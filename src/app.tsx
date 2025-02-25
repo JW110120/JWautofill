@@ -1,5 +1,5 @@
 import React from "react";
-const { app, action, core, UI } = require("photoshop");
+const { app, action, core } = require("photoshop");
 
 class App extends React.Component {
     state = {
@@ -57,10 +57,18 @@ class App extends React.Component {
 
             await core.executeAsModal(async () => {
                 const featherAmount = Number(this.state.feather) || 0;
-
                 if (featherAmount > 0) {
                     console.log(`🔧 正在应用羽化: ${featherAmount}px`);
-                    await app.activeDocument.selection.feather(featherAmount);
+                    await action.batchPlay(
+                        [
+                            {
+                                _obj: "feather",
+                                radius: featherAmount,
+                                _isCommand: true
+                            },
+                        ],
+                        { synchronousExecution: true, modalBehavior: "execute" }
+                    );
                 }
 
                 await action.batchPlay(
@@ -70,11 +78,12 @@ class App extends React.Component {
                             using: { _enum: "fillContents", _value: "foregroundColor" },
                             opacity: this.state.opacity,
                             mode: { _enum: "blendMode", _value: "normal" },
+                            _isCommand: true
                         },
                     ],
                     { synchronousExecution: true, dialogOptions: "dontDisplayDialogs" }
                 );
-            });
+            }, { commandName: "Apply Feather and Fill" });
 
             console.log("✅ 填充完成");
         } catch (error) {
@@ -93,7 +102,6 @@ class App extends React.Component {
     render() {
         return (
             <div style={{ padding: "15px", width: "220px", fontFamily: "思源黑体 CN" }}>
-                {/* 标题 */}
                 <h3
                     style={{
                         textAlign: "center",
@@ -102,22 +110,22 @@ class App extends React.Component {
                         marginBottom: "10px",
                         paddingBottom: "5px",
                         borderBottom: "2px solid",
+                        color: "var(--uxp-host-text-color)",
                     }}
                 >
                     选区笔 1.0
                 </h3>
 
-                {/* 总开关按钮 */}
                 <button
                     onClick={this.toggleFeature}
                     style={{
                         backgroundColor: this.state.isFeatureEnabled ? "green" : "red",
                         fontFamily: "思源黑体 CN",
-						color: "white",
+                        color: "white",
                         border: "none",
                         padding: "8px 15px",
                         width: "100%",
-                        borderRadius: "8px", // 圆角矩形
+                        borderRadius: "8px",
                         fontSize: "14px",
                         cursor: "pointer",
                     }}
@@ -128,11 +136,11 @@ class App extends React.Component {
                 <br />
                 <br />
 
-                {/* 不透明度 */}
                 <label
                     style={{
                         fontSize: "16px",
                         fontWeight: "bold",
+                        color: "var(--uxp-host-text-color)",
                     }}
                 >
                     不透明度: {this.state.opacity}%
@@ -150,11 +158,11 @@ class App extends React.Component {
                 <br />
                 <br />
 
-                {/* 羽化 */}
                 <label
                     style={{
                         fontSize: "16px",
                         fontWeight: "bold",
+                        color: "var(--uxp-host-text-color)",
                     }}
                 >
                     羽化: {this.state.feather}px
