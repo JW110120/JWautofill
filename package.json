@@ -1,0 +1,30 @@
+{
+  "name": "JWautofill",
+  "version": "1.0.0",
+  "description": "UXP plugin for Photoshop - com.photoshop.jwautofill",
+  "main": "index.js",
+  "author": "JW",
+  "license": "MIT",
+  "private": false,
+  "scripts": {
+    "build": "webpack --mode=production",
+    "watch": "webpack --mode=development --watch"
+  },
+  "dependencies": {
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "copy-webpack-plugin": "^12.0.2",
+    "css-loader": "^7.1.2",
+    "html-webpack-plugin": "^5.6.3",
+    "json-loader": "^0.5.7",
+    "ts-loader": "^9.5.2",
+    "typescript": "^4.9.5",
+    "url-loader": "^4.1.1",
+    "webpack": "^5.98.0",
+    "webpack-cli": "^6.0.1"
+  }
+}

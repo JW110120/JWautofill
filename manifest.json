@@ -1,0 +1,101 @@
+{
+    "manifestVersion": 5,
+    "name": "选区操作",
+    "version": "1.0.0",
+    "host": {
+        "app": "PS",
+        "minVersion": "23.0.0"
+    },
+    "main": "index.html",
+    "entrypoints": [
+        {
+            "id": "com.photoshop.jwautofill",
+            "label": {
+                "default": "选区笔"
+            },
+            "type": "panel",
+            "minimumSize": {
+                "width": 360,
+                "height": 300
+            },
+            "maximumSize": {
+                "width": 360,
+                "height": 400
+            },
+            "preferredDockedSize": {
+                "width": 380,
+                "height": 400
+            },
+            "preferredFloatingSize": {
+                "width": 380,
+                "height": 400
+            },
+            "icons": [
+                {
+                    "path": "icons/panel_icon_dark.png",
+                    "width": 23,
+                    "scale": [
+                        1,
+                        2
+                    ],
+                    "theme": [
+                        "darkest",
+                        "dark",
+                        "medium"
+                    ],
+                    "height": 23
+                },
+                {
+                    "path": "icons/panel_icon_light.png",
+                    "width": 23,
+                    "scale": [
+                        1,
+                        2
+                    ],
+                    "theme": [
+                        "lightest",
+                        "light"
+                    ],
+                    "height": 23
+                }
+            ]
+        }
+    ],
+    "id": "com.photoshop.jwautofill",
+    "icons": [
+        {
+            "path": "icons/panel_icon_dark.png",
+            "width": 23,
+            "scale": [
+                1,
+                2
+            ],
+            "theme": [
+                "darkest",
+                "dark",
+                "medium"
+            ],
+            "height": 23
+        },
+        {
+            "path": "icons/panel_icon_light.png",
+            "width": 23,
+            "scale": [
+                1,
+                2
+            ],
+            "theme": [
+                "lightest",
+                "light"
+            ],
+            "height": 23
+        }
+    ],
+    "requiredPermissions": {
+        "clipboard": "readAndWrite",
+        "network": {
+            "domains": "all"
+        },
+        "allowCodeGenerationFromStrings": true
+    }
+}
