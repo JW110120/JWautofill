@@ -1,4 +1,5 @@
 import React from "react";
+import './ButtonStyles.css';
 const { app, action, core } = require("photoshop");
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -68,7 +69,6 @@ class App extends React.Component {
             console.log("🎯 选区发生变化，开始自动填充");
 
         await core.executeAsModal(async () => {
-
             if (this.state.autoUpdateHistory) {
             await this.setHistoryBrushSource();
             }
@@ -114,27 +114,28 @@ class App extends React.Component {
     }
 
         try {
-        const result = await batchPlay(
-            [
-                {
-                    _obj: "set",
-                    _target: [
-                        {
-                            _ref: "historyState",
-                            _property: "historyBrushSource"
-                        }
-                    ],
-                    to: [
-                        {
-                            _ref: "historyState",
-                            _property: "currentHistoryState"
-						}
-                    ],
-                  
-                }
+           const result = await batchPlay(
+      [
+         {
+            _obj: "set",
+            _target: [
+               {
+                  _ref: "historyState",
+                  _property: "historyBrushSource"
+               }
             ],
-            {}
-        );
+            to: {
+               _ref: "historyState",
+               _enum: "ordinal",
+               _value: "last"
+            },
+            _options: {
+               dialogOptions: "dontDisplay"
+            }
+         }
+      ],
+      {}
+   );
 
             console.log("batchPlay 返回结果:", JSON.stringify(result, null, 2));
 
@@ -239,6 +240,8 @@ class App extends React.Component {
     }
 
     render() {
+	    const { isFeatureEnabled } = this.state;
+        const buttonClass = `custom-toggle-button ${isFeatureEnabled ? 'enabled' : ''}`;
         return (
             <div style={{ padding: "18px", width: "220px", fontFamily: "思源黑体 CN" }}>
                 <h3
@@ -254,39 +257,22 @@ class App extends React.Component {
                     <span style={{ fontSize: '24px' }}>选区笔1.0</span>
                     <span style={{ fontSize: '13px' }}>beta</span>
                 </h3>
+				
                 <button
-                    onClick={this.toggleFeature}
-                    style={{
-                        backgroundColor: this.state.isFeatureEnabled ? "green" : "red",
-                        color: "white",
-                        margin: "0 auto",
-                        width: "100%",
-                        minHeight: "100px",
-                        borderRadius: "15px",
-                        fontSize: "30px",
-                        cursor: "pointer",
-                        textAlign: "center",
-                        display: "flex",
-                        flexDirection: "column",
-                        justifyContent: "center",
-                        alignItems: "center",
-                        whiteSpace: "normal",
-                        padding: "10px",
-                        transition: "background-color 0.3s, transform 0.1s",
-                        boxShadow: "0 4px 8px rgba(0, 0, 0, 0.2)",
-                    }}
-                    onMouseDown={(e) => (e.currentTarget.style.transform = "scale(0.95)")}
-                    onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
-                >
-                    <div style={{ fontSize: "20px", fontWeight: "bold" }}>
-                        {this.state.isFeatureEnabled ? "功能已开启 ✅" : "功能已关闭 ❌"}
-                    </div>
-                    <div style={{ fontSize: "12px", color: "rgba(255, 255, 255, 0.7)" }}>
-                        （快捷键：Ctrl+K）
-                    </div>
+                onClick={this.toggleFeature}
+                className={buttonClass}>
+                <span className="status-text">
+				      {isFeatureEnabled ? "功能开启 " : "功能关闭 "}
+                </span>
+				<br />
+                <span className="shortcut-text">
+				     （Ctrl+K）
+                </span>
                 </button>
+				
                 <br />
-                <div style={{ display: "flex", alignItems: "center", marginBottom: "30px" }}>
+                
+				<div style={{ display: "flex", alignItems: "center", marginBottom: "30px" }}>
                     <span style={{ fontSize: "16px", fontWeight: "bold", color: "var(--uxp-host-text-color)", marginBottom: '-18px', marginRight: "-12px" }}>模式：</span>
                     <select
                         value={this.state.blendMode}
