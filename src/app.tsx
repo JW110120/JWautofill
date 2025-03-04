@@ -21,24 +21,15 @@ class App extends React.Component {
         this.handleBlendModeChange = this.handleBlendModeChange.bind(this);
         this.toggleAutoUpdateHistory = this.toggleAutoUpdateHistory.bind(this);
         this.handleButtonClick = this.handleButtonClick.bind(this); 
-		this.handleShortcut = this.handleShortcut.bind(this);
+
     }
 
     async componentDidMount() {
         await action.addNotificationListener(['select', 'historyStateChanged'], this.handleSelectionChange);
-        window.addEventListener('keydown', this.handleShortcut);
 	}
 
     componentWillUnmount() {
         action.removeNotificationListener(['select', 'historyStateChanged'], this.handleSelectionChange);
-        window.removeEventListener('keydown', this.handleShortcut);
-    }
-	
-    handleShortcut(event) {
-            if (event.ctrlKey && event.altKey && event.key === 'k') {
-            console.log("快捷键 Ctrl + Alt + K 触发");
-            this.handleButtonClick();
-        }
     }
 
     handleButtonClick() {
@@ -284,7 +275,6 @@ class App extends React.Component {
                         onClick={this.handleButtonClick}
                     >
                         <div style={{ fontSize: '20px' }}>{text}</div>
-                        <div style={{ fontSize: '11px',color:'rgba(255,255,255,0.7) '}}>快捷键：ctrl+alt+k</div>
                     </sp-button>
                 </div>
 
