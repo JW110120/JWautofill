@@ -8,12 +8,13 @@ class App extends React.Component {
     constructor(props) {
         super(props);
         this.state = {
-            opacity: 50,
-            feather: 5,
+            opacity: 100,
+            feather: 0,
             blendMode: '正常',
             autoUpdateHistory: true,
             isEnabled: true,
-            SelectionA: null
+            SelectionA: null,
+			deselectAfterFill: true // 新增状态，控制填充后是否取消选区
         };
         this.handleSelectionChange = this.handleSelectionChange.bind(this);
         this.handleOpacityChange = this.handleOpacityChange.bind(this);
@@ -21,7 +22,7 @@ class App extends React.Component {
         this.handleBlendModeChange = this.handleBlendModeChange.bind(this);
         this.toggleAutoUpdateHistory = this.toggleAutoUpdateHistory.bind(this);
         this.handleButtonClick = this.handleButtonClick.bind(this); 
-
+        this.toggleDeselectAfterFill = this.toggleDeselectAfterFill.bind(this);
     }
 
     async componentDidMount() {
@@ -39,7 +40,7 @@ class App extends React.Component {
     }
 
     getButtonTextAndStyle() {
-        let text = this.state.isEnabled ? '功能启用' : '功能未启用';
+        let text = this.state.isEnabled ? '功能开启' : '功能关闭';
         let backgroundColor = this.state.isEnabled ? 'rgb(60,120,60)' : 'rgb(200,70,70)';
         return {
             text,
@@ -62,13 +63,33 @@ class App extends React.Component {
                 return;
             }
 
-        // **检查当前工具是否会影响选区**
-        const currentTool = app.currentTool;
-        const ignoredTools = ['moveTool', 'brushTool', 'lassoTool'];
-        if (ignoredTools.includes(currentTool)) {
-            console.log(`🛑 当前工具 (${currentTool}) 不触发填充`);
-            return;
-        }
+    const currentTool = app.currentTool;
+    const ignoredTools = [
+        {_id: "moveTool"},
+		{_id: "eraserTool"},
+        {_id: "paintlbrushTool"},
+		{_id: "typeCreateOrEditTool"},
+        {_id: "eyedropperTool"},
+        {_id: "blurTool"},
+        {_id: "smudgeTool"},
+        {_id: "historyBrushTool"},
+        {_id: "gradientTool"},
+        {_id: "wetBrushTool"},
+		{_id: "pattenStampTool"},
+		{_id: "pencilTool"},
+		{_id: "penTool"},
+		{_id: "rotateTool"},
+		{_id: "sharpenTool"},
+		{_id: "artBrushTool"},
+		{_id: "cropTool"},
+		{_id: "wetBrushTool"}
+    ];
+    if (ignoredTools.some(tool => tool._id === currentTool._id)) {
+    console.log(`🛑 当前工具 (${currentTool._id}) 不触发填充`);
+    return;
+    } else {
+    console.log(`当前工具 (${currentTool._id}) 不在忽略列表中`);
+    }
 
         await new Promise(resolve => setTimeout(resolve, 50));
         const selection = await this.getSelection();
@@ -89,6 +110,9 @@ class App extends React.Component {
 		{await this.setHistoryBrushSource();}
         await this.applyFeather();
         await this.fillSelection();
+		if (this.state.deselectAfterFill) { // 如果勾选了填充后取消选区
+        await this.deselectSelection(); // 调用取消选区的方法
+        }
         }, { commandName: '更新历史源&羽化选区&加工选区A&填充选区' });
 
         console.log('✅ 填充完成');
@@ -180,7 +204,7 @@ class App extends React.Component {
             { synchronousExecution: true, modalBehavior: 'execute' }
     );
     
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise(resolve => setTimeout(resolve, 100));
     const newSelection = await this.getSelection();
     this.setState({ SelectionA: newSelection });
 }
@@ -228,6 +252,27 @@ class App extends React.Component {
         ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
     }
 
+    async deselectSelection() { // 新增方法，用于取消选区
+        await action.batchPlay([
+           {
+            _obj: "set",
+            _target: [
+               {
+                  _ref: "channel",
+                  _property: "selection"
+               }
+            ],
+            to: {
+               _enum: "ordinal",
+               _value: "none"
+            },
+            _options: {
+               dialogOptions: "dontDisplay"
+            }
+         }
+        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
+    }
+
     handleOpacityChange(event) {
         this.setState({ opacity: parseInt(event.target.value, 10) });
     }
@@ -243,42 +288,44 @@ class App extends React.Component {
     toggleAutoUpdateHistory() {
         this.setState({ autoUpdateHistory: !this.state.autoUpdateHistory });
     }
-
+	
+	toggleDeselectAfterFill() { // 新增方法，用于切换填充后取消选区的状态
+        this.setState({ deselectAfterFill: !this.state.deselectAfterFill });
+    }
+	
     render() {
         const { text, style } = this.getButtonTextAndStyle();
         return (
-            <div style={{ padding: '18px', width: '220px', fontFamily: 'Arial' }}>
+            <div style={{ padding: '5px', width: '200px', fontFamily: 'Arial' }}>
                 <h3
                     style={{
                         textAlign: 'center',
                         fontWeight: 'bold',
-                        marginBottom: '25px',
-                        paddingBottom: '2px',
+						marginBottom: '23px',
+                        paddingBottom: '5px',
                         borderBottom: `1px solid rgba(128, 128, 128, 0.3)`,
                         color: 'var(--uxp-host-text-color)'
                     }}
                 >
-                    <span style={{ fontSize: '30px' }}>选区笔1.0</span>
+                    <span style={{ fontSize: '24px' }}>选区笔1.0</span>
                     <span style={{ fontSize: '13px' }}>beta</span>
                 </h3>
-                <div style={{ textAlign: 'center',marginBottom: '10px'}}> 
+                <div style={{ textAlign: 'center',marginBottom: '15px'}}> 
                     <sp-button
                         style={{
                             ...style,
-                            borderRadius: '25px', // 添加圆角
-                            border: 'none', // 去除默认边框
+                            borderRadius: '8px', // 添加圆角
                             cursor: 'pointer',
-							marginBottom: '5px',
-							height: '60px', 
-							width: '100%' 
+							height: '40px', 
+							width: '70%' 
                         }}
                         onClick={this.handleButtonClick}
                     >
-                        <div style={{ fontSize: '20px' }}>{text}</div>
+                        <div style={{ fontSize: '16px' }}>{text}</div>
                     </sp-button>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '30px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '30px'}}>
                     <span style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--uxp-host-text-color)', marginBottom: '-18px', marginRight: '-8px' }}>模式：</span>
                     <select
                         value={this.state.blendMode}
@@ -295,38 +342,38 @@ class App extends React.Component {
                             fontSize: '12px',
                         }}
                     >
-                        <option value='正常' style={{ padding: '8px 0' }}>正常</option>
-                        <option value='溶解' style={{ padding: '8px 0' }}>溶解</option>
+                        <option value='正常'>正常</option>
+                        <option value='溶解'>溶解</option>
                         <option disabled style={{ borderBottom: '1px solid var(--uxp-host-border-color)', padding: '8px 0' }} />
-                        <option value='变暗' style={{ padding: '8px 0' }}>变暗</option>
-                        <option value='正片叠底' style={{ padding: '8px 0' }}>正片叠底</option>
-                        <option value='颜色加深' style={{ padding: '8px 0' }}>颜色加深</option>
-                        <option value='线性加深' style={{ padding: '8px 0' }}>线性加深</option>
-                        <option value='深色' style={{ padding: '8px 0' }}>深色</option>
+                        <option value='变暗'>变暗</option>
+                        <option value='正片叠底'>正片叠底</option>
+                        <option value='颜色加深'>颜色加深</option>
+                        <option value='线性加深'>线性加深</option>
+                        <option value='深色'>深色</option>
                         <option disabled style={{ borderBottom: '1px solid var(--uxp-host-border-color)', padding: '8px 0' }} />
-                        <option value='变亮' style={{ padding: '8px 0' }}>变亮</option>
-                        <option value='滤色' style={{ padding: '8px 0' }}>滤色</option>
-                        <option value='颜色减淡' style={{ padding: '8px 0' }}>颜色减淡</option>
-                        <option value='线性减淡' style={{ padding: '8px 0' }}>线性减淡</option>
-                        <option value='浅色' style={{ padding: '8px 0' }}>浅色</option>
+                        <option value='变亮'>变亮</option>
+                        <option value='滤色'>滤色</option>
+                        <option value='颜色减淡'>颜色减淡</option>
+                        <option value='线性减淡'>线性减淡</option>
+                        <option value='浅色'>浅色</option>
                         <option disabled style={{ borderBottom: '1px solid var(--uxp-host-border-color)', padding: '8px 0' }} />
-                        <option value='叠加' style={{ padding: '8px 0' }}>叠加</option>
-                        <option value='柔光' style={{ padding: '8px 0' }}>柔光</option>
-                        <option value='强光' style={{ padding: '8px 0' }}>强光</option>
-                        <option value='亮光' style={{ padding: '8px 0' }}>亮光</option>
-                        <option value='线性光' style={{ padding: '8px 0' }}>线性光</option>
-                        <option value='点光' style={{ padding: '8px 0' }}>点光</option>
-                        <option value='实色混合' style={{ padding: '8px 0' }}>实色混合</option>
+                        <option value='叠加'>叠加</option>
+                        <option value='柔光'>柔光</option>
+                        <option value='强光'>强光</option>
+                        <option value='亮光'>亮光</option>
+                        <option value='线性光'>线性光</option>
+                        <option value='点光'>点光</option>
+                        <option value='实色混合'>实色混合</option>
                         <option disabled style={{ borderBottom: '1px solid var(--uxp-host-border-color)', padding: '8px 0' }} />
-                        <option value='差值' style={{ padding: '8px 0' }}>差值</option>
-                        <option value='排除' style={{ padding: '8px 0' }}>排除</option>
-                        <option value='减去' style={{ padding: '8px 0' }}>减去</option>
-                        <option value='划分' style={{ padding: '8px 0' }}>划分</option>
+                        <option value='差值'>差值</option>
+                        <option value='排除'>排除</option>
+                        <option value='减去'>减去</option>
+                        <option value='划分'>划分</option>
                         <option disabled style={{ borderBottom: '1px solid var(--uxp-host-border-color)', padding: '8px 0' }} />
-                        <option value='色相' style={{ padding: '8px 0' }}>色相</option>
-                        <option value='饱和度' style={{ padding: '8px 0' }}>饱和度</option>
-                        <option value='颜色' style={{ padding: '8px 0' }}>颜色</option>
-                        <option value='明度' style={{ padding: '8px 0' }}>明度</option>
+                        <option value='色相'>色相</option>
+                        <option value='饱和度'>饱和度</option>
+                        <option value='颜色'>颜色</option>
+                        <option value='明度'>明度</option>
                     </select>
                 </div>
                 <label
@@ -369,7 +416,18 @@ class App extends React.Component {
                     style={{ width: '100%', cursor: 'pointer', marginBottom: '-18px' }}
                 />
                 <br />
-                <br />
+				<br />
+				<div style={{ display: 'flex', alignItems: 'center' }}>
+                    <input
+                        type='checkbox'
+                        checked={this.state.deselectAfterFill}
+                        onChange={this.toggleDeselectAfterFill}
+                        style={{ marginRight: '0px', cursor: 'pointer' }}
+                    />
+                    <label style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--uxp-host-text-color)', cursor: 'pointer' }}>
+                        填充后取消选区
+                    </label>
+                </div>
                 <div style={{ display: 'flex', alignItems: 'center' }}>
                     <input
                         type='checkbox'
@@ -378,7 +436,7 @@ class App extends React.Component {
                         style={{ marginRight: '0px', cursor: 'pointer' }}
                     />
                     <label style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--uxp-host-text-color)', cursor: 'pointer' }}>
-                        自动更新历史记录
+                        自动更新历史源
                     </label>
                 </div>
             </div>
