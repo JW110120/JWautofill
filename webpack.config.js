@@ -30,8 +30,9 @@ function createConfig(mode, entry, output, plugins) {
             os: 'commonjs2 os',
         },
         output: {
-            filename: '[name].js',
-            path: output
+        path: path.resolve(__dirname, 'dist'),
+        filename: 'bundle.js',
+        publicPath: './' // 手动设置 publicPath
         },
 
         plugins,
@@ -60,9 +61,9 @@ module.exports = (env, argv) => {
             apply: (compiler) => {
                 compiler.hooks.afterEmit.tap('AfterEmitPlugin', async (compilation) => {
                     if (argv.mode === 'production') {
-                        //await signPanel(panelOutput);
-                        //await packageWindows();
-                        //await packageMac();
+                       await signPanel(panelOutput);
+                       await packageWindows();
+                       await packageMac();
                     }
                 });
             }
