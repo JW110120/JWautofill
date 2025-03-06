@@ -32,10 +32,22 @@
             },
             "icons": [
                 {
-                    "path": "icons/panel_icon_dark.png",
+                    "path": "icons/light@1x.png",
                     "width": 23,
                     "scale": [
-                        1,
+                        1
+                    ],
+                    "theme": [
+                        "darkest",
+                        "dark",
+                        "medium"
+                    ],
+                    "height": 23
+                },
+                {
+                    "path": "icons/light@2x.png",
+                    "width": 23,
+                    "scale": [
                         2
                     ],
                     "theme": [
@@ -46,10 +58,21 @@
                     "height": 23
                 },
                 {
-                    "path": "icons/panel_icon_light.png",
+                    "path": "icons/dark@1x.png",
                     "width": 23,
                     "scale": [
-                        1,
+                        1
+                    ],
+                    "theme": [
+                        "lightest",
+                        "light"
+                    ],
+                    "height": 23
+                },
+                {
+                    "path": "icons/dark@2x.png",
+                    "width": 23,
+                    "scale": [
                         2
                     ],
                     "theme": [
@@ -64,10 +87,22 @@
     "id": "com.photoshop.jwautofill",
     "icons": [
         {
-            "path": "icons/panel_icon_dark.png",
+            "path": "icons/light@1x.png",
             "width": 23,
             "scale": [
-                1,
+                1
+            ],
+            "theme": [
+                "darkest",
+                "dark",
+                "medium"
+            ],
+            "height": 23
+        },
+        {
+            "path": "icons/light@2x.png",
+            "width": 23,
+            "scale": [
                 2
             ],
             "theme": [
@@ -78,10 +113,21 @@
             "height": 23
         },
         {
-            "path": "icons/panel_icon_light.png",
+            "path": "icons/dark@1x.png",
             "width": 23,
             "scale": [
-                1,
+                1
+            ],
+            "theme": [
+                "lightest",
+                "light"
+            ],
+            "height": 23
+        },
+        {
+            "path": "icons/dark@2x.png",
+            "width": 23,
+            "scale": [
                 2
             ],
             "theme": [
