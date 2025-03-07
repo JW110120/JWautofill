@@ -1,0 +1,70 @@
+{
+    "manifestVersion": 4,
+    "name": "选区操作",
+    "version": "1.0.0",
+    "host": {
+        "app": "PS",
+        "minVersion": "23.0.0"
+    },
+    "main": "index.html",
+    "entrypoints": [
+        {
+            "id": "com.photoshop.jwautofill",
+            "label": {
+                "default": "选区笔"
+            },
+            "type": "panel",
+            "minimumSize": {
+                "width": 250,
+                "height": 430
+            },
+            "maximumSize": {
+                "width": 250,
+                "height": 430
+            },
+            "preferredDockedSize": {
+                "width": 250,
+                "height": 430
+            },
+            "preferredFloatingSize": {
+                "width": 250,
+                "height": 430
+            },
+            "icons": [
+                {
+                    "path": "icons/dark-panel.png",
+                    "width": 23,
+                    "height": 23,
+                    "scale": [1,2],
+                    "theme": ["darkest", "dark", "medium"],
+                    "species": ["chrome"]
+                },
+                {
+                    "path": "light-panel.png",
+                    "width": 23,
+                    "height": 23,
+                    "scale": [1,2],
+                    "theme": ["lightest", "light"],
+                    "species": ["chrome"]
+                }
+            ]
+        }
+    ],
+    "id": "com.photoshop.jwautofill",
+    "icons": [
+        {
+            "path": "icons/plugin.png",
+            "width": 48,
+            "height": 48,
+            "scale": [1,2],
+            "theme": ["darkest", "dark", "medium", "lightest", "light", "all"],
+            "species": ["pluginList"]
+        },
+    "requiredPermissions": {
+        "clipboard": "readAndWrite",
+        "network": {
+            "domains": "all"
+        },
+        "allowCodeGenerationFromStrings": true
+    }
+}

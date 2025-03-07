@@ -1,5 +1,5 @@
 {
-    "manifestVersion": 5,
+    "manifestVersion": 4,
     "name": "选区操作",
     "version": "1.0.0",
     "host": {
@@ -32,54 +32,20 @@
             },
             "icons": [
                 {
-                    "path": "icons/light@1x.png",
+                    "path": "icons/dark-panel.png",
                     "width": 23,
-                    "scale": [
-                        1
-                    ],
-                    "theme": [
-                        "darkest",
-                        "dark",
-                        "medium"
-                    ],
-                    "height": 23
+                    "height": 23,
+                    "scale": [1,2],
+                    "theme": ["darkest", "dark", "medium"],
+                    "species": ["chrome"]
                 },
                 {
-                    "path": "icons/light@2x.png",
+                    "path": "light-panel.png",
                     "width": 23,
-                    "scale": [
-                        2
-                    ],
-                    "theme": [
-                        "darkest",
-                        "dark",
-                        "medium"
-                    ],
-                    "height": 23
-                },
-                {
-                    "path": "icons/dark@1x.png",
-                    "width": 23,
-                    "scale": [
-                        1
-                    ],
-                    "theme": [
-                        "lightest",
-                        "light"
-                    ],
-                    "height": 23
-                },
-                {
-                    "path": "icons/dark@2x.png",
-                    "width": 23,
-                    "scale": [
-                        2
-                    ],
-                    "theme": [
-                        "lightest",
-                        "light"
-                    ],
-                    "height": 23
+                    "height": 23,
+                    "scale": [1,2],
+                    "theme": ["lightest", "light"],
+                    "species": ["chrome"]
                 }
             ]
         }
@@ -87,56 +53,13 @@
     "id": "com.photoshop.jwautofill",
     "icons": [
         {
-            "path": "icons/light@1x.png",
-            "width": 23,
-            "scale": [
-                1
-            ],
-            "theme": [
-                "darkest",
-                "dark",
-                "medium"
-            ],
-            "height": 23
+            "path": "icons/plugin.png",
+            "width": 48,
+            "height": 48,
+            "scale": [1,2],
+            "theme": ["darkest", "dark", "medium", "lightest", "light", "all"],
+            "species": ["pluginList"]
         },
-        {
-            "path": "icons/light@2x.png",
-            "width": 23,
-            "scale": [
-                2
-            ],
-            "theme": [
-                "darkest",
-                "dark",
-                "medium"
-            ],
-            "height": 23
-        },
-        {
-            "path": "icons/dark@1x.png",
-            "width": 23,
-            "scale": [
-                1
-            ],
-            "theme": [
-                "lightest",
-                "light"
-            ],
-            "height": 23
-        },
-        {
-            "path": "icons/dark@2x.png",
-            "width": 23,
-            "scale": [
-                2
-            ],
-            "theme": [
-                "lightest",
-                "light"
-            ],
-            "height": 23
-        }
-    ],
     "requiredPermissions": {
         "clipboard": "readAndWrite",
         "network": {
