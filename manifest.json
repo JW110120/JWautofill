@@ -66,6 +66,12 @@
         "network": {
             "domains": "all"
         },
-        "allowCodeGenerationFromStrings": true
-    }
+        "allowCodeGenerationFromStrings": true,
+        "launchProcess": {
+        "schemes": ["http", "https"]
+        }
+    },
+    "build": {
+    "cssResources": ["styles.css"]
+  }
 }

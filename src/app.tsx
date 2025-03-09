@@ -310,7 +310,11 @@ class App extends React.Component {
     render() {
         const { text, style } = this.getButtonTextAndStyle();
         return (
-            <div style={{ padding: '5px', width: '200px', fontFamily: 'Arial' }}>
+            <div style={{ 
+                padding: '5px', 
+                width: '200px', 
+                fontFamily: '"SourceHanSansCN-Normal", Arial, sans-serif' 
+            }}>
                 <h3
                     style={{
                         textAlign: 'center',

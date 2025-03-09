@@ -48,13 +48,14 @@ module.exports = (env, argv) => {
         new HtmlWebpackPlugin({
             template: './src/index.html',
             filename: 'index.html',
-            /*inlineSource: '.(js)$',*/
             chunks: ['uxp'],
         }),
         new copyWebpackPlugin({
             patterns: [
                 { from: "./manifest.json", to: "." },
                 { from: "./src/assets/icons", to: "./icons" },
+                { from: "./src/assets/SourceHanSansCN-Normal.otf", to: "." },
+                { from: "./src/styles.css", to: "." }
             ]
         }),
         {
