@@ -223,8 +223,9 @@ class App extends React.Component {
                 _obj: 'fill',
                 using: { _enum: 'fillContents', _value: 'foregroundColor' },
                 opacity: this.state.opacity,
-                mode: { _enum: 'blendMode', _value: blendModeMap[this.state.blendMode] || 'normal' },
-                _isCommand: true
+                mode: { _enum: 'blendMode', _value: blendModeMap[this.state.blendMode]},
+                preserveTransparency: true,
+                _isCommand: false
             },
         ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
     }
