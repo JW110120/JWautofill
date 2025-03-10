@@ -151,9 +151,8 @@ class App extends React.Component {
                             }
                         ],
                         to: {
-                            _ref: 'historyState',
-                            _enum: 'ordinal',
-                            _value: 'last'
+                             _ref: "historyState",
+                            _property: "currentHistoryState"
                         },
                         _options: {
                             dialogOptions: 'dontDisplay'
@@ -276,7 +275,7 @@ class App extends React.Component {
             newValue = Math.max(0, Math.min(100, Math.round(newValue)));
         } else if (this.state.dragTarget === 'feather') {
             // 将羽化值四舍五入到最接近的0.5的倍数
-            newValue = Math.max(0, Math.min(10, Math.round(newValue * 2) / 2));
+            newValue = Math.max(0, Math.min(10, Math.round(newValue)));
         }
         
         this.setState({ [this.state.dragTarget]: newValue });
@@ -413,7 +412,7 @@ class App extends React.Component {
                     step='1'
                     value={this.state.opacity}
                     onChange={this.handleOpacityChange}
-                    style={{ width: '100%', cursor: 'pointer', marginBottom: '-18px' }}
+                    style={{ width: '100%', cursor: 'pointer', marginBottom: '-18px' }}  
                 />
                 <br />
                 <label
@@ -435,7 +434,7 @@ class App extends React.Component {
                     step='0.5'
                     value={this.state.feather}
                     onChange={this.handleFeatherChange}
-                    style={{ width: '100%', cursor: 'pointer', marginBottom: '-18px' }}
+                    style={{ width: '100%', cursor: 'pointer', marginBottom: '-18px' }}  
                 />
                 <br />
                 <br />
