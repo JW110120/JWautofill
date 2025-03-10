@@ -217,17 +217,161 @@ class App extends React.Component {
             '明度': 'luminosity',
         };
 
-        new Promise(resolve => setTimeout(resolve, 50));
-        await action.batchPlay([
-            {
-                _obj: 'fill',
-                using: { _enum: 'fillContents', _value: 'foregroundColor' },
-                opacity: this.state.opacity,
-                mode: { _enum: 'blendMode', _value: blendModeMap[this.state.blendMode]},
-                preserveTransparency: true,
-                _isCommand: false
-            },
-        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
+        await new Promise(resolve => setTimeout(resolve, 50));
+        try {
+            // 获取当前活动图层信息
+            const layerInfo = await this.getActiveLayerInfo();
+            if (!layerInfo) {
+                return;
+            }
+            const { isBackground, hasTransparencyLocked, hasPixels } = layerInfo;
+            
+            // 情况1: 背景图层 - 将背景图层判断提到最前面
+            if (isBackground) {
+                await action.batchPlay([
+                    {
+                        _obj: 'fill',
+                        using: { _enum: 'fillContents', _value: 'foregroundColor' },
+                        opacity: this.state.opacity,
+                        mode: { _enum: 'blendMode', _value: blendModeMap[this.state.blendMode]},
+                        _isCommand: true
+                    },
+                ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
+            } 
+            // 情况2: 图层锁定不透明度且有像素（非背景图层）
+            else if (hasTransparencyLocked && hasPixels) {
+                await action.batchPlay([
+                    {
+                        _obj: 'fill',
+                        using: { _enum: 'fillContents', _value: 'foregroundColor' },
+                        opacity: this.state.opacity,
+                        mode: { _enum: 'blendMode', _value: blendModeMap[this.state.blendMode]},
+                        preserveTransparency: true,
+                        _isCommand: false
+                    },
+                ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
+            } 
+            // 情况3: 图层锁定不透明度且没有像素
+            else if (hasTransparencyLocked && !hasPixels) {
+                // 先解锁图层 - 添加括号调用方法
+                await this.unlockLayerTransparency();
+                
+                // 填充
+                await action.batchPlay([
+                    {
+                        _obj: 'fill',
+                        using: { _enum: 'fillContents', _value: 'foregroundColor' },
+                        opacity: this.state.opacity,
+                        mode: { _enum: 'blendMode', _value: blendModeMap[this.state.blendMode]},
+                        _isCommand: true
+                    },
+                ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
+                
+                // 重新锁定图层 - 添加括号调用方法
+                await this.lockLayerTransparency();
+            } 
+            // 情况4: 图层未锁定不透明度且非背景图层
+            else if(!hasTransparencyLocked && !isBackground) {
+                await action.batchPlay([
+                    {
+                        _obj: 'fill',
+                        using: { _enum: 'fillContents', _value: 'foregroundColor' },
+                        opacity: this.state.opacity,
+                        mode: { _enum: 'blendMode', _value: blendModeMap[this.state.blendMode]},
+                        _isCommand: false
+                    },
+                ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
+            }
+            // 情况5: 不符合上述四种情况的默认处理
+            else {
+                await action.batchPlay([
+                    {
+                        _obj: 'fill',
+                        using: { _enum: 'fillContents', _value: 'foregroundColor' },
+                        opacity: this.state.opacity,
+                        mode: { _enum: 'blendMode', _value: blendModeMap[this.state.blendMode]||"normal"},
+                        _isCommand: true
+                    },
+                ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
+            }
+        } catch (error) {
+            // 错误处理
+        }
+    }
+
+    // 获取当前活动图层信息
+    async getActiveLayerInfo() {
+        try {
+            // 使用app.activeDocument.activeLayers获取当前活动图层
+            const doc = app.activeDocument;
+            if (!doc) {
+                return null;
+            }
+            
+            // 获取当前活动图层
+            const activeLayer = doc.activeLayers[0];
+            if (!activeLayer) {
+                return null;
+            }
+            
+            // 检查是否为背景图层
+            const isBackground = activeLayer.isBackgroundLayer;
+            
+            // 检查是否锁定不透明度
+            const hasTransparencyLocked = activeLayer.transparentPixelsLocked;
+            
+            // 检查图层是否有像素 - 可以通过检查图层类型或bounds来判断
+            const hasPixels = activeLayer.kind !== 'pixel' ? false : 
+            (activeLayer.bounds && 
+             activeLayer.bounds.width > 0 && 
+             activeLayer.bounds.height > 0);
+
+            return {
+                isBackground,
+                hasTransparencyLocked,
+                hasPixels
+            };
+        } catch (error) {
+            return null;
+        }
+    }
+    
+    // 设置图层透明度锁定
+    async lockLayerTransparency() {
+        try {
+            await action.batchPlay([
+                {
+                    _obj: "applyLocking",
+                    _target: [
+                        { _ref: "layer", _enum: "ordinal", _value: "targetEnum" }
+                    ],
+                    layerLocking: {
+                        _obj: "layerLocking",
+                        protectTransparency: true
+                    },
+                    _options: { dialogOptions: "dontDisplay" }
+                }
+            ], { synchronousExecution: true });
+        } catch (error) {}
+    }
+
+    // 设置图层透明度不锁定
+    async unlockLayerTransparency() {
+        try {
+            await action.batchPlay([
+                {
+                    _obj: "applyLocking",
+                    _target: [
+                        { _ref: "layer", _enum: "ordinal", _value: "targetEnum" }
+                    ],
+                    layerLocking: {
+                        _obj: "layerLocking",
+                        protectNone: true
+                    },
+                    _options: { dialogOptions: "dontDisplay" }
+                }
+            ], { synchronousExecution: true });
+        } catch (error) {}
     }
 
     async deselectSelection() {
