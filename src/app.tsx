@@ -13,14 +13,16 @@ class App extends React.Component {
             blendMode: '正常',
             autoUpdateHistory: true,
             isEnabled: true,
-            SelectionA: null,
             deselectAfterFill: true,
             isDragging: false,
             dragStartX: 0,
             dragStartValue: 0,
-            dragTarget: null
+            dragTarget: null,
+            selectionType: 'normal' // 添加选区类型状态
         };
         this.handleSelectionChange = this.handleSelectionChange.bind(this);
+        this.handleNormalSelectionChange = this.handleNormalSelectionChange.bind(this);
+        this.handleSpecialSelectionChange = this.handleSpecialSelectionChange.bind(this);
         this.handleOpacityChange = this.handleOpacityChange.bind(this);
         this.handleFeatherChange = this.handleFeatherChange.bind(this);
         this.handleBlendModeChange = this.handleBlendModeChange.bind(this);
@@ -33,32 +35,39 @@ class App extends React.Component {
     }
 
     async componentDidMount() {
-        await action.addNotificationListener(['set'], this.handleSelectionChange);
+        // 分别监听不同类型的选区变化
+        await action.addNotificationListener(['set'], this.handleNormalSelectionChange);
+        await action.addNotificationListener(['addTo', 'subtractFrom', 'intersectWith'], this.handleSpecialSelectionChange);
         document.addEventListener('mousemove', this.handleMouseMove);
         document.addEventListener('mouseup', this.handleMouseUp);
     }
 
     componentWillUnmount() {
-        action.removeNotificationListener(['set'], this.handleSelectionChange);
+        // 移除所有监听器
+        action.removeNotificationListener(['set'], this.handleNormalSelectionChange);
+        action.removeNotificationListener(['addTo', 'subtractFrom', 'intersectWith'], this.handleSpecialSelectionChange);
         document.removeEventListener('mousemove', this.handleMouseMove);
         document.removeEventListener('mouseup', this.handleMouseUp);
+    }
+
+    // 处理普通选区变化
+    async handleNormalSelectionChange(event) {
+        console.log('🔍 检测到普通选区操作: set');
+        this.setState({ selectionType: 'normal' });
+        await this.handleSelectionChange();
+    }
+
+    // 处理特殊选区变化
+    async handleSpecialSelectionChange(event) {
+        console.log(`🔍 检测到特殊选区操作: ${event.type}`);
+        this.setState({ selectionType: 'special' });
+        await this.handleSelectionChange();
     }
 
     handleButtonClick() {
         this.setState(prevState => ({
             isEnabled: !prevState.isEnabled
         }));
-    }
-
-    getButtonTextAndStyle() {
-        let text = this.state.isEnabled ? '功能开启' : '功能关闭';
-        let backgroundColor = this.state.isEnabled ? 'rgb(60,120,60)' : 'rgb(200,70,70)';
-        return { text, style: { backgroundColor } };
-    }
-
-    areSelectionsEqual(selection1, selection2) {
-        if (!selection1 || !selection2) return false;
-        return JSON.stringify(selection1) === JSON.stringify(selection2);
     }
 
     async handleSelectionChange() {
@@ -76,28 +85,32 @@ class App extends React.Component {
                 console.warn('⚠️ 选区为空，跳过填充');
                 return;
             }
-           
-            if (this.areSelectionsEqual(selection, this.state.SelectionA)) {
-                console.log('⚠️ 选区未发生变化，跳过填充');
-                return;
-            }
 
-            console.log('🎯 选区发生变化，开始自动填充');
+            console.log(`🎯 选区发生变化，类型: ${this.state.selectionType}，开始处理`);
 
             await core.executeAsModal(async () => {
                 if (this.state.autoUpdateHistory) {
                     await this.setHistoryBrushSource();
                 }
-                await this.applyFeather();
-                await this.fillSelection();
-                if (this.state.deselectAfterFill) {
-                    await this.deselectSelection();
+                
+                // 只有普通选区操作才执行羽化
+                if (this.state.selectionType === 'normal') {
+                    await this.applyFeather();
+                    await this.fillSelection();
+                    
+                    // 只有普通选区操作且设置了取消选区才执行取消选区
+                    if (this.state.deselectAfterFill) {
+                        await this.deselectSelection();
+                    }
+                } else {
+                    // 特殊选区操作只保存选区状态，不执行羽化和填充
+                    const newSelection = await this.getSelection();
                 }
-            }, { commandName: '更新历史源&羽化选区&加工选区A&填充选区' });
+            }, { commandName: '更新历史源&羽化选区&处理选区' });
 
-            console.log('✅ 填充完成');
+            console.log('✅ 处理完成');
         } catch (error) {
-            console.error('❌ 填充失败:', error);
+            console.error('❌ 处理失败:', error);
         }
     }
 
@@ -419,7 +432,6 @@ class App extends React.Component {
         if (this.state.dragTarget === 'opacity') {
             newValue = Math.max(0, Math.min(100, Math.round(newValue)));
         } else if (this.state.dragTarget === 'feather') {
-            // 将羽化值四舍五入到最接近的0.5的倍数
             newValue = Math.max(0, Math.min(10, Math.round(newValue)));
         }
         
@@ -452,11 +464,10 @@ class App extends React.Component {
     }  
 
     render() {
-        const { text, style } = this.getButtonTextAndStyle();
         return (
             <div style={{ 
                 padding: '5px', 
-                width: '200px', 
+                width: '216px', 
                 fontFamily: '"SourceHanSansCN-Normal", Arial, sans-serif' 
             }}>
                 <h3
@@ -472,23 +483,60 @@ class App extends React.Component {
                     <span style={{ fontSize: '24px' }}>选区笔1.1</span>
                     <span style={{ fontSize: '13px' }}>beta</span>
                 </h3>
-                <div style={{ textAlign: 'center',marginBottom: '15px'}}> 
+                <div style={{ textAlign: 'center', marginBottom: '15px'}}> 
                     <sp-button
                         style={{
-                            ...style,
-                            borderRadius: '8px',
+                            borderRadius: '10px',
                             cursor: 'pointer',
-                            height: '40px', 
-                            width: '70%' 
+                            height: '45px', 
+                            width: '70%',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            backgroundColor: 'transparent',
+                            border: '1.5px solid var(--uxp-host-text-color)',
+                            color: 'var(--uxp-host-text-color)',
+                            padding: '8px 16px',
+                            margin: '0 auto' // 添加水平居中
                         }}
                         onClick={this.handleButtonClick}
                     >
-                        <div style={{ fontSize: '16px' }}>{text}</div>
+                        <div style={{ 
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            width: '100%'
+                        }}>
+                            <span style={{ 
+                                fontSize: '16px',
+                                fontWeight: 'bold',
+                                color: this.state.isEnabled ? 'var(--uxp-host-text-color)' : 'rgba(128, 128, 128, 0.5)' // 关闭时文字变灰
+                            }}>
+                                {this.state.isEnabled ? '功能开启' : '功能关闭'}
+                            </span>
+                            <div 
+                                style={{ 
+                                    width: '11px', 
+                                    height: '11px', 
+                                    borderRadius: '50%', 
+                                    backgroundColor: this.state.isEnabled ? 'var(--uxp-host-link-color,rgb(55, 139, 241))' : 'rgba(128, 128, 128, 0.5)',
+                                    marginLeft: '10px',
+                                    flexShrink: 0
+                                }}
+                            ></div>
+                        </div>
                     </sp-button>
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', marginBottom: '30px'}}>
-                    <span style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--uxp-host-text-color)', marginBottom: '-18px', marginRight: '-8px' }}>模式：</span>
+                    <span style={{ 
+                        fontSize: '16px', 
+                        fontWeight: 'bold', 
+                        color: 'var(--uxp-host-text-color)', 
+                        marginBottom: '-18px', 
+                        marginRight: '-8px',
+                        paddingLeft: '7px' // 添加左内边距与其他标签对齐
+                    }}>模式：</span>
                     <select
                         value={this.state.blendMode}
                         onChange={this.handleBlendModeChange}
@@ -544,7 +592,8 @@ class App extends React.Component {
                         fontWeight: 'bold',
                         color: 'var(--uxp-host-text-color)',
                         marginBottom: '-18px',
-                        cursor: this.state.isDragging && this.state.dragTarget === 'opacity' ? 'grabbing' : 'ew-resize'
+                        cursor: this.state.isDragging && this.state.dragTarget === 'opacity' ? 'grabbing' : 'ew-resize',
+                        paddingLeft: '7px' // 添加左内边距
                     }}
                     onMouseDown={(e) => this.handleLabelMouseDown(e, 'opacity')}
                 >
@@ -566,7 +615,8 @@ class App extends React.Component {
                         fontWeight: 'bold',
                         color: 'var(--uxp-host-text-color)',
                         marginBottom: '-18px',
-                        cursor: this.state.isDragging && this.state.dragTarget === 'feather' ? 'grabbing' : 'ew-resize'
+                        cursor: this.state.isDragging && this.state.dragTarget === 'feather' ? 'grabbing' : 'ew-resize',
+                        paddingLeft: '7px' // 添加左内边距
                     }}
                     onMouseDown={(e) => this.handleLabelMouseDown(e, 'feather')}
                 >
@@ -621,7 +671,7 @@ class App extends React.Component {
                     bottom: '10px',
                     right: '10px',
                     fontSize: '8px', 
-                    color: 'rgba(128, 128, 128, 0.5)',
+                    color: 'rgba(128, 128, 128, 0.6)',
                     pointerEvents: 'none' // 防止文本干扰用户交互
                 }}>
                     Copyright © listen2me（JW）
