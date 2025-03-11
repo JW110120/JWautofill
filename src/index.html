@@ -12,6 +12,17 @@
             justify-content: center;
             align-items: center;
         }
+        #app {
+            padding-left: 3px;
+            margin-top: -25px;
+        }
+        /* 添加复选框区域的样式 */
+        input[type="checkbox"] + label {
+            margin-left: 6px; /* 减少checkbox与标签文字的间距 */
+        }
+        input[type="checkbox"] {
+            margin-left: 26px; /* checkbox本身向右偏移保持不变 */
+        }
 		::-webkit-scrollbar {
             display: none;
         }
