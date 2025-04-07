@@ -1,0 +1,194 @@
+@font-face {
+  font-family: 'SourceHanSansCN-Normal';
+  src: url('../assets/SourceHanSansCN-Normal.otf') format('opentype');
+  font-weight: normal;
+  font-style: normal;
+}
+
+html, body {
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
+}
+
+/* 复选框样式 */
+input[type="checkbox"] + label {
+  margin-left: 6px;
+}
+
+input[type="checkbox"] {
+  margin-left: 26px;
+}
+
+/* 隐藏滚动条 */
+::-webkit-scrollbar {
+  display: none;
+}
+
+.container {
+  padding: 5px;
+  width: 216px;
+}
+
+.title {
+  text-align: center;
+  font-weight: bold;
+  margin-bottom: 23px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.3);
+  color: var(--uxp-host-text-color);
+}
+
+.title-text {
+  font-size: 24px;
+}
+
+.title-beta {
+  font-size: 13px;
+}
+
+.button-container {
+  text-align: center;
+  margin-bottom: 15px;
+}
+
+.toggle-button {
+  border-radius: 10px;
+  cursor: pointer;
+  height: 45px;
+  width: 70%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--button-bg);
+  border: 1.5px solid var(--border-color);
+  color: var(--text-color);
+  padding: 8px 16px;
+  margin: 0 auto;
+  transition: all 0.3s ease; /* 添加过渡效果 */
+}
+
+.toggle-button:hover {
+    background-color: var(--hover-bg);
+    transform: scale(1.02); /* 轻微放大效果 */
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); /* 添加轻微阴影 */
+}
+
+/* 禁用状态下的悬停效果 */
+.toggle-button:hover .button-text.disabled {
+    color: rgba(128, 128, 128, 0.7); /* 略微提高禁用状态下的文字透明度 */
+}
+
+.button-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
+.button-text {
+  font-size: 16px;
+  font-weight: bold;
+}
+
+.button-text.disabled {
+  color: rgba(128, 128, 128, 0.5);
+}
+
+.button-indicator {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  margin-left: 10px;
+  flex-shrink: 0;
+}
+
+.button-indicator.enabled {
+  background-color: var(--uxp-host-link-color,rgb(55, 139, 241));
+}
+
+.button-indicator.disabled {
+  background-color: rgba(128, 128, 128, 0.5);
+}
+
+.blend-mode-container {
+  display: flex;
+  align-items: center;
+  margin-bottom: 30px;
+}
+
+.blend-mode-label {
+  font-size: 16px;
+  font-weight: bold;
+  color: var(--uxp-host-text-color);
+  margin-bottom: -18px;
+  margin-right: -8px;
+  padding-left: 7px;
+}
+
+.blend-mode-select {
+  flex: 1;
+  padding: 0px;
+  margin-bottom: -12px;
+  border-radius: 0px;
+  border: 0px solid var(--uxp-host-border-color);
+  background-color: var(--uxp-host-background-color);
+  color: var(--uxp-host-text-color);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.blend-mode-option-divider {
+  border-bottom: 1px solid var(--uxp-host-border-color);
+  padding: 8px 0;
+}
+
+.slider-label {
+  font-size: 16px;
+  font-weight: bold;
+  color: var(--uxp-host-text-color);
+  margin-bottom: -18px;
+  padding-left: 7px;
+}
+
+.slider-label.dragging {
+  cursor: grabbing;
+}
+
+.slider-label.not-dragging {
+  cursor: ew-resize;
+}
+
+.slider-input {
+  width: 100%;
+  cursor: pointer;
+  margin-bottom: -18px;
+}
+
+.checkbox-container {
+  display: flex;
+  align-items: center;
+}
+
+.checkbox-input {
+  margin-right: 0px;
+  cursor: pointer;
+}
+
+.checkbox-label {
+  font-size: 16px;
+  font-weight: bold;
+  color: var(--uxp-host-text-color);
+  cursor: pointer;
+}
+
+.copyright {
+  position: fixed;
+  bottom: 10px;
+  right: 10px;
+  font-size: 8px;
+  color: rgba(128, 128, 128, 0.7);
+  pointer-events: none;
+}

@@ -1,12 +1,27 @@
-import * as React from 'react';
-import * as ReactDOM from 'react-dom/client';
-import './styles.css';  
+import React from 'react';
+import { createRoot } from 'react-dom/client';
 import App from './app';
+import { initializeTheme } from './styles/theme.ts';
+import './styles/styles.css';
+import { defaultTheme, Provider } from '@adobe/react-spectrum';
 
-const rootElement = document.getElementById('app');
-if (rootElement) {
-    const root = ReactDOM.createRoot(rootElement);
-    root.render(<App />);
-} else {
-    console.error('❌ 未找到 #app 元素，插件可能未正确加载');
+// 初始化主题
+initializeTheme();
+
+const container = document.getElementById('app');
+if (container) {
+  const root = createRoot(container);
+  
+  // 创建根组件
+  const Root = () => {
+    return (
+      <Provider theme={defaultTheme} colorScheme="dark">
+        <div style={{ width: '100%', height: '100%', display: 'flex', overflow: 'hidden' }}>
+          <App />
+        </div>
+      </Provider>
+    );
+  };
+
+  root.render(<Root />);
 }

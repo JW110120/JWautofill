@@ -18,7 +18,13 @@ function createConfig(mode, entry, output, plugins) {
                     use: [ { loader: 'ts-loader', options: { transpileOnly: true, configFile: "tsconfig.json" } }],
                 },
                 { test: /\.css$/, use: ['style-loader', 'css-loader'] },
-                { test: /\.(png|jpg|gif|webp|svg|zip|otf)$/, use: ['url-loader'] },
+                { 
+                    test: /\.(png|jpg|gif|webp|svg|zip|otf)$/,
+                    type: 'asset/resource',
+                    generator: {
+                        filename: '[name][ext]'
+                    }
+                }
             ],
         },
 
@@ -55,7 +61,7 @@ module.exports = (env, argv) => {
                 { from: "./manifest.json", to: "." },
                 { from: "./src/assets/icons", to: "./icons" },
                 { from: "./src/assets/SourceHanSansCN-Normal.otf", to: "." },
-                { from: "./src/styles.css", to: "." }
+                { from: "./src/styles/styles.css", to: "." }
             ]
         }),
         {

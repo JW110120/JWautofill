@@ -11,6 +11,7 @@
     "watch": "webpack --mode=development --watch"
   },
   "dependencies": {
+    "@adobe/react-spectrum": "^3.40.1",
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
     "css-loader": "^7.1.2",

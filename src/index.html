@@ -5,37 +5,13 @@
     <title>选区操作</title>
     <meta name="viewport" content="width=device-width,initial-scale=1.0">
     <link rel="stylesheet" href="./styles.css">
-    <style>
-       		html, body {
-            height: 100%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-        }
-        #app {
-            padding-left: 3px;
-            margin-top: -25px;
-        }
-        /* 添加复选框区域的样式 */
-        input[type="checkbox"] + label {
-            margin-left: 6px; /* 减少checkbox与标签文字的间距 */
-        }
-        input[type="checkbox"] {
-            margin-left: 26px; /* checkbox本身向右偏移保持不变 */
-        }
-		::-webkit-scrollbar {
-            display: none;
-        }
-    </style>
     <script>
         // 修复mac下点击事件没有反馈的问题
         // https://bleepcoder.com/react-spectrum/667291182/click-events-don-t-work-on-macos-in-adobe-cep-extension
         delete window.PointerEvent;
     </script>
-	
 </head>
 <body>
-      <div id="app">
-    </div>
+    <div id="app"></div>
 </body>
 </html>
