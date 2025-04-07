@@ -1,7 +1,7 @@
 {
   "name": "JWautofill",
   "version": "1.0.0",
-  "description": "UXP plugin for Photoshop - com.photoshop.jwautofill",
+  "description": "UXP plugin for Photoshop - com.listen2me.jwautofill",
   "main": "bundle.js",
   "author": "JW",
   "license": "MIT",

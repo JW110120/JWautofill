@@ -484,7 +484,7 @@ class App extends React.Component {
                     <span style={{ fontSize: '13px' }}>beta</span>
                 </h3>
                 <div style={{ textAlign: 'center', marginBottom: '15px'}}> 
-                    <sp-button
+                    <sp-action-button
                         style={{
                             borderRadius: '10px',
                             cursor: 'pointer',
@@ -525,7 +525,7 @@ class App extends React.Component {
                                 }}
                             ></div>
                         </div>
-                    </sp-button>
+                    </sp-action-button>
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', marginBottom: '30px'}}>

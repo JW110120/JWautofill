@@ -9,7 +9,7 @@
     "main": "index.html",
     "entrypoints": [
         {
-            "id": "com.photoshop.jwautofill",
+            "id": "com.listen2me.jwautofill",
             "label": {
                 "default": "选区笔"
             },
@@ -32,7 +32,7 @@
             },
             "icons": [
                 {
-                    "path": "icons/dark-panel.png",
+                    "path": "icons/light-panel.png",
                     "width": 23,
                     "height": 23,
                     "scale": [1,2],
@@ -40,7 +40,7 @@
                     "species": ["chrome"]
                 },
                 {
-                    "path": "light-panel.png",
+                    "path": "icons/dark-panel.png",
                     "width": 23,
                     "height": 23,
                     "scale": [1,2],
@@ -50,7 +50,7 @@
             ]
         }
     ],
-    "id": "com.photoshop.jwautofill",
+    "id": "com.listen2me.jwautofill",
     "icons": [
         {
             "path": "icons/plugin.png",

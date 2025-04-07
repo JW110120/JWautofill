@@ -3,7 +3,7 @@ const copyWebpackPlugin = require('copy-webpack-plugin');
 const webpack = require('webpack');
 const path = require("path");
 
-const panelName = `com.photoshop.jwautofill`;
+const panelName = `com.listen2me.jwautofill`;
 
 const dist = path.join(__dirname, 'dist');
 
