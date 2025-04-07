@@ -671,7 +671,7 @@ class App extends React.Component {
                     bottom: '10px',
                     right: '10px',
                     fontSize: '8px', 
-                    color: 'rgba(128, 128, 128, 0.6)',
+                    color: 'rgba(128, 128, 128, 0.7)',
                     pointerEvents: 'none' // 防止文本干扰用户交互
                 }}>
                     Copyright © listen2me（JW）
