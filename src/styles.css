@@ -1,6 +1,6 @@
 @font-face {
   font-family: 'SourceHanSansCN-Normal';
-  src: url('./SourceHanSansCN-Normal.otf') format('opentype');
+  src: url('./assets/SourceHanSansCN-Normal.otf') format('opentype');
   font-weight: normal;
   font-style: normal;
 }

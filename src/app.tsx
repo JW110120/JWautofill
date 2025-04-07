@@ -3,6 +3,7 @@ import { interaction } from 'uxp';
 import { app, action, core } from 'photoshop';
 const { executeAsModal } = core;
 const { batchPlay } = action;
+import { BLEND_MODES } from './constants/blendModes';
 
 class App extends React.Component {
     constructor(props) {
@@ -37,7 +38,6 @@ class App extends React.Component {
     async componentDidMount() {
         // 分别监听不同类型的选区变化
         await action.addNotificationListener(['set'], this.handleNormalSelectionChange);
-        await action.addNotificationListener(['addTo', 'subtractFrom', 'intersectWith'], this.handleSpecialSelectionChange);
         document.addEventListener('mousemove', this.handleMouseMove);
         document.addEventListener('mouseup', this.handleMouseUp);
     }
@@ -45,23 +45,8 @@ class App extends React.Component {
     componentWillUnmount() {
         // 移除所有监听器
         action.removeNotificationListener(['set'], this.handleNormalSelectionChange);
-        action.removeNotificationListener(['addTo', 'subtractFrom', 'intersectWith'], this.handleSpecialSelectionChange);
         document.removeEventListener('mousemove', this.handleMouseMove);
         document.removeEventListener('mouseup', this.handleMouseUp);
-    }
-
-    // 处理普通选区变化
-    async handleNormalSelectionChange(event) {
-        console.log('🔍 检测到普通选区操作: set');
-        this.setState({ selectionType: 'normal' });
-        await this.handleSelectionChange();
-    }
-
-    // 处理特殊选区变化
-    async handleSpecialSelectionChange(event) {
-        console.log(`🔍 检测到特殊选区操作: ${event.type}`);
-        this.setState({ selectionType: 'special' });
-        await this.handleSelectionChange();
     }
 
     handleButtonClick() {
@@ -86,34 +71,23 @@ class App extends React.Component {
                 return;
             }
 
-            console.log(`🎯 选区发生变化，类型: ${this.state.selectionType}，开始处理`);
-
             await core.executeAsModal(async () => {
                 if (this.state.autoUpdateHistory) {
                     await this.setHistoryBrushSource();
                 }
                 
-                // 只有普通选区操作才执行羽化
-                if (this.state.selectionType === 'normal') {
-                    await this.applyFeather();
-                    await this.fillSelection();
-                    
-                    // 只有普通选区操作且设置了取消选区才执行取消选区
-                    if (this.state.deselectAfterFill) {
-                        await this.deselectSelection();
-                    }
-                } else {
-                    // 特殊选区操作只保存选区状态，不执行羽化和填充
-                    const newSelection = await this.getSelection();
+                await this.applyFeather();
+                await this.fillSelection();
+                
+                // 只有普通选区操作且设置了取消选区才执行取消选区
+                if (this.state.deselectAfterFill) {
+                    await this.deselectSelection();
                 }
             }, { commandName: '更新历史源&羽化选区&处理选区' });
-
-            console.log('✅ 处理完成');
         } catch (error) {
             console.error('❌ 处理失败:', error);
         }
     }
-
     async getSelection() {
         try {
             const result = await action.batchPlay(
@@ -200,36 +174,6 @@ class App extends React.Component {
     }
 
     async fillSelection() {
-        const blendModeMap = {
-            '正常': 'normal',
-            '溶解': 'dissolve',
-            '变暗': 'darken',
-            '正片叠底': 'multiply',
-            '颜色加深': 'colorBurn',
-            '线性加深': 'linearBurn',
-            '深色': 'darkerColor',
-            '变亮': 'lighten',
-            '滤色': 'screen',
-            '颜色减淡': 'colorDodge',
-            '线性减淡': 'linearDodge',
-            '浅色': 'lighterColor',
-            '叠加': 'overlay',
-            '柔光': 'softLight',
-            '强光': 'hardLight',
-            '亮光': 'vividLight',
-            '线性光': 'linearLight',
-            '点光': 'pinLight',
-            '实色混合': 'hardMix',
-            '差值': 'difference',
-            '排除': 'exclusion',
-            '减去': 'subtract',
-            '划分': 'divide',
-            '色相': 'hue',
-            '饱和度': 'saturation',
-            '颜色': 'color',
-            '明度': 'luminosity',
-        };
-
         await new Promise(resolve => setTimeout(resolve, 50));
         try {
             // 获取当前活动图层信息
@@ -246,7 +190,7 @@ class App extends React.Component {
                         _obj: 'fill',
                         using: { _enum: 'fillContents', _value: 'foregroundColor' },
                         opacity: this.state.opacity,
-                        mode: { _enum: 'blendMode', _value: blendModeMap[this.state.blendMode]},
+                        mode: { _enum: 'blendMode', _value: BLEND_MODES[this.state.blendMode]},
                         _isCommand: true
                     },
                 ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
@@ -258,7 +202,7 @@ class App extends React.Component {
                         _obj: 'fill',
                         using: { _enum: 'fillContents', _value: 'foregroundColor' },
                         opacity: this.state.opacity,
-                        mode: { _enum: 'blendMode', _value: blendModeMap[this.state.blendMode]},
+                        mode: { _enum: 'blendMode', _value: BLEND_MODES[this.state.blendMode]},
                         preserveTransparency: true,
                         _isCommand: false
                     },
@@ -275,7 +219,7 @@ class App extends React.Component {
                         _obj: 'fill',
                         using: { _enum: 'fillContents', _value: 'foregroundColor' },
                         opacity: this.state.opacity,
-                        mode: { _enum: 'blendMode', _value: blendModeMap[this.state.blendMode]},
+                        mode: { _enum: 'blendMode', _value: BLEND_MODES[this.state.blendMode]},
                         _isCommand: true
                     },
                 ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
@@ -290,7 +234,7 @@ class App extends React.Component {
                         _obj: 'fill',
                         using: { _enum: 'fillContents', _value: 'foregroundColor' },
                         opacity: this.state.opacity,
-                        mode: { _enum: 'blendMode', _value: blendModeMap[this.state.blendMode]},
+                        mode: { _enum: 'blendMode', _value: BLEND_MODES[this.state.blendMode]},
                         _isCommand: false
                     },
                 ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
@@ -302,7 +246,7 @@ class App extends React.Component {
                         _obj: 'fill',
                         using: { _enum: 'fillContents', _value: 'foregroundColor' },
                         opacity: this.state.opacity,
-                        mode: { _enum: 'blendMode', _value: blendModeMap[this.state.blendMode]||"normal"},
+                        mode: { _enum: 'blendMode', _value: BLEND_MODES[this.state.blendMode]||"normal"},
                         _isCommand: true
                     },
                 ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
