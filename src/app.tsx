@@ -314,6 +314,12 @@ class App extends React.Component<AppProps, AppState> {
 
     render() {
         return (
+            <div style={{ 
+                display: 'flex', 
+                flexDirection: 'column',
+                height: '415px',
+                justifyContent: 'space-between'
+            }}>
             <div className="container">
                 <h3 className="title">
                     <span className="title-text">选区笔1.1</span>
@@ -331,7 +337,7 @@ class App extends React.Component<AppProps, AppState> {
                 </div>
             
                 <div className="blend-mode-container">
-                    <span className="blend-mode-label">模式：</span>
+                    <span className="blend-mode-label">混合模式：</span>
                     <select
                         value={this.state.blendMode}
                         onChange={this.handleBlendModeChange}
@@ -351,47 +357,48 @@ class App extends React.Component<AppProps, AppState> {
                         ))}
                     </select>
                 </div>
-                <label
-                    className={`slider-label ${
-                        this.state.isDragging && this.state.dragTarget === 'opacity' 
-                        ? 'dragging' 
-                        : 'not-dragging'
-                    }`}
-                    onMouseDown={(e) => this.handleLabelMouseDown(e, 'opacity')}
-                >
-                    不透明度: {this.state.opacity}%
-                </label>
-                <input
-                    type='range'
-                    min='0'
-                    max='100'
-                    step='1'
-                    value={this.state.opacity}
-                    onChange={this.handleOpacityChange}
-                    className="slider-input"
-                />
-                <br />
-                <label
-                    className={`slider-label ${
-                        this.state.isDragging && this.state.dragTarget === 'feather' 
-                        ? 'dragging' 
-                        : 'not-dragging'
-                    }`}
-                    onMouseDown={(e) => this.handleLabelMouseDown(e, 'feather')}
-                >
-                    羽化: {this.state.feather}px
-                </label>
-                <input
-                    type='range'
-                    min='0'
-                    max='10'
-                    step='0.5'
-                    value={this.state.feather}
-                    onChange={this.handleFeatherChange}
-                    className="slider-input"
-                />
-                <br />
-                <br />
+                <div className="slider-container">
+                    <label
+                        className={`slider-label ${
+                            this.state.isDragging && this.state.dragTarget === 'opacity' 
+                            ? 'dragging' 
+                            : 'not-dragging'
+                        }`}
+                        onMouseDown={(e) => this.handleLabelMouseDown(e, 'opacity')}
+                    >
+                        不透明度
+                        <span className="slider-value">{this.state.opacity}%</span>
+                    </label>
+                    <input
+                        type='range'
+                        min='0'
+                        max='100'
+                        step='1'
+                        value={this.state.opacity}
+                        onChange={this.handleOpacityChange}
+                        className="slider-input"
+                    />
+                    <label
+                        className={`slider-label ${
+                            this.state.isDragging && this.state.dragTarget === 'feather' 
+                            ? 'dragging' 
+                            : 'not-dragging'
+                        }`}
+                        onMouseDown={(e) => this.handleLabelMouseDown(e, 'feather')}
+                    >
+                        羽化
+                        <span className="slider-value">{this.state.feather}px</span>
+                    </label>
+                    <input
+                        type='range'
+                        min='0'
+                        max='10'
+                        step='0.5'
+                        value={this.state.feather}
+                        onChange={this.handleFeatherChange}
+                        className="slider-input"
+                    />
+                </div>
                 <div className="checkbox-container">
                     <input
                         type='checkbox'
@@ -424,11 +431,11 @@ class App extends React.Component<AppProps, AppState> {
                         自动更新历史源
                     </label>
                 </div>
-                
-                <div className="copyright">
-                    Copyright © listen2me（JW）
-                </div>
             </div>
+            <div className="info-plane">
+            <span className="copyright">Copyright © listen2me (JW)</span>
+        </div>
+    </div>
         );
     }
 }

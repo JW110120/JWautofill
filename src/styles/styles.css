@@ -7,19 +7,23 @@
 
 html, body {
   height: 100%;
+  margin: 0;
+  padding: 0;
   display: flex;
   justify-content: center;
-  align-items: center;
+  align-items: center;  /* 改为 center */
   font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text-color);
 }
 
-/* 复选框样式 */
-input[type="checkbox"] + label {
-  margin-left: 6px;
-}
-
-input[type="checkbox"] {
-  margin-left: 26px;
+.container {
+  width: 250px;
+  height: 390px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  background-color: var(--bg-color);
+  padding: 0 10px;  /* 添加左右边距 */
 }
 
 /* 隐藏滚动条 */
@@ -27,53 +31,54 @@ input[type="checkbox"] {
   display: none;
 }
 
-.container {
-  padding: 5px;
-  width: 216px;
-}
 
 .title {
   text-align: center;
   font-weight: bold;
-  margin-bottom: 23px;
+  margin-bottom: 10px;
   padding-bottom: 5px;
-  border-bottom: 1px solid rgba(128, 128, 128, 0.3);
+  border-bottom: 1px solid var(--border-color);
   color: var(--uxp-host-text-color);
 }
 
 .title-text {
-  font-size: 24px;
+  font-size: 20px;
 }
 
 .title-beta {
-  font-size: 13px;
+  font-size: 10px;
 }
 
 .button-container {
   text-align: center;
-  margin-bottom: 15px;
 }
 
 .toggle-button {
-  border-radius: 10px;
+  border-radius: 6px;
   cursor: pointer;
   height: 45px;
-  width: 70%;
+  width: 80%;
   display: flex;
   align-items: center;
   justify-content: center;
   background-color: var(--button-bg);
-  border: 1.5px solid var(--border-color);
+  border: 3px solid var(--border-color);
   color: var(--text-color);
-  padding: 8px 16px;
+  padding: 8px 8px;
   margin: 0 auto;
-  transition: all 0.3s ease; /* 添加过渡效果 */
+  transition: all 0.3s ease;
 }
 
 .toggle-button:hover {
     background-color: var(--hover-bg);
-    transform: scale(1.02); /* 轻微放大效果 */
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); /* 添加轻微阴影 */
+    transform: scale(1.02);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.toggle-button:active {
+    background-color: var(--button-down);
+    transform: scale(0.98);
+    box-shadow: none;
 }
 
 /* 禁用状态下的悬停效果 */
@@ -116,28 +121,27 @@ input[type="checkbox"] {
 .blend-mode-container {
   display: flex;
   align-items: center;
-  margin-bottom: 30px;
+  margin-bottom: 15px;
 }
 
 .blend-mode-label {
-  font-size: 16px;
-  font-weight: bold;
+  font-size: 13px;
   color: var(--uxp-host-text-color);
-  margin-bottom: -18px;
+  margin-bottom: -35px;
   margin-right: -8px;
-  padding-left: 7px;
+  padding-left: 10px;
 }
 
 .blend-mode-select {
   flex: 1;
   padding: 0px;
-  margin-bottom: -12px;
+  margin-bottom: -28px;
   border-radius: 0px;
   border: 0px solid var(--uxp-host-border-color);
   background-color: var(--uxp-host-background-color);
   color: var(--uxp-host-text-color);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 20px;
 }
 
 .blend-mode-option-divider {
@@ -145,12 +149,28 @@ input[type="checkbox"] {
   padding: 8px 0;
 }
 
+.slider-container {
+  background-color: var(--bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  padding: 18px 3px;
+}
+
 .slider-label {
-  font-size: 16px;
-  font-weight: bold;
+  font-size: 13px;
+  padding-top: 10px;
   color: var(--uxp-host-text-color);
-  margin-bottom: -18px;
-  padding-left: 7px;
+  margin-bottom: -12px;
+  padding-left: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.slider-value {
+  margin-right: 10px;
+  font-size: 13px;
+  color: var(--text-color);
 }
 
 .slider-label.dragging {
@@ -162,14 +182,28 @@ input[type="checkbox"] {
 }
 
 .slider-input {
-  width: 100%;
+  width: 210px;
+  margin-bottom: 0px;
+
+  margin-left: 6px;
   cursor: pointer;
-  margin-bottom: -18px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
 .checkbox-container {
   display: flex;
   align-items: center;
+}
+
+/* 复选框样式 */
+input[type="checkbox"] + label {
+  margin-left: 6px;
+}
+
+input[type="checkbox"] {
+  margin-left: 40px;
 }
 
 .checkbox-input {
@@ -179,16 +213,26 @@ input[type="checkbox"] {
 
 .checkbox-label {
   font-size: 16px;
-  font-weight: bold;
   color: var(--uxp-host-text-color);
   cursor: pointer;
 }
 
+.info-plane {
+  width: 250px;
+  height: 25px;
+  background-color: var(--bg-color);
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 0 5px;
+  box-sizing: border-box;
+}
+
 .copyright {
-  position: fixed;
-  bottom: 10px;
-  right: 10px;
+  bottom: 5px;
+  right: 5px;
   font-size: 8px;
-  color: rgba(128, 128, 128, 0.7);
+  color: var(--disabled-color);
+  position: absolute;
   pointer-events: none;
 }

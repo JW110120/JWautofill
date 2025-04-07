@@ -16,7 +16,14 @@ if (container) {
   const Root = () => {
     return (
       <Provider theme={defaultTheme} colorScheme="dark">
-        <div style={{ width: '100%', height: '100%', display: 'flex', overflow: 'hidden' }}>
+        <div style={{ 
+          width: '100%', 
+          height: '100%', 
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'flex-start',
+          alignItems: 'center'
+        }}>
           <App />
         </div>
       </Provider>

@@ -6,11 +6,12 @@ const createThemeStyles = () => {
     :root {
       --primary-color: #2680eb;
       --text-color: #d6d6d6;
-      --bg-color:rgb(50, 50, 50);
+      --bg-color: rgb(50, 50, 50);
       --border-color: #484848;
       --disabled-color: #848484;
       --hover-bg: rgba(38, 128, 235, 0.1);
-      --button-bg: rgb(50, 50, 50);
+      --button-bg: rgb(60, 60, 60);
+      --button-down: rgb(40, 40, 40);
       --slider-bg: #eee;
       --slider-thumb: #2680eb;
     }
@@ -19,11 +20,12 @@ const createThemeStyles = () => {
       :root {
         --primary-color: #2680eb;
         --text-color: #d6d6d6;
-        --bg-color:rgb(50, 50, 50);
+        --bg-color: rgb(50, 50, 50);
         --border-color: #484848;
         --disabled-color: #848484;
         --hover-bg: rgba(38, 128, 235, 0.1);
-        --button-bg: rgb(50, 50, 50);
+        --button-bg: rgb(60, 60, 60);
+        --button-down: rgb(40, 40, 40);
         --slider-bg: #eee;
         --slider-thumb: #2680eb;
       }
@@ -37,7 +39,8 @@ const createThemeStyles = () => {
         --border-color: #555555;
         --disabled-color: #999999;
         --hover-bg: rgba(38, 128, 235, 0.1);
-        --button-bg: rgb(80, 80, 80);
+        --button-bg: rgb(93, 93, 93);
+        --button-down: rgb(73, 73, 73);
         --slider-bg: #eee;
         --slider-thumb: #2680eb;
       }
@@ -51,7 +54,8 @@ const createThemeStyles = () => {
         --border-color: #a0a0a0;
         --disabled-color: #666666;
         --hover-bg: rgba(38, 128, 235, 0.05);
-        --button-bg: rgb(184, 184, 184);
+        --button-bg: rgb(194, 194, 194);
+        --button-down: rgb(174, 174, 174);
         --slider-bg: #ddd;
         --slider-thumb: #2680eb;
       }
@@ -65,7 +69,8 @@ const createThemeStyles = () => {
         --border-color: #c4c4c4;
         --disabled-color: #909090;
         --hover-bg: rgba(38, 128, 235, 0.03);
-        --button-bg: rgb(240, 240, 240);
+        --button-bg: rgb(250, 250, 250);
+        --button-down: rgb(230, 230, 230);
         --slider-bg: #ddd;
         --slider-thumb: #2680eb;
       }
