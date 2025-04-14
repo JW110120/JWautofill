@@ -19,11 +19,13 @@ html, body {
 
 .container {
   width: 250px;
-  height: 390px;
+  height: 100%;
   box-sizing: border-box;
   overflow-y: auto;
   background-color: var(--bg-color);
   padding: 0 10px;  /* 添加左右边距 */
+  display: flex;
+  flex-direction: column;
 }
 
 /* 隐藏滚动条 */
@@ -50,7 +52,8 @@ html, body {
 }
 
 .button-container {
-  text-align: center;
+  align-items: center;  /* 改为 center */
+  height: 50px;
 }
 
 .toggle-button {
@@ -120,11 +123,11 @@ html, body {
 
 .blend-mode-container {
   display: flex;
+  margin-bottom: -45px;
   align-items: center;
   background-color: var(--bg-color);
-  border-radius: 3px;
   padding: 3px;
-  position: absolute;  
+  position: relative;  
   width: calc(100% - 40px);  
   left: 50%;           /* 添加左偏移 */
   transform: translateX(-50%);  /* 使用transform实现居中 */
@@ -194,7 +197,6 @@ html, body {
 .slider-input {
   width: 210px;
   margin-bottom: 0px;
-
   margin-left: 6px;
   cursor: pointer;
   display: flex;
@@ -205,15 +207,16 @@ html, body {
 .checkbox-container {
   display: flex;
   align-items: center;
+  margin-top: -20px;
 }
 
 /* 复选框样式 */
 input[type="checkbox"] + label {
-  margin-left: 6px;
+  margin-left: 0px;
 }
 
 input[type="checkbox"] {
-  margin-left: 40px;
+  margin-left: 60px;
 }
 
 .checkbox-input {
@@ -222,14 +225,14 @@ input[type="checkbox"] {
 }
 
 .checkbox-label {
-  font-size: 16px;
+  font-size: 13px;
   color: var(--text-color);
   cursor: pointer;
 }
 
 .info-plane {
   width: 250px;
-  height: 25px;
+  height: 20px;
   background-color: var(--bg-color);
   display: flex;
   justify-content: flex-end;
@@ -239,17 +242,23 @@ input[type="checkbox"] {
 }
 
 .copyright {
-  bottom: 5px;
-  right: 5px;
+  width: 100%;
+  text-align: center;
   font-size: 8px;
   color: var(--disabled-color);
   position: absolute;
+  bottom: 5px;
+  left: 50%;
+  transform: translateX(-50%);
   pointer-events: none;
 }
 
 .expand-section {
-    margin-top: 5px;
-    overflow: hidden;
+    background-color: var(--bg-color);
+    height:30%;
+    padding: 0;
+    margin-bottom: 0;  /* 移除底部边距 */
+    margin-top: 0;  /* 保持这个以确保它在底部 */
 }
 
 .expand-header {
@@ -268,6 +277,7 @@ input[type="checkbox"] {
 }
 
 .expand-icon {
+    padding-left: 5px;
     margin-right: 2px;
     display: flex;
     align-items: center;
@@ -288,7 +298,8 @@ input[type="checkbox"] {
 }
 
 .expand-content.expanded {
-    max-height: 200px;
+    max-height: 50%;
+    margin-bottom: 0;  /* 确保展开内容也没有底部边距 */
 }
 
 .expand-icon .fill {

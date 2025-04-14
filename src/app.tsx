@@ -7,6 +7,7 @@ import { AppProps, AppState, initialState } from './types/app';
 import { DragHandler } from './utils/DragHandler';
 import { FillHandler } from './utils/FillHandler';
 import { LayerInfoHandler } from './utils/LayerInfoHandler';
+import { setPanelHeight } from './styles/theme';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -49,7 +50,11 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     toggleExpand = () => {
-        this.setState(prevState => ({ isExpanded: !prevState.isExpanded }));
+        this.setState(prevState => {
+            const isExpanded = !prevState.isExpanded;
+            setPanelHeight(isExpanded);
+            return { isExpanded };
+        });
     }
 
     async handleSelectionChange() {

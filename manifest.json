@@ -16,20 +16,21 @@
             "type": "panel",
             "minimumSize": {
                 "width": 250,
-                "height": 375
+                "height": 350  
             },
             "maximumSize": {
                 "width": 250,
-                "height": 450
+                "height": 415  
             },
             "preferredDockedSize": {
                 "width": 250,
-                "height": 375
+                "height": 415
             },
             "preferredFloatingSize": {
                 "width": 250,
-                "height": 375
+                "height": 415 
             },
+            "resizable": false,
             "icons": [
                 {
                     "path": "icons/light-panel.png",
@@ -46,7 +47,7 @@
                     "scale": [1,2],
                     "theme": ["lightest", "light"],
                     "species": ["chrome"]
-                }
+                } 
             ]
         }
     ],
