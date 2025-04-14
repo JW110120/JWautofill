@@ -29,5 +29,5 @@ export const initialState: AppState = {
     dragStartValue: 0,
     dragTarget: null,
     selectionType: 'normal',
-    isExpanded: false
+    isExpanded: true
 };
