@@ -121,31 +121,39 @@ html, body {
 .blend-mode-container {
   display: flex;
   align-items: center;
-  margin-bottom: 15px;
+  background-color: var(--bg-color);
+  border-radius: 3px;
+  padding: 3px;
+  position: absolute;  
+  width: calc(100% - 40px);  
+  left: 50%;           /* 添加左偏移 */
+  transform: translateX(-50%);  /* 使用transform实现居中 */
+  z-index: 1000;
 }
 
 .blend-mode-label {
   font-size: 13px;
   color: var(--uxp-host-text-color);
-  margin-bottom: -35px;
-  margin-right: -8px;
-  padding-left: 10px;
+  margin: 0;
+  padding: 0;
+  flex-shrink: 0;
 }
 
 .blend-mode-select {
   flex: 1;
-  padding: 0px;
-  margin-bottom: -28px;
-  border-radius: 0px;
-  border: 0px solid var(--uxp-host-border-color);
+  padding: 5px;
+  margin: 9px 0 0 0;  
   background-color: var(--uxp-host-background-color);
   color: var(--uxp-host-text-color);
   cursor: pointer;
-  font-size: 20px;
+  position: relative;
+  z-index: 1001;
 }
 
 .blend-mode-option-divider {
   border-bottom: 1px solid var(--uxp-host-border-color);
+  position: relative;  
+  z-index: 1001;      
   padding: 8px 0;
 }
 
@@ -154,6 +162,8 @@ html, body {
   border: 1px solid var(--border-color);
   border-radius: 3px;
   padding: 18px 3px;
+  margin-top: 22px;
+  z-index: 1;       /* 确保在混合模式容器下方 */
 }
 
 .slider-label {
