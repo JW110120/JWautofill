@@ -14,6 +14,7 @@ export interface AppState {
     dragStartValue: number;
     dragTarget: string | null;
     selectionType: string;
+    isExpanded: boolean;
 }
 
 export const initialState: AppState = {
@@ -27,5 +28,6 @@ export const initialState: AppState = {
     dragStartX: 0,
     dragStartValue: 0,
     dragTarget: null,
-    selectionType: 'normal'
+    selectionType: 'normal',
+    isExpanded: false
 };
