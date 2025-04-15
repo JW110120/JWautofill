@@ -30,7 +30,6 @@
                 "width": 250,
                 "height": 415 
             },
-            "resizable": false,
             "icons": [
                 {
                     "path": "icons/light-panel.png",

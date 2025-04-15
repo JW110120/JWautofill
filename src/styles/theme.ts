@@ -1,6 +1,4 @@
-import { panel } from "photoshop";
-
-const createThemeStyles = () => {
+  const createThemeStyles = () => {
   const style = document.createElement('style');
   document.head.appendChild(style);
   
@@ -83,13 +81,3 @@ const createThemeStyles = () => {
 export const initializeTheme = () => {
   createThemeStyles();
 };
-
-export const setPanelHeight = (isExpanded: boolean) => {
-  const height = isExpanded ? 415 : 350;
-   
-    // 备用方案：尝试通过CSS模拟高度变化
-    const container = document.querySelector('.container');
-    if (container) {
-      container.style.height = `${height}px`;
-    }
-  }
