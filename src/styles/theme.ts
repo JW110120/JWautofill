@@ -13,7 +13,6 @@
       --button-bg: rgb(60, 60, 60);
       --button-down: rgb(40, 40, 40);
       --slider-bg: #eee;
-      --slider-thumb: #2680eb;
     }
 
     @media (prefers-color-scheme: darkest) {
@@ -27,7 +26,6 @@
         --button-bg: rgb(60, 60, 60);
         --button-down: rgb(40, 40, 40);
         --slider-bg: #eee;
-        --slider-thumb: #2680eb;
       }
     }
 
@@ -42,7 +40,6 @@
         --button-bg: rgb(93, 93, 93);
         --button-down: rgb(73, 73, 73);
         --slider-bg: #eee;
-        --slider-thumb: #2680eb;
       }
     }
 
@@ -57,7 +54,6 @@
         --button-bg: rgb(194, 194, 194);
         --button-down: rgb(174, 174, 174);
         --slider-bg: #ddd;
-        --slider-thumb: #2680eb;
       }
     }
 
@@ -72,7 +68,6 @@
         --button-bg: rgb(250, 250, 250);
         --button-down: rgb(230, 230, 230);
         --slider-bg: #ddd;
-        --slider-thumb: #2680eb;
       }
     }
   `;

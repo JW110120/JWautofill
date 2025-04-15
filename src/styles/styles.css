@@ -19,7 +19,7 @@ html, body {
 
 .container {
   width: 250px;
-  height: 480px;
+  height: 310px;
   box-sizing: border-box;
   overflow-y: auto;
   background-color: var(--bg-color);
@@ -126,7 +126,7 @@ html, body {
   margin-bottom: -43px;
   align-items: center;
   background-color: var(--bg-color);
-  padding: 3px;
+  padding-left: 6px;
   position: relative;  
   width: calc(100% - 40px);  
   left: 50%;
@@ -142,11 +142,23 @@ html, body {
 
 .blend-mode-select {
   flex: 1;
+  padding: 5px;
+  margin: 9px 0 0 0;  
   background-color: var(--bg-color);
   color: var(--text-color);
   cursor: pointer;
   position: relative;
   z-index: 1001;
+}
+
+/* 添加禁用状态样式 */
+.blend-mode-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.blend-mode-label.disabled {
+  opacity: 0.5;
 }
 
 .blend-mode-option-divider {
@@ -159,7 +171,7 @@ html, body {
   background-color: var(--bg-color);
   border: 1px solid var(--border-color);
   border-radius: 3px;
-  padding: 15px 3px 18px 3px;
+  padding: 15px 3px 12px 3px;
   margin-top: 22px;
   z-index: 1;       /* 确保在混合模式容器下方 */
 }
@@ -199,9 +211,14 @@ html, body {
 
 .expand-section {
   background-color: var(--bg-color);
-  height: 150px;
-  margin-top: 10px;
-  z-index: 1;  /* 设置基础层级 */
+  min-height: 50px; /* 改为最小高度 */
+  padding: 0;
+  z-index: 1;
+}
+
+.expand-section.expanded{
+  height: 170px;
+  z-index: 1;
 }
 
 .expand-header {
@@ -240,7 +257,7 @@ html, body {
 }
 
 .expand-content.expanded {
-  max-height: 200px;
+  max-height: 170px;
 }
 
 .expand-icon .fill {
@@ -250,16 +267,40 @@ html, body {
 .checkbox-container {
   display: flex;
   border-bottom: 1px solid var(--border-color);  /* 添加分隔线 */
+  align-items: center;
+  margin-top: -20px;
+}
+
+/* 复选框样式 */
+input[type="checkbox"] + label {
+  margin-left: 0px;
+}
+
+input[type="checkbox"] {
+  margin-left: 60px;
 }
 
 .checkbox-input {
+  margin-right: 0px;
   cursor: pointer;
+}
+
+.checkbox-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .checkbox-label {
   font-size: 13px;
   color: var(--text-color);
   cursor: pointer;
+}
+
+/* 添加禁用状态的标签样式 */
+.checkbox-label.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  color: var(--disabled-color);
 }
 
 .info-plane {
@@ -270,7 +311,7 @@ html, body {
   justify-content: flex-end;
   padding: 0 5px;
   box-sizing: border-box;
-  position: absolute;  /* 改为绝对定位 */
+  position: fixed;  /* 改为固定定位 */
   bottom: 0;
   left: 0;
   z-index: 1000;  /* 确保在最上层 */
@@ -284,7 +325,7 @@ html, body {
   text-align: center;
   font-size: 8px;
   color: var(--disabled-color);
-  position: absolute;
+  position: fixed; /* 改为固定定位 */
   bottom: 5px;
   left: 50%;
   transform: translateX(-50%);

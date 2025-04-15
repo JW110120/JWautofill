@@ -1,6 +1,7 @@
 export const BLEND_MODES = {
     '正常': 'normal',
     '溶解': 'dissolve',
+    '背后': 'behind',  // 添加背后模式
     '变暗': 'darken',
     '正片叠底': 'multiply',
     '颜色加深': 'colorBurn',

@@ -16,7 +16,7 @@
             "type": "panel",
             "minimumSize": {
                 "width": 250,
-                "height": 325 
+                "height": 370 
             },
             "maximumSize": {
                 "width": 250,
@@ -28,7 +28,7 @@
             },
             "preferredFloatingSize": {
                 "width": 250,
-                "height": 325 
+                "height": 370
             },
             "icons": [
                 {

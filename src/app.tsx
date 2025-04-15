@@ -3,10 +3,11 @@ import { interaction } from 'uxp';
 import { app, action, core } from 'photoshop';
 import { BLEND_MODES } from './constants/blendModes';
 import { BLEND_MODE_OPTIONS } from './constants/blendModeOptions';
-import { AppProps, AppState, initialState } from './types/app';
+import { AppState, initialState } from './types/state';
 import { DragHandler } from './utils/DragHandler';
 import { FillHandler } from './utils/FillHandler';
 import { LayerInfoHandler } from './utils/LayerInfoHandler';
+import { ClearHandler } from './utils/ClearHandler';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -27,6 +28,7 @@ class App extends React.Component<AppProps, AppState> {
         this.handleMouseMove = this.handleMouseMove.bind(this);
         this.handleMouseUp = this.handleMouseUp.bind(this);
         this.toggleCreateNewLayer = this.toggleCreateNewLayer.bind(this);
+        this.toggleClearMode = this.toggleClearMode.bind(this);
     }
 
     async componentDidMount() {
@@ -54,6 +56,14 @@ class App extends React.Component<AppProps, AppState> {
             const isExpanded = !prevState.isExpanded;
             return { isExpanded };
         });
+    }
+
+    // 添加清除模式切换函数
+    toggleClearMode() {
+        this.setState(prevState => ({
+            clearMode: !prevState.clearMode,
+            createNewLayer: prevState.clearMode ? prevState.createNewLayer : false // 如果开启清除模式，关闭新建图层模式
+        }));
     }
 
     async handleSelectionChange() {
@@ -175,15 +185,23 @@ class App extends React.Component<AppProps, AppState> {
         this.setState({ SelectionA: newSelection });
     }
 
-    // 添加新的切换函数
-    toggleCreateNewLayer() {
-        this.setState({ createNewLayer: !this.state.createNewLayer });
+     // 修改新建图层模式切换函数
+     toggleCreateNewLayer() {
+        this.setState(prevState => ({
+            createNewLayer: !prevState.createNewLayer,
+            clearMode: prevState.createNewLayer ? prevState.clearMode : false // 如果开启新建图层模式，关闭清除模式
+        }));
     }
 
     async fillSelection() {
         await new Promise(resolve => setTimeout(resolve, 50));
         try {
-            // 如果启用了新建图层选项，先创建新图层
+            if (this.state.clearMode) {
+                await ClearHandler.clearWithOpacity(this.state.opacity);
+                return;
+            }
+
+            // 原有的填充逻辑
             if (this.state.createNewLayer) {
                 await action.batchPlay(
                     [{
@@ -339,13 +357,8 @@ class App extends React.Component<AppProps, AppState> {
 
     render() {
         return (
-            <div style={{ 
-                display: 'flex', 
-                flexDirection: 'column',
-                height: '415px',
-                justifyContent: 'space-between'
-            }}>
-            <div className="container">
+            <div>
+                <div className="container">
                 <h3 className="title">
                     <span className="title-text">选区笔1.1</span>
                     <span className="title-beta">beta</span>
@@ -362,11 +375,12 @@ class App extends React.Component<AppProps, AppState> {
                 </div>
             
                 <div className="blend-mode-container">
-                    <span className="blend-mode-label">混合模式：</span>
+                    <span className={`blend-mode-label ${this.state.clearMode ? 'disabled' : ''}`}>混合模式：</span>
                     <select
                         value={this.state.blendMode}
                         onChange={this.handleBlendModeChange}
                         className="blend-mode-select"
+                        disabled={this.state.clearMode}
                     >
                         {BLEND_MODE_OPTIONS.map((group, groupIndex) => (
                             <React.Fragment key={groupIndex}>
@@ -424,7 +438,8 @@ class App extends React.Component<AppProps, AppState> {
                         className="slider-input"
                     />
                 </div>
-                <div className="expand-section">
+            </div>
+            <div className="expand-section">
                     <div className="expand-header" onClick={this.toggleExpand}>
                         <div className={`expand-icon ${this.state.isExpanded ? 'expanded' : ''}`}>
                             {this.state.isExpanded ? (
@@ -480,17 +495,34 @@ class App extends React.Component<AppProps, AppState> {
                         checked={this.state.createNewLayer}
                         onChange={this.toggleCreateNewLayer}
                         className="checkbox-input"
+                        disabled={this.state.clearMode} // 在清除模式下禁用
                     />
                     <label 
                         htmlFor="newLayerCheckbox"
-                        className="checkbox-label"
-                        onClick={this.toggleCreateNewLayer}
+                        className={`checkbox-label ${this.state.clearMode ? 'disabled' : ''}`}
+                        onClick={this.state.clearMode ? undefined : this.toggleCreateNewLayer}
                     >
                         新建图层模式
                     </label>
                 </div>
+                <div className="checkbox-container">
+                    <input
+                        type='checkbox'
+                        id="clearModeCheckbox"
+                        checked={this.state.clearMode}
+                        onChange={this.toggleClearMode}
+                        className="checkbox-input"
+                        disabled={this.state.createNewLayer} // 在新建图层模式下禁用
+                    />
+                    <label 
+                        htmlFor="clearModeCheckbox"
+                        className={`checkbox-label ${this.state.createNewLayer ? 'disabled' : ''}`}
+                        onClick={this.state.createNewLayer ? undefined : this.toggleClearMode}
+                    >
+                        清除模式
+                    </label>
                 </div>
-            </div>
+                </div>
             </div>
             <div className="info-plane">
             <span className="copyright">Copyright © listen2me (JW)</span>

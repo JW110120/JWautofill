@@ -9,6 +9,7 @@ export const BLEND_MODE_OPTIONS: BlendModeOption[][] = [
     [
         { value: '正常', label: '正常' },
         { value: '溶解', label: '溶解' },
+        { value: '背后', label: '背后' },  // 添加背后模式
     ],
     [
         { value: '变暗', label: '变暗' },

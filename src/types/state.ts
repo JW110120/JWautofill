@@ -1,7 +1,3 @@
-export interface AppProps {
-    // 目前没有props，但为了未来扩展预留
-}
-
 export interface AppState {
     opacity: number;
     feather: number;
@@ -16,6 +12,7 @@ export interface AppState {
     selectionType: string;
     isExpanded: boolean;
     createNewLayer: boolean;  // 添加新状态
+    clearMode: boolean;  // 添加清除模式状态
 }
 
 export const initialState: AppState = {
@@ -32,4 +29,5 @@ export const initialState: AppState = {
     selectionType: 'normal',
     isExpanded: false,
     createNewLayer: false,    // 添加初始值
+    clearMode: false,    // 添加初始值
 };
