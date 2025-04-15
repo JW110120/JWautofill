@@ -19,7 +19,7 @@ html, body {
 
 .container {
   width: 250px;
-  height: 395px;
+  height: 480px;
   box-sizing: border-box;
   overflow-y: auto;
   background-color: var(--bg-color);
@@ -39,8 +39,7 @@ html, body {
 .title {
   text-align: center;
   font-weight: bold;
-  margin-bottom: 10px;
-  padding-bottom: 5px;
+  padding-bottom: 10px;
   border-bottom: 1px solid var(--border-color);
   color: var(--text-color);
 }
@@ -54,23 +53,23 @@ html, body {
 }
 
 .button-container {
-  align-items: center;  /* 改为 center */
+  align-items: center; 
+  margin: 5px 0;
   height: 50px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
 }
 
 .toggle-button {
   border-radius: 6px;
   cursor: pointer;
-  height: 45px;
+  height: 50px;
   width: 80%;
   display: flex;
-  align-items: center;
   justify-content: center;
   background-color: var(--button-bg);
-  border: 3px solid var(--border-color);
   color: var(--text-color);
-  padding: 8px 8px;
-  margin: 0 auto;
   transition: all 0.3s ease;
 }
 
@@ -94,7 +93,6 @@ html, body {
 .button-content {
   display: flex;
   align-items: center;
-  justify-content: center;
   width: 100%;
 }
 
@@ -108,15 +106,15 @@ html, body {
 }
 
 .button-indicator {
-  width: 11px;
-  height: 11px;
+  width: 13px;
+  height: 13px;
   border-radius: 50%;
   margin-left: 10px;
   flex-shrink: 0;
 }
 
 .button-indicator.enabled {
-  background-color: var(--uxp-host-link-color,rgb(55, 139, 241));
+  background-color: var(--uxp-host-link-color,rgb(26, 216, 23));
 }
 
 .button-indicator.disabled {
@@ -125,29 +123,25 @@ html, body {
 
 .blend-mode-container {
   display: flex;
-  margin-bottom: -45px;
+  margin-bottom: -43px;
   align-items: center;
   background-color: var(--bg-color);
   padding: 3px;
   position: relative;  
   width: calc(100% - 40px);  
-  left: 50%;           /* 添加左偏移 */
-  transform: translateX(-50%);  /* 使用transform实现居中 */
+  left: 50%;
+  transform: translateX(-48%);
   z-index: 1000;
 }
 
 .blend-mode-label {
   font-size: 13px;
   color: var(--text-color);
-  margin: 0;
-  padding: 0;
   flex-shrink: 0;
 }
 
 .blend-mode-select {
   flex: 1;
-  padding: 5px;
-  margin: 9px 0 0 0;  
   background-color: var(--bg-color);
   color: var(--text-color);
   cursor: pointer;
@@ -157,8 +151,7 @@ html, body {
 
 .blend-mode-option-divider {
   border-bottom: 1px solid var(--border-color);
-  position: relative;  
-  z-index: 1001;      
+  position: relative;   
   padding: 8px 0;
 }
 
@@ -166,7 +159,7 @@ html, body {
   background-color: var(--bg-color);
   border: 1px solid var(--border-color);
   border-radius: 3px;
-  padding: 18px 3px;
+  padding: 15px 3px 18px 3px;
   margin-top: 22px;
   z-index: 1;       /* 确保在混合模式容器下方 */
 }
@@ -175,7 +168,7 @@ html, body {
   font-size: 13px;
   padding-top: 10px;
   color: var(--text-color);
-  margin-bottom: -12px;
+  margin-bottom: -15px;
   padding-left: 10px;
   display: flex;
   justify-content: space-between;
@@ -198,27 +191,22 @@ html, body {
 
 .slider-input {
   width: 210px;
-  margin-bottom: 0px;
   margin-left: 6px;
   cursor: pointer;
   display: flex;
   justify-content: center;
-  align-items: center;
 }
 
 .expand-section {
   background-color: var(--bg-color);
-  height: 130px;
-  padding: 0;
+  height: 150px;
   margin-top: 10px;
-  position: relative;  /* 添加相对定位 */
   z-index: 1;  /* 设置基础层级 */
 }
 
 .expand-header {
   display: flex;
   align-items: center;
-  padding: 2px;
   cursor: pointer;
   font-size: 13px;
   color: var(--text-color);
@@ -246,14 +234,13 @@ html, body {
 }
 
 .expand-content {
-  max-height: 0;
+  max-height: 0px;
   overflow: hidden;
   transition: max-height 0.3s ease-out;
 }
 
 .expand-content.expanded {
-  max-height: 50%;
-  margin-bottom: 0;  /* 确保展开内容也没有底部边距 */
+  max-height: 200px;
 }
 
 .expand-icon .fill {
@@ -263,11 +250,9 @@ html, body {
 .checkbox-container {
   display: flex;
   border-bottom: 1px solid var(--border-color);  /* 添加分隔线 */
-  padding: 0px 15px 0px 15px;
 }
 
 .checkbox-input {
-  margin-right: 0px;
   cursor: pointer;
 }
 
@@ -287,6 +272,7 @@ html, body {
   box-sizing: border-box;
   position: absolute;  /* 改为绝对定位 */
   bottom: 0;
+  left: 0;
   z-index: 1000;  /* 确保在最上层 */
   left: 50%;  /* 水平居中 */
   transform: translateX(-50%);

@@ -15,6 +15,7 @@ export interface AppState {
     dragTarget: string | null;
     selectionType: string;
     isExpanded: boolean;
+    createNewLayer: boolean;  // 添加新状态
 }
 
 export const initialState: AppState = {
@@ -29,5 +30,6 @@ export const initialState: AppState = {
     dragStartValue: 0,
     dragTarget: null,
     selectionType: 'normal',
-    isExpanded: true
+    isExpanded: false,
+    createNewLayer: false,    // 添加初始值
 };

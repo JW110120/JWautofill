@@ -26,6 +26,7 @@ class App extends React.Component<AppProps, AppState> {
         this.handleLabelMouseDown = this.handleLabelMouseDown.bind(this);
         this.handleMouseMove = this.handleMouseMove.bind(this);
         this.handleMouseUp = this.handleMouseUp.bind(this);
+        this.toggleCreateNewLayer = this.toggleCreateNewLayer.bind(this);
     }
 
     async componentDidMount() {
@@ -174,9 +175,26 @@ class App extends React.Component<AppProps, AppState> {
         this.setState({ SelectionA: newSelection });
     }
 
+    // 添加新的切换函数
+    toggleCreateNewLayer() {
+        this.setState({ createNewLayer: !this.state.createNewLayer });
+    }
+
     async fillSelection() {
         await new Promise(resolve => setTimeout(resolve, 50));
         try {
+            // 如果启用了新建图层选项，先创建新图层
+            if (this.state.createNewLayer) {
+                await action.batchPlay(
+                    [{
+                        _obj: "make",
+                        _target: [{ _ref: "layer" }],
+                        _options: { dialogOptions: "dontDisplay" }
+                    }],
+                    { synchronousExecution: true }
+                );
+            }
+
             const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
             if (!layerInfo) return;
 
@@ -453,7 +471,24 @@ class App extends React.Component<AppProps, AppState> {
                     >
                         自动更新历史源
                     </label>
-                    </div>
+                </div>
+                {/* 添加新的复选框 */}
+                <div className="checkbox-container">
+                    <input
+                        type='checkbox'
+                        id="newLayerCheckbox"
+                        checked={this.state.createNewLayer}
+                        onChange={this.toggleCreateNewLayer}
+                        className="checkbox-input"
+                    />
+                    <label 
+                        htmlFor="newLayerCheckbox"
+                        className="checkbox-label"
+                        onClick={this.toggleCreateNewLayer}
+                    >
+                        新建图层模式
+                    </label>
+                </div>
                 </div>
             </div>
             </div>
