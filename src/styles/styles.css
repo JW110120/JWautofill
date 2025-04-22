@@ -257,10 +257,10 @@ html, body {
 }
 
 .expand-content.expanded {
-  max-height: 170px;
+  max-height: 400px;
 }
 
-.expand-icon .fill {
+.expand-icon path.fill {
   fill: var(--text-color);
 }
 
@@ -303,6 +303,198 @@ input[type="checkbox"] {
   color: var(--disabled-color);
 }
 
+/* 开关容器样式 */
+.switch-container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 15px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.switch-label {
+  font-size: 13px;
+  color: var(--text-color);
+}
+
+/* 填充模式组样式 */
+.fill-mode-group {
+  padding: 10px 15px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.radio-group-label {
+  font-size: 13px;
+  color: var(--text-color);
+  margin-bottom: 10px;
+}
+
+sp-radio-group {
+  width: 100%;
+}
+
+sp-radio {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 5px 0;
+}
+
+.settings-icon,
+.pattern-picker,
+.gradient-picker {
+  margin-left: auto;
+  padding: 4px;
+}
+
+/* 底部选项样式 */
+.bottom-options {
+  padding: 10px 15px;
+  border-top: 1px solid var(--border-color);
+  margin-top: auto;
+}
+
+/* 颜色设置面板样式 */
+.color-settings-panel {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background-color: var(--bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 15px;
+  width: 300px;
+  z-index: 1000;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.close-button {
+  background: none;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  color: var(--text-color);
+}
+
+.slider-group {
+  margin-bottom: 15px;
+}
+
+.slider-item {
+  margin-bottom: 10px;
+}
+
+.slider-item label {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 13px;
+}
+
+.panel-footer {
+  text-align: right;
+}
+
+/* 图案选择器样式 */
+.pattern-picker {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background-color: var(--bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 15px;
+  width: 350px;
+  z-index: 1000;
+}
+
+.patterns-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 15px 0;
+}
+
+.pattern-item {
+  cursor: pointer;
+  padding: 5px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  text-align: center;
+}
+
+.pattern-item.selected {
+  border-color: var(--uxp-host-link-color);
+}
+
+.pattern-item img {
+  width: 100%;
+  height: auto;
+}
+
+/* 渐变选择器样式 */
+.gradient-picker {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background-color: var(--bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 15px;
+  width: 350px;
+  z-index: 1000;
+}
+
+.gradient-type-selector {
+  margin-bottom: 15px;
+}
+
+.angle-selector {
+  margin-bottom: 15px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.gradient-stops {
+  margin-bottom: 15px;
+}
+
+.gradient-stop {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.preview-gradient {
+  height: 50px;
+  border-radius: 4px;
+  margin-bottom: 15px;
+}
+
+/* 通用按钮样式 */
+button {
+  padding: 5px 10px;
+  background-color: var(--button-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-color);
+  cursor: pointer;
+}
+
+button:hover {
+  background-color: var(--hover-bg);
+}
+
 .info-plane {
   width: 250px;
   height: 20px;
@@ -331,4 +523,11 @@ input[type="checkbox"] {
   transform: translateX(-50%);
   pointer-events: none;
   z-index: 2000;  /* 与 info-plane 保持同级 */
+}
+.settings-icon-path {
+    fill: var(--text-color);
+}
+
+.settings-icon:hover .settings-icon-path {
+    fill: var(--hover-text-color);
 }

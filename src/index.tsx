@@ -4,6 +4,9 @@ import App from './app';
 import { initializeTheme } from './styles/theme.ts';
 import './styles/styles.css';
 import { defaultTheme, Provider } from '@adobe/react-spectrum';
+import ColorSettingsPanel from './components/ColorSettingsPanel';
+import PatternPicker from './components/PatternPicker';
+import GradientPicker from './components/GradientPicker';
 
 // 初始化主题
 initializeTheme();
