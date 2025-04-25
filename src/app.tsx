@@ -11,6 +11,7 @@ import { ClearHandler } from './utils/ClearHandler';
 import ColorSettingsPanel from './components/ColorSettingsPanel';
 import PatternPicker from './components/PatternPicker';
 import GradientPicker from './components/GradientPicker';
+import { ExpandIcon, SettingsIcon } from './styles/Icons';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -108,10 +109,24 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     handleColorSettingsSave(settings: ColorSettings) {
-        this.setState({
-            colorSettings: settings,
-            isColorSettingsOpen: false
-        });
+        try {
+            // 验证设置值是否在有效范围内
+            const validatedSettings = {
+                hueVariation: Math.min(360, Math.max(0, settings.hueVariation)),
+                saturationVariation: Math.min(100, Math.max(0, settings.saturationVariation)),
+                brightnessVariation: Math.min(100, Math.max(0, settings.brightnessVariation)),
+                opacityVariation: Math.min(100, Math.max(0, settings.opacityVariation)),
+                pressureVariation: Math.min(100, Math.max(0, settings.pressureVariation))
+            };
+
+            this.setState({
+                colorSettings: validatedSettings,
+                isColorSettingsOpen: false
+            });
+        } catch (error) {
+            console.error('保存颜色设置失败:', error);
+            // 可以添加错误提示UI
+        }
     }
 
     handlePatternSelect(pattern: Pattern) {
@@ -518,15 +533,7 @@ class App extends React.Component<AppProps, AppState> {
             <div className="expand-section">
                     <div className="expand-header" onClick={this.toggleExpand}>
                         <div className={`expand-icon ${this.state.isExpanded ? 'expanded' : ''}`}>
-                            {this.state.isExpanded ? (
-                                <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18">
-                                    <path className="fill" d="M4,7.01a1,1,0,0,1,1.7055-.7055l3.289,3.286,3.289-3.286a1,1,0,0,1,1.437,1.3865l-.0245.0245L9.7,11.7075a1,1,0,0,1-1.4125,0L4.293,7.716A.9945.9945,0,0,1,4,7.01Z" />
-                                </svg>
-                            ) : (
-                                <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18">
-                                    <path className="fill" d="M12,9a.994.994,0,0,1-.2925.7045l-3.9915,3.99a1,1,0,1,1-1.4355-1.386l.0245-.0245L9.5905,9,6.3045,5.715A1,1,0,0,1,7.691,4.28l.0245.0245,3.9915,3.99A.994.994,0,0,1,12,9Z" />
-                                </svg>
-                            )}
+                            <ExpandIcon expanded={this.state.isExpanded} />
                         </div>
                         <span>更多选项</span>
                     </div>
@@ -557,43 +564,36 @@ class App extends React.Component<AppProps, AppState> {
                             <sp-radio-group 
                                 selected={this.state.fillMode} 
                                 name="fillMode"
-                                vertical={true}
                                 onChange={this.handleFillModeChange}
                             >
-                                <sp-radio value="foreground" style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px'}}>
-                                    前景色
+                                <sp-radio value="foreground" className="radio-item">
+                                    纯色
                                     <sp-action-button 
                                         quiet 
-                                        class="settings-icon"
+                                        className="settings-icon"
                                         onClick={this.toggleColorSettings}
                                     >
-                                        <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18">
-                                            <path className="settings-icon-path" d="M16.45,7.8965H14.8945a5.97644,5.97644,0,0,0-.921-2.2535L15.076,4.54a.55.55,0,0,0,.00219-.77781L15.076,3.76l-.8365-.836a.55.55,0,0,0-.77781-.00219L13.4595,2.924,12.357,4.0265a5.96235,5.96235,0,0,0-2.2535-.9205V1.55a.55.55,0,0,0-.55-.55H8.45a.55.55,0,0,0-.55.55V3.106a5.96235,5.96235,0,0,0-2.2535.9205l-1.1-1.1025a.55.55,0,0,0-.77781-.00219L3.7665,2.924,2.924,3.76a.55.55,0,0,0-.00219.77781L2.924,4.54,4.0265,5.643a5.97644,5.97644,0,0,0-.921,2.2535H1.55a.55.55,0,0,0-.55.55V9.55a.55.55,0,0,0,.55.55H3.1055a5.967,5.967,0,0,0,.921,2.2535L2.924,13.4595a.55.55,0,0,0-.00219.77782l.00219.00218.8365.8365a.55.55,0,0,0,.77781.00219L4.5405,15.076,5.643,13.9735a5.96235,5.96235,0,0,0,2.2535.9205V16.45a.55.55,0,0,0,.55.55H9.55a.55.55,0,0,0,.55-.55V14.894a5.96235,5.96235,0,0,0,2.2535-.9205L13.456,15.076a.55.55,0,0,0,.77782.00219L14.236,15.076l.8365-.8365a.55.55,0,0,0,.00219-.77781l-.00219-.00219L13.97,12.357a5.967,5.967,0,0,0,.921-2.2535H16.45a.55.55,0,0,0,.55-.55V8.45a.55.55,0,0,0-.54649-.55349ZM11.207,9A2.207,2.207,0,1,1,9,6.793H9A2.207,2.207,0,0,1,11.207,9Z" />
-                                        </svg>
+                                        <SettingsIcon />
                                     </sp-action-button>
                                 </sp-radio>
-                                <sp-radio value="pattern" style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px'}}>
+                                <sp-radio value="pattern" className="radio-item">
                                     图案
                                     <sp-action-button 
                                         quiet 
-                                        class="settings-icon"
+                                        className="settings-icon"
                                         onClick={this.openPatternPicker}
                                     >
-                                        <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18">
-                                            <path class="settings-icon-path" d="M16.45,7.8965H14.8945a5.97644,5.97644,0,0,0-.921-2.2535L15.076,4.54a.55.55,0,0,0,.00219-.77781L15.076,3.76l-.8365-.836a.55.55,0,0,0-.77781-.00219L13.4595,2.924,12.357,4.0265a5.96235,5.96235,0,0,0-2.2535-.9205V1.55a.55.55,0,0,0-.55-.55H8.45a.55.55,0,0,0-.55.55V3.106a5.96235,5.96235,0,0,0-2.2535.9205l-1.1-1.1025a.55.55,0,0,0-.77781-.00219L3.7665,2.924,2.924,3.76a.55.55,0,0,0-.00219.77781L2.924,4.54,4.0265,5.643a5.97644,5.97644,0,0,0-.921,2.2535H1.55a.55.55,0,0,0-.55.55V9.55a.55.55,0,0,0,.55.55H3.1055a5.967,5.967,0,0,0,.921,2.2535L2.924,13.4595a.55.55,0,0,0-.00219.77782l.00219.00218.8365.8365a.55.55,0,0,0,.77781.00219L4.5405,15.076,5.643,13.9735a5.96235,5.96235,0,0,0,2.2535.9205V16.45a.55.55,0,0,0,.55.55H9.55a.55.55,0,0,0,.55-.55V14.894a5.96235,5.96235,0,0,0,2.2535-.9205L13.456,15.076a.55.55,0,0,0,.77782.00219L14.236,15.076l.8365-.8365a.55.55,0,0,0,.00219-.77781l-.00219-.00219L13.97,12.357a5.967,5.967,0,0,0,.921-2.2535H16.45a.55.55,0,0,0,.55-.55V8.45a.55.55,0,0,0-.54649-.55349ZM11.207,9A2.207,2.207,0,1,1,9,6.793H9A2.207,2.207,0,0,1,11.207,9Z" />
-                                        </svg>
+                                        <SettingsIcon />
                                     </sp-action-button>
                                 </sp-radio>
-                                <sp-radio value="gradient" style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                                <sp-radio value="gradient" className="radio-item">
                                     渐变
                                     <sp-action-button 
                                         quiet 
                                         class="settings-icon"
                                         onClick={this.openGradientPicker}
                                     >
-                                        <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18">
-                                            <path class="settings-icon-path" d="M16.45,7.8965H14.8945a5.97644,5.97644,0,0,0-.921-2.2535L15.076,4.54a.55.55,0,0,0,.00219-.77781L15.076,3.76l-.8365-.836a.55.55,0,0,0-.77781-.00219L13.4595,2.924,12.357,4.0265a5.96235,5.96235,0,0,0-2.2535-.9205V1.55a.55.55,0,0,0-.55-.55H8.45a.55.55,0,0,0-.55.55V3.106a5.96235,5.96235,0,0,0-2.2535.9205l-1.1-1.1025a.55.55,0,0,0-.77781-.00219L3.7665,2.924,2.924,3.76a.55.55,0,0,0-.00219.77781L2.924,4.54,4.0265,5.643a5.97644,5.97644,0,0,0-.921,2.2535H1.55a.55.55,0,0,0-.55.55V9.55a.55.55,0,0,0,.55.55H3.1055a5.967,5.967,0,0,0,.921,2.2535L2.924,13.4595a.55.55,0,0,0-.00219.77782l.00219.00218.8365.8365a.55.55,0,0,0,.77781.00219L4.5405,15.076,5.643,13.9735a5.96235,5.96235,0,0,0,2.2535.9205V16.45a.55.55,0,0,0,.55.55H9.55a.55.55,0,0,0,.55-.55V14.894a5.96235,5.96235,0,0,0,2.2535-.9205L13.456,15.076a.55.55,0,0,0,.77782.00219L14.236,15.076l.8365-.8365a.55.55,0,0,0,.00219-.77781l-.00219-.00219L13.97,12.357a5.967,5.967,0,0,0,.921-2.2535H16.45a.55.55,0,0,0,.55-.55V8.45a.55.55,0,0,0-.54649-.55349ZM11.207,9A2.207,2.207,0,1,1,9,6.793H9A2.207,2.207,0,0,1,11.207,9Z" />
-                                        </svg>
+                                        <SettingsIcon />
                                     </sp-action-button>
                                 </sp-radio>
                             </sp-radio-group>
@@ -631,9 +631,6 @@ class App extends React.Component<AppProps, AppState> {
             <div className="info-plane">
             <span className="copyright">Copyright © listen2me (JW)</span>
         </div>
-            <div className="info-plane">
-                <span className="copyright">Copyright © listen2me (JW)</span>
-            </div>
 
             {/* 颜色设置面板 */}
             <ColorSettingsPanel 

@@ -59,7 +59,7 @@ export const initialState: AppState = {
     dragStartValue: 0,
     dragTarget: null,
     selectionType: 'normal',
-    isExpanded: false,
+    isExpanded: true,
     createNewLayer: false,    // 添加初始值
     clearMode: false,    // 添加初始值
     fillMode: 'foreground',
