@@ -469,21 +469,28 @@ class App extends React.Component<AppProps, AppState> {
                 <div className="blend-mode-container">
                     <span className={`blend-mode-label ${this.state.clearMode ? 'disabled' : ''}`}>混合模式：</span>
                     <sp-picker
-                        size="small"
+                        size="s"
                         selects="single"
                         selected={this.state.blendMode || "正常"}
                         onChange={this.handleBlendModeChange}
                         disabled={this.state.clearMode}
                     >
                         <sp-menu>
-                            {BLEND_MODE_OPTIONS.flat().map((option) => (
-                                <sp-menu-item 
-                                    key={option.value} 
-                                    value={option.value}
-                                    selected={option.value === (this.state.blendMode || "正常")}
-                                >
-                                    {option.label}
-                                </sp-menu-item>
+                            {BLEND_MODE_OPTIONS.map((group, groupIndex) => (
+                                <React.Fragment key={groupIndex}>
+                                    {group.map((option) => (
+                                        <sp-menu-item 
+                                            key={option.value} 
+                                            value={option.value}
+                                            selected={option.value === (this.state.blendMode || "正常")}
+                                        >
+                                            {option.label}
+                                        </sp-menu-item>
+                                    ))}
+                                    {groupIndex < BLEND_MODE_OPTIONS.length - 1 && (
+                                        <sp-menu-divider />
+                                    )}
+                                </React.Fragment>
                             ))}
                         </sp-menu>
                     </sp-picker>
@@ -569,33 +576,33 @@ class App extends React.Component<AppProps, AppState> {
                                 onChange={this.handleFillModeChange}
                             >
                                 <sp-radio value="foreground" className="radio-item">
-                                    纯色
+                                    <span className="radio-item-label">前景色</span>
                                     <sp-action-button 
                                         quiet 
                                         className="settings-icon"
                                         onClick={this.toggleColorSettings}
                                     >
-                                        <SettingsIcon />
+                                        <SettingsIcon/>
                                     </sp-action-button>
                                 </sp-radio>
                                 <sp-radio value="pattern" className="radio-item">
-                                    图案
+                                    <span className="radio-item-label">图案</span>
                                     <sp-action-button 
                                         quiet 
                                         className="settings-icon"
                                         onClick={this.openPatternPicker}
                                     >
-                                        <SettingsIcon />
+                                        <SettingsIcon/>
                                     </sp-action-button>
                                 </sp-radio>
                                 <sp-radio value="gradient" className="radio-item">
-                                    渐变
+                                    <span className="radio-item-label">渐变</span>
                                     <sp-action-button 
                                         quiet 
                                         class="settings-icon"
                                         onClick={this.openGradientPicker}
                                     >
-                                        <SettingsIcon />
+                                        <SettingsIcon/>
                                     </sp-action-button>
                                 </sp-radio>
                             </sp-radio-group>
