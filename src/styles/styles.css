@@ -262,7 +262,6 @@ sp-picker[disabled] {
   display: flex;
   border-bottom: 1px solid var(--border-color);  /* 添加分隔线 */
   align-items: center;
-  margin-top: -20px;
 }
 
 /* 复选框样式 */
@@ -271,7 +270,7 @@ input[type="checkbox"] + label {
 }
 
 input[type="checkbox"] {
-  margin-left: 60px;
+  margin-left: 45px;
 }
 
 .checkbox-input {

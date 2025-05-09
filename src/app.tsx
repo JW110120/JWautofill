@@ -618,7 +618,11 @@ class App extends React.Component<AppProps, AppState> {
                                     onChange={this.toggleDeselectAfterFill}
                                     className="checkbox-input"
                                 />
-                                <label htmlFor="deselectCheckbox" className="checkbox-label">
+                                <label 
+                                    htmlFor="deselectCheckbox" 
+                                    className="checkbox-label"
+                                    onClick={this.toggleDeselectAfterFill} // 添加 onClick 事件处理程序
+                                >
                                     填充后取消选区
                                 </label>
                             </div>
@@ -630,7 +634,11 @@ class App extends React.Component<AppProps, AppState> {
                                     onChange={this.toggleAutoUpdateHistory}
                                     className="checkbox-input"
                                 />
-                                <label htmlFor="historyCheckbox" className="checkbox-label">
+                                <label 
+                                    htmlFor="historyCheckbox" 
+                                    className="checkbox-label"
+                                    onClick={this.toggleAutoUpdateHistory} // 添加 onClick 事件处理程序
+                                >
                                     自动更新历史源
                                 </label>
                             </div>
