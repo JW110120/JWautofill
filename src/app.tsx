@@ -12,6 +12,7 @@ import ColorSettingsPanel from './components/ColorSettingsPanel';
 import PatternPicker from './components/PatternPicker';
 import GradientPicker from './components/GradientPicker';
 import { ExpandIcon, SettingsIcon } from './styles/Icons';
+import { calculateRandomColor } from './utils/ColorUtils';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -293,21 +294,20 @@ class App extends React.Component<AppProps, AppState> {
             if (!layerInfo) return;
 
             const { isBackground, hasTransparencyLocked, hasPixels } = layerInfo;
+            const randomColor = calculateRandomColor(this.state.colorSettings, this.state.opacity);
             const fillOptions = {
-                opacity: this.state.opacity,
-                blendMode: this.state.blendMode
+                opacity: randomColor.opacity,
+                blendMode: this.state.blendMode,
+                color: randomColor
             };
 
-        // 计算随机颜色
-        const randomColor = this.calculateRandomColor(this.state.colorSettings);
-
-        // 更新填充命令以使用随机颜色
-        const command = {
-            ...FillHandler.createBasicFillCommand(fillOptions),
-            using: { _enum: 'fillContents', _value: 'foregroundColor' },
-            color: randomColor, // 使用计算的随机颜色
-            _isCommand: true
-        };
+            // 更新填充命令以使用随机颜色
+            const command = {
+                ...FillHandler.createBasicFillCommand(fillOptions),
+                using: { _enum: 'fillContents', _value: 'color' }, 
+                color: fillOptions.color,
+                _isCommand: true
+            };
 
             if (isBackground) {
                 await FillHandler.fillBackground(fillOptions);
@@ -331,57 +331,8 @@ class App extends React.Component<AppProps, AppState> {
         } catch (error) {
             console.error('填充选区失败:', error);
         }
-    }
+    } 
 
-// 新增方法：计算随机颜色
-calculateRandomColor(settings: ColorSettings) {
-    const foregroundColor = app.foregroundColor;
-    const baseHue = foregroundColor.hsb.hue;
-    const baseSaturation = foregroundColor.hsb.saturation;
-    const baseBrightness = foregroundColor.hsb.brightness;
-
-    // 计算色相抖动范围
-    let hueRange = [];
-    if (settings.hueVariation > 0) {
-        const hueVariation = settings.hueVariation;
-        hueRange = [
-            ...Array.from({ length: hueVariation / 2 }, (_, i) => (baseHue + 360 - hueVariation / 2 + i) % 360),
-            ...Array.from({ length: hueVariation / 2 }, (_, i) => (baseHue + i) % 360)
-        ];
-    }
-
-    const hue = hueRange[Math.floor(Math.random() * hueRange.length)];
-
-    // 计算饱和度抖动范围
-    const saturationVariation = settings.saturationVariation / 2;
-    const saturationMin = Math.max(0, baseSaturation - baseSaturation * saturationVariation);
-    const saturationMax = Math.min(100, baseSaturation + baseSaturation * saturationVariation);
-    const saturation = Math.floor(Math.random() * (saturationMax - saturationMin + 1)) + saturationMin;
-
-    // 计算亮度抖动范围
-    const brightnessVariation = settings.brightnessVariation / 2;
-    const brightnessMin = Math.max(0, baseBrightness - baseBrightness * brightnessVariation);
-    const brightnessMax = Math.min(100, baseBrightness + baseBrightness * brightnessVariation);
-    const brightness = Math.floor(Math.random() * (brightnessMax - brightnessMin + 1)) + brightnessMin;
-
-    const randomColor = this.newrandomhsb(hue, saturation, brightness);
-    console.log('随机颜色:', randomColor); // 调试输出
-
-    return randomColor;
-}
-
-
-// 新增方法：生成随机HSB颜色
-newrandomhsb(hue: number, saturation: number, brightness: number) {
-    return {
-        hsb: {
-            hue: hue,
-            saturation: saturation,
-            brightness: brightness
-        }
-    };
-}
-    
     // 设置图层透明度锁定
     async lockLayerTransparency() {
         try {
