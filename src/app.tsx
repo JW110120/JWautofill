@@ -435,7 +435,8 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     handleBlendModeChange(event) {
-        this.setState({ blendMode: event.target.value });
+        const newBlendMode = event.target.value;
+        this.setState({ blendMode: newBlendMode });
     }
 
     toggleAutoUpdateHistory() {
@@ -464,29 +465,30 @@ class App extends React.Component<AppProps, AppState> {
                         </div>
                     </sp-action-button>
                 </div>
-            
+
                 <div className="blend-mode-container">
                     <span className={`blend-mode-label ${this.state.clearMode ? 'disabled' : ''}`}>混合模式：</span>
-                    <select
-                        value={this.state.blendMode}
+                    <sp-picker
+                        size="small"
+                        selects="single"
+                        selected={this.state.blendMode || "正常"}
                         onChange={this.handleBlendModeChange}
-                        className="blend-mode-select"
                         disabled={this.state.clearMode}
                     >
-                        {BLEND_MODE_OPTIONS.map((group, groupIndex) => (
-                            <React.Fragment key={groupIndex}>
-                                {group.map((option) => (
-                                    <option key={option.value} value={option.value}>
-                                        {option.label}
-                                    </option>
-                                ))}
-                                {groupIndex < BLEND_MODE_OPTIONS.length - 1 && (
-                                    <option disabled className="blend-mode-option-divider" />
-                                )}
-                            </React.Fragment>
-                        ))}
-                    </select>
-                </div>
+                        <sp-menu>
+                            {BLEND_MODE_OPTIONS.flat().map((option) => (
+                                <sp-menu-item 
+                                    key={option.value} 
+                                    value={option.value}
+                                    selected={option.value === (this.state.blendMode || "正常")}
+                                >
+                                    {option.label}
+                                </sp-menu-item>
+                            ))}
+                        </sp-menu>
+                    </sp-picker>
+                </div> 
+
                 <div className="slider-container">
                     <label
                         className={`slider-label ${

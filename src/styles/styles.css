@@ -126,11 +126,12 @@ html, body {
   margin-bottom: -43px;
   align-items: center;
   background-color: var(--bg-color);
-  padding:0 15px;
+  padding: 0 15px;
   position: relative;  
   width: calc(100% - 40px);  
   left: 50%;
   transform: translateX(-50%);
+  isolation: isolate; /* 添加这一行 */
 }
 
 .blend-mode-label {
@@ -138,26 +139,24 @@ html, body {
   color: var(--text-color);
 }
 
-.blend-mode-select {
+sp-picker {
   flex: 1;
   padding: 5px;
   margin: 9px 0 0 0;  
-  cursor: pointer;
+  cursor: pointer;    
+  position: relative;
+  z-index: 1;
+  width: 100%;
 }
 
 /* 添加禁用状态样式 */
-.blend-mode-select:disabled {
+sp-picker[disabled] {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
 .blend-mode-label.disabled {
   opacity: 0.5;
-}
-
-.blend-mode-option-divider {
-  border-bottom: 1px solid var(--border-color);   
-  padding: 8px 0;
 }
 
 .slider-container {
@@ -379,6 +378,7 @@ sp-radio {
   box-sizing: border-box;
   overflow-y: auto;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  z-index: 9999 !important;
 }
 
 
