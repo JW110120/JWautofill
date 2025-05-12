@@ -450,7 +450,7 @@ class App extends React.Component<AppProps, AppState> {
             <div>
                 <div className="container">
                 <h3 className="title">
-                    <span className="title-text">选区笔1.1</span>
+                    <span className="title-text">选区笔1.2</span>
                     <span className="title-beta">beta</span>
                 </h3>
                 <div className="button-container">

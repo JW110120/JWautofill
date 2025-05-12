@@ -30,11 +30,14 @@ html, body {
   top: 0;  /* 确保容器从顶部开始 */
 }
 
+.icon-fill {
+  fill: var(--text-color);
+} 
+
 /* 隐藏滚动条 */
 ::-webkit-scrollbar {
   display: none;
 }
-
 
 .title {
   text-align: center;
@@ -42,7 +45,7 @@ html, body {
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border-color);
   color: var(--text-color);
-}
+}   
 
 .title-text {
   font-size: 20px;
@@ -367,6 +370,10 @@ sp-radio {
   background-color: var(--button-down);
 }
 
+.settings-icon-path {
+  fill: var(--text-color);
+}
+
 .settings-icon,
 .pattern-picker,
 .gradient-picker {
@@ -470,35 +477,151 @@ sp-radio {
   height: 730px;
   background-color: var(--bg-color);
   border: 1px solid var(--border-color);
-  padding: 15px;
+  padding: 10px;
   box-sizing: border-box;
   overflow-y: auto;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
   z-index: 9999 !important;
+  display: flex;
+  flex-direction: column;
+}
+
+.pattern-container {
+  height: 175px;
+  width: 230px;
+  overflow-y: auto;
+  margin-bottom: 10px;
+  background-color: rgb(16, 16, 16);
+  border-radius: 4px;
 }
 
 .patterns-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);  /* 修改为2列布局 */
-  gap: 10px;
-  margin: 15px 0;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  padding: 4px;
 }
 
-.pattern-item {
-  cursor: pointer;
-  padding: 5px;
+.photo-container {
+  aspect-ratio: 1;
   border: 1px solid var(--border-color);
   border-radius: 4px;
-  text-align: center;
+  overflow: hidden;
+  cursor: pointer;
+  position: relative;
 }
 
-.pattern-item.selected {
-  border-color: var(--uxp-host-link-color);
-}
-
-.pattern-item img {
+.photo-container img {
   width: 100%;
-  height: auto;
+  height: 100%;
+  object-fit: cover;
+}
+
+.photo-container.selected {
+  border-color: var(--uxp-host-link-color);
+  box-shadow: 0 0 0 2px var(--uxp-host-link-color);
+}
+
+.pattern-icon-container {
+  padding: 8px 0;
+  border-top: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.icon-group {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.icon-button {
+  padding: 4px;
+  background: none;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-button:hover {
+  background-color: var(--hover-bg);
+}
+
+.icon-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.icon-button svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.icon-button .icon-fill {
+  fill: var(--text-color);
+}
+
+.picker-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 5px;
+  height: 40px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.picker-header h3 {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-color);
+}
+
+.close-button {
+  background-color: rgb(191, 17, 14);
+  border: 1px solid var(--border-color);
+  font-size: 14px;
+  cursor: pointer;
+  color: var(--text-color);
+  width: 25px;
+  height: 25px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+
+.pattern-settings {
+  padding: 10px 0;
+  color: var(--text-color);
+}
+
+.setting-item {
+  display: flex;
+  align-items: center;
+  margin-bottom: 10px;
+  padding: 0 10px;
+  gap: 8px;
+  color: var(--text-color);
+}
+
+.setting-item label {
+  min-width: 45px;
+  font-size: 13px;
+  color: var(--text-color);
+}
+
+.setting-item .value {
+  min-width: 40px;
+  text-align: right;
+  font-size: 13px;
+  color: var(--text-color);
+}
+
+.setting-item input[type="range"] {
+  width: 120px;
+  flex: 0 0 auto;
 }
 
 /* 渐变选择器样式 */
@@ -592,11 +715,4 @@ button:hover {
   transform: translateX(-50%);
   pointer-events: none;
   z-index: 2000;  /* 与 info-plane 保持同级 */
-}
-.settings-icon-path {
-    fill: var(--text-color);
-}
-
-.settings-icon:hover .settings-icon-path {
-    fill: var(--hover-text-color);
 }
