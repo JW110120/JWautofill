@@ -492,6 +492,8 @@ sp-radio {
   margin-bottom: 10px;
   background-color: rgb(16, 16, 16);
   border-radius: 4px;
+  position: relative;
+  z-index: 1;
 }
 
 .patterns-grid {
@@ -502,18 +504,23 @@ sp-radio {
 }
 
 .photo-container {
-  aspect-ratio: 1;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  overflow: hidden;
-  cursor: pointer;
-  position: relative;
+    aspect-ratio: 1;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    overflow: hidden;
+    cursor: pointer;
+    position: relative;
+    width: 100%; 
+    height: 100%; 
+    z-index: 2;
 }
 
 .photo-container img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    border: 1px solid red; /* 调试用边框 */
 }
 
 .photo-container.selected {

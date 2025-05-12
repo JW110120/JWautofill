@@ -18,6 +18,40 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
     const [angle, setAngle] = useState<number>(0);
     const [scale, setScale] = useState<number>(100);
 
+    const processFile = async (file) => {
+        try {
+            const arrayBuffer = await file.read({ format: require('uxp').storage.formats.binary });
+            
+            // 使用原生JavaScript方法替代Buffer
+            const base64String = arrayBufferToBase64(arrayBuffer);
+            const fileType = file.name.split('.').pop()?.toLowerCase() || 'jpeg';
+            const dataUrl = `data:image/${fileType};base64,${base64String}`;
+            
+            // 添加调试日志
+            console.log('生成的data URL:', dataUrl.substring(0, 50) + '...'); 
+            
+            return {
+                id: Date.now().toString(36) + Math.random().toString(36).substr(2),
+                name: file.name,
+                preview: dataUrl,
+                data: arrayBuffer
+            };
+        } catch (error) {
+            console.error('处理文件时发生错误:', error);
+            return null;
+        }
+    };
+
+    // 使用已有的辅助函数
+    const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
+        let binary = '';
+        const bytes = new Uint8Array(buffer);
+        for (let i = 0; i < bytes.byteLength; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        return btoa(binary);
+    };
+    
     const handleFileSelect = async () => {
         try {
             const files = await require('uxp').storage.localFileSystem.getFileForOpening({
@@ -32,50 +66,32 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
 
             const fileArray = Array.isArray(files) ? files : [files];
             
-            const processFile = async (file) => {
-                try {
-                    const arrayBuffer = await file.read({ format: require('uxp').storage.formats.binary });
-                    
-                    const bytes = new Uint8Array(arrayBuffer);
-                    let binary = '';
-                    const chunkSize = 1024;
-                    
-                    for (let i = 0; i < bytes.length; i += chunkSize) {
-                        const chunk = bytes.slice(i, i + chunkSize);
-                        chunk.forEach(byte => {
-                            binary += String.fromCharCode(byte);
-                        });
-                    }
-                    
-                    const base64String = btoa(binary);
-                    const fileType = file.name.split('.').pop()?.toLowerCase() || 'jpeg';
-                    const dataUrl = `data:image/${fileType};base64,${base64String}`;
-
-                    return {
-                        id: Date.now().toString(36) + Math.random().toString(36).substr(2),
-                        name: file.name,
-                        preview: dataUrl,
-                        data: arrayBuffer
-                    };
-                } catch (error) {
-                    console.error('处理文件时发生错误:', error);
-                    return null;
-                }
-            };
-
-            // 修改这里：确保所有文件处理完成后再更新状态
+            // 添加调试日志
+            console.log('开始处理文件:', fileArray.length);
+            
             const newPatterns = await Promise.all(
-                fileArray.map(async file => await processFile(file))
+                fileArray.map(async file => {
+                    const pattern = await processFile(file);
+                    if (pattern) {
+                        console.log('成功处理文件:', pattern.name);
+                    }
+                    return pattern;
+                })
             ).then(results => results.filter(Boolean));
 
+            console.log('处理完成，新图案数量:', newPatterns.length);
+            
             // 更新状态
-            setPatterns(prevPatterns => [...prevPatterns, ...newPatterns]);
+            setPatterns(prevPatterns => {
+                const updatedPatterns = [...prevPatterns, ...newPatterns];
+                console.log('更新后的patterns:', updatedPatterns);
+                return updatedPatterns;
+            });
             
             // 如果有新图案，自动选择第一个
             // 修改这里：移除自动调用onSelect的逻辑
             if (newPatterns.length > 0) {
                 setSelectedPattern(newPatterns[0].id);
-                // 移除这行：onSelect(newPatterns[0]);
             }
         } catch (error) {
             console.error('选择文件时发生错误:', error);
