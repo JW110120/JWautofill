@@ -20,24 +20,32 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
 
     const processFile = async (file) => {
         try {
-            const arrayBuffer = await file.read({ format: require('uxp').storage.formats.binary });
+            console.log('开始处理文件:', file.name);
             
-            // 使用原生JavaScript方法替代Buffer
+            const arrayBuffer = await file.read({ format: require('uxp').storage.formats.binary });
+            console.log('文件读取成功，大小:', arrayBuffer.byteLength, 'bytes');
+            
+            if (arrayBuffer.byteLength === 0) {
+                throw new Error('文件内容为空');
+            }
+            
             const base64String = arrayBufferToBase64(arrayBuffer);
+            console.log('Base64转换成功，长度:', base64String.length);
+            
             const fileType = file.name.split('.').pop()?.toLowerCase() || 'jpeg';
             const dataUrl = `data:image/${fileType};base64,${base64String}`;
-            
-            // 添加调试日志
-            console.log('生成的data URL:', dataUrl.substring(0, 50) + '...'); 
-            
-            return {
-                id: Date.now().toString(36) + Math.random().toString(36).substr(2),
+            // 直接创建pattern对象，不进行图片验证
+            const pattern = {
+                id: generateUniqueId(),
                 name: file.name,
                 preview: dataUrl,
                 data: arrayBuffer
             };
+            console.log('Pattern对象创建成功:', pattern.name);
+            
+            return pattern;
         } catch (error) {
-            console.error('处理文件时发生错误:', error);
+            console.error('处理文件失败:', file.name, error);
             return null;
         }
     };
@@ -60,65 +68,72 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                 title: '选择图案文件'
             });
 
+            console.log('文件选择对话框已打开');
+
             if (!files || (Array.isArray(files) && files.length === 0)) {
+                console.log('未选择文件');
                 return;
             }
 
             const fileArray = Array.isArray(files) ? files : [files];
-            
-            // 添加调试日志
-            console.log('开始处理文件:', fileArray.length);
+            console.log('选择的文件数量:', fileArray.length);
             
             const newPatterns = await Promise.all(
                 fileArray.map(async file => {
+                    console.log('开始处理文件:', file.name);
                     const pattern = await processFile(file);
                     if (pattern) {
-                        console.log('成功处理文件:', pattern.name);
+                        console.log('文件处理成功，pattern创建完成:', pattern.name);
                     }
                     return pattern;
                 })
             ).then(results => results.filter(Boolean));
 
-            console.log('处理完成，新图案数量:', newPatterns.length);
+            console.log('所有文件处理完成，成功数量:', newPatterns.length);
+            console.log('新创建的patterns:', newPatterns);
             
-            // 更新状态
             setPatterns(prevPatterns => {
+                console.log('当前patterns:', prevPatterns);
                 const updatedPatterns = [...prevPatterns, ...newPatterns];
                 console.log('更新后的patterns:', updatedPatterns);
                 return updatedPatterns;
             });
-            
-            // 如果有新图案，自动选择第一个
-            // 修改这里：移除自动调用onSelect的逻辑
+
             if (newPatterns.length > 0) {
-                setSelectedPattern(newPatterns[0].id);
+                const firstNewPattern = newPatterns[0];
+                console.log('选择第一个新图案:', firstNewPattern.name);
+                setSelectedPattern(firstNewPattern.id);
             }
         } catch (error) {
-            console.error('选择文件时发生错误:', error);
+            console.error('文件选择过程出错:', error);
         }
-    };  
+    };
 
     // 辅助函数：生成唯一ID
     const generateUniqueId = () => {
         return Date.now().toString(36) + Math.random().toString(36).substr(2);
     };
 
-    // 辅助函数：将ArrayBuffer转换为base64字符串
-    const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
-        let binary = '';
-        const bytes = new Uint8Array(buffer);
-        for (let i = 0; i < bytes.byteLength; i++) {
-            binary += String.fromCharCode(bytes[i]);
-        }
-        return btoa(binary);
-    };
-    
     const handleDelete = () => {
         if (selectedPattern) {
             setPatterns(patterns.filter(p => p.id !== selectedPattern));
             setSelectedPattern(null);
         }
     };
+
+    useEffect(() => {
+        if (patterns.length > 0) {
+            const imgElements = document.querySelectorAll('.photo-container img');
+            imgElements.forEach(img => {
+                console.log('图片实际尺寸:', {
+                    offsetWidth: img.offsetWidth,
+                    offsetHeight: img.offsetHeight,
+                    clientWidth: img.clientWidth,
+                    clientHeight: img.clientHeight
+                });
+            });
+        }
+    }, [patterns]);
 
     if (!isOpen) return null;
 
@@ -137,10 +152,34 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                             className={`photo-container ${selectedPattern === pattern.id ? 'selected' : ''}`}
                             onClick={() => {
                                 setSelectedPattern(pattern.id);
-                                onSelect(pattern);
+                                // 不要在这里直接调用 onSelect
                             }}
                         >
-                            <img src={pattern.preview} alt={pattern.name} />
+                            <img 
+                                src={pattern.preview} 
+                                alt={pattern.name}
+                                onLoad={(e) => {
+                                    const img = e.currentTarget;
+                                    setTimeout(() => {
+                                        console.log('延迟测量:', {
+                                            offsetWidth: img.offsetWidth,
+                                            offsetHeight: img.offsetHeight
+                                        });
+                                    }, 50);
+                                }}
+                                onError={(e) => {
+                                    console.error('图片加载失败:', {
+                                        patternName: pattern.name,
+                                        error: e,
+                                        src: pattern.preview.substring(0, 100) + '...'
+                                    });
+                                }}
+                                style={{
+                                    width: '100%',
+                                    height: '100%',
+                                    objectFit: 'cover'
+                                }}
+                            />
                         </div>
                     ))}
                 </div>
@@ -196,13 +235,14 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
 
             <div className="panel-footer">
                 <button onClick={() => {
-                    onSelect({
-                        id: selectedPattern || '',
-                        name: patterns.find(p => p.id === selectedPattern)?.name || '',
-                        preview: patterns.find(p => p.id === selectedPattern)?.preview || '',
-                        angle,
-                        scale
-                    });
+                    const selectedPatternData = patterns.find(p => p.id === selectedPattern);
+                    if (selectedPatternData) {
+                        onSelect({
+                            ...selectedPatternData,  // 保留原有的图案数据
+                            angle,                   // 添加角度
+                            scale                    // 添加缩放
+                        });
+                    }
                     onClose();
                 }}>保存设置</button>
             </div>

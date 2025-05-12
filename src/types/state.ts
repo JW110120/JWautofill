@@ -70,7 +70,6 @@ export const initialState: AppState = {
         saturationVariation: 0,
         brightnessVariation: 0,
         opacityVariation: 0,
-        pressureVariation: 0
     },
     selectedPattern: null,
     selectedGradient: null,

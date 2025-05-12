@@ -5,7 +5,6 @@ export interface ColorSettings {
     saturationVariation: number;
     brightnessVariation: number;
     opacityVariation: number;
-    pressureVariation: number;
 }
 
 export interface HSBColor {
