@@ -151,33 +151,41 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 <h3>渐变设置</h3>
             </div>
                 {/* 不透明度滑块区域 */}
-                    <div className="gradient-setting-item">
+                <div className="gradient-slider-container">
+                    <div className="gradient-slider-track" onClick={handleAddStop}>
                         {stops.map((stop, index) => (
                             <div
-                                key={index}
-                                className={`opacity-stop ${selectedStopIndex === index ? 'selected' : ''}`}
+                                key={`opacity-${index}`}
+                                className={`gradient-slider-thumb ${selectedStopIndex === index ? 'selected' : ''}`}
                                 style={{ left: `${stop.position}%` }}
-                                onClick={() => setSelectedStopIndex(index)}
-                            >
-                                <input
-                                    type="range"
-                                    min="0"
-                                    max="100"
-                                    value={stop.position}
-                                    onChange={(e) => handleStopChange(index, stop.color, Number(e.target.value))}
-                                />
-                                {stops.length > 1 && (
-                                    <sp-action-button 
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedStopIndex(index);
+                                }}
+                            />
+                        ))}
+                    </div>
+                    {selectedStopIndex !== null && (
+                        <div className="gradient-slider-controls">
+                            <input
+                                type="range"
+                                min="0"
+                                max="100"
+                                value={stops[selectedStopIndex].position}
+                                onChange={(e) => handleStopChange(selectedStopIndex, stops[selectedStopIndex].color, Number(e.target.value))}
+                            />
+                            {stops.length > 1 && (
+                                <sp-action-button 
                                     quiet 
                                     class="icon-button"
-                                    onClick={() => handleRemoveStop(index)}
+                                    onClick={() => handleRemoveStop(selectedStopIndex)}
                                 >
                                     <DeleteIcon />
                                 </sp-action-button>
-                                )}
-                            </div>
-                        ))}
-                    </div>
+                            )}
+                        </div>
+                    )}
+                </div>
 
                 {/* 渐变预览区域 */}
                 <div 
@@ -190,31 +198,43 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 />
 
                 {/* 颜色滑块区域 */}
-                    <div className="gradient-setting-item">
+                {/* 颜色滑块区域 */}
+                <div className="gradient-slider-container">
+                    <div className="gradient-slider-track" onClick={handleAddStop}>
                         {stops.map((stop, index) => (
                             <div
-                                key={index}
-                                className={`color-stop ${selectedStopIndex === index ? 'selected' : ''}`}
-                                style={{ left: `${stop.position}%` }}
-                                onClick={() => setSelectedStopIndex(index)}
-                            >
-                                <input
-                                    type="color"
-                                    value={stop.color}
-                                    onChange={(e) => handleStopChange(index, e.target.value, stop.position)}
-                                />
-                                {stops.length > 1 && (
-                                    <sp-action-button 
-                                        quiet 
-                                        class="icon-button"
-                                        onClick={() => handleRemoveStop(index)}
-                                    >
-                                        <DeleteIcon />
-                                    </sp-action-button>
-                                )}
-                            </div>
+                                key={`color-${index}`}
+                                className={`gradient-slider-thumb ${selectedStopIndex === index ? 'selected' : ''}`}
+                                style={{ 
+                                    left: `${stop.position}%`,
+                                    backgroundColor: stop.color
+                                }}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedStopIndex(index);
+                                }}
+                            />
                         ))}
                     </div>
+                    {selectedStopIndex !== null && (
+                        <div className="gradient-slider-controls">
+                            <input
+                                type="color"
+                                value={stops[selectedStopIndex].color}
+                                onChange={(e) => handleStopChange(selectedStopIndex, e.target.value, stops[selectedStopIndex].position)}
+                            />
+                            {stops.length > 1 && (
+                                <sp-action-button 
+                                    quiet 
+                                    class="icon-button"
+                                    onClick={() => handleRemoveStop(selectedStopIndex)}
+                                >
+                                    <DeleteIcon />
+                                </sp-action-button>
+                            )}
+                        </div>
+                    )}
+                </div>
 
             </div>
 

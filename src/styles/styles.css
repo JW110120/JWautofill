@@ -664,6 +664,49 @@ sp-radio {
     align-items: center;
 }
 
+.color-stop{
+  width: 10px;
+  display: flex;
+  align-items: center;
+}
+
+.gradient-slider-container {
+  position: relative;
+  margin: 20px 0;
+}
+
+.gradient-slider-track {
+  position: relative;
+  height: 30px;
+  background: linear-gradient(to right, var(--gradient-colors));
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.gradient-slider-thumb {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border: 2px solid #333;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  top: 50%;
+  cursor: pointer;
+}
+
+.gradient-slider-thumb.selected {
+  border-color: var(--uxp-host-link-color);
+  box-shadow: 0 0 0 2px var(--uxp-host-link-color);
+}
+
+.gradient-slider-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
 .gradient-preview {
     height: 20px;
     margin: 10px 10px;
