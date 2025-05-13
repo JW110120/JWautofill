@@ -286,7 +286,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
 
                 <div className="gradient-setting-item">
                 <div className="checkbox-reverse">
-                    <label className="checkbox-label">反向：</label>
+                    <label className="reverse-checkbox-label">反向：</label>
                     <input
                         type="checkbox"
                         checked={reverse}
