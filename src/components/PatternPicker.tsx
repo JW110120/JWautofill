@@ -17,6 +17,8 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
     const [selectedPattern, setSelectedPattern] = useState<string | null>(null);
     const [angle, setAngle] = useState<number>(0);
     const [scale, setScale] = useState<number>(100);
+    // 添加图片加载状态
+    const [loadedImages, setLoadedImages] = useState<Record<string, boolean>>({});
 
     const processFile = async (file) => {
         try {
@@ -34,7 +36,13 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
             
             const fileType = file.name.split('.').pop()?.toLowerCase() || 'jpeg';
             const dataUrl = `data:image/${fileType};base64,${base64String}`;
-            // 直接创建pattern对象，不进行图片验证
+            
+            // 在这里添加图片验证代码
+            const img = document.createElement('img');
+            img.src = dataUrl;
+            console.log('图片元素已创建，等待加载');
+            
+            // 直接创建pattern对象
             const pattern = {
                 id: generateUniqueId(),
                 name: file.name,
@@ -123,15 +131,23 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
 
     useEffect(() => {
         if (patterns.length > 0) {
-            const imgElements = document.querySelectorAll('.photo-container img');
-            imgElements.forEach(img => {
-                console.log('图片实际尺寸:', {
-                    offsetWidth: img.offsetWidth,
-                    offsetHeight: img.offsetHeight,
-                    clientWidth: img.clientWidth,
-                    clientHeight: img.clientHeight
+            // 延迟检查DOM，确保React已完成渲染
+            const timer = setTimeout(() => {
+                const imgElements = document.querySelectorAll('.photo-container img');
+                console.log('找到的图片元素数量:', imgElements.length);
+                imgElements.forEach((img, index) => {
+                    console.log(`图片[${index}]实际尺寸:`, {
+                        offsetWidth: img.offsetWidth,
+                        offsetHeight: img.offsetHeight,
+                        clientWidth: img.clientWidth,
+                        clientHeight: img.clientHeight,
+                        complete: img.complete,
+                        src: img.src.substring(0, 30) + '...'
+                    });
                 });
-            });
+            }, 500); // 延迟500ms
+            
+            return () => clearTimeout(timer);
         }
     }, [patterns]);
 
@@ -152,32 +168,80 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                             className={`photo-container ${selectedPattern === pattern.id ? 'selected' : ''}`}
                             onClick={() => {
                                 setSelectedPattern(pattern.id);
-                                // 不要在这里直接调用 onSelect
+                            }}
+                            style={{ 
+                                width: '80px', 
+                                height: '80px',
+                                border: '1px solid #ccc',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                overflow: 'hidden',
+                                position: 'relative'
                             }}
                         >
+                            {/* 添加一个加载指示器 */}
+                            {!loadedImages[pattern.id] && (
+                                <div style={{
+                                    position: 'absolute',
+                                    top: 0,
+                                    left: 0,
+                                    right: 0,
+                                    bottom: 0,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    backgroundColor: 'rgba(0,0,0,0.1)'
+                                }}>
+                                    加载中...
+                                </div>
+                            )}
                             <img 
                                 src={pattern.preview} 
                                 alt={pattern.name}
                                 onLoad={(e) => {
+                                    console.log('图片加载成功:', pattern.name);
+                                    setLoadedImages(prev => ({...prev, [pattern.id]: true}));
                                     const img = e.currentTarget;
-                                    setTimeout(() => {
-                                        console.log('延迟测量:', {
-                                            offsetWidth: img.offsetWidth,
-                                            offsetHeight: img.offsetHeight
-                                        });
-                                    }, 50);
+                                    
+                                    // 获取图片的自然尺寸
+                                    const naturalWidth = img.naturalWidth || 0;
+                                    const naturalHeight = img.naturalHeight || 0;
+                                    
+                                    console.log('图片尺寸:', {
+                                        offsetWidth: img.offsetWidth,
+                                        offsetHeight: img.offsetHeight,
+                                        naturalWidth,
+                                        naturalHeight
+                                    });
+                                    
+                                    // 如果容器尺寸为0但自然尺寸有效，手动设置图片样式
+                                    if ((img.offsetWidth === 0 || img.offsetHeight === 0) && naturalWidth > 0 && naturalHeight > 0) {
+                                        // 计算合适的缩放比例，使图片适合80px的容器
+                                        const containerSize = 80;
+                                        const scale = Math.min(containerSize / naturalWidth, containerSize / naturalHeight);
+                                        const width = Math.round(naturalWidth * scale);
+                                        const height = Math.round(naturalHeight * scale);
+                                        
+                                        // 直接设置图片的宽高
+                                        img.style.width = `${width}px`;
+                                        img.style.height = `${height}px`;
+                                        img.style.objectFit = 'contain';
+                                        
+                                        console.log('手动设置图片尺寸:', { width, height });
+                                    }
                                 }}
                                 onError={(e) => {
                                     console.error('图片加载失败:', {
                                         patternName: pattern.name,
-                                        error: e,
-                                        src: pattern.preview.substring(0, 100) + '...'
+                                        error: e
                                     });
                                 }}
                                 style={{
-                                    width: '100%',
-                                    height: '100%',
-                                    objectFit: 'cover'
+                                    maxWidth: '100%',
+                                    maxHeight: '100%',
+                                    objectFit: 'contain',
+                                    display: 'block'
                                 }}
                             />
                         </div>

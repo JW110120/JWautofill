@@ -20,9 +20,19 @@ export interface GradientStop {
 }
 
 export interface Gradient {
-    type: 'linear' | 'radial';
+    type: 'linear' | 'radial' | 'angle' | 'symmetric' | 'diamond';
     angle?: number;
+    scale?: number;
+    reverse?: boolean;
     stops: GradientStop[];
+    presets?: {
+        preview: string;
+        type: 'linear' | 'radial' | 'angle' | 'symmetric' | 'diamond';
+        angle?: number;
+        scale?: number;
+        reverse?: boolean;
+        stops: GradientStop[];
+    }[];
 }
 
 export interface AppState {
