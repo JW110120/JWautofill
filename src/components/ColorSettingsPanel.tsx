@@ -133,7 +133,6 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
             <div className="panel-footer">
                 <button 
                     onClick={() => onSave(settings)}
-                    className="save-button"
                 >
                     保存设置
                 </button>

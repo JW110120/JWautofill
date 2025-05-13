@@ -53,6 +53,24 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         setStops([...preset.stops]);
     };
 
+    const getGradientStyle = () => {
+        const stopString = stops.map(s => `${s.color} ${s.position}%`).join(', ');
+        switch (gradientType) {
+            case 'linear':
+                return `linear-gradient(${angle}deg, ${stopString})`;
+            case 'radial':
+                return `radial-gradient(circle, ${stopString})`;
+            case 'angle':
+                return `conic-gradient(from ${angle}deg, ${stopString})`;
+            case 'reflected':
+                return `repeating-linear-gradient(${angle}deg, ${stopString})`;
+            case 'diamond':
+                return `repeating-radial-gradient(diamond, ${stopString})`;
+            default:
+                return `linear-gradient(${angle}deg, ${stopString})`;
+        }
+    };
+
     const handleAddStop = () => {
         const positions = stops.map(s => s.position);
         const maxGap = Math.max(...positions.slice(1).map((pos, i) => pos - positions[i]));
@@ -82,7 +100,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     return (
         <div className="gradient-picker">
             <div className="panel-header">
-                <h3>渐变设置</h3>
+                <h3>预设</h3>
                 <button className="close-button" onClick={onClose}>×</button>
             </div>
 
@@ -95,45 +113,45 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             className={`preset-item ${selectedPreset === index ? 'selected' : ''}`}
                             onClick={() => handlePresetSelect(index)}
                         >
-                            <div className="preset-preview" style={{
-                                background: preset.type === 'linear'
-                                    ? `linear-gradient(${preset.angle}deg, ${preset.stops.map(s => `${s.color} ${s.position}%`).join(', ')})`
-                                    : `radial-gradient(circle, ${preset.stops.map(s => `${s.color} ${s.position}%`).join(', ')})`
+                              <div className="preset-preview" style={{
+                                background: getGradientStyle()
                             }} />
                         </div>
                     ))}
                 </div>
             </div>
 
-                     <div className="preset-actions">      
-                     <sp-action-button 
-                        quiet 
-                        class="icon-button"
-                        onClick={handleAddPreset}
-                    >
-                        <AddIcon />
-                    </sp-action-button> 
-                     <sp-action-button 
-                        quiet 
-                        class="icon-button"
-                        onClick={() => {
-                            if (selectedPreset !== null) {
-                                handleDeletePreset(selectedPreset);
-                            }
-                        }}
-                        disabled={selectedPreset === null}
-                    >
-                        <DeleteIcon />
-                    </sp-action-button>
-
-            </div> 
+                     <div className="pattern-icon-container">
+                        <div className="icon-group">
+                            <sp-action-button 
+                                quiet 
+                                class="icon-button"
+                                onClick={handleAddPreset}
+                            >
+                                <AddIcon />
+                            </sp-action-button> 
+                            <sp-action-button 
+                                quiet 
+                                class="icon-button" 
+                                onClick={() => {
+                                    if (selectedPreset !== null) {
+                                        handleDeletePreset(selectedPreset);
+                                    }
+                                }}
+                                disabled={selectedPreset === null}
+                            >
+                                <DeleteIcon />
+                            </sp-action-button>
+                        </div>
+                    </div>
 
             {/* 渐变编辑区域 */}
-            <div className="gradient-editor">
+            <div className="gradient-edit-area">
+            <div className="panel-header">
+                <h3>渐变设置</h3>
+            </div>
                 {/* 不透明度滑块区域 */}
-                <div className="opacity-stops">
-                    <div className="opacity-label">不透明度</div>
-                    <div className="opacity-slider">
+                    <div className="gradient-setting-item">
                         {stops.map((stop, index) => (
                             <div
                                 key={index}
@@ -149,31 +167,30 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                     onChange={(e) => handleStopChange(index, stop.color, Number(e.target.value))}
                                 />
                                 {stops.length > 1 && (
-                                    <button className="remove-stop" onClick={() => handleRemoveStop(index)}>
-                                        <DeleteIcon />
-                                    </button>
+                                    <sp-action-button 
+                                    quiet 
+                                    class="icon-button"
+                                    onClick={() => handleRemoveStop(index)}
+                                >
+                                    <DeleteIcon />
+                                </sp-action-button>
                                 )}
                             </div>
                         ))}
                     </div>
-                </div>
 
                 {/* 渐变预览区域 */}
                 <div 
                     className="gradient-preview" 
                     style={{
-                        background: gradientType === 'linear'
-                            ? `linear-gradient(${angle}deg, ${stops.map(s => `${s.color} ${s.position}%`).join(', ')})`
-                            : `radial-gradient(circle, ${stops.map(s => `${s.color} ${s.position}%`).join(', ')})`,
+                        background: `linear-gradient(to right, ${stops.map(s => s.color).join(', ')})`,
                         cursor: 'pointer'
                     }}
                     onClick={handleAddStop}
                 />
 
                 {/* 颜色滑块区域 */}
-                <div className="color-stops">
-                    <div className="color-label">颜色</div>
-                    <div className="color-slider">
+                    <div className="gradient-setting-item">
                         {stops.map((stop, index) => (
                             <div
                                 key={index}
@@ -187,33 +204,41 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                     onChange={(e) => handleStopChange(index, e.target.value, stop.position)}
                                 />
                                 {stops.length > 1 && (
-                                    <button className="remove-stop" onClick={() => handleRemoveStop(index)}>
+                                    <sp-action-button 
+                                        quiet 
+                                        class="icon-button"
+                                        onClick={() => handleRemoveStop(index)}
+                                    >
                                         <DeleteIcon />
-                                    </button>
+                                    </sp-action-button>
                                 )}
                             </div>
                         ))}
                     </div>
-                </div>
+
             </div>
 
             {/* 渐变类型设置 */}
             <div className="gradient-settings">
-                <div className="setting-item">
+                <div className="gradient-setting-item">
                     <label>样式：</label>
-                    <select 
-                        value={gradientType}
+                    <sp-picker
+                        size="s"
+                        selects="single"
+                        selected={gradientType}
                         onChange={(e) => setGradientType(e.target.value as typeof gradientType)}
                     >
-                        <option value="linear">线性</option>
-                        <option value="radial">径向</option>
-                        <option value="angle">角度</option>
-                        <option value="reflected">对称</option>
-                        <option value="diamond">菱形</option>
-                    </select>
+                        <sp-menu>
+                            <sp-menu-item value="linear" selected={gradientType === "linear"}>线性</sp-menu-item>
+                            <sp-menu-item value="radial" selected={gradientType === "radial"}>径向</sp-menu-item>
+                            <sp-menu-item value="angle" selected={gradientType === "angle"}>角度</sp-menu-item>
+                            <sp-menu-item value="reflected" selected={gradientType === "reflected"}>对称</sp-menu-item>
+                            <sp-menu-item value="diamond" selected={gradientType === "diamond"}>菱形</sp-menu-item>
+                        </sp-menu>
+                    </sp-picker>
                 </div>
 
-                <div className="setting-item">
+                <div className="gradient-setting-item">
                     <label>角度：</label>
                     <input
                         type="range"
@@ -226,7 +251,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     <span className="value">{angle}°</span>
                 </div>
 
-                <div className="setting-item">
+                <div className="gradient-setting-item">
                     <label>缩放：</label>
                     <input
                         type="range"
@@ -239,21 +264,22 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     <span className="value">{scale}%</span>
                 </div>
 
-                <div className="setting-item">
-                    <label>反向：</label>
+                <div className="gradient-setting-item">
+                <div className="checkbox-reverse">
+                    <label className="checkbox-label">反向：</label>
                     <input
                         type="checkbox"
                         checked={reverse}
                         onChange={(e) => setReverse(e.target.checked)}
                     />
                 </div>
+                </div>
             </div>
 
             {/* 预览区域 */}
+            <div className="panel-header"><h3>最终预览</h3></div>
             <div className="final-preview" style={{
-                background: gradientType === 'linear'
-                    ? `linear-gradient(${angle}deg, ${stops.map(s => `${s.color} ${s.position}%`).join(', ')})`
-                    : `radial-gradient(circle, ${stops.map(s => `${s.color} ${s.position}%`).join(', ')})`
+                background: getGradientStyle()
             }} />
 
             <div className="panel-footer">

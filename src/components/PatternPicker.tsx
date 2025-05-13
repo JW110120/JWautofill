@@ -155,7 +155,7 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
 
     return (
         <div className="pattern-picker">
-            <div className="picker-header">
+            <div className="panel-header">
                 <h3>选择图案</h3>
                 <button className="close-button" onClick={onClose}>×</button>
             </div>

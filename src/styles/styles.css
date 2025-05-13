@@ -403,7 +403,6 @@ sp-radio {
   z-index: 9999 !important;
 }
 
-
 .slider-item input[type="range"] {
   width: 100%;
   margin: 8px 0;
@@ -415,39 +414,12 @@ sp-radio {
   display: inline-block;
 }
 
-.save-button {
-  padding: 8px 16px;
-  background-color: var(--button-bg);
-  color: var(--text-color);
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-.save-button:hover {
-  background-color: var(--primary-color-hover);
-}
-
 .panel-header {
   display: flex;
   color: var(--text-color);
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 15px;
-}
-.close-button {
-  background: none;
-  background-color: rgb(191, 17, 14);
-  border: 1px solid var(--border-color);
-  font-size: 14px;
-  cursor: pointer;
-  color: var(--text-color);
-  width: 25px; /* 减小按钮宽度 */
-  height: 25px; /* 保持按钮为正方形 */
-  display: flex; /* 使用flex布局使内容居中 */
-  align-items: center;
-  justify-content: center;
+  margin-bottom: 5px;
 }
 
 .slider-group {
@@ -564,28 +536,13 @@ sp-radio {
 }
 
 .icon-button svg {
-  width: 18px;
-  height: 18px;
+  width: 15px;
+  height: 15px;
   display: block;
 }
 
 .icon-button .icon-fill {
   fill: var(--text-color);
-}
-
-.picker-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0 5px;
-  height: 40px;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.picker-header h3 {
-  margin: 0;
-  font-size: 14px;
-  color: var(--text-color);
 }
 
 .close-button {
@@ -652,30 +609,26 @@ sp-radio {
     height: 730px;
     background-color: var(--bg-color);
     border: 1px solid var(--border-color);
-    padding: 15px;
+    padding: 5px;
     box-sizing: border-box;
     overflow-y: auto;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
     z-index: 9999 !important;
     display: flex;
     flex-direction: column;
-    gap: 15px;
 }
 
 /* 预设区域样式 */
 .gradient-presets {
-    height: 180px;
+    height: 160px;
     overflow-y: auto;
     border: 1px solid var(--border-color);
     border-radius: 4px;
-    padding: 10px;
 }
 
 .presets-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     grid-template-rows: repeat(2, 1fr);
-    gap: 10px;
 }
 
 .preset-item {
@@ -698,81 +651,22 @@ sp-radio {
     height: 100%;
 }
 
-.delete-preset {
-    position: absolute;
-    top: 5px;
-    right: 5px;
-    padding: 2px;
-    background-color: rgba(191, 17, 14, 0.8);
-    border: none;
-    border-radius: 2px;
-    color: white;
-    cursor: pointer;
-}
-
-.add-preset {
-    width: 100%;
-    aspect-ratio: 1;
-    border: 1px dashed var(--border-color);
-    background: none;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.preset-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 8px;
-  border-top: 1px solid var(--border-color);
-}
-
-.preset-actions .icon-button {
-  padding: 4px;
-  background: none;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.preset-actions .icon-button:hover {
-  background-color: var(--hover-bg);
-}
-
-.preset-actions .icon-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.preset-actions .icon-button svg {
-  width: 18px;
-  height: 18px;
-}
-
 /* 渐变编辑区域样式 */
-.gradient-editor {
+.gradient-edit-area {
     border: 1px solid var(--border-color);
     border-radius: 4px;
-    padding: 10px;
+    margin-bottom: 10px;
 }
 
-.opacity-stop,
-.color-stop {
+.opacity-stop{
+    width: 50px;
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin: 10px 0;
 }
 
 .gradient-preview {
-    height: 40px;
-    border-radius: 4px;
-    margin: 10px 0;
+    height: 20px;
+    margin: 10px 10px;
     cursor: pointer;
 }
 
@@ -783,19 +677,17 @@ sp-radio {
     padding: 10px;
 }
 
-.setting-item {
+.gradient-setting-item {
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin-bottom: 10px;
 }
 
-.setting-item label {
-    min-width: 45px;
+.gradient-setting-item label {
+    font-size: 10px;
     color: var(--text-color);
 }
 
-.setting-item select {
+.gradient-setting-item select {
     flex: 1;
     padding: 5px;
     border-radius: 4px;
@@ -804,35 +696,29 @@ sp-radio {
     border: 1px solid var(--border-color);
 }
 
-.setting-item input[type="range"] {
+.gradient-setting-item input[type="range"] {
+    width:130px;
     flex: 1;
 }
 
-.setting-item .value {
-    min-width: 40px;
+.gradient-setting-item .value {
+    font-size: 10px;
     text-align: right;
     color: var(--text-color);
 }
 
+.checkbox-reverse{
+    margin-bottom: 20px;
+}
+
+.checkbox-label{
+    margin-bottom: 10px;
+}
 /* 最终预览区域样式 */
 .final-preview {
-    height: 100px;
+    height: 60px;
     border-radius: 4px;
     border: 1px solid var(--border-color);
-}
-
-/* 通用按钮样式 */
-button {
-  padding: 5px 10px;
-  background-color: var(--button-bg);
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  color: var(--text-color);
-  cursor: pointer;
-}
-
-button:hover {
-  background-color: var(--hover-bg);
 }
 
 .info-plane {
@@ -863,4 +749,18 @@ button:hover {
   transform: translateX(-50%);
   pointer-events: none;
   z-index: 2000; 
+}
+
+/* 通用按钮样式 */
+button {
+  padding: 5px 10px;
+  background-color: var(--button-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-color);
+  cursor: pointer;
+}
+
+button:hover {
+  background-color: var(--hover-bg);
 }
