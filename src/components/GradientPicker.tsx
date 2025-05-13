@@ -15,8 +15,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
 }) => {
     const [presets, setPresets] = useState<Gradient[]>([]);
     const [selectedPreset, setSelectedPreset] = useState<number | null>(null);
-    const [gradientType, setGradientType] = useState<'linear' | 'radial' | 'angle' | 'symmetric' | 'diamond'>('linear');
-    const [angle, setAngle] = useState(0);
+    const [gradientType, setGradientType] = useState<'linear' | 'radial' | 'angle' | 'reflected' | 'diamond'>('linear');
+    const [angle, setAngle] = useState(0); // 修改默认角度为90度，使渐变从左往右
     const [scale, setScale] = useState(100);
     const [reverse, setReverse] = useState(false);
     const [selectedStopIndex, setSelectedStopIndex] = useState<number | null>(null);
@@ -100,66 +100,100 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                     ? `linear-gradient(${preset.angle}deg, ${preset.stops.map(s => `${s.color} ${s.position}%`).join(', ')})`
                                     : `radial-gradient(circle, ${preset.stops.map(s => `${s.color} ${s.position}%`).join(', ')})`
                             }} />
-                            <button className="delete-preset" onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeletePreset(index);
-                            }}>
-                                <DeleteIcon />
-                            </button>
                         </div>
                     ))}
-                    <button className="add-preset" onClick={handleAddPreset}>
-                        <AddIcon />
-                    </button>
                 </div>
             </div>
 
+                     <div className="preset-actions">      
+                     <sp-action-button 
+                        quiet 
+                        class="icon-button"
+                        onClick={handleAddPreset}
+                    >
+                        <AddIcon />
+                    </sp-action-button> 
+                     <sp-action-button 
+                        quiet 
+                        class="icon-button"
+                        onClick={() => {
+                            if (selectedPreset !== null) {
+                                handleDeletePreset(selectedPreset);
+                            }
+                        }}
+                        disabled={selectedPreset === null}
+                    >
+                        <DeleteIcon />
+                    </sp-action-button>
+
+            </div> 
+
             {/* 渐变编辑区域 */}
             <div className="gradient-editor">
-                {/* 不透明度滑块 */}
-                <div className="opacity-stop">
-                    {selectedStopIndex !== null && (
-                        <>
-                            <input
-                                type="range"
-                                min="0"
-                                max="100"
-                                value={stops[selectedStopIndex].position}
-                                onChange={(e) => handleStopChange(selectedStopIndex, stops[selectedStopIndex].color, Number(e.target.value))}
-                            />
-                            <button className="remove-stop" onClick={() => handleRemoveStop(selectedStopIndex)}>×</button>
-                        </>
-                    )}
+                {/* 不透明度滑块区域 */}
+                <div className="opacity-stops">
+                    <div className="opacity-label">不透明度</div>
+                    <div className="opacity-slider">
+                        {stops.map((stop, index) => (
+                            <div
+                                key={index}
+                                className={`opacity-stop ${selectedStopIndex === index ? 'selected' : ''}`}
+                                style={{ left: `${stop.position}%` }}
+                                onClick={() => setSelectedStopIndex(index)}
+                            >
+                                <input
+                                    type="range"
+                                    min="0"
+                                    max="100"
+                                    value={stop.position}
+                                    onChange={(e) => handleStopChange(index, stop.color, Number(e.target.value))}
+                                />
+                                {stops.length > 1 && (
+                                    <button className="remove-stop" onClick={() => handleRemoveStop(index)}>
+                                        <DeleteIcon />
+                                    </button>
+                                )}
+                            </div>
+                        ))}
+                    </div>
                 </div>
 
-                {/* 渐变预览 */}
+                {/* 渐变预览区域 */}
                 <div 
                     className="gradient-preview" 
                     style={{
                         background: gradientType === 'linear'
                             ? `linear-gradient(${angle}deg, ${stops.map(s => `${s.color} ${s.position}%`).join(', ')})`
-                            : `radial-gradient(circle, ${stops.map(s => `${s.color} ${s.position}%`).join(', ')})`
+                            : `radial-gradient(circle, ${stops.map(s => `${s.color} ${s.position}%`).join(', ')})`,
+                        cursor: 'pointer'
                     }}
-                    onClick={(e) => {
-                        const rect = e.currentTarget.getBoundingClientRect();
-                        const position = Math.round(((e.clientX - rect.left) / rect.width) * 100);
-                        const newStop = { color: '#808080', position };
-                        setStops([...stops, newStop].sort((a, b) => a.position - b.position));
-                    }}
+                    onClick={handleAddStop}
                 />
 
-                {/* 颜色滑块 */}
-                <div className="color-stop">
-                    {selectedStopIndex !== null && (
-                        <>
-                            <input
-                                type="color"
-                                value={stops[selectedStopIndex].color}
-                                onChange={(e) => handleStopChange(selectedStopIndex, e.target.value, stops[selectedStopIndex].position)}
-                            />
-                            <button className="remove-stop" onClick={() => handleRemoveStop(selectedStopIndex)}>×</button>
-                        </>
-                    )}
+                {/* 颜色滑块区域 */}
+                <div className="color-stops">
+                    <div className="color-label">颜色</div>
+                    <div className="color-slider">
+                        {stops.map((stop, index) => (
+                            <div
+                                key={index}
+                                className={`color-stop ${selectedStopIndex === index ? 'selected' : ''}`}
+                                style={{ left: `${stop.position}%` }}
+                                onClick={() => setSelectedStopIndex(index)}
+                            >
+                                <input
+                                    type="color"
+                                    value={stop.color}
+                                    onChange={(e) => handleStopChange(index, e.target.value, stop.position)}
+                                />
+                                {stops.length > 1 && (
+                                    <button className="remove-stop" onClick={() => handleRemoveStop(index)}>
+                                        <DeleteIcon />
+                                    </button>
+                                )}
+                            </div>
+                        ))}
+                    </div>
                 </div>
             </div>
 
@@ -174,7 +208,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         <option value="linear">线性</option>
                         <option value="radial">径向</option>
                         <option value="angle">角度</option>
-                        <option value="symmetric">对称</option>
+                        <option value="reflected">对称</option>
                         <option value="diamond">菱形</option>
                     </select>
                 </div>
@@ -233,7 +267,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         presets
                     });
                     onClose();
-                }}>确认</button>
+                }}>保存设置</button>
             </div>
         </div>
     );

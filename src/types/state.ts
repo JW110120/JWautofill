@@ -20,14 +20,14 @@ export interface GradientStop {
 }
 
 export interface Gradient {
-    type: 'linear' | 'radial' | 'angle' | 'symmetric' | 'diamond';
+    type: 'linear' | 'radial' | 'angle' | 'reflected' | 'diamond';
     angle?: number;
     scale?: number;
     reverse?: boolean;
     stops: GradientStop[];
     presets?: {
         preview: string;
-        type: 'linear' | 'radial' | 'angle' | 'symmetric' | 'diamond';
+        type: 'linear' | 'radial' | 'angle' | 'reflected' | 'diamond';
         angle?: number;
         scale?: number;
         reverse?: boolean;

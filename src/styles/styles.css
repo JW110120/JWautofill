@@ -630,8 +630,17 @@ sp-radio {
 }
 
 .setting-item input[type="range"] {
-  width: 120px;
-  flex: 0 0 auto;
+    width: 120px;  /* 限制滑动条宽度 */
+    flex: 0 0 auto;  /* 防止滑动条被拉伸 */
+}
+
+.setting-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+    max-width: 100%;  /* 确保不会超出容器 */
+    overflow: hidden;  /* 防止内容溢出 */
 }
 
 /* 渐变选择器样式优化 */
@@ -710,6 +719,39 @@ sp-radio {
     display: flex;
     align-items: center;
     justify-content: center;
+}
+
+.preset-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px;
+  border-top: 1px solid var(--border-color);
+}
+
+.preset-actions .icon-button {
+  padding: 4px;
+  background: none;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.preset-actions .icon-button:hover {
+  background-color: var(--hover-bg);
+}
+
+.preset-actions .icon-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.preset-actions .icon-button svg {
+  width: 18px;
+  height: 18px;
 }
 
 /* 渐变编辑区域样式 */
@@ -821,4 +863,4 @@ button:hover {
   transform: translateX(-50%);
   pointer-events: none;
   z-index: 2000; 
-}   
+}
