@@ -664,6 +664,32 @@ sp-radio {
     flex-direction: column;
 }
 
+.delete-button {
+  cursor: pointer;
+  align-items: center;
+  margin-left: auto; /* 右对齐 */;
+  justify-content: flex-end; /* 修改为右对齐 */
+}
+
+.delete-button:hover {
+  background-color: var(--hover-bg);
+}
+
+.delete-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.delete-button svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+}
+
+.delete-button .icon-fill {
+  fill: var(--text-color);
+}
+
 .gradient-slider-track {
   position: relative;
   height: 20px;
@@ -699,8 +725,7 @@ sp-radio {
 .opacity-input {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .opacity-input input[type="number"] {
@@ -709,7 +734,7 @@ sp-radio {
   padding: 2px 4px;
   border: 1px solid var(--border-color);
   border-radius: 4px;
-  background: var(--bg-color);
+  margin-right:  -5px;
   color: var(--text-color);
 }
 
@@ -750,16 +775,24 @@ sp-radio {
 .gradient-color-controls {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
+    margin: 10px 0;
 }
 
-.gradient-color-controls input[type="color"] {
-    width: 60px;
-    height: 24px;
-    padding: 2px;
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    background: var(--bg-color);
+.color-input-container {
+  position: relative;
+}
+
+.color-input-container input[type="text"] {
+  width: 80px;
+  height: 24px;
+  padding: 2px 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+.color-preview {
+  border-radius: 2px;
 }
 
 /* 渐变设置区域样式 */
