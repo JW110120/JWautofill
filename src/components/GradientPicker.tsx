@@ -60,7 +60,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         const stopString = stops.map(s => `${s.color} ${s.position}%`).join(', ');
         switch (gradientType) {
             case 'linear':
-                return `linear-gradient(${angle}deg, ${stopString})`;
+                return `linear-gradient(${90+angle}deg, ${stopString})`;
             case 'radial':
                 return `radial-gradient(circle, ${stopString})`;
             case 'angle':
@@ -74,14 +74,12 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         }
     };
 
-    const handleAddStop = () => {
-        const positions = stops.map(s => s.position);
-        const maxGap = Math.max(...positions.slice(1).map((pos, i) => pos - positions[i]));
-        const insertIndex = positions.slice(1).findIndex((pos, i) => pos - positions[i] === maxGap);
-        const newPosition = (positions[insertIndex] + positions[insertIndex + 1]) / 2;
+    const handleAddStop = (e: React.MouseEvent) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        const clickX = e.clientX - rect.left;
+        const newPosition = Math.round((clickX / rect.width) * 100);
         
-        const newStops = [...stops];
-        newStops.splice(insertIndex + 1, 0, { color: '#808080', position: newPosition });
+        const newStops = [...stops, { color: '#808080', position: newPosition }];
         setStops(newStops.sort((a, b) => a.position - b.position));
     };
 
@@ -179,7 +177,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     return (
         <div className="gradient-picker">
             <div className="panel-header">
-                <h3>预设</h3>
+                <h3>渐变设置</h3>
                 <button className="close-button" onClick={onClose}>×</button>
             </div>
 
@@ -198,9 +196,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         </div>
                     ))}
                 </div>
-            </div>
-
-                     <div className="pattern-icon-container">
+                <div className="gradient-icon-container">
                         <div className="icon-group">
                             <sp-action-button 
                                 quiet 
@@ -222,11 +218,13 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                 <DeleteIcon />
                             </sp-action-button>
                         </div>
-                    </div>
+                 </div>
+        </div>
 
+                    
             {/* 渐变编辑区域 */}
             <div className="gradient-edit-area">
-              <div className="panel-header"><h3>渐变设置</h3></div>
+              <div className="panel-header"><h3>颜色序列</h3></div>
                 {/* 不透明度滑块区域 */}
                     <div className="opacity-input">
                         <label className="sublabel">不透明度：</label>
@@ -236,7 +234,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             max="100"
                             value={selectedStopIndex !== null 
                                 ? Math.round(parseFloat(stops[selectedStopIndex].color.match(/,\s*([\d.]+)\s*\)$/)?.[1] || '1') * 100)
-                                : 100}
+                                : ''}
                             onChange={(e) => {
                                 if (selectedStopIndex !== null) {
                                     const opacityValue = Math.max(0, Math.min(100, Number(e.target.value)));
@@ -248,6 +246,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                     );
                                 }
                             }}
+                            disabled={selectedStopIndex === null}
                         />
                          <label className="sublabel">%</label>
                         <sp-action-button 
@@ -323,8 +322,9 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         <div className="color-input-container" style={{ display: 'flex', alignItems: 'center', gap: '8px', position: 'relative' }}>
                             <input
                                 type="text"
-                                value={selectedStopIndex !== null ? getRGBColor(stops[selectedStopIndex].color).toUpperCase() : '#000000'}
+                                value={selectedStopIndex !== null ? getRGBColor(stops[selectedStopIndex].color).toUpperCase() : ''}
                                 readOnly
+                                disabled={selectedStopIndex === null}
                             />
                             <div 
                                 className="color-preview"
@@ -441,10 +441,13 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             </div>
 
             {/* 预览区域 */}
+            <div className="final-preview-container">
             <div className="panel-header"><h3>最终预览</h3></div>
-            <div className="final-preview" style={{
-                background: getGradientStyle()
-            }} />
+  
+                <div className="final-preview" style={{
+                    background: getGradientStyle()
+                }} />
+            </div>
 
             <div className="panel-footer">
                 <button onClick={() => {

@@ -623,13 +623,14 @@ sp-radio {
     height: 160px;
     overflow-y: auto;
     border: 1px solid var(--border-color);
+    margin-bottom: 10px;
     border-radius: 4px;
 }
 
 .presets-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    grid-template-rows: repeat(2, 1fr);
+    grid-template-columns: repeat(4, 1fr);
+    grid-template-rows: repeat(1, 1fr);
 }
 
 .preset-item {
@@ -643,14 +644,21 @@ sp-radio {
 }
 
 .preset-item.selected {
-    border-color: var(--uxp-host-link-color);
-    box-shadow: 0 0 0 2px var(--uxp-host-link-color);
+    border-color: var(--primary-color);
 }
 
 .preset-preview {
     width: 100%;
     height: 100%;
     border: 1px solid var(--border-color);
+}
+
+.gradient-icon-container {
+    bottom: 0;
+    padding: 0;
+    position: relative;
+    border-top: 1px solid var(--border-color);
+    top: 105px;
 }
 
 /* 渐变编辑区域样式 */
@@ -706,14 +714,12 @@ sp-radio {
     width: 12px;
     height: 12px;
     border-radius: 50%;
-    border: 2px solid #fff;
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3);
+    border: 2px solid var(--border-color);
     transform: translate(-50%, -50%);
     top: 50%;
     cursor: grab;
     user-select: none;
     -webkit-user-select: none;
-    /* 修改以下属性 */
     z-index: 10000;
     pointer-events: auto;
     touch-action: none;
@@ -721,14 +727,12 @@ sp-radio {
 
 .gradient-slider-thumb:active {
     cursor: grabbing;
-    /* 添加以下属性 */
     z-index: 10001;
     transform: translate(-50%, -50%) scale(1.1);
 }
 
 .gradient-slider-thumb.selected {
     border-color: var(--primary-color);
-    /* 添加以下属性 */
     z-index: 10001;
     transform: translate(-50%, -50%) scale(1.1);
 }
@@ -765,6 +769,7 @@ sp-radio {
 .gradient-preview {
     height: 20px;
     margin: 10px 10px;
+    border: 1px solid var(--border-color);
     cursor: pointer;
     position: relative;
 }
@@ -869,9 +874,18 @@ sp-radio {
   margin: 0;
 }
 /* 最终预览区域样式 */
+.final-preview-container {
+  display: flex;
+  margin-top: 10px;
+  border: 1px solid var(--border-color);
+  flex-direction: column;
+}
+
 .final-preview {
     height: 60px;
+    margin: 0px 10px 10px 10px;
     border-radius: 4px;
+    position: relative;
     border: 1px solid var(--border-color);
 }
 
