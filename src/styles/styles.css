@@ -691,11 +691,14 @@ sp-radio {
 }
 
 .gradient-slider-track {
-  position: relative;
-  height: 20px;
-  border-radius: 4px;
-  cursor: pointer;
-  margin: 0px 10px;
+    position: relative;
+    height: 20px;
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    margin: 0px 10px;
+    /* 添加以下属性 */
+    overflow: visible;
 }
 
 .gradient-slider-thumb {
@@ -707,12 +710,27 @@ sp-radio {
     box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3);
     transform: translate(-50%, -50%);
     top: 50%;
-    cursor: pointer;
-    z-index: 2;
+    cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
+    /* 修改以下属性 */
+    z-index: 10000;
+    pointer-events: auto;
+    touch-action: none;
+}
+
+.gradient-slider-thumb:active {
+    cursor: grabbing;
+    /* 添加以下属性 */
+    z-index: 10001;
+    transform: translate(-50%, -50%) scale(1.1);
 }
 
 .gradient-slider-thumb.selected {
     border-color: var(--primary-color);
+    /* 添加以下属性 */
+    z-index: 10001;
+    transform: translate(-50%, -50%) scale(1.1);
 }
 
 .sublabel {

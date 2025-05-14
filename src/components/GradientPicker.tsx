@@ -22,6 +22,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const [reverse, setReverse] = useState(false);
     const [colorPickerPosition, setColorPickerPosition] = useState({ x: 0, y: 0 });
     const [selectedStopIndex, setSelectedStopIndex] = useState<number | null>(null);
+    const [showColorPicker, setShowColorPicker] = useState(false);
     const [stops, setStops] = useState<GradientStop[]>([
         { color: '#000000', position: 0 },
         { color: '#ffffff', position: 100 }
@@ -97,20 +98,19 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
 
     const handleStopMouseDown = (e: React.MouseEvent, index: number) => {
         e.preventDefault();
+        e.stopPropagation();
         setIsDragging(true);
         setSelectedStopIndex(index);
         setDragStartX(e.clientX);
         setDragStartPosition(stops[index].position);
         
-        const handleMouseMove = (e: MouseEvent) => {
-            if (!isDragging) return;
-            
+        const handleMouseMove = (moveEvent: MouseEvent) => {
             const trackElement = document.querySelector('.gradient-slider-track') as HTMLElement;
             if (!trackElement) return;
             
             const rect = trackElement.getBoundingClientRect();
-            const deltaX = e.clientX - dragStartX;
-            const newPosition = Math.max(0, Math.min(100, dragStartPosition + (deltaX / rect.width) * 100));
+            const deltaX = moveEvent.clientX - e.clientX; // 使用初始事件的clientX
+            const newPosition = Math.max(0, Math.min(100, stops[index].position + (deltaX / rect.width) * 100));
             
             const newStops = [...stops];
             newStops[index] = { ...newStops[index], position: newPosition };
@@ -127,7 +127,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         document.addEventListener('mouseup', handleMouseUp);
     };
 
-    const [showColorPicker, setShowColorPicker] = useState(false);
+
 
     const handleStopChange = (index: number, color: string, position: number, opacity?: number) => {
         const newStops = [...stops];
@@ -240,7 +240,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             onChange={(e) => {
                                 if (selectedStopIndex !== null) {
                                     const opacityValue = Math.max(0, Math.min(100, Number(e.target.value)));
-                                    e.target.value = opacityValue.toString();
                                     handleStopChange(
                                         selectedStopIndex,
                                         stops[selectedStopIndex].color,
@@ -351,20 +350,19 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                     position: 'fixed',
                                     zIndex: 9999,
                                     top: `${colorPickerPosition.y}px`,
-                                    left: `${colorPickerPosition.x}px`,
+                                    left: `${colorPickerPosition.x}px`, 
                                     background: 'var(--background-color)',
-                                    padding: '8px',
+                                    padding: '8px', 
                                     borderRadius: '4px',
-                                    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)'
                                 }}>
                                     <sp-color-area 
                                         style={{
-                                            width: '72px',
-                                            height: '72px',
+                                            width: '200px',
+                                            height: '200px',
                                             display: 'block'
                                         }}
                                         color={getRGBColor(stops[selectedStopIndex].color)}
-                                        onChange={(e) => {
+                                        onChange={(e: any) => {
                                             handleStopChange(selectedStopIndex, e.target.value, stops[selectedStopIndex].position);
                                         }}
                                     ></sp-color-area>
