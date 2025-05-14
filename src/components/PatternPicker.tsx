@@ -269,7 +269,7 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                 </div>
             </div>
 
-            <div className="pattern-settings">
+            <div className="pattern-settings-area">
                 <div className="setting-item">
                     <label>角度：</label>
                     <input

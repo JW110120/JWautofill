@@ -89,9 +89,65 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         }
     };
 
-    const handleStopChange = (index: number, color: string, position: number) => {
+    const [isDragging, setIsDragging] = useState(false);
+    const [dragStartX, setDragStartX] = useState(0);
+    const [dragStartPosition, setDragStartPosition] = useState(0);
+
+    const handleStopMouseDown = (e: React.MouseEvent, index: number) => {
+        e.preventDefault(); // 防止拖拽时选中文本
+        setIsDragging(true);
+        setSelectedStopIndex(index);
+        setDragStartX(e.clientX);
+        setDragStartPosition(stops[index].position);
+        
+        const handleMouseMove = (e: MouseEvent) => {
+            if (!isDragging) return;
+            
+            const trackElement = e.currentTarget.closest('.gradient-slider-track') as HTMLElement;
+            if (!trackElement) return;
+            
+            const rect = trackElement.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const position = Math.max(0, Math.min(100, (x / rect.width) * 100));
+            
+            handleStopChange(index, stops[index].color, position);
+        };
+        
+        const handleMouseUp = () => {
+            setIsDragging(false);
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+        };
+        
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+    };
+
+    const handleStopChange = (index: number, color: string, position: number, opacity?: number) => {
         const newStops = [...stops];
-        newStops[index] = { color, position };
+        const currentStop = newStops[index];
+        
+        // 如果提供了透明度，则更新颜色的 alpha 值
+        if (opacity !== undefined) {
+            // 解析当前颜色
+            let r, g, b;
+            if (color.startsWith('rgba')) {
+                const matches = color.match(/rgba\((\d+),\s*(\d+),\s*(\d+)/);
+                if (matches) {
+                    [, r, g, b] = matches;
+                }
+            } else if (color.startsWith('#')) {
+                r = parseInt(color.slice(1, 3), 16);
+                g = parseInt(color.slice(3, 5), 16);
+                b = parseInt(color.slice(5, 7), 16);
+            }
+            
+            if (r !== undefined && g !== undefined && b !== undefined) {
+                color = `rgba(${r}, ${g}, ${b}, ${opacity / 100})`;
+            }
+        }
+        
+        newStops[index] = { ...currentStop, color, position };
         setStops(newStops.sort((a, b) => a.position - b.position));
     };
 
@@ -147,17 +203,47 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
 
             {/* 渐变编辑区域 */}
             <div className="gradient-edit-area">
-            <div className="panel-header">
-                <h3>渐变设置</h3>
-            </div>
+              <div className="panel-header"><h3>渐变设置</h3></div>
                 {/* 不透明度滑块区域 */}
-                <div className="gradient-slider-container">
+                    <div className="opacity-input">
+                        <label className="sublabel">不透明度：</label>
+                        <input
+                            type="number"
+                            min="0"
+                            max="100"
+                            value={selectedStopIndex !== null 
+                                ? parseInt(stops[selectedStopIndex].color.match(/[0-9.]+\)$/)?.[0] || '1') * 100 
+                                : 100}
+                            onChange={(e) => {
+                                if (selectedStopIndex !== null) {
+                                    handleStopChange(
+                                        selectedStopIndex,
+                                        stops[selectedStopIndex].color,
+                                        stops[selectedStopIndex].position,
+                                        Number(e.target.value)
+                                    );
+                                }
+                            }}
+                        />
+                        <sp-action-button 
+                            quiet 
+                            class="icon-button"
+                            onClick={() => selectedStopIndex !== null && stops.length > 1 && handleRemoveStop(selectedStopIndex)}
+                            disabled={selectedStopIndex === null || stops.length <= 1}
+                        >
+                            <DeleteIcon />
+                        </sp-action-button>
+                    </div>
                     <div className="gradient-slider-track" onClick={handleAddStop}>
                         {stops.map((stop, index) => (
                             <div
                                 key={`opacity-${index}`}
                                 className={`gradient-slider-thumb ${selectedStopIndex === index ? 'selected' : ''}`}
-                                style={{ left: `${stop.position}%` }}
+                                style={{ 
+                                    left: `${stop.position}%`,
+                                    backgroundColor: stop.color
+                                }}
+                                onMouseDown={(e) => handleStopMouseDown(e, index)}
                                 onClick={(e) => {
                                     e.stopPropagation();
                                     setSelectedStopIndex(index);
@@ -165,41 +251,32 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             />
                         ))}
                     </div>
-                    {selectedStopIndex !== null && (
-                        <div className="gradient-slider-controls">
-                            <input
-                                type="range"
-                                min="0"
-                                max="100"
-                                value={stops[selectedStopIndex].position}
-                                onChange={(e) => handleStopChange(selectedStopIndex, stops[selectedStopIndex].color, Number(e.target.value))}
-                            />
-                            {stops.length > 1 && (
-                                <sp-action-button 
-                                    quiet 
-                                    class="icon-button"
-                                    onClick={() => handleRemoveStop(selectedStopIndex)}
-                                >
-                                    <DeleteIcon />
-                                </sp-action-button>
-                            )}
-                        </div>
-                    )}
-                </div>
 
                 {/* 渐变预览区域 */}
-                <div 
-                    className="gradient-preview" 
-                    style={{
-                        background: `linear-gradient(to right, ${stops.map(s => s.color).join(', ')})`,
-                        cursor: 'pointer'
-                    }}
-                    onClick={handleAddStop}
-                />
+                <div className="gradient-preview">
+                    <div 
+                        className="opacity-checkerboard"
+                        style={{
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            bottom: 0
+                        }}
+                    />
+                    <div 
+                        style={{
+                            position: 'relative',
+                            width: '100%',
+                            height: '100%',
+                            background: `linear-gradient(to right, ${stops.map(s => s.color).join(', ')})`,
+                            cursor: 'pointer'
+                        }}
+                        onClick={handleAddStop}
+                    />
+                </div>
 
                 {/* 颜色滑块区域 */}
-                {/* 颜色滑块区域 */}
-                <div className="gradient-slider-container">
                     <div className="gradient-slider-track" onClick={handleAddStop}>
                         {stops.map((stop, index) => (
                             <div
@@ -217,7 +294,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         ))}
                     </div>
                     {selectedStopIndex !== null && (
-                        <div className="gradient-slider-controls">
+                        <div className="gradient-color-controls">
+                            <label className="sublabel">颜色：</label>
                             <input
                                 type="color"
                                 value={stops[selectedStopIndex].color}
@@ -234,8 +312,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             )}
                         </div>
                     )}
-                </div>
-
             </div>
 
             {/* 渐变类型设置 */}
@@ -285,8 +361,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 </div>
 
                 <div className="gradient-setting-item">
-                <div className="checkbox-reverse">
-                    <label className="reverse-checkbox-label">反向：</label>
+                <div className="reverse-checkbox-container">
+                    <label>反向：</label>
                     <input
                         type="checkbox"
                         checked={reverse}

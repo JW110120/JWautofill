@@ -461,7 +461,6 @@ sp-radio {
   height: 175px;
   width: 230px;
   overflow-y: auto;
-  margin-bottom: 10px;
   background-color: rgb(16, 16, 16);
   border-radius: 4px;
   position: relative;
@@ -504,9 +503,8 @@ sp-radio {
 }
 
 .pattern-icon-container {
-  padding: 8px 0;
-  border-top: 1px solid var(--border-color);
-  border-bottom: 1px solid var(--border-color);
+  padding: 2px 0;
+  margin-bottom: 10px;
 }
 
 .icon-group {
@@ -559,7 +557,9 @@ sp-radio {
   border-radius: 4px;
 }
 
-.pattern-settings {
+.pattern-settings-area {
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
   padding: 10px 0;
   color: var(--text-color);
 }
@@ -567,28 +567,29 @@ sp-radio {
 .setting-item {
   display: flex;
   align-items: center;
-  margin-bottom: 10px;
+  margin: 10px 0;
   padding: 0 10px;
-  gap: 8px;
   color: var(--text-color);
 }
 
 .setting-item label {
-  min-width: 45px;
+  min-width: 40px;
   font-size: 13px;
   color: var(--text-color);
 }
 
 .setting-item .value {
   min-width: 40px;
-  text-align: right;
+  text-align: left;
+  margin-left: -5px;
   font-size: 13px;
   color: var(--text-color);
 }
 
 .setting-item input[type="range"] {
-    width: 120px;  /* 限制滑动条宽度 */
+    width: 130px;  /* 限制滑动条宽度 */
     flex: 0 0 auto;  /* 防止滑动条被拉伸 */
+    margin-left: -3px;
 }
 
 .setting-item {
@@ -649,6 +650,7 @@ sp-radio {
 .preset-preview {
     width: 100%;
     height: 100%;
+    border: 1px solid var(--border-color);
 }
 
 /* 渐变编辑区域样式 */
@@ -656,61 +658,108 @@ sp-radio {
     border: 1px solid var(--border-color);
     border-radius: 4px;
     margin-bottom: 10px;
-}
-
-.opacity-stop{
-    width: 50px;
+    max-height: calc(100% - 220px); /* 减去预设区域和其他元素的高度 */
+    overflow-y: auto;
     display: flex;
-    align-items: center;
-}
-
-.color-stop{
-  width: 10px;
-  display: flex;
-  align-items: center;
-}
-
-.gradient-slider-container {
-  position: relative;
-  margin: 20px 0;
+    flex-direction: column;
 }
 
 .gradient-slider-track {
   position: relative;
-  height: 30px;
-  background: linear-gradient(to right, var(--gradient-colors));
-  cursor: pointer;
+  height: 20px;
   border-radius: 4px;
+  cursor: pointer;
+  margin: 0px 10px;
 }
 
 .gradient-slider-thumb {
-  position: absolute;
-  width: 12px;
-  height: 12px;
-  background: #fff;
-  border: 2px solid #333;
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
-  top: 50%;
-  cursor: pointer;
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 2px solid #fff;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3);
+    transform: translate(-50%, -50%);
+    top: 50%;
+    cursor: pointer;
+    z-index: 2;
 }
 
 .gradient-slider-thumb.selected {
-  border-color: var(--uxp-host-link-color);
-  box-shadow: 0 0 0 2px var(--uxp-host-link-color);
+    border-color: var(--primary-color);
 }
 
-.gradient-slider-controls {
+.sublabel {
+  color: var(--text-color);
+  min-width: 40px;
+  font-size: 12px;
+  margin-left: 8px;
+}
+
+.opacity-input {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-top: 10px;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.opacity-input input[type="number"] {
+  width: 60px;
+  height: 24px;
+  padding: 2px 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-color);
+  color: var(--text-color);
+}
+
+.opacity-input input[type="number"]::-webkit-inner-spin-button,
+.opacity-input input[type="number"]::-webkit-outer-spin-button {
+  opacity: 1;
+  height: 20px;
 }
 
 .gradient-preview {
     height: 20px;
     margin: 10px 10px;
     cursor: pointer;
+    position: relative;
+}
+
+.opacity-checkerboard {
+    background-image: linear-gradient(45deg, 
+        var(--spectrum-global-color-gray-300) 25%, 
+        transparent 25%
+    ),
+    linear-gradient(-45deg, 
+        var(--spectrum-global-color-gray-300) 25%, 
+        transparent 25%
+    ),
+    linear-gradient(45deg, 
+        transparent 75%, 
+        var(--spectrum-global-color-gray-300) 75%
+    ),
+    linear-gradient(-45deg, 
+        transparent 75%, 
+        var(--spectrum-global-color-gray-300) 75%
+    );
+    background-size: 4px 4px;  /* 从 8px 减小到 4px */
+    background-position: 0 0, 0 2px, 2px -2px, -2px 0px;  /* 相应地将位置值也减半 */
+}
+
+.gradient-color-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.gradient-color-controls input[type="color"] {
+    width: 60px;
+    height: 24px;
+    padding: 2px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-color);
 }
 
 /* 渐变设置区域样式 */
@@ -718,7 +767,11 @@ sp-radio {
     border: 1px solid var(--border-color);
     border-radius: 4px;
     padding: 10px;
-}
+    max-height: calc(100% - 220px); /* 减去预设区域和其他元素的高度 */
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+} 
 
 .gradient-setting-item {
     display: flex;
@@ -726,7 +779,7 @@ sp-radio {
 }
 
 .gradient-setting-item label {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-color);
 }
 
@@ -745,17 +798,24 @@ sp-radio {
 }
 
 .gradient-setting-item .value {
-    font-size: 10px;
+    font-size: 12px;
     text-align: right;
     color: var(--text-color);
 }
 
-.checkbox-reverse{
-    margin-bottom: 20px;
+.reverse-checkbox-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin : 10px 0;
 }
 
-.reverse-checkbox-label{
-    margin-bottom: 10px;
+.reverse-checkbox-container input[type="checkbox"] {
+  margin: 0;
+}
+
+.reverse-checkbox-container label {
+  margin: 0;
 }
 /* 最终预览区域样式 */
 .final-preview {
