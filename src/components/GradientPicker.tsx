@@ -294,7 +294,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             position: 'relative',
                             width: '100%',
                             height: '100%',
-                            background: `linear-gradient(to right, ${stops.map(s => s.color).join(', ')})`,
+                            background: `linear-gradient(to right, ${stops.map(s => `${s.color} ${s.position}%`).join(', ')})`,
                             cursor: 'pointer'
                         }}
                         onClick={handleAddStop}
