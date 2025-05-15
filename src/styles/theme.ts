@@ -1,4 +1,4 @@
-  const createThemeStyles = () => {
+const createThemeStyles = () => {
   const style = document.createElement('style');
   document.head.appendChild(style);
   
@@ -6,7 +6,9 @@
     :root {
       --primary-color: #2680eb;
       --text-color: #d6d6d6;
+      --black-text-: rgb(10, 10, 10);
       --bg-color: rgb(50, 50, 50);
+      --dark-bg-color: rgb(30, 30, 30);
       --border-color: #484848;
       --disabled-color: #848484;
       --hover-bg: rgba(38, 128, 235, 0.1);
@@ -19,7 +21,9 @@
       :root {
         --primary-color: #2680eb;
         --text-color: #d6d6d6;
+        --black-text-: rgb(10, 10, 10);
         --bg-color: rgb(50, 50, 50);
+        --dark-bg-color: rgb(30, 30, 30);
         --border-color:rgb(95, 95, 95);
         --disabled-color: #848484;
         --hover-bg: rgba(38, 128, 235, 0.1);
@@ -33,7 +37,9 @@
       :root {
         --primary-color: #2680eb;
         --text-color: rgb(215, 215, 215);
+        --black-text-: rgb(10, 10, 10);
         --bg-color: rgb(83, 83, 83);
+        --dark-bg-color: rgb(63, 63, 63);
         --border-color:rgb(128, 128, 128);
         --disabled-color: #999999;
         --hover-bg: rgba(38, 128, 235, 0.1);
@@ -47,7 +53,9 @@
       :root {
         --primary-color: #2680eb;
         --text-color: rgb(37, 37, 37);
+        --black-text-: rgb(10, 10, 10);
         --bg-color: rgb(184, 184, 184);
+        --dark-bg-color: rgb(164, 164, 164);
         --border-color:rgb(140, 140, 140);
         --disabled-color: #666666;
         --hover-bg: rgba(38, 128, 235, 0.05);
@@ -61,7 +69,9 @@
       :root {
         --primary-color: #2680eb;
         --text-color: rgb(48, 48, 48);
+        --black-text-: rgb(10, 10, 10);
         --bg-color: rgb(240, 240, 240);
+        --dark-bg-color: rgb(220, 220, 220);
         --border-color:rgb(196, 196, 196);
         --disabled-color: #909090;
         --hover-bg: rgba(38, 128, 235, 0.03);

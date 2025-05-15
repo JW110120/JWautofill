@@ -458,22 +458,14 @@ sp-radio {
 }
 
 .pattern-container {
-  height: 175px;
+  min-height:300px;
   width: 230px;
   overflow-y: auto;
-  background-color: rgb(16, 16, 16);
+  overflow-x: auto;
+  background-color: var(--dark-bg-color);
   border-radius: 4px;
   position: relative;
   z-index: 1;
-}
-
-.patterns-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
-    gap: 10px;
-    width: 100%;
-    min-height: 150px;
-    padding: 10px;
 }
 
 .photo-container {
@@ -483,10 +475,12 @@ sp-radio {
     overflow: hidden;
     cursor: pointer;
     position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
     width: 80px;
     height: 80px;
     z-index: 2;
-    background-color: rgba(0, 0, 0, 0.1);
 }
 
 .photo-container img {
@@ -494,12 +488,10 @@ sp-radio {
     height: 100%;
     object-fit: contain;
     display: block;
-    border: 1px solid blue; /* 添加图片边框以便于查看图片位置 */
 }
 
 .photo-container.selected {
-  border-color: var(--uxp-host-link-color);
-  box-shadow: 0 0 0 2px var(--uxp-host-link-color);
+  border-color: var(--primary-color);
 }
 
 .pattern-icon-container {

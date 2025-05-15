@@ -17,8 +17,13 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
     const [selectedPattern, setSelectedPattern] = useState<string | null>(null);
     const [angle, setAngle] = useState<number>(0);
     const [scale, setScale] = useState<number>(100);
-    // 添加图片加载状态
     const [loadedImages, setLoadedImages] = useState<Record<string, boolean>>({});
+    const mimeTypeMap = {
+        jpg: 'image/jpeg',
+        jpeg: 'image/jpeg',
+        png: 'image/png',
+        gif: 'image/gif'
+    };
 
     const processFile = async (file) => {
         try {
@@ -34,15 +39,12 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
             const base64String = arrayBufferToBase64(arrayBuffer);
             console.log('Base64转换成功，长度:', base64String.length);
             
-            const fileType = file.name.split('.').pop()?.toLowerCase() || 'jpeg';
-            const dataUrl = `data:image/${fileType};base64,${base64String}`;
+            // 修复：从文件名中提取文件扩展名
+            const fileExtension = file.name.split('.').pop()?.toLowerCase() || 'jpeg';
+            const mimeType = mimeTypeMap[fileExtension] || 'image/png';
+            const dataUrl = `data:${mimeType};base64,${base64String}`;
             
-            // 在这里添加图片验证代码
-            const img = document.createElement('img');
-            img.src = dataUrl;
-            console.log('图片元素已创建，等待加载');
-            
-            // 直接创建pattern对象
+            // 直接创建pattern对象，不进行预加载验证
             const pattern = {
                 id: generateUniqueId(),
                 name: file.name,
@@ -159,94 +161,61 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                 <h3>选择图案</h3>
                 <button className="close-button" onClick={onClose}>×</button>
             </div>
-
             <div className="pattern-container">
-                <div className="patterns-grid">
                     {patterns.map(pattern => (
                         <div
                             key={pattern.id}
                             className={`photo-container ${selectedPattern === pattern.id ? 'selected' : ''}`}
-                            onClick={() => {
-                                setSelectedPattern(pattern.id);
-                            }}
-                            style={{ 
-                                width: '80px', 
-                                height: '80px',
-                                border: '1px solid #ccc',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                overflow: 'hidden',
-                                position: 'relative'
-                            }}
+                            onClick={() => setSelectedPattern(pattern.id)}
                         >
-                            {/* 添加一个加载指示器 */}
-                            {!loadedImages[pattern.id] && (
-                                <div style={{
-                                    position: 'absolute',
-                                    top: 0,
-                                    left: 0,
-                                    right: 0,
-                                    bottom: 0,
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    backgroundColor: 'rgba(0,0,0,0.1)'
-                                }}>
-                                    加载中...
-                                </div>
-                            )}
                             <img 
                                 src={pattern.preview} 
                                 alt={pattern.name}
                                 onLoad={(e) => {
-                                    console.log('图片加载成功:', pattern.name);
-                                    setLoadedImages(prev => ({...prev, [pattern.id]: true}));
                                     const img = e.currentTarget;
-                                    
-                                    // 获取图片的自然尺寸
-                                    const naturalWidth = img.naturalWidth || 0;
-                                    const naturalHeight = img.naturalHeight || 0;
-                                    
-                                    console.log('图片尺寸:', {
-                                        offsetWidth: img.offsetWidth,
-                                        offsetHeight: img.offsetHeight,
-                                        naturalWidth,
-                                        naturalHeight
+                                    console.log(`图片加载成功 - ${pattern.name}:`, {
+                                        naturalSize: `${img.naturalWidth}x${img.naturalHeight}`,
+                                        displaySize: `${img.offsetWidth}x${img.offsetHeight}`,
+                                        complete: img.complete
                                     });
                                     
-                                    // 如果容器尺寸为0但自然尺寸有效，手动设置图片样式
-                                    if ((img.offsetWidth === 0 || img.offsetHeight === 0) && naturalWidth > 0 && naturalHeight > 0) {
-                                        // 计算合适的缩放比例，使图片适合80px的容器
-                                        const containerSize = 80;
-                                        const scale = Math.min(containerSize / naturalWidth, containerSize / naturalHeight);
-                                        const width = Math.round(naturalWidth * scale);
-                                        const height = Math.round(naturalHeight * scale);
-                                        
-                                        // 直接设置图片的宽高
-                                        img.style.width = `${width}px`;
-                                        img.style.height = `${height}px`;
-                                        img.style.objectFit = 'contain';
-                                        
-                                        console.log('手动设置图片尺寸:', { width, height });
-                                    }
+                                    setLoadedImages(prev => ({...prev, [pattern.id]: true}));
                                 }}
                                 onError={(e) => {
-                                    console.error('图片加载失败:', {
-                                        patternName: pattern.name,
-                                        error: e
-                                    });
+                                    console.error(`图片加载失败 - ${pattern.name}:`, e);
+                                    setLoadedImages(prev => ({...prev, [pattern.id]: false}));
                                 }}
                                 style={{
                                     maxWidth: '100%',
                                     maxHeight: '100%',
+                                    width: 'auto',
+                                    height: 'auto',
                                     objectFit: 'contain',
-                                    display: 'block'
+                                    display: 'block', // 移除条件显示
+                                    opacity: loadedImages[pattern.id] ? 1 : 0, // 使用透明度来控制显示
+                                    transition: 'opacity 0.2s',
+                                    padding: '4px'
                                 }}
                             />
+                            {(!loadedImages[pattern.id] && loadedImages[pattern.id] !== true) && ( // 修改判断条件
+                                <div style={{
+                                    position: 'absolute',
+                                    top: '0%',
+                                    left: '0%',
+                                    width: '100%',
+                                    height: '100%',
+                                    display: 'flex',
+                                    justifyContent: 'center',
+                                    alignItems: 'center',
+                                    backgroundColor: 'rgba(255,255,255,0.8)',
+                                    borderRadius: '4px',
+                                    color: 'var(--sp-color-text-default)',
+                                }}>
+                                    {loadedImages[pattern.id] === false ? '加载失败' : '加载中...'}
+                                </div>
+                            )}
                         </div>
                     ))}
-                </div>
             </div>
 
             <div className="pattern-icon-container">
