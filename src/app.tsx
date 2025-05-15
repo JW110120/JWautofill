@@ -454,7 +454,7 @@ class App extends React.Component<AppProps, AppState> {
                     <span className="title-beta">beta</span>
                 </h3>
                 <div className="button-container">
-                    <sp-action-button className="toggle-button" onClick={this.handleButtonClick}>
+                    <sp-action-button className="main-button" onClick={this.handleButtonClick}>
                         <div className="button-content">
                             <span className={`button-text ${!this.state.isEnabled ? 'disabled' : ''}`}>
                                 {this.state.isEnabled ? '功能开启' : '功能关闭'}

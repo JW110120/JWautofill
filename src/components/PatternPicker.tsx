@@ -209,7 +209,7 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                                     alignItems: 'center',
                                     backgroundColor: 'rgba(255,255,255,0.8)',
                                     borderRadius: '4px',
-                                    color: 'var(--sp-color-text-default)',
+                                    color: 'var(--black-text)',
                                 }}>
                                     {loadedImages[pattern.id] === false ? '加载失败' : '加载中...'}
                                 </div>
@@ -239,30 +239,32 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
             </div>
 
             <div className="pattern-settings-area">
-                <div className="setting-item">
-                    <label>角度：</label>
-                    <input
-                        type="range"
-                        min="0"
-                        max="360"
-                        step="1"
-                        value={angle}
-                        onChange={(e) => setAngle(Number(e.target.value))}
-                    />
-                    <span className="value">{angle}°</span>
-                </div>
+                <div className="setting-item-group">
+                    <div className="setting-item">
+                        <label>角度：</label>
+                        <input
+                            type="range"
+                            min="0"
+                            max="360"
+                            step="1"
+                            value={angle}
+                            onChange={(e) => setAngle(Number(e.target.value))}
+                        />
+                        <span className="value">{angle}°</span>
+                    </div>
 
-                <div className="setting-item">
-                    <label>缩放：</label>
-                    <input
-                        type="range"
-                        min="50"
-                        max="500"
-                        step="1"
-                        value={scale}
-                        onChange={(e) => setScale(Number(e.target.value))}
-                    />
-                    <span className="value">{scale}%</span>
+                    <div className="setting-item">
+                        <label>缩放：</label>
+                        <input
+                            type="range"
+                            min="50"
+                            max="500"
+                            step="1"
+                            value={scale}
+                            onChange={(e) => setScale(Number(e.target.value))}
+                        />
+                        <span className="value">{scale}%</span>
+                    </div>
                 </div>
             </div>
 

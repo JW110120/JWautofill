@@ -19,7 +19,7 @@ html, body {
 
 .container {
   width: 250px;
-  height: 310px;
+  min-height: 310px;
   box-sizing: border-box;
   overflow-y: auto;
   background-color: var(--bg-color);
@@ -42,7 +42,7 @@ html, body {
 .title {
   text-align: center;
   font-weight: bold;
-  padding-bottom: 10px;
+  padding: 5px 0;
   border-bottom: 1px solid var(--border-color);
   color: var(--text-color);
 }   
@@ -57,15 +57,15 @@ html, body {
 
 .button-container {
   align-items: center; 
-  margin: 5px 0;
+  margin: 5px 0 10px 0;
   height: 50px;
   position: relative;
   display: flex;
   flex-direction: column;
 }
 
-.toggle-button {
-  border-radius: 6px;
+.main-button {
+  border-radius: 4px;
   cursor: pointer;
   height: 50px;
   width: 80%;
@@ -76,20 +76,20 @@ html, body {
   transition: all 0.3s ease;
 }
 
-.toggle-button:hover {
+.main-button:hover {
     background-color: var(--hover-bg);
     transform: scale(1.02);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
-.toggle-button:active {
+.main-button:active {
     background-color: var(--button-down);
     transform: scale(0.98);
     box-shadow: none;
 }
 
 /* 禁用状态下的悬停效果 */
-.toggle-button:hover .button-text.disabled {
+.main-button:hover .button-text.disabled {
     color: rgba(128, 128, 128, 0.7); /* 略微提高禁用状态下的文字透明度 */
 }
 
@@ -126,10 +126,9 @@ html, body {
 
 .blend-mode-container {
   display: flex;
-  margin-bottom: -40px;
+  margin-bottom: -35px;
   align-items: center;
   background-color: var(--bg-color);
-  padding: 0 8px;
   position: relative;  
   width: calc(100% - 34px);  
   left: 50%;
@@ -144,7 +143,6 @@ html, body {
 
 sp-picker {
   flex: 1;
-  padding: 5px; 
   cursor: pointer;    
   position: relative;
   z-index: 1;
@@ -223,6 +221,7 @@ sp-picker[disabled] {
   align-items: center;
   cursor: pointer;
   font-size: 13px;
+  padding: 5px 0;
   color: var(--text-color);
   background-color: var(--bg-color);
   transition: background-color 0.3s;
@@ -393,13 +392,12 @@ sp-radio {
   top: 0;
   left: 0;
   width: 250px;  
-  height: 730px;  /* 留出20px给底部版权信息 */
+  height: calc(100% - 20px);
   background-color: var(--bg-color);
   border: 1px solid var(--border-color);
-  padding: 15px;
+  padding: 15px;  
   box-sizing: border-box;
   overflow-y: auto;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
   z-index: 9999 !important;
 }
 
@@ -416,6 +414,8 @@ sp-radio {
 
 .panel-header {
   display: flex;
+  min-height: 25px;
+  height: 6%;
   color: var(--text-color);
   justify-content: space-between;
   align-items: center;
@@ -437,7 +437,15 @@ sp-radio {
 }
 
 .panel-footer {
-  text-align: right;
+  position: absolute;
+  display: flex;
+  align-items: flex-end;
+  bottom: 1%;
+  min-height: 25px;
+  width: 100%;  /* 添加宽度 */
+  justify-content: flex-end;  /* 添加右对齐 */
+  padding-right: 15px;  /* 添加右侧内边距，避免按钮贴边 */
+  box-sizing: border-box;  /* 确保padding不会影响整体宽度 */
 }
 
 /* 图案选择器样式 */
@@ -446,7 +454,7 @@ sp-radio {
   top: 0;
   left: 0;
   width: 250px;
-  height: 730px;
+  height: calc(100% - 20px);
   background-color: var(--bg-color);
   border: 1px solid var(--border-color);
   padding: 10px;
@@ -458,36 +466,43 @@ sp-radio {
 }
 
 .pattern-container {
-  min-height:300px;
-  width: 230px;
+  min-height: 150px;
+  height: 62%;
+  width: 234px;
   overflow-y: auto;
   overflow-x: auto;
   background-color: var(--dark-bg-color);
   border-radius: 4px;
   position: relative;
   z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  flex-direction: row;
+  align-items: flex-start;
+  margin-left: -3px;
 }
 
 .photo-container {
-    aspect-ratio: 1;
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    overflow: hidden;
-    cursor: pointer;
-    position: relative;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    width: 80px;
-    height: 80px;
-    z-index: 2;
+  aspect-ratio: 1;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  overflow: hidden;
+  cursor: pointer;
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 78px;
+  height: 78px;
+  z-index: 2;
+  flex: 0 0 auto;
 }
 
 .photo-container img {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-    display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
 }
 
 .photo-container.selected {
@@ -550,18 +565,39 @@ sp-radio {
 }
 
 .pattern-settings-area {
+  position: sticky;
+  width: 234px;
+  min-height: 100px;
   border: 1px solid var(--border-color);
   border-radius: 4px;
-  padding: 10px 0;
+  padding: auto 10px;
+  bottom :70px;
   color: var(--text-color);
+  margin-left: -3px;
 }
 
-.setting-item {
+.setting-item-group {
+  padding: 10px;
+  border-radius: 4px;
+  background-color: var(--bg-color);
+}
+
+.setting-item-group .setting-item {
+  width: 100%;
   display: flex;
   align-items: center;
-  margin: 10px 0;
-  padding: 0 10px;
+  padding: auto 10px;
   color: var(--text-color);
+  margin-bottom: 15px;
+}
+
+.setting-item-group .setting-item:last-child {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  padding: auto 10px;
+  color: var(--text-color);
+  margin-bottom: 0;
 }
 
 .setting-item label {
