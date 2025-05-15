@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Gradient, GradientStop } from '../types/state';
 import { AddIcon, DeleteIcon } from '../styles/Icons';
-import { ColorArea } from '@spectrum-web-components/color-area';
 
 interface GradientPickerProps {
     isOpen: boolean;
@@ -10,7 +9,7 @@ interface GradientPickerProps {
 }
 
 const GradientPicker: React.FC<GradientPickerProps> = ({
-    isOpen,
+    isOpen, 
     onClose,
     onSelect
 }) => {
@@ -378,11 +377,11 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 </div>
 
                 {/* 颜色滑块区域 */}
-                    <div className="gradient-slider-track">
+                    <div className="color-slider-track">
                         {stops.map((stop, index) => (
                             <div
                                 key={`color-${index}`}
-                                className={`gradient-slider-thumb ${selectedStopIndex === index ? 'selected' : ''}`}
+                                className={`color-slider-thumb ${selectedStopIndex === index ? 'selected' : ''}`}
                                 style={{ 
                                     left: `${stop.position}%`,
                                     backgroundColor: stop.color
@@ -391,12 +390,12 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                     e.stopPropagation();
                                     setSelectedStopIndex(index);
                                 }}
-                            />
+                                >
+                            </div>
                         ))}
                     </div>
-                    <div className="gradient-color-controls">
+                    <div className="color-input-container" >
                         <label className="subtitle">颜色：</label>
-                        <div className="color-input-container" style={{ display: 'flex', alignItems: 'center', gap: '8px', position: 'relative' }}>
                             <span className="color-prefix">#</span>
                             <input
                                 type="text"
@@ -424,11 +423,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                         e.target.value = value;
                                     }
                                 }}
-                                style={{
-                                    width: '80px',
-                                    fontFamily: 'monospace',
-                                    padding: '2px 4px'
-                                }}
                                 disabled={selectedStopIndex === null}
                             />
                             <div 
@@ -441,29 +435,14 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                     border: `1px solid var(--border-color)`,
                                     borderRadius: '2px'
                                 }}
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    setShowColorPicker(!showColorPicker);
-                                    setColorPickerPosition({
-                                        x: e.clientX,
-                                        y: e.clientY
-                                    });
-                                }}
+                                onClick={() => setShowColorPicker(true)}
                             />
                             {showColorPicker && selectedStopIndex !== null && (
-                                <div style={{
-                                    position: 'fixed',
-                                    zIndex: 9999,
-                                    top: `${colorPickerPosition.y}px`,
-                                    left: `${colorPickerPosition.x}px`, 
-                                    background: 'var(--background-color)',
-                                    padding: '8px', 
-                                    borderRadius: '4px',
-                                }}>
+                                <div className="color-picker-container">
                                     <sp-color-area 
                                         style={{
-                                            width: '200px',
-                                            height: '200px',
+                                            width: '140px',
+                                            height: '140px',
                                             display: 'block'
                                         }}
                                         color={getRGBColor(stops[selectedStopIndex].color)}
@@ -471,9 +450,15 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                             handleStopChange(selectedStopIndex, e.target.value, stops[selectedStopIndex].position);
                                         }}
                                     ></sp-color-area>
+                                    <sp-color-slider 
+                                        vertical
+                                        onChange={(e: any) => {
+                                            // 处理色相变化的逻辑
+                                        }}
+                                    ></sp-color-slider>
                                 </div>
                             )}
-                        </div>
+                        
                         {stops.length >= 1 && (
                             <sp-action-button 
                                 quiet 
@@ -484,7 +469,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                 <DeleteIcon />
                             </sp-action-button>
                         )}
-                    </div>
+                     </div>
             </div>
 
             {/* 渐变类型设置 */}

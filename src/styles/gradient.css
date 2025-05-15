@@ -15,6 +15,40 @@
     flex-direction: column;
 }
 
+.subtitle {
+  color: var(--text-color);
+  min-width: 40px;
+  font-size: 12px;
+  margin-left: 8px;
+}
+
+
+.delete-button {
+  cursor: pointer;
+  align-items: center;
+  margin-left: auto; /* 右对齐 */;
+  justify-content: flex-end; /* 修改为右对齐 */
+}
+
+.delete-button:hover {
+  background-color: var(--hover-bg);
+}
+
+.delete-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.delete-button svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+}
+
+.delete-button .icon-fill {
+  fill: var(--text-color);
+}
+
 /* 预设区域样式 */
 .gradient-presets-area {
     height: 15% ;
@@ -81,30 +115,26 @@
     flex-direction: column;
 }
 
-.delete-button {
-  cursor: pointer;
+.opacity-input {
+  display: flex;
   align-items: center;
-  margin-left: auto; /* 右对齐 */;
-  justify-content: flex-end; /* 修改为右对齐 */
+  margin-bottom: 10px;
 }
 
-.delete-button:hover {
-  background-color: var(--hover-bg);
+.opacity-input input[type="number"] {
+  width: 40px;
+  height: 24px;
+  padding: 2px 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  margin-right:  -5px;
+  color: var(--text-color);
 }
 
-.delete-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.delete-button svg {
-  width: 15px;
-  height: 15px;
-  display: block;
-}
-
-.delete-button .icon-fill {
-  fill: var(--text-color);
+.opacity-input input[type="number"]::-webkit-inner-spin-button,
+.opacity-input input[type="number"]::-webkit-outer-spin-button {
+  opacity: 1;
+  height: 20px;
 }
 
 .gradient-slider-track {
@@ -113,7 +143,7 @@
     border-radius: 4px;
     background: transparent;
     cursor: pointer;
-    margin: 0px 10px;
+    margin: 0px 10px -13px 10px;
     /* 添加以下属性 */
     overflow: visible;
 }
@@ -146,35 +176,6 @@
     transform: translate(-50%, -50%) scale(1.1);
 }
 
-.subtitle {
-  color: var(--text-color);
-  min-width: 40px;
-  font-size: 12px;
-  margin-left: 8px;
-}
-
-.opacity-input {
-  display: flex;
-  align-items: center;
-  margin-bottom: 10px;
-}
-
-.opacity-input input[type="number"] {
-  width: 40px;
-  height: 24px;
-  padding: 2px 4px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  margin-right:  -5px;
-  color: var(--text-color);
-}
-
-.opacity-input input[type="number"]::-webkit-inner-spin-button,
-.opacity-input input[type="number"]::-webkit-outer-spin-button {
-  opacity: 1;
-  height: 20px;
-}
-
 .gradient-preview {
     height: 20px;
     margin: 10px 10px;
@@ -204,11 +205,42 @@
     background-position: 0 0, 0 2px, 2px -2px, -2px 0px;  /* 相应地将位置值也减半 */
 }
 
-.gradient-color-controls {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin: 10px 0;
+.color-slider-track {
+  position: relative;
+  height: 20px;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  margin: -12px 10px 0 10px;
+  /* 添加以下属性 */
+  overflow: visible;
+}
+
+.color-slider-thumb {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border-color);
+  transform: translate(-50%, -50%);
+  top: 50%;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  z-index: 10000;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.color-slider-thumb:active {
+  cursor: grabbing;
+  z-index: 10001;
+  transform: translate(-50%, -50%) scale(1.1);
+}
+
+.color-slider-thumb.selected {
+  border-color: var(--primary-color);
+  z-index: 10001;
+  transform: translate(-50%, -50%) scale(1.1);
 }
 
 .color-prefix {
@@ -218,6 +250,10 @@
 }
 
 .color-input-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
   position: relative;
 }
 
@@ -231,6 +267,24 @@
 
 .color-preview {
   border-radius: 2px;
+}
+
+.color-picker-container {
+  position: sticky;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  width: 200px;
+  height: 160px;
+}
+
+sp-color-area {
+  margin: 10px;
+}
+
+sp-color-slider {
+  margin: 10px;
+  width : 20px;
 }
 
 /* 渐变设置区域样式 */
