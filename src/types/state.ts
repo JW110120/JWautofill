@@ -84,6 +84,6 @@ export const initialState: AppState = {
     selectedPattern: null,
     selectedGradient: null,
     isColorSettingsOpen: false,
-    isPatternPickerOpen: true,
-    isGradientPickerOpen: false
+    isPatternPickerOpen: false,
+    isGradientPickerOpen: true
 };

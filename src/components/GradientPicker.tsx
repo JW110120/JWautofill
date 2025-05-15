@@ -36,13 +36,27 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             reverse,
             stops: [...stops]
         };
-        setPresets([...presets, newPreset]);
+        const newPresets = [...presets, newPreset];
+        setPresets(newPresets);
+        setSelectedPreset(newPresets.length - 1); // 选中新增的预设
     };
 
     const handleDeletePreset = (index: number) => {
         setPresets(presets.filter((_, i) => i !== index));
         if (selectedPreset === index) {
-            setSelectedPreset(null);
+            // 如果删除的是当前选中的预设，则选中上一个预设（如果存在）
+            const newSelectedIndex = index > 0 ? index - 1 : null;
+            setSelectedPreset(newSelectedIndex);
+            
+            // 如果存在上一个预设，则应用其设置
+            if (newSelectedIndex !== null) {
+                const previousPreset = presets[newSelectedIndex];
+                setGradientType(previousPreset.type);
+                setAngle(previousPreset.angle || 0);
+                setScale(previousPreset.scale || 100);
+                setReverse(previousPreset.reverse || false);
+                setStops([...previousPreset.stops]);
+            }
         }
     };
 
@@ -182,8 +196,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             </div>
 
             {/* 预设区域 */}
-            <div className="gradient-presets">
-                <div className="presets-grid">
+            <div className="gradient-presets-area">
+                <div className="gradient-presets">
                     {presets.map((preset, index) => (
                         <div 
                             key={index} 
@@ -218,8 +232,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                 <DeleteIcon />
                             </sp-action-button>
                         </div>
-                 </div>
-        </div>
+               </div>
+            </div>
 
                     
             {/* 渐变编辑区域 */}
@@ -227,7 +241,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
               <div className="panel-header"><h3>颜色序列</h3></div>
                 {/* 不透明度滑块区域 */}
                     <div className="opacity-input">
-                        <label className="sublabel">不透明度：</label>
+                        <label className="subtitle">不透明度：</label>
                         <input
                             type="number"
                             min="0"
@@ -248,7 +262,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             }}
                             disabled={selectedStopIndex === null}
                         />
-                         <label className="sublabel">%</label>
+                         <label className="subtitle">%</label>
                         <sp-action-button 
                             quiet 
                             className="delete-button"
@@ -318,7 +332,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         ))}
                     </div>
                     <div className="gradient-color-controls">
-                        <label className="sublabel">颜色：</label>
+                        <label className="subtitle">颜色：</label>
                         <div className="color-input-container" style={{ display: 'flex', alignItems: 'center', gap: '8px', position: 'relative' }}>
                             <input
                                 type="text"
@@ -383,7 +397,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             </div>
 
             {/* 渐变类型设置 */}
-            <div className="gradient-settings">
+            <div className="gradient-settings-area">
                 <div className="gradient-setting-item">
                     <label>样式：</label>
                     <sp-picker
@@ -442,7 +456,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
 
             {/* 预览区域 */}
             <div className="final-preview-container">
-            <div className="panel-header"><h3>最终预览</h3></div>
+            <div className="panel-header"><h3>最终预览</h3>
+            </div>
   
                 <div className="final-preview" style={{
                     background: getGradientStyle()

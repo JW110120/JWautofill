@@ -1,0 +1,307 @@
+/* 渐变选择器样式优化 */
+.gradient-picker {
+    position: sticky;
+    top: 0;
+    left: 0;
+    width: 250px;
+    height: calc(100% - 20px);
+    background-color: var(--bg-color);
+    border: 1px solid var(--border-color);
+    padding: 5px;
+    box-sizing: border-box;
+    overflow-y: auto;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+}
+
+/* 预设区域样式 */
+.gradient-presets-area {
+    height: 15% ;
+    min-height: 105px;
+    width: 100%;
+    position: relative;
+    display: flex;
+    flex-direction: column ;
+    border: 1px solid var(--border-color);
+    background-color: var(--dark-bg-color);
+    margin-bottom: 10px;
+    border-radius: 4px;
+    z-index: 11;
+}
+
+.gradient-presets {
+    width: 100%;
+    height: calc(100% - 31px);
+    position: relative;
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    overflow-y: auto;
+    top: 0;
+    left: 0;
+    z-index: 12;
+}
+
+.preset-item {
+    position: relative;
+    height: 35px;
+    width: 35px;
+    aspect-ratio: 1;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    overflow: hidden;
+    cursor: pointer;
+}
+
+.preset-item.selected {
+    border-color: var(--primary-color);
+}
+
+.preset-preview {
+    width: 100%;
+    height: 100%;
+}
+
+.gradient-icon-container {
+    position: relative;
+    border-top: 1px solid var(--border-color);
+    background-color: var(--bg-color);
+}
+
+/* 渐变颜色区域样式 */
+.gradient-edit-area {
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    margin-bottom: 10px;
+    max-height: calc(100% - 250px); /* 减去预设区域和其他元素的高度 */
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+.delete-button {
+  cursor: pointer;
+  align-items: center;
+  margin-left: auto; /* 右对齐 */;
+  justify-content: flex-end; /* 修改为右对齐 */
+}
+
+.delete-button:hover {
+  background-color: var(--hover-bg);
+}
+
+.delete-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.delete-button svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+}
+
+.delete-button .icon-fill {
+  fill: var(--text-color);
+}
+
+.gradient-slider-track {
+    position: relative;
+    height: 20px;
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    margin: 0px 10px;
+    /* 添加以下属性 */
+    overflow: visible;
+}
+
+.gradient-slider-thumb {
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 2px solid var(--border-color);
+    transform: translate(-50%, -50%);
+    top: 50%;
+    cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
+    z-index: 10000;
+    pointer-events: auto;
+    touch-action: none;
+}
+
+.gradient-slider-thumb:active {
+    cursor: grabbing;
+    z-index: 10001;
+    transform: translate(-50%, -50%) scale(1.1);
+}
+
+.gradient-slider-thumb.selected {
+    border-color: var(--primary-color);
+    z-index: 10001;
+    transform: translate(-50%, -50%) scale(1.1);
+}
+
+.subtitle {
+  color: var(--text-color);
+  min-width: 40px;
+  font-size: 12px;
+  margin-left: 8px;
+}
+
+.opacity-input {
+  display: flex;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.opacity-input input[type="number"] {
+  width: 60px;
+  height: 24px;
+  padding: 2px 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  margin-right:  -5px;
+  color: var(--text-color);
+}
+
+.opacity-input input[type="number"]::-webkit-inner-spin-button,
+.opacity-input input[type="number"]::-webkit-outer-spin-button {
+  opacity: 1;
+  height: 20px;
+}
+
+.gradient-preview {
+    height: 20px;
+    margin: 10px 10px;
+    border: 1px solid var(--border-color);
+    cursor: pointer;
+    position: relative;
+}
+
+.opacity-checkerboard {
+    background-image: linear-gradient(45deg, 
+        var(--spectrum-global-color-gray-300) 25%, 
+        transparent 25%
+    ),
+    linear-gradient(-45deg, 
+        var(--spectrum-global-color-gray-300) 25%, 
+        transparent 25%
+    ),
+    linear-gradient(45deg, 
+        transparent 75%, 
+        var(--spectrum-global-color-gray-300) 75%
+    ),
+    linear-gradient(-45deg, 
+        transparent 75%, 
+        var(--spectrum-global-color-gray-300) 75%
+    );
+    background-size: 4px 4px;  /* 从 8px 减小到 4px */
+    background-position: 0 0, 0 2px, 2px -2px, -2px 0px;  /* 相应地将位置值也减半 */
+}
+
+.gradient-color-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 10px 0;
+}
+
+.color-input-container {
+  position: relative;
+}
+
+.color-input-container input[type="text"] {
+  width: 80px;
+  height: 24px;
+  padding: 2px 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+.color-preview {
+  border-radius: 2px;
+}
+
+/* 渐变设置区域样式 */
+.gradient-settings-area {
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 10px;
+    height: 20%;
+    min-height: 130px; 
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 10px;
+} 
+
+.gradient-setting-item {
+    display: flex;
+    align-items: center;
+}
+
+.gradient-setting-item label {
+    font-size: 12px;
+    color: var(--text-color);
+}
+
+.gradient-setting-item select {
+    flex: 1;
+    padding: 5px;
+    border-radius: 4px;
+    background-color: var(--button-bg);
+    color: var(--text-color);
+    border: 1px solid var(--border-color);
+}
+
+.gradient-setting-item input[type="range"] {
+    width:130px;
+    flex: 1;
+}
+
+.gradient-setting-item .value {
+    font-size: 12px;
+    text-align: right;
+    color: var(--text-color);
+}
+
+.reverse-checkbox-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin : 10px 0;
+}
+
+.reverse-checkbox-container input[type="checkbox"] {
+  margin: 0;
+}
+
+.reverse-checkbox-container label {
+  margin: 0;
+}
+/* 最终预览区域样式 */
+.final-preview-container {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-width: 80px;
+  margin-top: 10px;
+  border: 1px solid var(--border-color);
+  flex-direction: column;
+  bottom: 10px;
+}
+
+.final-preview {
+    position: relative;
+    height: 40px;
+    margin: 0px 10px 10px 10px; 
+    border-radius: 4px;
+    justify-content: center;
+    box-sizing: border-box;
+    border: 1px solid var(--border-color);
+}
