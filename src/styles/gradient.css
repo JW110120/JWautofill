@@ -160,7 +160,7 @@
 }
 
 .opacity-input input[type="number"] {
-  width: 60px;
+  width: 40px;
   height: 24px;
   padding: 2px 4px;
   border: 1px solid var(--border-color);
@@ -211,14 +211,20 @@
     margin: 10px 0;
 }
 
+.color-prefix {
+  font-family: monospace;
+  font-size: 14px;
+  color: var(--text-color);
+}
+
 .color-input-container {
   position: relative;
 }
 
 .color-input-container input[type="text"] {
-  width: 80px;
+  width: 60px;
   height: 24px;
-  padding: 2px 4px;
+  padding: 2px 0px;
   border: 1px solid var(--border-color);
   border-radius: 4px;
 }
@@ -290,10 +296,9 @@
   display: flex;
   width: 100%;
   min-width: 80px;
-  margin-top: 10px;
+  margin-bottom: 10px;
   border: 1px solid var(--border-color);
   flex-direction: column;
-  bottom: 10px;
 }
 
 .final-preview {

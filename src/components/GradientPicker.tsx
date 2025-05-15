@@ -24,9 +24,9 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const [selectedStopIndex, setSelectedStopIndex] = useState<number | null>(null);
     const [showColorPicker, setShowColorPicker] = useState(false);
     const [stops, setStops] = useState<GradientStop[]>([
-        { color: '#000000', position: 0 },
-        { color: '#ffffff', position: 100 }
-    ]);
+        { color: 'rgba(0, 0, 0, 1)', position: 0 },
+        { color: 'rgba(255, 255, 255, 1)', position: 100 }
+    ]); 
 
     const handleAddPreset = () => {
         const newPreset: Gradient = {
@@ -93,8 +93,64 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         const clickX = e.clientX - rect.left;
         const newPosition = Math.round((clickX / rect.width) * 100);
         
-        const newStops = [...stops, { color: '#808080', position: newPosition }];
-        setStops(newStops.sort((a, b) => a.position - b.position));
+        // 计算新增锚点的颜色
+        const leftStop = stops.reduce((prev, curr) => 
+            curr.position <= newPosition && curr.position > prev.position ? curr : prev
+        , { position: -1, color: stops[0].color });
+        
+        const rightStop = stops.reduce((prev, curr) => 
+            curr.position >= newPosition && curr.position < prev.position ? curr : prev
+        , { position: 101, color: stops[stops.length-1].color });
+        
+        // 根据位置计算颜色插值
+        const progress = (newPosition - leftStop.position) / (rightStop.position - leftStop.position);
+        
+        // 从rgba格式中提取颜色值
+        const leftColor = leftStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
+        const rightColor = rightStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
+        
+        if (leftColor && rightColor) {
+            const r = Math.round(parseInt(leftColor[1]) * (1 - progress) + parseInt(rightColor[1]) * progress);
+            const g = Math.round(parseInt(leftColor[2]) * (1 - progress) + parseInt(rightColor[2]) * progress);
+            const b = Math.round(parseInt(leftColor[3]) * (1 - progress) + parseInt(rightColor[3]) * progress);
+            const a = parseFloat(leftColor[4]) * (1 - progress) + parseFloat(rightColor[4]) * progress;
+            
+            const newColor = `rgba(${r}, ${g}, ${b}, ${a})`;
+            const newStops = [...stops, { color: newColor, position: newPosition }];
+            setStops(newStops.sort((a, b) => a.position - b.position));
+        }
+    };
+
+    const handleStopChange = (index: number, color: string, position: number, opacity?: number) => {
+        const newStops = [...stops];
+        const currentStop = newStops[index];
+        
+        if (opacity !== undefined) {
+            // 更新不透明度时保持原有颜色
+            const rgbaValues = currentStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+            if (rgbaValues) {
+                const [_, r, g, b] = rgbaValues;
+                newStops[index] = {
+                    ...currentStop,
+                    color: `rgba(${r}, ${g}, ${b}, ${opacity / 100})`,
+                    position: position
+                };
+            }
+        } else if (color.startsWith('#')) {
+            // 更新颜色时保持原有不透明度
+            const currentAlpha = currentStop.color.match(/,\s*([\d.]+)\s*\)$/)?.[1] || '1';
+            const r = parseInt(color.slice(1, 3), 16);
+            const g = parseInt(color.slice(3, 5), 16);
+            const b = parseInt(color.slice(5, 7), 16);
+            newStops[index] = {
+                ...currentStop,
+                color: `rgba(${r}, ${g}, ${b}, ${currentAlpha})`,
+                position: position
+            };
+            
+            // 强制更新UI
+            setStops([...newStops]);
+        }
     };
 
     const handleRemoveStop = (index: number) => {
@@ -117,16 +173,21 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         setDragStartPosition(stops[index].position);
         
         const handleMouseMove = (moveEvent: MouseEvent) => {
+            moveEvent.preventDefault();  // 添加这行
             const trackElement = document.querySelector('.gradient-slider-track') as HTMLElement;
             if (!trackElement) return;
             
             const rect = trackElement.getBoundingClientRect();
-            const deltaX = moveEvent.clientX - e.clientX; // 使用初始事件的clientX
-            const newPosition = Math.max(0, Math.min(100, stops[index].position + (deltaX / rect.width) * 100));
+            const deltaX = moveEvent.clientX - dragStartX;  // 修改这里，使用dragStartX
+            const newPosition = Math.max(0, Math.min(100, dragStartPosition + (deltaX / rect.width) * 100));
             
             const newStops = [...stops];
             newStops[index] = { ...newStops[index], position: newPosition };
-            setStops(newStops.sort((a, b) => a.position - b.position));
+            const sortedStops = newStops.sort((a, b) => a.position - b.position);
+            setStops(sortedStops);
+            // 更新选中的stop索引
+            const newIndex = sortedStops.findIndex(stop => stop === newStops[index]);
+            setSelectedStopIndex(newIndex);
         };
         
         const handleMouseUp = () => {
@@ -146,31 +207,32 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         const currentStop = newStops[index];
         
         if (opacity !== undefined) {
-            // 仅更新不透明度
-            const rgbaColor = currentStop.color;
-            const rgbaValues = rgbaColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+            // 修改：更新不透明度时保持原有颜色
+            const rgbaValues = currentStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
             if (rgbaValues) {
                 const [_, r, g, b] = rgbaValues;
                 newStops[index] = {
                     ...currentStop,
                     color: `rgba(${r}, ${g}, ${b}, ${opacity / 100})`,
-                    position
+                    position: currentStop.position
                 };
             }
         } else {
-            // 仅更新颜色，保持不透明度不变
+            // 修改：更新颜色时保持原有不透明度
             const currentAlpha = currentStop.color.match(/,\s*([\d.]+)\s*\)$/)?.[1] || '1';
-            const r = parseInt(color.slice(1, 3), 16);
-            const g = parseInt(color.slice(3, 5), 16);
-            const b = parseInt(color.slice(5, 7), 16);
-            newStops[index] = {
-                ...currentStop,
-                color: `rgba(${r}, ${g}, ${b}, ${currentAlpha})`,
-                position
-            };
+            if (color.startsWith('#')) {
+                const r = parseInt(color.slice(1, 3), 16);
+                const g = parseInt(color.slice(3, 5), 16);
+                const b = parseInt(color.slice(5, 7), 16);
+                newStops[index] = {
+                    ...currentStop,
+                    color: `rgba(${r}, ${g}, ${b}, ${currentAlpha})`,
+                    position: currentStop.position
+                };
+            }
         }
         
-        setStops(newStops.sort((a, b) => a.position - b.position));
+        setStops(newStops);
     };
 
     const getRGBColor = (rgbaColor: string): string => {
@@ -252,10 +314,11 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             onChange={(e) => {
                                 if (selectedStopIndex !== null) {
                                     const opacityValue = Math.max(0, Math.min(100, Number(e.target.value)));
+                                    const currentStop = stops[selectedStopIndex];
                                     handleStopChange(
                                         selectedStopIndex,
-                                        stops[selectedStopIndex].color,
-                                        stops[selectedStopIndex].position,
+                                        getRGBColor(currentStop.color),
+                                        currentStop.position,
                                         opacityValue
                                     );
                                 }
@@ -334,10 +397,38 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     <div className="gradient-color-controls">
                         <label className="subtitle">颜色：</label>
                         <div className="color-input-container" style={{ display: 'flex', alignItems: 'center', gap: '8px', position: 'relative' }}>
+                            <span className="color-prefix">#</span>
                             <input
                                 type="text"
-                                value={selectedStopIndex !== null ? getRGBColor(stops[selectedStopIndex].color).toUpperCase() : ''}
-                                readOnly
+                                value={selectedStopIndex !== null ? getRGBColor(stops[selectedStopIndex].color).toUpperCase().slice(1) : ''}
+                                onChange={(e) => {
+                                    if (selectedStopIndex !== null) {
+                                        let value = e.target.value.replace(/[^0-9A-Fa-f]/g, '').slice(0, 6);
+                                        const newStops = [...stops];
+                                        const currentStop = newStops[selectedStopIndex];
+                                        const currentAlpha = currentStop.color.match(/,\s*([\d.]+)\s*\)$/)?.[1] || '1';
+                                        
+                                        // 如果有输入值，则使用输入值；如果完全删除，则使用000000
+                                        const colorValue = value || '000000';
+                                        const r = parseInt(colorValue.padEnd(2, '0').slice(0, 2), 16);
+                                        const g = parseInt(colorValue.padEnd(4, '0').slice(2, 4), 16);
+                                        const b = parseInt(colorValue.padEnd(6, '0').slice(4, 6), 16);
+                                        
+                                        newStops[selectedStopIndex] = {
+                                            ...currentStop,
+                                            color: `rgba(${r}, ${g}, ${b}, ${currentAlpha})`
+                                        };
+                                        setStops([...newStops]);
+                                        
+                                        // 直接更新输入框的值，允许部分输入
+                                        e.target.value = value;
+                                    }
+                                }}
+                                style={{
+                                    width: '80px',
+                                    fontFamily: 'monospace',
+                                    padding: '2px 4px'
+                                }}
                                 disabled={selectedStopIndex === null}
                             />
                             <div 
