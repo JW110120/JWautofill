@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
 import { Gradient, GradientStop } from '../types/state';
 import { AddIcon, DeleteIcon } from '../styles/Icons';
+import { app, action, core } from 'photoshop';
+
+const { executeAsModal } = core;
+const { batchPlay } = action;
 
 interface GradientPickerProps {
     isOpen: boolean;
@@ -123,7 +127,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const handleStopChange = (index: number, color: string, position: number, opacity?: number) => {
         const newStops = [...stops];
         const currentStop = newStops[index];
-        
         if (opacity !== undefined) {
             // 更新不透明度时保持原有颜色
             const rgbaValues = currentStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
@@ -132,24 +135,31 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 newStops[index] = {
                     ...currentStop,
                     color: `rgba(${r}, ${g}, ${b}, ${opacity / 100})`,
-                    position: position
+                    position: currentStop.position
                 };
             }
-        } else if (color.startsWith('#')) {
+        } else {
             // 更新颜色时保持原有不透明度
             const currentAlpha = currentStop.color.match(/,\s*([\d.]+)\s*\)$/)?.[1] || '1';
-            const r = parseInt(color.slice(1, 3), 16);
-            const g = parseInt(color.slice(3, 5), 16);
-            const b = parseInt(color.slice(5, 7), 16);
-            newStops[index] = {
-                ...currentStop,
-                color: `rgba(${r}, ${g}, ${b}, ${currentAlpha})`,
-                position: position
-            };
-            
-            // 强制更新UI
-            setStops([...newStops]);
+            if (color.startsWith('#')) {
+                const r = parseInt(color.slice(1, 3), 16);
+                const g = parseInt(color.slice(3, 5), 16);
+                const b = parseInt(color.slice(5, 7), 16);
+                newStops[index] = {
+                    ...currentStop,
+                    color: `rgba(${r}, ${g}, ${b}, ${currentAlpha})`,
+                    position: currentStop.position
+                };
+            } else if (color.startsWith('rgba')) {
+                // 直接赋值 rgba 字符串
+                newStops[index] = {
+                    ...currentStop,
+                    color: color,
+                    position: currentStop.position
+                };
+            }
         }
+        setStops(newStops);
     };
 
     const handleRemoveStop = (index: number) => {
@@ -226,6 +236,13 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 newStops[index] = {
                     ...currentStop,
                     color: `rgba(${r}, ${g}, ${b}, ${currentAlpha})`,
+                    position: currentStop.position
+                };
+            } else if (color.startsWith('rgba')) {
+                // 直接赋值 rgba 字符串
+                newStops[index] = {
+                    ...currentStop,
+                    color: color,
                     position: currentStop.position
                 };
             }
@@ -435,29 +452,40 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                     border: `1px solid var(--border-color)`,
                                     borderRadius: '2px'
                                 }}
-                                onClick={() => setShowColorPicker(true)}
+                                onClick={async () => {
+                                    if (selectedStopIndex !== null) {
+                                        try {
+                                            const result = await require("photoshop").core.executeAsModal(async (executionControl, descriptor) => {
+                                                return await batchPlay(
+                                                    [{
+                                                        _obj: "showColorPicker",
+                                                        _target: [{
+                                                            _ref: "application"
+                                                        }]
+                                                    }],
+                                                    {}
+                                                );
+                                            });
+
+                                            if (result && result[0] && result[0].RGBFloatColor) {
+                                                const { red, grain, blue } = result[0].RGBFloatColor;
+                                                // 将0-1的浮点数转换为0-255的整数
+                                                const r = Math.round(red);
+                                                const g = Math.round(grain);
+                                                const b = Math.round(blue);
+                                                // 保持原有的透明度
+                                                const currentAlpha = stops[selectedStopIndex].color.match(/,\s*([\d.]+)\s*\)$/)?.[1] || '1';
+                                                const newColor = `rgba(${r}, ${g}, ${b}, ${currentAlpha})`;
+                                                console.log('拾色器返回的RGB:', { r, g, b, currentAlpha, newColor, 原始: result[0].RGBFloatColor });
+                                                
+                                                handleStopChange(selectedStopIndex, newColor, stops[selectedStopIndex].position);
+                                            }
+                                        } catch (error) {
+                                            console.error('Error showing color picker:', error);
+                                        }
+                                    }
+                                }}
                             />
-                            {showColorPicker && selectedStopIndex !== null && (
-                                <div className="color-picker-container">
-                                    <sp-color-area 
-                                        style={{
-                                            width: '140px',
-                                            height: '140px',
-                                            display: 'block'
-                                        }}
-                                        color={getRGBColor(stops[selectedStopIndex].color)}
-                                        onChange={(e: any) => {
-                                            handleStopChange(selectedStopIndex, e.target.value, stops[selectedStopIndex].position);
-                                        }}
-                                    ></sp-color-area>
-                                    <sp-color-slider 
-                                        vertical
-                                        onChange={(e: any) => {
-                                            // 处理色相变化的逻辑
-                                        }}
-                                    ></sp-color-slider>
-                                </div>
-                            )}
                         
                         {stops.length >= 1 && (
                             <sp-action-button 
