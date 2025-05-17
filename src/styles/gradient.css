@@ -19,7 +19,6 @@
   color: var(--text-color);
   min-width: 40px;
   font-size: 12px;
-  margin-left: 8px;
 }
 
 
@@ -109,7 +108,6 @@
     border: 1px solid var(--border-color);
     border-radius: 4px;
     margin-bottom: 10px;
-    max-height: calc(100% - 250px); /* 减去预设区域和其他元素的高度 */
     overflow-y: auto;
     display: flex;
     flex-direction: column;
@@ -117,8 +115,8 @@
 
 .opacity-input {
   display: flex;
+  margin : 0 0 10px 6px;
   align-items: center;
-  margin-bottom: 10px;
 }
 
 .opacity-input input[type="number"] {
@@ -127,7 +125,6 @@
   padding: 2px 4px;
   border: 1px solid var(--border-color);
   border-radius: 4px;
-  margin-right:  -5px;
   color: var(--text-color);
 }
 
@@ -252,8 +249,7 @@
 .color-input-container {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 10px 0;
+  margin : 0 0 10px 6px;
   position: relative;
 }
 
@@ -292,8 +288,8 @@ sp-color-slider {
     border: 1px solid var(--border-color);
     border-radius: 4px;
     padding: 10px;
-    height: 20%;
-    min-height: 130px; 
+    height: 15%;
+    min-height: 80px; 
     overflow-y: auto;
     display: flex;
     flex-direction: column;
@@ -301,6 +297,7 @@ sp-color-slider {
 } 
 
 .gradient-setting-item {
+    margin: 15px 0;
     display: flex;
     align-items: center;
 }
@@ -320,6 +317,7 @@ sp-color-slider {
 }
 
 .gradient-setting-item input[type="range"] {
+    margin-top: 15px;
     width:130px;
     flex: 1;
 }
@@ -347,18 +345,18 @@ sp-color-slider {
 /* 最终预览区域样式 */
 .final-preview-container {
   position: relative;
+  border-radius: 4px;
   display: flex;
+  height: 20%; 
   width: 100%;
-  min-width: 80px;
-  margin-bottom: 10px;
   border: 1px solid var(--border-color);
   flex-direction: column;
 }
 
 .final-preview {
     position: relative;
-    height: 40px;
-    margin: 0px 10px 10px 10px; 
+    height: 100%;  
+    margin: 10px; 
     border-radius: 4px;
     justify-content: center;
     box-sizing: border-box;

@@ -20,16 +20,14 @@ export interface GradientStop {
 }
 
 export interface Gradient {
-    type: 'linear' | 'radial' | 'angle' | 'reflected' | 'diamond';
+    type: 'linear' | 'radial';
     angle?: number;
-    scale?: number;
     reverse?: boolean;
     stops: GradientStop[];
     presets?: {
         preview: string;
-        type: 'linear' | 'radial' | 'angle' | 'reflected' | 'diamond';
+        type: 'linear' | 'radial';
         angle?: number;
-        scale?: number;
         reverse?: boolean;
         stops: GradientStop[];
     }[];
@@ -84,6 +82,6 @@ export const initialState: AppState = {
     selectedPattern: null,
     selectedGradient: null,
     isColorSettingsOpen: false,
-    isPatternPickerOpen: false,
-    isGradientPickerOpen: true
+    isPatternPickerOpen: true,
+    isGradientPickerOpen: false,
 };

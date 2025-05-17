@@ -27,17 +27,14 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
 
     const processFile = async (file) => {
         try {
-            console.log('开始处理文件:', file.name);
             
             const arrayBuffer = await file.read({ format: require('uxp').storage.formats.binary });
-            console.log('文件读取成功，大小:', arrayBuffer.byteLength, 'bytes');
             
             if (arrayBuffer.byteLength === 0) {
                 throw new Error('文件内容为空');
             }
             
             const base64String = arrayBufferToBase64(arrayBuffer);
-            console.log('Base64转换成功，长度:', base64String.length);
             
             // 修复：从文件名中提取文件扩展名
             const fileExtension = file.name.split('.').pop()?.toLowerCase() || 'jpeg';
@@ -51,7 +48,6 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                 preview: dataUrl,
                 data: arrayBuffer
             };
-            console.log('Pattern对象创建成功:', pattern.name);
             
             return pattern;
         } catch (error) {
@@ -78,40 +74,30 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                 title: '选择图案文件'
             });
 
-            console.log('文件选择对话框已打开');
-
             if (!files || (Array.isArray(files) && files.length === 0)) {
                 console.log('未选择文件');
                 return;
             }
 
             const fileArray = Array.isArray(files) ? files : [files];
-            console.log('选择的文件数量:', fileArray.length);
             
             const newPatterns = await Promise.all(
                 fileArray.map(async file => {
                     console.log('开始处理文件:', file.name);
                     const pattern = await processFile(file);
                     if (pattern) {
-                        console.log('文件处理成功，pattern创建完成:', pattern.name);
                     }
                     return pattern;
                 })
             ).then(results => results.filter(Boolean));
-
-            console.log('所有文件处理完成，成功数量:', newPatterns.length);
-            console.log('新创建的patterns:', newPatterns);
             
             setPatterns(prevPatterns => {
-                console.log('当前patterns:', prevPatterns);
                 const updatedPatterns = [...prevPatterns, ...newPatterns];
-                console.log('更新后的patterns:', updatedPatterns);
                 return updatedPatterns;
             });
 
             if (newPatterns.length > 0) {
                 const firstNewPattern = newPatterns[0];
-                console.log('选择第一个新图案:', firstNewPattern.name);
                 setSelectedPattern(firstNewPattern.id);
             }
         } catch (error) {
@@ -131,12 +117,23 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
         }
     };
 
+    const handleAngleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const newAngle = Number(e.target.value);
+        console.log('角度更新:', newAngle);
+        setAngle(newAngle);
+    };
+    
+    const handleScaleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const newScale = Number(e.target.value);
+        console.log('缩放更新:', newScale);
+        setScale(newScale);
+    };
+
     useEffect(() => {
         if (patterns.length > 0) {
             // 延迟检查DOM，确保React已完成渲染
             const timer = setTimeout(() => {
                 const imgElements = document.querySelectorAll('.photo-container img');
-                console.log('找到的图片元素数量:', imgElements.length);
                 imgElements.forEach((img, index) => {
                     console.log(`图片[${index}]实际尺寸:`, {
                         offsetWidth: img.offsetWidth,
@@ -242,31 +239,51 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                 <div className="setting-item-group">
                     <div className="setting-item">
                         <label>角度：</label>
-                        <input
-                            type="range"
-                            min="0"
-                            max="360"
-                            step="1"
-                            value={angle}
-                            onChange={(e) => setAngle(Number(e.target.value))}
-                        />
-                        <span className="value">{angle}°</span>
-                    </div>
+                    <input
+                        type="range"
+                        min="0"
+                        max="360"
+                        step="1"
+                        value={angle}
+                        onChange={handleAngleChange}
+                    />
+                    <span className="value">{angle}°</span>
+                </div>
 
-                    <div className="setting-item">
-                        <label>缩放：</label>
-                        <input
-                            type="range"
-                            min="50"
-                            max="500"
-                            step="1"
-                            value={scale}
-                            onChange={(e) => setScale(Number(e.target.value))}
-                        />
+                <div className="setting-item">
+                    <label>缩放：</label>
+                    <input
+                        type="range"
+                        min="50"
+                        max="500"
+                        step="1"
+                        value={scale}
+                        onChange={handleScaleChange}
+                    />
                         <span className="value">{scale}%</span>
                     </div>
                 </div>
             </div>
+            {selectedPattern && (
+                <div className="pattern-final-preview-container">
+                    <div className="subtitle"><h3>预览</h3></div>
+                    <div className="preview-wrapper">
+                        <img
+                            src={patterns.find(p => p.id === selectedPattern)?.preview}
+                            className="pattern-final-preview"
+                            style={{
+                                position: 'absolute',
+                                top: '50%',
+                                left: '50%',
+                                transform: `translate(-50%, -50%) rotate(${angle}deg) scale(${scale / 100})`,
+                                transformOrigin: 'center center',
+                                transition: 'transform 0.1s ease',
+                                willChange: 'transform' // 添加这行优化性能
+                            }}
+                        />
+                    </div>
+                </div>
+            )}
 
             <div className="panel-footer">
                 <button onClick={() => {
