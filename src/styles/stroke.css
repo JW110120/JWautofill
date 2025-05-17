@@ -7,10 +7,7 @@
   background-color: var(--bg-color);
   border: 1px solid var(--border-color);
   padding: 8px;
-  box-sizing: border-box;
-  overflow-y: auto;
-  z-index: 9999;
-  display: flex;
+  display: flex; 
   flex-direction: column;
 }
 

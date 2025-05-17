@@ -355,6 +355,13 @@ sp-switch {
   border-radius: 2px;
 }
 
+.stroke-color-group {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+}
+
 /* 填充模式组样式 */
 .fill-mode-group {
   padding: 10px 15px;

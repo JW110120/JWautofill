@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { BlendMode } from '../constants/blendModes';
 import { BLEND_MODE_OPTIONS } from '../constants/blendModeOptions';
 
 interface StrokeSettingProps {
+  isOpen: boolean;
   width: number;
   position: 'inside' | 'center' | 'outside';
   blendMode: BlendMode;
@@ -11,9 +12,11 @@ interface StrokeSettingProps {
   onPositionChange: (position: 'inside' | 'center' | 'outside') => void;
   onBlendModeChange: (blendMode: BlendMode) => void;
   onOpacityChange: (opacity: number) => void;
+  onClose: () => void; // 修改这里，将onclose改为onClose
 }
 
-export default function StrokeSetting({
+const StrokeSetting: React.FC<StrokeSettingProps> = ({
+  isOpen,
   width,
   position,
   blendMode,
@@ -22,9 +25,10 @@ export default function StrokeSetting({
   onPositionChange,
   onBlendModeChange,
   onOpacityChange,
-  onClose // 新增关闭回调
-}: StrokeSettingProps) {
-  
+  onClose
+}) => {
+  if (!isOpen) return null;
+
   return (
     <div className="strokesetting">
         <div className="panel-header">
@@ -113,7 +117,7 @@ export default function StrokeSetting({
           <button 
             className="save-button"
             onClick={() => {
-              // 保存当前设置
+              // 触发所有回调以确保状态更新
               onWidthChange(width);
               onPositionChange(position);
               onBlendModeChange(blendMode);
@@ -128,3 +132,5 @@ export default function StrokeSetting({
       </div>
   );
 };
+
+export default StrokeSetting;

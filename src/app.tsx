@@ -47,8 +47,10 @@ class App extends React.Component<AppProps, AppState> {
         this.closeColorSettings = this.closeColorSettings.bind(this);
         this.closePatternPicker = this.closePatternPicker.bind(this);
         this.closeGradientPicker = this.closeGradientPicker.bind(this);
+        this.closeStrokeSetting = this.closeStrokeSetting.bind(this);
         this.toggleStrokeEnabled = this.toggleStrokeEnabled.bind(this);
-        this.toggleStrokeSettings = this.toggleStrokeSettings.bind(this);
+        this.toggleStrokeSetting = this.toggleStrokeSetting.bind(this);
+ 
     }
 
     async componentDidMount() {
@@ -98,10 +100,8 @@ class App extends React.Component<AppProps, AppState> {
         }
     }
 
-    toggleStrokeSettings() {
-        this.setState(prevState => ({
-            isStrokeSettingsOpen: !prevState.isStrokeSettingsOpen
-        }));
+    toggleStrokeSetting() {
+        this.setState({ isStrokeSettingOpen: true });
     }
 
     toggleColorSettings() {
@@ -161,6 +161,10 @@ class App extends React.Component<AppProps, AppState> {
 
     closeGradientPicker() {
         this.setState({ isGradientPickerOpen: false });
+    }
+
+    closeStrokeSetting() {
+        this.setState({ isStrokeSettingOpen: false });
     }
 
     async handleSelectionChange() {
@@ -563,45 +567,52 @@ class App extends React.Component<AppProps, AppState> {
                        {/* 描边模式开关 */}
                        <div className="switch-container">
                             <label className="switch-label">描边模式</label>
-                            <div 
-                                className="stroke-color-preview"
-                                style={{
-                                    backgroundColor: this.state.strokeColor || '#000000',
-                                   
-                                }}
-                                onClick={async () => {
-                                    try {
-                                        const result = await require("photoshop").core.executeAsModal(async (executionControl, descriptor) => {
-                                            return await batchPlay(
-                                                [{
-                                                    _obj: "showColorPicker",
-                                                    _target: [{
-                                                        _ref: "application"
-                                                    }]
-                                                }],
-                                                {}
-                                            );
-                                        });
-                                    
-                                        if (result && result[0] && result[0].RGBFloatColor) {
-                                            const { red, grain, blue } = result[0].RGBFloatColor;
-                                            const r = Math.round(red);
-                                            const g = Math.round(grain);
-                                            const b = Math.round(blue);
-                                            const newColor = `rgba(${r}, ${g}, ${b}, 1)`;
-                                            this.setState({ strokeColor: newColor });
+                            {this.state.strokeEnabled && (
+                                <div className="stroke-color-group">
+                                <div 
+                                    className="stroke-color-preview"
+                                    style={{
+                                        backgroundColor: this.state.strokeColor 
+                                            ? `rgb(${this.state.strokeColor.red}, ${this.state.strokeColor.green}, ${this.state.strokeColor.blue})`
+                                            : '#000000'
+                                    }}
+                                    onClick={async () => {
+                                        try {
+                                            const result = await require("photoshop").core.executeAsModal(async (executionControl, descriptor) => {
+                                                return await batchPlay(
+                                                    [{
+                                                        _obj: "showColorPicker",
+                                                        _target: [{
+                                                            _ref: "application"
+                                                        }]
+                                                    }],
+                                                    {}
+                                                );
+                                            });
+                                        
+                                            if (result && result[0] && result[0].RGBFloatColor) {
+                                                const { red, grain, blue } = result[0].RGBFloatColor;
+                                                this.setState({
+                                                    strokeColor: {
+                                                        red: Math.round(red),
+                                                        green: Math.round(grain),
+                                                        blue: Math.round(blue)
+                                                    }
+                                                });
+                                            }
+                                        } catch (error) {
+                                            console.error('Error showing color picker:', error);
                                         }
-                                    } catch (error) {
-                                        console.error('Error showing color picker:', error);
-                                    }
-                                }}/>
-                            <sp-action-button 
-                                quiet 
-                                className="stroke-settings-icon"
-                                onClick={this.toggleStrokeSettings}
-                            >
-                                <SettingsIcon/>
-                            </sp-action-button>
+                                    }}/>
+                                <sp-action-button 
+                                    quiet 
+                                    className="stroke-settings-icon"
+                                    onClick={this.toggleStrokeSetting}
+                                >
+                                    <SettingsIcon/>
+                                </sp-action-button>
+                                </div>
+                            )}
                             <sp-switch 
                                 checked={this.state.strokeEnabled}
                                 onChange={this.toggleStrokeEnabled}
@@ -739,6 +750,7 @@ class App extends React.Component<AppProps, AppState> {
 
                 {/* 描边设置面板 */}
             <StrokeSetting
+              isOpen={this.state.isStrokeSettingOpen ?? false}
               width={this.state.strokeWidth}
               position={this.state.strokePosition}
               blendMode={this.state.strokeBlendMode}
@@ -747,7 +759,7 @@ class App extends React.Component<AppProps, AppState> {
               onPositionChange={(position) => this.setState({ strokePosition: position })}
               onBlendModeChange={(blendMode) => this.setState({ strokeBlendMode: blendMode })}
               onOpacityChange={(opacity) => this.setState({ strokeOpacity: opacity })}
-              onClose={() => this.setState({ isStrokeSettingsOpen: false })}
+              onClose={this.closeStrokeSetting}
             />
         </div>
         );
