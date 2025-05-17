@@ -11,8 +11,10 @@ import { ClearHandler } from './utils/ClearHandler';
 import ColorSettingsPanel from './components/ColorSettingsPanel';
 import PatternPicker from './components/PatternPicker';
 import GradientPicker from './components/GradientPicker';
+import StrokeSetting from './components/StrokeSetting';
 import { ExpandIcon, SettingsIcon } from './styles/Icons';
 import { calculateRandomColor } from './utils/ColorUtils';
+import { strokeSelection } from './utils/StrokeSelection';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -45,6 +47,8 @@ class App extends React.Component<AppProps, AppState> {
         this.closeColorSettings = this.closeColorSettings.bind(this);
         this.closePatternPicker = this.closePatternPicker.bind(this);
         this.closeGradientPicker = this.closeGradientPicker.bind(this);
+        this.toggleStrokeEnabled = this.toggleStrokeEnabled.bind(this);
+        this.toggleStrokeSettings = this.toggleStrokeSettings.bind(this);
     }
 
     async componentDidMount() {
@@ -72,6 +76,10 @@ class App extends React.Component<AppProps, AppState> {
         });
     }
 
+    toggleStrokeEnabled() {
+        this.setState({ strokeEnabled: !this.state.strokeEnabled });
+    }
+    
     toggleClearMode() {
         this.setState(prevState => ({
             clearMode: !prevState.clearMode,
@@ -88,6 +96,12 @@ class App extends React.Component<AppProps, AppState> {
             this.setState({ fillMode: value });
         } catch (error) {
         }
+    }
+
+    toggleStrokeSettings() {
+        this.setState(prevState => ({
+            isStrokeSettingsOpen: !prevState.isStrokeSettingsOpen
+        }));
     }
 
     toggleColorSettings() {
@@ -166,14 +180,15 @@ class App extends React.Component<AppProps, AppState> {
             }
 
             await core.executeAsModal(async () => {
-                if (this.state.autoUpdateHistory) {await this.setHistoryBrushSource();}
-                
+                if (this.state.autoUpdateHistory) { await this.setHistoryBrushSource(); }
                 await this.applyFeather();
                 await this.fillSelection();
-                
+                if (this.state.strokeEnabled) {
+                    await strokeSelection(this.state);
+                }
                 if (this.state.deselectAfterFill) {
                     await this.deselectSelection();
-                } 
+                }
             }, { commandName: '更新历史源&羽化选区&处理选区' });
         } catch (error) {console.error('❌ 处理失败:', error);}
     }
@@ -545,13 +560,60 @@ class App extends React.Component<AppProps, AppState> {
                         <span>更多选项</span>
                     </div>
                     <div className={`expand-content ${this.state.isExpanded ? 'expanded' : ''}`}>
-                        {/* 新建图层模式开关 */}
+                       {/* 描边模式开关 */}
+                       <div className="switch-container">
+                            <label className="switch-label">描边模式</label>
+                            <div 
+                                className="stroke-color-preview"
+                                style={{
+                                    backgroundColor: this.state.strokeColor || '#000000',
+                                   
+                                }}
+                                onClick={async () => {
+                                    try {
+                                        const result = await require("photoshop").core.executeAsModal(async (executionControl, descriptor) => {
+                                            return await batchPlay(
+                                                [{
+                                                    _obj: "showColorPicker",
+                                                    _target: [{
+                                                        _ref: "application"
+                                                    }]
+                                                }],
+                                                {}
+                                            );
+                                        });
+                                    
+                                        if (result && result[0] && result[0].RGBFloatColor) {
+                                            const { red, grain, blue } = result[0].RGBFloatColor;
+                                            const r = Math.round(red);
+                                            const g = Math.round(grain);
+                                            const b = Math.round(blue);
+                                            const newColor = `rgba(${r}, ${g}, ${b}, 1)`;
+                                            this.setState({ strokeColor: newColor });
+                                        }
+                                    } catch (error) {
+                                        console.error('Error showing color picker:', error);
+                                    }
+                                }}/>
+                            <sp-action-button 
+                                quiet 
+                                className="stroke-settings-icon"
+                                onClick={this.toggleStrokeSettings}
+                            >
+                                <SettingsIcon/>
+                            </sp-action-button>
+                            <sp-switch 
+                                checked={this.state.strokeEnabled}
+                                onChange={this.toggleStrokeEnabled}
+                                disabled={this.state.clearMode || this.state.createNewLayer}
+                            />
+                        </div>
                         <div className="switch-container">
-                            <label className="switch-label">新建图层模式</label>
+                            <span className="switch-label">新建图层</span>
                             <sp-switch 
                                 checked={this.state.createNewLayer}
                                 onChange={this.toggleCreateNewLayer}
-                                disabled={this.state.clearMode}
+                                disabled={this.state.clearMode || this.state.strokeEnabled}
                             />
                         </div>
 
@@ -561,7 +623,7 @@ class App extends React.Component<AppProps, AppState> {
                             <sp-switch 
                                 checked={this.state.clearMode}
                                 onChange={this.toggleClearMode}
-                                disabled={this.state.createNewLayer}
+                                disabled={this.state.strokeEnabled || this.state.createNewLayer}
                             />
                         </div>
 
@@ -673,6 +735,19 @@ class App extends React.Component<AppProps, AppState> {
                 isOpen={this.state?.isGradientPickerOpen ?? false}    
                 onClose={this.closeGradientPicker} 
                 onSelect={this.handleGradientSelect} 
+            />
+
+                {/* 描边设置面板 */}
+            <StrokeSetting
+              width={this.state.strokeWidth}
+              position={this.state.strokePosition}
+              blendMode={this.state.strokeBlendMode}
+              opacity={this.state.strokeOpacity}
+              onWidthChange={(width) => this.setState({ strokeWidth: width })}
+              onPositionChange={(position) => this.setState({ strokePosition: position })}
+              onBlendModeChange={(blendMode) => this.setState({ strokeBlendMode: blendMode })}
+              onOpacityChange={(opacity) => this.setState({ strokeOpacity: opacity })}
+              onClose={() => this.setState({ isStrokeSettingsOpen: false })}
             />
         </div>
         );

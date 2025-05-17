@@ -33,6 +33,15 @@ export interface Gradient {
     }[];
 }
 
+export interface Stroke {
+    isStrokePanelOpen: boolean;
+    strokeWidth: number;
+    strokePosition: 'inside' | 'center' | 'outside';
+    strokeBlendMode: string;
+    strokeOpacity: number;
+  }
+
+
 export interface AppState {
     opacity: number;
     feather: number;
@@ -55,6 +64,14 @@ export interface AppState {
     isColorSettingsOpen: boolean;
     isPatternPickerOpen: boolean;
     isGradientPickerOpen: boolean;
+    strokeEnabled: boolean;
+    strokeWidth: number;
+    strokeColor: {
+        red: number;
+        green: number;
+        blue: number;
+    };
+    isStrokeSettingsOpen: boolean;  // 添加描边设置面板状态
 }
 
 export const initialState: AppState = {
@@ -82,6 +99,17 @@ export const initialState: AppState = {
     selectedPattern: null,
     selectedGradient: null,
     isColorSettingsOpen: false,
-    isPatternPickerOpen: true,
+    isPatternPickerOpen: false,
     isGradientPickerOpen: false,
+    strokeEnabled: false,
+    strokeWidth: 2,  // 默认宽度2px
+    strokePosition: 'center',  // 默认位置居中
+    strokeBlendMode: '正常',  // 默认混合模式
+    strokeOpacity: 100,  // 默认不透明度100%
+    strokeColor: {
+        red: 0,
+        green: 0,
+        blue: 0
+    },
+    isStrokeSettingsOpen: false,  // 确保初始为false
 };

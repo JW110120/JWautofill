@@ -1,6 +1,7 @@
 @import './colorpanel.css';
 @import './gradient.css';
 @import './pattern.css';
+@import './stroke.css';
 @font-face {
   font-family: 'SourceHanSansCN-Normal';
   src: url('../assets/SourceHanSansCN-Normal.otf') format('opentype');
@@ -304,15 +305,54 @@ input[type="checkbox"] {
 /* 开关容器样式 */
 .switch-container {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
-  padding: 10px 15px;
+  padding: 5px 10px;
   border-bottom: 1px solid var(--border-color);
+  gap: 8px;
+}
+
+sp-switch {
+  margin-left: auto; /* 添加这行使开关靠右 */
 }
 
 .switch-label {
   font-size: 13px;
   color: var(--text-color);
+}
+
+sp-switch {
+  right: 0px;
+}
+
+.stroke-settings-icon {
+  display: flex;
+  align-items: center;
+  line-height: 32px; /* 保持一致的行高 */
+}
+
+.stroke-settings-icon:hover {
+  background-color: var(--hover-bg);
+}
+
+.stroke-settings-icon:active {
+  background-color: var(--button-down);
+}
+
+.stroke-settings-icon-path {
+  fill: var(--text-color);
+}
+
+.stroke-settings-icon {
+  margin-top: 0; /* 移除顶部间距，因为现在是水平排列 */
+}
+
+.stroke-color-preview {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  margin-left: 10px;
+  border-radius: 2px;
 }
 
 /* 填充模式组样式 */
