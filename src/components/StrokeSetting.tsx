@@ -42,7 +42,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
             type="range" 
             min="1" 
             max="5" 
-            step="0.5"
+            step="1"
             value={width}
             onChange={(e) => onWidthChange(Number(e.target.value))}
           />
