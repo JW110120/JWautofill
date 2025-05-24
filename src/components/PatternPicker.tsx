@@ -29,25 +29,21 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
     const processFile = async (file) => {
         try {
             
-            const arrayBuffer = await file.read({ format: require('uxp').storage.formats.binary });
-            
-            if (arrayBuffer.byteLength === 0) {
-                throw new Error('文件内容为空');
-            }
-            
-            const base64String = arrayBufferToBase64(arrayBuffer);
-            
-            // 修复：从文件名中提取文件扩展名
+            // 从文件名中提取文件扩展名
             const fileExtension = file.name.split('.').pop()?.toLowerCase() || 'jpeg';
             const mimeType = mimeTypeMap[fileExtension] || 'image/png';
+            
+            // 读取文件内容用于预览
+            const arrayBuffer = await file.read({ format: require('uxp').storage.formats.binary });
+            const base64String = arrayBufferToBase64(arrayBuffer);
             const dataUrl = `data:${mimeType};base64,${base64String}`;
             
-            // 直接创建pattern对象，不进行预加载验证
+            // 创建pattern对象，保存文件引用
             const pattern = {
                 id: generateUniqueId(),
                 name: file.name,
                 preview: dataUrl,
-                data: arrayBuffer
+                file: file
             };
             
             return pattern;
@@ -165,8 +161,11 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
         if (!imgElement || !imgElement.complete) return;
         
         try {
-            // 将ByteArray数据转换为base64字符串
-            const base64Data = `data:image/jpeg;base64,${btoa(String.fromCharCode(...new Uint8Array(selectedPatternData.data)))}`;
+            const {localFileSystem: fs} = require("uxp").storage;
+            
+            // 获取文件的会话令牌
+            const filePath = selectedPatternData.file.nativePath;
+            const fileToken = await fs.createSessionToken(selectedPatternData.file);
             
             // 在modal scope中执行创建图案操作
             await core.executeAsModal(async () => {
@@ -192,7 +191,7 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                                 },
                                 resolution: {
                                     _unit: "densityUnit",
-                                    _value: 300
+                                    _value: 72
                                 },
                                 fill: {
                                     _enum: "fill",
@@ -205,13 +204,14 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                         },
                         {
                             _obj: "placeEvent",
-                            target: {
-                                _ref: "layer",
-                                _enum: "ordinal",
-                                _value: "targetEnum"
+                            null: {
+                                _path: fileToken,
+                                _kind: "local"
                             },
-                            linked: true,
-                            data: base64Data,
+                            freeTransformCenterState: {
+                                _enum: "quadCenterState",
+                                _value: "QCSAverage"
+                            },
                             _options: {
                                 dialogOptions: "dontDisplay"
                             }
@@ -224,10 +224,18 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                                 }
                             ],
                             using: {
-                                _ref: "layer",
-                                _enum: "ordinal",
-                                _value: "targetEnum"
-                            },
+                                _ref: [
+                                    {
+                                       _ref: "property",
+                                       _property: "selection"
+                                    },
+                                    {
+                                       _ref: "document",
+                                       _enum: "ordinal",
+                                       _value: "targetEnum"
+                                    }
+                                 ]
+                              },
                             name: patternName,
                             _options: {
                                 dialogOptions: "dontDisplay"
