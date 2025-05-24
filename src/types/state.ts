@@ -12,6 +12,7 @@ export interface Pattern {
     data?: ArrayBuffer;  // 添加图片数据字段
     angle?: number;      // 添加角度字段
     scale?: number;      // 添加缩放字段
+    patternName?: string; // 添加PS图案名称字段
 }
 
 export interface GradientStop {

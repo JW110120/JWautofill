@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Pattern } from '../types/state';
 import { FileIcon, DeleteIcon } from '../styles/Icons';
+import { action, core } from 'photoshop';
 
 interface PatternPickerProps {
     isOpen: boolean;
@@ -119,13 +120,11 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
 
     const handleAngleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const newAngle = Number(e.target.value);
-        console.log('角度更新:', newAngle);
         setAngle(newAngle);
     };
     
     const handleScaleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const newScale = Number(e.target.value);
-        console.log('缩放更新:', newScale);
         setScale(newScale);
     };
 
@@ -152,6 +151,125 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
 
     if (!isOpen) return null;
 
+    async function createPatternFromImage() {
+        // 生成唯一的文档名称
+        const docName = `Pattern_${Date.now()}`;
+        const patternName = `Pattern_${Date.now()}`;
+        
+        // 获取选中的图案
+        const selectedPatternData = patterns.find(p => p.id === selectedPattern);
+        if (!selectedPatternData) return;
+        
+        // 获取图片元素以读取实际尺寸
+        const imgElement = document.querySelector('.pattern-final-preview') as HTMLImageElement;
+        if (!imgElement || !imgElement.complete) return;
+        
+        try {
+            // 将ByteArray数据转换为base64字符串
+            const base64Data = `data:image/jpeg;base64,${btoa(String.fromCharCode(...new Uint8Array(selectedPatternData.data)))}`;
+            
+            // 在modal scope中执行创建图案操作
+            await core.executeAsModal(async () => {
+                await action.batchPlay(
+                    [
+                        {
+                            _obj: "make",
+                            new: {
+                                _obj: "document",
+                                name: docName,
+                                artboard: false,
+                                autoPromoteBackgroundLayer: false,
+                                mode: {
+                                    _class: "RGBColorMode"
+                                },
+                                width: {
+                                    _unit: "pixelsUnit",
+                                    _value: imgElement.naturalWidth
+                                },
+                                height: {
+                                    _unit: "pixelsUnit",
+                                    _value: imgElement.naturalHeight
+                                },
+                                resolution: {
+                                    _unit: "densityUnit",
+                                    _value: 300
+                                },
+                                fill: {
+                                    _enum: "fill",
+                                    _value: "transparent"
+                                }
+                            },
+                            _options: {
+                                dialogOptions: "dontDisplay"
+                            }
+                        },
+                        {
+                            _obj: "placeEvent",
+                            target: {
+                                _ref: "layer",
+                                _enum: "ordinal",
+                                _value: "targetEnum"
+                            },
+                            linked: true,
+                            data: base64Data,
+                            _options: {
+                                dialogOptions: "dontDisplay"
+                            }
+                        },
+                        {
+                            _obj: "make",
+                            _target: [
+                                {
+                                    _ref: "pattern"
+                                }
+                            ],
+                            using: {
+                                _ref: "layer",
+                                _enum: "ordinal",
+                                _value: "targetEnum"
+                            },
+                            name: patternName,
+                            _options: {
+                                dialogOptions: "dontDisplay"
+                            }
+                        },
+                        {
+                            _obj: "close",
+                            saving: {
+                                _enum: "yesNo",
+                                _value: "no"
+                            },
+                            _options: {
+                                dialogOptions: "dontDisplay"
+                            }
+                        }
+                    ],
+                    { synchronousExecution: true }
+                );
+            }, { commandName: '创建图案' });
+            
+            console.log('图案创建完成:', { docName, patternName });
+            
+            // 更新选中的图案对象，添加patternName属性
+            setPatterns(prevPatterns => {
+                return prevPatterns.map(p => {
+                    if (p.id === selectedPattern) {
+                        return {
+                            ...p,
+                            patternName: patternName // 保存创建的图案名称
+                        };
+                    }
+                    return p;
+                });
+            });
+            
+            return patternName;
+        } catch (error) {
+            console.error('创建图案失败:', error);
+            return null;
+        }
+    }
+
     return (
         <div className="pattern-picker">
             <div className="panel-header">
@@ -168,7 +286,7 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                             <img 
                                 src={pattern.preview} 
                                 alt={pattern.name}
-                                onLoad={(e) => {
+                                onLoad={async (e) => {
                                     const img = e.currentTarget;
                                     console.log(`图片加载成功 - ${pattern.name}:`, {
                                         naturalSize: `${img.naturalWidth}x${img.naturalHeight}`,
@@ -177,6 +295,17 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                                     });
                                     
                                     setLoadedImages(prev => ({...prev, [pattern.id]: true}));
+                                    
+                                    // 只有当这个图案被选中时才创建PS图案
+                                    if (selectedPattern === pattern.id) {
+                                        const patternName = await createPatternFromImage();
+                                        if (patternName) {
+                                            console.log('创建图案成功', {
+                                                patternName: patternName,
+                                                imageSize: `${img.naturalWidth}x${img.naturalHeight}`
+                                            });
+                                        }
+                                    }
                                 }}
                                 onError={(e) => {
                                     console.error(`图片加载失败 - ${pattern.name}:`, e);
@@ -289,13 +418,19 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                 <button onClick={() => {
                     const selectedPatternData = patterns.find(p => p.id === selectedPattern);
                     if (selectedPatternData) {
-                        onSelect({
-                            ...selectedPatternData,  // 保留原有的图案数据
-                            angle,                   // 添加角度
-                            scale                    // 添加缩放
+                        // 确保在关闭前创建图案
+                        createPatternFromImage().then(patternName => {
+                            onSelect({
+                                ...selectedPatternData,  // 保留原有的图案数据
+                                angle,                   // 添加角度
+                                scale,                   // 添加缩放
+                                patternName              // 添加图案名称
+                            });
+                            onClose();
                         });
+                    } else {
+                        onClose();
                     }
-                    onClose();
                 }}>保存设置</button>
             </div>
         </div>

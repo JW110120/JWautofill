@@ -343,10 +343,6 @@ sp-switch {
   fill: var(--text-color);
 }
 
-.stroke-settings-icon {
-  margin-top: 0; /* 移除顶部间距，因为现在是水平排列 */
-}
-
 .stroke-color-preview {
   width: 20px;
   height: 20px;
@@ -364,7 +360,7 @@ sp-switch {
 
 /* 填充模式组样式 */
 .fill-mode-group {
-  padding: 10px 15px;
+  padding: 5px 10px;
   margin: 5px 0;
 }
 
@@ -399,7 +395,7 @@ sp-radio {
 
 .radio-item-label {
   display: inline-flex;
-  line-height: 32px;
+  margin: 0 -3px;
   align-items: center;
 }
 
@@ -408,7 +404,6 @@ sp-radio {
   align-items: center;
   margin-left: 5px;
   padding:0px;
-  line-height: 32px; /* 保持一致的行高 */
 }
 
 .settings-icon:hover {
@@ -417,16 +412,6 @@ sp-radio {
 
 .settings-icon:active {
   background-color: var(--button-down);
-}
-
-.settings-icon-path {
-  fill: var(--text-color);
-}
-
-.settings-icon,
-.pattern-picker,
-.gradient-picker {
-  margin-top: 0; /* 移除顶部间距，因为现在是水平排列 */
 }
 
 /* 底部选项样式 */

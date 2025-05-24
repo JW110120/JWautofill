@@ -15,6 +15,7 @@ import StrokeSetting from './components/StrokeSetting';
 import { ExpandIcon, SettingsIcon } from './styles/Icons';
 import { calculateRandomColor } from './utils/ColorUtils';
 import { strokeSelection } from './utils/StrokeSelection';
+import { PatternFill } from './utils/PatternFill';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -313,39 +314,48 @@ class App extends React.Component<AppProps, AppState> {
             if (!layerInfo) return;
 
             const { isBackground, hasTransparencyLocked, hasPixels } = layerInfo;
-            const randomColor = calculateRandomColor(this.state.colorSettings, this.state.opacity);
-            const fillOptions = {
-                opacity: randomColor.opacity,
-                blendMode: this.state.blendMode,
-                color: randomColor
-            };
 
-            // 更新填充命令以使用随机颜色
-            const command = {
-                ...FillHandler.createBasicFillCommand(fillOptions),
-                using: { _enum: 'fillContents', _value: 'color' }, 
-                color: fillOptions.color,
-                _isCommand: true
-            };
+            if (this.state.fillMode === 'pattern' && this.state.selectedPattern) {
+                await PatternFill.fillPattern({
+                    opacity: this.state.opacity,
+                    blendMode: this.state.blendMode,
+                    pattern: this.state.selectedPattern
+                }, layerInfo);
+            } else {
+                const randomColor = calculateRandomColor(this.state.colorSettings, this.state.opacity);
+                const fillOptions = {
+                    opacity: randomColor.opacity,
+                    blendMode: this.state.blendMode,
+                    color: randomColor
+                };
 
-            if (isBackground) {
-                await FillHandler.fillBackground(fillOptions);
-            } 
-            else if (hasTransparencyLocked && hasPixels) {
-                await FillHandler.fillLockedWithPixels(fillOptions);
-            } 
-            else if (hasTransparencyLocked && !hasPixels) {
-                await FillHandler.fillLockedWithoutPixels(
-                    fillOptions,
-                    () => this.unlockLayerTransparency(),
-                    () => this.lockLayerTransparency()
-                );
-            } 
-            else if (!hasTransparencyLocked && !isBackground) {
-                await FillHandler.fillUnlocked(fillOptions);
-            }
-            else {
-                await FillHandler.fillBackground(fillOptions);
+                // 更新填充命令以使用随机颜色
+                const command = {
+                    ...FillHandler.createBasicFillCommand(fillOptions),
+                    using: { _enum: 'fillContents', _value: 'color' }, 
+                    color: fillOptions.color,
+                    _isCommand: true
+                };
+
+                if (isBackground) {
+                    await FillHandler.fillBackground(fillOptions);
+                } 
+                else if (hasTransparencyLocked && hasPixels) {
+                    await FillHandler.fillLockedWithPixels(fillOptions);
+                } 
+                else if (hasTransparencyLocked && !hasPixels) {
+                    await FillHandler.fillLockedWithoutPixels(
+                        fillOptions,
+                        () => this.unlockLayerTransparency(),
+                        () => this.lockLayerTransparency()
+                    );
+                } 
+                else if (!hasTransparencyLocked && !isBackground) {
+                    await FillHandler.fillUnlocked(fillOptions);
+                }
+                else {
+                    await FillHandler.fillBackground(fillOptions);
+                }
             }
         } catch (error) {
             console.error('填充选区失败:', error);
@@ -647,7 +657,7 @@ class App extends React.Component<AppProps, AppState> {
                                 onChange={this.handleFillModeChange}
                             >
                                 <sp-radio value="foreground" className="radio-item">
-                                    <span className="radio-item-label">前景色</span>
+                                    <span className="radio-item-label">纯色</span>
                                     <sp-action-button 
                                         quiet 
                                         className="settings-icon"
@@ -670,7 +680,7 @@ class App extends React.Component<AppProps, AppState> {
                                     <span className="radio-item-label">渐变</span>
                                     <sp-action-button 
                                         quiet 
-                                        class="settings-icon"
+                                        className="settings-icon"
                                         onClick={this.openGradientPicker}
                                     >
                                         <SettingsIcon/>
