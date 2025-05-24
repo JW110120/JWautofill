@@ -45,11 +45,11 @@ export class PatternFill {
             return;
         }
 
-        // 创建图案填充命令
+        // 修复后的patternCommand定义
         const patternCommand = {
             _obj: "fill",
             using: { _enum: "fillContents", _value: "pattern" },
-            opacity: options.opacity,
+            opacity: { _unit: "percentUnit", _value: options.opacity },
             mode: { _enum: "blendMode", _value: BLEND_MODES[options.blendMode] || "normal" },
             pattern: {
                 _obj: "pattern",
@@ -57,18 +57,45 @@ export class PatternFill {
                 _name: options.pattern.patternName,
                 scale: options.pattern.scale || 100,
                 angle: options.pattern.angle || 0,
-                width: width,  // 自适应选区宽度
-                height: height,  // 自适应选区高度
+                width: width,
+                height: height,
                 offset: {
                     _obj: "offset",
                     horizontal: centerX,
                     vertical: centerY
                 }
             },
+            patternTransform: {
+                _obj: "transform",
+                xx: options.pattern.scale ? options.pattern.scale / 100 : 1,
+                xy: 0,
+                yx: 0,
+                yy: options.pattern.scale ? options.pattern.scale / 100 : 1,
+                tx: 0,
+                ty: 0
+            },
             _options: {
                 dialogOptions: "dontDisplay"
             }
         };
+
+        // 如果有角度设置，添加旋转变换
+        if (options.pattern.angle && options.pattern.angle !== 0) {
+            const angleRad = (options.pattern.angle * Math.PI) / 180;
+            const cos = Math.cos(angleRad);
+            const sin = Math.sin(angleRad);
+            const scale = options.pattern.scale ? options.pattern.scale / 100 : 1;
+            
+            patternCommand.patternTransform = {
+                _obj: "transform",
+                xx: cos * scale,
+                xy: -sin * scale,
+                yx: sin * scale,
+                yy: cos * scale,
+                tx: 0,
+                ty: 0
+            };
+        }
 
         // 根据图层状态执行填充
         if (isBackground) {
