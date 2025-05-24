@@ -107,8 +107,38 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
         return Date.now().toString(36) + Math.random().toString(36).substr(2);
     };
 
-    const handleDelete = () => {
+    const handleDelete = async () => {
         if (selectedPattern) {
+            const patternToDelete = patterns.find(p => p.id === selectedPattern);
+            if (patternToDelete?.patternName) {
+                try {
+                    // 删除PS中的图案
+                    await core.executeAsModal(async () => {
+                        await action.batchPlay(
+                            [
+                                {
+                                    _obj: "delete",
+                                    _target: [
+                                        {
+                                            _ref: "pattern",
+                                            _name: patternToDelete.patternName
+                                        }
+                                    ],
+                                    _options: {
+                                        dialogOptions: "dontDisplay"
+                                    }
+                                }
+                            ],
+                            { synchronousExecution: true }
+                        );
+                    }, { commandName: '删除图案' });
+                    console.log('PS图案删除成功:', patternToDelete.patternName);
+                } catch (error) {
+                    console.error('删除PS图案失败:', error);
+                }
+            }
+            
+            // 从状态中删除图案
             setPatterns(patterns.filter(p => p.id !== selectedPattern));
             setSelectedPattern(null);
         }
@@ -304,8 +334,8 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                                     
                                     setLoadedImages(prev => ({...prev, [pattern.id]: true}));
                                     
-                                    // 只有当这个图案被选中时才创建PS图案
-                                    if (selectedPattern === pattern.id) {
+                                    // 只有当这个图案被选中且还没有创建过图案时才创建PS图案
+                                    if (selectedPattern === pattern.id && !pattern.patternName) {
                                         const patternName = await createPatternFromImage();
                                         if (patternName) {
                                             console.log('创建图案成功', {
@@ -426,16 +456,13 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                 <button onClick={() => {
                     const selectedPatternData = patterns.find(p => p.id === selectedPattern);
                     if (selectedPatternData) {
-                        // 确保在关闭前创建图案
-                        createPatternFromImage().then(patternName => {
-                            onSelect({
-                                ...selectedPatternData,  // 保留原有的图案数据
-                                angle,                   // 添加角度
-                                scale,                   // 添加缩放
-                                patternName              // 添加图案名称
-                            });
-                            onClose();
+                        onSelect({
+                            ...selectedPatternData,  // 保留原有的图案数据
+                            angle,                   // 添加角度
+                            scale,                   // 添加缩放
+                            patternName: selectedPatternData.patternName  // 使用已创建的图案名称
                         });
+                        onClose();
                     } else {
                         onClose();
                     }
