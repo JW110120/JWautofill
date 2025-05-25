@@ -15,8 +15,6 @@ interface LayerInfo {
 
 export class PatternFill {
     static async fillPattern(options: PatternFillOptions, layerInfo: LayerInfo) {
-        console.log('Pattern fill options:', options); // 添加这行来调试
-        const { hasPixels } = layerInfo;
         // 获取选区边界
         const bounds = app.activeDocument.selection.bounds;
         if (!bounds) {
