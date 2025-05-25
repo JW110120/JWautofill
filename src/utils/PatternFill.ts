@@ -10,113 +10,151 @@ interface PatternFillOptions {
 }
 
 interface LayerInfo {
-    isBackground: boolean;
-    hasTransparencyLocked: boolean;
     hasPixels: boolean;
 }
 
 export class PatternFill {
     static async fillPattern(options: PatternFillOptions, layerInfo: LayerInfo) {
-        const { isBackground, hasTransparencyLocked, hasPixels } = layerInfo;
+        console.log('Pattern fill options:', options); // 添加这行来调试
+        const { hasPixels } = layerInfo;
+        // 获取选区边界
+        const bounds = app.activeDocument.selection.bounds;
+        if (!bounds) {
+            console.error("❌ 无法获取选区边界数据");
+            return;
+        }
 
-        try {
-            // 检查是否有选区
-            const hasSelection = await this.checkSelection();
-            if (!hasSelection) {
-                console.error("❌ 没有活动选区");
-                return;
-            }
 
-            // 检查是否有patternName
-            if (!options.pattern.patternName) {
-                console.error("❌ 没有可用的图案名称，无法填充");
-                return;
-            }
+        // 检查是否有patternName
+        if (!options.pattern.patternName) {
+            console.error("❌ 没有可用的图案名称，无法填充");
+            return;
+        }
 
-            // 修改patternCommand的构建逻辑
-            const patternCommand = {
-                _obj: "fill",
-                using: { _enum: "fillContents", _value: "pattern" },
-                opacity: { _unit: "percentUnit", _value: options.opacity },
-                mode: { _enum: "blendMode", _value: BLEND_MODES[options.blendMode] || "normal" },
-                Pattern: {
-                    _obj: "pattern",
-                    name: options.pattern.patternName,
-                    angle: { _unit: "angleUnit", _value: options.pattern.angle || 0 },
-                    scale: { _unit: "percentUnit", _value: options.pattern.scale || 100 }
-                },
-                _options: {
-                    dialogOptions: "dontDisplay"
+        // 第一步：创建图案图层的配置
+        const createPatternLayer = {
+            _obj: "make",
+            _target: [{
+                _ref: "contentLayer"
+            }],
+            using: {
+                _obj: "contentLayer",
+                type: {
+                    _obj: "patternLayer",
+                    phase: {
+                        _obj: "paint",
+                        horizontal: bounds.left,
+                        vertical: bounds.top
+                    },
+                    scale: {
+                        _unit: "percentUnit",
+                        _value: options.pattern.scale || 100
+                    },
+                    angle: {
+                        _unit: "angleUnit",
+                        _value: options.pattern.angle || 0
+                    },
+                    pattern: {
+                        _obj: "pattern",
+                        name: options.pattern.patternName
+                    }
                 }
+            },
+            _options: {
+                dialogOptions: "dontDisplay"
+            }
+        };
+
+        // 第二步：设置图层属性的配置
+        const setLayerProperties = {
+            _obj: "set",
+            _target: [{
+                _ref: "layer",
+                _enum: "ordinal",
+                _value: "targetEnum"
+            }],
+            to: {
+                _obj: "layer",
+                opacity: {
+                    _unit: "percentUnit",
+                    _value: options.opacity
+                },
+                mode: {
+                    _enum: "blendMode",
+                    _value: BLEND_MODES[options.blendMode] || "normal"
+                }
+            },
+            _options: {
+                dialogOptions: "dontDisplay"
+            }
+        };
+
+        // 第三步：剪贴蒙版的配置
+        const createClippingMask = {
+            _obj: "groupEvent",
+            _target: [{
+                _ref: "layer",
+                _enum: "ordinal",
+                _value: "targetEnum"
+            }],
+            _options: {
+                dialogOptions: "dontDisplay"
+            }
+        };
+
+        // 第四步：根据图层类型选择操作
+        const rasterizeLayer = {
+            _obj: "rasterizeLayer",
+            _target: [{
+                _ref: "layer",
+                _enum: "ordinal",
+                _value: "targetEnum"
+            }],
+            _options: {
+                dialogOptions: "dontDisplay"
+            }
+        };
+
+        const applyMask = {
+               _obj: "delete",
+               _target: [
+                  {
+                     _ref: "channel",
+                     _enum: "channel",
+                     _value: "mask"
+                  }
+               ],
+               apply: true,
+               _options: {
+                  dialogOptions: "dontDisplay"
+               }
             };
-
-            // 根据preserveTransparency选项决定是否添加preserveTransparency属性
-            if (options.preserveTransparency) {
-                patternCommand.preserveTransparency = true;
+   
+        const mergeLayers = {
+            _obj: "mergeLayersNew",
+            _options: {
+                dialogOptions: "dontDisplay"
             }
+        };
 
-            // 根据图层状态执行填充
-            if (isBackground) {
-                await action.batchPlay([patternCommand], { synchronousExecution: true });
-            } else if (hasTransparencyLocked && hasPixels) {
-                await action.batchPlay([{
-                    ...patternCommand,
-                    preserveTransparency: true
-                }], { synchronousExecution: true });
-            } else if (hasTransparencyLocked && !hasPixels) {
-                await this.unlockLayerTransparency();
-                await action.batchPlay([patternCommand], { synchronousExecution: true });
-                await this.lockLayerTransparency();
-            } else {
-                await action.batchPlay([patternCommand], { synchronousExecution: true });
-            }
-
-            console.log("✅ 图案填充成功");
-        } catch (error) {
-            console.error("❌ 图案填充失败:", error);
-            throw error;
-        }
-    }
-
-    // 添加检查选区的方法
-    private static async checkSelection(): Promise<boolean> {
         try {
-            const bounds = app.activeDocument.selection.bounds;
-            return bounds !== undefined && bounds !== null;
+            // 执行操作
+            await action.batchPlay([createPatternLayer], {});
+            await action.batchPlay([setLayerProperties], {});
+            
+            if (options.preserveTransparency) {
+                await action.batchPlay([createClippingMask], {});
+            }
+            
+            // 根据图层是否有像素来决定最后的操作
+            if (!layerInfo.hasPixels) {
+                await action.batchPlay([rasterizeLayer], {});
+                await action.batchPlay([applyMask], {});
+            } else {
+                await action.batchPlay([mergeLayers], {});
+            }
         } catch (error) {
-            return false;
+            console.error("❌ 执行图案填充时发生错误:", error);
         }
-    }
-
-    private static async lockLayerTransparency() {
-        await action.batchPlay([
-            {
-                _obj: "applyLocking",
-                _target: [
-                    { _ref: "layer", _enum: "ordinal", _value: "targetEnum" }
-                ],
-                layerLocking: {
-                    _obj: "layerLocking",
-                    protectTransparency: true
-                },
-                _options: { dialogOptions: "dontDisplay" }
-            }
-        ], { synchronousExecution: true });
-    }
-
-    private static async unlockLayerTransparency() {
-        await action.batchPlay([
-            {
-                _obj: "applyLocking",
-                _target: [
-                    { _ref: "layer", _enum: "ordinal", _value: "targetEnum" }
-                ],
-                layerLocking: {
-                    _obj: "layerLocking",
-                    protectNone: true
-                },
-                _options: { dialogOptions: "dontDisplay" }
-            }
-        ], { synchronousExecution: true });
     }
 }

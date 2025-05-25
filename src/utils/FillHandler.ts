@@ -79,4 +79,13 @@ export class FillHandler {
             dialogOptions: 'dontDisplayDialogs' 
         });
     }
+
+    static createColorFillCommand(options: FillOptions) {
+        return {
+            ...this.createBasicFillCommand(options),
+            using: { _enum: 'fillContents', _value: 'color' },
+            color: options.color,
+            _isCommand: true
+        };
+    }
 }

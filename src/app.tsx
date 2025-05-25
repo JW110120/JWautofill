@@ -319,7 +319,8 @@ class App extends React.Component<AppProps, AppState> {
                 await PatternFill.fillPattern({
                     opacity: this.state.opacity,
                     blendMode: this.state.blendMode,
-                    pattern: this.state.selectedPattern
+                    pattern: this.state.selectedPattern,
+                    preserveTransparency: this.state.selectedPattern.preserveTransparency // 确保这里正确传递
                 }, layerInfo);
             } else {
                 const randomColor = calculateRandomColor(this.state.colorSettings, this.state.opacity);
@@ -330,12 +331,7 @@ class App extends React.Component<AppProps, AppState> {
                 };
 
                 // 更新填充命令以使用随机颜色
-                const command = {
-                    ...FillHandler.createBasicFillCommand(fillOptions),
-                    using: { _enum: 'fillContents', _value: 'color' }, 
-                    color: fillOptions.color,
-                    _isCommand: true
-                };
+                const command = FillHandler.createColorFillCommand(fillOptions);
 
                 if (isBackground) {
                     await FillHandler.fillBackground(fillOptions);

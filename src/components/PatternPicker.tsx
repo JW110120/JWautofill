@@ -422,8 +422,8 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                     <label>缩放：</label>
                     <input
                         type="range"
-                        min="50"
-                        max="500"
+                        min="20"
+                        max="300"
                         step="1"
                         value={scale}
                         onChange={handleScaleChange}
