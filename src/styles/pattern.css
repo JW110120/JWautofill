@@ -202,3 +202,22 @@
   transform-origin: center center;
   /* top 和 left 将通过内联样式设置 */
 }
+
+/* Checkbox 样式 */
+.pattern-checkbox-container {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    justify-content: flex-start;
+}
+
+.pattern-checkbox-input {
+    cursor: pointer;
+}
+
+.pattern-checkbox-label {
+    font-size: 13px;
+    color: var(--text-color);
+    cursor: pointer;
+    user-select: none;
+}

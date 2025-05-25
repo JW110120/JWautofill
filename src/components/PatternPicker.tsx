@@ -25,7 +25,8 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
         png: 'image/png',
         gif: 'image/gif'
     };
-
+    const [preserveTransparency, setPreserveTransparency] = useState<boolean>(false);
+    
     const processFile = async (file) => {
         try {
             
@@ -430,6 +431,22 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                         <span className="value">{scale}%</span>
                     </div>
                 </div>
+                <div className="pattern-checkbox-container">
+                        <input
+                            type="checkbox"
+                            id="transparencyCheckbox"
+                            checked={preserveTransparency}
+                            onChange={(e) => setPreserveTransparency(e.target.checked)}
+                            className="pattern-checkbox-input"
+                        />
+                        <label
+                            htmlFor="transparencyCheckbox"
+                            className="pattern-checkbox-label"
+                            onClick={() => setPreserveTransparency(!preserveTransparency)}
+                        >
+                            保留不透明度
+                        </label>
+                </div>
             </div>
             {selectedPattern && (
                 <div className="pattern-final-preview-container">
@@ -457,10 +474,11 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                     const selectedPatternData = patterns.find(p => p.id === selectedPattern);
                     if (selectedPatternData) {
                         onSelect({
-                            ...selectedPatternData,  // 保留原有的图案数据
-                            angle,                   // 添加角度
-                            scale,                   // 添加缩放
-                            patternName: selectedPatternData.patternName  // 使用已创建的图案名称
+                            ...selectedPatternData,
+                            angle,
+                            scale,
+                            patternName: selectedPatternData.patternName,
+                            preserveTransparency // 添加保留不透明度设置
                         });
                         onClose();
                     } else {

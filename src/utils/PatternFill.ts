@@ -6,6 +6,7 @@ interface PatternFillOptions {
     opacity: number;
     blendMode: string;
     pattern: Pattern;
+    preserveTransparency?: boolean; // 添加新的选项
 }
 
 interface LayerInfo {
@@ -18,99 +19,72 @@ export class PatternFill {
     static async fillPattern(options: PatternFillOptions, layerInfo: LayerInfo) {
         const { isBackground, hasTransparencyLocked, hasPixels } = layerInfo;
 
-        // 获取选区边界
-        const bounds = app.activeDocument.selection.bounds;
-
-        console.log("📐 选区信息:", bounds);
-
-        if (!bounds) {
-            console.error("❌ 无法获取选区边界数据");
-            return;
-        }
-
-        const { left, top, right, bottom } = bounds;
-        console.log("📏 选区边界:", { left, top, right, bottom });
-        
-        const width = right - left;
-        const height = bottom - top;
-        console.log("📐 选区尺寸:", { width, height });
-        
-        const centerX = left + width / 2;
-        const centerY = top + height / 2;
-        console.log("🎯 选区中心点:", { centerX, centerY });
-        
-        // 检查是否有patternName
-        if (!options.pattern.patternName) {
-            console.error("❌ 没有可用的图案名称，无法填充");
-            return;
-        }
-
-        // 修复后的patternCommand定义
-        const patternCommand = {
-            _obj: "fill",
-            using: { _enum: "fillContents", _value: "pattern" },
-            opacity: { _unit: "percentUnit", _value: options.opacity },
-            mode: { _enum: "blendMode", _value: BLEND_MODES[options.blendMode] || "normal" },
-            pattern: {
-                _obj: "pattern",
-                _ref: "pattern",
-                _name: options.pattern.patternName,
-                scale: options.pattern.scale || 100,
-                angle: options.pattern.angle || 0,
-                width: width,
-                height: height,
-                offset: {
-                    _obj: "offset",
-                    horizontal: centerX,
-                    vertical: centerY
-                }
-            },
-            patternTransform: {
-                _obj: "transform",
-                xx: options.pattern.scale ? options.pattern.scale / 100 : 1,
-                xy: 0,
-                yx: 0,
-                yy: options.pattern.scale ? options.pattern.scale / 100 : 1,
-                tx: 0,
-                ty: 0
-            },
-            _options: {
-                dialogOptions: "dontDisplay"
+        try {
+            // 检查是否有选区
+            const hasSelection = await this.checkSelection();
+            if (!hasSelection) {
+                console.error("❌ 没有活动选区");
+                return;
             }
-        };
 
-        // 如果有角度设置，添加旋转变换
-        if (options.pattern.angle && options.pattern.angle !== 0) {
-            const angleRad = (options.pattern.angle * Math.PI) / 180;
-            const cos = Math.cos(angleRad);
-            const sin = Math.sin(angleRad);
-            const scale = options.pattern.scale ? options.pattern.scale / 100 : 1;
-            
-            patternCommand.patternTransform = {
-                _obj: "transform",
-                xx: cos * scale,
-                xy: -sin * scale,
-                yx: sin * scale,
-                yy: cos * scale,
-                tx: 0,
-                ty: 0
+            // 检查是否有patternName
+            if (!options.pattern.patternName) {
+                console.error("❌ 没有可用的图案名称，无法填充");
+                return;
+            }
+
+            // 修改patternCommand的构建逻辑
+            const patternCommand = {
+                _obj: "fill",
+                using: { _enum: "fillContents", _value: "pattern" },
+                opacity: { _unit: "percentUnit", _value: options.opacity },
+                mode: { _enum: "blendMode", _value: BLEND_MODES[options.blendMode] || "normal" },
+                Pattern: {
+                    _obj: "pattern",
+                    name: options.pattern.patternName,
+                    angle: { _unit: "angleUnit", _value: options.pattern.angle || 0 },
+                    scale: { _unit: "percentUnit", _value: options.pattern.scale || 100 }
+                },
+                _options: {
+                    dialogOptions: "dontDisplay"
+                }
             };
-        }
 
-        // 根据图层状态执行填充
-        if (isBackground) {
-            await action.batchPlay([patternCommand], { synchronousExecution: true });
-        } else if (hasTransparencyLocked && hasPixels) {
-            await action.batchPlay([{
-                ...patternCommand,
-                preserveTransparency: true
-            }], { synchronousExecution: true });
-        } else if (hasTransparencyLocked && !hasPixels) {
-            await this.unlockLayerTransparency();
-            await action.batchPlay([patternCommand], { synchronousExecution: true });
-            await this.lockLayerTransparency();
-        } else {
-            await action.batchPlay([patternCommand], { synchronousExecution: true });
+            // 根据preserveTransparency选项决定是否添加preserveTransparency属性
+            if (options.preserveTransparency) {
+                patternCommand.preserveTransparency = true;
+            }
+
+            // 根据图层状态执行填充
+            if (isBackground) {
+                await action.batchPlay([patternCommand], { synchronousExecution: true });
+            } else if (hasTransparencyLocked && hasPixels) {
+                await action.batchPlay([{
+                    ...patternCommand,
+                    preserveTransparency: true
+                }], { synchronousExecution: true });
+            } else if (hasTransparencyLocked && !hasPixels) {
+                await this.unlockLayerTransparency();
+                await action.batchPlay([patternCommand], { synchronousExecution: true });
+                await this.lockLayerTransparency();
+            } else {
+                await action.batchPlay([patternCommand], { synchronousExecution: true });
+            }
+
+            console.log("✅ 图案填充成功");
+        } catch (error) {
+            console.error("❌ 图案填充失败:", error);
+            throw error;
+        }
+    }
+
+    // 添加检查选区的方法
+    private static async checkSelection(): Promise<boolean> {
+        try {
+            const bounds = app.activeDocument.selection.bounds;
+            return bounds !== undefined && bounds !== null;
+        } catch (error) {
+            return false;
         }
     }
 
