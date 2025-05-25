@@ -61,6 +61,7 @@
     margin-bottom: 10px;
     border-radius: 4px;
     z-index: 11;
+    overflow: hidden; /* 新增：确保内容和背景不会溢出圆角 */
 }
 
 .gradient-presets {
@@ -101,6 +102,7 @@
     position: relative;
     border-top: 1px solid var(--border-color);
     background-color: var(--bg-color);
+    background-clip: padding-box; /* 新增这一行 */
 }
 
 /* 渐变颜色区域样式 */
@@ -108,6 +110,7 @@
     border: 1px solid var(--border-color);
     border-radius: 4px;
     margin-bottom: 10px;
+    padding: 0 0 10px 0;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
@@ -115,7 +118,7 @@
 
 .opacity-input {
   display: flex;
-  margin : 0 0 10px 6px;
+  margin-left: 6px;
   align-items: center;
 }
 
@@ -247,7 +250,7 @@
 .color-input-container {
   display: flex;
   align-items: center;
-  margin : 0 0 10px 6px;
+  margin-left: 6px;
   position: relative;
 }
 

@@ -149,7 +149,6 @@ sp-picker {
   flex: 1;
   cursor: pointer;    
   position: relative;
-  z-index: 1;
 }
 
 /* 添加禁用状态样式 */
@@ -271,12 +270,12 @@ sp-picker[disabled] {
 }
 
 /* 复选框样式 */
-/* 只影响不在特定容器中的复选框 */
-:not(.pattern-checkbox-container) > input[type="checkbox"] {
+/* 排除在pattern-checkbox-container或reverse-checkbox-container内部的checkbox */
+:not(.pattern-checkbox-container):not(.reverse-checkbox-container) > input[type="checkbox"] {
   margin-left: 45px;
 }
 
-:not(.pattern-checkbox-container) > input[type="checkbox"] + label {
+:not(.pattern-checkbox-container):not(.reverse-checkbox-container) > input[type="checkbox"] + label {
   margin-left: 0px;
 }
 

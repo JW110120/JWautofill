@@ -18,7 +18,10 @@ export async function strokeSelection(state: AppState) {
             blue: state.strokeColor.blue || 0
         }
     };
-    
+
+    const halfWidth = strokeParams.width / 2;
+    const strokeWidthFix = Math.floor(halfWidth);
+
     try {
         // 1. 根据位置调整选区
         if (strokeParams.position === "inside") {
@@ -27,7 +30,7 @@ export async function strokeSelection(state: AppState) {
                     _obj: "contract",
                     by: {
                         _unit: "pixelsUnit",
-                        _value: strokeParams.width / 2
+                        _value: strokeWidthFix
                     },
                     selectionModifyEffectAtCanvasBounds: false,
                     _options: {
@@ -42,7 +45,7 @@ export async function strokeSelection(state: AppState) {
                     _obj: "expand",
                     by: {
                         _unit: "pixelsUnit",
-                        _value: strokeParams.width / 2
+                        _value: strokeWidthFix
                     },
                     selectionModifyEffectAtCanvasBounds: false,
                     _options: {
@@ -148,7 +151,7 @@ export async function strokeSelection(state: AppState) {
                 },
                 tolerance: {
                     _unit: "pixelsUnit",
-                    _value: 0.8
+                    _value: 0.3
                 },
                 _options: {
                     dialogOptions: "dontDisplay"
