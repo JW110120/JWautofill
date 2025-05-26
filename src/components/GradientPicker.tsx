@@ -12,9 +12,11 @@ interface GradientPickerProps {
     onSelect: (gradient: Gradient) => void;
 }
 
-// 扩展GradientStop类型以支持中点
+// 扩展GradientStop类型以支持独立的颜色和透明度位置
 interface ExtendedGradientStop extends GradientStop {
-    midpoint?: number; // 与下一个stop之间的中点位置
+    colorPosition: number;    // 颜色stop的位置
+    opacityPosition: number;  // 透明度stop的位置
+    midpoint?: number;        // 与下一个stop之间的中点位置
 }
 
 const GradientPicker: React.FC<GradientPickerProps> = ({
@@ -29,10 +31,10 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const [scale, setScale] = useState(100);
     const [reverse, setReverse] = useState(false);
     const [selectedStopIndex, setSelectedStopIndex] = useState<number | null>(null);
-    const [selectedStopType, setSelectedStopType] = useState<'color' | 'opacity'>('color'); // 新增：区分选中的是颜色还是透明度stop
+    const [selectedStopType, setSelectedStopType] = useState<'color' | 'opacity'>('color');
     const [stops, setStops] = useState<ExtendedGradientStop[]>([
-        { color: 'rgba(0, 0, 0, 1)', position: 0, midpoint: 50 },
-        { color: 'rgba(255, 255, 255, 1)', position: 100 }
+        { color: 'rgba(0, 0, 0, 1)', position: 0, colorPosition: 0, opacityPosition: 0, midpoint: 50 },
+        { color: 'rgba(255, 255, 255, 1)', position: 100, colorPosition: 100, opacityPosition: 100 }
     ]);
 
     // 分离的拖拽状态
@@ -48,7 +50,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             type: gradientType,
             angle,
             reverse,
-            stops: stops.map(({ midpoint, ...stop }) => stop) // 移除midpoint属性
+            stops: stops.map(({ midpoint, colorPosition, opacityPosition, ...stop }) => stop)
         };
         const newPresets = [...presets, newPreset];
         setPresets(newPresets);
@@ -69,6 +71,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 setReverse(previousPreset.reverse || false);
                 setStops(previousPreset.stops.map((stop, i) => ({
                     ...stop,
+                    colorPosition: stop.position,
+                    opacityPosition: stop.position,
                     midpoint: i < previousPreset.stops.length - 1 ? 50 : undefined
                 })));
             }
@@ -84,6 +88,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         setReverse(preset.reverse || false);
         setStops(preset.stops.map((stop, i) => ({
             ...stop,
+            colorPosition: stop.position,
+            opacityPosition: stop.position,
             midpoint: i < preset.stops.length - 1 ? 50 : undefined
         })));
     };
@@ -128,7 +134,13 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             const a = parseFloat(leftColor[4]) * (1 - progress) + parseFloat(rightColor[4]) * progress;
             
             const newColor = `rgba(${r}, ${g}, ${b}, ${a})`;
-            const newStops = [...stops, { color: newColor, position: newPosition, midpoint: 50 }];
+            const newStops = [...stops, { 
+                color: newColor, 
+                position: newPosition, 
+                colorPosition: newPosition,
+                opacityPosition: newPosition,
+                midpoint: 50 
+            }];
             const sortedStops = newStops.sort((a, b) => a.position - b.position);
             
             // 更新中点
@@ -142,7 +154,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         }
     };
 
-    const handleStopChange = (index: number, color?: string, position?: number, opacity?: number) => {
+    const handleStopChange = (index: number, color?: string, position?: number, opacity?: number, colorPosition?: number, opacityPosition?: number) => {
         const newStops = [...stops];
         const currentStop = newStops[index];
         
