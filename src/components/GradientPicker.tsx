@@ -185,10 +185,26 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             }
         }
         
+        if (colorPosition !== undefined) {
+            newStops[index] = {
+                ...newStops[index],
+                colorPosition: colorPosition
+            };
+        }
+        
+        if (opacityPosition !== undefined) {
+            newStops[index] = {
+                ...newStops[index],
+                opacityPosition: opacityPosition
+            };
+        }
+        
         if (position !== undefined) {
             newStops[index] = {
                 ...newStops[index],
-                position: position
+                position: position,
+                colorPosition: position,
+                opacityPosition: position
             };
         }
         
@@ -217,7 +233,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         setSelectedStopIndex(index);
         setSelectedStopType('color');
         setDragStartX(e.clientX);
-        setDragStartPosition(stops[index].position);
+        setDragStartPosition(stops[index].colorPosition);
         setDragStopIndex(index);
         
         const handleMouseMove = (moveEvent: MouseEvent) => {
@@ -229,7 +245,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             const deltaX = moveEvent.clientX - dragStartX;
             const newPosition = Math.max(0, Math.min(100, dragStartPosition + (deltaX / rect.width) * 100));
             
-            handleStopChange(index, undefined, newPosition);
+            handleStopChange(index, undefined, undefined, undefined, newPosition);
         };
         
         const handleMouseUp = () => {
@@ -251,7 +267,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         setSelectedStopIndex(index);
         setSelectedStopType('opacity');
         setDragStartX(e.clientX);
-        setDragStartPosition(stops[index].position);
+        setDragStartPosition(stops[index].opacityPosition);
         setDragStopIndex(index);
         
         const handleMouseMove = (moveEvent: MouseEvent) => {
@@ -263,7 +279,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             const deltaX = moveEvent.clientX - dragStartX;
             const newPosition = Math.max(0, Math.min(100, dragStartPosition + (deltaX / rect.width) * 100));
             
-            handleStopChange(index, undefined, newPosition);
+            handleStopChange(index, undefined, undefined, undefined, undefined, newPosition);
         };
         
         const handleMouseUp = () => {
@@ -277,8 +293,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         document.addEventListener('mouseup', handleMouseUp);
     };
 
-    // 中点拖拽处理
-    const handleMidpointMouseDown = (e: React.MouseEvent, index: number) => {
+    // 颜色中点拖拽处理
+    const handleColorMidpointMouseDown = (e: React.MouseEvent, index: number) => {
         e.preventDefault();
         e.stopPropagation();
         setIsDraggingMidpoint(true);
@@ -288,7 +304,41 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         
         const handleMouseMove = (moveEvent: MouseEvent) => {
             moveEvent.preventDefault();
-            const trackElement = document.querySelector('.gradient-preview') as HTMLElement;
+            const trackElement = document.querySelector('.color-slider-track') as HTMLElement;
+            if (!trackElement) return;
+            
+            const rect = trackElement.getBoundingClientRect();
+            const deltaX = moveEvent.clientX - dragStartX;
+            const newMidpoint = Math.max(0, Math.min(100, dragStartPosition + (deltaX / rect.width) * 100));
+            
+            const newStops = [...stops];
+            newStops[index] = { ...newStops[index], midpoint: newMidpoint };
+            setStops(newStops);
+        };
+        
+        const handleMouseUp = () => {
+            setIsDraggingMidpoint(false);
+            setDragStopIndex(null);
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+        };
+        
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+    };
+
+    // 透明度中点拖拽处理
+    const handleOpacityMidpointMouseDown = (e: React.MouseEvent, index: number) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDraggingMidpoint(true);
+        setDragStartX(e.clientX);
+        setDragStartPosition(stops[index].midpoint || 50);
+        setDragStopIndex(index);
+        
+        const handleMouseMove = (moveEvent: MouseEvent) => {
+            moveEvent.preventDefault();
+            const trackElement = document.querySelector('.gradient-slider-track') as HTMLElement;
             if (!trackElement) return;
             
             const rect = trackElement.getBoundingClientRect();
@@ -436,7 +486,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             key={`opacity-${index}`}
                             className={`gradient-slider-thumb ${selectedStopIndex === index && selectedStopType === 'opacity' ? 'selected' : ''}`}
                             style={{ 
-                                left: `${stop.position}%`,
+                                left: `${stop.opacityPosition}%`,
                                 backgroundColor: stop.color
                             }}
                             onMouseDown={(e) => handleOpacityStopMouseDown(e, index)}
@@ -447,6 +497,53 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             }}
                         />
                     ))}
+                    
+                    {/* 透明度中点滑块 */}
+                    {selectedStopIndex !== null && selectedStopType === 'opacity' && (
+                        <>
+                            {/* 左侧中点 */}
+                            {selectedStopIndex > 0 && (
+                                <div
+                                    className="midpoint-slider"
+                                    style={{
+                                        position: 'absolute',
+                                        left: `${stops[selectedStopIndex - 1].opacityPosition + (stops[selectedStopIndex].opacityPosition - stops[selectedStopIndex - 1].opacityPosition) * (stops[selectedStopIndex - 1].midpoint || 50) / 100}%`,
+                                        top: '50%',
+                                        transform: 'translate(-50%, -50%)',
+                                        width: '8px',
+                                        height: '8px',
+                                        backgroundColor: 'white',
+                                        border: '1px solid #666',
+                                        borderRadius: '50%',
+                                        cursor: 'ew-resize',
+                                        zIndex: 10
+                                    }}
+                                    onMouseDown={(e) => handleOpacityMidpointMouseDown(e, selectedStopIndex - 1)}
+                                />
+                            )}
+                            
+                            {/* 右侧中点 */}
+                            {selectedStopIndex < stops.length - 1 && (
+                                <div
+                                    className="midpoint-slider"
+                                    style={{
+                                        position: 'absolute',
+                                        left: `${stops[selectedStopIndex].opacityPosition + (stops[selectedStopIndex + 1].opacityPosition - stops[selectedStopIndex].opacityPosition) * (stops[selectedStopIndex].midpoint || 50) / 100}%`,
+                                        top: '50%',
+                                        transform: 'translate(-50%, -50%)',
+                                        width: '8px',
+                                        height: '8px',
+                                        backgroundColor: 'white',
+                                        border: '1px solid #666',
+                                        borderRadius: '50%',
+                                        cursor: 'ew-resize',
+                                        zIndex: 10
+                                    }}
+                                    onMouseDown={(e) => handleOpacityMidpointMouseDown(e, selectedStopIndex)}
+                                />
+                            )}
+                        </>
+                    )}
                 </div>
 
                 {/* 渐变预览区域 */}
@@ -471,53 +568,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         }}
                         onClick={handleAddStop}
                     />
-                    
-                    {/* 中点滑块 */}
-                    {selectedStopIndex !== null && (
-                        <>
-                            {/* 左侧中点 */}
-                            {selectedStopIndex > 0 && (
-                                <div
-                                    className="midpoint-slider"
-                                    style={{
-                                        position: 'absolute',
-                                        left: `${stops[selectedStopIndex - 1].position + (stops[selectedStopIndex].position - stops[selectedStopIndex - 1].position) * (stops[selectedStopIndex - 1].midpoint || 50) / 100}%`,
-                                        top: '50%',
-                                        transform: 'translate(-50%, -50%)',
-                                        width: '8px',
-                                        height: '8px',
-                                        backgroundColor: 'white',
-                                        border: '1px solid #666',
-                                        borderRadius: '50%',
-                                        cursor: 'ew-resize',
-                                        zIndex: 10
-                                    }}
-                                    onMouseDown={(e) => handleMidpointMouseDown(e, selectedStopIndex - 1)}
-                                />
-                            )}
-                            
-                            {/* 右侧中点 */}
-                            {selectedStopIndex < stops.length - 1 && (
-                                <div
-                                    className="midpoint-slider"
-                                    style={{
-                                        position: 'absolute',
-                                        left: `${stops[selectedStopIndex].position + (stops[selectedStopIndex + 1].position - stops[selectedStopIndex].position) * (stops[selectedStopIndex].midpoint || 50) / 100}%`,
-                                        top: '50%',
-                                        transform: 'translate(-50%, -50%)',
-                                        width: '8px',
-                                        height: '8px',
-                                        backgroundColor: 'white',
-                                        border: '1px solid #666',
-                                        borderRadius: '50%',
-                                        cursor: 'ew-resize',
-                                        zIndex: 10
-                                    }}
-                                    onMouseDown={(e) => handleMidpointMouseDown(e, selectedStopIndex)}
-                                />
-                            )}
-                        </>
-                    )}
                 </div>
 
                 {/* 颜色滑块 */}
@@ -527,7 +577,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             key={`color-${index}`}
                             className={`color-slider-thumb ${selectedStopIndex === index && selectedStopType === 'color' ? 'selected' : ''}`}
                             style={{ 
-                                left: `${stop.position}%`,
+                                left: `${stop.colorPosition}%`,
                                 backgroundColor: getRGBColor(stop.color)
                             }}
                             onMouseDown={(e) => handleColorStopMouseDown(e, index)}
@@ -538,6 +588,53 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             }}
                         />
                     ))}
+                    
+                    {/* 颜色中点滑块 */}
+                    {selectedStopIndex !== null && selectedStopType === 'color' && (
+                        <>
+                            {/* 左侧中点 */}
+                            {selectedStopIndex > 0 && (
+                                <div
+                                    className="midpoint-slider"
+                                    style={{
+                                        position: 'absolute',
+                                        left: `${stops[selectedStopIndex - 1].colorPosition + (stops[selectedStopIndex].colorPosition - stops[selectedStopIndex - 1].colorPosition) * (stops[selectedStopIndex - 1].midpoint || 50) / 100}%`,
+                                        top: '50%',
+                                        transform: 'translate(-50%, -50%)',
+                                        width: '8px',
+                                        height: '8px',
+                                        backgroundColor: 'white',
+                                        border: '1px solid #666',
+                                        borderRadius: '50%',
+                                        cursor: 'ew-resize',
+                                        zIndex: 10
+                                    }}
+                                    onMouseDown={(e) => handleColorMidpointMouseDown(e, selectedStopIndex - 1)}
+                                />
+                            )}
+                            
+                            {/* 右侧中点 */}
+                            {selectedStopIndex < stops.length - 1 && (
+                                <div
+                                    className="midpoint-slider"
+                                    style={{
+                                        position: 'absolute',
+                                        left: `${stops[selectedStopIndex].colorPosition + (stops[selectedStopIndex + 1].colorPosition - stops[selectedStopIndex].colorPosition) * (stops[selectedStopIndex].midpoint || 50) / 100}%`,
+                                        top: '50%',
+                                        transform: 'translate(-50%, -50%)',
+                                        width: '8px',
+                                        height: '8px',
+                                        backgroundColor: 'white',
+                                        border: '1px solid #666',
+                                        borderRadius: '50%',
+                                        cursor: 'ew-resize',
+                                        zIndex: 10
+                                    }}
+                                    onMouseDown={(e) => handleColorMidpointMouseDown(e, selectedStopIndex)}
+                                />
+                            )}
+                        </>
+                    )}
                 </div>
                 
                 {/* 颜色控制 */}
@@ -661,7 +758,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         type: gradientType,
                         angle,
                         reverse,
-                        stops: stops.map(({ midpoint, ...stop }) => stop), // 移除midpoint
+                        stops: stops.map(({ midpoint, colorPosition, opacityPosition, ...stop }) => stop), // 移除扩展属性
                         presets
                     });
                     onClose();
