@@ -642,7 +642,9 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                 style={{ 
                                     left: `${stop.opacityPosition}%`,
                                     backgroundColor: displayColor,
-                                    border: '1px solid #666'
+                                    border: selectedStopIndex === index && selectedStopType === 'opacity' 
+                                        ? '2px solid var(--primary-color)' 
+                                        : '2px solid var(--border-color)' // 修复选中状态边框颜色
                                 }}
                                 onMouseDown={(e) => handleOpacityStopMouseDown(e, index)}
                                 onClick={(e) => {
@@ -654,50 +656,67 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         );
                     })}
                     
-                    {/* 透明度中点滑块 */}
+                    {/* 透明度中点滑块 - 简化逻辑 */}
                     {selectedStopIndex !== null && selectedStopType === 'opacity' && (
                         <>
                             {/* 左侧中点 */}
-                            {selectedStopIndex > 0 && (
-                                <div
-                                    className="midpoint-slider"
-                                    style={{
-                                        position: 'absolute',
-                                        left: `${stops[selectedStopIndex - 1].opacityPosition + (stops[selectedStopIndex].opacityPosition - stops[selectedStopIndex - 1].opacityPosition) * (stops[selectedStopIndex - 1].midpoint || 50) / 100}%`,
-                                        top: '50%',
-                                        transform: 'translate(-50%, -50%)',
-                                        width: '8px',
-                                        height: '8px',
-                                        backgroundColor: 'white',
-                                        border: '1px solid #666',
-                                        borderRadius: '50%',
-                                        cursor: 'ew-resize',
-                                        zIndex: 10
-                                    }}
-                                    onMouseDown={(e) => handleOpacityMidpointMouseDown(e, selectedStopIndex - 1)}
-                                />
-                            )}
+                            {(() => {
+                                // 找到当前选中stop左侧最近的stop
+                                const leftStops = stops.filter((_, i) => i !== selectedStopIndex && stops[i].opacityPosition < stops[selectedStopIndex].opacityPosition);
+                                if (leftStops.length === 0) return null;
+                                
+                                const leftStop = leftStops.reduce((prev, curr) => 
+                                    curr.opacityPosition > prev.opacityPosition ? curr : prev
+                                );
+                                const leftStopIndex = stops.indexOf(leftStop);
+                                
+                                return (
+                                    <div
+                                        className="midpoint-slider"
+                                        style={{
+                                            position: 'absolute',
+                                            left: `${leftStop.opacityPosition + (stops[selectedStopIndex].opacityPosition - leftStop.opacityPosition) * (leftStop.midpoint || 50) / 100}%`,
+                                            top: '50%',
+                                            transform: 'translate(-50%, -50%)',
+                                            width: '6px',
+                                            height: '6px',
+                                            backgroundColor: 'white',
+                                            border: '1px solid #666',
+                                            borderRadius: '50%',
+                                            cursor: 'ew-resize',
+                                            zIndex: 10
+                                        }}
+                                        onMouseDown={(e) => handleOpacityMidpointMouseDown(e, leftStopIndex)}
+                                    />
+                                );
+                            })()}
                             
                             {/* 右侧中点 */}
-                            {selectedStopIndex < stops.length - 1 && (
-                                <div
-                                    className="midpoint-slider"
-                                    style={{
-                                        position: 'absolute',
-                                        left: `${stops[selectedStopIndex].opacityPosition + (stops[selectedStopIndex + 1].opacityPosition - stops[selectedStopIndex].opacityPosition) * (stops[selectedStopIndex].midpoint || 50) / 100}%`,
-                                        top: '50%',
-                                        transform: 'translate(-50%, -50%)',
-                                        width: '8px',
-                                        height: '8px',
-                                        backgroundColor: 'white',
-                                        border: '1px solid #666',
-                                        borderRadius: '50%',
-                                        cursor: 'ew-resize',
-                                        zIndex: 10
-                                    }}
-                                    onMouseDown={(e) => handleOpacityMidpointMouseDown(e, selectedStopIndex)}
-                                />
-                            )}
+                            {(() => {
+                                // 找到当前选中stop右侧最近的stop
+                                const rightStops = stops.filter((_, i) => i !== selectedStopIndex && stops[i].opacityPosition > stops[selectedStopIndex].opacityPosition);
+                                if (rightStops.length === 0) return null;
+                                
+                                return (
+                                    <div
+                                        className="midpoint-slider"
+                                        style={{
+                                            position: 'absolute',
+                                            left: `${stops[selectedStopIndex].opacityPosition + (rightStops[0].opacityPosition - stops[selectedStopIndex].opacityPosition) * (stops[selectedStopIndex].midpoint || 50) / 100}%`,
+                                            top: '50%',
+                                            transform: 'translate(-50%, -50%)',
+                                            width: '6px',
+                                            height: '6px',
+                                            backgroundColor: 'white',
+                                            border: '1px solid #666',
+                                            borderRadius: '50%',
+                                            cursor: 'ew-resize',
+                                            zIndex: 10
+                                        }}
+                                        onMouseDown={(e) => handleOpacityMidpointMouseDown(e, selectedStopIndex)}
+                                    />
+                                );
+                            })()}
                         </>
                     )}
                 </div>
@@ -749,50 +768,71 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         />  
                     ))}
                     
-                    {/* 颜色中点滑块 */}
+                    {/* 颜色中点滑块 - 修复逻辑 */}
                     {selectedStopIndex !== null && selectedStopType === 'color' && (
                         <>
                             {/* 左侧中点 */}
-                            {selectedStopIndex > 0 && (
-                                <div
-                                    className="midpoint-slider"
-                                    style={{
-                                        position: 'absolute',
-                                        left: `${stops[selectedStopIndex - 1].colorPosition + (stops[selectedStopIndex].colorPosition - stops[selectedStopIndex - 1].colorPosition) * (stops[selectedStopIndex - 1].midpoint || 50) / 100}%`,
-                                        top: '50%',
-                                        transform: 'translate(-50%, -50%)',
-                                        width: '8px',
-                                        height: '8px',
-                                        backgroundColor: 'white',
-                                        border: '1px solid #666',
-                                        borderRadius: '50%',
-                                        cursor: 'ew-resize',
-                                        zIndex: 10
-                                    }}
-                                    onMouseDown={(e) => handleColorMidpointMouseDown(e, selectedStopIndex - 1)}
-                                />
-                            )}
+                            {(() => {
+                                // 找到当前选中stop左侧最近的stop
+                                const leftStops = stops.filter((_, i) => i !== selectedStopIndex && stops[i].colorPosition < stops[selectedStopIndex].colorPosition);
+                                if (leftStops.length === 0) return null;
+                                
+                                const leftStop = leftStops.reduce((prev, curr) => 
+                                    curr.colorPosition > prev.colorPosition ? curr : prev
+                                );
+                                const leftStopIndex = stops.indexOf(leftStop);
+                                
+                                return (
+                                    <div
+                                        className="midpoint-slider"
+                                        style={{
+                                            position: 'absolute',
+                                            left: `${leftStop.colorPosition + (stops[selectedStopIndex].colorPosition - leftStop.colorPosition) * (leftStop.midpoint || 50) / 100}%`,
+                                            top: '50%',
+                                            transform: 'translate(-50%, -50%)',
+                                            width: '6px',
+                                            height: '6px',
+                                            backgroundColor: 'white',
+                                            border: '1px solid #666',
+                                            borderRadius: '50%',
+                                            cursor: 'ew-resize',
+                                            zIndex: 10
+                                        }}
+                                        onMouseDown={(e) => handleColorMidpointMouseDown(e, leftStopIndex)}
+                                    />
+                                );
+                            })()}
                             
                             {/* 右侧中点 */}
-                            {selectedStopIndex < stops.length - 1 && (
-                                <div
-                                    className="midpoint-slider"
-                                    style={{
-                                        position: 'absolute',
-                                        left: `${stops[selectedStopIndex].colorPosition + (stops[selectedStopIndex + 1].colorPosition - stops[selectedStopIndex].colorPosition) * (stops[selectedStopIndex].midpoint || 50) / 100}%`,
-                                        top: '50%',
-                                        transform: 'translate(-50%, -50%)',
-                                        width: '8px',
-                                        height: '8px',
-                                        backgroundColor: 'white',
-                                        border: '1px solid #666',
-                                        borderRadius: '50%',
-                                        cursor: 'ew-resize',
-                                        zIndex: 10
-                                    }}
-                                    onMouseDown={(e) => handleColorMidpointMouseDown(e, selectedStopIndex)}
-                                />
-                            )}
+                            {(() => {
+                                // 找到当前选中stop右侧最近的stop
+                                const rightStops = stops.filter((_, i) => i !== selectedStopIndex && stops[i].colorPosition > stops[selectedStopIndex].colorPosition);
+                                if (rightStops.length === 0) return null;
+                                
+                                const rightStop = rightStops.reduce((prev, curr) => 
+                                    curr.colorPosition < prev.colorPosition ? curr : prev
+                                );
+                                
+                                return (
+                                    <div
+                                        className="midpoint-slider"
+                                        style={{
+                                            position: 'absolute',
+                                            left: `${stops[selectedStopIndex].colorPosition + (rightStop.colorPosition - stops[selectedStopIndex].colorPosition) * (stops[selectedStopIndex].midpoint || 50) / 100}%`,
+                                            top: '50%',
+                                            transform: 'translate(-50%, -50%)',
+                                            width: '6px',
+                                            height: '6px',
+                                            backgroundColor: 'white',
+                                            border: '1px solid #666',
+                                            borderRadius: '50%',
+                                            cursor: 'ew-resize',
+                                            zIndex: 10
+                                        }}
+                                        onMouseDown={(e) => handleColorMidpointMouseDown(e, selectedStopIndex)}
+                                    />
+                                );
+                            })()}
                         </>
                     )}
                 </div>
