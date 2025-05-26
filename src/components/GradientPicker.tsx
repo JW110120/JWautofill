@@ -94,11 +94,158 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         })));
     };
 
+    // 修正的预览渐变函数
+    const getPreviewGradientStyle = () => {
+        // 创建一个综合的渐变，同时考虑颜色位置和透明度位置
+        const allPositions = new Set<number>();
+        
+        // 收集所有位置点
+        stops.forEach(stop => {
+            allPositions.add(stop.colorPosition);
+            allPositions.add(stop.opacityPosition);
+        });
+        
+        const sortedPositions = Array.from(allPositions).sort((a, b) => a - b);
+        
+        const gradientStops = sortedPositions.map(position => {
+            // 在当前位置插值颜色
+            const colorAtPosition = interpolateColor(position, 'color');
+            // 在当前位置插值透明度
+            const opacityAtPosition = interpolateOpacity(position);
+            
+            const rgbaMatch = colorAtPosition.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+            if (rgbaMatch) {
+                const [_, r, g, b] = rgbaMatch;
+                return `rgba(${r}, ${g}, ${b}, ${opacityAtPosition}) ${position}%`;
+            }
+            return `rgba(0, 0, 0, ${opacityAtPosition}) ${position}%`;
+        });
+        
+        return `linear-gradient(to right, ${gradientStops.join(', ')})`;
+    };
+
+    // 颜色插值函数
+    const interpolateColor = (position: number, type: 'color' | 'opacity') => {
+        const relevantStops = type === 'color' 
+            ? [...stops].sort((a, b) => a.colorPosition - b.colorPosition)
+            : [...stops].sort((a, b) => a.opacityPosition - b.opacityPosition);
+            
+        const pos = type === 'color' ? 'colorPosition' : 'opacityPosition';
+        
+        // 找到位置两侧的stop
+        let leftStop = relevantStops[0];
+        let rightStop = relevantStops[relevantStops.length - 1];
+        
+        for (let i = 0; i < relevantStops.length - 1; i++) {
+            if (relevantStops[i][pos] <= position && relevantStops[i + 1][pos] >= position) {
+                leftStop = relevantStops[i];
+                rightStop = relevantStops[i + 1];
+                break;
+            }
+        }
+        
+        if (leftStop[pos] === rightStop[pos]) {
+            return leftStop.color;
+        }
+        
+        // 计算插值比例
+        const ratio = (position - leftStop[pos]) / (rightStop[pos] - leftStop[pos]);
+        
+        // 插值颜色
+        const leftRgba = leftStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
+        const rightRgba = rightStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
+        
+        if (leftRgba && rightRgba) {
+            const r = Math.round(parseInt(leftRgba[1]) * (1 - ratio) + parseInt(rightRgba[1]) * ratio);
+            const g = Math.round(parseInt(leftRgba[2]) * (1 - ratio) + parseInt(rightRgba[2]) * ratio);
+            const b = Math.round(parseInt(leftRgba[3]) * (1 - ratio) + parseInt(rightRgba[3]) * ratio);
+            return `rgb(${r}, ${g}, ${b})`;
+        }
+        
+        return leftStop.color;
+    };
+
+    // 透明度插值函数
+    const interpolateOpacity = (position: number) => {
+        const opacityStops = [...stops].sort((a, b) => a.opacityPosition - b.opacityPosition);
+        
+        // 找到位置两侧的stop
+        let leftStop = opacityStops[0];
+        let rightStop = opacityStops[opacityStops.length - 1];
+        
+        for (let i = 0; i < opacityStops.length - 1; i++) {
+            if (opacityStops[i].opacityPosition <= position && opacityStops[i + 1].opacityPosition >= position) {
+                leftStop = opacityStops[i];
+                rightStop = opacityStops[i + 1];
+                break;
+            }
+        }
+        
+        if (leftStop.opacityPosition === rightStop.opacityPosition) {
+            const rgbaMatch = leftStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
+            return rgbaMatch ? parseFloat(rgbaMatch[4]) : 1;
+        }
+        
+        // 计算插值比例
+        const ratio = (position - leftStop.opacityPosition) / (rightStop.opacityPosition - leftStop.opacityPosition);
+        
+        // 插值透明度
+        const leftRgba = leftStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
+        const rightRgba = rightStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
+        
+        if (leftRgba && rightRgba) {
+            const leftAlpha = parseFloat(leftRgba[4]);
+            const rightAlpha = parseFloat(rightRgba[4]);
+            return leftAlpha * (1 - ratio) + rightAlpha * ratio;
+        }
+        
+        return 1;
+    };
+
     const getGradientStyle = () => {
+        // 构建带中点的渐变字符串，使用colorPosition和opacityPosition
+        const sortedStops = [...stops].sort((a, b) => a.colorPosition - b.colorPosition);
+        let gradientStops: string[] = [];
+        
+        for (let i = 0; i < sortedStops.length; i++) {
+            const currentStop = sortedStops[i];
+            gradientStops.push(`${currentStop.color} ${currentStop.colorPosition}%`);
+            
+            // 如果有下一个stop且当前stop有中点设置，添加中点
+            if (i < sortedStops.length - 1 && currentStop.midpoint !== undefined && currentStop.midpoint !== 50) {
+                const nextStop = sortedStops[i + 1];
+                const midpointPosition = currentStop.colorPosition + (nextStop.colorPosition - currentStop.colorPosition) * (currentStop.midpoint / 100);
+                
+                // 在中点位置插入颜色过渡
+                const progress = currentStop.midpoint / 100;
+                const currentRgba = currentStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
+                const nextRgba = nextStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
+                
+                if (currentRgba && nextRgba) {
+                    const r = Math.round(parseInt(currentRgba[1]) * (1 - progress) + parseInt(nextRgba[1]) * progress);
+                    const g = Math.round(parseInt(currentRgba[2]) * (1 - progress) + parseInt(nextRgba[2]) * progress);
+                    const b = Math.round(parseInt(currentRgba[3]) * (1 - progress) + parseInt(nextRgba[3]) * progress);
+                    const a = parseFloat(currentRgba[4]) * (1 - progress) + parseFloat(nextRgba[4]) * progress;
+                    
+                    gradientStops.push(`rgba(${r}, ${g}, ${b}, ${a}) ${midpointPosition}%`);
+                }
+            }
+        }
+        
         const displayStops = reverse
-            ? stops.map(s => ({ ...s, position: 100 - s.position })).sort((a, b) => a.position - b.position)
-            : stops;
-        const stopString = displayStops.map(s => `${s.color} ${s.position}%`).join(', ');
+            ? gradientStops.map(stop => {
+                const match = stop.match(/^(.+)\s+(\d+(?:\.\d+)?)%$/);
+                if (match) {
+                    const color = match[1];
+                    const position = parseFloat(match[2]);
+                    return `${color} ${100 - position}%`;
+                }
+                return stop;
+            }).reverse()
+            : gradientStops;
+            
+        const stopString = displayStops.join(', ');
+        
         switch (gradientType) {
             case 'linear':
                 return `linear-gradient(${90+angle}deg, ${stopString})`;
@@ -479,24 +626,33 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     </div>
                 )}
 
-                {/* 透明度滑块 */}
+                {/* 透明度滑块 - 修改样式 */}
                 <div className="gradient-slider-track">
-                    {stops.map((stop, index) => (
-                        <div
-                            key={`opacity-${index}`}
-                            className={`gradient-slider-thumb ${selectedStopIndex === index && selectedStopType === 'opacity' ? 'selected' : ''}`}
-                            style={{ 
-                                left: `${stop.opacityPosition}%`,
-                                backgroundColor: stop.color
-                            }}
-                            onMouseDown={(e) => handleOpacityStopMouseDown(e, index)}
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                setSelectedStopIndex(index);
-                                setSelectedStopType('opacity');
-                            }}
-                        />
-                    ))}
+                    {stops.map((stop, index) => {
+                        // 计算透明度stop的显示颜色
+                        const rgbaMatch = stop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
+                        const alpha = rgbaMatch ? parseFloat(rgbaMatch[4]) : 1;
+                        const grayValue = Math.round(255 * alpha); // 0% = 白色(255), 100% = 黑色(0)
+                        const displayColor = `rgb(${255 - grayValue}, ${255 - grayValue}, ${255 - grayValue})`;
+                        
+                        return (
+                            <div
+                                key={`opacity-${index}`}
+                                className={`gradient-slider-thumb ${selectedStopIndex === index && selectedStopType === 'opacity' ? 'selected' : ''}`}
+                                style={{ 
+                                    left: `${stop.opacityPosition}%`,
+                                    backgroundColor: displayColor,
+                                    border: '1px solid #666'
+                                }}
+                                onMouseDown={(e) => handleOpacityStopMouseDown(e, index)}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedStopIndex(index);
+                                    setSelectedStopType('opacity');
+                                }}
+                            />
+                        );
+                    })}
                     
                     {/* 透明度中点滑块 */}
                     {selectedStopIndex !== null && selectedStopType === 'opacity' && (
@@ -546,8 +702,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     )}
                 </div>
 
-                {/* 渐变预览区域 */}
-                <div className="gradient-preview">
+                   {/* 渐变预览区域 */}
+                   <div className="gradient-preview">
                     <div 
                         className="opacity-checkerboard"
                         style={{
@@ -555,16 +711,20 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             top: 0,
                             left: 0,
                             right: 0,
-                            bottom: 0
+                            bottom: 0,
+                            zIndex: 1
                         }}
                     />
                     <div 
                         style={{
-                            position: 'relative',
-                            width: '100%',
-                            height: '100%',
-                            background: `linear-gradient(to right, ${stops.map(s => `${s.color} ${s.position}%`).join(', ')})`,
-                            cursor: 'pointer'
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            background: getPreviewGradientStyle(),
+                            cursor: 'pointer',
+                            zIndex: 2
                         }}
                         onClick={handleAddStop}
                     />
@@ -586,7 +746,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                 setSelectedStopIndex(index);
                                 setSelectedStopType('color');
                             }}
-                        />
+                        />  
                     ))}
                     
                     {/* 颜色中点滑块 */}
