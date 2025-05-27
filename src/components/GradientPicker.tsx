@@ -94,35 +94,36 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         })));
     };
 
-    // 修正的预览渐变函数
-    const getPreviewGradientStyle = () => {
-        // 创建一个综合的渐变，同时考虑颜色位置和透明度位置
-        const allPositions = new Set<number>();
+// 修正的预览渐变函数
+const getPreviewGradientStyle = () => {
+    // 创建一个综合的渐变，同时考虑颜色位置和透明度位置
+    const allPositions = new Set<number>();
+    
+    // 收集所有位置点
+    stops.forEach(stop => {
+        allPositions.add(stop.colorPosition);
+        allPositions.add(stop.opacityPosition);
+    });
+    
+    const sortedPositions = Array.from(allPositions).sort((a, b) => a - b);
+    
+    const gradientStops = sortedPositions.map(position => {
+        // 在当前位置插值颜色
+        const colorAtPosition = interpolateColor(position, 'color');
+        // 在当前位置插值透明度
+        const opacityAtPosition = interpolateOpacity(position);
         
-        // 收集所有位置点
-        stops.forEach(stop => {
-            allPositions.add(stop.colorPosition);
-            allPositions.add(stop.opacityPosition);
-        });
-        
-        const sortedPositions = Array.from(allPositions).sort((a, b) => a - b);
-        
-        const gradientStops = sortedPositions.map(position => {
-            // 在当前位置插值颜色
-            const colorAtPosition = interpolateColor(position, 'color');
-            // 在当前位置插值透明度
-            const opacityAtPosition = interpolateOpacity(position);
-            
-            const rgbaMatch = colorAtPosition.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-            if (rgbaMatch) {
-                const [_, r, g, b] = rgbaMatch;
-                return `rgba(${r}, ${g}, ${b}, ${opacityAtPosition}) ${position}%`;
-            }
-            return `rgba(0, 0, 0, ${opacityAtPosition}) ${position}%`;
-        });
-        
-        return `linear-gradient(to right, ${gradientStops.join(', ')})`;
-    };
+        const rgbaMatch = colorAtPosition.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+        if (rgbaMatch) {
+            const [_, r, g, b] = rgbaMatch;
+            return `rgba(${r}, ${g}, ${b}, ${opacityAtPosition}) ${position}%`;
+        }
+        return `rgba(0, 0, 0, ${opacityAtPosition}) ${position}%`;
+    });
+    
+    // 注意：这里不应用 reverse，只是纯粹的预览
+    return `linear-gradient(to right, ${gradientStops.join(', ')})`;
+};
 
     // 颜色插值函数
     const interpolateColor = (position: number, type: 'color' | 'opacity') => {
@@ -598,7 +599,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
 
             {/* 渐变编辑区域 */}
             <div className="gradient-edit-area">
-                <div className="subtitle"><h3>颜色序列</h3></div>
+                <div className="subtitle"><h3>颜色渐变</h3></div>
                 
                 {/* 不透明度控制 */}
                 {selectedStopIndex !== null && selectedStopType === 'opacity' && (
@@ -729,8 +730,15 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             position: 'absolute',
                             top: 0,
                             left: 0,
-                            right: 0,
-                            bottom: 0,
+                            width: '100%',
+                            height: '100%',
+                            backgroundImage: `
+                              linear-gradient(45deg, #ccc 25%, transparent 25%),
+                              linear-gradient(-45deg, #ccc 25%, transparent 25%),
+                              linear-gradient(45deg, transparent 75%, #ccc 75%),
+                              linear-gradient(-45deg, transparent 75%, #ccc 75%)`,
+                            backgroundSize: '10px 10px',
+                            backgroundPosition: '0 0, 0 5px, 5px -5px, -5px 0px',
                             zIndex: 1
                         }}
                     />
@@ -944,7 +952,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 </div>
             </div>
 
-            {/* 预览区域 */}
+            {/* 最终预览区域 */}
             <div className="final-preview-container">
                 <div className="subtitle"><h3>最终预览</h3></div>
                 <div className="final-preview" style={{
