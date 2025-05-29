@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Pattern } from '../types/state';
 import { FileIcon, DeleteIcon } from '../styles/Icons';
 import { action, core } from 'photoshop';
@@ -19,6 +19,16 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
     const [angle, setAngle] = useState<number>(0);
     const [scale, setScale] = useState<number>(100);
     const [loadedImages, setLoadedImages] = useState<Record<string, boolean>>({});
+    // 新增预览相关状态
+    const [previewZoom, setPreviewZoom] = useState<number>(100); // 预览缩放级别
+    const [previewOffset, setPreviewOffset] = useState<{x: number, y: number}>({x: 0, y: 0}); // 预览偏移
+    const [isDragging, setIsDragging] = useState<boolean>(false);
+    const [dragStart, setDragStart] = useState<{x: number, y: number}>({x: 0, y: 0});
+    const previewRef = useRef<HTMLDivElement>(null);
+    
+    // 预览缩放档位
+    const zoomLevels = [12.5, 25, 33, 50, 67, 100, 150, 200, 300, 400, 500, 600, 800, 1000, 1200, 1600];
+    
     const mimeTypeMap = {
         jpg: 'image/jpeg',
         jpeg: 'image/jpeg',
@@ -27,6 +37,90 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
     };
     const [preserveTransparency, setPreserveTransparency] = useState<boolean>(false);
     
+    // 处理预览缩放
+    const handlePreviewZoomChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+        const newZoom = Number(e.target.value);
+        setPreviewZoom(newZoom);
+        // 重置偏移到中心
+        setPreviewOffset({x: 0, y: 0});
+    };
+    
+    // 处理鼠标滚轮缩放
+    const handlePreviewWheel = (e: React.WheelEvent) => {
+        e.preventDefault();
+        const delta = e.deltaY > 0 ? -1 : 1;
+        const currentIndex = zoomLevels.indexOf(previewZoom);
+        const newIndex = Math.max(0, Math.min(zoomLevels.length - 1, currentIndex + delta));
+        setPreviewZoom(zoomLevels[newIndex]);
+        setPreviewOffset({x: 0, y: 0});
+    };
+    
+    // 处理拖拽开始
+    const handlePreviewMouseDown = (e: React.MouseEvent) => {
+        if (previewZoom > 100) {
+            setIsDragging(true);
+            setDragStart({
+                x: e.clientX - previewOffset.x,
+                y: e.clientY - previewOffset.y
+            });
+        }
+    };
+    
+    // 处理拖拽移动
+    const handlePreviewMouseMove = (e: React.MouseEvent) => {
+        if (isDragging && previewZoom > 100) {
+            const newOffset = {
+                x: e.clientX - dragStart.x,
+                y: e.clientY - dragStart.y
+            };
+            
+            // 限制拖拽范围
+            const maxOffset = (previewZoom - 100) * 2;
+            newOffset.x = Math.max(-maxOffset, Math.min(maxOffset, newOffset.x));
+            newOffset.y = Math.max(-maxOffset, Math.min(maxOffset, newOffset.y));
+            
+            setPreviewOffset(newOffset);
+        }
+    };
+    
+    // 处理拖拽结束
+    const handlePreviewMouseUp = () => {
+        setIsDragging(false);
+    };
+    
+    // 添加全局鼠标事件监听
+    useEffect(() => {
+        const handleGlobalMouseMove = (e: MouseEvent) => {
+            if (isDragging && previewZoom > 100) {
+                const newOffset = {
+                    x: e.clientX - dragStart.x,
+                    y: e.clientY - dragStart.y
+                };
+                
+                const maxOffset = (previewZoom - 100) * 2;
+                newOffset.x = Math.max(-maxOffset, Math.min(maxOffset, newOffset.x));
+                newOffset.y = Math.max(-maxOffset, Math.min(maxOffset, newOffset.y));
+                
+                setPreviewOffset(newOffset);
+            }
+        };
+        
+        const handleGlobalMouseUp = () => {
+            setIsDragging(false);
+        };
+        
+        if (isDragging) {
+            document.addEventListener('mousemove', handleGlobalMouseMove);
+            document.addEventListener('mouseup', handleGlobalMouseUp);
+        }
+        
+        return () => {
+            document.removeEventListener('mousemove', handleGlobalMouseMove);
+            document.removeEventListener('mouseup', handleGlobalMouseUp);
+        };
+    }, [isDragging, dragStart, previewZoom]);
+
+
     const processFile = async (file) => {
         try {
             
@@ -309,6 +403,8 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
         }
     }
 
+
+
     return (
         <div className="pattern-picker">
             <div className="panel-header">
@@ -450,8 +546,32 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
             </div>
             {selectedPattern && (
                 <div className="pattern-final-preview-container">
-                    <div className="subtitle"><h3>预览</h3></div>
-                    <div className="preview-wrapper">
+                    <div className="subtitle">
+                        <h3>预览</h3>
+                        <div className="preview-controls">
+                            <select 
+                                value={previewZoom} 
+                                onChange={handlePreviewZoomChange}
+                                className="zoom-select"
+                            >
+                                {zoomLevels.map(level => (
+                                    <option key={level} value={level}>{level}%</option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
+                    <div 
+                        className="preview-wrapper"
+                        ref={previewRef}
+                        onWheel={handlePreviewWheel}
+                        onMouseDown={handlePreviewMouseDown}
+                        onMouseMove={handlePreviewMouseMove}
+                        onMouseUp={handlePreviewMouseUp}
+                        style={{
+                            cursor: previewZoom > 100 ? (isDragging ? 'grabbing' : 'grab') : 'default',
+                            overflow: 'hidden'
+                        }}
+                    >
                         <img
                             src={patterns.find(p => p.id === selectedPattern)?.preview}
                             className="pattern-final-preview"
@@ -459,15 +579,23 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                                 position: 'absolute',
                                 top: '50%',
                                 left: '50%',
-                                transform: `translate(-50%, -50%) rotate(${angle}deg) scale(${scale / 100})`,
+                                transform: `translate(-50%, -50%) translate(${previewOffset.x}px, ${previewOffset.y}px) rotate(${angle}deg) scale(${(scale * previewZoom) / 10000})`,
                                 transformOrigin: 'center center',
-                                transition: 'transform 0.1s ease',
-                                willChange: 'transform' // 添加这行优化性能
+                                transition: isDragging ? 'none' : 'transform 0.1s ease',
+                                willChange: 'transform',
+                                imageRendering: previewZoom > 400 ? 'pixelated' : 'auto'
                             }}
+                            draggable={false}
                         />
+                        {previewZoom > 100 && (
+                            <div className="zoom-indicator">
+                                {previewZoom}%
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
+
 
             <div className="panel-footer">
                 <button onClick={() => {
