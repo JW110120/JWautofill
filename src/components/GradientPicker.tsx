@@ -561,17 +561,33 @@ const getPreviewGradientStyle = () => {
             {/* 预设区域 */}
             <div className="gradient-presets-area">
                 <div className="gradient-presets">
-                    {presets.map((preset, index) => (
-                        <div 
-                            key={index} 
-                            className={`preset-item ${selectedPreset === index ? 'selected' : ''}`}
-                            onClick={() => handlePresetSelect(index)}
-                        >
-                            <div className="preset-preview" style={{
-                                background: getGradientStyle()
-                            }} />
-                        </div>
-                    ))}
+                    {presets.map((preset, index) => {
+                        // 为每个预设生成独立的渐变样式
+                        const presetGradientStops = preset.stops.map(stop => {
+                            const rgbaMatch = stop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+                            if (rgbaMatch) {
+                                const [_, r, g, b, a = '1'] = rgbaMatch;
+                                return `rgba(${r}, ${g}, ${b}, ${a}) ${stop.position}%`;
+                            }
+                            return `${stop.color} ${stop.position}%`;
+                        }).join(', ');
+                        
+                        const presetGradientStyle = preset.type === 'radial' 
+                            ? `radial-gradient(circle, ${presetGradientStops})`
+                            : `linear-gradient(${preset.angle || 0}deg, ${presetGradientStops})`;
+                        
+                        return (
+                            <div 
+                                key={index} 
+                                className={`preset-item ${selectedPreset === index ? 'selected' : ''}`}
+                                onClick={() => handlePresetSelect(index)}
+                            >
+                                <div className="preset-preview" style={{
+                                    background: presetGradientStyle
+                                }} />
+                            </div>
+                        );
+                    })}
                 </div>
                 <div className="gradient-icon-container">
                     <div className="icon-group">

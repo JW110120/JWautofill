@@ -263,8 +263,10 @@ sp-picker[disabled] {
 .selection-slider-container {
   width: ca1calc(100% - 20px);
   flex-direction: column;
-  padding: 0 10px ; 
+  padding: 8px 10px 5px 10px; 
   border-bottom: 1px solid var(--border-color);
+  margin-bottom: 10px;
+
 }
 
 .selection-slider-item {

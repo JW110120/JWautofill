@@ -147,18 +147,20 @@ export class GradientFill {
             };
 
         try {
-            // 执行所有操作
-            await action.batchPlay([
-                createGradientLayer,
-                setLayerProperties,
-                createClippingMask,
-                rasterizeLayer,
-                applyMask,
-                mergeLayers
-            ], {
-                synchronousExecution: true,
-                modalBehavior: "execute"
-            });
+            await action.batchPlay([createGradientLayer], {});
+            await action.batchPlay([setLayerProperties], {});
+
+            if (options.preserveTransparency) {
+                await action.batchPlay([createClippingMask], {});
+            }
+            
+            // 根据图层是否有像素来决定最后的操作
+            if (!layerInfo.hasPixels) {
+                await action.batchPlay([rasterizeLayer], {});
+                await action.batchPlay([applyMask], {});
+            } else {
+                await action.batchPlay([mergeLayers], {});
+            }
 
             console.log("✅ 渐变填充完成");
         } catch (error) {
@@ -178,7 +180,7 @@ export class GradientFill {
                 color: {
                     _obj: "RGBColor",
                     red: color.red,
-                    grain: color.green,
+                    green: color.green,
                     blue: color.blue
                 },
                 type: {

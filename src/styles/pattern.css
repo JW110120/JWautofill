@@ -16,12 +16,29 @@
   }
   
   .pattern-container {
-    min-height: 150px;
-    height: 30%;
-    width: 234px;
+    min-height: 130px;
+    height: 25%;
+    width: 100%;
     overflow-y: auto;
     overflow-x: auto;
+    border-radius: 4px;
+    position: relative;
     background-color: var(--dark-bg-color);
+    border: 1px solid var(--border-color);
+    margin-bottom: 10px;
+    z-index: 1;
+    display: flex;
+    flex-wrap: wrap;
+    flex-direction: column;
+    overflow: hidden; /* 新增：确保内容和背景不会溢出圆角 */
+  }
+  
+  .pattern-presest {
+    width: 100%;
+    height: calc(100% - 31px);
+    top: 0;
+    left: 0;
+    overflow-y: auto;
     border-radius: 4px;
     position: relative;
     z-index: 1;
@@ -31,6 +48,7 @@
     align-items: flex-start;
   }
   
+
   .photo-container {
     aspect-ratio: 1;
     border: 1px solid var(--border-color);
@@ -59,8 +77,14 @@
   }
   
   .pattern-icon-container {
-    padding: 2px 0;
-    margin-bottom: 10px;
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    left: 0;
+    border-top: 1px solid var(--border-color);
+    background-color: var(--bg-color);
+    background-clip: padding-box;
+    z-index: 3;
   }
   
   .icon-group {
@@ -123,60 +147,46 @@
     margin-bottom: 10px;
   }
   
-  .setting-item-group {
-    padding: 10px;
-    border-radius: 4px;
-    background-color: var(--bg-color);
+  .pattern-setting-item-group {
+    display: flex;
+    flex-direction: column;
+    margin-top: 10px;
+    padding: auto 10px;
   }
   
-  .setting-item-group .setting-item {
-    width: 100%;
+  .pattern-setting-item {
+    max-width: 100%;
+    position: relative;
+    overflow: hidden;
     display: flex;
     align-items: center;
     padding: auto 10px;
     color: var(--text-color);
-    margin-bottom: 15px;
+    flex-direction: column;
   }
+
   
-  .setting-item-group .setting-item:last-child {
-    width: 100%;
+  .pattern-setting-item label {
+    font-size: 13px;
+    justify-content: space-between;
+    width: calc(100% - 20px);
+    position: relative;
     display: flex;
-    align-items: center;
-    padding: auto 10px;
     color: var(--text-color);
-    margin-bottom: 0;
   }
   
-  .setting-item label {
-    min-width: 40px;
+  .pattern-setting-item .value {
     font-size: 13px;
     color: var(--text-color);
   }
   
-  .setting-item .value {
-    min-width: 40px;
-    text-align: left;
-    margin-left: -5px;
-    font-size: 13px;
-    color: var(--text-color);
-  }
-  
-  .setting-item input[type="range"] {
-      width: 210px;  /* 从130px改为210px，使其更宽松 */
-      margin-left: 6px;  /* 从-3px改为6px，增加左边距 */
+  .pattern-setting-item input[type="range"] {
+      width: 210px;  
+      margin-left: 6px; 
       cursor: pointer;
       display: flex;
-      justify-content: center;
   }
   
-  .setting-item {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 10px;  /* 保持原有间距 */
-      max-width: 100%;
-      overflow: hidden;
-  }
   
   .pattern-final-preview-container {
       position: relative;

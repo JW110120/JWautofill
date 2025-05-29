@@ -16,6 +16,9 @@ import { ExpandIcon, SettingsIcon } from './styles/Icons';
 import { calculateRandomColor } from './utils/ColorUtils';
 import { strokeSelection } from './utils/StrokeSelection';
 import { PatternFill } from './utils/PatternFill';
+import { GradientFill } from './utils/GradientFill';
+import { ColorSettings } from './types/ColorSettings';
+import { Pattern } from './types/Pattern';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -257,7 +260,12 @@ class App extends React.Component<AppProps, AppState> {
 
             await core.executeAsModal(async () => {
                 if (this.state.autoUpdateHistory) { await this.setHistoryBrushSource(); }
-                await this.applySelectAndMask();
+                // 只有当选区选项值不为初始值时才执行选择并遮住
+                if ( this.state.selectionSmooth !== 0 || 
+                     this.state.selectionContrast !== 0 || 
+                     this.state.selectionShiftEdge !== 0) {
+                    await this.applySelectAndMask();
+                }
                 await this.applyFeather();
                 await this.fillSelection();
                 if (this.state.strokeEnabled) {

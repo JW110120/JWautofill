@@ -412,6 +412,7 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                 <button className="close-button" onClick={onClose}>×</button>
             </div>
             <div className="pattern-container">
+                 <div className="pattern-preset">
                     {patterns.map(pattern => (
                         <div
                             key={pattern.id}
@@ -477,32 +478,37 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                             )}
                         </div>
                     ))}
+                    </div> 
+                     <div className="pattern-icon-container">
+                        <div className="icon-group">
+                            <sp-action-button 
+                                quiet 
+                                class="icon-button"
+                                onClick={handleFileSelect}
+                            >
+                                <FileIcon />
+                            </sp-action-button>
+                            <sp-action-button 
+                                quiet 
+                                class="icon-button"
+                                onClick={handleDelete}
+                                disabled={!selectedPattern}
+                            >
+                                <DeleteIcon />
+                            </sp-action-button>
+                        </div>
+                     </div>
             </div>
 
-            <div className="pattern-icon-container">
-                <div className="icon-group">
-                    <sp-action-button 
-                        quiet 
-                        class="icon-button"
-                        onClick={handleFileSelect}
-                    >
-                        <FileIcon />
-                    </sp-action-button>
-                    <sp-action-button 
-                        quiet 
-                        class="icon-button"
-                        onClick={handleDelete}
-                        disabled={!selectedPattern}
-                    >
-                        <DeleteIcon />
-                    </sp-action-button>
-                </div>
-            </div>
+            
 
             <div className="pattern-settings-area">
-                <div className="setting-item-group">
-                    <div className="setting-item">
-                        <label>角度：</label>
+                <div className="pattern-setting-item-group">
+                    <div className="pattern-setting-item">
+                        <label>角度：
+                        <span className="value">{angle}°</span>
+                        </label>
+                       
                     <input
                         type="range"
                         min="0"
@@ -511,11 +517,13 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                         value={angle}
                         onChange={handleAngleChange}
                     />
-                    <span className="value">{angle}°</span>
-                </div>
+                    </div>
 
-                <div className="setting-item">
-                    <label>缩放：</label>
+                    <div className="pattern-setting-item">
+                        <label>缩放：
+                        <span className="value">{scale}%</span>
+                        </label> 
+                    
                     <input
                         type="range"
                         min="20"
@@ -523,8 +531,7 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                         step="1"
                         value={scale}
                         onChange={handleScaleChange}
-                    />
-                        <span className="value">{scale}%</span>
+                    />    
                     </div>
                 </div>
                 <div className="pattern-checkbox-container">
