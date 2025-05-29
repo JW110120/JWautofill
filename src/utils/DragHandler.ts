@@ -15,6 +15,21 @@ export class DragHandler {
             min: 0,
             max: 10,
             sensitivity: 0.1
+        },
+        selectionSmooth: {
+            min: 0,
+            max: 100,
+            sensitivity: 1
+        },
+        selectionContrast: {
+            min: 0,
+            max: 100,
+            sensitivity: 1
+        },
+        selectionShiftEdge: {
+            min: -100,
+            max: 100,
+            sensitivity: 1
         }
     };
 

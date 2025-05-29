@@ -30,6 +30,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const [angle, setAngle] = useState(0);
     const [scale, setScale] = useState(100);
     const [reverse, setReverse] = useState(false);
+    const [preserveTransparency, setPreserveTransparency] = useState<boolean>(false); // 添加新状态
     const [selectedStopIndex, setSelectedStopIndex] = useState<number | null>(null);
     const [selectedStopType, setSelectedStopType] = useState<'color' | 'opacity'>('color');
     const [stops, setStops] = useState<ExtendedGradientStop[]>([
@@ -940,7 +941,7 @@ const getPreviewGradientStyle = () => {
                     </div>
                 )}    
 
-                <div className="gradient-setting-item">
+                <div className="reverse-checkbox-group">
                     <div className="reverse-checkbox-container">
                         <label>反向：</label>
                         <input
@@ -948,6 +949,23 @@ const getPreviewGradientStyle = () => {
                             checked={reverse}
                             onChange={(e) => setReverse(e.target.checked)}
                         />
+                    </div>
+
+                    <div className="reverse-checkbox-container">
+                         <label
+                            htmlFor="transparencyCheckbox"
+                            className="pattern-checkbox-label"
+                            onClick={() => setPreserveTransparency(!preserveTransparency)}
+                        >
+                            保留不透明度：
+                        </label>
+                        <input
+                            type="checkbox"
+                            id="transparencyCheckbox"
+                            checked={preserveTransparency}
+                            onChange={(e) => setPreserveTransparency(e.target.checked)}
+                        />
+                       
                     </div>
                 </div>
             </div>
@@ -967,6 +985,7 @@ const getPreviewGradientStyle = () => {
                         angle,
                         reverse,
                         stops: stops.map(({ midpoint, colorPosition, opacityPosition, ...stop }) => stop), // 移除扩展属性
+                        preserveTransparency,// 添加这个属性
                         presets
                     });
                     onClose();

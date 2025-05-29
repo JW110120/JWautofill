@@ -51,6 +51,11 @@ class App extends React.Component<AppProps, AppState> {
         this.closeStrokeSetting = this.closeStrokeSetting.bind(this);
         this.toggleStrokeEnabled = this.toggleStrokeEnabled.bind(this);
         this.toggleStrokeSetting = this.toggleStrokeSetting.bind(this);
+        // 新增绑定
+        this.toggleSelectionOptions = this.toggleSelectionOptions.bind(this);
+        this.handleSelectionSmoothChange = this.handleSelectionSmoothChange.bind(this);
+        this.handleSelectionContrastChange = this.handleSelectionContrastChange.bind(this);
+        this.handleSelectionShiftEdgeChange = this.handleSelectionShiftEdgeChange.bind(this);
  
     }
 
@@ -70,6 +75,72 @@ class App extends React.Component<AppProps, AppState> {
         this.setState(prevState => ({
             isEnabled: !prevState.isEnabled
         }));
+    }
+
+    // 新增方法
+    toggleSelectionOptions() {
+        this.setState(prevState => ({
+            isSelectionOptionsExpanded: !prevState.isSelectionOptionsExpanded
+        }));
+    }
+
+    handleSelectionSmoothChange(event) {
+        this.setState({ selectionSmooth: parseInt(event.target.value, 10) });
+    }
+
+    handleSelectionContrastChange(event) {
+        this.setState({ selectionContrast: parseInt(event.target.value, 10) });
+    }
+
+    handleSelectionShiftEdgeChange(event) {
+        this.setState({ selectionShiftEdge: parseInt(event.target.value, 10) });
+    }
+
+    // 新增选择并遮住方法
+    async applySelectAndMask() {
+        try {
+            await action.batchPlay([
+                {
+                    _obj: "smartBrushWorkspace",
+                    presetKind: {
+                        _enum: "presetKindType",
+                        _value: "presetKindCustom"
+                    },
+                    smartBrushRadius: 0,
+                    smartBrushSmooth: this.state.selectionSmooth,
+                    smartBrushFeather: {
+                        _unit: "pixelsUnit",
+                        _value: 0
+                    },
+                    smartBrushContrast: {
+                        _unit: "percentUnit",
+                        _value: this.state.selectionContrast
+                    },
+                    smartBrushShiftEdge: {
+                        _unit: "percentUnit",
+                        _value: this.state.selectionShiftEdge
+                    },
+                    sampleAllLayers: false,
+                    smartBrushUseSmartRadius: false,
+                    smartBrushUseDeepMatte: false,
+                    autoTrimap: false,
+                    smartBrushDecontaminate: false,
+                    smartBrushDeconAmount: {
+                        _unit: "percentUnit",
+                        _value: 100
+                    },
+                    refineEdgeOutput: {
+                        _enum: "refineEdgeOutput",
+                        _value: "selectionOutputToSelection"
+                    },
+                    _options: {
+                        dialogOptions: "dontDisplay"
+                    }
+                }
+            ], {});
+        } catch (error) {
+            console.error('选择并遮住失败:', error);
+        }
     }
 
     toggleExpand() {
@@ -186,6 +257,7 @@ class App extends React.Component<AppProps, AppState> {
 
             await core.executeAsModal(async () => {
                 if (this.state.autoUpdateHistory) { await this.setHistoryBrushSource(); }
+                await this.applySelectAndMask();
                 await this.applyFeather();
                 await this.fillSelection();
                 if (this.state.strokeEnabled) {
@@ -298,7 +370,7 @@ class App extends React.Component<AppProps, AppState> {
                 await ClearHandler.clearWithOpacity(this.state.opacity);
                 return;
             }
-
+    
             if (this.state.createNewLayer) {
                 await action.batchPlay(
                     [{
@@ -309,18 +381,25 @@ class App extends React.Component<AppProps, AppState> {
                     { synchronousExecution: true }
                 );
             }
-
+    
             const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
             if (!layerInfo) return;
-
+    
             const { isBackground, hasTransparencyLocked, hasPixels } = layerInfo;
-
+    
             if (this.state.fillMode === 'pattern' && this.state.selectedPattern) {
                 await PatternFill.fillPattern({
                     opacity: this.state.opacity,
                     blendMode: this.state.blendMode,
                     pattern: this.state.selectedPattern,
-                    preserveTransparency: this.state.selectedPattern.preserveTransparency // 确保这里正确传递
+                    preserveTransparency: this.state.selectedPattern.preserveTransparency
+                }, layerInfo);
+            } else if (this.state.fillMode === 'gradient' && this.state.selectedGradient) {
+                await GradientFill.fillGradient({
+                    opacity: this.state.opacity,
+                    blendMode: this.state.blendMode,
+                    gradient: this.state.selectedGradient,
+                    preserveTransparency: this.state.selectedGradient.preserveTransparency
                 }, layerInfo);
             } else {
                 const randomColor = calculateRandomColor(this.state.colorSettings, this.state.opacity);
@@ -329,10 +408,10 @@ class App extends React.Component<AppProps, AppState> {
                     blendMode: this.state.blendMode,
                     color: randomColor
                 };
-
+    
                 // 更新填充命令以使用随机颜色
                 const command = FillHandler.createColorFillCommand(fillOptions);
-
+    
                 if (isBackground) {
                     await FillHandler.fillBackground(fillOptions);
                 } 
@@ -356,7 +435,7 @@ class App extends React.Component<AppProps, AppState> {
         } catch (error) {
             console.error('填充选区失败:', error);
         }
-    } 
+    }
 
     // 设置图层透明度锁定
     async lockLayerTransparency() {
@@ -562,12 +641,88 @@ class App extends React.Component<AppProps, AppState> {
                     />
                 </div>
             </div>
+
+ {/* 新增选区选项区域 */}
+ <div className="expand-section">
+                <div className="expand-header" onClick={this.toggleSelectionOptions}>
+                    <div className={`expand-icon ${this.state.isSelectionOptionsExpanded ? 'expanded' : ''}`}>
+                        <ExpandIcon expanded={this.state.isSelectionOptionsExpanded} />
+                    </div>
+                    <span>选区选项</span>
+                </div>
+                <div className={`expand-content ${this.state.isSelectionOptionsExpanded ? 'expanded' : ''}`}>
+                    <div className="slider-container">
+                        <label
+                            className={`slider-label ${
+                                this.state.isDragging && this.state.dragTarget === 'selectionSmooth' 
+                                ? 'dragging' 
+                                : 'not-dragging'
+                            }`}
+                            onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionSmooth')}
+                        >
+                            平滑
+                            <span className="slider-value">{this.state.selectionSmooth}</span>
+                        </label>
+                        <input
+                            type='range'
+                            min='0'
+                            max='100'
+                            step='1'
+                            value={this.state.selectionSmooth}
+                            onChange={this.handleSelectionSmoothChange}
+                            className="slider-input"
+                        />
+                        <label
+                            className={`slider-label ${
+                                this.state.isDragging && this.state.dragTarget === 'selectionContrast' 
+                                ? 'dragging' 
+                                : 'not-dragging'
+                            }`}
+                            onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionContrast')}
+                        >
+                            对比度
+                            <span className="slider-value">{this.state.selectionContrast}%</span>
+                        </label>
+                        <input
+                            type='range'
+                            min='0'
+                            max='100'
+                            step='1'
+                            value={this.state.selectionContrast}
+                            onChange={this.handleSelectionContrastChange}
+                            className="slider-input"
+                        />
+                        <label
+                            className={`slider-label ${
+                                this.state.isDragging && this.state.dragTarget === 'selectionShiftEdge' 
+                                ? 'dragging' 
+                                : 'not-dragging'
+                            }`}
+                            onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionShiftEdge')}
+                        >
+                            移动边缘
+                            <span className="slider-value">{this.state.selectionShiftEdge}%</span>
+                        </label>
+                        <input
+                            type='range'
+                            min='-100'
+                            max='100'
+                            step='1'
+                            value={this.state.selectionShiftEdge}
+                            onChange={this.handleSelectionShiftEdgeChange}
+                            className="slider-input"
+                        />
+                    </div>
+                </div>
+            </div>
+
+
             <div className="expand-section">
                     <div className="expand-header" onClick={this.toggleExpand}>
                         <div className={`expand-icon ${this.state.isExpanded ? 'expanded' : ''}`}>
                             <ExpandIcon expanded={this.state.isExpanded} />
                         </div>
-                        <span>更多选项</span>
+                        <span>填充选项</span>
                     </div>
                     <div className={`expand-content ${this.state.isExpanded ? 'expanded' : ''}`}>
                        {/* 描边模式开关 */}

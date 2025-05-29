@@ -26,6 +26,7 @@ export interface Gradient {
     angle?: number;
     reverse?: boolean;
     stops: GradientStop[];
+    preserveTransparency?: boolean; // 添加新的属性
     presets?: {
         preview: string;
         type: 'linear' | 'radial';
@@ -72,6 +73,11 @@ export interface AppState {
         green: number;
         blue: number;
     };
+     // 新增选区选项状态
+     isSelectionOptionsExpanded: boolean;
+     selectionSmooth: number;
+     selectionContrast: number;
+     selectionShiftEdge: number;
 }
 
 export const initialState: AppState = {
@@ -112,4 +118,8 @@ export const initialState: AppState = {
             green: 0,
             blue: 0
     },
+    isSelectionOptionsExpanded: true,
+    selectionSmooth: 0,
+    selectionContrast: 0,
+    selectionShiftEdge: 0,
 };
