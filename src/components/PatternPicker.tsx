@@ -546,18 +546,32 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
             </div>
             {selectedPattern && (
                 <div className="pattern-final-preview-container">
-                    <div className="subtitle">
+                    <div className="pattern-subtitle">
                         <h3>预览</h3>
                         <div className="preview-controls">
-                            <select 
-                                value={previewZoom} 
-                                onChange={handlePreviewZoomChange}
-                                className="zoom-select"
+                            <sp-picker
+                                size="s"
+                                selects="single"
+                                selected={previewZoom.toString()}
+                                onChange={(e: any) => {
+                                    const newZoom = Number(e.target.value);
+                                    setPreviewZoom(newZoom);
+                                    setPreviewOffset({x: 0, y: 0});
+                                }}
+                                className="zoom-picker"
                             >
-                                {zoomLevels.map(level => (
-                                    <option key={level} value={level}>{level}%</option>
-                                ))}
-                            </select>
+                                <sp-menu>
+                                    {zoomLevels.map(level => (
+                                        <sp-menu-item 
+                                            key={level} 
+                                            value={level.toString()}
+                                            selected={level === previewZoom}
+                                        >
+                                            {level}%
+                                        </sp-menu-item>
+                                    ))}
+                                </sp-menu>
+                            </sp-picker>
                         </div>
                     </div>
                     <div 

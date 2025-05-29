@@ -162,18 +162,20 @@
   }
   
   .setting-item input[type="range"] {
-      width: 130px;  /* 限制滑动条宽度 */
-      flex: 0 0 auto;  /* 防止滑动条被拉伸 */
-      margin-left: -3px;
+      width: 210px;  /* 从130px改为210px，使其更宽松 */
+      margin-left: 6px;  /* 从-3px改为6px，增加左边距 */
+      cursor: pointer;
+      display: flex;
+      justify-content: center;
   }
   
   .setting-item {
       display: flex;
       align-items: center;
       gap: 10px;
-      margin-bottom: 10px;
-      max-width: 100%;  /* 确保不会超出容器 */
-      overflow: hidden;  /* 防止内容溢出 */
+      margin-bottom: 10px;  /* 保持原有间距 */
+      max-width: 100%;
+      overflow: hidden;
   }
   
   .pattern-final-preview-container {
@@ -213,6 +215,7 @@
     align-items: center;
     width: 100%;
     justify-content: flex-start;
+    margin-bottom: 5px;
 }
 
 .pattern-checkbox-input {
@@ -229,7 +232,6 @@
 .preview-controls {
   display: flex;
   align-items: center;
-  gap: 10px;
   margin-left: auto;
 }
 
@@ -248,17 +250,14 @@
   border-color: var(--primary-color);
 }
 
-.subtitle {
+.pattern-subtitle {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  width: 100%;
-  padding: 8px;
-  background-color: var(--bg-color);
+  width: calc(100% - 20px);
 }
 
-.subtitle h3 {
-  margin: 0;
+.pattern-subtitle h3 {
   font-size: 14px;
   color: var(--text-color);
 }

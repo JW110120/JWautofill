@@ -643,78 +643,86 @@ class App extends React.Component<AppProps, AppState> {
             </div>
 
  {/* 新增选区选项区域 */}
- <div className="expand-section">
-                <div className="expand-header" onClick={this.toggleSelectionOptions}>
-                    <div className={`expand-icon ${this.state.isSelectionOptionsExpanded ? 'expanded' : ''}`}>
-                        <ExpandIcon expanded={this.state.isSelectionOptionsExpanded} />
-                    </div>
-                    <span>选区选项</span>
-                </div>
-                <div className={`expand-content ${this.state.isSelectionOptionsExpanded ? 'expanded' : ''}`}>
-                    <div className="slider-container">
-                        <label
-                            className={`slider-label ${
-                                this.state.isDragging && this.state.dragTarget === 'selectionSmooth' 
-                                ? 'dragging' 
-                                : 'not-dragging'
-                            }`}
-                            onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionSmooth')}
-                        >
-                            平滑
-                            <span className="slider-value">{this.state.selectionSmooth}</span>
-                        </label>
-                        <input
-                            type='range'
-                            min='0'
-                            max='100'
-                            step='1'
-                            value={this.state.selectionSmooth}
-                            onChange={this.handleSelectionSmoothChange}
-                            className="slider-input"
-                        />
-                        <label
-                            className={`slider-label ${
-                                this.state.isDragging && this.state.dragTarget === 'selectionContrast' 
-                                ? 'dragging' 
-                                : 'not-dragging'
-                            }`}
-                            onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionContrast')}
-                        >
-                            对比度
-                            <span className="slider-value">{this.state.selectionContrast}%</span>
-                        </label>
-                        <input
-                            type='range'
-                            min='0'
-                            max='100'
-                            step='1'
-                            value={this.state.selectionContrast}
-                            onChange={this.handleSelectionContrastChange}
-                            className="slider-input"
-                        />
-                        <label
-                            className={`slider-label ${
-                                this.state.isDragging && this.state.dragTarget === 'selectionShiftEdge' 
-                                ? 'dragging' 
-                                : 'not-dragging'
-                            }`}
-                            onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionShiftEdge')}
-                        >
-                            移动边缘
-                            <span className="slider-value">{this.state.selectionShiftEdge}%</span>
-                        </label>
-                        <input
-                            type='range'
-                            min='-100'
-                            max='100'
-                            step='1'
-                            value={this.state.selectionShiftEdge}
-                            onChange={this.handleSelectionShiftEdgeChange}
-                            className="slider-input"
-                        />
-                    </div>
-                </div>
-            </div>
+            <div className="expand-section">
+                            <div className="expand-header" onClick={this.toggleSelectionOptions}>
+                                <div className={`expand-icon ${this.state.isSelectionOptionsExpanded ? 'expanded' : ''}`}>
+                                    <ExpandIcon expanded={this.state.isSelectionOptionsExpanded} />
+                                </div>
+                                <span>选区选项</span>
+                            </div>
+                            <div className={`expand-content ${this.state.isSelectionOptionsExpanded ? 'expanded' : ''}`}>
+                                <div className="selection-slider-container">
+                                <div className="selection-slider-item">
+                                    <label
+                                        className={`selection-slider-label ${
+                                            this.state.isDragging && this.state.dragTarget === 'selectionSmooth' 
+                                            ? 'dragging' 
+                                            : 'not-dragging'
+                                        }`}
+                                        onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionSmooth')}
+                                    >
+                                        平滑
+                                    </label>
+                                    <input
+                                        type='range'
+                                        min='0'
+                                        max='100'
+                                        step='1'
+                                        value={this.state.selectionSmooth}
+                                        onChange={this.handleSelectionSmoothChange}
+                                        className="selection-slider-input"
+                                    />
+                                    <span className="selection-slider-value">{this.state.selectionSmooth}</span>
+                                    </div>
+                            
+                                    <div className="selection-slider-item">
+                                    <label
+                                        className={`selection-slider-label ${
+                                            this.state.isDragging && this.state.dragTarget === 'selectionContrast' 
+                                            ? 'dragging' 
+                                            : 'not-dragging'
+                                        }`}
+                                        onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionContrast')}
+                                    >
+                                        对比度
+                                    </label>
+                                    <input
+                                        type='range'
+                                        min='0'
+                                        max='100'
+                                        step='1'
+                                        value={this.state.selectionContrast}
+                                        onChange={this.handleSelectionContrastChange}
+                                        className="selection-slider-input"
+                                    />
+                                    <span className="selection-slider-value">{this.state.selectionContrast}%</span>
+                                    </div>
+
+                                    <div className="selection-slider-item">
+                                    <label
+                                        className={`selection-slider-label ${
+                                            this.state.isDragging && this.state.dragTarget === 'selectionShiftEdge' 
+                                            ? 'dragging' 
+                                            : 'not-dragging'
+                                        }`}
+                                        onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionShiftEdge')}
+                                    >
+                                        缩放
+                                    </label>
+                                    <input
+                                        type='range'
+                                        min='-100'
+                                        max='100'
+                                        step='1'
+                                        value={this.state.selectionShiftEdge}
+                                        onChange={this.handleSelectionShiftEdgeChange}
+                                        className="selection-slider-input"
+                                    />
+                                    <span className="selection-slider-value">{this.state.selectionShiftEdge}%</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
 
 
             <div className="expand-section">
@@ -843,6 +851,13 @@ class App extends React.Component<AppProps, AppState> {
                         {/* 底部选项 */}
                         <div className="bottom-options">
                             <div className="checkbox-container">
+                                 <label 
+                                    htmlFor="deselectCheckbox" 
+                                    className="checkbox-label"
+                                    onClick={this.toggleDeselectAfterFill} // 添加 onClick 事件处理程序
+                                >
+                                    取消选区:
+                                </label>
                                 <input
                                     type='checkbox'
                                     id="deselectCheckbox"
@@ -850,15 +865,16 @@ class App extends React.Component<AppProps, AppState> {
                                     onChange={this.toggleDeselectAfterFill}
                                     className="checkbox-input"
                                 />
-                                <label 
-                                    htmlFor="deselectCheckbox" 
-                                    className="checkbox-label"
-                                    onClick={this.toggleDeselectAfterFill} // 添加 onClick 事件处理程序
-                                >
-                                    填充后取消选区
-                                </label>
+                                
                             </div>
                             <div className="checkbox-container">
+                                <label 
+                                    htmlFor="historyCheckbox" 
+                                    className="checkbox-label"
+                                    onClick={this.toggleAutoUpdateHistory} // 添加 onClick 事件处理程序
+                                >
+                                    更新历史源:
+                                </label>
                                 <input
                                     type='checkbox'
                                     id="historyCheckbox"
@@ -866,13 +882,6 @@ class App extends React.Component<AppProps, AppState> {
                                     onChange={this.toggleAutoUpdateHistory}
                                     className="checkbox-input"
                                 />
-                                <label 
-                                    htmlFor="historyCheckbox" 
-                                    className="checkbox-label"
-                                    onClick={this.toggleAutoUpdateHistory} // 添加 onClick 事件处理程序
-                                >
-                                    自动更新历史源
-                                </label>
                             </div>
                         </div>
                     </div>

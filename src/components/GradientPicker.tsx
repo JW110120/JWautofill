@@ -600,12 +600,12 @@ const getPreviewGradientStyle = () => {
 
             {/* 渐变编辑区域 */}
             <div className="gradient-edit-area">
-                <div className="subtitle"><h3>颜色渐变</h3></div>
+                <div className="gradient-subtitle"><h3>颜色渐变</h3></div>
                 
                 {/* 不透明度控制 */}
                 {selectedStopIndex !== null && selectedStopType === 'opacity' && (
                     <div className="opacity-input">
-                        <label className="subtitle">不透明度：</label>
+                        <label className="gradient-subtitle">不透明度：</label>
                         <input
                             type="number"
                             min="0"
@@ -616,7 +616,7 @@ const getPreviewGradientStyle = () => {
                                 handleStopChange(selectedStopIndex, undefined, undefined, opacityValue);
                             }}
                         />
-                        <label className="subtitle">%</label>
+                        <label className="gradient-subtitle">%</label>
                         <sp-action-button 
                             quiet 
                             className="delete-button"
@@ -849,7 +849,7 @@ const getPreviewGradientStyle = () => {
                 {/* 颜色控制 */}
                 {selectedStopIndex !== null && selectedStopType === 'color' && (
                     <div className="color-input-container">
-                        <label className="subtitle">颜色：</label>
+                        <label className="gradient-subtitle">颜色：</label>
                         <span className="color-prefix">#</span>
                         <input
                             type="text"
@@ -972,7 +972,7 @@ const getPreviewGradientStyle = () => {
 
             {/* 最终预览区域 */}
             <div className="final-preview-container">
-                <div className="subtitle"><h3>最终预览</h3></div>
+                <div className="gradient-subtitle"><h3>最终预览</h3></div>
                 <div className="final-preview" style={{
                     background: getGradientStyle()
                 }} />

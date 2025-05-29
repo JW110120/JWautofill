@@ -118,7 +118,7 @@ export const initialState: AppState = {
             green: 0,
             blue: 0
     },
-    isSelectionOptionsExpanded: true,
+    isSelectionOptionsExpanded: false,
     selectionSmooth: 0,
     selectionContrast: 0,
     selectionShiftEdge: 0,

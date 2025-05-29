@@ -165,13 +165,9 @@ sp-picker[disabled] {
   background-color: var(--bg-color);
   border: 1px solid var(--border-color);
   border-radius: 3px;
-  padding: 15px 3px 12px 3px;
+  padding: 15px 3px 8px 3px;
   margin-top: 22px;
   z-index: 1;       /* 确保在混合模式容器下方 */
-}
-
-.slider-item {
-  margin-bottom: 10px;
 }
 
 .slider-label {
@@ -207,6 +203,7 @@ sp-picker[disabled] {
   justify-content: center;
 }
 
+
 .expand-section {
   background-color: var(--bg-color);
   min-height: 50px; /* 改为最小高度 */
@@ -215,7 +212,7 @@ sp-picker[disabled] {
 }
 
 .expand-section.expanded{
-  height: 400px;
+  max-height: 400px;
   z-index: 1;
 }
 
@@ -263,43 +260,47 @@ sp-picker[disabled] {
   fill: var(--text-color);
 }
 
-.checkbox-container {
+.selection-slider-container {
+  width: ca1calc(100% - 20px);
+  flex-direction: column;
+  padding: 0 10px ; 
+  border-bottom: 1px solid var(--border-color);
+}
+
+.selection-slider-item {
+  width: 100%;
+  margin-bottom: 5px;
   display: flex;
-  border-bottom: 1px solid var(--border-color);  /* 添加分隔线 */
+  flex-direction: row;
+  justify-content: space-between;
+}
+
+.selection-slider-label {
+  font-size: 13px; 
+  color: var(--text-color);
+  display: flex;
   align-items: center;
 }
 
-/* 复选框样式 */
-/* 排除在pattern-checkbox-container或reverse-checkbox-container内部的checkbox */
-:not(.pattern-checkbox-container):not(.reverse-checkbox-container) > input[type="checkbox"] {
-  margin-left: 45px;
-}
-
-:not(.pattern-checkbox-container):not(.reverse-checkbox-container) > input[type="checkbox"] + label {
-  margin-left: 0px;
-}
-
-.checkbox-input {
-  margin-right: 0px;
-  cursor: pointer;
-}
-
-.checkbox-input:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.checkbox-label {
-  font-size: 13px;
+.selection-slider-value {
+  font-size: 12px;  /* 从13px改为12px */
+  right: 0px;
   color: var(--text-color);
-  cursor: pointer;
 }
 
-/* 添加禁用状态的标签样式 */
-.checkbox-label.disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  color: var(--disabled-color);
+.selection-slider-input {
+  width: 130px; 
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
+}
+
+.selection-slider-label.dragging {
+  cursor: grabbing;
+}
+
+.selection-slider-label.not-dragging {
+  cursor: ew-resize;
 }
 
 /* 开关容器样式 */
@@ -414,13 +415,6 @@ sp-radio {
   background-color: var(--button-down);
 }
 
-/* 底部选项样式 */
-.bottom-options {
-  padding: 10px 15px;
-  border-top: 1px solid var(--border-color);
-  margin-top: auto;
-}
-
 .info-plane {
   width: 250px;
   height: 20px;
@@ -463,4 +457,43 @@ button {
 
 button:hover {
   background-color: var(--hover-bg);
+}
+
+/* 底部选项样式 */
+.bottom-options {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 10px;
+  border-top: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  flex-direction: row;
+}
+
+.checkbox-container {
+  margin-left : 3px;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.checkbox-input {
+  cursor: pointer;
+}
+
+.checkbox-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.checkbox-label {
+  font-size: 13px;
+  color: var(--text-color);
+  cursor: pointer;
+}
+
+/* 添加禁用状态的标签样式 */
+.checkbox-label.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  color: var(--disabled-color);
 }

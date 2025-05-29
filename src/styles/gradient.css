@@ -15,12 +15,17 @@
     flex-direction: column;
 }
 
-.subtitle {
+.gradient-subtitle {
   color: var(--text-color);
   min-width: 40px;
   font-size: 12px;
 }
 
+.gradient-subtitle h3 {
+  margin: 5px;
+  font-size: 14px;
+  color: var(--text-color);
+}
 
 .delete-button {
   cursor: pointer;
@@ -277,7 +282,7 @@ sp-color-slider {
     flex-direction: column;
     margin-bottom: 10px;
 } 
-
+/* 渐变角度滑块样式 */
 .gradient-setting-item {
     margin: 15px 0;
     display: flex;
