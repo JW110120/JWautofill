@@ -162,6 +162,24 @@ export class GradientFill {
                 await action.batchPlay([mergeLayers], {});
             }
 
+            // 选中上一个选区
+            await action.batchPlay([{
+                _obj: "set",
+                _target: [
+                    {
+                        _ref: "channel",
+                        _property: "selection"
+                    }
+                ],
+                to: {
+                    _enum: "ordinal",
+                    _value: "previous"
+                },
+                _options: {
+                    dialogOptions: "dontDisplay"
+                }
+            }], { synchronousExecution: true });
+
             console.log("✅ 渐变填充完成");
         } catch (error) {
             console.error("❌ 渐变填充失败:", error);

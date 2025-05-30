@@ -24,6 +24,8 @@ const { executeAsModal } = core;
 const { batchPlay } = action;
 
 class App extends React.Component<AppProps, AppState> {
+    private isListenerPaused = false;
+
     constructor(props: AppProps) {
         super(props);
         this.state = initialState;
@@ -243,7 +245,7 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     async handleSelectionChange() {
-        if (!this.state.isEnabled) return;
+        if (!this.state.isEnabled || this.isListenerPaused) return;
 
         try {
             const doc = app.activeDocument;
@@ -257,6 +259,9 @@ class App extends React.Component<AppProps, AppState> {
                 console.warn('⚠️ 选区为空，跳过填充');
                 return;
             }
+
+            // 暂停监听
+            this.isListenerPaused = true;
 
             await core.executeAsModal(async () => {
                 if (this.state.autoUpdateHistory) { await this.setHistoryBrushSource(); }
@@ -275,7 +280,14 @@ class App extends React.Component<AppProps, AppState> {
                     await this.deselectSelection();
                 }
             }, { commandName: '更新历史源&羽化选区&处理选区' });
-        } catch (error) {console.error('❌ 处理失败:', error);}
+
+            // 恢复监听
+            this.isListenerPaused = false;
+        } catch (error) {
+            console.error('❌ 处理失败:', error);
+            // 确保在错误情况下也恢复监听
+            this.isListenerPaused = false;
+        }
     }
 
     async getSelection() {

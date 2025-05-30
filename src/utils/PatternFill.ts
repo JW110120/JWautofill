@@ -151,6 +151,26 @@ export class PatternFill {
             } else {
                 await action.batchPlay([mergeLayers], {});
             }
+
+            // 选中上一个选区
+            await action.batchPlay([{
+                _obj: "set",
+                _target: [
+                    {
+                        _ref: "channel",
+                        _property: "selection"
+                    }
+                ],
+                to: {
+                    _enum: "ordinal",
+                    _value: "previous"
+                },
+                _options: {
+                    dialogOptions: "dontDisplay"
+                }
+            }], { synchronousExecution: true });
+
+            console.log("✅ 图案填充完成");
         } catch (error) {
             console.error("❌ 执行图案填充时发生错误:", error);
         }
