@@ -150,6 +150,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
             selects="single"
             selected={blendMode}
             onChange={(e) => onBlendModeChange(e.target.value as BlendMode)}
+            style={{ minWidth: '120px', width: '120px' }}
           >
             <sp-menu>
               {BLEND_MODE_OPTIONS.map((group, groupIndex) => (

@@ -979,6 +979,7 @@ class App extends React.Component<AppProps, AppState> {
                         </div>
                     </div>
                 </div>
+                
             <div className="info-plane">
             <span className="copyright">Copyright © listen2me (JW)</span>
         </div>

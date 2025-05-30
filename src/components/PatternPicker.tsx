@@ -627,7 +627,7 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                                 selects="single"
                                 selected={previewZoom.toString()}
                                 onChange={(e: any) => {
-                                    const newZoom = Number(e.target.value);
+                                    const newZoom = Number(e.target.value || e.target.selected);
                                     setPreviewZoom(newZoom);
                                     setPreviewOffset({x: 0, y: 0});
                                 }}

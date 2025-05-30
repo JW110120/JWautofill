@@ -182,7 +182,7 @@
 }
 
 .gradient-preview {
-    height: 20px;
+    height: 24px;
     width: calc(100% - 20px);  /* 减去左右margin的总和 */
     margin: 10px 10px;
     border: 1px solid var(--border-color);
@@ -275,7 +275,7 @@ sp-color-slider {
     border: 1px solid var(--border-color);
     border-radius: 4px;
     padding: 10px;
-    height: 15%;
+    height: 18%;
     min-height: 80px; 
     overflow-y: auto;
     display: flex;
@@ -305,8 +305,8 @@ sp-color-slider {
 
 .gradient-setting-item input[type="range"] {
     margin-top: 15px;
-    margin: 0 -5px;
-    width:130px;
+    margin: 0 -7px;
+    width:120px;
     flex: 1;
 }
 

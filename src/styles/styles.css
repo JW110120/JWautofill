@@ -168,7 +168,7 @@ sp-picker[disabled] {
   border-radius: 3px;
   padding: 10px 12px 8px 3px;
   margin-top: 22px;
-  margin-bottom: 10px;
+  margin-bottom: 5px;
   z-index: 1;       /* 确保在混合模式容器下方 */
 }
 
@@ -208,8 +208,9 @@ sp-picker[disabled] {
 
 
 .expand-section {
-  background-color: var(--bg-color);
-  min-height: 50px; /* 改为最小高度 */
+  border-bottom: 1px solid var(--border-color);
+  background-color:  var(--bg-color);
+  min-height: 0; 
   padding: 0;
   z-index: 1;
 }
@@ -224,7 +225,7 @@ sp-picker[disabled] {
   align-items: center;
   cursor: pointer;
   font-size: 13px;
-  padding: 5px 0;
+  padding: 10px 0;
   color: var(--text-color);
   background-color: var(--bg-color);
   transition: background-color 0.3s;
@@ -267,8 +268,6 @@ sp-picker[disabled] {
   width: ca1calc(100% - 20px);
   flex-direction: column;
   padding: 8px 10px 5px 10px; 
-  border-bottom: 1px solid var(--border-color);
-  margin-bottom: 10px;
 
 }
 
@@ -472,7 +471,6 @@ button:hover {
   justify-content: space-between;
   padding: 10px 10px;
   border-top: 1px solid var(--border-color);
-  border-bottom: 1px solid var(--border-color);
   flex-direction: row;
 }
 

@@ -12,6 +12,7 @@ interface GradientPickerProps {
     onSelect: (gradient: Gradient) => void;
 }
 
+
 // 扩展GradientStop类型以支持独立的颜色和透明度位置
 interface ExtendedGradientStop extends GradientStop {
     colorPosition: number;    // 颜色stop的位置
@@ -128,7 +129,7 @@ const getPreviewGradientStyle = () => {
     return `linear-gradient(to right, ${gradientStops.join(', ')})`;
 };
 
-    // 颜色插值函数
+    // 颜色插值函数 - 支持中点
     const interpolateColor = (position: number, type: 'color' | 'opacity') => {
         const relevantStops = type === 'color' 
             ? [...stops].sort((a, b) => a.colorPosition - b.colorPosition)
@@ -139,11 +140,13 @@ const getPreviewGradientStyle = () => {
         // 找到位置两侧的stop
         let leftStop = relevantStops[0];
         let rightStop = relevantStops[relevantStops.length - 1];
+        let leftStopIndex = 0;
         
         for (let i = 0; i < relevantStops.length - 1; i++) {
             if (relevantStops[i][pos] <= position && relevantStops[i + 1][pos] >= position) {
                 leftStop = relevantStops[i];
                 rightStop = relevantStops[i + 1];
+                leftStopIndex = i;
                 break;
             }
         }
@@ -152,8 +155,18 @@ const getPreviewGradientStyle = () => {
             return leftStop.color;
         }
         
-        // 计算插值比例
-        const ratio = (position - leftStop[pos]) / (rightStop[pos] - leftStop[pos]);
+        // 计算基础插值比例
+        let ratio = (position - leftStop[pos]) / (rightStop[pos] - leftStop[pos]);
+        
+        // 应用中点调整
+        const midpoint = (leftStop.midpoint || 50) / 100;
+        if (ratio <= midpoint) {
+            // 在中点左侧，压缩到前半段
+            ratio = (ratio / midpoint) * 0.5;
+        } else {
+            // 在中点右侧，映射到后半段
+            ratio = 0.5 + ((ratio - midpoint) / (1 - midpoint)) * 0.5;
+        }
         
         // 插值颜色
         const leftRgba = leftStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
@@ -169,7 +182,7 @@ const getPreviewGradientStyle = () => {
         return leftStop.color;
     };
 
-    // 透明度插值函数
+    // 透明度插值函数 - 支持中点
     const interpolateOpacity = (position: number) => {
         const opacityStops = [...stops].sort((a, b) => a.opacityPosition - b.opacityPosition);
         
@@ -190,8 +203,16 @@ const getPreviewGradientStyle = () => {
             return rgbaMatch ? parseFloat(rgbaMatch[4]) : 1;
         }
         
-        // 计算插值比例
-        const ratio = (position - leftStop.opacityPosition) / (rightStop.opacityPosition - leftStop.opacityPosition);
+        // 计算基础插值比例
+        let ratio = (position - leftStop.opacityPosition) / (rightStop.opacityPosition - leftStop.opacityPosition);
+        
+        // 应用中点调整
+        const midpoint = (leftStop.midpoint || 50) / 100;
+        if (ratio <= midpoint) {
+            ratio = (ratio / midpoint) * 0.5;
+        } else {
+            ratio = 0.5 + ((ratio - midpoint) / (1 - midpoint)) * 0.5;
+        }
         
         // 插值透明度
         const leftRgba = leftStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
@@ -207,34 +228,30 @@ const getPreviewGradientStyle = () => {
     };
 
     const getGradientStyle = () => {
-        // 构建带中点的渐变字符串，使用colorPosition和opacityPosition
-        const sortedStops = [...stops].sort((a, b) => a.colorPosition - b.colorPosition);
-        let gradientStops: string[] = [];
+        // 创建一个综合的渐变，同时考虑颜色位置和透明度位置
+        const allPositions = new Set<number>();
         
-        for (let i = 0; i < sortedStops.length; i++) {
-            const currentStop = sortedStops[i];
-            gradientStops.push(`${currentStop.color} ${currentStop.colorPosition}%`);
+        // 收集所有位置点
+        stops.forEach(stop => {
+            allPositions.add(stop.colorPosition);
+            allPositions.add(stop.opacityPosition);
+        });
+        
+        const sortedPositions = Array.from(allPositions).sort((a, b) => a - b);
+        
+        const gradientStops = sortedPositions.map(position => {
+            // 在当前位置插值颜色
+            const colorAtPosition = interpolateColor(position, 'color');
+            // 在当前位置插值透明度
+            const opacityAtPosition = interpolateOpacity(position);
             
-            // 如果有下一个stop且当前stop有中点设置，添加中点
-            if (i < sortedStops.length - 1 && currentStop.midpoint !== undefined && currentStop.midpoint !== 50) {
-                const nextStop = sortedStops[i + 1];
-                const midpointPosition = currentStop.colorPosition + (nextStop.colorPosition - currentStop.colorPosition) * (currentStop.midpoint / 100);
-                
-                // 在中点位置插入颜色过渡
-                const progress = currentStop.midpoint / 100;
-                const currentRgba = currentStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
-                const nextRgba = nextStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
-                
-                if (currentRgba && nextRgba) {
-                    const r = Math.round(parseInt(currentRgba[1]) * (1 - progress) + parseInt(nextRgba[1]) * progress);
-                    const g = Math.round(parseInt(currentRgba[2]) * (1 - progress) + parseInt(nextRgba[2]) * progress);
-                    const b = Math.round(parseInt(currentRgba[3]) * (1 - progress) + parseInt(nextRgba[3]) * progress);
-                    const a = parseFloat(currentRgba[4]) * (1 - progress) + parseFloat(nextRgba[4]) * progress;
-                    
-                    gradientStops.push(`rgba(${r}, ${g}, ${b}, ${a}) ${midpointPosition}%`);
-                }
+            const rgbaMatch = colorAtPosition.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+            if (rgbaMatch) {
+                const [_, r, g, b] = rgbaMatch;
+                return `rgba(${r}, ${g}, ${b}, ${opacityAtPosition}) ${position}%`;
             }
-        }
+            return `rgba(0, 0, 0, ${opacityAtPosition}) ${position}%`;
+        });
         
         const displayStops = reverse
             ? gradientStops.map(stop => {
@@ -389,6 +406,7 @@ const getPreviewGradientStyle = () => {
         
         const handleMouseMove = (moveEvent: MouseEvent) => {
             moveEvent.preventDefault();
+            // 修复选择器
             const trackElement = document.querySelector('.color-slider-track') as HTMLElement;
             if (!trackElement) return;
             
@@ -423,6 +441,7 @@ const getPreviewGradientStyle = () => {
         
         const handleMouseMove = (moveEvent: MouseEvent) => {
             moveEvent.preventDefault();
+            // 修复选择器 - 透明度拖拽应该使用gradient-slider-track
             const trackElement = document.querySelector('.gradient-slider-track') as HTMLElement;
             if (!trackElement) return;
             
@@ -582,6 +601,37 @@ const getPreviewGradientStyle = () => {
     };
 
     if (!isOpen) return null;
+
+    // 添加渲染棋盘格的函数
+    const renderCheckerboard = (containerWidth: number, containerHeight: number) => {
+        const tileSize = 8; // 固定8x8像素的方块
+        const tilesPerRow = Math.ceil(containerWidth / tileSize);
+        const rows = Math.ceil(containerHeight / tileSize);
+        const tiles = [];
+        
+        for (let row = 0; row < rows; row++) {
+            for (let col = 0; col < tilesPerRow; col++) {
+                const isLight = (row + col) % 2 === 0;
+                tiles.push(
+                    <div
+                        key={`${row}-${col}`}
+                        style={{
+                            position: 'absolute',
+                            left: col * tileSize,
+                            top: row * tileSize,
+                            width: tileSize,
+                            height: tileSize,
+                            backgroundColor: isLight ? '#ffffff' : '#cccccc',
+                            // 确保无缝拼接
+                            boxSizing: 'border-box'
+                        }}
+                    />
+                );
+            }
+        }
+        return tiles;
+    };
+
 
     return (
         <div className="gradient-picker">
@@ -781,18 +831,12 @@ const getPreviewGradientStyle = () => {
                             left: 0,
                             width: '100%',
                             height: '100%',
-                            backgroundImage: `
-                              repeating-conic-gradient(
-                                from 0deg at 50% 50%,
-                                #fff 0deg 90deg,
-                                #ccc 90deg 180deg,
-                                #fff 180deg 270deg,
-                                #ccc 270deg 360deg
-                              )`,
-                            backgroundSize: '12px 12px',
+                            overflow: 'hidden', // 裁切超出部分
                             zIndex: 1
                         }}
-                    />
+                    >
+                        {renderCheckerboard(220, 24)}
+                    </div>
                     <div 
                         style={{
                             position: 'absolute',
@@ -1035,23 +1079,19 @@ const getPreviewGradientStyle = () => {
                 <div className="gradient-subtitle"><h3>最终预览</h3></div>
                 <div className="final-preview">
                     {/* 棋盘格背景 */}
-                    <div style={{
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        width: '100%',
-                        height: '100%',
-                        backgroundImage: `
-                            repeating-conic-gradient(
-                              from 0deg at 50% 50%,
-                              #fff 0deg 90deg,
-                              #ccc 90deg 180deg,
-                              #fff 180deg 270deg,
-                              #ccc 270deg 360deg
-                            )
-                        `,
-                        backgroundSize: '16px 16px'
-                    }} />
+                    <div className="opacity-checkerboard" 
+                        style={{
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            width: '100%',
+                            height: '100%',
+                            overflow: 'hidden', // 裁切超出部分
+                            zIndex: 1
+                        }}
+                    >
+                        {renderCheckerboard(220, 150)}
+                    </div>
                     {/* 渐变覆盖层 */}
                     <div style={{
                         position: 'absolute',
@@ -1059,8 +1099,34 @@ const getPreviewGradientStyle = () => {
                         left: 0,
                         width: '100%',
                         height: '100%',
-                        background: getGradientStyle()
+                        background: getGradientStyle(),
+                        zIndex: 2
                     }} />
+                    {/* 当渐变完全透明时显示提示 */}
+                    {(() => {
+                        const hasVisibleOpacity = stops.some(stop => {
+                            const rgbaMatch = stop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
+                            return rgbaMatch && parseFloat(rgbaMatch[4]) > 0;
+                        });
+                        
+                        if (!hasVisibleOpacity) {
+                            return (
+                                <div style={{
+                                    position: 'absolute',
+                                    top: '50%',
+                                    left: '50%',
+                                    transform: 'translate(-50%, -50%)',
+                                    color: '#666',
+                                    fontSize: '12px',
+                                    zIndex: 3,
+                                    pointerEvents: 'none'
+                                }}>
+                                    渐变完全透明
+                                </div>
+                            );
+                        }
+                        return null;
+                    })()} 
                 </div>
             </div>
 
