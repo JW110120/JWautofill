@@ -70,7 +70,22 @@ export async function strokeSelection(state: AppState) {
             );
         }
 
-        // 3. 根据相应参数描边，此时不透明度和混合模式是100%和正常
+
+        // 3. 记录前景色
+        let savedForegroundColor;
+        await executeAsModal(async () => {
+            const foregroundColor = app.foregroundColor;
+            savedForegroundColor = {
+                hue: {
+                    _unit: "angleUnit",
+                    _value: foregroundColor.hsb.hue
+                },
+                saturation: foregroundColor.hsb.saturation,
+                brightness: foregroundColor.hsb.brightness
+            };
+        });
+
+        // 4. 描边
         await batchPlay(
             [{
                 _obj: "stroke",
@@ -103,7 +118,7 @@ export async function strokeSelection(state: AppState) {
             { synchronousExecution: true }
         );
 
-        // 4. 根据用户描边面板的不透明度和混合模式修改描边图层不透明度和混合模式
+        // 5. 根据用户描边面板的不透明度和混合模式修改描边图层不透明度和混合模式
         await batchPlay(
             [{
                 _obj: "set",
@@ -132,7 +147,7 @@ export async function strokeSelection(state: AppState) {
             { synchronousExecution: true }
         );
         
-        // 5. 向下合并图层
+        // 6. 向下合并图层
         await batchPlay(
             [{
                 _obj: "mergeLayersNew",
@@ -142,6 +157,30 @@ export async function strokeSelection(state: AppState) {
             }],
             { synchronousExecution: true }
         );
+
+             // 7. 恢复前景色
+             if (savedForegroundColor) {
+                await batchPlay(
+                    [{
+                        _obj: "set",
+                        _target: [{
+                            _ref: "color",
+                            _property: "foregroundColor"
+                        }],
+                        to: {
+                            _obj: "HSBColorClass",
+                            hue: savedForegroundColor.hue,
+                            saturation: savedForegroundColor.saturation,
+                            brightness: savedForegroundColor.brightness
+                        },
+                        source: "photoshopPicker",
+                        _options: {
+                            dialogOptions: "dontDisplay"
+                        }
+                    }],
+                    { synchronousExecution: true }
+                );
+            }
 
         console.log("✅ 描边完成");
     } catch (error) {

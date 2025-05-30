@@ -2,6 +2,7 @@
 @import './gradient.css';
 @import './pattern.css';
 @import './stroke.css';
+@import './input-fix.css';
 @font-face {
   font-family: 'SourceHanSansCN-Normal';
   src: url('../assets/SourceHanSansCN-Normal.otf') format('opentype');
@@ -165,8 +166,9 @@ sp-picker[disabled] {
   background-color: var(--bg-color);
   border: 1px solid var(--border-color);
   border-radius: 3px;
-  padding: 15px 3px 8px 3px;
+  padding: 10px 12px 8px 3px;
   margin-top: 22px;
+  margin-bottom: 10px;
   z-index: 1;       /* 确保在混合模式容器下方 */
 }
 
@@ -174,7 +176,6 @@ sp-picker[disabled] {
   font-size: 13px;
   padding-top: 10px;
   color: var(--text-color);
-  margin-bottom: -15px;
   padding-left: 10px;
   display: flex;
   justify-content: space-between;
@@ -183,6 +184,7 @@ sp-picker[disabled] {
 
 .slider-value {
   margin-right: 10px;
+
   font-size: 13px;
   color: var(--text-color);
 }
@@ -197,6 +199,7 @@ sp-picker[disabled] {
 
 .slider-input {
   width: 210px;
+  margin-top: -5px;
   margin-left: 6px;
   cursor: pointer;
   display: flex;
@@ -279,6 +282,7 @@ sp-picker[disabled] {
 
 .selection-slider-label {
   font-size: 13px; 
+  margin-right: -5px;
   color: var(--text-color);
   display: flex;
   align-items: center;
@@ -291,7 +295,8 @@ sp-picker[disabled] {
 }
 
 .selection-slider-input {
-  width: 130px; 
+  width: 150px; 
+  margin-top: 15px;
   cursor: pointer;
   display: flex;
   justify-content: center;

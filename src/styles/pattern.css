@@ -181,9 +181,10 @@
   }
   
   .pattern-setting-item input[type="range"] {
-      width: 210px;  
+      width: 220px;  
       margin-left: 6px; 
       cursor: pointer;
+      margin-top: -5px;
       display: flex;
   }
   

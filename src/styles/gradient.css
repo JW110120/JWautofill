@@ -305,6 +305,7 @@ sp-color-slider {
 
 .gradient-setting-item input[type="range"] {
     margin-top: 15px;
+    margin: 0 -5px;
     width:130px;
     flex: 1;
 }

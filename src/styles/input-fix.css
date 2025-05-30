@@ -1,0 +1,50 @@
+/* 修复input number字段的z-index问题 */
+
+/* 主面板中的input number字段应该有较低的z-index */
+input[type="number"] {
+    position: relative;
+    z-index: 1 !important;
+}
+
+/* 当次级面板打开时，主面板的input应该被遮盖 */
+.pattern-picker,
+.color-settings-panel,
+.gradient-picker,
+.stroke-setting {
+    z-index: 9999 !important;
+}
+
+/* 当任何次级面板打开时 (通过 body.secondary-panel-open 类名控制)，隐藏主面板中 .slider-container 内的 input number 字段 */
+body.secondary-panel-open .slider-container input[type="number"] {
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+
+/* 保留次级面板内input始终可见的规则，确保其特异性或顺序能覆盖上述规则 */
+/* (确保 .pattern-picker input[type="number"], 等规则仍然有效) */
+
+/* 确保次级面板内的input始终可见 */
+.pattern-picker input[type="number"],
+.color-settings-panel input[type="number"],
+.gradient-picker input[type="number"],
+.stroke-setting input[type="number"] {
+    visibility: visible !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+}
+
+/* 确保折叠状态下的input不显示 */
+.expand-content:not(.expanded) input[type="number"] {
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* 展开状态下的input正常显示 */
+.expand-content.expanded input[type="number"] {
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+    transition: opacity 0.3s ease;
+}

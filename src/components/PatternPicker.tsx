@@ -18,6 +18,12 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
     const [selectedPattern, setSelectedPattern] = useState<string | null>(null);
     const [angle, setAngle] = useState<number>(0);
     const [scale, setScale] = useState<number>(100);
+    
+    // 拖动状态
+    const [isDragging, setIsDragging] = useState(false);
+    const [dragTarget, setDragTarget] = useState<'angle' | 'scale' | null>(null);
+    const [dragStartX, setDragStartX] = useState(0);
+    const [dragStartValue, setDragStartValue] = useState(0);
     const [loadedImages, setLoadedImages] = useState<Record<string, boolean>>({});
     // 新增预览相关状态
     const [previewZoom, setPreviewZoom] = useState<number>(100); // 预览缩放级别
@@ -248,6 +254,49 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
         const newScale = Number(e.target.value);
         setScale(newScale);
     };
+    
+    // 拖动事件处理
+    const handleMouseDown = (event: React.MouseEvent, target: 'angle' | 'scale') => {
+        setIsDragging(true);
+        setDragTarget(target);
+        setDragStartX(event.clientX);
+        setDragStartValue(target === 'angle' ? angle : scale);
+        event.preventDefault();
+    };
+    
+    const handleMouseMove = (event: MouseEvent) => {
+        if (!isDragging || !dragTarget) return;
+        
+        const deltaX = event.clientX - dragStartX;
+        const sensitivity = 10;
+        
+        let newValue = dragStartValue + deltaX * (sensitivity / 10);
+        newValue = Math.round(newValue);
+        
+        if (dragTarget === 'angle') {
+            newValue = Math.min(360, Math.max(0, newValue));
+            setAngle(newValue);
+        } else if (dragTarget === 'scale') {
+            newValue = Math.min(300, Math.max(20, newValue));
+            setScale(newValue);
+        }
+    };
+    
+    const handleMouseUp = () => {
+        setIsDragging(false);
+        setDragTarget(null);
+    };
+    
+    useEffect(() => {
+        if (isDragging) {
+            document.addEventListener('mousemove', handleMouseMove);
+            document.addEventListener('mouseup', handleMouseUp);
+            return () => {
+                document.removeEventListener('mousemove', handleMouseMove);
+                document.removeEventListener('mouseup', handleMouseUp);
+            };
+        }
+    }, [isDragging, dragTarget, dragStartX, dragStartValue, angle, scale]);
 
     useEffect(() => {
         if (patterns.length > 0) {
@@ -270,9 +319,7 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
         }
     }, [patterns]);
 
-    if (!isOpen) return null;
-
-    async function createPatternFromImage() {
+    const createPatternFromImage = async () => {
         // 生成唯一的文档名称
         const docName = `Pattern_${Date.now()}`;
         const patternName = `Pattern_${Date.now()}`;
@@ -401,9 +448,9 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
             console.error('创建图案失败:', error);
             return null;
         }
-    }
+    };
 
-
+    if (!isOpen) return null;
 
     return (
         <div className="pattern-picker">
@@ -505,33 +552,52 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
             <div className="pattern-settings-area">
                 <div className="pattern-setting-item-group">
                     <div className="pattern-setting-item">
-                        <label>角度：
-                        <span className="value">{angle}°</span>
-                        </label>
-                       
-                    <input
-                        type="range"
-                        min="0"
-                        max="360"
-                        step="1"
-                        value={angle}
-                        onChange={handleAngleChange}
-                    />
+                        <label onMouseDown={(e) => handleMouseDown(e, 'angle')} style={{ cursor: isDragging && dragTarget === 'angle' ? 'ew-resize' : 'ew-resize' }}>角度：
+                            <div style={{ display: 'flex', alignItems: 'center'}}>
+                            <input
+                                type="number"
+                                min="0"
+                                max="360"
+                                value={angle}
+                                onChange={(e) => setAngle(Number(e.target.value))}
+                                style={{ width: '30px', textAlign: 'center' }}
+                            />
+                              <span style={{ marginLeft:'-3px', fontSize: '13px' }}>°</span>
+                        </div></label>
+                        <input
+                            type="range"
+                            min="0"
+                            max="360"
+                            step="1"
+                            value={angle}
+                            onChange={handleAngleChange}
+                        />
+                   
                     </div>
 
                     <div className="pattern-setting-item">
-                        <label>缩放：
-                        <span className="value">{scale}%</span>
-                        </label> 
-                    
-                    <input
-                        type="range"
-                        min="20"
-                        max="300"
-                        step="1"
-                        value={scale}
-                        onChange={handleScaleChange}
-                    />    
+                        <label onMouseDown={(e) => handleMouseDown(e, 'scale')} style={{ cursor: isDragging && dragTarget === 'scale' ? 'ew-resize' : 'ew-resize' }}>缩放：
+                            <div style={{ display: 'flex', alignItems: 'center' }}>
+                                <input
+                                    type="number"
+                                    min="20"
+                                    max="300"
+                                    value={scale}
+                                    onChange={(e) => setScale(Number(e.target.value))}
+                                    style={{ width: '30px', textAlign: 'center' }}
+                                />
+                                <span style={{ marginLeft:'-3px', fontSize: '13px' }}>%</span>
+                            </div>
+                        </label>
+                        <input
+                            type="range"
+                            min="20"
+                            max="300"
+                            step="1"
+                            value={scale}
+                            onChange={handleScaleChange}
+                        />
+                       
                     </div>
                 </div>
                 <div className="pattern-checkbox-container">
@@ -600,7 +666,7 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                                 position: 'absolute',
                                 top: '50%',
                                 left: '50%',
-                                transform: `translate(-50%, -50%) translate(${previewOffset.x}px, ${previewOffset.y}px) rotate(${angle}deg) scale(${(scale * previewZoom) / 10000})`,
+                                transform: `translate(-50%, -50%) translate(${previewOffset.x}px, ${previewOffset.y}px) rotate(${angle}deg) scale(${(scale / 100) * (previewZoom / 100)})`,
                                 transformOrigin: 'center center',
                                 transition: isDragging ? 'none' : 'transform 0.1s ease',
                                 willChange: 'transform',

@@ -42,8 +42,10 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const [isDraggingColor, setIsDraggingColor] = useState(false);
     const [isDraggingOpacity, setIsDraggingOpacity] = useState(false);
     const [isDraggingMidpoint, setIsDraggingMidpoint] = useState(false);
+    const [isDraggingAngle, setIsDraggingAngle] = useState(false);
     const [dragStartX, setDragStartX] = useState(0);
     const [dragStartPosition, setDragStartPosition] = useState(0);
+    const [dragStartAngle, setDragStartAngle] = useState(0);
     const [dragStopIndex, setDragStopIndex] = useState<number | null>(null);
 
     const handleAddPreset = () => {
@@ -54,7 +56,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             stops: stops.map(({ midpoint, colorPosition, opacityPosition, ...stop }) => stop)
         };
         const newPresets = [...presets, newPreset];
-        setPresets(newPresets);
+        setPresets(newPresets); 
         setSelectedPreset(newPresets.length - 1);
     };
 
@@ -510,6 +512,36 @@ const getPreviewGradientStyle = () => {
         document.addEventListener('mouseup', handleMouseUp);
     };
 
+    // 角度拖拽处理
+    const handleAngleMouseDown = (e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDraggingAngle(true);
+        setDragStartX(e.clientX);
+        setDragStartAngle(angle);
+        
+        const handleMouseMove = (moveEvent: MouseEvent) => {
+            moveEvent.preventDefault();
+            const deltaX = moveEvent.clientX - dragStartX;
+            const sensitivity = 10;
+            
+            let newAngle = dragStartAngle + deltaX * (sensitivity / 10);
+            newAngle = Math.round(newAngle);
+            newAngle = Math.min(360, Math.max(0, newAngle));
+            
+            setAngle(newAngle);
+        };
+        
+        const handleMouseUp = () => {
+            setIsDraggingAngle(false);
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+        };
+        
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+    };
+
     const getRGBColor = (rgbaColor: string): string => {
         const rgbaValues = rgbaColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
         if (rgbaValues) {
@@ -574,7 +606,7 @@ const getPreviewGradientStyle = () => {
                         
                         const presetGradientStyle = preset.type === 'radial' 
                             ? `radial-gradient(circle, ${presetGradientStops})`
-                            : `linear-gradient(${preset.angle || 0}deg, ${presetGradientStops})`;
+                            : `linear-gradient(${90+preset.angle || 0}deg, ${presetGradientStops})`;
                         
                         return (
                             <div 
@@ -750,12 +782,14 @@ const getPreviewGradientStyle = () => {
                             width: '100%',
                             height: '100%',
                             backgroundImage: `
-                              linear-gradient(45deg, #ccc 25%, transparent 25%),
-                              linear-gradient(-45deg, #ccc 25%, transparent 25%),
-                              linear-gradient(45deg, transparent 75%, #ccc 75%),
-                              linear-gradient(-45deg, transparent 75%, #ccc 75%)`,
-                            backgroundSize: '10px 10px',
-                            backgroundPosition: '0 0, 0 5px, 5px -5px, -5px 0px',
+                              repeating-conic-gradient(
+                                from 0deg at 50% 50%,
+                                #fff 0deg 90deg,
+                                #ccc 90deg 180deg,
+                                #fff 180deg 270deg,
+                                #ccc 270deg 360deg
+                              )`,
+                            backgroundSize: '12px 12px',
                             zIndex: 1
                         }}
                     />
@@ -944,7 +978,7 @@ const getPreviewGradientStyle = () => {
 
                 {gradientType === 'linear' && (
                     <div className="gradient-setting-item">
-                        <label>角度：</label>
+                        <label onMouseDown={handleAngleMouseDown} style={{ cursor: isDraggingAngle ? 'ew-resize' : 'ew-resize' }}>角度：</label>
                         <input
                             type="range"
                             min="0"
@@ -953,7 +987,17 @@ const getPreviewGradientStyle = () => {
                             value={angle}
                             onChange={(e) => setAngle(Number(e.target.value))}
                         />
-                        <span className="value">{angle}°</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                            <input
+                                type="number"
+                                min="0"
+                                max="360"
+                                value={angle}
+                                onChange={(e) => setAngle(Number(e.target.value))}
+                                style={{ width: '30px', textAlign: 'center' }}
+                            />
+                          <span style={{ marginLeft:'-3px', fontSize: '13px' }}>°</span>
+                        </div>
                     </div>
                 )}    
 
@@ -989,9 +1033,35 @@ const getPreviewGradientStyle = () => {
             {/* 最终预览区域 */}
             <div className="final-preview-container">
                 <div className="gradient-subtitle"><h3>最终预览</h3></div>
-                <div className="final-preview" style={{
-                    background: getGradientStyle()
-                }} />
+                <div className="final-preview">
+                    {/* 棋盘格背景 */}
+                    <div style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        height: '100%',
+                        backgroundImage: `
+                            repeating-conic-gradient(
+                              from 0deg at 50% 50%,
+                              #fff 0deg 90deg,
+                              #ccc 90deg 180deg,
+                              #fff 180deg 270deg,
+                              #ccc 270deg 360deg
+                            )
+                        `,
+                        backgroundSize: '16px 16px'
+                    }} />
+                    {/* 渐变覆盖层 */}
+                    <div style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        height: '100%',
+                        background: getGradientStyle()
+                    }} />
+                </div>
             </div>
 
             <div className="panel-footer">
@@ -1001,7 +1071,7 @@ const getPreviewGradientStyle = () => {
                         angle,
                         reverse,
                         stops: stops.map(({ midpoint, colorPosition, opacityPosition, ...stop }) => stop), // 移除扩展属性
-                        preserveTransparency,// 添加这个属性
+                        preserveTransparency, // 添加这个属性
                         presets
                     });
                     onClose();

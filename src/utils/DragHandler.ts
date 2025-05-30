@@ -9,22 +9,22 @@ export class DragHandler {
         opacity: {
             min: 0,
             max: 100,
-            sensitivity: 1
+            sensitivity: 0.2
         },
         feather: {
             min: 0,
             max: 10,
-            sensitivity: 0.1
+            sensitivity: 0.05   
         },
         selectionSmooth: {
             min: 0,
             max: 100,
-            sensitivity: 1
+            sensitivity: 0.5
         },
         selectionContrast: {
             min: 0,
             max: 100,
-            sensitivity: 1
+            sensitivity: 0.5
         },
         selectionShiftEdge: {
             min: -100,

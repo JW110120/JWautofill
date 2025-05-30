@@ -92,29 +92,40 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
                 {Object.keys(settings).map((key) => (
                     key !== 'pressureVariation' && (
                         <div key={key} className="slider-item">
-                            <label
-                                className={`slider-label ${isDragging && dragTarget === key ? 'dragging' : 'not-dragging'}`}
-                                onMouseDown={(e) => handleLabelMouseDown(e, key as keyof ColorSettings)}
-                                style={{
-                                    display: 'flex',
-                                    justifyContent: 'space-between',
-                                    alignItems: 'center',
-                                    width: '100%',
-                                    marginBottom: '5px',
-                                    fontSize: '13px',
-                                    cursor: 'ew-resize',
-                                    userSelect: 'none'
-                                }}
-                            >
-                                <span style={{ flexShrink: 0 }}>
+                            <div style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                width: '100%',
+                            }}>
+                                <label
+                                    className={`slider-label ${isDragging && dragTarget === key ? 'dragging' : 'not-dragging'}`}
+                                    onMouseDown={(e) => handleLabelMouseDown(e, key as keyof ColorSettings)}
+                                    style={{
+                                        fontSize: '13px',
+                                        cursor: 'ew-resize',
+                                        userSelect: 'none',
+                                        flexShrink: 0
+                                    }}
+                                >
                                     {key === 'hueVariation' ? '色相抖动' :
                                      key === 'saturationVariation' ? '饱和度抖动' :
                                      key === 'brightnessVariation' ? '亮度抖动' : '不透明度抖动'}
-                                </span>
-                                <span className="slider-value" style={{ marginLeft: 'auto' }}>
-                                    {settings[key as keyof ColorSettings]}{getUnitSymbol(key as keyof ColorSettings)}
-                                </span>
-                            </label>
+                                </label>
+                                <div style={{ display: 'flex', alignItems: 'center' }}>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        max={key === 'hueVariation' ? 360 : 100}
+                                        value={settings[key as keyof ColorSettings]}
+                                        onChange={(e) => handleSliderChange(key as keyof ColorSettings, Number(e.target.value))}
+                                        style={{ marginTop:'12px', marginRight:'-10px', width: '30px', textAlign: 'center' }}
+                                    />
+                                    <span style={{ marginLeft:'-12px', fontSize: '13px' }}>
+                                        {getUnitSymbol(key as keyof ColorSettings)}
+                                    </span>
+                                </div>
+                            </div>
                             <input
                                 type="range"
                                 min="0"

@@ -18,25 +18,24 @@
 
 /*描边宽度*/
 .stroke-wide-container {
-  width: 100%;
+  width: 100;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 10px 30px 10px;
+  padding: 20px 10px 20px 10px;
   margin-bottom: 10px;
   border-bottom: 1px solid var(--border-color);
 }
 
 .stroke-wide-container label {
-  min-width: 60px;
   font-size: 13px;
+  margin-right: -10px;
   color: var(--text-color);
 }
 
 .stroke-wide-container input[type="range"] {
-  flex: 1;
-  margin : 10px 0px 0  0px;
-  width: 130px;
+  margin :5px -10px 0 -10px;
+  width: auto;
   max-width: 130px; /* 限制最大宽度 */
 }
 
@@ -44,7 +43,6 @@
   font-size: 13px;
   color: var(--text-color);
   display: inline-block; /* 转为块级元素以便设置宽度 */
-  min-width: 30px; /* 确保能容纳最长的数值 "10.0" */
   text-align: center; /* 数值居中显示 */
 }
 
@@ -114,22 +112,49 @@
 .stroke-blende-mode {
   display: flex;          /* 启用 Flexbox */
   align-items: center;    /* 垂直居中对齐 */
+  flex-direction: row;
   width: 100%;
   border-bottom: 1px solid var(--border-color);
   padding: 10px 10px 30px 10px;
   margin-bottom: 20px;
+  justify-content: space-between;
 }
 
 .stroke-blende-mode label {
   font-size: 14px;
+  margin-right: 5px;
+  min-width: 30%;
   color: var(--text-color);
 }
 
 .stroke-blende-mode sp-picker {
+  flex: 1;
   display: flex;
   align-items: center;
-  margin-left: 5px;
-  width: 100px;
+  width: 100% !important;
+  min-width: 125px !important; /* 增加最低宽度，防止被压缩 */
+  max-width: none !important;
+  flex-grow: 1;
+  flex-shrink: 0 !important; /* 防止收缩 */
+}
+
+.stroke-blende-mode sp-picker sp-menu {
+  min-width: 150px !important;
+  width: auto !important;
+}
+
+.stroke-blende-mode sp-picker sp-menu-item {
+  white-space: nowrap;
+  min-width: 150px !important;
+}
+
+/* 额外保护：确保sp-picker在所有状态下保持宽度 */
+.stroke-blende-mode sp-picker[open],
+.stroke-blende-mode sp-picker:focus,
+.stroke-blende-mode sp-picker:active {
+  width: 100% !important;
+  min-width: 125px !important;
+  flex-shrink: 0 !important;
 }
 
 

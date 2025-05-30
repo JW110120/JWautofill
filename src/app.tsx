@@ -70,10 +70,33 @@ class App extends React.Component<AppProps, AppState> {
         document.addEventListener('mouseup', this.handleMouseUp);
     }
 
+    componentDidUpdate(prevProps, prevState) {
+        // 检查次级面板状态变化，添加或移除CSS类
+        const isAnySecondaryPanelOpen = this.state.isColorSettingsOpen || 
+                                       this.state.isPatternPickerOpen || 
+                                       this.state.isGradientPickerOpen || 
+                                       this.state.isStrokeSettingOpen;
+        
+        const wasAnySecondaryPanelOpen = prevState.isColorSettingsOpen || 
+                                        prevState.isPatternPickerOpen || 
+                                        prevState.isGradientPickerOpen || 
+                                        prevState.isStrokeSettingOpen;
+        
+        if (isAnySecondaryPanelOpen !== wasAnySecondaryPanelOpen) {
+            if (isAnySecondaryPanelOpen) {
+                document.body.classList.add('secondary-panel-open');
+            } else {
+                document.body.classList.remove('secondary-panel-open');
+            }
+        }
+    }
+
     componentWillUnmount() {
         action.removeNotificationListener(['set'], this.handleSelectionChange);
         document.removeEventListener('mousemove', this.handleMouseMove);
         document.removeEventListener('mouseup', this.handleMouseUp);
+        // 清理CSS类
+        document.body.classList.remove('secondary-panel-open');
     }
 
     handleButtonClick() {
@@ -628,7 +651,17 @@ class App extends React.Component<AppProps, AppState> {
                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'opacity')}
                     >
                         不透明度
-                        <span className="slider-value">{this.state.opacity}%</span>
+                        <div style={{ display: 'flex', alignItems: 'center' }}>
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            max="100"
+                                            value={this.state.opacity}
+                                            onChange={(e) => this.setState({ opacity: Number(e.target.value) })}
+                                            style={{ width: '30px', textAlign: 'center', zIndex: 1 }}
+                                        />
+                                        <span style={{ fontSize: '13px' }}>%</span>
+                                    </div>
                     </label>
                     <input
                         type='range'
@@ -648,7 +681,17 @@ class App extends React.Component<AppProps, AppState> {
                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'feather')}
                     >
                         羽化
-                        <span className="slider-value">{this.state.feather}px</span>
+                        <div style={{ display: 'flex', alignItems: 'center' }}>
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            max="100"
+                                            value={this.state.feather}
+                                            onChange={(e) => this.setState({ feather: Number(e.target.value) })}
+                                            style={{ width: '30px', textAlign: 'center', zIndex: 1 }}
+                                        />
+                                        <span style={{ fontSize: '13px' }}>px</span>
+                                    </div>
                     </label>
                     <input
                         type='range'
@@ -692,7 +735,17 @@ class App extends React.Component<AppProps, AppState> {
                                         onChange={this.handleSelectionSmoothChange}
                                         className="selection-slider-input"
                                     />
-                                    <span className="selection-slider-value">{this.state.selectionSmooth}</span>
+                                    <div style={{ display: 'flex', alignItems: 'center'}}>
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            max="100"
+                                            value={this.state.selectionSmooth}
+                                            onChange={(e) => this.setState({ selectionSmooth: Number(e.target.value) })}
+                                            style={{ marginLeft: '-10px', width: '30px', textAlign: 'center', zIndex: 1 }}
+                                        />
+                                        <span style={{ fontSize: '13px' }}>%</span>
+                                    </div>
                                     </div>
                             
                                     <div className="selection-slider-item">
@@ -704,7 +757,7 @@ class App extends React.Component<AppProps, AppState> {
                                         }`}
                                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionContrast')}
                                     >
-                                        对比度
+                                        对比
                                     </label>
                                     <input
                                         type='range'
@@ -715,7 +768,17 @@ class App extends React.Component<AppProps, AppState> {
                                         onChange={this.handleSelectionContrastChange}
                                         className="selection-slider-input"
                                     />
-                                    <span className="selection-slider-value">{this.state.selectionContrast}%</span>
+                                    <div style={{ display: 'flex', alignItems: 'center'}}>
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            max="100"
+                                            value={this.state.selectionContrast}
+                                            onChange={(e) => this.setState({ selectionContrast: Number(e.target.value) })}
+                                            style={{ marginLeft: '-10px', width: '30px', textAlign: 'center', zIndex: 1 }}
+                                        />
+                                        <span style={{ fontSize: '13px' }}>%</span>
+                                    </div>
                                     </div>
 
                                     <div className="selection-slider-item">
@@ -738,7 +801,17 @@ class App extends React.Component<AppProps, AppState> {
                                         onChange={this.handleSelectionShiftEdgeChange}
                                         className="selection-slider-input"
                                     />
-                                    <span className="selection-slider-value">{this.state.selectionShiftEdge}%</span>
+                                    <div style={{ display: 'flex', alignItems: 'center'}}>
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            max="100"
+                                            value={this.state.selectionShiftEdge}
+                                            onChange={(e) => this.setState({ selectionShiftEdge: Number(e.target.value) })}
+                                            style={{ marginLeft: '-10px', width: '30px', textAlign: 'center', zIndex: 1 }}
+                                        />
+                                       <span style={{ fontSize: '13px' }}>%</span>
+                                    </div>
                                     </div>
                                 </div>
                             </div>

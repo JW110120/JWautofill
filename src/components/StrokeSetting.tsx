@@ -27,6 +27,61 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
   onOpacityChange,
   onClose
 }) => {
+  const [isDragging, setIsDragging] = React.useState(false);
+  const [dragTarget, setDragTarget] = React.useState<string | null>(null);
+  const [dragStartX, setDragStartX] = React.useState(0);
+  const [dragStartValue, setDragStartValue] = React.useState(0);
+
+  const handleLabelMouseDown = (event: React.MouseEvent, target: string) => {
+    event.preventDefault();
+    setIsDragging(true);
+    setDragTarget(target);
+    setDragStartX(event.clientX);
+    setDragStartValue(target === 'width' ? width : opacity);
+  };
+
+  React.useEffect(() => {
+    const handleMouseMove = (event: MouseEvent) => {
+      if (!isDragging || !dragTarget) return;
+      
+      const deltaX = event.clientX - dragStartX;
+      const sensitivity = dragTarget === 'width' ? 0.5 : 1;
+      const maxValue = dragTarget === 'width' ? 10 : 100;
+      const minValue = 0;
+      
+      let newValue = dragStartValue + deltaX * (sensitivity / 100);
+      
+      // 根据步长进行舍入
+      if (dragTarget === 'width') {
+        newValue = Math.round(newValue / 0.5) * 0.5;
+      } else {
+        newValue = Math.round(newValue);
+      }
+      
+      newValue = Math.min(maxValue, Math.max(minValue, newValue));
+      
+      if (dragTarget === 'width') {
+        onWidthChange(newValue);
+      } else if (dragTarget === 'opacity') {
+        onOpacityChange(newValue);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+      setDragTarget(null);
+    };
+
+    if (isDragging) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      return () => {
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
+      };
+    }
+  }, [isDragging, dragTarget, dragStartX, dragStartValue, width, opacity, onWidthChange, onOpacityChange]);
+
   if (!isOpen) return null;
 
   return (
@@ -37,7 +92,13 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         </div>
         
         <div className="stroke-wide-container">
-          <label>描边宽度</label>
+          <label 
+            className={`stroke-label ${isDragging && dragTarget === 'width' ? 'dragging' : 'not-dragging'}`}
+            onMouseDown={(e) => handleLabelMouseDown(e, 'width')}
+            style={{ cursor: 'ew-resize', userSelect: 'none' }}
+          >
+            宽度
+          </label>
           <input 
             type="range" 
             min="0" 
@@ -46,7 +107,18 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
             value={width}
             onChange={(e) => onWidthChange(Number(e.target.value))}
           />
-          <span>{width}px</span>
+          <div style={{ display: 'flex', alignItems: 'center'}}>
+            <input
+              type="number"
+              min="0"
+              max="10"
+              step="0.5"
+              value={width}
+              onChange={(e) => onWidthChange(Number(e.target.value))}
+              style={{ marginLeft:'-5px', width: '24px', textAlign: 'center' }}
+            />
+           <span style={{ marginLeft:'-10px', fontSize: '13px' }}>px</span>
+          </div>
         </div>
         
 
@@ -74,7 +146,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         <div className="stroke-blende-mode">
           <label>混合模式：</label>
           <sp-picker
-            size="s"
+            size="m"
             selects="single"
             selected={blendMode}
             onChange={(e) => onBlendModeChange(e.target.value as BlendMode)}
@@ -101,16 +173,33 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         </div> 
         
         <div className="stroke-opacity-control">
-          <label>不透明度</label>
+          <label 
+            className={`stroke-label ${isDragging && dragTarget === 'opacity' ? 'dragging' : 'not-dragging'}`}
+            onMouseDown={(e) => handleLabelMouseDown(e, 'opacity')}
+            style={{ cursor: 'ew-resize', marginRight:'5px', userSelect: 'none' }}
+          >
+            不透明度
+          </label>
           <input 
             type="range" 
             min="0" 
             max="100" 
             step="1"
             value={opacity}
+            style={{ width: '100px'}}
             onChange={(e) => onOpacityChange(Number(e.target.value))}
           />
-          <span>{opacity}%</span>
+          <div style={{ display: 'flex', alignItems: 'center'}}>
+            <input
+              type="number"
+              min="0"
+              max="100"
+              value={opacity}
+              onChange={(e) => onOpacityChange(Number(e.target.value))}
+              style={{ width: '30px', textAlign: 'center' }}
+            />
+          <span style={{ marginLeft:'-20px', fontSize: '13px' }}>%</span>
+          </div>
         </div>
         
         <div className="panel-footer">
