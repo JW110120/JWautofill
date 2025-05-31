@@ -16,19 +16,19 @@
             "type": "panel",
             "minimumSize": {
                 "width": 250,
-                "height": 370 
+                "height": 410 
             },
             "maximumSize": {
                 "width": 250,
-                "height": 750  
+                "height": 880
             },
             "preferredDockedSize": {
                 "width": 250,
-                "height": 750
+                "height": 880
             },
             "preferredFloatingSize": {
                 "width": 250,
-                "height": 750
+                "height": 880
             },
             "icons": [
                 {
@@ -72,6 +72,9 @@
         }
     },
     "build": {
-    "cssResources": ["styles.css"]
-  }
+        "cssResources": ["styles.css"],
+        "featureFlags": {
+            "CSSNextSupport": true
+        }
+    }
 }

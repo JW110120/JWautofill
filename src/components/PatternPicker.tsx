@@ -44,11 +44,29 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
     const [preserveTransparency, setPreserveTransparency] = useState<boolean>(false);
     
     // 处理预览缩放
-    const handlePreviewZoomChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-        const newZoom = Number(e.target.value);
-        setPreviewZoom(newZoom);
-        // 重置偏移到中心
-        setPreviewOffset({x: 0, y: 0});
+    const handlePreviewZoomChange = (e: any) => {
+            console.log('Zoom change event:', e); // 添加调试日志
+            let newZoom;
+            
+            // 尝试多种方式获取值
+            if (e.target && e.target.value) {
+                newZoom = Number(e.target.value);
+            } else if (e.target && e.target.selected) {
+                newZoom = Number(e.target.selected);
+            } else if (e.detail && e.detail.value) {
+                newZoom = Number(e.detail.value);
+            } else {
+                // 如果都获取不到，尝试从事件对象本身获取
+                newZoom = Number(e);
+            }
+            
+            console.log('New zoom value:', newZoom); // 添加调试日志
+            
+            if (newZoom && zoomLevels.includes(newZoom)) {
+                setPreviewZoom(newZoom);
+                setPreviewOffset({x: 0, y: 0});
+                console.log('Zoom set to:', newZoom); // 添加调试日志
+            }
     };
     
     // 处理鼠标滚轮缩放
@@ -626,11 +644,7 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                                 size="s"
                                 selects="single"
                                 selected={previewZoom.toString()}
-                                onChange={(e: any) => {
-                                    const newZoom = Number(e.target.value || e.target.selected);
-                                    setPreviewZoom(newZoom);
-                                    setPreviewOffset({x: 0, y: 0});
-                                }}
+                                onChange={handlePreviewZoomChange}
                                 className="zoom-picker"
                             >
                                 <sp-menu>
@@ -649,7 +663,6 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                     </div>
                     <div 
                         className="preview-wrapper"
-                        ref={previewRef}
                         onWheel={handlePreviewWheel}
                         onMouseDown={handlePreviewMouseDown}
                         onMouseMove={handlePreviewMouseMove}
@@ -660,19 +673,19 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                         }}
                     >
                         <img
-                            src={patterns.find(p => p.id === selectedPattern)?.preview}
                             className="pattern-final-preview"
+                            src={patterns.find(p => p.id === selectedPattern)?.preview}
+                            alt="Pattern Preview"
                             style={{
                                 position: 'absolute',
                                 top: '50%',
                                 left: '50%',
-                                transform: `translate(-50%, -50%) translate(${previewOffset.x}px, ${previewOffset.y}px) rotate(${angle}deg) scale(${(scale / 100) * (previewZoom / 100)})`,
+                                width: `${previewZoom * (scale / 100)}%`,
+                                height: `${previewZoom * (scale / 100)}%`,
+                                transform: `translate(-50%, -50%) translate(${previewOffset.x}px, ${previewOffset.y}px) rotate(${angle}deg)`,
                                 transformOrigin: 'center center',
-                                transition: isDragging ? 'none' : 'transform 0.1s ease',
-                                willChange: 'transform',
                                 imageRendering: previewZoom > 400 ? 'pixelated' : 'auto'
                             }}
-                            draggable={false}
                         />
                         {previewZoom > 100 && (
                             <div className="zoom-indicator">

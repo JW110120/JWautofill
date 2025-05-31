@@ -92,7 +92,7 @@ export const initialState: AppState = {
     dragStartValue: 0,
     dragTarget: null,
     selectionType: 'normal',
-    isExpanded: true,
+    isExpanded: false,
     createNewLayer: false,    // 添加初始值
     clearMode: false,    // 添加初始值
     fillMode: 'foreground',
@@ -107,7 +107,7 @@ export const initialState: AppState = {
     isColorSettingsOpen: false,
     isPatternPickerOpen: false,
     isGradientPickerOpen: false,
-    isStrokeSettingOpen: false, // 修改为false
+    isStrokeSettingOpen: false, 
     strokeEnabled: false,
         strokeWidth: 2,
         strokePosition: 'center',
@@ -119,7 +119,7 @@ export const initialState: AppState = {
             blue: 0
     },
     isSelectionOptionsExpanded: false,
-    selectionSmooth: 0,
+    selectionSmooth: 0, 
     selectionContrast: 0,
     selectionShiftEdge: 0,
 };

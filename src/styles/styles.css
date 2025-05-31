@@ -208,7 +208,6 @@ sp-picker[disabled] {
 
 
 .expand-section {
-  border-bottom: 1px solid var(--border-color);
   background-color:  var(--bg-color);
   min-height: 0; 
   padding: 0;
@@ -267,16 +266,19 @@ sp-picker[disabled] {
 .selection-slider-container {
   width: ca1calc(100% - 20px);
   flex-direction: column;
-  padding: 8px 10px 5px 10px; 
+  padding: 0px 10px 10px 10px; 
 
 }
 
 .selection-slider-item {
   width: 100%;
-  margin-bottom: 5px;
   display: flex;
   flex-direction: row;
   justify-content: space-between;
+}
+
+.selection-slider-item:not(:last-child) {
+  margin-bottom: -5px;
 }
 
 .selection-slider-label {
@@ -425,9 +427,8 @@ sp-radio {
   width: 250px;
   height: 20px;
   background-color: var(--bg-color);
+  border-top: 1px solid var(--border-color);
   display: flex;
-  justify-content: flex-end;
-  padding: 0 5px;
   box-sizing: border-box;
   position: fixed;  /* 改为固定定位 */
   bottom: 0;
@@ -444,7 +445,7 @@ sp-radio {
   font-size: 8px;
   color: var(--disabled-color);
   position: fixed; /* 改为固定定位 */
-  bottom: 5px;
+  bottom: 3px;
   left: 50%;
   transform: translateX(-50%);
   pointer-events: none;

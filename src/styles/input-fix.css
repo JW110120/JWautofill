@@ -14,15 +14,13 @@ input[type="number"] {
     z-index: 9999 !important;
 }
 
-/* 当任何次级面板打开时 (通过 body.secondary-panel-open 类名控制)，隐藏主面板中 .slider-container 内的 input number 字段 */
-body.secondary-panel-open .slider-container input[type="number"] {
+/* 当任何次级面板打开时，隐藏主面板中的所有input number字段 */
+body.secondary-panel-open .slider-container input[type="number"],
+body.secondary-panel-open .expand-content input[type="number"] {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
 }
-
-/* 保留次级面板内input始终可见的规则，确保其特异性或顺序能覆盖上述规则 */
-/* (确保 .pattern-picker input[type="number"], 等规则仍然有效) */
 
 /* 确保次级面板内的input始终可见 */
 .pattern-picker input[type="number"],
@@ -41,10 +39,17 @@ body.secondary-panel-open .slider-container input[type="number"] {
     pointer-events: none;
 }
 
-/* 展开状态下的input正常显示 */
+/* 展开状态下的input正常显示，但当次级面板打开时仍要隐藏 */
 .expand-content.expanded input[type="number"] {
     visibility: visible;
     opacity: 1;
     pointer-events: auto;
     transition: opacity 0.3s ease;
+}
+
+/* 当次级面板打开时，即使是展开状态的选区选项input也要隐藏 */
+body.secondary-panel-open .expand-content.expanded input[type="number"] {
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
 }
