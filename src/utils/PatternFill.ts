@@ -11,21 +11,28 @@ interface PatternFillOptions {
 
 interface LayerInfo {
     hasPixels: boolean;
+    isInQuickMask: boolean;
 }
 
 export class PatternFill {
     static async fillPattern(options: PatternFillOptions, layerInfo: LayerInfo) {
-        // 获取选区边界
-        const bounds = app.activeDocument.selection.bounds;
-        if (!bounds) {
-            console.error("❌ 无法获取选区边界数据");
-            return;
-        }
-
-
         // 检查是否有patternName
         if (!options.pattern.patternName) {
             console.error("❌ 没有可用的图案名称，无法填充");
+            return;
+        }
+
+        // 如果在快速蒙版状态，使用简化的直接填充
+        if (layerInfo.isInQuickMask) {
+            await this.fillPatternDirect(options);
+            return;
+        }
+
+        // 获取选区边界
+        const bounds = app.activeDocument.selection.bounds;
+        
+        if (!bounds) {
+            console.error("❌ 无法获取选区边界数据");
             return;
         }
 
@@ -173,6 +180,40 @@ export class PatternFill {
             console.log("✅ 图案填充完成");
         } catch (error) {
             console.error("❌ 执行图案填充时发生错误:", error);
+        }
+    }
+
+    // 快速蒙版状态下的直接填充
+    private static async fillPatternDirect(options: PatternFillOptions) {
+        try {
+            const fillPattern = {
+                _obj: "fill",
+                using: {
+                    _enum: "fillContents",
+                    _value: "pattern"
+                },
+                pattern: {
+                    _obj: "pattern",
+                    name: options.pattern.patternName
+                },
+                opacity: {
+                    _unit: "percentUnit",
+                    _value: options.opacity
+                },
+                mode: {
+                    _enum: "blendMode",
+                    _value: BLEND_MODES[options.blendMode] || "normal"
+                },
+                _options: {
+                    dialogOptions: "dontDisplay"
+                }
+            };
+
+            await action.batchPlay([fillPattern], { synchronousExecution: true });
+            console.log("✅ 快速蒙版图案填充完成");
+        } catch (error) {
+            console.error("❌ 快速蒙版图案填充失败:", error);
+            throw error;
         }
     }
 }

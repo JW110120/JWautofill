@@ -878,7 +878,7 @@ class App extends React.Component<AppProps, AppState> {
                             <sp-switch 
                                 checked={this.state.strokeEnabled}
                                 onChange={this.toggleStrokeEnabled}
-                                disabled={this.state.clearMode || this.state.createNewLayer}
+                                disabled={this.state.clearMode}
                             />
                         </div>
                         <div className="switch-container">
@@ -886,7 +886,7 @@ class App extends React.Component<AppProps, AppState> {
                             <sp-switch 
                                 checked={this.state.createNewLayer}
                                 onChange={this.toggleCreateNewLayer}
-                                disabled={this.state.clearMode || this.state.strokeEnabled}
+                                disabled={this.state.clearMode}
                             />
                         </div>
 

@@ -4,6 +4,7 @@ interface LayerInfo {
     isBackground: boolean;
     hasTransparencyLocked: boolean;
     hasPixels: boolean;
+    isInQuickMask: boolean;
 }
 
 export class LayerInfoHandler {
@@ -19,10 +20,14 @@ export class LayerInfoHandler {
                 return null;
             }
             
+            const document = app.activeDocument;
+            const isInQuickMask = document.quickMaskMode;
+            
             return {
                 isBackground: activeLayer.isBackgroundLayer,
                 hasTransparencyLocked: activeLayer.transparentPixelsLocked,
-                hasPixels: this.checkLayerHasPixels(activeLayer)
+                hasPixels: this.checkLayerHasPixels(activeLayer),
+                isInQuickMask: isInQuickMask
             };
         } catch (error) {
             return null;

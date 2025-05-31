@@ -92,7 +92,7 @@ export const initialState: AppState = {
     dragStartValue: 0,
     dragTarget: null,
     selectionType: 'normal',
-    isExpanded: false,
+    isExpanded: true,
     createNewLayer: false,    // 添加初始值
     clearMode: false,    // 添加初始值
     fillMode: 'foreground',
@@ -118,7 +118,7 @@ export const initialState: AppState = {
             green: 0,
             blue: 0
     },
-    isSelectionOptionsExpanded: false,
+    isSelectionOptionsExpanded: true,
     selectionSmooth: 0, 
     selectionContrast: 0,
     selectionShiftEdge: 0,

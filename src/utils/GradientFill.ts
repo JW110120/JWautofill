@@ -11,20 +11,27 @@ interface GradientFillOptions {
 
 interface LayerInfo {
     hasPixels: boolean;
+    isInQuickMask: boolean;
 }
 
 export class GradientFill {
     static async fillGradient(options: GradientFillOptions, layerInfo: LayerInfo) {
+        // 检查是否有渐变stops
+        if (!options.gradient.stops || options.gradient.stops.length === 0) {
+            console.error("❌ 没有可用的渐变stops，无法填充");
+            return;
+        }
+
+        // 如果在快速蒙版状态，使用简化的直接填充
+        if (layerInfo.isInQuickMask) {
+            await this.fillGradientDirect(options);
+            return;
+        }
+
         // 获取选区边界
         const bounds = app.activeDocument.selection.bounds;
         if (!bounds) {
             console.error("❌ 无法获取选区边界数据");
-            return;
-        }
-
-        // 检查是否有渐变stops
-        if (!options.gradient.stops || options.gradient.stops.length === 0) {
-            console.error("❌ 没有可用的渐变stops，无法填充");
             return;
         }
 
@@ -263,4 +270,176 @@ export class GradientFill {
         }
         return 100; // 默认完全不透明
     }
-}
+
+    private static async fillGradientDirect(options: GradientFillOptions) {
+        try {
+            // 获取快速蒙版通道的边界信息
+            const result = await action.batchPlay([
+                {
+                    _obj: "get",
+                    _target: [
+                        {
+                            _property: "selection"
+                        },
+                        {
+                            _ref: "document",
+                            _enum: "ordinal",
+                            _value: "targetEnum"
+                        }
+                    ],
+                    _options: {
+                        dialogOptions: "dontDisplay"
+                    }
+                }
+            ], { synchronousExecution: true });
+            
+            // 修改边界提取逻辑
+            let bounds;
+            if (result[0] && result[0].selection && result[0].selection.bottom !== undefined) {
+                // 从selection对象中提取边界信息，注意获取_value属性
+                const selection = result[0].selection;
+                bounds = [
+                    selection.left._value,
+                    selection.top._value, 
+                    selection.right._value,
+                    selection.bottom._value
+                ];
+                await this.processGradientFill(options, bounds);
+            } else {
+                // 如果没有获取到边界，尝试获取整个文档尺寸作为fallback
+                const docInfo = await action.batchPlay([
+                    {
+                        _obj: "get",
+                        _target: [
+                            {
+                                _property: "width"
+                            },
+                            {
+                                _property: "height"
+                            },
+                            {
+                                _ref: "document",
+                                _enum: "ordinal",
+                                _value: "targetEnum"
+                            }
+                        ],
+                        _options: {
+                            dialogOptions: "dontDisplay"
+                        }
+                    }
+                ], { synchronousExecution: true });
+                
+                // 使用整个文档作为填充区域
+                const docWidth = docInfo[0].width;
+                const docHeight = docInfo[0].height;
+                
+                bounds = [0, 0, docWidth, docHeight];
+                
+                // 继续处理渐变填充逻辑...
+                await this.processGradientFill(options, bounds);
+            }
+            
+        } catch (error) {
+            console.error("❌ 快速蒙版渐变填充失败:", error);
+            throw error;
+        }
+    }
+            
+                // 处理渐变填充的辅助方法
+            private static async processGradientFill(options: GradientFillOptions, bounds: number[]) {
+            const left = bounds[0];
+            const top = bounds[1];
+            const right = bounds[2];
+            const bottom = bounds[3];
+    
+            // 计算选区中心点和尺寸
+            const centerX = (left + right) / 2;
+            const centerY = (top + bottom) / 2;
+            const width = right - left;
+            const height = bottom - top;
+            
+            // 计算对角线长度，用于确定渐变距离
+            const diagonal = Math.sqrt(width * width + height * height);
+            
+            // 增加容差，确保渐变完全覆盖选区
+            const tolerance = diagonal * 0.1; // 20%的容差
+            const gradientLength = diagonal / 2 + tolerance;
+            
+            // 将角度转换为弧度
+            const angleRad = (options.gradient.angle || 0) * Math.PI / 180;
+            
+            // 根据角度计算from和to坐标
+            const fromX = centerX - Math.cos(angleRad) * gradientLength;
+            const fromY = centerY - Math.sin(angleRad) * gradientLength;
+            const toX = centerX + Math.cos(angleRad) * gradientLength;
+            const toY = centerY + Math.sin(angleRad) * gradientLength;
+
+            // 生成颜色stops
+            const colorStops = this.generateColorStops(options.gradient.stops);
+            
+            // 生成透明度stops
+            const transparencyStops = this.generateTransparencyStops(options.gradient.stops);
+
+            const fillGradient = {
+                _obj: "gradientClassEvent",
+                type: {
+                    _enum: "gradientType",
+                    _value: options.gradient.type || "linear"
+                },
+                useMask: false,
+                reverse: options.gradient.reverse || false,
+                gradientsInterpolationMethod: {
+                    _enum: "gradientInterpolationMethodType",
+                    _value: "smooth"
+                },
+                gradient: {
+                    _obj: "gradientClassEvent",
+                    gradientForm: {
+                        _enum: "gradientForm",
+                        _value: "customStops"
+                    },
+                    interfaceIconFrameDimmed: 4096,
+                    colors: colorStops,
+                    transparency: transparencyStops
+                },
+                from: {
+                    _obj: "paint",
+                    horizontal: {
+                       _unit: "pixelsUnit",
+                       _value: Math.round(fromX)
+                    },
+                    vertical: {
+                       _unit: "pixelsUnit",
+                       _value: Math.round(fromY)
+                    }
+                 },
+                 to: {
+                    _obj: "paint",
+                    horizontal: {
+                       _unit: "pixelsUnit",
+                       _value: Math.round(toX)
+                    },
+                    vertical: {
+                       _unit: "pixelsUnit",
+                       _value: Math.round(toY)
+                    }
+                 },
+                opacity: {
+                    _unit: "percentUnit",
+                    _value: options.opacity
+                },
+                mode: {
+                    _enum: "blendMode",
+                    _value: BLEND_MODES[options.blendMode] || "normal"
+                },
+                _options: {
+                    dialogOptions: "dontDisplay"
+                }
+            };
+
+            await action.batchPlay([fillGradient], { synchronousExecution: true });
+        } catch (error) {
+            console.error("❌ 快速蒙版渐变填充失败:", error);
+            throw error;
+        }
+    }
