@@ -297,7 +297,9 @@ class App extends React.Component<AppProps, AppState> {
                 await this.applyFeather();
                 await this.fillSelection();
                 if (this.state.strokeEnabled) {
-                    await strokeSelection(this.state);
+                    // 获取图层信息
+                    const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
+                    await strokeSelection(this.state, layerInfo);
                 }
                 if (this.state.deselectAfterFill) {
                     await this.deselectSelection();

@@ -5,7 +5,12 @@ import { AppState } from '../types/state';
 const { executeAsModal } = core;
 const { batchPlay } = action;
 
-export async function strokeSelection(state: AppState) {
+interface LayerInfo {
+    hasPixels: boolean;
+    isInQuickMask: boolean;
+}
+
+export async function strokeSelection(state: AppState, layerInfo?: LayerInfo) {
     if (!state.strokeEnabled) return;
     
     const strokeParams = {
@@ -19,6 +24,14 @@ export async function strokeSelection(state: AppState) {
             blue: state.strokeColor.blue || 0
         }
     };
+
+
+    // 如果在快速蒙版状态，使用简化的直接描边
+    if (layerInfo?.isInQuickMask) {
+
+        await strokeSelectionDirect(strokeParams);
+        return;
+    }
 
     try {
         // 1. 新建准备描边的空白图层
@@ -36,6 +49,7 @@ export async function strokeSelection(state: AppState) {
             }],
             { synchronousExecution: true }
         );
+        console.log("✅ 新建图层成功");
 
         // 2. 根据位置调整选区
         if (strokeParams.position === "inside") {
@@ -69,7 +83,6 @@ export async function strokeSelection(state: AppState) {
                 { synchronousExecution: true }
             );
         }
-
 
         // 3. 记录前景色
         let savedForegroundColor;
@@ -158,29 +171,29 @@ export async function strokeSelection(state: AppState) {
             { synchronousExecution: true }
         );
 
-             // 7. 恢复前景色
-             if (savedForegroundColor) {
-                await batchPlay(
-                    [{
-                        _obj: "set",
-                        _target: [{
-                            _ref: "color",
-                            _property: "foregroundColor"
-                        }],
-                        to: {
-                            _obj: "HSBColorClass",
-                            hue: savedForegroundColor.hue,
-                            saturation: savedForegroundColor.saturation,
-                            brightness: savedForegroundColor.brightness
-                        },
-                        source: "photoshopPicker",
-                        _options: {
-                            dialogOptions: "dontDisplay"
-                        }
+        // 7. 恢复前景色
+        if (savedForegroundColor) {
+            await batchPlay(
+                [{
+                    _obj: "set",
+                    _target: [{
+                        _ref: "color",
+                        _property: "foregroundColor"
                     }],
-                    { synchronousExecution: true }
-                );
-            }
+                    to: {
+                        _obj: "HSBColorClass",
+                        hue: savedForegroundColor.hue,
+                        saturation: savedForegroundColor.saturation,
+                        brightness: savedForegroundColor.brightness
+                    },
+                    source: "photoshopPicker",
+                    _options: {
+                        dialogOptions: "dontDisplay"
+                    }
+                }],
+                { synchronousExecution: true }
+            );
+        }
 
         console.log("✅ 描边完成");
     } catch (error) {
@@ -188,3 +201,79 @@ export async function strokeSelection(state: AppState) {
         throw error;
     }
 }
+
+// 快速蒙版状态下的直接描边
+async function strokeSelectionDirect(strokeParams: any) {
+    try {
+        // 记录前景色
+        let savedForegroundColor;
+        await executeAsModal(async () => {
+            const foregroundColor = app.foregroundColor;
+            savedForegroundColor = {
+                hue: {
+                    _unit: "angleUnit",
+                    _value: foregroundColor.hsb.hue
+                },
+                saturation: foregroundColor.hsb.saturation,
+                brightness: foregroundColor.hsb.brightness
+            };
+        });
+
+        const strokeDirect = {
+            _obj: "stroke",
+            width: strokeParams.width,
+            location: {
+                _enum: "strokeLocation",
+                _value: strokeParams.position
+            },
+            opacity: {
+                _unit: "percentUnit",
+                _value: strokeParams.opacity
+            },
+            mode: {
+                _enum: "blendMode",
+                _value: BLEND_MODES[strokeParams.blendMode] || "normal"
+            },
+            color: {
+                _obj: "RGBColor",
+                red: strokeParams.color.red,
+                green: strokeParams.color.green,
+                blue: strokeParams.color.blue
+            },
+            _options: {
+                dialogOptions: "dontDisplay"
+            }
+        };
+
+        await batchPlay([strokeDirect], { synchronousExecution: true });
+
+        // 恢复前景色
+        if (savedForegroundColor) {
+            await batchPlay(
+                [{
+                    _obj: "set",
+                    _target: [{
+                        _ref: "color",
+                        _property: "foregroundColor"
+                    }],
+                    to: {
+                        _obj: "HSBColorClass",
+                        hue: savedForegroundColor.hue,
+                        saturation: savedForegroundColor.saturation,
+                        brightness: savedForegroundColor.brightness
+                    },
+                    source: "photoshopPicker",
+                    _options: {
+                        dialogOptions: "dontDisplay"
+                    }
+                }],
+                { synchronousExecution: true }
+            );
+        }
+
+    } catch (error) {
+        console.error("❌ 快速蒙版描边失败:", error);
+        throw error;
+    }
+}
+
