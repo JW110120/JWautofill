@@ -674,6 +674,7 @@ class App extends React.Component<AppProps, AppState> {
                         onChange={this.handleOpacityChange}
                         className="slider-input"
                     />
+                    
                     <label
                         className={`slider-label ${
                             this.state.isDragging && this.state.dragTarget === 'feather' 

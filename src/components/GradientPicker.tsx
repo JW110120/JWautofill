@@ -98,36 +98,36 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         })));
     };
 
-// 修正的预览渐变函数
-const getPreviewGradientStyle = () => {
-    // 创建一个综合的渐变，同时考虑颜色位置和透明度位置
-    const allPositions = new Set<number>();
-    
-    // 收集所有位置点
-    stops.forEach(stop => {
-        allPositions.add(stop.colorPosition);
-        allPositions.add(stop.opacityPosition);
-    });
-    
-    const sortedPositions = Array.from(allPositions).sort((a, b) => a - b);
-    
-    const gradientStops = sortedPositions.map(position => {
-        // 在当前位置插值颜色
-        const colorAtPosition = interpolateColor(position, 'color');
-        // 在当前位置插值透明度
-        const opacityAtPosition = interpolateOpacity(position);
+    // 修正的预览渐变函数
+    const getPreviewGradientStyle = () => {
+        // 创建一个综合的渐变，同时考虑颜色位置和透明度位置
+        const allPositions = new Set<number>();
         
-        const rgbaMatch = colorAtPosition.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-        if (rgbaMatch) {
-            const [_, r, g, b] = rgbaMatch;
-            return `rgba(${r}, ${g}, ${b}, ${opacityAtPosition}) ${position}%`;
-        }
-        return `rgba(0, 0, 0, ${opacityAtPosition}) ${position}%`;
-    });
-    
-    // 注意：这里不应用 reverse，只是纯粹的预览
-    return `linear-gradient(to right, ${gradientStops.join(', ')})`;
-};
+        // 收集所有位置点
+        stops.forEach(stop => {
+            allPositions.add(stop.colorPosition);
+            allPositions.add(stop.opacityPosition);
+        });
+        
+        const sortedPositions = Array.from(allPositions).sort((a, b) => a - b);
+        
+        const gradientStops = sortedPositions.map(position => {
+            // 在当前位置插值颜色
+            const colorAtPosition = interpolateColor(position, 'color');
+            // 在当前位置插值透明度
+            const opacityAtPosition = interpolateOpacity(position);
+            
+            const rgbaMatch = colorAtPosition.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+            if (rgbaMatch) {
+                const [_, r, g, b] = rgbaMatch;
+                return `rgba(${r}, ${g}, ${b}, ${opacityAtPosition}) ${position}%`;
+            }
+            return `rgba(0, 0, 0, ${opacityAtPosition}) ${position}%`;
+        });
+        
+        // 注意：这里不应用 reverse，只是纯粹的预览
+        return `linear-gradient(to right, ${gradientStops.join(', ')})`;
+    };
 
     // 颜色插值函数 - 支持中点
     const interpolateColor = (position: number, type: 'color' | 'opacity') => {
@@ -800,25 +800,29 @@ const getPreviewGradientStyle = () => {
                     </div>
                 )}
 
-                {/* 透明度滑块 - 修改样式 */}
+                {/* 透明度滑块 */}
                 <div className="gradient-slider-track">
                     {stops.map((stop, index) => {
-                        // 计算透明度stop的显示颜色
                         const rgbaMatch = stop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
                         const alpha = rgbaMatch ? parseFloat(rgbaMatch[4]) : 1;
-                        const grayValue = Math.round(255 * alpha); // 0% = 白色(255), 100% = 黑色(0)
+                        const grayValue = Math.round(255 * alpha);
                         const displayColor = `rgb(${255 - grayValue}, ${255 - grayValue}, ${255 - grayValue})`;
                         
                         return (
                             <div
                                 key={`opacity-${index}`}
-                                className={`gradient-slider-thumb ${selectedStopIndex === index && selectedStopType === 'opacity' ? 'selected' : ''}`}
+                                className={`opacity-slider-thumb ${
+                                    selectedStopIndex === index && selectedStopType === 'opacity' ? 'selected' : ''
+                                }`}
                                 style={{ 
                                     left: `${stop.opacityPosition}%`,
                                     backgroundColor: displayColor,
                                     border: selectedStopIndex === index && selectedStopType === 'opacity' 
                                         ? '2px solid var(--primary-color)' 
-                                        : '2px solid var(--border-color)' // 修复选中状态边框颜色
+                                        : '2px solid var(--border-color)',
+                                    ...(isDraggingOpacity && dragStopIndex === index ? {
+                                        cursor: 'grabbing'
+                                    } : {})
                                 }}
                                 onMouseDown={(e) => handleOpacityStopMouseDown(e, index)}
                                 onClick={(e) => {
@@ -931,10 +935,15 @@ const getPreviewGradientStyle = () => {
                     {stops.map((stop, index) => (
                         <div
                             key={`color-${index}`}
-                            className={`color-slider-thumb ${selectedStopIndex === index && selectedStopType === 'color' ? 'selected' : ''}`}
+                            className={`color-slider-thumb ${
+                                selectedStopIndex === index && selectedStopType === 'color' ? 'selected' : ''
+                            }`}
                             style={{ 
                                 left: `${stop.colorPosition}%`,
-                                backgroundColor: getRGBColor(stop.color)
+                                backgroundColor: getRGBColor(stop.color),
+                                ...(isDraggingColor && dragStopIndex === index ? {
+                                    cursor: 'grabbing'
+                                } : {})
                             }}
                             onMouseDown={(e) => handleColorStopMouseDown(e, index)}
                             onClick={(e) => {
