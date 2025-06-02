@@ -766,10 +766,11 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             disabled={selectedPreset === null || presets.length === 0}
                             style={{
                             cursor: selectedPreset === null || presets.length === 0 ? 'not-allowed' : 'pointer',
-                            opacity: selectedPreset === null || presets.length === 0 ? 0.5 : 1,
+                            opacity: selectedPreset === null || presets.length === 0 ? 0.4 : 1,
                             alignItems: 'center',
                             marginLeft: 'auto',
-                            justifyContent: 'flex-end'
+                            justifyContent: 'flex-end',
+                            border: 'none'
                             }}
                             onMouseEnter={(e) => {
                                 if (!(selectedPreset === null || presets.length === 0)) {
@@ -841,7 +842,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         <div className="delete-button-wrapper">
                         <sp-action-button
                             quiet
-                            className="delete-button"
+                            className="icon-button"
                             onClick={() => {
                             if (stops.length > 2) {
                                 handleRemoveStop(selectedStopIndex);
@@ -853,7 +854,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             opacity: stops.length <= 2 ? 0.5 : 1,
                             alignItems: 'center',
                             marginLeft: 'auto',
-                            justifyContent: 'flex-end'
+                            justifyContent: 'flex-end',
+                            border: 'none'
                             }}
                             onMouseEnter={(e) => {
                                 if (stops.length > 2) {
@@ -1156,7 +1158,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         <div className="delete-button-wrapper">
                         <sp-action-button
                             quiet
-                            className="delete-button"
+                            className="icon-button"
                             onClick={() => {
                             if (stops.length > 2) {
                                 handleRemoveStop(selectedStopIndex);
@@ -1168,7 +1170,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             opacity: stops.length <= 2 ? 0.5 : 1,
                             alignItems: 'center',
                             marginLeft: 'auto',
-                            justifyContent: 'flex-end'
+                            justifyContent: 'flex-end',
+                            border: 'none'
                             }}
                             onMouseEnter={(e) => {
                                 if (stops.length > 2) {

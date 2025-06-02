@@ -26,7 +26,7 @@ const createThemeStyles = () => {
         --bg-color: rgb(50, 50, 50);
         --dark-bg-color: rgb(30, 30, 30);
         --border-color:rgb(95, 95, 95);
-        --disabled-color: #848484;
+        --disabled-color:rgb(80, 80, 80);
         --hover-bg: rgba(38, 128, 235, 0.1);
         --hover-icon: rgb(38, 128, 235);
         --button-bg: rgb(60, 60, 60);
@@ -43,7 +43,7 @@ const createThemeStyles = () => {
         --bg-color: rgb(83, 83, 83);
         --dark-bg-color: rgb(63, 63, 63);
         --border-color:rgb(128, 128, 128);
-        --disabled-color: #999999;
+        --disabled-color:rgb(100, 100, 100);
         --hover-bg: rgba(38, 128, 235, 0.2);
         --hover-icon:rgb(0, 115, 255); 
         --button-bg: rgb(93, 93, 93);
@@ -60,7 +60,7 @@ const createThemeStyles = () => {
         --bg-color: rgb(184, 184, 184);
         --dark-bg-color: rgb(164, 164, 164);
         --border-color:rgb(140, 140, 140);
-        --disabled-color: #666666;
+        --disabled-color:rgb(151, 151, 151);
         --hover-bg: rgba(38, 128, 235, 0.3);
         --hover-icon:rgb(22, 127, 255);
         --button-bg: rgb(194, 194, 194);
@@ -77,7 +77,7 @@ const createThemeStyles = () => {
         --bg-color: rgb(240, 240, 240);
         --dark-bg-color: rgb(220, 220, 220);
         --border-color:rgb(196, 196, 196);
-        --disabled-color: #909090;
+        --disabled-color:rgb(194, 194, 194);
         --hover-bg: rgba(38, 128, 235, 0.35);
         --hover-icon: rgb(38, 128, 235);
         --button-bg: rgb(250, 250, 250);

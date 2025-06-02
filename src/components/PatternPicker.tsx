@@ -565,10 +565,10 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                                     disabled={!selectedPattern}
                                     style={{
                                         cursor: !selectedPattern ? 'not-allowed' : 'pointer',
-                                        opacity: !selectedPattern ? 0.5 : 1,
+                                        opacity: !selectedPattern ? 0.4 : 1,
                                         padding: '4px',
                                         background: 'none',
-                                        border: '1px solid var(--border-color)',
+                                        border: 'none',
                                         borderRadius: '4px',
                                         display: 'flex',
                                         alignItems: 'center',
