@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { BlendMode } from '../constants/blendModes';
 import { BLEND_MODE_OPTIONS } from '../constants/blendModeOptions';
 
@@ -12,7 +12,7 @@ interface StrokeSettingProps {
   onPositionChange: (position: 'inside' | 'center' | 'outside') => void;
   onBlendModeChange: (blendMode: BlendMode) => void;
   onOpacityChange: (opacity: number) => void;
-  onClose: () => void; // 修改这里，将onclose改为onClose
+  onClose: () => void; 
 }
 
 const StrokeSetting: React.FC<StrokeSettingProps> = ({
@@ -95,7 +95,6 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
           <label 
             className={`stroke-label ${isDragging && dragTarget === 'width' ? 'dragging' : 'not-dragging'}`}
             onMouseDown={(e) => handleLabelMouseDown(e, 'width')}
-            style={{ cursor: 'ew-resize', userSelect: 'none' }}
           >
             宽度
           </label>
@@ -107,7 +106,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
             value={width}
             onChange={(e) => onWidthChange(Number(e.target.value))}
           />
-          <div style={{ display: 'flex', alignItems: 'center'}}>
+          <div>
             <input
               type="number"
               min="0"
@@ -117,12 +116,12 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
               onChange={(e) => onWidthChange(Number(e.target.value))}
               style={{ marginLeft:'-5px', width: '24px', textAlign: 'center' }}
             />
-           <span style={{ marginLeft:'-10px', fontSize: '13px' }}>px</span>
+           <span>px</span>
           </div>
         </div>
         
 
-        <div className="subtitle">
+        <div className="stroke-subtitle">
           <h3>位置</h3>
         </div>
           <div className="position-radio-group">
@@ -150,7 +149,6 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
             selects="single"
             selected={blendMode}
             onChange={(e) => onBlendModeChange(e.target.value as BlendMode)}
-            style={{ minWidth: '120px', width: '120px' }}
           >
             <sp-menu>
               {BLEND_MODE_OPTIONS.map((group, groupIndex) => (

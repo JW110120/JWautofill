@@ -2,7 +2,7 @@
   position: sticky;
   top: 0px;
   left: 0px;
-  width: 250px;
+  width: 100%;
   height: calc(100% - 20px);
   background-color: var(--bg-color);
   border: 1px solid var(--border-color);
@@ -23,7 +23,6 @@
   align-items: center;
   justify-content: space-between;
   padding: 20px 10px 20px 10px;
-  margin-bottom: 10px;
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -31,24 +30,33 @@
   font-size: 13px;
   margin-right: -10px;
   color: var(--text-color);
+  cursor:ew-resize;
+  user-select: none;
 }
 
-.stroke-wide-container input[type="range"] {
-  margin :5px -10px 0 -10px;
-  width: auto;
-  max-width: 130px; /* 限制最大宽度 */
+.stroke-wide-container div {
+  display: flex;
+  align-items: center;
 }
 
 .stroke-wide-container span {
+  margin: -3px 0 0 -5px;
   font-size: 13px;
   color: var(--text-color);
   display: inline-block; /* 转为块级元素以便设置宽度 */
   text-align: center; /* 数值居中显示 */
 }
 
+.stroke-wide-container input[type="range"] {
+  margin :5px -10px 0 -10px;
+  width: 140px;
+}
 
-
-
+.stroke-wide-container input[type="number"] {
+  width: 24px;
+  margin-left: -5px;
+  text-align: center;
+}
 
 
 
@@ -56,19 +64,29 @@
 
 
 /*位置*/
+.stroke-subtitle {
+  margin-top: 10px;
+}
+.stroke-subtitle h3{
+  margin: 5px;
+  font-size: 13px;
+  color: var(--text-color);
+}
+
+
+
 .position-radio-group {
   display: flex;
   align-items: center;
   flex-direction: column;
   width: 100%;
-  padding: 0 10px 10px 10px;
+  padding: 10px 10px 30px 10px;
   border-bottom: 1px solid var(--border-color);
   margin-bottom: 20px;
 }
 
 .position-radio-group sp-radio-group {
   width: 100%;
-  margin: 10px 0;
   display: flex;
   align-items: center;
   flex-direction: row;
@@ -96,7 +114,6 @@
 }
 
 .position-radio-item-label {
-  line-height: 32px;
   align-items: center;
 }
 
@@ -110,56 +127,21 @@
 
 /*混合模式*/
 .stroke-blende-mode {
-  display: flex;          /* 启用 Flexbox */
+  position: relative;
+  display:inline-flex;          /* 启用 Flexbox */
   align-items: center;    /* 垂直居中对齐 */
-  flex-direction: row;
-  width: 100%;
+  width: 230px;
   border-bottom: 1px solid var(--border-color);
   padding: 10px 10px 30px 10px;
   margin-bottom: 20px;
-  justify-content: space-between;
 }
 
 .stroke-blende-mode label {
   font-size: 14px;
-  margin-right: 5px;
-  min-width: 30%;
+  padding-right: 5px;
+  width: 83px;
   color: var(--text-color);
 }
-
-.stroke-blende-mode sp-picker {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  width: 100% !important;
-  min-width: 125px !important; /* 增加最低宽度，防止被压缩 */
-  max-width: none !important;
-  flex-grow: 1;
-  flex-shrink: 0 !important; /* 防止收缩 */
-}
-
-.stroke-blende-mode sp-picker sp-menu {
-  min-width: 150px !important;
-  width: auto !important;
-}
-
-.stroke-blende-mode sp-picker sp-menu-item {
-  white-space: nowrap;
-  min-width: 150px !important;
-}
-
-/* 额外保护：确保sp-picker在所有状态下保持宽度 */
-.stroke-blende-mode sp-picker[open],
-.stroke-blende-mode sp-picker:focus,
-.stroke-blende-mode sp-picker:active {
-  width: 100% !important;
-  min-width: 125px !important;
-  flex-shrink: 0 !important;
-}
-
-
-
-
 
 
 /*不透明度*/

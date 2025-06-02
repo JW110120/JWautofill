@@ -553,14 +553,48 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                             >
                                 <FileIcon />
                             </sp-action-button>
-                            <sp-action-button 
-                                quiet 
-                                class="icon-button"
-                                onClick={handleDelete}
-                                disabled={!selectedPattern}
-                            >
-                                <DeleteIcon />
-                            </sp-action-button>
+                            <div className="delete-button-wrapper">
+                                <sp-action-button
+                                    quiet
+                                    class="icon-button"
+                                    onClick={() => {
+                                        if (selectedPattern) {
+                                            handleDelete();
+                                        }
+                                    }}
+                                    disabled={!selectedPattern}
+                                    style={{
+                                        cursor: !selectedPattern ? 'not-allowed' : 'pointer',
+                                        opacity: !selectedPattern ? 0.5 : 1,
+                                        padding: '4px',
+                                        background: 'none',
+                                        border: '1px solid var(--border-color)',
+                                        borderRadius: '4px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center'
+                                    }}
+                                    onMouseEnter={(e) => {
+                                        if (selectedPattern) {
+                                            const iconFill = e.currentTarget.querySelector('.icon-fill');
+                                            if (iconFill) iconFill.style.fill = 'var(--hover-icon)';
+                                        }
+                                    }}
+                                    onMouseLeave={(e) => {
+                                        const iconFill = e.currentTarget.querySelector('.icon-fill');
+                                        if (iconFill) {
+                                            iconFill.style.fill = !selectedPattern ? 'var(--disabled-color)' : 'var(--text-color)';
+                                        }
+                                    }}
+                                    title="删除图案"
+                                >
+                                    <DeleteIcon style={{
+                                        width: '15px',
+                                        height: '15px',
+                                        display: 'block'
+                                    }} />
+                                </sp-action-button>
+                        </div>
                         </div>
                      </div>
             </div>
@@ -571,17 +605,18 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                 <div className="pattern-setting-item-group">
                     <div className="pattern-setting-item">
                         <label onMouseDown={(e) => handleMouseDown(e, 'angle')} style={{ cursor: isDragging && dragTarget === 'angle' ? 'ew-resize' : 'ew-resize' }}>角度：
-                            <div style={{ display: 'flex', alignItems: 'center'}}>
+                            <div>
                             <input
                                 type="number"
                                 min="0"
                                 max="360"
                                 value={angle}
                                 onChange={(e) => setAngle(Number(e.target.value))}
-                                style={{ width: '30px', textAlign: 'center' }}
                             />
-                              <span style={{ marginLeft:'-3px', fontSize: '13px' }}>°</span>
-                        </div></label>
+                            <span>°</span>
+                            </div>
+                        </label>
+
                         <input
                             type="range"
                             min="0"
@@ -590,21 +625,19 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                             value={angle}
                             onChange={handleAngleChange}
                         />
-                   
                     </div>
 
                     <div className="pattern-setting-item">
                         <label onMouseDown={(e) => handleMouseDown(e, 'scale')} style={{ cursor: isDragging && dragTarget === 'scale' ? 'ew-resize' : 'ew-resize' }}>缩放：
-                            <div style={{ display: 'flex', alignItems: 'center' }}>
+                            <div>
                                 <input
                                     type="number"
                                     min="20"
                                     max="300"
                                     value={scale}
                                     onChange={(e) => setScale(Number(e.target.value))}
-                                    style={{ width: '30px', textAlign: 'center' }}
                                 />
-                                <span style={{ marginLeft:'-3px', fontSize: '13px' }}>%</span>
+                                <span>%</span>
                             </div>
                         </label>
                         <input
@@ -615,25 +648,26 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                             value={scale}
                             onChange={handleScaleChange}
                         />
-                       
                     </div>
                 </div>
+
                 <div className="pattern-checkbox-container">
-                        <input
+                       <label
+                            htmlFor="transparencyCheckbox"
+                            className="pattern-checkbox-label"
+                            onClick={() => setPreserveTransparency(!preserveTransparency)}
+                        >
+                            保留不透明度:
+                       </label>
+                       <input
                             type="checkbox"
                             id="transparencyCheckbox"
                             checked={preserveTransparency}
                             onChange={(e) => setPreserveTransparency(e.target.checked)}
                             className="pattern-checkbox-input"
                         />
-                        <label
-                            htmlFor="transparencyCheckbox"
-                            className="pattern-checkbox-label"
-                            onClick={() => setPreserveTransparency(!preserveTransparency)}
-                        >
-                            保留不透明度
-                        </label>
                 </div>
+                
             </div>
             {selectedPattern && (
                 <div className="pattern-final-preview-container">

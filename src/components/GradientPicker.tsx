@@ -21,7 +21,7 @@ interface ExtendedGradientStop extends GradientStop {
 }
 
 const GradientPicker: React.FC<GradientPickerProps> = ({
-    isOpen, 
+    isOpen,  
     onClose,
     onSelect
 }) => {
@@ -754,18 +754,44 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         >
                             <AddIcon />
                         </sp-action-button> 
-                        <sp-action-button 
-                            quiet 
-                            class="icon-button" 
+                        <div className="delete-button-wrapper">
+                        <sp-action-button
+                            quiet
+                            class="icon-button"
                             onClick={() => {
-                                if (selectedPreset !== null) {
-                                    handleDeletePreset(selectedPreset);
+                            if (selectedPreset !== null) {
+                                handleDeletePreset(selectedPreset);
+                            }
+                            }}
+                            disabled={selectedPreset === null || presets.length === 0}
+                            style={{
+                            cursor: selectedPreset === null || presets.length === 0 ? 'not-allowed' : 'pointer',
+                            opacity: selectedPreset === null || presets.length === 0 ? 0.5 : 1,
+                            alignItems: 'center',
+                            marginLeft: 'auto',
+                            justifyContent: 'flex-end'
+                            }}
+                            onMouseEnter={(e) => {
+                                if (!(selectedPreset === null || presets.length === 0)) {
+                                    const iconFill = e.currentTarget.querySelector('.icon-fill');
+                                    if (iconFill) iconFill.style.fill = 'var(--hover-icon)';
                                 }
                             }}
-                            disabled={selectedPreset === null}
+                            onMouseLeave={(e) => {
+                                const iconFill = e.currentTarget.querySelector('.icon-fill');
+                                if (iconFill) {
+                                    iconFill.style.fill = (selectedPreset === null || presets.length === 0) ? 'var(--disabled-color)' : 'var(--text-color)';
+                                }
+                            }}
+                            title="删除预设"
                         >
-                            <DeleteIcon />
+                            <DeleteIcon style={{
+                                width: '15px',
+                                height: '15px',
+                                display: 'block'
+                            }} />
                         </sp-action-button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -777,7 +803,30 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 {/* 不透明度控制 */}
                 {selectedStopIndex !== null && selectedStopType === 'opacity' && (
                     <div className="opacity-input">
-                        <label className="gradient-subtitle">不透明度：</label>
+                        <label 
+                            className="gradient-subtitle draggable-label"
+                            onMouseDown={(e) => {
+                                e.preventDefault();
+                                const startX = e.clientX;
+                                const startValue = Math.round(parseFloat(stops[selectedStopIndex].color.match(/,\s*([\d.]+)\s*\)$/)?.[1] || '1') * 100);
+                                
+                                const handleMouseMove = (moveEvent: MouseEvent) => {
+                                    const deltaX = moveEvent.clientX - startX;
+                                    const newValue = Math.max(0, Math.min(100, startValue + Math.round(deltaX / 2)));
+                                    handleStopChange(selectedStopIndex, undefined, undefined, newValue);
+                                };
+                                
+                                const handleMouseUp = () => {
+                                    document.removeEventListener('mousemove', handleMouseMove);
+                                    document.removeEventListener('mouseup', handleMouseUp);
+                                };
+                                
+                                document.addEventListener('mousemove', handleMouseMove);
+                                document.addEventListener('mouseup', handleMouseUp);
+                            }}
+                        >
+                            不透明度：
+                        </label>
                         <input
                             type="number"
                             min="0"
@@ -789,14 +838,44 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             }}
                         />
                         <label className="gradient-subtitle">%</label>
-                        <sp-action-button 
-                            quiet 
+                        <div className="delete-button-wrapper">
+                        <sp-action-button
+                            quiet
                             className="delete-button"
-                            onClick={() => handleRemoveStop(selectedStopIndex)}
+                            onClick={() => {
+                            if (stops.length > 2) {
+                                handleRemoveStop(selectedStopIndex);
+                            }
+                            }}
                             disabled={stops.length <= 2}
+                            style={{
+                            cursor: stops.length <= 2 ? 'not-allowed' : 'pointer',
+                            opacity: stops.length <= 2 ? 0.5 : 1,
+                            alignItems: 'center',
+                            marginLeft: 'auto',
+                            justifyContent: 'flex-end'
+                            }}
+                            onMouseEnter={(e) => {
+                                if (stops.length > 2) {
+                                    const iconFill = e.currentTarget.querySelector('.icon-fill');
+                                    if (iconFill) iconFill.style.fill = 'var(--hover-icon)';
+                                }
+                            }}
+                            onMouseLeave={(e) => {
+                                const iconFill = e.currentTarget.querySelector('.icon-fill');
+                                if (iconFill) {
+                                    iconFill.style.fill = stops.length <= 2 ? 'var(--disabled-color)' : 'var(--text-color)';
+                                }
+                            }}
+                            title="删除色标"
                         >
-                            <DeleteIcon />
+                            <DeleteIcon style={{
+                                width: '15px',
+                                height: '15px',
+                                display: 'block'
+                            }} />
                         </sp-action-button>
+                        </div>
                     </div>
                 )}
 
@@ -1074,14 +1153,44 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             }}
                         />
                         
-                        <sp-action-button 
-                            quiet 
+                        <div className="delete-button-wrapper">
+                        <sp-action-button
+                            quiet
                             className="delete-button"
-                            onClick={() => handleRemoveStop(selectedStopIndex)}
+                            onClick={() => {
+                            if (stops.length > 2) {
+                                handleRemoveStop(selectedStopIndex);
+                            }
+                            }}
                             disabled={stops.length <= 2}
+                            style={{
+                            cursor: stops.length <= 2 ? 'not-allowed' : 'pointer',
+                            opacity: stops.length <= 2 ? 0.5 : 1,
+                            alignItems: 'center',
+                            marginLeft: 'auto',
+                            justifyContent: 'flex-end'
+                            }}
+                            onMouseEnter={(e) => {
+                                if (stops.length > 2) {
+                                    const iconFill = e.currentTarget.querySelector('.icon-fill');
+                                    if (iconFill) iconFill.style.fill = 'var(--hover-icon)';
+                                }
+                            }}
+                            onMouseLeave={(e) => {
+                                const iconFill = e.currentTarget.querySelector('.icon-fill');
+                                if (iconFill) {
+                                    iconFill.style.fill = stops.length <= 2 ? 'var(--disabled-color)' : 'var(--text-color)';
+                                }
+                            }}
+                            title="删除色标"
                         >
-                            <DeleteIcon />
+                            <DeleteIcon style={{
+                                width: '15px',
+                                height: '15px',
+                                display: 'block'
+                            }} />
                         </sp-action-button>
+                        </div>
                     </div>
                 )}
             </div>
@@ -1115,25 +1224,30 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             style={{ cursor: 'pointer' }}
                             onChange={(e) => setAngle(Number(e.target.value))}
                         />
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                        <div>
                             <input
                                 type="number"
                                 min="0" 
                                 max="360"
                                 value={angle}
                                 onChange={(e) => setAngle(Number(e.target.value))}
-                                style={{ width: '30px', textAlign: 'center' }}
                             />
-                          <span style={{ marginLeft:'-3px', fontSize: '13px' }}>°</span>
+                          <span>°</span>
                         </div>
                     </div>
                 )}    
 
                 <div className={`reverse-checkbox-group ${gradientType === 'radial' ? 'compact' : ''}`}>
                     <div className="reverse-checkbox-container">
-                        <label>反向：</label>
+                        <label 
+                            htmlFor="reverseCheckbox"
+                            onClick={() => setReverse(!reverse)}
+                        >
+                            反向：
+                        </label>
                         <input
                             type="checkbox"
+                            id="reverseCheckbox"
                             checked={reverse}
                             onChange={(e) => setReverse(e.target.checked)}
                         />
@@ -1142,7 +1256,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     <div className="reverse-checkbox-container">
                          <label
                             htmlFor="transparencyCheckbox"
-                            className="pattern-checkbox-label"
                             onClick={() => setPreserveTransparency(!preserveTransparency)}
                         >
                             保留不透明度：

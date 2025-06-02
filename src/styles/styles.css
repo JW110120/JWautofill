@@ -277,6 +277,18 @@ sp-picker[disabled] {
   justify-content: space-between;
 }
 
+.selection-slider-item div {
+  margin-right: 3px;
+  align-items: center;
+  display: flex;
+}
+
+.selection-slider-item span {
+  font-size: 13px;
+  color: var(--text-color);
+  width: 8px;
+}
+
 .selection-slider-item:not(:last-child) {
   margin-bottom: -5px;
 }
@@ -289,15 +301,9 @@ sp-picker[disabled] {
   align-items: center;
 }
 
-.selection-slider-value {
-  font-size: 12px;  /* 从13px改为12px */
-  right: 0px;
-  color: var(--text-color);
-}
-
 .selection-slider-input {
   width: 150px; 
-  margin-top: 15px;
+  margin:15px 0 0 -2px;
   cursor: pointer;
   display: flex;
   justify-content: center;
@@ -340,8 +346,8 @@ sp-switch {
   line-height: 32px; /* 保持一致的行高 */
 }
 
-.stroke-settings-icon:hover {
-  background-color: var(--hover-bg);
+.stroke-settings-icon:hover .icon-fill {
+  fill: var(--hover-icon);
 }
 
 .stroke-settings-icon:active {
@@ -415,8 +421,8 @@ sp-radio {
   padding:0px;
 }
 
-.settings-icon:hover {
-  background-color: var(--hover-bg);
+.settings-icon:hover .icon-fill {
+  fill: var(--hover-icon);
 }
 
 .settings-icon:active {
