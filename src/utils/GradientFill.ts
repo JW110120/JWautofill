@@ -345,35 +345,42 @@ export class GradientFill {
         }
     }
             
-                // 处理渐变填充的辅助方法
-            private static async processGradientFill(options: GradientFillOptions, bounds: number[]) {
-            const left = bounds[0];
-            const top = bounds[1];
-            const right = bounds[2];
-            const bottom = bounds[3];
+    // 处理渐变填充的辅助方法
+    private static async processGradientFill(options: GradientFillOptions, bounds: number[]) {
+        const left = bounds[0];
+        const top = bounds[1];
+        const right = bounds[2];
+        const bottom = bounds[3];
     
-            // 计算选区中心点和尺寸
-            const centerX = (left + right) / 2;
-            const centerY = (top + bottom) / 2;
-            const width = right - left;
-            const height = bottom - top;
-            
-            // 计算对角线长度，用于确定渐变距离
-            const diagonal = Math.sqrt(width * width + height * height);
-            
-            // 增加容差，确保渐变完全覆盖选区
-            const tolerance = diagonal * 0.1; // 20%的容差
-            const gradientLength = diagonal / 2 + tolerance;
-            
-            // 将角度转换为弧度
-            const angleRad = (options.gradient.angle || 0) * Math.PI / 180;
-            
-            // 根据角度计算from和to坐标
-            const fromX = centerX - Math.cos(angleRad) * gradientLength;
-            const fromY = centerY - Math.sin(angleRad) * gradientLength;
-            const toX = centerX + Math.cos(angleRad) * gradientLength;
-            const toY = centerY + Math.sin(angleRad) * gradientLength;
-
+        // 计算选区中心点和尺寸
+        const centerX = (left + right) / 2;
+        const centerY = (top + bottom) / 2;
+        const width = right - left;
+        const height = bottom - top;
+        
+        // 计算对角线长度，用于确定渐变距离
+        const diagonal = Math.sqrt(width * width + height * height);
+        
+        // 增加容差，确保渐变完全覆盖选区
+        const tolerance = diagonal * 0.2; // 20%的容差
+        const gradientLength = diagonal + tolerance; // 使用完整对角线长度
+        
+        // 将角度转换为弧度
+        const angleRad = (options.gradient.angle || 0) * Math.PI / 180;
+        
+        let fromX, fromY, toX, toY;
+        
+        if (options.gradient.type === 'radial') {
+            // 径向渐变：from和to都在中心点，通过半径控制 
+            fromX = toX = centerX;
+            fromY = toY = centerY;
+        } else {
+            // 线性渐变：根据角度计算from和to坐标
+            fromX = centerX - Math.cos(angleRad) * gradientLength;
+            fromY = centerY - Math.sin(angleRad) * gradientLength;
+            toX = centerX + Math.cos(angleRad) * gradientLength;
+            toY = centerY + Math.sin(angleRad) * gradientLength;
+        }
             // 生成颜色stops
             const colorStops = this.generateColorStops(options.gradient.stops);
             

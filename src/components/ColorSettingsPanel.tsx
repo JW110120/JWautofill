@@ -35,6 +35,17 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
         }
     };
 
+    const handleNumberInputChange = (key: keyof ColorSettings, value: number) => {
+        const maxValue = key === 'hueVariation' ? 360 : 100;
+        const clampedValue = Math.max(0, Math.min(maxValue, value));
+        if (!isNaN(clampedValue)) {
+            setSettings(prev => ({
+                ...prev,
+                [key]: clampedValue
+            }));
+        }
+    };
+
     const handleLabelMouseDown = (event: React.MouseEvent, key: keyof ColorSettings) => {
         event.preventDefault();
         setIsDragging(true);
@@ -118,7 +129,7 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
                                         min="0"
                                         max={key === 'hueVariation' ? 360 : 100}
                                         value={settings[key as keyof ColorSettings]}
-                                        onChange={(e) => handleSliderChange(key as keyof ColorSettings, Number(e.target.value))}
+                                        onChange={(e) => handleNumberInputChange(key as keyof ColorSettings, Number(e.target.value))}
                                         style={{ marginTop:'12px', marginRight:'-10px', width: '30px', textAlign: 'center' }}
                                     />
                                     <span style={{ marginLeft:'-12px', fontSize: '13px' }}>

@@ -412,7 +412,7 @@ class App extends React.Component<AppProps, AppState> {
         await new Promise(resolve => setTimeout(resolve, 50));
         try {
             if (this.state.clearMode) {
-                await ClearHandler.clearWithOpacity(this.state.opacity);
+                await ClearHandler.clearWithOpacity(this.state.opacity, this.state);
                 return;
             }
     
@@ -828,6 +828,18 @@ class App extends React.Component<AppProps, AppState> {
                         <span>填充选项</span>
                     </div>
                     <div className={`expand-content ${this.state.isExpanded ? 'expanded' : ''}`}>
+
+
+                        {/* 新建图层开关 */}
+                        <div className="switch-container">
+                            <span className="switch-label">新建图层</span>
+                            <sp-switch 
+                                checked={this.state.createNewLayer}
+                                onChange={this.toggleCreateNewLayer}
+                                disabled={this.state.clearMode}
+                            />
+                        </div>
+
                        {/* 描边模式开关 */}
                        <div className="switch-container">
                             <label className="switch-label">描边模式</label>
@@ -880,15 +892,6 @@ class App extends React.Component<AppProps, AppState> {
                             <sp-switch 
                                 checked={this.state.strokeEnabled}
                                 onChange={this.toggleStrokeEnabled}
-                                disabled={this.state.clearMode}
-                            />
-                        </div>
-                        <div className="switch-container">
-                            <span className="switch-label">新建图层</span>
-                            <sp-switch 
-                                checked={this.state.createNewLayer}
-                                onChange={this.toggleCreateNewLayer}
-                                disabled={this.state.clearMode}
                             />
                         </div>
 
@@ -898,7 +901,7 @@ class App extends React.Component<AppProps, AppState> {
                             <sp-switch 
                                 checked={this.state.clearMode}
                                 onChange={this.toggleClearMode}
-                                disabled={this.state.strokeEnabled || this.state.createNewLayer}
+                                disabled={this.state.createNewLayer}
                             />
                         </div>
 

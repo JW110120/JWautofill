@@ -17,7 +17,7 @@ interface GradientPickerProps {
 interface ExtendedGradientStop extends GradientStop {
     colorPosition: number;    // 颜色stop的位置
     opacityPosition: number;  // 透明度stop的位置
-    midpoint?: number;        // 与下一个stop之间的中点位置
+    midpoint?: number;        // 与下一个stop之间的中点位置 
 }
 
 const GradientPicker: React.FC<GradientPickerProps> = ({
@@ -34,7 +34,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const [preserveTransparency, setPreserveTransparency] = useState<boolean>(false); // 添加新状态
     const [selectedStopIndex, setSelectedStopIndex] = useState<number | null>(null);
     const [selectedStopType, setSelectedStopType] = useState<'color' | 'opacity'>('color');
-    const [stops, setStops] = useState<ExtendedGradientStop[]>([
+    const [stops, setStops] = useState<ExtendedGradientStop[]>([ 
         { color: 'rgba(0, 0, 0, 1)', position: 0, colorPosition: 0, opacityPosition: 0, midpoint: 50 },
         { color: 'rgba(255, 255, 255, 1)', position: 100, colorPosition: 100, opacityPosition: 100 }
     ]);
@@ -46,7 +46,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const [isDraggingAngle, setIsDraggingAngle] = useState(false);
     const [dragStartX, setDragStartX] = useState(0);
     const [dragStartPosition, setDragStartPosition] = useState(0);
-    const [dragStartAngle, setDragStartAngle] = useState(0);
+    const [dragStartAngle, setDragStartAngle] = useState(0); 
     const [dragStopIndex, setDragStopIndex] = useState<number | null>(null);
 
     const handleAddPreset = () => {
@@ -64,7 +64,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const handleDeletePreset = (index: number) => {
         setPresets(presets.filter((_, i) => i !== index));
         if (selectedPreset === index) {
-            const newSelectedIndex = index > 0 ? index - 1 : null;
+            const newSelectedIndex = index > 0 ? index - 1 : null; 
             setSelectedPreset(newSelectedIndex);
             
             if (newSelectedIndex !== null) {
@@ -397,28 +397,47 @@ const getPreviewGradientStyle = () => {
     const handleColorStopMouseDown = (e: React.MouseEvent, index: number) => {
         e.preventDefault();
         e.stopPropagation();
-        setIsDraggingColor(true);
         setSelectedStopIndex(index);
         setSelectedStopType('color');
-        setDragStartX(e.clientX);
-        setDragStartPosition(stops[index].colorPosition);
+        
+        const startX = e.clientX;
+        const startPosition = stops[index].colorPosition;
+        setDragStartX(startX);
+        setDragStartPosition(startPosition);
         setDragStopIndex(index);
+        
+        let hasMoved = false;
         
         const handleMouseMove = (moveEvent: MouseEvent) => {
             moveEvent.preventDefault();
+            
+            // 只有在鼠标移动超过阈值时才进入拖拽状态
+            if (!hasMoved) {
+                const deltaX = Math.abs(moveEvent.clientX - startX);
+                if (deltaX > 3) { // 3px的移动阈值
+                    hasMoved = true;
+                    setIsDraggingColor(true);
+                } else {
+                    return;
+                }
+            }
+            
             // 修复选择器
             const trackElement = document.querySelector('.color-slider-track') as HTMLElement;
             if (!trackElement) return;
             
             const rect = trackElement.getBoundingClientRect();
-            const deltaX = moveEvent.clientX - dragStartX;
-            const newPosition = Math.max(0, Math.min(100, dragStartPosition + (deltaX / rect.width) * 100));
+            const deltaX = moveEvent.clientX - startX;
+            const newPosition = Math.max(0, Math.min(100, startPosition + (deltaX / rect.width) * 100));
             
             handleStopChange(index, undefined, undefined, undefined, newPosition);
         };
         
         const handleMouseUp = () => {
-            setIsDraggingColor(false);
+            // 只有在真正移动过的情况下才清除拖拽状态
+            if (hasMoved) {
+                setIsDraggingColor(false);
+            }
             setDragStopIndex(null);
             document.removeEventListener('mousemove', handleMouseMove);
             document.removeEventListener('mouseup', handleMouseUp);
@@ -432,28 +451,47 @@ const getPreviewGradientStyle = () => {
     const handleOpacityStopMouseDown = (e: React.MouseEvent, index: number) => {
         e.preventDefault();
         e.stopPropagation();
-        setIsDraggingOpacity(true);
         setSelectedStopIndex(index);
         setSelectedStopType('opacity');
-        setDragStartX(e.clientX);
-        setDragStartPosition(stops[index].opacityPosition);
+        
+        const startX = e.clientX;
+        const startPosition = stops[index].opacityPosition;
+        setDragStartX(startX);
+        setDragStartPosition(startPosition);
         setDragStopIndex(index);
+        
+        let hasMoved = false;
         
         const handleMouseMove = (moveEvent: MouseEvent) => {
             moveEvent.preventDefault();
+            
+            // 只有在鼠标移动超过阈值时才进入拖拽状态
+            if (!hasMoved) {
+                const deltaX = Math.abs(moveEvent.clientX - startX);
+                if (deltaX > 3) { // 3px的移动阈值
+                    hasMoved = true;
+                    setIsDraggingOpacity(true);
+                } else {
+                    return;
+                }
+            }
+            
             // 修复选择器 - 透明度拖拽应该使用gradient-slider-track
             const trackElement = document.querySelector('.gradient-slider-track') as HTMLElement;
             if (!trackElement) return;
             
             const rect = trackElement.getBoundingClientRect();
-            const deltaX = moveEvent.clientX - dragStartX;
-            const newPosition = Math.max(0, Math.min(100, dragStartPosition + (deltaX / rect.width) * 100));
+            const deltaX = moveEvent.clientX - startX;
+            const newPosition = Math.max(0, Math.min(100, startPosition + (deltaX / rect.width) * 100));
             
             handleStopChange(index, undefined, undefined, undefined, undefined, newPosition);
         };
         
         const handleMouseUp = () => {
-            setIsDraggingOpacity(false);
+            // 只有在真正移动过的情况下才清除拖拽状态
+            if (hasMoved) {
+                setIsDraggingOpacity(false);
+            }
             setDragStopIndex(null);
             document.removeEventListener('mousemove', handleMouseMove);
             document.removeEventListener('mouseup', handleMouseUp);
@@ -603,8 +641,7 @@ const getPreviewGradientStyle = () => {
     if (!isOpen) return null;
 
     // 添加渲染棋盘格的函数
-    const renderCheckerboard = (containerWidth: number, containerHeight: number) => {
-        const tileSize = 8; // 固定8x8像素的方块
+    const renderCheckerboard = (containerWidth: number, containerHeight: number, tileSize: number = 8) => {
         const tilesPerRow = Math.ceil(containerWidth / tileSize);
         const rows = Math.ceil(containerHeight / tileSize);
         const tiles = [];
@@ -646,17 +683,28 @@ const getPreviewGradientStyle = () => {
                     {presets.map((preset, index) => {
                         // 为每个预设生成独立的渐变样式
                         const presetGradientStops = preset.stops.map(stop => {
-                            const rgbaMatch = stop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+                            // 解析颜色，确保正确处理透明度
+                            let color = stop.color;
+                            const rgbaMatch = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
                             if (rgbaMatch) {
                                 const [_, r, g, b, a = '1'] = rgbaMatch;
-                                return `rgba(${r}, ${g}, ${b}, ${a}) ${stop.position}%`;
+                                // 确保透明度值正确
+                                const alpha = parseFloat(a);
+                                color = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+                            } else if (color.startsWith('#')) {
+                                // 处理十六进制颜色
+                                const hex = color.replace('#', '');
+                                const r = parseInt(hex.substring(0, 2), 16);
+                                const g = parseInt(hex.substring(2, 4), 16);
+                                const b = parseInt(hex.substring(4, 6), 16);
+                                color = `rgba(${r}, ${g}, ${b}, 1)`;
                             }
-                            return `${stop.color} ${stop.position}%`;
+                            return `${color} ${stop.position}%`;
                         }).join(', ');
                         
                         const presetGradientStyle = preset.type === 'radial' 
                             ? `radial-gradient(circle, ${presetGradientStops})`
-                            : `linear-gradient(${90+preset.angle || 0}deg, ${presetGradientStops})`;
+                            : `linear-gradient(${(preset.angle || 0) + 90}deg, ${presetGradientStops})`;
                         
                         return (
                             <div 
@@ -665,12 +713,38 @@ const getPreviewGradientStyle = () => {
                                 onClick={() => handlePresetSelect(index)}
                             >
                                 <div className="preset-preview" style={{
-                                    background: presetGradientStyle
-                                }} />
+                                    position: 'relative',
+                                    width: '100%',
+                                    height: '100%',
+                                    overflow: 'hidden'
+                                }}>
+                                    {/* 棋盘格背景 */}
+                                    <div style={{
+                                        position: 'absolute',
+                                        top: 0,
+                                        left: 0,
+                                        width: '100%',
+                                        height: '100%',
+                                        zIndex: 1
+                                    }}>
+                                        {renderCheckerboard(50, 50, 4)}
+                                    </div>
+                                    {/* 渐变覆盖层 */}
+                                    <div style={{
+                                        position: 'absolute',
+                                        top: 0,
+                                        left: 0,
+                                        width: '100%',
+                                        height: '100%',
+                                        background: presetGradientStyle,
+                                        zIndex: 2
+                                    }} />
+                                </div>
                             </div>
                         );
                     })}
                 </div>
+                
                 <div className="gradient-icon-container">
                     <div className="icon-group">
                         <sp-action-button 
@@ -1004,7 +1078,7 @@ const getPreviewGradientStyle = () => {
             </div>
 
             {/* 渐变类型设置 */}
-            <div className="gradient-settings-area">
+            <div className={`gradient-settings-area ${gradientType === 'radial' ? 'radial-mode' : 'linear-mode'}`}>
                 <div className="gradient-setting-item">
                     <label>样式：</label>
                     <sp-picker
@@ -1029,12 +1103,13 @@ const getPreviewGradientStyle = () => {
                             max="360"
                             step="1"
                             value={angle}
+                            style={{ cursor: 'pointer' }}
                             onChange={(e) => setAngle(Number(e.target.value))}
                         />
                         <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                             <input
                                 type="number"
-                                min="0"
+                                min="0" 
                                 max="360"
                                 value={angle}
                                 onChange={(e) => setAngle(Number(e.target.value))}
@@ -1045,7 +1120,7 @@ const getPreviewGradientStyle = () => {
                     </div>
                 )}    
 
-                <div className="reverse-checkbox-group">
+                <div className={`reverse-checkbox-group ${gradientType === 'radial' ? 'compact' : ''}`}>
                     <div className="reverse-checkbox-container">
                         <label>反向：</label>
                         <input

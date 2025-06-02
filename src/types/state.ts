@@ -94,7 +94,7 @@ export const initialState: AppState = {
     selectionType: 'normal',
     isExpanded: true,
     createNewLayer: false,    // 添加初始值
-    clearMode: false,    // 添加初始值
+    clearMode: true,    // 添加初始值
     fillMode: 'foreground',
     colorSettings: {
         hueVariation: 0,

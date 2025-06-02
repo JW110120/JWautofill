@@ -1,0 +1,34 @@
+{
+    "id": "com.adobe.photoshop.sample.imaging-test",
+    "name": {
+        "default": "Imaging Test Plugin"
+    },
+    "manifestVersion": 4,
+    "version": "1.0.0",
+    "main": "index.html",
+
+    "entrypoints": [
+        {
+            "type": "panel",
+            "id": "panel",
+
+            "label": {"default": "Imaging Test"},
+            "title": "Imaging Test",
+
+            "minimumSize": {"width": 230, "height": 200},
+            "maximumSize": {"width": 2000, "height": 2000},
+            "preferredDockedSize": {"width": 230, "height": 200},
+            "preferredFloatingSize": {"width": 340, "height": 200}
+        }
+    ],
+
+
+    "host": {
+		"app":  "PS",
+		"minVersion": "1.0.0",
+		"data" : {
+            "apiVersion": 2,
+			"loadEvent": "use"
+		}
+	}
+}

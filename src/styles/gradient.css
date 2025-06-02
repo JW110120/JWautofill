@@ -147,7 +147,7 @@
     height: 20px;
     border-radius: 4px;
     background: transparent;
-    margin: 0px 10px -13px 10px;
+    margin: 0px 14px -13px 14px;
     /* 添加以下属性 */
     overflow: visible;
 }
@@ -182,10 +182,10 @@
 
 .gradient-preview {
     height: 24px;
-    width: calc(100% - 20px);  /* 减去左右margin的总和 */
-    margin: 10px 10px;
-    border: 1px solid var(--border-color);
-    position: relative;
+    width: calc(100% - 28px); 
+    margin: 10px 10px 10px 14px;
+    border: 1px solid var(--border-color); 
+    position: relative;  
     overflow: hidden;
 }
 
@@ -194,7 +194,7 @@
   height: 20px;
   border-radius: 4px;
   background: transparent;
-  margin: -12px 10px 0 10px;
+  margin: -12px 14px 0 14px;
   /* 添加以下属性 */
   overflow: visible;
 }
@@ -280,6 +280,18 @@ sp-color-slider {
     display: flex;
     flex-direction: column;
     margin-bottom: 10px;
+}
+
+/* 径向渐变模式的紧凑布局 */
+.gradient-settings-area.radial-mode {
+    height: 12%;
+    min-height: 60px;
+    padding: 8px;
+}
+
+.gradient-settings-area.linear-mode {
+    height: 18%;
+    min-height: 80px;
 } 
 /* 渐变角度滑块样式 */
 .gradient-setting-item {
@@ -322,11 +334,25 @@ sp-color-slider {
   justify-content: space-between;
 }
 
+/* 径向渐变模式的紧凑间距 */
+.reverse-checkbox-group.compact {
+  margin: 8px 0;
+}
+
 .reverse-checkbox-container {
   display: flex;
   align-items: center;
   gap: 8px;
   margin : 10px 0;
+}
+
+/* 径向渐变模式下的紧凑容器间距 */
+.gradient-settings-area.radial-mode .reverse-checkbox-container {
+  margin: 5px 0;
+}
+
+.gradient-settings-area.radial-mode .gradient-setting-item {
+  margin: 8px 0;
 }
 
 .reverse-checkbox-container input[type="checkbox"] {

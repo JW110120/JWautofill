@@ -61,7 +61,8 @@ module.exports = (env, argv) => {
                 { from: "./manifest.json", to: "." },
                 { from: "./src/assets/icons", to: "./icons" },
                 { from: "./src/assets/SourceHanSansCN-Normal.otf", to: "." },
-                { from: "./src/styles/styles.css", to: "." }
+                { from: "./src/styles/styles.css", to: "." },
+                { from: "./README.md", to: "." }
             ]
         }),
         {
