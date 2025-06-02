@@ -660,7 +660,7 @@ class App extends React.Component<AppProps, AppState> {
                                             max="100"
                                             value={this.state.opacity}
                                             onChange={(e) => this.setState({ opacity: Number(e.target.value) })}
-                                            style={{ width: '30px', textAlign: 'center', zIndex: 1 }}
+                                            style={{ width: '30px', zIndex: 1 }}
                                         />
                                         <span style={{ fontSize: '13px' }}>%</span>
                                     </div>
@@ -691,7 +691,7 @@ class App extends React.Component<AppProps, AppState> {
                                             max="100"
                                             value={this.state.feather}
                                             onChange={(e) => this.setState({ feather: Number(e.target.value) })}
-                                            style={{ width: '30px', textAlign: 'center', zIndex: 1 }}
+                                            style={{ width: '30px', zIndex: 1 }}
                                         />
                                         <span style={{ fontSize: '13px' }}>px</span>
                                     </div>
@@ -745,7 +745,7 @@ class App extends React.Component<AppProps, AppState> {
                                             max="100"
                                             value={this.state.selectionSmooth}
                                             onChange={(e) => this.setState({ selectionSmooth: Number(e.target.value) })}
-                                            style={{ marginLeft: '-10px', width: '30px', textAlign: 'center', zIndex: 1 }}
+                                            style={{ marginLeft: '-10px', width: '30px', zIndex: 1 }}
                                         />
                                         <span style={{ fontSize: '13px' }}>%</span>
                                     </div>
@@ -778,7 +778,7 @@ class App extends React.Component<AppProps, AppState> {
                                             max="100"
                                             value={this.state.selectionContrast}
                                             onChange={(e) => this.setState({ selectionContrast: Number(e.target.value) })}
-                                            style={{ marginLeft: '-10px', width: '30px', textAlign: 'center', zIndex: 1 }}
+                                            style={{ marginLeft: '-10px', width: '30px', zIndex: 1 }}
                                         />
                                         <span style={{ fontSize: '13px' }}>%</span>
                                     </div>
@@ -811,7 +811,7 @@ class App extends React.Component<AppProps, AppState> {
                                             max="100"
                                             value={this.state.selectionShiftEdge}
                                             onChange={(e) => this.setState({ selectionShiftEdge: Number(e.target.value) })}
-                                            style={{ marginLeft: '-10px', width: '30px', textAlign: 'center', zIndex: 1 }}
+                                            style={{ marginLeft: '-10px', width: '30px', zIndex: 1 }}
                                         />
                                        <span style={{ fontSize: '13px' }}>%</span>
                                     </div>

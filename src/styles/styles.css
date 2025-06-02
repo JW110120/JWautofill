@@ -277,6 +277,10 @@ sp-picker[disabled] {
   justify-content: space-between;
 }
 
+.selection-slider-item input[type="number"]  {
+  width: 30px;
+}
+
 .selection-slider-item div {
   margin-right: 3px;
   align-items: center;
@@ -508,4 +512,14 @@ button:hover {
   opacity: 0.5;
   cursor: not-allowed;
   color: var(--disabled-color);
+}
+
+/* sp-action-button 边框控制 */
+sp-action-button {
+  border: none;
+}
+
+/* 主按钮保持边框 */
+sp-action-button.main-button {
+  border: 1px solid var(--border-color);
 }

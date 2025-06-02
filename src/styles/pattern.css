@@ -77,6 +77,7 @@
   
   .pattern-icon-container {
     position: absolute;
+    height: 30px;
     bottom: 0;
     right: 0;
     left: 0;
@@ -94,7 +95,6 @@
   .icon-button {
     padding: 4px;
     background: none;
-    border: 1px solid var(--border-color);
     border-radius: 4px;
     display: flex;
     align-items: center;
