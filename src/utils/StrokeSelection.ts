@@ -501,7 +501,7 @@ async function updateQuickMaskChannel(grayData: Uint8Array, bounds: any) {
             components: 1,
             chunky: false,  // 对于单通道灰度图像使用false
             colorSpace: "Grayscale",
-            colorProfile: "Generic Gray Profile"  // 根据示例代码添加颜色配置文件
+            colorProfile: "Dot Gain 15%"  // 根据示例代码添加颜色配置文件
         };
         
         console.log('🔧 创建ImageData选项:', options);

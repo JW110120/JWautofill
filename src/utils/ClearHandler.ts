@@ -236,12 +236,19 @@ export class ClearHandler {
     // 获取纯色填充的灰度数据
     static async getSolidFillGrayData(state: any, bounds: any) {
         const panelColor = calculateRandomColor(state.colorSettings, state.opacity);
+        console.log('🎨 获取到的面板颜色 (HSB):', panelColor);
+        
+        // 将HSB转换为RGB
+        const rgbColor = this.hsbToRgb(panelColor.hsb.hue, panelColor.hsb.saturation, panelColor.hsb.brightness);
+        console.log('🎨 转换后的RGB颜色:', rgbColor);
+        
         // 将RGB转换为灰度值：Gray = 0.299*R + 0.587*G + 0.114*B
         const grayValue = Math.round(
-            0.299 * panelColor.red + 
-            0.587 * panelColor.green + 
-            0.114 * panelColor.blue
+            0.299 * rgbColor.red + 
+            0.587 * rgbColor.green + 
+            0.114 * rgbColor.blue
         );
+        console.log('🎨 计算得到的灰度值:', grayValue);
         
         const pixelCount = bounds.width * bounds.height;
         const grayData = new Uint8Array(pixelCount);
@@ -415,7 +422,7 @@ export class ClearHandler {
                 components: 1,
                 chunky: false,  // 对于单通道灰度图像使用false
                 colorSpace: "Grayscale",
-                colorProfile: "Generic Gray Profile"  // 根据示例代码添加颜色配置文件
+                colorProfile: "Dot Gain 15%"  // 根据示例代码添加颜色配置文件
             };
             
             console.log('🔧 创建ImageData选项:', options);
@@ -494,6 +501,37 @@ export class ClearHandler {
         return Math.round(0.299 * red + 0.587 * green + 0.114 * blue);
     }
 
-
+    // 将HSB颜色转换为RGB
+    static hsbToRgb(hue: number, saturation: number, brightness: number) {
+        const h = hue / 360;
+        const s = saturation / 100;
+        const v = brightness / 100;
+        
+        const c = v * s;
+        const x = c * (1 - Math.abs((h * 6) % 2 - 1));
+        const m = v - c;
+        
+        let r, g, b;
+        
+        if (h >= 0 && h < 1/6) {
+            r = c; g = x; b = 0;
+        } else if (h >= 1/6 && h < 2/6) {
+            r = x; g = c; b = 0;
+        } else if (h >= 2/6 && h < 3/6) {
+            r = 0; g = c; b = x;
+        } else if (h >= 3/6 && h < 4/6) {
+            r = 0; g = x; b = c;
+        } else if (h >= 4/6 && h < 5/6) {
+            r = x; g = 0; b = c;
+        } else {
+            r = c; g = 0; b = x;
+        }
+        
+        return {
+            red: Math.round((r + m) * 255),
+            green: Math.round((g + m) * 255),
+            blue: Math.round((b + m) * 255)
+        };
+    }
 }
 
