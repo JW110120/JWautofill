@@ -110,7 +110,6 @@ export class ClearHandler {
     // 快速蒙版状态下的特殊填充逻辑
     static async clearInQuickMask(state: any) {
         try {
-            console.log('🔄 开始快速蒙版清除操作，填充模式:', state.fillMode);
             
             // 获取当前选区边界信息
             const selectionBounds = await this.getSelectionBounds();
@@ -118,11 +117,9 @@ export class ClearHandler {
                 console.warn('❌ 没有选区，无法执行快速蒙版清除操作');
                 return;
             }
-            console.log('✅ 获取选区边界成功:', selectionBounds);
 
             // 获取快速蒙版通道的像素数据
             const quickMaskPixels = await this.getQuickMaskPixels(selectionBounds);
-            console.log('✅ 获取快速蒙版像素数据成功，数据长度:', quickMaskPixels.length);
             
             // 根据填充模式获取填充内容的灰度数据
             let fillGrayData;
@@ -143,11 +140,9 @@ export class ClearHandler {
 
             // 应用新的混合公式计算最终灰度值
             const finalGrayData = this.calculateFinalGrayValues(quickMaskPixels, fillGrayData);
-            console.log('✅ 计算最终灰度值成功，数据长度:', finalGrayData.length);
             
             // 将计算后的灰度数据写回快速蒙版通道
             await this.updateQuickMaskChannel(finalGrayData, selectionBounds);
-            console.log('✅ 快速蒙版清除操作完成');
             
         } catch (error) {
             console.error('❌ 快速蒙版特殊填充失败:', error);
@@ -192,36 +187,63 @@ export class ClearHandler {
         }
     }
 
-    // 获取快速蒙版通道的像素数据
-    static async getQuickMaskPixels(bounds: any) {
-        try {
-            console.log('🔍 尝试获取快速蒙版像素数据，边界:', bounds);
-            // 使用imaging API获取快速蒙版通道的像素数据
-            const pixels = await imaging.getPixels({
-                documentID: app.activeDocument.id,
-                sourceBounds: {
-                    left: bounds.left,
-                    top: bounds.top,
-                    right: bounds.right,
-                    bottom: bounds.bottom
-                },
-                targetSize: {
-                    width: bounds.width,
-                    height: bounds.height
-                },
-                channelID: "mask" // 获取快速蒙版通道
-            });
-            
-            const data = await pixels.imageData.getData();
-            console.log('✅ 成功获取快速蒙版像素数据，数据类型:', data.constructor.name, '长度:', data.length);
-            return data;
-        } catch (error) {
-            console.error('❌ 获取快速蒙版像素数据失败:', error);
-            console.log('🔄 使用备用方法获取快速蒙版数据');
-            // 如果无法直接获取快速蒙版，尝试通过其他方式
-            return this.getFallbackQuickMaskData(bounds);
+   // 获取快速蒙版通道的像素数据
+static async getQuickMaskPixels(bounds: any) {
+    try {
+        console.log('🔍 尝试获取快速蒙版像素数据，边界:', bounds);
+        
+        // 方法1：使用batchPlay获取快速蒙版通道（Alpha通道）
+        const channelResult = await action.batchPlay([
+            {
+                _obj: "get",
+                _target: [
+                    {
+                        _ref: "channel",
+                        _name: "Quick Mask"  // 快速蒙版通道名称
+                    }
+                ]
+            }
+        ], { synchronousExecution: true });
+        
+        console.log('📊 快速蒙版通道信息:', channelResult);
+        
+        // 方法2：使用imaging.getPixels获取Alpha通道数据
+        const pixels = await imaging.getPixels({
+            documentID: app.activeDocument.id,
+            sourceBounds: {
+                left: bounds.left,
+                top: bounds.top,
+                right: bounds.right,
+                bottom: bounds.bottom
+            },
+            targetSize: {
+                width: bounds.width,
+                height: bounds.height
+            },
+            componentSize: 8,
+            channelsRequired: ["transparency"]  // 获取透明度通道（快速蒙版）
+        });
+        
+        const data = await pixels.imageData.getData();
+        console.log('✅ 成功获取快速蒙版像素数据，数据类型:', data.constructor.name, '长度:', data.length);
+        
+        // 如果是RGBA格式，提取Alpha通道（每4个字节的第4个）
+        if (data.length === bounds.width * bounds.height * 4) {
+            const alphaData = new Uint8Array(bounds.width * bounds.height);
+            for (let i = 0; i < alphaData.length; i++) {
+                alphaData[i] = data[i * 4 + 3]; // 提取Alpha通道
+            }
+            return alphaData;
         }
+        
+        return data;
+    } catch (error) {
+        console.error('❌ 获取快速蒙版像素数据失败:', error);
+        console.log('🔄 使用备用方法获取快速蒙版数据');
+        // 如果无法直接获取快速蒙版，尝试通过其他方式
+        return this.getFallbackQuickMaskData(bounds);
     }
+}
 
     // 备用方法：通过其他方式获取快速蒙版数据
     static async getFallbackQuickMaskData(bounds: any) {
@@ -236,11 +258,9 @@ export class ClearHandler {
     // 获取纯色填充的灰度数据
     static async getSolidFillGrayData(state: any, bounds: any) {
         const panelColor = calculateRandomColor(state.colorSettings, state.opacity);
-        console.log('🎨 获取到的面板颜色 (HSB):', panelColor);
         
         // 将HSB转换为RGB
         const rgbColor = this.hsbToRgb(panelColor.hsb.hue, panelColor.hsb.saturation, panelColor.hsb.brightness);
-        console.log('🎨 转换后的RGB颜色:', rgbColor);
         
         // 将RGB转换为灰度值：Gray = 0.299*R + 0.587*G + 0.114*B
         const grayValue = Math.round(
@@ -398,6 +418,9 @@ export class ClearHandler {
     static calculateFinalGrayValues(maskData: Uint8Array, fillData: Uint8Array) {
         const finalData = new Uint8Array(maskData.length);
         
+        // 输出前10个像素的样本数据用于调试
+        console.log('🔍 混合计算样本数据 (前10个像素):');
+        
         for (let i = 0; i < maskData.length; i++) {
             const maskValue = maskData[i];  // 快速蒙版像素值 (0-255)
             const fillValue = fillData[i];  // 填充内容像素灰度值 (0-255)
@@ -405,96 +428,93 @@ export class ClearHandler {
             // 应用公式：maskValue + fillValue - (maskValue * fillValue) / 255
             const finalValue = maskValue + fillValue - (maskValue * fillValue) / 255;
             finalData[i] = Math.min(255, Math.max(0, Math.round(finalValue)));
+            // 输出前10个像素的详细信息
+            if (i < 10) {
+                console.log(`像素 ${i}: maskValue=${maskValue}, fillValue=${fillValue}, finalValue=${finalValue.toFixed(2)} `);
+            }
         }
         
         return finalData;
     }
 
     // 将计算后的灰度数据写回快速蒙版通道
-    static async updateQuickMaskChannel(grayData: Uint8Array, bounds: any) {
-        try {
-            console.log('🔄 开始更新快速蒙版通道，数据长度:', grayData.length, '边界:', bounds);
-            
-            // 创建PhotoshopImageData对象，快速蒙版是选区，使用putSelection API
-            const options = {
-                width: bounds.width,
-                height: bounds.height,
-                components: 1,
-                chunky: false,  // 对于单通道灰度图像使用false
-                colorSpace: "Grayscale",
-                colorProfile: "Dot Gain 15%"  // 根据示例代码添加颜色配置文件
-            };
-            
-            console.log('🔧 创建ImageData选项:', options);
-            const imageData = await imaging.createImageDataFromBuffer(grayData, options);
-            console.log('✅ 成功创建ImageData对象');
-            
-            // 快速蒙版实际上是选区，使用putSelection而不是putPixels
-            const putSelectionOptions = {
-                documentID: app.activeDocument.id,
-                imageData: imageData
-            };
-            
-            console.log('🔧 putSelection选项:', putSelectionOptions);
-            await imaging.putSelection(putSelectionOptions);
-            console.log('✅ 成功更新快速蒙版选区');
-            
-            // 释放图像数据
-            imageData.dispose();
-            console.log('✅ 已释放ImageData对象');
-            
-        } catch (error) {
-            console.error('❌ 更新快速蒙版通道失败:', error);
-            console.log('🔄 尝试使用备用方法更新快速蒙版');
-            // 如果直接写入失败，尝试通过其他方式
-            await this.fallbackUpdateQuickMask(grayData, bounds);
+static async updateQuickMaskChannel(grayData: Uint8Array, bounds: any) {
+    try {
+        console.log('🔄 开始更新快速蒙版通道，数据长度:', grayData.length, '边界:', bounds);
+        
+        // 方法1：使用imaging.putPixels更新Alpha通道
+        const options = {
+            width: bounds.width,
+            height: bounds.height,
+            components: 4,  // RGBA格式
+            chunky: true,
+            colorSpace: "RGB"
+        };
+        
+        // 创建RGBA数据，其中RGB设为白色，Alpha设为计算的灰度值
+        const rgbaData = new Uint8Array(bounds.width * bounds.height * 4);
+        for (let i = 0; i < grayData.length; i++) {
+            const rgbaIndex = i * 4;
+            rgbaData[rgbaIndex] = 255;     // R
+            rgbaData[rgbaIndex + 1] = 255; // G
+            rgbaData[rgbaIndex + 2] = 255; // B
+            rgbaData[rgbaIndex + 3] = grayData[i]; // A (快速蒙版值)
         }
+        
+        const imageData = await imaging.createImageDataFromBuffer(rgbaData, options);
+        
+        await imaging.putPixels({
+            documentID: app.activeDocument.id,
+            targetBounds: {
+                left: bounds.left,
+                top: bounds.top,
+                right: bounds.right,
+                bottom: bounds.bottom
+            },
+            imageData: imageData,
+            channelID: "transparency"  // 更新透明度通道
+        });
+        
+        imageData.dispose();
+        
+    } catch (error) {
+        console.error('❌ 更新快速蒙版通道失败:', error);
+        console.log('🔄 尝试使用batchPlay方法更新快速蒙版');
+        await this.updateQuickMaskWithBatchPlay(grayData, bounds);
     }
+}
 
-    // 备用方法：通过其他方式更新快速蒙版
-    static async fallbackUpdateQuickMask(grayData: Uint8Array, bounds: any) {
-        try {
-            console.log('🔄 执行备用快速蒙版更新方法');
-            
-            // 计算平均灰度值作为色阶调整的参考
-            const avgGray = grayData.reduce((sum, val) => sum + val, 0) / grayData.length;
-            const outputMin = Math.round(avgGray);
-            
-            console.log('📊 计算得到的平均灰度值:', avgGray, '输出最小值:', outputMin);
-            console.log('⚠️  注意：备用方法只能模拟效果，无法实现精确的像素级混合');
-            
-            // 使用色阶调整来模拟效果
-            await action.batchPlay([
-                {
-                    _obj: "levels",
-                    presetKind: {
-                        _enum: "presetKindType",
-                        _value: "presetKindCustom"
-                    },
-                    adjustment: [
-                        {
-                            _obj: "levelsAdjustment",
-                            channel: {
-                                _ref: "channel",
-                                _enum: "ordinal",
-                                _value: "targetEnum"
-                            },
-                            output: [
-                                outputMin,
-                                255
-                            ]   
-                        }
-                    ],
-                    _options: { dialogOptions: "dontDisplay" }
-                }
-            ], { synchronousExecution: true });
-            
-            console.log('✅ 备用快速蒙版更新成功，使用色阶调整模拟效果');
-            console.log('💡 建议：如果需要精确效果，请检查imaging API的使用是否正确');
-        } catch (error) {
-            console.error('❌ 备用快速蒙版更新方法也失败:', error);
-        }
+// 使用batchPlay更新快速蒙版的备用方法
+static async updateQuickMaskWithBatchPlay(grayData: Uint8Array, bounds: any) {
+    try {
+        // 计算平均灰度值
+        const avgGray = grayData.reduce((sum, val) => sum + val, 0) / grayData.length;
+        
+        // 使用填充命令更新快速蒙版
+        await action.batchPlay([
+            {
+                _obj: "fill",
+                using: {
+                    _enum: "fillContents",
+                    _value: "gray"
+                },
+                opacity: {
+                    _unit: "percentUnit",
+                    _value: (avgGray / 255) * 100
+                },
+                mode: {
+                    _enum: "blendMode",
+                    _value: "normal"
+                },
+                _options: { dialogOptions: "dontDisplay" }
+            }
+        ], { synchronousExecution: true });
+        
+        console.log('✅ 使用batchPlay成功更新快速蒙版');
+    } catch (error) {
+        console.error('❌ batchPlay更新快速蒙版也失败:', error);
     }
+}
 
     // 将RGB颜色转换为灰度值
     static rgbToGray(red: number, green: number, blue: number) {
