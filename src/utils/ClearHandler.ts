@@ -1,4 +1,4 @@
-import { action, app, imaging } from "photoshop";
+import { action, app, core, imaging } from "photoshop";
 import { calculateRandomColor } from './ColorUtils';
 
 export class ClearHandler {
@@ -187,73 +187,318 @@ export class ClearHandler {
         }
     }
 
-   // 获取快速蒙版通道的像素数据
+
+
+    
+   //-------------------------------------------------------------------------------------------------
+  // 获取快速蒙版通道的像素数据
 static async getQuickMaskPixels(bounds: any) {
-    try {
-        console.log('🔍 尝试获取快速蒙版像素数据，边界:', bounds);
-        
-        // 方法1：使用batchPlay获取快速蒙版通道（Alpha通道）
-        const channelResult = await action.batchPlay([
-            {
-                _obj: "get",
-                _target: [
-                    {
-                        _ref: "channel",
-                        _name: "Quick Mask"  // 快速蒙版通道名称
+        try {  
+            // 获取快速蒙版通道信息
+            const channelResult = await action.batchPlay([
+                {
+                    _obj: "get",
+                    _target: [
+                        {
+                            _ref: "channel",
+                            _name: "快速蒙版"  // 快速蒙版通道名称
+                        }
+                    ]
+                }
+            ], { synchronousExecution: true });
+            
+            console.log('📊 快速蒙版通道信息:', channelResult);
+
+            // 情况一：检查alphaChannelOptions中的colorIndicates的_value是否为selectedAreas
+            if (channelResult[0] && 
+                channelResult[0].alphaChannelOptions && 
+                channelResult[0].alphaChannelOptions.colorIndicates && 
+                channelResult[0].alphaChannelOptions.colorIndicates._value === "selectedAreas") {
+                
+                console.log('🔍 检测到colorIndicates为selectedAreas，检查快速蒙版是否为空');
+                
+                // 检查快速蒙版是否为空：如果histogram中除了255色阶外其他都是0，则认为快速蒙版为空
+                const histogram = channelResult[0].histogram;
+                let isQuickMaskEmpty = false;
+                
+                if (histogram && Array.isArray(histogram)) {
+                    // 检查0-254色阶是否都为0，只有255有值
+                    let nonZeroCount = 0;
+                    for (let i = 0; i < 255; i++) {
+                        if (histogram[i] > 0) {
+                            nonZeroCount++;
+                        }
                     }
-                ]
+                    
+                    // 如果0-254色阶都为0，且255色阶有值，则认为快速蒙版为空
+                    isQuickMaskEmpty = (nonZeroCount === 0 && histogram[255] > 0);
+                    
+                    console.log('📊 快速蒙版直方图分析: 蒙版空白？', isQuickMaskEmpty, ', 0-254色阶非零数量=', nonZeroCount, ', 255色阶值=', histogram[255]);
+                }
+                
+                if (isQuickMaskEmpty) {
+                    await core.showAlert({ message: '您的快速蒙版已经为空！' });
+                    console.log('⚠️ 检测到快速蒙版为空，跳过特殊处理流程');
+                    // 跳过后续步骤，返回空数组
+                    const pixelCount = bounds.width * bounds.height;
+                    return new Uint8Array(pixelCount);
+                } else {
+                    console.log('✅ 快速蒙版不为空，执行特殊处理流程');
+                
+                //第一步：撤销快速蒙版
+                await action.batchPlay([
+                    {
+                       _obj: "clearEvent",
+                       _target: [
+                          {
+                             _ref: "property",
+                             _property: "quickMask"
+                          },
+                          {
+                             _ref: "document",
+                             _enum: "ordinal",
+                             _value: "targetEnum"
+                          }
+                       ],
+                       _options: {
+                          dialogOptions: "dontDisplay"
+                       }
+                    }
+                ], { synchronousExecution: true });
+                
+                console.log('✅ 第一步：已撤销快速蒙版');
+
+                //第二步：通过Imaging API获取选区的黑白信息
+                const pixels = await imaging.getSelection({
+                    documentID: app.activeDocument.id,
+                    sourceBounds: {
+                        left: bounds.left,
+                        top: bounds.top,
+                        right: bounds.right,
+                        bottom: bounds.bottom
+                    },
+                    targetSize: {
+                        width: bounds.width,
+                        height: bounds.height
+                    },
+                });
+                
+                const selectionData = await pixels.imageData.getData();
+                console.log('✅ 第二步：成功获取选区像素数据，数据类型:', selectionData.constructor.name, '长度:', selectionData.length);
+                
+                //第三步：重新进入快速蒙版
+                await action.batchPlay([
+                    {
+                       _obj: "set",
+                       _target: [
+                          {
+                             _ref: "property",
+                             _property: "quickMask"
+                          },
+                          {
+                             _ref: "document",
+                             _enum: "ordinal",
+                             _value: "targetEnum"
+                          }
+                       ],
+                       _options: {
+                          dialogOptions: "dontDisplay"
+                       }
+                    }
+                ], { synchronousExecution: true });
+                
+                console.log('✅ 第三步：已重新进入快速蒙版');
+                
+                //第四步：根据第二步获取的选区信息构建MaskValue数组
+                const pixelCount = bounds.width * bounds.height;
+                const maskValue = new Uint8Array(pixelCount);
+                
+                // 处理选区数据，转换为maskValue数组（情况一：255-Value）
+                if (selectionData.length === pixelCount) {
+                    // 单通道数据，计算255-Value
+                    console.log('📋 检测到单通道选区数据，计算255-Value');
+                    for (let i = 0; i < pixelCount; i++) {
+                        maskValue[i] = 255 - selectionData[i];
+                    }
+                } else {
+                    console.warn('⚠️ getSelection应该只返回单通道数据，实际数据长度:', selectionData.length, '预期:', pixelCount);
+                    // 按单通道处理，取第一个字节
+                    for (let i = 0; i < pixelCount; i++) {
+                        const index = Math.min(i, selectionData.length - 1);
+                        maskValue[i] = 255 - selectionData[index];
+                    }
+                }
+                
+                console.log('🎯 第四步：构建maskValue数组成功，长度:', maskValue.length);
+                console.log('📊 maskValue样本值 (前10个):', Array.from(maskValue.slice(0, 10)));
+                
+                return maskValue;
+                }
             }
-        ], { synchronousExecution: true });
-        
-        console.log('📊 快速蒙版通道信息:', channelResult);
-        
-        // 方法2：使用imaging.getPixels获取Alpha通道数据
-        const pixels = await imaging.getPixels({
-            documentID: app.activeDocument.id,
-            sourceBounds: {
-                left: bounds.left,
-                top: bounds.top,
-                right: bounds.right,
-                bottom: bounds.bottom
-            },
-            targetSize: {
-                width: bounds.width,
-                height: bounds.height
-            },
-            componentSize: 8,
-            channelsRequired: ["transparency"]  // 获取透明度通道（快速蒙版）
-        });
-        
-        const data = await pixels.imageData.getData();
-        console.log('✅ 成功获取快速蒙版像素数据，数据类型:', data.constructor.name, '长度:', data.length);
-        
-        // 如果是RGBA格式，提取Alpha通道（每4个字节的第4个）
-        if (data.length === bounds.width * bounds.height * 4) {
-            const alphaData = new Uint8Array(bounds.width * bounds.height);
-            for (let i = 0; i < alphaData.length; i++) {
-                alphaData[i] = data[i * 4 + 3]; // 提取Alpha通道
+            
+            // 情况二：默认处理流程（colorIndicates不是selectedAreas或快速蒙版为空）
+            console.log('🔍 使用情况二处理流程，检查快速蒙版直方图');
+            
+            // 检查快速蒙版直方图
+            const histogram2 = channelResult[0].histogram;
+            let isQuickMaskEmpty2 = false;
+            let isQuickMaskWhite = false;
+            
+            if (histogram2 && Array.isArray(histogram2)) {
+                // 检查是否为全选，即纯白（除了255色阶外其他都是0）
+                let nonZeroCountWhite = 0;
+                for (let i = 0; i < 255; i++) {
+                    if (histogram2[i] > 0) {
+                        nonZeroCountWhite++;
+                    }
+                }
+                isQuickMaskWhite = (nonZeroCountWhite === 0 && histogram2[255] > 0);
+                
+                // 检查是否为空，即纯黑（除了0色阶外其他都是0）
+                let nonZeroCount2 = 0;
+                for (let i = 1; i < 256; i++) {
+                    if (histogram2[i] > 0) {
+                        nonZeroCount2++;
+                    }
+                }
+                isQuickMaskEmpty2 = (nonZeroCount2 === 0 && histogram2[0] > 0);
+                
+                console.log('📊 情况二直方图分析: 全选？=', isQuickMaskWhite, ', 空白？=', isQuickMaskEmpty2);
             }
-            return alphaData;
-        }
+            
+            if (isQuickMaskEmpty2) {
+                console.log('⚠️ 情况二检测到快速蒙版为空白');
+                await core.showAlert({ message: '您的快速蒙版已经为空！' });
+                // 跳过后续步骤，返回空数组或默认值
+                const pixelCount = bounds.width * bounds.height;
+                return new Uint8Array(pixelCount);
+            }
+            
+            console.log('✅ 情况二执行处理流程');
+            
+            //第一步：撤销快速蒙版
+            await action.batchPlay([
+                {
+                   _obj: "clearEvent",
+                   _target: [
+                      {
+                         _ref: "property",
+                         _property: "quickMask"
+                      },
+                      {
+                         _ref: "document",
+                         _enum: "ordinal",
+                         _value: "targetEnum"
+                      }
+                   ],
+                   _options: {
+                      dialogOptions: "dontDisplay"
+                   }
+                }
+            ], { synchronousExecution: true });
+            
+            console.log('✅ 情况二第一步：已撤销快速蒙版');
+            
+            // 如果是纯白快速蒙版，需要执行全选操作
+            if (isQuickMaskWhite) {
+                console.log('🔍 检测到纯白快速蒙版，执行全选操作');
+                await action.batchPlay([
+                    {
+                       _obj: "set",
+                       _target: [
+                          {
+                             _ref: "channel",
+                             _property: "selection"
+                          }
+                       ],
+                       to: {
+                          _enum: "ordinal",
+                          _value: "allEnum"
+                       },
+                       _options: {
+                          dialogOptions: "dontDisplay"
+                       }
+                    }
+                ], { synchronousExecution: true });
+                console.log('✅ 已执行全选操作');
+            }
+
+            //第二步：通过Imaging API获取选区的黑白信息
+            const pixels2 = await imaging.getSelection({
+                documentID: app.activeDocument.id,
+                sourceBounds: {
+                    left: bounds.left,
+                    top: bounds.top,
+                    right: bounds.right,
+                    bottom: bounds.bottom
+                },
+                targetSize: {
+                    width: bounds.width,
+                    height: bounds.height
+                },
+            });
+            
+            const selectionData2 = await pixels2.imageData.getData();
+            console.log('✅ 情况二第二步：成功获取选区像素数据，数据类型:', selectionData2.constructor.name, '长度:', selectionData2.length);
+            
+            //第三步：重新进入快速蒙版
+            await action.batchPlay([
+                {
+                   _obj: "set",
+                   _target: [
+                      {
+                         _ref: "property",
+                         _property: "quickMask"
+                      },
+                      {
+                         _ref: "document",
+                         _enum: "ordinal",
+                         _value: "targetEnum"
+                      }
+                   ],
+                   _options: {
+                      dialogOptions: "dontDisplay"
+                   }
+                }
+            ], { synchronousExecution: true });
+            
+            console.log('✅ 情况二第三步：已重新进入快速蒙版');
+            
+            //第四步：根据第二步获取的选区信息构建MaskValue数组（情况二：正常Value）
+            const pixelCount = bounds.width * bounds.height;
+            const maskValue = new Uint8Array(pixelCount);
+            
+            // 处理选区数据，转换为maskValue数组（情况二：正常Value）
+            if (selectionData2.length === pixelCount) {
+                // 单通道数据，直接使用Value
+                console.log('📋 情况二检测到单通道选区数据，使用正常Value');
+                for (let i = 0; i < pixelCount; i++) {
+                    maskValue[i] = selectionData2[i];
+                }
+            } else {
+                console.warn('⚠️ getSelection应该只返回单通道数据，实际数据长度:', selectionData2.length, '预期:', pixelCount);
+                // 按单通道处理，取第一个字节
+                for (let i = 0; i < pixelCount; i++) {
+                    const index = Math.min(i, selectionData2.length - 1);
+                    maskValue[i] = selectionData2[index];
+                }
+            }
+            
+            console.log('🎯 情况二第四步：构建maskValue数组成功，长度:', maskValue.length);
+            console.log('📊 情况二maskValue样本值 (前10个):', Array.from(maskValue.slice(0, 10)));
+            
+            return maskValue;
         
-        return data;
     } catch (error) {
         console.error('❌ 获取快速蒙版像素数据失败:', error);
-        console.log('🔄 使用备用方法获取快速蒙版数据');
-        // 如果无法直接获取快速蒙版，尝试通过其他方式
-        return this.getFallbackQuickMaskData(bounds);
+        throw error;
     }
 }
 
-    // 备用方法：通过其他方式获取快速蒙版数据
-    static async getFallbackQuickMaskData(bounds: any) {
-        // 创建一个默认的灰度数组，假设选区内都是0（黑色）
-        const pixelCount = bounds.width * bounds.height;
-        const grayData = new Uint8Array(pixelCount);
-        // 初始化为0，表示完全选中的区域
-        grayData.fill(0);
-        return grayData;
-    }
+
+   //-------------------------------------------------------------------------------------------------
+
+
 
     // 获取纯色填充的灰度数据
     static async getSolidFillGrayData(state: any, bounds: any) {
