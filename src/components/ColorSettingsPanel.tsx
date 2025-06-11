@@ -6,6 +6,7 @@ interface ColorSettingsProps {
     onClose: () => void;
     onSave: (settings: ColorSettings) => void;
     initialSettings?: ColorSettings;
+    isQuickMaskMode?: boolean;
 }
 
 const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
@@ -17,7 +18,8 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
         saturationVariation: 0,
         brightnessVariation: 0,
         opacityVariation: 0
-    }
+    },
+    isQuickMaskMode = false
 }) => {
     const [settings, setSettings] = useState<ColorSettings>(initialSettings);
     const [isDragging, setIsDragging] = useState(false);
@@ -100,17 +102,23 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
             </div>
             
             <div className="colorsettings-slider-group">
-                {Object.keys(settings).map((key) => (
-                    key !== 'pressureVariation' && (
-                        <div key={key} className="colorsettings-slider-item">
+                {Object.keys(settings).map((key) => {
+                    if (key === 'pressureVariation') return null;
+                    
+                    // 在快速蒙版模式下禁用色相和饱和度抖动
+                    const isDisabled = isQuickMaskMode && (key === 'hueVariation' || key === 'saturationVariation');
+                    
+                    return (
+                        <div key={key} className={`colorsettings-slider-item ${isDisabled ? 'disabled' : ''}`}>
                             <div className="colorsettings-slider-header">
                                 <label
-                                    className={`colorsettings-slider-label ${isDragging && dragTarget === key ? 'dragging' : 'not-dragging'}`}
-                                    onMouseDown={(e) => handleLabelMouseDown(e, key as keyof ColorSettings)}
+                                    className={`colorsettings-slider-label ${isDragging && dragTarget === key ? 'dragging' : 'not-dragging'} ${isDisabled ? 'disabled' : ''}`}
+                                    onMouseDown={isDisabled ? undefined : (e) => handleLabelMouseDown(e, key as keyof ColorSettings)}
                                 >
                                     {key === 'hueVariation' ? '色相抖动' :
                                      key === 'saturationVariation' ? '饱和度抖动' :
                                      key === 'brightnessVariation' ? '亮度抖动' : '不透明度抖动'}
+                                    {isDisabled && ' (快速蒙版模式下禁用)'}
                                 </label>
 
                                 <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -119,7 +127,8 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
                                         min="0"
                                         max={key === 'hueVariation' ? 360 : 100}
                                         value={settings[key as keyof ColorSettings]}
-                                        onChange={(e) => handleNumberInputChange(key as keyof ColorSettings, Number(e.target.value))}
+                                        onChange={isDisabled ? undefined : (e) => handleNumberInputChange(key as keyof ColorSettings, Number(e.target.value))}
+                                        disabled={isDisabled}
                                     />
                                     <span>
                                         {getUnitSymbol(key as keyof ColorSettings)}
@@ -133,11 +142,12 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
                                 max={key === 'hueVariation' ? '360' : '100'}
                                 step="1"
                                 value={settings[key as keyof ColorSettings]}
-                                onChange={handleSliderChange(key as keyof ColorSettings)}
+                                onChange={isDisabled ? undefined : handleSliderChange(key as keyof ColorSettings)}
+                                disabled={isDisabled}
                             />
                         </div>
-                    )
-                ))}
+                    );
+                })}
             </div>
 
             <div className="panel-footer">

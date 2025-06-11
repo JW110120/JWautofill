@@ -15,8 +15,8 @@ export interface HSBColor {
     };
 }
 
-export function calculateRandomColor(settings: ColorSettings, baseOpacity: number): HSBColor & { opacity: number } {
-    const foregroundColor = app.foregroundColor;
+export function calculateRandomColor(settings: ColorSettings, baseOpacity: number, customForegroundColor?: any): HSBColor & { opacity: number } {
+    const foregroundColor = customForegroundColor || app.foregroundColor;
     const baseHue = foregroundColor.hsb.hue;
     const baseSaturation = foregroundColor.hsb.saturation;
     const baseBrightness = foregroundColor.hsb.brightness;

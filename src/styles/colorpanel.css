@@ -91,3 +91,25 @@
     box-sizing: border-box;  /* 确保padding不会影响整体宽度 */
     z-index: 100;  /* 确保在其他内容之上 */
   }
+
+  /* 快速蒙版模式下的禁用样式 */
+  .colorsettings-slider-item.disabled {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+
+  .colorsettings-slider-item.disabled label {
+    cursor: not-allowed;
+    color: var(--disabled-color);
+  }
+
+  .colorsettings-slider-item.disabled input[type="range"],
+  .colorsettings-slider-item.disabled input[type="number"] {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  .colorsettings-slider-label.disabled {
+    cursor: not-allowed !important;
+    color: var(--disabled-color)!important;
+  }

@@ -1001,7 +1001,8 @@ class App extends React.Component<AppProps, AppState> {
                     brightnessVariation: 0,
                     opacityVariation: 0,
                     pressureVariation: 0
-                }} 
+                }}
+                isQuickMaskMode={document.quickMaskMode}
             />
 
             {/* 图案选择器 */}
