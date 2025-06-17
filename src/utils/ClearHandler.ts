@@ -447,9 +447,6 @@ export class ClearHandler {
         return intersectionCount % 2 === 1;
     }
 
-
-
-    
     //-------------------------------------------------------------------------------------------------
     // 获取快速蒙版通道的像素数据
     static async getQuickMaskPixels(bounds: any) {
@@ -642,9 +639,6 @@ export class ClearHandler {
         ], { synchronousExecution: true });
     }
 
-
-
-    
     //-------------------------------------------------------------------------------------------------
     // 获取纯色填充的灰度数据
     static async getSolidFillGrayData(state: any, bounds: any, quickMaskForegroundColor?: any) {
@@ -671,16 +665,41 @@ export class ClearHandler {
     // 获取图案填充的灰度数据
     static async getPatternFillGrayData(state: any, bounds: any) {
         try {
-            console.log('🔳 获取图案填充灰度数据 - selectedPattern:', state.selectedPattern);
+            console.log('🔳 获取图案填充灰度数据 - selectedPattern:', {
+                hasPattern: !!state.selectedPattern,
+                hasGrayData: !!(state.selectedPattern?.grayData),
+                patternSize: state.selectedPattern ? `${state.selectedPattern.width}x${state.selectedPattern.height}` : 'N/A',
+                boundsSize: `${bounds.width}x${bounds.height}`
+            });
             
             // 检查是否有有效的图案数据
-            if (state.selectedPattern && state.selectedPattern.grayData) {
-                console.log('✅ 使用缓存的图案灰度数据，图案尺寸:', state.selectedPattern.width, 'x', state.selectedPattern.height);
-                return this.tilePatternToFitBounds(state.selectedPattern.grayData, 
-                    state.selectedPattern.width, state.selectedPattern.height, bounds);
+            if (state.selectedPattern && state.selectedPattern.grayData && 
+                state.selectedPattern.width > 0 && state.selectedPattern.height > 0) {
+                
+                console.log('✅ 使用图案灰度数据，图案尺寸:', state.selectedPattern.width, 'x', state.selectedPattern.height);
+                console.log('📊 图案参数:', {
+                    scale: state.selectedPattern.currentScale || 100,
+                    angle: state.selectedPattern.currentAngle || 0,
+                    dataLength: state.selectedPattern.grayData.length
+                });
+                
+                return this.tilePatternToFitBounds(
+                    state.selectedPattern.grayData, 
+                    state.selectedPattern.width, 
+                    state.selectedPattern.height, 
+                    bounds
+                );
             }
             
-            console.log('⚠️ 没有找到图案灰度数据，使用默认中等灰度');
+            console.log('⚠️ 没有找到有效的图案灰度数据，使用默认中等灰度');
+            console.log('🔍 调试信息:', {
+                hasSelectedPattern: !!state.selectedPattern,
+                hasGrayData: !!(state.selectedPattern?.grayData),
+                grayDataLength: state.selectedPattern?.grayData?.length || 0,
+                patternWidth: state.selectedPattern?.width || 0,
+                patternHeight: state.selectedPattern?.height || 0
+            });
+            
             // 否则创建一个默认的灰度值
             const pixelCount = bounds.width * bounds.height;
             const grayData = new Uint8Array(pixelCount);
@@ -766,16 +785,58 @@ export class ClearHandler {
     //-------------------------------------------------------------------------------------------------
     // 将图案平铺到指定边界
     static tilePatternToFitBounds(patternGrayData: Uint8Array, patternWidth: number, patternHeight: number, bounds: any) {
+        console.log('🔳 开始图案平铺:', {
+            patternSize: `${patternWidth}x${patternHeight}`,
+            boundsSize: `${bounds.width}x${bounds.height}`,
+            hasSelectionPixels: !!(bounds.selectionPixels && bounds.selectionPixels.size > 0),
+            selectionPixelsCount: bounds.selectionPixels ? bounds.selectionPixels.size : 0
+        });
+        
         const pixelCount = bounds.width * bounds.height;
         const tiledData = new Uint8Array(pixelCount);
         
-        for (let y = 0; y < bounds.height; y++) {
-            for (let x = 0; x < bounds.width; x++) {
-                const targetIndex = y * bounds.width + x;
-                const sourceX = x % patternWidth;
-                const sourceY = y % patternHeight;
-                const sourceIndex = sourceY * patternWidth + sourceX;
-                tiledData[targetIndex] = patternGrayData[sourceIndex];
+        // 如果有精确的选区像素信息，只处理选区内的像素
+        if (bounds.selectionPixels && bounds.selectionPixels.size > 0) {
+            console.log('🎯 使用精确选区像素进行图案平铺');
+            
+            for (const globalPixelIndex of bounds.selectionPixels) {
+                // 将全局像素索引转换为相对于选区边界的坐标
+                const globalY = Math.floor(globalPixelIndex / bounds.docWidth);
+                const globalX = globalPixelIndex % bounds.docWidth;
+                
+                // 转换为相对于选区边界的坐标
+                const relativeX = globalX - bounds.left;
+                const relativeY = globalY - bounds.top;
+                
+                // 检查是否在选区边界内
+                if (relativeX >= 0 && relativeX < bounds.width && 
+                    relativeY >= 0 && relativeY < bounds.height) {
+                    
+                    const targetIndex = relativeY * bounds.width + relativeX;
+                    const sourceX = relativeX % patternWidth;
+                    const sourceY = relativeY % patternHeight;
+                    const sourceIndex = sourceY * patternWidth + sourceX;
+                    
+                    if (sourceIndex < patternGrayData.length && targetIndex < tiledData.length) {
+                        tiledData[targetIndex] = patternGrayData[sourceIndex];
+                    }
+                }
+            }
+        } else {
+            // 回退到传统的矩形区域平铺
+            console.log('📦 使用矩形区域进行图案平铺');
+            
+            for (let y = 0; y < bounds.height; y++) {
+                for (let x = 0; x < bounds.width; x++) {
+                    const targetIndex = y * bounds.width + x;
+                    const sourceX = x % patternWidth;
+                    const sourceY = y % patternHeight;
+                    const sourceIndex = sourceY * patternWidth + sourceX;
+                    
+                    if (sourceIndex < patternGrayData.length && targetIndex < tiledData.length) {
+                        tiledData[targetIndex] = patternGrayData[sourceIndex];
+                    }
+                }
             }
         }
         
@@ -832,7 +893,20 @@ export class ClearHandler {
     //-------------------------------------------------------------------------------------------------
     // 应用新的混合公式计算最终灰度值
     static calculateFinalGrayValues(maskData: Uint8Array, fillData: Uint8Array, isSelectedAreas: boolean = true) {
+        console.log('🔍 开始混合计算:', {
+            maskDataLength: maskData.length,
+            fillDataLength: fillData.length,
+            isSelectedAreas: isSelectedAreas
+        });
+        
         const finalData = new Uint8Array(maskData.length);
+        
+        // 确保两个数组长度一致
+        if (maskData.length !== fillData.length) {
+            console.warn('⚠️ maskData和fillData长度不匹配，将使用较短的长度');
+        }
+        
+        const minLength = Math.min(maskData.length, fillData.length);
         
         // 输出前10个像素的样本数据用于调试
         console.log('🔍 混合计算样本数据 (前10个像素):');
@@ -840,7 +914,9 @@ export class ClearHandler {
         // 两种情况使用相同的公式：255 - (maskValue + fillValue - (maskValue * fillValue) / 255)
         for (let i = 0; i < maskData.length; i++) {
             const maskValue = maskData[i];  // 快速蒙版像素值 (0-255)
-            const fillValue = fillData[i];  // 填充内容像素灰度值 (0-255)
+            
+            // 安全获取fillValue，如果超出范围则使用默认值128
+            const fillValue = i < fillData.length ? fillData[i] : 128;
             
             // 应用统一公式
             const finalValue = 255 - (maskValue + fillValue - (maskValue * fillValue) / 255);
@@ -852,6 +928,7 @@ export class ClearHandler {
             }
         }
         
+        console.log('✅ 混合计算完成，最终数据长度:', finalData.length);
         return finalData;
     }
 
@@ -907,7 +984,6 @@ export class ClearHandler {
             
             // 根据射线法计算的选区内像素来更新数据
             if (bounds.selectionPixels && bounds.selectionPixels.size > 0) {
-                console.log('🎯 使用射线法计算的选区像素进行更新，像素数量:', bounds.selectionPixels.size);
                 
                 // 遍历选区边界内的每个像素
                 for (let y = 0; y < bounds.height; y++) {
@@ -1040,4 +1116,3 @@ export class ClearHandler {
         };
     }
 }
-

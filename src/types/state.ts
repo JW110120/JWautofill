@@ -13,7 +13,17 @@ export interface Pattern {
     angle?: number;
     scale?: number;
     patternName?: string;
-    preserveTransparency?: boolean; // 添加新的属性
+    preserveTransparency?: boolean;
+    // 灰度数据相关属性
+    grayData?: Uint8Array;           // 当前变换后的灰度数据
+    originalGrayData?: Uint8Array;   // 原始灰度数据（用于重新计算变换）
+    width?: number;                  // 当前图案宽度
+    height?: number;                 // 当前图案高度
+    originalWidth?: number;          // 原始图案宽度
+    originalHeight?: number;         // 原始图案高度
+    currentScale?: number;           // 当前缩放比例
+    currentAngle?: number;           // 当前旋转角度
+    file?: any;                      // UXP文件引用
 }
 
 export interface GradientStop {
