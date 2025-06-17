@@ -28,6 +28,21 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
     // 新增预览相关状态
     const [previewZoom, setPreviewZoom] = useState<number>(100); // 预览缩放级别
     const [previewOffset, setPreviewOffset] = useState<{x: number, y: number}>({x: 0, y: 0}); // 预览偏移
+    
+    // 监听 patterns 状态变化，检查 grayData 是否正确设置
+    useEffect(() => {
+        patterns.forEach(pattern => {
+            if (pattern.patternName && pattern.grayData) {
+                console.log('✅ 图案灰度数据已设置:', {
+                    patternId: pattern.id,
+                    patternName: pattern.patternName,
+                    hasGrayData: !!pattern.grayData,
+                    grayDataLength: pattern.grayData.length,
+                    patternDimensions: `${pattern.width}x${pattern.height}`,
+                });
+            }
+        });
+    }, [patterns]);
     const [isDragging, setIsDragging] = useState<boolean>(false);
     const [dragStart, setDragStart] = useState<{x: number, y: number}>({x: 0, y: 0});
     const previewRef = useRef<HTMLDivElement>(null);
@@ -263,48 +278,26 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
         }
     };
 
-    // 重新计算图案的变换灰度数据
+    // 更新图案的缩放和旋转参数（不进行实际变换，由ClearHandler处理）
     const updatePatternTransform = async (patternId: string, newScale: number, newAngle: number) => {
-        const pattern = patterns.find(p => p.id === patternId);
-        if (!pattern || !pattern.originalGrayData) return;
+        setPatterns(prevPatterns => {
+            return prevPatterns.map(p => {
+                if (p.id === patternId) {
+                    return {
+                        ...p,
+                        currentScale: newScale,
+                        currentAngle: newAngle
+                    };
+                }
+                return p;
+            });
+        });
         
-        try {
-            // 从原始灰度数据应用新的缩放和旋转
-            const transformed = transformGrayData(
-                pattern.originalGrayData,
-                pattern.originalWidth,
-                pattern.originalHeight,
-                newScale,
-                newAngle
-            );
-            
-            // 更新图案数据
-            setPatterns(prevPatterns => {
-                return prevPatterns.map(p => {
-                    if (p.id === patternId) {
-                        return {
-                            ...p,
-                            grayData: transformed.data,
-                            width: transformed.width,
-                            height: transformed.height,
-                            currentScale: newScale,
-                            currentAngle: newAngle
-                        };
-                    }
-                    return p;
-                });
-            });
-            
-            console.log('图案变换更新完成:', {
-                patternId,
-                newSize: `${transformed.width}x${transformed.height}`,
-                scale: newScale,
-                angle: newAngle
-            });
-            
-        } catch (error) {
-            console.error('更新图案变换失败:', error);
-        }
+        console.log('图案参数更新完成:', {
+            patternId,
+            scale: newScale,
+            angle: newAngle
+        });
     };
 
     const handleAngleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -405,68 +398,7 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
         return grayData;
     };
 
-    // 应用缩放和旋转变换到灰度数据
-    const transformGrayData = (originalData: Uint8Array, originalWidth: number, originalHeight: number, 
-                              scalePercent: number, angleDegrees: number): {
-        data: Uint8Array, width: number, height: number
-    } => {
-        const scaleRatio = scalePercent / 100;
-        const angleRad = (angleDegrees * Math.PI) / 180;
-        
-        // 计算缩放后的尺寸
-        const scaledWidth = Math.round(originalWidth * scaleRatio);
-        const scaledHeight = Math.round(originalHeight * scaleRatio);
-        
-        // 计算旋转后的边界框尺寸
-        const cos = Math.abs(Math.cos(angleRad));
-        const sin = Math.abs(Math.sin(angleRad));
-        const rotatedWidth = Math.ceil(scaledWidth * cos + scaledHeight * sin);
-        const rotatedHeight = Math.ceil(scaledWidth * sin + scaledHeight * cos);
-        
-        const transformedData = new Uint8Array(rotatedWidth * rotatedHeight);
-        transformedData.fill(255); // 默认白色背景
-        
-        const centerX = rotatedWidth / 2;
-        const centerY = rotatedHeight / 2;
-        const scaledCenterX = scaledWidth / 2;
-        const scaledCenterY = scaledHeight / 2;
-        
-        for (let y = 0; y < rotatedHeight; y++) {
-            for (let x = 0; x < rotatedWidth; x++) {
-                // 将坐标转换到以中心为原点的坐标系
-                const dx = x - centerX;
-                const dy = y - centerY;
-                
-                // 应用反向旋转
-                const rotatedX = dx * Math.cos(-angleRad) - dy * Math.sin(-angleRad);
-                const rotatedY = dx * Math.sin(-angleRad) + dy * Math.cos(-angleRad);
-                
-                // 转换回缩放后的图像坐标
-                const scaledX = rotatedX + scaledCenterX;
-                const scaledY = rotatedY + scaledCenterY;
-                
-                // 检查是否在缩放后的图像范围内
-                if (scaledX >= 0 && scaledX < scaledWidth && scaledY >= 0 && scaledY < scaledHeight) {
-                    // 应用反向缩放到原始图像坐标
-                    const originalX = Math.round(scaledX / scaleRatio);
-                    const originalY = Math.round(scaledY / scaleRatio);
-                    
-                    // 检查是否在原始图像范围内
-                    if (originalX >= 0 && originalX < originalWidth && originalY >= 0 && originalY < originalHeight) {
-                        const originalIndex = originalY * originalWidth + originalX;
-                        const transformedIndex = y * rotatedWidth + x;
-                        transformedData[transformedIndex] = originalData[originalIndex];
-                    }
-                }
-            }
-        }
-        
-        return {
-            data: transformedData,
-            width: rotatedWidth,
-            height: rotatedHeight
-        };
-    };
+
 
     const createPatternFromImage = async () => {
         // 生成唯一的文档名称
@@ -491,8 +423,6 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
             let patternGrayData: Uint8Array | null = null;
             let patternWidth = 0;
             let patternHeight = 0;
-            let originalWidth = 0;
-            let originalHeight = 0;
             let pixelData: any = null;
             let rgbData: Uint8Array | null = null;
             
@@ -634,7 +564,7 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                 
                 // 确保rgbData不为null
                 if (!rgbData) {
-                    rgbData = new Uint8Array(defaultWidth * defaultHeight * 4).fill(128);
+                    rgbData = new Uint8Array(defaultWidth * defaultHeight * 3).fill(128);
                     console.warn('rgbData为空，使用默认数据');
                 }
                 
@@ -652,24 +582,34 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                 }
                 
                 // 转换RGB数据为灰度数据
+                console.log('🔄 开始转换RGB数据为灰度数据:', {
+                    rgbDataLength: rgbData!.length,
+                    expectedLength: pixelData.imageData.width * pixelData.imageData.height * 3,
+                    dimensions: `${pixelData.imageData.width}x${pixelData.imageData.height}`
+                });
+                
                 const originalGrayData = convertRGBToGrayData(
                     rgbData!, 
                     pixelData.imageData.width, 
                     pixelData.imageData.height
                 );
                 
-                // 应用缩放和旋转变换
-                const transformed = transformGrayData(
-                    originalGrayData,
-                    pixelData.imageData.width,
-                    pixelData.imageData.height,
-                    scale,
-                    angle
-                ); 
+                console.log('✅ 灰度数据转换完成:', {
+                    originalGrayDataLength: originalGrayData.length,
+                    expectedLength: pixelData.imageData.width * pixelData.imageData.height,
+                    sampleValues: Array.from(originalGrayData.slice(0, 10))
+                });
                 
-                patternGrayData = transformed.data;
-                patternWidth = transformed.width;
-                patternHeight = transformed.height;
+                // 直接使用原始灰度数据，变换处理由ClearHandler负责
+                patternGrayData = originalGrayData;
+                patternWidth = pixelData.imageData.width;
+                patternHeight = pixelData.imageData.height;
+                
+                console.log('✅ 原始灰度数据准备完成:', {
+                    grayDataLength: patternGrayData.length,
+                    dimensions: `${patternWidth}x${patternHeight}`,
+                    expectedLength: patternWidth * patternHeight
+                });
                 
                 // 保存原始灰度数据用于后续变换
                 selectedPatternData.originalGrayData = originalGrayData;
@@ -739,10 +679,18 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
             console.log('图案创建完成:', { docName, patternName });
             
             // 更新选中的图案对象，添加patternName和灰度数据
+            console.log('📝 准备更新图案状态:', {
+                selectedPatternId: selectedPattern,
+                patternName: patternName,
+                hasPatternGrayData: !!patternGrayData,
+                patternGrayDataLength: patternGrayData ? patternGrayData.length : 0,
+                patternDimensions: `${patternWidth}x${patternHeight}`
+            });
+            
             setPatterns(prevPatterns => {
-                return prevPatterns.map(p => {
+                const updatedPatterns = prevPatterns.map(p => {
                     if (p.id === selectedPattern) {
-                        return {
+                        const updatedPattern = {
                             ...p,
                             patternName: patternName,
                             grayData: patternGrayData,
@@ -754,9 +702,19 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                             currentScale: scale,
                             currentAngle: angle
                         };
+                        
+                        console.log('🔄 图案状态更新:', {
+                            patternId: p.id,
+                            beforeUpdate: { hasGrayData: !!p.grayData },
+                            afterUpdate: { hasGrayData: !!updatedPattern.grayData, grayDataLength: updatedPattern.grayData?.length }
+                        });
+                        
+                        return updatedPattern;
                     }
                     return p;
                 });
+                
+                return updatedPatterns;
             });
             
             return patternName;
@@ -799,10 +757,10 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                                     if (selectedPattern === pattern.id && !pattern.patternName) {
                                         const patternName = await createPatternFromImage();
                                         if (patternName) {
-                                            console.log('创建图案成功', {
+                                            console.log('图案创建请求完成', {
                                                 patternName: patternName,
                                                 imageSize: `${img.naturalWidth}x${img.naturalHeight}`,
-                                                hasGrayData: !!patterns.find(p => p.id === pattern.id)?.grayData
+                                                note: '灰度数据将在状态更新后可用'
                                             });
                                         }
                                     }

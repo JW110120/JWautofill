@@ -115,14 +115,19 @@ export class ClearHandler {
     static async clearInQuickMask(state: any) {
         try {
             
-            // 在进入快速蒙版状态时，立即获取快速蒙版状态下的前景色
+            // 只有在纯色填充模式下才获取前景色
             // 这必须在getQuickMaskPixels调用之前，因为该方法会撤销快速蒙版
-            const quickMaskForegroundColor = app.foregroundColor;
-            console.log('🎨 获取快速蒙版状态下的前景色:', {
-                hue: quickMaskForegroundColor.hsb.hue,
-                saturation: quickMaskForegroundColor.hsb.saturation,
-                brightness: quickMaskForegroundColor.hsb.brightness
-            });
+            let quickMaskForegroundColor = null;
+            if (state.fillMode === 'foreground') {
+                quickMaskForegroundColor = app.foregroundColor;
+                console.log('🎨 获取快速蒙版状态下的前景色:', {
+                    hue: quickMaskForegroundColor.hsb.hue,
+                    saturation: quickMaskForegroundColor.hsb.saturation,
+                    brightness: quickMaskForegroundColor.hsb.brightness
+                });
+            } else {
+                console.log('🔄 非纯色填充模式，跳过前景色获取，当前模式:', state.fillMode);
+            }
             
             // 获取当前选区边界信息
             const selectionBounds = await this.getSelectionBounds();
@@ -256,8 +261,6 @@ export class ClearHandler {
                 }
             }
             
-            console.log('🎯 提取的路径anchor点坐标:', pathPoints);
-            
             // 步骤3: 将路径重新转回选区
             await action.batchPlay([
                 {
@@ -303,9 +306,6 @@ export class ClearHandler {
             const docWidthPixels = Math.round(docWidth * resolution / 72);
             const docHeightPixels = Math.round(docHeight * resolution / 72);
             
-            console.log('📄 文档分辨率:', resolution, 'DPI');
-            console.log('📄 文档尺寸(像素):', docWidthPixels, 'x', docHeightPixels);
-            
             // 优先使用路径点数据
             if (pathPoints && pathPoints.length > 0) {
                 
@@ -341,7 +341,6 @@ export class ClearHandler {
                 
                 // 检查是否有精确的选区点数据
                 if (selection.points && selection.points.horizontal && selection.points.vertical) {
-                    console.log('🎯 获取到精确选区点数据');
                     const horizontal = selection.points.horizontal.list;
                     const vertical = selection.points.vertical.list;
                     
@@ -495,7 +494,6 @@ export class ClearHandler {
             
             // 如果是纯白快速蒙版（非selectedAreas模式下），需要执行全选操作
             if (!isSelectedAreas && maskStatus.isWhite) {
-                console.log('🔍 检测到纯白快速蒙版，执行全选操作');
                 await this.selectAll();
             }
 
@@ -523,7 +521,6 @@ export class ClearHandler {
             
             // 处理选区数据，转换为maskValue数组
             if (selectionData.length === pixelCount) {
-                console.log('📋 检测到单通道选区数据');
                 for (let i = 0; i < pixelCount; i++) {
                     maskValue[i] = 255 - selectionData[i];
                 }
@@ -535,9 +532,6 @@ export class ClearHandler {
                     maskValue[i] = 255 - selectionData[index];
                 }
             }
-            
-            console.log('🎯 构建maskValue数组成功，长度:', maskValue.length);
-            console.log('📊 maskValue样本值 (前10个):', Array.from(maskValue.slice(0, 10)));
             
             return {
                 quickMaskPixels: maskValue,
@@ -687,7 +681,9 @@ export class ClearHandler {
                     state.selectedPattern.grayData, 
                     state.selectedPattern.width, 
                     state.selectedPattern.height, 
-                    bounds
+                    bounds,
+                    state.selectedPattern.currentScale || 100,
+                    state.selectedPattern.currentAngle || 0
                 );
             }
             
@@ -783,64 +779,241 @@ export class ClearHandler {
 
     
     //-------------------------------------------------------------------------------------------------
-    // 将图案平铺到指定边界
-    static tilePatternToFitBounds(patternGrayData: Uint8Array, patternWidth: number, patternHeight: number, bounds: any) {
+    // 将图案平铺到指定边界（支持缩放和旋转）
+    static tilePatternToFitBounds(patternGrayData: Uint8Array, patternWidth: number, patternHeight: number, bounds: any, scale: number = 100, angle: number = 0) {
         console.log('🔳 开始图案平铺:', {
             patternSize: `${patternWidth}x${patternHeight}`,
             boundsSize: `${bounds.width}x${bounds.height}`,
-            hasSelectionPixels: !!(bounds.selectionPixels && bounds.selectionPixels.size > 0),
-            selectionPixelsCount: bounds.selectionPixels ? bounds.selectionPixels.size : 0
+            scale: scale,
+            angle: angle,
+            selectionPixelsCount: bounds.selectionPixels ? bounds.selectionPixels.size : 0,
+            patternDataLength: patternGrayData.length
         });
         
-        const pixelCount = bounds.width * bounds.height;
-        const tiledData = new Uint8Array(pixelCount);
+        // 输入参数验证
+        if (patternWidth <= 0 || patternHeight <= 0) {
+            console.error('❌ 图案尺寸无效:', { patternWidth, patternHeight });
+            return new Uint8Array(bounds.width * bounds.height);
+        }
         
-        // 如果有精确的选区像素信息，只处理选区内的像素
-        if (bounds.selectionPixels && bounds.selectionPixels.size > 0) {
-            console.log('🎯 使用精确选区像素进行图案平铺');
+        if (patternGrayData.length !== patternWidth * patternHeight) {
+            console.error('❌ 图案数据长度与尺寸不匹配:', {
+                dataLength: patternGrayData.length,
+                expectedLength: patternWidth * patternHeight
+            });
+            return new Uint8Array(bounds.width * bounds.height);
+        }
+        
+        // 第一步：创建整个文档大小的平铺数组
+        const docTiledData = this.createDocumentTiledPattern(patternGrayData, patternWidth, patternHeight, bounds.docWidth, bounds.docHeight, scale, angle);
+        
+        // 第二步：从文档平铺数组中截取选区部分
+        return this.extractSelectionFromDocumentTiled(docTiledData, bounds);
+    }
+    
+    // 创建整个文档大小的平铺图案数组
+    static createDocumentTiledPattern(patternGrayData: Uint8Array, patternWidth: number, patternHeight: number, docWidth: number, docHeight: number, scale: number, angle: number): Uint8Array {
+        console.log('🌐 创建文档级平铺图案');
+        
+        // 计算缩放后的图案尺寸
+        const scaleFactor = scale / 100;
+        const scaledWidth = Math.max(1, Math.round(patternWidth * scaleFactor));
+        const scaledHeight = Math.max(1, Math.round(patternHeight * scaleFactor));
+        
+        console.log('📏 缩放后图案尺寸:', {
+            original: `${patternWidth}x${patternHeight}`,
+            scaled: `${scaledWidth}x${scaledHeight}`,
+        });
+        
+        // 创建缩放后的图案数据
+        const scaledPatternData = this.scalePatternData(patternGrayData, patternWidth, patternHeight, scaledWidth, scaledHeight);
+        
+        // 如果有旋转角度，应用旋转变换
+        let transformedPatternData = scaledPatternData;
+        let transformedWidth = scaledWidth;
+        let transformedHeight = scaledHeight;
+        
+        if (angle !== 0) {
+            const rotationResult = this.rotatePatternData(scaledPatternData, scaledWidth, scaledHeight, angle);
+            transformedPatternData = rotationResult.data;
+            transformedWidth = rotationResult.width;
+            transformedHeight = rotationResult.height;
             
-            for (const globalPixelIndex of bounds.selectionPixels) {
-                // 将全局像素索引转换为相对于选区边界的坐标
-                const globalY = Math.floor(globalPixelIndex / bounds.docWidth);
-                const globalX = globalPixelIndex % bounds.docWidth;
+            console.log('🔄 图案旋转完成', {
+                rotated: `${transformedWidth}x${transformedHeight}`,
+                angle: angle
+            });
+        }
+        
+        // 创建文档大小的数组并平铺图案
+        const docTiledData = new Uint8Array(docWidth * docHeight);
+        
+        for (let y = 0; y < docHeight; y++) {
+            for (let x = 0; x < docWidth; x++) {
+                const docIndex = y * docWidth + x;
                 
-                // 转换为相对于选区边界的坐标
-                const relativeX = globalX - bounds.left;
-                const relativeY = globalY - bounds.top;
+                // 计算在变换后图案中的位置
+                const patternX = x % transformedWidth;
+                const patternY = y % transformedHeight;
+                const patternIndex = patternY * transformedWidth + patternX;
                 
-                // 检查是否在选区边界内
-                if (relativeX >= 0 && relativeX < bounds.width && 
-                    relativeY >= 0 && relativeY < bounds.height) {
-                    
-                    const targetIndex = relativeY * bounds.width + relativeX;
-                    const sourceX = relativeX % patternWidth;
-                    const sourceY = relativeY % patternHeight;
-                    const sourceIndex = sourceY * patternWidth + sourceX;
-                    
-                    if (sourceIndex < patternGrayData.length && targetIndex < tiledData.length) {
-                        tiledData[targetIndex] = patternGrayData[sourceIndex];
-                    }
+                if (patternIndex < transformedPatternData.length) {
+                    docTiledData[docIndex] = transformedPatternData[patternIndex];
                 }
             }
-        } else {
-            // 回退到传统的矩形区域平铺
-            console.log('📦 使用矩形区域进行图案平铺');
-            
-            for (let y = 0; y < bounds.height; y++) {
-                for (let x = 0; x < bounds.width; x++) {
-                    const targetIndex = y * bounds.width + x;
-                    const sourceX = x % patternWidth;
-                    const sourceY = y % patternHeight;
-                    const sourceIndex = sourceY * patternWidth + sourceX;
+        }
+        
+        return docTiledData;
+    }
+    
+    // 缩放图案数据
+    static scalePatternData(patternData: Uint8Array, originalWidth: number, originalHeight: number, newWidth: number, newHeight: number): Uint8Array {
+        const scaledData = new Uint8Array(newWidth * newHeight);
+        
+        for (let y = 0; y < newHeight; y++) {
+            for (let x = 0; x < newWidth; x++) {
+                // 使用双线性插值进行缩放
+                const srcX = (x / newWidth) * originalWidth;
+                const srcY = (y / newHeight) * originalHeight;
+                
+                const x1 = Math.floor(srcX);
+                const y1 = Math.floor(srcY);
+                const x2 = Math.min(x1 + 1, originalWidth - 1);
+                const y2 = Math.min(y1 + 1, originalHeight - 1);
+                
+                const fx = srcX - x1;
+                const fy = srcY - y1;
+                
+                // 获取四个邻近像素的值
+                const p1 = patternData[y1 * originalWidth + x1];
+                const p2 = patternData[y1 * originalWidth + x2];
+                const p3 = patternData[y2 * originalWidth + x1];
+                const p4 = patternData[y2 * originalWidth + x2];
+                
+                // 双线性插值
+                const interpolated = p1 * (1 - fx) * (1 - fy) +
+                                   p2 * fx * (1 - fy) +
+                                   p3 * (1 - fx) * fy +
+                                   p4 * fx * fy;
+                
+                scaledData[y * newWidth + x] = Math.round(interpolated);
+            }
+        }
+        
+        return scaledData;
+    }
+    
+    // 旋转图案数据
+    static rotatePatternData(patternData: Uint8Array, width: number, height: number, angle: number): { data: Uint8Array, width: number, height: number } {
+        const angleRad = (angle * Math.PI) / 180;
+        const cos = Math.cos(angleRad);
+        const sin = Math.sin(angleRad);
+        
+        // 计算旋转后的边界框
+        const corners = [
+            { x: 0, y: 0 },
+            { x: width, y: 0 },
+            { x: width, y: height },
+            { x: 0, y: height }
+        ];
+        
+        let minX = Infinity, maxX = -Infinity;
+        let minY = Infinity, maxY = -Infinity;
+        
+        corners.forEach(corner => {
+            const rotatedX = corner.x * cos - corner.y * sin;
+            const rotatedY = corner.x * sin + corner.y * cos;
+            minX = Math.min(minX, rotatedX);
+            maxX = Math.max(maxX, rotatedX);
+            minY = Math.min(minY, rotatedY);
+            maxY = Math.max(maxY, rotatedY);
+        });
+        
+        const newWidth = Math.ceil(maxX - minX);
+        const newHeight = Math.ceil(maxY - minY);
+        const rotatedData = new Uint8Array(newWidth * newHeight);
+        
+        const centerX = width / 2;
+        const centerY = height / 2;
+        const newCenterX = newWidth / 2;
+        const newCenterY = newHeight / 2;
+        
+        for (let y = 0; y < newHeight; y++) {
+            for (let x = 0; x < newWidth; x++) {
+                // 将新坐标转换回原始坐标
+                const relativeX = x - newCenterX;
+                const relativeY = y - newCenterY;
+                
+                const originalX = relativeX * cos + relativeY * sin + centerX;
+                const originalY = -relativeX * sin + relativeY * cos + centerY;
+                
+                // 检查是否在原始图案范围内
+                if (originalX >= 0 && originalX < width && originalY >= 0 && originalY < height) {
+                    // 使用双线性插值
+                    const x1 = Math.floor(originalX);
+                    const y1 = Math.floor(originalY);
+                    const x2 = Math.min(x1 + 1, width - 1);
+                    const y2 = Math.min(y1 + 1, height - 1);
                     
-                    if (sourceIndex < patternGrayData.length && targetIndex < tiledData.length) {
-                        tiledData[targetIndex] = patternGrayData[sourceIndex];
+                    const fx = originalX - x1;
+                    const fy = originalY - y1;
+                    
+                    const p1 = patternData[y1 * width + x1];
+                    const p2 = patternData[y1 * width + x2];
+                    const p3 = patternData[y2 * width + x1];
+                    const p4 = patternData[y2 * width + x2];
+                    
+                    const interpolated = p1 * (1 - fx) * (1 - fy) +
+                                       p2 * fx * (1 - fy) +
+                                       p3 * (1 - fx) * fy +
+                                       p4 * fx * fy;
+                    
+                    rotatedData[y * newWidth + x] = Math.round(interpolated);
+                }
+            }
+        }
+        
+        return { data: rotatedData, width: newWidth, height: newHeight };
+    }
+    
+    // 从文档平铺数组中截取选区部分
+    static extractSelectionFromDocumentTiled(docTiledData: Uint8Array, bounds: any): Uint8Array {
+        console.log('✂️ 从文档平铺中截取选区:', {
+            boundsSize: `${bounds.width}x${bounds.height}`,
+            boundsPosition: `(${bounds.left}, ${bounds.top})`,
+        });
+        
+        const selectionData = new Uint8Array(bounds.width * bounds.height);
+        let processedPixels = 0;
+    
+        for (let y = 0; y < bounds.height; y++) {
+            for (let x = 0; x < bounds.width; x++) {
+                const globalX = bounds.left + x;
+                const globalY = bounds.top + y;
+                
+                if (globalX >= 0 && globalX < bounds.docWidth && 
+                    globalY >= 0 && globalY < bounds.docHeight) {
+                    
+                    const docIndex = globalY * bounds.docWidth + globalX;
+                    const targetIndex = y * bounds.width + x;
+                    
+                    if (docIndex >= 0 && docIndex < docTiledData.length && 
+                        targetIndex >= 0 && targetIndex < selectionData.length) {
+                        selectionData[targetIndex] = docTiledData[docIndex];
+                        processedPixels++;
                     }
                 }
             }
         }
         
-        return tiledData;
+
+        console.log('✅ 选区截取完成:', {
+            processedPixels: processedPixels,
+            totalPixels: selectionData.length,
+            selectionSample: selectionData.slice(0, 5)
+        });
+        
+        return selectionData;
     }
 
     
@@ -901,14 +1074,15 @@ export class ClearHandler {
         
         const finalData = new Uint8Array(maskData.length);
         
-        // 确保两个数组长度一致
-        if (maskData.length !== fillData.length) {
-            console.warn('⚠️ maskData和fillData长度不匹配，将使用较短的长度');
-        }
         
-        const minLength = Math.min(maskData.length, fillData.length);
+        // 添加fillData的统计信息
+        const fillStats = {
+            min: Math.min(...fillData),
+            max: Math.max(...fillData),
+            avg: fillData.reduce((sum, val) => sum + val, 0) / fillData.length,
+        };
         
-        // 输出前10个像素的样本数据用于调试
+        console.log('📊 fillData统计信息:', fillStats);
         console.log('🔍 混合计算样本数据 (前10个像素):');
         
         // 两种情况使用相同的公式：255 - (maskValue + fillValue - (maskValue * fillValue) / 255)
@@ -938,7 +1112,7 @@ export class ClearHandler {
     // 将计算后的灰度数据写回快速蒙版通道
     static async updateQuickMaskChannel(grayData: Uint8Array, bounds: any) {
         try {
-            console.log('🔄 开始更新快速蒙版通道，数据长度:', grayData.length, '边界:', bounds);
+            console.log('🔄 开始更新快速蒙版通道');
             
             let documentColorProfile = "Dot Gain 15%"; // 默认值
             
@@ -1002,7 +1176,7 @@ export class ClearHandler {
                     }
                 }
             } else {
-                console.log('📦 回退到简单的边界更新方式');
+                console.log('📦 直接更新选区边界内的所有像素');
                 // 回退方式：直接更新选区边界内的所有像素
                 for (let y = 0; y < bounds.height; y++) {
                     for (let x = 0; x < bounds.width; x++) {
