@@ -1,5 +1,5 @@
 import { action, app, core, imaging } from "photoshop";
-import { calculateRandomColor } from './ColorUtils';
+import { calculateRandomColor, hsbToRgb, rgbToGray } from './ColorUtils';
 
 export class ClearHandler {
     static async clearWithOpacity(opacity: number, state?: any) {
@@ -156,7 +156,7 @@ export class ClearHandler {
             }
 
             // 应用新的混合公式计算最终灰度值
-            const finalGrayData = await this.calculateFinalGrayValues(quickMaskPixels, fillGrayData, isSelectedAreas);
+            const finalGrayData = await this.calculateFinalGrayValues(quickMaskPixels, fillGrayData, isSelectedAreas, state.opacity);
             
             // 将计算后的灰度数据写回快速蒙版通道
             await this.updateQuickMaskChannel(finalGrayData, selectionBounds);
@@ -664,15 +664,17 @@ export class ClearHandler {
         // 使用传入的快速蒙版前景色，如果没有则实时获取当前前景色
         const currentForegroundColor = quickMaskForegroundColor || app.foregroundColor;
         
-        // 使用传入的快速蒙版前景色计算随机颜色
-        const panelColor = calculateRandomColor(state.colorSettings, state.opacity, currentForegroundColor);
-        console.log('🔍 填充的纯色 - panelColor:', panelColor);
-
         const pixelCount = bounds.width * bounds.height;
         const grayData = new Uint8Array(pixelCount);
+        
+        // 在快速蒙版模式下，使用灰度抖动而不是HSB颜色抖动
+        const isQuickMaskMode = true; // 在getSolidFillGrayData中，我们总是处于快速蒙版模式
+        const panelColor = calculateRandomColor(state.colorSettings, state.opacity, currentForegroundColor, isQuickMaskMode);
+        console.log('🔍 填充的纯色 - panelColor:', panelColor);
+        
         // 将HSB颜色转换为灰度值
-        const rgb = this.hsbToRgb(panelColor.hsb.hue, panelColor.hsb.saturation, panelColor.hsb.brightness);
-        const grayValue = this.rgbToGray(rgb.red, rgb.green, rgb.blue);
+        const rgb = hsbToRgb(panelColor.hsb.hue, panelColor.hsb.saturation, panelColor.hsb.brightness);
+        const grayValue = rgbToGray(rgb.red, rgb.green, rgb.blue);
         grayData.fill(grayValue);
         
         return grayData;
@@ -749,7 +751,7 @@ export class ClearHandler {
                 return grayData;
             }
             
-            console.log('✅ 使用渐变数据计算灰度，渐变类型:', gradient.type, '角度:', gradient.angle);
+            console.log('✅ 使用渐变数据计算灰度，渐变类型:', gradient.type, '角度:', gradient.angle, '反向:', gradient.reverse);
             const pixelCount = bounds.width * bounds.height;
             const grayData = new Uint8Array(pixelCount);
             
@@ -777,6 +779,11 @@ export class ClearHandler {
                         const projectedDistance = dx * Math.cos(angleRad) + dy * Math.sin(angleRad);
                         const maxProjectedDistance = Math.abs(centerX * Math.cos(angleRad)) + Math.abs(centerY * Math.sin(angleRad));
                         position = Math.max(0, Math.min(1, (projectedDistance + maxProjectedDistance) / (2 * maxProjectedDistance)));
+                    }
+                    
+                    // 应用反向参数
+                    if (gradient.reverse) {
+                        position = 1 - position;
                     }
                     
                     // 根据位置插值渐变颜色并转换为灰度
@@ -1170,7 +1177,7 @@ export class ClearHandler {
     
     //-------------------------------------------------------------------------------------------------
     // 应用新的混合公式计算最终灰度值（优化版本，避免栈溢出）
-    static async calculateFinalGrayValues(maskData: Uint8Array, fillData: Uint8Array, isSelectedAreas: boolean = true): Promise<Uint8Array> {
+    static async calculateFinalGrayValues(maskData: Uint8Array, fillData: Uint8Array, isSelectedAreas: boolean = true, opacity: number = 100): Promise<Uint8Array> {
         console.log('🔍 开始混合计算（优化版本）:', {
             maskDataLength: maskData.length,
             fillDataLength: fillData.length,
@@ -1212,8 +1219,9 @@ export class ClearHandler {
                         // 安全获取fillValue，如果超出范围则使用默认值128
                         const fillValue = i < fillData.length ? fillData[i] : 128;
                         
-                        // 应用统一公式
-                        const finalValue = 255 - (maskValue + fillValue - (maskValue * fillValue) / 255);
+                        // 应用统一公式，主面板不透明度转换为0-1范围
+                        const opacityFactor = opacity / 100;
+                        const finalValue = 255 - (maskValue + fillValue - (maskValue * fillValue) / 255) * opacityFactor;
                         finalData[i] = Math.min(255, Math.max(0, Math.round(finalValue)));
                         
                         // 输出前10个像素的详细信息
@@ -1376,41 +1384,5 @@ export class ClearHandler {
 
     
     //-------------------------------------------------------------------------------------------------
-    // 将RGB颜色转换为灰度值
-    static rgbToGray(red: number, green: number, blue: number) {
-        return Math.round(0.299 * red + 0.587 * green + 0.114 * blue);
-    }
-
-    // 将HSB颜色转换为RGB
-    static hsbToRgb(hue: number, saturation: number, brightness: number) {
-        const h = hue / 360;
-        const s = saturation / 100;
-        const v = brightness / 100;
-        
-        const c = v * s;
-        const x = c * (1 - Math.abs((h * 6) % 2 - 1));
-        const m = v - c;
-        
-        let r, g, b;
-        
-        if (h >= 0 && h < 1/6) {
-            r = c; g = x; b = 0;
-        } else if (h >= 1/6 && h < 2/6) {
-            r = x; g = c; b = 0;
-        } else if (h >= 2/6 && h < 3/6) {
-            r = 0; g = c; b = x;
-        } else if (h >= 3/6 && h < 4/6) {
-            r = 0; g = x; b = c;
-        } else if (h >= 4/6 && h < 5/6) {
-            r = x; g = 0; b = c;
-        } else {
-            r = c; g = 0; b = x;
-        }
-        
-        return {
-            red: Math.round((r + m) * 255),
-            green: Math.round((g + m) * 255),
-            blue: Math.round((b + m) * 255)
-        };
     }
 }

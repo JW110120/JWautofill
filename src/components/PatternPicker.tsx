@@ -971,8 +971,11 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                                 position: 'absolute',
                                 top: '50%',
                                 left: '50%',
-                                width: `${previewZoom * (scale / 100)}%`,
-                                height: `${previewZoom * (scale / 100)}%`,
+                                maxWidth: `${previewZoom * (scale / 100)}%`,
+                                maxHeight: `${previewZoom * (scale / 100)}%`,
+                                width: 'auto',
+                                height: 'auto',
+                                objectFit: 'contain',
                                 transform: `translate(-50%, -50%) translate(${previewOffset.x}px, ${previewOffset.y}px) rotate(${angle}deg)`,
                                 transformOrigin: 'center center',
                                 imageRendering: previewZoom > 400 ? 'pixelated' : 'auto'

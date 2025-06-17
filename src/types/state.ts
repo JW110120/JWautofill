@@ -3,6 +3,7 @@ export interface ColorSettings {
     saturationVariation: number;
     brightnessVariation: number;
     opacityVariation: number;
+    grayVariation?: number; // 灰度抖动，用于快速蒙版模式
 }
 
 export interface Pattern {
@@ -111,6 +112,7 @@ export const initialState: AppState = {
         saturationVariation: 0,
         brightnessVariation: 0,
         opacityVariation: 0,
+        grayVariation: 0,
     },
     selectedPattern: null,
     selectedGradient: null,
@@ -119,14 +121,14 @@ export const initialState: AppState = {
     isGradientPickerOpen: false,
     isStrokeSettingOpen: false, 
     strokeEnabled: false,
-        strokeWidth: 2,
-        strokePosition: 'center',
-        strokeBlendMode: '正常',
-        strokeOpacity: 100,
-        strokeColor: {
-            red: 0,
-            green: 0,
-            blue: 0
+    strokeWidth: 2,
+    strokePosition: 'center',
+    strokeBlendMode: '正常',
+    strokeOpacity: 100,
+    strokeColor: {
+        red: 0,
+        green: 0,
+        blue: 0
     },
     isSelectionOptionsExpanded: true,
     selectionSmooth: 0, 

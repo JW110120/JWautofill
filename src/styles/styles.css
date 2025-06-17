@@ -226,7 +226,6 @@ sp-picker[disabled] {
   font-size: 13px;
   padding: 10px 0;
   color: var(--text-color);
-  background-color: var(--bg-color);
   transition: background-color 0.3s;
 }
 
@@ -405,7 +404,7 @@ sp-radio {
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  margin: 2px 0;
+  margin: 2px -3px 2px 0;
   color: var(--text-color);
   cursor: pointer;
   transition: background-color 0.2s;
@@ -421,8 +420,8 @@ sp-radio {
 .settings-icon {
   display: inline-flex;
   align-items: center;
-  margin-left: 5px;
-  padding:0px;
+  margin: 0 -1px 0 3px;
+  padding:-5px;
 }
 
 .settings-icon:hover .icon-fill {
@@ -486,7 +485,7 @@ button:hover {
 }
 
 .checkbox-container {
-  margin-left : 3px;
+  margin: -1px 0 0 6px;
   position: relative;
   display: flex;
   align-items: center;
@@ -503,6 +502,7 @@ button:hover {
 
 .checkbox-label {
   font-size: 13px;
+  margin: -1px -3px 0 0;
   color: var(--text-color);
   cursor: pointer;
 }

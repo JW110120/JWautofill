@@ -224,7 +224,8 @@ class App extends React.Component<AppProps, AppState> {
                 saturationVariation: Math.min(100, Math.max(0, settings.saturationVariation)),
                 brightnessVariation: Math.min(100, Math.max(0, settings.brightnessVariation)),
                 opacityVariation: Math.min(100, Math.max(0, settings.opacityVariation)),
-                pressureVariation: Math.min(100, Math.max(0, settings.pressureVariation))
+                pressureVariation: Math.min(100, Math.max(0, settings.pressureVariation)),
+                grayVariation: Math.min(100, Math.max(0, settings.grayVariation || 0))
             };
 
             this.setState({
@@ -1000,9 +1001,10 @@ class App extends React.Component<AppProps, AppState> {
                     saturationVariation: 0,
                     brightnessVariation: 0,
                     opacityVariation: 0,
-                    pressureVariation: 0
+                    grayVariation: 0
                 }}
-                isQuickMaskMode={document.quickMaskMode}
+                isClearMode={this.state.clearMode}
+                isQuickMaskMode={false}
             />
 
             {/* 图案选择器 */}

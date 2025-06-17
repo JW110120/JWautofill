@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { app } from 'photoshop';
 import { ColorSettings } from '../types/state';
+import SliderControl from './SliderControl';
 
 interface ColorSettingsProps {
     isOpen: boolean;
@@ -7,6 +9,7 @@ interface ColorSettingsProps {
     onSave: (settings: ColorSettings) => void;
     initialSettings?: ColorSettings;
     isQuickMaskMode?: boolean;
+    isClearMode?: boolean; 
 }
 
 const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
@@ -17,10 +20,13 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
         hueVariation: 0,
         saturationVariation: 0,
         brightnessVariation: 0,
-        opacityVariation: 0
+        opacityVariation: 0,
+        grayVariation: 0
     },
-    isQuickMaskMode = false
+    isQuickMaskMode: propIsQuickMaskMode = false,
+    isClearMode = false
 }) => {
+    const [internalQuickMaskMode, setInternalQuickMaskMode] = useState(propIsQuickMaskMode);
     const [settings, setSettings] = useState<ColorSettings>(initialSettings);
     const [isDragging, setIsDragging] = useState(false);
     const [dragTarget, setDragTarget] = useState<keyof ColorSettings | null>(null);
@@ -88,11 +94,28 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
         };
     }, [isDragging, dragTarget, dragStartX, dragStartValue]);
 
+    useEffect(() => {
+        if (isOpen) {
+            try {
+                const currentDocument = app.activeDocument;
+                if (currentDocument) {
+                    const currentQuickMaskState = currentDocument.quickMaskMode;
+                    setInternalQuickMaskMode(currentQuickMaskState);
+                    console.log('获取到的内部快速蒙版模式:', currentQuickMaskState);
+                } else {
+                    console.log('没有活动文档可以获取快速蒙版模式。');
+                }
+            } catch (e) {
+                console.error('获取快速蒙版模式时出错:', e);
+                setInternalQuickMaskMode(propIsQuickMaskMode);
+            }
+        }
+    }, [isOpen, propIsQuickMaskMode]); 
+
     if (!isOpen) return null;
 
-    const getUnitSymbol = (key: keyof ColorSettings) => {
-        return key === 'hueVariation' ? '°' : '%';
-    };
+    console.log('颜色设置面板状态/属性:', { isClearMode, propIsQuickMaskMode, internalQuickMaskMode });
+
 
     return (
         <div className="color-settings-panel">
@@ -102,52 +125,70 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
             </div>
             
             <div className="colorsettings-slider-group">
-                {Object.keys(settings).map((key) => {
-                    if (key === 'pressureVariation') return null;
-                    
-                    // 在快速蒙版模式下禁用色相和饱和度抖动
-                    const isDisabled = isQuickMaskMode && (key === 'hueVariation' || key === 'saturationVariation');
-                    
-                    return (
-                        <div key={key} className={`colorsettings-slider-item ${isDisabled ? 'disabled' : ''}`}>
-                            <div className="colorsettings-slider-header">
-                                <label
-                                    className={`colorsettings-slider-label ${isDragging && dragTarget === key ? 'dragging' : 'not-dragging'} ${isDisabled ? 'disabled' : ''}`}
-                                    onMouseDown={isDisabled ? undefined : (e) => handleLabelMouseDown(e, key as keyof ColorSettings)}
-                                >
-                                    {key === 'hueVariation' ? '色相抖动' :
-                                     key === 'saturationVariation' ? '饱和度抖动' :
-                                     key === 'brightnessVariation' ? '亮度抖动' : '不透明度抖动'}
-                                    {isDisabled && ' (快速蒙版模式下禁用)'}
-                                </label>
+                {console.log('渲染条件: isClearMode && internalQuickMaskMode', isClearMode && internalQuickMaskMode)}
+                {isClearMode && internalQuickMaskMode ? (
+                    <>
+                        <SliderControl
+                            settingKey="grayVariation"
+                            label="灰度抖动"
+                            value={settings.grayVariation}
+                            min={0}
+                            max={100}
+                            unit="%"
+                            isDraggingActive={isDragging && dragTarget === 'grayVariation'}
+                            onValueChange={handleNumberInputChange}
+                            onLabelMouseDown={handleLabelMouseDown}
+                        />
+                    </>
+                ) : (
+                    <>
+                        <SliderControl
+                            settingKey="hueVariation"
+                            label="色相抖动"
+                            value={settings.hueVariation}
+                            min={0}
+                            max={360}
+                            unit="°"
+                            isDraggingActive={isDragging && dragTarget === 'hueVariation'}
+                            onValueChange={handleNumberInputChange}
+                            onLabelMouseDown={handleLabelMouseDown}
+                        />
+                        <SliderControl
+                            settingKey="saturationVariation"
+                            label="饱和度抖动"
+                            value={settings.saturationVariation}
+                            min={0}
+                            max={100}
+                            unit="%"
+                            isDraggingActive={isDragging && dragTarget === 'saturationVariation'}
+                            onValueChange={handleNumberInputChange}
+                            onLabelMouseDown={handleLabelMouseDown}
+                        />
+                        <SliderControl
+                            settingKey="brightnessVariation"
+                            label="亮度抖动"
+                            value={settings.brightnessVariation}
+                            min={0}
+                            max={100}
+                            unit="%"
+                            isDraggingActive={isDragging && dragTarget === 'brightnessVariation'}
+                            onValueChange={handleNumberInputChange}
+                            onLabelMouseDown={handleLabelMouseDown}
+                        />
+                    </>
+                )}
 
-                                <div style={{ display: 'flex', alignItems: 'center' }}>
-                                    <input
-                                        type="number"
-                                        min="0"
-                                        max={key === 'hueVariation' ? 360 : 100}
-                                        value={settings[key as keyof ColorSettings]}
-                                        onChange={isDisabled ? undefined : (e) => handleNumberInputChange(key as keyof ColorSettings, Number(e.target.value))}
-                                        disabled={isDisabled}
-                                    />
-                                    <span>
-                                        {getUnitSymbol(key as keyof ColorSettings)}
-                                    </span>
-                                </div>
-                            </div>
-
-                            <input
-                                type="range"
-                                min="0"
-                                max={key === 'hueVariation' ? '360' : '100'}
-                                step="1"
-                                value={settings[key as keyof ColorSettings]}
-                                onChange={isDisabled ? undefined : handleSliderChange(key as keyof ColorSettings)}
-                                disabled={isDisabled}
-                            />
-                        </div>
-                    );
-                })}
+                <SliderControl
+                    settingKey="opacityVariation"
+                    label="不透明度抖动"
+                    value={settings.opacityVariation}
+                    min={0}
+                    max={100}
+                    unit="%"
+                    isDraggingActive={isDragging && dragTarget === 'opacityVariation'}
+                    onValueChange={handleNumberInputChange}
+                    onLabelMouseDown={handleLabelMouseDown}
+                />
             </div>
 
             <div className="panel-footer">
