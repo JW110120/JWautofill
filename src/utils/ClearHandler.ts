@@ -156,7 +156,7 @@ export class ClearHandler {
             }
 
             // 应用新的混合公式计算最终灰度值
-            const finalGrayData = this.calculateFinalGrayValues(quickMaskPixels, fillGrayData, isSelectedAreas);
+            const finalGrayData = await this.calculateFinalGrayValues(quickMaskPixels, fillGrayData, isSelectedAreas);
             
             // 将计算后的灰度数据写回快速蒙版通道
             await this.updateQuickMaskChannel(finalGrayData, selectionBounds);
@@ -319,7 +319,7 @@ export class ClearHandler {
                 const bottom = Math.max(...yCoords);
                 
                 // 使用射线法计算选区内的所有像素位置
-                const selectionPixels = this.getPixelsInPolygon(pathPoints, left, top, right, bottom, docWidthPixels);
+                const selectionPixels = await this.getPixelsInPolygon(pathPoints, left, top, right, bottom, docWidthPixels);
                 
                 return {
                     left: left,
@@ -365,7 +365,7 @@ export class ClearHandler {
                     }
                     
                     // 使用射线法计算选区内的所有像素位置
-                    const selectionPixels = this.getPixelsInPolygon(polygonPoints, left, top, right, bottom, docWidthPixels);
+                const selectionPixels = await this.getPixelsInPolygon(polygonPoints, left, top, right, bottom, docWidthPixels);
                     
                     return {
                         left: left,
@@ -406,13 +406,39 @@ export class ClearHandler {
     }
     
     //-------------------------------------------------------------------------------------------------
-    // 使用射线法判断像素是否在多边形选区内
-    static getPixelsInPolygon(polygonPoints: Array<{x: number, y: number}>, left: number, top: number, right: number, bottom: number, docWidth: number): Set<number> {
+    // 使用射线法判断像素是否在多边形选区内（优化版本，避免栈溢出）
+    static async getPixelsInPolygon(polygonPoints: Array<{x: number, y: number}>, left: number, top: number, right: number, bottom: number, docWidth: number): Promise<Set<number>> {
         const selectionPixels = new Set<number>();
         
-        // 遍历选区边界内的每个像素
-        for (let y = Math.floor(top); y <= Math.ceil(bottom); y++) {
-            for (let x = Math.floor(left); x <= Math.ceil(right); x++) {
+        const startY = Math.floor(top);
+        const endY = Math.ceil(bottom);
+        const startX = Math.floor(left);
+        const endX = Math.ceil(right);
+        
+        // 分批处理，避免一次性处理过多像素导致栈溢出
+        const BATCH_SIZE = 1000; // 每批处理1000行
+        
+        for (let batchStartY = startY; batchStartY <= endY; batchStartY += BATCH_SIZE) {
+            const batchEndY = Math.min(batchStartY + BATCH_SIZE - 1, endY);
+            
+            // 使用setTimeout让出控制权，避免阻塞主线程
+            await new Promise(resolve => {
+                setTimeout(() => {
+                    this.processBatchPixels(polygonPoints, startX, endX, batchStartY, batchEndY, docWidth, selectionPixels);
+                    resolve(void 0);
+                }, 0);
+            });
+        }
+        
+        console.log('🎯 射线法计算完成，选区内像素数量:', selectionPixels.size);
+        return selectionPixels;
+    }
+    
+    //-------------------------------------------------------------------------------------------------
+    // 分批处理像素，避免栈溢出
+    static processBatchPixels(polygonPoints: Array<{x: number, y: number}>, startX: number, endX: number, startY: number, endY: number, docWidth: number, selectionPixels: Set<number>) {
+        for (let y = startY; y <= endY; y++) {
+            for (let x = startX; x <= endX; x++) {
                 if (this.isPointInPolygon(x, y, polygonPoints)) {
                     // 计算像素在整个文档数组中的位置：docWidth * (y - 1) + x
                     const pixelIndex = docWidth * (y - 1) + x;
@@ -420,9 +446,6 @@ export class ClearHandler {
                 }
             }
         }
-        
-        console.log('🎯 射线法计算完成，选区内像素数量:', selectionPixels.size);
-        return selectionPixels;
     }
     
     //-------------------------------------------------------------------------------------------------
@@ -677,7 +700,7 @@ export class ClearHandler {
                     dataLength: state.selectedPattern.grayData.length
                 });
                 
-                return this.tilePatternToFitBounds(
+                return await this.tilePatternToFitBounds(
                     state.selectedPattern.grayData, 
                     state.selectedPattern.width, 
                     state.selectedPattern.height, 
@@ -779,9 +802,9 @@ export class ClearHandler {
 
     
     //-------------------------------------------------------------------------------------------------
-    // 将图案平铺到指定边界（支持缩放和旋转）
-    static tilePatternToFitBounds(patternGrayData: Uint8Array, patternWidth: number, patternHeight: number, bounds: any, scale: number = 100, angle: number = 0) {
-        console.log('🔳 开始图案平铺:', {
+    // 将图案平铺到指定边界（支持缩放和旋转）- 优化版本
+    static async tilePatternToFitBounds(patternGrayData: Uint8Array, patternWidth: number, patternHeight: number, bounds: any, scale: number = 100, angle: number = 0): Promise<Uint8Array> {
+        console.log('🔳 开始图案平铺（优化版本）:', {
             patternSize: `${patternWidth}x${patternHeight}`,
             boundsSize: `${bounds.width}x${bounds.height}`,
             scale: scale,
@@ -790,30 +813,71 @@ export class ClearHandler {
             patternDataLength: patternGrayData.length
         });
         
-        // 输入参数验证
-        if (patternWidth <= 0 || patternHeight <= 0) {
-            console.error('❌ 图案尺寸无效:', { patternWidth, patternHeight });
-            return new Uint8Array(bounds.width * bounds.height);
-        }
-        
-        if (patternGrayData.length !== patternWidth * patternHeight) {
-            console.error('❌ 图案数据长度与尺寸不匹配:', {
-                dataLength: patternGrayData.length,
-                expectedLength: patternWidth * patternHeight
-            });
-            return new Uint8Array(bounds.width * bounds.height);
-        }
-        
-        // 第一步：创建整个文档大小的平铺数组
-        const docTiledData = this.createDocumentTiledPattern(patternGrayData, patternWidth, patternHeight, bounds.docWidth, bounds.docHeight, scale, angle);
-        
-        // 第二步：从文档平铺数组中截取选区部分
-        return this.extractSelectionFromDocumentTiled(docTiledData, bounds);
+        // 优化：直接计算选区内的图案，避免创建整个文档大小的数组
+        return await this.createOptimizedPatternForSelection(patternGrayData, patternWidth, patternHeight, bounds, scale, angle);
     }
     
-    // 创建整个文档大小的平铺图案数组
-    static createDocumentTiledPattern(patternGrayData: Uint8Array, patternWidth: number, patternHeight: number, docWidth: number, docHeight: number, scale: number, angle: number): Uint8Array {
-        console.log('🌐 创建文档级平铺图案');
+    // 优化的图案创建方法，只处理选区内的像素
+    static async createOptimizedPatternForSelection(patternGrayData: Uint8Array, patternWidth: number, patternHeight: number, bounds: any, scale: number, angle: number): Promise<Uint8Array> {
+        console.log('⚡ 使用优化的图案创建方法');
+        
+        // 计算缩放后的图案尺寸
+        const scaleFactor = scale / 100;
+        const scaledWidth = Math.max(1, Math.round(patternWidth * scaleFactor));
+        const scaledHeight = Math.max(1, Math.round(patternHeight * scaleFactor));
+        
+        // 创建缩放后的图案数据
+        const scaledPatternData = await this.scalePatternData(patternGrayData, patternWidth, patternHeight, scaledWidth, scaledHeight);
+        
+        // 如果有旋转角度，应用旋转变换
+        let transformedPatternData = scaledPatternData;
+        let transformedWidth = scaledWidth;
+        let transformedHeight = scaledHeight;
+        
+        if (angle !== 0) {
+            const rotationResult = await this.rotatePatternData(scaledPatternData, scaledWidth, scaledHeight, angle);
+            transformedPatternData = rotationResult.data;
+            transformedWidth = rotationResult.width;
+            transformedHeight = rotationResult.height;
+        }
+        
+        // 只为选区创建数据
+        const selectionData = new Uint8Array(bounds.width * bounds.height);
+        const BATCH_ROWS = 50; // 每批处理50行
+        
+        for (let batchStart = 0; batchStart < bounds.height; batchStart += BATCH_ROWS) {
+            const batchEnd = Math.min(batchStart + BATCH_ROWS, bounds.height);
+            
+            await new Promise(resolve => {
+                setTimeout(() => {
+                    for (let y = batchStart; y < batchEnd; y++) {
+                        for (let x = 0; x < bounds.width; x++) {
+                            const globalX = bounds.left + x;
+                            const globalY = bounds.top + y;
+                            
+                            // 计算在变换后图案中的位置
+                            const patternX = globalX % transformedWidth;
+                            const patternY = globalY % transformedHeight;
+                            const patternIndex = patternY * transformedWidth + patternX;
+                            
+                            const targetIndex = y * bounds.width + x;
+                            
+                            if (patternIndex < transformedPatternData.length && targetIndex < selectionData.length) {
+                                selectionData[targetIndex] = transformedPatternData[patternIndex];
+                            }
+                        }
+                    }
+                    resolve(void 0);
+                }, 0);
+            });
+        }
+        
+        return selectionData;
+    }
+    
+    // 创建整个文档大小的平铺图案数组（优化版本，避免创建过大数组）
+    static async createDocumentTiledPattern(patternGrayData: Uint8Array, patternWidth: number, patternHeight: number, docWidth: number, docHeight: number, scale: number, angle: number): Promise<Uint8Array> {
+        console.log('🌐 创建文档级平铺图案（优化版本）');
         
         // 计算缩放后的图案尺寸
         const scaleFactor = scale / 100;
@@ -826,7 +890,7 @@ export class ClearHandler {
         });
         
         // 创建缩放后的图案数据
-        const scaledPatternData = this.scalePatternData(patternGrayData, patternWidth, patternHeight, scaledWidth, scaledHeight);
+        const scaledPatternData = await this.scalePatternData(patternGrayData, patternWidth, patternHeight, scaledWidth, scaledHeight);
         
         // 如果有旋转角度，应用旋转变换
         let transformedPatternData = scaledPatternData;
@@ -834,7 +898,7 @@ export class ClearHandler {
         let transformedHeight = scaledHeight;
         
         if (angle !== 0) {
-            const rotationResult = this.rotatePatternData(scaledPatternData, scaledWidth, scaledHeight, angle);
+            const rotationResult = await this.rotatePatternData(scaledPatternData, scaledWidth, scaledHeight, angle);
             transformedPatternData = rotationResult.data;
             transformedWidth = rotationResult.width;
             transformedHeight = rotationResult.height;
@@ -845,66 +909,87 @@ export class ClearHandler {
             });
         }
         
-        // 创建文档大小的数组并平铺图案
+        // 优化：避免创建过大的数组，分批处理
         const docTiledData = new Uint8Array(docWidth * docHeight);
+        const BATCH_ROWS = 100; // 每批处理100行
         
-        for (let y = 0; y < docHeight; y++) {
-            for (let x = 0; x < docWidth; x++) {
-                const docIndex = y * docWidth + x;
-                
-                // 计算在变换后图案中的位置
-                const patternX = x % transformedWidth;
-                const patternY = y % transformedHeight;
-                const patternIndex = patternY * transformedWidth + patternX;
-                
-                if (patternIndex < transformedPatternData.length) {
-                    docTiledData[docIndex] = transformedPatternData[patternIndex];
-                }
-            }
+        for (let batchStart = 0; batchStart < docHeight; batchStart += BATCH_ROWS) {
+            const batchEnd = Math.min(batchStart + BATCH_ROWS, docHeight);
+            
+            // 分批处理，让出控制权
+            await new Promise(resolve => {
+                setTimeout(() => {
+                    for (let y = batchStart; y < batchEnd; y++) {
+                        for (let x = 0; x < docWidth; x++) {
+                            const docIndex = y * docWidth + x;
+                            
+                            // 计算在变换后图案中的位置
+                            const patternX = x % transformedWidth;
+                            const patternY = y % transformedHeight;
+                            const patternIndex = patternY * transformedWidth + patternX;
+                            
+                            if (patternIndex < transformedPatternData.length) {
+                                docTiledData[docIndex] = transformedPatternData[patternIndex];
+                            }
+                        }
+                    }
+                    resolve(void 0);
+                }, 0);
+            });
         }
         
         return docTiledData;
     }
     
-    // 缩放图案数据
-    static scalePatternData(patternData: Uint8Array, originalWidth: number, originalHeight: number, newWidth: number, newHeight: number): Uint8Array {
+    // 缩放图案数据（优化版本，避免栈溢出）
+    static async scalePatternData(patternData: Uint8Array, originalWidth: number, originalHeight: number, newWidth: number, newHeight: number): Promise<Uint8Array> {
         const scaledData = new Uint8Array(newWidth * newHeight);
+        const BATCH_ROWS = 100; // 每批处理100行
         
-        for (let y = 0; y < newHeight; y++) {
-            for (let x = 0; x < newWidth; x++) {
-                // 使用双线性插值进行缩放
-                const srcX = (x / newWidth) * originalWidth;
-                const srcY = (y / newHeight) * originalHeight;
-                
-                const x1 = Math.floor(srcX);
-                const y1 = Math.floor(srcY);
-                const x2 = Math.min(x1 + 1, originalWidth - 1);
-                const y2 = Math.min(y1 + 1, originalHeight - 1);
-                
-                const fx = srcX - x1;
-                const fy = srcY - y1;
-                
-                // 获取四个邻近像素的值
-                const p1 = patternData[y1 * originalWidth + x1];
-                const p2 = patternData[y1 * originalWidth + x2];
-                const p3 = patternData[y2 * originalWidth + x1];
-                const p4 = patternData[y2 * originalWidth + x2];
-                
-                // 双线性插值
-                const interpolated = p1 * (1 - fx) * (1 - fy) +
-                                   p2 * fx * (1 - fy) +
-                                   p3 * (1 - fx) * fy +
-                                   p4 * fx * fy;
-                
-                scaledData[y * newWidth + x] = Math.round(interpolated);
-            }
+        for (let batchStart = 0; batchStart < newHeight; batchStart += BATCH_ROWS) {
+            const batchEnd = Math.min(batchStart + BATCH_ROWS, newHeight);
+            
+            await new Promise(resolve => {
+                setTimeout(() => {
+                    for (let y = batchStart; y < batchEnd; y++) {
+                        for (let x = 0; x < newWidth; x++) {
+                            // 使用双线性插值进行缩放
+                            const srcX = (x / newWidth) * originalWidth;
+                            const srcY = (y / newHeight) * originalHeight;
+                            
+                            const x1 = Math.floor(srcX);
+                            const y1 = Math.floor(srcY);
+                            const x2 = Math.min(x1 + 1, originalWidth - 1);
+                            const y2 = Math.min(y1 + 1, originalHeight - 1);
+                            
+                            const fx = srcX - x1;
+                            const fy = srcY - y1;
+                            
+                            // 获取四个邻近像素的值
+                            const p1 = patternData[y1 * originalWidth + x1];
+                            const p2 = patternData[y1 * originalWidth + x2];
+                            const p3 = patternData[y2 * originalWidth + x1];
+                            const p4 = patternData[y2 * originalWidth + x2];
+                            
+                            // 双线性插值
+                            const interpolated = p1 * (1 - fx) * (1 - fy) +
+                                               p2 * fx * (1 - fy) +
+                                               p3 * (1 - fx) * fy +
+                                               p4 * fx * fy;
+                            
+                            scaledData[y * newWidth + x] = Math.round(interpolated);
+                        }
+                    }
+                    resolve(void 0);
+                }, 0);
+            });
         }
         
         return scaledData;
     }
     
-    // 旋转图案数据
-    static rotatePatternData(patternData: Uint8Array, width: number, height: number, angle: number): { data: Uint8Array, width: number, height: number } {
+    // 旋转图案数据（优化版本，避免栈溢出）
+    static async rotatePatternData(patternData: Uint8Array, width: number, height: number, angle: number): Promise<{ data: Uint8Array, width: number, height: number }> {
         const angleRad = (angle * Math.PI) / 180;
         const cos = Math.cos(angleRad);
         const sin = Math.sin(angleRad);
@@ -938,75 +1023,95 @@ export class ClearHandler {
         const newCenterX = newWidth / 2;
         const newCenterY = newHeight / 2;
         
-        for (let y = 0; y < newHeight; y++) {
-            for (let x = 0; x < newWidth; x++) {
-                // 将新坐标转换回原始坐标
-                const relativeX = x - newCenterX;
-                const relativeY = y - newCenterY;
-                
-                const originalX = relativeX * cos + relativeY * sin + centerX;
-                const originalY = -relativeX * sin + relativeY * cos + centerY;
-                
-                // 检查是否在原始图案范围内
-                if (originalX >= 0 && originalX < width && originalY >= 0 && originalY < height) {
-                    // 使用双线性插值
-                    const x1 = Math.floor(originalX);
-                    const y1 = Math.floor(originalY);
-                    const x2 = Math.min(x1 + 1, width - 1);
-                    const y2 = Math.min(y1 + 1, height - 1);
-                    
-                    const fx = originalX - x1;
-                    const fy = originalY - y1;
-                    
-                    const p1 = patternData[y1 * width + x1];
-                    const p2 = patternData[y1 * width + x2];
-                    const p3 = patternData[y2 * width + x1];
-                    const p4 = patternData[y2 * width + x2];
-                    
-                    const interpolated = p1 * (1 - fx) * (1 - fy) +
-                                       p2 * fx * (1 - fy) +
-                                       p3 * (1 - fx) * fy +
-                                       p4 * fx * fy;
-                    
-                    rotatedData[y * newWidth + x] = Math.round(interpolated);
-                }
-            }
+        const BATCH_ROWS = 100; // 每批处理100行
+        
+        for (let batchStart = 0; batchStart < newHeight; batchStart += BATCH_ROWS) {
+            const batchEnd = Math.min(batchStart + BATCH_ROWS, newHeight);
+            
+            await new Promise(resolve => {
+                setTimeout(() => {
+                    for (let y = batchStart; y < batchEnd; y++) {
+                        for (let x = 0; x < newWidth; x++) {
+                            // 将新坐标转换回原始坐标
+                            const relativeX = x - newCenterX;
+                            const relativeY = y - newCenterY;
+                            
+                            const originalX = relativeX * cos + relativeY * sin + centerX;
+                            const originalY = -relativeX * sin + relativeY * cos + centerY;
+                            
+                            // 检查是否在原始图案范围内
+                            if (originalX >= 0 && originalX < width && originalY >= 0 && originalY < height) {
+                                // 使用双线性插值
+                                const x1 = Math.floor(originalX);
+                                const y1 = Math.floor(originalY);
+                                const x2 = Math.min(x1 + 1, width - 1);
+                                const y2 = Math.min(y1 + 1, height - 1);
+                                
+                                const fx = originalX - x1;
+                                const fy = originalY - y1;
+                                
+                                const p1 = patternData[y1 * width + x1];
+                                const p2 = patternData[y1 * width + x2];
+                                const p3 = patternData[y2 * width + x1];
+                                const p4 = patternData[y2 * width + x2];
+                                
+                                const interpolated = p1 * (1 - fx) * (1 - fy) +
+                                                   p2 * fx * (1 - fy) +
+                                                   p3 * (1 - fx) * fy +
+                                                   p4 * fx * fy;
+                                
+                                rotatedData[y * newWidth + x] = Math.round(interpolated);
+                            }
+                        }
+                    }
+                    resolve(void 0);
+                }, 0);
+            });
         }
         
         return { data: rotatedData, width: newWidth, height: newHeight };
     }
     
-    // 从文档平铺数组中截取选区部分
-    static extractSelectionFromDocumentTiled(docTiledData: Uint8Array, bounds: any): Uint8Array {
-        console.log('✂️ 从文档平铺中截取选区:', {
+    // 从文档平铺数组中截取选区部分（优化版本，避免栈溢出）
+    static async extractSelectionFromDocumentTiled(docTiledData: Uint8Array, bounds: any): Promise<Uint8Array> {
+        console.log('✂️ 从文档平铺中截取选区（优化版本）:', {
             boundsSize: `${bounds.width}x${bounds.height}`,
             boundsPosition: `(${bounds.left}, ${bounds.top})`,
         });
         
         const selectionData = new Uint8Array(bounds.width * bounds.height);
         let processedPixels = 0;
+        const BATCH_ROWS = 50; // 每批处理50行
     
-        for (let y = 0; y < bounds.height; y++) {
-            for (let x = 0; x < bounds.width; x++) {
-                const globalX = bounds.left + x;
-                const globalY = bounds.top + y;
-                
-                if (globalX >= 0 && globalX < bounds.docWidth && 
-                    globalY >= 0 && globalY < bounds.docHeight) {
-                    
-                    const docIndex = globalY * bounds.docWidth + globalX;
-                    const targetIndex = y * bounds.width + x;
-                    
-                    if (docIndex >= 0 && docIndex < docTiledData.length && 
-                        targetIndex >= 0 && targetIndex < selectionData.length) {
-                        selectionData[targetIndex] = docTiledData[docIndex];
-                        processedPixels++;
+        for (let batchStart = 0; batchStart < bounds.height; batchStart += BATCH_ROWS) {
+            const batchEnd = Math.min(batchStart + BATCH_ROWS, bounds.height);
+            
+            await new Promise(resolve => {
+                setTimeout(() => {
+                    for (let y = batchStart; y < batchEnd; y++) {
+                        for (let x = 0; x < bounds.width; x++) {
+                            const globalX = bounds.left + x;
+                            const globalY = bounds.top + y;
+                            
+                            if (globalX >= 0 && globalX < bounds.docWidth && 
+                                globalY >= 0 && globalY < bounds.docHeight) {
+                                
+                                const docIndex = globalY * bounds.docWidth + globalX;
+                                const targetIndex = y * bounds.width + x;
+                                
+                                if (docIndex >= 0 && docIndex < docTiledData.length && 
+                                    targetIndex >= 0 && targetIndex < selectionData.length) {
+                                    selectionData[targetIndex] = docTiledData[docIndex];
+                                    processedPixels++;
+                                }
+                            }
+                        }
                     }
-                }
-            }
+                    resolve(void 0);
+                }, 0);
+            });
         }
         
-
         console.log('✅ 选区截取完成:', {
             processedPixels: processedPixels,
             totalPixels: selectionData.length,
@@ -1064,9 +1169,9 @@ export class ClearHandler {
 
     
     //-------------------------------------------------------------------------------------------------
-    // 应用新的混合公式计算最终灰度值
-    static calculateFinalGrayValues(maskData: Uint8Array, fillData: Uint8Array, isSelectedAreas: boolean = true) {
-        console.log('🔍 开始混合计算:', {
+    // 应用新的混合公式计算最终灰度值（优化版本，避免栈溢出）
+    static async calculateFinalGrayValues(maskData: Uint8Array, fillData: Uint8Array, isSelectedAreas: boolean = true): Promise<Uint8Array> {
+        console.log('🔍 开始混合计算（优化版本）:', {
             maskDataLength: maskData.length,
             fillDataLength: fillData.length,
             isSelectedAreas: isSelectedAreas
@@ -1074,32 +1179,51 @@ export class ClearHandler {
         
         const finalData = new Uint8Array(maskData.length);
         
+        // 优化：计算fillData统计信息时避免使用扩展运算符
+        let fillMin = 255, fillMax = 0, fillSum = 0;
+        for (let i = 0; i < fillData.length; i++) {
+            const val = fillData[i];
+            if (val < fillMin) fillMin = val;
+            if (val > fillMax) fillMax = val;
+            fillSum += val;
+        }
         
-        // 添加fillData的统计信息
         const fillStats = {
-            min: Math.min(...fillData),
-            max: Math.max(...fillData),
-            avg: fillData.reduce((sum, val) => sum + val, 0) / fillData.length,
+            min: fillMin,
+            max: fillMax,
+            avg: fillSum / fillData.length,
         };
         
         console.log('📊 fillData统计信息:', fillStats);
         console.log('🔍 混合计算样本数据 (前10个像素):');
         
-        // 两种情况使用相同的公式：255 - (maskValue + fillValue - (maskValue * fillValue) / 255)
-        for (let i = 0; i < maskData.length; i++) {
-            const maskValue = maskData[i];  // 快速蒙版像素值 (0-255)
+        // 分批处理，避免一次性处理过多数据导致栈溢出
+        const BATCH_SIZE = 10000; // 每批处理1万个像素
+        
+        for (let batchStart = 0; batchStart < maskData.length; batchStart += BATCH_SIZE) {
+            const batchEnd = Math.min(batchStart + BATCH_SIZE, maskData.length);
             
-            // 安全获取fillValue，如果超出范围则使用默认值128
-            const fillValue = i < fillData.length ? fillData[i] : 128;
-            
-            // 应用统一公式
-            const finalValue = 255 - (maskValue + fillValue - (maskValue * fillValue) / 255);
-            finalData[i] = Math.min(255, Math.max(0, Math.round(finalValue)));
-            
-            // 输出前10个像素的详细信息
-            if (i < 10) {
-                console.log(`像素 ${i} (${isSelectedAreas ? 'selectedAreas' : '非selectedAreas'}): maskValue=${maskValue}, fillValue=${fillValue}, finalValue=${finalValue.toFixed(2)}`);
-            }
+            await new Promise(resolve => {
+                setTimeout(() => {
+                    // 两种情况使用相同的公式：255 - (maskValue + fillValue - (maskValue * fillValue) / 255)
+                    for (let i = batchStart; i < batchEnd; i++) {
+                        const maskValue = maskData[i];  // 快速蒙版像素值 (0-255)
+                        
+                        // 安全获取fillValue，如果超出范围则使用默认值128
+                        const fillValue = i < fillData.length ? fillData[i] : 128;
+                        
+                        // 应用统一公式
+                        const finalValue = 255 - (maskValue + fillValue - (maskValue * fillValue) / 255);
+                        finalData[i] = Math.min(255, Math.max(0, Math.round(finalValue)));
+                        
+                        // 输出前10个像素的详细信息
+                        if (i < 10) {
+                            console.log(`像素 ${i} (${isSelectedAreas ? 'selectedAreas' : '非selectedAreas'}): maskValue=${maskValue}, fillValue=${fillValue}, finalValue=${finalValue.toFixed(2)}`);
+                        }
+                    }
+                    resolve(void 0);
+                }, 0);
+            });
         }
         
         console.log('✅ 混合计算完成，最终数据长度:', finalData.length);
