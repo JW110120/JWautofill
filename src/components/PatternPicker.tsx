@@ -8,56 +8,99 @@ interface PatternPickerProps {
     onClose: () => void;
     onSelect: (pattern: Pattern) => void;
 }
-
-const PatternPicker: React.FC<PatternPickerProps> = ({
-    isOpen,
-    onClose,
-    onSelect
-}) => {
+    //-------------------------------------------------------------------------------------------------
+    // 定义图案面板上的核心选项参数
+    const PatternPicker: React.FC<PatternPickerProps> = ({
+        isOpen,
+        onClose,
+        onSelect
+    }) => {
     const [patterns, setPatterns] = useState<Pattern[]>([]);
     const [selectedPattern, setSelectedPattern] = useState<string | null>(null);
     const [angle, setAngle] = useState<number>(0);
     const [scale, setScale] = useState<number>(100);
-    
-    // 拖动状态
-    const [isDragging, setIsDragging] = useState(false);
+
+    // 新增滑动条拖拽状态    
+    const [isSliderDragging, setIsSliderDragging] = useState(false);
     const [dragTarget, setDragTarget] = useState<'angle' | 'scale' | null>(null);
     const [dragStartX, setDragStartX] = useState(0);
     const [dragStartValue, setDragStartValue] = useState(0);
-    const [loadedImages, setLoadedImages] = useState<Record<string, boolean>>({});
-    // 新增预览相关状态
-    const [previewZoom, setPreviewZoom] = useState<number>(100); // 预览缩放级别
-    const [previewOffset, setPreviewOffset] = useState<{x: number, y: number}>({x: 0, y: 0}); // 预览偏移
-    
-    // 监听 patterns 状态变化，检查 grayData 是否正确设置
-    useEffect(() => {
-        patterns.forEach(pattern => {
-            if (pattern.patternName && pattern.grayData) {
-                console.log('✅ 图案灰度数据已设置:', {
-                    patternId: pattern.id,
-                    patternName: pattern.patternName,
-                    hasGrayData: !!pattern.grayData,
-                    grayDataLength: pattern.grayData.length,
-                    patternDimensions: `${pattern.width}x${pattern.height}`,
-                });
-            }
-        });
-    }, [patterns]);
-    const [isDragging, setIsDragging] = useState<boolean>(false);
+
+    // 新增预览拖拽状态
+    const [isPreviewDragging, setIsPreviewDragging] = useState<boolean>(false);
     const [dragStart, setDragStart] = useState<{x: number, y: number}>({x: 0, y: 0});
     const previewRef = useRef<HTMLDivElement>(null);
     
+    // 新增预览相关状态
+    const [loadedImages, setLoadedImages] = useState<Record<string, boolean>>({});
+    const [previewZoom, setPreviewZoom] = useState<number>(100); // 预览缩放级别
+    const [previewOffset, setPreviewOffset] = useState<{x: number, y: number}>({x: 0, y: 0}); // 预览偏移
+    
+    
     // 预览缩放档位
     const zoomLevels = [12.5, 25, 33, 50, 67, 100, 150, 200, 300, 400, 500, 600, 800, 1000, 1200, 1600];
-    
+
+    // 定义可载入图案类型
     const mimeTypeMap = {
         jpg: 'image/jpeg',
         jpeg: 'image/jpeg',
         png: 'image/png',
-        gif: 'image/gif'
     };
     const [preserveTransparency, setPreserveTransparency] = useState<boolean>(false);
+
+
+
+
+    //-------------------------------------------------------------------------------------------------
+    // 新增滑块拖动事件处理
+    const handleMouseDown = (event: React.MouseEvent, target: 'angle' | 'scale') => {
+        setIsSliderDragging(true);
+        setDragTarget(target);
+        setDragStartX(event.clientX);
+        setDragStartValue(target === 'angle' ? angle : scale);
+        event.preventDefault();
+    };
     
+    // 处理滑块拖拽开始
+    const handleMouseMove = (event: MouseEvent) => {
+        if (!isSliderDragging || !dragTarget) return;
+        
+        const deltaX = event.clientX - dragStartX;
+        const sensitivity = 10;
+        
+        let newValue = dragStartValue + deltaX * (sensitivity / 10);
+        newValue = Math.round(newValue);
+        
+        if (dragTarget === 'angle') {
+            newValue = Math.min(360, Math.max(0, newValue));
+            setAngle(newValue);
+        } else if (dragTarget === 'scale') {
+            newValue = Math.min(300, Math.max(20, newValue));
+            setScale(newValue);
+        }
+    };
+
+    // 处理滑块拖拽结束
+    const handleMouseUp = () => {
+        setIsSliderDragging(false);
+        setDragTarget(null);
+    };
+
+    // 监听鼠标在拖动滑块时的状态。
+    useEffect(() => {
+        if (isSliderDragging) {
+            document.addEventListener('mousemove', handleMouseMove);
+            document.addEventListener('mouseup', handleMouseUp);
+            return () => {
+                document.removeEventListener('mousemove', handleMouseMove);
+                document.removeEventListener('mouseup', handleMouseUp);
+            };
+        }
+    }, [isSliderDragging, dragTarget, dragStartX, dragStartValue, angle, scale]);
+
+
+    //-------------------------------------------------------------------------------------------------
+    // 新增各种与预览交互时的逻辑。
     // 处理预览缩放
     const handlePreviewZoomChange = (e: any) => {
             console.log('Zoom change event:', e); // 添加调试日志
@@ -84,7 +127,7 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
             }
     };
     
-    // 处理预览鼠标滚轮缩放
+    // 处理预览鼠标滚轮切换缩放下拉菜单
     const handlePreviewWheel = (e: React.WheelEvent) => {
         e.preventDefault();
         const delta = e.deltaY > 0 ? -1 : 1;
@@ -97,7 +140,7 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
     // 处理预览拖拽开始
     const handlePreviewMouseDown = (e: React.MouseEvent) => {
         if (previewZoom > 100) {
-            setIsDragging(true);
+            setIsPreviewDragging(true);
             setDragStart({
                 x: e.clientX - previewOffset.x,
                 y: e.clientY - previewOffset.y
@@ -107,7 +150,7 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
     
     // 处理预览拖拽移动
     const handlePreviewMouseMove = (e: React.MouseEvent) => {
-        if (isDragging && previewZoom > 100) {
+        if (isPreviewDragging && previewZoom > 100) {
             const newOffset = {
                 x: e.clientX - dragStart.x,
                 y: e.clientY - dragStart.y
@@ -124,13 +167,13 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
     
     // 处理预览拖拽结束
     const handlePreviewMouseUp = () => {
-        setIsDragging(false);
+        setIsPreviewDragging(false);
     };
     
-    // 添加全局鼠标事件监听
+    // 添加鼠标拖拽图案预览事件监听
     useEffect(() => {
         const handleGlobalMouseMove = (e: MouseEvent) => {
-            if (isDragging && previewZoom > 100) {
+            if (isPreviewDragging && previewZoom > 100) {
                 const newOffset = {
                     x: e.clientX - dragStart.x,
                     y: e.clientY - dragStart.y
@@ -145,10 +188,10 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
         };
         
         const handleGlobalMouseUp = () => {
-            setIsDragging(false);
+            setIsPreviewDragging(false);
         };
         
-        if (isDragging) {
+        if (isPreviewDragging) {
             document.addEventListener('mousemove', handleGlobalMouseMove);
             document.addEventListener('mouseup', handleGlobalMouseUp);
         }
@@ -157,9 +200,10 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
             document.removeEventListener('mousemove', handleGlobalMouseMove);
             document.removeEventListener('mouseup', handleGlobalMouseUp);
         };
-    }, [isDragging, dragStart, previewZoom]);
+    }, [isPreviewDragging, dragStart, previewZoom]);
 
-
+    //-------------------------------------------------------------------------------------------------
+    // 新增从系统中载入待填充图案的方法
     const processFile = async (file) => {
         try {
             
@@ -187,7 +231,7 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
         }
     };
 
-    // 使用已有的辅助函数
+    // 使用辅助函数获取Base64信息
     const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
         let binary = '';
         const bytes = new Uint8Array(buffer);
@@ -197,6 +241,7 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
         return btoa(binary);
     };
     
+    // 新增选中文件的逻辑
     const handleFileSelect = async () => {
         try {
             const files = await require('uxp').storage.localFileSystem.getFileForOpening({
@@ -236,184 +281,49 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
         }
     };
 
-    // 辅助函数：生成唯一ID
+    // 辅助函数：为加载的图案生成唯一ID
     const generateUniqueId = () => {
         return Date.now().toString(36) + Math.random().toString(36).substr(2);
     };
 
-    const handleDelete = async () => {
-        if (selectedPattern) {
-            const patternToDelete = patterns.find(p => p.id === selectedPattern);
-            if (patternToDelete?.patternName) {
-                try {
-                    // 删除PS中的图案
-                    await core.executeAsModal(async () => {
-                        await action.batchPlay(
-                            [
-                                {
-                                    _obj: "delete",
-                                    _target: [
-                                        {
-                                            _ref: "pattern",
-                                            _name: patternToDelete.patternName
-                                        }
-                                    ],
-                                    _options: {
-                                        dialogOptions: "dontDisplay"
-                                    }
-                                }
-                            ],
-                            { synchronousExecution: true }
-                        );
-                    }, { commandName: '删除图案' });
-                    console.log('PS图案删除成功:', patternToDelete.patternName);
-                } catch (error) {
-                    console.error('删除PS图案失败:', error);
-                }
-            }
-            
-            // 从状态中删除图案
-            setPatterns(patterns.filter(p => p.id !== selectedPattern));
-            setSelectedPattern(null);
-        }
-    };
-
-    // 更新图案的缩放和旋转参数（不进行实际变换，由ClearHandler处理）
-    const updatePatternTransform = async (patternId: string, newScale: number, newAngle: number) => {
-        setPatterns(prevPatterns => {
-            return prevPatterns.map(p => {
-                if (p.id === patternId) {
-                    return {
-                        ...p,
-                        currentScale: newScale,
-                        currentAngle: newAngle
-                    };
-                }
-                return p;
-            });
-        });
-        
-        console.log('图案参数更新完成:', {
-            patternId,
-            scale: newScale,
-            angle: newAngle
-        });
-    };
-
-    const handleAngleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const newAngle = Number(e.target.value);
-        setAngle(newAngle);
-        
-        // 如果有选中的图案，更新其变换
-        if (selectedPattern) {
-            updatePatternTransform(selectedPattern, scale, newAngle);
-        }
-    };
-    
-    const handleScaleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const newScale = Number(e.target.value);
-        setScale(newScale);
-        
-        // 如果有选中的图案，更新其变换
-        if (selectedPattern) {
-            updatePatternTransform(selectedPattern, newScale, angle);
-        }
-    };
-    
-    // 滑块拖动事件处理
-    const handleMouseDown = (event: React.MouseEvent, target: 'angle' | 'scale') => {
-        setIsDragging(true);
-        setDragTarget(target);
-        setDragStartX(event.clientX);
-        setDragStartValue(target === 'angle' ? angle : scale);
-        event.preventDefault();
-    };
-    
-    const handleMouseMove = (event: MouseEvent) => {
-        if (!isDragging || !dragTarget) return;
-        
-        const deltaX = event.clientX - dragStartX;
-        const sensitivity = 10;
-        
-        let newValue = dragStartValue + deltaX * (sensitivity / 10);
-        newValue = Math.round(newValue);
-        
-        if (dragTarget === 'angle') {
-            newValue = Math.min(360, Math.max(0, newValue));
-            setAngle(newValue);
-        } else if (dragTarget === 'scale') {
-            newValue = Math.min(300, Math.max(20, newValue));
-            setScale(newValue);
-        }
-    };
-    
-    const handleMouseUp = () => {
-        setIsDragging(false);
-        setDragTarget(null);
-    };
-    
-    useEffect(() => {
-        if (isDragging) {
-            document.addEventListener('mousemove', handleMouseMove);
-            document.addEventListener('mouseup', handleMouseUp);
-            return () => {
-                document.removeEventListener('mousemove', handleMouseMove);
-                document.removeEventListener('mouseup', handleMouseUp);
-            };
-        }
-    }, [isDragging, dragTarget, dragStartX, dragStartValue, angle, scale]);
-
-    useEffect(() => {
-        if (patterns.length > 0) {
-            // 延迟检查DOM，确保React已完成渲染
-            const timer = setTimeout(() => {
-                const imgElements = document.querySelectorAll('.photo-container img');
-                imgElements.forEach((img, index) => {
-                    console.log(`图片[${index}]实际尺寸:`, {
-                        offsetWidth: img.offsetWidth,
-                        offsetHeight: img.offsetHeight,
-                        clientWidth: img.clientWidth,
-                        clientHeight: img.clientHeight,
-                        complete: img.complete,
-                        src: img.src.substring(0, 30) + '...'
-                    });
-                });
-            }, 500); // 延迟500ms
-            
-            return () => clearTimeout(timer);
-        }
-    }, [patterns]);
-
-    // 从RGB数据转换为灰度数据
-    const convertRGBToGrayData = (rgbData: Uint8Array, width: number, height: number): Uint8Array => {
-        const grayData = new Uint8Array(width * height);
-        for (let i = 0; i < width * height; i++) {
-            const r = rgbData[i * 3];
-            const g = rgbData[i * 3 + 1];
-            const b = rgbData[i * 3 + 2];
-            // 使用标准的RGB到灰度转换公式
-            const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
-            grayData[i] = gray;
-        }
-        return grayData;
-    };
-
-
-
+    // 将外部的图案转化为PS内部图案
     const createPatternFromImage = async () => {
-        // 生成唯一的文档名称
-        const docName = `Pattern_${Date.now()}`;
-        const patternName = `Pattern_${Date.now()}`;
-        
         // 获取选中的图案
         let selectedPatternData = patterns.find(p => p.id === selectedPattern);
         if (!selectedPatternData) return;
         
+        // 检查是否已经有缓存的图案数据，避免重复处理
+        if (selectedPatternData.patternRgbData && selectedPatternData.grayData && 
+            selectedPatternData.width && selectedPatternData.height) {
+            console.log('✅ 使用已缓存的图案数据，跳过重新处理');
+            return `Pattern_${selectedPatternData.id}`;
+        }
+        
+        // 生成唯一的文档名称
+        const docName = `Pattern_${Date.now()}`;
+        const patternName = `Pattern_${Date.now()}`;
+        
         // 获取图片元素以读取实际尺寸
         const imgElement = document.querySelector('.pattern-final-preview') as HTMLImageElement;
-        if (!imgElement || !imgElement.complete) return;
+        if (!imgElement || !imgElement.complete) {
+            console.error('❌ 图片元素未找到或未完全加载');
+            return;
+        }
+        
+        // 验证图片尺寸
+        if (!imgElement.naturalWidth || !imgElement.naturalHeight || 
+            imgElement.naturalWidth <= 0 || imgElement.naturalHeight <= 0) {
+            console.error('❌ 图片尺寸无效:', {
+                naturalWidth: imgElement.naturalWidth,
+                naturalHeight: imgElement.naturalHeight
+            });
+            return;
+        }
         
         try {
+            // 显示处理提示，改善用户体验
+            console.log('🔄 开始处理图案数据，请稍候...');
+            
             const {localFileSystem: fs} = require("uxp").storage;
             
             // 获取文件的会话令牌
@@ -428,6 +338,10 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
             
             // 在modal scope中执行创建图案操作
             await core.executeAsModal(async () => {
+                // 为了减少界面闪烁，使用较小的临时文档尺寸，后续会调整
+                const tempWidth = Math.min(imgElement.naturalWidth, 512);
+                const tempHeight = Math.min(imgElement.naturalHeight, 512);
+                
                 await action.batchPlay(
                     [
                         {
@@ -442,11 +356,11 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                                 },
                                 width: {
                                     _unit: "pixelsUnit",
-                                    _value: imgElement.naturalWidth
+                                    _value: tempWidth
                                 },
                                 height: {
                                     _unit: "pixelsUnit",
-                                    _value: imgElement.naturalHeight
+                                    _value: tempHeight
                                 },
                                 resolution: {
                                     _unit: "densityUnit",
@@ -470,6 +384,14 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                             freeTransformCenterState: {
                                 _enum: "quadCenterState",
                                 _value: "QCSAverage"
+                            },
+                            width: {
+                                _unit: "pixelsUnit",
+                                _value: imgElement.naturalWidth
+                            },
+                            height: {
+                                _unit: "pixelsUnit",
+                                _value: imgElement.naturalHeight
                             },
                             _options: {
                                 dialogOptions: "dontDisplay"
@@ -508,6 +430,7 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                     const activeDoc = app.activeDocument;
                     
                     // 按照官方API格式获取文档的像素数据
+                    // 确保获取原始图像尺寸的像素数据
                     let options = {
                         "documentID": activeDoc.id,
                         "targetSize": {
@@ -516,7 +439,13 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                         },
                         "componentSize": 8,
                         "applyAlpha": true,
-                        "colorProfile": "sRGB IEC61966-2.1"
+                        "colorProfile": "sRGB IEC61966-2.1",
+                        "bounds": {
+                            "left": 0,
+                            "top": 0,
+                            "right": imgElement.naturalWidth,
+                            "bottom": imgElement.naturalHeight
+                        }
                     };
                     
                     // 如果有选中的图层，添加图层ID
@@ -560,12 +489,8 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                     
                 } catch (pixelError) {
                     console.error('获取像素数据失败:', pixelError);
-                }
-                
-                // 确保rgbData不为null
-                if (!rgbData) {
-                    rgbData = new Uint8Array(defaultWidth * defaultHeight * 3).fill(128);
-                    console.warn('rgbData为空，使用默认数据');
+                    // 在catch块中重置pixelData为null，确保后续逻辑正确处理
+                    pixelData = null;
                 }
                 
                 // 确保pixelData不为null
@@ -581,17 +506,28 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                     console.warn('pixelData为空，使用默认数据');
                 }
                 
-                // 转换RGB数据为灰度数据
-                console.log('🔄 开始转换RGB数据为灰度数据:', {
-                    rgbDataLength: rgbData!.length,
-                    expectedLength: pixelData.imageData.width * pixelData.imageData.height * 3,
+                // 确保components变量始终有定义
+                const components = pixelData?.imageData?.components || 3;
+                
+                // 确保rgbData不为null
+                if (!rgbData) {
+                    rgbData = new Uint8Array(defaultWidth * defaultHeight * components).fill(128);
+                    console.warn('rgbData为空，使用默认数据');
+                }
+                
+                // 转换RGB/RGBA数据为灰度数据
+                console.log('🔄 开始转换像素数据为灰度数据:', {
+                    pixelDataLength: rgbData!.length,
+                    components: components,
+                    expectedLength: pixelData.imageData.width * pixelData.imageData.height * components,
                     dimensions: `${pixelData.imageData.width}x${pixelData.imageData.height}`
                 });
                 
-                const originalGrayData = convertRGBToGrayData(
+                const originalGrayData = convertToGrayData(
                     rgbData!, 
                     pixelData.imageData.width, 
-                    pixelData.imageData.height
+                    pixelData.imageData.height,
+                    components
                 );
                 
                 console.log('✅ 灰度数据转换完成:', {
@@ -614,9 +550,10 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                 // 保存原始灰度数据用于后续变换
                 selectedPatternData.originalGrayData = originalGrayData;
                 
-                console.log('图案灰度数据处理完成:', {
+                console.log('图案数据处理完成:', {
                     originalSize: `${pixelData.imageData.width}x${pixelData.imageData.height}`,
                     transformedSize: `${patternWidth}x${patternHeight}`,
+                    components: components,
                     scale: scale,
                     angle: angle
                 });
@@ -630,37 +567,13 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                     patternWidth,
                     patternHeight,
                     patternGrayDataLength: patternGrayData ? patternGrayData.length : 0,
-                    rgbDataLength: rgbData ? rgbData.length : 0
+                    rgbDataLength: rgbData ? rgbData.length : 0,
+                    components: components
                 });
                 
-                // 创建图案
+                // 关闭临时文档（快速且静默）
                 await action.batchPlay(
                     [
-                        {
-                            _obj: "make",
-                            _target: [
-                                {
-                                    _ref: "pattern"
-                                }
-                            ],
-                            using: {
-                                _ref: [
-                                    {
-                                       _ref: "property",
-                                       _property: "selection"
-                                    },
-                                    {
-                                       _ref: "document",
-                                       _enum: "ordinal",
-                                       _value: "targetEnum"
-                                    }
-                                 ]
-                              },
-                            name: patternName,
-                            _options: {
-                                dialogOptions: "dontDisplay"
-                            }
-                        },
                         {
                             _obj: "close",
                             saving: {
@@ -674,48 +587,50 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                     ],
                     { synchronousExecution: true }
                 );
-            }, { commandName: '创建图案' });
-            
-            console.log('图案创建完成:', { docName, patternName });
-            
-            // 更新选中的图案对象，添加patternName和灰度数据
-            console.log('📝 准备更新图案状态:', {
-                selectedPatternId: selectedPattern,
-                patternName: patternName,
-                hasPatternGrayData: !!patternGrayData,
-                patternGrayDataLength: patternGrayData ? patternGrayData.length : 0,
-                patternDimensions: `${patternWidth}x${patternHeight}`
-            });
-            
-            setPatterns(prevPatterns => {
-                const updatedPatterns = prevPatterns.map(p => {
-                    if (p.id === selectedPattern) {
-                        const updatedPattern = {
-                            ...p,
-                            patternName: patternName,
-                            grayData: patternGrayData,
-                            originalGrayData: selectedPatternData.originalGrayData,
-                            width: patternWidth,
-                            height: patternHeight,
-                            originalWidth: pixelData.imageData.width,
-                            originalHeight: pixelData.imageData.height,
-                            currentScale: scale,
-                            currentAngle: angle
-                        };
-                        
-                        console.log('🔄 图案状态更新:', {
-                            patternId: p.id,
-                            beforeUpdate: { hasGrayData: !!p.grayData },
-                            afterUpdate: { hasGrayData: !!updatedPattern.grayData, grayDataLength: updatedPattern.grayData?.length }
-                        });
-                        
-                        return updatedPattern;
-                    }
-                    return p;
+                
+                console.log('✅ 图案数据处理完成，临时文档已关闭');
+                
+                // 更新选中的图案对象，添加patternName和灰度数据
+                console.log('📝 准备更新图案状态:', {
+                    selectedPatternId: selectedPattern,
+                    patternName: patternName,
+                    hasPatternGrayData: !!patternGrayData,
+                    patternGrayDataLength: patternGrayData ? patternGrayData.length : 0,
+                    patternDimensions: `${patternWidth}x${patternHeight}`
                 });
                 
-                return updatedPatterns;
-            });
+                setPatterns(prevPatterns => {
+                    const updatedPatterns = prevPatterns.map(p => {
+                        if (p.id === selectedPattern) {
+                            const updatedPattern = {
+                                ...p,
+                                patternRgbData: rgbData,
+                                patternComponents: components,
+                                grayData: patternGrayData,
+                                originalGrayData: selectedPatternData.originalGrayData,
+                                width: patternWidth,
+                                height: patternHeight,
+                                originalWidth: pixelData?.imageData?.width || imgElement.naturalWidth,
+                                originalHeight: pixelData?.imageData?.height || imgElement.naturalHeight,
+                                currentScale: scale,
+                                currentAngle: angle
+                            };
+                            
+                            console.log('🔄 图案状态更新:', {
+                                patternId: p.id,
+                                beforeUpdate: { hasGrayData: !!p.grayData },
+                                afterUpdate: { hasGrayData: !!updatedPattern.grayData, grayDataLength: updatedPattern.grayData?.length }
+                            });
+                            
+                            return updatedPattern;
+                        }
+                        return p;
+                    });
+                    
+                    return updatedPatterns;
+                });
+                
+            }, { commandName: '载入图案' });
             
             return patternName;
         } catch (error) {
@@ -723,6 +638,114 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
             return null;
         }
     };
+
+    // 将图案的RGB/RGBA数据转换为灰度数据
+    const convertToGrayData = (pixelData: Uint8Array, width: number, height: number, components: number): Uint8Array => {
+        const grayData = new Uint8Array(width * height);
+        for (let i = 0; i < width * height; i++) {
+            const r = pixelData[i * components];
+            const g = pixelData[i * components + 1];
+            const b = pixelData[i * components + 2];
+            // 使用标准的RGB到灰度转换公式
+            const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+            grayData[i] = gray;
+        }
+        return grayData;
+    };
+    
+    // 删除图案的逻辑
+    const handleDelete = async () => {
+        if (selectedPattern) {
+            // 从状态中删除图案
+            setPatterns(patterns.filter(p => p.id !== selectedPattern));
+            setSelectedPattern(null);
+            console.log('图案删除成功');
+        }
+    };
+
+    //-------------------------------------------------------------------------------------------------
+    // 更新图案的变形（不进行实际变换，由ClearHandler处理）
+    const updatePatternTransform = async (patternId: string, newScale: number, newAngle: number) => {
+        setPatterns(prevPatterns => {
+            return prevPatterns.map(p => {
+                if (p.id === patternId) {
+                    return {
+                        ...p,
+                        currentScale: newScale,
+                        currentAngle: newAngle
+                    };
+                }
+                return p;
+            });
+        });
+        
+        console.log('图案参数更新完成:', {
+            patternId,
+            scale: newScale,
+            angle: newAngle
+        });
+    };
+    
+    // 更新图案的角度滑块的变化
+    const handleAngleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const newAngle = Number(e.target.value);
+        setAngle(newAngle);
+        
+        // 如果有选中的图案，更新其变换
+        if (selectedPattern) {
+            updatePatternTransform(selectedPattern, scale, newAngle);
+        }
+    };
+    
+    // 更新图案的缩放滑块的变化
+    const handleScaleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const newScale = Number(e.target.value);
+        setScale(newScale);
+        
+        // 如果有选中的图案，更新其变换
+        if (selectedPattern) {
+            updatePatternTransform(selectedPattern, newScale, angle);
+        }
+    };
+    
+    //-------------------------------------------------------------------------------------------------
+    // 监听 patterns 加载情况，输出图案的具体信息。
+    useEffect(() => {
+        if (patterns.length > 0) {
+            // 延迟检查DOM，确保React已完成渲染
+            const timer = setTimeout(() => {
+                const imgElements = document.querySelectorAll('.photo-container img');
+                imgElements.forEach((img, index) => {
+                    console.log(`图片[${index}]实际尺寸:`, {
+                        offsetWidth: img.offsetWidth,
+                        offsetHeight: img.offsetHeight,
+                        clientWidth: img.clientWidth,
+                        clientHeight: img.clientHeight,
+                        complete: img.complete,
+                        src: img.src.substring(0, 30) + '...'
+                    });
+                });
+            }, 500); // 延迟500ms
+            
+            return () => clearTimeout(timer);
+        }
+    }, [patterns]);
+
+    //-------------------------------------------------------------------------------------------------
+    // 监听 patterns 状态变化，检查 grayData 是否正确设置
+    useEffect(() => {
+        patterns.forEach(pattern => {
+            if (pattern.patternName && pattern.grayData) {
+                console.log('✅ 图案灰度数据已设置:', {
+                    patternId: pattern.id,
+                    patternName: pattern.patternName,
+                    hasGrayData: !!pattern.grayData,
+                    grayDataLength: pattern.grayData.length,
+                    patternDimensions: `${pattern.width}x${pattern.height}`,
+                });
+            }
+        });
+    }, [patterns]);
 
     if (!isOpen) return null;
 
@@ -861,7 +884,7 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
             <div className="pattern-settings-area">
                 <div className="pattern-setting-item-group">
                     <div className="pattern-setting-item">
-                        <label onMouseDown={(e) => handleMouseDown(e, 'angle')} style={{ cursor: isDragging && dragTarget === 'angle' ? 'ew-resize' : 'ew-resize' }}>角度：
+                        <label onMouseDown={(e) => handleMouseDown(e, 'angle')} style={{ cursor: isSliderDragging && dragTarget === 'angle' ? 'ew-resize' : 'ew-resize' }}>角度：
                             <div>
                             <input
                                 type="number"
@@ -885,7 +908,7 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                     </div>
 
                     <div className="pattern-setting-item">
-                        <label onMouseDown={(e) => handleMouseDown(e, 'scale')} style={{ cursor: isDragging && dragTarget === 'scale' ? 'ew-resize' : 'ew-resize' }}>缩放：
+                        <label onMouseDown={(e) => handleMouseDown(e, 'scale')} style={{ cursor: isSliderDragging && dragTarget === 'scale' ? 'ew-resize' : 'ew-resize' }}>缩放：
                             <div>
                                 <input
                                     type="number"
@@ -959,7 +982,7 @@ const PatternPicker: React.FC<PatternPickerProps> = ({
                         onMouseMove={handlePreviewMouseMove}
                         onMouseUp={handlePreviewMouseUp}
                         style={{
-                            cursor: previewZoom > 100 ? (isDragging ? 'grabbing' : 'grab') : 'default',
+                            cursor: previewZoom > 100 ? (isPreviewDragging ? 'grabbing' : 'grab') : 'default',
                             overflow: 'hidden'
                         }}
                     >

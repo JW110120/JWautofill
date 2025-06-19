@@ -13,8 +13,10 @@ export interface Pattern {
     data?: ArrayBuffer;
     angle?: number;
     scale?: number;
-    patternName?: string;
     preserveTransparency?: boolean;
+    // RGB/RGBA数据相关属性
+    patternRgbData?: Uint8Array;     // 原始RGB/RGBA像素数据
+    patternComponents?: number;      // 组件数（3=RGB, 4=RGBA）
     // 灰度数据相关属性
     grayData?: Uint8Array;           // 当前变换后的灰度数据
     originalGrayData?: Uint8Array;   // 原始灰度数据（用于重新计算变换）
@@ -105,7 +107,7 @@ export const initialState: AppState = {
     selectionType: 'normal',
     isExpanded: true,
     createNewLayer: false,    // 添加初始值
-    clearMode: true,    // 添加初始值
+    clearMode: false,    // 添加初始值
     fillMode: 'foreground',
     colorSettings: {
         hueVariation: 0,

@@ -32,7 +32,7 @@
     overflow: hidden; /* 新增：确保内容和背景不会溢出圆角 */
   }
   
-  .pattern-presest {
+  .pattern-preset {
     width: 100%;
     height: calc(100% - 31px);
     top: 0;
@@ -45,6 +45,7 @@
     flex-wrap: wrap;
     flex-direction: row;
     align-items: flex-start;
+    align-content: flex-start;
   }
   
 

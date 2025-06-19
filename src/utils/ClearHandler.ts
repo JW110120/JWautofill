@@ -111,7 +111,7 @@ export class ClearHandler {
 
 
     //-------------------------------------------------------------------------------------------------
-    // 快速蒙版状态下的特殊填充逻辑
+    // 处于清除模式，并且文档状态为快速蒙版状态下，修改快速蒙版通道像素的方法
     static async clearInQuickMask(state: any) {
         try {
             
@@ -405,8 +405,7 @@ export class ClearHandler {
         }
     }
     
-    //-------------------------------------------------------------------------------------------------
-    // 使用射线法判断像素是否在多边形选区内（优化版本，避免栈溢出）
+    // 收集在多边形选区内的像素（优化版本，避免栈溢出）
     static async getPixelsInPolygon(polygonPoints: Array<{x: number, y: number}>, left: number, top: number, right: number, bottom: number, docWidth: number): Promise<Set<number>> {
         const selectionPixels = new Set<number>();
         
@@ -434,7 +433,6 @@ export class ClearHandler {
         return selectionPixels;
     }
     
-    //-------------------------------------------------------------------------------------------------
     // 分批处理像素，避免栈溢出
     static processBatchPixels(polygonPoints: Array<{x: number, y: number}>, startX: number, endX: number, startY: number, endY: number, docWidth: number, selectionPixels: Set<number>) {
         for (let y = startY; y <= endY; y++) {
@@ -447,9 +445,8 @@ export class ClearHandler {
             }
         }
     }
-    
-    //-------------------------------------------------------------------------------------------------
-    // 射线法判断点是否在多边形内
+
+    // 射线法判断像素是否在多边形内
     static isPointInPolygon(x: number, y: number, polygonPoints: Array<{x: number, y: number}>): boolean {
         let intersectionCount = 0;
         const n = polygonPoints.length;
@@ -567,7 +564,6 @@ export class ClearHandler {
         }
     }
     
-    //-------------------------------------------------------------------------------------------------
     // 分析快速蒙版直方图状态
     static analyzeQuickMaskHistogram(histogram: number[], isSelectedAreas: boolean) {
         let isEmpty = false;
@@ -609,7 +605,6 @@ export class ClearHandler {
         return { isEmpty, isWhite };
     }
     
-    //-------------------------------------------------------------------------------------------------
     // 撤销快速蒙版
     static async clearQuickMask() {
         await action.batchPlay([
@@ -633,7 +628,6 @@ export class ClearHandler {
         ], { synchronousExecution: true });
     }
     
-    //-------------------------------------------------------------------------------------------------
     // 执行全选操作
     static async selectAll() {
         await action.batchPlay([
@@ -713,13 +707,6 @@ export class ClearHandler {
             }
             
             console.log('⚠️ 没有找到有效的图案灰度数据，使用默认中等灰度');
-            console.log('🔍 调试信息:', {
-                hasSelectedPattern: !!state.selectedPattern,
-                hasGrayData: !!(state.selectedPattern?.grayData),
-                grayDataLength: state.selectedPattern?.grayData?.length || 0,
-                patternWidth: state.selectedPattern?.width || 0,
-                patternHeight: state.selectedPattern?.height || 0
-            });
             
             // 否则创建一个默认的灰度值
             const pixelCount = bounds.width * bounds.height;
@@ -735,80 +722,6 @@ export class ClearHandler {
         }
     }
 
-    
-    //-------------------------------------------------------------------------------------------------
-    // 获取渐变填充的灰度数据
-    static async getGradientFillGrayData(state: any, bounds: any) {
-        try {
-            console.log('🌈 获取渐变填充灰度数据 - selectedGradient:', state.selectedGradient);
-            
-            const gradient = state.selectedGradient;
-            if (!gradient) {
-                console.log('⚠️ 没有找到渐变数据，使用默认中等灰度');
-                const pixelCount = bounds.width * bounds.height;
-                const grayData = new Uint8Array(pixelCount);
-                grayData.fill(128);
-                return grayData;
-            }
-            
-            console.log('✅ 使用渐变数据计算灰度，渐变类型:', gradient.type, '角度:', gradient.angle, '反向:', gradient.reverse);
-            const pixelCount = bounds.width * bounds.height;
-            const grayData = new Uint8Array(pixelCount);
-            
-            // 计算渐变的中心点和角度
-            const centerX = bounds.width / 2;
-            const centerY = bounds.height / 2;
-            const angleRad = (gradient.angle || 0) * Math.PI / 180;
-            
-            for (let y = 0; y < bounds.height; y++) {
-                for (let x = 0; x < bounds.width; x++) {
-                    const index = y * bounds.width + x;
-                    let position;
-                    
-                    if (gradient.type === 'radial') {
-                        // 径向渐变
-                        const dx = x - centerX;
-                        const dy = y - centerY;
-                        const distance = Math.sqrt(dx * dx + dy * dy);
-                        const maxDistance = Math.sqrt(centerX * centerX + centerY * centerY);
-                        position = Math.min(1, distance / maxDistance);
-                    } else {
-                        // 线性渐变
-                        const dx = x - centerX;
-                        const dy = y - centerY;
-                        const projectedDistance = dx * Math.cos(angleRad) + dy * Math.sin(angleRad);
-                        const maxProjectedDistance = Math.abs(centerX * Math.cos(angleRad)) + Math.abs(centerY * Math.sin(angleRad));
-                        position = Math.max(0, Math.min(1, (projectedDistance + maxProjectedDistance) / (2 * maxProjectedDistance)));
-                    }
-                    
-                    // 应用反向参数
-                    if (gradient.reverse) {
-                        position = 1 - position;
-                    }
-                    
-                    // 根据位置插值渐变颜色并转换为灰度
-                    const color = this.interpolateGradientColor(gradient.stops, position);
-                    const grayValue = Math.round(
-                        0.299 * color.red + 
-                        0.587 * color.green + 
-                        0.114 * color.blue
-                    );
-                    grayData[index] = grayValue;
-                }
-            }
-            
-            return grayData;
-        } catch (error) {
-            console.error('获取渐变灰度数据失败:', error);
-            const pixelCount = bounds.width * bounds.height;
-            const grayData = new Uint8Array(pixelCount);
-            grayData.fill(128);
-            return grayData;
-        }
-    }
-
-    
-    //-------------------------------------------------------------------------------------------------
     // 将图案平铺到指定边界（支持缩放和旋转）- 优化版本
     static async tilePatternToFitBounds(patternGrayData: Uint8Array, patternWidth: number, patternHeight: number, bounds: any, scale: number = 100, angle: number = 0): Promise<Uint8Array> {
         console.log('🔳 开始图案平铺（优化版本）:', {
@@ -823,7 +736,7 @@ export class ClearHandler {
         // 优化：直接计算选区内的图案，避免创建整个文档大小的数组
         return await this.createOptimizedPatternForSelection(patternGrayData, patternWidth, patternHeight, bounds, scale, angle);
     }
-    
+
     // 优化的图案创建方法，只处理选区内的像素
     static async createOptimizedPatternForSelection(patternGrayData: Uint8Array, patternWidth: number, patternHeight: number, bounds: any, scale: number, angle: number): Promise<Uint8Array> {
         console.log('⚡ 使用优化的图案创建方法');
@@ -1128,8 +1041,79 @@ export class ClearHandler {
         return selectionData;
     }
 
-    
+
+
     //-------------------------------------------------------------------------------------------------
+    // 获取渐变填充的灰度数据
+    static async getGradientFillGrayData(state: any, bounds: any) {
+        try {
+            console.log('🌈 获取渐变填充灰度数据 - selectedGradient:', state.selectedGradient);
+            
+            const gradient = state.selectedGradient;
+            if (!gradient) {
+                console.log('⚠️ 没有找到渐变数据，使用默认中等灰度');
+                const pixelCount = bounds.width * bounds.height;
+                const grayData = new Uint8Array(pixelCount);
+                grayData.fill(128);
+                return grayData;
+            }
+            
+            console.log('✅ 使用渐变数据计算灰度，渐变类型:', gradient.type, '角度:', gradient.angle, '反向:', gradient.reverse);
+            const pixelCount = bounds.width * bounds.height;
+            const grayData = new Uint8Array(pixelCount);
+            
+            // 计算渐变的中心点和角度
+            const centerX = bounds.width / 2;
+            const centerY = bounds.height / 2;
+            const angleRad = (gradient.angle || 0) * Math.PI / 180;
+            
+            for (let y = 0; y < bounds.height; y++) {
+                for (let x = 0; x < bounds.width; x++) {
+                    const index = y * bounds.width + x;
+                    let position;
+                    
+                    if (gradient.type === 'radial') {
+                        // 径向渐变
+                        const dx = x - centerX;
+                        const dy = y - centerY;
+                        const distance = Math.sqrt(dx * dx + dy * dy);
+                        const maxDistance = Math.sqrt(centerX * centerX + centerY * centerY);
+                        position = Math.min(1, distance / maxDistance);
+                    } else {
+                        // 线性渐变
+                        const dx = x - centerX;
+                        const dy = y - centerY;
+                        const projectedDistance = dx * Math.cos(angleRad) + dy * Math.sin(angleRad);
+                        const maxProjectedDistance = Math.abs(centerX * Math.cos(angleRad)) + Math.abs(centerY * Math.sin(angleRad));
+                        position = Math.max(0, Math.min(1, (projectedDistance + maxProjectedDistance) / (2 * maxProjectedDistance)));
+                    }
+                    
+                    // 应用反向参数
+                    if (gradient.reverse) {
+                        position = 1 - position;
+                    }
+                    
+                    // 根据位置插值渐变颜色并转换为灰度
+                    const color = this.interpolateGradientColor(gradient.stops, position);
+                    const grayValue = Math.round(
+                        0.299 * color.red + 
+                        0.587 * color.green + 
+                        0.114 * color.blue
+                    );
+                    grayData[index] = grayValue;
+                }
+            }
+            
+            return grayData;
+        } catch (error) {
+            console.error('获取渐变灰度数据失败:', error);
+            const pixelCount = bounds.width * bounds.height;
+            const grayData = new Uint8Array(pixelCount);
+            grayData.fill(128);
+            return grayData;
+        }
+    }
+    
     // 插值渐变颜色
     static interpolateGradientColor(stops: any[], position: number) {
         if (!stops || stops.length === 0) {
@@ -1174,7 +1158,7 @@ export class ClearHandler {
     }
 
 
-    
+
     //-------------------------------------------------------------------------------------------------
     // 应用新的混合公式计算最终灰度值（优化版本，避免栈溢出）
     static async calculateFinalGrayValues(maskData: Uint8Array, fillData: Uint8Array, isSelectedAreas: boolean = true, opacity: number = 100): Promise<Uint8Array> {
@@ -1341,13 +1325,7 @@ export class ClearHandler {
             // 使用putSelection更新整个快速蒙版
             await imaging.putSelection({
                 documentID: app.activeDocument.id,
-                targetBounds: {
-                    left: 0,
-                    top: 0,
-                    right: finalDocWidth,
-                    bottom: finalDocHeight
-                },
-                imageData: fullImageData,
+                imageData: fullImageData
             });
             
             fullMaskData.imageData.dispose();
