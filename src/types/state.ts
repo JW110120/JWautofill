@@ -14,6 +14,8 @@ export interface Pattern {
     angle?: number;
     scale?: number;
     preserveTransparency?: boolean;
+    fillMode?: 'stamp' | 'tile';     // 填充模式：盖图章或贴墙纸
+    rotateAll?: boolean; // 全部旋转选项，仅在重复模式下有效
     // RGB/RGBA数据相关属性
     patternRgbData?: Uint8Array;     // 原始RGB/RGBA像素数据
     patternComponents?: number;      // 组件数（3=RGB, 4=RGBA）
@@ -115,6 +117,7 @@ export const initialState: AppState = {
         brightnessVariation: 0,
         opacityVariation: 0,
         grayVariation: 0,
+        calculationMode: 'absolute'
     },
     selectedPattern: null,
     selectedGradient: null,

@@ -27,7 +27,10 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
     isClearMode = false
 }) => {
     const [internalQuickMaskMode, setInternalQuickMaskMode] = useState(propIsQuickMaskMode);
-    const [settings, setSettings] = useState<ColorSettings>(initialSettings);
+    const [settings, setSettings] = useState<ColorSettings>({
+        ...initialSettings,
+        calculationMode: initialSettings?.calculationMode || 'absolute'
+    });
     const [isDragging, setIsDragging] = useState(false);
     const [dragTarget, setDragTarget] = useState<keyof ColorSettings | null>(null);
     const [dragStartX, setDragStartX] = useState(0);
@@ -189,6 +192,23 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
                     onValueChange={handleNumberInputChange}
                     onLabelMouseDown={handleLabelMouseDown}
                 />
+                
+                {/* 计算模式选择器 */}
+                <div className="colorsettings-calculation-mode">
+                    <label>计算模式：</label>
+                    <sp-radio-group 
+                        selected={settings.calculationMode || 'absolute'}
+                        name="calculationMode"
+                        onChange={(e) => setSettings(prev => ({ ...prev, calculationMode: e.target.value as 'absolute' | 'relative' }))}
+                    >
+                        <sp-radio value="absolute" className="calculation-mode-radio">
+                            <span className="radio-item-label">绝对</span>
+                        </sp-radio>
+                        <sp-radio value="relative" className="calculation-mode-radio">
+                            <span className="radio-item-label">相对</span>
+                        </sp-radio>
+                    </sp-radio-group>
+                </div>
             </div>
 
             <div className="panel-footer">

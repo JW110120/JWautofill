@@ -26,6 +26,9 @@ interface PatternPickerProps {
     const [dragStartX, setDragStartX] = useState(0);
     const [dragStartValue, setDragStartValue] = useState(0);
 
+    const [fillMode, setFillMode] = useState<'stamp' | 'tile'>('stamp'); // 填充模式状态，默认为单次
+    const [rotateAll, setRotateAll] = useState(true); // 全部旋转状态，默认勾选
+
     // 新增预览拖拽状态
     const [isPreviewDragging, setIsPreviewDragging] = useState<boolean>(false);
     const [dragStart, setDragStart] = useState<{x: number, y: number}>({x: 0, y: 0});
@@ -931,6 +934,24 @@ interface PatternPickerProps {
                     </div>
                 </div>
 
+                <div className="pattern-setting-item">
+                    <label>填充模式：</label>
+                    <div className="pattern-fillmode-container">
+                        <sp-radio-group 
+                            selected={fillMode}
+                            name="fillMode"
+                            onChange={(e) => setFillMode(e.target.value as 'stamp' | 'tile')}
+                        >
+                            <sp-radio value="stamp" className="pattern-fillmode-radio">
+                                <span className="radio-item-label">单次</span>
+                            </sp-radio>
+                            <sp-radio value="tile" className="pattern-fillmode-radio">
+                                <span className="radio-item-label">重复</span>
+                            </sp-radio>
+                        </sp-radio-group>
+                    </div>
+                </div>
+
                 <div className="pattern-checkbox-container">
                        <label
                             htmlFor="transparencyCheckbox"
@@ -946,6 +967,25 @@ interface PatternPickerProps {
                             onChange={(e) => setPreserveTransparency(e.target.checked)}
                             className="pattern-checkbox-input"
                         />
+                        {fillMode === 'tile' && (
+                            <>
+                                <label
+                                    htmlFor="rotateAllCheckbox"
+                                    className="pattern-checkbox-label"
+                                    style={{marginLeft: '20px'}}
+                                    onClick={() => setRotateAll(!rotateAll)}
+                                >
+                                    全部旋转:
+                                </label>
+                                <input
+                                    type="checkbox"
+                                    id="rotateAllCheckbox"
+                                    checked={rotateAll}
+                                    onChange={(e) => setRotateAll(e.target.checked)}
+                                    className="pattern-checkbox-input"
+                                />
+                            </>
+                        )}
                 </div>
                 
             </div>
@@ -1019,12 +1059,14 @@ interface PatternPickerProps {
                     const selectedPatternData = patterns.find(p => p.id === selectedPattern);
                     if (selectedPatternData) {
                         onSelect({
-                            ...selectedPatternData,
-                            angle,
-                            scale,
-                            patternName: selectedPatternData.patternName,
-                            preserveTransparency // 添加保留不透明度设置
-                        });
+                        ...selectedPatternData,
+                        angle,
+                        scale,
+                        patternName: selectedPatternData.patternName,
+                        preserveTransparency, // 添加保留不透明度设置
+                        fillMode, // 添加填充模式设置
+                        rotateAll // 添加全部旋转设置
+                    });
                         onClose();
                     } else {
                         onClose();

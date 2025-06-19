@@ -9,8 +9,8 @@ interface PatternFillOptions {
     pattern: Pattern;
 }
 
-// 创建平铺图案数据的辅助函数（先平铺，后旋转）
-function createTiledPatternData(
+// 盖图章模式：图案居中显示，不重复
+function createStampPatternData(
     patternData: Uint8Array,
     patternWidth: number,
     patternHeight: number,
@@ -21,44 +21,34 @@ function createTiledPatternData(
     scaledPatternHeight: number,
     angle: number
 ): Uint8Array {
-    // 第一步：创建平铺的图案数据（不考虑旋转）
-    const tiledData = new Uint8Array(targetWidth * targetHeight * components);
+    // 初始化为透明（全0），而不是黑色
+    const resultData = new Uint8Array(targetWidth * targetHeight * components);
     
-    // 先进行平铺操作
-    for (let y = 0; y < targetHeight; y++) {
-        for (let x = 0; x < targetWidth; x++) {
-            // 计算在缩放后图案中的位置
-            const patternX = Math.floor((x % scaledPatternWidth) * patternWidth / scaledPatternWidth);
-            const patternY = Math.floor((y % scaledPatternHeight) * patternHeight / scaledPatternHeight);
-            
-            // 确保坐标在图案范围内
-            const sourceX = Math.min(patternX, patternWidth - 1);
-            const sourceY = Math.min(patternY, patternHeight - 1);
-            
-            const sourceIndex = (sourceY * patternWidth + sourceX) * components;
-            const targetIndex = (y * targetWidth + x) * components;
-            
-            // 复制像素数据
-            for (let c = 0; c < components; c++) {
-                tiledData[targetIndex + c] = patternData[sourceIndex + c];
-            }
+    // 如果是RGBA格式，将alpha通道设置为0（透明）
+    if (components === 4) {
+        for (let i = 3; i < resultData.length; i += 4) {
+            resultData[i] = 0; // alpha = 0 (透明)
         }
     }
     
-    // 第二步：如果有旋转角度，对整个平铺后的图案进行旋转
-    if (angle !== 0) {
-        const rotatedData = new Uint8Array(targetWidth * targetHeight * components);
-        const angleRad = (angle * Math.PI) / 180;
-        const cos = Math.cos(angleRad);
-        const sin = Math.sin(angleRad);
-        
-        // 旋转中心为整个目标区域的中心
-        const centerX = targetWidth / 2;
-        const centerY = targetHeight / 2;
-        
-        for (let y = 0; y < targetHeight; y++) {
-            for (let x = 0; x < targetWidth; x++) {
-                // 相对于中心的坐标
+    // 计算图案在目标区域的居中位置
+    const offsetX = (targetWidth - scaledPatternWidth) / 2;
+    const offsetY = (targetHeight - scaledPatternHeight) / 2;
+    
+    const angleRad = (angle * Math.PI) / 180;
+    const cos = Math.cos(angleRad);
+    const sin = Math.sin(angleRad);
+    
+    // 旋转中心为目标区域的中心
+    const centerX = targetWidth / 2;
+    const centerY = targetHeight / 2;
+    
+    for (let y = 0; y < targetHeight; y++) {
+        for (let x = 0; x < targetWidth; x++) {
+            const targetIndex = (y * targetWidth + x) * components;
+            
+            if (angle !== 0) {
+                // 计算相对于中心的坐标
                 const relativeX = x - centerX;
                 const relativeY = y - centerY;
                 
@@ -66,49 +56,171 @@ function createTiledPatternData(
                 const originalX = relativeX * cos + relativeY * sin + centerX;
                 const originalY = -relativeX * sin + relativeY * cos + centerY;
                 
+                // 计算在图案中的位置
+                const patternX = originalX - offsetX;
+                const patternY = originalY - offsetY;
+                
+                // 检查是否在图案范围内
+                if (patternX >= 0 && patternX < scaledPatternWidth && patternY >= 0 && patternY < scaledPatternHeight) {
+                    // 映射到原始图案坐标
+                    const sourceX = Math.floor(patternX * patternWidth / scaledPatternWidth);
+                    const sourceY = Math.floor(patternY * patternHeight / scaledPatternHeight);
+                    
+                    if (sourceX >= 0 && sourceX < patternWidth && sourceY >= 0 && sourceY < patternHeight) {
+                        const sourceIndex = (sourceY * patternWidth + sourceX) * components;
+                        for (let c = 0; c < components; c++) {
+                            resultData[targetIndex + c] = patternData[sourceIndex + c];
+                        }
+                    }
+                }
+            } else {
+                // 无旋转的情况
+                const patternX = x - offsetX;
+                const patternY = y - offsetY;
+                
+                if (patternX >= 0 && patternX < scaledPatternWidth && patternY >= 0 && patternY < scaledPatternHeight) {
+                    const sourceX = Math.floor(patternX * patternWidth / scaledPatternWidth);
+                    const sourceY = Math.floor(patternY * patternHeight / scaledPatternHeight);
+                    
+                    if (sourceX >= 0 && sourceX < patternWidth && sourceY >= 0 && sourceY < patternHeight) {
+                        const sourceIndex = (sourceY * patternWidth + sourceX) * components;
+                        for (let c = 0; c < components; c++) {
+                            resultData[targetIndex + c] = patternData[sourceIndex + c];
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    return resultData;
+}
+
+// 贴墙纸模式：无缝平铺，解决旋转边界问题
+function createTilePatternData(
+    patternData: Uint8Array,
+    patternWidth: number,
+    patternHeight: number,
+    components: number,
+    targetWidth: number,
+    targetHeight: number,
+    scaledPatternWidth: number,
+    scaledPatternHeight: number,
+    angle: number,
+    rotateAll: boolean = true
+): Uint8Array {
+    // 为了解决旋转时的边界问题，我们需要创建一个更大的平铺区域
+    // 计算旋转后可能需要的最大尺寸
+    const diagonal = Math.sqrt(targetWidth * targetWidth + targetHeight * targetHeight);
+    const expandedSize = Math.ceil(diagonal * 1.5); // 增加50%的缓冲区
+    
+    // 创建扩展的平铺数据
+    const expandedData = new Uint8Array(expandedSize * expandedSize * components);
+    
+    // 先在扩展区域进行平铺
+    for (let y = 0; y < expandedSize; y++) {
+        for (let x = 0; x < expandedSize; x++) {
+            const patternX = Math.floor((x % scaledPatternWidth) * patternWidth / scaledPatternWidth);
+            const patternY = Math.floor((y % scaledPatternHeight) * patternHeight / scaledPatternHeight);
+            
+            const sourceX = Math.min(patternX, patternWidth - 1);
+            const sourceY = Math.min(patternY, patternHeight - 1);
+            
+            const sourceIndex = (sourceY * patternWidth + sourceX) * components;
+            const targetIndex = (y * expandedSize + x) * components;
+            
+            for (let c = 0; c < components; c++) {
+                expandedData[targetIndex + c] = patternData[sourceIndex + c];
+            }
+        }
+    }
+    
+    // 创建最终结果数据
+    const resultData = new Uint8Array(targetWidth * targetHeight * components);
+    
+    if (angle !== 0) {
+        const angleRad = (angle * Math.PI) / 180;
+        const cos = Math.cos(angleRad);
+        const sin = Math.sin(angleRad);
+        
+        // 旋转中心为目标区域的中心
+        const centerX = targetWidth / 2;
+        const centerY = targetHeight / 2;
+        const expandedCenterX = expandedSize / 2;
+        const expandedCenterY = expandedSize / 2;
+        
+        for (let y = 0; y < targetHeight; y++) {
+            for (let x = 0; x < targetWidth; x++) {
+                // 相对于目标中心的坐标
+                const relativeX = x - centerX;
+                const relativeY = y - centerY;
+                
+                // 反向旋转以获取扩展区域中的坐标
+                const expandedX = relativeX * cos + relativeY * sin + expandedCenterX;
+                const expandedY = -relativeX * sin + relativeY * cos + expandedCenterY;
+                
                 const targetIndex = (y * targetWidth + x) * components;
                 
-                // 检查原始坐标是否在范围内
-                if (originalX >= 0 && originalX < targetWidth && originalY >= 0 && originalY < targetHeight) {
-                    // 使用双线性插值
-                    const x1 = Math.floor(originalX);
-                    const y1 = Math.floor(originalY);
-                    const x2 = Math.min(x1 + 1, targetWidth - 1);
-                    const y2 = Math.min(y1 + 1, targetHeight - 1);
+                // 使用双线性插值从扩展数据中采样
+                if (expandedX >= 0 && expandedX < expandedSize - 1 && expandedY >= 0 && expandedY < expandedSize - 1) {
+                    const x1 = Math.floor(expandedX);
+                    const y1 = Math.floor(expandedY);
+                    const x2 = x1 + 1;
+                    const y2 = y1 + 1;
                     
-                    const fx = originalX - x1;
-                    const fy = originalY - y1;
+                    const fx = expandedX - x1;
+                    const fy = expandedY - y1;
                     
                     for (let c = 0; c < components; c++) {
-                        const p1 = tiledData[(y1 * targetWidth + x1) * components + c];
-                        const p2 = tiledData[(y1 * targetWidth + x2) * components + c];
-                        const p3 = tiledData[(y2 * targetWidth + x1) * components + c];
-                        const p4 = tiledData[(y2 * targetWidth + x2) * components + c];
+                        const p1 = expandedData[(y1 * expandedSize + x1) * components + c];
+                        const p2 = expandedData[(y1 * expandedSize + x2) * components + c];
+                        const p3 = expandedData[(y2 * expandedSize + x1) * components + c];
+                        const p4 = expandedData[(y2 * expandedSize + x2) * components + c];
                         
                         const interpolated = p1 * (1 - fx) * (1 - fy) +
                                            p2 * fx * (1 - fy) +
                                            p3 * (1 - fx) * fy +
                                            p4 * fx * fy;
                         
-                        rotatedData[targetIndex + c] = Math.round(interpolated);
+                        resultData[targetIndex + c] = Math.round(interpolated);
                     }
                 } else {
-                    // 如果超出范围，使用平铺逻辑获取对应像素
-                    const wrappedX = ((Math.floor(originalX) % targetWidth) + targetWidth) % targetWidth;
-                    const wrappedY = ((Math.floor(originalY) % targetHeight) + targetHeight) % targetHeight;
-                    const sourceIndex = (wrappedY * targetWidth + wrappedX) * components;
+                    // 如果超出扩展区域，使用平铺逻辑
+                    const wrappedX = ((Math.floor(expandedX) % scaledPatternWidth) + scaledPatternWidth) % scaledPatternWidth;
+                    const wrappedY = ((Math.floor(expandedY) % scaledPatternHeight) + scaledPatternHeight) % scaledPatternHeight;
+                    
+                    const patternX = Math.floor(wrappedX * patternWidth / scaledPatternWidth);
+                    const patternY = Math.floor(wrappedY * patternHeight / scaledPatternHeight);
+                    
+                    const sourceIndex = (patternY * patternWidth + patternX) * components;
                     
                     for (let c = 0; c < components; c++) {
-                        rotatedData[targetIndex + c] = tiledData[sourceIndex + c];
+                        resultData[targetIndex + c] = patternData[sourceIndex + c];
                     }
                 }
             }
         }
+    } else {
+        // 无旋转的情况，直接从扩展数据中心区域复制
+        const offsetX = (expandedSize - targetWidth) / 2;
+        const offsetY = (expandedSize - targetHeight) / 2;
         
-        return rotatedData;
+        for (let y = 0; y < targetHeight; y++) {
+            for (let x = 0; x < targetWidth; x++) {
+                const sourceX = Math.floor(x + offsetX);
+                const sourceY = Math.floor(y + offsetY);
+                
+                const sourceIndex = (sourceY * expandedSize + sourceX) * components;
+                const targetIndex = (y * targetWidth + x) * components;
+                
+                for (let c = 0; c < components; c++) {
+                    resultData[targetIndex + c] = expandedData[sourceIndex + c];
+                }
+            }
+        }
     }
     
-    return tiledData;
+    return resultData;
 }
 
 
@@ -239,23 +351,45 @@ export class PatternFill {
             const scaledPatternWidth = Math.round(patternWidth * scale / 100);
             const scaledPatternHeight = Math.round(patternHeight * scale / 100);
             
-            // 创建平铺的图案数据
-            const tiledData = createTiledPatternData(
-                options.pattern.patternRgbData,
-                patternWidth,
-                patternHeight,
-                options.pattern.patternComponents,
-                selectionWidth,
-                selectionHeight,
-                scaledPatternWidth,
-                scaledPatternHeight,
-                angle
-            );
+            // 根据填充模式选择算法
+            const fillMode = options.pattern.fillMode || 'tile'; // 默认为贴墙纸模式
+            let patternData: Uint8Array;
             
-            console.log('🔄 平铺数据生成完成:', {
-                tiledDataLength: tiledData.length,
+            if (fillMode === 'stamp') {
+                // 盖图章模式：图案居中显示，不重复
+                console.log('🎯 使用盖图章模式填充');
+                patternData = createStampPatternData(
+                    options.pattern.patternRgbData,
+                    patternWidth,
+                    patternHeight,
+                    options.pattern.patternComponents,
+                    selectionWidth,
+                    selectionHeight,
+                    scaledPatternWidth,
+                    scaledPatternHeight,
+                    angle
+                );
+            } else {
+                // 贴墙纸模式：无缝平铺
+                console.log('🧱 使用贴墙纸模式填充');
+                patternData = createTilePatternData(
+                    options.pattern.patternRgbData,
+                    patternWidth,
+                    patternHeight,
+                    options.pattern.patternComponents,
+                    selectionWidth,
+                    selectionHeight,
+                    scaledPatternWidth,
+                    scaledPatternHeight,
+                    angle,
+                    options.pattern.rotateAll !== false
+                );
+            }
+            
+            console.log('🔄 图案数据生成完成:', {
+                patternDataLength: patternData.length,
                 expectedLength: selectionWidth * selectionHeight * options.pattern.patternComponents,
-                sampleTiledPixels: Array.from(tiledData.slice(0, 12))
+                samplePatternPixels: Array.from(patternData.slice(0, 12))
             });
             
             // 创建ImageData对象
@@ -267,7 +401,7 @@ export class PatternFill {
                 colorProfile: "sRGB IEC61966-2.1",
                 colorSpace: options.pattern.patternComponents === 4 ? 'RGBA' : 'RGB'
             };
-            const imageData = await imaging.createImageDataFromBuffer(tiledData, imageDataOptions);
+            const imageData = await imaging.createImageDataFromBuffer(patternData, imageDataOptions);
             
             // 使用putPixels填充数据
             await imaging.putPixels({
@@ -469,17 +603,40 @@ export class PatternFill {
             const scaledPatternWidth = Math.round(patternWidth * scale / 100);
             const scaledPatternHeight = Math.round(patternHeight * scale / 100);
             
-            const tiledGrayData = createTiledPatternData(
-                options.pattern.grayData,
-                patternWidth,
-                patternHeight,
-                1, // 灰度数据只有1个组件
-                selectionWidth,
-                selectionHeight,
-                scaledPatternWidth,
-                scaledPatternHeight,
-                options.pattern.currentAngle || options.pattern.angle || 0
-            );
+            // 根据填充模式选择算法
+            const fillMode = options.pattern.fillMode || 'tile'; // 默认为贴墙纸模式
+            let grayPatternData: Uint8Array;
+            
+            if (fillMode === 'stamp') {
+                // 盖图章模式：图案居中显示，不重复
+                console.log('🎯 快速蒙版：使用盖图章模式填充');
+                grayPatternData = createStampPatternData(
+                    options.pattern.grayData,
+                    patternWidth,
+                    patternHeight,
+                    1, // 灰度数据只有1个组件
+                    selectionWidth,
+                    selectionHeight,
+                    scaledPatternWidth,
+                    scaledPatternHeight,
+                    options.pattern.currentAngle || options.pattern.angle || 0
+                );
+            } else {
+                // 贴墙纸模式：无缝平铺
+                console.log('🧱 快速蒙版：使用贴墙纸模式填充，全部旋转:', options.pattern.rotateAll);
+                grayPatternData = createTilePatternData(
+                    options.pattern.grayData,
+                    patternWidth,
+                    patternHeight,
+                    1, // 灰度数据只有1个组件
+                    selectionWidth,
+                    selectionHeight,
+                    scaledPatternWidth,
+                    scaledPatternHeight,
+                    options.pattern.currentAngle || options.pattern.angle || 0,
+                    options.pattern.rotateAll !== false
+                );
+            }
             
             // 创建灰度ImageData对象
             const grayImageDataOptions = {
@@ -490,7 +647,7 @@ export class PatternFill {
                 colorProfile: "Generic Gray Profile",
                 colorSpace: 'Grayscale'
             };
-            const grayImageData = await imaging.createImageDataFromBuffer(tiledGrayData, grayImageDataOptions);
+            const grayImageData = await imaging.createImageDataFromBuffer(grayPatternData, grayImageDataOptions);
             
             // 使用putSelection填充灰度数据
             await imaging.putSelection({

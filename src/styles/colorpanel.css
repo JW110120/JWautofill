@@ -113,3 +113,34 @@
     cursor: not-allowed !important;
     color: var(--disabled-color)!important;
   }
+
+/* 计算模式选择器样式 */
+.colorsettings-calculation-mode {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 15px;
+    padding-top: 15px;
+    border-top: 1px solid var(--border-color);
+}
+
+.colorsettings-calculation-mode label {
+    font-size: 13px;
+    color: var(--text-color);
+    font-weight: 500;
+}
+
+.colorsettings-calculation-mode sp-radio-group {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+}
+
+.calculation-mode-radio {
+    flex: 1;
+}
+
+.calculation-mode-radio .radio-item-label {
+    font-size: 13px;
+    color: var(--text-color);
+}

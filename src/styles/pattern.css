@@ -244,6 +244,26 @@
     cursor: pointer;
 }
 
+.pattern-fillmode-container {
+    display: flex;
+    margin-top: 5px;
+}
+
+.pattern-fillmode-container sp-radio-group {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+}
+
+.pattern-fillmode-radio {
+    flex: 1;
+}
+
+.pattern-fillmode-radio .radio-item-label {
+    font-size: 13px;
+    color: var(--text-color);
+}
+
 .preview-controls {
   display: flex;
   align-items: center;
