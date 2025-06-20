@@ -118,26 +118,44 @@
 .colorsettings-calculation-mode {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    margin-top: 15px;
+    margin: 30px -15px 0 -15px;
     padding-top: 15px;
     border-top: 1px solid var(--border-color);
 }
 
 .colorsettings-calculation-mode label {
-    font-size: 13px;
+    margin: 10px 0 10px 20px;
+    font-size: 16px;
     color: var(--text-color);
-    font-weight: 500;
+    font-weight: 600;
+
 }
 
 .colorsettings-calculation-mode sp-radio-group {
     display: flex;
-    justify-content: space-between;
+    flex-direction: row;
+    align-items: center;  
+    justify-content: space-around;
+    margin-left: 5px;
     width: 100%;
 }
 
+.colorsettings-calculation-mode sp-radio{
+  display: flex;
+  align-items: center;  
+  justify-content: space-between;
+  flex: 1;
+}
+
+.colorsettings-calculation-mode sp-radio:not(:last-child){
+  margin-right: 110px;
+}
+
+
 .calculation-mode-radio {
     flex: 1;
+    cursor: pointer;
+    transition: background-color 0.2s;
 }
 
 .calculation-mode-radio .radio-item-label {

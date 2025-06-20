@@ -431,9 +431,12 @@ interface PatternPickerProps {
                 
                 try {
                     const activeDoc = app.activeDocument;
-                    
+
+                    // 根据文件类型决定是否应用alpha通道
+                    const fileName = selectedPatternData.file.name.toLowerCase();
+                    const isJpg = fileName.endsWith('.jpg') || fileName.endsWith('.jpeg');
+
                     // 按照官方API格式获取文档的像素数据
-                    // 确保获取原始图像尺寸的像素数据
                     let options = {
                         "documentID": activeDoc.id,
                         "targetSize": {
@@ -441,7 +444,7 @@ interface PatternPickerProps {
                             "width": imgElement.naturalWidth
                         },
                         "componentSize": 8,
-                        "applyAlpha": true,
+                        "applyAlpha": false, // 设置为false以保留alpha通道，获取真正的RGBA数据
                         "colorProfile": "sRGB IEC61966-2.1",
                         "bounds": {
                             "left": 0,
@@ -450,13 +453,13 @@ interface PatternPickerProps {
                             "bottom": imgElement.naturalHeight
                         }
                     };
-                    
+
                     // 如果有选中的图层，添加图层ID
                     let activeLayers = activeDoc.activeLayers;
                     if (activeLayers.length > 0) {
                         options["layerID"] = activeLayers[0].id;
                     }
-                    
+
                     pixelData = await imaging.getPixels(options);
                     
                     // 获取实际的像素数据
@@ -471,7 +474,14 @@ interface PatternPickerProps {
                         } else {
                             // 如果不是Promise，直接使用
                             rgbData = dataPromise;
+
                         }
+
+                        // 更新图案数据，包含组件信息
+                        selectedPatternData.patternRgbData = rgbData;
+                        selectedPatternData.width = pixelData.imageData.width;
+                        selectedPatternData.height = pixelData.imageData.height;
+                        selectedPatternData.components = pixelData.imageData.components; // 保存组件数
                         
                         console.log('获取到像素数据:', {
                             width: pixelData.imageData.width,
@@ -602,6 +612,12 @@ interface PatternPickerProps {
                     patternDimensions: `${patternWidth}x${patternHeight}`
                 });
                 
+                // 修正 colorSpace 的值
+                let finalColorSpace = "RGB"; // 默认为RGB
+                if (components === 1) {
+                    finalColorSpace = "gray";
+                }
+
                 setPatterns(prevPatterns => {
                     const updatedPatterns = prevPatterns.map(p => {
                         if (p.id === selectedPattern) {
@@ -609,6 +625,7 @@ interface PatternPickerProps {
                                 ...p,
                                 patternRgbData: rgbData,
                                 patternComponents: components,
+                                components: components, // 同时设置components字段以确保兼容性
                                 grayData: patternGrayData,
                                 originalGrayData: selectedPatternData.originalGrayData,
                                 width: patternWidth,
@@ -616,13 +633,19 @@ interface PatternPickerProps {
                                 originalWidth: pixelData?.imageData?.width || imgElement.naturalWidth,
                                 originalHeight: pixelData?.imageData?.height || imgElement.naturalHeight,
                                 currentScale: scale,
-                                currentAngle: angle
+                                currentAngle: angle,
+                                colorSpace: finalColorSpace // 使用修正后的 colorSpace
                             };
                             
                             console.log('🔄 图案状态更新:', {
                                 patternId: p.id,
                                 beforeUpdate: { hasGrayData: !!p.grayData },
-                                afterUpdate: { hasGrayData: !!updatedPattern.grayData, grayDataLength: updatedPattern.grayData?.length }
+                                afterUpdate: { 
+                                    hasGrayData: !!updatedPattern.grayData, 
+                                    grayDataLength: updatedPattern.grayData?.length,
+                                    components: updatedPattern.components,
+                                    patternComponents: updatedPattern.patternComponents
+                                }
                             });
                             
                             return updatedPattern;
@@ -659,9 +682,23 @@ interface PatternPickerProps {
     // 删除图案的逻辑
     const handleDelete = async () => {
         if (selectedPattern) {
+            const currentIndex = patterns.findIndex(p => p.id === selectedPattern);
+            if (currentIndex === -1) return; // Should not happen
+
             // 从状态中删除图案
-            setPatterns(patterns.filter(p => p.id !== selectedPattern));
-            setSelectedPattern(null);
+            const newPatterns = patterns.filter(p => p.id !== selectedPattern);
+            setPatterns(newPatterns);
+
+            // 如果删除后列表为空，则清空选择
+            if (newPatterns.length === 0) {
+                setSelectedPattern(null);
+            } else {
+                // 确定新的选中项
+                // 如果删除的不是第一项，则选中前一项
+                // 如果删除的是第一项，则选中新的第一项
+                const newIndex = currentIndex > 0 ? currentIndex - 1 : 0;
+                setSelectedPattern(newPatterns[newIndex].id);
+            }
             console.log('图案删除成功');
         }
     };
@@ -779,7 +816,6 @@ interface PatternPickerProps {
                                     
                                     setLoadedImages(prev => ({...prev, [pattern.id]: true}));
                                     
-                                    // 只有当这个图案被选中且还没有创建过图案时才创建PS图案
                                     if (selectedPattern === pattern.id && !pattern.patternName) {
                                         const patternName = await createPatternFromImage();
                                         if (patternName) {
@@ -933,23 +969,20 @@ interface PatternPickerProps {
                         />
                     </div>
                 </div>
-
-                <div className="pattern-setting-item">
-                    <label>填充模式：</label>
-                    <div className="pattern-fillmode-container">
-                        <sp-radio-group 
+               
+                <div className="pattern-fillmode-container">
+                            <sp-radio-group 
                             selected={fillMode}
                             name="fillMode"
                             onChange={(e) => setFillMode(e.target.value as 'stamp' | 'tile')}
                         >
                             <sp-radio value="stamp" className="pattern-fillmode-radio">
-                                <span className="radio-item-label">单次</span>
+                                <span className="pattern-radio-item-label">单次</span>
                             </sp-radio>
                             <sp-radio value="tile" className="pattern-fillmode-radio">
-                                <span className="radio-item-label">重复</span>
+                                <span className="pattern-radio-item-label">平铺</span>
                             </sp-radio>
                         </sp-radio-group>
-                    </div>
                 </div>
 
                 <div className="pattern-checkbox-container">
@@ -958,7 +991,7 @@ interface PatternPickerProps {
                             className="pattern-checkbox-label"
                             onClick={() => setPreserveTransparency(!preserveTransparency)}
                         >
-                            保留不透明度:
+                            剪贴蒙版：
                        </label>
                        <input
                             type="checkbox"
@@ -975,7 +1008,7 @@ interface PatternPickerProps {
                                     style={{marginLeft: '20px'}}
                                     onClick={() => setRotateAll(!rotateAll)}
                                 >
-                                    全部旋转:
+                                    旋转阵列：
                                 </label>
                                 <input
                                     type="checkbox"
@@ -1055,22 +1088,24 @@ interface PatternPickerProps {
 
 
             <div className="panel-footer">
-                <button onClick={() => {
+                <button onClick={async () => {
                     const selectedPatternData = patterns.find(p => p.id === selectedPattern);
                     if (selectedPatternData) {
-                        onSelect({
-                        ...selectedPatternData,
-                        angle,
-                        scale,
-                        patternName: selectedPatternData.patternName,
-                        preserveTransparency, // 添加保留不透明度设置
-                        fillMode, // 添加填充模式设置
-                        rotateAll // 添加全部旋转设置
-                    });
-                        onClose();
-                    } else {
-                        onClose();
+                        await createPatternFromImage(); // 确保在应用前处理图像
+                        const finalPatternData = patterns.find(p => p.id === selectedPattern); // 重新获取最新的数据
+                        if (finalPatternData) {
+                            onSelect({
+                                ...finalPatternData,
+                                angle,
+                                scale,
+                                fillMode,
+                                rotateAll,
+                                preserveTransparency,
+                                components: finalPatternData.patternComponents || finalPatternData.components || 3 // 修正组件数传递
+                            });
+                        }
                     }
+                    onClose();
                 }}>保存设置</button>
             </div>
         </div>

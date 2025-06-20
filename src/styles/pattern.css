@@ -35,6 +35,7 @@
   .pattern-preset {
     width: 100%;
     height: calc(100% - 31px);
+    padding: 0 1px;
     top: 0;
     left: 0;
     overflow-y: auto;
@@ -44,7 +45,6 @@
     display: flex;
     flex-wrap: wrap;
     flex-direction: row;
-    align-items: flex-start;
     align-content: flex-start;
   }
   
@@ -59,8 +59,8 @@
     display: flex;
     justify-content: center;
     align-items: center;
-    width: 78px;
-    height: 78px;
+    width: 76px;
+    height: 76px;
     z-index: 2;
     flex: 0 0 auto;
   }
@@ -144,8 +144,9 @@
   .pattern-setting-item-group {
     display: flex;
     flex-direction: column;
-    margin-top: 10px;
+    margin: 10px 0 10px 0;
     padding: auto 10px;
+    border-bottom: 1px solid var(--border-color);
   }
   
   .pattern-setting-item {
@@ -159,7 +160,10 @@
     flex-direction: column;
   }
 
-  
+  .pattern-setting-item:last-child {
+   margin-bottom: 10px;
+  }
+
   .pattern-setting-item label {
     font-size: 13px;
     justify-content: space-between;
@@ -193,30 +197,142 @@
     width: 30px;  
     text-align: center;
 }
-  
-  
-  .pattern-final-preview-container {
-      position: relative;
-      width: 100%;
-      height: 28%;
-      border: 1px solid var(--border-color);
-      flex-direction: column;
-      overflow: hidden;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+
+/* ---------------------------------------------------------------------------------------------------------------- */
+  .pattern-fillmode-container {
+    width: 100%;
+    display: flex;
+    margin: 10px -18px 10px 8px;
+    padding: auto 10px;
+    flex-direction: column;
   }
 
-  .preview-wrapper {
+  .pattern-fillmode-container sp-radio-group {
+    display: flex;
+    align-items: center;
+    flex-direction: row;
+    justify-content: space-around;
+    margin: -8px 0 0 0px;
+    width: 100%;
+  }
+
+  .pattern-fillmode-container sp-radio {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex: 1;
+  }
+
+  .pattern-fillmode-radio {
+    width: 100%;
+    cursor: pointer;
+    transition: background-color 0.2s;
+  }
+
+  .pattern-fillmode-radio span{
+    margin-top: 20px;
+  }
+
+  .pattern-fillmode-container sp-radio:not(:last-child) {
+    margin-right: 105px;
+  }
+
+
+  /* Checkbox 样式 */
+  .pattern-checkbox-container {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      margin: 0 0 5px 0px;
+      padding-top: 5px;
+      border-top: 1px solid var(--border-color);
+  }
+
+  .pattern-checkbox-input {
+      cursor: pointer;
+      margin-left: -3px;
+  }
+
+  .pattern-checkbox-input:not(:last-child){
+     margin-right: 20px;
+}
+
+  .pattern-checkbox-label {
+      font-size: 13px;
+      color: var(--text-color);
+      margin-left: 10px;
+      cursor: pointer;
+      margin-right: -3px;
+  }
+
+
+  .preview-controls {
+    display: flex;
+    align-items: center;
+    margin-left: auto;
+  }
+
+  .zoom-select {
+    background-color: var(--bg-color);
+    border: 1px solid var(--border-color);
+    color: var(--text-color);
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 12px;
+    min-width: 60px;
+  }
+
+  .zoom-select:focus {
+    outline: none;
+    border-color: var(--primary-color);
+  }
+
+  .pattern-subtitle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: calc(100% - 20px);
+  }
+
+  .pattern-subtitle h3 {
+    font-size: 14px;
+    color: var(--text-color);
+  }
+
+  .zoom-indicator {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background-color: rgba(0, 0, 0, 0.7);
+    color: white;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    pointer-events: none;
+  }
+
+  .pattern-final-preview-container {
     position: relative;
     width: 100%;
-    height: 200px;
-    overflow: hidden;
+    height: 28%;
     border: 1px solid var(--border-color);
-    background-color: var(--dark-bg-color);
-    user-select: none;
+    flex-direction: column;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
-  
+
+.preview-wrapper {
+  position: relative;
+  width: 100%;
+  height: 200px;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  background-color: var(--dark-bg-color);
+  user-select: none;
+}
+
 .pattern-final-preview {
   position: absolute;
   transform-origin: center center;
@@ -224,87 +340,4 @@
   max-height: none;
   width: auto;
   height: auto;
-}
-
-/* Checkbox 样式 */
-.pattern-checkbox-container {
-    display: flex;
-    align-items: center;
-    width: calc(100% - 20px);
-    margin: 0 0 5px 10px;
-}
-
-.pattern-checkbox-input {
-    cursor: pointer;
-}
-
-.pattern-checkbox-label {
-    font-size: 13px;
-    color: var(--text-color);
-    cursor: pointer;
-}
-
-.pattern-fillmode-container {
-    display: flex;
-    margin-top: 5px;
-}
-
-.pattern-fillmode-container sp-radio-group {
-    display: flex;
-    justify-content: space-between;
-    width: 100%;
-}
-
-.pattern-fillmode-radio {
-    flex: 1;
-}
-
-.pattern-fillmode-radio .radio-item-label {
-    font-size: 13px;
-    color: var(--text-color);
-}
-
-.preview-controls {
-  display: flex;
-  align-items: center;
-  margin-left: auto;
-}
-
-.zoom-select {
-  background-color: var(--bg-color);
-  border: 1px solid var(--border-color);
-  color: var(--text-color);
-  padding: 2px 6px;
-  border-radius: 3px;
-  font-size: 12px;
-  min-width: 60px;
-}
-
-.zoom-select:focus {
-  outline: none;
-  border-color: var(--primary-color);
-}
-
-.pattern-subtitle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: calc(100% - 20px);
-}
-
-.pattern-subtitle h3 {
-  font-size: 14px;
-  color: var(--text-color);
-}
-
-.zoom-indicator {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  background-color: rgba(0, 0, 0, 0.7);
-  color: white;
-  padding: 2px 6px;
-  border-radius: 3px;
-  font-size: 11px;
-  pointer-events: none;
 }

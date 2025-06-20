@@ -422,6 +422,13 @@ class App extends React.Component<AppProps, AppState> {
                     [{
                         _obj: "make",
                         _target: [{ _ref: "layer" }],
+                        using: {
+                            _obj: "layer",
+                            mode: {
+                                _enum: "blendMode",
+                                _value: BLEND_MODES[this.state.blendMode] || "normal"
+                            }
+                        },
                         _options: { dialogOptions: "dontDisplay" }
                     }],
                     { synchronousExecution: true }

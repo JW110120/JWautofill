@@ -195,7 +195,7 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
                 
                 {/* 计算模式选择器 */}
                 <div className="colorsettings-calculation-mode">
-                    <label>计算模式：</label>
+                    <label>计算方法</label>
                     <sp-radio-group 
                         selected={settings.calculationMode || 'absolute'}
                         name="calculationMode"
