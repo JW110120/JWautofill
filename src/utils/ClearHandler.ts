@@ -218,7 +218,7 @@ export class ClearHandler {
                     },
                     tolerance: {
                         _unit: "pixelsUnit",
-                        _value: 0.5
+                        _value: 2
                     },
                     _options: {
                         dialogOptions: "dontDisplay"
@@ -682,7 +682,9 @@ export class ClearHandler {
                 hasPattern: !!state.selectedPattern,
                 hasGrayData: !!(state.selectedPattern?.grayData),
                 patternSize: state.selectedPattern ? `${state.selectedPattern.width}x${state.selectedPattern.height}` : 'N/A',
-                boundsSize: `${bounds.width}x${bounds.height}`
+                boundsSize: `${bounds.width}x${bounds.height}`,
+                fillMode: state.selectedPattern?.fillMode || 'tile',
+                rotateAll: state.selectedPattern?.rotateAll
             });
             
             // 检查是否有有效的图案数据
@@ -693,17 +695,41 @@ export class ClearHandler {
                 console.log('📊 图案参数:', {
                     scale: state.selectedPattern.currentScale || 100,
                     angle: state.selectedPattern.currentAngle || 0,
+                    fillMode: state.selectedPattern.fillMode || 'tile',
+                    rotateAll: state.selectedPattern.rotateAll !== false,
                     dataLength: state.selectedPattern.grayData.length
                 });
                 
-                return await this.tilePatternToFitBounds(
-                    state.selectedPattern.grayData, 
-                    state.selectedPattern.width, 
-                    state.selectedPattern.height, 
-                    bounds,
-                    state.selectedPattern.currentScale || 100,
-                    state.selectedPattern.currentAngle || 0
-                );
+                // 根据填充模式选择不同的处理方法
+                const fillMode = state.selectedPattern.fillMode || 'tile';
+                const scale = state.selectedPattern.currentScale || 100;
+                const angle = state.selectedPattern.currentAngle || 0;
+                const rotateAll = state.selectedPattern.rotateAll !== false;
+                
+                if (fillMode === 'stamp') {
+                    // 单次填充模式：图案居中显示，不重复
+                    console.log('🎯 使用单次填充模式（盖图章）');
+                    return await this.stampPatternToFitBounds(
+                        state.selectedPattern.grayData,
+                        state.selectedPattern.width,
+                        state.selectedPattern.height,
+                        bounds,
+                        scale,
+                        angle
+                    );
+                } else {
+                    // 平铺填充模式：无缝平铺
+                    console.log('🧱 使用平铺填充模式（贴墙纸），全部旋转:', rotateAll);
+                    return await this.tilePatternToFitBounds(
+                        state.selectedPattern.grayData, 
+                        state.selectedPattern.width, 
+                        state.selectedPattern.height, 
+                        bounds,
+                        scale,
+                        angle,
+                        rotateAll
+                    );
+                }
             }
             
             console.log('⚠️ 没有找到有效的图案灰度数据，使用默认中等灰度');
@@ -723,23 +749,24 @@ export class ClearHandler {
     }
 
     // 将图案平铺到指定边界（支持缩放和旋转）- 优化版本
-    static async tilePatternToFitBounds(patternGrayData: Uint8Array, patternWidth: number, patternHeight: number, bounds: any, scale: number = 100, angle: number = 0): Promise<Uint8Array> {
+    static async tilePatternToFitBounds(patternGrayData: Uint8Array, patternWidth: number, patternHeight: number, bounds: any, scale: number = 100, angle: number = 0, rotateAll: boolean = true): Promise<Uint8Array> {
         console.log('🔳 开始图案平铺（优化版本）:', {
             patternSize: `${patternWidth}x${patternHeight}`,
             boundsSize: `${bounds.width}x${bounds.height}`,
             scale: scale,
             angle: angle,
+            rotateAll: rotateAll,
             selectionPixelsCount: bounds.selectionPixels ? bounds.selectionPixels.size : 0,
             patternDataLength: patternGrayData.length
         });
         
         // 优化：直接计算选区内的图案，避免创建整个文档大小的数组
-        return await this.createOptimizedPatternForSelection(patternGrayData, patternWidth, patternHeight, bounds, scale, angle);
+        return await this.createOptimizedPatternForSelection(patternGrayData, patternWidth, patternHeight, bounds, scale, angle, rotateAll);
     }
 
     // 优化的图案创建方法，只处理选区内的像素
-    static async createOptimizedPatternForSelection(patternGrayData: Uint8Array, patternWidth: number, patternHeight: number, bounds: any, scale: number, angle: number): Promise<Uint8Array> {
-        console.log('⚡ 使用优化的图案创建方法');
+    static async createOptimizedPatternForSelection(patternGrayData: Uint8Array, patternWidth: number, patternHeight: number, bounds: any, scale: number, angle: number, rotateAll: boolean = true): Promise<Uint8Array> {
+        console.log('⚡ 使用优化的图案创建方法，全部旋转:', rotateAll);
         
         // 计算缩放后的图案尺寸
         const scaleFactor = scale / 100;
@@ -749,27 +776,31 @@ export class ClearHandler {
         // 创建缩放后的图案数据
         const scaledPatternData = await this.scalePatternData(patternGrayData, patternWidth, patternHeight, scaledWidth, scaledHeight);
         
-        // 如果有旋转角度，应用旋转变换
+        // 如果有旋转角度且启用了全部旋转，应用旋转变换
         let transformedPatternData = scaledPatternData;
         let transformedWidth = scaledWidth;
         let transformedHeight = scaledHeight;
         
-        if (angle !== 0) {
+        if (angle !== 0 && rotateAll) {
+            console.log('🔄 应用图案旋转变换，角度:', angle);
             const rotationResult = await this.rotatePatternData(scaledPatternData, scaledWidth, scaledHeight, angle);
             transformedPatternData = rotationResult.data;
             transformedWidth = rotationResult.width;
             transformedHeight = rotationResult.height;
+        } else if (angle !== 0 && !rotateAll) {
+            console.log('⏸️ 跳过图案旋转变换（全部旋转已禁用）');
         }
         
         // 只为选区创建数据
         const selectionData = new Uint8Array(bounds.width * bounds.height);
-        const BATCH_ROWS = 50; // 每批处理50行
+        const BATCH_ROWS = 200; // 增加每批处理的行数
+        let processedRows = 0;
         
         for (let batchStart = 0; batchStart < bounds.height; batchStart += BATCH_ROWS) {
             const batchEnd = Math.min(batchStart + BATCH_ROWS, bounds.height);
             
-            await new Promise(resolve => {
-                setTimeout(() => {
+            await new Promise<void>(resolve => {
+                setImmediate(() => {
                     for (let y = batchStart; y < batchEnd; y++) {
                         for (let x = 0; x < bounds.width; x++) {
                             const globalX = bounds.left + x;
@@ -787,11 +818,84 @@ export class ClearHandler {
                             }
                         }
                     }
-                    resolve(void 0);
-                }, 0);
+                    
+                    processedRows += (batchEnd - batchStart);
+                    if (processedRows % 1000 === 0 || processedRows >= bounds.height) {
+                        console.log(`🔄 图案处理进度: ${processedRows}/${bounds.height} 行 (${((processedRows / bounds.height) * 100).toFixed(1)}%)`);
+                    }
+                    
+                    resolve();
+                });
             });
         }
         
+        return selectionData;
+    }
+    
+    // 单次填充模式：图案居中显示，不重复（盖图章模式）
+    static async stampPatternToFitBounds(patternGrayData: Uint8Array, patternWidth: number, patternHeight: number, bounds: any, scale: number = 100, angle: number = 0): Promise<Uint8Array> {
+        console.log('🎯 开始单次填充（盖图章模式）:', {
+            patternSize: `${patternWidth}x${patternHeight}`,
+            boundsSize: `${bounds.width}x${bounds.height}`,
+            scale: scale,
+            angle: angle,
+            patternDataLength: patternGrayData.length
+        });
+        
+        // 计算缩放后的图案尺寸
+        const scaleFactor = scale / 100;
+        const scaledWidth = Math.max(1, Math.round(patternWidth * scaleFactor));
+        const scaledHeight = Math.max(1, Math.round(patternHeight * scaleFactor));
+        
+        // 创建缩放后的图案数据
+        const scaledPatternData = await this.scalePatternData(patternGrayData, patternWidth, patternHeight, scaledWidth, scaledHeight);
+        
+        // 如果有旋转角度，应用旋转变换
+        let transformedPatternData = scaledPatternData;
+        let transformedWidth = scaledWidth;
+        let transformedHeight = scaledHeight;
+        
+        if (angle !== 0) {
+            console.log('🔄 应用图案旋转变换，角度:', angle);
+            const rotationResult = await this.rotatePatternData(scaledPatternData, scaledWidth, scaledHeight, angle);
+            transformedPatternData = rotationResult.data;
+            transformedWidth = rotationResult.width;
+            transformedHeight = rotationResult.height;
+        }
+        
+        // 创建选区大小的数据数组，默认填充透明（0）
+        const selectionData = new Uint8Array(bounds.width * bounds.height);
+        selectionData.fill(0); // 默认透明
+        
+        // 计算图案在选区中的居中位置
+        const offsetX = Math.floor((bounds.width - transformedWidth) / 2);
+        const offsetY = Math.floor((bounds.height - transformedHeight) / 2);
+        
+        console.log('📍 图案居中位置:', {
+            offsetX: offsetX,
+            offsetY: offsetY,
+            transformedSize: `${transformedWidth}x${transformedHeight}`
+        });
+        
+        // 将图案数据复制到选区数据中（居中位置）
+        for (let y = 0; y < transformedHeight; y++) {
+            for (let x = 0; x < transformedWidth; x++) {
+                const targetX = offsetX + x;
+                const targetY = offsetY + y;
+                
+                // 检查目标位置是否在选区范围内
+                if (targetX >= 0 && targetX < bounds.width && targetY >= 0 && targetY < bounds.height) {
+                    const sourceIndex = y * transformedWidth + x;
+                    const targetIndex = targetY * bounds.width + targetX;
+                    
+                    if (sourceIndex < transformedPatternData.length && targetIndex < selectionData.length) {
+                        selectionData[targetIndex] = transformedPatternData[sourceIndex];
+                    }
+                }
+            }
+        }
+        
+        console.log('✅ 单次填充完成');
         return selectionData;
     }
     
@@ -864,13 +968,14 @@ export class ClearHandler {
     // 缩放图案数据（优化版本，避免栈溢出）
     static async scalePatternData(patternData: Uint8Array, originalWidth: number, originalHeight: number, newWidth: number, newHeight: number): Promise<Uint8Array> {
         const scaledData = new Uint8Array(newWidth * newHeight);
-        const BATCH_ROWS = 100; // 每批处理100行
+        const BATCH_ROWS = 500; // 增加每批处理的行数
+        let processedRows = 0;
         
         for (let batchStart = 0; batchStart < newHeight; batchStart += BATCH_ROWS) {
             const batchEnd = Math.min(batchStart + BATCH_ROWS, newHeight);
             
-            await new Promise(resolve => {
-                setTimeout(() => {
+            await new Promise<void>(resolve => {
+                setImmediate(() => {
                     for (let y = batchStart; y < batchEnd; y++) {
                         for (let x = 0; x < newWidth; x++) {
                             // 使用双线性插值进行缩放
@@ -900,8 +1005,14 @@ export class ClearHandler {
                             scaledData[y * newWidth + x] = Math.round(interpolated);
                         }
                     }
-                    resolve(void 0);
-                }, 0);
+                    
+                    processedRows += (batchEnd - batchStart);
+                    if (processedRows % 1000 === 0 || processedRows >= newHeight) {
+                        console.log(`🔄 图案缩放进度: ${processedRows}/${newHeight} 行 (${((processedRows / newHeight) * 100).toFixed(1)}%)`);
+                    }
+                    
+                    resolve();
+                });
             });
         }
         
@@ -943,13 +1054,14 @@ export class ClearHandler {
         const newCenterX = newWidth / 2;
         const newCenterY = newHeight / 2;
         
-        const BATCH_ROWS = 100; // 每批处理100行
+        const BATCH_ROWS = 500; // 增加每批处理的行数
+        let processedRows = 0;
         
         for (let batchStart = 0; batchStart < newHeight; batchStart += BATCH_ROWS) {
             const batchEnd = Math.min(batchStart + BATCH_ROWS, newHeight);
             
-            await new Promise(resolve => {
-                setTimeout(() => {
+            await new Promise<void>(resolve => {
+                setImmediate(() => {
                     for (let y = batchStart; y < batchEnd; y++) {
                         for (let x = 0; x < newWidth; x++) {
                             // 将新坐标转换回原始坐标
@@ -984,8 +1096,14 @@ export class ClearHandler {
                             }
                         }
                     }
-                    resolve(void 0);
-                }, 0);
+                    
+                    processedRows += (batchEnd - batchStart);
+                    if (processedRows % 1000 === 0 || processedRows >= newHeight) {
+                        console.log(`🔄 图案旋转进度: ${processedRows}/${newHeight} 行 (${((processedRows / newHeight) * 100).toFixed(1)}%)`);
+                    }
+                    
+                    resolve();
+                });
             });
         }
         
@@ -1001,13 +1119,13 @@ export class ClearHandler {
         
         const selectionData = new Uint8Array(bounds.width * bounds.height);
         let processedPixels = 0;
-        const BATCH_ROWS = 50; // 每批处理50行
+        const BATCH_ROWS = 200; // 增加每批处理的行数
     
         for (let batchStart = 0; batchStart < bounds.height; batchStart += BATCH_ROWS) {
             const batchEnd = Math.min(batchStart + BATCH_ROWS, bounds.height);
             
-            await new Promise(resolve => {
-                setTimeout(() => {
+            await new Promise<void>(resolve => {
+                setImmediate(() => {
                     for (let y = batchStart; y < batchEnd; y++) {
                         for (let x = 0; x < bounds.width; x++) {
                             const globalX = bounds.left + x;
@@ -1027,8 +1145,13 @@ export class ClearHandler {
                             }
                         }
                     }
-                    resolve(void 0);
-                }, 0);
+                    
+                    if (processedPixels % 10000 === 0 || batchStart + BATCH_ROWS >= bounds.height) {
+                        console.log(`🔄 文档提取进度: ${batchStart + BATCH_ROWS}/${bounds.height} 行 (${(((batchStart + BATCH_ROWS) / bounds.height) * 100).toFixed(1)}%)`);
+                    }
+                    
+                    resolve();
+                });
             });
         }
         

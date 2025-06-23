@@ -276,6 +276,12 @@ class App extends React.Component<AppProps, AppState> {
             if (!doc) {
                 return;
             }
+
+            // 检测快速蒙版状态
+            const isInQuickMask = doc.quickMaskMode;
+            if (this.state.isInQuickMask !== isInQuickMask) {
+                this.setState({ isInQuickMask });
+            }
    
             await new Promise(resolve => setTimeout(resolve, 50));
             const selection = await this.getSelection();
@@ -845,7 +851,7 @@ class App extends React.Component<AppProps, AppState> {
                             <sp-switch 
                                 checked={this.state.createNewLayer}
                                 onChange={this.toggleCreateNewLayer}
-                                disabled={this.state.clearMode}
+                                disabled={this.state.clearMode || this.state.isInQuickMask}
                             />
                         </div>
 

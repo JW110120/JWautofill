@@ -200,24 +200,19 @@
 
 /* ---------------------------------------------------------------------------------------------------------------- */
   .pattern-fillmode-container {
-    width: 100%;
     display: flex;
-    margin: 10px -18px 10px 8px;
-    padding: auto 10px;
+    margin: 10px -26px 10px 8px;
     flex-direction: column;
   }
 
   .pattern-fillmode-container sp-radio-group {
     display: flex;
     align-items: center;
-    flex-direction: row;
-    justify-content: space-around;
     margin: -8px 0 0 0px;
     width: 100%;
   }
 
   .pattern-fillmode-container sp-radio {
-    display: flex;
     align-items: center;
     justify-content: space-between;
     flex: 1;
@@ -236,8 +231,6 @@
   .pattern-fillmode-container sp-radio:not(:last-child) {
     margin-right: 105px;
   }
-
-
   /* Checkbox 样式 */
   .pattern-checkbox-container {
       display: flex;

@@ -74,6 +74,7 @@ export interface AppState {
     isExpanded: boolean;
     createNewLayer: boolean;  // 添加新状态
     clearMode: boolean;  // 添加清除模式状态
+    isInQuickMask: boolean;  // 添加快速蒙版状态
     fillMode: 'foreground' | 'pattern' | 'gradient';
     colorSettings: ColorSettings;
     selectedPattern: Pattern | null;
@@ -110,6 +111,7 @@ export const initialState: AppState = {
     isExpanded: true,
     createNewLayer: false,    // 添加初始值
     clearMode: false,    // 添加初始值
+    isInQuickMask: false,    // 添加快速蒙版初始值
     fillMode: 'foreground',
     colorSettings: {
         hueVariation: 0,
