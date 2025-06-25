@@ -335,69 +335,6 @@ export class ClearHandler {
                 };
             }
             
-            // 回退到基本选区信息
-            if (selectionResult[0] && selectionResult[0].selection) {
-                const selection = selectionResult[0].selection;
-                
-                // 检查是否有精确的选区点数据
-                if (selection.points && selection.points.horizontal && selection.points.vertical) {
-                    const horizontal = selection.points.horizontal.list;
-                    const vertical = selection.points.vertical.list;
-                    
-                    // 计算选区的实际边界
-                    const leftPoints = horizontal.filter((_, index) => index % 2 === 0);
-                    const rightPoints = horizontal.filter((_, index) => index % 2 === 1);
-                    const topPoints = vertical.filter((_, index) => index % 2 === 0);
-                    const bottomPoints = vertical.filter((_, index) => index % 2 === 1);
-                    
-                    const left = Math.min(...leftPoints);
-                    const right = Math.max(...rightPoints);
-                    const top = Math.min(...topPoints);
-                    const bottom = Math.max(...bottomPoints);
-                    
-                    // 构建选区轮廓点坐标数组
-                    const polygonPoints = [];
-                    for (let i = 0; i < horizontal.length; i += 2) {
-                        polygonPoints.push({
-                            x: horizontal[i],
-                            y: vertical[i]
-                        });
-                    }
-                    
-                    // 使用射线法计算选区内的所有像素位置
-                const selectionPixels = await this.getPixelsInPolygon(polygonPoints, left, top, right, bottom, docWidthPixels);
-                    
-                    return {
-                        left: left,
-                        top: top,
-                        right: right,
-                        bottom: bottom,
-                        width: right - left,
-                        height: bottom - top,
-                        docWidth: docWidthPixels,
-                        docHeight: docHeightPixels,
-                        points: {
-                            horizontal: horizontal,
-                            vertical: vertical
-                        },
-                        polygonPoints: polygonPoints,
-                        selectionPixels: selectionPixels
-                    };
-                } else if (selection.bottom !== undefined) {
-                    // 回退到基本边界信息
-                    console.log('📦 使用基本选区边界信息');
-                    return {
-                        left: selection.left._value,
-                        top: selection.top._value,
-                        right: selection.right._value,
-                        bottom: selection.bottom._value,
-                        width: selection.right._value - selection.left._value,
-                        height: selection.bottom._value - selection.top._value,
-                        docWidth: docWidthPixels,
-                        docHeight: docHeightPixels
-                    };
-                }
-            }
             return null;
         } catch (error) {
             console.error('获取选区边界失败:', error);
@@ -782,13 +719,90 @@ export class ClearHandler {
         let transformedHeight = scaledHeight;
         
         if (angle !== 0 && rotateAll) {
-            console.log('🔄 应用图案旋转变换，角度:', angle);
-            const rotationResult = await this.rotatePatternData(scaledPatternData, scaledWidth, scaledHeight, angle);
-            transformedPatternData = rotationResult.data;
-            transformedWidth = rotationResult.width;
-            transformedHeight = rotationResult.height;
+            console.log('🔄 全部旋转模式：先平铺再整体旋转');
+            // 全部旋转模式：先平铺完整个区域，然后对整个平铺结果进行旋转
+            // 这里不对单个图案进行旋转，而是在平铺完成后对整个结果进行旋转
+            transformedPatternData = scaledPatternData;
+            transformedWidth = scaledWidth;
+            transformedHeight = scaledHeight;
         } else if (angle !== 0 && !rotateAll) {
-            console.log('⏸️ 跳过图案旋转变换（全部旋转已禁用）');
+            console.log('🔄 单独旋转模式：先旋转图案再平铺');
+            // 单独旋转模式：先旋转图案再平铺
+            const angleRad = (angle * Math.PI) / 180;
+            const cos = Math.cos(angleRad);
+            const sin = Math.sin(angleRad);
+            
+            // 计算旋转后图案的边界框
+            const corners = [
+                { x: 0, y: 0 },
+                { x: scaledWidth, y: 0 },
+                { x: scaledWidth, y: scaledHeight },
+                { x: 0, y: scaledHeight }
+            ];
+            
+            const patternCenterX = scaledWidth / 2;
+            const patternCenterY = scaledHeight / 2;
+            
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            corners.forEach(corner => {
+                const relX = corner.x - patternCenterX;
+                const relY = corner.y - patternCenterY;
+                const rotX = relX * cos - relY * sin + patternCenterX;
+                const rotY = relX * sin + relY * cos + patternCenterY;
+                
+                minX = Math.min(minX, rotX);
+                maxX = Math.max(maxX, rotX);
+                minY = Math.min(minY, rotY);
+                maxY = Math.max(maxY, rotY);
+            });
+            
+            const rotatedWidth = Math.ceil(maxX - minX);
+            const rotatedHeight = Math.ceil(maxY - minY);
+            const offsetX = -minX;
+            const offsetY = -minY;
+            
+            // 创建旋转后的图案数据
+            const rotatedPatternData = new Uint8Array(rotatedWidth * rotatedHeight);
+            
+            // 生成旋转后的图案
+            for (let y = 0; y < rotatedHeight; y++) {
+                for (let x = 0; x < rotatedWidth; x++) {
+                    const targetIndex = y * rotatedWidth + x;
+                    
+                    // 计算在旋转前图案中的坐标
+                    const adjustedX = x - offsetX;
+                    const adjustedY = y - offsetY;
+                    
+                    const relativeX = adjustedX - patternCenterX;
+                    const relativeY = adjustedY - patternCenterY;
+                    
+                    // 反向旋转获取原始坐标
+                    const originalX = relativeX * cos + relativeY * sin + patternCenterX;
+                    const originalY = -relativeX * sin + relativeY * cos + patternCenterY;
+                    
+                    // 检查是否在原始图案范围内（不使用模运算，保持图案独立性）
+                    if (originalX >= 0 && originalX < scaledWidth && originalY >= 0 && originalY < scaledHeight) {
+                        // 映射到原始图案像素
+                        const sourceX = Math.floor(originalX * patternWidth / scaledWidth);
+                        const sourceY = Math.floor(originalY * patternHeight / scaledHeight);
+                        
+                        // 确保索引在有效范围内
+                        const clampedSourceX = Math.max(0, Math.min(patternWidth - 1, sourceX));
+                        const clampedSourceY = Math.max(0, Math.min(patternHeight - 1, sourceY));
+                        
+                        const sourceIndex = clampedSourceY * patternWidth + clampedSourceX;
+                        
+                        rotatedPatternData[targetIndex] = patternGrayData[sourceIndex];
+                    } else {
+                        // 超出原始图案范围的部分设为透明（灰度值0）
+                        rotatedPatternData[targetIndex] = 0;
+                    }
+                }
+            }
+            
+            transformedPatternData = rotatedPatternData;
+            transformedWidth = rotatedWidth;
+            transformedHeight = rotatedHeight;
         }
         
         // 只为选区创建数据
@@ -827,6 +841,13 @@ export class ClearHandler {
                     resolve();
                 });
             });
+        }
+        
+        // 如果是全部旋转模式且有旋转角度，对整个平铺结果进行旋转
+        if (angle !== 0 && rotateAll) {
+            console.log('🔄 对整个平铺结果进行旋转，角度:', angle);
+            const rotationResult = await this.rotateSelectionData(selectionData, bounds.width, bounds.height, angle, bounds);
+            return rotationResult;
         }
         
         return selectionData;
@@ -1108,6 +1129,79 @@ export class ClearHandler {
         }
         
         return { data: rotatedData, width: newWidth, height: newHeight };
+    }
+    
+    // 对整个选区数据进行旋转（全部旋转模式）
+    static async rotateSelectionData(selectionData: Uint8Array, width: number, height: number, angle: number, bounds: any): Promise<Uint8Array> {
+        const angleRad = (angle * Math.PI) / 180;
+        const cos = Math.cos(angleRad);
+        const sin = Math.sin(angleRad);
+        
+        // 计算选区中心作为旋转中心
+        const centerX = width / 2;
+        const centerY = height / 2;
+        
+        // 创建旋转后的数据数组
+        const rotatedData = new Uint8Array(width * height);
+        rotatedData.fill(0); // 默认透明
+        
+        const BATCH_ROWS = 200;
+        let processedRows = 0;
+        
+        for (let batchStart = 0; batchStart < height; batchStart += BATCH_ROWS) {
+            const batchEnd = Math.min(batchStart + BATCH_ROWS, height);
+            
+            await new Promise<void>(resolve => {
+                setImmediate(() => {
+                    for (let y = batchStart; y < batchEnd; y++) {
+                        for (let x = 0; x < width; x++) {
+                            const targetIndex = y * width + x;
+                            
+                            // 计算相对于中心的坐标
+                            const relativeX = x - centerX;
+                            const relativeY = y - centerY;
+                            
+                            // 反向旋转获取原始坐标
+                            const originalX = relativeX * cos + relativeY * sin + centerX;
+                            const originalY = -relativeX * sin + relativeY * cos + centerY;
+                            
+                            // 检查原始坐标是否在选区范围内
+                            if (originalX >= 0 && originalX < width && originalY >= 0 && originalY < height) {
+                                // 使用双线性插值
+                                const x1 = Math.floor(originalX);
+                                const y1 = Math.floor(originalY);
+                                const x2 = Math.min(x1 + 1, width - 1);
+                                const y2 = Math.min(y1 + 1, height - 1);
+                                
+                                const fx = originalX - x1;
+                                const fy = originalY - y1;
+                                
+                                const p1 = selectionData[y1 * width + x1];
+                                const p2 = selectionData[y1 * width + x2];
+                                const p3 = selectionData[y2 * width + x1];
+                                const p4 = selectionData[y2 * width + x2];
+                                
+                                const interpolated = p1 * (1 - fx) * (1 - fy) +
+                                                   p2 * fx * (1 - fy) +
+                                                   p3 * (1 - fx) * fy +
+                                                   p4 * fx * fy;
+                                
+                                rotatedData[targetIndex] = Math.round(interpolated);
+                            }
+                        }
+                    }
+                    
+                    processedRows += (batchEnd - batchStart);
+                    if (processedRows % 1000 === 0 || processedRows >= height) {
+                        console.log(`🔄 整体旋转进度: ${processedRows}/${height} 行 (${((processedRows / height) * 100).toFixed(1)}%)`);
+                    }
+                    
+                    resolve();
+                });
+            });
+        }
+        
+        return rotatedData;
     }
     
     // 从文档平铺数组中截取选区部分（优化版本，避免栈溢出）
