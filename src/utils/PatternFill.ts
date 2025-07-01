@@ -540,6 +540,7 @@ interface LayerInfo {
     isInQuickMask: boolean;
 }
 
+// 收集左上角和右下角像素的值，并且做处理
 async function getPixelValue(action: any, x: number, y: number): Promise<number> {
     // 选择指定坐标的1x1像素区域
     await action.batchPlay([
@@ -600,8 +601,8 @@ async function getPixelValue(action: any, x: number, y: number): Promise<number>
 
 
 // ---------------------------------------------------------------------------------------------------
-// 不在快速蒙版中，根据用户指定条件填充相应的图案。（RGB/RGBA）
 export class PatternFill {
+    // 1.不在快速蒙版中，根据用户指定条件填充相应的彩色图案。（RGB/RGBA）
     static async fillPattern(options: PatternFillOptions, layerInfo: LayerInfo) {
         // 检查是否有图案数据
         const components = options.pattern.components || options.pattern.patternComponents || 3;
@@ -889,7 +890,7 @@ export class PatternFill {
 
 
     //-------------------------------------------------------------------------------------------------
-    // 快速蒙版状态下的直接填充核心函数（灰度）（支持混合模式和不透明度）
+    // 2.快速蒙版状态下的直接填充核心函数（灰度）（支持混合模式和不透明度）
     private static async fillPatternDirect(options: PatternFillOptions) {
         try {
             console.log('🎨 开始快速蒙版图案填充。');
@@ -902,7 +903,7 @@ export class PatternFill {
             }
 
             // 获取快速蒙版通道的像素数据和colorIndicates信息
-            const { quickMaskPixels, isSelectedAreas, isEmpty, isNotFull, originalTopLeft, originalBottomRight } = await this.getQuickMaskPixels(selectionBounds);
+            const { quickMaskPixels, isSelectedAreas, isEmpty, topLeftIsEmpty, bottomRightIsEmpty, originalTopLeft, originalBottomRight } = await this.getQuickMaskPixels(selectionBounds);
             
             // 获取图案填充的灰度数据
             const fillGrayData = await this.getPatternFillGrayData(options, selectionBounds);
@@ -916,7 +917,8 @@ export class PatternFill {
                 options.blendMode,
                 isEmpty,  // 传递isEmpty状态
                 selectionBounds,  // 传递bounds信息
-                isNotFull,  // 传递不完整蒙版标记
+                topLeftIsEmpty,
+                bottomRightIsEmpty,
                 originalTopLeft,  // 传递原始左上角像素值
                 originalBottomRight  // 传递原始右下角像素值
             );
@@ -1168,10 +1170,11 @@ export class PatternFill {
             const histogram = channelResult[0].histogram;
             const maskStatus = await this.analyzeQuickMaskHistogram(histogram, isSelectedAreas);
             
-            let isNotFull = false;
+            let topLeftIsEmpty = false;
+            let bottomRightIsEmpty = false;
             let originalTopLeft = 0;
             let originalBottomRight = 0;
-            
+
             // 获取左上角和右下角像素值
             originalTopLeft = await getPixelValue(action, 0, 0);
             originalBottomRight = await getPixelValue(action, Math.round(bounds.docWidth) - 1, Math.round(bounds.docHeight) - 1);
@@ -1234,101 +1237,149 @@ export class PatternFill {
                 ], { synchronousExecution: true });
                 
             } else {
-                // 检查左上角和右下角像素
-                originalTopLeft = await getPixelValue(action, 0, 0);
-                originalBottomRight = await getPixelValue(action, Math.round(bounds.docWidth) - 1, Math.round(bounds.docHeight) - 1);
 
                 // 判断是否需要填充
-                if ((isSelectedAreas && (originalTopLeft === 255 || originalBottomRight === 255)) ||
-                    (!isSelectedAreas && (originalTopLeft === 0 || originalBottomRight === 0))) {
-                    isNotFull = true;
-                    
-                    // 加选左上角像素
-                    await action.batchPlay([
-                        {
-                            _obj: "addTo",
-                            _target: [
-                                {
-                                    _ref: "channel",
-                                    _property: "selection"
-                                }
-                            ],
-                            to: {
-                                _obj: "rectangle",
-                                top: {
-                                    _unit: "pixelsUnit",
-                                    _value: 0
-                                },
-                                left: {
-                                    _unit: "pixelsUnit",
-                                    _value: 0
-                                },
-                                bottom: {
-                                    _unit: "pixelsUnit",
-                                    _value: 1
-                                },
-                                right: {
-                                    _unit: "pixelsUnit",
-                                    _value: 1
-                                }
-                            }
-                        }
-                    ], { synchronousExecution: true });
+                if ((isSelectedAreas && (originalTopLeft === 255)) ||
+                    (!isSelectedAreas && (originalTopLeft === 0))) 
+                    topLeftIsEmpty = true;
+                
+                if ((isSelectedAreas && (originalBottomRight === 255)) ||
+                    (!isSelectedAreas && (originalBottomRight === 0))) 
+                    bottomRightIsEmpty = true;
 
-                    // 执行填充操作
-                    await action.batchPlay([
-                        {
-                            _obj: "set",
-                            _target: [
+                // 如果两个角都不为空，则跳过后续的填充
+                if (!topLeftIsEmpty && !bottomRightIsEmpty) {
+                    console.log('两个角都不为空，跳过填充');
+                } else {
+                    // 根据isEmpty状态添加选区
+                    if (topLeftIsEmpty || bottomRightIsEmpty) {
+                        // 创建选区 - 只选择需要填充的像素
+                        if (topLeftIsEmpty && !bottomRightIsEmpty) {
+                            // 只有左上角为空，选择左上角像素
+                            console.log('只有左上角为空，选择左上角像素');
+                            await action.batchPlay([
                                 {
-                                    _ref: "color",
-                                    _property: "foregroundColor"
+                                    _obj: "set",
+                                    _target: [
+                                        {
+                                            _ref: "channel",
+                                            _property: "selection"
+                                        }
+                                    ],
+                                    to: {
+                                        _obj: "rectangle",
+                                        top: {
+                                            _unit: "pixelsUnit",
+                                            _value: 0
+                                        },
+                                        left: {
+                                            _unit: "pixelsUnit",
+                                            _value: 0
+                                        },
+                                        bottom: {
+                                            _unit: "pixelsUnit",
+                                            _value: 1
+                                        },
+                                        right: {
+                                            _unit: "pixelsUnit",
+                                            _value: 1
+                                        }
+                                    }
                                 }
-                            ],
-                            to: {
-                                _obj: "HSBColorClass",
-                                hue: {
-                                    _unit: "angleUnit",
-                                    _value: 0
-                                },
-                                saturation: {
-                                    _unit: "percentUnit",
-                                    _value: 0
-                                },
-                                brightness: {
-                                    _unit: "percentUnit",
-                                    _value: isSelectedAreas ? 0 : 100
+                            ], { synchronousExecution: true });
+                        } else if (!topLeftIsEmpty && bottomRightIsEmpty) {
+                            // 只有右下角为空，选择右下角像素
+                            console.log('只有右下角为空，选择右下角像素');
+                        } else if (topLeftIsEmpty && bottomRightIsEmpty) {
+                            console.log('两个角都为空，选择两个角的像素');
+                            await action.batchPlay([
+                                {
+                                    _obj: "addTo",
+                                    _target: [
+                                        {
+                                            _ref: "channel",
+                                            _property: "selection"
+                                        }
+                                    ],
+                                    to: {
+                                        _obj: "rectangle",
+                                        top: {
+                                            _unit: "pixelsUnit",
+                                            _value: 0
+                                        },
+                                        left: {
+                                            _unit: "pixelsUnit",
+                                            _value: 0
+                                        },
+                                        bottom: {
+                                            _unit: "pixelsUnit",
+                                            _value: 1
+                                        },
+                                        right: {
+                                            _unit: "pixelsUnit",
+                                            _value: 1
+                                        }
+                                    }
                                 }
-                            },
-                            source: "photoshopPicker",
-                            _options: {
-                                dialogOptions: "dontDisplay"
-                            }
+                            ], { synchronousExecution: true });
                         }
-                    ], { synchronousExecution: true });
 
-                    await action.batchPlay([
-                        {
-                            _obj: "fill",
-                            using: {
-                                _enum: "fillContents",
-                                _value: "foregroundColor"
-                            },
-                            opacity: {
-                                _unit: "percentUnit",
-                                _value: 100
-                            },
-                            mode: {
-                                _enum: "blendMode",
-                                _value: "normal"
-                            },
-                            _options: {
-                                dialogOptions: "dontDisplay"
+                        // 执行填充操作
+                        await action.batchPlay([
+                            {
+                                _obj: "set",
+                                _target: [
+                                    {
+                                        _ref: "color",
+                                        _property: "foregroundColor"
+                                    }
+                                ],
+                                to: {
+                                    _obj: "HSBColorClass",
+                                    hue: {
+                                        _unit: "angleUnit",
+                                        _value: 0
+                                    },
+                                    saturation: {
+                                        _unit: "percentUnit",
+                                        _value: 0
+                                    },
+                                    brightness: {
+                                        _unit: "percentUnit",
+                                        _value: isSelectedAreas ? 0 : 100
+                                    }
+                                },
+                                source: "photoshopPicker",
+                                _options: {
+                                    dialogOptions: "dontDisplay"
+                                }
                             }
-                        }
-                    ], { synchronousExecution: true });
+                        ], { synchronousExecution: true });
+
+                        await action.batchPlay([
+                            {
+                                _obj: "fill",
+                                using: {
+                                    _enum: "fillContents",
+                                    _value: "foregroundColor"
+                                },
+                                opacity: {
+                                    _unit: "percentUnit",
+                                    _value: 100
+                                },
+                                mode: {
+                                    _enum: "blendMode",
+                                    _value: "normal"
+                                },
+                                _options: {
+                                    dialogOptions: "dontDisplay"
+                                }
+                            }
+                        ], { synchronousExecution: true });
+                    }
                 }
             }
+        
             
             
             // 撤销快速蒙版
@@ -1376,7 +1427,8 @@ export class PatternFill {
                     quickMaskPixels: maskValue,
                     isSelectedAreas: isSelectedAreas,
                     isEmpty: maskStatus.isEmpty,
-                    isNotFull: false,
+                    topLeftIsEmpty: false,
+                    bottomRightIsEmpty: false,
                     originalTopLeft: 0,
                     originalBottomRight: 0
                 };
@@ -1410,7 +1462,8 @@ export class PatternFill {
                 quickMaskPixels: maskValue,
                 isSelectedAreas: isSelectedAreas,
                 isEmpty: maskStatus.isEmpty,  // 添加isEmpty状态信息
-                isNotFull: isNotFull,  // 添加不完整蒙版标记
+                topLeftIsEmpty: topLeftIsEmpty,
+                bottomRightIsEmpty: bottomRightIsEmpty,
                 originalTopLeft: originalTopLeft,  // 原始左上角像素值
                 originalBottomRight: originalBottomRight  // 原始右下角像素值
             };
@@ -1635,11 +1688,12 @@ export class PatternFill {
         blendMode: string = 'normal',
         isEmpty: boolean,
         bounds: any,
-        isNotFull: boolean = false,
+        topLeftIsEmpty: boolean = false,
+        bottomRightIsEmpty: boolean = false,
         originalTopLeft: number = 0,
         originalBottomRight: number = 0
     ): Promise<Uint8Array> {
-        console.log('📊 参数状态 - isNotFull:', isNotFull, '    originalTopLeft:', originalTopLeft, '    originalBottomRight:', originalBottomRight);
+        console.log('📊 参数状态 - topLeftIsEmpty:', topLeftIsEmpty, '    bottomRightIsEmpty:', bottomRightIsEmpty, '    originalTopLeft:', originalTopLeft, '    originalBottomRight:', originalBottomRight);
         
         // maskData现在是完整文档的快速蒙版数据，fillData是选区内图案的数据
         // 需要从maskData中提取出真正在选区内的像素数据
@@ -1773,17 +1827,24 @@ export class PatternFill {
         }
         
         // 如果是不完整蒙版，根据是否在选区内决定是否还原角落像素值
-        if (isNotFull) {
-            console.log('🔄 检查是否需要还原角落像素值');
-            // 检查左上角和右下角是否在选区内
+        if ( topLeftIsEmpty ) {
+            console.log('🔄 检查是否需要还原左上角像素值');
+            // 检查左上角是否在选区内
             const topLeftInSelection = maskData[0] !== 0;
-            const bottomRightInSelection = maskData[maskData.length - 1] !== 0;
             
             // 只有当像素不在选区内时，才将其还原为0
             if (!topLeftInSelection) {
                 console.log('⚪ 左上角像素不在选区内，还原为0');
                 newMaskValue[0] = 0;
             }
+        }
+
+        if ( bottomRightIsEmpty ) {
+            console.log('🔄 检查是否需要还原右下角像素值');
+            // 检查左上角是否在选区内
+            const bottomRightInSelection = maskData[maskData.length - 1] !== 0;
+            
+            // 只有当像素不在选区内时，才将其还原为0
             if (!bottomRightInSelection) {
                 console.log('⚪ 右下角像素不在选区内，还原为0');
                 newMaskValue[newMaskValue.length - 1] = 0;
