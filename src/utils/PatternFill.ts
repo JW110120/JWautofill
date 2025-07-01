@@ -540,6 +540,65 @@ interface LayerInfo {
     isInQuickMask: boolean;
 }
 
+async function getPixelValue(action: any, x: number, y: number): Promise<number> {
+    // 选择指定坐标的1x1像素区域
+    await action.batchPlay([
+        {
+            _obj: "set",
+            _target: [
+                {
+                    _ref: "channel",
+                    _property: "selection"
+                }
+            ],
+            to: {
+                _obj: "rectangle",
+                top: {
+                    _unit: "pixelsUnit",
+                    _value: y
+                },
+                left: {
+                    _unit: "pixelsUnit",
+                    _value: x
+                },
+                bottom: {
+                    _unit: "pixelsUnit",
+                    _value: y + 1
+                },
+                right: {
+                    _unit: "pixelsUnit",
+                    _value: x + 1
+                }
+            },
+            _options: {
+                dialogOptions: "dontDisplay"
+            }
+        }
+    ], { synchronousExecution: true });
+
+    // 获取像素的直方图
+    const result = await action.batchPlay([
+        {
+            _obj: "get",
+            _target: [
+                {
+                    _ref: "channel",
+                    _name: "快速蒙版"
+                }
+            ]
+        }
+    ], { synchronousExecution: true });
+    
+    // 分析直方图找出数量为1的色阶值
+    const histogram = result[0].histogram;
+    const pixelValue = histogram.findIndex(count => count === 1);
+    console.log(`坐标(${x}, ${y})的直方图：`, histogram);
+    console.log(`坐标(${x}, ${y})的像素值：`, pixelValue);
+
+    return pixelValue;
+}
+
+
 // ---------------------------------------------------------------------------------------------------
 // 不在快速蒙版中，根据用户指定条件填充相应的图案。（RGB/RGBA）
 export class PatternFill {
@@ -1051,8 +1110,8 @@ export class PatternFill {
         for (let y = startY; y <= endY; y++) {
             for (let x = startX; x <= endX; x++) {
                 if (this.isPointInPolygon(x, y, polygonPoints)) {
-                    // 计算像素在整个文档数组中的位置：docWidth * ( y - 1 ) + x
-                    const pixelIndex = docWidth * ( y - 1 ) + x;
+                    // 计算像素在整个文档数组中的位置
+                    const pixelIndex =( docWidth *  y ) + x;
                     selectionPixels.add(pixelIndex);
                 }
             }
@@ -1109,6 +1168,14 @@ export class PatternFill {
             const histogram = channelResult[0].histogram;
             const maskStatus = await this.analyzeQuickMaskHistogram(histogram, isSelectedAreas);
             
+            let isNotFull = false;
+            let originalTopLeft = 0;
+            let originalBottomRight = 0;
+            
+            // 获取左上角和右下角像素值
+            originalTopLeft = await getPixelValue(action, 0, 0);
+            originalBottomRight = await getPixelValue(action, Math.round(bounds.docWidth) - 1, Math.round(bounds.docHeight) - 1);
+
             if (maskStatus.isEmpty) {
                 console.log('⚠️ 检测到快速蒙版为空，通过填充快速蒙版改造以便后续正常填充');
                 
@@ -1166,6 +1233,101 @@ export class PatternFill {
                     }
                 ], { synchronousExecution: true });
                 
+            } else {
+                // 检查左上角和右下角像素
+                originalTopLeft = await getPixelValue(action, 0, 0);
+                originalBottomRight = await getPixelValue(action, Math.round(bounds.docWidth) - 1, Math.round(bounds.docHeight) - 1);
+
+                // 判断是否需要填充
+                if ((isSelectedAreas && (originalTopLeft === 255 || originalBottomRight === 255)) ||
+                    (!isSelectedAreas && (originalTopLeft === 0 || originalBottomRight === 0))) {
+                    isNotFull = true;
+                    
+                    // 加选左上角像素
+                    await action.batchPlay([
+                        {
+                            _obj: "addTo",
+                            _target: [
+                                {
+                                    _ref: "channel",
+                                    _property: "selection"
+                                }
+                            ],
+                            to: {
+                                _obj: "rectangle",
+                                top: {
+                                    _unit: "pixelsUnit",
+                                    _value: 0
+                                },
+                                left: {
+                                    _unit: "pixelsUnit",
+                                    _value: 0
+                                },
+                                bottom: {
+                                    _unit: "pixelsUnit",
+                                    _value: 1
+                                },
+                                right: {
+                                    _unit: "pixelsUnit",
+                                    _value: 1
+                                }
+                            }
+                        }
+                    ], { synchronousExecution: true });
+
+                    // 执行填充操作
+                    await action.batchPlay([
+                        {
+                            _obj: "set",
+                            _target: [
+                                {
+                                    _ref: "color",
+                                    _property: "foregroundColor"
+                                }
+                            ],
+                            to: {
+                                _obj: "HSBColorClass",
+                                hue: {
+                                    _unit: "angleUnit",
+                                    _value: 0
+                                },
+                                saturation: {
+                                    _unit: "percentUnit",
+                                    _value: 0
+                                },
+                                brightness: {
+                                    _unit: "percentUnit",
+                                    _value: isSelectedAreas ? 0 : 100
+                                }
+                            },
+                            source: "photoshopPicker",
+                            _options: {
+                                dialogOptions: "dontDisplay"
+                            }
+                        }
+                    ], { synchronousExecution: true });
+
+                    await action.batchPlay([
+                        {
+                            _obj: "fill",
+                            using: {
+                                _enum: "fillContents",
+                                _value: "foregroundColor"
+                            },
+                            opacity: {
+                                _unit: "percentUnit",
+                                _value: 100
+                            },
+                            mode: {
+                                _enum: "blendMode",
+                                _value: "normal"
+                            },
+                            _options: {
+                                dialogOptions: "dontDisplay"
+                            }
+                        }
+                    ], { synchronousExecution: true });
+                }
             }
             
             
@@ -1220,201 +1382,26 @@ export class PatternFill {
                 };
             }
 
-            // 使用临时图层获取选区在整个文档中的精确索引位置
-            console.log('🎯 获取蒙版非空像素的索引位置');
-            
-            // 1. 新建一个临时图层
-            const tempLayer = await app.activeDocument.layers.add({
-                name: "临时索引图层",
-                opacity: 100,
-                blendMode: "normal"
-            });
-            // 2. 为选区填充前景色（使用batchPlay）
-            await action.batchPlay([
-                {
-                    _obj: "fill",
-                    using: {
-                        _enum: "fillContents",
-                        _value: "foregroundColor"
-                    },
-                    _options: {
-                        dialogOptions: "dontDisplay"
-                    }
-                }
-            ], {});
-            
-            // 3. 获取这个临时图层每一个像素在整个文档中的索引值
-            const tempLayerPixels = await imaging.getPixels({
-                documentID: app.activeDocument.id,
-                layerID: tempLayer.id,
-                sourceBounds: {
-                    left: 0,
-                    top: 0,
-                    right: finalDocWidth,
-                    bottom: finalDocHeight
-                },
-                componentSize: 8,
-                colorProfile: "sRGB IEC61966-2.1"
-            });
-            
-            const tempLayerData = await tempLayerPixels.imageData.getData();
-            
-            // 4. 删除临时图层
-            await require('photoshop').action.batchPlay([
-                {
-                    _obj: "delete",
-                    _target: [
-                        {
-                            _ref: "layer",
-                            _enum: "ordinal",
-                            _value: "targetEnum"
-                        }
-                    ]
-                }
-            ], {});
-            
-            // 5. 利用获取的索引值扩展出maskValue数组
+            // 创建固定长度的maskValue数组，初始值全为0
             const expectedPixelCount = finalDocWidth * finalDocHeight;
             let maskValue = new Uint8Array(expectedPixelCount);
             
-            // 找出所有非透明像素的位置（Alpha值不为0的位置）
-            const selectionIndices: number[] = [];
-            
-            // tempLayerData是RGBA格式，每4个字节代表一个像素
-            for (let i = 0; i < tempLayerData.length; i += 4) {
-                const alpha = tempLayerData[i + 3];
-                
-                // 如果Alpha值不为0，说明这个位置在选区内（非透明像素）
-                if (alpha !== 0) {
-                    const pixelIndex = Math.floor(i / 4);
-                    selectionIndices.push(pixelIndex);
-                }
-            }
-            
-            
-            // 调试：检查quickMaskPixels中非零像素的数量
-            let quickMaskNonZeroCount = 0;
+            // 获取quickMaskPixels中非零值的索引位置
+            const nonZeroIndices: number[] = [];
             for (let i = 0; i < quickMaskPixels.length; i++) {
                 if (quickMaskPixels[i] !== 0) {
-                    quickMaskNonZeroCount++;
+                    nonZeroIndices.push(i);
                 }
             }
             
-            // 调试：检查tempLayerData中alpha值的分布
-            let alphaDistribution = new Array(256).fill(0);
-            for (let i = 3; i < tempLayerData.length; i += 4) {
-                const alpha = tempLayerData[i];
-                alphaDistribution[alpha]++;
+            // 将非零值复制到maskValue对应位置
+            for (let i = 0; i < nonZeroIndices.length; i++) {
+                const sourceIndex = nonZeroIndices[i];
+                maskValue[sourceIndex] = quickMaskPixels[sourceIndex];
             }
             
-            // 将quickMaskPixels中的非零值映射到正确的索引位置
-            let nonZeroIndex = 0; // 用于追踪quickMaskPixels中非零值的索引
-            for (let i = 0; i < quickMaskPixels.length && nonZeroIndex < selectionIndices.length; i++) {
-                if (quickMaskPixels[i] !== 0) {
-                    const targetIndex = selectionIndices[nonZeroIndex];
-                    maskValue[targetIndex] = quickMaskPixels[i];
-                    nonZeroIndex++;
-                }
-            }
-            console.log('🎯 成功映射非零像素数量:', nonZeroIndex);
+            console.log('🎯 成功映射非零像素数量:', nonZeroIndices.length);
             
-            // 输出四个角落附近5个点的maskValue值
-            console.log('🔍 maskValue四个角落附近的值:');
-            console.log('左上角附近5个点:', [
-                maskValue[0], // 左上角
-                maskValue[1], // 右移1个像素
-                maskValue[finalDocWidth], // 下移1行
-                maskValue[finalDocWidth + 1], // 右下移1个像素
-                maskValue[2] // 右移2个像素
-            ]);
-            console.log('右上角附近5个点:', [
-                maskValue[finalDocWidth - 1], // 右上角
-                maskValue[finalDocWidth - 2], // 左移1个像素
-                maskValue[finalDocWidth * 2 - 1], // 下移1行
-                maskValue[finalDocWidth * 2 - 2], // 左下移1个像素
-                maskValue[finalDocWidth - 3] // 左移2个像素
-            ]);
-            console.log('左下角附近5个点:', [
-                maskValue[(finalDocHeight - 1) * finalDocWidth], // 左下角
-                maskValue[(finalDocHeight - 1) * finalDocWidth + 1], // 右移1个像素
-                maskValue[(finalDocHeight - 2) * finalDocWidth], // 上移1行
-                maskValue[(finalDocHeight - 2) * finalDocWidth + 1], // 右上移1个像素
-                maskValue[(finalDocHeight - 1) * finalDocWidth + 2] // 右移2个像素
-            ]);
-            console.log('右下角附近5个点:', [
-                maskValue[finalDocHeight * finalDocWidth - 1], // 右下角
-                maskValue[finalDocHeight * finalDocWidth - 2], // 左移1个像素
-                maskValue[(finalDocHeight - 1) * finalDocWidth - 1], // 上移1行
-                maskValue[(finalDocHeight - 1) * finalDocWidth - 2], // 左上移1个像素
-                maskValue[finalDocHeight * finalDocWidth - 3] // 左移2个像素
-            ]);
-            
-            // 检查边界像素是否全为0，判断是否为不完整蒙版
-            console.log('🔍 开始执行边界像素检查逻辑');
-            let isNotFull = false;
-            let originalTopLeft = 0;
-            let originalBottomRight = 0;
-            
-            // 检查第一行是否全为0
-            let firstRowAllZero = true;
-            let firstRowNonZeroCount = 0;
-            for (let x = 0; x < finalDocWidth; x++) {
-                if (maskValue[x] !== 0) {
-                    firstRowAllZero = false;
-                    firstRowNonZeroCount++;
-                }
-            }
-            
-            // 检查最后一行是否全为0
-            let lastRowAllZero = true;
-            let lastRowNonZeroCount = 0;
-            const lastRowStart = (finalDocHeight - 1) * finalDocWidth;
-            for (let x = 0; x < finalDocWidth; x++) {
-                if (maskValue[lastRowStart + x] !== 0) {
-                    lastRowAllZero = false;
-                    lastRowNonZeroCount++;
-                }
-            }
-            
-            // 检查第一列是否全为0
-            let firstColAllZero = true;
-            let firstColNonZeroCount = 0;
-            for (let y = 0; y < finalDocHeight; y++) {
-                if (maskValue[y * finalDocWidth] !== 0) {
-                    firstColAllZero = false;
-                    firstColNonZeroCount++;
-                }
-            }
-            
-            // 检查最后一列是否全为0
-            let lastColAllZero = true;
-            let lastColNonZeroCount = 0;
-            for (let y = 0; y < finalDocHeight; y++) {
-                if (maskValue[y * finalDocWidth + (finalDocWidth - 1)] !== 0) {
-                    lastColAllZero = false;
-                    lastColNonZeroCount++;
-                }
-            }
-            
-            
-            // 如果任一边界全为0，则标记为不完整蒙版
-            if (firstRowAllZero || lastRowAllZero || firstColAllZero || lastColAllZero) {
-                isNotFull = true;
-                console.log('🔍 检测到某条边界像素全为0，标记为不完整蒙版状态');
-                
-                // 记录左上角和右下角的原始像素值
-                originalTopLeft = maskValue[0]; // 第一个像素
-                originalBottomRight = maskValue[maskValue.length - 1]; // 最后一个像素
-                
-                console.log('📝 原始角落像素值 - 左上角:', originalTopLeft, '右下角:', originalBottomRight);
-                
-                // 将角落像素设为255
-                maskValue[0] = 255;
-                maskValue[maskValue.length - 1] = 255;
-                
-            } else {
-                console.log('✅ 蒙版完整');
-            }
             
             // 释放ImageData内存
             pixels.imageData.dispose();
@@ -1541,7 +1528,7 @@ export class PatternFill {
                 console.error('缺少图案灰度数据');
                 const pixelCount = bounds.selectionPixels
                 const grayData = new Uint8Array(pixelCount);
-                grayData.fill(128); // 默认中灰
+                grayData.fill(128); 
                 return grayData;
             }
             
@@ -1785,11 +1772,22 @@ export class PatternFill {
             }
         }
         
-        // 如果是不完整蒙版，恢复原始角落像素值
+        // 如果是不完整蒙版，根据是否在选区内决定是否还原角落像素值
         if (isNotFull) {
-            console.log('🔄 恢复原始角落像素值');
-            newMaskValue[0] = originalTopLeft;  // 恢复左上角像素
-            newMaskValue[newMaskValue.length - 1] = originalBottomRight;  // 恢复右下角像素
+            console.log('🔄 检查是否需要还原角落像素值');
+            // 检查左上角和右下角是否在选区内
+            const topLeftInSelection = maskData[0] !== 0;
+            const bottomRightInSelection = maskData[maskData.length - 1] !== 0;
+            
+            // 只有当像素不在选区内时，才将其还原为0
+            if (!topLeftInSelection) {
+                console.log('⚪ 左上角像素不在选区内，还原为0');
+                newMaskValue[0] = 0;
+            }
+            if (!bottomRightInSelection) {
+                console.log('⚪ 右下角像素不在选区内，还原为0');
+                newMaskValue[newMaskValue.length - 1] = 0;
+            }
         }
         
         return newMaskValue;
