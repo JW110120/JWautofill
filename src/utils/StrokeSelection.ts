@@ -301,7 +301,7 @@ async function strokeSelectionWithColorCalculation(strokeParams: any, state: any
         console.log('✅ 已保存前景色');
 
         // 获取选区边界信息
-        const selectionBounds = await getSelectionBounds();
+        const selectionBounds = await getSelectionData();
         if (!selectionBounds) {
             console.warn('❌ 没有选区，无法执行清除模式描边');
             return;
@@ -358,7 +358,7 @@ async function strokeSelectionWithColorCalculation(strokeParams: any, state: any
 }
 
 // 获取选区边界信息
-async function getSelectionBounds() {
+async function getSelectionData() {
     try {
         const result = await batchPlay([
             {

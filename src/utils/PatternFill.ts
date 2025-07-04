@@ -593,7 +593,6 @@ async function getPixelValue(action: any, x: number, y: number): Promise<number>
     // 分析直方图找出数量为1的色阶值
     const histogram = result[0].histogram;
     const pixelValue = histogram.findIndex(count => count === 1);
-    console.log(`坐标(${x}, ${y})的直方图：`, histogram);
     console.log(`坐标(${x}, ${y})的像素值：`, pixelValue);
 
     return pixelValue;
@@ -896,7 +895,7 @@ export class PatternFill {
             console.log('🎨 开始快速蒙版图案填充。');
             
             // 获取当前选区边界信息
-            const selectionBounds = await this.getSelectionBounds();
+            const selectionBounds = await this.getSelectionData();
             if (!selectionBounds) {
                 console.warn('❌ 没有选区，无法执行快速蒙版图案填充操作');
                 return;
@@ -924,7 +923,7 @@ export class PatternFill {
             );
             
             // 将计算后的灰度数据写回快速蒙版通道
-            await this.updateQuickMaskChannel(finalGrayData, selectionBounds, isEmpty);
+            await this.updateQuickMaskChannel(finalGrayData, selectionBounds);
             
         } catch (error) {
             console.error("❌ 快速蒙版图案填充失败:", error);
@@ -932,8 +931,8 @@ export class PatternFill {
         }
     }
 
-    // 获取选区边界信息与文档信息（参考ClearHandler的实现）
-    private static async getSelectionBounds() {
+    // 获取选区边界信息与文档信息
+    private static async getSelectionData() {
         try {
             // batchplay获取文档信息和选区信息
             const [docResult, selectionResult] = await Promise.all([
@@ -966,180 +965,116 @@ export class PatternFill {
                 ], { synchronousExecution: true })
             ]);
             
-            // 步骤1: 将选区转换为路径,容差2
-            const pathResult = await action.batchPlay([
-                {
-                    _obj: "make",
-                    _target: [
-                        {
-                            _ref: "path"
-                        }
-                    ],
-                    from: {
-                        _ref: "selectionClass",
+        // 获取文档尺寸信息（完全参考ClearHandler的处理方式）
+        const docWidth = docResult[0].width._value;
+        const docHeight = docResult[0].height._value;
+        const resolution = docResult[0].resolution._value;
+        
+        // 直接转换为像素单位（与ClearHandler保持一致）
+        const docWidthPixels = Math.round(docWidth * resolution / 72);
+        const docHeightPixels = Math.round(docHeight * resolution / 72);    
+        // 获取选区边界
+        const bounds = selectionResult[0].selection;
+        const left = Math.round(bounds.left._value);
+        const top = Math.round(bounds.top._value);
+        const right = Math.round(bounds.right._value);
+        const bottom = Math.round(bounds.bottom._value);
+        const width = right - left;
+        const height = bottom - top;
+        
+        // 使用imaging.getSelection获取羽化选区的像素数据
+        const pixels = await imaging.getSelection({
+            documentID: app.activeDocument.id,
+            sourceBounds: {
+                left: left,
+                top: top,
+                right: right,
+                bottom: bottom
+            },
+            targetSize: {
+                width: width,
+                height: height
+            },
+        });
+        
+        const selectionData = await pixels.imageData.getData();
+        console.log('✅ 成功获取选区边界内的像素数据，数据类型:', selectionData.constructor.name, '长度:', selectionData.length);
+        
+        // 计算选区内的像素值和选择系数，并记录选区内像素在文档中的索引
+        const selectionValues = new Uint8Array(width * height);
+        const selectionCoefficients = new Float32Array(width * height);
+        // 创建一个新的Set来存储选区内像素（值大于0）在文档中的索引
+        const selectionDocIndices = new Set<number>();
+        
+        // 处理选区数据
+        if (selectionData.length === width * height) {
+            // 单通道数据
+            for (let i = 0; i < width * height; i++) {
+                selectionValues[i] = selectionData[i];
+                selectionCoefficients[i] = selectionData[i] / 255; // 计算选择系数
+                
+                // 只有当像素值大于0时，才认为它在选区内
+                if (selectionData[i] > 0) {
+                    // 计算该像素在选区边界内的坐标
+                    const x = i % width;
+                    const y = Math.floor(i / width);
+                    
+                    // 计算该像素在整个文档中的索引
+                    // 对坐标取整以处理羽化边界的小数问题
+                    const docX = Math.round(left + x);
+                    const docY = Math.round(top + y);
+                    const docIndex = docY * docWidthPixels + docX;
+                    
+                    // 将文档索引添加到集合中
+                    selectionDocIndices.add(docIndex);
+                }
+            }
+        }
+        console.log('✅ 选区内像素数量（selectionDocIndices.size）:', selectionDocIndices.size);
+        
+        // 释放ImageData内存
+        pixels.imageData.dispose();
+        
+        // 取消选区
+        await action.batchPlay([
+            {
+                _obj: "set",
+                _target: [
+                    {
+                        _ref: "channel",
                         _property: "selection"
-                    },
-                    tolerance: {
-                        _unit: "pixelsUnit",
-                        _value: 2
-                    },
-                    _options: {
-                        dialogOptions: "dontDisplay"
                     }
-                }
-            ], { synchronousExecution: true });
-            
-            // 步骤2: 获取路径的边缘点坐标信息
-            const pathPointsResult = await action.batchPlay([
-                {
-                    _obj: "get",
-                    _target: [
-                        {
-                            _ref: "path",
-                            _name: "工作路径"
-                        }
-                    ]
-                }
-            ], { synchronousExecution: true });
-            
-            // 提取路径的anchor点坐标
-            let pathPoints = [];
-            if (pathPointsResult[0] && pathPointsResult[0].pathContents && pathPointsResult[0].pathContents.pathComponents) {
-                const pathComponents = pathPointsResult[0].pathContents.pathComponents;
-                for (const component of pathComponents) {
-                    if (component.subpathListKey) {
-                        for (const subpath of component.subpathListKey) {
-                            if (subpath.points) {
-                                for (const point of subpath.points) {
-                                    if (point.anchor && point.anchor.horizontal && point.anchor.vertical) {
-                                        pathPoints.push({
-                                            x: point.anchor.horizontal._value,
-                                            y: point.anchor.vertical._value
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
+                ],
+                to: {
+                    _enum: "ordinal",
+                    _value: "none"
+                },
+                _options: {
+                    dialogOptions: "dontDisplay"
                 }
             }
-            
-            
-            // 步骤3: 删除工作路径
-            await action.batchPlay([
-                {
-                    _obj: "delete",
-                    _target: [
-                        {
-                            _ref: "path",
-                            _property: "workPath"
-                        }
-                    ],
-                    _options: {
-                        dialogOptions: "dontDisplay"
-                    }
-                }
-            ], { synchronousExecution: true });
-            
-           // 获取文档尺寸信息（完全参考ClearHandler的处理方式）
-            const docWidth = docResult[0].width._value;
-            const docHeight = docResult[0].height._value;
-            const resolution = docResult[0].resolution._value;
-            
-            // 直接转换为像素单位（与ClearHandler保持一致）
-            const docWidthPixels = Math.round(docWidth * resolution / 72);
-            const docHeightPixels = Math.round(docHeight * resolution / 72);    
-            // 获取选区边界
-            const bounds = selectionResult[0].selection;
-            const left = Math.round(bounds.left._value);
-            const top = Math.round(bounds.top._value);
-            const right = Math.round(bounds.right._value);
-            const bottom = Math.round(bounds.bottom._value);
-            const width = right - left;
-            const height = bottom - top;
-            
-            // 使用射线法计算选区内的像素（传入正确的像素单位）
-            const selectionPixels = await this.getPixelsInPolygon(pathPoints, left, top, right, bottom, docWidthPixels, docHeightPixels);
-            
-            return {
-                left,
-                top,
-                right,
-                bottom,
-                width,
-                height,
-                docWidth: docWidthPixels,  // 返回像素单位的文档宽度
-                docHeight: docHeightPixels, // 返回像素单位的文档高度
-                selectionPixels
-            };
-            
-        } catch (error) {
-            console.error('获取选区边界失败:', error);
-            return null;
-        }
+        ], { synchronousExecution: true });
+        
+        return {
+            left,
+            top,
+            right,
+            bottom,
+            width,
+            height,
+            docWidth: docWidthPixels,  // 返回像素单位的文档宽度
+            docHeight: docHeightPixels, // 返回像素单位的文档高度
+            selectionPixels: selectionDocIndices, // 现在直接使用selectionDocIndices
+            selectionDocIndices,       // 通过imaging.getSelection获取的选区内像素在文档中的索引
+            selectionValues,           // 选区像素值（0-255）
+            selectionCoefficients      // 选择系数（0-1）
+        };
+        
+    } catch (error) {
+        console.error('获取选区边界失败:', error);
+        return null;
     }
-
-
-    // 收集在多边形选区内的像素（优化版本，避免栈溢出）
-    private static async getPixelsInPolygon(polygonPoints: Array<{x: number, y: number}>, left: number, top: number, right: number, bottom: number, docWidth: number, docHeight: number): Promise<Set<number>> {
-        const selectionPixels = new Set<number>();
-        
-        const startY = Math.floor(top);
-        const endY = Math.ceil(bottom);
-        const startX = Math.floor(left);
-        const endX = Math.ceil(right);
-        // 分批处理，避免一次性处理过多像素导致栈溢出
-        const BATCH_SIZE = 1000; // 每批处理1000行
-        
-        for (let batchStartY = startY; batchStartY <= endY; batchStartY += BATCH_SIZE) {
-            const batchEndY = Math.min(batchStartY + BATCH_SIZE - 1, endY);
-            
-            // 使用setTimeout让出控制权，避免阻塞主线程
-            await new Promise(resolve => {
-                setTimeout(() => {
-                    this.processBatchPixels(polygonPoints, startX, endX, batchStartY, batchEndY, docWidth, docHeight, selectionPixels);
-                    resolve(void 0);
-                }, 0);
-            });
-        }
-        
-        console.log('🎯 选区内像素数量:', selectionPixels.size);
-        return selectionPixels;
-    }
-    
-    // 分批处理像素，避免栈溢出
-    private static processBatchPixels(polygonPoints: Array<{x: number, y: number}>, startX: number, endX: number, startY: number, endY: number, docWidth: number, docHeight: number, selectionPixels: Set<number>) {
-        for (let y = startY; y <= endY; y++) {
-            for (let x = startX; x <= endX; x++) {
-                if (this.isPointInPolygon(x, y, polygonPoints)) {
-                    // 计算像素在整个文档数组中的位置
-                    const pixelIndex =( docWidth *  y ) + x;
-                    selectionPixels.add(pixelIndex);
-                }
-            }
-        }
-    }
-
-    // 射线法判断像素是否在多边形内
-    private static isPointInPolygon(x: number, y: number, polygonPoints: Array<{x: number, y: number}>): boolean {
-        let intersectionCount = 0;
-        const n = polygonPoints.length;
-        
-        for (let i = 0; i < n; i++) {
-            const p1 = polygonPoints[i];
-            const p2 = polygonPoints[(i + 1) % n];
-            
-            // 检查射线是否与边相交
-            if (((p1.y > y) !== (p2.y > y)) && 
-                (x < (p2.x - p1.x) * (y - p1.y) / (p2.y - p1.y) + p1.x)) {
-                intersectionCount++;
-            }
-        }
-        
-        // 奇数个交点表示在多边形内
-        return intersectionCount % 2 === 1;
-    }
-
+}
 
     //-------------------------------------------------------------------------------------------------
     // 获取快速蒙版通道的像素数据
@@ -1179,8 +1114,29 @@ export class PatternFill {
             originalTopLeft = await getPixelValue(action, 0, 0);
             originalBottomRight = await getPixelValue(action, Math.round(bounds.docWidth) - 1, Math.round(bounds.docHeight) - 1);
 
+            // 取消选区
+            await action.batchPlay([
+                {
+                    _obj: "set",
+                    _target: [
+                        {
+                            _ref: "channel",
+                            _property: "selection"
+                        }
+                    ],
+                    to: {
+                        _enum: "ordinal",
+                        _value: "none"
+                    },
+                    _options: {
+                        dialogOptions: "dontDisplay"
+                    }
+                }
+            ], { synchronousExecution: true });
+
             if (maskStatus.isEmpty) {
-                console.log('⚠️ 检测到快速蒙版为空，通过填充快速蒙版改造以便后续正常填充');
+                console.log('快速蒙版为空，填充快速蒙版');
+
                 
                 // 第一步：设置前景色为指定颜色（根据selectedAreas类型）
                 await action.batchPlay([
@@ -1290,8 +1246,68 @@ export class PatternFill {
                         } else if (!topLeftIsEmpty && bottomRightIsEmpty) {
                             // 只有右下角为空，选择右下角像素
                             console.log('只有右下角为空，选择右下角像素');
+                             await action.batchPlay([
+                                {
+                                    _obj: "set",
+                                    _target: [
+                                        {
+                                            _ref: "channel",
+                                            _property: "selection"
+                                        }
+                                    ],
+                                    to: {
+                                        _obj: "rectangle",
+                                        top: {
+                                            _unit: "pixelsUnit",
+                                            _value: Math.round(bounds.docHeight) - 1
+                                        },
+                                        left: {
+                                            _unit: "pixelsUnit",
+                                            _value: Math.round(bounds.docWidth) - 1
+                                        },
+                                        bottom: {
+                                            _unit: "pixelsUnit",
+                                            _value: Math.round(bounds.docHeight)
+                                        },
+                                        right: {
+                                            _unit: "pixelsUnit",
+                                            _value: Math.round(bounds.docWidth)
+                                        }
+                                    }
+                                }
+                            ], { synchronousExecution: true });
                         } else if (topLeftIsEmpty && bottomRightIsEmpty) {
                             console.log('两个角都为空，选择两个角的像素');
+                             await action.batchPlay([
+                                {
+                                    _obj: "set",
+                                    _target: [
+                                        {
+                                            _ref: "channel",
+                                            _property: "selection"
+                                        }
+                                    ],
+                                    to: {
+                                        _obj: "rectangle",
+                                        top: {
+                                            _unit: "pixelsUnit",
+                                            _value: Math.round(bounds.docHeight) - 1
+                                        },
+                                        left: {
+                                            _unit: "pixelsUnit",
+                                            _value: Math.round(bounds.docWidth) - 1
+                                        },
+                                        bottom: {
+                                            _unit: "pixelsUnit",
+                                            _value: Math.round(bounds.docHeight)
+                                        },
+                                        right: {
+                                            _unit: "pixelsUnit",
+                                            _value: Math.round(bounds.docWidth)
+                                        }
+                                    }
+                                }
+                            ], { synchronousExecution: true });
                             await action.batchPlay([
                                 {
                                     _obj: "addTo",
@@ -1411,7 +1427,6 @@ export class PatternFill {
 
             // 如果快速蒙版为空，直接返回空的maskValue数组
             if (maskStatus.isEmpty) {
-                console.log('⚠️ 检测到快速蒙版为空，跳过复杂的像素映射逻辑');
                 const expectedPixelCount = finalDocWidth * finalDocHeight;
                 const maskValue = new Uint8Array(expectedPixelCount);
                 
@@ -1452,7 +1467,7 @@ export class PatternFill {
                 maskValue[sourceIndex] = quickMaskPixels[sourceIndex];
             }
             
-            console.log('🎯 成功映射非零像素数量:', nonZeroIndices.length);
+            console.log('快速蒙版图案非零像素数量:', nonZeroIndices.length);
             
             
             // 释放ImageData内存
@@ -1631,50 +1646,52 @@ export class PatternFill {
                 );
             }
             
-            if (bounds.selectionPixels && bounds.selectionPixels.size > 0) {
-                console.log('🎯 从选区的矩形边界中提取选区内像素');
-                const selectionGrayData = new Uint8Array(bounds.selectionPixels.size);
-                const selectionPixelsArray = Array.from(bounds.selectionPixels);
-                let fillIndex = 0;
+          if (bounds.selectionDocIndices && bounds.selectionDocIndices.size > 0) {
+                // 使用selectionDocIndices（选区内像素在文档中的索引）
+                // 创建与选区边界大小相同的数组
+                const selectionGrayData = new Uint8Array(bounds.width * bounds.height);
+                selectionGrayData.fill(0); 
                 
-                // 遍历selectionPixels集合，从完整图案数据中提取对应像素
-                for (const docIndex of selectionPixelsArray) {
-                    // 将文档索引转换为选区边界内的相对索引
-                    const docX = docIndex % bounds.docWidth;
-                    const docY = Math.floor(docIndex / bounds.docWidth);
-                    
-                    // 计算在选区边界内的相对位置
-                    const relativeX = docX - bounds.left;
-                    const relativeY = docY - bounds.top;
-                    
-                    // 检查是否在选区边界内
-                    if (relativeX >= 0 && relativeX < bounds.width && 
-                        relativeY >= 0 && relativeY < bounds.height) {
-                        const boundsIndex = relativeY * bounds.width + relativeX;
-                        if (boundsIndex < grayPatternData.length) {
-                            selectionGrayData[fillIndex] = grayPatternData[boundsIndex];
-                        } else {
-                            selectionGrayData[fillIndex] = 128; // 默认中灰值
+                // 遍历选区边界内的所有像素
+                for (let y = 0; y < bounds.height; y++) {
+                    for (let x = 0; x < bounds.width; x++) {
+                        const boundsIndex = y * bounds.width + x;
+                        // 对坐标取整以处理羽化边界的小数问题
+                        const docX = Math.round(bounds.left + x);
+                        const docY = Math.round(bounds.top + y);
+                        const docIndex = docY * bounds.docWidth + docX;
+                        
+                        // 检查该像素是否在选区内
+                        if (bounds.selectionDocIndices.has(docIndex)) {
+                            if (boundsIndex < grayPatternData.length) {
+                                selectionGrayData[boundsIndex] = grayPatternData[boundsIndex];
+                            } else {
+                                selectionGrayData[boundsIndex] = 128; // 默认中灰值
+                            }
                         }
-                    } else {
-                        selectionGrayData[fillIndex] = 128; // 边界外默认中灰值
                     }
-                    fillIndex++;
                 }
                 
-                console.log('🎯 提取完成，选区内像素数:', selectionGrayData.length);
+                console.log('🎯 selectionDocIndices提取完成，【图案】在选区内像素数:', bounds.selectionDocIndices.size);
                 return selectionGrayData;
-            } else {
-                // 没有射线法数据，直接返回完整的选区边界图案数据
-                console.log('🎯 返回完整选区边界图案数据，像素数:', grayPatternData.length);
-                return grayPatternData;
             }
-            
         } catch (error) {
             console.error('获取图案灰度数据失败:', error);
-            const pixelCount = bounds.selectionPixels
+            let pixelCount = 0;
+            
+            // 根据可用的选区信息确定像素数量
+            if (bounds.selectionDocIndices && bounds.selectionDocIndices.size > 0) {
+                pixelCount = bounds.selectionDocIndices.size;
+            } else if (bounds.selectionValues && bounds.selectionValues.length > 0) {
+                pixelCount = bounds.selectionValues.length;
+            } else {
+                // 如果没有选区信息，使用选区边界的面积作为默认值
+                pixelCount = bounds.width * bounds.height;
+            }
+            
             const grayData = new Uint8Array(pixelCount);
-            grayData.fill(128);
+            grayData.fill(128); // 填充中灰色
+            console.log('⚠️ 使用默认灰度数据，像素数:', pixelCount);
             return grayData;
         }
     }
@@ -1699,44 +1716,23 @@ export class PatternFill {
         // 需要从maskData中提取出真正在选区内的像素数据
         const selectedMaskData = new Uint8Array(fillData.length);
         
-        if (bounds.selectionPixels && bounds.selectionPixels.size > 0) {
-            console.log('🎯 从扩充为全文档长度的图案数组中，根据选区索引，精确提取新数组做计算');       
-            // 使用Array.from确保兼容性
-            const selectionPixelsArray = Array.from(bounds.selectionPixels);
-            let fillIndex = 0;
+        if (bounds.selectionDocIndices && bounds.selectionDocIndices.size > 0) {
             
-            // 遍历selectionPixels集合，提取对应的maskData像素
-            for (const docIndex of selectionPixelsArray) {
-                if (fillIndex >= selectedMaskData.length) {
-                    break;
-                }
-                
-                if (docIndex >= 0 && docIndex < maskData.length) {
+            // 使用selectionDocIndices直接获取选区内像素
+            let fillIndex = 0;
+            // 将Set转换为数组以便遍历
+            const selectionIndices = Array.from(bounds.selectionDocIndices);
+            
+            for (const docIndex of selectionIndices) {
+                if (docIndex >= 0 && docIndex < maskData.length && fillIndex < selectedMaskData.length) {
                     selectedMaskData[fillIndex] = maskData[docIndex];
-                } else {
-                    selectedMaskData[fillIndex] = 128; // 默认中灰值
+                    fillIndex++;
                 }
-                fillIndex++;
             }
             
-            console.log(`📊 提取了 ${fillIndex} 个像素`);
-            // 提取的蒙版值
-        } else {
-            // 回退方式：遍历选区边界内的所有像素
-            let fillIndex = 0;
-            for (let y = 0; y < bounds.height; y++) {
-                for (let x = 0; x < bounds.width; x++) {
-                    const targetX = bounds.left + x;
-                    const targetY = bounds.top + y;
-                    const docIndex = targetY * bounds.docWidth + targetX;
-                    
-                    if (docIndex < maskData.length && fillIndex < selectedMaskData.length) {
-                        selectedMaskData[fillIndex] = maskData[docIndex];
-                        fillIndex++;
-                    }
-                }
-            }
+            console.log(`📊 通过selectionDocIndices提取了【快速蒙版】中 ${fillIndex} 个像素`);
         }
+ 
         
         // 创建完整文档尺寸的新蒙版数组
         const newMaskValue = new Uint8Array(maskData.length);
@@ -1791,39 +1787,34 @@ export class PatternFill {
         }
         
         // 将计算结果映射回完整文档的newMaskValue中
-        if (bounds.selectionPixels && bounds.selectionPixels.size > 0) {
-            console.log('🎯 计算完成，将选区内计算结果映射回全文档长度的新蒙版数组');
-            // 使用Array.from确保兼容性
-            const selectionPixelsArray = Array.from(bounds.selectionPixels);
+        if (bounds.selectionDocIndices && bounds.selectionDocIndices.size > 0) {
+            console.log('🎯 使用selectionDocIndices映射选区内的最终计算结果');
+            const selectionIndices = Array.from(bounds.selectionDocIndices);
             let resultIndex = 0;
             let mappedCount = 0;
             
-            // 遍历selectionPixels数组，将结果写入对应位置
-            for (const docIndex of selectionPixelsArray) {
+            for (const docIndex of selectionIndices) {
                 if (docIndex < newMaskValue.length && resultIndex < finalData.length) {
-                    newMaskValue[docIndex] = finalData[resultIndex];
+                    // 计算当前像素在选区边界内的坐标
+                    const docX = docIndex % bounds.docWidth;
+                    const docY = Math.floor(docIndex / bounds.docWidth);
+                    const boundsX = docX - bounds.left;
+                    const boundsY = docY - bounds.top;
+                    const boundsIndex = boundsY * bounds.width + boundsX;
+                    
+                    // 根据选择系数混合原始值和新值
+                    const selectionCoefficient = bounds.selectionCoefficients[boundsIndex];
+                    const originalValue = isEmpty ? 0 : maskData[docIndex];
+                    const newValue = finalData[resultIndex];
+                    
+                    newMaskValue[docIndex] = Math.round(originalValue * (1 - selectionCoefficient) + newValue * selectionCoefficient);
+                    
                     mappedCount++;
                     resultIndex++;
                 }
             }
             
-            // 验证映射结果
-            // 映射验证完成
-        } else {
-            // 回退方式：按选区边界映射计算结果
-            let resultIndex = 0;
-            for (let y = 0; y < bounds.height; y++) {
-                for (let x = 0; x < bounds.width; x++) {
-                    const targetX = bounds.left + x;
-                    const targetY = bounds.top + y;
-                    const docIndex = targetY * bounds.docWidth + targetX;
-                    
-                    if (docIndex < newMaskValue.length && resultIndex < finalData.length) {
-                        newMaskValue[docIndex] = finalData[resultIndex];
-                        resultIndex++;
-                    }
-                }
-            }
+            console.log(`🎯 selectionDocIndices映射完成，映射了 ${mappedCount} 个像素`);
         }
         
         // 如果是不完整蒙版，根据是否在选区内决定是否还原角落像素值

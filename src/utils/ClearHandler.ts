@@ -130,7 +130,7 @@ export class ClearHandler {
             }
             
             // 获取当前选区边界信息
-            const selectionBounds = await this.getSelectionBounds();
+            const selectionBounds = await this.getSelectionData();
             if (!selectionBounds) {
                 console.warn('❌ 没有选区，无法执行快速蒙版清除操作');
                 return;
@@ -170,7 +170,7 @@ export class ClearHandler {
   
     //-------------------------------------------------------------------------------------------------
     // 获取选区边界信息和文档信息
-    static async getSelectionBounds() {
+    static async getSelectionData() {
         try {
             // 获取文档信息和选区信息
             const [docResult, selectionResult] = await Promise.all([
