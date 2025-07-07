@@ -482,6 +482,7 @@ interface PatternPickerProps {
                         selectedPatternData.width = pixelData.imageData.width;
                         selectedPatternData.height = pixelData.imageData.height;
                         selectedPatternData.components = pixelData.imageData.components; // 保存组件数
+                        selectedPatternData.hasAlpha = pixelData.imageData.components === 4; // 标记是否有透明度
                         
                         console.log('获取到像素数据:', {
                             width: pixelData.imageData.width,
@@ -665,15 +666,25 @@ interface PatternPickerProps {
         }
     };
 
-    // 将图案的RGB/RGBA数据转换为灰度数据
+    // 将图案的RGB/RGBA数据转换为灰度数据，支持透明度
     const convertToGrayData = (pixelData: Uint8Array, width: number, height: number, components: number): Uint8Array => {
         const grayData = new Uint8Array(width * height);
         for (let i = 0; i < width * height; i++) {
             const r = pixelData[i * components];
             const g = pixelData[i * components + 1];
             const b = pixelData[i * components + 2];
+            
             // 使用标准的RGB到灰度转换公式
-            const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+            let gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+            
+            // 如果有alpha通道，考虑透明度
+            if (components === 4) {
+                const alpha = pixelData[i * components + 3] / 255;
+                // 透明部分映射为黑色(0)，不透明部分保持原灰度值
+                // 这样在快速蒙版中，透明区域不会被选中，不透明区域会被选中
+                gray = Math.round(gray * alpha);
+            }
+            
             grayData[i] = gray;
         }
         return grayData;

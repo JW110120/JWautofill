@@ -19,6 +19,8 @@ export interface Pattern {
     // RGB/RGBA数据相关属性
     patternRgbData?: Uint8Array;     // 原始RGB/RGBA像素数据
     patternComponents?: number;      // 组件数（3=RGB, 4=RGBA）
+    components?: number;             // 组件数（兼容性字段）
+    hasAlpha?: boolean;              // 是否包含透明度信息
     // 灰度数据相关属性
     grayData?: Uint8Array;           // 当前变换后的灰度数据
     originalGrayData?: Uint8Array;   // 原始灰度数据（用于重新计算变换）
