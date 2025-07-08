@@ -627,6 +627,7 @@ interface PatternPickerProps {
                                 patternRgbData: rgbData,
                                 patternComponents: components,
                                 components: components, // 同时设置components字段以确保兼容性
+                                hasAlpha: components === 4, // 正确设置透明度标记
                                 grayData: patternGrayData,
                                 originalGrayData: selectedPatternData.originalGrayData,
                                 width: patternWidth,
@@ -674,16 +675,9 @@ interface PatternPickerProps {
             const g = pixelData[i * components + 1];
             const b = pixelData[i * components + 2];
             
-            // 使用标准的RGB到灰度转换公式
-            let gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
-            
-            // 如果有alpha通道，考虑透明度
-            if (components === 4) {
-                const alpha = pixelData[i * components + 3] / 255;
-                // 透明部分映射为黑色(0)，不透明部分保持原灰度值
-                // 这样在快速蒙版中，透明区域不会被选中，不透明区域会被选中
-                gray = Math.round(gray * alpha);
-            }
+            // 使用标准的RGB到灰度转换公式，不在此处处理透明度
+            // 透明度信息将在PatternFill的最终混合阶段处理
+            const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
             
             grayData[i] = gray;
         }

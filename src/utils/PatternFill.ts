@@ -22,8 +22,9 @@ async function createStampPatternData(
     scaledPatternHeight: number,
     angle: number,
     bounds: any,
-    isGrayMode: boolean = false
-): Promise<Uint8Array> {
+    isGrayMode: boolean = false,
+    generateAlphaData: boolean = false
+): Promise<{ colorData: Uint8Array; alphaData?: Uint8Array }> {
     let resultData: Uint8Array;
     
     // 非快速蒙版模式下，获取图案的原始像素数据        
@@ -172,22 +173,9 @@ async function createStampPatternData(
         if (isGrayMode) {
             // 灰度模式：正常模式100%不透明度覆盖
             resultData[targetIndex] = patternData[sourceIndex];
-        } else if (components === 4) {
-            // RGBA格式：根据alpha通道进行透明度混合
-            const patternAlpha = patternData[sourceIndex + 3] / 255;
-            if (patternAlpha > 0) { // 只有当图案像素不完全透明时才绘制
-                const backgroundAlpha = resultData[targetIndex + 3] / 255;
-                const outAlpha = patternAlpha + backgroundAlpha * (1 - patternAlpha);
-                
-                if (outAlpha > 0) {
-                    resultData[targetIndex] = Math.round((patternData[sourceIndex] * patternAlpha + resultData[targetIndex] * backgroundAlpha * (1 - patternAlpha)) / outAlpha);
-                    resultData[targetIndex + 1] = Math.round((patternData[sourceIndex + 1] * patternAlpha + resultData[targetIndex + 1] * backgroundAlpha * (1 - patternAlpha)) / outAlpha);
-                    resultData[targetIndex + 2] = Math.round((patternData[sourceIndex + 2] * patternAlpha + resultData[targetIndex + 2] * backgroundAlpha * (1 - patternAlpha)) / outAlpha);
-                    resultData[targetIndex + 3] = Math.round(outAlpha * 255);
-                }
-            }
         } else {
-            // RGB格式：直接复制
+            // 直接复制图案像素数据，保持原始透明度信息
+            // 这样可以确保PNG图案的透明度信息得到完整保留
             for (let c = 0; c < components; c++) {
                 resultData[targetIndex + c] = patternData[sourceIndex + c];
             }
@@ -241,10 +229,22 @@ async function createStampPatternData(
         }
     }
     
-    return resultData;
+    // 如果需要生成透明度数据，创建对应的alpha数组
+    let alphaData: Uint8Array | undefined;
+    if (generateAlphaData && components === 4) {
+        alphaData = new Uint8Array(targetWidth * targetHeight);
+        
+        // 提取alpha通道数据
+        for (let i = 0; i < targetWidth * targetHeight; i++) {
+            const sourceIndex = i * components;
+            alphaData[i] = resultData[sourceIndex + 3] || 0;
+        }
+    }
+    
+    return { colorData: resultData, alphaData };
 }
 
-// 贴墙纸模式：无缝平铺，解决旋转边界问题
+// 贴墙纸模式：无缝平铺，解决旋转边界问题，同时生成透明度数据
 function createTilePatternData(
     patternData: Uint8Array,
     patternWidth: number,
@@ -256,8 +256,9 @@ function createTilePatternData(
     scaledPatternHeight: number,
     angle: number,
     rotateAll: boolean = true,
-    bounds?: any  // 添加bounds参数以支持全局坐标平铺
-): Uint8Array {
+    bounds?: any,  // 添加bounds参数以支持全局坐标平铺
+    generateAlphaData: boolean = false  // 是否生成透明度数据
+): { colorData: Uint8Array; alphaData?: Uint8Array } {
     
     // 创建最终结果数据
     const resultData = new Uint8Array(targetWidth * targetHeight * components);
@@ -290,7 +291,20 @@ function createTilePatternData(
                 }
             }
         }
-        return resultData;
+        
+        // 如果需要生成透明度数据，创建对应的alpha数组
+        let alphaData: Uint8Array | undefined;
+        if (generateAlphaData && components === 4) {
+            alphaData = new Uint8Array(targetWidth * targetHeight);
+            
+            // 提取alpha通道数据
+            for (let i = 0; i < targetWidth * targetHeight; i++) {
+                const sourceIndex = i * components;
+                alphaData[i] = resultData[sourceIndex + 3] || 0;
+            }
+        }
+        
+        return { colorData: resultData, alphaData };
     }
     
     if (rotateAll) {
@@ -530,7 +544,19 @@ function createTilePatternData(
         }
     }
     
-    return resultData;
+    // 如果需要生成透明度数据，创建对应的alpha数组
+    let alphaData: Uint8Array | undefined;
+    if (generateAlphaData && components === 4) {
+        alphaData = new Uint8Array(targetWidth * targetHeight);
+        
+        // 提取alpha通道数据
+        for (let i = 0; i < targetWidth * targetHeight; i++) {
+            const sourceIndex = i * components;
+            alphaData[i] = resultData[sourceIndex + 3] || 0;
+        }
+    }
+    
+    return { colorData: resultData, alphaData };
 }
 
 
@@ -724,7 +750,7 @@ export class PatternFill {
             if (fillMode === 'stamp') {
                 // 盖图章模式：图案居中显示，不重复
                 console.log('🎯 使用盖图章模式填充');
-                patternData = await createStampPatternData(
+                const stampResult = await createStampPatternData(
                     options.pattern.patternRgbData,
                     patternWidth,
                     patternHeight,
@@ -736,10 +762,11 @@ export class PatternFill {
                     angle,
                     bounds
                 );
+                patternData = stampResult.colorData;
             } else {
                 // 贴墙纸模式：无缝平铺
                 console.log('🧱 使用贴墙纸模式填充');
-                patternData = createTilePatternData(
+                const tileResult = createTilePatternData(
                     options.pattern.patternRgbData,
                     patternWidth,
                     patternHeight,
@@ -751,6 +778,7 @@ export class PatternFill {
                     angle,
                     options.pattern.rotateAll !== false
                 );
+                patternData = tileResult.colorData;
             }
             
             // 创建ImageData对象，准备填充
@@ -919,7 +947,8 @@ export class PatternFill {
                 topLeftIsEmpty,
                 bottomRightIsEmpty,
                 originalTopLeft,  // 传递原始左上角像素值
-                originalBottomRight  // 传递原始右下角像素值
+                originalBottomRight,  // 传递原始右下角像素值
+                options.pattern  // 传递图案信息用于透明度处理
             );
             
             // 将计算后的灰度数据写回快速蒙版通道
@@ -1632,7 +1661,7 @@ export class PatternFill {
             if (fillMode === 'stamp') {
                 // 盖图章模式：图案居中显示，不重复
                 console.log('🎯 快速蒙版：使用盖图章模式填充');
-                grayPatternData = await createStampPatternData(
+                const grayStampResult = await createStampPatternData(
                     options.pattern.grayData,
                     patternWidth,
                     patternHeight,
@@ -1643,12 +1672,14 @@ export class PatternFill {
                     scaledPatternHeight,
                     options.pattern.currentAngle || options.pattern.angle || 0,
                     bounds,
-                    true // 灰度模式
+                    true, // 灰度模式
+                    false // 不需要生成透明度数据（灰度模式）
                 );
+                grayPatternData = grayStampResult.colorData;
             } else {
                 // 贴墙纸模式：无缝平铺
                 console.log('🧱 快速蒙版：使用贴墙纸模式填充，全部旋转:', options.pattern.rotateAll);
-                grayPatternData = createTilePatternData(
+                const grayTileResult = createTilePatternData(
                     options.pattern.grayData,
                     patternWidth,
                     patternHeight,
@@ -1658,8 +1689,11 @@ export class PatternFill {
                     scaledPatternWidth,
                     scaledPatternHeight,
                     options.pattern.currentAngle || options.pattern.angle || 0,
-                    options.pattern.rotateAll !== false
+                    options.pattern.rotateAll !== false,
+                    bounds,
+                    false // 不需要生成透明度数据（灰度模式）
                 );
+                grayPatternData = grayTileResult.colorData;
             }
             
               if (bounds.selectionDocIndices && bounds.selectionDocIndices.size > 0) {
@@ -1718,7 +1752,7 @@ export class PatternFill {
         }
     }
 
-    // 应用混合模式计算最终灰度值（支持混合模式）
+    // 应用混合模式计算最终灰度值（支持混合模式和透明度）
     private static async calculateFinalGrayValues(
         maskData: Uint8Array, 
         fillData: Uint8Array, 
@@ -1730,7 +1764,8 @@ export class PatternFill {
         topLeftIsEmpty: boolean = false,
         bottomRightIsEmpty: boolean = false,
         originalTopLeft: number = 0,
-        originalBottomRight: number = 0
+        originalBottomRight: number = 0,
+        pattern?: Pattern
     ): Promise<Uint8Array> {
         console.log('📊 参数状态 - topLeftIsEmpty:', topLeftIsEmpty, '    bottomRightIsEmpty:', bottomRightIsEmpty, '    originalTopLeft:', originalTopLeft, '    originalBottomRight:', originalBottomRight);
         
@@ -1769,6 +1804,108 @@ export class PatternFill {
         
         // 计算选区内的混合结果
         const finalData = new Uint8Array(fillData.length);
+        
+        // 预先计算选区索引数组，避免在循环中重复转换
+        const selectionIndices = bounds.selectionDocIndices ? Array.from(bounds.selectionDocIndices) : null;
+        
+        // 检查是否有透明度信息需要处理
+        const hasAlpha = pattern && pattern.hasAlpha && pattern.patternRgbData && pattern.patternComponents === 4;
+        
+        // 如果有透明度信息，生成对应的透明度数据
+        let alphaData: Uint8Array | undefined;
+        if (hasAlpha) {
+            const patternWidth = pattern.width || pattern.originalWidth || 100;
+            const patternHeight = pattern.height || pattern.originalHeight || 100;
+            const scale = pattern.currentScale || pattern.scale || 100;
+            const scaledPatternWidth = Math.round(patternWidth * scale / 100);
+            const scaledPatternHeight = Math.round(patternHeight * scale / 100);
+            const angle = pattern.currentAngle || pattern.angle || 0;
+            
+            if (pattern.fillMode === 'stamp') {
+                // 盖图章模式：使用createStampPatternData生成透明度数据
+                const stampAlphaResult = await createStampPatternData(
+                    pattern.patternRgbData,
+                    patternWidth,
+                    patternHeight,
+                    4, // RGBA数据
+                    bounds.width,
+                    bounds.height,
+                    scaledPatternWidth,
+                    scaledPatternHeight,
+                    angle,
+                    bounds,
+                    false, // 非灰度模式
+                    true // 生成透明度数据
+                );
+                
+                if (stampAlphaResult.alphaData && bounds.selectionDocIndices) {
+                    // 提取选区内的透明度数据
+                    alphaData = new Uint8Array(bounds.selectionDocIndices.size);
+                    const selectionIndices = Array.from(bounds.selectionDocIndices);
+                    
+                    for (let i = 0; i < selectionIndices.length; i++) {
+                        const docIndex = selectionIndices[i];
+                        const docX = docIndex % bounds.docWidth;
+                        const docY = Math.floor(docIndex / bounds.docWidth);
+                        const boundsX = docX - bounds.left;
+                        const boundsY = docY - bounds.top;
+                        
+                        if (boundsX >= 0 && boundsX < bounds.width && boundsY >= 0 && boundsY < bounds.height) {
+                            const boundsIndex = boundsY * bounds.width + boundsX;
+                            if (boundsIndex < stampAlphaResult.alphaData.length) {
+                                alphaData[i] = stampAlphaResult.alphaData[boundsIndex];
+                            } else {
+                                alphaData[i] = 255; // 默认不透明
+                            }
+                        } else {
+                            alphaData[i] = 255; // 默认不透明
+                        }
+                    }
+                }
+            } else {
+                // 贴墙纸模式：使用createTilePatternData生成透明度数据
+                const alphaResult = createTilePatternData(
+                    pattern.patternRgbData,
+                    patternWidth,
+                    patternHeight,
+                    4, // RGBA数据
+                    bounds.width,
+                    bounds.height,
+                    scaledPatternWidth,
+                    scaledPatternHeight,
+                    angle,
+                    pattern.rotateAll !== false,
+                    bounds,
+                    true // 生成透明度数据
+                );
+                
+                // 提取选区内的透明度数据
+                if (alphaResult.alphaData && bounds.selectionDocIndices) {
+                    const selectionIndices = Array.from(bounds.selectionDocIndices);
+                    alphaData = new Uint8Array(selectionIndices.length);
+                    
+                    for (let i = 0; i < selectionIndices.length; i++) {
+                        const docIndex = selectionIndices[i];
+                        const docX = docIndex % bounds.docWidth;
+                        const docY = Math.floor(docIndex / bounds.docWidth);
+                        const boundsX = docX - bounds.left;
+                        const boundsY = docY - bounds.top;
+                        
+                        if (boundsX >= 0 && boundsX < bounds.width && boundsY >= 0 && boundsY < bounds.height) {
+                            const boundsIndex = boundsY * bounds.width + boundsX;
+                            if (boundsIndex < alphaResult.alphaData.length) {
+                                alphaData[i] = alphaResult.alphaData[boundsIndex];
+                            } else {
+                                alphaData[i] = 255; // 默认不透明
+                            }
+                        } else {
+                            alphaData[i] = 255; // 默认不透明
+                        }
+                    }
+                }
+            }
+        }
+        
         // 分批处理，避免一次性处理过多数据导致栈溢出
         const BATCH_SIZE = 10000; // 每批处理1万个像素
         
@@ -1780,9 +1917,16 @@ export class PatternFill {
                     // 使用混合模式计算，selectedMaskValue作为底色，fillValue作为混合色
                     for (let i = batchStart; i < batchEnd; i++) {
                         const selectedMaskValue = selectedMaskData[i];  // 选区内快速蒙版像素值 (0-255) - 底色
-                        const fillValue = fillData[i]; // 图案像素值 (0-255) - 混合色
+                        let fillValue = fillData[i]; // 图案像素值 (0-255) - 混合色
+                        let effectiveOpacity = opacity; // 有效不透明度
                         
-                        if (fillValue === 0) {
+                        // 处理透明度信息（使用预生成的透明度数据）
+                        if (hasAlpha && alphaData && i < alphaData.length) {
+                            const alpha = alphaData[i];
+                            effectiveOpacity = Math.round(opacity * alpha / 255);
+                        }
+                        
+                        if (fillValue === 0 || effectiveOpacity === 0) {
                             if (isEmpty) {
                                 // 空白快速蒙版：选区内图案外的部分设为0，不参与混合
                                 finalData[i] = 0;
@@ -1793,12 +1937,12 @@ export class PatternFill {
                         } else {
                             if (isEmpty) {
                                 // 空白快速蒙版特殊处理：只在图案内部进行与纯白背景的混合
-                                const adjustedFillValue = Math.round(fillValue * opacity / 100);
+                                const adjustedFillValue = Math.round(fillValue * effectiveOpacity / 100);
                                 const blendedValue = applyBlendMode(255, adjustedFillValue, 'normal', 100); // 与纯白背景混合
                                 finalData[i] = Math.min(255, Math.max(0, Math.round(blendedValue)));
                             } else {
-                                // 正常情况：应用用户指定的混合模式计算
-                                const blendedValue = applyBlendMode(selectedMaskValue, fillValue, blendMode, opacity);
+                                // 正常情况：应用用户指定的混合模式计算，使用有效不透明度
+                                const blendedValue = applyBlendMode(selectedMaskValue, fillValue, blendMode, effectiveOpacity);
                                 finalData[i] = Math.min(255, Math.max(0, Math.round(blendedValue)));
                             }
                         }
