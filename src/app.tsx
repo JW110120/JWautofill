@@ -1041,6 +1041,7 @@ class App extends React.Component<AppProps, AppState> {
               position={this.state.strokePosition}
               blendMode={this.state.strokeBlendMode}
               opacity={this.state.strokeOpacity}
+              clearMode={this.state.clearMode}
               onWidthChange={(width) => this.setState({ strokeWidth: width })}
               onPositionChange={(position) => this.setState({ strokePosition: position })}
               onBlendModeChange={(blendMode) => this.setState({ strokeBlendMode: blendMode })}

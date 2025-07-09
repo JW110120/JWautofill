@@ -65,7 +65,7 @@
 
 /*位置*/
 .stroke-subtitle {
-  margin-top: 10px;
+  margin-top: 15px;
 }
 .stroke-subtitle h3{
   margin: 5px;
@@ -80,7 +80,7 @@
   align-items: center;
   flex-direction: column;
   width: 100%;
-  padding: 10px 10px 30px 10px;
+  padding: 10px 10px 20px 10px;
   border-bottom: 1px solid var(--border-color);
   margin-bottom: 20px;
 }
@@ -150,7 +150,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 10px 30px 10px;
+  padding: 15px 10px 30px 10px;
   margin-bottom: 10px;
   border-bottom: 1px solid var(--border-color);
 }

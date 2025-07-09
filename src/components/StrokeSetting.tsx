@@ -8,6 +8,7 @@ interface StrokeSettingProps {
   position: 'inside' | 'center' | 'outside';
   blendMode: BlendMode;
   opacity: number;
+  clearMode: boolean; // 新增清除模式状态
   onWidthChange: (width: number) => void;
   onPositionChange: (position: 'inside' | 'center' | 'outside') => void;
   onBlendModeChange: (blendMode: BlendMode) => void;
@@ -21,6 +22,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
   position,
   blendMode,
   opacity,
+  clearMode,
   onWidthChange,
   onPositionChange,
   onBlendModeChange,
@@ -142,34 +144,36 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
             </sp-radio-group>
           </div>
         
-        <div className="stroke-blende-mode">
-          <label>混合模式：</label>
-          <sp-picker
-            size="m"
-            selects="single"
-            selected={blendMode}
-            onChange={(e) => onBlendModeChange(e.target.value as BlendMode)}
-          >
-            <sp-menu>
-              {BLEND_MODE_OPTIONS.map((group, groupIndex) => (
-                <React.Fragment key={groupIndex}>
-                  {group.map((option) => (
-                    <sp-menu-item 
-                      key={option.value} 
-                      value={option.value}
-                      selected={option.value === blendMode}
-                    >
-                      {option.label}
-                    </sp-menu-item>
-                  ))}
-                  {groupIndex < BLEND_MODE_OPTIONS.length - 1 && (
-                    <sp-menu-divider />
-                  )}
-                </React.Fragment>
-              ))}
-            </sp-menu>
-          </sp-picker>
-        </div> 
+        {!clearMode && (
+          <div className="stroke-blende-mode">
+            <label>混合模式：</label>
+            <sp-picker
+              size="m"
+              selects="single"
+              selected={blendMode}
+              onChange={(e) => onBlendModeChange(e.target.value as BlendMode)}
+            >
+              <sp-menu>
+                {BLEND_MODE_OPTIONS.map((group, groupIndex) => (
+                  <React.Fragment key={groupIndex}>
+                    {group.map((option) => (
+                      <sp-menu-item 
+                        key={option.value} 
+                        value={option.value}
+                        selected={option.value === blendMode}
+                      >
+                        {option.label}
+                      </sp-menu-item>
+                    ))}
+                    {groupIndex < BLEND_MODE_OPTIONS.length - 1 && (
+                      <sp-menu-divider />
+                    )}
+                  </React.Fragment>
+                ))}
+              </sp-menu>
+            </sp-picker>
+          </div>
+        )} 
         
         <div className="stroke-opacity-control">
           <label 
