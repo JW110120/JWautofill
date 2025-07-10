@@ -207,7 +207,7 @@ sp-picker[disabled] {
 
 .expand-section {
   background-color:var(--bg-color);
-  margin-bottom: -1 px;
+  margin-bottom: -1px;
   z-index: 1;
 }
 
