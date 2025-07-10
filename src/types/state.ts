@@ -112,7 +112,7 @@ export const initialState: AppState = {
     selectionType: 'normal',
     isExpanded: true,
     createNewLayer: false,    // 添加初始值
-    clearMode: false,    // 添加初始值
+    clearMode: true,    // 添加初始值
     isInQuickMask: false,    // 添加快速蒙版初始值
     fillMode: 'foreground',
     colorSettings: {

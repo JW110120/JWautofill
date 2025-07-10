@@ -84,13 +84,11 @@ html, body {
 .main-button:hover {
     background-color: var(--hover-bg);
     transform: scale(1.02);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .main-button:active {
     background-color: var(--button-down);
     transform: scale(0.98);
-    box-shadow: none;
 }
 
 /* 禁用状态下的悬停效果 */
@@ -208,14 +206,8 @@ sp-picker[disabled] {
 
 
 .expand-section {
-  background-color:  var(--bg-color);
-  min-height: 0; 
-  padding: 0;
-  z-index: 1;
-}
-
-.expand-section.expanded{
-  max-height: 400px;
+  background-color:var(--bg-color);
+  margin-bottom: -1 px;
   z-index: 1;
 }
 
@@ -438,7 +430,6 @@ sp-radio {
   background-color: var(--bg-color);
   border-top: 1px solid var(--border-color);
   display: flex;
-  box-sizing: border-box;
   position: fixed;  /* 改为固定定位 */
   bottom: 0;
   left: 0;
