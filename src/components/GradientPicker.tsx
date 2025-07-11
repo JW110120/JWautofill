@@ -98,95 +98,110 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         })));
     };
 
-    // 修正的预览渐变函数
+    // 性能优化：使用useMemo缓存排序后的stops，避免每次渲染都重新排序
+    const sortedColorStops = React.useMemo(() => 
+        [...stops].sort((a, b) => a.colorPosition - b.colorPosition), 
+        [stops]
+    );
+    
+    const sortedOpacityStops = React.useMemo(() => 
+        [...stops].sort((a, b) => a.opacityPosition - b.opacityPosition), 
+        [stops]
+    );
+    
+    // 优化的预览渐变函数 - 减少计算量和内存分配
     const getPreviewGradientStyle = () => {
-        // 创建一个综合的渐变，同时考虑颜色位置和透明度位置
-        const allPositions = new Set<number>();
+        // 直接采样关键位置，避免创建大数组
+        const sampleStep = 5; // 每5%采样一次
+        const gradientStops: string[] = [];
         
-        // 收集所有位置点
-        stops.forEach(stop => {
-            allPositions.add(stop.colorPosition);
-            allPositions.add(stop.opacityPosition);
-        });
-        
-        const sortedPositions = Array.from(allPositions).sort((a, b) => a - b);
-        
-        const gradientStops = sortedPositions.map(position => {
-            // 在当前位置插值颜色
-            const colorAtPosition = interpolateColor(position, 'color');
-            // 在当前位置插值透明度
-            const opacityAtPosition = interpolateOpacity(position);
+        // 直接在采样点计算RGBA值，避免填充整个数组
+        for (let i = 0; i <= 100; i += sampleStep) {
+            const rgb = interpolateColorAtPosition(i, sortedColorStops);
+            const alpha = interpolateOpacityAtPosition(i, sortedOpacityStops);
             
-            const rgbaMatch = colorAtPosition.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-            if (rgbaMatch) {
-                const [_, r, g, b] = rgbaMatch;
-                return `rgba(${r}, ${g}, ${b}, ${opacityAtPosition}) ${position}%`;
-            }
-            return `rgba(0, 0, 0, ${opacityAtPosition}) ${position}%`;
-        });
+            const r = Math.round(rgb.r);
+            const g = Math.round(rgb.g);
+            const b = Math.round(rgb.b);
+            const a = alpha.toFixed(3);
+            
+            gradientStops.push(`rgba(${r}, ${g}, ${b}, ${a}) ${i}%`);
+        }
         
-        // 注意：这里不应用 reverse，只是纯粹的预览
         return `linear-gradient(to right, ${gradientStops.join(', ')})`;
     };
 
-    // 颜色插值函数 - 支持中点
-    const interpolateColor = (position: number, type: 'color' | 'opacity') => {
-        const relevantStops = type === 'color' 
-            ? [...stops].sort((a, b) => a.colorPosition - b.colorPosition)
-            : [...stops].sort((a, b) => a.opacityPosition - b.opacityPosition);
-            
-        const pos = type === 'color' ? 'colorPosition' : 'opacityPosition';
+    // 缓存正则表达式以提升性能
+    const rgbaRegex = /rgba?\((\d+),\s*(\d+),\s*(\d+)/;
+    
+    // 优化的颜色插值函数 - 减少重复计算
+    const interpolateColorAtPosition = (position: number, colorStops: ExtendedGradientStop[]) => {
+        // 找到位置两侧的color-stop
+        let leftStop = colorStops[0];
+        let rightStop = colorStops[colorStops.length - 1];
         
-        // 找到位置两侧的stop
-        let leftStop = relevantStops[0];
-        let rightStop = relevantStops[relevantStops.length - 1];
-        let leftStopIndex = 0;
-        
-        for (let i = 0; i < relevantStops.length - 1; i++) {
-            if (relevantStops[i][pos] <= position && relevantStops[i + 1][pos] >= position) {
-                leftStop = relevantStops[i];
-                rightStop = relevantStops[i + 1];
-                leftStopIndex = i;
+        for (let i = 0; i < colorStops.length - 1; i++) {
+            if (colorStops[i].colorPosition <= position && colorStops[i + 1].colorPosition >= position) {
+                leftStop = colorStops[i];
+                rightStop = colorStops[i + 1];
                 break;
             }
         }
         
-        if (leftStop[pos] === rightStop[pos]) {
-            return leftStop.color;
+        // 如果位置相同，直接返回左侧stop的颜色
+        if (leftStop.colorPosition === rightStop.colorPosition) {
+            const rgbaMatch = leftStop.color.match(rgbaRegex);
+            if (rgbaMatch) {
+                return {
+                    r: parseInt(rgbaMatch[1]),
+                    g: parseInt(rgbaMatch[2]),
+                    b: parseInt(rgbaMatch[3])
+                };
+            }
+            return { r: 0, g: 0, b: 0 };
         }
         
         // 计算基础插值比例
-        let ratio = (position - leftStop[pos]) / (rightStop[pos] - leftStop[pos]);
+        let ratio = (position - leftStop.colorPosition) / (rightStop.colorPosition - leftStop.colorPosition);
         
         // 应用中点调整
         const midpoint = (leftStop.midpoint || 50) / 100;
-        if (ratio <= midpoint) {
-            // 在中点左侧，压缩到前半段
-            ratio = (ratio / midpoint) * 0.5;
-        } else {
-            // 在中点右侧，映射到后半段
-            ratio = 0.5 + ((ratio - midpoint) / (1 - midpoint)) * 0.5;
+        if (midpoint !== 0.5) {
+            if (ratio < midpoint) {
+                ratio = (ratio / midpoint) * 0.5;
+            } else {
+                ratio = 0.5 + ((ratio - midpoint) / (1 - midpoint)) * 0.5;
+            }
         }
         
-        // 插值颜色
-        const leftRgba = leftStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
-        const rightRgba = rightStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
+        // 插值RGB颜色
+        const leftRgba = leftStop.color.match(rgbaRegex);
+        const rightRgba = rightStop.color.match(rgbaRegex);
         
         if (leftRgba && rightRgba) {
-            const r = Math.round(parseInt(leftRgba[1]) * (1 - ratio) + parseInt(rightRgba[1]) * ratio);
-            const g = Math.round(parseInt(leftRgba[2]) * (1 - ratio) + parseInt(rightRgba[2]) * ratio);
-            const b = Math.round(parseInt(leftRgba[3]) * (1 - ratio) + parseInt(rightRgba[3]) * ratio);
-            return `rgb(${r}, ${g}, ${b})`;
+            const leftR = parseInt(leftRgba[1]);
+            const leftG = parseInt(leftRgba[2]);
+            const leftB = parseInt(leftRgba[3]);
+            const rightR = parseInt(rightRgba[1]);
+            const rightG = parseInt(rightRgba[2]);
+            const rightB = parseInt(rightRgba[3]);
+            
+            return {
+                r: leftR * (1 - ratio) + rightR * ratio,
+                g: leftG * (1 - ratio) + rightG * ratio,
+                b: leftB * (1 - ratio) + rightB * ratio
+            };
         }
         
-        return leftStop.color;
+        return { r: 0, g: 0, b: 0 };
     };
 
-    // 透明度插值函数 - 支持中点
-    const interpolateOpacity = (position: number) => {
-        const opacityStops = [...stops].sort((a, b) => a.opacityPosition - b.opacityPosition);
-        
-        // 找到位置两侧的stop
+    // 缓存透明度正则表达式
+    const rgbaWithAlphaRegex = /rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/;
+    
+    // 优化的透明度插值函数 - 减少重复计算
+    const interpolateOpacityAtPosition = (position: number, opacityStops: ExtendedGradientStop[]) => {
+        // 找到位置两侧的opacity-stop
         let leftStop = opacityStops[0];
         let rightStop = opacityStops[opacityStops.length - 1];
         
@@ -198,8 +213,9 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             }
         }
         
+        // 如果位置相同，直接返回左侧stop的透明度
         if (leftStop.opacityPosition === rightStop.opacityPosition) {
-            const rgbaMatch = leftStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
+            const rgbaMatch = leftStop.color.match(rgbaWithAlphaRegex);
             return rgbaMatch ? parseFloat(rgbaMatch[4]) : 1;
         }
         
@@ -208,15 +224,17 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         
         // 应用中点调整
         const midpoint = (leftStop.midpoint || 50) / 100;
-        if (ratio <= midpoint) {
-            ratio = (ratio / midpoint) * 0.5;
-        } else {
-            ratio = 0.5 + ((ratio - midpoint) / (1 - midpoint)) * 0.5;
+        if (midpoint !== 0.5) {
+            if (ratio < midpoint) {
+                ratio = (ratio / midpoint) * 0.5;
+            } else {
+                ratio = 0.5 + ((ratio - midpoint) / (1 - midpoint)) * 0.5;
+            }
         }
         
         // 插值透明度
-        const leftRgba = leftStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
-        const rightRgba = rightStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
+        const leftRgba = leftStop.color.match(rgbaWithAlphaRegex);
+        const rightRgba = rightStop.color.match(rgbaWithAlphaRegex);
         
         if (leftRgba && rightRgba) {
             const leftAlpha = parseFloat(leftRgba[4]);
@@ -228,30 +246,24 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     };
 
     const getGradientStyle = () => {
-        // 创建一个综合的渐变，同时考虑颜色位置和透明度位置
-        const allPositions = new Set<number>();
+        if (stops.length === 0) return '';
         
-        // 收集所有位置点
-        stops.forEach(stop => {
-            allPositions.add(stop.colorPosition);
-            allPositions.add(stop.opacityPosition);
-        });
+        // 直接采样关键位置，避免创建大数组
+        const sampleStep = 10; // 每10%采样一次，平衡性能和质量
+        const gradientStops = [];
         
-        const sortedPositions = Array.from(allPositions).sort((a, b) => a - b);
-        
-        const gradientStops = sortedPositions.map(position => {
-            // 在当前位置插值颜色
-            const colorAtPosition = interpolateColor(position, 'color');
-            // 在当前位置插值透明度
-            const opacityAtPosition = interpolateOpacity(position);
+        // 直接在采样点计算RGBA值，使用缓存的排序数组
+        for (let i = 0; i <= 100; i += sampleStep) {
+            const rgb = interpolateColorAtPosition(i, sortedColorStops);
+            const alpha = interpolateOpacityAtPosition(i, sortedOpacityStops);
             
-            const rgbaMatch = colorAtPosition.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-            if (rgbaMatch) {
-                const [_, r, g, b] = rgbaMatch;
-                return `rgba(${r}, ${g}, ${b}, ${opacityAtPosition}) ${position}%`;
-            }
-            return `rgba(0, 0, 0, ${opacityAtPosition}) ${position}%`;
-        });
+            const r = Math.round(rgb.r);
+            const g = Math.round(rgb.g);
+            const b = Math.round(rgb.b);
+            const a = alpha.toFixed(3);
+            
+            gradientStops.push(`rgba(${r}, ${g}, ${b}, ${a}) ${i}%`);
+        }
         
         const displayStops = reverse
             ? gradientStops.map(stop => {
@@ -468,7 +480,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             // 只有在鼠标移动超过阈值时才进入拖拽状态
             if (!hasMoved) {
                 const deltaX = Math.abs(moveEvent.clientX - startX);
-                if (deltaX > 3) { // 3px的移动阈值
+                if (deltaX > 1) { // 3px的移动阈值
                     hasMoved = true;
                     setIsDraggingOpacity(true);
                 } else {
@@ -506,9 +518,9 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         e.preventDefault();
         e.stopPropagation();
         setIsDraggingMidpoint(true);
-        setDragStartX(e.clientX);
-        setDragStartPosition(stops[index].midpoint || 50);
-        setDragStopIndex(index);
+        
+        const startX = e.clientX;
+        const startMidpoint = stops[index].midpoint || 50;
         
         const handleMouseMove = (moveEvent: MouseEvent) => {
             moveEvent.preventDefault();
@@ -516,8 +528,9 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             if (!trackElement) return;
             
             const rect = trackElement.getBoundingClientRect();
-            const deltaX = moveEvent.clientX - dragStartX;
-            const newMidpoint = Math.max(0, Math.min(100, dragStartPosition + (deltaX / rect.width) * 100));
+            const deltaX = moveEvent.clientX - startX;
+            const deltaPercent = (deltaX / rect.width) * 100;
+            const newMidpoint = Math.max(1, Math.min(99, startMidpoint + deltaPercent));
             
             const newStops = [...stops];
             newStops[index] = { ...newStops[index], midpoint: newMidpoint };
@@ -540,9 +553,9 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         e.preventDefault();
         e.stopPropagation();
         setIsDraggingMidpoint(true);
-        setDragStartX(e.clientX);
-        setDragStartPosition(stops[index].midpoint || 50);
-        setDragStopIndex(index);
+        
+        const startX = e.clientX;
+        const startMidpoint = stops[index].midpoint || 50;
         
         const handleMouseMove = (moveEvent: MouseEvent) => {
             moveEvent.preventDefault();
@@ -550,8 +563,9 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             if (!trackElement) return;
             
             const rect = trackElement.getBoundingClientRect();
-            const deltaX = moveEvent.clientX - dragStartX;
-            const newMidpoint = Math.max(0, Math.min(100, dragStartPosition + (deltaX / rect.width) * 100));
+            const deltaX = moveEvent.clientX - startX;
+            const deltaPercent = (deltaX / rect.width) * 100;
+            const newMidpoint = Math.max(1, Math.min(99, startMidpoint + deltaPercent));
             
             const newStops = [...stops];
             newStops[index] = { ...newStops[index], midpoint: newMidpoint };
