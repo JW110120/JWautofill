@@ -14,6 +14,7 @@ const { batchPlay } = action;
 interface LayerInfo {
     hasPixels: boolean;
     isInQuickMask: boolean;
+    isInLayerMask: boolean;
 }
 
 export async function strokeSelection(state: AppState, layerInfo?: LayerInfo) {

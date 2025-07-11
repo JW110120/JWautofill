@@ -340,7 +340,7 @@ export class ClearHandler {
         const hasFeathering = bounds.selectionCoefficients && bounds.selectionCoefficients.length > 0;
         
         if (hasAlpha && alphaData) {
-            // 有透明度数据的情况 - 优化版本
+            // 有透明度数据的情况（绝对公式）
             for (let i = 0; i < dataLength; i++) {
                 const alpha = alphaData[i];
                 if (alpha === 0) {
@@ -358,7 +358,7 @@ export class ClearHandler {
                 }
             }
         } else {
-            // 无透明度数据的情况 - 优化版本
+            // 无透明度数据的情况（绝对公式）
             for (let i = 0; i < dataLength; i++) {
                 let effectiveOpacityFactor = opacityFactor;
                 
@@ -403,7 +403,7 @@ export class ClearHandler {
             }
             
             // 由于gradientGrayData[i]范围是0-255，effectiveOpacityFactor范围是0-1，
-            // 所以结果必然在0-255范围内，无需额外检查
+            // 所以结果必然在0-255范围内，无需额外检查（绝对公式）
             finalData[i] = Math.floor(gradientGrayData[i] * effectiveOpacityFactor);
         }
         
@@ -2186,7 +2186,7 @@ export class ClearHandler {
                         } else {
                             // maskvalue>0且有效不透明度>0时，应用删除公式
                             // 删除百分比 = fillValue / 255
-                            // 最终值 = maskValue * (1 - 删除百分比 * opacityFactor)
+                            // 最终值 = maskValue * (1 - 删除百分比 * opacityFactor)相对公式
                             const deleteRatio = fillValue / 255;
                             finalValue = selectedMaskValue * (1 - deleteRatio * opacityFactor);
                         }

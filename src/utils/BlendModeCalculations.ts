@@ -233,3 +233,32 @@ export function applyBlendMode(
     const opacityFactor = Math.max(0, Math.min(100, opacity)) / 100;
     return Math.round(baseValue + (blendedValue - baseValue) * opacityFactor);
 }
+
+/**
+ * 图层蒙版与图案混合计算
+ * @param maskValue 图层蒙版灰度值 (0-255) 作为 baseNorm
+ * @param patternValue 图案灰度值 (0-255) 作为 blendNorm
+ * @param patternAlpha 图案不透明度 (0-255)
+ * @param blendMode 混合模式
+ * @param opacity 整体不透明度 (0-100)
+ * @returns 计算后的蒙版灰度值 (0-255)
+ */
+export function blendLayerMaskWithPattern(
+    maskValue: number,
+    patternValue: number,
+    patternAlpha: number,
+    blendMode: string,
+    opacity: number = 100
+): number {
+    // 首先应用图案的不透明度
+    const alphaFactor = Math.max(0, Math.min(255, patternAlpha)) / 255;
+    const effectivePatternValue = Math.round(patternValue * alphaFactor + 255 * (1 - alphaFactor));
+    
+    // 应用混合模式计算，图层蒙版作为base，图案作为blend
+    const blendFunction = getBlendModeCalculation(blendMode);
+    const blendedValue = blendFunction(maskValue, effectivePatternValue);
+    
+    // 应用整体不透明度
+    const opacityFactor = Math.max(0, Math.min(100, opacity)) / 100;
+    return Math.round(maskValue + (blendedValue - maskValue) * opacityFactor);
+}
