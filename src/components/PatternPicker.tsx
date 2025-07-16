@@ -1096,19 +1096,64 @@ interface PatternPickerProps {
                 <button onClick={async () => {
                     const selectedPatternData = patterns.find(p => p.id === selectedPattern);
                     if (selectedPatternData) {
-                        await createPatternFromImage(); // 确保在应用前处理图像
-                        const finalPatternData = patterns.find(p => p.id === selectedPattern); // 重新获取最新的数据
+                        console.log('🔄 开始处理图案数据，当前状态:', {
+                            patternId: selectedPattern,
+                            hasGrayData: !!selectedPatternData.grayData,
+                            grayDataLength: selectedPatternData.grayData?.length,
+                            hasPatternRgbData: !!selectedPatternData.patternRgbData,
+                            patternRgbDataLength: selectedPatternData.patternRgbData?.length
+                        });
+                        
+                        // 确保在应用前处理图像
+                        await createPatternFromImage();
+                        
+                        // 等待状态更新完成，使用setTimeout确保React状态已更新
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                        
+                        // 重新获取最新的数据
+                        const finalPatternData = patterns.find(p => p.id === selectedPattern);
                         if (finalPatternData) {
-                            onSelect({
+                            console.log('✅ 最终图案数据状态:', {
+                                patternId: selectedPattern,
+                                hasGrayData: !!finalPatternData.grayData,
+                                grayDataLength: finalPatternData.grayData?.length,
+                                hasPatternRgbData: !!finalPatternData.patternRgbData,
+                                patternRgbDataLength: finalPatternData.patternRgbData?.length,
+                                width: finalPatternData.width,
+                                height: finalPatternData.height,
+                                components: finalPatternData.components
+                            });
+                            
+                            const patternToSend = {
                                 ...finalPatternData,
                                 angle,
                                 scale,
                                 fillMode,
                                 rotateAll,
                                 preserveTransparency,
-                                components: finalPatternData.patternComponents || finalPatternData.components || 3 // 修正组件数传递
+                                components: finalPatternData.patternComponents || finalPatternData.components || 3,
+                                // 确保关键数据字段存在
+                                currentScale: scale,
+                                currentAngle: angle
+                            };
+                            
+                            console.log('📤 发送给PatternFill的数据:', {
+                                hasGrayData: !!patternToSend.grayData,
+                                grayDataLength: patternToSend.grayData?.length,
+                                hasPatternRgbData: !!patternToSend.patternRgbData,
+                                patternRgbDataLength: patternToSend.patternRgbData?.length,
+                                dimensions: `${patternToSend.width}x${patternToSend.height}`,
+                                scale: patternToSend.scale,
+                                angle: patternToSend.angle,
+                                fillMode: patternToSend.fillMode
                             });
+                            
+                            onSelect(patternToSend);
+                        } else {
+                            console.error('❌ 无法获取最终图案数据');
                         }
+                    } else {
+                        console.error('❌ 未选择图案');
                     }
                     onClose();
                 }}>保存设置</button>

@@ -1,7 +1,7 @@
 import { app, action, core, imaging } from 'photoshop';
 import { BLEND_MODES } from '../constants/blendModes';
 import { Pattern } from '../types/state';
-import { applyBlendMode, blendLayerMaskWithPattern } from './BlendModeCalculations';
+import { BLEND_MODE_CALCULATIONS, BlendModeFunction } from './BlendModeCalculations';
 
 interface PatternFillOptions {
     opacity: number;
@@ -24,7 +24,7 @@ async function createStampPatternData(
     bounds: any,
     isGrayMode: boolean = false,
     generateAlphaData: boolean = false
-): Promise<{ colorData: Uint8Array; alphaData?: Uint8Array }> {
+): Promise<{ colorData: Uint8Array; alphaData?: Uint8Array; patternMask?: Uint8Array }> {
     let resultData: Uint8Array;
     
     // 非快速蒙版模式下，获取图案的原始像素数据        
@@ -217,15 +217,22 @@ async function createStampPatternData(
         return -1;
     };
 
-    // 主循环：遍历目标区域的每个像素
+    // 创建图案掩码数组，标记哪些区域是图案内的
+    const patternMask = new Uint8Array(targetWidth * targetHeight);
+    
+    // 主循环：遍历目标区域的每个像素（优化版本）
     for (let y = 0; y < targetHeight; y++) {
+        const rowOffset = y * targetWidth;
         for (let x = 0; x < targetWidth; x++) {
-            const targetIndex = (y * targetWidth + x) * components;
+            const targetIndex = (rowOffset + x) * components;
+            const maskIndex = rowOffset + x;
             const sourceIndex = getPatternPixel(x, y);
             
             if (sourceIndex >= 0) {
                 blendPixel(sourceIndex, targetIndex);
+                patternMask[maskIndex] = 255; // 标记为图案内
             }
+            // 图案外区域默认为0，无需显式设置
         }
     }
     
@@ -241,7 +248,7 @@ async function createStampPatternData(
         }
     }
     
-    return { colorData: resultData, alphaData };
+    return { colorData: resultData, alphaData, patternMask };
 }
 
 // 贴墙纸模式：无缝平铺，解决旋转边界问题，同时生成透明度数据
@@ -628,6 +635,7 @@ async function getPixelValue(action: any, x: number, y: number): Promise<number>
 
 // ---------------------------------------------------------------------------------------------------
 export class PatternFill {
+    // ---------------------------------------------------------------------------------------------------
     // 1.不在快速蒙版中，根据用户指定条件填充相应的彩色图案。（RGB/RGBA）
     static async fillPattern(options: PatternFillOptions, layerInfo: LayerInfo) {
         // 检查是否有图案数据
@@ -641,7 +649,6 @@ export class PatternFill {
             return;
         }
         
-
         // 如果在快速蒙版状态，使用快速蒙版中的填充
         if (layerInfo.isInQuickMask) {
             await this.fillPatternDirect(options);
@@ -919,6 +926,7 @@ export class PatternFill {
         }
     }
 
+    // ---------------------------------------------------------------------------------------------------
     // 2.不在快速蒙版中，图层蒙版模式下的图案填充
     private static async fillLayerMaskPattern(options: PatternFillOptions): Promise<void> {
         try {
@@ -950,7 +958,7 @@ export class PatternFill {
             
             
             // 第四步：混合计算
-            const blendedData = await this.blendLayerMaskWithPattern(
+            const blendedData = await this.blendLayerMaskWithPatternArray(
                 layerMaskData.maskPixels,
                 patternGrayData,
                 options,
@@ -958,7 +966,7 @@ export class PatternFill {
             );
             
             // 第五步：写回文档
-            await this.writeLayerMaskData(blendedData, bounds, currentLayerId);
+            await this.writeLayerMaskData(blendedData, bounds, currentLayerId, layerMaskData.fullDocMaskArray);
             
             console.log('✅ 图层蒙版图案填充完成');
             
@@ -967,9 +975,184 @@ export class PatternFill {
             throw error;
         }
     }
+
+     // 获取当前激活图层ID
+    private static async getCurrentLayerId(): Promise<number> {
+        try {
+            const layerResult = await action.batchPlay([
+                {
+                    _obj: "get",
+                    _target: [
+                        {
+                            _ref: "layer",
+                            _enum: "ordinal",
+                            _value: "targetEnum"
+                        }
+                    ]
+                }
+            ], { synchronousExecution: true });
+            
+            console.log('✅ 获取当前激活图层ID:', layerResult[0].layerID);
+            return layerResult[0].layerID;
+        } catch (error) {
+            console.error('❌ 获取当前激活图层ID失败:', error);
+            throw error;
+        }
+    }
     
+
+    // 获取图层蒙版通道的像素数据
+    private static async getLayerMaskPixels(bounds: any, currentLayerId: number) {
+        try {             
+            console.log('🎭 开始获取图层蒙版数据，图层ID:', currentLayerId);
+            
+            // 根据官方文档，使用getLayerMask获取完整文档的图层蒙版像素数据
+            // 添加sourceBounds参数以符合API规范
+            const pixels = await imaging.getLayerMask({
+                documentID: app.activeDocument.id,
+                layerID: currentLayerId,
+                sourceBounds: {
+                    left: 0,
+                    top: 0,
+                    right: bounds.docWidth,
+                    bottom: bounds.docHeight
+                },
+                componentSize: 8
+            });
+            
+            const fullDocMaskArray = await pixels.imageData.getData();
+            console.log('🎯 完整文档蒙版数组长度:', fullDocMaskArray.length);
+            
+            // 从完整文档长度的蒙版数组中按照索引提取选区内的蒙版像素数据
+            const selectionSize = bounds.selectionDocIndices.size;
+            const selectionIndices = Array.from(bounds.selectionDocIndices);
+            
+            // 提取选区内的图层蒙版值并计算统计信息
+            const selectionMaskValues = [];
+            for (let i = 0; i < selectionIndices.length; i++) {
+                const docIndex = selectionIndices[i];
+                if (docIndex >= 0 && docIndex < fullDocMaskArray.length) {
+                    selectionMaskValues.push(fullDocMaskArray[docIndex]);
+                }
+            }
+            
+            let minVal = 255, maxVal = 0, zeroCount = 0, fullCount = 0;
+            for (const val of selectionMaskValues) {
+                minVal = Math.min(minVal, val);
+                maxVal = Math.max(maxVal, val);
+                if (val === 0) zeroCount++;
+                if (val === 255) fullCount++;
+            }
+            console.log('🎯 选区内图层蒙版值统计: 最小值=', minVal, '最大值=', maxVal, '黑色像素=', zeroCount, '白色像素=', fullCount);
+            
+            const maskPixels = new Uint8Array(selectionSize);
+            console.log('🎯 选区索引数量:', selectionIndices.length, '第一个索引:', selectionIndices[0], '最后一个索引:', selectionIndices[selectionIndices.length - 1]);
+            
+            let outOfRangeCount = 0;
+            // 遍历选区内的每个像素，从完整文档蒙版数组中提取对应的值
+            for (let i = 0; i < selectionIndices.length; i++) {
+                const docIndex = selectionIndices[i];
+                if (docIndex >= 0 && docIndex < fullDocMaskArray.length) {
+                    maskPixels[i] = fullDocMaskArray[docIndex];
+                } else {
+                    outOfRangeCount++;
+                    maskPixels[i] = fullDocMaskArray[docIndex] || 0; // 保持原始像素值或默认黑色
+                }
+                
+                // 只输出前3个像素的提取过程
+                if (i < 3) {
+                    console.log(`🎯 提取像素${i}: 文档索引=${docIndex}, 蒙版值=${maskPixels[i]}`);
+                }
+            }
+            
+            if (outOfRangeCount > 0) {
+                console.warn(`⚠️ ${outOfRangeCount}个索引超出范围，使用默认值255`);
+            }
+            
+            // 计算提取数据的统计信息
+            let extractedMin = 255, extractedMax = 0;
+            for (let i = 0; i < Math.min(100, maskPixels.length); i++) {
+                extractedMin = Math.min(extractedMin, maskPixels[i]);
+                extractedMax = Math.max(extractedMax, maskPixels[i]);
+            }
+            
+            console.log('🎯 图层蒙版选区内像素数量:', selectionSize);
+            console.log('🎯 提取的蒙版数据统计: 最小值=', extractedMin, '最大值=', extractedMax);
+            
+            // 释放ImageData内存
+            pixels.imageData.dispose();
+            
+            return {
+                maskPixels: maskPixels,
+                fullDocMaskArray: fullDocMaskArray
+            };
+            
+        } catch (error) {
+            console.error('❌ 获取图层蒙版像素数据失败:', error);
+            throw error;
+        }
+    }
+
+      
+   // ---------------------------------------------------------------------------------------------------
+   // 图层蒙版混合模式计算
+    private static getBlendModeCalculation(blendMode: string): BlendModeFunction {
+        return BLEND_MODE_CALCULATIONS[blendMode] || BLEND_MODE_CALCULATIONS['normal'];
+    }
+
+    private static applyBlendMode(
+        baseValue: number,
+        blendValue: number,
+        blendMode: string,
+        opacity: number = 100
+    ): number {
+        const blendFunction = this.getBlendModeCalculation(blendMode);
+        const blendedValue = blendFunction(baseValue, blendValue);
+        
+        // 应用不透明度
+        const opacityFactor = Math.max(0, Math.min(100, opacity)) / 100;
+        return Math.round(baseValue + (blendedValue - baseValue) * opacityFactor);
+    }
+
+    private static blendLayerMaskWithPattern(
+        maskValue: number,
+        patternValue: number,
+        patternAlpha: number,
+        blendMode: string,
+        opacity: number = 100,
+        isLayerMaskMode: boolean = false,
+        isPatternArea: boolean = true
+    ): number {
+        // 如果图案完全透明，直接返回原始蒙版值
+        if (patternAlpha === 0) {
+            return maskValue;
+        }
+        
+        // 图层蒙版模式下的特殊处理：如果是图案外区域，保持原始蒙版值
+        if (isLayerMaskMode && !isPatternArea) {
+            return maskValue;
+        }
+        
+        // 应用混合模式计算，图层蒙版作为base，图案作为blend
+        const blendFunction = this.getBlendModeCalculation(blendMode);
+        const blendedValue = blendFunction(maskValue, patternValue);
+        
+        // 应用图案不透明度和整体不透明度
+        // 确保alpha值在0-255范围内，opacity值在0-100范围内
+        const normalizedAlpha = Math.max(0, Math.min(255, patternAlpha)) / 255;
+        const normalizedOpacity = Math.max(0, Math.min(100, opacity)) / 100;
+        
+        // 计算综合透明度因子：先应用不透明度，再应用alpha透明度
+        const combinedOpacity = normalizedOpacity * normalizedAlpha;
+        
+        // 使用标准混合公式：result = base + (blend - base) * opacity
+        const finalValue = maskValue + (blendedValue - maskValue) * combinedOpacity;
+        
+        return Math.round(Math.max(0, Math.min(255, finalValue)));
+    }
+
     // 混合图层蒙版与图案数据
-    private static async blendLayerMaskWithPattern(
+    private static async blendLayerMaskWithPatternArray(
         maskPixels: Uint8Array,
         patternGrayData: Uint8Array,
         options: PatternFillOptions,
@@ -980,79 +1163,170 @@ export class PatternFill {
         console.log('🔄 开始混合计算，像素数量:', maskPixels.length);
         console.log('🎨 混合模式:', options.blendMode, '不透明度:', options.opacity + '%');
         
+        // 性能监控
+        const startTime = performance.now();
+        const hasPatternMask = !!patternMask;
+        const hasCacheOptimization = !!coordinateCache;
+        console.log('⚡ 性能优化状态: 图案掩码=', hasPatternMask, '坐标缓存=', hasCacheOptimization);
+        
         // 检查图案是否支持PNG不透明度
         const hasAlpha = options.pattern.components === 4 || options.pattern.patternComponents === 4;
         const patternAlphaData = hasAlpha ? options.pattern.patternAlphaData : null;
+        
+        // 获取图案掩码数据（如果有的话）
+        const patternMask = (options.pattern as any).patternMask as Uint8Array | undefined;
+        
+        // 预先计算选区索引数组，避免在循环中重复转换（性能优化）
+        const selectionIndices = bounds.selectionDocIndices ? Array.from(bounds.selectionDocIndices) : null;
+        
+        // 预先计算坐标映射缓存，进一步优化性能
+        let coordinateCache: Array<{boundsX: number, boundsY: number, maskIndex: number}> | null = null;
+        if (patternMask && selectionIndices) {
+            coordinateCache = new Array(selectionIndices.length);
+            for (let i = 0; i < selectionIndices.length; i++) {
+                const docIndex = selectionIndices[i];
+                const docX = docIndex % bounds.docWidth;
+                const docY = Math.floor(docIndex / bounds.docWidth);
+                const boundsX = docX - bounds.left;
+                const boundsY = docY - bounds.top;
+                const maskIndex = boundsY * bounds.width + boundsX;
+                coordinateCache[i] = { boundsX, boundsY, maskIndex };
+            }
+        }
+        
+        // 计算数据统计而不是输出大量数组
+        let maskMin = 255, maskMax = 0, patternMin = 255, patternMax = 0;
+        for (let i = 0; i < Math.min(100, maskPixels.length); i++) {
+            maskMin = Math.min(maskMin, maskPixels[i]);
+            maskMax = Math.max(maskMax, maskPixels[i]);
+        }
+        for (let i = 0; i < Math.min(100, patternGrayData.length); i++) {
+            patternMin = Math.min(patternMin, patternGrayData[i]);
+            patternMax = Math.max(patternMax, patternGrayData[i]);
+        }
+        
+        console.log('📊 蒙版数据统计: 最小值=', maskMin, '最大值=', maskMax);
+        console.log('📊 图案数据统计: 最小值=', patternMin, '最大值=', patternMax);
+        if (patternAlphaData) {
+            console.log('📊 图案支持Alpha通道，长度:', patternAlphaData.length);
+        }
+        
+        let minResult = 255, maxResult = 0, changeCount = 0;
         
         for (let i = 0; i < maskPixels.length; i++) {
             const maskValue = maskPixels[i];
             const patternValue = patternGrayData[i % patternGrayData.length];
             const patternAlpha = patternAlphaData ? patternAlphaData[i % patternAlphaData.length] : 255;
             
-            result[i] = blendLayerMaskWithPattern(
+            // 确定当前像素是否在图案区域内（高性能缓存版本）
+            let isPatternArea = true; // 默认为图案区域
+            if (patternMask && coordinateCache) {
+                const coord = coordinateCache[i];
+                if (coord.boundsX >= 0 && coord.boundsX < bounds.width && 
+                    coord.boundsY >= 0 && coord.boundsY < bounds.height && 
+                    coord.maskIndex < patternMask.length) {
+                    isPatternArea = patternMask[coord.maskIndex] > 0;
+                }
+            }
+            
+            const blendedValue = this.blendLayerMaskWithPattern(
                 maskValue,
                 patternValue,
                 patternAlpha,
                 options.blendMode,
-                options.opacity
+                options.opacity,
+                true, // 图层蒙版模式
+                isPatternArea // 是否为图案区域
             );
+            
+            result[i] = blendedValue;
+            
+            // 统计结果范围和变化
+            minResult = Math.min(minResult, blendedValue);
+            maxResult = Math.max(maxResult, blendedValue);
+            if (blendedValue !== maskValue) {
+                changeCount++;
+            }
+            
+            // 只输出前3个像素的详细计算过程
+            if (i < 3) {
+                console.log(`🔍 像素${i}: 蒙版=${maskValue}, 图案=${patternValue}, Alpha=${patternAlpha}, 混合结果=${blendedValue}`);
+            }
         }
+        
+        console.log('📈 混合结果统计: 最小值=', minResult, '最大值=', maxResult, '改变像素数=', changeCount);
+        
+        // 性能监控结束
+        const endTime = performance.now();
+        const executionTime = endTime - startTime;
+        console.log('⚡ 混合计算完成，耗时:', executionTime.toFixed(2), 'ms，平均每像素:', (executionTime / maskPixels.length).toFixed(4), 'ms');
         
         return result;
     }
-    
+
     // 将混合后的数据写回图层蒙版
-    private static async writeLayerMaskData(blendedData: Uint8Array, bounds: any, currentLayerId: number): Promise<void> {
+    private static async writeLayerMaskData(blendedData: Uint8Array, bounds: any, currentLayerId: number, fullDocMaskArray: Uint8Array): Promise<void> {
         try {
+            console.log('📝 开始写回图层蒙版数据');
+            console.log('📊 混合数据长度:', blendedData.length);
+            console.log('📊 选区索引数量:', bounds.selectionDocIndices.size);
             
-            // 创建完整文档大小的蒙版数组
+            // 创建完整文档大小的蒙版数组，复用已获取的数据
             const docWidth = bounds.docWidth;
             const docHeight = bounds.docHeight;
-            const fullMaskArray = new Uint8Array(docWidth * docHeight);
-
-            // 使用getLayerMask获取当前完整的图层蒙版数据
-            const currentMaskPixels = await imaging.getLayerMask({
-                documentID: app.activeDocument.id,
-                layerID: currentLayerId,
-                sourceBounds: {
-                    left: 0,
-                    top: 0,
-                    right: docWidth,
-                    bottom: docHeight
-                },
-                componentSize: 8
-            });
+            console.log('📐 文档尺寸:', docWidth, 'x', docHeight);
             
-            const currentMaskData = await currentMaskPixels.imageData.getData();
-            fullMaskArray.set(currentMaskData);
-            currentMaskPixels.imageData.dispose();
+            const fullMaskArray = new Uint8Array(fullDocMaskArray);
             
             // 将选区内的像素按索引写入完整数组
             const selectionIndices = Array.from(bounds.selectionDocIndices);
             const selectionCoefficients = bounds.selectionCoefficients;
             
+            let changeCount = 0;
             for (let i = 0; i < selectionIndices.length; i++) {
                 const docIndex = selectionIndices[i];
                 const newValue = blendedData[i];
-                const coefficient = selectionCoefficients[i] / 255; // 羽化系数
+                const coefficient = selectionCoefficients[i]; // 羽化系数已经是0-1范围，无需除以255
                 
                 // 应用羽化效果
                 const currentValue = fullMaskArray[docIndex];
-                fullMaskArray[docIndex] = Math.round(currentValue + (newValue - currentValue) * coefficient);
+                const finalValue = Math.round(currentValue + (newValue - currentValue) * coefficient);
+                
+                if (finalValue !== currentValue) {
+                    changeCount++;
+                }
+                
+                fullMaskArray[docIndex] = finalValue;
+                
+                // 只输出前3个像素的写回过程
+                if (i < 3) {
+                    console.log(`📝 写回像素${i}: 索引=${docIndex}, 原值=${currentValue}, 新值=${newValue}, 系数=${coefficient.toFixed(3)}, 最终值=${finalValue}`);
+                }
             }
             
-            // 创建ImageData对象用于图层蒙版写回
+            console.log('📈 实际改变的像素数量:', changeCount);
+            
+            // 计算写回后的统计信息
+            let finalMin = 255, finalMax = 0;
+            for (let i = 0; i < Math.min(100, fullMaskArray.length); i++) {
+                finalMin = Math.min(finalMin, fullMaskArray[i]);
+                finalMax = Math.max(finalMax, fullMaskArray[i]);
+            }
+            console.log('📊 写回后蒙版数据统计: 最小值=', finalMin, '最大值=', finalMax);
+            
+            // 根据官方文档创建ImageData对象用于图层蒙版写回
+            // 图层蒙版应该使用灰度色彩空间和单通道
             const maskImageDataOptions = {
                 width: docWidth,
                 height: docHeight,
                 components: 1, // 图层蒙版是单通道灰度
                 chunky: false,
-                colorProfile: "Dot Gain 10%",
+                colorProfile: "Dot Gain 15%",
                 colorSpace: 'Grayscale'
             };
             const maskImageData = await imaging.createImageDataFromBuffer(fullMaskArray, maskImageDataOptions);
             
-            // 使用putLayerMask写回完整的图层蒙版数据
+            // 根据官方文档使用putLayerMask写回完整的图层蒙版数据
             await imaging.putLayerMask({
                 documentID: app.activeDocument.id,
                 layerID: currentLayerId,
@@ -1064,6 +1338,8 @@ export class PatternFill {
                 },
                 imageData: maskImageData
             });
+            
+            console.log('📝 putLayerMask API调用完成，参数: documentID=', app.activeDocument.id, 'layerID=', currentLayerId, 'bounds=', `${docWidth}x${docHeight}`);
             
             // 释放ImageData内存
             maskImageData.dispose();
@@ -1695,140 +1971,6 @@ export class PatternFill {
         }
     }
 
-    // 获取当前激活图层ID
-    private static async getCurrentLayerId(): Promise<number> {
-        try {
-            await action.batchPlay([
-                {
-                    _obj: "select",
-                    _target: [
-                    {
-                        _ref: "channel",
-                        _enum: "ordinal",
-                        _value: "targetEnum"
-                    }
-                    ],
-                    _options: {
-                    dialogOptions: "dontDisplay"
-                    }
-                }
-            ],{ synchronousExecution: true });
-
-            const layerResult = await action.batchPlay([
-                {
-                    _obj: "get",
-                    _target: [
-                        {
-                            _ref: "layer",
-                            _enum: "ordinal",
-                            _value: "targetEnum"
-                        }
-                    ]
-                }
-            ], { synchronousExecution: true });
-
-            await action.batchPlay([
-                {
-                    _obj: "select",
-                    _target: [
-                    {
-                        _ref: "channel",
-                        _enum: "ordinal",
-                        _value: "targetEnum"
-                    }
-                    ],
-                    _options: {
-                    dialogOptions: "dontDisplay"
-                    }
-                }
-            ],{ synchronousExecution: true });
-            
-            return layerResult[0].layerID;
-        } catch (error) {
-            console.error('❌ 获取当前激活图层ID失败:', error);
-            throw error;
-        }
-    }
-
-    // 获取图层蒙版通道的像素数据
-    private static async getLayerMaskPixels(bounds: any, currentLayerId: number) {
-        try {
-            console.log('🎭 开始获取图层蒙版像素数据');
-            // 获取图层蒙版通道信息
-            const channelResult = await action.batchPlay([
-                {
-                    _obj: "get",
-                    _target: [
-                        {
-                            _ref: "channel",
-                            _enum: "channel",
-                            _value: "mask"
-                        }
-                    ]
-                }
-            ], { synchronousExecution: true });
-                          
-            // 使用getLayerMask获取图层蒙版像素数据
-            const pixels = await imaging.getLayerMask({
-                documentID: app.activeDocument.id,
-                layerID: currentLayerId,
-                sourceBounds: {
-                    left: bounds.left,
-                    top: bounds.top,
-                    right: bounds.right,
-                    bottom: bounds.bottom
-                },
-                componentSize: 8
-            });
-            
-            const layerMaskPixels = await pixels.imageData.getData();
-            console.log('✅ 成功获取图层蒙版像素数据，长度:', layerMaskPixels.length);
-            
-            // 创建选区内图层蒙版像素数组
-            const selectionSize = bounds.selectionDocIndices.size;
-            const maskPixels = new Uint8Array(selectionSize);
-            
-            // 将selectionDocIndices转换为数组以便按顺序遍历
-            const selectionIndices = Array.from(bounds.selectionDocIndices);
-            
-            // 遍历选区内的每个像素，从完整蒙版数据中提取对应的值
-            for (let i = 0; i < selectionIndices.length; i++) {
-                const docIndex = selectionIndices[i];
-                // 计算该像素在选区边界内的坐标
-                const docX = docIndex % bounds.docWidth;
-                const docY = Math.floor(docIndex / bounds.docWidth);
-                const boundsX = docX - bounds.left;
-                const boundsY = docY - bounds.top;
-                
-                // 检查坐标是否在选区边界内
-                if (boundsX >= 0 && boundsX < bounds.width && boundsY >= 0 && boundsY < bounds.height) {
-                    const boundsIndex = boundsY * bounds.width + boundsX;
-                    if (boundsIndex < layerMaskPixels.length) {
-                        maskPixels[i] = layerMaskPixels[boundsIndex];
-                    } else {
-                        maskPixels[i] = 255; // 默认白色（不透明）
-                    }
-                } else {
-                    maskPixels[i] = 255; // 默认白色（不透明）
-                }
-            }
-            
-            console.log('🎯 图层蒙版选区内像素数量:', selectionSize);
-            
-            // 释放ImageData内存
-            pixels.imageData.dispose();
-            
-            return {
-                maskPixels: maskPixels,
-                channelInfo: channelResult[0]
-            };
-            
-        } catch (error) {
-            console.error('❌ 获取图层蒙版像素数据失败:', error);
-            throw error;
-        }
-    }
-    
     //-------------------------------------------------------------------------------------------------
     // 分析快速蒙版直方图状态
     private static analyzeQuickMaskHistogram(histogram: number[], isSelectedAreas: boolean) {
@@ -1932,12 +2074,81 @@ export class PatternFill {
     // 获取图案填充的灰度数据
     private static async getPatternFillGrayData(options: PatternFillOptions, bounds: any): Promise<Uint8Array> {
         try {
+            console.log('🎨 ===== getPatternFillGrayData 开始 =====');
+            console.log('📊 接收到的完整options.pattern对象:', {
+                hasPattern: !!options.pattern,
+                patternKeys: options.pattern ? Object.keys(options.pattern) : [],
+                // 基本属性
+                id: options.pattern?.id,
+                width: options.pattern?.width,
+                height: options.pattern?.height,
+                components: options.pattern?.components,
+                // 数据属性
+                hasGrayData: !!options.pattern?.grayData,
+                grayDataLength: options.pattern?.grayData?.length,
+                grayDataType: options.pattern?.grayData?.constructor?.name,
+                hasPatternRgbData: !!options.pattern?.patternRgbData,
+                patternRgbDataLength: options.pattern?.patternRgbData?.length,
+                patternRgbDataType: options.pattern?.patternRgbData?.constructor?.name,
+                // 变换属性
+                scale: options.pattern?.scale,
+                currentScale: options.pattern?.currentScale,
+                angle: options.pattern?.angle,
+                currentAngle: options.pattern?.currentAngle,
+                fillMode: options.pattern?.fillMode,
+                rotateAll: options.pattern?.rotateAll,
+                preserveTransparency: options.pattern?.preserveTransparency,
+                // 数据样本
+                grayDataSample: options.pattern?.grayData ? Array.from(options.pattern.grayData.slice(0, 10)) : null,
+                patternRgbDataSample: options.pattern?.patternRgbData ? Array.from(options.pattern.patternRgbData.slice(0, 12)) : null
+            });
+            
+            
             if (!options.pattern.grayData) {
-                console.error('缺少图案灰度数据');
-                const pixelCount = bounds.selectionPixels
-                const grayData = new Uint8Array(pixelCount);
-                grayData.fill(128); 
-                return grayData;
+                console.error('❌ 缺少图案灰度数据，尝试从RGB数据生成');
+                
+                // 尝试从RGB数据生成灰度数据
+                if (options.pattern.patternRgbData && options.pattern.width && options.pattern.height) {
+                    console.log('🔄 从RGB数据生成灰度数据');
+                    const rgbData = options.pattern.patternRgbData;
+                    const width = options.pattern.width;
+                    const height = options.pattern.height;
+                    const components = options.pattern.components || 4; // 默认RGBA
+                    
+                    const grayData = new Uint8Array(width * height);
+                    for (let i = 0; i < width * height; i++) {
+                        const r = rgbData[i * components];
+                        const g = rgbData[i * components + 1];
+                        const b = rgbData[i * components + 2];
+                        
+                        // 使用标准的RGB到灰度转换公式
+                        const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+                        grayData[i] = gray;
+                    }
+                    
+                    // 将生成的灰度数据保存到图案对象中
+                    options.pattern.grayData = grayData;
+                    console.log('✅ 成功从RGB数据生成灰度数据，长度:', grayData.length);
+                    console.log('🎯 生成的灰度数据长度:', grayData.length, '前3个值:', grayData[0], grayData[1], grayData[2]);
+                } else {
+                    console.error('❌ 无法生成灰度数据，缺少必要的RGB数据或尺寸信息');
+                    // 根据可用的选区信息确定像素数量
+                    let pixelCount = 0;
+                    if (bounds.selectionDocIndices && bounds.selectionDocIndices.size > 0) {
+                        pixelCount = bounds.selectionDocIndices.size;
+                    } else if (bounds.selectionValues && bounds.selectionValues.length > 0) {
+                        pixelCount = bounds.selectionValues.length;
+                    } else {
+                        pixelCount = bounds.width * bounds.height;
+                    }
+                    const grayData = new Uint8Array(pixelCount);
+                    grayData.fill(128); 
+                    console.log('⚠️ 使用默认灰度数据，像素数:', pixelCount);
+                    return grayData;
+                }
+            } else {
+                console.log('✅ 找到现有的灰度数据，长度:', options.pattern.grayData.length);
+                console.log('🎯 现有灰度数据长度:', options.pattern.grayData.length, '前3个值:', options.pattern.grayData[0], options.pattern.grayData[1], options.pattern.grayData[2]);
             }
             
             // 优先使用width和height，这些是PatternPicker中设置的当前尺寸
@@ -1971,6 +2182,8 @@ export class PatternFill {
                     false // 不需要生成透明度数据（灰度模式）
                 );
                 grayPatternData = grayStampResult.colorData;
+                // 保存图案掩码供后续使用
+                (options.pattern as any).patternMask = grayStampResult.patternMask;
             } else {
                 // 贴墙纸模式：无缝平铺
                 console.log('🧱 快速蒙版：使用贴墙纸模式填充，全部旋转:', options.pattern.rotateAll);
@@ -2233,11 +2446,11 @@ export class PatternFill {
                             if (isEmpty) {
                                 // 空白快速蒙版特殊处理：只在图案内部进行与纯白背景的混合
                                 const adjustedFillValue = Math.round(fillValue * effectiveOpacity / 100);
-                                const blendedValue = applyBlendMode(255, adjustedFillValue, 'normal', 100); // 与纯白背景混合
+                                const blendedValue = this.applyBlendMode(255, adjustedFillValue, 'normal', 100); // 与纯白背景混合
                                 finalData[i] = Math.min(255, Math.max(0, Math.round(blendedValue)));
                             } else {
                                 // 正常情况：应用用户指定的混合模式计算，使用有效不透明度
-                                const blendedValue = applyBlendMode(selectedMaskValue, fillValue, blendMode, effectiveOpacity);
+                                const blendedValue = this.applyBlendMode(selectedMaskValue, fillValue, blendMode, effectiveOpacity);
                                 finalData[i] = Math.min(255, Math.max(0, Math.round(blendedValue)));
                             }
                         }
