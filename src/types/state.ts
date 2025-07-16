@@ -36,6 +36,10 @@ export interface Pattern {
 export interface GradientStop {
     color: string;
     position: number;
+    // 扩展属性，用于支持独立的颜色和透明度位置以及中点
+    colorPosition?: number;
+    opacityPosition?: number;
+    midpoint?: number;
 }
 
 export interface Gradient {

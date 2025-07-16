@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Gradient, GradientStop } from '../types/state';
 import { AddIcon, DeleteIcon } from '../styles/Icons';
 import { app, action, core } from 'photoshop';
+import { LayerInfoHandler } from '../utils/LayerInfoHandler';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -12,6 +13,158 @@ interface GradientPickerProps {
     onSelect: (gradient: Gradient) => void;
 }
 
+// 生成考虑中点插值的预设预览样式
+const generatePresetPreviewStyle = (preset: Gradient, isInLayerMask: boolean = false): string => {
+    // 为预设创建临时的扩展stops
+    const extendedStops = preset.stops.map((stop, i) => ({
+        ...stop,
+        colorPosition: stop.colorPosition !== undefined ? stop.colorPosition : stop.position,
+        opacityPosition: stop.opacityPosition !== undefined ? stop.opacityPosition : stop.position,
+        midpoint: stop.midpoint !== undefined ? stop.midpoint : (i < preset.stops.length - 1 ? 50 : undefined)
+    }));
+    
+    const sortedColorStops = [...extendedStops].sort((a, b) => a.colorPosition - b.colorPosition);
+    const sortedOpacityStops = [...extendedStops].sort((a, b) => a.opacityPosition - b.opacityPosition);
+    
+    // 采样生成渐变stops
+    const sampleStep = 10; // 每10%采样一次，减少计算量
+    const gradientStops: string[] = [];
+    
+    for (let i = 0; i <= 100; i += sampleStep) {
+        const rgb = interpolateColorAtPositionForPreset(i, sortedColorStops);
+        const alpha = interpolateOpacityAtPositionForPreset(i, sortedOpacityStops);
+        
+        if (isInLayerMask) {
+            // 图层蒙版模式：转换为灰度值
+            const gray = Math.round(0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b);
+            const a = alpha.toFixed(3);
+            gradientStops.push(`rgba(${gray}, ${gray}, ${gray}, ${a}) ${i}%`);
+        } else {
+            // 普通模式：使用原始RGB颜色
+            const r = Math.round(rgb.r);
+            const g = Math.round(rgb.g);
+            const b = Math.round(rgb.b);
+            const a = alpha.toFixed(3);
+            gradientStops.push(`rgba(${r}, ${g}, ${b}, ${a}) ${i}%`);
+        }
+    }
+    
+    // 应用reverse效果
+    const displayStops = preset.reverse
+        ? gradientStops.map(stop => {
+            const match = stop.match(/^(.+)\s+(\d+(?:\.\d+)?)%$/);
+            if (match) {
+                const color = match[1];
+                const position = parseFloat(match[2]);
+                return `${color} ${100 - position}%`;
+            }
+            return stop;
+        }).reverse()
+        : gradientStops;
+    
+    return preset.type === 'radial' 
+        ? `radial-gradient(circle, ${displayStops.join(', ')})`
+        : `linear-gradient(${(preset.angle || 0) + 90}deg, ${displayStops.join(', ')})`;
+};
+
+// 预设预览的颜色插值函数
+const interpolateColorAtPositionForPreset = (position: number, colorStops: any[]) => {
+    const rgbaRegex = /rgba?\((\d+),\s*(\d+),\s*(\d+)/;
+    
+    let leftStop = colorStops[0];
+    let rightStop = colorStops[colorStops.length - 1];
+    
+    for (let i = 0; i < colorStops.length - 1; i++) {
+        if (colorStops[i].colorPosition <= position && colorStops[i + 1].colorPosition >= position) {
+            leftStop = colorStops[i];
+            rightStop = colorStops[i + 1];
+            break;
+        }
+    }
+    
+    if (leftStop.colorPosition === rightStop.colorPosition) {
+        const rgbaMatch = leftStop.color.match(rgbaRegex);
+        if (rgbaMatch) {
+            return {
+                r: parseInt(rgbaMatch[1]),
+                g: parseInt(rgbaMatch[2]),
+                b: parseInt(rgbaMatch[3])
+            };
+        }
+        return { r: 0, g: 0, b: 0 };
+    }
+    
+    let ratio = (position - leftStop.colorPosition) / (rightStop.colorPosition - leftStop.colorPosition);
+    
+    // 应用中点调整
+    const midpoint = (leftStop.midpoint || 50) / 100;
+    if (midpoint !== 0.5) {
+        if (ratio < midpoint) {
+            ratio = (ratio / midpoint) * 0.5;
+        } else {
+            ratio = 0.5 + ((ratio - midpoint) / (1 - midpoint)) * 0.5;
+        }
+    }
+    
+    const leftRgba = leftStop.color.match(rgbaRegex);
+    const rightRgba = rightStop.color.match(rgbaRegex);
+    
+    if (leftRgba && rightRgba) {
+        const leftR = parseInt(leftRgba[1]);
+        const leftG = parseInt(leftRgba[2]);
+        const leftB = parseInt(leftRgba[3]);
+        const rightR = parseInt(rightRgba[1]);
+        const rightG = parseInt(rightRgba[2]);
+        const rightB = parseInt(rightRgba[3]);
+        
+        return {
+            r: leftR * (1 - ratio) + rightR * ratio,
+            g: leftG * (1 - ratio) + rightG * ratio,
+            b: leftB * (1 - ratio) + rightB * ratio
+        };
+    }
+    
+    return { r: 0, g: 0, b: 0 };
+};
+
+// 预设预览的透明度插值函数
+const interpolateOpacityAtPositionForPreset = (position: number, opacityStops: any[]) => {
+    let leftStop = opacityStops[0];
+    let rightStop = opacityStops[opacityStops.length - 1];
+    
+    for (let i = 0; i < opacityStops.length - 1; i++) {
+        if (opacityStops[i].opacityPosition <= position && opacityStops[i + 1].opacityPosition >= position) {
+            leftStop = opacityStops[i];
+            rightStop = opacityStops[i + 1];
+            break;
+        }
+    }
+    
+    if (leftStop.opacityPosition === rightStop.opacityPosition) {
+        const rgbaMatch = leftStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+        return rgbaMatch && rgbaMatch[4] !== undefined ? parseFloat(rgbaMatch[4]) : 1;
+    }
+    
+    let ratio = (position - leftStop.opacityPosition) / (rightStop.opacityPosition - leftStop.opacityPosition);
+    
+    // 应用中点调整
+    const midpoint = (leftStop.midpoint || 50) / 100;
+    if (midpoint !== 0.5) {
+        if (ratio < midpoint) {
+            ratio = (ratio / midpoint) * 0.5;
+        } else {
+            ratio = 0.5 + ((ratio - midpoint) / (1 - midpoint)) * 0.5;
+        }
+    }
+    
+    const leftOpacity = leftStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/)?.[4];
+    const rightOpacity = rightStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/)?.[4];
+    
+    const leftAlpha = leftOpacity !== undefined ? parseFloat(leftOpacity) : 1;
+    const rightAlpha = rightOpacity !== undefined ? parseFloat(rightOpacity) : 1;
+    
+    return leftAlpha * (1 - ratio) + rightAlpha * ratio;
+};
 
 // 扩展GradientStop类型以支持独立的颜色和透明度位置
 interface ExtendedGradientStop extends GradientStop {
@@ -48,13 +201,38 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const [dragStartPosition, setDragStartPosition] = useState(0);
     const [dragStartAngle, setDragStartAngle] = useState(0); 
     const [dragStopIndex, setDragStopIndex] = useState<number | null>(null);
+    const [isInLayerMask, setIsInLayerMask] = useState(false);
+
+    // 检测图层蒙版模式
+    useEffect(() => {
+        const checkLayerMaskMode = async () => {
+            try {
+                const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
+                setIsInLayerMask(layerInfo?.isInLayerMask || false);
+            } catch (error) {
+                console.error('检测图层蒙版模式失败:', error);
+                setIsInLayerMask(false);
+            }
+        };
+
+        if (isOpen) {
+            checkLayerMaskMode();
+        }
+    }, [isOpen]);
 
     const handleAddPreset = () => {
         const newPreset: Gradient = {
             type: gradientType,
             angle,
             reverse,
-            stops: stops.map(({ midpoint, colorPosition, opacityPosition, ...stop }) => stop)
+            stops: stops.map(stop => ({
+                color: stop.color,
+                position: stop.position,
+                // 保存扩展属性到自定义字段中
+                colorPosition: stop.colorPosition,
+                opacityPosition: stop.opacityPosition,
+                midpoint: stop.midpoint
+            }))
         };
         const newPresets = [...presets, newPreset];
         setPresets(newPresets); 
@@ -75,9 +253,10 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 setReverse(previousPreset.reverse || false);
                 setStops(previousPreset.stops.map((stop, i) => ({
                     ...stop,
-                    colorPosition: stop.position,
-                    opacityPosition: stop.position,
-                    midpoint: i < previousPreset.stops.length - 1 ? 50 : undefined
+                    // 如果预设中保存了扩展属性，则使用保存的值，否则使用默认值
+                    colorPosition: stop.colorPosition !== undefined ? stop.colorPosition : stop.position,
+                    opacityPosition: stop.opacityPosition !== undefined ? stop.opacityPosition : stop.position,
+                    midpoint: stop.midpoint !== undefined ? stop.midpoint : (i < previousPreset.stops.length - 1 ? 50 : undefined)
                 })));
             }
         }
@@ -92,9 +271,10 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         setReverse(preset.reverse || false);
         setStops(preset.stops.map((stop, i) => ({
             ...stop,
-            colorPosition: stop.position,
-            opacityPosition: stop.position,
-            midpoint: i < preset.stops.length - 1 ? 50 : undefined
+            // 如果预设中保存了扩展属性，则使用保存的值，否则使用默认值
+            colorPosition: stop.colorPosition !== undefined ? stop.colorPosition : stop.position,
+            opacityPosition: stop.opacityPosition !== undefined ? stop.opacityPosition : stop.position,
+            midpoint: stop.midpoint !== undefined ? stop.midpoint : (i < preset.stops.length - 1 ? 50 : undefined)
         })));
     };
 
@@ -120,12 +300,19 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             const rgb = interpolateColorAtPosition(i, sortedColorStops);
             const alpha = interpolateOpacityAtPosition(i, sortedOpacityStops);
             
-            const r = Math.round(rgb.r);
-            const g = Math.round(rgb.g);
-            const b = Math.round(rgb.b);
-            const a = alpha.toFixed(3);
-            
-            gradientStops.push(`rgba(${r}, ${g}, ${b}, ${a}) ${i}%`);
+            if (isInLayerMask) {
+                // 图层蒙版模式：转换为灰度值
+                const gray = Math.round(0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b);
+                const a = alpha.toFixed(3);
+                gradientStops.push(`rgba(${gray}, ${gray}, ${gray}, ${a}) ${i}%`);
+            } else {
+                // 普通模式：使用原始RGB颜色
+                const r = Math.round(rgb.r);
+                const g = Math.round(rgb.g);
+                const b = Math.round(rgb.b);
+                const a = alpha.toFixed(3);
+                gradientStops.push(`rgba(${r}, ${g}, ${b}, ${a}) ${i}%`);
+            }
         }
         
         return `linear-gradient(to right, ${gradientStops.join(', ')})`;
@@ -257,12 +444,19 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             const rgb = interpolateColorAtPosition(i, sortedColorStops);
             const alpha = interpolateOpacityAtPosition(i, sortedOpacityStops);
             
-            const r = Math.round(rgb.r);
-            const g = Math.round(rgb.g);
-            const b = Math.round(rgb.b);
-            const a = alpha.toFixed(3);
-            
-            gradientStops.push(`rgba(${r}, ${g}, ${b}, ${a}) ${i}%`);
+            if (isInLayerMask) {
+                // 图层蒙版模式：转换为灰度值
+                const gray = Math.round(0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b);
+                const a = alpha.toFixed(3);
+                gradientStops.push(`rgba(${gray}, ${gray}, ${gray}, ${a}) ${i}%`);
+            } else {
+                // 普通模式：使用原始RGB颜色
+                const r = Math.round(rgb.r);
+                const g = Math.round(rgb.g);
+                const b = Math.round(rgb.b);
+                const a = alpha.toFixed(3);
+                gradientStops.push(`rgba(${r}, ${g}, ${b}, ${a}) ${i}%`);
+            }
         }
         
         const displayStops = reverse
@@ -695,30 +889,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             <div className="gradient-presets-area">
                 <div className="gradient-presets">
                     {presets.map((preset, index) => {
-                        // 为每个预设生成独立的渐变样式
-                        const presetGradientStops = preset.stops.map(stop => {
-                            // 解析颜色，确保正确处理透明度
-                            let color = stop.color;
-                            const rgbaMatch = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
-                            if (rgbaMatch) {
-                                const [_, r, g, b, a = '1'] = rgbaMatch;
-                                // 确保透明度值正确
-                                const alpha = parseFloat(a);
-                                color = `rgba(${r}, ${g}, ${b}, ${alpha})`;
-                            } else if (color.startsWith('#')) {
-                                // 处理十六进制颜色
-                                const hex = color.replace('#', '');
-                                const r = parseInt(hex.substring(0, 2), 16);
-                                const g = parseInt(hex.substring(2, 4), 16);
-                                const b = parseInt(hex.substring(4, 6), 16);
-                                color = `rgba(${r}, ${g}, ${b}, 1)`;
-                            }
-                            return `${color} ${stop.position}%`;
-                        }).join(', ');
-                        
-                        const presetGradientStyle = preset.type === 'radial' 
-                            ? `radial-gradient(circle, ${presetGradientStops})`
-                            : `linear-gradient(${(preset.angle || 0) + 90}deg, ${presetGradientStops})`;
+                        // 生成考虑中点插值的预设预览样式
+                        const presetGradientStyle = generatePresetPreviewStyle(preset, isInLayerMask);
                         
                         return (
                             <div 

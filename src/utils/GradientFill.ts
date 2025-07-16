@@ -43,10 +43,10 @@ export class GradientFill {
         }
 
         // 生成颜色stops
-        const colorStops = this.generateColorStops(options.gradient.stops);
+        const colorStops = this.generateColorStops(options.gradient.stops, options.gradient.reverse);
         
         // 生成透明度stops
-        const transparencyStops = this.generateTransparencyStops(options.gradient.stops);
+        const transparencyStops = this.generateTransparencyStops(options.gradient.stops, options.gradient.reverse);
 
         // 第一步：创建渐变图层的配置
         const createGradientLayer = {
@@ -203,10 +203,13 @@ export class GradientFill {
 
     //----------------------------------------------------------------------------------
     // 生成颜色stops
-    private static generateColorStops(stops: GradientStop[]) {
+    private static generateColorStops(stops: GradientStop[], reverse: boolean = false) {
         return stops.map((stop, index) => {
             // 解析颜色
             const color = this.parseColor(stop.color);
+            
+            // 如果reverse为true，反转位置
+            const position = reverse ? (100 - stop.position) : stop.position;
             
             return {
                 _obj: "colorStop",
@@ -220,18 +223,22 @@ export class GradientFill {
                     _enum: "colorStopType",
                     _value: "userStop"
                 },
-                location: Math.round((stop.position / 100) * 4096),
-                midpoint: 50
+                location: Math.round((position / 100) * 4096),
+                // 使用stop中的midpoint属性，如果没有则默认为50
+                midpoint: stop.midpoint !== undefined ? stop.midpoint : 50
             };
         });
     }
 
     //----------------------------------------------------------------------------------
     // 生成透明度stops
-    private static generateTransparencyStops(stops: GradientStop[]) {
+    private static generateTransparencyStops(stops: GradientStop[], reverse: boolean = false) {
         return stops.map((stop, index) => {
             // 解析透明度
             const opacity = this.parseOpacity(stop.color);
+            
+            // 如果reverse为true，反转位置
+            const position = reverse ? (100 - stop.position) : stop.position;
             
             return {
                 _obj: "transferSpec",
@@ -239,8 +246,41 @@ export class GradientFill {
                     _unit: "percentUnit",
                     _value: opacity
                 },
-                location: Math.round((stop.position / 100) * 4096),
-                midpoint: 50
+                location: Math.round((position / 100) * 4096),
+                // 使用stop中的midpoint属性，如果没有则默认为50
+                midpoint: stop.midpoint !== undefined ? stop.midpoint : 50
+            };
+        });
+    }
+
+    //----------------------------------------------------------------------------------
+    // 生成图层蒙版专用的灰度stops
+    private static generateGrayscaleStops(stops: GradientStop[], reverse: boolean = false) {
+        return stops.map((stop, index) => {
+            // 解析颜色并转换为灰度
+            const color = this.parseColor(stop.color);
+            // 使用标准的灰度转换公式：0.299*R + 0.587*G + 0.114*B
+            const grayscale = Math.round(color.red * 0.299 + color.green * 0.587 + color.blue * 0.114);
+            
+            // 如果reverse为true，反转位置
+            const position = reverse ? (100 - stop.position) : stop.position;
+            
+            return {
+                _obj: "colorStop",
+                color: {
+                    _obj: "grayscale",
+                    gray: {
+                        _unit: "percentUnit",
+                        _value: Math.round((grayscale / 255) * 100)
+                    }
+                },
+                type: {
+                    _enum: "colorStopType",
+                    _value: "userStop"
+                },
+                location: Math.round((position / 100) * 4096),
+                // 使用stop中的midpoint属性，如果没有则默认为50
+                midpoint: stop.midpoint !== undefined ? stop.midpoint : 50
             };
         });
     }
@@ -372,16 +412,6 @@ export class GradientFill {
         const width = right - left;
         const height = bottom - top;
         
-        // 计算对角线长度，用于确定渐变距离
-        const diagonal = Math.sqrt(width * width + height * height);
-        
-        // 增加容差，确保渐变完全覆盖选区
-        const tolerance = diagonal * 0.2; // 20%的容差
-        const gradientLength = diagonal + tolerance; // 使用完整对角线长度
-        
-        // 将角度转换为弧度
-        const angleRad = (options.gradient.angle || 0) * Math.PI / 180;
-        
         let fromX, fromY, toX, toY;
         
         if (options.gradient.type === 'radial') {
@@ -389,18 +419,28 @@ export class GradientFill {
             fromX = toX = centerX;
             fromY = toY = centerY;
         } else {
-            // 线性渐变：根据角度计算from和to坐标
-            fromX = centerX - Math.cos(angleRad) * gradientLength;
-            fromY = centerY - Math.sin(angleRad) * gradientLength;
-            toX = centerX + Math.cos(angleRad) * gradientLength;
-            toY = centerY + Math.sin(angleRad) * gradientLength;
+            // 线性渐变：使用新的外接矩形算法计算起点和终点
+            const gradientPoints = this.calculateGradientBounds(left, top, right, bottom, options.gradient.angle || 0);
+            
+            // 如果reverse为true，交换起点和终点
+            if (options.gradient.reverse) {
+                fromX = gradientPoints.endX;
+                fromY = gradientPoints.endY;
+                toX = gradientPoints.startX;
+                toY = gradientPoints.startY;
+            } else {
+                fromX = gradientPoints.startX;
+                fromY = gradientPoints.startY;
+                toX = gradientPoints.endX;
+                toY = gradientPoints.endY;
+            }
         }
 
         // 生成颜色stops
-        const colorStops = this.generateColorStops(options.gradient.stops);
+        const colorStops = this.generateColorStops(options.gradient.stops, options.gradient.reverse);
         
         // 生成透明度stops
-        const transparencyStops = this.generateTransparencyStops(options.gradient.stops);
+        const transparencyStops = this.generateTransparencyStops(options.gradient.stops, options.gradient.reverse);
 
         const fillGradient = {
             _obj: "gradientClassEvent",
@@ -459,6 +499,66 @@ export class GradientFill {
         };
 
         await action.batchPlay([fillGradient], { synchronousExecution: true });
+    }
+
+    //----------------------------------------------------------------------------------
+    // 计算渐变的外接矩形边界点（新算法）
+    private static calculateGradientBounds(left: number, top: number, right: number, bottom: number, angle: number) {
+        // 计算选区中心点和尺寸
+        const centerX = (left + right) / 2;
+        const centerY = (top + bottom) / 2;
+        const width = right - left;
+        const height = bottom - top;
+        
+        // 将角度转换为弧度，调整角度以匹配预览效果
+        const adjustedAngle = angle + 180;
+        const angleRad = adjustedAngle * Math.PI / 180;
+        
+        // 计算渐变方向的单位向量
+        const dirX = Math.cos(angleRad);
+        const dirY = Math.sin(angleRad);
+        
+        // 计算选区矩形的四个顶点
+        const corners = [
+            { x: left, y: top },
+            { x: right, y: top },
+            { x: right, y: bottom },
+            { x: left, y: bottom }
+        ];
+        
+        // 计算每个顶点在渐变方向上的投影
+        let minProjection = Infinity;
+        let maxProjection = -Infinity;
+        
+        for (const corner of corners) {
+            // 计算从中心点到顶点的向量
+            const dx = corner.x - centerX;
+            const dy = corner.y - centerY;
+            
+            // 计算在渐变方向上的投影
+            const projection = dx * dirX + dy * dirY;
+            
+            minProjection = Math.min(minProjection, projection);
+            maxProjection = Math.max(maxProjection, projection);
+        }
+        
+        // 添加小量容差确保完全覆盖
+        const tolerance = Math.max(width, height) * 0.05;
+        minProjection -= tolerance;
+        maxProjection += tolerance;
+        
+        // 计算起点和终点坐标
+        const startX = centerX + minProjection * dirX;
+        const startY = centerY + minProjection * dirY;
+        const endX = centerX + maxProjection * dirX;
+        const endY = centerY + maxProjection * dirY;
+        
+        return {
+            startX,
+            startY,
+            endX,
+            endY
+        };
     }
 
     //----------------------------------------------------------------------------------
@@ -548,18 +648,6 @@ export class GradientFill {
             // 计算选区中心点和尺寸
             const centerX = (left + right) / 2;
             const centerY = (top + bottom) / 2;
-            const width = right - left;
-            const height = bottom - top;
-            
-            // 计算对角线长度，用于确定渐变距离
-            const diagonal = Math.sqrt(width * width + height * height);
-            
-            // 增加容差，确保渐变完全覆盖选区
-            const tolerance = diagonal * 0.2; // 20%的容差
-            const gradientLength = diagonal + tolerance; // 使用完整对角线长度
-            
-            // 将角度转换为弧度
-            const angleRad = (options.gradient.angle || 0) * Math.PI / 180;
             
             let fromX, fromY, toX, toY;
             
@@ -568,18 +656,28 @@ export class GradientFill {
                 fromX = toX = centerX;
                 fromY = toY = centerY;
             } else {
-                // 线性渐变：根据角度计算from和to坐标
-                fromX = centerX - Math.cos(angleRad) * gradientLength;
-                fromY = centerY - Math.sin(angleRad) * gradientLength;
-                toX = centerX + Math.cos(angleRad) * gradientLength;
-                toY = centerY + Math.sin(angleRad) * gradientLength;
+                // 线性渐变：使用新的外接矩形算法计算起点和终点
+                const gradientPoints = this.calculateGradientBounds(left, top, right, bottom, options.gradient.angle || 0);
+                
+                // 如果reverse为true，交换起点和终点
+                if (options.gradient.reverse) {
+                    fromX = gradientPoints.endX;
+                    fromY = gradientPoints.endY;
+                    toX = gradientPoints.startX;
+                    toY = gradientPoints.startY;
+                } else {
+                    fromX = gradientPoints.startX;
+                    fromY = gradientPoints.startY;
+                    toX = gradientPoints.endX;
+                    toY = gradientPoints.endY;
+                }
             }
             
-            // 生成颜色stops
-            const colorStops = this.generateColorStops(options.gradient.stops);
+            // 图层蒙版使用灰度stops而不是RGB颜色stops
+            const colorStops = this.generateGrayscaleStops(options.gradient.stops, options.gradient.reverse);
             
             // 生成透明度stops
-            const transparencyStops = this.generateTransparencyStops(options.gradient.stops);
+        const transparencyStops = this.generateTransparencyStops(options.gradient.stops, options.gradient.reverse);
 
             const fillGradient = {
                 _obj: "gradientClassEvent",

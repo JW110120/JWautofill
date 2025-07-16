@@ -1865,7 +1865,24 @@ export class ClearHandler {
             // 计算渐变的中心点和角度（基于选区边界）
             const centerX = bounds.width / 2;
             const centerY = bounds.height / 2;
-            const angleRad = (gradient.angle || 0) * Math.PI / 180;
+            
+            // 使用新的外接矩形算法计算起点和终点（与GradientFill.ts保持一致）
+            const gradientPoints = this.calculateGradientBounds(0, 0, bounds.width, bounds.height, gradient.angle || 0);
+            
+            let startX, startY, endX, endY;
+            
+            // 如果reverse为true，交换起点和终点
+            if (gradient.reverse) {
+                startX = gradientPoints.endX;
+                startY = gradientPoints.endY;
+                endX = gradientPoints.startX;
+                endY = gradientPoints.startY;
+            } else {
+                startX = gradientPoints.startX;
+                startY = gradientPoints.startY;
+                endX = gradientPoints.endX;
+                endY = gradientPoints.endY;
+            }
             
             console.log('📊 开始为选区内', selectionIndices.length, '个像素计算渐变灰度');
             
@@ -1889,18 +1906,22 @@ export class ClearHandler {
                     const maxDistance = Math.sqrt(centerX * centerX + centerY * centerY);
                     position = Math.min(1, distance / maxDistance);
                 } else {
-                    // 线性渐变
-                    const dx = boundsX - centerX;
-                    const dy = boundsY - centerY;
-                    const projectedDistance = dx * Math.cos(angleRad) + dy * Math.sin(angleRad);
-                    const maxProjectedDistance = Math.abs(centerX * Math.cos(angleRad)) + Math.abs(centerY * Math.sin(angleRad));
-                    position = Math.max(0, Math.min(1, (projectedDistance + maxProjectedDistance) / (2 * maxProjectedDistance)));
+                    // 线性渐变 - 使用与GradientFill.ts一致的计算方法
+                    const dx = boundsX - startX;
+                    const dy = boundsY - startY;
+                    const gradientDx = endX - startX;
+                    const gradientDy = endY - startY;
+                    const gradientLengthSq = gradientDx * gradientDx + gradientDy * gradientDy;
+                    
+                    if (gradientLengthSq > 0) {
+                        const dotProduct = dx * gradientDx + dy * gradientDy;
+                        position = Math.max(0, Math.min(1, dotProduct / gradientLengthSq));
+                    } else {
+                        position = 0;
+                    }
                 }
                 
-                // 应用反向参数
-                if (gradient.reverse) {
-                    position = 1 - position;
-                }
+                // reverse属性已在起点终点交换时处理，这里不需要再次应用
                 
                 // 根据位置插值渐变颜色并转换为灰度
                 const color = this.interpolateGradientColor(gradient.stops, position);
@@ -1923,6 +1944,66 @@ export class ClearHandler {
             console.log('📊 错误处理：生成默认灰度数据，像素数量:', pixelCount);
             return grayData;
         }
+    }
+    
+    //-------------------------------------------------------------------------------------------------
+    // 计算渐变的外接矩形边界点（新算法）
+    static calculateGradientBounds(left: number, top: number, right: number, bottom: number, angle: number) {
+        // 计算选区中心点和尺寸
+        const centerX = (left + right) / 2;
+        const centerY = (top + bottom) / 2;
+        const width = right - left;
+        const height = bottom - top;
+        
+        // 将角度转换为弧度，调整角度以匹配预览效果
+        const adjustedAngle = angle + 180;
+        const angleRad = adjustedAngle * Math.PI / 180;
+        
+        // 计算渐变方向的单位向量
+        const dirX = Math.cos(angleRad);
+        const dirY = Math.sin(angleRad);
+        
+        // 计算选区矩形的四个顶点
+        const corners = [
+            { x: left, y: top },
+            { x: right, y: top },
+            { x: right, y: bottom },
+            { x: left, y: bottom }
+        ];
+        
+        // 计算每个顶点在渐变方向上的投影
+        let minProjection = Infinity;
+        let maxProjection = -Infinity;
+        
+        for (const corner of corners) {
+            // 计算从中心点到顶点的向量
+            const dx = corner.x - centerX;
+            const dy = corner.y - centerY;
+            
+            // 计算在渐变方向上的投影
+            const projection = dx * dirX + dy * dirY;
+            
+            minProjection = Math.min(minProjection, projection);
+            maxProjection = Math.max(maxProjection, projection);
+        }
+        
+        // 添加小量容差确保完全覆盖
+        const tolerance = Math.max(width, height) * 0.05;
+        minProjection -= tolerance;
+        maxProjection += tolerance;
+        
+        // 计算起点和终点坐标
+        const startX = centerX + minProjection * dirX;
+        const startY = centerY + minProjection * dirY;
+        const endX = centerX + maxProjection * dirX;
+        const endY = centerY + maxProjection * dirY;
+        
+        return {
+            startX,
+            startY,
+            endX,
+            endY
+        };
     }
     
     // 插值渐变颜色
@@ -1959,7 +2040,21 @@ export class ClearHandler {
             return { red: 128, green: 128, blue: 128 };
         }
         
-        const ratio = (position * 100 - leftStop.position) / (rightStop.position - leftStop.position);
+        // 计算插值比例，考虑中点位置
+        let ratio = (position * 100 - leftStop.position) / (rightStop.position - leftStop.position);
+        
+        // 如果存在中点信息，应用中点插值
+        const midpoint = leftStop.midpoint ?? rightStop.midpoint ?? 50;
+        if (midpoint !== 50) {
+            const midpointRatio = midpoint / 100;
+            if (ratio <= midpointRatio) {
+                // 在左侧停止点和中点之间
+                ratio = (ratio / midpointRatio) * 0.5;
+            } else {
+                // 在中点和右侧停止点之间
+                ratio = 0.5 + ((ratio - midpointRatio) / (1 - midpointRatio)) * 0.5;
+            }
+        }
         
         return {
             red: Math.round(parseInt(leftColor[1]) * (1 - ratio) + parseInt(rightColor[1]) * ratio),
