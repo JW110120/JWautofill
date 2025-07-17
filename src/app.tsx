@@ -419,7 +419,8 @@ class App extends React.Component<AppProps, AppState> {
         await new Promise(resolve => setTimeout(resolve, 50));
         try {
             if (this.state.clearMode) {
-                await ClearHandler.clearWithOpacity(this.state.opacity, this.state);
+                const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
+                await ClearHandler.clearWithOpacity(this.state.opacity, this.state, layerInfo);
                 return;
             }
     

@@ -1,8 +1,9 @@
 import { action, app, core, imaging } from "photoshop";
 import { calculateRandomColor, hsbToRgb, rgbToGray } from './ColorUtils';
+import { Pattern } from '../types/state';
 
 export class ClearHandler {
-    static async clearWithOpacity(opacity: number, state?: any) {
+    static async clearWithOpacity(opacity: number, state?: any, layerInfo?: any) {
         try {
             // 获取当前文档信息
             const document = app.activeDocument;
@@ -11,6 +12,26 @@ export class ClearHandler {
             // 如果已经在快速蒙版状态，执行特殊填充逻辑
             if (isInQuickMask && state) {
                 await this.clearInQuickMask(state);
+                return;
+            }
+            
+            // 检查是否在图层蒙版模式
+            console.log('🔍 检查图层信息:', {
+                layerInfo: layerInfo,
+                isInLayerMask: layerInfo?.isInLayerMask,
+                isInQuickMask: layerInfo?.isInQuickMask,
+                fillMode: state?.fillMode
+            });
+            
+            if (layerInfo && layerInfo.isInLayerMask && state) {
+                console.log('🎭 当前在图层蒙版状态，使用图层蒙版清除方法');
+                if (state.fillMode === 'foreground') {
+                    await this.clearLayerMaskSolidColor(layerInfo, state, opacity);
+                } else if (state.fillMode === 'pattern' && state.selectedPattern) {
+                    await this.clearLayerMaskPattern(layerInfo, state, opacity);
+                } else if (state.fillMode === 'gradient' && state.selectedGradient) {
+                    await this.clearLayerMaskGradient(layerInfo, state, opacity);
+                }
                 return;
             }
             
@@ -1956,7 +1977,7 @@ export class ClearHandler {
         const height = bottom - top;
         
         // 将角度转换为弧度，调整角度以匹配预览效果
-        const adjustedAngle = angle + 180;
+        const adjustedAngle = angle;
         const angleRad = adjustedAngle * Math.PI / 180;
         
         // 计算渐变方向的单位向量
@@ -2426,6 +2447,600 @@ export class ClearHandler {
             
         } catch (error) {
             console.error('❌ 更新快速蒙版通道失败:', error);
+        }
+    }
+
+    //-------------------------------------------------------------------------------------------------
+    // 图层蒙版纯色清除
+    static async clearLayerMaskSolidColor(layerInfo: any, state: any, opacity: number) {
+        try {
+            console.log('🎨 开始图层蒙版纯色清除');
+            
+            // 获取选区边界
+            const bounds = await this.getSelectionData();
+            if (!bounds) {
+                console.log('❌ 无法获取选区边界');
+                return;
+            }
+            
+            // 获取当前图层ID
+            const currentLayerId = await this.getCurrentLayerId();
+            if (!currentLayerId) {
+                console.log('❌ 无法获取当前图层ID');
+                return;
+            }
+            
+            // 获取图层蒙版像素数据
+            const maskResult = await this.getLayerMaskPixels(bounds, currentLayerId);
+            if (!maskResult) {
+                console.log('❌ 无法获取图层蒙版像素数据');
+                return;
+            }
+            
+            const { maskData, selectedMaskData, stats } = maskResult;
+            
+            // 生成纯色灰度数据（固定为255，表示完全清除）
+            const solidGrayData = new Uint8Array(selectedMaskData.length).fill(255);
+            
+            // 计算最终灰度值（减去模式）
+            const finalGrayData = await this.calculateLayerMaskClearValues(
+                selectedMaskData,
+                solidGrayData,
+                opacity,
+                bounds,
+                maskData,
+                stats.isEmpty
+            );
+            
+            // 更新图层蒙版
+            await this.updateLayerMask(finalGrayData, bounds, currentLayerId);
+            
+            console.log('✅ 图层蒙版纯色清除完成');
+        } catch (error) {
+            console.error('❌ 图层蒙版纯色清除失败:', error);
+        }
+    }
+    
+    //-------------------------------------------------------------------------------------------------
+    // 图层蒙版图案清除
+    static async clearLayerMaskPattern(layerInfo: any, state: any, opacity: number) {
+        try {
+            console.log('🎨 开始图层蒙版图案清除');
+            
+            // 获取选区边界
+            const bounds = await this.getSelectionData();
+            if (!bounds) {
+                console.log('❌ 无法获取选区边界');
+                return;
+            }
+            
+            // 获取当前图层ID
+            const currentLayerId = await this.getCurrentLayerId();
+            if (!currentLayerId) {
+                console.log('❌ 无法获取当前图层ID');
+                return;
+            }
+            
+            // 获取图层蒙版像素数据
+            const maskResult = await this.getLayerMaskPixels(bounds, currentLayerId);
+            if (!maskResult) {
+                console.log('❌ 无法获取图层蒙版像素数据');
+                return;
+            }
+            
+            const { maskData, selectedMaskData, stats } = maskResult;
+            
+            // 获取图案灰度数据
+            const patternGrayData = await this.getPatternFillGrayData(state, bounds);
+            if (!patternGrayData) {
+                console.log('❌ 无法获取图案灰度数据');
+                return;
+            }
+            
+            // 生成PNG透明度数据（如果图案支持透明度）
+            const patternAlphaData = await this.generateLayerMaskAlphaData(state.selectedPattern, bounds);
+            
+            // 计算最终灰度值（减去模式，支持PNG透明度）
+            const finalGrayData = await this.calculateLayerMaskClearValuesWithAlpha(
+                selectedMaskData,
+                patternGrayData,
+                patternAlphaData,
+                opacity,
+                bounds,
+                maskData,
+                stats.isEmpty
+            );
+            
+            // 更新图层蒙版
+            await this.updateLayerMask(finalGrayData, bounds, currentLayerId);
+            
+            console.log('✅ 图层蒙版图案清除完成');
+        } catch (error) {
+            console.error('❌ 图层蒙版图案清除失败:', error);
+        }
+    }
+    
+    //-------------------------------------------------------------------------------------------------
+    // 图层蒙版渐变清除
+    static async clearLayerMaskGradient(layerInfo: any, state: any, opacity: number) {
+        try {
+            console.log('🎨 开始图层蒙版渐变清除');
+            
+            // 获取选区边界
+            const bounds = await this.getSelectionData();
+            if (!bounds) {
+                console.log('❌ 无法获取选区边界');
+                return;
+            }
+            
+            // 获取当前图层ID
+            const currentLayerId = await this.getCurrentLayerId();
+            if (!currentLayerId) {
+                console.log('❌ 无法获取当前图层ID');
+                return;
+            }
+            
+            // 获取图层蒙版像素数据
+            const maskResult = await this.getLayerMaskPixels(bounds, currentLayerId);
+            if (!maskResult) {
+                console.log('❌ 无法获取图层蒙版像素数据');
+                return;
+            }
+            
+            const { maskData, selectedMaskData, stats } = maskResult;
+            
+            // 获取渐变灰度数据
+            const gradientGrayData = await this.getGradientFillGrayData(state, bounds);
+            if (!gradientGrayData) {
+                console.log('❌ 无法获取渐变灰度数据');
+                return;
+            }
+            
+            // 计算最终灰度值（减去模式）
+            const finalGrayData = await this.calculateLayerMaskClearValues(
+                selectedMaskData,
+                gradientGrayData,
+                opacity,
+                bounds,
+                maskData,
+                stats.isEmpty
+            );
+            
+            // 更新图层蒙版
+            await this.updateLayerMask(finalGrayData, bounds, currentLayerId);
+            
+            console.log('✅ 图层蒙版渐变清除完成');
+        } catch (error) {
+            console.error('❌ 图层蒙版渐变清除失败:', error);
+        }
+    }
+    
+    //-------------------------------------------------------------------------------------------------
+    // 获取当前激活图层的ID
+    static async getCurrentLayerId() {
+        try {
+            const result = await action.batchPlay([
+                {
+                    _obj: "get",
+                    _target: [
+                        {
+                            _ref: "layer",
+                            _enum: "ordinal",
+                            _value: "targetEnum"
+                        }
+                    ]
+                }
+            ], { synchronousExecution: true });
+            
+            return result[0]?.layerID;
+        } catch (error) {
+            console.error('❌ 获取当前图层ID失败:', error);
+            return null;
+        }
+    }
+    
+    //-------------------------------------------------------------------------------------------------
+    // 为图层蒙版模式生成PNG透明度数据
+    static async generateLayerMaskAlphaData(pattern: Pattern, bounds: any): Promise<Uint8Array | null> {
+        try {
+            if (!pattern.patternRgbData || !pattern.components || pattern.components !== 4) {
+                console.log('⚠️ 图案不支持透明度或缺少RGBA数据');
+                return null;
+            }
+
+            const patternWidth = pattern.width || pattern.originalWidth || 100;
+            const patternHeight = pattern.height || pattern.originalHeight || 100;
+            const scale = pattern.currentScale || pattern.scale || 100;
+            const scaledPatternWidth = Math.round(patternWidth * scale / 100);
+            const scaledPatternHeight = Math.round(patternHeight * scale / 100);
+            const angle = pattern.currentAngle || pattern.angle || 0;
+            const fillMode = pattern.fillMode || 'tile';
+
+            let alphaResult: { alphaData?: Uint8Array };
+
+            if (fillMode === 'stamp') {
+                // 盖图章模式：生成透明度数据
+                console.log('🎯 图层蒙版：使用盖图章模式生成透明度数据');
+                alphaResult = await this.createStampPatternData(
+                    pattern.patternRgbData,
+                    patternWidth,
+                    patternHeight,
+                    4, // RGBA数据
+                    bounds.width,
+                    bounds.height,
+                    scaledPatternWidth,
+                    scaledPatternHeight,
+                    angle,
+                    bounds,
+                    false, // 非灰度模式
+                    true // 生成透明度数据
+                );
+            } else {
+                // 贴墙纸模式：生成透明度数据
+                console.log('🧱 图层蒙版：使用贴墙纸模式生成透明度数据');
+                alphaResult = this.createTilePatternData(
+                    pattern.patternRgbData,
+                    patternWidth,
+                    patternHeight,
+                    4, // RGBA数据
+                    bounds.width,
+                    bounds.height,
+                    scaledPatternWidth,
+                    scaledPatternHeight,
+                    angle,
+                    pattern.rotateAll !== false,
+                    bounds,
+                    true // 生成透明度数据
+                );
+            }
+
+            if (!alphaResult.alphaData) {
+                console.log('⚠️ 无法生成透明度数据');
+                return null;
+            }
+
+            // 如果有选区索引，提取选区内的透明度数据
+            if (bounds.selectionDocIndices && bounds.selectionDocIndices.size > 0) {
+                const selectionIndices = Array.from(bounds.selectionDocIndices);
+                const selectionAlphaData = new Uint8Array(selectionIndices.length);
+
+                for (let i = 0; i < selectionIndices.length; i++) {
+                    const docIndex = selectionIndices[i];
+                    const docX = docIndex % bounds.docWidth;
+                    const docY = Math.floor(docIndex / bounds.docWidth);
+                    const boundsX = docX - bounds.left;
+                    const boundsY = docY - bounds.top;
+
+                    if (boundsX >= 0 && boundsX < bounds.width && boundsY >= 0 && boundsY < bounds.height) {
+                        const boundsIndex = boundsY * bounds.width + boundsX;
+                        if (boundsIndex < alphaResult.alphaData.length) {
+                            selectionAlphaData[i] = alphaResult.alphaData[boundsIndex];
+                        } else {
+                            selectionAlphaData[i] = 255; // 默认不透明
+                        }
+                    } else {
+                        selectionAlphaData[i] = 255; // 默认不透明
+                    }
+                }
+
+                console.log('✅ 成功生成图层蒙版透明度数据，选区内像素数:', selectionAlphaData.length);
+                return selectionAlphaData;
+            }
+
+            console.log('✅ 成功生成图层蒙版透明度数据，总像素数:', alphaResult.alphaData.length);
+            return alphaResult.alphaData;
+
+        } catch (error) {
+            console.error('❌ 生成图层蒙版透明度数据失败:', error);
+            return null;
+        }
+    }
+    
+    //-------------------------------------------------------------------------------------------------
+    // 获取图层蒙版通道的像素数据
+    static async getLayerMaskPixels(bounds: any, layerId: number) {
+        try {
+            console.log('🎭 开始获取图层蒙版数据，图层ID:', layerId);
+            
+            // 根据官方文档，使用getLayerMask获取完整文档的图层蒙版像素数据
+            // 添加sourceBounds参数以符合API规范
+            const pixels = await imaging.getLayerMask({
+                documentID: app.activeDocument.id,
+                layerID: layerId,
+                sourceBounds: {
+                    left: 0,
+                    top: 0,
+                    right: bounds.docWidth,
+                    bottom: bounds.docHeight
+                },
+                componentSize: 8
+            });
+            
+            const fullDocMaskArray = await pixels.imageData.getData();
+            console.log('🎯 完整文档蒙版数组长度:', fullDocMaskArray.length);
+            
+            // 从完整文档长度的蒙版数组中按照索引提取选区内的蒙版像素数据
+            const selectionSize = bounds.selectionDocIndices.size;
+            const selectionIndices = Array.from(bounds.selectionDocIndices);
+            
+            // 提取选区内的图层蒙版值并计算统计信息
+            const selectionMaskValues = [];
+            for (let i = 0; i < selectionIndices.length; i++) {
+                const docIndex = selectionIndices[i];
+                if (docIndex >= 0 && docIndex < fullDocMaskArray.length) {
+                    selectionMaskValues.push(fullDocMaskArray[docIndex]);
+                }
+            }
+            
+            let minVal = 255, maxVal = 0, zeroCount = 0, fullCount = 0;
+            for (const val of selectionMaskValues) {
+                minVal = Math.min(minVal, val);
+                maxVal = Math.max(maxVal, val);
+                if (val === 0) zeroCount++;
+                if (val === 255) fullCount++;
+            }
+            console.log('🎯 选区内图层蒙版值统计: 最小值=', minVal, '最大值=', maxVal, '黑色像素=', zeroCount, '白色像素=', fullCount);
+            
+            const maskPixels = new Uint8Array(selectionSize);
+            console.log('🎯 选区索引数量:', selectionIndices.length, '第一个索引:', selectionIndices[0], '最后一个索引:', selectionIndices[selectionIndices.length - 1]);
+            
+            let outOfRangeCount = 0;
+            // 遍历选区内的每个像素，从完整文档蒙版数组中提取对应的值
+            for (let i = 0; i < selectionIndices.length; i++) {
+                const docIndex = selectionIndices[i];
+                if (docIndex >= 0 && docIndex < fullDocMaskArray.length) {
+                    maskPixels[i] = fullDocMaskArray[docIndex];
+                } else {
+                    outOfRangeCount++;
+                    maskPixels[i] = fullDocMaskArray[docIndex] || 0; // 保持原始像素值或默认黑色
+                }
+                
+                // 只输出前3个像素的提取过程
+                if (i < 3) {
+                    console.log(`🎯 提取像素${i}: 文档索引=${docIndex}, 蒙版值=${maskPixels[i]}`);
+                }
+            }
+            
+            if (outOfRangeCount > 0) {
+                console.warn(`⚠️ ${outOfRangeCount}个索引超出范围，使用默认值0`);
+            }
+            
+            // 计算提取数据的统计信息
+            let extractedMin = 255, extractedMax = 0;
+            let blackPixels = 0, whitePixels = 0;
+            let isEmpty = true;
+            
+            for (let i = 0; i < maskPixels.length; i++) {
+                const value = maskPixels[i];
+                if (value > 0) isEmpty = false;
+                extractedMin = Math.min(extractedMin, value);
+                extractedMax = Math.max(extractedMax, value);
+                if (value === 0) blackPixels++;
+                if (value === 255) whitePixels++;
+            }
+            
+            const stats = {
+                minValue: extractedMin,
+                maxValue: extractedMax,
+                blackPixels,
+                whitePixels,
+                isEmpty
+            };
+            
+            console.log('🎯 图层蒙版选区内像素数量:', selectionSize);
+            console.log('🎯 提取的蒙版数据统计: 最小值=', extractedMin, '最大值=', extractedMax);
+            console.log('📊 图层蒙版统计信息:', stats);
+            
+            // 释放ImageData内存
+            pixels.imageData.dispose();
+            
+            return {
+                maskData: fullDocMaskArray,
+                selectedMaskData: maskPixels,
+                stats
+            };
+        } catch (error) {
+            console.error('❌ 获取图层蒙版像素数据失败:', error);
+            throw error;
+        }
+    }
+    
+    //-------------------------------------------------------------------------------------------------
+    // 计算图层蒙版清除的最终灰度值（减去模式）
+    static async calculateLayerMaskClearValues(
+        selectedMaskData: Uint8Array,
+        clearData: Uint8Array,
+        opacity: number,
+        bounds: any,
+        maskData: Uint8Array,
+        isEmpty: boolean
+    ) {
+        try {
+            console.log('🧮 计算最终灰度值（减去模式）');
+            
+            const finalData = new Uint8Array(selectedMaskData.length);
+            const newMaskValue = new Uint8Array(maskData.length);
+            
+            // 复制原始蒙版数据
+            newMaskValue.set(maskData);
+            
+            // 分批处理，避免一次性处理过多数据导致栈溢出
+            const BATCH_SIZE = 10000;
+            
+            for (let batchStart = 0; batchStart < selectedMaskData.length; batchStart += BATCH_SIZE) {
+                const batchEnd = Math.min(batchStart + BATCH_SIZE, selectedMaskData.length);
+                
+                await new Promise(resolve => {
+                    setTimeout(() => {
+                        // 使用减去模式的清除公式
+                        for (let i = batchStart; i < batchEnd; i++) {
+                            const maskValue = selectedMaskData[i];  // 蒙版像素值 (0-255)
+                            const clearValue = clearData[i]; // 清除像素值 (0-255)
+                            
+                            // 减去模式：蒙版值 - 清除值 * 不透明度
+                            const opacityFactor = opacity / 100;
+                            const subtractAmount = clearValue * opacityFactor;
+                            const finalValue = maskValue - subtractAmount;
+                            
+                            finalData[i] = Math.min(255, Math.max(0, Math.round(finalValue)));
+                        }
+                        resolve(void 0);
+                    }, 0);
+                });
+            }
+            
+            // 将计算结果映射回完整文档的newMaskValue中
+            if (bounds && bounds.selectionDocIndices && bounds.selectionDocIndices.size > 0) {
+                const selectionIndices = Array.from(bounds.selectionDocIndices);
+                let resultIndex = 0;
+                
+                for (const docIndex of selectionIndices) {
+                    if (docIndex < newMaskValue.length && resultIndex < finalData.length) {
+                        newMaskValue[docIndex] = finalData[resultIndex];
+                        resultIndex++;
+                    }
+                }
+            }
+            
+            return newMaskValue;
+        } catch (error) {
+            console.error('❌ 计算最终灰度值失败:', error);
+            return null;
+        }
+    }
+    
+    //-------------------------------------------------------------------------------------------------
+    // 计算图层蒙版清除的最终灰度值（减去模式，支持PNG透明度）
+    static async calculateLayerMaskClearValuesWithAlpha(
+        selectedMaskData: Uint8Array,
+        clearData: Uint8Array,
+        alphaData: Uint8Array | null,
+        opacity: number,
+        bounds: any,
+        maskData: Uint8Array,
+        isEmpty: boolean
+    ) {
+        try {
+            console.log('🧮 计算最终灰度值（减去模式，支持PNG透明度）');
+            
+            const finalData = new Uint8Array(selectedMaskData.length);
+            const newMaskValue = new Uint8Array(maskData.length);
+            
+            // 复制原始蒙版数据
+            newMaskValue.set(maskData);
+            
+            // 分批处理，避免一次性处理过多数据导致栈溢出
+            const BATCH_SIZE = 10000;
+            
+            for (let batchStart = 0; batchStart < selectedMaskData.length; batchStart += BATCH_SIZE) {
+                const batchEnd = Math.min(batchStart + BATCH_SIZE, selectedMaskData.length);
+                
+                await new Promise(resolve => {
+                    setTimeout(() => {
+                        // 使用减去模式的清除公式，支持PNG透明度
+                        for (let i = batchStart; i < batchEnd; i++) {
+                            const maskValue = selectedMaskData[i];  // 蒙版像素值 (0-255)
+                            const clearValue = clearData[i]; // 清除像素值 (0-255)
+                            const alpha = alphaData ? alphaData[i] : 255; // PNG透明度 (0-255)
+                            
+                            // 如果图案完全透明，不进行清除操作
+                            if (alpha === 0) {
+                                finalData[i] = maskValue;
+                                continue;
+                            }
+                            
+                            // 减去模式：蒙版值 - (清除值 * 不透明度 * PNG透明度)
+                            const opacityFactor = opacity / 100;
+                            const alphaFactor = alpha / 255;
+                            const subtractAmount = clearValue * opacityFactor * alphaFactor;
+                            const finalValue = maskValue - subtractAmount;
+                            
+                            finalData[i] = Math.min(255, Math.max(0, Math.round(finalValue)));
+                        }
+                        resolve(void 0);
+                    }, 0);
+                });
+            }
+            
+            // 将计算结果映射回完整文档的newMaskValue中
+            if (bounds && bounds.selectionDocIndices && bounds.selectionDocIndices.size > 0) {
+                const selectionIndices = Array.from(bounds.selectionDocIndices);
+                let resultIndex = 0;
+                
+                for (const docIndex of selectionIndices) {
+                    if (docIndex < newMaskValue.length && resultIndex < finalData.length) {
+                        newMaskValue[docIndex] = finalData[resultIndex];
+                        resultIndex++;
+                    }
+                }
+            }
+            
+            console.log('✅ 支持PNG透明度的图层蒙版清除计算完成');
+            return newMaskValue;
+        } catch (error) {
+            console.error('❌ 计算最终灰度值失败:', error);
+            return null;
+        }
+    }
+    
+    //-------------------------------------------------------------------------------------------------
+    // 更新图层蒙版
+    static async updateLayerMask(grayData: Uint8Array, bounds: any, layerId: number) {
+        try {
+            console.log('🔄 更新图层蒙版');
+            
+            let documentColorProfile = "Dot Gain 15%";
+            
+            const finalDocWidth = Math.round(bounds.docWidth);
+            const finalDocHeight = Math.round(bounds.docHeight);
+            const expectedSize = finalDocWidth * finalDocHeight;
+            
+            console.log('📏 图层蒙版数据验证:');
+            console.log('  - 文档宽度:', finalDocWidth);
+            console.log('  - 文档高度:', finalDocHeight);
+            console.log('  - 期望数据大小:', expectedSize);
+            console.log('  - 实际数据大小:', grayData.length);
+            
+            // 验证数据大小
+            if (grayData.length !== expectedSize) {
+                console.error('❌ 图层蒙版数据大小不匹配');
+                console.error('期望大小:', expectedSize, '实际大小:', grayData.length);
+                
+                // 创建正确大小的数据缓冲区
+                const correctedData = new Uint8Array(expectedSize);
+                
+                // 如果数据太小，用0填充；如果太大，截断
+                const copySize = Math.min(grayData.length, expectedSize);
+                correctedData.set(grayData.subarray(0, copySize));
+                
+                console.log('🔧 已创建修正后的数据缓冲区，大小:', correctedData.length);
+                grayData = correctedData;
+            }
+            
+            // 创建完整文档尺寸的ImageData
+            const fullOptions = {
+                width: finalDocWidth,
+                height: finalDocHeight,
+                components: 1,
+                chunky: true,
+                colorProfile: documentColorProfile,
+                colorSpace: "Grayscale"
+            };
+            
+            const fullImageData = await imaging.createImageDataFromBuffer(grayData, fullOptions);
+            
+            // 更新图层蒙版
+            await imaging.putLayerMask({
+                documentID: app.activeDocument.id,
+                layerID: layerId,
+                imageData: fullImageData
+            });
+            
+            fullImageData.dispose();
+            
+            console.log('✅ 图层蒙版更新完成');
+        } catch (error) {
+            console.error('❌ 更新图层蒙版失败:', error);
         }
     }
 

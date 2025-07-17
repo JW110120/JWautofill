@@ -1165,16 +1165,26 @@ export class PatternFill {
         
         // 性能监控
         const startTime = performance.now();
-        const hasPatternMask = !!patternMask;
-        const hasCacheOptimization = !!coordinateCache;
-        console.log('⚡ 性能优化状态: 图案掩码=', hasPatternMask, '坐标缓存=', hasCacheOptimization);
         
-        // 检查图案是否支持PNG不透明度
-        const hasAlpha = options.pattern.components === 4 || options.pattern.patternComponents === 4;
-        const patternAlphaData = hasAlpha ? options.pattern.patternAlphaData : null;
+        // 检查图案是否支持PNG透明度
+        const hasAlpha = (options.pattern.components === 4 || options.pattern.patternComponents === 4) && options.pattern.patternRgbData;
+        console.log('🔍 PNG透明度检查:', {
+            hasAlpha: hasAlpha,
+            components: options.pattern.components,
+            patternComponents: options.pattern.patternComponents,
+            hasPatternRgbData: !!options.pattern.patternRgbData
+        });
+        
+        // 生成透明度数据（如果需要）
+        let patternAlphaData: Uint8Array | null = null;
+        if (hasAlpha && options.pattern.patternRgbData) {
+            console.log('🎨 生成图层蒙版模式的PNG透明度数据');
+            patternAlphaData = await this.generateLayerMaskAlphaData(options.pattern, bounds);
+        }
         
         // 获取图案掩码数据（如果有的话）
         const patternMask = (options.pattern as any).patternMask as Uint8Array | undefined;
+        const hasPatternMask = !!patternMask;
         
         // 预先计算选区索引数组，避免在循环中重复转换（性能优化）
         const selectionIndices = bounds.selectionDocIndices ? Array.from(bounds.selectionDocIndices) : null;
@@ -1194,6 +1204,9 @@ export class PatternFill {
             }
         }
         
+        const hasCacheOptimization = !!coordinateCache;
+        console.log('⚡ 性能优化状态: 图案掩码=', hasPatternMask, '坐标缓存=', hasCacheOptimization);
+        
         // 计算数据统计而不是输出大量数组
         let maskMin = 255, maskMax = 0, patternMin = 255, patternMax = 0;
         for (let i = 0; i < Math.min(100, maskPixels.length); i++) {
@@ -1209,6 +1222,8 @@ export class PatternFill {
         console.log('📊 图案数据统计: 最小值=', patternMin, '最大值=', patternMax);
         if (patternAlphaData) {
             console.log('📊 图案支持Alpha通道，长度:', patternAlphaData.length);
+        } else if (hasAlpha) {
+            console.log('⚠️ 图案应该支持Alpha通道但数据为空');
         }
         
         let minResult = 255, maxResult = 0, changeCount = 0;
@@ -1216,7 +1231,7 @@ export class PatternFill {
         for (let i = 0; i < maskPixels.length; i++) {
             const maskValue = maskPixels[i];
             const patternValue = patternGrayData[i % patternGrayData.length];
-            const patternAlpha = patternAlphaData ? patternAlphaData[i % patternAlphaData.length] : 255;
+            const patternAlpha = patternAlphaData ? patternAlphaData[i] : 255;
             
             // 确定当前像素是否在图案区域内（高性能缓存版本）
             let isPatternArea = true; // 默认为图案区域
@@ -1262,6 +1277,102 @@ export class PatternFill {
         console.log('⚡ 混合计算完成，耗时:', executionTime.toFixed(2), 'ms，平均每像素:', (executionTime / maskPixels.length).toFixed(4), 'ms');
         
         return result;
+    }
+
+    // 为图层蒙版模式生成PNG透明度数据
+    private static async generateLayerMaskAlphaData(pattern: Pattern, bounds: any): Promise<Uint8Array | null> {
+        try {
+            if (!pattern.patternRgbData || !pattern.components || pattern.components !== 4) {
+                console.log('⚠️ 图案不支持透明度或缺少RGBA数据');
+                return null;
+            }
+
+            const patternWidth = pattern.width || pattern.originalWidth || 100;
+            const patternHeight = pattern.height || pattern.originalHeight || 100;
+            const scale = pattern.currentScale || pattern.scale || 100;
+            const scaledPatternWidth = Math.round(patternWidth * scale / 100);
+            const scaledPatternHeight = Math.round(patternHeight * scale / 100);
+            const angle = pattern.currentAngle || pattern.angle || 0;
+            const fillMode = pattern.fillMode || 'tile';
+
+            let alphaResult: { alphaData?: Uint8Array };
+
+            if (fillMode === 'stamp') {
+                // 盖图章模式：生成透明度数据
+                console.log('🎯 图层蒙版：使用盖图章模式生成透明度数据');
+                alphaResult = await createStampPatternData(
+                    pattern.patternRgbData,
+                    patternWidth,
+                    patternHeight,
+                    4, // RGBA数据
+                    bounds.width,
+                    bounds.height,
+                    scaledPatternWidth,
+                    scaledPatternHeight,
+                    angle,
+                    bounds,
+                    false, // 非灰度模式
+                    true // 生成透明度数据
+                );
+            } else {
+                // 贴墙纸模式：生成透明度数据
+                console.log('🧱 图层蒙版：使用贴墙纸模式生成透明度数据');
+                alphaResult = createTilePatternData(
+                    pattern.patternRgbData,
+                    patternWidth,
+                    patternHeight,
+                    4, // RGBA数据
+                    bounds.width,
+                    bounds.height,
+                    scaledPatternWidth,
+                    scaledPatternHeight,
+                    angle,
+                    pattern.rotateAll !== false,
+                    bounds,
+                    true // 生成透明度数据
+                );
+            }
+
+            if (!alphaResult.alphaData) {
+                console.log('⚠️ 无法生成透明度数据');
+                return null;
+            }
+
+            // 如果有选区索引，提取选区内的透明度数据
+            if (bounds.selectionDocIndices && bounds.selectionDocIndices.size > 0) {
+                const selectionIndices = Array.from(bounds.selectionDocIndices);
+                const selectionAlphaData = new Uint8Array(selectionIndices.length);
+
+                for (let i = 0; i < selectionIndices.length; i++) {
+                    const docIndex = selectionIndices[i];
+                    const docX = docIndex % bounds.docWidth;
+                    const docY = Math.floor(docIndex / bounds.docWidth);
+                    const boundsX = docX - bounds.left;
+                    const boundsY = docY - bounds.top;
+
+                    if (boundsX >= 0 && boundsX < bounds.width && boundsY >= 0 && boundsY < bounds.height) {
+                        const boundsIndex = boundsY * bounds.width + boundsX;
+                        if (boundsIndex < alphaResult.alphaData.length) {
+                            selectionAlphaData[i] = alphaResult.alphaData[boundsIndex];
+                        } else {
+                            selectionAlphaData[i] = 255; // 默认不透明
+                        }
+                    } else {
+                        selectionAlphaData[i] = 255; // 默认不透明
+                    }
+                }
+
+                console.log('✅ 成功生成图层蒙版透明度数据，选区内像素数:', selectionAlphaData.length);
+                return selectionAlphaData;
+            }
+
+            console.log('✅ 成功生成图层蒙版透明度数据，总像素数:', alphaResult.alphaData.length);
+            return alphaResult.alphaData;
+
+        } catch (error) {
+            console.error('❌ 生成图层蒙版透明度数据失败:', error);
+            return null;
+        }
     }
 
     // 将混合后的数据写回图层蒙版
