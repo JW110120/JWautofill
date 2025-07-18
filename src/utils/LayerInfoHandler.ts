@@ -94,43 +94,27 @@ export class LayerInfoHandler {
                 console.log("🎭 蒙版通道信息:", maskInfo);
                 console.log("🎯 目标通道信息:", targetChannelInfo);
                 
-                // 方法1：检查目标通道是否为蒙版类型
-                if (targetChannelInfo._enum === "mask" || 
-                    targetChannelInfo._value === "mask" ||
-                    (targetChannelInfo.name && 
-                     (targetChannelInfo.name.includes("蒙版") || 
-                      targetChannelInfo.name.toLowerCase().includes("mask")))) {
-                    console.log("✅ 检测到当前目标通道为图层蒙版:", {
-                        enum: targetChannelInfo._enum,
-                        value: targetChannelInfo._value,
-                        name: targetChannelInfo.name
-                    });
-                    return true;
-                }
+                // 简化逻辑：比较channelName参数
+                const maskChannelName = maskInfo.channelName;
+                const targetChannelName = targetChannelInfo.channelName;
                 
-                // 方法2：比对通道 itemIndex（特殊标识）
-                let maskItemIndex = maskInfo.itemIndex;
-                let targetItemIndex = targetChannelInfo.itemIndex;
-                
-                console.log("🔍 通道索引信息:", {
-                    maskItemIndex: maskItemIndex,
-                    targetItemIndex: targetItemIndex
+                console.log("🔍 通道名称比较:", {
+                    maskChannelName: maskChannelName,
+                    targetChannelName: targetChannelName
                 });
                 
-                if (maskItemIndex !== undefined && targetItemIndex !== undefined && maskItemIndex === targetItemIndex) {
-                    console.log("✅ 图层蒙版通道是当前激活通道。", {
-                        maskItemIndex: maskItemIndex,
-                        targetItemIndex: targetItemIndex
+                if (maskChannelName && targetChannelName && maskChannelName === targetChannelName) {
+                    console.log("✅ 正在编辑蒙版 - 通道名称匹配:", {
+                        channelName: maskChannelName
                     });
                     return true;
+                } else {
+                    console.log("❌ 未在编辑蒙版 - 通道名称不匹配:", {
+                        maskChannelName: maskChannelName,
+                        targetChannelName: targetChannelName
+                    });
+                    return false;
                 }
-                
-                console.log("❌ 当前目标通道不是图层蒙版:", {
-                    targetEnum: targetChannelInfo._enum,
-                    targetValue: targetChannelInfo._value,
-                    targetName: targetChannelInfo.name
-                });
-                return false;
             }
             
             console.log("❌ 未找到蒙版信息或激活通道信息");

@@ -413,19 +413,45 @@ export class ClearHandler {
         // 检查是否有选区羽化系数
         const hasFeathering = bounds.selectionCoefficients && bounds.selectionCoefficients.length > 0;
         
-        // 渐变清除模式的计算公式：最终结果 = 渐变灰度 * 不透明度
-        // 性能优化：使用位运算替代Math.round，移除不必要的Math.min/Math.max检查
-        for (let i = 0; i < dataLength; i++) {
-            let effectiveOpacityFactor = opacityFactor;
-            
-            // 应用选区羽化系数
-            if (hasFeathering && i < bounds.selectionCoefficients.length) {
-                effectiveOpacityFactor *= bounds.selectionCoefficients[i];
+        // 检查是否有渐变透明度信息需要处理
+        const hasGradientAlpha = state?.selectedGradient && state.selectedGradient.stops;
+        
+        // 如果有渐变透明度信息，生成对应的透明度数据
+        let alphaData: Uint8Array | undefined;
+        if (hasGradientAlpha && state?.selectedGradient) {
+            alphaData = await this.generateGradientAlphaData(state, bounds);
+        }
+        
+        if (hasGradientAlpha && alphaData) {
+            // 有透明度数据的情况（考虑渐变透明度）
+            for (let i = 0; i < dataLength; i++) {
+                const alpha = alphaData[i];
+                if (alpha === 0) {
+                    finalData[i] = 0; // 透明区域直接设为0
+                } else {
+                    // 计算有效不透明度并应用
+                    let effectiveOpacity = (opacity * alpha) / 25500; // 合并除法运算 (opacity * alpha / 255 / 100)
+                    
+                    // 应用选区羽化系数
+                    if (hasFeathering && i < bounds.selectionCoefficients.length) {
+                        effectiveOpacity *= bounds.selectionCoefficients[i];
+                    }
+                    
+                    finalData[i] = Math.floor(gradientGrayData[i] * effectiveOpacity);
+                }
             }
-            
-            // 由于gradientGrayData[i]范围是0-255，effectiveOpacityFactor范围是0-1，
-            // 所以结果必然在0-255范围内，无需额外检查（绝对公式）
-            finalData[i] = Math.floor(gradientGrayData[i] * effectiveOpacityFactor);
+        } else {
+            // 无透明度数据的情况（原有逻辑）
+            for (let i = 0; i < dataLength; i++) {
+                let effectiveOpacityFactor = opacityFactor;
+                
+                // 应用选区羽化系数
+                if (hasFeathering && i < bounds.selectionCoefficients.length) {
+                    effectiveOpacityFactor *= bounds.selectionCoefficients[i];
+                }
+                
+                finalData[i] = Math.floor(gradientGrayData[i] * effectiveOpacityFactor);
+            }
         }
         
         console.log('✅ 渐变清除模式灰度值计算完成');
@@ -1944,14 +1970,19 @@ export class ClearHandler {
                 
                 // reverse属性已在起点终点交换时处理，这里不需要再次应用
                 
-                // 根据位置插值渐变颜色并转换为灰度
-                const color = this.interpolateGradientColor(gradient.stops, position);
-                const grayValue = Math.round(
-                    0.299 * color.red + 
-                    0.587 * color.green + 
-                    0.114 * color.blue
+                // 根据位置插值渐变颜色并转换为灰度，同时考虑透明度
+                const colorWithOpacity = this.interpolateGradientColorWithOpacity(gradient.stops, position);
+                
+                // 计算颜色的灰度值
+                const colorGrayscale = Math.round(
+                    0.299 * colorWithOpacity.red + 
+                    0.587 * colorWithOpacity.green + 
+                    0.114 * colorWithOpacity.blue
                 );
-                grayData[i] = grayValue;
+                
+                // 综合考虑颜色灰度和透明度：灰度值 = (颜色灰度/255) × (不透明度/100) × 255
+                const finalGrayValue = Math.round((colorGrayscale / 255) * (colorWithOpacity.opacity / 100) * 255);
+                grayData[i] = finalGrayValue;
             }
             
             console.log('✅ 渐变灰度数据生成完成，数据长度:', grayData.length);
@@ -2027,7 +2058,7 @@ export class ClearHandler {
         };
     }
     
-    // 插值渐变颜色
+    // 插值渐变颜色（不包含透明度）
     static interpolateGradientColor(stops: any[], position: number) {
         if (!stops || stops.length === 0) {
             return { red: 128, green: 128, blue: 128 };
@@ -2054,12 +2085,80 @@ export class ClearHandler {
             }
         }
         
-        const leftColor = leftStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-        const rightColor = rightStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+        const leftColor = leftStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+         const rightColor = rightStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+         
+         if (!leftColor || !rightColor) {
+             return { red: 128, green: 128, blue: 128, opacity: 100 };
+         }
+         
+         // 解析透明度
+         const leftOpacity = leftColor[4] !== undefined ? Math.round(parseFloat(leftColor[4]) * 100) : 100;
+         const rightOpacity = rightColor[4] !== undefined ? Math.round(parseFloat(rightColor[4]) * 100) : 100;
+         
+         // 计算插值比例，考虑中点位置
+         let ratio = (position * 100 - leftStop.position) / (rightStop.position - leftStop.position);
+         
+         // 如果存在中点信息，应用中点插值
+         const midpoint = leftStop.midpoint ?? rightStop.midpoint ?? 50;
+         if (midpoint !== 50) {
+             const midpointRatio = midpoint / 100;
+             if (ratio <= midpointRatio) {
+                 // 在左侧停止点和中点之间
+                 ratio = (ratio / midpointRatio) * 0.5;
+             } else {
+                 // 在中点和右侧停止点之间
+                 ratio = 0.5 + ((ratio - midpointRatio) / (1 - midpointRatio)) * 0.5;
+             }
+         }
+         
+         return {
+             red: Math.round(parseInt(leftColor[1]) * (1 - ratio) + parseInt(rightColor[1]) * ratio),
+             green: Math.round(parseInt(leftColor[2]) * (1 - ratio) + parseInt(rightColor[2]) * ratio),
+             blue: Math.round(parseInt(leftColor[3]) * (1 - ratio) + parseInt(rightColor[3]) * ratio),
+             opacity: Math.round(leftOpacity * (1 - ratio) + rightOpacity * ratio)
+         };
+    }
+    
+    // 插值渐变颜色（包含透明度）
+    static interpolateGradientColorWithOpacity(stops: any[], position: number) {
+        if (!stops || stops.length === 0) {
+            return { red: 128, green: 128, blue: 128, opacity: 100 };
+        }
+        
+        if (stops.length === 1) {
+            const color = stops[0].color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+            const opacity = color && color[4] !== undefined ? Math.round(parseFloat(color[4]) * 100) : 100;
+            return color ? {
+                red: parseInt(color[1]),
+                green: parseInt(color[2]),
+                blue: parseInt(color[3]),
+                opacity: opacity
+            } : { red: 128, green: 128, blue: 128, opacity: 100 };
+        }
+        
+        // 找到位置两侧的stop
+        let leftStop = stops[0];
+        let rightStop = stops[stops.length - 1];
+        
+        for (let i = 0; i < stops.length - 1; i++) {
+            if (stops[i].position <= position * 100 && stops[i + 1].position >= position * 100) {
+                leftStop = stops[i];
+                rightStop = stops[i + 1];
+                break;
+            }
+        }
+        
+        const leftColor = leftStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+        const rightColor = rightStop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
         
         if (!leftColor || !rightColor) {
-            return { red: 128, green: 128, blue: 128 };
+            return { red: 128, green: 128, blue: 128, opacity: 100 };
         }
+        
+        // 解析透明度
+        const leftOpacity = leftColor[4] !== undefined ? Math.round(parseFloat(leftColor[4]) * 100) : 100;
+        const rightOpacity = rightColor[4] !== undefined ? Math.round(parseFloat(rightColor[4]) * 100) : 100;
         
         // 计算插值比例，考虑中点位置
         let ratio = (position * 100 - leftStop.position) / (rightStop.position - leftStop.position);
@@ -2080,7 +2179,8 @@ export class ClearHandler {
         return {
             red: Math.round(parseInt(leftColor[1]) * (1 - ratio) + parseInt(rightColor[1]) * ratio),
             green: Math.round(parseInt(leftColor[2]) * (1 - ratio) + parseInt(rightColor[2]) * ratio),
-            blue: Math.round(parseInt(leftColor[3]) * (1 - ratio) + parseInt(rightColor[3]) * ratio)
+            blue: Math.round(parseInt(leftColor[3]) * (1 - ratio) + parseInt(rightColor[3]) * ratio),
+            opacity: Math.round(leftOpacity * (1 - ratio) + rightOpacity * ratio)
         };
     }
 
@@ -2146,15 +2246,16 @@ export class ClearHandler {
         // 预先计算选区索引数组，避免在循环中重复转换
         const selectionIndices = bounds.selectionDocIndices ? Array.from(bounds.selectionDocIndices) : null;
         
-        // 检查是否有透明度信息需要处理（PNG图案自带透明区域）
-        const hasAlpha = state?.fillMode === 'pattern' && state?.selectedPattern && state.selectedPattern.hasAlpha && 
-                         state.selectedPattern.patternRgbData && state.selectedPattern.patternComponents === 4;
+        // 检查是否有透明度信息需要处理（PNG图案自带透明区域或渐变透明度）
+        const hasPatternAlpha = state?.fillMode === 'pattern' && state?.selectedPattern && state.selectedPattern.hasAlpha && 
+                               state.selectedPattern.patternRgbData && state.selectedPattern.patternComponents === 4;
+        const hasGradientAlpha = state?.fillMode === 'gradient' && state?.selectedGradient;
+        const hasAlpha = hasPatternAlpha || hasGradientAlpha;
         
-        console.log('🔍 PNG透明度检查:', {
+        console.log('🔍 透明度检查:', {
             hasSelectedPattern: !!state?.selectedPattern,
-            hasAlpha: state?.selectedPattern?.hasAlpha,
-            hasPatternRgbData: !!state?.selectedPattern?.patternRgbData,
-            patternComponents: state?.selectedPattern?.patternComponents,
+            hasPatternAlpha: hasPatternAlpha,
+            hasGradientAlpha: hasGradientAlpha,
             finalHasAlpha: hasAlpha
         });
         
@@ -2252,10 +2353,13 @@ export class ClearHandler {
                     }
                 }
             }
+        } else if (hasGradientAlpha && state?.selectedGradient) {
+            console.log('🌈 生成渐变透明度数据');
+            alphaData = await this.generateGradientAlphaData(state, bounds);
         }
         
         if (hasAlpha) {
-            console.log('🎨 PNG透明度数据生成完成:', {
+            console.log('🎨 透明度数据生成完成:', {
                 hasAlphaData: !!alphaData,
                 alphaDataLength: alphaData?.length,
                 fillDataLength: fillData.length,
@@ -2277,7 +2381,7 @@ export class ClearHandler {
                         let fillValue = fillData[i]; // 填充像素值 (0-255)
                         let effectiveOpacity = opacity; // 有效不透明度
                         
-                        // 处理透明度信息（PNG图案自带透明区域）
+                        // 处理透明度信息（PNG图案自带透明区域或渐变透明度）
                         if (hasAlpha && alphaData && i < alphaData.length) {
                             const alpha = alphaData[i];
                             // 透明度影响有效不透明度：alpha=0时完全透明，不参与清除；alpha=255时完全不透明，正常清除
@@ -2596,10 +2700,14 @@ export class ClearHandler {
                 return;
             }
             
-            // 计算最终灰度值（减去模式）
-            const finalGrayData = await this.calculateLayerMaskClearValues(
+            // 为渐变生成透明度数据（基于渐变stops中的透明度信息）
+            const gradientAlphaData = await this.generateGradientAlphaData(state, bounds);
+            
+            // 计算最终灰度值（减去模式，支持渐变透明度）
+            const finalGrayData = await this.calculateLayerMaskClearValuesWithAlpha(
                 selectedMaskData,
                 gradientGrayData,
+                gradientAlphaData,
                 opacity,
                 bounds,
                 maskData,
@@ -2635,6 +2743,102 @@ export class ClearHandler {
             return result[0]?.layerID;
         } catch (error) {
             console.error('❌ 获取当前图层ID失败:', error);
+            return null;
+        }
+    }
+    
+    //-------------------------------------------------------------------------------------------------
+    // 为渐变生成透明度数据（基于渐变stops中的透明度信息）
+    static async generateGradientAlphaData(state: any, bounds: any): Promise<Uint8Array | null> {
+        try {
+            console.log('🌈 开始生成渐变透明度数据');
+            
+            const gradient = state.selectedGradient;
+            if (!gradient || !gradient.stops) {
+                console.log('⚠️ 没有渐变数据，返回完全不透明');
+                return null;
+            }
+            
+            // 检查是否有选区索引信息
+            if (!bounds.selectionDocIndices || bounds.selectionDocIndices.size === 0) {
+                console.log('⚠️ 没有找到选区索引信息');
+                return null;
+            }
+            
+            // 只为选区内的像素生成透明度数据
+            const selectionIndices = Array.from(bounds.selectionDocIndices);
+            const alphaData = new Uint8Array(selectionIndices.length);
+            
+            // 计算渐变的中心点和角度（基于选区边界）
+            const centerX = bounds.width / 2;
+            const centerY = bounds.height / 2;
+            
+            // 使用与getGradientFillGrayData相同的算法计算起点和终点
+            const gradientPoints = this.calculateGradientBounds(0, 0, bounds.width, bounds.height, gradient.angle || 0);
+            
+            let startX, startY, endX, endY;
+            
+            // 如果reverse为true，交换起点和终点
+            if (gradient.reverse) {
+                startX = gradientPoints.endX;
+                startY = gradientPoints.endY;
+                endX = gradientPoints.startX;
+                endY = gradientPoints.startY;
+            } else {
+                startX = gradientPoints.startX;
+                startY = gradientPoints.startY;
+                endX = gradientPoints.endX;
+                endY = gradientPoints.endY;
+            }
+            
+            console.log('📊 开始为选区内', selectionIndices.length, '个像素计算渐变透明度');
+            
+            // 遍历选区内的每个像素
+            for (let i = 0; i < selectionIndices.length; i++) {
+                const docIndex = selectionIndices[i];
+                
+                // 将文档索引转换为选区边界内的坐标
+                const docX = docIndex % bounds.docWidth;
+                const docY = Math.floor(docIndex / bounds.docWidth);
+                const boundsX = docX - bounds.left;
+                const boundsY = docY - bounds.top;
+                
+                let position;
+                
+                if (gradient.type === 'radial') {
+                    // 径向渐变
+                    const dx = boundsX - centerX;
+                    const dy = boundsY - centerY;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    const maxDistance = Math.sqrt(centerX * centerX + centerY * centerY);
+                    position = Math.min(1, distance / maxDistance);
+                } else {
+                    // 线性渐变
+                    const dx = boundsX - startX;
+                    const dy = boundsY - startY;
+                    const gradientDx = endX - startX;
+                    const gradientDy = endY - startY;
+                    const gradientLengthSq = gradientDx * gradientDx + gradientDy * gradientDy;
+                    
+                    if (gradientLengthSq > 0) {
+                        const dotProduct = dx * gradientDx + dy * gradientDy;
+                        position = Math.max(0, Math.min(1, dotProduct / gradientLengthSq));
+                    } else {
+                        position = 0;
+                    }
+                }
+                
+                // 根据位置插值渐变透明度
+                const colorWithOpacity = this.interpolateGradientColorWithOpacity(gradient.stops, position);
+                
+                // 将不透明度转换为0-255范围的透明度值
+                alphaData[i] = Math.round((colorWithOpacity.opacity / 100) * 255);
+            }
+            
+            console.log('✅ 渐变透明度数据生成完成，数据长度:', alphaData.length);
+            return alphaData;
+        } catch (error) {
+            console.error('❌ 生成渐变透明度数据失败:', error);
             return null;
         }
     }

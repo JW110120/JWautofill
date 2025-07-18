@@ -189,7 +189,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const [selectedStopType, setSelectedStopType] = useState<'color' | 'opacity'>('color');
     const [stops, setStops] = useState<ExtendedGradientStop[]>([ 
         { color: 'rgba(0, 0, 0, 1)', position: 0, colorPosition: 0, opacityPosition: 0, midpoint: 50 },
-        { color: 'rgba(255, 255, 255, 1)', position: 100, colorPosition: 100, opacityPosition: 100 }
+        { color: 'rgba(255, 255, 255, 1)', position: 100, colorPosition: 100, opacityPosition: 100, midpoint: 50 }
     ]);
 
     // 分离的拖拽状态
@@ -606,6 +606,11 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         setSelectedStopIndex(index);
         setSelectedStopType('color');
         
+        // 安全检查：确保colorPosition存在
+        if (!stops[index] || stops[index].colorPosition === undefined) {
+            return;
+        }
+        
         const startX = e.clientX;
         const startPosition = stops[index].colorPosition;
         setDragStartX(startX);
@@ -659,6 +664,11 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         e.stopPropagation();
         setSelectedStopIndex(index);
         setSelectedStopType('opacity');
+        
+        // 安全检查：确保opacityPosition存在
+        if (!stops[index] || stops[index].opacityPosition === undefined) {
+            return;
+        }
         
         const startX = e.clientX;
         const startPosition = stops[index].opacityPosition;
@@ -1226,8 +1236,15 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         <>
                             {/* 左侧中点 */}
                             {(() => {
+                                // 安全检查：确保selectedStopIndex有效且stop存在colorPosition属性
+                                if (selectedStopIndex === null || !stops[selectedStopIndex] || stops[selectedStopIndex].colorPosition === undefined) {
+                                    return null;
+                                }
+                                
                                 // 找到当前选中stop左侧最近的stop
-                                const leftStops = stops.filter((_, i) => i !== selectedStopIndex && stops[i].colorPosition < stops[selectedStopIndex].colorPosition);
+                                const leftStops = stops.filter((_, i) => i !== selectedStopIndex && 
+                                    stops[i].colorPosition !== undefined && 
+                                    stops[i].colorPosition < stops[selectedStopIndex].colorPosition);
                                 if (leftStops.length === 0) return null;
                                 
                                 const leftStop = leftStops.reduce((prev, curr) => 
@@ -1258,8 +1275,15 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             
                             {/* 右侧中点 */}
                             {(() => {
+                                // 安全检查：确保selectedStopIndex有效且stop存在colorPosition属性
+                                if (selectedStopIndex === null || !stops[selectedStopIndex] || stops[selectedStopIndex].colorPosition === undefined) {
+                                    return null;
+                                }
+                                
                                 // 找到当前选中stop右侧最近的stop
-                                const rightStops = stops.filter((_, i) => i !== selectedStopIndex && stops[i].colorPosition > stops[selectedStopIndex].colorPosition);
+                                const rightStops = stops.filter((_, i) => i !== selectedStopIndex && 
+                                    stops[i].colorPosition !== undefined && 
+                                    stops[i].colorPosition > stops[selectedStopIndex].colorPosition);
                                 if (rightStops.length === 0) return null;
                                 
                                 const rightStop = rightStops.reduce((prev, curr) => 
