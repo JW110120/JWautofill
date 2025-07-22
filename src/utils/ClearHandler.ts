@@ -3050,7 +3050,7 @@ export class ClearHandler {
     }
     
     //-------------------------------------------------------------------------------------------------
-    // 计算图层蒙版清除的最终灰度值（减去模式）
+    // 计算图层蒙版清除的最终灰度值（减去模式，支持选区羽化）
     static async calculateLayerMaskClearValues(
         selectedMaskData: Uint8Array,
         clearData: Uint8Array,
@@ -3060,13 +3060,17 @@ export class ClearHandler {
         isEmpty: boolean
     ) {
         try {
-            console.log('🧮 计算最终灰度值（减去模式）');
+            console.log('🧮 计算最终灰度值（减去模式，支持选区羽化）');
             
             const finalData = new Uint8Array(selectedMaskData.length);
             const newMaskValue = new Uint8Array(maskData.length);
             
             // 复制原始蒙版数据
             newMaskValue.set(maskData);
+            
+            // 检查是否有选区羽化系数
+            const hasFeathering = bounds.selectionCoefficients && bounds.selectionCoefficients.length > 0;
+            const opacityFactor = opacity / 100;
             
             // 分批处理，避免一次性处理过多数据导致栈溢出
             const BATCH_SIZE = 10000;
@@ -3076,14 +3080,19 @@ export class ClearHandler {
                 
                 await new Promise(resolve => {
                     setTimeout(() => {
-                        // 使用减去模式的清除公式
+                        // 使用减去模式的清除公式，支持选区羽化
                         for (let i = batchStart; i < batchEnd; i++) {
                             const maskValue = selectedMaskData[i];  // 蒙版像素值 (0-255)
                             const clearValue = clearData[i]; // 清除像素值 (0-255)
                             
-                            // 减去模式：蒙版值 - 清除值 * 不透明度
-                            const opacityFactor = opacity / 100;
-                            const subtractAmount = clearValue * opacityFactor;
+                            // 计算有效不透明度（考虑选区羽化系数）
+                            let effectiveOpacity = opacityFactor;
+                            if (hasFeathering && i < bounds.selectionCoefficients.length) {
+                                effectiveOpacity *= bounds.selectionCoefficients[i];
+                            }
+                            
+                            // 减去模式：蒙版值 - 清除值 * 有效不透明度
+                            const subtractAmount = clearValue * effectiveOpacity;
                             const finalValue = maskValue - subtractAmount;
                             
                             finalData[i] = Math.min(255, Math.max(0, Math.round(finalValue)));
@@ -3114,7 +3123,7 @@ export class ClearHandler {
     }
     
     //-------------------------------------------------------------------------------------------------
-    // 计算图层蒙版清除的最终灰度值（减去模式，支持PNG透明度）
+    // 计算图层蒙版清除的最终灰度值（减去模式，支持PNG透明度和选区羽化）
     static async calculateLayerMaskClearValuesWithAlpha(
         selectedMaskData: Uint8Array,
         clearData: Uint8Array,
@@ -3125,13 +3134,17 @@ export class ClearHandler {
         isEmpty: boolean
     ) {
         try {
-            console.log('🧮 计算最终灰度值（减去模式，支持PNG透明度）');
+            console.log('🧮 计算最终灰度值（减去模式，支持PNG透明度和选区羽化）');
             
             const finalData = new Uint8Array(selectedMaskData.length);
             const newMaskValue = new Uint8Array(maskData.length);
             
             // 复制原始蒙版数据
             newMaskValue.set(maskData);
+            
+            // 检查是否有选区羽化系数
+            const hasFeathering = bounds.selectionCoefficients && bounds.selectionCoefficients.length > 0;
+            const opacityFactor = opacity / 100;
             
             // 分批处理，避免一次性处理过多数据导致栈溢出
             const BATCH_SIZE = 10000;
@@ -3141,7 +3154,7 @@ export class ClearHandler {
                 
                 await new Promise(resolve => {
                     setTimeout(() => {
-                        // 使用减去模式的清除公式，支持PNG透明度
+                        // 使用减去模式的清除公式，支持PNG透明度和选区羽化
                         for (let i = batchStart; i < batchEnd; i++) {
                             const maskValue = selectedMaskData[i];  // 蒙版像素值 (0-255)
                             const clearValue = clearData[i]; // 清除像素值 (0-255)
@@ -3153,10 +3166,15 @@ export class ClearHandler {
                                 continue;
                             }
                             
-                            // 减去模式：蒙版值 - (清除值 * 不透明度 * PNG透明度)
-                            const opacityFactor = opacity / 100;
+                            // 计算有效不透明度（考虑选区羽化系数）
+                            let effectiveOpacity = opacityFactor;
+                            if (hasFeathering && i < bounds.selectionCoefficients.length) {
+                                effectiveOpacity *= bounds.selectionCoefficients[i];
+                            }
+                            
+                            // 减去模式：蒙版值 - (清除值 * 有效不透明度 * PNG透明度)
                             const alphaFactor = alpha / 255;
-                            const subtractAmount = clearValue * opacityFactor * alphaFactor;
+                            const subtractAmount = clearValue * effectiveOpacity * alphaFactor;
                             const finalValue = maskValue - subtractAmount;
                             
                             finalData[i] = Math.min(255, Math.max(0, Math.round(finalValue)));
