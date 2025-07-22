@@ -74,6 +74,7 @@
   
   .photo-container.selected {
     border-color: var(--primary-color);
+    border-width: 2px;
   }
   
   .pattern-icon-container {

@@ -13,7 +13,7 @@ import PatternPicker from './components/PatternPicker';
 import GradientPicker from './components/GradientPicker';
 import StrokeSetting from './components/StrokeSetting';
 import { ExpandIcon, SettingsIcon } from './styles/Icons';
-import { calculateRandomColor } from './utils/ColorUtils';
+import { calculateRandomColor, hsbToRgb, rgbToGray } from './utils/ColorUtils';
 import { strokeSelection } from './utils/StrokeSelection';
 import { PatternFill } from './utils/PatternFill';
 import { GradientFill } from './utils/GradientFill';
@@ -462,13 +462,63 @@ class App extends React.Component<AppProps, AppState> {
                     preserveTransparency: this.state.selectedGradient.preserveTransparency
                 }, layerInfo);
             } else {
-                const randomColor = calculateRandomColor(this.state.colorSettings, this.state.opacity);
+                // 检测是否在快速蒙版状态
+                const isInQuickMask = layerInfo.isInQuickMask;
+                const randomColor = calculateRandomColor(this.state.colorSettings, this.state.opacity, undefined, isInQuickMask);
+                
+                // 只有在快速蒙版状态且为selectedAreas模式时，才反转灰度值
+                let finalColor = randomColor;
+                if (isInQuickMask) {
+                    // 获取快速蒙版的isSelectedAreas属性
+                    try {
+                        const channelResult = await action.batchPlay([
+                            {
+                                _obj: "get",
+                                _target: [
+                                    {
+                                        _ref: "channel",
+                                        _name: "快速蒙版"
+                                    }
+                                ]
+                            }
+                        ], { synchronousExecution: true });
+                        
+                        let isSelectedAreas = false;
+                        if (channelResult[0] && 
+                            channelResult[0].alphaChannelOptions && 
+                            channelResult[0].alphaChannelOptions.colorIndicates) {
+                            isSelectedAreas = channelResult[0].alphaChannelOptions.colorIndicates._value === "selectedAreas";
+                        }
+                        
+                        // 只有在selectedAreas模式下才反转灰度值
+                        if (isSelectedAreas) {
+                            // 将HSB转换为RGB，计算灰度值，然后反转
+                            const rgb = hsbToRgb(randomColor.hsb.hue, randomColor.hsb.saturation, randomColor.hsb.brightness);
+                            const originalGrayValue = rgbToGray(rgb.red, rgb.green, rgb.blue);
+                            const invertedGrayValue = 255 - originalGrayValue;
+                            
+                            // 将反转后的灰度值转换回HSB（亮度值）
+                            const invertedBrightness = (invertedGrayValue / 255) * 100;
+                            
+                            finalColor = {
+                                ...randomColor,
+                                hsb: {
+                                    ...randomColor.hsb,
+                                    brightness: invertedBrightness
+                                }
+                            };
+                        }
+                    } catch (error) {
+                        console.error('获取快速蒙版属性失败:', error);
+                    }
+                }
+                
                 const fillOptions = {
-                    opacity: randomColor.opacity,
+                    opacity: finalColor.opacity,
                     blendMode: this.state.blendMode,
-                    color: randomColor
+                    color: finalColor
                 };
-    
+
                 // 更新填充命令以使用随机颜色
                 const command = FillHandler.createColorFillCommand(fillOptions);
     

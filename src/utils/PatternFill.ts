@@ -1993,8 +1993,8 @@ export class PatternFill {
             // 撤销快速蒙版
             await this.clearQuickMask();
             
-            // 如果是纯白快速蒙版（非selectedAreas模式下），需要执行全选操作
-            if (!isSelectedAreas && maskStatus.isWhite) {
+            // 如果是纯白快速蒙版或空白快速蒙版（非selectedAreas模式下），需要执行全选操作
+            if (!isSelectedAreas && (maskStatus.isWhite || maskStatus.isEmpty)) {
                 await this.selectAll();
             }
 

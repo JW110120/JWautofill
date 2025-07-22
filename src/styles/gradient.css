@@ -76,6 +76,7 @@
 
 .preset-item.selected {
     border-color: var(--primary-color);
+    border-width: 2px;
 }
 
 .preset-preview {
@@ -156,6 +157,7 @@
 
 .opacity-slider-thumb.selected {
   border-color: var(--primary-color);
+  border-width: 3px;
   z-index: 10001;
   transform: translate(-50%, -50%) scale(1.1);
 }
@@ -196,6 +198,7 @@
 
 .color-slider-thumb.selected {
   border-color: var(--primary-color);
+  border-width: 3px;
   z-index: 10001;
   transform: translate(-50%, -50%) scale(1.1);
 }

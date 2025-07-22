@@ -17,15 +17,6 @@ export interface HSBColor {
     };
 }
 
-/**
- * 根据基础颜色和抖动设置计算随机颜色。
- *
- * @param settings 颜色抖动设置，包含色相、饱和度、亮度、不透明度和灰度（可选）的抖动值。
- * @param baseOpacity 基础不透明度 (0-100)。
- * @param customForegroundColor 可选的自定义前景色对象，如果未提供，则使用 Photoshop 的当前前景色。
- * @param isQuickMaskMode 布尔值，指示是否处于快速蒙版模式。在此模式下，颜色抖动行为会有所不同。
- * @returns 返回一个包含随机计算出的 HSB 颜色值和不透明度的对象。
- */
 export function calculateRandomColor(settings: ColorSettings, baseOpacity: number, customForegroundColor?: any, isQuickMaskMode: boolean = false): HSBColor & { opacity: number } {
     const foregroundColor = customForegroundColor || app.foregroundColor;
     const baseHue = foregroundColor.hsb.hue;
