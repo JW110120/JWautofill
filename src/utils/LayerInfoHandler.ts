@@ -91,9 +91,6 @@ export class LayerInfoHandler {
                 const maskInfo = maskResult[0];
                 const targetChannelInfo = targetChannelResult[0];
                 
-                console.log("🎭 蒙版通道信息:", maskInfo);
-                console.log("🎯 目标通道信息:", targetChannelInfo);
-                
                 // 简化逻辑：比较channelName参数
                 const maskChannelName = maskInfo.channelName;
                 const targetChannelName = targetChannelInfo.channelName;
@@ -104,15 +101,10 @@ export class LayerInfoHandler {
                 });
                 
                 if (maskChannelName && targetChannelName && maskChannelName === targetChannelName) {
-                    console.log("✅ 正在编辑蒙版 - 通道名称匹配:", {
-                        channelName: maskChannelName
-                    });
+                    console.log("✅ 正在编辑图层蒙版");
                     return true;
                 } else {
-                    console.log("❌ 未在编辑蒙版 - 通道名称不匹配:", {
-                        maskChannelName: maskChannelName,
-                        targetChannelName: targetChannelName
-                    });
+                    console.log("❌ 未在编辑图层蒙版。");
                     return false;
                 }
             }

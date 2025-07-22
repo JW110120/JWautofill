@@ -1,6 +1,7 @@
 import { app, action, core, imaging } from 'photoshop';
 import { BLEND_MODES } from '../constants/blendModes';
 import { AppState } from '../types/state';
+import { ClearHandler } from './ClearHandler';
 
 // 计算RGB颜色的灰度值
 function rgbToGray(red: number, green: number, blue: number): number {
@@ -15,9 +16,15 @@ interface LayerInfo {
     hasPixels: boolean;
     isInQuickMask: boolean;
     isInLayerMask: boolean;
+    selectionData?: {
+        selectionValues: Uint8Array;
+        docWidth: number;
+        docHeight: number;
+        selectionDocIndices?: Set<number>;
+    };
 }
 
-export async function strokeSelection(state: AppState, layerInfo?: LayerInfo) {
+export async function strokeSelection(state: AppState, layerInfo?: LayerInfo, selectionData?: any) {
     if (!state.strokeEnabled) return;
     
     const strokeParams = {
@@ -36,7 +43,7 @@ export async function strokeSelection(state: AppState, layerInfo?: LayerInfo) {
     if (layerInfo?.isInQuickMask) {
         // 如果同时开启了清除模式，使用特殊的颜色计算描边
         if (state.clearMode) {
-            await strokeSelectionWithColorCalculation(strokeParams, state);
+            await strokeSelectionWithColorCalculation(strokeParams, state, selectionData);
         } else {
             await strokeSelectionDirect(strokeParams);
         }
@@ -407,7 +414,7 @@ async function strokeSelectionDirect(strokeParams: any) {
 }
 
 // 4.快速蒙版状态且清除模式下的特殊描边
-async function strokeSelectionWithColorCalculation(strokeParams: any, state: any) {
+async function strokeSelectionWithColorCalculation(strokeParams: any, state: any, selectionData?: any) {
     try {
         console.log('🔄 开始清除模式快速蒙版描边，描边参数:', strokeParams);
         
@@ -447,7 +454,60 @@ async function strokeSelectionWithColorCalculation(strokeParams: any, state: any
         });
         console.log('✅ 已保存前景色');
 
-        // 3. 根据selectedAreas状态选择混合模式执行描边
+        // 3. 当处于清除模式且描边模式打开时，使用API重新选择最初的选区
+        if (state.clearMode && state.strokeEnabled && selectionData) {
+            console.log('🔄 清除模式且描边模式下，重新选择最初选区');
+            
+            try {
+                if (selectionData.selectionValues && selectionData.selectionDocIndices) {
+                    console.log('🎯 使用传入的选区数据，压缩长度:', selectionData.selectionValues.length);
+                    console.log('🎯 文档尺寸:', selectionData.docWidth, 'x', selectionData.docHeight);
+                    
+                    // 将压缩的selectionValues数组补全为整个文档大小的数组
+                    const fullDocumentArray = new Uint8Array(selectionData.docWidth * selectionData.docHeight);
+                    
+                    // 将选区内像素的值填入对应的文档位置
+                    const selectionIndicesArray = Array.from(selectionData.selectionDocIndices);
+                    for (let i = 0; i < selectionData.selectionValues.length; i++) {
+                        const docIndex = selectionIndicesArray[i];
+                        if (docIndex < fullDocumentArray.length) {
+                            fullDocumentArray[docIndex] = selectionData.selectionValues[i];
+                        }
+                    }
+                    
+                    console.log('✅ 选区数组补全完成，完整数组长度:', fullDocumentArray.length);
+                    
+                    // 使用createImageDataFromBuffer创建ImageData
+                    const imageDataOptions = {
+                        width: selectionData.docWidth,
+                        height: selectionData.docHeight,
+                        components: 1,
+                        chunky: true,
+                        colorProfile: "Dot Gain 15%",
+                        colorSpace: "Grayscale"
+                    };
+                    
+                    const imageData = await imaging.createImageDataFromBuffer(fullDocumentArray, imageDataOptions);
+                    
+                    // 使用putSelection更新选区
+                    await imaging.putSelection({
+                        documentID: app.activeDocument.id,
+                        imageData: imageData
+                    });
+                    
+                    // 释放ImageData内存
+                    imageData.dispose();
+                    
+                    console.log('✅ 选区修改完成');
+                } else {
+                    console.log('⚠️ 传入的选区数据无效，跳过选区修改');
+                }
+            } catch (error) {
+                console.error('❌ 修改选区失败:', error);
+            }
+        }
+        
+        // 4. 根据selectedAreas状态选择混合模式执行描边
         const blendMode = isSelectedAreas ? "linearDodge" : "blendSubtraction";
         console.log(`🎨 使用混合模式: ${blendMode}`);
         
@@ -481,7 +541,7 @@ async function strokeSelectionWithColorCalculation(strokeParams: any, state: any
         );
         console.log('✅ 描边执行完成');
 
-        // 4. 恢复前景色
+        // 5. 恢复前景色
         if (savedForegroundColor) {
             await batchPlay(
                 [{

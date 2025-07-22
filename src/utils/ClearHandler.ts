@@ -3,6 +3,30 @@ import { calculateRandomColor, hsbToRgb, rgbToGray } from './ColorUtils';
 import { Pattern } from '../types/state';
 
 export class ClearHandler {
+    // 静态属性：存储第一次获取的选区数据
+    private static cachedSelectionData: any = null;
+    
+    // 获取缓存的选区数据
+    static getCachedSelectionData() {
+        return this.cachedSelectionData;
+    }
+    
+    // 设置缓存的选区数据
+    static setCachedSelectionData(selectionData: any) {
+        this.cachedSelectionData = selectionData;
+        console.log('💾 已缓存选区数据:', {
+            hasData: !!selectionData,
+            selectionValuesLength: selectionData?.selectionValues?.length,
+            docWidth: selectionData?.docWidth,
+            docHeight: selectionData?.docHeight
+        });
+    }
+    
+    // 清除缓存的选区数据
+    static clearCachedSelectionData() {
+        this.cachedSelectionData = null;
+        console.log('🗑️ 已清除缓存的选区数据');
+    }
     static async clearWithOpacity(opacity: number, state?: any, layerInfo?: any) {
         try {
             // 获取当前文档信息
@@ -626,12 +650,25 @@ export class ClearHandler {
                 console.log('🔄 非纯色填充模式，跳过前景色获取，当前模式:', state.fillMode);
             }
             
-            // 获取当前选区边界信息
+            // 获取当前选区边界信息（第一次获取，需要缓存）
             const selectionBounds = await this.getSelectionData();
             if (!selectionBounds) {
                 console.warn('❌ 没有选区，无法执行快速蒙版清除操作');
                 return;
             }
+            
+            // 缓存第一次获取的选区数据，供后续描边功能使用
+            // 传递selectionValues数组而不是整个selectionBounds对象
+            this.setCachedSelectionData({
+                selectionValues: selectionBounds.selectionValues,
+                selectionDocIndices: selectionBounds.selectionDocIndices,
+                docWidth: selectionBounds.docWidth,
+                docHeight: selectionBounds.docHeight,
+                left: selectionBounds.left,
+                top: selectionBounds.top,
+                width: selectionBounds.width,
+                height: selectionBounds.height
+            });
 
             // 获取快速蒙版通道的像素数据和colorIndicates信息
             const { quickMaskPixels, isSelectedAreas, isEmpty, topLeftIsEmpty, bottomRightIsEmpty, originalTopLeft, originalBottomRight } = await this.getQuickMaskPixels(selectionBounds);

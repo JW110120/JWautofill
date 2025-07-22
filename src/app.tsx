@@ -306,7 +306,15 @@ class App extends React.Component<AppProps, AppState> {
                 if (this.state.strokeEnabled) {
                     // 获取图层信息
                     const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
-                    await strokeSelection(this.state, layerInfo);
+                    
+                    // 使用缓存的选区数据而不是重新获取
+                    const cachedSelectionData = ClearHandler.getCachedSelectionData();
+                    console.log('🔍 使用缓存的选区数据:', {
+                        hasData: !!cachedSelectionData,
+                        selectionValuesLength: cachedSelectionData?.selectionValues?.length
+                    });
+                    
+                    await strokeSelection(this.state, layerInfo, cachedSelectionData);
                 }
                 if (this.state.deselectAfterFill) {
                     await this.deselectSelection();
@@ -315,10 +323,16 @@ class App extends React.Component<AppProps, AppState> {
 
             // 恢复监听
             this.isListenerPaused = false;
+            
+            // 清除缓存的选区数据
+            ClearHandler.clearCachedSelectionData();
         } catch (error) {
             console.error('❌ 处理失败:', error);
             // 确保在错误情况下也恢复监听
             this.isListenerPaused = false;
+            
+            // 即使出错也要清除缓存的选区数据
+            ClearHandler.clearCachedSelectionData();
         }
     }
 
@@ -920,6 +934,22 @@ class App extends React.Component<AppProps, AppState> {
                                     }}
                                     onClick={async () => {
                                         try {
+                                            // 1. 保存当前前景色
+                                            let savedForegroundColor;
+                                            await executeAsModal(async () => {
+                                                const foregroundColor = app.foregroundColor;
+                                                savedForegroundColor = {
+                                                    hue: {
+                                                        _unit: "angleUnit",
+                                                        _value: foregroundColor.hsb.hue
+                                                    },
+                                                    saturation: foregroundColor.hsb.saturation,
+                                                    brightness: foregroundColor.hsb.brightness
+                                                };
+                                            });
+                                            console.log('✅ 已保存前景色');
+
+                                            // 2. 显示颜色选择器
                                             const result = await require("photoshop").core.executeAsModal(async (executionControl, descriptor) => {
                                                 return await batchPlay(
                                                     [{
@@ -932,6 +962,7 @@ class App extends React.Component<AppProps, AppState> {
                                                 );
                                             });
                                         
+                                            // 3. 处理颜色选择结果
                                             if (result && result[0] && result[0].RGBFloatColor) {
                                                 const { red, grain, blue } = result[0].RGBFloatColor;
                                                 this.setState({
@@ -942,8 +973,35 @@ class App extends React.Component<AppProps, AppState> {
                                                     }
                                                 });
                                             }
+
+                                            // 4. 恢复前景色
+                                            if (savedForegroundColor) {
+                                                await executeAsModal(async () => {
+                                                    await batchPlay(
+                                                        [{
+                                                            _obj: "set",
+                                                            _target: [{
+                                                                _ref: "color",
+                                                                _property: "foregroundColor"
+                                                            }],
+                                                            to: {
+                                                                _obj: "HSBColorClass",
+                                                                hue: savedForegroundColor.hue,
+                                                                saturation: savedForegroundColor.saturation,
+                                                                brightness: savedForegroundColor.brightness
+                                                            },
+                                                            source: "photoshopPicker",
+                                                            _options: {
+                                                                dialogOptions: "dontDisplay"
+                                                            }
+                                                        }],
+                                                        { synchronousExecution: true }
+                                                    );
+                                                }, { commandName: "恢复前景色" });
+                                                console.log('✅ 已恢复前景色');
+                                            }
                                         } catch (error) {
-                                            console.error('Error showing color picker:', error);
+                                            console.error('颜色选择器错误:', error);
                                         }
                                     }}/>
                                 <sp-action-button 
