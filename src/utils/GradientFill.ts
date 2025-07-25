@@ -27,7 +27,7 @@ interface LayerInfo {
 }
 
 export class GradientFill {
-    static async fillGradient(options: GradientFillOptions, layerInfo: LayerInfo) {
+    static async fillGradient(options: GradientFillOptions, layerInfo: LayerInfo, state?: any) {
         // 检查是否有渐变stops
         if (!options.gradient.stops || options.gradient.stops.length === 0) {
             console.error("❌ 没有可用的渐变stops，无法填充");
@@ -36,13 +36,13 @@ export class GradientFill {
 
         // 如果在快速蒙版状态，使用简化的直接填充
         if (layerInfo.isInQuickMask) {
-            await this.fillGradientDirect(options);
+            await this.fillGradientDirect(options, state);
             return;
         }
 
         // 如果在图层蒙版编辑状态，使用蒙版填充
         if (layerInfo.isInLayerMask) {
-            await this.fillLayerMask(options);
+            await this.fillLayerMask(options, state);
             return;
         }
 
@@ -557,7 +557,7 @@ export class GradientFill {
 
     //----------------------------------------------------------------------------------
     // 快速蒙版渐变填充（重构版本，支持渐变不透明度）
-    private static async fillGradientDirect(options: GradientFillOptions) {
+    private static async fillGradientDirect(options: GradientFillOptions, state?: any) {
         try {
             console.log("🎨 开始快速蒙版渐变填充（支持不透明度）");                         
             
@@ -593,7 +593,7 @@ export class GradientFill {
             );
             
             // 5. 将最终数据写回快速蒙版
-            await this.updateQuickMaskChannel(finalData, bounds);
+            await this.updateQuickMaskChannel(finalData, bounds, state);
             
             console.log("✅ 快速蒙版渐变填充完成");
         } catch (error) {
@@ -604,7 +604,7 @@ export class GradientFill {
 
     //----------------------------------------------------------------------------------
     // 图层蒙版渐变填充（重构版本，支持渐变不透明度）
-    private static async fillLayerMask(options: GradientFillOptions) {
+    private static async fillLayerMask(options: GradientFillOptions, state?: any) {
         try {
             console.log("🎨 开始图层蒙版渐变填充（支持不透明度）");
             
@@ -642,7 +642,7 @@ export class GradientFill {
             );
             
             // 5. 将最终数据写回图层蒙版
-            await this.updateLayerMask(finalData, bounds, currentLayerId, maskData);
+            await this.updateLayerMask(finalData, bounds, currentLayerId, maskData, state);
             
             console.log("✅ 图层蒙版渐变填充完成");
         } catch (error) {
@@ -1944,7 +1944,8 @@ export class GradientFill {
     // 更新快速蒙版通道
     private static async updateQuickMaskChannel(
         finalGrayData: Uint8Array,
-        bounds: any
+        bounds: any,
+        state?: any
     ): Promise<void> {
         try {
             console.log('🔄 将选区重新改回快速蒙版');
@@ -1998,6 +1999,47 @@ export class GradientFill {
                 }
             ], { synchronousExecution: true });
             
+            // 检查是否需要恢复选区
+            if (state && !state.deselectAfterFill && bounds.selectionValues) {
+                try {
+                    console.log('🔄 恢复上一个选区');
+                    
+                    // 将压缩的selectionValues数组补全为整个文档大小的数组
+                    const fullDocArray = new Uint8Array(bounds.docWidth * bounds.docHeight);
+                    const selectionIndices = Array.from(bounds.selectionDocIndices);
+                    
+                    for (let i = 0; i < selectionIndices.length; i++) {
+                        const docIndex = selectionIndices[i];
+                        if (docIndex >= 0 && docIndex < fullDocArray.length) {
+                            fullDocArray[docIndex] = bounds.selectionValues[i];
+                        }
+                    }
+                    
+                    // 使用imagingAPI恢复选区
+                    const selectionOptions = {
+                        width: bounds.docWidth,
+                        height: bounds.docHeight,
+                        components: 1,
+                        chunky: true,
+                        colorProfile: "Dot Gain 15%",
+                        colorSpace: "Grayscale"
+                    };
+                    
+                    const selectionImageData = await imaging.createImageDataFromBuffer(fullDocArray, selectionOptions);
+                    
+                    await imaging.putSelection({
+                        documentID: app.activeDocument.id,
+                        imageData: selectionImageData
+                    });
+                    
+                    selectionImageData.dispose();
+                    
+                    console.log('✅ 选区恢复完成');
+                } catch (error) {
+                    console.error('❌ 恢复选区失败:', error);
+                }
+            }
+            
         } catch (error) {
             console.error('❌ 更新快速蒙版通道失败:', error);
             throw error;
@@ -2010,7 +2052,8 @@ export class GradientFill {
         finalGrayData: Uint8Array,
         bounds: any,
         layerId: number,
-        originalMaskData: Uint8Array
+        originalMaskData: Uint8Array,
+        state?: any
     ): Promise<void> {
         try {
             console.log('🔄 更新图层蒙版');
@@ -2080,6 +2123,47 @@ export class GradientFill {
             fullImageData.dispose();
             
             console.log('✅ 图层蒙版更新完成');
+            
+            // 检查是否需要恢复选区
+            if (state && !state.deselectAfterFill && bounds.selectionValues) {
+                try {
+                    console.log('🔄 恢复上一个选区');
+                    
+                    // 将压缩的selectionValues数组补全为整个文档大小的数组
+                    const fullDocArray = new Uint8Array(bounds.docWidth * bounds.docHeight);
+                    const selectionIndices = Array.from(bounds.selectionDocIndices);
+                    
+                    for (let i = 0; i < selectionIndices.length; i++) {
+                        const docIndex = selectionIndices[i];
+                        if (docIndex >= 0 && docIndex < fullDocArray.length) {
+                            fullDocArray[docIndex] = bounds.selectionValues[i];
+                        }
+                    }
+                    
+                    // 使用imagingAPI恢复选区
+                    const selectionOptions = {
+                        width: bounds.docWidth,
+                        height: bounds.docHeight,
+                        components: 1,
+                        chunky: true,
+                        colorProfile: "Dot Gain 15%",
+                        colorSpace: "Grayscale"
+                    };
+                    
+                    const selectionImageData = await imaging.createImageDataFromBuffer(fullDocArray, selectionOptions);
+                    
+                    await imaging.putSelection({
+                        documentID: app.activeDocument.id,
+                        imageData: selectionImageData
+                    });
+                    
+                    selectionImageData.dispose();
+                    
+                    console.log('✅ 选区恢复完成');
+                } catch (error) {
+                    console.error('❌ 恢复选区失败:', error);
+                }
+            }
             
         } catch (error) {
             console.error('❌ 更新图层蒙版失败:', error);

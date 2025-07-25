@@ -467,14 +467,14 @@ class App extends React.Component<AppProps, AppState> {
                     blendMode: this.state.blendMode,
                     pattern: this.state.selectedPattern,
                     preserveTransparency: this.state.selectedPattern.preserveTransparency
-                }, layerInfo);
+                }, layerInfo, this.state);
             } else if (this.state.fillMode === 'gradient' && this.state.selectedGradient) {
                 await GradientFill.fillGradient({
                     opacity: this.state.opacity,
                     blendMode: this.state.blendMode,
                     gradient: this.state.selectedGradient,
                     preserveTransparency: this.state.selectedGradient.preserveTransparency
-                }, layerInfo);
+                }, layerInfo, this.state);
             } else {
                 // 检测是否在快速蒙版状态
                 const isInQuickMask = layerInfo.isInQuickMask;

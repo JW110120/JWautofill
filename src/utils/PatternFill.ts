@@ -637,7 +637,7 @@ async function getPixelValue(action: any, x: number, y: number): Promise<number>
 export class PatternFill {
     // ---------------------------------------------------------------------------------------------------
     // 1.不在快速蒙版中，根据用户指定条件填充相应的彩色图案。（RGB/RGBA）
-    static async fillPattern(options: PatternFillOptions, layerInfo: LayerInfo) {
+    static async fillPattern(options: PatternFillOptions, layerInfo: LayerInfo, state?: any) {
         // 检查是否有图案数据
         const components = options.pattern.components || options.pattern.patternComponents || 3;
         if (!options.pattern.patternRgbData || !components) {
@@ -651,12 +651,12 @@ export class PatternFill {
         
         // 如果在快速蒙版状态，使用快速蒙版中的填充
         if (layerInfo.isInQuickMask) {
-            await this.fillPatternDirect(options);
+            await this.fillPatternDirect(options, state);
             return;
         } else if (layerInfo.isInLayerMask) {
             // 如果在普通图层蒙版状态，使用图层蒙版填充
             console.log('🎭 当前在图层蒙版状态，使用图层蒙版填充方法');
-            await this.fillLayerMaskPattern(options);
+            await this.fillLayerMaskPattern(options, state);
             return;
         } else {
             console.log('📝 当前不在快速蒙版状态，使用常规填充方法');
@@ -928,7 +928,7 @@ export class PatternFill {
 
     // ---------------------------------------------------------------------------------------------------
     // 2.不在快速蒙版中，图层蒙版模式下的图案填充
-    private static async fillLayerMaskPattern(options: PatternFillOptions): Promise<void> {
+    private static async fillLayerMaskPattern(options: PatternFillOptions, state?: any): Promise<void> {
         try {
             console.log('🎭 开始图层蒙版图案填充');
             
@@ -966,7 +966,7 @@ export class PatternFill {
             );
             
             // 第五步：写回文档
-            await this.writeLayerMaskData(blendedData, bounds, currentLayerId, layerMaskData.fullDocMaskArray);
+            await this.writeLayerMaskData(blendedData, bounds, currentLayerId, layerMaskData.fullDocMaskArray, state);
             
             console.log('✅ 图层蒙版图案填充完成');
             
@@ -1376,7 +1376,7 @@ export class PatternFill {
     }
 
     // 将混合后的数据写回图层蒙版
-    private static async writeLayerMaskData(blendedData: Uint8Array, bounds: any, currentLayerId: number, fullDocMaskArray: Uint8Array): Promise<void> {
+    private static async writeLayerMaskData(blendedData: Uint8Array, bounds: any, currentLayerId: number, fullDocMaskArray: Uint8Array, state?: any): Promise<void> {
         try {
             console.log('📝 开始写回图层蒙版数据');
             console.log('📊 混合数据长度:', blendedData.length);
@@ -1457,6 +1457,55 @@ export class PatternFill {
             
             console.log('✅ 图层蒙版数据写回完成');
             
+            // 检查APP主面板的取消选区checkbox状态，如果为false则使用imagingAPI恢复选区
+            if (state && state.deselectAfterFill === false && bounds.selectionValues && bounds.selectionDocIndices) {
+                console.log('🎯 取消选区checkbox为false，使用imagingAPI恢复选区');
+                
+                try {
+                    console.log('🎯 使用传入的选区数据，压缩长度:', bounds.selectionValues.length);
+                    console.log('🎯 文档尺寸:', bounds.docWidth, 'x', bounds.docHeight);
+                    
+                    // 将压缩的selectionValues数组补全为整个文档大小的数组
+                    const fullDocumentArray = new Uint8Array(bounds.docWidth * bounds.docHeight);
+                    
+                    // 将选区内像素的值填入对应的文档位置
+                    const selectionIndicesArray = Array.from(bounds.selectionDocIndices);
+                    for (let i = 0; i < bounds.selectionValues.length; i++) {
+                        const docIndex = selectionIndicesArray[i];
+                        if (docIndex < fullDocumentArray.length) {
+                            fullDocumentArray[docIndex] = bounds.selectionValues[i];
+                        }
+                    }
+                    
+                    console.log('✅ 选区数组补全完成，完整数组长度:', fullDocumentArray.length);
+                    
+                    // 使用createImageDataFromBuffer创建ImageData
+                    const imageDataOptions = {
+                        width: bounds.docWidth,
+                        height: bounds.docHeight,
+                        components: 1,
+                        chunky: true,
+                        colorProfile: "Dot Gain 15%",
+                        colorSpace: "Grayscale"
+                    };
+                    
+                    const imageData = await imaging.createImageDataFromBuffer(fullDocumentArray, imageDataOptions);
+                    
+                    // 使用putSelection更新选区
+                    await imaging.putSelection({
+                        documentID: app.activeDocument.id,
+                        imageData: imageData
+                    });
+                    
+                    // 释放ImageData内存
+                    imageData.dispose();
+                    
+                    console.log('✅ 选区恢复完成');
+                } catch (error) {
+                    console.error('❌ 恢复选区失败:', error);
+                }
+            }
+            
         } catch (error) {
             console.error('❌ 写回图层蒙版数据失败:', error);
             throw error;
@@ -1466,7 +1515,7 @@ export class PatternFill {
 
     //-------------------------------------------------------------------------------------------------
     // 3.快速蒙版状态下的直接填充核心函数（灰度）（支持混合模式和不透明度）
-    private static async fillPatternDirect(options: PatternFillOptions) {
+    private static async fillPatternDirect(options: PatternFillOptions, state?: any) {
         try {
             console.log('🎨 开始快速蒙版图案填充。');
             
@@ -1500,7 +1549,7 @@ export class PatternFill {
             );
             
             // 将计算后的灰度数据写回快速蒙版通道
-            await this.updateQuickMaskChannel(finalGrayData, selectionBounds);
+            await this.updateQuickMaskChannel(finalGrayData, selectionBounds, state);
             
         } catch (error) {
             console.error("❌ 快速蒙版图案填充失败:", error);
@@ -2625,7 +2674,7 @@ export class PatternFill {
     }
 
     // 将计算后的灰度数据写回快速蒙版通道
-    private static async updateQuickMaskChannel(grayData: Uint8Array, bounds: any) {
+    private static async updateQuickMaskChannel(grayData: Uint8Array, bounds: any, state?: any) {
         try {
             console.log('🔄 将选区重新改回快速蒙版');
             
@@ -2677,6 +2726,55 @@ export class PatternFill {
                 }
                 }
             ], { synchronousExecution: true });
+            
+            // 检查APP主面板的取消选区checkbox状态，如果为false则使用imagingAPI恢复选区
+            if (state && state.deselectAfterFill === false && bounds.selectionValues && bounds.selectionDocIndices) {
+                console.log('🎯 取消选区checkbox为false，使用imagingAPI恢复选区');
+                
+                try {
+                    console.log('🎯 使用传入的选区数据，压缩长度:', bounds.selectionValues.length);
+                    console.log('🎯 文档尺寸:', bounds.docWidth, 'x', bounds.docHeight);
+                    
+                    // 将压缩的selectionValues数组补全为整个文档大小的数组
+                    const fullDocumentArray = new Uint8Array(bounds.docWidth * bounds.docHeight);
+                    
+                    // 将选区内像素的值填入对应的文档位置
+                    const selectionIndicesArray = Array.from(bounds.selectionDocIndices);
+                    for (let i = 0; i < bounds.selectionValues.length; i++) {
+                        const docIndex = selectionIndicesArray[i];
+                        if (docIndex < fullDocumentArray.length) {
+                            fullDocumentArray[docIndex] = bounds.selectionValues[i];
+                        }
+                    }
+                    
+                    console.log('✅ 选区数组补全完成，完整数组长度:', fullDocumentArray.length);
+                    
+                    // 使用createImageDataFromBuffer创建ImageData
+                    const imageDataOptions = {
+                        width: bounds.docWidth,
+                        height: bounds.docHeight,
+                        components: 1,
+                        chunky: true,
+                        colorProfile: "Dot Gain 15%",
+                        colorSpace: "Grayscale"
+                    };
+                    
+                    const imageData = await imaging.createImageDataFromBuffer(fullDocumentArray, imageDataOptions);
+                    
+                    // 使用putSelection更新选区
+                    await imaging.putSelection({
+                        documentID: app.activeDocument.id,
+                        imageData: imageData
+                    });
+                    
+                    // 释放ImageData内存
+                    imageData.dispose();
+                    
+                    console.log('✅ 选区恢复完成');
+                } catch (error) {
+                    console.error('❌ 恢复选区失败:', error);
+                }
+            }
             
             
         } catch (error) {

@@ -33,20 +33,13 @@ export class ClearHandler {
             const document = app.activeDocument;
             const isInQuickMask = document.quickMaskMode;
             
-            // 如果已经在快速蒙版状态，执行特殊填充逻辑
+            // 快速蒙版执行特殊填充逻辑
             if (isInQuickMask && state) {
                 await this.clearInQuickMask(state);
                 return;
             }
             
-            // 检查是否在图层蒙版模式
-            console.log('🔍 检查图层信息:', {
-                layerInfo: layerInfo,
-                isInLayerMask: layerInfo?.isInLayerMask,
-                isInQuickMask: layerInfo?.isInQuickMask,
-                fillMode: state?.fillMode
-            });
-            
+            // 图层蒙版执行特殊填充逻辑
             if (layerInfo && layerInfo.isInLayerMask && state) {
                 console.log('🎭 当前在图层蒙版状态，使用图层蒙版清除方法');
                 if (state.fillMode === 'foreground') {
@@ -59,15 +52,15 @@ export class ClearHandler {
                 return;
             }
             
-            // 非快速蒙版状态下的清除逻辑
+            // 像素图层的清除逻辑
             if (state && state.fillMode === 'foreground') {
-                // 情况1：清除模式，非快速蒙版状态，删除纯色
+                // 情况1：清除模式，删除纯色
                 await this.clearSolidColor(opacity, state);
             } else if (state && state.fillMode === 'pattern' && state.selectedPattern) {
-                // 情况2：清除模式，非快速蒙版状态，删除图案
+                // 情况2：清除模式，删除图案
                 await this.clearPattern(opacity, state);
             } else if (state && state.fillMode === 'gradient' && state.selectedGradient) {
-                // 情况3：清除模式，非快速蒙版状态，删除渐变
+                // 情况3：清除模式，删除渐变
                 await this.clearGradient(opacity, state);
             } 
         } catch (error) {
@@ -77,7 +70,7 @@ export class ClearHandler {
     }
 
     //-------------------------------------------------------------------------------------------------
-    // 情况1：清除模式，非快速蒙版状态，删除纯色√
+    // 情况1：清除模式，像素图层，删除纯色√
     static async clearSolidColor(opacity: number, state: any) {
         try {
             console.log('🎨 执行纯色清除模式');
@@ -204,7 +197,7 @@ export class ClearHandler {
     }
 
     //-------------------------------------------------------------------------------------------------
-    // 情况2：清除模式，非快速蒙版状态，删除图案
+    // 情况2：清除模式，像素图层，删除图案
     static async clearPattern(opacity: number, state: any) {
         try {
             console.log('🔳 执行图案清除模式');
@@ -233,7 +226,7 @@ export class ClearHandler {
     }
 
     //-------------------------------------------------------------------------------------------------
-    // 情况3：清除模式，非快速蒙版状态，删除渐变
+    // 情况3：清除模式，像素图层，删除渐变
     static async clearGradient(opacity: number, state: any) {
         try {
             console.log('🌈 执行渐变清除模式');
@@ -321,7 +314,7 @@ export class ClearHandler {
                     
                     // 批量处理，减少重复计算
                     for (let i = 0; i < selectionIndices.length; i++) {
-                        const docIndex = selectionIndices[i];
+                        const docIndex: number = selectionIndices[i];
                         const docX = docIndex % docWidth;
                         const docY = Math.floor(docIndex / docWidth);
                         const boundsX = docX - boundsLeft;
@@ -360,7 +353,7 @@ export class ClearHandler {
                     
                     // 批量处理，减少重复计算
                     for (let i = 0; i < selectionIndices.length; i++) {
-                        const docIndex = selectionIndices[i];
+                        const docIndex: number = selectionIndices[i];
                         const docX = docIndex % docWidth;
                         const docY = Math.floor(docIndex / docWidth);
                         const boundsX = docX - boundsLeft;
@@ -711,7 +704,7 @@ export class ClearHandler {
             );
             
             // 将计算后的灰度数据写回快速蒙版通道
-            await this.updateQuickMaskChannel(finalGrayData, selectionBounds);
+            await this.updateQuickMaskChannel(finalGrayData, selectionBounds, state);
             
         } catch (error) {
             console.error('❌ 快速蒙版特殊填充失败:', error);
@@ -1423,7 +1416,7 @@ export class ClearHandler {
                 
                 // 遍历选区内的每个像素，从完整图案数据中提取对应的值
                 for (let i = 0; i < selectionIndices.length; i++) {
-                    const docIndex = selectionIndices[i];
+                    const docIndex: number = selectionIndices[i];
                     // 计算该像素在选区边界内的坐标
                     const docX = docIndex % bounds.docWidth;
                     const docY = Math.floor(docIndex / bounds.docWidth);
@@ -1918,16 +1911,12 @@ export class ClearHandler {
     // 获取渐变填充的灰度数据
     static async getGradientFillGrayData(state: any, bounds: any) {
         try {
-            console.log('🌈 获取渐变填充灰度数据 - selectedGradient:', state.selectedGradient);
-            
             const gradient = state.selectedGradient;
             if (!gradient) {
-                console.log('⚠️ 没有找到渐变数据，使用默认中等灰度');
                 // 优先使用selectionDocIndices.size，其次selectionValues.length，最后使用bounds面积
                 const pixelCount = bounds.selectionDocIndices?.size || bounds.selectionValues?.length || (bounds.width * bounds.height);
                 const grayData = new Uint8Array(pixelCount);
                 grayData.fill(128);
-                console.log('📊 生成默认灰度数据，像素数量:', pixelCount);
                 return grayData;
             }
             
@@ -1972,7 +1961,7 @@ export class ClearHandler {
             
             // 遍历选区内的每个像素
             for (let i = 0; i < selectionIndices.length; i++) {
-                const docIndex = selectionIndices[i];
+                const docIndex: number = selectionIndices[i];
                 
                 // 将文档索引转换为选区边界内的坐标
                 const docX = docIndex % bounds.docWidth;
@@ -2004,8 +1993,6 @@ export class ClearHandler {
                         position = 0;
                     }
                 }
-                
-                // reverse属性已在起点终点交换时处理，这里不需要再次应用
                 
                 // 根据位置插值渐变颜色并转换为灰度，同时考虑透明度
                 const colorWithOpacity = this.interpolateGradientColorWithOpacity(gradient.stops, position);
@@ -2284,12 +2271,19 @@ export class ClearHandler {
         const selectionIndices = bounds.selectionDocIndices ? Array.from(bounds.selectionDocIndices) : null;
         
         // 检查是否有透明度信息需要处理（PNG图案自带透明区域或渐变透明度）
-        const hasPatternAlpha = state?.fillMode === 'pattern' && state?.selectedPattern && state.selectedPattern.hasAlpha && 
+        // 注意：在清除模式下，只有当前正在清除的填充类型才应该生成透明度数据
+        // 避免图案的透明度数据影响渐变的计算
+        const isCurrentlyProcessingPattern = state?.fillMode === 'pattern';
+        const isCurrentlyProcessingGradient = state?.fillMode === 'gradient';
+        
+        const hasPatternAlpha = isCurrentlyProcessingPattern && state?.selectedPattern && state.selectedPattern.hasAlpha && 
                                state.selectedPattern.patternRgbData && state.selectedPattern.patternComponents === 4;
-        const hasGradientAlpha = state?.fillMode === 'gradient' && state?.selectedGradient;
+        const hasGradientAlpha = isCurrentlyProcessingGradient && state?.selectedGradient;
         const hasAlpha = hasPatternAlpha || hasGradientAlpha;
         
         console.log('🔍 透明度检查:', {
+            isCurrentlyProcessingPattern: isCurrentlyProcessingPattern,
+            isCurrentlyProcessingGradient: isCurrentlyProcessingGradient,
             hasSelectedPattern: !!state?.selectedPattern,
             hasPatternAlpha: hasPatternAlpha,
             hasGradientAlpha: hasGradientAlpha,
@@ -2298,7 +2292,7 @@ export class ClearHandler {
         
         // 如果有透明度信息，生成对应的透明度数据
         let alphaData: Uint8Array | undefined;
-        if (hasAlpha && state?.selectedPattern) {
+        if (hasPatternAlpha && state?.selectedPattern) {
             const pattern = state.selectedPattern;
             const patternWidth = pattern.width || pattern.originalWidth || 100;
             const patternHeight = pattern.height || pattern.originalHeight || 100;
@@ -2330,7 +2324,7 @@ export class ClearHandler {
                     const selectionIndices = Array.from(bounds.selectionDocIndices);
                     
                     for (let i = 0; i < selectionIndices.length; i++) {
-                        const docIndex = selectionIndices[i];
+                        const docIndex: number = selectionIndices[i];
                         const docX = docIndex % bounds.docWidth;
                         const docY = Math.floor(docIndex / bounds.docWidth);
                         const boundsX = docX - bounds.left;
@@ -2371,7 +2365,7 @@ export class ClearHandler {
                     alphaData = new Uint8Array(selectionIndices.length);
                     
                     for (let i = 0; i < selectionIndices.length; i++) {
-                        const docIndex = selectionIndices[i];
+                        const docIndex: number = selectionIndices[i];
                         const docX = docIndex % bounds.docWidth;
                         const docY = Math.floor(docIndex / bounds.docWidth);
                         const boundsX = docX - bounds.left;
@@ -2393,6 +2387,12 @@ export class ClearHandler {
         } else if (hasGradientAlpha && state?.selectedGradient) {
             console.log('🌈 生成渐变透明度数据');
             alphaData = await this.generateGradientAlphaData(state, bounds);
+        }
+        
+        // 如果当前不是正在处理的填充类型，不应该生成透明度数据
+        if (!isCurrentlyProcessingPattern && !isCurrentlyProcessingGradient) {
+            alphaData = undefined;
+            console.log('⚠️ 当前不是正在处理的填充类型，跳过透明度数据生成');
         }
         
         if (hasAlpha) {
@@ -2535,7 +2535,7 @@ export class ClearHandler {
 
     //-------------------------------------------------------------------------------------------------
     // 将计算后的灰度数据写回快速蒙版通道
-    static async updateQuickMaskChannel(grayData: Uint8Array, bounds: any) {
+    static async updateQuickMaskChannel(grayData: Uint8Array, bounds: any, state?: any) {
         try {
             console.log('🔄 将选区重新改回快速蒙版');
             
@@ -2586,6 +2586,55 @@ export class ClearHandler {
                 }
             ], { synchronousExecution: true });
             
+            // 根据state参数和bounds.selectionValues判断是否需要恢复选区
+            if (state && state.deselectAfterFill === false && bounds && bounds.selectionValues && bounds.selectionValues.length > 0) {
+                try {
+                    console.log('🔄 恢复选区状态');
+                    
+                    // 将压缩的selectionValues数组补全为整个文档大小的数组
+                    const fullSelectionData = new Uint8Array(finalDocWidth * finalDocHeight);
+                    
+                    if (bounds.selectionDocIndices && bounds.selectionDocIndices.size > 0) {
+                        const selectionIndices = Array.from(bounds.selectionDocIndices);
+                        let valueIndex = 0;
+                        
+                        for (const docIndex of selectionIndices) {
+                            if (docIndex < fullSelectionData.length && valueIndex < bounds.selectionValues.length) {
+                                fullSelectionData[docIndex] = bounds.selectionValues[valueIndex];
+                                valueIndex++;
+                            } else if (valueIndex >= bounds.selectionValues.length) {
+                                break; // 已经处理完所有选区值，提前退出循环
+                            }
+                        }
+                    }
+                    
+                    // 创建选区ImageData
+                    const selectionOptions = {
+                        width: finalDocWidth,
+                        height: finalDocHeight,
+                        components: 1,
+                        chunky: true,
+                        colorProfile: documentColorProfile,
+                        colorSpace: "Grayscale"
+                    };
+                    
+                    const selectionImageData = await imaging.createImageDataFromBuffer(fullSelectionData, selectionOptions);
+                    
+                    // 恢复选区
+                    await imaging.putSelection({
+                        documentID: app.activeDocument.id,
+                        imageData: selectionImageData
+                    });
+                    
+                    // 释放ImageData内存
+                    selectionImageData.dispose();
+                    
+                    console.log('✅ 选区恢复完成');
+                } catch (selectionError) {
+                    console.error('❌ 恢复选区失败:', selectionError);
+                }
+            }
+            
         } catch (error) {
             console.error('❌ 更新快速蒙版通道失败:', error);
         }
@@ -2634,7 +2683,7 @@ export class ClearHandler {
             );
             
             // 更新图层蒙版
-            await this.updateLayerMask(finalGrayData, bounds, currentLayerId);
+            await this.updateLayerMask(finalGrayData, bounds, currentLayerId, state);
             
             console.log('✅ 图层蒙版纯色清除完成');
         } catch (error) {
@@ -2693,7 +2742,7 @@ export class ClearHandler {
             );
             
             // 更新图层蒙版
-            await this.updateLayerMask(finalGrayData, bounds, currentLayerId);
+            await this.updateLayerMask(finalGrayData, bounds, currentLayerId, state);
             
             console.log('✅ 图层蒙版图案清除完成');
         } catch (error) {
@@ -2752,7 +2801,7 @@ export class ClearHandler {
             );
             
             // 更新图层蒙版
-            await this.updateLayerMask(finalGrayData, bounds, currentLayerId);
+            await this.updateLayerMask(finalGrayData, bounds, currentLayerId, state);
             
             console.log('✅ 图层蒙版渐变清除完成');
         } catch (error) {
@@ -2832,7 +2881,7 @@ export class ClearHandler {
             
             // 遍历选区内的每个像素
             for (let i = 0; i < selectionIndices.length; i++) {
-                const docIndex = selectionIndices[i];
+                const docIndex: number = selectionIndices[i];
                 
                 // 将文档索引转换为选区边界内的坐标
                 const docX = docIndex % bounds.docWidth;
@@ -2946,7 +2995,7 @@ export class ClearHandler {
                 const selectionAlphaData = new Uint8Array(selectionIndices.length);
 
                 for (let i = 0; i < selectionIndices.length; i++) {
-                    const docIndex = selectionIndices[i];
+                    const docIndex: number = selectionIndices[i];
                     const docX = docIndex % bounds.docWidth;
                     const docY = Math.floor(docIndex / bounds.docWidth);
                     const boundsX = docX - bounds.left;
@@ -3007,7 +3056,7 @@ export class ClearHandler {
             // 提取选区内的图层蒙版值并计算统计信息
             const selectionMaskValues = [];
             for (let i = 0; i < selectionIndices.length; i++) {
-                const docIndex = selectionIndices[i];
+                const docIndex: number = selectionIndices[i];
                 if (docIndex >= 0 && docIndex < fullDocMaskArray.length) {
                     selectionMaskValues.push(fullDocMaskArray[docIndex]);
                 }
@@ -3028,7 +3077,7 @@ export class ClearHandler {
             let outOfRangeCount = 0;
             // 遍历选区内的每个像素，从完整文档蒙版数组中提取对应的值
             for (let i = 0; i < selectionIndices.length; i++) {
-                const docIndex = selectionIndices[i];
+                const docIndex: number = selectionIndices[i];
                 if (docIndex >= 0 && docIndex < fullDocMaskArray.length) {
                     maskPixels[i] = fullDocMaskArray[docIndex];
                 } else {
@@ -3244,7 +3293,7 @@ export class ClearHandler {
     
     //-------------------------------------------------------------------------------------------------
     // 更新图层蒙版
-    static async updateLayerMask(grayData: Uint8Array, bounds: any, layerId: number) {
+    static async updateLayerMask(grayData: Uint8Array, bounds: any, layerId: number, state?: any) {
         try {
             console.log('🔄 更新图层蒙版');
             
@@ -3296,6 +3345,55 @@ export class ClearHandler {
             });
             
             fullImageData.dispose();
+            
+            // 根据state参数和bounds.selectionValues判断是否需要恢复选区
+             if (state && state.deselectAfterFill === false && bounds && bounds.selectionValues && bounds.selectionValues.length > 0) {
+                try {
+                    console.log('🔄 恢复选区状态');
+                    
+                    // 将压缩的selectionValues数组补全为整个文档大小的数组
+                    const fullSelectionData = new Uint8Array(finalDocWidth * finalDocHeight);
+                    
+                    if (bounds.selectionDocIndices && bounds.selectionDocIndices.size > 0) {
+                        const selectionIndices = Array.from(bounds.selectionDocIndices);
+                        let valueIndex = 0;
+                        
+                        for (const docIndex of selectionIndices) {
+                            if (docIndex < fullSelectionData.length && valueIndex < bounds.selectionValues.length) {
+                                fullSelectionData[docIndex] = bounds.selectionValues[valueIndex];
+                                valueIndex++;
+                            } else if (valueIndex >= bounds.selectionValues.length) {
+                                break; // 已经处理完所有选区值，提前退出循环
+                            }
+                        }
+                    }
+                    
+                    // 创建选区ImageData
+                    const selectionOptions = {
+                        width: finalDocWidth,
+                        height: finalDocHeight,
+                        components: 1,
+                        chunky: true,
+                        colorProfile: documentColorProfile,
+                        colorSpace: "Grayscale"
+                    };
+                    
+                    const selectionImageData = await imaging.createImageDataFromBuffer(fullSelectionData, selectionOptions);
+                    
+                    // 恢复选区
+                    await imaging.putSelection({
+                        documentID: app.activeDocument.id,
+                        imageData: selectionImageData
+                    });
+                    
+                    // 释放ImageData内存
+                    selectionImageData.dispose();
+                    
+                    console.log('✅ 选区恢复完成');
+                } catch (selectionError) {
+                    console.error('❌ 恢复选区失败:', selectionError);
+                }
+            }
             
             console.log('✅ 图层蒙版更新完成');
         } catch (error) {
