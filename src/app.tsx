@@ -306,15 +306,7 @@ class App extends React.Component<AppProps, AppState> {
                 if (this.state.strokeEnabled) {
                     // 获取图层信息
                     const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
-                    
-                    // 使用缓存的选区数据而不是重新获取
-                    const cachedSelectionData = ClearHandler.getCachedSelectionData();
-                    console.log('🔍 使用缓存的选区数据:', {
-                        hasData: !!cachedSelectionData,
-                        selectionValuesLength: cachedSelectionData?.selectionValues?.length
-                    });
-                    
-                    await strokeSelection(this.state, layerInfo, cachedSelectionData);
+                    await strokeSelection(this.state, layerInfo);
                 }
                 if (this.state.deselectAfterFill) {
                     await this.deselectSelection();
@@ -323,16 +315,10 @@ class App extends React.Component<AppProps, AppState> {
 
             // 恢复监听
             this.isListenerPaused = false;
-            
-            // 清除缓存的选区数据
-            ClearHandler.clearCachedSelectionData();
         } catch (error) {
             console.error('❌ 处理失败:', error);
             // 确保在错误情况下也恢复监听
             this.isListenerPaused = false;
-            
-            // 即使出错也要清除缓存的选区数据
-            ClearHandler.clearCachedSelectionData();
         }
     }
 

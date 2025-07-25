@@ -3,30 +3,6 @@ import { calculateRandomColor, hsbToRgb, rgbToGray } from './ColorUtils';
 import { Pattern } from '../types/state';
 
 export class ClearHandler {
-    // 静态属性：存储第一次获取的选区数据
-    private static cachedSelectionData: any = null;
-    
-    // 获取缓存的选区数据
-    static getCachedSelectionData() {
-        return this.cachedSelectionData;
-    }
-    
-    // 设置缓存的选区数据
-    static setCachedSelectionData(selectionData: any) {
-        this.cachedSelectionData = selectionData;
-        console.log('💾 已缓存选区数据:', {
-            hasData: !!selectionData,
-            selectionValuesLength: selectionData?.selectionValues?.length,
-            docWidth: selectionData?.docWidth,
-            docHeight: selectionData?.docHeight
-        });
-    }
-    
-    // 清除缓存的选区数据
-    static clearCachedSelectionData() {
-        this.cachedSelectionData = null;
-        console.log('🗑️ 已清除缓存的选区数据');
-    }
     static async clearWithOpacity(opacity: number, state?: any, layerInfo?: any) {
         try {
             // 获取当前文档信息
