@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Pattern } from '../types/state';
 import { FileIcon, DeleteIcon } from '../styles/Icons';
 import { action, core, imaging, app } from 'photoshop';
+import { LayerInfoHandler } from '../utils/LayerInfoHandler';
 
 interface PatternPickerProps {
     isOpen: boolean;
@@ -17,6 +18,8 @@ interface PatternPickerProps {
     }) => {
     const [patterns, setPatterns] = useState<Pattern[]>([]);
     const [selectedPattern, setSelectedPattern] = useState<string | null>(null);
+    const [selectedPatterns, setSelectedPatterns] = useState<Set<string>>(new Set());
+    const [lastClickedPattern, setLastClickedPattern] = useState<string | null>(null);
     const [angle, setAngle] = useState<number>(0);
     const [scale, setScale] = useState<number>(100);
 
@@ -50,6 +53,11 @@ interface PatternPickerProps {
         png: 'image/png',
     };
     const [preserveTransparency, setPreserveTransparency] = useState<boolean>(false);
+    
+    // 添加蒙版状态检测
+    const [isInLayerMask, setIsInLayerMask] = useState(false);
+    const [isInQuickMask, setIsInQuickMask] = useState(false);
+    const [isInSingleColorChannel, setIsInSingleColorChannel] = useState(false);
 
 
 
@@ -204,6 +212,65 @@ interface PatternPickerProps {
             document.removeEventListener('mouseup', handleGlobalMouseUp);
         };
     }, [isPreviewDragging, dragStart, previewZoom]);
+
+    // 检测图层蒙版和快速蒙版模式
+    useEffect(() => {
+        const checkMaskModes = async () => {
+            try {
+                const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
+                setIsInLayerMask(layerInfo?.isInLayerMask || false);
+                setIsInQuickMask(layerInfo?.isInQuickMask || false);
+                setIsInSingleColorChannel(layerInfo?.isInSingleColorChannel || false);
+            } catch (error) {
+                console.error('检测蒙版模式失败:', error);
+                setIsInLayerMask(false);
+                setIsInQuickMask(false);
+                setIsInSingleColorChannel(false);
+            }
+        };
+
+        // 面板打开时检测一次
+        if (isOpen) {
+            checkMaskModes();
+        }
+    }, [isOpen]);
+
+    // 监听通道切换和快速蒙版切换事件
+    useEffect(() => {
+        if (!isOpen) return;
+
+        const checkMaskModes = async () => {
+            try {
+                const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
+                setIsInLayerMask(layerInfo?.isInLayerMask || false);
+                setIsInQuickMask(layerInfo?.isInQuickMask || false);
+                setIsInSingleColorChannel(layerInfo?.isInSingleColorChannel || false);
+            } catch (error) {
+                console.error('检测蒙版模式失败:', error);
+                setIsInLayerMask(false);
+                setIsInQuickMask(false);
+                setIsInSingleColorChannel(false);
+            }
+        };
+
+        // 监听Photoshop事件来检查状态变化
+        const handleNotification = async () => {
+            try {
+                // 检测图层蒙版和快速蒙版状态
+                await checkMaskModes();
+            } catch (error) {
+                // 静默处理错误，避免频繁的错误日志
+            }
+        };
+
+        // 添加事件监听器
+        action.addNotificationListener(['set', 'select', 'clearEvent'], handleNotification);
+
+        // 清理函数
+        return () => {
+            action.removeNotificationListener(['set', 'select', 'clearEvent'], handleNotification);
+        };
+    }, [isOpen]);
 
     //-------------------------------------------------------------------------------------------------
     // 新增从系统中载入待填充图案的方法
@@ -686,7 +753,19 @@ interface PatternPickerProps {
     
     // 删除图案的逻辑
     const handleDelete = async () => {
-        if (selectedPattern) {
+        if (selectedPatterns.size > 0) {
+            // 删除多选的图案
+            const newPatterns = patterns.filter(p => !selectedPatterns.has(p.id));
+            setPatterns(newPatterns);
+            setSelectedPatterns(new Set());
+            setLastClickedPattern(null);
+            
+            // 如果删除后列表为空，则清空选择
+            if (newPatterns.length === 0) {
+                setSelectedPattern(null);
+            }
+            console.log('多个图案删除成功');
+        } else if (selectedPattern) {
             const currentIndex = patterns.findIndex(p => p.id === selectedPattern);
             if (currentIndex === -1) return; // Should not happen
 
@@ -731,6 +810,61 @@ interface PatternPickerProps {
         });
     };
     
+    // 图案选择处理函数
+    const handlePatternSelect = (patternId: string, event?: React.MouseEvent) => {
+        if (event && (event.ctrlKey || event.metaKey)) {
+            // Ctrl+点击（Windows）或Cmd+点击（Mac）：切换选中状态
+            const newSelectedPatterns = new Set(selectedPatterns);
+            if (newSelectedPatterns.has(patternId)) {
+                newSelectedPatterns.delete(patternId);
+            } else {
+                newSelectedPatterns.add(patternId);
+            }
+            
+            setSelectedPatterns(newSelectedPatterns);
+            setLastClickedPattern(patternId);
+            
+            // 如果多选集合为空，恢复单选状态
+            if (newSelectedPatterns.size === 0) {
+                setSelectedPattern(patternId);
+            } else {
+                // 多选时清空单选状态
+                setSelectedPattern(null);
+            }
+        } else if (event && event.shiftKey && lastClickedPattern !== null) {
+            // Shift+点击：范围选择
+            const newSelectedPatterns = new Set(selectedPatterns);
+            const patternIds = patterns.map(p => p.id);
+            const startIndex = patternIds.indexOf(lastClickedPattern);
+            const endIndex = patternIds.indexOf(patternId);
+            
+            if (startIndex !== -1 && endIndex !== -1) {
+                const start = Math.min(startIndex, endIndex);
+                const end = Math.max(startIndex, endIndex);
+                for (let i = start; i <= end; i++) {
+                    newSelectedPatterns.add(patternIds[i]);
+                }
+            }
+            
+            setSelectedPatterns(newSelectedPatterns);
+            setLastClickedPattern(patternId);
+            
+            // 如果范围选择只有一个项目，按单选处理
+            if (newSelectedPatterns.size === 1) {
+                setSelectedPattern(patternId);
+                setSelectedPatterns(new Set());
+            } else {
+                // 多选时清空单选状态
+                setSelectedPattern(null);
+            }
+        } else {
+            // 单选模式
+            setSelectedPattern(patternId);
+            setSelectedPatterns(new Set());
+            setLastClickedPattern(patternId);
+        }
+    };
+
     // 更新图案的角度滑块的变化
     const handleAngleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const newAngle = Number(e.target.value);
@@ -805,8 +939,8 @@ interface PatternPickerProps {
                     {patterns.map(pattern => (
                         <div
                             key={pattern.id}
-                            className={`photo-container ${selectedPattern === pattern.id ? 'selected' : ''}`}
-                            onClick={() => setSelectedPattern(pattern.id)}
+                            className={`photo-container ${selectedPattern === pattern.id ? 'selected' : ''} ${selectedPatterns.has(pattern.id) ? 'multi-selected' : ''}`}
+                            onClick={(e) => handlePatternSelect(pattern.id, e)}
                         >
                             <img 
                                 src={pattern.preview} 
@@ -845,7 +979,8 @@ interface PatternPickerProps {
                                     display: 'block', // 移除条件显示
                                     opacity: loadedImages[pattern.id] ? 1 : 0, // 使用透明度来控制显示
                                     transition: 'opacity 0.2s',
-                                    padding: '4px'
+                                    padding: '4px',
+                                    filter: (isInLayerMask || isInQuickMask || isInSingleColorChannel) ? 'grayscale(100%)' : 'none'
                                 }}
                             />
                             {(!loadedImages[pattern.id] && loadedImages[pattern.id] !== true) && ( // 修改判断条件
@@ -882,14 +1017,14 @@ interface PatternPickerProps {
                                     quiet
                                     class="icon-button"
                                     onClick={() => {
-                                        if (selectedPattern) {
+                                        if (selectedPatterns.size > 0 || selectedPattern) {
                                             handleDelete();
                                         }
                                     }}
-                                    disabled={!selectedPattern}
+                                    disabled={!selectedPattern && selectedPatterns.size === 0}
                                     style={{
-                                        cursor: !selectedPattern ? 'not-allowed' : 'pointer',
-                                        opacity: !selectedPattern ? 0.4 : 1,
+                                        cursor: (!selectedPattern && selectedPatterns.size === 0) ? 'not-allowed' : 'pointer',
+                                        opacity: (!selectedPattern && selectedPatterns.size === 0) ? 0.4 : 1,
                                         padding: '4px',
                                         background: 'none',
                                         border: 'none',
@@ -1079,7 +1214,8 @@ interface PatternPickerProps {
                                 objectFit: 'contain',
                                 transform: `translate(-50%, -50%) translate(${previewOffset.x}px, ${previewOffset.y}px) rotate(${angle}deg)`,
                                 transformOrigin: 'center center',
-                                imageRendering: previewZoom > 400 ? 'pixelated' : 'auto'
+                                imageRendering: previewZoom > 400 ? 'pixelated' : 'auto',
+                                filter: (isInLayerMask || isInQuickMask || isInSingleColorChannel) ? 'grayscale(100%)' : 'none'
                             }}
                         />
                         {previewZoom > 100 && (
@@ -1094,6 +1230,13 @@ interface PatternPickerProps {
 
             <div className="panel-footer">
                 <button onClick={async () => {
+                    // 如果有多选或未选择图案，返回null
+                    if (selectedPatterns.size > 0 || !selectedPattern) {
+                        onSelect(null);
+                        onClose();
+                        return;
+                    }
+                    
                     const selectedPatternData = patterns.find(p => p.id === selectedPattern);
                     if (selectedPatternData) {
                         console.log('🔄 开始处理图案数据，当前状态:', {

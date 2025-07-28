@@ -20,10 +20,22 @@ export class ClearHandler {
                 console.log('🎭 当前在图层蒙版状态，使用图层蒙版清除方法');
                 if (state.fillMode === 'foreground') {
                     await this.clearLayerMaskSolidColor(layerInfo, state, opacity);
-                } else if (state.fillMode === 'pattern' && state.selectedPattern) {
-                    await this.clearLayerMaskPattern(layerInfo, state, opacity);
-                } else if (state.fillMode === 'gradient' && state.selectedGradient) {
-                    await this.clearLayerMaskGradient(layerInfo, state, opacity);
+                } else if (state.fillMode === 'pattern') {
+                    if (state.selectedPattern) {
+                        await this.clearLayerMaskPattern(layerInfo, state, opacity);
+                    } else {
+                        // 缺少图案预设，显示警告并跳过清除
+                        await core.showAlert({ message: '请先选择一个图案预设' });
+                        return;
+                    }
+                } else if (state.fillMode === 'gradient') {
+                    if (state.selectedGradient) {
+                        await this.clearLayerMaskGradient(layerInfo, state, opacity);
+                    } else {
+                        // 缺少渐变预设，显示警告并跳过清除
+                        await core.showAlert({ message: '请先选择一个渐变预设' });
+                        return;
+                    }
                 }
                 return;
             }
@@ -32,12 +44,24 @@ export class ClearHandler {
             if (state && state.fillMode === 'foreground') {
                 // 情况1：清除模式，删除纯色
                 await this.clearSolidColor(opacity, state);
-            } else if (state && state.fillMode === 'pattern' && state.selectedPattern) {
-                // 情况2：清除模式，删除图案
-                await this.clearPattern(opacity, state);
-            } else if (state && state.fillMode === 'gradient' && state.selectedGradient) {
-                // 情况3：清除模式，删除渐变
-                await this.clearGradient(opacity, state);
+            } else if (state && state.fillMode === 'pattern') {
+                if (state.selectedPattern) {
+                    // 情况2：清除模式，删除图案
+                    await this.clearPattern(opacity, state);
+                } else {
+                    // 缺少图案预设，显示警告并跳过清除
+                    await core.showAlert({ message: '请先选择一个图案预设' });
+                    return;
+                }
+            } else if (state && state.fillMode === 'gradient') {
+                if (state.selectedGradient) {
+                    // 情况3：清除模式，删除渐变
+                    await this.clearGradient(opacity, state);
+                } else {
+                    // 缺少渐变预设，显示警告并跳过清除
+                    await core.showAlert({ message: '请先选择一个渐变预设' });
+                    return;
+                }
             } 
         } catch (error) {
             console.error('清除选区失败:', error);
@@ -653,12 +677,24 @@ export class ClearHandler {
             if (state.fillMode === 'foreground') {
                 console.log('🎨 使用纯色填充模式');
                 fillGrayData = await this.getSolidFillGrayData(state, selectionBounds, quickMaskForegroundColor);
-            } else if (state.fillMode === 'pattern' && state.selectedPattern) {
-                console.log('🔳 使用图案填充模式');
-                fillGrayData = await this.getPatternFillGrayData(state, selectionBounds);
-            } else if (state.fillMode === 'gradient' && state.selectedGradient) {
-                console.log('🌈 使用渐变填充模式');
-                fillGrayData = await this.getGradientFillGrayData(state, selectionBounds);
+            } else if (state.fillMode === 'pattern') {
+                if (state.selectedPattern) {
+                    console.log('🔳 使用图案填充模式');
+                    fillGrayData = await this.getPatternFillGrayData(state, selectionBounds);
+                } else {
+                    // 缺少图案预设，显示警告并跳过清除
+                    await core.showAlert({ message: '请先选择一个图案预设' });
+                    return;
+                }
+            } else if (state.fillMode === 'gradient') {
+                if (state.selectedGradient) {
+                    console.log('🌈 使用渐变填充模式');
+                    fillGrayData = await this.getGradientFillGrayData(state, selectionBounds);
+                } else {
+                    // 缺少渐变预设，显示警告并跳过清除
+                    await core.showAlert({ message: '请先选择一个渐变预设' });
+                    return;
+                }
             } else {
                 console.warn('❌ 未知的填充模式或缺少填充数据，填充模式:', state.fillMode);
                 return;

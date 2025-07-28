@@ -64,6 +64,17 @@
     z-index: 2;
     flex: 0 0 auto;
   }
+
+  .photo-container.selected {
+    border-color: var(--primary-color);
+    border-width: 2px;
+  }
+
+  .photo-container.multi-selected {
+    border-color: var(--secondary-color, #ff6b35);
+    border-width: 2px;
+    background-color: rgba(255, 107, 53, 0.1);
+  }
   
   .photo-container img {
     width: 100%;

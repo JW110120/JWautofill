@@ -6,6 +6,7 @@ interface LayerInfo {
     hasPixels: boolean;
     isInQuickMask: boolean;
     isInLayerMask: boolean;
+    isInSingleColorChannel: boolean;
 }
 
 export class LayerInfoHandler {
@@ -27,12 +28,16 @@ export class LayerInfoHandler {
             // 检测是否在编辑图层蒙版
             const isInLayerMask = await this.checkLayerMaskMode();
             
+            // 检测是否选中了单个颜色通道
+            const isInSingleColorChannel = await this.checkSingleColorChannelMode();
+            
             return {
                 isBackground: activeLayer.isBackgroundLayer,
                 hasTransparencyLocked: activeLayer.transparentPixelsLocked,
                 hasPixels: this.checkLayerHasPixels(activeLayer),
                 isInQuickMask: isInQuickMask,
-                isInLayerMask: isInLayerMask
+                isInLayerMask: isInLayerMask,
+                isInSingleColorChannel: isInSingleColorChannel
             };
         } catch (error) {
             return null;
@@ -113,6 +118,48 @@ export class LayerInfoHandler {
             return false;
         } catch (error) {
             console.error("❌ 检测图层蒙版模式失败:", error);
+            return false;
+        }
+    }
+
+    // 检测是否选中了单个颜色通道（红、绿、蓝）
+    private static async checkSingleColorChannelMode(): Promise<boolean> {
+        try {
+            // 获取当前激活的通道信息
+            const targetChannelResult = await action.batchPlay([
+                {
+                    _obj: "get",
+                    _target: [
+                        {
+                            _ref: "channel",
+                            _enum: "ordinal",
+                            _value: "targetEnum"
+                        }
+                    ],
+                    _options: {
+                        dialogOptions: "dontDisplay"
+                    }
+                }
+            ], { synchronousExecution: true });
+
+            if (targetChannelResult[0]) {
+                const targetChannelInfo = targetChannelResult[0];
+                const channelName = targetChannelInfo.channelName;
+                
+                console.log("🔍 当前激活通道:", channelName);
+                
+                // 检测是否为单个颜色通道（红、绿、蓝）
+                // 通常这些通道的名称为 "红"、"绿"、"蓝" 或 "Red"、"Green"、"Blue"
+                const singleColorChannels = ["红", "绿", "蓝", "Red", "Green", "Blue", "R", "G", "B"];
+                const isInSingleColorChannel = singleColorChannels.includes(channelName);
+                
+                console.log("🔍 是否在单个颜色通道:", isInSingleColorChannel);
+                return isInSingleColorChannel;
+            }
+            
+            return false;
+        } catch (error) {
+            console.error("❌ 检测单个颜色通道模式失败:", error);
             return false;
         }
     }

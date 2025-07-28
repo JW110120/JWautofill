@@ -245,7 +245,7 @@ class App extends React.Component<AppProps, AppState> {
         });
     }
 
-    handleGradientSelect(gradient: Gradient) {
+    handleGradientSelect(gradient: Gradient | null) {
         this.setState({
             selectedGradient: gradient,
             isGradientPickerOpen: false
@@ -447,20 +447,32 @@ class App extends React.Component<AppProps, AppState> {
     
             const { isBackground, hasTransparencyLocked, hasPixels } = layerInfo;
     
-            if (this.state.fillMode === 'pattern' && this.state.selectedPattern) {
-                await PatternFill.fillPattern({
-                    opacity: this.state.opacity,
-                    blendMode: this.state.blendMode,
-                    pattern: this.state.selectedPattern,
-                    preserveTransparency: this.state.selectedPattern.preserveTransparency
-                }, layerInfo, this.state);
-            } else if (this.state.fillMode === 'gradient' && this.state.selectedGradient) {
-                await GradientFill.fillGradient({
-                    opacity: this.state.opacity,
-                    blendMode: this.state.blendMode,
-                    gradient: this.state.selectedGradient,
-                    preserveTransparency: this.state.selectedGradient.preserveTransparency
-                }, layerInfo, this.state);
+            if (this.state.fillMode === 'pattern') {
+                if (this.state.selectedPattern) {
+                    await PatternFill.fillPattern({
+                        opacity: this.state.opacity,
+                        blendMode: this.state.blendMode,
+                        pattern: this.state.selectedPattern,
+                        preserveTransparency: this.state.selectedPattern.preserveTransparency
+                    }, layerInfo, this.state);
+                } else {
+                    // 缺少图案预设，显示警告并跳过填充
+                    await core.showAlert({ message: '请先选择一个图案预设' });
+                    return;
+                }
+            } else if (this.state.fillMode === 'gradient') {
+                if (this.state.selectedGradient) {
+                    await GradientFill.fillGradient({
+                        opacity: this.state.opacity,
+                        blendMode: this.state.blendMode,
+                        gradient: this.state.selectedGradient,
+                        preserveTransparency: this.state.selectedGradient.preserveTransparency
+                    }, layerInfo, this.state);
+                } else {
+                    // 缺少渐变预设，显示警告并跳过填充
+                    await core.showAlert({ message: '请先选择一个渐变预设' });
+                    return; 
+                } 
             } else {
                 // 检测是否在快速蒙版状态
                 const isInQuickMask = layerInfo.isInQuickMask;

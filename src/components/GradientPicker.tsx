@@ -10,11 +10,11 @@ const { batchPlay } = action;
 interface GradientPickerProps {
     isOpen: boolean;
     onClose: () => void;
-    onSelect: (gradient: Gradient) => void;
+    onSelect: (gradient: Gradient | null) => void;
 }
 
 // 生成考虑中点插值的预设预览样式
-const generatePresetPreviewStyle = (preset: Gradient, isInLayerMask: boolean = false): string => {
+const generatePresetPreviewStyle = (preset: Gradient, isInLayerMask: boolean = false, isInQuickMask: boolean = false, isInSingleColorChannel: boolean = false): string => {
     // 为预设创建临时的扩展stops
     const extendedStops = preset.stops.map((stop, i) => ({
         ...stop,
@@ -34,8 +34,8 @@ const generatePresetPreviewStyle = (preset: Gradient, isInLayerMask: boolean = f
         const rgb = interpolateColorAtPositionForPreset(i, sortedColorStops);
         const alpha = interpolateOpacityAtPositionForPreset(i, sortedOpacityStops);
         
-        if (isInLayerMask) {
-            // 图层蒙版模式：转换为灰度值
+        if (isInLayerMask || isInQuickMask || isInSingleColorChannel) {
+            // 图层蒙版模式、快速蒙版模式或单个颜色通道模式：转换为灰度值
             const gray = Math.round(0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b);
             const a = alpha.toFixed(3);
             gradientStops.push(`rgba(${gray}, ${gray}, ${gray}, ${a}) ${i}%`);
@@ -180,6 +180,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
 }) => {
     const [presets, setPresets] = useState<Gradient[]>([]);
     const [selectedPreset, setSelectedPreset] = useState<number | null>(null);
+    const [selectedPresets, setSelectedPresets] = useState<Set<number>>(new Set());
+    const [lastClickedPreset, setLastClickedPreset] = useState<number | null>(null);
     const [gradientType, setGradientType] = useState<'linear' | 'radial'>('linear');
     const [angle, setAngle] = useState(0);
     const [scale, setScale] = useState(100);
@@ -202,22 +204,66 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const [dragStartAngle, setDragStartAngle] = useState(0); 
     const [dragStopIndex, setDragStopIndex] = useState<number | null>(null);
     const [isInLayerMask, setIsInLayerMask] = useState(false);
+    const [isInQuickMask, setIsInQuickMask] = useState(false);
+    const [isInSingleColorChannel, setIsInSingleColorChannel] = useState(false);
 
-    // 检测图层蒙版模式
+    // 检测图层蒙版和快速蒙版模式
     useEffect(() => {
-        const checkLayerMaskMode = async () => {
+        const checkMaskModes = async () => {
             try {
                 const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
                 setIsInLayerMask(layerInfo?.isInLayerMask || false);
+                setIsInQuickMask(layerInfo?.isInQuickMask || false);
+                setIsInSingleColorChannel(layerInfo?.isInSingleColorChannel || false);
             } catch (error) {
-                console.error('检测图层蒙版模式失败:', error);
+                console.error('检测蒙版模式失败:', error);
                 setIsInLayerMask(false);
+                setIsInQuickMask(false);
+                setIsInSingleColorChannel(false);
             }
         };
 
+        // 面板打开时检测一次
         if (isOpen) {
-            checkLayerMaskMode();
+            checkMaskModes();
         }
+    }, [isOpen]);
+
+    // 监听通道切换和快速蒙版切换事件
+    useEffect(() => {
+        if (!isOpen) return;
+
+        const checkMaskModes = async () => {
+            try {
+                const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
+                setIsInLayerMask(layerInfo?.isInLayerMask || false);
+                setIsInQuickMask(layerInfo?.isInQuickMask || false);
+                setIsInSingleColorChannel(layerInfo?.isInSingleColorChannel || false);
+            } catch (error) {
+                console.error('检测蒙版模式失败:', error);
+                setIsInLayerMask(false);
+                setIsInQuickMask(false);
+                setIsInSingleColorChannel(false);
+            }
+        };
+
+        // 监听Photoshop事件来检查状态变化
+        const handleNotification = async () => {
+            try {
+                // 检测图层蒙版和快速蒙版状态
+                await checkMaskModes();
+            } catch (error) {
+                // 静默处理错误，避免频繁的错误日志
+            }
+        };
+
+        // 添加事件监听器
+        action.addNotificationListener(['set', 'select', 'clearEvent'], handleNotification);
+
+        // 清理函数
+        return () => {
+            action.removeNotificationListener(['set', 'select', 'clearEvent'], handleNotification);
+        };
     }, [isOpen]);
 
     const handleAddPreset = () => {
@@ -239,43 +285,140 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         setSelectedPreset(newPresets.length - 1);
     };
 
-    const handleDeletePreset = (index: number) => {
-        setPresets(presets.filter((_, i) => i !== index));
-        if (selectedPreset === index) {
-            const newSelectedIndex = index > 0 ? index - 1 : null; 
-            setSelectedPreset(newSelectedIndex);
+    const handleDeletePreset = (index?: number) => {
+        if (selectedPresets.size > 0) {
+            // 删除多选的预设
+            const sortedIndices = Array.from(selectedPresets).sort((a, b) => b - a); // 从大到小排序
+            let newPresets = [...presets];
             
-            if (newSelectedIndex !== null) {
-                const previousPreset = presets[newSelectedIndex];
-                setGradientType(previousPreset.type);
-                setAngle(previousPreset.angle || 0);
-                setScale(previousPreset.scale || 100);
-                setReverse(previousPreset.reverse || false);
-                setStops(previousPreset.stops.map((stop, i) => ({
-                    ...stop,
-                    // 如果预设中保存了扩展属性，则使用保存的值，否则使用默认值
-                    colorPosition: stop.colorPosition !== undefined ? stop.colorPosition : stop.position,
-                    opacityPosition: stop.opacityPosition !== undefined ? stop.opacityPosition : stop.position,
-                    midpoint: stop.midpoint !== undefined ? stop.midpoint : (i < previousPreset.stops.length - 1 ? 50 : undefined)
-                })));
+            sortedIndices.forEach(i => {
+                newPresets = newPresets.filter((_, idx) => idx !== i);
+            });
+            
+            setPresets(newPresets);
+            setSelectedPresets(new Set());
+            setLastClickedPreset(null);
+            
+            // 如果删除后没有预设了，清空选中状态
+            if (newPresets.length === 0) {
+                setSelectedPreset(null);
+            }
+        } else if (index !== undefined) {
+            // 删除单个预设
+            const newPresets = presets.filter((_, i) => i !== index);
+            setPresets(newPresets);
+            
+            // 如果删除后没有预设了，清空选中状态
+            if (newPresets.length === 0) {
+                setSelectedPreset(null);
+            } else if (selectedPreset === index) {
+                // 如果删除的是当前选中的预设
+                const newSelectedIndex = index > 0 ? index - 1 : (newPresets.length > 0 ? 0 : null);
+                setSelectedPreset(newSelectedIndex);
+                
+                if (newSelectedIndex !== null) {
+                    const previousPreset = newPresets[newSelectedIndex];
+                    setGradientType(previousPreset.type);
+                    setAngle(previousPreset.angle || 0);
+                    setScale(previousPreset.scale || 100);
+                    setReverse(previousPreset.reverse || false);
+                    setStops(previousPreset.stops.map((stop, i) => ({
+                        ...stop,
+                        // 如果预设中保存了扩展属性，则使用保存的值，否则使用默认值
+                        colorPosition: stop.colorPosition !== undefined ? stop.colorPosition : stop.position,
+                        opacityPosition: stop.opacityPosition !== undefined ? stop.opacityPosition : stop.position,
+                        midpoint: stop.midpoint !== undefined ? stop.midpoint : (i < previousPreset.stops.length - 1 ? 50 : undefined)
+                    })));
+                }
+            } else if (selectedPreset !== null && selectedPreset > index) {
+                // 如果删除的预设在当前选中预设之前，需要调整索引
+                setSelectedPreset(selectedPreset - 1);
             }
         }
     };
 
-    const handlePresetSelect = (index: number) => {
-        const preset = presets[index];
-        setSelectedPreset(index);
-        setGradientType(preset.type);
-        setAngle(preset.angle || 0);
-        setScale(preset.scale || 100);
-        setReverse(preset.reverse || false);
-        setStops(preset.stops.map((stop, i) => ({
-            ...stop,
-            // 如果预设中保存了扩展属性，则使用保存的值，否则使用默认值
-            colorPosition: stop.colorPosition !== undefined ? stop.colorPosition : stop.position,
-            opacityPosition: stop.opacityPosition !== undefined ? stop.opacityPosition : stop.position,
-            midpoint: stop.midpoint !== undefined ? stop.midpoint : (i < preset.stops.length - 1 ? 50 : undefined)
-        })));
+    const handlePresetSelect = (index: number, event?: React.MouseEvent) => {
+        if (event && (event.ctrlKey || event.metaKey)) {
+            // Ctrl+点击（Windows）或Cmd+点击（Mac）：切换选中状态
+            const newSelectedPresets = new Set(selectedPresets);
+            if (newSelectedPresets.has(index)) {
+                newSelectedPresets.delete(index);
+            } else {
+                newSelectedPresets.add(index);
+            }
+            
+            setSelectedPresets(newSelectedPresets);
+            setLastClickedPreset(index);
+            
+            // 如果多选集合为空，恢复单选状态
+            if (newSelectedPresets.size === 0) {
+                setSelectedPreset(index);
+                const preset = presets[index];
+                setGradientType(preset.type);
+                setAngle(preset.angle || 0);
+                setScale(preset.scale || 100);
+                setReverse(preset.reverse || false);
+                setStops(preset.stops.map((stop, i) => ({
+                    ...stop,
+                    colorPosition: stop.colorPosition !== undefined ? stop.colorPosition : stop.position,
+                    opacityPosition: stop.opacityPosition !== undefined ? stop.opacityPosition : stop.position,
+                    midpoint: stop.midpoint !== undefined ? stop.midpoint : (i < preset.stops.length - 1 ? 50 : undefined)
+                })));
+            } else {
+                // 多选时清空单选状态
+                setSelectedPreset(null);
+            }
+        } else if (event && event.shiftKey && lastClickedPreset !== null) {
+            // Shift+点击：范围选择
+            const newSelectedPresets = new Set(selectedPresets);
+            const start = Math.min(lastClickedPreset, index);
+            const end = Math.max(lastClickedPreset, index);
+            for (let i = start; i <= end; i++) {
+                newSelectedPresets.add(i);
+            }
+            
+            setSelectedPresets(newSelectedPresets);
+            setLastClickedPreset(index);
+            
+            // 如果范围选择只有一个项目，按单选处理
+            if (newSelectedPresets.size === 1) {
+                setSelectedPreset(index);
+                setSelectedPresets(new Set());
+                
+                const preset = presets[index];
+                setGradientType(preset.type);
+                setAngle(preset.angle || 0);
+                setScale(preset.scale || 100);
+                setReverse(preset.reverse || false);
+                setStops(preset.stops.map((stop, i) => ({
+                    ...stop,
+                    colorPosition: stop.colorPosition !== undefined ? stop.colorPosition : stop.position,
+                    opacityPosition: stop.opacityPosition !== undefined ? stop.opacityPosition : stop.position,
+                    midpoint: stop.midpoint !== undefined ? stop.midpoint : (i < preset.stops.length - 1 ? 50 : undefined)
+                })));
+            } else {
+                // 多选时清空单选状态
+                setSelectedPreset(null);
+            }
+        } else {
+            // 单选模式
+            setSelectedPreset(index);
+            setSelectedPresets(new Set());
+            setLastClickedPreset(index);
+            
+            const preset = presets[index];
+            setGradientType(preset.type);
+            setAngle(preset.angle || 0);
+            setScale(preset.scale || 100);
+            setReverse(preset.reverse || false);
+            setStops(preset.stops.map((stop, i) => ({
+                ...stop,
+                // 如果预设中保存了扩展属性，则使用保存的值，否则使用默认值
+                colorPosition: stop.colorPosition !== undefined ? stop.colorPosition : stop.position,
+                opacityPosition: stop.opacityPosition !== undefined ? stop.opacityPosition : stop.position,
+                midpoint: stop.midpoint !== undefined ? stop.midpoint : (i < preset.stops.length - 1 ? 50 : undefined)
+            })));
+        }
     };
 
     // 性能优化：使用useMemo缓存排序后的stops，避免每次渲染都重新排序
@@ -300,8 +443,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             const rgb = interpolateColorAtPosition(i, sortedColorStops);
             const alpha = interpolateOpacityAtPosition(i, sortedOpacityStops);
             
-            if (isInLayerMask) {
-                // 图层蒙版模式：转换为灰度值
+            if (isInLayerMask || isInQuickMask || isInSingleColorChannel) {
+                // 图层蒙版模式、快速蒙版模式或单个颜色通道模式：转换为灰度值
                 const gray = Math.round(0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b);
                 const a = alpha.toFixed(3);
                 gradientStops.push(`rgba(${gray}, ${gray}, ${gray}, ${a}) ${i}%`);
@@ -444,8 +587,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             const rgb = interpolateColorAtPosition(i, sortedColorStops);
             const alpha = interpolateOpacityAtPosition(i, sortedOpacityStops);
             
-            if (isInLayerMask) {
-                // 图层蒙版模式：转换为灰度值
+            if (isInLayerMask || isInQuickMask || isInSingleColorChannel) {
+                // 图层蒙版模式或快速蒙版模式：转换为灰度值
                 const gray = Math.round(0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b);
                 const a = alpha.toFixed(3);
                 gradientStops.push(`rgba(${gray}, ${gray}, ${gray}, ${a}) ${i}%`);
@@ -900,13 +1043,13 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 <div className="gradient-presets">
                     {presets.map((preset, index) => {
                         // 生成考虑中点插值的预设预览样式
-                        const presetGradientStyle = generatePresetPreviewStyle(preset, isInLayerMask);
+                        const presetGradientStyle = generatePresetPreviewStyle(preset, isInLayerMask, isInQuickMask, isInSingleColorChannel);
                         
                         return (
                             <div 
                                 key={index} 
-                                className={`preset-item ${selectedPreset === index ? 'selected' : ''}`}
-                                onClick={() => handlePresetSelect(index)}
+                                className={`preset-item ${selectedPreset === index ? 'selected' : ''} ${selectedPresets.has(index) ? 'multi-selected' : ''}`}
+                                onClick={(e) => handlePresetSelect(index, e)}
                             >
                                 <div className="preset-preview" style={{
                                     position: 'relative',
@@ -955,21 +1098,23 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             quiet
                             class="icon-button"
                             onClick={() => {
-                            if (selectedPreset !== null) {
+                            if (selectedPresets.size > 0) {
+                                handleDeletePreset();
+                            } else if (selectedPreset !== null) {
                                 handleDeletePreset(selectedPreset);
                             }
                             }}
-                            disabled={selectedPreset === null || presets.length === 0}
+                            disabled={(selectedPreset === null && selectedPresets.size === 0) || presets.length === 0}
                             style={{
-                            cursor: selectedPreset === null || presets.length === 0 ? 'not-allowed' : 'pointer',
-                            opacity: selectedPreset === null || presets.length === 0 ? 0.4 : 1,
+                            cursor: (selectedPreset === null && selectedPresets.size === 0) || presets.length === 0 ? 'not-allowed' : 'pointer',
+                            opacity: (selectedPreset === null && selectedPresets.size === 0) || presets.length === 0 ? 0.4 : 1,
                             alignItems: 'center',
                             marginLeft: 'auto',
                             justifyContent: 'flex-end',
                             border: 'none'
                             }}
                             onMouseEnter={(e) => {
-                                if (!(selectedPreset === null || presets.length === 0)) {
+                                if (!((selectedPreset === null && selectedPresets.size === 0) || presets.length === 0)) {
                                     const iconFill = e.currentTarget.querySelector('.icon-fill');
                                     if (iconFill) iconFill.style.fill = 'var(--hover-icon)';
                                 }
@@ -977,7 +1122,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             onMouseLeave={(e) => {
                                 const iconFill = e.currentTarget.querySelector('.icon-fill');
                                 if (iconFill) {
-                                    iconFill.style.fill = (selectedPreset === null || presets.length === 0) ? 'var(--disabled-color)' : 'var(--text-color)';
+                                    iconFill.style.fill = ((selectedPreset === null && selectedPresets.size === 0) || presets.length === 0) ? 'var(--disabled-color)' : 'var(--text-color)';
                                 }
                             }}
                             title="删除预设"
@@ -1488,68 +1633,93 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             <div className="final-preview-container">
                 <div className="gradient-subtitle"><h3>最终预览</h3></div>
                 <div className="final-preview">
-                    {/* 棋盘格背景 */}
-                    <div className="opacity-checkerboard" 
-                        style={{
+                    {/* 当选中多个预设时不渲染预览 */}
+                    {selectedPresets.size > 0 ? (
+                        <div style={{
                             position: 'absolute',
-                            top: 0,
-                            left: 0,
-                            width: '100%',
-                            height: '100%',
-                            overflow: 'hidden', // 裁切超出部分
-                            zIndex: 1
-                        }}
-                    >
-                        {renderCheckerboard(220, 150)}
-                    </div>
-                    {/* 渐变覆盖层 */}
-                    <div style={{
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        width: '100%',
-                        height: '100%',
-                        background: getGradientStyle(),
-                        zIndex: 2
-                    }} />
-                    {/* 当渐变完全透明时显示提示 */}
-                    {(() => {
-                        const hasVisibleOpacity = stops.some(stop => {
-                            const rgbaMatch = stop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
-                            return rgbaMatch && parseFloat(rgbaMatch[4]) > 0;
-                        });
-                        
-                        if (!hasVisibleOpacity) {
-                            return (
-                                <div style={{
+                            top: '50%',
+                            left: '50%',
+                            transform: 'translate(-50%, -50%)',
+                            color: '#666',
+                            fontSize: '12px',
+                            zIndex: 3,
+                            pointerEvents: 'none'
+                        }}>
+                            已选中多个预设
+                        </div>
+                    ) : (
+                        <>
+                            {/* 棋盘格背景 */}
+                            <div className="opacity-checkerboard" 
+                                style={{
                                     position: 'absolute',
-                                    top: '50%',
-                                    left: '50%',
-                                    transform: 'translate(-50%, -50%)',
-                                    color: '#666',
-                                    fontSize: '12px',
-                                    zIndex: 3,
-                                    pointerEvents: 'none'
-                                }}>
-                                    渐变完全透明
-                                </div>
-                            );
-                        }
-                        return null;
-                    })()} 
+                                    top: 0,
+                                    left: 0,
+                                    width: '100%',
+                                    height: '100%',
+                                    overflow: 'hidden', // 裁切超出部分
+                                    zIndex: 1
+                                }}
+                            >
+                                {renderCheckerboard(220, 150)}
+                            </div>
+                            {/* 渐变覆盖层 */}
+                            <div style={{
+                                position: 'absolute',
+                                top: 0,
+                                left: 0,
+                                width: '100%',
+                                height: '100%',
+                                background: getGradientStyle(),
+                                zIndex: 2
+                            }} />
+                            {/* 当渐变完全透明时显示提示 */}
+                            {(() => {
+                                const hasVisibleOpacity = stops.some(stop => {
+                                    const rgbaMatch = stop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
+                                    return rgbaMatch && parseFloat(rgbaMatch[4]) > 0;
+                                });
+                                
+                                if (!hasVisibleOpacity) {
+                                    return (
+                                        <div style={{
+                                            position: 'absolute',
+                                            top: '50%',
+                                            left: '50%',
+                                            transform: 'translate(-50%, -50%)',
+                                            color: '#666',
+                                            fontSize: '12px',
+                                            zIndex: 3,
+                                            pointerEvents: 'none'
+                                        }}>
+                                            渐变完全透明
+                                        </div>
+                                    );
+                                }
+                                return null;
+                            })()} 
+                        </>
+                    )}
                 </div>
             </div>
 
             <div className="panel-footer">
                 <button onClick={() => {
-                    onSelect({
-                        type: gradientType,
-                        angle,
-                        reverse,
-                        stops: stops.map(({ midpoint, colorPosition, opacityPosition, ...stop }) => stop), // 移除扩展属性
-                        preserveTransparency, // 添加这个属性
-                        presets
-                    });
+                    // 多选时或没有选中预设时传递null，只有单选了预设才传递渐变对象
+                    if (selectedPresets.size > 0 || selectedPreset === null) {
+                        onSelect(null);
+                    } else if (selectedPreset !== null && presets[selectedPreset]) {
+                        onSelect({
+                            type: gradientType,
+                            angle,
+                            reverse,
+                            stops: stops.map(({ midpoint, colorPosition, opacityPosition, ...stop }) => stop), // 移除扩展属性
+                            preserveTransparency, // 添加这个属性
+                            presets
+                        });
+                    } else {
+                        onSelect(null);
+                    }
                     onClose();
                 }}>保存设置</button>
             </div>
