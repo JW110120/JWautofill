@@ -11,10 +11,11 @@ interface GradientPickerProps {
     isOpen: boolean;
     onClose: () => void;
     onSelect: (gradient: Gradient | null) => void;
+    isClearMode?: boolean;
 }
 
 // 生成考虑中点插值的预设预览样式
-const generatePresetPreviewStyle = (preset: Gradient, isInLayerMask: boolean = false, isInQuickMask: boolean = false, isInSingleColorChannel: boolean = false): string => {
+const generatePresetPreviewStyle = (preset: Gradient, isInLayerMask: boolean = false, isInQuickMask: boolean = false, isInSingleColorChannel: boolean = false, isClearMode: boolean = false): string => {
     // 为预设创建临时的扩展stops
     const extendedStops = preset.stops.map((stop, i) => ({
         ...stop,
@@ -34,8 +35,8 @@ const generatePresetPreviewStyle = (preset: Gradient, isInLayerMask: boolean = f
         const rgb = interpolateColorAtPositionForPreset(i, sortedColorStops);
         const alpha = interpolateOpacityAtPositionForPreset(i, sortedOpacityStops);
         
-        if (isInLayerMask || isInQuickMask || isInSingleColorChannel) {
-            // 图层蒙版模式、快速蒙版模式或单个颜色通道模式：转换为灰度值
+        if (isClearMode || isInLayerMask || isInQuickMask || isInSingleColorChannel) {
+            // 清除模式、图层蒙版模式、快速蒙版模式或单个颜色通道模式：转换为灰度值
             const gray = Math.round(0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b);
             const a = alpha.toFixed(3);
             gradientStops.push(`rgba(${gray}, ${gray}, ${gray}, ${a}) ${i}%`);
@@ -176,7 +177,8 @@ interface ExtendedGradientStop extends GradientStop {
 const GradientPicker: React.FC<GradientPickerProps> = ({
     isOpen,  
     onClose,
-    onSelect
+    onSelect,
+    isClearMode = false
 }) => {
     const [presets, setPresets] = useState<Gradient[]>([]);
     const [selectedPreset, setSelectedPreset] = useState<number | null>(null);
@@ -258,11 +260,11 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         };
 
         // 添加事件监听器
-        action.addNotificationListener(['set', 'select', 'clearEvent'], handleNotification);
+        action.addNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], handleNotification);
 
         // 清理函数
         return () => {
-            action.removeNotificationListener(['set', 'select', 'clearEvent'], handleNotification);
+            action.removeNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], handleNotification);
         };
     }, [isOpen]);
 
@@ -366,7 +368,22 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const handlePresetSelect = (index: number, event?: React.MouseEvent) => {
         if (event && (event.ctrlKey || event.metaKey)) {
             // Ctrl+点击（Windows）或Cmd+点击（Mac）：切换选中状态
+            
+            // 如果当前是单选状态且点击的是已选中的项目，则取消选中
+            if (selectedPreset === index && selectedPresets.size === 0) {
+                setSelectedPreset(null);
+                setLastClickedPreset(null);
+                onSelect(null);
+                return;
+            }
+            
             const newSelectedPresets = new Set(selectedPresets);
+            
+            // 如果当前是单选状态，先将单选项加入多选集合
+            if (selectedPreset !== null && selectedPresets.size === 0) {
+                newSelectedPresets.add(selectedPreset);
+            }
+            
             if (newSelectedPresets.has(index)) {
                 newSelectedPresets.delete(index);
             } else {
@@ -376,10 +393,17 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             setSelectedPresets(newSelectedPresets);
             setLastClickedPreset(index);
             
-            // 如果多选集合为空，恢复单选状态
+            // 如果多选集合为空，清空所有选中状态
             if (newSelectedPresets.size === 0) {
-                setSelectedPreset(index);
-                const preset = presets[index];
+                setSelectedPreset(null);
+                onSelect(null);
+            } else if (newSelectedPresets.size === 1) {
+                // 如果只剩一个，转为单选状态
+                const remainingIndex = Array.from(newSelectedPresets)[0];
+                setSelectedPreset(remainingIndex);
+                setSelectedPresets(new Set());
+                
+                const preset = presets[remainingIndex];
                 setGradientType(preset.type);
                 setAngle(preset.angle || 0);
                 setScale(preset.scale || 100);
@@ -397,6 +421,12 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         } else if (event && event.shiftKey && lastClickedPreset !== null) {
             // Shift+点击：范围选择
             const newSelectedPresets = new Set(selectedPresets);
+            
+            // 如果当前是单选状态，先将单选项加入多选集合
+            if (selectedPreset !== null && selectedPresets.size === 0) {
+                newSelectedPresets.add(selectedPreset);
+            }
+            
             const start = Math.min(lastClickedPreset, index);
             const end = Math.max(lastClickedPreset, index);
             for (let i = start; i <= end; i++) {
@@ -447,6 +477,17 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         }
     };
 
+    // 处理点击空白区域取消选中
+    const handleContainerClick = (event: React.MouseEvent) => {
+        // 检查点击的是否是预设区域的空白部分
+        if (event.target === event.currentTarget) {
+            setSelectedPreset(null);
+            setSelectedPresets(new Set());
+            setLastClickedPreset(null);
+            onSelect(null);
+        }
+    };
+
     // 性能优化：使用useMemo缓存排序后的stops，避免每次渲染都重新排序
     const sortedColorStops = React.useMemo(() => 
         [...stops].sort((a, b) => a.colorPosition - b.colorPosition), 
@@ -469,8 +510,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             const rgb = interpolateColorAtPosition(i, sortedColorStops);
             const alpha = interpolateOpacityAtPosition(i, sortedOpacityStops);
             
-            if (isInLayerMask || isInQuickMask || isInSingleColorChannel) {
-                // 图层蒙版模式、快速蒙版模式或单个颜色通道模式：转换为灰度值
+            if (isClearMode || isInLayerMask || isInQuickMask || isInSingleColorChannel) {
+                // 清除模式、图层蒙版模式、快速蒙版模式或单个颜色通道模式：转换为灰度值
                 const gray = Math.round(0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b);
                 const a = alpha.toFixed(3);
                 gradientStops.push(`rgba(${gray}, ${gray}, ${gray}, ${a}) ${i}%`);
@@ -613,7 +654,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             const rgb = interpolateColorAtPosition(i, sortedColorStops);
             const alpha = interpolateOpacityAtPosition(i, sortedOpacityStops);
             
-            if (isInLayerMask || isInQuickMask || isInSingleColorChannel) {
+            if (isClearMode || isInLayerMask || isInQuickMask || isInSingleColorChannel) {
                 // 图层蒙版模式或快速蒙版模式：转换为灰度值
                 const gray = Math.round(0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b);
                 const a = alpha.toFixed(3);
@@ -1066,10 +1107,10 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
 
             {/* 预设区域 */}
             <div className="gradient-presets-area">
-                <div className="gradient-presets">
+                <div className="gradient-presets" onClick={handleContainerClick}>
                     {presets.map((preset, index) => {
                         // 生成考虑中点插值的预设预览样式
-                        const presetGradientStyle = generatePresetPreviewStyle(preset, isInLayerMask, isInQuickMask, isInSingleColorChannel);
+                        const presetGradientStyle = generatePresetPreviewStyle(preset, isInLayerMask, isInQuickMask, isInSingleColorChannel, isClearMode);
                         
                         return (
                             <div 

@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { app } from 'photoshop';
+import { app, action } from 'photoshop';
 import { ColorSettings } from '../types/state';
 import SliderControl from './SliderControl';
+import { LayerInfoHandler } from '../utils/LayerInfoHandler';
 
 interface ColorSettingsProps {
     isOpen: boolean;
@@ -27,6 +28,8 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
     isClearMode = false
 }) => {
     const [internalQuickMaskMode, setInternalQuickMaskMode] = useState(propIsQuickMaskMode);
+    const [isInLayerMask, setIsInLayerMask] = useState(false);
+    const [isInSingleColorChannel, setIsInSingleColorChannel] = useState(false);
     const [settings, setSettings] = useState<ColorSettings>({
         ...initialSettings,
         calculationMode: initialSettings?.calculationMode || 'absolute'
@@ -107,27 +110,81 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
         };
     }, [isDragging, dragTarget, dragStartX, dragStartValue]);
 
+    // 检测图层蒙版和快速蒙版模式
     useEffect(() => {
-        if (isOpen) {
+        const checkMaskModes = async () => {
             try {
-                const currentDocument = app.activeDocument;
-                if (currentDocument) {
-                    const currentQuickMaskState = currentDocument.quickMaskMode;
-                    setInternalQuickMaskMode(currentQuickMaskState);
-                    console.log('获取到的内部快速蒙版模式:', currentQuickMaskState);
+                const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
+                if (layerInfo) {
+                    setInternalQuickMaskMode(layerInfo.isInQuickMask);
+                    setIsInLayerMask(layerInfo.isInLayerMask);
+                    setIsInSingleColorChannel(layerInfo.isInSingleColorChannel);
+                    console.log('获取到的图层信息:', {
+                        快速蒙版: layerInfo.isInQuickMask,
+                        图层蒙版: layerInfo.isInLayerMask,
+                        单通道: layerInfo.isInSingleColorChannel
+                    });
                 } else {
-                    console.log('没有活动文档可以获取快速蒙版模式。');
+                    console.log('无法获取图层信息');
+                    setInternalQuickMaskMode(propIsQuickMaskMode);
+                    setIsInLayerMask(false);
+                    setIsInSingleColorChannel(false);
                 }
-            } catch (e) {
-                console.error('获取快速蒙版模式时出错:', e);
+            } catch (error) {
+                console.error('检测蒙版模式失败:', error);
                 setInternalQuickMaskMode(propIsQuickMaskMode);
+                setIsInLayerMask(false);
+                setIsInSingleColorChannel(false);
             }
+        };
+
+        // 面板打开时检测一次
+        if (isOpen) {
+            checkMaskModes();
         }
-    }, [isOpen, propIsQuickMaskMode]); 
+    }, [isOpen, propIsQuickMaskMode]);
+
+    // 监听通道切换和快速蒙版切换事件
+    useEffect(() => {
+        if (!isOpen) return;
+
+        const checkMaskModes = async () => {
+            try {
+                const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
+                setInternalQuickMaskMode(layerInfo?.isInQuickMask || false);
+                setIsInLayerMask(layerInfo?.isInLayerMask || false);
+                setIsInSingleColorChannel(layerInfo?.isInSingleColorChannel || false);
+            } catch (error) {
+                console.error('检测蒙版模式失败:', error);
+                setInternalQuickMaskMode(false);
+                setIsInLayerMask(false);
+                setIsInSingleColorChannel(false);
+            }
+        };
+
+        // 监听Photoshop事件来检查状态变化
+        const handleNotification = async () => {
+            try {
+                // 检测图层蒙版和快速蒙版状态
+                await checkMaskModes();
+            } catch (error) {
+                // 静默处理错误，避免频繁的错误日志
+            }
+        };
+
+        // 添加事件监听器
+        action.addNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], handleNotification);
+
+        // 清理函数
+        return () => {
+            action.removeNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], handleNotification);
+        };
+    }, [isOpen]); 
 
     if (!isOpen) return null;
 
-    console.log('颜色设置面板状态/属性:', { isClearMode, propIsQuickMaskMode, internalQuickMaskMode });
+    // 判断是否应该显示灰度抖动：清除模式 || 快速蒙版 || 图层蒙版 || 单通道
+    const shouldShowGrayVariation = isClearMode || internalQuickMaskMode || isInLayerMask || isInSingleColorChannel;
 
 
     return (
@@ -138,8 +195,7 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
             </div>
             
             <div className="colorsettings-slider-group">
-                {console.log('渲染条件: isClearMode && internalQuickMaskMode', isClearMode && internalQuickMaskMode)}
-                {isClearMode && internalQuickMaskMode ? (
+                {shouldShowGrayVariation ? (
                     <>
                         <SliderControl
                             settingKey="grayVariation"

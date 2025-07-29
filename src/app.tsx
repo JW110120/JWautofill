@@ -61,6 +61,7 @@ class App extends React.Component<AppProps, AppState> {
         this.handleSelectionSmoothChange = this.handleSelectionSmoothChange.bind(this);
         this.handleSelectionContrastChange = this.handleSelectionContrastChange.bind(this);
         this.handleSelectionShiftEdgeChange = this.handleSelectionShiftEdgeChange.bind(this);
+        this.handleKeyDown = this.handleKeyDown.bind(this);
  
     }
 
@@ -68,6 +69,7 @@ class App extends React.Component<AppProps, AppState> {
         await action.addNotificationListener(['set'], this.handleSelectionChange);
         document.addEventListener('mousemove', this.handleMouseMove);
         document.addEventListener('mouseup', this.handleMouseUp);
+        document.addEventListener('keydown', this.handleKeyDown);
     }
 
     componentDidUpdate(prevProps, prevState) {
@@ -95,6 +97,7 @@ class App extends React.Component<AppProps, AppState> {
         action.removeNotificationListener(['set'], this.handleSelectionChange);
         document.removeEventListener('mousemove', this.handleMouseMove);
         document.removeEventListener('mouseup', this.handleMouseUp);
+        document.removeEventListener('keydown', this.handleKeyDown);
         // 清理CSS类
         document.body.classList.remove('secondary-panel-open');
     }
@@ -103,6 +106,15 @@ class App extends React.Component<AppProps, AppState> {
         this.setState(prevState => ({
             isEnabled: !prevState.isEnabled
         }));
+    }
+
+    // 键盘事件处理函数
+    handleKeyDown(event: KeyboardEvent) {
+        // 检查是否按下了Ctrl+Alt+K（Windows）或Cmd+Alt+K（Mac）
+        if ((event.ctrlKey || event.metaKey) && event.altKey && event.key === 'k') {
+            event.preventDefault(); // 阻止默认行为
+            this.handleButtonClick(); // 切换总开关状态
+        }
     }
 
     // 新增方法
@@ -1132,6 +1144,7 @@ class App extends React.Component<AppProps, AppState> {
                 isOpen={this.state?.isPatternPickerOpen ?? false} 
                 onClose={this.closePatternPicker} 
                 onSelect={this.handlePatternSelect} 
+                isClearMode={this.state.clearMode}
             />
 
             {/* 渐变选择器 */}
@@ -1139,6 +1152,7 @@ class App extends React.Component<AppProps, AppState> {
                 isOpen={this.state?.isGradientPickerOpen ?? false}    
                 onClose={this.closeGradientPicker} 
                 onSelect={this.handleGradientSelect} 
+                isClearMode={this.state.clearMode}
             />
 
                 {/* 描边设置面板 */}

@@ -8,13 +8,15 @@ interface PatternPickerProps {
     isOpen: boolean;
     onClose: () => void;
     onSelect: (pattern: Pattern) => void;
+    isClearMode?: boolean;
 }
     //-------------------------------------------------------------------------------------------------
     // 定义图案面板上的核心选项参数
     const PatternPicker: React.FC<PatternPickerProps> = ({
         isOpen,
         onClose,
-        onSelect
+        onSelect,
+        isClearMode = false
     }) => {
     const [patterns, setPatterns] = useState<Pattern[]>([]);
     const [selectedPattern, setSelectedPattern] = useState<string | null>(null);
@@ -288,11 +290,11 @@ interface PatternPickerProps {
         };
 
         // 添加事件监听器
-        action.addNotificationListener(['set', 'select', 'clearEvent'], handleNotification);
+        action.addNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], handleNotification);
 
         // 清理函数
         return () => {
-            action.removeNotificationListener(['set', 'select', 'clearEvent'], handleNotification);
+            action.removeNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], handleNotification);
         };
     }, [isOpen]);
 
@@ -841,7 +843,22 @@ interface PatternPickerProps {
     const handlePatternSelect = (patternId: string, event?: React.MouseEvent) => {
         if (event && (event.ctrlKey || event.metaKey)) {
             // Ctrl+点击（Windows）或Cmd+点击（Mac）：切换选中状态
+            
+            // 如果当前是单选状态且点击的是已选中的项目，则取消选中
+            if (selectedPattern === patternId && selectedPatterns.size === 0) {
+                setSelectedPattern(null);
+                setLastClickedPattern(null);
+                onSelect(null);
+                return;
+            }
+            
             const newSelectedPatterns = new Set(selectedPatterns);
+            
+            // 如果当前是单选状态，先将单选项加入多选集合
+            if (selectedPattern !== null && selectedPatterns.size === 0) {
+                newSelectedPatterns.add(selectedPattern);
+            }
+            
             if (newSelectedPatterns.has(patternId)) {
                 newSelectedPatterns.delete(patternId);
             } else {
@@ -851,9 +868,15 @@ interface PatternPickerProps {
             setSelectedPatterns(newSelectedPatterns);
             setLastClickedPattern(patternId);
             
-            // 如果多选集合为空，恢复单选状态
+            // 如果多选集合为空，清空所有选中状态
             if (newSelectedPatterns.size === 0) {
-                setSelectedPattern(patternId);
+                setSelectedPattern(null);
+                onSelect(null);
+            } else if (newSelectedPatterns.size === 1) {
+                // 如果只剩一个，转为单选状态
+                const remainingPatternId = Array.from(newSelectedPatterns)[0];
+                setSelectedPattern(remainingPatternId);
+                setSelectedPatterns(new Set());
             } else {
                 // 多选时清空单选状态
                 setSelectedPattern(null);
@@ -861,6 +884,12 @@ interface PatternPickerProps {
         } else if (event && event.shiftKey && lastClickedPattern !== null) {
             // Shift+点击：范围选择
             const newSelectedPatterns = new Set(selectedPatterns);
+            
+            // 如果当前是单选状态，先将单选项加入多选集合
+            if (selectedPattern !== null && selectedPatterns.size === 0) {
+                newSelectedPatterns.add(selectedPattern);
+            }
+            
             const patternIds = patterns.map(p => p.id);
             const startIndex = patternIds.indexOf(lastClickedPattern);
             const endIndex = patternIds.indexOf(patternId);
@@ -889,6 +918,17 @@ interface PatternPickerProps {
             setSelectedPattern(patternId);
             setSelectedPatterns(new Set());
             setLastClickedPattern(patternId);
+        }
+    };
+
+    // 处理点击空白区域取消选中
+    const handleContainerClick = (event: React.MouseEvent) => {
+        // 检查点击的是否是预设区域的空白部分
+        if (event.target === event.currentTarget) {
+            setSelectedPattern(null);
+            setSelectedPatterns(new Set());
+            setLastClickedPattern(null);
+            onSelect(null);
         }
     };
 
@@ -964,7 +1004,7 @@ interface PatternPickerProps {
                 }}>×</button>
             </div>
             <div className="pattern-container">
-                 <div className="pattern-preset">
+                 <div className="pattern-preset" onClick={handleContainerClick}>
                     {patterns.map(pattern => (
                         <div
                             key={pattern.id}
@@ -1009,7 +1049,7 @@ interface PatternPickerProps {
                                     opacity: loadedImages[pattern.id] ? 1 : 0, // 使用透明度来控制显示
                                     transition: 'opacity 0.2s',
                                     padding: '4px',
-                                    filter: (isInLayerMask || isInQuickMask || isInSingleColorChannel) ? 'grayscale(100%)' : 'none'
+                                    filter: (isClearMode || isInLayerMask || isInQuickMask || isInSingleColorChannel) ? 'grayscale(100%)' : 'none'
                                 }}
                             />
                             {(!loadedImages[pattern.id] && loadedImages[pattern.id] !== true) && ( // 修改判断条件
@@ -1248,7 +1288,7 @@ interface PatternPickerProps {
                                     transform: `translate(-50%, -50%) translate(${previewOffset.x}px, ${previewOffset.y}px) rotate(${angle}deg)`,
                                     transformOrigin: 'center center',
                                     imageRendering: previewZoom > 400 ? 'pixelated' : 'auto',
-                                    filter: (isInLayerMask || isInQuickMask || isInSingleColorChannel) ? 'grayscale(100%)' : 'none'
+                                    filter: (isClearMode || isInLayerMask || isInQuickMask || isInSingleColorChannel) ? 'grayscale(100%)' : 'none'
                                 }}
                             />
                             {previewZoom > 100 && (
