@@ -59,8 +59,32 @@ interface PatternPickerProps {
     const [isInQuickMask, setIsInQuickMask] = useState(false);
     const [isInSingleColorChannel, setIsInSingleColorChannel] = useState(false);
 
-
-
+    // 实时更新功能：使用防抖机制避免频繁调用
+    useEffect(() => {
+        if (!selectedPattern || selectedPatterns.size > 0) return;
+        
+        const selectedPatternData = patterns.find(p => p.id === selectedPattern);
+        if (selectedPatternData && selectedPatternData.grayData && selectedPatternData.patternRgbData) {
+            const patternToSend = {
+                ...selectedPatternData,
+                angle,
+                scale,
+                fillMode,
+                rotateAll,
+                preserveTransparency,
+                components: selectedPatternData.patternComponents || selectedPatternData.components || 3,
+                currentScale: scale,
+                currentAngle: angle
+            };
+            
+            // 使用防抖机制，延迟300ms后再调用onSelect，避免频繁更新导致性能问题
+            const debounceTimeoutId = setTimeout(() => {
+                onSelect(patternToSend);
+            }, 300);
+            
+            return () => clearTimeout(debounceTimeoutId);
+        }
+    }, [selectedPattern, angle, scale, fillMode, rotateAll, preserveTransparency, patterns, selectedPatterns.size]);
 
     //-------------------------------------------------------------------------------------------------
     // 新增滑块拖动事件处理
@@ -314,9 +338,10 @@ interface PatternPickerProps {
     // 新增选中文件的逻辑
     const handleFileSelect = async () => {
         try {
+            const { fileTypes } = require('uxp').storage;
             const files = await require('uxp').storage.localFileSystem.getFileForOpening({
                 allowMultiple: true,
-                types: ['jpg', 'jpeg', 'png'],
+                types: fileTypes.images,
                 title: '选择图案文件'
             });
 
@@ -760,9 +785,10 @@ interface PatternPickerProps {
             setSelectedPatterns(new Set());
             setLastClickedPattern(null);
             
-            // 如果删除后列表为空，则清空选择
+            // 如果删除后列表为空，则清空选择并通知父组件
             if (newPatterns.length === 0) {
                 setSelectedPattern(null);
+                onSelect(null);
             }
             console.log('多个图案删除成功');
         } else if (selectedPattern) {
@@ -773,9 +799,10 @@ interface PatternPickerProps {
             const newPatterns = patterns.filter(p => p.id !== selectedPattern);
             setPatterns(newPatterns);
 
-            // 如果删除后列表为空，则清空选择
+            // 如果删除后列表为空，则清空选择并通知父组件
             if (newPatterns.length === 0) {
                 setSelectedPattern(null);
+                onSelect(null);
             } else {
                 // 确定新的选中项
                 // 如果删除的不是第一项，则选中前一项
@@ -932,7 +959,9 @@ interface PatternPickerProps {
         <div className="pattern-picker">
             <div className="panel-header">
                 <h3>选择图案</h3>
-                <button className="close-button" onClick={onClose}>×</button>
+                <button className="close-button" onClick={() => {
+                    onClose();
+                }}>×</button>
             </div>
             <div className="pattern-container">
                  <div className="pattern-preset">
@@ -1162,10 +1191,10 @@ interface PatternPickerProps {
                 </div>
                 
             </div>
-            {selectedPattern && (
-                <div className="pattern-final-preview-container">
-                    <div className="pattern-subtitle">
-                        <h3>预览</h3>
+            <div className="pattern-final-preview-container">
+                <div className="pattern-subtitle">
+                    <h3>预览</h3>
+                    {selectedPattern && (
                         <div className="preview-controls">
                             <sp-picker
                                 size="s"
@@ -1187,120 +1216,66 @@ interface PatternPickerProps {
                                 </sp-menu>
                             </sp-picker>
                         </div>
-                    </div>
-                    <div 
-                        className="preview-wrapper"
-                        onWheel={handlePreviewWheel}
-                        onMouseDown={handlePreviewMouseDown}
-                        onMouseMove={handlePreviewMouseMove}
-                        onMouseUp={handlePreviewMouseUp}
-                        style={{
-                            cursor: previewZoom > 100 ? (isPreviewDragging ? 'grabbing' : 'grab') : 'default',
-                            overflow: 'hidden'
-                        }}
-                    >
-                        <img
-                            className="pattern-final-preview"
-                            src={patterns.find(p => p.id === selectedPattern)?.preview}
-                            alt="Pattern Preview"
-                            style={{
-                                position: 'absolute',
-                                top: '50%',
-                                left: '50%',
-                                maxWidth: `${previewZoom * (scale / 100)}%`,
-                                maxHeight: `${previewZoom * (scale / 100)}%`,
-                                width: 'auto',
-                                height: 'auto',
-                                objectFit: 'contain',
-                                transform: `translate(-50%, -50%) translate(${previewOffset.x}px, ${previewOffset.y}px) rotate(${angle}deg)`,
-                                transformOrigin: 'center center',
-                                imageRendering: previewZoom > 400 ? 'pixelated' : 'auto',
-                                filter: (isInLayerMask || isInQuickMask || isInSingleColorChannel) ? 'grayscale(100%)' : 'none'
-                            }}
-                        />
-                        {previewZoom > 100 && (
-                            <div className="zoom-indicator">
-                                {previewZoom}%
-                            </div>
-                        )}
-                    </div>
+                    )}
                 </div>
-            )}
-
-
-            <div className="panel-footer">
-                <button onClick={async () => {
-                    // 如果有多选或未选择图案，返回null
-                    if (selectedPatterns.size > 0 || !selectedPattern) {
-                        onSelect(null);
-                        onClose();
-                        return;
-                    }
-                    
-                    const selectedPatternData = patterns.find(p => p.id === selectedPattern);
-                    if (selectedPatternData) {
-                        console.log('🔄 开始处理图案数据，当前状态:', {
-                            patternId: selectedPattern,
-                            hasGrayData: !!selectedPatternData.grayData,
-                            grayDataLength: selectedPatternData.grayData?.length,
-                            hasPatternRgbData: !!selectedPatternData.patternRgbData,
-                            patternRgbDataLength: selectedPatternData.patternRgbData?.length
-                        });
-                        
-                        // 确保在应用前处理图像
-                        await createPatternFromImage();
-                        
-                        // 等待状态更新完成，使用setTimeout确保React状态已更新
-                        await new Promise(resolve => setTimeout(resolve, 100));
-                        
-                        // 重新获取最新的数据
-                        const finalPatternData = patterns.find(p => p.id === selectedPattern);
-                        if (finalPatternData) {
-                            console.log('✅ 最终图案数据状态:', {
-                                patternId: selectedPattern,
-                                hasGrayData: !!finalPatternData.grayData,
-                                grayDataLength: finalPatternData.grayData?.length,
-                                hasPatternRgbData: !!finalPatternData.patternRgbData,
-                                patternRgbDataLength: finalPatternData.patternRgbData?.length,
-                                width: finalPatternData.width,
-                                height: finalPatternData.height,
-                                components: finalPatternData.components
-                            });
-                            
-                            const patternToSend = {
-                                ...finalPatternData,
-                                angle,
-                                scale,
-                                fillMode,
-                                rotateAll,
-                                preserveTransparency,
-                                components: finalPatternData.patternComponents || finalPatternData.components || 3,
-                                // 确保关键数据字段存在
-                                currentScale: scale,
-                                currentAngle: angle
-                            };
-                            
-                            console.log('📤 发送给PatternFill的数据:', {
-                                hasGrayData: !!patternToSend.grayData,
-                                grayDataLength: patternToSend.grayData?.length,
-                                hasPatternRgbData: !!patternToSend.patternRgbData,
-                                patternRgbDataLength: patternToSend.patternRgbData?.length,
-                                dimensions: `${patternToSend.width}x${patternToSend.height}`,
-                                scale: patternToSend.scale,
-                                angle: patternToSend.angle,
-                                fillMode: patternToSend.fillMode
-                            });
-                            
-                            onSelect(patternToSend);
-                        } else {
-                            console.error('❌ 无法获取最终图案数据');
-                        }
-                    } else {
-                        console.error('❌ 未选择图案');
-                    }
-                    onClose();
-                }}>保存设置</button>
+                <div 
+                    className="preview-wrapper"
+                    onWheel={selectedPattern ? handlePreviewWheel : undefined}
+                    onMouseDown={selectedPattern ? handlePreviewMouseDown : undefined}
+                    onMouseMove={selectedPattern ? handlePreviewMouseMove : undefined}
+                    onMouseUp={selectedPattern ? handlePreviewMouseUp : undefined}
+                    style={{
+                        cursor: selectedPattern && previewZoom > 100 ? (isPreviewDragging ? 'grabbing' : 'grab') : 'default',
+                        overflow: 'hidden',
+                        position: 'relative'
+                    }}
+                >
+                    {selectedPattern ? (
+                        <>
+                            <img
+                                className="pattern-final-preview"
+                                src={patterns.find(p => p.id === selectedPattern)?.preview}
+                                alt="Pattern Preview"
+                                style={{
+                                    position: 'absolute',
+                                    top: '50%',
+                                    left: '50%',
+                                    maxWidth: `${previewZoom * (scale / 100)}%`,
+                                    maxHeight: `${previewZoom * (scale / 100)}%`,
+                                    width: 'auto',
+                                    height: 'auto',
+                                    objectFit: 'contain',
+                                    transform: `translate(-50%, -50%) translate(${previewOffset.x}px, ${previewOffset.y}px) rotate(${angle}deg)`,
+                                    transformOrigin: 'center center',
+                                    imageRendering: previewZoom > 400 ? 'pixelated' : 'auto',
+                                    filter: (isInLayerMask || isInQuickMask || isInSingleColorChannel) ? 'grayscale(100%)' : 'none'
+                                }}
+                            />
+                            {previewZoom > 100 && (
+                                <div className="zoom-indicator">
+                                    {previewZoom}%
+                                </div>
+                            )}
+                        </>
+                    ) : (
+                        <div style={{
+                            position: 'absolute',
+                            top: '50%',
+                            left: '50%',
+                            transform: 'translate(-50%, -50%)',
+                            color: '#666',
+                            fontSize: '12px',
+                            zIndex: 3,
+                            pointerEvents: 'none'
+                        }}>
+                            请选择一个图案预设
+                        </div>
+                    )}
+                </div>
             </div>
+
+
+
         </div>
     );
 };

@@ -78,20 +78,6 @@
     margin-bottom: 15px;
   }
 
-  
-  .panel-footer {
-    position: sticky;
-    display: flex;
-    align-items: flex-end;
-    bottom: 0;
-    min-height: 25px;
-    width: 100%;  /* 添加宽度 */
-    justify-content: flex-end;  /* 添加右对齐 */
-    padding-right: 15px;  /* 添加右侧内边距，避免按钮贴边 */
-    box-sizing: border-box;  /* 确保padding不会影响整体宽度 */
-    z-index: 100;  /* 确保在其他内容之上 */
-  }
-
   /* 快速蒙版模式下的禁用样式 */
   .colorsettings-slider-item.disabled {
     opacity: 0.5;

@@ -6,12 +6,6 @@ import { BLEND_MODE_CALCULATIONS } from './BlendModeCalculations';
 // 内部类型定义
 type Bounds = [number, number, number, number];
 
-interface GradientCoordinates {
-    fromX: number;
-    fromY: number;
-    toX: number;
-    toY: number;
-}
 
 interface GradientFillOptions {
     opacity: number;
@@ -75,13 +69,14 @@ export class GradientFill {
                     },
                     angle: {
                         _unit: "angleUnit",
-                        _value: options.gradient.angle || 0
+                        // 修正角度：取负值实现顺时针旋转
+                        _value: -(options.gradient.angle || 0)
                     },
                     type: {
                         _enum: "gradientType",
                         _value: options.gradient.type || "linear"
                     },
-                    reverse: options.gradient.reverse || false,
+                    reverse: false,
                     gradient: {
                         _obj: "gradientClassEvent",
                         gradientForm: {
@@ -265,38 +260,6 @@ export class GradientFill {
     }
 
     //----------------------------------------------------------------------------------
-    // 生成图层蒙版专用的灰度stops
-    private static generateGrayscaleStops(stops: GradientStop[], reverse: boolean = false) {
-        return stops.map((stop, index) => {
-            // 解析颜色并转换为灰度
-            const color = this.parseColor(stop.color);
-            // 使用标准的灰度转换公式：0.299*R + 0.587*G + 0.114*B
-            const grayscale = Math.round(color.red * 0.299 + color.green * 0.587 + color.blue * 0.114);
-            
-            // 如果reverse为true，反转位置
-            const position = reverse ? (100 - stop.position) : stop.position;
-            
-            return {
-                _obj: "colorStop",
-                color: {
-                    _obj: "grayscale",
-                    gray: {
-                        _unit: "percentUnit",
-                        _value: Math.round((grayscale / 255) * 100)
-                    }
-                },
-                type: {
-                    _enum: "colorStopType",
-                    _value: "userStop"
-                },
-                location: Math.round((position / 100) * 4096),
-                // 使用stop中的midpoint属性，如果没有则默认为50
-                midpoint: stop.midpoint !== undefined ? stop.midpoint : 50
-            };
-        });
-    }
-
-    //----------------------------------------------------------------------------------
     // 解析颜色
     private static parseColor(colorString: string) {
         // 处理rgba格式
@@ -333,227 +296,8 @@ export class GradientFill {
         return 100; // 默认完全不透明
     }
 
-    //----------------------------------------------------------------------------------
-    // 获取边界信息的公共方法
-    private static async getBounds(): Promise<Bounds> {
-        try {
-            // 获取选区边界信息
-            const result = await action.batchPlay([
-                {
-                    _obj: "get",
-                    _target: [
-                        {
-                            _property: "selection"
-                        },
-                        {
-                            _ref: "document",
-                            _enum: "ordinal",
-                            _value: "targetEnum"
-                        }
-                    ],
-                    _options: {
-                        dialogOptions: "dontDisplay"
-                    }
-                }
-            ], { synchronousExecution: true });
-            
-            // 尝试从选区获取边界
-            if (result?.[0]?.selection?.bottom !== undefined) {
-                const selection = result[0].selection;
-                const bounds: Bounds = [
-                    selection.left._value || 0,
-                    selection.top._value || 0, 
-                    selection.right._value || 0,
-                    selection.bottom._value || 0
-                ];
-                
-                // 验证边界有效性
-                if (bounds[2] > bounds[0] && bounds[3] > bounds[1]) {
-                    return bounds;
-                }
-            }
-            
-            // 如果没有选区或选区无效，使用整个文档尺寸作为fallback
-            const docInfo = await action.batchPlay([
-                {
-                    _obj: "get",
-                    _target: [
-                        {
-                            _property: "width"
-                        },
-                        {
-                            _property: "height"
-                        },
-                        {
-                            _ref: "document",
-                            _enum: "ordinal",
-                            _value: "targetEnum"
-                        }
-                    ],
-                    _options: {
-                        dialogOptions: "dontDisplay"
-                    }
-                }
-            ], { synchronousExecution: true });
-            
-            const docWidth = docInfo?.[0]?.width || 1920;
-            const docHeight = docInfo?.[0]?.height || 1080;
-            
-            return [0, 0, docWidth, docHeight];
-            
-        } catch (error) {
-            console.error("❌ 获取边界信息失败:", error);
-            // 返回默认边界而不是抛出错误
-            return [0, 0, 1920, 1080];
-        }
-    }
 
-    //----------------------------------------------------------------------------------
-    // 计算渐变坐标的公共方法
-    private static async calculateGradientCoordinates(
-        bounds: Bounds, 
-        options: GradientFillOptions
-    ): Promise<GradientCoordinates> {
-        const [left, top, right, bottom] = bounds;
-        const centerX = (left + right) / 2;
-        const centerY = (top + bottom) / 2;
-        
-        if (options.gradient.type === 'radial') {
-            // 径向渐变：from和to都在中心点
-            return {
-                fromX: centerX,
-                fromY: centerY,
-                toX: centerX,
-                toY: centerY
-            };
-        }
-        
-        // 线性渐变：计算起点和终点
-        // 确保角度在有效范围内
-        const angle = typeof options.gradient.angle === 'number' 
-            ? options.gradient.angle % 360 
-            : 0;
-            
-        const gradientPoints = await this.calculateGradientBounds(
-            left, top, right, bottom, angle
-        );
-        
-        // 处理reverse选项
-        if (options.gradient.reverse) {
-            return {
-                fromX: gradientPoints.endX,
-                fromY: gradientPoints.endY,
-                toX: gradientPoints.startX,
-                toY: gradientPoints.startY
-            };
-        }
-        
-        return {
-            fromX: gradientPoints.startX,
-            fromY: gradientPoints.startY,
-            toX: gradientPoints.endX,
-            toY: gradientPoints.endY
-        };
-    }
 
-    //----------------------------------------------------------------------------------
-    // 统一的渐变填充执行方法
-    private static async executeGradientFill(
-        options: GradientFillOptions, 
-        bounds: Bounds, 
-        isMaskMode: boolean = false
-    ): Promise<void> {
-        try {
-            // 输入验证
-            if (!options?.gradient?.stops || options.gradient.stops.length < 2) {
-                throw new Error("渐变至少需要2个颜色停止点");
-            }
-            
-            if (options.opacity < 0 || options.opacity > 100) {
-                throw new Error("不透明度必须在0-100之间");
-            }
-            
-            // 验证边界有效性
-            const [left, top, right, bottom] = bounds;
-            if (right <= left || bottom <= top) {
-                throw new Error("无效的边界范围");
-            }
-            
-            // 计算渐变坐标
-            const coordinates = await this.calculateGradientCoordinates(bounds, options);
-            
-            // 生成stops
-            const colorStops = isMaskMode 
-                ? this.generateGrayscaleStops(options.gradient.stops, options.gradient.reverse)
-                : this.generateColorStops(options.gradient.stops, options.gradient.reverse);
-            
-            // 对于蒙版模式（快速蒙版和图层蒙版），不透明度stop和灰度stop是独立的
-            const transparencyStops = this.generateTransparencyStops(options.gradient.stops, options.gradient.reverse);
-
-            // 构建渐变填充对象
-            const fillGradient = {
-                _obj: "gradientClassEvent",
-                type: {
-                    _enum: "gradientType",
-                    _value: options.gradient.type || "linear"
-                },
-                ...(isMaskMode && { useMask: true }),
-                reverse: options.gradient.reverse || false,
-                gradientsInterpolationMethod: {
-                    _enum: "gradientInterpolationMethodType",
-                    _value: "smooth"
-                },
-                gradient: {
-                    _obj: "gradientClassEvent",
-                    gradientForm: {
-                        _enum: "gradientForm",
-                        _value: "customStops"
-                    },
-                    interfaceIconFrameDimmed: 4096,
-                    colors: colorStops,
-                    transparency: transparencyStops
-                },
-                from: {
-                    _obj: "paint",
-                    horizontal: {
-                       _unit: "pixelsUnit",
-                       _value: Math.round(coordinates.fromX)
-                    },
-                    vertical: {
-                       _unit: "pixelsUnit",
-                       _value: Math.round(coordinates.fromY)
-                    }
-                 },
-                 to: {
-                    _obj: "paint",
-                    horizontal: {
-                       _unit: "pixelsUnit",
-                       _value: Math.round(coordinates.toX)
-                    },
-                    vertical: {
-                       _unit: "pixelsUnit",
-                       _value: Math.round(coordinates.toY)
-                    }
-                 },
-                opacity: {
-                    _unit: "percentUnit",
-                    _value: options.opacity
-                },
-                mode: {
-                    _enum: "blendMode",
-                    _value: BLEND_MODES[options.blendMode] || "normal"
-                },
-                _options: {
-                    dialogOptions: "dontDisplay"
-                }
-            };
-
-            await action.batchPlay([fillGradient], { synchronousExecution: true });
-            
-        } catch (error) {
-            throw error;
-        }
-    }
 
     //----------------------------------------------------------------------------------
     // 快速蒙版渐变填充（重构版本，支持渐变不透明度）

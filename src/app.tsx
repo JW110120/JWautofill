@@ -225,12 +225,13 @@ class App extends React.Component<AppProps, AppState> {
                 brightnessVariation: Math.min(100, Math.max(0, settings.brightnessVariation)),
                 opacityVariation: Math.min(100, Math.max(0, settings.opacityVariation)),
                 pressureVariation: Math.min(100, Math.max(0, settings.pressureVariation)),
-                grayVariation: Math.min(100, Math.max(0, settings.grayVariation || 0))
+                grayVariation: Math.min(100, Math.max(0, settings.grayVariation || 0)),
+                calculationMode: settings.calculationMode || 'absolute'
             };
 
+            // 只保存设置，不关闭面板
             this.setState({
-                colorSettings: validatedSettings,
-                isColorSettingsOpen: false
+                colorSettings: validatedSettings
             });
         } catch (error) {
             console.error('保存颜色设置失败:', error);
@@ -240,15 +241,13 @@ class App extends React.Component<AppProps, AppState> {
 
     handlePatternSelect(pattern: Pattern) {
         this.setState({
-            selectedPattern: pattern,
-            isPatternPickerOpen: false
+            selectedPattern: pattern
         });
     }
 
     handleGradientSelect(gradient: Gradient | null) {
         this.setState({
-            selectedGradient: gradient,
-            isGradientPickerOpen: false
+            selectedGradient: gradient
         });
     }
 
@@ -765,7 +764,7 @@ class App extends React.Component<AppProps, AppState> {
                                         <input
                                             type="number"
                                             min="0"
-                                            max="100"
+                                            max="20"
                                             value={this.state.feather}
                                             onChange={(e) => this.setState({ feather: Number(e.target.value) })}
                                             style={{ width: '30px', zIndex: 1 }}
@@ -776,7 +775,7 @@ class App extends React.Component<AppProps, AppState> {
                     <input
                         type='range'
                         min='0'
-                        max='10'
+                        max='20'
                         step='0.5'
                         value={this.state.feather}
                         onChange={this.handleFeatherChange}
@@ -1121,7 +1120,8 @@ class App extends React.Component<AppProps, AppState> {
                     saturationVariation: 0,
                     brightnessVariation: 0,
                     opacityVariation: 0,
-                    grayVariation: 0
+                    grayVariation: 0,
+                    calculationMode: 'absolute'
                 }}
                 isClearMode={this.state.clearMode}
                 isQuickMaskMode={false}

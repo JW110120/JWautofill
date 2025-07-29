@@ -34,6 +34,12 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
   const [dragStartX, setDragStartX] = React.useState(0);
   const [dragStartValue, setDragStartValue] = React.useState(0);
 
+  // 实时更新功能：当参数变化时自动调用回调函数
+  React.useEffect(() => {
+    // 这里不需要额外的逻辑，因为StrokeSetting的参数变化已经通过onChange回调实时传递给父组件
+    // 父组件会处理实时更新逻辑
+  }, [width, position, blendMode, opacity]);
+
   const handleLabelMouseDown = (event: React.MouseEvent, target: string) => {
     event.preventDefault();
     setIsDragging(true);
@@ -90,7 +96,15 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
     <div className="strokesetting">
         <div className="panel-header">
           <h3>描边设置</h3>
-          <button className="close-button" onClick={onClose}>×</button>
+          <button className="close-button" onClick={() => {
+                    // 触发所有回调以确保状态更新
+                    onWidthChange(width);
+                    onPositionChange(position);
+                    onBlendModeChange(blendMode);
+                    onOpacityChange(opacity);
+                    // 关闭面板
+                    onClose();
+                }}>×</button>
         </div>
         
         <div className="stroke-wide-container">
@@ -103,7 +117,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
           <input 
             type="range" 
             min="0" 
-            max="10" 
+            max="20" 
             step="0.5"
             value={width}
             onChange={(e) => onWidthChange(Number(e.target.value))}
@@ -112,7 +126,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
             <input
               type="number"
               min="0"
-              max="10"
+              max="20"
               step="0.5"
               value={width}
               onChange={(e) => onWidthChange(Number(e.target.value))}
@@ -205,22 +219,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
           </div>
         </div>
         
-        <div className="panel-footer">
-          <button 
-            className="save-button"
-            onClick={() => {
-              // 触发所有回调以确保状态更新
-              onWidthChange(width);
-              onPositionChange(position);
-              onBlendModeChange(blendMode);
-              onOpacityChange(opacity);
-              // 关闭面板
-              onClose();
-            }}
-          >
-            保存设置
-          </button>
-        </div>
+
       </div>
   );
 };

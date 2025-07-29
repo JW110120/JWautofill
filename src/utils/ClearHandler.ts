@@ -643,26 +643,13 @@ export class ClearHandler {
                 console.log('🔄 非纯色填充模式，跳过前景色获取，当前模式:', state.fillMode);
             }
             
-            // 获取当前选区边界信息（第一次获取，需要缓存）
+            // 获取当前选区边界信息（第一次获取）
             const selectionBounds = await this.getSelectionData();
             if (!selectionBounds) {
                 console.warn('❌ 没有选区，无法执行快速蒙版清除操作');
                 return;
             }
             
-            // 缓存第一次获取的选区数据，供后续描边功能使用
-            // 传递selectionValues数组而不是整个selectionBounds对象
-            this.setCachedSelectionData({
-                selectionValues: selectionBounds.selectionValues,
-                selectionDocIndices: selectionBounds.selectionDocIndices,
-                docWidth: selectionBounds.docWidth,
-                docHeight: selectionBounds.docHeight,
-                left: selectionBounds.left,
-                top: selectionBounds.top,
-                width: selectionBounds.width,
-                height: selectionBounds.height
-            });
-
             // 获取快速蒙版通道的像素数据和colorIndicates信息
             const { quickMaskPixels, isSelectedAreas, isEmpty, topLeftIsEmpty, bottomRightIsEmpty, originalTopLeft, originalBottomRight } = await this.getQuickMaskPixels(selectionBounds);
 

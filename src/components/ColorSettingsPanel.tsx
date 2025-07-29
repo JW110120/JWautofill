@@ -46,6 +46,16 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
         }
     };
 
+    // 实时更新功能：使用防抖机制避免频繁调用
+    useEffect(() => {
+        // 使用防抖机制，延迟300ms后再调用onSave，避免频繁更新导致PS崩溃
+        const debounceTimeoutId = setTimeout(() => {
+            onSave(settings);
+        }, 300);
+        
+        return () => clearTimeout(debounceTimeoutId);
+    }, [settings]); // 移除onSave依赖，避免不必要的重新执行
+
     const handleNumberInputChange = (key: keyof ColorSettings, value: number) => {
         const maxValue = key === 'hueVariation' ? 360 : 100;
         const clampedValue = Math.max(0, Math.min(maxValue, value));
@@ -211,13 +221,7 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
                 </div>
             </div>
 
-            <div className="panel-footer">
-                <button 
-                    onClick={() => onSave(settings)}
-                >
-                    保存设置
-                </button>
-            </div>
+
         </div>
     );
 };

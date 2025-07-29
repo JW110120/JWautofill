@@ -86,40 +86,7 @@ async function strokeSelectionNormal(strokeParams: any) {
         );
         console.log("✅ 新建图层成功");
 
-        // 2. 根据位置调整选区
-        if (strokeParams.position === "inside") {
-            await batchPlay(
-                [{
-                    _obj: "contract",
-                    by: {
-                        _unit: "pixelsUnit",
-                        _value: strokeParams.width / 2
-                    },
-                    selectionModifyEffectAtCanvasBounds: false,
-                    _options: {
-                        dialogOptions: "dontDisplay"
-                    }
-                }],
-                { synchronousExecution: true }
-            );
-        } else if (strokeParams.position === "outside") {
-            await batchPlay(
-                [{
-                    _obj: "expand",
-                    by: {
-                        _unit: "pixelsUnit",
-                        _value: strokeParams.width / 2
-                    },
-                    selectionModifyEffectAtCanvasBounds: false,
-                    _options: {
-                        dialogOptions: "dontDisplay"
-                    }
-                }],
-                { synchronousExecution: true }
-            );
-        }
-
-        // 3. 记录前景色
+        // 2. 记录前景色
         let savedForegroundColor;
         await executeAsModal(async () => {
             const foregroundColor = app.foregroundColor;
@@ -133,7 +100,7 @@ async function strokeSelectionNormal(strokeParams: any) {
             };
         });
 
-        // 4. 描边
+        // 3. 描边
         await batchPlay(
             [{
                 _obj: "stroke",
@@ -166,7 +133,7 @@ async function strokeSelectionNormal(strokeParams: any) {
             { synchronousExecution: true }
         );
 
-        // 5. 根据用户描边面板的不透明度和混合模式修改描边图层不透明度和混合模式
+        // 4. 根据用户描边面板的不透明度和混合模式修改描边图层不透明度和混合模式
         await batchPlay(
             [{
                 _obj: "set",
@@ -195,7 +162,7 @@ async function strokeSelectionNormal(strokeParams: any) {
             { synchronousExecution: true }
         );
         
-        // 6. 向下合并图层
+        // 5. 向下合并图层
         await batchPlay(
             [{
                 _obj: "mergeLayersNew",
@@ -206,7 +173,7 @@ async function strokeSelectionNormal(strokeParams: any) {
             { synchronousExecution: true }
         );
 
-        // 7. 恢复前景色
+        // 6. 恢复前景色
         if (savedForegroundColor) {
             await batchPlay(
                 [{

@@ -266,6 +266,30 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         };
     }, [isOpen]);
 
+    // 实时更新功能：使用防抖机制避免频繁调用
+    useEffect(() => {
+        if (selectedPreset !== null && selectedPreset < presets.length) {
+            // 更新选中预设的数据
+            const updatedPresets = [...presets];
+            const updatedPreset = {
+                type: gradientType,
+                angle,
+                reverse,
+                stops: stops.map(({ midpoint, colorPosition, opacityPosition, ...stop }) => stop),
+                preserveTransparency
+            };
+            updatedPresets[selectedPreset] = updatedPreset;
+            setPresets(updatedPresets);
+            
+            // 使用防抖机制，延迟300ms后再调用onSelect，避免频繁更新导致性能问题
+            const debounceTimeoutId = setTimeout(() => {
+                onSelect(updatedPreset);
+            }, 300);
+            
+            return () => clearTimeout(debounceTimeoutId);
+        }
+    }, [gradientType, angle, reverse, stops, preserveTransparency, selectedPreset]);
+
     const handleAddPreset = () => {
         const newPreset: Gradient = {
             type: gradientType,
@@ -299,18 +323,20 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             setSelectedPresets(new Set());
             setLastClickedPreset(null);
             
-            // 如果删除后没有预设了，清空选中状态
+            // 如果删除后没有预设了，清空选中状态并通知父组件
             if (newPresets.length === 0) {
                 setSelectedPreset(null);
+                onSelect(null);
             }
         } else if (index !== undefined) {
             // 删除单个预设
             const newPresets = presets.filter((_, i) => i !== index);
             setPresets(newPresets);
             
-            // 如果删除后没有预设了，清空选中状态
+            // 如果删除后没有预设了，清空选中状态并通知父组件
             if (newPresets.length === 0) {
                 setSelectedPreset(null);
+                onSelect(null);
             } else if (selectedPreset === index) {
                 // 如果删除的是当前选中的预设
                 const newSelectedIndex = index > 0 ? index - 1 : (newPresets.length > 0 ? 0 : null);
@@ -1633,7 +1659,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             <div className="final-preview-container">
                 <div className="gradient-subtitle"><h3>最终预览</h3></div>
                 <div className="final-preview">
-                    {/* 当选中多个预设时不渲染预览 */}
+                    {/* 当选中多个预设时渲染提示词 */}
                     {selectedPresets.size > 0 ? (
                         <div style={{
                             position: 'absolute',
@@ -1646,6 +1672,19 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             pointerEvents: 'none'
                         }}>
                             已选中多个预设
+                        </div>
+                    ) : selectedPreset === null ? (
+                        <div style={{
+                            position: 'absolute',
+                            top: '50%',
+                            left: '50%',
+                            transform: 'translate(-50%, -50%)',
+                            color: '#666',
+                            fontSize: '12px',
+                            zIndex: 3,
+                            pointerEvents: 'none'
+                        }}>
+                            请选择一个渐变预设
                         </div>
                     ) : (
                         <>
@@ -1703,26 +1742,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 </div>
             </div>
 
-            <div className="panel-footer">
-                <button onClick={() => {
-                    // 多选时或没有选中预设时传递null，只有单选了预设才传递渐变对象
-                    if (selectedPresets.size > 0 || selectedPreset === null) {
-                        onSelect(null);
-                    } else if (selectedPreset !== null && presets[selectedPreset]) {
-                        onSelect({
-                            type: gradientType,
-                            angle,
-                            reverse,
-                            stops: stops.map(({ midpoint, colorPosition, opacityPosition, ...stop }) => stop), // 移除扩展属性
-                            preserveTransparency, // 添加这个属性
-                            presets
-                        });
-                    } else {
-                        onSelect(null);
-                    }
-                    onClose();
-                }}>保存设置</button>
-            </div>
+
         </div>
     );
 };
