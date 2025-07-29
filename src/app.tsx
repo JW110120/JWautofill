@@ -17,6 +17,7 @@ import { calculateRandomColor, hsbToRgb, rgbToGray } from './utils/ColorUtils';
 import { strokeSelection } from './utils/StrokeSelection';
 import { PatternFill } from './utils/PatternFill';
 import { GradientFill } from './utils/GradientFill';
+import { SelectionHandler, SelectionOptions } from './utils/SelectionHandler';
 import { ColorSettings } from './types/ColorSettings';
 import { Pattern } from './types/Pattern';
 
@@ -25,6 +26,9 @@ const { batchPlay } = action;
 
 class App extends React.Component<AppProps, AppState> {
     private isListenerPaused = false;
+    private isInLayerMask = false;
+    private isInQuickMask = false;
+    private isInSingleColorChannel = false;
 
     constructor(props: AppProps) {
         super(props);
@@ -60,8 +64,9 @@ class App extends React.Component<AppProps, AppState> {
         this.toggleSelectionOptions = this.toggleSelectionOptions.bind(this);
         this.handleSelectionSmoothChange = this.handleSelectionSmoothChange.bind(this);
         this.handleSelectionContrastChange = this.handleSelectionContrastChange.bind(this);
-        this.handleSelectionShiftEdgeChange = this.handleSelectionShiftEdgeChange.bind(this);
+        this.handleSelectionExpandChange = this.handleSelectionExpandChange.bind(this);
         this.handleKeyDown = this.handleKeyDown.bind(this);
+        this.handleNotification = this.handleNotification.bind(this);
  
     }
 
@@ -70,6 +75,12 @@ class App extends React.Component<AppProps, AppState> {
         document.addEventListener('mousemove', this.handleMouseMove);
         document.addEventListener('mouseup', this.handleMouseUp);
         document.addEventListener('keydown', this.handleKeyDown);
+        
+        // 初始化状态检测
+        await this.checkMaskModes();
+        
+        // 监听Photoshop事件来检查状态变化
+        await action.addNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], this.handleNotification);
     }
 
     componentDidUpdate(prevProps, prevState) {
@@ -95,6 +106,7 @@ class App extends React.Component<AppProps, AppState> {
 
     componentWillUnmount() {
         action.removeNotificationListener(['set'], this.handleSelectionChange);
+        action.removeNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], this.handleNotification);
         document.removeEventListener('mousemove', this.handleMouseMove);
         document.removeEventListener('mouseup', this.handleMouseUp);
         document.removeEventListener('keydown', this.handleKeyDown);
@@ -132,54 +144,22 @@ class App extends React.Component<AppProps, AppState> {
         this.setState({ selectionContrast: parseInt(event.target.value, 10) });
     }
 
-    handleSelectionShiftEdgeChange(event) {
-        this.setState({ selectionShiftEdge: parseInt(event.target.value, 10) });
+    handleSelectionExpandChange(event) {
+        this.setState({ selectionExpand: parseInt(event.target.value, 10) });
     }
 
-    // 新增选择并遮住方法
-    async applySelectAndMask() {
+    // 应用选区修改
+    async applySelectionModification() {
+        const options: SelectionOptions = {
+            selectionSmooth: this.state.selectionSmooth,
+            selectionContrast: this.state.selectionContrast,
+            selectionExpand: this.state.selectionExpand
+        };
+        
         try {
-            await action.batchPlay([
-                {
-                    _obj: "smartBrushWorkspace",
-                    presetKind: {
-                        _enum: "presetKindType",
-                        _value: "presetKindCustom"
-                    },
-                    smartBrushRadius: 0,
-                    smartBrushSmooth: this.state.selectionSmooth,
-                    smartBrushFeather: {
-                        _unit: "pixelsUnit",
-                        _value: 0
-                    },
-                    smartBrushContrast: {
-                        _unit: "percentUnit",
-                        _value: this.state.selectionContrast
-                    },
-                    smartBrushShiftEdge: {
-                        _unit: "percentUnit",
-                        _value: this.state.selectionShiftEdge
-                    },
-                    sampleAllLayers: false,
-                    smartBrushUseSmartRadius: false,
-                    smartBrushUseDeepMatte: false,
-                    autoTrimap: false,
-                    smartBrushDecontaminate: false,
-                    smartBrushDeconAmount: {
-                        _unit: "percentUnit",
-                        _value: 100
-                    },
-                    refineEdgeOutput: {
-                        _enum: "refineEdgeOutput",
-                        _value: "selectionOutputToSelection"
-                    },
-                    _options: {
-                        dialogOptions: "dontDisplay"
-                    }
-                }
-            ], {});
+            await SelectionHandler.applySelectionModification(options);
         } catch (error) {
-            console.error('选择并遮住失败:', error);
+            console.error('选区修改失败:', error);
         }
     }
 
@@ -307,10 +287,14 @@ class App extends React.Component<AppProps, AppState> {
             await core.executeAsModal(async () => {
                 if (this.state.autoUpdateHistory) { await this.setHistoryBrushSource(); }
                 // 只有当选区选项值不为初始值时才执行选择并遮住
-                if ( this.state.selectionSmooth !== 0 || 
-                     this.state.selectionContrast !== 0 || 
-                     this.state.selectionShiftEdge !== 0) {
-                    await this.applySelectAndMask();
+                const options: SelectionOptions = {
+                    selectionSmooth: this.state.selectionSmooth,
+                    selectionContrast: this.state.selectionContrast,
+                    selectionExpand: this.state.selectionExpand
+                };
+                
+                if (SelectionHandler.shouldApplySelectionModification(options)) {
+                    await this.applySelectionModification();
                 }
                 await this.applyFeather();
                 await this.fillSelection();
@@ -680,6 +664,52 @@ class App extends React.Component<AppProps, AppState> {
     
     toggleDeselectAfterFill() {
         this.setState({ deselectAfterFill: !this.state.deselectAfterFill });
+    }
+
+    // 检测蒙版模式状态
+    async checkMaskModes() {
+        try {
+            const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
+            this.isInLayerMask = layerInfo?.isInLayerMask || false;
+            this.isInQuickMask = layerInfo?.isInQuickMask || false;
+            this.isInSingleColorChannel = layerInfo?.isInSingleColorChannel || false;
+        } catch (error) {
+            console.error('检测蒙版模式失败:', error);
+            this.isInLayerMask = false;
+            this.isInQuickMask = false;
+            this.isInSingleColorChannel = false;
+        }
+    }
+
+    // 处理Photoshop通知事件
+    async handleNotification() {
+        try {
+            // 检测图层蒙版和快速蒙版状态
+            await this.checkMaskModes();
+            // 强制重新渲染以更新颜色预览
+            this.forceUpdate();
+        } catch (error) {
+            // 静默处理错误，避免频繁的错误日志
+        }
+    }
+
+    // 获取描边颜色预览样式
+    getStrokeColorPreviewStyle() {
+        const { strokeColor, clearMode } = this.state;
+        const shouldShowGray = clearMode || this.isInLayerMask || this.isInQuickMask || this.isInSingleColorChannel;
+        
+        if (!strokeColor) {
+            return { backgroundColor: '#000000' };
+        }
+        
+        if (shouldShowGray) {
+            // 使用灰度显示：将RGB转换为灰度值
+            const grayValue = Math.round(strokeColor.red * 0.299 + strokeColor.green * 0.587 + strokeColor.blue * 0.114);
+            return { backgroundColor: `rgb(${grayValue}, ${grayValue}, ${grayValue})` };
+        } else {
+            // 正常彩色显示
+            return { backgroundColor: `rgb(${strokeColor.red}, ${strokeColor.green}, ${strokeColor.blue})` };
+        }
     }  
 
     render() {
@@ -848,7 +878,7 @@ class App extends React.Component<AppProps, AppState> {
                                         }`}
                                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionContrast')}
                                     >
-                                        对比
+                                        锐度
                                     </label>
                                     <input
                                         type='range'
@@ -875,21 +905,21 @@ class App extends React.Component<AppProps, AppState> {
                                     <div className="selection-slider-item">
                                     <label
                                         className={`selection-slider-label ${
-                                            this.state.isDragging && this.state.dragTarget === 'selectionShiftEdge' 
+                                            this.state.isDragging && this.state.dragTarget === 'selectionExpand' 
                                             ? 'dragging' 
                                             : 'not-dragging'
                                         }`}
-                                        onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionShiftEdge')}
+                                        onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionExpand')}
                                     >
-                                        缩放
+                                        扩散
                                     </label>
                                     <input
                                         type='range'
-                                        min='-100'
+                                        min='0'
                                         max='100'
                                         step='1'
-                                        value={this.state.selectionShiftEdge}
-                                        onChange={this.handleSelectionShiftEdgeChange}
+                                        value={this.state.selectionExpand}
+                                        onChange={this.handleSelectionExpandChange}
                                         className="selection-slider-input"
                                     />
                                     <div style={{ display: 'flex', alignItems: 'center'}}>
@@ -897,8 +927,8 @@ class App extends React.Component<AppProps, AppState> {
                                             type="number"
                                             min="0"
                                             max="100"
-                                            value={this.state.selectionShiftEdge}
-                                            onChange={(e) => this.setState({ selectionShiftEdge: Number(e.target.value) })}
+                                            value={this.state.selectionExpand}
+                                            onChange={(e) => this.setState({ selectionExpand: Number(e.target.value) })}
                                             style={{ marginLeft: '-10px', width: '30px', zIndex: 1 }}
                                         />
                                        <span style={{ fontSize: '13px' }}>%</span>
@@ -936,11 +966,7 @@ class App extends React.Component<AppProps, AppState> {
                                 <div className="stroke-color-group">
                                 <div 
                                     className="stroke-color-preview"
-                                    style={{
-                                        backgroundColor: this.state.strokeColor 
-                                            ? `rgb(${this.state.strokeColor.red}, ${this.state.strokeColor.green}, ${this.state.strokeColor.blue})`
-                                            : '#000000'
-                                    }}
+                                    style={this.getStrokeColorPreviewStyle()}
                                     onClick={async () => {
                                         try {
                                             // 1. 保存当前前景色

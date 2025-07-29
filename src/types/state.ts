@@ -99,7 +99,7 @@ export interface AppState {
      isSelectionOptionsExpanded: boolean;
      selectionSmooth: number;
      selectionContrast: number;
-     selectionShiftEdge: number;
+     selectionExpand: number; // 改名为扩散
 }
 
 export const initialState: AppState = {
@@ -146,5 +146,5 @@ export const initialState: AppState = {
     isSelectionOptionsExpanded: true,
     selectionSmooth: 0, 
     selectionContrast: 0,
-    selectionShiftEdge: 0,
+    selectionExpand: 0, // 改名为扩散
 };

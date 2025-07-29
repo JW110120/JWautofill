@@ -2440,11 +2440,11 @@ export class ClearHandler {
                             // 完全透明区域，保持原始蒙版值，不参与清除
                             finalValue = selectedMaskValue;
                         } else {
-                            // maskvalue>0且有效不透明度>0时，应用删除公式
-                            // 删除百分比 = fillValue / 255
-                            // 最终值 = maskValue * (1 - 删除百分比 * opacityFactor)相对公式
-                            const deleteRatio = fillValue / 255;
-                            finalValue = selectedMaskValue * (1 - deleteRatio * opacityFactor);
+                            // maskvalue>0且有效不透明度>0时，应用绝对删除公式（参考图层蒙版）
+                            // 绝对公式：蒙版值 - (清除值 * 有效不透明度)
+                            // 最终值 = maskValue - (fillValue * opacityFactor)
+                            const subtractAmount = fillValue * opacityFactor;
+                            finalValue = selectedMaskValue - subtractAmount;
                         }
                         
                         finalData[i] = Math.min(255, Math.max(0, Math.round(finalValue)));
