@@ -30,7 +30,7 @@ export class SelectionHandler {
                     },
                     smartBrushShiftEdge: {
                         _unit: "percentUnit",
-                        _value: 0 // 始终设为0，按用户要求
+                        _value: 0
                     },
                     sampleAllLayers: false,
                     smartBrushUseSmartRadius: false,
@@ -82,6 +82,8 @@ export class SelectionHandler {
             throw error;
         }
     }
+
+
 
 
     
@@ -188,115 +190,117 @@ export class SelectionHandler {
         const fullDocumentData = new Uint8Array(docWidth * docHeight);
         fullDocumentData.fill(0);
         
-        // 将选区数据映射到文档坐标
-        const selectionMap = new Map<string, number>();
+        console.log(`🌟 开始像素移动式喷溅算法: 扩散值=${expandValue}`);
+        
+        // 收集所有有效像素用于移动
+        const allPixels = [];
+        let processedPixels = 0;
+        
         for (let i = 0; i < selectionData.length; i++) {
             if (selectionData[i] > 0) {
                 const x = i % width;
                 const y = Math.floor(i / width);
                 const docX = left + x;
                 const docY = top + y;
-                const key = `${docX},${docY}`;
-                selectionMap.set(key, selectionData[i]);
+                
+                allPixels.push({ x: docX, y: docY, value: selectionData[i] });
+                processedPixels++;
             }
         }
         
-        console.log(`🗺️ 选区映射: 有效像素=${selectionMap.size}`);
+        console.log(`📊 收集到有效像素: ${processedPixels}个`);
         
-        if (selectionMap.size === 0) {
-            console.warn('⚠️ 选区映射为空，返回空数组');
-            const finalNonZeroCount = fullDocumentData.filter(val => val > 0).length;
-            console.log(`🎯 最终结果: 非零像素=${finalNonZeroCount}`);
+        if (allPixels.length === 0) {
+            console.warn('⚠️ 没有有效像素，返回空数组');
             return fullDocumentData;
         }
         
-        // 计算选区中心点（加权平均）
-        let centerX = 0, centerY = 0, totalWeight = 0;
-        for (const [key, value] of selectionMap) {
-            const [x, y] = key.split(',').map(Number);
-            const weight = value / 255; // 归一化权重
-            centerX += x * weight;
-            centerY += y * weight;
-            totalWeight += weight;
-        }
-        
-        if (totalWeight > 0) {
-            centerX /= totalWeight;
-            centerY /= totalWeight;
-        } else {
-            // 如果没有权重，使用几何中心
-            let sumX = 0, sumY = 0, count = 0;
-            for (const [key] of selectionMap) {
-                const [x, y] = key.split(',').map(Number);
-                sumX += x;
-                sumY += y;
-                count++;
-            }
-            centerX = count > 0 ? sumX / count : 0;
-            centerY = count > 0 ? sumY / count : 0;
-        }
-        
-        // 应用扩散效果
-        const expandFactor = expandValue / 100; // 将0到100转换为0到1
-        
-        // 先保留原始选区
-        for (const [key, value] of selectionMap) {
-            const [x, y] = key.split(',').map(Number);
-            const index = y * docWidth + x;
-            if (index >= 0 && index < fullDocumentData.length) {
-                fullDocumentData[index] = value;
-            }
-        }
-        
-        // 如果有扩散值，则添加扩散效果
-        let diffusedPixels = 0;
+        // 应用像素移动式喷溅效果
         if (expandValue > 0) {
-            console.log(`🌟 开始扩散: 中心点(${centerX.toFixed(1)}, ${centerY.toFixed(1)}), 扩散因子=${expandFactor}`);
+            // 增强强度一倍
+            const splashIntensity = (expandValue / 100) * 2; // 0-2的强度
+            const maxSplashDistance = Math.max(10, Math.round(expandValue / 2.5)); // 增大最大喷溅距离
             
-            for (const [key, value] of selectionMap) {
-                const [x, y] = key.split(',').map(Number);
+            console.log(`🎨 喷溅参数: 强度=${splashIntensity.toFixed(2)}, 最大距离=${maxSplashDistance}`);
+            
+            const movedPixels = [];
+            let totalMoved = 0;
+            
+            // 为每个像素计算移动位置
+            for (const pixel of allPixels) {
+                // 根据强度决定是否移动这个像素
+                const moveChance = Math.min(0.9, splashIntensity * 0.5); // 最多90%的像素会移动
                 
-                // 计算距离中心的向量
-                const dx = x - centerX;
-                const dy = y - centerY;
-                const distance = Math.sqrt(dx * dx + dy * dy);
-                
-                // 避免除零错误
-                if (distance === 0) continue;
-                
-                // 归一化方向向量
-                const dirX = dx / distance;
-                const dirY = dy / distance;
-                
-                // 计算扩散距离（基于原始距离和扩散因子）
-                const expandDistance = expandFactor * (1 + distance * 0.01); // 距离越远扩散越强
-                
-                // 计算扩散偏移
-                const offsetX = Math.round(dirX * expandDistance);
-                const offsetY = Math.round(dirY * expandDistance);
-                
-                // 计算新位置
-                const newX = x + offsetX;
-                const newY = y + offsetY;
-                
-                // 检查边界并应用扩散
-                if (newX >= 0 && newX < docWidth && newY >= 0 && newY < docHeight) {
-                    const newIndex = newY * docWidth + newX;
-                    const oldValue = fullDocumentData[newIndex];
+                if (Math.random() < moveChance) {
+                    // 随机生成移动方向和距离
+                    const angle = Math.random() * 2 * Math.PI;
+                    const distance = Math.random() * maxSplashDistance * splashIntensity;
                     
-                    // 计算扩散强度（距离越远强度越弱）
-                    const intensity = Math.max(0.3, 1 - (expandDistance / 100));
-                    const expandedValue = Math.round(value * intensity);
+                    // 添加随机性让移动更不规则
+                    const randomFactor = 0.3 + Math.random() * 0.7;
+                    const actualDistance = distance * randomFactor;
                     
-                    // 使用最大值混合
-                    fullDocumentData[newIndex] = Math.max(fullDocumentData[newIndex], expandedValue);
-                    if (fullDocumentData[newIndex] > oldValue) {
-                        diffusedPixels++;
+                    const newX = Math.round(pixel.x + Math.cos(angle) * actualDistance);
+                    const newY = Math.round(pixel.y + Math.sin(angle) * actualDistance);
+                    
+                    // 检查边界
+                    if (newX >= 0 && newX < docWidth && newY >= 0 && newY < docHeight) {
+                        movedPixels.push({ x: newX, y: newY, value: pixel.value });
+                        totalMoved++;
+                    }
+                } else {
+                    // 不移动的像素保持原位
+                    movedPixels.push({ x: pixel.x, y: pixel.y, value: pixel.value });
+                }
+            }
+            
+            console.log(`🚀 像素移动完成: 移动了${totalMoved}个像素`);
+            
+            // 将移动后的像素放置到新位置
+            for (const pixel of movedPixels) {
+                const index = pixel.y * docWidth + pixel.x;
+                if (index >= 0 && index < fullDocumentData.length) {
+                    // 使用最大值混合，避免覆盖更亮的像素
+                    fullDocumentData[index] = Math.max(fullDocumentData[index], pixel.value);
+                }
+            }
+            
+            // 增加15%的额外像素来增强视觉效果
+            const extraPixelCount = Math.round(movedPixels.length * 0.15);
+            let extraPixelsAdded = 0;
+            
+            console.log(`✨ 开始添加${extraPixelCount}个额外像素增强效果`);
+            
+            for (let i = 0; i < extraPixelCount && extraPixelsAdded < extraPixelCount; i++) {
+                // 随机选择一个已移动的像素作为基础
+                const basePixel = movedPixels[Math.floor(Math.random() * movedPixels.length)];
+                
+                // 在其周围小范围内添加额外像素
+                const extraRange = 3; // 额外像素的范围
+                const extraX = basePixel.x + Math.round((Math.random() - 0.5) * extraRange * 2);
+                const extraY = basePixel.y + Math.round((Math.random() - 0.5) * extraRange * 2);
+                
+                // 检查边界
+                if (extraX >= 0 && extraX < docWidth && extraY >= 0 && extraY < docHeight) {
+                    const extraIndex = extraY * docWidth + extraX;
+                    if (extraIndex >= 0 && extraIndex < fullDocumentData.length) {
+                        // 额外像素的强度稍弱
+                        const extraValue = Math.round(basePixel.value * (0.3 + Math.random() * 0.4));
+                        fullDocumentData[extraIndex] = Math.max(fullDocumentData[extraIndex], extraValue);
+                        extraPixelsAdded++;
                     }
                 }
             }
             
-            console.log(`✨ 扩散完成: 新增/更新像素=${diffusedPixels}`);
+            console.log(`🎯 喷溅完成: 主要像素=${movedPixels.length}个, 额外像素=${extraPixelsAdded}个`);
+        } else {
+            // 如果扩散值为0，直接复制原始像素
+            for (const pixel of allPixels) {
+                const index = pixel.y * docWidth + pixel.x;
+                if (index >= 0 && index < fullDocumentData.length) {
+                    fullDocumentData[index] = pixel.value;
+                }
+            }
         }
         
         return fullDocumentData;
@@ -357,7 +361,7 @@ export class SelectionHandler {
                 await this.applySelectAndMask(options);
             }
             
-            // 再应用扩散效果
+            // 再应用扩散效果（使用当前选区数据）
             if (options.selectionExpand !== 0) {
                 await this.applyExpand(options.selectionExpand);
             }
