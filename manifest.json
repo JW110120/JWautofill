@@ -49,6 +49,47 @@
                     "species": ["chrome"]
                 } 
             ]
+        },
+        {
+            "id": "com.listen2me.newentrypoint",
+            "label": {
+                "default": "调整内容"
+            },
+            "type": "panel",
+            "minimumSize": {
+                "width": 250,
+                "height": 300 
+            },
+            "maximumSize": {
+                "width": 250,
+                "height": 400
+            },
+            "preferredDockedSize": {
+                "width": 250,
+                "height": 400
+            },
+            "preferredFloatingSize": {
+                "width": 250,
+                "height": 400
+            },
+            "icons": [
+                {
+                    "path": "icons/light-panel.png",
+                    "width": 23,
+                    "height": 23,
+                    "scale": [1,2],
+                    "theme": ["darkest", "dark", "medium"],
+                    "species": ["chrome"]
+                },
+                {
+                    "path": "icons/dark-panel.png",
+                    "width": 23,
+                    "height": 23,
+                    "scale": [1,2],
+                    "theme": ["lightest", "light"],
+                    "species": ["chrome"]
+                } 
+            ]
         }
     ],
     "id": "com.listen2me.jwautofill",

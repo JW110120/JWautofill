@@ -25,8 +25,8 @@ export class LayerInfoHandler {
             const document = app.activeDocument;
             const isInQuickMask = document.quickMaskMode;
             
-            // 检测是否在编辑图层蒙版
-            const isInLayerMask = await this.checkLayerMaskMode();
+            // 检测是否在编辑图层蒙版（背景图层跳过此检测）
+            const isInLayerMask = activeLayer.isBackgroundLayer ? false : await this.checkLayerMaskMode();
             
             // 检测是否选中了单个颜色通道
             const isInSingleColorChannel = await this.checkSingleColorChannelMode();

@@ -7,10 +7,16 @@ import { defaultTheme, Provider } from '@adobe/react-spectrum';
 import ColorSettingsPanel from './components/ColorSettingsPanel';
 import PatternPicker from './components/PatternPicker';
 import GradientPicker from './components/GradientPicker';
+import AdjustmentPanel from './adjustments/AdjustmentPanel';
 
 // 初始化主题
 initializeTheme();
 
+
+
+
+
+// 渲染主应用
 const container = document.getElementById('app');
 if (container) {
   const root = createRoot(container);
@@ -34,4 +40,11 @@ if (container) {
   };
 
   root.render(<Root />);
+}
+
+// 渲染新入口点应用
+const newContainer = document.getElementById('newapp');
+if (newContainer) {
+  const newRoot = createRoot(newContainer);
+  newRoot.render(<AdjustmentPanel />);
 }

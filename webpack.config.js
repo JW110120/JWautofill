@@ -65,17 +65,6 @@ module.exports = (env, argv) => {
                 { from: "./README.md", to: "." }
             ]
         }),
-        {
-            apply: (compiler) => {
-                compiler.hooks.afterEmit.tap('AfterEmitPlugin', async (compilation) => {
-                    if (argv.mode === 'production') {
-                       await signPanel(panelOutput);
-                       await packageWindows();
-                       await packageMac();
-                    }
-                });
-            }
-        }
     ]);
     return [uxpPanelConfig];
 }
