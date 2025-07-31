@@ -1,0 +1,219 @@
+/* 像素调整面板样式 */
+
+/* 面板容器 */
+.adjustment-container {
+  width: 100%;
+  height: 100%;
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+/* 标题样式 */
+.adjustment-title {
+  color: var(--text-color);
+  font-size: 18px;
+  font-weight: bold;
+  margin-bottom: 20px;
+  text-align: center;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 10px;
+  width: 100%;
+}
+
+/* 分区容器 */
+.adjustment-section {
+  width: 100%;
+  max-width: 220px;
+  margin-bottom: 20px;
+}
+
+/* 分区标题 */
+.adjustment-section-title {
+  color: var(--text-color);
+  font-size: 14px;
+  font-weight: bold;
+  margin-bottom: 10px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+/* 按钮容器 */
+.adjustment-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+/* 按钮样式 */
+.adjustment-button {
+  width: 100%;
+  height: 35px;
+  background-color: var(--button-bg);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  font-size: 13px;
+  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.adjustment-button:hover {
+  background-color: var(--hover-bg);
+  transform: scale(1.02);
+}
+
+.adjustment-button:active {
+  background-color: var(--button-down);
+  transform: scale(0.98);
+}
+
+/* 滑块容器 */
+.adjustment-slider-container {
+  width: 100%;
+  margin-top: 15px;
+}
+
+/* 滑块项 */
+.adjustment-slider-item {
+  display: flex;
+  align-items: center;
+  margin-bottom: 10px;
+  gap: 8px;
+}
+
+/* 滑块标签 */
+.adjustment-slider-label {
+  color: var(--text-color);
+  font-size: 12px;
+  min-width: 45px;
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.2s ease;
+}
+
+.adjustment-slider-label.dragging {
+  color: var(--accent-color);
+}
+
+.adjustment-slider-label.not-dragging:hover {
+  color: var(--hover-color);
+}
+
+/* 滑块输入 */
+.adjustment-slider-input {
+  flex: 1;
+  height: 20px;
+  background: var(--slider-bg);
+  outline: none;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.adjustment-slider-input::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--slider-thumb);
+  cursor: pointer;
+  border: 2px solid var(--bg-color);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+
+.adjustment-slider-input::-webkit-slider-thumb:hover {
+  background: var(--slider-thumb-hover);
+}
+
+/* 数值输入框 */
+.adjustment-number-input {
+  width: 30px;
+  height: 20px;
+  background: var(--input-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  color: var(--text-color);
+  font-size: 11px;
+  text-align: center;
+  margin-left: -10px;
+  z-index: 1;
+}
+
+.adjustment-number-input:focus {
+  outline: 1px solid var(--accent-color);
+  border-color: var(--accent-color);
+}
+
+/* 单位标签 */
+.adjustment-unit {
+  color: var(--text-color);
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+/* 功能描述区域 */
+.adjustment-description {
+  margin-top: 20px;
+  padding: 15px;
+  background-color: var(--dark-bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  width: 100%;
+  max-width: 220px;
+}
+
+.adjustment-description h4 {
+  color: var(--text-color);
+  font-size: 14px;
+  margin: 0 0 10px 0;
+  font-weight: bold;
+}
+
+.adjustment-description p {
+  color: var(--text-color);
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 5px 0;
+  opacity: 0.9;
+}
+
+/* 分隔线 */
+.adjustment-divider {
+  width: 100%;
+  height: 1px;
+  background-color: var(--border-color);
+  margin: 15px 0;
+}
+
+/* 响应式调整 */
+@media (max-height: 350px) {
+  .adjustment-container {
+    padding: 15px;
+  }
+  
+  .adjustment-title {
+    font-size: 16px;
+    margin-bottom: 15px;
+  }
+  
+  .adjustment-buttons {
+    gap: 10px;
+  }
+  
+  .adjustment-description {
+    margin-top: 15px;
+    padding: 10px;
+  }
+}

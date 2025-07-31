@@ -133,7 +133,7 @@ export async function processBlockAverage(layerPixelData: ArrayBuffer, selection
 }
 
 // 像素过渡处理函数 - 高级模糊算法，只影响alpha>0的像素
-export async function processPixelTransition(layerPixelData: ArrayBuffer, selectionData: ArrayBuffer, bounds: { width: number; height: number }): Promise<Uint8Array> {
+export async function processPixelTransition(layerPixelData: ArrayBuffer, selectionData: ArrayBuffer, bounds: { width: number; height: number }, params: { radius: number; sigma: number }): Promise<Uint8Array> {
   const width = bounds.width;
   const height = bounds.height;
   const pixels = new Uint8Array(layerPixelData);
@@ -146,8 +146,8 @@ export async function processPixelTransition(layerPixelData: ArrayBuffer, select
   result.set(pixels);
   
   // 高斯模糊参数
-  const radius = 10;
-  const sigma = 3;
+  const radius = params.radius;
+  const sigma = params.sigma;
   
   // 创建高斯核
   const kernel: number[] = [];

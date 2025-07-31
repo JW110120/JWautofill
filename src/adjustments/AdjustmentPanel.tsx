@@ -1,7 +1,7 @@
-import React from 'react';
-import { defaultTheme, Provider } from '@adobe/react-spectrum';
+import React, { useState } from 'react';
 import { processBlockAverage, processPixelTransition } from './pixelProcessing';
 import { action, app, core, imaging } from 'photoshop';
+import './adjustment.css';
 
 // 获取选区边界信息和文档信息（完全参考ClearHandler.getSelectionData）
 const getSelectionData = async () => {
@@ -145,6 +145,81 @@ const getSelectionData = async () => {
 
 // 调整内容面板组件
 const AdjustmentPanel = () => {
+  // 状态管理
+  const [radius, setRadius] = useState(10);
+  const [sigma, setSigma] = useState(3);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragTarget, setDragTarget] = useState<string | null>(null);
+  const [dragStartX, setDragStartX] = useState(0);
+  const [dragStartValue, setDragStartValue] = useState(0);
+
+  // 拖拽处理函数
+  const handleLabelMouseDown = (event: React.MouseEvent, target: string) => {
+    event.preventDefault();
+    setIsDragging(true);
+    setDragTarget(target);
+    setDragStartX(event.clientX);
+    setDragStartValue(target === 'radius' ? radius : sigma);
+  };
+
+  const handleMouseMove = (event: MouseEvent) => {
+    if (!isDragging || !dragTarget) return;
+
+    const deltaX = event.clientX - dragStartX;
+    const sensitivity = dragTarget === 'radius' ? 0.1 : 0.02;
+    const minValue = dragTarget === 'radius' ? 5 : 1;
+    const maxValue = dragTarget === 'radius' ? 20 : 5;
+    
+    const newValue = Math.max(
+      minValue,
+      Math.min(maxValue, dragStartValue + (deltaX * sensitivity))
+    );
+
+    if (dragTarget === 'radius') {
+      setRadius(Math.round(newValue));
+    } else {
+      setSigma(Math.round(newValue * 2) / 2); // 保持0.5的步长
+    }
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+    setDragTarget(null);
+  };
+
+  // 添加事件监听器
+  React.useEffect(() => {
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDragging, dragTarget, dragStartX, dragStartValue]);
+
+  // 滑块变化处理
+  const handleRadiusChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setRadius(parseInt(event.target.value, 10));
+  };
+
+  const handleSigmaChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setSigma(parseFloat(event.target.value));
+  };
+
+  // 数值输入处理
+  const handleRadiusNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const value = parseInt(event.target.value, 10);
+    if (!isNaN(value) && value >= 5 && value <= 20) {
+      setRadius(value);
+    }
+  };
+
+  const handleSigmaNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const value = parseFloat(event.target.value);
+    if (!isNaN(value) && value >= 1 && value <= 5) {
+      setSigma(value);
+    }
+  };
   // 分块平均功能
   const handleBlockAverage = async () => {
     try {
@@ -425,7 +500,8 @@ const AdjustmentPanel = () => {
         const processedPixels = await processPixelTransition(
           selectionPixelData.buffer, 
           fullSelectionMask.buffer, 
-          { width: selectionBounds.docWidth, height: selectionBounds.docHeight }
+          { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
+          { radius, sigma }
         );
         
         console.log('✅ 处理像素数据完成，长度:', processedPixels.length);
@@ -484,82 +560,115 @@ const AdjustmentPanel = () => {
   };
   
   return (
-    <Provider theme={defaultTheme} colorScheme="dark">
-      <div style={{ 
-        width: '100%', 
-        height: '100%', 
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'flex-start',
-        alignItems: 'center',
-        padding: '20px',
-        gap: '20px'
-      }}>
-        <h2 style={{
-          color: '#ffffff',
-          fontSize: '18px',
-          marginBottom: '10px',
-          fontFamily: 'Arial, sans-serif',
-          textAlign: 'center'
-        }}>
-          调整内容
-        </h2>
-        
-        <button 
-          onClick={handleBlockAverage}
-          style={{
-            width: '180px',
-            height: '40px',
-            backgroundColor: '#4a90e2',
-            color: '#ffffff',
-            border: 'none',
-            borderRadius: '5px',
-            fontSize: '14px',
-            fontFamily: 'Arial, sans-serif',
-            cursor: 'pointer',
-            transition: 'background-color 0.3s'
-          }}
-          onMouseOver={(e) => e.target.style.backgroundColor = '#357abd'}
-          onMouseOut={(e) => e.target.style.backgroundColor = '#4a90e2'}
-        >
-          分块平均
-        </button>
-        
-        <button 
-          onClick={handlePixelTransition}
-          style={{
-            width: '180px',
-            height: '40px',
-            backgroundColor: '#28a745',
-            color: '#ffffff',
-            border: 'none',
-            borderRadius: '5px',
-            fontSize: '14px',
-            fontFamily: 'Arial, sans-serif',
-            cursor: 'pointer',
-            transition: 'background-color 0.3s'
-          }}
-          onMouseOver={(e) => e.target.style.backgroundColor = '#218838'}
-          onMouseOut={(e) => e.target.style.backgroundColor = '#28a745'}
-        >
-          像素过渡
-        </button>
-        
-        <div style={{
-          marginTop: '20px',
-          padding: '10px',
-          backgroundColor: '#333333',
-          borderRadius: '5px',
-          fontSize: '12px',
-          color: '#cccccc',
-          textAlign: 'center',
-          lineHeight: '1.4'
-        }}>
-          <div>分块平均：对不相连选区分别计算平均值</div>
-          <div>像素过渡：模糊选区内alpha&gt;0的像素</div>
+    <div className="adjustment-container">
+      <h2 className="adjustment-title">
+        调整内容
+      </h2>
+      
+      {/* 概括栏目 */}
+      <div className="adjustment-section">
+        <div className="adjustment-section-title">概括</div>
+        <div className="adjustment-buttons">
+          <button 
+            className="adjustment-button"
+            onClick={handleBlockAverage}
+          >
+            分块平均
+          </button>
         </div>
       </div>
-    </Provider>
+      
+      {/* 过渡栏目 */}
+      <div className="adjustment-section">
+        <div className="adjustment-section-title">过渡</div>
+        <div className="adjustment-buttons">
+          <button 
+            className="adjustment-button"
+            onClick={handlePixelTransition}
+          >
+            像素过渡
+          </button>
+        </div>
+        
+        {/* 过渡参数滑块 */}
+        <div className="adjustment-slider-container">
+          <div className="adjustment-slider-item">
+            <label
+              className={`adjustment-slider-label ${
+                isDragging && dragTarget === 'radius' 
+                ? 'dragging' 
+                : 'not-dragging'
+              }`}
+              onMouseDown={(e) => handleLabelMouseDown(e, 'radius')}
+            >
+              半径
+            </label>
+            <input
+              type="range"
+              min="5"
+              max="20"
+              step="1"
+              value={radius}
+              onChange={handleRadiusChange}
+              className="adjustment-slider-input"
+            />
+            <div style={{ display: 'flex', alignItems: 'center'}}>
+              <input
+                type="number"
+                min="5"
+                max="20"
+                value={radius}
+                onChange={handleRadiusNumberChange}
+                className="adjustment-number-input"
+              />
+              <span className="adjustment-unit">px</span>
+            </div>
+          </div>
+          
+          <div className="adjustment-slider-item">
+            <label
+              className={`adjustment-slider-label ${
+                isDragging && dragTarget === 'sigma' 
+                ? 'dragging' 
+                : 'not-dragging'
+              }`}
+              onMouseDown={(e) => handleLabelMouseDown(e, 'sigma')}
+            >
+              强度
+            </label>
+            <input
+              type="range"
+              min="1"
+              max="5"
+              step="0.5"
+              value={sigma}
+              onChange={handleSigmaChange}
+              className="adjustment-slider-input"
+            />
+            <div style={{ display: 'flex', alignItems: 'center'}}>
+              <input
+                type="number"
+                min="1"
+                max="5"
+                step="0.5"
+                value={sigma}
+                onChange={handleSigmaNumberChange}
+                className="adjustment-number-input"
+              />
+              <span className="adjustment-unit">px</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <div className="adjustment-divider"></div>
+      
+      <div className="adjustment-description">
+        <h4>功能说明</h4>
+        <p><strong>分块平均：</strong>对不相连选区分别计算平均值</p>
+        <p><strong>像素过渡：</strong>模糊选区内alpha&gt;0的像素</p>
+      </div>
+    </div>
   );
 };
 

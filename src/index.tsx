@@ -42,9 +42,30 @@ if (container) {
   root.render(<Root />);
 }
 
-// 渲染新入口点应用
-const newContainer = document.getElementById('newapp');
-if (newContainer) {
-  const newRoot = createRoot(newContainer);
-  newRoot.render(<AdjustmentPanel />);
+// 渲染像素调整应用
+const pixelAdjustmentContainer = document.getElementById('pixeladjustment');
+if (pixelAdjustmentContainer) {
+  const pixelAdjustmentRoot = createRoot(pixelAdjustmentContainer);
+  
+  // 创建像素调整根组件
+  const PixelAdjustmentRoot = () => {
+    return (
+      <Provider theme={defaultTheme} colorScheme="dark">
+        <div style={{ 
+          width: '100%', 
+          height: '100%', 
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'flex-start',
+          alignItems: 'center',
+          backgroundColor: 'var(--bg-color)',
+          color: 'var(--text-color)'
+        }}>
+          <AdjustmentPanel />
+        </div>
+      </Provider>
+    );
+  };
+
+  pixelAdjustmentRoot.render(<PixelAdjustmentRoot />);
 }

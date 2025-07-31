@@ -60,6 +60,9 @@ interface PatternPickerProps {
     const [isInLayerMask, setIsInLayerMask] = useState(false);
     const [isInQuickMask, setIsInQuickMask] = useState(false);
     const [isInSingleColorChannel, setIsInSingleColorChannel] = useState(false);
+    
+    // 添加灰度预览URL缓存
+    const [grayPreviewUrls, setGrayPreviewUrls] = useState<Record<string, string>>({});
 
     // 实时更新功能：使用防抖机制避免频繁调用
     useEffect(() => {
@@ -255,11 +258,16 @@ interface PatternPickerProps {
             }
         };
 
-        // 面板打开时检测一次
+        // 面板打开时检测一次，包含isClearMode检查
         if (isOpen) {
             checkMaskModes();
         }
-    }, [isOpen]);
+    }, [isOpen, isClearMode]);
+
+    // 当灰度模式状态变化时，清理缓存的灰度预览URL
+    useEffect(() => {
+        setGrayPreviewUrls({});
+    }, [isClearMode, isInLayerMask, isInQuickMask, isInSingleColorChannel]);
 
     // 监听通道切换和快速蒙版切换事件
     useEffect(() => {
@@ -282,7 +290,7 @@ interface PatternPickerProps {
         // 监听Photoshop事件来检查状态变化
         const handleNotification = async () => {
             try {
-                // 检测图层蒙版和快速蒙版状态
+                // 检测图层蒙版和快速蒙版状态，包含isClearMode变化
                 await checkMaskModes();
             } catch (error) {
                 // 静默处理错误，避免频繁的错误日志
@@ -392,7 +400,6 @@ interface PatternPickerProps {
         // 检查是否已经有缓存的图案数据，避免重复处理
         if (selectedPatternData.patternRgbData && selectedPatternData.grayData && 
             selectedPatternData.width && selectedPatternData.height) {
-            console.log('✅ 使用已缓存的图案数据，跳过重新处理');
             return `Pattern_${selectedPatternData.id}`;
         }
         
@@ -417,10 +424,7 @@ interface PatternPickerProps {
             return;
         }
         
-        try {
-            // 显示处理提示，改善用户体验
-            console.log('🔄 开始处理图案数据，请稍候...');
-            
+        try {            
             const {localFileSystem: fs} = require("uxp").storage;
             
             // 获取文件的会话令牌
@@ -578,14 +582,6 @@ interface PatternPickerProps {
                         selectedPatternData.components = pixelData.imageData.components; // 保存组件数
                         selectedPatternData.hasAlpha = pixelData.imageData.components === 4; // 标记是否有透明度
                         
-                        console.log('获取到像素数据:', {
-                            width: pixelData.imageData.width,
-                            height: pixelData.imageData.height,
-                            components: pixelData.imageData.components,
-                            colorSpace: pixelData.imageData.colorSpace,
-                            dataLength: rgbData ? rgbData.length : 'rgbData为undefined'
-                        });
-                        
                         // 如果仍然没有数据，尝试其他方法
                         if (!rgbData) {
                             console.warn('getData()解析后仍为空，尝试直接访问data属性');
@@ -623,14 +619,6 @@ interface PatternPickerProps {
                     console.warn('rgbData为空，使用默认数据');
                 }
                 
-                // 转换RGB/RGBA数据为灰度数据
-                console.log('🔄 开始转换像素数据为灰度数据:', {
-                    pixelDataLength: rgbData!.length,
-                    components: components,
-                    expectedLength: pixelData.imageData.width * pixelData.imageData.height * components,
-                    dimensions: `${pixelData.imageData.width}x${pixelData.imageData.height}`
-                });
-                
                 const originalGrayData = convertToGrayData(
                     rgbData!, 
                     pixelData.imageData.width, 
@@ -638,39 +626,21 @@ interface PatternPickerProps {
                     components
                 );
                 
-                console.log('✅ 灰度数据转换完成:', {
-                    originalGrayDataLength: originalGrayData.length,
-                    expectedLength: pixelData.imageData.width * pixelData.imageData.height,
-                    sampleValues: Array.from(originalGrayData.slice(0, 10))
-                });
                 
                 // 直接使用原始灰度数据，变换处理由ClearHandler负责
                 patternGrayData = originalGrayData;
                 patternWidth = pixelData.imageData.width;
                 patternHeight = pixelData.imageData.height;
                 
-                console.log('✅ 原始灰度数据准备完成:', {
-                    grayDataLength: patternGrayData.length,
-                    dimensions: `${patternWidth}x${patternHeight}`,
-                    expectedLength: patternWidth * patternHeight
-                });
-                
                 // 保存原始灰度数据用于后续变换
                 selectedPatternData.originalGrayData = originalGrayData;
                 
-                console.log('图案数据处理完成:', {
-                    originalSize: `${pixelData.imageData.width}x${pixelData.imageData.height}`,
-                    transformedSize: `${patternWidth}x${patternHeight}`,
-                    components: components,
-                    scale: scale,
-                    angle: angle
-                });
                 
                 // 释放图像数据以避免内存泄漏
                 if (pixelData && pixelData.imageData && pixelData.imageData.dispose) {
                     pixelData.imageData.dispose();
                 }
-                
+                      
                 console.log('最终数据检查:', {
                     patternWidth,
                     patternHeight,
@@ -695,17 +665,6 @@ interface PatternPickerProps {
                     ],
                     { synchronousExecution: true }
                 );
-                
-                console.log('✅ 图案数据处理完成，临时文档已关闭');
-                
-                // 更新选中的图案对象，添加patternName和灰度数据
-                console.log('📝 准备更新图案状态:', {
-                    selectedPatternId: selectedPattern,
-                    patternName: patternName,
-                    hasPatternGrayData: !!patternGrayData,
-                    patternGrayDataLength: patternGrayData ? patternGrayData.length : 0,
-                    patternDimensions: `${patternWidth}x${patternHeight}`
-                });
                 
                 // 修正 colorSpace 的值
                 let finalColorSpace = "RGB"; // 默认为RGB
@@ -732,17 +691,6 @@ interface PatternPickerProps {
                                 currentAngle: angle,
                                 colorSpace: finalColorSpace // 使用修正后的 colorSpace
                             };
-                            
-                            console.log('🔄 图案状态更新:', {
-                                patternId: p.id,
-                                beforeUpdate: { hasGrayData: !!p.grayData },
-                                afterUpdate: { 
-                                    hasGrayData: !!updatedPattern.grayData, 
-                                    grayDataLength: updatedPattern.grayData?.length,
-                                    components: updatedPattern.components,
-                                    patternComponents: updatedPattern.patternComponents
-                                }
-                            });
                             
                             return updatedPattern;
                         }
@@ -776,6 +724,79 @@ interface PatternPickerProps {
             grayData[i] = gray;
         }
         return grayData;
+    };
+
+    // 生成灰度预览URL
+    const generateGrayPreviewUrl = async (pattern: Pattern): Promise<string> => {
+        if (!pattern.grayData || !pattern.width || !pattern.height) {
+            return pattern.preview; // 如果没有灰度数据，返回原始预览
+        }
+
+        try {
+            // 直接使用已存储的灰度数据，转换为RGBA格式
+            const grayDataArray = new Uint8Array(pattern.width * pattern.height * 3);
+
+            // 将单通道灰度数据转换为RGBA格式
+            for (let i = 0; i < pattern.width * pattern.height; i++) {
+                const gray = pattern.grayData[i];
+                
+                // 设置灰度值到RGB通道
+                grayDataArray[i * 3] = gray;     // R
+                grayDataArray[i * 3 + 1] = gray; // G
+                grayDataArray[i * 3 + 2] = gray; // B
+            }
+
+            // 使用Photoshop的imaging API创建图像数据
+            const options = {
+                width: pattern.width,
+                height: pattern.height,
+                chunky: true,
+                colorProfile: "sRGB IEC61966-2.1",
+                colorSpace: "RGB",
+                components: 3,
+                componentSize: 8
+            };
+            
+            const imageData = await imaging.createImageDataFromBuffer(grayDataArray, options);
+
+            // 将图像数据编码为JPEG格式的base64
+            const jpegData = await imaging.encodeImageData({"imageData": imageData, "base64": true});
+            
+            // 释放图像数据
+            imageData.dispose();
+            
+            return `data:image/jpeg;base64,${jpegData}`;
+        } catch (error) {
+            console.error('生成灰度预览失败:', error);
+            return pattern.preview;
+        }
+    };
+
+    // 获取预览URL（根据状态返回彩色或灰度）
+    const getPreviewUrl = (pattern: Pattern): string => {
+        const shouldShowGray = isClearMode || isInLayerMask || isInQuickMask || isInSingleColorChannel;
+        
+        if (!shouldShowGray) {
+            return pattern.preview;
+        }
+
+        // 检查是否已有缓存的灰度预览
+        if (grayPreviewUrls[pattern.id]) {
+            return grayPreviewUrls[pattern.id];
+        }
+
+        // 异步生成并缓存灰度预览
+        generateGrayPreviewUrl(pattern).then(grayUrl => {
+            setGrayPreviewUrls(prev => ({
+                ...prev,
+                [pattern.id]: grayUrl
+            }));
+        }).catch(error => {
+            console.error('生成灰度预览失败:', error);
+        });
+
+        // 在灰度预览生成期间返回原始预览
+        return pattern.preview;
     };
     
     // 删除图案的逻辑
@@ -1012,7 +1033,7 @@ interface PatternPickerProps {
                             onClick={(e) => handlePatternSelect(pattern.id, e)}
                         >
                             <img 
-                                src={pattern.preview} 
+                                src={getPreviewUrl(pattern)} 
                                 alt={pattern.name}
                                 onLoad={async (e) => {
                                     const img = e.currentTarget;
@@ -1048,8 +1069,7 @@ interface PatternPickerProps {
                                     display: 'block', // 移除条件显示
                                     opacity: loadedImages[pattern.id] ? 1 : 0, // 使用透明度来控制显示
                                     transition: 'opacity 0.2s',
-                                    padding: '4px',
-                                    filter: (isClearMode || isInLayerMask || isInQuickMask || isInSingleColorChannel) ? 'grayscale(100%)' : 'none'
+                                    padding: '4px'
                                 }}
                             />
                             {(!loadedImages[pattern.id] && loadedImages[pattern.id] !== true) && ( // 修改判断条件
@@ -1274,7 +1294,7 @@ interface PatternPickerProps {
                         <>
                             <img
                                 className="pattern-final-preview"
-                                src={patterns.find(p => p.id === selectedPattern)?.preview}
+                                src={patterns.find(p => p.id === selectedPattern) ? getPreviewUrl(patterns.find(p => p.id === selectedPattern)!) : ''}
                                 alt="Pattern Preview"
                                 style={{
                                     position: 'absolute',
@@ -1287,8 +1307,7 @@ interface PatternPickerProps {
                                     objectFit: 'contain',
                                     transform: `translate(-50%, -50%) translate(${previewOffset.x}px, ${previewOffset.y}px) rotate(${angle}deg)`,
                                     transformOrigin: 'center center',
-                                    imageRendering: previewZoom > 400 ? 'pixelated' : 'auto',
-                                    filter: (isClearMode || isInLayerMask || isInQuickMask || isInSingleColorChannel) ? 'grayscale(100%)' : 'none'
+                                    imageRendering: previewZoom > 400 ? 'pixelated' : 'auto'
                                 }}
                             />
                             {previewZoom > 100 && (
