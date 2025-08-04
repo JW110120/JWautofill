@@ -277,7 +277,14 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 type: gradientType,
                 angle,
                 reverse,
-                stops: stops.map(({ midpoint, colorPosition, opacityPosition, ...stop }) => stop),
+                stops: stops.map(stop => ({
+                    color: stop.color,
+                    position: stop.position,
+                    // 保存扩展属性到自定义字段中
+                    colorPosition: stop.colorPosition,
+                    opacityPosition: stop.opacityPosition,
+                    midpoint: stop.midpoint
+                })),
                 preserveTransparency
             };
             updatedPresets[selectedPreset] = updatedPreset;
