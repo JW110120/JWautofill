@@ -1,5 +1,3 @@
-/* 像素调整面板样式 */
-
 /* 面板容器 */
 .adjustment-container {
   width: 100%;
@@ -11,7 +9,7 @@
   flex-direction: column;
   justify-content: flex-start;
   align-items: center;
-  padding: 20px;
+  padding: 10px;
   box-sizing: border-box;
 }
 
@@ -30,8 +28,7 @@
 /* 分区容器 */
 .adjustment-section {
   width: 100%;
-  max-width: 220px;
-  margin-bottom: 20px;
+  margin-bottom: 10px;
 }
 
 /* 分区标题 */
@@ -39,23 +36,21 @@
   color: var(--text-color);
   font-size: 14px;
   font-weight: bold;
-  margin-bottom: 10px;
-  padding-bottom: 5px;
-  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 5px;
 }
 
 /* 按钮容器 */
 .adjustment-buttons {
   display: flex;
   flex-direction: column;
-  gap: 10px;
   width: 100%;
 }
 
 /* 按钮样式 */
 .adjustment-button {
-  width: 100%;
+  width: 100%-10px;
   height: 35px;
+  padding: 0 5px;
   background-color: var(--button-bg);
   color: var(--text-color);
   border: 1px solid var(--border-color);
@@ -82,72 +77,46 @@
 /* 滑块容器 */
 .adjustment-slider-container {
   width: 100%;
-  margin-top: 15px;
+  margin-top: 10px;
 }
 
 /* 滑块项 */
 .adjustment-slider-item {
   display: flex;
   align-items: center;
-  margin-bottom: 10px;
-  gap: 8px;
+  flex-direction: row;
+  margin-bottom: -5px;
 }
 
 /* 滑块标签 */
 .adjustment-slider-label {
   color: var(--text-color);
-  font-size: 12px;
-  min-width: 45px;
+  display: flex;
+  font-size: 13px;
+  min-width: 28px;
   cursor: pointer;
-  user-select: none;
-  transition: color 0.2s ease;
-}
-
-.adjustment-slider-label.dragging {
-  color: var(--accent-color);
-}
-
-.adjustment-slider-label.not-dragging:hover {
-  color: var(--hover-color);
+  margin-right: -7px;
 }
 
 /* 滑块输入 */
 .adjustment-slider-input {
-  flex: 1;
-  height: 20px;
-  background: var(--slider-bg);
-  outline: none;
-  border: none;
-  border-radius: 10px;
-  cursor: pointer;
-}
-
-.adjustment-slider-input::-webkit-slider-thumb {
-  appearance: none;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--slider-thumb);
-  cursor: pointer;
-  border: 2px solid var(--bg-color);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-}
-
-.adjustment-slider-input::-webkit-slider-thumb:hover {
-  background: var(--slider-thumb-hover);
+  display: flex;  
+  width: 135px;
+  cursor: ew-resize;
+  background: var(--bg-color);
+  margin-top: 15px;
 }
 
 /* 数值输入框 */
 .adjustment-number-input {
   width: 30px;
-  height: 20px;
-  background: var(--input-bg);
+  height: 25px;
   border: 1px solid var(--border-color);
   border-radius: 3px;
   color: var(--text-color);
   font-size: 11px;
   text-align: center;
-  margin-left: -10px;
+  margin-left: -5px;
   z-index: 1;
 }
 
@@ -159,34 +128,8 @@
 /* 单位标签 */
 .adjustment-unit {
   color: var(--text-color);
-  font-size: 11px;
+  font-size: 13px;
   opacity: 0.8;
-}
-
-/* 功能描述区域 */
-.adjustment-description {
-  margin-top: 20px;
-  padding: 15px;
-  background-color: var(--dark-bg-color);
-  border: 1px solid var(--border-color);
-  border-radius: 5px;
-  width: 100%;
-  max-width: 220px;
-}
-
-.adjustment-description h4 {
-  color: var(--text-color);
-  font-size: 14px;
-  margin: 0 0 10px 0;
-  font-weight: bold;
-}
-
-.adjustment-description p {
-  color: var(--text-color);
-  font-size: 12px;
-  line-height: 1.4;
-  margin: 5px 0;
-  opacity: 0.9;
 }
 
 /* 分隔线 */
@@ -198,7 +141,6 @@
 }
 
 /* 响应式调整 */
-@media (max-height: 350px) {
   .adjustment-container {
     padding: 15px;
   }
@@ -211,9 +153,3 @@
   .adjustment-buttons {
     gap: 10px;
   }
-  
-  .adjustment-description {
-    margin-top: 15px;
-    padding: 10px;
-  }
-}

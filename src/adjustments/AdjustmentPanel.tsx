@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { processBlockAverage, processPixelTransition } from './pixelProcessing';
+import { processLineEnhancement } from './lineProcessing';
+import { checkEditingState, processPixelData, applyProcessedPixels } from './pixelDataProcessor';
 import { action, app, core, imaging } from 'photoshop';
 import './adjustment.css';
 
@@ -46,81 +48,116 @@ const getSelectionData = async () => {
     const docWidthPixels = Math.round(docWidth * resolution / 72);
     const docHeightPixels = Math.round(docHeight * resolution / 72);
     
-    // 获取选区边界
-    const bounds = selectionResult[0].selection;
-    const left = Math.round(bounds.left._value);
-    const top = Math.round(bounds.top._value);
-    const right = Math.round(bounds.right._value);
-    const bottom = Math.round(bounds.bottom._value);
-    const width = right - left;
-    const height = bottom - top;
+    // 检查是否有选区
+    const hasSelection = selectionResult[0].selection !== undefined;
     
-    // 使用imaging.getSelection获取羽化选区的像素数据
-    const pixels = await imaging.getSelection({
-      documentID: app.activeDocument.id,
-      sourceBounds: {
-        left: left,
-        top: top,
-        right: right,
-        bottom: bottom
-      },
-      targetSize: {
-        width: width,
-        height: height
-      },
-    });
+    let left, top, right, bottom, width, height;
     
-    const selectionData = await pixels.imageData.getData();
-    console.log('✅ 成功获取选区边界内的像素数据，数据类型:', selectionData.constructor.name, '长度:', selectionData.length);
+    if (hasSelection) {
+      // 有选区时，获取选区边界
+      const bounds = selectionResult[0].selection;
+      left = Math.round(bounds.left._value);
+      top = Math.round(bounds.top._value);
+      right = Math.round(bounds.right._value);
+      bottom = Math.round(bounds.bottom._value);
+      width = right - left;
+      height = bottom - top;
+    } else {
+      // 没有选区时，使用整个文档作为选区
+      left = 0;
+      top = 0;
+      right = docWidthPixels;
+      bottom = docHeightPixels;
+      width = docWidthPixels;
+      height = docHeightPixels;
+    }
     
-    // 创建临时数组来存储矩形边界内的所有像素信息
-    const tempSelectionValues = new Uint8Array(width * height);
-    const tempSelectionCoefficients = new Float32Array(width * height);
-    // 创建一个新的Set来存储选区内像素（值大于0）在文档中的索引
-    const selectionDocIndices = new Set<number>();
+    let selectionData, selectionSize, selectionValues, selectionCoefficients, selectionDocIndices;
     
-    // 处理矩形边界内的所有像素，收集选区内像素的索引
-    if (selectionData.length === width * height) {
-      // 单通道数据
-      for (let i = 0; i < width * height; i++) {
-        tempSelectionValues[i] = selectionData[i];
-        tempSelectionCoefficients[i] = selectionData[i] / 255; // 计算选择系数
-        
-        // 只有当像素值大于0时，才认为它在选区内
-        if (selectionData[i] > 0) {
-          // 计算该像素在选区边界内的坐标
-          const x = i % width;
-          const y = Math.floor(i / width);
+    if (hasSelection) {
+      // 有选区时，使用imaging.getSelection获取羽化选区的像素数据
+      const pixels = await imaging.getSelection({
+        documentID: app.activeDocument.id,
+        sourceBounds: {
+          left: left,
+          top: top,
+          right: right,
+          bottom: bottom
+        },
+        targetSize: {
+          width: width,
+          height: height
+        },
+      });
+      
+      selectionData = await pixels.imageData.getData();
+      console.log('✅ 成功获取选区边界内的像素数据，数据类型:', selectionData.constructor.name, '长度:', selectionData.length);
+      
+      // 创建临时数组来存储矩形边界内的所有像素信息
+      const tempSelectionValues = new Uint8Array(width * height);
+      const tempSelectionCoefficients = new Float32Array(width * height);
+      // 创建一个新的Set来存储选区内像素（值大于0）在文档中的索引
+      selectionDocIndices = new Set<number>();
+      
+      // 处理矩形边界内的所有像素，收集选区内像素的索引
+      if (selectionData.length === width * height) {
+        // 单通道数据
+        for (let i = 0; i < width * height; i++) {
+          tempSelectionValues[i] = selectionData[i];
+          tempSelectionCoefficients[i] = selectionData[i] / 255; // 计算选择系数
           
-          // 计算该像素在整个文档中的索引
-          const docX = left + x;
-          const docY = top + y;
-          const docIndex = docY * docWidthPixels + docX;
-          
-          // 将文档索引添加到集合中
-          selectionDocIndices.add(docIndex);
+          // 只有当像素值大于0时，才认为它在选区内
+          if (selectionData[i] > 0) {
+            // 计算该像素在选区边界内的坐标
+            const x = i % width;
+            const y = Math.floor(i / width);
+            
+            // 计算该像素在整个文档中的索引
+            const docX = left + x;
+            const docY = top + y;
+            const docIndex = docY * docWidthPixels + docX;
+            
+            // 将文档索引添加到集合中
+            selectionDocIndices.add(docIndex);
+          }
         }
       }
-    }
-    
-    // 创建只包含选区内像素的数组（长度为selectionDocIndices.size）
-    const selectionSize = selectionDocIndices.size;
-    const selectionValues = new Uint8Array(selectionSize);
-    const selectionCoefficients = new Float32Array(selectionSize);
-    
-    // 将选区内像素的值和系数填入新数组
-    let fillIndex = 0;
-    for (let i = 0; i < width * height; i++) {
-      if (tempSelectionValues[i] > 0) {
-        selectionValues[fillIndex] = tempSelectionValues[i];
-        selectionCoefficients[fillIndex] = tempSelectionCoefficients[i];
-        fillIndex++;
+      
+      // 创建只包含选区内像素的数组（长度为selectionDocIndices.size）
+      selectionSize = selectionDocIndices.size;
+      selectionValues = new Uint8Array(selectionSize);
+      selectionCoefficients = new Float32Array(selectionSize);
+      
+      // 将选区内像素的值和系数填入新数组
+      let fillIndex = 0;
+      for (let i = 0; i < width * height; i++) {
+        if (tempSelectionValues[i] > 0) {
+          selectionValues[fillIndex] = tempSelectionValues[i];
+          selectionCoefficients[fillIndex] = tempSelectionCoefficients[i];
+          fillIndex++;
+        }
+      }
+      
+      // 释放ImageData内存
+      pixels.imageData.dispose();
+    } else {
+      // 没有选区时，创建全选的选区数据
+      selectionSize = docWidthPixels * docHeightPixels;
+      selectionValues = new Uint8Array(selectionSize);
+      selectionCoefficients = new Float32Array(selectionSize);
+      selectionDocIndices = new Set<number>();
+      
+      // 填充全选数据
+      for (let i = 0; i < selectionSize; i++) {
+        selectionValues[i] = 255; // 完全选中
+        selectionCoefficients[i] = 1.0; // 完全选择系数
+        selectionDocIndices.add(i);
       }
     }
+    
     console.log('✅ 选区内像素数量（selectionDocIndices.size）:', selectionDocIndices.size);
     
-    // 释放ImageData内存
-    pixels.imageData.dispose();
+
    
     return {
       left,
@@ -226,165 +263,102 @@ const AdjustmentPanel = () => {
       const { executeAsModal } = core;
       
       await executeAsModal(async () => {
-        // 获取选区边界信息
+        // 检测当前编辑状态
+        const editingState = await checkEditingState();
+        if (!editingState.isValid) {
+          return;
+        }
+        
+        const { layer, isBackgroundLayer } = editingState;
+        
+        // 获取选区边界信息（如果没有选区则默认全选整个文档）
         const selectionBounds = await getSelectionData();
         if (!selectionBounds) {
-          await core.showAlert({ message: '请先创建选区' });
+          await core.showAlert({ message: '获取文档信息失败' });
           return;
         }
         
-        // 检查当前图层是否为像素图层
-        const doc = app.activeDocument;
-        if (!doc) {
-          await core.showAlert({ message: '未找到活动文档' });
-          return;
-        }
-        
-        const layer = doc.activeLayers[0];
-        if (!layer) {
-          await core.showAlert({ message: '未找到活动图层' });
-          return;
-        }
-        if (layer.kind !== 'pixel') {
-          await core.showAlert({ message: '请选择像素图层' });
-          return;
-        }
-        
-        // 步骤1：获取图层的实际边界和像素数据
-        const layerBounds = {
-          left: layer.bounds.left,
-          top: layer.bounds.top,
-          right: layer.bounds.right,
-          bottom: layer.bounds.bottom
-        };
-        
-        const layerWidth = layerBounds.right - layerBounds.left;
-        const layerHeight = layerBounds.bottom - layerBounds.top;
-        
-        // 获取图层实际像素数据
-        const layerPixels = await imaging.getPixels({
-          documentID: app.activeDocument.id,
-          layerID: layer.id,
-          sourceBounds: layerBounds,
-          targetSize: {
-            width: layerWidth,
-            height: layerHeight
-          }
-        });
-        
-        const layerPixelData = await layerPixels.imageData.getData();
-        console.log('✅ 获取图层像素数组，尺寸:', layerWidth, 'x', layerHeight, '长度:', layerPixelData.length);
-        
-        // 创建完整文档大小的像素数组，初始化为透明
-        const fullPixelData = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight * 4);
-        
-        // 将图层像素数据填入对应位置
-        for (let y = 0; y < layerHeight; y++) {
-          for (let x = 0; x < layerWidth; x++) {
-            const layerIndex = (y * layerWidth + x) * 4;
-            const docX = layerBounds.left + x;
-            const docY = layerBounds.top + y;
-            
-            // 确保坐标在文档范围内
-            if (docX >= 0 && docX < selectionBounds.docWidth && docY >= 0 && docY < selectionBounds.docHeight) {
-              const docIndex = (docY * selectionBounds.docWidth + docX) * 4;
-              
-              fullPixelData[docIndex] = layerPixelData[layerIndex];         // R
-              fullPixelData[docIndex + 1] = layerPixelData[layerIndex + 1]; // G
-              fullPixelData[docIndex + 2] = layerPixelData[layerIndex + 2]; // B
-              fullPixelData[docIndex + 3] = layerPixelData[layerIndex + 3]; // A
-            }
-          }
-        }
-        
-        // 释放图层像素数据内存
-        layerPixels.imageData.dispose();
-        
-        console.log('✅ 创建完整文档像素数组，长度:', fullPixelData.length);
-        
-        // 步骤2：创建完整文档尺寸的选区像素数组，选区外设为透明
-        const selectionPixelData = new Uint8Array(fullPixelData.length); // 保持完整文档尺寸
-        const selectionIndices = Array.from(selectionBounds.selectionDocIndices);
-        
-        // 复制选区内的像素，选区外保持透明（默认为0）
-        for (const docIndex of selectionIndices) {
-          const sourceIndex = docIndex * 4;
-          
-          selectionPixelData[sourceIndex] = fullPixelData[sourceIndex];         // R
-          selectionPixelData[sourceIndex + 1] = fullPixelData[sourceIndex + 1]; // G
-          selectionPixelData[sourceIndex + 2] = fullPixelData[sourceIndex + 2]; // B
-          selectionPixelData[sourceIndex + 3] = fullPixelData[sourceIndex + 3]; // A
-        }
-        
-        console.log('✅ 创建完整尺寸选区像素数组，长度:', selectionPixelData.length);
+        // 使用共享的像素数据处理函数
+        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
         
         // 创建完整文档尺寸的选区掩码数组
         const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
         let maskIndex = 0;
-        for (let docIndex of selectionIndices) {
+        for (let docIndex of pixelResult.selectionIndices) {
           fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
           maskIndex++;
         }
         
         // 步骤3：用公式计算得到新数组
         const processedPixels = await processBlockAverage(
-          selectionPixelData.buffer, 
+          pixelResult.selectionPixelData.buffer, 
           fullSelectionMask.buffer, 
-          { width: selectionBounds.docWidth, height: selectionBounds.docHeight }
+          { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
+          isBackgroundLayer
         );
         
         console.log('✅ 处理像素数据完成，长度:', processedPixels.length);
         
         // 步骤4：应用处理后的像素数据
-        const newFullPixelData = new Uint8Array(fullPixelData.length);
-        newFullPixelData.set(fullPixelData); // 复制原始数据
-        
-        let coefficientIndex = 0;
-        for (const docIndex of selectionIndices) {
-          const pixelIndex = docIndex * 4;
-          const coefficient = selectionBounds.selectionCoefficients[coefficientIndex];
-          
-          // 根据选区系数混合原始颜色和处理后的颜色
-          newFullPixelData[pixelIndex] = Math.round(fullPixelData[pixelIndex] * (1 - coefficient) + processedPixels[pixelIndex] * coefficient);
-          newFullPixelData[pixelIndex + 1] = Math.round(fullPixelData[pixelIndex + 1] * (1 - coefficient) + processedPixels[pixelIndex + 1] * coefficient);
-          newFullPixelData[pixelIndex + 2] = Math.round(fullPixelData[pixelIndex + 2] * (1 - coefficient) + processedPixels[pixelIndex + 2] * coefficient);
-          newFullPixelData[pixelIndex + 3] = Math.round(fullPixelData[pixelIndex + 3] * (1 - coefficient) + processedPixels[pixelIndex + 3] * coefficient);
-          
-          coefficientIndex++;
-        }
-        
-        console.log('✅ 映射回完整像素数组完成');
-        
-        // 步骤5：把改造后的完整像素数组通过putPixels写回图层
-        const newImageData = await imaging.createImageDataFromBuffer(newFullPixelData, {
-          width: selectionBounds.docWidth,
-          height: selectionBounds.docHeight,
-          colorSpace: 'RGB',
-          pixelFormat: 'RGBA',
-          components: 4,
-          componentSize: 8
-        });
-        
-        await imaging.putPixels({
-          documentID: app.activeDocument.id,
-          layerID: layer.id,
-          imageData: newImageData,
-          targetBounds: {
-            left: 0,
-            top: 0,
-            right: selectionBounds.docWidth,
-            bottom: selectionBounds.docHeight
-          }
-        });
-        
-        // 释放内存
-        newImageData.dispose();
+        await applyProcessedPixels(processedPixels, pixelResult);
         
         console.log('✅ 分块平均处理完成');
       });
     } catch (error) {
       console.error('❌ 分块平均处理失败:', error);
       await core.showAlert({ message: '分块平均处理失败: ' + error.message });
+    }
+  };
+
+  // 线条处理功能
+  const handleLineEnhancement = async () => {
+    try {
+      const { executeAsModal } = core;
+      
+      await executeAsModal(async () => {
+        // 检测当前编辑状态
+        const editingState = await checkEditingState();
+        if (!editingState.isValid) {
+          return;
+        }
+        
+        const { layer, isBackgroundLayer } = editingState;
+        
+        // 获取选区边界信息（如果没有选区则默认全选整个文档）
+        const selectionBounds = await getSelectionData();
+        if (!selectionBounds) {
+          await core.showAlert({ message: '获取文档信息失败' });
+          return;
+        }
+        
+        // 使用共享的像素数据处理函数
+        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+        
+        // 创建完整文档尺寸的选区掩码数组
+        const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
+        let maskIndex = 0;
+        for (let docIndex of pixelResult.selectionIndices) {
+          fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
+          maskIndex++;
+        }
+        
+        // 步骤3：用线条增强算法处理像素数据
+        const processedPixels = await processLineEnhancement(
+          pixelResult.selectionPixelData.buffer, 
+          fullSelectionMask.buffer, 
+          { width: selectionBounds.docWidth, height: selectionBounds.docHeight }
+        );
+        
+        console.log('✅ 线条增强处理完成，长度:', processedPixels.length);
+        
+        // 步骤4：应用处理后的像素数据
+        await applyProcessedPixels(processedPixels, pixelResult);
+        
+        console.log('✅ 线条增强处理完成');
+      });
+    } catch (error) {
+      console.error('❌ 线条增强处理失败:', error);
+      await core.showAlert({ message: '线条增强处理失败: ' + error.message });
     }
   };
 
@@ -396,6 +370,14 @@ const AdjustmentPanel = () => {
       const { executeAsModal } = core;
       
       await executeAsModal(async () => {
+        // 检测当前编辑状态
+        const editingState = await checkEditingState();
+        if (!editingState.isValid) {
+          return;
+        }
+        
+        const { layer, isBackgroundLayer } = editingState;
+        
         // 获取选区边界信息
         const selectionBounds = await getSelectionData();
         if (!selectionBounds) {
@@ -403,153 +385,30 @@ const AdjustmentPanel = () => {
           return;
         }
         
-        // 检查当前图层是否为像素图层
-        const doc = app.activeDocument;
-        if (!doc) {
-          await core.showAlert({ message: '未找到活动文档' });
-          return;
-        }
-        
-        const layer = doc.activeLayers[0];
-        if (!layer) {
-          await core.showAlert({ message: '未找到活动图层' });
-          return;
-        }
-        if (layer.kind !== 'pixel') {
-          await core.showAlert({ message: '请选择像素图层' });
-          return;
-        }
-        
-        // 步骤1：获取图层的实际边界和像素数据
-        const layerBounds = {
-          left: layer.bounds.left,
-          top: layer.bounds.top,
-          right: layer.bounds.right,
-          bottom: layer.bounds.bottom
-        };
-        
-        const layerWidth = layerBounds.right - layerBounds.left;
-        const layerHeight = layerBounds.bottom - layerBounds.top;
-        
-        // 获取图层实际像素数据
-        const layerPixels = await imaging.getPixels({
-          documentID: app.activeDocument.id,
-          layerID: layer.id,
-          sourceBounds: layerBounds,
-          targetSize: {
-            width: layerWidth,
-            height: layerHeight
-          }
-        });
-        
-        const layerPixelData = await layerPixels.imageData.getData();
-        console.log('✅ 获取图层像素数组，尺寸:', layerWidth, 'x', layerHeight, '长度:', layerPixelData.length);
-        
-        // 创建完整文档大小的像素数组，初始化为透明
-        const fullPixelData = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight * 4);
-        
-        // 将图层像素数据填入对应位置
-        for (let y = 0; y < layerHeight; y++) {
-          for (let x = 0; x < layerWidth; x++) {
-            const layerIndex = (y * layerWidth + x) * 4;
-            const docX = layerBounds.left + x;
-            const docY = layerBounds.top + y;
-            
-            // 确保坐标在文档范围内
-            if (docX >= 0 && docX < selectionBounds.docWidth && docY >= 0 && docY < selectionBounds.docHeight) {
-              const docIndex = (docY * selectionBounds.docWidth + docX) * 4;
-              
-              fullPixelData[docIndex] = layerPixelData[layerIndex];         // R
-              fullPixelData[docIndex + 1] = layerPixelData[layerIndex + 1]; // G
-              fullPixelData[docIndex + 2] = layerPixelData[layerIndex + 2]; // B
-              fullPixelData[docIndex + 3] = layerPixelData[layerIndex + 3]; // A
-            }
-          }
-        }
-        
-        // 释放图层像素数据内存
-        layerPixels.imageData.dispose();
-        
-        console.log('✅ 创建完整文档像素数组，长度:', fullPixelData.length);
-        
-        // 步骤2：创建完整文档尺寸的选区像素数组，选区外设为透明
-        const selectionPixelData = new Uint8Array(fullPixelData.length); // 保持完整文档尺寸
-        const selectionIndices = Array.from(selectionBounds.selectionDocIndices);
-        
-        // 复制选区内的像素，选区外保持透明（默认为0）
-        for (const docIndex of selectionIndices) {
-          const sourceIndex = docIndex * 4;
-          
-          selectionPixelData[sourceIndex] = fullPixelData[sourceIndex];         // R
-          selectionPixelData[sourceIndex + 1] = fullPixelData[sourceIndex + 1]; // G
-          selectionPixelData[sourceIndex + 2] = fullPixelData[sourceIndex + 2]; // B
-          selectionPixelData[sourceIndex + 3] = fullPixelData[sourceIndex + 3]; // A
-        }
-        
-        console.log('✅ 创建完整尺寸选区像素数组，长度:', selectionPixelData.length);
+        // 使用共享的像素数据处理函数
+        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
         
         // 创建完整文档尺寸的选区掩码数组
         const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
         let maskIndex = 0;
-        for (let docIndex of selectionIndices) {
+        for (let docIndex of pixelResult.selectionIndices) {
           fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
           maskIndex++;
         }
         
         // 步骤3：用公式计算得到新数组
         const processedPixels = await processPixelTransition(
-          selectionPixelData.buffer, 
+          pixelResult.selectionPixelData.buffer, 
           fullSelectionMask.buffer, 
           { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
-          { radius, sigma }
+          { radius, sigma },
+          isBackgroundLayer
         );
         
         console.log('✅ 处理像素数据完成，长度:', processedPixels.length);
         
         // 步骤4：应用处理后的像素数据
-        const newFullPixelData = new Uint8Array(fullPixelData.length);
-        newFullPixelData.set(fullPixelData); // 复制原始数据
-        
-        let coefficientIndex = 0;
-        for (const docIndex of selectionIndices) {
-          const pixelIndex = docIndex * 4;
-          const coefficient = selectionBounds.selectionCoefficients[coefficientIndex];
-          
-          // 根据选区系数混合原始颜色和处理后的颜色
-          newFullPixelData[pixelIndex] = Math.round(fullPixelData[pixelIndex] * (1 - coefficient) + processedPixels[pixelIndex] * coefficient);
-          newFullPixelData[pixelIndex + 1] = Math.round(fullPixelData[pixelIndex + 1] * (1 - coefficient) + processedPixels[pixelIndex + 1] * coefficient);
-          newFullPixelData[pixelIndex + 2] = Math.round(fullPixelData[pixelIndex + 2] * (1 - coefficient) + processedPixels[pixelIndex + 2] * coefficient);
-          newFullPixelData[pixelIndex + 3] = Math.round(fullPixelData[pixelIndex + 3] * (1 - coefficient) + processedPixels[pixelIndex + 3] * coefficient);
-          
-          coefficientIndex++;
-        }
-        
-        console.log('✅ 映射回完整像素数组完成');
-        
-        // 步骤5：把改造后的完整像素数组通过putPixels写回图层
-            const newImageData = await imaging.createImageDataFromBuffer(newFullPixelData, {
-              width: selectionBounds.docWidth,
-              height: selectionBounds.docHeight,
-              colorSpace: 'RGB',
-              pixelFormat: 'RGBA',
-              components: 4,
-              componentSize: 8
-            });
-          
-          await imaging.putPixels({
-            documentID: app.activeDocument.id,
-            layerID: layer.id,
-            imageData: newImageData,
-            targetBounds: {
-              left: 0,
-              top: 0,
-              right: selectionBounds.docWidth,
-              bottom: selectionBounds.docHeight
-            }
-          });
-        
-        // 释放内存
-         newImageData.dispose();
+        await applyProcessedPixels(processedPixels, pixelResult);
         
         console.log('✅ 像素过渡处理完成');
       });
@@ -567,24 +426,28 @@ const AdjustmentPanel = () => {
       
       {/* 概括栏目 */}
       <div className="adjustment-section">
-        <div className="adjustment-section-title">概括</div>
+        <div className="adjustment-section-title">细节调整</div>
         <div className="adjustment-buttons">
           <button 
             className="adjustment-button"
             onClick={handleBlockAverage}
+            title="对不相连选区分别计算平均值"
           >
             分块平均
           </button>
         </div>
       </div>
+
+      <div className="adjustment-divider"></div>
       
       {/* 过渡栏目 */}
       <div className="adjustment-section">
-        <div className="adjustment-section-title">过渡</div>
+        <div className="adjustment-section-title">局部对比</div>
         <div className="adjustment-buttons">
           <button 
             className="adjustment-button"
             onClick={handlePixelTransition}
+            title="模糊选区内alpha>0的像素"
           >
             像素过渡
           </button>
@@ -663,10 +526,18 @@ const AdjustmentPanel = () => {
       
       <div className="adjustment-divider"></div>
       
-      <div className="adjustment-description">
-        <h4>功能说明</h4>
-        <p><strong>分块平均：</strong>对不相连选区分别计算平均值</p>
-        <p><strong>像素过渡：</strong>模糊选区内alpha&gt;0的像素</p>
+      {/* 线条处理栏目 */}
+      <div className="adjustment-section">
+        <div className="adjustment-section-title">线条处理</div>
+        <div className="adjustment-buttons">
+          <button 
+            className="adjustment-button"
+            onClick={handleLineEnhancement}
+            title="增强选区内像素的alpha通道，让线条更加清晰"
+          >
+            加黑线条
+          </button>
+        </div>
       </div>
     </div>
   );
