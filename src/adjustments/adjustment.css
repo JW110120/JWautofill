@@ -13,18 +13,6 @@
   box-sizing: border-box;
 }
 
-/* 标题样式 */
-.adjustment-title {
-  color: var(--text-color);
-  font-size: 18px;
-  font-weight: bold;
-  margin-bottom: 20px;
-  text-align: center;
-  border-bottom: 1px solid var(--border-color);
-  padding-bottom: 10px;
-  width: 100%;
-}
-
 /* 分区容器 */
 .adjustment-section {
   width: 100%;
@@ -34,7 +22,7 @@
 /* 分区标题 */
 .adjustment-section-title {
   color: var(--text-color);
-  font-size: 14px;
+  font-size: 16px;
   font-weight: bold;
   margin-bottom: 5px;
 }
@@ -74,10 +62,25 @@
   transform: scale(0.98);
 }
 
+/* 半宽按钮样式 */
+.adjustment-button-half {
+  width: 100px;
+  margin-right: 10px;
+}
+
+/* 滑块标签 */
+.adjustment-swtich-label {
+  color: var(--text-color);
+  display: flex;
+  font-size: 13px;
+  min-width: 28px;
+  cursor: pointer;
+  margin: 10px;
+}
+
 /* 滑块容器 */
 .adjustment-slider-container {
   width: 100%;
-  margin-top: 10px;
 }
 
 /* 滑块项 */
@@ -110,19 +113,12 @@
 /* 数值输入框 */
 .adjustment-number-input {
   width: 30px;
-  height: 25px;
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
+  height: 24px;
   color: var(--text-color);
   font-size: 11px;
   text-align: center;
   margin-left: -5px;
   z-index: 1;
-}
-
-.adjustment-number-input:focus {
-  outline: 1px solid var(--accent-color);
-  border-color: var(--accent-color);
 }
 
 /* 单位标签 */

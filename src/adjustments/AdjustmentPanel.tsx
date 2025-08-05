@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import { processBlockAverage, processPixelTransition } from './pixelProcessing';
+import { processBlockAverage } from './blockAverageProcessor';
+import { processPixelTransition } from './pixelTransitionProcessor';
 import { processLineEnhancement } from './lineProcessing';
+import { processHighFrequencyEnhancement } from './highFrequencyEnhancer';
 import { checkEditingState, processPixelData, applyProcessedPixels } from './pixelDataProcessor';
 import { action, app, core, imaging } from 'photoshop';
 import './adjustment.css';
@@ -189,6 +191,10 @@ const AdjustmentPanel = () => {
   const [dragTarget, setDragTarget] = useState<string | null>(null);
   const [dragStartX, setDragStartX] = useState(0);
   const [dragStartValue, setDragStartValue] = useState(0);
+  const [useWeightedAverage, setUseWeightedAverage] = useState(false);
+  const [weightedIntensity, setWeightedIntensity] = useState(1);
+  const [highFreqIntensity, setHighFreqIntensity] = useState(5);
+  const [highFreqRange, setHighFreqRange] = useState(3);
 
   // 拖拽处理函数
   const handleLabelMouseDown = (event: React.MouseEvent, target: string) => {
@@ -196,16 +202,46 @@ const AdjustmentPanel = () => {
     setIsDragging(true);
     setDragTarget(target);
     setDragStartX(event.clientX);
-    setDragStartValue(target === 'radius' ? radius : sigma);
+    if (target === 'radius') {
+      setDragStartValue(radius);
+    } else if (target === 'sigma') {
+      setDragStartValue(sigma);
+    } else if (target === 'weightedIntensity') {
+      setDragStartValue(weightedIntensity);
+    } else if (target === 'highFreqIntensity') {
+      setDragStartValue(highFreqIntensity);
+    } else if (target === 'highFreqRange') {
+      setDragStartValue(highFreqRange);
+    }
   };
 
   const handleMouseMove = (event: MouseEvent) => {
     if (!isDragging || !dragTarget) return;
 
     const deltaX = event.clientX - dragStartX;
-    const sensitivity = dragTarget === 'radius' ? 0.1 : 0.02;
-    const minValue = dragTarget === 'radius' ? 5 : 1;
-    const maxValue = dragTarget === 'radius' ? 20 : 5;
+    let sensitivity, minValue, maxValue;
+    
+    if (dragTarget === 'radius') {
+      sensitivity = 0.1;
+      minValue = 5;
+      maxValue = 20;
+    } else if (dragTarget === 'sigma') {
+      sensitivity = 0.02;
+      minValue = 1;
+      maxValue = 5;
+    } else if (dragTarget === 'weightedIntensity') {
+      sensitivity = 0.05;
+      minValue = 1;
+      maxValue = 10;
+    } else if (dragTarget === 'highFreqIntensity') {
+      sensitivity = 0.05;
+      minValue = 1;
+      maxValue = 10;
+    } else if (dragTarget === 'highFreqRange') {
+      sensitivity = 0.05;
+      minValue = 1;
+      maxValue = 10;
+    }
     
     const newValue = Math.max(
       minValue,
@@ -214,8 +250,14 @@ const AdjustmentPanel = () => {
 
     if (dragTarget === 'radius') {
       setRadius(Math.round(newValue));
-    } else {
+    } else if (dragTarget === 'sigma') {
       setSigma(Math.round(newValue * 2) / 2); // 保持0.5的步长
+    } else if (dragTarget === 'weightedIntensity') {
+      setWeightedIntensity(Math.round(newValue * 2) / 2); // 保持0.5的步长
+    } else if (dragTarget === 'highFreqIntensity') {
+      setHighFreqIntensity(Math.round(newValue * 2) / 2); // 保持0.5的步长
+    } else if (dragTarget === 'highFreqRange') {
+      setHighFreqRange(Math.round(newValue * 2) / 2); // 保持0.5的步长
     }
   };
 
@@ -257,6 +299,42 @@ const AdjustmentPanel = () => {
       setSigma(value);
     }
   };
+
+  // 加权强度滑块处理
+  const handleWeightedIntensityChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setWeightedIntensity(parseFloat(event.target.value));
+  };
+
+  const handleWeightedIntensityNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const value = parseFloat(event.target.value);
+    if (!isNaN(value) && value >= 1 && value <= 10) {
+      setWeightedIntensity(value);
+    }
+  };
+
+  // 高频增强强度滑块处理
+  const handleHighFreqIntensityChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setHighFreqIntensity(parseFloat(event.target.value));
+  };
+
+  const handleHighFreqIntensityNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const value = parseFloat(event.target.value);
+    if (!isNaN(value) && value >= 1 && value <= 10) {
+      setHighFreqIntensity(value);
+    }
+  };
+
+  // 高频范围滑块处理
+  const handleHighFreqRangeChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setHighFreqRange(parseFloat(event.target.value));
+  };
+
+  const handleHighFreqRangeNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const value = parseFloat(event.target.value);
+    if (!isNaN(value) && value >= 1 && value <= 10) {
+      setHighFreqRange(value);
+    }
+  };
   // 分块平均功能
   const handleBlockAverage = async () => {
     try {
@@ -294,7 +372,9 @@ const AdjustmentPanel = () => {
           pixelResult.selectionPixelData.buffer, 
           fullSelectionMask.buffer, 
           { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
-          isBackgroundLayer
+          isBackgroundLayer,
+          useWeightedAverage,
+          weightedIntensity
         );
         
         console.log('✅ 处理像素数据完成，长度:', processedPixels.length);
@@ -363,6 +443,60 @@ const AdjustmentPanel = () => {
   };
 
   
+  // 高频增强功能
+  const handleHighFrequencyEnhancement = async () => {
+    try {
+      const { executeAsModal } = core;
+      
+      await executeAsModal(async () => {
+        // 检测当前编辑状态
+        const editingState = await checkEditingState();
+        if (!editingState.isValid) {
+          return;
+        }
+        
+        const { layer, isBackgroundLayer } = editingState;
+        
+        // 获取选区边界信息
+        const selectionBounds = await getSelectionData();
+        if (!selectionBounds) {
+          await core.showAlert({ message: '请先创建选区' });
+          return;
+        }
+        
+        // 使用共享的像素数据处理函数
+        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+        
+        // 创建完整文档尺寸的选区掩码数组
+        const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
+        let maskIndex = 0;
+        for (let docIndex of pixelResult.selectionIndices) {
+          fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
+          maskIndex++;
+        }
+        
+        // 步骤3：用高频增强算法处理像素数据
+        const processedPixels = await processHighFrequencyEnhancement(
+          pixelResult.selectionPixelData.buffer, 
+          fullSelectionMask.buffer, 
+          { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
+          { intensity: highFreqIntensity, thresholdRange: highFreqRange },
+          isBackgroundLayer
+        );
+        
+        console.log('✅ 高频增强处理完成，长度:', processedPixels.length);
+        
+        // 步骤4：应用处理后的像素数据
+        await applyProcessedPixels(processedPixels, pixelResult);
+        
+        console.log('✅ 高频增强处理完成');
+      });
+    } catch (error) {
+      console.error('❌ 高频增强处理失败:', error);
+      await core.showAlert({ message: '高频增强处理失败: ' + error.message });
+    }
+  };
+
   //------------------------------------------------------------------------
   // 像素过渡功能
   const handlePixelTransition = async () => {
@@ -420,22 +554,70 @@ const AdjustmentPanel = () => {
   
   return (
     <div className="adjustment-container">
-      <h2 className="adjustment-title">
-        调整内容
-      </h2>
       
       {/* 概括栏目 */}
       <div className="adjustment-section">
-        <div className="adjustment-section-title">细节调整</div>
-        <div className="adjustment-buttons">
-          <button 
-            className="adjustment-button"
-            onClick={handleBlockAverage}
-            title="对不相连选区分别计算平均值"
-          >
-            分块平均
-          </button>
+        <div className="adjustment-section-title">分块调整</div>
+        
+        {/* 分块平均参数开关和确认按钮 */}
+        <div className="adjustment-slider-container">
+          <div className="adjustment-slider-item">
+            <button 
+              className="adjustment-button adjustment-button-half"
+              onClick={handleBlockAverage}
+              title={useWeightedAverage ? "使用加权平均算法弱化区域对比" : "对不相连选区分别计算平均值"}
+            >
+              分块平均
+
+            </button>
+            <label className="adjustment-swtich-label">加权模式</label>
+            <div style={{ display: 'flex', alignItems: 'center', marginleft: '20px' }}>
+              <sp-switch 
+                checked={useWeightedAverage}
+                onChange={(e) => setUseWeightedAverage(e.target.checked)}
+              />
+            </div>
+          </div>
         </div>
+        
+        {/* 加权强度滑块 - 仅在加权模式开启时显示 */}
+        {useWeightedAverage && (
+          <div className="adjustment-slider-container">
+            <div className="adjustment-slider-item">
+              <label
+                className={`adjustment-slider-label ${
+                  isDragging && dragTarget === 'weightedIntensity' 
+                  ? 'dragging' 
+                  : 'not-dragging'
+                }`}
+                onMouseDown={(e) => handleLabelMouseDown(e, 'weightedIntensity')}
+              >
+                强度
+              </label>
+              <input
+                type="range"
+                min="1"
+                max="10"
+                step="0.5"
+                value={weightedIntensity}
+                onChange={handleWeightedIntensityChange}
+                className="adjustment-slider-input"
+              />
+              <div style={{ display: 'flex', alignItems: 'center'}}>
+                <input
+                  type="number"
+                  min="1"
+                  max="10"
+                  step="0.5"
+                  value={weightedIntensity}
+                  onChange={handleWeightedIntensityNumberChange}
+                  className="adjustment-number-input"
+                />
+                <span className="adjustment-unit">级</span>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="adjustment-divider"></div>
@@ -445,7 +627,7 @@ const AdjustmentPanel = () => {
         <div className="adjustment-section-title">局部对比</div>
         <div className="adjustment-buttons">
           <button 
-            className="adjustment-button"
+            className="adjustment-button adjustment-button-half"
             onClick={handlePixelTransition}
             title="模糊选区内alpha>0的像素"
           >
@@ -519,6 +701,87 @@ const AdjustmentPanel = () => {
                 className="adjustment-number-input"
               />
               <span className="adjustment-unit">px</span>
+            </div>
+          </div>
+        </div>
+
+        <button 
+            className="adjustment-button adjustment-button-half"
+            onClick={handleHighFrequencyEnhancement}
+            title="增强选区内高频信息，如头发等细节"
+          >
+            高频增强
+        </button>
+        {/* 高频增强强度滑块 */}
+        <div className="adjustment-slider-container">
+          <div className="adjustment-slider-item">
+            <label
+              className={`adjustment-slider-label ${
+                isDragging && dragTarget === 'highFreqIntensity' 
+                ? 'dragging' 
+                : 'not-dragging'
+              }`}
+              onMouseDown={(e) => handleLabelMouseDown(e, 'highFreqIntensity')}
+            >
+              强度
+            </label>
+            <input
+              type="range"
+              min="1"
+              max="10"
+              step="0.5"
+              value={highFreqIntensity}
+              onChange={handleHighFreqIntensityChange}
+              className="adjustment-slider-input"
+            />
+            <div style={{ display: 'flex', alignItems: 'center'}}>
+              <input
+                type="number"
+                min="1"
+                max="10"
+                step="0.5"
+                value={highFreqIntensity}
+                onChange={handleHighFreqIntensityNumberChange}
+                className="adjustment-number-input"
+              />
+              <span className="adjustment-unit">级</span>
+            </div>
+          </div>
+        </div>
+        
+        {/* 高频范围滑块 */}
+        <div className="adjustment-slider-container">
+          <div className="adjustment-slider-item">
+            <label
+              className={`adjustment-slider-label ${
+                isDragging && dragTarget === 'highFreqRange' 
+                ? 'dragging' 
+                : 'not-dragging'
+              }`}
+              onMouseDown={(e) => handleLabelMouseDown(e, 'highFreqRange')}
+            >
+              范围
+            </label>
+            <input
+              type="range"
+              min="1"
+              max="10"
+              step="0.5"
+              value={highFreqRange}
+              onChange={handleHighFreqRangeChange}
+              className="adjustment-slider-input"
+            />
+            <div style={{ display: 'flex', alignItems: 'center'}}>
+              <input
+                type="number"
+                min="1"
+                max="10"
+                step="0.5"
+                value={highFreqRange}
+                onChange={handleHighFreqRangeNumberChange}
+                className="adjustment-number-input"
+              />
+              <span className="adjustment-unit">级</span>
             </div>
           </div>
         </div>

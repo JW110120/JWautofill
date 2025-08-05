@@ -74,7 +74,19 @@ class App extends React.Component<AppProps, AppState> {
         this.selectionChangeListener = (eventName, descriptor) => {
             console.log('🔍 接收到事件名称:', eventName);
             console.log('🔍 事件描述符:', descriptor);
-            this.handleSelectionChange(descriptor);
+            
+            // 检查是否是选区相关的set事件
+            if (descriptor && descriptor._target && Array.isArray(descriptor._target)) {
+                const isSelectionEvent = descriptor._target.some(target => 
+                    target._ref === 'channel' && target._property === 'selection'
+                );
+                
+                if (isSelectionEvent) {
+                    this.handleSelectionChange(descriptor);
+                } else {
+                    console.log('🔍 非选区设置事件，跳过处理');
+                }
+            }
         };
         await action.addNotificationListener(['set'], this.selectionChangeListener);
         document.addEventListener('mousemove', this.handleMouseMove);
