@@ -29,6 +29,7 @@ class App extends React.Component<AppProps, AppState> {
     private isInLayerMask = false;
     private isInQuickMask = false;
     private isInSingleColorChannel = false;
+    private selectionChangeListener: any = null;
 
     constructor(props: AppProps) {
         super(props);
@@ -65,16 +66,19 @@ class App extends React.Component<AppProps, AppState> {
         this.handleSelectionSmoothChange = this.handleSelectionSmoothChange.bind(this);
         this.handleSelectionContrastChange = this.handleSelectionContrastChange.bind(this);
         this.handleSelectionExpandChange = this.handleSelectionExpandChange.bind(this);
-        this.handleKeyDown = this.handleKeyDown.bind(this);
         this.handleNotification = this.handleNotification.bind(this);
  
     }
 
     async componentDidMount() {
-        await action.addNotificationListener(['set'], this.handleSelectionChange);
+        this.selectionChangeListener = (eventName, descriptor) => {
+            console.log('🔍 接收到事件名称:', eventName);
+            console.log('🔍 事件描述符:', descriptor);
+            this.handleSelectionChange(descriptor);
+        };
+        await action.addNotificationListener(['set'], this.selectionChangeListener);
         document.addEventListener('mousemove', this.handleMouseMove);
         document.addEventListener('mouseup', this.handleMouseUp);
-        document.addEventListener('keydown', this.handleKeyDown);
         
         // 初始化状态检测
         await this.checkMaskModes();
@@ -105,11 +109,12 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     componentWillUnmount() {
-        action.removeNotificationListener(['set'], this.handleSelectionChange);
+        if (this.selectionChangeListener) {
+            action.removeNotificationListener(['set'], this.selectionChangeListener);
+        }
         action.removeNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], this.handleNotification);
         document.removeEventListener('mousemove', this.handleMouseMove);
         document.removeEventListener('mouseup', this.handleMouseUp);
-        document.removeEventListener('keydown', this.handleKeyDown);
         // 清理CSS类
         document.body.classList.remove('secondary-panel-open');
     }
@@ -120,14 +125,6 @@ class App extends React.Component<AppProps, AppState> {
         }));
     }
 
-    // 键盘事件处理函数
-    handleKeyDown(event: KeyboardEvent) {
-        // 检查是否按下了Ctrl+Alt+K（Windows）或Cmd+Alt+K（Mac）
-        if ((event.ctrlKey || event.metaKey) && event.altKey && event.key === 'k') {
-            event.preventDefault(); // 阻止默认行为
-            this.handleButtonClick(); // 切换总开关状态
-        }
-    }
 
     // 新增方法
     toggleSelectionOptions() {
@@ -259,8 +256,14 @@ class App extends React.Component<AppProps, AppState> {
         this.setState({ isStrokeSettingOpen: false });
     }
 
-    async handleSelectionChange() {
+    async handleSelectionChange(event?: any) {
         if (!this.state.isEnabled || this.isListenerPaused) return;
+        // 检查事件中是否包含feather项，如果包含则直接返回
+        if (event && event.feather) {
+            console.log('🔍 检测到feather事件，跳过处理:', event);
+            return;
+        }    
+        console.log('🔍 没有检测到feather，继续处理');
 
         try {
             const doc = app.activeDocument;
