@@ -1302,7 +1302,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         const rgbaMatch = stop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
                         const alpha = rgbaMatch ? parseFloat(rgbaMatch[4]) : 1;
                         const grayValue = Math.round(255 * alpha);
-                        const displayColor = `rgb(${255 - grayValue}, ${255 - grayValue}, ${255 - grayValue})`;
+                        const displayColor = `rgb(${grayValue}, ${grayValue}, ${grayValue})`; // 修改：纯白代表完全不透明，纯黑代表完全透明
                         
                         return (
                             <div
