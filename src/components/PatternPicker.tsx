@@ -143,7 +143,6 @@ interface PatternPickerProps {
     // 新增各种与预览交互时的逻辑。
     // 处理预览缩放
     const handlePreviewZoomChange = (e: any) => {
-            console.log('Zoom change event:', e); // 添加调试日志
             let newZoom;
             
             // 尝试多种方式获取值
@@ -158,12 +157,9 @@ interface PatternPickerProps {
                 newZoom = Number(e);
             }
             
-            console.log('New zoom value:', newZoom); // 添加调试日志
-            
             if (newZoom && zoomLevels.includes(newZoom)) {
                 setPreviewZoom(newZoom);
                 setPreviewOffset({x: 0, y: 0});
-                console.log('Zoom set to:', newZoom); // 添加调试日志
             }
     };
     
@@ -364,7 +360,6 @@ interface PatternPickerProps {
             
             const newPatterns = await Promise.all(
                 fileArray.map(async file => {
-                    console.log('开始处理文件:', file.name);
                     const pattern = await processFile(file);
                     if (pattern) {
                     }
@@ -640,14 +635,6 @@ interface PatternPickerProps {
                 if (pixelData && pixelData.imageData && pixelData.imageData.dispose) {
                     pixelData.imageData.dispose();
                 }
-                      
-                console.log('最终数据检查:', {
-                    patternWidth,
-                    patternHeight,
-                    patternGrayDataLength: patternGrayData ? patternGrayData.length : 0,
-                    rgbDataLength: rgbData ? rgbData.length : 0,
-                    components: components
-                });
                 
                 // 关闭临时文档（快速且静默）
                 await action.batchPlay(
@@ -851,12 +838,6 @@ interface PatternPickerProps {
                 }
                 return p;
             });
-        });
-        
-        console.log('图案参数更新完成:', {
-            patternId,
-            scale: newScale,
-            angle: newAngle
         });
     };
     

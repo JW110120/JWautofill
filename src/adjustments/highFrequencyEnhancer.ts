@@ -195,13 +195,10 @@ export async function processHighFrequencyEnhancement(
             result[centerIdx + 3] = pixels[centerIdx + 3];
           }
           
-          console.log(`高频增强像素 (${x},${y}): 强度=${currentIntensity.toFixed(2)}, 增强系数=${localEnhancement.toFixed(3)}, 方差=${variance.toFixed(2)}`);
         }
       }
     }
   }
-  
-  console.log(`高频增强完成，阈值=${adaptiveThreshold.toFixed(2)}, 最大强度=${maxIntensity.toFixed(2)}`);
   
   return result;
 }

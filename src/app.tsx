@@ -72,9 +72,6 @@ class App extends React.Component<AppProps, AppState> {
 
     async componentDidMount() {
         this.selectionChangeListener = (eventName, descriptor) => {
-            console.log('🔍 接收到事件名称:', eventName);
-            console.log('🔍 事件描述符:', descriptor);
-            
             // 检查是否是选区相关的set事件
             if (descriptor && descriptor._target && Array.isArray(descriptor._target)) {
                 const isSelectionEvent = descriptor._target.some(target => 
@@ -272,10 +269,8 @@ class App extends React.Component<AppProps, AppState> {
         if (!this.state.isEnabled || this.isListenerPaused) return;
         // 检查事件中是否包含feather项，如果包含则直接返回
         if (event && event.feather) {
-            console.log('🔍 检测到feather事件，跳过处理:', event);
             return;
         }    
-        console.log('🔍 没有检测到feather，继续处理');
 
         try {
             const doc = app.activeDocument;
@@ -321,7 +316,7 @@ class App extends React.Component<AppProps, AppState> {
                 if (this.state.deselectAfterFill) {
                     await this.deselectSelection();
                 }
-            }, { commandName: '更新历史源&羽化选区&处理选区' });
+            }, { commandName: '正在处理选区中......' });
 
             // 恢复监听
             this.isListenerPaused = false;
@@ -421,7 +416,7 @@ class App extends React.Component<AppProps, AppState> {
      toggleCreateNewLayer() {
         this.setState(prevState => ({
             createNewLayer: !prevState.createNewLayer,
-            clearMode: prevState.createNewLayer ? prevState.clearMode : false // 如果开启新建图层模式，关闭清除模式
+            clearMode: prevState.createNewLayer ? prevState.clearMode : false 
         }));
     }
 
@@ -997,7 +992,6 @@ class App extends React.Component<AppProps, AppState> {
                                                     brightness: foregroundColor.hsb.brightness
                                                 };
                                             });
-                                            console.log('✅ 已保存前景色');
 
                                             // 2. 显示颜色选择器
                                             const result = await require("photoshop").core.executeAsModal(async (executionControl, descriptor) => {
@@ -1048,7 +1042,6 @@ class App extends React.Component<AppProps, AppState> {
                                                         { synchronousExecution: true }
                                                     );
                                                 }, { commandName: "恢复前景色" });
-                                                console.log('✅ 已恢复前景色');
                                             }
                                         } catch (error) {
                                             console.error('颜色选择器错误:', error);

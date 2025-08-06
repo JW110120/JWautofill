@@ -118,7 +118,6 @@ export class ClearHandler {
                 saturation: foregroundColor.hsb.saturation,
                 brightness: foregroundColor.hsb.brightness
             };
-            console.log('✅ 已保存前景色');
             
             try {
                 // 设置前景色为抖动计算的结果
@@ -187,7 +186,6 @@ export class ClearHandler {
                         dialogOptions: "dontDisplay"
                     }
                 }], { synchronousExecution: true });
-                console.log('✅ 已恢复前景色');
             }
             
         } catch (error) {
@@ -217,8 +215,6 @@ export class ClearHandler {
             
             // 第四步：用putSelection修改选区并删除内容
             await this.applySelectionAndDelete(finalGrayData, selectionBounds);
-            
-            console.log('✅ 图案清除模式执行完成');
         } catch (error) {
             console.error('❌ 图案清除失败:', error);
             throw error;
@@ -246,8 +242,6 @@ export class ClearHandler {
             
             // 第四步：用putSelection修改选区并删除内容
             await this.applySelectionAndDelete(finalGrayData, selectionBounds);
-            
-            console.log('✅ 渐变清除模式执行完成');
         } catch (error) {
             console.error('❌ 渐变清除失败:', error);
             throw error;
@@ -470,8 +464,6 @@ export class ClearHandler {
                 finalData[i] = Math.floor(gradientGrayData[i] * effectiveOpacityFactor);
             }
         }
-        
-        console.log('✅ 渐变清除模式灰度值计算完成');
         return finalData;
     }
     
@@ -557,8 +549,6 @@ export class ClearHandler {
                     }
                 }
             ], { synchronousExecution: true });
-            
-            console.log('✅ 选区应用和删除操作完成');
         } catch (error) {
             console.error('❌ 应用选区并删除内容失败:', error);
             throw error;
@@ -618,7 +608,6 @@ export class ClearHandler {
         // 分析直方图找出数量为1的色阶值
         const histogram = result[0].histogram;
         const pixelValue = histogram.findIndex(count => count === 1);
-        console.log(`坐标(${x}, ${y})的像素值：`, pixelValue);
 
         return pixelValue;
     }
@@ -634,11 +623,6 @@ export class ClearHandler {
             let quickMaskForegroundColor = null;
             if (state.fillMode === 'foreground') {
                 quickMaskForegroundColor = app.foregroundColor;
-                console.log('🎨 获取快速蒙版状态下的前景色:', {
-                    hue: quickMaskForegroundColor.hsb.hue,
-                    saturation: quickMaskForegroundColor.hsb.saturation,
-                    brightness: quickMaskForegroundColor.hsb.brightness
-                });
             } else {
                 console.log('🔄 非纯色填充模式，跳过前景色获取，当前模式:', state.fillMode);
             }
@@ -780,7 +764,6 @@ export class ClearHandler {
         });
         
         const selectionData = await pixels.imageData.getData();
-        console.log('✅ 成功获取选区边界内的像素数据，数据类型:', selectionData.constructor.name, '长度:', selectionData.length);
         
         // 创建临时数组来存储矩形边界内的所有像素信息
         const tempSelectionValues = new Uint8Array(width * height);
@@ -1174,7 +1157,6 @@ export class ClearHandler {
             });
             
             const quickMaskData = await pixels.imageData.getData();
-            console.log('✅ 成功获取快速蒙版像素数据，数据类型:', quickMaskData.constructor.name, '长度:', quickMaskData.length);
 
             // 释放ImageData内存
             pixels.imageData.dispose();
@@ -1199,8 +1181,6 @@ export class ClearHandler {
                 const sourceIndex = nonZeroIndices[i];
                 maskValue[sourceIndex] = quickMaskPixels[sourceIndex];
             }
-            
-            console.log('快速蒙版清除非零像素数量:', nonZeroIndices.length);
             
             return {
                 quickMaskPixels: maskValue,
@@ -2224,7 +2204,7 @@ export class ClearHandler {
         originalBottomRight: number = 0,
         state?: any
     ): Promise<Uint8Array> {
-        console.log('🔍 开始混合计算（优化版本）:', {
+        console.log('🔍 开始混合计算:', {
             maskDataLength: maskData.length,
             fillDataLength: fillData.length,
             isSelectedAreas: isSelectedAreas,
@@ -2497,8 +2477,6 @@ export class ClearHandler {
                 console.log(`🌟 应用羽化效果的像素数量: ${featheredCount}`);
             }
         } else {
-            // 回退到原有逻辑
-            console.log('✅ 混合计算完成，最终数据长度:', finalData.length);
             return finalData;
         }
         
@@ -2588,8 +2566,6 @@ export class ClearHandler {
             // 根据state参数和bounds.selectionValues判断是否需要恢复选区
             if (state && state.deselectAfterFill === false && bounds && bounds.selectionValues && bounds.selectionValues.length > 0) {
                 try {
-                    console.log('🔄 恢复选区状态');
-                    
                     // 将压缩的selectionValues数组补全为整个文档大小的数组
                     const fullSelectionData = new Uint8Array(finalDocWidth * finalDocHeight);
                     
@@ -2627,8 +2603,6 @@ export class ClearHandler {
                     
                     // 释放ImageData内存
                     selectionImageData.dispose();
-                    
-                    console.log('✅ 选区恢复完成');
                 } catch (selectionError) {
                     console.error('❌ 恢复选区失败:', selectionError);
                 }
@@ -2683,8 +2657,6 @@ export class ClearHandler {
             
             // 更新图层蒙版
             await this.updateLayerMask(finalGrayData, bounds, currentLayerId, state);
-            
-            console.log('✅ 图层蒙版纯色清除完成');
         } catch (error) {
             console.error('❌ 图层蒙版纯色清除失败:', error);
         }
@@ -2742,8 +2714,6 @@ export class ClearHandler {
             
             // 更新图层蒙版
             await this.updateLayerMask(finalGrayData, bounds, currentLayerId, state);
-            
-            console.log('✅ 图层蒙版图案清除完成');
         } catch (error) {
             console.error('❌ 图层蒙版图案清除失败:', error);
         }
@@ -2801,8 +2771,6 @@ export class ClearHandler {
             
             // 更新图层蒙版
             await this.updateLayerMask(finalGrayData, bounds, currentLayerId, state);
-            
-            console.log('✅ 图层蒙版渐变清除完成');
         } catch (error) {
             console.error('❌ 图层蒙版渐变清除失败:', error);
         }
@@ -3294,7 +3262,6 @@ export class ClearHandler {
     // 更新图层蒙版
     static async updateLayerMask(grayData: Uint8Array, bounds: any, layerId: number, state?: any) {
         try {
-            console.log('🔄 更新图层蒙版');
             
             let documentColorProfile = "Dot Gain 15%";
             
@@ -3302,11 +3269,6 @@ export class ClearHandler {
             const finalDocHeight = Math.round(bounds.docHeight);
             const expectedSize = finalDocWidth * finalDocHeight;
             
-            console.log('📏 图层蒙版数据验证:');
-            console.log('  - 文档宽度:', finalDocWidth);
-            console.log('  - 文档高度:', finalDocHeight);
-            console.log('  - 期望数据大小:', expectedSize);
-            console.log('  - 实际数据大小:', grayData.length);
             
             // 验证数据大小
             if (grayData.length !== expectedSize) {
@@ -3348,7 +3310,6 @@ export class ClearHandler {
             // 根据state参数和bounds.selectionValues判断是否需要恢复选区
              if (state && state.deselectAfterFill === false && bounds && bounds.selectionValues && bounds.selectionValues.length > 0) {
                 try {
-                    console.log('🔄 恢复选区状态');
                     
                     // 将压缩的selectionValues数组补全为整个文档大小的数组
                     const fullSelectionData = new Uint8Array(finalDocWidth * finalDocHeight);
@@ -3388,13 +3349,11 @@ export class ClearHandler {
                     // 释放ImageData内存
                     selectionImageData.dispose();
                     
-                    console.log('✅ 选区恢复完成');
                 } catch (selectionError) {
                     console.error('❌ 恢复选区失败:', selectionError);
                 }
             }
             
-            console.log('✅ 图层蒙版更新完成');
         } catch (error) {
             console.error('❌ 更新图层蒙版失败:', error);
         }

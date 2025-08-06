@@ -150,8 +150,6 @@ export async function processBlockAverage(layerPixelData: ArrayBuffer, selection
             }
           }
           
-          console.log(`加权区域 ${regionCount}: 像素数=${component.length}, 颜色簇数=${colorClusters.length}`);
-          
           // 按颜色频率计算加权平均
           let weightedR = 0, weightedG = 0, weightedB = 0, weightedA = 0;
           let totalWeight = 0;
@@ -164,7 +162,6 @@ export async function processBlockAverage(layerPixelData: ArrayBuffer, selection
             weightedA += cluster.a * weight;
             totalWeight += weight;
             
-            console.log(`  颜色簇: RGB(${cluster.r},${cluster.g},${cluster.b}) 权重=${cluster.count}`);
           }
           
           const avgR = totalWeight > 0 ? Math.round(weightedR / totalWeight) : 0;
@@ -172,7 +169,6 @@ export async function processBlockAverage(layerPixelData: ArrayBuffer, selection
           const avgB = totalWeight > 0 ? Math.round(weightedB / totalWeight) : 0;
           const avgA = totalWeight > 0 ? Math.round(weightedA / totalWeight) : 0;
           
-          console.log(`  最终加权平均: RGB(${avgR},${avgG},${avgB})`);
           
           // 应用弱化对比的混合算法
           for (const idx of component) {
@@ -220,7 +216,6 @@ export async function processBlockAverage(layerPixelData: ArrayBuffer, selection
           const avgB = Math.round(totalB / component.length);
           const avgA = Math.round(totalA / component.length);
           
-          console.log(`矩形区域 ${regionCount}: 像素数=${component.length}, 平均颜色=RGB(${avgR},${avgG},${avgB}), 起始位置=(${component[0] % bounds.width}, ${Math.floor(component[0] / bounds.width)})`);
           
           // 将该区域的平均颜色应用到区域内的所有像素
           for (const idx of component) {

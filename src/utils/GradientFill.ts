@@ -200,7 +200,6 @@ export class GradientFill {
                 }
             }], { synchronousExecution: true });
 
-            console.log("✅ 渐变填充完成");
         } catch (error) {
             console.error("❌ 渐变填充失败:", error);
             throw error;
@@ -338,8 +337,6 @@ export class GradientFill {
             
             // 5. 将最终数据写回快速蒙版
             await this.updateQuickMaskChannel(finalData, bounds, state);
-            
-            console.log("✅ 快速蒙版渐变填充完成");
         } catch (error) {
             console.error("❌ 快速蒙版渐变填充失败:", error);
             throw error;
@@ -387,8 +384,6 @@ export class GradientFill {
             
             // 5. 将最终数据写回图层蒙版
             await this.updateLayerMask(finalData, bounds, currentLayerId, maskData, state);
-            
-            console.log("✅ 图层蒙版渐变填充完成");
         } catch (error) {
             console.error("❌ 图层蒙版渐变填充失败:", error);
             throw error;

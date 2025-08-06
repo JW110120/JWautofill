@@ -146,7 +146,6 @@ export const processPixelData = async (selectionBounds: SelectionBounds, layer: 
       }
     }
     
-    console.log('✅ 背景图层像素数据格式:', bytesPerPixel === 3 ? 'RGB' : 'RGBA', '每像素字节数:', bytesPerPixel);
   } else {
     // 普通图层：按图层边界填入像素数据
     for (let y = 0; y < layerHeight; y++) {
@@ -171,8 +170,6 @@ export const processPixelData = async (selectionBounds: SelectionBounds, layer: 
   // 释放图层像素数据内存
   layerPixels.imageData.dispose();
   
-  console.log('✅ 创建完整文档像素数组，长度:', fullPixelData.length);
-  
   // 步骤2：创建完整文档尺寸的选区像素数组，选区外根据图层类型设置
   const selectionPixelData = new Uint8Array(fullPixelData.length); // 保持完整文档尺寸
   const selectionIndices = Array.from(selectionBounds.selectionDocIndices);
@@ -196,8 +193,6 @@ export const processPixelData = async (selectionBounds: SelectionBounds, layer: 
       selectionPixelData[sourceIndex + 3] = fullPixelData[sourceIndex + 3]; // A
     }
   }
-  
-  console.log('✅ 创建完整尺寸选区像素数组，长度:', selectionPixelData.length);
   
   return {
     fullPixelData,

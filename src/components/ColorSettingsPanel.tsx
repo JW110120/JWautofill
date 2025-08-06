@@ -119,11 +119,6 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
                     setInternalQuickMaskMode(layerInfo.isInQuickMask);
                     setIsInLayerMask(layerInfo.isInLayerMask);
                     setIsInSingleColorChannel(layerInfo.isInSingleColorChannel);
-                    console.log('获取到的图层信息:', {
-                        快速蒙版: layerInfo.isInQuickMask,
-                        图层蒙版: layerInfo.isInLayerMask,
-                        单通道: layerInfo.isInSingleColorChannel
-                    });
                 } else {
                     console.log('无法获取图层信息');
                     setInternalQuickMaskMode(propIsQuickMaskMode);

@@ -94,7 +94,6 @@ const getSelectionData = async () => {
       });
       
       selectionData = await pixels.imageData.getData();
-      console.log('✅ 成功获取选区边界内的像素数据，数据类型:', selectionData.constructor.name, '长度:', selectionData.length);
       
       // 创建临时数组来存储矩形边界内的所有像素信息
       const tempSelectionValues = new Uint8Array(width * height);
@@ -463,12 +462,8 @@ const AdjustmentPanel = () => {
           weightedIntensity
         );
         
-        console.log('✅ 处理像素数据完成，长度:', processedPixels.length);
-        
         // 步骤4：应用处理后的像素数据
         await applyProcessedPixels(processedPixels, pixelResult);
-        
-        console.log('✅ 分块平均处理完成');
       });
     } catch (error) {
       console.error('❌ 分块平均处理失败:', error);

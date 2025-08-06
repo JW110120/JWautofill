@@ -100,16 +100,10 @@ export class LayerInfoHandler {
                 const maskChannelName = maskInfo.channelName;
                 const targetChannelName = targetChannelInfo.channelName;
                 
-                console.log("🔍 通道名称比较:", {
-                    maskChannelName: maskChannelName,
-                    targetChannelName: targetChannelName
-                });
-                
                 if (maskChannelName && targetChannelName && maskChannelName === targetChannelName) {
                     console.log("✅ 正在编辑图层蒙版");
                     return true;
                 } else {
-                    console.log("❌ 未在编辑图层蒙版。");
                     return false;
                 }
             }
@@ -152,8 +146,7 @@ export class LayerInfoHandler {
                 // 通常这些通道的名称为 "红"、"绿"、"蓝" 或 "Red"、"Green"、"Blue"
                 const singleColorChannels = ["红", "绿", "蓝", "Red", "Green", "Blue", "R", "G", "B"];
                 const isInSingleColorChannel = singleColorChannels.includes(channelName);
-                
-                console.log("🔍 是否在单个颜色通道:", isInSingleColorChannel);
+
                 return isInSingleColorChannel;
             }
             

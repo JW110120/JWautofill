@@ -438,21 +438,12 @@ export async function processSmartEdgeSmooth(
   const selectionMask = new Uint8Array(selectionMaskBuffer);
   const { width, height } = dimensions;
   
-  console.log('📏 智能线条拉直处理开始:', {
-    像素数据长度: pixelData.length,
-    选区掩码长度: selectionMask.length,
-    文档尺寸: `${width}x${height}`,
-    处理参数: params,
-    是否背景图层: isBackgroundLayer,
-    算法特性: '方向检测 + 线性插值拉直锯齿线条'
-  });
   
   // 检查选区掩码中的非零值数量
   let selectionPixelCount = 0;
   for (let i = 0; i < selectionMask.length; i++) {
     if (selectionMask[i] > 0) selectionPixelCount++;
   }
-  console.log('📊 选区内像素数量:', selectionPixelCount);
   
   // 检查像素数据是否全为0（这可能是问题所在）
   let nonZeroPixelCount = 0;
@@ -461,7 +452,6 @@ export async function processSmartEdgeSmooth(
       nonZeroPixelCount++;
     }
   }
-  console.log('📊 非零像素数量:', nonZeroPixelCount, '总像素数量:', pixelData.length / 4);
   
   // 创建输出数组
   const outputData = new Uint8Array(pixelData.length);
@@ -488,7 +478,6 @@ export async function processSmartEdgeSmooth(
   console.log(`✅ 识别到 ${edgeCount} 个边缘像素`);
   
   // 第二步：对边缘像素进行平滑处理
-  console.log('🎨 对边缘像素进行平滑处理...');
   let processedCount = 0;
   let debugCount = 0;
   
@@ -537,18 +526,6 @@ export async function processSmartEdgeSmooth(
         const blendedG = Math.round(originalG * (1 - blendFactor) + smoothG * blendFactor);
         const blendedB = Math.round(originalB * (1 - blendFactor) + smoothB * blendFactor);
         const blendedA = Math.round(originalA * (1 - blendFactor) + smoothA * blendFactor);
-        
-        // 调试信息：打印前5个像素的处理结果
-        if (debugCount < 5) {
-          console.log(`📏 线条拉直 (${x}, ${y}):`, {
-            原始: [originalR, originalG, originalB, originalA],
-            拉直后: [smoothR, smoothG, smoothB, smoothA],
-            最终混合: [blendedR, blendedG, blendedB, blendedA],
-            混合强度: blendFactor,
-            颜色变化: Math.abs(originalR - blendedR) + Math.abs(originalG - blendedG) + Math.abs(originalB - blendedB)
-          });
-          debugCount++;
-        }
         
         outputData[pixelIndex] = Math.max(0, Math.min(255, blendedR));
         outputData[pixelIndex + 1] = Math.max(0, Math.min(255, blendedG));
