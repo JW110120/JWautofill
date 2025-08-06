@@ -1579,7 +1579,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                         handleStopChange(selectedStopIndex, newColor);
                                     }
                                 } catch (error) {
-                                    console.error('Error showing color picker:', error);
+                                    console.error('显示颜色选择器时出错:', error);
                                 }
                             }}
                         />
