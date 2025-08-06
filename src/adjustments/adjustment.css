@@ -16,7 +16,11 @@
 /* 分区容器 */
 .adjustment-section {
   width: 100%;
+  padding: 8px 13px;
   margin-bottom: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+
 }
 
 /* 分区标题 */
@@ -24,21 +28,22 @@
   color: var(--text-color);
   font-size: 16px;
   font-weight: bold;
-  margin-bottom: 5px;
 }
 
-/* 按钮容器 */
-.adjustment-buttons {
+/* 双按钮容器 */
+.adjustment-double-buttons {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
   width: 100%;
 }
 
 /* 按钮样式 */
 .adjustment-button {
-  width: 100%-10px;
-  height: 35px;
-  padding: 0 5px;
+  height: 30px;
+  width: 80px;
+  margin: 0 0 3px -2px;
   background-color: var(--button-bg);
   color: var(--text-color);
   border: 1px solid var(--border-color);
@@ -62,33 +67,38 @@
   transform: scale(0.98);
 }
 
-/* 半宽按钮样式 */
-.adjustment-button-half {
-  width: 100px;
-  margin-right: 10px;
+.adjustment-swtich-container {
+  display: flex;
+  right: 0;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  width: 85px;
+  margin-bottom: 5px;
 }
 
-/* 滑块标签 */
+/* 开关标签 */
 .adjustment-swtich-label {
   color: var(--text-color);
   display: flex;
   font-size: 13px;
   min-width: 28px;
   cursor: pointer;
-  margin: 10px;
 }
 
 /* 滑块容器 */
 .adjustment-slider-container {
   width: 100%;
+  margin-bottom: 3px;
 }
 
 /* 滑块项 */
 .adjustment-slider-item {
+  width: 100%;
   display: flex;
   align-items: center;
   flex-direction: row;
-  margin-bottom: -5px;
+  justify-content: space-between;
 }
 
 /* 滑块标签 */
@@ -98,16 +108,22 @@
   font-size: 13px;
   min-width: 28px;
   cursor: pointer;
-  margin-right: -7px;
+  margin-right: -8px;
+
 }
 
 /* 滑块输入 */
 .adjustment-slider-input {
   display: flex;  
-  width: 135px;
+  width: 125px;
   cursor: ew-resize;
   background: var(--bg-color);
   margin-top: 15px;
+}
+
+.unit-container{
+  display: flex;
+  align-items: center;
 }
 
 /* 数值输入框 */
@@ -128,24 +144,49 @@
   opacity: 0.8;
 }
 
-/* 分隔线 */
-.adjustment-divider {
-  width: 100%;
-  height: 1px;
-  background-color: var(--border-color);
-  margin: 15px 0;
+/* 宽的单位标签 */
+.wide-adjustment-slider-label {
+  color: var(--text-color);
+  display: flex;
+  font-size: 13px;
+  min-width: 55px;
+  cursor: pointer;
+  margin-right: -10px;
+
 }
 
-/* 响应式调整 */
-  .adjustment-container {
-    padding: 15px;
-  }
-  
-  .adjustment-title {
-    font-size: 16px;
-    margin-bottom: 15px;
-  }
-  
-  .adjustment-buttons {
-    gap: 10px;
-  }
+/* 更宽的单位标签 */
+.wider-adjustment-slider-label {
+  color: var(--text-color);
+  display: flex;
+  font-size: 13px;
+  min-width: 60px;
+  cursor: pointer;
+  margin-right: -5px;
+}
+
+/* 窄的滑块 */
+.narrow-adjustment-slider-input{
+  display: flex;  
+  width: 100px;
+  cursor: ew-resize;
+  background: var(--bg-color);
+  margin-top: 15px;
+}
+
+/* 更窄的滑块 */
+.narrower-adjustment-slider-input{
+  display: flex;  
+  width: 90px;
+  cursor: ew-resize;
+  background: var(--bg-color);
+  margin-top: 15px;
+}
+
+/* 分隔线 */
+.adjustment-divider {
+  width: calc(100% + 26px);
+  height: 1px;
+  background-color: var(--border-color);
+  margin: 7px 13px 10px -13px;
+}
