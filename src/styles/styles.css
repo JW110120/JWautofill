@@ -476,7 +476,7 @@ button:hover {
 }
 
 .checkbox-container {
-  margin: -5px -8px 0 0px;
+  margin: 0px -8px 0 0px;
   position: relative;
   display: flex;
   align-items: center;

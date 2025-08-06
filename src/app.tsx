@@ -726,12 +726,24 @@ class App extends React.Component<AppProps, AppState> {
         return (
             <div>
                 <div className="container">
-                <h3 className="title">
+<h3 
+className="title" 
+title={`生成选区时，插件会自动根据用户选择的模式填充/删除内容，
+选区模式只有作为【新选区】时，才会触发自动填充，
+加选，减选，交叉选择不会自动填充。`
+}>
                     <span className="title-text">选区笔1.2</span>
                     <span className="title-beta">beta</span>
                 </h3>
                 <div className="button-container">
-                    <sp-action-button className="main-button" onClick={this.handleButtonClick}>
+<sp-action-button 
+className="main-button" 
+onClick={this.handleButtonClick}
+title={`开启后，当PS工具栏羽化参数为0时，自动填充才能正常使用。
+推荐由下方的插件面板设置想要的羽化值。
+处于套索等工具时，依次按下【Enter → 数字1 → Enter】，
+可以把工具栏的羽化值设为1，从而恢复正常的选区功能。`
+}>
                         <div className="button-content">
                             <span className={`button-text ${!this.state.isEnabled ? 'disabled' : ''}`}>
                                 {this.state.isEnabled ? '功能开启' : '功能关闭'}
@@ -749,6 +761,7 @@ class App extends React.Component<AppProps, AppState> {
                         selected={this.state.blendMode || "正常"}
                         onChange={this.handleBlendModeChange}
                         disabled={this.state.clearMode}
+                        title="选择填充时使用的混合模式，计算方式与PS原生一致。"
                     >
                         <sp-menu>
                             {BLEND_MODE_OPTIONS.map((group, groupIndex) => (
@@ -779,7 +792,9 @@ class App extends React.Component<AppProps, AppState> {
                             : 'not-dragging'
                         }`}
                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'opacity')}
-                    >
+title={`调整填充内容的不透明度，支持清除模式。可通过拖拽标签快速调整数值。
+对于新建图层模式，影响的是新图层的不透明度，图层内部填充的内容的不透明度维持该模式本身的值。`}
+>
                         不透明度
                         <div style={{ display: 'flex', alignItems: 'center' }}>
                                         <input
@@ -789,6 +804,7 @@ class App extends React.Component<AppProps, AppState> {
                                             value={this.state.opacity}
                                             onChange={(e) => this.setState({ opacity: Number(e.target.value) })}
                                             style={{ width: '30px', zIndex: 1 }}
+                                            title="输入填充内容的不透明度（0-100）。"
                                         />
                                         <span style={{ fontSize: '13px' }}>%</span>
                                     </div>
@@ -801,6 +817,7 @@ class App extends React.Component<AppProps, AppState> {
                         value={this.state.opacity}
                         onChange={this.handleOpacityChange}
                         className="slider-input"
+                        title="调整填充的不透明度，0%为完全透明，100%为完全不透明。"
                     />
                     
                     <label
@@ -810,6 +827,7 @@ class App extends React.Component<AppProps, AppState> {
                             : 'not-dragging'
                         }`}
                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'feather')}
+                        title="改造选区使用的羽化值，可通过拖拽标签快速调整数值。"
                     >
                         羽化
                         <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -820,6 +838,7 @@ class App extends React.Component<AppProps, AppState> {
                                             value={this.state.feather}
                                             onChange={(e) => this.setState({ feather: Number(e.target.value) })}
                                             style={{ width: '30px', zIndex: 1 }}
+                                            title="输入改造选区使用的羽化值（0-20像素）。"
                                         />
                                         <span style={{ fontSize: '13px' }}>px</span>
                                     </div>
@@ -832,13 +851,15 @@ class App extends React.Component<AppProps, AppState> {
                         value={this.state.feather}
                         onChange={this.handleFeatherChange}
                         className="slider-input"
+                        title="调整选区边缘的羽化程度，数值越大边缘越柔和。"
                     />
                 </div>
             </div>
 
  {/* 新增选区选项区域 */}
             <div className="expand-section">
-                            <div className="expand-header" onClick={this.toggleSelectionOptions}>
+                            <div className="expand-header" onClick={this.toggleSelectionOptions} title="点击展开/折叠选区选项设置。">
+
                                 <div className={`expand-icon ${this.state.isSelectionOptionsExpanded ? 'expanded' : ''}`}>
                                     <ExpandIcon expanded={this.state.isSelectionOptionsExpanded} />
                                 </div>
@@ -854,6 +875,7 @@ class App extends React.Component<AppProps, AppState> {
                                             : 'not-dragging'
                                         }`}
                                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionSmooth')}
+                                        title="平滑选区边缘，减少锯齿效果，可通过拖拽标签快速调整数值。"
                                     >
                                         平滑
                                     </label>
@@ -865,6 +887,7 @@ class App extends React.Component<AppProps, AppState> {
                                         value={this.state.selectionSmooth}
                                         onChange={this.handleSelectionSmoothChange}
                                         className="selection-slider-input"
+                                        title="平滑选区边缘，减少凹凸起伏，数值越大平滑效果越明显。"
                                     />
                                     <div style={{ display: 'flex', alignItems: 'center'}}>
                                         <input
@@ -874,6 +897,7 @@ class App extends React.Component<AppProps, AppState> {
                                             value={this.state.selectionSmooth}
                                             onChange={(e) => this.setState({ selectionSmooth: Number(e.target.value) })}
                                             style={{ marginLeft: '-10px', width: '30px', zIndex: 1 }}
+                                            title="直接输入平滑数值（0-100%）。"
                                         />
                                         <span style={{ fontSize: '13px' }}>%</span>
                                     </div>
@@ -887,6 +911,7 @@ class App extends React.Component<AppProps, AppState> {
                                             : 'not-dragging'
                                         }`}
                                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionContrast')}
+                                        title="增强选区边缘的锐度，可通过拖拽标签快速调整数值。"
                                     >
                                         锐度
                                     </label>
@@ -898,6 +923,7 @@ class App extends React.Component<AppProps, AppState> {
                                         value={this.state.selectionContrast}
                                         onChange={this.handleSelectionContrastChange}
                                         className="selection-slider-input"
+                                        title="增强选区边缘的锐度，使边缘更加清晰明确。"
                                     />
                                     <div style={{ display: 'flex', alignItems: 'center'}}>
                                         <input
@@ -907,6 +933,7 @@ class App extends React.Component<AppProps, AppState> {
                                             value={this.state.selectionContrast}
                                             onChange={(e) => this.setState({ selectionContrast: Number(e.target.value) })}
                                             style={{ marginLeft: '-10px', width: '30px', zIndex: 1 }}
+                                            title="直接输入锐度数值（0-100%）。"
                                         />
                                         <span style={{ fontSize: '13px' }}>%</span>
                                     </div>
@@ -920,6 +947,7 @@ class App extends React.Component<AppProps, AppState> {
                                             : 'not-dragging'
                                         }`}
                                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionExpand')}
+                                        title="以喷溅方式扩展选区范围，可通过拖拽标签快速调整数值。"
                                     >
                                         扩散
                                     </label>
@@ -931,6 +959,7 @@ class App extends React.Component<AppProps, AppState> {
                                         value={this.state.selectionExpand}
                                         onChange={this.handleSelectionExpandChange}
                                         className="selection-slider-input"
+                                        title="以喷溅的方式改造选区，数值越大选区向外喷溅的强度越高。"
                                     />
                                     <div style={{ display: 'flex', alignItems: 'center'}}>
                                         <input
@@ -940,6 +969,7 @@ class App extends React.Component<AppProps, AppState> {
                                             value={this.state.selectionExpand}
                                             onChange={(e) => this.setState({ selectionExpand: Number(e.target.value) })}
                                             style={{ marginLeft: '-10px', width: '30px', zIndex: 1 }}
+                                            title="直接输入扩散数值（0-100%）。"
                                         />
                                        <span style={{ fontSize: '13px' }}>%</span>
                                     </div>
@@ -950,7 +980,7 @@ class App extends React.Component<AppProps, AppState> {
 
 
             <div className="expand-section">
-                    <div className="expand-header" onClick={this.toggleExpand}>
+                    <div className="expand-header" onClick={this.toggleExpand} title="点击展开/折叠填充选项设置。">
                         <div className={`expand-icon ${this.state.isExpanded ? 'expanded' : ''}`}>
                             <ExpandIcon expanded={this.state.isExpanded} />
                         </div>
@@ -961,22 +991,24 @@ class App extends React.Component<AppProps, AppState> {
 
                         {/* 新建图层开关 */}
                         <div className="switch-container">
-                            <span className="switch-label">新建图层</span>
+                            <span className="switch-label" title="开启后在新图层上进行填充，保持原图层不变。">新建图层</span>
                             <sp-switch 
                                 checked={this.state.createNewLayer}
                                 onChange={this.toggleCreateNewLayer}
                                 disabled={this.state.clearMode || this.state.isInQuickMask}
+                                title="开启后在新图层上进行填充，保持原图层不变。"
                             />
                         </div>
 
                        {/* 描边模式开关 */}
                        <div className="switch-container">
-                            <label className="switch-label">描边模式</label>
+                            <label className="switch-label" title="开启描边模式，为选区添加边框描边效果。">描边模式</label>
                             {this.state.strokeEnabled && (
                                 <div className="stroke-color-group">
                                 <div 
                                     className="stroke-color-preview"
                                     style={this.getStrokeColorPreviewStyle()}
+                                    title="点击选择描边颜色。"
                                     onClick={async () => {
                                         try {
                                             // 1. 保存当前前景色
@@ -1051,6 +1083,7 @@ class App extends React.Component<AppProps, AppState> {
                                     quiet 
                                     className="stroke-settings-icon"
                                     onClick={this.toggleStrokeSetting}
+                                    title="打开描边设置面板，调整描边宽度、位置等参数。"
                                 >
                                     <SettingsIcon/>
                                 </sp-action-button>
@@ -1059,53 +1092,58 @@ class App extends React.Component<AppProps, AppState> {
                             <sp-switch 
                                 checked={this.state.strokeEnabled}
                                 onChange={this.toggleStrokeEnabled}
+                                title="开启描边模式，为选区添加边框描边效果。"
                             />
                         </div>
 
                         {/* 清除模式开关 */}
                         <div className="switch-container">
-                            <label className="switch-label">清除模式</label>
+                            <label className="switch-label" title="开启清除模式，以下方选择的模式删除选区内容。">清除模式</label>
                             <sp-switch 
                                 checked={this.state.clearMode}
                                 onChange={this.toggleClearMode}
                                 disabled={this.state.createNewLayer}
+                                title="开启清除模式，以下方选择的模式删除选区内容。"
                             />
                         </div>
 
                         {/* 填充模式选择 */}
                         <div className="fill-mode-group">
-                            <div className="radio-group-label">填充模式</div>
+                            <div className="radio-group-label" title="选择填充类型：纯色、图案或渐变。">填充模式</div>
                             <sp-radio-group 
                                 selected={this.state.fillMode} 
                                 name="fillMode"
                                 onChange={this.handleFillModeChange}
                             >
-                                <sp-radio value="foreground" className="radio-item">
+                                <sp-radio value="foreground" className="radio-item" title="使用纯色填充选区。">
                                     <span className="radio-item-label">纯色</span>
                                     <sp-action-button 
                                         quiet 
                                         className="settings-icon"
                                         onClick={this.toggleColorSettings}
+                                        title="打开颜色设置面板，调整颜色变化参数。"
                                     >
                                         <SettingsIcon/>
                                     </sp-action-button>
                                 </sp-radio>
-                                <sp-radio value="pattern" className="radio-item">
+                                <sp-radio value="pattern" className="radio-item" title="使用图案填充选区。">
                                     <span className="radio-item-label">图案</span>
                                     <sp-action-button 
                                         quiet 
                                         className="settings-icon"
                                         onClick={this.openPatternPicker}
+                                        title="打开图案选择器，选择填充图案。"
                                     >
                                         <SettingsIcon/>
                                     </sp-action-button>
                                 </sp-radio>
-                                <sp-radio value="gradient" className="radio-item">
+                                <sp-radio value="gradient" className="radio-item" title="使用渐变填充选区。">
                                     <span className="radio-item-label">渐变</span>
                                     <sp-action-button 
                                         quiet 
                                         className="settings-icon"
                                         onClick={this.openGradientPicker}
+                                        title="打开渐变选择器，设置渐变预设与角度等参数。"
                                     >
                                         <SettingsIcon/>
                                     </sp-action-button>
@@ -1120,6 +1158,7 @@ class App extends React.Component<AppProps, AppState> {
                                     htmlFor="deselectCheckbox" 
                                     className="checkbox-label"
                                     onClick={this.toggleDeselectAfterFill} // 添加 onClick 事件处理程序
+                                    title="填充完成后自动取消选区。"
                                 >
                                     取消选区:
                                 </label>
@@ -1129,6 +1168,7 @@ class App extends React.Component<AppProps, AppState> {
                                     checked={this.state.deselectAfterFill}
                                     onChange={this.toggleDeselectAfterFill}
                                     className="checkbox-input"
+                                    title="填充完成后自动取消选区。"
                                 />
                                 
                             </div>
@@ -1137,6 +1177,7 @@ class App extends React.Component<AppProps, AppState> {
                                     htmlFor="historyCheckbox" 
                                     className="checkbox-label"
                                     onClick={this.toggleAutoUpdateHistory} // 添加 onClick 事件处理程序
+                                    title="自动更新历史记录画笔的源图像。"
                                 >
                                     更新历史源:
                                 </label>
@@ -1146,6 +1187,7 @@ class App extends React.Component<AppProps, AppState> {
                                     checked={this.state.autoUpdateHistory}
                                     onChange={this.toggleAutoUpdateHistory}
                                     className="checkbox-input"
+                                    title="自动更新历史记录画笔的源图像。"
                                 />
                             </div>
                         </div>
