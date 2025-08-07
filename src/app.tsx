@@ -17,6 +17,7 @@ import { calculateRandomColor, hsbToRgb, rgbToGray } from './utils/ColorUtils';
 import { strokeSelection } from './utils/StrokeSelection';
 import { PatternFill } from './utils/PatternFill';
 import { GradientFill } from './utils/GradientFill';
+import { SingleChannelHandler } from './utils/SingleChannelHandler';
 import { SelectionHandler, SelectionOptions } from './utils/SelectionHandler';
 import { ColorSettings } from './types/ColorSettings';
 import { Pattern } from './types/Pattern';
@@ -449,6 +450,25 @@ class App extends React.Component<AppProps, AppState> {
     
             const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
             if (!layerInfo) return;
+    
+            // 检查是否在单通道模式
+            const isInSingleChannel = await LayerInfoHandler.checkSingleColorChannelMode();
+            if (isInSingleChannel) {
+                
+                const fillOptions = {
+                    opacity: this.state.opacity,
+                    blendMode: this.state.blendMode,
+                    pattern: this.state.selectedPattern,
+                    gradient: this.state.selectedGradient
+                };
+                
+                if (this.state.clearMode) {
+                    await SingleChannelHandler.clearSingleChannel(fillOptions, this.state.fillMode, this.state);
+                } else {
+                    await SingleChannelHandler.fillSingleChannel(fillOptions, this.state.fillMode, this.state);
+                }
+                return;
+            }
     
             const { isBackground, hasTransparencyLocked, hasPixels } = layerInfo;
     

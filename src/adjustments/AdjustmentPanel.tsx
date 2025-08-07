@@ -185,16 +185,16 @@ const getSelectionData = async () => {
 // 调整内容面板组件
 const AdjustmentPanel = () => {
   // 状态管理
-  const [radius, setRadius] = useState(10);
-  const [sigma, setSigma] = useState(3);
+  const [radius, setRadius] = useState(15);
+  const [sigma, setSigma] = useState(5);
   const [isDragging, setIsDragging] = useState(false);
   const [dragTarget, setDragTarget] = useState<string | null>(null);
   const [dragStartX, setDragStartX] = useState(0);
   const [dragStartValue, setDragStartValue] = useState(0);
   const [useWeightedAverage, setUseWeightedAverage] = useState(true);
-  const [weightedIntensity, setWeightedIntensity] = useState(1);
-  const [highFreqIntensity, setHighFreqIntensity] = useState(1);
-  const [highFreqRange, setHighFreqRange] = useState(1);
+  const [weightedIntensity, setWeightedIntensity] = useState(5);
+  const [highFreqIntensity, setHighFreqIntensity] = useState(5);
+  const [highFreqRange, setHighFreqRange] = useState(3);
   
   // 智能边缘平滑参数
   const [edgeAlphaThreshold, setEdgeAlphaThreshold] = useState(defaultSmartEdgeSmoothParams.alphaThreshold);

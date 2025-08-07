@@ -117,7 +117,7 @@ export class LayerInfoHandler {
     }
 
     // 检测是否选中了单个颜色通道（红、绿、蓝）
-    private static async checkSingleColorChannelMode(): Promise<boolean> {
+    static async checkSingleColorChannelMode(): Promise<boolean> {
         try {
             // 获取当前激活的通道信息
             const targetChannelResult = await action.batchPlay([
@@ -143,8 +143,8 @@ export class LayerInfoHandler {
                 console.log("🔍 当前激活通道:", channelName);
                 
                 // 检测是否为单个颜色通道（红、绿、蓝）
-                // 通常这些通道的名称为 "红"、"绿"、"蓝" 或 "Red"、"Green"、"Blue"
-                const singleColorChannels = ["红", "绿", "蓝", "Red", "Green", "Blue", "R", "G", "B"];
+                // 通常这些通道的名称为 "红"、"绿"、"蓝" 或 "Red"、"Grain"、"Blue"
+                const singleColorChannels = ["红", "绿", "蓝", "Red", "Grain", "Blue", "R", "G", "B"];
                 const isInSingleColorChannel = singleColorChannels.includes(channelName);
 
                 return isInSingleColorChannel;

@@ -105,13 +105,16 @@ export async function processBlockAverage(layerPixelData: ArrayBuffer, selection
             pixels: number[];
           }> = [];
           
-          // 对区域内每个像素进行颜色聚类
+          // 对区域内每个像素进行颜色聚类（排除alpha=0的像素）
           for (const idx of component) {
             const pIdx = idx * 4;
             const pixelR = layerPixels[pIdx];
             const pixelG = layerPixels[pIdx + 1];
             const pixelB = layerPixels[pIdx + 2];
             const pixelA = layerPixels[pIdx + 3];
+            
+            // 跳过alpha=0的像素，不参与颜色聚类
+            if (pixelA === 0) continue;
             
             // 查找是否存在相似的颜色簇
             let foundCluster = false;
@@ -175,6 +178,9 @@ export async function processBlockAverage(layerPixelData: ArrayBuffer, selection
             const pIdx = idx * 4;
             const coefficient = selectionCoefficients[idx];
             
+            // 跳过alpha=0的像素，不进行修改
+            if (layerPixels[pIdx + 3] === 0) continue;
+            
             // 找到该像素所属的颜色簇
             let pixelCluster = null;
             for (const cluster of colorClusters) {
@@ -200,27 +206,38 @@ export async function processBlockAverage(layerPixelData: ArrayBuffer, selection
             }
           }
         } else {
-          // 原始算法 - 计算简单平均颜色
+          // 原始算法 - 计算简单平均颜色（排除alpha=0的像素）
           let totalR = 0, totalG = 0, totalB = 0, totalA = 0;
+          let validPixelCount = 0;
           
           for (const idx of component) {
             const pIdx = idx * 4;
+            // 跳过alpha=0的像素，不参与平均值计算
+            if (layerPixels[pIdx + 3] === 0) continue;
+            
             totalR += layerPixels[pIdx];
             totalG += layerPixels[pIdx + 1];
             totalB += layerPixels[pIdx + 2];
             totalA += layerPixels[pIdx + 3];
+            validPixelCount++;
           }
           
-          const avgR = Math.round(totalR / component.length);
-          const avgG = Math.round(totalG / component.length);
-          const avgB = Math.round(totalB / component.length);
-          const avgA = Math.round(totalA / component.length);
+          // 如果没有有效像素（全部alpha=0），则跳过该区域
+          if (validPixelCount === 0) continue;
+          
+          const avgR = Math.round(totalR / validPixelCount);
+          const avgG = Math.round(totalG / validPixelCount);
+          const avgB = Math.round(totalB / validPixelCount);
+          const avgA = Math.round(totalA / validPixelCount);
           
           
           // 将该区域的平均颜色应用到区域内的所有像素
           for (const idx of component) {
             const pIdx = idx * 4;
             const coefficient = selectionCoefficients[idx];
+            
+            // 跳过alpha=0的像素，不进行修改
+            if (layerPixels[pIdx + 3] === 0) continue;
             
             // 根据选区系数混合原始颜色和区域平均颜色
             result[pIdx] = Math.round(layerPixels[pIdx] * (1 - coefficient) + avgR * coefficient);
