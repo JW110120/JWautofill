@@ -424,6 +424,30 @@ class App extends React.Component<AppProps, AppState> {
     async fillSelection() {
         await new Promise(resolve => setTimeout(resolve, 50));
         try {
+            const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
+            if (!layerInfo) return;
+    
+            // 检查是否在单通道模式
+            const isInSingleChannel = await LayerInfoHandler.checkSingleColorChannelMode();
+            if (isInSingleChannel) {
+                
+                const fillOptions = {
+                    opacity: this.state.opacity,
+                    blendMode: this.state.blendMode,
+                    pattern: this.state.selectedPattern,
+                    gradient: this.state.selectedGradient
+                };
+                
+                if (this.state.clearMode) {
+                    await SingleChannelHandler.clearSingleChannel(fillOptions, this.state.fillMode, this.state);
+                } else {
+                    await SingleChannelHandler.fillSingleChannel(fillOptions, this.state.fillMode, this.state);
+                }
+                
+                // 单通道模式处理完成，直接返回，跳过后续的常规填充逻辑
+                return;
+            }
+
             if (this.state.clearMode) {
                 const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
                 await ClearHandler.clearWithOpacity(this.state.opacity, this.state, layerInfo);
@@ -446,28 +470,6 @@ class App extends React.Component<AppProps, AppState> {
                     }],
                     { synchronousExecution: true }
                 );
-            }
-    
-            const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
-            if (!layerInfo) return;
-    
-            // 检查是否在单通道模式
-            const isInSingleChannel = await LayerInfoHandler.checkSingleColorChannelMode();
-            if (isInSingleChannel) {
-                
-                const fillOptions = {
-                    opacity: this.state.opacity,
-                    blendMode: this.state.blendMode,
-                    pattern: this.state.selectedPattern,
-                    gradient: this.state.selectedGradient
-                };
-                
-                if (this.state.clearMode) {
-                    await SingleChannelHandler.clearSingleChannel(fillOptions, this.state.fillMode, this.state);
-                } else {
-                    await SingleChannelHandler.fillSingleChannel(fillOptions, this.state.fillMode, this.state);
-                }
-                return;
             }
     
             const { isBackground, hasTransparencyLocked, hasPixels } = layerInfo;
