@@ -726,23 +726,27 @@ class App extends React.Component<AppProps, AppState> {
         return (
             <div>
                 <div className="container">
-<h3 
-className="title" 
-title={`生成选区时，插件会自动根据用户选择的模式填充/删除内容，
-选区模式只有作为【新选区】时，才会触发自动填充，
-加选，减选，交叉选择不会自动填充。`
+                <h3 className="title" 
+title={`● 生成选区时，插件会自动根据选择的模式填充/删除内容。
+
+● 选区模式只有作为【新选区】时，才会触发自动填充，加选，减选，交叉选择不会自动填充。
+
+● 由于每次生成选区后，插件会立刻执行若干个步骤。因此想要撤销本次的自动填充，建议回溯历史记录。`
 }>
                     <span className="title-text">选区笔1.2</span>
                     <span className="title-beta">beta</span>
                 </h3>
                 <div className="button-container">
-<sp-action-button 
-className="main-button" 
-onClick={this.handleButtonClick}
-title={`开启后，当PS工具栏羽化参数为0时，自动填充才能正常使用。
-推荐由下方的插件面板设置想要的羽化值。
-处于套索等工具时，依次按下【Enter → 数字1 → Enter】，
-可以把工具栏的羽化值设为1，从而恢复正常的选区功能。`
+                    <sp-action-button 
+                    className="main-button" 
+                    onClick={this.handleButtonClick}
+title={`● 功能开启后，PS工具栏羽化参数设为0时，自动填充才可正常使用。
+
+● 推荐由下方的插件面板设置想要的羽化值。
+
+● 处于套索等工具时，依次按下【Enter → 数字1 → Enter】，可以把工具栏的羽化值设为1，暂停自动填充。
+
+● 依次按下【Enter → 数字0 → Enter】，可以把羽化值改回0，恢复自动填充。`
 }>
                         <div className="button-content">
                             <span className={`button-text ${!this.state.isEnabled ? 'disabled' : ''}`}>
@@ -754,7 +758,16 @@ title={`开启后，当PS工具栏羽化参数为0时，自动填充才能正常
                 </div>
 
                 <div className="blend-mode-container">
-                    <span className={`blend-mode-label ${this.state.clearMode ? 'disabled' : ''}`}>混合模式：</span>
+                    <span className={`blend-mode-label ${this.state.clearMode ? 'disabled' : ''}`} 
+title={`● 混合模式支持纯色，图案和渐变三种模式。描边的混合模式需要在描边的面板中独立设置。
+  
+● 在新建图层模式下：该混合模式下拉菜单修改的是新建图层的混合模式。至于本次在新图层中填充的内容，采取的混合模式是【正常】。
+    
+● 在清除模式下：开启后默认设为【清除】，混合模式不支持修改。`
+}>
+                    混合模式：
+                    </span>
+
                     <sp-picker
                         size="s"
                         selects="single"
@@ -792,22 +805,29 @@ title={`开启后，当PS工具栏羽化参数为0时，自动填充才能正常
                             : 'not-dragging'
                         }`}
                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'opacity')}
-title={`调整填充内容的不透明度，支持清除模式。可通过拖拽标签快速调整数值。
-对于新建图层模式，影响的是新图层的不透明度，图层内部填充的内容的不透明度维持该模式本身的值。`}
->
-                        不透明度
-                        <div style={{ display: 'flex', alignItems: 'center' }}>
-                                        <input
-                                            type="number"
-                                            min="0"
-                                            max="100"
-                                            value={this.state.opacity}
-                                            onChange={(e) => this.setState({ opacity: Number(e.target.value) })}
-                                            style={{ width: '30px', zIndex: 1 }}
-                                            title="输入填充内容的不透明度（0-100）。"
-                                        />
-                                        <span style={{ fontSize: '13px' }}>%</span>
-                                    </div>
+title={`● 调整填充内容的不透明度，不透明度间采用【乘算】。
+    
+● 在填充模式下：假设原本填充的图案中有一个自带50%的不透明度的区域，插件面板中不透明度设为50%，则最终填充该区域的不透明度为50%*50%*（受羽化影响产生的不透明度）。
+
+● 在清除模式下：不透明度计算方式与填充模式相同。
+
+● 在新建图层模式下：影响的是新图层的不透明度，假设填充的图案或者渐变原先带有不透明度，填充的内容仍保持原来的不透明度。`
+}>
+                    不透明度
+                    
+                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                    <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        value={this.state.opacity}
+                        onChange={(e) => this.setState({ opacity: Number(e.target.value) })}
+                        style={{ width: '30px', zIndex: 1 }}
+                        title="输入填充内容的不透明度（0-100）。"
+                    />
+                    <span style={{ fontSize: '13px' }}>%</span>
+                    </div>
+
                     </label>
                     <input
                         type='range'
@@ -827,21 +847,27 @@ title={`调整填充内容的不透明度，支持清除模式。可通过拖拽
                             : 'not-dragging'
                         }`}
                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'feather')}
-                        title="改造选区使用的羽化值，可通过拖拽标签快速调整数值。"
-                    >
+title={`● 改造选区使用的羽化值，也就是对选区的灰度通道使用了高斯模糊。
+
+● 羽化值越大，选区边缘越柔和，填充内容的不透明度也会相应降低。
+
+● 羽化值也会直接影响描边的羽化程度与不透明度。`
+}>
                         羽化
-                        <div style={{ display: 'flex', alignItems: 'center' }}>
-                                        <input
-                                            type="number"
-                                            min="0"
-                                            max="20"
-                                            value={this.state.feather}
-                                            onChange={(e) => this.setState({ feather: Number(e.target.value) })}
-                                            style={{ width: '30px', zIndex: 1 }}
-                                            title="输入改造选区使用的羽化值（0-20像素）。"
-                                        />
-                                        <span style={{ fontSize: '13px' }}>px</span>
-                                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                    <input
+                        type="number"
+                        min="0"
+                        max="20"
+                        value={this.state.feather}
+                        onChange={(e) => this.setState({ feather: Number(e.target.value) })}
+                        style={{ width: '30px', zIndex: 1 }}
+                        title="输入改造选区使用的羽化值（0-20像素）。"
+                        />
+                    <span style={{ fontSize: '13px' }}>px</span>
+                    </div>
+
                     </label>
                     <input
                         type='range'
@@ -875,8 +901,12 @@ title={`调整填充内容的不透明度，支持清除模式。可通过拖拽
                                             : 'not-dragging'
                                         }`}
                                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionSmooth')}
-                                        title="平滑选区边缘，减少锯齿效果，可通过拖拽标签快速调整数值。"
-                                    >
+title={`● 在填充前，以降低选区灰度通道中的高频信息的方式修改选区。
+    
+● 具体实现是直接挪用【选择并遮住】中的平滑选区边缘功能，减小选区边缘的锯齿与起伏。
+    
+● 当该值设为0时，不会修改选区，可以显著提高连续自动填充的流畅度。`
+}>
                                         平滑
                                     </label>
                                     <input
@@ -911,9 +941,14 @@ title={`调整填充内容的不透明度，支持清除模式。可通过拖拽
                                             : 'not-dragging'
                                         }`}
                                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionContrast')}
-                                        title="增强选区边缘的锐度，可通过拖拽标签快速调整数值。"
-                                    >
+title={`● 在填充前，以锐化选区灰度通道方式修改选区。
+
+● 具体实现是直接挪用【选择并遮住】中的锐化选区边缘功能，增强选区边缘的锐度。
+
+● 当该值设为0时，不会修改选区，可以显著提高连续自动填充的流畅度。`
+}>
                                         锐度
+
                                     </label>
                                     <input
                                         type='range'
@@ -947,8 +982,10 @@ title={`调整填充内容的不透明度，支持清除模式。可通过拖拽
                                             : 'not-dragging'
                                         }`}
                                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionExpand')}
-                                        title="以喷溅方式扩展选区范围，可通过拖拽标签快速调整数值。"
-                                    >
+title={`● 参考PS滤镜库中数次叠加喷溅的算法，以喷溅的方式扩展选区范围。
+
+● 未来打算扩展更多的参数，以对选区进行更丰富的改造。`
+}>
                                         扩散
                                     </label>
                                     <input
@@ -991,24 +1028,30 @@ title={`调整填充内容的不透明度，支持清除模式。可通过拖拽
 
                         {/* 新建图层开关 */}
                         <div className="switch-container">
-                            <span className="switch-label" title="开启后在新图层上进行填充，保持原图层不变。">新建图层</span>
+                            <span className="switch-label" 
+title={`● 每次填充前都会以设置的参数新建一个图层，在该新图层上填充内容。
+
+● 新建图层模式与清除模式互斥，不能同时开启。`
+}>
+                            新建图层
+                            </span>
                             <sp-switch 
                                 checked={this.state.createNewLayer}
                                 onChange={this.toggleCreateNewLayer}
                                 disabled={this.state.clearMode || this.state.isInQuickMask}
-                                title="开启后在新图层上进行填充，保持原图层不变。"
+                                title="开启后在新图层上进行填充，保持下方图层不受影响。"
                             />
                         </div>
 
                        {/* 描边模式开关 */}
                        <div className="switch-container">
-                            <label className="switch-label" title="开启描边模式，为选区添加边框描边效果。">描边模式</label>
+                            <label className="switch-label" title="在填充后自动为选区边缘增加描边效果。开启右侧开关后，将会显示设置描边颜色和设置具体描边的参数的区域。">描边模式</label>
                             {this.state.strokeEnabled && (
                                 <div className="stroke-color-group">
                                 <div 
                                     className="stroke-color-preview"
                                     style={this.getStrokeColorPreviewStyle()}
-                                    title="点击选择描边颜色。"
+                                    title="点击选择描边颜色，在编辑蒙版等灰度通道时，这里将会显示选中颜色的灰度。"
                                     onClick={async () => {
                                         try {
                                             // 1. 保存当前前景色
@@ -1092,13 +1135,26 @@ title={`调整填充内容的不透明度，支持清除模式。可通过拖拽
                             <sp-switch 
                                 checked={this.state.strokeEnabled}
                                 onChange={this.toggleStrokeEnabled}
-                                title="开启描边模式，为选区添加边框描边效果。"
+                                title="开启描边模式，在填充后自动为选区边缘增加描边效果。"
                             />
                         </div>
 
                         {/* 清除模式开关 */}
                         <div className="switch-container">
-                            <label className="switch-label" title="开启清除模式，以下方选择的模式删除选区内容。">清除模式</label>
+                            <label className="switch-label" 
+title={`● 开启清除模式，以下方选择的模式删除选区内容。
+
+● 关闭清除模式的情况下称作填充模式，填充模式与清除模式支持修改像素图层，快速蒙版，图层蒙版。（对于红绿蓝等单通道的支持将在未来版本更新）
+
+● 清除模式的计算方法采取绝对计算，对纯色、图案与渐变在保留不透明度的基础上采用统一的逻辑：先转化为灰度，白色代表100%删除，黑色代表完全不删除。
+（因此删除纯色，需要先把前景色设为白色）
+
+● 未来考虑增加相对计算模式，即考虑一个删除系数，当被删除对象的颜色的灰度越高（或不透明度越高），它被删除的百分比越高。
+
+● 清除模式与新建图层模式互斥，不能同时开启。`
+}>
+                            清除模式
+                            </label>
                             <sp-switch 
                                 checked={this.state.clearMode}
                                 onChange={this.toggleClearMode}
@@ -1115,30 +1171,62 @@ title={`调整填充内容的不透明度，支持清除模式。可通过拖拽
                                 name="fillMode"
                                 onChange={this.handleFillModeChange}
                             >
-                                <sp-radio value="foreground" className="radio-item" title="使用纯色填充选区。">
-                                    <span className="radio-item-label">纯色</span>
+                                <sp-radio value="foreground" className="radio-item" title="使用【纯色】改写选区中的内容。">
+                                    <span className="radio-item-label" 
+title={`● 基础的纯色填充模式，当监测到生成选区后，立刻填充前景色。
+
+● 右侧的纯色参数面板，通过算法使得每次自动填充会以当前前景色作为原点，在参数设定的颜色区间内随机选择颜色填充。
+
+● 编辑RGB通道时，会提供4个可编辑选项。在编辑蒙版等灰度通道时，只提供2个可编辑选项。`
+}>
+                                    纯色
+                                    </span>
                                     <sp-action-button 
                                         quiet 
                                         className="settings-icon"
                                         onClick={this.toggleColorSettings}
-                                        title="打开颜色设置面板，调整颜色变化参数。"
+                                        title="打开纯色设置面板，调整纯色变化参数。"
                                     >
                                         <SettingsIcon/>
                                     </sp-action-button>
                                 </sp-radio>
-                                <sp-radio value="pattern" className="radio-item" title="使用图案填充选区。">
-                                    <span className="radio-item-label">图案</span>
+                                <sp-radio value="pattern" className="radio-item" title="使用【图案】改写选区中的内容。">
+                                    <span className="radio-item-label" 
+title={`● 图案填充模式，需要用户用系统中加载jpg、png等图片文件，作为图案的预设。
+    
+● 由于图案接口未开放，当前版本不支持PS内部的图案。
+    
+● 支持Shift，Ctrl等修改键多选管理预设。
+
+● 提供两种不同的填充方案，支持旋转与缩放；支持PNG的不透明度通道。
+
+● 当前PS没有开放预览旋转图案的接口，当开放后会跟进。`
+}>
+                                    图案
+                                    </span>
                                     <sp-action-button 
                                         quiet 
                                         className="settings-icon"
                                         onClick={this.openPatternPicker}
-                                        title="打开图案选择器，选择填充图案。"
+                                        title="打开图案面板，管理图案预设，设置相关的参数。"
                                     >
                                         <SettingsIcon/>
                                     </sp-action-button>
                                 </sp-radio>
-                                <sp-radio value="gradient" className="radio-item" title="使用渐变填充选区。">
-                                    <span className="radio-item-label">渐变</span>
+                                <sp-radio value="gradient" className="radio-item" title="使用【渐变】改写选区中的内容。">
+                                    <span className="radio-item-label" 
+title={`● 渐变填充模式，需要用户自行设置渐变的起始颜色、结束颜色、角度等参数，以制作渐变的预设。
+
+● 已经存在的渐变预设，可以点击选中后，修改面板中的参数以修改预设。   
+
+● 可以点击渐变条增加滑块，不透明度与颜色滑块一一对应，由于需要统一逻辑，插件中不透明度滑块白色代表100%不透明，黑色代表完全透明。
+    
+● 点击渐变预设区的空白可以取消选择。支持Shift，Ctrl等修改键多选管理预设。
+
+● 由于渐变接口未开放，当前版本不支持PS内部的渐变预设；由于浏览器的问题，渐变的种类暂时只支持线性与径向两种，未来可能会补充其他类型的渐变。`
+}>
+                                    渐变
+                                    </span>
                                     <sp-action-button 
                                         quiet 
                                         className="settings-icon"
@@ -1158,7 +1246,8 @@ title={`调整填充内容的不透明度，支持清除模式。可通过拖拽
                                     htmlFor="deselectCheckbox" 
                                     className="checkbox-label"
                                     onClick={this.toggleDeselectAfterFill} // 添加 onClick 事件处理程序
-                                    title="填充完成后自动取消选区。"
+                                      title="填充完成后自动取消选区。
+取消勾选后会保留已经修改后的选区，而不是最初生成的选区。"
                                 >
                                     取消选区:
                                 </label>
@@ -1168,7 +1257,7 @@ title={`调整填充内容的不透明度，支持清除模式。可通过拖拽
                                     checked={this.state.deselectAfterFill}
                                     onChange={this.toggleDeselectAfterFill}
                                     className="checkbox-input"
-                                    title="填充完成后自动取消选区。"
+                                    title="切换自动取消选区的状态。"
                                 />
                                 
                             </div>
@@ -1177,7 +1266,8 @@ title={`调整填充内容的不透明度，支持清除模式。可通过拖拽
                                     htmlFor="historyCheckbox" 
                                     className="checkbox-label"
                                     onClick={this.toggleAutoUpdateHistory} // 添加 onClick 事件处理程序
-                                    title="自动更新历史记录画笔的源图像。"
+                                    title="自动把历史记录画笔的源图像设置为每次生成选区的那一刻，
+从而可以结合历史记录画笔增强或者削弱本次填充的效果。"
                                 >
                                     更新历史源:
                                 </label>
@@ -1187,7 +1277,8 @@ title={`调整填充内容的不透明度，支持清除模式。可通过拖拽
                                     checked={this.state.autoUpdateHistory}
                                     onChange={this.toggleAutoUpdateHistory}
                                     className="checkbox-input"
-                                    title="自动更新历史记录画笔的源图像。"
+                                    title="切换自动更新历史记录画笔的源图像的状态。"
+
                                 />
                             </div>
                         </div>
