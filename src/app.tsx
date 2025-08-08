@@ -424,9 +424,6 @@ class App extends React.Component<AppProps, AppState> {
     async fillSelection() {
         await new Promise(resolve => setTimeout(resolve, 50));
         try {
-            const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
-            if (!layerInfo) return;
-    
             // 检查是否在单通道模式
             const isInSingleChannel = await LayerInfoHandler.checkSingleColorChannelMode();
             if (isInSingleChannel) {
@@ -447,6 +444,9 @@ class App extends React.Component<AppProps, AppState> {
                 // 单通道模式处理完成，直接返回，跳过后续的常规填充逻辑
                 return;
             }
+
+            const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
+            if (!layerInfo) return;
 
             if (this.state.clearMode) {
                 const layerInfo = await LayerInfoHandler.getActiveLayerInfo();

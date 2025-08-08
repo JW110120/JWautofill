@@ -1,9 +1,10 @@
-import { app, action, core, imaging } from 'photoshop';
+import { app, action, imaging, core } from 'photoshop';
+import { LayerInfoHandler } from './LayerInfoHandler';
 import { BLEND_MODES } from '../constants/blendModes';
 import { Pattern, Gradient } from '../types/state';
 import { BLEND_MODE_CALCULATIONS } from './BlendModeCalculations';
 import { calculateRandomColor, hsbToRgb, rgbToGray } from './ColorUtils';
-import { PatternFill } from './PatternFill';
+import { PatternFill, createStampPatternData, createTilePatternData } from './PatternFill';
 import { GradientFill } from './GradientFill';
 
 interface SingleChannelFillOptions {
@@ -41,8 +42,10 @@ export class SingleChannelHandler {
                 return;
             }
             
-            // 获取当前通道的灰度数据
-            const channelData = await this.getChannelPixels(bounds, channelInfo);
+            // 获取当前通道的灰度数据和原始图像数据
+            const pixelResult = await this.getChannelPixels(bounds, channelInfo);
+            const channelData = pixelResult.channelData;
+            const originalRgbaData = pixelResult.originalRgbaData; // 背景图层为RGB，普通图层为RGBA
             
             let fillData: Uint8Array;
             let alphaData: Uint8Array | undefined;
@@ -85,7 +88,7 @@ export class SingleChannelHandler {
             );
             
             // 写回通道数据
-            await this.updateChannelPixels(finalData, bounds, channelInfo, state);
+            await this.updateChannelPixels(finalData, bounds, channelInfo, originalRgbaData, state);
             
             console.log('✅ 单通道填充完成');
         } catch (error) {
@@ -113,8 +116,10 @@ export class SingleChannelHandler {
                 return;
             }
             
-            // 获取当前通道的灰度数据
-            const channelData = await this.getChannelPixels(bounds, channelInfo);
+            // 获取当前通道的灰度数据和原始图像数据
+            const pixelResult = await this.getChannelPixels(bounds, channelInfo);
+            const channelData = pixelResult.channelData;
+            const originalRgbaData = pixelResult.originalRgbaData; // 背景图层为RGB，普通图层为RGBA
             
             let clearData: Uint8Array;
             let alphaData: Uint8Array | undefined;
@@ -156,7 +161,7 @@ export class SingleChannelHandler {
             );
             
             // 写回通道数据
-            await this.updateChannelPixels(finalData, bounds, channelInfo, state);
+            await this.updateChannelPixels(finalData, bounds, channelInfo, originalRgbaData, state);
             
             console.log('✅ 单通道清除完成');
         } catch (error) {
@@ -196,7 +201,7 @@ export class SingleChannelHandler {
                 
                 return {
                     channelName,
-                    channelIndex: 0, // 暂时设为0，因为我们主要通过名称识别
+                    channelIndex: targetChannelInfo.channelIndex,
                     isColorChannel
                 };
             }
@@ -291,39 +296,43 @@ export class SingleChannelHandler {
             const tempSelectionCoefficients = new Float32Array(width * height);
             const selectionDocIndices = new Set<number>();
             
+            // 第一步：处理矩形边界内的所有像素，收集选区内像素的索引
             if (selectionData.length === width * height) {
                 // 单通道数据
                 for (let i = 0; i < width * height; i++) {
                     tempSelectionValues[i] = selectionData[i];
-                    tempSelectionCoefficients[i] = selectionData[i] / 255;
+                    tempSelectionCoefficients[i] = selectionData[i] / 255; // 计算选择系数
                     
+                    // 只有当像素值大于0时，才认为它在选区内
                     if (selectionData[i] > 0) {
-                        const boundsX = i % width;
-                        const boundsY = Math.floor(i / width);
-                        const docX = left + boundsX;
-                        const docY = top + boundsY;
+                        // 计算该像素在选区边界内的坐标
+                        const x = i % width;
+                        const y = Math.floor(i / width);
+                        
+                        // 计算该像素在整个文档中的索引
+                        const docX = left + x;
+                        const docY = top + y;
                         const docIndex = docY * docWidthPixels + docX;
+                        
+                        // 将文档索引添加到集合中
                         selectionDocIndices.add(docIndex);
                     }
                 }
             }
             
-            // 提取选区内像素的选择系数
-            const selectionCoefficients = new Float32Array(selectionDocIndices.size);
-            let coeffIndex = 0;
+            // 第二步：创建只包含选区内像素的数组（长度为selectionDocIndices.size）
+            const selectionSize = selectionDocIndices.size;
+            const selectionCoefficients = new Float32Array(selectionSize);
             
-            for (const docIndex of selectionDocIndices) {
-                const docX = docIndex % docWidthPixels;
-                const docY = Math.floor(docIndex / docWidthPixels);
-                const boundsX = docX - left;
-                const boundsY = docY - top;
-                
-                if (boundsX >= 0 && boundsX < width && boundsY >= 0 && boundsY < height) {
-                    const boundsIndex = boundsY * width + boundsX;
-                    selectionCoefficients[coeffIndex] = tempSelectionCoefficients[boundsIndex];
+            // 第三步：将选区内像素的系数填入新数组
+            let fillIndex = 0;
+            for (let i = 0; i < width * height; i++) {
+                if (tempSelectionValues[i] > 0) {
+                    selectionCoefficients[fillIndex] = tempSelectionCoefficients[i];
+                    fillIndex++;
                 }
-                coeffIndex++;
             }
+            console.log('选区内的像素数量：', selectionDocIndices.size);
             
             return {
                 left,
@@ -344,50 +353,34 @@ export class SingleChannelHandler {
     }
     
     // 获取通道像素数据
-    private static async getChannelPixels(bounds: any, channelInfo: ChannelInfo): Promise<Uint8Array> {
+    private static async getChannelPixels(bounds: any, channelInfo: ChannelInfo): Promise<{ channelData: Uint8Array; originalRgbaData: Uint8Array }> {
         try {        
-            // 使用batchPlay获取通道像素数据
-            const channelResult = await action.batchPlay([
-                {
-                    _obj: "get",
-                    _target: [
-                        {
-                            _ref: "channel",
-                            _name: channelInfo.channelName
-                        }
-                    ]
-                }
-            ], { synchronousExecution: true });
-            
-            if (!channelResult[0]) {
-                throw new Error(`无法获取通道信息: ${channelInfo.channelName}`);
+             const doc = app.activeDocument;
+            if (!doc) {
+                throw new Error('没有活动文档');
             }
             
-            // 使用imaging.getPixels获取RGB图像数据，然后提取对应通道
+            const activeLayer = doc.activeLayers[0];
+            if (!activeLayer) {
+                throw new Error('没有活动图层');
+            }
+            
+            // 使用imaging.getPixels获取文档长度的RGB图像数据，然后提取对应通道
             const pixelOptions = {
-                documentID: app.activeDocument.id,
+                documentID: doc.id,
+                layerID: activeLayer.id,
                 sourceBounds: {
-                    left: bounds.left,
-                    top: bounds.top,
-                    right: bounds.right,
-                    bottom: bounds.bottom
-                },
-                targetSize: {
-                    width: bounds.width,
-                    height: bounds.height
+                    left: 0,
+                    top: 0,
+                    right: bounds.docWidth,
+                    bottom: bounds.docHeight
                 },
                 componentSize: 8
             };
             
             const pixelData = await imaging.getPixels(pixelOptions);
             if (pixelData && pixelData.imageData) {
-                const dataPromise = pixelData.imageData.getData();
-                let rgbData: Uint8Array;
-                if (dataPromise && typeof dataPromise.then === 'function') {
-                    rgbData = await dataPromise;
-                } else {
-                    rgbData = dataPromise;
-                }
+                const rgbData = await pixelData.imageData.getData();
                 
                 // 确定通道索引（0=红，1=绿，2=蓝）
                 let channelIndex = 0;
@@ -398,41 +391,48 @@ export class SingleChannelHandler {
                     channelIndex = 2;
                 }
                 
-                console.log('📊 SingleChannelHandler - 通道索引:', channelIndex, '通道名称:', channelInfo.channelName);
                 
-                // 提取指定通道的数据
-                const channelData = new Uint8Array(bounds.width * bounds.height);
-                const components = rgbData.length / (bounds.width * bounds.height);
-                
-                for (let i = 0; i < bounds.width * bounds.height; i++) {
-                    channelData[i] = rgbData[i * components + channelIndex];
-                }
-                
-                // 提取选区内的像素数据
-                const selectedChannelData = new Uint8Array(bounds.selectionDocIndices.size);
-                let index = 0;
-                
-                for (const docIndex of bounds.selectionDocIndices) {
-                    const docX = docIndex % bounds.docWidth;
-                    const docY = Math.floor(docIndex / bounds.docWidth);
-                    const boundsX = docX - bounds.left;
-                    const boundsY = docY - bounds.top;
-                    
-                    if (boundsX >= 0 && boundsX < bounds.width && boundsY >= 0 && boundsY < bounds.height) {
-                        const boundsIndex = boundsY * bounds.width + boundsX;
-                        selectedChannelData[index] = channelData[boundsIndex] || 0;
-                    } else {
-                        selectedChannelData[index] = 0;
+                // 第一步：提取完整文档的单通道数据 (长度: bounds.docWidth * bounds.docHeight)
+                const fullDocChannelData = new Uint8Array(bounds.docWidth * bounds.docHeight);
+                const totalPixels = bounds.docWidth * bounds.docHeight;
+                const components = Math.round(rgbData.length / totalPixels);
+     
+                // 尝试不同的提取方式
+                if (components === 3 || components === 4) {
+                    // 标准的RGB/RGBA格式
+                    for (let i = 0; i < totalPixels; i++) {
+                        const pixelStartIndex = i * components;
+                        fullDocChannelData[i] = rgbData[pixelStartIndex + channelIndex];
                     }
-                    index++;
-                }
+                } 
+
+                // 第二步：从完整文档单通道数据中提取选区内的像素数据 (长度: bounds.selectionDocIndices.size)                
+                const selectionChannelData = new Uint8Array(bounds.selectionDocIndices.size);
                 
-                console.log('✅ SingleChannelHandler - 成功获取通道像素数据，选区内像素数量:', selectedChannelData.length);
+                if (bounds.selectionDocIndices && bounds.selectionDocIndices.size > 0) {
+                    
+                    // 使用selectionDocIndices直接获取选区内像素
+                    let fillIndex = 0;
+                    // 将Set转换为数组以便遍历
+                    const selectionIndices = Array.from(bounds.selectionDocIndices);
+                    
+                    for (const docIndex of selectionIndices) {
+                        if (docIndex >= 0 && docIndex < fullDocChannelData.length && fillIndex < selectionChannelData.length) {
+                            selectionChannelData[fillIndex] = fullDocChannelData[docIndex];
+                            fillIndex++;
+                        }
+                    }
+                    
+                    console.log(`📊 通过selectionDocIndices提取了【单通道数据】中 ${fillIndex} 个像素`);
+                }
                 
                 // 释放 ImageData 资源
                 pixelData.imageData.dispose();
                 
-                return selectedChannelData;
+                return {
+                    channelData: selectionChannelData,
+                    originalRgbaData: rgbData // 根据图层类型，可能是RGB(背景图层)或RGBA(普通图层)数据
+                };
             } else {
                 throw new Error('无法获取通道像素数据');
             }
@@ -482,6 +482,15 @@ export class SingleChannelHandler {
     private static async generatePatternData(bounds: any, pattern: Pattern, state: any): Promise<{ colorData: Uint8Array; alphaData?: Uint8Array }> {
         console.log('🔳 生成图案数据');
         
+        // 验证图案数据
+        if (!pattern.patternRgbData || pattern.patternRgbData.length === 0) {
+            console.error('❌ 图案数据为空或无效');
+            return {
+                colorData: new Uint8Array(bounds.selectionDocIndices.size),
+                alphaData: undefined
+            };
+        }
+        
         // 复用PatternFill中的逻辑
         const patternWidth = pattern.width || pattern.originalWidth || 100;
         const patternHeight = pattern.height || pattern.originalHeight || 100;
@@ -490,11 +499,31 @@ export class SingleChannelHandler {
         const scaledPatternHeight = Math.round(patternHeight * scale / 100);
         const angle = pattern.currentAngle || pattern.angle || 0;
         
+        console.log('图案参数:', {
+            fillMode: pattern.fillMode,
+            width: patternWidth,
+            height: patternHeight,
+            originalWidth: pattern.originalWidth,
+            originalHeight: pattern.originalHeight,
+            scale: scale,
+            currentScale: pattern.currentScale,
+            scaledWidth: scaledPatternWidth,
+            scaledHeight: scaledPatternHeight,
+            angle: angle,
+            currentAngle: pattern.currentAngle,
+            hasAlpha: pattern.hasAlpha,
+            components: pattern.patternComponents,
+            boundsSize: `${bounds.width}x${bounds.height}`,
+            selectionSize: bounds.selectionDocIndices.size,
+            patternDataLength: pattern.patternRgbData?.length || 0,
+            patternDataSample: pattern.patternRgbData?.slice(0, 12) || [],
+            hasPatternData: !!pattern.patternRgbData
+        });
+        
         let patternResult: { colorData: Uint8Array; alphaData?: Uint8Array };
         
         if (pattern.fillMode === 'stamp') {
-            // 盖图章模式 - 需要动态导入函数
-            const { createStampPatternData } = await import('./PatternFill');
+            // 盖图章模式 - 使用静态导入的函数
             const stampResult = await createStampPatternData(
                 pattern.patternRgbData,
                 patternWidth,
@@ -515,8 +544,7 @@ export class SingleChannelHandler {
                 alphaData: stampResult.alphaData
             };
         } else {
-            // 贴墙纸模式 - 需要动态导入函数
-            const { createTilePatternData } = await import('./PatternFill');
+            // 贴墙纸模式 - 使用静态导入的函数（同步函数，无需await）
             const tileResult = createTilePatternData(
                 pattern.patternRgbData,
                 patternWidth,
@@ -537,6 +565,14 @@ export class SingleChannelHandler {
                 alphaData: tileResult.alphaData
             };
         }
+        
+        console.log('图案数据生成结果:', {
+            colorDataLength: patternResult.colorData?.length || 0,
+            alphaDataLength: patternResult.alphaData?.length || 0,
+            expectedSize: bounds.width * bounds.height,
+            colorDataSample: patternResult.colorData?.slice(0, 10) || [],
+            hasValidData: patternResult.colorData && patternResult.colorData.length > 0
+        });
         
         // 提取选区内的图案数据
         const selectedColorData = new Uint8Array(bounds.selectionDocIndices.size);
@@ -569,6 +605,14 @@ export class SingleChannelHandler {
             index++;
         }
         
+        console.log('选区图案数据提取结果:', {
+            selectedColorDataLength: selectedColorData.length,
+            selectedAlphaDataLength: selectedAlphaData?.length || 0,
+            selectedColorDataSample: selectedColorData.slice(0, 10),
+            nonZeroCount: Array.from(selectedColorData).filter(v => v > 0).length,
+            averageValue: Array.from(selectedColorData).reduce((a, b) => a + b, 0) / selectedColorData.length
+        });
+        
         console.log('✅ 图案数据生成完成');
         return {
             colorData: selectedColorData,
@@ -595,95 +639,128 @@ export class SingleChannelHandler {
     
     // 计算填充混合
     private static async calculateFillBlend(
-        channelData: Uint8Array,
-        fillData: Uint8Array,
-        alphaData: Uint8Array | undefined,
+        selectionChannelData: Uint8Array, // 选区内的单通道数据 (长度: bounds.selectionDocIndices.size)
+        selectionFillData: Uint8Array,    // 选区内的填充数据 (长度: bounds.selectionDocIndices.size)
+        selectionAlphaData: Uint8Array | undefined, // 选区内的填充内容的透明度数据 (长度: bounds.selectionDocIndices.size)
         opacity: number,
         blendMode: string,
         bounds: any
     ): Promise<Uint8Array> {
         console.log('🔄 计算填充混合');
         
-        const finalData = new Uint8Array(channelData.length);
-        const opacityFactor = opacity / 100;
+        // 输出数据：选区内混合后的单通道数据 (长度: bounds.selectionDocIndices.size)
+        const blendedSelectionData = new Uint8Array(bounds.selectionDocIndices.size);
+        const opacityRatio = opacity * 0.01; // 避免重复除法
         
         // 获取混合模式计算函数
         const blendFunction = BLEND_MODE_CALCULATIONS[blendMode] || BLEND_MODE_CALCULATIONS['normal'];
         
-        for (let i = 0; i < channelData.length; i++) {
-            const baseValue = channelData[i];
-            const fillValue = fillData[i] || 0;
+        // 检查是否有选区羽化系数
+        const hasFeathering = bounds?.selectionCoefficients?.length > 0;
+        const selectionCoefficients = bounds?.selectionCoefficients;
+        
+        for (let i = 0; i < selectionChannelData.length; i++) {
+            const baseValue = selectionChannelData[i]; // 选区内原始通道值
+            const fillValue = selectionFillData[i];    // 选区内填充值
+            const alphaValue = selectionAlphaData ? selectionAlphaData[i] : 255; // 选区内透明度值
             
-            // 计算有效不透明度
-            let effectiveOpacity = opacityFactor;
+            // 计算填充内容的最终的透明度（图案/渐变透明度 × 整体不透明度）
+            const finalAlpha = (alphaValue / 255) * opacityRatio;
             
-            // 应用透明度数据
-            if (alphaData && alphaData[i] !== undefined) {
-                effectiveOpacity *= alphaData[i] / 255;
+            // 如果填充内容最终透明度为0，直接保持原始通道值，不进行任何混合
+            if (finalAlpha === 0) {
+                blendedSelectionData[i] = baseValue;
+                continue;
             }
             
-            // 应用选区羽化系数
-            if (bounds.selectionCoefficients && i < bounds.selectionCoefficients.length) {
-                effectiveOpacity *= bounds.selectionCoefficients[i];
-            }
-            
-            // 执行混合计算
+            // 计算混合值
             const blendedValue = blendFunction(baseValue, fillValue);
             
-            // 应用不透明度
-            finalData[i] = Math.round(baseValue + (blendedValue - baseValue) * effectiveOpacity);
+            // 应用透明度混合
+            const invAlphaRatio = 1 - finalAlpha;
+            let blendedResult = baseValue * invAlphaRatio + blendedValue * finalAlpha;
+            
+            // 应用羽化系数（如果存在）
+            if (hasFeathering && selectionCoefficients && selectionCoefficients[i] !== undefined) {
+                const featherCoeff = selectionCoefficients[i];
+                // 羽化混合：原始值 * (1 - 羽化系数) + 混合结果 * 羽化系数
+                const invFeatherCoeff = 1 - featherCoeff;
+                blendedResult = baseValue * invFeatherCoeff + blendedResult * featherCoeff;
+            }
+            
+            // 快速边界检查和取整
+            blendedSelectionData[i] = blendedResult > 255 ? 255 : (blendedResult < 0 ? 0 : Math.round(blendedResult));
         }
         
         console.log('✅ 填充混合计算完成');
-        return finalData;
+        return blendedSelectionData;
     }
     
     // 计算清除混合
     private static async calculateClearBlend(
-        channelData: Uint8Array,
-        clearData: Uint8Array,
-        alphaData: Uint8Array | undefined,
+        selectionChannelData: Uint8Array, // 选区内的单通道数据 (长度: bounds.selectionDocIndices.size)
+        selectionClearData: Uint8Array,   // 选区内的清除数据 (长度: bounds.selectionDocIndices.size)
+        selectionAlphaData: Uint8Array | undefined, // 选区内的透明度数据 (长度: bounds.selectionDocIndices.size)
         opacity: number,
         bounds: any
     ): Promise<Uint8Array> {
         console.log('🧹 计算清除混合');
         
-        const finalData = new Uint8Array(channelData.length);
+        // 输出数据：选区内清除后的单通道数据 (长度: bounds.selectionDocIndices.size)
+        const clearedSelectionData = new Uint8Array(selectionChannelData.length);
         const opacityFactor = opacity / 100;
         
-        for (let i = 0; i < channelData.length; i++) {
-            const baseValue = channelData[i];
-            const clearValue = clearData[i] || 0;
+        // 检查是否有选区羽化系数
+        const hasFeathering = bounds?.selectionCoefficients?.length > 0;
+        const selectionCoefficients = bounds?.selectionCoefficients;
+        
+        for (let i = 0; i < selectionChannelData.length; i++) {
+            const baseValue = selectionChannelData[i]; // 选区内原始通道值 (0-255)
+            const clearValue = selectionClearData[i] || 0; // 选区内清除值 (0-255)
+            const alpha = selectionAlphaData ? selectionAlphaData[i] : 255; // 选区内透明度值 (0-255)
             
-            // 计算有效不透明度
+            // 如果图案/渐变完全透明，不进行清除操作
+            if (alpha === 0) {
+                clearedSelectionData[i] = baseValue;
+                continue;
+            }
+            
+            // 计算有效不透明度（考虑选区羽化系数）
             let effectiveOpacity = opacityFactor;
-            
-            // 应用透明度数据
-            if (alphaData && alphaData[i] !== undefined) {
-                effectiveOpacity *= alphaData[i] / 255;
+            if (hasFeathering && selectionCoefficients && selectionCoefficients[i] !== undefined) {
+                effectiveOpacity *= selectionCoefficients[i];
             }
             
-            // 应用选区羽化系数
-            if (bounds.selectionCoefficients && i < bounds.selectionCoefficients.length) {
-                effectiveOpacity *= bounds.selectionCoefficients[i];
-            }
+            // 减去模式：通道值 - (清除值 * 有效不透明度 * 透明度)
+            const alphaFactor = alpha / 255;
+            const subtractAmount = clearValue * effectiveOpacity * alphaFactor;
+            const finalValue = baseValue - subtractAmount;
             
-            // 清除模式：最终值 = 清除值 * 有效不透明度
-            finalData[i] = Math.round(clearValue * effectiveOpacity);
+            clearedSelectionData[i] = Math.min(255, Math.max(0, Math.round(finalValue)));
         }
         
         console.log('✅ 清除混合计算完成');
-        return finalData;
+        return clearedSelectionData;
     }
     
     // 更新通道像素数据
-    private static async updateChannelPixels(finalData: Uint8Array, bounds: any, channelInfo: ChannelInfo, state?: any) {
+    // originalRgbaData: 原始图像数据，背景图层为RGB格式，普通图层为RGBA格式
+    private static async updateChannelPixels(finalData: Uint8Array, bounds: any, channelInfo: ChannelInfo, originalRgbaData: Uint8Array, state?: any) {
         try {
             const activeDoc = app.activeDocument;
             const activeLayer = activeDoc.activeLayers[0];
+            const activeLayerID = activeLayer.id;
             if (!activeLayer) {
                 throw new Error('没有活动图层');
             }
+            
+            // 获取原始图层信息，判断是否为背景图层
+            const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
+            const isBackgroundLayer = layerInfo?.isBackground || false;
+            
+            // 根据图层类型确定components数量：背景图层为3(RGB)，普通图层为4(RGBA)
+            const components = isBackgroundLayer ? 3 : 4;
+            console.log('🔍 图层类型检测 - 是否为背景图层:', isBackgroundLayer, '组件数:', components);
             
             // 确定通道索引和通道名称
             let channelIndex: number;
@@ -708,8 +785,6 @@ export class SingleChannelHandler {
                     throw new Error(`不支持的通道: ${channelInfo.channelName}`);
             }
             
-            console.log('💾 SingleChannelHandler - 更新通道索引:', channelIndex, '通道名称:', channelInfo.channelName, '目标通道:', targetChannelName);
-            
             // 1. 创建临时图层
             await action.batchPlay([
                 {
@@ -727,44 +802,86 @@ export class SingleChannelHandler {
                 }
             ], {});
             
-            // 获取临时图层ID
-            const tempLayer = activeDoc.activeLayers[0];
-            const tempLayerId = tempLayer.id;
+            // 获取临时图层ID（使用batchPlay确保准确性）
+            const tempLayerResult = await action.batchPlay([
+                {
+                    _obj: "get",
+                    _target: [
+                        {
+                            _ref: "layer",
+                            _enum: "ordinal",
+                            _value: "targetEnum"
+                        }
+                    ]
+                }
+            ], { synchronousExecution: true });
             
-            // 2. 创建灰度数据数组（RGBA格式，所有通道都使用相同的灰度值）
-            const grayRgbaData = new Uint8Array(bounds.docWidth * bounds.docHeight * 4);
-            
-            // 初始化为白色背景
-            for (let i = 0; i < grayRgbaData.length; i += 4) {
-                grayRgbaData[i] = 255;     // R
-                grayRgbaData[i + 1] = 255; // G
-                grayRgbaData[i + 2] = 255; // B
-                grayRgbaData[i + 3] = 255; // A
+            const tempLayerId = tempLayerResult[0]?.layerID;
+            if (!tempLayerId) {
+                throw new Error('无法获取临时图层ID');
             }
             
-            // 将finalData写入选区位置的所有通道
+            // 3. 从原始图像数据中提取指定通道的灰度数据
+            // 注意：originalRgbaData的组件数根据图层类型而定：背景图层为RGB(3)，普通图层为RGBA(4)
+            const singleChannelPixelCount = bounds.docWidth * bounds.docHeight;
+            const singleChannelData = new Uint8Array(singleChannelPixelCount);
+            
+            for (let i = 0; i < singleChannelPixelCount; i++) {
+                const pixelIndex = i * components;
+                // 根据通道索引提取对应通道的灰度值
+                singleChannelData[i] = originalRgbaData[pixelIndex + channelIndex];
+            }
+            // 4. 用finalData更新单通道数据选区内的部分
             let dataIndex = 0;
+            let updateCount = 0;
+            
             for (const docIndex of bounds.selectionDocIndices) {
-                const docX = docIndex % bounds.docWidth;
-                const docY = Math.floor(docIndex / bounds.docWidth);
-                const pixelIndex = (docY * bounds.docWidth + docX) * 4;
-                
-                const grayValue = finalData[dataIndex];
-                grayRgbaData[pixelIndex] = grayValue;     // R
-                grayRgbaData[pixelIndex + 1] = grayValue; // G
-                grayRgbaData[pixelIndex + 2] = grayValue; // B
-                grayRgbaData[pixelIndex + 3] = 255;       // A
-                
-                dataIndex++;
+                if (dataIndex < finalData.length) {
+                    singleChannelData[docIndex] = finalData[dataIndex];
+                    updateCount++;
+                    dataIndex++;
+                } else {
+                    break;
+                }
             }
             
-            // 创建ImageData并写入临时图层
+            // 5. 创建新的RGBA图层数组，临时图层总是RGBA格式（4个组件）
+            const pixelCount = bounds.docWidth * bounds.docHeight;
+            const grayRgbaData = new Uint8Array(pixelCount * 4); // 临时图层总是RGBA
+            
+            // 将原始数据转换为RGBA格式并更新目标通道
+            for (let i = 0; i < singleChannelPixelCount; i++) {
+                const originalPixelIndex = i * components; // 原始数据索引
+                const rgbaPixelIndex = i * 4; // RGBA数据索引
+                const channelValue = singleChannelData[i];
+                
+                if (components === 3) {
+                    // 背景图层：RGB -> RGBA
+                    grayRgbaData[rgbaPixelIndex] = originalRgbaData[originalPixelIndex]; // R
+                    grayRgbaData[rgbaPixelIndex + 1] = originalRgbaData[originalPixelIndex + 1]; // G
+                    grayRgbaData[rgbaPixelIndex + 2] = originalRgbaData[originalPixelIndex + 2]; // B
+                    grayRgbaData[rgbaPixelIndex + 3] = 255; // A (不透明)
+                    
+                    // 修改目标通道
+                    grayRgbaData[rgbaPixelIndex + channelIndex] = channelValue;
+                } else {
+                    // 普通图层：RGBA -> RGBA
+                    grayRgbaData[rgbaPixelIndex] = originalRgbaData[originalPixelIndex]; // R
+                    grayRgbaData[rgbaPixelIndex + 1] = originalRgbaData[originalPixelIndex + 1]; // G
+                    grayRgbaData[rgbaPixelIndex + 2] = originalRgbaData[originalPixelIndex + 2]; // B
+                    grayRgbaData[rgbaPixelIndex + 3] = originalRgbaData[originalPixelIndex + 3]; // A
+                    
+                    // 修改目标通道
+                    grayRgbaData[rgbaPixelIndex + channelIndex] = channelValue;
+                }
+            }
+            
+            // 创建ImageData并写入临时图层（总是RGBA格式）
             const tempImageData = await imaging.createImageDataFromBuffer(grayRgbaData, {
                 width: bounds.docWidth,
                 height: bounds.docHeight,
                 colorSpace: 'RGB',
-                hasAlpha: false,
-                componentSize: 8,
+                colorProfile: "sRGB IEC61966-2.1",
                 components: 4
             });
             
@@ -790,31 +907,57 @@ export class SingleChannelHandler {
                     "_target": [
                         {
                             "_ref": "layer",
-                            "_id": activeLayer.id
+                            "_id": activeLayerID
                         }
                     ],
                     "_isCommand": false
                 }
             ], {});
+            console.log('选择原始图层完成,图层名称为：', activeLayer.name);
             
-            // 4. 使用应用图像API将临时图层的指定通道复制到原图层的目标通道
+            // 4. 选择目标通道
+            await action.batchPlay([
+                {
+                    "_obj": "select",
+                    "_target": [
+                        {
+                            "_ref": "channel",
+                            "_enum": "channel",
+                            "_value": targetChannelName
+                        }
+                    ],
+                    "_isCommand": false
+                }
+            ], {});
+            console.log('选择目标通道完成,通道名称为：', targetChannelName);
+            
+            // 5. 使用应用图像API将临时图层的指定通道复制到原图层的目标通道
             await action.batchPlay([
                 {
                     "_obj": "applyImageEvent",
                     "with": {
                         "_obj": "calculation",
                         "to": {
-                            "_ref": "channel",
-                            "_enum": "channel",
-                            "_value": targetChannelName
+                            "_ref": [
+                                {
+                                    "_ref": "channel",
+                                    "_enum": "channel",
+                                    "_value": targetChannelName
+                                },
+                                {
+                                    "_ref": "layer",
+                                    "_id": tempLayerId
+                                }
+                            ]
                         },
                         "preserveTransparency": true
                     },
                     "_isCommand": false
                 }
             ], {});
+            console.log('应用图像API完成');
             
-            // 5. 删除临时图层
+            // 6. 删除临时图层
             await action.batchPlay([
                 {
                     "_obj": "delete",
@@ -822,6 +965,21 @@ export class SingleChannelHandler {
                         {
                             "_ref": "layer",
                             "_id": tempLayerId
+                        }
+                    ],
+                    "_isCommand": false
+                }
+            ], {});
+
+            // 7. 再次选择目标通道
+            await action.batchPlay([
+                {
+                    "_obj": "select",
+                    "_target": [
+                        {
+                            "_ref": "channel",
+                            "_enum": "channel",
+                            "_value": targetChannelName
                         }
                     ],
                     "_isCommand": false

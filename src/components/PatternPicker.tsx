@@ -923,6 +923,41 @@ interface PatternPickerProps {
         }
     };
 
+    // 监听选中图案变化，传递完整的图案数据给父组件
+    useEffect(() => {
+        if (selectedPattern) {
+            const pattern = patterns.find(p => p.id === selectedPattern);
+            if (pattern) {
+                // 构建完整的图案数据，包括当前的设置
+                const completePatternData = {
+                    ...pattern,
+                    angle: angle,
+                    scale: scale,
+                    fillMode: fillMode,
+                    preserveTransparency: preserveTransparency,
+                    rotateAll: rotateAll
+                };
+                console.log('传递给父组件的完整图案数据:', {
+                    patternId: pattern.id,
+                    patternName: pattern.name,
+                    width: pattern.width,
+                    height: pattern.height,
+                    originalWidth: pattern.originalWidth,
+                    originalHeight: pattern.originalHeight,
+                    angle: angle,
+                    scale: scale,
+                    fillMode: fillMode,
+                    preserveTransparency: preserveTransparency,
+                    rotateAll: rotateAll,
+                    patternRgbDataLength: pattern.patternRgbData?.length || 0
+                });
+                onSelect(completePatternData);
+            }
+        } else {
+            onSelect(null);
+        }
+    }, [selectedPattern, angle, scale, fillMode, preserveTransparency, rotateAll, patterns, onSelect]);
+
     // 处理点击空白区域取消选中
     const handleContainerClick = (event: React.MouseEvent) => {
         // 检查点击的是否是预设区域的空白部分
