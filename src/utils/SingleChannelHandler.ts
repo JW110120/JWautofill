@@ -89,8 +89,6 @@ export class SingleChannelHandler {
             
             // 写回通道数据
             await this.updateChannelPixels(finalData, bounds, channelInfo, originalRgbaData, state);
-            
-            console.log('✅ 单通道填充完成');
         } catch (error) {
             console.error('❌ 单通道填充失败:', error);
             throw error;
@@ -193,8 +191,6 @@ export class SingleChannelHandler {
                 const targetChannelInfo = targetChannelResult[0];
                 const channelName = targetChannelInfo.channelName;
                 
-                console.log('🔍 SingleChannelHandler - 当前激活通道:', channelName);
-                
                 // 检测是否为单个颜色通道
                 const singleColorChannels = ["红", "绿", "蓝", "Red", "Grain", "Blue", "R", "G", "B"];
                 const isColorChannel = singleColorChannels.includes(channelName);
@@ -269,8 +265,6 @@ export class SingleChannelHandler {
             const width = right - left;
             const height = bottom - top;
             
-            console.log('🎯 选区边界:', { left, top, right, bottom, width, height });
-            
             // 使用imaging.getSelection获取羽化选区的像素数据
             const pixels = await imaging.getSelection({
                 documentID: app.activeDocument.id,
@@ -334,6 +328,9 @@ export class SingleChannelHandler {
             }
             console.log('选区内的像素数量：', selectionDocIndices.size);
             
+            // 生成稳定的索引数组，确保后续所有处理顺序一致
+            const selectionIndicesArray = Array.from(selectionDocIndices);
+            
             return {
                 left,
                 top,
@@ -344,6 +341,7 @@ export class SingleChannelHandler {
                 docWidth: docWidthPixels,
                 docHeight: docHeightPixels,
                 selectionDocIndices,
+                selectionIndicesArray,
                 selectionCoefficients
             };
         } catch (error) {
@@ -393,8 +391,8 @@ export class SingleChannelHandler {
                 
                 
                 // 第一步：提取完整文档的单通道数据 (长度: bounds.docWidth * bounds.docHeight)
-                const fullDocChannelData = new Uint8Array(bounds.docWidth * bounds.docHeight);
                 const totalPixels = bounds.docWidth * bounds.docHeight;
+                const fullDocChannelData = new Uint8Array(totalPixels);
                 const components = Math.round(rgbData.length / totalPixels);
      
                 // 尝试不同的提取方式
@@ -411,10 +409,9 @@ export class SingleChannelHandler {
                 
                 if (bounds.selectionDocIndices && bounds.selectionDocIndices.size > 0) {
                     
-                    // 使用selectionDocIndices直接获取选区内像素
+                    // 使用稳定顺序的selectionIndicesArray直接获取选区内像素
                     let fillIndex = 0;
-                    // 将Set转换为数组以便遍历
-                    const selectionIndices = Array.from(bounds.selectionDocIndices);
+                    const selectionIndices = bounds.selectionIndicesArray || Array.from(bounds.selectionDocIndices);
                     
                     for (const docIndex of selectionIndices) {
                         if (docIndex >= 0 && docIndex < fullDocChannelData.length && fillIndex < selectionChannelData.length) {
@@ -483,21 +480,119 @@ export class SingleChannelHandler {
         console.log('🔳 生成图案数据');
         
         // 验证图案数据
-        if (!pattern.patternRgbData || pattern.patternRgbData.length === 0) {
-            console.error('❌ 图案数据为空或无效');
+        if (((!pattern.patternRgbData || pattern.patternRgbData.length === 0) && (!pattern.grayData || pattern.grayData.length === 0))) {
+            console.error('❌ 图案数据为空或无效（缺少RGB和灰度数据）');
             return {
                 colorData: new Uint8Array(bounds.selectionDocIndices.size),
                 alphaData: undefined
             };
         }
         
+        // 首先生成或获取灰度数据
+        if (!pattern.grayData) {
+            console.log('🔄 从RGB数据生成灰度数据');
+            const rgbData = pattern.patternRgbData;
+            let width = pattern.width || pattern.originalWidth || 100;
+            let height = pattern.height || pattern.originalHeight || 100;
+            let components = pattern.patternComponents || pattern.components || 4; // 默认RGBA
+            
+            // 守护：确保为有效数值
+            if (typeof width !== 'number' || !isFinite(width) || width <= 0) {
+                console.warn('⚠️ 图案宽度无效，使用默认值 100，当前值:', pattern.width, pattern.originalWidth);
+                width = 100;
+            }
+            if (typeof height !== 'number' || !isFinite(height) || height <= 0) {
+                console.warn('⚠️ 图案高度无效，使用默认值 100，当前值:', pattern.height, pattern.originalHeight);
+                height = 100;
+            }
+            if (typeof components !== 'number' || !isFinite(components) || components < 1 || components > 4) {
+                console.warn('⚠️ 通道数无效，使用默认值 4，当前值:', pattern.patternComponents, pattern.components);
+                components = 4;
+            }
+            
+            // 如果RGB长度与尺寸不匹配，尝试推断components
+            const expectedMin = width * height; // 最小1通道长度
+            if (rgbData && rgbData.length < expectedMin) {
+                console.error('❌ RGB数据长度小于最小期望值，无法生成灰度。len=', rgbData.length, 'expectMin=', expectedMin);
+            }
+            if (rgbData && rgbData.length % (width * height) === 0) {
+                const inferred = rgbData.length / (width * height);
+                if (inferred >= 1 && inferred <= 4 && inferred !== components) {
+                    console.warn('ℹ️ 依据数据长度推断通道数为', inferred, '替换原通道数', components);
+                    components = inferred;
+                }
+            }
+            
+            const grayData = new Uint8Array(width * height);
+            if (rgbData && rgbData.length >= width * height * Math.max(1, components)) {
+                for (let i = 0; i < width * height; i++) {
+                    const r = rgbData[i * components];
+                    const g = rgbData[i * components + 1];
+                    const b = rgbData[i * components + 2];
+                    const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+                    grayData[i] = gray;
+                }
+            } else {
+                console.warn('⚠️ RGB数据长度与尺寸/通道不匹配，使用中性灰填充');
+                grayData.fill(128);
+            }
+            
+            // 将生成的灰度数据保存到图案对象中
+            pattern.grayData = grayData;
+            console.log('✅ 成功从RGB数据生成灰度数据，长度:', grayData.length);
+        }
+        
         // 复用PatternFill中的逻辑
-        const patternWidth = pattern.width || pattern.originalWidth || 100;
-        const patternHeight = pattern.height || pattern.originalHeight || 100;
-        const scale = pattern.currentScale || pattern.scale || 100;
-        const scaledPatternWidth = Math.round(patternWidth * scale / 100);
-        const scaledPatternHeight = Math.round(patternHeight * scale / 100);
+        let patternWidth = pattern.width || pattern.originalWidth || 100;
+        let patternHeight = pattern.height || pattern.originalHeight || 100;
+        let scale = pattern.currentScale || pattern.scale || 100;
+        
+        // 守护：确保为有效数值
+        if (typeof patternWidth !== 'number' || !isFinite(patternWidth) || patternWidth <= 0) {
+            console.warn('⚠️ 图案宽度无效，使用默认值 100，当前值:', pattern.width, pattern.originalWidth);
+            patternWidth = 100;
+        }
+        if (typeof patternHeight !== 'number' || !isFinite(patternHeight) || patternHeight <= 0) {
+            console.warn('⚠️ 图案高度无效，使用默认值 100，当前值:', pattern.height, pattern.originalHeight);
+            patternHeight = 100;
+        }
+        if (typeof scale !== 'number' || !isFinite(scale) || scale <= 0) {
+            console.warn('⚠️ 缩放比例无效，使用默认值 100，当前值:', pattern.currentScale, pattern.scale);
+            scale = 100;
+        }
+        
+        const scaledPatternWidth = Math.max(1, Math.round(patternWidth * scale / 100));
+        const scaledPatternHeight = Math.max(1, Math.round(patternHeight * scale / 100));
         const angle = pattern.currentAngle || pattern.angle || 0;
+        
+        // 灰度数据一致性校验：若长度与尺寸不符，尝试从RGB重建或填充
+        if (pattern.grayData && pattern.grayData.length !== patternWidth * patternHeight) {
+            console.warn('⚠️ 灰度数据长度与尺寸不匹配，尝试修正。grayLen=', pattern.grayData.length, 'w*h=', patternWidth * patternHeight);
+            const rgbData = pattern.patternRgbData;
+            let comps = pattern.patternComponents || pattern.components || 4;
+            if (rgbData && rgbData.length % (patternWidth * patternHeight) === 0) {
+                const inferred = rgbData.length / (patternWidth * patternHeight);
+                if (inferred >= 1 && inferred <= 4) {
+                    comps = inferred;
+                }
+            }
+            const rebuilt = new Uint8Array(patternWidth * patternHeight);
+            if (rgbData && rgbData.length >= patternWidth * patternHeight * Math.max(1, comps)) {
+                for (let i = 0; i < patternWidth * patternHeight; i++) {
+                    const r = rgbData[i * comps];
+                    const g = rgbData[i * comps + 1];
+                    const b = rgbData[i * comps + 2];
+                    const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+                    rebuilt[i] = gray;
+                }
+                pattern.grayData = rebuilt;
+                console.log('🔧 已根据RGB数据重建匹配尺寸的灰度数据，长度:', rebuilt.length);
+            } else {
+                rebuilt.fill(128);
+                pattern.grayData = rebuilt;
+                console.warn('🔧 无法从RGB重建，使用中性灰填充匹配尺寸的数据，长度:', rebuilt.length);
+            }
+        }
         
         console.log('图案参数:', {
             fillMode: pattern.fillMode,
@@ -516,19 +611,23 @@ export class SingleChannelHandler {
             boundsSize: `${bounds.width}x${bounds.height}`,
             selectionSize: bounds.selectionDocIndices.size,
             patternDataLength: pattern.patternRgbData?.length || 0,
-            patternDataSample: pattern.patternRgbData?.slice(0, 12) || [],
-            hasPatternData: !!pattern.patternRgbData
+            grayDataLength: pattern.grayData?.length || 0,
+            hasPatternData: !!pattern.patternRgbData,
+            hasGrayData: !!pattern.grayData
         });
         
-        let patternResult: { colorData: Uint8Array; alphaData?: Uint8Array };
+        // 使用灰度数据生成图案
+        let grayPatternData: Uint8Array;
+        let patternAlphaData: Uint8Array | undefined;
         
         if (pattern.fillMode === 'stamp') {
-            // 盖图章模式 - 使用静态导入的函数
+            // 盖图章模式 - 使用灰度数据
+            console.log('🎯 单通道：使用盖图章模式填充');
             const stampResult = await createStampPatternData(
-                pattern.patternRgbData,
+                pattern.grayData,
                 patternWidth,
                 patternHeight,
-                pattern.patternComponents || 3,
+                1, // 灰度数据只有1个组件
                 bounds.width,
                 bounds.height,
                 scaledPatternWidth,
@@ -536,20 +635,37 @@ export class SingleChannelHandler {
                 angle,
                 bounds,
                 true, // 灰度模式
-                pattern.hasAlpha && pattern.patternComponents === 4 // 生成透明度数据
+                false // 不需要生成透明度数据（灰度模式）
             );
             
-            patternResult = {
-                colorData: stampResult.colorData,
-                alphaData: stampResult.alphaData
-            };
+            grayPatternData = stampResult.colorData;
+            
+            // 如果需要透明度数据，从RGB数据生成
+            if (pattern.hasAlpha && (pattern.patternComponents === 4 || pattern.components === 4)) {
+                const alphaStampResult = await createStampPatternData(
+                    pattern.patternRgbData,
+                    patternWidth,
+                    patternHeight,
+                    pattern.patternComponents || pattern.components || 4, // 使用原始RGB数据的组件数
+                    bounds.width,
+                    bounds.height,
+                    scaledPatternWidth,
+                    scaledPatternHeight,
+                    angle,
+                    bounds,
+                    false, // 非灰度模式
+                    true // 生成透明度数据
+                );
+                patternAlphaData = alphaStampResult.alphaData;
+            }
         } else {
-            // 贴墙纸模式 - 使用静态导入的函数（同步函数，无需await）
+            // 贴墙纸模式 - 使用灰度数据
+            console.log('🧱 单通道：使用贴墙纸模式填充');
             const tileResult = createTilePatternData(
-                pattern.patternRgbData,
+                pattern.grayData,
                 patternWidth,
                 patternHeight,
-                pattern.patternComponents || 3,
+                1, // 灰度数据只有1个组件
                 bounds.width,
                 bounds.height,
                 scaledPatternWidth,
@@ -557,33 +673,52 @@ export class SingleChannelHandler {
                 angle,
                 pattern.rotateAll !== false,
                 bounds,
-                pattern.hasAlpha && pattern.patternComponents === 4 // 生成透明度数据
+                false // 不需要生成透明度数据（灰度模式）
             );
             
-            patternResult = {
-                colorData: tileResult.colorData,
-                alphaData: tileResult.alphaData
-            };
+            grayPatternData = tileResult.colorData;
+            
+            // 如果需要透明度数据，从RGB数据生成
+            if (pattern.hasAlpha && (pattern.patternComponents === 4 || pattern.components === 4)) {
+                const alphaTileResult = createTilePatternData(
+                    pattern.patternRgbData,
+                    patternWidth,
+                    patternHeight,
+                    pattern.patternComponents || pattern.components || 4, // 使用原始RGB数据的组件数
+                    bounds.width,
+                    bounds.height,
+                    scaledPatternWidth,
+                    scaledPatternHeight,
+                    angle,
+                    pattern.rotateAll !== false,
+                    bounds,
+                    true // 生成透明度数据
+                );
+                patternAlphaData = alphaTileResult.alphaData;
+            }
         }
         
         console.log('图案数据生成结果:', {
-            colorDataLength: patternResult.colorData?.length || 0,
-            alphaDataLength: patternResult.alphaData?.length || 0,
+            grayDataLength: grayPatternData?.length || 0,
+            alphaDataLength: patternAlphaData?.length || 0,
             expectedSize: bounds.width * bounds.height,
-            colorDataSample: patternResult.colorData?.slice(0, 10) || [],
-            hasValidData: patternResult.colorData && patternResult.colorData.length > 0
+            grayDataSample: grayPatternData?.slice(0, 10) || [],
+            hasValidData: grayPatternData && grayPatternData.length > 0
         });
         
         // 提取选区内的图案数据
         const selectedColorData = new Uint8Array(bounds.selectionDocIndices.size);
         let selectedAlphaData: Uint8Array | undefined;
         
-        if (patternResult.alphaData) {
+        if (patternAlphaData) {
             selectedAlphaData = new Uint8Array(bounds.selectionDocIndices.size);
         }
         
-        let index = 0;
-        for (const docIndex of bounds.selectionDocIndices) {
+        // 使用在getSelectionData中生成的稳定顺序的索引数组
+        const selectionIndicesArray = bounds.selectionIndicesArray || Array.from(bounds.selectionDocIndices);
+        
+        for (let index = 0; index < selectionIndicesArray.length; index++) {
+            const docIndex = selectionIndicesArray[index];
             const docX = docIndex % bounds.docWidth;
             const docY = Math.floor(docIndex / bounds.docWidth);
             const boundsX = docX - bounds.left;
@@ -591,10 +726,10 @@ export class SingleChannelHandler {
             
             if (boundsX >= 0 && boundsX < bounds.width && boundsY >= 0 && boundsY < bounds.height) {
                 const boundsIndex = boundsY * bounds.width + boundsX;
-                selectedColorData[index] = patternResult.colorData[boundsIndex] || 0;
+                selectedColorData[index] = grayPatternData[boundsIndex] || 0;
                 
-                if (selectedAlphaData && patternResult.alphaData) {
-                    selectedAlphaData[index] = patternResult.alphaData[boundsIndex] || 0;
+                if (selectedAlphaData && patternAlphaData) {
+                    selectedAlphaData[index] = patternAlphaData[boundsIndex] || 0;
                 }
             } else {
                 selectedColorData[index] = 0;
@@ -602,15 +737,18 @@ export class SingleChannelHandler {
                     selectedAlphaData[index] = 0;
                 }
             }
-            index++;
         }
         
+        const nonZeroCount = selectedColorData.length > 0 ? Array.from(selectedColorData).filter(v => v > 0).length : 0;
+        const averageValue = selectedColorData.length > 0 ? Array.from(selectedColorData).reduce((a, b) => a + b, 0) / selectedColorData.length : 0;
         console.log('选区图案数据提取结果:', {
+            bounds: { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height, docWidth: bounds.docWidth, docHeight: bounds.docHeight },
             selectedColorDataLength: selectedColorData.length,
             selectedAlphaDataLength: selectedAlphaData?.length || 0,
             selectedColorDataSample: selectedColorData.slice(0, 10),
-            nonZeroCount: Array.from(selectedColorData).filter(v => v > 0).length,
-            averageValue: Array.from(selectedColorData).reduce((a, b) => a + b, 0) / selectedColorData.length
+            firstFewIndices: (bounds.selectionIndicesArray || Array.from(bounds.selectionDocIndices)).slice(0, 10),
+            nonZeroCount,
+            averageValue
         });
         
         console.log('✅ 图案数据生成完成');
@@ -637,7 +775,7 @@ export class SingleChannelHandler {
         };
     }
     
-    // 计算填充混合
+    // 计算填充
     private static async calculateFillBlend(
         selectionChannelData: Uint8Array, // 选区内的单通道数据 (长度: bounds.selectionDocIndices.size)
         selectionFillData: Uint8Array,    // 选区内的填充数据 (长度: bounds.selectionDocIndices.size)
@@ -646,7 +784,6 @@ export class SingleChannelHandler {
         blendMode: string,
         bounds: any
     ): Promise<Uint8Array> {
-        console.log('🔄 计算填充混合');
         
         // 输出数据：选区内混合后的单通道数据 (长度: bounds.selectionDocIndices.size)
         const blendedSelectionData = new Uint8Array(bounds.selectionDocIndices.size);
@@ -692,11 +829,10 @@ export class SingleChannelHandler {
             blendedSelectionData[i] = blendedResult > 255 ? 255 : (blendedResult < 0 ? 0 : Math.round(blendedResult));
         }
         
-        console.log('✅ 填充混合计算完成');
         return blendedSelectionData;
     }
     
-    // 计算清除混合
+    // 计算清除
     private static async calculateClearBlend(
         selectionChannelData: Uint8Array, // 选区内的单通道数据 (长度: bounds.selectionDocIndices.size)
         selectionClearData: Uint8Array,   // 选区内的清除数据 (长度: bounds.selectionDocIndices.size)
@@ -760,7 +896,7 @@ export class SingleChannelHandler {
             
             // 根据图层类型确定components数量：背景图层为3(RGB)，普通图层为4(RGBA)
             const components = isBackgroundLayer ? 3 : 4;
-            console.log('🔍 图层类型检测 - 是否为背景图层:', isBackgroundLayer, '组件数:', components);
+            console.log('🔍 是否为背景图层:', isBackgroundLayer, '组件数:', components);
             
             // 确定通道索引和通道名称
             let channelIndex: number;
@@ -831,19 +967,15 @@ export class SingleChannelHandler {
                 // 根据通道索引提取对应通道的灰度值
                 singleChannelData[i] = originalRgbaData[pixelIndex + channelIndex];
             }
-            // 4. 用finalData更新单通道数据选区内的部分
-            let dataIndex = 0;
-            let updateCount = 0;
-            
-            for (const docIndex of bounds.selectionDocIndices) {
-                if (dataIndex < finalData.length) {
-                    singleChannelData[docIndex] = finalData[dataIndex];
-                    updateCount++;
-                    dataIndex++;
-                } else {
-                    break;
-                }
+
+
+            // 4. 用finalData更新单通道数据选区内的部分（保持与提取顺序一致）
+            const selectionIndicesArray = Array.from(bounds.selectionDocIndices);
+            for (let i = 0; i < finalData.length && i < selectionIndicesArray.length; i++) {
+                const docIndex = selectionIndicesArray[i];
+                singleChannelData[docIndex] = finalData[i];
             }
+            
             
             // 5. 创建新的RGBA图层数组，临时图层总是RGBA格式（4个组件）
             const pixelCount = bounds.docWidth * bounds.docHeight;
@@ -913,7 +1045,6 @@ export class SingleChannelHandler {
                     "_isCommand": false
                 }
             ], {});
-            console.log('选择原始图层完成,图层名称为：', activeLayer.name);
             
             // 4. 选择目标通道
             await action.batchPlay([
@@ -929,7 +1060,6 @@ export class SingleChannelHandler {
                     "_isCommand": false
                 }
             ], {});
-            console.log('选择目标通道完成,通道名称为：', targetChannelName);
             
             // 5. 使用应用图像API将临时图层的指定通道复制到原图层的目标通道
             await action.batchPlay([
@@ -955,7 +1085,6 @@ export class SingleChannelHandler {
                     "_isCommand": false
                 }
             ], {});
-            console.log('应用图像API完成');
             
             // 6. 删除临时图层
             await action.batchPlay([
@@ -985,8 +1114,6 @@ export class SingleChannelHandler {
                     "_isCommand": false
                 }
             ], {});
-            
-            console.log('✅ SingleChannelHandler - 成功更新通道像素数据');
         } catch (error) {
             console.error('❌ SingleChannelHandler - 更新通道像素数据失败:', error);
             throw error;
