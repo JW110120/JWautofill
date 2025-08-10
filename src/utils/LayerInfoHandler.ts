@@ -116,7 +116,7 @@ export class LayerInfoHandler {
         }
     }
 
-    // 检测是否选中了单个颜色通道（红、绿、蓝）
+    // 检测是否选中了单个颜色通道（红、绿、蓝、Alpha）
     static async checkSingleColorChannelMode(): Promise<boolean> {
         try {
             // 获取当前激活的通道信息
@@ -139,13 +139,27 @@ export class LayerInfoHandler {
             if (targetChannelResult[0]) {
                 const targetChannelInfo = targetChannelResult[0];
                 const channelName = targetChannelInfo.channelName;
+                const itemIndex = targetChannelInfo.itemIndex;
                 
                 console.log("🔍 当前激活通道:", channelName);
+                console.log("🔍 当前激活通道的索引:", itemIndex);
+
                 
-                // 检测是否为单个颜色通道（红、绿、蓝）
+                // 检测是否为RGB颜色通道（红、绿、蓝）
                 // 通常这些通道的名称为 "红"、"绿"、"蓝" 或 "Red"、"Grain"、"Blue"
-                const singleColorChannels = ["红", "绿", "蓝", "Red", "Grain", "Blue", "R", "G", "B"];
-                const isInSingleColorChannel = singleColorChannels.includes(channelName);
+                const rgbChannels = ["红", "绿", "蓝", "Red", "Grain", "Blue", "R", "G", "B"];
+                const isRgbChannel = rgbChannels.includes(channelName);
+                
+                // Alpha通道通常以 "Alpha" 开头或包含 "Alpha" 关键字
+                const isAlphaChannel = channelName.toLowerCase().includes('alpha') || 
+                                     channelName.match(/^alpha\s*\d*$/i) ||
+                                     channelName.match(/^[aα]\s*\d*$/i) || itemIndex>=4
+                
+                // 对于单通道操作，支持RGB通道和Alpha通道
+                const isInSingleColorChannel = isRgbChannel || isAlphaChannel;
+                
+                console.log(`🎯 当前通道是RGB复合通道吗: ${isRgbChannel}, 是单通道吗: ${isInSingleColorChannel}`);
+
 
                 return isInSingleColorChannel;
             }

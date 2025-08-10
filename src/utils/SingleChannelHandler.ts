@@ -18,28 +18,30 @@ interface SingleChannelFillOptions {
 interface ChannelInfo {
     channelName: string;
     channelIndex: number;
-    isColorChannel: boolean;
+    isSingleChannel: boolean;
+    isAlphaChannel: boolean;
+    isRgbChannel: boolean;
 }
 
 export class SingleChannelHandler {
     
     // 主入口：单通道填充
-    static async fillSingleChannel(options: SingleChannelFillOptions, fillMode: 'foreground' | 'pattern' | 'gradient', state?: any) {
+    static async fillSingleChannel(options: SingleChannelFillOptions, fillMode: 'foreground' | 'pattern' | 'gradient', state?: any): Promise<boolean> {
         try {
             console.log('🎨 开始单通道填充操作，模式:', fillMode);
             
             // 检查是否在单通道模式
             const channelInfo = await this.getCurrentChannelInfo();
-            if (!channelInfo || !channelInfo.isColorChannel) {
+            if (!channelInfo || !channelInfo.isSingleChannel) {
                 console.error('❌ 当前不在单个颜色通道模式');
-                return;
+                return false;
             }
             
             // 获取选区数据
             const bounds = await this.getSelectionData();
             if (!bounds || !bounds.selectionDocIndices || bounds.selectionDocIndices.size === 0) {
                 console.log('❌ 无法获取选区数据或选区为空');
-                return;
+                return false;
             }
             
             // 获取当前通道的灰度数据和原始图像数据
@@ -58,7 +60,7 @@ export class SingleChannelHandler {
                 case 'pattern':
                     if (!options.pattern) {
                         await core.showAlert({ message: '请先选择一个图案预设' });
-                        return;
+                        return false;
                     }
                     const patternResult = await this.generatePatternData(bounds, options.pattern, state);
                     fillData = patternResult.colorData;
@@ -67,7 +69,7 @@ export class SingleChannelHandler {
                 case 'gradient':
                     if (!options.gradient) {
                         await core.showAlert({ message: '请先选择一个渐变预设' });
-                        return;
+                        return false;
                     }
                     const gradientResult = await this.generateGradientData(bounds, options.gradient, state);
                     fillData = gradientResult.colorData;
@@ -88,30 +90,39 @@ export class SingleChannelHandler {
             );
             
             // 写回通道数据
-            await this.updateChannelPixels(finalData, bounds, channelInfo, originalRgbaData, state);
+            if (channelInfo.isAlphaChannel) {
+                await this.updateAlphaChannelPixels(finalData, bounds, channelInfo, channelData, state);
+                console.log('✅ alpha通道:', channelInfo.channelName);
+
+            } else {
+                await this.updateChannelPixels(finalData, bounds, channelInfo, originalRgbaData, state);
+                console.log('✅ 红绿蓝通道:', channelInfo.channelName);
+
+            }
+            return true;
         } catch (error) {
             console.error('❌ 单通道填充失败:', error);
-            throw error;
+            return false;
         }
     }
     
     // 主入口：单通道清除
-    static async clearSingleChannel(options: SingleChannelFillOptions, fillMode: 'foreground' | 'pattern' | 'gradient', state?: any) {
+    static async clearSingleChannel(options: SingleChannelFillOptions, fillMode: 'foreground' | 'pattern' | 'gradient', state?: any): Promise<boolean> {
         try {
             console.log('🧹 开始单通道清除操作，模式:', fillMode);
             
             // 检查是否在单通道模式
             const channelInfo = await this.getCurrentChannelInfo();
-            if (!channelInfo || !channelInfo.isColorChannel) {
+            if (!channelInfo || !channelInfo.isSingleChannel) {
                 console.error('❌ 当前不在单个颜色通道模式');
-                return;
+                return false;
             }
             
             // 获取选区数据
             const bounds = await this.getSelectionData();
             if (!bounds || !bounds.selectionDocIndices || bounds.selectionDocIndices.size === 0) {
                 console.log('❌ 无法获取选区数据或选区为空');
-                return;
+                return false;
             }
             
             // 获取当前通道的灰度数据和原始图像数据
@@ -130,7 +141,7 @@ export class SingleChannelHandler {
                 case 'pattern':
                     if (!options.pattern) {
                         await core.showAlert({ message: '请先选择一个图案预设' });
-                        return;
+                        return false;
                     }
                     const patternResult = await this.generatePatternData(bounds, options.pattern, state);
                     clearData = patternResult.colorData;
@@ -139,7 +150,7 @@ export class SingleChannelHandler {
                 case 'gradient':
                     if (!options.gradient) {
                         await core.showAlert({ message: '请先选择一个渐变预设' });
-                        return;
+                        return false;
                     }
                     const gradientResult = await this.generateGradientData(bounds, options.gradient, state);
                     clearData = gradientResult.colorData;
@@ -158,13 +169,18 @@ export class SingleChannelHandler {
                 bounds
             );
             
-            // 写回通道数据
-            await this.updateChannelPixels(finalData, bounds, channelInfo, originalRgbaData, state);
-            
+           // 写回通道数据
+            if (channelInfo.isAlphaChannel) {
+                await this.updateAlphaChannelPixels(finalData, bounds, channelInfo, channelData, state);
+            } else {
+                await this.updateChannelPixels(finalData, bounds, channelInfo, originalRgbaData, state);
+            }
+              
             console.log('✅ 单通道清除完成');
+            return true;
         } catch (error) {
             console.error('❌ 单通道清除失败:', error);
-            throw error;
+            return false;
         }
     }
     
@@ -190,15 +206,27 @@ export class SingleChannelHandler {
             if (targetChannelResult[0]) {
                 const targetChannelInfo = targetChannelResult[0];
                 const channelName = targetChannelInfo.channelName;
+                const itemIndex = targetChannelInfo.itemIndex;
+
                 
-                // 检测是否为单个颜色通道
-                const singleColorChannels = ["红", "绿", "蓝", "Red", "Grain", "Blue", "R", "G", "B"];
-                const isColorChannel = singleColorChannels.includes(channelName);
+                // 检测是否为单色通道（红、绿、蓝）
+                const rgbChannels = ["红", "绿", "蓝", "Red", "Grain", "Blue", "R", "G", "B"];
+                const isRgbChannel = rgbChannels.includes(channelName);
+                
+                // 检测是否为alpha通道（包括自定义alpha通道）
+                const isAlphaChannel = channelName.toLowerCase().includes('alpha') || 
+                                     channelName.match(/^alpha\s*\d*$/i) ||
+                                     channelName.match(/^[aα]\s*\d*$/i) || itemIndex>=4;
+                
+                // 对于单通道操作，支持RGB通道和Alpha通道
+                const isSingleChannel = isRgbChannel || isAlphaChannel;
                 
                 return {
-                    channelName,
+                    channelName: targetChannelInfo.channelName,
                     channelIndex: targetChannelInfo.channelIndex,
-                    isColorChannel
+                    isSingleChannel,
+                    isAlphaChannel,
+                    isRgbChannel
                 };
             }
             return null;
@@ -363,6 +391,157 @@ export class SingleChannelHandler {
                 throw new Error('没有活动图层');
             }
             
+            // 当前通道为普通用户自建的alpha通道时，其灰度无法直接通过getPixels获取，需要先新建一个临时文档，通过应用图像把该通道的灰度值给临时文档，再从临时文档获取像素数据
+            const isAlphaChannel = channelInfo.isAlphaChannel;
+            if (isAlphaChannel) {
+            // 2. 创建获取单通道灰度值的临时图层
+            await action.batchPlay([
+                {
+                    "_obj": "make",
+                    "_target": [
+                        {
+                            "_ref": "layer"
+                        }
+                    ],
+                    "using": {
+                        "_obj": "layer",
+                        "name": "临时获取灰度图层"
+                    },
+                    "_isCommand": false
+                }
+            ], {});
+            
+            // 获取临时灰度图层ID（使用batchPlay确保准确性）
+
+            const tempGrayLayerResult = await action.batchPlay([
+                {
+                    _obj: "get",
+                    _target: [
+                        {
+                            _ref: "layer",
+                            _enum: "ordinal",
+                            _value: "targetEnum"
+                        }
+                    ]
+                }
+            ], { synchronousExecution: true });
+            
+            const tempGrayLayerId = tempGrayLayerResult[0]?.layerID;
+
+            if (!tempGrayLayerId) {
+                throw new Error('无法获取临时灰度图层ID');
+            }
+
+             // 选中临时灰度图层ID（使用batchPlay确保准确性）
+            await action.batchPlay([
+                {
+                    _obj: "select",
+                    _target: [
+                        {
+                            _ref: "layer",
+                            _id: tempGrayLayerId
+                        }
+                    ],
+                    _options: {
+                        dialogOptions: "dontDisplay"
+                    }
+                }
+            ], { synchronousExecution: true });
+
+            // 对临时灰度图层使用应用图像。
+            await action.batchPlay([
+                {
+                    "_obj": "applyImageEvent",
+                    "with": {
+                        "_obj": "calculation",
+                        "to": {
+                            "_ref": "channel",
+                            "_name": channelInfo.channelName
+                        }
+                    },
+                    "_isCommand": false
+                }
+            ], { synchronousExecution: true });
+
+             // 使用imaging.getPixels获取文档长度的RGB图像数据，然后提取对应通道
+            const tempGrayLayerPixelOptions = {
+                documentID: doc.id,
+                layerID: tempGrayLayerId,
+                sourceBounds: {
+                    left: 0,
+                    top: 0,
+                    right: bounds.docWidth,
+                    bottom: bounds.docHeight
+                },
+                componentSize: 8
+            };
+
+            
+            const tempGrayLayerPixelData = await imaging.getPixels(tempGrayLayerPixelOptions);
+            if (!tempGrayLayerPixelData || !tempGrayLayerPixelData.imageData) {
+                throw new Error('无法获取临时灰度图层的像素数据');
+            }
+            const tempGrayLayerRgbData = tempGrayLayerPixelData.imageData.getData();
+            // 由于是一个只有灰度信息的单通道把数据给RGB的图层，所以图层的三个通道都是一样的。
+            // 3，从tempGrayLayerRgbData获取红通道的灰度数据作为单通道数据
+            const singleChannelData = new Uint8Array(bounds.docWidth * bounds.docHeight);
+            for (let i = 0; i < tempGrayLayerRgbData.length; i += 4) {
+                singleChannelData[i / 4] = tempGrayLayerRgbData[i];
+            }
+            // 4，从singleChannelData获取选区内的像素数据 (长度: bounds.selectionDocIndices.size)
+            const selectionIndices = bounds.selectionIndicesArray || Array.from(bounds.selectionDocIndices);
+            const selectionChannelData = new Uint8Array(selectionIndices.length);
+            for (let i = 0; i < selectionIndices.length; i++) {
+                selectionChannelData[i] = singleChannelData[selectionIndices[i]];
+            }
+
+            // 5，释放资源
+            tempGrayLayerPixelData.imageData.dispose();
+            
+            // 6，删除临时灰度图层
+            await action.batchPlay([
+                {
+                    "_obj": "delete",
+                    "_target": [
+                        {
+                            "_ref": "layer",
+                            "_id": tempGrayLayerId
+                        }
+                    ],
+                    "_isCommand": false
+                }
+            ], {});
+
+            // 1，使用imaging.getPixels获取原图层的完整RGB图像数据作为originalRgbaData
+            const originalPixelOptions = {
+                documentID: doc.id,
+                layerID: activeLayer.id,
+                sourceBounds: {
+                    left: 0,
+                    top: 0,
+                    right: bounds.docWidth,
+                    bottom: bounds.docHeight
+                },
+                componentSize: 8
+            };
+            
+            const originalPixelData = await imaging.getPixels(originalPixelOptions);
+            if (!originalPixelData || !originalPixelData.imageData) {
+                throw new Error('无法获取原图层像素数据');
+            }
+            const originalRgbaData = originalPixelData.imageData.getData();
+            originalPixelData.imageData.dispose();
+
+            return {
+                channelData: selectionChannelData,
+                originalRgbaData: originalRgbaData
+            };
+
+            
+
+        } else {
+            // RGB通道的处理逻辑
+            
             // 使用imaging.getPixels获取文档长度的RGB图像数据，然后提取对应通道
             const pixelOptions = {
                 documentID: doc.id,
@@ -388,7 +567,7 @@ export class SingleChannelHandler {
                 } else if (channelName.includes('蓝') || channelName.includes('blue') || channelName === 'b') {
                     channelIndex = 2;
                 }
-                
+
                 
                 // 第一步：提取完整文档的单通道数据 (长度: bounds.docWidth * bounds.docHeight)
                 const totalPixels = bounds.docWidth * bounds.docHeight;
@@ -433,6 +612,7 @@ export class SingleChannelHandler {
             } else {
                 throw new Error('无法获取通道像素数据');
             }
+        }
         } catch (error) {
             console.error('❌ SingleChannelHandler - 获取通道像素数据失败:', error);
             throw error;
@@ -898,7 +1078,7 @@ export class SingleChannelHandler {
             const components = isBackgroundLayer ? 3 : 4;
             console.log('🔍 是否为背景图层:', isBackgroundLayer, '组件数:', components);
             
-            // 确定通道索引和通道名称
+  // 确定通道索引和通道名称
             let channelIndex: number;
             let targetChannelName: string;
             switch (channelInfo.channelName.toLowerCase()) {
@@ -1116,6 +1296,170 @@ export class SingleChannelHandler {
             ], {});
         } catch (error) {
             console.error('❌ SingleChannelHandler - 更新通道像素数据失败:', error);
+            throw error;
+        }
+    }
+
+    // Alpha通道专用更新方法
+    private static async updateAlphaChannelPixels(finalData: Uint8Array, bounds: any, channelInfo: ChannelInfo, channelData: Uint8Array, state?: any) {
+        try {
+            console.log('🎯 开始更新Alpha通道像素:', channelInfo.channelName);
+            
+            // 创建灰度数据的完整文档数组
+            const pixelCount = bounds.docWidth * bounds.docHeight;
+            const grayData = new Uint8Array(pixelCount);
+            // 该数组为获取的之前的红通道数组。
+            grayData.set(channelData);
+
+            // 将选区内的数据更新到对应位置
+            const selectionIndicesArray = Array.from(bounds.selectionDocIndices);
+            for (let i = 0; i < finalData.length && i < selectionIndicesArray.length; i++) {
+                const docIndex = selectionIndicesArray[i];
+                if (docIndex >= 0 && docIndex < grayData.length) {
+                    grayData[docIndex] = finalData[i];
+                }
+            }
+            
+            // 创建临时图层，用于写入Alpha通道数据
+            await action.batchPlay([
+                {
+                    "_obj": "make",
+                    "_target": [
+                        {
+                            "_ref": "layer"
+                        }
+                    ],
+                    "using": {
+                        "_obj": "layer",
+                        "name": "Alpha通道临时图层"
+                    },
+                    "_isCommand": false
+                }
+            ], {});
+            
+            // 获取临时图层ID
+            const tempLayerResult = await action.batchPlay([
+                {
+                    _obj: "get",
+                    _target: [
+                        {
+                            _ref: "layer",
+                            _enum: "ordinal",
+                            _value: "targetEnum"
+                        }
+                    ]
+                }
+            ], { synchronousExecution: true });
+            
+            const tempLayerId = tempLayerResult[0]?.layerID;
+            if (!tempLayerId) {
+                throw new Error('无法获取临时图层ID');
+            }
+            
+            // 将灰度数据转换为RGBA格式（灰度值作为RGB，Alpha为255）
+            const rgbaData = new Uint8Array(pixelCount * 4);
+            for (let i = 0; i < pixelCount; i++) {
+                const grayValue = grayData[i];
+                const rgbaIndex = i * 4;
+                rgbaData[rgbaIndex] = grayValue;     // R
+                rgbaData[rgbaIndex + 1] = grayValue; // G  
+                rgbaData[rgbaIndex + 2] = grayValue; // B
+                rgbaData[rgbaIndex + 3] = 255;       // A
+            }
+            
+            // 写入临时图层
+            const tempImageData = await imaging.createImageDataFromBuffer(rgbaData, {
+                width: bounds.docWidth,
+                height: bounds.docHeight,
+                colorSpace: 'RGB',
+                colorProfile: "sRGB IEC61966-2.1",
+                components: 4
+            });
+            
+            await imaging.putPixels({
+                documentID: app.activeDocument.id,
+                layerID: tempLayerId,
+                imageData: tempImageData,
+                targetBounds: {
+                    left: 0,
+                    top: 0,
+                    right: bounds.docWidth,
+                    bottom: bounds.docHeight
+                }
+            });
+            
+            tempImageData.dispose();
+            
+            // 选择目标Alpha通道
+             await action.batchPlay([
+                {
+                    "_obj": "select",
+                    "_target": [
+                        {
+                            "_ref": "channel",
+                            "_name": channelInfo.channelName
+                        }
+                    ],
+                    "_isCommand": false
+                }
+            ], {});
+            
+            // 使用应用图像API将临时图层的灰度复制到Alpha通道
+            await action.batchPlay([
+                {
+                    "_obj": "applyImageEvent",
+                    "with": {
+                        "_obj": "calculation",
+                        "to": {
+                            "_ref": [
+                                {
+                                    "_ref": "channel",
+                                    "_enum": "channel",
+                                    "_value": "red"
+                                },
+                                {
+                                    "_ref": "layer",
+                                    "_id": tempLayerId
+                                }
+                            ]
+                        },
+                        "preserveTransparency": false
+                    },
+                    "_isCommand": false
+                }
+            ], {});
+            
+            // 删除临时图层
+            await action.batchPlay([
+                {
+                    "_obj": "delete",
+                    "_target": [
+                        {
+                            "_ref": "layer",
+                            "_id": tempLayerId
+                        }
+                    ],
+                    "_isCommand": false
+                }
+            ], {});
+            
+            // 重新选择目标Alpha通道
+            await action.batchPlay([
+                {
+                    "_obj": "select",
+                    "_target": [
+                        {
+                            "_ref": "channel",
+                            "_name": channelInfo.channelName
+                        }
+                    ],
+                    "_isCommand": false
+                }
+            ], {});
+            
+            console.log('✅ Alpha通道更新完成');
+        } catch (error) {
+            console.error('❌ Alpha通道更新失败:', error);
             throw error;
         }
     }

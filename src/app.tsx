@@ -308,8 +308,8 @@ class App extends React.Component<AppProps, AppState> {
                     await this.applySelectionModification();
                 }
                 await this.applyFeather();
-                await this.fillSelection();
-                if (this.state.strokeEnabled) {
+                const fillSuccess = await this.fillSelection();
+                if (this.state.strokeEnabled && fillSuccess) {
                     // 获取图层信息
                     const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
                     await strokeSelection(this.state, layerInfo);
@@ -436,22 +436,21 @@ class App extends React.Component<AppProps, AppState> {
                 };
                 
                 if (this.state.clearMode) {
-                    await SingleChannelHandler.clearSingleChannel(fillOptions, this.state.fillMode, this.state);
+                    const ok = await SingleChannelHandler.clearSingleChannel(fillOptions, this.state.fillMode, this.state);
+                    return ok === undefined ? true : !!ok; // 若内部未显式返回，视为成功
                 } else {
-                    await SingleChannelHandler.fillSingleChannel(fillOptions, this.state.fillMode, this.state);
+                    const ok = await SingleChannelHandler.fillSingleChannel(fillOptions, this.state.fillMode, this.state);
+                    return ok === undefined ? true : !!ok;
                 }
-                
-                // 单通道模式处理完成，直接返回，跳过后续的常规填充逻辑
-                return;
             }
 
             const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
-            if (!layerInfo) return;
+            if (!layerInfo) return false;
 
             if (this.state.clearMode) {
                 const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
                 await ClearHandler.clearWithOpacity(this.state.opacity, this.state, layerInfo);
-                return;
+                return true;
             }
     
             if (this.state.createNewLayer) {
@@ -482,10 +481,11 @@ class App extends React.Component<AppProps, AppState> {
                         pattern: this.state.selectedPattern,
                         preserveTransparency: this.state.selectedPattern.preserveTransparency
                     }, layerInfo, this.state);
+                    return true;
                 } else {
                     // 缺少图案预设，显示警告并跳过填充
                     await core.showAlert({ message: '请先选择一个图案预设' });
-                    return;
+                    return false;
                 }
             } else if (this.state.fillMode === 'gradient') {
                 if (this.state.selectedGradient) {
@@ -495,10 +495,11 @@ class App extends React.Component<AppProps, AppState> {
                         gradient: this.state.selectedGradient,
                         preserveTransparency: this.state.selectedGradient.preserveTransparency
                     }, layerInfo, this.state);
+                    return true;
                 } else {
                     // 缺少渐变预设，显示警告并跳过填充
                     await core.showAlert({ message: '请先选择一个渐变预设' });
-                    return; 
+                    return false; 
                 } 
             } else {
                 // 检测是否在快速蒙版状态
@@ -580,9 +581,11 @@ class App extends React.Component<AppProps, AppState> {
                 else {
                     await FillHandler.fillBackground(fillOptions);
                 }
+                return true;
             }
         } catch (error) {
             console.error('填充选区失败:', error);
+            return false;
         }
     }
 
@@ -1166,7 +1169,7 @@ title={`● 每次填充前都会以设置的参数新建一个图层，在该�
                             <label className="switch-label" 
 title={`● 开启清除模式，以下方选择的模式删除选区内容。
 
-● 关闭清除模式的情况下称作填充模式，填充模式与清除模式支持修改像素图层，快速蒙版，图层蒙版。（对于红绿蓝等单通道的支持将在未来版本更新）
+● 关闭清除模式的情况下称作填充模式，填充模式与清除模式支持修改像素图层、红、绿、蓝通道、快速蒙版，图层蒙版。(用户新增alpha通道待实现)
 
 ● 清除模式的计算方法采取绝对计算，对纯色、图案与渐变在保留不透明度的基础上采用统一的逻辑：先转化为灰度，白色代表100%删除，黑色代表完全不删除。
 （因此删除纯色，需要先把前景色设为白色）
