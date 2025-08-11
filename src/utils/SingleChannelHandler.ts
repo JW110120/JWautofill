@@ -29,6 +29,17 @@ export class SingleChannelHandler {
         try {
             console.log('🎨 开始单通道填充操作，模式:', fillMode);
             
+            // 预先保存前景色，防止后续操作影响前景色获取
+            let savedForegroundColor = null;
+            if (fillMode === 'foreground') {
+                savedForegroundColor = {
+                    hue: app.foregroundColor.hsb.hue,
+                    saturation: app.foregroundColor.hsb.saturation,
+                    brightness: app.foregroundColor.hsb.brightness
+                };
+                console.log('🔒 预先保存前景色:', savedForegroundColor);
+            }
+            
             // 检查是否在单通道模式
             const channelInfo = await this.getCurrentChannelInfo();
             if (!channelInfo || !channelInfo.isInSingleColorChannel) {
@@ -55,7 +66,7 @@ export class SingleChannelHandler {
             // 根据填充模式生成选区内的填充数据
             switch (fillMode) {
                 case 'foreground':
-                    fillData = await this.generateSolidColorData(bounds, state);
+                    fillData = await this.generateSolidColorData(bounds, state, savedForegroundColor);
                     break;
                 case 'pattern':
                     if (!options.pattern) {
@@ -86,7 +97,8 @@ export class SingleChannelHandler {
                 alphaData,
                 options.opacity,
                 options.blendMode,
-                bounds
+                bounds,
+                channelData  // 传入完整的channelData，用于图案外区域获取原始值
             );
             
             // 将计算得到的选区内的最终值，写回当前通道，实现通道的填充。
@@ -389,7 +401,6 @@ export class SingleChannelHandler {
             }
             
             // 当前选中的通道为普通用户自建的alpha通道时，其灰度无法直接通过getPixels获取，需要先新建一个临时文档，通过应用图像把该通道的灰度值给临时文档，再从临时文档获取像素数据。
-
             const isAlphaChannel = channelInfo.isAlphaChannel;
             if (isAlphaChannel) {
             // 1. 创建获取单通道灰度值的临时空图层，创建后系统会默认自动选中这个图层，无需手动选择。
@@ -492,10 +503,6 @@ export class SingleChannelHandler {
             // 创建channelData的深度拷贝，防止数据被释放
             const channelDataCopy = new Uint8Array(singleChannelData.length);
             channelDataCopy.set(singleChannelData);
-            
-            console.log('🔍 Alpha通道数据检查 - 原始数据长度:', singleChannelData.length, '拷贝数据长度:', channelDataCopy.length);
-            console.log('🔍 原始数据非零值数量:', singleChannelData.filter(v => v > 0).length);
-            console.log('🔍 拷贝数据非零值数量:', channelDataCopy.filter(v => v > 0).length);
             
             // 4，从singleChannelData获取选区内的像素数据 (长度: bounds.selectionDocIndices.size)
             const selectionIndices = bounds.selectionIndicesArray || Array.from(bounds.selectionDocIndices);
@@ -632,8 +639,27 @@ export class SingleChannelHandler {
     }
     
     // 生成纯色数据
-    private static async generateSolidColorData(bounds: any, state: any): Promise<Uint8Array> {
+    private static async generateSolidColorData(bounds: any, state: any, savedForegroundColor?: any): Promise<Uint8Array> {
         console.log('🎨 生成纯色数据');
+        
+        // 获取当前前景色的不透明度，使用实际的不透明度值而不是硬编码100
+        const currentOpacity = state?.opacity || 100;
+        
+        // 使用保存的前景色（如果提供）或当前前景色
+        let currentForegroundColor;
+        if (savedForegroundColor) {
+            currentForegroundColor = {
+                hsb: savedForegroundColor
+            };
+            console.log('🔓 使用预先保存的前景色:', savedForegroundColor);
+        } else {
+            currentForegroundColor = app.foregroundColor;
+            console.log('🔍 使用当前实时前景色:', {
+                hue: currentForegroundColor.hsb.hue,
+                saturation: currentForegroundColor.hsb.saturation,
+                brightness: currentForegroundColor.hsb.brightness
+            });
+        }
         
         // 计算抖动后的颜色
         const randomColorResult = calculateRandomColor(
@@ -644,8 +670,8 @@ export class SingleChannelHandler {
                 opacityVariation: state?.opacityVariation || 0,
                 calculationMode: state?.calculationMode || 'absolute'
             },
-            100, // 基础不透明度
-            undefined, // 使用当前前景色
+            currentOpacity, // 使用实际的不透明度而不是硬编码100
+            currentForegroundColor, // 传入前景色
             false // 非快速蒙版模式
         );
         
@@ -663,7 +689,7 @@ export class SingleChannelHandler {
         const colorData = new Uint8Array(bounds.selectionDocIndices.size);
         colorData.fill(grayValue);
         
-        console.log('✅ 纯色数据生成完成，灰度值:', grayValue);
+        console.log('✅ 纯色数据生成完成，灰度值:', grayValue, '基于前景色RGB:', rgb, '不透明度:', currentOpacity);
         return colorData;
     }
     
@@ -826,6 +852,9 @@ export class SingleChannelHandler {
                 );
                 patternAlphaData = alphaStampResult.alphaData;
             }
+            
+            // 保存图案掩码用于生成正确的alpha覆盖掩码
+            (grayPatternData as any).patternMask = stampResult.patternMask;
         } else {
             // 贴墙纸模式 - 使用灰度数据
             console.log('🧱 单通道：使用贴墙纸模式填充');
@@ -870,9 +899,8 @@ export class SingleChannelHandler {
         const selectedColorData = new Uint8Array(bounds.selectionDocIndices.size);
         let selectedAlphaData: Uint8Array | undefined;
         
-        if (patternAlphaData) {
-            selectedAlphaData = new Uint8Array(bounds.selectionDocIndices.size);
-        }
+        // 强制生成alpha覆盖掩码，确保图案外部区域不参与混合
+        selectedAlphaData = new Uint8Array(bounds.selectionDocIndices.size);
         
         // 使用在getSelectionData中生成的稳定顺序的索引数组
         const selectionIndicesArray = bounds.selectionIndicesArray || Array.from(bounds.selectionDocIndices);
@@ -886,16 +914,50 @@ export class SingleChannelHandler {
             
             if (boundsX >= 0 && boundsX < bounds.width && boundsY >= 0 && boundsY < bounds.height) {
                 const boundsIndex = boundsY * bounds.width + boundsX;
-                selectedColorData[index] = grayPatternData[boundsIndex] || 0;
                 
-                if (selectedAlphaData && patternAlphaData) {
-                    selectedAlphaData[index] = patternAlphaData[boundsIndex] || 0;
+                // 修正alpha掩码生成逻辑和填充数据选择逻辑
+                let isInPattern = false;
+                if (patternAlphaData) {
+                    // 如果图案有alpha数据，直接使用
+                    const alphaVal = patternAlphaData[boundsIndex] || 0;
+                    selectedAlphaData[index] = alphaVal;
+                    isInPattern = alphaVal > 0;
+                } else {
+                    // 当没有alpha数据时，根据填充模式决定alpha掩码策略
+                    if (pattern.fillMode === 'stamp') {
+                        // 优先使用createStampPatternData提供的patternMask
+                        const patternMask: Uint8Array | undefined = (grayPatternData as any).patternMask;
+                        if (patternMask && patternMask.length === bounds.width * bounds.height) {
+                            const maskVal = patternMask[boundsIndex] || 0;
+                            selectedAlphaData[index] = maskVal > 0 ? 255 : 0;
+                            isInPattern = maskVal > 0;
+                        } else {
+                            // 回退：计算是否在图案范围内
+                            const patternX = boundsX % scaledPatternWidth;
+                            const patternY = boundsY % scaledPatternHeight;
+                            isInPattern = patternX < scaledPatternWidth && patternY < scaledPatternHeight;
+                            selectedAlphaData[index] = isInPattern ? 255 : 0;
+                        }
+                    } else {
+                        // 贴墙纸模式：所有位置都参与混合
+                        selectedAlphaData[index] = 255;
+                        isInPattern = true;
+                    }
+                }
+                
+                // 关键修正：对于图案外区域，不使用图案数据，而是使用占位符0
+                // calculateFillBlend会在finalAlpha=0时从channelData获取原始值
+                if (isInPattern) {
+                    const patternColorValue = grayPatternData[boundsIndex] || 0;
+                    selectedColorData[index] = patternColorValue;
+                } else {
+                    // 图案外区域：使用占位符，calculateFillBlend会从channelData获取原始值
+                    selectedColorData[index] = 0; // 占位符，不会被使用
                 }
             } else {
+                // 超出边界的区域
                 selectedColorData[index] = 0;
-                if (selectedAlphaData) {
-                    selectedAlphaData[index] = 0;
-                }
+                selectedAlphaData[index] = 0;
             }
         }
         
@@ -929,7 +991,8 @@ export class SingleChannelHandler {
         selectionAlphaData: Uint8Array | undefined, // 选区内的填充内容的透明度数据 (长度: bounds.selectionDocIndices.size)
         opacity: number,
         blendMode: string,
-        bounds: any
+        bounds: any,
+        channelData?: Uint8Array  // 添加完整的channelData参数，用于获取图案外区域的原始值
     ): Promise<Uint8Array> {
         
         // 最终输出的数据，是两个选区长度 (bounds.selectionDocIndices.size)的数组计算得到的，分别是选区内的原始通道值和选区内的填充值
@@ -946,14 +1009,29 @@ export class SingleChannelHandler {
         for (let i = 0; i < selectionChannelData.length; i++) {
             const baseValue = selectionChannelData[i]; // 选区内原始通道值
             const fillValue = selectionFillData[i];    // 选区内填充值
-            const alphaValue = selectionAlphaData ? selectionAlphaData[i] : 255; // 选区内透明度值
+            // 修复透明度处理：
+            // 1) 如果提供了 alphaData，直接使用；
+            // 2) 如果没有 alphaData，默认认为选区内全部可参与混合（alpha=255），
+            //    但在generatePatternData中我们已确保图案范围外的像素alpha=0并且填充值为原值或0。
+            const alphaValue = selectionAlphaData ? selectionAlphaData[i] : 255;
             
             // 计算填充内容的最终的透明度（图案/渐变透明度 × 整体不透明度）
             const finalAlpha = (alphaValue / 255) * opacityRatio;
             
             // 如果填充内容最终透明度为0，直接保持原始通道值，不进行任何混合
             if (finalAlpha === 0) {
-                blendedSelectionData[i] = baseValue;
+                // 对于盖图章模式，当alpha为0时（图案外区域），应该从完整的channelData中获取对应位置的原始值
+                if (channelData && bounds.selectionDocIndices) {
+                    const selectionIndicesArray = bounds.selectionIndicesArray || Array.from(bounds.selectionDocIndices);
+                    const globalIndex = selectionIndicesArray[i];
+                    if (globalIndex !== undefined && globalIndex < channelData.length) {
+                        blendedSelectionData[i] = channelData[globalIndex];
+                    } else {
+                        blendedSelectionData[i] = baseValue;
+                    }
+                } else {
+                    blendedSelectionData[i] = baseValue;
+                }
                 continue;
             }
             
@@ -980,54 +1058,59 @@ export class SingleChannelHandler {
     }
     
     // 计算清除
+    // 计算清除混合
     private static async calculateClearBlend(
         selectionChannelData: Uint8Array, // 选区内的单通道数据 (长度: bounds.selectionDocIndices.size)
         selectionClearData: Uint8Array,   // 选区内的清除数据 (长度: bounds.selectionDocIndices.size)
-        selectionAlphaData: Uint8Array | undefined, // 选区内的透明度数据 (长度: bounds.selectionDocIndices.size)
+        selectionAlphaData: Uint8Array | undefined, // 选区内的清除内容的透明度数据 (长度: bounds.selectionDocIndices.size)
         opacity: number,
         bounds: any
     ): Promise<Uint8Array> {
-        console.log('🧹 计算清除混合');
         
-        // 输出数据：选区内清除后的单通道数据 (长度: bounds.selectionDocIndices.size)
-        const clearedSelectionData = new Uint8Array(selectionChannelData.length);
-        const opacityFactor = opacity / 100;
+        // 最终输出的数据，是两个选区长度 (bounds.selectionDocIndices.size)的数组计算得到的，分别是选区内的原始通道值和选区内的清除值
+        const clearedSelectionData = new Uint8Array(bounds.selectionDocIndices.size);
+        const opacityRatio = opacity * 0.01; // 避免重复除法
         
         // 检查是否有选区羽化系数
         const hasFeathering = bounds?.selectionCoefficients?.length > 0;
         const selectionCoefficients = bounds?.selectionCoefficients;
         
         for (let i = 0; i < selectionChannelData.length; i++) {
-            const baseValue = selectionChannelData[i]; // 选区内原始通道值 (0-255)
-            const clearValue = selectionClearData[i] || 0; // 选区内清除值 (0-255)
-            const alpha = selectionAlphaData ? selectionAlphaData[i] : 255; // 选区内透明度值 (0-255)
+            const baseValue = selectionChannelData[i]; // 选区内原始通道值
+            const clearValue = selectionClearData[i];  // 选区内清除值
+            // 修复透明度处理：当alphaData不存在时，根据清除值判断是否参与混合
+            // 对于图案清除，如果没有alpha数据且清除值为0（黑色），则认为该区域不参与清除
+            const alphaValue = selectionAlphaData ? selectionAlphaData[i] : (clearValue > 0 ? 255 : 0);
             
-            // 如果图案/渐变完全透明，不进行清除操作
-            if (alpha === 0) {
+            // 计算清除内容的最终的透明度（图案/渐变透明度 × 整体不透明度）
+            const finalAlpha = (alphaValue / 255) * opacityRatio;
+            
+            // 如果清除内容最终透明度为0，直接保持原始通道值，不进行任何清除
+            if (finalAlpha === 0) {
                 clearedSelectionData[i] = baseValue;
                 continue;
             }
             
-            // 计算有效不透明度（考虑选区羽化系数）
-            let effectiveOpacity = opacityFactor;
+            // 计算清除值：从原始通道值中减去清除值
+            let clearedResult = baseValue - clearValue * finalAlpha;
+            
+            // 应用羽化系数（如果存在）
             if (hasFeathering && selectionCoefficients && selectionCoefficients[i] !== undefined) {
-                effectiveOpacity *= selectionCoefficients[i];
+                const featherCoeff = selectionCoefficients[i];
+                // 羽化混合：原始值 * (1 - 羽化系数) + 清除结果 * 羽化系数
+                const invFeatherCoeff = 1 - featherCoeff;
+                clearedResult = baseValue * invFeatherCoeff + clearedResult * featherCoeff;
             }
             
-            // 减去模式：通道值 - (清除值 * 有效不透明度 * 透明度)
-            const alphaFactor = alpha / 255;
-            const subtractAmount = clearValue * effectiveOpacity * alphaFactor;
-            const finalValue = baseValue - subtractAmount;
-            
-            clearedSelectionData[i] = Math.min(255, Math.max(0, Math.round(finalValue)));
+            // 快速边界检查和取整
+            clearedSelectionData[i] = clearedResult < 0 ? 0 : (clearedResult > 255 ? 255 : Math.round(clearedResult));
         }
         
-        console.log('✅ 清除混合计算完成');
         return clearedSelectionData;
     }
     
     // 更新通道像素数据
-    // originalRgbaData: 原始图像数据，背景图层为RGB格式，普通图层为RGBA格式
+    // originalRgbaData: 背景图层为RGB，普通图层为RGBA
     private static async updateChannelPixels(finalData: Uint8Array, bounds: any, channelInfo: ChannelInfo, originalRgbaData: Uint8Array, state?: any) {
         try {
             const activeDoc = app.activeDocument;
@@ -1117,7 +1200,7 @@ export class SingleChannelHandler {
 
 
             // 4. 用finalData更新单通道数据选区内的部分（保持与提取顺序一致）
-            const selectionIndicesArray = Array.from(bounds.selectionDocIndices);
+            const selectionIndicesArray = bounds.selectionIndicesArray || Array.from(bounds.selectionDocIndices);
             for (let i = 0; i < finalData.length && i < selectionIndicesArray.length; i++) {
                 const docIndex = selectionIndicesArray[i];
                 singleChannelData[docIndex] = finalData[i];
@@ -1273,14 +1356,9 @@ export class SingleChannelHandler {
             console.log('🎯 开始更新Alpha通道像素:', channelInfo.channelName);
             
             // 验证传入的channelData是否有效
-            try {
-                console.log('🔍 传入的channelData长度:', channelData.length, '预期长度:', bounds.docWidth * bounds.docHeight);
-                const nonZero = channelData.reduce((acc, v) => acc + (v > 0 ? 1 : 0), 0);
-                console.log('🔍 传入的channelData非零值数量:', nonZero);
-                console.log('🔍 传入的channelData前10个值:', Array.from(channelData.slice(0, 10)));
-            } catch (logErr) {
-                console.warn('⚠️ 记录channelData日志失败:', logErr);
-            }
+            console.log('🔍 传入的channelData长度:', channelData.length, '预期长度:', bounds.docWidth * bounds.docHeight);
+            const nonZero = channelData.reduce((acc, v) => acc + (v > 0 ? 1 : 0), 0);
+            console.log('🔍 传入的channelData非零值数量:', nonZero);
             
             // 创建灰度数据的完整文档数组
             const pixelCount = bounds.docWidth * bounds.docHeight;
@@ -1296,12 +1374,9 @@ export class SingleChannelHandler {
             } else {
                 console.warn('⚠️ channelData为空或无效，grayData将保持全0');
             }
-            const grayNonZero = grayData.reduce((acc, v) => acc + (v > 0 ? 1 : 0), 0);
-            console.log('🔍 复制后grayData非零值数量:', grayNonZero);
-            console.log('🔍 复制后grayData纯黑色数量：', grayData.length - grayNonZero, '文档长度：', bounds.docWidth * bounds.docHeight);
             
             
-            // 将选区内的数据更新到对应位置
+            // 将选区长度的最终计算数据更新到对应位置
             const selectionIndicesArray = bounds.selectionIndicesArray || Array.from(bounds.selectionDocIndices);
             for (let i = 0; i < finalData.length && i < selectionIndicesArray.length; i++) {
                 const docIndex = selectionIndicesArray[i];
