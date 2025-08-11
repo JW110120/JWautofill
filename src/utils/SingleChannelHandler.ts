@@ -1,10 +1,9 @@
 import { app, action, imaging, core } from 'photoshop';
 import { LayerInfoHandler } from './LayerInfoHandler';
-import { BLEND_MODES } from '../constants/blendModes';
 import { Pattern, Gradient } from '../types/state';
 import { BLEND_MODE_CALCULATIONS } from './BlendModeCalculations';
 import { calculateRandomColor, hsbToRgb, rgbToGray } from './ColorUtils';
-import { PatternFill, createStampPatternData, createTilePatternData } from './PatternFill';
+import { createStampPatternData, createTilePatternData } from './PatternFill';
 import { GradientFill } from './GradientFill';
 
 interface SingleChannelFillOptions {
@@ -18,7 +17,7 @@ interface SingleChannelFillOptions {
 interface ChannelInfo {
     channelName: string;
     channelIndex: number;
-    isSingleChannel: boolean;
+    isInSingleColorChannel: boolean;
     isAlphaChannel: boolean;
     isRgbChannel: boolean;
 }
@@ -32,7 +31,7 @@ export class SingleChannelHandler {
             
             // 检查是否在单通道模式
             const channelInfo = await this.getCurrentChannelInfo();
-            if (!channelInfo || !channelInfo.isSingleChannel) {
+            if (!channelInfo || !channelInfo.isInSingleColorChannel) {
                 console.error('❌ 当前不在单个颜色通道模式');
                 return false;
             }
@@ -44,15 +43,16 @@ export class SingleChannelHandler {
                 return false;
             }
             
-            // 获取当前通道的灰度数据和原始图像数据
+            // 获取文档长度的当前通道的灰度数据和原始图像数据
             const pixelResult = await this.getChannelPixels(bounds, channelInfo);
             const channelData = pixelResult.channelData;
+            const selectionChannelData = pixelResult.selectionChannelData || channelData; // Alpha通道为选区内数据，RGB通道 channelData 本身就是选区内数据
             const originalRgbaData = pixelResult.originalRgbaData; // 背景图层为RGB，普通图层为RGBA
             
             let fillData: Uint8Array;
             let alphaData: Uint8Array | undefined;
             
-            // 根据填充模式生成填充数据
+            // 根据填充模式生成选区内的填充数据
             switch (fillMode) {
                 case 'foreground':
                     fillData = await this.generateSolidColorData(bounds, state);
@@ -79,9 +79,9 @@ export class SingleChannelHandler {
                     throw new Error('不支持的填充模式');
             }
             
-            // 混合计算
+            // 提取当前通道在选区中的灰度值，与选区中的填充数据混合计算
             const finalData = await this.calculateFillBlend(
-                channelData,
+                selectionChannelData,
                 fillData,
                 alphaData,
                 options.opacity,
@@ -89,14 +89,12 @@ export class SingleChannelHandler {
                 bounds
             );
             
-            // 写回通道数据
+            // 将计算得到的选区内的最终值，写回当前通道，实现通道的填充。
             if (channelInfo.isAlphaChannel) {
                 await this.updateAlphaChannelPixels(finalData, bounds, channelInfo, channelData, state);
-                console.log('✅ alpha通道:', channelInfo.channelName);
 
             } else {
                 await this.updateChannelPixels(finalData, bounds, channelInfo, originalRgbaData, state);
-                console.log('✅ 红绿蓝通道:', channelInfo.channelName);
 
             }
             return true;
@@ -113,7 +111,7 @@ export class SingleChannelHandler {
             
             // 检查是否在单通道模式
             const channelInfo = await this.getCurrentChannelInfo();
-            if (!channelInfo || !channelInfo.isSingleChannel) {
+            if (!channelInfo || !channelInfo.isInSingleColorChannel) {
                 console.error('❌ 当前不在单个颜色通道模式');
                 return false;
             }
@@ -128,6 +126,7 @@ export class SingleChannelHandler {
             // 获取当前通道的灰度数据和原始图像数据
             const pixelResult = await this.getChannelPixels(bounds, channelInfo);
             const channelData = pixelResult.channelData;
+            const selectionChannelData = pixelResult.selectionChannelData || channelData;
             const originalRgbaData = pixelResult.originalRgbaData; // 背景图层为RGB，普通图层为RGBA
             
             let clearData: Uint8Array;
@@ -162,7 +161,7 @@ export class SingleChannelHandler {
             
             // 混合计算（清除模式）
             const finalData = await this.calculateClearBlend(
-                channelData,
+                selectionChannelData,
                 clearData,
                 alphaData,
                 options.opacity,
@@ -175,8 +174,6 @@ export class SingleChannelHandler {
             } else {
                 await this.updateChannelPixels(finalData, bounds, channelInfo, originalRgbaData, state);
             }
-              
-            console.log('✅ 单通道清除完成');
             return true;
         } catch (error) {
             console.error('❌ 单通道清除失败:', error);
@@ -184,7 +181,7 @@ export class SingleChannelHandler {
         }
     }
     
-    // 获取当前通道信息
+    // 判断当前通道的类型
     private static async getCurrentChannelInfo(): Promise<ChannelInfo | null> {
         try {
             const targetChannelResult = await action.batchPlay([
@@ -213,18 +210,19 @@ export class SingleChannelHandler {
                 const rgbChannels = ["红", "绿", "蓝", "Red", "Grain", "Blue", "R", "G", "B"];
                 const isRgbChannel = rgbChannels.includes(channelName);
                 
-                // 检测是否为alpha通道（包括自定义alpha通道）
+                // 检测是否为用户自建的alpha通道（是指自定义alpha通道，itemIndex>=4的那些，这是因为这些通道在Photoshop的面板中通常位于蓝通道的下方。）
+
                 const isAlphaChannel = channelName.toLowerCase().includes('alpha') || 
                                      channelName.match(/^alpha\s*\d*$/i) ||
                                      channelName.match(/^[aα]\s*\d*$/i) || itemIndex>=4;
                 
-                // 对于单通道操作，支持RGB通道和Alpha通道
-                const isSingleChannel = isRgbChannel || isAlphaChannel;
+                // 对于单通道操作，支持R、G、B通道和自定义Alpha通道
+                const isInSingleColorChannel = isRgbChannel || isAlphaChannel;
                 
                 return {
                     channelName: targetChannelInfo.channelName,
                     channelIndex: targetChannelInfo.channelIndex,
-                    isSingleChannel,
+                    isInSingleColorChannel,
                     isAlphaChannel,
                     isRgbChannel
                 };
@@ -236,10 +234,9 @@ export class SingleChannelHandler {
         }
     }
     
-    // 获取选区数据
+    // 获取选区通道的灰度数据
     private static async getSelectionData() {
         try {
-            // 使用与GradientFill相同的逻辑
             const [docResult, selectionResult] = await Promise.all([
                 action.batchPlay([
                     {
@@ -293,7 +290,7 @@ export class SingleChannelHandler {
             const width = right - left;
             const height = bottom - top;
             
-            // 使用imaging.getSelection获取羽化选区的像素数据
+            // 使用imaging.getSelection获取羽化后选区的像素数据
             const pixels = await imaging.getSelection({
                 documentID: app.activeDocument.id,
                 sourceBounds: {
@@ -378,8 +375,8 @@ export class SingleChannelHandler {
         }
     }
     
-    // 获取通道像素数据
-    private static async getChannelPixels(bounds: any, channelInfo: ChannelInfo): Promise<{ channelData: Uint8Array; originalRgbaData: Uint8Array }> {
+    // 获取当前选中通道的灰度数据
+    private static async getChannelPixels(bounds: any, channelInfo: ChannelInfo): Promise<{ channelData: Uint8Array; originalRgbaData: Uint8Array; selectionChannelData?: Uint8Array }> {
         try {        
              const doc = app.activeDocument;
             if (!doc) {
@@ -391,10 +388,11 @@ export class SingleChannelHandler {
                 throw new Error('没有活动图层');
             }
             
-            // 当前通道为普通用户自建的alpha通道时，其灰度无法直接通过getPixels获取，需要先新建一个临时文档，通过应用图像把该通道的灰度值给临时文档，再从临时文档获取像素数据
+            // 当前选中的通道为普通用户自建的alpha通道时，其灰度无法直接通过getPixels获取，需要先新建一个临时文档，通过应用图像把该通道的灰度值给临时文档，再从临时文档获取像素数据。
+
             const isAlphaChannel = channelInfo.isAlphaChannel;
             if (isAlphaChannel) {
-            // 2. 创建获取单通道灰度值的临时图层
+            // 1. 创建获取单通道灰度值的临时空图层，创建后系统会默认自动选中这个图层，无需手动选择。
             await action.batchPlay([
                 {
                     "_obj": "make",
@@ -411,8 +409,7 @@ export class SingleChannelHandler {
                 }
             ], {});
             
-            // 获取临时灰度图层ID（使用batchPlay确保准确性）
-
+            // 2. 获取该临时灰度图层ID，以备后续重新选中它。
             const tempGrayLayerResult = await action.batchPlay([
                 {
                     _obj: "get",
@@ -432,23 +429,25 @@ export class SingleChannelHandler {
                 throw new Error('无法获取临时灰度图层ID');
             }
 
-             // 选中临时灰度图层ID（使用batchPlay确保准确性）
+            // 取消选区，为之后的应用图像操作腾出空间，避免应用图像的作用范围只生成在选区中。
             await action.batchPlay([
                 {
-                    _obj: "select",
-                    _target: [
-                        {
-                            _ref: "layer",
-                            _id: tempGrayLayerId
-                        }
-                    ],
-                    _options: {
-                        dialogOptions: "dontDisplay"
+                "_obj": "set",
+                "_target": [
+                    {
+                        "_ref": "channel",
+                        "_property": "selection"
                     }
+                ],
+                "to": {
+                    "_enum": "ordinal",
+                    "_value": "none"
+                }
                 }
             ], { synchronousExecution: true });
 
-            // 对临时灰度图层使用应用图像。
+            // 对临时灰度图层使用应用图像，将目标【自定义alpha通道】的灰度值给临时灰度图层的RGB复合通道，此时临时灰度图层的R、G、B通道的灰度与目标【自定义alpha通道】的灰度一样。
+            // 通过应用图像，临时灰度图层的RGB复合通道的不透明度通道默认为255。
             await action.batchPlay([
                 {
                     "_obj": "applyImageEvent",
@@ -481,24 +480,34 @@ export class SingleChannelHandler {
             if (!tempGrayLayerPixelData || !tempGrayLayerPixelData.imageData) {
                 throw new Error('无法获取临时灰度图层的像素数据');
             }
-            const tempGrayLayerRgbData = tempGrayLayerPixelData.imageData.getData();
-            // 由于是一个只有灰度信息的单通道把数据给RGB的图层，所以图层的三个通道都是一样的。
-            // 3，从tempGrayLayerRgbData获取红通道的灰度数据作为单通道数据
+            const tempGrayLayerRgbData = await tempGrayLayerPixelData.imageData.getData();
+
+            // 3，从tempGrayLayerRgbData获取红通道的灰度数据，由于应有图像的关系，该红通道值等价于目标【自定义alpha】的通道值。
+            // 红通道的长度为文档长度bounds.docWidth * bounds.docHeight。
             const singleChannelData = new Uint8Array(bounds.docWidth * bounds.docHeight);
             for (let i = 0; i < tempGrayLayerRgbData.length; i += 4) {
                 singleChannelData[i / 4] = tempGrayLayerRgbData[i];
             }
+            
+            // 创建channelData的深度拷贝，防止数据被释放
+            const channelDataCopy = new Uint8Array(singleChannelData.length);
+            channelDataCopy.set(singleChannelData);
+            
+            console.log('🔍 Alpha通道数据检查 - 原始数据长度:', singleChannelData.length, '拷贝数据长度:', channelDataCopy.length);
+            console.log('🔍 原始数据非零值数量:', singleChannelData.filter(v => v > 0).length);
+            console.log('🔍 拷贝数据非零值数量:', channelDataCopy.filter(v => v > 0).length);
+            
             // 4，从singleChannelData获取选区内的像素数据 (长度: bounds.selectionDocIndices.size)
             const selectionIndices = bounds.selectionIndicesArray || Array.from(bounds.selectionDocIndices);
             const selectionChannelData = new Uint8Array(selectionIndices.length);
             for (let i = 0; i < selectionIndices.length; i++) {
-                selectionChannelData[i] = singleChannelData[selectionIndices[i]];
+                selectionChannelData[i] = channelDataCopy[selectionIndices[i]]; // 使用拷贝的数据
             }
 
             // 5，释放资源
             tempGrayLayerPixelData.imageData.dispose();
             
-            // 6，删除临时灰度图层
+            // 6，删除临时灰度图层，此时会系统会默认自动选择下个图层的RGB复合通道。
             await action.batchPlay([
                 {
                     "_obj": "delete",
@@ -512,7 +521,8 @@ export class SingleChannelHandler {
                 }
             ], {});
 
-            // 1，使用imaging.getPixels获取原图层的完整RGB图像数据作为originalRgbaData
+            // 7，使用imaging.getPixels获取原图层的完整RGB图像数据作为originalRgbaData。对于目标【自定义alpha通道】，获取原图层的完整RGBA图像数据是不必要的。
+            // 因为目标【自定义alpha通道】的灰度值已经被提取到singleChannelData中了，无需再获取原图层的完整RGBA图像数据，只是由于getChannelPixels需要返回两个参数：channelData、originalRgbaData。
             const originalPixelOptions = {
                 documentID: doc.id,
                 layerID: activeLayer.id,
@@ -533,8 +543,9 @@ export class SingleChannelHandler {
             originalPixelData.imageData.dispose();
 
             return {
-                channelData: selectionChannelData,
-                originalRgbaData: originalRgbaData
+                channelData: channelDataCopy, // 返回拷贝的完整文档Alpha通道数据，用于updateAlphaChannelPixels
+                originalRgbaData: originalRgbaData,
+                selectionChannelData: selectionChannelData // 返回选区内的Alpha通道数据，用于混合计算
             };
 
             
@@ -606,8 +617,9 @@ export class SingleChannelHandler {
                 pixelData.imageData.dispose();
                 
                 return {
-                    channelData: selectionChannelData,
-                    originalRgbaData: rgbData // 根据图层类型，可能是RGB(背景图层)或RGBA(普通图层)数据
+                    channelData:  fullDocChannelData,
+                    originalRgbaData: rgbData, // 根据图层类型，可能是RGB(背景图层)或RGBA(普通图层)数据
+                    selectionChannelData: selectionChannelData // RGB通道的选区内数据直接就是 channelData
                 };
             } else {
                 throw new Error('无法获取通道像素数据');
@@ -670,7 +682,6 @@ export class SingleChannelHandler {
         
         // 首先生成或获取灰度数据
         if (!pattern.grayData) {
-            console.log('🔄 从RGB数据生成灰度数据');
             const rgbData = pattern.patternRgbData;
             let width = pattern.width || pattern.originalWidth || 100;
             let height = pattern.height || pattern.originalHeight || 100;
@@ -719,7 +730,6 @@ export class SingleChannelHandler {
             
             // 将生成的灰度数据保存到图案对象中
             pattern.grayData = grayData;
-            console.log('✅ 成功从RGB数据生成灰度数据，长度:', grayData.length);
         }
         
         // 复用PatternFill中的逻辑
@@ -766,7 +776,6 @@ export class SingleChannelHandler {
                     rebuilt[i] = gray;
                 }
                 pattern.grayData = rebuilt;
-                console.log('🔧 已根据RGB数据重建匹配尺寸的灰度数据，长度:', rebuilt.length);
             } else {
                 rebuilt.fill(128);
                 pattern.grayData = rebuilt;
@@ -774,27 +783,6 @@ export class SingleChannelHandler {
             }
         }
         
-        console.log('图案参数:', {
-            fillMode: pattern.fillMode,
-            width: patternWidth,
-            height: patternHeight,
-            originalWidth: pattern.originalWidth,
-            originalHeight: pattern.originalHeight,
-            scale: scale,
-            currentScale: pattern.currentScale,
-            scaledWidth: scaledPatternWidth,
-            scaledHeight: scaledPatternHeight,
-            angle: angle,
-            currentAngle: pattern.currentAngle,
-            hasAlpha: pattern.hasAlpha,
-            components: pattern.patternComponents,
-            boundsSize: `${bounds.width}x${bounds.height}`,
-            selectionSize: bounds.selectionDocIndices.size,
-            patternDataLength: pattern.patternRgbData?.length || 0,
-            grayDataLength: pattern.grayData?.length || 0,
-            hasPatternData: !!pattern.patternRgbData,
-            hasGrayData: !!pattern.grayData
-        });
         
         // 使用灰度数据生成图案
         let grayPatternData: Uint8Array;
@@ -878,14 +866,6 @@ export class SingleChannelHandler {
             }
         }
         
-        console.log('图案数据生成结果:', {
-            grayDataLength: grayPatternData?.length || 0,
-            alphaDataLength: patternAlphaData?.length || 0,
-            expectedSize: bounds.width * bounds.height,
-            grayDataSample: grayPatternData?.slice(0, 10) || [],
-            hasValidData: grayPatternData && grayPatternData.length > 0
-        });
-        
         // 提取选区内的图案数据
         const selectedColorData = new Uint8Array(bounds.selectionDocIndices.size);
         let selectedAlphaData: Uint8Array | undefined;
@@ -919,19 +899,6 @@ export class SingleChannelHandler {
             }
         }
         
-        const nonZeroCount = selectedColorData.length > 0 ? Array.from(selectedColorData).filter(v => v > 0).length : 0;
-        const averageValue = selectedColorData.length > 0 ? Array.from(selectedColorData).reduce((a, b) => a + b, 0) / selectedColorData.length : 0;
-        console.log('选区图案数据提取结果:', {
-            bounds: { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height, docWidth: bounds.docWidth, docHeight: bounds.docHeight },
-            selectedColorDataLength: selectedColorData.length,
-            selectedAlphaDataLength: selectedAlphaData?.length || 0,
-            selectedColorDataSample: selectedColorData.slice(0, 10),
-            firstFewIndices: (bounds.selectionIndicesArray || Array.from(bounds.selectionDocIndices)).slice(0, 10),
-            nonZeroCount,
-            averageValue
-        });
-        
-        console.log('✅ 图案数据生成完成');
         return {
             colorData: selectedColorData,
             alphaData: selectedAlphaData
@@ -965,7 +932,7 @@ export class SingleChannelHandler {
         bounds: any
     ): Promise<Uint8Array> {
         
-        // 输出数据：选区内混合后的单通道数据 (长度: bounds.selectionDocIndices.size)
+        // 最终输出的数据，是两个选区长度 (bounds.selectionDocIndices.size)的数组计算得到的，分别是选区内的原始通道值和选区内的填充值
         const blendedSelectionData = new Uint8Array(bounds.selectionDocIndices.size);
         const opacityRatio = opacity * 0.01; // 避免重复除法
         
@@ -1305,14 +1272,37 @@ export class SingleChannelHandler {
         try {
             console.log('🎯 开始更新Alpha通道像素:', channelInfo.channelName);
             
+            // 验证传入的channelData是否有效
+            try {
+                console.log('🔍 传入的channelData长度:', channelData.length, '预期长度:', bounds.docWidth * bounds.docHeight);
+                const nonZero = channelData.reduce((acc, v) => acc + (v > 0 ? 1 : 0), 0);
+                console.log('🔍 传入的channelData非零值数量:', nonZero);
+                console.log('🔍 传入的channelData前10个值:', Array.from(channelData.slice(0, 10)));
+            } catch (logErr) {
+                console.warn('⚠️ 记录channelData日志失败:', logErr);
+            }
+            
             // 创建灰度数据的完整文档数组
             const pixelCount = bounds.docWidth * bounds.docHeight;
             const grayData = new Uint8Array(pixelCount);
-            // 该数组为获取的之前的红通道数组。
-            grayData.set(channelData);
-
+            // channelData 现在是完整文档的 Alpha 通道数据，进行安全拷贝
+            if (channelData && channelData.length) {
+                if (channelData.length >= pixelCount) {
+                    grayData.set(channelData.subarray(0, pixelCount));
+                } else {
+                    grayData.set(channelData); // 拷贝已有部分
+                    console.warn('⚠️ channelData长度小于文档像素数，将未覆盖部分保持为0。实际长度:', channelData.length, '期望长度:', pixelCount);
+                }
+            } else {
+                console.warn('⚠️ channelData为空或无效，grayData将保持全0');
+            }
+            const grayNonZero = grayData.reduce((acc, v) => acc + (v > 0 ? 1 : 0), 0);
+            console.log('🔍 复制后grayData非零值数量:', grayNonZero);
+            console.log('🔍 复制后grayData纯黑色数量：', grayData.length - grayNonZero, '文档长度：', bounds.docWidth * bounds.docHeight);
+            
+            
             // 将选区内的数据更新到对应位置
-            const selectionIndicesArray = Array.from(bounds.selectionDocIndices);
+            const selectionIndicesArray = bounds.selectionIndicesArray || Array.from(bounds.selectionDocIndices);
             for (let i = 0; i < finalData.length && i < selectionIndicesArray.length; i++) {
                 const docIndex = selectionIndicesArray[i];
                 if (docIndex >= 0 && docIndex < grayData.length) {
@@ -1367,7 +1357,7 @@ export class SingleChannelHandler {
                 rgbaData[rgbaIndex + 3] = 255;       // A
             }
             
-            // 写入临时图层
+            // 置入临时图层
             const tempImageData = await imaging.createImageDataFromBuffer(rgbaData, {
                 width: bounds.docWidth,
                 height: bounds.docHeight,
@@ -1404,7 +1394,7 @@ export class SingleChannelHandler {
                 }
             ], {});
             
-            // 使用应用图像API将临时图层的灰度复制到Alpha通道
+            // 使用应用图像API将临时图层的红通道复制到目标Alpha通道
             await action.batchPlay([
                 {
                     "_obj": "applyImageEvent",
