@@ -100,6 +100,11 @@ export interface AppState {
      selectionSmooth: number;
      selectionContrast: number;
      selectionExpand: number; // 改名为扩散
+     // 许可证相关状态
+     isLicensed: boolean;
+     isTrial: boolean;
+     isLicenseDialogOpen: boolean;
+     trialDaysRemaining: number;
 }
 
 export const initialState: AppState = {
@@ -147,4 +152,9 @@ export const initialState: AppState = {
     selectionSmooth: 0, 
     selectionContrast: 0,
     selectionExpand: 0, // 改名为扩散
+    // 新增：许可证默认状态
+    isLicensed: false,
+    isTrial: false,
+    isLicenseDialogOpen: true,
+    trialDaysRemaining: 0,
 };

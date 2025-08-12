@@ -1,10 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { processBlockAverage } from './blockAverageProcessor';
 import { processPixelTransition } from './pixelTransitionProcessor';
 import { processLineEnhancement } from './lineProcessing';
 import { processHighFrequencyEnhancement } from './highFrequencyEnhancer';
 import { processSmartEdgeSmooth, defaultSmartEdgeSmoothParams } from './smartEdgeSmoothProcessor';
 import { checkEditingState, processPixelData, applyProcessedPixels } from './pixelDataProcessor';
+import { LicenseManager } from '../utils/LicenseManager';
+import LicenseDialog from '../components/LicenseDialog';
 import { action, app, core, imaging } from 'photoshop';
 import './adjustment.css';
 
@@ -159,8 +161,6 @@ const getSelectionData = async () => {
     
     console.log('✅ 选区内像素数量（selectionDocIndices.size）:', selectionDocIndices.size);
     
-
-   
     return {
       left,
       top,
@@ -184,6 +184,12 @@ const getSelectionData = async () => {
 
 // 调整内容面板组件
 const AdjustmentPanel = () => {
+  // 许可证状态管理
+  const [isLicensed, setIsLicensed] = useState(false);
+  const [isTrial, setIsTrial] = useState(false);
+  const [trialDaysRemaining, setTrialDaysRemaining] = useState(0);
+  const [isLicenseDialogOpen, setIsLicenseDialogOpen] = useState(false);
+
   // 状态管理
   const [radius, setRadius] = useState(15);
   const [sigma, setSigma] = useState(5);
@@ -202,6 +208,65 @@ const AdjustmentPanel = () => {
   const [edgeSmoothRadius, setEdgeSmoothRadius] = useState(defaultSmartEdgeSmoothParams.smoothRadius);
   const [preserveDetail, setPreserveDetail] = useState(defaultSmartEdgeSmoothParams.preserveDetail);
   const [edgeIntensity, setEdgeIntensity] = useState(defaultSmartEdgeSmoothParams.intensity);
+
+  // 许可证相关 Hook 和函数
+  useEffect(() => {
+    checkLicenseStatus();
+  }, []);
+
+  const checkLicenseStatus = async () => {
+    try {
+      const licenseManager = new LicenseManager();
+      const result = await licenseManager.checkLicenseStatus();
+      
+      if (result.isLicensed) {
+        setIsLicensed(true);
+        setIsTrial(false);
+      } else if (result.isTrial && !result.isExpired) {
+        setIsTrial(true);
+        setIsLicensed(false);
+        setTrialDaysRemaining(result.daysRemaining || 0);
+      } else {
+        setIsLicensed(false);
+        setIsTrial(false);
+        setTrialDaysRemaining(0);
+      }
+    } catch (error) {
+      console.error('检查许可证状态失败:', error);
+      setIsLicensed(false);
+      setIsTrial(false);
+      setTrialDaysRemaining(0);
+    }
+  };
+
+  const handleLicenseVerified = () => {
+    setIsLicensed(true);
+    setIsTrial(false);
+    setIsLicenseDialogOpen(false);
+  };
+
+  const handleTrialStarted = () => {
+    setIsTrial(true);
+    setIsLicensed(false);
+    setTrialDaysRemaining(30);
+    setIsLicenseDialogOpen(false);
+  };
+
+  const closeLicenseDialog = () => {
+    setIsLicenseDialogOpen(false);
+  };
+
+  const openLicenseDialog = () => {
+    setIsLicenseDialogOpen(true);
+  };
+
+  const checkLicenseBeforeAction = (): boolean => {
+    if (!isLicensed && !isTrial) {
+      openLicenseDialog();
+      return false;
+    }
+    return true;
+  };
 
   // 拖拽处理函数
   const handleLabelMouseDown = (event: React.MouseEvent, target: string) => {
@@ -420,8 +485,10 @@ const AdjustmentPanel = () => {
       setEdgeIntensity(value);
     }
   };
+
   // 分块平均功能
   const handleBlockAverage = async () => {
+    if (!checkLicenseBeforeAction()) return;
     try {
       const { executeAsModal } = core;
       
@@ -473,6 +540,7 @@ const AdjustmentPanel = () => {
 
   // 线条处理功能
   const handleLineEnhancement = async () => {
+    if (!checkLicenseBeforeAction()) return;
     try {
       const { executeAsModal } = core;
       
@@ -523,9 +591,9 @@ const AdjustmentPanel = () => {
     }
   };
 
-  
   // 高频增强功能
   const handleHighFrequencyEnhancement = async () => {
+    if (!checkLicenseBeforeAction()) return;
     try {
       const { executeAsModal } = core;
       
@@ -580,6 +648,7 @@ const AdjustmentPanel = () => {
 
   // 智能边缘平滑功能
   const handleSmartEdgeSmooth = async () => {
+    if (!checkLicenseBeforeAction()) return;
     try {
       const { executeAsModal } = core;
       
@@ -641,9 +710,9 @@ const AdjustmentPanel = () => {
     }
   };
 
-  //------------------------------------------------------------------------
   // 像素过渡功能
   const handlePixelTransition = async () => {
+    if (!checkLicenseBeforeAction()) return;
     try {
       const { executeAsModal } = core;
       
@@ -699,7 +768,30 @@ const AdjustmentPanel = () => {
   return (
     <div className="adjustment-container">
       
-      {/* 概括栏目 */}
+      {/* 试用状态提示 - 仅在试用中或试用结束时显示 */}
+      {(isTrial || (!isLicensed && !isTrial && trialDaysRemaining === 0)) && (
+        <div className="license-status-banner">
+          {isTrial && trialDaysRemaining > 0 && (
+            <span className="trial-status">试用中：还剩 {trialDaysRemaining} 天</span>
+          )}
+          {!isTrial && !isLicensed && (
+            <span className="trial-expired">试用天数用尽</span>
+          )}
+        </div>
+      )}
+      
+      {/* 许可证对话框 */}
+      <LicenseDialog
+        isOpen={isLicenseDialogOpen}
+        isLicensed={isLicensed}
+        isTrial={isTrial}
+        trialDaysRemaining={trialDaysRemaining}
+        onLicenseVerified={handleLicenseVerified}
+        onTrialStarted={handleTrialStarted}
+        onClose={closeLicenseDialog}
+      />
+      
+      {/* 分块调整 */}
       <div className="adjustment-section">
         <div className="adjustment-section-title">分块调整</div>
 
@@ -767,27 +859,25 @@ const AdjustmentPanel = () => {
                 <span className="adjustment-unit">级</span>
               </div>
             </div>
-          </div>   
+          </div>
         )}
       </div>
-      
-      {/* 过渡栏目 */}
+
+      {/* 像素过渡 */}
       <div className="adjustment-section">
-        <div className="adjustment-section-title">局部对比</div>
+        <div className="adjustment-section-title">像素过渡</div>
         <div className="adjustment-divider"></div>
         <button 
-            className="adjustment-button"
-            onClick={handlePixelTransition}
-            title="模糊选区内alpha>0的像素"
-          >
+          className="adjustment-button"
+          onClick={handlePixelTransition}
+          title="处理像素过渡，使相邻像素颜色更自然"
+        >
           像素过渡
         </button>
 
-
-        <div className="adjustment-slider-container">
-          {/* 过渡半径滑块 */}
+        <div className="adjustment-controls">
           <div className="adjustment-slider-item">
-            <label
+            <label 
               className={`adjustment-slider-label ${
                 isDragging && dragTarget === 'radius' 
                 ? 'dragging' 
@@ -819,9 +909,8 @@ const AdjustmentPanel = () => {
             </div>
           </div>
           
-          {/* 过渡强度滑块 */}
           <div className="adjustment-slider-item">
-            <label
+            <label 
               className={`adjustment-slider-label ${
                 isDragging && dragTarget === 'sigma' 
                 ? 'dragging' 
@@ -850,26 +939,23 @@ const AdjustmentPanel = () => {
                 onChange={handleSigmaNumberChange}
                 className="adjustment-number-input"
               />
-              <span className="adjustment-unit">px</span>
+              <span className="adjustment-unit">级</span>
             </div>
           </div>
-       
         </div>
 
         <div className="adjustment-divider"></div>
-
         <button 
-            className="adjustment-button"
-            onClick={handleHighFrequencyEnhancement}
-            title="增强选区内高频信息，如头发等细节"
-          >
-            高频增强
+          className="adjustment-button"
+          onClick={handleHighFrequencyEnhancement}
+          title="增强选区内的高频细节，使图像更加锐化"
+        >
+          高频增强
         </button>
-        
-        <div className="adjustment-slider-container">
-          {/* 高频增强强度滑块 */}
+
+        <div className="adjustment-controls">
           <div className="adjustment-slider-item">
-            <label
+            <label 
               className={`adjustment-slider-label ${
                 isDragging && dragTarget === 'highFreqIntensity' 
                 ? 'dragging' 
@@ -901,10 +987,9 @@ const AdjustmentPanel = () => {
               <span className="adjustment-unit">级</span>
             </div>
           </div>
-        
-          {/* 高频范围滑块 */}
+
           <div className="adjustment-slider-item">
-            <label
+            <label 
               className={`adjustment-slider-label ${
                 isDragging && dragTarget === 'highFreqRange' 
                 ? 'dragging' 
@@ -938,22 +1023,21 @@ const AdjustmentPanel = () => {
           </div>
         </div>
       </div>
-      
-      
-      {/* 边缘处理栏目 */}
+
+      {/* 智能边缘平滑 */}
       <div className="adjustment-section">
-        <div className="adjustment-section-title">边缘处理</div>
+        <div className="adjustment-section-title">智能边缘平滑</div>
         <div className="adjustment-divider"></div>
-        
-          {/* 平滑按钮控件 */}
+
         <div className="adjustment-double-buttons">
             <button 
               className="adjustment-button"
               onClick={handleSmartEdgeSmooth}
-              title="智能识别边缘并进行平滑处理，保留色块内部细节"
+              title="检测边缘并智能平滑，减少锯齿现象"
             >
-              边缘平滑
+              智能平滑
             </button>
+
             <div className="adjustment-swtich-container">
             <label 
               className="adjustment-swtich-label"
@@ -962,20 +1046,23 @@ const AdjustmentPanel = () => {
             >
               保留细节
             </label>
-              <sp-switch 
+                <sp-switch 
                 checked={preserveDetail}
                 onChange={(e) => setPreserveDetail(e.target.checked)}
-              />
+              /> 
             </div>
         </div>
 
-        <div className="adjustment-slider-container">
-           {/* 边缘alpha滑块控件 */}
+        <div className="adjustment-controls">
           <div className="adjustment-slider-item">
             <label 
-              className="wider-adjustment-slider-label"
+              className={`wide-adjustment-slider-label ${
+                isDragging && dragTarget === 'edgeAlphaThreshold' 
+                ? 'dragging' 
+                : 'not-dragging'
+              }`}
               onMouseDown={(e) => handleLabelMouseDown(e, 'edgeAlphaThreshold')}
-              title="拖拽调整Alpha差异阈值"
+              title="拖拽调整透明度差异阈值"
             >
               Alpha阈值
             </label>
@@ -986,7 +1073,7 @@ const AdjustmentPanel = () => {
               step="1"
               value={edgeAlphaThreshold}
               onChange={handleEdgeAlphaThresholdChange}
-              className="narrower-adjustment-slider-input"
+              className="narrow-adjustment-slider-input"
             />
             <div className="unit-container">
             <input
@@ -1000,11 +1087,14 @@ const AdjustmentPanel = () => {
             <span className="adjustment-unit">%</span>
             </div>
           </div>
-          
+
           <div className="adjustment-slider-item">
             <label 
-              className="wide-adjustment-slider-label"
-
+              className={`wide-adjustment-slider-label ${
+                isDragging && dragTarget === 'edgeColorThreshold' 
+                ? 'dragging' 
+                : 'not-dragging'
+              }`}
               onMouseDown={(e) => handleLabelMouseDown(e, 'edgeColorThreshold')}
               title="拖拽调整颜色差异阈值"
             >
@@ -1031,19 +1121,23 @@ const AdjustmentPanel = () => {
             <span className="adjustment-unit">%</span>
             </div>
           </div>
-          
+
           <div className="adjustment-slider-item">
             <label 
-              className="adjustment-slider-label"
+              className={`adjustment-slider-label ${
+                isDragging && dragTarget === 'edgeSmoothRadius' 
+                ? 'dragging' 
+                : 'not-dragging'
+              }`}
               onMouseDown={(e) => handleLabelMouseDown(e, 'edgeSmoothRadius')}
               title="拖拽调整平滑半径"
             >
-              半径  
+              平滑半径
             </label>
             <input
               type="range"
               min="1"
-              max="30"
+              max="8"
               step="0.5"
               value={edgeSmoothRadius}
               onChange={handleEdgeSmoothRadiusChange}
@@ -1053,7 +1147,7 @@ const AdjustmentPanel = () => {
             <input
               type="number"
               min="1"
-              max="30"
+              max="8"
               step="0.5"
               value={edgeSmoothRadius}
               onChange={handleEdgeSmoothRadiusNumberChange}
@@ -1065,7 +1159,11 @@ const AdjustmentPanel = () => {
 
           <div className="adjustment-slider-item">
             <label 
-              className="adjustment-slider-label"
+              className={`adjustment-slider-label ${
+                isDragging && dragTarget === 'edgeIntensity' 
+                ? 'dragging' 
+                : 'not-dragging'
+              }`}
               onMouseDown={(e) => handleLabelMouseDown(e, 'edgeIntensity')}
               title="拖拽调整拉直强度"
             >
@@ -1096,7 +1194,7 @@ const AdjustmentPanel = () => {
         </div>
 
         <div className="adjustment-divider"></div>
-        
+
           <button 
             className="adjustment-button"
             onClick={handleLineEnhancement}

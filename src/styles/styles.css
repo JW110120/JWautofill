@@ -50,6 +50,11 @@ html, body {
   padding: 5px 0;
   border-bottom: 1px solid var(--border-color);
   color: var(--text-color);
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 3000; /* 确保标题及右上角入口位于顶部 */
 }   
 
 .title-text {

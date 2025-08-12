@@ -1,9 +1,9 @@
 import React from 'react';
-import { interaction } from 'uxp';
+import { interaction, storage } from 'uxp';
 import { app, action, core } from 'photoshop';
 import { BLEND_MODES } from './constants/blendModes';
 import { BLEND_MODE_OPTIONS } from './constants/blendModeOptions';
-import { AppState, initialState } from './types/state';
+import { AppState, initialState, Gradient } from './types/state';
 import { DragHandler } from './utils/DragHandler';
 import { FillHandler } from './utils/FillHandler';
 import { LayerInfoHandler } from './utils/LayerInfoHandler';
@@ -12,6 +12,8 @@ import ColorSettingsPanel from './components/ColorSettingsPanel';
 import PatternPicker from './components/PatternPicker';
 import GradientPicker from './components/GradientPicker';
 import StrokeSetting from './components/StrokeSetting';
+import LicenseDialog from './components/LicenseDialog';
+import { LicenseManager } from './utils/LicenseManager';
 import { ExpandIcon, SettingsIcon } from './styles/Icons';
 import { calculateRandomColor, hsbToRgb, rgbToGray } from './utils/ColorUtils';
 import { strokeSelection } from './utils/StrokeSelection';
@@ -19,11 +21,12 @@ import { PatternFill } from './utils/PatternFill';
 import { GradientFill } from './utils/GradientFill';
 import { SingleChannelHandler } from './utils/SingleChannelHandler';
 import { SelectionHandler, SelectionOptions } from './utils/SelectionHandler';
-import { ColorSettings } from './types/ColorSettings';
-import { Pattern } from './types/Pattern';
+import { ColorSettings, Pattern } from './types/state';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
+
+interface AppProps {}
 
 class App extends React.Component<AppProps, AppState> {
     private isListenerPaused = false;
@@ -68,6 +71,13 @@ class App extends React.Component<AppProps, AppState> {
         this.handleSelectionContrastChange = this.handleSelectionContrastChange.bind(this);
         this.handleSelectionExpandChange = this.handleSelectionExpandChange.bind(this);
         this.handleNotification = this.handleNotification.bind(this);
+        // 许可证相关方法绑定
+        this.handleLicenseVerified = this.handleLicenseVerified.bind(this);
+        this.handleTrialStarted = this.handleTrialStarted.bind(this);
+        this.closeLicenseDialog = this.closeLicenseDialog.bind(this);
+        this.checkLicenseStatus = this.checkLicenseStatus.bind(this);
+        this.openLicenseDialog = this.openLicenseDialog.bind(this);
+        this.resetLicenseForTesting = this.resetLicenseForTesting.bind(this);
  
     }
 
@@ -95,6 +105,9 @@ class App extends React.Component<AppProps, AppState> {
         
         // 监听Photoshop事件来检查状态变化
         await action.addNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], this.handleNotification);
+
+        // 许可证：检查当前状态并尝试自动重新验证
+        await this.checkLicenseStatus();
     }
 
     componentDidUpdate(prevProps, prevState) {
@@ -116,6 +129,15 @@ class App extends React.Component<AppProps, AppState> {
                 document.body.classList.remove('secondary-panel-open');
             }
         }
+
+        // 检查授权对话框状态变化，添加或移除CSS类
+        if (this.state.isLicenseDialogOpen !== prevState.isLicenseDialogOpen) {
+            if (this.state.isLicenseDialogOpen) {
+                document.body.classList.add('license-dialog-open');
+            } else {
+                document.body.classList.remove('license-dialog-open');
+            }
+        }
     }
 
     componentWillUnmount() {
@@ -127,6 +149,7 @@ class App extends React.Component<AppProps, AppState> {
         document.removeEventListener('mouseup', this.handleMouseUp);
         // 清理CSS类
         document.body.classList.remove('secondary-panel-open');
+        document.body.classList.remove('license-dialog-open');
     }
 
     handleButtonClick() {
@@ -424,6 +447,12 @@ class App extends React.Component<AppProps, AppState> {
     async fillSelection() {
         await new Promise(resolve => setTimeout(resolve, 50));
         try {
+            // 授权门控：未授权且非试用，打开授权窗口并阻止功能
+            if (!this.state.isLicensed && !this.state.isTrial) {
+                this.setState({ isLicenseDialogOpen: true });
+                return false;
+            }
+
             // 检查是否在单通道模式
             const isInSingleChannel = await LayerInfoHandler.checkSingleColorChannelMode();
             if (isInSingleChannel) {
@@ -747,9 +776,115 @@ class App extends React.Component<AppProps, AppState> {
         }
     }  
 
+    // ===== 许可证相关方法 =====
+    async checkLicenseStatus() {
+        try {
+            // 先查看本地缓存
+            const status = await LicenseManager.checkLicenseStatus();
+            let isLicensed = status.isValid;
+            let isTrial = false;
+            let trialDaysRemaining = 0;
+
+            // 如果不是正式许可证，检查是否处于试用并是否过期
+            if (!isLicensed) {
+                const expired = await LicenseManager.isTrialExpired();
+                // 读取缓存看看是否是试用
+                const cachedInfo: any = (status && status.info) || await (LicenseManager as any).getCachedLicense?.();
+                const isTrialKey = cachedInfo && cachedInfo.key && String(cachedInfo.key).startsWith('TRIAL_');
+                isTrial = !!isTrialKey && !expired;
+
+                if (isTrialKey && cachedInfo && cachedInfo.expiryDate) {
+                    const expire = new Date(cachedInfo.expiryDate).getTime();
+                    const diffDays = Math.max(0, Math.ceil((expire - Date.now()) / (24 * 60 * 60 * 1000)));
+                    trialDaysRemaining = diffDays;
+                }
+            }
+
+            // 自动重新验证（宽松：失败不阻止）
+            if (status.needsReverification) {
+                try { await LicenseManager.autoReverifyIfNeeded(); } catch {}
+            }
+
+            // 控制对话框打开逻辑：首次启动若未授权则打开
+            this.setState({
+                isLicensed,
+                isTrial,
+                trialDaysRemaining,
+                isLicenseDialogOpen: !(isLicensed || isTrial)
+            });
+        } catch (e) {
+            console.warn('检查许可证状态失败:', e);
+            this.setState({ isLicensed: false, isTrial: false, isLicenseDialogOpen: true });
+        }
+    }
+
+    handleLicenseVerified() {
+        this.setState({ isLicensed: true, isTrial: false, isLicenseDialogOpen: false });
+        // 对话框关闭，移除类名恢复输入框
+        document.body.classList.remove('license-dialog-open');
+    }
+
+    handleTrialStarted() {
+        // 试用7天
+        this.setState({ isLicensed: false, isTrial: true, isLicenseDialogOpen: false, trialDaysRemaining: 7 });
+        // 对话框关闭，移除类名恢复输入框
+        document.body.classList.remove('license-dialog-open');
+    }
+
+    closeLicenseDialog() {
+        this.setState({ isLicenseDialogOpen: false });
+        // 移除body类名，恢复输入框显示
+        document.body.classList.remove('license-dialog-open');
+    }
+
+    // 新增：手动打开授权对话框
+    openLicenseDialog() {
+        this.setState({ isLicenseDialogOpen: true });
+        // 添加body类名，隐藏输入框
+        document.body.classList.add('license-dialog-open');
+    }
+
+    // 临时调试方法：重置许可证状态
+    async resetLicenseForTesting() {
+        try {
+            await LicenseManager.clearLicense();
+            // 也清除试用记录
+            try {
+                const localFileSystem = storage.localFileSystem;
+                const dataFolder = await localFileSystem.getDataFolder();
+                const trialFile = await dataFolder.getEntry('trial.json');
+                await trialFile.delete();
+            } catch (e) {
+                // 试用文件可能不存在，忽略错误
+            }
+            
+            // 重置状态并显示对话框
+            this.setState({
+                isLicensed: false,
+                isTrial: false,
+                isLicenseDialogOpen: true,
+                trialDaysRemaining: 0
+            });
+            
+            console.log('许可证状态已重置，可重新测试授权流程');
+        } catch (error) {
+            console.error('重置许可证状态失败:', error);
+        }
+    }
+
     render() {
         return (
             <div>
+                {/* 授权对话框 */}
+                <LicenseDialog
+                    isOpen={this.state.isLicenseDialogOpen}
+                    isLicensed={this.state.isLicensed}
+                    isTrial={this.state.isTrial}
+                    trialDaysRemaining={this.state.trialDaysRemaining}
+                    onLicenseVerified={this.handleLicenseVerified}
+                    onTrialStarted={this.handleTrialStarted}
+                    onClose={this.closeLicenseDialog}
+                />
                 <div className="container">
                 <h3 className="title" 
 title={`● 生成选区时，插件会自动根据选择的模式填充/删除内容。
@@ -761,7 +896,52 @@ title={`● 生成选区时，插件会自动根据选择的模式填充/删除�
 ● 由于每次生成选区后，插件会立刻执行若干个步骤。因此想要撤销本次的自动填充，建议回溯历史记录。`
 }>
                     <span className="title-text">选区笔1.2</span>
-                    <span className="title-beta">beta</span>
+                    {/* 临时调试：重置许可证按钮 */}
+                    <button
+                        onClick={() => this.resetLicenseForTesting()}
+                        title="重置许可证状态（仅调试用）"
+                        style={{
+                            position: 'absolute',
+                            right: 32,
+                            top: 2,
+                            width: 20,
+                            height: 20,
+                            borderRadius: 10,
+                            border: '1px solid var(--border-color)',
+                            background: 'var(--bg-color)',
+                            color: 'red',
+                            cursor: 'pointer',
+                            lineHeight: '18px',
+                            fontSize: '10px',
+                            padding: 0,
+                            zIndex: 10
+                        }}
+                    >
+                        R
+                    </button>
+                    {/* 新增：帮助按钮（右上角问号），用于重新打开授权窗口 */}
+                    <button
+                        onClick={this.openLicenseDialog}
+                        title="打开许可证与试用面板"
+                        style={{
+                            position: 'absolute',
+                            right: 8,
+                            top: 2,
+                            width: 20,
+                            height: 20,
+                            borderRadius: 10,
+                            border: '1px solid var(--border-color)',
+                            background: 'var(--bg-color)',
+                            color: 'var(--text-color)',
+                            cursor: 'pointer',
+                            lineHeight: '18px',
+                            fontSize: '12px',
+                            padding: 0,
+                            zIndex: 10
+                        }}
+                    >
+                        ?
+                    </button>
                 </h3>
                 <div className="button-container">
                     <sp-action-button 
