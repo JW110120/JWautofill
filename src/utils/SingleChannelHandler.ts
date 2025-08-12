@@ -66,7 +66,9 @@ export class SingleChannelHandler {
             // 根据填充模式生成选区内的填充数据
             switch (fillMode) {
                 case 'foreground':
-                    fillData = await this.generateSolidColorData(bounds, state, savedForegroundColor);
+                    const solidColorResult = await this.generateSolidColorData(bounds, state, savedForegroundColor);
+                    fillData = solidColorResult.colorData;
+                    alphaData = solidColorResult.alphaData;
                     break;
                 case 'pattern':
                     if (!options.pattern) {
@@ -104,11 +106,68 @@ export class SingleChannelHandler {
             // 将计算得到的选区内的最终值，写回当前通道，实现通道的填充。
             if (channelInfo.isAlphaChannel) {
                 await this.updateAlphaChannelPixels(finalData, bounds, channelInfo, channelData, state);
-
             } else {
                 await this.updateChannelPixels(finalData, bounds, channelInfo, originalRgbaData, state);
-
             }
+            
+            // 检查APP主面板的取消选区checkbox状态，如果为false则使用imagingAPI恢复选区
+            console.log('🔍 检查选区恢复条件:', {
+                hasState: !!state,
+                deselectAfterFill: state?.deselectAfterFill,
+                hasSelectionValues: !!bounds.selectionValues,
+                selectionValuesLength: bounds.selectionValues?.length,
+                hasSelectionDocIndices: !!bounds.selectionDocIndices,
+                selectionDocIndicesSize: bounds.selectionDocIndices?.size
+            });
+            
+            if (state && state.deselectAfterFill === false && bounds.selectionValues && bounds.selectionDocIndices) {
+                console.log('🎯 取消选区checkbox为false，使用imagingAPI恢复选区');
+                
+                try {
+                    console.log('🎯 使用传入的选区数据，压缩长度:', bounds.selectionValues.length);
+                    console.log('🎯 文档尺寸:', bounds.docWidth, 'x', bounds.docHeight);
+                    
+                    // 将压缩的selectionValues数组补全为整个文档大小的数组
+                    const fullDocumentArray = new Uint8Array(bounds.docWidth * bounds.docHeight);
+                    
+                    // 将选区内像素的值填入对应的文档位置
+                    const selectionIndicesArray = Array.from(bounds.selectionDocIndices);
+                    for (let i = 0; i < bounds.selectionValues.length; i++) {
+                        const docIndex = selectionIndicesArray[i];
+                        if (docIndex < fullDocumentArray.length) {
+                            fullDocumentArray[docIndex] = bounds.selectionValues[i];
+                        }
+                    }
+                    
+                    console.log('✅ 选区数组补全完成，完整数组长度:', fullDocumentArray.length);
+                    
+                    // 使用createImageDataFromBuffer创建ImageData
+                    const imageDataOptions = {
+                        width: bounds.docWidth,
+                        height: bounds.docHeight,
+                        components: 1,
+                        chunky: true,
+                        colorProfile: "Dot Gain 15%",
+                        colorSpace: "Grayscale"
+                    };
+                    
+                    const imageData = await imaging.createImageDataFromBuffer(fullDocumentArray, imageDataOptions);
+                    
+                    // 使用putSelection更新选区
+                    await imaging.putSelection({
+                        documentID: app.activeDocument.id,
+                        imageData: imageData
+                    });
+                    
+                    // 释放ImageData内存
+                    imageData.dispose();
+                    
+                    console.log('✅ 选区恢复成功');
+                } catch (error) {
+                    console.error('❌ 恢复选区失败:', error);
+                }
+            }
+            
             return true;
         } catch (error) {
             console.error('❌ 单通道填充失败:', error);
@@ -158,14 +217,16 @@ export class SingleChannelHandler {
             // 根据清除模式生成清除数据
             switch (fillMode) {
                 case 'foreground':
-                    clearData = await this.generateSolidColorData(bounds, state, savedForegroundColor);
+                    const solidColorResult = await this.generateSolidColorData(bounds, state, savedForegroundColor);
+                    clearData = solidColorResult.colorData;
+                    alphaData = solidColorResult.alphaData;
                     break;
                 case 'pattern':
                     if (!options.pattern) {
                         await core.showAlert({ message: '请先选择一个图案预设' });
                         return false;
                     }
-                    const patternResult = await this.generatePatternData(bounds, options.pattern, { ...state, channelData });
+                    const patternResult = await this.generatePatternData(bounds, options.pattern, state);
                     clearData = patternResult.colorData;
                     alphaData = patternResult.alphaData;
                     break;
@@ -198,6 +259,64 @@ export class SingleChannelHandler {
             } else {
                 await this.updateChannelPixels(finalData, bounds, channelInfo, originalRgbaData, state);
             }
+            
+            // 检查APP主面板的取消选区checkbox状态，如果为false则使用imagingAPI恢复选区
+            console.log('🔍 检查选区恢复条件(clear):', {
+                hasState: !!state,
+                deselectAfterFill: state?.deselectAfterFill,
+                hasSelectionValues: !!bounds.selectionValues,
+                selectionValuesLength: bounds.selectionValues?.length,
+                hasSelectionDocIndices: !!bounds.selectionDocIndices,
+                selectionDocIndicesSize: bounds.selectionDocIndices?.size
+            });
+            if (state && state.deselectAfterFill === false && bounds.selectionValues && bounds.selectionDocIndices) {
+                console.log('🎯 取消选区checkbox为false，使用imagingAPI恢复选区');
+                
+                try {
+                    console.log('🎯 使用传入的选区数据，压缩长度:', bounds.selectionValues.length);
+                    console.log('🎯 文档尺寸:', bounds.docWidth, 'x', bounds.docHeight);
+                    
+                    // 将压缩的selectionValues数组补全为整个文档大小的数组
+                    const fullDocumentArray = new Uint8Array(bounds.docWidth * bounds.docHeight);
+                    
+                    // 将选区内像素的值填入对应的文档位置
+                    const selectionIndicesArray = Array.from(bounds.selectionDocIndices);
+                    for (let i = 0; i < bounds.selectionValues.length; i++) {
+                        const docIndex = selectionIndicesArray[i];
+                        if (docIndex < fullDocumentArray.length) {
+                            fullDocumentArray[docIndex] = bounds.selectionValues[i];
+                        }
+                    }
+                    
+                    console.log('✅ 选区数组补全完成，完整数组长度:', fullDocumentArray.length);
+                    
+                    // 使用createImageDataFromBuffer创建ImageData
+                    const imageDataOptions = {
+                        width: bounds.docWidth,
+                        height: bounds.docHeight,
+                        components: 1,
+                        chunky: true,
+                        colorProfile: "Dot Gain 15%",
+                        colorSpace: "Grayscale"
+                    };
+                    
+                    const imageData = await imaging.createImageDataFromBuffer(fullDocumentArray, imageDataOptions);
+                    
+                    // 使用putSelection更新选区
+                    await imaging.putSelection({
+                        documentID: app.activeDocument.id,
+                        imageData: imageData
+                    });
+                    
+                    // 释放ImageData内存
+                    imageData.dispose();
+                    
+                    console.log('✅ 选区恢复成功');
+                } catch (error) {
+                    console.error('❌ 恢复选区失败:', error);
+                }
+            }
+            
             return true;
         } catch (error) {
             console.error('❌ 单通道清除失败:', error);
@@ -234,11 +353,17 @@ export class SingleChannelHandler {
                 const rgbChannels = ["红", "绿", "蓝", "Red", "Grain", "Blue", "R", "G", "B"];
                 const isRgbChannel = rgbChannels.includes(channelName);
                 
+                // 获取快速蒙版状态
+                const document = app.activeDocument;
+                const isInQuickMask = document.quickMaskMode;
+                
+                // 获取图层蒙版状态
+                const activeLayer = document.activeLayers[0];
+                const isInLayerMask = activeLayer && !activeLayer.isBackgroundLayer ? await LayerInfoHandler.checkLayerMaskMode() : false;
+                
                 // 检测是否为用户自建的alpha通道（是指自定义alpha通道，itemIndex>=4的那些，这是因为这些通道在Photoshop的面板中通常位于蓝通道的下方。）
-
-                const isAlphaChannel = channelName.toLowerCase().includes('alpha') || 
-                                     channelName.match(/^alpha\s*\d*$/i) ||
-                                     channelName.match(/^[aα]\s*\d*$/i) || itemIndex>=4;
+                // Alpha通道为通道指数 >=4且不为快速蒙版、图层蒙版的通道（因为快速蒙版、图层蒙版也在蓝通道下方，通道索引大于3）
+                const isAlphaChannel = itemIndex >= 4 && !isInQuickMask && !isInLayerMask;
                 
                 // 对于单通道操作，支持R、G、B通道和自定义Alpha通道
                 const isInSingleColorChannel = isRgbChannel || isAlphaChannel;
@@ -366,12 +491,14 @@ export class SingleChannelHandler {
             // 第二步：创建只包含选区内像素的数组（长度为selectionDocIndices.size）
             const selectionSize = selectionDocIndices.size;
             const selectionCoefficients = new Float32Array(selectionSize);
+            const selectionValues = new Uint8Array(selectionSize);
             
-            // 第三步：将选区内像素的系数填入新数组
+            // 第三步：将选区内像素的系数和值填入新数组
             let fillIndex = 0;
             for (let i = 0; i < width * height; i++) {
                 if (tempSelectionValues[i] > 0) {
                     selectionCoefficients[fillIndex] = tempSelectionCoefficients[i];
+                    selectionValues[fillIndex] = tempSelectionValues[i];
                     fillIndex++;
                 }
             }
@@ -391,7 +518,8 @@ export class SingleChannelHandler {
                 docHeight: docHeightPixels,
                 selectionDocIndices,
                 selectionIndicesArray,
-                selectionCoefficients
+                selectionCoefficients,
+                selectionValues           // 选区像素值（0-255）
             };
         } catch (error) {
             console.error('❌ 获取选区数据失败:', error);
@@ -651,7 +779,7 @@ export class SingleChannelHandler {
     }
     
     // 生成纯色数据
-    private static async generateSolidColorData(bounds: any, state: any, savedForegroundColor?: any): Promise<Uint8Array> {
+    private static async generateSolidColorData(bounds: any, state: any, savedForegroundColor?: any): Promise<{ colorData: Uint8Array; alphaData: Uint8Array }> {
         console.log('🎨 生成纯色数据');
         
         // 获取当前前景色的不透明度，使用实际的不透明度值而不是硬编码100
@@ -701,8 +829,12 @@ export class SingleChannelHandler {
         const colorData = new Uint8Array(bounds.selectionDocIndices.size);
         colorData.fill(grayValue);
         
-        console.log('✅ 纯色数据生成完成，灰度值:', grayValue, '基于前景色RGB:', rgb, '不透明度:', currentOpacity);
-        return colorData;
+        // 创建alpha数据数组，纯色填充默认alpha为255（完全不透明）
+        const alphaData = new Uint8Array(bounds.selectionDocIndices.size);
+        alphaData.fill(255);
+        
+        console.log('✅ 纯色数据生成完成，灰度值:', grayValue, '基于前景色RGB:', rgb, '不透明度:', currentOpacity, 'alpha值:', 255);
+        return { colorData, alphaData };
     }
     
     // 生成图案数据
@@ -959,14 +1091,13 @@ export class SingleChannelHandler {
                 }
                 
                 // 关键修正：对于图案外区域，设置为0，配合alpha=0确保不参与清除
-                // 不再强制设置图案外区域为0，而是使用createStampPatternData返回的背景值
                 if (isInPattern) {
                     const patternColorValue = grayPatternData[boundsIndex] || 0;
                     selectedColorData[index] = patternColorValue;
                 } else {
-                    // 图案外区域：使用createStampPatternData已经设置好的背景值（包括原始通道数据）
-                    const backgroundValue = grayPatternData[boundsIndex] || 0;
-                    selectedColorData[index] = backgroundValue;
+                    // 图案外区域：设置为0，确保不参与清除操作
+                    // 这样配合alpha=0，可以完全避免图案外区域被清除
+                    selectedColorData[index] = 0;
                 }
             } else {
                 // 超出边界的区域
@@ -1092,33 +1223,33 @@ export class SingleChannelHandler {
         
         for (let i = 0; i < selectionChannelData.length; i++) {
             const baseValue = selectionChannelData[i]; // 选区内原始通道值
-            const clearValue = selectionClearData[i];  // 选区内清除值
-            // 修复透明度处理：当alphaData不存在时，根据清除值判断是否参与混合
-            // 对于图案清除，如果没有alpha数据且清除值为0（黑色），则认为该区域不参与清除
-            const alphaValue = selectionAlphaData ? selectionAlphaData[i] : 0; // 默认为0，只有明确的alpha数据才参与清除
+            const clearValue = selectionClearData[i];  // 选区内清除值（图案灰度值）
+            
+            // 关键修复：优先检查alpha值，如果alpha为0（图案外区域），直接跳过清除操作
+            const alphaValue = selectionAlphaData ? selectionAlphaData[i] : 0;
+            
+            // 如果alpha为0，说明该像素位于图案外区域，直接保持原始值，不参与任何清除计算
+            if (alphaValue === 0) {
+                clearedSelectionData[i] = baseValue;
+                continue;
+            }
             
             // 计算清除内容的最终的透明度（图案/渐变透明度 × 整体不透明度）
             const finalAlpha = (alphaValue / 255) * opacityRatio;
             
-            // 如果清除内容最终透明度为0，直接保持原始通道值，不进行任何清除
+            // 双重保险：如果最终透明度为0，也直接保持原始值
             if (finalAlpha === 0) {
-                // 对于盖图章模式，当alpha为0时（图案外区域），应该从完整的channelData中获取对应位置的原始值
-                if (channelData && bounds.selectionDocIndices) {
-                    const selectionIndicesArray = bounds.selectionIndicesArray || Array.from(bounds.selectionDocIndices);
-                    const globalIndex = selectionIndicesArray[i];
-                    if (globalIndex !== undefined && globalIndex < channelData.length) {
-                        clearedSelectionData[i] = channelData[globalIndex];
-                    } else {
-                        clearedSelectionData[i] = baseValue;
-                    }
-                } else {
-                    clearedSelectionData[i] = baseValue;
-                }
+                clearedSelectionData[i] = baseValue;
                 continue;
             }
             
-            // 计算清除值：从原始通道值中减去清除值
-            let clearedResult = baseValue - clearValue * finalAlpha;
+            // 修正清除算法：根据图案灰度值计算清除强度
+            // clearValue是图案的灰度值(0-255)，需要转换为清除强度(0-1)
+            // 灰度值越高，清除强度越大；灰度值为0时不清除，灰度值为255时完全清除
+            const clearIntensity = (clearValue / 255) * finalAlpha;
+            
+            // 计算清除后的结果：原始值 × (1 - 清除强度)
+            let clearedResult = baseValue * (1 - clearIntensity);
             
             // 应用羽化系数（如果存在）
             if (hasFeathering && selectionCoefficients && selectionCoefficients[i] !== undefined) {

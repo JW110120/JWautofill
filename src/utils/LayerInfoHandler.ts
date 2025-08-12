@@ -55,7 +55,7 @@ export class LayerInfoHandler {
     }
 
     // 检测是否在编辑图层蒙版
-    private static async checkLayerMaskMode(): Promise<boolean> {
+    static async checkLayerMaskMode(): Promise<boolean> {
         try {
             // 第一步：获取图层蒙版信息
             const maskResult = await action.batchPlay([
@@ -144,16 +144,21 @@ export class LayerInfoHandler {
                 console.log("🔍 当前激活通道:", channelName);
                 console.log("🔍 当前激活通道的索引:", itemIndex);
 
+                // 获取快速蒙版状态
+                const document = app.activeDocument;
+                const isInQuickMask = document.quickMaskMode;
+                
+                // 获取图层蒙版状态
+                const activeLayer = document.activeLayers[0];
+                const isInLayerMask = activeLayer && !activeLayer.isBackgroundLayer ? await this.checkLayerMaskMode() : false;
                 
                 // 检测是否为RGB颜色通道（红、绿、蓝）
                 // 通常这些通道的名称为 "红"、"绿"、"蓝" 或 "Red"、"Grain"、"Blue"
                 const rgbChannels = ["红", "绿", "蓝", "Red", "Grain", "Blue", "R", "G", "B"];
                 const isRgbChannel = rgbChannels.includes(channelName);
                 
-                // Alpha通道通常以 "Alpha" 开头或包含 "Alpha" 关键字
-                const isAlphaChannel = channelName.toLowerCase().includes('alpha') || 
-                                     channelName.match(/^alpha\s*\d*$/i) ||
-                                     channelName.match(/^[aα]\s*\d*$/i) || itemIndex>=4
+                // Alpha通道为通道指数 >=4且不为快速蒙版、图层蒙版的通道（因为快速蒙版、图层蒙版也在蓝通道下方，通道索引大于3）
+                const isAlphaChannel = itemIndex >= 4 && !isInQuickMask && !isInLayerMask;
                 
                 // 对于单通道操作，支持RGB通道和Alpha通道
                 const isInSingleColorChannel = isRgbChannel || isAlphaChannel;
