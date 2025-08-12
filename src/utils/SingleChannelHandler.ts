@@ -73,7 +73,7 @@ export class SingleChannelHandler {
                         await core.showAlert({ message: '请先选择一个图案预设' });
                         return false;
                     }
-                    const patternResult = await this.generatePatternData(bounds, options.pattern, state);
+                    const patternResult = await this.generatePatternData(bounds, options.pattern, { ...state, channelData });
                     fillData = patternResult.colorData;
                     alphaData = patternResult.alphaData;
                     break;
@@ -121,6 +121,17 @@ export class SingleChannelHandler {
         try {
             console.log('🧹 开始单通道清除操作，模式:', fillMode);
             
+            // 预先保存前景色，防止后续操作影响前景色获取
+            let savedForegroundColor = null;
+            if (fillMode === 'foreground') {
+                savedForegroundColor = {
+                    hue: app.foregroundColor.hsb.hue,
+                    saturation: app.foregroundColor.hsb.saturation,
+                    brightness: app.foregroundColor.hsb.brightness
+                };
+                console.log('🔒 预先保存前景色:', savedForegroundColor);
+            }
+            
             // 检查是否在单通道模式
             const channelInfo = await this.getCurrentChannelInfo();
             if (!channelInfo || !channelInfo.isInSingleColorChannel) {
@@ -147,14 +158,14 @@ export class SingleChannelHandler {
             // 根据清除模式生成清除数据
             switch (fillMode) {
                 case 'foreground':
-                    clearData = await this.generateSolidColorData(bounds, state);
+                    clearData = await this.generateSolidColorData(bounds, state, savedForegroundColor);
                     break;
                 case 'pattern':
                     if (!options.pattern) {
                         await core.showAlert({ message: '请先选择一个图案预设' });
                         return false;
                     }
-                    const patternResult = await this.generatePatternData(bounds, options.pattern, state);
+                    const patternResult = await this.generatePatternData(bounds, options.pattern, { ...state, channelData });
                     clearData = patternResult.colorData;
                     alphaData = patternResult.alphaData;
                     break;
@@ -177,7 +188,8 @@ export class SingleChannelHandler {
                 clearData,
                 alphaData,
                 options.opacity,
-                bounds
+                bounds,
+                channelData  // 传入完整的channelData，用于图案外区域获取原始值
             );
             
            // 写回通道数据
@@ -829,7 +841,8 @@ export class SingleChannelHandler {
                 angle,
                 bounds,
                 true, // 灰度模式
-                false // 不需要生成透明度数据（灰度模式）
+                false, // 不需要生成透明度数据（灰度模式）
+                state.channelData // 传入原始通道数据作为背景
             );
             
             grayPatternData = stampResult.colorData;
@@ -945,14 +958,15 @@ export class SingleChannelHandler {
                     }
                 }
                 
-                // 关键修正：对于图案外区域，不使用图案数据，而是使用占位符0
-                // calculateFillBlend会在finalAlpha=0时从channelData获取原始值
+                // 关键修正：对于图案外区域，设置为0，配合alpha=0确保不参与清除
+                // 不再强制设置图案外区域为0，而是使用createStampPatternData返回的背景值
                 if (isInPattern) {
                     const patternColorValue = grayPatternData[boundsIndex] || 0;
                     selectedColorData[index] = patternColorValue;
                 } else {
-                    // 图案外区域：使用占位符，calculateFillBlend会从channelData获取原始值
-                    selectedColorData[index] = 0; // 占位符，不会被使用
+                    // 图案外区域：使用createStampPatternData已经设置好的背景值（包括原始通道数据）
+                    const backgroundValue = grayPatternData[boundsIndex] || 0;
+                    selectedColorData[index] = backgroundValue;
                 }
             } else {
                 // 超出边界的区域
@@ -1011,9 +1025,9 @@ export class SingleChannelHandler {
             const fillValue = selectionFillData[i];    // 选区内填充值
             // 修复透明度处理：
             // 1) 如果提供了 alphaData，直接使用；
-            // 2) 如果没有 alphaData，默认认为选区内全部可参与混合（alpha=255），
-            //    但在generatePatternData中我们已确保图案范围外的像素alpha=0并且填充值为原值或0。
-            const alphaValue = selectionAlphaData ? selectionAlphaData[i] : 255;
+            // 2) 如果没有 alphaData，默认为0，只有明确的alpha数据才参与清除
+            //    在generatePatternData中我们已确保图案范围外的像素alpha=0。
+            const alphaValue = selectionAlphaData ? selectionAlphaData[i] : 0;
             
             // 计算填充内容的最终的透明度（图案/渐变透明度 × 整体不透明度）
             const finalAlpha = (alphaValue / 255) * opacityRatio;
@@ -1064,7 +1078,8 @@ export class SingleChannelHandler {
         selectionClearData: Uint8Array,   // 选区内的清除数据 (长度: bounds.selectionDocIndices.size)
         selectionAlphaData: Uint8Array | undefined, // 选区内的清除内容的透明度数据 (长度: bounds.selectionDocIndices.size)
         opacity: number,
-        bounds: any
+        bounds: any,
+        channelData?: Uint8Array  // 添加完整的channelData参数，用于获取图案外区域的原始值
     ): Promise<Uint8Array> {
         
         // 最终输出的数据，是两个选区长度 (bounds.selectionDocIndices.size)的数组计算得到的，分别是选区内的原始通道值和选区内的清除值
@@ -1080,14 +1095,25 @@ export class SingleChannelHandler {
             const clearValue = selectionClearData[i];  // 选区内清除值
             // 修复透明度处理：当alphaData不存在时，根据清除值判断是否参与混合
             // 对于图案清除，如果没有alpha数据且清除值为0（黑色），则认为该区域不参与清除
-            const alphaValue = selectionAlphaData ? selectionAlphaData[i] : (clearValue > 0 ? 255 : 0);
+            const alphaValue = selectionAlphaData ? selectionAlphaData[i] : 0; // 默认为0，只有明确的alpha数据才参与清除
             
             // 计算清除内容的最终的透明度（图案/渐变透明度 × 整体不透明度）
             const finalAlpha = (alphaValue / 255) * opacityRatio;
             
             // 如果清除内容最终透明度为0，直接保持原始通道值，不进行任何清除
             if (finalAlpha === 0) {
-                clearedSelectionData[i] = baseValue;
+                // 对于盖图章模式，当alpha为0时（图案外区域），应该从完整的channelData中获取对应位置的原始值
+                if (channelData && bounds.selectionDocIndices) {
+                    const selectionIndicesArray = bounds.selectionIndicesArray || Array.from(bounds.selectionDocIndices);
+                    const globalIndex = selectionIndicesArray[i];
+                    if (globalIndex !== undefined && globalIndex < channelData.length) {
+                        clearedSelectionData[i] = channelData[globalIndex];
+                    } else {
+                        clearedSelectionData[i] = baseValue;
+                    }
+                } else {
+                    clearedSelectionData[i] = baseValue;
+                }
                 continue;
             }
             

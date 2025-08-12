@@ -23,7 +23,8 @@ async function createStampPatternData(
     angle: number,
     bounds: any,
     isGrayMode: boolean = false,
-    generateAlphaData: boolean = false
+    generateAlphaData: boolean = false,
+    backgroundChannelData?: Uint8Array // 新增：原始背景通道数据，用于单通道填充
 ): Promise<{ colorData: Uint8Array; alphaData?: Uint8Array; patternMask?: Uint8Array }> {
     let resultData: Uint8Array;
     
@@ -42,8 +43,18 @@ async function createStampPatternData(
             console.log('选区无效或为空，创建背景');
             resultData = new Uint8Array(targetWidth * targetHeight * components);
             if (isGrayMode) {
-                // 灰度模式：背景设置为0（黑色）
-                resultData.fill(0);
+                // 单通道模式：使用传入的原始通道数据作为背景，否则填充为0
+                if (backgroundChannelData) {
+                    for (let y = 0; y < targetHeight; y++) {
+                        for (let x = 0; x < targetWidth; x++) {
+                            const docIndex = (bounds.top + y) * bounds.docWidth + (bounds.left + x);
+                            const targetIndex = y * targetWidth + x;
+                            resultData[targetIndex] = docIndex < backgroundChannelData.length ? backgroundChannelData[docIndex] : 0;
+                        }
+                    }
+                } else {
+                    resultData.fill(0);
+                }
             } else if (components === 4) {
                 //图案为RGBA格式：背景设置为完全透明
                 for (let i = 3; i < resultData.length; i += 4) {
@@ -89,7 +100,24 @@ async function createStampPatternData(
                 // 强制将背景处理为与图案相同的通道数
                 resultData = new Uint8Array(targetWidth * targetHeight * components);
 
-                if (components === 4) { // 图案是 RGBA
+                if (isGrayMode && backgroundChannelData) {
+                    // 单通道模式：使用传入的原始通道数据作为背景
+                    console.log('使用传入的原始通道数据作为背景（有效选区）');
+                    for (let y = 0; y < targetHeight; y++) {
+                        for (let x = 0; x < targetWidth; x++) {
+                            const docX = bounds.left + x;
+                            const docY = bounds.top + y;
+                            const docIndex = docY * bounds.docWidth + docX;
+                            const targetIndex = y * targetWidth + x;
+                            
+                            if (docIndex >= 0 && docIndex < backgroundChannelData.length) {
+                                resultData[targetIndex] = backgroundChannelData[docIndex];
+                            } else {
+                                resultData[targetIndex] = 0; // 超出范围时使用默认值
+                            }
+                        }
+                    }
+                } else if (components === 4) { // 图案是 RGBA
                     if (backgroundData.length === targetWidth * targetHeight * 4) {
                         // 背景也是 RGBA
                         resultData.set(backgroundData);
@@ -133,8 +161,27 @@ async function createStampPatternData(
       // 如果获取失败，创建默认背景
         resultData = new Uint8Array(targetWidth * targetHeight * components);
         if (isGrayMode) {
-            // 灰度模式：背景设置为0（黑色）
-            resultData.fill(0);
+            if (backgroundChannelData) {
+                // 单通道模式：使用传入的原始通道数据作为背景
+                console.log('获取像素失败，使用传入的原始通道数据作为背景');
+                for (let y = 0; y < targetHeight; y++) {
+                    for (let x = 0; x < targetWidth; x++) {
+                        const docX = bounds.left + x;
+                        const docY = bounds.top + y;
+                        const docIndex = docY * bounds.docWidth + docX;
+                        const targetIndex = y * targetWidth + x;
+                        
+                        if (docIndex >= 0 && docIndex < backgroundChannelData.length) {
+                            resultData[targetIndex] = backgroundChannelData[docIndex];
+                        } else {
+                            resultData[targetIndex] = 0; // 超出范围时使用默认值
+                        }
+                    }
+                }
+            } else {
+                // 传统灰度模式：背景设置为0（黑色）
+                resultData.fill(0);
+            }
         } else if (components === 4) {
             // RGBA格式：设置为透明
             for (let i = 3; i < resultData.length; i += 4) {
@@ -171,7 +218,8 @@ async function createStampPatternData(
     // 像素混合处理函数
     const blendPixel = (sourceIndex: number, targetIndex: number) => {
         if (isGrayMode) {
-            // 灰度模式：正常模式100%不透明度覆盖
+            // 灰度模式：只有在图案内部才覆盖，图案外区域保持背景值
+            // 这里targetIndex是单通道索引，不需要乘以components
             resultData[targetIndex] = patternData[sourceIndex];
         } else {
             // 直接复制图案像素数据，保持原始透明度信息
@@ -224,15 +272,16 @@ async function createStampPatternData(
     for (let y = 0; y < targetHeight; y++) {
         const rowOffset = y * targetWidth;
         for (let x = 0; x < targetWidth; x++) {
-            const targetIndex = (rowOffset + x) * components;
             const maskIndex = rowOffset + x;
             const sourceIndex = getPatternPixel(x, y);
             
             if (sourceIndex >= 0) {
+                // 根据模式计算正确的targetIndex
+                const targetIndex = isGrayMode ? maskIndex : maskIndex * components;
                 blendPixel(sourceIndex, targetIndex);
                 patternMask[maskIndex] = 255; // 标记为图案内
             }
-            // 图案外区域默认为0，无需显式设置
+            // 图案外区域保持原始背景值，无需显式设置
         }
     }
     
