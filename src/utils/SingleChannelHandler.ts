@@ -46,6 +46,32 @@ export class SingleChannelHandler {
                 console.error('❌ 当前不在单个颜色通道模式');
                 return false;
             }
+
+            // 新增：当在 RGB 单通道且当前图层为空时，提前提示并返回，避免 getPixels 报错
+            if (channelInfo.isRgbChannel) {
+                try {
+                    const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
+                    if (!layerInfo || !layerInfo.hasPixels) {
+                        const name = channelInfo.channelName || '当前';
+                        await core.showAlert({ message: `因当前图层为空，故${name}通道为空，无法清除。` });
+                        return false;
+                    }
+                } catch (e) {
+                    console.warn('⚠️ 检测图层像素状态失败:', e);
+                }
+            }
+
+            // Alpha 通道编辑时，若选择了图案/渐变模式但未选择预设，则直接返回，避免继续创建临时图层等操作
+            if (channelInfo.isAlphaChannel && (fillMode === 'pattern' || fillMode === 'gradient')) {
+                if (fillMode === 'pattern' && !options.pattern) {
+                    await core.showAlert({ message: '请先选择一个图案预设' });
+                    return false;
+                }
+                if (fillMode === 'gradient' && !options.gradient) {
+                    await core.showAlert({ message: '请先选择一个渐变预设' });
+                    return false;
+                }
+            }
             
             // 获取选区数据
             const bounds = await this.getSelectionData();
@@ -197,6 +223,32 @@ export class SingleChannelHandler {
                 console.error('❌ 当前不在单个颜色通道模式');
                 return false;
             }
+
+            // 新增：当在 RGB 单通道且当前图层为空时，提前提示并返回，避免 getPixels 报错
+            if (channelInfo.isRgbChannel) {
+                try {
+                    const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
+                    if (!layerInfo || !layerInfo.hasPixels) {
+                        const name = channelInfo.channelName || '当前';
+                        await core.showAlert({ message: `因当前图层为空，故${name}通道为空，无法填充。` });
+                        return false;
+                    }
+                } catch (e) {
+                    console.warn('⚠️ 检测图层像素状态失败:', e);
+                }
+            }
+
+            // Alpha 通道编辑时，若选择了图案/渐变模式但未选择预设，则直接返回，避免继续创建临时图层等操作
+            if (channelInfo.isAlphaChannel && (fillMode === 'pattern' || fillMode === 'gradient')) {
+                if (fillMode === 'pattern' && !options.pattern) {
+                    await core.showAlert({ message: '请先选择一个图案预设' });
+                    return false;
+                }
+                if (fillMode === 'gradient' && !options.gradient) {
+                    await core.showAlert({ message: '请先选择一个渐变预设' });
+                    return false;
+                }
+            }
             
             // 获取选区数据
             const bounds = await this.getSelectionData();
@@ -327,6 +379,17 @@ export class SingleChannelHandler {
     // 判断当前通道的类型
     private static async getCurrentChannelInfo(): Promise<ChannelInfo | null> {
         try {
+            // 先检测是否多选了通道，防止 batchPlay 获取时触发"获取命令不可用"错误
+            try {
+                const activeChannelsCount = (app.activeDocument as any)?.activeChannels?.length || 0;
+                if (activeChannelsCount > 1) {
+                    console.log(`🚫 检测到多通道选择 (${activeChannelsCount} 个通道)，跳过通道信息获取`);
+                    return null;
+                }
+            } catch (error) {
+                console.log('⚠️ 无法检测多通道状态，继续通道信息获取');
+            }
+
             const targetChannelResult = await action.batchPlay([
                 {
                     _obj: "get",
@@ -670,30 +733,15 @@ export class SingleChannelHandler {
 
             // 7，使用imaging.getPixels获取原图层的完整RGB图像数据作为originalRgbaData。对于目标【自定义alpha通道】，获取原图层的完整RGBA图像数据是不必要的。
             // 因为目标【自定义alpha通道】的灰度值已经被提取到singleChannelData中了，无需再获取原图层的完整RGBA图像数据，只是由于getChannelPixels需要返回两个参数：channelData、originalRgbaData。
-            const originalPixelOptions = {
-                documentID: doc.id,
-                layerID: activeLayer.id,
-                sourceBounds: {
-                    left: 0,
-                    top: 0,
-                    right: bounds.docWidth,
-                    bottom: bounds.docHeight
-                },
-                componentSize: 8
-            };
-            
-            const originalPixelData = await imaging.getPixels(originalPixelOptions);
-            if (!originalPixelData || !originalPixelData.imageData) {
-                throw new Error('无法获取原图层像素数据');
-            }
-            const originalRgbaData = originalPixelData.imageData.getData();
-            originalPixelData.imageData.dispose();
+            // 自定义 Alpha 通道不依赖当前图层像素，避免在空白图层上触发 "No pixels in the requested area" 错误
+            const originalRgbaData = new Uint8Array(0);
 
             return {
                 channelData: channelDataCopy, // 返回拷贝的完整文档Alpha通道数据，用于updateAlphaChannelPixels
                 originalRgbaData: originalRgbaData,
                 selectionChannelData: selectionChannelData // 返回选区内的Alpha通道数据，用于混合计算
             };
+
 
             
 

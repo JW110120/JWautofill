@@ -4,24 +4,46 @@
 
 /* 授权/试用状态提示样式 */
 .license-status-banner {
-  background: #fff7e6;
-  border: 1px solid #ffe7ba;
-  color: #ad6800;
-  padding: 8px 12px;
-  border-radius: 6px;
-  margin-bottom: 10px;
   display: flex;
   align-items: center;
   gap: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-color);
+  padding: 6px 10px;
+  border-radius: 4px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  width: 100%;
+  height: 30px;
 }
 
+.license-status-banner.is-trial {
+  background: rgba(76, 175, 80, 0.08);
+  border-color: rgba(76, 175, 80, 0.18);
+}
+
+.license-status-banner.is-expired {
+  background: rgba(239, 83, 80, 0.08);
+  border-color: rgba(239, 83, 80, 0.18);
+}
 .license-status-banner .trial-status {
   font-weight: 600;
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .license-status-banner .trial-expired {
   color: #a8071a;
   font-weight: 600;
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .adjustment-container {
   width: 100%;
@@ -213,4 +235,41 @@
   height: 1px;
   background-color: var(--border-color);
   margin: 7px 13px 10px -13px;
+}
+.license-status-banner .badge-dot {
+  width: 6px;
+  height: 6px;
+  margin-right: 4px;
+  border-radius: 50%;
+  background: #4caf50;
+  display: inline-block;
+}
+
+.license-status-banner .badge-dot.danger {
+  background: #ef5350;
+}
+.license-status-banner .trial-status,
+.license-status-banner .trial-expired {
+  font-weight: 500;
+  font-size: 12px;
+}
+.license-status-banner .license-link {
+  margin-right: -3px;
+  color: #cfcfcf;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 2px 2px;
+  border-radius: 4px;
+  line-height: 18px;
+  height: 20px;
+  flex: 0 0 auto;
+}
+.license-status-banner .license-link:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.06);
+}
+.license-status-banner .trial-expired {
+  color: #ff6b6b;
 }

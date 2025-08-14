@@ -420,6 +420,14 @@ class App extends React.Component<AppProps, AppState> {
         const featherAmount = Number(this.state.feather);
         if (featherAmount < 0) return;
         
+        // 当羽化值为0时，跳过羽化操作
+        if (featherAmount === 0) {
+            // 直接更新选区状态，不执行羽化
+            const newSelection = await this.getSelection();
+            this.setState({ SelectionA: newSelection });
+            return;
+        }
+        
         await action.batchPlay(
             [
                 {

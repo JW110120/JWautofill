@@ -216,26 +216,42 @@ const AdjustmentPanel = () => {
 
   const checkLicenseStatus = async () => {
     try {
-      const licenseManager = new LicenseManager();
-      const result = await licenseManager.checkLicenseStatus();
-      
-      if (result.isLicensed) {
-        setIsLicensed(true);
-        setIsTrial(false);
-      } else if (result.isTrial && !result.isExpired) {
-        setIsTrial(true);
-        setIsLicensed(false);
-        setTrialDaysRemaining(result.daysRemaining || 0);
-      } else {
-        setIsLicensed(false);
-        setIsTrial(false);
-        setTrialDaysRemaining(0);
+      // 与 app.tsx 保持一致：使用静态方法
+      const status = await LicenseManager.checkLicenseStatus();
+
+      // 统一逻辑：TRIAL_ 开头的密钥始终视为试用，不计入正式授权
+      const cachedInfo: any = (status && status.info) || await (LicenseManager as any).getCachedLicense?.();
+      const isTrialKey = cachedInfo && cachedInfo.key && String(cachedInfo.key).startsWith('TRIAL_');
+
+      // 试用到期判断（仅当是试用时才判断）
+      const expired = isTrialKey ? await LicenseManager.isTrialExpired() : false;
+
+      // 正式授权仅在非试用且 isValid 为 true 时成立
+      const licensed = !!status.isValid && !isTrialKey;
+
+      // 试用状态：具有 TRIAL_ 且未过期
+      let days = 0;
+      if (isTrialKey && cachedInfo && cachedInfo.expiryDate) {
+        const expire = new Date(cachedInfo.expiryDate).getTime();
+        days = Math.max(0, Math.ceil((expire - Date.now()) / (24 * 60 * 60 * 1000)));
       }
+      const trial = !!isTrialKey && !expired;
+
+      // 自动重新验证：仅对正式许可证执行，避免对 TRIAL_ 触发无意义的网络验证
+      if (status.needsReverification && !isTrialKey) {
+        try { await LicenseManager.autoReverifyIfNeeded(); } catch {}
+      }
+
+      setIsLicensed(licensed);
+      setIsTrial(trial);
+      setTrialDaysRemaining(days);
+      setIsLicenseDialogOpen(!(licensed || trial));
     } catch (error) {
       console.error('检查许可证状态失败:', error);
       setIsLicensed(false);
       setIsTrial(false);
       setTrialDaysRemaining(0);
+      setIsLicenseDialogOpen(true);
     }
   };
 
@@ -770,16 +786,22 @@ const AdjustmentPanel = () => {
       
       {/* 试用状态提示 - 仅在试用中或试用结束时显示 */}
       {(isTrial || (!isLicensed && !isTrial && trialDaysRemaining === 0)) && (
-        <div className="license-status-banner">
-          {isTrial && trialDaysRemaining > 0 && (
-            <span className="trial-status">试用中：还剩 {trialDaysRemaining} 天</span>
+        <div className={`license-status-banner ${isTrial ? 'is-trial' : 'is-expired'}`}>
+          {isTrial && trialDaysRemaining > 0 ? (
+            <>
+              <span className="badge-dot" />
+              <span className="trial-status">试用还剩 {trialDaysRemaining} 天</span>
+            </>
+          ) : (
+            <>
+              <span className="badge-dot danger" />
+              <span className="trial-expired">试用已结束</span>
+            </>
           )}
-          {!isTrial && !isLicensed && (
-            <span className="trial-expired">试用天数用尽</span>
-          )}
+          <button className="license-link" onClick={openLicenseDialog}>管理许可</button>
         </div>
       )}
-      
+
       {/* 许可证对话框 */}
       <LicenseDialog
         isOpen={isLicenseDialogOpen}
@@ -865,7 +887,7 @@ const AdjustmentPanel = () => {
 
       {/* 像素过渡 */}
       <div className="adjustment-section">
-        <div className="adjustment-section-title">像素过渡</div>
+        <div className="adjustment-section-title">局部对比</div>
         <div className="adjustment-divider"></div>
         <button 
           className="adjustment-button"
@@ -875,7 +897,8 @@ const AdjustmentPanel = () => {
           像素过渡
         </button>
 
-        <div className="adjustment-controls">
+        <div className="adjustment-slider-container">
+          {/* 过渡半径滑块 */}
           <div className="adjustment-slider-item">
             <label 
               className={`adjustment-slider-label ${
@@ -909,6 +932,7 @@ const AdjustmentPanel = () => {
             </div>
           </div>
           
+          {/* 过渡强度滑块 */}
           <div className="adjustment-slider-item">
             <label 
               className={`adjustment-slider-label ${
@@ -952,8 +976,9 @@ const AdjustmentPanel = () => {
         >
           高频增强
         </button>
-
-        <div className="adjustment-controls">
+ 
+        <div className="adjustment-slider-container">
+          {/* 高频增强强度滑块 */}
           <div className="adjustment-slider-item">
             <label 
               className={`adjustment-slider-label ${
@@ -988,6 +1013,7 @@ const AdjustmentPanel = () => {
             </div>
           </div>
 
+          {/* 高频范围滑块 */}
           <div className="adjustment-slider-item">
             <label 
               className={`adjustment-slider-label ${
@@ -1024,18 +1050,19 @@ const AdjustmentPanel = () => {
         </div>
       </div>
 
-      {/* 智能边缘平滑 */}
+      {/* 边缘处理栏目 */}
       <div className="adjustment-section">
-        <div className="adjustment-section-title">智能边缘平滑</div>
+        <div className="adjustment-section-title">边缘处理</div>
         <div className="adjustment-divider"></div>
 
+        {/* 平滑按钮控件 */}
         <div className="adjustment-double-buttons">
             <button 
               className="adjustment-button"
               onClick={handleSmartEdgeSmooth}
               title="检测边缘并智能平滑，减少锯齿现象"
             >
-              智能平滑
+              边缘平滑
             </button>
 
             <div className="adjustment-swtich-container">
@@ -1053,10 +1080,11 @@ const AdjustmentPanel = () => {
             </div>
         </div>
 
-        <div className="adjustment-controls">
+        <div className="adjustment-slider-container">
+          {/* 边缘alpha滑块控件 */}
           <div className="adjustment-slider-item">
             <label 
-              className={`wide-adjustment-slider-label ${
+              className={`wider-adjustment-slider-label ${
                 isDragging && dragTarget === 'edgeAlphaThreshold' 
                 ? 'dragging' 
                 : 'not-dragging'
@@ -1073,7 +1101,7 @@ const AdjustmentPanel = () => {
               step="1"
               value={edgeAlphaThreshold}
               onChange={handleEdgeAlphaThresholdChange}
-              className="narrow-adjustment-slider-input"
+              className="narrower-adjustment-slider-input"
             />
             <div className="unit-container">
             <input
@@ -1132,12 +1160,12 @@ const AdjustmentPanel = () => {
               onMouseDown={(e) => handleLabelMouseDown(e, 'edgeSmoothRadius')}
               title="拖拽调整平滑半径"
             >
-              平滑半径
+              半径
             </label>
             <input
               type="range"
               min="1"
-              max="8"
+              max="30"
               step="0.5"
               value={edgeSmoothRadius}
               onChange={handleEdgeSmoothRadiusChange}
@@ -1147,7 +1175,7 @@ const AdjustmentPanel = () => {
             <input
               type="number"
               min="1"
-              max="8"
+              max="30"
               step="0.5"
               value={edgeSmoothRadius}
               onChange={handleEdgeSmoothRadiusNumberChange}

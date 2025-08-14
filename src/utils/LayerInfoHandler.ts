@@ -57,6 +57,17 @@ export class LayerInfoHandler {
     // 检测是否在编辑图层蒙版
     static async checkLayerMaskMode(): Promise<boolean> {
         try {
+            // 多通道保护：如果当前选择了多个通道，直接返回 false，避免 batchPlay 获取报错
+            try {
+                const activeChannelsCount = (app.activeDocument as any)?.activeChannels?.length || 0;
+                if (activeChannelsCount > 1) {
+                    console.log(`🚫 检测到多通道选择 (${activeChannelsCount} 个通道)，跳过图层蒙版检测`);
+                    return false;
+                }
+            } catch (error) {
+                console.log('⚠️ 无法检测多通道状态，继续图层蒙版检测');
+            }
+
             // 第一步：获取图层蒙版信息
             const maskResult = await action.batchPlay([
                 {
@@ -119,6 +130,17 @@ export class LayerInfoHandler {
     // 检测是否选中了单个颜色通道（红、绿、蓝、Alpha）
     static async checkSingleColorChannelMode(): Promise<boolean> {
         try {
+            // 先检测是否多选了通道
+            try {
+                const activeChannelsCount = (app.activeDocument as any)?.activeChannels?.length || 0;
+                if (activeChannelsCount > 1) {
+                    console.log(`🚫 检测到多通道选择 (${activeChannelsCount} 个通道)，跳过单通道操作`);
+                    return false;
+                }
+            } catch (error) {
+                console.log('⚠️ 无法检测多通道状态，继续单通道检测');
+            }
+
             // 获取当前激活的通道信息
             const targetChannelResult = await action.batchPlay([
                 {
