@@ -273,3 +273,76 @@
 .license-status-banner .trial-expired {
   color: #ff6b6b;
 }
+
+/* 模态框遮罩与内容（仅调参面板作用域） */
+.adjustment-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.adjustment-modal-content {
+  background: var(--bg-color);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  width: 340px;
+  max-width: 90vw;
+  padding: 16px;
+  box-shadow: 0 10px 24px rgba(0,0,0,0.35);
+}
+
+.adjustment-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.adjustment-modal-close {
+  background: transparent;
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.adjustment-modal-close:hover { background: var(--hover-bg); }
+
+/* 二级面板局部的 selection 滑块样式（避免依赖全局 styles.css） */
+.selection-slider-container { margin: 6px 0; }
+.selection-slider-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 6px 0;
+}
+.selection-slider-label {
+  color: var(--text-color);
+  font-size: 12px;
+  min-width: 72px;
+  user-select: none;
+}
+.selection-slider-input {
+  width: 130px;
+  margin-top: 14px;
+}
+.selection-slider-item input[type="number"] {
+  width: 36px;
+  height: 22px;
+  text-align: center;
+  font-size: 11px;
+}

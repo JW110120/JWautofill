@@ -8,9 +8,13 @@ import ColorSettingsPanel from './components/ColorSettingsPanel';
 import PatternPicker from './components/PatternPicker';
 import GradientPicker from './components/GradientPicker';
 import AdjustmentPanel from './adjustments/AdjustmentPanel';
+import { AdjustmentPanelFlyout } from './adjustments/AdjustmentPanelFlyout';
 
 // 初始化主题
 initializeTheme();
+
+// 设置调整面板的浮动菜单
+AdjustmentPanelFlyout.setup();
 
 
 

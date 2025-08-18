@@ -22,6 +22,7 @@ import { GradientFill } from './utils/GradientFill';
 import { SingleChannelHandler } from './utils/SingleChannelHandler';
 import { SelectionHandler, SelectionOptions } from './utils/SelectionHandler';
 import { ColorSettings, Pattern } from './types/state';
+import { AdjustmentPanelFlyout } from './adjustments/AdjustmentPanelFlyout';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -82,6 +83,11 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     async componentDidMount() {
+        // 注册主面板菜单回调
+        AdjustmentPanelFlyout.registerAppCallbacks({
+            onOpenLicenseDialog: this.openLicenseDialog,
+            onResetLicense: this.resetLicenseForTesting,
+        });
         this.selectionChangeListener = (eventName, descriptor) => {
             // 检查是否是选区相关的set事件
             if (descriptor && descriptor._target && Array.isArray(descriptor._target)) {
