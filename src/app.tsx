@@ -911,51 +911,9 @@ title={`● 生成选区时，插件会自动根据选择的模式填充/删除�
 }>
                     <span className="title-text">选区笔1.2</span>
                     {/* 临时调试：重置许可证按钮 */}
-                    <button
-                        onClick={() => this.resetLicenseForTesting()}
-                        title="重置激活状态（仅调试用）"
-                        style={{
-                            position: 'absolute',
-                            right: 32,
-                            top: 2,
-                            width: 20,
-                            height: 20,
-                            borderRadius: 10,
-                            border: '1px solid var(--border-color)',
-                            background: 'var(--bg-color)',
-                            color: 'red',
-                            cursor: 'pointer',
-                            lineHeight: '18px',
-                            fontSize: '10px',
-                            padding: 0,
-                            zIndex: 10
-                        }}
-                    >
-                        R
-                    </button>
+                    
                     {/* 新增：帮助按钮（右上角问号），用于重新打开授权窗口 */}
-                    <button
-                        onClick={this.openLicenseDialog}
-                        title="打开激活与试用面板"
-                        style={{
-                            position: 'absolute',
-                            right: 8,
-                            top: 2,
-                            width: 20,
-                            height: 20,
-                            borderRadius: 10,
-                            border: '1px solid var(--border-color)',
-                            background: 'var(--bg-color)',
-                            color: 'var(--text-color)',
-                            cursor: 'pointer',
-                            lineHeight: '18px',
-                            fontSize: '12px',
-                            padding: 0,
-                            zIndex: 10
-                        }}
-                    >
-                        ?
-                    </button>
+                    
                 </h3>
                 <div className="button-container">
                     <sp-action-button 

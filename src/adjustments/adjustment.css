@@ -174,13 +174,16 @@
 
 /* 数值输入框 */
 .adjustment-number-input {
+  /* 保证跟随容器折叠且不浮到最上层 */
+  position: relative;
+  z-index: auto;
   width: 30px;
   height: 24px;
   color: var(--text-color);
   font-size: 11px;
   text-align: center;
   margin-left: -5px;
-  z-index: 1;
+  /* 移除z-index，让它跟随父容器的折叠状态 */
 }
 
 /* 单位标签 */
@@ -305,6 +308,7 @@
   justify-content: space-between;
   margin-bottom: 8px;
   font-weight: 600;
+  color: #ffffff;
 }
 
 .adjustment-modal-close {

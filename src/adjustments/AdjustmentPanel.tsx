@@ -923,78 +923,157 @@ const handleDrop = (e: React.DragEvent, targetId: string) => {
 
 // 渲染子功能内容
 const renderLocalContrastContent = () => (
-  <div className="selection-slider-container">
-    <div className="selection-slider-item">
-      <div className="selection-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'highFreqIntensity')}>高频增强强度</div>
-      <input type="range" min="1" max="10" step="0.5" value={highFreqIntensity} onChange={handleHighFreqIntensityChange} />
-      <input type="number" min="1" max="10" step="0.5" value={highFreqIntensity} onChange={handleHighFreqIntensityNumberChange} />
+  <div className="adjustment-section">
+    <div className="adjustment-divider"></div>
+    
+    <button className="adjustment-button" onClick={handlePixelTransition}>像素过渡</button>
+
+    <div className="adjustment-slider-container">
+      <div className="adjustment-slider-item">
+        <div className="adjustment-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'radius')}>半径</div>
+        <div className="unit-container">
+          <input type="range" min="5" max="20" step="1" value={radius} onChange={handleRadiusChange} className="adjustment-slider-input" />
+          <input type="number" min="5" max="20" step="1" value={radius} onChange={handleRadiusNumberChange} className="adjustment-number-input" />
+          <div className="adjustment-unit">px</div>
+        </div>
+      </div>
+      <div className="adjustment-slider-item">
+        <div className="adjustment-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'sigma')}>强度</div>
+        <div className="unit-container">
+          <input type="range" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaChange} className="adjustment-slider-input" />
+          <input type="number" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaNumberChange} className="adjustment-number-input" />
+          <div className="adjustment-unit">级</div>
+        </div>
+      </div>
     </div>
-    <div className="selection-slider-item">
-      <div className="selection-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'highFreqRange')}>高频增强范围</div>
-      <input type="range" min="1" max="10" step="0.5" value={highFreqRange} onChange={handleHighFreqRangeChange} />
-      <input type="number" min="1" max="10" step="0.5" value={highFreqRange} onChange={handleHighFreqRangeNumberChange} />
-    </div>
-    <div className="button-group" style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-      <button className="btn" onClick={handlePixelTransition}>像素过渡</button>
-      <button className="btn" onClick={handleHighFrequencyEnhancement}>高频增强</button>
+
+    <div className="adjustment-divider"></div>
+    
+    <button className="adjustment-button" onClick={handleHighFrequencyEnhancement}>高频增强</button>
+
+    <div className="adjustment-slider-container">
+      <div className="adjustment-slider-item">
+        <div className="adjustment-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'highFreqIntensity')}>强度</div>
+        <div className="unit-container">
+          <input type="range" min="1" max="10" step="0.5" value={highFreqIntensity} onChange={handleHighFreqIntensityChange} className="adjustment-slider-input" />
+          <input type="number" min="1" max="10" step="0.5" value={highFreqIntensity} onChange={handleHighFreqIntensityNumberChange} className="adjustment-number-input" />
+          <div className="adjustment-unit">级</div>
+        </div>
+      </div>
+      <div className="adjustment-slider-item">
+        <div className="adjustment-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'highFreqRange')}>范围</div>
+        <div className="unit-container">
+          <input type="range" min="1" max="10" step="0.5" value={highFreqRange} onChange={handleHighFreqRangeChange} className="adjustment-slider-input" />
+          <input type="number" min="1" max="10" step="0.5" value={highFreqRange} onChange={handleHighFreqRangeNumberChange} className="adjustment-number-input" />
+          <div className="adjustment-unit">级</div>
+        </div>
+      </div>
     </div>
   </div>
 );
 
 const renderEdgeProcessingContent = () => (
-  <div className="selection-slider-container">
-    <div className="selection-slider-item">
-      <div className="selection-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'edgeAlphaThreshold')}>透明阈值</div>
-      <input type="range" min="10" max="100" step="1" value={edgeAlphaThreshold} onChange={handleEdgeAlphaThresholdChange} />
-      <input type="number" min="10" max="100" step="1" value={edgeAlphaThreshold} onChange={handleEdgeAlphaThresholdNumberChange} />
+  <div className="adjustment-section">
+    <div className="adjustment-divider"></div>
+
+    <div className="adjustment-double-buttons">
+      <button className="adjustment-button" onClick={handleSmartEdgeSmooth}>边缘平滑</button>
+      
+      <div className="adjustment-swtich-container">
+        <label className="adjustment-swtich-label">保留细节</label>
+        <input 
+          type="checkbox" 
+          checked={preserveDetail} 
+          onChange={(e) => setPreserveDetail(e.target.checked)} 
+          style={{ marginLeft: '8px' }}
+        />
+      </div>
     </div>
-    <div className="selection-slider-item">
-      <div className="selection-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'edgeColorThreshold')}>颜色阈值</div>
-      <input type="range" min="10" max="100" step="1" value={edgeColorThreshold} onChange={handleEdgeColorThresholdChange} />
-      <input type="number" min="1" max="100" step="1" value={edgeColorThreshold} onChange={handleEdgeColorThresholdNumberChange} />
+
+    <div className="adjustment-slider-container">
+      <div className="adjustment-slider-item">
+        <div className="adjustment-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'edgeAlphaThreshold')}>Alpha阈值</div>
+        <div className="unit-container">
+          <input type="range" min="10" max="100" step="1" value={edgeAlphaThreshold} onChange={handleEdgeAlphaThresholdChange} className="adjustment-slider-input" />
+          <input type="number" min="10" max="100" step="1" value={edgeAlphaThreshold} onChange={handleEdgeAlphaThresholdNumberChange} className="adjustment-number-input" />
+          <div className="adjustment-unit">%</div>
+        </div>
+      </div>
+      <div className="adjustment-slider-item">
+        <div className="adjustment-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'edgeColorThreshold')}>颜色阈值</div>
+        <div className="unit-container">
+          <input type="range" min="10" max="100" step="1" value={edgeColorThreshold} onChange={handleEdgeColorThresholdChange} className="adjustment-slider-input" />
+          <input type="number" min="1" max="100" step="1" value={edgeColorThreshold} onChange={handleEdgeColorThresholdNumberChange} className="adjustment-number-input" />
+          <div className="adjustment-unit">%</div>
+        </div>
+      </div>
+      <div className="adjustment-slider-item">
+        <div className="adjustment-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'edgeSmoothRadius')}>半径</div>
+        <div className="unit-container">
+          <input type="range" min="1" max="30" step="0.5" value={edgeSmoothRadius} onChange={handleEdgeSmoothRadiusChange} className="adjustment-slider-input" />
+          <input type="number" min="1" max="30" step="0.5" value={edgeSmoothRadius} onChange={handleEdgeSmoothRadiusNumberChange} className="adjustment-number-input" />
+          <div className="adjustment-unit">px</div>
+        </div>
+      </div>
+      <div className="adjustment-slider-item">
+        <div className="adjustment-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'edgeIntensity')}>强度</div>
+        <div className="unit-container">
+          <input type="range" min="1" max="10" step="0.5" value={edgeIntensity} onChange={handleEdgeIntensityChange} className="adjustment-slider-input" />
+          <input type="number" min="1" max="10" step="0.5" value={edgeIntensity} onChange={handleEdgeIntensityNumberChange} className="adjustment-number-input" />
+          <div className="adjustment-unit">级</div>
+        </div>
+      </div>
     </div>
-    <div className="selection-slider-item">
-      <div className="selection-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'edgeSmoothRadius')}>平滑半径</div>
-      <input type="range" min="1" max="8" step="0.5" value={edgeSmoothRadius} onChange={handleEdgeSmoothRadiusChange} />
-      <input type="number" min="1" max="8" step="0.5" value={edgeSmoothRadius} onChange={handleEdgeSmoothRadiusNumberChange} />
-    </div>
-    <div className="selection-slider-item">
-      <div className="selection-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'edgeIntensity')}>强度</div>
-      <input type="range" min="1" max="10" step="0.5" value={edgeIntensity} onChange={handleEdgeIntensityChange} />
-      <input type="number" min="1" max="10" step="0.5" value={edgeIntensity} onChange={handleEdgeIntensityNumberChange} />
-    </div>
-    <div className="button-group" style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-      <button className="btn" onClick={handleSmartEdgeSmooth}>边缘平滑</button>
-      <button className="btn" onClick={handleLineEnhancement}>加黑线条</button>
-    </div>
+
+    <div className="adjustment-divider"></div>
+
+    <button className="adjustment-button" onClick={handleLineEnhancement}>加黑线条</button>
   </div>
 );
 
 const renderBlockAdjustmentContent = () => (
-  <div className="selection-slider-container">
-    <div className="selection-slider-item">
-      <div className="selection-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'radius')}>半径</div>
-      <input type="range" min="5" max="20" step="1" value={radius} onChange={handleRadiusChange} />
-      <input type="number" min="5" max="20" step="1" value={radius} onChange={handleRadiusNumberChange} />
+  <div className="adjustment-section">
+    <div className="adjustment-divider"></div>
+
+    <div className="adjustment-slider-container">
+      <div className="adjustment-slider-item">
+        <div className="adjustment-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'radius')}>半径</div>
+        <div className="unit-container">
+          <input type="range" min="5" max="20" step="1" value={radius} onChange={handleRadiusChange} className="adjustment-slider-input" />
+          <input type="number" min="5" max="20" step="1" value={radius} onChange={handleRadiusNumberChange} className="adjustment-number-input" />
+          <div className="adjustment-unit">px</div>
+        </div>
+      </div>
+      <div className="adjustment-slider-item">
+        <div className="adjustment-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'sigma')}>强度</div>
+        <div className="unit-container">
+          <input type="range" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaChange} className="adjustment-slider-input" />
+          <input type="number" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaNumberChange} className="adjustment-number-input" />
+          <div className="adjustment-unit">级</div>
+        </div>
+      </div>
+      <div className="adjustment-swtich-container">
+        <label className="adjustment-swtich-label" onClick={() => setUseWeightedAverage(!useWeightedAverage)} style={{ cursor: 'pointer' }}>加权模式</label>
+        <input type="checkbox" checked={useWeightedAverage} onChange={(e)=>setUseWeightedAverage(e.target.checked)} />
+      </div>
     </div>
-    <div className="selection-slider-item">
-      <div className="selection-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'sigma')}>平滑系数</div>
-      <input type="range" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaChange} />
-      <input type="number" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaNumberChange} />
+
+    <div className="adjustment-double-buttons">
+      <button className="adjustment-button" onClick={handleBlockAverage}>分块平均</button>
     </div>
-    <div className="selection-slider-item">
-      <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <input type="checkbox" checked={useWeightedAverage} onChange={(e)=>setUseWeightedAverage(e.target.checked)} />使用加权
-      </label>
-    </div>
-    <div className="selection-slider-item">
-      <div className="selection-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'weightedIntensity')}>加权强度</div>
-      <input type="range" min="1" max="10" step="0.5" value={weightedIntensity} onChange={handleWeightedIntensityChange} />
-      <input type="number" min="1" max="10" step="0.5" value={weightedIntensity} onChange={handleWeightedIntensityNumberChange} />
-    </div>
-    <div className="button-group" style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-      <button className="btn" onClick={handleBlockAverage}>分块调整</button>
-    </div>
+
+    {useWeightedAverage && (
+      <div className="adjustment-slider-container">
+        <div className="adjustment-slider-item">
+          <div className="adjustment-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'weightedIntensity')}>强度</div>
+          <div className="unit-container">
+            <input type="range" min="1" max="10" step="0.5" value={weightedIntensity} onChange={handleWeightedIntensityChange} className="adjustment-slider-input" />
+            <input type="number" min="1" max="10" step="0.5" value={weightedIntensity} onChange={handleWeightedIntensityNumberChange} className="adjustment-number-input" />
+            <div className="adjustment-unit">级</div>
+          </div>
+        </div>
+      </div>
+    )}
   </div>
 );
 
@@ -1018,7 +1097,7 @@ const renderSection = (section: SectionConfig) => (
         <ExpandIcon expanded={!section.isCollapsed} />
       </div>
       <div style={{ flex: 1 }}>{section.title}</div>
-      {selectedSections.has(section.id) && <span style={{ fontSize: 10, opacity: 0.7, marginRight: 6 }}>✓</span>}
+      {/* 移除对号标记，避免分区标题右侧出现视觉噪点 */}
     </div>
     <div className={`expand-content ${section.isCollapsed ? '' : 'expanded'}`}>
       {renderSectionContent(section.id)}
