@@ -260,7 +260,6 @@ sp-picker[disabled] {
 }
 
 .selection-slider-container {
-  width: ca1calc(100% - 20px);
   flex-direction: column;
   padding: 0px 10px 10px 10px; 
 

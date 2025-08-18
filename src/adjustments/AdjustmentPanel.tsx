@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { processBlockAverage } from './blockAverageProcessor';
 import { processPixelTransition } from './pixelTransitionProcessor';
 import { processLineEnhancement } from './lineProcessing';
@@ -6,7 +6,6 @@ import { processHighFrequencyEnhancement } from './highFrequencyEnhancer';
 import { processSmartEdgeSmooth, defaultSmartEdgeSmoothParams } from './smartEdgeSmoothProcessor';
 import { checkEditingState, processPixelData, applyProcessedPixels } from './pixelDataProcessor';
 import { LicenseManager } from '../utils/LicenseManager';
-import LicenseDialog from '../components/LicenseDialog';
 import { action, app, core, imaging } from 'photoshop';
 import './adjustment.css';
 
@@ -188,9 +187,55 @@ const AdjustmentPanel = () => {
   const [isLicensed, setIsLicensed] = useState(false);
   const [isTrial, setIsTrial] = useState(false);
   const [trialDaysRemaining, setTrialDaysRemaining] = useState(0);
-  const [isLicenseDialogOpen, setIsLicenseDialogOpen] = useState(false);
+  // 移除第二入口的授权对话框状态
+  // const [isLicenseDialogOpen, setIsLicenseDialogOpen] = useState(false);
+  
+  // 移除：在第二入口切换授权对话框时不再改 body 类
+  // useEffect(() => {
+  //   if (isLicenseDialogOpen) {
+  //     document.body.classList.add('license-dialog-open');
+  //   } else {
+  //     document.body.classList.remove('license-dialog-open');
+  //   }
+  // }, [isLicenseDialogOpen]);
+  
+  // 组件卸载时清理（确保不残留类名）
+  useEffect(() => {
+    return () => {
+      // 第二入口不干预 body 类，交由主入口统一管理
+      // document.body.classList.remove('license-dialog-open');
+    };
+  }, []);
 
-  // 状态管理
+  // 授权状态引用，用于轮询中读取最新值
+  const licensedRef = useRef(false);
+  useEffect(() => { licensedRef.current = isLicensed; }, [isLicensed]);
+
+  // 跨入口同步：获得焦点/可见性变化时刷新；启动后短期轮询快速同步
+  useEffect(() => {
+    const onFocus = () => { checkLicenseStatus(); };
+    const onVisibility = () => { if (document.visibilityState === 'visible') { checkLicenseStatus(); } };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+
+    // 启动后在短时间内快速同步（最多约30秒，每2秒一次，检测到已授权则提前停止）
+    let tries = 0;
+    const maxTries = 15; // 约30s
+    const timer = setInterval(async () => {
+      tries++;
+      try { await checkLicenseStatus(); } catch {}
+      if (licensedRef.current || tries >= maxTries) {
+        clearInterval(timer);
+      }
+    }, 2000);
+
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+      clearInterval(timer);
+    };
+  }, []);
+
   const [radius, setRadius] = useState(15);
   const [sigma, setSigma] = useState(5);
   const [isDragging, setIsDragging] = useState(false);
@@ -211,9 +256,17 @@ const AdjustmentPanel = () => {
 
   // 许可证相关 Hook 和函数
   useEffect(() => {
-    checkLicenseStatus();
-  }, []);
+    const onLicenseUpdated = () => { checkLicenseStatus(); };
+    document.addEventListener('license-updated', onLicenseUpdated as EventListener);
 
+    // 首次挂载时检查一次
+    checkLicenseStatus();
+
+    return () => {
+      document.removeEventListener('license-updated', onLicenseUpdated as EventListener);
+    };
+  }, []);
+  
   const checkLicenseStatus = async () => {
     try {
       // 与 app.tsx 保持一致：使用静态方法
@@ -245,40 +298,44 @@ const AdjustmentPanel = () => {
       setIsLicensed(licensed);
       setIsTrial(trial);
       setTrialDaysRemaining(days);
-      setIsLicenseDialogOpen(!(licensed || trial));
+      // 第二入口（AdjustmentPanel）不显示对话框，仅同步状态
+      // setIsLicenseDialogOpen(false);
     } catch (error) {
       console.error('检查许可证状态失败:', error);
       setIsLicensed(false);
       setIsTrial(false);
       setTrialDaysRemaining(0);
-      setIsLicenseDialogOpen(true);
+      // 第二入口即使失败也不显示对话框
+      // setIsLicenseDialogOpen(false);
     }
   };
 
-  const handleLicenseVerified = () => {
-    setIsLicensed(true);
-    setIsTrial(false);
-    setIsLicenseDialogOpen(false);
-  };
+  // 移除：第二入口不再控制授权对话框打开/关闭
+  // const handleLicenseVerified = () => {
+  //   setIsLicensed(true);
+  //   setIsTrial(false);
+  // };
 
-  const handleTrialStarted = () => {
-    setIsTrial(true);
-    setIsLicensed(false);
-    setTrialDaysRemaining(30);
-    setIsLicenseDialogOpen(false);
-  };
+  // const handleTrialStarted = () => {
+  //   setIsTrial(true);
+  //   setIsLicensed(false);
+  //   setTrialDaysRemaining(7);
+  // };
 
-  const closeLicenseDialog = () => {
-    setIsLicenseDialogOpen(false);
-  };
+  // const closeLicenseDialog = () => {
+  //   document.body.classList.remove('license-dialog-open');
+  // };
 
-  const openLicenseDialog = () => {
-    setIsLicenseDialogOpen(true);
-  };
+  // const openLicenseDialog = () => {
+  //   document.body.classList.add('license-dialog-open');
+  // };
 
-  const checkLicenseBeforeAction = (): boolean => {
+  const handleLicenseBeforeAction = (): boolean => {
+    // 触发一次异步刷新，尽快感知在另一个入口刚完成的授权
+    try { checkLicenseStatus(); } catch {}
     if (!isLicensed && !isTrial) {
-      openLicenseDialog();
+      // 第二入口不开启对话框，仅提示用户前往第一入口激活
+      console.log('需要在主面板（第一入口）进行授权激活');
       return false;
     }
     return true;
@@ -504,7 +561,7 @@ const AdjustmentPanel = () => {
 
   // 分块平均功能
   const handleBlockAverage = async () => {
-    if (!checkLicenseBeforeAction()) return;
+    if (!handleLicenseBeforeAction()) return;
     try {
       const { executeAsModal } = core;
       
@@ -556,7 +613,7 @@ const AdjustmentPanel = () => {
 
   // 线条处理功能
   const handleLineEnhancement = async () => {
-    if (!checkLicenseBeforeAction()) return;
+    if (!handleLicenseBeforeAction()) return;
     try {
       const { executeAsModal } = core;
       
@@ -609,7 +666,7 @@ const AdjustmentPanel = () => {
 
   // 高频增强功能
   const handleHighFrequencyEnhancement = async () => {
-    if (!checkLicenseBeforeAction()) return;
+    if (!handleLicenseBeforeAction()) return;
     try {
       const { executeAsModal } = core;
       
@@ -664,7 +721,7 @@ const AdjustmentPanel = () => {
 
   // 智能边缘平滑功能
   const handleSmartEdgeSmooth = async () => {
-    if (!checkLicenseBeforeAction()) return;
+    if (!handleLicenseBeforeAction()) return;
     try {
       const { executeAsModal } = core;
       
@@ -728,7 +785,7 @@ const AdjustmentPanel = () => {
 
   // 像素过渡功能
   const handlePixelTransition = async () => {
-    if (!checkLicenseBeforeAction()) return;
+    if (!handleLicenseBeforeAction()) return;
     try {
       const { executeAsModal } = core;
       
@@ -795,23 +852,14 @@ const AdjustmentPanel = () => {
           ) : (
             <>
               <span className="badge-dot danger" />
-              <span className="trial-expired">试用已结束</span>
+              <span className="trial-expired">需要在主面板激活</span>
             </>
           )}
-          <button className="license-link" onClick={openLicenseDialog}>管理许可</button>
+          {/* 第二入口仅提示，不提供打开对话框的入口 */}
         </div>
       )}
 
-      {/* 许可证对话框 */}
-      <LicenseDialog
-        isOpen={isLicenseDialogOpen}
-        isLicensed={isLicensed}
-        isTrial={isTrial}
-        trialDaysRemaining={trialDaysRemaining}
-        onLicenseVerified={handleLicenseVerified}
-        onTrialStarted={handleTrialStarted}
-        onClose={closeLicenseDialog}
-      />
+      {/* 第二入口不渲染许可证对话框，只显示提示条，渲染功能区域 */}
       
       {/* 分块调整 */}
       <div className="adjustment-section">

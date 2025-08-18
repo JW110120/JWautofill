@@ -16,7 +16,9 @@ input[type="number"] {
 
 /* 授权对话框打开时，彻底隐藏主面板内所有数字输入，避免穿透和抢层级 */
 body.license-dialog-open .slider-container input[type="number"],
-body.license-dialog-open .expand-content input[type="number"] {
+body.license-dialog-open .expand-content input[type="number"],
+body.license-dialog-open .adjustment-slider-container input[type="number"],
+body.license-dialog-open .adjustment-number-input {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
@@ -24,7 +26,9 @@ body.license-dialog-open .expand-content input[type="number"] {
 
 /* 当任何次级面板打开时，隐藏主面板中的所有input number字段 */
 body.secondary-panel-open .slider-container input[type="number"],
-body.secondary-panel-open .expand-content input[type="number"] {
+body.secondary-panel-open .expand-content input[type="number"],
+body.secondary-panel-open .adjustment-slider-container input[type="number"],
+body.secondary-panel-open .adjustment-number-input {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { LicenseManager } from '../utils/LicenseManager';
 
 interface LicenseDialogProps {
@@ -25,24 +25,36 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
     const [message, setMessage] = useState('');
     const [messageType, setMessageType] = useState<'success' | 'error' | 'info'>('info');
 
+    // 打开时添加遮罩类，关闭/卸载时移除，解决 number input 层级问题
+    useEffect(() => {
+        if (isOpen) {
+            document.body.classList.add('license-dialog-open');
+        } else {
+            document.body.classList.remove('license-dialog-open');
+        }
+        return () => {
+            document.body.classList.remove('license-dialog-open');
+        };
+    }, [isOpen]);
+
     if (!isOpen) return null;
 
     const handleVerifyLicense = async () => {
         if (!licenseKey.trim()) {
-            setMessage('请输入许可证密钥');
+            setMessage('请输入激活码');
             setMessageType('error');
             return;
         }
 
         setIsVerifying(true);
-        setMessage('正在验证许可证...');
+        setMessage('正在验证激活码...');
         setMessageType('info');
 
         try {
             const result = await LicenseManager.verifyLicense(licenseKey);
             
             if (result.isValid) {
-                setMessage('验证成功！');
+                setMessage('激活成功！');
                 setMessageType('success');
                 setTimeout(() => {
                     onLicenseVerified();
@@ -75,7 +87,7 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
                     onClose();
                 }, 1500);
             } else {
-                setMessage('已使用过试用，请购买许可证');
+                setMessage('已使用过试用，请购买后获取激活码');
                 setMessageType('error');
             }
         } catch (error) {
@@ -113,15 +125,15 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
                 <div className="license-content">
                     <h3>🔶 试用版</h3>
                     <p>剩余：{trialDaysRemaining} 天</p>
-                    <p>试用结束后请购买正式许可证。</p>
+                    <p>试用结束后请购买正式激活码。</p>
                     
                     <div className="license-input-group">
-                        <label>已购买？输入密钥：</label>
+                        <label>已购买？输入激活码：</label>
                         <input
                             type="text"
                             value={licenseKey}
                             onChange={(e) => setLicenseKey(e.target.value)}
-                            placeholder="许可证密钥"
+                            placeholder="激活码"
                             disabled={isVerifying}
                         />
                     </div>
@@ -144,15 +156,15 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
         return (
             <div className="license-content">
                 <h3>🔒 欢迎使用选区笔</h3>
-                <p>需要有效许可证才能使用。</p>
+                <p>需要有效激活码才能使用。</p>
                 
                 <div className="license-input-group">
-                    <label>已购买？输入密钥：</label>
+                    <label>已购买？输入激活码：</label>
                     <input
                         type="text"
                         value={licenseKey}
                         onChange={(e) => setLicenseKey(e.target.value)}
-                        placeholder="许可证密钥"
+                        placeholder="激活码"
                         disabled={isVerifying}
                     />
                 </div>
@@ -177,7 +189,7 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
                 </div>
 
                 <div className="purchase-info">
-                    <p>无许可证？<a href="https://gumroad.com/l/jwautofill" target="_blank">购买</a></p>
+                    <p>无激活码？请联系作者购买</p>
                 </div>
             </div>
         );

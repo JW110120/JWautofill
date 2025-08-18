@@ -907,7 +907,7 @@ title={`● 生成选区时，插件会自动根据选择的模式填充/删除�
                     {/* 临时调试：重置许可证按钮 */}
                     <button
                         onClick={() => this.resetLicenseForTesting()}
-                        title="重置许可证状态（仅调试用）"
+                        title="重置激活状态（仅调试用）"
                         style={{
                             position: 'absolute',
                             right: 32,
@@ -930,7 +930,7 @@ title={`● 生成选区时，插件会自动根据选择的模式填充/删除�
                     {/* 新增：帮助按钮（右上角问号），用于重新打开授权窗口 */}
                     <button
                         onClick={this.openLicenseDialog}
-                        title="打开许可证与试用面板"
+                        title="打开激活与试用面板"
                         style={{
                             position: 'absolute',
                             right: 8,
