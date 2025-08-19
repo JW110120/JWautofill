@@ -1,35 +1,19 @@
 /**
- * Flyout菜单配置 - 用于像素调整面板
- * 提供折叠/展开、复位、隐藏/显示分区功能
+ * 通用菜单管理器 - 负责UXP入口点设置和主面板菜单功能
  */
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { entrypoints } = require("uxp");
 
-export class AdjustmentPanelFlyout {
-  private static visibilityPanelCallback: ((visible: boolean) => void) | null = null;
-  private static collapseCallback: (() => void) | null = null;
-  private static resetCallback: (() => void) | null = null;
+import { AdjustmentMenu } from './AdjustmentMenu';
 
+export class MenuManager {
   // 主面板 APP 的回调
   private static appOpenLicenseCallback: (() => void) | null = null;
   private static appResetLicenseCallback: (() => void) | null = null;
 
   constructor() {
     // Constructor
-  }
-
-  /**
-   * 注册事件回调函数（像素调整面板）
-   */
-  public static registerCallbacks(callbacks: {
-    onToggleVisibilityPanel: (visible: boolean) => void;
-    onToggleAllCollapse: () => void;
-    onResetOrder: () => void;
-  }) {
-    this.visibilityPanelCallback = callbacks.onToggleVisibilityPanel;
-    this.collapseCallback = callbacks.onToggleAllCollapse;
-    this.resetCallback = callbacks.onResetOrder;
   }
 
   /**
@@ -41,32 +25,6 @@ export class AdjustmentPanelFlyout {
   }) {
     this.appOpenLicenseCallback = callbacks.onOpenLicenseDialog;
     this.appResetLicenseCallback = callbacks.onResetLicense;
-  }
-
-  /**
-   * 处理像素调整面板菜单项点击事件
-   */
-  private static handleFlyout(id: string) {
-    console.log(`AdjustmentPanel Flyout: ${id}`);
-    switch (id) {
-      case "toggleCollapseAll":
-        if (this.collapseCallback) {
-          this.collapseCallback();
-        }
-        break;
-      case "resetOrder":
-        if (this.resetCallback) {
-          this.resetCallback();
-        }
-        break;
-      case "showVisibilityPanel":
-        if (this.visibilityPanelCallback) {
-          this.visibilityPanelCallback(true);
-        }
-        break;
-      default:
-        console.warn(`Unknown flyout menu item: ${id}`);
-    }
   }
 
   /**
@@ -91,6 +49,14 @@ export class AdjustmentPanelFlyout {
   }
 
   /**
+   * 处理像素调整面板菜单项点击事件 - 委托给 AdjustmentMenu
+   */
+  private static handleAdjustmentFlyout(id: string) {
+    // 委托给专门的 AdjustmentMenu 处理
+    AdjustmentMenu.handleMenuAction(id);
+  }
+
+  /**
    * 设置UXP入口点和菜单项
    */
   public static setup(): void {
@@ -112,7 +78,7 @@ export class AdjustmentPanelFlyout {
             }
           ],
           invokeMenu(id: string) {
-            AdjustmentPanelFlyout.handleAppFlyout(id);
+            MenuManager.handleAppFlyout(id);
           }
         },
         // 像素调整面板的flyout菜单配置
@@ -140,7 +106,7 @@ export class AdjustmentPanelFlyout {
             }
           ],
           invokeMenu(id: string) {
-            AdjustmentPanelFlyout.handleFlyout(id);
+            MenuManager.handleAdjustmentFlyout(id);
           }
         }
       }

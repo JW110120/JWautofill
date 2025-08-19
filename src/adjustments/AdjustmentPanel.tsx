@@ -8,7 +8,8 @@ import { checkEditingState, processPixelData, applyProcessedPixels } from './pix
 import { LicenseManager } from '../utils/LicenseManager';
 import { action, app, core, imaging } from 'photoshop';
 import './adjustment.css';
-import { AdjustmentPanelFlyout } from './AdjustmentPanelFlyout';
+import './adjustment-input.css';
+import { AdjustmentMenu } from '../utils/AdjustmentMenu';
 import { ExpandIcon } from '../styles/Icons';
 
 // 获取选区边界信息和文档信息（完全参考ClearHandler.getSelectionData）
@@ -263,7 +264,7 @@ useEffect(() => {
 
 // 注册Flyout菜单回调
 useEffect(() => {
-  AdjustmentPanelFlyout.registerCallbacks({
+  AdjustmentMenu.registerCallbacks({
     onToggleVisibilityPanel: (visible: boolean) => {
       setShowVisibilityPanel(visible);
     },
@@ -278,6 +279,15 @@ useEffect(() => {
   });
 }, [sections]);
 
+// 当“隐藏/显示分区”模态打开时，为 body 添加类，配合 CSS 隐藏背后 number 输入
+useEffect(() => {
+  if (showVisibilityPanel) {
+    document.body.classList.add('visibility-panel-open');
+  } else {
+    document.body.classList.remove('visibility-panel-open');
+  }
+  return () => document.body.classList.remove('visibility-panel-open');
+}, [showVisibilityPanel]);
 const checkLicenseStatus = async () => {
   try {
     // 与 app.tsx 保持一致：使用静态方法
@@ -981,10 +991,9 @@ const renderEdgeProcessingContent = () => (
       
       <div className="adjustment-swtich-container">
         <label className="adjustment-swtich-label">保留细节</label>
-        <input 
-          type="checkbox" 
-          checked={preserveDetail} 
-          onChange={(e) => setPreserveDetail(e.target.checked)} 
+        <sp-switch 
+          checked={preserveDetail}
+          onChange={(e) => setPreserveDetail(e.target.checked)}
           style={{ marginLeft: '8px' }}
         />
       </div>
@@ -1035,31 +1044,22 @@ const renderBlockAdjustmentContent = () => (
   <div className="adjustment-section">
     <div className="adjustment-divider"></div>
 
-    <div className="adjustment-slider-container">
-      <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'radius')}>半径</div>
-        <div className="unit-container">
-          <input type="range" min="5" max="20" step="1" value={radius} onChange={handleRadiusChange} className="adjustment-slider-input" />
-          <input type="number" min="5" max="20" step="1" value={radius} onChange={handleRadiusNumberChange} className="adjustment-number-input" />
-          <div className="adjustment-unit">px</div>
-        </div>
-      </div>
-      <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'sigma')}>强度</div>
-        <div className="unit-container">
-          <input type="range" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaChange} className="adjustment-slider-input" />
-          <input type="number" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaNumberChange} className="adjustment-number-input" />
-          <div className="adjustment-unit">级</div>
-        </div>
-      </div>
-      <div className="adjustment-swtich-container">
-        <label className="adjustment-swtich-label" onClick={() => setUseWeightedAverage(!useWeightedAverage)} style={{ cursor: 'pointer' }}>加权模式</label>
-        <input type="checkbox" checked={useWeightedAverage} onChange={(e)=>setUseWeightedAverage(e.target.checked)} />
-      </div>
-    </div>
-
     <div className="adjustment-double-buttons">
       <button className="adjustment-button" onClick={handleBlockAverage}>分块平均</button>
+      
+      <div className="adjustment-swtich-container">
+        <label 
+          className="adjustment-swtich-label"
+          onClick={() => setUseWeightedAverage(!useWeightedAverage)}
+          style={{ cursor: 'pointer' }}
+        >
+          加权模式
+        </label>
+        <sp-switch 
+          checked={useWeightedAverage}
+          onChange={(e) => setUseWeightedAverage(e.target.checked)}
+        />
+      </div>
     </div>
 
     {useWeightedAverage && (
@@ -1138,16 +1138,18 @@ return (
             <span>隐藏/显示分区</span>
             <button className="adjustment-modal-close" onClick={() => setShowVisibilityPanel(false)}>×</button>
           </div>
-          <div style={{marginTop: '8px'}}>
+          <div className="adjustment-modal-list">
             {sections.sort((a,b)=>a.order-b.order).map(sec => (
-              <label key={sec.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <input
-                  type="checkbox"
+              <div key={sec.id} className="adjustment-modal-item">
+                <span
+                  className="adjustment-modal-item-label"
+                  onClick={() => toggleSectionVisibility(sec.id)}
+                >{sec.title}</span>
+                <sp-switch
                   checked={sec.isVisible}
                   onChange={() => toggleSectionVisibility(sec.id)}
                 />
-                <span>{sec.title}</span>
-              </label>
+              </div>
             ))}
           </div>
         </div>

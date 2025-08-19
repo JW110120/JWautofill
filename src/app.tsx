@@ -22,7 +22,7 @@ import { GradientFill } from './utils/GradientFill';
 import { SingleChannelHandler } from './utils/SingleChannelHandler';
 import { SelectionHandler, SelectionOptions } from './utils/SelectionHandler';
 import { ColorSettings, Pattern } from './types/state';
-import { AdjustmentPanelFlyout } from './adjustments/AdjustmentPanelFlyout';
+import { MenuManager } from './utils/MenuManager';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -84,7 +84,7 @@ class App extends React.Component<AppProps, AppState> {
 
     async componentDidMount() {
         // 注册主面板菜单回调
-        AdjustmentPanelFlyout.registerAppCallbacks({
+        MenuManager.registerAppCallbacks({
             onOpenLicenseDialog: this.openLicenseDialog,
             onResetLicense: this.resetLicenseForTesting,
         });
@@ -909,11 +909,7 @@ title={`● 生成选区时，插件会自动根据选择的模式填充/删除�
 
 ● 由于每次生成选区后，插件会立刻执行若干个步骤。因此想要撤销本次的自动填充，建议回溯历史记录。`
 }>
-                    <span className="title-text">选区笔1.2</span>
-                    {/* 临时调试：重置许可证按钮 */}
-                    
-                    {/* 新增：帮助按钮（右上角问号），用于重新打开授权窗口 */}
-                    
+                    <span className="title-text">选区笔1.2</span>                    
                 </h3>
                 <div className="button-container">
                     <sp-action-button 

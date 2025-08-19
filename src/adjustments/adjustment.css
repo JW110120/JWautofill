@@ -57,6 +57,10 @@
   align-items: center;
   padding: 10px;
   box-sizing: border-box;
+  /* 新增：当内容超出时，允许垂直滚动 */
+  overflow-y: auto;
+  /* 避免出现横向滚动条 */
+  overflow-x: hidden;
 }
 
 /* 分区容器 */
@@ -66,7 +70,6 @@
   margin-bottom: 10px;
   border: 1px solid var(--border-color);
   border-radius: 4px;
-
 }
 
 /* 分区标题 */
@@ -284,11 +287,12 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(0, 0, 0, 0.35); /* 降低透明度，保持半透明背景效果 */
   display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 9999;
+  align-items: flex-start; /* 顶部对齐 */
+  justify-content: center; /* 居中 */
+  padding-top: 12px; /* 与顶部留白 */
+  z-index: 99999; /* 置顶，超过其他面板 */
 }
 
 .adjustment-modal-content {
@@ -296,21 +300,105 @@
   color: var(--text-color);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  width: 340px;
-  max-width: 90vw;
-  padding: 16px;
+  width: 360px;
+  max-width: 92vw;
+  padding: 14px 16px;
   box-shadow: 0 10px 24px rgba(0,0,0,0.35);
+  padding-left: 10px;
+  padding-right: 10px;
 }
 
 .adjustment-modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--text-color);
 }
 
+/* 列表与条目统一排版 */
+.adjustment-modal-list { margin-top: 4px; }
+.adjustment-modal-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.adjustment-modal-item sp-switch { transform: scale(0.98); }
+.adjustment-modal-item-label { color: var(--text-color); font-size: 13px; user-select: none; }
+
+/* 当"隐藏/显示分区"模态打开时，彻底隐藏本面板内所有数字输入、数值占位元素，避免穿透与叠出 */
+body.visibility-panel-open #pixeladjustment input[type="number"],
+body.visibility-panel-open #pixeladjustment .adjustment-number-input,
+body.visibility-panel-open #pixeladjustment .unit-container input[type="number"],
+body.visibility-panel-open #pixeladjustment .unit-container .adjustment-number-input {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  z-index: -1 !important;
+}
+
+/* 第二入口（调整面板）的折叠状态隐藏规则 - 确保折叠时数字输入完全隐藏 */
+#pixeladjustment .expand-content:not(.expanded) input[type="number"],
+#pixeladjustment .expand-content:not(.expanded) .adjustment-number-input,
+#pixeladjustment .expand-content:not(.expanded) .unit-container input[type="number"],
+#pixeladjustment .expand-content:not(.expanded) .unit-container .adjustment-number-input {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* 第二入口展开状态下的input正常显示 */
+#pixeladjustment .expand-content.expanded input[type="number"],
+#pixeladjustment .expand-content.expanded .adjustment-number-input {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  transition: opacity 0.3s ease;
+}
+
+/* 第二入口折叠样式对齐修复 - 覆盖全局样式确保一致对齐 */
+#pixeladjustment .expand-section {
+  background-color: var(--bg-color);
+  margin-bottom: -1px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+#pixeladjustment .expand-header {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 10px 12px;
+  color: var(--text-color);
+  transition: background-color 0.3s;
+}
+
+#pixeladjustment .expand-header:hover {
+  background-color: var(--hover-bg);
+}
+
+#pixeladjustment .expand-icon {
+  padding-left: 0px;
+  margin-right: 8px;
+  display: flex;
+  align-items: center;
+}
+
+#pixeladjustment .expand-content {
+  max-height: 0px;
+  overflow: hidden;
+  transition: max-height 0.3s ease-out;
+}
+
+#pixeladjustment .expand-content.expanded {
+  max-height: 400px;
+}
 .adjustment-modal-close {
   background: transparent;
   color: var(--text-color);
@@ -349,4 +437,30 @@
   height: 22px;
   text-align: center;
   font-size: 11px;
+}
+
+/* 弹窗头部：标题与开关在同一行，space-between，左右加 10px 边距 */
+.adjustment-modal-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+.adjustment-modal-item-label {
+  flex: 1;
+  user-select: none;
+}
+
+/* 确保 sp-switch 不被压缩过小，也不过度放大 */
+.adjustment-modal-item sp-switch {
+  flex: 0 0 auto;
+  margin-left: 8px;
+}
+
+/* 弹窗内容器左右统一 10px 内边距 */
+.adjustment-modal-content {
+  padding-left: 10px;
+  padding-right: 10px;
 }

@@ -1,15 +1,9 @@
-/* 修复input number字段的z-index问题 - 限定到主面板作用域 */
+/* 修复input number字段的z-index问题 - 限定到主面板作用域（仅主面板规则） */
 
 /* 主面板（#app）中的input number字段应该有较低的z-index */
 #app input[type="number"] {
     position: relative;
     z-index: 1 !important;
-}
-
-/* 第二入口（#pixeladjustment）input不受影响，使用默认样式 */
-#pixeladjustment input[type="number"] {
-    position: relative;
-    z-index: auto;
 }
 
 /* 当次级面板打开时，主面板的input应该被遮盖 */
@@ -40,7 +34,7 @@ body.secondary-panel-open #app .adjustment-number-input {
     pointer-events: none !important;
 }
 
-/* 确保次级面板内的input始终可见 */
+/* 确保次级面板内的input始终可见（这些类属于主面板的次级弹层） */
 .pattern-picker input[type="number"],
 .color-settings-panel input[type="number"],
 .gradient-picker input[type="number"],
