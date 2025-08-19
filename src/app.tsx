@@ -87,6 +87,28 @@ class App extends React.Component<AppProps, AppState> {
         MenuManager.registerAppCallbacks({
             onOpenLicenseDialog: this.openLicenseDialog,
             onResetLicense: this.resetLicenseForTesting,
+            onResetParameters: () => {
+                // 保留图案与渐变预设，仅复位其它参数
+                const keepPattern = this.state.selectedPattern;
+                const keepGradient = this.state.selectedGradient;
+                // 使用 initialState 作为基准，保留需要保留的项
+                this.setState({
+                    ...initialState,
+                    selectedPattern: keepPattern,
+                    selectedGradient: keepGradient,
+                    // UI 相关展开/面板开关保持为当前值以避免打断用户操作
+                    isColorSettingsOpen: this.state.isColorSettingsOpen,
+                    isPatternPickerOpen: this.state.isPatternPickerOpen,
+                    isGradientPickerOpen: this.state.isGradientPickerOpen,
+                    isStrokeSettingOpen: this.state.isStrokeSettingOpen,
+                    isExpanded: this.state.isExpanded,
+                    // 授权状态不应被参数复位影响
+                    isLicensed: this.state.isLicensed,
+                    isTrial: this.state.isTrial,
+                    isLicenseDialogOpen: this.state.isLicenseDialogOpen,
+                    trialDaysRemaining: this.state.trialDaysRemaining,
+                });
+            }
         });
         this.selectionChangeListener = (eventName, descriptor) => {
             // 检查是否是选区相关的set事件

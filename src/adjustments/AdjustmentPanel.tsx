@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { processBlockAverage } from './blockAverageProcessor';
 import { processPixelTransition } from './pixelTransitionProcessor';
 import { processLineEnhancement } from './lineProcessing';
@@ -225,18 +225,15 @@ const [trialDaysRemaining, setTrialDaysRemaining] = useState(0);
 // 分区状态管理
 const [sections, setSections] = useState<SectionConfig[]>(defaultSections);
 const [subFeatures, setSubFeatures] = useState<SubFeature[]>(defaultSubFeatures);
-const [selectedSections, setSelectedSections] = useState<Set<string>>(new Set());
 const [isDragMode, setIsDragMode] = useState(false);
-const [dragTarget, setDragTarget] = useState<{ type: 'section' | 'subfeature', id: string } | null>(null);
+
 
 // 控制"隐藏/显示分区"面板
 const [showVisibilityPanel, setShowVisibilityPanel] = useState(false);
 
 const [radius, setRadius] = useState(15);
 const [sigma, setSigma] = useState(5);
-const [isDragging, setIsDragging] = useState(false);
-const [dragStartX, setDragStartX] = useState(0);
-const [dragStartValue, setDragStartValue] = useState(0);
+
 const [useWeightedAverage, setUseWeightedAverage] = useState(true);
 const [weightedIntensity, setWeightedIntensity] = useState(5);
 const [highFreqIntensity, setHighFreqIntensity] = useState(5);
@@ -275,6 +272,26 @@ useEffect(() => {
     },
     onResetOrder: () => {
       resetSectionOrder();
+    },
+    onResetParameters: () => {
+      // 1) 分区与子功能回归默认配置（顺序、可见性、折叠状态）
+      setSections([...defaultSections]);
+      setSubFeatures([...defaultSubFeatures]);
+      // 2) 基础参数复位
+      setRadius(15);
+      setSigma(5);
+      setUseWeightedAverage(true);
+      setWeightedIntensity(5);
+      setHighFreqIntensity(5);
+      setHighFreqRange(3);
+      // 3) 智能边缘平滑参数复位
+      setEdgeAlphaThreshold(defaultSmartEdgeSmoothParams.alphaThreshold);
+      setEdgeColorThreshold(defaultSmartEdgeSmoothParams.colorThreshold);
+      setEdgeSmoothRadius(defaultSmartEdgeSmoothParams.smoothRadius);
+      setPreserveDetail(defaultSmartEdgeSmoothParams.preserveDetail);
+      setEdgeIntensity(defaultSmartEdgeSmoothParams.intensity);
+      // 4) 关闭可见性面板
+      setShowVisibilityPanel(false);
     }
   });
 }, [sections]);
@@ -326,30 +343,8 @@ const checkLicenseStatus = async () => {
     setIsLicensed(false);
     setIsTrial(false);
     setTrialDaysRemaining(0);
-    // 第二入口即使失败也不显示对话框
-    // setIsLicenseDialogOpen(false);
   }
 };
-
-// 移除：第二入口不再控制授权对话框打开/关闭
-// const handleLicenseVerified = () => {
-//   setIsLicensed(true);
-//   setIsTrial(false);
-// };
-
-// const handleTrialStarted = () => {
-//   setIsTrial(true);
-//   setIsLicensed(false);
-//   setTrialDaysRemaining(7);
-// };
-
-// const closeLicenseDialog = () => {
-//   document.body.classList.remove('license-dialog-open');
-// };
-
-// const openLicenseDialog = () => {
-//   document.body.classList.add('license-dialog-open');
-// };
 
 const handleLicenseBeforeAction = (): boolean => {
   // 触发一次异步刷新，尽快感知在另一个入口刚完成的授权
@@ -365,117 +360,9 @@ const handleLicenseBeforeAction = (): boolean => {
   return true;
 };
 
-// 拖拽处理函数
-const handleLabelMouseDown = (event: React.MouseEvent, target: string) => {
-  event.preventDefault();
-  setIsDragging(true);
-  setDragTarget(target);
-  setDragStartX(event.clientX);
-  if (target === 'radius') {
-    setDragStartValue(radius);
-  } else if (target === 'sigma') {
-    setDragStartValue(sigma);
-  } else if (target === 'weightedIntensity') {
-    setDragStartValue(weightedIntensity);
-  } else if (target === 'highFreqIntensity') {
-    setDragStartValue(highFreqIntensity);
-  } else if (target === 'highFreqRange') {
-    setDragStartValue(highFreqRange);
-  } else if (target === 'edgeAlphaThreshold') {
-    setDragStartValue(edgeAlphaThreshold);
-  } else if (target === 'edgeColorThreshold') {
-    setDragStartValue(edgeColorThreshold);
-  } else if (target === 'edgeSmoothRadius') {
-    setDragStartValue(edgeSmoothRadius);
-  } else if (target === 'edgeIntensity') {
-    setDragStartValue(edgeIntensity);
-  }
-};
 
-const handleMouseMove = (event: MouseEvent) => {
-  if (!isDragging || !dragTarget) return;
 
-  const deltaX = event.clientX - dragStartX;
-  let sensitivity, minValue, maxValue;
-  
-  if (dragTarget === 'radius') {
-    sensitivity = 0.1;
-    minValue = 5;
-    maxValue = 20;
-  } else if (dragTarget === 'sigma') {
-    sensitivity = 0.02;
-    minValue = 1;
-    maxValue = 5;
-  } else if (dragTarget === 'weightedIntensity') {
-    sensitivity = 0.05;
-    minValue = 1;
-    maxValue = 10;
-  } else if (dragTarget === 'highFreqIntensity') {
-    sensitivity = 0.05;
-    minValue = 1;
-    maxValue = 10;
-  } else if (dragTarget === 'highFreqRange') {
-    sensitivity = 0.05;
-    minValue = 1;
-    maxValue = 10;
-  } else if (dragTarget === 'edgeAlphaThreshold') {
-    sensitivity = 0.5;
-    minValue = 10;
-    maxValue = 100;
-  } else if (dragTarget === 'edgeColorThreshold') {
-    sensitivity = 0.5;
-    minValue = 10;
-    maxValue = 100;
-  } else if (dragTarget === 'edgeSmoothRadius') {
-    sensitivity = 0.05;
-    minValue = 1;
-    maxValue = 8;
-  } else if (dragTarget === 'edgeIntensity') {
-    sensitivity = 0.05;
-    minValue = 1;
-    maxValue = 10;
-  }
-  
-  const newValue = Math.max(
-    minValue,
-    Math.min(maxValue, dragStartValue + (deltaX * sensitivity))
-  );
 
-  if (dragTarget === 'radius') {
-    setRadius(Math.round(newValue));
-  } else if (dragTarget === 'sigma') {
-    setSigma(Math.round(newValue * 2) / 2); // 保持0.5的步长
-  } else if (dragTarget === 'weightedIntensity') {
-    setWeightedIntensity(Math.round(newValue * 2) / 2); // 保持0.5的步长
-  } else if (dragTarget === 'highFreqIntensity') {
-    setHighFreqIntensity(Math.round(newValue * 2) / 2); // 保持0.5的步长
-  } else if (dragTarget === 'highFreqRange') {
-    setHighFreqRange(Math.round(newValue * 2) / 2); // 保持0.5的步长
-  } else if (dragTarget === 'edgeAlphaThreshold') {
-    setEdgeAlphaThreshold(Math.round(newValue));
-  } else if (dragTarget === 'edgeColorThreshold') {
-    setEdgeColorThreshold(Math.round(newValue));
-  } else if (dragTarget === 'edgeSmoothRadius') {
-    setEdgeSmoothRadius(Math.round(newValue * 2) / 2); // 保持0.5的步长
-  } else if (dragTarget === 'edgeIntensity') {
-    setEdgeIntensity(Math.round(newValue * 2) / 2); // 保持0.5的步长
-  }
-};
-
-const handleMouseUp = () => {
-  setIsDragging(false);
-  setDragTarget(null);
-};
-
-// 添加事件监听器
-React.useEffect(() => {
-  document.addEventListener('mousemove', handleMouseMove);
-  document.addEventListener('mouseup', handleMouseUp);
-  return () => {
-    document.removeEventListener('mousemove', handleMouseMove);
-    document.removeEventListener('mouseup', handleMouseUp);
-  };
-}, [isDragging, dragTarget, dragStartX, dragStartValue]);
 
 // 滑块变化处理
 const handleRadiusChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -880,33 +767,7 @@ const toggleSectionVisibility = (id: string) => {
   setSections(prev => prev.map(s => s.id === id ? { ...s, isVisible: !s.isVisible } : s));
 };
 
-// 多选处理（Ctrl/Shift）
-const handleSectionSelection = (event: React.MouseEvent, id: string) => {
-  event.stopPropagation();
-  setSelectedSections(prev => {
-    const next = new Set(prev);
-    if (event.shiftKey) {
-      // 简单策略：若为空则直接添加，否则按排序范围选择
-      const ordered = sections.slice().sort((a,b)=>a.order-b.order);
-      const last = ordered.find(s=> next.has(s.id));
-      if (!last) {
-        next.add(id);
-      } else {
-        const startIndex = ordered.findIndex(s=>s.id===last.id);
-        const endIndex = ordered.findIndex(s=>s.id===id);
-        if (startIndex !== -1 && endIndex !== -1) {
-          const [min, max] = [Math.min(startIndex,endIndex), Math.max(startIndex,endIndex)];
-          for (let i=min;i<=max;i++) next.add(ordered[i].id);
-        }
-      }
-    } else if (event.ctrlKey || event.metaKey) {
-      if (next.has(id)) next.delete(id); else next.add(id);
-    } else {
-      if (next.has(id) && next.size === 1) { next.clear(); } else { next.clear(); next.add(id); }
-    }
-    return next;
-  });
-};
+
 
 // 拖拽排序（分区级）
 const handleDragStart = (e: React.DragEvent, id: string) => {
@@ -937,13 +798,12 @@ const handleDrop = (e: React.DragEvent, targetId: string) => {
 // 渲染子功能内容
 const renderLocalContrastContent = () => (
   <div className="adjustment-section">
-    <div className="adjustment-divider"></div>
     
     <button className="adjustment-button" onClick={handlePixelTransition}>像素过渡</button>
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'radius')}>半径</div>
+        <div className="adjustment-slider-label">半径</div>
         <div className="unit-container">
           <input type="range" min="5" max="20" step="1" value={radius} onChange={handleRadiusChange} className="adjustment-slider-input" />
           <input type="number" min="5" max="20" step="1" value={radius} onChange={handleRadiusNumberChange} className="adjustment-number-input" />
@@ -951,7 +811,7 @@ const renderLocalContrastContent = () => (
         </div>
       </div>
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'sigma')}>强度</div>
+        <div className="adjustment-slider-label">强度</div>
         <div className="unit-container">
           <input type="range" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaChange} className="adjustment-slider-input" />
           <input type="number" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaNumberChange} className="adjustment-number-input" />
@@ -966,7 +826,7 @@ const renderLocalContrastContent = () => (
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'highFreqIntensity')}>强度</div>
+        <div className="adjustment-slider-label">强度</div>
         <div className="unit-container">
           <input type="range" min="1" max="10" step="0.5" value={highFreqIntensity} onChange={handleHighFreqIntensityChange} className="adjustment-slider-input" />
           <input type="number" min="1" max="10" step="0.5" value={highFreqIntensity} onChange={handleHighFreqIntensityNumberChange} className="adjustment-number-input" />
@@ -974,7 +834,7 @@ const renderLocalContrastContent = () => (
         </div>
       </div>
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'highFreqRange')}>范围</div>
+        <div className="adjustment-slider-label">范围</div>
         <div className="unit-container">
           <input type="range" min="1" max="10" step="0.5" value={highFreqRange} onChange={handleHighFreqRangeChange} className="adjustment-slider-input" />
           <input type="number" min="1" max="10" step="0.5" value={highFreqRange} onChange={handleHighFreqRangeNumberChange} className="adjustment-number-input" />
@@ -987,13 +847,16 @@ const renderLocalContrastContent = () => (
 
 const renderEdgeProcessingContent = () => (
   <div className="adjustment-section">
-    <div className="adjustment-divider"></div>
 
     <div className="adjustment-double-buttons">
       <button className="adjustment-button" onClick={handleSmartEdgeSmooth}>边缘平滑</button>
       
       <div className="adjustment-swtich-container">
-        <label className="adjustment-swtich-label">保留细节</label>
+        <label 
+          className="adjustment-swtich-label"
+          onClick={() => setPreserveDetail(!preserveDetail)}
+          style={{ cursor: 'pointer' }}
+        >保留细节</label>
         <sp-switch 
           checked={preserveDetail}
           onChange={(e) => setPreserveDetail(e.target.checked)}
@@ -1004,23 +867,23 @@ const renderEdgeProcessingContent = () => (
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'edgeAlphaThreshold')}>Alpha阈值</div>
+        <div className="wider-adjustment-slider-label">Alpha阈值</div>
         <div className="unit-container">
-          <input type="range" min="10" max="100" step="1" value={edgeAlphaThreshold} onChange={handleEdgeAlphaThresholdChange} className="adjustment-slider-input" />
+          <input type="range" min="10" max="100" step="1" value={edgeAlphaThreshold} onChange={handleEdgeAlphaThresholdChange} className="narrower-adjustment-slider-input" />
           <input type="number" min="10" max="100" step="1" value={edgeAlphaThreshold} onChange={handleEdgeAlphaThresholdNumberChange} className="adjustment-number-input" />
           <div className="adjustment-unit">%</div>
         </div>
       </div>
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'edgeColorThreshold')}>颜色阈值</div>
+        <div className="wide-adjustment-slider-label">颜色阈值</div>
         <div className="unit-container">
-          <input type="range" min="10" max="100" step="1" value={edgeColorThreshold} onChange={handleEdgeColorThresholdChange} className="adjustment-slider-input" />
+          <input type="range" min="10" max="100" step="1" value={edgeColorThreshold} onChange={handleEdgeColorThresholdChange} className="narrow-adjustment-slider-input" />
           <input type="number" min="1" max="100" step="1" value={edgeColorThreshold} onChange={handleEdgeColorThresholdNumberChange} className="adjustment-number-input" />
           <div className="adjustment-unit">%</div>
         </div>
       </div>
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'edgeSmoothRadius')}>半径</div>
+        <div className="adjustment-slider-label">半径</div>
         <div className="unit-container">
           <input type="range" min="1" max="30" step="0.5" value={edgeSmoothRadius} onChange={handleEdgeSmoothRadiusChange} className="adjustment-slider-input" />
           <input type="number" min="1" max="30" step="0.5" value={edgeSmoothRadius} onChange={handleEdgeSmoothRadiusNumberChange} className="adjustment-number-input" />
@@ -1028,7 +891,7 @@ const renderEdgeProcessingContent = () => (
         </div>
       </div>
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'edgeIntensity')}>强度</div>
+        <div className="adjustment-slider-label">强度</div>
         <div className="unit-container">
           <input type="range" min="1" max="10" step="0.5" value={edgeIntensity} onChange={handleEdgeIntensityChange} className="adjustment-slider-input" />
           <input type="number" min="1" max="10" step="0.5" value={edgeIntensity} onChange={handleEdgeIntensityNumberChange} className="adjustment-number-input" />
@@ -1045,7 +908,6 @@ const renderEdgeProcessingContent = () => (
 
 const renderBlockAdjustmentContent = () => (
   <div className="adjustment-section">
-    <div className="adjustment-divider"></div>
 
     <div className="adjustment-double-buttons">
       <button className="adjustment-button" onClick={handleBlockAverage}>分块平均</button>
@@ -1055,12 +917,11 @@ const renderBlockAdjustmentContent = () => (
           className="adjustment-swtich-label"
           onClick={() => setUseWeightedAverage(!useWeightedAverage)}
           style={{ cursor: 'pointer' }}
-        >
-          加权模式
-        </label>
+        >加权模式</label>
         <sp-switch 
           checked={useWeightedAverage}
           onChange={(e) => setUseWeightedAverage(e.target.checked)}
+          style={{ marginLeft: '8px' }}
         />
       </div>
     </div>
@@ -1068,7 +929,7 @@ const renderBlockAdjustmentContent = () => (
     {useWeightedAverage && (
       <div className="adjustment-slider-container">
         <div className="adjustment-slider-item">
-          <div className="adjustment-slider-label" onMouseDown={(e)=>handleLabelMouseDown(e,'weightedIntensity')}>强度</div>
+          <div className="adjustment-slider-label">强度</div>
           <div className="unit-container">
             <input type="range" min="1" max="10" step="0.5" value={weightedIntensity} onChange={handleWeightedIntensityChange} className="adjustment-slider-input" />
             <input type="number" min="1" max="10" step="0.5" value={weightedIntensity} onChange={handleWeightedIntensityNumberChange} className="adjustment-number-input" />
@@ -1095,12 +956,11 @@ const renderSection = (section: SectionConfig) => (
        onDragOver={handleDragOver}
        onDrop={(e)=>handleDrop(e, section.id)}
   >
-    <div className="adjust-expand-header" onClick={()=>toggleSectionCollapse(section.id)} onMouseDown={(e)=>handleSectionSelection(e, section.id)}>
+    <div className="adjust-expand-header" onClick={()=>toggleSectionCollapse(section.id)}>
       <div className={`adjust-expand-icon ${section.isCollapsed ? '' : 'expanded'}`}>
         <ExpandIcon expanded={!section.isCollapsed} />
       </div>
-      <div style={{ flex: 1 }}>{section.title}</div>
-      {/* 移除对号标记，避免分区标题右侧出现视觉噪点 */}
+      <div>{section.title}</div>
     </div>
     <div className={`adjust-expand-content ${section.isCollapsed ? '' : 'expanded'}`}>
       {renderSectionContent(section.id)}

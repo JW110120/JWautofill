@@ -328,6 +328,8 @@ sp-picker[disabled] {
 
 sp-switch {
   margin-left: auto; /* 添加这行使开关靠右 */
+  right: 0px;
+  cursor: pointer;
 }
 
 .switch-label {
@@ -335,9 +337,6 @@ sp-switch {
   color: var(--text-color);
 }
 
-sp-switch {
-  right: 0px;
-}
 
 .stroke-settings-icon {
   display: flex;

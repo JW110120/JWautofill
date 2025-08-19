@@ -137,9 +137,6 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         </div>
         
 
-        <div className="stroke-subtitle">
-          <h3>位置</h3>
-        </div>
           <div className="position-radio-group">
             <sp-radio-group 
               selected={position}

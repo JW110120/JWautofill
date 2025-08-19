@@ -11,6 +11,7 @@ export class MenuManager {
   // 主面板 APP 的回调
   private static appOpenLicenseCallback: (() => void) | null = null;
   private static appResetLicenseCallback: (() => void) | null = null;
+  private static appResetParametersCallback: (() => void) | null = null;
 
   constructor() {
     // Constructor
@@ -22,9 +23,11 @@ export class MenuManager {
   public static registerAppCallbacks(callbacks: {
     onOpenLicenseDialog: () => void;
     onResetLicense: () => void;
+    onResetParameters: () => void;
   }) {
     this.appOpenLicenseCallback = callbacks.onOpenLicenseDialog;
     this.appResetLicenseCallback = callbacks.onResetLicense;
+    this.appResetParametersCallback = callbacks.onResetParameters;
   }
 
   /**
@@ -43,6 +46,11 @@ export class MenuManager {
           this.appOpenLicenseCallback();
         }
         break;
+      case "resetAppParameters":
+        if (this.appResetParametersCallback) {
+          this.appResetParametersCallback();
+        }
+        break;
       default:
         console.warn(`Unknown app flyout menu item: ${id}`);
     }
@@ -52,14 +60,30 @@ export class MenuManager {
    * 处理像素调整面板菜单项点击事件 - 委托给 AdjustmentMenu
    */
   private static handleAdjustmentFlyout(id: string) {
-    // 委托给专门的 AdjustmentMenu 处理
-    AdjustmentMenu.handleMenuAction(id);
+    try {
+      if (!id) {
+        console.warn("Adjustment Flyout: missing menu id");
+        return;
+      }
+      console.log(`Adjustment Flyout: ${id}`);
+      // 委托给专门的 AdjustmentMenu 处理
+      AdjustmentMenu.handleMenuAction(id);
+    } catch (err) {
+      console.error("Error handling adjustment flyout menu:", err);
+    }
   }
 
   /**
    * 设置UXP入口点和菜单项
    */
   public static setup(): void {
+    // 防止在热更新或多次执行时重复注册菜单
+    const g: any = globalThis as any;
+    if (g.__JW_MENU_SETUP_DONE__) {
+      console.log("MenuManager.setup skipped (already done)");
+      return;
+    }
+
     entrypoints.setup({
       panels: {
         // 主面板（App）的flyout菜单配置
@@ -75,6 +99,10 @@ export class MenuManager {
             {
               id: "openLicenseDialog",
               label: "打开激活与试用面板"
+            },
+            {
+              id: "resetAppParameters",
+              label: "参数复位（保留已加载图案与新建渐变预设）"
             }
           ],
           invokeMenu(id: string) {
@@ -103,6 +131,10 @@ export class MenuManager {
             {
               id: "showVisibilityPanel",
               label: "隐藏/显示分区"
+            },
+            {
+              id: "resetParameters",
+              label: "参数复位（还原所有像素调整参数）"
             }
           ],
           invokeMenu(id: string) {
@@ -111,5 +143,7 @@ export class MenuManager {
         }
       }
     });
+
+    g.__JW_MENU_SETUP_DONE__ = true;
   }
 }

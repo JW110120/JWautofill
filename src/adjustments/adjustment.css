@@ -1,5 +1,3 @@
-/* 面板容器 */
-
 /* 调整面板样式 */
 
 /* 授权/试用状态提示样式 */
@@ -18,6 +16,23 @@
   height: 30px;
 }
 
+.license-status-banner .badge-dot {
+  width: 6px;
+  height: 6px;
+  margin-right: 4px;
+  border-radius: 50%;
+  background: #4caf50;
+  display: inline-block;
+}
+
+.license-status-banner .badge-dot.danger {
+  background: #ef5350;
+}
+
+.license-status-banner .trial-expired {
+  color: #ff6b6b;
+}
+
 .license-status-banner.is-trial {
   background: rgba(76, 175, 80, 0.08);
   border-color: rgba(76, 175, 80, 0.18);
@@ -30,6 +45,7 @@
 .license-status-banner .trial-status {
   font-weight: 600;
   flex: 1 1 auto;
+  font-size: 12px;
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
@@ -37,14 +53,16 @@
 }
 
 .license-status-banner .trial-expired {
-  color: #a8071a;
+  color: #ff6b6b;
   font-weight: 600;
   flex: 1 1 auto;
+  font-size: 12px;
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
 .adjustment-container {
   width: 100%;
   height: 100%;
@@ -64,37 +82,32 @@
 }
 
 /* 调整面板专属滚动条（仅作用于第二入口容器） */
-#pixeladjustment .adjustment-container::-webkit-scrollbar {
+.adjustment-container::-webkit-scrollbar {
   width: 10px;
 }
-#pixeladjustment .adjustment-container::-webkit-scrollbar-thumb {
+.adjustment-container::-webkit-scrollbar-thumb {
   background-color: var(--scrollbar-thumb);
   border-radius: 8px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
-#pixeladjustment .adjustment-container::-webkit-scrollbar-thumb:hover {
+.adjustment-container::-webkit-scrollbar-thumb:hover {
   background-color: color-mix(in oklab, var(--scrollbar-thumb) 90%, #ffffff 10%);
 }
-#pixeladjustment .adjustment-container::-webkit-scrollbar-track {
+.adjustment-container::-webkit-scrollbar-track {
   background-color: var(--scrollbar-track);
   border-radius: 8px;
 }
 
 /* 分区容器 */
 .adjustment-section {
-  width: 100%;
-  padding: 8px 13px;
-  margin-bottom: 10px;
+  width: 230px;
+  display: flex;
+  flex-direction: column;
+  padding: 13px 12px 6px 12px;
+  margin-bottom: 20px;
   border: 1px solid var(--border-color);
   border-radius: 4px;
-}
-
-/* 分区标题 */
-.adjustment-section-title {
-  color: var(--text-color);
-  font-size: 16px;
-  font-weight: bold;
 }
 
 /* 双按钮容器 */
@@ -110,7 +123,7 @@
 .adjustment-button {
   height: 30px;
   width: 80px;
-  margin: 0 0 3px -2px;
+  margin: 0 0 8px -2px;
   background-color: var(--button-bg);
   color: var(--text-color);
   border: 1px solid var(--border-color);
@@ -140,7 +153,7 @@
   flex-direction: row;
   align-items: center;
   justify-content: center;
-  width: 85px;
+  width: 90px; 
   margin-bottom: 5px;
 }
 
@@ -149,7 +162,7 @@
   color: var(--text-color);
   display: flex;
   font-size: 13px;
-  min-width: 28px;
+  min-width: 50px; 
   cursor: pointer;
 }
 
@@ -174,16 +187,55 @@
   display: flex;
   font-size: 13px;
   min-width: 28px;
-  cursor: pointer;
   margin-right: -8px;
 
+}
+
+/* 宽的单位标签 */
+.wide-adjustment-slider-label {
+  color: var(--text-color);
+  display: flex;
+  font-size: 13px;
+  min-width: 55px;
+  cursor: pointer;
+  margin-right: -10px;
+  margin-left: -2px;
+}
+
+/* 更宽的单位标签 */
+.wider-adjustment-slider-label {
+  color: var(--text-color);
+  display: flex;
+  font-size: 13px;
+  min-width: 60px;
+  cursor: pointer;
+  margin-right: -5px;
+  margin-left: -2px;
 }
 
 /* 滑块输入 */
 .adjustment-slider-input {
   display: flex;  
   width: 125px;
-  cursor: ew-resize;
+  cursor: pointer;
+  background: var(--bg-color);
+  margin-top: 15px;
+}
+
+/* 窄的滑块 */
+.narrow-adjustment-slider-input{
+  display: flex;  
+  width: 100px;
+  cursor: pointer;
+  background: var(--bg-color);
+  margin-top: 15px;
+}
+
+/* 更窄的滑块 */
+.narrower-adjustment-slider-input{
+  display: flex;  
+  width: 90px;
+  cursor: pointer;
   background: var(--bg-color);
   margin-top: 15px;
 }
@@ -214,91 +266,56 @@
   opacity: 0.8;
 }
 
-/* 宽的单位标签 */
-.wide-adjustment-slider-label {
-  color: var(--text-color);
-  display: flex;
-  font-size: 13px;
-  min-width: 55px;
-  cursor: pointer;
-  margin-right: -10px;
-
-}
-
-/* 更宽的单位标签 */
-.wider-adjustment-slider-label {
-  color: var(--text-color);
-  display: flex;
-  font-size: 13px;
-  min-width: 60px;
-  cursor: pointer;
-  margin-right: -5px;
-}
-
-/* 窄的滑块 */
-.narrow-adjustment-slider-input{
-  display: flex;  
-  width: 100px;
-  cursor: ew-resize;
-  background: var(--bg-color);
-  margin-top: 15px;
-}
-
-/* 更窄的滑块 */
-.narrower-adjustment-slider-input{
-  display: flex;  
-  width: 90px;
-  cursor: ew-resize;
-  background: var(--bg-color);
-  margin-top: 15px;
-}
-
 /* 分隔线 */
 .adjustment-divider {
   width: calc(100% + 26px);
   height: 1px;
   background-color: var(--border-color);
-  margin: 7px 13px 10px -13px;
-}
-.license-status-banner .badge-dot {
-  width: 6px;
-  height: 6px;
-  margin-right: 4px;
-  border-radius: 50%;
-  background: #4caf50;
-  display: inline-block;
+  margin: 7px 13px 13px -13px;
 }
 
-.license-status-banner .badge-dot.danger {
-  background: #ef5350;
+.adjust-expand-section {
+  background-color: var(--bg-color);
+  z-index: 1;
 }
-.license-status-banner .trial-status,
-.license-status-banner .trial-expired {
-  font-weight: 500;
-  font-size: 12px;
-}
-.license-status-banner .license-link {
-  margin-right: -3px;
-  color: #cfcfcf;
-  background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  font-size: 10px;
+
+.adjust-expand-header {
+  display: flex;
+  align-items: center;
   cursor: pointer;
-  padding: 2px 2px;
-  border-radius: 4px;
-  line-height: 18px;
-  height: 20px;
-  flex: 0 0 auto;
+  font-size: 13px;
+  padding: 10px 0;
+  color: var(--text-color);
+  transition: background-color 0.3s;
 }
-.license-status-banner .license-link:hover {
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.06);
+.adjust-expand-header:hover {
+  background-color: var(--hover-bg);
 }
-.license-status-banner .trial-expired {
-  color: #ff6b6b;
+.adjust-expand-icon {
+  padding-left: 5px;
+  margin-right: 2px;
+  display: flex;
+  align-items: center;
+}
+.adjust-expand-icon svg {
+  transition: transform 0.3s;
+}
+.adjust-expand-icon.expanded svg {
+  transform: rotate(0deg);
+}
+.adjust-expand-content {
+  max-height: 0px;
+  overflow: hidden;
+  transition: max-height 0.3s ease-out;
+}
+.adjust-expand-content.expanded {
+  max-height: 400px;
+}
+.adjust-expand-icon path.fill {
+  fill: var(--text-color);
 }
 
-/* 模态框遮罩与内容（仅调参面板作用域） */
+/* 模态框遮罩与内容*/
 .adjustment-modal-overlay {
   position: fixed;
   top: 0;
@@ -318,12 +335,10 @@
   color: var(--text-color);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  width: 360px;
+  width: 230px;
   max-width: 92vw;
-  padding: 14px 16px;
+  padding: 10px 10px;
   box-shadow: 0 10px 24px rgba(0,0,0,0.35);
-  padding-left: 10px;
-  padding-right: 10px;
 }
 
 .adjustment-modal-header {
@@ -344,120 +359,9 @@
   gap: 10px;
   margin-bottom: 10px;
 }
-.adjustment-modal-item sp-switch { transform: scale(0.98); }
+.adjustment-modal-item sp-switch { transform: scale(0.98); cursor: pointer; }
 .adjustment-modal-item-label { color: var(--text-color); font-size: 13px; user-select: none; }
 
-/* 当"隐藏/显示分区"模态打开时，彻底隐藏本面板内所有数字输入、数值占位元素，避免穿透与叠出 */
-body.visibility-panel-open #pixeladjustment input[type="number"],
-body.visibility-panel-open #pixeladjustment .adjustment-number-input,
-body.visibility-panel-open #pixeladjustment .unit-container input[type="number"],
-body.visibility-panel-open #pixeladjustment .unit-container .adjustment-number-input {
-  display: none !important;
-  visibility: hidden !important;
-  opacity: 0 !important;
-  pointer-events: none !important;
-  z-index: -1 !important;
-}
-
-/* 第二入口（调整面板）的折叠状态隐藏规则 - 确保折叠时数字输入完全隐藏 */
-#pixeladjustment .adjust-expand-content:not(.expanded) input[type="number"],
-#pixeladjustment .adjust-expand-content:not(.expanded) .adjustment-number-input,
-#pixeladjustment .adjust-expand-content:not(.expanded) .unit-container input[type="number"],
-#pixeladjustment .adjust-expand-content:not(.expanded) .unit-container .adjustment-number-input {
-  display: none !important;
-  visibility: hidden !important;
-  opacity: 0 !important;
-  pointer-events: none !important;
-}
-#pixeladjustment .adjust-expand-content.expanded input[type="number"],
-#pixeladjustment .adjust-expand-content.expanded .adjustment-number-input {
-  visibility: visible;
-  opacity: 1;
-  pointer-events: auto;
-  transition: opacity 0.3s ease;
-}
-/* 将expand样式重命名为adjust-expand-，避免与APP面板冲突 */
-#pixeladjustment .adjust-expand-section {
-  background-color: var(--bg-color);
-  margin-bottom: -1px;
-  z-index: 1;
-}
-#pixeladjustment .adjust-expand-header {
-  display: flex;
-  align-items: center;
-  cursor: pointer;
-  font-size: 13px;
-  padding: 10px 0;
-  color: var(--text-color);
-  transition: background-color 0.3s;
-}
-#pixeladjustment .adjust-expand-header:hover {
-  background-color: var(--hover-bg);
-}
-#pixeladjustment .adjust-expand-icon {
-  padding-left: 5px;
-  margin-right: 2px;
-  display: flex;
-  align-items: center;
-}
-#pixeladjustment .adjust-expand-icon svg {
-  transition: transform 0.3s;
-}
-#pixeladjustment .adjust-expand-icon.expanded svg {
-  transform: rotate(0deg);
-}
-#pixeladjustment .adjust-expand-content {
-  max-height: 0px;
-  overflow: hidden;
-  transition: max-height 0.3s ease-out;
-}
-#pixeladjustment .adjust-expand-content.expanded {
-  max-height: 400px;
-}
-#pixeladjustment .adjust-expand-icon path.fill {
-  fill: var(--text-color);
-}
-.adjustment-modal-close {
-  background: transparent;
-  color: var(--text-color);
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  width: 22px;
-  height: 22px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-}
-.adjustment-modal-close:hover { background: var(--hover-bg); }
-
-/* 二级面板局部的 selection 滑块样式（避免依赖全局 styles.css） */
-.selection-slider-container { margin: 6px 0; }
-.selection-slider-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin: 6px 0;
-}
-.selection-slider-label {
-  color: var(--text-color);
-  font-size: 12px;
-  min-width: 72px;
-  user-select: none;
-}
-.selection-slider-input {
-  width: 130px;
-  margin-top: 14px;
-}
-.selection-slider-item input[type="number"] {
-  width: 36px;
-  height: 22px;
-  text-align: center;
-  font-size: 11px;
-}
-
-/* 弹窗头部：标题与开关在同一行，space-between，左右加 10px 边距 */
 .adjustment-modal-item {
   display: flex;
   align-items: center;
@@ -471,14 +375,23 @@ body.visibility-panel-open #pixeladjustment .unit-container .adjustment-number-i
   user-select: none;
 }
 
-/* 确保 sp-switch 不被压缩过小，也不过度放大 */
-.adjustment-modal-item sp-switch {
-  flex: 0 0 auto;
-  margin-left: 8px;
-}
-
-/* 弹窗内容器左右统一 10px 内边距 */
 .adjustment-modal-content {
   padding-left: 10px;
   padding-right: 10px;
 }
+
+.adjustment-modal-close {
+  background: transparent;
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  padding-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.adjustment-modal-close:hover { background: var(--hover-bg); }
+

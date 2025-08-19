@@ -6,6 +6,7 @@ export class AdjustmentMenu {
   private static visibilityPanelCallback: ((visible: boolean) => void) | null = null;
   private static collapseCallback: (() => void) | null = null;
   private static resetCallback: (() => void) | null = null;
+  private static resetParametersCallback: (() => void) | null = null;
 
   constructor() {
     // Constructor
@@ -18,10 +19,12 @@ export class AdjustmentMenu {
     onToggleVisibilityPanel: (visible: boolean) => void;
     onToggleAllCollapse: () => void;
     onResetOrder: () => void;
+    onResetParameters: () => void;
   }) {
     this.visibilityPanelCallback = callbacks.onToggleVisibilityPanel;
     this.collapseCallback = callbacks.onToggleAllCollapse;
     this.resetCallback = callbacks.onResetOrder;
+    this.resetParametersCallback = callbacks.onResetParameters;
   }
 
   /**
@@ -43,6 +46,11 @@ export class AdjustmentMenu {
       case "showVisibilityPanel":
         if (this.visibilityPanelCallback) {
           this.visibilityPanelCallback(true);
+        }
+        break;
+      case "resetParameters":
+        if (this.resetParametersCallback) {
+          this.resetParametersCallback();
         }
         break;
       default:

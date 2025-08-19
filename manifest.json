@@ -1,6 +1,6 @@
 {
     "manifestVersion": 4,
-    "name": "选区操作",
+    "name": "易修",
     "version": "1.0.0",
     "host": {
         "app": "PS",
@@ -53,7 +53,7 @@
         {
             "id": "com.listen2me.pixeladjustment",
             "label": {
-                "default": "调整内容"
+                "default": "特制绘画滤镜"
             },
             "type": "panel",
             "minimumSize": {

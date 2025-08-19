@@ -1,15 +1,41 @@
 /* adjustments 第二入口：输入样式（精简版）
-   注意：本文件仅保留在“隐藏/显示分区”模态打开时的隐藏规则，
-   其余视觉样式均由 adjustment.css 负责，避免重复与冲突。 */
 
 /* 当"隐藏/显示分区"模态框打开时，彻底隐藏调整面板内所有 number 输入，避免穿透与交互 */
 body.visibility-panel-open #pixeladjustment input[type="number"],
 body.visibility-panel-open #pixeladjustment .adjustment-number-input,
 body.visibility-panel-open #pixeladjustment .unit-container input[type="number"],
 body.visibility-panel-open #pixeladjustment .unit-container .adjustment-number-input {
-  display: none !important;
+  /* 不再使用 display:none，改为完全透明并禁用交互，保留布局占位 */
   visibility: hidden !important;
   opacity: 0 !important;
   pointer-events: none !important;
-  z-index: -1 !important;
+}
+
+/* 当"隐藏/显示分区"模态打开时，彻底隐藏本面板内所有数字输入、数值占位元素，避免穿透与叠出 */
+body.visibility-panel-open #pixeladjustment input[type="number"],
+body.visibility-panel-open #pixeladjustment .adjustment-number-input,
+body.visibility-panel-open #pixeladjustment .unit-container input[type="number"],
+body.visibility-panel-open #pixeladjustment .unit-container .adjustment-number-input {
+  /* 不再使用 display:none，改为完全透明并禁用交互，保留布局占位 */
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* 第二入口（调整面板）的折叠状态隐藏规则 - 确保折叠时数字输入完全隐藏 */
+#pixeladjustment .adjust-expand-content:not(.expanded) input[type="number"],
+#pixeladjustment .adjust-expand-content:not(.expanded) .adjustment-number-input,
+#pixeladjustment .adjust-expand-content:not(.expanded) .unit-container input[type="number"],
+#pixeladjustment .adjust-expand-content:not(.expanded) .unit-container .adjustment-number-input {
+  /* 不再使用 display:none，改为完全透明并禁用交互，保留布局占位 */
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+#pixeladjustment .adjust-expand-content.expanded input[type="number"],
+#pixeladjustment .adjust-expand-content.expanded .adjustment-number-input {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  transition: opacity 0.3s ease;
 }
