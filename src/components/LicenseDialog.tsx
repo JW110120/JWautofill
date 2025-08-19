@@ -59,7 +59,7 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
                 setTimeout(() => {
                     onLicenseVerified();
                     onClose();
-                }, 1500);
+                }, 800);
             } else {
                 setMessage(result.message);
                 setMessageType('error');
@@ -85,7 +85,7 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
                 setTimeout(() => {
                     onTrialStarted();
                     onClose();
-                }, 1500);
+                }, 800);
             } else {
                 setMessage('已使用过试用，请购买后获取激活码');
                 setMessageType('error');
@@ -195,7 +195,7 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
         );
     };
 
-    return (
+      return (
         <div className="license-dialog-overlay" onClick={handleOverlayClick}>
             <div className="license-dialog" onClick={handleDialogClick}>
                 {getDialogContent()}

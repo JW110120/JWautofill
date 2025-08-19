@@ -16,6 +16,8 @@ const createThemeStyles = () => {
       --button-bg: rgb(60, 60, 60);
       --button-down: rgb(40, 40, 40);
       --slider-bg: #eee;
+      --scrollbar-thumb: #c0c0c0;
+      --scrollbar-track: rgba(255, 255, 255, 0.1);
     }
 
     @media (prefers-color-scheme: darkest) {
@@ -32,6 +34,8 @@ const createThemeStyles = () => {
         --button-bg: rgb(60, 60, 60);
         --button-down: rgb(40, 40, 40);
         --slider-bg: #eee;
+        --scrollbar-thumb: #c8c8c8;
+        --scrollbar-track: rgba(255, 255, 255, 0.12);
       }
     }
 
@@ -49,6 +53,8 @@ const createThemeStyles = () => {
         --button-bg: rgb(93, 93, 93);
         --button-down: rgb(73, 73, 73);
         --slider-bg: #eee;
+        --scrollbar-thumb: #b8b8b8;
+        --scrollbar-track: rgba(255, 255, 255, 0.08);
       }
     }
 
@@ -66,6 +72,8 @@ const createThemeStyles = () => {
         --button-bg: rgb(194, 194, 194);
         --button-down: rgb(174, 174, 174);
         --slider-bg: #ddd;
+        --scrollbar-thumb: #606060;
+        --scrollbar-track: rgba(0, 0, 0, 0.1);
       }
     }
 
@@ -83,6 +91,8 @@ const createThemeStyles = () => {
         --button-bg: rgb(250, 250, 250);
         --button-down: rgb(230, 230, 230);
         --slider-bg: #ddd;
+        --scrollbar-thumb: #505050;
+        --scrollbar-track: rgba(0, 0, 0, 0.05);
       }
     }
   `;

@@ -63,6 +63,24 @@
   overflow-x: hidden;
 }
 
+/* 调整面板专属滚动条（仅作用于第二入口容器） */
+#pixeladjustment .adjustment-container::-webkit-scrollbar {
+  width: 10px;
+}
+#pixeladjustment .adjustment-container::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+#pixeladjustment .adjustment-container::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in oklab, var(--scrollbar-thumb) 90%, #ffffff 10%);
+}
+#pixeladjustment .adjustment-container::-webkit-scrollbar-track {
+  background-color: var(--scrollbar-track);
+  border-radius: 8px;
+}
+
 /* 分区容器 */
 .adjustment-section {
   width: 100%;
@@ -342,62 +360,62 @@ body.visibility-panel-open #pixeladjustment .unit-container .adjustment-number-i
 }
 
 /* 第二入口（调整面板）的折叠状态隐藏规则 - 确保折叠时数字输入完全隐藏 */
-#pixeladjustment .expand-content:not(.expanded) input[type="number"],
-#pixeladjustment .expand-content:not(.expanded) .adjustment-number-input,
-#pixeladjustment .expand-content:not(.expanded) .unit-container input[type="number"],
-#pixeladjustment .expand-content:not(.expanded) .unit-container .adjustment-number-input {
+#pixeladjustment .adjust-expand-content:not(.expanded) input[type="number"],
+#pixeladjustment .adjust-expand-content:not(.expanded) .adjustment-number-input,
+#pixeladjustment .adjust-expand-content:not(.expanded) .unit-container input[type="number"],
+#pixeladjustment .adjust-expand-content:not(.expanded) .unit-container .adjustment-number-input {
   display: none !important;
   visibility: hidden !important;
   opacity: 0 !important;
   pointer-events: none !important;
 }
-
-/* 第二入口展开状态下的input正常显示 */
-#pixeladjustment .expand-content.expanded input[type="number"],
-#pixeladjustment .expand-content.expanded .adjustment-number-input {
+#pixeladjustment .adjust-expand-content.expanded input[type="number"],
+#pixeladjustment .adjust-expand-content.expanded .adjustment-number-input {
   visibility: visible;
   opacity: 1;
   pointer-events: auto;
   transition: opacity 0.3s ease;
 }
-
-/* 第二入口折叠样式对齐修复 - 覆盖全局样式确保一致对齐 */
-#pixeladjustment .expand-section {
+/* 将expand样式重命名为adjust-expand-，避免与APP面板冲突 */
+#pixeladjustment .adjust-expand-section {
   background-color: var(--bg-color);
   margin-bottom: -1px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
+  z-index: 1;
 }
-
-#pixeladjustment .expand-header {
+#pixeladjustment .adjust-expand-header {
   display: flex;
   align-items: center;
   cursor: pointer;
   font-size: 13px;
-  padding: 10px 12px;
+  padding: 10px 0;
   color: var(--text-color);
   transition: background-color 0.3s;
 }
-
-#pixeladjustment .expand-header:hover {
+#pixeladjustment .adjust-expand-header:hover {
   background-color: var(--hover-bg);
 }
-
-#pixeladjustment .expand-icon {
-  padding-left: 0px;
-  margin-right: 8px;
+#pixeladjustment .adjust-expand-icon {
+  padding-left: 5px;
+  margin-right: 2px;
   display: flex;
   align-items: center;
 }
-
-#pixeladjustment .expand-content {
+#pixeladjustment .adjust-expand-icon svg {
+  transition: transform 0.3s;
+}
+#pixeladjustment .adjust-expand-icon.expanded svg {
+  transform: rotate(0deg);
+}
+#pixeladjustment .adjust-expand-content {
   max-height: 0px;
   overflow: hidden;
   transition: max-height 0.3s ease-out;
 }
-
-#pixeladjustment .expand-content.expanded {
+#pixeladjustment .adjust-expand-content.expanded {
   max-height: 400px;
+}
+#pixeladjustment .adjust-expand-icon path.fill {
+  fill: var(--text-color);
 }
 .adjustment-modal-close {
   background: transparent;

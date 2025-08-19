@@ -355,7 +355,10 @@ const handleLicenseBeforeAction = (): boolean => {
   // 触发一次异步刷新，尽快感知在另一个入口刚完成的授权
   try { checkLicenseStatus(); } catch {}
   if (!isLicensed && !isTrial) {
-    // 第二入口不开启对话框，仅提示用户前往第一入口激活
+    // 第二入口不开启对话框，直接弹出提示
+    try {
+      core.showAlert({ message: '当前未激活，请在选区笔界面完成授权后再使用此功能。' });
+    } catch {}
     console.log('需要在主面板（第一入口）进行授权激活');
     return false;
   }
@@ -1086,20 +1089,20 @@ const renderSectionContent = (sectionId: string) => {
 };
 
 const renderSection = (section: SectionConfig) => (
-  <div key={section.id} className="expand-section"
+  <div key={section.id} className="adjust-expand-section"
        draggable
        onDragStart={(e)=>handleDragStart(e, section.id)}
        onDragOver={handleDragOver}
        onDrop={(e)=>handleDrop(e, section.id)}
   >
-    <div className="expand-header" onClick={()=>toggleSectionCollapse(section.id)} onMouseDown={(e)=>handleSectionSelection(e, section.id)}>
-      <div className={`expand-icon ${section.isCollapsed ? '' : 'expanded'}`}>
+    <div className="adjust-expand-header" onClick={()=>toggleSectionCollapse(section.id)} onMouseDown={(e)=>handleSectionSelection(e, section.id)}>
+      <div className={`adjust-expand-icon ${section.isCollapsed ? '' : 'expanded'}`}>
         <ExpandIcon expanded={!section.isCollapsed} />
       </div>
       <div style={{ flex: 1 }}>{section.title}</div>
       {/* 移除对号标记，避免分区标题右侧出现视觉噪点 */}
     </div>
-    <div className={`expand-content ${section.isCollapsed ? '' : 'expanded'}`}>
+    <div className={`adjust-expand-content ${section.isCollapsed ? '' : 'expanded'}`}>
       {renderSectionContent(section.id)}
     </div>
   </div>

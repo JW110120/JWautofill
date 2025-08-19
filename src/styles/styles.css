@@ -39,8 +39,8 @@ html, body {
   fill: var(--text-color);
 }  
 
-/* 隐藏滚动条 */
-::-webkit-scrollbar {
+/* 隐藏主面板滚动条（限定作用域，不影响调整面板） */
+#app ::-webkit-scrollbar {
   display: none;
 }
 
