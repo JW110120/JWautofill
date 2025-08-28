@@ -1,4 +1,4 @@
-// 分块平均处理算法 - 对独立的选区分别计算平均值
+// 分块平均处理算法 - 对独立的选区分别计算平均值（优化版本）
 export async function processBlockAverage(layerPixelData: ArrayBuffer, selectionData: ArrayBuffer, bounds: { width: number; height: number }, isBackgroundLayer: boolean = false, useWeightedAverage: boolean = false, weightedIntensity: number = 1): Promise<Uint8Array> {
   const layerPixels = new Uint8Array(layerPixelData);
   const selectionPixels = new Uint8Array(selectionData);
@@ -9,210 +9,185 @@ export async function processBlockAverage(layerPixelData: ArrayBuffer, selection
   
   // 选区像素数量
   const pixelCount = layerPixels.length / 4;
+  const { width, height } = bounds;
   
-  // 创建选区内像素的映射（基于选区像素数组的索引）
-  const selectionMask = new Array(pixelCount).fill(false);
-  const selectionCoefficients = new Array(pixelCount).fill(0);
+  // 使用更高效的位掩码和紧凑的数据结构
+  const visitedBits = new Uint32Array(Math.ceil(pixelCount / 32));
+  const selectionCoefficients = new Uint8Array(pixelCount); // 使用 0-255 范围而非浮点数
   
-  // 处理选区数据，建立选区掩码（基于选区像素数组）
+  // 内联函数：检查和设置访问状态（避免函数调用开销）
+  const isVisited = (idx: number) => {
+    const wordIdx = Math.floor(idx / 32);
+    const bitIdx = idx % 32;
+    return (visitedBits[wordIdx] & (1 << bitIdx)) !== 0;
+  };
+  
+  const setVisited = (idx: number) => {
+    const wordIdx = Math.floor(idx / 32);
+    const bitIdx = idx % 32;
+    visitedBits[wordIdx] |= (1 << bitIdx);
+  };
+  
+  // 预处理选区数据（仅一次遍历，避免重复计算）
+  const hasSelection = selectionPixels.length > 0;
+  if (!hasSelection) {
+    return result; // 没有选区直接返回
+  }
+  
   if (selectionPixels.length === pixelCount) {
     // 单通道选区数据
     for (let i = 0; i < pixelCount; i++) {
-      selectionCoefficients[i] = selectionPixels[i] / 255;
-      selectionMask[i] = selectionPixels[i] > 0;
+      selectionCoefficients[i] = selectionPixels[i];
     }
   } else if (selectionPixels.length === pixelCount * 4) {
     // RGBA选区数据，使用alpha通道
     for (let i = 0; i < pixelCount; i++) {
-      const alpha = selectionPixels[i * 4 + 3];
-      selectionCoefficients[i] = alpha / 255;
-      selectionMask[i] = alpha > 0;
+      selectionCoefficients[i] = selectionPixels[i * 4 + 3];
     }
   }
   
-  // 创建访问标记数组
-  const visited = new Array(pixelCount).fill(false);
+  // 基于空间连通性的 flood fill（使用循环和预分配队列减少开销）
+  const queue = new Int32Array(pixelCount);
+  const componentIdxs = new Int32Array(pixelCount);
   
-  // 基于空间连通性的flood fill算法
-  const floodFill = (startIndex: number, component: number[]): void => {
-    const stack: number[] = [startIndex];
+  const floodFill = (startIndex: number): number => {
+    let qHead = 0, qTail = 0;
+    let compSize = 0;
+    queue[qTail++] = startIndex;
+    setVisited(startIndex);
     
-    while (stack.length > 0) {
-      const index = stack.pop()!;
+    while (qHead < qTail) {
+      const index = queue[qHead++];
+      componentIdxs[compSize++] = index;
+      const x = index % width;
+      const y = (index / width) | 0;
       
-      if (index < 0 || index >= pixelCount) continue;
-      if (visited[index] || !selectionMask[index]) continue;
-      
-      visited[index] = true;
-      component.push(index);
-      
-      // 检查4连通的相邻像素
-      const x = index % bounds.width;
-      const y = Math.floor(index / bounds.width);
-      
-      // 右邻居
-      if (x + 1 < bounds.width) {
-        const rightIndex = y * bounds.width + (x + 1);
-        if (rightIndex < pixelCount && !visited[rightIndex] && selectionMask[rightIndex]) {
-          stack.push(rightIndex);
-        }
+      // 右
+      if (x + 1 < width) {
+        const ni = index + 1;
+        if (!isVisited(ni) && selectionCoefficients[ni] > 0) { setVisited(ni); queue[qTail++] = ni; }
       }
-      // 左邻居
+      // 左
       if (x - 1 >= 0) {
-        const leftIndex = y * bounds.width + (x - 1);
-        if (leftIndex < pixelCount && !visited[leftIndex] && selectionMask[leftIndex]) {
-          stack.push(leftIndex);
-        }
+        const ni = index - 1;
+        if (!isVisited(ni) && selectionCoefficients[ni] > 0) { setVisited(ni); queue[qTail++] = ni; }
       }
-      // 下邻居
-      if (y + 1 < bounds.height) {
-        const downIndex = (y + 1) * bounds.width + x;
-        if (downIndex < pixelCount && !visited[downIndex] && selectionMask[downIndex]) {
-          stack.push(downIndex);
-        }
+      // 下
+      if (y + 1 < height) {
+        const ni = index + width;
+        if (!isVisited(ni) && selectionCoefficients[ni] > 0) { setVisited(ni); queue[qTail++] = ni; }
       }
-      // 上邻居
+      // 上
       if (y - 1 >= 0) {
-        const upIndex = (y - 1) * bounds.width + x;
-        if (upIndex < pixelCount && !visited[upIndex] && selectionMask[upIndex]) {
-          stack.push(upIndex);
-        }
+        const ni = index - width;
+        if (!isVisited(ni) && selectionCoefficients[ni] > 0) { setVisited(ni); queue[qTail++] = ni; }
       }
     }
+    return compSize;
   };
   
-  // 查找所有独立的连通区域
+  // 查找所有独立的连通区域（优化版本）
   let regionCount = 0;
   for (let index = 0; index < pixelCount; index++) {
-    if (!visited[index] && selectionMask[index]) {
-      const component: number[] = [];
-      floodFill(index, component);
+    if (!isVisited(index) && selectionCoefficients[index] > 0) {
+      const compSize = floodFill(index);
       
-      if (component.length > 0) {
+      if (compSize > 0) {
         regionCount++;
         
         if (useWeightedAverage) {
-          // 基于颜色频率的加权平均算法
-          const colorTolerance = 30; // 颜色容差，用于颜色聚类
+          // 简化的加权算法：使用近似颜色聚类（减少计算）
+          const colorTolerance = 900; // 使用平方距离避免sqrt
           
-          // 颜色聚类：将相似颜色归为一类
-          const colorClusters: Array<{
-            r: number;
-            g: number;
-            b: number;
-            a: number;
-            count: number;
-            pixels: number[];
-          }> = [];
+          // 简化聚类：最多16个颜色簇，减少内存分配
+          const maxClusters = 16;
+          const clusterR = new Uint8Array(maxClusters);
+          const clusterG = new Uint8Array(maxClusters);
+          const clusterB = new Uint8Array(maxClusters);
+          const clusterA = new Uint8Array(maxClusters);
+          const clusterCount = new Uint16Array(maxClusters);
+          let numClusters = 0;
           
-          // 对区域内每个像素进行颜色聚类（排除alpha=0的像素）
-          for (const idx of component) {
-            const pIdx = idx * 4;
-            const pixelR = layerPixels[pIdx];
-            const pixelG = layerPixels[pIdx + 1];
-            const pixelB = layerPixels[pIdx + 2];
-            const pixelA = layerPixels[pIdx + 3];
+          // 快速聚类（避免对象分配）
+          for (let ci = 0; ci < compSize; ci++) {
+            const idx = componentIdxs[ci];
+            const pIdx = idx << 2; // * 4
+            const r = layerPixels[pIdx];
+            const g = layerPixels[pIdx + 1];
+            const b = layerPixels[pIdx + 2];
+            const a = layerPixels[pIdx + 3];
             
-            // 跳过alpha=0的像素，不参与颜色聚类
-            if (pixelA === 0) continue;
+            if (a === 0) continue;
             
-            // 查找是否存在相似的颜色簇
-            let foundCluster = false;
-            for (const cluster of colorClusters) {
-              const colorDistance = Math.sqrt(
-                Math.pow(pixelR - cluster.r, 2) +
-                Math.pow(pixelG - cluster.g, 2) +
-                Math.pow(pixelB - cluster.b, 2) +
-                Math.pow(pixelA - cluster.a, 2)
-              );
-              
-              if (colorDistance <= colorTolerance) {
-                // 更新簇的平均颜色（增量更新）
-                const totalCount = cluster.count + 1;
-                cluster.r = Math.round((cluster.r * cluster.count + pixelR) / totalCount);
-                cluster.g = Math.round((cluster.g * cluster.count + pixelG) / totalCount);
-                cluster.b = Math.round((cluster.b * cluster.count + pixelB) / totalCount);
-                cluster.a = Math.round((cluster.a * cluster.count + pixelA) / totalCount);
-                cluster.count = totalCount;
-                cluster.pixels.push(idx);
-                foundCluster = true;
+            let clusterFound = false;
+            for (let c = 0; c < numClusters; c++) {
+              const dr = r - clusterR[c];
+              const dg = g - clusterG[c];
+              const db = b - clusterB[c];
+              const da = a - clusterA[c];
+              if (dr*dr + dg*dg + db*db + da*da <= colorTolerance) {
+                const newCount = clusterCount[c] + 1;
+                clusterR[c] = ((clusterR[c] * clusterCount[c] + r) / newCount) | 0;
+                clusterG[c] = ((clusterG[c] * clusterCount[c] + g) / newCount) | 0;
+                clusterB[c] = ((clusterB[c] * clusterCount[c] + b) / newCount) | 0;
+                clusterA[c] = ((clusterA[c] * clusterCount[c] + a) / newCount) | 0;
+                clusterCount[c] = newCount;
+                clusterFound = true;
                 break;
               }
             }
             
-            // 如果没有找到相似颜色簇，创建新的簇
-            if (!foundCluster) {
-              colorClusters.push({
-                r: pixelR,
-                g: pixelG,
-                b: pixelB,
-                a: pixelA,
-                count: 1,
-                pixels: [idx]
-              });
+            if (!clusterFound && numClusters < maxClusters) {
+              clusterR[numClusters] = r;
+              clusterG[numClusters] = g;
+              clusterB[numClusters] = b;
+              clusterA[numClusters] = a;
+              clusterCount[numClusters] = 1;
+              numClusters++;
             }
           }
           
-          // 按颜色频率计算加权平均
-          let weightedR = 0, weightedG = 0, weightedB = 0, weightedA = 0;
-          let totalWeight = 0;
-          
-          for (const cluster of colorClusters) {
-            const weight = cluster.count; // 颜色出现次数作为权重
-            weightedR += cluster.r * weight;
-            weightedG += cluster.g * weight;
-            weightedB += cluster.b * weight;
-            weightedA += cluster.a * weight;
+          // 计算加权平均
+          let weightedR = 0, weightedG = 0, weightedB = 0, weightedA = 0, totalWeight = 0;
+          for (let c = 0; c < numClusters; c++) {
+            const weight = clusterCount[c];
+            weightedR += clusterR[c] * weight;
+            weightedG += clusterG[c] * weight;
+            weightedB += clusterB[c] * weight;
+            weightedA += clusterA[c] * weight;
             totalWeight += weight;
-            
           }
           
-          const avgR = totalWeight > 0 ? Math.round(weightedR / totalWeight) : 0;
-          const avgG = totalWeight > 0 ? Math.round(weightedG / totalWeight) : 0;
-          const avgB = totalWeight > 0 ? Math.round(weightedB / totalWeight) : 0;
-          const avgA = totalWeight > 0 ? Math.round(weightedA / totalWeight) : 0;
-          
-          
-          // 应用弱化对比的混合算法
-          for (const idx of component) {
-            const pIdx = idx * 4;
-            const coefficient = selectionCoefficients[idx];
+          if (totalWeight > 0) {
+            const avgR = (weightedR / totalWeight) | 0;
+            const avgG = (weightedG / totalWeight) | 0;
+            const avgB = (weightedB / totalWeight) | 0;
+            const avgA = (weightedA / totalWeight) | 0;
+            const intensityFactor = weightedIntensity * 0.1; // /10
             
-            // 跳过alpha=0的像素，不进行修改
-            if (layerPixels[pIdx + 3] === 0) continue;
-            
-            // 找到该像素所属的颜色簇
-            let pixelCluster = null;
-            for (const cluster of colorClusters) {
-              if (cluster.pixels.includes(idx)) {
-                pixelCluster = cluster;
-                break;
-              }
-            }
-            
-            if (pixelCluster) {
-              // 根据颜色频率计算弱化系数：频率越低，弱化效果越强
-              const frequencyRatio = pixelCluster.count / component.length;
-              const softenFactor = 0.2 + (1 - frequencyRatio) * 0.6; // 0.2-0.8的弱化范围
+            // 应用混合
+            for (let ci = 0; ci < compSize; ci++) {
+              const idx = componentIdxs[ci];
+              const pIdx = idx << 2;
+              if (layerPixels[pIdx + 3] === 0) continue;
               
-              // 混合原始像素和加权平均，产生弱化对比的效果
-              // weightedIntensity: 1=保留更多原图像素, 10=保留更多加权平均
-              const intensityFactor = weightedIntensity / 10; // 将1-10映射到0-1
-              const blendFactor = coefficient * softenFactor * intensityFactor;
-              result[pIdx] = Math.round(layerPixels[pIdx] * (1 - blendFactor) + avgR * blendFactor);
-              result[pIdx + 1] = Math.round(layerPixels[pIdx + 1] * (1 - blendFactor) + avgG * blendFactor);
-              result[pIdx + 2] = Math.round(layerPixels[pIdx + 2] * (1 - blendFactor) + avgB * blendFactor);
-              result[pIdx + 3] = Math.round(layerPixels[pIdx + 3] * (1 - blendFactor) + avgA * blendFactor);
+              const coeff = selectionCoefficients[idx] * 0.00392156863; // /255
+              const blendFactor = coeff * intensityFactor;
+              const invBlend = 1 - blendFactor;
+              
+              result[pIdx] = (layerPixels[pIdx] * invBlend + avgR * blendFactor) | 0;
+              result[pIdx + 1] = (layerPixels[pIdx + 1] * invBlend + avgG * blendFactor) | 0;
+              result[pIdx + 2] = (layerPixels[pIdx + 2] * invBlend + avgB * blendFactor) | 0;
+              result[pIdx + 3] = (layerPixels[pIdx + 3] * invBlend + avgA * blendFactor) | 0;
             }
           }
         } else {
-          // 原始算法 - 计算简单平均颜色（排除alpha=0的像素）
-          let totalR = 0, totalG = 0, totalB = 0, totalA = 0;
-          let validPixelCount = 0;
+          // 简单平均算法（优化版）
+          let totalR = 0, totalG = 0, totalB = 0, totalA = 0, validPixelCount = 0;
           
-          for (const idx of component) {
-            const pIdx = idx * 4;
-            // 跳过alpha=0的像素，不参与平均值计算
+          for (let ci = 0; ci < compSize; ci++) {
+            const idx = componentIdxs[ci];
+            const pIdx = idx << 2;
             if (layerPixels[pIdx + 3] === 0) continue;
             
             totalR += layerPixels[pIdx];
@@ -222,35 +197,32 @@ export async function processBlockAverage(layerPixelData: ArrayBuffer, selection
             validPixelCount++;
           }
           
-          // 如果没有有效像素（全部alpha=0），则跳过该区域
           if (validPixelCount === 0) continue;
           
-          const avgR = Math.round(totalR / validPixelCount);
-          const avgG = Math.round(totalG / validPixelCount);
-          const avgB = Math.round(totalB / validPixelCount);
-          const avgA = Math.round(totalA / validPixelCount);
+          const avgR = (totalR / validPixelCount) | 0;
+          const avgG = (totalG / validPixelCount) | 0;
+          const avgB = (totalB / validPixelCount) | 0;
+          const avgA = (totalA / validPixelCount) | 0;
           
-          
-          // 将该区域的平均颜色应用到区域内的所有像素
-          for (const idx of component) {
-            const pIdx = idx * 4;
-            const coefficient = selectionCoefficients[idx];
-            
-            // 跳过alpha=0的像素，不进行修改
+          // 应用混合
+          for (let ci = 0; ci < compSize; ci++) {
+            const idx = componentIdxs[ci];
+            const pIdx = idx << 2;
             if (layerPixels[pIdx + 3] === 0) continue;
             
-            // 根据选区系数混合原始颜色和区域平均颜色
-            result[pIdx] = Math.round(layerPixels[pIdx] * (1 - coefficient) + avgR * coefficient);
-            result[pIdx + 1] = Math.round(layerPixels[pIdx + 1] * (1 - coefficient) + avgG * coefficient);
-            result[pIdx + 2] = Math.round(layerPixels[pIdx + 2] * (1 - coefficient) + avgB * coefficient);
-            result[pIdx + 3] = Math.round(layerPixels[pIdx + 3] * (1 - coefficient) + avgA * coefficient);
+            const coeff = selectionCoefficients[idx] * 0.00392156863; // /255
+            const invCoeff = 1 - coeff;
+            
+            result[pIdx] = (layerPixels[pIdx] * invCoeff + avgR * coeff) | 0;
+            result[pIdx + 1] = (layerPixels[pIdx + 1] * invCoeff + avgG * coeff) | 0;
+            result[pIdx + 2] = (layerPixels[pIdx + 2] * invCoeff + avgB * coeff) | 0;
+            result[pIdx + 3] = (layerPixels[pIdx + 3] * invCoeff + avgA * coeff) | 0;
           }
         }
       }
     }
   }
   
-  console.log(`总共找到 ${regionCount} 个独立矩形区域`);
-  
+  // console.log(`总共找到 ${regionCount} 个独立矩形区域`);
   return result;
 }

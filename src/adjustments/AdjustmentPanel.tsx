@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { processBlockAverage } from './blockAverageProcessor';
 import { processPixelTransition } from './pixelTransitionProcessor';
 import { processLineEnhancement } from './lineProcessing';
@@ -217,6 +217,9 @@ const defaultSubFeatures: SubFeature[] = [
 ];
 
 const AdjustmentPanel: React.FC = () => {
+// DOM引用，用于绑定键盘事件
+const rootRef = useRef<HTMLDivElement>(null);
+
 // 许可证状态管理
 const [isLicensed, setIsLicensed] = useState(false);
 const [isTrial, setIsTrial] = useState(false);
@@ -305,6 +308,38 @@ useEffect(() => {
   }
   return () => document.body.classList.remove('visibility-panel-open');
 }, [showVisibilityPanel]);
+
+// 拦截 Enter 键，避免触发 Photoshop 的“重复上一操作”
+useEffect(() => {
+  const el = rootRef.current ?? document.getElementById('pixeladjustment');
+  if (!el) return;
+
+  const onKeyDown = (e: KeyboardEvent) => {
+    const key = e.key;
+    if (key === 'Enter') {
+      // 在本面板内始终阻止 Enter 的默认行为和冒泡
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  };
+
+  el.addEventListener('keydown', onKeyDown, { capture: true } as any);
+  // 保险起见，监听 document 但仅当事件目标在本面板内部时才阻止
+  const onDocKeyDown = (e: KeyboardEvent) => {
+    const container = rootRef.current ?? document.getElementById('pixeladjustment');
+    if (!container) return;
+    if (e.key === 'Enter' && container.contains(e.target as Node)) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  };
+  document.addEventListener('keydown', onDocKeyDown, { capture: true } as any);
+
+  return () => {
+    el.removeEventListener('keydown', onKeyDown, { capture: true } as any);
+    document.removeEventListener('keydown', onDocKeyDown, { capture: true } as any);
+  };
+}, []);
 const checkLicenseStatus = async () => {
   try {
     // 与 app.tsx 保持一致：使用静态方法
@@ -969,7 +1004,7 @@ const renderSection = (section: SectionConfig) => (
 );
 
 return (
-  <div className="adjustment-container">
+  <div className="adjustment-container" ref={rootRef}>
     {/* 试用状态提示 - 仅在试用中或试用结束时显示 */}
     {(isTrial || (!isLicensed && !isTrial && trialDaysRemaining === 0)) && (
       <div className={`license-status-banner ${isTrial ? 'is-trial' : 'is-expired'}`}>

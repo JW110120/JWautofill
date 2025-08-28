@@ -3,6 +3,7 @@ import { Gradient, GradientStop } from '../types/state';
 import { AddIcon, DeleteIcon } from '../styles/Icons';
 import { app, action, core } from 'photoshop';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
+import { PresetManager } from '../utils/PresetManager';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -195,6 +196,32 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         { color: 'rgba(0, 0, 0, 1)', position: 0, colorPosition: 0, opacityPosition: 0, midpoint: 50 },
         { color: 'rgba(255, 255, 255, 1)', position: 100, colorPosition: 100, opacityPosition: 100, midpoint: 50 }
     ]);
+
+    // 面板打开时加载已保存的渐变预设
+    useEffect(() => {
+        if (!isOpen) return;
+        (async () => {
+            try {
+                const saved = await PresetManager.loadGradientPresets();
+                if (Array.isArray(saved) && saved.length > 0) {
+                    setPresets(saved);
+                }
+            } catch (err) {
+                console.error('加载渐变预设失败:', err);
+            }
+        })();
+    }, [isOpen]);
+
+    // 当渐变预设变更时，持久化保存
+    useEffect(() => {
+        (async () => {
+            try {
+                await PresetManager.saveGradientPresets(presets);
+            } catch (err) {
+                console.error('保存渐变预设失败:', err);
+            }
+        })();
+    }, [presets]);
 
     // 分离的拖拽状态
     const [isDraggingColor, setIsDraggingColor] = useState(false);

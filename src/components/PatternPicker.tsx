@@ -3,6 +3,7 @@ import { Pattern } from '../types/state';
 import { FileIcon, DeleteIcon } from '../styles/Icons';
 import { action, core, imaging, app } from 'photoshop';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
+import { PresetManager } from '../utils/PresetManager';
 
 interface PatternPickerProps {
     isOpen: boolean;
@@ -99,6 +100,32 @@ interface PatternPickerProps {
             return () => clearTimeout(debounceTimeoutId);
         }
     }, [selectedPattern, angle, scale, fillMode, rotateAll, preserveTransparency, patterns, selectedPatterns.size]);
+
+    // 面板打开时加载已保存的图案预设
+    useEffect(() => {
+        if (!isOpen) return;
+        (async () => {
+            try {
+                const savedPatterns = await PresetManager.loadPatternPresets();
+                if (Array.isArray(savedPatterns) && savedPatterns.length > 0) {
+                    setPatterns(savedPatterns);
+                }
+            } catch (err) {
+                console.error('加载图案预设失败:', err);
+            }
+        })();
+    }, [isOpen]);
+
+    // 当图案预设变更时，持久化保存（仅保存可序列化字段）
+    useEffect(() => {
+        (async () => {
+            try {
+                await PresetManager.savePatternPresets(patterns);
+            } catch (err) {
+                console.error('保存图案预设失败:', err);
+            }
+        })();
+    }, [patterns]);
 
     //-------------------------------------------------------------------------------------------------
     // 新增滑块拖动事件处理

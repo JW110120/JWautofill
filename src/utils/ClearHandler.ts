@@ -89,22 +89,11 @@ export class ClearHandler {
                 false // 非快速蒙版模式
             );
             
-            // 将抖动后的颜色转换为RGB
-            const rgb = hsbToRgb(
-                randomColorResult.hsb.hue,
-                randomColorResult.hsb.saturation,
-                randomColorResult.hsb.brightness
-            );
-            
-            // 转换为灰度值
-            const grayValue = rgbToGray(rgb.red, rgb.green, rgb.blue);
-            
-            // 计算特殊的不透明度值：(主面板不透明度) * (灰度值/255)
-            const finalOpacity = Math.round(randomColorResult.opacity * (grayValue / 255));
+            // 只使用面板不透明度，不考虑前景色灰度
+            const finalOpacity = Math.round(randomColorResult.opacity);
             
             console.log('🔢 颜色计算结果:', {
                 originalOpacity: randomColorResult.opacity,
-                grayValue: grayValue,
                 finalOpacity: finalOpacity,
             });
             
