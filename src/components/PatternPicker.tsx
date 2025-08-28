@@ -127,6 +127,38 @@ interface PatternPickerProps {
         })();
     }, [patterns]);
 
+    // 组件卸载时强制保存预设，确保数据不丢失
+    useEffect(() => {
+        return () => {
+            // 组件卸载时的清理函数
+            if (patterns.length > 0) {
+                console.log('🚨 PatternPicker: 组件卸载，强制保存预设');
+                // 使用同步方式尝试保存，虽然可能不完全可靠，但比不保存好
+                PresetManager.savePatternPresets(patterns).catch(error => {
+                    console.error('❌ PatternPicker: 组件卸载时保存失败:', error);
+                });
+            }
+        };
+    }, [patterns]);
+
+    // 定期自动保存预设（每30秒）
+    useEffect(() => {
+        if (!isOpen || patterns.length === 0) return;
+        
+        const autoSaveInterval = setInterval(async () => {
+            try {
+                console.log('🔄 PatternPicker: 定期自动保存预设');
+                await PresetManager.savePatternPresets(patterns);
+            } catch (error) {
+                console.error('❌ PatternPicker: 定期保存失败:', error);
+            }
+        }, 30000); // 30秒间隔
+        
+        return () => {
+            clearInterval(autoSaveInterval);
+        };
+    }, [isOpen, patterns]);
+
     //-------------------------------------------------------------------------------------------------
     // 新增滑块拖动事件处理
     const handleMouseDown = (event: React.MouseEvent, target: 'angle' | 'scale') => {

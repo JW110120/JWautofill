@@ -181,7 +181,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     onSelect,
     isClearMode = false
 }) => {
-    const [presets, setPresets] = useState<Gradient[]>([]);
+    const [presets, setPresets] = useState<(Gradient & { id?: string; name?: string; preview?: string })[]>([]);
     const [selectedPreset, setSelectedPreset] = useState<number | null>(null);
     const [selectedPresets, setSelectedPresets] = useState<Set<number>>(new Set());
     const [lastClickedPreset, setLastClickedPreset] = useState<number | null>(null);
@@ -222,6 +222,38 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             }
         })();
     }, [presets]);
+
+    // 组件卸载时强制保存预设，确保数据不丢失
+    useEffect(() => {
+        return () => {
+            // 组件卸载时的清理函数
+            if (presets.length > 0) {
+                console.log('🚨 GradientPicker: 组件卸载，强制保存预设');
+                // 使用同步方式尝试保存，虽然可能不完全可靠，但比不保存好
+                PresetManager.saveGradientPresets(presets).catch(error => {
+                    console.error('❌ GradientPicker: 组件卸载时保存失败:', error);
+                });
+            }
+        };
+    }, [presets]);
+
+    // 定期自动保存预设（每30秒）
+    useEffect(() => {
+        if (!isOpen || presets.length === 0) return;
+        
+        const autoSaveInterval = setInterval(async () => {
+            try {
+                console.log('🔄 GradientPicker: 定期自动保存预设');
+                await PresetManager.saveGradientPresets(presets);
+            } catch (error) {
+                console.error('❌ GradientPicker: 定期保存失败:', error);
+            }
+        }, 30000); // 30秒间隔
+        
+        return () => {
+            clearInterval(autoSaveInterval);
+        };
+    }, [isOpen, presets]);
 
     // 分离的拖拽状态
     const [isDraggingColor, setIsDraggingColor] = useState(false);
@@ -300,7 +332,12 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         if (selectedPreset !== null && selectedPreset < presets.length) {
             // 更新选中预设的数据
             const updatedPresets = [...presets];
+            const currentPreset = presets[selectedPreset] as any;
             const updatedPreset = {
+                // 保留原有的id、name和preview字段
+                id: currentPreset?.id || `gradient_${Date.now()}_${selectedPreset}`,
+                name: currentPreset?.name || `渐变预设 ${selectedPreset + 1}`,
+                preview: currentPreset?.preview || '',
                 type: gradientType,
                 angle,
                 reverse,
@@ -327,10 +364,14 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     }, [gradientType, angle, reverse, stops, preserveTransparency, selectedPreset]);
 
     const handleAddPreset = () => {
-        const newPreset: Gradient = {
+        const newPreset: Gradient & { id: string; name: string; preview?: string } = {
+            id: `gradient_${Date.now()}_${presets.length}`,
+            name: `渐变预设 ${presets.length + 1}`,
+            preview: '', // 可以在此添加预览图标识
             type: gradientType,
             angle,
             reverse,
+            preserveTransparency,
             stops: stops.map(stop => ({
                 color: stop.color,
                 position: stop.position,

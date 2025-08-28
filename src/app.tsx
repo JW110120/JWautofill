@@ -23,6 +23,7 @@ import { SingleChannelHandler } from './utils/SingleChannelHandler';
 import { SelectionHandler, SelectionOptions } from './utils/SelectionHandler';
 import { ColorSettings, Pattern } from './types/state';
 import { MenuManager } from './utils/MenuManager';
+import { PresetManager } from './utils/PresetManager';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -83,6 +84,21 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     async componentDidMount() {
+        // 测试文件系统访问权限
+        console.log('🔍 开始测试文件系统访问权限...');
+        try {
+            const hasFileAccess = await PresetManager.testFileSystemAccess();
+            if (!hasFileAccess) {
+                console.error('❌ 文件系统访问权限测试失败，预设功能可能无法正常工作');
+            } else {
+                // 如果文件系统访问正常，进一步测试预设保存功能
+                console.log('🧪 文件系统访问正常，开始测试预设保存功能...');
+                await PresetManager.testPresetSaving();
+            }
+        } catch (error) {
+            console.error('❌ 文件系统访问权限测试异常:', error);
+        }
+        
         // 注册主面板菜单回调
         MenuManager.registerAppCallbacks({
             onOpenLicenseDialog: this.openLicenseDialog,
@@ -168,7 +184,15 @@ class App extends React.Component<AppProps, AppState> {
         }
     }
 
-    componentWillUnmount() {
+    async componentWillUnmount() {
+        // 在应用关闭前强制保存所有预设
+        try {
+            await PresetManager.forceSaveAllPresets();
+            console.log('✅ 应用关闭前预设保存完成');
+        } catch (error) {
+            console.error('❌ 应用关闭前预设保存失败:', error);
+        }
+        
         if (this.selectionChangeListener) {
             action.removeNotificationListener(['set'], this.selectionChangeListener);
         }
