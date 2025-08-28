@@ -43,7 +43,7 @@ export class ClearHandler {
             // 像素图层的清除逻辑
             if (state && state.fillMode === 'foreground') {
                 // 情况1：清除模式，删除纯色
-                await this.clearSolidColor(opacity, state);
+                await this.clearSolidColor(opacity, state, layerInfo);
             } else if (state && state.fillMode === 'pattern') {
                 if (state.selectedPattern) {
                     // 情况2：清除模式，删除图案
@@ -71,10 +71,53 @@ export class ClearHandler {
 
     //-------------------------------------------------------------------------------------------------
     // 情况1：清除模式，像素图层，删除纯色√
-    static async clearSolidColor(opacity: number, state: any) {
+    static async clearSolidColor(opacity: number, state: any, layerInfo?: any) {
         try {
             console.log('🎨 执行纯色清除模式');
             
+            // 背景图层特殊处理：使用色阶调整实现白色填充效果，避免弹出对话框
+            if (layerInfo && layerInfo.isBackground) {
+                console.log('🎯 检测到背景图层，使用色阶调整');
+                
+                // 根据不透明度计算色阶输出值：X = opacity/100 * 255
+                const outputValue = Math.round((opacity / 100) * 255);
+                
+                console.log('🎛️ 色阶参数:', {
+                    opacity: opacity,
+                    outputValue: outputValue
+                });
+                
+                // 使用色阶调整实现白色填充效果
+                await action.batchPlay([{
+                    _obj: "levels",
+                    presetKind: {
+                        _enum: "presetKindType",
+                        _value: "presetKindCustom"
+                    },
+                    adjustment: [
+                        {
+                            _obj: "levelsAdjustment",
+                            channel: {
+                                _ref: "channel",
+                                _enum: "channel",
+                                _value: "composite"
+                            },
+                            output: [
+                                outputValue,
+                                255
+                            ]
+                        }
+                    ],
+                    _isCommand: false,
+                    _options: {
+                        dialogOptions: "dontDisplay"
+                    }
+                }], { synchronousExecution: true });
+                
+                return;
+            }
+            
+            // 非背景图层的原有逻辑
             // 计算抖动后的颜色
             const randomColorResult = calculateRandomColor(
                 {

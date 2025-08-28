@@ -111,7 +111,8 @@
         "allowCodeGenerationFromStrings": true,
         "launchProcess": {
         "schemes": ["http", "https"]
-        }
+        },
+        "localFileSystem": "fullAccess"
     },
     "build": {
         "cssResources": ["styles.css"],
