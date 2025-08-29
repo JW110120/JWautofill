@@ -62,7 +62,10 @@ module.exports = (env, argv) => {
                 { from: "./src/assets/icons", to: "./icons" },
                 { from: "./src/assets/SourceHanSansCN-Normal.otf", to: "." },
                 { from: "./src/styles/styles.css", to: "." },
-                { from: "./README.md", to: "." }
+                { from: "./README.md", to: "." },
+                // 默认预设 JSON（拷贝到插件根目录，供运行时回退读取）
+                { from: "./src/assets/presets/pattern-presets.json", to: "." },
+                { from: "./src/assets/presets/gradient-presets.json", to: "." }
             ]
         }),
     ]);

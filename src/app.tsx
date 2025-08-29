@@ -84,16 +84,16 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     async componentDidMount() {
-        // 测试文件系统访问权限
+        // 测试文件系统访问权限（禁用自动写入测试以避免干扰首次加载）
         console.log('🔍 开始测试文件系统访问权限...');
         try {
             const hasFileAccess = await PresetManager.testFileSystemAccess();
             if (!hasFileAccess) {
                 console.error('❌ 文件系统访问权限测试失败，预设功能可能无法正常工作');
             } else {
-                // 如果文件系统访问正常，进一步测试预设保存功能
-                console.log('🧪 文件系统访问正常，开始测试预设保存功能...');
-                await PresetManager.testPresetSaving();
+                // 🚫 暂时禁用：避免在启动阶段对预设文件进行写入测试，干扰加载顺序
+                // console.log('🧪 文件系统访问正常，开始测试预设保存功能...');
+                // await PresetManager.testPresetSaving();
             }
         } catch (error) {
             console.error('❌ 文件系统访问权限测试异常:', error);

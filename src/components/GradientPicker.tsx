@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Gradient, GradientStop } from '../types/state';
 import { AddIcon, DeleteIcon } from '../styles/Icons';
 import { app, action, core } from 'photoshop';
@@ -196,10 +196,15 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         { color: 'rgba(0, 0, 0, 1)', position: 0, colorPosition: 0, opacityPosition: 0, midpoint: 50 },
         { color: 'rgba(255, 255, 255, 1)', position: 100, colorPosition: 100, opacityPosition: 100, midpoint: 50 }
     ]);
+    // 保存控制：加载中标志/防抖定时器/脏标记
+    const isLoadingRef = useRef(false);
+    const saveTimerRef = useRef<any>(null);
+    const dirtyRef = useRef(false);
 
-    // 面板打开时加载已保存的渐变预设
+    // 面板打开时加载已保存的渐变预设（加载期间禁止保存）
     useEffect(() => {
         if (!isOpen) return;
+        isLoadingRef.current = true;
         (async () => {
             try {
                 const saved = await PresetManager.loadGradientPresets();
@@ -208,28 +213,45 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 }
             } catch (err) {
                 console.error('加载渐变预设失败:', err);
+            } finally {
+                // 延迟到下一tick再允许保存，避免因setPresets触发的保存
+                setTimeout(() => { isLoadingRef.current = false; }, 0);
             }
         })();
     }, [isOpen]);
 
-    // 当渐变预设变更时，持久化保存
+    // 当渐变预设变更时，防抖持久化保存（跳过初次加载期间）
     useEffect(() => {
-        (async () => {
+        if (isLoadingRef.current) return;
+        dirtyRef.current = true;
+        if (saveTimerRef.current) {
+            clearTimeout(saveTimerRef.current);
+        }
+        saveTimerRef.current = setTimeout(async () => {
             try {
                 await PresetManager.saveGradientPresets(presets);
+                dirtyRef.current = false;
             } catch (err) {
                 console.error('保存渐变预设失败:', err);
             }
-        })();
+        }, 500);
+        return () => {
+            if (saveTimerRef.current) {
+                clearTimeout(saveTimerRef.current);
+                saveTimerRef.current = null;
+            }
+        };
     }, [presets]);
 
-    // 组件卸载时强制保存预设，确保数据不丢失
+    // 组件卸载时清理定时器并在有脏数据时保存
     useEffect(() => {
         return () => {
-            // 组件卸载时的清理函数
-            if (presets.length > 0) {
-                console.log('🚨 GradientPicker: 组件卸载，强制保存预设');
-                // 使用同步方式尝试保存，虽然可能不完全可靠，但比不保存好
+            if (saveTimerRef.current) {
+                clearTimeout(saveTimerRef.current);
+                saveTimerRef.current = null;
+            }
+            if (presets.length > 0 && dirtyRef.current) {
+                console.log('🚨 GradientPicker: 组件卸载，保存未落盘的预设');
                 PresetManager.saveGradientPresets(presets).catch(error => {
                     console.error('❌ GradientPicker: 组件卸载时保存失败:', error);
                 });
@@ -237,22 +259,35 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         };
     }, [presets]);
 
-    // 定期自动保存预设（每30秒）
+    // 定期自动保存预设（每30秒，仅在有脏数据时）
     useEffect(() => {
         if (!isOpen || presets.length === 0) return;
-        
         const autoSaveInterval = setInterval(async () => {
             try {
-                console.log('🔄 GradientPicker: 定期自动保存预设');
-                await PresetManager.saveGradientPresets(presets);
+                if (dirtyRef.current) {
+                    console.log('🔄 GradientPicker: 定期自动保存预设');
+                    await PresetManager.saveGradientPresets(presets);
+                    dirtyRef.current = false;
+                }
             } catch (error) {
                 console.error('❌ GradientPicker: 定期保存失败:', error);
             }
-        }, 30000); // 30秒间隔
-        
-        return () => {
-            clearInterval(autoSaveInterval);
-        };
+        }, 30000);
+        return () => { clearInterval(autoSaveInterval); };
+    }, [isOpen, presets]);
+
+    // 面板关闭时（isOpen变为false）立即尝试落盘
+    useEffect(() => {
+        if (!isOpen && presets.length > 0 && dirtyRef.current) {
+            (async () => {
+                try {
+                    await PresetManager.saveGradientPresets(presets);
+                    dirtyRef.current = false;
+                } catch (err) {
+                    console.error('关闭面板时保存渐变预设失败:', err);
+                }
+            })();
+        }
     }, [isOpen, presets]);
 
     // 分离的拖拽状态

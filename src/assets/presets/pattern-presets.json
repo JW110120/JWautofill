@@ -1,0 +1,18 @@
+[
+  {
+    "id": "pattern_default_white",
+    "name": "白色纯色",
+    "preview": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFElEQVQYV2P8//8/AzbAOKpgVAEAALQCAgJk8A2cAAAAAElFTkSuQmCC",
+    "angle": 0,
+    "scale": 100,
+    "preserveTransparency": false,
+    "fillMode": "stamp",
+    "rotateAll": true,
+    "width": 2,
+    "height": 2,
+    "originalWidth": 2,
+    "originalHeight": 2,
+    "hasAlpha": false,
+    "grayDataBase64": "/////w=="
+  }
+]

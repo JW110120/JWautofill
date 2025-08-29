@@ -6,6 +6,10 @@ import { Pattern, Gradient } from '../types/state';
 export class PresetManager {
     private static readonly PATTERN_PRESETS_FILE = 'pattern-presets.json';
     private static readonly GRADIENT_PRESETS_FILE = 'gradient-presets.json';
+    // 用于串行化渐变保存，避免并发写入导致竞争
+    private static gradientSavePromise: Promise<void> | null = null;
+    // 记录上次成功保存的渐变JSON，用于避免不必要的重复写入
+    private static lastGradientJson: string | null = null;
 
     /**
      * 获取预设保存文件夹（使用UXP数据文件夹）
@@ -301,6 +305,11 @@ export class PresetManager {
             console.warn('⚠️ 图案预设数据无效，跳过保存');
             return;
         }
+        // 避免将空数组写入文件导致下次启动回退到默认预设
+        if (patterns.length === 0) {
+            console.warn('⚠️ 图案预设为空，跳过保存以避免覆盖默认预设');
+            return;
+        }
 
         let retryCount = 0;
         const maxRetries = 3;
@@ -413,11 +422,11 @@ export class PresetManager {
                         // 删除旧备份（如果存在）
                         try {
                             const oldBackup = await presetFolder.getEntry(backupFileName);
-                            await oldBackup.delete();
+                            await (oldBackup as any).delete();
                         } catch (e) { /* 忽略备份文件不存在的错误 */ }
                         
                         // 创建备份
-                        await existingFile.moveTo(presetFolder, backupFileName);
+                        await (existingFile as any).moveTo(presetFolder, backupFileName);
                         console.log('✅ 现有文件已备份');
                     }
                 } catch (e) {
@@ -426,12 +435,33 @@ export class PresetManager {
                 
                 // 重命名临时文件为正式文件
                 console.log('🔄 重命名临时文件为正式文件:', finalFileName);
-                await tempFile.moveTo(presetFolder, finalFileName);
-                console.log('✅ 文件重命名成功');
+                try {
+                    await tempFile.moveTo(presetFolder, finalFileName);
+                    console.log('✅ 文件重命名成功');
+                } catch (moveErr) {
+                    console.error('❌ 重命名失败，尝试直接写入最终文件覆盖:', moveErr);
+                    try {
+                        const finalFile = await presetFolder.createFile(finalFileName, { overwrite: true });
+                        await finalFile.write(jsonData);
+                        console.log('✅ 回退写入最终文件成功');
+                    } catch (fallbackErr) {
+                        console.error('❌ 回退直接写入最终文件失败:', fallbackErr);
+                        throw fallbackErr; // 让外层重试
+                    }
+                }
+                
+                // 清理遗留的临时文件（容错）
+                try {
+                    const leftoverTmp = await presetFolder.getEntry(tempFileName);
+                    if (leftoverTmp) {
+                        await (leftoverTmp as any).delete();
+                        console.log('🧹 已清理遗留的临时文件');
+                    }
+                } catch (_) { /* 无需处理 */ }
                 
                 // 验证最终文件是否存在
                 const finalFile = await presetFolder.getEntry(this.PATTERN_PRESETS_FILE);
-                console.log('🔍 验证最终文件:', finalFile.nativePath);
+                console.log('🔍 验证最终文件:', (finalFile as any).nativePath);
                 
                 console.log('✅ 图案预设已保存（完整数据）', serializablePatterns.length, '个预设');
                 return; // 成功保存，退出重试循环
@@ -457,16 +487,39 @@ export class PresetManager {
     static async loadPatternPresets(): Promise<Pattern[]> {
         try {
             const presetFolder = await this.getPresetFolder();
-            const presetsFile = await presetFolder.getEntry(this.PATTERN_PRESETS_FILE);
+            let serializedPatterns: any[] | null = null;
+
+            try {
+                const presetsFile = await presetFolder.getEntry(this.PATTERN_PRESETS_FILE);
+                if (presetsFile) {
+                    const content = await (presetsFile as any).read({ format: require('uxp').storage.formats.utf8 });
+                    const parsed = JSON.parse(content);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        serializedPatterns = parsed;
+                    }
+                }
+            } catch (_) { /* 数据文件不存在或解析失败时回退到bundle */ }
+
+            // 若数据文件夹无有效数据，尝试从bundle读取默认预设
+            if (!serializedPatterns || serializedPatterns.length === 0) {
+                console.log('ℹ️ 图案预设本地文件缺失或空，尝试从bundle/dist读取默认预设');
+                const bundleData = await this.tryReadFromBundle(this.PATTERN_PRESETS_FILE);
+                if (bundleData && bundleData.length > 0) {
+                    serializedPatterns = bundleData;
+                    // 将bundle中的默认预设写回到数据文件夹，便于后续持久化
+                    try {
+                        await this.savePatternPresets(bundleData as any);
+                    } catch (e) {
+                        console.warn('⚠️ 将bundle默认图案预设写回数据文件夹失败:', e);
+                    }
+                }
+            }
             
-            if (!presetsFile) {
-                console.log('📁 图案预设文件不存在，返回空数组');
+            if (!serializedPatterns) {
+                console.log('📁 图案预设文件不存在或无有效数据，返回空数组');
                 return [];
             }
 
-            const content = await presetsFile.read({ format: require('uxp').storage.formats.utf8 });
-            const serializedPatterns = JSON.parse(content);
-            
             // 恢复完整的图案数据，包括二进制数据
             const patterns: Pattern[] = serializedPatterns.map((serialized: any) => {
                 const pattern: Pattern = {
@@ -530,23 +583,38 @@ export class PresetManager {
             console.warn('⚠️ 渐变预设数据无效，跳过保存');
             return;
         }
+        // 避免将空数组写入文件导致下次启动回退到默认预设
+        if (gradients.length === 0) {
+            console.warn('⚠️ 渐变预设为空，跳过保存以避免覆盖默认预设');
+            return;
+        }
+
+        // 串行化保存，等待前一次保存完成，避免并发导致的“file already exists”等问题
+        if (this.gradientSavePromise) {
+            try { await this.gradientSavePromise; } catch (_) { /* 忽略前一次失败，仅确保顺序 */ }
+        }
 
         let retryCount = 0;
         const maxRetries = 3;
         
+        // 当前保存的Promise占位，便于后续调用等待
+        let currentResolve: (() => void) | null = null;
+        let currentReject: ((e: any) => void) | null = null;
+        this.gradientSavePromise = new Promise<void>((resolve, reject) => {
+            currentResolve = resolve;
+            currentReject = reject;
+        });
+
         while (retryCount < maxRetries) {
             try {
                 console.log(`🔄 开始保存渐变预设 (尝试 ${retryCount + 1}/${maxRetries})，共 ${gradients.length} 个预设`);
                 const presetFolder = await this.getPresetFolder();
-                console.log('📁 预设文件夹获取成功，路径:', presetFolder.nativePath);
-                
-                // 保存完整的渐变预设数据，包括id、name和preview
+
+                // 保存完整的渐变预设数据（去除易引起频繁变更的时间戳）
                 const serializableGradients = gradients.map((gradient, index) => ({
-                    // 添加唯一标识和名称字段
                     id: gradient.id || `gradient_${Date.now()}_${index}`,
                     name: gradient.name || `渐变预设 ${index + 1}`,
-                    preview: gradient.preview || '', // 预览图标识
-                    // 原有渐变数据
+                    preview: gradient.preview || '',
                     type: gradient.type,
                     angle: gradient.angle || 0,
                     reverse: gradient.reverse || false,
@@ -558,7 +626,6 @@ export class PresetManager {
                         opacityPosition: stop.opacityPosition,
                         midpoint: stop.midpoint
                     })),
-                    // 保存预设列表（如果存在）
                     presets: gradient.presets ? gradient.presets.map(preset => ({
                         preview: preset.preview,
                         type: preset.type,
@@ -571,99 +638,151 @@ export class PresetManager {
                             opacityPosition: stop.opacityPosition,
                             midpoint: stop.midpoint
                         }))
-                    })) : undefined,
-                    // 添加保存时间戳
-                    savedAt: new Date().toISOString()
+                    })) : undefined
                 }));
+
+                // 待写入的稳定JSON字符串
+                const jsonData = JSON.stringify(serializableGradients, null, 2);
+
+                // 内容未变化则跳过写入（若最终文件已存在）
+                try {
+                    const existing = await presetFolder.getEntry(this.GRADIENT_PRESETS_FILE);
+                    if (existing && this.lastGradientJson === jsonData) {
+                        console.log('⏭️ 渐变预设内容未变化，跳过写入');
+                        currentResolve && currentResolve();
+                        this.gradientSavePromise = null;
+                        return;
+                    }
+                } catch (_) { /* 文件不存在时继续写入 */ }
 
                 // 创建临时文件名，确保原子性写入
                 const tempFileName = `${this.GRADIENT_PRESETS_FILE}.tmp`;
                 console.log('📝 创建临时文件:', tempFileName);
                 const tempFile = await presetFolder.createFile(tempFileName, { overwrite: true });
-                console.log('✅ 临时文件创建成功:', tempFile.nativePath);
-                
-                // 验证JSON数据有效性
-                const jsonData = JSON.stringify(serializableGradients, null, 2);
-                console.log('🔍 验证JSON数据有效性...');
-                try {
-                    JSON.parse(jsonData);
-                    console.log('✅ JSON数据验证通过');
-                } catch (jsonError) {
+
+                // 先验证JSON数据有效性
+                try { JSON.parse(jsonData); } catch (jsonError) {
                     console.error('❌ JSON数据无效:', jsonError);
-                    throw new Error(`JSON数据格式错误: ${jsonError.message}`);
+                    throw jsonError;
                 }
-                
-                // 写入数据到临时文件
-                console.log('💾 开始写入数据，大小:', jsonData.length, '字符');
-                await tempFile.write(jsonData);
-                console.log('✅ 数据写入完成');
-                
-                // 验证写入的文件内容
-                console.log('🔍 验证写入的文件内容...');
-                const writtenContent = await tempFile.read({ format: require('uxp').storage.formats.utf8 });
-                try {
-                    JSON.parse(writtenContent);
-                    console.log('✅ 写入文件内容验证通过');
-                } catch (verifyError) {
-                    console.error('❌ 写入文件内容验证失败:', verifyError);
-                    throw new Error(`写入文件内容无效: ${verifyError.message}`);
+
+                // 写入并验证临时文件
+                await (tempFile as any).write(jsonData, { format: require('uxp').storage.formats.utf8 });
+                const tempContent = await (tempFile as any).read({ format: require('uxp').storage.formats.utf8 });
+                try { JSON.parse(tempContent); } catch (e) {
+                    console.error('❌ 写入文件内容无效:', e);
+                    throw e;
                 }
-                
-                // 验证写入的数据
-                const verifyContent = await tempFile.read({ format: require('uxp').storage.formats.utf8 });
-                const verifyData = JSON.parse(verifyContent);
-                
-                if (verifyData.length !== serializableGradients.length) {
-                    throw new Error('数据验证失败：保存的渐变预设数量不匹配');
-                }
-                
-                // 使用更安全的文件替换策略
+
                 const finalFileName = this.GRADIENT_PRESETS_FILE;
                 const backupFileName = `${this.GRADIENT_PRESETS_FILE}.backup`;
-                
-                // 如果目标文件存在，先备份
+
+                // 若目标存在则先备份
                 try {
                     const existingFile = await presetFolder.getEntry(finalFileName);
                     if (existingFile) {
-                        console.log('📋 备份现有文件...');
-                        // 删除旧备份（如果存在）
                         try {
                             const oldBackup = await presetFolder.getEntry(backupFileName);
-                            await oldBackup.delete();
-                        } catch (e) { /* 忽略备份文件不存在的错误 */ }
-                        
-                        // 创建备份
-                        await existingFile.moveTo(presetFolder, backupFileName);
-                        console.log('✅ 现有文件已备份');
+                            await (oldBackup as any).delete();
+                        } catch (_) { }
+                        await (existingFile as any).moveTo(presetFolder, backupFileName);
                     }
-                } catch (e) {
-                    console.log('ℹ️ 目标文件不存在，无需备份');
+                } catch (_) { }
+
+                // 将临时文件移动为正式文件，必要时删除目标文件后重试；再不行则直接覆盖写入
+                try {
+                    await (tempFile as any).moveTo(presetFolder, finalFileName);
+                } catch (_) {
+                    try {
+                        const maybeExisting = await presetFolder.getEntry(finalFileName);
+                        if (maybeExisting) { await (maybeExisting as any).delete(); }
+                    } catch (_) { }
+                    try {
+                        await (tempFile as any).moveTo(presetFolder, finalFileName);
+                    } catch (_) {
+                        const finalFile = await presetFolder.createFile(finalFileName, { overwrite: true });
+                        await (finalFile as any).write(jsonData, { format: require('uxp').storage.formats.utf8 });
+                        try { await (tempFile as any).delete(); } catch (_) { }
+                    }
                 }
-                
-                // 重命名临时文件为正式文件
-                console.log('🔄 重命名临时文件为正式文件:', finalFileName);
-                await tempFile.moveTo(presetFolder, finalFileName);
-                console.log('✅ 文件重命名成功');
-                
-                // 验证最终文件是否存在
-                const finalFile = await presetFolder.getEntry(this.GRADIENT_PRESETS_FILE);
-                console.log('🔍 验证最终文件:', finalFile.nativePath);
-                
-                console.log('✅ 渐变预设已保存（完整数据）', serializableGradients.length, '个预设');
-                return; // 成功保存，退出重试循环
-                
+
+                // 验证最终文件
+                try {
+                    const finalFile = await presetFolder.getEntry(this.GRADIENT_PRESETS_FILE);
+                    const finalContent = await (finalFile as any).read({ format: require('uxp').storage.formats.utf8 });
+                    JSON.parse(finalContent);
+                } catch (verifyErr) {
+                    console.error('❌ 最终文件内容验证失败:', verifyErr);
+                    throw verifyErr;
+                }
+
+                // 记录本次成功保存的内容
+                this.lastGradientJson = jsonData;
+                console.log('✅ 渐变预设已保存，数量:', serializableGradients.length);
+                currentResolve && currentResolve();
+                this.gradientSavePromise = null;
+                return;
             } catch (error) {
                 retryCount++;
                 console.error(`❌ 保存渐变预设失败 (尝试 ${retryCount}/${maxRetries}):`, error);
-                
                 if (retryCount >= maxRetries) {
                     console.error('❌ 渐变预设保存失败，已达到最大重试次数');
+                    currentReject && currentReject(error);
+                    this.gradientSavePromise = null;
                     throw error;
                 }
-                
-                // 等待一段时间后重试
                 await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
             }
+        }
+    }
+
+    // 从插件包读取默认预设所需的辅助方法
+    private static async getPluginFolder() {
+        try {
+            let localFileSystem;
+            try {
+                localFileSystem = require('uxp').storage.localFileSystem;
+            } catch (_) {
+                localFileSystem = (window as any).uxp?.storage?.localFileSystem;
+            }
+            if (!localFileSystem || !localFileSystem.getPluginFolder) {
+                throw new Error('无法获取pluginFolder（localFileSystem.getPluginFolder 不可用）');
+            }
+            const pluginFolder = await localFileSystem.getPluginFolder();
+            console.log('📦 插件包路径:', pluginFolder.nativePath);
+            return pluginFolder;
+        } catch (error) {
+            console.error('❌ 获取插件包文件夹失败:', error);
+            throw error;
+        }
+    }
+
+    private static async tryReadFromBundle(fileName: string): Promise<any[] | null> {
+        try {
+            const pluginFolder = await this.getPluginFolder();
+            const formats = require('uxp').storage.formats;
+            const tryPaths = [fileName, `dist/${fileName}`, `./${fileName}`];
+
+            for (const relPath of tryPaths) {
+                try {
+                    const entry = await pluginFolder.getEntry(relPath);
+                    if (entry) {
+                        const content = await (entry as any).read({ format: formats.utf8 });
+                        const parsed = JSON.parse(content);
+                        if (Array.isArray(parsed) && parsed.length > 0) {
+                            console.log(`✅ 从bundle读取到默认预设: ${relPath} (${parsed.length} 条)`);
+                            return parsed;
+                        }
+                    }
+                } catch (e) {
+                    // 尝试下一个路径
+                }
+            }
+            console.warn(`⚠️ 未在插件包中找到默认预设文件: ${fileName}`);
+            return null;
+        } catch (error) {
+            console.error('❌ 读取插件包默认预设失败:', error);
+            return null;
         }
     }
 
@@ -673,42 +792,113 @@ export class PresetManager {
     static async loadGradientPresets(): Promise<(Gradient & { id: string; name: string; preview?: string })[]> {
         try {
             const presetFolder = await this.getPresetFolder();
-            const presetsFile = await presetFolder.getEntry(this.GRADIENT_PRESETS_FILE);
-            
-            if (!presetsFile) {
-                console.log('📁 渐变预设文件不存在，返回空数组');
+            let serializedGradients: any[] | null = null;
+
+            // 解析带恢复的辅助函数
+            const parseWithRecovery = (content: string): any[] | null => {
+                try {
+                    const parsed = JSON.parse(content);
+                    return Array.isArray(parsed) ? parsed : null;
+                } catch (e) {
+                    // 尝试从首个'['到最后一个']'之间截取修复
+                    const start = content.indexOf('[');
+                    const end = content.lastIndexOf(']');
+                    if (start !== -1 && end !== -1 && end > start) {
+                        try {
+                            const repaired = content.slice(start, end + 1);
+                            const parsed = JSON.parse(repaired);
+                            return Array.isArray(parsed) ? parsed : null;
+                        } catch (_) { /* ignore */ }
+                    }
+                    return null;
+                }
+            };
+
+            const formats = require('uxp').storage.formats;
+
+            // 先尝试从数据文件夹读取
+            try {
+                const presetsFile = await presetFolder.getEntry(this.GRADIENT_PRESETS_FILE);
+                if (presetsFile) {
+                    const content = await (presetsFile as any).read({ format: formats.utf8 });
+                    const parsed = parseWithRecovery(content);
+                    if (parsed && parsed.length > 0) {
+                        serializedGradients = parsed;
+                    } else {
+                        console.warn('⚠️ 渐变预设主文件解析失败，尝试读取备份文件');
+                        try {
+                            const backupFile = await presetFolder.getEntry(`${this.GRADIENT_PRESETS_FILE}.backup`);
+                            if (backupFile) {
+                                const backupContent = await (backupFile as any).read({ format: formats.utf8 });
+                                const backupParsed = parseWithRecovery(backupContent);
+                                if (backupParsed && backupParsed.length > 0) {
+                                    console.log('✅ 使用备份文件恢复渐变预设');
+                                    serializedGradients = backupParsed;
+                                    // 将备份内容写回主文件，恢复可用状态
+                                    try { await this.saveGradientPresets(backupParsed as any); } catch (e) { /* 忽略写回失败 */ }
+                                }
+                            }
+                        } catch (_) { /* 忽略备份读取失败 */ }
+                    }
+                }
+            } catch (_) { /* 忽略，后续回退到bundle */ }
+
+            // 若数据文件夹无有效数据，尝试从bundle读取默认预设并回写
+            if (!serializedGradients || serializedGradients.length === 0) {
+                console.log('ℹ️ 渐变预设本地文件缺失或空，尝试从bundle/dist读取默认预设');
+                const bundleData = await this.tryReadFromBundle(this.GRADIENT_PRESETS_FILE);
+                if (bundleData && bundleData.length > 0) {
+                    serializedGradients = bundleData;
+                    try {
+                        await this.saveGradientPresets(bundleData as any);
+                    } catch (e) {
+                        console.warn('⚠️ 将bundle默认渐变预设写回数据文件夹失败:', e);
+                    }
+                }
+            }
+
+            if (!serializedGradients) {
+                console.log('📁 渐变预设文件不存在或无有效数据，返回空数组');
                 return [];
             }
 
-            const content = await presetsFile.read({ format: require('uxp').storage.formats.utf8 });
-            const serializedGradients = JSON.parse(content);
-            
-            // 恢复完整的渐变数据，确保包含所有必要字段
+            const normalizeColor = (c: any): string => {
+                if (typeof c === 'string') {
+                    // 若已是 rgb/rgba 则直接返回；若是十六进制，可在此扩展转换
+                    if (/^rgba?\(/i.test(c)) return c;
+                    // 简单将十六进制等非常规格式兜底为不透明黑
+                    return 'rgba(0,0,0,1)';
+                }
+                if (c && typeof c === 'object' && 'r' in c && 'g' in c && 'b' in c) {
+                    const a = (c as any).a != null ? (c as any).a : 1;
+                    return `rgba(${c.r}, ${c.g}, ${c.b}, ${a})`;
+                }
+                return 'rgba(0,0,0,1)';
+            };
+
+            // 恢复完整的渐变数据
             const gradients = serializedGradients.map((serialized: any, index: number) => ({
-                // 恢复标识和名称字段
                 id: serialized.id || `gradient_${Date.now()}_${index}`,
                 name: serialized.name || `渐变预设 ${index + 1}`,
                 preview: serialized.preview || '',
-                // 恢复渐变数据
                 type: serialized.type || 'linear',
                 angle: serialized.angle || 0,
                 reverse: serialized.reverse || false,
                 preserveTransparency: serialized.preserveTransparency || false,
                 stops: (serialized.stops || []).map((stop: any) => ({
-                    color: stop.color || '#000000',
+                    color: normalizeColor(stop.color),
                     position: stop.position || 0,
                     colorPosition: stop.colorPosition,
                     opacityPosition: stop.opacityPosition,
                     midpoint: stop.midpoint
                 })),
-                // 恢复预设列表（如果存在）
                 presets: serialized.presets ? serialized.presets.map((preset: any) => ({
                     preview: preset.preview || '',
                     type: preset.type || 'linear',
                     angle: preset.angle || 0,
                     reverse: preset.reverse || false,
                     stops: (preset.stops || []).map((stop: any) => ({
-                        color: stop.color || '#000000',
+                        color: normalizeColor(stop.color),
                         position: stop.position || 0,
                         colorPosition: stop.colorPosition,
                         opacityPosition: stop.opacityPosition,
@@ -716,7 +906,7 @@ export class PresetManager {
                     }))
                 })) : undefined
             }));
-            
+
             console.log('✅ 渐变预设已加载（完整数据）', gradients.length, '个预设');
             return gradients;
         } catch (error) {
