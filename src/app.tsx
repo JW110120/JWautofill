@@ -24,6 +24,7 @@ import { SelectionHandler, SelectionOptions } from './utils/SelectionHandler';
 import { ColorSettings, Pattern } from './types/state';
 import { MenuManager } from './utils/MenuManager';
 import { PresetManager } from './utils/PresetManager';
+import { PanelStateManager } from './utils/PanelStateManager';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -152,6 +153,36 @@ class App extends React.Component<AppProps, AppState> {
 
         // 许可证：检查当前状态并尝试自动重新验证
         await this.checkLicenseStatus();
+
+        // ========= 面板状态：加载并合并 =========
+        try {
+            const loaded = await PanelStateManager.initialize({
+                appPanel: {
+                    isExpanded: this.state.isExpanded,
+                    isSelectionOptionsExpanded: this.state.isSelectionOptionsExpanded,
+                    autoUpdateHistory: this.state.autoUpdateHistory,
+                    deselectAfterFill: this.state.deselectAfterFill,
+                    strokeEnabled: this.state.strokeEnabled,
+                    createNewLayer: this.state.createNewLayer,
+                    clearMode: this.state.clearMode,
+                    fillMode: this.state.fillMode,
+                },
+            });
+            if (loaded && loaded.appPanel) {
+                this.setState({
+                    isExpanded: loaded.appPanel.isExpanded ?? this.state.isExpanded,
+                    isSelectionOptionsExpanded: loaded.appPanel.isSelectionOptionsExpanded ?? this.state.isSelectionOptionsExpanded,
+                    autoUpdateHistory: loaded.appPanel.autoUpdateHistory ?? this.state.autoUpdateHistory,
+                    deselectAfterFill: loaded.appPanel.deselectAfterFill ?? this.state.deselectAfterFill,
+                    strokeEnabled: loaded.appPanel.strokeEnabled ?? this.state.strokeEnabled,
+                    createNewLayer: loaded.appPanel.createNewLayer ?? this.state.createNewLayer,
+                    clearMode: loaded.appPanel.clearMode ?? this.state.clearMode,
+                    fillMode: loaded.appPanel.fillMode ?? this.state.fillMode,
+                });
+            }
+        } catch (e) {
+            console.warn('⚠️ 面板状态加载失败，使用默认状态:', e);
+        }
     }
 
     componentDidUpdate(prevProps, prevState) {
@@ -181,6 +212,33 @@ class App extends React.Component<AppProps, AppState> {
             } else {
                 document.body.classList.remove('license-dialog-open');
             }
+        }
+
+        // ========= 面板状态：有变更则保存 =========
+        const watchedKeys: Array<keyof typeof this.state> = [
+            'isExpanded',
+            'isSelectionOptionsExpanded',
+            'autoUpdateHistory',
+            'deselectAfterFill',
+            'strokeEnabled',
+            'createNewLayer',
+            'clearMode',
+            'fillMode',
+        ];
+        const changed = watchedKeys.some(k => prevState[k] !== this.state[k]);
+        if (changed) {
+            PanelStateManager.update({
+                appPanel: {
+                    isExpanded: this.state.isExpanded,
+                    isSelectionOptionsExpanded: this.state.isSelectionOptionsExpanded,
+                    autoUpdateHistory: this.state.autoUpdateHistory,
+                    deselectAfterFill: this.state.deselectAfterFill,
+                    strokeEnabled: this.state.strokeEnabled,
+                    createNewLayer: this.state.createNewLayer,
+                    clearMode: this.state.clearMode,
+                    fillMode: this.state.fillMode,
+                },
+            }, { debounceMs: 400 }).catch(e => console.warn('⚠️ 保存面板状态失败:', e));
         }
     }
 

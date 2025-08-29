@@ -11,6 +11,7 @@ import './adjustment.css';
 import './adjustment-input.css';
 import { AdjustmentMenu } from '../utils/AdjustmentMenu';
 import { ExpandIcon } from '../styles/Icons';
+import { PanelStateManager } from '../utils/PanelStateManager';
 
 // 获取选区边界信息和文档信息（完全参考ClearHandler.getSelectionData）
 const getSelectionData = async () => {
@@ -229,6 +230,8 @@ const [trialDaysRemaining, setTrialDaysRemaining] = useState(0);
 const [sections, setSections] = useState<SectionConfig[]>(defaultSections);
 const [subFeatures, setSubFeatures] = useState<SubFeature[]>(defaultSubFeatures);
 const [isDragMode, setIsDragMode] = useState(false);
+// 标记：面板状态是否已从本地加载完成（避免初次写入覆盖旧值）
+const [panelStateLoaded, setPanelStateLoaded] = useState(false);
 
 
 // 控制"隐藏/显示分区"面板
@@ -261,6 +264,93 @@ useEffect(() => {
     document.removeEventListener('license-updated', onLicenseUpdated as EventListener);
   };
 }, []);
+
+// ========= 像素调整面板状态：加载 =========
+useEffect(() => {
+  (async () => {
+    try {
+      const loaded = await PanelStateManager.initialize({
+        adjustmentPanel: {
+          sections,
+          subFeatures,
+          toggles: { useWeightedAverage, preserveDetail },
+        },
+      });
+      const ap = loaded && loaded.adjustmentPanel;
+      if (ap) {
+        if (ap.sections && ap.sections.length) {
+          setSections(ap.sections);
+        }
+        if (ap.subFeatures && ap.subFeatures.length) {
+          setSubFeatures(ap.subFeatures);
+        }
+        if (ap.toggles) {
+          if (typeof ap.toggles.useWeightedAverage === 'boolean') {
+            setUseWeightedAverage(ap.toggles.useWeightedAverage);
+          }
+          if (typeof ap.toggles.preserveDetail === 'boolean') {
+            setPreserveDetail(ap.toggles.preserveDetail);
+          }
+        }
+        if (ap.values) {
+          if (typeof ap.values.radius === 'number') setRadius(ap.values.radius);
+          if (typeof ap.values.sigma === 'number') setSigma(ap.values.sigma);
+          if (typeof ap.values.weightedIntensity === 'number') setWeightedIntensity(ap.values.weightedIntensity);
+          if (typeof ap.values.highFreqIntensity === 'number') setHighFreqIntensity(ap.values.highFreqIntensity);
+          if (typeof ap.values.highFreqRange === 'number') setHighFreqRange(ap.values.highFreqRange);
+          if (typeof ap.values.edgeAlphaThreshold === 'number') setEdgeAlphaThreshold(ap.values.edgeAlphaThreshold);
+          if (typeof ap.values.edgeColorThreshold === 'number') setEdgeColorThreshold(ap.values.edgeColorThreshold);
+          if (typeof ap.values.edgeSmoothRadius === 'number') setEdgeSmoothRadius(ap.values.edgeSmoothRadius);
+          if (typeof ap.values.edgeIntensity === 'number') setEdgeIntensity(ap.values.edgeIntensity);
+        }
+      }
+      setPanelStateLoaded(true);
+    } catch (e) {
+      console.warn('⚠️ 像素调整面板状态加载失败，使用默认状态:', e);
+      setPanelStateLoaded(true);
+    }
+  })();
+  // 仅在挂载时执行一次
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
+
+// ========= 像素调整面板状态：持久化 =========
+useEffect(() => {
+  if (!panelStateLoaded) return;
+  PanelStateManager.update({
+    adjustmentPanel: {
+      sections,
+      subFeatures,
+      toggles: { useWeightedAverage, preserveDetail },
+      values: {
+        radius,
+        sigma,
+        weightedIntensity,
+        highFreqIntensity,
+        highFreqRange,
+        edgeAlphaThreshold,
+        edgeColorThreshold,
+        edgeSmoothRadius,
+        edgeIntensity,
+      },
+    },
+  }, { debounceMs: 400 }).catch(e => console.warn('⚠️ 保存像素调整面板状态失败:', e));
+}, [
+  panelStateLoaded,
+  sections,
+  subFeatures,
+  useWeightedAverage,
+  preserveDetail,
+  radius,
+  sigma,
+  weightedIntensity,
+  highFreqIntensity,
+  highFreqRange,
+  edgeAlphaThreshold,
+  edgeColorThreshold,
+  edgeSmoothRadius,
+  edgeIntensity,
+]);
 
 // 注册Flyout菜单回调
 useEffect(() => {
