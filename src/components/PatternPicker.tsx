@@ -116,15 +116,15 @@ interface PatternPickerProps {
         })();
     }, [isOpen]);
 
-    // 当图案预设变更时，持久化保存（仅保存可序列化字段）
+    // 当图案预设变更时，持久化保存（仅保存可序列化字段，加入500ms防抖）
     useEffect(() => {
-        (async () => {
-            try {
-                await PresetManager.savePatternPresets(patterns);
-            } catch (err) {
+        if (!patterns) return;
+        const handle = setTimeout(() => {
+            PresetManager.savePatternPresets(patterns).catch(err => {
                 console.error('保存图案预设失败:', err);
-            }
-        })();
+            });
+        }, 500);
+        return () => clearTimeout(handle);
     }, [patterns]);
 
     // 组件卸载时强制保存预设，确保数据不丢失
@@ -1051,6 +1051,52 @@ interface PatternPickerProps {
         return grayData;
     };
 
+    // 判断预览缓冲区是否接近纯白（用于在浅色主题下给预览增加对比边框）
+    const isBufferNearlyWhite = (
+        buffer: Uint8Array,
+        width: number,
+        height: number,
+        components: number,
+        threshold: number = 245,
+        ratio: number = 0.985
+    ): boolean => {
+        const pixelCount = width * height;
+        let brightCount = 0;
+        for (let i = 0; i < pixelCount; i++) {
+            const r = buffer[i * components];
+            const g = buffer[i * components + 1];
+            const b = buffer[i * components + 2];
+            const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+            if (luma >= threshold) brightCount++;
+        }
+        return brightCount / pixelCount >= ratio;
+    };
+
+    // 在缓冲区四周绘制1px的中灰边框，提升可见性
+    const applyContrastBorder = (
+        buffer: Uint8Array,
+        width: number,
+        height: number,
+        components: number,
+        borderGray: number = 128
+    ): void => {
+        if (width === 0 || height === 0) return;
+        const setPixel = (x: number, y: number) => {
+            const idx = (y * width + x) * components;
+            buffer[idx] = borderGray;
+            buffer[idx + 1] = borderGray;
+            buffer[idx + 2] = borderGray;
+        };
+        for (let x = 0; x < width; x++) {
+            setPixel(x, 0);
+            setPixel(x, Math.max(0, height - 1));
+        }
+        for (let y = 0; y < height; y++) {
+            setPixel(0, y);
+            setPixel(Math.max(0, width - 1), y);
+        }
+    };
+
     // 生成灰度预览URL
     const generateGrayPreviewUrl = async (pattern: Pattern): Promise<string> => {
         if (!pattern.grayData || !pattern.width || !pattern.height) {
@@ -1068,14 +1114,17 @@ interface PatternPickerProps {
                 // 创建JPG的灰色版本预览的数据数组
                 const grayDataArray = new Uint8Array(pattern.width * pattern.height * 3);
 
-                // 将单通道灰度数据转换为RGBA格式
+                // 将单通道灰度数据转换为RGB格式
                 for (let i = 0; i < pattern.width * pattern.height; i++) {
                     const gray = pattern.grayData[i];
-                    
-                    // 设置灰度值到RGB通道
-                    grayDataArray[i * 3] = gray;     // R
-                    grayDataArray[i * 3 + 1] = gray; // G
-                    grayDataArray[i * 3 + 2] = gray; // B
+                    grayDataArray[i * 3] = gray;
+                    grayDataArray[i * 3 + 1] = gray;
+                    grayDataArray[i * 3 + 2] = gray;
+                }
+
+                // 若整体接近纯白，添加1px中灰对比边框
+                if (isBufferNearlyWhite(grayDataArray, pattern.width, pattern.height, 3)) {
+                    applyContrastBorder(grayDataArray, pattern.width, pattern.height, 3);
                 }
 
                 // 使用Photoshop的imaging API创建图像数据
@@ -1257,6 +1306,11 @@ interface PatternPickerProps {
                     components: 3,
                     componentSize: 8
                 };
+
+                // 若整体接近纯白，添加1px中灰对比边框
+                if (isBufferNearlyWhite(rgbBuffer, pattern.width, pattern.height, 3)) {
+                    applyContrastBorder(rgbBuffer, pattern.width, pattern.height, 3);
+                }
 
                 const imageData = await imaging.createImageDataFromBuffer(rgbBuffer, options);
 

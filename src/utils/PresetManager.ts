@@ -10,6 +10,10 @@ export class PresetManager {
     private static gradientSavePromise: Promise<void> | null = null;
     // 记录上次成功保存的渐变JSON，用于避免不必要的重复写入
     private static lastGradientJson: string | null = null;
+    // 用于串行化图案保存，避免并发写入导致竞争
+    private static patternSavePromise: Promise<void> | null = null;
+    // 记录上次成功保存的图案JSON，用于避免不必要的重复写入
+    private static lastPatternJson: string | null = null;
 
     /**
      * 获取预设保存文件夹（使用UXP数据文件夹）
@@ -311,8 +315,21 @@ export class PresetManager {
             return;
         }
 
+        // 串行化保存，确保前一次保存完成
+        if (this.patternSavePromise) {
+            try { await this.patternSavePromise; } catch (_) { /* 忽略前一次失败，仅确保顺序 */ }
+        }
+
         let retryCount = 0;
         const maxRetries = 3;
+
+        // 当前保存的Promise占位，便于后续调用等待
+        let currentResolve: (() => void) | null = null;
+        let currentReject: ((e: any) => void) | null = null;
+        this.patternSavePromise = new Promise<void>((resolve, reject) => {
+            currentResolve = resolve;
+            currentReject = reject;
+        });
         
         while (retryCount < maxRetries) {
             try {
@@ -320,7 +337,7 @@ export class PresetManager {
                 const presetFolder = await this.getPresetFolder();
                 console.log('📁 预设文件夹获取成功，路径:', presetFolder.nativePath);
                 
-                // 保存完整的图案数据，包括二进制数据
+                // 保存完整的图案数据，包括二进制数据（移除易变字段以便去重判断）
                 const serializablePatterns = patterns.map(pattern => {
                     const serialized: any = {
                         id: pattern.id,
@@ -342,9 +359,7 @@ export class PresetManager {
                         // 保存组件信息
                         patternComponents: pattern.patternComponents,
                         components: pattern.components,
-                        hasAlpha: pattern.hasAlpha,
-                        // 添加保存时间戳
-                        savedAt: new Date().toISOString()
+                        hasAlpha: pattern.hasAlpha
                     };
 
                     // 保存二进制数据（Base64编码）
@@ -369,6 +384,20 @@ export class PresetManager {
                     return serialized;
                 });
 
+                // 待写入的稳定JSON字符串
+                const jsonData = JSON.stringify(serializablePatterns, null, 2);
+
+                // 内容未变化则跳过写入（若最终文件已存在）
+                try {
+                    const existing = await presetFolder.getEntry(this.PATTERN_PRESETS_FILE);
+                    if (existing && this.lastPatternJson === jsonData) {
+                        console.log('⏭️ 图案预设内容未变化，跳过写入');
+                        currentResolve && currentResolve();
+                        this.patternSavePromise = null;
+                        return;
+                    }
+                } catch (_) { /* 文件不存在时继续写入 */ }
+                
                 // 创建临时文件名，确保原子性写入
                 const tempFileName = `${this.PATTERN_PRESETS_FILE}.tmp`;
                 console.log('📝 创建临时文件:', tempFileName);
@@ -376,7 +405,6 @@ export class PresetManager {
                 console.log('✅ 临时文件创建成功:', tempFile.nativePath);
                 
                 // 验证JSON数据有效性
-                const jsonData = JSON.stringify(serializablePatterns, null, 2);
                 console.log('🔍 验证JSON数据有效性...');
                 try {
                     JSON.parse(jsonData);
@@ -388,7 +416,7 @@ export class PresetManager {
                 
                 // 写入数据到临时文件
                 console.log('💾 开始写入数据，大小:', jsonData.length, '字符');
-                await tempFile.write(jsonData);
+                await tempFile.write(jsonData, { format: require('uxp').storage.formats.utf8 });
                 console.log('✅ 数据写入完成');
                 
                 // 验证写入的文件内容
@@ -400,14 +428,6 @@ export class PresetManager {
                 } catch (verifyError) {
                     console.error('❌ 写入文件内容验证失败:', verifyError);
                     throw new Error(`写入文件内容无效: ${verifyError.message}`);
-                }
-                
-                // 验证写入的数据
-                const verifyContent = await tempFile.read({ format: require('uxp').storage.formats.utf8 });
-                const verifyData = JSON.parse(verifyContent);
-                
-                if (verifyData.length !== serializablePatterns.length) {
-                    throw new Error('数据验证失败：保存的预设数量不匹配');
                 }
                 
                 // 使用更安全的文件替换策略
@@ -442,7 +462,7 @@ export class PresetManager {
                     console.error('❌ 重命名失败，尝试直接写入最终文件覆盖:', moveErr);
                     try {
                         const finalFile = await presetFolder.createFile(finalFileName, { overwrite: true });
-                        await finalFile.write(jsonData);
+                        await finalFile.write(jsonData, { format: require('uxp').storage.formats.utf8 });
                         console.log('✅ 回退写入最终文件成功');
                     } catch (fallbackErr) {
                         console.error('❌ 回退直接写入最终文件失败:', fallbackErr);
@@ -463,7 +483,11 @@ export class PresetManager {
                 const finalFile = await presetFolder.getEntry(this.PATTERN_PRESETS_FILE);
                 console.log('🔍 验证最终文件:', (finalFile as any).nativePath);
                 
+                // 记录本次成功保存的内容
+                this.lastPatternJson = jsonData;
                 console.log('✅ 图案预设已保存（完整数据）', serializablePatterns.length, '个预设');
+                currentResolve && currentResolve();
+                this.patternSavePromise = null;
                 return; // 成功保存，退出重试循环
                 
             } catch (error) {
@@ -472,6 +496,8 @@ export class PresetManager {
                 
                 if (retryCount >= maxRetries) {
                     console.error('❌ 图案预设保存失败，已达到最大重试次数');
+                    currentReject && currentReject(error);
+                    this.patternSavePromise = null;
                     throw error;
                 }
                 
@@ -489,13 +515,50 @@ export class PresetManager {
             const presetFolder = await this.getPresetFolder();
             let serializedPatterns: any[] | null = null;
 
+            // 解析带恢复的辅助函数（与渐变一致）
+            const parseWithRecovery = (content: string): any[] | null => {
+                try {
+                    const parsed = JSON.parse(content);
+                    return Array.isArray(parsed) ? parsed : null;
+                } catch (e) {
+                    const start = content.indexOf('[');
+                    const end = content.lastIndexOf(']');
+                    if (start !== -1 && end !== -1 && end > start) {
+                        try {
+                            const repaired = content.slice(start, end + 1);
+                            const parsed = JSON.parse(repaired);
+                            return Array.isArray(parsed) ? parsed : null;
+                        } catch (_) { /* ignore */ }
+                    }
+                    return null;
+                }
+            };
+
+            const formats = require('uxp').storage.formats;
+
+            // 先尝试从数据文件夹读取
             try {
                 const presetsFile = await presetFolder.getEntry(this.PATTERN_PRESETS_FILE);
                 if (presetsFile) {
-                    const content = await (presetsFile as any).read({ format: require('uxp').storage.formats.utf8 });
-                    const parsed = JSON.parse(content);
-                    if (Array.isArray(parsed) && parsed.length > 0) {
+                    const content = await (presetsFile as any).read({ format: formats.utf8 });
+                    const parsed = parseWithRecovery(content);
+                    if (parsed && parsed.length > 0) {
                         serializedPatterns = parsed;
+                    } else {
+                        console.warn('⚠️ 图案预设主文件解析失败，尝试读取备份文件');
+                        try {
+                            const backupFile = await presetFolder.getEntry(`${this.PATTERN_PRESETS_FILE}.backup`);
+                            if (backupFile) {
+                                const backupContent = await (backupFile as any).read({ format: formats.utf8 });
+                                const backupParsed = parseWithRecovery(backupContent);
+                                if (backupParsed && backupParsed.length > 0) {
+                                    console.log('✅ 使用备份文件恢复图案预设');
+                                    serializedPatterns = backupParsed;
+                                    // 将备份内容写回主文件，恢复可用状态
+                                    try { await this.savePatternPresets(backupParsed as any); } catch (e) { /* 忽略写回失败 */ }
+                                }
+                            }
+                        } catch (_) { /* 忽略备份读取失败 */ }
                     }
                 }
             } catch (_) { /* 数据文件不存在或解析失败时回退到bundle */ }

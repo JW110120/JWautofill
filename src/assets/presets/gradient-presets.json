@@ -1,27 +1,2 @@
 [
-  {
-    "id": "default-gradient-1",
-    "name": "默认渐变 1",
-    "preview": "",
-    "type": "linear",
-    "angle": 0,
-    "reverse": false,
-    "preserveTransparency": false,
-    "stops": [
-      {
-        "color": "rgba(255, 0, 0, 1)",
-        "position": 0,
-        "colorPosition": 0,
-        "opacityPosition": 0,
-        "midpoint": 50
-      },
-      {
-        "color": "rgba(0, 0, 255, 1)",
-        "position": 100,
-        "colorPosition": 100,
-        "opacityPosition": 100,
-        "midpoint": 50
-      }
-    ]
-  }
 ]
