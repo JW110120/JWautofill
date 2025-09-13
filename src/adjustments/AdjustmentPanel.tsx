@@ -595,6 +595,112 @@ const handleEdgeIntensityNumberChange = (event: React.ChangeEvent<HTMLInputEleme
   }
 };
 
+// 图层锁定处理工具函数（记录-解锁-恢复）
+const getCurrentLayerLockState = async () => {
+  try {
+    const res = await action.batchPlay([
+      {
+        _obj: 'get',
+        _target: [
+          { _ref: 'layer', _enum: 'ordinal', _value: 'targetEnum' }
+        ],
+        _property: 'layerLocking',
+        _options: { dialogOptions: 'dontDisplay' }
+      }
+    ], { synchronousExecution: true });
+    const obj: any = res && res[0] ? res[0] : {};
+    const locking: any = obj.layerLocking || obj || {};
+    return {
+      protectAll: !!locking.protectAll,
+      protectComposite: !!locking.protectComposite,
+      protectPosition: !!locking.protectPosition,
+      protectTransparency: !!locking.protectTransparency
+    };
+  } catch (e) {
+    console.warn('⚠️ 读取图层锁定状态失败，默认视为未锁定', e);
+    return { protectAll: false, protectComposite: false, protectPosition: false, protectTransparency: false };
+  }
+};
+
+const unlockAllLayerLocks = async () => {
+  try {
+    await action.batchPlay([
+      {
+        _obj: 'applyLocking',
+        _target: [
+          { _ref: 'layer', _enum: 'ordinal', _value: 'targetEnum' }
+        ],
+        layerLocking: { _obj: 'layerLocking', protectNone: true },
+        _options: { dialogOptions: 'dontDisplay' }
+      }
+    ], { synchronousExecution: true });
+  } catch (e) {
+    console.warn('⚠️ 解锁图层失败', e);
+  }
+};
+
+const restoreLayerLocks = async (state: { protectAll?: boolean; protectComposite?: boolean; protectPosition?: boolean; protectTransparency?: boolean; }) => {
+  try {
+    const layerLocking: any = { _obj: 'layerLocking' };
+    if (state.protectAll) {
+      layerLocking.protectAll = true;
+    } else {
+      if (state.protectTransparency) layerLocking.protectTransparency = true;
+      if (state.protectPosition) layerLocking.protectPosition = true;
+      if (state.protectComposite) layerLocking.protectComposite = true;
+      if (!state.protectTransparency && !state.protectPosition && !state.protectComposite) {
+        layerLocking.protectNone = true;
+      }
+    }
+    await action.batchPlay([
+      {
+        _obj: 'applyLocking',
+        _target: [
+          { _ref: 'layer', _enum: 'ordinal', _value: 'targetEnum' }
+        ],
+        layerLocking,
+        _options: { dialogOptions: 'dontDisplay' }
+      }
+    ], { synchronousExecution: true });
+  } catch (e) {
+    console.warn('⚠️ 恢复图层锁定失败', e);
+  }
+};
+
+const runWithTemporaryUnlock = async (fn: () => Promise<void>) => {
+  const prev = await getCurrentLayerLockState();
+  const hadLock = !!(prev.protectAll || prev.protectComposite || prev.protectPosition || prev.protectTransparency);
+  if (hadLock) {
+    await unlockAllLayerLocks();
+  }
+  try {
+    await fn();
+  } finally {
+    if (hadLock) {
+      await restoreLayerLocks(prev);
+    }
+  }
+};
+
+// 在操作完成后释放面板焦点，让 Photoshop 重新接收快捷键
+const giveFocusBackToPS = () => {
+  try {
+    const active = document.activeElement as HTMLElement | null;
+    if (active && typeof active.blur === 'function') {
+      active.blur();
+    }
+    // 异步再尝试一次，确保 executeAsModal 之后也释放焦点
+    setTimeout(() => {
+      const active2 = document.activeElement as HTMLElement | null;
+      if (active2 && typeof active2.blur === 'function') {
+        active2.blur();
+      }
+    }, 0);
+  } catch (e) {
+    console.warn('⚠️ 释放面板焦点失败:', e);
+  }
+};
+
 // 分块平均功能
 const handleBlockAverage = async () => {
   if (!handleLicenseBeforeAction()) return;
@@ -617,30 +723,33 @@ const handleBlockAverage = async () => {
         return;
       }
       
-      // 使用共享的像素数据处理函数
-      const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
-      
-      // 创建完整文档尺寸的选区掩码数组
-      const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
-      let maskIndex = 0;
-      for (let docIndex of pixelResult.selectionIndices) {
-        fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
-        maskIndex++;
-      }
-      
-      // 步骤3：用公式计算得到新数组
-      const processedPixels = await processBlockAverage(
-        pixelResult.selectionPixelData.buffer, 
-        fullSelectionMask.buffer, 
-        { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
-        isBackgroundLayer,
-        useWeightedAverage,
-        weightedIntensity
-      );
-      
-      // 步骤4：应用处理后的像素数据
-      await applyProcessedPixels(processedPixels, pixelResult);
+      await runWithTemporaryUnlock(async () => {
+        // 使用共享的像素数据处理函数
+        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+        
+        // 创建完整文档尺寸的选区掩码数组
+        const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
+        let maskIndex = 0;
+        for (let docIndex of pixelResult.selectionIndices) {
+          fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
+          maskIndex++;
+        }
+        
+        // 步骤3：用公式计算得到新数组
+        const processedPixels = await processBlockAverage(
+          pixelResult.selectionPixelData.buffer, 
+          fullSelectionMask.buffer, 
+          { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
+          isBackgroundLayer,
+          useWeightedAverage,
+          weightedIntensity
+        );
+        
+        // 步骤4：应用处理后的像素数据
+        await applyProcessedPixels(processedPixels, pixelResult);
+      });
     });
+    giveFocusBackToPS();
   } catch (error) {
     console.error('❌ 分块平均处理失败:', error);
     await core.showAlert({ message: '分块平均处理失败: ' + error.message });
@@ -669,31 +778,34 @@ const handleLineEnhancement = async () => {
         return;
       }
       
-      // 使用共享的像素数据处理函数
-      const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
-      
-      // 创建完整文档尺寸的选区掩码数组
-      const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
-      let maskIndex = 0;
-      for (let docIndex of pixelResult.selectionIndices) {
-        fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
-        maskIndex++;
-      }
-      
-      // 步骤3：用线条增强算法处理像素数据
-      const processedPixels = await processLineEnhancement(
-        pixelResult.selectionPixelData.buffer, 
-        fullSelectionMask.buffer, 
-        { width: selectionBounds.docWidth, height: selectionBounds.docHeight }
-      );
-      
-      console.log('✅ 线条增强处理完成，长度:', processedPixels.length);
-      
-      // 步骤4：应用处理后的像素数据
-      await applyProcessedPixels(processedPixels, pixelResult);
-      
-      console.log('✅ 线条增强处理完成');
+      await runWithTemporaryUnlock(async () => {
+        // 使用共享的像素数据处理函数
+        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+        
+        // 创建完整文档尺寸的选区掩码数组
+        const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
+        let maskIndex = 0;
+        for (let docIndex of pixelResult.selectionIndices) {
+          fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
+          maskIndex++;
+        }
+        
+        // 步骤3：用线条增强算法处理像素数据
+        const processedPixels = await processLineEnhancement(
+          pixelResult.selectionPixelData.buffer, 
+          fullSelectionMask.buffer, 
+          { width: selectionBounds.docWidth, height: selectionBounds.docHeight }
+        );
+        
+        console.log('✅ 线条增强处理完成，长度:', processedPixels.length);
+        
+        // 步骤4：应用处理后的像素数据
+        await applyProcessedPixels(processedPixels, pixelResult);
+        
+        console.log('✅ 线条增强处理完成');
+      });
     });
+    giveFocusBackToPS();
   } catch (error) {
     console.error('❌ 线条增强处理失败:', error);
     await core.showAlert({ message: '线条增强处理失败: ' + error.message });
@@ -722,33 +834,36 @@ const handleHighFrequencyEnhancement = async () => {
         return;
       }
       
-      // 使用共享的像素数据处理函数
-      const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
-      
-      // 创建完整文档尺寸的选区掩码数组
-      const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
-      let maskIndex = 0;
-      for (let docIndex of pixelResult.selectionIndices) {
-        fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
-        maskIndex++;
-      }
-      
-      // 步骤3：用高频增强算法处理像素数据
-      const processedPixels = await processHighFrequencyEnhancement(
-        pixelResult.selectionPixelData.buffer, 
-        fullSelectionMask.buffer, 
-        { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
-        { intensity: highFreqIntensity, thresholdRange: highFreqRange },
-        isBackgroundLayer
-      );
-      
-      console.log('✅ 高频增强处理完成，长度:', processedPixels.length);
-      
-      // 步骤4：应用处理后的像素数据
-      await applyProcessedPixels(processedPixels, pixelResult);
-      
-      console.log('✅ 高频增强处理完成');
+      await runWithTemporaryUnlock(async () => {
+        // 使用共享的像素数据处理函数
+        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+        
+        // 创建完整文档尺寸的选区掩码数组
+        const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
+        let maskIndex = 0;
+        for (let docIndex of pixelResult.selectionIndices) {
+          fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
+          maskIndex++;
+        }
+        
+        // 步骤3：用高频增强算法处理像素数据
+        const processedPixels = await processHighFrequencyEnhancement(
+          pixelResult.selectionPixelData.buffer, 
+          fullSelectionMask.buffer, 
+          { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
+          { intensity: highFreqIntensity, thresholdRange: highFreqRange },
+          isBackgroundLayer
+        );
+        
+        console.log('✅ 高频增强处理完成，长度:', processedPixels.length);
+        
+        // 步骤4：应用处理后的像素数据
+        await applyProcessedPixels(processedPixels, pixelResult);
+        
+        console.log('✅ 高频增强处理完成');
+      });
     });
+    giveFocusBackToPS();
   } catch (error) {
     console.error('❌ 高频增强处理失败:', error);
     await core.showAlert({ message: '高频增强处理失败: ' + error.message });
@@ -777,42 +892,45 @@ const handleSmartEdgeSmooth = async () => {
         return;
       }
       
-      // 使用共享的像素数据处理函数
-      const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
-      
-      // 创建完整文档尺寸的选区掩码数组
-      const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
-      let maskIndex = 0;
-      for (let docIndex of pixelResult.selectionIndices) {
-        fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
-        maskIndex++;
-      }
-      
-      // 步骤3：用智能边缘平滑算法处理像素数据
-      // 注意：传递完整的像素数据而不是选区像素数据，因为算法需要邻域信息
-      const processedPixels = await processSmartEdgeSmooth(
-        pixelResult.fullPixelData.buffer, 
-        fullSelectionMask.buffer, 
-        { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
-        {
-          alphaThreshold: edgeAlphaThreshold,
-          colorThreshold: edgeColorThreshold,
-          smoothRadius: edgeSmoothRadius,
-          preserveDetail: preserveDetail,
-          intensity: edgeIntensity
-        },
-        isBackgroundLayer
-      );
-      
-      console.log('✅ 智能边缘平滑处理完成，长度:', processedPixels.byteLength);
-      
-      // 步骤4：应用处理后的像素数据
-      // 将ArrayBuffer转换为Uint8Array
-      const processedPixelsArray = new Uint8Array(processedPixels);
-      await applyProcessedPixels(processedPixelsArray, pixelResult);
-      
-      console.log('✅ 智能边缘平滑处理完成');
+      await runWithTemporaryUnlock(async () => {
+        // 使用共享的像素数据处理函数
+        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+        
+        // 创建完整文档尺寸的选区掩码数组
+        const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
+        let maskIndex = 0;
+        for (let docIndex of pixelResult.selectionIndices) {
+          fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
+          maskIndex++;
+        }
+        
+        // 步骤3：用智能边缘平滑算法处理像素数据
+        // 注意：传递完整的像素数据而不是选区像素数据，因为算法需要邻域信息
+        const processedPixels = await processSmartEdgeSmooth(
+          pixelResult.fullPixelData.buffer, 
+          fullSelectionMask.buffer, 
+          { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
+          {
+            alphaThreshold: edgeAlphaThreshold,
+            colorThreshold: edgeColorThreshold,
+            smoothRadius: edgeSmoothRadius,
+            preserveDetail: preserveDetail,
+            intensity: edgeIntensity
+          },
+          isBackgroundLayer
+        );
+        
+        console.log('✅ 智能边缘平滑处理完成，长度:', processedPixels.byteLength);
+        
+        // 步骤4：应用处理后的像素数据
+        // 将ArrayBuffer转换为Uint8Array
+        const processedPixelsArray = new Uint8Array(processedPixels);
+        await applyProcessedPixels(processedPixelsArray, pixelResult);
+        
+        console.log('✅ 智能边缘平滑处理完成');
+      });
     });
+    giveFocusBackToPS();
   } catch (error) {
     console.error('❌ 智能边缘平滑处理失败:', error);
     await core.showAlert({ message: '智能边缘平滑处理失败: ' + error.message });
@@ -841,33 +959,36 @@ const handlePixelTransition = async () => {
         return;
       }
       
-      // 使用共享的像素数据处理函数
-      const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
-      
-      // 创建完整文档尺寸的选区掩码数组
-      const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
-      let maskIndex = 0;
-      for (let docIndex of pixelResult.selectionIndices) {
-        fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
-        maskIndex++;
-      }
-      
-      // 步骤3：用公式计算得到新数组
-      const processedPixels = await processPixelTransition(
-        pixelResult.selectionPixelData.buffer, 
-        fullSelectionMask.buffer, 
-        { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
-        { radius, sigma },
-        isBackgroundLayer
-      );
-      
-      console.log('✅ 处理像素数据完成，长度:', processedPixels.length);
-      
-      // 步骤4：应用处理后的像素数据
-      await applyProcessedPixels(processedPixels, pixelResult);
-      
-      console.log('✅ 像素过渡处理完成');
+      await runWithTemporaryUnlock(async () => {
+        // 使用共享的像素数据处理函数
+        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+        
+        // 创建完整文档尺寸的选区掩码数组
+        const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
+        let maskIndex = 0;
+        for (let docIndex of pixelResult.selectionIndices) {
+          fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
+          maskIndex++;
+        }
+        
+        // 步骤3：用公式计算得到新数组
+        const processedPixels = await processPixelTransition(
+          pixelResult.selectionPixelData.buffer, 
+          fullSelectionMask.buffer, 
+          { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
+          { radius, sigma },
+          isBackgroundLayer
+        );
+        
+        console.log('✅ 处理像素数据完成，长度:', processedPixels.length);
+        
+        // 步骤4：应用处理后的像素数据
+        await applyProcessedPixels(processedPixels, pixelResult);
+        
+        console.log('✅ 像素过渡处理完成');
+      });
     });
+    giveFocusBackToPS();
   } catch (error) {
     console.error('❌ 像素过渡处理失败:', error);
     await core.showAlert({ message: '像素过渡处理失败: ' + error.message });

@@ -201,6 +201,10 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const saveTimerRef = useRef<any>(null);
     const dirtyRef = useRef(false);
 
+    // 拖拽排序所需的引用与状态
+    const dragPresetIndexRef = useRef<number | null>(null);
+    const dragPresetActiveRef = useRef<boolean>(false);
+
     // 面板打开时加载已保存的渐变预设（加载期间禁止保存）
     useEffect(() => {
         if (!isOpen) return;
@@ -1137,6 +1141,52 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         document.addEventListener('mouseup', handleMouseUp);
     };
 
+    // 预设拖拽排序处理
+    const handlePresetDragStart = (e: React.DragEvent<HTMLDivElement>, index: number) => {
+        dragPresetIndexRef.current = index;
+        dragPresetActiveRef.current = true;
+        if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = 'move';
+            try { e.dataTransfer.setData('text/plain', String(index)); } catch {}
+        }
+    };
+
+    const handlePresetDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    };
+
+    const handlePresetDrop = async (e: React.DragEvent<HTMLDivElement>, dropIndex: number) => {
+        e.preventDefault();
+        const dragIndexFromRef = dragPresetIndexRef.current;
+        const dragIndexFromData = (() => {
+            try { return parseInt(e.dataTransfer.getData('text/plain')); } catch { return NaN; }
+        })();
+        const fromIndex = (dragIndexFromRef !== null && dragIndexFromRef !== undefined) ? dragIndexFromRef : dragIndexFromData;
+        dragPresetActiveRef.current = false;
+        dragPresetIndexRef.current = null;
+        if (Number.isNaN(fromIndex) || fromIndex === dropIndex) {
+            return;
+        }
+        const nextOrder = (() => {
+            const updated = [...presets];
+            const [moved] = updated.splice(fromIndex, 1);
+            updated.splice(dropIndex, 0, moved);
+            return updated;
+        })();
+        setPresets(nextOrder);
+        try {
+            await PresetManager.saveGradientPresets(nextOrder);
+        } catch (err) {
+            console.error('保存拖拽后的渐变预设顺序失败:', err);
+        }
+    };
+
+    const handlePresetDragEnd = () => {
+        dragPresetActiveRef.current = false;
+        dragPresetIndexRef.current = null;
+    };
+
     const getRGBColor = (rgbaColor: string): string => {
         const rgbaValues = rgbaColor.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
         if (rgbaValues) {
@@ -1226,7 +1276,15 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             <div 
                                 key={index} 
                                 className={`preset-item ${selectedPreset === index ? 'selected' : ''} ${selectedPresets.has(index) ? 'multi-selected' : ''}`}
-                                onClick={(e) => handlePresetSelect(index, e)}
+                                draggable={true}
+                                onDragStart={(e) => handlePresetDragStart(e, index)}
+                                onDragOver={handlePresetDragOver}
+                                onDrop={(e) => handlePresetDrop(e, index)}
+                                onDragEnd={handlePresetDragEnd}
+                                onClick={(e) => {
+                                    if (dragPresetActiveRef.current) return;
+                                    handlePresetSelect(index, e);
+                                }}
                             >
                                 <div className="preset-preview" style={{
                                     position: 'relative',

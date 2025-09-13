@@ -44,6 +44,10 @@ interface PatternPickerProps {
     const [loadedImages, setLoadedImages] = useState<Record<string, boolean>>({});
     const [previewZoom, setPreviewZoom] = useState<number>(100); // 预览缩放级别
     const [previewOffset, setPreviewOffset] = useState<{x: number, y: number}>({x: 0, y: 0}); // 预览偏移
+
+    // 拖拽排序相关引用
+    const dragPatternIndexRef = useRef<number | null>(null);
+    const dragPatternActiveRef = useRef<boolean>(false);
     
     
     // 预览缩放档位
@@ -168,6 +172,50 @@ interface PatternPickerProps {
         setDragStartValue(target === 'angle' ? angle : scale);
         event.preventDefault();
     };
+
+    // ---------------- 拖拽排序（图案预设） 开始 ----------------
+    const handlePatternDragStart = (e: React.DragEvent<HTMLDivElement>, index: number) => {
+        dragPatternIndexRef.current = index;
+        dragPatternActiveRef.current = true;
+        try { e.dataTransfer.setData('text/plain', String(index)); } catch (_) {}
+        e.dataTransfer.effectAllowed = 'move';
+    };
+
+    const handlePatternDragOver = (e: React.DragEvent<HTMLDivElement>, overIndex: number) => {
+        if (!dragPatternActiveRef.current) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+    };
+
+    const handlePatternDrop = async (e: React.DragEvent<HTMLDivElement>, dropIndex: number) => {
+        e.preventDefault();
+        if (!dragPatternActiveRef.current) return;
+        const from = dragPatternIndexRef.current;
+        const to = dropIndex;
+        dragPatternActiveRef.current = false;
+        dragPatternIndexRef.current = null;
+        if (from == null || to == null || from === to) return;
+
+        // 基于当前 patterns 计算新的顺序，避免 setState 异步导致的顺序不一致
+        const nextOrder = (() => {
+            const next = [...patterns];
+            const [moved] = next.splice(from, 1);
+            next.splice(to, 0, moved);
+            return next;
+        })();
+        setPatterns(nextOrder);
+        try {
+            await PresetManager.savePatternPresets(nextOrder);
+        } catch (err) {
+            console.error('保存拖拽后的图案预设顺序失败:', err);
+        }
+    };
+
+    const handlePatternDragEnd = () => {
+        dragPatternActiveRef.current = false;
+        dragPatternIndexRef.current = null;
+    };
+    // ---------------- 拖拽排序（图案预设） 结束 ----------------
     
     // 处理滑块拖拽开始
     const handleMouseMove = (event: MouseEvent) => {
@@ -1586,11 +1634,23 @@ interface PatternPickerProps {
             </div>
             <div className="pattern-container">
                  <div className="pattern-preset" onClick={handleContainerClick}>
-                    {patterns.map(pattern => (
+                    {patterns.map((pattern, index) => (
                         <div
                             key={pattern.id}
                             className={`photo-container ${selectedPattern === pattern.id ? 'selected' : ''} ${selectedPatterns.has(pattern.id) ? 'multi-selected' : ''}`}
-                            onClick={(e) => handlePatternSelect(pattern.id, e)}
+                            draggable
+                            onDragStart={(e) => handlePatternDragStart(e, index)}
+                            onDragOver={(e) => handlePatternDragOver(e, index)}
+                            onDrop={(e) => handlePatternDrop(e, index)}
+                            onDragEnd={handlePatternDragEnd}
+                            onClick={(e) => {
+                                if (dragPatternActiveRef.current) {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    return;
+                                }
+                                handlePatternSelect(pattern.id, e);
+                            }}
                         >
                             <img 
                                 src={getPreviewUrl(pattern)} 
