@@ -844,13 +844,17 @@ export class PatternFill {
             }
             
             // 创建ImageData对象，准备填充
+            // UXP imaging 仅接受诸如 'RGB'/'CMYK'/'Grayscale' 等颜色空间，
+            // 不支持 'RGBA'。当包含 alpha 时仍需使用 'RGB'，并通过 components=4 携带透明度。
+            // 为避免 Invalid colorSpace 错误，这里统一设置为 'RGB'。
+            const safeComponents = (components === 4 || components === 3) ? components : 3;
             const imageDataOptions = {
                 width: selectionWidth,
                 height: selectionHeight,
-                components: components,
+                components: safeComponents,
                 chunky: true,
                 colorProfile: "sRGB IEC61966-2.1",
-                colorSpace: options.pattern.colorSpace || (components === 4 ? 'RGBA' : 'RGB')
+                colorSpace: 'RGB'
             };
             const imageData = await imaging.createImageDataFromBuffer(patternData, imageDataOptions);
 

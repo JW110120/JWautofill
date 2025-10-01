@@ -564,11 +564,37 @@ class App extends React.Component<AppProps, AppState> {
 
     async fillSelection() {
         await new Promise(resolve => setTimeout(resolve, 50));
+        // 统一处理：若当前目标图层被隐藏，在操作前临时显示，操作后恢复隐藏
+        // 注意：当选择“新建图层”时，目标会变为新图层（可见），无需临时显示原图层
+        let needToggleVisibility = false;
+        const showTargetLayer = {
+            _obj: "show",
+            null: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }],
+            _isCommand: false
+        };
+        const hideTargetLayer = {
+            _obj: "hide",
+            null: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }],
+            _isCommand: false
+        };
         try {
             // 授权门控：未授权且非试用，打开授权窗口并阻止功能
             if (!this.state.isLicensed && !this.state.isTrial) {
                 this.setState({ isLicenseDialogOpen: true });
                 return false;
+            }
+
+            // 记录原始活动图层的可见性（当不新建图层时需要临时显示隐藏图层以避免合并/删除警告）
+            try {
+                const activeDoc = app.activeDocument;
+                const originalLayer = activeDoc.activeLayers && activeDoc.activeLayers.length > 0 ? activeDoc.activeLayers[0] : null;
+                const originalWasHidden = originalLayer ? (originalLayer.visible === false) : false;
+                needToggleVisibility = !!(originalWasHidden && !this.state.createNewLayer);
+                if (needToggleVisibility) {
+                    await action.batchPlay([showTargetLayer], {});
+                }
+            } catch (e) {
+                console.warn('读取/切换图层可见性失败，继续执行填充流程:', e);
             }
 
             // 检查是否在单通道模式
@@ -725,14 +751,19 @@ class App extends React.Component<AppProps, AppState> {
                 else if (!hasTransparencyLocked && !isBackground) {
                     await FillHandler.fillUnlocked(fillOptions);
                 }
-                else {
-                    await FillHandler.fillBackground(fillOptions);
-                }
                 return true;
             }
         } catch (error) {
             console.error('填充选区失败:', error);
             return false;
+        } finally {
+            try {
+                if (needToggleVisibility) {
+                    await action.batchPlay([hideTargetLayer], {});
+                }
+            } catch (e) {
+                console.warn('恢复图层隐藏状态失败:', e);
+            }
         }
     }
 

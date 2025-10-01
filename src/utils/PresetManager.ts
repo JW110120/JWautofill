@@ -390,11 +390,25 @@ export class PresetManager {
                 // 内容未变化则跳过写入（若最终文件已存在）
                 try {
                     const existing = await presetFolder.getEntry(this.PATTERN_PRESETS_FILE);
-                    if (existing && this.lastPatternJson === jsonData) {
-                        console.log('⏭️ 图案预设内容未变化，跳过写入');
-                        currentResolve && currentResolve();
-                        this.patternSavePromise = null;
-                        return;
+                    if (existing) {
+                        const formats = require('uxp').storage.formats;
+                        try {
+                            const existingContent = await (existing as any).read({ format: formats.utf8 });
+                            if (existingContent === jsonData) {
+                                console.log('⏭️ 图案预设内容未变化（与现有文件一致），跳过写入');
+                                currentResolve && currentResolve();
+                                this.patternSavePromise = null;
+                                return;
+                            }
+                        } catch (_) {
+                            // 读取失败则继续写入流程
+                        }
+                        if (this.lastPatternJson === jsonData) {
+                            console.log('⏭️ 图案预设内容未变化（与上次写入一致），跳过写入');
+                            currentResolve && currentResolve();
+                            this.patternSavePromise = null;
+                            return;
+                        }
                     }
                 } catch (_) { /* 文件不存在时继续写入 */ }
                 
@@ -453,21 +467,15 @@ export class PresetManager {
                     console.log('ℹ️ 目标文件不存在，无需备份');
                 }
                 
-                // 重命名临时文件为正式文件
-                console.log('🔄 重命名临时文件为正式文件:', finalFileName);
+                // 直接写入最终文件（覆盖模式），避免 UXP moveTo 的 file exists 问题
+                console.log('✍️ 写入最终文件 (覆盖模式):', finalFileName);
                 try {
-                    await tempFile.moveTo(presetFolder, finalFileName);
-                    console.log('✅ 文件重命名成功');
-                } catch (moveErr) {
-                    console.error('❌ 重命名失败，尝试直接写入最终文件覆盖:', moveErr);
-                    try {
-                        const finalFile = await presetFolder.createFile(finalFileName, { overwrite: true });
-                        await finalFile.write(jsonData, { format: require('uxp').storage.formats.utf8 });
-                        console.log('✅ 回退写入最终文件成功');
-                    } catch (fallbackErr) {
-                        console.error('❌ 回退直接写入最终文件失败:', fallbackErr);
-                        throw fallbackErr; // 让外层重试
-                    }
+                    const finalFile = await presetFolder.createFile(finalFileName, { overwrite: true });
+                    await finalFile.write(jsonData, { format: require('uxp').storage.formats.utf8 });
+                    console.log('✅ 最终文件写入成功');
+                } catch (writeErr) {
+                    console.error('❌ 写入最终文件失败:', writeErr);
+                    throw writeErr; // 让外层重试
                 }
                 
                 // 清理遗留的临时文件（容错）
