@@ -158,6 +158,7 @@ class App extends React.Component<AppProps, AppState> {
         try {
             const loaded = await PanelStateManager.initialize({
                 appPanel: {
+                    isEnabled: this.state.isEnabled,
                     isExpanded: this.state.isExpanded,
                     isSelectionOptionsExpanded: this.state.isSelectionOptionsExpanded,
                     autoUpdateHistory: this.state.autoUpdateHistory,
@@ -170,6 +171,7 @@ class App extends React.Component<AppProps, AppState> {
             });
             if (loaded && loaded.appPanel) {
                 this.setState({
+                    isEnabled: loaded.appPanel.isEnabled ?? this.state.isEnabled,
                     isExpanded: loaded.appPanel.isExpanded ?? this.state.isExpanded,
                     isSelectionOptionsExpanded: loaded.appPanel.isSelectionOptionsExpanded ?? this.state.isSelectionOptionsExpanded,
                     autoUpdateHistory: loaded.appPanel.autoUpdateHistory ?? this.state.autoUpdateHistory,
@@ -216,6 +218,7 @@ class App extends React.Component<AppProps, AppState> {
 
         // ========= 面板状态：有变更则保存 =========
         const watchedKeys: Array<keyof typeof this.state> = [
+            'isEnabled',
             'isExpanded',
             'isSelectionOptionsExpanded',
             'autoUpdateHistory',
@@ -229,6 +232,7 @@ class App extends React.Component<AppProps, AppState> {
         if (changed) {
             PanelStateManager.update({
                 appPanel: {
+                    isEnabled: this.state.isEnabled,
                     isExpanded: this.state.isExpanded,
                     isSelectionOptionsExpanded: this.state.isSelectionOptionsExpanded,
                     autoUpdateHistory: this.state.autoUpdateHistory,
@@ -263,9 +267,14 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     handleButtonClick() {
-        this.setState(prevState => ({
-            isEnabled: !prevState.isEnabled
-        }));
+        this.setState(prevState => {
+            const nextEnabled = !prevState.isEnabled;
+            return { isEnabled: nextEnabled };
+        }, () => {
+            PanelStateManager.update({
+                appPanel: { isEnabled: this.state.isEnabled }
+            }, { debounceMs: 0 }).catch(e => console.warn('⚠️ 主开关状态持久化失败:', e));
+        });
     }
 
 

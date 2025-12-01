@@ -6,6 +6,7 @@ import { } from 'react';
  * 存储位置：UXP 数据目录下的 settings/panel-state.json
  */
 export type AppPanelState = {
+  isEnabled?: boolean;
   isExpanded?: boolean;
   isSelectionOptionsExpanded?: boolean;
   autoUpdateHistory?: boolean;
@@ -90,11 +91,23 @@ export class PanelStateManager {
   }
 
   // 原子写入（简单且可靠）：直接覆盖写入
-  private static async writeStateFile(state: PanelState): Promise<void> {
-    const folder = await this.getSettingsFolder();
-    const file = await folder.createFile(this.PANEL_STATE_FILE, { overwrite: true });
+  private static async writeStateFileWithRetry(state: PanelState): Promise<void> {
     const formats = require('uxp').storage.formats;
-    await file.write(JSON.stringify(state ?? {}, null, 2), { format: formats.utf8 });
+    let attempt = 0;
+    let delay = 200;
+    while (true) {
+      try {
+        const folder = await this.getSettingsFolder();
+        const file = await folder.createFile(this.PANEL_STATE_FILE, { overwrite: true });
+        await file.write(JSON.stringify(state ?? {}, null, 2), { format: formats.utf8 });
+        return;
+      } catch (e) {
+        attempt++;
+        console.warn(`面板状态写入失败，正在重试(${attempt})`, e);
+        await new Promise(res => setTimeout(res, Math.min(5000, delay)));
+        delay = Math.min(5000, Math.floor(delay * 1.5));
+      }
+    }
   }
 
   // 浅+递归合并（仅对象层级）
@@ -143,7 +156,7 @@ export class PanelStateManager {
     const current = this.cache || {};
     const next = updates ? this.deepMerge(current, updates) : current;
     this.cache = next;
-    await this.writeStateFile(next);
+    await this.writeStateFileWithRetry(next);
   }
 
   // 更新并可选防抖写入
@@ -156,10 +169,10 @@ export class PanelStateManager {
     if (debounceMs > 0) {
       this.saveTimer = setTimeout(async () => {
         this.saveTimer = null;
-        try { await this.writeStateFile(this.cache!); } catch (e) { console.error('保存面板状态失败:', e); }
+        try { await this.writeStateFileWithRetry(this.cache!); } catch (e) { console.error('保存面板状态失败:', e); }
       }, debounceMs);
     } else {
-      try { await this.writeStateFile(this.cache!); } catch (e) { console.error('保存面板状态失败:', e); }
+      try { await this.writeStateFileWithRetry(this.cache!); } catch (e) { console.error('保存面板状态失败:', e); }
     }
   }
 }
