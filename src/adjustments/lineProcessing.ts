@@ -22,15 +22,21 @@ export async function processLineEnhancement(layerPixelData: ArrayBuffer, select
     return 0;
   };
   
-  // 第一步：收集选区内所有像素的alpha值（包括alpha=0的像素）
-  const alphaValues: number[] = [];
+  // 第一步：收集必要像素并流式统计alpha范围
   const pixelData: Array<{ index: number; alpha: number; coefficient: number }> = [];
+  let minAlpha = 255;
+  let maxAlpha = 0;
+  let nonZeroCount = 0;
   
   for (let i = 0; i < pixelCount; i++) {
     const coefficient = getSelectionCoefficient(i);
     if (coefficient > 0) {
       const alpha = layerPixels[i * 4 + 3];
-      alphaValues.push(alpha);
+      if (alpha > 0) {
+        if (alpha < minAlpha) minAlpha = alpha;
+        if (alpha > maxAlpha) maxAlpha = alpha;
+        nonZeroCount++;
+      }
       if (!(alpha === 255 && coefficient >= 0.99)) {
         pixelData.push({ index: i, alpha, coefficient });
       }
@@ -42,15 +48,11 @@ export async function processLineEnhancement(layerPixelData: ArrayBuffer, select
     return result;
   }
   
-  // 第二步：计算alpha值的统计信息
-  const nonZeroAlphas = alphaValues.filter(a => a > 0);
-  if (nonZeroAlphas.length === 0) {
+  // 第二步：计算alpha值的统计信息（流式结果）
+  if (nonZeroCount === 0) {
     console.log('选区内没有非透明像素');
     return result;
   }
-  
-  const maxAlpha = Math.max(...nonZeroAlphas);
-  const minAlpha = Math.min(...nonZeroAlphas);
   
   console.log(`Alpha值范围: ${minAlpha} - ${maxAlpha}，总像素数: ${pixelData.length}`);
   if (minAlpha === 255 && maxAlpha === 255) {
@@ -98,12 +100,11 @@ export async function processLineEnhancement(layerPixelData: ArrayBuffer, select
     );
   }
   
-  // 第五步：高级抗锯齿处理
-  const antiAliasedResult = new Uint8Array(result.length);
-  antiAliasedResult.set(result);
-  
-  // 创建像素索引映射，便于快速查找
-  const pixelIndexMap = new Set(pixelData.map(p => p.index));
+  // 第五步：高级抗锯齿处理（仅复制alpha通道以降低内存）
+  const alphaChannel = new Uint8Array(pixelCount);
+  for (let i = 0; i < pixelCount; i++) {
+    alphaChannel[i] = result[i * 4 + 3];
+  }
   
   // 第一轮：对增强后的像素进行高斯模糊式平滑
   for (const { index, alpha, coefficient } of pixelData) {
@@ -150,7 +151,7 @@ export async function processLineEnhancement(layerPixelData: ArrayBuffer, select
         const smoothedAlpha = Math.round(weightedAlphaSum / totalWeight);
         // 根据选区系数决定平滑强度
         const smoothingStrength = Math.min(0.4, coefficient * 0.3);
-        antiAliasedResult[centerByteIndex + 3] = Math.round(
+        alphaChannel[index] = Math.round(
           result[centerByteIndex + 3] * (1 - smoothingStrength) + smoothedAlpha * smoothingStrength
         );
       }
@@ -178,8 +179,7 @@ export async function processLineEnhancement(layerPixelData: ArrayBuffer, select
             const nx = x + dx;
             const ny = y + dy;
             const neighborIndex = ny * width + nx;
-            const neighborByteIndex = neighborIndex * 4;
-            const neighborAlpha = antiAliasedResult[neighborByteIndex + 3];
+            const neighborAlpha = alphaChannel[neighborIndex];
             
             if (neighborAlpha > 0) {
               neighborAlphaSum += neighborAlpha;
@@ -200,7 +200,7 @@ export async function processLineEnhancement(layerPixelData: ArrayBuffer, select
           const edgeAlpha = Math.round(
             avgNeighborAlpha * (strongNeighborCount / 8) * coefficient * 0.08 // 从0.25降低到0.08
           );
-          antiAliasedResult[centerByteIndex + 3] = Math.min(15, edgeAlpha); // 从40降低到15
+          alphaChannel[centerIndex] = Math.min(15, edgeAlpha); // 从40降低到15
           
           // 同时复制邻居的平均颜色
           let rSum = 0, gSum = 0, bSum = 0, colorCount = 0;
@@ -211,29 +211,30 @@ export async function processLineEnhancement(layerPixelData: ArrayBuffer, select
               const nx = x + dx;
               const ny = y + dy;
               const neighborIndex = ny * width + nx;
-              const neighborByteIndex = neighborIndex * 4;
-              
-              if (antiAliasedResult[neighborByteIndex + 3] > 150) { // 只从强邻居复制颜色
-                rSum += antiAliasedResult[neighborByteIndex];
-                gSum += antiAliasedResult[neighborByteIndex + 1];
-                bSum += antiAliasedResult[neighborByteIndex + 2];
+              if (alphaChannel[neighborIndex] > 150) { // 只从强邻居复制颜色
+                const nb = neighborIndex * 4;
+                rSum += result[nb];
+                gSum += result[nb + 1];
+                bSum += result[nb + 2];
                 colorCount++;
               }
             }
           }
           
           if (colorCount > 0) {
-            antiAliasedResult[centerByteIndex] = Math.round(rSum / colorCount);
-            antiAliasedResult[centerByteIndex + 1] = Math.round(gSum / colorCount);
-            antiAliasedResult[centerByteIndex + 2] = Math.round(bSum / colorCount);
+            result[centerByteIndex] = Math.round(rSum / colorCount);
+            result[centerByteIndex + 1] = Math.round(gSum / colorCount);
+            result[centerByteIndex + 2] = Math.round(bSum / colorCount);
           }
         }
       }
     }
   }
   
-  // 使用抗锯齿后的结果
-  result.set(antiAliasedResult);
+  // 将alpha通道写回结果
+  for (let i = 0; i < pixelCount; i++) {
+    result[i * 4 + 3] = alphaChannel[i];
+  }
   
   console.log(`线条增强处理完成: 处理了 ${pixelData.length} 个像素，alpha范围: ${minAlpha}-${maxAlpha}`);
   
