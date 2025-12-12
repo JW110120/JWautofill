@@ -761,54 +761,48 @@ const handleLineEnhancement = async () => {
   if (!handleLicenseBeforeAction()) return;
   try {
     const { executeAsModal } = core;
-    
+    let selectionBounds: any = null;
+    let pixelResult: any = null;
+    let isBackgroundLayer = false;
     await executeAsModal(async () => {
-      // 检测当前编辑状态
       const editingState = await checkEditingState();
       if (!editingState.isValid) {
         return;
       }
-      
-      const { layer, isBackgroundLayer } = editingState;
-      
-      // 获取选区边界信息（如果没有选区则默认全选整个文档）
-      const selectionBounds = await getSelectionData();
+      const { layer, isBackgroundLayer: bg } = editingState;
+      isBackgroundLayer = bg;
+      selectionBounds = await getSelectionData();
       if (!selectionBounds) {
         await core.showAlert({ message: '获取文档信息失败' });
         return;
       }
-      
+      pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+    });
+    if (!selectionBounds || !pixelResult) {
+      giveFocusBackToPS();
+      return;
+    }
+    const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
+    let maskIndex = 0;
+    for (let docIndex of pixelResult.selectionIndices) {
+      fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
+      maskIndex++;
+    }
+    const processedPixels = await processLineEnhancement(
+      pixelResult.selectionPixelData.buffer,
+      fullSelectionMask.buffer,
+      { width: selectionBounds.docWidth, height: selectionBounds.docHeight }
+    );
+    await executeAsModal(async () => {
       await runWithTemporaryUnlock(async () => {
-        // 使用共享的像素数据处理函数
-        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
-        
-        // 创建完整文档尺寸的选区掩码数组
-        const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
-        let maskIndex = 0;
-        for (let docIndex of pixelResult.selectionIndices) {
-          fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
-          maskIndex++;
-        }
-        
-        // 步骤3：用线条增强算法处理像素数据
-        const processedPixels = await processLineEnhancement(
-          pixelResult.selectionPixelData.buffer, 
-          fullSelectionMask.buffer, 
-          { width: selectionBounds.docWidth, height: selectionBounds.docHeight }
-        );
-        
-        console.log('✅ 线条增强处理完成，长度:', processedPixels.length);
-        
-        // 步骤4：应用处理后的像素数据
         await applyProcessedPixels(processedPixels, pixelResult);
-        
-        console.log('✅ 线条增强处理完成');
       });
     });
     giveFocusBackToPS();
   } catch (error) {
+    const msg = typeof error === 'string' ? error : (error && (error.message || (error as any).toString?.() || '未知错误'));
     console.error('❌ 线条增强处理失败:', error);
-    await core.showAlert({ message: '线条增强处理失败: ' + error.message });
+    await core.showAlert({ message: '线条增强处理失败: ' + msg });
   }
 };
 
@@ -1045,11 +1039,21 @@ const handleDrop = (e: React.DragEvent, targetId: string) => {
 const renderLocalContrastContent = () => (
   <div className="adjustment-section">
     
-    <button className="adjustment-button" onClick={handlePixelTransition}>像素过渡</button>
+    <button className="adjustment-button" onClick={handlePixelTransition} title={`● 在选区边缘做柔和过渡，减少硬边和断裂。
+
+● 适合人物发丝、衣料边缘、贴图接缝等，让边缘更自然。
+
+● 半径决定参考范围大小；强度决定过渡幅度。
+
+示例：半径大→过渡范围更广；强度大→边缘更平滑。`}>像素过渡</button>
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label">半径</div>
+        <div className="adjustment-slider-label" title={`● 控制处理时参考的邻域大小，单位 px。
+
+● 半径越大，影响范围越宽，过渡更柔和但更慢。
+
+示例：小图建议 5–10px；大图建议 10–20px。`}>半径</div>
         <div className="unit-container">
           <input type="range" min="5" max="20" step="1" value={radius} onChange={handleRadiusChange} className="adjustment-slider-input" />
           <input type="number" min="5" max="20" step="1" value={radius} onChange={handleRadiusNumberChange} className="adjustment-number-input" />
@@ -1057,7 +1061,11 @@ const renderLocalContrastContent = () => (
         </div>
       </div>
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label">强度</div>
+        <div className="adjustment-slider-label" title={`● 控制过渡力度，单位级。
+
+● 强度越高，对比被削弱越多，边缘更圆滑。
+
+示例：轻微处理用 1–2 级；明显去锯齿用 3–5 级。`}>强度</div>
         <div className="unit-container">
           <input type="range" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaChange} className="adjustment-slider-input" />
           <input type="number" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaNumberChange} className="adjustment-number-input" />
@@ -1068,11 +1076,19 @@ const renderLocalContrastContent = () => (
 
     <div className="adjustment-divider"></div>
     
-    <button className="adjustment-button" onClick={handleHighFrequencyEnhancement}>高频增强</button>
+    <button className="adjustment-button" onClick={handleHighFrequencyEnhancement} title={`● 提升细小纹理与微对比，使画面更清晰。
+
+● 仅对选区内的高频细节生效，低频形状不被破坏。
+
+● 强度决定增强幅度；范围决定纳入的细节尺度宽度。
+
+示例：强度高→更锐利；范围大→兼顾更粗的纹理。`}>高频增强</button>
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label">强度</div>
+        <div className="adjustment-slider-label" title={`● 控制细节增强强弱，单位级。
+
+● 建议 1–4 用于精修，5–8 用于明显锐化。`}>强度</div>
         <div className="unit-container">
           <input type="range" min="1" max="10" step="0.5" value={highFreqIntensity} onChange={handleHighFreqIntensityChange} className="adjustment-slider-input" />
           <input type="number" min="1" max="10" step="0.5" value={highFreqIntensity} onChange={handleHighFreqIntensityNumberChange} className="adjustment-number-input" />
@@ -1080,7 +1096,9 @@ const renderLocalContrastContent = () => (
         </div>
       </div>
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label">范围</div>
+        <div className="adjustment-slider-label" title={`● 控制被视为高频的细节宽度，单位级。
+
+● 值小偏向极细纹理；值大兼顾较粗纹理。`}>范围</div>
         <div className="unit-container">
           <input type="range" min="1" max="10" step="0.5" value={highFreqRange} onChange={handleHighFreqRangeChange} className="adjustment-slider-input" />
           <input type="number" min="1" max="10" step="0.5" value={highFreqRange} onChange={handleHighFreqRangeNumberChange} className="adjustment-number-input" />
@@ -1095,25 +1113,39 @@ const renderEdgeProcessingContent = () => (
   <div className="adjustment-section">
 
     <div className="adjustment-double-buttons">
-      <button className="adjustment-button" onClick={handleSmartEdgeSmooth}>边缘平滑</button>
+      <button className="adjustment-button" onClick={handleSmartEdgeSmooth} title={`● 智能识别边缘并进行平滑与抗锯齿处理。
+
+● “保留细节”可避免过度模糊主体纹理。
+
+● Alpha 阈值决定透明边界识别灵敏度；颜色阈值决定色差门槛。
+
+示例：用于羽化边缘、贴图拼接、抠图残留锯齿等场景。`}>边缘平滑</button>
       
       <div className="adjustment-swtich-container">
         <label 
           className="adjustment-swtich-label"
           onClick={() => setPreserveDetail(!preserveDetail)}
           style={{ cursor: 'pointer' }}
+          title={`● 开启后仅在明显边缘平滑，尽量保留纹理细节。
+
+● 关闭则更强力统一边缘，可能略微变软。`}
         >保留细节</label>
         <sp-switch 
           checked={preserveDetail}
           onChange={(e) => setPreserveDetail(e.target.checked)}
           style={{ marginLeft: '8px' }}
+          title={`● 开启后更保守地处理边缘，保留主体纹理。`}
         />
       </div>
     </div>
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
-        <div className="wider-adjustment-slider-label">Alpha阈值</div>
+        <div className="wider-adjustment-slider-label" title={`● 判断“透明→不透明”边界的灵敏度，百分比。
+
+● 值越低越容易把弱透明当作边缘，平滑范围更大。
+
+示例：抠图残影用 20–40%；羽化较强的选区用 40–70%。`}>Alpha阈值</div>
         <div className="unit-container">
           <input type="range" min="10" max="100" step="1" value={edgeAlphaThreshold} onChange={handleEdgeAlphaThresholdChange} className="narrower-adjustment-slider-input" />
           <input type="number" min="10" max="100" step="1" value={edgeAlphaThreshold} onChange={handleEdgeAlphaThresholdNumberChange} className="adjustment-number-input" />
@@ -1121,7 +1153,11 @@ const renderEdgeProcessingContent = () => (
         </div>
       </div>
       <div className="adjustment-slider-item">
-        <div className="wide-adjustment-slider-label">颜色阈值</div>
+        <div className="wide-adjustment-slider-label" title={`● 判断颜色差异是否构成边界的门槛，百分比。
+
+● 值低更敏感，色差稍大即判为边缘；值高更保守。
+
+示例：噪点较多用 30–60%；色块分明用 10–30%。`}>颜色阈值</div>
         <div className="unit-container">
           <input type="range" min="10" max="100" step="1" value={edgeColorThreshold} onChange={handleEdgeColorThresholdChange} className="narrow-adjustment-slider-input" />
           <input type="number" min="1" max="100" step="1" value={edgeColorThreshold} onChange={handleEdgeColorThresholdNumberChange} className="adjustment-number-input" />
@@ -1129,7 +1165,11 @@ const renderEdgeProcessingContent = () => (
         </div>
       </div>
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label">半径</div>
+        <div className="adjustment-slider-label" title={`● 决定平滑核的大小，单位 px。
+
+● 半径越大，平滑越强但可能变软，且耗时增加。
+
+示例：小图 1–5px；大图 10–20px。`}>半径</div>
         <div className="unit-container">
           <input type="range" min="1" max="30" step="0.5" value={edgeSmoothRadius} onChange={handleEdgeSmoothRadiusChange} className="adjustment-slider-input" />
           <input type="number" min="1" max="30" step="0.5" value={edgeSmoothRadius} onChange={handleEdgeSmoothRadiusNumberChange} className="adjustment-number-input" />
@@ -1137,7 +1177,9 @@ const renderEdgeProcessingContent = () => (
         </div>
       </div>
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label">强度</div>
+        <div className="adjustment-slider-label" title={`● 平滑权重，单位级。
+
+● 值越大，边缘被拉平越明显。`}>强度</div>
         <div className="unit-container">
           <input type="range" min="1" max="10" step="0.5" value={edgeIntensity} onChange={handleEdgeIntensityChange} className="adjustment-slider-input" />
           <input type="number" min="1" max="10" step="0.5" value={edgeIntensity} onChange={handleEdgeIntensityNumberChange} className="adjustment-number-input" />
@@ -1148,7 +1190,11 @@ const renderEdgeProcessingContent = () => (
 
     <div className="adjustment-divider"></div>
 
-    <button className="adjustment-button" onClick={handleLineEnhancement}>加黑线条</button>
+    <button className="adjustment-button" onClick={handleLineEnhancement} title={`● 针对边缘线条的 Alpha 进行增强，使轮廓更清晰。
+
+● 适合线稿、UI 描边、图标轮廓等。
+
+● 无选区时默认对整幅图处理。`}>加黑线条</button>
   </div>
 );
 
@@ -1156,13 +1202,16 @@ const renderBlockAdjustmentContent = () => (
   <div className="adjustment-section">
 
     <div className="adjustment-double-buttons">
-      <button className="adjustment-button" onClick={handleBlockAverage}>分块平均</button>
+      <button className="adjustment-button" onClick={handleBlockAverage} title={`● 按网格对选区分块做加权平均，降低噪点和斑驳。
+
+● 加权模式让中心权重更高，保留主体轮廓。`}>分块平均</button>
       
       <div className="adjustment-swtich-container">
         <label 
           className="adjustment-swtich-label"
           onClick={() => setUseWeightedAverage(!useWeightedAverage)}
           style={{ cursor: 'pointer' }}
+          title={`● 开启后中心像素影响更大，边缘影响更小，保留主体。`}
         >加权模式</label>
         <sp-switch 
           checked={useWeightedAverage}
@@ -1175,7 +1224,11 @@ const renderBlockAdjustmentContent = () => (
     {useWeightedAverage && (
       <div className="adjustment-slider-container">
         <div className="adjustment-slider-item">
-          <div className="adjustment-slider-label">强度</div>
+          <div className="adjustment-slider-label" title={`● 控制分块平滑力度，单位级。
+
+● 值越大，纹理被弱化越多。
+
+示例：照片降噪用 2–6；UI 底色统一用 6–10。`}>强度</div>
           <div className="unit-container">
             <input type="range" min="1" max="10" step="0.5" value={weightedIntensity} onChange={handleWeightedIntensityChange} className="adjustment-slider-input" />
             <input type="number" min="1" max="10" step="0.5" value={weightedIntensity} onChange={handleWeightedIntensityNumberChange} className="adjustment-number-input" />

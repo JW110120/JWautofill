@@ -31,7 +31,9 @@ export async function processLineEnhancement(layerPixelData: ArrayBuffer, select
     if (coefficient > 0) {
       const alpha = layerPixels[i * 4 + 3];
       alphaValues.push(alpha);
-      pixelData.push({ index: i, alpha, coefficient });
+      if (!(alpha === 255 && coefficient >= 0.99)) {
+        pixelData.push({ index: i, alpha, coefficient });
+      }
     }
   }
   
@@ -51,6 +53,9 @@ export async function processLineEnhancement(layerPixelData: ArrayBuffer, select
   const minAlpha = Math.min(...nonZeroAlphas);
   
   console.log(`Alpha值范围: ${minAlpha} - ${maxAlpha}，总像素数: ${pixelData.length}`);
+  if (minAlpha === 255 && maxAlpha === 255) {
+    return result;
+  }
   
   // 第三步：创建保守的alpha增强函数
   const enhanceAlpha = (originalAlpha: number): number => {
@@ -102,6 +107,9 @@ export async function processLineEnhancement(layerPixelData: ArrayBuffer, select
   
   // 第一轮：对增强后的像素进行高斯模糊式平滑
   for (const { index, alpha, coefficient } of pixelData) {
+    if (alpha === 255 && coefficient >= 0.99) {
+      continue;
+    }
     if (alpha > 0) {
       const x = index % width;
       const y = Math.floor(index / width);
