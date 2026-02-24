@@ -821,6 +821,7 @@ const handleLineEnhancement = async () => {
     let selectionBounds: any = null;
     let pixelResult: any = null;
     let isBackgroundLayer = false;
+    let abortedByBackgroundLayer = false;
     await executeAsModal(async () => {
       const editingState = await checkEditingState();
       if (!editingState.isValid) {
@@ -828,6 +829,11 @@ const handleLineEnhancement = async () => {
       }
       const { layer, isBackgroundLayer: bg } = editingState;
       isBackgroundLayer = bg;
+      if (isBackgroundLayer) {
+        abortedByBackgroundLayer = true;
+        await core.showAlert({ message: '请选择不透明底的线稿图层！' });
+        return;
+      }
       selectionBounds = await getSelectionData();
       if (!selectionBounds) {
         await core.showAlert({ message: '获取文档信息失败' });
@@ -835,6 +841,10 @@ const handleLineEnhancement = async () => {
       }
       pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
     });
+    if (abortedByBackgroundLayer) {
+      giveFocusBackToPS();
+      return;
+    }
     if (!selectionBounds || !pixelResult) {
       giveFocusBackToPS();
       return;

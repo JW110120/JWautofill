@@ -21,6 +21,32 @@ export async function processLineEnhancement(layerPixelData: ArrayBuffer, select
     }
     return 0;
   };
+
+  const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+
+  const smoothstep = (edge0: number, edge1: number, x: number) => {
+    const t = clamp01((x - edge0) / Math.max(1e-6, edge1 - edge0));
+    return t * t * (3 - 2 * t);
+  };
+
+  const getLocalMaxAlpha = (pixelIndex: number): number => {
+    const x = pixelIndex % width;
+    const y = Math.floor(pixelIndex / width);
+
+    let maxA = 0;
+    for (let dy = -1; dy <= 1; dy++) {
+      const ny = y + dy;
+      if (ny < 0 || ny >= height) continue;
+      for (let dx = -1; dx <= 1; dx++) {
+        const nx = x + dx;
+        if (nx < 0 || nx >= width) continue;
+        const nIndex = ny * width + nx;
+        const a = layerPixels[nIndex * 4 + 3];
+        if (a > maxA) maxA = a;
+      }
+    }
+    return maxA;
+  };
   
   // 第一步：收集必要像素并流式统计alpha范围
   const pixelData: Array<{ index: number; alpha: number; coefficient: number }> = [];
@@ -37,7 +63,7 @@ export async function processLineEnhancement(layerPixelData: ArrayBuffer, select
         if (alpha > maxAlpha) maxAlpha = alpha;
         nonZeroCount++;
       }
-      if (!(alpha === 255 && coefficient >= 0.99)) {
+      if (alpha > 0 && !(alpha === 255 && coefficient >= 0.99)) {
         pixelData.push({ index: i, alpha, coefficient });
       }
     }
@@ -59,54 +85,46 @@ export async function processLineEnhancement(layerPixelData: ArrayBuffer, select
     return result;
   }
   
-  // 第三步：创建保守的alpha增强函数
+  // 第三步：连续曲线加黑（自适应k，保护最外沿羽化）
   const enhanceAlpha = (originalAlpha: number): number => {
-    if (originalAlpha === 0) {
-      // 对于完全透明的像素，不进行处理
-      return 0;
-    }
-    
-    // 只对真正需要增强的低alpha值进行处理
-    // 如果alpha值已经比较高（超过180），则只进行轻微增强
-    if (originalAlpha >= 180) {
-      return Math.min(255, originalAlpha + Math.max(2, Math.round((255 - originalAlpha) * 0.1)));
-    }
-    
-    // 对于中等alpha值（120-180），进行适度增强
-    if (originalAlpha >= 120) {
-      const enhancement = Math.round((255 - originalAlpha) * 0.25);
-      return Math.min(255, originalAlpha + enhancement);
-    }
-    
-    // 只对低alpha值（小于120）进行较大增强
-    const normalizedPosition = (originalAlpha - minAlpha) / Math.max(1, maxAlpha - minAlpha);
-    const enhancementFactor = Math.pow(1 - normalizedPosition, 0.4); // 降低指数，减少增强幅度
-    
-    // 限制增强幅度，避免过度处理
-    const maxEnhancement = Math.min(60, (255 - originalAlpha) * 0.4);
-    const enhancement = maxEnhancement * enhancementFactor;
-    
-    return Math.min(255, Math.round(originalAlpha + enhancement));
+    if (originalAlpha <= 0) return 0;
+    if (originalAlpha >= 255) return 255;
+
+    const a = originalAlpha / 255;
+
+    const kMax = 3.0;
+    const edgeProtect = smoothstep(0.04, 0.18, a);
+    const lowBoostRaw = 1 - smoothstep(0.22, 0.86, a);
+    const lowBoost = Math.pow(lowBoostRaw, 1.15);
+    const kEff = 1 + (kMax - 1) * (edgeProtect * lowBoost);
+
+    const enhanced = 1 - Math.pow(1 - a, kEff);
+    const midDamp = smoothstep(0.16, 0.55, a) * (1 - smoothstep(0.78, 0.93, a));
+    const deltaScale = 1 - 0.22 * midDamp;
+    const finalAlpha = a + (enhanced - a) * deltaScale;
+    return Math.max(0, Math.min(255, Math.round(finalAlpha * 255)));
   };
   
   // 第四步：应用增强算法
   for (const { index, alpha, coefficient } of pixelData) {
     const byteIndex = index * 4;
     const enhancedAlpha = enhanceAlpha(alpha);
-    
-    // 根据选区系数混合原始alpha和增强后的alpha
-    result[byteIndex + 3] = Math.round(
-      alpha * (1 - coefficient) + enhancedAlpha * coefficient
-    );
+
+    const localMaxA = getLocalMaxAlpha(index);
+    const rel = localMaxA > 0 ? alpha / localMaxA : 0;
+    const edgeKeep = smoothstep(0.42, 0.86, rel);
+    const edgeAwareAlpha = alpha + (enhancedAlpha - alpha) * edgeKeep;
+
+    result[byteIndex + 3] = Math.round(alpha * (1 - coefficient) + edgeAwareAlpha * coefficient);
   }
   
-  // 第五步：高级抗锯齿处理（仅复制alpha通道以降低内存）
+  // 第五步：轻量级平滑（不扩边，只在原有羽化内保持衰减柔和）
   const alphaChannel = new Uint8Array(pixelCount);
   for (let i = 0; i < pixelCount; i++) {
     alphaChannel[i] = result[i * 4 + 3];
   }
   
-  // 第一轮：对增强后的像素进行高斯模糊式平滑
+  // 对增强后的像素进行高斯核平滑（双缓冲写入alphaChannel）
   for (const { index, alpha, coefficient } of pixelData) {
     if (alpha === 255 && coefficient >= 0.99) {
       continue;
@@ -149,83 +167,10 @@ export async function processLineEnhancement(layerPixelData: ArrayBuffer, select
       
       if (totalWeight > 0) {
         const smoothedAlpha = Math.round(weightedAlphaSum / totalWeight);
-        // 根据选区系数决定平滑强度
-        const smoothingStrength = Math.min(0.4, coefficient * 0.3);
-        alphaChannel[index] = Math.round(
-          result[centerByteIndex + 3] * (1 - smoothingStrength) + smoothedAlpha * smoothingStrength
-        );
-      }
-    }
-  }
-  
-  // 第二轮：轻量级边缘抗锯齿处理（减少线条加粗）
-  for (let y = 1; y < height - 1; y++) {
-    for (let x = 1; x < width - 1; x++) {
-      const centerIndex = y * width + x;
-      const centerByteIndex = centerIndex * 4;
-      const coefficient = getSelectionCoefficient(centerIndex);
-      
-      // 只处理选区内原本透明但邻近有内容的像素，并且要求更严格的条件
-      if (coefficient > 0.5 && layerPixels[centerByteIndex + 3] === 0) { // 提高选区系数要求
-        // 检查周围8个像素，寻找边缘
-        let strongNeighborCount = 0; // 强邻居（alpha > 150）的数量
-        let neighborAlphaSum = 0;
-        let neighborCount = 0;
-        
-        for (let dy = -1; dy <= 1; dy++) {
-          for (let dx = -1; dx <= 1; dx++) {
-            if (dx === 0 && dy === 0) continue;
-            
-            const nx = x + dx;
-            const ny = y + dy;
-            const neighborIndex = ny * width + nx;
-            const neighborAlpha = alphaChannel[neighborIndex];
-            
-            if (neighborAlpha > 0) {
-              neighborAlphaSum += neighborAlpha;
-              neighborCount++;
-              
-              // 只有强邻居才算作真正的边缘
-              if (neighborAlpha > 150) {
-                strongNeighborCount++;
-              }
-            }
-          }
-        }
-        
-        // 只有当有足够多的强邻居时才进行边缘处理，避免过度扩展
-        if (strongNeighborCount >= 2 && neighborCount > 0) {
-          const avgNeighborAlpha = neighborAlphaSum / neighborCount;
-          // 大幅降低边缘alpha值，减少线条加粗
-          const edgeAlpha = Math.round(
-            avgNeighborAlpha * (strongNeighborCount / 8) * coefficient * 0.08 // 从0.25降低到0.08
-          );
-          alphaChannel[centerIndex] = Math.min(15, edgeAlpha); // 从40降低到15
-          
-          // 同时复制邻居的平均颜色
-          let rSum = 0, gSum = 0, bSum = 0, colorCount = 0;
-          for (let dy = -1; dy <= 1; dy++) {
-            for (let dx = -1; dx <= 1; dx++) {
-              if (dx === 0 && dy === 0) continue;
-              
-              const nx = x + dx;
-              const ny = y + dy;
-              const neighborIndex = ny * width + nx;
-              if (alphaChannel[neighborIndex] > 150) { // 只从强邻居复制颜色
-                const nb = neighborIndex * 4;
-                rSum += result[nb];
-                gSum += result[nb + 1];
-                bSum += result[nb + 2];
-                colorCount++;
-              }
-            }
-          }
-          
-          if (colorCount > 0) {
-            result[centerByteIndex] = Math.round(rSum / colorCount);
-            result[centerByteIndex + 1] = Math.round(gSum / colorCount);
-            result[centerByteIndex + 2] = Math.round(bSum / colorCount);
-          }
+        const smoothingStrength = Math.min(0.20, coefficient * 0.16);
+        const currentAlpha = result[centerByteIndex + 3];
+        if (smoothedAlpha < currentAlpha) {
+          alphaChannel[index] = Math.round(currentAlpha * (1 - smoothingStrength) + smoothedAlpha * smoothingStrength);
         }
       }
     }
