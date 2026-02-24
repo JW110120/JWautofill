@@ -68,8 +68,8 @@ export const checkEditingState = async () => {
       return { isValid: false };
     }
 
-    // 检查图层类型
-    if (!layerInfo.hasPixels) {
+    // 检查图层类型（允许空白像素图层）
+    if (layer.kind !== 'pixel') {
       await core.showAlert({ message: '请选择像素图层' });
       return { isValid: false };
     }
@@ -94,6 +94,31 @@ export const processPixelData = async (selectionBounds: SelectionBounds, layer: 
   
   const layerWidth = layerBounds.right - layerBounds.left;
   const layerHeight = layerBounds.bottom - layerBounds.top;
+
+  // 创建完整文档大小的像素数组，不进行预初始化
+  // 背景图层和普通图层都将通过后续的像素填充来设置正确的值
+  const fullPixelData = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight * 4);
+
+  // 空白像素图层：bounds 宽高可能为 0，此时跳过 getPixels，按全透明处理
+  if (!isBackgroundLayer && (layerWidth <= 0 || layerHeight <= 0)) {
+    const selectionPixelData = new Uint8Array(fullPixelData.length);
+    const selectionIndices = Array.from(selectionBounds.selectionDocIndices);
+    for (const docIndex of selectionIndices) {
+      const sourceIndex = docIndex * 4;
+      selectionPixelData[sourceIndex] = 0;
+      selectionPixelData[sourceIndex + 1] = 0;
+      selectionPixelData[sourceIndex + 2] = 0;
+      selectionPixelData[sourceIndex + 3] = 0;
+    }
+    return {
+      fullPixelData,
+      selectionPixelData,
+      selectionIndices,
+      selectionBounds,
+      layer,
+      isBackgroundLayer
+    };
+  }
   
   // 获取图层实际像素数据
   const layerPixels = await imaging.getPixels({
@@ -108,10 +133,6 @@ export const processPixelData = async (selectionBounds: SelectionBounds, layer: 
   
   const layerPixelData = await layerPixels.imageData.getData();
   console.log('✅ 获取图层像素数组，尺寸:', layerWidth, 'x', layerHeight, '长度:', layerPixelData.length);
-  
-  // 创建完整文档大小的像素数组，不进行预初始化
-  // 背景图层和普通图层都将通过后续的像素填充来设置正确的值
-  const fullPixelData = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight * 4);
   
   // 移除强制白色初始化，避免在选区边界产生白色边缘
   // 背景图层的像素值将通过下面的图层像素数据填充来设置

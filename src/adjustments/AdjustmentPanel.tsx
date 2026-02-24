@@ -1278,12 +1278,6 @@ const renderBlockAdjustmentContent = () => (
       </div>
     </div>
 
-    <button className="adjustment-button" onClick={handleBlockGradient} title={`● 对每个不相连选区（连通块）分别采样一次渐变颜色并填充。
-
-● 渐变数据来自主面板“渐变设置”的最终预览（含角度与反向）。
-
-● 每个连通块取形状质心，沿渐变方向投影后做归一化映射。`}>分块渐变</button>
-
     {useWeightedAverage && (
       <div className="adjustment-slider-container">
         <div className="adjustment-slider-item">
@@ -1300,6 +1294,14 @@ const renderBlockAdjustmentContent = () => (
         </div>
       </div>
     )}
+
+    <div className="adjustment-divider"></div>
+
+    <button className="adjustment-button" onClick={handleBlockGradient} title={`● 对每个不相连选区（连通块）分别采样一次渐变颜色并填充。
+
+● 渐变数据来自主面板“渐变设置”的最终预览（含角度与反向）。
+
+● 每个连通块取形状质心，沿渐变方向投影后做归一化映射。`}>分块渐变</button>
   </div>
 );
 

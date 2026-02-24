@@ -309,7 +309,6 @@ export async function processBlockGradient(
     for (let i = start; i < end; i++) {
       const idx = pixelsByRegion[i];
       const pIdx = idx << 2;
-      if (!isBackgroundLayer && layerPixels[pIdx + 3] === 0) continue;
       result[pIdx] = sampled.r;
       result[pIdx + 1] = sampled.g;
       result[pIdx + 2] = sampled.b;
