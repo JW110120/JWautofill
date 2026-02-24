@@ -390,6 +390,10 @@ class App extends React.Component<AppProps, AppState> {
         this.setState({
             selectedGradient: gradient
         });
+        PanelStateManager.update(
+            { appPanel: { selectedGradient: gradient } },
+            { debounceMs: 200 }
+        ).catch(e => console.warn('⚠️ 保存当前渐变设置失败:', e));
     }
 
     closeColorSettings() {

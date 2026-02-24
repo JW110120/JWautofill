@@ -1,3 +1,4 @@
+import type { Gradient } from '../types/state';
 import { } from 'react';
 
 /**
@@ -15,6 +16,7 @@ export type AppPanelState = {
   createNewLayer?: boolean;
   clearMode?: boolean;
   fillMode?: 'foreground' | 'pattern' | 'gradient';
+  selectedGradient?: Gradient | null;
 };
 
 export type AdjustmentPanelState = {
@@ -146,6 +148,13 @@ export class PanelStateManager {
   // 读取（不会触发文件访问，如果有缓存则直接返回）
   static async load(): Promise<PanelState> {
     if (this.cache) return this.cache;
+    const existing = await this.readStateFile();
+    this.cache = existing || {};
+    return this.cache;
+  }
+
+  // 读取最新（强制从磁盘读取，覆盖缓存）
+  static async loadLatest(): Promise<PanelState> {
     const existing = await this.readStateFile();
     this.cache = existing || {};
     return this.cache;

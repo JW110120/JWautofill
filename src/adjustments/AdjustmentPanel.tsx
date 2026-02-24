@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { processBlockAverage } from './blockAverageProcessor';
+import { processBlockGradient } from './blockGradientProcessor';
 import { processPixelTransition } from './pixelTransitionProcessor';
 import { processLineEnhancement } from './lineProcessing';
 import { processHighFrequencyEnhancement } from './highFrequencyEnhancer';
@@ -7,6 +8,7 @@ import { processSmartEdgeSmooth, defaultSmartEdgeSmoothParams } from './smartEdg
 import { checkEditingState, processPixelData, applyProcessedPixels } from './pixelDataProcessor';
 import { LicenseManager } from '../utils/LicenseManager';
 import { action, app, core, imaging } from 'photoshop';
+import type { Gradient } from '../types/state';
 import './adjustment.css';
 import './adjustment-input.css';
 import { AdjustmentMenu } from '../utils/AdjustmentMenu';
@@ -756,6 +758,61 @@ const handleBlockAverage = async () => {
   }
 };
 
+const handleBlockGradient = async () => {
+  if (!handleLicenseBeforeAction()) return;
+  try {
+    const { executeAsModal } = core;
+
+    await executeAsModal(async () => {
+      const editingState = await checkEditingState();
+      if (!editingState.isValid) {
+        return;
+      }
+
+      const { layer, isBackgroundLayer } = editingState;
+
+      const selectionBounds = await getSelectionData();
+      if (!selectionBounds) {
+        await core.showAlert({ message: '获取文档信息失败' });
+        return;
+      }
+
+      const panelState = await PanelStateManager.loadLatest();
+      const gradient = (panelState?.appPanel as any)?.selectedGradient as Gradient | null;
+      if (!gradient || !gradient.stops || gradient.stops.length === 0) {
+        await core.showAlert({ message: '请先在主面板的渐变设置中选择一个渐变预设' });
+        return;
+      }
+
+      await runWithTemporaryUnlock(async () => {
+        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+
+        const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
+        let maskIndex = 0;
+        for (let docIndex of pixelResult.selectionIndices) {
+          fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
+          maskIndex++;
+        }
+
+        const processedPixels = await processBlockGradient(
+          pixelResult.selectionPixelData.buffer,
+          fullSelectionMask.buffer,
+          { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
+          gradient,
+          isBackgroundLayer
+        );
+
+        await applyProcessedPixels(processedPixels, pixelResult);
+      });
+    });
+    giveFocusBackToPS();
+  } catch (error) {
+    const msg = typeof error === 'string' ? error : (error && (error.message || (error as any).toString?.() || '未知错误'));
+    console.error('❌ 分块渐变处理失败:', error);
+    await core.showAlert({ message: '分块渐变处理失败: ' + msg });
+  }
+};
+
 // 线条处理功能
 const handleLineEnhancement = async () => {
   if (!handleLicenseBeforeAction()) return;
@@ -1220,6 +1277,12 @@ const renderBlockAdjustmentContent = () => (
         />
       </div>
     </div>
+
+    <button className="adjustment-button" onClick={handleBlockGradient} title={`● 对每个不相连选区（连通块）分别采样一次渐变颜色并填充。
+
+● 渐变数据来自主面板“渐变设置”的最终预览（含角度与反向）。
+
+● 每个连通块取形状质心，沿渐变方向投影后做归一化映射。`}>分块渐变</button>
 
     {useWeightedAverage && (
       <div className="adjustment-slider-container">
