@@ -42,6 +42,11 @@ export async function processGradientRelax(
     return t * t * (3 - 2 * t);
   };
 
+  const smootherstep01 = (t: number) => {
+    const x = Math.max(0, Math.min(1, t));
+    return x * x * x * (x * (x * 6 - 15) + 10);
+  };
+
   const temp = new Uint8Array(pixels.length);
   temp.set(pixels);
   const blurred = new Uint8Array(pixels.length);
@@ -195,6 +200,38 @@ export async function processGradientRelax(
   passHorizontal();
   passVertical();
 
+  const supportTmp = new Uint16Array(width * height);
+  for (let y = 0; y < height; y++) {
+    const rowBase = y * width;
+    for (let x = 0; x < width; x++) {
+      const idx = rowBase + x;
+      if ((selectionMask[idx] || 0) === 0) {
+        supportTmp[idx] = 0;
+        continue;
+      }
+      const left = x > 0 ? support[idx - 1] : support[idx];
+      const mid = support[idx];
+      const right = x + 1 < width ? support[idx + 1] : support[idx];
+      supportTmp[idx] = left + mid + right;
+    }
+  }
+
+  const supportSmooth = new Uint8Array(width * height);
+  for (let y = 0; y < height; y++) {
+    const rowBase = y * width;
+    for (let x = 0; x < width; x++) {
+      const idx = rowBase + x;
+      if ((selectionMask[idx] || 0) === 0) {
+        supportSmooth[idx] = 0;
+        continue;
+      }
+      const up = y > 0 ? supportTmp[idx - width] : supportTmp[idx];
+      const mid = supportTmp[idx];
+      const down = y + 1 < height ? supportTmp[idx + width] : supportTmp[idx];
+      supportSmooth[idx] = Math.round((up + mid + down) / 9);
+    }
+  }
+
   const out = new Uint8Array(pixels.length);
   out.set(pixels);
 
@@ -212,7 +249,9 @@ export async function processGradientRelax(
     const m = selectionMask[i] || 0;
     if (m === 0) continue;
 
-    const fade = smoothstep(0.72, 0.97, (support[i] || 0) / 255);
+    const s01 = (supportSmooth[i] || 0) / 255;
+    const t = Math.max(0, Math.min(1, (s01 - 0.22) / (0.995 - 0.22)));
+    const fade = smootherstep01(smootherstep01(t));
     const k = effectBase * fade * kScale;
     if (k <= 0) continue;
 
