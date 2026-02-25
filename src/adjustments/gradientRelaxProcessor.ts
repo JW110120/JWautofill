@@ -2,7 +2,7 @@ export async function processGradientRelax(
   layerPixelData: ArrayBuffer,
   selectionData: ArrayBuffer,
   bounds: { width: number; height: number },
-  params: { strength: number },
+  params: { amount: number },
   isBackgroundLayer: boolean = false
 ): Promise<Uint8Array> {
   const width = bounds.width;
@@ -10,10 +10,18 @@ export async function processGradientRelax(
   const pixels = new Uint8Array(layerPixelData);
   const selectionMask = new Uint8Array(selectionData);
 
-  const strength = Math.max(1, Math.min(10, params.strength || 1));
-  const effectBase = Math.max(0, Math.min(1, strength / 10));
+  const rawAmount = typeof params.amount === 'number' ? params.amount : 0;
+  const amount = Math.max(-10, Math.min(10, rawAmount));
+  if (amount === 0) {
+    const out0 = new Uint8Array(pixels.length);
+    out0.set(pixels);
+    return out0;
+  }
 
-  const radius = Math.max(2, Math.min(30, Math.round(2 + strength * 2)));
+  const magnitude = Math.abs(amount);
+  const effectBase = Math.max(0, Math.min(1, magnitude / 10));
+
+  const radius = Math.max(2, Math.min(30, Math.round(2 + magnitude * 2)));
   const sigma = Math.max(1, radius * 0.55);
 
   const kernelSize = radius * 2 + 1;
@@ -36,22 +44,26 @@ export async function processGradientRelax(
 
   const temp = new Uint8Array(pixels.length);
   temp.set(pixels);
-  const result = new Uint8Array(pixels.length);
-  result.set(pixels);
+  const blurred = new Uint8Array(pixels.length);
+  blurred.set(pixels);
+  const supportX = new Uint8Array(width * height);
+  const support = new Uint8Array(width * height);
 
   const passHorizontal = () => {
     for (let y = 0; y < height; y++) {
       const rowBase = y * width;
       for (let x = 0; x < width; x++) {
-        const centerPix = (rowBase + x) * 4;
-        const centerA = pixels[centerPix + 3];
-        const centerMask = selectionMask[rowBase + x] || 0;
-
-        const shouldProcess = isBackgroundLayer ? centerMask > 0 : centerA > 0;
-        if (!shouldProcess) continue;
+        const centerIndex = rowBase + x;
+        const centerPix = centerIndex * 4;
+        const centerMask = selectionMask[centerIndex] || 0;
+        if (centerMask === 0) {
+          supportX[centerIndex] = 0;
+          continue;
+        }
 
         let localKernelSum = 0;
         let weightSum = 0;
+        let maskWeightSum = 0;
         let sumA = 0;
         let sumPremR = 0;
         let sumPremG = 0;
@@ -67,10 +79,10 @@ export async function processGradientRelax(
           if (m === 0) continue;
           const idx = (rowBase + sx) * 4;
           const a = pixels[idx + 3];
-          if (!isBackgroundLayer && a === 0) continue;
 
           const w = k * (m / 255);
           weightSum += w;
+          maskWeightSum += w;
           sumA += a * w;
           const a01 = a / 255;
           sumPremR += pixels[idx] * a01 * w;
@@ -78,12 +90,14 @@ export async function processGradientRelax(
           sumPremB += pixels[idx + 2] * a01 * w;
         }
 
-        if (weightSum <= 0 || localKernelSum <= 0) continue;
+        if (localKernelSum <= 0) {
+          supportX[centerIndex] = 0;
+          continue;
+        }
+        const s = Math.max(0, Math.min(1, maskWeightSum / localKernelSum));
+        supportX[centerIndex] = Math.round(s * 255);
 
-        const support = Math.max(0, Math.min(1, weightSum / localKernelSum));
-        const boundaryFade = smoothstep(0.72, 0.97, support);
-        const effect = effectBase * boundaryFade;
-        if (effect <= 0) continue;
+        if (weightSum <= 0) continue;
 
         const blurA = sumA / weightSum;
         let blurR = 0;
@@ -96,12 +110,12 @@ export async function processGradientRelax(
           blurB = Math.max(0, Math.min(255, sumPremB / weightSum * invA));
         }
 
-        temp[centerPix] = Math.round(pixels[centerPix] * (1 - effect) + blurR * effect);
-        temp[centerPix + 1] = Math.round(pixels[centerPix + 1] * (1 - effect) + blurG * effect);
-        temp[centerPix + 2] = Math.round(pixels[centerPix + 2] * (1 - effect) + blurB * effect);
+        temp[centerPix] = Math.round(blurR);
+        temp[centerPix + 1] = Math.round(blurG);
+        temp[centerPix + 2] = Math.round(blurB);
         temp[centerPix + 3] = isBackgroundLayer
           ? 255
-          : Math.round(centerA * (1 - effect) + blurA * effect);
+          : Math.round(blurA);
       }
     }
   };
@@ -111,14 +125,15 @@ export async function processGradientRelax(
       for (let x = 0; x < width; x++) {
         const centerIndex = y * width + x;
         const centerPix = centerIndex * 4;
-        const centerA = temp[centerPix + 3];
         const centerMask = selectionMask[centerIndex] || 0;
-
-        const shouldProcess = isBackgroundLayer ? centerMask > 0 : centerA > 0;
-        if (!shouldProcess) continue;
+        if (centerMask === 0) {
+          support[centerIndex] = 0;
+          continue;
+        }
 
         let localKernelSum = 0;
         let weightSum = 0;
+        let maskWeightSum = 0;
         let sumA = 0;
         let sumPremR = 0;
         let sumPremG = 0;
@@ -131,13 +146,16 @@ export async function processGradientRelax(
           localKernelSum += k;
 
           const sIndex = sy * width + x;
-          const m = selectionMask[sIndex] || 0;
-          if (m === 0) continue;
+          const m = supportX[sIndex] || 0;
           const idx = sIndex * 4;
           const a = temp[idx + 3];
-          if (!isBackgroundLayer && a === 0) continue;
 
-          const w = k * (m / 255);
+          const wMask = k * (m / 255);
+          maskWeightSum += wMask;
+
+          const m2 = selectionMask[sIndex] || 0;
+          if (m2 === 0) continue;
+          const w = k * (m2 / 255);
           weightSum += w;
           sumA += a * w;
           const a01 = a / 255;
@@ -146,12 +164,14 @@ export async function processGradientRelax(
           sumPremB += temp[idx + 2] * a01 * w;
         }
 
-        if (weightSum <= 0 || localKernelSum <= 0) continue;
+        if (localKernelSum <= 0) {
+          support[centerIndex] = 0;
+          continue;
+        }
+        const s = Math.max(0, Math.min(1, maskWeightSum / localKernelSum));
+        support[centerIndex] = Math.round(s * 255);
 
-        const support = Math.max(0, Math.min(1, weightSum / localKernelSum));
-        const boundaryFade = smoothstep(0.72, 0.97, support);
-        const effect = effectBase * boundaryFade;
-        if (effect <= 0) continue;
+        if (weightSum <= 0) continue;
 
         const blurA = sumA / weightSum;
         let blurR = 0;
@@ -164,12 +184,10 @@ export async function processGradientRelax(
           blurB = Math.max(0, Math.min(255, sumPremB / weightSum * invA));
         }
 
-        result[centerPix] = Math.round(temp[centerPix] * (1 - effect) + blurR * effect);
-        result[centerPix + 1] = Math.round(temp[centerPix + 1] * (1 - effect) + blurG * effect);
-        result[centerPix + 2] = Math.round(temp[centerPix + 2] * (1 - effect) + blurB * effect);
-        result[centerPix + 3] = isBackgroundLayer
-          ? 255
-          : Math.round(centerA * (1 - effect) + blurA * effect);
+        blurred[centerPix] = Math.round(blurR);
+        blurred[centerPix + 1] = Math.round(blurG);
+        blurred[centerPix + 2] = Math.round(blurB);
+        blurred[centerPix + 3] = isBackgroundLayer ? 255 : Math.round(blurA);
       }
     }
   };
@@ -177,6 +195,81 @@ export async function processGradientRelax(
   passHorizontal();
   passVertical();
 
-  return result;
-}
+  const out = new Uint8Array(pixels.length);
+  out.set(pixels);
 
+  const clamp255 = (v: number) => Math.max(0, Math.min(255, v));
+  const softLimiter = (delta: number, limit: number) => {
+    const ad = Math.abs(delta);
+    if (ad <= limit) return delta;
+    const scale = limit / ad;
+    return delta * scale;
+  };
+
+  const kScale = amount > 0 ? 0.9 : 1.0;
+
+  for (let i = 0; i < width * height; i++) {
+    const m = selectionMask[i] || 0;
+    if (m === 0) continue;
+
+    const fade = smoothstep(0.72, 0.97, (support[i] || 0) / 255);
+    const k = effectBase * fade * kScale;
+    if (k <= 0) continue;
+
+    const p = i * 4;
+    const oA = isBackgroundLayer ? 255 : pixels[p + 3];
+    const bA = isBackgroundLayer ? 255 : blurred[p + 3];
+
+    if (amount < 0) {
+      out[p] = Math.round(pixels[p] * (1 - k) + blurred[p] * k);
+      out[p + 1] = Math.round(pixels[p + 1] * (1 - k) + blurred[p + 1] * k);
+      out[p + 2] = Math.round(pixels[p + 2] * (1 - k) + blurred[p + 2] * k);
+      out[p + 3] = isBackgroundLayer ? 255 : Math.round(oA * (1 - k) + bA * k);
+      continue;
+    }
+
+    const deltaA = softLimiter(oA - bA, 80);
+    const outA = clamp255(oA + deltaA * k);
+
+    const oA01 = oA / 255;
+    const bA01 = bA / 255;
+    const oPremR = pixels[p] * oA01;
+    const oPremG = pixels[p + 1] * oA01;
+    const oPremB = pixels[p + 2] * oA01;
+    const bPremR = blurred[p] * bA01;
+    const bPremG = blurred[p + 1] * bA01;
+    const bPremB = blurred[p + 2] * bA01;
+
+    const dPremR = softLimiter(oPremR - bPremR, 90);
+    const dPremG = softLimiter(oPremG - bPremG, 90);
+    const dPremB = softLimiter(oPremB - bPremB, 90);
+
+    const outPremR = oPremR + dPremR * k;
+    const outPremG = oPremG + dPremG * k;
+    const outPremB = oPremB + dPremB * k;
+
+    if (isBackgroundLayer) {
+      out[p] = Math.round(clamp255(pixels[p] + (pixels[p] - blurred[p]) * k));
+      out[p + 1] = Math.round(clamp255(pixels[p + 1] + (pixels[p + 1] - blurred[p + 1]) * k));
+      out[p + 2] = Math.round(clamp255(pixels[p + 2] + (pixels[p + 2] - blurred[p + 2]) * k));
+      out[p + 3] = 255;
+      continue;
+    }
+
+    if (outA <= 0.001) {
+      out[p] = 0;
+      out[p + 1] = 0;
+      out[p + 2] = 0;
+      out[p + 3] = 0;
+      continue;
+    }
+
+    const invA = 255 / outA;
+    out[p] = Math.round(clamp255(outPremR * invA));
+    out[p + 1] = Math.round(clamp255(outPremG * invA));
+    out[p + 2] = Math.round(clamp255(outPremB * invA));
+    out[p + 3] = Math.round(outA);
+  }
+
+  return out;
+}

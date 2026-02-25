@@ -215,7 +215,7 @@ const defaultSections: SectionConfig[] = [
 // 默认子功能配置
 const defaultSubFeatures: SubFeature[] = [
   { id: 'pixelTransition', parentId: 'localContrast', title: '像素过渡', isVisible: true, order: 0 },
-  { id: 'gradientRelax', parentId: 'localContrast', title: '梯度放缓', isVisible: true, order: 1 },
+  { id: 'gradientRelax', parentId: 'localContrast', title: '梯度修改', isVisible: true, order: 1 },
   { id: 'highFreqEnhancement', parentId: 'localContrast', title: '高频增强', isVisible: true, order: 2 },
   { id: 'edgeSmooth', parentId: 'edgeProcessing', title: '边缘平滑', isVisible: true, order: 0 },
   { id: 'lineEnhancement', parentId: 'edgeProcessing', title: '线条加黑', isVisible: true, order: 1 }
@@ -243,7 +243,7 @@ const [showVisibilityPanel, setShowVisibilityPanel] = useState(false);
 
 const [radius, setRadius] = useState(15);
 const [sigma, setSigma] = useState(5);
-const [gradientRelaxStrength, setGradientRelaxStrength] = useState(5);
+const [gradientRelaxStrength, setGradientRelaxStrength] = useState(-5);
 
 const [useWeightedAverage, setUseWeightedAverage] = useState(true);
 const [weightedIntensity, setWeightedIntensity] = useState(5);
@@ -300,7 +300,13 @@ useEffect(() => {
         if (ap.values) {
           if (typeof ap.values.radius === 'number') setRadius(ap.values.radius);
           if (typeof ap.values.sigma === 'number') setSigma(ap.values.sigma);
-          if (typeof ap.values.gradientRelaxStrength === 'number') setGradientRelaxStrength(ap.values.gradientRelaxStrength);
+          if (typeof ap.values.gradientRelaxStrength === 'number') {
+            const v = ap.values.gradientRelaxStrength;
+            const signedReady = ap.values.gradientModifySigned === true;
+            const clampedAbs = Math.max(0, Math.min(10, Math.abs(v)));
+            const next = signedReady ? Math.max(-10, Math.min(10, v)) : (v === 0 ? 0 : -clampedAbs);
+            setGradientRelaxStrength(next);
+          }
           if (typeof ap.values.weightedIntensity === 'number') setWeightedIntensity(ap.values.weightedIntensity);
           if (typeof ap.values.highFreqIntensity === 'number') setHighFreqIntensity(ap.values.highFreqIntensity);
           if (typeof ap.values.highFreqRange === 'number') setHighFreqRange(ap.values.highFreqRange);
@@ -332,6 +338,7 @@ useEffect(() => {
         radius,
         sigma,
         gradientRelaxStrength,
+        gradientModifySigned: true,
         weightedIntensity,
         highFreqIntensity,
         highFreqRange,
@@ -381,7 +388,7 @@ useEffect(() => {
       // 2) 基础参数复位
       setRadius(15);
       setSigma(5);
-      setGradientRelaxStrength(5);
+      setGradientRelaxStrength(-5);
       setUseWeightedAverage(true);
       setWeightedIntensity(5);
       setHighFreqIntensity(5);
@@ -508,7 +515,7 @@ const handleSigmaChange = (event: React.ChangeEvent<HTMLInputElement>) => {
 };
 
 const handleGradientRelaxStrengthChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setGradientRelaxStrength(parseFloat(event.target.value));
+  setGradientRelaxStrength(parseInt(event.target.value, 10));
 };
 
 // 数值输入处理
@@ -527,8 +534,8 @@ const handleSigmaNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => 
 };
 
 const handleGradientRelaxStrengthNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  const value = parseFloat(event.target.value);
-  if (!isNaN(value) && value >= 1 && value <= 10) {
+  const value = parseInt(event.target.value, 10);
+  if (!isNaN(value) && value >= -10 && value <= 10) {
     setGradientRelaxStrength(value);
   }
 };
@@ -1074,8 +1081,9 @@ const handlePixelTransition = async () => {
   }
 };
 
-const handleGradientRelax = async () => {
+const handleGradientModify = async () => {
   if (!handleLicenseBeforeAction()) return;
+  if (gradientRelaxStrength === 0) return;
   try {
     const { executeAsModal } = core;
 
@@ -1107,7 +1115,7 @@ const handleGradientRelax = async () => {
           pixelResult.selectionPixelData.buffer,
           fullSelectionMask.buffer,
           { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
-          { strength: gradientRelaxStrength },
+          { amount: gradientRelaxStrength },
           isBackgroundLayer
         );
 
@@ -1116,8 +1124,8 @@ const handleGradientRelax = async () => {
     });
     giveFocusBackToPS();
   } catch (error) {
-    console.error('❌ 梯度放缓处理失败:', error);
-    await core.showAlert({ message: '梯度放缓处理失败: ' + error.message });
+    console.error('❌ 梯度修改处理失败:', error);
+    await core.showAlert({ message: '梯度修改处理失败: ' + error.message });
   }
 };
 
@@ -1206,22 +1214,24 @@ const renderLocalContrastContent = () => (
 
     <div className="adjustment-divider"></div>
     
-    <button className="adjustment-button" onClick={handleGradientRelax} title={`● 把选区内的“陡峭梯度”放缓，让过渡带更宽、更柔和。
+    <button className="adjustment-button" onClick={handleGradientModify} title={`● 修改选区内的梯度形态：负值放缓（过渡更宽更柔），正值陡峭（过渡更窄更硬）。
 
 ● 同时作用于颜色与不透明度（alpha）的过渡。
 
-● 计算时屏蔽选区外像素，避免透明外部拖低边缘导致露出选区边界。`}>梯度放缓</button>
+● 计算时屏蔽选区外像素，避免透明外部拖低边缘导致露出选区边界。`}>梯度修改</button>
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" title={`● 控制放缓程度，单位级。
+        <div className="adjustment-slider-label" title={`● -10 到 -1：放缓梯度（过渡更宽、更柔和）。
 
-● 数值越大：参考范围更大、放缓更明显，但更慢。
+● 0：不做修改。
 
-建议：先从 3–6 级开始。`}>程度</div>
+● 1 到 10：陡峭梯度（过渡更窄、更明显）。
+
+提示：绝对值越大，影响越明显且更慢。`}>程度</div>
         <div className="unit-container">
-          <input type="range" min="1" max="10" step="0.5" value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthChange} className="adjustment-slider-input" />
-          <input type="number" min="1" max="10" step="0.5" value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthNumberChange} className="adjustment-number-input" />
+          <input type="range" min="-10" max="10" step="1" value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthChange} className="adjustment-slider-input" />
+          <input type="number" min="-10" max="10" step="1" value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthNumberChange} className="adjustment-number-input" />
           <div className="adjustment-unit">级</div>
         </div>
       </div>
