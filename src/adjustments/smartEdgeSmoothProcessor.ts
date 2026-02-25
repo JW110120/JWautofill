@@ -433,124 +433,878 @@ export async function processSmartEdgeSmooth(
   params: EdgeDetectionParams,
   isBackgroundLayer: boolean = false
 ): Promise<ArrayBuffer> {
-  
   const pixelData = new Uint8Array(pixelDataBuffer);
   const selectionMask = new Uint8Array(selectionMaskBuffer);
   const { width, height } = dimensions;
-  
-  
-  // 检查选区掩码中的非零值数量
-  let selectionPixelCount = 0;
-  for (let i = 0; i < selectionMask.length; i++) {
-    if (selectionMask[i] > 0) selectionPixelCount++;
+
+  const pixelCount = width * height;
+  const outputData = new Uint8Array(pixelData.length);
+  outputData.set(pixelData);
+
+  const clamp255 = (v: number) => Math.max(0, Math.min(255, v));
+  const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+  const lumaFromPremult = (r: number, g: number, b: number) => (77 * r + 150 * g + 29 * b + 128) >> 8;
+
+  const lumaP = new Uint8Array(pixelCount);
+  for (let i = 0; i < pixelCount; i++) {
+    const p = i * 4;
+    const a = isBackgroundLayer ? 255 : pixelData[p + 3];
+    const rP = (pixelData[p] * a + 127) / 255;
+    const gP = (pixelData[p + 1] * a + 127) / 255;
+    const bP = (pixelData[p + 2] * a + 127) / 255;
+    lumaP[i] = lumaFromPremult(rP, gP, bP);
   }
-  
-  // 检查像素数据是否全为0（这可能是问题所在）
-  let nonZeroPixelCount = 0;
-  for (let i = 0; i < pixelData.length; i += 4) {
-    if (pixelData[i] > 0 || pixelData[i + 1] > 0 || pixelData[i + 2] > 0 || pixelData[i + 3] > 0) {
-      nonZeroPixelCount++;
+
+  const gradMag = new Uint16Array(pixelCount);
+  const gradDir = new Uint8Array(pixelCount);
+  const gradHist = new Uint32Array(2048);
+  let selectedCount = 0;
+
+  const getL = (x: number, y: number) => lumaP[y * width + x];
+
+  for (let y = 1; y < height - 1; y++) {
+    const rowBase = y * width;
+    for (let x = 1; x < width - 1; x++) {
+      const idx = rowBase + x;
+      if ((selectionMask[idx] || 0) === 0) continue;
+
+      const p00 = getL(x - 1, y - 1);
+      const p10 = getL(x, y - 1);
+      const p20 = getL(x + 1, y - 1);
+      const p01 = getL(x - 1, y);
+      const p21 = getL(x + 1, y);
+      const p02 = getL(x - 1, y + 1);
+      const p12 = getL(x, y + 1);
+      const p22 = getL(x + 1, y + 1);
+
+      const gx = -p00 - 2 * p01 - p02 + p20 + 2 * p21 + p22;
+      const gy = -p00 - 2 * p10 - p20 + p02 + 2 * p12 + p22;
+
+      const agx = Math.abs(gx);
+      const agy = Math.abs(gy);
+      const g = agx + agy;
+      const gClamped = g > 2047 ? 2047 : g;
+      gradMag[idx] = gClamped;
+
+      let dir = 0;
+      if (agx === 0 && agy === 0) {
+        dir = 0;
+      } else if (agy <= (agx * 106) / 256) {
+        dir = 0;
+      } else if (agy >= (agx * 618) / 256) {
+        dir = 2;
+      } else {
+        dir = gx * gy >= 0 ? 1 : 3;
+      }
+      gradDir[idx] = dir;
+
+      gradHist[gClamped]++;
+      selectedCount++;
     }
   }
-  
-  // 创建输出数组
-  const outputData = new Uint8Array(pixelData.length);
-  outputData.set(pixelData); // 先复制原始数据
-  
-  // 第一步：识别边缘像素
-  const edgeMap = new Uint8Array(width * height);
-  let edgeCount = 0;
-  
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const maskIndex = y * width + x;
-      
-      // 只处理选区内的像素
-      if (selectionMask[maskIndex] === 0) continue;
-      
-      if (isEdgePixel(pixelData, x, y, width, height, params, isBackgroundLayer)) {
-        edgeMap[maskIndex] = 255;
-        edgeCount++;
+
+  if (selectedCount <= 0) {
+    return outputData.buffer;
+  }
+
+  const getPercentile = (p01: number) => {
+    const target = Math.max(0, Math.min(selectedCount - 1, Math.round(p01 * (selectedCount - 1))));
+    let acc = 0;
+    for (let i = 0; i < gradHist.length; i++) {
+      acc += gradHist[i];
+      if (acc > target) return i;
+    }
+    return gradHist.length - 1;
+  };
+
+  const p70 = getPercentile(0.7);
+  const p92 = getPercentile(0.92);
+  const paramEdgeThreshold = isBackgroundLayer
+    ? params.colorThreshold * 6
+    : Math.max(params.colorThreshold * 6, params.alphaThreshold * 6);
+  const edgeThreshold = Math.max(24, Math.min(600, Math.max(p70, paramEdgeThreshold)));
+  const strongThreshold = Math.max(edgeThreshold + 1, Math.min(900, Math.max(p92, edgeThreshold + 40)));
+
+  const intensity01 = clamp01(params.intensity / 10);
+  const intensityCurve = Math.pow(intensity01, 0.45);
+  const baseStrength = clamp01(intensityCurve * (params.preserveDetail ? 1.05 : 1.45));
+
+  let selMinX = width;
+  let selMinY = height;
+  let selMaxX = -1;
+  let selMaxY = -1;
+  for (let i = 0; i < pixelCount; i++) {
+    if ((selectionMask[i] || 0) === 0) continue;
+    const x = i % width;
+    const y = (i - x) / width;
+    if (x < selMinX) selMinX = x;
+    if (x > selMaxX) selMaxX = x;
+    if (y < selMinY) selMinY = y;
+    if (y > selMaxY) selMaxY = y;
+  }
+  if (selMaxX < 0) {
+    return outputData.buffer;
+  }
+
+  const clampInt = (v: number, lo: number, hi: number) => (v < lo ? lo : (v > hi ? hi : v));
+
+  const medianEnabled = params.smoothRadius >= 12 || params.intensity >= 8;
+  const medianRadius = medianEnabled ? clampInt(Math.round(params.smoothRadius * 1.5), 6, 40) : 0;
+
+  const regionPad = medianEnabled ? (medianRadius + 2) : 2;
+  const regionX0 = clampInt(selMinX - regionPad, 0, width - 1);
+  const regionY0 = clampInt(selMinY - regionPad, 0, height - 1);
+  const regionX1 = clampInt(selMaxX + regionPad, 0, width - 1);
+  const regionY1 = clampInt(selMaxY + regionPad, 0, height - 1);
+  const regionW = regionX1 - regionX0 + 1;
+  const regionH = regionY1 - regionY0 + 1;
+
+  const regionIndexOf = (x: number, y: number) => (y - regionY0) * regionW + (x - regionX0);
+  const docIndexOfRegion = (ri: number) => {
+    const ry = (ri / regionW) | 0;
+    const rx = ri - ry * regionW;
+    return (regionY0 + ry) * width + (regionX0 + rx);
+  };
+
+  const smoothstep01 = (t: number) => {
+    const x = clamp01(t);
+    return x * x * (3 - 2 * x);
+  };
+
+  let regionMedianLuma: Uint8Array | null = null;
+  let regionSupportCount: Uint16Array | null = null;
+  let supportWindowArea = 1;
+
+  if (medianEnabled) {
+    const regionLuma = new Uint8Array(regionW * regionH);
+    const regionMask01 = new Uint8Array(regionW * regionH);
+    for (let ry = 0; ry < regionH; ry++) {
+      const docY = regionY0 + ry;
+      const docRow = docY * width;
+      const base = ry * regionW;
+      for (let rx = 0; rx < regionW; rx++) {
+        const docX = regionX0 + rx;
+        const di = docRow + docX;
+        regionLuma[base + rx] = lumaP[di] || 0;
+        regionMask01[base + rx] = (selectionMask[di] || 0) > 0 ? 1 : 0;
+      }
+    }
+
+    const r = medianRadius;
+    supportWindowArea = (r * 2 + 1) * (r * 2 + 1);
+
+    const maskH = new Uint16Array(regionW * regionH);
+    for (let ry = 0; ry < regionH; ry++) {
+      const rowBase = ry * regionW;
+      let sum = 0;
+      for (let dx = -r; dx <= r; dx++) {
+        const x = clampInt(dx, 0, regionW - 1);
+        sum += regionMask01[rowBase + x] || 0;
+      }
+      maskH[rowBase] = sum;
+      for (let rx = 1; rx < regionW; rx++) {
+        const outX = clampInt(rx - r - 1, 0, regionW - 1);
+        const inX = clampInt(rx + r, 0, regionW - 1);
+        sum += (regionMask01[rowBase + inX] || 0) - (regionMask01[rowBase + outX] || 0);
+        maskH[rowBase + rx] = sum;
+      }
+    }
+
+    const maskHV = new Uint16Array(regionW * regionH);
+    for (let rx = 0; rx < regionW; rx++) {
+      let sum = 0;
+      for (let dy = -r; dy <= r; dy++) {
+        const y = clampInt(dy, 0, regionH - 1);
+        sum += maskH[y * regionW + rx] || 0;
+      }
+      maskHV[rx] = sum;
+      for (let ry = 1; ry < regionH; ry++) {
+        const outY = clampInt(ry - r - 1, 0, regionH - 1);
+        const inY = clampInt(ry + r, 0, regionH - 1);
+        sum += (maskH[inY * regionW + rx] || 0) - (maskH[outY * regionW + rx] || 0);
+        maskHV[ry * regionW + rx] = sum;
+      }
+    }
+
+    regionSupportCount = maskHV;
+
+    const medianH = new Uint8Array(regionW * regionH);
+    const half = (r * 2 + 1) >> 1;
+
+    for (let ry = 0; ry < regionH; ry++) {
+      const rowBase = ry * regionW;
+      const hist = new Uint16Array(256);
+      for (let dx = -r; dx <= r; dx++) {
+        const x = clampInt(dx, 0, regionW - 1);
+        hist[regionLuma[rowBase + x] || 0]++;
+      }
+      let median = 0;
+      let less = 0;
+      while (less + (hist[median] || 0) <= half) {
+        less += hist[median] || 0;
+        median++;
+      }
+      medianH[rowBase] = median;
+      for (let rx = 1; rx < regionW; rx++) {
+        const outX = clampInt(rx - r - 1, 0, regionW - 1);
+        const inX = clampInt(rx + r, 0, regionW - 1);
+        const outV = regionLuma[rowBase + outX] || 0;
+        const inV = regionLuma[rowBase + inX] || 0;
+        hist[outV]--;
+        if (outV < median) less--;
+        hist[inV]++;
+        if (inV < median) less++;
+
+        while (less > half) {
+          median--;
+          less -= hist[median] || 0;
+        }
+        while (less + (hist[median] || 0) <= half) {
+          less += hist[median] || 0;
+          median++;
+        }
+        medianH[rowBase + rx] = median;
+      }
+    }
+
+    const medianHV = new Uint8Array(regionW * regionH);
+    for (let rx = 0; rx < regionW; rx++) {
+      const hist = new Uint16Array(256);
+      for (let dy = -r; dy <= r; dy++) {
+        const y = clampInt(dy, 0, regionH - 1);
+        hist[medianH[y * regionW + rx] || 0]++;
+      }
+      let median = 0;
+      let less = 0;
+      while (less + (hist[median] || 0) <= half) {
+        less += hist[median] || 0;
+        median++;
+      }
+      medianHV[rx] = median;
+      for (let ry = 1; ry < regionH; ry++) {
+        const outY = clampInt(ry - r - 1, 0, regionH - 1);
+        const inY = clampInt(ry + r, 0, regionH - 1);
+        const outV = medianH[outY * regionW + rx] || 0;
+        const inV = medianH[inY * regionW + rx] || 0;
+        hist[outV]--;
+        if (outV < median) less--;
+        hist[inV]++;
+        if (inV < median) less++;
+
+        while (less > half) {
+          median--;
+          less -= hist[median] || 0;
+        }
+        while (less + (hist[median] || 0) <= half) {
+          less += hist[median] || 0;
+          median++;
+        }
+        medianHV[ry * regionW + rx] = median;
+      }
+    }
+
+    regionMedianLuma = medianHV;
+  }
+
+  const denoiseRadius = Math.max(1, Math.min(2, Math.round(params.smoothRadius / 18)));
+  const tangentLen = Math.max(1, Math.min(4, Math.round(params.smoothRadius / 14) + (params.intensity >= 7 ? 1 : 0)));
+
+  const sigmaRBase = Math.max(10, Math.min(80, 8 + params.colorThreshold * 3));
+  const sigmaR = params.preserveDetail ? sigmaRBase * 0.75 : sigmaRBase;
+  const sigmaR2 = sigmaR * sigmaR;
+
+  const rangeLUT = new Float32Array(256);
+  if (sigmaR2 > 0.0001) {
+    const denom = 2 * sigmaR2;
+    for (let d = 0; d < 256; d++) {
+      rangeLUT[d] = Math.exp(-(d * d) / denom);
+    }
+  } else {
+    for (let d = 0; d < 256; d++) rangeLUT[d] = d === 0 ? 1 : 0;
+  }
+
+  const buildSpatialKernel = (r: number) => {
+    const size = r * 2 + 1;
+    const out = new Float32Array(size * size);
+    const sigmaS = Math.max(0.6, r * 0.85);
+    const denom = 2 * sigmaS * sigmaS;
+    let k = 0;
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        const d2 = dx * dx + dy * dy;
+        out[k++] = Math.exp(-d2 / denom);
+      }
+    }
+    return out;
+  };
+
+  const spatial3 = buildSpatialKernel(1);
+  const spatial5 = buildSpatialKernel(2);
+
+  const denoisePremultAt = (x: number, y: number, r: number) => {
+    const centerIndex = y * width + x;
+    const centerL = lumaP[centerIndex];
+    const spatial = r === 1 ? spatial3 : spatial5;
+    const size = r * 2 + 1;
+
+    let sumW = 0;
+    let sumA = 0;
+    let sumPremR = 0;
+    let sumPremG = 0;
+    let sumPremB = 0;
+    let k = 0;
+
+    for (let dy = -r; dy <= r; dy++) {
+      const ny = y + dy;
+      if (ny < 0 || ny >= height) {
+        k += size;
+        continue;
+      }
+      const rowBase = ny * width;
+      for (let dx = -r; dx <= r; dx++, k++) {
+        const nx = x + dx;
+        if (nx < 0 || nx >= width) continue;
+        const nIndex = rowBase + nx;
+        const m = selectionMask[nIndex] || 0;
+        if (m === 0) continue;
+
+        const d = Math.abs((lumaP[nIndex] || 0) - centerL) & 255;
+        const w = spatial[k] * rangeLUT[d] * (m / 255);
+        if (w <= 0) continue;
+
+        const p = nIndex * 4;
+        const a = isBackgroundLayer ? 255 : pixelData[p + 3];
+        const rP = (pixelData[p] * a + 127) / 255;
+        const gP = (pixelData[p + 1] * a + 127) / 255;
+        const bP = (pixelData[p + 2] * a + 127) / 255;
+
+        sumW += w;
+        sumA += a * w;
+        sumPremR += rP * w;
+        sumPremG += gP * w;
+        sumPremB += bP * w;
+      }
+    }
+
+    if (sumW <= 1e-6) {
+      const p = centerIndex * 4;
+      const a = isBackgroundLayer ? 255 : pixelData[p + 3];
+      const rP = (pixelData[p] * a + 127) / 255;
+      const gP = (pixelData[p + 1] * a + 127) / 255;
+      const bP = (pixelData[p + 2] * a + 127) / 255;
+      return { a, rP, gP, bP };
+    }
+
+    return {
+      a: sumA / sumW,
+      rP: sumPremR / sumW,
+      gP: sumPremG / sumW,
+      bP: sumPremB / sumW
+    };
+  };
+
+  const tangentPremultAt = (x: number, y: number, len: number, dir: number) => {
+    const centerIndex = y * width + x;
+    const centerL = lumaP[centerIndex];
+
+    let tx = 1;
+    let ty = 0;
+    if (dir === 0) {
+      tx = 0; ty = 1;
+    } else if (dir === 2) {
+      tx = 1; ty = 0;
+    } else if (dir === 1) {
+      tx = 1; ty = -1;
+    } else {
+      tx = 1; ty = 1;
+    }
+
+    let sumW = 0;
+    let sumA = 0;
+    let sumPremR = 0;
+    let sumPremG = 0;
+    let sumPremB = 0;
+
+    for (let t = -len; t <= len; t++) {
+      const nx = x + tx * t;
+      const ny = y + ty * t;
+      if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+      const nIndex = ny * width + nx;
+      const m = selectionMask[nIndex] || 0;
+      if (m === 0) continue;
+
+      const d = Math.abs((lumaP[nIndex] || 0) - centerL) & 255;
+      const spatialW = 1 - Math.abs(t) / (len + 1);
+      const w = spatialW * rangeLUT[d] * (m / 255);
+      if (w <= 0) continue;
+
+      const p = nIndex * 4;
+      const a = isBackgroundLayer ? 255 : pixelData[p + 3];
+      const rP = (pixelData[p] * a + 127) / 255;
+      const gP = (pixelData[p + 1] * a + 127) / 255;
+      const bP = (pixelData[p + 2] * a + 127) / 255;
+
+      sumW += w;
+      sumA += a * w;
+      sumPremR += rP * w;
+      sumPremG += gP * w;
+      sumPremB += bP * w;
+    }
+
+    if (sumW <= 1e-6) {
+      const p = centerIndex * 4;
+      const a = isBackgroundLayer ? 255 : pixelData[p + 3];
+      const rP = (pixelData[p] * a + 127) / 255;
+      const gP = (pixelData[p + 1] * a + 127) / 255;
+      const bP = (pixelData[p + 2] * a + 127) / 255;
+      return { a, rP, gP, bP };
+    }
+
+    return {
+      a: sumA / sumW,
+      rP: sumPremR / sumW,
+      gP: sumPremG / sumW,
+      bP: sumPremB / sumW
+    };
+  };
+
+  const tangentPremultAtFiltered = (
+    x: number,
+    y: number,
+    len: number,
+    dir: number,
+    includeIndex: (index: number) => boolean
+  ) => {
+    const centerIndex = y * width + x;
+    const centerL = lumaP[centerIndex];
+
+    let tx = 1;
+    let ty = 0;
+    if (dir === 0) {
+      tx = 0; ty = 1;
+    } else if (dir === 2) {
+      tx = 1; ty = 0;
+    } else if (dir === 1) {
+      tx = 1; ty = -1;
+    } else {
+      tx = 1; ty = 1;
+    }
+
+    let sumW = 0;
+    let sumA = 0;
+    let sumPremR = 0;
+    let sumPremG = 0;
+    let sumPremB = 0;
+
+    for (let t = -len; t <= len; t++) {
+      const nx = x + tx * t;
+      const ny = y + ty * t;
+      if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+      const nIndex = ny * width + nx;
+      if (!includeIndex(nIndex)) continue;
+
+      const m = selectionMask[nIndex] || 0;
+      if (m === 0) continue;
+
+      const d = Math.abs((lumaP[nIndex] || 0) - centerL) & 255;
+      const spatialW = 1 - Math.abs(t) / (len + 1);
+      const w = spatialW * rangeLUT[d] * (m / 255);
+      if (w <= 0) continue;
+
+      const p = nIndex * 4;
+      const a = isBackgroundLayer ? 255 : pixelData[p + 3];
+      const rP = (pixelData[p] * a + 127) / 255;
+      const gP = (pixelData[p + 1] * a + 127) / 255;
+      const bP = (pixelData[p + 2] * a + 127) / 255;
+
+      sumW += w;
+      sumA += a * w;
+      sumPremR += rP * w;
+      sumPremG += gP * w;
+      sumPremB += bP * w;
+    }
+
+    if (sumW <= 1e-6) {
+      const p = centerIndex * 4;
+      const a = isBackgroundLayer ? 255 : pixelData[p + 3];
+      const rP = (pixelData[p] * a + 127) / 255;
+      const gP = (pixelData[p + 1] * a + 127) / 255;
+      const bP = (pixelData[p + 2] * a + 127) / 255;
+      return { a, rP, gP, bP };
+    }
+
+    return {
+      a: sumA / sumW,
+      rP: sumPremR / sumW,
+      gP: sumPremG / sumW,
+      bP: sumPremB / sumW
+    };
+  };
+
+  const isSecondaryEdge = (x: number, y: number, idx: number, dir: number, g: number) => {
+    let nx = 1;
+    let ny = 0;
+    if (dir === 0) { nx = 1; ny = 0; }
+    else if (dir === 2) { nx = 0; ny = 1; }
+    else if (dir === 1) { nx = 1; ny = -1; }
+    else { nx = 1; ny = 1; }
+
+    let best = g;
+    for (let s = -2; s <= 2; s++) {
+      if (s === 0) continue;
+      const px = x + nx * s;
+      const py = y + ny * s;
+      if (px <= 0 || px >= width - 1 || py <= 0 || py >= height - 1) continue;
+      const nIdx = py * width + px;
+      if ((selectionMask[nIdx] || 0) === 0) continue;
+      const gg = gradMag[nIdx] || 0;
+      if (gg > best) best = gg;
+    }
+
+    if (best <= 0) return false;
+    return g < best * 0.92;
+  };
+
+  const getLocalInkStats = (x: number, y: number) => {
+    const centerIndex = y * width + x;
+    const centerL = lumaP[centerIndex];
+    let minL = centerL;
+    let sumL = 0;
+    let count = 0;
+    let darkNeighbors = 0;
+    for (let dy = -1; dy <= 1; dy++) {
+      const ny = y + dy;
+      if (ny < 0 || ny >= height) continue;
+      const rowBase = ny * width;
+      for (let dx = -1; dx <= 1; dx++) {
+        const nx = x + dx;
+        if (nx < 0 || nx >= width) continue;
+        const nIndex = rowBase + nx;
+        if ((selectionMask[nIndex] || 0) === 0) continue;
+        const l = lumaP[nIndex] || 0;
+        if (l < minL) minL = l;
+        sumL += l;
+        count++;
+        if (l <= centerL + 10) darkNeighbors++;
+      }
+    }
+    const meanL = count > 0 ? sumL / count : centerL;
+    const inkCore = centerL <= minL + 8 && darkNeighbors >= 4 && centerL + 14 < meanL;
+    return { centerL, minL, meanL, inkCore };
+  };
+
+  const isNearStrongEdge = (x: number, y: number, idx: number) => {
+    if (x <= 0 || x >= width - 1 || y <= 0 || y >= height - 1) return false;
+
+    const up = idx - width;
+    const down = idx + width;
+    const left = idx - 1;
+    const right = idx + 1;
+    const upLeft = up - 1;
+    const upRight = up + 1;
+    const downLeft = down - 1;
+    const downRight = down + 1;
+
+    if ((selectionMask[up] || 0) > 0 && (gradMag[up] || 0) >= strongThreshold) return true;
+    if ((selectionMask[down] || 0) > 0 && (gradMag[down] || 0) >= strongThreshold) return true;
+    if ((selectionMask[left] || 0) > 0 && (gradMag[left] || 0) >= strongThreshold) return true;
+    if ((selectionMask[right] || 0) > 0 && (gradMag[right] || 0) >= strongThreshold) return true;
+
+    if ((selectionMask[upLeft] || 0) > 0 && (gradMag[upLeft] || 0) >= strongThreshold) return true;
+    if ((selectionMask[upRight] || 0) > 0 && (gradMag[upRight] || 0) >= strongThreshold) return true;
+    if ((selectionMask[downLeft] || 0) > 0 && (gradMag[downLeft] || 0) >= strongThreshold) return true;
+    if ((selectionMask[downRight] || 0) > 0 && (gradMag[downRight] || 0) >= strongThreshold) return true;
+
+    return false;
+  };
+
+  const mainLineMask = new Uint8Array(pixelCount);
+  const mainGate = strongThreshold * 0.9;
+  const scanX0 = clampInt(regionX0, 1, width - 2);
+  const scanY0 = clampInt(regionY0, 1, height - 2);
+  const scanX1 = clampInt(regionX1, 1, width - 2);
+  const scanY1 = clampInt(regionY1, 1, height - 2);
+
+  for (let y = scanY0; y <= scanY1; y++) {
+    const rowBase = y * width;
+    for (let x = scanX0; x <= scanX1; x++) {
+      const idx = rowBase + x;
+      if ((selectionMask[idx] || 0) === 0) continue;
+      const g = gradMag[idx] || 0;
+      if (g < mainGate) continue;
+      if (!isBackgroundLayer) {
+        const a = pixelData[idx * 4 + 3] || 0;
+        if (a < 48) continue;
+      }
+
+      const dir = gradDir[idx] || 0;
+      let n1 = 0;
+      let n2 = 0;
+      if (dir === 0) {
+        n1 = idx - 1;
+        n2 = idx + 1;
+      } else if (dir === 2) {
+        n1 = idx - width;
+        n2 = idx + width;
+      } else if (dir === 1) {
+        n1 = idx - width - 1;
+        n2 = idx + width + 1;
+      } else {
+        n1 = idx - width + 1;
+        n2 = idx + width - 1;
+      }
+
+      const g1 = gradMag[n1] || 0;
+      const g2 = gradMag[n2] || 0;
+      if (g >= g1 && g >= g2) {
+        mainLineMask[idx] = 255;
       }
     }
   }
-  
-  console.log(`✅ 识别到 ${edgeCount} 个边缘像素`);
-  
-  // 第二步：对边缘像素进行平滑处理
-  let processedCount = 0;
-  let debugCount = 0;
-  
+
+  const polarityAt = (idx: number, normalOffset: number) => {
+    const lNeg = lumaP[idx - normalOffset] || 0;
+    const lPos = lumaP[idx + normalOffset] || 0;
+    const d = lPos - lNeg;
+    if (d >= 6) return 1;
+    if (d <= -6) return -1;
+    return 0;
+  };
+
+  const maxStrokeHalf = 8;
+  for (let y = scanY0; y <= scanY1; y++) {
+    const rowBase = y * width;
+    for (let x = scanX0; x <= scanX1; x++) {
+      const idx = rowBase + x;
+      if ((selectionMask[idx] || 0) === 0) continue;
+      const g = gradMag[idx] || 0;
+      if (g < mainGate) continue;
+
+      const dir = gradDir[idx] || 0;
+      let dx = 1;
+      let dy = 0;
+      if (dir === 0) { dx = 1; dy = 0; }
+      else if (dir === 2) { dx = 0; dy = 1; }
+      else if (dir === 1) { dx = 1; dy = 1; }
+      else { dx = 1; dy = -1; }
+      const normalOffset = dx + dy * width;
+
+      const pol = polarityAt(idx, normalOffset);
+      if (pol === 0) continue;
+
+      for (let s = 2; s <= maxStrokeHalf; s++) {
+        const nx = x + dx * s;
+        const ny = y + dy * s;
+        if (nx <= 0 || nx >= width - 1 || ny <= 0 || ny >= height - 1) break;
+        const nIdx = idx + normalOffset * s;
+        if ((selectionMask[nIdx] || 0) === 0) continue;
+        if ((gradMag[nIdx] || 0) < mainGate) continue;
+        const pol2 = polarityAt(nIdx, normalOffset);
+        if (pol2 === 0 || pol2 === pol) continue;
+
+        if (pol2 === -pol) {
+          const span = s;
+          for (let t = 0; t <= span; t++) {
+            const fIdx = idx + normalOffset * t;
+            if ((selectionMask[fIdx] || 0) === 0) continue;
+            mainLineMask[fIdx] = 255;
+          }
+        }
+        break;
+      }
+
+      for (let s = 2; s <= maxStrokeHalf; s++) {
+        const nx = x - dx * s;
+        const ny = y - dy * s;
+        if (nx <= 0 || nx >= width - 1 || ny <= 0 || ny >= height - 1) break;
+        const nIdx = idx - normalOffset * s;
+        if ((selectionMask[nIdx] || 0) === 0) continue;
+        if ((gradMag[nIdx] || 0) < mainGate) continue;
+        const pol2 = polarityAt(nIdx, normalOffset);
+        if (pol2 === 0 || pol2 === pol) continue;
+        if (pol2 === -pol) {
+          const span = s;
+          for (let t = 0; t <= span; t++) {
+            const fIdx = idx - normalOffset * t;
+            if ((selectionMask[fIdx] || 0) === 0) continue;
+            mainLineMask[fIdx] = 255;
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  const protectMask = new Uint8Array(pixelCount);
+  const protectR = 2;
+  const protectX0 = clampInt(regionX0 - protectR, 0, width - 1);
+  const protectY0 = clampInt(regionY0 - protectR, 0, height - 1);
+  const protectX1 = clampInt(regionX1 + protectR, 0, width - 1);
+  const protectY1 = clampInt(regionY1 + protectR, 0, height - 1);
+
+  for (let y = protectY0; y <= protectY1; y++) {
+    const rowBase = y * width;
+    for (let x = protectX0; x <= protectX1; x++) {
+      const idx = rowBase + x;
+      if (mainLineMask[idx] === 0) continue;
+      for (let dy = -protectR; dy <= protectR; dy++) {
+        const ny = y + dy;
+        if (ny < 0 || ny >= height) continue;
+        const nRow = ny * width;
+        for (let dx = -protectR; dx <= protectR; dx++) {
+          const nx = x + dx;
+          if (nx < 0 || nx >= width) continue;
+          const nIdx = nRow + nx;
+          if ((selectionMask[nIdx] || 0) === 0) continue;
+          protectMask[nIdx] = 255;
+        }
+      }
+    }
+  }
+
+  const isNearMainLine = (_x: number, _y: number, idx: number) => protectMask[idx] > 0;
+
   for (let y = 0; y < height; y++) {
+    const rowBase = y * width;
     for (let x = 0; x < width; x++) {
-      const maskIndex = y * width + x;
-      const pixelIndex = maskIndex * 4;
-      
-      // 只处理选区内的像素
-      if (selectionMask[maskIndex] === 0) continue;
-      
-      const originalR = pixelData[pixelIndex];
-      const originalG = pixelData[pixelIndex + 1];
-      const originalB = pixelData[pixelIndex + 2];
-      const originalA = pixelData[pixelIndex + 3];
-      
-      // 检测是否为边缘像素
-      const isEdge = edgeMap[maskIndex] > 0;
-      
-      if (isEdge) {
-        // 使用改进的线条拉直算法，能够处理各种尺度的凹凸
-        const [smoothR, smoothG, smoothB, smoothA] = getLineStraighteningSmooth(
-          pixelData,
-          selectionMask,
+      const idx = rowBase + x;
+      const m = selectionMask[idx] || 0;
+      if (m === 0) continue;
+
+      const p = idx * 4;
+      const oA = isBackgroundLayer ? 255 : pixelData[p + 3];
+      const oPremR = (pixelData[p] * oA + 127) / 255;
+      const oPremG = (pixelData[p + 1] * oA + 127) / 255;
+      const oPremB = (pixelData[p + 2] * oA + 127) / 255;
+
+      const g = gradMag[idx] || 0;
+      const dir = gradDir[idx] || 0;
+      const isEdge = g >= edgeThreshold;
+      const edge01 = isEdge ? clamp01((g - edgeThreshold) / (strongThreshold - edgeThreshold)) : 0;
+
+      const secondary = isEdge && x > 0 && x < width - 1 && y > 0 && y < height - 1
+        ? isSecondaryEdge(x, y, idx, dir, g)
+        : false;
+
+      const { centerL, minL, meanL, inkCore } = getLocalInkStats(x, y);
+      const nearStrongEdge = isNearStrongEdge(x, y, idx);
+      const isMainLine = mainLineMask[idx] > 0;
+      const nearMainLine = isNearMainLine(x, y, idx);
+      const smudge = !nearMainLine && !inkCore && nearStrongEdge && oA >= 160 && centerL > minL + 6 && centerL + 18 < meanL;
+
+      let selectionFade = 1;
+      if (regionSupportCount) {
+        const ri = regionIndexOf(x, y);
+        const support01 = (regionSupportCount[ri] || 0) / supportWindowArea;
+        selectionFade = smoothstep01((support01 - 0.62) / 0.38);
+      }
+
+      let candidate;
+      let blend = 0;
+
+      if (isMainLine) {
+        const len = Math.max(1, Math.min(tangentLen, 3));
+        candidate = tangentPremultAtFiltered(
           x,
           y,
-          width,
-          height,
-          params.smoothRadius
+          len,
+          dir,
+          (nIndex) => (protectMask[nIndex] > 0) || ((gradMag[nIndex] || 0) >= strongThreshold * 0.9)
         );
-        
-        // 根据强度参数计算混合因子，重新设计强度曲线
-        // 强度1-10对应混合因子0.3-0.95，确保强度1就有明显效果
-        let blendFactor;
-        if (params.preserveDetail) {
-          // 保留细节模式：强度1=0.2, 强度5=0.5, 强度10=0.8
-          blendFactor = 0.1 + (params.intensity - 1) * 0.7 / 9;
-        } else {
-          // 标准模式：强度1=0.3, 强度5=0.65, 强度10=0.95
-          blendFactor = 0.2 + (params.intensity - 1) * 0.75 / 9;
-        }
-        blendFactor = Math.max(0.1, Math.min(0.95, blendFactor));
-        
-        // 混合原始像素和平滑后的像素
-        const blendedR = Math.round(originalR * (1 - blendFactor) + smoothR * blendFactor);
-        const blendedG = Math.round(originalG * (1 - blendFactor) + smoothG * blendFactor);
-        const blendedB = Math.round(originalB * (1 - blendFactor) + smoothB * blendFactor);
-        const blendedA = Math.round(originalA * (1 - blendFactor) + smoothA * blendFactor);
-        
-        outputData[pixelIndex] = Math.max(0, Math.min(255, blendedR));
-        outputData[pixelIndex + 1] = Math.max(0, Math.min(255, blendedG));
-        outputData[pixelIndex + 2] = Math.max(0, Math.min(255, blendedB));
-        outputData[pixelIndex + 3] = Math.max(0, Math.min(255, blendedA));
-        
-        processedCount++;
+        blend = baseStrength * (params.preserveDetail ? 0.28 : 0.35);
+      } else if (!nearMainLine && regionMedianLuma && isEdge && !secondary) {
+        const ri = regionIndexOf(x, y);
+        const mL = regionMedianLuma[ri] || 0;
+        const ratio = (mL + 0.5) / (centerL + 0.5);
+        candidate = { a: oA, rP: oPremR * ratio, gP: oPremG * ratio, bP: oPremB * ratio };
+        blend = baseStrength * (0.55 + 0.75 * edge01);
+      } else if (smudge) {
+        candidate = denoisePremultAt(x, y, 2);
+        blend = baseStrength * 1.0;
+      } else if (!isEdge) {
+        candidate = denoisePremultAt(x, y, denoiseRadius);
+        blend = baseStrength * (nearMainLine ? 0.22 : 0.95);
+      } else if (secondary) {
+        candidate = denoisePremultAt(x, y, 2);
+        blend = baseStrength * (0.85 + 0.3 * edge01);
       } else {
-        // 非边缘像素保持原样
-        outputData[pixelIndex] = originalR;
-        outputData[pixelIndex + 1] = originalG;
-        outputData[pixelIndex + 2] = originalB;
-        outputData[pixelIndex + 3] = originalA;
+        candidate = tangentPremultAt(x, y, tangentLen, dir);
+        blend = baseStrength * (0.45 + 0.75 * edge01);
       }
+
+      if (!isBackgroundLayer && inkCore) {
+        blend *= params.preserveDetail ? 0.35 : 0.45;
+      } else if (!isBackgroundLayer && isMainLine) {
+        blend *= 0.75;
+      } else if (!isBackgroundLayer && isEdge && !secondary && oA < 255) {
+        blend *= 0.88;
+      }
+      if (!isMainLine) {
+        blend *= selectionFade;
+      }
+      blend = clamp01(blend);
+
+      let outA = 255;
+      if (!isBackgroundLayer) {
+        if (inkCore || isMainLine || (isEdge && !secondary)) {
+          outA = oA;
+        } else {
+          const alphaBlend = clamp01(smudge ? blend * 1.15 : blend * 0.85);
+          const mixedA = oA * (1 - alphaBlend) + candidate.a * alphaBlend;
+          const maxDrop = (params.preserveDetail ? 10 : 18) * (0.35 + 0.65 * (smudge ? 0.8 : edge01));
+          outA = Math.max(mixedA, oA - maxDrop);
+        }
+      }
+      const outPremR = oPremR * (1 - blend) + candidate.rP * blend;
+      const outPremG = oPremG * (1 - blend) + candidate.gP * blend;
+      const outPremB = oPremB * (1 - blend) + candidate.bP * blend;
+
+      if (inkCore) {
+        const oL = lumaP[idx] || 0;
+        const cL = lumaFromPremult(outPremR, outPremG, outPremB);
+        if (cL > oL + 4) {
+          outputData[p] = pixelData[p];
+          outputData[p + 1] = pixelData[p + 1];
+          outputData[p + 2] = pixelData[p + 2];
+          outputData[p + 3] = isBackgroundLayer ? 255 : oA;
+          continue;
+        }
+      } else if (isMainLine) {
+        const oL = lumaP[idx] || 0;
+        const cL = lumaFromPremult(outPremR, outPremG, outPremB);
+        if (cL > oL + 2) {
+          outputData[p] = pixelData[p];
+          outputData[p + 1] = pixelData[p + 1];
+          outputData[p + 2] = pixelData[p + 2];
+          outputData[p + 3] = isBackgroundLayer ? 255 : oA;
+          continue;
+        }
+      }
+
+      if (isBackgroundLayer) {
+        outputData[p] = Math.round(clamp255(outPremR));
+        outputData[p + 1] = Math.round(clamp255(outPremG));
+        outputData[p + 2] = Math.round(clamp255(outPremB));
+        outputData[p + 3] = 255;
+        continue;
+      }
+
+      if (outA <= 0.001) {
+        outputData[p] = 0;
+        outputData[p + 1] = 0;
+        outputData[p + 2] = 0;
+        outputData[p + 3] = 0;
+        continue;
+      }
+
+      const invA = 255 / outA;
+      outputData[p] = Math.round(clamp255(outPremR * invA));
+      outputData[p + 1] = Math.round(clamp255(outPremG * invA));
+      outputData[p + 2] = Math.round(clamp255(outPremB * invA));
+      outputData[p + 3] = Math.round(clamp255(outA));
     }
   }
-  
-  console.log(`✅ 拉直了 ${processedCount} 个边缘像素`);
-  console.log('✅ 智能线条拉直处理完成:', {
-    处理像素数: processedCount,
-    边缘像素数: edgeCount,
-    处理比例: `${((processedCount / Math.max(edgeCount, 1)) * 100).toFixed(1)}%`,
-    算法效果: '方向检测拉直，消除锯齿线条'
-  });
-  
+
   return outputData.buffer;
 }
 
