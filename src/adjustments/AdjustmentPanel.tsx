@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { processBlockAverage } from './blockAverageProcessor';
 import { processBlockGradient } from './blockGradientProcessor';
 import { processPixelTransition } from './pixelTransitionProcessor';
+import { processGradientRelax } from './gradientRelaxProcessor';
 import { processLineEnhancement } from './lineProcessing';
 import { processHighFrequencyEnhancement } from './highFrequencyEnhancer';
 import { processSmartEdgeSmooth, defaultSmartEdgeSmoothParams } from './smartEdgeSmoothProcessor';
@@ -214,9 +215,10 @@ const defaultSections: SectionConfig[] = [
 // 默认子功能配置
 const defaultSubFeatures: SubFeature[] = [
   { id: 'pixelTransition', parentId: 'localContrast', title: '像素过渡', isVisible: true, order: 0 },
-  { id: 'highFreqEnhancement', parentId: 'localContrast', title: '高频增强', isVisible: true, order: 1 },
+  { id: 'gradientRelax', parentId: 'localContrast', title: '梯度放缓', isVisible: true, order: 1 },
+  { id: 'highFreqEnhancement', parentId: 'localContrast', title: '高频增强', isVisible: true, order: 2 },
   { id: 'edgeSmooth', parentId: 'edgeProcessing', title: '边缘平滑', isVisible: true, order: 0 },
-  { id: 'lineEnhancement', parentId: 'edgeProcessing', title: '加黑线条', isVisible: true, order: 1 }
+  { id: 'lineEnhancement', parentId: 'edgeProcessing', title: '线条加黑', isVisible: true, order: 1 }
 ];
 
 const AdjustmentPanel: React.FC = () => {
@@ -241,6 +243,7 @@ const [showVisibilityPanel, setShowVisibilityPanel] = useState(false);
 
 const [radius, setRadius] = useState(15);
 const [sigma, setSigma] = useState(5);
+const [gradientRelaxStrength, setGradientRelaxStrength] = useState(5);
 
 const [useWeightedAverage, setUseWeightedAverage] = useState(true);
 const [weightedIntensity, setWeightedIntensity] = useState(5);
@@ -297,6 +300,7 @@ useEffect(() => {
         if (ap.values) {
           if (typeof ap.values.radius === 'number') setRadius(ap.values.radius);
           if (typeof ap.values.sigma === 'number') setSigma(ap.values.sigma);
+          if (typeof ap.values.gradientRelaxStrength === 'number') setGradientRelaxStrength(ap.values.gradientRelaxStrength);
           if (typeof ap.values.weightedIntensity === 'number') setWeightedIntensity(ap.values.weightedIntensity);
           if (typeof ap.values.highFreqIntensity === 'number') setHighFreqIntensity(ap.values.highFreqIntensity);
           if (typeof ap.values.highFreqRange === 'number') setHighFreqRange(ap.values.highFreqRange);
@@ -327,6 +331,7 @@ useEffect(() => {
       values: {
         radius,
         sigma,
+        gradientRelaxStrength,
         weightedIntensity,
         highFreqIntensity,
         highFreqRange,
@@ -345,6 +350,7 @@ useEffect(() => {
   preserveDetail,
   radius,
   sigma,
+  gradientRelaxStrength,
   weightedIntensity,
   highFreqIntensity,
   highFreqRange,
@@ -375,6 +381,7 @@ useEffect(() => {
       // 2) 基础参数复位
       setRadius(15);
       setSigma(5);
+      setGradientRelaxStrength(5);
       setUseWeightedAverage(true);
       setWeightedIntensity(5);
       setHighFreqIntensity(5);
@@ -500,6 +507,10 @@ const handleSigmaChange = (event: React.ChangeEvent<HTMLInputElement>) => {
   setSigma(parseFloat(event.target.value));
 };
 
+const handleGradientRelaxStrengthChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  setGradientRelaxStrength(parseFloat(event.target.value));
+};
+
 // 数值输入处理
 const handleRadiusNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
   const value = parseInt(event.target.value, 10);
@@ -512,6 +523,13 @@ const handleSigmaNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => 
   const value = parseFloat(event.target.value);
   if (!isNaN(value) && value >= 1 && value <= 5) {
     setSigma(value);
+  }
+};
+
+const handleGradientRelaxStrengthNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const value = parseFloat(event.target.value);
+  if (!isNaN(value) && value >= 1 && value <= 10) {
+    setGradientRelaxStrength(value);
   }
 };
 
@@ -1056,6 +1074,53 @@ const handlePixelTransition = async () => {
   }
 };
 
+const handleGradientRelax = async () => {
+  if (!handleLicenseBeforeAction()) return;
+  try {
+    const { executeAsModal } = core;
+
+    await executeAsModal(async () => {
+      const editingState = await checkEditingState();
+      if (!editingState.isValid) {
+        return;
+      }
+
+      const { layer, isBackgroundLayer } = editingState;
+
+      const selectionBounds = await getSelectionData();
+      if (!selectionBounds) {
+        await core.showAlert({ message: '请先创建选区' });
+        return;
+      }
+
+      await runWithTemporaryUnlock(async () => {
+        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+
+        const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
+        let maskIndex = 0;
+        for (let docIndex of pixelResult.selectionIndices) {
+          fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
+          maskIndex++;
+        }
+
+        const processedPixels = await processGradientRelax(
+          pixelResult.selectionPixelData.buffer,
+          fullSelectionMask.buffer,
+          { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
+          { strength: gradientRelaxStrength },
+          isBackgroundLayer
+        );
+
+        await applyProcessedPixels(processedPixels, pixelResult);
+      });
+    });
+    giveFocusBackToPS();
+  } catch (error) {
+    console.error('❌ 梯度放缓处理失败:', error);
+    await core.showAlert({ message: '梯度放缓处理失败: ' + error.message });
+  }
+};
+
 // 折叠/展开与排序等操作函数
 const toggleSectionCollapse = (id: string) => {
   setSections(prev => prev.map(s => s.id === id ? { ...s, isCollapsed: !s.isCollapsed } : s));
@@ -1106,13 +1171,11 @@ const handleDrop = (e: React.DragEvent, targetId: string) => {
 const renderLocalContrastContent = () => (
   <div className="adjustment-section">
     
-    <button className="adjustment-button" onClick={handlePixelTransition} title={`● 在选区边缘做柔和过渡，减少硬边和断裂。
-
-● 适合人物发丝、衣料边缘、贴图接缝等，让边缘更自然。
+    <button className="adjustment-button" onClick={handlePixelTransition} title={`● 特制类高斯模糊过渡滤镜，特点是屏蔽alpha为0的像素，从而更好保护形状。
 
 ● 半径决定参考范围大小；强度决定过渡幅度。
 
-示例：半径大→过渡范围更广；强度大→边缘更平滑。`}>像素过渡</button>
+即：半径大→过渡范围更广；强度大→边缘更平滑。`}>像素过渡</button>
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
@@ -1143,6 +1206,29 @@ const renderLocalContrastContent = () => (
 
     <div className="adjustment-divider"></div>
     
+    <button className="adjustment-button" onClick={handleGradientRelax} title={`● 把选区内的“陡峭梯度”放缓，让过渡带更宽、更柔和。
+
+● 同时作用于颜色与不透明度（alpha）的过渡。
+
+● 计算时屏蔽选区外像素，避免透明外部拖低边缘导致露出选区边界。`}>梯度放缓</button>
+
+    <div className="adjustment-slider-container">
+      <div className="adjustment-slider-item">
+        <div className="adjustment-slider-label" title={`● 控制放缓程度，单位级。
+
+● 数值越大：参考范围更大、放缓更明显，但更慢。
+
+建议：先从 3–6 级开始。`}>程度</div>
+        <div className="unit-container">
+          <input type="range" min="1" max="10" step="0.5" value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthChange} className="adjustment-slider-input" />
+          <input type="number" min="1" max="10" step="0.5" value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthNumberChange} className="adjustment-number-input" />
+          <div className="adjustment-unit">级</div>
+        </div>
+      </div>
+    </div>
+
+    <div className="adjustment-divider"></div>
+
     <button className="adjustment-button" onClick={handleHighFrequencyEnhancement} title={`● 提升细小纹理与微对比，使画面更清晰。
 
 ● 仅对选区内的高频细节生效，低频形状不被破坏。
@@ -1261,7 +1347,7 @@ const renderEdgeProcessingContent = () => (
 
 ● 适合线稿、UI 描边、图标轮廓等。
 
-● 无选区时默认对整幅图处理。`}>加黑线条</button>
+● 无选区时默认对整幅图处理。`}>线条加黑</button>
   </div>
 );
 
