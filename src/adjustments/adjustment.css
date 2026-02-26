@@ -309,7 +309,7 @@
   transition: max-height 0.3s ease-out;
 }
 .adjust-expand-content.expanded {
-  max-height: 400px;
+  max-height: 1000px;
 }
 .adjust-expand-icon path.fill {
   fill: var(--text-color);

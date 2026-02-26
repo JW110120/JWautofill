@@ -3,6 +3,7 @@ import { processBlockAverage } from './blockAverageProcessor';
 import { processBlockGradient } from './blockGradientProcessor';
 import { processPixelTransition } from './pixelTransitionProcessor';
 import { processGradientRelax } from './gradientRelaxProcessor';
+import { processSpecialSharpen } from './specialSharpenProcessor';
 import { processLineEnhancement } from './lineProcessing';
 import { processHighFrequencyEnhancement } from './highFrequencyEnhancer';
 import { processSmartEdgeSmooth, defaultSmartEdgeSmoothParams } from './smartEdgeSmoothProcessor';
@@ -243,6 +244,7 @@ const [showVisibilityPanel, setShowVisibilityPanel] = useState(false);
 
 const [radius, setRadius] = useState(15);
 const [sigma, setSigma] = useState(5);
+const [specialSharpenStrength, setSpecialSharpenStrength] = useState(5);
 const [gradientRelaxStrength, setGradientRelaxStrength] = useState(-5);
 
 const [useWeightedAverage, setUseWeightedAverage] = useState(true);
@@ -300,6 +302,7 @@ useEffect(() => {
         if (ap.values) {
           if (typeof ap.values.radius === 'number') setRadius(ap.values.radius);
           if (typeof ap.values.sigma === 'number') setSigma(ap.values.sigma);
+          if (typeof ap.values.specialSharpenStrength === 'number') setSpecialSharpenStrength(ap.values.specialSharpenStrength);
           if (typeof ap.values.gradientRelaxStrength === 'number') {
             const v = ap.values.gradientRelaxStrength;
             const signedReady = ap.values.gradientModifySigned === true;
@@ -337,6 +340,7 @@ useEffect(() => {
       values: {
         radius,
         sigma,
+        specialSharpenStrength,
         gradientRelaxStrength,
         gradientModifySigned: true,
         weightedIntensity,
@@ -357,6 +361,7 @@ useEffect(() => {
   preserveDetail,
   radius,
   sigma,
+  specialSharpenStrength,
   gradientRelaxStrength,
   weightedIntensity,
   highFreqIntensity,
@@ -388,6 +393,7 @@ useEffect(() => {
       // 2) 基础参数复位
       setRadius(15);
       setSigma(5);
+      setSpecialSharpenStrength(5);
       setGradientRelaxStrength(-5);
       setUseWeightedAverage(true);
       setWeightedIntensity(5);
@@ -514,6 +520,10 @@ const handleSigmaChange = (event: React.ChangeEvent<HTMLInputElement>) => {
   setSigma(parseFloat(event.target.value));
 };
 
+const handleSpecialSharpenStrengthChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  setSpecialSharpenStrength(parseFloat(event.target.value));
+};
+
 const handleGradientRelaxStrengthChange = (event: React.ChangeEvent<HTMLInputElement>) => {
   setGradientRelaxStrength(parseInt(event.target.value, 10));
 };
@@ -530,6 +540,13 @@ const handleSigmaNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => 
   const value = parseFloat(event.target.value);
   if (!isNaN(value) && value >= 1 && value <= 5) {
     setSigma(value);
+  }
+};
+
+const handleSpecialSharpenStrengthNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const value = parseFloat(event.target.value);
+  if (!isNaN(value) && value >= 1 && value <= 10) {
+    setSpecialSharpenStrength(value);
   }
 };
 
@@ -1129,6 +1146,53 @@ const handleGradientModify = async () => {
   }
 };
 
+const handleSpecialSharpen = async () => {
+  if (!handleLicenseBeforeAction()) return;
+  try {
+    const { executeAsModal } = core;
+
+    await executeAsModal(async () => {
+      const editingState = await checkEditingState();
+      if (!editingState.isValid) {
+        return;
+      }
+
+      const { layer, isBackgroundLayer } = editingState;
+
+      const selectionBounds = await getSelectionData();
+      if (!selectionBounds) {
+        await core.showAlert({ message: '请先创建选区' });
+        return;
+      }
+
+      await runWithTemporaryUnlock(async () => {
+        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+
+        const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
+        let maskIndex = 0;
+        for (let docIndex of pixelResult.selectionIndices) {
+          fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
+          maskIndex++;
+        }
+
+        const processedPixels = await processSpecialSharpen(
+          pixelResult.selectionPixelData.buffer,
+          fullSelectionMask.buffer,
+          { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
+          { strength: specialSharpenStrength },
+          isBackgroundLayer
+        );
+
+        await applyProcessedPixels(processedPixels, pixelResult);
+      });
+    });
+    giveFocusBackToPS();
+  } catch (error) {
+    console.error('❌ 特殊锐化处理失败:', error);
+    await core.showAlert({ message: '特殊锐化处理失败: ' + error.message });
+  }
+};
+
 // 折叠/展开与排序等操作函数
 const toggleSectionCollapse = (id: string) => {
   setSections(prev => prev.map(s => s.id === id ? { ...s, isCollapsed: !s.isCollapsed } : s));
@@ -1214,6 +1278,27 @@ const renderLocalContrastContent = () => (
 
     <div className="adjustment-divider"></div>
     
+    <button className="adjustment-button" onClick={handleSpecialSharpen} title={`● 一种更“硬”的局部锐化方式，用于强化过渡边缘与对比。
+
+● 仅对选区内生效，并尽量避免选区边界露出。
+
+● 数值越大效果越强，也越慢。`}>特殊锐化</button>
+
+    <div className="adjustment-slider-container">
+      <div className="adjustment-slider-item">
+        <div className="adjustment-slider-label" title={`● 控制锐化强度，单位级。
+
+● 建议 2–6 用于轻中度增强，7–10 用于强烈强化。`}>强度</div>
+        <div className="unit-container">
+          <input type="range" min="1" max="10" step="0.5" value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthChange} className="adjustment-slider-input" />
+          <input type="number" min="1" max="10" step="0.5" value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthNumberChange} className="adjustment-number-input" />
+          <div className="adjustment-unit">级</div>
+        </div>
+      </div>
+    </div>
+
+    <div className="adjustment-divider"></div>
+
     <button className="adjustment-button" onClick={handleGradientModify} title={`● 修改选区内的梯度形态：负值放缓（过渡更宽更柔），正值陡峭（过渡更窄更硬）。
 
 ● 同时作用于颜色与不透明度（alpha）的过渡。
