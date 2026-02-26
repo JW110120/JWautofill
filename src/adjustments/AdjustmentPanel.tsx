@@ -1312,27 +1312,6 @@ const renderLocalContrastContent = () => (
     </div>
 
     <div className="adjustment-divider"></div>
-    
-    <button className="adjustment-button" onClick={handleSpecialSharpen} title={`● 一种更“硬”的局部锐化方式，用于强化过渡边缘与对比。
-
-● 仅对选区内生效，并尽量避免选区边界露出。
-
-● 数值越大效果越强，也越慢。`}>特殊锐化</button>
-
-    <div className="adjustment-slider-container">
-      <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" title={`● 控制锐化强度，单位级。
-
-● 建议 2–6 用于轻中度增强，7–10 用于强烈强化。`}>强度</div>
-        <div className="unit-container">
-          <input type="range" min="1" max="10" step="0.5" value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthChange} className="adjustment-slider-input" />
-          <input type="number" min="1" max="10" step="0.5" value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthNumberChange} className="adjustment-number-input" />
-          <div className="adjustment-unit">级</div>
-        </div>
-      </div>
-    </div>
-
-    <div className="adjustment-divider"></div>
 
     <button className="adjustment-button" onClick={handleGradientModify} title={`● 修改选区内的梯度形态：负值放缓（过渡更宽更柔），正值陡峭（过渡更窄更硬）。
 
@@ -1352,6 +1331,27 @@ const renderLocalContrastContent = () => (
         <div className="unit-container">
           <input type="range" min="-10" max="10" step="1" value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthChange} className="adjustment-slider-input" />
           <input type="number" min="-10" max="10" step="1" value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthNumberChange} className="adjustment-number-input" />
+          <div className="adjustment-unit">级</div>
+        </div>
+      </div>
+    </div>
+
+    <div className="adjustment-divider"></div>
+
+    <button className="adjustment-button" onClick={handleSpecialSharpen} title={`● 一种更“硬”的局部锐化方式，用于强化过渡边缘与对比。
+
+● 仅对选区内生效，并尽量避免选区边界露出。
+
+● 数值越大效果越强，也越慢。`}>特殊锐化</button>
+
+    <div className="adjustment-slider-container">
+      <div className="adjustment-slider-item">
+        <div className="adjustment-slider-label" title={`● 控制锐化强度，单位级。
+
+● 建议 2–6 用于轻中度增强，7–10 用于强烈强化。`}>强度</div>
+        <div className="unit-container">
+          <input type="range" min="1" max="10" step="0.5" value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthChange} className="adjustment-slider-input" />
+          <input type="number" min="1" max="10" step="0.5" value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthNumberChange} className="adjustment-number-input" />
           <div className="adjustment-unit">级</div>
         </div>
       </div>
