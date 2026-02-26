@@ -54,16 +54,17 @@ if (pixelAdjustmentContainer) {
   // 创建像素调整根组件
   const PixelAdjustmentRoot = () => {
     return (
-      <Provider theme={defaultTheme} colorScheme="dark">
+      <Provider theme={defaultTheme} colorScheme="dark" height="100%">
         <div style={{ 
           width: '100%', 
           height: '100%', 
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'flex-start',
-          alignItems: 'center',
+          alignItems: 'stretch',
           backgroundColor: 'var(--bg-color)',
-          color: 'var(--text-color)'
+          color: 'var(--text-color)',
+          overflow: 'hidden'
         }}>
           <AdjustmentPanel />
         </div>

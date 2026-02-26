@@ -66,13 +66,15 @@
 .adjustment-container {
   width: 100%;
   height: 100%;
+  max-height: 100%;
+  min-height: 0;
   background-color: var(--bg-color);
   color: var(--text-color);
   font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
-  align-items: center;
+  align-items: stretch;
   padding: 10px;
   box-sizing: border-box;
   /* 新增：当内容超出时，允许垂直滚动 */
@@ -101,13 +103,17 @@
 
 /* 分区容器 */
 .adjustment-section {
-  width: 230px;
+  width: calc(100% - 2px);
+  max-width: 280px;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   padding: 13px 12px 6px 12px;
   margin-bottom: 20px;
   border: 1px solid var(--border-color);
   border-radius: 4px;
+  margin-left: 0;
+  margin-right: 0;
 }
 
 /* 双按钮容器 */
@@ -178,7 +184,8 @@
   display: flex;
   align-items: center;
   flex-direction: row;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: 3px;
 }
 
 /* 滑块标签 */
@@ -186,9 +193,8 @@
   color: var(--text-color);
   display: flex;
   font-size: 13px;
-  min-width: 28px;
-  margin-right: -8px;
-
+  flex: 0 0 20px;
+  white-space: nowrap;
 }
 
 /* 宽的单位标签 */
@@ -196,10 +202,9 @@
   color: var(--text-color);
   display: flex;
   font-size: 13px;
-  min-width: 55px;
+  flex: 0 0 50px;
   cursor: pointer;
-  margin-right: -10px;
-  margin-left: -2px;
+  white-space: nowrap;
 }
 
 /* 更宽的单位标签 */
@@ -207,16 +212,16 @@
   color: var(--text-color);
   display: flex;
   font-size: 13px;
-  min-width: 60px;
+  flex: 0 0 60px;
   cursor: pointer;
-  margin-right: -5px;
-  margin-left: -2px;
+  white-space: nowrap;
 }
 
 /* 滑块输入 */
 .adjustment-slider-input {
-  display: flex;  
-  width: 125px;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
   cursor: pointer;
   background: var(--bg-color);
   margin-top: 15px;
@@ -224,8 +229,9 @@
 
 /* 窄的滑块 */
 .narrow-adjustment-slider-input{
-  display: flex;  
-  width: 100px;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
   cursor: pointer;
   background: var(--bg-color);
   margin-top: 15px;
@@ -233,8 +239,9 @@
 
 /* 更窄的滑块 */
 .narrower-adjustment-slider-input{
-  display: flex;  
-  width: 90px;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
   cursor: pointer;
   background: var(--bg-color);
   margin-top: 15px;
@@ -243,6 +250,9 @@
 .unit-container{
   display: flex;
   align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 3px;
 }
 
 /* 数值输入框 */
@@ -251,6 +261,7 @@
   position: relative;
   z-index: auto;
   width: 30px;
+  flex: 0 0 30px;
   height: 24px;
   color: var(--text-color);
   font-size: 11px;
@@ -259,11 +270,28 @@
   /* 移除z-index，让它跟随父容器的折叠状态 */
 }
 
+.adjustment-select {
+  position: relative;
+  z-index: auto;
+  width: 170px;
+  height: 24px;
+  color: var(--text-color);
+  font-size: 12px;
+  background: var(--bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  margin-left: auto;
+  margin-right: -2px;
+}
+
 /* 单位标签 */
 .adjustment-unit {
   color: var(--text-color);
   font-size: 13px;
   opacity: 0.8;
+  width: 15px;
+  flex: 0 0 15px;
+  text-align: left;
 }
 
 /* 分隔线 */
@@ -276,7 +304,10 @@
 
 .adjust-expand-section {
   background-color: var(--bg-color);
+  width: 100%;
+  box-sizing: border-box;
   z-index: 1;
+  flex-shrink: 0; /* 防止子元素被压缩导致重叠 */
 }
 
 .adjust-expand-header {
@@ -284,6 +315,8 @@
   align-items: center;
   cursor: pointer;
   font-size: 13px;
+  width: 100%;
+  box-sizing: border-box;
   padding: 10px 0;
   color: var(--text-color);
   transition: background-color 0.3s;
@@ -304,12 +337,11 @@
   transform: rotate(0deg);
 }
 .adjust-expand-content {
-  max-height: 0px;
-  overflow: hidden;
-  transition: max-height 0.3s ease-out;
+  width: 100%;
+  box-sizing: border-box;
 }
 .adjust-expand-content.expanded {
-  max-height: 1000px;
+  width: 100%;
 }
 .adjust-expand-icon path.fill {
   fill: var(--text-color);
@@ -335,7 +367,7 @@
   color: var(--text-color);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  width: 230px;
+  width: 280px;
   max-width: 92vw;
   padding: 10px 10px;
   box-shadow: 0 10px 24px rgba(0,0,0,0.35);

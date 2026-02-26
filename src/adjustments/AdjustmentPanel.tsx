@@ -253,11 +253,13 @@ const [highFreqIntensity, setHighFreqIntensity] = useState(5);
 const [highFreqRange, setHighFreqRange] = useState(3);
 
 // 智能边缘平滑参数
-const [edgeAlphaThreshold, setEdgeAlphaThreshold] = useState(defaultSmartEdgeSmoothParams.alphaThreshold);
-const [edgeColorThreshold, setEdgeColorThreshold] = useState(defaultSmartEdgeSmoothParams.colorThreshold);
-const [edgeSmoothRadius, setEdgeSmoothRadius] = useState(defaultSmartEdgeSmoothParams.smoothRadius);
-const [preserveDetail, setPreserveDetail] = useState(defaultSmartEdgeSmoothParams.preserveDetail);
-const [edgeIntensity, setEdgeIntensity] = useState(defaultSmartEdgeSmoothParams.intensity);
+const [edgeSmoothMode, setEdgeSmoothMode] = useState((defaultSmartEdgeSmoothParams.mode as any) || 'auto');
+const [edgeMedianRadius, setEdgeMedianRadius] = useState(defaultSmartEdgeSmoothParams.edgeMedianRadius ?? 20);
+const [edgeMedianStrength, setEdgeMedianStrength] = useState(Math.round((defaultSmartEdgeSmoothParams.edgeMedianStrength ?? 1) * 100));
+const [edgeBackgroundSmoothRadius, setEdgeBackgroundSmoothRadius] = useState(defaultSmartEdgeSmoothParams.backgroundSmoothRadius ?? 16);
+const [edgeLineStrength, setEdgeLineStrength] = useState(Math.round((defaultSmartEdgeSmoothParams.lineStrength ?? 1) * 100));
+const [edgeLineWidthScale, setEdgeLineWidthScale] = useState(defaultSmartEdgeSmoothParams.lineWidthScale ?? 1);
+const [edgeLineHardness, setEdgeLineHardness] = useState(Math.round((defaultSmartEdgeSmoothParams.lineHardness ?? 1) * 100));
 
 // 许可证相关 Hook 和函数
 useEffect(() => {
@@ -280,7 +282,7 @@ useEffect(() => {
         adjustmentPanel: {
           sections,
           subFeatures,
-          toggles: { useWeightedAverage, preserveDetail },
+          toggles: { useWeightedAverage },
         },
       });
       const ap = loaded && loaded.adjustmentPanel;
@@ -294,9 +296,6 @@ useEffect(() => {
         if (ap.toggles) {
           if (typeof ap.toggles.useWeightedAverage === 'boolean') {
             setUseWeightedAverage(ap.toggles.useWeightedAverage);
-          }
-          if (typeof ap.toggles.preserveDetail === 'boolean') {
-            setPreserveDetail(ap.toggles.preserveDetail);
           }
         }
         if (ap.values) {
@@ -313,10 +312,13 @@ useEffect(() => {
           if (typeof ap.values.weightedIntensity === 'number') setWeightedIntensity(ap.values.weightedIntensity);
           if (typeof ap.values.highFreqIntensity === 'number') setHighFreqIntensity(ap.values.highFreqIntensity);
           if (typeof ap.values.highFreqRange === 'number') setHighFreqRange(ap.values.highFreqRange);
-          if (typeof ap.values.edgeAlphaThreshold === 'number') setEdgeAlphaThreshold(ap.values.edgeAlphaThreshold);
-          if (typeof ap.values.edgeColorThreshold === 'number') setEdgeColorThreshold(ap.values.edgeColorThreshold);
-          if (typeof ap.values.edgeSmoothRadius === 'number') setEdgeSmoothRadius(ap.values.edgeSmoothRadius);
-          if (typeof ap.values.edgeIntensity === 'number') setEdgeIntensity(ap.values.edgeIntensity);
+          if (typeof ap.values.edgeSmoothMode === 'string') setEdgeSmoothMode(ap.values.edgeSmoothMode);
+          if (typeof ap.values.edgeMedianRadius === 'number') setEdgeMedianRadius(ap.values.edgeMedianRadius);
+          if (typeof ap.values.edgeMedianStrength === 'number') setEdgeMedianStrength(ap.values.edgeMedianStrength);
+          if (typeof ap.values.edgeBackgroundSmoothRadius === 'number') setEdgeBackgroundSmoothRadius(ap.values.edgeBackgroundSmoothRadius);
+          if (typeof ap.values.edgeLineStrength === 'number') setEdgeLineStrength(ap.values.edgeLineStrength);
+          if (typeof ap.values.edgeLineWidthScale === 'number') setEdgeLineWidthScale(ap.values.edgeLineWidthScale);
+          if (typeof ap.values.edgeLineHardness === 'number') setEdgeLineHardness(ap.values.edgeLineHardness);
         }
       }
       setPanelStateLoaded(true);
@@ -336,7 +338,7 @@ useEffect(() => {
     adjustmentPanel: {
       sections,
       subFeatures,
-      toggles: { useWeightedAverage, preserveDetail },
+      toggles: { useWeightedAverage },
       values: {
         radius,
         sigma,
@@ -346,10 +348,13 @@ useEffect(() => {
         weightedIntensity,
         highFreqIntensity,
         highFreqRange,
-        edgeAlphaThreshold,
-        edgeColorThreshold,
-        edgeSmoothRadius,
-        edgeIntensity,
+        edgeSmoothMode,
+        edgeMedianRadius,
+        edgeMedianStrength,
+        edgeBackgroundSmoothRadius,
+        edgeLineStrength,
+        edgeLineWidthScale,
+        edgeLineHardness,
       },
     },
   }, { debounceMs: 400 }).catch(e => console.warn('⚠️ 保存像素调整面板状态失败:', e));
@@ -358,7 +363,6 @@ useEffect(() => {
   sections,
   subFeatures,
   useWeightedAverage,
-  preserveDetail,
   radius,
   sigma,
   specialSharpenStrength,
@@ -366,10 +370,13 @@ useEffect(() => {
   weightedIntensity,
   highFreqIntensity,
   highFreqRange,
-  edgeAlphaThreshold,
-  edgeColorThreshold,
-  edgeSmoothRadius,
-  edgeIntensity,
+  edgeSmoothMode,
+  edgeMedianRadius,
+  edgeMedianStrength,
+  edgeBackgroundSmoothRadius,
+  edgeLineStrength,
+  edgeLineWidthScale,
+  edgeLineHardness,
 ]);
 
 // 注册Flyout菜单回调
@@ -400,11 +407,13 @@ useEffect(() => {
       setHighFreqIntensity(5);
       setHighFreqRange(3);
       // 3) 智能边缘平滑参数复位
-      setEdgeAlphaThreshold(defaultSmartEdgeSmoothParams.alphaThreshold);
-      setEdgeColorThreshold(defaultSmartEdgeSmoothParams.colorThreshold);
-      setEdgeSmoothRadius(defaultSmartEdgeSmoothParams.smoothRadius);
-      setPreserveDetail(defaultSmartEdgeSmoothParams.preserveDetail);
-      setEdgeIntensity(defaultSmartEdgeSmoothParams.intensity);
+      setEdgeSmoothMode((defaultSmartEdgeSmoothParams.mode as any) || 'auto');
+      setEdgeMedianRadius(defaultSmartEdgeSmoothParams.edgeMedianRadius ?? 20);
+      setEdgeMedianStrength(Math.round((defaultSmartEdgeSmoothParams.edgeMedianStrength ?? 1) * 100));
+      setEdgeBackgroundSmoothRadius(defaultSmartEdgeSmoothParams.backgroundSmoothRadius ?? 16);
+      setEdgeLineStrength(Math.round((defaultSmartEdgeSmoothParams.lineStrength ?? 1) * 100));
+      setEdgeLineWidthScale(defaultSmartEdgeSmoothParams.lineWidthScale ?? 1);
+      setEdgeLineHardness(Math.round((defaultSmartEdgeSmoothParams.lineHardness ?? 1) * 100));
       // 4) 关闭可见性面板
       setShowVisibilityPanel(false);
     }
@@ -593,49 +602,73 @@ const handleHighFreqRangeNumberChange = (event: React.ChangeEvent<HTMLInputEleme
   }
 };
 
-// 智能边缘平滑滑块处理
-const handleEdgeAlphaThresholdChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setEdgeAlphaThreshold(parseInt(event.target.value, 10));
+const handleEdgeSmoothModeChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+  setEdgeSmoothMode(event.target.value);
 };
 
-const handleEdgeAlphaThresholdNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+const handleEdgeMedianRadiusChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  setEdgeMedianRadius(parseInt(event.target.value, 10));
+};
+
+const handleEdgeMedianRadiusNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
   const value = parseInt(event.target.value, 10);
-  if (!isNaN(value) && value >= 10 && value <= 100) {
-    setEdgeAlphaThreshold(value);
+  if (!isNaN(value) && value >= 4 && value <= 40) {
+    setEdgeMedianRadius(value);
   }
 };
 
-const handleEdgeColorThresholdChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setEdgeColorThreshold(parseInt(event.target.value, 10));
+const handleEdgeMedianStrengthChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  setEdgeMedianStrength(parseInt(event.target.value, 10));
 };
 
-const handleEdgeColorThresholdNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+const handleEdgeMedianStrengthNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
   const value = parseInt(event.target.value, 10);
-  if (!isNaN(value) && value >= 10 && value <= 100) {
-    setEdgeColorThreshold(value);
+  if (!isNaN(value) && value >= 0 && value <= 100) {
+    setEdgeMedianStrength(value);
   }
 };
 
-const handleEdgeSmoothRadiusChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setEdgeSmoothRadius(parseFloat(event.target.value));
+const handleEdgeBackgroundSmoothRadiusChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  setEdgeBackgroundSmoothRadius(parseInt(event.target.value, 10));
 };
 
-const handleEdgeSmoothRadiusNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  const value = parseFloat(event.target.value);
-  if (!isNaN(value) && value >= 1 && value <= 8) {
-    setEdgeSmoothRadius(value);
+const handleEdgeBackgroundSmoothRadiusNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const value = parseInt(event.target.value, 10);
+  if (!isNaN(value) && value >= 0 && value <= 40) {
+    setEdgeBackgroundSmoothRadius(value);
   }
 };
 
-// 强度滑块处理
-const handleEdgeIntensityChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setEdgeIntensity(parseFloat(event.target.value));
+const handleEdgeLineStrengthChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  setEdgeLineStrength(parseInt(event.target.value, 10));
 };
 
-const handleEdgeIntensityNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+const handleEdgeLineStrengthNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const value = parseInt(event.target.value, 10);
+  if (!isNaN(value) && value >= 0 && value <= 100) {
+    setEdgeLineStrength(value);
+  }
+};
+
+const handleEdgeLineWidthScaleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  setEdgeLineWidthScale(parseFloat(event.target.value));
+};
+
+const handleEdgeLineWidthScaleNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
   const value = parseFloat(event.target.value);
-  if (!isNaN(value) && value >= 1 && value <= 10) {
-    setEdgeIntensity(value);
+  if (!isNaN(value) && value >= 0.5 && value <= 2) {
+    setEdgeLineWidthScale(value);
+  }
+};
+
+const handleEdgeLineHardnessChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  setEdgeLineHardness(parseInt(event.target.value, 10));
+};
+
+const handleEdgeLineHardnessNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const value = parseInt(event.target.value, 10);
+  if (!isNaN(value) && value >= 0 && value <= 100) {
+    setEdgeLineHardness(value);
   }
 };
 
@@ -1014,11 +1047,13 @@ const handleSmartEdgeSmooth = async () => {
           fullSelectionMask.buffer, 
           { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
           {
-            alphaThreshold: edgeAlphaThreshold,
-            colorThreshold: edgeColorThreshold,
-            smoothRadius: edgeSmoothRadius,
-            preserveDetail: preserveDetail,
-            intensity: edgeIntensity
+            mode: edgeSmoothMode,
+            edgeMedianRadius: edgeMedianRadius,
+            edgeMedianStrength: edgeMedianStrength / 100,
+            backgroundSmoothRadius: edgeBackgroundSmoothRadius,
+            lineStrength: edgeLineStrength / 100,
+            lineWidthScale: edgeLineWidthScale,
+            lineHardness: edgeLineHardness / 100
           },
           isBackgroundLayer
         );
@@ -1359,81 +1394,87 @@ const renderLocalContrastContent = () => (
 
 const renderEdgeProcessingContent = () => (
   <div className="adjustment-section">
+    <button className="adjustment-button" onClick={handleSmartEdgeSmooth} title={`● 两种模式：色块边界的“中间值”平滑；或识别主线条后“抹平→拟合→回写”。
 
-    <div className="adjustment-double-buttons">
-      <button className="adjustment-button" onClick={handleSmartEdgeSmooth} title={`● 智能识别边缘并进行平滑与抗锯齿处理。
-
-● “保留细节”可避免过度模糊主体纹理。
-
-● Alpha 阈值决定透明边界识别灵敏度；颜色阈值决定色差门槛。
-
-示例：用于羽化边缘、贴图拼接、抠图残留锯齿等场景。`}>边缘平滑</button>
-      
-      <div className="adjustment-swtich-container">
-        <label 
-          className="adjustment-swtich-label"
-          onClick={() => setPreserveDetail(!preserveDetail)}
-          style={{ cursor: 'pointer' }}
-          title={`● 开启后仅在明显边缘平滑，尽量保留纹理细节。
-
-● 关闭则更强力统一边缘，可能略微变软。`}
-        >保留细节</label>
-        <sp-switch 
-          checked={preserveDetail}
-          onChange={(e) => setPreserveDetail(e.target.checked)}
-          style={{ marginLeft: '8px' }}
-          title={`● 开启后更保守地处理边缘，保留主体纹理。`}
-        />
-      </div>
-    </div>
+● 普通图层会对 RGBA 四通道处理；背景图层只处理 RGB。`}>边缘平滑</button>
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
-        <div className="wider-adjustment-slider-label" title={`● 判断“透明→不透明”边界的灵敏度，百分比。
+        <div className="adjustment-slider-label" title={`● 自动：优先尝试识别主线条；识别不到则做色块边界平滑。
 
-● 值越低越容易把弱透明当作边缘，平滑范围更大。
+● 仅色块边界：只做边界“中间值”平滑。
 
-示例：抠图残影用 20–40%；羽化较强的选区用 40–70%。`}>Alpha阈值</div>
+● 仅主线条：只做主线条识别与回写。`}>平滑模式</div>
         <div className="unit-container">
-          <input type="range" min="10" max="100" step="1" value={edgeAlphaThreshold} onChange={handleEdgeAlphaThresholdChange} className="narrower-adjustment-slider-input" />
-          <input type="number" min="10" max="100" step="1" value={edgeAlphaThreshold} onChange={handleEdgeAlphaThresholdNumberChange} className="adjustment-number-input" />
-          <div className="adjustment-unit">%</div>
+          <select value={edgeSmoothMode} onChange={handleEdgeSmoothModeChange} className="adjustment-select">
+            <option value="auto">自动</option>
+            <option value="edge">仅色块边界</option>
+            <option value="line">仅主线条</option>
+          </select>
         </div>
       </div>
-      <div className="adjustment-slider-item">
-        <div className="wide-adjustment-slider-label" title={`● 判断颜色差异是否构成边界的门槛，百分比。
 
-● 值低更敏感，色差稍大即判为边缘；值高更保守。
+      {edgeSmoothMode === 'edge' && (
+        <>
+          <div className="adjustment-slider-item">
+            <div className="wider-adjustment-slider-label" title={`● 中间值的参考半径（近似 PS 中间值）。半径越大，边缘越柔和但更慢。`}>中间值半径</div>
+            <div className="unit-container">
+              <input type="range" min="4" max="40" step="1" value={edgeMedianRadius} onChange={handleEdgeMedianRadiusChange} className="adjustment-slider-input" />
+              <input type="number" min="4" max="40" step="1" value={edgeMedianRadius} onChange={handleEdgeMedianRadiusNumberChange} className="adjustment-number-input" />
+              <div className="adjustment-unit">px</div>
+            </div>
+          </div>
 
-示例：噪点较多用 30–60%；色块分明用 10–30%。`}>颜色阈值</div>
-        <div className="unit-container">
-          <input type="range" min="10" max="100" step="1" value={edgeColorThreshold} onChange={handleEdgeColorThresholdChange} className="narrow-adjustment-slider-input" />
-          <input type="number" min="1" max="100" step="1" value={edgeColorThreshold} onChange={handleEdgeColorThresholdNumberChange} className="adjustment-number-input" />
-          <div className="adjustment-unit">%</div>
-        </div>
-      </div>
-      <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" title={`● 决定平滑核的大小，单位 px。
+          <div className="adjustment-slider-item">
+            <div className="wide-adjustment-slider-label" title={`● 中间值写回的力度。低一些更保守；高一些更“磨平”。`}>边界强度</div>
+            <div className="unit-container">
+              <input type="range" min="0" max="100" step="1" value={edgeMedianStrength} onChange={handleEdgeMedianStrengthChange} className="adjustment-slider-input" />
+              <input type="number" min="0" max="100" step="1" value={edgeMedianStrength} onChange={handleEdgeMedianStrengthNumberChange} className="adjustment-number-input" />
+              <div className="adjustment-unit">%</div>
+            </div>
+          </div>
+        </>
+      )}
 
-● 半径越大，平滑越强但可能变软，且耗时增加。
+      {edgeSmoothMode === 'line' && (
+        <>
+          <div className="adjustment-slider-item">
+            <div className="wide-adjustment-slider-label" title={`● 主线条模式中的“抹平”半径。越大越能清掉杂线与脏点，但整体会更软。`}>抹平半径</div>
+            <div className="unit-container">
+              <input type="range" min="0" max="40" step="1" value={edgeBackgroundSmoothRadius} onChange={handleEdgeBackgroundSmoothRadiusChange} className="adjustment-slider-input" />
+              <input type="number" min="0" max="40" step="1" value={edgeBackgroundSmoothRadius} onChange={handleEdgeBackgroundSmoothRadiusNumberChange} className="adjustment-number-input" />
+              <div className="adjustment-unit">px</div>
+            </div>
+          </div>
 
-示例：小图 1–5px；大图 10–20px。`}>半径</div>
-        <div className="unit-container">
-          <input type="range" min="1" max="30" step="0.5" value={edgeSmoothRadius} onChange={handleEdgeSmoothRadiusChange} className="adjustment-slider-input" />
-          <input type="number" min="1" max="30" step="0.5" value={edgeSmoothRadius} onChange={handleEdgeSmoothRadiusNumberChange} className="adjustment-number-input" />
-          <div className="adjustment-unit">px</div>
-        </div>
-      </div>
-      <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" title={`● 平滑权重，单位级。
+          <div className="adjustment-slider-item">
+            <div className="wide-adjustment-slider-label" title={`● 主线条回写的不透明度倍率。越高线条越“压回去”。`}>线条力度</div>
+            <div className="unit-container">
+              <input type="range" min="0" max="100" step="1" value={edgeLineStrength} onChange={handleEdgeLineStrengthChange} className="adjustment-slider-input" />
+              <input type="number" min="0" max="100" step="1" value={edgeLineStrength} onChange={handleEdgeLineStrengthNumberChange} className="adjustment-number-input" />
+              <div className="adjustment-unit">%</div>
+            </div>
+          </div>
 
-● 值越大，边缘被拉平越明显。`}>强度</div>
-        <div className="unit-container">
-          <input type="range" min="1" max="10" step="0.5" value={edgeIntensity} onChange={handleEdgeIntensityChange} className="adjustment-slider-input" />
-          <input type="number" min="1" max="10" step="0.5" value={edgeIntensity} onChange={handleEdgeIntensityNumberChange} className="adjustment-number-input" />
-          <div className="adjustment-unit">级</div>
-        </div>
-      </div>
+          <div className="adjustment-slider-item">
+            <div className="wide-adjustment-slider-label" title={`● 主线条回写的粗细倍率。大于 1 会更粗，小于 1 会更细。`}>线条粗细</div>
+            <div className="unit-container">
+              <input type="range" min="0.5" max="2" step="0.05" value={edgeLineWidthScale} onChange={handleEdgeLineWidthScaleChange} className="adjustment-slider-input" />
+              <input type="number" min="0.5" max="2" step="0.05" value={edgeLineWidthScale} onChange={handleEdgeLineWidthScaleNumberChange} className="adjustment-number-input" />
+              <div className="adjustment-unit">x</div>
+            </div>
+          </div>
+
+          <div className="adjustment-slider-item">
+            <div className="wide-adjustment-slider-label" title={`● 主线条边缘硬度。越高越锐利，越低越柔。`}>线条硬度</div>
+            <div className="unit-container">
+              <input type="range" min="0" max="100" step="1" value={edgeLineHardness} onChange={handleEdgeLineHardnessChange} className="adjustment-slider-input" />
+              <input type="number" min="0" max="100" step="1" value={edgeLineHardness} onChange={handleEdgeLineHardnessNumberChange} className="adjustment-number-input" />
+              <div className="adjustment-unit">%</div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
 
     <div className="adjustment-divider"></div>
@@ -1517,9 +1558,11 @@ const renderSection = (section: SectionConfig) => (
       </div>
       <div>{section.title}</div>
     </div>
-    <div className={`adjust-expand-content ${section.isCollapsed ? '' : 'expanded'}`}>
-      {renderSectionContent(section.id)}
-    </div>
+    {!section.isCollapsed && (
+      <div className="adjust-expand-content expanded">
+        {renderSectionContent(section.id)}
+      </div>
+    )}
   </div>
 );
 

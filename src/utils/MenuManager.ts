@@ -134,7 +134,7 @@ export class MenuManager {
             },
             {
               id: "resetParameters",
-              label: "参数复位（还原所有像素调整参数）"
+              label: "参数复位"
             }
           ],
           invokeMenu(id: string) {

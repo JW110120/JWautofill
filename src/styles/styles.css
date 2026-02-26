@@ -22,6 +22,13 @@ html, body {
   color: var(--text-color);
 }
 
+uxp-panel[panelid="com.listen2me.pixeladjustment"],
+#pixeladjustment {
+  height: 100vh;
+  width: 100%;
+  overflow: hidden;
+}
+
 .container {
   width: 250px;
   min-height: 310px;
