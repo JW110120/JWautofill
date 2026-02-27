@@ -253,9 +253,8 @@ const [highFreqIntensity, setHighFreqIntensity] = useState(5);
 const [highFreqRange, setHighFreqRange] = useState(3);
 
 // 智能边缘平滑参数
-const [edgeSmoothMode, setEdgeSmoothMode] = useState((defaultSmartEdgeSmoothParams.mode as any) || 'auto');
-const [edgeMedianRadius, setEdgeMedianRadius] = useState(defaultSmartEdgeSmoothParams.edgeMedianRadius ?? 20);
-const [edgeMedianStrength, setEdgeMedianStrength] = useState(Math.round((defaultSmartEdgeSmoothParams.edgeMedianStrength ?? 1) * 100));
+const [edgeSmoothMode, setEdgeSmoothMode] = useState((defaultSmartEdgeSmoothParams.mode as any) || 'edge');
+const [edgeMedianRadius, setEdgeMedianRadius] = useState(defaultSmartEdgeSmoothParams.edgeMedianRadius ?? 16);
 const [edgeBackgroundSmoothRadius, setEdgeBackgroundSmoothRadius] = useState(defaultSmartEdgeSmoothParams.backgroundSmoothRadius ?? 16);
 const [edgeLineStrength, setEdgeLineStrength] = useState(Math.round((defaultSmartEdgeSmoothParams.lineStrength ?? 1) * 100));
 const [edgeLineWidthScale, setEdgeLineWidthScale] = useState(defaultSmartEdgeSmoothParams.lineWidthScale ?? 1);
@@ -312,10 +311,9 @@ useEffect(() => {
           if (typeof ap.values.weightedIntensity === 'number') setWeightedIntensity(ap.values.weightedIntensity);
           if (typeof ap.values.highFreqIntensity === 'number') setHighFreqIntensity(ap.values.highFreqIntensity);
           if (typeof ap.values.highFreqRange === 'number') setHighFreqRange(ap.values.highFreqRange);
-          if (typeof ap.values.edgeSmoothMode === 'string') setEdgeSmoothMode(ap.values.edgeSmoothMode);
-          if (typeof ap.values.edgeMedianRadius === 'number') setEdgeMedianRadius(ap.values.edgeMedianRadius);
-          if (typeof ap.values.edgeMedianStrength === 'number') setEdgeMedianStrength(ap.values.edgeMedianStrength);
-          if (typeof ap.values.edgeBackgroundSmoothRadius === 'number') setEdgeBackgroundSmoothRadius(ap.values.edgeBackgroundSmoothRadius);
+          if (typeof ap.values.edgeSmoothMode === 'string') setEdgeSmoothMode(ap.values.edgeSmoothMode === 'line' ? 'line' : 'edge');
+          if (typeof ap.values.edgeMedianRadius === 'number') setEdgeMedianRadius(Math.max(10, Math.min(30, Math.round(ap.values.edgeMedianRadius))));
+          if (typeof ap.values.edgeBackgroundSmoothRadius === 'number') setEdgeBackgroundSmoothRadius(Math.max(10, Math.min(30, Math.round(ap.values.edgeBackgroundSmoothRadius))));
           if (typeof ap.values.edgeLineStrength === 'number') setEdgeLineStrength(ap.values.edgeLineStrength);
           if (typeof ap.values.edgeLineWidthScale === 'number') setEdgeLineWidthScale(ap.values.edgeLineWidthScale);
           if (typeof ap.values.edgeLineHardness === 'number') setEdgeLineHardness(ap.values.edgeLineHardness);
@@ -350,7 +348,6 @@ useEffect(() => {
         highFreqRange,
         edgeSmoothMode,
         edgeMedianRadius,
-        edgeMedianStrength,
         edgeBackgroundSmoothRadius,
         edgeLineStrength,
         edgeLineWidthScale,
@@ -372,7 +369,6 @@ useEffect(() => {
   highFreqRange,
   edgeSmoothMode,
   edgeMedianRadius,
-  edgeMedianStrength,
   edgeBackgroundSmoothRadius,
   edgeLineStrength,
   edgeLineWidthScale,
@@ -407,9 +403,8 @@ useEffect(() => {
       setHighFreqIntensity(5);
       setHighFreqRange(3);
       // 3) 智能边缘平滑参数复位
-      setEdgeSmoothMode((defaultSmartEdgeSmoothParams.mode as any) || 'auto');
+      setEdgeSmoothMode((defaultSmartEdgeSmoothParams.mode as any) || 'edge');
       setEdgeMedianRadius(defaultSmartEdgeSmoothParams.edgeMedianRadius ?? 20);
-      setEdgeMedianStrength(Math.round((defaultSmartEdgeSmoothParams.edgeMedianStrength ?? 1) * 100));
       setEdgeBackgroundSmoothRadius(defaultSmartEdgeSmoothParams.backgroundSmoothRadius ?? 16);
       setEdgeLineStrength(Math.round((defaultSmartEdgeSmoothParams.lineStrength ?? 1) * 100));
       setEdgeLineWidthScale(defaultSmartEdgeSmoothParams.lineWidthScale ?? 1);
@@ -612,19 +607,8 @@ const handleEdgeMedianRadiusChange = (event: React.ChangeEvent<HTMLInputElement>
 
 const handleEdgeMedianRadiusNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
   const value = parseInt(event.target.value, 10);
-  if (!isNaN(value) && value >= 4 && value <= 40) {
+  if (!isNaN(value) && value >= 10 && value <= 30) {
     setEdgeMedianRadius(value);
-  }
-};
-
-const handleEdgeMedianStrengthChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setEdgeMedianStrength(parseInt(event.target.value, 10));
-};
-
-const handleEdgeMedianStrengthNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  const value = parseInt(event.target.value, 10);
-  if (!isNaN(value) && value >= 0 && value <= 100) {
-    setEdgeMedianStrength(value);
   }
 };
 
@@ -634,7 +618,7 @@ const handleEdgeBackgroundSmoothRadiusChange = (event: React.ChangeEvent<HTMLInp
 
 const handleEdgeBackgroundSmoothRadiusNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
   const value = parseInt(event.target.value, 10);
-  if (!isNaN(value) && value >= 0 && value <= 40) {
+  if (!isNaN(value) && value >= 10 && value <= 30) {
     setEdgeBackgroundSmoothRadius(value);
   }
 };
@@ -1029,33 +1013,50 @@ const handleSmartEdgeSmooth = async () => {
       }
       
       await runWithTemporaryUnlock(async () => {
-        // 使用共享的像素数据处理函数
-        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+        const isLineMode = edgeSmoothMode === 'line';
+        const prePixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
         
         // 创建完整文档尺寸的选区掩码数组
         const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
         let maskIndex = 0;
-        for (let docIndex of pixelResult.selectionIndices) {
+        for (let docIndex of prePixelResult.selectionIndices) {
           fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
           maskIndex++;
+        }
+
+        let postPixelResult = prePixelResult;
+        let baseAfterMedianBuffer: ArrayBuffer | undefined = undefined;
+        if (isLineMode) {
+          await action.batchPlay([
+            {
+              _obj: 'median',
+              radius: { _unit: 'pixelsUnit', _value: edgeBackgroundSmoothRadius },
+              _isCommand: false,
+              _options: { dialogOptions: 'dontDisplay' }
+            }
+          ], { synchronousExecution: true });
+
+          postPixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+          baseAfterMedianBuffer = postPixelResult.fullPixelData.buffer;
         }
         
         // 步骤3：用智能边缘平滑算法处理像素数据
         // 注意：传递完整的像素数据而不是选区像素数据，因为算法需要邻域信息
         const processedPixels = await processSmartEdgeSmooth(
-          pixelResult.fullPixelData.buffer, 
+          prePixelResult.fullPixelData.buffer, 
           fullSelectionMask.buffer, 
           { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
           {
-            mode: edgeSmoothMode,
+            mode: isLineMode ? 'line' : 'edge',
             edgeMedianRadius: edgeMedianRadius,
-            edgeMedianStrength: edgeMedianStrength / 100,
             backgroundSmoothRadius: edgeBackgroundSmoothRadius,
             lineStrength: edgeLineStrength / 100,
             lineWidthScale: edgeLineWidthScale,
             lineHardness: edgeLineHardness / 100
           },
-          isBackgroundLayer
+          isBackgroundLayer,
+          isLineMode ? undefined : { documentID: app.activeDocument.id, layerID: layer.id },
+          baseAfterMedianBuffer
         );
         
         console.log('✅ 智能边缘平滑处理完成，长度:', processedPixels.byteLength);
@@ -1063,7 +1064,17 @@ const handleSmartEdgeSmooth = async () => {
         // 步骤4：应用处理后的像素数据
         // 将ArrayBuffer转换为Uint8Array
         const processedPixelsArray = new Uint8Array(processedPixels);
-        await applyProcessedPixels(processedPixelsArray, pixelResult);
+        const coeffLen = postPixelResult.selectionBounds.selectionCoefficients?.length || 0;
+        const selectionCoefficients = coeffLen > 0 ? new Float32Array(coeffLen) : new Float32Array(0);
+        selectionCoefficients.fill(1);
+        const resultForWriteback = {
+          ...postPixelResult,
+          selectionBounds: {
+            ...postPixelResult.selectionBounds,
+            selectionCoefficients
+          }
+        };
+        await applyProcessedPixels(processedPixelsArray, resultForWriteback as any);
         
         console.log('✅ 智能边缘平滑处理完成');
       });
@@ -1400,14 +1411,11 @@ const renderEdgeProcessingContent = () => (
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" title={`● 自动：优先尝试识别主线条；识别不到则做色块边界平滑。
+        <div className="adjustment-slider-label" title={`● 仅色块边界：对选区做“中间值”平滑，并在选区边缘做渐隐避免边界感。
 
-● 仅色块边界：只做边界“中间值”平滑。
-
-● 仅主线条：只做主线条识别与回写。`}>平滑模式</div>
+● 仅主线条：先对选区做“中间值”抹除，再拟合主线条并写回。`}>平滑模式</div>
         <div className="unit-container">
           <select value={edgeSmoothMode} onChange={handleEdgeSmoothModeChange} className="adjustment-select">
-            <option value="auto">自动</option>
             <option value="edge">仅色块边界</option>
             <option value="line">仅主线条</option>
           </select>
@@ -1417,20 +1425,11 @@ const renderEdgeProcessingContent = () => (
       {edgeSmoothMode === 'edge' && (
         <>
           <div className="adjustment-slider-item">
-            <div className="wider-adjustment-slider-label" title={`● 中间值的参考半径（近似 PS 中间值）。半径越大，边缘越柔和但更慢。`}>中间值半径</div>
+            <div className="wider-adjustment-slider-label" title={`● PS 自带“中间值”滤镜半径。半径越大，边缘越柔和但更慢。`}>中间值半径</div>
             <div className="unit-container">
-              <input type="range" min="4" max="40" step="1" value={edgeMedianRadius} onChange={handleEdgeMedianRadiusChange} className="adjustment-slider-input" />
-              <input type="number" min="4" max="40" step="1" value={edgeMedianRadius} onChange={handleEdgeMedianRadiusNumberChange} className="adjustment-number-input" />
+              <input type="range" min="10" max="30" step="1" value={edgeMedianRadius} onChange={handleEdgeMedianRadiusChange} className="adjustment-slider-input" />
+              <input type="number" min="10" max="30" step="1" value={edgeMedianRadius} onChange={handleEdgeMedianRadiusNumberChange} className="adjustment-number-input" />
               <div className="adjustment-unit">px</div>
-            </div>
-          </div>
-
-          <div className="adjustment-slider-item">
-            <div className="wide-adjustment-slider-label" title={`● 中间值写回的力度。低一些更保守；高一些更“磨平”。`}>边界强度</div>
-            <div className="unit-container">
-              <input type="range" min="0" max="100" step="1" value={edgeMedianStrength} onChange={handleEdgeMedianStrengthChange} className="adjustment-slider-input" />
-              <input type="number" min="0" max="100" step="1" value={edgeMedianStrength} onChange={handleEdgeMedianStrengthNumberChange} className="adjustment-number-input" />
-              <div className="adjustment-unit">%</div>
             </div>
           </div>
         </>
@@ -1439,10 +1438,10 @@ const renderEdgeProcessingContent = () => (
       {edgeSmoothMode === 'line' && (
         <>
           <div className="adjustment-slider-item">
-            <div className="wide-adjustment-slider-label" title={`● 主线条模式中的“抹平”半径。越大越能清掉杂线与脏点，但整体会更软。`}>抹平半径</div>
+            <div className="wider-adjustment-slider-label" title={`● 主线条模式中的“抹除”使用 PS 自带“中间值”滤镜。半径越大越能清掉杂线与脏点，但整体会更软。`}>中间值半径</div>
             <div className="unit-container">
-              <input type="range" min="0" max="40" step="1" value={edgeBackgroundSmoothRadius} onChange={handleEdgeBackgroundSmoothRadiusChange} className="adjustment-slider-input" />
-              <input type="number" min="0" max="40" step="1" value={edgeBackgroundSmoothRadius} onChange={handleEdgeBackgroundSmoothRadiusNumberChange} className="adjustment-number-input" />
+              <input type="range" min="10" max="30" step="1" value={edgeBackgroundSmoothRadius} onChange={handleEdgeBackgroundSmoothRadiusChange} className="adjustment-slider-input" />
+              <input type="number" min="10" max="30" step="1" value={edgeBackgroundSmoothRadius} onChange={handleEdgeBackgroundSmoothRadiusNumberChange} className="adjustment-number-input" />
               <div className="adjustment-unit">px</div>
             </div>
           </div>
