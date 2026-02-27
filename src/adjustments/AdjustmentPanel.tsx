@@ -256,9 +256,9 @@ const [highFreqRange, setHighFreqRange] = useState(3);
 const [edgeSmoothMode, setEdgeSmoothMode] = useState((defaultSmartEdgeSmoothParams.mode as any) || 'edge');
 const [edgeMedianRadius, setEdgeMedianRadius] = useState(defaultSmartEdgeSmoothParams.edgeMedianRadius ?? 16);
 const [edgeBackgroundSmoothRadius, setEdgeBackgroundSmoothRadius] = useState(defaultSmartEdgeSmoothParams.backgroundSmoothRadius ?? 16);
-const [edgeLineStrength, setEdgeLineStrength] = useState(Math.round((defaultSmartEdgeSmoothParams.lineStrength ?? 1) * 100));
-const [edgeLineWidthScale, setEdgeLineWidthScale] = useState(defaultSmartEdgeSmoothParams.lineWidthScale ?? 1);
-const [edgeLineHardness, setEdgeLineHardness] = useState(Math.round((defaultSmartEdgeSmoothParams.lineHardness ?? 1) * 100));
+const [edgeLineStrength, setEdgeLineStrength] = useState(Math.round((defaultSmartEdgeSmoothParams.lineSmoothStrength ?? defaultSmartEdgeSmoothParams.lineStrength ?? 1) * 100));
+const [edgeLineSmoothRadius, setEdgeLineSmoothRadius] = useState(defaultSmartEdgeSmoothParams.lineSmoothRadius ?? 10);
+const [edgeLinePreserveDetail, setEdgeLinePreserveDetail] = useState(Math.round((defaultSmartEdgeSmoothParams.linePreserveDetail ?? defaultSmartEdgeSmoothParams.lineHardness ?? 1) * 100));
 
 // 许可证相关 Hook 和函数
 useEffect(() => {
@@ -315,8 +315,10 @@ useEffect(() => {
           if (typeof ap.values.edgeMedianRadius === 'number') setEdgeMedianRadius(Math.max(10, Math.min(30, Math.round(ap.values.edgeMedianRadius))));
           if (typeof ap.values.edgeBackgroundSmoothRadius === 'number') setEdgeBackgroundSmoothRadius(Math.max(10, Math.min(30, Math.round(ap.values.edgeBackgroundSmoothRadius))));
           if (typeof ap.values.edgeLineStrength === 'number') setEdgeLineStrength(ap.values.edgeLineStrength);
-          if (typeof ap.values.edgeLineWidthScale === 'number') setEdgeLineWidthScale(ap.values.edgeLineWidthScale);
-          if (typeof ap.values.edgeLineHardness === 'number') setEdgeLineHardness(ap.values.edgeLineHardness);
+          if (typeof ap.values.edgeLineSmoothRadius === 'number') setEdgeLineSmoothRadius(Math.max(2, Math.min(24, Math.round(ap.values.edgeLineSmoothRadius))));
+          else if (typeof ap.values.edgeLineWidthScale === 'number') setEdgeLineSmoothRadius(Math.max(2, Math.min(24, Math.round(ap.values.edgeLineWidthScale * 8))));
+          if (typeof ap.values.edgeLinePreserveDetail === 'number') setEdgeLinePreserveDetail(Math.max(0, Math.min(100, Math.round(ap.values.edgeLinePreserveDetail))));
+          else if (typeof ap.values.edgeLineHardness === 'number') setEdgeLinePreserveDetail(Math.max(0, Math.min(100, Math.round(ap.values.edgeLineHardness))));
         }
       }
       setPanelStateLoaded(true);
@@ -350,8 +352,8 @@ useEffect(() => {
         edgeMedianRadius,
         edgeBackgroundSmoothRadius,
         edgeLineStrength,
-        edgeLineWidthScale,
-        edgeLineHardness,
+        edgeLineSmoothRadius,
+        edgeLinePreserveDetail,
       },
     },
   }, { debounceMs: 400 }).catch(e => console.warn('⚠️ 保存像素调整面板状态失败:', e));
@@ -371,8 +373,8 @@ useEffect(() => {
   edgeMedianRadius,
   edgeBackgroundSmoothRadius,
   edgeLineStrength,
-  edgeLineWidthScale,
-  edgeLineHardness,
+  edgeLineSmoothRadius,
+  edgeLinePreserveDetail,
 ]);
 
 // 注册Flyout菜单回调
@@ -406,9 +408,9 @@ useEffect(() => {
       setEdgeSmoothMode((defaultSmartEdgeSmoothParams.mode as any) || 'edge');
       setEdgeMedianRadius(defaultSmartEdgeSmoothParams.edgeMedianRadius ?? 20);
       setEdgeBackgroundSmoothRadius(defaultSmartEdgeSmoothParams.backgroundSmoothRadius ?? 16);
-      setEdgeLineStrength(Math.round((defaultSmartEdgeSmoothParams.lineStrength ?? 1) * 100));
-      setEdgeLineWidthScale(defaultSmartEdgeSmoothParams.lineWidthScale ?? 1);
-      setEdgeLineHardness(Math.round((defaultSmartEdgeSmoothParams.lineHardness ?? 1) * 100));
+      setEdgeLineStrength(Math.round((defaultSmartEdgeSmoothParams.lineSmoothStrength ?? defaultSmartEdgeSmoothParams.lineStrength ?? 1) * 100));
+      setEdgeLineSmoothRadius(defaultSmartEdgeSmoothParams.lineSmoothRadius ?? 10);
+      setEdgeLinePreserveDetail(Math.round((defaultSmartEdgeSmoothParams.linePreserveDetail ?? defaultSmartEdgeSmoothParams.lineHardness ?? 1) * 100));
       // 4) 关闭可见性面板
       setShowVisibilityPanel(false);
     }
@@ -634,25 +636,25 @@ const handleEdgeLineStrengthNumberChange = (event: React.ChangeEvent<HTMLInputEl
   }
 };
 
-const handleEdgeLineWidthScaleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setEdgeLineWidthScale(parseFloat(event.target.value));
+const handleEdgeLineSmoothRadiusChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  setEdgeLineSmoothRadius(parseInt(event.target.value, 10));
 };
 
-const handleEdgeLineWidthScaleNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  const value = parseFloat(event.target.value);
-  if (!isNaN(value) && value >= 0.5 && value <= 2) {
-    setEdgeLineWidthScale(value);
+const handleEdgeLineSmoothRadiusNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const value = parseInt(event.target.value, 10);
+  if (!isNaN(value) && value >= 2 && value <= 24) {
+    setEdgeLineSmoothRadius(value);
   }
 };
 
-const handleEdgeLineHardnessChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setEdgeLineHardness(parseInt(event.target.value, 10));
+const handleEdgeLinePreserveDetailChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  setEdgeLinePreserveDetail(parseInt(event.target.value, 10));
 };
 
-const handleEdgeLineHardnessNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+const handleEdgeLinePreserveDetailNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
   const value = parseInt(event.target.value, 10);
   if (!isNaN(value) && value >= 0 && value <= 100) {
-    setEdgeLineHardness(value);
+    setEdgeLinePreserveDetail(value);
   }
 };
 
@@ -1050,9 +1052,9 @@ const handleSmartEdgeSmooth = async () => {
             mode: isLineMode ? 'line' : 'edge',
             edgeMedianRadius: edgeMedianRadius,
             backgroundSmoothRadius: edgeBackgroundSmoothRadius,
-            lineStrength: edgeLineStrength / 100,
-            lineWidthScale: edgeLineWidthScale,
-            lineHardness: edgeLineHardness / 100
+            lineSmoothStrength: edgeLineStrength / 100,
+            lineSmoothRadius: edgeLineSmoothRadius,
+            linePreserveDetail: edgeLinePreserveDetail / 100
           },
           isBackgroundLayer,
           isLineMode ? undefined : { documentID: app.activeDocument.id, layerID: layer.id },
@@ -1405,7 +1407,7 @@ const renderLocalContrastContent = () => (
 
 const renderEdgeProcessingContent = () => (
   <div className="adjustment-section">
-    <button className="adjustment-button" onClick={handleSmartEdgeSmooth} title={`● 两种模式：色块边界的“中间值”平滑；或识别主线条后“抹平→拟合→回写”。
+    <button className="adjustment-button" onClick={handleSmartEdgeSmooth} title={`● 两种模式：色块边界的“中间值”平滑；或对线条做“抹除→方向平滑→回写”。
 
 ● 普通图层会对 RGBA 四通道处理；背景图层只处理 RGB。`}>边缘平滑</button>
 
@@ -1413,7 +1415,7 @@ const renderEdgeProcessingContent = () => (
       <div className="adjustment-slider-item">
         <div className="adjustment-slider-label" title={`● 仅色块边界：对选区做“中间值”平滑，并在选区边缘做渐隐避免边界感。
 
-● 仅主线条：先对选区做“中间值”抹除，再拟合主线条并写回。`}>平滑模式</div>
+● 仅主线条：先对选区做“中间值”抹除，再对线条方向做平滑并写回。`}>平滑模式</div>
         <div className="unit-container">
           <select value={edgeSmoothMode} onChange={handleEdgeSmoothModeChange} className="adjustment-select">
             <option value="edge">仅色块边界</option>
@@ -1447,7 +1449,7 @@ const renderEdgeProcessingContent = () => (
           </div>
 
           <div className="adjustment-slider-item">
-            <div className="wide-adjustment-slider-label" title={`● 主线条回写的不透明度倍率。越高线条越“压回去”。`}>线条力度</div>
+            <div className="wide-adjustment-slider-label" title={`● 控制线条平滑的力度。越高越接近“油画滤镜”那种把乱线磨平的效果。`}>平滑力度</div>
             <div className="unit-container">
               <input type="range" min="0" max="100" step="1" value={edgeLineStrength} onChange={handleEdgeLineStrengthChange} className="adjustment-slider-input" />
               <input type="number" min="0" max="100" step="1" value={edgeLineStrength} onChange={handleEdgeLineStrengthNumberChange} className="adjustment-number-input" />
@@ -1456,19 +1458,19 @@ const renderEdgeProcessingContent = () => (
           </div>
 
           <div className="adjustment-slider-item">
-            <div className="wide-adjustment-slider-label" title={`● 主线条回写的粗细倍率。大于 1 会更粗，小于 1 会更细。`}>线条粗细</div>
+            <div className="wide-adjustment-slider-label" title={`● 控制平滑的采样范围。范围越大越能把起伏磨平，但也更慢。`}>平滑范围</div>
             <div className="unit-container">
-              <input type="range" min="0.5" max="2" step="0.05" value={edgeLineWidthScale} onChange={handleEdgeLineWidthScaleChange} className="adjustment-slider-input" />
-              <input type="number" min="0.5" max="2" step="0.05" value={edgeLineWidthScale} onChange={handleEdgeLineWidthScaleNumberChange} className="adjustment-number-input" />
-              <div className="adjustment-unit">x</div>
+              <input type="range" min="2" max="24" step="1" value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusChange} className="adjustment-slider-input" />
+              <input type="number" min="2" max="24" step="1" value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusNumberChange} className="adjustment-number-input" />
+              <div className="adjustment-unit">px</div>
             </div>
           </div>
 
           <div className="adjustment-slider-item">
-            <div className="wide-adjustment-slider-label" title={`● 主线条边缘硬度。越高越锐利，越低越柔。`}>线条硬度</div>
+            <div className="wide-adjustment-slider-label" title={`● 控制保边缘程度。越高越不容易把笔触边缘糊掉。`}>保细节</div>
             <div className="unit-container">
-              <input type="range" min="0" max="100" step="1" value={edgeLineHardness} onChange={handleEdgeLineHardnessChange} className="adjustment-slider-input" />
-              <input type="number" min="0" max="100" step="1" value={edgeLineHardness} onChange={handleEdgeLineHardnessNumberChange} className="adjustment-number-input" />
+              <input type="range" min="0" max="100" step="1" value={edgeLinePreserveDetail} onChange={handleEdgeLinePreserveDetailChange} className="adjustment-slider-input" />
+              <input type="number" min="0" max="100" step="1" value={edgeLinePreserveDetail} onChange={handleEdgeLinePreserveDetailNumberChange} className="adjustment-number-input" />
               <div className="adjustment-unit">%</div>
             </div>
           </div>
