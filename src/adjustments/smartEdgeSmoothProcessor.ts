@@ -818,8 +818,11 @@ function applyLineDirectionalSmoothInBounds(
   if (s <= 0.001) return;
 
   const iterations = clampInt(Math.round(2 + s * 4), 2, 6);
-  const sigma = 10 + (1 - clamp01(preserveDetail01)) * 70;
-  const simLut = buildGaussianLut256(sigma);
+  let sigmaBase = 10 + (1 - clamp01(preserveDetail01)) * 70;
+  if (!isBackgroundLayer) {
+    sigmaBase = Math.max(sigmaBase, 40 + (1 - clamp01(preserveDetail01)) * 100);
+  }
+  const simLut = buildGaussianLut256(sigmaBase);
 
   const d3 = clampInt(Math.round(Math.max(2, Math.min(24, smoothRadiusPx))), 2, 24);
   const d2 = clampInt(Math.round(d3 * 0.66), 1, d3);
@@ -890,12 +893,6 @@ function applyLineDirectionalSmoothInBounds(
         let sumB = 0;
         let sumA = 0;
 
-        // 对中心像素也使用 Alpha 权重，保证逻辑一致性。
-        // w0 * 1024 是基础权重，我们将其与 curA[ri] 结合。
-        // 为了避免溢出，可以先 >> 4 或 >> 8。
-        // wCenterBase = 512 * 1024 = 524288。
-        // curA = 255. Product = 1.3e8. Fits in Int32.
-        
         const centerA = curA[ri] || 0;
         const wCenterBase = w0 * 1024;
         const wCenter = (wCenterBase * (isBackgroundLayer ? 255 : centerA)) >> 8;
@@ -918,7 +915,6 @@ function applyLineDirectionalSmoothInBounds(
             if ((strokeMask[rj] || 0) !== 0) {
               const gj = simGuide[(bounds.y0 + ry1) * width + (bounds.x0 + rx1)] || 0;
               const sim = simLut[Math.abs(gj - g0) & 255] || 0;
-              // 引入 Alpha 权重：防止透明像素拉低平均值
               const aj = isBackgroundLayer ? 255 : (curA[rj] || 0);
               const w = (bw * sim * aj) >> 8;
               if (w > 0) {
@@ -966,6 +962,11 @@ function applyLineDirectionalSmoothInBounds(
 
   const mixQ = clampInt(Math.round(s * 256), 0, 256);
 
+  const outPR0 = new Uint8Array(srcR0);
+  const outPG0 = new Uint8Array(srcG0);
+  const outPB0 = new Uint8Array(srcB0);
+  const outA0 = new Uint8Array(srcA0);
+
   for (let y = 0; y < regionH; y++) {
     const docY = bounds.y0 + y;
     const rowBase = docY * width;
@@ -990,99 +991,114 @@ function applyLineDirectionalSmoothInBounds(
       const sb = curB[ri] || 0;
       const sa = curA[ri] || 0;
 
-      // 如果 smoothStrength 很高，应该更多地使用 smooth result (sr/sg/sb/sa)
-      // mixQ 是基于 smoothStrength 的。
-      // 但之前的逻辑里，mixQ 只在 (pr, pg, pb, pa) 的计算中用到。
-      // 而后面又和 original 做了一次基于 fade01 的混合。
-      
-      // 我们希望在选区中心 (fade01 ~ 1) 的地方，结果尽可能平滑。
-      // 所以 mixQ 应该足够大。
-      
       const pr = ((or * (256 - mixQ) + sr * mixQ + 128) >> 8) & 255;
       const pg = ((og * (256 - mixQ) + sg * mixQ + 128) >> 8) & 255;
       const pb = ((ob * (256 - mixQ) + sb * mixQ + 128) >> 8) & 255;
       const pa = ((oa * (256 - mixQ) + sa * mixQ + 128) >> 8) & 255;
 
-      const rawStrokeA = clampInt(Math.round(pa * fade01), 0, 255);
-      const maxStrokeA = clampInt(Math.round(oa * fade01), 0, 255);
-      const strokeA = rawStrokeA < maxStrokeA ? rawStrokeA : maxStrokeA;
-      if (strokeA <= 0) continue;
-
-      const prF = clampInt(Math.round(pr * strokeA / 255), 0, 255);
-      const pgF = clampInt(Math.round(pg * strokeA / 255), 0, 255);
-      const pbF = clampInt(Math.round(pb * strokeA / 255), 0, 255);
-
-      const p = idx * 4;
-
-      // 使用 Replacement 逻辑：
-      // 最终颜色 = SmoothPixel * fade01 + OriginalPixel * (1 - fade01)
-      // 但这里 strokeA 已经包含了 fade01 导致的 Alpha 衰减，以及 maxStrokeA 的限制。
-      // 为了保证平滑过渡，我们应该以 fade01 作为混合权重。
+      const lpr = pr;
+      const lpg = pg;
+      const lpb = pb;
+      const limitedSmoothA = pa;
       
-      // 注意：pr, pg, pb, pa 是平滑后的结果（可能包含了 mixQ 的原图成分）。
-      // strokeA 是平滑结果经过 fade01 和 maxLimit 后的最终 Alpha。
-      
-      // 如果我们直接把 (prF, pgF, pbF, strokeA) 写入，那就是替换。
-      // 但是 prF 是基于 strokeA 的预乘。
-      // strokeA = min(pa * fade01, oa * fade01)。
-      // 这里的 fade01 实际上起到了“选区边缘渐隐”的作用。
-      // 但如果 fade01 < 1，说明我们在选区边缘。
-      // 在选区边缘，我们希望它是 OriginalPixel。
-      // 现在的逻辑：strokeA 变小了。如果不混合 Original，那就是变透明了。
-      // 所以必须混合 Original。
-      
-      // 混合公式：Out = Smooth * W + Original * (1 - W)
-      // 这里 W 应该是 fade01。
-      // 但 strokeA 已经被 fade01 乘过了。
-      // 让我们回退一步：
-      // SmoothPixel 是 (pr, pg, pb, pa)。
-      // OriginalPixel 是 (or, og, ob, oa)。
-      // 我们希望限制 SmoothPixel 的 Alpha 不超过 OriginalPixel 的 Alpha (maxLimit)。
-      // let limitedSmoothA = min(pa, oa);
-      // let limitedSmoothP = (pr, pg, pb) * (limitedSmoothA / pa);
-      
-      // 然后混合：
-      // Out = LimitedSmooth * fade01 + Original * (1 - fade01)
-      
-      // 优化后的混合逻辑：
-      // 我们希望保留线条区域的浓度（即使 pa > oa，只要 oa 足够大），同时防止背景区域（oa ~ 0）产生光晕。
-      
-      // 定义一个“信任平滑结果”的权重 trustSmooth。
-      // 当 oa 很小时，trustSmooth -> 0，我们强制 limitedSmoothA <= oa。
-      // 当 oa 较大时（比如 > 20），trustSmooth -> 1，我们允许 limitedSmoothA = pa。
-      
-      // 使用简单的线性过渡：
-      // trust = clamp((oa - low) / (high - low))
-      const trustSmooth = oa < 10 ? 0 : (oa > 40 ? 1 : (oa - 10) / 30);
-      
-      // 目标 Alpha：在 oa (强限制) 和 pa (无限制) 之间插值
-      const constrainedA = pa < oa ? pa : oa; // 绝对安全的下限
-      const targetSmoothA = constrainedA * (1 - trustSmooth) + pa * trustSmooth;
-      
-      const limitedSmoothA = clampInt(Math.round(targetSmoothA), 0, 255);
-      
-      // 如果 pa 非常小，避免除零
-      const scale = pa > 0 ? limitedSmoothA / pa : 0;
-      
-      const lpr = clampInt(Math.round(pr * scale), 0, 255);
-      const lpg = clampInt(Math.round(pg * scale), 0, 255);
-      const lpb = clampInt(Math.round(pb * scale), 0, 255);
-      
-      // 原始像素（预乘）
       const srcP = idx * 4;
       const srcA = isBackgroundLayer ? 255 : (pixelData[srcP + 3] || 0);
       const srcR_P = clampInt(Math.round((pixelData[srcP] || 0) * srcA / 255), 0, 255);
       const srcG_P = clampInt(Math.round((pixelData[srcP + 1] || 0) * srcA / 255), 0, 255);
       const srcB_P = clampInt(Math.round((pixelData[srcP + 2] || 0) * srcA / 255), 0, 255);
       
-      // 最终混合 (Lerp)
       const w = fade01;
       const outPR = clampInt(Math.round(lpr * w + srcR_P * (1 - w)), 0, 255);
       const outPG = clampInt(Math.round(lpg * w + srcG_P * (1 - w)), 0, 255);
       const outPB = clampInt(Math.round(lpb * w + srcB_P * (1 - w)), 0, 255);
       const outA = clampInt(Math.round(limitedSmoothA * w + srcA * (1 - w)), 0, 255);
-      
-      if (outA <= 0) {
+
+      outPR0[ri] = outPR;
+      outPG0[ri] = outPG;
+      outPB0[ri] = outPB;
+      outA0[ri] = outA;
+    }
+  }
+
+  if (!isBackgroundLayer) {
+    const aaRadius = clampInt(Math.round(Math.max(1, Math.min(3, smoothRadiusPx * 0.25))), 1, 3);
+    const aaMixQ = clampInt(Math.round((0.2 + s * 0.6) * 256), 0, 256);
+    if (aaMixQ > 0 && aaRadius > 0) {
+      const aaPR = tmpR;
+      const aaPG = tmpG;
+      const aaPB = tmpB;
+      const aaA = tmpA;
+      aaPR.fill(0);
+      aaPG.fill(0);
+      aaPB.fill(0);
+      aaA.fill(0);
+
+      for (let y = 0; y < regionH; y++) {
+        const base = y * regionW;
+        for (let x = 0; x < regionW; x++) {
+          const ri = base + x;
+          if ((strokeMask[ri] || 0) === 0) continue;
+          if ((selectionInnerFade[ri] || 0) === 0) continue;
+          const a0 = outA0[ri] || 0;
+          if (a0 <= 0 || a0 >= 250) continue;
+
+          let sumA = 0;
+          let sumR = 0;
+          let sumG = 0;
+          let sumB = 0;
+          let cnt = 0;
+
+          const y0 = y - aaRadius < 0 ? 0 : y - aaRadius;
+          const y1 = y + aaRadius >= regionH ? regionH - 1 : y + aaRadius;
+          const x0 = x - aaRadius < 0 ? 0 : x - aaRadius;
+          const x1 = x + aaRadius >= regionW ? regionW - 1 : x + aaRadius;
+
+          for (let yy = y0; yy <= y1; yy++) {
+            const b2 = yy * regionW;
+            for (let xx = x0; xx <= x1; xx++) {
+              const rj = b2 + xx;
+              if ((selectionInnerFade[rj] || 0) === 0) continue;
+              sumA += outA0[rj] || 0;
+              sumR += outPR0[rj] || 0;
+              sumG += outPG0[rj] || 0;
+              sumB += outPB0[rj] || 0;
+              cnt++;
+            }
+          }
+
+          if (cnt <= 0) continue;
+          aaA[ri] = clampInt(Math.round(sumA / cnt), 0, 255);
+          aaPR[ri] = clampInt(Math.round(sumR / cnt), 0, 255);
+          aaPG[ri] = clampInt(Math.round(sumG / cnt), 0, 255);
+          aaPB[ri] = clampInt(Math.round(sumB / cnt), 0, 255);
+        }
+      }
+
+      const invQ = 256 - aaMixQ;
+      for (let i = 0; i < regionSize; i++) {
+        if ((aaA[i] || 0) === 0) continue;
+        outA0[i] = ((outA0[i] * invQ + aaA[i] * aaMixQ + 128) >> 8) & 255;
+        outPR0[i] = ((outPR0[i] * invQ + aaPR[i] * aaMixQ + 128) >> 8) & 255;
+        outPG0[i] = ((outPG0[i] * invQ + aaPG[i] * aaMixQ + 128) >> 8) & 255;
+        outPB0[i] = ((outPB0[i] * invQ + aaPB[i] * aaMixQ + 128) >> 8) & 255;
+      }
+    }
+  }
+
+  for (let y = 0; y < regionH; y++) {
+    const docY = bounds.y0 + y;
+    const rowBase = docY * width;
+    const base = y * regionW;
+    for (let x = 0; x < regionW; x++) {
+      const ri = base + x;
+      if ((strokeMask[ri] || 0) === 0) continue;
+      const docX = bounds.x0 + x;
+      const idx = rowBase + docX;
+      if ((selectionMask[idx] || 0) === 0) continue;
+
+      const a = isBackgroundLayer ? 255 : (outA0[ri] || 0);
+      const p = idx * 4;
+      if (a <= 0) {
         outputData[p] = 0;
         outputData[p + 1] = 0;
         outputData[p + 2] = 0;
@@ -1090,10 +1106,10 @@ function applyLineDirectionalSmoothInBounds(
         continue;
       }
 
-      outputData[p] = clampInt(Math.round((outPR * 255) / outA), 0, 255);
-      outputData[p + 1] = clampInt(Math.round((outPG * 255) / outA), 0, 255);
-      outputData[p + 2] = clampInt(Math.round((outPB * 255) / outA), 0, 255);
-      outputData[p + 3] = isBackgroundLayer ? 255 : clampInt(outA, 0, 255);
+      outputData[p] = clampInt(Math.round(((outPR0[ri] || 0) * 255) / a), 0, 255);
+      outputData[p + 1] = clampInt(Math.round(((outPG0[ri] || 0) * 255) / a), 0, 255);
+      outputData[p + 2] = clampInt(Math.round(((outPB0[ri] || 0) * 255) / a), 0, 255);
+      outputData[p + 3] = isBackgroundLayer ? 255 : a;
     }
   }
 }
@@ -1150,8 +1166,8 @@ export async function processSmartEdgeSmooth(
   const mode = params.mode || 'edge';
   const edgeMedianRadius = clampInt(Math.round(params.edgeMedianRadius ?? 16), 10, 30);
   const eraseMedianRadius = clampInt(Math.round(params.backgroundSmoothRadius ?? 16), 10, 30);
-  const lineSmoothStrength = clamp01(params.lineSmoothStrength ?? params.lineStrength ?? 1);
-  const lineSmoothRadius = clampInt(Math.round(params.lineSmoothRadius ?? (Math.max(0.5, Math.min(2, params.lineWidthScale ?? 1)) * 8)), 2, 24);
+  const lineSmoothStrength = clamp01(clamp01(params.lineSmoothStrength ?? params.lineStrength ?? 1) * 0.5);
+  const lineSmoothRadius = clampInt(Math.round(params.lineSmoothRadius ?? (Math.max(0.5, Math.min(2, params.lineWidthScale ?? 1)) * 8)), 3, 12);
   const linePreserveDetail = clamp01(params.linePreserveDetail ?? params.lineHardness ?? 1);
 
   const regionPad = Math.max(edgeMedianRadius + 2, eraseMedianRadius + 2);

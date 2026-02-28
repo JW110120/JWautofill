@@ -315,8 +315,8 @@ useEffect(() => {
           if (typeof ap.values.edgeMedianRadius === 'number') setEdgeMedianRadius(Math.max(10, Math.min(30, Math.round(ap.values.edgeMedianRadius))));
           if (typeof ap.values.edgeBackgroundSmoothRadius === 'number') setEdgeBackgroundSmoothRadius(Math.max(10, Math.min(30, Math.round(ap.values.edgeBackgroundSmoothRadius))));
           if (typeof ap.values.edgeLineStrength === 'number') setEdgeLineStrength(ap.values.edgeLineStrength);
-          if (typeof ap.values.edgeLineSmoothRadius === 'number') setEdgeLineSmoothRadius(Math.max(2, Math.min(24, Math.round(ap.values.edgeLineSmoothRadius))));
-          else if (typeof ap.values.edgeLineWidthScale === 'number') setEdgeLineSmoothRadius(Math.max(2, Math.min(24, Math.round(ap.values.edgeLineWidthScale * 8))));
+          if (typeof ap.values.edgeLineSmoothRadius === 'number') setEdgeLineSmoothRadius(Math.max(3, Math.min(12, Math.round(ap.values.edgeLineSmoothRadius))));
+          else if (typeof ap.values.edgeLineWidthScale === 'number') setEdgeLineSmoothRadius(Math.max(3, Math.min(12, Math.round(ap.values.edgeLineWidthScale * 8))));
           if (typeof ap.values.edgeLinePreserveDetail === 'number') setEdgeLinePreserveDetail(Math.max(0, Math.min(100, Math.round(ap.values.edgeLinePreserveDetail))));
           else if (typeof ap.values.edgeLineHardness === 'number') setEdgeLinePreserveDetail(Math.max(0, Math.min(100, Math.round(ap.values.edgeLineHardness))));
         }
@@ -642,7 +642,7 @@ const handleEdgeLineSmoothRadiusChange = (event: React.ChangeEvent<HTMLInputElem
 
 const handleEdgeLineSmoothRadiusNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
   const value = parseInt(event.target.value, 10);
-  if (!isNaN(value) && value >= 2 && value <= 24) {
+  if (!isNaN(value) && value >= 3 && value <= 12) {
     setEdgeLineSmoothRadius(value);
   }
 };
@@ -1460,8 +1460,8 @@ const renderEdgeProcessingContent = () => (
           <div className="adjustment-slider-item">
             <div className="wide-adjustment-slider-label" title={`● 控制平滑的采样范围。范围越大越能把起伏磨平，但也更慢。`}>平滑范围</div>
             <div className="unit-container">
-              <input type="range" min="2" max="24" step="1" value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusChange} className="adjustment-slider-input" />
-              <input type="number" min="2" max="24" step="1" value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusNumberChange} className="adjustment-number-input" />
+              <input type="range" min="3" max="12" step="1" value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusChange} className="adjustment-slider-input" />
+              <input type="number" min="3" max="12" step="1" value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusNumberChange} className="adjustment-number-input" />
               <div className="adjustment-unit">px</div>
             </div>
           </div>
