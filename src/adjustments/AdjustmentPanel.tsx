@@ -253,11 +253,11 @@ const [weightedIntensity, setWeightedIntensity] = useState(5);
 const [highFreqIntensity, setHighFreqIntensity] = useState(5);
 const [highFreqRange, setHighFreqRange] = useState(3);
 
-const [blockColorPatchDistance, setBlockColorPatchDistance] = useState(12);
-const [blockColorPatchLineSensitivity, setBlockColorPatchLineSensitivity] = useState(6);
-const [blockColorPatchLineGrow, setBlockColorPatchLineGrow] = useState(1);
 const [lineReferenceLayerId, setLineReferenceLayerId] = useState<number | null>(null);
 const [lineReferenceLayerName, setLineReferenceLayerName] = useState<string>('');
+const [lineReferenceOptions, setLineReferenceOptions] = useState<Array<{ value: string; label: string; disabled?: boolean }>>([]);
+const lineReferenceSignatureRef = useRef<{ docId: number | null; hash: number }>({ docId: null, hash: 0 });
+const lineReferenceSelectionRef = useRef<{ id: number | null; name: string }>({ id: null, name: '' });
 
 // 智能边缘平滑参数
 const [edgeSmoothMode, setEdgeSmoothMode] = useState((defaultSmartEdgeSmoothParams.mode as any) || 'edge');
@@ -277,6 +277,34 @@ useEffect(() => {
 
   return () => {
     document.removeEventListener('license-updated', onLicenseUpdated as EventListener);
+  };
+}, []);
+
+useEffect(() => {
+  refreshLineReferenceOptions();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
+
+useEffect(() => {
+  lineReferenceSelectionRef.current = { id: lineReferenceLayerId, name: lineReferenceLayerName };
+}, [lineReferenceLayerId, lineReferenceLayerName]);
+
+useEffect(() => {
+  const handleNotification = async () => {
+    try {
+      const doc = app.activeDocument;
+      const layers = doc?.layers || [];
+      const docId = doc?.id ?? null;
+      const hash = computeLayerSignature(layers);
+      const prev = lineReferenceSignatureRef.current;
+      if (prev.docId !== docId || prev.hash !== hash) {
+        refreshLineReferenceOptions(doc);
+      }
+    } catch {}
+  };
+  action.addNotificationListener(['set', 'select', 'delete', 'make'], handleNotification);
+  return () => {
+    action.removeNotificationListener(['set', 'select', 'delete', 'make'], handleNotification);
   };
 }, []);
 
@@ -318,9 +346,6 @@ useEffect(() => {
           if (typeof ap.values.weightedIntensity === 'number') setWeightedIntensity(ap.values.weightedIntensity);
           if (typeof ap.values.highFreqIntensity === 'number') setHighFreqIntensity(ap.values.highFreqIntensity);
           if (typeof ap.values.highFreqRange === 'number') setHighFreqRange(ap.values.highFreqRange);
-          if (typeof ap.values.blockColorPatchDistance === 'number') setBlockColorPatchDistance(Math.max(1, Math.min(30, Math.round(ap.values.blockColorPatchDistance))));
-          if (typeof ap.values.blockColorPatchLineSensitivity === 'number') setBlockColorPatchLineSensitivity(Math.max(1, Math.min(10, Math.round(ap.values.blockColorPatchLineSensitivity))));
-          if (typeof ap.values.blockColorPatchLineGrow === 'number') setBlockColorPatchLineGrow(Math.max(0, Math.min(3, Math.round(ap.values.blockColorPatchLineGrow))));
           if (typeof ap.values.lineReferenceLayerId === 'number') setLineReferenceLayerId(ap.values.lineReferenceLayerId);
           if (typeof ap.values.lineReferenceLayerName === 'string') setLineReferenceLayerName(ap.values.lineReferenceLayerName);
           if (typeof ap.values.edgeSmoothMode === 'string') setEdgeSmoothMode(ap.values.edgeSmoothMode === 'line' ? 'line' : 'edge');
@@ -360,9 +385,6 @@ useEffect(() => {
         weightedIntensity,
         highFreqIntensity,
         highFreqRange,
-        blockColorPatchDistance,
-        blockColorPatchLineSensitivity,
-        blockColorPatchLineGrow,
         lineReferenceLayerId,
         lineReferenceLayerName,
         edgeSmoothMode,
@@ -386,9 +408,6 @@ useEffect(() => {
   weightedIntensity,
   highFreqIntensity,
   highFreqRange,
-  blockColorPatchDistance,
-  blockColorPatchLineSensitivity,
-  blockColorPatchLineGrow,
   lineReferenceLayerId,
   lineReferenceLayerName,
   edgeSmoothMode,
@@ -426,9 +445,6 @@ useEffect(() => {
       setWeightedIntensity(5);
       setHighFreqIntensity(5);
       setHighFreqRange(3);
-      setBlockColorPatchDistance(12);
-      setBlockColorPatchLineSensitivity(6);
-      setBlockColorPatchLineGrow(1);
       setLineReferenceLayerId(null);
       setLineReferenceLayerName('');
       // 3) 智能边缘平滑参数复位
@@ -626,39 +642,6 @@ const handleHighFreqRangeNumberChange = (event: React.ChangeEvent<HTMLInputEleme
   }
 };
 
-const handleBlockColorPatchDistanceChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setBlockColorPatchDistance(parseInt(event.target.value, 10));
-};
-
-const handleBlockColorPatchDistanceNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  const value = parseInt(event.target.value, 10);
-  if (!isNaN(value) && value >= 1 && value <= 30) {
-    setBlockColorPatchDistance(value);
-  }
-};
-
-const handleBlockColorPatchLineSensitivityChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setBlockColorPatchLineSensitivity(parseInt(event.target.value, 10));
-};
-
-const handleBlockColorPatchLineSensitivityNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  const value = parseInt(event.target.value, 10);
-  if (!isNaN(value) && value >= 1 && value <= 10) {
-    setBlockColorPatchLineSensitivity(value);
-  }
-};
-
-const handleBlockColorPatchLineGrowChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setBlockColorPatchLineGrow(parseInt(event.target.value, 10));
-};
-
-const handleBlockColorPatchLineGrowNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  const value = parseInt(event.target.value, 10);
-  if (!isNaN(value) && value >= 0 && value <= 3) {
-    setBlockColorPatchLineGrow(value);
-  }
-};
-
 const flattenLayers = (layers: any[], out: any[] = []) => {
   for (const layer of layers || []) {
     out.push(layer);
@@ -684,6 +667,70 @@ const findLayerById = (layers: any[], id: number): any | null => {
   return null;
 };
 
+const computeLayerSignature = (layers: any[]): number => {
+  let h = 2166136261 >>> 0;
+  const stack = [...(layers || [])];
+  while (stack.length) {
+    const layer = stack.pop();
+    if (!layer) continue;
+    const id = layer.id || 0;
+    const kind = layer.kind === 'pixel' ? 1 : (layer.kind === 'group' ? 2 : 3);
+    h = Math.imul(h ^ id, 16777619) >>> 0;
+    h = Math.imul(h ^ kind, 16777619) >>> 0;
+    const name = layer.name || '';
+    for (let i = 0; i < name.length; i++) {
+      h = Math.imul(h ^ name.charCodeAt(i), 16777619) >>> 0;
+    }
+    const children = (layer as any)?.layers;
+    if (children && Array.isArray(children) && children.length > 0) {
+      for (let i = 0; i < children.length; i++) stack.push(children[i]);
+    }
+  }
+  return h >>> 0;
+};
+
+const buildLineReferenceOptions = (layers: any[], depth: number, out: Array<{ value: string; label: string; disabled?: boolean }>) => {
+  for (const layer of layers || []) {
+    if (!layer) continue;
+    const children = (layer as any)?.layers;
+    const hasChildren = !!(children && Array.isArray(children) && children.length > 0);
+    const indent = depth > 0 ? ('　'.repeat(Math.min(6, depth)) + '└ ') : '';
+    const kind = (layer as any)?.kind;
+    const isPixel = kind === 'pixel';
+    const labelSuffix = hasChildren ? '（组）' : (isPixel ? '（像素）' : '（不可用）');
+    out.push({
+      value: String(layer.id),
+      label: `${indent}${layer.name || `图层 ${layer.id}`}${labelSuffix}`,
+      disabled: !isPixel
+    });
+    if (hasChildren) buildLineReferenceOptions(children, depth + 1, out);
+  }
+};
+
+const refreshLineReferenceOptions = (docOverride?: any) => {
+  try {
+    const doc = docOverride || app.activeDocument;
+    const layers = doc?.layers || [];
+    const out: Array<{ value: string; label: string; disabled?: boolean }> = [];
+    buildLineReferenceOptions(layers, 0, out);
+    setLineReferenceOptions(out);
+    const docId = doc?.id ?? null;
+    lineReferenceSignatureRef.current = { docId, hash: computeLayerSignature(layers) };
+    const sel = lineReferenceSelectionRef.current;
+    if (typeof sel.id === 'number') {
+      const layer = findLayerById(layers, sel.id);
+      if (!layer || layer.kind !== 'pixel') {
+        setLineReferenceLayerId(null);
+        setLineReferenceLayerName('');
+      } else if ((layer.name || '') !== sel.name) {
+        setLineReferenceLayerName(layer.name || '');
+      }
+    }
+  } catch (e) {
+    setLineReferenceOptions([]);
+  }
+};
+
 const getAutoLineReferenceLayer = (doc: any, activeLayerId: number): any | null => {
   const flat = flattenLayers(doc.layers || []);
   const idx = flat.findIndex(l => l && l.id === activeLayerId);
@@ -705,28 +752,29 @@ const getAutoLineReferenceLayer = (doc: any, activeLayerId: number): any | null 
   return null;
 };
 
-const handleSetLineReferenceLayer = async () => {
-  try {
-    const doc = app.activeDocument;
-    const layer = doc?.activeLayers?.[0];
-    if (!layer) {
-      await core.showAlert({ message: '未找到活动图层' });
-      return;
-    }
-    if (layer.kind !== 'pixel') {
-      await core.showAlert({ message: '请选择像素图层作为线稿参考层' });
-      return;
-    }
-    setLineReferenceLayerId(layer.id);
-    setLineReferenceLayerName(layer.name || '');
-  } catch (e) {
-    try { await core.showAlert({ message: '设置线稿参考层失败' }); } catch {}
+const handleLineReferenceLayerChange = async (event: React.ChangeEvent<HTMLSelectElement>) => {
+  const value = event.target.value;
+  if (value === 'auto') {
+    setLineReferenceLayerId(null);
+    setLineReferenceLayerName('');
+    return;
   }
-};
-
-const handleClearLineReferenceLayer = async () => {
-  setLineReferenceLayerId(null);
-  setLineReferenceLayerName('');
+  const id = parseInt(value, 10);
+  if (!Number.isFinite(id)) {
+    setLineReferenceLayerId(null);
+    setLineReferenceLayerName('');
+    return;
+  }
+  const doc = app.activeDocument;
+  const layer = findLayerById(doc?.layers || [], id);
+  if (!layer || layer.kind !== 'pixel') {
+    try { await core.showAlert({ message: '该图层不可作为线稿参考层，请选择像素图层' }); } catch {}
+    setLineReferenceLayerId(null);
+    setLineReferenceLayerName('');
+    return;
+  }
+  setLineReferenceLayerId(id);
+  setLineReferenceLayerName(layer.name || '');
 };
 
 const handleEdgeSmoothModeChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
@@ -1033,11 +1081,16 @@ const handleBlockColorPatch = async () => {
         refLayer = getAutoLineReferenceLayer(doc, activeLayerId);
       }
       if (!refLayer || refLayer.kind !== 'pixel') {
-        await core.showAlert({ message: '未找到可用的线稿参考层（建议先点击“设为线稿参考层”）' });
+        await core.showAlert({ message: '未找到可用的线稿参考层，请在“线稿参考”下拉中选择线稿图层' });
         return;
       }
 
-      const margin = Math.max(1, Math.min(200, Math.round(blockColorPatchDistance + blockColorPatchLineGrow + 2)));
+      const selArea = Math.max(1, Math.round(selectionBounds.width) * Math.round(selectionBounds.height));
+      const autoDistance = Math.max(8, Math.min(24, Math.round(Math.sqrt(selArea) / 25)));
+      const autoLineGrow = 2;
+      const autoLineSensitivity = 7;
+
+      const margin = Math.max(1, Math.min(200, Math.round(autoDistance + autoLineGrow + 2)));
       const roiLeft = Math.max(0, selectionBounds.left - margin);
       const roiTop = Math.max(0, selectionBounds.top - margin);
       const roiRight = Math.min(selectionBounds.docWidth, selectionBounds.right + margin);
@@ -1069,6 +1122,34 @@ const handleBlockColorPatch = async () => {
         const refRaw = new Uint8Array(await refPixels.imageData.getData());
         refPixels.imageData.dispose();
 
+        const pixelCount = roiW * roiH;
+        const stride = pixelCount > 800_000 ? 7 : (pixelCount > 200_000 ? 5 : 3);
+        let lineLike = 0;
+        let sampled = 0;
+        const bpp = pixelCount > 0 ? refRaw.length / pixelCount : 0;
+        const getRGBA = (i: number) => {
+          if (bpp === 4) {
+            const p = i * 4;
+            return { r: refRaw[p] || 0, g: refRaw[p + 1] || 0, b: refRaw[p + 2] || 0, a: refRaw[p + 3] || 0 };
+          }
+          if (bpp === 3) {
+            const p = i * 3;
+            return { r: refRaw[p] || 0, g: refRaw[p + 1] || 0, b: refRaw[p + 2] || 0, a: 255 };
+          }
+          return { r: 0, g: 0, b: 0, a: 0 };
+        };
+        const luminance8 = (r: number, g: number, b: number) => ((r * 54 + g * 183 + b * 19) / 256) | 0;
+        for (let i = 0; i < pixelCount; i += stride) {
+          const { r, g, b, a } = getRGBA(i);
+          if (a <= 8) continue;
+          sampled++;
+          if (luminance8(r, g, b) <= 90) lineLike++;
+        }
+        if (sampled > 0 && lineLike / sampled < 0.01) {
+          await core.showAlert({ message: '线稿参考层疑似不是线稿（可见暗线太少），建议在“线稿参考”下拉中改选线稿图层。' });
+          return;
+        }
+
         const processedPixels = await processBlockColorPatch(
           pixelResult.fullPixelData.buffer,
           fullSelectionMask.buffer,
@@ -1076,9 +1157,9 @@ const handleBlockColorPatch = async () => {
           { left: roiLeft, top: roiTop, width: roiW, height: roiH },
           refRaw.buffer,
           {
-            maxDistance: blockColorPatchDistance,
-            lineSensitivity: blockColorPatchLineSensitivity,
-            lineGrow: blockColorPatchLineGrow
+            maxDistance: autoDistance,
+            lineSensitivity: autoLineSensitivity,
+            lineGrow: autoLineGrow
           }
         );
 
@@ -1761,55 +1842,28 @@ const renderBlockAdjustmentContent = () => (
 
 ● 在选区内，把透明像素用最近的已有颜色补齐，并尽量不跨越线稿边界。
 
-● 建议先用“设为线稿参考层”指定线稿所在图层，再在颜色层选区内执行。`}>分块补色</button>
+● 建议先在“线稿参考”下拉中选择线稿所在图层，再在颜色层选区内执行。`}>分块补色</button>
+
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
-        <div className="wide-adjustment-slider-label" title={`● 控制补色向内扩散的最大距离。
+        <div className="wide-adjustment-slider-label" title={`● 指定用于识别线条边界的参考图层。
 
-● 值越大越容易补满，但也更慢。`}>补色距离</div>
+● 推荐选择线稿所在的像素图层。`}>线稿参考</div>
         <div className="unit-container">
-          <input type="range" min="1" max="30" step="1" value={blockColorPatchDistance} onChange={handleBlockColorPatchDistanceChange} className="adjustment-slider-input" />
-          <input type="number" min="1" max="30" step="1" value={blockColorPatchDistance} onChange={handleBlockColorPatchDistanceNumberChange} className="adjustment-number-input" />
-          <div className="adjustment-unit">px</div>
-        </div>
-      </div>
-
-      <div className="adjustment-slider-item">
-        <div className="wide-adjustment-slider-label" title={`● 控制线稿识别的敏感程度。
-
-● 越高越容易把浅灰线条也当作边界，越不容易穿线。`}>线条灵敏</div>
-        <div className="unit-container">
-          <input type="range" min="1" max="10" step="1" value={blockColorPatchLineSensitivity} onChange={handleBlockColorPatchLineSensitivityChange} className="adjustment-slider-input" />
-          <input type="number" min="1" max="10" step="1" value={blockColorPatchLineSensitivity} onChange={handleBlockColorPatchLineSensitivityNumberChange} className="adjustment-number-input" />
-          <div className="adjustment-unit">级</div>
-        </div>
-      </div>
-
-      <div className="adjustment-slider-item">
-        <div className="wide-adjustment-slider-label" title={`● 对识别出的线条边界做轻微加粗，减少抗锯齿造成的漏穿。`}>边界加粗</div>
-        <div className="unit-container">
-          <input type="range" min="0" max="3" step="1" value={blockColorPatchLineGrow} onChange={handleBlockColorPatchLineGrowChange} className="adjustment-slider-input" />
-          <input type="number" min="0" max="3" step="1" value={blockColorPatchLineGrow} onChange={handleBlockColorPatchLineGrowNumberChange} className="adjustment-number-input" />
-          <div className="adjustment-unit">px</div>
-        </div>
-      </div>
-    </div>
-
-    <div className="adjustment-divider"></div>
-
-    <div className="adjustment-double-buttons">
-      <button className="adjustment-button" onClick={handleSetLineReferenceLayer} title={`● 把当前活动图层记录为线稿参考层（用于识别边界）。
-
-● 一般在点击前先选中线稿图层。`}>设为线稿</button>
-      <button className="adjustment-button" onClick={handleClearLineReferenceLayer} title={`● 清除已记录的参考层，回到自动选择（优先使用当前层上方最近像素层）。`}>清除线稿</button>
-    </div>
-
-    <div className="adjustment-slider-container">
-      <div className="adjustment-slider-item">
-        <div className="wide-adjustment-slider-label">当前参考</div>
-        <div style={{ fontSize: '12px', opacity: 0.9, paddingLeft: '6px', lineHeight: '18px' }}>
-          {lineReferenceLayerId ? (lineReferenceLayerName || `图层ID ${lineReferenceLayerId}`) : '自动：当前层上方最近像素层'}
+          <select
+            value={lineReferenceLayerId ? String(lineReferenceLayerId) : 'auto'}
+            onChange={handleLineReferenceLayerChange}
+            onMouseDown={refreshLineReferenceOptions}
+            className="adjustment-select"
+          >
+            <option value="auto">自动：当前层上方最近像素层</option>
+            {lineReferenceOptions.map(opt => (
+              <option key={opt.value} value={opt.value} disabled={opt.disabled}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
     </div>
