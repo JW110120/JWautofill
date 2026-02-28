@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { processBlockAverage } from './blockAverageProcessor';
 import { processBlockGradient } from './blockGradientProcessor';
+import { processBlockColorPatch } from './blockColorPatchProcessor';
 import { processPixelTransition } from './pixelTransitionProcessor';
 import { processGradientRelax } from './gradientRelaxProcessor';
 import { processSpecialSharpen } from './specialSharpenProcessor';
@@ -252,6 +253,12 @@ const [weightedIntensity, setWeightedIntensity] = useState(5);
 const [highFreqIntensity, setHighFreqIntensity] = useState(5);
 const [highFreqRange, setHighFreqRange] = useState(3);
 
+const [blockColorPatchDistance, setBlockColorPatchDistance] = useState(12);
+const [blockColorPatchLineSensitivity, setBlockColorPatchLineSensitivity] = useState(6);
+const [blockColorPatchLineGrow, setBlockColorPatchLineGrow] = useState(1);
+const [lineReferenceLayerId, setLineReferenceLayerId] = useState<number | null>(null);
+const [lineReferenceLayerName, setLineReferenceLayerName] = useState<string>('');
+
 // 智能边缘平滑参数
 const [edgeSmoothMode, setEdgeSmoothMode] = useState((defaultSmartEdgeSmoothParams.mode as any) || 'edge');
 const [edgeMedianRadius, setEdgeMedianRadius] = useState(defaultSmartEdgeSmoothParams.edgeMedianRadius ?? 16);
@@ -311,6 +318,11 @@ useEffect(() => {
           if (typeof ap.values.weightedIntensity === 'number') setWeightedIntensity(ap.values.weightedIntensity);
           if (typeof ap.values.highFreqIntensity === 'number') setHighFreqIntensity(ap.values.highFreqIntensity);
           if (typeof ap.values.highFreqRange === 'number') setHighFreqRange(ap.values.highFreqRange);
+          if (typeof ap.values.blockColorPatchDistance === 'number') setBlockColorPatchDistance(Math.max(1, Math.min(30, Math.round(ap.values.blockColorPatchDistance))));
+          if (typeof ap.values.blockColorPatchLineSensitivity === 'number') setBlockColorPatchLineSensitivity(Math.max(1, Math.min(10, Math.round(ap.values.blockColorPatchLineSensitivity))));
+          if (typeof ap.values.blockColorPatchLineGrow === 'number') setBlockColorPatchLineGrow(Math.max(0, Math.min(3, Math.round(ap.values.blockColorPatchLineGrow))));
+          if (typeof ap.values.lineReferenceLayerId === 'number') setLineReferenceLayerId(ap.values.lineReferenceLayerId);
+          if (typeof ap.values.lineReferenceLayerName === 'string') setLineReferenceLayerName(ap.values.lineReferenceLayerName);
           if (typeof ap.values.edgeSmoothMode === 'string') setEdgeSmoothMode(ap.values.edgeSmoothMode === 'line' ? 'line' : 'edge');
           if (typeof ap.values.edgeMedianRadius === 'number') setEdgeMedianRadius(Math.max(10, Math.min(30, Math.round(ap.values.edgeMedianRadius))));
           if (typeof ap.values.edgeBackgroundSmoothRadius === 'number') setEdgeBackgroundSmoothRadius(Math.max(10, Math.min(30, Math.round(ap.values.edgeBackgroundSmoothRadius))));
@@ -348,6 +360,11 @@ useEffect(() => {
         weightedIntensity,
         highFreqIntensity,
         highFreqRange,
+        blockColorPatchDistance,
+        blockColorPatchLineSensitivity,
+        blockColorPatchLineGrow,
+        lineReferenceLayerId,
+        lineReferenceLayerName,
         edgeSmoothMode,
         edgeMedianRadius,
         edgeBackgroundSmoothRadius,
@@ -369,6 +386,11 @@ useEffect(() => {
   weightedIntensity,
   highFreqIntensity,
   highFreqRange,
+  blockColorPatchDistance,
+  blockColorPatchLineSensitivity,
+  blockColorPatchLineGrow,
+  lineReferenceLayerId,
+  lineReferenceLayerName,
   edgeSmoothMode,
   edgeMedianRadius,
   edgeBackgroundSmoothRadius,
@@ -404,6 +426,11 @@ useEffect(() => {
       setWeightedIntensity(5);
       setHighFreqIntensity(5);
       setHighFreqRange(3);
+      setBlockColorPatchDistance(12);
+      setBlockColorPatchLineSensitivity(6);
+      setBlockColorPatchLineGrow(1);
+      setLineReferenceLayerId(null);
+      setLineReferenceLayerName('');
       // 3) 智能边缘平滑参数复位
       setEdgeSmoothMode((defaultSmartEdgeSmoothParams.mode as any) || 'edge');
       setEdgeMedianRadius(defaultSmartEdgeSmoothParams.edgeMedianRadius ?? 20);
@@ -597,6 +624,109 @@ const handleHighFreqRangeNumberChange = (event: React.ChangeEvent<HTMLInputEleme
   if (!isNaN(value) && value >= 1 && value <= 10) {
     setHighFreqRange(value);
   }
+};
+
+const handleBlockColorPatchDistanceChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  setBlockColorPatchDistance(parseInt(event.target.value, 10));
+};
+
+const handleBlockColorPatchDistanceNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const value = parseInt(event.target.value, 10);
+  if (!isNaN(value) && value >= 1 && value <= 30) {
+    setBlockColorPatchDistance(value);
+  }
+};
+
+const handleBlockColorPatchLineSensitivityChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  setBlockColorPatchLineSensitivity(parseInt(event.target.value, 10));
+};
+
+const handleBlockColorPatchLineSensitivityNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const value = parseInt(event.target.value, 10);
+  if (!isNaN(value) && value >= 1 && value <= 10) {
+    setBlockColorPatchLineSensitivity(value);
+  }
+};
+
+const handleBlockColorPatchLineGrowChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  setBlockColorPatchLineGrow(parseInt(event.target.value, 10));
+};
+
+const handleBlockColorPatchLineGrowNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const value = parseInt(event.target.value, 10);
+  if (!isNaN(value) && value >= 0 && value <= 3) {
+    setBlockColorPatchLineGrow(value);
+  }
+};
+
+const flattenLayers = (layers: any[], out: any[] = []) => {
+  for (const layer of layers || []) {
+    out.push(layer);
+    const children = (layer as any)?.layers;
+    if (children && Array.isArray(children) && children.length > 0) {
+      flattenLayers(children, out);
+    }
+  }
+  return out;
+};
+
+const findLayerById = (layers: any[], id: number): any | null => {
+  const stack = [...(layers || [])];
+  while (stack.length) {
+    const layer = stack.pop();
+    if (!layer) continue;
+    if (layer.id === id) return layer;
+    const children = (layer as any)?.layers;
+    if (children && Array.isArray(children) && children.length > 0) {
+      for (let i = 0; i < children.length; i++) stack.push(children[i]);
+    }
+  }
+  return null;
+};
+
+const getAutoLineReferenceLayer = (doc: any, activeLayerId: number): any | null => {
+  const flat = flattenLayers(doc.layers || []);
+  const idx = flat.findIndex(l => l && l.id === activeLayerId);
+  const isUsable = (l: any) => !!l && l.kind === 'pixel';
+  if (idx >= 0) {
+    for (let i = idx - 1; i >= 0; i--) {
+      const l = flat[i];
+      if (isUsable(l)) return l;
+    }
+    for (let i = idx + 1; i < flat.length; i++) {
+      const l = flat[i];
+      if (isUsable(l)) return l;
+    }
+  }
+  for (let i = 0; i < flat.length; i++) {
+    const l = flat[i];
+    if (isUsable(l)) return l;
+  }
+  return null;
+};
+
+const handleSetLineReferenceLayer = async () => {
+  try {
+    const doc = app.activeDocument;
+    const layer = doc?.activeLayers?.[0];
+    if (!layer) {
+      await core.showAlert({ message: '未找到活动图层' });
+      return;
+    }
+    if (layer.kind !== 'pixel') {
+      await core.showAlert({ message: '请选择像素图层作为线稿参考层' });
+      return;
+    }
+    setLineReferenceLayerId(layer.id);
+    setLineReferenceLayerName(layer.name || '');
+  } catch (e) {
+    try { await core.showAlert({ message: '设置线稿参考层失败' }); } catch {}
+  }
+};
+
+const handleClearLineReferenceLayer = async () => {
+  setLineReferenceLayerId(null);
+  setLineReferenceLayerName('');
 };
 
 const handleEdgeSmoothModeChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
@@ -871,6 +1001,95 @@ const handleBlockGradient = async () => {
     const msg = typeof error === 'string' ? error : (error && (error.message || (error as any).toString?.() || '未知错误'));
     console.error('❌ 分块渐变处理失败:', error);
     await core.showAlert({ message: '分块渐变处理失败: ' + msg });
+  }
+};
+
+const handleBlockColorPatch = async () => {
+  if (!handleLicenseBeforeAction()) return;
+  try {
+    const { executeAsModal } = core;
+
+    await executeAsModal(async () => {
+      const editingState = await checkEditingState();
+      if (!editingState.isValid) {
+        return;
+      }
+
+      const { layer, isBackgroundLayer } = editingState;
+      const selectionBounds = await getSelectionData();
+      if (!selectionBounds) {
+        await core.showAlert({ message: '获取文档信息失败' });
+        return;
+      }
+
+      const doc = app.activeDocument;
+      const activeLayerId = layer.id;
+
+      let refLayer: any | null = null;
+      if (typeof lineReferenceLayerId === 'number') {
+        refLayer = findLayerById(doc.layers || [], lineReferenceLayerId);
+      }
+      if (!refLayer || refLayer.kind !== 'pixel') {
+        refLayer = getAutoLineReferenceLayer(doc, activeLayerId);
+      }
+      if (!refLayer || refLayer.kind !== 'pixel') {
+        await core.showAlert({ message: '未找到可用的线稿参考层（建议先点击“设为线稿参考层”）' });
+        return;
+      }
+
+      const margin = Math.max(1, Math.min(200, Math.round(blockColorPatchDistance + blockColorPatchLineGrow + 2)));
+      const roiLeft = Math.max(0, selectionBounds.left - margin);
+      const roiTop = Math.max(0, selectionBounds.top - margin);
+      const roiRight = Math.min(selectionBounds.docWidth, selectionBounds.right + margin);
+      const roiBottom = Math.min(selectionBounds.docHeight, selectionBounds.bottom + margin);
+      const roiW = Math.max(1, roiRight - roiLeft);
+      const roiH = Math.max(1, roiBottom - roiTop);
+
+      await runWithTemporaryUnlock(async () => {
+        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+
+        const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
+        let maskIndex = 0;
+        for (let docIndex of pixelResult.selectionIndices) {
+          fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
+          maskIndex++;
+        }
+
+        const refPixels = await imaging.getPixels({
+          documentID: doc.id,
+          layerID: refLayer.id,
+          sourceBounds: {
+            left: roiLeft,
+            top: roiTop,
+            right: roiLeft + roiW,
+            bottom: roiTop + roiH
+          },
+          targetSize: { width: roiW, height: roiH }
+        });
+        const refRaw = new Uint8Array(await refPixels.imageData.getData());
+        refPixels.imageData.dispose();
+
+        const processedPixels = await processBlockColorPatch(
+          pixelResult.fullPixelData.buffer,
+          fullSelectionMask.buffer,
+          { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
+          { left: roiLeft, top: roiTop, width: roiW, height: roiH },
+          refRaw.buffer,
+          {
+            maxDistance: blockColorPatchDistance,
+            lineSensitivity: blockColorPatchLineSensitivity,
+            lineGrow: blockColorPatchLineGrow
+          }
+        );
+
+        await applyProcessedPixels(processedPixels, pixelResult);
+      });
+    });
+    giveFocusBackToPS();
+  } catch (error) {
+    const msg = typeof error === 'string' ? error : (error && (error.message || (error as any).toString?.() || '未知错误'));
+    console.error('❌ 分块补色失败:', error);
+    await core.showAlert({ message: '分块补色失败: ' + msg });
   }
 };
 
@@ -1535,6 +1754,65 @@ const renderBlockAdjustmentContent = () => (
 ● 渐变数据来自主面板“渐变设置”的最终预览（含角度与反向）。
 
 ● 每个连通块取形状质心，沿渐变方向投影后做归一化映射。`}>分块渐变</button>
+
+    <div className="adjustment-divider"></div>
+
+    <button className="adjustment-button" onClick={handleBlockColorPatch} title={`● 解决线稿与底色之间的细缝、锐角尖头漏填等问题。
+
+● 在选区内，把透明像素用最近的已有颜色补齐，并尽量不跨越线稿边界。
+
+● 建议先用“设为线稿参考层”指定线稿所在图层，再在颜色层选区内执行。`}>分块补色</button>
+
+    <div className="adjustment-slider-container">
+      <div className="adjustment-slider-item">
+        <div className="wide-adjustment-slider-label" title={`● 控制补色向内扩散的最大距离。
+
+● 值越大越容易补满，但也更慢。`}>补色距离</div>
+        <div className="unit-container">
+          <input type="range" min="1" max="30" step="1" value={blockColorPatchDistance} onChange={handleBlockColorPatchDistanceChange} className="adjustment-slider-input" />
+          <input type="number" min="1" max="30" step="1" value={blockColorPatchDistance} onChange={handleBlockColorPatchDistanceNumberChange} className="adjustment-number-input" />
+          <div className="adjustment-unit">px</div>
+        </div>
+      </div>
+
+      <div className="adjustment-slider-item">
+        <div className="wide-adjustment-slider-label" title={`● 控制线稿识别的敏感程度。
+
+● 越高越容易把浅灰线条也当作边界，越不容易穿线。`}>线条灵敏</div>
+        <div className="unit-container">
+          <input type="range" min="1" max="10" step="1" value={blockColorPatchLineSensitivity} onChange={handleBlockColorPatchLineSensitivityChange} className="adjustment-slider-input" />
+          <input type="number" min="1" max="10" step="1" value={blockColorPatchLineSensitivity} onChange={handleBlockColorPatchLineSensitivityNumberChange} className="adjustment-number-input" />
+          <div className="adjustment-unit">级</div>
+        </div>
+      </div>
+
+      <div className="adjustment-slider-item">
+        <div className="wide-adjustment-slider-label" title={`● 对识别出的线条边界做轻微加粗，减少抗锯齿造成的漏穿。`}>边界加粗</div>
+        <div className="unit-container">
+          <input type="range" min="0" max="3" step="1" value={blockColorPatchLineGrow} onChange={handleBlockColorPatchLineGrowChange} className="adjustment-slider-input" />
+          <input type="number" min="0" max="3" step="1" value={blockColorPatchLineGrow} onChange={handleBlockColorPatchLineGrowNumberChange} className="adjustment-number-input" />
+          <div className="adjustment-unit">px</div>
+        </div>
+      </div>
+    </div>
+
+    <div className="adjustment-divider"></div>
+
+    <div className="adjustment-double-buttons">
+      <button className="adjustment-button" onClick={handleSetLineReferenceLayer} title={`● 把当前活动图层记录为线稿参考层（用于识别边界）。
+
+● 一般在点击前先选中线稿图层。`}>设为线稿</button>
+      <button className="adjustment-button" onClick={handleClearLineReferenceLayer} title={`● 清除已记录的参考层，回到自动选择（优先使用当前层上方最近像素层）。`}>清除线稿</button>
+    </div>
+
+    <div className="adjustment-slider-container">
+      <div className="adjustment-slider-item">
+        <div className="wide-adjustment-slider-label">当前参考</div>
+        <div style={{ fontSize: '12px', opacity: 0.9, paddingLeft: '6px', lineHeight: '18px' }}>
+          {lineReferenceLayerId ? (lineReferenceLayerName || `图层ID ${lineReferenceLayerId}`) : '自动：当前层上方最近像素层'}
+        </div>
+      </div>
+    </div>
   </div>
 );
 
