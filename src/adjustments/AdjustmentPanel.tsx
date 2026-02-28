@@ -1467,7 +1467,7 @@ const renderEdgeProcessingContent = () => (
           </div>
 
           <div className="adjustment-slider-item">
-            <div className="wide-adjustment-slider-label" title={`● 控制保边缘程度。越高越不容易把笔触边缘糊掉。`}>保细节</div>
+            <div className="wide-adjustment-slider-label" title={`● 控制保边缘程度。越高越不容易把笔触边缘糊掉。`}>保护细节</div>
             <div className="unit-container">
               <input type="range" min="0" max="100" step="1" value={edgeLinePreserveDetail} onChange={handleEdgeLinePreserveDetailChange} className="adjustment-slider-input" />
               <input type="number" min="0" max="100" step="1" value={edgeLinePreserveDetail} onChange={handleEdgeLinePreserveDetailNumberChange} className="adjustment-number-input" />

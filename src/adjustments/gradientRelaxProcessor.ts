@@ -27,64 +27,205 @@ export async function processGradientRelax(
     const x = Math.max(0, Math.min(1, t));
     return x * x * x * (x * (x * 6 - 15) + 10);
   };
+  const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+  const alphaToColorWeight01 = (a255: number) => {
+    const t = clamp01(a255 / 80);
+    return smootherstep01(t);
+  };
 
-  const INF = 0xffff;
-  const dist = new Uint16Array(width * height);
-  for (let i = 0; i < width * height; i++) {
-    dist[i] = (selectionMask[i] || 0) > 0 ? INF : 0;
+  const hasAlpha = !isBackgroundLayer;
+  const workingPixels = new Uint8Array(pixels.length);
+  workingPixels.set(pixels);
+  if (hasAlpha) {
+    for (let i = 0; i < width * height; i++) {
+      const p = i * 4;
+      const a = workingPixels[p + 3] || 0;
+      if (a === 0) {
+        workingPixels[p] = 0;
+        workingPixels[p + 1] = 0;
+        workingPixels[p + 2] = 0;
+        continue;
+      }
+      const r = workingPixels[p] || 0;
+      const g = workingPixels[p + 1] || 0;
+      const b = workingPixels[p + 2] || 0;
+      workingPixels[p] = Math.floor((r * a + 127) / 255);
+      workingPixels[p + 1] = Math.floor((g * a + 127) / 255);
+      workingPixels[p + 2] = Math.floor((b * a + 127) / 255);
+    }
   }
+
+  const validMaskAlpha = selectionMask;
+  let validMaskColor = validMaskAlpha;
+  if (hasAlpha) {
+    validMaskColor = new Uint8Array(width * height);
+    for (let i = 0; i < width * height; i++) {
+      const m = selectionMask[i] || 0;
+      if (m === 0) continue;
+      const a = pixels[i * 4 + 3] || 0;
+      const w = alphaToColorWeight01(a);
+      validMaskColor[i] = Math.round(m * w);
+    }
+  }
+
+  const xSpan = new Uint16Array(width);
+  for (let x = 0; x < width; x++) {
+    const x0 = x - radius < 0 ? 0 : x - radius;
+    const x1 = x + radius >= width ? width - 1 : x + radius;
+    xSpan[x] = (x1 - x0 + 1) as any;
+  }
+  const ySpan = new Uint16Array(height);
+  for (let y = 0; y < height; y++) {
+    const y0 = y - radius < 0 ? 0 : y - radius;
+    const y1 = y + radius >= height ? height - 1 : y + radius;
+    ySpan[y] = (y1 - y0 + 1) as any;
+  }
+
+  const buildBoxSums = (mask: Uint8Array) => {
+    const n = width * height;
+    const sumH = new Uint32Array(n);
+    const sum = new Uint32Array(n);
+
+    for (let y = 0; y < height; y++) {
+      const rowBase = y * width;
+      let acc = 0;
+      for (let x = -radius; x <= radius; x++) {
+        if (x < 0 || x >= width) continue;
+        acc += mask[rowBase + x] || 0;
+      }
+      sumH[rowBase] = acc;
+      for (let x = 1; x < width; x++) {
+        const addX = x + radius;
+        const subX = x - radius - 1;
+        if (addX >= 0 && addX < width) acc += mask[rowBase + addX] || 0;
+        if (subX >= 0 && subX < width) acc -= mask[rowBase + subX] || 0;
+        sumH[rowBase + x] = acc;
+      }
+    }
+
+    for (let x = 0; x < width; x++) {
+      let acc = 0;
+      for (let y = -radius; y <= radius; y++) {
+        if (y < 0 || y >= height) continue;
+        acc += sumH[y * width + x] || 0;
+      }
+      sum[x] = acc;
+      for (let y = 1; y < height; y++) {
+        const addY = y + radius;
+        const subY = y - radius - 1;
+        if (addY >= 0 && addY < height) acc += sumH[addY * width + x] || 0;
+        if (subY >= 0 && subY < height) acc -= sumH[subY * width + x] || 0;
+        sum[y * width + x] = acc;
+      }
+    }
+
+    return sum;
+  };
+
+  const alphaWeightSum = buildBoxSums(validMaskAlpha);
+  const colorWeightSum = buildBoxSums(validMaskColor);
+
+  const supportAlpha255 = new Uint8Array(width * height);
+  const supportColor255 = new Uint8Array(width * height);
   for (let y = 0; y < height; y++) {
     const rowBase = y * width;
+    const hSpan = ySpan[y] || 1;
     for (let x = 0; x < width; x++) {
-      const idx = rowBase + x;
-      const d = dist[idx];
-      if (d === 0) continue;
-      let best = d;
-      if (x > 0) {
-        const left = dist[idx - 1];
-        if (left + 1 < best) best = left + 1;
-      }
-      if (y > 0) {
-        const up = dist[idx - width];
-        if (up + 1 < best) best = up + 1;
-      }
-      dist[idx] = best;
-    }
-  }
-  for (let y = height - 1; y >= 0; y--) {
-    const rowBase = y * width;
-    for (let x = width - 1; x >= 0; x--) {
-      const idx = rowBase + x;
-      const d = dist[idx];
-      if (d === 0) continue;
-      let best = d;
-      if (x + 1 < width) {
-        const right = dist[idx + 1];
-        const cand = right === INF ? INF : right + 1;
-        if (cand < best) best = cand;
-      }
-      if (y + 1 < height) {
-        const down = dist[idx + width];
-        const cand = down === INF ? INF : down + 1;
-        if (cand < best) best = cand;
-      }
-      dist[idx] = best;
+      const i = rowBase + x;
+      if ((selectionMask[i] || 0) === 0) continue;
+      const area = (xSpan[x] || 1) * hSpan;
+      const sA = alphaWeightSum[i] / (255 * area);
+      const sC = colorWeightSum[i] / (255 * area);
+      supportAlpha255[i] = Math.round(smootherstep01(clamp01(sA)) * 255);
+      supportColor255[i] = Math.round(smootherstep01(clamp01(sC)) * 255);
     }
   }
 
-  const featherPx = Math.max(6, Math.min(80, Math.round(radius * 2)));
-  const featherMask = new Uint8Array(width * height);
-  for (let i = 0; i < width * height; i++) {
-    const m = selectionMask[i] || 0;
-    if (m === 0) {
-      featherMask[i] = 0;
-      continue;
+  const blurAlpha = hasAlpha ? new Uint8Array(width * height) : null;
+  if (hasAlpha && amount < 0) {
+    const n = width * height;
+    const sumWAH = new Uint32Array(n);
+    const sumWAV = new Uint32Array(n);
+    const sumWH = new Uint32Array(n);
+    const sumWV = new Uint32Array(n);
+
+    for (let y = 0; y < height; y++) {
+      const rowBase = y * width;
+      let accW = 0;
+      let accWA = 0;
+      for (let x = -radius; x <= radius; x++) {
+        if (x < 0 || x >= width) continue;
+        const idx = rowBase + x;
+        const w = selectionMask[idx] || 0;
+        if (w === 0) continue;
+        accW += w;
+        accWA += w * (pixels[idx * 4 + 3] || 0);
+      }
+      sumWH[rowBase] = accW;
+      sumWAH[rowBase] = accWA;
+      for (let x = 1; x < width; x++) {
+        const addX = x + radius;
+        const subX = x - radius - 1;
+        if (addX >= 0 && addX < width) {
+          const idxA = rowBase + addX;
+          const wA = selectionMask[idxA] || 0;
+          if (wA !== 0) {
+            accW += wA;
+            accWA += wA * (pixels[idxA * 4 + 3] || 0);
+          }
+        }
+        if (subX >= 0 && subX < width) {
+          const idxS = rowBase + subX;
+          const wS = selectionMask[idxS] || 0;
+          if (wS !== 0) {
+            accW -= wS;
+            accWA -= wS * (pixels[idxS * 4 + 3] || 0);
+          }
+        }
+        sumWH[rowBase + x] = accW;
+        sumWAH[rowBase + x] = accWA;
+      }
     }
-    const d = dist[i];
-    const d0 = d === INF ? featherPx : Math.max(0, d - 1);
-    const u = Math.max(0, Math.min(1, d0 / featherPx));
-    const fade = smootherstep01(smootherstep01(u));
-    featherMask[i] = Math.round(fade * m);
+
+    for (let x = 0; x < width; x++) {
+      let accW = 0;
+      let accWA = 0;
+      for (let y = -radius; y <= radius; y++) {
+        if (y < 0 || y >= height) continue;
+        const idx = y * width + x;
+        accW += sumWH[idx] || 0;
+        accWA += sumWAH[idx] || 0;
+      }
+      sumWV[x] = accW;
+      sumWAV[x] = accWA;
+      for (let y = 1; y < height; y++) {
+        const addY = y + radius;
+        const subY = y - radius - 1;
+        if (addY >= 0 && addY < height) {
+          const idxA = addY * width + x;
+          accW += sumWH[idxA] || 0;
+          accWA += sumWAH[idxA] || 0;
+        }
+        if (subY >= 0 && subY < height) {
+          const idxS = subY * width + x;
+          accW -= sumWH[idxS] || 0;
+          accWA -= sumWAH[idxS] || 0;
+        }
+        sumWV[y * width + x] = accW;
+        sumWAV[y * width + x] = accWA;
+      }
+    }
+
+    for (let i = 0; i < width * height; i++) {
+      const m = selectionMask[i] || 0;
+      if (m === 0) continue;
+      const w = sumWV[i] || 0;
+      if (w === 0) {
+        blurAlpha![i] = pixels[i * 4 + 3] || 0;
+        continue;
+      }
+      blurAlpha![i] = Math.round((sumWAV[i] || 0) / w);
+    }
   }
 
   const channelCount = isBackgroundLayer ? 3 : 4;
@@ -93,7 +234,7 @@ export async function processGradientRelax(
   const minH = new Uint8Array(width * height);
   const maxH = new Uint8Array(width * height);
 
-  const computeMinMaxForChannel = (ch: number) => {
+  const computeMinMaxForChannel = (ch: number, validMask: Uint8Array) => {
     for (let y = 0; y < height; y++) {
       const base = y * width;
       const minIdx: number[] = [];
@@ -106,8 +247,8 @@ export async function processGradientRelax(
       for (let j = -radius; j <= width - 1 + radius; j++) {
         const xClamped = j < 0 ? 0 : (j >= width ? width - 1 : j);
         const idx = base + xClamped;
-        const valid = (selectionMask[idx] || 0) > 0;
-        const v = valid ? pixels[idx * 4 + ch] : 0;
+        const valid = (validMask[idx] || 0) > 0;
+        const v = valid ? workingPixels[idx * 4 + ch] : 0;
         const vMin = valid ? v : 255;
         const vMax = valid ? v : 0;
 
@@ -148,7 +289,7 @@ export async function processGradientRelax(
       for (let j = -radius; j <= height - 1 + radius; j++) {
         const yClamped = j < 0 ? 0 : (j >= height ? height - 1 : j);
         const idx = yClamped * width + x;
-        const valid = (selectionMask[idx] || 0) > 0;
+        const valid = (validMask[idx] || 0) > 0;
         const vMin = valid ? minH[idx] : 255;
         const vMax = valid ? maxH[idx] : 0;
 
@@ -179,19 +320,26 @@ export async function processGradientRelax(
     }
   };
 
-  const contrast = Math.pow(2, amount / 5);
-  const out = new Uint8Array(pixels.length);
-  out.set(pixels);
+  const tAmount = magnitude / 10;
+  const negBoost = amount < 0 ? 1 + tAmount * tAmount : 1;
+  const amountForContrast = amount < 0 ? amount * negBoost : amount;
+  const contrast = Math.pow(2, amountForContrast / 5);
+  const out = new Uint8Array(workingPixels.length);
+  out.set(workingPixels);
 
-  const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
-
-  for (let ch = 0; ch < channelCount; ch++) {
-    computeMinMaxForChannel(ch);
+  const channelOrder = channelCount === 4 ? [3, 0, 1, 2] : [0, 1, 2];
+  for (const ch of channelOrder) {
+    const validMask = ch === 3 ? validMaskAlpha : validMaskColor;
+    computeMinMaxForChannel(ch, validMask);
     for (let i = 0; i < width * height; i++) {
-      const fm = featherMask[i] || 0;
+      const fm = selectionMask[i] || 0;
       if (fm === 0) continue;
 
-      const k = effectBase * (fm / 255);
+      const kBase = effectBase * (fm / 255);
+      const supportFactor = (ch === 3 ? (supportAlpha255[i] || 0) : (supportColor255[i] || 0)) / 255;
+      let k = kBase * supportFactor;
+      const p = i * 4;
+      if (hasAlpha && ch !== 3) k *= alphaToColorWeight01(pixels[p + 3] || 0);
       if (k <= 0) continue;
 
       const mn = minCh[i];
@@ -199,12 +347,44 @@ export async function processGradientRelax(
       const range = mx - mn;
       if (range < 2) continue;
 
-      const p = i * 4;
-      const v = pixels[p + ch];
+      if (hasAlpha && ch === 3 && amount < 0 && blurAlpha) {
+        const edge = smootherstep01(clamp01(range / 64));
+        const kA = k * edge;
+        if (kA > 0) {
+          const a0 = pixels[p + 3] || 0;
+          const ab = blurAlpha[i] || 0;
+          out[p + 3] = Math.round(a0 * (1 - kA) + ab * kA);
+        }
+        continue;
+      }
+
+      const v = workingPixels[p + ch];
       const tn = (v - mn) / range;
       const tn2 = clamp01(0.5 + (tn - 0.5) * contrast);
       const v2 = mn + tn2 * range;
       out[p + ch] = Math.round(v * (1 - k) + v2 * k);
+    }
+  }
+
+  if (hasAlpha) {
+    for (let i = 0; i < width * height; i++) {
+      const p = i * 4;
+      const a = out[p + 3] || 0;
+      if (a <= 1) {
+        out[p] = 0;
+        out[p + 1] = 0;
+        out[p + 2] = 0;
+        continue;
+      }
+      const rP = out[p] || 0;
+      const gP = out[p + 1] || 0;
+      const bP = out[p + 2] || 0;
+      const r = Math.round((rP * 255) / a);
+      const g = Math.round((gP * 255) / a);
+      const b = Math.round((bP * 255) / a);
+      out[p] = r > 255 ? 255 : (r < 0 ? 0 : r);
+      out[p + 1] = g > 255 ? 255 : (g < 0 ? 0 : g);
+      out[p + 2] = b > 255 ? 255 : (b < 0 ? 0 : b);
     }
   }
 
