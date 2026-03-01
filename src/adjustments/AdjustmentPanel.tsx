@@ -21,6 +21,22 @@ import { PanelStateManager } from '../utils/PanelStateManager';
 // 获取选区边界信息和文档信息（完全参考ClearHandler.getSelectionData）
 const getSelectionData = async () => {
   try {
+    const toPixels = (v: any, resolution: number) => {
+      if (typeof v === 'number') return Math.round(v);
+      const unit = v?._unit;
+      const value = v?._value;
+      if (typeof value !== 'number') return 0;
+      if (typeof unit === 'string') {
+        const u = unit.toLowerCase();
+        if (u.includes('pixel')) return Math.round(value);
+        if (u.includes('point') || u.includes('distance')) return Math.round(value * resolution / 72);
+        if (u.includes('inch')) return Math.round(value * resolution);
+        if (u.includes('cm')) return Math.round(value * resolution / 2.54);
+        if (u.includes('mm')) return Math.round(value * resolution / 25.4);
+      }
+      return Math.round(value);
+    };
+
     // batchplay获取文档信息和选区信息
     const [docResult, selectionResult] = await Promise.all([
       action.batchPlay([
@@ -53,13 +69,9 @@ const getSelectionData = async () => {
     ]);
     
     // 获取文档尺寸信息
-    const docWidth = docResult[0].width._value;
-    const docHeight = docResult[0].height._value;
-    const resolution = docResult[0].resolution._value;
-    
-    // 直接转换为像素单位
-    const docWidthPixels = Math.round(docWidth * resolution / 72);
-    const docHeightPixels = Math.round(docHeight * resolution / 72);
+    const resolution = Math.max(1, Math.round(docResult?.[0]?.resolution?._value ?? 72));
+    const docWidthPixels = toPixels(docResult?.[0]?.width, resolution);
+    const docHeightPixels = toPixels(docResult?.[0]?.height, resolution);
     
     // 检查是否有选区
     const hasSelection = selectionResult[0].selection !== undefined;
@@ -69,10 +81,10 @@ const getSelectionData = async () => {
     if (hasSelection) {
       // 有选区时，获取选区边界
       const bounds = selectionResult[0].selection;
-      left = Math.round(bounds.left._value);
-      top = Math.round(bounds.top._value);
-      right = Math.round(bounds.right._value);
-      bottom = Math.round(bounds.bottom._value);
+      left = toPixels(bounds.left, resolution);
+      top = toPixels(bounds.top, resolution);
+      right = toPixels(bounds.right, resolution);
+      bottom = toPixels(bounds.bottom, resolution);
       width = right - left;
       height = bottom - top;
     } else {
@@ -1107,40 +1119,8 @@ const handleBlockColorPatch = async () => {
       const autoDistance = Math.max(8, Math.min(24, Math.round(Math.sqrt(selArea) / 25)));
       const autoLineGrow = 2;
       const autoLineSensitivity = 8; // 稍微调高灵敏度，以覆盖线稿边缘虚色
-
-      const margin = Math.max(1, Math.min(200, Math.round(autoDistance + autoLineGrow + 2)));
-      const isFullDocSelection =
-        selectionBounds.left <= 0 &&
-        selectionBounds.top <= 0 &&
-        selectionBounds.right >= selectionBounds.docWidth &&
-        selectionBounds.bottom >= selectionBounds.docHeight;
-
-      const getLayerBounds = (l: any) => {
-        const b = l?.bounds;
-        const left = Math.round(b?.left ?? 0);
-        const top = Math.round(b?.top ?? 0);
-        const right = Math.round(b?.right ?? 0);
-        const bottom = Math.round(b?.bottom ?? 0);
-        return { left, top, right, bottom };
-      };
-
-      const layerBounds = getLayerBounds(layer);
-      const refBounds = getLayerBounds(refLayer);
-      const unionLeft = Math.min(layerBounds.left, refBounds.left, selectionBounds.left);
-      const unionTop = Math.min(layerBounds.top, refBounds.top, selectionBounds.top);
-      const unionRight = Math.max(layerBounds.right, refBounds.right, selectionBounds.right);
-      const unionBottom = Math.max(layerBounds.bottom, refBounds.bottom, selectionBounds.bottom);
-
-      const roiBase = isFullDocSelection
-        ? { left: unionLeft, top: unionTop, right: unionRight, bottom: unionBottom }
-        : { left: selectionBounds.left, top: selectionBounds.top, right: selectionBounds.right, bottom: selectionBounds.bottom };
-
-      const roiLeft = Math.max(0, roiBase.left - margin);
-      const roiTop = Math.max(0, roiBase.top - margin);
-      const roiRight = Math.min(selectionBounds.docWidth, roiBase.right + margin);
-      const roiBottom = Math.min(selectionBounds.docHeight, roiBase.bottom + margin);
-      const roiW = Math.max(1, roiRight - roiLeft);
-      const roiH = Math.max(1, roiBottom - roiTop);
+      const docW = selectionBounds.docWidth;
+      const docH = selectionBounds.docHeight;
 
       await runWithTemporaryUnlock(async () => {
         const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
@@ -1156,17 +1136,17 @@ const handleBlockColorPatch = async () => {
           documentID: doc.id,
           layerID: refLayer.id,
           sourceBounds: {
-            left: roiLeft,
-            top: roiTop,
-            right: roiLeft + roiW,
-            bottom: roiTop + roiH
+            left: 0,
+            top: 0,
+            right: docW,
+            bottom: docH
           },
-          targetSize: { width: roiW, height: roiH }
+          targetSize: { width: docW, height: docH }
         });
         const refRaw = new Uint8Array(await refPixels.imageData.getData());
         refPixels.imageData.dispose();
 
-        const pixelCount = roiW * roiH;
+        const pixelCount = docW * docH;
         const stride = pixelCount > 800_000 ? 7 : (pixelCount > 200_000 ? 5 : 3);
         let sampled = 0;
         let visible = 0;
@@ -1216,7 +1196,6 @@ const handleBlockColorPatch = async () => {
           pixelResult.fullPixelData.buffer,
           fullSelectionMask.buffer,
           { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
-          { left: roiLeft, top: roiTop, width: roiW, height: roiH },
           refRaw.buffer,
           {
             maxDistance: autoDistance,
