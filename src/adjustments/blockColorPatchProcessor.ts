@@ -162,6 +162,50 @@ function closeBinaryMask(mask: Uint8Array, w: number, h: number, radius: number)
   return erodeBinaryMask(dilated, w, h, radius);
 }
 
+function estimateBinaryMaskHalfWidth(mask: Uint8Array, w: number, h: number, cap: number): number {
+  const size = w * h;
+  if (size <= 0) return 1;
+  const dist = new Uint8Array(size);
+  dist.fill(255);
+  const q = new Uint32Array(size);
+  let head = 0;
+  let tail = 0;
+
+  for (let i = 0; i < size; i++) {
+    if (!mask[i]) {
+      dist[i] = 0;
+      q[tail++] = i;
+    }
+  }
+  if (tail === 0) return clampInt(cap, 1, cap);
+
+  while (head < tail) {
+    const i = q[head++] as number;
+    const d = dist[i] as number;
+    if (d >= cap) continue;
+    const x = i % w;
+    const y = (i - x) / w;
+    const nd = (d + 1) as any;
+    const push = (ni: number) => {
+      if ((dist[ni] as number) <= nd) return;
+      dist[ni] = nd;
+      q[tail++] = ni;
+    };
+    if (x > 0) push(i - 1);
+    if (x + 1 < w) push(i + 1);
+    if (y > 0) push(i - w);
+    if (y + 1 < h) push(i + w);
+  }
+
+  let maxD = 1;
+  for (let i = 0; i < size; i++) {
+    if (!mask[i]) continue;
+    const d = dist[i] as number;
+    if (d !== 255 && d > maxD) maxD = d;
+  }
+  return clampInt(maxD, 1, cap);
+}
+
 function floodFillOutsideRegion(barrier: Uint8Array, w: number, h: number): Uint8Array {
   const size = w * h;
   const outside = new Uint8Array(size);
@@ -242,6 +286,8 @@ export async function processBlockColorPatch(
   }
   const alphaCoverage = alphaCount / Math.max(1, regionSize);
   const effectiveLineAlphaThreshold = alphaCoverage < 0.22 ? 1 : lineAlphaThreshold;
+
+  const adaptiveLineYThreshold = computeAdaptiveLineThreshold(lineRGBA, regionSize, effectiveLineAlphaThreshold, lineSensitivity);
 
   let lineCount = 0;
   if (alphaCoverage > 0.45) {
@@ -345,6 +391,11 @@ export async function processBlockColorPatch(
       const g = lineRGBA[p + 1] || 0;
       const b = lineRGBA[p + 2] || 0;
       const y = luminance8(r, g, b);
+      if (y <= adaptiveLineYThreshold) {
+        barrier0[i] = 1;
+        lineCount++;
+        continue;
+      }
       const yDiff = y >= bgY ? y - bgY : bgY - y;
       const rgbDiff = (r >= bgR ? r - bgR : bgR - r) + (g >= bgG ? g - bgG : bgG - g) + (b >= bgB ? b - bgB : bgB - b);
       let edgeLike = false;
@@ -378,23 +429,29 @@ export async function processBlockColorPatch(
   const lineCoverage = lineCount / Math.max(1, regionSize);
   const growAdjust = lineCoverage > 0.08 ? 1 : (lineCoverage < 0.02 ? -1 : 0);
   const tunedLineGrow = clampInt(lineGrow + growAdjust, 0, 6);
-  // 大幅降低 barrierForOutside 的膨胀幅度，防止堵死线稿外部通路导致溢出
-  const barrierForOutsideBase = dilateBinaryMask(barrier0, regionW, regionH, Math.min(3, Math.max(1, tunedLineGrow)));
-  const closeRadius = clampInt(tunedLineGrow + 1, 1, 3);
-  const barrierForOutside = closeBinaryMask(barrierForOutsideBase, regionW, regionH, closeRadius);
+
+  const lineHalfWidth = estimateBinaryMaskHalfWidth(barrier0, regionW, regionH, 8);
+  const lineScale = clampInt(lineHalfWidth, 1, 6);
+
+  const outsideBarrierDilate = clampInt(lineScale, 1, 4);
+  const barrierForOutsideBase = dilateBinaryMask(barrier0, regionW, regionH, outsideBarrierDilate);
+  const barrierForOutsideClose = clampInt(Math.round(Math.max(1, lineScale * 0.75)), 1, 3);
+  const barrierForOutside = closeBinaryMask(barrierForOutsideBase, regionW, regionH, barrierForOutsideClose);
   const outside = floodFillOutsideRegion(barrierForOutside, regionW, regionH);
-  const inside = new Uint8Array(regionSize);
+  const outsideNear = dilateBinaryMask(outside, regionW, regionH, clampInt(lineScale, 1, 4));
+  const outerBarrier = new Uint8Array(regionSize);
   for (let i = 0; i < regionSize; i++) {
-    inside[i] = outside[i] || barrier0[i] ? 0 : 1;
+    outerBarrier[i] = barrierForOutside[i] && outsideNear[i] ? 1 : 0;
   }
-  // 取消内缩，以便补满尖角细缝；依赖 barrier0 本身作为边界
-  const paintLimit = inside;
-  // barrierCross 不膨胀，允许颜色流进细缝，但利用 barrier0 阻挡
+
+  const paintLimit = new Uint8Array(regionSize);
+  for (let i = 0; i < regionSize; i++) {
+    paintLimit[i] = outside[i] || outerBarrier[i] || barrier0[i] ? 0 : 1;
+  }
   const barrierCross = barrier0;
 
   const selectionROI = new Uint8Array(regionSize);
   let selectedCount = 0;
-  let selectedOutsideCount = 0;
   for (let ry = 0; ry < regionH; ry++) {
     const docY = roiTop + ry;
     const rowBase = docY * docW;
@@ -406,20 +463,17 @@ export async function processBlockColorPatch(
       selectedCount++;
       const ri = regionRow + rx;
       selectionROI[ri] = 1;
-      if (outside[ri]) selectedOutsideCount++;
     }
   }
   const initialSelectionRatio = selectedCount / Math.max(1, regionSize);
   const useAutoFillArea = selectedCount === 0 || initialSelectionRatio > 0.985;
 
   let finalSelectedCount = 0;
-  let finalSelectedOutsideCount = 0;
   if (useAutoFillArea) {
     selectionROI.set(paintLimit);
     for (let i = 0; i < regionSize; i++) {
       if (!selectionROI[i]) continue;
       finalSelectedCount++;
-      if (outside[i]) finalSelectedOutsideCount++;
     }
   } else {
     for (let i = 0; i < regionSize; i++) {
@@ -429,31 +483,9 @@ export async function processBlockColorPatch(
         continue;
       }
       finalSelectedCount++;
-      if (outside[i]) finalSelectedOutsideCount++;
     }
   }
   selectedCount = finalSelectedCount;
-  selectedOutsideCount = finalSelectedOutsideCount;
-
-  if (selectedCount > 0 && selectedOutsideCount / selectedCount > 0.85) {
-    outside.fill(0);
-  }
-
-  let relaxRadius = 0;
-  if (selectedCount > 0) {
-    const outsideRatio = selectedOutsideCount / selectedCount;
-    if (outsideRatio > 0.12 || lineCoverage < 0.015) {
-      relaxRadius = clampInt(tunedLineGrow + (outsideRatio > 0.35 ? 2 : 1), 1, 4);
-    }
-  }
-  const nearLineRelax = relaxRadius > 0 ? dilateBinaryMask(barrier0, regionW, regionH, relaxRadius) : null;
-
-  const isOutsideBlocked = (ri: number) => {
-    if (!outside[ri]) return false;
-    if (!nearLineRelax) return true;
-    if (!selectionROI[ri]) return true;
-    return !nearLineRelax[ri];
-  };
 
   const allowRadius = clampInt(Math.round(maxDistance + 2), 2, 80);
   let allowedROI: Uint8Array;
@@ -474,6 +506,9 @@ export async function processBlockColorPatch(
   let tail = 0;
 
   let seedCount = 0;
+  const nearLineBandRadius = clampInt(lineScale, 1, 6);
+  const nearLineBand = dilateBinaryMask(barrierForOutside, regionW, regionH, nearLineBandRadius);
+  const nearLineOverwriteAlphaThreshold = clampInt(200 + lineScale * 8, 200, 235);
 
   const isNearLine = (rx: number, ry: number, ri: number) => {
     if (barrier0[ri]) return true;
@@ -493,7 +528,6 @@ export async function processBlockColorPatch(
         const ri = regionRow + rx;
         if (!allowedROI[ri]) continue;
         if (barrierCross[ri]) continue;
-        if (isOutsideBlocked(ri)) continue;
         if (forbidNearLine && isNearLine(rx, ry, ri)) continue;
         const docX = roiLeft + rx;
         const docIdx = rowBase + docX;
@@ -528,7 +562,6 @@ export async function processBlockColorPatch(
     const tryVisit = (nrx: number, nry: number, nRi: number) => {
       if (dist[nRi] !== 0xffff) return;
       if (barrierCross[nRi]) return;
-      if (isOutsideBlocked(nRi)) return;
       if (!allowedROI[nRi]) return;
       const docX = roiLeft + nrx;
       const docY = roiTop + nry;
@@ -556,9 +589,9 @@ export async function processBlockColorPatch(
       if (!selectionROI[ri]) continue;
       const pi = docIdx * 4;
       const a = base[pi + 3] || 0;
-      if (a > emptyAlphaThreshold) continue;
+      const overwriteLimit = nearLineBand[ri] ? nearLineOverwriteAlphaThreshold : emptyAlphaThreshold;
+      if (a > overwriteLimit) continue;
       if (dist[ri] === 0xffff) continue;
-      if (isOutsideBlocked(ri)) continue;
       const c = colorPacked[ri] || 0;
       if (c === 0) continue;
       result[pi] = unpackR(c);

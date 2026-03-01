@@ -290,21 +290,39 @@ useEffect(() => {
 }, [lineReferenceLayerId, lineReferenceLayerName]);
 
 useEffect(() => {
-  const handleNotification = async () => {
+  let timer: any = 0;
+  const scheduleRefresh = (docOverride?: any) => {
+    if (timer) return;
+    timer = setTimeout(() => {
+      timer = 0;
+      refreshLineReferenceOptions(docOverride);
+    }, 80);
+  };
+  const handleNotification = async (eventName?: any) => {
     try {
       const doc = app.activeDocument;
       const layers = doc?.layers || [];
       const docId = doc?.id ?? null;
       const hash = computeLayerSignature(layers);
       const prev = lineReferenceSignatureRef.current;
-      if (prev.docId !== docId || prev.hash !== hash) {
-        refreshLineReferenceOptions(doc);
+      const evt = typeof eventName === 'string' ? eventName : '';
+      if (evt === 'make' || evt === 'delete') {
+        scheduleRefresh(doc);
+        return;
       }
-    } catch {}
+      if (prev.docId !== docId || prev.hash !== hash) {
+        scheduleRefresh(doc);
+      }
+    } catch {
+      scheduleRefresh();
+    }
   };
-  action.addNotificationListener(['set', 'select', 'delete', 'make'], handleNotification);
+  action.addNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], handleNotification);
   return () => {
-    action.removeNotificationListener(['set', 'select', 'delete', 'make'], handleNotification);
+    try {
+      if (timer) clearTimeout(timer);
+    } catch {}
+    action.removeNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], handleNotification);
   };
 }, []);
 
@@ -1207,7 +1225,18 @@ const handleBlockColorPatch = async () => {
           }
         );
 
-        await applyProcessedPixels(processedPixels, pixelResult);
+        const processedPixelsArray = processedPixels instanceof Uint8Array ? processedPixels : new Uint8Array(processedPixels as any);
+        const coeffLen = pixelResult.selectionBounds.selectionCoefficients?.length || 0;
+        const selectionCoefficients = coeffLen > 0 ? new Float32Array(coeffLen) : new Float32Array(0);
+        selectionCoefficients.fill(1);
+        const resultForWriteback = {
+          ...pixelResult,
+          selectionBounds: {
+            ...pixelResult.selectionBounds,
+            selectionCoefficients
+          }
+        };
+        await applyProcessedPixels(processedPixelsArray, resultForWriteback as any);
       });
     });
     giveFocusBackToPS();
