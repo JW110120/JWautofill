@@ -1088,13 +1088,39 @@ const handleBlockColorPatch = async () => {
       const selArea = Math.max(1, Math.round(selectionBounds.width) * Math.round(selectionBounds.height));
       const autoDistance = Math.max(8, Math.min(24, Math.round(Math.sqrt(selArea) / 25)));
       const autoLineGrow = 2;
-      const autoLineSensitivity = 7;
+      const autoLineSensitivity = 8; // 稍微调高灵敏度，以覆盖线稿边缘虚色
 
       const margin = Math.max(1, Math.min(200, Math.round(autoDistance + autoLineGrow + 2)));
-      const roiLeft = Math.max(0, selectionBounds.left - margin);
-      const roiTop = Math.max(0, selectionBounds.top - margin);
-      const roiRight = Math.min(selectionBounds.docWidth, selectionBounds.right + margin);
-      const roiBottom = Math.min(selectionBounds.docHeight, selectionBounds.bottom + margin);
+      const isFullDocSelection =
+        selectionBounds.left <= 0 &&
+        selectionBounds.top <= 0 &&
+        selectionBounds.right >= selectionBounds.docWidth &&
+        selectionBounds.bottom >= selectionBounds.docHeight;
+
+      const getLayerBounds = (l: any) => {
+        const b = l?.bounds;
+        const left = Math.round(b?.left ?? 0);
+        const top = Math.round(b?.top ?? 0);
+        const right = Math.round(b?.right ?? 0);
+        const bottom = Math.round(b?.bottom ?? 0);
+        return { left, top, right, bottom };
+      };
+
+      const layerBounds = getLayerBounds(layer);
+      const refBounds = getLayerBounds(refLayer);
+      const unionLeft = Math.min(layerBounds.left, refBounds.left, selectionBounds.left);
+      const unionTop = Math.min(layerBounds.top, refBounds.top, selectionBounds.top);
+      const unionRight = Math.max(layerBounds.right, refBounds.right, selectionBounds.right);
+      const unionBottom = Math.max(layerBounds.bottom, refBounds.bottom, selectionBounds.bottom);
+
+      const roiBase = isFullDocSelection
+        ? { left: unionLeft, top: unionTop, right: unionRight, bottom: unionBottom }
+        : { left: selectionBounds.left, top: selectionBounds.top, right: selectionBounds.right, bottom: selectionBounds.bottom };
+
+      const roiLeft = Math.max(0, roiBase.left - margin);
+      const roiTop = Math.max(0, roiBase.top - margin);
+      const roiRight = Math.min(selectionBounds.docWidth, roiBase.right + margin);
+      const roiBottom = Math.min(selectionBounds.docHeight, roiBase.bottom + margin);
       const roiW = Math.max(1, roiRight - roiLeft);
       const roiH = Math.max(1, roiBottom - roiTop);
 
@@ -1124,8 +1150,8 @@ const handleBlockColorPatch = async () => {
 
         const pixelCount = roiW * roiH;
         const stride = pixelCount > 800_000 ? 7 : (pixelCount > 200_000 ? 5 : 3);
-        let lineLike = 0;
         let sampled = 0;
+        let visible = 0;
         const bpp = pixelCount > 0 ? refRaw.length / pixelCount : 0;
         const getRGBA = (i: number) => {
           if (bpp === 4) {
@@ -1139,14 +1165,32 @@ const handleBlockColorPatch = async () => {
           return { r: 0, g: 0, b: 0, a: 0 };
         };
         const luminance8 = (r: number, g: number, b: number) => ((r * 54 + g * 183 + b * 19) / 256) | 0;
+        const hist = new Uint32Array(256);
         for (let i = 0; i < pixelCount; i += stride) {
-          const { r, g, b, a } = getRGBA(i);
-          if (a <= 8) continue;
           sampled++;
-          if (luminance8(r, g, b) <= 90) lineLike++;
+          const { r, g, b, a } = getRGBA(i);
+          if (a > 8) {
+            visible++;
+            hist[luminance8(r, g, b)] += 1;
+          }
         }
-        if (sampled > 0 && lineLike / sampled < 0.01) {
-          await core.showAlert({ message: '线稿参考层疑似不是线稿（可见暗线太少），建议在“线稿参考”下拉中改选线稿图层。' });
+        if (sampled > 0) {
+          const visibleRatio = visible / sampled;
+          if (visibleRatio < 0.0006) {
+            await core.showAlert({ message: '线稿参考层疑似不是线稿（可见线像素太少），建议在“线稿参考”下拉中改选线稿图层。' });
+            return;
+          }
+          if (visibleRatio > 0.75) {
+            let peak = 0;
+            for (let y = 0; y < 256; y++) peak = Math.max(peak, hist[y] || 0);
+            const peakRatio = peak / Math.max(1, visible);
+            if (peakRatio < 0.35) {
+              await core.showAlert({ message: '线稿参考层疑似不是线稿（可见像素太多且颜色变化较大），建议在“线稿参考”下拉中改选线稿图层。' });
+              return;
+            }
+          }
+        } else {
+          await core.showAlert({ message: '线稿参考层疑似不是线稿（无法采样像素），建议在“线稿参考”下拉中改选线稿图层。' });
           return;
         }
 

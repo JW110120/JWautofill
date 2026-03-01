@@ -234,19 +234,143 @@ export async function processBlockColorPatch(
   const seedAlphaThreshold = clampInt(Math.round(params.seedAlphaThreshold ?? 16), 0, 255);
   const lineAlphaThreshold = clampInt(Math.round(params.lineAlphaThreshold ?? 8), 0, 255);
 
-  const lineThreshold = computeAdaptiveLineThreshold(lineRGBA, regionSize, lineAlphaThreshold, lineSensitivity);
-
   const barrier0 = new Uint8Array(regionSize);
-  let lineCount = 0;
+  let alphaCount = 0;
   for (let i = 0; i < regionSize; i++) {
-    const p = i * 4;
-    const a = lineRGBA[p + 3] || 0;
-    if (a <= lineAlphaThreshold) continue;
-    const r = lineRGBA[p] || 0;
-    const g = lineRGBA[p + 1] || 0;
-    const b = lineRGBA[p + 2] || 0;
-    const y = luminance8(r, g, b);
-    if (y <= lineThreshold) {
+    const a = lineRGBA[i * 4 + 3] || 0;
+    if (a > lineAlphaThreshold) alphaCount++;
+  }
+  const alphaCoverage = alphaCount / Math.max(1, regionSize);
+  const effectiveLineAlphaThreshold = alphaCoverage < 0.22 ? 1 : lineAlphaThreshold;
+
+  let lineCount = 0;
+  if (alphaCoverage > 0.45) {
+    const stride = regionSize > 800_000 ? 6 : (regionSize > 200_000 ? 4 : 2);
+    const hist = new Uint32Array(256);
+    let sampled = 0;
+    for (let i = 0; i < regionSize; i += stride) {
+      const p = i * 4;
+      const a = lineRGBA[p + 3] || 0;
+      if (a <= effectiveLineAlphaThreshold) continue;
+      const y = luminance8(lineRGBA[p] || 0, lineRGBA[p + 1] || 0, lineRGBA[p + 2] || 0);
+      hist[y] += 1;
+      sampled++;
+    }
+    let bgY = 255;
+    if (sampled > 0) {
+      let best = 0;
+      for (let y = 0; y < 256; y++) {
+        const c = hist[y] || 0;
+        if (c > best) {
+          best = c;
+          bgY = y;
+        }
+      }
+    }
+
+    let bgR = 255;
+    let bgG = 255;
+    let bgB = 255;
+    let bgCnt = 0;
+    let sumR = 0;
+    let sumG = 0;
+    let sumB = 0;
+    const bgLo = clampInt(bgY - 2, 0, 255);
+    const bgHi = clampInt(bgY + 2, 0, 255);
+    for (let i = 0; i < regionSize; i += stride) {
+      const p = i * 4;
+      const a = lineRGBA[p + 3] || 0;
+      if (a <= effectiveLineAlphaThreshold) continue;
+      const r = lineRGBA[p] || 0;
+      const g = lineRGBA[p + 1] || 0;
+      const b = lineRGBA[p + 2] || 0;
+      const y = luminance8(r, g, b);
+      if (y < bgLo || y > bgHi) continue;
+      sumR += r;
+      sumG += g;
+      sumB += b;
+      bgCnt++;
+    }
+    if (bgCnt > 0) {
+      bgR = (sumR / bgCnt) | 0;
+      bgG = (sumG / bgCnt) | 0;
+      bgB = (sumB / bgCnt) | 0;
+    }
+
+    const sens = clampInt(Math.round(lineSensitivity || 6), 1, 10);
+    const yDiffThreshold = clampInt(12 + (10 - sens) * 6, 10, 90);
+    const rgbDiffThreshold = clampInt(yDiffThreshold * 3, 30, 240);
+    const diffHist = new Uint32Array(256);
+    let diffSampled = 0;
+    for (let i = 0; i < regionSize; i += stride) {
+      const p = i * 4;
+      const a = lineRGBA[p + 3] || 0;
+      if (a <= effectiveLineAlphaThreshold) continue;
+      const x = i % regionW;
+      const y = (i - x) / regionW;
+      const y0 = luminance8(lineRGBA[p] || 0, lineRGBA[p + 1] || 0, lineRGBA[p + 2] || 0);
+      if (x + 1 < regionW) {
+        const pr = p + 4;
+        const y1 = luminance8(lineRGBA[pr] || 0, lineRGBA[pr + 1] || 0, lineRGBA[pr + 2] || 0);
+        const d = y1 >= y0 ? y1 - y0 : y0 - y1;
+        diffHist[d] += 1;
+        diffSampled++;
+      }
+      if (y + 1 < regionH) {
+        const pd = p + regionW * 4;
+        const y2 = luminance8(lineRGBA[pd] || 0, lineRGBA[pd + 1] || 0, lineRGBA[pd + 2] || 0);
+        const d = y2 >= y0 ? y2 - y0 : y0 - y2;
+        diffHist[d] += 1;
+        diffSampled++;
+      }
+    }
+    let qDiff = 16;
+    if (diffSampled > 64) {
+      const target = Math.max(1, Math.floor(diffSampled * 0.92));
+      let acc = 0;
+      for (let d = 0; d < 256; d++) {
+        acc += diffHist[d] || 0;
+        if (acc >= target) {
+          qDiff = d;
+          break;
+        }
+      }
+    }
+    const edgeDiffThreshold = clampInt(Math.max(6, qDiff - 4 - (sens - 6) * 2), 4, 60);
+    for (let i = 0; i < regionSize; i++) {
+      const p = i * 4;
+      const a = lineRGBA[p + 3] || 0;
+      if (a <= effectiveLineAlphaThreshold) continue;
+      const r = lineRGBA[p] || 0;
+      const g = lineRGBA[p + 1] || 0;
+      const b = lineRGBA[p + 2] || 0;
+      const y = luminance8(r, g, b);
+      const yDiff = y >= bgY ? y - bgY : bgY - y;
+      const rgbDiff = (r >= bgR ? r - bgR : bgR - r) + (g >= bgG ? g - bgG : bgG - g) + (b >= bgB ? b - bgB : bgB - b);
+      let edgeLike = false;
+      const x = i % regionW;
+      const yy = (i - x) / regionW;
+      if (x + 1 < regionW) {
+        const pr = p + 4;
+        const y1 = luminance8(lineRGBA[pr] || 0, lineRGBA[pr + 1] || 0, lineRGBA[pr + 2] || 0);
+        const d = y1 >= y ? y1 - y : y - y1;
+        if (d >= edgeDiffThreshold) edgeLike = true;
+      }
+      if (!edgeLike && yy + 1 < regionH) {
+        const pd = p + regionW * 4;
+        const y2 = luminance8(lineRGBA[pd] || 0, lineRGBA[pd + 1] || 0, lineRGBA[pd + 2] || 0);
+        const d = y2 >= y ? y2 - y : y - y2;
+        if (d >= edgeDiffThreshold) edgeLike = true;
+      }
+      if (yDiff >= yDiffThreshold || rgbDiff >= rgbDiffThreshold || edgeLike) {
+        barrier0[i] = 1;
+        lineCount++;
+      }
+    }
+  } else {
+    for (let i = 0; i < regionSize; i++) {
+      const a = lineRGBA[i * 4 + 3] || 0;
+      if (a <= effectiveLineAlphaThreshold) continue;
       barrier0[i] = 1;
       lineCount++;
     }
@@ -254,10 +378,19 @@ export async function processBlockColorPatch(
   const lineCoverage = lineCount / Math.max(1, regionSize);
   const growAdjust = lineCoverage > 0.08 ? 1 : (lineCoverage < 0.02 ? -1 : 0);
   const tunedLineGrow = clampInt(lineGrow + growAdjust, 0, 6);
-  const barrier = dilateBinaryMask(barrier0, regionW, regionH, Math.min(6, tunedLineGrow + 1));
-  const closeRadius = clampInt(tunedLineGrow + 2, 2, 5);
-  const barrierForOutside = closeBinaryMask(barrier, regionW, regionH, closeRadius);
+  // 大幅降低 barrierForOutside 的膨胀幅度，防止堵死线稿外部通路导致溢出
+  const barrierForOutsideBase = dilateBinaryMask(barrier0, regionW, regionH, Math.min(3, Math.max(1, tunedLineGrow)));
+  const closeRadius = clampInt(tunedLineGrow + 1, 1, 3);
+  const barrierForOutside = closeBinaryMask(barrierForOutsideBase, regionW, regionH, closeRadius);
   const outside = floodFillOutsideRegion(barrierForOutside, regionW, regionH);
+  const inside = new Uint8Array(regionSize);
+  for (let i = 0; i < regionSize; i++) {
+    inside[i] = outside[i] || barrier0[i] ? 0 : 1;
+  }
+  // 取消内缩，以便补满尖角细缝；依赖 barrier0 本身作为边界
+  const paintLimit = inside;
+  // barrierCross 不膨胀，允许颜色流进细缝，但利用 barrier0 阻挡
+  const barrierCross = barrier0;
 
   const selectionROI = new Uint8Array(regionSize);
   let selectedCount = 0;
@@ -276,6 +409,32 @@ export async function processBlockColorPatch(
       if (outside[ri]) selectedOutsideCount++;
     }
   }
+  const initialSelectionRatio = selectedCount / Math.max(1, regionSize);
+  const useAutoFillArea = selectedCount === 0 || initialSelectionRatio > 0.985;
+
+  let finalSelectedCount = 0;
+  let finalSelectedOutsideCount = 0;
+  if (useAutoFillArea) {
+    selectionROI.set(paintLimit);
+    for (let i = 0; i < regionSize; i++) {
+      if (!selectionROI[i]) continue;
+      finalSelectedCount++;
+      if (outside[i]) finalSelectedOutsideCount++;
+    }
+  } else {
+    for (let i = 0; i < regionSize; i++) {
+      if (!selectionROI[i]) continue;
+      if (!paintLimit[i]) {
+        selectionROI[i] = 0;
+        continue;
+      }
+      finalSelectedCount++;
+      if (outside[i]) finalSelectedOutsideCount++;
+    }
+  }
+  selectedCount = finalSelectedCount;
+  selectedOutsideCount = finalSelectedOutsideCount;
+
   if (selectedCount > 0 && selectedOutsideCount / selectedCount > 0.85) {
     outside.fill(0);
   }
@@ -297,7 +456,15 @@ export async function processBlockColorPatch(
   };
 
   const allowRadius = clampInt(Math.round(maxDistance + 2), 2, 80);
-  const allowedROI = dilateBinaryMask(selectionROI, regionW, regionH, allowRadius);
+  let allowedROI: Uint8Array;
+  if (useAutoFillArea) {
+    allowedROI = paintLimit;
+  } else {
+    allowedROI = dilateBinaryMask(selectionROI, regionW, regionH, allowRadius);
+    for (let i = 0; i < regionSize; i++) {
+      if (!paintLimit[i]) allowedROI[i] = 0;
+    }
+  }
 
   const dist = new Uint16Array(regionSize);
   dist.fill(0xffff);
@@ -325,7 +492,7 @@ export async function processBlockColorPatch(
       for (let rx = 0; rx < regionW; rx++) {
         const ri = regionRow + rx;
         if (!allowedROI[ri]) continue;
-        if (barrier[ri]) continue;
+        if (barrierCross[ri]) continue;
         if (isOutsideBlocked(ri)) continue;
         if (forbidNearLine && isNearLine(rx, ry, ri)) continue;
         const docX = roiLeft + rx;
@@ -360,7 +527,7 @@ export async function processBlockColorPatch(
 
     const tryVisit = (nrx: number, nry: number, nRi: number) => {
       if (dist[nRi] !== 0xffff) return;
-      if (barrier[nRi]) return;
+      if (barrierCross[nRi]) return;
       if (isOutsideBlocked(nRi)) return;
       if (!allowedROI[nRi]) return;
       const docX = roiLeft + nrx;
@@ -383,7 +550,7 @@ export async function processBlockColorPatch(
     const regionRow = ry * regionW;
     for (let rx = 0; rx < regionW; rx++) {
       const ri = regionRow + rx;
-      if (barrier[ri]) continue;
+      if (barrierCross[ri]) continue;
       const docX = roiLeft + rx;
       const docIdx = rowBase + docX;
       if (!selectionROI[ri]) continue;
