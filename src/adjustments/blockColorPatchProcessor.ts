@@ -318,7 +318,7 @@ export async function processBlockColorPatch(
   if (base.length !== docW * docH * 4) return result;
 
   // 参数保护：maxDistance 为 0 代表不做补色，直接返回原图。
-  const maxDistance = clampInt(Math.round(params.maxDistance || 0), 0, 200);
+  let maxDistance = clampInt(Math.round(params.maxDistance || 0), 0, 200);
   if (maxDistance <= 0) return result;
 
   const regionW = docW;
@@ -337,22 +337,32 @@ export async function processBlockColorPatch(
   // barrier0：线稿边界二值图（1=边界/不可跨越，0=可通行）。
   const barrier0 = new Uint8Array(regionSize);
   const effectiveLineAlphaThreshold = lineAlphaThreshold;
+  const lineLumaThreshold = computeAdaptiveLineThreshold(lineRGBA, regionSize, effectiveLineAlphaThreshold, params.lineSensitivity || 6);
 
-  // 第一步：从线稿参考里提取边界 barrier0（只按 alpha 判断）。
+  // 第一步：从线稿参考里提取边界 barrier0（按 alpha + 亮度判断）。
   for (let i = 0; i < regionSize; i++) {
-    const a = lineRGBA[i * 4 + 3] || 0;
+    const p = i * 4;
+    const a = lineRGBA[p + 3] || 0;
     if (a <= effectiveLineAlphaThreshold) continue;
-    barrier0[i] = 1;
+    const y = luminance8(lineRGBA[p] || 0, lineRGBA[p + 1] || 0, lineRGBA[p + 2] || 0);
+    if (y <= lineLumaThreshold) barrier0[i] = 1;
   }
 
   const lineHalfWidth = estimateBinaryMaskHalfWidth(barrier0, regionW, regionH, 8);
   const lineScale = clampInt(lineHalfWidth, 1, 6);
-  const barrierCross = barrier0;
+  maxDistance = clampInt(maxDistance, 0, Math.max(4, lineHalfWidth * 4));
+  if (maxDistance <= 0) return result;
 
-  const outside = floodFillOutsideRegion(barrier0, regionW, regionH);
+  const grow = clampInt(Math.round(params.lineGrow || 0), 0, 10);
+  const closeRadius = lineHalfWidth >= 2 ? 1 : 0;
+  let barrierCross = barrier0;
+  if (closeRadius > 0) barrierCross = closeBinaryMask(barrierCross, regionW, regionH, closeRadius);
+  if (grow > 0) barrierCross = dilateBinaryMask(barrierCross, regionW, regionH, grow);
+
+  const outside = floodFillOutsideRegion(barrierCross, regionW, regionH);
   const paintLimit = new Uint8Array(regionSize);
   for (let i = 0; i < regionSize; i++) {
-    paintLimit[i] = outside[i] || barrier0[i] ? 0 : 1;
+    paintLimit[i] = outside[i] || barrierCross[i] ? 0 : 1;
   }
 
   const selectionROI = new Uint8Array(regionSize);
@@ -379,11 +389,11 @@ export async function processBlockColorPatch(
       const x = i % regionW;
       const y = (i - x) / regionW;
       let near = false;
-      if (barrier0[i]) near = true;
-      else if (x > 0 && barrier0[i - 1]) near = true;
-      else if (x + 1 < regionW && barrier0[i + 1]) near = true;
-      else if (y > 0 && barrier0[i - regionW]) near = true;
-      else if (y + 1 < regionH && barrier0[i + regionW]) near = true;
+      if (barrierCross[i]) near = true;
+      else if (x > 0 && barrierCross[i - 1]) near = true;
+      else if (x + 1 < regionW && barrierCross[i + 1]) near = true;
+      else if (y > 0 && barrierCross[i - regionW]) near = true;
+      else if (y + 1 < regionH && barrierCross[i + regionW]) near = true;
       if (!near) {
         seedIndexNotNearLine = i;
         break;
@@ -454,11 +464,11 @@ export async function processBlockColorPatch(
   // 第五步：收集“种子颜色”（颜色传播的起点）。
   // 默认尽量避免贴线取样，减少把线色/灰边当作颜色源点带来的污染。
   const isNearLine = (rx: number, ry: number, ri: number) => {
-    if (barrier0[ri]) return true;
-    if (rx > 0 && barrier0[ri - 1]) return true;
-    if (rx + 1 < regionW && barrier0[ri + 1]) return true;
-    if (ry > 0 && barrier0[ri - regionW]) return true;
-    if (ry + 1 < regionH && barrier0[ri + regionW]) return true;
+    if (barrierCross[ri]) return true;
+    if (rx > 0 && barrierCross[ri - 1]) return true;
+    if (rx + 1 < regionW && barrierCross[ri + 1]) return true;
+    if (ry > 0 && barrierCross[ri - regionW]) return true;
+    if (ry + 1 < regionH && barrierCross[ri + regionW]) return true;
     return false;
   };
 
@@ -521,9 +531,16 @@ export async function processBlockColorPatch(
   // 第七步：写回结果。
   // 仅对 selectionROI 内的像素写回，并且只覆盖原本“很透明/接近空”的像素，避免破坏已有涂色。
   for (let ri = 0; ri < regionSize; ri++) {
-    if (!selectionROI[ri] && !(useAutoFillArea && barrierCross[ri])) continue;
     const rx = ri % regionW;
     const ry = (ri - rx) / regionW;
+    let writeOK = (allowedROI[ri] || 0) !== 0;
+    if (!writeOK && barrierCross[ri]) {
+      if (rx > 0 && allowedROI[ri - 1]) writeOK = true;
+      else if (rx + 1 < regionW && allowedROI[ri + 1]) writeOK = true;
+      else if (ry > 0 && allowedROI[ri - regionW]) writeOK = true;
+      else if (ry + 1 < regionH && allowedROI[ri + regionW]) writeOK = true;
+    }
+    if (!writeOK) continue;
     const pi = ri * 4;
     const a = base[pi + 3] || 0;
 

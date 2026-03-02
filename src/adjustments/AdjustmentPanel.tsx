@@ -182,6 +182,7 @@ const getSelectionData = async () => {
     console.log('✅ 选区内像素数量（selectionDocIndices.size）:', selectionDocIndices.size);
     
     return {
+      hasSelection,
       left,
       top,
       right,
@@ -1094,8 +1095,8 @@ const handleBlockColorPatch = async () => {
       }
 
       const { layer, isBackgroundLayer } = editingState;
-      const selectionBounds = await getSelectionData();
-      if (!selectionBounds) {
+      const initialSelectionBounds = await getSelectionData();
+      if (!initialSelectionBounds) {
         await core.showAlert({ message: '获取文档信息失败' });
         return;
       }
@@ -1115,23 +1116,12 @@ const handleBlockColorPatch = async () => {
         return;
       }
 
-      const selArea = Math.max(1, Math.round(selectionBounds.width) * Math.round(selectionBounds.height));
-      const autoDistance = Math.max(8, Math.min(24, Math.round(Math.sqrt(selArea) / 25)));
       const autoLineGrow = 2;
       const autoLineSensitivity = 8; // 稍微调高灵敏度，以覆盖线稿边缘虚色
-      const docW = selectionBounds.docWidth;
-      const docH = selectionBounds.docHeight;
+      const docW = initialSelectionBounds.docWidth;
+      const docH = initialSelectionBounds.docHeight;
 
       await runWithTemporaryUnlock(async () => {
-        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
-
-        const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
-        let maskIndex = 0;
-        for (let docIndex of pixelResult.selectionIndices) {
-          fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
-          maskIndex++;
-        }
-
         const refPixels = await imaging.getPixels({
           documentID: doc.id,
           layerID: refLayer.id,
@@ -1192,30 +1182,182 @@ const handleBlockColorPatch = async () => {
           return;
         }
 
-        const processedPixels = await processBlockColorPatch(
-          pixelResult.fullPixelData.buffer,
-          fullSelectionMask.buffer,
-          { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
-          refRaw.buffer,
-          {
-            maxDistance: autoDistance,
-            lineSensitivity: autoLineSensitivity,
-            lineGrow: autoLineGrow
+        let selectionBounds: any = initialSelectionBounds;
+        let createdTempSelection = false;
+        const clampInt = (v: number, lo: number, hi: number) => (v < lo ? lo : (v > hi ? hi : v));
+        const computeAdaptiveLineThreshold = (visibleCount: number, histArr: Uint32Array, sensitivity: number) => {
+          if (visibleCount < 64) return clampInt(30 + clampInt(Math.round(sensitivity || 6), 1, 10) * 20, 30, 230);
+          const target = Math.max(1, Math.floor(visibleCount * 0.35));
+          let acc = 0;
+          let q = 60;
+          for (let y = 0; y < 256; y++) {
+            acc += histArr[y] || 0;
+            if (acc >= target) {
+              q = y;
+              break;
+            }
           }
-        );
-
-        const processedPixelsArray = processedPixels instanceof Uint8Array ? processedPixels : new Uint8Array(processedPixels as any);
-        const coeffLen = pixelResult.selectionBounds.selectionCoefficients?.length || 0;
-        const selectionCoefficients = coeffLen > 0 ? new Float32Array(coeffLen) : new Float32Array(0);
-        selectionCoefficients.fill(1);
-        const resultForWriteback = {
-          ...pixelResult,
-          selectionBounds: {
-            ...pixelResult.selectionBounds,
-            selectionCoefficients
-          }
+          const sens = clampInt(Math.round(sensitivity || 6), 1, 10);
+          const adjust = (sens - 6) * 6;
+          return clampInt(q + 18 + adjust, 45, 210);
         };
-        await applyProcessedPixels(processedPixelsArray, resultForWriteback as any);
+        const estimateMaskHalfWidth = (mask: Uint8Array, w: number, h: number, cap: number) => {
+          const size = w * h;
+          if (size <= 0) return 1;
+          const dist = new Uint8Array(size);
+          dist.fill(255);
+          const q = new Uint32Array(size);
+          let head = 0;
+          let tail = 0;
+          for (let i = 0; i < size; i++) {
+            if (!mask[i]) {
+              dist[i] = 0;
+              q[tail++] = i;
+            }
+          }
+          if (tail === 0) return clampInt(cap, 1, cap);
+          while (head < tail) {
+            const i = q[head++] as number;
+            const d = dist[i] as number;
+            if (d >= cap) continue;
+            const x = i % w;
+            const y = (i - x) / w;
+            const nd = (d + 1) as any;
+            const push = (ni: number) => {
+              if ((dist[ni] as number) <= nd) return;
+              dist[ni] = nd;
+              q[tail++] = ni;
+            };
+            if (x > 0) push(i - 1);
+            if (x + 1 < w) push(i + 1);
+            if (y > 0) push(i - w);
+            if (y + 1 < h) push(i + w);
+          }
+          let maxD = 1;
+          for (let i = 0; i < size; i++) {
+            if (!mask[i]) continue;
+            const d = dist[i] as number;
+            if (d !== 255 && d > maxD) maxD = d;
+          }
+          return clampInt(maxD, 1, cap);
+        };
+        const estimateLineWidthPx = () => {
+          const maxReducedPixels = 220_000;
+          const step = clampInt(Math.ceil(Math.sqrt(Math.max(1, pixelCount) / maxReducedPixels)), 1, 64);
+          const rw = Math.ceil(docW / step);
+          const rh = Math.ceil(docH / step);
+          const reducedSize = rw * rh;
+          if (reducedSize <= 0) return 0;
+          const thr = computeAdaptiveLineThreshold(visible, hist, autoLineSensitivity);
+          const mask = new Uint8Array(reducedSize);
+          for (let y = 0; y < rh; y++) {
+            const oy = y * step;
+            if (oy >= docH) break;
+            for (let x = 0; x < rw; x++) {
+              const ox = x * step;
+              if (ox >= docW) break;
+              const i = oy * docW + ox;
+              const { r, g, b, a } = getRGBA(i);
+              if (a <= 8) continue;
+              if (luminance8(r, g, b) <= thr) mask[y * rw + x] = 1;
+            }
+          }
+          const halfW = estimateMaskHalfWidth(mask, rw, rh, 10);
+          return Math.max(0, Math.round(halfW * 2 * step));
+        };
+        const estimatedLineWidthPx = estimateLineWidthPx();
+
+        try {
+          if (!initialSelectionBounds.hasSelection) {
+            const borderWidth = clampInt(
+              Math.round(Math.max(2, Math.min(16, (estimatedLineWidthPx > 0 ? estimatedLineWidthPx * 1.5 : 6)))),
+              2,
+              Math.round(Math.max(2, (estimatedLineWidthPx > 0 ? estimatedLineWidthPx * 2 : 12)))
+            );
+
+            await action.batchPlay([
+              {
+                _obj: "select",
+                _target: [{ _ref: "layer", _id: activeLayerId }],
+                _isCommand: false
+              }
+            ], { synchronousExecution: true });
+
+            await action.batchPlay([
+              {
+                _obj: "set",
+                _target: [{ _ref: "channel", _property: "selection" }],
+                to: { _ref: "channel", _enum: "channel", _value: "transparencyEnum" },
+                _isCommand: false,
+                _options: { dialogOptions: "dontDisplay" }
+              },
+              {
+                _obj: "border",
+                width: { _unit: "pixelsUnit", _value: borderWidth },
+                _isCommand: false,
+                _options: { dialogOptions: "dontDisplay" }
+              }
+            ], { synchronousExecution: true });
+
+            selectionBounds = await getSelectionData();
+            if (!selectionBounds || !selectionBounds.hasSelection) {
+              await core.showAlert({ message: '当前颜色图层的透明度选区为空，无法自动补色。请先在颜色层画出颜色或手动框选要处理区域。' });
+              return;
+            }
+            createdTempSelection = true;
+          }
+
+          const selArea = Math.max(1, Math.round(selectionBounds.width) * Math.round(selectionBounds.height));
+          const autoDistanceArea = Math.max(8, Math.min(24, Math.round(Math.sqrt(selArea) / 25)));
+          const autoDistanceLine = estimatedLineWidthPx > 0 ? clampInt(Math.round(estimatedLineWidthPx * 2), 8, 24) : 8;
+          const autoDistance = Math.max(autoDistanceArea, autoDistanceLine);
+
+          const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+
+          const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
+          let maskIndex = 0;
+          for (let docIndex of pixelResult.selectionIndices) {
+            fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
+            maskIndex++;
+          }
+
+          const processedPixels = await processBlockColorPatch(
+            pixelResult.fullPixelData.buffer,
+            fullSelectionMask.buffer,
+            { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
+            refRaw.buffer,
+            {
+              maxDistance: autoDistance,
+              lineSensitivity: autoLineSensitivity,
+              lineGrow: autoLineGrow
+            }
+          );
+
+          const processedPixelsArray = processedPixels instanceof Uint8Array ? processedPixels : new Uint8Array(processedPixels as any);
+          const coeffLen = pixelResult.selectionBounds.selectionCoefficients?.length || 0;
+          const selectionCoefficients = coeffLen > 0 ? new Float32Array(coeffLen) : new Float32Array(0);
+          selectionCoefficients.fill(1);
+          const resultForWriteback = {
+            ...pixelResult,
+            selectionBounds: {
+              ...pixelResult.selectionBounds,
+              selectionCoefficients
+            }
+          };
+          await applyProcessedPixels(processedPixelsArray, resultForWriteback as any);
+        } finally {
+          if (createdTempSelection) {
+            await action.batchPlay([
+              {
+                _obj: "set",
+                _target: [{ _ref: "channel", _property: "selection" }],
+                to: { _enum: "ordinal", _value: "none" },
+                _options: { dialogOptions: "dontDisplay" }
+              }
+            ], { synchronousExecution: true });
+          }
+        }
+
       });
     });
     giveFocusBackToPS();
