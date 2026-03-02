@@ -1116,91 +1116,11 @@ const handleBlockColorPatch = async () => {
         return;
       }
 
-      const autoLineGrow = 2;
-      const autoLineSensitivity = 8; // 稍微调高灵敏度，以覆盖线稿边缘虚色
       const docW = initialSelectionBounds.docWidth;
       const docH = initialSelectionBounds.docHeight;
 
       await runWithTemporaryUnlock(async () => {
-        const refPixels = await imaging.getPixels({
-          documentID: doc.id,
-          layerID: refLayer.id,
-          sourceBounds: {
-            left: 0,
-            top: 0,
-            right: docW,
-            bottom: docH
-          },
-          targetSize: { width: docW, height: docH }
-        });
-        const refRaw = new Uint8Array(await refPixels.imageData.getData());
-        refPixels.imageData.dispose();
-
-        const pixelCount = docW * docH;
-        const stride = pixelCount > 800_000 ? 7 : (pixelCount > 200_000 ? 5 : 3);
-        let sampled = 0;
-        let visible = 0;
-        const bpp = pixelCount > 0 ? refRaw.length / pixelCount : 0;
-        const getRGBA = (i: number) => {
-          if (bpp === 4) {
-            const p = i * 4;
-            return { r: refRaw[p] || 0, g: refRaw[p + 1] || 0, b: refRaw[p + 2] || 0, a: refRaw[p + 3] || 0 };
-          }
-          if (bpp === 3) {
-            const p = i * 3;
-            return { r: refRaw[p] || 0, g: refRaw[p + 1] || 0, b: refRaw[p + 2] || 0, a: 255 };
-          }
-          return { r: 0, g: 0, b: 0, a: 0 };
-        };
-        const luminance8 = (r: number, g: number, b: number) => ((r * 54 + g * 183 + b * 19) / 256) | 0;
-        const hist = new Uint32Array(256);
-        for (let i = 0; i < pixelCount; i += stride) {
-          sampled++;
-          const { r, g, b, a } = getRGBA(i);
-          if (a > 8) {
-            visible++;
-            hist[luminance8(r, g, b)] += 1;
-          }
-        }
-        if (sampled > 0) {
-          const visibleRatio = visible / sampled;
-          if (visibleRatio < 0.0006) {
-            await core.showAlert({ message: '线稿参考层疑似不是线稿（可见线像素太少），建议在“线稿参考”下拉中改选线稿图层。' });
-            return;
-          }
-          if (visibleRatio > 0.75) {
-            let peak = 0;
-            for (let y = 0; y < 256; y++) peak = Math.max(peak, hist[y] || 0);
-            const peakRatio = peak / Math.max(1, visible);
-            if (peakRatio < 0.35) {
-              await core.showAlert({ message: '线稿参考层疑似不是线稿（可见像素太多且颜色变化较大），建议在“线稿参考”下拉中改选线稿图层。' });
-              return;
-            }
-          }
-        } else {
-          await core.showAlert({ message: '线稿参考层疑似不是线稿（无法采样像素），建议在“线稿参考”下拉中改选线稿图层。' });
-          return;
-        }
-
-        let selectionBounds: any = initialSelectionBounds;
-        let createdTempSelection = false;
         const clampInt = (v: number, lo: number, hi: number) => (v < lo ? lo : (v > hi ? hi : v));
-        const computeAdaptiveLineThreshold = (visibleCount: number, histArr: Uint32Array, sensitivity: number) => {
-          if (visibleCount < 64) return clampInt(30 + clampInt(Math.round(sensitivity || 6), 1, 10) * 20, 30, 230);
-          const target = Math.max(1, Math.floor(visibleCount * 0.35));
-          let acc = 0;
-          let q = 60;
-          for (let y = 0; y < 256; y++) {
-            acc += histArr[y] || 0;
-            if (acc >= target) {
-              q = y;
-              break;
-            }
-          }
-          const sens = clampInt(Math.round(sensitivity || 6), 1, 10);
-          const adjust = (sens - 6) * 6;
-          return clampInt(q + 18 + adjust, 45, 210);
-        };
         const estimateMaskHalfWidth = (mask: Uint8Array, w: number, h: number, cap: number) => {
           const size = w * h;
           if (size <= 0) return 1;
@@ -1241,122 +1161,115 @@ const handleBlockColorPatch = async () => {
           }
           return clampInt(maxD, 1, cap);
         };
-        const estimateLineWidthPx = () => {
-          const maxReducedPixels = 220_000;
-          const step = clampInt(Math.ceil(Math.sqrt(Math.max(1, pixelCount) / maxReducedPixels)), 1, 64);
-          const rw = Math.ceil(docW / step);
-          const rh = Math.ceil(docH / step);
-          const reducedSize = rw * rh;
-          if (reducedSize <= 0) return 0;
-          const thr = computeAdaptiveLineThreshold(visible, hist, autoLineSensitivity);
-          const mask = new Uint8Array(reducedSize);
-          for (let y = 0; y < rh; y++) {
-            const oy = y * step;
-            if (oy >= docH) break;
-            for (let x = 0; x < rw; x++) {
-              const ox = x * step;
-              if (ox >= docW) break;
-              const i = oy * docW + ox;
-              const { r, g, b, a } = getRGBA(i);
-              if (a <= 8) continue;
-              if (luminance8(r, g, b) <= thr) mask[y * rw + x] = 1;
+        const luminance8 = (r: number, g: number, b: number) => ((r * 54 + g * 183 + b * 19) / 256) | 0;
+
+        const pixelCount = docW * docH;
+        const maxReducedPixels = 220_000;
+        const step = clampInt(Math.ceil(Math.sqrt(Math.max(1, pixelCount) / maxReducedPixels)), 1, 64);
+        const rw = Math.max(1, Math.ceil(docW / step));
+        const rh = Math.max(1, Math.ceil(docH / step));
+        const reducedCount = rw * rh;
+
+        const refPixels = await imaging.getPixels({
+          documentID: doc.id,
+          layerID: refLayer.id,
+          sourceBounds: { left: 0, top: 0, right: docW, bottom: docH },
+          targetSize: { width: rw, height: rh }
+        });
+        const refRaw = new Uint8Array(await refPixels.imageData.getData());
+        refPixels.imageData.dispose();
+
+        const bpp = reducedCount > 0 ? refRaw.length / reducedCount : 0;
+        const lineMask = new Uint8Array(reducedCount);
+        let visible = 0;
+        if (bpp === 4) {
+          const alphaHist = new Uint32Array(256);
+          let nonZeroAlpha = 0;
+          for (let i = 0; i < reducedCount; i++) {
+            const a = refRaw[i * 4 + 3] || 0;
+            if (a <= 0) continue;
+            alphaHist[a] += 1;
+            nonZeroAlpha++;
+          }
+          let alphaP90 = 0;
+          if (nonZeroAlpha > 0) {
+            const target = Math.max(1, Math.floor(nonZeroAlpha * 0.9));
+            let acc = 0;
+            for (let a = 0; a < 256; a++) {
+              acc += alphaHist[a] || 0;
+              if (acc >= target) {
+                alphaP90 = a;
+                break;
+              }
             }
           }
-          const halfW = estimateMaskHalfWidth(mask, rw, rh, 10);
-          return Math.max(0, Math.round(halfW * 2 * step));
-        };
-        const estimatedLineWidthPx = estimateLineWidthPx();
-
-        try {
-          if (!initialSelectionBounds.hasSelection) {
-            const borderWidth = clampInt(
-              Math.round(Math.max(2, Math.min(16, (estimatedLineWidthPx > 0 ? estimatedLineWidthPx * 1.5 : 6)))),
-              2,
-              Math.round(Math.max(2, (estimatedLineWidthPx > 0 ? estimatedLineWidthPx * 2 : 12)))
-            );
-
-            await action.batchPlay([
-              {
-                _obj: "select",
-                _target: [{ _ref: "layer", _id: activeLayerId }],
-                _isCommand: false
-              }
-            ], { synchronousExecution: true });
-
-            await action.batchPlay([
-              {
-                _obj: "set",
-                _target: [{ _ref: "channel", _property: "selection" }],
-                to: { _ref: "channel", _enum: "channel", _value: "transparencyEnum" },
-                _isCommand: false,
-                _options: { dialogOptions: "dontDisplay" }
-              },
-              {
-                _obj: "border",
-                width: { _unit: "pixelsUnit", _value: borderWidth },
-                _isCommand: false,
-                _options: { dialogOptions: "dontDisplay" }
-              }
-            ], { synchronousExecution: true });
-
-            selectionBounds = await getSelectionData();
-            if (!selectionBounds || !selectionBounds.hasSelection) {
-              await core.showAlert({ message: '当前颜色图层的透明度选区为空，无法自动补色。请先在颜色层画出颜色或手动框选要处理区域。' });
-              return;
+          const alphaThreshold = clampInt(Math.round(alphaP90 * 0.6), 8, 200);
+          for (let i = 0; i < reducedCount; i++) {
+            const a = refRaw[i * 4 + 3] || 0;
+            if (a >= alphaThreshold) {
+              lineMask[i] = 1;
+              visible++;
             }
-            createdTempSelection = true;
           }
-
-          const selArea = Math.max(1, Math.round(selectionBounds.width) * Math.round(selectionBounds.height));
-          const autoDistanceArea = Math.max(8, Math.min(24, Math.round(Math.sqrt(selArea) / 25)));
-          const autoDistanceLine = estimatedLineWidthPx > 0 ? clampInt(Math.round(estimatedLineWidthPx * 2), 8, 24) : 8;
-          const autoDistance = Math.max(autoDistanceArea, autoDistanceLine);
-
-          const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
-
-          const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
-          let maskIndex = 0;
-          for (let docIndex of pixelResult.selectionIndices) {
-            fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
-            maskIndex++;
-          }
-
-          const processedPixels = await processBlockColorPatch(
-            pixelResult.fullPixelData.buffer,
-            fullSelectionMask.buffer,
-            { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
-            refRaw.buffer,
-            {
-              maxDistance: autoDistance,
-              lineSensitivity: autoLineSensitivity,
-              lineGrow: autoLineGrow
+        } else if (bpp === 3) {
+          for (let i = 0; i < reducedCount; i++) {
+            const p = i * 3;
+            const y = luminance8(refRaw[p] || 0, refRaw[p + 1] || 0, refRaw[p + 2] || 0);
+            if (y < 245) {
+              lineMask[i] = 1;
+              visible++;
             }
-          );
-
-          const processedPixelsArray = processedPixels instanceof Uint8Array ? processedPixels : new Uint8Array(processedPixels as any);
-          const coeffLen = pixelResult.selectionBounds.selectionCoefficients?.length || 0;
-          const selectionCoefficients = coeffLen > 0 ? new Float32Array(coeffLen) : new Float32Array(0);
-          selectionCoefficients.fill(1);
-          const resultForWriteback = {
-            ...pixelResult,
-            selectionBounds: {
-              ...pixelResult.selectionBounds,
-              selectionCoefficients
-            }
-          };
-          await applyProcessedPixels(processedPixelsArray, resultForWriteback as any);
-        } finally {
-          if (createdTempSelection) {
-            await action.batchPlay([
-              {
-                _obj: "set",
-                _target: [{ _ref: "channel", _property: "selection" }],
-                to: { _enum: "ordinal", _value: "none" },
-                _options: { dialogOptions: "dontDisplay" }
-              }
-            ], { synchronousExecution: true });
           }
         }
+
+        const visibleRatio = reducedCount > 0 ? visible / reducedCount : 0;
+        if (visibleRatio < 0.0006 || visibleRatio > 0.95) {
+          await core.showAlert({ message: '线稿参考层疑似不合适（线像素占比异常），请在“线稿参考”下拉中改选线稿图层。' });
+          return;
+        }
+
+        const halfW = estimateMaskHalfWidth(lineMask, rw, rh, 10);
+        let estimatedLineWidthPx = 0;
+        if (halfW <= 1) {
+          estimatedLineWidthPx = 2;
+        } else {
+          estimatedLineWidthPx = Math.max(2, Math.round(halfW * 2 * step));
+        }
+        estimatedLineWidthPx = clampInt(estimatedLineWidthPx, 2, 32);
+
+        const borderMax = clampInt(Math.round(estimatedLineWidthPx * 2), 2, 18);
+        const borderWidth = clampInt(Math.round(estimatedLineWidthPx * 1.2), 2, borderMax);
+        const maxDistance = clampInt(borderWidth + 2, 4, 64);
+
+        const selectionBounds: any = initialSelectionBounds;
+        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+
+        const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
+        let maskIndex = 0;
+        for (let docIndex of pixelResult.selectionIndices) {
+          fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
+          maskIndex++;
+        }
+
+        const processedPixels = await processBlockColorPatch(
+          pixelResult.fullPixelData.buffer,
+          fullSelectionMask.buffer,
+          { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
+          { borderWidth, maxDistance }
+        );
+
+        const processedPixelsArray = processedPixels instanceof Uint8Array ? processedPixels : new Uint8Array(processedPixels as any);
+        const coeffLen = pixelResult.selectionBounds.selectionCoefficients?.length || 0;
+        const selectionCoefficients = coeffLen > 0 ? new Float32Array(coeffLen) : new Float32Array(0);
+        selectionCoefficients.fill(1);
+        const resultForWriteback = {
+          ...pixelResult,
+          selectionBounds: {
+            ...pixelResult.selectionBounds,
+            selectionCoefficients
+          }
+        };
+        await applyProcessedPixels(processedPixelsArray, resultForWriteback as any);
 
       });
     });
