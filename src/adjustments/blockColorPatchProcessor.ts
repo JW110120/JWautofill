@@ -54,6 +54,10 @@ function dilateBinaryMask(mask: Uint8Array, w: number, h: number, radius: number
     if (x + 1 < w) push(i + 1);
     if (y > 0) push(i - w);
     if (y + 1 < h) push(i + w);
+    if (x > 0 && y > 0) push(i - w - 1);
+    if (x + 1 < w && y > 0) push(i - w + 1);
+    if (x > 0 && y + 1 < h) push(i + w - 1);
+    if (x + 1 < w && y + 1 < h) push(i + w + 1);
   }
   return out;
 }
@@ -135,6 +139,10 @@ export async function processBlockColorPatch(
     if (rx + 1 < regionW) tryVisit(ri + 1);
     if (ry > 0) tryVisit(ri - regionW);
     if (ry + 1 < regionH) tryVisit(ri + regionW);
+    if (rx > 0 && ry > 0) tryVisit(ri - regionW - 1);
+    if (rx + 1 < regionW && ry > 0) tryVisit(ri - regionW + 1);
+    if (rx > 0 && ry + 1 < regionH) tryVisit(ri + regionW - 1);
+    if (rx + 1 < regionW && ry + 1 < regionH) tryVisit(ri + regionW + 1);
   }
 
   for (let ri = 0; ri < regionSize; ri++) {

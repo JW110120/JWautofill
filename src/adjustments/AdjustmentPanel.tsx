@@ -1164,82 +1164,95 @@ const handleBlockColorPatch = async () => {
         const luminance8 = (r: number, g: number, b: number) => ((r * 54 + g * 183 + b * 19) / 256) | 0;
 
         const pixelCount = docW * docH;
-        const maxReducedPixels = 220_000;
-        const step = clampInt(Math.ceil(Math.sqrt(Math.max(1, pixelCount) / maxReducedPixels)), 1, 64);
-        const rw = Math.max(1, Math.ceil(docW / step));
-        const rh = Math.max(1, Math.ceil(docH / step));
-        const reducedCount = rw * rh;
+        const computeLineWidthPxFromRef = async (targetPixelBudget: number) => {
+          const step = clampInt(Math.ceil(Math.sqrt(Math.max(1, pixelCount) / Math.max(1, targetPixelBudget))), 1, 64);
+          const rw = Math.max(1, Math.ceil(docW / step));
+          const rh = Math.max(1, Math.ceil(docH / step));
+          const reducedCount = rw * rh;
 
-        const refPixels = await imaging.getPixels({
-          documentID: doc.id,
-          layerID: refLayer.id,
-          sourceBounds: { left: 0, top: 0, right: docW, bottom: docH },
-          targetSize: { width: rw, height: rh }
-        });
-        const refRaw = new Uint8Array(await refPixels.imageData.getData());
-        refPixels.imageData.dispose();
+          const refPixels = await imaging.getPixels({
+            documentID: doc.id,
+            layerID: refLayer.id,
+            sourceBounds: { left: 0, top: 0, right: docW, bottom: docH },
+            targetSize: { width: rw, height: rh }
+          });
+          const refRaw = new Uint8Array(await refPixels.imageData.getData());
+          refPixels.imageData.dispose();
 
-        const bpp = reducedCount > 0 ? refRaw.length / reducedCount : 0;
-        const lineMask = new Uint8Array(reducedCount);
-        let visible = 0;
-        if (bpp === 4) {
-          const alphaHist = new Uint32Array(256);
-          let nonZeroAlpha = 0;
-          for (let i = 0; i < reducedCount; i++) {
-            const a = refRaw[i * 4 + 3] || 0;
-            if (a <= 0) continue;
-            alphaHist[a] += 1;
-            nonZeroAlpha++;
-          }
-          let alphaP90 = 0;
-          if (nonZeroAlpha > 0) {
-            const target = Math.max(1, Math.floor(nonZeroAlpha * 0.9));
-            let acc = 0;
-            for (let a = 0; a < 256; a++) {
-              acc += alphaHist[a] || 0;
-              if (acc >= target) {
-                alphaP90 = a;
-                break;
+          const bpp = reducedCount > 0 ? refRaw.length / reducedCount : 0;
+          const lineMask = new Uint8Array(reducedCount);
+          let visible = 0;
+          if (bpp === 4) {
+            const alphaHist = new Uint32Array(256);
+            let nonZeroAlpha = 0;
+            for (let i = 0; i < reducedCount; i++) {
+              const a = refRaw[i * 4 + 3] || 0;
+              if (a <= 0) continue;
+              alphaHist[a] += 1;
+              nonZeroAlpha++;
+            }
+            let alphaP90 = 0;
+            let alphaP98 = 0;
+            if (nonZeroAlpha > 0) {
+              const target90 = Math.max(1, Math.floor(nonZeroAlpha * 0.9));
+              const target98 = Math.max(1, Math.floor(nonZeroAlpha * 0.98));
+              let acc = 0;
+              for (let a = 0; a < 256; a++) {
+                acc += alphaHist[a] || 0;
+                if (!alphaP90 && acc >= target90) alphaP90 = a;
+                if (!alphaP98 && acc >= target98) {
+                  alphaP98 = a;
+                  break;
+                }
               }
             }
-          }
-          const alphaThreshold = clampInt(Math.round(alphaP90 * 0.6), 8, 200);
-          for (let i = 0; i < reducedCount; i++) {
-            const a = refRaw[i * 4 + 3] || 0;
-            if (a >= alphaThreshold) {
-              lineMask[i] = 1;
-              visible++;
+            const alphaThreshold = clampInt(Math.round((alphaP98 || alphaP90 || 0) * 0.85), 8, 245);
+            for (let i = 0; i < reducedCount; i++) {
+              const a = refRaw[i * 4 + 3] || 0;
+              if (a >= alphaThreshold) {
+                lineMask[i] = 1;
+                visible++;
+              }
             }
-          }
-        } else if (bpp === 3) {
-          for (let i = 0; i < reducedCount; i++) {
-            const p = i * 3;
-            const y = luminance8(refRaw[p] || 0, refRaw[p + 1] || 0, refRaw[p + 2] || 0);
-            if (y < 245) {
-              lineMask[i] = 1;
-              visible++;
+          } else if (bpp === 3) {
+            for (let i = 0; i < reducedCount; i++) {
+              const p = i * 3;
+              const y = luminance8(refRaw[p] || 0, refRaw[p + 1] || 0, refRaw[p + 2] || 0);
+              if (y < 190) {
+                lineMask[i] = 1;
+                visible++;
+              }
             }
+          } else {
+            return 0;
           }
+
+          const visibleRatio = reducedCount > 0 ? visible / reducedCount : 0;
+          if (visibleRatio < 0.00005 || visibleRatio > 0.995) return 0;
+
+          const halfW = estimateMaskHalfWidth(lineMask, rw, rh, 10);
+          const scaleMin = Math.max(1, Math.min(docW / rw, docH / rh));
+          let widthPx = 0;
+          if (halfW <= 1) widthPx = 2;
+          else widthPx = Math.max(2, Math.round(halfW * 2 * scaleMin));
+          return clampInt(widthPx, 2, 32);
+        };
+
+        const wCoarse = await computeLineWidthPxFromRef(220_000);
+        const wFine = await computeLineWidthPxFromRef(900_000);
+        let estimatedLineWidthPx = Math.min(wCoarse || 32, wFine || 32);
+        if (estimatedLineWidthPx <= 0 || estimatedLineWidthPx >= 32) {
+          estimatedLineWidthPx = 4;
         }
 
-        const visibleRatio = reducedCount > 0 ? visible / reducedCount : 0;
-        if (visibleRatio < 0.0006 || visibleRatio > 0.95) {
-          await core.showAlert({ message: '线稿参考层疑似不合适（线像素占比异常），请在“线稿参考”下拉中改选线稿图层。' });
-          return;
-        }
-
-        const halfW = estimateMaskHalfWidth(lineMask, rw, rh, 10);
-        let estimatedLineWidthPx = 0;
-        if (halfW <= 1) {
-          estimatedLineWidthPx = 2;
-        } else {
-          estimatedLineWidthPx = Math.max(2, Math.round(halfW * 2 * step));
-        }
-        estimatedLineWidthPx = clampInt(estimatedLineWidthPx, 2, 32);
-
-        const borderMax = clampInt(Math.round(estimatedLineWidthPx * 2), 2, 18);
-        const borderWidth = clampInt(Math.round(estimatedLineWidthPx * 1.2), 2, borderMax);
-        const maxDistance = clampInt(borderWidth + 2, 4, 64);
+        let borderWidth = 0;
+        if (estimatedLineWidthPx <= 3) borderWidth = 1;
+        else if (estimatedLineWidthPx <= 5) borderWidth = 1;
+        else if (estimatedLineWidthPx <= 8) borderWidth = 1;
+        else if (estimatedLineWidthPx <= 12) borderWidth = 2;
+        else borderWidth = 3;
+        borderWidth = clampInt(borderWidth, 2, 8);
+        const maxDistance = clampInt(borderWidth + 2, 4, 24);
 
         const selectionBounds: any = initialSelectionBounds;
         const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
