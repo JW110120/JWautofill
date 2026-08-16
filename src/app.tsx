@@ -13,6 +13,7 @@ import PatternPicker from './components/PatternPicker';
 import GradientPicker from './components/GradientPicker';
 import StrokeSetting from './components/StrokeSetting';
 import LicenseDialog from './components/LicenseDialog';
+import RangeSlider from './components/RangeSlider';
 import { LicenseManager } from './utils/LicenseManager';
 import { ExpandIcon, SettingsIcon } from './styles/Icons';
 import { calculateRandomColor, hsbToRgb, rgbToGray } from './utils/ColorUtils';
@@ -285,16 +286,16 @@ class App extends React.Component<AppProps, AppState> {
         }));
     }
 
-    handleSelectionSmoothChange(event) {
-        this.setState({ selectionSmooth: parseInt(event.target.value, 10) });
+    handleSelectionSmoothChange(value: number) {
+        this.setState({ selectionSmooth: value });
     }
 
-    handleSelectionContrastChange(event) {
-        this.setState({ selectionContrast: parseInt(event.target.value, 10) });
+    handleSelectionContrastChange(value: number) {
+        this.setState({ selectionContrast: value });
     }
 
-    handleSelectionExpandChange(event) {
-        this.setState({ selectionExpand: parseInt(event.target.value, 10) });
+    handleSelectionExpandChange(value: number) {
+        this.setState({ selectionExpand: value });
     }
 
     // 应用选区修改
@@ -871,12 +872,12 @@ class App extends React.Component<AppProps, AppState> {
         this.setState({ isDragging: false });
     }
 
-    handleOpacityChange(event) {
-        this.setState({ opacity: parseInt(event.target.value, 10) });
+    handleOpacityChange(value: number) {
+        this.setState({ opacity: value });
     }
 
-    handleFeatherChange(event) {
-        this.setState({ feather: parseInt(event.target.value, 10) });
+    handleFeatherChange(value: number) {
+        this.setState({ feather: value });
     }
 
     handleBlendModeChange(event) {
@@ -1060,8 +1061,10 @@ title={`● 生成选区时，插件会自动根据选择的模式填充/删除�
                     <span className="title-text">选区笔1.2</span>                    
                 </h3>
                 <div className="button-container">
-                    <sp-action-button 
-                    className="main-button" 
+                    <div 
+                    role="button"
+                    tabIndex={0}
+                    className={`main-button ${this.state.isEnabled ? 'enabled' : ''}`} 
                     onClick={this.handleButtonClick}
 title={`● 功能开启后，PS工具栏羽化参数设为0时，自动填充才可正常使用。
 
@@ -1077,7 +1080,7 @@ title={`● 功能开启后，PS工具栏羽化参数设为0时，自动填充�
                             </span>
                             <div className={`button-indicator ${this.state.isEnabled ? 'enabled' : 'disabled'}`}></div>
                         </div>
-                    </sp-action-button>
+                    </div>
                 </div>
 
                 <div className="blend-mode-container">
@@ -1152,11 +1155,10 @@ title={`● 调整填充内容的不透明度，不透明度间采用【乘算�
                     </div>
 
                     </label>
-                    <input
-                        type='range'
-                        min='0'
-                        max='100'
-                        step='1'
+                    <RangeSlider
+                        min={0}
+                        max={100}
+                        step={1}
                         value={this.state.opacity}
                         onChange={this.handleOpacityChange}
                         className="slider-input"
@@ -1192,11 +1194,10 @@ title={`● 改造选区使用的羽化值，也就是对选区的灰度通道�
                     </div>
 
                     </label>
-                    <input
-                        type='range'
-                        min='0'
-                        max='20'
-                        step='0.5'
+                    <RangeSlider
+                        min={0}
+                        max={20}
+                        step={0.5}
                         value={this.state.feather}
                         onChange={this.handleFeatherChange}
                         className="slider-input"
@@ -1232,11 +1233,10 @@ title={`● 在填充前，以降低选区灰度通道中的高频信息的方�
 }>
                                         平滑
                                     </label>
-                                    <input
-                                        type='range'
-                                        min='0'
-                                        max='100'
-                                        step='1'
+                                    <RangeSlider
+                                        min={0}
+                                        max={100}
+                                        step={1}
                                         value={this.state.selectionSmooth}
                                         onChange={this.handleSelectionSmoothChange}
                                         className="selection-slider-input"
@@ -1273,11 +1273,10 @@ title={`● 在填充前，以锐化选区灰度通道方式修改选区。
                                         锐度
 
                                     </label>
-                                    <input
-                                        type='range'
-                                        min='0'
-                                        max='100'
-                                        step='1'
+                                    <RangeSlider
+                                        min={0}
+                                        max={100}
+                                        step={1}
                                         value={this.state.selectionContrast}
                                         onChange={this.handleSelectionContrastChange}
                                         className="selection-slider-input"
@@ -1311,11 +1310,10 @@ title={`● 参考PS滤镜库中数次叠加喷溅的算法，以喷溅的方式
 }>
                                         扩散
                                     </label>
-                                    <input
-                                        type='range'
-                                        min='0'
-                                        max='100'
-                                        step='1'
+                                    <RangeSlider
+                                        min={0}
+                                        max={100}
+                                        step={1}
                                         value={this.state.selectionExpand}
                                         onChange={this.handleSelectionExpandChange}
                                         className="selection-slider-input"

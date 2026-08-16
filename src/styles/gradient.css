@@ -300,9 +300,9 @@ sp-color-slider {
     border: 1px solid var(--border-color);
 }
 
-.gradient-setting-item input[type="range"] {
-    margin: 4px -4px 0 0px;
-    width:110px;
+.gradient-setting-item .gradient-angle-range {
+    margin: 3px -4px 0 0px;
+    width: 104px;
     flex: 1;
 }
 

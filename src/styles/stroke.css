@@ -46,9 +46,9 @@
   text-align: center; /* 数值居中显示 */
 }
 
-.stroke-wide-container input[type="range"] {
-  margin :5px -10px -7px -8px;
-  width: 140px;
+.stroke-wide-container .range-slider {
+  margin :3px -10px -7px -8px;
+  width: 130px;
   cursor: pointer;
 }
 
@@ -161,10 +161,10 @@
   color: var(--text-color);
 }
 
-.stroke-opacity-control input[type="range"] {
+.stroke-opacity-control .stroke-opacity-range {
   position: relative;
-  margin: 10px -33px 0 -40px;
-  width: 123px;
+  margin: 8px -33px 0 -40px;
+  width: 90px;
   cursor: pointer;
 }
 

@@ -1,6 +1,7 @@
 import React from 'react';
 import { BlendMode } from '../constants/blendModes';
 import { BLEND_MODE_OPTIONS } from '../constants/blendModeOptions';
+import RangeSlider from './RangeSlider';
 
 interface StrokeSettingProps {
   isOpen: boolean;
@@ -96,7 +97,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
     <div className="strokesetting">
         <div className="panel-header">
           <h3>描边设置</h3>
-          <button className="close-button" onClick={() => {
+          <div className="close-button" role="button" tabIndex={0} onClick={() => {
                     // 触发所有回调以确保状态更新
                     onWidthChange(width);
                     onPositionChange(position);
@@ -104,7 +105,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
                     onOpacityChange(opacity);
                     // 关闭面板
                     onClose();
-                }}>×</button>
+                }}>×</div>
         </div>
         
         <div className="stroke-wide-container">
@@ -114,13 +115,12 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
           >
             宽度
           </label>
-          <input 
-            type="range" 
-            min="0" 
-            max="20" 
-            step="0.5"
+          <RangeSlider 
+            min={0} 
+            max={20} 
+            step={0.5}
             value={width}
-            onChange={(e) => onWidthChange(Number(e.target.value))}
+            onChange={(v) => onWidthChange(v)}
           />
           <div>
             <input
@@ -194,14 +194,13 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
           >
             不透明度
           </label>
-          <input 
-            type="range" 
-            min="0" 
-            max="100" 
-            step="1"
+          <RangeSlider 
+            min={0} 
+            max={100} 
+            step={1}
             value={opacity}
-            style={{ width: '100px'}}
-            onChange={(e) => onOpacityChange(Number(e.target.value))}
+            className="stroke-opacity-range"
+            onChange={(v) => onOpacityChange(v)}
           />
           <div style={{ display: 'flex', alignItems: 'center'}}>
             <input

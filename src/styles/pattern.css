@@ -129,17 +129,21 @@
   }
   
   .close-button {
-    background-color: rgb(191, 17, 14);
-    border: 1px solid var(--border-color);
+    /* 去除新版 UXP 后端的原生按钮外观，保证纯红色圆角矩形按钮完全由 CSS 呈现 */
+    appearance: none;
+    -webkit-appearance: none;
+    background-color: rgb(191, 17, 14) !important;
+    border: 1px solid var(--border-color) !important;
+    border-radius: 4px !important;
+    box-shadow: none !important;
     font-size: 14px;
     cursor: pointer;
-    color: rgb(255, 255, 255);
+    color: rgb(255, 255, 255) !important;
     width: 25px;
     height: 25px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 4px;
   }
   
   .pattern-settings-area {
@@ -197,12 +201,13 @@
     color: var(--text-color);
   }
   
-  .pattern-setting-item input[type="range"] {
+  .pattern-setting-item .pattern-angle-range,
+  .pattern-setting-item .pattern-scale-range {
       width: 210px;  
       margin-left: 6px; 
       cursor: pointer;
       margin-top: -5px;
-      display: flex;
+      display: block;
   }
 
   .pattern-setting-item input[type="number"] {
@@ -250,12 +255,14 @@
       width: 100%;
       margin: 0 0 5px 0px;
       padding-top: 5px;
+      padding-left: 4px; /* 剪贴蒙版 checkbox 整体右移4px */
       border-top: 1px solid var(--border-color);
   }
 
   .pattern-checkbox-input {
       cursor: pointer;
-      margin-left: -3px;
+      /* 与标签之间留出 8px 间距（参考渐变设置面板 gap:8px） */
+      margin-left: 4px;
   }
 
   .pattern-checkbox-input:not(:last-child){
@@ -267,7 +274,7 @@
       color: var(--text-color);
       margin-left: 10px;
       cursor: pointer;
-      margin-right: -3px;
+      margin-right: 4px;
   }
 
 

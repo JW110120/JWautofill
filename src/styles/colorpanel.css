@@ -45,7 +45,7 @@
     padding: 0px;
   }
 
-  .colorsettings-slider-item input[type="range"] {
+  .colorsettings-slider-item .colorsettings-slider-range {
     width: 210px;
     margin:-5px 0 0 3px;
     cursor: pointer;
@@ -89,7 +89,7 @@
     color: var(--disabled-color);
   }
 
-  .colorsettings-slider-item.disabled input[type="range"],
+  .colorsettings-slider-item.disabled .colorsettings-slider-range,
   .colorsettings-slider-item.disabled input[type="number"] {
     cursor: not-allowed;
     opacity: 0.6;

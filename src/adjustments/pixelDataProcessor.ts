@@ -309,3 +309,58 @@ export const applyProcessedPixels = async (
   // 释放内存
   newImageData.dispose();
 };
+
+// 将完整文档尺寸的 RGBA 像素数据原样写回图层（不做选区混合）。
+// 用于“预览”场景的还原：把保存的原始像素恢复到图层，撤销上一次预览的写入。
+export const writeFullPixelsToLayer = async (
+  fullPixelData: Uint8Array,
+  layer: any,
+  docWidth: number,
+  docHeight: number,
+  isBackgroundLayer: boolean
+): Promise<void> => {
+  let outputPixelData: Uint8Array;
+  let components: number;
+  let pixelFormat: 'RGB' | 'RGBA';
+
+  if (isBackgroundLayer) {
+    components = 3;
+    pixelFormat = 'RGB';
+    const pixelCount = docWidth * docHeight;
+    outputPixelData = new Uint8Array(pixelCount * 3);
+    for (let i = 0; i < pixelCount; i++) {
+      const s = i * 4;
+      const d = i * 3;
+      outputPixelData[d] = fullPixelData[s];
+      outputPixelData[d + 1] = fullPixelData[s + 1];
+      outputPixelData[d + 2] = fullPixelData[s + 2];
+    }
+  } else {
+    components = 4;
+    pixelFormat = 'RGBA';
+    outputPixelData = fullPixelData;
+  }
+
+  const newImageData = await imaging.createImageDataFromBuffer(outputPixelData, {
+    width: docWidth,
+    height: docHeight,
+    colorSpace: 'RGB',
+    pixelFormat,
+    components,
+    componentSize: 8
+  });
+
+  await imaging.putPixels({
+    documentID: app.activeDocument.id,
+    layerID: layer.id,
+    imageData: newImageData,
+    targetBounds: {
+      left: 0,
+      top: 0,
+      right: docWidth,
+      bottom: docHeight
+    }
+  });
+
+  newImageData.dispose();
+};

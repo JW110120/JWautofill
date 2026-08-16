@@ -88,19 +88,47 @@ uxp-panel[panelid="com.listen2me.pixeladjustment"],
   width: 80%;
   display: flex;
   justify-content: center;
+  align-items: center;
   background-color: var(--button-bg);
+  border: 1px solid var(--border-color);
   color: var(--text-color);
   transition: all 0.3s ease;
+  box-sizing: border-box;
 }
 
 .main-button:hover {
     background-color: var(--hover-bg);
+    border-color: var(--primary-color);
     transform: scale(1.02);
 }
 
 .main-button:active {
     background-color: var(--button-down);
     transform: scale(0.98);
+}
+
+/* 功能开启：整个按钮显示为绿色 */
+.main-button.enabled {
+    background-color: rgb(55, 158, 62);
+    border-color: rgb(55, 158, 62);
+}
+
+.main-button.enabled .button-text {
+    color: #ffffff;
+}
+
+.main-button.enabled .button-indicator {
+    background-color: #ffffff;
+}
+
+.main-button.enabled:hover {
+    background-color: rgb(26, 216, 23);
+    border-color: rgb(26, 216, 23);
+}
+
+.main-button.enabled:active {
+    background-color: rgb(26, 216, 23);
+    border-color: rgb(26, 216, 23);
 }
 
 /* 禁用状态下的悬停效果 */
@@ -111,6 +139,7 @@ uxp-panel[panelid="com.listen2me.pixeladjustment"],
 .button-content {
   display: flex;
   align-items: center;
+  justify-content: center;
   width: 100%;
 }
 
@@ -132,7 +161,8 @@ uxp-panel[panelid="com.listen2me.pixeladjustment"],
 }
 
 .button-indicator.enabled {
-  background-color: var(--uxp-host-link-color,rgb(26, 216, 23));
+  /* PS 27.9 中 --uxp-host-link-color 已不再是绿色，直接固定为绿色 */
+  background-color: rgb(26, 216, 23);
 }
 
 .button-indicator.disabled {
@@ -276,6 +306,7 @@ sp-picker[disabled] {
   width: 100%;
   display: flex;
   flex-direction: row;
+  align-items: center;
   justify-content: space-between;
 }
 
@@ -308,8 +339,8 @@ sp-picker[disabled] {
 }
 
 .selection-slider-input {
-  width: 150px; 
-  margin:15px 0 0 -2px;
+  width: 140px; 
+  margin: -2px 0 0 -2px;
   cursor: pointer;
   display: flex;
   justify-content: center;
@@ -470,6 +501,9 @@ button {
   border-radius: 4px;
   color: var(--text-color);
   cursor: pointer;
+  /* 去除新版 UXP 后端的原生按钮外观，确保完全由 CSS 控制颜色与形状 */
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 button:hover {
@@ -520,7 +554,66 @@ sp-action-button {
   border: none;
 }
 
-/* 主按钮保持边框 */
-sp-action-button.main-button {
-  border: 1px solid var(--border-color);
+/* ==========================================================================
+   RangeSlider 自定义滑块（替代 PS 27.9 后失效的原生 input[type="range"]）
+   ========================================================================== */
+.range-slider {
+  position: relative;
+  display: block;
+  height: 18px;
+  cursor: pointer;
+  outline: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+  box-sizing: border-box;
+  /* 轨道两端缩进量，容器可通过覆盖此变量来调整可见轨道宽度 */
+  --rs-track-inset: 6px;
+}
+
+.range-slider-track {
+  position: absolute;
+  left: var(--rs-track-inset);
+  right: var(--rs-track-inset);
+  top: 50%;
+  height: 4px;
+  margin-top: -2px;
+  border-radius: 2px;
+  background-color: var(--border-color);
+  pointer-events: none;
+}
+
+.range-slider-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  border-radius: 2px;
+  background-color: var(--primary-color);
+  pointer-events: none;
+}
+
+.range-slider-thumb {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  margin-top: -6px;
+  margin-left: -6px;
+  border-radius: 50%;
+  background-color: #ffffff;
+  border: 1px solid var(--primary-color);
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.range-slider:hover .range-slider-thumb,
+.range-slider:focus .range-slider-thumb {
+  border-color: var(--primary-color);
+}
+
+/* 统一选区笔面板中所有滑块 number-input 的字号（原默认约13px，减小2px）与字体 */
+#app input[type="number"] {
+  font-size: 11px;
+  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
 }

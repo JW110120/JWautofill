@@ -186,7 +186,7 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
         <div className="color-settings-panel">
             <div className="panel-header">
                 <h3>颜色动态设置</h3>
-                <button className="close-button" onClick={onClose}>×</button>
+                <div className="close-button" role="button" tabIndex={0} onClick={onClose}>×</div>
             </div>
             
             <div className="colorsettings-slider-group">

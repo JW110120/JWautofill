@@ -4,6 +4,7 @@ import { AddIcon, DeleteIcon } from '../styles/Icons';
 import { app, action, core } from 'photoshop';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
 import { PresetManager } from '../utils/PresetManager';
+import RangeSlider from './RangeSlider';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -1262,7 +1263,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         <div className="gradient-picker">
             <div className="panel-header">
                 <h3>渐变设置</h3>
-                <button className="close-button" onClick={onClose}>×</button>
+                <div className="close-button" role="button" tabIndex={0} onClick={onClose}>×</div>
             </div>
 
             {/* 预设区域 */}
@@ -1808,14 +1809,14 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 {gradientType === 'linear' && (
                     <div className="gradient-setting-item">
                         <label onMouseDown={handleAngleMouseDown} style={{ cursor: isDraggingAngle ? 'ew-resize' : 'ew-resize' }}>角度：</label>
-                        <input
-                            type="range"
-                            min="0"
-                            max="360"
-                            step="1"
+                        <RangeSlider
+                            min={0}
+                            max={360}
+                            step={1}
                             value={angle}
-                            style={{ cursor: 'pointer' }}
-                            onChange={(e) => setAngle(Number(e.target.value))}
+                            className="gradient-angle-range"
+                            title="调整渐变角度"
+                            onChange={(v) => setAngle(v)}
                         />
                         <div>
                             <input

@@ -1,5 +1,6 @@
 import React from 'react';
 import { ColorSettings } from '../types/state';
+import RangeSlider from './RangeSlider';
 
 interface SliderControlProps {
     settingKey: keyof ColorSettings;
@@ -32,11 +33,8 @@ const SliderControl: React.FC<SliderControlProps> = ({
         }
     };
 
-    const handleRangeChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-        const numValue = Number(event.target.value);
-        if (!isNaN(numValue)) {
-            onValueChange(settingKey, numValue); // Range input already respects min/max
-        }
+    const handleRangeChange = (value: number) => {
+        onValueChange(settingKey, value); // RangeSlider 已按 min/max/step 吸附
     };
 
     return (
@@ -61,13 +59,13 @@ const SliderControl: React.FC<SliderControlProps> = ({
                 </div>
             </div>
 
-            <input
-                type="range"
+            <RangeSlider
                 min={min}
                 max={max}
-                step="1"
+                step={1}
                 value={value || 0}
                 onChange={handleRangeChange}
+                className="colorsettings-slider-range"
             />
         </div>
     );

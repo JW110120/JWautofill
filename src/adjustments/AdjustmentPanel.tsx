@@ -7,9 +7,10 @@ import { processGradientRelax } from './gradientRelaxProcessor';
 import { processSpecialSharpen } from './specialSharpenProcessor';
 import { processSpecialWoodcut } from './specialWoodcutProcessor';
 import { processLineEnhancement } from './lineProcessing';
+import { processAlphaAlign } from './alphaAlignProcessor';
 import { processHighFrequencyEnhancement } from './highFrequencyEnhancer';
 import { processSmartEdgeSmooth, defaultSmartEdgeSmoothParams } from './smartEdgeSmoothProcessor';
-import { checkEditingState, processPixelData, applyProcessedPixels } from './pixelDataProcessor';
+import { checkEditingState, processPixelData, applyProcessedPixels, writeFullPixelsToLayer } from './pixelDataProcessor';
 import { LicenseManager } from '../utils/LicenseManager';
 import { action, app, core, imaging } from 'photoshop';
 import type { Gradient } from '../types/state';
@@ -18,88 +19,111 @@ import './adjustment-input.css';
 import { AdjustmentMenu } from '../utils/AdjustmentMenu';
 import { ExpandIcon } from '../styles/Icons';
 import { PanelStateManager } from '../utils/PanelStateManager';
+import RangeSlider from '../components/RangeSlider';
 
-// 获取选区边界信息和文档信息（完全参考ClearHandler.getSelectionData）
-const getSelectionData = async () => {
+// 单位换算为像素（兼容普通数字与带 _unit/_value 的单位对象）
+const toPixels = (v: any, resolution: number) => {
+  if (typeof v === 'number') return Math.round(v);
+  const unit = v?._unit;
+  const value = v?._value;
+  if (typeof value !== 'number') return 0;
+  if (typeof unit === 'string') {
+    const u = unit.toLowerCase();
+    if (u.includes('pixel')) return Math.round(value);
+    if (u.includes('point') || u.includes('distance')) return Math.round(value * resolution / 72);
+    if (u.includes('inch')) return Math.round(value * resolution);
+    if (u.includes('cm')) return Math.round(value * resolution / 2.54);
+    if (u.includes('mm')) return Math.round(value * resolution / 25.4);
+  }
+  return Math.round(value);
+};
+
+// 通过 batchPlay 全选当前文档（选区通道设为 allEnum）
+const selectAllDocument = async () => {
+  await action.batchPlay([
+    {
+      _obj: 'set',
+      _target: [{ _ref: 'channel', _property: 'selection' }],
+      to: { _enum: 'ordinal', _value: 'allEnum' },
+      _options: { dialogOptions: 'dontDisplay' }
+    }
+  ], { synchronousExecution: true });
+};
+
+// 轻量获取文档与选区边界（不读取像素数据）。
+// 当没有有效选区时，自动通过 batchPlay 全选整个文档（isFullDocument=true）。
+const getSelectionBounds = async () => {
   try {
-    const toPixels = (v: any, resolution: number) => {
-      if (typeof v === 'number') return Math.round(v);
-      const unit = v?._unit;
-      const value = v?._value;
-      if (typeof value !== 'number') return 0;
-      if (typeof unit === 'string') {
-        const u = unit.toLowerCase();
-        if (u.includes('pixel')) return Math.round(value);
-        if (u.includes('point') || u.includes('distance')) return Math.round(value * resolution / 72);
-        if (u.includes('inch')) return Math.round(value * resolution);
-        if (u.includes('cm')) return Math.round(value * resolution / 2.54);
-        if (u.includes('mm')) return Math.round(value * resolution / 25.4);
-      }
-      return Math.round(value);
-    };
-
-    // batchplay获取文档信息和选区信息
     const [docResult, selectionResult] = await Promise.all([
       action.batchPlay([
         {
-          _obj: "get",
-          _target: [
-            {
-              _ref: "document",
-              _enum: "ordinal",
-              _value: "targetEnum"
-            }
-          ]
+          _obj: 'get',
+          _target: [{ _ref: 'document', _enum: 'ordinal', _value: 'targetEnum' }]
         }
       ], { synchronousExecution: true }),
       action.batchPlay([
         {
-          _obj: "get",
+          _obj: 'get',
           _target: [
-            {
-              _property: "selection"
-            },
-            {
-              _ref: "document",
-              _enum: "ordinal",
-              _value: "targetEnum"
-            }
+            { _property: 'selection' },
+            { _ref: 'document', _enum: 'ordinal', _value: 'targetEnum' }
           ]
         }
       ], { synchronousExecution: true })
     ]);
-    
-    // 获取文档尺寸信息
+
     const resolution = Math.max(1, Math.round(docResult?.[0]?.resolution?._value ?? 72));
-    const docWidthPixels = toPixels(docResult?.[0]?.width, resolution);
-    const docHeightPixels = toPixels(docResult?.[0]?.height, resolution);
-    
-    // 检查是否有选区
-    const hasSelection = selectionResult[0].selection !== undefined;
-    
-    let left, top, right, bottom, width, height;
-    
-    if (hasSelection) {
-      // 有选区时，获取选区边界
-      const bounds = selectionResult[0].selection;
-      left = toPixels(bounds.left, resolution);
-      top = toPixels(bounds.top, resolution);
-      right = toPixels(bounds.right, resolution);
-      bottom = toPixels(bounds.bottom, resolution);
-      width = right - left;
-      height = bottom - top;
-    } else {
-      // 没有选区时，使用整个文档作为选区
-      left = 0;
-      top = 0;
-      right = docWidthPixels;
-      bottom = docHeightPixels;
-      width = docWidthPixels;
-      height = docHeightPixels;
+    const docWidth = toPixels(docResult?.[0]?.width, resolution);
+    const docHeight = toPixels(docResult?.[0]?.height, resolution);
+
+    // 稳健判断是否存在“有效选区”（面积 > 0），
+    // 兼容 selection 为 undefined 或零面积（空对象/全 0 边界）等情况。
+    const sel = selectionResult?.[0]?.selection;
+    let hasSelection = false;
+    let left = 0, top = 0, right = 0, bottom = 0;
+    if (sel) {
+      const l = toPixels(sel.left, resolution);
+      const t = toPixels(sel.top, resolution);
+      const r = toPixels(sel.right, resolution);
+      const b = toPixels(sel.bottom, resolution);
+      if (r > l && b > t) {
+        hasSelection = true;
+        left = l; top = t; right = r; bottom = b;
+      }
     }
-    
-    let selectionData, selectionSize, selectionValues, selectionCoefficients, selectionDocIndices;
-    
+
+    let isFullDocument = false;
+    if (!hasSelection) {
+      // 没有选区：默认全选整个文档
+      await selectAllDocument();
+      left = 0; top = 0; right = docWidth; bottom = docHeight;
+      isFullDocument = true;
+    }
+
+    return {
+      hasSelection,
+      isFullDocument,
+      left, top, right, bottom,
+      width: right - left,
+      height: bottom - top,
+      docWidth,
+      docHeight
+    };
+  } catch (error) {
+    console.error('获取选区边界失败:', error);
+    return null;
+  }
+};
+
+// 获取选区边界信息 + 选区像素数据（供分块平均/渐变等非分块算法使用）
+const getSelectionData = async () => {
+  try {
+    const bounds = await getSelectionBounds();
+    if (!bounds) return null;
+    const { hasSelection, left, top, right, bottom, width, height, docWidth, docHeight } = bounds;
+
+    let selectionSize, selectionValues, selectionCoefficients, selectionDocIndices;
+
     if (hasSelection) {
       // 有选区时，使用imaging.getSelection获取羽化选区的像素数据
       const pixels = await imaging.getSelection({
@@ -115,44 +139,44 @@ const getSelectionData = async () => {
           height: height
         },
       });
-      
-      selectionData = await pixels.imageData.getData();
-      
+
+      const selectionData = new Uint8Array(await pixels.imageData.getData());
+
       // 创建临时数组来存储矩形边界内的所有像素信息
       const tempSelectionValues = new Uint8Array(width * height);
       const tempSelectionCoefficients = new Float32Array(width * height);
       // 创建一个新的Set来存储选区内像素（值大于0）在文档中的索引
       selectionDocIndices = new Set<number>();
-      
+
       // 处理矩形边界内的所有像素，收集选区内像素的索引
       if (selectionData.length === width * height) {
         // 单通道数据
         for (let i = 0; i < width * height; i++) {
           tempSelectionValues[i] = selectionData[i];
           tempSelectionCoefficients[i] = selectionData[i] / 255; // 计算选择系数
-          
+
           // 只有当像素值大于0时，才认为它在选区内
           if (selectionData[i] > 0) {
             // 计算该像素在选区边界内的坐标
             const x = i % width;
             const y = Math.floor(i / width);
-            
+
             // 计算该像素在整个文档中的索引
             const docX = left + x;
             const docY = top + y;
-            const docIndex = docY * docWidthPixels + docX;
-            
+            const docIndex = docY * docWidth + docX;
+
             // 将文档索引添加到集合中
             selectionDocIndices.add(docIndex);
           }
         }
       }
-      
+
       // 创建只包含选区内像素的数组（长度为selectionDocIndices.size）
       selectionSize = selectionDocIndices.size;
       selectionValues = new Uint8Array(selectionSize);
       selectionCoefficients = new Float32Array(selectionSize);
-      
+
       // 将选区内像素的值和系数填入新数组
       let fillIndex = 0;
       for (let i = 0; i < width * height; i++) {
@@ -162,16 +186,16 @@ const getSelectionData = async () => {
           fillIndex++;
         }
       }
-      
+
       // 释放ImageData内存
       pixels.imageData.dispose();
     } else {
-      // 没有选区时，创建全选的选区数据
-      selectionSize = docWidthPixels * docHeightPixels;
+      // 没有选区（getSelectionBounds 已自动全选文档），创建全选的选区数据
+      selectionSize = docWidth * docHeight;
       selectionValues = new Uint8Array(selectionSize);
       selectionCoefficients = new Float32Array(selectionSize);
       selectionDocIndices = new Set<number>();
-      
+
       // 填充全选数据
       for (let i = 0; i < selectionSize; i++) {
         selectionValues[i] = 255; // 完全选中
@@ -179,25 +203,26 @@ const getSelectionData = async () => {
         selectionDocIndices.add(i);
       }
     }
-    
+
     console.log('✅ 选区内像素数量（selectionDocIndices.size）:', selectionDocIndices.size);
-    
+
     return {
       hasSelection,
+      isFullDocument: bounds.isFullDocument,
       left,
       top,
       right,
       bottom,
       width,
       height,
-      docWidth: docWidthPixels,  // 返回像素单位的文档宽度
-      docHeight: docHeightPixels, // 返回像素单位的文档高度
+      docWidth,  // 返回像素单位的文档宽度
+      docHeight, // 返回像素单位的文档高度
       selectionPixels: selectionDocIndices, // 现在直接使用selectionDocIndices
       selectionDocIndices,       // 通过imaging.getSelection获取的选区内像素在文档中的索引
       selectionValues,           // 选区像素值（0-255）
       selectionCoefficients      // 选择系数（0-1）
     };
-    
+
   } catch (error) {
     console.error('获取选区边界失败:', error);
     return null;
@@ -242,6 +267,18 @@ const AdjustmentPanel: React.FC = () => {
 const rootRef = useRef<HTMLDivElement>(null);
 const specialWoodcutPreviewTimerRef = useRef<any>(0);
 const specialWoodcutApplyingRef = useRef(false);
+// 标记面板是否已完成首次挂载，避免刚打开面板就自动执行一次预览写入
+const specialWoodcutPreviewMountedRef = useRef(false);
+// 预览基线：记录应用预览前图层的原始像素，用于在参数变化或关闭预览时还原
+const specialWoodcutPreviewBaselineRef = useRef<{
+  docId: number;
+  layerId: number;
+  layer: any;
+  isBackgroundLayer: boolean;
+  docWidth: number;
+  docHeight: number;
+  fullPixelData: Uint8Array;
+} | null>(null);
 
 // 许可证状态管理
 const [isLicensed, setIsLicensed] = useState(false);
@@ -477,10 +514,26 @@ useEffect(() => {
         clearTimeout(specialWoodcutPreviewTimerRef.current);
       }
       specialWoodcutPreviewTimerRef.current = 0;
+      // 关闭预览时，若存在预览基线则还原原始像素
+      if (specialWoodcutPreviewBaselineRef.current) {
+        const { executeAsModal } = core;
+        executeAsModal(async () => {
+          try {
+            await restoreSpecialWoodcutBaseline();
+          } catch (e) {
+            console.warn('⚠️ 还原特殊木刻预览失败:', e);
+          }
+        }).catch(() => {});
+      }
       return;
     }
     if (specialWoodcutPreviewTimerRef.current) {
       clearTimeout(specialWoodcutPreviewTimerRef.current);
+    }
+    // 首次挂载时不自动预览，仅在用户实际调整参数后才触发
+    if (!specialWoodcutPreviewMountedRef.current) {
+      specialWoodcutPreviewMountedRef.current = true;
+      return;
     }
     specialWoodcutPreviewTimerRef.current = setTimeout(() => {
       handleSpecialWoodcut(true);
@@ -551,6 +604,26 @@ useEffect(() => {
   }
   return () => document.body.classList.remove('visibility-panel-open');
 }, [showVisibilityPanel]);
+
+// 拦截滚轮，避免滚轮穿透到 Photoshop 活动文档，改为滚动本面板
+useEffect(() => {
+  const el = rootRef.current ?? document.getElementById('pixeladjustment');
+  if (!el) return;
+
+  const onWheel = (e: WheelEvent) => {
+    const target = e.target as Node;
+    if (!el.contains(target)) return;
+    // 仅当本面板确实存在上下溢出时拦截，否则保持默认行为
+    if (el.scrollHeight <= el.clientHeight) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const delta = typeof e.deltaY === 'number' ? e.deltaY : (-(e as any).wheelDelta || 0);
+    el.scrollTop += delta;
+  };
+
+  el.addEventListener('wheel', onWheel, { capture: true, passive: false } as any);
+  return () => el.removeEventListener('wheel', onWheel, { capture: true } as any);
+}, []);
 
 // 拦截 Enter 键，避免触发 Photoshop 的“重复上一操作”
 useEffect(() => {
@@ -642,21 +715,21 @@ const handleLicenseBeforeAction = (): boolean => {
 
 
 
-// 滑块变化处理
-const handleRadiusChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setRadius(parseInt(event.target.value, 10));
+// 滑块变化处理（RangeSlider 直接传入数值）
+const handleRadiusChange = (value: number) => {
+  setRadius(value);
 };
 
-const handleSigmaChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setSigma(parseFloat(event.target.value));
+const handleSigmaChange = (value: number) => {
+  setSigma(value);
 };
 
-const handleSpecialSharpenStrengthChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setSpecialSharpenStrength(parseFloat(event.target.value));
+const handleSpecialSharpenStrengthChange = (value: number) => {
+  setSpecialSharpenStrength(value);
 };
 
-const handleGradientRelaxStrengthChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setGradientRelaxStrength(parseInt(event.target.value, 10));
+const handleGradientRelaxStrengthChange = (value: number) => {
+  setGradientRelaxStrength(value);
 };
 
 // 数值输入处理
@@ -689,8 +762,8 @@ const handleGradientRelaxStrengthNumberChange = (event: React.ChangeEvent<HTMLIn
 };
 
 // 加权强度滑块处理
-const handleWeightedIntensityChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setWeightedIntensity(parseFloat(event.target.value));
+const handleWeightedIntensityChange = (value: number) => {
+  setWeightedIntensity(value);
 };
 
 const handleWeightedIntensityNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -701,8 +774,8 @@ const handleWeightedIntensityNumberChange = (event: React.ChangeEvent<HTMLInputE
 };
 
 // 高频增强强度滑块处理
-const handleHighFreqIntensityChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setHighFreqIntensity(parseFloat(event.target.value));
+const handleHighFreqIntensityChange = (value: number) => {
+  setHighFreqIntensity(value);
 };
 
 const handleHighFreqIntensityNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -713,8 +786,8 @@ const handleHighFreqIntensityNumberChange = (event: React.ChangeEvent<HTMLInputE
 };
 
 // 高频范围滑块处理
-const handleHighFreqRangeChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setHighFreqRange(parseFloat(event.target.value));
+const handleHighFreqRangeChange = (value: number) => {
+  setHighFreqRange(value);
 };
 
 const handleHighFreqRangeNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -724,8 +797,8 @@ const handleHighFreqRangeNumberChange = (event: React.ChangeEvent<HTMLInputEleme
   }
 };
 
-const handleSpecialWoodcutLevelsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setSpecialWoodcutLevels(parseInt(event.target.value, 10));
+const handleSpecialWoodcutLevelsChange = (value: number) => {
+  setSpecialWoodcutLevels(value);
 };
 
 const handleSpecialWoodcutLevelsNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -735,8 +808,8 @@ const handleSpecialWoodcutLevelsNumberChange = (event: React.ChangeEvent<HTMLInp
   }
 };
 
-const handleSpecialWoodcutEdgeThresholdChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setSpecialWoodcutEdgeThreshold(parseInt(event.target.value, 10));
+const handleSpecialWoodcutEdgeThresholdChange = (value: number) => {
+  setSpecialWoodcutEdgeThreshold(value);
 };
 
 const handleSpecialWoodcutEdgeThresholdNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -746,8 +819,8 @@ const handleSpecialWoodcutEdgeThresholdNumberChange = (event: React.ChangeEvent<
   }
 };
 
-const handleSpecialWoodcutEdgeStrengthChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setSpecialWoodcutEdgeStrength(parseInt(event.target.value, 10));
+const handleSpecialWoodcutEdgeStrengthChange = (value: number) => {
+  setSpecialWoodcutEdgeStrength(value);
 };
 
 const handleSpecialWoodcutEdgeStrengthNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -903,8 +976,8 @@ const handleEdgeSmoothModeChange = (event: React.ChangeEvent<HTMLSelectElement>)
   setEdgeSmoothMode(event.target.value);
 };
 
-const handleEdgeMedianRadiusChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setEdgeMedianRadius(parseInt(event.target.value, 10));
+const handleEdgeMedianRadiusChange = (value: number) => {
+  setEdgeMedianRadius(value);
 };
 
 const handleEdgeMedianRadiusNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -914,8 +987,8 @@ const handleEdgeMedianRadiusNumberChange = (event: React.ChangeEvent<HTMLInputEl
   }
 };
 
-const handleEdgeBackgroundSmoothRadiusChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setEdgeBackgroundSmoothRadius(parseInt(event.target.value, 10));
+const handleEdgeBackgroundSmoothRadiusChange = (value: number) => {
+  setEdgeBackgroundSmoothRadius(value);
 };
 
 const handleEdgeBackgroundSmoothRadiusNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -925,8 +998,8 @@ const handleEdgeBackgroundSmoothRadiusNumberChange = (event: React.ChangeEvent<H
   }
 };
 
-const handleEdgeLineStrengthChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setEdgeLineStrength(parseInt(event.target.value, 10));
+const handleEdgeLineStrengthChange = (value: number) => {
+  setEdgeLineStrength(value);
 };
 
 const handleEdgeLineStrengthNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -936,8 +1009,8 @@ const handleEdgeLineStrengthNumberChange = (event: React.ChangeEvent<HTMLInputEl
   }
 };
 
-const handleEdgeLineSmoothRadiusChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setEdgeLineSmoothRadius(parseInt(event.target.value, 10));
+const handleEdgeLineSmoothRadiusChange = (value: number) => {
+  setEdgeLineSmoothRadius(value);
 };
 
 const handleEdgeLineSmoothRadiusNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -947,8 +1020,8 @@ const handleEdgeLineSmoothRadiusNumberChange = (event: React.ChangeEvent<HTMLInp
   }
 };
 
-const handleEdgeLinePreserveDetailChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  setEdgeLinePreserveDetail(parseInt(event.target.value, 10));
+const handleEdgeLinePreserveDetailChange = (value: number) => {
+  setEdgeLinePreserveDetail(value);
 };
 
 const handleEdgeLinePreserveDetailNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1385,6 +1458,32 @@ const handleBlockColorPatch = async () => {
   }
 };
 
+// 还原特殊木刻预览：把保存的原始像素写回图层，并清除基线
+const restoreSpecialWoodcutBaseline = async () => {
+  const baseline = specialWoodcutPreviewBaselineRef.current;
+  if (!baseline) return;
+  // 若文档或图层已变化，无法安全还原，直接丢弃基线
+  try {
+    const doc = app.activeDocument;
+    const activeLayer = doc?.activeLayers?.[0];
+    if (!doc || !activeLayer || doc.id !== baseline.docId || activeLayer.id !== baseline.layerId) {
+      specialWoodcutPreviewBaselineRef.current = null;
+      return;
+    }
+  } catch {
+    specialWoodcutPreviewBaselineRef.current = null;
+    return;
+  }
+  await writeFullPixelsToLayer(
+    baseline.fullPixelData,
+    baseline.layer,
+    baseline.docWidth,
+    baseline.docHeight,
+    baseline.isBackgroundLayer
+  );
+  specialWoodcutPreviewBaselineRef.current = null;
+};
+
 const handleSpecialWoodcut = async (isPreview: boolean = false) => {
   if (!handleLicenseBeforeAction()) return;
   if (specialWoodcutApplyingRef.current) return;
@@ -1409,6 +1508,11 @@ const handleSpecialWoodcut = async (isPreview: boolean = false) => {
         return;
       }
 
+      // 若存在上一次预览的基线，先还原原始像素，避免在预览结果上重复叠加
+      if (specialWoodcutPreviewBaselineRef.current) {
+        await restoreSpecialWoodcutBaseline();
+      }
+
       const selectionBounds = await getSelectionData();
       if (!selectionBounds) {
         if (!isPreview) {
@@ -1418,6 +1522,19 @@ const handleSpecialWoodcut = async (isPreview: boolean = false) => {
       }
 
       const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+
+      // 预览首次：在写回前保存原始像素作为基线，便于后续还原
+      if (isPreview && !specialWoodcutPreviewBaselineRef.current) {
+        specialWoodcutPreviewBaselineRef.current = {
+          docId: app.activeDocument.id,
+          layerId: layer.id,
+          layer,
+          isBackgroundLayer,
+          docWidth: selectionBounds.docWidth,
+          docHeight: selectionBounds.docHeight,
+          fullPixelData: new Uint8Array(pixelResult.fullPixelData)
+        };
+      }
 
       const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
       let maskIndex = 0;
@@ -1441,6 +1558,8 @@ const handleSpecialWoodcut = async (isPreview: boolean = false) => {
       await applyProcessedPixels(processedPixels, pixelResult);
     });
     if (!isPreview) {
+      // 正式应用：清除预览基线，提交当前结果
+      specialWoodcutPreviewBaselineRef.current = null;
       giveFocusBackToPS();
     }
   } catch (error) {
@@ -1511,6 +1630,83 @@ const handleLineEnhancement = async () => {
     const msg = typeof error === 'string' ? error : (error && (error.message || (error as any).toString?.() || '未知错误'));
     console.error('❌ 线条增强处理失败:', error);
     await core.showAlert({ message: '线条增强处理失败: ' + msg });
+  }
+};
+
+// alpha对齐功能：统一半透明笔刷交叉点的不透明度
+// I/O 模式参考 handleGradientModify：整文档 getPixels → 算法 → 整文档 putPixels，
+// 选区外像素由掩码系数 (mask/255) 混合保留。环形邻域参考所有画过的线条像素（不受选区限制），
+// 因此小选区也能引用选区外的线条找到"单线水平"真正统一交叉点。
+const handleAlphaAlign = async () => {
+  if (!handleLicenseBeforeAction()) return;
+  try {
+    const { executeAsModal } = core;
+
+    await executeAsModal(async () => {
+      // 检测当前编辑状态
+      const editingState = await checkEditingState();
+      if (!editingState.isValid) return;
+      const { layer, isBackgroundLayer } = editingState;
+      if (isBackgroundLayer) {
+        await core.showAlert({ message: 'alpha对齐仅支持非背景的普通像素图层，请选择像素图层后再使用。' });
+        return;
+      }
+
+      // 获取选区边界与选区像素数据（无选区时内部会自动 batchPlay 全选文档）
+      const selectionBounds = await getSelectionData();
+      if (!selectionBounds) {
+        await core.showAlert({ message: '获取文档信息失败' });
+        return;
+      }
+      console.log('✅ [alpha对齐 v2] 选区像素数=' + (selectionBounds.selectionDocIndices ? selectionBounds.selectionDocIndices.size : -1) +
+        ' 文档=' + selectionBounds.docWidth + 'x' + selectionBounds.docHeight +
+        ' 选区=' + selectionBounds.left + ',' + selectionBounds.top + ',' + selectionBounds.right + ',' + selectionBounds.bottom);
+
+      await runWithTemporaryUnlock(async () => {
+        // 使用与像素过渡等已验证功能完全相同的共享像素数据处理流程
+        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+
+        // 诊断：统计选区内 fullPixelData 的 alpha 分布，确认读到的 alpha 是否正确
+        {
+          let aMin = 255, aMax = 0, aNonZero = 0;
+          for (let i = 0; i < pixelResult.selectionIndices.length; i++) {
+            const di = pixelResult.selectionIndices[i] * 4;
+            const a = pixelResult.fullPixelData[di + 3] || 0;
+            if (a > 0) aNonZero++;
+            if (a < aMin) aMin = a;
+            if (a > aMax) aMax = a;
+          }
+          console.log('🔍 [alpha对齐] 选区内 fullPixelData alpha: 非零像素=' + aNonZero + ' min=' + aMin + ' max=' + aMax);
+        }
+
+        // 创建完整文档尺寸的选区掩码（选区内为羽化值 0-255，选区外为 0）
+        const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
+        let maskIndex = 0;
+        for (let docIndex of pixelResult.selectionIndices) {
+          fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
+          maskIndex++;
+        }
+
+        // 关键：传入 fullPixelData（完整 alpha）而非 selectionPixelData。
+        // 这样环形邻域能引用选区外的线条像素找到“单线水平”，
+        // 而 fullSelectionMask 只决定“哪些像素会被修改”。
+        const processedPixels = await processAlphaAlign(
+          pixelResult.fullPixelData.buffer,
+          fullSelectionMask.buffer,
+          { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
+          {},
+          false
+        );
+
+        // 写回：按选区羽化系数混合，选区内写入计算结果，选区外保留原像素
+        await applyProcessedPixels(processedPixels, pixelResult);
+      });
+    });
+    giveFocusBackToPS();
+  } catch (error) {
+    const msg = typeof error === 'string' ? error : (error && (error.message || (error as any).toString?.() || '未知错误'));
+    console.error('❌ alpha对齐处理失败:', error);
+    await core.showAlert({ message: 'alpha对齐处理失败: ' + msg });
   }
 };
 
@@ -1871,11 +2067,11 @@ const handleDrop = (e: React.DragEvent, targetId: string) => {
 const renderLocalContrastContent = () => (
   <div className="adjustment-section">
     
-    <button className="adjustment-button" onClick={handlePixelTransition} title={`● 特制类高斯模糊过渡滤镜，特点是屏蔽alpha为0的像素，从而更好保护形状。
+    <div role="button" tabIndex={0} className="adjustment-button" onClick={handlePixelTransition} title={`● 特制类高斯模糊过渡滤镜，特点是屏蔽alpha为0的像素，从而更好保护形状。
 
 ● 半径决定参考范围大小；强度决定过渡幅度。
 
-即：半径大→过渡范围更广；强度大→边缘更平滑。`}>像素过渡</button>
+即：半径大→过渡范围更广；强度大→边缘更平滑。`}>像素过渡</div>
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
@@ -1885,7 +2081,7 @@ const renderLocalContrastContent = () => (
 
 示例：小图建议 5–10px；大图建议 10–20px。`}>半径</div>
         <div className="unit-container">
-          <input type="range" min="5" max="20" step="1" value={radius} onChange={handleRadiusChange} className="adjustment-slider-input" />
+          <RangeSlider min={5} max={20} step={1} value={radius} onChange={handleRadiusChange} className="adjustment-slider-input" />
           <input type="number" min="5" max="20" step="1" value={radius} onChange={handleRadiusNumberChange} className="adjustment-number-input" />
           <div className="adjustment-unit">px</div>
         </div>
@@ -1897,7 +2093,7 @@ const renderLocalContrastContent = () => (
 
 示例：轻微处理用 1–2 级；明显去锯齿用 3–5 级。`}>强度</div>
         <div className="unit-container">
-          <input type="range" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaChange} className="adjustment-slider-input" />
+          <RangeSlider min={1} max={5} step={0.5} value={sigma} onChange={handleSigmaChange} className="adjustment-slider-input" />
           <input type="number" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaNumberChange} className="adjustment-number-input" />
           <div className="adjustment-unit">级</div>
         </div>
@@ -1906,11 +2102,11 @@ const renderLocalContrastContent = () => (
 
     <div className="adjustment-divider"></div>
 
-    <button className="adjustment-button" onClick={handleGradientModify} title={`● 修改选区内的梯度形态：负值放缓（过渡更宽更柔），正值陡峭（过渡更窄更硬）。
+    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleGradientModify} title={`● 修改选区内的梯度形态：负值放缓（过渡更宽更柔），正值陡峭（过渡更窄更硬）。
 
 ● 同时作用于颜色与不透明度（alpha）的过渡。
 
-● 计算时屏蔽选区外像素，避免透明外部拖低边缘导致露出选区边界。`}>梯度修改</button>
+● 计算时屏蔽选区外像素，避免透明外部拖低边缘导致露出选区边界。`}>梯度修改</div>
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
@@ -1922,7 +2118,7 @@ const renderLocalContrastContent = () => (
 
 提示：绝对值越大，影响越明显且更慢。`}>程度</div>
         <div className="unit-container">
-          <input type="range" min="-10" max="10" step="1" value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthChange} className="adjustment-slider-input" />
+          <RangeSlider min={-10} max={10} step={1} value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthChange} className="adjustment-slider-input" />
           <input type="number" min="-10" max="10" step="1" value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthNumberChange} className="adjustment-number-input" />
           <div className="adjustment-unit">级</div>
         </div>
@@ -1931,11 +2127,11 @@ const renderLocalContrastContent = () => (
 
     <div className="adjustment-divider"></div>
 
-    <button className="adjustment-button" onClick={handleSpecialSharpen} title={`● 一种更“硬”的局部锐化方式，用于强化过渡边缘与对比。
+    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleSpecialSharpen} title={`● 一种更“硬”的局部锐化方式，用于强化过渡边缘与对比。
 
 ● 仅对选区内生效，并尽量避免选区边界露出。
 
-● 数值越大效果越强，也越慢。`}>特殊锐化</button>
+● 数值越大效果越强，也越慢。`}>特殊锐化</div>
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
@@ -1943,7 +2139,7 @@ const renderLocalContrastContent = () => (
 
 ● 建议 2–6 用于轻中度增强，7–10 用于强烈强化。`}>强度</div>
         <div className="unit-container">
-          <input type="range" min="1" max="10" step="0.5" value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthChange} className="adjustment-slider-input" />
+          <RangeSlider min={1} max={10} step={0.5} value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthChange} className="adjustment-slider-input" />
           <input type="number" min="1" max="10" step="0.5" value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthNumberChange} className="adjustment-number-input" />
           <div className="adjustment-unit">级</div>
         </div>
@@ -1952,13 +2148,13 @@ const renderLocalContrastContent = () => (
 
     <div className="adjustment-divider"></div>
 
-    <button className="adjustment-button" onClick={handleHighFrequencyEnhancement} title={`● 提升细小纹理与微对比，使画面更清晰。
+    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleHighFrequencyEnhancement} title={`● 提升细小纹理与微对比，使画面更清晰。
 
 ● 仅对选区内的高频细节生效，低频形状不被破坏。
 
 ● 强度决定增强幅度；范围决定纳入的细节尺度宽度。
 
-示例：强度高→更锐利；范围大→兼顾更粗的纹理。`}>高频增强</button>
+示例：强度高→更锐利；范围大→兼顾更粗的纹理。`}>高频增强</div>
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
@@ -1966,7 +2162,7 @@ const renderLocalContrastContent = () => (
 
 ● 建议 1–4 用于精修，5–8 用于明显锐化。`}>强度</div>
         <div className="unit-container">
-          <input type="range" min="1" max="10" step="0.5" value={highFreqIntensity} onChange={handleHighFreqIntensityChange} className="adjustment-slider-input" />
+          <RangeSlider min={1} max={10} step={0.5} value={highFreqIntensity} onChange={handleHighFreqIntensityChange} className="adjustment-slider-input" />
           <input type="number" min="1" max="10" step="0.5" value={highFreqIntensity} onChange={handleHighFreqIntensityNumberChange} className="adjustment-number-input" />
           <div className="adjustment-unit">级</div>
         </div>
@@ -1976,7 +2172,7 @@ const renderLocalContrastContent = () => (
 
 ● 值小偏向极细纹理；值大兼顾较粗纹理。`}>范围</div>
         <div className="unit-container">
-          <input type="range" min="1" max="10" step="0.5" value={highFreqRange} onChange={handleHighFreqRangeChange} className="adjustment-slider-input" />
+          <RangeSlider min={1} max={10} step={0.5} value={highFreqRange} onChange={handleHighFreqRangeChange} className="adjustment-slider-input" />
           <input type="number" min="1" max="10" step="0.5" value={highFreqRange} onChange={handleHighFreqRangeNumberChange} className="adjustment-number-input" />
           <div className="adjustment-unit">级</div>
         </div>
@@ -1987,9 +2183,9 @@ const renderLocalContrastContent = () => (
 
 const renderEdgeProcessingContent = () => (
   <div className="adjustment-section">
-    <button className="adjustment-button" onClick={handleSmartEdgeSmooth} title={`● 两种模式：色块边界的“中间值”平滑；或对线条做“抹除→方向平滑→回写”。
+    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleSmartEdgeSmooth} title={`● 两种模式：色块边界的“中间值”平滑；或对线条做“抹除→方向平滑→回写”。
 
-● 普通图层会对 RGBA 四通道处理；背景图层只处理 RGB。`}>边缘平滑</button>
+● 普通图层会对 RGBA 四通道处理；背景图层只处理 RGB。`}>边缘平滑</div>
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
@@ -2009,7 +2205,7 @@ const renderEdgeProcessingContent = () => (
           <div className="adjustment-slider-item">
             <div className="wider-adjustment-slider-label" title={`● PS 自带“中间值”滤镜半径。半径越大，边缘越柔和但更慢。`}>中间值半径</div>
             <div className="unit-container">
-              <input type="range" min="10" max="30" step="1" value={edgeMedianRadius} onChange={handleEdgeMedianRadiusChange} className="adjustment-slider-input" />
+              <RangeSlider min={10} max={30} step={1} value={edgeMedianRadius} onChange={handleEdgeMedianRadiusChange} className="adjustment-slider-input" />
               <input type="number" min="10" max="30" step="1" value={edgeMedianRadius} onChange={handleEdgeMedianRadiusNumberChange} className="adjustment-number-input" />
               <div className="adjustment-unit">px</div>
             </div>
@@ -2022,7 +2218,7 @@ const renderEdgeProcessingContent = () => (
           <div className="adjustment-slider-item">
             <div className="wider-adjustment-slider-label" title={`● 主线条模式中的“抹除”使用 PS 自带“中间值”滤镜。半径越大越能清掉杂线与脏点，但整体会更软。`}>中间值半径</div>
             <div className="unit-container">
-              <input type="range" min="10" max="30" step="1" value={edgeBackgroundSmoothRadius} onChange={handleEdgeBackgroundSmoothRadiusChange} className="adjustment-slider-input" />
+              <RangeSlider min={10} max={30} step={1} value={edgeBackgroundSmoothRadius} onChange={handleEdgeBackgroundSmoothRadiusChange} className="adjustment-slider-input" />
               <input type="number" min="10" max="30" step="1" value={edgeBackgroundSmoothRadius} onChange={handleEdgeBackgroundSmoothRadiusNumberChange} className="adjustment-number-input" />
               <div className="adjustment-unit">px</div>
             </div>
@@ -2031,7 +2227,7 @@ const renderEdgeProcessingContent = () => (
           <div className="adjustment-slider-item">
             <div className="wide-adjustment-slider-label" title={`● 控制线条平滑的力度。越高越接近“油画滤镜”那种把乱线磨平的效果。`}>平滑力度</div>
             <div className="unit-container">
-              <input type="range" min="0" max="100" step="1" value={edgeLineStrength} onChange={handleEdgeLineStrengthChange} className="adjustment-slider-input" />
+              <RangeSlider min={0} max={100} step={1} value={edgeLineStrength} onChange={handleEdgeLineStrengthChange} className="adjustment-slider-input" />
               <input type="number" min="0" max="100" step="1" value={edgeLineStrength} onChange={handleEdgeLineStrengthNumberChange} className="adjustment-number-input" />
               <div className="adjustment-unit">%</div>
             </div>
@@ -2040,7 +2236,7 @@ const renderEdgeProcessingContent = () => (
           <div className="adjustment-slider-item">
             <div className="wide-adjustment-slider-label" title={`● 控制平滑的采样范围。范围越大越能把起伏磨平，但也更慢。`}>平滑范围</div>
             <div className="unit-container">
-              <input type="range" min="3" max="12" step="1" value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusChange} className="adjustment-slider-input" />
+              <RangeSlider min={3} max={12} step={1} value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusChange} className="adjustment-slider-input" />
               <input type="number" min="3" max="12" step="1" value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusNumberChange} className="adjustment-number-input" />
               <div className="adjustment-unit">px</div>
             </div>
@@ -2049,7 +2245,7 @@ const renderEdgeProcessingContent = () => (
           <div className="adjustment-slider-item">
             <div className="wide-adjustment-slider-label" title={`● 控制保边缘程度。越高越不容易把笔触边缘糊掉。`}>保护细节</div>
             <div className="unit-container">
-              <input type="range" min="0" max="100" step="1" value={edgeLinePreserveDetail} onChange={handleEdgeLinePreserveDetailChange} className="adjustment-slider-input" />
+              <RangeSlider min={0} max={100} step={1} value={edgeLinePreserveDetail} onChange={handleEdgeLinePreserveDetailChange} className="adjustment-slider-input" />
               <input type="number" min="0" max="100" step="1" value={edgeLinePreserveDetail} onChange={handleEdgeLinePreserveDetailNumberChange} className="adjustment-number-input" />
               <div className="adjustment-unit">%</div>
             </div>
@@ -2060,11 +2256,21 @@ const renderEdgeProcessingContent = () => (
 
     <div className="adjustment-divider"></div>
 
-    <button className="adjustment-button" onClick={handleLineEnhancement} title={`● 针对边缘线条的 Alpha 进行增强，使轮廓更清晰。
+    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleLineEnhancement} title={`● 针对边缘线条的 Alpha 进行增强，使轮廓更清晰。
 
 ● 适合线稿、UI 描边、图标轮廓等。
 
-● 无选区时默认对整幅图处理。`}>线条加黑</button>
+● 无选区时默认对整幅图处理。`}>线条加黑</div>
+
+    <div className="adjustment-divider"></div>
+
+    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleAlphaAlign} title={`● 统一半透明笔刷交叉点的不透明度，消除两笔交汇处出现的“深色点”。
+
+● 分析选区内像素的 alpha，把局部异常偏高（如交叉叠加）的区域拉回周围线条的自然水平，与周边自然衔接。
+
+● 仅对非背景的普通像素图层生效，只修改选区内 Alpha>0 的区域（RGB 不变）。
+
+● 会排除选区内的羽化渐变与极低不透明度残留的干扰。`}>alpha对齐</div>
   </div>
 );
 
@@ -2072,9 +2278,9 @@ const renderBlockAdjustmentContent = () => (
   <div className="adjustment-section">
 
     <div className="adjustment-double-buttons">
-      <button className="adjustment-button" onClick={handleBlockAverage} title={`● 按网格对选区分块做加权平均，降低噪点和斑驳。
+      <div role="button" tabIndex={0} className="adjustment-button" onClick={handleBlockAverage} title={`● 按网格对选区分块做加权平均，降低噪点和斑驳。
 
-● 加权模式让中心权重更高，保留主体轮廓。`}>分块平均</button>
+● 加权模式让中心权重更高，保留主体轮廓。`}>分块平均</div>
       
       <div className="adjustment-swtich-container">
         <label 
@@ -2100,7 +2306,7 @@ const renderBlockAdjustmentContent = () => (
 
 示例：照片降噪用 2–6；UI 底色统一用 6–10。`}>强度</div>
           <div className="unit-container">
-            <input type="range" min="1" max="10" step="0.5" value={weightedIntensity} onChange={handleWeightedIntensityChange} className="adjustment-slider-input" />
+            <RangeSlider min={1} max={10} step={0.5} value={weightedIntensity} onChange={handleWeightedIntensityChange} className="adjustment-slider-input" />
             <input type="number" min="1" max="10" step="0.5" value={weightedIntensity} onChange={handleWeightedIntensityNumberChange} className="adjustment-number-input" />
             <div className="adjustment-unit">级</div>
           </div>
@@ -2110,19 +2316,20 @@ const renderBlockAdjustmentContent = () => (
 
     <div className="adjustment-divider"></div>
 
-    <button className="adjustment-button" onClick={handleBlockGradient} title={`● 对每个不相连选区（连通块）分别采样一次渐变颜色并填充。
+    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleBlockGradient} title={`● 对每个不相连选区（连通块）分别采样一次渐变颜色并填充。
 
 ● 渐变数据来自主面板“渐变设置”的最终预览（含角度与反向）。
 
-● 每个连通块取形状质心，沿渐变方向投影后做归一化映射。`}>分块渐变</button>
+● 每个连通块取形状质心，沿渐变方向投影后做归一化映射。`}>分块渐变</div>
 
-    <div className="adjustment-divider"></div>
+    {/* 分块补色功能暂不完善，先隐藏不显示（连同其线稿参考选择器一起注释） */}
+    {/* <div className="adjustment-divider"></div>
 
-    <button className="adjustment-button" onClick={handleBlockColorPatch} title={`● 解决线稿与底色之间的细缝、锐角尖头漏填等问题。
+    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleBlockColorPatch} title={`● 解决线稿与底色之间的细缝、锐角尖头漏填等问题。
 
 ● 在选区内，把透明像素用最近的已有颜色补齐，并尽量不跨越线稿边界。
 
-● 建议先在“线稿参考”下拉中选择线稿所在图层，再在颜色层选区内执行。`}>分块补色</button>
+● 建议先在“线稿参考”下拉中选择线稿所在图层，再在颜色层选区内执行。`}>分块补色</div>
 
 
     <div className="adjustment-slider-container">
@@ -2148,47 +2355,49 @@ const renderBlockAdjustmentContent = () => (
       </div>
     </div>
 
+    <div className="adjustment-divider"></div> */}
+
     <div className="adjustment-divider"></div>
 
     <div className="adjustment-double-buttons">
-      <button className="adjustment-button" onClick={() => handleSpecialWoodcut(false)} title={`● 木刻量化会让颜色出现阶梯状色阶。
+      <div role="button" tabIndex={0} className="adjustment-button" onClick={() => handleSpecialWoodcut(false)} title={`● 木刻量化会让颜色出现阶梯状色阶。
 
 ● 本功能会额外识别透明/半透明边缘，并在边缘处按强度叠加木刻量化，使边缘与内部风格一致。
 
-● 仅修改 RGB，alpha 保持不变。`}>特殊木刻</button>
+● 仅修改 RGB，alpha 保持不变。`}>特殊木刻</div>
 
-      <button className="adjustment-button" onClick={resetSpecialWoodcutParams} title="一键恢复默认参数">重置</button>
+      <div role="button" tabIndex={0} className="adjustment-button" onClick={resetSpecialWoodcutParams} title="一键恢复默认参数">重置</div>
     </div>
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" title="色阶数（2–16），数值越小越“硬”，越大越细腻。">色阶数</div>
+        <div className="adjustment-slider-label adjustment-slider-label-3" title="色阶数（2–16），数值越小越“硬”，越大越细腻。">色阶数</div>
         <div className="unit-container">
-          <input type="range" min="2" max="16" step="1" value={specialWoodcutLevels} onChange={handleSpecialWoodcutLevelsChange} className="adjustment-slider-input" />
+          <RangeSlider min={2} max={16} step={1} value={specialWoodcutLevels} onChange={handleSpecialWoodcutLevelsChange} className="adjustment-slider-input" />
           <input type="number" min="2" max="16" step="1" value={specialWoodcutLevels} onChange={handleSpecialWoodcutLevelsNumberChange} className="adjustment-number-input" />
           <div className="adjustment-unit">级</div>
         </div>
       </div>
 
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" title="边缘强度阈值（0–255），越低越容易把更多区域视为边缘。">边缘阈值</div>
+        <div className="adjustment-slider-label adjustment-slider-label-4" title="边缘强度阈值（0–255），越低越容易把更多区域视为边缘。">边缘阈值</div>
         <div className="unit-container">
-          <input type="range" min="0" max="255" step="1" value={specialWoodcutEdgeThreshold} onChange={handleSpecialWoodcutEdgeThresholdChange} className="adjustment-slider-input" />
+          <RangeSlider min={0} max={255} step={1} value={specialWoodcutEdgeThreshold} onChange={handleSpecialWoodcutEdgeThresholdChange} className="adjustment-slider-input" />
           <input type="number" min="0" max="255" step="1" value={specialWoodcutEdgeThreshold} onChange={handleSpecialWoodcutEdgeThresholdNumberChange} className="adjustment-number-input" />
           <div className="adjustment-unit">值</div>
         </div>
       </div>
 
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" title="边缘木刻叠加强度（0–100%）。">边缘强度</div>
+        <div className="adjustment-slider-label adjustment-slider-label-4" title="边缘木刻叠加强度（0–100%）。">边缘强度</div>
         <div className="unit-container">
-          <input type="range" min="0" max="100" step="1" value={specialWoodcutEdgeStrength} onChange={handleSpecialWoodcutEdgeStrengthChange} className="adjustment-slider-input" />
+          <RangeSlider min={0} max={100} step={1} value={specialWoodcutEdgeStrength} onChange={handleSpecialWoodcutEdgeStrengthChange} className="adjustment-slider-input" />
           <input type="number" min="0" max="100" step="1" value={specialWoodcutEdgeStrength} onChange={handleSpecialWoodcutEdgeStrengthNumberChange} className="adjustment-number-input" />
           <div className="adjustment-unit">%</div>
         </div>
       </div>
 
-      <div className="adjustment-swtich-container" style={{ marginTop: '6px' }}>
+      <div className="adjustment-swtich-container" style={{ marginTop: '6px', justifyContent: 'flex-start', width: 'auto' }}>
         <label
           className="adjustment-swtich-label"
           onClick={() => setSpecialWoodcutPreview(!specialWoodcutPreview)}
@@ -2214,13 +2423,14 @@ const renderSectionContent = (sectionId: string) => {
 };
 
 const renderSection = (section: SectionConfig) => (
-  <div key={section.id} className="adjust-expand-section"
-       draggable
-       onDragStart={(e)=>handleDragStart(e, section.id)}
-       onDragOver={handleDragOver}
-       onDrop={(e)=>handleDrop(e, section.id)}
-  >
-    <div className="adjust-expand-header" onClick={()=>toggleSectionCollapse(section.id)}>
+  <div key={section.id} className="adjust-expand-section">
+    <div className="adjust-expand-header"
+         draggable
+         onDragStart={(e)=>handleDragStart(e, section.id)}
+         onDragOver={handleDragOver}
+         onDrop={(e)=>handleDrop(e, section.id)}
+         onClick={()=>toggleSectionCollapse(section.id)}
+    >
       <div className={`adjust-expand-icon ${section.isCollapsed ? '' : 'expanded'}`}>
         <ExpandIcon expanded={!section.isCollapsed} />
       </div>
@@ -2265,7 +2475,7 @@ return (
         <div className="adjustment-modal-content" onClick={(e) => e.stopPropagation()}>
           <div className="adjustment-modal-header">
             <span>隐藏/显示分区</span>
-            <button className="adjustment-modal-close" onClick={() => setShowVisibilityPanel(false)}>×</button>
+            <div role="button" tabIndex={0} className="adjustment-modal-close" onClick={() => setShowVisibilityPanel(false)}>×</div>
           </div>
           <div className="adjustment-modal-list">
             {sections.sort((a,b)=>a.order-b.order).map(sec => (

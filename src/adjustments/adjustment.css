@@ -125,7 +125,7 @@
   width: 100%;
 }
 
-/* 按钮样式 */
+/* 按钮样式（与主面板主开关 .main-button 保持一致） */
 .adjustment-button {
   height: 30px;
   width: 80px;
@@ -133,7 +133,7 @@
   background-color: var(--button-bg);
   color: var(--text-color);
   border: 1px solid var(--border-color);
-  border-radius: 5px;
+  border-radius: 4px;
   font-size: 13px;
   font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
   cursor: pointer;
@@ -141,10 +141,13 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  box-sizing: border-box;
+  user-select: none;
 }
 
 .adjustment-button:hover {
   background-color: var(--hover-bg);
+  border-color: var(--primary-color);
   transform: scale(1.02);
 }
 
@@ -168,7 +171,6 @@
   color: var(--text-color);
   display: flex;
   font-size: 13px;
-  min-width: 50px; 
   cursor: pointer;
 }
 
@@ -195,6 +197,17 @@
   font-size: 13px;
   flex: 0 0 20px;
   white-space: nowrap;
+}
+
+/* 3字标签专用宽度：参考 2字=20px、5字=60px 按字数线性插值（每字约13.3px），
+   保证标签文字不溢出、滑块两端间距与其他滑块一致 */
+.adjustment-slider-label-3 {
+  flex: 0 0 33px;
+}
+
+/* 4字标签专用宽度 */
+.adjustment-slider-label-4 {
+  flex: 0 0 47px;
 }
 
 /* 宽的单位标签 */
@@ -237,6 +250,23 @@
   margin-top: 15px;
 }
 
+/* RangeSlider 在调整面板中的适配（替代 PS 27.9 后失效的原生 range） */
+.adjustment-slider-input.range-slider,
+.narrow-adjustment-slider-input.range-slider,
+.narrower-adjustment-slider-input.range-slider {
+  display: block;
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 18px;
+  /* 与 number-input 纵向居中（unit-container 已 align-items:center），再上移2px */
+  margin-top: 1px;
+  background: transparent;
+  cursor: pointer;
+  /* 可见轨道宽度减少14px（左右各内缩7px，比上一轮再短4px，保证手柄在两端时与外部有足够间距） */
+  --rs-track-inset: 13px;
+}
+
 /* 更窄的滑块 */
 .narrower-adjustment-slider-input{
   display: flex;
@@ -267,6 +297,8 @@
   font-size: 11px;
   text-align: center;
   margin-left: -5px;
+  /* 字体与选区笔面板统一 */
+  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
   /* 移除z-index，让它跟随父容器的折叠状态 */
 }
 

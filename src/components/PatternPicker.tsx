@@ -4,6 +4,7 @@ import { FileIcon, DeleteIcon } from '../styles/Icons';
 import { action, core, imaging, app } from 'photoshop';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
 import { PresetManager } from '../utils/PresetManager';
+import RangeSlider from './RangeSlider';
 
 interface PatternPickerProps {
     isOpen: boolean;
@@ -1628,9 +1629,9 @@ interface PatternPickerProps {
         <div className="pattern-picker">
             <div className="panel-header">
                 <h3>选择图案</h3>
-                <button className="close-button" onClick={() => {
+                <div className="close-button" role="button" tabIndex={0} onClick={() => {
                     onClose();
-                }}>×</button>
+                }}>×</div>
             </div>
             <div className="pattern-container">
                  <div className="pattern-preset" onClick={handleContainerClick}>
@@ -1785,16 +1786,14 @@ interface PatternPickerProps {
                             </div>
                         </label>
 
-                        <input
-                            type="range"
-                            min="0"
-                            max="360"
-                            step="1"
+                        <RangeSlider
+                            min={0}
+                            max={360}
+                            step={1}
                             value={angle}
-                            onChange={(e) => setAngle(Number(e.target.value))}
-                            onMouseDown={() => { setIsSliderDragging(true); setDragTarget('angle'); }}
-                            onMouseUp={() => { setIsSliderDragging(false); setDragTarget(null); }}
-                            onMouseLeave={() => { if (isSliderDragging && dragTarget === 'angle') { setIsSliderDragging(false); setDragTarget(null); } }}
+                            className="pattern-angle-range"
+                            onChange={(v) => setAngle(v)}
+                            onDragEnd={() => { if (selectedPattern) updatePatternTransform(selectedPattern, scale, angle); }}
                         />
                     </div>
 
@@ -1811,16 +1810,14 @@ interface PatternPickerProps {
                                 <span>%</span>
                             </div>
                         </label>
-                        <input
-                            type="range"
-                            min="20"
-                            max="300"
-                            step="1"
+                        <RangeSlider
+                            min={20}
+                            max={300}
+                            step={1}
                             value={scale}
-                            onChange={(e) => setScale(Number(e.target.value))}
-                            onMouseDown={() => { setIsSliderDragging(true); setDragTarget('scale'); }}
-                            onMouseUp={() => { setIsSliderDragging(false); setDragTarget(null); }}
-                            onMouseLeave={() => { if (isSliderDragging && dragTarget === 'scale') { setIsSliderDragging(false); setDragTarget(null); } }}
+                            className="pattern-scale-range"
+                            onChange={(v) => setScale(v)}
+                            onDragEnd={() => { if (selectedPattern) updatePatternTransform(selectedPattern, scale, angle); }}
                         />
                     </div>
                 </div>
