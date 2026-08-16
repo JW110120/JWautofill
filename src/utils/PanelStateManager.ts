@@ -26,6 +26,7 @@ export type AdjustmentPanelState = {
   toggles?: {
     useWeightedAverage?: boolean;
     preserveDetail?: boolean;
+    specialWoodcutPreview?: boolean;
   };
   // 新增：全部数值类参数（滑块/数字输入）
   values?: {
@@ -38,6 +39,9 @@ export type AdjustmentPanelState = {
     edgeColorThreshold?: number;
     edgeSmoothRadius?: number;
     edgeIntensity?: number;
+    specialWoodcutLevels?: number;
+    specialWoodcutEdgeThreshold?: number;
+    specialWoodcutEdgeStrength?: number;
   };
 };
 

@@ -5,6 +5,7 @@ import { processBlockColorPatch } from './blockColorPatchProcessor';
 import { processPixelTransition } from './pixelTransitionProcessor';
 import { processGradientRelax } from './gradientRelaxProcessor';
 import { processSpecialSharpen } from './specialSharpenProcessor';
+import { processSpecialWoodcut } from './specialWoodcutProcessor';
 import { processLineEnhancement } from './lineProcessing';
 import { processHighFrequencyEnhancement } from './highFrequencyEnhancer';
 import { processSmartEdgeSmooth, defaultSmartEdgeSmoothParams } from './smartEdgeSmoothProcessor';
@@ -239,6 +240,8 @@ const defaultSubFeatures: SubFeature[] = [
 const AdjustmentPanel: React.FC = () => {
 // DOM引用，用于绑定键盘事件
 const rootRef = useRef<HTMLDivElement>(null);
+const specialWoodcutPreviewTimerRef = useRef<any>(0);
+const specialWoodcutApplyingRef = useRef(false);
 
 // 许可证状态管理
 const [isLicensed, setIsLicensed] = useState(false);
@@ -265,6 +268,11 @@ const [useWeightedAverage, setUseWeightedAverage] = useState(true);
 const [weightedIntensity, setWeightedIntensity] = useState(5);
 const [highFreqIntensity, setHighFreqIntensity] = useState(5);
 const [highFreqRange, setHighFreqRange] = useState(3);
+
+const [specialWoodcutLevels, setSpecialWoodcutLevels] = useState(4);
+const [specialWoodcutEdgeThreshold, setSpecialWoodcutEdgeThreshold] = useState(32);
+const [specialWoodcutEdgeStrength, setSpecialWoodcutEdgeStrength] = useState(60);
+const [specialWoodcutPreview, setSpecialWoodcutPreview] = useState(true);
 
 const [lineReferenceLayerId, setLineReferenceLayerId] = useState<number | null>(null);
 const [lineReferenceLayerName, setLineReferenceLayerName] = useState<string>('');
@@ -362,6 +370,9 @@ useEffect(() => {
           if (typeof ap.toggles.useWeightedAverage === 'boolean') {
             setUseWeightedAverage(ap.toggles.useWeightedAverage);
           }
+          if (typeof (ap.toggles as any).specialWoodcutPreview === 'boolean') {
+            setSpecialWoodcutPreview((ap.toggles as any).specialWoodcutPreview);
+          }
         }
         if (ap.values) {
           if (typeof ap.values.radius === 'number') setRadius(ap.values.radius);
@@ -377,6 +388,9 @@ useEffect(() => {
           if (typeof ap.values.weightedIntensity === 'number') setWeightedIntensity(ap.values.weightedIntensity);
           if (typeof ap.values.highFreqIntensity === 'number') setHighFreqIntensity(ap.values.highFreqIntensity);
           if (typeof ap.values.highFreqRange === 'number') setHighFreqRange(ap.values.highFreqRange);
+          if (typeof (ap.values as any).specialWoodcutLevels === 'number') setSpecialWoodcutLevels(Math.max(2, Math.min(16, Math.round((ap.values as any).specialWoodcutLevels))));
+          if (typeof (ap.values as any).specialWoodcutEdgeThreshold === 'number') setSpecialWoodcutEdgeThreshold(Math.max(0, Math.min(255, Math.round((ap.values as any).specialWoodcutEdgeThreshold))));
+          if (typeof (ap.values as any).specialWoodcutEdgeStrength === 'number') setSpecialWoodcutEdgeStrength(Math.max(0, Math.min(100, Math.round((ap.values as any).specialWoodcutEdgeStrength))));
           if (typeof ap.values.lineReferenceLayerId === 'number') setLineReferenceLayerId(ap.values.lineReferenceLayerId);
           if (typeof ap.values.lineReferenceLayerName === 'string') setLineReferenceLayerName(ap.values.lineReferenceLayerName);
           if (typeof ap.values.edgeSmoothMode === 'string') setEdgeSmoothMode(ap.values.edgeSmoothMode === 'line' ? 'line' : 'edge');
@@ -406,7 +420,7 @@ useEffect(() => {
     adjustmentPanel: {
       sections,
       subFeatures,
-      toggles: { useWeightedAverage },
+      toggles: { useWeightedAverage, specialWoodcutPreview },
       values: {
         radius,
         sigma,
@@ -416,6 +430,9 @@ useEffect(() => {
         weightedIntensity,
         highFreqIntensity,
         highFreqRange,
+        specialWoodcutLevels,
+        specialWoodcutEdgeThreshold,
+        specialWoodcutEdgeStrength,
         lineReferenceLayerId,
         lineReferenceLayerName,
         edgeSmoothMode,
@@ -432,6 +449,7 @@ useEffect(() => {
   sections,
   subFeatures,
   useWeightedAverage,
+  specialWoodcutPreview,
   radius,
   sigma,
   specialSharpenStrength,
@@ -439,6 +457,9 @@ useEffect(() => {
   weightedIntensity,
   highFreqIntensity,
   highFreqRange,
+  specialWoodcutLevels,
+  specialWoodcutEdgeThreshold,
+  specialWoodcutEdgeStrength,
   lineReferenceLayerId,
   lineReferenceLayerName,
   edgeSmoothMode,
@@ -448,6 +469,32 @@ useEffect(() => {
   edgeLineSmoothRadius,
   edgeLinePreserveDetail,
 ]);
+
+useEffect(() => {
+  try {
+    if (!specialWoodcutPreview) {
+      if (specialWoodcutPreviewTimerRef.current) {
+        clearTimeout(specialWoodcutPreviewTimerRef.current);
+      }
+      specialWoodcutPreviewTimerRef.current = 0;
+      return;
+    }
+    if (specialWoodcutPreviewTimerRef.current) {
+      clearTimeout(specialWoodcutPreviewTimerRef.current);
+    }
+    specialWoodcutPreviewTimerRef.current = setTimeout(() => {
+      handleSpecialWoodcut(true);
+    }, 300);
+    return () => {
+      if (specialWoodcutPreviewTimerRef.current) {
+        clearTimeout(specialWoodcutPreviewTimerRef.current);
+      }
+      specialWoodcutPreviewTimerRef.current = 0;
+    };
+  } catch {
+    return;
+  }
+}, [specialWoodcutPreview, specialWoodcutLevels, specialWoodcutEdgeThreshold, specialWoodcutEdgeStrength]);
 
 // 注册Flyout菜单回调
 useEffect(() => {
@@ -476,6 +523,10 @@ useEffect(() => {
       setWeightedIntensity(5);
       setHighFreqIntensity(5);
       setHighFreqRange(3);
+      setSpecialWoodcutLevels(4);
+      setSpecialWoodcutEdgeThreshold(32);
+      setSpecialWoodcutEdgeStrength(60);
+      setSpecialWoodcutPreview(true);
       setLineReferenceLayerId(null);
       setLineReferenceLayerName('');
       // 3) 智能边缘平滑参数复位
@@ -671,6 +722,46 @@ const handleHighFreqRangeNumberChange = (event: React.ChangeEvent<HTMLInputEleme
   if (!isNaN(value) && value >= 1 && value <= 10) {
     setHighFreqRange(value);
   }
+};
+
+const handleSpecialWoodcutLevelsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  setSpecialWoodcutLevels(parseInt(event.target.value, 10));
+};
+
+const handleSpecialWoodcutLevelsNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const value = parseInt(event.target.value, 10);
+  if (!isNaN(value) && value >= 2 && value <= 16) {
+    setSpecialWoodcutLevels(value);
+  }
+};
+
+const handleSpecialWoodcutEdgeThresholdChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  setSpecialWoodcutEdgeThreshold(parseInt(event.target.value, 10));
+};
+
+const handleSpecialWoodcutEdgeThresholdNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const value = parseInt(event.target.value, 10);
+  if (!isNaN(value) && value >= 0 && value <= 255) {
+    setSpecialWoodcutEdgeThreshold(value);
+  }
+};
+
+const handleSpecialWoodcutEdgeStrengthChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  setSpecialWoodcutEdgeStrength(parseInt(event.target.value, 10));
+};
+
+const handleSpecialWoodcutEdgeStrengthNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const value = parseInt(event.target.value, 10);
+  if (!isNaN(value) && value >= 0 && value <= 100) {
+    setSpecialWoodcutEdgeStrength(value);
+  }
+};
+
+const resetSpecialWoodcutParams = () => {
+  setSpecialWoodcutLevels(4);
+  setSpecialWoodcutEdgeThreshold(32);
+  setSpecialWoodcutEdgeStrength(60);
+  setSpecialWoodcutPreview(true);
 };
 
 const flattenLayers = (layers: any[], out: any[] = []) => {
@@ -1291,6 +1382,75 @@ const handleBlockColorPatch = async () => {
     const msg = typeof error === 'string' ? error : (error && (error.message || (error as any).toString?.() || '未知错误'));
     console.error('❌ 分块补色失败:', error);
     await core.showAlert({ message: '分块补色失败: ' + msg });
+  }
+};
+
+const handleSpecialWoodcut = async (isPreview: boolean = false) => {
+  if (!handleLicenseBeforeAction()) return;
+  if (specialWoodcutApplyingRef.current) return;
+  specialWoodcutApplyingRef.current = true;
+  try {
+    const { executeAsModal } = core;
+
+    await executeAsModal(async () => {
+      const editingState = await checkEditingState();
+      if (!editingState.isValid) {
+        return;
+      }
+
+      const { layer, isBackgroundLayer } = editingState;
+
+      const lockState = await getCurrentLayerLockState();
+      const hadLock = !!(lockState.protectAll || lockState.protectComposite || lockState.protectPosition || lockState.protectTransparency);
+      if (hadLock) {
+        if (!isPreview) {
+          await core.showAlert({ message: '当前图层处于锁定状态（像素锁/透明像素锁等），请先解除锁定后再使用“特殊木刻”。' });
+        }
+        return;
+      }
+
+      const selectionBounds = await getSelectionData();
+      if (!selectionBounds) {
+        if (!isPreview) {
+          await core.showAlert({ message: '获取文档信息失败' });
+        }
+        return;
+      }
+
+      const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+
+      const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
+      let maskIndex = 0;
+      for (let docIndex of pixelResult.selectionIndices) {
+        fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
+        maskIndex++;
+      }
+
+      const processedPixels = await processSpecialWoodcut(
+        pixelResult.selectionPixelData.buffer,
+        fullSelectionMask.buffer,
+        { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
+        {
+          levels: specialWoodcutLevels,
+          edgeThreshold: specialWoodcutEdgeThreshold,
+          edgeStrength: specialWoodcutEdgeStrength
+        },
+        isBackgroundLayer
+      );
+
+      await applyProcessedPixels(processedPixels, pixelResult);
+    });
+    if (!isPreview) {
+      giveFocusBackToPS();
+    }
+  } catch (error) {
+    const msg = typeof error === 'string' ? error : (error && (error.message || (error as any).toString?.() || '未知错误'));
+    console.error('❌ 特殊木刻处理失败:', error);
+    if (!isPreview) {
+      await core.showAlert({ message: '特殊木刻处理失败: ' + msg });
+    }
+  } finally {
+    specialWoodcutApplyingRef.current = false;
   }
 };
 
@@ -1985,6 +2145,61 @@ const renderBlockAdjustmentContent = () => (
             ))}
           </select>
         </div>
+      </div>
+    </div>
+
+    <div className="adjustment-divider"></div>
+
+    <div className="adjustment-double-buttons">
+      <button className="adjustment-button" onClick={() => handleSpecialWoodcut(false)} title={`● 木刻量化会让颜色出现阶梯状色阶。
+
+● 本功能会额外识别透明/半透明边缘，并在边缘处按强度叠加木刻量化，使边缘与内部风格一致。
+
+● 仅修改 RGB，alpha 保持不变。`}>特殊木刻</button>
+
+      <button className="adjustment-button" onClick={resetSpecialWoodcutParams} title="一键恢复默认参数">重置</button>
+    </div>
+
+    <div className="adjustment-slider-container">
+      <div className="adjustment-slider-item">
+        <div className="adjustment-slider-label" title="色阶数（2–16），数值越小越“硬”，越大越细腻。">色阶数</div>
+        <div className="unit-container">
+          <input type="range" min="2" max="16" step="1" value={specialWoodcutLevels} onChange={handleSpecialWoodcutLevelsChange} className="adjustment-slider-input" />
+          <input type="number" min="2" max="16" step="1" value={specialWoodcutLevels} onChange={handleSpecialWoodcutLevelsNumberChange} className="adjustment-number-input" />
+          <div className="adjustment-unit">级</div>
+        </div>
+      </div>
+
+      <div className="adjustment-slider-item">
+        <div className="adjustment-slider-label" title="边缘强度阈值（0–255），越低越容易把更多区域视为边缘。">边缘阈值</div>
+        <div className="unit-container">
+          <input type="range" min="0" max="255" step="1" value={specialWoodcutEdgeThreshold} onChange={handleSpecialWoodcutEdgeThresholdChange} className="adjustment-slider-input" />
+          <input type="number" min="0" max="255" step="1" value={specialWoodcutEdgeThreshold} onChange={handleSpecialWoodcutEdgeThresholdNumberChange} className="adjustment-number-input" />
+          <div className="adjustment-unit">值</div>
+        </div>
+      </div>
+
+      <div className="adjustment-slider-item">
+        <div className="adjustment-slider-label" title="边缘木刻叠加强度（0–100%）。">边缘强度</div>
+        <div className="unit-container">
+          <input type="range" min="0" max="100" step="1" value={specialWoodcutEdgeStrength} onChange={handleSpecialWoodcutEdgeStrengthChange} className="adjustment-slider-input" />
+          <input type="number" min="0" max="100" step="1" value={specialWoodcutEdgeStrength} onChange={handleSpecialWoodcutEdgeStrengthNumberChange} className="adjustment-number-input" />
+          <div className="adjustment-unit">%</div>
+        </div>
+      </div>
+
+      <div className="adjustment-swtich-container" style={{ marginTop: '6px' }}>
+        <label
+          className="adjustment-swtich-label"
+          onClick={() => setSpecialWoodcutPreview(!specialWoodcutPreview)}
+          style={{ cursor: 'pointer' }}
+          title="开启后参数变化会在 300ms 内自动刷新预览。"
+        >预览</label>
+        <sp-switch
+          checked={specialWoodcutPreview}
+          onChange={(e) => setSpecialWoodcutPreview(e.target.checked)}
+          style={{ marginLeft: '8px' }}
+        />
       </div>
     </div>
   </div>
