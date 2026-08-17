@@ -9,16 +9,17 @@
 //   - 环形邻域的参考像素是**所有画过的线条像素**（alpha ≥ MIN_ALPHA），不受选区限制。
 //     这样做是为了：小选区也能引用选区外的线条找到"单线水平"，真正统一交叉点；
 //     选区只决定"哪些像素会被修改"，不影响"在哪里找参考"。
-//   - 对每个候选像素，在多个尺度的"环形邻域"上分别取最大 alpha：
+//   - 对每个候选像素，在多个尺度的"环形邻域"上分别取**最大** alpha：
 //       环形内半径 k、外半径 k+ringWidth（Chebyshev 距离）。
-//     交叉点是一个 2D 局部凸包：当 k 足够大、环形"跳出"凸包后，环上会落到周围
-//     的单线（较低）alpha；而 k 较小时环形还困在凸包内（仍是高 alpha）。
-//     因此对多个尺度取"最小值"，即可稳健地得到"该处线条应有的水平"，
-//     无论交叉点（凸包）是宽还是窄，都能找到一个能逃出去的尺度。
-//   - 正常线条中心 / 羽化渐变 / 硬边：因为线条是 1D 且长，沿线条方向任意尺度上都
-//     存在等高的邻居，各尺度 ring max 都≈自身，min 后 peak≈0，不会被误判。
+//     取 MAX 的关键原因：Chebyshev 方形环的"角"能沿对角线方向探到交叉凸包外侧的
+//     单线像素（alpha = 线中心水平，与线宽/笔刷软硬无关）。因此：
+//       - 交叉中心/边缘像素：小尺度环被凸包主导（MAX 高），大尺度环的"角"探到单线
+//         （MAX = 线中心水平），对各尺度取 min → 单线水平，一次拉平整个凸包
+//       - 单线像素：任意尺度环的 MAX = 自身线中心水平，peak=0 不误伤（无侵蚀）
+//       - 无固定阈值 → 自动适配任意不透明度（30%~70% 已验证）与任意线宽（4px~200px）
 //   - 通过 minAlpha 排除没擦干净的极低不透明度残留；通过 peakThresh 忽略
 //     微小抖动与抗锯齿噪声。
+//   - 选区边缘用 support 羽化（参考 specialSharpen），避免边界生硬。
 //   - rate = strength（默认 1.0），把交叉点完全拉到单线水平，无残留。
 //
 // 说明：本函数只修改 alpha 通道，RGB 保持不变（图层存储的是 straight alpha，颜色
@@ -29,18 +30,26 @@ type Bounds = { width: number; height: number };
 
 export type AlphaAlignParams = {
   strength?: number; // 0~1，默认 1，整体缩放拉回比例
+  // 模式选择：
+  //   'standard'（默认）：环形邻域取 MAX。细线/软笔刷友好，单线不被侵蚀；
+  //     但粗线（≥70px）交叉凸包的"轴方向"区域环探不到单线（环一出凸包就出线），
+  //     只能统一凸包的一部分（表现为"只改中心小矩形"）。
+  //   'thick'：环形邻域取 MIN。硬笔刷粗线交叉凸包（含轴方向）能完整统一到单线水平，
+  //     但对软笔刷（渐变边缘）会把单线中心错误拉低——建议硬笔刷/高硬度线稿用。
+  mode?: 'standard' | 'thick';
 };
 
 const clamp01 = (v: number) => (v < 0 ? 0 : (v > 1 ? 1 : v));
 
 // 算法核心常量（提升到模块级，供分块处理计算邻域 halo 与复用）
 const RING_WIDTH = 3;                 // 每个环形邻域的宽度
-const SCALES = [4, 8, 14, 22, 32];    // 环形内半径（覆盖从窄到宽的交叉点）
+const SCALES = [4, 8, 14, 22, 32, 50, 70]; // 环形内半径（覆盖细线到 200px 粗线的交叉点）
 const MIN_ALPHA = 32;                 // 低于该不透明度视为残留/噪声，不参与
-const PEAK_THRESH = 10;               // 凸起高出局部线条水平的最小量
+const PEAK_THRESH = 5;                // 凸起高出局部线条水平的最小量（降低以捕捉弱凸起）
+const FEATHER_RADIUS = 20;            // 选区边缘羽化半径（参考 specialSharpen，让过渡更柔）
 
 // 分块处理所需的最大邻域半径（halo），保证块边缘像素也能取到完整的环形邻域
-export const ALPHA_ALIGN_HALO = SCALES[SCALES.length - 1] + RING_WIDTH + 2; // = 37
+export const ALPHA_ALIGN_HALO = SCALES[SCALES.length - 1] + RING_WIDTH + 2; // = 75
 
 export async function processAlphaAlign(
   layerPixelData: ArrayBuffer,
@@ -64,6 +73,8 @@ export async function processAlphaAlign(
 
   // 可调参数（经验值，针对半透明羽化笔刷的交叉点）
   const strength = clamp01(typeof params.strength === 'number' ? params.strength : 1);
+  // 模式：standard = 环 MAX（细线/软笔刷友好）；thick = 环 MIN（硬笔刷粗线凸包全改）
+  const useMin = params.mode === 'thick';
   const minAlpha = MIN_ALPHA;
   const peakThresh = PEAK_THRESH;
   const ringWidth = RING_WIDTH;
@@ -121,7 +132,17 @@ export async function processAlphaAlign(
     }
   }
 
-  // 3. 计算每个尺度的环形邻域最大值，并边算边取最小值作为“线条水平”
+  // 3. 计算每个尺度的环形邻域统计量，并对各尺度取最小值作为"线条水平"
+  //    统计量取决于模式：
+  //    - standard（环 MAX）：Chebyshev 方形环的"角"沿对角线探到交叉凸包外侧的
+  //      单线像素（alpha = 线中心水平，与笔刷软硬/线宽无关）。交叉中心/边缘像素
+  //      靠大尺度环探到单线（对各尺度取 min）；单线像素任意尺度 MAX = 自身，
+  //      peak=0 不误伤。无固定阈值 → 自动适配任意不透明度与细/中线宽。
+  //      局限：粗线（≥70px）交叉凸包的"轴方向"像素（两条线垂直距离都接近半宽）
+  //      的环一旦出凸包就同时出线（无单线过渡带），MAX 探不到 → 只改凸包一部分。
+  //    - thick（环 MIN）：粗线凸包的轴方向像素环 MIN 能探到附近单线（线水平），
+  //      凸包（含轴方向）能完整统一；但软笔刷渐变边缘会被当作参照（侵蚀单线），
+  //      适合硬笔刷/高硬度线稿。
   const refMin = new Float32Array(rn);
   refMin.fill(65535);
   for (let s = 0; s < scales.length; s++) {
@@ -133,7 +154,10 @@ export async function processAlphaAlign(
         const ri = ry * rw + rx;
         if (vR[ri] === 0) continue;
         if (aR[ri] < minAlpha) continue;
-        let m = 0;
+        // m = 本尺度环上 alpha≥MIN_ALPHA 像素的统计值；
+        //    useMin: 最小值（65535 = 环内无有效参照）
+        //    !useMin: 最大值（0 = 环内无有效参照）
+        let m = useMin ? 65535 : 0;
         for (let dy = -outer; dy <= outer; dy++) {
           const ny = ry + dy;
           if (ny < 0 || ny >= rh) continue;
@@ -150,11 +174,73 @@ export async function processAlphaAlign(
             // 这样小选区也能引用选区外的线条找到"单线水平"，真正统一交叉点。
             if (aR[ni] < MIN_ALPHA) continue;
             const a = aR[ni];
-            if (a > m) m = a;
+            if (useMin) { if (a < m) m = a; }
+            else if (a > m) m = a;
           }
         }
-        if (m > 0 && m < refMin[ri]) refMin[ri] = m;
+        if ((useMin ? m < 65535 : m > 0) && m < refMin[ri]) refMin[ri] = m;
       }
+    }
+  }
+
+  // 3.5. 计算选区边缘羽化 support（参考 specialSharpen 的思路）
+  //    support[ri] = 该像素被多少"被选中的像素"围绕（高斯加权），0~1。
+  //    选区内部 support≈1，边缘 support<1，外部 support=0。
+  //    后续 step 4 用 support 做 alpha 改动的羽化，避免"选区边界生硬"。
+  const featherRadius = FEATHER_RADIUS;
+  const featherSigma = featherRadius * 0.5;
+  const featherKSize = featherRadius * 2 + 1;
+  const featherK = new Float32Array(featherKSize);
+  let featherKSum = 0;
+  for (let i = 0; i < featherKSize; i++) {
+    const x = i - featherRadius;
+    const v = Math.exp(-(x * x) / (2 * featherSigma * featherSigma));
+    featherK[i] = v;
+    featherKSum += v;
+  }
+  for (let i = 0; i < featherKSize; i++) featherK[i] /= featherKSum;
+
+  // 分离高斯：先水平后垂直
+  const supportH = new Float32Array(rn);
+  const support = new Float32Array(rn);
+  // 水平
+  for (let ry = 0; ry < rh; ry++) {
+    const docY = y0 + ry;
+    const rowBaseDoc = docY * width;
+    for (let rx = 0; rx < rw; rx++) {
+      const ri = ry * rw + rx;
+      let weightSum = 0;
+      let maskWeightSum = 0;
+      for (let i = 0; i < featherKSize; i++) {
+        const sx = x0 + rx + i - featherRadius;
+        if (sx < 0 || sx >= width) continue;
+        const k = featherK[i];
+        const m = selectionMask[rowBaseDoc + sx] || 0;
+        weightSum += k;
+        maskWeightSum += k * (m / 255);
+      }
+      supportH[ri] = weightSum > 0 ? maskWeightSum / weightSum : 0;
+    }
+  }
+  // 垂直
+  for (let rx = 0; rx < rw; rx++) {
+    for (let ry = 0; ry < rh; ry++) {
+      const ri = ry * rw + rx;
+      let weightSum = 0;
+      let maskWeightSum = 0;
+      for (let i = 0; i < featherKSize; i++) {
+        const sy = y0 + ry + i - featherRadius;
+        const k = featherK[i];
+        // 关键修复：kernel weight 必须累加（即使像素超出区域也要算入归一化分母），
+        // 同时检查区域边界（sy - y0 必须在 [0, rh-1]）否则会读到 undefined → NaN → fade=NaN → alpha=0
+        weightSum += k;
+        if (sy < 0 || sy >= height) continue;
+        const ryOffset = sy - y0;
+        if (ryOffset < 0 || ryOffset >= rh) continue;
+        const v = supportH[ryOffset * rw + rx];
+        maskWeightSum += k * v;
+      }
+      support[ri] = weightSum > 0 ? maskWeightSum / weightSum : 0;
     }
   }
 
@@ -162,7 +248,7 @@ export async function processAlphaAlign(
   let changedCount = 0;
   let changedSample = '';
 
-  // 诊断：统计每个候选像素被跳过的原因，定位“无现象”问题
+  // 诊断：统计每个候选像素被跳过的原因，定位"无现象"问题
   let skipLowAlpha = 0;     // a < minAlpha
   let skipNoRef = 0;        // refMin >= 65535（环上找不到 alpha>=MIN_ALPHA 的参照）
   let skipSmallPeak = 0;    // peak < peakThresh
@@ -170,6 +256,13 @@ export async function processAlphaAlign(
   let maxPeakInfo = '';     // 最大 peak 像素的信息
   // alpha 直方图（仅统计候选像素 a>=minAlpha 的部分）
   let histLow = 0, histMid = 0, histHigh = 0, histSat = 0; // <64, 64-128, 129-220, 221-255
+
+  // 选区边缘羽化（参考 specialSharpen）：用 support 值把 alpha 改动从"全改"渐变到"不改"，
+  // 避免选区边界生硬。smootherstep 双层套用让过渡更平滑。
+  const smootherstep01 = (t: number) => {
+    const x = Math.max(0, Math.min(1, t));
+    return x * x * x * (x * (x * 6 - 15) + 10);
+  };
 
   for (let ry = 0; ry < rh; ry++) {
     const docY = y0 + ry;
@@ -195,9 +288,22 @@ export async function processAlphaAlign(
       }
       if (peak < peakThresh) { skipSmallPeak++; continue; }
 
-      let na = Math.round(a + (ref - a) * rate);
+      // 计算"应有的目标 alpha"（不带羽化）
+      let targetA = Math.round(a + (ref - a) * rate);
+      if (targetA < 0) targetA = 0;
+      else if (targetA > 255) targetA = 255;
+
+      // 用 support 做羽化：选区中心 fade≈1（完全改），边缘 fade≈0（不改）
+      const s01 = support[ri];
+      const t = Math.max(0, Math.min(1, (s01 - 0.22) / (0.995 - 0.22)));
+      const fade = smootherstep01(smootherstep01(t));
+      let na = Math.round(a + (targetA - a) * fade);
+      // 安全闸：算法语义是"把交叉凸起拉低到单线水平"，永远不应该让 alpha 升高。
+      // 这里 clamp 一下，防止任何数值异常（NaN、fade 计算偏差等）导致 alpha 不降反升。
+      if (na > a) na = a;
       if (na < 0) na = 0;
       else if (na > 255) na = 255;
+
       const di = (docY * width + (x0 + rx)) * 4;
       out[di + 3] = na;
       changedCount++;

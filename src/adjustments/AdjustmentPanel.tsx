@@ -3,6 +3,7 @@ import { processBlockAverage } from './blockAverageProcessor';
 import { processBlockGradient } from './blockGradientProcessor';
 import { processBlockColorPatch } from './blockColorPatchProcessor';
 import { processPixelTransition } from './pixelTransitionProcessor';
+import { processPixelTransitionPowerful } from './powerfulTransitionProcessor';
 import { processGradientRelax } from './gradientRelaxProcessor';
 import { processSpecialSharpen } from './specialSharpenProcessor';
 import { processSpecialWoodcut } from './specialWoodcutProcessor';
@@ -303,6 +304,8 @@ const [gradientRelaxStrength, setGradientRelaxStrength] = useState(-5);
 
 const [useWeightedAverage, setUseWeightedAverage] = useState(true);
 const [weightedIntensity, setWeightedIntensity] = useState(5);
+const [usePowerfulMode, setUsePowerfulMode] = useState(false);
+const [useThickMode, setUseThickMode] = useState(false);
 const [highFreqIntensity, setHighFreqIntensity] = useState(5);
 const [highFreqRange, setHighFreqRange] = useState(3);
 
@@ -392,7 +395,7 @@ useEffect(() => {
         adjustmentPanel: {
           sections,
           subFeatures,
-          toggles: { useWeightedAverage },
+          toggles: { useWeightedAverage, usePowerfulMode, useThickMode },
         },
       });
       const ap = loaded && loaded.adjustmentPanel;
@@ -406,6 +409,12 @@ useEffect(() => {
         if (ap.toggles) {
           if (typeof ap.toggles.useWeightedAverage === 'boolean') {
             setUseWeightedAverage(ap.toggles.useWeightedAverage);
+          }
+          if (typeof ap.toggles.usePowerfulMode === 'boolean') {
+            setUsePowerfulMode(ap.toggles.usePowerfulMode);
+          }
+          if (typeof ap.toggles.useThickMode === 'boolean') {
+            setUseThickMode(ap.toggles.useThickMode);
           }
           if (typeof (ap.toggles as any).specialWoodcutPreview === 'boolean') {
             setSpecialWoodcutPreview((ap.toggles as any).specialWoodcutPreview);
@@ -457,7 +466,7 @@ useEffect(() => {
     adjustmentPanel: {
       sections,
       subFeatures,
-      toggles: { useWeightedAverage, specialWoodcutPreview },
+      toggles: { useWeightedAverage, usePowerfulMode, useThickMode, specialWoodcutPreview },
       values: {
         radius,
         sigma,
@@ -486,6 +495,8 @@ useEffect(() => {
   sections,
   subFeatures,
   useWeightedAverage,
+  usePowerfulMode,
+  useThickMode,
   specialWoodcutPreview,
   radius,
   sigma,
@@ -1688,13 +1699,14 @@ const handleAlphaAlign = async () => {
         }
 
         // 关键：传入 fullPixelData（完整 alpha）而非 selectionPixelData。
-        // 这样环形邻域能引用选区外的线条像素找到“单线水平”，
-        // 而 fullSelectionMask 只决定“哪些像素会被修改”。
+        // 这样环形邻域能引用选区外的线条像素找到"单线水平"，
+        // 而 fullSelectionMask 只决定"哪些像素会被修改"。
+        // mode：standard（默认，环 MAX，细线/软笔刷友好）或 thick（环 MIN，粗线凸包全改）。
         const processedPixels = await processAlphaAlign(
           pixelResult.fullPixelData.buffer,
           fullSelectionMask.buffer,
           { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
-          {},
+          { mode: useThickMode ? 'thick' : 'standard' },
           false
         );
 
@@ -1869,49 +1881,60 @@ const handlePixelTransition = async () => {
   if (!handleLicenseBeforeAction()) return;
   try {
     const { executeAsModal } = core;
-    
+
     await executeAsModal(async () => {
       // 检测当前编辑状态
       const editingState = await checkEditingState();
       if (!editingState.isValid) {
         return;
       }
-      
+
       const { layer, isBackgroundLayer } = editingState;
-      
+
       // 获取选区边界信息
       const selectionBounds = await getSelectionData();
       if (!selectionBounds) {
         await core.showAlert({ message: '请先创建选区' });
         return;
       }
-      
+
       await runWithTemporaryUnlock(async () => {
         // 使用共享的像素数据处理函数
         const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
-        
+
         // 创建完整文档尺寸的选区掩码数组
         const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
         let maskIndex = 0;
-        for (let docIndex of pixelResult.selectionIndices) {
+        for (const docIndex of pixelResult.selectionIndices) {
           fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
           maskIndex++;
         }
-        
-        // 步骤3：用公式计算得到新数组
-        const processedPixels = await processPixelTransition(
-          pixelResult.selectionPixelData.buffer, 
-          fullSelectionMask.buffer, 
-          { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
-          { radius, sigma },
-          isBackgroundLayer
-        );
-        
+
+        let processedPixels: Uint8Array;
+        if (usePowerfulMode) {
+          // 强力模式：自动估算等效中间值半径（不需要用户输入 radius/sigma）
+          processedPixels = await processPixelTransitionPowerful(
+            pixelResult.selectionPixelData.buffer,
+            fullSelectionMask.buffer,
+            { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
+            isBackgroundLayer
+          );
+        } else {
+          // 普通模式：用户指定 radius/sigma 的高斯模糊
+          processedPixels = await processPixelTransition(
+            pixelResult.selectionPixelData.buffer,
+            fullSelectionMask.buffer,
+            { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
+            { radius, sigma },
+            isBackgroundLayer
+          );
+        }
+
         console.log('✅ 处理像素数据完成，长度:', processedPixels.length);
-        
+
         // 步骤4：应用处理后的像素数据
         await applyProcessedPixels(processedPixels, pixelResult);
-        
+
         console.log('✅ 像素过渡处理完成');
       });
     });
@@ -2066,39 +2089,61 @@ const handleDrop = (e: React.DragEvent, targetId: string) => {
 // 渲染子功能内容
 const renderLocalContrastContent = () => (
   <div className="adjustment-section">
-    
-    <div role="button" tabIndex={0} className="adjustment-button" onClick={handlePixelTransition} title={`● 特制类高斯模糊过渡滤镜，特点是屏蔽alpha为0的像素，从而更好保护形状。
+
+    <div className="adjustment-double-buttons">
+      <div role="button" tabIndex={0} className="adjustment-button" onClick={handlePixelTransition} title={`● 特制类高斯模糊过渡滤镜，特点是屏蔽alpha为0的像素，从而更好保护形状。
 
 ● 半径决定参考范围大小；强度决定过渡幅度。
 
-即：半径大→过渡范围更广；强度大→边缘更平滑。`}>像素过渡</div>
+即：半径大→过渡范围更广；强度大→边缘更平滑。
 
-    <div className="adjustment-slider-container">
-      <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" title={`● 控制处理时参考的邻域大小，单位 px。
+● 强力模式开启后，算法自动识别选区内的色块厚度并估算等效中间值半径（类似 PS 中间值滤镜），无需手动调节半径/强度。`}>像素过渡</div>
+
+      <div className="adjustment-swtich-container">
+        <label
+          className="adjustment-swtich-label"
+          onClick={() => setUsePowerfulMode(!usePowerfulMode)}
+          style={{ cursor: 'pointer' }}
+          title={`● 强力模式：自动估算等效中间值半径。
+\n● 15px 笔触约对应半径 18。
+\n● 开启后隐藏下方的半径/强度滑块。`}
+        >强力模式</label>
+        <sp-switch
+          checked={usePowerfulMode}
+          onChange={(e) => setUsePowerfulMode((e.target as HTMLInputElement).checked)}
+          style={{ marginLeft: '8px' }}
+        />
+      </div>
+    </div>
+
+    {!usePowerfulMode && (
+      <div className="adjustment-slider-container">
+        <div className="adjustment-slider-item">
+          <div className="adjustment-slider-label" title={`● 控制处理时参考的邻域大小，单位 px。
 
 ● 半径越大，影响范围越宽，过渡更柔和但更慢。
 
 示例：小图建议 5–10px；大图建议 10–20px。`}>半径</div>
-        <div className="unit-container">
-          <RangeSlider min={5} max={20} step={1} value={radius} onChange={handleRadiusChange} className="adjustment-slider-input" />
-          <input type="number" min="5" max="20" step="1" value={radius} onChange={handleRadiusNumberChange} className="adjustment-number-input" />
-          <div className="adjustment-unit">px</div>
+          <div className="unit-container">
+            <RangeSlider min={5} max={20} step={1} value={radius} onChange={handleRadiusChange} className="adjustment-slider-input" />
+            <input type="number" min="5" max="20" step="1" value={radius} onChange={handleRadiusNumberChange} className="adjustment-number-input" />
+            <div className="adjustment-unit">px</div>
+          </div>
         </div>
-      </div>
-      <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" title={`● 控制过渡力度，单位级。
+        <div className="adjustment-slider-item">
+          <div className="adjustment-slider-label" title={`● 控制过渡力度，单位级。
 
 ● 强度越高，对比被削弱越多，边缘更圆滑。
 
 示例：轻微处理用 1–2 级；明显去锯齿用 3–5 级。`}>强度</div>
-        <div className="unit-container">
-          <RangeSlider min={1} max={5} step={0.5} value={sigma} onChange={handleSigmaChange} className="adjustment-slider-input" />
-          <input type="number" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaNumberChange} className="adjustment-number-input" />
-          <div className="adjustment-unit">级</div>
+          <div className="unit-container">
+            <RangeSlider min={1} max={5} step={0.5} value={sigma} onChange={handleSigmaChange} className="adjustment-slider-input" />
+            <input type="number" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaNumberChange} className="adjustment-number-input" />
+            <div className="adjustment-unit">级</div>
+          </div>
         </div>
       </div>
-    </div>
+    )}
 
     <div className="adjustment-divider"></div>
 
@@ -2264,13 +2309,31 @@ const renderEdgeProcessingContent = () => (
 
     <div className="adjustment-divider"></div>
 
-    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleAlphaAlign} title={`● 统一半透明笔刷交叉点的不透明度，消除两笔交汇处出现的“深色点”。
+    <div className="adjustment-double-buttons">
+      <div role="button" tabIndex={0} className="adjustment-button" onClick={handleAlphaAlign} title={`● 统一半透明笔刷交叉点的不透明度，消除两笔交汇处出现的"深色点"。
 
 ● 分析选区内像素的 alpha，把局部异常偏高（如交叉叠加）的区域拉回周围线条的自然水平，与周边自然衔接。
 
 ● 仅对非背景的普通像素图层生效，只修改选区内 Alpha>0 的区域（RGB 不变）。
 
 ● 会排除选区内的羽化渐变与极低不透明度残留的干扰。`}>alpha对齐</div>
+
+      <div className="adjustment-swtich-container">
+        <label
+          className="adjustment-swtich-label"
+          onClick={() => setUseThickMode(!useThickMode)}
+          style={{ cursor: 'pointer' }}
+          title={`● 粗线模式：适配 50px 以上的粗线交叉。
+\n● 普通模式（关闭）：细线/软笔刷友好，但粗线交叉凸包的轴方向区域可能无法完全统一（只改中心小矩形）。
+\n● 粗线模式（开启）：硬笔刷/高硬度线稿的粗线交叉凸包能完整统一；软笔刷渐变边缘可能被轻微拉低，建议粗线用硬笔刷时开启。`}
+        >粗线模式</label>
+        <sp-switch
+          checked={useThickMode}
+          onChange={(e) => setUseThickMode((e.target as HTMLInputElement).checked)}
+          style={{ marginLeft: '8px' }}
+        />
+      </div>
+    </div>
   </div>
 );
 
