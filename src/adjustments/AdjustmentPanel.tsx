@@ -305,7 +305,6 @@ const [gradientRelaxStrength, setGradientRelaxStrength] = useState(-5);
 const [useWeightedAverage, setUseWeightedAverage] = useState(true);
 const [weightedIntensity, setWeightedIntensity] = useState(5);
 const [usePowerfulMode, setUsePowerfulMode] = useState(false);
-const [useThickMode, setUseThickMode] = useState(false);
 const [highFreqIntensity, setHighFreqIntensity] = useState(5);
 const [highFreqRange, setHighFreqRange] = useState(3);
 
@@ -395,7 +394,7 @@ useEffect(() => {
         adjustmentPanel: {
           sections,
           subFeatures,
-          toggles: { useWeightedAverage, usePowerfulMode, useThickMode },
+          toggles: { useWeightedAverage, usePowerfulMode },
         },
       });
       const ap = loaded && loaded.adjustmentPanel;
@@ -412,9 +411,6 @@ useEffect(() => {
           }
           if (typeof ap.toggles.usePowerfulMode === 'boolean') {
             setUsePowerfulMode(ap.toggles.usePowerfulMode);
-          }
-          if (typeof ap.toggles.useThickMode === 'boolean') {
-            setUseThickMode(ap.toggles.useThickMode);
           }
           if (typeof (ap.toggles as any).specialWoodcutPreview === 'boolean') {
             setSpecialWoodcutPreview((ap.toggles as any).specialWoodcutPreview);
@@ -466,7 +462,7 @@ useEffect(() => {
     adjustmentPanel: {
       sections,
       subFeatures,
-      toggles: { useWeightedAverage, usePowerfulMode, useThickMode, specialWoodcutPreview },
+      toggles: { useWeightedAverage, usePowerfulMode, specialWoodcutPreview },
       values: {
         radius,
         sigma,
@@ -496,7 +492,6 @@ useEffect(() => {
   subFeatures,
   useWeightedAverage,
   usePowerfulMode,
-  useThickMode,
   specialWoodcutPreview,
   radius,
   sigma,
@@ -1701,12 +1696,12 @@ const handleAlphaAlign = async () => {
         // 关键：传入 fullPixelData（完整 alpha）而非 selectionPixelData。
         // 这样环形邻域能引用选区外的线条像素找到"单线水平"，
         // 而 fullSelectionMask 只决定"哪些像素会被修改"。
-        // mode：standard（默认，环 MAX，细线/软笔刷友好）或 thick（环 MIN，粗线凸包全改）。
+        // v2：自适应粗细线（1~100px），无需手动切换模式。
         const processedPixels = await processAlphaAlign(
           pixelResult.fullPixelData.buffer,
           fullSelectionMask.buffer,
           { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
-          { mode: useThickMode ? 'thick' : 'standard' },
+          {},
           false
         );
 
@@ -2314,25 +2309,11 @@ const renderEdgeProcessingContent = () => (
 
 ● 分析选区内像素的 alpha，把局部异常偏高（如交叉叠加）的区域拉回周围线条的自然水平，与周边自然衔接。
 
+● 自适应识别 1~100px 的细线与粗线交叉（含粗细混排），无需手动切换模式。
+
 ● 仅对非背景的普通像素图层生效，只修改选区内 Alpha>0 的区域（RGB 不变）。
 
 ● 会排除选区内的羽化渐变与极低不透明度残留的干扰。`}>alpha对齐</div>
-
-      <div className="adjustment-swtich-container">
-        <label
-          className="adjustment-swtich-label"
-          onClick={() => setUseThickMode(!useThickMode)}
-          style={{ cursor: 'pointer' }}
-          title={`● 粗线模式：适配 50px 以上的粗线交叉。
-\n● 普通模式（关闭）：细线/软笔刷友好，但粗线交叉凸包的轴方向区域可能无法完全统一（只改中心小矩形）。
-\n● 粗线模式（开启）：硬笔刷/高硬度线稿的粗线交叉凸包能完整统一；软笔刷渐变边缘可能被轻微拉低，建议粗线用硬笔刷时开启。`}
-        >粗线模式</label>
-        <sp-switch
-          checked={useThickMode}
-          onChange={(e) => setUseThickMode((e.target as HTMLInputElement).checked)}
-          style={{ marginLeft: '8px' }}
-        />
-      </div>
     </div>
   </div>
 );
