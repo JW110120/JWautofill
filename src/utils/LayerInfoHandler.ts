@@ -1,6 +1,6 @@
 import { app, action } from 'photoshop';
 
-interface LayerInfo {
+export interface LayerInfo {
     isBackground: boolean;
     hasTransparencyLocked: boolean;
     hasPixels: boolean;

@@ -22,6 +22,7 @@ import { PatternFill } from './utils/PatternFill';
 import { GradientFill } from './utils/GradientFill';
 import { SingleChannelHandler } from './utils/SingleChannelHandler';
 import { SelectionHandler, SelectionOptions } from './utils/SelectionHandler';
+import { LayerInfo } from './utils/LayerInfoHandler';
 import { ColorSettings, Pattern } from './types/state';
 import { MenuManager } from './utils/MenuManager';
 import { PresetManager } from './utils/PresetManager';
@@ -33,7 +34,8 @@ const { batchPlay } = action;
 interface AppProps {}
 
 class App extends React.Component<AppProps, AppState> {
-    private isListenerPaused = false;
+    private isFilling = false;
+    private pendingSelection = false;
     private isInLayerMask = false;
     private isInQuickMask = false;
     private isInSingleColorChannel = false;
@@ -414,11 +416,19 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     async handleSelectionChange(event?: any) {
-        if (!this.state.isEnabled || this.isListenerPaused) return;
+        if (!this.state.isEnabled) return;
         // 检查事件中是否包含feather项，如果包含则直接返回
         if (event && event.feather) {
             return;
-        }    
+        }
+
+        // 【同步锁】检查是否正在处理；必须在任何 await 之前完成，避免竞态
+        if (this.isFilling) {
+            // 已有正在进行的填充，把"需要再处理一次"标记上，
+            // 等当前这一轮结束后由 finally 重新触发一次（而非并发覆盖）
+            this.pendingSelection = true;
+            return;
+        }
 
         try {
             const doc = app.activeDocument;
@@ -426,52 +436,79 @@ class App extends React.Component<AppProps, AppState> {
                 return;
             }
 
-            // 检测快速蒙版状态
+            // 检测快速蒙版状态（廉价读取，不阻塞）
             const isInQuickMask = doc.quickMaskMode;
             if (this.state.isInQuickMask !== isInQuickMask) {
                 this.setState({ isInQuickMask });
             }
-   
-            await new Promise(resolve => setTimeout(resolve, 50));
+
+            // 上锁（在任何 await 之前同步置位，让后续事件被 pendingSelection 捕获）
+            this.isFilling = true;
+
             const selection = await this.getSelection();
             if (!selection) {
-                console.warn('⚠️ 选区为空，跳过填充');
+                // 选区为空，跳过填充
                 return;
             }
 
-            // 暂停监听
-            this.isListenerPaused = true;
+            const featherAmount = Number(this.state.feather);
+            const needsFeather = featherAmount > 0;
+            const options: SelectionOptions = {
+                selectionSmooth: this.state.selectionSmooth,
+                selectionContrast: this.state.selectionContrast,
+                selectionExpand: this.state.selectionExpand
+            };
+            const needsSelectionMod = SelectionHandler.shouldApplySelectionModification(options);
+            const needsStroke = this.state.strokeEnabled;
+            const needsDeselect = this.state.deselectAfterFill;
+            const needsHistory = this.state.autoUpdateHistory;
 
             await core.executeAsModal(async () => {
-                if (this.state.autoUpdateHistory) { await this.setHistoryBrushSource(); }
-                // 只有当选区选项值不为初始值时才执行选择并遮住
-                const options: SelectionOptions = {
-                    selectionSmooth: this.state.selectionSmooth,
-                    selectionContrast: this.state.selectionContrast,
-                    selectionExpand: this.state.selectionExpand
-                };
-                
-                if (SelectionHandler.shouldApplySelectionModification(options)) {
+                // 【关键防御】重新校验选区——前一次填充若开了 deselectAfterFill，
+                // 这里的 selection 可能已经在排队期间被清空；空选区下 fill 整个图层
+                // 表现为"填充整个文档"。直接放弃本轮，避免误伤整张画布。
+                const innerSelection = await this.getSelection();
+                if (!innerSelection) {
+                    console.warn('⚠️ 选区已为空，跳过本次填充（避免填充整个图层）');
+                    return;
+                }
+
+                if (needsHistory) {
+                    await this.setHistoryBrushSource();
+                }
+                // 只有当选区选项值不为初始值时才执行选区修改
+                if (needsSelectionMod) {
                     await this.applySelectionModification();
                 }
-                await this.applyFeather();
-                const fillSuccess = await this.fillSelection();
-                if (this.state.strokeEnabled && fillSuccess) {
-                    // 获取图层信息
-                    const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
+                // feather=0 时整段 applyFeather 都是无效工作，直接跳过
+                if (needsFeather) {
+                    await this.applyFeather(featherAmount);
+                }
+                const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
+                const fillSuccess = await this.fillSelection(layerInfo);
+                if (needsStroke && fillSuccess) {
                     await strokeSelection(this.state, layerInfo);
                 }
-                if (this.state.deselectAfterFill) {
+                if (needsDeselect) {
                     await this.deselectSelection();
                 }
             }, { commandName: '正在处理选区中......' });
-
-            // 恢复监听
-            this.isListenerPaused = false;
         } catch (error) {
             console.error('❌ 处理失败:', error);
-            // 确保在错误情况下也恢复监听
-            this.isListenerPaused = false;
+        } finally {
+            this.isFilling = false;
+            // 若填充期间又有新的选区事件进来，再处理一次，
+            // 这样套索连点也不会丢选区
+            if (this.pendingSelection) {
+                this.pendingSelection = false;
+                // 用 setTimeout(0) 把递归触发推到下一个事件循环，
+                // 避免在 finally 里直接重入导致栈过深
+                setTimeout(() => {
+                    if (this.state.isEnabled) {
+                        this.handleSelectionChange();
+                    }
+                }, 0);
+            }
         }
     }
 
@@ -540,18 +577,9 @@ class App extends React.Component<AppProps, AppState> {
         }  
     }
 
-    async applyFeather() {
-        const featherAmount = Number(this.state.feather);
-        if (featherAmount < 0) return;
-        
-        // 当羽化值为0时，跳过羽化操作
-        if (featherAmount === 0) {
-            // 直接更新选区状态，不执行羽化
-            const newSelection = await this.getSelection();
-            this.setState({ SelectionA: newSelection });
-            return;
-        }
-        
+    async applyFeather(featherAmount: number) {
+        // 调用方已保证 featherAmount > 0；负值/0 不应进入此函数
+        if (featherAmount <= 0) return;
         await action.batchPlay(
             [
                 {
@@ -562,10 +590,6 @@ class App extends React.Component<AppProps, AppState> {
             ],
             { synchronousExecution: true, modalBehavior: 'execute' }
         );
-        
-        await new Promise(resolve => setTimeout(resolve, 50));
-        const newSelection = await this.getSelection();
-        this.setState({ SelectionA: newSelection });
     }
 
      // 修改新建图层模式切换函数
@@ -576,10 +600,9 @@ class App extends React.Component<AppProps, AppState> {
         }));
     }
 
-    async fillSelection() {
-        await new Promise(resolve => setTimeout(resolve, 50));
+    async fillSelection(layerInfo?: LayerInfo | null) {
         // 统一处理：若当前目标图层被隐藏，在操作前临时显示，操作后恢复隐藏
-        // 注意：当选择“新建图层”时，目标会变为新图层（可见），无需临时显示原图层
+        // 注意：当选择"新建图层"时，目标会变为新图层（可见），无需临时显示原图层
         let needToggleVisibility = false;
         const showTargetLayer = {
             _obj: "show",
@@ -614,14 +637,14 @@ class App extends React.Component<AppProps, AppState> {
             // 检查是否在单通道模式
             const isInSingleChannel = await LayerInfoHandler.checkSingleColorChannelMode();
             if (isInSingleChannel) {
-                
+
                 const fillOptions = {
                     opacity: this.state.opacity,
                     blendMode: this.state.blendMode,
                     pattern: this.state.selectedPattern,
                     gradient: this.state.selectedGradient
                 };
-                
+
                 if (this.state.clearMode) {
                     const ok = await SingleChannelHandler.clearSingleChannel(fillOptions, this.state.fillMode, this.state);
                     return ok === undefined ? true : !!ok; // 若内部未显式返回，视为成功
@@ -631,15 +654,17 @@ class App extends React.Component<AppProps, AppState> {
                 }
             }
 
-            const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
+            // 复用调用方已查询的 layerInfo，避免在一次填充中重复 3 次 batchPlay
+            if (!layerInfo) {
+                layerInfo = await LayerInfoHandler.getActiveLayerInfo();
+            }
             if (!layerInfo) return false;
 
             if (this.state.clearMode) {
-                const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
                 await ClearHandler.clearWithOpacity(this.state.opacity, this.state, layerInfo);
                 return true;
             }
-    
+
             if (this.state.createNewLayer) {
                 await action.batchPlay(
                     [{
@@ -657,7 +682,7 @@ class App extends React.Component<AppProps, AppState> {
                     { synchronousExecution: true }
                 );
             }
-    
+
             const { isBackground, hasTransparencyLocked, hasPixels } = layerInfo;
     
             if (this.state.fillMode === 'pattern') {

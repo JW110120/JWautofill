@@ -188,7 +188,7 @@ uxp-panel[panelid="com.listen2me.pixeladjustment"],
 
 sp-picker {
   flex: 1;
-  cursor: pointer;    
+  cursor: pointer;
   position: relative;
 }
 
@@ -196,6 +196,22 @@ sp-picker {
 sp-picker[disabled] {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* 通用 Spectrum 控件禁用状态：cursor 统一改为 not-allowed，
+   包括开关、按钮、单选等所有可点击控件；新增 disabled 控件只需在 React 端
+   设置 disabled 属性即可，无需额外 CSS。 */
+sp-switch[disabled],
+sp-button[disabled],
+sp-action-button[disabled],
+sp-radio[disabled] {
+  cursor: not-allowed;
+}
+
+/* 开关禁用时，左侧标签文字也变灰，hover 同样显示禁止光标 */
+.switch-container:has(sp-switch[disabled]) .switch-label {
+  cursor: not-allowed;
+  color: var(--disabled-color);
 }
 
 .blend-mode-label.disabled {
