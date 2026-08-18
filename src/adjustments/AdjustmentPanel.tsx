@@ -18,8 +18,9 @@ import type { Gradient } from '../types/state';
 import './adjustment.css';
 import './adjustment-input.css';
 import { AdjustmentMenu } from '../utils/AdjustmentMenu';
-import { ExpandIcon } from '../styles/Icons';
+import { ExpandIcon, AddIcon, DeleteIcon } from '../styles/Icons';
 import { PanelStateManager } from '../utils/PanelStateManager';
+import { maskSyncEngine, MASK_SYNC_CHANNEL_LABELS, LayerTreeEntry, MaskSyncTask, MaskSyncChannel } from '../utils/MaskSyncEngine';
 import RangeSlider from '../components/RangeSlider';
 
 // 单位换算为像素（兼容普通数字与带 _unit/_value 的单位对象）
@@ -251,7 +252,8 @@ interface SubFeature {
 const defaultSections: SectionConfig[] = [
   { id: 'blockAdjustment', title: '分块调整', isCollapsed: false, isVisible: true, order: 0 },
   { id: 'localContrast', title: '局部对比', isCollapsed: false, isVisible: true, order: 1 },
-  { id: 'edgeProcessing', title: '边缘处理', isCollapsed: false, isVisible: true, order: 2 }
+  { id: 'edgeProcessing', title: '边缘处理', isCollapsed: false, isVisible: true, order: 2 },
+  { id: 'maskSync', title: '蒙版同步', isCollapsed: false, isVisible: true, order: 3 }
 ];
 
 // 默认子功能配置
@@ -326,6 +328,13 @@ const [edgeBackgroundSmoothRadius, setEdgeBackgroundSmoothRadius] = useState(def
 const [edgeLineStrength, setEdgeLineStrength] = useState(Math.round((defaultSmartEdgeSmoothParams.lineSmoothStrength ?? defaultSmartEdgeSmoothParams.lineStrength ?? 1) * 100));
 const [edgeLineSmoothRadius, setEdgeLineSmoothRadius] = useState(defaultSmartEdgeSmoothParams.lineSmoothRadius ?? 10);
 const [edgeLinePreserveDetail, setEdgeLinePreserveDetail] = useState(Math.round((defaultSmartEdgeSmoothParams.linePreserveDetail ?? defaultSmartEdgeSmoothParams.lineHardness ?? 1) * 100));
+
+// ===== 蒙版同步 =====
+const [maskSyncTasks, setMaskSyncTasks] = useState<MaskSyncTask[]>([]);
+const [maskSyncSampleOptions, setMaskSyncSampleOptions] = useState<LayerTreeEntry[]>([]);
+const [maskSyncTargetOptions, setMaskSyncTargetOptions] = useState<LayerTreeEntry[]>([]);
+const [maskSyncEditingId, setMaskSyncEditingId] = useState<string | null>(null);
+const [maskSyncEditingName, setMaskSyncEditingName] = useState('');
 
 // 许可证相关 Hook 和函数
 useEffect(() => {
@@ -610,6 +619,154 @@ useEffect(() => {
   }
   return () => document.body.classList.remove('visibility-panel-open');
 }, [showVisibilityPanel]);
+
+// ================= 蒙版同步：初始化与监听 =================
+const refreshMaskSyncOptions = async () => {
+  try {
+    const tree = await maskSyncEngine.buildLayerTree();
+    setMaskSyncSampleOptions(tree);
+    setMaskSyncTargetOptions(tree.filter(t => t.hasUserMask));
+  } catch (e) {
+    console.warn('⚠️ 刷新蒙版同步文件树失败:', e);
+  }
+};
+
+useEffect(() => {
+  let unsub: (() => void) | undefined;
+  let cancelled = false;
+  const boot = async () => {
+    await maskSyncEngine.init();
+    if (cancelled) return;
+    unsub = maskSyncEngine.subscribe((info) => {
+      setMaskSyncTasks(maskSyncEngine.getTasks());
+      // 文档切换/重开：刷新文件树下拉，并按名称路径重解析失效的图层引用
+      if (info.docChanged) {
+        refreshMaskSyncOptions();
+        maskSyncEngine.reconcileTasks().then(changed => {
+          if (changed) setMaskSyncTasks(maskSyncEngine.getTasks());
+        });
+      }
+    });
+    refreshMaskSyncOptions();
+    setMaskSyncTasks(maskSyncEngine.getTasks());
+    // 首次挂载/插件重载：任务引用可能是旧会话的 layerId，按路径重解析一次
+    maskSyncEngine.reconcileTasks().then(changed => {
+      if (changed) setMaskSyncTasks(maskSyncEngine.getTasks());
+    });
+  };
+  boot();
+  return () => {
+    cancelled = true;
+    if (unsub) unsub();
+    maskSyncEngine.dispose();
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
+
+// 图层结构变化（新建/删除/重命名图层）时刷新文件树下拉，并重解析失效引用
+useEffect(() => {
+  let timer: any = 0;
+  const scheduleRefresh = () => {
+    if (timer) return;
+    timer = setTimeout(() => {
+      timer = 0;
+      refreshMaskSyncOptions();
+      maskSyncEngine.reconcileTasks().then(changed => {
+        if (changed) setMaskSyncTasks(maskSyncEngine.getTasks());
+      });
+    }, 120);
+  };
+  const handleMaskSyncNotif = (eventName?: any) => {
+    const evt = typeof eventName === 'string' ? eventName : '';
+    if (evt === 'make' || evt === 'delete') {
+      scheduleRefresh();
+    }
+  };
+  try {
+    action.addNotificationListener(['make', 'delete'], handleMaskSyncNotif);
+  } catch {}
+  return () => {
+    try {
+      if (timer) clearTimeout(timer);
+      action.removeNotificationListener(['make', 'delete'], handleMaskSyncNotif);
+    } catch {}
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
+
+// 蒙版同步任务操作
+const handleMaskSyncAdd = async () => {
+  try {
+    await maskSyncEngine.addTask();
+  } catch (e) {
+    console.warn('⚠️ 新建同步任务失败:', e);
+  }
+};
+
+const handleMaskSyncRemove = async (id: string) => {
+  try {
+    await maskSyncEngine.removeTask(id);
+    if (maskSyncEditingId === id) setMaskSyncEditingId(null);
+  } catch (e) {
+    console.warn('⚠️ 删除同步任务失败:', e);
+  }
+};
+
+const patchMaskSyncTask = async (task: MaskSyncTask, patch: Partial<MaskSyncTask>) => {
+  const next = { ...task, ...patch };
+  setMaskSyncTasks(prev => prev.map(t => (t.id === task.id ? next : t)));
+  try {
+    await maskSyncEngine.updateTask(next);
+  } catch (e) {
+    console.warn('⚠️ 更新同步任务失败:', e);
+  }
+};
+
+const handleMaskSyncSampleChange = async (task: MaskSyncTask, value: string) => {
+  const id = parseInt(value, 10);
+  if (!Number.isFinite(id)) return;
+  const hit = maskSyncSampleOptions.find(o => o.id === id);
+  if (!hit || hit.kind !== 'pixel') return;
+  await patchMaskSyncTask(task, { sampleLayerId: hit.id, sampleLayerPath: hit.path, sampleLayerName: hit.name });
+};
+
+const handleMaskSyncChannelChange = async (task: MaskSyncTask, value: string) => {
+  const channel = value as MaskSyncChannel;
+  if (!MASK_SYNC_CHANNEL_LABELS[channel]) return;
+  await patchMaskSyncTask(task, { channel });
+};
+
+const handleMaskSyncInvertChange = async (task: MaskSyncTask, checked: boolean) => {
+  await patchMaskSyncTask(task, { invert: checked });
+};
+
+const handleMaskSyncTargetChange = async (task: MaskSyncTask, value: string) => {
+  const id = parseInt(value, 10);
+  if (!Number.isFinite(id)) return;
+  const hit = maskSyncTargetOptions.find(o => o.id === id && o.hasUserMask);
+  if (!hit) return;
+  await patchMaskSyncTask(task, { targetLayerId: hit.id, targetLayerPath: hit.path, targetLayerName: hit.name });
+};
+
+const handleMaskSyncEnabledChange = async (task: MaskSyncTask, checked: boolean) => {
+  await patchMaskSyncTask(task, { enabled: checked });
+};
+
+const startMaskSyncRename = (task: MaskSyncTask) => {
+  setMaskSyncEditingId(task.id);
+  setMaskSyncEditingName(task.name);
+};
+
+const commitMaskSyncRename = async () => {
+  const id = maskSyncEditingId;
+  if (!id) return;
+  const name = maskSyncEditingName.trim() || '';
+  setMaskSyncEditingId(null);
+  if (!name) return;
+  const task = maskSyncTasks.find(t => t.id === id);
+  if (!task || task.name === name) return;
+  await patchMaskSyncTask(task, { name });
+};
 
 // 拦截滚轮，避免滚轮穿透到 Photoshop 活动文档，改为滚动本面板
 useEffect(() => {
@@ -2333,6 +2490,141 @@ const renderEdgeProcessingContent = () => (
   </div>
 );
 
+const renderMaskSyncContent = () => (
+  <div className="adjustment-section mask-sync-section">
+    {/* 新建同步任务按钮 */}
+    <div className="mask-sync-add-row">
+      <sp-action-button quiet class="mask-sync-add-button" onClick={handleMaskSyncAdd} title="新建同步任务">
+        <AddIcon />
+      </sp-action-button>
+    </div>
+
+    {maskSyncTasks.length === 0 && (
+      <div className="mask-sync-empty">点击 + 新建同步任务</div>
+    )}
+
+    {maskSyncTasks.map(task => (
+      <div key={task.id} className="mask-sync-task">
+        {/* 任务名：双击重命名 */}
+        <div className="mask-sync-task-header">
+          {maskSyncEditingId === task.id ? (
+            <input
+              className="mask-sync-name-input"
+              value={maskSyncEditingName}
+              autoFocus
+              onChange={(e) => setMaskSyncEditingName(e.target.value)}
+              onBlur={commitMaskSyncRename}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  commitMaskSyncRename();
+                } else if (e.key === 'Escape') {
+                  setMaskSyncEditingId(null);
+                }
+              }}
+            />
+          ) : (
+            <span
+              className="mask-sync-task-name"
+              onDoubleClick={() => startMaskSyncRename(task)}
+              title="双击重命名"
+            >{task.name}</span>
+          )}
+        </div>
+
+        <div className="mask-sync-divider" />
+
+        {/* 部分一：样本（图层 + 通道 + 反相） */}
+        <div className="mask-sync-row">
+          <span className="mask-sync-label">样本图层</span>
+          <select
+            className="mask-sync-select"
+            value={task.sampleLayerId != null ? String(task.sampleLayerId) : ''}
+            onMouseDown={refreshMaskSyncOptions}
+            onChange={(e) => handleMaskSyncSampleChange(task, e.target.value)}
+          >
+            <option value="">请选择像素图层</option>
+            {maskSyncSampleOptions.map(opt => (
+              <option key={opt.id} value={String(opt.id)} disabled={opt.kind !== 'pixel'}>{opt.label}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="mask-sync-row">
+          <span className="mask-sync-label">通道</span>
+          <select
+            className="mask-sync-select"
+            value={task.channel}
+            onChange={(e) => handleMaskSyncChannelChange(task, e.target.value)}
+          >
+            {(Object.keys(MASK_SYNC_CHANNEL_LABELS) as MaskSyncChannel[]).map(ch => (
+              <option key={ch} value={ch}>{MASK_SYNC_CHANNEL_LABELS[ch]}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="mask-sync-divider" />
+
+        {/* 部分二：目标（有蒙版的图层/组）+ 反相 */}
+        <div className="mask-sync-row">
+          <span className="mask-sync-label">目标蒙版</span>
+          <select
+            className="mask-sync-select"
+            value={task.targetLayerId != null ? String(task.targetLayerId) : ''}
+            onMouseDown={refreshMaskSyncOptions}
+            onChange={(e) => handleMaskSyncTargetChange(task, e.target.value)}
+          >
+            <option value="">请选择带蒙版图层</option>
+            {maskSyncTargetOptions.map(opt => (
+              <option key={opt.id} value={String(opt.id)}>{opt.label}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="mask-sync-row mask-sync-invert-row">
+          <label
+            className="mask-sync-checkbox"
+            style={{ color: 'var(--text-color)' }}
+            title="开启后通道灰度取反（255-值）"
+          >
+            <input
+              type="checkbox"
+              checked={task.invert}
+              onChange={(e) => handleMaskSyncInvertChange(task, e.target.checked)}
+            />
+            <span style={{ color: 'var(--text-color)' }}>反相</span>
+          </label>
+        </div>
+
+        <div className="mask-sync-divider" />
+
+        {/* 部分三：同步开关 + 删除 */}
+        <div className="mask-sync-footer">
+          <div className="adjustment-swtich-container mask-sync-switch" style={{ width: 'auto', marginBottom: 0 }}>
+            <label
+              className="adjustment-swtich-label"
+              style={{ cursor: 'pointer' }}
+              title="开启后按“事件驱动+兜底轮询”自动同步样本通道到目标蒙版"
+            >同步</label>
+            <sp-switch
+              checked={task.enabled}
+              onChange={(e) => handleMaskSyncEnabledChange(task, (e.target as HTMLInputElement).checked)}
+              style={{ marginLeft: '8px' }}
+            />
+          </div>
+          <sp-action-button
+            quiet
+            class="mask-sync-delete-button"
+            onClick={() => handleMaskSyncRemove(task.id)}
+            title="删除该同步任务"
+          >
+            <DeleteIcon style={{ width: '15px', height: '15px', display: 'block' }} />
+          </sp-action-button>
+        </div>
+      </div>
+    ))}
+  </div>
+);
+
 const renderBlockAdjustmentContent = () => (
   <div className="adjustment-section">
 
@@ -2478,6 +2770,7 @@ const renderSectionContent = (sectionId: string) => {
   if (sectionId === 'blockAdjustment') return renderBlockAdjustmentContent();
   if (sectionId === 'localContrast') return renderLocalContrastContent();
   if (sectionId === 'edgeProcessing') return renderEdgeProcessingContent();
+  if (sectionId === 'maskSync') return renderMaskSyncContent();
   return null;
 };
 

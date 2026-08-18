@@ -458,3 +458,220 @@
   cursor: pointer;
 }
 .adjustment-modal-close:hover { background: var(--hover-bg); }
+
+/* ================= 蒙版同步分区 ================= */
+.mask-sync-section {
+  max-width: 280px;
+}
+
+/* 新建任务：圆形 + 号按钮 */
+.mask-sync-add-row {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.mask-sync-add-button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: var(--button-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text-color);
+}
+
+.mask-sync-add-button:hover {
+  background: var(--hover-bg);
+  border-color: var(--primary-color);
+}
+
+.mask-sync-add-button .icon-fill {
+  fill: var(--text-color);
+}
+
+.mask-sync-add-button svg,
+.mask-sync-delete-button svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.mask-sync-empty {
+  text-align: center;
+  color: var(--text-color);
+  opacity: 0.5;
+  font-size: 12px;
+  padding: 6px 0 10px 0;
+  user-select: none;
+}
+
+/* 同步任务卡片：圆角矩形 */
+.mask-sync-task {
+  background: var(--bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 9px 10px 8px 10px;
+  margin-bottom: 10px;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+/* 任务标题行 */
+.mask-sync-task-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 20px;
+}
+
+.mask-sync-task-name {
+  color: var(--text-color);
+  font-size: 13px;
+  font-weight: 600;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: text;
+  user-select: none;
+  padding: 1px 2px;
+  border-radius: 3px;
+}
+
+.mask-sync-task-name:hover {
+  background: var(--hover-bg);
+  outline: 1px dashed var(--border-color);
+}
+
+.mask-sync-name-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 22px;
+  color: var(--text-color);
+  background: var(--bg-color);
+  border: 1px solid var(--primary-color);
+  border-radius: 3px;
+  font-size: 13px;
+  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
+  padding: 0 4px;
+  box-sizing: border-box;
+}
+
+/* 卡片内部三段分割线 */
+.mask-sync-divider {
+  height: 1px;
+  background-color: var(--border-color);
+  margin: 8px 0;
+}
+
+/* 配置行：标签 + 控件 space-between，放不下换行 */
+.mask-sync-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 7px;
+  flex-wrap: wrap;
+}
+
+.mask-sync-row-wrap {
+  row-gap: 5px;
+}
+
+.mask-sync-label {
+  color: var(--text-color);
+  font-size: 12px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.mask-sync-select {
+  flex: 1 1 120px;
+  min-width: 0;
+  height: 24px;
+  color: var(--text-color);
+  font-size: 12px;
+  background: var(--bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  box-sizing: border-box;
+  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
+}
+
+.mask-sync-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-color);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  flex: 0 0 auto;
+}
+
+/* 反相文字显式指定颜色，避免深色主题下被默认样式盖成深灰 */
+.mask-sync-checkbox span {
+  color: var(--text-color);
+}
+
+.mask-sync-checkbox input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--primary-color);
+  cursor: pointer;
+  margin: 0;
+}
+
+/* 反相行：独立一行，右对齐 */
+.mask-sync-invert-row {
+  justify-content: flex-end;
+  margin-bottom: 0;
+}
+
+/* 底部：同步开关 + 圆形删除按钮 */
+.mask-sync-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 2px;
+}
+
+/* 同步开关左对齐（覆盖 adjustment-swtich-container 默认居中） */
+.mask-sync-switch {
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: flex-start;
+  width: auto;
+}
+
+.mask-sync-delete-button {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: var(--button-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text-color);
+  flex: 0 0 auto;
+}
+
+.mask-sync-delete-button:hover {
+  background: var(--hover-bg);
+  border-color: var(--primary-color);
+}
+
+.mask-sync-delete-button .icon-fill {
+  fill: var(--text-color);
+}
