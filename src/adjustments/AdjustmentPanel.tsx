@@ -1640,11 +1640,16 @@ const handleLineEnhancement = async () => {
 };
 
 // alpha对齐功能：统一半透明笔刷交叉点的不透明度
+// withBg=true 时是"背景保护"：处理"低透明度背景（如 alpha=50 的色块）上画线"的场景——
+// 参照估计排除背景水平（环带中位数），只以线条主体水平为参照，交叉凸起拉回线水平，
+// 背景色块不透明度保持不变；自动识别并保护普通线条像素（非交叉区线 core 不修改）；
+// 参照须比像素低至少 BRIGHT_DELTA（只修明显凸起，保护线自身）。
 // I/O 模式参考 handleGradientModify：整文档 getPixels → 算法 → 整文档 putPixels，
 // 选区外像素由掩码系数 (mask/255) 混合保留。环形邻域参考所有画过的线条像素（不受选区限制），
 // 因此小选区也能引用选区外的线条找到"单线水平"真正统一交叉点。
-const handleAlphaAlign = async () => {
+const handleAlphaAlign = async (withBg: boolean = false) => {
   if (!handleLicenseBeforeAction()) return;
+  const name = withBg ? '背景保护' : 'alpha对齐';
   try {
     const { executeAsModal } = core;
 
@@ -1654,7 +1659,7 @@ const handleAlphaAlign = async () => {
       if (!editingState.isValid) return;
       const { layer, isBackgroundLayer } = editingState;
       if (isBackgroundLayer) {
-        await core.showAlert({ message: 'alpha对齐仅支持非背景的普通像素图层，请选择像素图层后再使用。' });
+        await core.showAlert({ message: name + '仅支持非背景的普通像素图层，请选择像素图层后再使用。' });
         return;
       }
 
@@ -1664,7 +1669,7 @@ const handleAlphaAlign = async () => {
         await core.showAlert({ message: '获取文档信息失败' });
         return;
       }
-      console.log('✅ [alpha对齐 v2] 选区像素数=' + (selectionBounds.selectionDocIndices ? selectionBounds.selectionDocIndices.size : -1) +
+      console.log('✅ [' + name + '] 选区像素数=' + (selectionBounds.selectionDocIndices ? selectionBounds.selectionDocIndices.size : -1) +
         ' 文档=' + selectionBounds.docWidth + 'x' + selectionBounds.docHeight +
         ' 选区=' + selectionBounds.left + ',' + selectionBounds.top + ',' + selectionBounds.right + ',' + selectionBounds.bottom);
 
@@ -1682,7 +1687,7 @@ const handleAlphaAlign = async () => {
             if (a < aMin) aMin = a;
             if (a > aMax) aMax = a;
           }
-          console.log('🔍 [alpha对齐] 选区内 fullPixelData alpha: 非零像素=' + aNonZero + ' min=' + aMin + ' max=' + aMax);
+          console.log('🔍 [' + name + '] 选区内 fullPixelData alpha: 非零像素=' + aNonZero + ' min=' + aMin + ' max=' + aMax);
         }
 
         // 创建完整文档尺寸的选区掩码（选区内为羽化值 0-255，选区外为 0）
@@ -1696,13 +1701,13 @@ const handleAlphaAlign = async () => {
         // 关键：传入 fullPixelData（完整 alpha）而非 selectionPixelData。
         // 这样环形邻域能引用选区外的线条像素找到"单线水平"，
         // 而 fullSelectionMask 只决定"哪些像素会被修改"。
-        // v2：自适应粗细线（1~100px），无需手动切换模式。
         const processedPixels = await processAlphaAlign(
           pixelResult.fullPixelData.buffer,
           fullSelectionMask.buffer,
           { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
           {},
-          false
+          false,
+          withBg // 含背景模式：参照排除低透明度背景，只以线条主体水平为参照
         );
 
         // 写回：按选区羽化系数混合，选区内写入计算结果，选区外保留原像素
@@ -1712,8 +1717,8 @@ const handleAlphaAlign = async () => {
     giveFocusBackToPS();
   } catch (error) {
     const msg = typeof error === 'string' ? error : (error && (error.message || (error as any).toString?.() || '未知错误'));
-    console.error('❌ alpha对齐处理失败:', error);
-    await core.showAlert({ message: 'alpha对齐处理失败: ' + msg });
+    console.error('❌ ' + name + '处理失败:', error);
+    await core.showAlert({ message: name + '处理失败: ' + msg });
   }
 };
 
@@ -2305,7 +2310,7 @@ const renderEdgeProcessingContent = () => (
     <div className="adjustment-divider"></div>
 
     <div className="adjustment-double-buttons">
-      <div role="button" tabIndex={0} className="adjustment-button" onClick={handleAlphaAlign} title={`● 统一半透明笔刷交叉点的不透明度，消除两笔交汇处出现的"深色点"。
+      <div role="button" tabIndex={0} className="adjustment-button" onClick={() => handleAlphaAlign(false)} title={`● 统一半透明笔刷交叉点的不透明度，消除两笔交汇处出现的"深色点"。
 
 ● 分析选区内像素的 alpha，把局部异常偏高（如交叉叠加）的区域拉回周围线条的自然水平，与周边自然衔接。
 
@@ -2314,6 +2319,16 @@ const renderEdgeProcessingContent = () => (
 ● 仅对非背景的普通像素图层生效，只修改选区内 Alpha>0 的区域（RGB 不变）。
 
 ● 会排除选区内的羽化渐变与极低不透明度残留的干扰。`}>alpha对齐</div>
+
+      <div role="button" tabIndex={0} className="adjustment-button" onClick={() => handleAlphaAlign(true)} title={`● 与 alpha对齐 类似，但用于"低透明度背景（如 alpha=50 的色块）上画线"的场景——统一化线条交叉区域的叠加凸起，同时保护背景色块与线条自身不被侵蚀。
+ 
+● 参照估计会排除背景水平（环带中位数），只以线条主体水平为参照：交叉凸起拉回线水平，背景保持不变。
+ 
+● 自动识别并保护普通线条像素（非交叉区的线 core 不会被误拉低），只修"明显凸起"（参照比像素低 ≥10）。
+ 
+● 自适应识别各种宽度的线条交错（细×细、细×粗、粗×粗）。
+ 
+● 仅对非背景的普通像素图层生效，只修改选区内 Alpha>0 的区域（RGB 不变）。`}>背景保护</div>
     </div>
   </div>
 );
