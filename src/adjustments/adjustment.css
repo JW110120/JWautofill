@@ -464,12 +464,13 @@
   max-width: 280px;
 }
 
-/* 新建任务：圆形 + 号按钮 */
+/* 新建任务：圆形 + 号按钮（位于任务卡片列表底部） */
 .mask-sync-add-row {
   display: flex;
   justify-content: center;
   align-items: center;
-  margin-bottom: 10px;
+  margin-top: 4px;
+  margin-bottom: 2px;
 }
 
 .mask-sync-add-button {
@@ -509,6 +510,89 @@
   font-size: 12px;
   padding: 6px 0 10px 0;
   user-select: none;
+}
+
+/* 引擎状态条：绿点+“引擎就绪”左对齐，文档名+任务数右对齐 */
+.mask-sync-status-bar {
+  display: flex;
+  align-items: center;
+  padding: 4px 6px;
+  margin-bottom: 8px;
+  border-radius: 4px;
+  background: var(--panel-bg, rgba(128, 128, 128, 0.08));
+  border: 1px solid var(--border-color);
+  user-select: none;
+}
+
+.mask-sync-status-dot {
+  width: 8px;
+  height: 8px;
+  margin-right: 12px; /* 绿点与“引擎就绪”之间留出足够空隙 */
+  border-radius: 50%;
+  flex: none;
+}
+
+.mask-sync-status-dot.ok {
+  background: #2ecc71;
+  box-shadow: 0 0 4px rgba(46, 204, 113, 0.6);
+}
+
+.mask-sync-status-dot.warn {
+  background: #f39c12;
+  box-shadow: 0 0 4px rgba(243, 156, 18, 0.6);
+}
+
+/* “引擎就绪”左对齐（紧跟绿点） */
+.mask-sync-status-ready {
+  font-size: 11px;
+  color: var(--text-color);
+  opacity: 0.85;
+  white-space: nowrap;
+}
+
+/* 文档名与任务数：右对齐 */
+.mask-sync-status-info {
+  margin-left: auto; /* 推到最右 */
+  text-align: right;
+  font-size: 11px;
+  color: var(--text-color);
+  opacity: 0.85;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 每任务上次同步结果 */
+.mask-sync-result {
+  display: flex;
+  align-items: flex-start;
+  padding: 3px 6px;
+  margin: 2px 0 4px 0;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.35;
+  user-select: none;
+}
+
+.mask-sync-result.ok {
+  color: #27ae60;
+  background: rgba(46, 204, 113, 0.10);
+}
+
+.mask-sync-result.fail {
+  color: #c0392b;
+  background: rgba(231, 76, 60, 0.12);
+}
+
+.mask-sync-result-icon {
+  flex: none;
+  margin-right: 5px;
+  font-size: 8px;
+  line-height: 1.6;
+}
+
+.mask-sync-result-text {
+  word-break: break-all;
 }
 
 /* 同步任务卡片：圆角矩形 */
@@ -571,32 +655,48 @@
   margin: 8px 0;
 }
 
-/* 配置行：标签 + 控件 space-between，放不下换行 */
+/* 配置行：标签 + 控件 space-between，放不下换行。
+   注意：UXP 环境 flex gap 不生效，间距一律用 margin 实现。 */
 .mask-sync-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
   margin-bottom: 7px;
   flex-wrap: wrap;
+}
+
+/* 样本图层行与通道行之间更紧凑（亲密性原则） */
+.mask-sync-row-close {
+  margin-bottom: 2px;
 }
 
 .mask-sync-row-wrap {
   row-gap: 5px;
 }
 
+/* 标签统一宽度（4 个汉字宽），与下拉控件之间 6px 间距 */
 .mask-sync-label {
   color: var(--text-color);
   font-size: 12px;
   flex: 0 0 auto;
+  min-width: 4em; /* “样本图层”/“目标蒙版” 4 字宽，让“通道”容器同宽 */
+  margin-right: 6px;
   white-space: nowrap;
   user-select: none;
 }
 
-.mask-sync-select {
+/* 自绘下拉：头部（闭合状态） */
+.mask-sync-select-wrap {
   flex: 1 1 120px;
   min-width: 0;
+  position: relative;
+}
+
+.mask-sync-select-head {
+  display: flex;
+  align-items: center;
   height: 24px;
+  padding: 0 6px;
   color: var(--text-color);
   font-size: 12px;
   background: var(--bg-color);
@@ -604,12 +704,89 @@
   border-radius: 4px;
   box-sizing: border-box;
   font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
+  cursor: pointer;
+  user-select: none;
+  overflow: hidden;
+}
+
+.mask-sync-select-head.open {
+  border-color: var(--primary-color);
+}
+
+.mask-sync-select-value {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mask-sync-select-caret {
+  flex: 0 0 auto;
+  margin-left: 4px;
+  font-size: 10px;
+  opacity: 0.6;
+}
+
+/* 弹出层：fixed 定位（相对面板视口），避免被面板 overflow 裁剪 */
+.mask-sync-select-pop {
+  position: fixed;
+  z-index: 9999;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--bg-color, #ffffff);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  padding: 2px 0;
+  box-sizing: border-box;
+}
+
+.mask-sync-select-opt {
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text-color);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.mask-sync-select-opt:hover {
+  background: var(--hover-bg, rgba(128, 128, 128, 0.15));
+}
+
+.mask-sync-select-opt.sel {
+  background: var(--primary-color, #4a7dff);
+  color: #fff;
+}
+
+.mask-sync-select-opt.dis {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mask-sync-select-opt-main {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 注释（（像素）等）右对齐；闭合头部与弹出选项共用此规则 */
+.mask-sync-select-opt-tag {
+  flex: 1 1 auto;
+  margin-left: 10px;
+  text-align: right;
+  font-size: 11px;
+  opacity: 0.7;
+  white-space: nowrap;
 }
 
 .mask-sync-checkbox {
   display: flex;
   align-items: center;
-  gap: 4px;
   color: var(--text-color);
   font-size: 12px;
   cursor: pointer;
@@ -617,9 +794,11 @@
   flex: 0 0 auto;
 }
 
-/* 反相文字显式指定颜色，避免深色主题下被默认样式盖成深灰 */
+/* 反相文字显式指定颜色，避免深色主题下被默认样式盖成深灰；
+   标签与 checkbox 间距 4px（margin 实现，UXP 不支持 flex gap） */
 .mask-sync-checkbox span {
   color: var(--text-color);
+  margin-right: 4px;
 }
 
 .mask-sync-checkbox input[type="checkbox"] {
@@ -627,16 +806,16 @@
   height: 14px;
   accent-color: var(--primary-color);
   cursor: pointer;
-  margin: 0;
+  margin: 0; /* 间距由上面的 span margin-right 控制 */
 }
 
-/* 反相行：独立一行，右对齐 */
+/* 反相行：左对齐（反相标签在左、checkbox 在右） */
 .mask-sync-invert-row {
-  justify-content: flex-end;
+  justify-content: flex-start;
   margin-bottom: 0;
 }
 
-/* 底部：同步开关 + 圆形删除按钮 */
+/* 底部：同步开关 + 立即同步 + 圆形删除按钮 */
 .mask-sync-footer {
   display: flex;
   align-items: center;
@@ -644,12 +823,36 @@
   margin-top: 2px;
 }
 
+/* 立即同步按钮与删除按钮之间的间距（margin 实现，UXP 不支持 flex gap） */
 /* 同步开关左对齐（覆盖 adjustment-swtich-container 默认居中） */
 .mask-sync-switch {
   flex: 1 1 auto;
   min-width: 0;
   justify-content: flex-start;
   width: auto;
+}
+
+/* 立即同步按钮（margin-right 保证与删除按钮之间 2px 间距，UXP 不支持 flex gap） */
+.mask-sync-now-button {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 8px;
+  font-size: 11px;
+  background: var(--button-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 13px;
+  cursor: pointer;
+  color: var(--text-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  margin-right: 2px;
+}
+
+.mask-sync-now-button:hover {
+  background: var(--hover-bg);
+  border-color: var(--primary-color);
 }
 
 .mask-sync-delete-button {
@@ -665,6 +868,7 @@
   cursor: pointer;
   color: var(--text-color);
   flex: 0 0 auto;
+  margin-left: 2px; /* 与“立即同步”按钮增加 2px 间距 */
 }
 
 .mask-sync-delete-button:hover {
