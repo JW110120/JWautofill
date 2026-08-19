@@ -699,7 +699,8 @@
   padding: 0 6px;
   color: var(--text-color);
   font-size: 12px;
-  background: var(--bg-color);
+  /* 与主面板 sp-picker 自动渲染的主题背景统一（theme.ts --dropdown-bg-color） */
+  background: var(--dropdown-bg-color);
   border: 1px solid var(--border-color);
   border-radius: 4px;
   box-sizing: border-box;
@@ -723,9 +724,29 @@
 
 .mask-sync-select-caret {
   flex: 0 0 auto;
-  margin-left: 4px;
-  font-size: 10px;
+  /* margin-left: auto：无 tag 时把箭头推到最右；有 tag（flex:1 撑满）时箭头位于行尾，
+     任何情况下都右对齐（与主面板 sp-picker 的箭头位置一致） */
+  margin-left: auto;
+  padding-left: 6px;
+  display: flex;
+  align-items: center;
   opacity: 0.6;
+}
+
+/* 选中项右侧对勾（与主面板 sp-picker 的 Spectrum 勾样式一致） */
+.mask-sync-select-check {
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  opacity: 0.9;
+}
+
+/* 边缘平滑"平滑模式"下拉：保持与原原生 select 相同的宽度与右对齐 */
+.adjustment-smooth-mode-select {
+  flex: 0 1 170px;
+  margin-left: auto;
+  margin-right: -2px;
 }
 
 /* 弹出层：fixed 定位（相对面板视口），避免被面板 overflow 裁剪 */
@@ -734,7 +755,7 @@
   z-index: 9999;
   max-height: 200px;
   overflow-y: auto;
-  background: var(--bg-color, #ffffff);
+  background: var(--dropdown-bg-color);
   border: 1px solid var(--border-color);
   border-radius: 4px;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);

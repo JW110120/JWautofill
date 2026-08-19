@@ -623,11 +623,72 @@ useEffect(() => {
 }, [showVisibilityPanel]);
 
 // ================= 蒙版同步：初始化与监听 =================
+
+/**
+ * 两个图层树是否完全相同（逐字段比较）。
+ * buildLayerTree 内部是 batchPlay，会在 PS 端触发 set/select 等通知，
+ * 这些通知又会回流触发引擎 notify / 面板刷新——若不比较去重，每次刷新都会
+ * 强制全面板 re-render，re-render 引发的布局重排/输入重放正是
+ * "下拉打开后立刻自动关闭"的根源（只影响带 onOpen 的样本/目标下拉）。
+ */
+const sameLayerTree = (a: LayerTreeEntry[], b: LayerTreeEntry[]): boolean => {
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    const y = b[i];
+    if (!x || !y) return false;
+    if (x.id !== y.id || x.name !== y.name || x.kind !== y.kind ||
+        x.depth !== y.depth || x.hasUserMask !== y.hasUserMask ||
+        x.isBackground !== y.isBackground || x.isAdjustment !== y.isAdjustment ||
+        x.label !== y.label || x.path.join('/') !== y.path.join('/')) {
+      return false;
+    }
+  }
+  return true;
+};
+
+/** 任务列表内容比较（引擎每次 notify 都返回新数组引用，内容没变就不必重渲染）。 */
+const sameMaskSyncTasks = (a: MaskSyncTask[], b: MaskSyncTask[]): boolean => {
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    const y = b[i];
+    if (!x || !y) return false;
+    if (x.id !== y.id || x.name !== y.name ||
+        x.sampleLayerId !== y.sampleLayerId || x.targetLayerId !== y.targetLayerId ||
+        x.channel !== y.channel || x.invert !== y.invert || x.enabled !== y.enabled) {
+      return false;
+    }
+  }
+  return true;
+};
+
+/**
+ * 同步结果比较：**忽略 time 字段**（引擎 2s 轮询每次都会刷新时间戳，若把 time
+ * 也纳入比较，面板每 2 秒就会重渲染一次，恰好落在下拉打开瞬间就会引发闪关）。
+ * 只关心内容变化（synced/reason）。
+ */
+const sameSyncResults = (a: Record<string, SyncState> | undefined, b: Record<string, SyncState>): boolean => {
+  const x = a || {};
+  const kx = Object.keys(x);
+  const ky = Object.keys(b);
+  if (kx.length !== ky.length) return false;
+  for (const k of ky) {
+    const sb = b[k];
+    const sa = x[k];
+    if (!sa || !sb || sa.synced !== sb.synced || sa.reason !== sb.reason) return false;
+  }
+  return true;
+};
+
 const refreshMaskSyncOptions = async (): Promise<LayerTreeEntry[] | null> => {
   try {
     const tree = await maskSyncEngine.buildLayerTree();
-    setMaskSyncSampleOptions(tree);
-    setMaskSyncTargetOptions(tree.filter(t => t.hasUserMask));
+    // 树内容没变就不 setState（比较引用/内容后再决定），切断
+    // "刷新 → re-render → 布局重排/输入重放 → 下拉闪关"的链路。
+    setMaskSyncSampleOptions(prev => (sameLayerTree(prev, tree) ? prev : tree));
+    const targets = tree.filter(t => t.hasUserMask);
+    setMaskSyncTargetOptions(prev => (sameLayerTree(prev, targets) ? prev : targets));
     return tree;
   } catch (e) {
     console.warn('⚠️ 刷新蒙版同步文件树失败:', e);
@@ -643,13 +704,21 @@ useEffect(() => {
     if (cancelled) return;
     setMaskSyncEngineReady(true);
     unsub = maskSyncEngine.subscribe((info) => {
-      setMaskSyncTasks(maskSyncEngine.getTasks());
-      if (info.results) setMaskSyncResults(info.results);
+      // 引擎高频 notify（事件驱动 + 2s 兜底轮询）：内容无变化时不 setState，
+      // 避免全面板反复 re-render 干扰下拉交互（下拉闪关的直接诱因）。
+      const tasks = maskSyncEngine.getTasks();
+      setMaskSyncTasks(prev => (sameMaskSyncTasks(prev, tasks) ? prev : tasks));
+      if (info.results) {
+        setMaskSyncResults(prev => (sameSyncResults(prev, info.results) ? prev : info.results));
+      }
       // 文档切换/重开：刷新文件树下拉，并按名称路径重解析失效的图层引用
       if (info.docChanged) {
         refreshMaskSyncOptions();
         maskSyncEngine.reconcileTasks().then(changed => {
-          if (changed) setMaskSyncTasks(maskSyncEngine.getTasks());
+          if (changed) {
+            const t2 = maskSyncEngine.getTasks();
+            setMaskSyncTasks(prev => (sameMaskSyncTasks(prev, t2) ? prev : t2));
+          }
         });
       }
     });
@@ -678,7 +747,10 @@ useEffect(() => {
       timer = 0;
       refreshMaskSyncOptions();
       maskSyncEngine.reconcileTasks().then(changed => {
-        if (changed) setMaskSyncTasks(maskSyncEngine.getTasks());
+        if (changed) {
+          const t2 = maskSyncEngine.getTasks();
+          setMaskSyncTasks(prev => (sameMaskSyncTasks(prev, t2) ? prev : t2));
+        }
       });
     }, 120);
   };
@@ -777,49 +849,104 @@ const MaskSyncSelect: React.FC<{
   options: MaskSyncSelectOption[];
   onOpen?: () => void;
   title?: string;
-}> = ({ value, onChange, options, onOpen, title }) => {
+  /** 选中项右侧打勾（与主面板 sp-picker 统一）。样本/目标下拉不传（无勾，保持 space-between 布局）。 */
+  showCheck?: boolean;
+  /** 透传到外层 wrap，用于外部控制宽度/对齐。 */
+  className?: string;
+}> = ({ value, onChange, options, onOpen, title, showCheck, className }) => {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
   const headRef = useRef<HTMLDivElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
   const openAtRef = useRef(0);
+  const lastToggleAtRef = useRef(0);
+  // 自动关闭抑制截止时间：打开后（及 onOpen 刷新完成后缓冲期内）禁止任何
+  // 外部点击/滚动信号关闭菜单。刷新期间置为 Infinity——onOpen 的 batchPlay
+  // 耗时不定（可能远超固定 500ms 保护窗口），刷新完成时的 re-render 引发的
+  // 布局重排/输入重放正是"打开后立刻自动关闭"的根源。
+  const suppressCloseUntilRef = useRef(0);
 
-  // 点击弹出层外部或滚动时关闭。打开瞬间（150ms 内）的 scroll/mousedown 信号
-  // 全部忽略——否则 UXP 面板在弹出时触发的重排/滚动会把下拉立刻"闪关"。
+  /** 重新计算弹出层位置；位置没变时复用旧对象，避免无谓 re-render。 */
+  const reposition = () => {
+    const r = headRef.current?.getBoundingClientRect();
+    if (!r) return;
+    setPos(prev =>
+      prev &&
+      Math.abs(prev.left - r.left) < 1 &&
+      Math.abs(prev.top - (r.bottom + 2)) < 1 &&
+      Math.abs(prev.width - r.width) < 1
+        ? prev
+        : { left: r.left, top: r.bottom + 2, width: r.width }
+    );
+  };
+
+  // 点击弹出层外部时关闭；面板滚动时**不关闭**而是重新定位 pop（fixed 定位
+  // 不随滚动，重新定位才能跟随头部）。打开瞬间与 onOpen 刷新期间/缓冲期内的
+  // 一切关闭信号都忽略，避免 batchPlay 刷新完成后的 re-render 滚动/输入重放闪关。
   useEffect(() => {
     if (!open) return;
+    // UXP 中原生 number 输入控件会渲染在 fixed 弹层之上（z-index 无效）；
+    // 弹层打开期间给 body 加类，CSS 隐藏面板内所有 number 输入（保留布局占位），
+    // 避免下方滑块的数字显示在弹出菜单上面（与"隐藏/显示分区"模态的处理一致）。
+    document.body.classList.add('mask-sync-pop-open');
     const onDocClick = (e: MouseEvent) => {
-      if (Date.now() - openAtRef.current < 150) return;
+      if (Date.now() < suppressCloseUntilRef.current) return; // 刷新期/缓冲期：绝不关闭
+      if (Date.now() - openAtRef.current < 500) return;
       if (headRef.current?.contains(e.target as Node)) return;
       if (popRef.current?.contains(e.target as Node)) return;
       setOpen(false);
     };
-    const onScrollClose = () => {
-      if (Date.now() - openAtRef.current < 150) return;
-      setOpen(false);
+    const onScrollReposition = (e: Event) => {
+      // 弹出层自身滚动（选项多时的内部滚动条）不处理
+      if (popRef.current && e.target instanceof Node && popRef.current.contains(e.target)) return;
+      if (Date.now() - openAtRef.current < 200) return; // 打开瞬间的布局滚动忽略
+      reposition();
     };
     document.addEventListener('mousedown', onDocClick);
-    document.addEventListener('scroll', onScrollClose, true);
+    document.addEventListener('scroll', onScrollReposition, true);
     return () => {
+      document.body.classList.remove('mask-sync-pop-open');
       document.removeEventListener('mousedown', onDocClick);
-      document.removeEventListener('scroll', onScrollClose, true);
+      document.removeEventListener('scroll', onScrollReposition, true);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // onOpen 刷新完成后（options 变化）重新对齐 pop 位置，避免头部移位导致错位
+  useEffect(() => {
+    if (!open) return;
+    reposition();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [options, open]);
 
   const sel = options.find(o => o.value === value);
 
   const toggle = () => {
+    // 防重复触发：两次 toggle 间隔 < 100ms 时忽略（避免误触导致的闪开闪关）
+    const now = Date.now();
+    if (now - lastToggleAtRef.current < 100) return;
+    lastToggleAtRef.current = now;
     if (!open) {
-      if (onOpen) onOpen(); // 打开前先刷新选项
-      const r = headRef.current?.getBoundingClientRect();
-      if (r) setPos({ left: r.left, top: r.bottom + 2, width: r.width });
-      openAtRef.current = Date.now();
+      openAtRef.current = now;
+      if (onOpen) {
+        // 刷新期间禁止一切自动关闭；刷新完成后仍保留 600ms 缓冲，
+        // 盖住刷新引发的 re-render/滚动/输入重放（batchPlay 耗时不定，
+        // 固定 500ms 保护窗口盖不住）。
+        suppressCloseUntilRef.current = Number.MAX_SAFE_INTEGER;
+        Promise.resolve()
+          .then(() => onOpen())
+          .catch(() => {})
+          .finally(() => {
+            suppressCloseUntilRef.current = Date.now() + 600;
+          });
+      }
+      reposition();
     }
     setOpen(o => !o);
   };
 
   return (
-    <div className="mask-sync-select-wrap" title={title}>
+    <div className={`mask-sync-select-wrap ${className || ''}`} title={title}>
       <div
         ref={headRef}
         className={`mask-sync-select-head ${open ? 'open' : ''}`}
@@ -827,7 +954,12 @@ const MaskSyncSelect: React.FC<{
       >
         <span className="mask-sync-select-value">{sel ? sel.main : ''}</span>
         {sel && sel.tag && <span className="mask-sync-select-opt-tag">{sel.tag}</span>}
-        <span className="mask-sync-select-caret">▾</span>
+        <span className="mask-sync-select-caret">
+          {/* 与主面板一致的 ChevronDown 官方图标（Fluent 18x18，圆润下箭头） */}
+          <svg viewBox="0 0 18 18" width="16" height="16" aria-hidden="true" focusable="false">
+            <path d="M4,7.01a1,1,0,0,1,1.7055-.7055l3.289,3.286,3.289-3.286a1,1,0,0,1,1.437,1.3865l-.0245.0245L9.7,11.7075a1,1,0,0,1-1.4125,0L4.293,7.716A.9945.9945,0,0,1,4,7.01Z" fill="currentColor" />
+          </svg>
+        </span>
       </div>
       {open && pos && (
         <div
@@ -847,6 +979,14 @@ const MaskSyncSelect: React.FC<{
             >
               <span className="mask-sync-select-opt-main">{o.main}</span>
               {o.tag && <span className="mask-sync-select-opt-tag">{o.tag}</span>}
+              {showCheck && o.value === value && (
+                <span className="mask-sync-select-check">
+                  {/* 与主面板 sp-picker 一致的 Spectrum 对勾（选中项右侧） */}
+                  <svg viewBox="0 0 36 36" width="12" height="12" aria-hidden="true" focusable="false">
+                    <path d="M9 16.4L14.6 22.1L27.4 9.6L29.4 11.6L14.6 26.3L9 20.4Z" fill="currentColor" />
+                  </svg>
+                </span>
+              )}
             </div>
           ))}
         </div>
@@ -1309,8 +1449,8 @@ const handleLineReferenceLayerChange = async (event: React.ChangeEvent<HTMLSelec
   setLineReferenceLayerName(layer.name || '');
 };
 
-const handleEdgeSmoothModeChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
-  setEdgeSmoothMode(event.target.value);
+const handleEdgeSmoothModeChange = (value: string) => {
+  setEdgeSmoothMode(value);
 };
 
 const handleEdgeMedianRadiusChange = (value: number) => {
@@ -2569,10 +2709,17 @@ const renderEdgeProcessingContent = () => (
 
 ● 仅主线条：先对选区做“中间值”抹除，再对线条方向做平滑并写回。`}>平滑模式</div>
         <div className="unit-container">
-          <select value={edgeSmoothMode} onChange={handleEdgeSmoothModeChange} className="adjustment-select">
-            <option value="edge">仅色块边界</option>
-            <option value="line">仅主线条</option>
-          </select>
+          <MaskSyncSelect
+            value={edgeSmoothMode}
+            onChange={handleEdgeSmoothModeChange}
+            className="adjustment-smooth-mode-select"
+            title="选择边缘平滑的模式"
+            showCheck
+            options={[
+              { value: 'edge', main: '仅色块边界' },
+              { value: 'line', main: '仅主线条' },
+            ]}
+          />
         </div>
       </div>
 
@@ -2765,6 +2912,7 @@ const renderMaskSyncContent = () => (
           <MaskSyncSelect
             value={task.channel || ''}
             onChange={(v) => handleMaskSyncChannelChange(task, v)}
+            showCheck
             options={channelOptions.map(ch => ({ value: ch, main: MASK_SYNC_CHANNEL_LABELS[ch] }))}
           />
         </div>

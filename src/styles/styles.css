@@ -192,6 +192,26 @@ sp-picker {
   position: relative;
 }
 
+/* 下拉控件背景与特制绘画滤镜面板统一（theme.ts 的 --dropdown-bg-color）：
+   darkest #080808 / dark #2f2f2f / light #e1e1e1（默认 #ffffff 偏亮，已调）/ lightest #ffffff
+   双保险：CSS 变量覆盖（继承进 shadow DOM）+ ::part 强制基础色，
+   保证不被 Spectrum 内部更高优先级的类选择器压过。 */
+sp-picker {
+  --spectrum-picker-background-color: var(--dropdown-bg-color);
+  --spectrum-picker-background-color-hover: var(--dropdown-bg-color);
+  --spectrum-picker-background-color-down: var(--dropdown-bg-color);
+  --spectrum-field-background-color: var(--dropdown-bg-color);
+}
+
+sp-picker::part(button) {
+  background-color: var(--dropdown-bg-color) !important;
+}
+
+/* 展开的选项菜单背景同步统一 */
+sp-menu {
+  background-color: var(--dropdown-bg-color) !important;
+}
+
 /* 添加禁用状态样式 */
 sp-picker[disabled] {
   opacity: 0.5;
