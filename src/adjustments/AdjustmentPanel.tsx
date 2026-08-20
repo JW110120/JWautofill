@@ -11,6 +11,7 @@ import { processLineEnhancement } from './lineProcessing';
 import { processAlphaAlign } from './alphaAlignProcessor';
 import { processHighFrequencyEnhancement } from './highFrequencyEnhancer';
 import { processSmartEdgeSmooth, defaultSmartEdgeSmoothParams } from './smartEdgeSmoothProcessor';
+import { processPencilAASmooth, defaultPencilAAParams } from './pencilAASmoothProcessor';
 import { checkEditingState, processPixelData, applyProcessedPixels, writeFullPixelsToLayer } from './pixelDataProcessor';
 import { LicenseManager } from '../utils/LicenseManager';
 import { action, app, core, imaging } from 'photoshop';
@@ -241,7 +242,7 @@ interface SectionConfig {
 }
 
 interface SubFeature {
-  id: 'pixelTransition' | 'highFreqEnhancement' | 'edgeSmooth' | 'lineEnhancement' | string;
+  id: 'pixelTransition' | 'highFreqEnhancement' | 'edgeSmooth' | 'lineEnhancement' | 'pencilAA' | string;
   parentId: SectionConfig['id'];
   title: string;
   isVisible: boolean;
@@ -262,7 +263,8 @@ const defaultSubFeatures: SubFeature[] = [
   { id: 'gradientRelax', parentId: 'localContrast', title: '梯度修改', isVisible: true, order: 1 },
   { id: 'highFreqEnhancement', parentId: 'localContrast', title: '高频增强', isVisible: true, order: 2 },
   { id: 'edgeSmooth', parentId: 'edgeProcessing', title: '边缘平滑', isVisible: true, order: 0 },
-  { id: 'lineEnhancement', parentId: 'edgeProcessing', title: '线条加黑', isVisible: true, order: 1 }
+  { id: 'pencilAA', parentId: 'edgeProcessing', title: '铅笔去锯齿', isVisible: true, order: 1 },
+  { id: 'lineEnhancement', parentId: 'edgeProcessing', title: '线条加黑', isVisible: true, order: 2 }
 ];
 
 const AdjustmentPanel: React.FC = () => {
@@ -328,6 +330,13 @@ const [edgeBackgroundSmoothRadius, setEdgeBackgroundSmoothRadius] = useState(def
 const [edgeLineStrength, setEdgeLineStrength] = useState(Math.round((defaultSmartEdgeSmoothParams.lineSmoothStrength ?? defaultSmartEdgeSmoothParams.lineStrength ?? 1) * 100));
 const [edgeLineSmoothRadius, setEdgeLineSmoothRadius] = useState(defaultSmartEdgeSmoothParams.lineSmoothRadius ?? 10);
 const [edgeLinePreserveDetail, setEdgeLinePreserveDetail] = useState(Math.round((defaultSmartEdgeSmoothParams.linePreserveDetail ?? defaultSmartEdgeSmoothParams.lineHardness ?? 1) * 100));
+
+// 铅笔去锯齿参数
+const [pencilSoftWidth, setPencilSoftWidth] = useState(defaultPencilAAParams.softWidth ?? 2);
+const [pencilStrength, setPencilStrength] = useState(Math.round((defaultPencilAAParams.strength ?? 1) * 100));
+const [pencilAlphaThreshold, setPencilAlphaThreshold] = useState(defaultPencilAAParams.alphaThreshold ?? 128);
+const [pencilThinProtect, setPencilThinProtect] = useState(defaultPencilAAParams.thinLineProtect !== false);
+const [pencilThinSmooth, setPencilThinSmooth] = useState(Math.round((defaultPencilAAParams.thinLineSmooth ?? 0.6) * 100));
 
 // ===== 蒙版同步 =====
 const [maskSyncTasks, setMaskSyncTasks] = useState<MaskSyncTask[]>([]);
@@ -454,6 +463,11 @@ useEffect(() => {
           else if (typeof ap.values.edgeLineWidthScale === 'number') setEdgeLineSmoothRadius(Math.max(3, Math.min(12, Math.round(ap.values.edgeLineWidthScale * 8))));
           if (typeof ap.values.edgeLinePreserveDetail === 'number') setEdgeLinePreserveDetail(Math.max(0, Math.min(100, Math.round(ap.values.edgeLinePreserveDetail))));
           else if (typeof ap.values.edgeLineHardness === 'number') setEdgeLinePreserveDetail(Math.max(0, Math.min(100, Math.round(ap.values.edgeLineHardness))));
+          if (typeof ap.values.pencilSoftWidth === 'number') setPencilSoftWidth(Math.max(0.5, Math.min(4, ap.values.pencilSoftWidth)));
+          if (typeof ap.values.pencilStrength === 'number') setPencilStrength(Math.max(0, Math.min(100, Math.round(ap.values.pencilStrength))));
+          if (typeof ap.values.pencilAlphaThreshold === 'number') setPencilAlphaThreshold(Math.max(64, Math.min(192, Math.round(ap.values.pencilAlphaThreshold))));
+          if (typeof ap.values.pencilThinProtect === 'boolean') setPencilThinProtect(ap.values.pencilThinProtect);
+          if (typeof ap.values.pencilThinSmooth === 'number') setPencilThinSmooth(Math.max(0, Math.min(100, Math.round(ap.values.pencilThinSmooth))));
         }
       }
       setPanelStateLoaded(true);
@@ -494,6 +508,11 @@ useEffect(() => {
         edgeLineStrength,
         edgeLineSmoothRadius,
         edgeLinePreserveDetail,
+        pencilSoftWidth,
+        pencilStrength,
+        pencilAlphaThreshold,
+        pencilThinProtect,
+        pencilThinSmooth,
       },
     },
   }, { debounceMs: 400 }).catch(e => console.warn('⚠️ 保存像素调整面板状态失败:', e));
@@ -522,6 +541,11 @@ useEffect(() => {
   edgeLineStrength,
   edgeLineSmoothRadius,
   edgeLinePreserveDetail,
+  pencilSoftWidth,
+  pencilStrength,
+  pencilAlphaThreshold,
+  pencilThinProtect,
+  pencilThinSmooth,
 ]);
 
 useEffect(() => {
@@ -606,6 +630,12 @@ useEffect(() => {
       setEdgeLineStrength(Math.round((defaultSmartEdgeSmoothParams.lineSmoothStrength ?? defaultSmartEdgeSmoothParams.lineStrength ?? 1) * 100));
       setEdgeLineSmoothRadius(defaultSmartEdgeSmoothParams.lineSmoothRadius ?? 10);
       setEdgeLinePreserveDetail(Math.round((defaultSmartEdgeSmoothParams.linePreserveDetail ?? defaultSmartEdgeSmoothParams.lineHardness ?? 1) * 100));
+      // 3.5) 铅笔去锯齿参数复位
+      setPencilSoftWidth(defaultPencilAAParams.softWidth ?? 2);
+      setPencilStrength(Math.round((defaultPencilAAParams.strength ?? 1) * 100));
+      setPencilAlphaThreshold(defaultPencilAAParams.alphaThreshold ?? 128);
+      setPencilThinProtect(defaultPencilAAParams.thinLineProtect !== false);
+      setPencilThinSmooth(Math.round((defaultPencilAAParams.thinLineSmooth ?? 0.6) * 100));
       // 4) 关闭可见性面板
       setShowVisibilityPanel(false);
     }
@@ -1508,6 +1538,54 @@ const handleEdgeLinePreserveDetailNumberChange = (event: React.ChangeEvent<HTMLI
   }
 };
 
+const handlePencilSoftWidthChange = (value: number) => {
+  setPencilSoftWidth(value);
+};
+
+const handlePencilSoftWidthNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const value = parseFloat(event.target.value);
+  if (!isNaN(value) && value >= 0.5 && value <= 4) {
+    setPencilSoftWidth(value);
+  }
+};
+
+const handlePencilStrengthChange = (value: number) => {
+  setPencilStrength(value);
+};
+
+const handlePencilStrengthNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const value = parseInt(event.target.value, 10);
+  if (!isNaN(value) && value >= 0 && value <= 100) {
+    setPencilStrength(value);
+  }
+};
+
+const handlePencilAlphaThresholdChange = (value: number) => {
+  setPencilAlphaThreshold(value);
+};
+
+const handlePencilAlphaThresholdNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const value = parseInt(event.target.value, 10);
+  if (!isNaN(value) && value >= 64 && value <= 192) {
+    setPencilAlphaThreshold(value);
+  }
+};
+
+const handlePencilThinProtectChange = () => {
+  setPencilThinProtect(!pencilThinProtect);
+};
+
+const handlePencilThinSmoothChange = (value: number) => {
+  setPencilThinSmooth(value);
+};
+
+const handlePencilThinSmoothNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const value = parseInt(event.target.value, 10);
+  if (!isNaN(value) && value >= 0 && value <= 100) {
+    setPencilThinSmooth(value);
+  }
+};
+
 // 图层锁定处理工具函数（记录-解锁-恢复）
 const getCurrentLayerLockState = async () => {
   try {
@@ -2347,6 +2425,135 @@ const handleSmartEdgeSmooth = async () => {
   }
 };
 
+// 铅笔去锯齿功能：SDF 距离场重建边缘，模拟圆头笔笔触
+//  - 消除铅笔硬边阶梯，边缘 alpha 由"到真实边界的距离"决定，曲线平滑不"抖"
+//  - alpha 与 RGB 一起处理（预乘空间重建），边缘颜色与线条主体一致
+//  - 支持周围 alpha>0 的内容（色块、其他线条羽化带）：过渡带渐变到背景水平，不侵蚀背景
+//  - 细线（≤3px）走窄过渡 + 轻量平滑兜底，避免被吃穿
+const handlePencilAASmooth = async () => {
+  if (!handleLicenseBeforeAction()) return;
+  try {
+    const { executeAsModal } = core;
+
+    await executeAsModal(async () => {
+      const editingState = await checkEditingState();
+      if (!editingState.isValid) return;
+      const { layer, isBackgroundLayer } = editingState;
+      if (isBackgroundLayer) {
+        await core.showAlert({ message: '铅笔去锯齿仅支持非背景的普通像素图层，请选择像素图层后再使用。' });
+        return;
+      }
+
+      const selectionBounds = await getSelectionData();
+      if (!selectionBounds) {
+        await core.showAlert({ message: '获取文档信息失败' });
+        return;
+      }
+
+      await runWithTemporaryUnlock(async () => {
+        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+
+        // 创建完整文档尺寸的选区掩码（选区内为羽化值 0-255，选区外为 0）
+        const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
+        let maskIndex = 0;
+        for (const docIndex of pixelResult.selectionIndices) {
+          fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
+          maskIndex++;
+        }
+
+        // 传入 fullPixelData（完整 alpha，距离场参照不受选区限制），
+        // fullSelectionMask 决定"哪些像素会被修改"
+        const processedPixels = await processPencilAASmooth(
+          pixelResult.fullPixelData.buffer,
+          fullSelectionMask.buffer,
+          { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
+          {
+            softWidth: pencilSoftWidth,
+            strength: pencilStrength / 100,
+            alphaThreshold: pencilAlphaThreshold,
+            thinLineProtect: pencilThinProtect,
+            thinLineSmooth: pencilThinSmooth / 100
+          },
+          false
+        );
+
+        // 写回：按选区羽化系数混合，选区内写入计算结果，选区外保留原像素
+        await applyProcessedPixels(new Uint8Array(processedPixels), pixelResult);
+      });
+    });
+    giveFocusBackToPS();
+  } catch (error) {
+    console.error('❌ 铅笔去锯齿处理失败:', error);
+    await core.showAlert({ message: '铅笔去锯齿处理失败: ' + error.message });
+  }
+};
+
+// 铅笔去锯齿采样：把当前图层像素的 alpha 通道以矩阵形式打印到控制台。
+// 用途：用户用钢笔画一根路径，建两个图层分别用相同半径的铅笔/普通圆头笔描边，
+// 依次点本按钮输出两组 alpha 数据，供拟合更贴近真实笔刷的算法参数。
+const handlePencilAlphaSample = async () => {
+  if (!handleLicenseBeforeAction()) return;
+  try {
+    const { executeAsModal } = core;
+
+    await executeAsModal(async () => {
+      const editingState = await checkEditingState();
+      if (!editingState.isValid) return;
+      const { layer, isBackgroundLayer } = editingState;
+      if (isBackgroundLayer) {
+        await core.showAlert({ message: 'alpha采样仅支持非背景的普通像素图层，请选择像素图层后再使用。' });
+        return;
+      }
+
+      // 读取图层边界内的像素（图层边界 = 内容包围盒，一条路径描边的数据量很小）
+      const bounds = layer.bounds;
+      const W = Math.round(bounds.right - bounds.left);
+      const H = Math.round(bounds.bottom - bounds.top);
+      if (W <= 0 || H <= 0) {
+        await core.showAlert({ message: '图层为空，请先用铅笔/圆头笔沿路径描边。' });
+        return;
+      }
+      if (W * H > 250000) {
+        await core.showAlert({ message: '图层像素过多（' + W + 'x' + H + '），请用选区框选笔画区域后再试。' });
+        return;
+      }
+
+      const pixels = await imaging.getPixels({
+        documentID: app.activeDocument.id,
+        layerID: layer.id,
+        sourceBounds: {
+          left: bounds.left,
+          top: bounds.top,
+          right: bounds.right,
+          bottom: bounds.bottom
+        },
+        targetSize: { width: W, height: H }
+      });
+      const raw = new Uint8Array(await pixels.imageData.getData());
+      const bpp = raw.length / (W * H);
+
+      console.log('===== [alpha采样] 图层: ' + layer.name + ' =====');
+      console.log('尺寸: ' + W + 'x' + H + ' 边界: (' + Math.round(bounds.left) + ',' + Math.round(bounds.top) + ')');
+      // alpha 矩阵：每行一条记录，便于直接复制
+      for (let y = 0; y < H; y++) {
+        const row: number[] = [];
+        for (let x = 0; x < W; x++) {
+          const idx = y * W + x;
+          row.push(bpp === 4 ? raw[idx * 4 + 3] : 255);
+        }
+        console.log('y=' + y + ': ' + row.join(','));
+      }
+      console.log('===== [alpha采样] 结束 =====');
+
+      pixels.imageData.dispose();
+    });
+    giveFocusBackToPS();
+  } catch (error) {
+    console.error('❌ alpha采样失败:', error);
+    await core.showAlert({ message: 'alpha采样失败: ' + error.message });
+  }
+};
+
 // 像素过渡功能
 const handlePixelTransition = async () => {
   if (!handleLicenseBeforeAction()) return;
@@ -2775,6 +2982,61 @@ const renderEdgeProcessingContent = () => (
           </div>
         </>
       )}
+    </div>
+
+    <div className="adjustment-divider"></div>
+
+    <div className="adjustment-double-buttons">
+      <div role="button" tabIndex={0} className="adjustment-button" onClick={handlePencilAASmooth} title={`● 消除铅笔线条的边缘锯齿，观感接近画笔工具普通圆头笔的笔触。
+● 原理：重建线条的覆盖率场（把二值 mask 平滑成亚像素连续渐变，按像素内覆盖面积比例重新生成 alpha）——曲线平滑不"抖"、边缘连续渐变无"圈"、拐角自然圆润。
+● 与高斯模糊的区别：高斯只软化锯齿、残留周期性明暗节律（抖）；本功能直接重建边缘。
+● 边缘过渡带 alpha 连续渐变，直通色保持笔色/背景色（原透明像素改写为线条色），无灰边/黑边。
+● 支持线条周围存在半透明内容（色块、其他线条羽化带）：边缘过渡到背景水平，背景不被侵蚀。
+● 细线（≤3px）自动走"补外部过渡"保护路径，不会被吃穿。
+● 处理幂等：多次点击结果一致，线条不会越来越粗/细。
+● 仅支持非背景的普通像素图层。`}>铅笔去锯齿</div>
+
+      <div role="button" tabIndex={0} className="adjustment-button" onClick={handlePencilAlphaSample} title={`● 调试用：把当前图层像素的 alpha 通道以矩阵形式打印到 UXP 控制台。
+● 用法：用钢笔工具画一根路径 → 新建两个图层 → 分别用相同半径的"铅笔"和"普通圆头笔"沿路径描边 → 依次选中每个图层点本按钮 → 把控制台输出的 alpha 数据发给我，用于拟合更贴近真实笔刷的算法参数。
+● 数据带图层名与尺寸，便于区分铅笔/圆头笔两组样本。
+● 仅支持非背景的普通像素图层。`}>alpha采样</div>
+    </div>
+
+    <div className="adjustment-slider-container">
+      <div className="adjustment-slider-item">
+        <div className="adjustment-slider-label adjustment-slider-label-4" title={`● 边缘过渡带的总宽度，单位 px（默认 2.7 = 按真实圆头笔采样拟合）。
+● 越大边缘越软（更像大号软边圆头笔），越小越接近铅笔硬边。`}>柔化宽度</div>
+        <div className="unit-container">
+          <RangeSlider min={0.5} max={4} step={0.5} value={pencilSoftWidth} onChange={handlePencilSoftWidthChange} className="adjustment-slider-input" />
+          <input type="number" min="0.5" max="4" step="0.5" value={pencilSoftWidth} onChange={handlePencilSoftWidthNumberChange} className="adjustment-number-input" />
+          <div className="adjustment-unit">px</div>
+        </div>
+      </div>
+
+      <div className="adjustment-slider-item">
+        <div className="adjustment-slider-label" title={`● 重建结果与原图的混合比例。
+● 100%：完全采用重建后的平滑边缘；降低则保留部分原始锯齿。`}>强度</div>
+        <div className="unit-container">
+          <RangeSlider min={0} max={100} step={1} value={pencilStrength} onChange={handlePencilStrengthChange} className="adjustment-slider-input" />
+          <input type="number" min="0" max="100" step="1" value={pencilStrength} onChange={handlePencilStrengthNumberChange} className="adjustment-number-input" />
+          <div className="adjustment-unit">%</div>
+        </div>
+      </div>
+    </div>
+
+    <div className="adjustment-swtich-container">
+      <label
+        className="adjustment-swtich-label"
+        onClick={handlePencilThinProtectChange}
+        style={{ cursor: 'pointer' }}
+        title={`● 细线保护：≤3px 的细线保持实心、只补外部过渡，避免被吃穿/削淡。
+● 默认开启；其余参数（线条阈值 128、细线平滑度）已按拟合结果固定为默认值。`}
+      >细线保护</label>
+      <sp-switch
+        checked={pencilThinProtect}
+        onChange={(e) => setPencilThinProtect((e.target as HTMLInputElement).checked)}
+        style={{ marginLeft: '8px' }}
+      />
     </div>
 
     <div className="adjustment-divider"></div>
