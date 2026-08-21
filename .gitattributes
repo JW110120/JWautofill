@@ -1,0 +1,7 @@
+* text=auto
+# 图片资源标记二进制，不要处理换行
+*.png binary
+*.jpg binary
+*.gif binary
+*.webp binary
+*.zip binary
