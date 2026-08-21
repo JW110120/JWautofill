@@ -127,7 +127,8 @@ export async function processAlphaAlign(
   bounds: Bounds,
   params: AlphaAlignParams = {},
   isBackgroundLayer: boolean = false,
-  withBg: boolean = false
+  withBg: boolean = false,
+  direction: 'down' | 'up' = 'down'
 ): Promise<Uint8Array> {
   const width = Math.max(1, bounds.width | 0);
   const height = Math.max(1, bounds.height | 0);
@@ -146,6 +147,7 @@ export async function processAlphaAlign(
   const minAlpha = MIN_ALPHA;
   const peakThresh = PEAK_THRESH;
   const ringWidth = RING_WIDTH;
+  const alignUp = direction === 'up'; // 上对齐：把比主体偏淡的像素拉高到线条主体水平（与下对齐对称）
 
   const rate = strength; // 拉回比例（1.0 时完全统一到单线水平）
 
@@ -226,6 +228,7 @@ export async function processAlphaAlign(
           const k = SCREEN_SCALES[si];
           const outer = k + ringWidth;
           let minSample = 65535;
+          let maxSample = -1;
           for (let d = 0; d < 8; d++) {
             const dx = DIRS8[d][0];
             const dy = DIRS8[d][1];
@@ -235,10 +238,19 @@ export async function processAlphaAlign(
               const ny = ry + dy * rr;
               if (nx < 0 || nx >= rw || ny < 0 || ny >= rh) continue;
               const s = aR[ny * rw + nx];
-              if (s >= minAlpha && s < minSample) minSample = s;
+              if (s >= minAlpha) {
+                if (s < minSample) minSample = s;
+                if (s > maxSample) maxSample = s;
+              }
             }
           }
-          if (minSample < 65535 && minSample < a - peakThresh) isSuspicious = true;
+          if (alignUp) {
+            // 上对齐：周围存在明显高于自身的线条水平 → 本像素"偏淡"，标记可疑
+            if (maxSample >= 0 && maxSample > a + peakThresh) isSuspicious = true;
+          } else if (minSample < 65535 && minSample < a - peakThresh) {
+            // 下对齐：周围存在明显低于自身的单线水平 → 本像素"偏高"（交叉凸起），标记可疑
+            isSuspicious = true;
+          }
         }
         if (isSuspicious) {
           suspicious[ri] = 1;
@@ -359,10 +371,11 @@ export async function processAlphaAlign(
     //     避免把"线条自身/另一条略不同 alpha 的线"误拉低（如 153 竖线 vs 145 横线）；
     //   - 中位数回退取 ">med 像素" 的中位数（线主体水平），同样要求差 ≥BRIGHT_DELTA；
     //   - 背景像素（alpha≈med、环带主体是自身）被平坦拦截保护，不会被改。
+    // 参照须比 alpha 低/高至少 refDelta（含背景模式更克制，只修明显凸起/明显偏淡）
+    const refDelta = withBg ? BRIGHT_DELTA : peakThresh;
+
     const analyzePixel = (ri: number): number => {
       const a = readSrc[ri];
-      // 参照须比 alpha 低至少 refDelta（含背景模式更克制，只修明显凸起）
-      const refDelta = withBg ? BRIGHT_DELTA : peakThresh;
       // 参照候选：含背景模式取**最高**候选（大尺度环带采到的羽化带/背景过渡值较低，
       // 取最高 = 线 core）；非含背景模式取**最低**候选（大尺度环带里线 core 胜出，
       // 纠正小尺度误选交叉过渡值）。
@@ -573,6 +586,116 @@ export async function processAlphaAlign(
       return 65535;
     };
 
+    // ---- 上对齐（alignUp）：检测线条上"比主体偏淡"的像素（淡斑/断点/被削弱处），
+    //     以周围线条主体水平为参照拉高，让线条更均匀。与下对齐对称：
+    //      - 参照从环带"高端稳定簇"（线 core 水平）中找，且必须比 alpha 高至少 refDelta；
+    //      - 平坦拦截：环带内"≥alpha 的像素"中 ≥50% 集中在 [a, a+CLOSE_DELTA] →
+    //        像素周围是与自身同水平的平台（整条线均匀偏淡 / 自然软边过渡带）→ 保护
+    //        （自然软边不会被误拉成硬边；只有"局部明显偏淡"的坑才被修复）；
+    //      - 候选取**最高**：小尺度环带可能命中淡斑周围的过渡值，大尺度环带里线 core
+    //        占比上升胜出（与下对齐"取最低"收敛到 core 的机理对称）；
+    //      - 只允许拉高（alpha 只增不减），与下对齐只减不增对称。
+    const analyzePixelUp = (ri: number): number => {
+      const a = readSrc[ri];
+      let bestRef = -1; // 取最高候选 = 线 core 水平
+      let qHist: Uint16Array | null = null; // 中位数回退用直方图
+      let qCnt = 0;
+      let midFlat = false;
+      let midNonFlat = false;
+      let sawBelow = false; // 出现过"高端簇 ≤ alpha"（像素不低于周围线水平）→ 非偏淡
+      for (let si = 0; si < RING_SCALES.length; si++) {
+        const k = RING_SCALES[si];
+        const r = scanBand(k, 1); // 全采样填充 histBuf
+        const cnt = r.cnt;
+        if (cnt < RING_MIN_COUNT) {
+          clearHist();
+          continue;
+        }
+        // 平坦拦截：环带内 ≥alpha 的像素若大部分集中在自身水平附近 → 平台
+        let highCount = 0;
+        for (let v = a; v < 256; v++) highCount += histBuf[v];
+        if (highCount >= HIGH_CLUSTER_MIN) {
+          let nearCount = 0;
+          const nearMax = a + CLOSE_DELTA > 255 ? 255 : a + CLOSE_DELTA;
+          for (let v = a; v <= nearMax; v++) nearCount += histBuf[v];
+          const flat = nearCount * 2 >= highCount;
+          if (flat) {
+            if (si === 2 || si === 3) midFlat = true; // k14/k42：中尺度平坦
+            clearHist();
+            continue;
+          }
+        }
+        if (si === 2 || si === 3) midNonFlat = true; // k14/k42：中尺度非平坦（偏淡坑）
+        // 高端区间内找第一个计数达标的簇（线 core 水平）
+        const bMin = brightClusterMin(cnt, BRIGHT_CLUSTER_MIN_RATIO);
+        let loV = r.bandMax - BRIGHT_GAP;
+        if (loV < minAlpha) loV = minAlpha;
+        let v1 = -1;
+        for (let v = r.bandMax; v >= loV; v--) {
+          if (histBuf[v] >= bMin) { v1 = v; break; }
+        }
+        if (v1 < 0) {
+          // 高端区间无稳定簇 → 记录中位数回退候选，放大尺度
+          if (cnt >= QUANTILE_MIN_COUNT) {
+            qHist = new Uint16Array(histBuf);
+            qCnt = cnt;
+          }
+          clearHist();
+          continue;
+        }
+        if (v1 > a + refDelta) {
+          // 显著高于 alpha → 偏淡像素，采纳为参照候选（取最高 = 线 core）
+          if (v1 > bestRef) bestRef = v1;
+          clearHist();
+          continue;
+        }
+        if (v1 > a) {
+          // 接近 alpha（差 < refDelta）：像素基本处于线条主体水平附近，不是明显偏淡 → 保护
+          flatAll[ri] = 1;
+          clearHist();
+          return 65535;
+        }
+        // 高端簇 ≤ alpha：像素不低于周围线水平（如更深处交叉凸起像素）→ 非偏淡
+        sawBelow = true;
+        clearHist();
+        continue;
+      }
+      // 中尺度确认像素在自身平台、且无"非平坦"信号 → 普通线条像素，保护
+      if (midFlat && !midNonFlat) {
+        flatAll[ri] = 1;
+        return 65535;
+      }
+      if (bestRef >= 0) return bestRef;
+      // 出现过"高端簇 ≤ alpha"→ 像素不偏淡，禁用中位数回退
+      if (sawBelow) {
+        flatAll[ri] = 1;
+        return 65535;
+      }
+      if (midFlat) {
+        flatAll[ri] = 1;
+        return 65535;
+      }
+      // 中位数回退：环带中位数显著高于 alpha → 以中位数为参照拉高
+      if (qHist !== null && qCnt >= QUANTILE_MIN_COUNT) {
+        const half = qCnt / 2;
+        let acc = 0;
+        for (let v = 0; v < 256; v++) {
+          acc += qHist[v];
+          if (acc >= half) {
+            if (v > a + peakThresh) return v;
+            break;
+          }
+        }
+      }
+      // 无法确认是偏淡 → 不改，且第二遍跳过
+      flatAll[ri] = 1;
+      return 65535;
+    };
+
+    // 按方向分发：上对齐走 analyzePixelUp；其余（含保底下对齐 withBg）走 analyzePixel
+    const analyze = (ri: number): number =>
+      (alignUp && !withBg) ? analyzePixelUp(ri) : analyzePixel(ri);
+
     let analyzedCount = 0;
     // ---- 第一遍：处理主体 ----
     for (let ry = 0; ry < rh; ry++) {
@@ -583,17 +706,17 @@ export async function processAlphaAlign(
         analyzedCount++;
         curRx = rx;
         curRy = ry;
-        const ref = analyzePixel(ri);
+        const ref = analyze(ri);
         if (ref < 65535) {
           refMin[ri] = ref;
-          curA[ri] = ref; // 更新当前状态（第二遍环带可读到拉平后的单线水平）
+          curA[ri] = ref; // 更新当前状态（第二遍环带可读到拉平/拉高后的单线水平）
         }
       }
     }
     // ---- 第二遍：处理第一遍未解决的像素（凸包角/深处残余）----
-    //     跳过"非凸起"像素（flatAll：它们处于自身平台/接近自身水平；第二遍环带已含
+    //     跳过"非凸起/非偏淡"像素（flatAll：它们处于自身平台/接近自身水平；第二遍环带已含
     //     第一遍修改值，重判会被污染误伤）
-    readSrc = curA; // 第二遍读第一遍修改后的 alpha（凸包拉平后环带参照自然正确）
+    readSrc = curA; // 第二遍读第一遍修改后的 alpha（凸包拉平/淡斑拉高后环带参照自然正确）
     for (let ry = 0; ry < rh; ry++) {
       const rowBaseR = ry * rw;
       for (let rx = 0; rx < rw; rx++) {
@@ -601,7 +724,7 @@ export async function processAlphaAlign(
         if (suspicious[ri] === 0 || refMin[ri] < 65535 || flatAll[ri] !== 0) continue;
         curRx = rx;
         curRy = ry;
-        const ref = analyzePixel(ri);
+        const ref = analyze(ri);
         if (ref < 65535) refMin[ri] = ref;
       }
     }
@@ -669,7 +792,7 @@ export async function processAlphaAlign(
     support.set(tmp1);
   }
 
-  // 6. 对每个可疑像素：把高出"线条水平"的 alpha 拉低
+  // 6. 对每个可疑像素：下对齐把高出"线条水平"的 alpha 拉低；上对齐把偏淡像素拉高
   let changedCount = 0;
   let changedSample = '';
 
@@ -700,8 +823,9 @@ export async function processAlphaAlign(
       const t = Math.max(0, Math.min(1, (s01 - 0.22) / (0.995 - 0.22)));
       const fade = smootherstep01(smootherstep01(t));
       let na = Math.round(a + (targetA - a) * fade);
-      // 安全闸：算法语义是"把交叉凸起拉低到单线水平"，永远不应该让 alpha 升高。
-      if (na > a) na = a;
+      // 安全闸：下对齐"把交叉凸起拉低到单线水平"，只允许 alpha 降低；
+      // 上对齐"把偏淡像素拉高到线条水平"，只允许 alpha 升高。
+      if (alignUp ? (na < a) : (na > a)) na = a;
       if (na < 0) na = 0;
       else if (na > 255) na = 255;
 
@@ -713,7 +837,7 @@ export async function processAlphaAlign(
       }
     }
   }
-  console.log('🔍 [alpha对齐] 修改像素数=' + changedCount + (changedSample ? ' 样例: ' + changedSample : ''));
+  console.log('🔍 [alpha对齐' + (alignUp ? '上' : '下') + '] 修改像素数=' + changedCount + (changedSample ? ' 样例: ' + changedSample : ''));
 
   return out;
 }

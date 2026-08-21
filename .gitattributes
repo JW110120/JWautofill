@@ -1,7 +1,10 @@
-* text=auto
-# 图片资源标记二进制，不要处理换行
+# 统一文本文件换行符为 LF（git 仓库内与检出均为 LF），避免 LF↔CRLF 冲突导致构建/加载异常
+* text=auto eol=lf
+# 图片/字体/压缩资源标记二进制，不要处理换行
 *.png binary
 *.jpg binary
+*.jpeg binary
 *.gif binary
 *.webp binary
+*.otf binary
 *.zip binary

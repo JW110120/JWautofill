@@ -451,11 +451,13 @@
   border-radius: 4px;
   width: 22px;
   height: 22px;
-  padding-top: 10px;
+  padding: 0; /* 去掉 padding-top 偏移，让 × 在 flex 下真正竖直居中 */
+  line-height: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  box-sizing: border-box;
 }
 .adjustment-modal-close:hover { background: var(--hover-bg); }
 
