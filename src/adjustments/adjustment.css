@@ -527,7 +527,7 @@
 .mask-sync-status-dot {
   width: 8px;
   height: 8px;
-  margin-right: 12px; /* 绿点与“引擎就绪”之间留出足够空隙 */
+  margin-right: 6px; /* 绿点与“引擎就绪”之间留出足够空隙 */
   border-radius: 50%;
   flex: none;
 }

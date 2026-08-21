@@ -333,7 +333,6 @@ const [edgeLinePreserveDetail, setEdgeLinePreserveDetail] = useState(Math.round(
 
 // 铅笔去锯齿参数
 const [pencilSoftWidth, setPencilSoftWidth] = useState(defaultPencilAAParams.softWidth ?? 2);
-const [pencilStrength, setPencilStrength] = useState(Math.round((defaultPencilAAParams.strength ?? 1) * 100));
 const [pencilAlphaThreshold, setPencilAlphaThreshold] = useState(defaultPencilAAParams.alphaThreshold ?? 128);
 const [pencilThinProtect, setPencilThinProtect] = useState(defaultPencilAAParams.thinLineProtect !== false);
 const [pencilThinSmooth, setPencilThinSmooth] = useState(Math.round((defaultPencilAAParams.thinLineSmooth ?? 0.6) * 100));
@@ -463,8 +462,7 @@ useEffect(() => {
           else if (typeof ap.values.edgeLineWidthScale === 'number') setEdgeLineSmoothRadius(Math.max(3, Math.min(12, Math.round(ap.values.edgeLineWidthScale * 8))));
           if (typeof ap.values.edgeLinePreserveDetail === 'number') setEdgeLinePreserveDetail(Math.max(0, Math.min(100, Math.round(ap.values.edgeLinePreserveDetail))));
           else if (typeof ap.values.edgeLineHardness === 'number') setEdgeLinePreserveDetail(Math.max(0, Math.min(100, Math.round(ap.values.edgeLineHardness))));
-          if (typeof ap.values.pencilSoftWidth === 'number') setPencilSoftWidth(Math.max(0.5, Math.min(4, ap.values.pencilSoftWidth)));
-          if (typeof ap.values.pencilStrength === 'number') setPencilStrength(Math.max(0, Math.min(100, Math.round(ap.values.pencilStrength))));
+          if (typeof ap.values.pencilSoftWidth === 'number') setPencilSoftWidth(Math.max(0.5, Math.min(2, ap.values.pencilSoftWidth)));
           if (typeof ap.values.pencilAlphaThreshold === 'number') setPencilAlphaThreshold(Math.max(64, Math.min(192, Math.round(ap.values.pencilAlphaThreshold))));
           if (typeof ap.values.pencilThinProtect === 'boolean') setPencilThinProtect(ap.values.pencilThinProtect);
           if (typeof ap.values.pencilThinSmooth === 'number') setPencilThinSmooth(Math.max(0, Math.min(100, Math.round(ap.values.pencilThinSmooth))));
@@ -509,7 +507,6 @@ useEffect(() => {
         edgeLineSmoothRadius,
         edgeLinePreserveDetail,
         pencilSoftWidth,
-        pencilStrength,
         pencilAlphaThreshold,
         pencilThinProtect,
         pencilThinSmooth,
@@ -542,7 +539,6 @@ useEffect(() => {
   edgeLineSmoothRadius,
   edgeLinePreserveDetail,
   pencilSoftWidth,
-  pencilStrength,
   pencilAlphaThreshold,
   pencilThinProtect,
   pencilThinSmooth,
@@ -632,7 +628,6 @@ useEffect(() => {
       setEdgeLinePreserveDetail(Math.round((defaultSmartEdgeSmoothParams.linePreserveDetail ?? defaultSmartEdgeSmoothParams.lineHardness ?? 1) * 100));
       // 3.5) 铅笔去锯齿参数复位
       setPencilSoftWidth(defaultPencilAAParams.softWidth ?? 2);
-      setPencilStrength(Math.round((defaultPencilAAParams.strength ?? 1) * 100));
       setPencilAlphaThreshold(defaultPencilAAParams.alphaThreshold ?? 128);
       setPencilThinProtect(defaultPencilAAParams.thinLineProtect !== false);
       setPencilThinSmooth(Math.round((defaultPencilAAParams.thinLineSmooth ?? 0.6) * 100));
@@ -1544,19 +1539,8 @@ const handlePencilSoftWidthChange = (value: number) => {
 
 const handlePencilSoftWidthNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
   const value = parseFloat(event.target.value);
-  if (!isNaN(value) && value >= 0.5 && value <= 4) {
+  if (!isNaN(value) && value >= 0.5 && value <= 2) {
     setPencilSoftWidth(value);
-  }
-};
-
-const handlePencilStrengthChange = (value: number) => {
-  setPencilStrength(value);
-};
-
-const handlePencilStrengthNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  const value = parseInt(event.target.value, 10);
-  if (!isNaN(value) && value >= 0 && value <= 100) {
-    setPencilStrength(value);
   }
 };
 
@@ -2469,7 +2453,7 @@ const handlePencilAASmooth = async () => {
           { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
           {
             softWidth: pencilSoftWidth,
-            strength: pencilStrength / 100,
+            strength: 1, // 固定 100%：混合依赖当前像素值会破坏幂等（多次点击边缘逐次变实变粗）
             alphaThreshold: pencilAlphaThreshold,
             thinLineProtect: pencilThinProtect,
             thinLineSmooth: pencilThinSmooth / 100
@@ -3004,22 +2988,12 @@ const renderEdgeProcessingContent = () => (
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label adjustment-slider-label-4" title={`● 边缘过渡带的总宽度，单位 px（默认 2.7 = 按真实圆头笔采样拟合）。
+        <div className="adjustment-slider-label adjustment-slider-label-4" title={`● 边缘过渡带的总宽度，单位 px（默认 2 = 按真实圆头笔采样拟合）。
 ● 越大边缘越软（更像大号软边圆头笔），越小越接近铅笔硬边。`}>柔化宽度</div>
         <div className="unit-container">
-          <RangeSlider min={0.5} max={4} step={0.5} value={pencilSoftWidth} onChange={handlePencilSoftWidthChange} className="adjustment-slider-input" />
-          <input type="number" min="0.5" max="4" step="0.5" value={pencilSoftWidth} onChange={handlePencilSoftWidthNumberChange} className="adjustment-number-input" />
+          <RangeSlider min={0.5} max={2} step={0.5} value={pencilSoftWidth} onChange={handlePencilSoftWidthChange} className="adjustment-slider-input" />
+          <input type="number" min="0.5" max="2" step="0.5" value={pencilSoftWidth} onChange={handlePencilSoftWidthNumberChange} className="adjustment-number-input" />
           <div className="adjustment-unit">px</div>
-        </div>
-      </div>
-
-      <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" title={`● 重建结果与原图的混合比例。
-● 100%：完全采用重建后的平滑边缘；降低则保留部分原始锯齿。`}>强度</div>
-        <div className="unit-container">
-          <RangeSlider min={0} max={100} step={1} value={pencilStrength} onChange={handlePencilStrengthChange} className="adjustment-slider-input" />
-          <input type="number" min="0" max="100" step="1" value={pencilStrength} onChange={handlePencilStrengthNumberChange} className="adjustment-number-input" />
-          <div className="adjustment-unit">%</div>
         </div>
       </div>
     </div>

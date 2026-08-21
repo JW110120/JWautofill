@@ -9,17 +9,23 @@
 //
 // 本算法（基于真实采样数据拟合：半径 7px 铅笔 vs 普通圆头笔对照采样，两组一致）：
 //   1. 铅笔线二值化 → mask。
-//   2. 对 mask 做 box 平滑（半径 blurR，默认 3 = 柔化宽度 2.7px）成连续渐变场，
+//   2. 对 mask 做 box 平滑（半径 blurR，柔化宽度 0.5~2px 映射到 blurR 1~3，
+//      默认 2px → blurR=3，即拟合值）成连续渐变场，
 //      再在像素内 4×4 子采样求覆盖率 cov（亚像素连续 → 圈内 alpha 连续渐变）。
 //      box 模糊保持重心 → cov 的 0.5 等高线精确落在 mask 边界 → 宽度守恒、幂等。
 //   3. alpha = F(cov)，F 为真实采样拟合的分段线性表（r=3 场）：
 //      - mask 内第一圈 cov≈0.55~0.7 → alpha≈197~253（微削，匹配真实 193~250）
 //      - mask 外第一圈 cov≈0.3~0.48 → alpha≈27~147（补像素，匹配真实）
-//   4. 幂等锚定：mask 内输出 ≥128、mask 外 ≤127 → 输出≥128 的集合与 mask 完全一致，
+//   4. 长台阶直线专项（近水平/垂直的略倾斜直线，如 1:5~1:20）：
+//      box 模糊覆盖率在长台阶段内恒定 → 台阶跳变处 alpha 突变 → 周期性阶梯感残留。
+//      对"平台段 ≥5px 的边界带"，改用"相邻列/行线性插值边界"的覆盖率（亚像素连续），
+//      跳变处连续渐变（无突变）；台阶段 alpha 保持（匹配真实圆头笔 198~230）。
+//      曲线/陡斜线（平台段短）仍走 blur 覆盖率，不受影响。
+//   5. 幂等锚定：mask 内输出 ≥128、mask 外 ≤127 → 输出≥128 的集合与 mask 完全一致，
 //      二次点击 cov 场不变 → 严格幂等（连点不粗不细）。
 //      （注意：真实圆头笔 mask 比铅笔 mask 大约 0.5px，严格幂等要求边界处 alpha=128，
 //       故圆头笔"外扩圈"的高 alpha（128~197）会收敛到 127 —— 这是幂等的代价，视觉无碍。）
-//   5. RGB：直通色保持笔色/背景色；原透明像素改写为最近线内像素的直通色（消黑边）。
+//   6. RGB：直通色保持笔色/背景色；原透明像素改写为最近线内像素的直通色（消黑边）。
 //
 // 特性：
 //   - alpha 与 RGB 一起处理（直通色恒定，无灰边/黑边/白边）
@@ -29,8 +35,8 @@
 //   - 仅适用于非背景的普通像素图层
 
 interface PencilAAParams {
-  softWidth?: number;       // 柔化宽度（px），0.5~4，默认 2.7。控制过渡带软硬（F 表斜率）
-  strength?: number;        // 混合强度 0~1，默认 1
+  softWidth?: number;       // 柔化宽度（px），0.5~2，默认 2（→blurR 1~3）。控制过渡带软硬
+  strength?: number;        // 混合强度 0~1，默认 1（UI 固定 100%：<100% 会破坏幂等）
   alphaThreshold?: number;  // 线条二值化阈值 64~192，默认 128
   thinLineProtect?: boolean; // 细线保护开关，默认 true
   thinLineSmooth?: number;  // 细线平滑度 0~1，默认 0.6
@@ -284,6 +290,126 @@ function lookUpF(cov: number): number {
 }
 
 /*
+  —— 近水平/近垂直"长台阶"直线专项 ——
+  接近水平/垂直的略倾斜直线，二值台阶很长（如 1:10 → 每 10px 才跳变一次）。
+  box 模糊覆盖率在长台阶段内恒定（窗口内 mask 模式相同）→ 台阶跳变处 alpha 突变，
+  残留周期性阶梯感。专项修复：把"每列/每行"的边界位置（top/bot/left/right）在
+  相邻列/行之间线性插值，重建亚像素连续边界，再算覆盖率 ——
+  台阶段内 alpha 保持（与圆头笔一致），台阶跳变处连续渐变（无突变）。
+  只对"平台段 ≥5px"的长台阶边界带启用，曲线/陡斜线仍走 blur 覆盖率（不劣化）。
+*/
+
+/*
+  长台阶插值覆盖率 → alpha（真实数据拟合）：
+  插值 coverage 的 0.5 等高线在 mask 内第一圈（像素半覆盖），真实圆头笔在该处
+  alpha≈211~224（比 blur 场的 F 表高，因为插值 cov 与 blur cov 的 0.5 语义不同）。
+  拟合：cov 0.425→198、0.5→211、0.6→228、1.0→255；低端封顶 198（跳变处不降，
+  保证沿线条方向无突变）。
+*/
+function gInterp(cov: number): number {
+  return Math.min(255, 198 + 172 * Math.max(0, cov - 0.425));
+}
+
+// 提取每列 top/bot、每行 left/right 边界位置（-1 = 该列/行无 mask）
+function extractBorders(
+  mask: Uint8Array,
+  rw: number,
+  rh: number
+): { top: Int32Array; bot: Int32Array; left: Int32Array; right: Int32Array } {
+  const top = new Int32Array(rw); top.fill(-1);
+  const bot = new Int32Array(rw); bot.fill(-1);
+  const left = new Int32Array(rh); left.fill(-1);
+  const right = new Int32Array(rh); right.fill(-1);
+  for (let x = 0; x < rw; x++) {
+    for (let y = 0; y < rh; y++) {
+      if (mask[y * rw + x] !== 1) continue;
+      if (top[x] < 0) top[x] = y;
+      bot[x] = y;
+    }
+  }
+  for (let y = 0; y < rh; y++) {
+    for (let x = 0; x < rw; x++) {
+      if (mask[y * rw + x] !== 1) continue;
+      if (left[y] < 0) left[y] = x;
+      right[y] = x;
+    }
+  }
+  return { top, bot, left, right };
+}
+
+// 每个位置的"连续平台段长度"（seq=-1 处为 0）
+function plateauLen(seq: Int32Array, n: number): Int32Array {
+  const out = new Int32Array(n);
+  for (let i = 0; i < n; i++) {
+    if (seq[i] < 0) continue;
+    let j = i;
+    while (j > 0 && seq[j - 1] === seq[i]) j--;
+    let k = i;
+    while (k < n - 1 && seq[k + 1] === seq[i]) k++;
+    out[i] = k - j + 1;
+  }
+  return out;
+}
+
+// 列插值覆盖率：边界 top/bot 在相邻列线性插值（亚像素连续），4×4 子采样判断
+function covColInterp(
+  mask: Uint8Array,
+  top: Int32Array,
+  bot: Int32Array,
+  rw: number,
+  rh: number,
+  i: number,
+  j: number
+): number {
+  if (top[i] < 0) return 0;
+  let hits = 0;
+  for (let sy = 0; sy < 4; sy++) {
+    const yy = j - 0.5 + (sy + 0.5) / 4;
+    for (let sx = 0; sx < 4; sx++) {
+      const xx = i - 0.5 + (sx + 0.5) / 4;
+      const x0 = xx < 0 ? 0 : (xx > rw - 1 ? rw - 1 : (xx | 0));
+      const x1 = x0 + 1 < rw ? x0 + 1 : x0;
+      const f = xx - x0;
+      const t0 = top[x0], t1 = top[x1], b0 = bot[x0], b1 = bot[x1];
+      if (t0 < 0 || t1 < 0) continue;
+      const tt = t0 * (1 - f) + t1 * f;
+      const bb = b0 * (1 - f) + b1 * f;
+      if (tt <= yy && yy <= bb) hits++;
+    }
+  }
+  return hits / 16;
+}
+
+// 行插值覆盖率（对称：近垂直线）
+function covRowInterp(
+  mask: Uint8Array,
+  left: Int32Array,
+  right: Int32Array,
+  rw: number,
+  rh: number,
+  i: number,
+  j: number
+): number {
+  if (left[j] < 0) return 0;
+  let hits = 0;
+  for (let sy = 0; sy < 4; sy++) {
+    const yy = j - 0.5 + (sy + 0.5) / 4;
+    for (let sx = 0; sx < 4; sx++) {
+      const xx = i - 0.5 + (sx + 0.5) / 4;
+      const y0 = yy < 0 ? 0 : (yy > rh - 1 ? rh - 1 : (yy | 0));
+      const y1 = y0 + 1 < rh ? y0 + 1 : y0;
+      const f = yy - y0;
+      const l0 = left[y0], l1 = left[y1], r0 = right[y0], r1 = right[y1];
+      if (l0 < 0 || l1 < 0) continue;
+      const ll = l0 * (1 - f) + l1 * f;
+      const rr = r0 * (1 - f) + r1 * f;
+      if (ll <= xx && xx <= rr) hits++;
+    }
+  }
+  return hits / 16;
+}
+
+/*
   主入口：对完整文档尺寸的 RGBA（straight alpha）像素做铅笔去锯齿。
   - pixelData：完整文档 RGBA（straight）
   - selectionMask：完整文档 0~255（>0 表示可修改；羽化混合由调用方完成）
@@ -310,7 +436,7 @@ export async function processPencilAASmooth(
   if (pixels.length < pixelCount * 4) return out.buffer;
 
   const params = (_params || {}) as PencilAAParams;
-  const softWidth = Math.max(0.5, Math.min(4, typeof params.softWidth === 'number' ? params.softWidth : 2.7));
+  const softWidth = Math.max(0.5, Math.min(2, typeof params.softWidth === 'number' ? params.softWidth : 2));
   const strength = clamp01(typeof params.strength === 'number' ? params.strength : 1);
   const alphaThreshold = clampInt(Math.round(params.alphaThreshold ?? 128), 64, 192);
   const thinLineProtect = params.thinLineProtect !== false;
@@ -429,14 +555,23 @@ export async function processPencilAASmooth(
     domainMax = comp.domainMax;
   }
 
-  // ---- coverage 场：对 mask 做 box 平滑（blurR 由柔化宽度映射，默认 3 ≈ 2.7px）----
+  // ---- coverage 场：对 mask 做 box 平滑（blurR 由柔化宽度映射，默认 2px → blurR=3）----
+  // 映射 softWidth 0.5/1/1.5/2 → blurR 1/1/2/3（默认 2px 对应拟合值 blurR=3，效果与旧 2.7px 一致）。
   // box 模糊保持重心 → cov 的 0.5 等高线精确落在 mask 边界：
   //   输出≥128 ⇔ cov≥0.5 ⇔ mask（配合下方锚定）→ 二次处理 cov 场不变 → 严格幂等。
-  const blurR = clampInt(Math.round(softWidth * 1.1), 1, 4);
+  const blurR = clampInt(Math.round(softWidth * 1.4), 1, 4);
   const blurredMask = boxBlurMask(rMask, rw, rh, blurR);
   const maxD2Screen = (blurR + 2.5) * (blurR + 2.5); // 粗筛：只处理边界带内的像素
 
-  // ---- 覆盖率重建（查表）----
+  // ---- 长台阶直线专项：每列/每行边界 + 平台长度（供插值覆盖率分支使用）----
+  const borders = extractBorders(rMask, rw, rh);
+  const platTop = plateauLen(borders.top, rw);
+  const platBot = plateauLen(borders.bot, rw);
+  const platLeft = plateauLen(borders.left, rh);
+  const platRight = plateauLen(borders.right, rh);
+  const MIN_PLAT = 5; // 平台段 ≥5px 判为长台阶（约 1:5 及更缓的斜线）
+
+  // ---- 覆盖率重建（查表 + 长台阶插值分支）----
   for (let ry = 0; ry < rh; ry++) {
     const rowR = ry * rw;
     const docY = y0 + ry;
@@ -457,13 +592,36 @@ export async function processPencilAASmooth(
       const d2 = inMask ? distOut2[ri] : distIn2[ri];
       if (d2 > maxD2Screen) continue;
 
-      const cov = coverage4x4(blurredMask, rw, rh, rx, ry);
-      // 完全覆盖（主体）或完全未覆盖（远处背景）→ 不改（F 表两端本身 ≈255/0）
-      if (cov <= 0.22) continue;
-      if (cov >= 0.97) continue;
+      let aRecon: number;
+      let skipCov = false;
 
-      // 查表 → alpha（拟合真实圆头笔的覆盖率映射）
-      let aRecon = lookUpF(cov);
+      // 长台阶插值分支（mask 内边界带，平台段 ≥MIN_PLAT 的列/行）：
+      //   台阶段内 alpha 恒定（与圆头笔一致）、台阶跳变处连续渐变（消除阶梯感）。
+      if (inMask) {
+        const hPlat = platTop[rx] > platBot[rx] ? platTop[rx] : platBot[rx];
+        const nearH =
+          (borders.top[rx] >= 0 && (ry === borders.top[rx] || ry === borders.top[rx] + 1)) ||
+          (borders.bot[rx] >= 0 && (ry === borders.bot[rx] || ry === borders.bot[rx] - 1));
+        const vPlat = platLeft[ry] > platRight[ry] ? platLeft[ry] : platRight[ry];
+        const nearV =
+          (borders.left[ry] >= 0 && (rx === borders.left[ry] || rx === borders.left[ry] + 1)) ||
+          (borders.right[ry] >= 0 && (rx === borders.right[ry] || rx === borders.right[ry] - 1));
+        if (hPlat >= MIN_PLAT && nearH) {
+          aRecon = gInterp(covColInterp(rMask, borders.top, borders.bot, rw, rh, rx, ry));
+          skipCov = true;
+        } else if (vPlat >= MIN_PLAT && nearV) {
+          aRecon = gInterp(covRowInterp(rMask, borders.left, borders.right, rw, rh, rx, ry));
+          skipCov = true;
+        }
+      }
+
+      if (!skipCov) {
+        const cov = coverage4x4(blurredMask, rw, rh, rx, ry);
+        // 完全覆盖（主体）或完全未覆盖（远处背景）→ 不改（F 表两端本身 ≈255/0）
+        if (cov <= 0.22) continue;
+        if (cov >= 0.97) continue;
+        aRecon = lookUpF(cov);
+      }
 
       // 幂等锚定：mask 内 ≥128（不内缩）、mask 外 ≤127（不外扩）
       if (inMask) aRecon = Math.max(aRecon, 128);
@@ -585,8 +743,8 @@ export async function processPencilAASmooth(
 }
 
 export const defaultPencilAAParams: PencilAAParams = {
-  softWidth: 2.7, // 默认柔化宽度（拟合值 → F 表斜率 1.0）
-  strength: 1,
+  softWidth: 2, // 默认柔化宽度（0.5~2px 滑块上限，2px → blurR=3 对应拟合值，效果与 2.7 一致）
+  strength: 1, // 固定 100%：混合依赖当前像素值会破坏幂等（多次点击边缘逐次变实变粗）
   alphaThreshold: 128, // 固定默认：线条二值化阈值
   thinLineProtect: true, // 固定默认：细线保护
   thinLineSmooth: 0.6 // 固定默认：细线轻量平滑
