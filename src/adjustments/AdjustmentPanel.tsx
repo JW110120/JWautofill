@@ -633,6 +633,9 @@ useEffect(() => {
       setPencilThinSmooth(Math.round((defaultPencilAAParams.thinLineSmooth ?? 0.6) * 100));
       // 4) 关闭可见性面板
       setShowVisibilityPanel(false);
+    },
+    onAlphaSample: () => {
+      handlePencilAlphaSample();
     }
   });
 }, [sections]);
@@ -1450,8 +1453,8 @@ const getAutoLineReferenceLayer = (doc: any, activeLayerId: number): any | null 
   return null;
 };
 
-const handleLineReferenceLayerChange = async (event: React.ChangeEvent<HTMLSelectElement>) => {
-  const value = event.target.value;
+/** 线稿参考层选择（MaskSyncSelect 下拉，value = 图层 id 或 'auto'）。 */
+const handleLineReferenceSelect = (value: string) => {
   if (value === 'auto') {
     setLineReferenceLayerId(null);
     setLineReferenceLayerName('');
@@ -1466,7 +1469,7 @@ const handleLineReferenceLayerChange = async (event: React.ChangeEvent<HTMLSelec
   const doc = app.activeDocument;
   const layer = findLayerById(doc?.layers || [], id);
   if (!layer || layer.kind !== 'pixel') {
-    try { await core.showAlert({ message: '该图层不可作为线稿参考层，请选择像素图层' }); } catch {}
+    try { core.showAlert({ message: '该图层不可作为线稿参考层，请选择像素图层' }); } catch {}
     setLineReferenceLayerId(null);
     setLineReferenceLayerName('');
     return;
@@ -1787,7 +1790,61 @@ const handleBlockGradient = async () => {
   }
 };
 
-const handleBlockColorPatch = async () => {
+/** 读取指定图层的 alpha 掩码（文档坐标、docW*docH 尺寸；RGBA 图层取 A，RGB 背景层视为 255）。 */
+const readLineLayerAlphaMask = async (
+  doc: any,
+  layerId: number,
+  docW: number,
+  docH: number
+): Promise<Uint8Array | null> => {
+  try {
+    const layer = findLayerById(doc?.layers || [], layerId);
+    if (!layer || !layer.bounds) return null;
+    const b = layer.bounds;
+    const left = Math.round(b.left || 0);
+    const top = Math.round(b.top || 0);
+    const right = Math.round(b.right || 0);
+    const bottom = Math.round(b.bottom || 0);
+    const lw = Math.max(0, right - left);
+    const lh = Math.max(0, bottom - top);
+    if (lw <= 0 || lh <= 0) return null;
+    const res: any = await imaging.getPixels({
+      documentID: doc.id,
+      layerID: layerId,
+      sourceBounds: { left, top, right, bottom },
+      targetSize: { width: lw, height: lh },
+      componentSize: 8,
+    });
+    const imgData = res.imageData;
+    const raw = new Uint8Array(await imgData.getData());
+    const gotW = imgData.width || 0;
+    const gotH = imgData.height || 0;
+    imgData.dispose();
+    // 用返回的 imageData 实际宽高计算通道数（请求尺寸可能被 UXP 取整/裁剪）
+    const comps = gotW > 0 && gotH > 0 && raw.length > 0 ? Math.round(raw.length / (gotW * gotH)) : 0;
+    if (comps !== 3 && comps !== 4) {
+      console.warn(`⚠️ 线稿层 alpha 读取失败：comps=${comps}（请求 ${lw}x${lh}，实际 ${gotW}x${gotH}）`);
+      return null;
+    }
+    const mask = new Uint8Array(docW * docH);
+    for (let y = 0; y < gotH; y++) {
+      for (let x = 0; x < gotW; x++) {
+        const dx = left + x;
+        const dy = top + y;
+        if (dx < 0 || dx >= docW || dy < 0 || dy >= docH) continue;
+        const si = (y * gotW + x) * comps;
+        mask[dy * docW + dx] = comps === 4 ? raw[si + 3] : 255;
+      }
+    }
+    return mask;
+  } catch (e) {
+    console.warn('⚠️ 读取线稿层 alpha 失败:', e);
+    return null;
+  }
+};
+
+/** 分块补色公共流程：sameOnly=true 走同层算法（不读线稿）；false 走分层算法（线稿引导，自动检测线稿层）。 */
+const runBlockColorPatch = async (sameOnly: boolean) => {
   if (!handleLicenseBeforeAction()) return;
   try {
     const { executeAsModal } = core;
@@ -1799,180 +1856,60 @@ const handleBlockColorPatch = async () => {
       }
 
       const { layer, isBackgroundLayer } = editingState;
-      const initialSelectionBounds = await getSelectionData();
-      if (!initialSelectionBounds) {
+
+      // 获取选区边界信息（如果没有选区则默认全选整个文档）
+      const selectionBounds = await getSelectionData();
+      if (!selectionBounds) {
         await core.showAlert({ message: '获取文档信息失败' });
         return;
       }
 
       const doc = app.activeDocument;
-      const activeLayerId = layer.id;
 
+      // 线稿参考层（仅分层模式）：优先用户手动选择；否则自动取当前激活图层上方最近的像素图层。
+      // 线稿层与填充层同层或找不到可用线稿层 → 退化同层算法。
       let refLayer: any | null = null;
-      if (typeof lineReferenceLayerId === 'number') {
-        refLayer = findLayerById(doc.layers || [], lineReferenceLayerId);
+      if (!sameOnly) {
+        if (typeof lineReferenceLayerId === 'number' && lineReferenceLayerId !== layer.id) {
+          refLayer = findLayerById(doc.layers || [], lineReferenceLayerId);
+        }
+        if (!refLayer || refLayer.kind !== 'pixel' || refLayer.id === layer.id) {
+          refLayer = getAutoLineReferenceLayer(doc, layer.id);
+        }
+        if (!refLayer || refLayer.kind !== 'pixel' || refLayer.id === layer.id) {
+          refLayer = null;
+        }
       }
-      if (!refLayer || refLayer.kind !== 'pixel') {
-        refLayer = getAutoLineReferenceLayer(doc, activeLayerId);
-      }
-      if (!refLayer || refLayer.kind !== 'pixel') {
-        await core.showAlert({ message: '未找到可用的线稿参考层，请在“线稿参考”下拉中选择线稿图层' });
-        return;
-      }
-
-      const docW = initialSelectionBounds.docWidth;
-      const docH = initialSelectionBounds.docHeight;
+      const useLineGuide = !sameOnly && !!refLayer;
 
       await runWithTemporaryUnlock(async () => {
-        const clampInt = (v: number, lo: number, hi: number) => (v < lo ? lo : (v > hi ? hi : v));
-        const estimateMaskHalfWidth = (mask: Uint8Array, w: number, h: number, cap: number) => {
-          const size = w * h;
-          if (size <= 0) return 1;
-          const dist = new Uint8Array(size);
-          dist.fill(255);
-          const q = new Uint32Array(size);
-          let head = 0;
-          let tail = 0;
-          for (let i = 0; i < size; i++) {
-            if (!mask[i]) {
-              dist[i] = 0;
-              q[tail++] = i;
-            }
-          }
-          if (tail === 0) return clampInt(cap, 1, cap);
-          while (head < tail) {
-            const i = q[head++] as number;
-            const d = dist[i] as number;
-            if (d >= cap) continue;
-            const x = i % w;
-            const y = (i - x) / w;
-            const nd = (d + 1) as any;
-            const push = (ni: number) => {
-              if ((dist[ni] as number) <= nd) return;
-              dist[ni] = nd;
-              q[tail++] = ni;
-            };
-            if (x > 0) push(i - 1);
-            if (x + 1 < w) push(i + 1);
-            if (y > 0) push(i - w);
-            if (y + 1 < h) push(i + w);
-          }
-          let maxD = 1;
-          for (let i = 0; i < size; i++) {
-            if (!mask[i]) continue;
-            const d = dist[i] as number;
-            if (d !== 255 && d > maxD) maxD = d;
-          }
-          return clampInt(maxD, 1, cap);
-        };
-        const luminance8 = (r: number, g: number, b: number) => ((r * 54 + g * 183 + b * 19) / 256) | 0;
-
-        const pixelCount = docW * docH;
-        const computeLineWidthPxFromRef = async (targetPixelBudget: number) => {
-          const step = clampInt(Math.ceil(Math.sqrt(Math.max(1, pixelCount) / Math.max(1, targetPixelBudget))), 1, 64);
-          const rw = Math.max(1, Math.ceil(docW / step));
-          const rh = Math.max(1, Math.ceil(docH / step));
-          const reducedCount = rw * rh;
-
-          const refPixels = await imaging.getPixels({
-            documentID: doc.id,
-            layerID: refLayer.id,
-            sourceBounds: { left: 0, top: 0, right: docW, bottom: docH },
-            targetSize: { width: rw, height: rh }
-          });
-          const refRaw = new Uint8Array(await refPixels.imageData.getData());
-          refPixels.imageData.dispose();
-
-          const bpp = reducedCount > 0 ? refRaw.length / reducedCount : 0;
-          const lineMask = new Uint8Array(reducedCount);
-          let visible = 0;
-          if (bpp === 4) {
-            const alphaHist = new Uint32Array(256);
-            let nonZeroAlpha = 0;
-            for (let i = 0; i < reducedCount; i++) {
-              const a = refRaw[i * 4 + 3] || 0;
-              if (a <= 0) continue;
-              alphaHist[a] += 1;
-              nonZeroAlpha++;
-            }
-            let alphaP90 = 0;
-            let alphaP98 = 0;
-            if (nonZeroAlpha > 0) {
-              const target90 = Math.max(1, Math.floor(nonZeroAlpha * 0.9));
-              const target98 = Math.max(1, Math.floor(nonZeroAlpha * 0.98));
-              let acc = 0;
-              for (let a = 0; a < 256; a++) {
-                acc += alphaHist[a] || 0;
-                if (!alphaP90 && acc >= target90) alphaP90 = a;
-                if (!alphaP98 && acc >= target98) {
-                  alphaP98 = a;
-                  break;
-                }
-              }
-            }
-            const alphaThreshold = clampInt(Math.round((alphaP98 || alphaP90 || 0) * 0.85), 8, 245);
-            for (let i = 0; i < reducedCount; i++) {
-              const a = refRaw[i * 4 + 3] || 0;
-              if (a >= alphaThreshold) {
-                lineMask[i] = 1;
-                visible++;
-              }
-            }
-          } else if (bpp === 3) {
-            for (let i = 0; i < reducedCount; i++) {
-              const p = i * 3;
-              const y = luminance8(refRaw[p] || 0, refRaw[p + 1] || 0, refRaw[p + 2] || 0);
-              if (y < 190) {
-                lineMask[i] = 1;
-                visible++;
-              }
-            }
-          } else {
-            return 0;
-          }
-
-          const visibleRatio = reducedCount > 0 ? visible / reducedCount : 0;
-          if (visibleRatio < 0.00005 || visibleRatio > 0.995) return 0;
-
-          const halfW = estimateMaskHalfWidth(lineMask, rw, rh, 10);
-          const scaleMin = Math.max(1, Math.min(docW / rw, docH / rh));
-          let widthPx = 0;
-          if (halfW <= 1) widthPx = 2;
-          else widthPx = Math.max(2, Math.round(halfW * 2 * scaleMin));
-          return clampInt(widthPx, 2, 32);
-        };
-
-        const wCoarse = await computeLineWidthPxFromRef(220_000);
-        const wFine = await computeLineWidthPxFromRef(900_000);
-        let estimatedLineWidthPx = Math.min(wCoarse || 32, wFine || 32);
-        if (estimatedLineWidthPx <= 0 || estimatedLineWidthPx >= 32) {
-          estimatedLineWidthPx = 4;
-        }
-
-        let borderWidth = 0;
-        if (estimatedLineWidthPx <= 3) borderWidth = 1;
-        else if (estimatedLineWidthPx <= 5) borderWidth = 1;
-        else if (estimatedLineWidthPx <= 8) borderWidth = 1;
-        else if (estimatedLineWidthPx <= 12) borderWidth = 2;
-        else borderWidth = 3;
-        borderWidth = clampInt(borderWidth, 2, 8);
-        const maxDistance = clampInt(borderWidth + 2, 4, 24);
-
-        const selectionBounds: any = initialSelectionBounds;
         const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
 
+        // 创建完整文档尺寸的选区掩码数组
         const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
         let maskIndex = 0;
-        for (let docIndex of pixelResult.selectionIndices) {
+        for (const docIndex of pixelResult.selectionIndices) {
           fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
           maskIndex++;
         }
 
+        // 线稿引导（分层场景）：读取线稿层 alpha 掩码，线稿轮廓内部全部补全（含尖角/孔洞/缝隙）
+        let lineMask: ArrayBuffer | null = null;
+        if (useLineGuide && refLayer) {
+          lineMask = await readLineLayerAlphaMask(
+            doc,
+            refLayer.id,
+            selectionBounds.docWidth,
+            selectionBounds.docHeight
+          );
+        }
+
+        // v4 算法：alpha 孔洞/缝隙/尖角补全（同层几何 + 可选线稿引导）
         const processedPixels = await processBlockColorPatch(
           pixelResult.fullPixelData.buffer,
           fullSelectionMask.buffer,
           { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
-          { borderWidth, maxDistance }
+          lineMask ? { lineMask } : undefined
         );
 
         const processedPixelsArray = processedPixels instanceof Uint8Array ? processedPixels : new Uint8Array(processedPixels as any);
@@ -1987,7 +1924,6 @@ const handleBlockColorPatch = async () => {
           }
         };
         await applyProcessedPixels(processedPixelsArray, resultForWriteback as any);
-
       });
     });
     giveFocusBackToPS();
@@ -1996,6 +1932,16 @@ const handleBlockColorPatch = async () => {
     console.error('❌ 分块补色失败:', error);
     await core.showAlert({ message: '分块补色失败: ' + msg });
   }
+};
+
+/** 同层补色：线稿与内部填充在同一图层，直接用图层 alpha 几何补全。 */
+const handleBlockColorPatchSame = async () => {
+  await runBlockColorPatch(true);
+};
+
+/** 分层补色：线稿与内部填充在不同图层，用线稿轮廓引导补全。 */
+const handleBlockColorPatchLayered = async () => {
+  await runBlockColorPatch(false);
 };
 
 // 还原特殊木刻预览：把保存的原始像素写回图层，并清除基线
@@ -2983,11 +2929,6 @@ const renderEdgeProcessingContent = () => (
 ● 细线（≤3px）自动走"补外部过渡"保护路径，不会被吃穿。
 ● 处理幂等：多次点击结果一致，线条不会越来越粗/细。
 ● 仅支持非背景的普通像素图层。`}>铅笔去锯齿</div>
-
-      <div role="button" tabIndex={0} className="adjustment-button" onClick={handlePencilAlphaSample} title={`● 调试用：把当前图层像素的 alpha 通道以矩阵形式打印到 UXP 控制台。
-● 用法：用钢笔工具画一根路径 → 新建两个图层 → 分别用相同半径的"铅笔"和"普通圆头笔"沿路径描边 → 依次选中每个图层点本按钮 → 把控制台输出的 alpha 数据发给我，用于拟合更贴近真实笔刷的算法参数。
-● 数据带图层名与尺寸，便于区分铅笔/圆头笔两组样本。
-● 仅支持非背景的普通像素图层。`}>alpha采样</div>
     </div>
 
     <div className="adjustment-slider-container">
@@ -3016,6 +2957,9 @@ const renderEdgeProcessingContent = () => (
         style={{ marginLeft: '8px' }}
       />
     </div>
+
+    {/* 分割线：铅笔去锯齿模块 与 alpha 对齐模块之间 */}
+    <div className="adjustment-divider"></div>
 
     <div className="adjustment-double-buttons">
       <div role="button" tabIndex={0} className="adjustment-button" onClick={() => handleAlphaAlign(false, 'down')} title={`● 统一半透明笔刷交叉点的不透明度，消除两笔交汇处出现的"深色点"。
@@ -3297,40 +3241,42 @@ const renderBlockAdjustmentContent = () => (
 
 ● 每个连通块取形状质心，沿渐变方向投影后做归一化映射。`}>分块渐变</div>
 
-    {/* 分块补色功能暂不完善，先隐藏不显示（连同其线稿参考选择器一起注释） */}
-    {/* <div className="adjustment-divider"></div>
+    <div className="adjustment-divider"></div>
 
-    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleBlockColorPatch} title={`● 解决线稿与底色之间的细缝、锐角尖头漏填等问题。
+    <div className="adjustment-double-buttons">
+      <div role="button" tabIndex={0} className="adjustment-button" onClick={handleBlockColorPatchSame} title={`● 同层补色：线稿与内部填充在同一图层时使用。
+● 直接在图层 alpha 上补全：豁口填充（贴边尖角空隙）+ 闭运算（≤2px 断缝）+ 内部孔洞填充 + 距离判定。
+● 尖角头部小三角、半透明缝隙、断点、孔洞全部填成实心（alpha→255，RGB 不变），边缘抗锯齿过渡保持原值。
+● 仅在选区内生效（无选区 = 整层）；已不透明区域无变化（幂等）。`}>同层补色</div>
 
-● 在选区内，把透明像素用最近的已有颜色补齐，并尽量不跨越线稿边界。
-
-● 建议先在“线稿参考”下拉中选择线稿所在图层，再在颜色层选区内执行。`}>分块补色</div>
-
+      <div role="button" tabIndex={0} className="adjustment-button" onClick={handleBlockColorPatchLayered} title={`● 分层补色：线稿与内部填充不在同一图层时使用。
+● 线稿轮廓内部 = 填充应覆盖区（实测与补全区吻合 ≈98.9%），尖角/孔洞/缝隙一网打尽；再叠加同层几何兜底。
+● 线稿参考默认自动取当前层上方最近的像素图层，可在下方下拉手动指定。
+● 仅在选区内生效（无选区 = 整层）；已不透明区域无变化（幂等）。`}>分层补色</div>
+    </div>
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
-        <div className="wide-adjustment-slider-label" title={`● 指定用于识别线条边界的参考图层。
-
-● 推荐选择线稿所在的像素图层。`}>线稿参考</div>
+        <div className="wide-adjustment-slider-label" title={`● 指定用于识别"填充应覆盖区域"的线稿图层（分层补色使用）。
+● 默认"自动"：取当前激活图层上方最近的像素图层；找不到可用线稿层时分层补色自动退回同层算法。`}>线稿参考</div>
         <div className="unit-container">
-          <select
+          <MaskSyncSelect
             value={lineReferenceLayerId ? String(lineReferenceLayerId) : 'auto'}
-            onChange={handleLineReferenceLayerChange}
-            onMouseDown={refreshLineReferenceOptions}
-            className="adjustment-select"
-          >
-            <option value="auto">自动：当前层上方最近像素层</option>
-            {lineReferenceOptions.map(opt => (
-              <option key={opt.value} value={opt.value} disabled={opt.disabled}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
+            onChange={handleLineReferenceSelect}
+            options={[
+              { value: 'auto', main: '自动', tag: '上方像素层' },
+              ...lineReferenceOptions.map(opt => {
+                const s = splitLabelTag(opt.label);
+                return { value: opt.value, main: s.main, tag: s.tag, disabled: opt.disabled };
+              })
+            ]}
+            showCheck
+            title="线稿参考层（分层补色使用）"
+            className="adjustment-smooth-mode-select"
+          />
         </div>
       </div>
     </div>
-
-    <div className="adjustment-divider"></div> */}
 
     <div className="adjustment-divider"></div>
 

@@ -121,20 +121,24 @@ export class MenuManager {
               label: "折叠/展开所有分区"
             },
             {
-              id: "resetOrder", 
-              label: "复位分区顺序"
-            },
-            {
-              id: "spacer1",
-              label: "-" // 分隔符
-            },
-            {
               id: "showVisibilityPanel",
               label: "隐藏/显示分区"
             },
             {
+              id: "resetOrder", 
+              label: "复位分区顺序"
+            },
+            {
               id: "resetParameters",
               label: "参数复位"
+            },
+            {
+              id: "spacer1",
+              label: "-" // 分隔符（参数复位 与 图层像素alpha采样 之间）
+            },
+            {
+              id: "alphaSample",
+              label: "图层像素alpha采样"
             }
           ],
           invokeMenu(id: string) {
