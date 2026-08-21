@@ -1,3 +1,6 @@
+// ⚠️ 必须最先加载：修补 UXP 的 performance.mark/measure，否则 React 19 dev 构建
+// 首次渲染即抛 NotFoundError 并进入 "Should not already be working" 死锁，面板停止渲染
+import './uxpPerfPatch';
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './app';

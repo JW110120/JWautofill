@@ -161,7 +161,8 @@ export class MaskSyncEngine {
     this.running = false;
     for (const evt of NOTIF_EVENTS) {
       try {
-        action.removeNotificationListener(evt as any, this.handleNotification);
+        // UXP 的 add/removeNotificationListener 第一个参数必须是数组（与 app.tsx 一致）
+        action.removeNotificationListener([evt] as any, this.handleNotification);
       } catch {}
     }
     if (this.syncTimer) {
@@ -952,10 +953,13 @@ export class MaskSyncEngine {
 
   private registerNotification(): void {
     // 逐个注册：UXP 对事件数组中的非法事件名会整体抛错，逐个注册可保证
-    // 单个事件不支持时不影响其他事件（避免监听整体失效）
+    // 单个事件不支持时不影响其他事件（避免监听整体失效）。
+    // ⚠️ 注意：addNotificationListener 的第一个参数必须是【数组】（与 app.tsx
+    // 一致）；传字符串会报 "Argument 1 has an invalid type. Expected type: array
+    // actual type: string"，导致监听完全注册失败。
     for (const evt of NOTIF_EVENTS) {
       try {
-        action.addNotificationListener(evt as any, this.handleNotification);
+        action.addNotificationListener([evt] as any, this.handleNotification);
       } catch (e) {
         console.warn(`⚠️ 蒙版同步通知监听注册失败: ${evt}`, e);
       }

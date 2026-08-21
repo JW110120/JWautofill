@@ -786,10 +786,11 @@ useEffect(() => {
     }
   };
   // 逐个注册：单个事件名不支持时不拖垮其他事件（UXP 数组注册遇非法事件名会整体抛错）
+  // ⚠️ 注意：addNotificationListener 第一个参数必须是【数组】，传字符串会整体注册失败
   const refreshEvents = ['make', 'delete', 'set', 'rename', 'move'];
   for (const evt of refreshEvents) {
     try {
-      action.addNotificationListener(evt as any, handleMaskSyncNotif);
+      action.addNotificationListener([evt] as any, handleMaskSyncNotif);
     } catch {}
   }
   return () => {
@@ -797,7 +798,7 @@ useEffect(() => {
       if (timer) clearTimeout(timer);
       for (const evt of refreshEvents) {
         try {
-          action.removeNotificationListener(evt as any, handleMaskSyncNotif);
+          action.removeNotificationListener([evt] as any, handleMaskSyncNotif);
         } catch {}
       }
     } catch {}
