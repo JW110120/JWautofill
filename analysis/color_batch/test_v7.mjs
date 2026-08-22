@@ -1,5 +1,5 @@
 import { readFileSync } from 'fs';
-import { processBlockColorPatch } from '../src/adjustments/blockColorPatchProcessor.ts';
+import { processBlockColorPatch } from '../../src/adjustments/blockColorPatchProcessor.ts';
 
 const CW = 145, CH = 140, N = CW * CH;
 const loadRows = (p) => {

@@ -1,4 +1,5 @@
 import { action, imaging } from 'photoshop';
+import { processLineSmooth } from './lineSmoothProcessor';
 
 /*
   这个文件实现「边缘平滑」功能，分成两种用户能理解的模式：
@@ -1166,9 +1167,10 @@ export async function processSmartEdgeSmooth(
   const mode = params.mode || 'edge';
   const edgeMedianRadius = clampInt(Math.round(params.edgeMedianRadius ?? 16), 10, 30);
   const eraseMedianRadius = clampInt(Math.round(params.backgroundSmoothRadius ?? 16), 10, 30);
-  const lineSmoothStrength = clamp01(clamp01(params.lineSmoothStrength ?? params.lineStrength ?? 1) * 0.5);
-  const lineSmoothRadius = clampInt(Math.round(params.lineSmoothRadius ?? (Math.max(0.5, Math.min(2, params.lineWidthScale ?? 1)) * 8)), 3, 12);
-  const linePreserveDetail = clamp01(params.linePreserveDetail ?? params.lineHardness ?? 1);
+  // 「仅主线条」参数（精简为两个）：平滑力度（默认 100%）、平滑范围（默认 8px）
+  const lineSmoothStrength = clamp01(params.lineSmoothStrength ?? params.lineStrength ?? 1);
+  const lineSmoothRadius = clampInt(Math.round(params.lineSmoothRadius ?? 8), 3, 12);
+  const linePreserveDetail = clamp01(params.linePreserveDetail ?? params.lineHardness ?? 0);
 
   const regionPad = Math.max(edgeMedianRadius + 2, eraseMedianRadius + 2);
   const bounds = {
@@ -1233,27 +1235,19 @@ export async function processSmartEdgeSmooth(
     : null;
 
   if (mode === 'line') {
-    applyLineDirectionalSmoothInBounds(
-      outputData,
-      pixelData,
-      selectionMask,
-      selectionInnerFade,
-      lumaP,
-      bgLuma,
-      gradMag,
-      alpha,
-      bgAlpha,
-      width,
-      height,
-      bounds,
-      isBackgroundLayer,
-      edgeThreshold,
-      lineSmoothStrength,
-      lineSmoothRadius,
-      linePreserveDetail
+    // 「仅主线条」模式：委托给 lineSmoothProcessor（纯像素算法，结构张量方向场 +
+    // 沿切线各向异性平滑 + 局部主体收敛）。参数只暴露两个：
+    //   - strength：平滑力度（0~1，默认 1=100%）
+    //   - radius：平滑范围 px（默认 8）
+    return processLineSmooth(
+      pixelDataBuffer,
+      selectionMaskBuffer,
+      { width, height },
+      {
+        strength: lineSmoothStrength,
+        radius: lineSmoothRadius
+      }
     );
-
-    return outputData.buffer;
   }
 
   return outputData.buffer;
@@ -1268,11 +1262,11 @@ export const defaultSmartEdgeSmoothParams: EdgeDetectionParams = {
   mode: 'edge',
   edgeMedianRadius: 16,
   backgroundSmoothRadius: 16,
-  lineSmoothStrength: 0.85,
-  lineSmoothRadius: 10,
-  linePreserveDetail: 0.7,
+  lineSmoothStrength: 1,       // 平滑力度默认 100%
+  lineSmoothRadius: 8,         // 平滑范围默认 8px
+  linePreserveDetail: 0,       // 保护细节默认 0
   lineStrength: 1,
   lineWidthScale: 1,
-  lineHardness: 1
+  lineHardness: 0
 };
 

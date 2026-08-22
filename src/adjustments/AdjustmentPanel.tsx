@@ -2304,22 +2304,11 @@ const handleSmartEdgeSmooth = async () => {
 
         let postPixelResult = prePixelResult;
         let baseAfterMedianBuffer: ArrayBuffer | undefined = undefined;
-        if (isLineMode) {
-          await action.batchPlay([
-            {
-              _obj: 'median',
-              radius: { _unit: 'pixelsUnit', _value: edgeBackgroundSmoothRadius },
-              _isCommand: false,
-              _options: { dialogOptions: 'dontDisplay' }
-            }
-          ], { synchronousExecution: true });
-
-          postPixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
-          baseAfterMedianBuffer = postPixelResult.fullPixelData.buffer;
-        }
         
         // 步骤3：用智能边缘平滑算法处理像素数据
         // 注意：传递完整的像素数据而不是选区像素数据，因为算法需要邻域信息
+        // 仅主线条模式（line）已重构为纯像素算法（结构张量方向场 + 沿切线平滑），
+        // 不再需要 PS「中间值」预处理；参数精简为：平滑力度(默认100%) + 平滑范围(默认8px)
         const processedPixels = await processSmartEdgeSmooth(
           prePixelResult.fullPixelData.buffer, 
           fullSelectionMask.buffer, 
@@ -2329,8 +2318,7 @@ const handleSmartEdgeSmooth = async () => {
             edgeMedianRadius: edgeMedianRadius,
             backgroundSmoothRadius: edgeBackgroundSmoothRadius,
             lineSmoothStrength: edgeLineStrength / 100,
-            lineSmoothRadius: edgeLineSmoothRadius,
-            linePreserveDetail: edgeLinePreserveDetail / 100
+            lineSmoothRadius: edgeLineSmoothRadius
           },
           isBackgroundLayer,
           isLineMode ? undefined : { documentID: app.activeDocument.id, layerID: layer.id },
@@ -2885,16 +2873,8 @@ const renderEdgeProcessingContent = () => (
       {edgeSmoothMode === 'line' && (
         <>
           <div className="adjustment-slider-item">
-            <div className="wider-adjustment-slider-label" title={`● 主线条模式中的“抹除”使用 PS 自带“中间值”滤镜。半径越大越能清掉杂线与脏点，但整体会更软。`}>中间值半径</div>
-            <div className="unit-container">
-              <RangeSlider min={10} max={30} step={1} value={edgeBackgroundSmoothRadius} onChange={handleEdgeBackgroundSmoothRadiusChange} className="adjustment-slider-input" />
-              <input type="number" min="10" max="30" step="1" value={edgeBackgroundSmoothRadius} onChange={handleEdgeBackgroundSmoothRadiusNumberChange} className="adjustment-number-input" />
-              <div className="adjustment-unit">px</div>
-            </div>
-          </div>
-
-          <div className="adjustment-slider-item">
-            <div className="wide-adjustment-slider-label" title={`● 控制线条平滑的力度。越高越接近“油画滤镜”那种把乱线磨平的效果。`}>平滑力度</div>
+            <div className="wide-adjustment-slider-label" title={`● 控制线条平滑的力度（默认 100%）。算法沿线条方向做非对称平滑：暗痕（反复描线）被磨平拉实，亮痕保持，同时极大削弱毛刺感。
+● 强度越低，改动越保守（仅磨掉最明显的起伏）。`}>平滑力度</div>
             <div className="unit-container">
               <RangeSlider min={0} max={100} step={1} value={edgeLineStrength} onChange={handleEdgeLineStrengthChange} className="adjustment-slider-input" />
               <input type="number" min="0" max="100" step="1" value={edgeLineStrength} onChange={handleEdgeLineStrengthNumberChange} className="adjustment-number-input" />
@@ -2903,7 +2883,7 @@ const renderEdgeProcessingContent = () => (
           </div>
 
           <div className="adjustment-slider-item">
-            <div className="wide-adjustment-slider-label" title={`● 控制平滑的采样范围。范围越大越能把起伏磨平，但也更慢。`}>平滑范围</div>
+            <div className="wide-adjustment-slider-label" title={`● 控制沿线条方向的采样范围（默认 8px）。范围越大越能把长距离的起伏磨平，但过大会让弯折处轻微走形。`}>平滑范围</div>
             <div className="unit-container">
               <RangeSlider min={3} max={12} step={1} value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusChange} className="adjustment-slider-input" />
               <input type="number" min="3" max="12" step="1" value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusNumberChange} className="adjustment-number-input" />
@@ -2911,14 +2891,6 @@ const renderEdgeProcessingContent = () => (
             </div>
           </div>
 
-          <div className="adjustment-slider-item">
-            <div className="wide-adjustment-slider-label" title={`● 控制保边缘程度。越高越不容易把笔触边缘糊掉。`}>保护细节</div>
-            <div className="unit-container">
-              <RangeSlider min={0} max={100} step={1} value={edgeLinePreserveDetail} onChange={handleEdgeLinePreserveDetailChange} className="adjustment-slider-input" />
-              <input type="number" min="0" max="100" step="1" value={edgeLinePreserveDetail} onChange={handleEdgeLinePreserveDetailNumberChange} className="adjustment-number-input" />
-              <div className="adjustment-unit">%</div>
-            </div>
-          </div>
         </>
       )}
     </div>
