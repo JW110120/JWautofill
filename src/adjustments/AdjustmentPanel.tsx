@@ -1843,8 +1843,8 @@ const readLineLayerAlphaMask = async (
   }
 };
 
-/** 分块补色公共流程：sameOnly=true 走同层算法（不读线稿）；false 走分层算法（线稿引导，自动检测线稿层）。 */
-const runBlockColorPatch = async (sameOnly: boolean) => {
+/** 分块补色公共流程：sameOnly=true 走同层算法（lineColorMode 区分浅/深线）；false 走分层算法（线稿引导）。 */
+const runBlockColorPatch = async (sameOnly: boolean, lineColorMode?: 'lighter' | 'darker') => {
   if (!handleLicenseBeforeAction()) return;
   try {
     const { executeAsModal } = core;
@@ -1904,12 +1904,12 @@ const runBlockColorPatch = async (sameOnly: boolean) => {
           );
         }
 
-        // v4 算法：alpha 孔洞/缝隙/尖角补全（同层几何 + 可选线稿引导）
+        // v7 算法：alpha 孔洞/缝隙/尖角补全（同层颜色模式 / 分层线稿引导）
         const processedPixels = await processBlockColorPatch(
           pixelResult.fullPixelData.buffer,
           fullSelectionMask.buffer,
           { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
-          lineMask ? { lineMask } : undefined
+          lineMask ? { lineMask } : (lineColorMode ? { lineColorMode } : undefined)
         );
 
         const processedPixelsArray = processedPixels instanceof Uint8Array ? processedPixels : new Uint8Array(processedPixels as any);
@@ -1934,9 +1934,14 @@ const runBlockColorPatch = async (sameOnly: boolean) => {
   }
 };
 
-/** 同层补色：线稿与内部填充在同一图层，直接用图层 alpha 几何补全。 */
-const handleBlockColorPatchSame = async () => {
-  await runBlockColorPatch(true);
+/** 浅线同层补色：线条颜色比内部填充浅 → 只传播较深的内部填充色。 */
+const handleBlockColorPatchLightLine = async () => {
+  await runBlockColorPatch(true, 'lighter');
+};
+
+/** 深线同层补色：线条颜色比内部填充深 → 只传播较浅的内部填充色。 */
+const handleBlockColorPatchDarkLine = async () => {
+  await runBlockColorPatch(true, 'darker');
 };
 
 /** 分层补色：线稿与内部填充在不同图层，用线稿轮廓引导补全。 */
@@ -2844,9 +2849,9 @@ const renderEdgeProcessingContent = () => (
 
 ● 普通图层会对 RGBA 四通道处理；背景图层只处理 RGB。`}>边缘平滑</div>
 
-    <div className="adjustment-slider-container">
-      <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" title={`● 仅色块边界：对选区做“中间值”平滑，并在选区边缘做渐隐避免边界感。
+    <div className="adjustment-slider-container adjustment-slider-container-vpad">
+      <div className="adjustment-slider-item adjustment-slider-item-no-gap adjustment-slider-item-gap-bottom">
+        <div className="adjustment-slider-label adjustment-slider-label-4" title={`● 仅色块边界：对选区做“中间值”平滑，并在选区边缘做渐隐避免边界感。
 
 ● 仅主线条：先对选区做“中间值”抹除，再对线条方向做平滑并写回。`}>平滑模式</div>
         <div className="unit-container">
@@ -3193,6 +3198,32 @@ const renderMaskSyncContent = () => (
   </div>
 );
 
+/** 虚线分割线（同层补色 与 分层补色 之间）。
+ *  UXP 对 CSS 背景/边框高级特性支持不可靠（linear-gradient+var() 整条不渲染、
+ *  background-repeat: repeat-x 只渲染一次），因此改用纯 DOM 方案：
+ *  一段 6px 短线 + 6px 空（12px 周期）的 span 序列 + flex 排列 + overflow 裁剪，
+ *  短线颜色读取主题 --border-color。 */
+const DashedDivider: React.FC = () => {
+  const [borderColor, setBorderColor] = useState('#808080');
+  useEffect(() => {
+    try {
+      const bc =
+        (getComputedStyle(document.documentElement).getPropertyValue('--border-color') || '').trim();
+      if (bc) setBorderColor(bc);
+    } catch {
+      // 读取失败：保持默认灰
+    }
+  }, []);
+  // 60 段 × 12px = 720px，足以覆盖任意面板宽度（多余部分被 overflow 裁掉）
+  return (
+    <div className="adjustment-dashed-divider">
+      {Array.from({ length: 60 }, (_, i) => (
+        <span key={i} className="adjustment-dashed-divider-dash" style={{ backgroundColor: borderColor }} />
+      ))}
+    </div>
+  );
+};
+
 const renderBlockAdjustmentContent = () => (
   <div className="adjustment-section">
 
@@ -3244,19 +3275,27 @@ const renderBlockAdjustmentContent = () => (
     <div className="adjustment-divider"></div>
 
     <div className="adjustment-double-buttons">
-      <div role="button" tabIndex={0} className="adjustment-button" onClick={handleBlockColorPatchSame} title={`● 同层补色：线稿与内部填充在同一图层时使用。
-● 直接在图层 alpha 上补全：豁口填充（贴边尖角空隙）+ 闭运算（≤2px 断缝）+ 内部孔洞填充 + 距离判定。
-● 尖角头部小三角、半透明缝隙、断点、孔洞全部填成实心（alpha→255，RGB 不变），边缘抗锯齿过渡保持原值。
-● 仅在选区内生效（无选区 = 整层）；已不透明区域无变化（幂等）。`}>同层补色</div>
+      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-wide" onClick={handleBlockColorPatchLightLine} title={`● 浅线同层补色：线稿与内部填充在同一图层，且线条颜色比内部填充浅（如浅灰线 + 深色填充）。
+● 按亮度均值分界，只把"较深的内部填充色"作为颜色传播源——线稿浅色不参与，补色不会带上线稿色。
+● 几何补全与"同层补色"一致：尖角头部、缝隙、孔洞全部填实（alpha→255），RGB 取就近填充色。
+● 仅在选区内生效（无选区 = 整层）。`}>浅线同层补色</div>
 
-      <div role="button" tabIndex={0} className="adjustment-button" onClick={handleBlockColorPatchLayered} title={`● 分层补色：线稿与内部填充不在同一图层时使用。
-● 线稿轮廓内部 = 填充应覆盖区（实测与补全区吻合 ≈98.9%），尖角/孔洞/缝隙一网打尽；再叠加同层几何兜底。
-● 线稿参考默认自动取当前层上方最近的像素图层，可在下方下拉手动指定。
-● 仅在选区内生效（无选区 = 整层）；已不透明区域无变化（幂等）。`}>分层补色</div>
+      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-wide" onClick={handleBlockColorPatchDarkLine} title={`● 深线同层补色：线稿与内部填充在同一图层，且线条颜色比内部填充深（如黑色线稿 + 红色填充）。
+● 按亮度均值分界，只把"较浅的内部填充色"作为颜色传播源——深色线稿不参与，补色不会把线条染黑。
+● 几何补全与"同层补色"一致：尖角头部、缝隙、孔洞全部填实（alpha→255），RGB 取就近填充色。
+● 仅在选区内生效（无选区 = 整层）。`}>深线同层补色</div>
     </div>
 
-    <div className="adjustment-slider-container">
-      <div className="adjustment-slider-item">
+    {/* 虚线分割线：同层补色 与 分层补色 之间（JS 拼渐变渲染，短线/空各 6px） */}
+    <DashedDivider />
+
+    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleBlockColorPatchLayered} title={`● 分层补色：线稿与内部填充不在同一图层时使用。
+● 线稿轮廓内部 = 填充应覆盖区，尖角/孔洞/缝隙一网打尽（线稿帮助封闭帽顶/V 形缺口）。
+● 线稿参考默认自动取当前层上方最近的像素图层，可在下方下拉手动指定。
+● 仅在选区内生效（无选区 = 整层）。`}>分层补色</div>
+
+    <div className="adjustment-slider-container adjustment-slider-container-vpad">
+      <div className="adjustment-slider-item adjustment-slider-item-no-gap">
         <div className="wide-adjustment-slider-label" title={`● 指定用于识别"填充应覆盖区域"的线稿图层（分层补色使用）。
 ● 默认"自动"：取当前激活图层上方最近的像素图层；找不到可用线稿层时分层补色自动退回同层算法。`}>线稿参考</div>
         <div className="unit-container">

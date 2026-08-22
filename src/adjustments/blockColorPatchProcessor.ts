@@ -1,7 +1,7 @@
 type DocSize = { width: number; height: number };
 
 /**
- * 分块补色 v4（孔洞/缝隙/尖角补全，同层与分层兼顾）
+ * 分块补色 v6.1（孔洞/缝隙/尖角补全，同层与分层兼顾）
  * ==================================================
  *
  * 场景 A —— 同层补色（线稿与内部填充在同一图层，不提供 lineMask）：
@@ -25,10 +25,19 @@ type DocSize = { width: number; height: number };
  *     实测与补全区吻合 ≈98.9%，尖角/孔洞/缝隙一网打尽）；
  *   · 其余走场景 A 的距离判定。
  *
+ * v6.1 新增 —— 同层浅线/深线补色（lineColorMode）：
+ *   · 亮度分界只过滤"颜色传播源"：线稿像素不参与 RGB 传播，补出的缝隙/孔洞
+ *     不会带上线稿色（浅线模式传播较深填充、深线模式传播较浅填充）；
+ *   · 几何掩码保持全量（含线稿）——闭运算/豁口/孔洞/距离判定与 v6 完全一致，
+ *     缝隙与凸尖角的吻合度不回退（v7 把掩码一起过滤导致缝隙吻合度下降，已弃用）。
+ *
  * 实测指标（样本 analysis/，TS 端到端）：
  *   · 分层：补全区命中 100%、背景保持 100%、尖角吻合 100%；
- *   · 同层：补全区命中 100%、尖角吻合 100%、背景保持 98.8%。
- * RGB 一律不变，只提升 alpha；仅选区内生效；alpha 已满（=255）跳过（幂等）。
+ *   · 同层：补全区命中 100%、尖角吻合 100%、背景保持 98.8%；
+ *   · 同层深线（黑线+红填充合成）：补色像素零线稿色传播。
+ * 已知行为（v6 基准）：封闭线稿外部的凹尖角会被填充（v7 曾用 DF≤1 限制消除，
+ * 但连带误杀非贴边凸尖角并破坏缝隙闭合，用户要求回退 v6 基准）。
+ * RGB 一律只写入传播色，仅提升 alpha；仅选区内生效；alpha 已满（=255）跳过（幂等）。
  */
 export type BlockColorPatchParams = {
   /** alpha 阈值：alpha > 该值视为"内容存在"（含半透明缝隙），默认 16 */
@@ -45,6 +54,11 @@ export type BlockColorPatchParams = {
   lineMask?: ArrayBuffer | null;
   /** 线稿掩码阈值，默认 16 */
   lineThreshold?: number;
+  /** 同层线稿颜色模式（仅同层场景生效，分层时忽略）：
+   *  'lighter' = 线条颜色比内部填充浅（如浅灰线+深色填充）→ 只传播较深侧的填充色；
+   *  'darker'  = 线条颜色比内部填充深（如黑线稿+红色填充）→ 只传播较浅侧的填充色。
+   *  只过滤颜色传播源，几何掩码仍全量（含线稿），缝隙/尖角闭合能力与 v6 一致。 */
+  lineColorMode?: 'lighter' | 'darker';
 };
 
 const clampInt = (v: number, lo: number, hi: number) => (v < lo ? lo : (v > hi ? hi : v));
@@ -310,15 +324,18 @@ function fillGaps(
 }
 
 /**
- * 颜色就近传播（多源 BFS）：从所有 alpha>threshold 的像素出发，把 RGB 扩散到整个画布，
- * 每个像素取"最近有值像素"的颜色（先到先得）。纯色填充 = 全部同色；渐变/多色 = 就近近似。
+ * 颜色就近传播（多源 BFS）：从所有 alpha>threshold 且（可选）colorSource 命中的像素出发，
+ * 把 RGB 扩散到整个画布，每个像素取"最近有值像素"的颜色（先到先得）。
+ * 纯色填充 = 全部同色；渐变/多色 = 就近近似。
+ * colorSource 为空时 = 全量传播（v6 行为）；非空时只从该掩码内像素出发（线稿色不参与传播）。
  */
 function propagateColor(
   base: Uint8Array,
   alpha: Uint8Array,
   maskThreshold: number,
   w: number,
-  h: number
+  h: number,
+  colorSource?: Uint8Array | null
 ): { r: Uint8Array; g: Uint8Array; b: Uint8Array } {
   const size = w * h;
   const r = new Uint8Array(size);
@@ -329,7 +346,7 @@ function propagateColor(
   let head = 0;
   let tail = 0;
   for (let i = 0; i < size; i++) {
-    if (alpha[i] > maskThreshold) {
+    if (alpha[i] > maskThreshold && (!colorSource || colorSource[i])) {
       const pi = i * 4;
       r[i] = base[pi];
       g[i] = base[pi + 1];
@@ -390,16 +407,46 @@ export async function processBlockColorPatch(
   const fillProximityMax = clampInt(Math.round(params?.fillProximityMax ?? 1), 0, 16);
   const lineThreshold = clampInt(Math.round(params?.lineThreshold ?? 16), 1, 254);
   const lineMask = params?.lineMask ? new Uint8Array(params.lineMask as ArrayBuffer) : null;
+  const lineColorMode = params?.lineColorMode;
 
   const alpha = new Uint8Array(regionSize);
   for (let i = 0; i < regionSize; i++) alpha[i] = base[i * 4 + 3] || 0;
 
   // 1) 填充掩码 + 提升候选约束：alpha>threshold 或 距填充掩码 ≤ fillProximityMax（掩码内=0）
+  //    几何掩码始终全量（含线稿，v6 行为）——保证闭运算/豁口/孔洞/距离判定的闭合能力不回退。
   const fillMask = new Uint8Array(regionSize);
   for (let i = 0; i < regionSize; i++) {
     if (alpha[i] > maskThreshold) fillMask[i] = 1;
   }
   const fillDist = distanceToMask(fillMask, docW, docH);
+
+  // 1b) 颜色传播源掩码（仅同层浅线/深线模式）：按亮度分界只保留"填充侧"颜色像素，
+  //     线稿像素不参与 RGB 传播 → 补出的缝隙/孔洞不会带上线稿色。
+  //     注意：只过滤传播源，不参与任何几何运算。
+  let colorSource: Uint8Array | null = null;
+  if (lineColorMode && !lineMask) {
+    let lumaSum = 0;
+    let lumaCnt = 0;
+    for (let i = 0; i < regionSize; i++) {
+      if (alpha[i] > maskThreshold) {
+        const pi = i * 4;
+        lumaSum += 0.299 * base[pi] + 0.587 * base[pi + 1] + 0.114 * base[pi + 2];
+        lumaCnt++;
+      }
+    }
+    const meanLuma = lumaCnt > 0 ? lumaSum / lumaCnt : 128;
+    colorSource = new Uint8Array(regionSize);
+    for (let i = 0; i < regionSize; i++) {
+      if (alpha[i] > maskThreshold) {
+        const pi = i * 4;
+        const luma = 0.299 * base[pi] + 0.587 * base[pi + 1] + 0.114 * base[pi + 2];
+        // lighter（浅线）= 填充在较深侧；darker（深线）= 填充在较浅侧
+        if (lineColorMode === 'lighter' ? luma <= meanLuma : luma >= meanLuma) {
+          colorSource[i] = 1;
+        }
+      }
+    }
+  }
 
   // 2) 联合掩码（分层时并入线稿，帮助封闭帽顶/V 形缺口）
   let lineMask01: Uint8Array | null = null;
@@ -431,7 +478,8 @@ export async function processBlockColorPatch(
   const dist = distanceToBackground(filled, docW, docH);
 
   // 5) 颜色就近传播：从填充掩码像素出发 BFS，每个像素取最近有值像素的 RGB
-  const colors = propagateColor(base, alpha, maskThreshold, docW, docH);
+  //    （同层浅线/深线模式下 colorSource 已过滤线稿色）
+  const colors = propagateColor(base, alpha, maskThreshold, docW, docH, colorSource);
 
   // 6) 提升（alpha → 255，RGB 用就近传播色）
   for (let i = 0; i < regionSize; i++) {

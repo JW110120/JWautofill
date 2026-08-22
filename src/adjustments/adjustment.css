@@ -180,6 +180,18 @@
   margin-bottom: 3px;
 }
 
+/* 下拉行（平滑模式 / 线稿参考）：上下各留 10px，与上下元素保持间距 */
+.adjustment-slider-container-vpad {
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+
+/* 下拉行内部与紧随行（如 中间值半径）之间的间距：容器 margin 只作用于容器外，
+   容器内 item 之间需单独加 margin-bottom */
+.adjustment-slider-item-gap-bottom {
+  margin-bottom: 8px;
+}
+
 /* 滑块项 */
 .adjustment-slider-item {
   width: 100%;
@@ -332,6 +344,33 @@
   height: 1px;
   background-color: var(--border-color);
   margin: 7px 13px 13px -13px;
+}
+
+/* 6 字按钮（浅线/深线同层补色）：加宽并留内边距，保证文字与按钮左右边缘有足够间距 */
+.adjustment-button-wide {
+  width: auto;
+  min-width: 96px;
+  padding: 0 8px;
+}
+
+/* 虚线分隔线（同层补色 与 分层补色 之间）：
+   - 纯 DOM 方案：DashedDivider 渲染 6px 短线 span 序列（6px 短线 + 6px 空 = 12px 周期），
+     flex 排列 + overflow 裁剪，规避 UXP 对 background-repeat/渐变的渲染缺陷；
+   - 左右各留 14px，不贯通容器；不透明度 0.5。 */
+.adjustment-dashed-divider {
+  height: 1px;
+  margin: 7px 0px 13px 0px;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  overflow: hidden;
+  opacity: 0.5;
+}
+.adjustment-dashed-divider-dash {
+  width: 6px;
+  height: 1px;
+  flex-shrink: 0;
+  margin-right: 6px;
 }
 
 .adjust-expand-section {
@@ -744,11 +783,21 @@
   opacity: 0.9;
 }
 
-/* 边缘平滑"平滑模式"下拉：保持与原原生 select 相同的宽度与右对齐 */
+/* 边缘平滑"平滑模式" / 分层补色"线稿参考"下拉：
+   优先宽度 190px（面板过窄时可收缩），不再右对齐；
+   与左侧标签间距 8px 由 select 的 margin-left 精确控制（UXP 不支持 flex gap，
+   故配合 item 的 no-gap 修饰类，保证间距在任何渲染环境下都是精确 8px） */
 .adjustment-smooth-mode-select {
-  flex: 0 1 170px;
-  margin-left: auto;
-  margin-right: -2px;
+  flex: 0 1 190px;
+  min-width: 0;
+  margin-left: 8px;
+  margin-right: 0;
+}
+
+/* 下拉行修饰类：抵消 .adjustment-slider-item 的 gap（UXP 下 gap 不可靠，
+   存在时置 0 使 margin 精确生效，不存在时无副作用） */
+.adjustment-slider-item-no-gap {
+  gap: 0;
 }
 
 /* 弹出层：fixed 定位（相对面板视口），避免被面板 overflow 裁剪 */
