@@ -447,14 +447,16 @@ export class MaskSyncEngine {
           console.log(
             `🩺 [诊断] 文档=${docW}x${docH} 样本图层bounds=`, layerBounds,
             '图层宽高=', layerW, 'x', layerH,
-            sampleMeta.isBackground ? '（背景图层）' : (sampleMeta.isAdjustment ? '（调整图层）' : '（普通图层）')
+            sampleMeta.isBackground ? '（背景图层）' : (sampleMeta.isAdjustment ? '（调整图层）' : (sampleMeta.isGroup ? '（组图层·按蒙版通道同步）' : '（普通图层）'))
           );
 
           // 3) 读取样本图层像素（按图层实际边界，sourceBounds 与 targetSize 一致）
           let raw: Uint8Array | null = null;
           let comps = 0;
           let pixelsReadError: string | null = null;
-          if (!sampleMeta.isAdjustment && layerW > 0 && layerH > 0) {
+          // 调整图层无像素内容、组图层 getPixels 会报 "Unsupported layer type"，
+          // 二者都跳过像素读取（组图层通道锁定为蒙版，由 step5 的 getSampleMaskChannel 读其蒙版）
+          if (!sampleMeta.isAdjustment && !sampleMeta.isGroup && layerW > 0 && layerH > 0) {
             try {
               const srcPixels = await imaging.getPixels({
                 documentID: d.id,
@@ -519,6 +521,8 @@ export class MaskSyncEngine {
           let channel: Uint8Array;
           if (task.channel === 'mask') {
             channel = await this.getSampleMaskChannel(d, task.sampleLayerId, docW, docH);
+            // 反相：蒙版通道同样需要支持反相（组样本通道锁定为蒙版时尤为关键）
+            if (task.invert) for (let i = 0; i < channel.length; i++) channel[i] = 255 - channel[i];
           } else {
             channel = new Uint8Array(totalPixels);
             for (let i = 0; i < totalPixels; i++) {
@@ -538,7 +542,14 @@ export class MaskSyncEngine {
             }
           }
 
-          // 6) 读取目标蒙版
+          // 6) 目标蒙版上锁检测：全锁/像素锁都会阻止蒙版写入，提前报错避免静默失败
+          const targetMeta = await this.getLayerMeta(d, task.targetLayerId);
+          if (targetMeta && targetMeta.locked) {
+            result = { synced: false, reason: 'target-locked' };
+            return;
+          }
+
+          // 7) 读取目标蒙版
           let maskImg: any;
           try {
             maskImg = await imaging.getLayerMask({
@@ -556,7 +567,9 @@ export class MaskSyncEngine {
           const maskRaw = new Uint8Array(await maskImg.imageData.getData());
           maskImg.imageData.dispose();
 
-          // 7) 差异检测：无差异跳过
+          // 8) 差异检测：无差异跳过
+          //    channel 已含反相（mask 与非 mask 通道均在此前完成反相），
+          //    因此「无需写入」在反相开启时等价于：样本通道 == 蒙版的反相
           let hasDiff = false;
           const cmpLen = Math.min(channel.length, maskRaw.length);
           for (let i = 0; i < cmpLen; i++) {
@@ -566,11 +579,11 @@ export class MaskSyncEngine {
             }
           }
           if (!hasDiff) {
-            result = { synced: false, reason: 'unchanged' };
+            result = { synced: false, reason: 'unchanged', detail: task.invert ? '已按反相匹配' : undefined };
             return;
           }
 
-          // 8) 整图写回蒙版
+          // 9) 整图写回蒙版
           const imageData = await imaging.createImageDataFromBuffer(channel, {
             width: docW,
             height: docH,
@@ -750,6 +763,8 @@ export class MaskSyncEngine {
   ): Promise<{
     isBackground: boolean;
     isAdjustment: boolean;
+    isGroup: boolean;
+    locked: boolean;
     bounds: { left: number; top: number; right: number; bottom: number };
   } | null> {
     try {
@@ -770,9 +785,13 @@ export class MaskSyncEngine {
       if (!layer || !layer.bounds) return null;
       const b = layer.bounds;
       const kind = (layer as any)?.kind || '';
+      // 全锁或像素锁都会阻止蒙版写入；二者任一为真即视为上锁
+      const locked = !!(layer as any)?.allLocked || !!(layer as any)?.pixelsLocked;
       return {
         isBackground: !!(layer as any)?.isBackgroundLayer,
         isAdjustment: isAdjustmentKind(kind),
+        isGroup: kind === 'group',
+        locked,
         bounds: {
           left: Math.round(b.left || 0),
           top: Math.round(b.top || 0),
