@@ -30,6 +30,9 @@ type DocSize = { width: number; height: number };
  *     不会带上线稿色（浅线模式传播较深填充、深线模式传播较浅填充）；
  *   · 几何掩码保持全量（含线稿）——闭运算/豁口/孔洞/距离判定与 v6 完全一致，
  *     缝隙与凸尖角的吻合度不回退（v7 把掩码一起过滤导致缝隙吻合度下降，已弃用）。
+ *   · 线稿侧像素（含半透明抗锯齿边缘）在提升阶段被显式跳过，保留原色/原 alpha，
+ *     黑色线稿绝不被填充色改写（杜绝"黑线被染红内描边"）；补色只发生在
+ *     内部填充的透明缝隙/孔洞（内部填充从内向外侵蚀）。
  *
  * 实测指标（样本 analysis/，TS 端到端）：
  *   · 分层：补全区命中 100%、背景保持 100%、尖角吻合 100%；
@@ -448,6 +451,21 @@ export async function processBlockColorPatch(
     }
   }
 
+  // 1c) 同层线稿侧掩码（仅 lineColorMode 且无线稿层）：标记"线稿侧"像素
+  //     = alpha>threshold 且 不在 colorSource（即亮度落在线条侧）。
+  //     这些是黑色线稿本身（含其半透明抗锯齿边缘），在同层模式下充当"屏障"：
+  //     step 6 从填充侧 4 邻域洪泛生成内部区域 interior 时，lineArt 像素不可穿越，
+  //     从而红线稿外侧凹尖角（被线稿与背景包围）不被填充。透明缝隙/孔洞（alpha≤threshold）
+  //     非线稿侧，会被洪泛覆盖并补全。另由 6b 计算 lineInner（最内侧 1px 线稿），
+  //     允许其内部接缝处被填充色覆盖以彻底封缝，但绝不向外穿越。
+  let lineArt: Uint8Array | null = null;
+  if (colorSource) {
+    lineArt = new Uint8Array(regionSize);
+    for (let i = 0; i < regionSize; i++) {
+      if (alpha[i] > maskThreshold && !colorSource[i]) lineArt[i] = 1;
+    }
+  }
+
   // 2) 联合掩码（分层时并入线稿，帮助封闭帽顶/V 形缺口）
   let lineMask01: Uint8Array | null = null;
   let mask = new Uint8Array(regionSize);
@@ -482,11 +500,107 @@ export async function processBlockColorPatch(
   const colors = propagateColor(base, alpha, maskThreshold, docW, docH, colorSource);
 
   // 6) 提升（alpha → 255，RGB 用就近传播色）
+  //    同层浅/深线（lineArt 存在）：以"线稿为屏障、从填充侧 8 邻域洪泛"得到内部区域
+  //    interior——红线稿外侧凹尖角（interior 外，被线稿与背景包围）不被填；内部填充
+  //    从内向外侵蚀，补缝隙/孔洞/三角尖。采用 8 邻域以兜住收束到一点的三角舌尖
+  //    （尖端透明像素常与填充体仅对角相邻，4 邻域过不去会留尖）；对角步施加"墙角护栏"：
+  //    当对角移动两侧的正交像素都为线稿时禁止跨越，从而不从不连续的 1px 线缝泄漏到
+  //    凹尖角/外侧。线稿像素默认保留原色/原 alpha（黑线不外染），仅最内侧 1px
+  //    （lineInner，与 interior/填充源 8 邻域相邻）允许被填充色覆盖以封缝，且该层不参与
+  //    洪泛、不向外穿越，故凹尖角/背景绝不泄漏。闭运算/豁口/距离等量在同层线稿模式下
+  //    不再用于提升判定（仅 fillMask/fillDist 用于颜色传播）。
+  let interior: Uint8Array | null = null;
+  if (lineArt) {
+    interior = new Uint8Array(regionSize);
+    const q = new Uint32Array(regionSize);
+    let head = 0;
+    let tail = 0;
+    for (let i = 0; i < regionSize; i++) {
+      if (colorSource && colorSource[i]) {
+        interior[i] = 1;
+        q[tail++] = i;
+      }
+    }
+    while (head < tail) {
+      const i = q[head++] as number;
+      const x = i % docW;
+      const y = (i - x) / docW;
+      const push = (ni: number, dx: number, dy: number) => {
+        if (interior[ni] || lineArt[ni]) return;
+        if ((selectionMask[ni] || 0) === 0) return;
+        // 对角步墙角护栏：两侧正交像素均为线稿 → 视为线缝，禁止穿越（防泄漏到凹尖角/外侧）
+        if (dx !== 0 && dy !== 0) {
+          const o1 = (x + dx >= 0 && x + dx < docW) ? (y * docW + (x + dx)) : -1;
+          const o2 = (y + dy >= 0 && y + dy < docH) ? ((y + dy) * docW + x) : -1;
+          if (o1 >= 0 && o2 >= 0 && lineArt[o1] && lineArt[o2]) return;
+        }
+        interior[ni] = 1;
+        q[tail++] = ni;
+      };
+      if (x > 0) push(i - 1, -1, 0);
+      if (x + 1 < docW) push(i + 1, 1, 0);
+      if (y > 0) push(i - docW, 0, -1);
+      if (y + 1 < docH) push(i + docW, 0, 1);
+      if (x > 0 && y > 0) push(i - docW - 1, -1, -1);
+      if (x + 1 < docW && y > 0) push(i - docW + 1, 1, -1);
+      if (x > 0 && y + 1 < docH) push(i + docW - 1, -1, 1);
+      if (x + 1 < docW && y + 1 < docH) push(i + docW + 1, 1, 1);
+    }
+  }
+
+  // 6b) 最内侧 1px 线稿（lineInner）：与 interior 或 colorSource 8 邻域相邻的线稿像素。
+  //     这些像素允许被填充色覆盖（彻底封死缝隙/孔洞/尖角），但【不】加入洪泛队列、
+  //     不向外穿越——线稿更深层与线稿外侧（凹尖角/背景）一律不触及。
+  //     用 8 邻域判定以便兜住对角接缝处的舌尖像素；因不参与洪泛，故不会向外侧泄漏。
+  let lineInner: Uint8Array | null = null;
+  if (lineArt) {
+    lineInner = new Uint8Array(regionSize);
+    for (let i = 0; i < regionSize; i++) {
+      if (!lineArt[i]) continue;
+      const x = i % docW;
+      const y = (i - x) / docW;
+      let touch = false;
+      for (let dy = -1; dy <= 1 && !touch; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= docW || ny >= docH) continue;
+          const ni = ny * docW + nx;
+          if ((interior && interior[ni]) || (colorSource && colorSource[ni])) {
+            touch = true;
+            break;
+          }
+        }
+      }
+      if (touch) lineInner[i] = 1;
+    }
+  }
+
   for (let i = 0; i < regionSize; i++) {
     if ((selectionMask[i] || 0) === 0) continue;
     const pi = i * 4;
     const a = alpha[i];
     if (a >= 255) continue;
+    if (lineArt) {
+      // 线稿侧像素：仅"最内侧 1px"（lineInner，邻接内部区域/填充源）被填充色覆盖以封缝；
+      // 更深层线稿与线稿外侧（凹尖角/背景）保留原色/原 alpha（黑线不外染、凹尖角不填）。
+      if (lineArt[i]) {
+        if (!lineInner || !lineInner[i]) continue;
+        result[pi] = colors.r[i];
+        result[pi + 1] = colors.g[i];
+        result[pi + 2] = colors.b[i];
+        result[pi + 3] = 255;
+        continue;
+      }
+      if (!interior || !interior[i]) continue;
+      result[pi] = colors.r[i];
+      result[pi + 1] = colors.g[i];
+      result[pi + 2] = colors.b[i];
+      result[pi + 3] = 255;
+      continue;
+    }
+    // ---- 以下为原几何逻辑（无线稿色模式 / 分层场景），保持不变 ----
     // 提升候选约束：只补"填充相关"像素。
     //   · 填充掩码内（a > threshold）
     //   · 紧贴填充（距填充掩码 ≤ fillProximityMax）
