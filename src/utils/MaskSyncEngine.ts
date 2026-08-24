@@ -273,7 +273,9 @@ export class MaskSyncEngine {
           const isBackground = !!(layer as any)?.isBackgroundLayer;
           const isAdjustment = isAdjustmentKind(kind);
           const curIds = parentIds.concat([layer.id]);
-          const indent = depth > 0 ? '　'.repeat(Math.min(6, depth)) + '└ ' : '';
+          // 层级缩进由 CSS 的 padding-left（按 depth）体现（见 MaskSyncSelect），
+          // 组内的图层/嵌套组前面再补一个 └ 符号增强层级辨识（depth>0 才加）。
+          const indent = depth > 0 ? '└ ' : '';
           let kindSuffix = '';
           if (hasChildren) kindSuffix = '（组）';
           else if (isBackground) kindSuffix = '（背景）';
@@ -313,7 +315,8 @@ export class MaskSyncEngine {
         }
         e.name = names[names.length - 1];
         e.path = names;
-        const indent = e.depth > 0 ? '　'.repeat(Math.min(6, e.depth)) + '└ ' : '';
+        // 层级缩进由 CSS padding-left（按 depth）体现；组内图层/嵌套组前面补 └ 符号
+        const indent = e.depth > 0 ? '└ ' : '';
         let kindSuffix = '';
         if (e.kind === 'group') kindSuffix = '（组）';
         else if (e.isBackground) kindSuffix = '（背景）';
@@ -645,7 +648,7 @@ export class MaskSyncEngine {
       if (t.sampleLayerPath && t.sampleLayerPath.length) {
         const cur = t.sampleLayerId != null ? byId.get(t.sampleLayerId) : undefined;
         if (cur) {
-          const typeOk = cur.kind === 'pixel' || cur.isAdjustment || cur.isBackground;
+          const typeOk = cur.kind === 'pixel' || cur.isAdjustment || cur.isBackground || (cur.kind === 'group' && cur.hasUserMask);
           if (!typeOk) {
             t.sampleLayerId = null;
             changed = true;
@@ -656,7 +659,7 @@ export class MaskSyncEngine {
           }
         } else {
           const hit = this.resolveLayerByPath(entries, t.sampleLayerPath);
-          if (hit && (hit.kind === 'pixel' || hit.isAdjustment || hit.isBackground)) {
+          if (hit && (hit.kind === 'pixel' || hit.isAdjustment || hit.isBackground || (hit.kind === 'group' && hit.hasUserMask))) {
             if (t.sampleLayerId !== hit.id) {
               t.sampleLayerId = hit.id;
               t.sampleLayerName = hit.name;

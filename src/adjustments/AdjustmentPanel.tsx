@@ -267,6 +267,50 @@ const defaultSubFeatures: SubFeature[] = [
   { id: 'lineEnhancement', parentId: 'edgeProcessing', title: '线条加黑', isVisible: true, order: 2 }
 ];
 
+/**
+ * 合并已保存分区与默认分区，保证默认分区（含新增的「蒙版同步」）在插件
+ * 安装/升级后一定出现，不会因旧版本的 panel-state.json 缺少该分区而被整体替换掉。
+ * - 默认分区全部保留；已保存分区沿用用户的可见性/折叠/顺序设置；
+ * - 新增的默认分区若不在已保存数据中，按默认（可见）补齐；
+ * - 已保存但不在默认中的分区也保留，避免丢数据。
+ */
+const mergeSections = (
+  defaults: SectionConfig[],
+  loaded?: Array<{ id: string; isCollapsed?: boolean; isVisible?: boolean; order?: number; title?: string }>
+): SectionConfig[] => {
+  if (!loaded || loaded.length === 0) return defaults.map(s => ({ ...s }));
+  const loadedMap = new Map(loaded.map(s => [s.id, s]));
+  const result: SectionConfig[] = [];
+  // 1) 默认分区全部保留（新增分区自动补齐，默认可见）
+  for (const d of defaults) {
+    const l = loadedMap.get(d.id);
+    result.push(
+      l
+        ? {
+            ...d,
+            isCollapsed: l.isCollapsed ?? d.isCollapsed,
+            isVisible: l.isVisible ?? true,
+            order: l.order ?? d.order,
+          }
+        : { ...d }
+    );
+  }
+  // 2) 保留已保存但不在默认中的分区
+  for (const l of loaded) {
+    if (!defaults.some(d => d.id === l.id)) {
+      result.push({
+        id: l.id,
+        title: l.title ?? l.id,
+        isCollapsed: !!l.isCollapsed,
+        isVisible: l.isVisible ?? true,
+        order: l.order ?? 99,
+      });
+    }
+  }
+  result.sort((a, b) => a.order - b.order);
+  return result;
+};
+
 const AdjustmentPanel: React.FC = () => {
 // DOM引用，用于绑定键盘事件
 const rootRef = useRef<HTMLDivElement>(null);
@@ -419,7 +463,9 @@ useEffect(() => {
       const ap = loaded && loaded.adjustmentPanel;
       if (ap) {
         if (ap.sections && ap.sections.length) {
-          setSections(ap.sections);
+          // 与默认分区合并：保证「蒙版同步」等新增分区在安装/升级后可见，
+          // 不再因旧 panel-state.json 缺失该分区而被整体替换掉。
+          setSections(mergeSections(defaultSections, ap.sections));
         }
         if (ap.subFeatures && ap.subFeatures.length) {
           setSubFeatures(ap.subFeatures);
@@ -848,6 +894,8 @@ const patchMaskSyncTask = async (taskId: string, patch: Partial<MaskSyncTask>) =
  */
 const getMaskSyncChannelsForEntry = (entry?: LayerTreeEntry): MaskSyncChannel[] => {
   if (!entry) return ['gray', 'r', 'g', 'b', 'a', 'mask'];
+  // 带蒙版的图层组：样本只能取该组自身的蒙版通道
+  if (entry.kind === 'group' && entry.hasUserMask) return ['mask'];
   if (entry.isBackground) return ['gray', 'r', 'g', 'b'];
   if (entry.isAdjustment) return ['gray', 'r', 'g', 'b', 'mask'];
   return ['gray', 'r', 'g', 'b', 'a', 'mask'];
@@ -858,9 +906,10 @@ const getMaskSyncChannelsForEntry = (entry?: LayerTreeEntry): MaskSyncChannel[] 
  * 主文本靠左、注释靠右，弹出层 fixed 定位避免被面板 overflow 裁剪。 */
 interface MaskSyncSelectOption {
   value: string;
-  main: string; // 主文本（含缩进）
+  main: string; // 主文本
   tag?: string; // 右对齐注释（如（像素））
   disabled?: boolean;
+  depth?: number; // 图层在文档树中的层级（用于按层级缩进，体现图层结构）
 }
 
 /** 把 label 末尾的（注释）拆出来：'　└ 图层1（像素）' → main='　└ 图层1' tag='（像素）' */
@@ -1000,6 +1049,7 @@ const MaskSyncSelect: React.FC<{
             <div
               key={o.value}
               className={`mask-sync-select-opt ${o.value === value ? 'sel' : ''} ${o.disabled ? 'dis' : ''}`}
+              style={o.depth != null ? { paddingLeft: 8 + o.depth * 16 } : undefined}
               onClick={() => {
                 if (o.disabled) return;
                 onChange(o.value);
@@ -1037,17 +1087,24 @@ const handleMaskSyncSampleChange = async (task: MaskSyncTask, value: string) => 
     console.warn(`⚠️ 蒙版同步：样本图层 id=${id} 未找到，选择未保存`);
     return;
   }
-  // 样本图层支持：像素图层 / 调整图层 / 背景图层（背景只有 RGB 三通道）
-  if (hit.kind !== 'pixel' && !hit.isAdjustment && !hit.isBackground) return;
+  // 样本图层支持：像素图层 / 调整图层 / 背景图层（背景只有 RGB 三通道）；
+  // 此外「带蒙版的图层组」也可作为样本（只能取该组的蒙版通道）。
+  const isMaskedGroup = hit.kind === 'group' && hit.hasUserMask;
+  if (hit.kind !== 'pixel' && !hit.isAdjustment && !hit.isBackground && !isMaskedGroup) return;
   const patch: Partial<MaskSyncTask> = {
     sampleLayerId: hit.id,
     sampleLayerPath: hit.path,
     sampleLayerName: hit.name,
   };
-  // 若当前通道不在新样本的可用通道内（如切到背景图层后 A/蒙版不可用），重置为灰阶；
-  // 若通道尚未选择（''），保持空白不自动填充
-  const channels = getMaskSyncChannelsForEntry(hit);
-  if (task.channel && !channels.includes(task.channel)) patch.channel = 'gray';
+  if (isMaskedGroup) {
+    // 带蒙版的图层组：样本只能取「蒙版」通道，选中即强制锁定为蒙版
+    patch.channel = 'mask';
+  } else {
+    // 若当前通道不在新样本的可用通道内（如切到背景图层后 A/蒙版不可用），重置为灰阶；
+    // 若通道尚未选择（''），保持空白不自动填充
+    const channels = getMaskSyncChannelsForEntry(hit);
+    if (task.channel && !channels.includes(task.channel)) patch.channel = 'gray';
+  }
   await patchMaskSyncTask(task.id, patch);
 };
 
@@ -3066,8 +3123,9 @@ const renderMaskSyncContent = () => (
             title="选择样本图层（像素/调整/背景）"
             options={maskSyncSampleOptions.map(opt => {
               const { main, tag } = splitLabelTag(opt.label);
-              const selectable = opt.kind === 'pixel' || opt.isAdjustment || opt.isBackground;
-              return { value: String(opt.id), main, tag, disabled: !selectable };
+              // 像素/调整/背景图层可選；带蒙版的图层组也可作为样本（只能取蒙版通道）
+              const selectable = opt.kind === 'pixel' || opt.isAdjustment || opt.isBackground || (opt.kind === 'group' && opt.hasUserMask);
+              return { value: String(opt.id), main, tag, disabled: !selectable, depth: opt.depth };
             })}
           />
         </div>
@@ -3094,7 +3152,7 @@ const renderMaskSyncContent = () => (
             title="选择带蒙版的目标图层"
             options={maskSyncTargetOptions.map(opt => {
               const { main, tag } = splitLabelTag(opt.label);
-              return { value: String(opt.id), main, tag };
+              return { value: String(opt.id), main, tag, depth: opt.depth };
             })}
           />
         </div>
