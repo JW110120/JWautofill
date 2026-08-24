@@ -363,7 +363,7 @@ const [specialWoodcutPreview, setSpecialWoodcutPreview] = useState(true);
 
 const [lineReferenceLayerId, setLineReferenceLayerId] = useState<number | null>(null);
 const [lineReferenceLayerName, setLineReferenceLayerName] = useState<string>('');
-const [lineReferenceOptions, setLineReferenceOptions] = useState<Array<{ value: string; label: string; disabled?: boolean }>>([]);
+const [lineReferenceOptions, setLineReferenceOptions] = useState<Array<{ value: string; label: string; depth: number; disabled?: boolean }>>([]);
 const lineReferenceSignatureRef = useRef<{ docId: number | null; hash: number }>({ docId: null, hash: 0 });
 const lineReferenceSelectionRef = useRef<{ id: number | null; name: string }>({ id: null, name: '' });
 
@@ -1447,18 +1447,21 @@ const computeLayerSignature = (layers: any[]): number => {
   return h >>> 0;
 };
 
-const buildLineReferenceOptions = (layers: any[], depth: number, out: Array<{ value: string; label: string; disabled?: boolean }>) => {
+const buildLineReferenceOptions = (layers: any[], depth: number, out: Array<{ value: string; label: string; depth: number; disabled?: boolean }>) => {
   for (const layer of layers || []) {
     if (!layer) continue;
     const children = (layer as any)?.layers;
     const hasChildren = !!(children && Array.isArray(children) && children.length > 0);
-    const indent = depth > 0 ? ('　'.repeat(Math.min(6, depth)) + '└ ') : '';
+    // 层级缩进改为按 depth 在 CSS 层用 padding-left 体现（与蒙版同步样本下拉一致），
+    // 组内图层/嵌套组前面补一个 └ 符号增强层级辨识（depth>0 才加）
+    const indent = depth > 0 ? '└ ' : '';
     const kind = (layer as any)?.kind;
     const isPixel = kind === 'pixel';
     const labelSuffix = hasChildren ? '（组）' : (isPixel ? '（像素）' : '（不可用）');
     out.push({
       value: String(layer.id),
       label: `${indent}${layer.name || `图层 ${layer.id}`}${labelSuffix}`,
+      depth,
       disabled: !isPixel
     });
     if (hasChildren) buildLineReferenceOptions(children, depth + 1, out);
@@ -1469,7 +1472,7 @@ const refreshLineReferenceOptions = (docOverride?: any) => {
   try {
     const doc = docOverride || app.activeDocument;
     const layers = doc?.layers || [];
-    const out: Array<{ value: string; label: string; disabled?: boolean }> = [];
+    const out: Array<{ value: string; label: string; depth: number; disabled?: boolean }> = [];
     buildLineReferenceOptions(layers, 0, out);
     setLineReferenceOptions(out);
     const docId = doc?.id ?? null;
@@ -3337,7 +3340,7 @@ const renderBlockAdjustmentContent = () => (
               { value: 'auto', main: '自动', tag: '上方像素层' },
               ...lineReferenceOptions.map(opt => {
                 const s = splitLabelTag(opt.label);
-                return { value: opt.value, main: s.main, tag: s.tag, disabled: opt.disabled };
+                return { value: opt.value, main: s.main, tag: s.tag, depth: opt.depth, disabled: opt.disabled };
               })
             ]}
             showCheck
