@@ -1800,7 +1800,7 @@ const handleBlockAverage = async () => {
         );
         
         // 步骤4：应用处理后的像素数据
-        await applyProcessedPixels(processedPixels, pixelResult);
+        await applyProcessedPixels(processedPixels, pixelResult, '分块平均');
       });
     });
     giveFocusBackToPS();
@@ -1854,7 +1854,7 @@ const handleBlockGradient = async () => {
           isBackgroundLayer
         );
 
-        await applyProcessedPixels(processedPixels, pixelResult);
+        await applyProcessedPixels(processedPixels, pixelResult, '分块渐变');
       });
     });
     giveFocusBackToPS();
@@ -1998,7 +1998,8 @@ const runBlockColorPatch = async (sameOnly: boolean, lineColorMode?: 'lighter' |
             selectionCoefficients
           }
         };
-        await applyProcessedPixels(processedPixelsArray, resultForWriteback as any);
+        const patchName = sameOnly ? (lineColorMode === 'lighter' ? '浅线同层补色' : '深线同层补色') : '分层补色';
+        await applyProcessedPixels(processedPixelsArray, resultForWriteback as any, patchName);
       });
     });
     giveFocusBackToPS();
@@ -2045,7 +2046,8 @@ const restoreSpecialWoodcutBaseline = async () => {
     baseline.layer,
     baseline.docWidth,
     baseline.docHeight,
-    baseline.isBackgroundLayer
+    baseline.isBackgroundLayer,
+    '特殊木刻预览还原'
   );
   specialWoodcutPreviewBaselineRef.current = null;
 };
@@ -2121,7 +2123,7 @@ const handleSpecialWoodcut = async (isPreview: boolean = false) => {
         isBackgroundLayer
       );
 
-      await applyProcessedPixels(processedPixels, pixelResult);
+      await applyProcessedPixels(processedPixels, pixelResult, '特殊木刻');
     });
     if (!isPreview) {
       // 正式应用：清除预览基线，提交当前结果
@@ -2188,7 +2190,7 @@ const handleLineEnhancement = async () => {
     );
     await executeAsModal(async () => {
       await runWithTemporaryUnlock(async () => {
-        await applyProcessedPixels(processedPixels, pixelResult);
+        await applyProcessedPixels(processedPixels, pixelResult, '线条加黑');
       });
     });
     giveFocusBackToPS();
@@ -2274,7 +2276,7 @@ const handleAlphaAlign = async (withBg: boolean = false, direction: 'down' | 'up
         );
 
         // 写回：按选区羽化系数混合，选区内写入计算结果，选区外保留原像素
-        await applyProcessedPixels(processedPixels, pixelResult);
+        await applyProcessedPixels(processedPixels, pixelResult, name);
       });
     });
     giveFocusBackToPS();
@@ -2331,7 +2333,7 @@ const handleHighFrequencyEnhancement = async () => {
         console.log('✅ 高频增强处理完成，长度:', processedPixels.length);
         
         // 步骤4：应用处理后的像素数据
-        await applyProcessedPixels(processedPixels, pixelResult);
+        await applyProcessedPixels(processedPixels, pixelResult, '高频增强');
         
         console.log('✅ 高频增强处理完成');
       });
@@ -2415,7 +2417,7 @@ const handleSmartEdgeSmooth = async () => {
             selectionCoefficients
           }
         };
-        await applyProcessedPixels(processedPixelsArray, resultForWriteback as any);
+        await applyProcessedPixels(processedPixelsArray, resultForWriteback as any, '边缘平滑');
         
         console.log('✅ 智能边缘平滑处理完成');
       });
@@ -2480,7 +2482,7 @@ const handlePencilAASmooth = async () => {
         );
 
         // 写回：按选区羽化系数混合，选区内写入计算结果，选区外保留原像素
-        await applyProcessedPixels(new Uint8Array(processedPixels), pixelResult);
+        await applyProcessedPixels(new Uint8Array(processedPixels), pixelResult, '铅笔去锯齿');
       });
     });
     giveFocusBackToPS();
@@ -2613,7 +2615,7 @@ const handlePixelTransition = async () => {
         console.log('✅ 处理像素数据完成，长度:', processedPixels.length);
 
         // 步骤4：应用处理后的像素数据
-        await applyProcessedPixels(processedPixels, pixelResult);
+        await applyProcessedPixels(processedPixels, pixelResult, '像素过渡');
 
         console.log('✅ 像素过渡处理完成');
       });
@@ -2663,7 +2665,7 @@ const handleGradientModify = async () => {
           isBackgroundLayer
         );
 
-        await applyProcessedPixels(processedPixels, pixelResult);
+        await applyProcessedPixels(processedPixels, pixelResult, '梯度修改');
       });
     });
     giveFocusBackToPS();
@@ -2710,7 +2712,7 @@ const handleSpecialSharpen = async () => {
           isBackgroundLayer
         );
 
-        await applyProcessedPixels(processedPixels, pixelResult);
+        await applyProcessedPixels(processedPixels, pixelResult, '特殊锐化');
       });
     });
     giveFocusBackToPS();

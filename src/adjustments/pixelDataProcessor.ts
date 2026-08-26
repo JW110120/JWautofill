@@ -226,99 +226,116 @@ export const processPixelData = async (selectionBounds: SelectionBounds, layer: 
 };
 
 // 应用处理后的像素数据到图层
+// historyName：写回时登记的 Photoshop 历史记录名称（避免清一色显示“置入像素”）
 export const applyProcessedPixels = async (
   processedPixels: Uint8Array,
-  result: PixelProcessingResult
+  result: PixelProcessingResult,
+  historyName: string = '像素处理'
 ): Promise<void> => {
   const { fullPixelData, selectionIndices, selectionBounds, layer, isBackgroundLayer } = result;
-  
-  // 应用处理后的像素数据
-  const newFullPixelData = new Uint8Array(fullPixelData.length);
-  newFullPixelData.set(fullPixelData); // 复制原始数据
-  
-  let coefficientIndex = 0;
-  for (const docIndex of selectionIndices) {
-    const pixelIndex = docIndex * 4;
-    const coefficient = selectionBounds.selectionCoefficients[coefficientIndex];
-    
+  const doc = app.activeDocument;
+  if (!doc) {
+    throw new Error('未找到活动文档，无法写回像素');
+  }
+
+  // 用 suspendHistory 把整次 putPixels 合并为【一条】带自定义名称的历史记录，
+  // 覆盖 PS 默认的“置入像素”项名，方便在历史面板里区分不同算法。
+  await doc.suspendHistory(async () => {
+    // 应用处理后的像素数据
+    const newFullPixelData = new Uint8Array(fullPixelData.length);
+    newFullPixelData.set(fullPixelData); // 复制原始数据
+
+    let coefficientIndex = 0;
+    for (const docIndex of selectionIndices) {
+      const pixelIndex = docIndex * 4;
+      const coefficient = selectionBounds.selectionCoefficients[coefficientIndex];
+
+      if (isBackgroundLayer) {
+        // 背景图层：与原始像素混合，避免消除锯齿时产生白边
+        newFullPixelData[pixelIndex] = Math.round(fullPixelData[pixelIndex] * (1 - coefficient) + processedPixels[pixelIndex] * coefficient);
+        newFullPixelData[pixelIndex + 1] = Math.round(fullPixelData[pixelIndex + 1] * (1 - coefficient) + processedPixels[pixelIndex + 1] * coefficient);
+        newFullPixelData[pixelIndex + 2] = Math.round(fullPixelData[pixelIndex + 2] * (1 - coefficient) + processedPixels[pixelIndex + 2] * coefficient);
+        // 背景图层的alpha始终保持255
+        newFullPixelData[pixelIndex + 3] = 255;
+      } else {
+        // 普通图层：根据选区系数混合原始颜色和处理后的颜色
+        newFullPixelData[pixelIndex] = Math.round(fullPixelData[pixelIndex] * (1 - coefficient) + processedPixels[pixelIndex] * coefficient);
+        newFullPixelData[pixelIndex + 1] = Math.round(fullPixelData[pixelIndex + 1] * (1 - coefficient) + processedPixels[pixelIndex + 1] * coefficient);
+        newFullPixelData[pixelIndex + 2] = Math.round(fullPixelData[pixelIndex + 2] * (1 - coefficient) + processedPixels[pixelIndex + 2] * coefficient);
+        newFullPixelData[pixelIndex + 3] = Math.round(fullPixelData[pixelIndex + 3] * (1 - coefficient) + processedPixels[pixelIndex + 3] * coefficient);
+      }
+
+      coefficientIndex++;
+    }
+
+    console.log('✅ 映射回完整像素数组完成');
+
+    // 根据图层类型创建不同的像素数据
+    let outputPixelData: Uint8Array;
+    let components: number;
+
     if (isBackgroundLayer) {
-      // 背景图层：与原始像素混合，避免消除锯齿时产生白边
-      newFullPixelData[pixelIndex] = Math.round(fullPixelData[pixelIndex] * (1 - coefficient) + processedPixels[pixelIndex] * coefficient);
-      newFullPixelData[pixelIndex + 1] = Math.round(fullPixelData[pixelIndex + 1] * (1 - coefficient) + processedPixels[pixelIndex + 1] * coefficient);
-      newFullPixelData[pixelIndex + 2] = Math.round(fullPixelData[pixelIndex + 2] * (1 - coefficient) + processedPixels[pixelIndex + 2] * coefficient);
-      // 背景图层的alpha始终保持255
-      newFullPixelData[pixelIndex + 3] = 255;
+      // 背景图层：创建RGB格式的数据（3个组件）
+      components = 3;
+      const pixelCount = selectionBounds.docWidth * selectionBounds.docHeight;
+      outputPixelData = new Uint8Array(pixelCount * 3);
+
+      for (let i = 0; i < pixelCount; i++) {
+        const sourceIndex = i * 4;
+        const targetIndex = i * 3;
+        outputPixelData[targetIndex] = newFullPixelData[sourceIndex];         // R
+        outputPixelData[targetIndex + 1] = newFullPixelData[sourceIndex + 1]; // G
+        outputPixelData[targetIndex + 2] = newFullPixelData[sourceIndex + 2]; // B
+      }
     } else {
-      // 普通图层：根据选区系数混合原始颜色和处理后的颜色
-      newFullPixelData[pixelIndex] = Math.round(fullPixelData[pixelIndex] * (1 - coefficient) + processedPixels[pixelIndex] * coefficient);
-      newFullPixelData[pixelIndex + 1] = Math.round(fullPixelData[pixelIndex + 1] * (1 - coefficient) + processedPixels[pixelIndex + 1] * coefficient);
-      newFullPixelData[pixelIndex + 2] = Math.round(fullPixelData[pixelIndex + 2] * (1 - coefficient) + processedPixels[pixelIndex + 2] * coefficient);
-      newFullPixelData[pixelIndex + 3] = Math.round(fullPixelData[pixelIndex + 3] * (1 - coefficient) + processedPixels[pixelIndex + 3] * coefficient);
+      // 普通图层：使用RGBA格式的数据（4个组件）
+      components = 4;
+      outputPixelData = newFullPixelData;
     }
-    
-    coefficientIndex++;
-  }
-  
-  console.log('✅ 映射回完整像素数组完成');
-  
-  // 根据图层类型创建不同的像素数据
-  let outputPixelData: Uint8Array;
-  let components: number;
-  
-  if (isBackgroundLayer) {
-    // 背景图层：创建RGB格式的数据（3个组件）
-    components = 3;
-    const pixelCount = selectionBounds.docWidth * selectionBounds.docHeight;
-    outputPixelData = new Uint8Array(pixelCount * 3);
-    
-    for (let i = 0; i < pixelCount; i++) {
-      const sourceIndex = i * 4;
-      const targetIndex = i * 3;
-      outputPixelData[targetIndex] = newFullPixelData[sourceIndex];         // R
-      outputPixelData[targetIndex + 1] = newFullPixelData[sourceIndex + 1]; // G
-      outputPixelData[targetIndex + 2] = newFullPixelData[sourceIndex + 2]; // B
-    }
-  } else {
-    // 普通图层：使用RGBA格式的数据（4个组件）
-    components = 4;
-    outputPixelData = newFullPixelData;
-  }
-  
-  // 把改造后的像素数组通过putPixels写回图层
-  const newImageData = await imaging.createImageDataFromBuffer(outputPixelData, {
-    width: selectionBounds.docWidth,
-    height: selectionBounds.docHeight,
-    colorSpace: 'RGB',
-    pixelFormat: isBackgroundLayer ? 'RGB' : 'RGBA',
-    components: components,
-    componentSize: 8
-  });
-  
-  await imaging.putPixels({
-    documentID: app.activeDocument.id,
-    layerID: layer.id,
-    imageData: newImageData,
-    targetBounds: {
-      left: 0,
-      top: 0,
-      right: selectionBounds.docWidth,
-      bottom: selectionBounds.docHeight
-    }
-  });
-  
-  // 释放内存
-  newImageData.dispose();
+
+    // 把改造后的像素数组通过putPixels写回图层
+    const newImageData = await imaging.createImageDataFromBuffer(outputPixelData, {
+      width: selectionBounds.docWidth,
+      height: selectionBounds.docHeight,
+      colorSpace: 'RGB',
+      pixelFormat: isBackgroundLayer ? 'RGB' : 'RGBA',
+      components: components,
+      componentSize: 8
+    });
+
+    await imaging.putPixels({
+      documentID: doc.id,
+      layerID: layer.id,
+      imageData: newImageData,
+      targetBounds: {
+        left: 0,
+        top: 0,
+        right: selectionBounds.docWidth,
+        bottom: selectionBounds.docHeight
+      }
+    });
+
+    // 释放内存
+    newImageData.dispose();
+  }, historyName);
 };
 
 // 将完整文档尺寸的 RGBA 像素数据原样写回图层（不做选区混合）。
 // 用于“预览”场景的还原：把保存的原始像素恢复到图层，撤销上一次预览的写入。
+// historyName：写回时登记的 Photoshop 历史记录名称（避免清一色显示“置入像素”）
 export const writeFullPixelsToLayer = async (
   fullPixelData: Uint8Array,
   layer: any,
   docWidth: number,
   docHeight: number,
-  isBackgroundLayer: boolean
+  isBackgroundLayer: boolean,
+  historyName: string = '像素写回'
 ): Promise<void> => {
+  const doc = app.activeDocument;
+  if (!doc) {
+    throw new Error('未找到活动文档，无法写回像素');
+  }
+
   let outputPixelData: Uint8Array;
   let components: number;
   let pixelFormat: 'RGB' | 'RGBA';
@@ -341,26 +358,28 @@ export const writeFullPixelsToLayer = async (
     outputPixelData = fullPixelData;
   }
 
-  const newImageData = await imaging.createImageDataFromBuffer(outputPixelData, {
-    width: docWidth,
-    height: docHeight,
-    colorSpace: 'RGB',
-    pixelFormat,
-    components,
-    componentSize: 8
-  });
+  await doc.suspendHistory(async () => {
+    const newImageData = await imaging.createImageDataFromBuffer(outputPixelData, {
+      width: docWidth,
+      height: docHeight,
+      colorSpace: 'RGB',
+      pixelFormat,
+      components,
+      componentSize: 8
+    });
 
-  await imaging.putPixels({
-    documentID: app.activeDocument.id,
-    layerID: layer.id,
-    imageData: newImageData,
-    targetBounds: {
-      left: 0,
-      top: 0,
-      right: docWidth,
-      bottom: docHeight
-    }
-  });
+    await imaging.putPixels({
+      documentID: doc.id,
+      layerID: layer.id,
+      imageData: newImageData,
+      targetBounds: {
+        left: 0,
+        top: 0,
+        right: docWidth,
+        bottom: docHeight
+      }
+    });
 
-  newImageData.dispose();
+    newImageData.dispose();
+  }, historyName);
 };
