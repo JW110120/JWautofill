@@ -903,17 +903,19 @@ const patchMaskSyncTask = async (taskId: string, patch: Partial<MaskSyncTask>) =
 
 /**
  * 根据样本图层类型返回可用的通道下拉选项：
- * - 背景图层（只有 RGB 三通道）：灰度、R、G、B（无 A、无蒙版）
+ * - 背景图层（只有 RGB 三通道）：灰度、R、G、B + 色相、饱和度（无 A、无蒙版）
  * - 调整图层（无 A 通道）：灰度、R、G、B、蒙版
- * - 普通像素图层：灰度、R、G、B、A、蒙版
+ * - 普通像素图层：灰度、R、G、B、A、蒙版 + 色相、饱和度
+ * 色相/饱和度通道依赖真实 RGB，仅背景图层与普通像素图层提供（调整图层/带蒙版组不提供）。
  */
 const getMaskSyncChannelsForEntry = (entry?: LayerTreeEntry): MaskSyncChannel[] => {
-  if (!entry) return ['gray', 'r', 'g', 'b', 'a', 'mask'];
+  // 色相/饱和度通道：仅样本图层有真实 RGB 时可用（背景图层 / 普通像素图层）
+  if (!entry) return ['gray', 'r', 'g', 'b', 'a', 'mask', 'hue', 'sat'];
   // 带蒙版的图层组：样本只能取该组自身的蒙版通道
   if (entry.kind === 'group' && entry.hasUserMask) return ['mask'];
-  if (entry.isBackground) return ['gray', 'r', 'g', 'b'];
+  if (entry.isBackground) return ['gray', 'r', 'g', 'b', 'hue', 'sat'];
   if (entry.isAdjustment) return ['gray', 'r', 'g', 'b', 'mask'];
-  return ['gray', 'r', 'g', 'b', 'a', 'mask'];
+  return ['gray', 'r', 'g', 'b', 'a', 'mask', 'hue', 'sat'];
 };
 
 /* ================= 自定义下拉（支持“注释右对齐”） =================
@@ -3107,7 +3109,7 @@ const renderMaskSyncContent = () => (
       </span>
       {maskSyncEngineReady && (
         <span className="mask-sync-status-info">
-          {maskSyncEngine.getDocName() || '无文档'} · {maskSyncTasks.length} 个任务
+          {maskSyncEngine.getDocName() || '无文档'}
         </span>
       )}
     </div>
@@ -3477,10 +3479,10 @@ const renderQuickActionContent = () => (
     <div className="adjustment-divider"></div>
 
     <div className="adjustment-double-buttons">
-      <div role="button" tabIndex={0} className="adjustment-button" onClick={handleKnockoutWhite} title={`● 仅普通像素图层可用，背景图层不可用。
+      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-lv2" onClick={handleKnockoutWhite} title={`● 仅普通像素图层可用，背景图层不可用。
 ● 复刻手动验证方案：Ctrl+点击 RGB 通道载入亮度选区 → Delete 清除亮部 → 复制 N 份合并增强 alpha（N 自动按内容亮度计算，最少 7 份）。
 ● 用于把“纯白底上叠加的半透明内容”抠回透明底；结果放在白底上与原图视觉一致。`}>扣白</div>
-      <div role="button" tabIndex={0} className="adjustment-button" onClick={handleKnockoutBlack} title={`● 仅普通像素图层可用，背景图层不可用。
+      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-lv2" onClick={handleKnockoutBlack} title={`● 仅普通像素图层可用，背景图层不可用。
 ● 反色法纠正思路：先 Invert 把黑底问题转成白底问题，再走扣白流程，最后 Invert 回来（数学上与“反选删暗部”等价，但份数自动放大到 alpha 收敛，解决偏暗）。
 ● 用于把“纯黑底上叠加的半透明内容”抠回透明底；结果放在黑底上与原图视觉一致。`}>扣黑</div>
     </div>

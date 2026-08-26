@@ -604,7 +604,7 @@
   white-space: nowrap;
 }
 
-/* 文档名与任务数：右对齐 */
+/* 文档名：右对齐；限制宽度并允许收缩+省略号，避免长标题与左侧状态栏（绿点+引擎就绪）重叠 */
 .mask-sync-status-info {
   margin-left: auto; /* 推到最右 */
   text-align: right;
@@ -614,6 +614,9 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 60%; /* 限制标题容器宽度，长文档名截断而非挤压/重叠左侧状态 */
+  min-width: 0;   /* 允许 flex 收缩以触发 ellipsis，而非溢出重叠 */
+  flex-shrink: 1;
 }
 
 /* 每任务上次同步结果 */

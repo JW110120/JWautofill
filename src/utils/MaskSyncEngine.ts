@@ -34,7 +34,7 @@ export const MASK_SYNC_ENGINE_VERSION = 'v3.3';
 
 console.log(`[蒙版同步] 引擎代码加载 ${MASK_SYNC_ENGINE_VERSION}`);
 
-export type MaskSyncChannel = 'gray' | 'r' | 'g' | 'b' | 'a' | 'mask';
+export type MaskSyncChannel = 'gray' | 'r' | 'g' | 'b' | 'a' | 'mask' | 'hue' | 'sat';
 
 export const MASK_SYNC_CHANNEL_LABELS: Record<MaskSyncChannel, string> = {
   gray: '灰阶',
@@ -43,7 +43,44 @@ export const MASK_SYNC_CHANNEL_LABELS: Record<MaskSyncChannel, string> = {
   b: 'B通道',
   a: 'A通道',
   mask: '蒙版',
+  hue: '色相通道',
+  sat: '饱和度通道',
 };
+
+/**
+ * RGB → 色相灰阶：以纯黄（色相 60°）为白(255)、纯蓝（色相 240°）为黑(0)，
+ * 按到黄的最短角距线性映射（蓝恰在黄的对面 180°）。
+ *   - 黄(60°)  → 255（白）
+ *   - 蓝(240°) → 0（黑）
+ *   - 绿(120°)/红(0°) → 170；青(180°)/品红(300°) → 85（中间过渡）
+ * 灰度像素（R=G=B，色相未定义）落入红/黄区间，得 ~170，属中性灰，避免极端黑白。
+ */
+function rgbToHueGray(r: number, g: number, b: number): number {
+  const rn = r / 255, gn = g / 255, bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const delta = max - min;
+  let h = 0;
+  if (delta > 1e-6) {
+    if (max === rn) h = 60 * (((gn - bn) / delta) % 6);
+    else if (max === gn) h = 60 * ((bn - rn) / delta + 2);
+    else h = 60 * ((rn - gn) / delta + 4);
+    if (h < 0) h += 360;
+  }
+  // 到黄(60°)的最短有向角差，归一到 [-180,180]
+  let d = h - 60;
+  d = ((d + 180) % 360 + 360) % 360 - 180;
+  return Math.round(255 * (1 - Math.abs(d) / 180));
+}
+
+/** RGB → 饱和度灰阶：高饱和为白(255)，低饱和为黑(0)。灰度/中性色（S=0）→ 黑。 */
+function rgbToSatGray(r: number, g: number, b: number): number {
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const delta = max - min;
+  const s = max === 0 ? 0 : delta / max; // HSV 饱和度 [0,1]
+  return Math.round(s * 255);
+}
 
 /** 调整图层（LayerKind）识别集合：kind 值取自 UXP LayerKind 常量（小写）。 */
 export const ADJUSTMENT_KINDS = new Set<string>([
@@ -536,6 +573,8 @@ export class MaskSyncEngine {
                 case 'g': v = G; break;
                 case 'b': v = B; break;
                 case 'a': v = A; break;
+                case 'hue': v = rgbToHueGray(R, G, B); break;
+                case 'sat': v = rgbToSatGray(R, G, B); break;
                 default: v = Math.round(0.299 * R + 0.587 * G + 0.114 * B); break;
               }
               channel[i] = task.invert ? 255 - v : v;
