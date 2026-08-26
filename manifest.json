@@ -53,7 +53,7 @@
         {
             "id": "com.listen2me.pixeladjustment",
             "label": {
-                "default": "特制绘画滤镜"
+                "default": "绘画滤镜"
             },
             "type": "panel",
             "minimumSize": {

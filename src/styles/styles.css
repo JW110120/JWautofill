@@ -177,7 +177,7 @@ sp-picker {
   position: relative;
 }
 
-/* 下拉控件背景与特制绘画滤镜面板统一（theme.ts 的 --dropdown-bg-color）：
+/* 下拉控件背景与绘画滤镜面板统一（theme.ts 的 --dropdown-bg-color）：
    darkest #080808 / dark #2f2f2f / light #e1e1e1（默认 #ffffff 偏亮，已调）/ lightest #ffffff
    双保险：CSS 变量覆盖（继承进 shadow DOM）+ ::part 强制基础色，
    保证不被 Spectrum 内部更高优先级的类选择器压过。 */

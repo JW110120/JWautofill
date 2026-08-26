@@ -1722,6 +1722,21 @@ const restoreLayerLocks = async (state: { protectAll?: boolean; protectComposite
 };
 
 const runWithTemporaryUnlock = async (fn: () => Promise<void>) => {
+  // 背景图层在 Photoshop 中被视为“整体锁定”（isBackgroundLayer），
+  // 它无法（也不需要）做锁定/解锁操作：对其执行 applyLocking 会弹出
+  // “命令'加锁'当前不可用”警告；而且写回像素（imaging.putPixels）本就不依赖锁定状态。
+  // 因此背景图层直接执行 fn，跳过解锁/恢复锁定流程，避免两次无意义的警告。
+  try {
+    // 注意：本 UXP 运行时只用复数 activeLayers[0]，单数 activeLayer 不存在（见项目踩坑记录）
+    const activeLayer = app.activeDocument?.activeLayers?.[0];
+    if (activeLayer && (activeLayer as any).isBackgroundLayer) {
+      await fn();
+      return;
+    }
+  } catch (e) {
+    console.warn('⚠️ 判断背景图层失败，仍按原逻辑尝试临时解锁流程:', e);
+  }
+
   const prev = await getCurrentLayerLockState();
   const hadLock = !!(prev.protectAll || prev.protectComposite || prev.protectPosition || prev.protectTransparency);
   if (hadLock) {
