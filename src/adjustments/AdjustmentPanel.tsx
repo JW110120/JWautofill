@@ -13,6 +13,7 @@ import { processHighFrequencyEnhancement } from './highFrequencyEnhancer';
 import { processSmartEdgeSmooth, defaultSmartEdgeSmoothParams } from './smartEdgeSmoothProcessor';
 import { processPencilAASmooth, defaultPencilAAParams } from './pencilAASmoothProcessor';
 import { checkEditingState, processPixelData, applyProcessedPixels, writeFullPixelsToLayer } from './pixelDataProcessor';
+import { processKnockout } from './knockoutProcessor';
 import { LicenseManager } from '../utils/LicenseManager';
 import { action, app, core, imaging } from 'photoshop';
 import type { Gradient } from '../types/state';
@@ -3272,6 +3273,55 @@ const DashedDivider: React.FC = () => {
   );
 };
 
+// 扣白 / 扣黑：把“曾在纯白/纯黑底上叠加的半透明色”反推回“透明底+原半透明色”。
+// 仅普通像素图层可用；背景图层直接警告并终止；无选区时 processPixelData 已默认全图层。
+const handleKnockout = async (mode: 'white' | 'black') => {
+  if (!handleLicenseBeforeAction()) return;
+  const label = mode === 'white' ? '白' : '黑';
+  try {
+    const { executeAsModal } = core;
+    await executeAsModal(async () => {
+      const editingState = await checkEditingState();
+      if (!editingState.isValid) return;
+      const { layer, isBackgroundLayer } = editingState;
+
+      // 仅普通像素图层可用，背景图层弹出警告并终止
+      if (isBackgroundLayer) {
+        await core.showAlert({ message: `扣${label}功能仅支持普通像素图层，不能用于背景图层。` });
+        return;
+      }
+
+      const selectionBounds = await getSelectionData();
+      if (!selectionBounds) {
+        await core.showAlert({ message: '获取文档信息失败' });
+        return;
+      }
+
+      await runWithTemporaryUnlock(async () => {
+        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+        // 原地修改 fullPixelData（不额外分配大数组），适配低配机器
+        processKnockout(pixelResult.fullPixelData, pixelResult.selectionIndices, mode);
+        // 直接写回整层：不走选区系数混合，省去大数组，性能更友好
+        await writeFullPixelsToLayer(
+          pixelResult.fullPixelData,
+          layer,
+          selectionBounds.docWidth,
+          selectionBounds.docHeight,
+          isBackgroundLayer
+        );
+      });
+    });
+    giveFocusBackToPS();
+  } catch (error) {
+    const msg = typeof error === 'string' ? error : (error && (error.message || (error as any).toString?.() || '未知错误'));
+    console.error(`❌ 扣${label}处理失败:`, error);
+    try { await core.showAlert({ message: `扣${label}处理失败: ` + msg }); } catch {}
+  }
+};
+
+const handleKnockoutWhite = () => handleKnockout('white');
+const handleKnockoutBlack = () => handleKnockout('black');
+
 const renderQuickActionContent = () => (
   <div className="adjustment-section">
 
@@ -3418,6 +3468,17 @@ const renderQuickActionContent = () => (
           style={{ marginLeft: '8px' }}
         />
       </div>
+    </div>
+
+    <div className="adjustment-divider"></div>
+
+    <div className="adjustment-double-buttons">
+      <div role="button" tabIndex={0} className="adjustment-button" onClick={handleKnockoutWhite} title={`● 仅普通像素图层可用，背景图层不可用。
+● 把图层当作曾在纯白底上叠加的半透明色，反推回透明底+原半透明色：白色区域变透明，彩色区域按“非白程度”恢复 alpha 与原色。
+● 无选区时作用于整层。`}>扣白</div>
+      <div role="button" tabIndex={0} className="adjustment-button" onClick={handleKnockoutBlack} title={`● 仅普通像素图层可用，背景图层不可用。
+● 把图层当作曾在纯黑底上叠加的半透明色，反推回透明底+原半透明色：黑色区域变透明，彩色区域按“非黑程度”恢复 alpha 与原色。
+● 无选区时作用于整层。`}>扣黑</div>
     </div>
   </div>
 );
