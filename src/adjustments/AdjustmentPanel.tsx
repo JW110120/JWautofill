@@ -234,7 +234,7 @@ const getSelectionData = async () => {
 
 // 新增：分区与子功能类型
 interface SectionConfig {
-  id: 'blockAdjustment' | 'localContrast' | 'edgeProcessing' | string;
+  id: 'quickAction' | 'detailAdjust' | 'edgeProcessing' | string;
   title: string;
   isCollapsed: boolean;
   isVisible: boolean;
@@ -251,17 +251,17 @@ interface SubFeature {
 
 // 默认分区配置
 const defaultSections: SectionConfig[] = [
-  { id: 'blockAdjustment', title: '分块调整', isCollapsed: false, isVisible: true, order: 0 },
-  { id: 'localContrast', title: '局部对比', isCollapsed: false, isVisible: true, order: 1 },
+  { id: 'quickAction', title: '快捷操作', isCollapsed: false, isVisible: true, order: 0 },
+  { id: 'detailAdjust', title: '细节调整', isCollapsed: false, isVisible: true, order: 1 },
   { id: 'edgeProcessing', title: '边缘处理', isCollapsed: false, isVisible: true, order: 2 },
   { id: 'maskSync', title: '蒙版同步', isCollapsed: false, isVisible: true, order: 3 }
 ];
 
 // 默认子功能配置
 const defaultSubFeatures: SubFeature[] = [
-  { id: 'pixelTransition', parentId: 'localContrast', title: '像素过渡', isVisible: true, order: 0 },
-  { id: 'gradientRelax', parentId: 'localContrast', title: '梯度修改', isVisible: true, order: 1 },
-  { id: 'highFreqEnhancement', parentId: 'localContrast', title: '高频增强', isVisible: true, order: 2 },
+  { id: 'pixelTransition', parentId: 'detailAdjust', title: '像素过渡', isVisible: true, order: 0 },
+  { id: 'gradientRelax', parentId: 'detailAdjust', title: '梯度修改', isVisible: true, order: 1 },
+  { id: 'highFreqEnhancement', parentId: 'detailAdjust', title: '高频增强', isVisible: true, order: 2 },
   { id: 'edgeSmooth', parentId: 'edgeProcessing', title: '边缘平滑', isVisible: true, order: 0 },
   { id: 'pencilAA', parentId: 'edgeProcessing', title: '铅笔去锯齿', isVisible: true, order: 1 },
   { id: 'lineEnhancement', parentId: 'edgeProcessing', title: '线条加黑', isVisible: true, order: 2 }
@@ -462,13 +462,27 @@ useEffect(() => {
       });
       const ap = loaded && loaded.adjustmentPanel;
       if (ap) {
-        if (ap.sections && ap.sections.length) {
+        // 旧版本分区 id 重命名迁移：blockAdjustment→quickAction、localContrast→detailAdjust。
+        // 避免升级后旧 panel-state.json 残留旧 id，与新默认值叠加产生重复分区/失效子功能。
+        const SECTION_ID_MIGRATION: Record<string, string> = {
+          blockAdjustment: 'quickAction',
+          localContrast: 'detailAdjust',
+        };
+        const migratedSections = (ap.sections || []).map((s: any) => ({
+          ...s,
+          id: SECTION_ID_MIGRATION[s.id] ?? s.id,
+        }));
+        const migratedSubFeatures = (ap.subFeatures || []).map((sf: any) => ({
+          ...sf,
+          parentId: SECTION_ID_MIGRATION[sf.parentId] ?? sf.parentId,
+        }));
+        if (migratedSections.length) {
           // 与默认分区合并：保证「蒙版同步」等新增分区在安装/升级后可见，
           // 不再因旧 panel-state.json 缺失该分区而被整体替换掉。
-          setSections(mergeSections(defaultSections, ap.sections));
+          setSections(mergeSections(defaultSections, migratedSections));
         }
-        if (ap.subFeatures && ap.subFeatures.length) {
-          setSubFeatures(ap.subFeatures);
+        if (migratedSubFeatures.length) {
+          setSubFeatures(migratedSubFeatures);
         }
         if (ap.toggles) {
           if (typeof ap.toggles.useWeightedAverage === 'boolean') {
@@ -2752,7 +2766,7 @@ const handleDrop = (e: React.DragEvent, targetId: string) => {
 };
 
 // 渲染子功能内容
-const renderLocalContrastContent = () => (
+const renderDetailAdjustContent = () => (
   <div className="adjustment-section">
 
     <div className="adjustment-double-buttons">
@@ -3258,7 +3272,7 @@ const DashedDivider: React.FC = () => {
   );
 };
 
-const renderBlockAdjustmentContent = () => (
+const renderQuickActionContent = () => (
   <div className="adjustment-section">
 
     <div className="adjustment-double-buttons">
@@ -3410,8 +3424,8 @@ const renderBlockAdjustmentContent = () => (
 
 // 渲染整个分区
 const renderSectionContent = (sectionId: string) => {
-  if (sectionId === 'blockAdjustment') return renderBlockAdjustmentContent();
-  if (sectionId === 'localContrast') return renderLocalContrastContent();
+  if (sectionId === 'quickAction') return renderQuickActionContent();
+  if (sectionId === 'detailAdjust') return renderDetailAdjustContent();
   if (sectionId === 'edgeProcessing') return renderEdgeProcessingContent();
   if (sectionId === 'maskSync') return renderMaskSyncContent();
   return null;

@@ -1083,7 +1083,7 @@ title={`● 生成选区时，插件会自动根据选择的模式填充/删除�
 
 ● 由于每次生成选区后，插件会立刻执行若干个步骤。因此想要撤销本次的自动填充，建议回溯历史记录。`
 }>
-                    <span className="title-text">选区笔1.2</span>                    
+                    <span className="title-text">选区笔2.0</span>                    
                 </h3>
                 <div className="button-container">
                     <div 

@@ -26,11 +26,13 @@
  *            · 原为背景/孔洞像素 → 用「代表性密度 medOrig」而非原始 alpha 的高斯光晕，
  *              避免线外因光晕泄漏产生游离杂点；同时平滑新增的边缘/内部孔洞得到干净填充
  *   Phase D  就近洪泛：新像素（alpha>0 但原为背景）从最近原线像素取 RGB
- *   Phase E  标记游离杂点：原 lineMask 中面积 < SPECK_MAX 的 8 连通小域（铅笔屑/碎墨点），
- *            与主线条不连通。它们被 Phase A 从 lineMaskClean 移除、Phase C cov≈0 清空，
- *            但「na==0 保留原值」会原样写回 → 线外游离黑点。此处显式标记供写回清零
- *   Phase F  写回（仅选区；原线 RGB 直通，背景绝对保持；不硬性删原线像素防孔洞；
- *            游离杂点连同 RGB 彻底清除）
+ *   Phase E  原线连通域标记：对 lineMask 做 8 连通分量标注并记录面积，供 Phase E.5/写回判定
+ *            「游离杂点 / 线外残影」——既覆盖 < SPECK_MAX 的小域（铅笔屑/碎墨点），也覆盖
+ *            「已被 SDF 平滑覆盖的大分量中、被 SDF 判为线外(na==0)的原线像素」，避免线条被
+ *            平滑变细后，这些原值像素仍停留在近外部形成游离杂点。
+ *   Phase F  写回（仅选区；原线 RGB 直通，背景绝对保持；被 SDF 判为线外且属于「已覆盖分量」
+ *            或「小杂点分量」的原线像素连同 RGB 彻底清除；仅当某大连通域完全未被 SDF 覆盖
+ *            —— 如极细线条 SDF 失效 —— 才保留原值，防止误删真实细线）
  */
 
 export interface LineSmoothParams {
@@ -99,21 +101,28 @@ export async function processLineSmooth(
   const lineMaskClean = binaryOpen(lineMask, width, height, 2);
   const sd = buildSignedDistance(lineMaskClean, sel, width, height);
 
-  // ================= Phase A.5：标记游离杂点（孤立小连通域） =================
-  // 原 lineMask 中面积 < SPECK_MAX 的 8 连通域视为游离杂点（铅笔屑/碎墨点/灰尘点，
-  // 与主线条不连通）。它们已被 binaryOpen 从 lineMaskClean 移除，Phase C 中 cov≈0，
-  // 但 Phase F 的「na==0 保留原值」会把原 alpha 原样写回 → 线外残留黑点。
-  // 这里显式标记，Phase F 写回时对它们连同 RGB 一并清零。
+  // ================= Phase A.5：原线连通域标注（面积 / 小杂点标记） =================
+  // 对 lineMask 做 8 连通分量分析，记录每个原线像素所属的连通域 id 与面积。
+  //   · area < SPECK_MAX 的分量 → isSpeck=1（铅笔屑/碎墨点/灰尘点，与主线条不连通）；
+  //   · 大面积分量 → 可能是主线条，也可能是 SDF 无法覆盖的极细线条（见 Phase E.5）。
+  // 这些分量信息用于写回阶段：被 SDF 判为线外(na==0)的原线像素，若属于「已被 SDF 覆盖的大
+  // 分量」或「小杂点分量」，则连同 RGB 一并清零，避免线条被平滑变细后这些原值像素停留在
+  // 近外部形成游离杂点。
   const isSpeck = new Uint8Array(pixelCount);
+  const lineCompId = new Int32Array(pixelCount);
+  const lineCompSize: number[] = [0]; // 0 占位，1-based
   {
     const visited = new Uint8Array(pixelCount);
     const stack = new Int32Array(pixelCount);
+    let compId = 0;
     for (let start = 0; start < pixelCount; start++) {
       if (!lineMask[start] || visited[start]) continue;
+      compId++;
       let head = 0, tail = 0;
       stack[tail++] = start;
       visited[start] = 1;
       const begin = tail - 1; // 该连通域在 stack 中的起点
+      lineCompId[start] = compId;
       while (head < tail) {
         const cur = stack[head++];
         const cx = cur % width;
@@ -128,12 +137,15 @@ export async function processLineSmooth(
             const nb = yy * width + xx;
             if (lineMask[nb] && !visited[nb]) {
               visited[nb] = 1;
+              lineCompId[nb] = compId;
               stack[tail++] = nb;
             }
           }
         }
       }
-      if (tail - begin < SPECK_MAX) {
+      const size = tail - begin;
+      lineCompSize[compId] = size;
+      if (size < SPECK_MAX) {
         for (let k = begin; k < tail; k++) isSpeck[stack[k]] = 1;
       }
     }
@@ -247,6 +259,29 @@ export async function processLineSmooth(
   }
   for (let i = 0; i < pixelCount; i++) strokeAlpha[i] = cleaned[i];
 
+  // ================= Phase E.5：分量级覆盖判定（区分「被平滑的大分量」与「SDF 失效的细线」） =================
+  // 对每个原线连通域统计：总像素数 cnt、其中被 SDF 平滑覆盖(输出 na>0)的像素数 hit。
+  // 覆盖率 cov = hit / cnt。判定：
+  //   · cov >= COVER_MIN → 该分量确实被 SDF 平滑处理（线条变细是其正常结果）。此时分量内
+  //     任何「原线像素但输出 na==0」的像素，只是被平滑推到线外的残留，写回时连同 RGB 清零，
+  //     杜绝线条变细后近外部的游离杂点。
+  //   · cov <  COVER_MIN → 该分量几乎完全未被 SDF 覆盖，最可能是极细线条(线宽 < 2σ)导致 SDF
+  //     平滑后整体塌缩、本应保留却全部 na==0。此时「na==0 保留原值」以保全真实线条，避免误删。
+  const COVER_MIN = 0.25;
+  const compHits = new Float32Array(lineCompSize.length);
+  const compCnts = new Float32Array(lineCompSize.length);
+  for (let i = 0; i < pixelCount; i++) {
+    if (sel[i] !== 1) continue;
+    const cid = lineCompId[i];
+    if (cid <= 0) continue;
+    compCnts[cid]++;
+    if (strokeAlpha[i] > 0) compHits[cid]++;
+  }
+  const compCovered = new Uint8Array(lineCompSize.length);
+  for (let cid = 1; cid < lineCompSize.length; cid++) {
+    if (compCnts[cid] > 0 && compHits[cid] / compCnts[cid] >= COVER_MIN) compCovered[cid] = 1;
+  }
+
   // ================= Phase E（写回）：原线直通 / 杂点清零 / 背景保持 =================
   for (let i = 0; i < pixelCount; i++) {
     if (sel[i] !== 1) continue;
@@ -266,15 +301,39 @@ export async function processLineSmooth(
         }
       }
       // 原线像素（a0>0）：RGB 直通保持原色，只更新 alpha
-    } else if (isSpeck[i]) {
-      // 游离杂点：算法判定不在平滑线条上（na==0），且原为孤立小连通域 →
-      // 连同 RGB 彻底清除，杜绝「线外游离像素杂点」残留。
-      out[p + 3] = 0;
-      out[p] = 0;
-      out[p + 1] = 0;
-      out[p + 2] = 0;
+    } else {
+      // na==0：输出判定该像素在线外（被平滑移除 / 残留 / 杂点）
+      const cid = lineCompId[i];
+      // 仅当「属于小杂点分量」或「属于已被 SDF 覆盖的大分量」时才考虑清除：
+      // 这两种情况 na==0 的残留都是应被平滑掉、不该保留在原位的像素（含你说的线条变细后
+      // 停留在近外部的游离杂点）。
+      // 否则（大分量但完全未被 SDF 覆盖，极细线情况）保留原值，避免误删真实细线。
+      if (isSpeck[i] || (cid > 0 && compCovered[cid])) {
+        // 额外守卫：若该 na==0 原线像素被「输出>0 的像素」完全包围，则说明它位于新线条
+        // 内部（被平滑后留下的 1px 孔洞），此时保留原值，避免在线条内部误开洞。
+        // 仅当它在 8 邻域内至少存在一个「背景空位(na==0)」才视为外观残留 → 清除。
+        let hasEmptyNbr = false;
+        const cx = i % width;
+        const cy = (i - cx) / width;
+        for (let dy = -1; dy <= 1 && !hasEmptyNbr; dy++) {
+          const yy = cy + dy;
+          if (yy < 0 || yy >= height) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const xx = cx + dx;
+            if (xx < 0 || xx >= width) continue;
+            if (strokeAlpha[yy * width + xx] <= 0) { hasEmptyNbr = true; break; }
+          }
+        }
+        if (hasEmptyNbr) {
+          out[p + 3] = 0;
+          out[p] = 0;
+          out[p + 1] = 0;
+          out[p + 2] = 0;
+        }
+      }
+      // 其余 na==0 情况：不写，原值保留（背景保持 / SDF 失效的细线保持 / 线条内部孔洞保持）
     }
-    // na==0 且非杂点：不写，原值保留（主线/细线像素不会因边缘细化被误删成孔洞；背景保持）
   }
 
   return out.buffer;
