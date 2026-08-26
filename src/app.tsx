@@ -473,25 +473,33 @@ class App extends React.Component<AppProps, AppState> {
                     return;
                 }
 
-                if (needsHistory) {
-                    await this.setHistoryBrushSource();
-                }
-                // 只有当选区选项值不为初始值时才执行选区修改
-                if (needsSelectionMod) {
-                    await this.applySelectionModification();
-                }
-                // feather=0 时整段 applyFeather 都是无效工作，直接跳过
-                if (needsFeather) {
-                    await this.applyFeather(featherAmount);
-                }
-                const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
-                const fillSuccess = await this.fillSelection(layerInfo);
-                if (needsStroke && fillSuccess) {
-                    await strokeSelection(this.state, layerInfo);
-                }
-                if (needsDeselect) {
-                    await this.deselectSelection();
-                }
+                // 把整次填充（历史画笔源 / 选区修改 / 羽化 / 填充 / 描边 / 取消选区）
+                // 合并成【一条】历史记录，方便整体撤回。suspendHistory 本身是
+                // executeAsModal 的封装，可直接嵌套在当前 executeAsModal 作用域内使用。
+                const modeLabel =
+                    this.state.fillMode === 'pattern' ? '选区图案填充'
+                    : this.state.fillMode === 'gradient' ? '选区渐变填充' : '选区纯色填充';
+                await doc.suspendHistory(async () => {
+                    if (needsHistory) {
+                        await this.setHistoryBrushSource();
+                    }
+                    // 只有当选区选项值不为初始值时才执行选区修改
+                    if (needsSelectionMod) {
+                        await this.applySelectionModification();
+                    }
+                    // feather=0 时整段 applyFeather 都是无效工作，直接跳过
+                    if (needsFeather) {
+                        await this.applyFeather(featherAmount);
+                    }
+                    const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
+                    const fillSuccess = await this.fillSelection(layerInfo);
+                    if (needsStroke && fillSuccess) {
+                        await strokeSelection(this.state, layerInfo);
+                    }
+                    if (needsDeselect) {
+                        await this.deselectSelection();
+                    }
+                }, modeLabel);
             }, { commandName: '正在处理选区中......' });
         } catch (error) {
             console.error('❌ 处理失败:', error);
@@ -665,7 +673,7 @@ class App extends React.Component<AppProps, AppState> {
                 return true;
             }
 
-            if (this.state.createNewLayer) {
+            if (this.state.createNewLayer && this.state.fillMode !== 'gradient') {
                 await action.batchPlay(
                     [{
                         _obj: "make",
@@ -706,7 +714,7 @@ class App extends React.Component<AppProps, AppState> {
                         blendMode: this.state.blendMode,
                         gradient: this.state.selectedGradient,
                         preserveTransparency: this.state.selectedGradient.preserveTransparency
-                    }, layerInfo, this.state);
+                    }, layerInfo, this.state, this.state.createNewLayer);
                     return true;
                 } else {
                     // 缺少渐变预设，显示警告并跳过填充

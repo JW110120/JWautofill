@@ -21,7 +21,7 @@ interface LayerInfo {
 }
 
 export class GradientFill {
-    static async fillGradient(options: GradientFillOptions, layerInfo: LayerInfo, state?: any) {
+    static async fillGradient(options: GradientFillOptions, layerInfo: LayerInfo, state?: any, createNewLayer?: boolean) {
         // 检查是否有渐变stops
         if (!options.gradient.stops || options.gradient.stops.length === 0) {
             console.error("❌ 没有可用的渐变stops，无法填充");
@@ -154,9 +154,7 @@ export class GradientFill {
                       }
                    ],
                    apply: true,
-                   _options: {
-                      dialogOptions: "dontDisplay"
-                   }
+                   _isCommand: false
         };
        
         const mergeLayers = {
@@ -170,12 +168,20 @@ export class GradientFill {
             await action.batchPlay([createGradientLayer], {});
             await action.batchPlay([setLayerProperties], {});
 
-            if (options.preserveTransparency) {
+            // 新图层模式：渐变内容图层自身即为目标新图层，下方无内容可裁切，
+            // 不能做剪贴蒙版（会把渐变裁掉）
+            if (options.preserveTransparency && !createNewLayer) {
                 await action.batchPlay([createClippingMask], {});
             }
             
-            // 根据图层是否有像素来决定最后的操作
-            if (!layerInfo.hasPixels) {
+            // 根据图层与新图层模式决定最后的操作
+            if (createNewLayer) {
+                // 新图层模式：渐变内容图层本身就是新图层，仅栅格化，不向下合并，
+                // 否则 mergeLayersNew 会跳过新建的空白图层、把渐变合并进原图层。
+                // 之后应用图层蒙版（apply），让结果图层处于“已应用蒙版、无蒙版”的状态。
+                await action.batchPlay([rasterizeLayer], {});
+                await action.batchPlay([applyMask], {});
+            } else if (!layerInfo.hasPixels) {
                 await action.batchPlay([rasterizeLayer], {});
                 await action.batchPlay([applyMask], {});
             } else {
