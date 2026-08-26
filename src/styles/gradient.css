@@ -286,6 +286,11 @@ sp-color-slider {
     align-items: center;
 }
 
+/* 角度行整体视觉上移 3px，使其与上下内容间距更均衡 */
+.gradient-angle-setting {
+    transform: translateY(-3px);
+}
+
 .gradient-setting-item label {
     font-size: 12px;
     color: var(--text-color);

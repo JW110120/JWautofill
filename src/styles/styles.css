@@ -97,9 +97,8 @@ uxp-panel[panelid="com.listen2me.pixeladjustment"],
 }
 
 .main-button:hover {
+    /* hover 与下方选区选项一致：半透明蓝（--hover-bg），开启/关闭态相同 */
     background-color: var(--hover-bg);
-    border-color: var(--primary-color);
-    transform: scale(1.02);
 }
 
 .main-button:active {
@@ -107,28 +106,14 @@ uxp-panel[panelid="com.listen2me.pixeladjustment"],
     transform: scale(0.98);
 }
 
-/* 功能开启：整个按钮显示为绿色 */
-.main-button.enabled {
-    background-color: rgb(55, 158, 62);
-    border-color: rgb(55, 158, 62);
-}
-
+/* 功能开启：背景与边框保持主题色不变，仅文字变亮（深主题白 / 浅主题黑）+ 绿灯亮起 */
 .main-button.enabled .button-text {
-    color: #ffffff;
+    color: var(--enabled-text-color);
 }
 
 .main-button.enabled .button-indicator {
-    background-color: #ffffff;
-}
-
-.main-button.enabled:hover {
-    background-color: rgb(26, 216, 23);
-    border-color: rgb(26, 216, 23);
-}
-
-.main-button.enabled:active {
-    background-color: rgb(26, 216, 23);
-    border-color: rgb(26, 216, 23);
+    /* 提示灯：与 AdjustmentPanel 绿灯一致 */
+    background-color: #2ecc71;
 }
 
 /* 禁用状态下的悬停效果 */
@@ -161,8 +146,8 @@ uxp-panel[panelid="com.listen2me.pixeladjustment"],
 }
 
 .button-indicator.enabled {
-  /* PS 27.9 中 --uxp-host-link-color 已不再是绿色，直接固定为绿色 */
-  background-color: rgb(26, 216, 23);
+  /* 与 AdjustmentPanel 绿灯一致 */
+  background-color: #2ecc71;
 }
 
 .button-indicator.disabled {

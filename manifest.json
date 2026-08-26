@@ -33,7 +33,7 @@
             },
             "icons": [
                 {
-                    "path": "icons/light-panel.png",
+                    "path": "icons/App/light-panel.png",
                     "width": 23,
                     "height": 23,
                     "scale": [1,2],
@@ -41,7 +41,7 @@
                     "species": ["chrome"]
                 },
                 {
-                    "path": "icons/dark-panel.png",
+                    "path": "icons/App/dark-panel.png",
                     "width": 23,
                     "height": 23,
                     "scale": [1,2],
@@ -74,7 +74,7 @@
             },
             "icons": [
                 {
-                    "path": "icons/light-panel.png",
+                    "path": "icons/AdjustmentPanel/light-panel.png",
                     "width": 23,
                     "height": 23,
                     "scale": [1,2],
@@ -82,7 +82,7 @@
                     "species": ["chrome"]
                 },
                 {
-                    "path": "icons/dark-panel.png",
+                    "path": "icons/AdjustmentPanel/dark-panel.png",
                     "width": 23,
                     "height": 23,
                     "scale": [1,2],
@@ -95,7 +95,7 @@
     "id": "com.listen2me.jwautofill",
     "icons": [
         {
-            "path": "icons/plugin.png",
+            "path": "icons/App/plugin.png",
             "width": 48,
             "height": 48,
             "scale": [1,2],

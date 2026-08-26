@@ -146,5 +146,6 @@
 
 .calculation-mode-radio .radio-item-label {
     font-size: 13px;
+    margin-top: 3px;
     color: var(--text-color);
 }

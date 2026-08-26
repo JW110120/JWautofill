@@ -18,6 +18,8 @@ const createThemeStyles = () => {
       --slider-bg: #eee;
       --scrollbar-thumb: #c0c0c0;
       --scrollbar-track: rgba(255, 255, 255, 0.1);
+      /* 主按钮「功能开启」态文字色：深主题为白，浅主题在下方 override 为黑 */
+      --enabled-text-color: #ffffff;
       /* 下拉菜单背景：与主面板 sp-picker 自动渲染的主题色统一
          （darkest #080808 / dark #2f2f2f / light #e1e1e1 / lightest #ffffff） */
       --dropdown-bg-color: #2f2f2f;
@@ -78,10 +80,11 @@ const createThemeStyles = () => {
         --button-down: rgb(174, 174, 174);
         --slider-bg: #ddd;
         --scrollbar-thumb: #606060;
-        --scrollbar-track: rgba(0, 0, 0, 0.1);
-        /* light 主题默认 #ffffff 偏亮，统一改为 #e1e1e1 */
-        --dropdown-bg-color: #e1e1e1;
-      }
+      --scrollbar-track: rgba(0, 0, 0, 0.1);
+      /* light 主题默认 #ffffff 偏亮，统一改为 #e1e1e1 */
+      --enabled-text-color: rgb(10, 10, 10);
+      --dropdown-bg-color: #e1e1e1;
+    }
     }
 
     @media (prefers-color-scheme: lightest) {
@@ -98,10 +101,11 @@ const createThemeStyles = () => {
         --button-bg: rgb(250, 250, 250);
         --button-down: rgb(230, 230, 230);
         --slider-bg: #ddd;
-        --scrollbar-thumb: #505050;
-        --scrollbar-track: rgba(0, 0, 0, 0.05);
-        --dropdown-bg-color: #ffffff;
-      }
+      --scrollbar-thumb: #505050;
+      --scrollbar-track: rgba(0, 0, 0, 0.05);
+      --enabled-text-color: rgb(10, 10, 10);
+      --dropdown-bg-color: #ffffff;
+    }
     }
   `;
 };

@@ -1857,7 +1857,6 @@ interface PatternPickerProps {
                                 <label
                                     htmlFor="rotateAllCheckbox"
                                     className="pattern-checkbox-label"
-                                    style={{marginLeft: '20px'}}
                                     onClick={() => setRotateAll(!rotateAll)}
                                 >
                                     旋转阵列：

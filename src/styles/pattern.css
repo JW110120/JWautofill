@@ -261,20 +261,22 @@
 
   .pattern-checkbox-input {
       cursor: pointer;
-      /* 与标签之间留出 8px 间距（参考渐变设置面板 gap:8px） */
-      margin-left: 4px;
+      /* 缩短与标签的间距（亲密性原则），但保留空隙不贴太紧 */
+      margin-left: 2px;
   }
 
   .pattern-checkbox-input:not(:last-child){
-     margin-right: 20px;
+     margin-right: 12px;
 }
 
   .pattern-checkbox-label {
       font-size: 13px;
       color: var(--text-color);
-      margin-left: 10px;
+      margin-left: 6px;
       cursor: pointer;
-      margin-right: 4px;
+      margin-right: 2px;
+      white-space: nowrap;
+      flex-shrink: 0;
   }
 
 

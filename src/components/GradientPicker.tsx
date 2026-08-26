@@ -1807,7 +1807,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 </div>
 
                 {gradientType === 'linear' && (
-                    <div className="gradient-setting-item">
+                    <div className="gradient-setting-item gradient-angle-setting">
                         <label onMouseDown={handleAngleMouseDown} style={{ cursor: isDraggingAngle ? 'ew-resize' : 'ew-resize' }}>角度：</label>
                         <RangeSlider
                             min={0}

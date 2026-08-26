@@ -2958,7 +2958,7 @@ const renderEdgeProcessingContent = () => (
     <div className="adjustment-divider"></div>
 
     <div className="adjustment-double-buttons">
-      <div role="button" tabIndex={0} className="adjustment-button" onClick={handlePencilAASmooth} title={`● 消除铅笔线条的边缘锯齿，观感接近画笔工具普通圆头笔的笔触。
+      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-wide" onClick={handlePencilAASmooth} title={`● 消除铅笔线条的边缘锯齿，观感接近画笔工具普通圆头笔的笔触。
 ● 原理：重建线条的覆盖率场（把二值 mask 平滑成亚像素连续渐变，按像素内覆盖面积比例重新生成 alpha）——曲线平滑不"抖"、边缘连续渐变无"圈"、拐角自然圆润。
 ● 与高斯模糊的区别：高斯只软化锯齿、残留周期性明暗节律（抖）；本功能直接重建边缘。
 ● 边缘过渡带 alpha 连续渐变，直通色保持笔色/背景色（原透明像素改写为线条色），无灰边/黑边。
@@ -2999,7 +2999,7 @@ const renderEdgeProcessingContent = () => (
     <div className="adjustment-divider"></div>
 
     <div className="adjustment-double-buttons">
-      <div role="button" tabIndex={0} className="adjustment-button" onClick={() => handleAlphaAlign(false, 'down')} title={`● 统一半透明笔刷交叉点的不透明度，消除两笔交汇处出现的"深色点"。
+      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-wide" onClick={() => handleAlphaAlign(false, 'down')} title={`● 统一半透明笔刷交叉点的不透明度，消除两笔交汇处出现的"深色点"。
 
 ● 分析选区内像素的 alpha，把局部异常偏高（如交叉叠加）的区域拉回周围线条的自然水平，与周边自然衔接。
 
@@ -3009,7 +3009,7 @@ const renderEdgeProcessingContent = () => (
 
 ● 会排除选区内的羽化渐变与极低不透明度残留的干扰。`}>alpha下对齐</div>
 
-      <div role="button" tabIndex={0} className="adjustment-button" onClick={() => handleAlphaAlign(false, 'up')} title={`● 与 alpha下对齐 对称：检测线条上比主体偏淡/被削弱的像素（淡斑、断点、被擦淡处），以周围线条主体水平为参照拉高，让线条更均匀。
+      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-wide" onClick={() => handleAlphaAlign(false, 'up')} title={`● 与 alpha下对齐 对称：检测线条上比主体偏淡/被削弱的像素（淡斑、断点、被擦淡处），以周围线条主体水平为参照拉高，让线条更均匀。
 
 ● 只修"明显偏淡"（参照比像素高 ≥5）：自然软边过渡、整条均匀偏淡的线条不会被误拉。
 
@@ -3017,7 +3017,7 @@ const renderEdgeProcessingContent = () => (
     </div>
 
     <div className="adjustment-double-buttons">
-      <div role="button" tabIndex={0} className="adjustment-button" onClick={() => handleAlphaAlign(true, 'down')} title={`● 与 alpha下对齐 类似，但用于"低透明度背景（如 alpha=50 的色块）上画线"的场景——统一化线条交叉区域的叠加凸起，同时保护背景色块与线条自身不被侵蚀。
+      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-wide" onClick={() => handleAlphaAlign(true, 'down')} title={`● 与 alpha下对齐 类似，但用于"低透明度背景（如 alpha=50 的色块）上画线"的场景——统一化线条交叉区域的叠加凸起，同时保护背景色块与线条自身不被侵蚀。
 
 ● 参照估计会排除背景水平（环带中位数），只以线条主体水平为参照：交叉凸起拉回线水平，背景保持不变。
 
@@ -3027,7 +3027,7 @@ const renderEdgeProcessingContent = () => (
 
 ● 仅对非背景的普通像素图层生效，只修改选区内 Alpha>0 的区域（RGB 不变）。`}>保底下对齐</div>
 
-      <div role="button" tabIndex={0} className="adjustment-button" onClick={handleLineEnhancement} title={`● 针对边缘线条的 Alpha 进行增强，使轮廓更清晰。
+      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-wide" onClick={handleLineEnhancement} title={`● 针对边缘线条的 Alpha 进行增强，使轮廓更清晰。
 
 ● 适合线稿、UI 描边、图标轮廓等。
 
@@ -3360,7 +3360,7 @@ const renderBlockAdjustmentContent = () => (
 
 ● 仅修改 RGB，alpha 保持不变。`}>特殊木刻</div>
 
-      <div role="button" tabIndex={0} className="adjustment-button" onClick={resetSpecialWoodcutParams} title="一键恢复默认参数">重置</div>
+      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-lv2" onClick={resetSpecialWoodcutParams} title="一键恢复默认参数">重置</div>
     </div>
 
     <div className="adjustment-slider-container">

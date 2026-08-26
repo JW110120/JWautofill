@@ -130,6 +130,8 @@
   height: 30px;
   width: 80px;
   margin: 0 0 8px -2px;
+  /* 4 字档默认内边距：保证文字与按钮左右边框有足够间距 */
+  padding: 0 10px;
   background-color: var(--button-bg);
   color: var(--text-color);
   border: 1px solid var(--border-color);
@@ -346,11 +348,22 @@
   margin: 7px 13px 13px -13px;
 }
 
-/* 6 字按钮（浅线/深线同层补色）：加宽并留内边距，保证文字与按钮左右边缘有足够间距 */
+/* 按钮三档宽度：按按钮汉字字数 2 / 4 / 6 分级。
+   各档均使用 box-sizing: border-box + 左右 padding，保证文字与按钮左右边框有足够边距。
+   - 4 字档为 .adjustment-button 默认（width: 80px + padding 0 10px）；
+   - 2 字档 .adjustment-button-lv2；
+   - 6 字档 .adjustment-button-wide。 */
+.adjustment-button-lv2 {
+  width: 64px;
+  padding: 0 10px;
+}
+
+/* 6 字按钮（浅线/深线同层补色、铅笔去锯齿、alpha 上/下对齐、保底下对齐、线条加黑）：
+   自适应宽度并留内边距，保证文字与按钮左右边缘有足够间距 */
 .adjustment-button-wide {
   width: auto;
-  min-width: 96px;
-  padding: 0 8px;
+  min-width: 112px;
+  padding: 0 10px;
 }
 
 /* 虚线分隔线（同层补色 与 分层补色 之间）：
