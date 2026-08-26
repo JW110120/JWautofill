@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>扣黑修复 · 黑底观感对比</title>
+<style>
+  body { background:#1a1a1a; color:#ddd; font-family:system-ui,"Microsoft YaHei",sans-serif; margin:0; padding:24px; }
+  h1 { font-size:18px; font-weight:600; }
+  .row { display:flex; gap:28px; align-items:flex-start; margin:18px 0; }
+  .case { text-align:center; }
+  .sw { width:120px; height:120px; border:1px solid #444; background:#000; display:flex; align-items:center; justify-content:center; }
+  .sw > div { width:80px; height:80px; border-radius:6px; }
+  .lab { margin-top:8px; font-size:13px; }
+  .tag { font-size:11px; color:#9aa; }
+  .err { font-size:11px; }
+  .ok { color:#6f6; } .bad { color:#f86; }
+  h2 { font-size:14px; color:#bbb; border-top:1px solid #333; padding-top:14px; }
+</style>
+</head>
+<body>
+<h1>扣黑结果 Z 在黑底上的观感（修复前后对比）</h1>
+<p class="tag">目标：Z 在黑底上看起来 ≈ 原图层 X 在黑底上。数值来自 sim_black_fix.py（内容图层输入 X=(x,a)）。</p>
+
+<div id="rows"></div>
+
+<h2>说明</h2>
+<p style="max-width:760px;line-height:1.6;font-size:13px;color:#bbb">
+当前实现中，反色往返会把图层「解除预乘」：内容图层 X=(x,a) 经 Invert→扣白→Invert 后变成 (x,1)，
+黑底观感从 <b>x·a</b> 变成 <b>x</b>，因 x &gt; x·a 而<b>偏亮</b>。<br>
+修复：处理前抓取预乘值 rgb·(alpha/255)，处理完用它覆盖 RGB、遮罩内 alpha 置 255，
+使 Z 在黑底观感 == 原 X 在黑底观感（误差 0）。
+</p>
+
+<script>
+// 来自 sim_black_fix.py 的实测值
+const data = [
+  { name:"红 a=0.50", x:[121,26,26], cur:[241,52,52], fix:[121,26,26] },
+  { name:"绿 a=0.70", x:[53,155,39], cur:[76,221,56], fix:[53,155,39] },
+  { name:"交叉 a=0.85", x:[89,163,47], cur:[105,191,55], fix:[89,163,47] },
+];
+const rgb = a => `rgb(${a[0]|0},${a[1]|0},${a[2]|0})`;
+const err = (a,b)=>Math.max(...a.map((v,i)=>Math.abs(v-b[i])));
+const rows = document.getElementById('rows');
+for (const d of data){
+  const eCur = err(d.cur,d.x), eFix = err(d.fix,d.x);
+  const cell = (title,val,e,cls)=>`
+    <div class="case">
+      <div class="sw"><div style="background:${rgb(val)}"></div></div>
+      <div class="lab">${title}</div>
+      <div class="err ${cls}">误差 ${e}/255</div>
+    </div>`;
+  const row = document.createElement('div');
+  row.className='row';
+  row.innerHTML =
+    cell('原图层 X 在黑底', d.x, 0, 'ok') +
+    cell('当前 Z 在黑底（偏亮）', d.cur, eCur, 'bad') +
+    cell('修复后 Z 在黑底', d.fix, eFix, 'ok');
+  rows.appendChild(row);
+}
+</script>
+</body>
+</html>
