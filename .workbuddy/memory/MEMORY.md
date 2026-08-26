@@ -25,3 +25,12 @@
 - **「保留原值」写回陷阱**：Phase E 里 `na==0 不写、保留原值` 是防主线被误删成孔洞的，但它也会把**原图游离杂点**（alpha>THR、被 binaryOpen 移除、cov≈0 已清空）原样写回 → 线外黑点残留。**任何"清除某类像素"的逻辑必须显式清零，不能依赖 strokeAlpha==0 就以为删掉了**。
 - 游离杂点判定：对原 `lineMask` 做 8 连通域分析，面积 < `SPECK_MAX=10` 且与主线条不连通 → 杂点；写回时连 RGB 一起清零（Phase A.5 + Phase E）。
 - 测试指标注意：`alpha[i] <= THR && outA[i] > THR` 只统计「新生成」像素，**检测不到原杂点存活**；要加「杂点像素集合输出仍>THR」的指标。
+
+## 扣白/扣黑（knockoutBatchProcessor.ts，2026-08-26 重构为 batchPlay 版）
+
+- **核心思路**（用户手动验证）：合并图 Ctrl+点击 RGB 复合通道载入亮度选区 → Delete 清除亮部（alpha *= 1−亮度）→ 复制 N 份合并（alpha 按 1−(1−a)^N 增强）。**像素级无法还原原图层（欠定）**，实质是"放回原背景视觉一致"。
+- **扣黑偏暗根因**：黑底合成 `Z_rgb = X_rgb·a` 是预乘暗色（复制合并不改 RGB）；且 Z 上内容亮度低 → 单份 alpha 小 → 固定 7 份远不够收敛（黑底暗色对 alpha 误差敏感）。白底扣白因 RGB 接近白、对误差不敏感所以"看起来行"。
+- **扣黑纠正 = 反色法**：Z --Invert--> Z'(=反色X的白底合成) → 扣白流程 → Invert 回来；**份数 N 动态** = ceil(ln0.005/ln(1−aMin))，aMin = 选区灰度(∈(0,255))对应 alpha 的 5% 分位，clamp [3,40]。案例红圆 N=23（用户 7 份视觉差 22.5/255 → 动态后 0.48/255）。
+- **batchPlay 命令速查**：载入通道选区 `{_obj:'set',_target:[{_ref:'channel',_property:'selection'}],to:{_ref:'channel',_enum:'channel',_value:'RGB'}}`；Delete `{_obj:'clear'}`；反色 `{_obj:'invert'}`（只反 RGB 不动 alpha）；复制+向下合并用 UXP DOM `Layer.duplicate()`/`Layer.merge()`（官方 API 比 batchPlay mergeLayers 稳）。
+- **适用性**：扣白适合深/中色内容，扣黑适合浅/中色内容（对比度决定可恢复性，信息论极限）。
+- 验证脚本：analysis/knockout/{sim_knockout.py, sim_invert_fix.py, whole_image_sim.py}；对比图 analysis/knockout/knockout_verify.html。

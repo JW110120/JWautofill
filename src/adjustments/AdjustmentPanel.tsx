@@ -13,7 +13,7 @@ import { processHighFrequencyEnhancement } from './highFrequencyEnhancer';
 import { processSmartEdgeSmooth, defaultSmartEdgeSmoothParams } from './smartEdgeSmoothProcessor';
 import { processPencilAASmooth, defaultPencilAAParams } from './pencilAASmoothProcessor';
 import { checkEditingState, processPixelData, applyProcessedPixels, writeFullPixelsToLayer } from './pixelDataProcessor';
-import { processKnockout } from './knockoutProcessor';
+import { runKnockoutBatch } from './knockoutBatchProcessor';
 import { LicenseManager } from '../utils/LicenseManager';
 import { action, app, core, imaging } from 'photoshop';
 import type { Gradient } from '../types/state';
@@ -3273,8 +3273,10 @@ const DashedDivider: React.FC = () => {
   );
 };
 
-// 扣白 / 扣黑：把“曾在纯白/纯黑底上叠加的半透明色”反推回“透明底+原半透明色”。
-// 仅普通像素图层可用；背景图层直接警告并终止；无选区时 processPixelData 已默认全图层。
+// 扣白 / 扣黑（batchPlay 版，替代原像素级算法）：
+// 复刻手动验证的方案 —— 载入 RGB 复合通道亮度选区（Ctrl+点击）→ Delete 清除亮部
+// → 复制 N 份合并增强 alpha。扣黑用反色法（Invert→扣白流程→Invert）纠正“偏暗”，
+// N 按内容亮度动态计算。仅普通像素图层可用；背景图层直接警告并终止。
 const handleKnockout = async (mode: 'white' | 'black') => {
   if (!handleLicenseBeforeAction()) return;
   const label = mode === 'white' ? '白' : '黑';
@@ -3283,7 +3285,7 @@ const handleKnockout = async (mode: 'white' | 'black') => {
     await executeAsModal(async () => {
       const editingState = await checkEditingState();
       if (!editingState.isValid) return;
-      const { layer, isBackgroundLayer } = editingState;
+      const { isBackgroundLayer } = editingState;
 
       // 仅普通像素图层可用，背景图层弹出警告并终止
       if (isBackgroundLayer) {
@@ -3291,24 +3293,9 @@ const handleKnockout = async (mode: 'white' | 'black') => {
         return;
       }
 
-      const selectionBounds = await getSelectionData();
-      if (!selectionBounds) {
-        await core.showAlert({ message: '获取文档信息失败' });
-        return;
-      }
-
       await runWithTemporaryUnlock(async () => {
-        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
-        // 原地修改 fullPixelData（不额外分配大数组），适配低配机器
-        processKnockout(pixelResult.fullPixelData, pixelResult.selectionIndices, mode);
-        // 直接写回整层：不走选区系数混合，省去大数组，性能更友好
-        await writeFullPixelsToLayer(
-          pixelResult.fullPixelData,
-          layer,
-          selectionBounds.docWidth,
-          selectionBounds.docHeight,
-          isBackgroundLayer
-        );
+        // batchPlay 原生流程：反色(仅扣黑) → 载入亮度选区 → Clear → 复制N份合并 → 反色(仅扣黑)
+        await runKnockoutBatch(mode);
       });
     });
     giveFocusBackToPS();
@@ -3474,11 +3461,11 @@ const renderQuickActionContent = () => (
 
     <div className="adjustment-double-buttons">
       <div role="button" tabIndex={0} className="adjustment-button" onClick={handleKnockoutWhite} title={`● 仅普通像素图层可用，背景图层不可用。
-● 把图层当作曾在纯白底上叠加的半透明色，反推回透明底+原半透明色：白色区域变透明，彩色区域按“非白程度”恢复 alpha 与原色。
-● 无选区时作用于整层。`}>扣白</div>
+● 复刻手动验证方案：Ctrl+点击 RGB 通道载入亮度选区 → Delete 清除亮部 → 复制 N 份合并增强 alpha（N 自动按内容亮度计算，最少 7 份）。
+● 用于把“纯白底上叠加的半透明内容”抠回透明底；结果放在白底上与原图视觉一致。`}>扣白</div>
       <div role="button" tabIndex={0} className="adjustment-button" onClick={handleKnockoutBlack} title={`● 仅普通像素图层可用，背景图层不可用。
-● 把图层当作曾在纯黑底上叠加的半透明色，反推回透明底+原半透明色：黑色区域变透明，彩色区域按“非黑程度”恢复 alpha 与原色。
-● 无选区时作用于整层。`}>扣黑</div>
+● 反色法纠正思路：先 Invert 把黑底问题转成白底问题，再走扣白流程，最后 Invert 回来（数学上与“反选删暗部”等价，但份数自动放大到 alpha 收敛，解决偏暗）。
+● 用于把“纯黑底上叠加的半透明内容”抠回透明底；结果放在黑底上与原图视觉一致。`}>扣黑</div>
     </div>
   </div>
 );
