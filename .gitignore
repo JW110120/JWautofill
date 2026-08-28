@@ -4,9 +4,32 @@ dist/
 # 依赖目录
 node_modules/
 
-# Yarn
+# Yarn / npm 锁文件（按需要可改为提交；当前选择不提交，避免跨机差异）
 yarn.lock
 
-# 操作系统文件
+# ============ .NET / C# 编译缓存（原生守护进程） ============
+# 这些是可以从源码重新编译的缓存，绝不应提交到 GitHub
+native/HotkeyDaemon/bin/
+native/HotkeyDaemon/obj/
+bin/
+obj/
+*.user
+*.suo
+*.userprefs
+.vs/
+*.pdb
+*.cache
+
+# ============ TypeScript / 构建中间产物 ============
+*.tsbuildinfo
+
+# ============ 日志 ============
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ============ 编辑器 / 系统 ============
+.vscode/
 .DS_Store
-Thumbs.db 
+Thumbs.db

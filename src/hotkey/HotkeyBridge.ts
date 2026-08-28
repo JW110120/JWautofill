@@ -74,9 +74,12 @@ export function onConfig(fn: ConfigListener): () => void {
   };
 }
 
+// UXP 运行环境自带全局 WebSocket（Adobe UXP 标准 API），无需任何 npm 依赖。
+// 之前这里还有一行 Node 版的 `require('ws')` 作为回退，会被 webpack 在构建期静态分析并试图打包，
+// 从而报 “Can't resolve 'ws'”。UXP 里 globalThis.WebSocket 必定存在，删掉该回退即可消除警告。
 function resolveWs(): any {
-  if ((globalThis as any).WebSocket) return (globalThis as any).WebSocket;
-  try { return require('ws'); } catch { return null; }
+  const W = (globalThis as any).WebSocket;
+  return W || null;
 }
 
 // ===== 连接守护进程 =====
