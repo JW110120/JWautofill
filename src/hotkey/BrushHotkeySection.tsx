@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { HotkeyEntry, connectHotkeyDaemon, onConfig, pushConfig, enumerateBrushes } from './HotkeyBridge';
+import { HotkeyEntry, connectHotkeyDaemon, onConfig, pushConfig, enumerateBrushes, onDaemonStatus, launchDaemon } from './HotkeyBridge';
 import { ExpandIcon } from '../styles/Icons';
 
 // 笔刷热键分区：在调整面板内录制「笔刷 + 快捷键」，持久化到共享配置，
@@ -11,6 +11,14 @@ const itemStyle: React.CSSProperties = {
   background: 'rgba(255,255,255,0.06)', fontSize: 12
 };
 
+// 命名键 -> 与守护进程 ParseCombo 一致的 token（避免依赖字符首字母误判）
+const NAMED_KEYS: Record<string, string> = {
+  Backspace: 'Backspace', Tab: 'Tab', Enter: 'Enter', Escape: 'Escape',
+  Delete: 'Delete', Insert: 'Insert', Home: 'Home', End: 'End',
+  PageUp: 'PageUp', PageDown: 'PageDown',
+  ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right'
+};
+
 export default function BrushHotkeySection() {
   const [collapsed, setCollapsed] = useState(false);
   const [brushes, setBrushes] = useState<string[]>([]);
@@ -19,15 +27,38 @@ export default function BrushHotkeySection() {
   const [usePicker, setUsePicker] = useState(true);
   const [recording, setRecording] = useState(false);
   const [message, setMessage] = useState('');
+  const [daemonConnected, setDaemonConnected] = useState(false);
+  const [daemonPath, setDaemonPath] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('jwauto_daemon_path');
+      if (saved) return saved;
+    } catch { /* ignore */ }
+    // 默认安装位置（install.ps1 会放到这里）
+    return 'C:\\Users\\Administrator\\AppData\\Local\\JWautofill\\daemon\\JWautofillHotkeyDaemon.exe';
+  });
 
   useEffect(() => {
     const unsub = connectHotkeyDaemon();
-    onConfig((list) => setEntries(list));
+    onConfig((list)  => setEntries(list));
+    onDaemonStatus(setDaemonConnected);
     enumerateBrushes().then((b) => { setBrushes(b); setUsePicker(b.length > 0); }).catch(() => {
       setBrushes([]); setUsePicker(false);
     });
     return unsub;
   }, []);
+
+  const startDaemon = () => {
+    const path = daemonPath.trim();
+    if (!path) { setMessage('请先填写守护进程 exe 路径'); return; }
+    const lower = path.toLowerCase();
+    if (lower.endsWith('.ps1') || lower.endsWith('.bat')) {
+      setMessage('这是安装脚本，请右键「使用 PowerShell 运行」或双击 install.bat 安装；安装后请把生成的 exe 路径填到这里');
+      return;
+    }
+    try { localStorage.setItem('jwauto_daemon_path', path); } catch { /* ignore */ }
+    if (launchDaemon(path)) setMessage('已尝试启动守护进程，请稍候…');
+    else setMessage('启动失败：请确认 exe 路径正确，或先用 install.bat 安装');
+  };
 
   const startRecord = () => {
     if (!selectedBrush) { setMessage('请先在上方选择一支笔刷'); return; }
@@ -38,24 +69,29 @@ export default function BrushHotkeySection() {
   useEffect(() => {
     if (!recording) return;
     const onKey = (e: KeyboardEvent) => {
+      const k = e.key;
+      // 纯修饰键（Ctrl/Shift/Alt/Win）只用于组合，不能作为触发键，继续等待实体键
+      if (['Control', 'Shift', 'Alt', 'Meta'].includes(k)) return;
+      if (k === 'Escape') { setRecording(false); setMessage('已取消录制'); return; }
+
       e.preventDefault();
       e.stopPropagation();
+
       const parts: string[] = [];
       if (e.ctrlKey) parts.push('Ctrl');
       if (e.shiftKey) parts.push('Shift');
       if (e.altKey) parts.push('Alt');
       if (e.metaKey) parts.push('Win');
-      let key = e.key;
-      if (key === ' ') key = 'Space';
-      else if (key.length === 1) key = key.toUpperCase();
-      else if (/^F\d+$/.test(key)) { /* F1..F24 直接保留 */ }
-      else if (['Control', 'Shift', 'Alt', 'Meta'].includes(key)) return; // 仅修饰键不作为触发码
-      parts.push(key);
-      const combo = parts.join('+');
-      // 冲突检测
-      if (entries.some(x => x.combo === combo)) {
-        setMessage('该组合键已存在，已覆盖旧映射');
-      }
+
+      let key = '';
+      if (k === ' ') key = 'Space';
+      else if (k.length === 1) key = k.toUpperCase();      // 单字符（字母/数字/符号）
+      else if (/^F\d+$/.test(k)) key = k;                  // F1..F24
+      else if (NAMED_KEYS[k]) key = NAMED_KEYS[k];         // 其余命名键
+      if (!key) return;                                    // 未知键，忽略
+
+      const combo = [...parts, key].join('+');
+      if (entries.some(x => x.combo === combo)) setMessage('该组合键已存在，已覆盖旧映射');
       const entry: HotkeyEntry = { id: 'bk_' + Date.now(), combo, action: 'applyBrush', brush: selectedBrush };
       const next = [...entries.filter(x => x.combo !== combo), entry];
       setEntries(next);
@@ -63,8 +99,9 @@ export default function BrushHotkeySection() {
       else setMessage('推送配置失败（守护进程未运行？）');
       setRecording(false);
     };
-    window.addEventListener('keydown', onKey, { once: true, capture: true } as any);
-    return () => window.removeEventListener('keydown', onKey, { once: true, capture: true } as any);
+    // 注意：不能用 once:true —— 组合键的第一个 keydown 往往是修饰键，需持续监听直到实体键
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [recording, selectedBrush, entries]);
 
   const removeEntry = (id: string) => {
@@ -120,6 +157,23 @@ export default function BrushHotkeySection() {
           </div>
 
           {message && <div style={{ fontSize: 12, color: '#4CAF50', marginTop: 8 }}>{message}</div>}
+
+          <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.12)' }}>
+            <div style={{ fontSize: 12, marginBottom: 6 }}>
+              守护进程状态：
+              <b style={{ color: daemonConnected ? '#4CAF50' : '#E53935' }}>
+                {daemonConnected ? ' 已连接' : ' 未连接'}
+              </b>
+            </div>
+            <div style={rowStyle}>
+              <sp-textfield size="s" placeholder="守护进程 exe 路径" value={daemonPath}
+                onInput={(e: any) => setDaemonPath(e.target.value)} style={{ flex: 1 }} />
+              <sp-action-button onClick={startDaemon}>启动</sp-action-button>
+            </div>
+            <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>
+              未连接时快捷键不生效。双击项目里的 install.bat（或右键 install.ps1「使用 PowerShell 运行」）可自动编译并安装 exe，再把它填到这里点「启动」；也可由安装器加入开机自启。
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -13,6 +13,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -119,7 +120,9 @@ namespace JWautofillHotkeyDaemon
 
         private static string _configPath = "";
         private static readonly Dictionary<int, HotkeyItem> _idToItem = new();
+        private static List<HotkeyItem> _currentItems = new();
         private static int _nextId = 1;
+        private static bool _active = false;
         private static readonly object _clientsLock = new();
         private static readonly List<TcpClient> _clients = new();
         private static IntPtr _hwnd;
@@ -128,12 +131,21 @@ namespace JWautofillHotkeyDaemon
 
         static void Main(string[] args)
         {
-            _configPath = args.Length > 0 ? args[0] : DefaultConfigPath;
+            // 仅当参数是文件路径（不以 - 开头）时才当作配置文件，避免把 --autostart 等标志误当路径
+            foreach (var a in args)
+            {
+                if (!string.IsNullOrWhiteSpace(a) && !a.StartsWith("-") && File.Exists(a))
+                {
+                    _configPath = a;
+                    break;
+                }
+            }
             Console.WriteLine("[HotkeyDaemon] 配置路径: " + _configPath);
 
-            LoadConfig();
+            ReloadConfig();
 
             _ = Task.Run(() => RunWebSocketServer());
+            _ = Task.Run(WatchPhotoshop);
 
             if (File.Exists(_configPath))
             {
@@ -187,7 +199,7 @@ namespace JWautofillHotkeyDaemon
             }
             if (msg == Win32.WM_RELOAD)
             {
-                try { LoadConfig(); }
+                try { ReloadConfig(); }
                 catch (Exception ex) { Console.WriteLine("[HotkeyDaemon] 重载配置失败: " + ex.Message); }
                 return IntPtr.Zero;
             }
@@ -210,25 +222,42 @@ namespace JWautofillHotkeyDaemon
             }
         }
 
-        // 读取并注册热键
-        private static void LoadConfig()
+        // 读取配置并重载：仅在 Photoshop 运行时才真正注册热键
+        private static void ReloadConfig()
         {
-            foreach (var id in _idToItem.Keys) Win32.UnregisterHotKey(_hwnd, id);
-            _idToItem.Clear();
-            _nextId = 1;
+            _currentItems = ReadConfigFile();
+            if (_active) RegisterAll();
+            else BroadcastConfig();
+        }
 
-            var items = ReadConfigFile();
-            foreach (var it in items)
+        private static void RegisterAll()
+        {
+            UnregisterAll();
+            foreach (var it in _currentItems)
             {
                 if (string.IsNullOrWhiteSpace(it.Combo)) continue;
                 var (mods, vk) = ParseCombo(it.Combo);
+                if (vk == 0)
+                {
+                    Console.WriteLine("[HotkeyDaemon] 跳过无效组合键(无法解析实体键): " + it.Combo);
+                    continue;
+                }
                 int id = _nextId++;
                 if (Win32.RegisterHotKey(_hwnd, id, mods, vk))
                     _idToItem[id] = it;
                 else
                     Console.WriteLine("[HotkeyDaemon] 注册失败(可能冲突): " + it.Combo);
             }
+            _active = true;
             BroadcastConfig();
+        }
+
+        private static void UnregisterAll()
+        {
+            foreach (var id in _idToItem.Keys) Win32.UnregisterHotKey(_hwnd, id);
+            _idToItem.Clear();
+            _nextId = 1;
+            _active = false;
         }
 
         // 落盘并热更新
@@ -239,7 +268,7 @@ namespace JWautofillHotkeyDaemon
                 var dir = Path.GetDirectoryName(_configPath);
                 if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
                 File.WriteAllText(_configPath, JsonSerializer.Serialize(items, new JsonSerializerOptions { WriteIndented = true }));
-                LoadConfig();
+                ReloadConfig();
             }
             catch (Exception ex)
             {
@@ -247,7 +276,45 @@ namespace JWautofillHotkeyDaemon
             }
         }
 
-        // 解析 "Ctrl+Shift+R"、"Alt+F1"、"B" 等 -> (modifiers, virtualKey)
+        // 命名键 -> VirtualKeyCode（与 UXP 端 NAMED_KEYS 保持一致）
+        private static readonly Dictionary<string, int> NamedVk = new()
+        {
+            { "backspace", 0x08 }, { "tab", 0x09 }, { "enter", 0x0D }, { "escape", 0x1B },
+            { "space", 0x20 }, { "delete", 0x2E }, { "insert", 0x2D },
+            { "home", 0x24 }, { "end", 0x23 }, { "pageup", 0x21 }, { "pagedown", 0x22 },
+            { "up", 0x26 }, { "down", 0x28 }, { "left", 0x25 }, { "right", 0x27 }
+        };
+
+        // 进程监控：守护进程默认常驻，仅在 Photoshop 运行时才激活全局热键；
+        // 若设置环境变量 JWAUTO_EXIT_WHEN_PS_CLOSED=1，则 PS 关闭后立即退出（需由启动器/插件再次拉起）。
+        // 这样天然实现「随 PS 开启时开启、PS 关闭后关闭（或取消激活）」。
+        private static void WatchPhotoshop()
+        {
+            bool exitWhenClosed = Environment.GetEnvironmentVariable("JWAUTO_EXIT_WHEN_PS_CLOSED") == "1";
+            bool sawPs = false;
+            while (true)
+            {
+                Thread.Sleep(3000);
+                bool psRunning = false;
+                try { psRunning = Process.GetProcessesByName("photoshop").Length > 0; } catch { }
+                if (psRunning)
+                {
+                    sawPs = true;
+                    if (!_active) RegisterAll();
+                }
+                else
+                {
+                    if (_active) UnregisterAll();
+                    if (exitWhenClosed && sawPs)
+                    {
+                        Console.WriteLine("[HotkeyDaemon] Photoshop 已关闭，退出守护进程。");
+                        Environment.Exit(0);
+                    }
+                }
+            }
+        }
+
+        // 解析 "Ctrl+Shift+R"、"Alt+F1"、"Backspace" 等 -> (modifiers, virtualKey)
         private static (int, int) ParseCombo(string combo)
         {
             int mods = 0;
@@ -261,9 +328,9 @@ namespace JWautofillHotkeyDaemon
                 else if (p == "win" || p == "super") mods |= Win32.MOD_WIN;
                 else if (p.StartsWith("f") && int.TryParse(p.Substring(1), out int f) && f >= 1 && f <= 24)
                     vk = 0x70 + (f - 1);
-                else if (p == "enter") vk = 0x0D;
-                else if (p == "space") vk = 0x20;
-                else if (p.Length >= 1) vk = (byte)Win32.VkKeyScanW(p[0]);
+                else if (NamedVk.TryGetValue(p, out int nv)) vk = nv;
+                else if (p.Length == 1) vk = (byte)Win32.VkKeyScanW(p[0]);
+                // 其余情况 vk 保持 0，调用方需跳过注册
             }
             return (mods, vk);
         }

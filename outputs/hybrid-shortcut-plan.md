@@ -30,15 +30,27 @@
 - `src/adjustments/AdjustmentPanel.tsx` — 挂载上述分区。
 - `src/app.tsx` — 注册总开关回调 `registerMainToggleHandler(() => this.handleButtonClick())` 并 `connectHotkeyDaemon()`。
 
+## 随 Photoshop 启停（关键）
+
+守护进程内置进程监控 `WatchPhotoshop()`：
+
+- **默认（常驻）**：守护进程一直运行，但只在 **Photoshop 进程存在时** 才注册全局热键；Photoshop 关闭则自动取消注册（停止拦截）。再次打开 PS 会自动重新激活——无需任何外部触发器，最稳。
+- **可选退出**：若设置环境变量 `JWAUTO_EXIT_WHEN_PS_CLOSED=1`，则 PS 关闭后守护进程直接退出（进程消失）。此时需由「开机启动项 / 插件拉起」在下次 PS 会话再次启动它。
+
+**保证「随 PS 开启时开启」的做法**：双击 `native/HotkeyDaemon/install.bat`（或右键 `install.ps1`「用 PowerShell 运行」）。脚本会：自动编译 exe（若缺失）→ 复制到 `%LOCALAPPDATA%\JWautofill\daemon\` → 写入 HKCU\Run 开机自启 → 立即启动。面板「启动」按钮也可用 `UXP shell.openPath` 直接拉起已安装的 exe。
+
+> ⚠️「启动」按钮只接受 **.exe** 路径。如果把 `install.ps1` 填进去会被当文件打开（显示源码），这是 Windows 对 .ps1 的默认关联，不是执行。请用 install.bat / install.ps1 安装，再把生成的 exe 路径填进面板。
+
 ## 构建与运行
 
-1. 守护进程（Windows）：
+1. **一键安装（推荐）**：双击 `native/HotkeyDaemon/install.bat`（窗口会保持打开并显示进度/日志）。
+   脚本内部会在 exe 缺失时自动执行 `dotnet publish -c Release -r win-x64 --self-contained`，再把 exe 装到 `%LOCALAPPDATA%\JWautofill\daemon\JWautofillHotkeyDaemon.exe`。
+2. 手动编译：
    ```
    cd native/HotkeyDaemon
-   dotnet publish -c Release -r win-x64 --self-contained true
+   dotnet publish -c Release -r win-x64 --self-contained
    ```
-   产物在 `bin/Release/net8.0/win-x64/publish/JWautofillHotkeyDaemon.exe`，双击或后台启动即可（无需管理员）。
-2. UXP 插件：正常 `npm run build`，载入 PS 后自动连接 `ws://127.0.0.1:18923`（失败会每 1.5s 重连）。
+3. UXP 插件：yarn watch 会自动编译；载入 PS 后自动连接 `ws://127.0.0.1:18923`（失败每 1.5s 重连）；面板「守护进程状态」显示实时连接状态。
 
 ## 「直接绑笔刷」原理（仿 Brusherator）
 
@@ -56,13 +68,19 @@ await core.executeAsModal(async () => {
 
 描述符来自 Alchemist 录制「在笔刷面板选择预设」的标准输出。
 
+## 已修复的问题（本轮）
+
+- **组合键录不上**：原录制用 `once:true` 导致修饰键（Ctrl/Shift）按下即结束监听，后面的字母收不到。现改为持续监听直到实体键；首个修饰键会被忽略继续等待实体键，组合键（如 Ctrl+Shift+R）可正常录制。
+- **命名键误判**：原 `VkKeyScanW` 会把 Backspace 等命名键误判成字符，现用 `NamedVk` 表（Backspace=0x08、Enter=0x0D、Space=0x20 等）与 UXP 端 `NAMED_KEYS` 对齐。
+- **推送配置失败**：之前守护进程没在运行。现已加连接状态订阅 + 面板「启动」按钮（`shell.openPath` 拉起 exe）+ 默认安装路径自动填充。
+
 ## 未决风险 / 下一步
 
 - **笔刷切换 batchPlay 需在真实 PS 中验证**：`currentTool:'paintbrush'` 与 `select brush(preset)+name` 是 Alchemist 标准产物，但不同 PS 版本偶有不同的笔刷描述符形态；若切换失败需用 Alchemist 重新录制并修正 `applyBrush`。
-- **常驻进程**：守护进程需随 PS/系统自启（建议注册为 Windows 启动项或配套安装器），否则快捷键不生效。
+- **默认路径硬编码**：面板默认守护进程路径写死为 `C:\Users\Administrator\...`，换机器需手动改；或在 install.ps1 安装后由用户填写。
 - **冲突**：组合键若与 PS 原生快捷键冲突，`RegisterHotKey` 会失败并在控制台打印「注册失败(可能冲突)」，面板会提示。
 - 跨平台（macOS）未实现；当前仅 Windows。
 
 ## 结论
 
-可行性已落地为可编译代码：守护进程捕获全局热键、UXP 直接切笔刷与总开关均已打通；剩余工作量集中在 PS 实机验证笔刷描述符与守护进程的自启动分发。
+可行性已落地为可编译、可打包代码：守护进程捕获全局热键、随 PS 启停、UXP 直接切笔刷与总开关均已打通；剩余工作量集中在 PS 实机验证笔刷描述符与守护进程的自启动分发。

@@ -1,3 +1,6 @@
+C:\Users\Administrator\Documents\GitHub\JWautofill\native\HotkeyDaemon\obj\Release\net8.0\win-x64\HotkeyDaemon.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\Administrator\Documents\GitHub\JWautofill\native\HotkeyDaemon\obj\Release\net8.0\win-x64\HotkeyDaemon.csproj.CoreCompileInputs.cache
+C:\Users\Administrator\Documents\GitHub\JWautofill\native\HotkeyDaemon\obj\Release\net8.0\win-x64\HotkeyDaemon.sourcelink.json
 C:\Users\Administrator\Documents\GitHub\JWautofill\native\HotkeyDaemon\bin\Release\net8.0\win-x64\JWautofillHotkeyDaemon.exe
 C:\Users\Administrator\Documents\GitHub\JWautofill\native\HotkeyDaemon\bin\Release\net8.0\win-x64\JWautofillHotkeyDaemon.deps.json
 C:\Users\Administrator\Documents\GitHub\JWautofill\native\HotkeyDaemon\bin\Release\net8.0\win-x64\JWautofillHotkeyDaemon.runtimeconfig.json
@@ -185,9 +188,6 @@ C:\Users\Administrator\Documents\GitHub\JWautofill\native\HotkeyDaemon\bin\Relea
 C:\Users\Administrator\Documents\GitHub\JWautofill\native\HotkeyDaemon\bin\Release\net8.0\win-x64\mscordbi.dll
 C:\Users\Administrator\Documents\GitHub\JWautofill\native\HotkeyDaemon\bin\Release\net8.0\win-x64\mscorrc.dll
 C:\Users\Administrator\Documents\GitHub\JWautofill\native\HotkeyDaemon\bin\Release\net8.0\win-x64\msquic.dll
-C:\Users\Administrator\Documents\GitHub\JWautofill\native\HotkeyDaemon\obj\Release\net8.0\win-x64\HotkeyDaemon.GeneratedMSBuildEditorConfig.editorconfig
-C:\Users\Administrator\Documents\GitHub\JWautofill\native\HotkeyDaemon\obj\Release\net8.0\win-x64\HotkeyDaemon.csproj.CoreCompileInputs.cache
-C:\Users\Administrator\Documents\GitHub\JWautofill\native\HotkeyDaemon\obj\Release\net8.0\win-x64\HotkeyDaemon.sourcelink.json
 C:\Users\Administrator\Documents\GitHub\JWautofill\native\HotkeyDaemon\obj\Release\net8.0\win-x64\HotkeyDa.6825EA7D.Up2Date
 C:\Users\Administrator\Documents\GitHub\JWautofill\native\HotkeyDaemon\obj\Release\net8.0\win-x64\JWautofillHotkeyDaemon.dll
 C:\Users\Administrator\Documents\GitHub\JWautofill\native\HotkeyDaemon\obj\Release\net8.0\win-x64\refint\JWautofillHotkeyDaemon.dll

@@ -5,6 +5,7 @@
 // - 守护进程全局捕获按键后广播 hotkey 事件，插件执行「总开关切换 / 直接 select 笔刷」。
 
 import { action, core } from 'photoshop';
+import { shell } from 'uxp';
 
 export interface HotkeyEntry {
   id: string;
@@ -21,6 +22,37 @@ let cachedConfig: HotkeyEntry[] = [];
 const configListeners: ConfigListener[] = [];
 let mainToggleHandler: (() => void) | null = null;
 let currentWs: any = null;
+let connected = false;
+const statusListeners: ((c: boolean) => void)[] = [];
+
+function emitStatus() {
+  for (const l of statusListeners) { try { l(connected); } catch { /* ignore */ } }
+}
+
+// 订阅守护进程连接状态
+export function onDaemonStatus(fn: (c: boolean) => void): () => void {
+  statusListeners.push(fn);
+  fn(connected);
+  return () => { const i = statusListeners.indexOf(fn); if (i >= 0) statusListeners.splice(i, 1); };
+}
+
+// 从插件拉起守护进程（UXP shell.openPath 可直接启动本地 exe）。
+// 注意：对 .ps1/.bat 等脚本，openPath 会用编辑器打开而非执行，调用方应先校验扩展名。
+export function launchDaemon(exePath: string): boolean {
+  const p = (exePath || '').trim().toLowerCase();
+  if (!p) return false;
+  if (p.endsWith('.ps1') || p.endsWith('.bat') || p.endsWith('.cmd')) {
+    console.warn('⚠️ 启动路径不是 exe，请改用安装器或手动运行 exe');
+    return false;
+  }
+  try {
+    shell.openPath(exePath);
+    return true;
+  } catch (e) {
+    console.error('⚠️ 启动守护进程失败:', e);
+    return false;
+  }
+}
 
 export function registerMainToggleHandler(fn: () => void) {
   mainToggleHandler = fn;
@@ -59,6 +91,7 @@ export function connectHotkeyDaemon(): () => void {
       const ws = new WS(WS_URL);
       currentWs = ws;
       ws.onopen = () => {
+        connected = true; emitStatus();
         try { ws.send(JSON.stringify({ type: 'getConfig' })); } catch { /* ignore */ }
       };
       ws.onmessage = (ev: any) => {
@@ -71,7 +104,10 @@ export function connectHotkeyDaemon(): () => void {
           }
         } catch { /* ignore */ }
       };
-      ws.onclose = () => { if (!closedByUs) timer = setTimeout(open, 1500); };
+      ws.onclose = () => {
+        connected = false; emitStatus();
+        if (!closedByUs) timer = setTimeout(open, 1500);
+      };
       ws.onerror = () => { try { ws.close(); } catch { /* ignore */ } };
     } catch {
       timer = setTimeout(open, 1500);
