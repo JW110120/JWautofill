@@ -26,6 +26,8 @@ let connected = false;
 // 当前挂起的录制请求（守护进程回传 recordResult/recordCancel 时兑现）
 let pendingRecord: ((r: { combo: string } | null) => void) | null = null;
 const statusListeners: ((c: boolean) => void)[] = [];
+// 热键触发监听（供面板显示触发反馈，也便于用户确认事件链路是否打通）
+const hotkeyListeners: ((info: { combo: string; action: string; brush?: string; ok: boolean }) => void)[] = [];
 
 function emitStatus() {
   for (const l of statusListeners) { try { l(connected); } catch { /* ignore */ } }
@@ -58,6 +60,25 @@ export function launchDaemon(exePath: string): boolean {
 
 export function registerMainToggleHandler(fn: () => void) {
   mainToggleHandler = fn;
+}
+
+// 订阅热键触发事件（无论成败都会回调，ok=false 表示执行 batchPlay 失败）
+export function onHotkeyTriggered(fn: (info: { combo: string; action: string; brush?: string; ok: boolean }) => void): () => void {
+  hotkeyListeners.push(fn);
+  return () => { const i = hotkeyListeners.indexOf(fn); if (i >= 0) hotkeyListeners.splice(i, 1); };
+}
+
+// 守护进程回传的配置条目字段归一化：
+// 旧版守护进程落盘为 PascalCase（Combo/Action/Brush），UXP 端统一用小写驼峰读取。
+// 这里做双向兜底，避免版本错位时列表显示成 undefined / 快捷键不匹配。
+function normalizeEntry(e: any): HotkeyEntry | null {
+  if (!e || typeof e !== 'object') return null;
+  const combo: string = e.combo ?? e.Combo ?? '';
+  const action = (e.action ?? e.Action ?? '') as HotkeyEntry['action'];
+  const brush: string | undefined = e.brush ?? e.Brush ?? undefined;
+  const id: string = e.id ?? e.Id ?? ('bk_' + Math.random().toString(36).slice(2));
+  if (!combo) return null;
+  return { id, combo, action, brush };
 }
 
 function emitConfig() {
@@ -104,7 +125,8 @@ export function connectHotkeyDaemon(): () => void {
           const msg = JSON.parse(ev.data);
           if (msg?.type === 'hotkey') handleHotkey(msg);
           else if (msg?.type === 'config') {
-            cachedConfig = Array.isArray(msg.payload) ? (msg.payload as HotkeyEntry[]) : [];
+            const raw: any[] = Array.isArray(msg.payload) ? msg.payload : [];
+            cachedConfig = raw.map(normalizeEntry).filter((x): x is HotkeyEntry => !!x);
             emitConfig();
           }
           else if (msg?.type === 'recordResult') {
@@ -135,13 +157,17 @@ export function connectHotkeyDaemon(): () => void {
   };
 }
 
-function handleHotkey(msg: { id: string; action: string;  brush?: string }) {
+function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?: string }) {
   if (msg.action === 'toggleMain') {
     if (mainToggleHandler) mainToggleHandler();
+    for (const l of hotkeyListeners) { try { l({ combo: msg.combo ?? '', action: 'toggleMain', ok: true }); } catch { /* ignore */ } }
     return;
   }
   if (msg.action === 'applyBrush' && msg.brush) {
-    applyBrush(msg.brush);
+    applyBrush(msg.brush).then((ok) => {
+      // 把触发结果广播给 UI：用户按快捷键后面板立刻显示是否命中、切换是否成功
+      for (const l of hotkeyListeners) { try { l({ combo: msg.combo ?? '', action: 'applyBrush', brush: msg.brush, ok }); } catch { /* ignore */ } }
+    });
   }
 }
 
@@ -178,12 +204,12 @@ export async function applyBrush(brushName: string): Promise<boolean> {
       try {
         await action.batchPlay([
           { _obj: 'select', _target: [{ _ref: 'paintbrushTool' }] }
-        ], { synchronousExecution: false });
+        ], { synchronousExecution: true });
       } catch { /* 已是画笔工具 */ }
       // 按名称选中笔刷预设（选中的是 Brushes 面板里的预设，全局生效）
       await action.batchPlay([
         { _obj: 'select', _target: [{ _ref: 'brush', _name: brushName }] }
-      ], { synchronousExecution: false });
+      ], { synchronousExecution: true });
     }, { commandName: '切换笔刷' });
     return true;
   } catch (e) {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { storage, shell } from 'uxp';
-import { HotkeyEntry, connectHotkeyDaemon, onConfig, enumerateBrushes, onDaemonStatus, launchDaemon, pushConfig, requestHotkeyRecording, cancelHotkeyRecording } from './HotkeyBridge';
+import { HotkeyEntry, connectHotkeyDaemon, onConfig, enumerateBrushes, onDaemonStatus, launchDaemon, pushConfig, requestHotkeyRecording, cancelHotkeyRecording, onHotkeyTriggered } from './HotkeyBridge';
 import { ExpandIcon, DeleteIcon } from '../styles/Icons';
 
 // 笔刷热键分区：在调整面板内录制「笔刷 + 快捷键」，持久化到共享配置，
@@ -42,10 +42,19 @@ export default function BrushHotkeySection() {
     const unsub = connectHotkeyDaemon();
     onConfig((list)  => setEntries(list));
     onDaemonStatus(setDaemonConnected);
+    // 热键触发即时反馈：用户按快捷键后面板直接显示是否命中、切换是否成功
+    // （这是诊断「按了快捷键没反应」的关键观测点：无任何显示 = 事件根本没到达面板）
+    const unsubHotkey = onHotkeyTriggered((info) => {
+      if (info.action === 'applyBrush') {
+        setMessage(info.ok
+          ? ('热键触发 ✓ ' + (info.combo ? info.combo + ' → ' : '') + '已切换笔刷「' + info.brush + '」')
+          : ('热键触发 ✗ ' + (info.combo ? info.combo + ' → ' : '') + '切换笔刷「' + info.brush + '」失败（检查笔刷名是否与 Brushes 面板完全一致）'));
+      }
+    });
     enumerateBrushes().then((b) => { setBrushes(b); setUsePicker(b.length > 0); }).catch(() => {
       setBrushes([]); setUsePicker(false);
     });
-    return unsub;
+    return () => { unsub(); unsubHotkey(); };
   }, []);
 
   // 将插件内相对路径解析为真实 OS 路径：用 getPluginFolder().nativePath，
@@ -99,20 +108,40 @@ export default function BrushHotkeySection() {
   // 按钮 2：彻底卸载 install.ps1 写入的所有内容（仅本插件内容，绝不误删用户其他文件）。
   // 反馈策略：唤起卸载程序后轮询连接状态——卸载脚本第一步就会停掉守护进程，
   // 因此「已连接 → 未连接」即可判定卸载成功；超时未断开则提示用户去弹窗确认。
+  // 稳健性：整体 try/catch（之前 openBundled 抛异常时整个 Promise 被吞，按钮毫无反应）；
+  // 插件目录里找不到 uninstall.bat（例如从 dist 加载且构建未拷贝 native）时，退化为文件选择方式。
   const uninstallDaemon = async () => {
-    const wasConnected = daemonConnectedRef.current;
-    const ok = await openBundled('native/HotkeyDaemon/uninstall.bat');
-    if (!ok) { setMessage('卸载失败：无法唤起卸载程序，请手动双击插件目录 native/HotkeyDaemon/uninstall.bat'); return; }
-    if (!wasConnected) {
-      setMessage('卸载程序已打开：请在弹出的窗口中按提示完成卸载');
-      return;
+    try {
+      const wasConnected = daemonConnectedRef.current;
+      let ok = false;
+      try { ok = await openBundled('native/HotkeyDaemon/uninstall.bat'); } catch (err: any) {
+        console.error('唤起内置卸载程序失败:', err);
+      }
+      if (!ok) {
+        // 兜底：让用户手动选 uninstall.bat（与安装流程一致）
+        setMessage('插件目录内未找到卸载脚本，请选择 uninstall.bat');
+        const file: any = await storage.localFileSystem.getFileForOpening({ types: ['bat'] });
+        if (!file) { setMessage('已取消卸载'); return; }
+        const files: any[] = Array.isArray(file) ? file : [file];
+        const p: string = files[0]?.nativePath || '';
+        if (!p.toLowerCase().endsWith('uninstall.bat')) { setMessage('请选择 uninstall.bat 卸载脚本'); return; }
+        const r: any = await shell.openPath(p);
+        if (typeof r === 'string' && r.length > 0) { setMessage('唤起卸载脚本失败：' + r); return; }
+      }
+      if (!wasConnected) {
+        setMessage('卸载程序已打开：请在弹出的窗口中按提示完成卸载');
+        return;
+      }
+      setMessage('正在卸载…（卸载完成后守护进程会停止）');
+      for (let i = 0; i < 25; i++) {
+        await new Promise(r => setTimeout(r, 1000));
+        if (!daemonConnectedRef.current) { setMessage('卸载完成 ✓（守护进程已停止、开机自启与安装目录已移除）'); return; }
+      }
+      setMessage('尚未检测到卸载完成：请在弹出的卸载窗口中确认操作（完成后状态会变为「未连接」）');
+    } catch (e: any) {
+      const msg = e && e.message ? String(e.message) : (typeof e === 'string' ? e : JSON.stringify(e));
+      setMessage('卸载失败：' + msg + '（可手动双击插件目录 native/HotkeyDaemon/uninstall.bat）');
     }
-    setMessage('正在卸载…（卸载完成后守护进程会停止）');
-    for (let i = 0; i < 25; i++) {
-      await new Promise(r => setTimeout(r, 1000));
-      if (!daemonConnectedRef.current) { setMessage('卸载完成 ✓（守护进程已停止、开机自启与安装目录已移除）'); return; }
-    }
-    setMessage('尚未检测到卸载完成：请在弹出的卸载窗口中确认操作（完成后状态会变为「未连接」）');
   };
 
   // 安装脚本自身会在末尾启动守护进程；这里做兜底：未连接就周期尝试启动，连上即停（避免重复拉起实例）。

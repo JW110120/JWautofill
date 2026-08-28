@@ -65,7 +65,13 @@ module.exports = (env, argv) => {
                 { from: "./README.md", to: "." },
                 // 默认预设 JSON（拷贝到插件根目录，供运行时回退读取）
                 { from: "./src/assets/presets/pattern-presets.json", to: "." },
-                { from: "./src/assets/presets/gradient-presets.json", to: "." }
+                { from: "./src/assets/presets/gradient-presets.json", to: "." },
+                // 守护进程安装/卸载脚本 + 预编译 exe（面板通过 getPluginFolder 在插件目录
+                // 内定位 native/HotkeyDaemon/uninstall.bat 等；不拷贝的话从 dist 加载时
+                // 找不到文件，卸载按钮会静默失败）
+                { from: "./native/HotkeyDaemon/*.bat", to: "./native/HotkeyDaemon/[name][ext]" },
+                { from: "./native/HotkeyDaemon/*.ps1", to: "./native/HotkeyDaemon/[name][ext]" },
+                { from: "./native/HotkeyDaemon/publish/JWautofillHotkeyDaemon.exe", to: "./native/HotkeyDaemon/publish" }
             ]
         }),
     ]);

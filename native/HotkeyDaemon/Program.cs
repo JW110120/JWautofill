@@ -177,6 +177,17 @@ namespace JWautofillHotkeyDaemon
 
         private static Win32.WndProcDelegate? _wndProcDelegate; // 必须保持引用，避免 GC
 
+        // 统一的 JSON 序列化选项：
+        // - CamelCase：落盘/回传给 UXP 的字段为小写驼峰（id/combo/action/brush），与 UXP 端一致
+        // - PropertyNameCaseInsensitive：兼容反序列化 UXP 推来的小写键名。
+        //   System.Text.Json 默认大小写敏感，之前 UXP 推 {"combo":...} 反序列化到 PascalCase 属性
+        //   会全部得到空字符串，快捷键因此永远无法注册。
+        private static readonly JsonSerializerOptions JsonOpts = new()
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            PropertyNameCaseInsensitive = true
+        };
+
         static void Main(string[] args)
         {
             // 仅当参数是文件路径（不以 - 开头）时才当作配置文件，避免把 --autostart 等标志误当路径
@@ -188,6 +199,12 @@ namespace JWautofillHotkeyDaemon
                     break;
                 }
             }
+            // 关键兜底：未通过命令行指定配置文件时，必须回落到默认路径。
+            // 之前 _configPath 初始值是 ""，DefaultConfigPath 定义了却从未使用，
+            // 导致 SaveConfig 抛 "The value cannot be an empty string (Parameter 'path')"，
+            // 配置永远无法落盘、快捷键从未真正注册过（2026-08-29 ws 链路测试定位）。
+            if (string.IsNullOrWhiteSpace(_configPath))
+                _configPath = DefaultConfigPath;
             Console.WriteLine("[HotkeyDaemon] 配置路径: " + _configPath);
 
             ReloadConfig();
@@ -243,6 +260,7 @@ namespace JWautofillHotkeyDaemon
                     {
                         type = "hotkey",
                         id = item.Id,
+                        combo = item.Combo,
                         action = item.Action,
                         brush = item.Brush
                     }));
@@ -265,7 +283,7 @@ namespace JWautofillHotkeyDaemon
             try
             {
                 var json = File.ReadAllText(_configPath);
-                return JsonSerializer.Deserialize<List<HotkeyItem>>(json) ?? new List<HotkeyItem>();
+                return JsonSerializer.Deserialize<List<HotkeyItem>>(json, JsonOpts) ?? new List<HotkeyItem>();
             }
             catch (Exception ex)
             {
@@ -319,7 +337,7 @@ namespace JWautofillHotkeyDaemon
             {
                 var dir = Path.GetDirectoryName(_configPath);
                 if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-                File.WriteAllText(_configPath, JsonSerializer.Serialize(items, new JsonSerializerOptions { WriteIndented = true }));
+                File.WriteAllText(_configPath, JsonSerializer.Serialize(items, JsonOpts));
                 ReloadConfig();
             }
             catch (Exception ex)
@@ -576,7 +594,7 @@ namespace JWautofillHotkeyDaemon
                         {
                             if (doc.RootElement.TryGetProperty("payload", out var payload))
                             {
-                                var items = JsonSerializer.Deserialize<List<HotkeyItem>>(payload.GetRawText()) ?? new List<HotkeyItem>();
+                                var items = JsonSerializer.Deserialize<List<HotkeyItem>>(payload.GetRawText(), JsonOpts) ?? new List<HotkeyItem>();
                                 SaveConfig(items);
                             }
                         }
@@ -618,13 +636,13 @@ namespace JWautofillHotkeyDaemon
         private static void SendConfigToClient(TcpClient client)
         {
             var items = ReadConfigFile();
-            SendToClient(client, JsonSerializer.Serialize(new { type = "config", payload = items }));
+            SendToClient(client, JsonSerializer.Serialize(new { type = "config", payload = items }, JsonOpts));
         }
 
         private static void BroadcastConfig()
         {
             var items = ReadConfigFile();
-            var msg = JsonSerializer.Serialize(new { type = "config", payload = items });
+            var msg = JsonSerializer.Serialize(new { type = "config", payload = items }, JsonOpts);
             lock (_clientsLock)
             {
                 foreach (var c in _clients.ToArray())
@@ -710,16 +728,11 @@ namespace JWautofillHotkeyDaemon
 
         private static void Broadcast(string message)
         {
-            var bytes = Encoding.UTF8.GetBytes(message);
-            var frame = new byte[2 + bytes.Length];
-            frame[0] = 0x81; // FIN + 文本帧
-            frame[1] = (byte)bytes.Length; // 假设消息 < 126 字节（足够 JSON 短消息）
-            Array.Copy(bytes, 0, frame, 2, bytes.Length);
             lock (_clientsLock)
             {
                 foreach (var c in _clients.ToArray())
                 {
-                    try { c.GetStream().Write(frame, 0, frame.Length); }
+                    try { SendToClient(c, message); }
                     catch { try { c.Close(); } catch { } }
                 }
             }
