@@ -150,6 +150,9 @@ namespace JWautofillHotkeyDaemon
 
     internal static class Program
     {
+        // 构建版本标识：用于区分安装目录里的新旧 daemon（历史上两次因版本错位误判问题）
+        internal const string Version = "2026-08-29.2";
+
         private static readonly int PORT = 18923;
         private static readonly string DefaultConfigPath =
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -205,6 +208,7 @@ namespace JWautofillHotkeyDaemon
             // 配置永远无法落盘、快捷键从未真正注册过（2026-08-29 ws 链路测试定位）。
             if (string.IsNullOrWhiteSpace(_configPath))
                 _configPath = DefaultConfigPath;
+            Console.WriteLine("[HotkeyDaemon] 版本: " + Version);
             Console.WriteLine("[HotkeyDaemon] 配置路径: " + _configPath);
 
             ReloadConfig();
