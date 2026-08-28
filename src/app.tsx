@@ -27,6 +27,7 @@ import { ColorSettings, Pattern } from './types/state';
 import { MenuManager } from './utils/MenuManager';
 import { PresetManager } from './utils/PresetManager';
 import { PanelStateManager } from './utils/PanelStateManager';
+import { connectHotkeyDaemon, registerMainToggleHandler } from './hotkey/HotkeyBridge';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -153,6 +154,10 @@ class App extends React.Component<AppProps, AppState> {
         
         // 监听Photoshop事件来检查状态变化
         await action.addNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], this.handleNotification);
+
+        // 全局快捷键：注册总开关回调，并连接本地守护进程（Hybrid 路线）
+        registerMainToggleHandler(() => this.handleButtonClick());
+        connectHotkeyDaemon();
 
         // 许可证：检查当前状态并尝试自动重新验证
         await this.checkLicenseStatus();

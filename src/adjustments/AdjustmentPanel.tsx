@@ -22,6 +22,7 @@ import { AdjustmentMenu } from '../utils/AdjustmentMenu';
 import { ExpandIcon, AddIcon, DeleteIcon } from '../styles/Icons';
 import { PanelStateManager } from '../utils/PanelStateManager';
 import { maskSyncEngine, MASK_SYNC_CHANNEL_LABELS, LayerTreeEntry, MaskSyncTask, MaskSyncChannel, SyncState } from '../utils/MaskSyncEngine';
+import BrushHotkeySection from '../hotkey/BrushHotkeySection';
 import RangeSlider from '../components/RangeSlider';
 
 // 单位换算为像素（兼容普通数字与带 _unit/_value 的单位对象）
@@ -3377,6 +3378,9 @@ return (
       .filter(section => section.isVisible)
       .sort((a, b) => a.order - b.order)
       .map(section => renderSection(section))}
+
+    {/* 笔刷热键（全局）分区 */}
+    <BrushHotkeySection />
 
     {/* 隐藏/显示分区模态框 */}
     {showVisibilityPanel && (
