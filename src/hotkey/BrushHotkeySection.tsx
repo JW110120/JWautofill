@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { storage, shell } from 'uxp';
 import { HotkeyEntry, connectHotkeyDaemon, onConfig, enumerateBrushes, onDaemonStatus, launchDaemon, pushConfig, requestHotkeyRecording, cancelHotkeyRecording } from './HotkeyBridge';
-import { ExpandIcon } from '../styles/Icons';
+import { ExpandIcon, DeleteIcon } from '../styles/Icons';
 
 // 笔刷热键分区：在调整面板内录制「笔刷 + 快捷键」，持久化到共享配置，
 // 由本地守护进程在全局捕获按键后直接切换笔刷（仿 Brusherator，不录制动作）。
@@ -96,11 +96,23 @@ export default function BrushHotkeySection() {
     }
   };
 
-  // 按钮 2：彻底卸载 install.ps1 写入的所有内容（仅本插件内容，绝不误删用户其他文件）
+  // 按钮 2：彻底卸载 install.ps1 写入的所有内容（仅本插件内容，绝不误删用户其他文件）。
+  // 反馈策略：唤起卸载程序后轮询连接状态——卸载脚本第一步就会停掉守护进程，
+  // 因此「已连接 → 未连接」即可判定卸载成功；超时未断开则提示用户去弹窗确认。
   const uninstallDaemon = async () => {
-    if (await openBundled('native/HotkeyDaemon/uninstall.bat')) {
-      setMessage('已唤起卸载程序，请按窗口提示完成卸载');
+    const wasConnected = daemonConnectedRef.current;
+    const ok = await openBundled('native/HotkeyDaemon/uninstall.bat');
+    if (!ok) { setMessage('卸载失败：无法唤起卸载程序，请手动双击插件目录 native/HotkeyDaemon/uninstall.bat'); return; }
+    if (!wasConnected) {
+      setMessage('卸载程序已打开：请在弹出的窗口中按提示完成卸载');
+      return;
     }
+    setMessage('正在卸载…（卸载完成后守护进程会停止）');
+    for (let i = 0; i < 25; i++) {
+      await new Promise(r => setTimeout(r, 1000));
+      if (!daemonConnectedRef.current) { setMessage('卸载完成 ✓（守护进程已停止、开机自启与安装目录已移除）'); return; }
+    }
+    setMessage('尚未检测到卸载完成：请在弹出的卸载窗口中确认操作（完成后状态会变为「未连接」）');
   };
 
   // 安装脚本自身会在末尾启动守护进程；这里做兜底：未连接就周期尝试启动，连上即停（避免重复拉起实例）。
@@ -207,9 +219,14 @@ export default function BrushHotkeySection() {
             {entries.length === 0 && <div style={{ fontSize: 12, opacity: 0.6 }}>尚未绑定任何快捷键</div>}
             {entries.map(e => (
               <div key={e.id} style={itemStyle}>
-                <span style={{ fontWeight: 500 }}>{e.combo}</span>
-                <span style={{ opacity: 0.8 }}>{e.action === 'applyBrush' ? e.brush : '总开关'}</span>
-                <sp-action-button quiet onClick={() => removeEntry(e.id)}>删除</sp-action-button>
+                {/* 快捷键列定宽：不同长度的组合键不再把笔刷名挤得不对齐 */}
+                <span style={{ fontWeight: 500, width: 110, flexShrink: 0 }}>{e.combo}</span>
+                <span style={{ opacity: 0.8, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {e.action === 'applyBrush' ? e.brush : '总开关'}
+                </span>
+                <sp-action-button quiet onClick={() => removeEntry(e.id)} title="删除此快捷键">
+                  <DeleteIcon style={{ width: '15px', height: '15px', display: 'block' }} />
+                </sp-action-button>
               </div>
             ))}
           </div>

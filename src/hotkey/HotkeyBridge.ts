@@ -164,33 +164,31 @@ export function pushConfig(list: HotkeyEntry[]): boolean {
 }
 
 // ===== 直接切笔刷（不依赖录制动作，仿 Brusherator）=====
-// 依据 Alchemist 录制「在笔刷面板选择预设」得到的描述符：select + brush(preset) + 顶层 name。
-export async function applyBrush(brushName: string) {
+// 正确的 descriptor（UXP 论坛 7168 帖 #12 与 2127 帖 IanBarber 实例双重确认）：
+//   { _obj:'select', _target:[{ _ref:'brush', _name:'笔刷名' }] }
+// 注意两点：
+// 1) 引用里必须用 _name 携带笔刷名；不能像旧写法那样用 _enum/_value:'preset' +
+//    顶层 name: 字段——那种引用 PS 无法解析，batchPlay 静默无效（不报错但也不切笔刷）。
+// 2) 不要加 _options:{dialogOptions:'dontDisplay'}——该选项实际效果相反：会弹 PS 错误框
+//    且异常不进 catch；去掉后笔刷名不存在时会正常 throw，可被下方 catch 捕获并打日志。
+export async function applyBrush(brushName: string): Promise<boolean> {
   try {
     await core.executeAsModal(async () => {
-      // 先确保当前是画笔工具（避免在非画笔工具下切笔刷无效）
+      // 先确保当前是画笔工具（用标准 select 切工具；工具已是画笔时可能报错，忽略）
       try {
         await action.batchPlay([
-          {
-            _obj: 'set',
-            _target: [{ _ref: 'application', _enum: 'ordinal', _value: 'targetEnum' }],
-            to: { _obj: 'application', currentTool: 'paintbrush' }
-          }
-        ], { synchronousExecution: true });
-      } catch { /* 工具已是画笔时可能报错，忽略 */ }
+          { _obj: 'select', _target: [{ _ref: 'paintbrushTool' }] }
+        ], { synchronousExecution: false });
+      } catch { /* 已是画笔工具 */ }
+      // 按名称选中笔刷预设（选中的是 Brushes 面板里的预设，全局生效）
       await action.batchPlay([
-        {
-          _obj: 'select',
-          _target: [
-            { _ref: 'brush', _enum: 'brush', _value: 'preset' },
-            { _ref: 'application', _enum: 'ordinal', _value: 'targetEnum' }
-          ],
-          name: brushName
-        }
-      ], { synchronousExecution: true });
+        { _obj: 'select', _target: [{ _ref: 'brush', _name: brushName }] }
+      ], { synchronousExecution: false });
     }, { commandName: '切换笔刷' });
+    return true;
   } catch (e) {
-    console.error('⚠️ 切换笔刷失败:', e);
+    console.error('⚠️ 切换笔刷失败（笔刷名「' + brushName + '」可能不存在，需与 Brushes 面板名称完全一致）:', e);
+    return false;
   }
 }
 
