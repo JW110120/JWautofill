@@ -23,6 +23,8 @@ const configListeners: ConfigListener[] = [];
 let mainToggleHandler: (() => void) | null = null;
 let currentWs: any = null;
 let connected = false;
+// 当前挂起的录制请求（守护进程回传 recordResult/recordCancel 时兑现）
+let pendingRecord: ((r: { combo: string } | null) => void) | null = null;
 const statusListeners: ((c: boolean) => void)[] = [];
 
 function emitStatus() {
@@ -105,10 +107,18 @@ export function connectHotkeyDaemon(): () => void {
             cachedConfig = Array.isArray(msg.payload) ? (msg.payload as HotkeyEntry[]) : [];
             emitConfig();
           }
+          else if (msg?.type === 'recordResult') {
+            if (pendingRecord) { const r = pendingRecord; pendingRecord = null; r({ combo: msg.combo }); }
+          }
+          else if (msg?.type === 'recordCancel') {
+            if (pendingRecord) { const r = pendingRecord; pendingRecord = null; r(null); }
+          }
         } catch { /* ignore */ }
       };
       ws.onclose = () => {
         connected = false; emitStatus();
+        // 连接断开时若仍有挂起的录制，直接取消，避免 UI 永远停在「录制中」
+        if (pendingRecord) { const r = pendingRecord; pendingRecord = null; r(null); }
         if (!closedByUs) timer = setTimeout(open, 1500);
       };
       ws.onerror = () => { try { ws.close(); } catch { /* ignore */ } };
@@ -243,4 +253,30 @@ export async function enumerateBrushes(): Promise<string[]> {
     console.warn('⚠️ 枚举笔刷失败（可手动输入笔刷名）:', e);
     return [];
   }
+}
+
+// ===== 请求守护进程录制组合键（UXP 不再自行监听键盘）=====
+// 守护进程用 Windows 全局键盘钩子捕获，捕获到后回传 {type:'recordResult',combo}，
+// 或被用户按 Esc 取消回传 {type:'recordCancel'}。返回 Promise：{combo} 或 null(取消/失败)。
+export function requestHotkeyRecording(brush: string): Promise<{ combo: string } | null> {
+  return new Promise((resolve) => {
+    const WS = resolveWs();
+    if (!currentWs || currentWs.readyState !== (currentWs.OPEN ?? 1)) { resolve(null); return; }
+    pendingRecord = resolve;
+    try {
+      currentWs.send(JSON.stringify({ type: 'recordStart', brush }));
+    } catch {
+      pendingRecord = null;
+      resolve(null);
+    }
+  });
+}
+
+// 主动取消录制（UXP 端用户点「取消」时调用）
+export function cancelHotkeyRecording(): boolean {
+  const WS = resolveWs();
+  if (currentWs && currentWs.readyState === (currentWs.OPEN ?? 1)) {
+    try { currentWs.send(JSON.stringify({ type: 'recordCancel' })); return true; } catch { /* ignore */ }
+  }
+  return false;
 }

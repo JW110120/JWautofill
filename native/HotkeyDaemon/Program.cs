@@ -98,6 +98,43 @@ namespace JWautofillHotkeyDaemon
         [DllImport("kernel32.dll")]
         public static extern IntPtr GetModuleHandle(string? lpModuleName);
 
+        [DllImport("kernel32.dll")]
+        public static extern int GetCurrentThreadId();
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool PostThreadMessage(int idThread, uint msg, IntPtr wParam, IntPtr lParam);
+
+        // ===== 全局键盘钩子（用于录制组合键）=====
+        public const int WH_KEYBOARD_LL = 13;
+        public const int WM_KEYDOWN = 0x0100;
+        public const int WM_SYSKEYDOWN = 0x0104;
+
+        public delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        public static extern short GetAsyncKeyState(int vKey);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct KBDLLHOOKSTRUCT
+        {
+            public uint vkCode;
+            public uint scanCode;
+            public uint flags;
+            public uint time;
+            public IntPtr dwExtraInfo;
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         public struct MSG
         {
@@ -127,6 +164,17 @@ namespace JWautofillHotkeyDaemon
         private static readonly List<TcpClient> _clients = new();
         private static IntPtr _hwnd;
 
+        // ===== 组合键录制（全局键盘钩子）=====
+        private const int WM_RECORD_START = 0x8002; // 主线程安装钩子
+        private const int WM_RECORD_STOP = 0x8003;  // 主线程卸载钩子
+        private static readonly object _recLock = new();
+        private static IntPtr _hookId = IntPtr.Zero;
+        private static Win32.LowLevelKeyboardProc? _hookProc;
+        private static TcpClient? _recordingClient;
+        private static string? _recordingBrush;
+        // 录制线程：持有独立消息循环，全局键盘钩子必须装在带消息循环的线程上
+        private static int _recThreadId = 0;
+
         private static Win32.WndProcDelegate? _wndProcDelegate; // 必须保持引用，避免 GC
 
         static void Main(string[] args)
@@ -143,6 +191,10 @@ namespace JWautofillHotkeyDaemon
             Console.WriteLine("[HotkeyDaemon] 配置路径: " + _configPath);
 
             ReloadConfig();
+
+            // 启动录制线程（独立消息循环，承载全局键盘钩子）
+            var recThread = new Thread(RecordingThreadProc) { IsBackground = true };
+            recThread.Start();
 
             _ = Task.Run(() => RunWebSocketServer());
             _ = Task.Run(WatchPhotoshop);
@@ -335,6 +387,133 @@ namespace JWautofillHotkeyDaemon
             return (mods, vk);
         }
 
+        // ===== 组合键录制：由 UXP 发 recordStart -> 主线程安装全局键盘钩子 -> 捕获组合键 -> 回传 recordResult =====
+        private static void StartRecordingInternal()
+        {
+            lock (_recLock)
+            {
+                if (_hookId != IntPtr.Zero) { Win32.UnhookWindowsHookEx(_hookId); _hookId = IntPtr.Zero; }
+                _hookProc = LowLevelKeyboardProc;
+                _hookId = Win32.SetWindowsHookEx(Win32.WH_KEYBOARD_LL, _hookProc, Win32.GetModuleHandle(null), 0);
+                if (_hookId == IntPtr.Zero)
+                    Console.WriteLine("[HotkeyDaemon] 录制钩子安装失败");
+                else
+                    Console.WriteLine("[HotkeyDaemon] 录制钩子已安装，等待组合键…");
+            }
+        }
+
+        // combo 为 null 表示取消（ESC 或 UXP 主动取消）
+        private static void FinishRecordingInternal(string? combo)
+        {
+            lock (_recLock)
+            {
+                if (_hookId != IntPtr.Zero) { Win32.UnhookWindowsHookEx(_hookId); _hookId = IntPtr.Zero; }
+                var client = _recordingClient;
+                _recordingClient = null;
+                string brush = _recordingBrush ?? "";
+                _recordingBrush = null;
+                if (client == null) return;
+                try
+                {
+                    if (combo == null)
+                        SendToClient(client, JsonSerializer.Serialize(new { type = "recordCancel", brush }));
+                    else
+                        SendToClient(client, JsonSerializer.Serialize(new { type = "recordResult", brush, combo }));
+                }
+                catch { try { client.Close(); } catch { } }
+            }
+        }
+
+        // 录制线程：独立消息循环，专门用于承载 WH_KEYBOARD_LL 钩子。
+        // 通过 PostThreadMessage 接收 WM_RECORD_START / WM_RECORD_STOP。
+        private static void RecordingThreadProc()
+        {
+            _recThreadId = Win32.GetCurrentThreadId();
+            Console.WriteLine("[HotkeyDaemon] 录制线程已启动 tid=" + _recThreadId);
+            var msg = new Win32.MSG();
+            while (Win32.GetMessage(out msg, IntPtr.Zero, 0, 0) != 0)
+            {
+                if (msg.message == WM_RECORD_START) StartRecordingInternal();
+                else if (msg.message == WM_RECORD_STOP) FinishRecordingInternal(null);
+                // 线程消息（PostThreadMessage）没有窗口，无需 DispatchMessage
+            }
+            Console.WriteLine("[HotkeyDaemon] 录制线程已退出");
+        }
+
+        private static IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam)
+        {
+            if (nCode >= 0 && _recordingClient != null)
+            {
+                int msg = wParam.ToInt32();
+                if (msg == Win32.WM_KEYDOWN || msg == Win32.WM_SYSKEYDOWN)
+                {
+                    int vk = Marshal.ReadInt32(lParam);              // KBDLLHOOKSTRUCT.vkCode 为首字段
+                    uint flags = (uint)Marshal.ReadInt32(lParam, 8); // flags 偏移 8
+                    // bit 30 = 上一帧按键状态（1 表示此前已按下，即系统自动重复），忽略重复
+                    if ((flags & (1u << 30)) != 0)
+                        return Win32.CallNextHookEx(_hookId, nCode, wParam, lParam);
+
+                    if (vk == 0x1B) // Escape => 取消录制
+                    {
+                        Console.WriteLine("[HotkeyDaemon] 录制取消 (Esc)");
+                        FinishRecordingInternal(null);
+                        return Win32.CallNextHookEx(_hookId, nCode, wParam, lParam);
+                    }
+
+                    bool isModifier = vk == 0x11 || vk == 0x12 || vk == 0x10 || vk == 0x5B || vk == 0x5C;
+                    if (isModifier)
+                        return Win32.CallNextHookEx(_hookId, nCode, wParam, lParam); // 只收集修饰键，继续等实体键
+
+                    string? combo = BuildCombo(vk);
+                    if (!string.IsNullOrEmpty(combo))
+                    {
+                        Console.WriteLine("[HotkeyDaemon] 录制到组合键: " + combo);
+                        FinishRecordingInternal(combo);
+                    }
+                }
+            }
+            return Win32.CallNextHookEx(_hookId, nCode, wParam, lParam);
+        }
+
+        private static string? BuildCombo(int vk)
+        {
+            var parts = new List<string>();
+            if ((Win32.GetAsyncKeyState(0x11) & 0x8000) != 0) parts.Add("Ctrl");
+            if ((Win32.GetAsyncKeyState(0x12) & 0x8000) != 0) parts.Add("Alt");
+            if ((Win32.GetAsyncKeyState(0x10) & 0x8000) != 0) parts.Add("Shift");
+            if ((Win32.GetAsyncKeyState(0x5B) & 0x8000) != 0 || (Win32.GetAsyncKeyState(0x5C) & 0x8000) != 0) parts.Add("Win");
+            string? key = KeyToToken(vk);
+            if (string.IsNullOrEmpty(key)) return null;
+            parts.Add(key);
+            return string.Join("+", parts);
+        }
+
+        private static string? KeyToToken(int vk)
+        {
+            if (vk >= 0x41 && vk <= 0x5A) return ((char)vk).ToString();
+            if (vk >= 0x30 && vk <= 0x39) return ((char)vk).ToString();
+            if (vk >= 0x70 && vk <= 0x87) return "F" + (vk - 0x70 + 1);
+            switch (vk)
+            {
+                case 0x08: return "Backspace";
+                case 0x09: return "Tab";
+                case 0x0D: return "Enter";
+                case 0x1B: return "Escape";
+                case 0x20: return "Space";
+                case 0x2D: return "Insert";
+                case 0x23: return "End";
+                case 0x24: return "Home";
+                case 0x21: return "PageUp";
+                case 0x22: return "PageDown";
+                case 0x26: return "Up";
+                case 0x28: return "Down";
+                case 0x25: return "Left";
+                case 0x27: return "Right";
+                case 0x2E: return "Delete";
+                default: return null;
+            }
+        }
+
         private static async Task RunWebSocketServer()
         {
             var listener = new TcpListener(IPAddress.Loopback, PORT);
@@ -405,6 +584,19 @@ namespace JWautofillHotkeyDaemon
                         {
                             SendConfigToClient(client);
                         }
+                        else if (type == "recordStart")
+                        {
+                            // 记录请求方，并在「录制线程」安装全局键盘钩子
+                            // （钩子必须在带消息循环的线程上安装；我们用独立录制线程 + PostThreadMessage）
+                            string? brush = null;
+                            if (doc.RootElement.TryGetProperty("brush", out var bEl)) brush = bEl.GetString();
+                            lock (_recLock) { _recordingClient = client; _recordingBrush = brush; }
+                            Win32.PostThreadMessage(_recThreadId, WM_RECORD_START, IntPtr.Zero, IntPtr.Zero);
+                        }
+                        else if (type == "recordCancel")
+                        {
+                            Win32.PostThreadMessage(_recThreadId, WM_RECORD_STOP, IntPtr.Zero, IntPtr.Zero);
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -415,6 +607,9 @@ namespace JWautofillHotkeyDaemon
             catch { }
             finally
             {
+                // 若断开的是正在录制的一方，取消录制（卸载钩子）
+                if (_recordingClient == client)
+                    Win32.PostThreadMessage(_recThreadId, WM_RECORD_STOP, IntPtr.Zero, IntPtr.Zero);
                 lock (_clientsLock) _clients.Remove(client);
                 try { client.Close(); } catch { }
             }

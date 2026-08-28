@@ -1,23 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { storage, shell } from 'uxp';
-import { HotkeyEntry, connectHotkeyDaemon, onConfig, enumerateBrushes, onDaemonStatus, launchDaemon, pushConfig } from './HotkeyBridge';
+import { HotkeyEntry, connectHotkeyDaemon, onConfig, enumerateBrushes, onDaemonStatus, launchDaemon, pushConfig, requestHotkeyRecording, cancelHotkeyRecording } from './HotkeyBridge';
 import { ExpandIcon } from '../styles/Icons';
 
 // 笔刷热键分区：在调整面板内录制「笔刷 + 快捷键」，持久化到共享配置，
 // 由本地守护进程在全局捕获按键后直接切换笔刷（仿 Brusherator，不录制动作）。
+// 注意：组合键的「录制」由 native 守护进程用 Windows 全局键盘钩子完成，
+// UXP 面板只负责选笔刷 + 发指令 + 等结果；面板本身无法稳定捕获键盘事件。
 const rowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 };
 const itemStyle: React.CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
   padding: '6px 8px', marginTop: 6, borderRadius: 6,
   background: 'rgba(255,255,255,0.06)', fontSize: 12
-};
-
-// 命名键 -> 与守护进程 ParseCombo 一致的 token（避免依赖字符首字母误判）
-const NAMED_KEYS: Record<string, string> = {
-  Backspace: 'Backspace', Tab: 'Tab', Enter: 'Enter', Escape: 'Escape',
-  Delete: 'Delete', Insert: 'Insert', Home: 'Home', End: 'End',
-  PageUp: 'PageUp', PageDown: 'PageDown',
-  ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right'
 };
 
 export default function BrushHotkeySection() {
@@ -41,7 +35,6 @@ export default function BrushHotkeySection() {
   // refs：供自动启用轮询读取最新值，避免闭包拿到旧值
   const daemonConnectedRef = useRef(daemonConnected);
   const daemonPathRef = useRef(daemonPath);
-  const recordInputRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => { daemonConnectedRef.current = daemonConnected; }, [daemonConnected]);
   useEffect(() => { daemonPathRef.current = daemonPath; }, [daemonPath]);
 
@@ -54,17 +47,6 @@ export default function BrushHotkeySection() {
     });
     return unsub;
   }, []);
-
-  // 录制期把焦点放到隐藏输入框：UXP 只在「面板持有键盘焦点」时才会派发 keydown，
-  // 之前用 document.activeElement.blur() 把焦点整个丢掉，导致按键全跑去了 Photoshop。
-  useEffect(() => {
-    if (!recording) return;
-    const el = recordInputRef.current;
-    if (el) { try { el.focus({ preventScroll: true }); } catch { try { el.focus(); } catch { /* ignore */ } } }
-    return () => {
-      if (el && typeof el.blur === 'function') { try { el.blur(); } catch { /* ignore */ } }
-    };
-  }, [recording]);
 
   // 将插件内相对路径解析为真实 OS 路径：用 getPluginFolder().nativePath，
   // 绕开沙箱下 getEntry('native') 找不到目录的问题。
@@ -146,46 +128,29 @@ export default function BrushHotkeySection() {
     });
   };
 
-  const startRecord = () => {
+  // 录制由 native 守护进程完成（Windows 全局键盘钩子），UXP 只发指令并等待结果。
+  const startRecord = async () => {
     if (!selectedBrush) { setMessage('请先在上方选择一支笔刷'); return; }
-    // 注意：这里【不要】 blur，否则会丢掉面板键盘焦点导致录制收不到按键。
-    // 焦点改由录制期的隐藏输入框承接（见下方 useEffect）。
-    setMessage('请按下组合键…（按 Esc 取消）');
+    if (!daemonConnected) { setMessage('守护进程未连接，无法录制（请先安装并启用守护进程）'); return; }
     setRecording(true);
-  };
-
-  // 隐藏输入框的 keydown：录制时面板焦点在此输入框，keydown 稳定派发到这里
-  const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!recording) return;
-    const k = e.key;
-    // 纯修饰键只用于组合，不能作为触发键，继续等待实体键
-    if (['Control', 'Shift', 'Alt', 'Meta'].includes(k)) { e.preventDefault(); return; }
-    if (k === 'Escape') { setRecording(false); setMessage('已取消录制'); return; }
-
-    e.preventDefault();
-    e.stopPropagation();
-
-    const parts: string[] = [];
-    if (e.ctrlKey) parts.push('Ctrl');
-    if (e.shiftKey) parts.push('Shift');
-    if (e.altKey) parts.push('Alt');
-    if (e.metaKey) parts.push('Win');
-
-    let key = '';
-    if (k === ' ') key = 'Space';
-    else if (k.length === 1) key = k.toUpperCase();      // 单字符（字母/数字/符号）
-    else if (/^F\d+$/.test(k)) key = k;                  // F1..F24
-    else if (NAMED_KEYS[k]) key = NAMED_KEYS[k];         // 其余命名键
-    if (!key) return;                                    // 未知键，忽略
-
-    const combo = [...parts, key].join('+');
+    setMessage('正在录制… 请在任意位置按下组合键（按 Esc 取消）');
+    const res = await requestHotkeyRecording(selectedBrush);
+    setRecording(false);
+    if (!res) { setMessage('已取消录制'); return; }
+    const combo = res.combo;
     if (entries.some(x => x.combo === combo)) setMessage('该组合键已存在，已覆盖旧映射');
     const entry: HotkeyEntry = { id: 'bk_' + Date.now(), combo, action: 'applyBrush', brush: selectedBrush };
     const next = [...entries.filter(x => x.combo !== combo), entry];
     setEntries(next);
     if (pushConfig(next)) setMessage('已保存：' + combo + ' → ' + selectedBrush);
     else setMessage('推送配置失败（守护进程未运行？）');
+  };
+
+  // 用户主动取消当前录制
+  const cancelRecord = () => {
+    cancelHotkeyRecording();
     setRecording(false);
+    setMessage('已取消录制');
   };
 
   const removeEntry = (id: string) => {
@@ -208,7 +173,7 @@ export default function BrushHotkeySection() {
       {!collapsed && (
         <div className="adjust-expand-content expanded">
           <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 8 }}>
-            选中一支笔刷 → 点「录制」→ 按下组合键。守护进程会在任意焦点下触发，直接切换该笔刷。
+            选中一支笔刷 → 点「录制」→ 在任意位置按下组合键（由守护进程全局键盘钩子捕获，无需面板聚焦）。录制成功后守护进程会在全局触发并直接切换该笔刷。
           </div>
           <div style={rowStyle}>
             {usePicker ? (
@@ -228,8 +193,9 @@ export default function BrushHotkeySection() {
                 value={selectedBrush} onInput={(e: any) => setSelectedBrush(e.target.value)} />
             )}
             <sp-action-button onClick={startRecord} disabled={recording || !selectedBrush}>
-              {recording ? '按下组合键…' : '录制快捷键'}
+              {recording ? '录制中…' : '录制快捷键'}
             </sp-action-button>
+            {recording && <sp-action-button onClick={cancelRecord}>取消</sp-action-button>}
           </div>
           {!usePicker && (
             <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>
@@ -249,15 +215,6 @@ export default function BrushHotkeySection() {
           </div>
 
           {message && <div style={{ fontSize: 12, color: '#4CAF50', marginTop: 8 }}>{message}</div>}
-
-          {/* 录制用的隐藏输入框：仅在录制期被聚焦，承接面板键盘焦点 */}
-          <input
-            ref={recordInputRef}
-            onKeyDown={onKey}
-            aria-hidden="true"
-            tabIndex={-1}
-            style={{ position: 'absolute', left: 0, top: 0, width: 1, height: 1, opacity: 0, overflow: 'hidden', pointerEvents: 'none' }}
-          />
 
           <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.12)' }}>
             <div style={{ fontSize: 12, marginBottom: 6 }}>
