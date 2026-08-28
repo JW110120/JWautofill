@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { storage, shell } from 'uxp';
-import { HotkeyEntry, connectHotkeyDaemon, onConfig, pushConfig, enumerateBrushes, onDaemonStatus, launchDaemon } from './HotkeyBridge';
+import { HotkeyEntry, connectHotkeyDaemon, onConfig, enumerateBrushes, onDaemonStatus, launchDaemon, pushConfig } from './HotkeyBridge';
 import { ExpandIcon } from '../styles/Icons';
 
 // 笔刷热键分区：在调整面板内录制「笔刷 + 快捷键」，持久化到共享配置，
@@ -29,19 +29,21 @@ export default function BrushHotkeySection() {
   const [recording, setRecording] = useState(false);
   const [message, setMessage] = useState('');
   const [daemonConnected, setDaemonConnected] = useState(false);
+  // 守护进程预期安装路径（仅内部用于自动启用，不在面板上展示给用户）
   const [daemonPath, setDaemonPath] = useState<string>(() => {
-    try {
-      const saved = localStorage.getItem('jwauto_daemon_path');
-      if (saved) return saved;
-    } catch { /* ignore */ }
-    // 动态解析真实安装路径（install.ps1 会把 exe 装到 %LOCALAPPDATA%\JWautofill\daemon\）。
-    // 换机器/换用户时不再写死，避免“在家默认路径不对”的问题；取不到则留空，由「选择文件」补。
     try {
       const la = (globalThis as any).process?.env?.LOCALAPPDATA;
       if (la) return la + '\\JWautofill\\daemon\\JWautofillHotkeyDaemon.exe';
     } catch { /* ignore */ }
     return '';
   });
+
+  // refs：供自动启用轮询读取最新值，避免闭包拿到旧值
+  const daemonConnectedRef = useRef(daemonConnected);
+  const daemonPathRef = useRef(daemonPath);
+  const recordInputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => { daemonConnectedRef.current = daemonConnected; }, [daemonConnected]);
+  useEffect(() => { daemonPathRef.current = daemonPath; }, [daemonPath]);
 
   useEffect(() => {
     const unsub = connectHotkeyDaemon();
@@ -53,21 +55,19 @@ export default function BrushHotkeySection() {
     return unsub;
   }, []);
 
-  const startDaemon = () => {
-    const path = daemonPath.trim();
-    if (!path) { setMessage('请先选择守护进程 exe（点「选择 exe」或「运行安装器」）'); return; }
-    const lower = path.toLowerCase();
-    if (lower.endsWith('.ps1') || lower.endsWith('.bat')) {
-      setMessage('这是安装脚本，请点「运行安装器」；安装后点「选择 exe」选取生成的 exe');
-      return;
-    }
-    try { localStorage.setItem('jwauto_daemon_path', path); } catch { /* ignore */ }
-    if (launchDaemon(path)) setMessage('已尝试启动守护进程，请稍候…');
-    else setMessage('启动失败：请确认 exe 路径正确，或先「运行安装器」');
-  };
+  // 录制期把焦点放到隐藏输入框：UXP 只在「面板持有键盘焦点」时才会派发 keydown，
+  // 之前用 document.activeElement.blur() 把焦点整个丢掉，导致按键全跑去了 Photoshop。
+  useEffect(() => {
+    if (!recording) return;
+    const el = recordInputRef.current;
+    if (el) { try { el.focus({ preventScroll: true }); } catch { try { el.focus(); } catch { /* ignore */ } } }
+    return () => {
+      if (el && typeof el.blur === 'function') { try { el.blur(); } catch { /* ignore */ } }
+    };
+  }, [recording]);
 
   // 将插件内相对路径解析为真实 OS 路径：用 getPluginFolder().nativePath，
-  // 直接绕过沙箱下 getEntry('native') 找不到目录的问题（报 could not find an entry of plugin:/native）。
+  // 绕开沙箱下 getEntry('native') 找不到目录的问题。
   const getBundledNativePath = async (relPath: string): Promise<string | null> => {
     const folder: any = await storage.localFileSystem.getPluginFolder();
     const root: string = folder?.nativePath;
@@ -77,8 +77,7 @@ export default function BrushHotkeySection() {
     return [root, ...parts].join(sep);
   };
 
-  // 用 shell.openPath 唤起插件目录内的某个文件（exe/bat）。
-  // openPath 成功返回空串，失败返回错误串。
+  // 用 shell.openPath 唤起插件目录内的某个文件（exe/bat）。成功返回空串，失败返回错误串。
   const openBundled = async (relPath: string): Promise<boolean> => {
     const full = await getBundledNativePath(relPath);
     if (!full) {
@@ -93,18 +92,45 @@ export default function BrushHotkeySection() {
     return true;
   };
 
-  // 直接唤起安装器 install.bat（无需手动输入路径）
-  const runInstaller = async () => {
-    if (await openBundled('native/HotkeyDaemon/install.bat')) {
-      setMessage('已唤起安装器 install.bat，请按窗口提示完成安装；安装后点「选择 exe」');
+  // 按钮 1：选择 install.bat -> 运行 -> 安装完成后自动启用守护进程
+  const installDaemon = async () => {
+    try {
+      const file: any = await storage.localFileSystem.getFileForOpening({ types: ['bat'] });
+      if (!file) return; // 用户取消
+      const files: any[] = Array.isArray(file) ? file : [file];
+      const f: any = files[0];
+      const p: string = f?.nativePath || '';
+      if (!p) { setMessage('无法读取所选文件路径'); return; }
+      const name = p.toLowerCase().split(/[\\/]/).pop() || '';
+      if (name.includes('uninstall')) { setMessage('这看起来是卸载脚本，请选择 install.bat'); return; }
+      if (!name.endsWith('.bat')) { setMessage('请选择 install.bat 安装脚本'); return; }
+      const r: any = await shell.openPath(p);
+      if (typeof r === 'string' && r.length > 0) { setMessage('启动安装脚本失败：' + r); return; }
+      setMessage('安装已开始，完成后守护进程会自动启用（最多等待约 40 秒）…');
+      autoEnableDaemon();
+    } catch (e: any) {
+      const msg = e && e.message ? String(e.message) : (typeof e === 'string' ? e : JSON.stringify(e));
+      setMessage('安装失败：' + msg);
     }
   };
 
-  // 直接唤起卸载程序 uninstall.bat（安全卸载，详见 uninstall.ps1）
+  // 按钮 2：彻底卸载 install.ps1 写入的所有内容（仅本插件内容，绝不误删用户其他文件）
   const uninstallDaemon = async () => {
     if (await openBundled('native/HotkeyDaemon/uninstall.bat')) {
       setMessage('已唤起卸载程序，请按窗口提示完成卸载');
     }
+  };
+
+  // 安装脚本自身会在末尾启动守护进程；这里做兜底：未连接就周期尝试启动，连上即停（避免重复拉起实例）。
+  const autoEnableDaemon = () => {
+    let tries = 0;
+    const timer = setInterval(() => {
+      tries++;
+      if (daemonConnectedRef.current) { clearInterval(timer); setMessage('守护进程已连接 ✓'); return; }
+      if (tries > 10) { clearInterval(timer); setMessage('守护进程未自动连接，可重开插件或检查安装日志'); return; }
+      const p = daemonPathRef.current;
+      if (p) launchDaemon(p);
+    }, 4000);
   };
 
   // 重新枚举笔刷列表（枚举失败时可手动重试）
@@ -122,83 +148,45 @@ export default function BrushHotkeySection() {
 
   const startRecord = () => {
     if (!selectedBrush) { setMessage('请先在上方选择一支笔刷'); return; }
-    // 失焦当前元素：否则录制时按下的 Space/Enter 可能被仍在焦点的「录制」按钮再次捕获
-    try { (document.activeElement as HTMLElement | null)?.blur(); } catch { /* ignore */ }
+    // 注意：这里【不要】 blur，否则会丢掉面板键盘焦点导致录制收不到按键。
+    // 焦点改由录制期的隐藏输入框承接（见下方 useEffect）。
     setMessage('请按下组合键…（按 Esc 取消）');
     setRecording(true);
   };
 
-  // 用系统文件选择框定位守护进程，避免手动输入路径（仅允许 exe / bat）。
-  const pickDaemonFile = async () => {
-    try {
-      // types 必须是「扩展名字符串数组」（不带点）——这是 UXP getFileForOpening 的真实签名。
-      // 之前误写成 DOM 风格的 {description, accept} 对象数组，导致 UXP 内部对每个元素调 .trim() 报错。
-      const file: any = await storage.localFileSystem.getFileForOpening({
-        types: ['exe', 'bat']
-      });
-      if (!file) return; // 用户取消
-      // 某些 UXP 版本即使 allowMultiple:false 也会返回数组，统一归一化
-      const files: any[] = Array.isArray(file) ? file : [file];
-      const f: any = files[0];
-      const p: string = f?.nativePath || '';
-      if (!p) { setMessage('无法读取所选文件路径'); return; }
-      const name = p.toLowerCase().split(/[\\/]/).pop() || '';
-      if (name === 'install.bat') {
-        setMessage('install.bat 是安装脚本：请用资源管理器双击它（会自动编译并启动）；或选择已生成的 JWautofillHotkeyDaemon.exe');
-        return;
-      }
-      if (name !== 'jwautofillhotkeydaemon.exe') {
-        setMessage('请选择 JWautofillHotkeyDaemon.exe（或在资源管理器双击 install.bat 安装）');
-        return;
-      }
-      try { localStorage.setItem('jwauto_daemon_path', p); } catch { /* ignore */ }
-      setDaemonPath(p);
-      setMessage('已定位守护进程：' + p);
-    } catch (e: any) {
-      const msg = e && e.message ? String(e.message) : (typeof e === 'string' ? e : JSON.stringify(e));
-      setMessage('选择文件失败：' + msg);
-    }
-  };
-
-  useEffect(() => {
+  // 隐藏输入框的 keydown：录制时面板焦点在此输入框，keydown 稳定派发到这里
+  const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (!recording) return;
-    const onKey = (e: KeyboardEvent) => {
-      const k = e.key;
-      // 纯修饰键（Ctrl/Shift/Alt/Win）只用于组合，不能作为触发键，继续等待实体键
-      if (['Control', 'Shift', 'Alt', 'Meta'].includes(k)) return;
-      if (k === 'Escape') { setRecording(false); setMessage('已取消录制'); return; }
+    const k = e.key;
+    // 纯修饰键只用于组合，不能作为触发键，继续等待实体键
+    if (['Control', 'Shift', 'Alt', 'Meta'].includes(k)) { e.preventDefault(); return; }
+    if (k === 'Escape') { setRecording(false); setMessage('已取消录制'); return; }
 
-      e.preventDefault();
-      e.stopPropagation();
+    e.preventDefault();
+    e.stopPropagation();
 
-      const parts: string[] = [];
-      if (e.ctrlKey) parts.push('Ctrl');
-      if (e.shiftKey) parts.push('Shift');
-      if (e.altKey) parts.push('Alt');
-      if (e.metaKey) parts.push('Win');
+    const parts: string[] = [];
+    if (e.ctrlKey) parts.push('Ctrl');
+    if (e.shiftKey) parts.push('Shift');
+    if (e.altKey) parts.push('Alt');
+    if (e.metaKey) parts.push('Win');
 
-      let key = '';
-      if (k === ' ') key = 'Space';
-      else if (k.length === 1) key = k.toUpperCase();      // 单字符（字母/数字/符号）
-      else if (/^F\d+$/.test(k)) key = k;                  // F1..F24
-      else if (NAMED_KEYS[k]) key = NAMED_KEYS[k];         // 其余命名键
-      if (!key) return;                                    // 未知键，忽略
+    let key = '';
+    if (k === ' ') key = 'Space';
+    else if (k.length === 1) key = k.toUpperCase();      // 单字符（字母/数字/符号）
+    else if (/^F\d+$/.test(k)) key = k;                  // F1..F24
+    else if (NAMED_KEYS[k]) key = NAMED_KEYS[k];         // 其余命名键
+    if (!key) return;                                    // 未知键，忽略
 
-      const combo = [...parts, key].join('+');
-      if (entries.some(x => x.combo === combo)) setMessage('该组合键已存在，已覆盖旧映射');
-      const entry: HotkeyEntry = { id: 'bk_' + Date.now(), combo, action: 'applyBrush', brush: selectedBrush };
-      const next = [...entries.filter(x => x.combo !== combo), entry];
-      setEntries(next);
-      if (pushConfig(next)) setMessage('已保存：' + combo + ' → ' + selectedBrush);
-      else setMessage('推送配置失败（守护进程未运行？）');
-      setRecording(false);
-    };
-    // 注意：不能用 once:true —— 组合键的第一个 keydown 往往是修饰键，需持续监听直到实体键。
-    // 关键：UXP 面板里 keydown 必须挂在 document 上（window 上的监听器在 UXP 中不会可靠触发），
-    // 这正是「不管怎么按都录不了」的根因。
-    document.addEventListener('keydown', onKey, true);
-    return () => document.removeEventListener('keydown', onKey, true);
-  }, [recording, selectedBrush, entries]);
+    const combo = [...parts, key].join('+');
+    if (entries.some(x => x.combo === combo)) setMessage('该组合键已存在，已覆盖旧映射');
+    const entry: HotkeyEntry = { id: 'bk_' + Date.now(), combo, action: 'applyBrush', brush: selectedBrush };
+    const next = [...entries.filter(x => x.combo !== combo), entry];
+    setEntries(next);
+    if (pushConfig(next)) setMessage('已保存：' + combo + ' → ' + selectedBrush);
+    else setMessage('推送配置失败（守护进程未运行？）');
+    setRecording(false);
+  };
 
   const removeEntry = (id: string) => {
     const next = entries.filter(e => e.id !== id);
@@ -262,6 +250,15 @@ export default function BrushHotkeySection() {
 
           {message && <div style={{ fontSize: 12, color: '#4CAF50', marginTop: 8 }}>{message}</div>}
 
+          {/* 录制用的隐藏输入框：仅在录制期被聚焦，承接面板键盘焦点 */}
+          <input
+            ref={recordInputRef}
+            onKeyDown={onKey}
+            aria-hidden="true"
+            tabIndex={-1}
+            style={{ position: 'absolute', left: 0, top: 0, width: 1, height: 1, opacity: 0, overflow: 'hidden', pointerEvents: 'none' }}
+          />
+
           <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.12)' }}>
             <div style={{ fontSize: 12, marginBottom: 6 }}>
               守护进程状态：
@@ -269,17 +266,12 @@ export default function BrushHotkeySection() {
                 {daemonConnected ? ' 已连接' : ' 未连接'}
               </b>
             </div>
-            <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 6, wordBreak: 'break-all' }}>
-              守护进程路径：{daemonPath || '（未选择，点「选择 exe」或「运行安装器」）'}
-            </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              <sp-action-button onClick={pickDaemonFile}>选择 exe</sp-action-button>
-              <sp-action-button onClick={runInstaller}>运行安装器</sp-action-button>
-              <sp-action-button onClick={startDaemon} disabled={!daemonPath}>启动</sp-action-button>
+              <sp-action-button onClick={installDaemon}>安装守护进程</sp-action-button>
               <sp-action-button onClick={uninstallDaemon}>卸载守护进程</sp-action-button>
             </div>
             <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>
-              点「运行安装器」可自动编译并安装 exe（加入开机自启）；「选择 exe」用于已有安装；「卸载守护进程」可彻底移除。未连接时快捷键不生效。
+              点「安装守护进程」选择 install.bat 完成安装并自动启用；「卸载守护进程」会彻底移除本插件写入的内容（仅清理自身，不影响其他文件）。未连接时快捷键不生效。
             </div>
           </div>
         </div>
