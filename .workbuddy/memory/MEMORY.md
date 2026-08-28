@@ -34,3 +34,11 @@
 - **batchPlay 命令速查**：载入通道选区 `{_obj:'set',_target:[{_ref:'channel',_property:'selection'}],to:{_ref:'channel',_enum:'channel',_value:'RGB'}}`；Delete `{_obj:'clear'}`；反色 `{_obj:'invert'}`（只反 RGB 不动 alpha）；复制+向下合并用 UXP DOM `Layer.duplicate()`/`Layer.merge()`（官方 API 比 batchPlay mergeLayers 稳）。
 - **适用性**：扣白适合深/中色内容，扣黑适合浅/中色内容（对比度决定可恢复性，信息论极限）。
 - 验证脚本：analysis/knockout/{sim_knockout.py, sim_invert_fix.py, whole_image_sim.py}；对比图 analysis/knockout/knockout_verify.html。
+
+## 守护进程/热键补充（2026-08-29）
+
+- **C# System.Text.Json 默认大小写敏感**：UXP 推小写 JSON 键到 PascalCase C# 属性会静默全空。跨端通信必须 JsonSerializerOptions{CamelCase, CaseInsensitive=true}。
+- **配置路径类 bug 的排查法**：daemon 是无窗口 console 程序，Console.WriteLine 全被吞。前台重定向 stdout + analysis/hotkey/ws_raw_test.mjs（原始 TCP WS 客户端）可完整观测收发/落盘。
+- **daemon Broadcast 曾硬编码单字节帧长**（>125B 发坏帧），已统一走 SendToClient。
+- **面板通过 getPluginFolder 定位文件**：用户从 dist 加载插件，dist 必须由 webpack 拷入 daemon 脚本/exe；copy-webpack-plugin 的 glob from 需配 to:[name][ext]。
+- **会话沙箱会回收后台子进程**：Start-Process/setsid/schtasks 均不能持久拉起 daemon；需用户点「安装守护进程」或重启（HKCU Run 自启）。schtasks 在安全策略黑名单。
