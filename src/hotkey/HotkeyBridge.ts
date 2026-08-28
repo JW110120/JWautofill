@@ -5,7 +5,7 @@
 // - 守护进程全局捕获按键后广播 hotkey 事件，插件执行「总开关切换 / 直接 select 笔刷」。
 
 import { action, core, app } from 'photoshop';
-import { shell } from 'uxp';
+import { shell, storage } from 'uxp';
 
 export interface HotkeyEntry {
   id: string;
@@ -17,6 +17,31 @@ export interface HotkeyEntry {
 const WS_URL = 'ws://127.0.0.1:18923';
 
 type ConfigListener = (entries: HotkeyEntry[]) => void;
+
+// 配置文件统一放在 PS 的 PluginData 目录（与密钥、图案等持久化数据同一个位置），
+// 路径由本模块解析后告知守护进程，用户不再需要去 %LOCALAPPDATA% 里翻找。
+const CONFIG_FILE_NAME = 'hotkeys.json';
+let resolvedConfigPath = '';
+let configPathPromise: Promise<string> | null = null;
+
+async function resolveConfigPath(): Promise<string> {
+  if (resolvedConfigPath) return resolvedConfigPath;
+  if (configPathPromise) return configPathPromise;
+  configPathPromise = (async () => {
+    try {
+      const folder: any = await storage.localFileSystem.getDataFolder();
+      const p: string = folder?.nativePath || '';
+      if (p) {
+        const sep = p.indexOf('\\') >= 0 ? '\\' : '/';
+        resolvedConfigPath = p + sep + CONFIG_FILE_NAME;
+      }
+    } catch (e) {
+      console.warn('⚠️ 解析插件数据目录失败，守护进程将回落到默认配置路径:', e);
+    }
+    return resolvedConfigPath;
+  })();
+  return configPathPromise;
+}
 
 let cachedConfig: HotkeyEntry[] = [];
 const configListeners: ConfigListener[] = [];
@@ -58,8 +83,33 @@ export function launchDaemon(exePath: string): boolean {
   }
 }
 
+// 让守护进程优雅退出（面板「断开守护进程」用）。
+// 直接杀死进程在 UXP 里做不到，而卸载脚本又要求进程先停掉才能删安装目录，
+// 所以由守护进程自己退出是最干净的做法。
+export function disconnectDaemon(): boolean {
+  try {
+    if (currentWs && currentWs.readyState === (currentWs.OPEN ?? 1)) {
+      currentWs.send(JSON.stringify({ type: 'shutdown' }));
+      return true;
+    }
+  } catch { /* ignore */ }
+  return false;
+}
+
 export function registerMainToggleHandler(fn: () => void) {
   mainToggleHandler = fn;
+}
+
+// 卸载动作由面板右上角的菜单触发，但真正的实现（含状态提示）在 BrushHotkeySection 里，
+// 这里做一个简单的注册/转发，避免把面板内部状态暴露给菜单层。
+let uninstallHandler: (() => Promise<string>) | null = null;
+export function registerUninstallHandler(fn: () => Promise<string>) {
+  uninstallHandler = fn;
+}
+export async function requestUninstall(): Promise<string> {
+  if (!uninstallHandler) return '卸载功能尚未就绪（请展开「笔刷热键（全局）」分区后重试）';
+  try { return await uninstallHandler(); }
+  catch (e: any) { return '卸载失败：' + (e?.message || String(e)); }
 }
 
 // 订阅热键触发事件（无论成败都会回调，ok=false 表示执行 batchPlay 失败）
@@ -118,7 +168,15 @@ export function connectHotkeyDaemon(): () => void {
       currentWs = ws;
       ws.onopen = () => {
         connected = true; emitStatus();
-        try { ws.send(JSON.stringify({ type: 'getConfig' })); } catch { /* ignore */ }
+        // 先告知配置文件的统一存放位置（PS PluginData），再拉配置，
+        // 保证守护进程读写的就是面板展示的那一份。
+        void (async () => {
+          try {
+            const cp = await resolveConfigPath();
+            if (cp) ws.send(JSON.stringify({ type: 'setConfigPath', path: cp }));
+          } catch { /* ignore */ }
+          try { ws.send(JSON.stringify({ type: 'getConfig' })); } catch { /* ignore */ }
+        })();
       };
       ws.onmessage = (ev: any) => {
         try {
@@ -197,21 +255,35 @@ export function pushConfig(list: HotkeyEntry[]): boolean {
 //    顶层 name: 字段——那种引用 PS 无法解析，batchPlay 静默无效（不报错但也不切笔刷）。
 // 2) 不要加 _options:{dialogOptions:'dontDisplay'}——该选项实际效果相反：会弹 PS 错误框
 //    且异常不进 catch；去掉后笔刷名不存在时会正常 throw，可被下方 catch 捕获并打日志。
+// 一次完整的「切到画笔工具 + 选中笔刷预设」调用
+async function selectBrushCommands(brushName: string) {
+  // 先确保当前是画笔工具（用标准 select 切工具；工具已是画笔时可能报错，忽略）
+  try {
+    await action.batchPlay([
+      { _obj: 'select', _target: [{ _ref: 'paintbrushTool' }] }
+    ], { synchronousExecution: true });
+  } catch { /* 已是画笔工具 */ }
+  // 按名称选中笔刷预设（选中的是 Brushes 面板里的预设，全局生效）
+  return await action.batchPlay([
+    { _obj: 'select', _target: [{ _ref: 'brush', _name: brushName }] }
+  ], { synchronousExecution: true });
+}
+
 export async function applyBrush(brushName: string): Promise<boolean> {
   try {
-    await core.executeAsModal(async () => {
-      // 先确保当前是画笔工具（用标准 select 切工具；工具已是画笔时可能报错，忽略）
-      try {
-        await action.batchPlay([
-          { _obj: 'select', _target: [{ _ref: 'paintbrushTool' }] }
-        ], { synchronousExecution: true });
-      } catch { /* 已是画笔工具 */ }
-      // 按名称选中笔刷预设（选中的是 Brushes 面板里的预设，全局生效）
-      await action.batchPlay([
-        { _obj: 'select', _target: [{ _ref: 'brush', _name: brushName }] }
-      ], { synchronousExecution: true });
-    }, { commandName: '切换笔刷' });
-    return true;
+    // 首选直连 batchPlay：切换工具/笔刷属于「应用状态」而非文档修改，
+    // 多数情况下不需要模态作用域，且不打断用户当前操作（无进度条、无状态抢占）。
+    try {
+      await selectBrushCommands(brushName);
+      return true;
+    } catch (directErr) {
+      // 某些 PS 版本/某些状态下会要求 batchPlay 必须在模态作用域里执行，
+      // 这里做一次回退；两条路都不通才判定失败。
+      await core.executeAsModal(async () => {
+        await selectBrushCommands(brushName);
+      }, { commandName: '切换笔刷' });
+      return true;
+    }
   } catch (e) {
     console.error('⚠️ 切换笔刷失败（笔刷名「' + brushName + '」可能不存在，需与 Brushes 面板名称完全一致）:', e);
     return false;

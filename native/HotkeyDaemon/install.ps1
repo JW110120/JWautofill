@@ -1,3 +1,5 @@
+# IMPORTANT: keep this file pure ASCII. Windows PowerShell 5.1 reads a BOM-less
+# .ps1 as ANSI (GBK on Chinese Windows), so any non-ASCII byte corrupts parsing.
 $ErrorActionPreference = "Stop"
 $exeName = "JWautofillHotkeyDaemon.exe"
 $installDir = Join-Path $env:LOCALAPPDATA "JWautofill\daemon"
@@ -17,9 +19,13 @@ function CopyExe($srcExe) {
     if ($running) {
         Log "Stopping running daemon before exe update..."
         foreach ($p in $running) {
-            try { $p.Stop(); $p.WaitForExit(5000) } catch { try { $p.Kill() } catch { } }
+            # NOTE: System.Diagnostics.Process has no Stop() method (that belongs to
+            # ServiceController). Calling $p.Stop() throws "does not contain a method
+            # named 'Stop'" and silently left the daemon running, which then locked
+            # the exe/log files. Always use Stop-Process instead.
+            try { Stop-Process -Id $p.Id -Force -ErrorAction Stop } catch { }
         }
-        Start-Sleep -Milliseconds 500
+        Start-Sleep -Milliseconds 800
     }
     if (-not (Test-Path $installDir)) {
         New-Item -ItemType Directory -Path $installDir -Force | Out-Null
@@ -27,8 +33,32 @@ function CopyExe($srcExe) {
     Copy-Item -Path $srcExe -Destination (Join-Path $installDir $exeName) -Force
 }
 
+# Start-Process throws "An item with the same key has already been added. Key: Path"
+# on machines where the environment contains both "Path" and "PATH" keys, so try a
+# couple of progressively simpler launch methods before giving up.
+function Start-Daemon($exePath) {
+    $daemonLog = Join-Path $installDir "daemon.log"
+    $daemonErr = Join-Path $installDir "daemon.err.log"
+    try {
+        Start-Process -FilePath $exePath -ArgumentList "--autostart" -WindowStyle Hidden `
+            -RedirectStandardOutput $daemonLog -RedirectStandardError $daemonErr -ErrorAction Stop
+        return "Started daemon (hidden), log: $daemonLog"
+    } catch {
+        Log "Warn: Start-Process with log redirection failed: $_"
+    }
+    try {
+        Start-Process -FilePath $exePath -ArgumentList "--autostart" -WindowStyle Hidden -ErrorAction Stop
+        return "Started daemon (hidden), logging disabled."
+    } catch {
+        Log "Warn: Start-Process failed: $_"
+    }
+    & cmd /c start "" /b "`"$exePath`"" --autostart
+    return "Started daemon via cmd /c start."
+}
+
 try {
     Log "=== JWautofill daemon install start ==="
+    $exitCode = 0
 
     $exePath = Join-Path $installDir $exeName
     $prebuilt = Join-Path $PSScriptRoot "publish\$exeName"
@@ -88,17 +118,35 @@ try {
     # stdout/stderr are redirected to daemon.log: the daemon is a windowless console
     # app, and its startup/config/error logs are invaluable for diagnosing issues.
     if (-not (Get-Process -Name "JWautofillHotkeyDaemon" -ErrorAction SilentlyContinue)) {
-        $daemonLog = Join-Path $installDir "daemon.log"
-        Start-Process -FilePath $exePath -ArgumentList "--autostart" -WindowStyle Hidden `
-            -RedirectStandardOutput $daemonLog -RedirectStandardError (Join-Path $installDir "daemon.err.log")
-        Log "Started daemon (hidden), log: $daemonLog"
+        Log (Start-Daemon $exePath)
     } else {
         Log "Daemon already running."
     }
     Log "Install finished successfully."
+    Write-Host ""
+    Write-Host "Daemon is ready."
 } catch {
     Log "ERROR: $_"
     Write-Host "ERROR: $_"
+    $exitCode = 1
 }
 
-Read-Host "Install finished, press Enter to close"
+# IMPORTANT: keep this file pure ASCII. Windows PowerShell 5.1 reads a BOM-less
+# .ps1 as ANSI (GBK on Chinese Windows), so any non-ASCII byte corrupts parsing.
+#
+# Success  -> 5s countdown, then the window closes by itself (feels like the
+#             daemon was already there; the user does nothing).
+# Failure  -> the window stays open so the user can read the error.
+if ($exitCode -eq 0) {
+    Write-Host ""
+    for ($i = 5; $i -ge 1; $i--) {
+        Write-Host ("`rLoaded. This window closes in " + $i + " seconds...   ") -NoNewline
+        Start-Sleep -Seconds 1
+    }
+    Write-Host ""
+    exit 0
+} else {
+    Write-Host ""
+    Read-Host "Install FAILED. Press Enter to close this window"
+    exit 1
+}

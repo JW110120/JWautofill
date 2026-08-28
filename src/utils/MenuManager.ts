@@ -139,6 +139,14 @@ export class MenuManager {
             {
               id: "alphaSample",
               label: "图层像素alpha采样"
+            },
+            {
+              id: "spacer2",
+              label: "-" // 分隔符（图层像素alpha采样 与 卸载守护进程 之间）
+            },
+            {
+              id: "uninstallHotkeyDaemon",
+              label: "卸载笔刷热键守护进程"
             }
           ],
           invokeMenu(id: string) {

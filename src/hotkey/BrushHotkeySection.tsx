@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { storage, shell } from 'uxp';
-import { HotkeyEntry, connectHotkeyDaemon, onConfig, enumerateBrushes, onDaemonStatus, launchDaemon, pushConfig, requestHotkeyRecording, cancelHotkeyRecording, onHotkeyTriggered } from './HotkeyBridge';
+import { HotkeyEntry, connectHotkeyDaemon, onConfig, enumerateBrushes, onDaemonStatus, pushConfig, requestHotkeyRecording, cancelHotkeyRecording, onHotkeyTriggered, disconnectDaemon, registerUninstallHandler } from './HotkeyBridge';
 import { ExpandIcon, DeleteIcon } from '../styles/Icons';
 
 // 笔刷热键分区：在调整面板内录制「笔刷 + 快捷键」，持久化到共享配置，
@@ -22,26 +22,17 @@ export default function BrushHotkeySection() {
   const [usePicker, setUsePicker] = useState(true);
   const [recording, setRecording] = useState(false);
   const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
   const [daemonConnected, setDaemonConnected] = useState(false);
-  // 守护进程预期安装路径（仅内部用于自动启用，不在面板上展示给用户）
-  const [daemonPath, setDaemonPath] = useState<string>(() => {
-    try {
-      const la = (globalThis as any).process?.env?.LOCALAPPDATA;
-      if (la) return la + '\\JWautofill\\daemon\\JWautofillHotkeyDaemon.exe';
-    } catch { /* ignore */ }
-    return '';
-  });
 
-  // refs：供自动启用轮询读取最新值，避免闭包拿到旧值
+  // refs：供轮询读取最新值，避免闭包拿到旧值
   const daemonConnectedRef = useRef(daemonConnected);
-  const daemonPathRef = useRef(daemonPath);
   useEffect(() => { daemonConnectedRef.current = daemonConnected; }, [daemonConnected]);
-  useEffect(() => { daemonPathRef.current = daemonPath; }, [daemonPath]);
 
   useEffect(() => {
     const unsub = connectHotkeyDaemon();
-    onConfig((list)  => setEntries(list));
-    onDaemonStatus(setDaemonConnected);
+    const unsubConfig = onConfig((list)  => setEntries(list));
+    const unsubStatus = onDaemonStatus(setDaemonConnected);
     // 热键触发即时反馈：用户按快捷键后面板直接显示是否命中、切换是否成功
     // （这是诊断「按了快捷键没反应」的关键观测点：无任何显示 = 事件根本没到达面板）
     const unsubHotkey = onHotkeyTriggered((info) => {
@@ -54,7 +45,7 @@ export default function BrushHotkeySection() {
     enumerateBrushes().then((b) => { setBrushes(b); setUsePicker(b.length > 0); }).catch(() => {
       setBrushes([]); setUsePicker(false);
     });
-    return () => { unsub(); unsubHotkey(); };
+    return () => { unsub(); unsubConfig(); unsubStatus(); unsubHotkey(); };
   }, []);
 
   // 将插件内相对路径解析为真实 OS 路径：用 getPluginFolder().nativePath，
@@ -83,78 +74,78 @@ export default function BrushHotkeySection() {
     return true;
   };
 
-  // 按钮 1：选择 install.bat -> 运行 -> 安装完成后自动启用守护进程
-  const installDaemon = async () => {
+  // 「加载守护进程」：脚本已随插件分发在固定位置，直接静默运行，不再弹文件选择框。
+  // 安装成功的窗口会 5 秒倒计时自动关闭，所以这里通常不会打扰用户。
+  const loadDaemon = async () => {
+    if (busy) return;
+    setBusy(true);
     try {
-      const file: any = await storage.localFileSystem.getFileForOpening({ types: ['bat'] });
-      if (!file) return; // 用户取消
-      const files: any[] = Array.isArray(file) ? file : [file];
-      const f: any = files[0];
-      const p: string = f?.nativePath || '';
-      if (!p) { setMessage('无法读取所选文件路径'); return; }
-      const name = p.toLowerCase().split(/[\\/]/).pop() || '';
-      if (name.includes('uninstall')) { setMessage('这看起来是卸载脚本，请选择 install.bat'); return; }
-      if (!name.endsWith('.bat')) { setMessage('请选择 install.bat 安装脚本'); return; }
-      const r: any = await shell.openPath(p);
-      if (typeof r === 'string' && r.length > 0) { setMessage('启动安装脚本失败：' + r); return; }
-      setMessage('安装已开始，完成后守护进程会自动启用（最多等待约 40 秒）…');
-      autoEnableDaemon();
-    } catch (e: any) {
-      const msg = e && e.message ? String(e.message) : (typeof e === 'string' ? e : JSON.stringify(e));
-      setMessage('安装失败：' + msg);
-    }
-  };
-
-  // 按钮 2：彻底卸载 install.ps1 写入的所有内容（仅本插件内容，绝不误删用户其他文件）。
-  // 反馈策略：唤起卸载程序后轮询连接状态——卸载脚本第一步就会停掉守护进程，
-  // 因此「已连接 → 未连接」即可判定卸载成功；超时未断开则提示用户去弹窗确认。
-  // 稳健性：整体 try/catch（之前 openBundled 抛异常时整个 Promise 被吞，按钮毫无反应）；
-  // 插件目录里找不到 uninstall.bat（例如从 dist 加载且构建未拷贝 native）时，退化为文件选择方式。
-  const uninstallDaemon = async () => {
-    try {
-      const wasConnected = daemonConnectedRef.current;
-      let ok = false;
-      try { ok = await openBundled('native/HotkeyDaemon/uninstall.bat'); } catch (err: any) {
-        console.error('唤起内置卸载程序失败:', err);
-      }
+      const ok = await openBundled('native/HotkeyDaemon/install.bat');
       if (!ok) {
-        // 兜底：让用户手动选 uninstall.bat（与安装流程一致）
-        setMessage('插件目录内未找到卸载脚本，请选择 uninstall.bat');
-        const file: any = await storage.localFileSystem.getFileForOpening({ types: ['bat'] });
-        if (!file) { setMessage('已取消卸载'); return; }
-        const files: any[] = Array.isArray(file) ? file : [file];
-        const p: string = files[0]?.nativePath || '';
-        if (!p.toLowerCase().endsWith('uninstall.bat')) { setMessage('请选择 uninstall.bat 卸载脚本'); return; }
-        const r: any = await shell.openPath(p);
-        if (typeof r === 'string' && r.length > 0) { setMessage('唤起卸载脚本失败：' + r); return; }
-      }
-      if (!wasConnected) {
-        setMessage('卸载程序已打开：请在弹出的窗口中按提示完成卸载');
+        setMessage('加载失败：未找到安装脚本，请手动双击插件目录 native/HotkeyDaemon/install.bat');
         return;
       }
-      setMessage('正在卸载…（卸载完成后守护进程会停止）');
-      for (let i = 0; i < 25; i++) {
+      setMessage('正在加载守护进程…');
+      for (let i = 0; i < 30; i++) {
         await new Promise(r => setTimeout(r, 1000));
-        if (!daemonConnectedRef.current) { setMessage('卸载完成 ✓（守护进程已停止、开机自启与安装目录已移除）'); return; }
+        if (daemonConnectedRef.current) { setMessage('守护进程已就绪 ✓'); return; }
       }
-      setMessage('尚未检测到卸载完成：请在弹出的卸载窗口中确认操作（完成后状态会变为「未连接」）');
+      setMessage('未检测到守护进程：请在弹出的窗口中查看提示（加载失败时窗口不会自动关闭）');
     } catch (e: any) {
       const msg = e && e.message ? String(e.message) : (typeof e === 'string' ? e : JSON.stringify(e));
-      setMessage('卸载失败：' + msg + '（可手动双击插件目录 native/HotkeyDaemon/uninstall.bat）');
+      setMessage('加载守护进程失败：' + msg + '（可手动双击插件目录 native/HotkeyDaemon/install.bat）');
+    } finally {
+      setBusy(false);
     }
   };
 
-  // 安装脚本自身会在末尾启动守护进程；这里做兜底：未连接就周期尝试启动，连上即停（避免重复拉起实例）。
-  const autoEnableDaemon = () => {
-    let tries = 0;
-    const timer = setInterval(() => {
-      tries++;
-      if (daemonConnectedRef.current) { clearInterval(timer); setMessage('守护进程已连接 ✓'); return; }
-      if (tries > 10) { clearInterval(timer); setMessage('守护进程未自动连接，可重开插件或检查安装日志'); return; }
-      const p = daemonPathRef.current;
-      if (p) launchDaemon(p);
-    }, 4000);
+  // 「断开守护进程」：让守护进程自己优雅退出。
+  // 这是卸载前必须的准备动作——卸载脚本要删安装目录，而运行中的 exe 会锁住目录里的日志文件。
+  const stopDaemon = async () => {
+    if (busy) return;
+    if (!disconnectDaemon()) { setMessage('当前未连接到守护进程，无需断开'); return; }
+    setBusy(true);
+    setMessage('正在断开守护进程…');
+    try {
+      for (let i = 0; i < 20; i++) {
+        await new Promise(r => setTimeout(r, 500));
+        if (!daemonConnectedRef.current) { setMessage('守护进程已断开 ✓（快捷键已停止生效，此时可安全卸载）'); return; }
+      }
+      setMessage('守护进程无响应，请稍后重试；若仍无法断开，请重启电脑后再卸载。');
+    } finally {
+      setBusy(false);
+    }
   };
+
+  // 卸载：低频操作，入口在面板右上角菜单里（见 MenuManager / AdjustmentMenu）。
+  // 流程：先断连（保证 exe 不再占用文件）→ 运行卸载脚本 → 轮询确认。
+  const uninstallDaemon = async (): Promise<string> => {
+    setCollapsed(false);
+    if (daemonConnectedRef.current) {
+      setMessage('正在先断开守护进程…');
+      disconnectDaemon();
+      for (let i = 0; i < 20; i++) {
+        await new Promise(r => setTimeout(r, 500));
+        if (!daemonConnectedRef.current) break;
+      }
+    }
+    let ok = false;
+    try { ok = await openBundled('native/HotkeyDaemon/uninstall.bat'); } catch (err: any) {
+      console.error('唤起内置卸载程序失败:', err);
+    }
+    if (!ok) {
+      const ret = '插件目录内未找到卸载脚本，请手动双击 native/HotkeyDaemon/uninstall.bat';
+      setMessage(ret);
+      return ret;
+    }
+    setMessage('卸载程序已打开：成功时窗口会倒计时自动关闭，失败时会保留在屏幕上。');
+    return '卸载程序已打开，请在弹出的窗口中查看结果。';
+  };
+
+  // 供右上角菜单调用（菜单回调注册在 AdjustmentPanel 里，具体实现留在本组件）
+  useEffect(() => {
+    registerUninstallHandler(uninstallDaemon);
+  }, []);
 
   // 重新枚举笔刷列表（枚举失败时可手动重试）
   const refreshBrushes = () => {
@@ -213,6 +204,17 @@ export default function BrushHotkeySection() {
       </div>
       {!collapsed && (
         <div className="adjust-expand-content expanded">
+          {/* 守护进程状态条：与「蒙版同步」的引擎状态条同一套视觉，左侧状态点+文字，右侧操作按钮 */}
+          <div className="mask-sync-status-bar">
+            <span className={`mask-sync-status-dot ${daemonConnected ? 'ok' : 'warn'}`} />
+            <span className="mask-sync-status-ready">
+              {daemonConnected ? '守护进程就绪' : (busy ? '守护进程处理中…' : '守护进程未加载')}
+            </span>
+            <span style={{ flex: 1 }} />
+            <sp-action-button size="s" onClick={daemonConnected ? stopDaemon : loadDaemon} disabled={busy}>
+              {daemonConnected ? '断开守护进程' : '加载守护进程'}
+            </sp-action-button>
+          </div>
           <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 8 }}>
             选中一支笔刷 → 点「录制」→ 在任意位置按下组合键（由守护进程全局键盘钩子捕获，无需面板聚焦）。录制成功后守护进程会在全局触发并直接切换该笔刷。
           </div>
@@ -261,22 +263,6 @@ export default function BrushHotkeySection() {
           </div>
 
           {message && <div style={{ fontSize: 12, color: '#4CAF50', marginTop: 8 }}>{message}</div>}
-
-          <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.12)' }}>
-            <div style={{ fontSize: 12, marginBottom: 6 }}>
-              守护进程状态：
-              <b style={{ color: daemonConnected ? '#4CAF50' : '#E53935' }}>
-                {daemonConnected ? ' 已连接' : ' 未连接'}
-              </b>
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              <sp-action-button onClick={installDaemon}>安装守护进程</sp-action-button>
-              <sp-action-button onClick={uninstallDaemon}>卸载守护进程</sp-action-button>
-            </div>
-            <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>
-              点「安装守护进程」选择 install.bat 完成安装并自动启用；「卸载守护进程」会彻底移除本插件写入的内容（仅清理自身，不影响其他文件）。未连接时快捷键不生效。
-            </div>
-          </div>
         </div>
       )}
     </div>

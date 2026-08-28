@@ -8,6 +8,7 @@ export class AdjustmentMenu {
   private static resetCallback: (() => void) | null = null;
   private static resetParametersCallback: (() => void) | null = null;
   private static alphaSampleCallback: (() => void) | null = null;
+  private static uninstallHotkeyDaemonCallback: (() => void) | null = null;
 
   constructor() {
     // Constructor
@@ -22,12 +23,14 @@ export class AdjustmentMenu {
     onResetOrder: () => void;
     onResetParameters: () => void;
     onAlphaSample: () => void;
+    onUninstallHotkeyDaemon: () => void;
   }) {
     this.visibilityPanelCallback = callbacks.onToggleVisibilityPanel;
     this.collapseCallback = callbacks.onToggleAllCollapse;
     this.resetCallback = callbacks.onResetOrder;
     this.resetParametersCallback = callbacks.onResetParameters;
     this.alphaSampleCallback = callbacks.onAlphaSample;
+    this.uninstallHotkeyDaemonCallback = callbacks.onUninstallHotkeyDaemon;
   }
 
   /**
@@ -59,6 +62,11 @@ export class AdjustmentMenu {
       case "alphaSample":
         if (this.alphaSampleCallback) {
           this.alphaSampleCallback();
+        }
+        break;
+      case "uninstallHotkeyDaemon":
+        if (this.uninstallHotkeyDaemonCallback) {
+          this.uninstallHotkeyDaemonCallback();
         }
         break;
       default:
