@@ -20,6 +20,10 @@ obj/
 *.pdb
 *.cache
 
+# 例外：守护进程预编译「自包含单文件 exe」随插件分发，安装时直接复制，
+# 用户机器无需安装 .NET SDK / 运行时。这是必要的发布物，必须入库。
+!native/HotkeyDaemon/publish/JWautofillHotkeyDaemon.exe
+
 # ============ TypeScript / 构建中间产物 ============
 *.tsbuildinfo
 

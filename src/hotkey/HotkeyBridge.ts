@@ -4,7 +4,7 @@
 // - 插件只通过 WebSocket 向守护进程拉取/推送配置（getConfig / config），避免跨进程文件系统耦合。
 // - 守护进程全局捕获按键后广播 hotkey 事件，插件执行「总开关切换 / 直接 select 笔刷」。
 
-import { action, core } from 'photoshop';
+import { action, core, app } from 'photoshop';
 import { shell } from 'uxp';
 
 export interface HotkeyEntry {
@@ -185,15 +185,59 @@ export async function applyBrush(brushName: string) {
 }
 
 // ===== 枚举当前可用笔刷预设（供面板下拉使用；失败返回空，不影响核心功能）=====
+// 正确路径：读取 application 描述符里的 presetManager（第 0 组 = Brush Presets，
+// 第 7 组 = Tool Presets）。这是 UXP 下枚举笔刷名最可靠的方式（论坛 How-to-get-all-
+// brush-or-tool-presets 确认）。老写法用 get + brushPreset ordinal all 取到的结构里
+// 拿不到 name 列表，所以一直枚举为空。
 export async function enumerateBrushes(): Promise<string[]> {
   try {
-    const res = await action.batchPlay([
-      { _obj: 'get', _target: [{ _ref: 'brushPreset', _enum: 'ordinal', _value: 'all' }] }
+    // 1) 优先用现代 app.brushes 集合（部分较新 PS 版本提供）
+    const brushesApi: any = (app as any)?.brushes;
+    if (brushesApi && typeof brushesApi.get === 'function') {
+      try {
+        const list: any[] = await brushesApi.get();
+        if (Array.isArray(list)) {
+          const names = list.map((b: any) => (b?.name ?? '')).filter((x: any) => !!x);
+          if (names.length) return Array.from(new Set(names)) as string[];
+        }
+      } catch { /* 退回到 batchPlay */ }
+    }
+
+    // 2) 读取 application 描述符里的 presetManager
+    const res: any = await action.batchPlay([
+      {
+        _obj: 'get',
+        _target: [
+          { _ref: 'property', _property: 'presetManager' },
+          { _ref: 'application', _enum: 'ordinal', _value: 'targetEnum' }
+        ],
+        _options: { dialogOptions: 'dontDisplay' }
+      }
     ], { synchronousExecution: true });
-    const items: any[] = Array.isArray(res) ? res : [];
-    const names = items
-      .map((it: any) => it.name || it.localID || it.ID)
-      .filter((x: any) => !!x);
+
+    const appDesc: any = Array.isArray(res) ? res[0] : res;
+    let pm: any = appDesc?.presetManager;
+    // 有些版本直接把 presetManager 描述符作为返回值（而不是包在 application 里）
+    if (!pm && (appDesc?._obj === 'presetManager' || Array.isArray(appDesc?.preset) || Array.isArray(appDesc?.brushPreset))) {
+      pm = appDesc;
+    }
+    if (!pm) return [];
+
+    // presetManager 可能是「分组数组」，也可能是带 preset/brushPreset 的容器
+    const groups: any[] = [];
+    if (Array.isArray(pm)) groups.push(...pm);
+    else if (Array.isArray(pm.preset)) groups.push(...pm.preset);
+    else if (Array.isArray(pm.brushPreset)) groups.push(...pm.brushPreset);
+
+    // 第 0 组是 Brush Presets
+    const group = groups[0];
+    if (!group) return [];
+    const rawNames: any = group.name ?? group.names;
+    if (!rawNames) return [];
+    const arr: any[] = Array.isArray(rawNames) ? rawNames : [rawNames];
+    const names = arr
+      .map((n: any) => (typeof n === 'string' ? n : (n?.name ?? n?._value ?? '')))
+      .filter((x: any) => !!x && typeof x === 'string');
     return Array.from(new Set(names)) as string[];
   } catch (e) {
     console.warn('⚠️ 枚举笔刷失败（可手动输入笔刷名）:', e);

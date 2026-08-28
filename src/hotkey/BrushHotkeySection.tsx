@@ -66,40 +66,44 @@ export default function BrushHotkeySection() {
     else setMessage('启动失败：请确认 exe 路径正确，或先「运行安装器」');
   };
 
-  // 在插件目录内按相对路径定位文件（逐层 getEntry，兼容不同 UXP 版本对嵌套路径的支持差异）
-  const getBundledEntry = async (relPath: string) => {
-    const folder = await storage.localFileSystem.getPluginFolder();
-    let cur: any = folder;
-    for (const seg of relPath.split('/')) {
-      if (!seg) continue;
-      cur = await cur.getEntry(seg);
-      if (!cur) return null;
-    }
-    return cur as any;
+  // 将插件内相对路径解析为真实 OS 路径：用 getPluginFolder().nativePath，
+  // 直接绕过沙箱下 getEntry('native') 找不到目录的问题（报 could not find an entry of plugin:/native）。
+  const getBundledNativePath = async (relPath: string): Promise<string | null> => {
+    const folder: any = await storage.localFileSystem.getPluginFolder();
+    const root: string = folder?.nativePath;
+    if (!root) return null;
+    const sep = root.includes('\\') ? '\\' : '/';
+    const parts = relPath.split('/').filter(Boolean);
+    return [root, ...parts].join(sep);
   };
 
-  // 直接唤起安装器 install.bat（无需手动输入路径）。
-  // UXP 下 .bat 经 shell.openPath 会以「运行」方式执行，弹出安装窗口。
+  // 用 shell.openPath 唤起插件目录内的某个文件（exe/bat）。
+  // openPath 成功返回空串，失败返回错误串。
+  const openBundled = async (relPath: string): Promise<boolean> => {
+    const full = await getBundledNativePath(relPath);
+    if (!full) {
+      setMessage('无法定位插件目录，请手动在插件目录 ' + relPath + ' 处双击运行');
+      return false;
+    }
+    const r: any = await shell.openPath(full);
+    if (typeof r === 'string' && r.length > 0) {
+      setMessage('唤起失败：' + r + '（可手动双击插件目录下的 ' + relPath.split('/').pop() + '）');
+      return false;
+    }
+    return true;
+  };
+
+  // 直接唤起安装器 install.bat（无需手动输入路径）
   const runInstaller = async () => {
-    try {
-      const bat = await getBundledEntry('native/HotkeyDaemon/install.bat');
-      if (!bat) { setMessage('找不到 install.bat，请用资源管理器双击它'); return; }
-      shell.openPath(bat.nativePath);
+    if (await openBundled('native/HotkeyDaemon/install.bat')) {
       setMessage('已唤起安装器 install.bat，请按窗口提示完成安装；安装后点「选择 exe」');
-    } catch (e: any) {
-      setMessage('唤起安装器失败：' + (e?.message || e));
     }
   };
 
   // 直接唤起卸载程序 uninstall.bat（安全卸载，详见 uninstall.ps1）
   const uninstallDaemon = async () => {
-    try {
-      const bat = await getBundledEntry('native/HotkeyDaemon/uninstall.bat');
-      if (!bat) { setMessage('找不到 uninstall.bat'); return; }
-      shell.openPath(bat.nativePath);
+    if (await openBundled('native/HotkeyDaemon/uninstall.bat')) {
       setMessage('已唤起卸载程序，请按窗口提示完成卸载');
-    } catch (e: any) {
-      setMessage('唤起卸载程序失败：' + (e?.message || e));
     }
   };
 
@@ -124,16 +128,21 @@ export default function BrushHotkeySection() {
     setRecording(true);
   };
 
-  // 用系统文件选择框定位守护进程，避免手动输入路径（仅允许 exe / install.bat）。
+  // 用系统文件选择框定位守护进程，避免手动输入路径（仅允许 exe / bat）。
   const pickDaemonFile = async () => {
     try {
+      // types 必须是「扩展名字符串数组」（不带点）——这是 UXP getFileForOpening 的真实签名。
+      // 之前误写成 DOM 风格的 {description, accept} 对象数组，导致 UXP 内部对每个元素调 .trim() 报错。
       const file: any = await storage.localFileSystem.getFileForOpening({
-        types: [{ description: 'JWautofill 守护进程', accept: ['exe', 'bat'] }]
+        types: ['exe', 'bat']
       });
       if (!file) return; // 用户取消
-      const p: string = file.nativePath || '';
+      // 某些 UXP 版本即使 allowMultiple:false 也会返回数组，统一归一化
+      const files: any[] = Array.isArray(file) ? file : [file];
+      const f: any = files[0];
+      const p: string = f?.nativePath || '';
       if (!p) { setMessage('无法读取所选文件路径'); return; }
-      const name = p.toLowerCase().split('\\').pop() || '';
+      const name = p.toLowerCase().split(/[\\/]/).pop() || '';
       if (name === 'install.bat') {
         setMessage('install.bat 是安装脚本：请用资源管理器双击它（会自动编译并启动）；或选择已生成的 JWautofillHotkeyDaemon.exe');
         return;
@@ -146,7 +155,8 @@ export default function BrushHotkeySection() {
       setDaemonPath(p);
       setMessage('已定位守护进程：' + p);
     } catch (e: any) {
-      setMessage('选择文件失败：' + (e?.message || e));
+      const msg = e && e.message ? String(e.message) : (typeof e === 'string' ? e : JSON.stringify(e));
+      setMessage('选择文件失败：' + msg);
     }
   };
 
