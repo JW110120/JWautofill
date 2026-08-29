@@ -30,6 +30,24 @@ export const AddIcon = () => (
   </svg>
 );
 
+/**
+ * 刷新（环形箭头）。
+ * 用 stroke 画 270° 圆弧 + 一个三角形箭头，而不是直接抄 Spectrum 的 fill 路径——
+ * 后者一旦路径数据有误就会渲染成难以辨认的色块，圆弧方案几何关系明确、可控。
+ */
+export const RefreshIcon = ({ style }: { style?: React.CSSProperties }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18" style={style}>
+    <path
+      d="M14.5 9A5.5 5.5 0 1 1 9 3.5"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+    />
+    <path fill="currentColor" d="M11.9 3.5 8.9 1.7v3.6Z" />
+  </svg>
+);
+
 export const DeleteIcon = ({ style }: { style?: React.CSSProperties }) => (
   <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18" style={style}>
     <path className="icon-fill" d="M15.75,3H12V2a1,1,0,0,0-1-1H6A1,1,0,0,0,5,2V3H1.25A.25.25,0,0,0,1,3.25v.5A.25.25,0,0,0,1.25,4h1L3.4565,16.55a.5.5,0,0,0,.5.45H13.046a.5.5,0,0,0,.5-.45L14.75,4h1A.25.25,0,0,0,16,3.75v-.5A.25.25,0,0,0,15.75,3ZM5.5325,14.5a.5.5,0,0,1-.53245-.46529L5,14.034l-.5355-8a.50112.50112,0,0,1,1-.067l.5355,8a.5.5,0,0,1-.46486.53283ZM9,14a.5.5,0,0,1-1,0V6A.5.5,0,0,1,9,6ZM11,3H6V2h5Zm1,11.034a.50112.50112,0,0,1-1-.067l.5355-8a.50112.50112,0,1,1,1,.067Z" />

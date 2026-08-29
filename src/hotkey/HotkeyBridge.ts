@@ -16,6 +16,15 @@ export interface HotkeyEntry {
 
 const WS_URL = 'ws://127.0.0.1:18923';
 
+// ===== 主开关（选区填充面板的总开关）快捷键 =====
+// 默认绑定 Ctrl+Q。该条目在配置里「长期存在」：
+// - combo 为 '' 表示用户已解绑（此时不再自动补回默认值，尊重用户选择）；
+// - 配置里完全找不到该条目 = 首次使用，写入默认 Ctrl+Q 并推送。
+// 这样做的好处是「解绑」状态能随配置持久化，插件重载后不会又把 Ctrl+Q 塞回来。
+export const MAIN_TOGGLE_ID = 'main_toggle';
+export const DEFAULT_MAIN_TOGGLE_COMBO = 'Ctrl+Q';
+let mainToggleCombo: string | null = null; // null = 尚未从配置里读到过
+
 type ConfigListener = (entries: HotkeyEntry[]) => void;
 
 // 配置文件统一放在 PS 的 PluginData 目录（与密钥、图案等持久化数据同一个位置），
@@ -127,7 +136,10 @@ function normalizeEntry(e: any): HotkeyEntry | null {
   const action = (e.action ?? e.Action ?? '') as HotkeyEntry['action'];
   const brush: string | undefined = e.brush ?? e.Brush ?? undefined;
   const id: string = e.id ?? e.Id ?? ('bk_' + Math.random().toString(36).slice(2));
-  if (!combo) return null;
+  if (action !== 'toggleMain' && action !== 'applyBrush') return null;
+  // 主开关允许 combo 为空（表示用户已解绑，不能再被补回默认值）；
+  // 其余条目没有组合键就没有意义，直接丢弃。
+  if (!combo && action !== 'toggleMain') return null;
   return { id, combo, action, brush };
 }
 
@@ -185,6 +197,8 @@ export function connectHotkeyDaemon(): () => void {
           else if (msg?.type === 'config') {
             const raw: any[] = Array.isArray(msg.payload) ? msg.payload : [];
             cachedConfig = raw.map(normalizeEntry).filter((x): x is HotkeyEntry => !!x);
+            // 首次使用时补上主开关的默认快捷键 Ctrl+Q
+            ensureMainToggleEntry();
             emitConfig();
           }
           else if (msg?.type === 'recordResult') {
@@ -245,6 +259,54 @@ export function pushConfig(list: HotkeyEntry[]): boolean {
     }
   } catch { /* ignore */ }
   return false;
+}
+
+// ===== 主开关快捷键 =====
+
+/**
+ * 保证配置里始终存在「主开关」条目。
+ * - 已有该条目：仅同步内部的 combo 缓存（combo 为 '' 表示已解绑，不再补回默认）。
+ * - 没有该条目：判定为首次使用，写入默认的 Ctrl+Q 并推送给守护进程。
+ * 只在收到守护进程配置后调用，因此不会在守护进程未连接时空转。
+ */
+function ensureMainToggleEntry(): void {
+  const existing = cachedConfig.find(e => e.action === 'toggleMain');
+  if (existing) {
+    mainToggleCombo = existing.combo || '';
+    return;
+  }
+  mainToggleCombo = DEFAULT_MAIN_TOGGLE_COMBO;
+  const entry: HotkeyEntry = {
+    id: MAIN_TOGGLE_ID,
+    combo: DEFAULT_MAIN_TOGGLE_COMBO,
+    action: 'toggleMain'
+  };
+  cachedConfig = [entry, ...cachedConfig];
+  pushConfig(cachedConfig);
+}
+
+/** 当前主开关快捷键；'' 表示未绑定，null 表示还没读到过配置。 */
+export function getMainToggleCombo(): string {
+  return mainToggleCombo ?? '';
+}
+
+/** 是否已连上守护进程（菜单里「设置主开关快捷键」需要据此给出提示）。 */
+export function isDaemonConnected(): boolean {
+  return connected;
+}
+
+/**
+ * 重新指定主开关快捷键。combo 传 '' 表示解绑。
+ * 若该组合键已被某个笔刷热键占用，会覆盖掉那条笔刷映射（主开关优先级更高）。
+ */
+export function setMainToggleCombo(combo: string): boolean {
+  const others = cachedConfig.filter(e =>
+    e.action !== 'toggleMain' && !(combo && e.combo === combo)
+  );
+  const entry: HotkeyEntry = { id: MAIN_TOGGLE_ID, combo, action: 'toggleMain' };
+  cachedConfig = [entry, ...others];
+  mainToggleCombo = combo;
+  return pushConfig(cachedConfig);
 }
 
 // ===== 直接切笔刷（不依赖录制动作，仿 Brusherator）=====
@@ -349,6 +411,59 @@ export async function enumerateBrushes(): Promise<string[]> {
     console.warn('⚠️ 枚举笔刷失败（可手动输入笔刷名）:', e);
     return [];
   }
+}
+
+// ===== 笔刷类型（尽力而为）=====
+// 理想效果：下拉里每个笔刷名右侧显示「混合器 / 涂抹 / 喷枪…」这类类型。
+// 现实限制：presetManager 的 Brush Presets 分组只暴露 name 列表，不含笔刷类型；
+// 逐支选中去读类型会破坏用户当前的笔刷状态，不可接受。因此这里只做「尽力而为」：
+// 若 PS 的 app.brushes 集合里带了类型字段就用，取不到就返回空表（下拉不显示类型列）。
+// 桌面端 Photoshop 的部分版本确实不带该字段，此时按需求文档「如不能则忽略」处理。
+const BRUSH_TYPE_CN: Record<string, string> = {
+  computedbrush: '圆形',
+  sampledbrush: '取样',
+  mixerbrush: '混合器',
+  smudgebrush: '涂抹',
+  bristlebrush: '硬毛刷',
+  erodebrush: '侵蚀',
+  airbrush: '喷枪',
+  charcoalbrush: '炭笔',
+  watercolorbrush: '水彩',
+  inkbrush: '墨水',
+  oilbrush: '油画',
+  pastelbrush: '蜡笔',
+  pencilbrush: '铅笔',
+  markerbrush: '马克笔',
+  flatbrush: '平头',
+  roundbrush: '圆头',
+  fanbrush: '扇形',
+  calligraphicbrush: '书法',
+  brushtip: '笔尖',
+  dualbrush: '双重画笔',
+  bristle: '硬毛刷',
+  erode: '侵蚀',
+  air: '喷枪',
+  mixer: '混合器',
+  smudge: '涂抹'
+};
+
+export async function enumerateBrushTypes(): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  try {
+    const brushesApi: any = (app as any)?.brushes;
+    if (!brushesApi || typeof brushesApi.get !== 'function') return out;
+    const list: any[] = await brushesApi.get();
+    if (!Array.isArray(list)) return out;
+    for (const b of list) {
+      const name: string = (b?.name ?? '').toString();
+      if (!name) continue;
+      const raw: any = b?.type ?? b?.brushType ?? b?.kind ?? b?.presetKind ?? b?.brushKind;
+      if (typeof raw !== 'string' || !raw) continue;
+      const key = raw.toLowerCase();
+      out[name] = BRUSH_TYPE_CN[key] || raw;
+    }
+  } catch { /* 取不到就不显示类型 */ }
+  return out;
 }
 
 // ===== 请求守护进程录制组合键（UXP 不再自行监听键盘）=====

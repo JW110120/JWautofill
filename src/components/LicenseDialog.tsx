@@ -112,7 +112,7 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
             return (
                 <div className="license-content">
                     <h3>✅ 已授权</h3>
-                    <p>感谢购买选区笔插件！</p>
+                    <p>感谢购买选区填充插件！</p>
                     <div className="button-group">
                         <sp-action-button onClick={onClose}>关闭</sp-action-button>
                     </div>
@@ -155,7 +155,7 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
 
         return (
             <div className="license-content">
-                <h3>🔒 欢迎使用选区笔</h3>
+                <h3>🔒 欢迎使用选区填充</h3>
                 <p>需要有效激活码才能使用。</p>
                 
                 <div className="license-input-group">

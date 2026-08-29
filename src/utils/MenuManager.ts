@@ -12,6 +12,7 @@ export class MenuManager {
   private static appOpenLicenseCallback: (() => void) | null = null;
   private static appResetLicenseCallback: (() => void) | null = null;
   private static appResetParametersCallback: (() => void) | null = null;
+  private static appSetMainHotkeyCallback: (() => void) | null = null;
 
   constructor() {
     // Constructor
@@ -24,10 +25,12 @@ export class MenuManager {
     onOpenLicenseDialog: () => void;
     onResetLicense: () => void;
     onResetParameters: () => void;
+    onSetMainHotkey?: () => void;
   }) {
     this.appOpenLicenseCallback = callbacks.onOpenLicenseDialog;
     this.appResetLicenseCallback = callbacks.onResetLicense;
     this.appResetParametersCallback = callbacks.onResetParameters;
+    this.appSetMainHotkeyCallback = callbacks.onSetMainHotkey ?? null;
   }
 
   /**
@@ -49,6 +52,11 @@ export class MenuManager {
       case "resetAppParameters":
         if (this.appResetParametersCallback) {
           this.appResetParametersCallback();
+        }
+        break;
+      case "setMainHotkey":
+        if (this.appSetMainHotkeyCallback) {
+          this.appSetMainHotkeyCallback();
         }
         break;
       default:
@@ -103,6 +111,14 @@ export class MenuManager {
             {
               id: "resetAppParameters",
               label: "参数复位（保留已加载图案与新建渐变预设）"
+            },
+            {
+              id: "spacerApp1",
+              label: "-" // 分隔符（参数复位 与 设置主开关快捷键 之间）
+            },
+            {
+              id: "setMainHotkey",
+              label: "设置选区填充主开关快捷键"
             }
           ],
           invokeMenu(id: string) {

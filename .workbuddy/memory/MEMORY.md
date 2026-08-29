@@ -1,5 +1,10 @@
 # JWautofill 项目长期记忆
 
+## 提交约定（用户硬性要求，2026-08-29 起）
+
+- **每次帮用户提交（commit）时，必须同时把 `.workbuddy/memory/` 下的所有记忆文件与工作日志一并加入提交**（`git add .workbuddy/memory/ && git commit ...`，或 `git add -A` 时确认包含该目录）。记忆与工作日志是项目资产，不得遗漏。
+- 该目录已被 git 跟踪（`.workbuddy/memory/*.md` 在 `git ls-files` 中可见），无需额外 `git add` 步骤，但提交前务必确认其改动已纳入本次 commit。
+
 ## UXP / React 关键知识点（踩坑记录）
 
 - **`action.addNotificationListener / removeNotificationListener` 第一个参数必须是字符串数组**（如 `['set','select','clearEvent','delete','make']`）。传单个字符串会抛 `Argument 1 has an invalid type. Expected type: array actual type: string`，监听完全注册失败。若要逐个注册容错，也必须包成 `[evt]` 数组。正确范例：src/app.tsx。
@@ -42,3 +47,19 @@
 - **daemon Broadcast 曾硬编码单字节帧长**（>125B 发坏帧），已统一走 SendToClient。
 - **面板通过 getPluginFolder 定位文件**：用户从 dist 加载插件，dist 必须由 webpack 拷入 daemon 脚本/exe；copy-webpack-plugin 的 glob from 需配 to:[name][ext]。
 - **会话沙箱会回收后台子进程**：Start-Process/setsid/schtasks 均不能持久拉起 daemon；需用户点「安装守护进程」或重启（HKCU Run 自启）。schtasks 在安全策略黑名单。
+
+## 全局热键的 Windows 实现要点（2026-08-29，血泪）
+
+- **RegisterHotKey 不能挂在 message-only window（HWND_MESSAGE）上**：注册会成功返回 true，但 WM_HOTKEY 永远不派发 → 表现为「注册成功、按下无反应」。要么用真实隐藏窗口，要么别用 RegisterHotKey。
+- **推荐方案：常驻 WH_KEYBOARD_LL 低层钩子 + 内存组合键表**。好处是命中后可 `return (IntPtr)1` 吞掉按键，宿主程序（PS）不会再抢走该快捷键；也不存在「注册冲突 = 静默失效」。
+- **钩子必须由承载线程自己 SetWindowsHookEx**。从别的线程 `PostThreadMessage` 通知它安装会失败——线程消息队列在首次 GetMessage 前不存在。
+- **PostThreadMessage 的线程消息不会进 WndProc**，必须在 GetMessage 循环里按 `msg.hwnd==IntPtr.Zero` 显式处理。
+- **钩子回调里绝不能做网络 I/O，也不能做同步文件 I/O**（如 `Console.WriteLine` 写日志）：前者超时会被系统静默摘钩，后者一旦写入卡顿就会冻结整个低层键盘钩子，表现为「日志停更、按键全无反应」。正确做法：回调里只 `Enqueue` 一条记录 + `PostThreadMessage` 通知主线程，由主线程出队后做日志与广播。本次（2026-08-29.5）因此修过一次。
+
+## Windows 脚本/进程坑（同批次）
+
+- **System.Diagnostics.Process 没有 Stop() 方法**（属于 ServiceController）。`$p.Stop()` 会抛「不包含名为 Stop 的方法」并让清理静默失败，进程残留会锁住日志文件导致目录删不掉 → 一律用 `Stop-Process -Id`。
+- **`Start-Process` 在环境同时存在 `Path` 与 `PATH` 键时崩**（「已添加项。字典中的关键字:"Path"」）→ 需回退路径（去掉重定向重试 / `cmd /c start`）。
+- **`Read-Host` 在非交互或 stdin 被管道时抛异常**，会把可选询问变成整个脚本失败 → 必须 try/catch 兜底。
+- **删除刚被进程占用的目录要重试**（句柄释放有延迟），单次 Remove-Item 常失败。
+- **.ps1 必须纯 ASCII**：WinPS 5.1 把无 BOM 文件按 GBK 读，中文注释会造成语法错误。提交前用 `[System.Management.Automation.Language.Parser]::ParseFile` 做语法门禁。

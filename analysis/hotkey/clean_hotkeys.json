@@ -1,0 +1,8 @@
+[
+  {
+    "id": "main_toggle",
+    "combo": "Ctrl+Q",
+    "action": "toggleMain",
+    "brush": ""
+  }
+]

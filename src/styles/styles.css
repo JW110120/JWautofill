@@ -633,7 +633,7 @@ sp-action-button {
   border-color: var(--primary-color);
 }
 
-/* 统一选区笔面板中所有滑块 number-input 的字号（原默认约13px，减小2px）与字体 */
+/* 统一选区填充面板中所有滑块 number-input 的字号（原默认约13px，减小2px）与字体 */
 #app input[type="number"] {
   font-size: 11px;
   font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;

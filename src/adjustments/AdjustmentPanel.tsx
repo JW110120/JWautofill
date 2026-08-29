@@ -1266,7 +1266,7 @@ const handleLicenseBeforeAction = (): boolean => {
   if (!isLicensed && !isTrial) {
     // 第二入口不开启对话框，直接弹出提示
     try {
-      core.showAlert({ message: '当前未激活，请在选区笔界面完成授权后再使用此功能。' });
+      core.showAlert({ message: '当前未激活，请在选区填充界面完成授权后再使用此功能。' });
     } catch {}
     console.log('需要在主面板（第一入口）进行授权激活');
     return false;

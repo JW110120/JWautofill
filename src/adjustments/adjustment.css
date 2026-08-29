@@ -158,6 +158,61 @@
   transform: scale(0.98);
 }
 
+/* 自适应宽度：与 .adjustment-button 同一套视觉，仅放开 80px 固定宽度，
+   用于「录制快捷键」「断开守护进程」这类超过 4 字的按钮文案。 */
+.adjustment-button.auto {
+  width: auto;
+  min-width: 76px;
+  padding: 0 12px;
+  margin: 0;
+}
+
+/* 紧凑尺寸：守护进程状态条高 24px，条内按钮需同高才不撑破布局 */
+.adjustment-button.compact {
+  height: 24px;
+  font-size: 12px;
+  padding: 0 10px;
+  margin: 0;
+}
+
+/* 禁用态：div[role=button] 没有原生 disabled 语义，靠类控制 */
+.adjustment-button.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.adjustment-button.disabled:hover {
+  background-color: var(--button-bg);
+  border-color: var(--border-color);
+  transform: none;
+}
+
+/* 笔刷热键：图标按钮（刷新 / 删除）与面板内其它图标按钮观感一致 */
+.hotkey-icon-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background-color: var(--button-bg);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+  box-sizing: border-box;
+  user-select: none;
+}
+
+.hotkey-icon-button:hover {
+  background-color: var(--hover-bg);
+  border-color: var(--primary-color);
+}
+
+.hotkey-icon-button:active {
+  transform: scale(0.94);
+}
+
 .adjustment-swtich-container {
   display: flex;
   right: 0;
@@ -311,7 +366,7 @@
   font-size: 11px;
   text-align: center;
   margin-left: -5px;
-  /* 字体与选区笔面板统一 */
+  /* 字体与选区填充面板统一 */
   font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
   /* 移除z-index，让它跟随父容器的折叠状态 */
 }

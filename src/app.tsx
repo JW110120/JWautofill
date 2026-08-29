@@ -27,7 +27,10 @@ import { ColorSettings, Pattern } from './types/state';
 import { MenuManager } from './utils/MenuManager';
 import { PresetManager } from './utils/PresetManager';
 import { PanelStateManager } from './utils/PanelStateManager';
-import { connectHotkeyDaemon, registerMainToggleHandler } from './hotkey/HotkeyBridge';
+import {
+  connectHotkeyDaemon, registerMainToggleHandler,
+  isDaemonConnected, getMainToggleCombo, setMainToggleCombo, requestHotkeyRecording
+} from './hotkey/HotkeyBridge';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -129,7 +132,8 @@ class App extends React.Component<AppProps, AppState> {
                     isLicenseDialogOpen: this.state.isLicenseDialogOpen,
                     trialDaysRemaining: this.state.trialDaysRemaining,
                 });
-            }
+            },
+            onSetMainHotkey: () => { void this.setMainHotkey(); }
         });
         this.selectionChangeListener = (eventName, descriptor) => {
             // 检查是否是选区相关的set事件
@@ -283,6 +287,41 @@ class App extends React.Component<AppProps, AppState> {
                 appPanel: { isEnabled: this.state.isEnabled }
             }, { debounceMs: 0 }).catch(e => console.warn('⚠️ 主开关状态持久化失败:', e));
         });
+    }
+
+    /**
+     * 重新指定「选区填充」主开关的全局快捷键（默认 Ctrl+Q）。
+     * 录制由本地守护进程的全局键盘钩子完成：UXP 面板拿不到全局按键，
+     * 这里只负责弹提示、发指令、把结果写回共享配置。
+     */
+    async setMainHotkey() {
+        try {
+            if (!isDaemonConnected()) {
+                await core.showAlert({
+                    message: '守护进程未连接，无法录制快捷键。\n请到「像素调整」面板的「笔刷热键（全局）」分区点一下「加载守护进程」。'
+                });
+                return;
+            }
+            const current = getMainToggleCombo();
+            await core.showAlert({
+                message: `点「确定」后，请直接按下要绑定的组合键（按 Esc 取消）。\n\n` +
+                    `当前主开关快捷键：${current || '未绑定'}`
+            });
+            const res = await requestHotkeyRecording('选区填充主开关');
+            if (!res) {
+                await core.showAlert({ message: '已取消，主开关快捷键保持不变。' });
+                return;
+            }
+            const ok = setMainToggleCombo(res.combo);
+            await core.showAlert({
+                message: ok
+                    ? `主开关快捷键已设为：${res.combo}`
+                    : '设置失败：守护进程未响应，请重新加载守护进程后重试。'
+            });
+        } catch (e) {
+            console.error('❌ 设置主开关快捷键失败:', e);
+            try { await core.showAlert({ message: '设置主开关快捷键时出错，详见控制台日志。' }); } catch { /* ignore */ }
+        }
     }
 
 
@@ -1096,7 +1135,7 @@ title={`● 生成选区时，插件会自动根据选择的模式填充/删除�
 
 ● 由于每次生成选区后，插件会立刻执行若干个步骤。因此想要撤销本次的自动填充，建议回溯历史记录。`
 }>
-                    <span className="title-text">选区笔2.0</span>                    
+                    <span className="title-text">选区填充2.0</span>                    
                 </h3>
                 <div className="button-container">
                     <div 

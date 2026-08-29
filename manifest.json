@@ -11,7 +11,7 @@
         {
             "id": "com.listen2me.jwautofill",
             "label": {
-                "default": "选区笔"
+                "default": "选区填充"
             },
             "type": "panel",
             "minimumSize": {

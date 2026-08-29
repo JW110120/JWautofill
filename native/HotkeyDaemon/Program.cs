@@ -154,7 +154,7 @@ namespace JWautofillHotkeyDaemon
     internal static class Program
     {
         // 构建版本标识：用于区分安装目录里的新旧 daemon（历史上两次因版本错位误判问题）
-        internal const string Version = "2026-08-29.3";
+        internal const string Version = "2026-08-29.5";
 
         private static readonly int PORT = 18923;
         private static readonly string DefaultConfigPath =
@@ -182,12 +182,18 @@ namespace JWautofillHotkeyDaemon
         // 避免在键盘钩子里做网络 I/O（钩子有严格超时，超时会被系统静默摘除）。
         private static int _mainThreadId = 0;
         private static readonly ConcurrentQueue<string> _hitQueue = new();
+        // 钩子回调用的日志队列：钩子过程里绝不能做 I/O。实测（2026-08-29）一旦
+        // Console.WriteLine 卡住（例如宿主线程的输出被重定向且写入阻塞），整个
+        // 低层键盘钩子会随之冻结——表现为「热键全部失灵且日志停更」。
+        // 所以钩子只入队，由录制线程在消息循环里落盘输出。
+        private static readonly ConcurrentQueue<string> _logQueue = new();
 
         // ===== 组合键录制（全局键盘钩子）=====
         private const int WM_RECORD_START = 0x8002; // 录制线程：开始录制（常驻钩子已在运行）
         private const int WM_RECORD_STOP = 0x8003;  // 录制线程：结束录制
         private const int WM_HOTKEY_HIT = 0x8004;   // 主线程：钩子命中热键，去 _hitQueue 取出并广播
         private const int WM_HOOK_INSTALL = 0x8005; // 录制线程：安装常驻低层键盘钩子
+        private const int WM_DRAIN_LOG = 0x8006;    // 录制线程：把钩子入队的日志写出去
         private static readonly object _recLock = new();
         private static IntPtr _hookId = IntPtr.Zero;
         private static Win32.LowLevelKeyboardProc? _hookProc;
@@ -442,13 +448,29 @@ namespace JWautofillHotkeyDaemon
             }
         }
 
-        // 命名键 -> VirtualKeyCode（与 UXP 端 NAMED_KEYS 保持一致）
-        private static readonly Dictionary<string, int> NamedVk = new()
+        // 命名键 -> VirtualKeyCode。与 KeyToToken 严格互为逆运算：
+        // 录制时 KeyToToken 把 vk 变成 token 落盘，触发时 ParseCombo 把 token 还原成 vk，
+        // 两边必须用同一套命名，否则录出来的快捷键永远匹配不上。
+        // 注意：token 里绝不能出现 '+'（ParseCombo 按 '+' 切分），故小键盘加号写作 numplus。
+        private static readonly Dictionary<string, int> NamedVk = new(StringComparer.OrdinalIgnoreCase)
         {
             { "backspace", 0x08 }, { "tab", 0x09 }, { "enter", 0x0D }, { "escape", 0x1B },
             { "space", 0x20 }, { "delete", 0x2E }, { "insert", 0x2D },
             { "home", 0x24 }, { "end", 0x23 }, { "pageup", 0x21 }, { "pagedown", 0x22 },
-            { "up", 0x26 }, { "down", 0x28 }, { "left", 0x25 }, { "right", 0x27 }
+            { "up", 0x26 }, { "down", 0x28 }, { "left", 0x25 }, { "right", 0x27 },
+            { "capslock", 0x14 }, { "numlock", 0x90 }, { "scrolllock", 0x91 },
+            { "pause", 0x13 }, { "printscreen", 0x2C }, { "apps", 0x5D },
+            // 标点符号键（OEM）：用户明确要求把 ; ' 等符号也纳入可录制范围
+            { "semicolon", 0xBA }, { "equal", 0xBB }, { "comma", 0xBC },
+            { "minus", 0xBD }, { "period", 0xBE }, { "slash", 0xBF },
+            { "grave", 0xC0 }, { "bracketleft", 0xDB }, { "backslash", 0xDC },
+            { "bracketright", 0xDD }, { "apostrophe", 0xDE },
+            // 小键盘
+            { "num0", 0x60 }, { "num1", 0x61 }, { "num2", 0x62 }, { "num3", 0x63 },
+            { "num4", 0x64 }, { "num5", 0x65 }, { "num6", 0x66 }, { "num7", 0x67 },
+            { "num8", 0x68 }, { "num9", 0x69 },
+            { "nummul", 0x6A }, { "numplus", 0x6B }, { "numminus", 0x6D },
+            { "numdot", 0x6E }, { "numdiv", 0x6F }
         };
 
         // 进程监控：守护进程默认常驻，仅在 Photoshop 运行时才激活全局热键；
@@ -495,7 +517,13 @@ namespace JWautofillHotkeyDaemon
                 else if (p.StartsWith("f") && int.TryParse(p.Substring(1), out int f) && f >= 1 && f <= 24)
                     vk = 0x70 + (f - 1);
                 else if (NamedVk.TryGetValue(p, out int nv)) vk = nv;
-                else if (p.Length == 1) vk = (byte)Win32.VkKeyScanW(p[0]);
+                else if (p.Length == 1)
+                {
+                    // 标点/符号键（; ' [ ] \ / - = , . `）与字母数字统一走 VkKeyScan，
+                    // 只要键盘布局上能打出这个字符就能绑定。返回 -1 表示当前布局无此键。
+                    short scan = Win32.VkKeyScanW(p[0]);
+                    if (scan != -1) vk = scan & 0xFF;
+                }
                 // 其余情况 vk 保持 0，调用方需跳过注册
             }
             return (mods, vk);
@@ -563,9 +591,25 @@ namespace JWautofillHotkeyDaemon
                 if (msg.message == WM_HOOK_INSTALL) InstallPermanentHook();
                 else if (msg.message == WM_RECORD_START) StartRecordingInternal();
                 else if (msg.message == WM_RECORD_STOP) FinishRecordingInternal(null);
+                else if (msg.message == WM_DRAIN_LOG) DrainLogQueue();
                 // 线程消息（PostThreadMessage）没有窗口，无需 DispatchMessage
             }
             Console.WriteLine("[HotkeyDaemon] 钩子线程已退出");
+        }
+
+        // 钩子线程专用：只入队 + 投递线程消息，绝不在此处做 I/O。
+        private static void LogFromHook(string line)
+        {
+            _logQueue.Enqueue(line);
+            if (_recThreadId != 0) Win32.PostThreadMessage(_recThreadId, WM_DRAIN_LOG, IntPtr.Zero, IntPtr.Zero);
+        }
+
+        private static void DrainLogQueue()
+        {
+            while (_logQueue.TryDequeue(out var line))
+            {
+                try { Console.WriteLine(line); } catch { /* 输出不可用时忽略，绝不影响钩子 */ }
+            }
         }
 
         private static IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam)
@@ -589,7 +633,7 @@ namespace JWautofillHotkeyDaemon
                         {
                             if (vk == 0x1B) // Escape => 取消录制
                             {
-                                Console.WriteLine("[HotkeyDaemon] 录制取消 (Esc)");
+                                LogFromHook("[HotkeyDaemon] 录制取消 (Esc)");
                                 FinishRecordingInternal(null);
                                 return Win32.CallNextHookEx(_hookId, nCode, wParam, lParam);
                             }
@@ -600,7 +644,7 @@ namespace JWautofillHotkeyDaemon
                                 string? combo = BuildCombo(vk);
                                 if (!string.IsNullOrEmpty(combo))
                                 {
-                                    Console.WriteLine("[HotkeyDaemon] 录制到组合键: " + combo);
+                                    LogFromHook("[HotkeyDaemon] 录制到组合键: " + combo);
                                     FinishRecordingInternal(combo);
                                 }
                             }
@@ -645,6 +689,7 @@ namespace JWautofillHotkeyDaemon
             if (vk >= 0x41 && vk <= 0x5A) return ((char)vk).ToString();
             if (vk >= 0x30 && vk <= 0x39) return ((char)vk).ToString();
             if (vk >= 0x70 && vk <= 0x87) return "F" + (vk - 0x70 + 1);
+            if (vk >= 0x60 && vk <= 0x69) return "Num" + (vk - 0x60); // 小键盘 0-9
             switch (vk)
             {
                 case 0x08: return "Backspace";
@@ -662,6 +707,31 @@ namespace JWautofillHotkeyDaemon
                 case 0x25: return "Left";
                 case 0x27: return "Right";
                 case 0x2E: return "Delete";
+                case 0x14: return "CapsLock";
+                case 0x90: return "NumLock";
+                case 0x91: return "ScrollLock";
+                case 0x13: return "Pause";
+                case 0x2C: return "PrintScreen";
+                case 0x5D: return "Apps";
+                // 标点符号键：用户要求把 ; ' 等符号纳入可录制范围，
+                // 这些键此前返回 null，按下后「什么都没录到」。
+                case 0xBA: return ";";
+                case 0xBB: return "=";
+                case 0xBC: return ",";
+                case 0xBD: return "-";
+                case 0xBE: return ".";
+                case 0xBF: return "/";
+                case 0xC0: return "`";
+                case 0xDB: return "[";
+                case 0xDC: return "\\";
+                case 0xDD: return "]";
+                case 0xDE: return "'";
+                // 小键盘运算符（token 内不能含 '+'，用 numplus 等名字）
+                case 0x6A: return "NumMul";
+                case 0x6B: return "NumPlus";
+                case 0x6D: return "NumMinus";
+                case 0x6E: return "NumDot";
+                case 0x6F: return "NumDiv";
                 default: return null;
             }
         }
@@ -752,6 +822,21 @@ namespace JWautofillHotkeyDaemon
                         else if (type == "getConfig")
                         {
                             SendConfigToClient(client);
+                        }
+                        else if (type == "getState")
+                        {
+                            // 排障用：热键失灵时先看这里。active=false 表示 Photoshop 未被检测到
+                            // （热键表未装载）；combos 为空则配置文件没有被正确解析。
+                            SendToClient(client, JsonSerializer.Serialize(new
+                            {
+                                type = "state",
+                                version = Version,
+                                active = _active,
+                                hookInstalled = _hookId != IntPtr.Zero,
+                                comboCount = _comboMap.Count,
+                                combos = _comboMap.Keys.ToArray(),
+                                items = _currentItems.Count
+                            }, JsonOpts));
                         }
                         else if (type == "recordStart")
                         {
