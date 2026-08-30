@@ -1152,10 +1152,10 @@ title={`● 功能开启后，PS工具栏羽化参数设为0时，自动填充�
 ● 依次按下【Enter → 数字0 → Enter】，可以把羽化值改回0，恢复自动填充。`
 }>
                         <div className="button-content">
+                            <div className={`button-indicator ${this.state.isEnabled ? 'enabled' : 'disabled'}`}></div>
                             <span className={`button-text ${!this.state.isEnabled ? 'disabled' : ''}`}>
                                 {this.state.isEnabled ? '功能开启' : '功能关闭'}
                             </span>
-                            <div className={`button-indicator ${this.state.isEnabled ? 'enabled' : 'disabled'}`}></div>
                         </div>
                     </div>
                 </div>

@@ -6,7 +6,7 @@ import {
   onHotkeyTriggered, disconnectDaemon, registerUninstallHandler,
   setMainToggleCombo, getMainToggleCombo
 } from './HotkeyBridge';
-import { ExpandIcon, DeleteIcon, RefreshIcon, RecordCircleIcon, StopSquareIcon } from '../styles/Icons';
+import { ExpandIcon, DeleteIcon, RefreshIcon, DataRefreshIcon, RecordCircleIcon, StopSquareIcon } from '../styles/Icons';
 import BrushSelect, { BrushSelectOption } from './BrushSelect';
 
 // 笔刷热键分区：在调整面板内录制「笔刷 + 快捷键」，持久化到共享配置，
@@ -30,6 +30,10 @@ export default function BrushHotkeySection() {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [daemonConnected, setDaemonConnected] = useState(false);
+  // 已录快捷键的选中集合：单击单选，Ctrl/Shift + 单击加选或减选，用于单个/批量删除
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // 多选锚点（shift 延伸的基准）：普通单击或 Ctrl 单击后更新为该条索引
+  const anchorIndexRef = useRef<number>(-1);
 
   // refs：供轮询读取最新值，避免闭包拿到旧值
   const daemonConnectedRef = useRef(daemonConnected);
@@ -214,19 +218,95 @@ export default function BrushHotkeySection() {
     showMessage('已取消录制');
   };
 
-  const removeEntry = (id: string) => {
-    const target = entries.find(e => e.id === id);
-    if (!target) return;
-    if (target.action === 'toggleMain') {
-      // 主开关不真正删除，改为「解绑」（combo 置空并落盘），
-      // 这样下次打开插件不会又把默认的 Ctrl+Q 补回来；需要时可到主面板菜单重新指定。
-      setMainToggleCombo('');
-      showMessage('已解绑选区填充开关快捷键，可在主面板菜单「设置主开关快捷键」重新指定');
+  // 多选逻辑对齐 PS 原生图层：
+  // - 普通单击：仅选中该条，并把锚点设为它；
+  // - Ctrl/Meta + 单击：在已选集合里对该单条加选/减选（toggle），并把锚点设为它；
+  // - Shift + 单击：选中「锚点 ~ 当前」之间的所有记录（含两端），锚点保持不变以便继续延伸。
+  const handleEntryClick = (id: string, ev: React.MouseEvent) => {
+    const idx = entries.findIndex(e => e.id === id);
+    if (idx < 0) return;
+    if (ev.shiftKey && anchorIndexRef.current >= 0) {
+      const a = anchorIndexRef.current;
+      const [lo, hi] = a <= idx ? [a, idx] : [idx, a];
+      setSelectedIds(entries.slice(lo, hi + 1).map(e => e.id));
       return;
     }
-    const next = entries.filter(e => e.id !== id);
-    setEntries(next);
-    pushConfig(next);
+    if (ev.ctrlKey || ev.metaKey) {
+      setSelectedIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
+      anchorIndexRef.current = idx;
+      return;
+    }
+    setSelectedIds([id]);
+    anchorIndexRef.current = idx;
+  };
+
+  // 重录选中单条：直接对该记录的笔刷（或选区填充开关）发起一次新的录制，
+  // 无需回到上方下拉菜单重新选择。仅当恰好选中一条时可用。
+  const reRecordEntry = async () => {
+    if (selectedIds.length !== 1) return;
+    const target = entries.find(e => e.id === selectedIds[0]);
+    if (!target) return;
+    if (!daemonConnected) { showMessage('守护进程未连接，无法录制（请先加载守护进程）'); return; }
+    const isMain = target.action === 'toggleMain';
+    setRecording(true);
+    showMessage('正在重录：请按下新的组合键，Esc 取消');
+    const res = await requestHotkeyRecording(isMain ? '__MAIN__' : target.brush);
+    setRecording(false);
+    if (!res) { showMessage('已取消录制'); return; }
+    const combo = res.combo;
+    // 冲突检查：新组合键是否被其它记录（含主开关）占用？占用则提示并放弃本次重录
+    const dup = entries.find(e => e.id !== target.id && e.combo === combo);
+    if (dup) {
+      showMessage('该组合键已被「' + (dup.action === 'toggleMain' ? '选区填充开关' : dup.brush) + '」占用，请换一个');
+      return;
+    }
+    if (isMain) {
+      setMainToggleCombo(combo);
+      showMessage('已重录选区填充开关：' + combo);
+    } else {
+      const next = entries.map(e => (e.id === target.id ? { ...e, combo } : e));
+      setEntries(next);
+      if (pushConfig(next)) showMessage('已重录：' + combo + ' → ' + target.brush);
+      else showMessage('推送配置失败（守护进程未运行？）');
+    }
+  };
+
+  // 条目被删除/解绑/守护进程回灌配置后，剔除已不存在的选中项，避免选中数虚高
+  useEffect(() => {
+    setSelectedIds(prev => {
+      const next = prev.filter(id => entries.some(e => e.id === id));
+      return next.length === prev.length ? prev : next; // 无变化则返回原引用，避免无谓重渲染
+    });
+  }, [entries]);
+
+  // 选中项里真正"可处理"的条数：笔刷条目可删除；
+  // 选区填充开关只能解绑不能删除，且已解绑（combo 为空）时不可再操作
+  const deletableCount = selectedIds.filter(id => {
+    const e = entries.find(x => x.id === id);
+    return !!e && (e.action !== 'toggleMain' || !!e.combo);
+  }).length;
+
+  // 批量删除选中项：先删笔刷条目并落盘，再解绑主开关（两者都靠 pushConfig 同步 bridge 缓存）
+  const removeSelectedEntries = () => {
+    if (selectedIds.length === 0) return;
+    const sel = new Set(selectedIds);
+    const unbindMain = entries.some(e => sel.has(e.id) && e.action === 'toggleMain' && e.combo);
+    const brushIds = entries.filter(e => sel.has(e.id) && e.action !== 'toggleMain').map(e => e.id);
+    if (!unbindMain && brushIds.length === 0) { showMessage('选中的条目无需处理'); return; }
+    setSelectedIds([]);
+    // 先删笔刷条目：pushConfig 会同步 bridge 内缓存，保证随后的 setMainToggleCombo 基于最新列表
+    if (brushIds.length) {
+      const next = entries.filter(e => !brushIds.includes(e.id));
+      setEntries(next);
+      pushConfig(next);
+    }
+    // 主开关不真正删除，改为「解绑」（combo 置空并落盘），
+    // 这样下次打开插件不会又把默认的 Ctrl+Q 补回来；需要时可到主面板菜单重新指定。
+    if (unbindMain) setMainToggleCombo('');
+    const parts: string[] = [];
+    if (brushIds.length) parts.push('已删除 ' + brushIds.length + ' 条快捷键');
+    if (unbindMain) parts.push('已解绑选区填充开关');
+    showMessage(parts.join('，'));
   };
 
   const brushOptions: BrushSelectOption[] = brushes.map(b => ({
@@ -272,63 +352,64 @@ export default function BrushHotkeySection() {
 
           <div style={rowStyle}>
             {usePicker ? (
-              <>
-                <BrushSelect
-                  value={selectedBrush}
-                  options={brushOptions}
-                  onChange={setSelectedBrush}
-                  placeholder="选择笔刷"
-                  title="选择要绑定快捷键的笔刷预设（名称需与 Brushes 面板一致）"
-                  style={{ flex: '0 1 200px', minWidth: 0 }}
-                />
-                {/* 亲密性：刷新紧贴下拉（4px），下拉宽度受约束不再撑满整行，
-                    录制圆形 icon 用 marginLeft:auto 推到最右，二者之间自然拉开距离 */}
-                <div
-                  className="hotkey-icon-button"
-                  style={{ marginLeft: 4 }}
-                  onClick={() => void loadBrushes(true)}
-                  title="刷新笔刷列表"
-                >
-                  <RefreshIcon style={{ width: 14, height: 14, display: 'block' }} />
-                </div>
-              </>
+              <BrushSelect
+                value={selectedBrush}
+                options={brushOptions}
+                onChange={setSelectedBrush}
+                placeholder="选择笔刷"
+                title="选择要绑定快捷键的笔刷预设（名称需与 Brushes 面板一致）"
+                style={{ flex: '1 1 auto', minWidth: 0 }}
+              />
             ) : (
               <sp-textfield size="s" placeholder="输入笔刷预设名（需与 PS 完全一致）" style={{ flex: '1 1 auto', minWidth: 0 }}
                 value={selectedBrush} onInput={(e: any) => setSelectedBrush(e.target.value)} />
             )}
-            {/* 录制键 + 停止键作为一个整体推到最右，二者紧挨（停止键 marginLeft:4）；
-                刷新按钮始终在左侧下拉旁，与右侧录制/停止键组保持间距 */}
-            <div style={{ display: 'flex', alignItems: 'center', marginLeft: 'auto' }}>
-              <div
-                role="button"
-                tabIndex={0}
-                className={`hotkey-circle-button${recording ? ' recording' : ''}${!selectedBrush ? ' disabled' : ''}`}
-                title={
-                  '选中一支笔刷后点这个圆点，然后在任意位置按下要绑定的组合键即可。\n' +
-                  '可绑定的键：字母 A-Z、数字 0-9、F1-F24，以及 ; \' , . / - = ` [ ] \\ 等符号键，\n' +
-                  '还有方向键 / 空格 / 回车 / 退格 / Tab / Insert / Delete / Home / End / PageUp / PageDown\n' +
-                  '以及小键盘 Num0-Num9。录制由守护进程的全局键盘钩子完成，无需面板获得焦点。\n' +
-                  '录制中按 Esc 取消。'
-                }
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (!recording && selectedBrush) void startRecord();
-                }}
-              >
-                <RecordCircleIcon style={{ width: 16, height: 16, display: 'block' }} />
+            {/* 三个图标共用一个固定宽度大容器：下拉自由伸缩，图标组恒为 3×28px，
+                录制键恒在最右格；停止键出现/消失在预留的中间格子内，
+                因此刷新与录制都不会位移，三者间距也始终一致 */}
+            <div className="hotkey-icon-group">
+              <div className="hotkey-icon-cell">
+                {usePicker && (
+                  <div
+                    className="hotkey-icon-button"
+                    onClick={() => void loadBrushes(true)}
+                    title="刷新笔刷列表"
+                  >
+                    <RefreshIcon style={{ width: 14, height: 14, display: 'block' }} />
+                  </div>
+                )}
               </div>
-              {recording && (
+              <div className="hotkey-icon-cell">
                 <div
                   role="button"
                   tabIndex={0}
-                  className="hotkey-circle-button"
-                  style={{ marginLeft: 4 }}
-                  title="放弃本次录制（等同于在录制过程中按 Esc）"
-                  onClick={(e) => { e.stopPropagation(); cancelRecord(); }}
+                  className={`hotkey-circle-button${recording ? '' : ' disabled'}`}
+                  title={recording ? '放弃本次录制（等同于在录制过程中按 Esc）' : '仅在录制过程中可取消本次录制'}
+                  onClick={(e) => { e.stopPropagation(); if (recording) cancelRecord(); }}
                 >
                   <StopSquareIcon style={{ width: 16, height: 16, display: 'block' }} />
                 </div>
-              )}
+              </div>
+              <div className="hotkey-icon-cell">
+                <div
+                  role="button"
+                  tabIndex={0}
+                  className={`hotkey-circle-button${recording ? ' recording' : ''}${!selectedBrush ? ' disabled' : ''}`}
+                  title={
+                    '选中一支笔刷后点这个圆点，然后在任意位置按下要绑定的组合键即可。\n' +
+                    '可绑定的键：字母 A-Z、数字 0-9、F1-F24，以及 ; \' , . / - = ` [ ] \\ 等符号键，\n' +
+                    '还有方向键 / 空格 / 回车 / 退格 / Tab / Insert / Delete / Home / End / PageUp / PageDown\n' +
+                    '以及小键盘 Num0-Num9。录制由守护进程的全局键盘钩子完成，无需面板获得焦点。\n' +
+                    '录制中按 Esc 取消。'
+                  }
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (!recording && selectedBrush) void startRecord();
+                  }}
+                >
+                  <RecordCircleIcon style={{ width: 16, height: 16, display: 'block' }} />
+                </div>
+              </div>
             </div>
           </div>
           {!usePicker && (
@@ -337,36 +418,61 @@ export default function BrushHotkeySection() {
             </div>
           )}
 
-          <div style={{ marginTop: 10 }}>
-            {entries.length === 0 && <div style={{ fontSize: 12, opacity: 0.6 }}>尚未绑定任何快捷键</div>}
-            {entries.map(e => {
-              const isMainToggle = e.action === 'toggleMain';
-              // 选区填充开关解绑（combo 为空）时，右侧删除图标禁用
-              const delDisabled = isMainToggle && !e.combo;
-              return (
-                <div key={e.id} className="hotkey-entry-row">
-                  {/* 快捷键列定宽：不同长度的组合键不再把名称挤得不对齐；分隔线因此跨条目对齐 */}
+          {/* 所有录好的快捷键都装在一个边框可见的大容器里（参考蒙版同步卡片外部的大容器）；
+              删除键移到容器外的右下角，见下方 .hotkey-entry-actions */}
+          <div className="hotkey-entry-box">
+            <div className="hotkey-entry-list">
+              {entries.length === 0 && <div style={{ fontSize: 12, opacity: 0.6 }}>尚未绑定任何快捷键</div>}
+              {entries.map(e => (
+                <div
+                  key={e.id}
+                  className={`hotkey-entry-row${selectedIds.includes(e.id) ? ' selected' : ''}`}
+                  title="单击选中；Ctrl + 单击 加选/减选；Shift + 单击 选中从锚点到本条的所有记录"
+                  onClick={(ev) => handleEntryClick(e.id, ev)}
+                >
+                  {/* 快捷键列定宽：分隔线紧贴它，因此跨条目始终对齐 */}
                   <span className="hotkey-entry-combo">{e.combo || '未绑定'}</span>
                   <span className="hotkey-entry-sep">丨</span>
                   <span className="hotkey-entry-name">
-                    {isMainToggle ? '选区填充开关' : e.brush}
+                    {e.action === 'toggleMain' ? '选区填充开关' : e.brush}
                   </span>
-                  <span className="hotkey-entry-sep">丨</span>
-                  <div
-                    className={`hotkey-icon-button hotkey-entry-del${delDisabled ? ' disabled' : ''}`}
-                    title={isMainToggle ? (delDisabled ? '选区填充开关已解绑' : '解绑选区填充开关快捷键') : '删除此快捷键'}
-                    onClick={() => { if (!delDisabled) removeEntry(e.id); }}
-                  >
-                    <DeleteIcon style={{ width: 13, height: 13, display: 'block' }} />
-                  </div>
                 </div>
-              );
-            })}
+              ))}
+            </div>
           </div>
 
-          {/* 底部说明文字：颜色随守护进程状态变化（已连接=绿，断开=红），不再恒为绿色 */}
+          {/* 选中条数提示 + 重录 + 删除：列表大容器外右下角，说明文字上方。
+              左侧「已选中 N 条」左对齐；右侧重录（仅选中单条时）与删除图标按钮相邻 */}
+          <div className="hotkey-entry-actions">
+            <span className="hotkey-selected-count">已选中 {selectedIds.length} 条</span>
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+              <div
+                role="button"
+                tabIndex={0}
+                className={`hotkey-icon-button${(selectedIds.length !== 1 || recording || !daemonConnected) ? ' disabled' : ''}`}
+                style={{ marginRight: 4 }}
+                title={selectedIds.length === 1 ? '重录选中的这一条（无需再从上方下拉菜单选择）' : '选中单条快捷键后可重录'}
+                onClick={() => { if (selectedIds.length === 1 && !recording && daemonConnected) void reRecordEntry(); }}
+              >
+                <DataRefreshIcon style={{ width: 14, height: 14, display: 'block' }} />
+              </div>
+              <div
+                role="button"
+                tabIndex={0}
+                className={`hotkey-icon-button${deletableCount ? '' : ' disabled'}`}
+                title={deletableCount
+                  ? ('删除选中的 ' + deletableCount + ' 条（选区填充开关为解绑而非删除）')
+                  : '请先在上方单击选中要删除的快捷键'}
+                onClick={() => removeSelectedEntries()}
+              >
+                <DeleteIcon style={{ width: 14, height: 14, display: 'block' }} />
+              </div>
+            </div>
+          </div>
+
+          {/* 底部说明文字：颜色与状态指示灯一致（已连接=绿 #2ecc71，断开/未加载=橙 #f39c12） */}
           {message && (
-            <div style={{ fontSize: 12, color: daemonConnected ? '#4CAF50' : '#ef5350', marginTop: 8 }}>
+            <div style={{ fontSize: 12, color: daemonConnected ? '#2ecc71' : '#f39c12', marginTop: 8 }}>
               {message}
             </div>
           )}

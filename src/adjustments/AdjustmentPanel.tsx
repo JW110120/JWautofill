@@ -2941,8 +2941,12 @@ const formatSyncState = (task: MaskSyncTask): { text: string; ok: boolean } | nu
 };
 
 const renderMaskSyncContent = () => (
-  <div className="adjustment-section mask-sync-section">
-    {/* 引擎状态条：确认插件已加载最新代码。绿点+引擎就绪 左对齐，文档名+任务数 右对齐 */}
+  <div className="mask-sync-section">
+    {/* 不再复用 .adjustment-section：它自带 border + padding，会在「引擎状态条」与
+        「卡片总容器 A」之外再套一层可见的大容器。改用 .mask-sync-section，
+        仅保留内边距/宽度/间距，无边框，外面不再有可见的框 */}
+    {/* 引擎状态条：确认插件已加载最新代码。绿点+引擎就绪 左对齐，文档名+任务数 右对齐。
+        已挪到「卡片大容器」外部（上方），不再包裹在任务卡片列表里 */}
     <div className="mask-sync-status-bar">
       <span className={`mask-sync-status-dot ${maskSyncEngineReady ? 'ok' : 'warn'}`} />
       <span className="mask-sync-status-ready">
@@ -2955,6 +2959,11 @@ const renderMaskSyncContent = () => (
       )}
     </div>
 
+    {/* 容器 A（边框可见）：仅包裹任务卡片 + 新建按钮；
+        引擎状态条 .mask-sync-status-bar 位于其外部上方（不在容器内），
+        且引擎状态与容器 A 之外不再套任何有边框的外层容器。
+        空态提示也放进容器 A（对齐笔刷热键：空态在边框盒内），保证上下留白对称 */}
+    <div className="mask-sync-card-list">
     {maskSyncTasks.length === 0 && (
       <div className="mask-sync-empty">点击 + 新建同步任务</div>
     )}
@@ -3112,11 +3121,12 @@ const renderMaskSyncContent = () => (
       );
     })}
 
-    {/* 新建同步任务按钮：有任务卡片时位于所有卡片最下面 */}
+    {/* 新建同步任务按钮：位于容器 A（卡片大容器）底部 */}
     <div className="mask-sync-add-row">
       <sp-action-button quiet class="mask-sync-add-button" onClick={handleMaskSyncAdd} title="新建同步任务">
         <AddIcon />
       </sp-action-button>
+    </div>
     </div>
   </div>
 );

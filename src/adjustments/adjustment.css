@@ -231,6 +231,25 @@
   color: var(--disabled-color);
 }
 
+/* 三个图标按钮的固定宽度大容器：下拉可自由伸缩，图标组宽度恒为 3×28=84px。
+   每个按钮各占一个等宽小格子并在格内居中，格间距即按钮间距、恒定一致；
+   开启录制时停止键出现在预留的中间格子里，刷新与录制因此都不会位移。 */
+.hotkey-icon-group {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-left: 4px;
+}
+
+.hotkey-icon-cell {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 /* 录制 / 取消：圆形图标按钮（参考 PS 原生动作面板的录制圆点），无文字无边框；
    颜色跟随 --text-color（深色主题为白色、浅色主题为黑色），录制中变红，禁用态为灰色 */
 .hotkey-circle-button {
@@ -282,22 +301,57 @@
   color: var(--disabled-color);
 }
 
-/* 已录制快捷键条目：快捷键 丨 名称 丨 删除 三段式。
-   快捷键列与删除列定宽、名称列 flex:1，两个分隔线因此跨条目对齐（与卡片等宽无关）。 */
+/* 所有已录制快捷键的边框可见大容器（参考蒙版同步任务卡片 .mask-sync-task 风格） */
+.hotkey-entry-box {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 8px;            /* 上下内边距相等 → 首条上边/末条下边到边框距离一致 */
+  margin-top: 8px;
+  background: var(--bg-color);
+  box-sizing: border-box;
+}
+
+/* 列表本身在边框容器内，外间距由 .hotkey-entry-box 提供 */
+.hotkey-entry-list {
+  margin-top: 0;
+}
+
+/* 单条：只保留【快捷键 丨 名字】，快捷键靠左、名字靠右。
+   删除键已移出，名字独占整行剩余宽度，"选区填充开关" 六个字不再被截断。 */
 .hotkey-entry-row {
   display: flex;
   align-items: center;
   padding: 6px 8px;
-  margin-top: 6px;
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.06);
   font-size: 12px;
   box-sizing: border-box;
+  cursor: pointer;
+  user-select: none;
+  /* 横向分割线：与 丨（.hotkey-entry-sep）和外框（.hotkey-entry-box）同为 --border-color，保持横竖分割线一致 */
+  border-bottom: 1px solid var(--border-color);
+  /* 选中态用 outline 占位（不引起位移），与横向分割线 border-bottom 不冲突 */
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+}
+
+/* 仅后续行有上间距 → 首行上边距为 0；配合 box 上下等 padding，首尾到边框距离对称 */
+.hotkey-entry-row + .hotkey-entry-row {
+  margin-top: 6px;
+}
+
+.hotkey-entry-row:last-child {
+  border-bottom: none;
+}
+
+/* 选中态：与图案子面板被选中的图案一致——2px 主题蓝描边（用 outline，零位移） */
+.hotkey-entry-row.selected {
+  outline-color: var(--primary-color);
 }
 
 .hotkey-entry-combo {
   width: 110px;
-  flex-shrink: 0;
+  flex: 0 0 110px;
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -305,28 +359,42 @@
 }
 
 .hotkey-entry-sep {
-  flex-shrink: 0;
+  flex: 0 0 auto;
   margin: 0 8px;
-  color: var(--text-color);
-  opacity: 0.3;
+  color: var(--border-color);   /* 与横向分割线、外框同色，保持横竖分割线一致 */
   user-select: none;
   pointer-events: none;
 }
 
+/* 名称列占满剩余宽度并右对齐，与左侧快捷键形成两端对齐（space-between 观感）；
+   分隔线紧贴定宽的快捷键列，因此跨条目始终对齐 */
 .hotkey-entry-name {
   flex: 1 1 auto;
   min-width: 0;
+  text-align: right;
   opacity: 0.8;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.hotkey-entry-del {
-  flex-shrink: 0;
-  width: 22px;
-  height: 22px;
-  margin-left: 6px;
+/* 删除键 +「已选中 N 条」：位于列表大容器外、说明文字上方。
+   提示文字左对齐（space-between 顶到最左），删除键仍在最右 */
+.hotkey-entry-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+}
+
+.hotkey-selected-count {
+  font-size: 11px;
+  color: var(--text-color);
+  opacity: 0.6;
+  margin-right: auto;
+  text-align: left;
+  user-select: none;
+  white-space: nowrap;
 }
 
 .adjustment-swtich-container {
@@ -685,17 +753,45 @@
 .adjustment-modal-close:hover { background: var(--hover-bg); }
 
 /* ================= 蒙版同步分区 ================= */
+/* 蒙版同步分区：不再复用 .adjustment-section（其 border + padding 会在引擎状态条与
+   卡片总容器外再套一层可见大容器）。这里只保留内边距/宽度/间距，去掉边框与圆角，
+   使引擎状态条与卡片总容器 A 直接陈列在分区内，外面没有额外的可见框 */
 .mask-sync-section {
-  max-width: 280px;
+  /* 对齐笔刷热键分区：内容通栏（.adjust-expand-content 本身无 padding），
+     不加左右内边距、不限宽，使状态条与容器 A 与笔刷热键的盒子等宽 */
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  margin: 0 0 20px 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
 }
 
-/* 新建任务：圆形 + 号按钮（位于任务卡片列表底部） */
+/* 同步任务卡片大容器（容器 A）：与笔刷热键的 .hotkey-entry-box 完全同一套盒模型
+   （1px 边框 + radius 8 + 上下左右等距 padding 8 + --bg-color）。
+   内部留白原则同笔刷热键：首个子元素上边距为 0、后续元素才加 margin-top，
+   配合上下对称的 padding，使「首个卡片上边↔框上边界」=「加号按钮下边↔框下边界」 */
+.mask-sync-card-list {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 8px;
+  margin-top: 0; /* 与上方引擎状态条的 margin-bottom:8px 配合留白 */
+  background: var(--bg-color);
+  box-sizing: border-box;
+}
+
+/* 新建任务：圆形 + 号按钮（位于任务卡片列表底部）。
+   margin-top 6px 与卡片间距一致（对标 .hotkey-entry-row + .hotkey-entry-row），
+   margin-bottom 0 → 底部留白只来自容器 A 的 padding，上下对称 */
 .mask-sync-add-row {
   display: flex;
   justify-content: center;
   align-items: center;
-  margin-top: 4px;
-  margin-bottom: 2px;
+  margin-top: 6px;
+  margin-bottom: 0;
 }
 
 .mask-sync-add-button {
@@ -727,20 +823,24 @@
   display: block;
 }
 
+/* 空态提示：位于容器 A 内，padding 归零 → 上下留白全由容器 A 的 8px 提供，保持对称 */
 .mask-sync-empty {
   text-align: center;
   color: var(--text-color);
   opacity: 0.5;
   font-size: 12px;
-  padding: 6px 0 10px 0;
+  padding: 0;
+  margin: 0;
   user-select: none;
 }
 
-/* 引擎状态条：绿点+“引擎就绪”左对齐，文档名+任务数右对齐 */
+/* 引擎状态条：绿点+“引擎就绪”左对齐，文档名+任务数右对齐。
+   左右 padding 用 8px（与下方容器 A 的 padding 一致），
+   使状态条内文字与卡片内文字左边缘对齐（同有 1px 边框） */
 .mask-sync-status-bar {
   display: flex;
   align-items: center;
-  padding: 4px 6px;
+  padding: 4px 8px;
   margin-bottom: 8px;
   border-radius: 4px;
   background: var(--panel-bg, rgba(128, 128, 128, 0.08));
@@ -827,10 +927,16 @@
   background: var(--bg-color);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  padding: 9px 10px 8px 10px;
-  margin-bottom: 10px;
+  padding: 8px 10px;   /* 上下内边距相等（原为上 9 / 下 8） */
+  margin-bottom: 0;    /* 间距改由下方「后续卡片」规则提供 */
   box-sizing: border-box;
   width: 100%;
+}
+
+/* 仅后续卡片有上间距（6px，与笔刷热键 .hotkey-entry-row 的间距一致）；
+   首张卡片上边距为 0，配合容器 A 上下对称的 8px padding → 上下留白相等 */
+.mask-sync-task + .mask-sync-task {
+  margin-top: 6px;
 }
 
 /* 任务标题行 */

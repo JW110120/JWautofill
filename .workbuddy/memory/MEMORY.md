@@ -1,79 +1,58 @@
 # JWautofill 项目长期记忆
 
-## 提交约定（用户硬性要求，2026-08-29 起）
+## 提交约定（硬性，2026-08-29 起）
 
-- **每次帮用户提交（commit）时，必须同时把 `.workbuddy/memory/` 下的所有记忆文件与工作日志一并加入提交**（`git add .workbuddy/memory/ && git commit ...`，或 `git add -A` 时确认包含该目录）。记忆与工作日志是项目资产，不得遗漏。
-- 该目录已被 git 跟踪（`.workbuddy/memory/*.md` 在 `git ls-files` 中可见），无需额外 `git add` 步骤，但提交前务必确认其改动已纳入本次 commit。
+- 每次 commit 必须包含 `.workbuddy/memory/` 下所有记忆与日志。该目录已被 git 跟踪，`git add -A` 即可，但提交前务必确认其改动已纳入本次 commit。
 
-## UXP / React 关键知识点（踩坑记录）
+## UXP / React 关键坑
 
-- **`action.addNotificationListener / removeNotificationListener` 第一个参数必须是字符串数组**（如 `['set','select','clearEvent','delete','make']`）。传单个字符串会抛 `Argument 1 has an invalid type. Expected type: array actual type: string`，监听完全注册失败。若要逐个注册容错，也必须包成 `[evt]` 数组。正确范例：src/app.tsx。
-- **React 19 dev 构建在 UXP 中不能直接渲染**：其渲染流程调用 `performance.mark(name, {detail})` / `performance.measure(...)`，UXP 内置 Performance 不支持对象 options 且 measure 要求起点 mark 已注册 → 首次渲染抛 `NotFoundError: The mark [object Object] does not exist` → 渲染中断后 root 状态残留 → 之后全部渲染报 `Should not already be working.` 面板白屏。**解法**：入口最先 import `src/uxpPerfPatch.ts`（容错包装 mark/measure/clearMarks/clearMeasures）。Production 构建无此问题。
-- **往 PS 里加载产物**：`yarn build`（production）最稳；`yarn watch`（dev）现在有 uxpPerfPatch 兜底可用，但 PS 端需手动重新加载插件才能拿到新 bundle。
-- 仓库统一 LF（.gitattributes `* text=auto eol=lf` + `*.otf binary`）；改行符会引起 UXP 热重载竞态。
+- `action.addNotificationListener / removeNotificationListener` 首参必须是**字符串数组**（`['set','select','clearEvent','delete','make']`），传字符串会抛 `Argument 1 has an invalid type` 并监听静默失败。范例 src/app.tsx。
+- **React 19 dev 构建在 UXP 不能渲染**：渲染流程调用 `performance.mark/measure(name,{detail})`，UXP 的 Performance 不支持对象 options 且 measure 要求起点 mark 已注册 → 首次渲染抛 `The mark [object Object] does not exist` → root 状态残留 → 之后全部渲染报 `Should not already be working.` 面板白屏。**解法**：入口最优先 import `src/uxpPerfPatch.ts`（容错包装 mark/measure/clearMarks/clearMeasures）。Production 构建无此问题。
+- 加载产物：`yarn build`（production）最稳；`yarn watch`（dev）有 patch 兜底可用，但 PS 端需手动重新加载插件。
+- 仓库统一 LF（.gitattributes `* text=auto eol=lf` + `*.otf binary`）；行符不一致会引起 UXP 热重载竞态。
 
-## 面板/入口结构
+## 面板结构
 
-- 两个面板入口都在 src/index.tsx：`#app`（App 主面板）+ `#pixeladjustment`（AdjustmentPanel 像素调整）。菜单在 MenuManager.setup()。
-- 蒙版同步引擎 src/utils/MaskSyncEngine.ts（单例，事件驱动+2s 兜底轮询，按文档名持久化到 mask-sync-state.json）。
+- 入口 src/index.tsx：`#app`（App 主面板）+ `#pixeladjustment`（AdjustmentPanel）；菜单在 MenuManager.setup()。
+- 蒙版同步引擎 src/utils/MaskSyncEngine.ts（单例，事件驱动 + 2s 兜底轮询，按文档名持久化 mask-sync-state.json）。
 
-## 分块补色（blockColorPatchProcessor.ts）
+## 算法要点（细节见各源文件与 analysis/ 原型）
 
-- v5 算法（2026-08-22）：同层/分层兼顾。cand = alpha>16 | 距填充≤1 | (线稿内部且联合掩码8邻域实体==9 尖角孔洞)；线稿内部 R 优先全提升；close(2)+holeFill 后 D≥2 提升 + D==1 尖角(实体≥7 或 alpha≥80)。
-- **距离语义坑**：`distanceToBackground`（背景=0）≠ 到掩码距离。cand 约束必须用 `distanceToMask`（掩码内=0）。Python 原型验证时禁用 `if good==fill: continue`（ground truth 作弊）。
-- **R 不能排除线稿描边**（尖角头部在描边内）；但"线稿内部 fill=0"只提升被完全包围（nbr==9）的孔洞，防描边边缘误填。
-- 指标（TS 端到端）：分层 补全区 100%/背景 99.0%/尖角 100%；同层 补全区 100%/背景 98.99%/尖角 100%。
-- UI：**同层补色/分层补色** 两按钮；线稿下拉复用 MaskSyncSelect（蒙版同步同款样式）；readLineLayerAlphaMask 用 imgData 实际尺寸算 comps。
+- **分块补色 blockColorPatchProcessor.ts**（v5，2026-08-22）：同层/分层兼顾。**距离语义坑**——cand 约束必须用 `distanceToMask`（掩码内=0），不能用 `distanceToBackground`（背景=0）；Python 原型验证时禁用 `if good==fill: continue`（ground truth 作弊）。**R 不能排除线稿描边**（尖角头部在描边内）。指标：补全区 100% / 背景 ~99% / 尖角 100%。
+- **线条平滑 lineSmoothProcessor.ts**：**「保留原值」写回陷阱**——Phase E 里 `na==0` 不写会保留原值防主线被打成孔洞，但也会把原图游离杂点原样写回。**任何"清除某类像素"的逻辑必须显式清零**。杂点 = 对原 lineMask 做 8 连通域，面积 <10 且不与主线条连通。测试指标须单独统计「原杂点是否存活」（只统计新增像素的指标检测不到）。
+- **扣白/扣黑 knockoutBatchProcessor.ts**（2026-08-26 重构 batchPlay 版）：核心 = 合并图 Ctrl+点 RGB 复合通道载入亮度选区 → Delete（alpha *= 1−亮度）→ 复制 N 份合并（alpha 按 1−(1−a)^N 增强）。**像素级无法还原原图层（欠定）**，实质是"放回原背景视觉一致"。**扣黑必须反色法**：Z → Invert → 扣白流程 → Invert，份数 N = ceil(ln0.005 / ln(1−aMin))，aMin = 选区灰度对应 alpha 的 5% 分位，clamp [3,40]。batchPlay 速查：通道选区 `{_obj:'set',_target:[{_ref:'channel',_property:'selection'}],to:{_ref:'channel',_enum:'channel',_value:'RGB'}}`；Delete `{_obj:'clear'}`；反色 `{_obj:'invert'}`（只反 RGB 不动 alpha）；复制+向下合并用 UXP DOM `Layer.duplicate()/Layer.merge()`（比 batchPlay mergeLayers 稳）。适用性由对比度决定（信息论极限）：扣白适深/中色，扣黑适浅/中色。
 
-## 线条平滑（lineSmoothProcessor.ts）
+## Windows 守护进程 / 全局热键（2026-08-29）
 
-- **「保留原值」写回陷阱**：Phase E 里 `na==0 不写、保留原值` 是防主线被误删成孔洞的，但它也会把**原图游离杂点**（alpha>THR、被 binaryOpen 移除、cov≈0 已清空）原样写回 → 线外黑点残留。**任何"清除某类像素"的逻辑必须显式清零，不能依赖 strokeAlpha==0 就以为删掉了**。
-- 游离杂点判定：对原 `lineMask` 做 8 连通域分析，面积 < `SPECK_MAX=10` 且与主线条不连通 → 杂点；写回时连 RGB 一起清零（Phase A.5 + Phase E）。
-- 测试指标注意：`alpha[i] <= THR && outA[i] > THR` 只统计「新生成」像素，**检测不到原杂点存活**；要加「杂点像素集合输出仍>THR」的指标。
+- **C# `System.Text.Json` 默认大小写敏感**：UXP 推小写 JSON 键到 PascalCase 属性会静默全空 → 跨端通信必须 `JsonSerializerOptions{CamelCase, CaseInsensitive=true}`。
+- daemon 是无窗口 console，Console.WriteLine 全被吞；排查配置路径类 bug 用前台重定向 stdout + analysis/hotkey/ws_raw_test.mjs（原始 TCP WS 客户端）。
+- daemon Broadcast 曾硬编码单字节帧长（>125B 发坏帧），已统一走 SendToClient。
+- 面板通过 `getPluginFolder` 定位文件：dist 必须由 webpack 拷入 daemon 脚本/exe，copy-webpack-plugin 的 glob `from` 需配 `to:[name][ext]`。
+- 会话沙箱会回收后台子进程（Start-Process/setsid/schtasks 都不持久），需用户点「安装守护进程」或重启（HKCU Run 自启）；schtasks 在安全策略黑名单。
+- **RegisterHotKey 不能挂在 message-only window（HWND_MESSAGE）**：注册成功返回 true，但 WM_HOTKEY 永不派发 →「注册成功、按下无反应」。**推荐：常驻 WH_KEYBOARD_LL + 内存组合键表**，命中后 `return (IntPtr)1` 吞掉按键（宿主 PS 不再抢该快捷键），也不存在「注册冲突=静默失效」。
+- 钩子必须由承载线程自己 SetWindowsHookEx（别的线程 PostThreadMessage 通知它安装会失败——线程消息队列在首次 GetMessage 前不存在）；**PostThreadMessage 的线程消息不进 WndProc**，必须在 GetMessage 循环里按 `msg.hwnd==IntPtr.Zero` 显式处理。
+- **钩子回调里绝不能做网络 I/O，也不能做同步文件 I/O**（含 `Console.WriteLine` 写日志）：前者超时被系统静默摘钩，后者卡顿会冻结整个低层键盘钩子（表现「日志停更、按键全无反应」）。正确做法：回调只 Enqueue + PostThreadMessage，主线程出队后做日志与广播。
+- Windows 脚本坑：`System.Diagnostics.Process` 没有 `Stop()`（用 `Stop-Process -Id`，否则进程残留锁住日志文件）；`Start-Process` 在环境同时存在 `Path`/`PATH` 键时崩；`Read-Host` 非交互时抛异常需 try/catch；删除刚被进程占用的目录要重试；**.ps1 必须纯 ASCII**（WinPS 5.1 无 BOM 按 GBK 读，中文注释致语法错误）。
 
-## 扣白/扣黑（knockoutBatchProcessor.ts，2026-08-26 重构为 batchPlay 版）
+## 笔刷热键 & 蒙版同步 UI 约定（2026-08-30）
 
-- **核心思路**（用户手动验证）：合并图 Ctrl+点击 RGB 复合通道载入亮度选区 → Delete 清除亮部（alpha *= 1−亮度）→ 复制 N 份合并（alpha 按 1−(1−a)^N 增强）。**像素级无法还原原图层（欠定）**，实质是"放回原背景视觉一致"。
-- **扣黑偏暗根因**：黑底合成 `Z_rgb = X_rgb·a` 是预乘暗色（复制合并不改 RGB）；且 Z 上内容亮度低 → 单份 alpha 小 → 固定 7 份远不够收敛（黑底暗色对 alpha 误差敏感）。白底扣白因 RGB 接近白、对误差不敏感所以"看起来行"。
-- **扣黑纠正 = 反色法**：Z --Invert--> Z'(=反色X的白底合成) → 扣白流程 → Invert 回来；**份数 N 动态** = ceil(ln0.005/ln(1−aMin))，aMin = 选区灰度(∈(0,255))对应 alpha 的 5% 分位，clamp [3,40]。案例红圆 N=23（用户 7 份视觉差 22.5/255 → 动态后 0.48/255）。
-- **batchPlay 命令速查**：载入通道选区 `{_obj:'set',_target:[{_ref:'channel',_property:'selection'}],to:{_ref:'channel',_enum:'channel',_value:'RGB'}}`；Delete `{_obj:'clear'}`；反色 `{_obj:'invert'}`（只反 RGB 不动 alpha）；复制+向下合并用 UXP DOM `Layer.duplicate()`/`Layer.merge()`（官方 API 比 batchPlay mergeLayers 稳）。
-- **适用性**：扣白适合深/中色内容，扣黑适合浅/中色内容（对比度决定可恢复性，信息论极限）。
-- 验证脚本：analysis/knockout/{sim_knockout.py, sim_invert_fix.py, whole_image_sim.py}；对比图 analysis/knockout/knockout_verify.html。
-
-## 守护进程/热键补充（2026-08-29）
-
-- **C# System.Text.Json 默认大小写敏感**：UXP 推小写 JSON 键到 PascalCase C# 属性会静默全空。跨端通信必须 JsonSerializerOptions{CamelCase, CaseInsensitive=true}。
-- **配置路径类 bug 的排查法**：daemon 是无窗口 console 程序，Console.WriteLine 全被吞。前台重定向 stdout + analysis/hotkey/ws_raw_test.mjs（原始 TCP WS 客户端）可完整观测收发/落盘。
-- **daemon Broadcast 曾硬编码单字节帧长**（>125B 发坏帧），已统一走 SendToClient。
-- **面板通过 getPluginFolder 定位文件**：用户从 dist 加载插件，dist 必须由 webpack 拷入 daemon 脚本/exe；copy-webpack-plugin 的 glob from 需配 to:[name][ext]。
-- **会话沙箱会回收后台子进程**：Start-Process/setsid/schtasks 均不能持久拉起 daemon；需用户点「安装守护进程」或重启（HKCU Run 自启）。schtasks 在安全策略黑名单。
-
-## 全局热键的 Windows 实现要点（2026-08-29，血泪）
-
-- **RegisterHotKey 不能挂在 message-only window（HWND_MESSAGE）上**：注册会成功返回 true，但 WM_HOTKEY 永远不派发 → 表现为「注册成功、按下无反应」。要么用真实隐藏窗口，要么别用 RegisterHotKey。
-- **推荐方案：常驻 WH_KEYBOARD_LL 低层钩子 + 内存组合键表**。好处是命中后可 `return (IntPtr)1` 吞掉按键，宿主程序（PS）不会再抢走该快捷键；也不存在「注册冲突 = 静默失效」。
-- **钩子必须由承载线程自己 SetWindowsHookEx**。从别的线程 `PostThreadMessage` 通知它安装会失败——线程消息队列在首次 GetMessage 前不存在。
-- **PostThreadMessage 的线程消息不会进 WndProc**，必须在 GetMessage 循环里按 `msg.hwnd==IntPtr.Zero` 显式处理。
-- **钩子回调里绝不能做网络 I/O，也不能做同步文件 I/O**（如 `Console.WriteLine` 写日志）：前者超时会被系统静默摘钩，后者一旦写入卡顿就会冻结整个低层键盘钩子，表现为「日志停更、按键全无反应」。正确做法：回调里只 `Enqueue` 一条记录 + `PostThreadMessage` 通知主线程，由主线程出队后做日志与广播。本次（2026-08-29.5）因此修过一次。
-
-## Windows 脚本/进程坑（同批次）
-
-- **System.Diagnostics.Process 没有 Stop() 方法**（属于 ServiceController）。`$p.Stop()` 会抛「不包含名为 Stop 的方法」并让清理静默失败，进程残留会锁住日志文件导致目录删不掉 → 一律用 `Stop-Process -Id`。
-- **`Start-Process` 在环境同时存在 `Path` 与 `PATH` 键时崩**（「已添加项。字典中的关键字:"Path"」）→ 需回退路径（去掉重定向重试 / `cmd /c start`）。
-- **`Read-Host` 在非交互或 stdin 被管道时抛异常**，会把可选询问变成整个脚本失败 → 必须 try/catch 兜底。
-- **删除刚被进程占用的目录要重试**（句柄释放有延迟），单次 Remove-Item 常失败。
-- **.ps1 必须纯 ASCII**：WinPS 5.1 把无 BOM 文件按 GBK 读，中文注释会造成语法错误。提交前用 `[System.Management.Automation.Language.Parser]::ParseFile` 做语法门禁。
-
-## 笔刷热键分区 & 蒙版同步 UI 约定（2026-08-30 更新）
-
-- **"主题色"的准确定义**：用户说的"主题色"是指**跟随主题的文本色** `var(--text-color)`（深色主题=白、浅色主题=黑），**不是**固定的蓝色 `var(--primary-color)`。所有图标按钮（录制圆点、停止、刷新、同步、删除）的 `color` 都用 `var(--text-color)`（或用 `currentColor` 继承父级 `--text-color`）。
-- **录制/取消按钮 = 圆形图标**（参考 PS 原生动作面板）：常态 `RecordCircleIcon`（实心圆，`currentColor`→`--text-color`）；录制中变红 `#ef5350`；取消键 `StopSquareIcon`（**方形**圆角方块 stop，非圆形 stop-circle，用户觉得圆形 stop 不和谐）；均**无文字无边框**，样式类 `.hotkey-circle-button`（圆形、26px、border:none）。两图标尺寸 16px。
-- **录制键 + 停止键紧挨成组**：两者用一个 `marginLeft:auto` 的 flex 容器包在最右，停止键 `marginLeft:4` 紧挨录制键；刷新按钮始终在左侧下拉旁（`marginLeft:4`），与右侧录制/停止键组保持间距。
-- **禁用态**：未选笔刷时录制圆点加 `.disabled` → 灰色 `var(--disabled-color)`（#848484，与 APP 总开关 `sp-switch[disabled]` 禁用灰一致）+ `cursor:not-allowed`；录制中"忙"不灰（变红优先）。
-- **刷新/删除/同步图标按钮**：共用 `.hotkey-icon-button`，**无边框无背景**纯图标（不要给它们加白边/背景，那会破坏与 PS 原生图标的观感一致性）。蒙版同步的删除垃圾桶、"立即同步"按钮都已统一改用 `.hotkey-icon-button`（`SyncIcon` 16px），不再用带边框的 `sp-action-button` + `mask-sync-now-button`/`mask-sync-delete-button`。
-- **icon hover 统一为 APP 齿轮风格**：所有图标按钮（`.hotkey-icon-button` 的 刷新/删除/同步 + `.hotkey-circle-button` 的 录制/停止）的 hover 必须 `color: var(--hover-icon)`（蓝色，深浅主题各自的 `--hover-icon`）+ 若有 `.icon-fill` 则 `fill: var(--hover-icon)`；**hover 背景不变**（不要 `background-color: var(--hover-bg)`）。与 src/styles/pattern.css 的 `.icon-button:hover` 一致。
-- **禁用态通用写法**：图标按钮禁用加 `.disabled` 类 → `color: var(--disabled-color)` + `cursor:not-allowed`，并**在 onClick 里拦截**（div 无原生 disabled）；`.icon-fill` 也要 `fill: var(--disabled-color)`（如 DeleteIcon）。录制中（`.recording`）hover 仍红 `#ef5350`，不与 disabled 冲突。
-- **录好的快捷键条目三段式**：`.hotkey-entry-row` 用「快捷键列(`.hotkey-entry-combo` 110px 定宽) 丨 名称列(`.hotkey-entry-name` flex:1) 丨 删除(`.hotkey-entry-del` 22px 定宽)」，分隔线 `丨` 用 `.hotkey-entry-sep`（opacity 0.3），因首尾两列定宽使分隔线跨条目对齐。
-- **下拉宽度约束**：`BrushSelect` 容器默认 `flex:1 1 120px` 会撑满整行，把后续图标（刷新）挤到最右。需要"刷新贴下拉、录制推最右"时，给 `BrushSelect` 传 `style={{ flex:'0 1 200px', minWidth:0 }}`，刷新 `marginLeft:4`，录制组 `marginLeft:auto`。
-- **守护进程状态色**：笔刷热键区底部 `message` 文字颜色随 `daemonConnected` 两色（绿 `#4CAF50` / 红 `#ef5350`），不再恒绿。
-- **蒙版同步「立即同步」禁用条件**：`!task.sampleLayerId || !task.channel || !task.targetLayerId` 任一项空即禁用 SyncIcon。
+- **"主题色"的准确定义 = `var(--text-color)`**（深色主题白 / 浅色主题黑），**不是**固定蓝 `var(--primary-color)`。
+- **图标按钮**：`.hotkey-icon-button`（刷新/删除/同步）与 `.hotkey-circle-button`（录制/停止）均**无边框无背景**纯图标，色用 `--text-color` / `currentColor`。**hover 统一 APP 齿轮风**（src/styles/pattern.css 的 `.icon-button:hover`）：`color: var(--hover-icon)`（蓝）+ `.icon-fill { fill: var(--hover-icon) }`，**背景不变**（不要 `background-color: var(--hover-bg)`）。
+- **禁用态通用写法**：加 `.disabled` → `color: var(--disabled-color)`（#848484，与 APP 总开关 `sp-switch[disabled]` 一致）+ `cursor:not-allowed` + **在 onClick 里拦截**（div 无原生 disabled）；`.icon-fill` 也要灰。录制中（`.recording`）hover 仍红 `#ef5350`，优先于 disabled。
+- **录制/停止键**：`RecordCircleIcon`（实心圆）+ `StopSquareIcon`（**方形** stop，用户嫌圆形 stop-circle 不和谐），各 16px，无文字无边框；录制中圆点变红 `#ef5350`；未选笔刷时禁用灰。
+- **图标组防位移固定布局**：`.hotkey-icon-group`（`flex:0 0 auto`）+ 3 个 `.hotkey-icon-cell`（各 `flex:0 0 28px`，按钮格内居中），顺序 **刷新 | 停止 | 录制**，录制键恒在最右格。**停止键不再条件渲染**——始终占用中间格（未录制时 `.disabled` 灰显），刷新与录制零位移、三者间距恒定。`BrushSelect` 传 `style={{ flex:'1 1 auto', minWidth:0 }}` 撑满剩余宽度把图标组顶到最右。
+- **快捷键条目（现行版）**：`.hotkey-entry-row` 内只留【快捷键 `.hotkey-entry-combo`(110px 定宽) 丨 `.hotkey-entry-sep` 丨 名字 `.hotkey-entry-name`(flex:1, text-align:right)】，名字独占剩余宽度（"选区填充开关"六字不再截断）。**所有条目装进 `.hotkey-entry-box`（边框可见大容器，风格同 `.mask-sync-task`：border + radius 8 + padding + bg）**；列表自身 `.hotkey-entry-list` 在外框内、外间距由 box 提供。删除键移到容器外 `.hotkey-entry-actions`（`space-between`：**「已选中 N 条」左对齐**、删除键最右）。
+- **列表容器通用布局原则（新，2026-08-30 第八轮确立）**：①**上下边距相等**——box 用对称 padding，首行上边距归零（仅后续行 `margin-top`），使「首条上边↔框上边界」与「末条下边↔框下边界」距离相等；②**横竖分割线颜色一致**——纵向 丨 `.hotkey-entry-sep` 与横向行分割线、外框全部用同一 `--border-color`，不要各自用不同色/透明度；③**选中态零位移**——用 `outline:2px solid transparent; outline-offset:-2px`（`.selected` 时 `outline-color:var(--primary-color)`），不要再用 `border:2px solid transparent`（会与横向 `border-bottom` 分割线冲突导致位移/描边错位）。
+- **条目选中态 = 图案子面板风格**：参考 `.photo-container.selected` → `border: 2px solid var(--primary-color)`；为防位移，常态行写 `border: 2px solid transparent`，选中只改 `border-color`。**多选逻辑对齐 PS 原生图层**：普通单击=单选并把锚点设为该条；Ctrl/Meta+单击=对该单条加选/减选（toggle）并刷新锚点；Shift+单击=选中「锚点~当前」之间所有记录（含两端），锚点不变可继续延伸。锚点用 `anchorIndexRef`（基于 `entries` 当前顺序索引），`useEffect([entries])` 剔除已消失的选中项。
+- **重录选中单条（始终可见）**：「重录」图标按钮（`DataRefreshIcon`，PS「S DataRefresh 18 N」，`currentColor`/14px，无边框 `--text-color`）**不再条件渲染**——始终显示在「已选中 N 条」与删除键之间；仅当 `selectedIds.length===1 && !recording && daemonConnected` 时可点，否则 `.disabled` 灰显（title 提示"选中单条快捷键后可重录"）。`reRecordEntry()`：对选中条记录的笔刷或选区填充开关直接发起新录制（主开关占位 `__MAIN__`，回传 combo 后 `setMainToggleCombo`；笔刷则 `entries.map` 改该条 combo + `pushConfig`），无需回上方下拉再选；重录前检查新 combo 是否被其它记录（含主开关）占用，占用则放弃并提示。
+- **刷新图标已换 PS「S Refresh 18 N」**：下拉右侧刷新按钮的 `RefreshIcon` 改为双向环形箭头（`.fill`→`currentColor`），与同步/删除同色系（--text-color / hover 蓝）。
+- **批量删除顺序坑**：笔刷条目走 `setEntries+pushConfig`；主开关条目只能 `setMainToggleCombo('')` 解绑（不能删）。**必须先删笔刷再解绑**——`pushConfig` 会同步 bridge 的 `cachedConfig`，而 `setMainToggleCombo` 基于 `cachedConfig` 重建，顺序反了会把刚删的条目复原。
+- **状态色（与指示灯一致）**：笔刷热键区底部 `message` 颜色随 `daemonConnected`——已连接 `#2ecc71`（= `.mask-sync-status-dot.ok`）、断开/未加载 `#f39c12`（= `.warn`）。
+- **蒙版同步容器结构（2026-08-30 第九轮最终确立）**：
+  - 引擎状态条 `.mask-sync-status-bar`（自带 border 的独立条）位于**最上方、容器 A 之外**。
+  - 容器 A = `.mask-sync-card-list`（边框可见：border + radius 8 + padding 8px + bg），**只包裹任务卡片 `.mask-sync-task` + 新建按钮 `.mask-sync-add-row`**，里面不放引擎状态。
+  - 引擎状态条与容器 A 之外**不再套任何有边框的外层容器**（2026-08-30 第十轮）：蒙版同步已**不再复用 `.adjustment-section`**（该类带 `border:1px + border-radius:4px + padding:13px 12px 6px` + `max-width:280px`，被 4 个分区共用，**不可直接改它**），改用专用 `.mask-sync-section`：`border:none`、`padding:0`、`width:100%`、**不再限宽 280px**（笔刷热键分区本就通栏，两者盒子等宽），保留 `margin-bottom:20px`。
+  - **边距对齐笔刷热键（第十一轮）**：容器 A 与 `.hotkey-entry-box` 完全同一套盒模型（1px 边框 + radius 8 + padding 8 + `--bg-color`）；纵向节奏与笔刷热键一致：状态条 `margin-bottom:8px` → 容器 A；卡片间距 6px（`.mask-sync-task + .mask-sync-task { margin-top:6px }`，卡片自身 `margin-bottom:0`）；加号行 `margin-top:6px; margin-bottom:0`；卡片 `padding:8px 10px`（原 9/8 改上下相等）。空态 `.mask-sync-empty` 从容器 A 外**移入容器内**（`padding:0`，留白全由容器 A 提供，保持上下对称）。状态条左右 padding 由 6px 改 8px，使其内文字与卡片内文字左边缘对齐。
+  - ⚠️ 教训（连续两轮踩坑）：①第八轮误把 `.mask-sync-card-list`（=容器 A）当成"最外侧多余容器"删掉 → 容器 A 必须保留；②第九轮以为 `.mask-sync-section` 无边框就合格，**实际它同时挂着 `.adjustment-section`（有边框）**，用户看到的外层大容器正是后者。改分区外观前务必确认该元素挂的**全部**类名及其样式。
+  - 注：分区内容区 `.adjust-expand-content` **没有 padding**，各分区留白完全来自 `.adjustment-section` 的 padding，所以蒙版同步这层包裹不能直接删成 Fragment（会贴边且与其它分区不对齐），只能去掉其边框外观。
+- **蒙版同步「立即同步」禁用条件**：`!task.sampleLayerId || !task.channel || !task.targetLayerId`。

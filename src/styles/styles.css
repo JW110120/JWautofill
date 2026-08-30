@@ -126,6 +126,7 @@ uxp-panel[panelid="com.listen2me.pixeladjustment"],
   align-items: center;
   justify-content: center;
   width: 100%;
+  transform: translateX(-6px);  /* 交换状态灯与文字后整体左移 5px，避免视觉偏右 */
 }
 
 .button-text {
@@ -141,7 +142,7 @@ uxp-panel[panelid="com.listen2me.pixeladjustment"],
   width: 13px;
   height: 13px;
   border-radius: 50%;
-  margin-left: 10px;
+  margin-right: 10px;
   flex-shrink: 0;
 }
 
