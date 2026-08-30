@@ -296,6 +296,38 @@ sp-color-slider {
     color: var(--text-color);
 }
 
+/* 设置区标签统一取内容宽度（不伸缩）：「样式：」与下方「角度：」同为两字+全角冒号，
+   宽度天然一致，两行的下拉/滑块左端严格对齐。 */
+.gradient-setting-item > label {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    margin-bottom: 0;
+    margin-right: 8px;
+}
+
+/* 渐变“样式”下拉：标签与下拉同行（参考边缘平滑“平滑模式”），标签固定为内容宽度，
+   下拉自适应占满剩余宽度，标签+下拉正好占满整行（取消 190px 上限，避免被压窄到
+   选项换行/排成两列）。 */
+.gradient-type-setting {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    margin: 15px 0;
+}
+/* 下拉容器保持块级：`.gradient-setting-item > div{display:flex}` 会把 wrap 变成
+   flex 容器，虽然 head 已能撑满，但块级更可控（与其它面板的下拉行为一致）。 */
+.gradient-setting-item > .mask-sync-select-wrap {
+    display: block;
+}
+
+.gradient-type-setting .mask-sync-select-wrap {
+    /* flex-basis 用 0（而非 auto）：auto 会以内容宽度为基准，在 UXP 下容易残留
+       内容宽度导致下拉被压窄；0 + grow:1 保证稳定占满标签之后的整行剩余宽度。 */
+    flex: 1 1 0%;
+    min-width: 0;
+    width: auto;
+}
+
 .gradient-setting-item select {
     flex: 1;
     padding: 5px;
@@ -316,12 +348,21 @@ sp-color-slider {
   text-align: center;
 }
 
-.gradient-setting-item div {
+/* 只作用于直接子 div（数值输入框的包裹层、下拉容器）。
+   必须限定子选择器：写成 `.gradient-setting-item div` 会命中下拉弹层内部元素，
+   弹层若未显式声明 display 就会变成 flex 行容器，选项被横排成两列。 */
+.gradient-setting-item > div {
   display: flex;
   align-items: center;
 }
 
-.gradient-setting-item span {
+/* 只命中「数字输入框后面的单位符号（°）」这一层。
+   原写法 `.gradient-setting-item span`（后代选择器）会命中自绘下拉头部内部的
+   .mask-sync-select-value / .mask-sync-select-caret 两个 span：
+     · font-size:13px 覆盖头部的 12px → 与其它下拉字号不一致；
+     · margin-left:-4px 覆盖箭头的 margin-left:auto → 箭头紧贴文字而非右对齐。
+   收紧为 `> div > span` 后，下拉内部（wrap > head > span）不再被命中。 */
+.gradient-setting-item > div > span {
     font-size: 13px;
     margin-left: -4px;
     color: var(--text-color);

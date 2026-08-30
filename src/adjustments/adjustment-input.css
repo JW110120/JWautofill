@@ -22,16 +22,6 @@ body.visibility-panel-open #pixeladjustment .unit-container .adjustment-number-i
   pointer-events: none !important;
 }
 
-/* 自绘下拉弹层（MaskSyncSelect）打开时：隐藏面板内所有 number 输入。
-   UXP 中原生 number 控件会渲染在 fixed 弹层之上（z-index 对其无效），
-   不隐藏的话下方滑块的数字会显示在弹出菜单上面。关闭弹层后自动恢复。 */
-body.mask-sync-pop-open #pixeladjustment input[type="number"],
-body.mask-sync-pop-open #pixeladjustment .adjustment-number-input {
-  visibility: hidden !important;
-  opacity: 0 !important;
-  pointer-events: none !important;
-}
-
 /* 第二入口（调整面板）的折叠状态隐藏规则 - 确保折叠时数字输入完全隐藏 */
 #pixeladjustment .adjust-expand-content:not(.expanded) input[type="number"],
 #pixeladjustment .adjust-expand-content:not(.expanded) .adjustment-number-input,

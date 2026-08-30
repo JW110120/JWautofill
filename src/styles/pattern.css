@@ -248,35 +248,41 @@
   .pattern-fillmode-container sp-radio:not(:last-child) {
     margin-right: 105px;
   }
-  /* Checkbox 样式 */
+  /* Checkbox 区域：整行容器（分隔线 + 左右内边距），两列等宽布局由通用类 .field-row-two 提供 */
   .pattern-checkbox-container {
-      display: flex;
-      align-items: center;
       width: 100%;
+      box-sizing: border-box;
       margin: 0 0 5px 0px;
-      padding-top: 5px;
-      padding-left: 4px; /* 剪贴蒙版 checkbox 整体右移4px */
+      padding: 5px 8px 2px 8px;
       border-top: 1px solid var(--border-color);
+  }
+
+  /* 标签不撑满（覆盖通用 .field-cell-label 的 flex:1 1 auto），使复选框紧贴标签，
+     避免标签拉伸后与复选框间距过大；下拉菜单等场景不受影响。 */
+  .pattern-checkbox-container .field-cell-label {
+      flex: 0 0 auto;
+  }
+
+  /* 整行分两组（平铺状态下为「剪贴蒙版」+「旋转阵列」）：
+     左组内容靠整行左端（左对齐），右组内容靠整行右端（右对齐）。
+     仅一组时（单次模式）保持左对齐，避免内容被推到行尾。 */
+  .pattern-checkbox-container.field-row-two > .field-cell:first-child {
+      justify-content: flex-start;
+  }
+  .pattern-checkbox-container.field-row-two > .field-cell:last-child:not(:only-child) {
+      justify-content: flex-end;
   }
 
   .pattern-checkbox-input {
       cursor: pointer;
-      /* 缩短与标签的间距（亲密性原则），但保留空隙不贴太紧 */
       margin-left: 2px;
   }
-
-  .pattern-checkbox-input:not(:last-child){
-     margin-right: 12px;
-}
 
   .pattern-checkbox-label {
       font-size: 13px;
       color: var(--text-color);
-      margin-left: 6px;
       cursor: pointer;
-      margin-right: 2px;
       white-space: nowrap;
-      flex-shrink: 0;
   }
 
 

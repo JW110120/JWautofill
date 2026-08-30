@@ -1,4 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { getPopRoot } from '../utils/popRoot';
+import { hideOccludedTextFields, POP_LAYER_STYLE } from '../utils/popOverlay';
 import { processBlockAverage } from './blockAverageProcessor';
 import { processBlockGradient } from './blockGradientProcessor';
 import { processBlockColorPatch } from './blockColorPatchProcessor';
@@ -963,10 +966,6 @@ const MaskSyncSelect: React.FC<{
   // 一切关闭信号都忽略，避免 batchPlay 刷新完成后的 re-render 滚动/输入重放闪关。
   useEffect(() => {
     if (!open) return;
-    // UXP 中原生 number 输入控件会渲染在 fixed 弹层之上（z-index 无效）；
-    // 弹层打开期间给 body 加类，CSS 隐藏面板内所有 number 输入（保留布局占位），
-    // 避免下方滑块的数字显示在弹出菜单上面（与"隐藏/显示分区"模态的处理一致）。
-    document.body.classList.add('mask-sync-pop-open');
     const onDocClick = (e: MouseEvent) => {
       if (Date.now() < suppressCloseUntilRef.current) return; // 刷新期/缓冲期：绝不关闭
       if (Date.now() - openAtRef.current < 500) return;
@@ -983,7 +982,6 @@ const MaskSyncSelect: React.FC<{
     document.addEventListener('mousedown', onDocClick);
     document.addEventListener('scroll', onScrollReposition, true);
     return () => {
-      document.body.classList.remove('mask-sync-pop-open');
       document.removeEventListener('mousedown', onDocClick);
       document.removeEventListener('scroll', onScrollReposition, true);
     };
@@ -997,7 +995,21 @@ const MaskSyncSelect: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [options, open]);
 
+  // UXP 限制：可编辑控件无视 z-index 永远画在最上层。弹层渲染出来后按实际矩形，
+  // 只把与弹层相交的那些临时隐藏，关闭时还原。
+  useLayoutEffect(() => {
+    if (!open || !pos) return;
+    const pop = popRef.current;
+    if (!pop) return;
+    return hideOccludedTextFields(pop, getPopRoot(headRef.current));
+  }, [open, pos]);
+
   const sel = options.find(o => o.value === value);
+
+  // 挂载点：从下拉头部往上找到所属面板的根容器（#pixeladjustment / #app）。
+  // 不能挂 document.body —— UXP 只渲染当前激活的 <uxp-panel> 子树，挂到 body 的
+  // 弹层不会被绘制，表现为「下拉完全打不开」。
+  const popRoot = open && pos ? getPopRoot(headRef.current) : null;
 
   const toggle = () => {
     // 防重复触发：两次 toggle 间隔 < 100ms 时忽略（避免误触导致的闪开闪关）
@@ -1039,11 +1051,14 @@ const MaskSyncSelect: React.FC<{
           </svg>
         </span>
       </div>
-      {open && pos && (
+      {/* 弹层 portal 到所属面板根容器（见 utils/popRoot.ts）：面板容器会创建层叠
+          上下文，留在内部再高的 z-index 也盖不住面板外元素；同时也避免被面板内
+          通用 div 规则命中导致选项横排。 */}
+      {open && pos && popRoot && createPortal(
         <div
           ref={popRef}
           className="mask-sync-select-pop"
-          style={{ left: pos.left, top: pos.top, width: pos.width }}
+          style={{ left: pos.left, top: pos.top, width: pos.width, ...POP_LAYER_STYLE }}
         >
           {options.map(o => (
             <div
@@ -1068,7 +1083,8 @@ const MaskSyncSelect: React.FC<{
               )}
             </div>
           ))}
-        </div>
+        </div>,
+        popRoot
       )}
     </div>
   );

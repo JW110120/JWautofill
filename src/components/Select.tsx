@@ -1,9 +1,22 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { getPopRoot } from '../utils/popRoot';
+import { hideOccludedTextFields, POP_LAYER_STYLE } from '../utils/popOverlay';
 
 // 通用自绘下拉：与调整面板里的自绘下拉（MaskSyncSelect / BrushSelect）共用同一套
 // CSS（.mask-sync-select-*，定义在 src/adjustments/adjustment.css），因此视觉上
 // 与主面板其它下拉完全一致，且背景/文字都走主题变量（--dropdown-bg-color 等），
 // 不再依赖 sp-picker / sp-menu（其展开菜单背景在 UXP 下无法被 CSS 覆盖）。
+//
+// 弹层通过 createPortal 挂到「所在面板的根容器」（#app / #pixeladjustment，见
+// utils/popRoot.ts），原因：
+//   1) 面板容器（.gradient-picker z-index:10 / .pattern-picker z-index:9999）会创建
+//      层叠上下文，弹层再高的 z-index 也被困在该上下文里，无法盖住面板外的元素；
+//   2) 弹层留在面板内会被 .gradient-setting-item div{display:flex} 之类的通用规则
+//      命中，导致选项横向排成两列；也会被设置区的 overflow(裁剪)/sticky 影响；
+//   3) 因此不需要再靠「展开时隐藏滑块数字」这类 hack 规避穿透——弹层永远在最上层。
+//   注意：不能直接挂 document.body —— UXP 只渲染当前激活的 <uxp-panel> 子树，
+//   挂到 body 的弹层不会被绘制（表现为下拉完全打不开）。
 //
 // 支持：扁平列表（options）或分组带分隔线（groups）；禁用态（disabled）；
 // 选中项高亮（.sel，背景=主题主色）。
@@ -61,8 +74,6 @@ export default function Select({
 
   useEffect(() => {
     if (!open) return;
-    // 弹层打开期间隐藏面板内的 number 输入（UXP 下原生控件 z-index 无效，会盖住弹层）
-    document.body.classList.add('mask-sync-pop-open');
     const onDocClick = (e: MouseEvent) => {
       if (Date.now() - openAtRef.current < 300) return; // 打开瞬间的点击不关闭
       if (headRef.current?.contains(e.target as Node)) return;
@@ -77,7 +88,6 @@ export default function Select({
     document.addEventListener('mousedown', onDocClick);
     document.addEventListener('scroll', onScroll, true);
     return () => {
-      document.body.classList.remove('mask-sync-pop-open');
       document.removeEventListener('mousedown', onDocClick);
       document.removeEventListener('scroll', onScroll, true);
     };
@@ -86,6 +96,15 @@ export default function Select({
   useEffect(() => {
     if (open) reposition();
   }, [open, reposition, value]);
+
+  // UXP 限制：可编辑控件（滑块旁的 number 输入等）无视 z-index 永远画在最上层。
+  // 弹层渲染出来后按实际矩形，只把与弹层相交的那些临时隐藏，关闭时还原。
+  useLayoutEffect(() => {
+    if (!open || !pos) return;
+    const pop = popRef.current;
+    if (!pop) return;
+    return hideOccludedTextFields(pop, getPopRoot(headRef.current));
+  }, [open, pos]);
 
   const handleHeadClick = () => {
     if (disabled) return;
@@ -98,6 +117,9 @@ export default function Select({
     onChange(o.value);
     setOpen(false);
   };
+
+  // 挂载点：从下拉头部往上找到所属面板的根容器（#app / #pixeladjustment）。
+  const popRoot = open && pos ? getPopRoot(headRef.current) : null;
 
   const renderOpts = (opts: SelectOption[]) =>
     opts.map(o => (
@@ -128,11 +150,11 @@ export default function Select({
           </svg>
         </span>
       </div>
-      {open && pos && !disabled && (
+      {open && pos && popRoot && !disabled && createPortal(
         <div
           ref={popRef}
           className="mask-sync-select-pop"
-          style={{ left: pos.left, top: pos.top, width: pos.width }}
+          style={{ left: pos.left, top: pos.top, width: pos.width, ...POP_LAYER_STYLE }}
         >
           {groups ? (
             groups.map((g, gi) => (
@@ -146,7 +168,8 @@ export default function Select({
           ) : (
             renderOpts(allOptions)
           )}
-        </div>
+        </div>,
+        popRoot
       )}
     </div>
   );

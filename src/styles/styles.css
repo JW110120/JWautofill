@@ -526,7 +526,7 @@ button:hover {
 }
 
 .checkbox-column:not(:last-child) {
-  margin-right: 50px;
+  margin-right: 16px;
 }
 
 /* 标签容器：竖向堆叠，space-around 保证每行与 checkbox 对齐 */
@@ -561,6 +561,46 @@ button:hover {
   white-space: nowrap;  /* 文字不换行 */
   display: flex;
   align-items: center;  /* 标签文字在行内竖直居中，与对应勾选框对齐 */
+}
+
+/* 通用两列排版：一行排「标签 + 控件(checkbox / switch / input)」两个，等宽。
+   结构：.field-row-two > .field-cell(可多个) > .field-cell-label + .field-cell-control
+   参考主面板底部 checkbox 区（.checkbox-main-container 等）；
+   今后任何「一行两个 标签+控件」的排版统一用此结构，禁止临时 inline 拼凑。 */
+.field-row-two {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  width: 100%;
+  box-sizing: border-box;
+}
+.field-row-two > .field-cell {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  box-sizing: border-box;
+}
+.field-row-two > .field-cell:not(:last-child) {
+  margin-right: 16px;
+}
+.field-cell-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-right: 6px;
+  font-size: 12px;
+  color: var(--text-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.field-cell-control {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* 添加禁用状态的标签样式 */

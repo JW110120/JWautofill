@@ -1034,6 +1034,17 @@
   position: relative;
 }
 
+/* 头部必须撑满 wrap 的宽度：部分面板会把 wrap 变成 flex 容器
+   （例：.gradient-setting-item > div{display:flex}），此时 head 作为 flex item
+   会退化到「内容宽度」，导致下拉框异常窄，而弹层宽度 = head 宽度，于是展开后的
+   选项区也跟着变窄、文字换行看起来像排成两列。显式撑满即可，与 wrap 自身
+   是不是 flex 容器无关。 */
+.mask-sync-select-wrap > .mask-sync-select-head {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+}
+
 .mask-sync-select-head {
   display: flex;
   align-items: center;
@@ -1068,15 +1079,19 @@
   background: var(--border-color);
 }
 
-.mask-sync-select-value {
+/* 头部内部元素统一用「两级类」提高特异性：面板里常有 `.xxx-setting-item span{...}`
+   这类后代规则（特异性 0,1,1），会盖掉这里的字号与 `margin-left:auto`（箭头右对齐），
+   表现为某个下拉的箭头紧贴文字、字号与其它下拉不一致。 */
+.mask-sync-select-wrap .mask-sync-select-value {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 12px;
 }
 
-.mask-sync-select-caret {
+.mask-sync-select-wrap .mask-sync-select-caret {
   flex: 0 0 auto;
   /* margin-left: auto：无 tag 时把箭头推到最右；有 tag（flex:1 撑满）时箭头位于行尾，
      任何情况下都右对齐（与主面板 sp-picker 的箭头位置一致） */
@@ -1113,10 +1128,21 @@
   gap: 0;
 }
 
-/* 弹出层：fixed 定位（相对面板视口），避免被面板 overflow 裁剪 */
+/* 弹出层：由 Select.tsx 用 createPortal 挂到所属面板根容器（#app /
+   #pixeladjustment，见 utils/popRoot.ts），直接位于最上层，fixed 定位（相对视口），
+   既不被面板 overflow 裁剪，也不受面板容器层叠上下文（.gradient-picker z-index:10 /
+   .pattern-picker z-index:9999）限制。
+   注意：不能挂 document.body —— UXP 只渲染当前激活的 <uxp-panel> 子树，挂到 body
+   的弹层不会被绘制，表现为「下拉打不开」。
+   z-index 必须高于渐变/颜色滑块 thumb（10000~10001）与标准 input[type=number]，
+   低于模态遮罩 99999。
+   display:block 必须显式声明：面板内有 `.xxx-setting-item div{display:flex}`
+   这类通用规则，一旦弹层留在面板内被命中，选项会横向排成两列。 */
 .mask-sync-select-pop {
   position: fixed;
-  z-index: 9999;
+  z-index: 99998;
+  display: block;
+  min-width: 96px;
   max-height: 200px;
   overflow-y: auto;
   background: var(--dropdown-bg-color);
@@ -1125,6 +1151,7 @@
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
   padding: 2px 0;
   box-sizing: border-box;
+  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
 }
 
 .mask-sync-select-opt {

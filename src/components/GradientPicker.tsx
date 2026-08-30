@@ -1792,7 +1792,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
 
             {/* 渐变类型设置 */}
             <div className={`gradient-settings-area ${gradientType === 'radial' ? 'radial-mode' : 'linear-mode'}`}>
-                <div className="gradient-setting-item">
+                <div className="gradient-setting-item gradient-type-setting">
                     <label>样式：</label>
                     <Select
                         value={gradientType}

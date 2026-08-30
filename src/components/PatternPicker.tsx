@@ -1838,23 +1838,30 @@ interface PatternPickerProps {
                         </sp-radio-group>
                 </div>
 
-                <div className="pattern-checkbox-container">
-                       <label
-                            htmlFor="transparencyCheckbox"
-                            className="pattern-checkbox-label"
-                            onClick={() => setPreserveTransparency(!preserveTransparency)}
-                        >
-                            剪贴蒙版：
-                       </label>
-                       <input
-                            type="checkbox"
-                            id="transparencyCheckbox"
-                            checked={preserveTransparency}
-                            onChange={(e) => setPreserveTransparency(e.target.checked)}
-                            className="pattern-checkbox-input"
-                        />
-                        {fillMode === 'tile' && (
-                            <>
+                <div className="pattern-checkbox-container field-row-two">
+                    <div className="field-cell">
+                        <div className="field-cell-label">
+                            <label
+                                htmlFor="transparencyCheckbox"
+                                className="pattern-checkbox-label"
+                                onClick={() => setPreserveTransparency(!preserveTransparency)}
+                            >
+                                剪贴蒙版：
+                            </label>
+                        </div>
+                        <div className="field-cell-control">
+                            <input
+                                type="checkbox"
+                                id="transparencyCheckbox"
+                                checked={preserveTransparency}
+                                onChange={(e) => setPreserveTransparency(e.target.checked)}
+                                className="pattern-checkbox-input"
+                            />
+                        </div>
+                    </div>
+                    {fillMode === 'tile' && (
+                        <div className="field-cell">
+                            <div className="field-cell-label">
                                 <label
                                     htmlFor="rotateAllCheckbox"
                                     className="pattern-checkbox-label"
@@ -1862,6 +1869,8 @@ interface PatternPickerProps {
                                 >
                                     旋转阵列：
                                 </label>
+                            </div>
+                            <div className="field-cell-control">
                                 <input
                                     type="checkbox"
                                     id="rotateAllCheckbox"
@@ -1869,8 +1878,9 @@ interface PatternPickerProps {
                                     onChange={(e) => setRotateAll(e.target.checked)}
                                     className="pattern-checkbox-input"
                                 />
-                            </>
-                        )}
+                            </div>
+                        </div>
+                    )}
                 </div>
                 
             </div>
