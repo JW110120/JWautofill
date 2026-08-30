@@ -28,9 +28,10 @@ import { MenuManager } from './utils/MenuManager';
 import { PresetManager } from './utils/PresetManager';
 import { PanelStateManager } from './utils/PanelStateManager';
 import {
-  connectHotkeyDaemon, registerMainToggleHandler,
+  connectHotkeyDaemon,
   isDaemonConnected, getMainToggleCombo, setMainToggleCombo, requestHotkeyRecording
 } from './hotkey/HotkeyBridge';
+import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/MainToggleBus';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -38,6 +39,7 @@ const { batchPlay } = action;
 interface AppProps {}
 
 class App extends React.Component<AppProps, AppState> {
+    private unsubMainToggle: (() => void) | null = null;
     private isFilling = false;
     private pendingSelection = false;
     private isInLayerMask = false;
@@ -92,6 +94,24 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     async componentDidMount() {
+        // ===== 全局快捷键链路：必须最先建立 =====
+        // 这段绝不能放在任何 await 之后。componentDidMount 下面还有一连串 await
+        // （文件系统探测、事件监听注册、蒙版模式检测…），任何一个抛错或卡住，
+        // 后面的代码都不会执行——历史上正是因此出现「笔刷面板有热键提示、
+        // 主面板开关纹丝不动」：面板看起来完全正常，实际上连守护进程都没连上。
+        // 另外，UXP 各面板是独立 JS 上下文，热键可能只被绘画工具箱面板收到，
+        // 所以主开关统一改由 MainToggleBus（共享文件）同步，不依赖本面板的 WebSocket。
+        try {
+            connectHotkeyDaemon();
+            this.unsubMainToggle = subscribeMainToggle((st) => {
+                if (typeof st?.enabled === 'boolean' && st.enabled !== this.state.isEnabled) {
+                    this.setState({ isEnabled: st.enabled });
+                }
+            });
+        } catch (e) {
+            console.error('⚠️ 建立热键链路失败:', e);
+        }
+
         // 测试文件系统访问权限（禁用自动写入测试以避免干扰首次加载）
         console.log('🔍 开始测试文件系统访问权限...');
         try {
@@ -159,10 +179,6 @@ class App extends React.Component<AppProps, AppState> {
         // 监听Photoshop事件来检查状态变化
         await action.addNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], this.handleNotification);
 
-        // 全局快捷键：注册总开关回调，并连接本地守护进程（Hybrid 路线）
-        registerMainToggleHandler(() => this.handleButtonClick());
-        connectHotkeyDaemon();
-
         // 许可证：检查当前状态并尝试自动重新验证
         await this.checkLicenseStatus();
 
@@ -196,6 +212,18 @@ class App extends React.Component<AppProps, AppState> {
             }
         } catch (e) {
             console.warn('⚠️ 面板状态加载失败，使用默认状态:', e);
+        }
+
+        // ========= 主开关：与跨面板共享状态对齐 =========
+        // 共享文件存在（上次会话留下来的真实状态）就以它为准；不存在才用本面板持久化的值播种。
+        // 这样无论热键是被本面板还是被绘画工具箱面板接到的，两边的开关显示始终一致。
+        try {
+            const shared = await seedMainToggle(this.state.isEnabled);
+            if (shared.enabled !== this.state.isEnabled) {
+                this.setState({ isEnabled: shared.enabled });
+            }
+        } catch (e) {
+            console.warn('⚠️ 主开关共享状态初始化失败，仅使用面板本地状态:', e);
         }
     }
 
@@ -267,6 +295,10 @@ class App extends React.Component<AppProps, AppState> {
             console.error('❌ 应用关闭前预设保存失败:', error);
         }
         
+        if (this.unsubMainToggle) {
+            try { this.unsubMainToggle(); } catch { /* ignore */ }
+            this.unsubMainToggle = null;
+        }
         if (this.selectionChangeListener) {
             action.removeNotificationListener(['set'], this.selectionChangeListener);
         }
@@ -279,13 +311,14 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     handleButtonClick() {
-        this.setState(prevState => {
-            const nextEnabled = !prevState.isEnabled;
-            return { isEnabled: nextEnabled };
-        }, () => {
+        const nextEnabled = !this.state.isEnabled;
+        this.setState({ isEnabled: nextEnabled }, () => {
             PanelStateManager.update({
                 appPanel: { isEnabled: this.state.isEnabled }
             }, { debounceMs: 0 }).catch(e => console.warn('⚠️ 主开关状态持久化失败:', e));
+            // 同步到跨面板共享状态：不写的话，下次热键翻转是基于旧值算的，
+            // 手动点开关之后按 Ctrl+Q 会得到「反直觉」的结果。
+            setMainToggle(nextEnabled).catch(e => console.warn('⚠️ 主开关共享状态写入失败:', e));
         });
     }
 

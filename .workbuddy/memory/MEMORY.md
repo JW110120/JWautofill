@@ -34,6 +34,14 @@
 - **钩子回调里绝不能做网络 I/O，也不能做同步文件 I/O**（含 `Console.WriteLine` 写日志）：前者超时被系统静默摘钩，后者卡顿会冻结整个低层键盘钩子（表现「日志停更、按键全无反应」）。正确做法：回调只 Enqueue + PostThreadMessage，主线程出队后做日志与广播。
 - Windows 脚本坑：`System.Diagnostics.Process` 没有 `Stop()`（用 `Stop-Process -Id`，否则进程残留锁住日志文件）；`Start-Process` 在环境同时存在 `Path`/`PATH` 键时崩；`Read-Host` 非交互时抛异常需 try/catch；删除刚被进程占用的目录要重试；**.ps1 必须纯 ASCII**（WinPS 5.1 无 BOM 按 GBK 读，中文注释致语法错误）。
 
+## 跨面板热键通讯（2026-08-30，重要）
+
+- **UXP 多 entrypoint 共用同一个 `main: index.html` → 同一 bundle / 同一 JS 世界**。因此：①模块级单例（HotkeyBridge、MainToggleBus）在所有面板间共享；②但「注册面板内回调再被另一面板调用」不可靠。
+- **致命坑：`connectHotkeyDaemon()` 被多处调用会建出多条 WebSocket**。守护进程向所有客户端广播，同一条 toggleMain 被投递 N 份，N 次「读-改-写」翻转在 await 间竞态读到同一旧值 → 互相抵消 → 表现「按下有提示、主开关不动」。
+  **规则：`connectHotkeyDaemon` 必须幂等（引用计数，同上下文只一条连接）。**
+- **主开关跨面板同步解法**：用插件数据目录 `settings/main-toggle.json` 作共享状态（rev 递增 + token 幂等 + `requestMainToggle` 串行锁），App 面板 `subscribeMainToggle` 订阅应用；热键只翻转共享状态，不直接调面板回调。`registerMainToggleHandler` 已废弃。
+- 提示文字必须反映真实结果（已开启/已关闭），不能无条件显示「已切换」。
+
 ## 笔刷热键 & 蒙版同步 UI 约定（2026-08-30）
 
 - **"主题色"的准确定义 = `var(--text-color)`**（深色主题白 / 浅色主题黑），**不是**固定蓝 `var(--primary-color)`。
@@ -48,11 +56,5 @@
 - **刷新图标已换 PS「S Refresh 18 N」**：下拉右侧刷新按钮的 `RefreshIcon` 改为双向环形箭头（`.fill`→`currentColor`），与同步/删除同色系（--text-color / hover 蓝）。
 - **批量删除顺序坑**：笔刷条目走 `setEntries+pushConfig`；主开关条目只能 `setMainToggleCombo('')` 解绑（不能删）。**必须先删笔刷再解绑**——`pushConfig` 会同步 bridge 的 `cachedConfig`，而 `setMainToggleCombo` 基于 `cachedConfig` 重建，顺序反了会把刚删的条目复原。
 - **状态色（与指示灯一致）**：笔刷热键区底部 `message` 颜色随 `daemonConnected`——已连接 `#2ecc71`（= `.mask-sync-status-dot.ok`）、断开/未加载 `#f39c12`（= `.warn`）。
-- **蒙版同步容器结构（2026-08-30 第九轮最终确立）**：
-  - 引擎状态条 `.mask-sync-status-bar`（自带 border 的独立条）位于**最上方、容器 A 之外**。
-  - 容器 A = `.mask-sync-card-list`（边框可见：border + radius 8 + padding 8px + bg），**只包裹任务卡片 `.mask-sync-task` + 新建按钮 `.mask-sync-add-row`**，里面不放引擎状态。
-  - 引擎状态条与容器 A 之外**不再套任何有边框的外层容器**（2026-08-30 第十轮）：蒙版同步已**不再复用 `.adjustment-section`**（该类带 `border:1px + border-radius:4px + padding:13px 12px 6px` + `max-width:280px`，被 4 个分区共用，**不可直接改它**），改用专用 `.mask-sync-section`：`border:none`、`padding:0`、`width:100%`、**不再限宽 280px**（笔刷热键分区本就通栏，两者盒子等宽），保留 `margin-bottom:20px`。
-  - **边距对齐笔刷热键（第十一轮）**：容器 A 与 `.hotkey-entry-box` 完全同一套盒模型（1px 边框 + radius 8 + padding 8 + `--bg-color`）；纵向节奏与笔刷热键一致：状态条 `margin-bottom:8px` → 容器 A；卡片间距 6px（`.mask-sync-task + .mask-sync-task { margin-top:6px }`，卡片自身 `margin-bottom:0`）；加号行 `margin-top:6px; margin-bottom:0`；卡片 `padding:8px 10px`（原 9/8 改上下相等）。空态 `.mask-sync-empty` 从容器 A 外**移入容器内**（`padding:0`，留白全由容器 A 提供，保持上下对称）。状态条左右 padding 由 6px 改 8px，使其内文字与卡片内文字左边缘对齐。
-  - ⚠️ 教训（连续两轮踩坑）：①第八轮误把 `.mask-sync-card-list`（=容器 A）当成"最外侧多余容器"删掉 → 容器 A 必须保留；②第九轮以为 `.mask-sync-section` 无边框就合格，**实际它同时挂着 `.adjustment-section`（有边框）**，用户看到的外层大容器正是后者。改分区外观前务必确认该元素挂的**全部**类名及其样式。
-  - 注：分区内容区 `.adjust-expand-content` **没有 padding**，各分区留白完全来自 `.adjustment-section` 的 padding，所以蒙版同步这层包裹不能直接删成 Fragment（会贴边且与其它分区不对齐），只能去掉其边框外观。
+- **蒙版同步容器结构（最终版）**：引擎状态条 `.mask-sync-status-bar`（自带 border）在最上方、容器 A 之外；容器 A = `.mask-sync-card-list`（border+radius 8+padding 8+bg）只裹 `.mask-sync-task` + `.mask-sync-add-row`；**不再套任何有边框外层**（已弃用 `.adjustment-section` 包裹，它带 border+限宽 280px 且被 4 分区共用不可改），改 `.mask-sync-section`：`border:none;padding:0;width:100%`（与笔刷热键通栏等宽）。容器 A 与 `.hotkey-entry-box` 同盒模型；卡片间距 6px、`.mask-sync-empty` 移入容器内、状态条 padding 8px 与卡片左对齐。⚠️ 教训：改分区外观前务必确认元素挂的**全部**类名（曾误删容器 A、误以为 `.mask-sync-section` 无边框实则挂 `.adjustment-section`）。
 - **蒙版同步「立即同步」禁用条件**：`!task.sampleLayerId || !task.channel || !task.targetLayerId`。

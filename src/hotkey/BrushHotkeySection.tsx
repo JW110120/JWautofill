@@ -61,7 +61,11 @@ export default function BrushHotkeySection() {
           ? ('热键触发：' + (info.combo ? info.combo + ' → ' : '') + '已切换笔刷「' + info.brush + '」')
           : ('热键触发失败：' + (info.combo ? info.combo + ' → ' : '') + '切换笔刷「' + info.brush + '」失败，请检查笔刷名是否与 Brushes 面板完全一致'));
       } else if (info.action === 'toggleMain') {
-        showMessage('热键触发：' + (info.combo ? info.combo + ' → ' : '') + '已切换选区填充开关');
+        // 提示必须反映共享总线的真实结果：以前无条件显示「已切换」，
+        // 实际上回调在另一个面板上下文里是 null，什么都没切换，误导性极强。
+        showMessage('热键触发：' + (info.combo ? info.combo + ' → ' : '') + (info.enabled === undefined
+          ? '选区填充开关切换失败'
+          : ('选区填充开关已' + (info.enabled ? '开启' : '关闭'))));
       }
     });
     void loadBrushes(false);

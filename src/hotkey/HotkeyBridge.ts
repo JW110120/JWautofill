@@ -6,6 +6,7 @@
 
 import { action, core, app } from 'photoshop';
 import { shell, storage } from 'uxp';
+import { MainToggleState, requestMainToggle } from '../utils/MainToggleBus';
 
 export interface HotkeyEntry {
   id: string;
@@ -54,14 +55,15 @@ async function resolveConfigPath(): Promise<string> {
 
 let cachedConfig: HotkeyEntry[] = [];
 const configListeners: ConfigListener[] = [];
-let mainToggleHandler: (() => void) | null = null;
 let currentWs: any = null;
 let connected = false;
 // 当前挂起的录制请求（守护进程回传 recordResult/recordCancel 时兑现）
 let pendingRecord: ((r: { combo: string } | null) => void) | null = null;
 const statusListeners: ((c: boolean) => void)[] = [];
 // 热键触发监听（供面板显示触发反馈，也便于用户确认事件链路是否打通）
-const hotkeyListeners: ((info: { combo: string; action: string; brush?: string; ok: boolean }) => void)[] = [];
+// enabled 仅对 toggleMain 有效，取自共享总线翻转后的真实状态——
+// 提示文字必须说真话：以前无条件显示「已切换」，实际上什么都没切换。
+const hotkeyListeners: ((info: { combo: string; action: string; brush?: string; ok: boolean; enabled?: boolean }) => void)[] = [];
 
 function emitStatus() {
   for (const l of statusListeners) { try { l(connected); } catch { /* ignore */ } }
@@ -105,8 +107,14 @@ export function disconnectDaemon(): boolean {
   return false;
 }
 
-export function registerMainToggleHandler(fn: () => void) {
-  mainToggleHandler = fn;
+// ⚠️ 历史坑（2026-08-30）：这里曾经是「注册一个面板内回调，热键到达时直接调用」。
+// 但 UXP 的每个面板都是独立 JS 上下文，本模块在每个面板里都有一份实例：
+// App 面板注册的那份回调，绘画工具箱面板根本看不见。于是热键在绘画工具箱面板里被收到，
+// 回调是 null → 什么都不做 → 主面板开关纹丝不动（而提示文字照常显示，极具迷惑性）。
+// 现在改走 MainToggleBus：热键只负责翻转「共享状态」，由 App 面板订阅并应用。
+// 保留此导出仅为兼容旧调用，已不再参与任何逻辑。
+export function registerMainToggleHandler(_fn: () => void) {
+  console.warn('⚠️ registerMainToggleHandler 已废弃：主开关现由 MainToggleBus 跨面板同步');
 }
 
 // 卸载动作由面板右上角的菜单触发，但真正的实现（含状态提示）在 BrushHotkeySection 里，
@@ -122,7 +130,7 @@ export async function requestUninstall(): Promise<string> {
 }
 
 // 订阅热键触发事件（无论成败都会回调，ok=false 表示执行 batchPlay 失败）
-export function onHotkeyTriggered(fn: (info: { combo: string; action: string; brush?: string; ok: boolean }) => void): () => void {
+export function onHotkeyTriggered(fn: (info: { combo: string; action: string; brush?: string; ok: boolean; enabled?: boolean }) => void): () => void {
   hotkeyListeners.push(fn);
   return () => { const i = hotkeyListeners.indexOf(fn); if (i >= 0) hotkeyListeners.splice(i, 1); };
 }
@@ -168,7 +176,21 @@ function resolveWs(): any {
 }
 
 // ===== 连接守护进程 =====
+// ⚠️ 幂等 + 引用计数（关键修复）：
+// UXP 的 #app 与 #pixeladjustment 两个面板共用同一个 bundle.js / 同一个 JS 世界，
+// 它们各自在挂载时都会调用本函数。若不防重，就会建出「两条 WebSocket」。
+// 守护进程是向所有已连接客户端广播的，于是同一条 toggleMain 热键会被投递两份；
+// 两份 handleHotkey 各自执行一次「读-改-写」翻转，因 await 让出线程而读到同一个旧值，
+// 结果被翻转两次、互相抵消，表现正是用户看到的「按下有文字提示、主面板开关纹丝不动」。
+// 因此同一上下文只允许一条连接：第二次调用直接复用，退订时按引用计数关闭。
+let daemonConnectCount = 0;
+let daemonCloseFn: (() => void) | null = null;
+
 export function connectHotkeyDaemon(): () => void {
+  daemonConnectCount++;
+  // 已有连接：直接返回带引用计数的退订器，不再重复建连
+  if (daemonCloseFn) return makeDaemonUnsub();
+
   let closedByUs = false;
   let timer: any = null;
 
@@ -222,17 +244,43 @@ export function connectHotkeyDaemon(): () => void {
   };
   open();
 
-  return () => {
+  daemonCloseFn = () => {
     closedByUs = true;
     if (timer) clearTimeout(timer);
     try { currentWs?.close(); } catch { /* ignore */ }
   };
+  return makeDaemonUnsub();
+
+  function makeDaemonUnsub(): () => void {
+    return () => {
+      daemonConnectCount--;
+      if (daemonConnectCount <= 0) {
+        daemonConnectCount = 0;
+        daemonCloseFn?.();
+        daemonCloseFn = null;
+      }
+    };
+  }
 }
 
 function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?: string }) {
   if (msg.action === 'toggleMain') {
-    if (mainToggleHandler) mainToggleHandler();
-    for (const l of hotkeyListeners) { try { l({ combo: msg.combo ?? '', action: 'toggleMain', ok: true }); } catch { /* ignore */ } }
+    // 主开关：翻转「共享状态」而不是调用本面板内的回调。
+    // token 用「组合键 + 400ms 时间桶」生成：同一次命中在所有面板上算出同一个 token，
+    // 于是守护进程广播给 N 个面板也只会翻转一次（详见 MainToggleBus 头部说明）。
+    const combo = msg.combo ?? '';
+    const token = 'hit|' + (combo || 'toggleMain') + '|' + Math.floor(Date.now() / 400);
+    void requestMainToggle(token)
+      .then((st: MainToggleState) => {
+        for (const l of hotkeyListeners) {
+          try { l({ combo, action: 'toggleMain', ok: true, enabled: st.enabled }); } catch { /* ignore */ }
+        }
+      })
+      .catch(() => {
+        for (const l of hotkeyListeners) {
+          try { l({ combo, action: 'toggleMain', ok: false }); } catch { /* ignore */ }
+        }
+      });
     return;
   }
   if (msg.action === 'applyBrush' && msg.brush) {
