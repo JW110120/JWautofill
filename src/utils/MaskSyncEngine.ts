@@ -491,11 +491,6 @@ export class MaskSyncEngine {
           const layerBounds = sampleMeta.bounds;
           const layerW = layerBounds.right - layerBounds.left;
           const layerH = layerBounds.bottom - layerBounds.top;
-          console.log(
-            `🩺 [诊断] 文档=${docW}x${docH} 样本图层bounds=`, layerBounds,
-            '图层宽高=', layerW, 'x', layerH,
-            sampleMeta.isBackground ? '（背景图层）' : (sampleMeta.isAdjustment ? '（调整图层）' : (sampleMeta.isGroup ? '（组图层·按蒙版通道同步）' : '（普通图层）'))
-          );
 
           // 3) 读取样本图层像素（按图层实际边界，sourceBounds 与 targetSize 一致）
           let raw: Uint8Array | null = null;
@@ -516,13 +511,6 @@ export class MaskSyncEngine {
               const data = new Uint8Array(await imgData.getData());
               const gotW = imgData.width;
               const gotH = imgData.height;
-              console.log(
-                `🩺 [诊断] 任务=${task.name} 样本=${task.sampleLayerId} bounds=`,
-                layerBounds, '请求宽高=', layerW, 'x', layerH,
-                'imageData=', gotW, 'x', gotH,
-                'raw.length=', data.length,
-                'actualBounds=', srcPixels.sourceBounds
-              );
               srcPixels.imageData.dispose();
               comps = data.length > 0 ? Math.round(data.length / (gotW * gotH)) : 0;
               if (comps === 3 || comps === 4) {
@@ -680,21 +668,18 @@ export class MaskSyncEngine {
     const tasks = this.persisted[key] || [];
     const enabled = tasks.filter(t => t.enabled && t.sampleLayerId && t.targetLayerId && t.channel);
     if (enabled.length === 0) {
-      const pending = tasks.filter(t => t.enabled);
-      const missingSample = pending.filter(t => !t.sampleLayerId);
-      const missingTarget = pending.filter(t => !t.targetLayerId);
-      const missingChannel = pending.filter(t => !t.channel);
-      console.log(
-        `[蒙版同步] syncAll：无完整任务（启用${pending.length}个，` +
-        `其中缺样本引用 ${missingSample.length} 个、缺目标引用 ${missingTarget.length} 个、缺通道 ${missingChannel.length} 个）`
-      );
+      // 无完整任务属于常态（未配置/未选齐），不在轮询时刷屏。面板会显示配置提示。
       return 0;
     }
     let wrote = 0;
     for (const task of enabled) {
       const r = await this.syncTask(task, d);
-      if (r.synced) wrote++;
-      console.log(`🔄 蒙版同步[${task.name}]: ${r.synced ? '✓ 已写入蒙版' : '跳过(' + r.reason + ')'}`);
+      if (r.synced) {
+        wrote++;
+        // 只有真正写入蒙版时才记录一条日志；`unchanged`/`throttled` 等中性跳过保持静默，
+        // 避免轮询期 console 不断增长造成焦虑与不必要的开销。
+        console.log(`[蒙版同步] 已写入蒙版: ${task.name}`);
+      }
     }
     return wrote;
   }

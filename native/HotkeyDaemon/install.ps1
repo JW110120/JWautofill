@@ -107,11 +107,16 @@ try {
         Log "exe already installed (no prebuilt copy present, kept existing): $exePath"
     }
 
-    # Register autostart (current user, no admin required)
+    # Register autostart (current user, no admin required).
+    # IMPORTANT: launch HIDDEN. The daemon is a console-subsystem exe, so running
+    # it directly from HKCU\Run shows a black cmd window on every boot (which the
+    # user might mistake for malware). Wrapping it in a PowerShell -WindowStyle
+    # Hidden call keeps boot fully silent: no visible window at all.
     $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
-    $cmd = "`"$exePath`" --autostart"
+    $startArg = "Start-Process -FilePath '$exePath' -ArgumentList '--autostart' -WindowStyle Hidden"
+    $cmd = "powershell.exe -WindowStyle Hidden -Command `"$startArg`""
     Set-ItemProperty -Path $runKey -Name "JWautofillHotkeyDaemon" -Value $cmd -Type String
-    Log "Added startup entry to HKCU\Run"
+    Log "Added (hidden) startup entry to HKCU\Run"
 
     # Launch the daemon (hidden). install.bat is invoked by the panel; the panel also
     # polls for the daemon and will not relaunch if already connected.
@@ -134,12 +139,12 @@ try {
 # IMPORTANT: keep this file pure ASCII. Windows PowerShell 5.1 reads a BOM-less
 # .ps1 as ANSI (GBK on Chinese Windows), so any non-ASCII byte corrupts parsing.
 #
-# Success  -> 5s countdown, then the window closes by itself (feels like the
+# Success  -> 3s countdown, then the window closes by itself (feels like the
 #             daemon was already there; the user does nothing).
 # Failure  -> the window stays open so the user can read the error.
 if ($exitCode -eq 0) {
     Write-Host ""
-    for ($i = 5; $i -ge 1; $i--) {
+    for ($i = 3; $i -ge 1; $i--) {
         Write-Host ("`rLoaded. This window closes in " + $i + " seconds...   ") -NoNewline
         Start-Sleep -Seconds 1
     }

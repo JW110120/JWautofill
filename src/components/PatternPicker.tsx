@@ -5,6 +5,7 @@ import { action, core, imaging, app } from 'photoshop';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
 import { PresetManager } from '../utils/PresetManager';
 import RangeSlider from './RangeSlider';
+import Select from './Select';
 
 interface PatternPickerProps {
     isOpen: boolean;
@@ -1878,25 +1879,12 @@ interface PatternPickerProps {
                     <h3>预览</h3>
                     {selectedPattern && (
                         <div className="preview-controls">
-                            <sp-picker
-                                size="s"
-                                selects="single"
-                                selected={previewZoom.toString()}
-                                onChange={handlePreviewZoomChange}
+                            <Select
+                                value={previewZoom.toString()}
+                                options={zoomLevels.map(level => ({ value: level.toString(), label: `${level}%` }))}
+                                onChange={(v) => handlePreviewZoomChange({ target: { value: v } })}
                                 className="zoom-picker"
-                            >
-                                <sp-menu>
-                                    {zoomLevels.map(level => (
-                                        <sp-menu-item 
-                                            key={level} 
-                                            value={level.toString()}
-                                            selected={level === previewZoom}
-                                        >
-                                            {level}%
-                                        </sp-menu-item>
-                                    ))}
-                                </sp-menu>
-                            </sp-picker>
+                            />
                         </div>
                     )}
                 </div>
@@ -1945,7 +1933,7 @@ interface PatternPickerProps {
                             top: '50%',
                             left: '50%',
                             transform: 'translate(-50%, -50%)',
-                            color: '#666',
+                            color: 'rgb(102, 102, 102)',
                             fontSize: '12px',
                             zIndex: 3,
                             pointerEvents: 'none'

@@ -2937,7 +2937,10 @@ const formatSyncState = (task: MaskSyncTask): { text: string; ok: boolean } | nu
   };
   let text = reasons[st.reason] || st.reason;
   if (st.detail && st.reason !== 'error') text += `：${st.detail}`;
-  return { text: `${text}（${timeStr}）`, ok: false };
+  // 「未改动」「节流跳过」属于中性常态（没有写入需求），不标红，避免制造焦虑；
+  // 仅当确实出现配置/执行错误时才标红（fail 样式）。
+  const benign = st.reason === 'unchanged' || st.reason === 'throttled';
+  return { text: `${text}（${timeStr}）`, ok: benign };
 };
 
 const renderMaskSyncContent = () => (
@@ -3137,7 +3140,7 @@ const renderMaskSyncContent = () => (
  *  一段 6px 短线 + 6px 空（12px 周期）的 span 序列 + flex 排列 + overflow 裁剪，
  *  短线颜色读取主题 --border-color。 */
 const DashedDivider: React.FC = () => {
-  const [borderColor, setBorderColor] = useState('#808080');
+  const [borderColor, setBorderColor] = useState('rgb(128, 128, 128)');
   useEffect(() => {
     try {
       const bc =

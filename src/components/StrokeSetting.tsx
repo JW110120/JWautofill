@@ -2,6 +2,7 @@ import React from 'react';
 import { BlendMode } from '../constants/blendModes';
 import { BLEND_MODE_OPTIONS } from '../constants/blendModeOptions';
 import RangeSlider from './RangeSlider';
+import Select from './Select';
 
 interface StrokeSettingProps {
   isOpen: boolean;
@@ -158,31 +159,11 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         {!clearMode && (
           <div className="stroke-blende-mode">
             <label>混合模式：</label>
-            <sp-picker
-              size="m"
-              selects="single"
-              selected={blendMode}
-              onChange={(e) => onBlendModeChange(e.target.value as BlendMode)}
-            >
-              <sp-menu>
-                {BLEND_MODE_OPTIONS.map((group, groupIndex) => (
-                  <React.Fragment key={groupIndex}>
-                    {group.map((option) => (
-                      <sp-menu-item 
-                        key={option.value} 
-                        value={option.value}
-                        selected={option.value === blendMode}
-                      >
-                        {option.label}
-                      </sp-menu-item>
-                    ))}
-                    {groupIndex < BLEND_MODE_OPTIONS.length - 1 && (
-                      <sp-menu-divider />
-                    )}
-                  </React.Fragment>
-                ))}
-              </sp-menu>
-            </sp-picker>
+            <Select
+              value={blendMode}
+              groups={BLEND_MODE_OPTIONS}
+              onChange={(v) => onBlendModeChange(v as BlendMode)}
+            />
           </div>
         )} 
         

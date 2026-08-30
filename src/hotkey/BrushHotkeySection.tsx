@@ -494,9 +494,9 @@ export default function BrushHotkeySection() {
             </div>
           </div>
 
-          {/* 底部说明文字：颜色与状态指示灯一致（已连接=绿 #2ecc71，断开/未加载=橙 #f39c12） */}
+          {/* 底部文字通知：与「蒙版同步」的 .mask-sync-result 同一套样式（ok 绿 / warn 橙） */}
           {message && (
-            <div style={{ fontSize: 12, color: daemonConnected ? '#2ecc71' : '#f39c12', marginTop: 8 }}>
+            <div className={`mask-sync-result ${daemonConnected ? 'ok' : 'warn'}`}>
               {message}
             </div>
           )}

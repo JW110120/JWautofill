@@ -12,6 +12,7 @@ import ColorSettingsPanel from './components/ColorSettingsPanel';
 import PatternPicker from './components/PatternPicker';
 import GradientPicker from './components/GradientPicker';
 import StrokeSetting from './components/StrokeSetting';
+import Select from './components/Select';
 import LicenseDialog from './components/LicenseDialog';
 import RangeSlider from './components/RangeSlider';
 import { LicenseManager } from './utils/LicenseManager';
@@ -1146,7 +1147,7 @@ class App extends React.Component<AppProps, AppState> {
         const shouldShowGray = clearMode || this.isInLayerMask || this.isInQuickMask || this.isInSingleColorChannel;
         
         if (!strokeColor) {
-            return { backgroundColor: '#000000' };
+            return { backgroundColor: 'rgb(0, 0, 0)' };
         }
         
         if (shouldShowGray) {
@@ -1314,33 +1315,13 @@ title={`● 混合模式支持纯色，图案和渐变三种模式。描边的�
                     混合模式：
                     </span>
 
-                    <sp-picker
-                        size="s"
-                        selects="single"
-                        selected={this.state.blendMode || "正常"}
-                        onChange={this.handleBlendModeChange}
+                    <Select
+                        value={this.state.blendMode || "正常"}
+                        groups={BLEND_MODE_OPTIONS}
                         disabled={this.state.clearMode}
+                        onChange={(v) => this.handleBlendModeChange({ target: { value: v } } as React.ChangeEvent<HTMLSelectElement>)}
                         title="选择填充时使用的混合模式，计算方式与PS原生一致。"
-                    >
-                        <sp-menu>
-                            {BLEND_MODE_OPTIONS.map((group, groupIndex) => (
-                                <React.Fragment key={groupIndex}>
-                                    {group.map((option) => (
-                                        <sp-menu-item 
-                                            key={option.value} 
-                                            value={option.value}
-                                            selected={option.value === (this.state.blendMode || "正常")}
-                                        >
-                                            {option.label}
-                                        </sp-menu-item>
-                                    ))}
-                                    {groupIndex < BLEND_MODE_OPTIONS.length - 1 && (
-                                        <sp-menu-divider />
-                                    )}
-                                </React.Fragment>
-                            ))}
-                        </sp-menu>
-                    </sp-picker>
+                    />
                 </div> 
 
                 <div className="slider-container">

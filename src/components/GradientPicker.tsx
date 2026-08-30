@@ -5,6 +5,7 @@ import { app, action, core } from 'photoshop';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
 import { PresetManager } from '../utils/PresetManager';
 import RangeSlider from './RangeSlider';
+import Select from './Select';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -1197,7 +1198,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             const bHex = parseInt(b).toString(16).padStart(2, '0');
             return `#${rHex}${gHex}${bHex}`;
         }
-        return '#000000';
+        return 'rgb(0, 0, 0)';
     };
 
     // 修复颜色输入处理
@@ -1247,7 +1248,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             top: row * tileSize,
                             width: tileSize,
                             height: tileSize,
-                            backgroundColor: isLight ? '#ffffff' : '#cccccc',
+                            backgroundColor: isLight ? 'rgb(255, 255, 255)' : 'rgb(204, 204, 204)',
                             // 确保无缝拼接
                             boxSizing: 'border-box'
                         }}
@@ -1517,7 +1518,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                             width: '6px',
                                             height: '6px',
                                             backgroundColor: 'white',
-                                            border: '1px solid #666',
+                                            border: '1px solid rgb(102, 102, 102)',
                                             borderRadius: '50%',
                                             cursor: 'ew-resize',
                                             zIndex: 10
@@ -1544,7 +1545,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                             width: '6px',
                                             height: '6px',
                                             backgroundColor: 'white',
-                                            border: '1px solid #666',
+                                            border: '1px solid rgb(102, 102, 102)',
                                             borderRadius: '50%',
                                             cursor: 'ew-resize',
                                             zIndex: 10
@@ -1644,7 +1645,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                             width: '6px',
                                             height: '6px',
                                             backgroundColor: 'white',
-                                            border: '1px solid #666',
+                                            border: '1px solid rgb(102, 102, 102)',
                                             borderRadius: '50%',
                                             cursor: 'ew-resize',
                                             zIndex: 10
@@ -1682,7 +1683,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                             width: '6px',
                                             height: '6px',
                                             backgroundColor: 'white',
-                                            border: '1px solid #666',
+                                            border: '1px solid rgb(102, 102, 102)',
                                             borderRadius: '50%',
                                             cursor: 'ew-resize',
                                             zIndex: 10
@@ -1793,17 +1794,14 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             <div className={`gradient-settings-area ${gradientType === 'radial' ? 'radial-mode' : 'linear-mode'}`}>
                 <div className="gradient-setting-item">
                     <label>样式：</label>
-                    <sp-picker
-                        size="s"
-                        selects="single"
-                        selected={gradientType}
-                        onChange={(e) => setGradientType(e.target.value as typeof gradientType)}
-                    >
-                        <sp-menu>
-                            <sp-menu-item value="linear" selected={gradientType === "linear"}>线性</sp-menu-item>
-                            <sp-menu-item value="radial" selected={gradientType === "radial"}>径向</sp-menu-item>
-                        </sp-menu>
-                    </sp-picker>
+                    <Select
+                        value={gradientType}
+                        options={[
+                            { value: 'linear', label: '线性' },
+                            { value: 'radial', label: '径向' },
+                        ]}
+                        onChange={(v) => setGradientType(v as typeof gradientType)}
+                    />
                 </div>
 
                 {gradientType === 'linear' && (
@@ -1876,7 +1874,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             top: '50%',
                             left: '50%',
                             transform: 'translate(-50%, -50%)',
-                            color: '#666',
+                            color: 'rgb(102, 102, 102)',
                             fontSize: '12px',
                             zIndex: 3,
                             pointerEvents: 'none'
@@ -1889,7 +1887,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             top: '50%',
                             left: '50%',
                             transform: 'translate(-50%, -50%)',
-                            color: '#666',
+                            color: 'rgb(102, 102, 102)',
                             fontSize: '12px',
                             zIndex: 3,
                             pointerEvents: 'none'
@@ -1936,7 +1934,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                             top: '50%',
                                             left: '50%',
                                             transform: 'translate(-50%, -50%)',
-                                            color: '#666',
+                                            color: 'rgb(102, 102, 102)',
                                             fontSize: '12px',
                                             zIndex: 3,
                                             pointerEvents: 'none'
