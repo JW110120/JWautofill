@@ -461,58 +461,6 @@ export async function enumerateBrushes(): Promise<string[]> {
   }
 }
 
-// ===== 笔刷类型（尽力而为）=====
-// 理想效果：下拉里每个笔刷名右侧显示「混合器 / 涂抹 / 喷枪…」这类类型。
-// 现实限制：presetManager 的 Brush Presets 分组只暴露 name 列表，不含笔刷类型；
-// 逐支选中去读类型会破坏用户当前的笔刷状态，不可接受。因此这里只做「尽力而为」：
-// 若 PS 的 app.brushes 集合里带了类型字段就用，取不到就返回空表（下拉不显示类型列）。
-// 桌面端 Photoshop 的部分版本确实不带该字段，此时按需求文档「如不能则忽略」处理。
-const BRUSH_TYPE_CN: Record<string, string> = {
-  computedbrush: '圆形',
-  sampledbrush: '取样',
-  mixerbrush: '混合器',
-  smudgebrush: '涂抹',
-  bristlebrush: '硬毛刷',
-  erodebrush: '侵蚀',
-  airbrush: '喷枪',
-  charcoalbrush: '炭笔',
-  watercolorbrush: '水彩',
-  inkbrush: '墨水',
-  oilbrush: '油画',
-  pastelbrush: '蜡笔',
-  pencilbrush: '铅笔',
-  markerbrush: '马克笔',
-  flatbrush: '平头',
-  roundbrush: '圆头',
-  fanbrush: '扇形',
-  calligraphicbrush: '书法',
-  brushtip: '笔尖',
-  dualbrush: '双重画笔',
-  bristle: '硬毛刷',
-  erode: '侵蚀',
-  air: '喷枪',
-  mixer: '混合器',
-  smudge: '涂抹'
-};
-
-export async function enumerateBrushTypes(): Promise<Record<string, string>> {
-  const out: Record<string, string> = {};
-  try {
-    const brushesApi: any = (app as any)?.brushes;
-    if (!brushesApi || typeof brushesApi.get !== 'function') return out;
-    const list: any[] = await brushesApi.get();
-    if (!Array.isArray(list)) return out;
-    for (const b of list) {
-      const name: string = (b?.name ?? '').toString();
-      if (!name) continue;
-      const raw: any = b?.type ?? b?.brushType ?? b?.kind ?? b?.presetKind ?? b?.brushKind;
-      if (typeof raw !== 'string' || !raw) continue;
-      const key = raw.toLowerCase();
-      out[name] = BRUSH_TYPE_CN[key] || raw;
-    }
-  } catch { /* 取不到就不显示类型 */ }
-  return out;
-}
 
 // ===== 请求守护进程录制组合键（UXP 不再自行监听键盘）=====
 // 守护进程用 Windows 全局键盘钩子捕获，捕获到后回传 {type:'recordResult',combo}，
@@ -539,3 +487,186 @@ export function cancelHotkeyRecording(): boolean {
   }
   return false;
 }
+
+// ============================================================================
+// 当前工具 / 笔刷读取（非破坏性，只读）：供「检测类型」扫描与下拉展示复用。
+// 关键认知（已通过诊断验证）：
+//   · { _ref:'brush', _enum:'ordinal', _value:'targetEnum' } 这个目标 PS 不支持 get，
+//     会返回 { _obj:'error', result:-128 }。判定成功必须检查 _obj !== 'error'。
+//   · application.tool._enum 才是可靠的「当前工具类别」信号（paintbrushTool /
+//     mixerBrushTool / wetBrushTool / smudgeTool …）。
+// ============================================================================
+
+/** get 应用级属性时固定的尾部引用。 */
+const APP_TARGET = { _ref: 'application', _enum: 'ordinal', _value: 'targetEnum' };
+
+/**
+ * 判断 batchPlay 的 get 是否【真正成功】。
+ * PS 失败时不抛异常，而是返回 [{ _obj:'error', message:'', result:-128 }]，
+ * 所以必须显式识别这种「假成功」。
+ */
+function isGetOk(res: any): boolean {
+  const first = Array.isArray(res) ? res[0] : res;
+  if (!first || typeof first !== 'object') return false;
+  if (first._obj === 'error') return false;
+  if (typeof first.result === 'number' && first.result < 0) return false;
+  return Object.keys(first).length > 0;
+}
+
+/** Photoshop 工具 _enum → 中文名（用于笔刷/工具类型显示，例如 paintbrushTool → 画笔）。 */
+const TOOL_TYPE_CN: Record<string, string> = {
+  paintbrushTool: '画笔',
+  pencilTool: '铅笔',
+  mixerBrushTool: '混合器画笔',
+  wetBrushTool: '混合器画笔', // 混合器画笔预设在部分 PS 版本下 tool._enum 返回 wetBrushTool
+  smudgeTool: '涂抹',
+  eraserTool: '橡皮擦',
+  backgroundEraserTool: '背景橡皮擦',
+  magicEraserTool: '魔术橡皮擦',
+  cloneStampTool: '仿制图章',
+  patternStampTool: '图案图章',
+  healingBrushTool: '修复画笔',
+  spotHealingBrushTool: '污点修复画笔',
+  patchTool: '修补',
+  redEyeTool: '红眼工具',
+  historyBrushTool: '历史记录画笔',
+  artHistoryBrushTool: '历史记录艺术画笔',
+  colorReplacementBrushTool: '颜色替换',
+  blurTool: '模糊',
+  sharpenTool: '锐化',
+  artBrushTool: '艺术画笔',
+};
+
+/** 读取当前工具类型（_enum），例如 paintbrushTool；读不到返回 null。 */
+export async function getSelectedBrushToolEnum(): Promise<string | null> {
+  try {
+    const r: any = await action.batchPlay(
+      [{ _obj: 'get', _target: [{ _property: 'tool' }, APP_TARGET], _options: { dialogOptions: 'dontDisplay' } }],
+      { synchronousExecution: true }
+    );
+    if (!isGetOk(r)) return null;
+    const d = Array.isArray(r) ? r[0] : r;
+    const tool = d?.tool?._enum || d?.tool?._value || null;
+    return typeof tool === 'string' ? tool : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 当前笔刷的聚合信息（类型 / 名称 / 直径），用于下拉展示。 */
+export interface BrushInfo {
+  toolEnum: string | null;   // 原始 _enum，如 paintbrushTool
+  type: string | null;      // 中文类型名，未知时回退为原始 _enum
+  name: string | null;      // 当前笔刷名（来自 currentToolOptions.brush.name）
+  diameter: number | null;  // 笔尖直径（px）
+}
+
+/** 读取当前选中笔刷的聚合信息（非破坏性，只读）。 */
+export async function getSelectedBrushInfo(): Promise<BrushInfo> {
+  const info: BrushInfo = { toolEnum: null, type: null, name: null, diameter: null };
+  try {
+    const r: any = await action.batchPlay(
+      [{ _obj: 'get', _target: [{ _property: 'currentToolOptions' }, APP_TARGET], _options: { dialogOptions: 'dontDisplay' } }],
+      { synchronousExecution: true }
+    );
+    if (isGetOk(r)) {
+      const d = Array.isArray(r) ? r[0] : r;
+      const brush = d?.currentToolOptions?.brush;
+      if (brush && typeof brush === 'object') {
+        info.name = typeof brush.name === 'string' ? brush.name : null;
+        const dia = brush.diameter;
+        if (dia && typeof dia._value === 'number') info.diameter = dia._value;
+      }
+    }
+  } catch { /* 非关键 */ }
+  info.toolEnum = await getSelectedBrushToolEnum();
+  info.type = info.toolEnum ? (TOOL_TYPE_CN[info.toolEnum] || info.toolEnum) : null;
+  return info;
+}
+
+// ===== 方案 B：扫描全部笔刷预设的类型 =====
+// 思路（已在诊断中验证可行）：选中某支预设后读 application.tool._enum，
+// 混合器/涂抹等预设会连带把当前工具切到 mixerBrushTool/smudgeTool，从而反推出类型。
+// 关键实现点：
+//   1) 选中预设时【不强制切到画笔工具】——否则会掩盖真实工具类型，全标成「画笔」。
+//   2) 扫描前记录用户当前笔刷，扫描后【尽力还原】（finally 中），避免丢失用户状态。
+//   3) 整段包在 core.executeAsModal 里，作为一次逻辑操作，扫描期间不穿插其它命令。
+//   4) 每支独立 try/catch：一支失败不影响其余；读不到类型就留空（下拉不显示类型列）。
+//   5) 并发守卫：防止用户连点触发多轮扫描互相干扰。
+let brushTypeDetecting = false;
+
+/** 仅按名称选中笔刷预设（不强切工具，以暴露真实工具类型）。 */
+async function selectBrushForDetection(name: string): Promise<void> {
+  await action.batchPlay([
+    { _obj: 'select', _target: [{ _ref: 'brush', _name: name }] }
+  ], { synchronousExecution: true });
+}
+
+/** 记录用户当前笔刷，供扫描后还原。 */
+async function captureCurrentBrush(): Promise<{ toolEnum: string | null; brushName: string | null }> {
+  const info = await getSelectedBrushInfo();
+  return { toolEnum: info.toolEnum, brushName: info.name };
+}
+
+/** 尽力还原用户原本的笔刷与工具。 */
+async function restoreCurrentBrush(saved: { toolEnum: string | null; brushName: string | null } | null): Promise<void> {
+  if (!saved) return;
+  try {
+    if (saved.brushName) {
+      // applyBrush 会切回画笔工具并选中该笔刷；若该笔刷本身是混合器/涂抹预设，
+      // 选中动作通常会把工具重新切回对应类型，达到还原目的。
+      await applyBrush(saved.brushName);
+    } else if (saved.toolEnum) {
+      await action.batchPlay(
+        [{ _obj: 'select', _target: [{ _ref: saved.toolEnum }] }],
+        { synchronousExecution: true }
+      );
+    }
+  } catch (e) {
+    console.warn('⚠️ 检测笔刷类型：还原原笔刷失败，请手动切回你之前的笔刷', e);
+  }
+}
+
+/**
+ * 扫描全部笔刷预设，返回 { 笔刷名: 中文类型 } 映射。
+ * @param onProgress 进度回调 (已检测数, 总数, 当前笔刷名)，可用于 UI 反馈。
+ * @returns 映射；值可能是空串（读不到类型，表示该预设在当前工具下不暴露类型，按「画笔」处理）。
+ */
+export async function detectAllBrushTypes(
+  onProgress?: (done: number, total: number, current: string) => void
+): Promise<Record<string, string>> {
+  if (brushTypeDetecting) { console.warn('⚠️ 笔刷类型检测已在进行，忽略重复触发'); return {}; }
+  brushTypeDetecting = true;
+  const out: Record<string, string> = {};
+  try {
+    const names = await enumerateBrushes();
+    if (!names.length) { console.warn('⚠️ 未枚举到笔刷，无法检测类型'); return out; }
+    const saved = await captureCurrentBrush();
+    const total = names.length;
+    try {
+      await core.executeAsModal(async () => {
+        for (let i = 0; i < total; i++) {
+          const name = names[i];
+          if (onProgress) onProgress(i, total, name);
+          try {
+            await selectBrushForDetection(name);
+            const tool = await getSelectedBrushToolEnum();
+            out[name] = tool ? (TOOL_TYPE_CN[tool] || tool) : '';
+          } catch {
+            out[name] = ''; // 该预设选中失败，跳过
+          }
+        }
+      }, { commandName: '检测笔刷类型' });
+    } finally {
+      await restoreCurrentBrush(saved);
+    }
+    const known = Object.values(out).filter(Boolean).length;
+    console.log(`[笔刷类型检测] 完成：共 ${total} 支，识别到类型 ${known} 支`);
+  } catch (e) {
+    console.error('⚠️ 检测笔刷类型失败：', e);
+  } finally {
+    brushTypeDetecting = false;
+  }
+  return out;
+}
+

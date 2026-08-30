@@ -1138,10 +1138,14 @@
   text-overflow: ellipsis;
 }
 
-/* 注释（（像素）等）右对齐；闭合头部与弹出选项共用此规则 */
+/* 笔刷类型图标/文字右对齐；闭合头部与弹出选项共用此规则。
+   用 flex + justify-content:flex-end 而非 text-align，能可靠地把 inline SVG 推到最右。 */
 .mask-sync-select-opt-tag {
   flex: 1 1 auto;
   margin-left: 10px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
   text-align: right;
   font-size: 11px;
   opacity: 0.7;

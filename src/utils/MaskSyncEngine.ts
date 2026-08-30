@@ -30,7 +30,17 @@ import { app, action, core, imaging } from 'photoshop';
  */
 
 /** 引擎版本标识：面板与 console 都会显示，用于确认插件已加载最新代码。 */
-export const MASK_SYNC_ENGINE_VERSION = 'v3.3';
+export const MASK_SYNC_ENGINE_VERSION = 'v3.5';
+
+/**
+ * 同步写蒙版时使用的历史记录条目名。
+ *
+ * 这个常量是「撤回门控」的锚点，不要随意改名：
+ * 引擎靠「用户刚离开的那一条历史记录是否叫这个名字」来判断
+ * 「这次 Ctrl+Z 撤掉的是引擎自己的同步步」，从而代用户再退一格。
+ * 改名必须同时改 putLayerMask 的 commandName 与 executeAsModal 的 commandName。
+ */
+export const MASK_SYNC_HISTORY_NAME = '蒙版同步';
 
 console.log(`[蒙版同步] 引擎代码加载 ${MASK_SYNC_ENGINE_VERSION}`);
 
@@ -623,6 +633,16 @@ export class MaskSyncEngine {
           }
 
           // 9) 整图写回蒙版
+          //    ⚠️ 历史记录说明（曾走过的弯路，勿再重复）：
+          //    Photoshop 没有「写像素但不产生历史记录」的公开 API。
+          //      · action.batchPlay 的 suppressPlayLevelIncrease 只压制【动作嵌套层级】，
+          //        与历史记录无关，写蒙版照样产生历史条目；
+          //      · core.hostControl.resumeHistory(params, false) 的语义是
+          //        「丢弃像素改动、回退到 suspendHistory 之前」，不是「保留像素丢历史」；
+          //      · Document.suspendHistory 只是把多步合并为【一条】命名历史，仍然是一条。
+          //    因此这里老老实实产生一条历史，命名固定为 MASK_SYNC_HISTORY_NAME，
+          //    由「撤回门控」（checkUndoGate）在用户撤回时识别并跳过它，
+          //    从根本上解决「撤回死循环」。
           const imageData = await imaging.createImageDataFromBuffer(channel, {
             width: docW,
             height: docH,
@@ -636,11 +656,11 @@ export class MaskSyncEngine {
             layerID: task.targetLayerId,
             kind: 'user',
             imageData,
-            commandName: '蒙版同步',
+            commandName: MASK_SYNC_HISTORY_NAME,
           });
           imageData.dispose();
           result = { synced: true, reason: 'applied' };
-        }, { commandName: '蒙版同步' });
+        }, { commandName: MASK_SYNC_HISTORY_NAME });
       } catch (e) {
         console.warn('⚠️ 蒙版同步执行失败:', e);
         result = { synced: false, reason: 'error' };
@@ -652,10 +672,10 @@ export class MaskSyncEngine {
     }
   }
 
-  /** 同步当前文档中所有"启用且引用完整"的任务。 */
-  async syncAll(doc?: any): Promise<void> {
+  /** 同步当前文档中所有"启用且引用完整"的任务。返回实际写入蒙版的任务数。 */
+  async syncAll(doc?: any): Promise<number> {
     const d = doc || app.activeDocument;
-    if (!d) return;
+    if (!d) return 0;
     const key = this.docKeyOf(d);
     const tasks = this.persisted[key] || [];
     const enabled = tasks.filter(t => t.enabled && t.sampleLayerId && t.targetLayerId && t.channel);
@@ -668,12 +688,15 @@ export class MaskSyncEngine {
         `[蒙版同步] syncAll：无完整任务（启用${pending.length}个，` +
         `其中缺样本引用 ${missingSample.length} 个、缺目标引用 ${missingTarget.length} 个、缺通道 ${missingChannel.length} 个）`
       );
-      return;
+      return 0;
     }
+    let wrote = 0;
     for (const task of enabled) {
       const r = await this.syncTask(task, d);
+      if (r.synced) wrote++;
       console.log(`🔄 蒙版同步[${task.name}]: ${r.synced ? '✓ 已写入蒙版' : '跳过(' + r.reason + ')'}`);
     }
+    return wrote;
   }
 
   /** 把当前文档任务中的图层引用与当前文件树对齐（文档切换/重开时调用）：
@@ -872,6 +895,85 @@ export class MaskSyncEngine {
     return out;
   }
 
+  // ================= 撤回门控（解决「一直撤不回去」） =================
+  //
+  // 问题：画一笔 → 历史 H1(画笔)；引擎自动同步 → 历史 H2(蒙版同步)。
+  // 用户 Ctrl+Z 撤掉的是 H2，蒙版回退但笔画仍在 → 样本与蒙版出现差异 →
+  // 引擎又同步 → H3 → 再撤又是 H3……永远撤不到 H1 之前。
+  //
+  // 既然 PS 无法「写像素不留历史」（见 runSync 第 9 步注释），就换个方向：
+  // 让引擎「看得懂用户正在撤回」，此时不要同步。
+  //   历史指针后退（activeHistoryState.id 变小）→ 判定为撤回 → 本轮跳过同步，
+  //   并进入 undoHold 保持期，直到历史指针重新前进（用户做了新操作/重做）才恢复。
+  //
+  // ⚠️ 引擎【绝不会】代用户退历史（早期的 auto-step 逻辑已移除），原因有二：
+  //   - 用户可能在编辑别的图层，自动退一格会误撤别人的操作；
+  //   - 即便在同步图层上，自动退一格会让历史 id 反向增加，触发「恢复同步」，
+  //     把用户刚撤掉的东西又同步回来，形成「撤回 → 自动退 → 再撤回到自动退那步 →
+  //     恢复同步 → 回到没撤过」的死循环。
+  //   所以门控只做一件事：用户撤回期间暂停自动同步，把撤回控制权完全交还用户。
+  //
+  // 关键：门控只作用于【自动】同步路径（事件驱动 + 兜底轮询，即 doTimedSync）。
+  // 用户手动点「立即同步」走 syncTask/syncAll，不受门控影响。
+
+  private histLastActiveId: number | null = null; // 上次观察到的活动历史状态 id
+  private histUndoHold = false;                   // 撤回保持期：暂停自动同步
+
+  /**
+   * 读取当前活动历史状态的 id（廉价路径）。
+   * 只取 activeHistoryState.id，不构造整条历史列表——这个方法每 2 秒的兜底轮询
+   * 都会调用，避免每次都去实例化几十个 HistoryState 对象。
+   */
+  private readActiveHistoryId(doc: any): number | null {
+    try {
+      const active: any = doc?.activeHistoryState;
+      const id = active?.id;
+      return typeof id === 'number' ? id : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // （已移除 readLeftStateName：撤回门控不再读取「刚离开的历史名」，只做暂停）
+
+  /**
+   * 自动同步前的门控判定。返回 'skip' 表示本轮不要同步。
+   * 同时负责维护 histLastActiveId / histUndoHold。
+   */
+  private checkUndoGate(doc: any): 'proceed' | 'skip' {
+    const curId = this.readActiveHistoryId(doc);
+    if (curId === null) return 'proceed'; // 读不到历史信息 → 保持原有行为，不因门控而丢功能
+    const prev = this.histLastActiveId;
+    this.histLastActiveId = curId;
+    if (prev === null) return 'proceed'; // 首次观察，无从判断方向
+
+    if (curId < prev) {
+      // —— 历史指针后退：用户在撤回 ——
+      // 仅暂停自动同步，绝不代用户退历史（避免误撤其他图层 / 引发死循环）。
+      this.histUndoHold = true;
+      console.log('[蒙版同步] 检测到撤回，暂停自动同步（交还控制权给用户）');
+      return 'skip';
+    }
+
+    if (curId > prev) {
+      // —— 历史指针前进：用户做了新操作或重做 → 恢复同步 ——
+      if (this.histUndoHold) console.log('[蒙版同步] 检测到新操作，恢复自动同步');
+      this.histUndoHold = false;
+      return 'proceed';
+    }
+
+    // id 不变：没有新历史产生。撤回保持期内继续按住，否则正常放行。
+    return this.histUndoHold ? 'skip' : 'proceed';
+  }
+
+  // （已移除 stepBackOnce：撤回门控不再代用户退历史，避免误撤其他图层 / 死循环）
+
+  /** 文档切换/重开时复位门控状态（历史 id 是按文档计的，跨文档不可比）。 */
+  private resetUndoGate(): void {
+    this.histLastActiveId = null;
+    this.histUndoHold = false;
+  }
+
   private docKeyOf(doc: any): string {
     return (doc && doc.name) || '';
   }
@@ -980,6 +1082,7 @@ export class MaskSyncEngine {
       this.currentDocKey = docKey;
       this.currentDocName = docName;
       this.lastDocSignature = '';
+      this.resetUndoGate(); // 历史 id 按文档计，跨文档不可比，切换后重新观察
       return true;
     }
     return false;
@@ -1070,6 +1173,12 @@ export class MaskSyncEngine {
       const d = app.activeDocument;
       if (!d) return;
       this.refreshActiveDoc();
+      // 撤回门控：用户正在 Ctrl+Z 时不要同步，否则会不断产生新的「蒙版同步」
+      // 历史步，把用户永远挡在自己的操作之外。
+      if (await this.checkUndoGate(d) === 'skip') {
+        this.notify();
+        return;
+      }
       const key = this.currentDocKey;
       const list = this.persisted[key] || [];
       // 仅当图层结构签名变化时才按路径重解析引用（避免每次同步都全文档 batchPlay）
@@ -1084,7 +1193,13 @@ export class MaskSyncEngine {
         const changed = await this.reconcileTasks();
         if (changed) this.notify();
       }
-      await this.syncAll(d);
+      const wrote = await this.syncAll(d);
+      if (wrote > 0) {
+        // 引擎刚刚产生了一条「蒙版同步」历史：把它记录为已知的活动状态，
+        // 否则下一轮门控会把它误判成「用户的新操作」，撤回判定就失效了。
+        const after = this.readActiveHistoryId(d);
+        if (after !== null) this.histLastActiveId = after;
+      }
       this.notify(); // 同步完成后刷新面板上的同步状态
     } catch (e) {
       console.warn('⚠️ 蒙版同步调度执行失败:', e);

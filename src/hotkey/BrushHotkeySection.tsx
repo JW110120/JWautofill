@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { storage, shell } from 'uxp';
 import {
-  HotkeyEntry, connectHotkeyDaemon, onConfig, enumerateBrushes, enumerateBrushTypes,
+  HotkeyEntry, connectHotkeyDaemon, onConfig, enumerateBrushes,
   onDaemonStatus, pushConfig, requestHotkeyRecording, cancelHotkeyRecording,
   onHotkeyTriggered, disconnectDaemon, registerUninstallHandler,
-  setMainToggleCombo, getMainToggleCombo
+  setMainToggleCombo, getMainToggleCombo,
+  detectAllBrushTypes
 } from './HotkeyBridge';
-import { ExpandIcon, DeleteIcon, RefreshIcon, DataRefreshIcon, RecordCircleIcon, StopSquareIcon } from '../styles/Icons';
+import { ExpandIcon, DeleteIcon, RefreshIcon, DataRefreshIcon, RecordCircleIcon, StopSquareIcon, BrushToolIcon, SmudgeToolIcon, MixerToolIcon } from '../styles/Icons';
 import BrushSelect, { BrushSelectOption } from './BrushSelect';
 
 // 笔刷热键分区：在调整面板内录制「笔刷 + 快捷键」，持久化到共享配置，
@@ -73,18 +74,25 @@ export default function BrushHotkeySection() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 重新枚举笔刷列表。notify=false 用于初始化静默加载（不弹通知）。
+  // 重新枚举笔刷列表 + 自动检测每支预设的类型（混合器/涂抹/画笔…）。
+  // detectAllBrushTypes 会短暂切换当前笔刷并自动还原；纯画笔笔尖预设不暴露类型会标「画笔」。
+  // notify=false 用于初始化静默加载（不弹通知）。
   const loadBrushes = async (notify: boolean) => {
     if (notify) showMessage('正在刷新笔刷列表…');
     try {
-      const [names, types] = await Promise.all([enumerateBrushes(), enumerateBrushTypes()]);
+      const names = await enumerateBrushes();
       setBrushes(names);
-      setBrushTypes(types);
       setUsePicker(names.length > 0);
+      if (names.length) {
+        const types = await detectAllBrushTypes();
+        setBrushTypes(types);
+      } else {
+        setBrushTypes({});
+      }
       // 只陈述结果，不再附加「请选择」这类会被下一次操作立刻推翻的引导语
       if (notify) {
         showMessage(names.length
-          ? ('已刷新笔刷列表，共 ' + names.length + ' 支')
+          ? ('已刷新笔刷列表，共 ' + names.length + ' 支（已自动检测类型）')
           : '仍未枚举到笔刷，已切换为手动输入');
       }
     } catch {
@@ -313,11 +321,23 @@ export default function BrushHotkeySection() {
     showMessage(parts.join('，'));
   };
 
+  // 把检测到的中文类型渲染成对应图标；其它类型（橡皮擦等）无专用图标则回退显示文字，
+  // 空串则不显示任何 tag。
+  const brushTypeTag = (type: string): React.ReactNode => {
+    switch (type) {
+      case '画笔': return <BrushToolIcon />;
+      case '混合器画笔': return <MixerToolIcon />;
+      case '涂抹': return <SmudgeToolIcon />;
+      case '': return '';
+      default: return type;
+    }
+  };
+
   const brushOptions: BrushSelectOption[] = brushes.map(b => ({
     value: b,
     main: b,
-    // 笔刷类型（混合器/涂抹…）尽力而为：取不到时该项为空，下拉不显示类型列
-    tag: brushTypes[b] || ''
+    // 笔刷类型（混合器/涂抹/画笔…）渲染为图标；取不到类型则该项无 tag
+    tag: brushTypeTag(brushTypes[b] || '')
   }));
 
   return (

@@ -7,9 +7,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 // 为什么不用原生 <sp-picker>：sp-picker 的选项只能放纯文本，无法把「混合器/涂抹」
 // 这类类型标注右对齐，也无法在面板内保持与 MaskSyncSelect 相同的观感。
 export interface BrushSelectOption {
-  value: string;   // 笔刷预设名（PS 要求精确一致）
-  main: string;    // 主文本
-  tag?: string;    // 右侧标注（笔刷类型）
+  value: string;          // 笔刷预设名（PS 要求精确一致）
+  main: string;           // 主文本
+  tag?: React.ReactNode;  // 右侧标注（笔刷类型图标或文字；空则不显示）
 }
 
 interface Props {
