@@ -1780,87 +1780,90 @@ title={`● 渐变填充模式，需要用户自行设置渐变的起始颜色�
                             </sp-radio-group>
                         </div>
 
-                        {/* 底部选项：大 checkbox 容器（上下边缘紧贴分割线，2 列，每行 标签+checkbox 对齐） */}
-                        <div className="checkbox-box">
-                            <div className="checkbox-grid">
-                                <div className="checkbox-item">
-                                    <label
-                                        htmlFor="deselectCheckbox"
-                                        className="checkbox-item-label"
-                                        onClick={this.toggleDeselectAfterFill}
-                                        title="填充完成后自动取消选区。取消勾选后会保留已经修改后的选区，而不是最初生成的选区。"
-                                    >
-                                        取消选区
-                                    </label>
-                                    <input
-                                        type='checkbox'
-                                        id="deselectCheckbox"
-                                        checked={this.state.deselectAfterFill}
-                                        onChange={this.toggleDeselectAfterFill}
-                                        className="checkbox-input"
-                                        title="切换自动取消选区的状态。"
-                                    />
-                                </div>
-                                <div className="checkbox-item">
-                                    <label
-                                        htmlFor="historyCheckbox"
-                                        className="checkbox-item-label"
-                                        onClick={this.toggleAutoUpdateHistory}
-                                        title="自动把历史记录画笔的源图像设置为每次生成选区的那一刻，从而可以结合历史记录画笔增强或者削弱本次填充的效果。"
-                                    >
-                                        更新历史源
-                                    </label>
-                                    <input
-                                        type='checkbox'
-                                        id="historyCheckbox"
-                                        checked={this.state.autoUpdateHistory}
-                                        onChange={this.toggleAutoUpdateHistory}
-                                        className="checkbox-input"
-                                        title="切换自动更新历史记录画笔的源图像的状态。"
-                                    />
-                                </div>
-                                <div className="checkbox-item">
-                                    <label
-                                        htmlFor="lassoOnEnableCheckbox"
-                                        className="checkbox-item-label"
-                                        onClick={this.toggleSwitchToLassoOnEnable}
-                                        title="主开关从「关闭」切到「开启」时，自动把当前工具切换为套索工具，便于直接框选选区。"
-                                    >
-                                        开启后切套索
-                                    </label>
-                                    <input
-                                        type='checkbox'
-                                        id="lassoOnEnableCheckbox"
-                                        checked={this.state.switchToLassoOnEnable}
-                                        onChange={this.toggleSwitchToLassoOnEnable}
-                                        className="checkbox-input"
-                                        title="切换：主开关开启时自动切换为套索工具。"
-                                    />
-                                </div>
-                                <div className="checkbox-item">
-                                    <label
-                                        htmlFor="autoOffOnToolCheckbox"
-                                        className="checkbox-item-label"
-                                        onClick={this.toggleAutoOffOnOtherTool}
-                                        title="主开关处于开启状态时，若把当前工具切到画笔/铅笔/橡皮/混合器/油漆桶/渐变/移动/涂抹等其它工具，则自动关闭主开关。"
-                                    >
-                                        切其它工具即关
-                                    </label>
-                                    <input
-                                        type='checkbox'
-                                        id="autoOffOnToolCheckbox"
-                                        checked={this.state.autoOffOnOtherTool}
-                                        onChange={this.toggleAutoOffOnOtherTool}
-                                        className="checkbox-input"
-                                        title="切换：主开关开启时切到其它工具自动关闭主开关。"
-                                    />
-                                </div>
-                            </div>
-                        </div>
+                        
                     </div>
                 </div>
                 
-            <div className="info-plane">
+            
+{/* 底部选项：大 checkbox 容器（上下边缘紧贴分割线，2 列，每行 标签+checkbox 对齐） */}
+            <div className="checkbox-box">
+                <div className="checkbox-grid">
+                    <div className="checkbox-item">
+                        <label
+                            htmlFor="deselectCheckbox"
+                            className="checkbox-item-label"
+                            onClick={this.toggleDeselectAfterFill}
+                            title="填充完成后自动取消选区。取消勾选后会保留已经修改后的选区，而不是最初生成的选区。"
+                        >
+                            取消选区
+                        </label>
+                        <input
+                            type='checkbox'
+                            id="deselectCheckbox"
+                            checked={this.state.deselectAfterFill}
+                            onChange={this.toggleDeselectAfterFill}
+                            className="checkbox-input"
+                            title="切换自动取消选区的状态。"
+                        />
+                    </div>
+                    <div className="checkbox-item">
+                        <label
+                            htmlFor="historyCheckbox"
+                            className="checkbox-item-label"
+                            onClick={this.toggleAutoUpdateHistory}
+                            title="自动把历史记录画笔的源图像设置为每次生成选区的那一刻，从而可以结合历史记录画笔增强或者削弱本次填充的效果。"
+                        >
+                            更新历史源
+                        </label>
+                        <input
+                            type='checkbox'
+                            id="historyCheckbox"
+                            checked={this.state.autoUpdateHistory}
+                            onChange={this.toggleAutoUpdateHistory}
+                            className="checkbox-input"
+                            title="切换自动更新历史记录画笔的源图像的状态。"
+                        />
+                    </div>
+                    <div className="checkbox-item">
+                        <label
+                            htmlFor="lassoOnEnableCheckbox"
+                            className="checkbox-item-label"
+                            onClick={this.toggleSwitchToLassoOnEnable}
+                            title="主开关从「关闭」切到「开启」时，自动把当前工具切换为套索工具，便于直接框选选区。"
+                        >
+                            开启后切套索
+                        </label>
+                        <input
+                            type='checkbox'
+                            id="lassoOnEnableCheckbox"
+                            checked={this.state.switchToLassoOnEnable}
+                            onChange={this.toggleSwitchToLassoOnEnable}
+                            className="checkbox-input"
+                            title="切换：主开关开启时自动切换为套索工具。"
+                        />
+                    </div>
+                    <div className="checkbox-item">
+                        <label
+                            htmlFor="autoOffOnToolCheckbox"
+                            className="checkbox-item-label"
+                            onClick={this.toggleAutoOffOnOtherTool}
+                            title="主开关处于开启状态时，若把当前工具切到画笔/铅笔/橡皮/混合器/油漆桶/渐变/移动/涂抹等其它工具，则自动关闭主开关。"
+                        >
+                            切其它工具即关
+                        </label>
+                        <input
+                            type='checkbox'
+                            id="autoOffOnToolCheckbox"
+                            checked={this.state.autoOffOnOtherTool}
+                            onChange={this.toggleAutoOffOnOtherTool}
+                            className="checkbox-input"
+                            title="切换：主开关开启时切到其它工具自动关闭主开关。"
+                        />
+                    </div>
+                </div>
+            </div>
+
+<div className="info-plane">
             <span className="copyright">Copyright © listen2me (JW)</span>
         </div>
 

@@ -35,7 +35,7 @@ uxp-panel[panelid="com.listen2me.pixeladjustment"],
   box-sizing: border-box;
   overflow-y: auto;
   background-color: var(--bg-color);
-  padding: 0 10px;
+  padding: 0 10px 90px;  /* 底部留白：容纳固定底部的 checkbox-box(~64px)+info-plane(20px)，防止内容被遮挡 */
   display: flex;
   flex-direction: column;
   position: relative;  /* 添加相对定位 */
@@ -532,12 +532,18 @@ button:hover {
   background-color: var(--hover-bg);
 }
 
-/* 底部选项：大 checkbox 容器，上下边缘紧贴分割线 */
+/* 底部选项：大 checkbox 容器，常驻面板底部（移出可折叠区，避免折叠时整片消失） */
 .checkbox-box {
-  border-top: 1px solid var(--border-color);   /* 与上方分割线重合 */
+  position: fixed;                             /* 固定定位 → 始终可见，且底边恒定贴 info-plane 上边缘 */
+  bottom: 20px;                                /* info-plane 高 20px、bottom:0，其顶边恰在距底 20px 处，checkbox-box 底边与之重合（=下方分割线） */
+  left: 50%;
+  transform: translateX(-50%);
+  width: 250px;
+  box-sizing: border-box;
   background-color: var(--bg-color);
+  border-top: 1px solid var(--border-color);   /* 上方分割线 */
   padding: 10px 12px;                           /* 上下相等 → 首行距顶 == 末行距底 */
-  margin-bottom: 0;                             /* 紧贴下方 info-plane 分割线 */
+  z-index: 1500;
 }
 
 /* 两个列容器 */
