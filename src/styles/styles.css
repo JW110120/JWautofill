@@ -35,7 +35,7 @@ uxp-panel[panelid="com.listen2me.pixeladjustment"],
   box-sizing: border-box;
   overflow-y: auto;
   background-color: var(--bg-color);
-  padding: 0 10px 90px;  /* 底部留白：容纳固定底部的 checkbox-box(~64px)+info-plane(20px)，防止内容被遮挡 */
+  padding: 0 10px;  /* 与 0ffd3e1 一致：底部不预留（info-plane 是 fixed，不占位） */
   display: flex;
   flex-direction: column;
   position: relative;  /* 添加相对定位 */
@@ -311,7 +311,9 @@ sp-radio[disabled] {
 }
 
 .expand-content.expanded {
-  max-height: 400px;
+  /* 原 400px 过小：填充选项内容（含底部 checkbox 区）超过该高度会被 overflow:hidden 裁掉，
+     表现为最底部的 checkbox 区"整片消失"。放宽到足以容纳全部内容。 */
+  max-height: 1400px;
 }
 
 .expand-icon path.fill {
@@ -493,10 +495,8 @@ sp-radio {
   background-color: var(--bg-color);
   border-top: 1px solid var(--border-color);
   display: flex;
-  position: fixed;  /* 改为固定定位 */
+  position: fixed;  /* 固定定位：紧贴面板最下方 */
   bottom: 0;
-  left: 0;
-  z-index: 1000;  /* 确保在最上层 */
   left: 50%;  /* 水平居中 */
   transform: translateX(-50%);
   z-index: 2000;  /* 确保在最上层 */
@@ -507,12 +507,12 @@ sp-radio {
   text-align: center;
   font-size: 8px;
   color: var(--disabled-color);
-  position: fixed; /* 改为固定定位 */
+  position: fixed; /* 固定定位 */
   bottom: 3px;
   left: 50%;
   transform: translateX(-50%);
   pointer-events: none;
-  z-index: 2000; 
+  z-index: 2000;
 }
 
 /* 通用按钮样式 */
@@ -532,54 +532,70 @@ button:hover {
   background-color: var(--hover-bg);
 }
 
-/* 底部选项：大 checkbox 容器，常驻面板底部（移出可折叠区，避免折叠时整片消失） */
-.checkbox-box {
-  position: fixed;                             /* 固定定位 → 始终可见，且底边恒定贴 info-plane 上边缘 */
-  bottom: 20px;                                /* info-plane 高 20px、bottom:0，其顶边恰在距底 20px 处，checkbox-box 底边与之重合（=下方分割线） */
-  left: 50%;
-  transform: translateX(-50%);
-  width: 250px;
+.bottom-options {
+  padding: 0px 10px;
+  border-top: 1px solid var(--border-color);
+}
+
+/* 大 checkbox 容器：固定高度 120，内部两列 */
+.checkbox-main-container {
+  height: 90px;
   box-sizing: border-box;
-  background-color: var(--bg-color);
-  border-top: 1px solid var(--border-color);   /* 上方分割线 */
-  padding: 10px 12px;                           /* 上下相等 → 首行距顶 == 末行距底 */
-  z-index: 1500;
-}
-
-/* 两个列容器 */
-.checkbox-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  column-gap: 14px;
-  row-gap: 8px;
-}
-
-/* 每行：标签 + checkbox 两个小容器，space-between 保证两者对齐 */
-.checkbox-item {
   display: flex;
-  align-items: center;
+  flex-direction: row;
   justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
 }
 
-.checkbox-item-label {
-  font-size: 13px;
-  color: var(--text-color);
-  cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* 每列：左标签容器 + 右 checkbox 容器 */
+.checkbox-column {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+}
+
+.checkbox-column:not(:last-child) {
+  margin-right: 50px;
+}
+
+/* 标签容器：竖向堆叠，space-around 保证每行与 checkbox 对齐 */
+.checkbox-label-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-around;
+}
+
+/* checkbox 容器：竖向堆叠，space-around 保证每行与标签对齐；align-items 使勾选框水平居中 */
+.checkbox-input-container {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-around;
+  align-items: center;
 }
 
 .checkbox-input {
   cursor: pointer;
-  flex: 0 0 auto;
 }
 
 .checkbox-input:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+.checkbox-label {
+  font-size: 13px;
+  color: var(--text-color);
+  cursor: pointer;
+  white-space: nowrap;  /* 文字不换行 */
+  display: flex;
+  align-items: center;  /* 标签文字在行内竖直居中，与对应勾选框对齐 */
+}
+
+/* 添加禁用状态的标签样式 */
+.checkbox-label.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  color: var(--disabled-color);
 }
 
 /* sp-action-button 边框控制 */

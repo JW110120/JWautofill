@@ -3003,7 +3003,7 @@ const renderMaskSyncContent = () => (
 
         {/* 部分一：样本（图层 + 通道 + 反相） */}
         <div className="mask-sync-row mask-sync-row-close">
-          <span className="mask-sync-label">样本图层</span>
+          <span className="mask-sync-label">样本</span>
           <MaskSyncSelect
             value={task.sampleLayerId != null ? String(task.sampleLayerId) : ''}
             onChange={(v) => handleMaskSyncSampleChange(task, v)}
@@ -3032,7 +3032,7 @@ const renderMaskSyncContent = () => (
 
         {/* 部分二：目标（有蒙版的图层/组）+ 反相 */}
         <div className="mask-sync-row">
-          <span className="mask-sync-label">目标蒙版</span>
+          <span className="mask-sync-label">蒙版</span>
           <MaskSyncSelect
             value={task.targetLayerId != null ? String(task.targetLayerId) : ''}
             onChange={(v) => handleMaskSyncTargetChange(task, v)}

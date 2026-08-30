@@ -1012,7 +1012,7 @@
   color: var(--text-color);
   font-size: 12px;
   flex: 0 0 auto;
-  min-width: 4em; /* “样本图层”/“目标蒙版” 4 字宽，让“通道”容器同宽 */
+  width: 25px; /* “样本图层”/“目标蒙版” 4 字宽，让“通道”容器同宽 */
   margin-right: 6px;
   white-space: nowrap;
   user-select: none;
@@ -1170,7 +1170,7 @@
   height: 14px;
   accent-color: var(--primary-color);
   cursor: pointer;
-  margin: 0; /* 间距由上面的 span margin-right 控制 */
+  margin-left: 5px; /* 间距由上面的 span margin-right 控制 */
 }
 
 /* 反相行：左对齐（反相标签在左、checkbox 在右） */
