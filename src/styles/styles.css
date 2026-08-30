@@ -532,45 +532,48 @@ button:hover {
   background-color: var(--hover-bg);
 }
 
-/* 底部选项样式 */
-.bottom-options {
-  display: flex;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 4px 10px;
-  padding: 10px 10px;
-  border-top: 1px solid var(--border-color);
-  flex-direction: row;
+/* 底部选项：大 checkbox 容器，上下边缘紧贴分割线 */
+.checkbox-box {
+  border-top: 1px solid var(--border-color);   /* 与上方分割线重合 */
+  background-color: var(--bg-color);
+  padding: 10px 12px;                           /* 上下相等 → 首行距顶 == 末行距底 */
+  margin-bottom: 0;                             /* 紧贴下方 info-plane 分割线 */
 }
 
-.checkbox-container {
-  margin: 0px -8px 0 0px;
-  position: relative;
+/* 两个列容器 */
+.checkbox-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 14px;
+  row-gap: 8px;
+}
+
+/* 每行：标签 + checkbox 两个小容器，space-between 保证两者对齐 */
+.checkbox-item {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.checkbox-item-label {
+  font-size: 13px;
+  color: var(--text-color);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .checkbox-input {
   cursor: pointer;
+  flex: 0 0 auto;
 }
 
 .checkbox-input:disabled {
   cursor: not-allowed;
   opacity: 0.5;
-}
-
-.checkbox-label {
-  font-size: 13px;
-  margin: -1px -3px 0 0;
-  color: var(--text-color);
-  cursor: pointer;
-}
-
-/* 添加禁用状态的标签样式 */
-.checkbox-label.disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  color: var(--disabled-color);
 }
 
 /* sp-action-button 边框控制 */

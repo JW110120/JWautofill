@@ -61,7 +61,8 @@
 
 ## 主开关联动选项（2026-08-30）
 
-- 主面板底部选项区（`.bottom-options`，src/app.tsx）新增两个 checkbox 开关，**持久化于 `settings/panel-state.json`（PanelStateManager 的 appPanel）**，默认均为 `false`（opt-in）。字段：`switchToLassoOnEnable`、`autoOffOnOtherTool`（AppState/initialState/PanelStateManager.AppPanelState 三处都要加，并在 `componentDidMount` 的 initialize 默认值 + load 合并、以及 `componentDidUpdate` 的 watchedKeys + update 中同步）。
+- 主面板底部选项区（`src/app.tsx` 的 `.checkbox-box`，2026-08-30 重构）含 4 个 checkbox 开关，其中两个（`switchToLassoOnEnable`、`autoOffOnOtherTool`）**持久化于 `settings/panel-state.json`（PanelStateManager 的 appPanel）**，默认均为 `false`（opt-in）。字段三处都要加，并在 `componentDidMount` 的 initialize 默认值 + load 合并、以及 `componentDidUpdate` 的 watchedKeys + update 中同步。
+- **底部 checkbox 容器布局约定（2026-08-30 重构确立）**：`.checkbox-box`（大容器，上下边缘紧贴上方 `border-top` 分割线与下方 `info-plane` 的 `border-top` 分割线，`padding:10px 12px` 上下相等 → 首行距顶 == 末行距底）→ `.checkbox-grid`（`grid-template-columns:1fr 1fr` 两个列容器，`column-gap:14px;row-gap:8px`）→ 每个 `.checkbox-item`（`display:flex;justify-content:space-between`）拆成 `.checkbox-item-label` + `.checkbox-input` 两个小容器，保证标签左、checkbox 右对齐。已**彻底弃用**旧的 `.bottom-options`/`.checkbox-container`/`.checkbox-label`（含 `-2px` 左移与冒号），旧 CSS 已删除。
 - **选项一 `switchToLassoOnEnable`（开启后切套索）**：主开关 **关闭→开启** 的瞬间自动切到套索工具。
   - 切工具写法必须**先直连 `action.batchPlay`，失败再回退 `core.executeAsModal`**（与 `HotkeyBridge.applyBrush` 同款）。⚠️**曾踩坑**：旧实现只直连、未带模态回退，某些 PS 状态下直连抛 "command not available" 被 `catch` 静默吞掉 → 工具没切、表现「没实现」。
   - descriptor 用用户给定：`{_obj:'select',_target:[{_ref:'lassoTool'}],dontRecord:true,forceNotify:true,_isCommand:false}`，`batchPlay` 选项 `{synchronousExecution:true}`。
