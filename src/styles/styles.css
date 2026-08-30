@@ -536,6 +536,8 @@ button:hover {
 .bottom-options {
   display: flex;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 10px;
   padding: 10px 10px;
   border-top: 1px solid var(--border-color);
   flex-direction: row;

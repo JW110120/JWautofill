@@ -58,3 +58,14 @@
 - **状态色（与指示灯一致）**：笔刷热键区底部 `message` 颜色随 `daemonConnected`——已连接 `#2ecc71`（= `.mask-sync-status-dot.ok`）、断开/未加载 `#f39c12`（= `.warn`）。
 - **蒙版同步容器结构（最终版）**：引擎状态条 `.mask-sync-status-bar`（自带 border）在最上方、容器 A 之外；容器 A = `.mask-sync-card-list`（border+radius 8+padding 8+bg）只裹 `.mask-sync-task` + `.mask-sync-add-row`；**不再套任何有边框外层**（已弃用 `.adjustment-section` 包裹，它带 border+限宽 280px 且被 4 分区共用不可改），改 `.mask-sync-section`：`border:none;padding:0;width:100%`（与笔刷热键通栏等宽）。容器 A 与 `.hotkey-entry-box` 同盒模型；卡片间距 6px、`.mask-sync-empty` 移入容器内、状态条 padding 8px 与卡片左对齐。⚠️ 教训：改分区外观前务必确认元素挂的**全部**类名（曾误删容器 A、误以为 `.mask-sync-section` 无边框实则挂 `.adjustment-section`）。
 - **蒙版同步「立即同步」禁用条件**：`!task.sampleLayerId || !task.channel || !task.targetLayerId`。
+
+## 主开关联动选项（2026-08-30）
+
+- 主面板底部选项区（`.bottom-options`，src/app.tsx）新增两个 checkbox 开关，**持久化于 `settings/panel-state.json`（PanelStateManager 的 appPanel）**，默认均为 `false`（opt-in）。字段：`switchToLassoOnEnable`、`autoOffOnOtherTool`（AppState/initialState/PanelStateManager.AppPanelState 三处都要加，并在 `componentDidMount` 的 initialize 默认值 + load 合并、以及 `componentDidUpdate` 的 watchedKeys + update 中同步）。
+- **选项一 `switchToLassoOnEnable`（开启后切套索）**：主开关 **关闭→开启** 的瞬间自动 `action.batchPlay([{_obj:'select',_target:[{_ref:'lassoTool'}],dontRecord:true,forceNotify:true,_isCommand:false}],{synchronousExecution:true})` 切到套索工具。
+  - 触发收敛点：`handleButtonClick`（点开关）与 `subscribeMainToggle` 回调（热键/其它面板翻转）都调用同一私有方法 `onMainToggleChanged(prev,next)`；仅在 `next && !prev` 时切套索，且开关已 setState 为新值，故不会重复切。
+  - 套索 `lassoTool` **不在**选项二的「其它工具」列表里，所以切套索不会反向触发选项二自动关闭。
+- **选项二 `autoOffOnOtherTool`（切其它工具即关）**：主开关**开启**时，若 `handleNotification` 收到 `select` 事件且解析出的工具属于列表（paintbrushTool/pencilTool/eraserTool/wetBrushTool/bucketTool/gradientTool/moveTool/smudgeTool），则 `autoTurnOffMain()` 关闭主开关并同步 PanelStateManager + MainToggleBus。
+  - 工具判定：`resolveSelectedTool(descriptor)` 解析 descriptor `_target`，仅当确为工具选择（_ref==='tool' 取 _value，或 _ref 以 'Tool' 结尾）才返回，避免普通 select 事件误触发。
+- **UI 位移**：「更新历史源」那一行（含其 checkbox）整体 `marginLeft:-2px` 左移 2px；`.bottom-options` 已加 `flex-wrap:wrap;gap:4px 10px` 容纳 4 个选项不溢出。
+- 这两选项本质是「主开关的联动偏好」，存 panel-state.json（与 deselectAfterFill/autoUpdateHistory 同级），**不要**放进 MainToggleBus 的共享文件（那是跨面板的主开关状态本身）。

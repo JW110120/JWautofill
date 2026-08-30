@@ -58,6 +58,8 @@ class App extends React.Component<AppProps, AppState> {
         this.toggleAutoUpdateHistory = this.toggleAutoUpdateHistory.bind(this);
         this.handleButtonClick = this.handleButtonClick.bind(this);
         this.toggleDeselectAfterFill = this.toggleDeselectAfterFill.bind(this);
+        this.toggleSwitchToLassoOnEnable = this.toggleSwitchToLassoOnEnable.bind(this);
+        this.toggleAutoOffOnOtherTool = this.toggleAutoOffOnOtherTool.bind(this);
         this.handleLabelMouseDown = this.handleLabelMouseDown.bind(this);
         this.handleMouseMove = this.handleMouseMove.bind(this);
         this.handleMouseUp = this.handleMouseUp.bind(this);
@@ -105,7 +107,9 @@ class App extends React.Component<AppProps, AppState> {
             connectHotkeyDaemon();
             this.unsubMainToggle = subscribeMainToggle((st) => {
                 if (typeof st?.enabled === 'boolean' && st.enabled !== this.state.isEnabled) {
+                    const prev = this.state.isEnabled;
                     this.setState({ isEnabled: st.enabled });
+                    void this.onMainToggleChanged(prev, st.enabled);
                 }
             });
         } catch (e) {
@@ -191,6 +195,8 @@ class App extends React.Component<AppProps, AppState> {
                     isSelectionOptionsExpanded: this.state.isSelectionOptionsExpanded,
                     autoUpdateHistory: this.state.autoUpdateHistory,
                     deselectAfterFill: this.state.deselectAfterFill,
+                    switchToLassoOnEnable: this.state.switchToLassoOnEnable,
+                    autoOffOnOtherTool: this.state.autoOffOnOtherTool,
                     strokeEnabled: this.state.strokeEnabled,
                     createNewLayer: this.state.createNewLayer,
                     clearMode: this.state.clearMode,
@@ -204,6 +210,8 @@ class App extends React.Component<AppProps, AppState> {
                     isSelectionOptionsExpanded: loaded.appPanel.isSelectionOptionsExpanded ?? this.state.isSelectionOptionsExpanded,
                     autoUpdateHistory: loaded.appPanel.autoUpdateHistory ?? this.state.autoUpdateHistory,
                     deselectAfterFill: loaded.appPanel.deselectAfterFill ?? this.state.deselectAfterFill,
+                    switchToLassoOnEnable: loaded.appPanel.switchToLassoOnEnable ?? this.state.switchToLassoOnEnable,
+                    autoOffOnOtherTool: loaded.appPanel.autoOffOnOtherTool ?? this.state.autoOffOnOtherTool,
                     strokeEnabled: loaded.appPanel.strokeEnabled ?? this.state.strokeEnabled,
                     createNewLayer: loaded.appPanel.createNewLayer ?? this.state.createNewLayer,
                     clearMode: loaded.appPanel.clearMode ?? this.state.clearMode,
@@ -263,6 +271,8 @@ class App extends React.Component<AppProps, AppState> {
             'isSelectionOptionsExpanded',
             'autoUpdateHistory',
             'deselectAfterFill',
+            'switchToLassoOnEnable',
+            'autoOffOnOtherTool',
             'strokeEnabled',
             'createNewLayer',
             'clearMode',
@@ -277,6 +287,8 @@ class App extends React.Component<AppProps, AppState> {
                     isSelectionOptionsExpanded: this.state.isSelectionOptionsExpanded,
                     autoUpdateHistory: this.state.autoUpdateHistory,
                     deselectAfterFill: this.state.deselectAfterFill,
+                    switchToLassoOnEnable: this.state.switchToLassoOnEnable,
+                    autoOffOnOtherTool: this.state.autoOffOnOtherTool,
                     strokeEnabled: this.state.strokeEnabled,
                     createNewLayer: this.state.createNewLayer,
                     clearMode: this.state.clearMode,
@@ -311,7 +323,8 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     handleButtonClick() {
-        const nextEnabled = !this.state.isEnabled;
+        const prevEnabled = this.state.isEnabled;
+        const nextEnabled = !prevEnabled;
         this.setState({ isEnabled: nextEnabled }, () => {
             PanelStateManager.update({
                 appPanel: { isEnabled: this.state.isEnabled }
@@ -320,6 +333,8 @@ class App extends React.Component<AppProps, AppState> {
             // 手动点开关之后按 Ctrl+Q 会得到「反直觉」的结果。
             setMainToggle(nextEnabled).catch(e => console.warn('⚠️ 主开关共享状态写入失败:', e));
         });
+        // 主开关关闭→开启：按选项自动切换为套索工具
+        void this.onMainToggleChanged(prevEnabled, nextEnabled);
     }
 
     /**
@@ -1003,6 +1018,80 @@ class App extends React.Component<AppProps, AppState> {
         this.setState({ deselectAfterFill: !this.state.deselectAfterFill });
     }
 
+    // ===== 新增：主开关的两个联动选项 =====
+    // 开启主开关时，若用户把当前工具切到这些「其它工具」，则自动关闭主开关
+    private static readonly AUTO_OFF_TOOLS = [
+        'paintbrushTool',  // 画笔
+        'pencilTool',      // 铅笔
+        'eraserTool',      // 橡皮
+        'wetBrushTool',    // 混合器画笔
+        'bucketTool',      // 油漆桶
+        'gradientTool',    // 渐变
+        'moveTool',        // 移动
+        'smudgeTool',      // 涂抹
+    ];
+
+    toggleSwitchToLassoOnEnable() {
+        this.setState({ switchToLassoOnEnable: !this.state.switchToLassoOnEnable });
+    }
+
+    toggleAutoOffOnOtherTool() {
+        this.setState({ autoOffOnOtherTool: !this.state.autoOffOnOtherTool });
+    }
+
+    /**
+     * 主开关状态发生「实际翻转」时的副作用。
+     * 只在 关闭→开启 的瞬间按选项自动切换为套索工具。
+     * 注意：本方法既被 handleButtonClick（点开关）调用，也被
+     * subscribeMainToggle 的回调（热键/其它面板翻转）调用——两条路径都会收敛到这里，
+     * 但开关已经是新值（已 setState），所以不会因为重复触发而重复切工具。
+     */
+    private async onMainToggleChanged(prevEnabled: boolean, nextEnabled: boolean) {
+        if (nextEnabled && !prevEnabled && this.state.switchToLassoOnEnable) {
+            await this.selectLassoTool();
+        }
+    }
+
+    // 自动切换为套索工具（主开关关闭→开启时）
+    private async selectLassoTool() {
+        try {
+            await action.batchPlay([
+                {
+                    _obj: 'select',
+                    _target: [{ _ref: 'lassoTool' }],
+                    dontRecord: true,
+                    forceNotify: true,
+                    _isCommand: false
+                }
+            ], { synchronousExecution: true });
+        } catch (e) {
+            console.warn('⚠️ 自动切换套索工具失败（主开关开启时）:', e);
+        }
+    }
+
+    // 从 select 通知的 descriptor 解析被选中的工具 key；非工具选择返回 null
+    private resolveSelectedTool(descriptor: any): string | null {
+        const target = descriptor?._target;
+        if (Array.isArray(target)) {
+            for (const t of target) {
+                if (!t) continue;
+                if (t._ref === 'tool' && typeof t._value === 'string') return t._value;
+                if (typeof t._ref === 'string' && /Tool$/.test(t._ref)) return t._ref;
+            }
+        }
+        return null;
+    }
+
+    // 自动关闭主开关（切到其它工具时）
+    private async autoTurnOffMain() {
+        this.setState({ isEnabled: false }, () => {
+            PanelStateManager.update({
+                appPanel: { isEnabled: false }
+            }, { debounceMs: 0 }).catch(e => console.warn('⚠️ 主开关状态持久化失败:', e));
+            setMainToggle(false).catch(e => console.warn('⚠️ 主开关共享状态写入失败:', e));
+        });
+    }
+
     // 检测蒙版模式状态
     async checkMaskModes() {
         try {
@@ -1019,7 +1108,7 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     // 处理Photoshop通知事件
-    async handleNotification() {
+    async handleNotification(eventName?: string, descriptor?: any) {
         try {
             // 检测图层蒙版和快速蒙版状态
             await this.checkMaskModes();
@@ -1027,6 +1116,19 @@ class App extends React.Component<AppProps, AppState> {
             this.forceUpdate();
         } catch (error) {
             // 静默处理错误，避免频繁的错误日志
+        }
+
+        // 主开关处于开启状态，且开启了「切到其它工具即关」选项时，
+        // 若本次 select 事件确实是切换到了画笔/铅笔/橡皮等其它工具，则自动关闭主开关。
+        try {
+            if (this.state.isEnabled && this.state.autoOffOnOtherTool && eventName === 'select') {
+                const tool = this.resolveSelectedTool(descriptor);
+                if (tool && App.AUTO_OFF_TOOLS.indexOf(tool) !== -1) {
+                    await this.autoTurnOffMain();
+                }
+            }
+        } catch (e) {
+            console.warn('⚠️ 工具切换自动关闭主开关判断失败:', e);
         }
     }
 
@@ -1692,7 +1794,7 @@ title={`● 渐变填充模式，需要用户自行设置渐变的起始颜色�
                                 />
                                 
                             </div>
-                            <div className="checkbox-container">
+                            <div className="checkbox-container" style={{ marginLeft: '-2px' }}>
                                 <label 
                                     htmlFor="historyCheckbox" 
                                     className="checkbox-label"
@@ -1710,6 +1812,42 @@ title={`● 渐变填充模式，需要用户自行设置渐变的起始颜色�
                                     className="checkbox-input"
                                     title="切换自动更新历史记录画笔的源图像的状态。"
 
+                                />
+                            </div>
+                            <div className="checkbox-container">
+                                <label 
+                                    htmlFor="lassoOnEnableCheckbox" 
+                                    className="checkbox-label"
+                                    onClick={this.toggleSwitchToLassoOnEnable}
+                                    title="主开关从「关闭」切到「开启」时，自动把当前工具切换为套索工具，便于直接框选选区。"
+                                >
+                                    开启后切套索:
+                                </label>
+                                <input
+                                    type='checkbox'
+                                    id="lassoOnEnableCheckbox"
+                                    checked={this.state.switchToLassoOnEnable}
+                                    onChange={this.toggleSwitchToLassoOnEnable}
+                                    className="checkbox-input"
+                                    title="切换：主开关开启时自动切换为套索工具。"
+                                />
+                            </div>
+                            <div className="checkbox-container">
+                                <label 
+                                    htmlFor="autoOffOnToolCheckbox" 
+                                    className="checkbox-label"
+                                    onClick={this.toggleAutoOffOnOtherTool}
+                                    title="主开关处于开启状态时，若把当前工具切到画笔/铅笔/橡皮/混合器/油漆桶/渐变/移动/涂抹等其它工具，则自动关闭主开关。"
+                                >
+                                    切其它工具即关:
+                                </label>
+                                <input
+                                    type='checkbox'
+                                    id="autoOffOnToolCheckbox"
+                                    checked={this.state.autoOffOnOtherTool}
+                                    onChange={this.toggleAutoOffOnOtherTool}
+                                    className="checkbox-input"
+                                    title="切换：主开关开启时切到其它工具自动关闭主开关。"
                                 />
                             </div>
                         </div>

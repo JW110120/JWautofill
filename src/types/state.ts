@@ -72,6 +72,8 @@ export interface AppState {
     autoUpdateHistory: boolean;
     isEnabled: boolean;
     deselectAfterFill: boolean;
+    switchToLassoOnEnable: boolean;  // 主开关：关闭→开启时自动切换为套索工具
+    autoOffOnOtherTool: boolean;     // 主开关：开启时切到其它工具则自动关闭
     isDragging: boolean;
     dragStartX: number;
     dragStartValue: number;
@@ -114,6 +116,8 @@ export const initialState: AppState = {
     autoUpdateHistory: true,
     isEnabled: true,
     deselectAfterFill: true,
+    switchToLassoOnEnable: false,
+    autoOffOnOtherTool: false,
     isDragging: false,
     dragStartX: 0,
     dragStartValue: 0,

@@ -20,16 +20,16 @@
             },
             "maximumSize": {
                 "width": 250,
-                "height": 868
+                "height": 900
             },
             "preferredDockedSize": {
                 "width": 250,
-                "height": 868
+                "height": 900
 
             },
             "preferredFloatingSize": {
                 "width": 250,
-                "height": 868
+                "height": 900
             },
             "icons": [
                 {
@@ -62,15 +62,15 @@
             },
             "maximumSize": {
                 "width": 300,
-                "height": 868
+                "height": 900
             },
             "preferredDockedSize": {
                 "width": 300,
-                "height": 868
+                "height": 900
             },
             "preferredFloatingSize": {
                 "width": 300,
-                "height": 868
+                "height": 900
             },
             "icons": [
                 {

@@ -12,6 +12,8 @@ export type AppPanelState = {
   isSelectionOptionsExpanded?: boolean;
   autoUpdateHistory?: boolean;
   deselectAfterFill?: boolean;
+  switchToLassoOnEnable?: boolean;
+  autoOffOnOtherTool?: boolean;
   strokeEnabled?: boolean;
   createNewLayer?: boolean;
   clearMode?: boolean;
