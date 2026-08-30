@@ -62,7 +62,9 @@
 ## 主开关联动选项（2026-08-30）
 
 - 主面板底部选项区（`.bottom-options`，src/app.tsx）新增两个 checkbox 开关，**持久化于 `settings/panel-state.json`（PanelStateManager 的 appPanel）**，默认均为 `false`（opt-in）。字段：`switchToLassoOnEnable`、`autoOffOnOtherTool`（AppState/initialState/PanelStateManager.AppPanelState 三处都要加，并在 `componentDidMount` 的 initialize 默认值 + load 合并、以及 `componentDidUpdate` 的 watchedKeys + update 中同步）。
-- **选项一 `switchToLassoOnEnable`（开启后切套索）**：主开关 **关闭→开启** 的瞬间自动 `action.batchPlay([{_obj:'select',_target:[{_ref:'lassoTool'}],dontRecord:true,forceNotify:true,_isCommand:false}],{synchronousExecution:true})` 切到套索工具。
+- **选项一 `switchToLassoOnEnable`（开启后切套索）**：主开关 **关闭→开启** 的瞬间自动切到套索工具。
+  - 切工具写法必须**先直连 `action.batchPlay`，失败再回退 `core.executeAsModal`**（与 `HotkeyBridge.applyBrush` 同款）。⚠️**曾踩坑**：旧实现只直连、未带模态回退，某些 PS 状态下直连抛 "command not available" 被 `catch` 静默吞掉 → 工具没切、表现「没实现」。
+  - descriptor 用用户给定：`{_obj:'select',_target:[{_ref:'lassoTool'}],dontRecord:true,forceNotify:true,_isCommand:false}`，`batchPlay` 选项 `{synchronousExecution:true}`。
   - 触发收敛点：`handleButtonClick`（点开关）与 `subscribeMainToggle` 回调（热键/其它面板翻转）都调用同一私有方法 `onMainToggleChanged(prev,next)`；仅在 `next && !prev` 时切套索，且开关已 setState 为新值，故不会重复切。
   - 套索 `lassoTool` **不在**选项二的「其它工具」列表里，所以切套索不会反向触发选项二自动关闭。
 - **选项二 `autoOffOnOtherTool`（切其它工具即关）**：主开关**开启**时，若 `handleNotification` 收到 `select` 事件且解析出的工具属于列表（paintbrushTool/pencilTool/eraserTool/wetBrushTool/bucketTool/gradientTool/moveTool/smudgeTool），则 `autoTurnOffMain()` 关闭主开关并同步 PanelStateManager + MainToggleBus。

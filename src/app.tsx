@@ -1053,19 +1053,27 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     // 自动切换为套索工具（主开关关闭→开启时）
+    // 复用 HotkeyBridge.applyBrush 已验证的切工具写法：先直连 batchPlay，
+    // 失败（某些 PS 版本/状态下要求模态作用域）再回退 executeAsModal。
     private async selectLassoTool() {
+        const descriptor: any = {
+            _obj: 'select',
+            _target: [{ _ref: 'lassoTool' }],
+            dontRecord: true,
+            forceNotify: true,
+            _isCommand: false
+        };
         try {
-            await action.batchPlay([
-                {
-                    _obj: 'select',
-                    _target: [{ _ref: 'lassoTool' }],
-                    dontRecord: true,
-                    forceNotify: true,
-                    _isCommand: false
-                }
-            ], { synchronousExecution: true });
-        } catch (e) {
-            console.warn('⚠️ 自动切换套索工具失败（主开关开启时）:', e);
+            await action.batchPlay([descriptor], { synchronousExecution: true });
+        } catch (directErr) {
+            // 直连失败 → 回退模态作用域（与 applyBrush 一致）
+            try {
+                await core.executeAsModal(async () => {
+                    await action.batchPlay([descriptor], { synchronousExecution: true });
+                }, { commandName: '切换套索工具' });
+            } catch (e) {
+                console.warn('⚠️ 自动切换套索工具失败（主开关开启时）:', e);
+            }
         }
     }
 
