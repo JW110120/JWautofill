@@ -37,3 +37,10 @@ yarn-error.log*
 .vscode/
 .DS_Store
 Thumbs.db
+
+# ============ 分析 / 原型 / 调试产物（本地开发草稿，不入库） ============
+# analysis/：原型算法、测试脚本、生成图与日志、.npy 等，yarn build 与插件运行均不依赖。
+# outputs/：原生守护进程编译缓存(daemon_obj)、调试日志等。
+# 二者仅本地保留，取消 git 跟踪后不再推送远程。
+analysis/
+outputs/

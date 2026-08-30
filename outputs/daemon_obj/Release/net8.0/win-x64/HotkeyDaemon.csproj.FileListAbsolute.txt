@@ -1,5 +1,0 @@
-C:\Users\Administrator\Documents\GitHub\JWautofill\outputs\daemon_obj\Release\net8.0\win-x64\HotkeyDaemon.GeneratedMSBuildEditorConfig.editorconfig
-C:\Users\Administrator\Documents\GitHub\JWautofill\outputs\daemon_obj\Release\net8.0\win-x64\HotkeyDaemon.AssemblyInfoInputs.cache
-C:\Users\Administrator\Documents\GitHub\JWautofill\outputs\daemon_obj\Release\net8.0\win-x64\HotkeyDaemon.AssemblyInfo.cs
-C:\Users\Administrator\Documents\GitHub\JWautofill\outputs\daemon_obj\Release\net8.0\win-x64\HotkeyDaemon.csproj.CoreCompileInputs.cache
-C:\Users\Administrator\Documents\GitHub\JWautofill\outputs\daemon_obj\Release\net8.0\win-x64\HotkeyDaemon.sourcelink.json

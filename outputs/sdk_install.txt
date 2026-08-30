@@ -1,9 +1,0 @@
-﻿dotnet-install: Remote file https://builds.dotnet.microsoft.com/dotnet/Sdk/8.0.424/dotnet-sdk-8.0.424-win-x64.zip size is 285090820 bytes.
-dotnet-install: Downloaded file https://builds.dotnet.microsoft.com/dotnet/Sdk/8.0.424/dotnet-sdk-8.0.424-win-x64.zip size is 285090820 bytes.
-dotnet-install: The remote and local file sizes are equal.
-dotnet-install: Extracting the archive.
-dotnet-install: Adding to current process PATH: "C:\Users\Administrator\AppData\Local\JWdotnetSDK\". Note: This change will not be visible if PowerShell was run as a child process.
-dotnet-install: Note that the script does not ensure your Windows version is supported during the installation.
-dotnet-install: To check the list of supported versions, go to https://learn.microsoft.com/dotnet/core/install/windows#supported-versions
-dotnet-install: Installed version is 8.0.424
-dotnet-install: Installation finished
