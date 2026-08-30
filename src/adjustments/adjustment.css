@@ -1032,6 +1032,10 @@
   flex: 1 1 120px;
   min-width: 0;
   position: relative;
+  /* 与弹层 .mask-sync-select-pop 同理：局部重声明主色蓝，覆盖 Spectrum
+     <Provider> 作用域内被改写的 --primary-color，保证头部展开边框（.head.open）
+     取到的是我们的主色蓝而非 Spectrum 值。 */
+  --primary-color: rgb(38, 128, 235);
 }
 
 /* 头部必须撑满 wrap 的宽度：部分面板会把 wrap 变成 flex 容器
@@ -1064,7 +1068,7 @@
 }
 
 .mask-sync-select-head.open {
-  border-color: var(--primary-color);
+  border-color: rgb(38, 128, 235);
 }
 
 .mask-sync-select-head.disabled {
@@ -1152,6 +1156,13 @@
   padding: 2px 0;
   box-sizing: border-box;
   font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
+  /* 关键：在弹层作用域内显式声明主色蓝。
+     @adobe/react-spectrum 的 <Provider> 会在其作用域根（#app / #pixeladjustment）
+     上覆盖一批 CSS 变量，其中就含 --primary-color（被设成 Spectrum 自身语义值）。
+     弹层 portal 到 #app 后，.sel 的 var(--primary-color) 会解析到 Spectrum 的值，
+     变量"已定义但为空"时不触发 fallback → 选中背景变透明。这里局部重声明，
+     让 .sel 子元素取到的是我们自己的主色蓝。 */
+  --primary-color: rgb(38, 128, 235);
 }
 
 .mask-sync-select-opt {
@@ -1169,8 +1180,13 @@
   background: var(--hover-bg, rgba(128, 128, 128, 0.15));
 }
 
+/* 选中项背景：直接用字面色值 rgb(38,128,235)，不再走 var(--primary-color)。
+   原因：弹层经 createPortal 挂到 #app（<Provider> 作用域内），UXP 下 var() 在该
+   子树里解析不稳定，曾出现选中背景解析不到主色蓝、回退成面板底色的情况。
+   --primary-color 在四套主题里本就是恒定 rgb(38,128,235)，故字面值与主题完全一致，
+   且不依赖任何变量解析。 */
 .mask-sync-select-opt.sel {
-  background: var(--primary-color, rgb(74, 125, 255));
+  background: rgb(38, 128, 235);
   color: rgb(255, 255, 255);
 }
 

@@ -1,7 +1,11 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { getPopRoot } from '../utils/popRoot';
-import { hideOccludedTextFields, POP_LAYER_STYLE } from '../utils/popOverlay';
+import {
+  createOcclusionSession,
+  estimatePopRect,
+  POP_LAYER_STYLE,
+} from '../utils/popOverlay';
 import { processBlockAverage } from './blockAverageProcessor';
 import { processBlockGradient } from './blockGradientProcessor';
 import { processBlockColorPatch } from './blockColorPatchProcessor';
@@ -930,11 +934,15 @@ const MaskSyncSelect: React.FC<{
   options: MaskSyncSelectOption[];
   onOpen?: () => void;
   title?: string;
-  /** 选中项右侧打勾（与主面板 sp-picker 统一）。样本/目标下拉不传（无勾，保持 space-between 布局）。 */
+  /**
+   * 选中项右侧打勾（与主面板 Select 统一，de61f56 的样式）。
+   * 默认开启；实际是否绘制还要求「该项没有右侧注释（图层标记等）」——
+   * 即：右侧已有标记（如（像素）图层标记、笔刷图标）时不再画勾，避免视觉打架。
+   */
   showCheck?: boolean;
   /** 透传到外层 wrap，用于外部控制宽度/对齐。 */
   className?: string;
-}> = ({ value, onChange, options, onOpen, title, showCheck, className }) => {
+}> = ({ value, onChange, options, onOpen, title, showCheck = true, className }) => {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
   const headRef = useRef<HTMLDivElement>(null);
@@ -997,11 +1005,24 @@ const MaskSyncSelect: React.FC<{
 
   // UXP 限制：可编辑控件无视 z-index 永远画在最上层。弹层渲染出来后按实际矩形，
   // 只把与弹层相交的那些临时隐藏，关闭时还原。
+  // 用「会话」管理：定位变化（滚动/重排）时 update 重算，不再相交的立即还原。
   useLayoutEffect(() => {
     if (!open || !pos) return;
-    const pop = popRef.current;
-    if (!pop) return;
-    return hideOccludedTextFields(pop, getPopRoot(headRef.current));
+    const session = createOcclusionSession();
+    const root = getPopRoot(headRef.current);
+    const run = () => {
+      const pop = popRef.current;
+      if (!pop) return;
+      session.update(pop, root, estimatePopRect(pos, Math.max(options.length, 1)));
+    };
+    run();
+    // UXP 偶发在插入 DOM 当帧拿不到弹层尺寸，下一帧再补一次，避免漏隐藏
+    const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame(run) : 0;
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      session.restore();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, pos]);
 
   const sel = options.find(o => o.value === value);
@@ -1073,7 +1094,7 @@ const MaskSyncSelect: React.FC<{
             >
               <span className="mask-sync-select-opt-main">{o.main}</span>
               {o.tag && <span className="mask-sync-select-opt-tag">{o.tag}</span>}
-              {showCheck && o.value === value && (
+              {showCheck && !o.tag && o.value === value && (
                 <span className="mask-sync-select-check">
                   {/* 与主面板 sp-picker 一致的 Spectrum 对勾（选中项右侧） */}
                   <svg viewBox="0 0 36 36" width="12" height="12" aria-hidden="true" focusable="false">

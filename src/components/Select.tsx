@@ -1,7 +1,11 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { getPopRoot } from '../utils/popRoot';
-import { hideOccludedTextFields, POP_LAYER_STYLE } from '../utils/popOverlay';
+import {
+  createOcclusionSession,
+  estimatePopRect,
+  POP_LAYER_STYLE,
+} from '../utils/popOverlay';
 
 // 通用自绘下拉：与调整面板里的自绘下拉（MaskSyncSelect / BrushSelect）共用同一套
 // CSS（.mask-sync-select-*，定义在 src/adjustments/adjustment.css），因此视觉上
@@ -19,7 +23,7 @@ import { hideOccludedTextFields, POP_LAYER_STYLE } from '../utils/popOverlay';
 //   挂到 body 的弹层不会被绘制（表现为下拉完全打不开）。
 //
 // 支持：扁平列表（options）或分组带分隔线（groups）；禁用态（disabled）；
-// 选中项高亮（.sel，背景=主题主色）。
+// 选中项高亮（.sel，背景=主题主色、前景白）；无右侧标记时再补一个白色对勾。
 export interface SelectOption {
   value: string;
   label: string;
@@ -99,11 +103,24 @@ export default function Select({
 
   // UXP 限制：可编辑控件（滑块旁的 number 输入等）无视 z-index 永远画在最上层。
   // 弹层渲染出来后按实际矩形，只把与弹层相交的那些临时隐藏，关闭时还原。
+  // 用「会话」管理：定位变化（滚动/重排）时 update 重算，不再相交的立即还原。
   useLayoutEffect(() => {
     if (!open || !pos) return;
-    const pop = popRef.current;
-    if (!pop) return;
-    return hideOccludedTextFields(pop, getPopRoot(headRef.current));
+    const session = createOcclusionSession();
+    const root = getPopRoot(headRef.current);
+    const run = () => {
+      const pop = popRef.current;
+      if (!pop) return;
+      session.update(pop, root, estimatePopRect(pos, Math.max(allOptions.length, 1)));
+    };
+    run();
+    // UXP 偶发在插入 DOM 当帧拿不到弹层尺寸，下一帧再补一次，避免漏隐藏
+    const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame(run) : 0;
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      session.restore();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, pos]);
 
   const handleHeadClick = () => {
@@ -130,6 +147,16 @@ export default function Select({
       >
         <span className="mask-sync-select-opt-main">{o.label}</span>
         {o.tag && <span className="mask-sync-select-opt-tag">{o.tag}</span>}
+        {/* 选中项右侧对勾：仅在该项没有右侧标记（笔刷图标 / 图层标记）时显示，
+            与调整面板 MaskSyncSelect 的 de61f56 样式一致。勾的颜色继承 .sel 的
+            白色前景，落在主色（蓝）背景上。 */}
+        {!o.tag && o.value === value && (
+          <span className="mask-sync-select-check">
+            <svg viewBox="0 0 36 36" width="12" height="12" aria-hidden="true" focusable="false">
+              <path d="M9 16.4L14.6 22.1L27.4 9.6L29.4 11.6L14.6 26.3L9 20.4Z" fill="currentColor" />
+            </svg>
+          </span>
+        )}
       </div>
     ));
 

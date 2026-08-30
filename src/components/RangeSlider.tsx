@@ -18,6 +18,8 @@ interface RangeSliderProps {
     title?: string;
     /** 拖动结束时回调（如需要拖拽结束后再同步一次外部状态） */
     onDragEnd?: () => void;
+    /** 禁用态：不可拖动 / 键盘调节，视觉置灰 */
+    disabled?: boolean;
 }
 
 const RangeSlider: React.FC<RangeSliderProps> = ({
@@ -29,6 +31,7 @@ const RangeSlider: React.FC<RangeSliderProps> = ({
     className,
     title,
     onDragEnd,
+    disabled = false,
 }) => {
     const trackRef = useRef<HTMLDivElement>(null);
     const draggingRef = useRef(false);
@@ -69,6 +72,7 @@ const RangeSlider: React.FC<RangeSliderProps> = ({
     };
 
     const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+        if (disabled) return;
         if (e.button !== 0) return;
         e.preventDefault();
         e.stopPropagation();
@@ -93,6 +97,7 @@ const RangeSlider: React.FC<RangeSliderProps> = ({
     };
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+        if (disabled) return;
         let next: number | null = null;
         if (e.key === 'ArrowRight' || e.key === 'ArrowUp') next = value + step;
         else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') next = value - step;
@@ -109,13 +114,13 @@ const RangeSlider: React.FC<RangeSliderProps> = ({
     return (
         <div
             ref={trackRef}
-            className={`${className || ''} range-slider`}
+            className={`${className || ''} range-slider ${disabled ? 'disabled' : ''}`}
             title={title}
             role="slider"
             aria-valuemin={min}
             aria-valuemax={max}
             aria-valuenow={safeValue}
-            tabIndex={0}
+            tabIndex={disabled ? -1 : 0}
             onMouseDown={handleMouseDown}
             onKeyDown={handleKeyDown}
         >

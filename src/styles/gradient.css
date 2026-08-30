@@ -268,27 +268,15 @@ sp-color-slider {
     margin-bottom: 10px;
 }
 
-/* 径向渐变模式的紧凑布局 */
-.gradient-settings-area.radial-mode {
-    height: 12%;
-    min-height: 60px;
-    padding: 8px;
-}
-
-.gradient-settings-area.linear-mode {
-    height: 18%;
-    min-height: 80px;
-} 
 /* 渐变角度滑块样式 */
 .gradient-setting-item {
-    margin: 15px 0;
+    /* 三组（样式下拉 / 角度 / checkbox）统一用 10px 上下间距：配合 .gradient-settings-area
+       的 10px padding，下拉顶到容器上边距 == checkbox 底到容器下边距，两种模式下恒定。
+       角度行在径向模式下仅置 disabled（不再隐藏），容器高度在两种模式下保持一致，
+       不会再出现切换径向时下拉相对容器上移/间距变化的观感。 */
+    margin: 10px 0;
     display: flex;
     align-items: center;
-}
-
-/* 角度行整体视觉上移 3px，使其与上下内容间距更均衡 */
-.gradient-angle-setting {
-    transform: translateY(-3px);
 }
 
 .gradient-setting-item label {
@@ -312,7 +300,7 @@ sp-color-slider {
     display: flex;
     flex-direction: row;
     align-items: center;
-    margin: 15px 0;
+    margin: 10px 0;
 }
 /* 下拉容器保持块级：`.gradient-setting-item > div{display:flex}` 会把 wrap 变成
    flex 容器，虽然 head 已能撑满，但块级更可控（与其它面板的下拉行为一致）。 */
@@ -368,6 +356,24 @@ sp-color-slider {
     color: var(--text-color);
 }
 
+/* 渐变角度行在「径向」模式下仅禁用（不隐藏）：整体置灰、禁用指针，
+   但保留占位高度，使容器高度在线性/径向两种模式下恒定。 */
+.gradient-angle-setting.disabled label {
+    cursor: not-allowed;
+    color: var(--disabled-color);
+}
+
+.gradient-angle-setting.disabled .gradient-angle-range,
+.gradient-angle-setting.disabled input[type="number"] {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.gradient-angle-setting.disabled input[type="number"] {
+    /* 原生 number 在 UXP 下禁用态不自动置灰，手动补 */
+    color: var(--disabled-color);
+}
+
 .reverse-checkbox-group {
   margin: 10px 0;
   display: flex;
@@ -375,24 +381,10 @@ sp-color-slider {
   justify-content: space-between;
 }
 
-/* 径向渐变模式的紧凑间距 */
-.reverse-checkbox-group.compact {
-  margin: 8px 0;
-}
-
 .reverse-checkbox-container {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-/* 径向渐变模式下的紧凑容器间距 */
-.gradient-settings-area.radial-mode .reverse-checkbox-container {
-  margin: 5px 0;
-}
-
-.gradient-settings-area.radial-mode .gradient-setting-item {
-  margin: 8px 0;
 }
 
 .reverse-checkbox-container input[type="checkbox"] {

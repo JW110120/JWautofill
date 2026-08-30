@@ -1791,7 +1791,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             </div>
 
             {/* 渐变类型设置 */}
-            <div className={`gradient-settings-area ${gradientType === 'radial' ? 'radial-mode' : 'linear-mode'}`}>
+            <div className="gradient-settings-area">
                 <div className="gradient-setting-item gradient-type-setting">
                     <label>样式：</label>
                     <Select
@@ -1804,32 +1804,38 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     />
                 </div>
 
-                {gradientType === 'linear' && (
-                    <div className="gradient-setting-item gradient-angle-setting">
-                        <label onMouseDown={handleAngleMouseDown} style={{ cursor: isDraggingAngle ? 'ew-resize' : 'ew-resize' }}>角度：</label>
-                        <RangeSlider
-                            min={0}
-                            max={360}
-                            step={1}
+                {/* 角度行始终渲染：径向模式下仅置为禁用态（而非隐藏），
+                    这样 .gradient-settings-area 的容器高度在两种模式下保持一致，
+                    不会再出现切换径向时下拉相对容器上移/间距变化的观感。 */}
+                <div className={`gradient-setting-item gradient-angle-setting ${gradientType === 'radial' ? 'disabled' : ''}`}>
+                    <label
+                        onMouseDown={gradientType === 'radial' ? undefined : handleAngleMouseDown}
+                        style={{ cursor: gradientType === 'radial' ? 'not-allowed' : 'ew-resize' }}
+                    >角度：</label>
+                    <RangeSlider
+                        min={0}
+                        max={360}
+                        step={1}
+                        value={angle}
+                        className="gradient-angle-range"
+                        title="调整渐变角度"
+                        disabled={gradientType === 'radial'}
+                        onChange={(v) => setAngle(v)}
+                    />
+                    <div>
+                        <input
+                            type="number"
+                            min="0" 
+                            max="360"
                             value={angle}
-                            className="gradient-angle-range"
-                            title="调整渐变角度"
-                            onChange={(v) => setAngle(v)}
+                            disabled={gradientType === 'radial'}
+                            onChange={(e) => setAngle(Number(e.target.value))}
                         />
-                        <div>
-                            <input
-                                type="number"
-                                min="0" 
-                                max="360"
-                                value={angle}
-                                onChange={(e) => setAngle(Number(e.target.value))}
-                            />
-                          <span>°</span>
-                        </div>
+                      <span>°</span>
                     </div>
-                )}    
+                </div>
 
-                <div className={`reverse-checkbox-group ${gradientType === 'radial' ? 'compact' : ''}`}>
+                <div className="reverse-checkbox-group">
                     <div className="reverse-checkbox-container">
                         <label 
                             htmlFor="reverseCheckbox"

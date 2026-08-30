@@ -34,14 +34,21 @@ body.secondary-panel-open #app .adjustment-number-input {
     pointer-events: none !important;
 }
 
-/* 确保次级面板内的input始终可见（这些类属于主面板的次级弹层） */
+/* 确保次级面板内的 input 在常态下可见（这些类属于主面板的次级弹层）。
+   ⚠️ 注意：这里只能用「普通声明」，绝不能加 !important。
+   原因：弹层遮挡逻辑（src/utils/popOverlay.ts 的 hideOne）靠内联
+   `visibility:hidden !important` 临时隐藏与弹层相交的 number 输入；
+   若本规则写成 `visibility: visible !important`，UXP 的 CSS 引擎会把
+   样式表 !important 判在内联 !important 之上，导致次级面板（渐变/图案/
+   描边/颜色）的下拉菜单下方数字永远压不住、浮在菜单上。去掉 !important
+   后，内联 important 正常胜过本普通声明，遮挡生效且不引起布局位移。 */
 .pattern-picker input[type="number"],
 .color-settings-panel input[type="number"],
 .gradient-picker input[type="number"],
 .stroke-setting input[type="number"] {
-    visibility: visible !important;
-    opacity: 1 !important;
-    pointer-events: auto !important;
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
 }
 
 /* 确保主面板折叠状态下的input不显示 */
