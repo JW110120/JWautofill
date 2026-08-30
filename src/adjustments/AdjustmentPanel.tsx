@@ -19,7 +19,7 @@ import type { Gradient } from '../types/state';
 import './adjustment.css';
 import './adjustment-input.css';
 import { AdjustmentMenu } from '../utils/AdjustmentMenu';
-import { ExpandIcon, AddIcon, DeleteIcon } from '../styles/Icons';
+import { ExpandIcon, AddIcon, DeleteIcon, SyncIcon } from '../styles/Icons';
 import { PanelStateManager } from '../utils/PanelStateManager';
 import { maskSyncEngine, MASK_SYNC_CHANNEL_LABELS, LayerTreeEntry, MaskSyncTask, MaskSyncChannel, SyncState } from '../utils/MaskSyncEngine';
 import BrushHotkeySection from '../hotkey/BrushHotkeySection';
@@ -3079,20 +3079,34 @@ const renderMaskSyncContent = () => (
               style={{ marginLeft: '8px' }}
             />
           </div>
-          <sp-action-button
-            quiet
-            class="mask-sync-now-button"
-            onClick={() => handleMaskSyncNow(task)}
-            title="立即执行一次同步，结果会显示在上方状态行"
-          >立即同步</sp-action-button>
-          <sp-action-button
-            quiet
-            class="mask-sync-delete-button"
+          {/* 立即同步：改成与刷新一致的无边框图标按钮（--text-color / 16px），不再显示文字。
+              当样本图层 / 通道 / 目标蒙版三下拉任一项未选时禁用（灰 + 不触发同步） */}
+          {(() => {
+            const syncDisabled = !task.sampleLayerId || !task.channel || !task.targetLayerId;
+            return (
+              <div
+                role="button"
+                tabIndex={0}
+                className={`hotkey-icon-button${syncDisabled ? ' disabled' : ''}`}
+                style={{ marginLeft: 4 }}
+                title={syncDisabled ? '请先选择样本图层、通道和目标蒙版' : '立即执行一次同步，结果会显示在上方状态行'}
+                onClick={() => { if (!syncDisabled) handleMaskSyncNow(task); }}
+              >
+                <SyncIcon style={{ width: 16, height: 16, display: 'block' }} />
+              </div>
+            );
+          })()}
+          {/* 删除：复用笔刷热键的「垃圾桶」图标按钮样式（无边框、透明背景、--text-color） */}
+          <div
+            role="button"
+            tabIndex={0}
+            className="hotkey-icon-button"
+            style={{ marginLeft: 4 }}
             onClick={() => handleMaskSyncRemove(task.id)}
             title="删除该同步任务"
           >
-            <DeleteIcon style={{ width: '15px', height: '15px', display: 'block' }} />
-          </sp-action-button>
+            <DeleteIcon style={{ width: 16, height: 16, display: 'block' }} />
+          </div>
         </div>
       </div>
       );
@@ -3386,7 +3400,7 @@ return (
       .sort((a, b) => a.order - b.order)
       .map(section => renderSection(section))}
 
-    {/* 笔刷热键（全局）分区 */}
+    {/* 笔刷热键分区 */}
     <BrushHotkeySection />
 
     {/* 隐藏/显示分区模态框 */}

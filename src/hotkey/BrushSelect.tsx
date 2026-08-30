@@ -18,9 +18,10 @@ interface Props {
   onChange: (v: string) => void;
   placeholder?: string;
   title?: string;
+  style?: React.CSSProperties;
 }
 
-export default function BrushSelect({ value, options, onChange, placeholder, title }: Props) {
+export default function BrushSelect({ value, options, onChange, placeholder, title, style }: Props) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
   const headRef = useRef<HTMLDivElement>(null);
@@ -71,7 +72,7 @@ export default function BrushSelect({ value, options, onChange, placeholder, tit
   const sel = options.find(o => o.value === value);
 
   return (
-    <div className="mask-sync-select-wrap" title={title}>
+    <div className="mask-sync-select-wrap" title={title} style={style}>
       <div
         ref={headRef}
         className={`mask-sync-select-head ${open ? 'open' : ''}`}

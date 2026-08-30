@@ -53,3 +53,35 @@ export const DeleteIcon = ({ style }: { style?: React.CSSProperties }) => (
     <path className="icon-fill" d="M15.75,3H12V2a1,1,0,0,0-1-1H6A1,1,0,0,0,5,2V3H1.25A.25.25,0,0,0,1,3.25v.5A.25.25,0,0,0,1.25,4h1L3.4565,16.55a.5.5,0,0,0,.5.45H13.046a.5.5,0,0,0,.5-.45L14.75,4h1A.25.25,0,0,0,16,3.75v-.5A.25.25,0,0,0,15.75,3ZM5.5325,14.5a.5.5,0,0,1-.53245-.46529L5,14.034l-.5355-8a.50112.50112,0,0,1,1-.067l.5355,8a.5.5,0,0,1-.46486.53283ZM9,14a.5.5,0,0,1-1,0V6A.5.5,0,0,1,9,6ZM11,3H6V2h5Zm1,11.034a.50112.50112,0,0,1-1-.067l.5355-8a.50112.50112,0,1,1,1,.067Z" />
   </svg>
 );
+
+/**
+ * 录制按钮（参考 PS 原生动作面板的录制圆点）：实心圆，颜色由父级 currentColor 控制。
+ * 常态为主题色，录制中由 CSS 改为红色。几何取自 Spectrum「S Circle 18 N」但去掉透明画布矩形、
+ * 固定色改为 currentColor，以跟随主题。
+ */
+export const RecordCircleIcon = ({ style }: { style?: React.CSSProperties }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18" style={style}>
+    <circle cx="9" cy="9" r="7" fill="currentColor" />
+  </svg>
+);
+
+/**
+ * 停止/取消按钮（参考 PS「S Stop 18 N」方形停止）：圆角方块，颜色由父级 currentColor 控制，
+ * 去掉文字与边框，仅作图标；录制中点击它放弃本次录制。
+ */
+export const StopSquareIcon = ({ style }: { style?: React.CSSProperties }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18" style={style}>
+    <rect x="3" y="2" width="12" height="12" rx="0.5" fill="currentColor" />
+  </svg>
+);
+
+/**
+ * 立即同步（参考 PS「S Sync 18 N」环形双箭头）：颜色由父级 currentColor 控制（--text-color），
+ * 无边框无背景，仅作图标。
+ */
+export const SyncIcon = ({ style }: { style?: React.CSSProperties }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" height="16" viewBox="0 0 18 18" width="16" style={style}>
+    <path fill="currentColor" d="M10.5,8a.5.5,0,0,0,.5-.5v-3a.5.5,0,0,0-.5-.5H5V1.8675A.3665.3665,0,0,0,4.63451,1.5h-.004a.359.359,0,0,0-.2565.108L.0945,5.508a.36751.36751,0,0,0,0,.492L4.374,10.392a.359.359,0,0,0,.2565.108A.3665.3665,0,0,0,5,10.13651V8Z" />
+    <path fill="currentColor" d="M17.9055,12,13.626,7.608a.359.359,0,0,0-.2565-.108A.3665.3665,0,0,0,13,7.86349V10H7.5a.5.5,0,0,0-.5.5v3a.5.5,0,0,0,.5.5H13v2.1325a.3665.3665,0,0,0,.36549.36751h.004a.359.359,0,0,0,.2565-.108l4.2795-3.9A.36751.36751,0,0,0,17.9055,12Z" />
+  </svg>
+);

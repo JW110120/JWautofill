@@ -26,7 +26,7 @@
   - `config` → 落盘 + 热更新热键
   - 热键触发 → 广播 `{type:"hotkey", id, action, brush}`
 - `src/hotkey/HotkeyBridge.ts` — UXP 侧桥接：连接守护进程、`applyBrush()`（直接切笔刷）、`enumerateBrushes()`、`onConfig`/`pushConfig`。
-- `src/hotkey/BrushHotkeySection.tsx` — 调整面板新增「笔刷热键（全局）」分区：选笔刷→录制组合键→保存；支持笔刷枚举失败时降级为手动输入笔刷名。
+- `src/hotkey/BrushHotkeySection.tsx` — 调整面板新增「笔刷热键」分区：选笔刷→录制组合键→保存；支持笔刷枚举失败时降级为手动输入笔刷名。
 - `src/adjustments/AdjustmentPanel.tsx` — 挂载上述分区。
 - `src/app.tsx` — 注册总开关回调 `registerMainToggleHandler(() => this.handleButtonClick())` 并 `connectHotkeyDaemon()`。
 

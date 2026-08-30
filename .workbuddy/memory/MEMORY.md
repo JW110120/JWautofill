@@ -63,3 +63,17 @@
 - **`Read-Host` 在非交互或 stdin 被管道时抛异常**，会把可选询问变成整个脚本失败 → 必须 try/catch 兜底。
 - **删除刚被进程占用的目录要重试**（句柄释放有延迟），单次 Remove-Item 常失败。
 - **.ps1 必须纯 ASCII**：WinPS 5.1 把无 BOM 文件按 GBK 读，中文注释会造成语法错误。提交前用 `[System.Management.Automation.Language.Parser]::ParseFile` 做语法门禁。
+
+## 笔刷热键分区 & 蒙版同步 UI 约定（2026-08-30 更新）
+
+- **"主题色"的准确定义**：用户说的"主题色"是指**跟随主题的文本色** `var(--text-color)`（深色主题=白、浅色主题=黑），**不是**固定的蓝色 `var(--primary-color)`。所有图标按钮（录制圆点、停止、刷新、同步、删除）的 `color` 都用 `var(--text-color)`（或用 `currentColor` 继承父级 `--text-color`）。
+- **录制/取消按钮 = 圆形图标**（参考 PS 原生动作面板）：常态 `RecordCircleIcon`（实心圆，`currentColor`→`--text-color`）；录制中变红 `#ef5350`；取消键 `StopSquareIcon`（**方形**圆角方块 stop，非圆形 stop-circle，用户觉得圆形 stop 不和谐）；均**无文字无边框**，样式类 `.hotkey-circle-button`（圆形、26px、border:none）。两图标尺寸 16px。
+- **录制键 + 停止键紧挨成组**：两者用一个 `marginLeft:auto` 的 flex 容器包在最右，停止键 `marginLeft:4` 紧挨录制键；刷新按钮始终在左侧下拉旁（`marginLeft:4`），与右侧录制/停止键组保持间距。
+- **禁用态**：未选笔刷时录制圆点加 `.disabled` → 灰色 `var(--disabled-color)`（#848484，与 APP 总开关 `sp-switch[disabled]` 禁用灰一致）+ `cursor:not-allowed`；录制中"忙"不灰（变红优先）。
+- **刷新/删除/同步图标按钮**：共用 `.hotkey-icon-button`，**无边框无背景**纯图标（不要给它们加白边/背景，那会破坏与 PS 原生图标的观感一致性）。蒙版同步的删除垃圾桶、"立即同步"按钮都已统一改用 `.hotkey-icon-button`（`SyncIcon` 16px），不再用带边框的 `sp-action-button` + `mask-sync-now-button`/`mask-sync-delete-button`。
+- **icon hover 统一为 APP 齿轮风格**：所有图标按钮（`.hotkey-icon-button` 的 刷新/删除/同步 + `.hotkey-circle-button` 的 录制/停止）的 hover 必须 `color: var(--hover-icon)`（蓝色，深浅主题各自的 `--hover-icon`）+ 若有 `.icon-fill` 则 `fill: var(--hover-icon)`；**hover 背景不变**（不要 `background-color: var(--hover-bg)`）。与 src/styles/pattern.css 的 `.icon-button:hover` 一致。
+- **禁用态通用写法**：图标按钮禁用加 `.disabled` 类 → `color: var(--disabled-color)` + `cursor:not-allowed`，并**在 onClick 里拦截**（div 无原生 disabled）；`.icon-fill` 也要 `fill: var(--disabled-color)`（如 DeleteIcon）。录制中（`.recording`）hover 仍红 `#ef5350`，不与 disabled 冲突。
+- **录好的快捷键条目三段式**：`.hotkey-entry-row` 用「快捷键列(`.hotkey-entry-combo` 110px 定宽) 丨 名称列(`.hotkey-entry-name` flex:1) 丨 删除(`.hotkey-entry-del` 22px 定宽)」，分隔线 `丨` 用 `.hotkey-entry-sep`（opacity 0.3），因首尾两列定宽使分隔线跨条目对齐。
+- **下拉宽度约束**：`BrushSelect` 容器默认 `flex:1 1 120px` 会撑满整行，把后续图标（刷新）挤到最右。需要"刷新贴下拉、录制推最右"时，给 `BrushSelect` 传 `style={{ flex:'0 1 200px', minWidth:0 }}`，刷新 `marginLeft:4`，录制组 `marginLeft:auto`。
+- **守护进程状态色**：笔刷热键区底部 `message` 文字颜色随 `daemonConnected` 两色（绿 `#4CAF50` / 红 `#ef5350`），不再恒绿。
+- **蒙版同步「立即同步」禁用条件**：`!task.sampleLayerId || !task.channel || !task.targetLayerId` 任一项空即禁用 SyncIcon。

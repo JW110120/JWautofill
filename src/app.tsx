@@ -298,7 +298,7 @@ class App extends React.Component<AppProps, AppState> {
         try {
             if (!isDaemonConnected()) {
                 await core.showAlert({
-                    message: '守护进程未连接，无法录制快捷键。\n请到「像素调整」面板的「笔刷热键（全局）」分区点一下「加载守护进程」。'
+                    message: '守护进程未连接，无法录制快捷键。\n请到「像素调整」面板的「笔刷热键」分区点一下「加载守护进程」。'
                 });
                 return;
             }

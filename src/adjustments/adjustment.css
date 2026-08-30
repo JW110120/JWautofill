@@ -187,7 +187,7 @@
   transform: none;
 }
 
-/* 笔刷热键：图标按钮（刷新 / 删除）与面板内其它图标按钮观感一致 */
+/* 笔刷热键：图标按钮（刷新 / 删除）——无边框无背景，仅图标，与 PS 原生图标按钮一致 */
 .hotkey-icon-button {
   display: flex;
   align-items: center;
@@ -195,22 +195,138 @@
   width: 24px;
   height: 24px;
   padding: 0;
-  background-color: var(--button-bg);
+  background: transparent;
   color: var(--text-color);
-  border: 1px solid var(--border-color);
+  border: none;
   border-radius: 4px;
   cursor: pointer;
   box-sizing: border-box;
   user-select: none;
 }
 
+/* hover 与 APP 面板齿轮统一：icon 变蓝（--hover-icon），背景无变化 */
 .hotkey-icon-button:hover {
-  background-color: var(--hover-bg);
-  border-color: var(--primary-color);
+  color: var(--hover-icon);
+}
+
+.hotkey-icon-button:hover .icon-fill {
+  fill: var(--hover-icon);
 }
 
 .hotkey-icon-button:active {
   transform: scale(0.94);
+}
+
+/* 禁用态（如选区填充开关解绑时的删除图标、三下拉未选时的立即同步）：icon 灰 + 禁用光标，背景不变 */
+.hotkey-icon-button.disabled {
+  color: var(--disabled-color);
+  cursor: not-allowed;
+}
+
+.hotkey-icon-button.disabled .icon-fill {
+  fill: var(--disabled-color);
+}
+
+.hotkey-icon-button.disabled:hover {
+  color: var(--disabled-color);
+}
+
+/* 录制 / 取消：圆形图标按钮（参考 PS 原生动作面板的录制圆点），无文字无边框；
+   颜色跟随 --text-color（深色主题为白色、浅色主题为黑色），录制中变红，禁用态为灰色 */
+.hotkey-circle-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--text-color);
+  cursor: pointer;
+  box-sizing: border-box;
+  user-select: none;
+}
+
+/* hover 与 APP 面板齿轮统一：icon 变蓝（--hover-icon），背景无变化 */
+.hotkey-circle-button:hover {
+  color: var(--hover-icon);
+}
+
+.hotkey-circle-button:hover .icon-fill {
+  fill: var(--hover-icon);
+}
+
+.hotkey-circle-button:active {
+  transform: scale(0.94);
+}
+
+/* 录制中：圆点变红（停止混色，明确提示正在捕获按键） */
+.hotkey-circle-button.recording {
+  color: #ef5350;
+  cursor: default;
+}
+
+.hotkey-circle-button.recording:hover {
+  color: #ef5350;
+}
+
+/* 禁用态（未选笔刷）：图标呈灰色（与 APP 总开关禁用态 --disabled-color 一致）+ 禁用光标 */
+.hotkey-circle-button.disabled {
+  color: var(--disabled-color);
+  cursor: not-allowed;
+}
+
+.hotkey-circle-button.disabled:hover {
+  color: var(--disabled-color);
+}
+
+/* 已录制快捷键条目：快捷键 丨 名称 丨 删除 三段式。
+   快捷键列与删除列定宽、名称列 flex:1，两个分隔线因此跨条目对齐（与卡片等宽无关）。 */
+.hotkey-entry-row {
+  display: flex;
+  align-items: center;
+  padding: 6px 8px;
+  margin-top: 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 12px;
+  box-sizing: border-box;
+}
+
+.hotkey-entry-combo {
+  width: 110px;
+  flex-shrink: 0;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hotkey-entry-sep {
+  flex-shrink: 0;
+  margin: 0 8px;
+  color: var(--text-color);
+  opacity: 0.3;
+  user-select: none;
+  pointer-events: none;
+}
+
+.hotkey-entry-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  opacity: 0.8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hotkey-entry-del {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  margin-left: 6px;
 }
 
 .adjustment-swtich-container {
@@ -605,8 +721,7 @@
   fill: var(--text-color);
 }
 
-.mask-sync-add-button svg,
-.mask-sync-delete-button svg {
+.mask-sync-add-button svg {
   width: 16px;
   height: 16px;
   display: block;
@@ -975,50 +1090,5 @@
   width: auto;
 }
 
-/* 立即同步按钮（margin-right 保证与删除按钮之间 2px 间距，UXP 不支持 flex gap） */
-.mask-sync-now-button {
-  flex: 0 0 auto;
-  height: 26px;
-  padding: 0 8px;
-  font-size: 11px;
-  background: var(--button-bg);
-  border: 1px solid var(--border-color);
-  border-radius: 13px;
-  cursor: pointer;
-  color: var(--text-color);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  white-space: nowrap;
-  margin-right: 2px;
-}
-
-.mask-sync-now-button:hover {
-  background: var(--hover-bg);
-  border-color: var(--primary-color);
-}
-
-.mask-sync-delete-button {
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  background: var(--button-bg);
-  border: 1px solid var(--border-color);
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  color: var(--text-color);
-  flex: 0 0 auto;
-  margin-left: 2px; /* 与“立即同步”按钮增加 2px 间距 */
-}
-
-.mask-sync-delete-button:hover {
-  background: var(--hover-bg);
-  border-color: var(--primary-color);
-}
-
-.mask-sync-delete-button .icon-fill {
-  fill: var(--text-color);
-}
+/* 立即同步 / 删除 已统一改用 .hotkey-icon-button（无边框、透明背景、--text-color），
+   见 AdjustmentPanel.tsx 蒙版同步页脚 */

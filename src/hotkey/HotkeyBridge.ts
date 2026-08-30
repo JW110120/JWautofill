@@ -116,7 +116,7 @@ export function registerUninstallHandler(fn: () => Promise<string>) {
   uninstallHandler = fn;
 }
 export async function requestUninstall(): Promise<string> {
-  if (!uninstallHandler) return '卸载功能尚未就绪（请展开「笔刷热键（全局）」分区后重试）';
+  if (!uninstallHandler) return '卸载功能尚未就绪（请展开「笔刷热键」分区后重试）';
   try { return await uninstallHandler(); }
   catch (e: any) { return '卸载失败：' + (e?.message || String(e)); }
 }

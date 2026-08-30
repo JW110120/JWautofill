@@ -6,7 +6,7 @@ import {
   onHotkeyTriggered, disconnectDaemon, registerUninstallHandler,
   setMainToggleCombo, getMainToggleCombo
 } from './HotkeyBridge';
-import { ExpandIcon, DeleteIcon, RefreshIcon } from '../styles/Icons';
+import { ExpandIcon, DeleteIcon, RefreshIcon, RecordCircleIcon, StopSquareIcon } from '../styles/Icons';
 import BrushSelect, { BrushSelectOption } from './BrushSelect';
 
 // 笔刷热键分区：在调整面板内录制「笔刷 + 快捷键」，持久化到共享配置，
@@ -14,11 +14,6 @@ import BrushSelect, { BrushSelectOption } from './BrushSelect';
 // 注意：组合键的「录制」由 native 守护进程用 Windows 全局键盘钩子完成，
 // UXP 面板只负责选笔刷 + 发指令 + 等结果；面板本身无法稳定捕获键盘事件。
 const rowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', marginTop: 8 };
-const itemStyle: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-  padding: '6px 8px', marginTop: 6, borderRadius: 6,
-  background: 'rgba(255,255,255,0.06)', fontSize: 12
-};
 
 // 通知自动消失时间：提示是「瞬时反馈」而非常驻说明，5 秒足够读完，
 // 也避免下一次操作后还挂着上一条早已过期的提示（例如刷新完笔刷还显示"请选择"）。
@@ -62,7 +57,7 @@ export default function BrushHotkeySection() {
           ? ('热键触发：' + (info.combo ? info.combo + ' → ' : '') + '已切换笔刷「' + info.brush + '」')
           : ('热键触发失败：' + (info.combo ? info.combo + ' → ' : '') + '切换笔刷「' + info.brush + '」失败，请检查笔刷名是否与 Brushes 面板完全一致'));
       } else if (info.action === 'toggleMain') {
-        showMessage('热键触发：' + (info.combo ? info.combo + ' → ' : '') + '已切换选区填充总开关');
+        showMessage('热键触发：' + (info.combo ? info.combo + ' → ' : '') + '已切换选区填充开关');
       }
     });
     void loadBrushes(false);
@@ -201,7 +196,7 @@ export default function BrushHotkeySection() {
     if (!res) { showMessage('已取消录制'); return; }
     const combo = res.combo;
     if (mainCombo && combo === mainCombo) {
-      showMessage('该组合键已被选区填充总开关占用，请换一个');
+      showMessage('该组合键已被选区填充开关占用，请换一个');
       return;
     }
     const entry: HotkeyEntry = { id: 'bk_' + Date.now(), combo, action: 'applyBrush', brush: selectedBrush };
@@ -226,7 +221,7 @@ export default function BrushHotkeySection() {
       // 主开关不真正删除，改为「解绑」（combo 置空并落盘），
       // 这样下次打开插件不会又把默认的 Ctrl+Q 补回来；需要时可到主面板菜单重新指定。
       setMainToggleCombo('');
-      showMessage('已解绑选区填充总开关快捷键，可在主面板菜单「设置主开关快捷键」重新指定');
+      showMessage('已解绑选区填充开关快捷键，可在主面板菜单「设置主开关快捷键」重新指定');
       return;
     }
     const next = entries.filter(e => e.id !== id);
@@ -241,12 +236,6 @@ export default function BrushHotkeySection() {
     tag: brushTypes[b] || ''
   }));
 
-  // 组合键列定宽，保证不同长度的组合键不会把右侧名字挤得参差不齐
-  const comboCellStyle: React.CSSProperties = {
-    fontWeight: 500, width: 118, flexShrink: 0,
-    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
-  };
-
   return (
     <div className="adjust-expand-section">
       <div className="adjust-expand-header" onClick={() => setCollapsed(c => !c)}
@@ -254,7 +243,7 @@ export default function BrushHotkeySection() {
         <div className={`adjust-expand-icon ${collapsed ? '' : 'expanded'}`}>
           <ExpandIcon expanded={!collapsed} />
         </div>
-        <div>笔刷热键（全局）</div>
+        <div>笔刷热键</div>
       </div>
       {!collapsed && (
         <div className="adjust-expand-content expanded">
@@ -271,7 +260,7 @@ export default function BrushHotkeySection() {
               className={`adjustment-button auto compact${busy ? ' disabled' : ''}`}
               title={daemonConnected
                 ? '让守护进程退出。卸载插件前必须先断开，否则安装目录里的文件被占用删不掉'
-                : '安装并启动随插件分发的守护进程（默认的选区填充总开关 Ctrl+Q 也由它驱动）'}
+                : '安装并启动随插件分发的守护进程（默认的选区填充开关 Ctrl+Q 也由它驱动）'}
               onClick={(e) => {
                 e.stopPropagation(); // 避免冒泡到分区头部触发折叠
                 if (!busy) { if (daemonConnected) void stopDaemon(); else void loadDaemon(); }
@@ -290,11 +279,13 @@ export default function BrushHotkeySection() {
                   onChange={setSelectedBrush}
                   placeholder="选择笔刷"
                   title="选择要绑定快捷键的笔刷预设（名称需与 Brushes 面板一致）"
+                  style={{ flex: '0 1 200px', minWidth: 0 }}
                 />
-                {/* 亲密性原则：刷新紧贴下拉（6px），与右侧录制按钮用 marginLeft:auto 拉开距离 */}
+                {/* 亲密性：刷新紧贴下拉（4px），下拉宽度受约束不再撑满整行，
+                    录制圆形 icon 用 marginLeft:auto 推到最右，二者之间自然拉开距离 */}
                 <div
                   className="hotkey-icon-button"
-                  style={{ marginLeft: 6 }}
+                  style={{ marginLeft: 4 }}
                   onClick={() => void loadBrushes(true)}
                   title="刷新笔刷列表"
                 >
@@ -305,37 +296,40 @@ export default function BrushHotkeySection() {
               <sp-textfield size="s" placeholder="输入笔刷预设名（需与 PS 完全一致）" style={{ flex: '1 1 auto', minWidth: 0 }}
                 value={selectedBrush} onInput={(e: any) => setSelectedBrush(e.target.value)} />
             )}
-            <div
-              role="button"
-              tabIndex={0}
-              className={`adjustment-button auto${(recording || !selectedBrush) ? ' disabled' : ''}`}
-              style={{ marginLeft: 'auto' }}
-              title={
-                '选中一支笔刷后点这里，然后在任意位置按下要绑定的组合键即可。\n' +
-                '可绑定的键：字母 A-Z、数字 0-9、F1-F24，以及 ; \' , . / - = ` [ ] \\ 等符号键，\n' +
-                '还有方向键 / 空格 / 回车 / 退格 / Tab / Insert / Delete / Home / End / PageUp / PageDown\n' +
-                '以及小键盘 Num0-Num9。录制由守护进程的全局键盘钩子完成，无需面板获得焦点。\n' +
-                '录制中按 Esc 取消。'
-              }
-              onClick={(e) => {
-                e.stopPropagation();
-                if (!recording && selectedBrush) void startRecord();
-              }}
-            >
-              {recording ? '录制中…' : '录制快捷键'}
-            </div>
-            {recording && (
+            {/* 录制键 + 停止键作为一个整体推到最右，二者紧挨（停止键 marginLeft:4）；
+                刷新按钮始终在左侧下拉旁，与右侧录制/停止键组保持间距 */}
+            <div style={{ display: 'flex', alignItems: 'center', marginLeft: 'auto' }}>
               <div
                 role="button"
                 tabIndex={0}
-                className="adjustment-button auto"
-                style={{ marginLeft: 6 }}
-                title="放弃本次录制（等同于在录制过程中按 Esc）"
-                onClick={(e) => { e.stopPropagation(); cancelRecord(); }}
+                className={`hotkey-circle-button${recording ? ' recording' : ''}${!selectedBrush ? ' disabled' : ''}`}
+                title={
+                  '选中一支笔刷后点这个圆点，然后在任意位置按下要绑定的组合键即可。\n' +
+                  '可绑定的键：字母 A-Z、数字 0-9、F1-F24，以及 ; \' , . / - = ` [ ] \\ 等符号键，\n' +
+                  '还有方向键 / 空格 / 回车 / 退格 / Tab / Insert / Delete / Home / End / PageUp / PageDown\n' +
+                  '以及小键盘 Num0-Num9。录制由守护进程的全局键盘钩子完成，无需面板获得焦点。\n' +
+                  '录制中按 Esc 取消。'
+                }
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!recording && selectedBrush) void startRecord();
+                }}
               >
-                取消
+                <RecordCircleIcon style={{ width: 16, height: 16, display: 'block' }} />
               </div>
-            )}
+              {recording && (
+                <div
+                  role="button"
+                  tabIndex={0}
+                  className="hotkey-circle-button"
+                  style={{ marginLeft: 4 }}
+                  title="放弃本次录制（等同于在录制过程中按 Esc）"
+                  onClick={(e) => { e.stopPropagation(); cancelRecord(); }}
+                >
+                  <StopSquareIcon style={{ width: 16, height: 16, display: 'block' }} />
+                </div>
+              )}
+            </div>
           </div>
           {!usePicker && (
             <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>
@@ -345,26 +339,37 @@ export default function BrushHotkeySection() {
 
           <div style={{ marginTop: 10 }}>
             {entries.length === 0 && <div style={{ fontSize: 12, opacity: 0.6 }}>尚未绑定任何快捷键</div>}
-            {entries.map(e => (
-              <div key={e.id} style={itemStyle}>
-                {/* 快捷键列定宽：不同长度的组合键不再把笔刷名挤得不对齐 */}
-                <span style={comboCellStyle}>{e.combo || '未绑定'}</span>
-                <span style={{ opacity: 0.8, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {e.action === 'applyBrush' ? e.brush : '选区填充总开关'}
-                </span>
-                <div
-                  className="hotkey-icon-button"
-                  style={{ width: 22, height: 22, marginLeft: 6 }}
-                  title={e.action === 'toggleMain' ? '解绑选区填充总开关快捷键' : '删除此快捷键'}
-                  onClick={() => removeEntry(e.id)}
-                >
-                  <DeleteIcon style={{ width: 13, height: 13, display: 'block' }} />
+            {entries.map(e => {
+              const isMainToggle = e.action === 'toggleMain';
+              // 选区填充开关解绑（combo 为空）时，右侧删除图标禁用
+              const delDisabled = isMainToggle && !e.combo;
+              return (
+                <div key={e.id} className="hotkey-entry-row">
+                  {/* 快捷键列定宽：不同长度的组合键不再把名称挤得不对齐；分隔线因此跨条目对齐 */}
+                  <span className="hotkey-entry-combo">{e.combo || '未绑定'}</span>
+                  <span className="hotkey-entry-sep">丨</span>
+                  <span className="hotkey-entry-name">
+                    {isMainToggle ? '选区填充开关' : e.brush}
+                  </span>
+                  <span className="hotkey-entry-sep">丨</span>
+                  <div
+                    className={`hotkey-icon-button hotkey-entry-del${delDisabled ? ' disabled' : ''}`}
+                    title={isMainToggle ? (delDisabled ? '选区填充开关已解绑' : '解绑选区填充开关快捷键') : '删除此快捷键'}
+                    onClick={() => { if (!delDisabled) removeEntry(e.id); }}
+                  >
+                    <DeleteIcon style={{ width: 13, height: 13, display: 'block' }} />
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
-          {message && <div style={{ fontSize: 12, color: '#4CAF50', marginTop: 8 }}>{message}</div>}
+          {/* 底部说明文字：颜色随守护进程状态变化（已连接=绿，断开=红），不再恒为绿色 */}
+          {message && (
+            <div style={{ fontSize: 12, color: daemonConnected ? '#4CAF50' : '#ef5350', marginTop: 8 }}>
+              {message}
+            </div>
+          )}
         </div>
       )}
     </div>
