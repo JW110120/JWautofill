@@ -1,6 +1,12 @@
 /* 调整面板样式 */
 
-/* 授权/试用状态提示样式 */
+/* 授权/试用状态提示样式。
+   ⚠️ .adjustment-container 是 flex 列 + overflow-y:auto，默认 flex-shrink:1 会让本卡片在
+   下方分区展开、内容超出高度时被纵向压缩到只剩文字高度。
+   flex:none（= flex:0 0 auto）+ min-height 锁定 30px，保证任何展开组合下都不被压缩。
+   ⚠️ 不要指望 z-index 让它浮在锁定遮罩之上：遮罩是 position:fixed，
+      UXP 下 fixed 元素绘制在普通内容之上，z-index 再高也会被盖住。
+      正确做法见 AdjustmentPanel.tsx —— 锁定态时把卡片渲染进遮罩内部。 */
 .license-status-banner {
   display: flex;
   align-items: center;
@@ -12,36 +18,78 @@
   border-radius: 4px;
   margin-bottom: 6px;
   font-size: 12px;
+  /* 实测定稿（2026-08-31）：宽度就用 100%，右边距问题与 width 无关——
+     根因是锁定态曾把卡片塞进 position:fixed 遮罩内部，遮罩包含块比普通
+     内容区宽（不扣滚动条），卡片右缘整体右移被滚动条压住。
+     现在卡片永远留在普通文档流（此处），遮罩从卡片下方开始（见下方遮罩注释）。 */
   width: 100%;
   height: 30px;
+  min-height: 30px;
+  flex: none;
+  box-sizing: border-box;
+  position: relative;
 }
 
+/* 未激活锁定遮罩（绘画工具箱）：与激活弹窗遮罩同源（--overlay-scrim），
+   盖住激活提示卡片下方的全部面板内容。
+
+   ⚠️ top / height 由 AdjustmentPanel 以内联样式给定（卡片存在时 top:46px、
+   height:calc(100% - 46px)）——遮罩从卡片下方开始，卡片永远留在普通文档流里。
+   绝不要把卡片渲染进本遮罩内部：fixed 遮罩的包含块比普通内容区宽（不扣滚动条），
+   卡片进遮罩后右缘会整体右移、被滚动条压住，margin/width 都补不回来（实测）。
+
+   position:fixed 而非 absolute：absolute 会随 .adjustment-container 的滚动一起滚动。
+
+   遮罩背景色统一由 theme.ts 定义（不透明度恒定 0.80，按主题调颜色深浅），
+   此处不再写 background-color，避免组件/样式表顺序导致覆盖或 var() 解析失效。 */
+.adjustment-lock-overlay {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  box-sizing: border-box;
+  z-index: 9997;
+}
+
+/* 指示灯与蒙版同步引擎状态灯 .mask-sync-status-dot 保持一致：8px、margin-right 6px、圆形、带辉光 */
 .license-status-banner .badge-dot {
-  width: 6px;
-  height: 6px;
-  margin-right: 4px;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
   border-radius: 50%;
-  background: rgb(76, 175, 80);
+  flex: none;
+  background: rgb(46, 204, 113);
+  box-shadow: 0 0 4px rgba(46, 204, 113, 0.6);
   display: inline-block;
 }
 
+/* 未激活/过期态：与蒙版同步引擎的 warn（橙）灯一致，而非红，保证两处指示灯语义统一 */
 .license-status-banner .badge-dot.danger {
-  background: rgb(239, 83, 80);
+  background: rgb(243, 156, 18);
+  box-shadow: 0 0 4px rgba(243, 156, 18, 0.6);
 }
 
-.license-status-banner .trial-expired {
-  color: var(--notify-fail-fg);
-}
-
+/* 试用中态：沿用主题通知配色（绿）。
+   该态不会锁定，卡片直接压在面板底色上，所以用主题感知的 --notify-ok-*。 */
 .license-status-banner.is-trial {
   background: var(--notify-ok-bg);
   border-color: var(--notify-ok-border);
 }
 
+/*
+ * 未激活/过期态（橙色）：只在锁定态出现 —— 卡片压在半透明遮罩之上，
+ * 而浅色主题（light/lightest）的遮罩是中性灰，此时 --notify-warn-fg
+ * （深橙 rgb(180,83,9)）与背景亮度太接近，橙字和橙边框几乎看不见。
+ * 故文字与边框一律改用与状态灯完全相同的橙色 rgb(243,156,18)；
+ * 背景改成半透明黑（而非半透明橙）——否则橙底 + 橙字两者亮度依旧接近，
+ * 换色也救不回来，四主题下反差都才够。
+ */
 .license-status-banner.is-expired {
-  background: var(--notify-fail-bg);
-  border-color: var(--notify-fail-border);
+  background: rgba(0, 0, 0, 0.55);
+  border-color: rgb(243, 156, 18);
 }
+
 .license-status-banner .trial-status {
   font-weight: 600;
   flex: 1 1 auto;
@@ -52,8 +100,9 @@
   text-overflow: ellipsis;
 }
 
+/* 与 .badge-dot.danger 状态灯同色（见上方 .is-expired 说明） */
 .license-status-banner .trial-expired {
-  color: var(--notify-fail-fg);
+  color: rgb(243, 156, 18);
   font-weight: 600;
   flex: 1 1 auto;
   font-size: 12px;
@@ -64,6 +113,14 @@
 }
 
 .adjustment-container {
+  /*
+   * 面板滚动条宽度。容器自身滚动时会把它从内容区里扣掉——
+   * 这正是普通文档流里的 .license-status-banner 边距「正确」的原因：
+   * 它由滚动条感知的普通内容盒决定。锁定遮罩不装任何内容（从卡片下方开始），
+   * 因此不再需要任何滚动条宽度补偿。
+   * ⚠️ 改这个值时要同步改下面 ::-webkit-scrollbar 的 width（两者必须一致）。
+   */
+  --adjust-scrollbar-w: 10px;
   width: 100%;
   height: 100%;
   max-height: 100%;
@@ -83,7 +140,9 @@
   overflow-x: hidden;
 }
 
-/* 调整面板专属滚动条（仅作用于第二入口容器） */
+/* 调整面板专属滚动条（仅作用于第二入口容器）。
+   ⚠️ width 必须与 .adjustment-container 的 --adjust-scrollbar-w 保持一致；
+   这里刻意写字面值 10px —— 伪元素里用 var() 在 UXP 下不保证解析。 */
 .adjustment-container::-webkit-scrollbar {
   width: 10px;
 }

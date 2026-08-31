@@ -6,6 +6,7 @@
 const { entrypoints } = require("uxp");
 
 import { AdjustmentMenu } from './AdjustmentMenu';
+import { LicenseManager } from './LicenseManager';
 
 export class MenuManager {
   // 主面板 APP 的回调
@@ -13,6 +14,8 @@ export class MenuManager {
   private static appResetLicenseCallback: (() => void) | null = null;
   private static appResetParametersCallback: (() => void) | null = null;
   private static appSetMainHotkeyCallback: (() => void) | null = null;
+  // 是否已正式激活（试用不算）：决定「注销激活状态」菜单项能否点击
+  private static appLicenseActive: boolean = false;
 
   constructor() {
     // Constructor
@@ -34,12 +37,69 @@ export class MenuManager {
   }
 
   /**
+   * 同步「注销激活状态」菜单项的可用状态。
+   * 规则：仅正式激活后可点击；未激活与试用状态下均为禁用。
+   * 说明：UXP 动态更新菜单项走 getPanel(id).menuItems.getItem(id) 后直接改属性；
+   *       不同版本 API 名称不统一，故依次尝试 getItem → updateItem → 直接改数组项，
+   *       全部失败也只是菜单项保持旧状态（handler 里还有一层拦截）。
+   */
+  public static setLicenseLogoutEnabled(active: boolean): void {
+    this.appLicenseActive = !!active;
+    try {
+      const ep: any = (require("uxp") as any).entrypoints;
+      const panel: any = ep && typeof ep.getPanel === "function"
+        ? ep.getPanel("com.listen2me.jwautofill")
+        : null;
+      const menuItems: any = panel && (panel as any).menuItems;
+      if (!menuItems) return;
+
+      // 官方动态更新方式：getItem(id) 取到菜单项后直接改属性
+      if (typeof (menuItems as any).getItem === "function") {
+        const item = (menuItems as any).getItem("resetLicense");
+        if (item) {
+          item.enabled = !!active;
+          return;
+        }
+      }
+      if (typeof (menuItems as any).updateItem === "function") {
+        (menuItems as any).updateItem("resetLicense", { enabled: !!active });
+        return;
+      }
+      const list: any[] = Array.isArray(menuItems) ? menuItems : ((menuItems as any).items || []);
+      const item = list.find((it: any) => it && it.id === "resetLicense");
+      if (item) {
+        item.enabled = !!active;
+      }
+    } catch (err) {
+      console.warn("更新「注销激活状态」菜单项状态失败:", err);
+    }
+  }
+
+  /**
    * 处理主面板（App）菜单项点击事件
    */
   private static handleAppFlyout(id: string) {
     console.log(`App Flyout: ${id}`);
     switch (id) {
       case "resetLicense":
+        // 双保险：菜单项本身在未激活/试用时为 disabled，此处再拦一次
+        if (!this.appLicenseActive) {
+          // 极端情况下（UXP 菜单项 enabled 未同步成功）异步复核一次真实授权：
+          // 只有确认是「正式激活且非试用」才放行，避免试用态被注销。
+          LicenseManager.getLicenseState()
+            .then((s) => {
+              if (s.isLicensed && !s.isTrial) {
+                this.appLicenseActive = true;
+                this.appResetLicenseCallback?.();
+              } else {
+                console.warn("注销激活状态：当前未正式激活，忽略操作");
+              }
+            })
+            .catch(() => {
+              console.warn("注销激活状态：状态复核失败，忽略操作");
+            });
+          break;
+        }
         if (this.appResetLicenseCallback) {
           this.appResetLicenseCallback();
         }
@@ -102,11 +162,17 @@ export class MenuManager {
           menuItems: [
             {
               id: "resetLicense",
-              label: "重置激活状态（仅调试）"
+              label: "注销激活状态",
+              // 默认禁用：仅在正式激活（非试用）后由 setLicenseLogoutEnabled(true) 放开
+              enabled: false
             },
             {
               id: "openLicenseDialog",
               label: "打开激活与试用面板"
+            },
+            {
+              id: "spacerApp0",
+              label: "-" // 分隔符（打开激活与试用面板 与 参数复位 之间）
             },
             {
               id: "resetAppParameters",

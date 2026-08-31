@@ -1,4 +1,4 @@
-/* adjustments 第二入口：输入样式（精简版）
+/* adjustments 第二入口：输入样式（精简版） */
 
 /* 当"隐藏/显示分区"模态框打开时，彻底隐藏调整面板内所有 number 输入，避免穿透与交互 */
 body.visibility-panel-open #pixeladjustment input[type="number"],
@@ -17,6 +17,21 @@ body.visibility-panel-open #pixeladjustment .adjustment-number-input,
 body.visibility-panel-open #pixeladjustment .unit-container input[type="number"],
 body.visibility-panel-open #pixeladjustment .unit-container .adjustment-number-input {
   /* 不再使用 display:none，改为完全透明并禁用交互，保留布局占位 */
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* 未激活锁定遮罩（.adjustment-lock-overlay）打开时，隐藏本面板内所有可编辑控件。
+   原因：UXP 官方 Known Issues —— input 属于原生视图，永远绘制在同面板最上层，
+   z-index / transform / 层级都压不住，否则会浮在遮罩上方。
+   做法与主面板（body.license-dialog-open）一致：由 AdjustmentPanel 在锁定态
+   给 body 加 .adjustment-lock-open，此处统一隐藏（保留布局占位，不做 display:none）。
+   ⚠️ 必须带 !important：要压过下面 .adjust-expand-content.expanded 的 visibility:visible 规则。 */
+body.adjustment-lock-open #pixeladjustment input,
+body.adjustment-lock-open #pixeladjustment textarea,
+body.adjustment-lock-open #pixeladjustment .adjustment-number-input,
+body.adjustment-lock-open #pixeladjustment .unit-container input {
   visibility: hidden !important;
   opacity: 0 !important;
   pointer-events: none !important;

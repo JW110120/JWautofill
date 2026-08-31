@@ -340,6 +340,8 @@ const specialWoodcutPreviewBaselineRef = useRef<{
 const [isLicensed, setIsLicensed] = useState(false);
 const [isTrial, setIsTrial] = useState(false);
 const [trialDaysRemaining, setTrialDaysRemaining] = useState(0);
+// 许可证检查是否已完成：避免异步检查返回前锁定遮罩闪现（已激活用户会看到一瞬间的遮罩）
+const [licenseChecked, setLicenseChecked] = useState(false);
 
 // 分区状态管理
 const [sections, setSections] = useState<SectionConfig[]>(defaultSections);
@@ -403,6 +405,24 @@ useEffect(() => {
     document.removeEventListener('license-updated', onLicenseUpdated as EventListener);
   };
 }, []);
+
+/**
+ * 锁定遮罩打开时给 body 加类，由 input-fix.css 隐藏本面板内的所有可编辑控件。
+ * 原因：UXP 官方 Known Issues —— text field / number input 是原生视图，
+ * 永远绘制在同面板最上层，z-index 与层级都压不住，会浮在遮罩之上。
+ * 与主面板（body.license-dialog-open）同一套做法。
+ */
+useEffect(() => {
+  const locked = licenseChecked && !isLicensed && !isTrial;
+  if (locked) {
+    document.body.classList.add('adjustment-lock-open');
+  } else {
+    document.body.classList.remove('adjustment-lock-open');
+  }
+  return () => {
+    document.body.classList.remove('adjustment-lock-open');
+  };
+}, [licenseChecked, isLicensed, isTrial]);
 
 useEffect(() => {
   refreshLineReferenceOptions();
@@ -1258,31 +1278,10 @@ useEffect(() => {
 }, []);
 const checkLicenseStatus = async () => {
   try {
-    // 与 app.tsx 保持一致：使用静态方法
-    const status = await LicenseManager.checkLicenseStatus();
-
-    // 统一逻辑：TRIAL_ 开头的密钥始终视为试用，不计入正式授权
-    const cachedInfo: any = (status && status.info) || await (LicenseManager as any).getCachedLicense?.();
-    const isTrialKey = cachedInfo && cachedInfo.key && String(cachedInfo.key).startsWith('TRIAL_');
-
-    // 试用到期判断（仅当是试用时才判断）
-    const expired = isTrialKey ? await LicenseManager.isTrialExpired() : false;
-
-    // 正式授权仅在非试用且 isValid 为 true 时成立
-    const licensed = !!status.isValid && !isTrialKey;
-
-    // 试用状态：具有 TRIAL_ 且未过期
-    let days = 0;
-    if (isTrialKey && cachedInfo && cachedInfo.expiryDate) {
-      const expire = new Date(cachedInfo.expiryDate).getTime();
-      days = Math.max(0, Math.ceil((expire - Date.now()) / (24 * 60 * 60 * 1000)));
-    }
-    const trial = !!isTrialKey && !expired;
-
-    // 自动重新验证：仅对正式许可证执行，避免对 TRIAL_ 触发无意义的网络验证
-    if (status.needsReverification && !isTrialKey) {
-      try { await LicenseManager.autoReverifyIfNeeded(); } catch {}
-    }
+    // 统一判定（唯一事实来源）：与 app.tsx 共用 LicenseManager.getLicenseState()，
+    // 避免两处判定逻辑漂移导致「试用被当作已激活」之类的问题。
+    const { isLicensed: licensed, isTrial: trial, trialDaysRemaining: days } =
+      await LicenseManager.getLicenseState();
 
     setIsLicensed(licensed);
     setIsTrial(trial);
@@ -1294,6 +1293,8 @@ const checkLicenseStatus = async () => {
     setIsLicensed(false);
     setIsTrial(false);
     setTrialDaysRemaining(0);
+  } finally {
+    setLicenseChecked(true);
   }
 };
 
@@ -3425,23 +3426,49 @@ const renderSection = (section: SectionConfig) => (
   </div>
 );
 
+const licenseLocked = licenseChecked && !isLicensed && !isTrial;
+
+/* 激活提示卡片节点：试用中 或 未激活且试用已结束 时显示 */
+const bannerNode = (isTrial || (!isLicensed && !isTrial && trialDaysRemaining === 0)) ? (
+  <div className={`license-status-banner ${isTrial ? 'is-trial' : 'is-expired'}`}>
+    {isTrial && trialDaysRemaining > 0 ? (
+      <>
+        <span className="badge-dot" />
+        <span className="trial-status">试用还剩 {trialDaysRemaining} 天</span>
+      </>
+    ) : (
+      <>
+        <span className="badge-dot danger" />
+        <span className="trial-expired">需要在选区填充面板激活</span>
+      </>
+    )}
+  </div>
+) : null;
+
 return (
   <div className="adjustment-container" ref={rootRef}>
-    {/* 试用状态提示 - 仅在试用中或试用结束时显示 */}
-    {(isTrial || (!isLicensed && !isTrial && trialDaysRemaining === 0)) && (
-      <div className={`license-status-banner ${isTrial ? 'is-trial' : 'is-expired'}`}>
-        {isTrial && trialDaysRemaining > 0 ? (
-          <>
-            <span className="badge-dot" />
-            <span className="trial-status">试用还剩 {trialDaysRemaining} 天</span>
-          </>
-        ) : (
-          <>
-            <span className="badge-dot danger" />
-            <span className="trial-expired">需要在主面板激活</span>
-          </>
-        )}
-      </div>
+    {/*
+     * 激活提示卡片 + 锁定遮罩（2026-08-31 二次定稿）：
+     * ⚠️ 卡片必须永远留在普通文档流里渲染，绝不能塞进 position:fixed 的遮罩内部。
+     *    原因：fixed 遮罩的包含块比普通内容区更宽（不扣右侧滚动条），
+     *    卡片一旦进遮罩，右缘就会整体右移、被滚动条压住——
+     *    margin-right/width 怎么补都不对（实测 50% 宽度时右缘也异常右移，可复现）。
+     *    而未锁定时卡片在普通文档流里的边距实测是正确的，所以两边统一用文档流。
+     * 遮罩改为「从卡片下方开始」：top = 容器 padding-top 10 + 卡片高 30 + 下边距 6 = 46px，
+     * 卡片区域不被遮罩盖住（它本来就要可见），遮罩照样盖住下方全部内容。
+     * 卡片不是可编辑控件（无 input），顶部 46px 不遮不拦没有副作用；
+     * 可编辑控件仍由 body.adjustment-lock-open 统一隐藏（见 adjustment-input.css）。
+     */}
+    {bannerNode}
+    {licenseLocked && (
+      <div
+        className="adjustment-lock-overlay"
+        style={
+          bannerNode
+            ? { top: '46px', height: 'calc(100% - 46px)' }
+            : { top: '10px', height: 'calc(100% - 10px)' }
+        }
+      />
     )}
 
     {/* 渲染可见的分区，按order排序 */}

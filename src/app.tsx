@@ -1163,31 +1163,10 @@ class App extends React.Component<AppProps, AppState> {
     // ===== 许可证相关方法 =====
     async checkLicenseStatus() {
         try {
-            // 先查看本地缓存
-            const status = await LicenseManager.checkLicenseStatus();
-            let isLicensed = status.isValid;
-            let isTrial = false;
-            let trialDaysRemaining = 0;
-
-            // 如果不是正式许可证，检查是否处于试用并是否过期
-            if (!isLicensed) {
-                const expired = await LicenseManager.isTrialExpired();
-                // 读取缓存看看是否是试用
-                const cachedInfo: any = (status && status.info) || await (LicenseManager as any).getCachedLicense?.();
-                const isTrialKey = cachedInfo && cachedInfo.key && String(cachedInfo.key).startsWith('TRIAL_');
-                isTrial = !!isTrialKey && !expired;
-
-                if (isTrialKey && cachedInfo && cachedInfo.expiryDate) {
-                    const expire = new Date(cachedInfo.expiryDate).getTime();
-                    const diffDays = Math.max(0, Math.ceil((expire - Date.now()) / (24 * 60 * 60 * 1000)));
-                    trialDaysRemaining = diffDays;
-                }
-            }
-
-            // 自动重新验证（宽松：失败不阻止）
-            if (status.needsReverification) {
-                try { await LicenseManager.autoReverifyIfNeeded(); } catch {}
-            }
+            // 统一判定（唯一事实来源）：TRIAL_ 密钥只算试用，永不计入正式授权。
+            // 早期版本这里直接取 status.isValid，导致试用态被误判为「已激活」，
+            // 重载后「注销激活状态」菜单项在试用态下依然可点。
+            const { isLicensed, isTrial, trialDaysRemaining } = await LicenseManager.getLicenseState();
 
             // 控制对话框打开逻辑：首次启动若未授权则打开
             this.setState({
@@ -1196,9 +1175,15 @@ class App extends React.Component<AppProps, AppState> {
                 trialDaysRemaining,
                 isLicenseDialogOpen: !(isLicensed || isTrial)
             });
+            // 「注销激活状态」只有正式激活（非试用）才可点击
+            MenuManager.setLicenseLogoutEnabled(isLicensed && !isTrial);
+            // 检查完成后广播一次：绘画工具箱监听此事件、经 getLicenseState 的
+            // 记忆化缓存立即拿到同一份结果 —— 两面板的锁定遮罩/弹窗同刻出现。
+            document.dispatchEvent(new Event('license-updated'));
         } catch (e) {
             console.warn('检查许可证状态失败:', e);
             this.setState({ isLicensed: false, isTrial: false, isLicenseDialogOpen: true });
+            MenuManager.setLicenseLogoutEnabled(false);
         }
     }
 
@@ -1206,6 +1191,11 @@ class App extends React.Component<AppProps, AppState> {
         this.setState({ isLicensed: true, isTrial: false, isLicenseDialogOpen: false });
         // 对话框关闭，移除类名恢复输入框
         document.body.classList.remove('license-dialog-open');
+        // 在弹窗关闭的同刻广播：绘画工具箱的锁定遮罩随之解除，两遮罩同步消失。
+        // （广播不能更早 —— LicenseDialog 验证成功后还要停留 800ms 展示「激活成功！」）
+        document.dispatchEvent(new Event('license-updated'));
+        // 正式激活后可注销
+        MenuManager.setLicenseLogoutEnabled(true);
     }
 
     handleTrialStarted() {
@@ -1213,6 +1203,10 @@ class App extends React.Component<AppProps, AppState> {
         this.setState({ isLicensed: false, isTrial: true, isLicenseDialogOpen: false, trialDaysRemaining: 7 });
         // 对话框关闭，移除类名恢复输入框
         document.body.classList.remove('license-dialog-open');
+        // 同上：弹窗关闭同刻广播，工具箱同步切换到试用态（横幅变绿、不锁定）
+        document.dispatchEvent(new Event('license-updated'));
+        // 试用状态不允许注销
+        MenuManager.setLicenseLogoutEnabled(false);
     }
 
     closeLicenseDialog() {
@@ -1249,6 +1243,8 @@ class App extends React.Component<AppProps, AppState> {
                 isLicenseDialogOpen: true,
                 trialDaysRemaining: 0
             });
+            // 注销后回到未激活态，菜单项重新禁用
+            MenuManager.setLicenseLogoutEnabled(false);
             
             console.log('许可证状态已重置，可重新测试授权流程');
         } catch (error) {

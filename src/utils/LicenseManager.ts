@@ -8,11 +8,28 @@ export interface LicenseInfo {
     lastVerified: number;
 }
 
+/** 统一授权状态（getLicenseState 的返回结构） */
+export interface LicenseState {
+    isLicensed: boolean;
+    isTrial: boolean;
+    trialDaysRemaining: number;
+    expired: boolean;
+    needsReverification: boolean;
+}
+
 export class LicenseManager {
     private static readonly STORAGE_KEY = 'jwautofill_license';
     // 采用完全离线的本地白名单验证：不再使用任何在线验证地址
     // 为防君子不防小人，做轻度混淆：normalize -> reverse -> 插入盐
     private static readonly OFFLINE_SALT = 'JWAF_SALT_v1';
+
+    /*
+     * getLicenseState 的记忆化缓存：主面板与绘画工具箱同文档同 bundle、共享同一 JS 上下文，
+     * 并发调用共享同一个 Promise —— 两面板在同一 tick 拿到同一份结果，
+     * 激活弹窗与工具箱锁定遮罩因此能同刻出现（而不是各自读一遍文件、先后出现）。
+     * 保存/清除许可证时必须置空缓存（见 saveLicenseInfo / clearLicense）。
+     */
+    private static stateCache: Promise<LicenseState> | null = null;
 
     // TODO: 将下方示例替换为你实际发放的100个激活码，经 obfuscate 处理后的结果
     // 示例原始激活码（便于你理解和测试）：
@@ -198,7 +215,68 @@ export class LicenseManager {
     }
 
     /**
+     * 统一的授权状态判定 —— 全局唯一事实来源（带记忆化，见 stateCache 注释）。
+     *
+     * 规则：
+     * - key 以 `TRIAL_` 开头 → 一律视为「试用」，永不构成正式授权（试用过期则视为失效）
+     * - 其它 key 且缓存 isValid === true → 正式授权
+     *
+     * 背景（2026-08-31 bug）：试用许可证落盘时同样写入 `isValid: true`，
+     * 若调用方只取 `status.isValid` 就会把「试用」误判成「已激活」，
+     * 表现就是重载后「注销激活状态」菜单项在试用态下仍可点击。
+     * 因此 app.tsx（主面板）与 AdjustmentPanel.tsx（选区填充面板）
+     * 必须共用此方法，禁止各自再写一遍判定逻辑。
+     */
+    static getLicenseState(): Promise<LicenseState> {
+        if (!this.stateCache) {
+            this.stateCache = this.computeLicenseState();
+        }
+        return this.stateCache;
+    }
+
+    private static async computeLicenseState(): Promise<LicenseState> {
+        const fallback = { isLicensed: false, isTrial: false, trialDaysRemaining: 0, expired: false, needsReverification: false };
+        try {
+            const status = await this.checkLicenseStatus();
+            const cachedInfo: any = status.info || (await this.getCachedLicense());
+            const key = cachedInfo && cachedInfo.key ? String(cachedInfo.key) : '';
+            const isTrialKey = key.startsWith('TRIAL_');
+
+            // 只有 TRIAL_ 才带 expiryDate，故过期判断只对试用生效
+            const expired = isTrialKey ? await this.isTrialExpired() : false;
+
+            let trialDaysRemaining = 0;
+            if (isTrialKey && cachedInfo && cachedInfo.expiryDate) {
+                const expire = new Date(cachedInfo.expiryDate).getTime();
+                trialDaysRemaining = Math.max(0, Math.ceil((expire - Date.now()) / (24 * 60 * 60 * 1000)));
+            }
+
+            // 自动复验只对正式授权执行，避免对 TRIAL_ 触发无意义的网络请求
+            if (status.needsReverification && !isTrialKey) {
+                try { await this.autoReverifyIfNeeded(); } catch (e) { /* 复验失败不阻断 */ }
+            }
+
+            return {
+                isLicensed: !!status.isValid && !isTrialKey && !expired,
+                isTrial: isTrialKey && !expired,
+                trialDaysRemaining,
+                expired,
+                needsReverification: !!status.needsReverification
+            };
+        } catch (error) {
+            console.error('读取授权状态失败:', error);
+            return fallback;
+        }
+    }
+
+    /**
      * 保存许可证信息到本地存储
+     *
+     * ⚠️ 这里【不】广播 license-updated（2026-08-31 定稿）：
+     * 激活/试用成功后主面板弹窗还要停留 800ms 展示「激活成功！」，
+     * 若保存瞬间就广播，绘画工具箱会比弹窗关闭早 800ms 解锁——两遮罩不同步。
+     * 广播时机统一改到主面板弹窗关闭那一刻（app.tsx handleLicenseVerified /
+     * handleTrialStarted 里 dispatch）。这里只做缓存失效，保证下次读取拿到新状态。
      */
     private static async saveLicenseInfo(licenseInfo: LicenseInfo): Promise<void> {
         try {
@@ -206,7 +284,7 @@ export class LicenseManager {
             const dataFolder = await localFileSystem.getDataFolder();
             const licenseFile = await dataFolder.createFile('license.json', { overwrite: true });
             await licenseFile.write(JSON.stringify(licenseInfo), { append: false });
-            this.broadcastStatusChanged();
+            this.stateCache = null;
         } catch (error) {
             console.error('保存许可证信息失败:', error);
         }
@@ -234,6 +312,8 @@ export class LicenseManager {
 
     /**
      * 清除许可证信息
+     *
+     * 注销时立即广播：主面板弹窗与工具箱锁定遮罩在同一 tick 出现，天然同步。
      */
     static async clearLicense(): Promise<void> {
         try {
@@ -245,6 +325,7 @@ export class LicenseManager {
             } catch (fileError) {
                 // 文件不存在，忽略
             }
+            this.stateCache = null;
             this.broadcastStatusChanged();
         } catch (error) {
             console.error('清除许可证信息失败:', error);

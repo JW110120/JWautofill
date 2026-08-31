@@ -1,64 +1,42 @@
 # JWautofill 项目长期记忆
 
-## 一、设计语言与设计规范
+## 一、设计规范
 
-### 颜色表示法（硬性约定）
-- **禁止 HEX，一律用 rgb()/rgba()**（2026-08-30 全量转换 src 下 .css/.ts/.tsx 完成）。新增颜色代码不得再写 #xxxxxx。
-- 所有颜色走 theme.ts 主题变量，禁止硬编码：
-  - `--bg-color` 面板背景；`--text-color` 文字（主题色，非固定蓝）；`--entry-bg` 行/卡片背景（深主题比 bg 浅、浅主题比 bg 深）；`--border-color`；`--disabled-color`；`--primary-color` 主色。
-  - **下拉背景** `--dropdown-bg-color` 四主题固定值：darkest `rgb(32,32,32)` / dark `rgb(57,57,57)` / light `rgb(218,218,218)` / lightest `rgb(255,255,255)`。
-  - **状态/文字通知** `--notify-{ok,fail,warn}-{fg,bg,border}`：深主题用亮色（ok `rgb(74,222,128)`/fail `rgb(255,107,107)`/warn `rgb(255,183,77)`），浅主题用深色（ok `rgb(21,128,61)`/fail `rgb(198,40,40)`/warn `rgb(180,83,9)`）。状态通知容器背景=`var(--bg-color)`。
+### 颜色（硬性约定）
+- 禁止 HEX，一律 rgb()/rgba()；走 theme.ts 主题变量，禁止硬编码：
+  `--bg-color` 面板背景；`--text-color` 文字（主题色，非固定蓝）；`--entry-bg` 行/卡片背景（深比 bg 浅、浅比 bg 深）；`--border-color`；`--disabled-color`；`--primary-color` 恒定 `rgb(38,128,235)`；`--hover-bg` 主色 10~35% 透明；`--button-bg`；`--dropdown-bg-color` 四主题固定值 darkest `rgb(32,32,32)`/dark `rgb(57,57,57)`/light `rgb(218,218,218)`/lightest `rgb(255,255,255)`；`--link-color` 深底亮蓝/浅底深蓝；`--notify-{ok,fail,warn}-{fg,bg,border}` 深主题亮色、浅主题深色。
+- **遮罩配色（定稿）**：不透明度恒 0.80，主题只调颜色深浅——`darkest rgba(0,0,0,.80)` / `dark rgba(29,29,29,.80)` / `light rgba(92,92,92,.80)` / `lightest rgba(128,128,128,.80)`。
+  **写法硬性要求**：字面 rgba 写在 `src/styles/theme.ts` 末尾 `.license-dialog-overlay,.adjustment-lock-overlay{background-color:…}` + `@media (prefers-color-scheme:…)` 块，**绝不用 `var(--overlay-scrim)`**（UXP 对动态注入 var() 解析不稳定→整条声明被丢，遮罩能拦点击却背景不绘制）。
+- **面板命名**：`com.listen2me.jwautofill`=选区填充主面板(`src/app.tsx`，激活弹窗 LicenseDialog 在此)；`com.listen2me.pixeladjustment`=绘画工具箱(`src/adjustments/AdjustmentPanel.tsx`，激活横幅在此)。「主面板」=选区填充面板。
 
-### 下拉/选择器规范
-- 统一用自绘组件 `src/components/Select.tsx`（BrushSelect 同款），CSS `.mask-sync-select-*` 定义在 `src/adjustments/adjustment.css`、全局可用。
-- 主面板 4 个下拉（app.tsx 混合模式 / GradientPicker 渐变类型 / PatternPicker 缩放 / StrokeSetting 混合模式）已统一改用 Select。**不再用 `sp-picker`/`sp-menu`**（其展开菜单背景在 UXP 下无法用 CSS 覆盖）。
-- **下拉弹层必须 `createPortal` 到「所在面板的根容器」（渲染在最上层）**：`.mask-sync-select-pop` 现为 `position:fixed; z-index:99998`（高于滑块 thumb 10000~10001 与标准 `input[type=number]`，低于模态遮罩 99999）+ `display:block` + `min-width:96px` + 显式 `font-family`（脱离面板后不再继承面板字体）。
-  - **挂载点用 `src/utils/popRoot.ts` 的 `getPopRoot(from)`**：从下拉头部沿 `parentElement` 上溯找 `#app` / `#pixeladjustment`，兜底 `uxp-panel`，最后才 body。
-  - **绝不能挂 `document.body`（血泪坑）**：index.html 里 body 下有两个 `<uxp-panel>`，**UXP 只渲染当前激活的那个 panel 子树**，挂到 body 的弹层落在所有 uxp-panel 之外、根本不绘制——表现为「所有下拉菜单都打不开」。挂到面板根容器既脱离面板内层叠上下文（仍能盖在最上层、不受 `overflow` 裁剪），又仍在被渲染的子树内。
-  - **为什么必须 portal（硬性）**：面板容器 `.pattern-picker{z-index:9999;position:sticky}`、`.gradient-picker{z-index:10;position:sticky}` 都创建层叠上下文，弹层 z-index 再高也被困在上下文内，盖不住上下文之外的元素。
-  - `Select.tsx` 与 `AdjustmentPanel.tsx` 的 `MaskSyncSelect` 两处实现必须保持一致。
-- **下拉头部必须撑满 wrap**：`.mask-sync-select-wrap > .mask-sync-select-head{flex:1 1 auto;width:100%;min-width:0}`（adjustment.css）。
-- **选中项样式（全项目统一，基准=de61f56 的调整面板）**：选中行 `.mask-sync-select-opt.sel` 背景=`rgb(38, 128, 235)`（字面色值，不要用 `var(--primary-color)`——UXP portal 子树里解析不稳定会回退成面板底色）前景白；**仅当该项没有右侧标记（笔刷图标 / （像素）等图层 tag）时**在行尾渲染对勾 `.mask-sync-select-check`（svg `fill="currentColor"` 自动变白，`margin-left:auto` 右对齐）。有 tag 时不画勾，避免与标记打架。头部（闭合态）只显示 value + tag + 箭头，不画勾。
-- **下拉头部内部元素防覆盖**：`.mask-sync-select-wrap .mask-sync-select-value / .mask-sync-select-caret` 用「两级类」写（特异性 0,2,0），否则会被面板级 `.xxx-item span{...}`（0,1,1）覆盖导致箭头不右对齐、字号不一致。面板里给 span 定样式一律写成 `.xxx > div > span` 这类精确子选择器。因为面板里大量存在 `.xxx-setting-item div{display:flex}` 这类规则，会把 wrap 变成 flex 容器，head 作为 flex item 会退化到内容宽度（几十 px），导致下拉框异常窄、弹层（宽度=head 宽度）跟着变窄、选项文字换行看着像两列。
+### LicenseDialog（激活/试用弹窗）
+- 遮罩 `padding:10px` + 卡片 `width:100%`（面板250px→卡片230px，上/左/右恒10px）；按钮用原生 `<button class="license-btn">` 对齐全局 button 规则（`--button-bg`+`--border-color`+圆角4），全宽32px；间距一律 margin、不用 flex gap；标题14/600 vs 正文12；卡片圆角3px（对齐 `.slider-container`）。
+- **「联系作者」链接**：① 必须用**可点击 `<span role="button">`，绝不用 `<a>`**——UXP 强制用自带链接色渲染 `<a>` 文字、作者 color 被忽略（深色主题回退默认暗蓝、比下划线深一截），`<span>` 文字色才完全受 CSS 控制；② 组件 `<style>` 内**不得用 `var(--link-color)`**（UXP 对动态子树 var() 解析不稳、整条声明被丢）→ 按四主题**字面色 + `@media` 写死**（深底亮蓝/浅底深蓝，取值同 `--link-color`）；③ 容器不设 opacity（连带压暗链接），仅普通文字用 `.license-contact-dim{opacity:.7}`；④ 外链 `onClick` 调 `shell.openExternal`；下划线用 `border-bottom`，勿 `text-decoration`。
 
-### 排版规范（通用布局）
-- **一行两个「标签 + 控件(checkbox/switch/input)」统一用 `.field-row-two`**（定义在 `src/styles/styles.css`，全局类）：`.field-row-two > .field-cell`(flex:1 等宽，可多个) `> .field-cell-label`(标签容器) + `.field-cell-control`(控件小容器)。参考主面板底部 checkbox 区结构。**今后此类排版一律用此结构，禁止临时 inline 拼凑。**
-- 下拉「标签 + 下拉同行、下拉自适应宽度、二者占满整行」参考边缘平滑「平滑模式」：容器 `flex-direction:row; align-items:center`；**标签取内容宽度 `flex:0 0 auto;white-space:nowrap`**（不要用 `flex:1 1 auto` 撑满，也不要给下拉设 px 上限——UXP 下会把下拉压窄到选项换行/横排），下拉（`.mask-sync-select-wrap`）`flex:1 1 auto; min-width:0` 自适应占满剩余整行。例：渐变「样式」下拉 `.gradient-type-setting`；其标签与下方「角度：」标签用同一条 `.gradient-setting-item > label` 规则，保证两行控件左端对齐。与「标签占满整行 + 下拉全宽」纵向堆叠是两套不同需求，按需选用。
-- **渐变「角度」行约定（用户拍板）**：径向模式下**置 disabled 而非隐藏**（行始终渲染、保留占位高度），以保持 `.gradient-settings-area` 容器高度在线性/径向两种模式下恒定，避免切换时下拉相对容器上移/间距变化的观感。禁用态：RangeSlider/input 传 `disabled`、`label` 去掉拖拽 `onMouseDown` + 光标 `not-allowed`，样式见 `.gradient-angle-setting.disabled`（label 用 `--disabled-color`、滑块/数字 `opacity:0.4`）。`gradient-settings-area` 基础块恒定 `height:18%;min-height:80px;overflow-y:auto`，不要再加 `radial-mode`/`linear-mode`/`compact` 这类按模式改高度的死样式。
-- **一行两组 checkbox 的对齐**：整行用 `.field-row-two`，左组内容靠行左端、右组内容靠行右端——`.xxx.field-row-two > .field-cell:first-child{justify-content:flex-start}` + `> .field-cell:last-child:not(:only-child){justify-content:flex-end}`（`:not(:only-child)` 保证只有一组时仍左对齐）。例：图案面板平铺态 `.pattern-checkbox-container`。
-- **主面板底部大 checkbox 容器（`.checkbox-main-container`）间距规范（用户拍板）**：容器 `height` 固定 + `padding:15px 0`（上下内边距**相等**），内部 `.checkbox-label-container`/`.checkbox-input-container` 用 `justify-content:space-around` 让「顶部留白 / 相邻行距 / 底部留白」三者恒等。整体收放只调这一处 `padding` 与 `height`，**不要**去改子容器的 `space-around` 或加 margin。**新增选项时：`height` 必须同步增高（约 +26px/行），以保证上下内边距相等、相邻两行行距相等**（行距由 space-around 自动均分）。详见 `src/styles/styles.css` 该类的注释。
+### 激活横幅对齐（2026-08-31 二次定稿，推翻上一版）
+- **`.license-status-banner` 永远留在普通文档流渲染，绝不能塞进 `position:fixed` 遮罩内部**：fixed 遮罩包含块比普通内容区宽（不扣滚动条），卡片进遮罩后右缘整体右移被滚动条压住，`margin-right`/`width` 都补不回来（实测 50% 宽度也异常右移）。文档流里的边距实测正确 → 宽度定稿 `width:100%`。
+- 锁定遮罩 `.adjustment-lock-overlay` **从卡片下方开始**：JSX 内联 `top:46px`（容器 padding-top 10 + 卡片 30 + 下边距 6）、`height:calc(100% - 46px)`（无卡片的边缘情形 top:10px）；基础 CSS 只留 left/right/bottom/width/z-index。遮罩不装任何内容 → 无需任何 `--adjust-scrollbar-w` 补偿（该方案已废弃）。
 
-### UI 约定（笔刷热键 & 蒙版同步）
-- 主题色=`var(--text-color)`；图标按钮无边框无背景纯图标，hover 蓝；禁用态 `.disabled`→`color:var(--disabled-color)`+`cursor:not-allowed`+onClick 拦截；录制中红 `rgb(239,83,80)` 优先。
-- 蒙版同步：`status-bar` 在容器外；卡片列表只裹 task+add-row；状态色 已连 `rgb(46,204,113)`/断开 `rgb(243,156,18)`。
+### 双面板授权状态同步（2026-08-31 定稿）
+- `LicenseManager.getLicenseState()` 带**记忆化**（`stateCache` 静态 Promise；同 bundle 共享 JS 上下文，两面板共享同一次存储读取）→ 启动时弹窗与工具箱遮罩同刻出现；`saveLicenseInfo`/`clearLicense` 必须置空缓存。
+- **广播时机**：激活/试用成功 → `saveLicenseInfo` **不广播**（否则工具箱比弹窗早 800ms 解锁），由 app.tsx `handleLicenseVerified`/`handleTrialStarted` 在**弹窗关闭同刻** dispatch `license-updated`；注销 → `clearLicense` 立即广播（弹窗同 tick 打开，天然同步）。app.tsx `checkLicenseStatus` 完成后也 dispatch 一次。
 
-### 架构/结构规范
-- 入口 `src/index.tsx`：`#app`+`#pixeladjustment` 同文档同 bundle；`MenuManager.setup()`；蒙版同步引擎 `MaskSyncEngine.ts` 单例。
-- 底部 checkbox 区（app.tsx）：4 项；`switchToLassoOnEnable`/`autoOffOnOtherTool` 持久化 `settings/panel-state.json`，默认 false opt-in。
-- 主开关联动：切套索先直连 `action.batchPlay` 失败再回退 `core.executeAsModal`；两选项存 panel-state.json，勿放 MainToggleBus。
-- 提交约定（硬性）：每次 commit 必须 `git add -A` 纳入 `.workbuddy/memory/` 全部记忆与日志。
+## 二、下拉/选择器
+- 统一自绘 `src/components/Select.tsx`，CSS `.mask-sync-select-*` 在 `adjustment.css`；不再用 `sp-picker`/`sp-menu`。弹层 `createPortal` 到面板根容器（`#app`/`#pixeladjustment`，`utils/popRoot.ts`），**绝不挂 body**（UXP 只渲染当前激活 uxp-panel 子树）。`.mask-sync-select-pop{position:fixed;z-index:99998;min-width:96px}`。选中项背景**写死 `rgb(38,128,235)`**（portal 子树 var() 不稳，勿用 `var(--primary-color)`）。头部/内部元素用「两级类」(`.mask-sync-select-wrap .xxx`) 防面板 `div>span` 规则覆盖。
 
-## 二、避坑指南
+## 三、架构
+- 入口 `src/index.tsx`：`#app`+`#pixeladjustment` 同文档同 bundle；`MenuManager.setup()`；蒙版同步 `MaskSyncEngine.ts` 单例。
+- **授权状态唯一来源 `LicenseManager.getLicenseState()`**（返回 `{isLicensed,isTrial,trialDaysRemaining,expired,needsReverification}`）：`app.tsx` 与 `AdjustmentPanel.tsx` 都必须用它，禁止各自判定。`TRIAL_` 开头永远算试用、永不正式；只对 TRIAL 判过期；自动复验只对正式授权。
+- 提交约定：每次 commit `git add -A` 纳入 `.workbuddy/memory/` 全部记忆与日志。
+- 面向画师文案：代码称「守护进程/daemon」，用户可见文案统一叫「快捷键服务」（状态栏/按钮/通知/菜单）。守护进程静默架构：exe WinExe 不弹控制台、日志落 `%LOCALAPPDATA%\JWautofill\daemon\daemon.log`、`EnsureSelfInstalled()` 自拷贝+注册 HKCU\Run。
 
-- **改内联样式想覆盖 CSS 时，先查对方有没有 `!important`（血泪坑）**：`src/styles/input-fix.css` 里有 `.gradient-picker/.pattern-picker/.color-settings-panel/.stroke-setting input[type="number"]{visibility:visible!important;opacity:1!important}`，**普通内联样式（author 普通声明）层叠顺序低于 author `!important`，写了也白写**。必须 `el.style.setProperty(prop, val, 'important')` —— important 内联与 author important 同 origin 层，再靠内联最高特异性取胜。还原时要用 `getPropertyValue` + `getPropertyPriority` 记录原始值+优先级，空则 `removeProperty`。
-- **UXP 可编辑控件穿透弹层是硬限制**（官方 Known Issues：text field 永远画在同面板最上层，z-index/transform/portal 都无效）。当前方案：`utils/popOverlay.ts` 的 `createOcclusionSession()`（`{update(popEl,root,fallbackRect), restore()}`），按弹层**实际矩形**只隐藏与其相交的 input/textarea/sp-textfield，`visibility:hidden!important + opacity:0!important + pointer-events:none!important`，跳过 `document.activeElement`，关闭时逐个还原。调用约定：`useLayoutEffect([open,pos])` 跑一次 + `requestAnimationFrame` 补一次（UXP 偶发插入当帧量不到尺寸，用 `estimatePopRect` 兜底），cleanup 里 `cancelAnimationFrame` + `restore()`。**绝不可退回「打开下拉就隐藏面板内所有数字输入」**（观感诡异，用户明确否决）。
-- **UXP/React**：`addNotificationListener` 首参须字符串数组；React19 dev 白屏→入口最优先 import `uxpPerfPatch.ts`；仓库统一 LF；`.info-plane` 须 `position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:250px;height:20px;z-index:2000`；元素凭空消失先查祖先 `max-height`/`overflow:hidden`。
-- **算法**：分块补色 cand 用 `distanceToMask`；清像素须显式清零；扣白/扣黑公式与 N 计算见历史日志。
-- **Windows 守护进程/全局热键**：C# `System.Text.Json` 须 CamelCase+CaseInsensitive；钩子回调只 Enqueue+PostThreadMessage，绝不网络/同步 I/O；`.ps1` 纯 ASCII；会话沙箱回收后台子进程需 HKCU Run 自启。
-- **面向画师的 UI 命名约定**：代码/注释/日志里仍称「守护进程 / daemon」，但**用户可见文案统一叫「快捷键服务」**（状态栏、按钮、通知、提示、菜单项）。按钮动词用「启动/停止」（不用「加载/断开」），更口语、去技术/AI 味。改动只在 `BrushHotkeySection.tsx` / `app.tsx` / `MenuManager.ts` 的展示字符串，不动标识符与日志。
-  - **守护进程静默架构（2026-08-31 落地）**：exe 编译为 **WinExe（GUI 子系统）**，永不弹控制台窗口；日志改落盘 `%LOCALAPPDATA%\JWautofill\daemon\daemon.log`（`Program.RedirectConsoleToFile` 在 Main 首行把 stdout/stderr 重定向到文件）。
-  - **自安装**：`Program.EnsureSelfInstalled()` 在 Main 里把自身拷贝/哈希同步到 `%LOCALAPPDATA%\JWautofill\daemon\`、注册 HKCU\Run 开机自启（指向安装目录副本）、再从安装目录重新拉起自身后退出；面板只静默 `shell.openPath(publish/JWautofillHotkeyDaemon.exe)`，**不再经 install.bat/install.ps1 的弹窗包装**。
-  - **卸载静默**：面板「卸载」走 WebSocket `type:"uninstall"` → 守护进程 `DoUninstall()` 移除自启 + 1s 后 `rmdir /s /q` 删安装目录 + 退出；仅在未连接时才回退到会弹窗的 uninstall.bat。
-  - **加载/卸载反馈一律走面板文字通知**（`BrushHotkeySection.showMessage`），不再依赖任何 cmd/PowerShell 窗口。
-- **跨面板热键**：`connectHotkeyDaemon()` 须幂等；主开关跨面板用 `settings/main-toggle.json` 共享，热键只翻共享态不直接调回调。
-- **批量删除顺序**：先删笔刷条目（setEntries+pushConfig）再解绑主开关（setMainToggleCombo('')），反序会复原已删条目。
-- **sp-menu 不可 CSS 改背景** → 一律用自绘 Select，勿再引入 sp-picker。
-- **【UXP 坑·已纠正】选中项背景不要用 `var(--primary-color)`**：自绘下拉弹层 `createPortal` 到 `#app`（`<Provider>` 根容器内）后，实测 `.sel` 的 `background: var(--primary-color, ...)` 在该子树里解析不到主色蓝、回退成面板底色（`--bg-color` 观感），CSS/JS 都正确也救不了。已确认 **Spectrum 的 `<Provider>` 根本没定义 `--primary-color`**（最初猜测是它覆盖，后经 `grep -rno` 验证为假），真凶是 **UXP 在 portal 子树里对 `var()` 的解析不稳定**。**最终修复**：`.mask-sync-select-opt.sel` 与 `.mask-sync-select-head.open` 的背景/边框直接写**字面色值 `rgb(38, 128, 235)`**（四套主题里 `--primary-color` 本就恒定为此值，故与主题完全一致、且不依赖变量解析）。`.mask-sync-select-pop`/`.wrap` 上的局部 `--primary-color` 声明保留作冗余兜底。
-- **自绘下拉弹层用 `createPortal` 到「面板根容器」解决层级，绝不用「隐藏数字」的 hack**：靠 z-index（曾 10002）不够——面板容器自身创建层叠上下文会把弹层困住。打开弹层时给 `body` 加 `mask-sync-pop-open` 类、再靠 CSS `visibility:hidden` 隐藏数字输入的旧方案已废弃（观感诡异）。`Select.tsx` 与调整面板 `MaskSyncSelect` 均已移除该 class 开关，对应 CSS 规则已删除。
-- **面板内禁止写 `.xxx-item div{}` 这类通配后代选择器**：`.gradient-setting-item div{display:flex}` 曾命中下拉弹层（弹层当时为面板内 div 且未声明 display），把弹层变成 flex 行容器，导致「线性/径向」两个选项并排成两列。通用样式一律用子选择器 `>` 限定层级，或给组件根/内部元素显式声明 `display`。
-- **同理禁止 `.xxx-item span{}` 这类后代规则**：`.gradient-setting-item span{font-size:13px;margin-left:-4px}`（特异性 0,1,1）会盖掉自绘下拉内部的 `.mask-sync-select-caret{margin-left:auto}`（0,1,0），表现为箭头紧贴文字、字号与其它下拉不一致。**防御手段**：下拉头部内部元素一律用「两级类」写（`.mask-sync-select-wrap .mask-sync-select-value/.mask-sync-select-caret`，特异性 0,2,0），面板级规则就盖不住。
-- **popOverlay 三个关键坑（UXP 下缺一不可，渐变「样式」下拉漏检即此三连）**：
-  1. **【决定性根因·渐变等次级面板下拉漏检】`input-fix.css` 的次级面板 input 规则绝不能带 `!important`**：该文件有 `.gradient-picker/.pattern-picker/.color-settings-panel/.stroke-setting input[type=number]{visibility:visible!important;...}`，本意“确保次级面板输入可见”。**但 UXP 的 CSS 引擎在 important 级会把「样式表 !important」判在「内联 !important」之上（与标准层叠相反）**——于是遮挡逻辑的内联 `visibility:hidden!important` 永远赢不了它，表现就是「次级面板的下拉菜单下方数字始终浮在菜单上、其它（主面板 #app 下无此规则）下拉却正常」。隐藏本身仍用 `el.style.setProperty('visibility','hidden','important')`（连同 opacity/pointer-events）+ 逐字还原；**但根治手段是去掉那条 `!important`**（降级为普通声明），使内联 important 正常胜出、且不引起布局位移（visibility 保留占位）。
-  2. **遮挡矩形必须锚定 `pos`，绝不信任 measured.top/left**：UXP 下刚 portal 出的 `position:fixed` 弹层 `getBoundingClientRect()` 坐标（top/left）常错乱（0 或远超真实值），只有高宽偶尔可信。弹层 `left/top/width` 本就由我们写成 `pos`（下拉头部 rect + head.bottom+2），故 `update()` 用 `estimatePopRect(pos,…)` 的 `fallbackRect`（X/Y/width 全来自 pos）锚定，**高度取 `max(measuredH, fallbackH)`**（兜底 `min(200, max(90, n*24+12))`，足以盖住短菜单正下方 number 输入）。
-  3. **候选控件自身矩形会退化（0 尺寸）**：UXP 原生 number/text 输入（尤其次级面板 `.gradient-picker` 这类 `z-index:9999` 作用域）常返回 0 宽高——画得出来但 JS 量不到。旧逻辑 `r.width<=0||r.height<=0` 就 `continue` 跳过，导致「角度」数字压在弹层上却不隐藏。用 `robustRect(el)` 逐级向上（自身→父包裹 div→更上层容器，≤4 级）取第一个有效尺寸矩形做相交判定。
-  - 调用侧：`useLayoutEffect([open,pos])` 跑一次 + `requestAnimationFrame` 补一次（UXP 插入当帧常量不到尺寸），cleanup `cancelAnimationFrame`+`restore()`。绝不再用「打开下拉就隐藏所有 number 输入」的 hack。
+## 四、UXP 避坑（硬限制）
+- 原生 `<input>`：① `background:transparent` 绘制成纯黑→input 与 wrap 同色 `--dropdown-bg-color`；② 原生绘制区高于 CSS 盒且 `overflow:hidden` 裁不掉→input 26px in wrap 34px（上下各留4px缓冲）。聚焦态用 React `onFocus/onBlur` 切 `.is-focused`，勿 `:focus-within`。`appearance:none` 消 UA 异色外圈。
+- `flex gap` 不可靠→一律 margin。容器 `opacity` 会连带压暗子链接→只给文字降透明。
+- `<a href>` 不唤起浏览器→`shell.openExternal`；且 UXP **强制用自带链接色渲染 `<a>` 文字、作者 color 被忽略**（深色主题下回退暗蓝）→ 自定义色链接一律用可点击 `<span role="button">`。`text-decoration:underline` 不可靠→`border-bottom`。
+- 锁定/模态遮罩下隐藏可编辑控件：`body.adjustment-lock-open #pixeladjustment input,textarea` / `body.license-dialog-open #app …` + `visibility:hidden!important;opacity:0!important;pointer-events:none!important`（写在 `adjustment-input.css`/`input-fix.css`，必须带 `!important`）。
+- `flex` 列里固定高度卡片须 `flex:none`+`min-height`+`box-sizing:border-box` 防压缩。
+- 面板禁止写 `.xxx-item div{}`/`span{}` 通配后代选择器（会命中自绘弹层）。
+
+## 五、算法
+- 分块补色/渐变/线稿引导/alpha 对齐见历史日志；清像素须显式清零；扣白/扣黑公式与 N 计算见当日记录。
