@@ -1265,8 +1265,8 @@ class App extends React.Component<AppProps, AppState> {
                     onTrialStarted={this.handleTrialStarted}
                     onClose={this.closeLicenseDialog}
                 />
-                <div className="container">
-                <h3 className="title" 
+                <div className="selection-fill-container">
+                <h3 className="selection-fill-title" 
 title={`● 生成选区时，插件会自动根据选择的模式填充/删除内容。
 
 ● 选区模式只有作为【新选区】时，才会触发自动填充，加选，减选，交叉选择不会自动填充。
@@ -1275,9 +1275,9 @@ title={`● 生成选区时，插件会自动根据选择的模式填充/删除�
 
 ● 由于每次生成选区后，插件会立刻执行若干个步骤。因此想要撤销本次的自动填充，建议回溯历史记录。`
 }>
-                    <span className="title-text">选区填充2.0</span>                    
+                    <span className="selection-fill-title-text">选区填充2.0</span>                    
                 </h3>
-                <div className="button-container">
+                <div className="main-button-container">
                     <div 
                     role="button"
                     tabIndex={0}
@@ -1291,17 +1291,17 @@ title={`● 功能开启后，PS工具栏羽化参数设为0时，自动填充�
 
 ● 依次按下【Enter → 数字0 → Enter】，可以把羽化值改回0，恢复自动填充。`
 }>
-                        <div className="button-content">
-                            <div className={`button-indicator ${this.state.isEnabled ? 'enabled' : 'disabled'}`}></div>
-                            <span className={`button-text ${!this.state.isEnabled ? 'disabled' : ''}`}>
+                        <div className="main-button-content">
+                            <div className={`main-button-indicator ${this.state.isEnabled ? 'enabled' : 'disabled'}`}></div>
+                            <span className={`main-button-text ${!this.state.isEnabled ? 'disabled' : ''}`}>
                                 {this.state.isEnabled ? '功能开启' : '功能关闭'}
                             </span>
                         </div>
                     </div>
                 </div>
 
-                <div className="blend-mode-container">
-                    <span className={`blend-mode-label ${this.state.clearMode ? 'disabled' : ''}`} 
+                <div className="selection-fill-blend-mode-container">
+                    <span className={`selection-fill-blend-mode-label ${this.state.clearMode ? 'disabled' : ''}`} 
 title={`● 混合模式支持纯色，图案和渐变三种模式。描边的混合模式需要在描边的面板中独立设置。
   
 ● 在新建图层模式下：该混合模式下拉菜单修改的是新建图层的混合模式。至于本次在新图层中填充的内容，采取的混合模式是【正常】。

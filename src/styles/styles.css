@@ -11,8 +11,8 @@
 }
 
 html, body {
-  height: 100%;
-  margin: 0;
+  height: 100%;  
+  width: 100%;
   padding: 0;
   display: flex;
   justify-content: center;
@@ -36,19 +36,17 @@ uxp-panel[panelid="com.listen2me.jwautofill"],
   overflow: hidden;
 }
 
-.container {
+.selection-fill-container {
   width: 250px;
-  min-height: 310px;
   height: 100%;
   max-height: 100%;
   box-sizing: border-box;
   overflow-y: auto;
   background-color: var(--bg-color);
-  padding: 0 10px 20px;  /* 左右 10px 保证内容区 230px 居中；底部 20px 留给 fixed info-plane */
+  padding: 10px; 
   display: flex;
   flex-direction: column;
   position: relative;  /* 作为子面板 absolute 定位的包含块 */
-  top: 0;  /* 确保容器从顶部开始 */
 }
 
 /* 次级面板打开时禁止主容器滚动，避免内容在子面板后方滚动 */
@@ -97,10 +95,10 @@ body.secondary-panel-open .container {
   border-radius: 8px;
 }
 
-.title {
+.selection-fill-title {
   text-align: center;
   font-weight: bold;
-  padding: 5px 0;
+  padding: 0 0 10px 0px; 
   border-bottom: 1px solid var(--border-color);
   color: var(--text-color);
   position: relative;
@@ -110,17 +108,14 @@ body.secondary-panel-open .container {
   z-index: 3000; /* 确保标题及右上角入口位于顶部 */
 }   
 
-.title-text {
+.selection-fill-title-text {
   font-size: 20px;
 }
 
-.title-beta {
-  font-size: 10px;
-}
-
-.button-container {
+.main-button-container {
   align-items: center; 
-  margin: 5px 0 10px 0;
+  margin: 10px 0 10px 0; 
+  padding: 0px;
   height: 50px;
   position: relative;
   display: flex;
@@ -130,7 +125,7 @@ body.secondary-panel-open .container {
 .main-button {
   border-radius: 4px;
   cursor: pointer;
-  height: 50px;
+  height: 100%;
   width: 80%;
   display: flex;
   justify-content: center;
@@ -167,24 +162,24 @@ body.secondary-panel-open .container {
     color: rgba(128, 128, 128, 0.7); /* 略微提高禁用状态下的文字透明度 */
 }
 
-.button-content {
+.main-button-content {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 100%;
-  transform: translateX(-6px);  /* 交换状态灯与文字后整体左移 5px，避免视觉偏右 */
+  transform: translateX(-5px);  /* 交换状态灯与文字后整体左移 5px，避免视觉偏右 */
 }
 
-.button-text {
+.main-button-text {
   font-size: 16px;
   font-weight: bold;
 }
 
-.button-text.disabled {
+.main-button-text.disabled {
   color: rgba(128, 128, 128, 0.5);
 }
 
-.button-indicator {
+.main-button-indicator {
   width: 13px;
   height: 13px;
   border-radius: 50%;
@@ -192,28 +187,28 @@ body.secondary-panel-open .container {
   flex-shrink: 0;
 }
 
-.button-indicator.enabled {
+.main-button-indicator.enabled {
   /* 与 AdjustmentPanel 绿灯一致 */
   background-color: rgb(46, 204, 113);
 }
 
-.button-indicator.disabled {
+.main-button-indicator.disabled {
   background-color: rgba(128, 128, 128, 0.5);
 }
 
-.blend-mode-container {
+.selection-fill-blend-mode-container {
   display: flex;
-  margin-bottom: -35px;
+  margin-bottom: -10px;
   align-items: center;
   background-color: var(--bg-color);
   position: relative;  
-  width: calc(100% - 34px);  
+  width: calc(100% - 20px);  
   left: 50%;
   transform: translateX(-50%);
   isolation: isolate; /* 添加这一行 */
 }
 
-.blend-mode-label {
+.selection-fill-blend-mode-label {
   font-size: 13px;
   color: var(--text-color);
 }
@@ -243,28 +238,25 @@ sp-radio[disabled] {
 }
 
 .slider-container {
+  width: 100%;
   background-color: var(--bg-color);
   border: 1px solid var(--border-color);
   border-radius: 3px;
-  padding: 10px 12px 8px 3px;
-  margin-top: 22px;
-  margin-bottom: 5px;
+  padding: 0;
+  margin: 0 auto;
   z-index: 1;       /* 确保在混合模式容器下方 */
 }
 
 .slider-label {
   font-size: 13px;
-  padding-top: 10px;
+
   color: var(--text-color);
-  padding-left: 10px;
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
 
 .slider-value {
-  margin-right: 10px;
-
   font-size: 13px;
   color: var(--text-color);
 }
@@ -278,9 +270,8 @@ sp-radio[disabled] {
 }
 
 .slider-input {
-  width: 210px;
-  margin-top: -5px;
-  margin-left: 6px;
+  width: calc(100% - 20px);
+  margin: 0 auto;
   cursor: pointer;
   display: flex;
   justify-content: center;
