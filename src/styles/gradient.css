@@ -120,12 +120,17 @@
 }
 
 .opacity-input input[type="number"] {
-  width: 40px;
+  width: 54px;
   height: 24px;
   padding: 2px 4px;
   border: 1px solid var(--border-color);
   border-radius: 4px;
   color: var(--text-color);
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  background-color: var(--dropdown-bg-color);
+  background-image: none;
 }
 
 .opacity-input input[type="number"]::-webkit-inner-spin-button,
@@ -332,8 +337,16 @@ sp-color-slider {
 }
 
 .gradient-setting-item input[type="number"]{
-  width: 30px;
+  width: 46px;
   text-align: center;
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background-color: var(--dropdown-bg-color);
+  background-image: none;
+  padding: 0 3px;
 }
 
 /* 只作用于直接子 div（数值输入框的包裹层、下拉容器）。

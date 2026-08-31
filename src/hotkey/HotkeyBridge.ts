@@ -426,7 +426,7 @@ export async function enumerateBrushes(): Promise<string[]> {
         const list: any[] = await brushesApi.get();
         if (Array.isArray(list)) {
           const names = list.map((b: any) => (b?.name ?? '')).filter((x: any) => !!x);
-          if (names.length) return Array.from(new Set(names)) as string[];
+          if (names.length) return names as string[];
         }
       } catch { /* 退回到 batchPlay */ }
     }
@@ -466,7 +466,7 @@ export async function enumerateBrushes(): Promise<string[]> {
     const names = arr
       .map((n: any) => (typeof n === 'string' ? n : (n?.name ?? n?._value ?? '')))
       .filter((x: any) => !!x && typeof x === 'string');
-    return Array.from(new Set(names)) as string[];
+    return names as string[];
   } catch (e) {
     console.warn('⚠️ 枚举笔刷失败（可手动输入笔刷名）:', e);
     return [];

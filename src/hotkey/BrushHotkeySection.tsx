@@ -7,7 +7,7 @@ import {
   setMainToggleCombo, getMainToggleCombo,
   detectAllBrushTypes
 } from './HotkeyBridge';
-import { ExpandIcon, DeleteIcon, RefreshIcon, DataRefreshIcon, RecordCircleIcon, StopSquareIcon, BrushToolIcon, SmudgeToolIcon, MixerToolIcon } from '../styles/Icons';
+import { ExpandIcon, DeleteIcon, RefreshIcon, DataRefreshIcon, RecordCircleIcon, StopSquareIcon, BrushToolIcon, SmudgeToolIcon, MixerToolIcon, CloneStampIcon } from '../styles/Icons';
 import BrushSelect, { BrushSelectOption } from './BrushSelect';
 
 // 笔刷热键分区：在调整面板内录制「笔刷 + 快捷键」，持久化到共享配置，
@@ -35,6 +35,22 @@ export default function BrushHotkeySection() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   // 多选锚点（shift 延伸的基准）：普通单击或 Ctrl 单击后更新为该条索引
   const anchorIndexRef = useRef<number>(-1);
+
+  // 长按拖拽排序：拖起的行 id、落点行 id（均用 ref + state 双存，ref 供 document 监听闭包读取最新值）
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dropId, setDropId] = useState<string | null>(null);
+  const dragIdRef = useRef<string | null>(null);
+  const dropIdRef = useRef<string | null>(null);
+  const pressTimerRef = useRef<number | null>(null);
+  const pressStartRef = useRef<{ x: number; y: number } | null>(null);
+  const didDragRef = useRef(false);                 // 本次按下是否触发了拖拽，用于抑制拖完后的单击选中
+  const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const entriesRef = useRef<HotkeyEntry[]>(entries);
+  useEffect(() => { entriesRef.current = entries; }, [entries]);
+  const mainEntryRef = useRef<HotkeyEntry | undefined>(undefined);
+  useEffect(() => { mainEntryRef.current = entries.find(e => e.action === 'toggleMain'); }, [entries]);
+  const setDrag = (id: string | null) => { dragIdRef.current = id; setDragId(id); };
+  const setDrop = (id: string | null) => { dropIdRef.current = id; setDropId(id); };
 
   // refs：供轮询读取最新值，避免闭包拿到旧值
   const daemonConnectedRef = useRef(daemonConnected);
@@ -249,6 +265,8 @@ export default function BrushHotkeySection() {
   // - Ctrl/Meta + 单击：在已选集合里对该单条加选/减选（toggle），并把锚点设为它；
   // - Shift + 单击：选中「锚点 ~ 当前」之间的所有记录（含两端），锚点保持不变以便继续延伸。
   const handleEntryClick = (id: string, ev: React.MouseEvent) => {
+    // 本次按下触发了长按拖拽：松开后的单击只应结束拖拽，不应再选中该行
+    if (didDragRef.current) { didDragRef.current = false; return; }
     const idx = entries.findIndex(e => e.id === id);
     if (idx < 0) return;
     if (ev.shiftKey && anchorIndexRef.current >= 0) {
@@ -337,22 +355,111 @@ export default function BrushHotkeySection() {
 
   // 把检测到的中文类型渲染成对应图标；其它类型（橡皮擦等）无专用图标则回退显示文字，
   // 空串则不显示任何 tag。
+  // ---- 长按拖拽排序（仅作用于非「选区填充开关」的笔刷记录；开关始终置顶固定）----
+  const startPress = (e: React.MouseEvent, entry: HotkeyEntry) => {
+    if (entry.action === 'toggleMain') return; // 置顶固定项不可拖动
+    didDragRef.current = false;
+    pressStartRef.current = { x: e.clientX, y: e.clientY };
+    if (pressTimerRef.current != null) { clearTimeout(pressTimerRef.current); pressTimerRef.current = null; }
+    pressTimerRef.current = window.setTimeout(() => {
+      setDrag(entry.id);
+      setDrop(entry.id);
+      didDragRef.current = true; // 进入拖拽：松开后不应再触发单击选中
+    }, 300);
+  };
+
+  const onRowMove = (e: React.MouseEvent) => {
+    // 长按计时未触发前若发生明显移动（如滑动），取消长按，避免误触拖拽
+    if (pressTimerRef.current != null && pressStartRef.current) {
+      const dx = Math.abs(e.clientX - pressStartRef.current.x);
+      const dy = Math.abs(e.clientY - pressStartRef.current.y);
+      if (dx > 4 || dy > 4) {
+        clearTimeout(pressTimerRef.current);
+        pressTimerRef.current = null;
+      }
+    }
+  };
+
+  const endPress = () => {
+    if (pressTimerRef.current != null) {
+      clearTimeout(pressTimerRef.current);
+      pressTimerRef.current = null;
+    }
+  };
+
+  // 拖拽进行中：document 级监听实时计算落点并落盘重排（参考渐变色标拖拽的 document 监听写法）
+  useEffect(() => {
+    if (dragId == null) return;
+    const onMove = (ev: MouseEvent) => {
+      let targetId: string | null = null;
+      for (const id of Object.keys(rowRefs.current)) {
+        const el = rowRefs.current[id];
+        if (!el) continue;
+        const r = el.getBoundingClientRect();
+        if (ev.clientY >= r.top && ev.clientY <= r.bottom) { targetId = id; break; }
+      }
+      // 置顶固定的「选区填充开关」行不可作为落点：悬停其上时不更新落点（避免虚线误提示）
+      if (targetId && targetId !== mainEntryRef.current?.id && targetId !== dropIdRef.current) setDrop(targetId);
+    };
+    const onUp = () => {
+      const fromId = dragIdRef.current;
+      const toId = dropIdRef.current;
+      setDrag(null);
+      setDrop(null);
+      if (!fromId || !toId || fromId === toId) { didDragRef.current = true; return; }
+      const others = entriesRef.current.filter(e => e.action !== 'toggleMain');
+      const fromIdx = others.findIndex(e => e.id === fromId);
+      const toIdx = others.findIndex(e => e.id === toId);
+      if (fromIdx < 0 || toIdx < 0) { didDragRef.current = true; return; }
+      const next = [...others];
+      const [moved] = next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, moved);
+      const nextEntries = mainEntryRef.current ? [mainEntryRef.current, ...next] : next;
+      setEntries(nextEntries);
+      pushConfig(nextEntries);
+      didDragRef.current = true; // 抑制随后的单击选中
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    return () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+  }, [dragId]);
+
   const brushTypeTag = (type: string): React.ReactNode => {
     switch (type) {
       case '画笔': return <BrushToolIcon />;
       case '混合器画笔': return <MixerToolIcon />;
       case '涂抹': return <SmudgeToolIcon />;
+      case '图案图章': return <CloneStampIcon />;
       case '': return '';
       default: return type;
     }
   };
 
+  // 同名笔刷去重：PS 笔刷名被用作热键 key，重名只会在下拉里登记一条；
+  // 这里为第 2 个及以后的同名项追加「 (1)」「 (2)」… 仅作显示，value 仍用真实笔刷名（热键不变）。
+  const brushDisplayNames: Record<string, string> = {};
+  const brushSeen: Record<string, number> = {};
+  for (const b of brushes) {
+    const n = (brushSeen[b] = (brushSeen[b] || 0) + 1);
+    brushDisplayNames[b] = n === 1 ? b : `${b} (${n - 1})`;
+  }
+
   const brushOptions: BrushSelectOption[] = brushes.map(b => ({
     value: b,
-    main: b,
-    // 笔刷类型（混合器/涂抹/画笔…）渲染为图标；取不到类型则该项无 tag
+    main: brushDisplayNames[b] ?? b,
+    // 笔刷类型（混合器/涂抹/画笔/图案图章…）渲染为图标；取不到类型则该项无 tag
     tag: brushTypeTag(brushTypes[b] || '')
   }));
+
+  // 渲染顺序：选区填充开关（toggleMain）始终置顶固定，其余笔刷记录保持存储顺序；
+  // 长按拖拽只重排其余记录，不影响置顶项。
+  const mainEntry = entries.find(e => e.action === 'toggleMain');
+  const displayEntries = mainEntry
+    ? [mainEntry, ...entries.filter(e => e.action !== 'toggleMain')]
+    : entries;
 
   return (
     <div className="adjust-expand-section">
@@ -460,22 +567,38 @@ export default function BrushHotkeySection() {
               删除键移到容器外的右下角，见下方 .hotkey-entry-actions */}
           <div className="hotkey-entry-box">
             <div className="hotkey-entry-list">
-              {entries.length === 0 && <div style={{ fontSize: 12, opacity: 0.6 }}>尚未绑定任何快捷键</div>}
-              {entries.map(e => (
+              {displayEntries.length === 0 && <div style={{ fontSize: 12, opacity: 0.6 }}>尚未绑定任何快捷键</div>}
+              {displayEntries.map(e => {
+                const isPinned = e.action === 'toggleMain';
+                const rowClass = [
+                  'hotkey-entry-row',
+                  selectedIds.includes(e.id) ? 'selected' : '',
+                  isPinned ? 'pinned' : '',
+                  dragId === e.id ? 'dragging' : '',
+                  (dropId === e.id && dragId !== null && dragId !== e.id) ? 'drop-target' : '',
+                ].join(' ');
+                return (
                 <div
                   key={e.id}
-                  className={`hotkey-entry-row${selectedIds.includes(e.id) ? ' selected' : ''}`}
-                  title="单击选中；Ctrl + 单击 加选/减选；Shift + 单击 选中从锚点到本条的所有记录"
+                  ref={(el) => { rowRefs.current[e.id] = el; }}
+                  className={rowClass}
+                  title={isPinned
+                    ? '选区填充开关：始终置顶固定，不可拖动'
+                    : '单击选中；Ctrl + 单击 加选/减选；Shift + 单击 选中从锚点到本条；长按可拖拽调整顺序'}
                   onClick={(ev) => handleEntryClick(e.id, ev)}
+                  onMouseDown={(ev) => startPress(ev, e)}
+                  onMouseUp={endPress}
+                  onMouseMove={onRowMove}
                 >
                   {/* 快捷键列定宽：分隔线紧贴它，因此跨条目始终对齐 */}
                   <span className="hotkey-entry-combo">{e.combo || '未绑定'}</span>
                   <span className="hotkey-entry-sep">丨</span>
                   <span className="hotkey-entry-name">
-                    {e.action === 'toggleMain' ? '选区填充开关' : e.brush}
+                    {isPinned ? '选区填充开关' : e.brush}
                   </span>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 

@@ -139,9 +139,9 @@ export default function Select({
   const popRoot = open && pos ? getPopRoot(headRef.current) : null;
 
   const renderOpts = (opts: SelectOption[]) =>
-    opts.map(o => (
+    opts.map((o, i) => (
       <div
-        key={o.value}
+        key={i}
         className={`mask-sync-select-opt ${o.value === value ? 'sel' : ''} ${o.disabled ? 'dis' : ''}`}
         onClick={() => handleOptClick(o)}
       >

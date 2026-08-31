@@ -293,6 +293,13 @@
 /* 三个图标按钮的固定宽度大容器：下拉可自由伸缩，图标组宽度恒为 3×28=84px。
    每个按钮各占一个等宽小格子并在格内居中，格间距即按钮间距、恒定一致；
    开启录制时停止键出现在预留的中间格子里，刷新与录制因此都不会位移。 */
+/* 含垃圾桶的包装层自身成为 flex 居中容器：24px 的 .hotkey-icon-button 在任意行高下
+   都与左侧图标垂直居中对齐（替换 sp-action-button 后曾因固定高度顶对齐而偏上） */
+.delete-button-wrapper {
+  display: flex;
+  align-items: center;
+}
+
 .hotkey-icon-group {
   display: flex;
   align-items: center;
@@ -406,6 +413,22 @@
 /* 选中态：与图案子面板被选中的图案一致——2px 主题蓝描边（用 outline，零位移） */
 .hotkey-entry-row.selected {
   outline-color: var(--primary-color);
+}
+
+/* 长按拖拽排序：拖起的行半透明，落点行用主题蓝虚线描边指示插入位置 */
+.hotkey-entry-row.dragging {
+  opacity: 0.45;
+  cursor: grabbing;
+}
+
+.hotkey-entry-row.drop-target {
+  outline-color: var(--primary-color);
+  outline-style: dashed;
+}
+
+/* 置顶固定的「选区填充开关」行：明确不可拖动 */
+.hotkey-entry-row.pinned {
+  cursor: default;
 }
 
 .hotkey-entry-combo {
@@ -602,16 +625,43 @@
   /* 保证跟随容器折叠且不浮到最上层 */
   position: relative;
   z-index: auto;
-  width: 30px;
-  flex: 0 0 30px;
+  width: 46px;
+  flex: 0 0 46px;
   height: 24px;
   color: var(--text-color);
   font-size: 11px;
   text-align: center;
-  margin-left: -5px;
+  /* 取消负边距：加上 CSS 边框后负边距会与左侧滑块/单位重叠，反而压住边框 */
+  margin-left: 0;
   /* 字体与选区填充面板统一 */
   font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
   /* 移除z-index，让它跟随父容器的折叠状态 */
+  /* 修复 UXP 原生 number 输入框绘制区横向越界压住边框（与激活/试用面板 input 同类问题）：
+     appearance:none 让输入框按 CSS 盒绘制，不再溢出覆盖左右边框；边框改由 CSS 提供，
+     背景与下拉同色避免 UXP 下 transparent 被绘成纯黑；box-sizing:border-box 让边框计入宽度。 */
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background-color: var(--dropdown-bg-color);
+  background-image: none;
+  padding: 0 3px;
+}
+
+/* 绘画工具箱（含图案/渐变/颜色/描边子面板）内所有 number-input 统一按上述方式修复越界 */
+#pixeladjustment input[type="number"] {
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background-color: var(--dropdown-bg-color);
+  background-image: none;
+  padding: 0 3px;
+  /* 与 #app 面板统一：固定 22px 高度 + 基线居中，消除行内上下文下的下方越界 */
+  height: 22px;
+  vertical-align: middle;
 }
 
 .adjustment-select {

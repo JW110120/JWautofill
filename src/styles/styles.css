@@ -307,7 +307,15 @@ sp-radio[disabled] {
 }
 
 .selection-slider-item input[type="number"]  {
-  width: 30px;
+  width: 44px;
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background-color: var(--dropdown-bg-color);
+  background-image: none;
+  padding: 0 3px;
 }
 
 .selection-slider-item div {
@@ -682,4 +690,19 @@ sp-action-button {
 #app input[type="number"] {
   font-size: 11px;
   font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
+  /* 修复 UXP 原生 number 输入框绘制区横向越界压住边框（与激活/试用面板 input 同类问题）：
+     appearance:none 让输入框按 CSS 盒绘制，不再溢出覆盖左右边框；边框改由 CSS 提供，
+     背景与下拉同色避免 UXP 下 transparent 被绘成纯黑；box-sizing:border-box 让边框计入宽度。 */
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background-color: var(--dropdown-bg-color);
+  background-image: none;
+  padding: 0 3px;
+  /* 固定高度 + 基线居中：行内上下文下 type=number 默认按基线对齐会留出 descender 间隙，
+     表现为输入框整体下沉、下边框越界；统一 22px 高度并 vertical-align:middle 消除该间隙。 */
+  height: 22px;
+  vertical-align: middle;
 }

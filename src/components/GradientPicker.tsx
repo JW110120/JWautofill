@@ -1331,9 +1331,16 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             <AddIcon />
                         </sp-action-button> 
                         <div className="delete-button-wrapper">
-                        <sp-action-button
-                            quiet
-                            class="icon-button"
+                        <div
+                            className={`hotkey-icon-button${((selectedPreset === null && selectedPresets.size === 0) || presets.length === 0) ? ' disabled' : ''}`}
+                            role="button"
+                            tabIndex={0}
+                            title="删除预设"
+                            style={{
+                            cursor: ((selectedPreset === null && selectedPresets.size === 0) || presets.length === 0) ? 'not-allowed' : 'pointer',
+                            opacity: ((selectedPreset === null && selectedPresets.size === 0) || presets.length === 0) ? 0.4 : 1,
+                            marginLeft: 'auto'
+                            }}
                             onClick={() => {
                             if (selectedPresets.size > 0) {
                                 handleDeletePreset();
@@ -1341,35 +1348,13 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                 handleDeletePreset(selectedPreset);
                             }
                             }}
-                            disabled={(selectedPreset === null && selectedPresets.size === 0) || presets.length === 0}
-                            style={{
-                            cursor: (selectedPreset === null && selectedPresets.size === 0) || presets.length === 0 ? 'not-allowed' : 'pointer',
-                            opacity: (selectedPreset === null && selectedPresets.size === 0) || presets.length === 0 ? 0.4 : 1,
-                            alignItems: 'center',
-                            marginLeft: 'auto',
-                            justifyContent: 'flex-end',
-                            border: 'none'
-                            }}
-                            onMouseEnter={(e) => {
-                                if (!((selectedPreset === null && selectedPresets.size === 0) || presets.length === 0)) {
-                                    const iconFill = e.currentTarget.querySelector('.icon-fill');
-                                    if (iconFill) iconFill.style.fill = 'var(--hover-icon)';
-                                }
-                            }}
-                            onMouseLeave={(e) => {
-                                const iconFill = e.currentTarget.querySelector('.icon-fill');
-                                if (iconFill) {
-                                    iconFill.style.fill = ((selectedPreset === null && selectedPresets.size === 0) || presets.length === 0) ? 'var(--disabled-color)' : 'var(--text-color)';
-                                }
-                            }}
-                            title="删除预设"
                         >
                             <DeleteIcon style={{
                                 width: '15px',
                                 height: '15px',
                                 display: 'block'
                             }} />
-                        </sp-action-button>
+                        </div>
                         </div>
                     </div>
                 </div>
@@ -1418,43 +1403,28 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         />
                         <label className="gradient-subtitle">%</label>
                         <div className="delete-button-wrapper">
-                        <sp-action-button
-                            quiet
-                            className="icon-button"
+                        <div
+                            className={`hotkey-icon-button${stops.length <= 2 ? ' disabled' : ''}`}
+                            role="button"
+                            tabIndex={0}
+                            title="删除色标"
+                            style={{
+                            cursor: stops.length <= 2 ? 'not-allowed' : 'pointer',
+                            opacity: stops.length <= 2 ? 0.5 : 1,
+                            marginLeft: 'auto'
+                            }}
                             onClick={() => {
                             if (stops.length > 2) {
                                 handleRemoveStop(selectedStopIndex);
                             }
                             }}
-                            disabled={stops.length <= 2}
-                            style={{
-                            cursor: stops.length <= 2 ? 'not-allowed' : 'pointer',
-                            opacity: stops.length <= 2 ? 0.5 : 1,
-                            alignItems: 'center',
-                            marginLeft: 'auto',
-                            justifyContent: 'flex-end',
-                            border: 'none'
-                            }}
-                            onMouseEnter={(e) => {
-                                if (stops.length > 2) {
-                                    const iconFill = e.currentTarget.querySelector('.icon-fill');
-                                    if (iconFill) iconFill.style.fill = 'var(--hover-icon)';
-                                }
-                            }}
-                            onMouseLeave={(e) => {
-                                const iconFill = e.currentTarget.querySelector('.icon-fill');
-                                if (iconFill) {
-                                    iconFill.style.fill = stops.length <= 2 ? 'var(--disabled-color)' : 'var(--text-color)';
-                                }
-                            }}
-                            title="删除色标"
                         >
                             <DeleteIcon style={{
                                 width: '15px',
                                 height: '15px',
                                 display: 'block'
                             }} />
-                        </sp-action-button>
+                        </div>
                         </div>
                     </div>
                 )}
@@ -1748,43 +1718,28 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         />
                         
                         <div className="delete-button-wrapper">
-                        <sp-action-button
-                            quiet
-                            className="icon-button"
+                        <div
+                            className={`hotkey-icon-button${stops.length <= 2 ? ' disabled' : ''}`}
+                            role="button"
+                            tabIndex={0}
+                            title="删除色标"
+                            style={{
+                            cursor: stops.length <= 2 ? 'not-allowed' : 'pointer',
+                            opacity: stops.length <= 2 ? 0.5 : 1,
+                            marginLeft: 'auto'
+                            }}
                             onClick={() => {
                             if (stops.length > 2) {
                                 handleRemoveStop(selectedStopIndex);
                             }
                             }}
-                            disabled={stops.length <= 2}
-                            style={{
-                            cursor: stops.length <= 2 ? 'not-allowed' : 'pointer',
-                            opacity: stops.length <= 2 ? 0.5 : 1,
-                            alignItems: 'center',
-                            marginLeft: 'auto',
-                            justifyContent: 'flex-end',
-                            border: 'none'
-                            }}
-                            onMouseEnter={(e) => {
-                                if (stops.length > 2) {
-                                    const iconFill = e.currentTarget.querySelector('.icon-fill');
-                                    if (iconFill) iconFill.style.fill = 'var(--hover-icon)';
-                                }
-                            }}
-                            onMouseLeave={(e) => {
-                                const iconFill = e.currentTarget.querySelector('.icon-fill');
-                                if (iconFill) {
-                                    iconFill.style.fill = stops.length <= 2 ? 'var(--disabled-color)' : 'var(--text-color)';
-                                }
-                            }}
-                            title="删除色标"
                         >
                             <DeleteIcon style={{
                                 width: '15px',
                                 height: '15px',
                                 display: 'block'
                             }} />
-                        </sp-action-button>
+                        </div>
                         </div>
                     </div>
                 )}

@@ -1724,46 +1724,27 @@ interface PatternPickerProps {
                                 <FileIcon />
                             </sp-action-button>
                             <div className="delete-button-wrapper">
-                                <sp-action-button
-                                    quiet
-                                    class="icon-button"
-                                    onClick={() => {
-                                        if (selectedPatterns.size > 0 || selectedPattern) {
-                                            handleDelete();
-                                        }
-                                    }}
-                                    disabled={!selectedPattern && selectedPatterns.size === 0}
-                                    style={{
-                                        cursor: (!selectedPattern && selectedPatterns.size === 0) ? 'not-allowed' : 'pointer',
-                                        opacity: (!selectedPattern && selectedPatterns.size === 0) ? 0.4 : 1,
-                                        padding: '4px',
-                                        background: 'none',
-                                        border: 'none',
-                                        borderRadius: '4px',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center'
-                                    }}
-                                    onMouseEnter={(e) => {
-                                        if (selectedPattern) {
-                                            const iconFill = e.currentTarget.querySelector('.icon-fill');
-                                            if (iconFill) iconFill.style.fill = 'var(--hover-icon)';
-                                        }
-                                    }}
-                                    onMouseLeave={(e) => {
-                                        const iconFill = e.currentTarget.querySelector('.icon-fill');
-                                        if (iconFill) {
-                                            iconFill.style.fill = !selectedPattern ? 'var(--disabled-color)' : 'var(--text-color)';
-                                        }
-                                    }}
-                                    title="删除图案"
-                                >
-                                    <DeleteIcon style={{
-                                        width: '15px',
-                                        height: '15px',
-                                        display: 'block'
-                                    }} />
-                                </sp-action-button>
+                            <div
+                                className={`hotkey-icon-button${(!selectedPattern && selectedPatterns.size === 0) ? ' disabled' : ''}`}
+                                role="button"
+                                tabIndex={0}
+                                title="删除图案"
+                                style={{
+                                    cursor: (!selectedPattern && selectedPatterns.size === 0) ? 'not-allowed' : 'pointer',
+                                    opacity: (!selectedPattern && selectedPatterns.size === 0) ? 0.4 : 1
+                                }}
+                                onClick={() => {
+                                    if (selectedPatterns.size > 0 || selectedPattern) {
+                                        handleDelete();
+                                    }
+                                }}
+                            >
+                                <DeleteIcon style={{
+                                    width: '15px',
+                                    height: '15px',
+                                    display: 'block'
+                                }} />
+                            </div>
                         </div>
                         </div>
                      </div>

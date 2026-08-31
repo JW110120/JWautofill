@@ -211,8 +211,16 @@
   }
 
   .pattern-setting-item input[type="number"] {
-    width: 30px;  
+    width: 46px;
     text-align: center;
+    appearance: none;
+    -webkit-appearance: none;
+    box-sizing: border-box;
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    background-color: var(--dropdown-bg-color);
+    background-image: none;
+    padding: 0 3px;
 }
 
 /* ---------------------------------------------------------------------------------------------------------------- */
