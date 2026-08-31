@@ -1,7 +1,7 @@
 {
     "manifestVersion": 4,
     "name": "易修",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "host": {
         "app": "PS",
         "minVersion": "23.0.0"

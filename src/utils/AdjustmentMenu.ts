@@ -2,6 +2,8 @@
  * 像素调整面板菜单管理器 - 仅负责像素调整面板的菜单功能
  */
 
+import { openPluginDoc } from './openDocs';
+
 export class AdjustmentMenu {
   private static visibilityPanelCallback: ((visible: boolean) => void) | null = null;
   private static collapseCallback: (() => void) | null = null;
@@ -68,6 +70,9 @@ export class AdjustmentMenu {
         if (this.uninstallHotkeyDaemonCallback) {
           this.uninstallHotkeyDaemonCallback();
         }
+        break;
+      case "openDocsToolbox":
+        void openPluginDoc("docs/toolbox-guide.html");
         break;
       default:
         console.warn(`Unknown adjustment menu item: ${id}`);

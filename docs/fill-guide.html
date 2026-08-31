@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>选区填充 使用说明 · JWautofill</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --panel-2: #eef2f8;
+      --text: #1d2733;
+      --muted: #5d6b7c;
+      --line: #e3e9f1;
+      --accent: #267fe9;          /* 与插件主色 rgb(38,128,235) 一致 */
+      --accent-strong: #1b6bd6;
+      --accent-soft: rgba(38, 128, 235, 0.10);
+      --code-bg: #eef2f8;
+      --ok: #15803d;  --ok-bg: rgba(21, 128, 61, 0.12);
+      --warn: #b45309; --warn-bg: rgba(180, 83, 9, 0.12);
+      --danger: #b91c1c; --danger-bg: rgba(185, 28, 28, 0.12);
+      --radius: 14px;
+      --shadow: 0 1px 2px rgba(16,24,40,.05), 0 6px 18px rgba(16,24,40,.05);
+      --maxw: 900px;
+      --sidebar: 264px;
+      --ff: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f141b;
+        --panel: #161d27;
+        --panel-2: #1d2733;
+        --text: #e6edf5;
+        --muted: #9aa7b8;
+        --line: #283341;
+        --accent: #4f9bff;
+        --accent-strong: #6fabff;
+        --accent-soft: rgba(79, 155, 255, 0.14);
+        --code-bg: #1d2733;
+        --ok: #4ade80; --ok-bg: rgba(74, 222, 128, 0.14);
+        --warn: #f0b454; --warn-bg: rgba(240, 180, 84, 0.14);
+        --danger: #f87171; --danger-bg: rgba(248, 113, 113, 0.14);
+        --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 22px rgba(0,0,0,.28);
+      }
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--ff);
+      line-height: 1.75;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--accent-strong); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .layout { display: grid; grid-template-columns: var(--sidebar) minmax(0, 1fr); min-height: 100vh; }
+
+    /* ===== 侧边导航 ===== */
+    nav {
+      position: sticky; top: 0; align-self: start;
+      height: 100vh; overflow: auto;
+      padding: 26px 20px;
+      border-right: 1px solid var(--line);
+      background: color-mix(in srgb, var(--panel) 70%, var(--bg));
+      backdrop-filter: blur(6px);
+    }
+    nav .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+    nav .brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+    nav h1 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: .2px; }
+    nav .sub { margin: 2px 0 18px; color: var(--muted); font-size: 12px; }
+    nav a.navlink {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 10px; margin: 2px 0;
+      border-radius: 9px;
+      color: var(--muted); font-size: 13.5px; font-weight: 500;
+      transition: background .15s, color .15s;
+    }
+    nav a.navlink:hover { background: var(--accent-soft); color: var(--text); text-decoration: none; }
+    nav a.navlink.active { background: var(--accent-soft); color: var(--accent-strong); font-weight: 700; }
+    nav a.navlink .idx { font-variant-numeric: tabular-nums; font-size: 11px; opacity: .6; min-width: 16px; }
+    nav .navgroup { margin-top: 14px; font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); opacity: .7; padding-left: 10px; }
+
+    /* ===== 主内容 ===== */
+    main { max-width: var(--maxw); padding: 0 40px 96px; }
+    .hero {
+      margin: 0 -40px 8px; padding: 46px 40px 34px;
+      background: linear-gradient(135deg, var(--accent-soft), transparent 70%);
+      border-bottom: 1px solid var(--line);
+    }
+    .hero .eyebrow { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .6px; color: var(--accent-strong); background: var(--accent-soft); padding: 4px 10px; border-radius: 999px; margin-bottom: 14px; }
+    .hero h1 { margin: 0 0 10px; font-size: 32px; line-height: 1.2; letter-spacing: -.4px; }
+    .hero p { margin: 0; color: var(--muted); font-size: 16px; max-width: 640px; }
+    .hero .meta { margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .badge { font-size: 12px; color: var(--muted); background: var(--panel-2); border: 1px solid var(--line); padding: 4px 10px; border-radius: 999px; }
+
+    section { scroll-margin-top: 18px; padding-top: 30px; }
+    h2 { font-size: 22px; margin: 0 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); letter-spacing: -.2px; }
+    h3 { font-size: 16.5px; margin: 22px 0 8px; color: var(--text); }
+    p { margin: 10px 0; }
+    ul, ol { padding-left: 22px; } li { margin: 6px 0; }
+    code { font-family: var(--mono); font-size: .88em; background: var(--code-bg); padding: 2px 6px; border-radius: 5px; color: var(--text); }
+    .kbd { font-family: var(--mono); font-size: .85em; background: var(--panel-2); border: 1px solid var(--line); border-bottom-width: 2px; padding: 1px 7px; border-radius: 6px; }
+
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; margin: 14px 0; box-shadow: var(--shadow); }
+    .card h3 { margin-top: 0; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    @media (max-width: 640px){ .grid2 { grid-template-columns: 1fr; } }
+
+    .callout { display: flex; gap: 12px; border-radius: 12px; padding: 12px 14px; margin: 14px 0; border: 1px solid; font-size: 14px; line-height: 1.65; }
+    .callout .ic { flex: 0 0 auto; font-size: 16px; line-height: 1.5; }
+    .callout.note { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+    .callout.warn { background: var(--warn-bg); border-color: color-mix(in srgb, var(--warn) 32%, transparent); }
+    .callout.danger { background: var(--danger-bg); border-color: color-mix(in srgb, var(--danger) 32%, transparent); }
+    .callout.ok { background: var(--ok-bg); border-color: color-mix(in srgb, var(--ok) 32%, transparent); }
+    .callout b { color: var(--text); }
+
+    table { width: 100%; border-collapse: collapse; margin: 12px 0 14px; font-size: 13.5px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+    th, td { text-align: left; padding: 10px 13px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { background: var(--panel-2); font-weight: 700; }
+    tr:last-child td { border-bottom: 0; }
+    td:first-child, th:first-child { white-space: nowrap; font-weight: 600; }
+
+    .figure { margin: 14px 0; border: 1px dashed color-mix(in srgb, var(--muted) 40%, transparent); border-radius: 12px; background: var(--panel-2); overflow: hidden; }
+    .figure .ph { display: flex; align-items: center; justify-content: center; min-height: 150px; color: var(--muted); font-size: 13.5px; text-align: center; padding: 24px; }
+    .figure figcaption { padding: 9px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
+
+    footer { margin-top: 50px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+
+    @media (max-width: 880px) {
+      .layout { display: block; }
+      nav { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+      main { padding: 0 22px 64px; }
+      .hero { margin: 0 -22px 8px; padding: 34px 22px 26px; }
+      .hero h1 { font-size: 26px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <nav>
+      <div class="brand"><span class="dot"></span><h1>选区填充</h1></div>
+      <p class="sub">JWautofill 使用说明</p>
+      <a class="navlink" href="#overview"><span class="idx">1</span>面板概览</a>
+      <a class="navlink" href="#toggle"><span class="idx">2</span>主开关与快捷键</a>
+      <a class="navlink" href="#modes"><span class="idx">3</span>填充模式</a>
+      <a class="navlink" href="#options"><span class="idx">4</span>选区与填充选项</a>
+      <a class="navlink" href="#stroke"><span class="idx">5</span>描边设置</a>
+      <a class="navlink" href="#color"><span class="idx">6</span>颜色动态设置</a>
+      <a class="navlink" href="#menu"><span class="idx">7</span>顶部菜单</a>
+      <a class="navlink" href="#faq"><span class="idx">8</span>常见问题</a>
+    </nav>
+
+    <main>
+      <div class="hero">
+        <span class="eyebrow">JWautofill · 选区填充面板</span>
+        <h1>选区填充 使用说明</h1>
+        <p>当 Photoshop 生成「新选区」时，自动按你设定的模式（纯色 / 图案 / 渐变 / 清除）填充或删除选区内容；并提供主开关、混合模式、羽化、选区改造、描边与颜色抖动等全套控制。</p>
+        <div class="meta">
+          <span class="badge">版本 2.0.0</span>
+          <span class="badge">更新于 2026-08</span>
+        </div>
+      </div>
+
+      <section id="overview">
+        <h2>1. 面板概览</h2>
+        <p>选区填充是 JWautofill 的主面板（标题显示为「<b>选区填充2.0</b>」）。它的核心逻辑是：<b>只在生成「新选区」的瞬间</b>触发自动填充——加选、减选、交叉选区不会触发，避免重复填充。</p>
+        <div class="callout warn">本插件需要 <b>Photoshop 2022（版本 23.0）或更高版本</b>。绘画工具箱的像素处理功能依赖 imaging API，在更早的 Photoshop 版本中不可用。</div>
+        <div class="card">
+          <h3>面板从上到下包含</h3>
+          <ul>
+            <li><b>主开关</b>：大按钮「功能开启 / 功能关闭」，带状态指示灯。</li>
+            <li><b>混合模式</b>：与 Photoshop 图层混合模式一致（默认「正常」）。</li>
+            <li><b>不透明度 / 羽化</b>：两个滑杆，控制填充强度与边缘柔和度。</li>
+            <li><b>选区选项</b>（折叠区）：平滑、锐度、扩散。</li>
+            <li><b>填充选项</b>（折叠区）：新建图层、描边模式、清除模式、填充模式（纯色 / 图案 / 渐变），以及若干自动行为开关。</li>
+            <li><b>子面板</b>：选中对应填充模式后展开「颜色动态设置 / 选择图案 / 渐变设置 / 描边设置」。</li>
+          </ul>
+        </div>
+        <figure class="figure"><div class="ph">截图待补：选区填充面板整体布局</div><figcaption>面板整体：主开关 → 混合模式 → 不透明度/羽化 → 选区选项 → 填充选项 → 子面板。</figcaption></figure>
+      </section>
+
+      <section id="toggle">
+        <h2>2. 主开关与快捷键</h2>
+        <p>顶部的<b>主开关</b>决定自动填充是否生效。点击按钮在「功能开启 / 功能关闭」之间切换，左侧指示灯同步显示状态。开关状态会跨面板持久化并共享。</p>
+        <h3>联动行为</h3>
+        <table>
+          <tr><th>选项</th><th>作用</th></tr>
+          <tr><td>自动切套索</td><td>主开关由「关 → 开」时，自动切换到套索工具，便于立刻框选。</td></tr>
+          <tr><td>自动关开关</td><td>主开关开启时，若切到画笔 / 铅笔 / 橡皮 / 混合器 / 油漆桶 / 渐变 / 移动 / 涂抹等工具，自动关闭主开关。</td></tr>
+        </table>
+        <h3>主开关快捷键（Ctrl+Q）</h3>
+        <p>默认组合键为 <span class="kbd">Ctrl</span>+<span class="kbd">Q</span>，由本地的「快捷键服务」通过 Windows 全局键盘钩子捕获，翻转跨面板共享状态——两个面板显示始终一致。</p>
+        <ul>
+          <li>该条目在配置中长期存在：组合键为空表示你已<b>解绑</b>（不会自动补回默认）；配置里完全没有该条目才视为首次使用、写入默认 <code>Ctrl+Q</code>。</li>
+          <li>重新设置：右上角菜单「<b>设置选区填充主开关快捷键</b>」→ 按提示 → 由快捷键服务录制 → 写回配置。</li>
+          <li>若快捷键服务未连接，会提示先到绘画工具箱面板的「笔刷热键」启动它。</li>
+        </ul>
+        <div class="callout note"><b>使用前提：</b>主开关开启后，需把 Photoshop 工具栏的「羽化」参数设为 0，自动填充才能正常触发。临时改羽化：<span class="kbd">Enter</span> → <span class="kbd">1</span> → <span class="kbd">Enter</span> 设为 1（暂停），<span class="kbd">Enter</span> → <span class="kbd">0</span> → <span class="kbd">Enter</span> 恢复。</div>
+      </section>
+
+      <section id="modes">
+        <h2>3. 填充模式</h2>
+        <p>在「填充选项」里选择填充模式，并点对应设置图标打开子面板。三种模式互斥，下方选项随模式变化。</p>
+
+        <h3>3.1 纯色</h3>
+        <p>监测到新选区即填充<b>前景色</b>。点设置图标打开「颜色动态设置」，可对每次填充做随机颜色变化（见第 6 节）。</p>
+
+        <h3>3.2 图案</h3>
+        <p>用本地 <code>jpg</code> / <code>png</code> 作为图案预设（<b>不支持</b> Photoshop 内部图案）。点设置图标打开「选择图案」。</p>
+        <table>
+          <tr><th>参数</th><th>说明</th></tr>
+          <tr><td>缩放</td><td>图案缩放百分比。</td></tr>
+          <tr><td>单次 / 平铺</td><td>填充方案：单次铺一张，或平铺重复。</td></tr>
+          <tr><td>旋转阵列</td><td>「全部旋转」默认勾选 + 角度；可让图案按角度阵列排布。</td></tr>
+          <tr><td>预览</td><td>带预览缩放（默认 100%）。</td></tr>
+        </table>
+        <ul>
+          <li>「选择图案文件」从系统载入 jpg/png 作为预设；预设支持 <span class="kbd">Shift</span> / <span class="kbd">Ctrl</span> 多选、拖拽排序、删除。</li>
+          <li>图案填充支持 PNG 不透明度通道（保留透明度）。</li>
+        </ul>
+
+        <h3>3.3 渐变</h3>
+        <p>用户自设起止色 / 角度 / 滑块；当前仅支持<b>线性</b>与<b>径向</b>。点设置图标打开「渐变设置」。</p>
+        <table>
+          <tr><th>参数</th><th>说明</th></tr>
+          <tr><td>渐变预设</td><td>命名「渐变预设 N」，支持增 / 删 / 拖拽排序、Shift/Ctrl 多选；空选区提示「请选择一个渐变预设」。</td></tr>
+          <tr><td>颜色 / 不透明度滑块</td><td>渐变条上加滑块，颜色滑块（<code>#</code> 十六进制）与不透明度滑块一一对应。</td></tr>
+          <tr><td>样式</td><td>线性 / 径向。</td></tr>
+          <tr><td>角度</td><td>角度值（径向模式下禁用但仍占位）。</td></tr>
+          <tr><td>反向 / 保留不透明度</td><td>两个开关。</td></tr>
+        </table>
+
+        <h3>3.4 清除模式</h3>
+        <p>以下方所选模式「删除」选区内容（与「新建图层」互斥）。采用绝对计算：<b>白 = 100% 删除，黑 = 不删除</b>。</p>
+      </section>
+
+      <section id="options">
+        <h2>4. 选区与填充选项</h2>
+        <h3>选区选项（平滑 / 锐度 / 扩散，0–100%）</h3>
+        <table>
+          <tr><th>参数</th><th>说明</th></tr>
+          <tr><td>平滑</td><td>挪用「选择并遮住」的平滑，减锯齿与起伏（设 0 不修改选区）。</td></tr>
+          <tr><td>锐度</td><td>锐化选区边缘。</td></tr>
+          <tr><td>扩散</td><td>以喷溅方式向外扩张选区。</td></tr>
+        </table>
+        <h3>填充选项开关</h3>
+        <table>
+          <tr><th>开关</th><th>作用</th></tr>
+          <tr><td>新建图层</td><td>每次填充前新建图层（与清除模式互斥；快速蒙版 / 新建图层下禁用）。</td></tr>
+          <tr><td>描边模式</td><td>填充后自动给选区边缘加描边，开启后显示描边颜色预览块与「描边设置」。</td></tr>
+          <tr><td>清除模式</td><td>见 3.4。</td></tr>
+        </table>
+        <h3>底部自动行为（复选框）</h3>
+        <ul>
+          <li><b>自动删选区</b>：填充后取消选区。</li>
+          <li><b>更新历史源</b>：把历史记录画笔源设为生成选区那一刻（即「颜色历史」来源）。</li>
+          <li><b>自动关开关</b>：见第 2 节。</li>
+          <li><b>自动切套索</b>：见第 2 节。</li>
+        </ul>
+        <div class="callout warn">未选择图案预设时填充会提示「请先选择一个图案预设」；未选择渐变预设会提示「请先选择一个渐变预设」。</div>
+      </section>
+
+      <section id="stroke">
+        <h2>5. 描边设置</h2>
+        <p>开启「描边模式」后，填充会顺带给选区边缘描边。点「描边设置」图标打开子面板：</p>
+        <table>
+          <tr><th>参数</th><th>说明</th></tr>
+          <tr><td>宽度</td><td>0–20px。</td></tr>
+          <tr><td>位置</td><td>内部 / 居中 / 外部。</td></tr>
+          <tr><td>混合模式</td><td>下拉（清除模式下隐藏）。</td></tr>
+          <tr><td>不透明度</td><td>0–100%。</td></tr>
+        </table>
+      </section>
+
+      <section id="color">
+        <h2>6. 颜色动态设置</h2>
+        <p>纯色模式下打开，对每次填充做 RGB / 不透明度抖动，实现随机色彩变化。</p>
+        <table>
+          <tr><th>参数</th><th>范围 / 说明</th></tr>
+          <tr><td>色相抖动</td><td>0–360°（普通通道）。</td></tr>
+          <tr><td>饱和度抖动</td><td>0–100%（普通通道）。</td></tr>
+          <tr><td>亮度抖动</td><td>0–100%（普通通道）。</td></tr>
+          <tr><td>灰度抖动</td><td>0–100%（清除 / 快速蒙版 / 图层蒙版 / 单通道时显示此项）。</td></tr>
+          <tr><td>不透明度抖动</td><td>0–100%（始终显示）。</td></tr>
+          <tr><td>计算方法</td><td>绝对 / 相对（单选）。</td></tr>
+        </table>
+      </section>
+
+      <section id="menu">
+        <h2>7. 顶部菜单</h2>
+        <p>点击面板右上角的 <b>⋮</b> 菜单，包含以下项：</p>
+        <table>
+          <tr><th>菜单项</th><th>说明</th></tr>
+          <tr><td>注销激活状态</td><td>默认禁用，仅在正式激活（非试用）后放开。</td></tr>
+          <tr><td>打开激活与试用面板</td><td>弹出激活 / 试用对话框。</td></tr>
+          <tr><td>参数复位（保留已加载图案与新建渐变预设）</td><td>复位除图案 / 渐变预设外的参数；UI 展开态与授权状态保留。</td></tr>
+          <tr><td>设置选区填充主开关快捷键</td><td>重新录制 Ctrl+Q 等主开关快捷键（见第 2 节）。</td></tr>
+          <tr><td><b>功能文档</b></td><td>分隔线下方，点击在默认浏览器打开本说明。</td></tr>
+        </table>
+      </section>
+
+      <section id="faq">
+        <h2>8. 常见问题</h2>
+        <h3>为什么开启主开关后没有自动填充？</h3>
+        <p>请确认 Photoshop 工具栏的「羽化」为 0；且只在生成「新选区」时触发，加选 / 减选 / 交叉不会触发。</p>
+        <h3>填充提示「请先选择一个图案预设 / 渐变预设」？</h3>
+        <p>在对应的「选择图案 / 渐变设置」子面板里先选或新建一个预设再填充。</p>
+        <h3>快捷键（Ctrl+Q）没反应？</h3>
+        <p>说明「快捷键服务」未运行，请到绘画工具箱面板的「笔刷热键」启动它，再回主面板设置主开关快捷键。</p>
+      </section>
+
+      <footer>JWautofill · 选区填充面板使用说明</footer>
+    </main>
+  </div>
+  <script>
+    (function () {
+      var links = Array.prototype.slice.call(document.querySelectorAll('nav a.navlink'));
+      var map = {};
+      links.forEach(function (a) {
+        var id = a.getAttribute('href').slice(1);
+        var el = document.getElementById(id);
+        if (el) map[id] = a;
+      });
+      if ('IntersectionObserver' in window) {
+        var obs = new IntersectionObserver(function (entries) {
+          entries.forEach(function (e) {
+            if (e.isIntersecting) {
+              links.forEach(function (l) { l.classList.remove('active'); });
+              var a = map[e.target.id];
+              if (a) a.classList.add('active');
+            }
+          });
+        }, { rootMargin: '-15% 0px -75% 0px', threshold: 0 });
+        Object.keys(map).forEach(function (id) { obs.observe(document.getElementById(id)); });
+      }
+    })();
+  </script>
+</body>
+</html>

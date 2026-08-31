@@ -41,3 +41,7 @@
 
 ## 五、算法
 - 分块补色/渐变/线稿引导/alpha 对齐见历史日志；清像素须显式清零；扣白/扣黑公式与 N 计算见当日记录。
+
+## 六、文档与README同步约定
+- **每当重大版本更新，文档（docs/fill-guide.html、docs/toolbox-guide.html）与 README.md 必须同步跟进**：功能增删、菜单项变化、快捷键/授权流程变更都要同步到两处面板文档与 README，避免说明与功能脱节。
+- 文档为自包含 HTML（侧边栏导航 + 滚动高亮 + 卡片/表格/提示框，支持明暗主题），由面板右上角「⋮」菜单「功能文档」经 `openPluginDoc()`（`src/utils/openDocs.ts`：`getPluginFolder().nativePath` + `shell.openPath`）在默认浏览器打开；webpack 已把 `docs/` 拷贝进 `dist/docs/`。

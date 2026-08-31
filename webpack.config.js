@@ -71,7 +71,9 @@ module.exports = (env, argv) => {
                 // 找不到文件，卸载按钮会静默失败）
                 { from: "./native/HotkeyDaemon/*.bat", to: "./native/HotkeyDaemon/[name][ext]" },
                 { from: "./native/HotkeyDaemon/*.ps1", to: "./native/HotkeyDaemon/[name][ext]" },
-                { from: "./native/HotkeyDaemon/publish/JWautofillHotkeyDaemon.exe", to: "./native/HotkeyDaemon/publish" }
+                { from: "./native/HotkeyDaemon/publish/JWautofillHotkeyDaemon.exe", to: "./native/HotkeyDaemon/publish" },
+                // 用户文档（右上角菜单「功能文档」按钮经 shell.openPath 在默认浏览器中打开）
+                { from: "./docs", to: "./docs" }
             ]
         }),
     ]);

@@ -7,6 +7,7 @@ const { entrypoints } = require("uxp");
 
 import { AdjustmentMenu } from './AdjustmentMenu';
 import { LicenseManager } from './LicenseManager';
+import { openPluginDoc } from './openDocs';
 
 export class MenuManager {
   // 主面板 APP 的回调
@@ -119,6 +120,9 @@ export class MenuManager {
           this.appSetMainHotkeyCallback();
         }
         break;
+      case "openDocsFill":
+        void openPluginDoc("docs/fill-guide.html");
+        break;
       default:
         console.warn(`Unknown app flyout menu item: ${id}`);
     }
@@ -185,6 +189,14 @@ export class MenuManager {
             {
               id: "setMainHotkey",
               label: "设置选区填充主开关快捷键"
+            },
+            {
+              id: "spacerApp2",
+              label: "-" // 分隔符（设置主开关快捷键 与 功能文档 之间）
+            },
+            {
+              id: "openDocsFill",
+              label: "功能文档"
             }
           ],
           invokeMenu(id: string) {
@@ -229,6 +241,14 @@ export class MenuManager {
             {
               id: "uninstallHotkeyDaemon",
               label: "卸载快捷键服务"
+            },
+            {
+              id: "spacer3",
+              label: "-" // 分隔符（卸载快捷键服务 与 功能文档 之间）
+            },
+            {
+              id: "openDocsToolbox",
+              label: "功能文档"
             }
           ],
           invokeMenu(id: string) {

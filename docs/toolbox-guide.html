@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>绘画工具箱 使用说明 · JWautofill</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --panel-2: #eef2f8;
+      --text: #1d2733;
+      --muted: #5d6b7c;
+      --line: #e3e9f1;
+      --accent: #267fe9;
+      --accent-strong: #1b6bd6;
+      --accent-soft: rgba(38, 128, 235, 0.10);
+      --code-bg: #eef2f8;
+      --ok: #15803d;  --ok-bg: rgba(21, 128, 61, 0.12);
+      --warn: #b45309; --warn-bg: rgba(180, 83, 9, 0.12);
+      --danger: #b91c1c; --danger-bg: rgba(185, 28, 28, 0.12);
+      --radius: 14px;
+      --shadow: 0 1px 2px rgba(16,24,40,.05), 0 6px 18px rgba(16,24,40,.05);
+      --maxw: 900px;
+      --sidebar: 264px;
+      --ff: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f141b;
+        --panel: #161d27;
+        --panel-2: #1d2733;
+        --text: #e6edf5;
+        --muted: #9aa7b8;
+        --line: #283341;
+        --accent: #4f9bff;
+        --accent-strong: #6fabff;
+        --accent-soft: rgba(79, 155, 255, 0.14);
+        --code-bg: #1d2733;
+        --ok: #4ade80; --ok-bg: rgba(74, 222, 128, 0.14);
+        --warn: #f0b454; --warn-bg: rgba(240, 180, 84, 0.14);
+        --danger: #f87171; --danger-bg: rgba(248, 113, 113, 0.14);
+        --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 22px rgba(0,0,0,.28);
+      }
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--ff); line-height: 1.75; -webkit-font-smoothing: antialiased; }
+    a { color: var(--accent-strong); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .layout { display: grid; grid-template-columns: var(--sidebar) minmax(0, 1fr); min-height: 100vh; }
+
+    nav { position: sticky; top: 0; align-self: start; height: 100vh; overflow: auto; padding: 26px 20px; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 70%, var(--bg)); backdrop-filter: blur(6px); }
+    nav .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+    nav .brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+    nav h1 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: .2px; }
+    nav .sub { margin: 2px 0 18px; color: var(--muted); font-size: 12px; }
+    nav a.navlink { display: flex; align-items: center; gap: 10px; padding: 8px 10px; margin: 2px 0; border-radius: 9px; color: var(--muted); font-size: 13.5px; font-weight: 500; transition: background .15s, color .15s; }
+    nav a.navlink:hover { background: var(--accent-soft); color: var(--text); text-decoration: none; }
+    nav a.navlink.active { background: var(--accent-soft); color: var(--accent-strong); font-weight: 700; }
+    nav a.navlink .idx { font-variant-numeric: tabular-nums; font-size: 11px; opacity: .6; min-width: 16px; }
+    nav .navgroup { margin-top: 14px; font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); opacity: .7; padding-left: 10px; }
+
+    main { max-width: var(--maxw); padding: 0 40px 96px; }
+    .hero { margin: 0 -40px 8px; padding: 46px 40px 34px; background: linear-gradient(135deg, var(--accent-soft), transparent 70%); border-bottom: 1px solid var(--line); }
+    .hero .eyebrow { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .6px; color: var(--accent-strong); background: var(--accent-soft); padding: 4px 10px; border-radius: 999px; margin-bottom: 14px; }
+    .hero h1 { margin: 0 0 10px; font-size: 32px; line-height: 1.2; letter-spacing: -.4px; }
+    .hero p { margin: 0; color: var(--muted); font-size: 16px; max-width: 640px; }
+    .hero .meta { margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .badge { font-size: 12px; color: var(--muted); background: var(--panel-2); border: 1px solid var(--line); padding: 4px 10px; border-radius: 999px; }
+
+    section { scroll-margin-top: 18px; padding-top: 30px; }
+    h2 { font-size: 22px; margin: 0 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); letter-spacing: -.2px; }
+    h3 { font-size: 16.5px; margin: 22px 0 8px; color: var(--text); }
+    h4 { font-size: 14.5px; margin: 16px 0 6px; color: var(--accent-strong); }
+    p { margin: 10px 0; }
+    ul, ol { padding-left: 22px; } li { margin: 6px 0; }
+    code { font-family: var(--mono); font-size: .88em; background: var(--code-bg); padding: 2px 6px; border-radius: 5px; color: var(--text); }
+    .kbd { font-family: var(--mono); font-size: .85em; background: var(--panel-2); border: 1px solid var(--line); border-bottom-width: 2px; padding: 1px 7px; border-radius: 6px; }
+
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; margin: 14px 0; box-shadow: var(--shadow); }
+    .card h3 { margin-top: 0; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    @media (max-width: 640px){ .grid2 { grid-template-columns: 1fr; } }
+
+    .callout { display: flex; gap: 12px; border-radius: 12px; padding: 12px 14px; margin: 14px 0; border: 1px solid; font-size: 14px; line-height: 1.65; }
+    .callout .ic { flex: 0 0 auto; font-size: 16px; line-height: 1.5; }
+    .callout.note { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+    .callout.warn { background: var(--warn-bg); border-color: color-mix(in srgb, var(--warn) 32%, transparent); }
+    .callout.danger { background: var(--danger-bg); border-color: color-mix(in srgb, var(--danger) 32%, transparent); }
+    .callout.ok { background: var(--ok-bg); border-color: color-mix(in srgb, var(--ok) 32%, transparent); }
+    .callout b { color: var(--text); }
+
+    table { width: 100%; border-collapse: collapse; margin: 12px 0 14px; font-size: 13.5px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+    th, td { text-align: left; padding: 10px 13px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { background: var(--panel-2); font-weight: 700; }
+    tr:last-child td { border-bottom: 0; }
+    td:first-child, th:first-child { white-space: nowrap; font-weight: 600; }
+
+    .figure { margin: 14px 0; border: 1px dashed color-mix(in srgb, var(--muted) 40%, transparent); border-radius: 12px; background: var(--panel-2); overflow: hidden; }
+    .figure .ph { display: flex; align-items: center; justify-content: center; min-height: 150px; color: var(--muted); font-size: 13.5px; text-align: center; padding: 24px; }
+    .figure figcaption { padding: 9px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
+
+    footer { margin-top: 50px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+
+    @media (max-width: 880px) {
+      .layout { display: block; }
+      nav { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+      main { padding: 0 22px 64px; }
+      .hero { margin: 0 -22px 8px; padding: 34px 22px 26px; }
+      .hero h1 { font-size: 26px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <nav>
+      <div class="brand"><span class="dot"></span><h1>绘画工具箱</h1></div>
+      <p class="sub">JWautofill 使用说明</p>
+      <a class="navlink" href="#overview"><span class="idx">1</span>面板概览</a>
+      <a class="navlink" href="#layout"><span class="idx">2</span>分区与布局</a>
+      <a class="navlink" href="#quick"><span class="idx">3</span>快捷操作</a>
+      <a class="navlink" href="#detail"><span class="idx">4</span>细节调整</a>
+      <a class="navlink" href="#edge"><span class="idx">5</span>边缘处理</a>
+      <a class="navlink" href="#mask"><span class="idx">6</span>蒙版同步</a>
+      <a class="navlink" href="#hotkey"><span class="idx">7</span>笔刷热键</a>
+      <a class="navlink" href="#menu"><span class="idx">8</span>顶部菜单</a>
+      <a class="navlink" href="#license"><span class="idx">9</span>授权与试用</a>
+      <a class="navlink" href="#faq"><span class="idx">10</span>常见问题</a>
+    </nav>
+
+    <main>
+      <div class="hero">
+        <span class="eyebrow">JWautofill · 绘画工具箱</span>
+        <h1>绘画工具箱 使用说明</h1>
+        <p>一组针对「选区像素」的批处理算法（分块均值、补色、木刻、锐化、边缘平滑、alpha 对齐、扣白 / 扣黑等），一个「蒙版同步」引擎，以及「笔刷热键」服务（仿 Brusherator，全局快捷键直接切笔刷）。</p>
+        <div class="meta">
+          <span class="badge">版本 2.0.0</span>
+          <span class="badge">更新于 2026-08</span>
+        </div>
+      </div>
+
+      <section id="overview">
+        <h2>1. 面板概览</h2>
+        <p>绘画工具箱是 JWautofill 的第二面板，提供选区像素级的批量处理与自动化。所有功能受<b>授权门控</b>：未激活且非试用时，执行任一处理器前会提示先到选区填充面板完成授权。</p>
+        <div class="callout warn">本插件需要 <b>Photoshop 2022（版本 23.0）或更高版本</b>。本面板的像素处理功能依赖 imaging API，在更早的 Photoshop 版本中不可用。</div>
+        <div class="card">
+          <h3>能力三大块</h3>
+          <ul>
+            <li><b>选区像素算法</b>：分块平均 / 补色 / 木刻 / 锐化 / 边缘平滑 / alpha 对齐 / 扣白扣黑等。</li>
+            <li><b>蒙版同步引擎</b>：把某图层通道实时复制到目标蒙版（事件驱动 + 兜底轮询）。</li>
+            <li><b>笔刷热键（快捷键服务）</b>：快捷键服务提供 Windows 全局快捷键，直接在画布上切笔刷，无需录制动作。</li>
+          </ul>
+        </div>
+        <figure class="figure"><div class="ph">截图待补：绘画工具箱面板整体布局</div><figcaption>面板整体：快捷操作 / 细节调整 / 边缘处理 / 蒙版同步 / 笔刷热键 分区。</figcaption></figure>
+      </section>
+
+      <section id="layout">
+        <h2>2. 分区与布局</h2>
+        <p>面板内容由若干<b>分区（section）</b>组成，默认顺序为：快捷操作 → 细节调整 → 边缘处理 → 蒙版同步；「笔刷热键」分区渲染在最后。</p>
+        <ul>
+          <li>分区可<b>拖拽排序</b>、<b>折叠 / 展开</b>、<b>隐藏 / 显示</b>（见第 8 节菜单）。</li>
+          <li>「复位分区顺序」可恢复默认顺序与默认子功能。</li>
+        </ul>
+      </section>
+
+      <section id="quick">
+        <h2>3. 快捷操作</h2>
+
+        <h3>分块平均</h3>
+        <p>按网格对选区分块做加权平均降噪。</p>
+        <table>
+          <tr><th>参数</th><th>说明</th></tr>
+          <tr><td>加权模式</td><td>开关；开启后中心权重更高。</td></tr>
+          <tr><td>强度</td><td>1–10 级（开启加权模式后显示）。</td></tr>
+        </table>
+
+        <h3>分块渐变</h3>
+        <p>对每个不相连选区（连通块）分别采样一次渐变颜色填充；渐变取自主面板「渐变设置」的最终预览（含角度与反向）。</p>
+
+        <h3>浅线 / 深线同层补色</h3>
+        <table>
+          <tr><th>模式</th><th>说明</th></tr>
+          <tr><td>浅线同层补色</td><td>线稿与填充同层、线比填充浅时，只传播较深的内部填充色；尖角 / 缝隙 / 孔洞填实（alpha→255）。</td></tr>
+          <tr><td>深线同层补色</td><td>同层、线比填充深时，只传播较浅的内部填充色。</td></tr>
+        </table>
+
+        <h3>分层补色</h3>
+        <p>线稿与填充<b>不同层</b>时，以线稿轮廓引导补全。下方「线稿参考」下拉默认「自动」= 当前层上方最近像素层，可手动指定（选项标注「上方像素层」）。</p>
+
+        <h3>特殊木刻</h3>
+        <p>木刻量化 + 透明 / 半透明边缘按强度叠加木刻。</p>
+        <table>
+          <tr><th>参数</th><th>说明</th></tr>
+          <tr><td>重置</td><td>右侧按钮，恢复默认。</td></tr>
+          <tr><td>色阶数</td><td>2–16 级。</td></tr>
+          <tr><td>边缘阈值</td><td>0–255 值。</td></tr>
+          <tr><td>边缘强度</td><td>0–100%。</td></tr>
+          <tr><td>预览</td><td>开关；参数变化 300ms 内自动刷新预览，关闭时还原基线像素。</td></tr>
+        </table>
+
+        <h3>扣白</h3>
+        <p>仅普通像素层。<span class="kbd">Ctrl</span>+点击 RGB 载入亮度选区 → Delete 清亮部 → 复制 N 份合并增强 alpha，把白底半透明内容抠回透明底。</p>
+        <h3>扣黑</h3>
+        <p>同上，但用反色法（先 Invert 转成白底问题，走扣白流程，再 Invert 回来），把黑底半透明内容抠回透明底。</p>
+      </section>
+
+      <section id="detail">
+        <h2>4. 细节调整</h2>
+        <h3>像素过渡</h3>
+        <p>特制类高斯模糊过渡，屏蔽 alpha=0 像素以保护形状。</p>
+        <table>
+          <tr><th>参数</th><th>说明</th></tr>
+          <tr><td>强力模式</td><td>开关；自动估算等效中间值半径，开启后隐藏半径 / 强度。</td></tr>
+          <tr><td>半径</td><td>5–20px（普通模式）。</td></tr>
+          <tr><td>强度</td><td>1–5 级（普通模式）。</td></tr>
+        </table>
+        <h3>梯度修改</h3>
+        <p>程度 <b>-10 ~ 10 级</b>：修改选区内梯度形态（负 = 放缓，正 = 陡峭），同时作用于颜色与不透明度过渡。</p>
+        <h3>特殊锐化</h3>
+        <p>强度 1–10 级；更「硬」的局部锐化，强化过渡边缘。</p>
+        <h3>高频增强</h3>
+        <p>强度 1–10 级、范围 1–10 级；提升细小纹理与微对比。</p>
+      </section>
+
+      <section id="edge">
+        <h2>5. 边缘处理</h2>
+        <h3>边缘平滑</h3>
+        <p>「平滑模式」下拉切换两种行为：</p>
+        <table>
+          <tr><th>模式</th><th>参数</th></tr>
+          <tr><td>仅色块边界</td><td>中间值平滑 + 边缘渐隐；显示「中间值半径」10–30px。</td></tr>
+          <tr><td>仅主线条</td><td>沿切线方向平滑；显示「平滑力度」0–100%、「平滑范围」3–12px。</td></tr>
+        </table>
+        <h3>alpha 对齐（三档）</h3>
+        <table>
+          <tr><th>档位</th><th>说明</th></tr>
+          <tr><td>alpha 下对齐</td><td>统一半透明笔刷交叉点不透明度，消除交汇处深色点。</td></tr>
+          <tr><td>alpha 上对齐</td><td>把线条上偏淡 / 断点拉高到主体水平（对称，只增不减）。</td></tr>
+          <tr><td>保底下对齐（alpha 对齐含背景）</td><td>用于低透明度背景（如 alpha=50 色块）上画线，统一交叉凸起同时保护背景与线条自身。</td></tr>
+        </table>
+        <h3>线条加黑</h3>
+        <p>增强边缘线条 alpha，使轮廓更清晰。仅普通像素层；背景层会报警「请选择不透明底的线稿图层！」。</p>
+      </section>
+
+      <section id="mask">
+        <h2>6. 蒙版同步</h2>
+        <p>把某图层通道实时复制到目标蒙版。顶部「引擎状态条」显示状态点 + 文字（引擎就绪 / 引擎初始化中…）+ 文档名 + 任务数。</p>
+        <h3>单条同步任务</h3>
+        <table>
+          <tr><th>控件</th><th>说明</th></tr>
+          <tr><td>样本</td><td>像素 / 调整 / 背景图层，或带蒙版的图层组。</td></tr>
+          <tr><td>通道</td><td>灰阶 / R / G / B / A / 蒙版 / 色相 / 饱和度（背景层只有灰阶/R/G/B/色相/饱和度；调整层无 A/蒙版；普通像素层全有；带蒙版组只能取蒙版）。</td></tr>
+          <tr><td>蒙版</td><td>目标层须带蒙版。</td></tr>
+          <tr><td>反相</td><td>开关，取 255-值。</td></tr>
+          <tr><td>同步 / 立即同步 / 删除</td><td>同步开关（事件驱动 + 兜底轮询）、立即同步图标、删除图标；双击可重命名。</td></tr>
+        </table>
+        <p>底部「<b>+</b>」新建同步任务（空态显示「点击 + 新建同步任务」）。每条任务有「上次同步状态」行，如「已写入蒙版 12:30:01」或「未配置完成：请选择样本图层、通道与目标蒙版」。</p>
+      </section>
+
+      <section id="hotkey">
+        <h2>7. 笔刷热键（快捷键服务）</h2>
+        <p>分区标题「笔刷热键」。原理：通过「快捷键服务」实现 Windows 全局快捷键，直接在画布上按快捷键切换笔刷——<b>无需录制 Photoshop 动作</b>。</p>
+
+        <h3>总开关（选区填充开关）</h3>
+        <p>快捷键列表里的一条特殊条目：动作固定为「切换选区填充主开关」、名称显示「选区填充开关」、默认组合键 <code>Ctrl+Q</code>。它在配置中长期存在；「解绑」是把 combo 置空（不真正删除），需要重新指定时去主面板菜单。</p>
+
+        <h3>笔刷 → 快捷键绑定（仿 Brusherator）</h3>
+        <ol>
+          <li>在「选择笔刷」下拉中选一支笔刷（自动枚举 PS 笔刷预设并检测类型：画笔 / 混合器画笔 / 涂抹等；枚举失败则回退「手动输入笔刷预设名，需与 PS 完全一致」）。</li>
+          <li>点红色录制圆点 → 快捷键服务用 Windows 全局键盘钩子捕获组合键（可绑 A–Z、0–9、F1–F24、符号键、方向 / 空格 / 回车 / 退格 / Tab / Insert / Delete / Home / End / PageUp / PageDown、小键盘 Num0–9）→ 录完保存为「应用笔刷」条目。</li>
+          <li>录制中可点「停止」方块取消（等同 <span class="kbd">Esc</span>）；<span class="kbd">Esc</span> 亦可取消录制。</li>
+        </ol>
+        <div class="callout note">绑定后直接切换画笔工具并按笔刷名称选中预设，不走动作录制，因此比传统 Brusherator 方案更轻量、更稳定。</div>
+
+        <h3>连接与状态</h3>
+        <p>状态条显示「快捷键服务已就绪 / 处理中… / 未启动」（绿点 / 黄点）。右侧按钮「启动快捷键服务 / 停止快捷键服务」：</p>
+        <ul>
+          <li><b>启动</b>：在后台启动快捷键服务（无窗口、自动注册开机自启）。</li>
+          <li><b>停止</b>：让快捷键服务退出，便于卸载。</li>
+        </ul>
+
+        <h3>列表与多选</h3>
+        <p>显示「组合键 丨 名称」；空态「尚未绑定任何快捷键」。支持单击 / <span class="kbd">Ctrl</span>+单击 / <span class="kbd">Shift</span>+单击 多选；底部「已选中 N 条」+「重录」（仅选中单条可用）+「删除」（主开关条目为「解绑」而非删除）。</p>
+        <p>按快捷键后会有即时提示：「选区填充开关已开启/关闭」或「已切换笔刷『笔刷名』」；若失败则会提示检查笔刷名是否与 Brushes 面板一致。</p>
+
+        <h3>卸载快捷键服务</h3>
+        <p>优先让快捷键服务自行移除（取消开机自启并删除安装目录）；未连接时回退到卸载脚本。成功提示「已卸载快捷键服务：开机自启已移除，安装目录已删除。」</p>
+      </section>
+
+      <section id="menu">
+        <h2>8. 顶部菜单</h2>
+        <p>点击面板右上角 <b>⋮</b> 菜单：</p>
+        <table>
+          <tr><th>菜单项</th><th>说明</th></tr>
+          <tr><td>折叠 / 展开所有分区</td><td>有折叠项则全展开，否则全折叠。</td></tr>
+          <tr><td>隐藏 / 显示分区</td><td>打开「隐藏 / 显示分区」模态，列出各分区开关。</td></tr>
+          <tr><td>复位分区顺序</td><td>恢复默认顺序与子功能。</td></tr>
+          <tr><td>参数复位</td><td>分区 / 子功能回归默认 + 基础参数复位（半径 / sigma / 锐化 / 梯度 / 高频 / 木刻 / 边缘平滑等）+ 关闭可见性面板。</td></tr>
+          <tr><td><b>图层像素 alpha 采样</b></td><td>把当前图层像素的 alpha 通道以矩阵形式打印到控制台（每行 <code>y=N: a,b,c…</code>），用于调试。限制：仅非背景的普通像素图层；图层尺寸 W×H ≤ 250000（过大提示「请用选区框选笔画区域后再试」）；空层提示先绘制；背景层报警「alpha 采样仅支持非背景的普通像素图层」。</td></tr>
+          <tr><td>卸载快捷键服务</td><td>见第 7 节。</td></tr>
+          <tr><td><b>功能文档</b></td><td>分隔线下方，点击在默认浏览器打开本说明。</td></tr>
+        </table>
+      </section>
+
+      <section id="license">
+        <h2>9. 授权与试用</h2>
+        <p>面板顶部有授权状态横幅，由共享授权状态驱动（与选区填充面板同步）：</p>
+        <table>
+          <tr><th>状态</th><th>横幅</th></tr>
+          <tr><td>试用中且剩余天数 &gt; 0</td><td>绿点 + 「试用还剩 N 天」。</td></tr>
+          <tr><td>试用结束 / 未激活</td><td>红点 + 「需要在选区填充面板激活」。</td></tr>
+        </table>
+        <ul>
+          <li>未授权且非试用时，面板在横幅下方覆盖<b>锁定遮罩</b>，隐藏全部可编辑控件，必须到选区填充面板完成授权。</li>
+          <li>每次执行处理器前都会先检查授权状态：未授权且非试用会提示并阻断。</li>
+          <li>本面板本身<b>不开</b>授权对话框，仅同步状态。</li>
+        </ul>
+      </section>
+
+      <section id="faq">
+        <h2>10. 常见问题</h2>
+        <h3>点击处理器没反应？</h3>
+        <p>工具箱功能受授权门控，请先到选区填充面板激活或开始试用。</p>
+        <h3>绑了笔刷热键但切换不了？</h3>
+        <p>检查笔刷名是否与 Brushes 面板完全一致；确认「快捷键服务」处于「已就绪」绿点状态。</p>
+        <h3>蒙版同步没有自动更新？</h3>
+        <p>目标层须带蒙版，且样本 / 通道 / 蒙版需配置完整；可点「立即同步」手动触发。</p>
+        <h3>alpha 采样报错？</h3>
+        <p>仅支持非背景的普通像素图层，且图层尺寸 W×H ≤ 250000；过大请先用选区框选笔画区域。</p>
+      </section>
+
+      <footer>JWautofill · 绘画工具箱使用说明</footer>
+    </main>
+  </div>
+  <script>
+    (function () {
+      var links = Array.prototype.slice.call(document.querySelectorAll('nav a.navlink'));
+      var map = {};
+      links.forEach(function (a) {
+        var id = a.getAttribute('href').slice(1);
+        var el = document.getElementById(id);
+        if (el) map[id] = a;
+      });
+      if ('IntersectionObserver' in window) {
+        var obs = new IntersectionObserver(function (entries) {
+          entries.forEach(function (e) {
+            if (e.isIntersecting) {
+              links.forEach(function (l) { l.classList.remove('active'); });
+              var a = map[e.target.id];
+              if (a) a.classList.add('active');
+            }
+          });
+        }, { rootMargin: '-15% 0px -75% 0px', threshold: 0 });
+        Object.keys(map).forEach(function (id) { obs.observe(document.getElementById(id)); });
+      }
+    })();
+  </script>
+</body>
+</html>
