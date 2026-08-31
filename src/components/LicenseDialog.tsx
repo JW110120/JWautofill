@@ -171,13 +171,21 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
                     />
                 </div>
             </div>
-            <button
+            <div
                 className="license-btn"
-                onClick={handleVerifyLicense}
-                disabled={isVerifying}
+                role="button"
+                tabIndex={isVerifying ? -1 : 0}
+                aria-disabled={isVerifying}
+                onClick={() => { if (!isVerifying) void handleVerifyLicense(); }}
+                onKeyDown={(e) => {
+                    if (!isVerifying && (e.key === 'Enter' || e.key === ' ')) {
+                        e.preventDefault();
+                        void handleVerifyLicense();
+                    }
+                }}
             >
                 {isVerifying ? '验证中…' : '激活'}
-            </button>
+            </div>
         </div>
     );
 
@@ -206,9 +214,20 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
                         <span className="license-title">已授权</span>
                         <span className="license-sub">感谢购买选区填充插件！</span>
                     </div>
-                    <button className="license-btn" onClick={onClose}>
+                    <div
+                        className="license-btn"
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => onClose()}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                onClose();
+                            }
+                        }}
+                    >
                         关闭
-                    </button>
+                    </div>
                 </div>
             );
         }
@@ -244,12 +263,20 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
                 {/* 试用区：说明文字后紧接试用按钮 */}
                 <div className="license-block">
                     <p className="license-trial-text">免费试用 7 天，完整体验全部功能</p>
-                    <button
+                    <div
                         className="license-btn"
-                        onClick={handleStartTrial}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => void handleStartTrial()}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                void handleStartTrial();
+                            }
+                        }}
                     >
                         免费试用
-                    </button>
+                    </div>
                 </div>
 
                 {renderContact()}
@@ -366,10 +393,13 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
                 }
 
                 /* 与面板按钮同款：走全局 button 规则（--button-bg + --border-color + 圆角4）。
-                   居中要点：block + width:100% + 左右 margin auto + text-align:center，
-                   使按钮盒与按钮文字都在卡片水平中线上。 */
+                   居中要点：flex + align-items:center + justify-content:center，
+                   使按钮文字在按钮盒内上下、左右都居中（div 当 button 用，没有原生垂直居中）。
+                   只用 flex 的 align/justify 居中，不用 flex gap（UXP 下 gap 不稳）。 */
                 .license-btn {
-                    display: block;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
                     width: 100%;
                     max-width: 100%;
                     height: 32px;
@@ -377,11 +407,11 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
                     padding: 0 10px;
                     box-sizing: border-box;
                     font-size: 12px;
+                    line-height: 1;
                     color: var(--text-color);
                     background-color: var(--button-bg);
                     border: 1px solid var(--border-color);
                     border-radius: 4px;
-                    text-align: center;
                     cursor: pointer;
                     appearance: none;
                     -webkit-appearance: none;

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Pattern } from '../types/state';
 import { FileIcon, DeleteIcon } from '../styles/Icons';
+import IconButton from '../components/IconButton';
 import { action, core, imaging, app } from 'photoshop';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
 import { PresetManager } from '../utils/PresetManager';
@@ -1716,13 +1717,9 @@ interface PatternPickerProps {
                     </div> 
                      <div className="pattern-icon-container">
                         <div className="icon-group">
-                            <sp-action-button 
-                                quiet 
-                                class="icon-button"
-                                onClick={handleFileSelect}
-                            >
-                                <FileIcon />
-                            </sp-action-button>
+                            <IconButton title="选择图案文件" onClick={handleFileSelect}>
+                                <FileIcon style={{ width: 15, height: 15, display: 'block' }} />
+                            </IconButton>
                             <div className="delete-button-wrapper">
                             <div
                                 className={`hotkey-icon-button${(!selectedPattern && selectedPatterns.size === 0) ? ' disabled' : ''}`}

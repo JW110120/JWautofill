@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Gradient, GradientStop } from '../types/state';
 import { AddIcon, DeleteIcon } from '../styles/Icons';
+import IconButton from '../components/IconButton';
 import { app, action, core } from 'photoshop';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
 import { PresetManager } from '../utils/PresetManager';
@@ -1323,13 +1324,9 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 
                 <div className="gradient-icon-container">
                     <div className="icon-group">
-                        <sp-action-button 
-                            quiet 
-                            class="icon-button"
-                            onClick={handleAddPreset}
-                        >
-                            <AddIcon />
-                        </sp-action-button> 
+                        <IconButton title="添加预设" onClick={handleAddPreset}>
+                            <AddIcon style={{ width: 15, height: 15, display: 'block' }} />
+                        </IconButton>
                         <div className="delete-button-wrapper">
                         <div
                             className={`hotkey-icon-button${((selectedPreset === null && selectedPresets.size === 0) || presets.length === 0) ? ' disabled' : ''}`}

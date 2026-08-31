@@ -1,13 +1,33 @@
 .strokesetting {
-  position: sticky;
-  top: 0px;
-  left: 0px;
+  position: absolute;
+  top: 0;
+  left: 0;
   width: 100%;
   height: calc(100% - 20px);
   background-color: var(--bg-color);
-  padding: 8px;
-  display: flex; 
+  padding: 10px;
+  box-sizing: border-box;
+  display: flex;
   flex-direction: column;
+  justify-content: flex-start;
+  overflow-y: auto;
+  z-index: 9999;
+}
+
+/* 子面板变矮时各区块保持自身固有高度、不被 flex 压缩（默认 flex-shrink:1 会让
+   描边宽度/位置/混合/不透明度各行随面板高度一起被压扁，连带行内 padding 与之间的
+   间距一起缩短）。高度不足时改由 .strokesetting 自身出现竖直滚动条，与纯色面板一致。 */
+.strokesetting > * {
+  flex-shrink: 0;
+}
+
+/* 描边面板标题与关闭按钮紧贴内容容器边缘 */
+.strokesetting .panel-header {
+  padding: 0;
+}
+
+.strokesetting .panel-header h3 {
+  margin-left: 0;
 }
 
 
@@ -17,11 +37,11 @@
 
 /*描边宽度*/
 .stroke-wide-container {
-  width: 100;
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 10px 25px 10px;
+  padding: 20px 0 25px 0;
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -88,7 +108,7 @@
   align-items: center;
   flex-direction: column;
   width: 100%;
-  padding: 24px 10px 27px 10px;
+  padding: 24px 0 27px 0;
   border-bottom: 1px solid var(--border-color);
   margin-bottom: 20px;
 }
@@ -136,11 +156,11 @@
 /*混合模式*/
 .stroke-blende-mode {
   position: relative;
-  display:inline-flex;          /* 启用 Flexbox */
-  align-items: center;    /* 垂直居中对齐 */
-  width: 230px;
+  display: flex;
+  align-items: center;
+  width: 100%;
   border-bottom: 1px solid var(--border-color);
-  padding: 10px 10px 30px 10px;
+  padding: 10px 0 30px 0;
   margin-bottom: 20px;
 }
 
@@ -158,7 +178,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 5px 10px 23px 10px;
+  padding: 5px 0 23px 0;
   margin-bottom: 10px;
   border-bottom: 1px solid var(--border-color);
 }

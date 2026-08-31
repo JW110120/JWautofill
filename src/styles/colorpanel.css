@@ -1,21 +1,29 @@
 /* 颜色设置面板样式 */
-.color-settings-panel {
-    position: sticky;
+  .color-settings-panel {
+    position: absolute;
     top: 0;
     left: 0;
-    width: 250px;  
+    width: 100%;
     height: calc(100% - 20px);
     background-color: var(--bg-color);
-    padding: 15px;  
+    padding: 10px;
     box-sizing: border-box;
     overflow-y: auto;
+    justify-content: flex-start;
     z-index: 9999 !important;
+  }
+
+  /* 子面板变矮时各区块保持自身固有高度、不被 flex 压缩（默认 flex-shrink:1 会让
+     标题/滑块组/计算模式区随面板高度一起被压扁，连带间距一起缩短）。高度不足时改由
+     .color-settings-panel 自身出现竖直滚动条，与纯色面板一致。 */
+  .color-settings-panel > * {
+    flex-shrink: 0;
   }
 
   .panel-header {
     display: flex;
     min-height: 20px;
-    height: 6%;
+    height: auto;
     justify-content: space-between;
     align-items: center;
     margin-bottom: 5px;
@@ -32,8 +40,12 @@
   .colorsettings-slider-item {
     display: flex;
     flex-direction: column;
-    margin:0 0 15px 0px;
-    width: 210px
+    /* 内容区宽度 = 面板 250 - 左右 padding 10*2 = 230；max-width:100% + auto 外边距保证
+       面板宽度变化时滑块容器始终居中且不被撑破。 */
+    margin: 0 auto 15px auto;
+    width: 230px;
+    max-width: 100%;
+    box-sizing: border-box;
   }
 
   .colorsettings-slider-header {
@@ -46,8 +58,8 @@
   }
 
   .colorsettings-slider-item .colorsettings-slider-range {
-    width: 210px;
-    margin:-5px 0 0 3px;
+    width: 100%;
+    margin: -5px 0 0 0;
     cursor: pointer;
   }
 
@@ -112,7 +124,7 @@
 .colorsettings-calculation-mode {
     display: flex;
     flex-direction: column;
-    margin: 30px -15px 0 -15px;
+    margin: 30px -10px 0 -10px;
     padding-top: 15px;
     border-top: 1px solid var(--border-color);
 }

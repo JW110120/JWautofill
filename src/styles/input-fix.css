@@ -10,7 +10,7 @@
 .pattern-picker,
 .color-settings-panel,
 .gradient-picker,
-.stroke-setting {
+.strokesetting {
     z-index: 9999 !important;
 }
 
@@ -45,7 +45,7 @@ body.secondary-panel-open #app .adjustment-number-input {
 .pattern-picker input[type="number"],
 .color-settings-panel input[type="number"],
 .gradient-picker input[type="number"],
-.stroke-setting input[type="number"] {
+.strokesetting input[type="number"] {
     visibility: visible;
     opacity: 1;
     pointer-events: auto;

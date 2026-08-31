@@ -26,6 +26,9 @@ export default function BrushHotkeySection() {
   const [brushTypes, setBrushTypes] = useState<Record<string, string>>({});
   const [entries, setEntries] = useState<HotkeyEntry[]>([]);
   const [selectedBrush, setSelectedBrush] = useState('');
+  // 下拉选中的「唯一键」：同名笔刷各自有不同的 value（见下方 brushOptions），
+  // 此 state 仅用于驱动 BrushSelect 的选中高亮，真实笔刷名仍由 selectedBrush 持有。
+  const [selectedKey, setSelectedKey] = useState('');
   const [usePicker, setUsePicker] = useState(true);
   const [recording, setRecording] = useState(false);
   const [message, setMessage] = useState('');
@@ -323,6 +326,15 @@ export default function BrushHotkeySection() {
     });
   }, [entries]);
 
+  // 下拉选中键与真实笔刷名对齐：当已选笔刷（真实名）存在、但选中键为空时，
+  // 把选中键补到第一个同名项的索引，保证高亮正确（例如刷新笔刷列表后回灌选中态）。
+  useEffect(() => {
+    if (selectedBrush && !selectedKey) {
+      const gi = brushes.indexOf(selectedBrush);
+      if (gi >= 0) setSelectedKey(String(gi));
+    }
+  }, [selectedBrush, selectedKey, brushes]);
+
   // 选中项里真正"可处理"的条数：笔刷条目可删除；
   // 选区填充开关只能解绑不能删除，且已解绑（combo 为空）时不可再操作
   const deletableCount = selectedIds.filter(id => {
@@ -438,21 +450,21 @@ export default function BrushHotkeySection() {
     }
   };
 
-  // 同名笔刷去重：PS 笔刷名被用作热键 key，重名只会在下拉里登记一条；
-  // 这里为第 2 个及以后的同名项追加「 (1)」「 (2)」… 仅作显示，value 仍用真实笔刷名（热键不变）。
-  const brushDisplayNames: Record<string, string> = {};
-  const brushSeen: Record<string, number> = {};
-  for (const b of brushes) {
-    const n = (brushSeen[b] = (brushSeen[b] || 0) + 1);
-    brushDisplayNames[b] = n === 1 ? b : `${b} (${n - 1})`;
-  }
-
-  const brushOptions: BrushSelectOption[] = brushes.map(b => ({
-    value: b,
-    main: brushDisplayNames[b] ?? b,
-    // 笔刷类型（混合器/涂抹/画笔/图案图章…）渲染为图标；取不到类型则该项无 tag
-    tag: brushTypeTag(brushTypes[b] || '')
-  }));
+  // 同名笔刷区分：PS 笔刷名被用作热键 key，若两支重名则下拉里必须各自可被独立选中。
+  // 旧逻辑把 value 直接设为真实笔刷名，导致两个同名项 value 撞车：
+  // 点下方那支永远只选中列表较上方的那支，下方的同名笔刷无法在下拉里选出。
+  // 现改为：option.value 用「列表索引」保证唯一，显示名对第 2 个及以后追加「 (1)」「 (2)」…；
+  // 选中后再用索引反查真实笔刷名（brushes[index]）用于热键录制，热键语义不变。
+  const seenCount: Record<string, number> = {};
+  const brushOptions: BrushSelectOption[] = brushes.map((b, gi) => {
+    const dupIdx = (seenCount[b] = (seenCount[b] || 0) + 1) - 1; // 第几个同名项（0 起）
+    return {
+      value: String(gi),
+      main: dupIdx === 0 ? b : `${b} (${dupIdx})`,
+      // 笔刷类型（混合器/涂抹/画笔/图案图章…）渲染为图标；取不到类型则该项无 tag
+      tag: brushTypeTag(brushTypes[b] || '')
+    };
+  });
 
   // 渲染顺序：选区填充开关（toggleMain）始终置顶固定，其余笔刷记录保持存储顺序；
   // 长按拖拽只重排其余记录，不影响置顶项。
@@ -498,9 +510,14 @@ export default function BrushHotkeySection() {
           <div style={rowStyle}>
             {usePicker ? (
               <BrushSelect
-                value={selectedBrush}
+                value={selectedKey}
                 options={brushOptions}
-                onChange={setSelectedBrush}
+                onChange={(v) => {
+                  // 下拉 value 是唯一索引，反查真实笔刷名（用于热键录制）；
+                  // 同时记下选中的索引键，供选中高亮使用。
+                  setSelectedBrush(brushes[Number(v)] ?? v);
+                  setSelectedKey(v);
+                }}
                 placeholder="选择笔刷"
                 title="选择要绑定快捷键的笔刷预设（名称需与 Brushes 面板一致）"
                 style={{ flex: '1 1 auto', minWidth: 0 }}

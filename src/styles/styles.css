@@ -29,26 +29,72 @@ uxp-panel[panelid="com.listen2me.pixeladjustment"],
   overflow: hidden;
 }
 
+uxp-panel[panelid="com.listen2me.jwautofill"],
+#app {
+  height: 100vh;
+  width: 100%;
+  overflow: hidden;
+}
+
 .container {
   width: 250px;
   min-height: 310px;
+  height: 100%;
+  max-height: 100%;
   box-sizing: border-box;
   overflow-y: auto;
   background-color: var(--bg-color);
-  padding: 0 10px;  /* 与 0ffd3e1 一致：底部不预留（info-plane 是 fixed，不占位） */
+  padding: 0 10px 20px;  /* 左右 10px 保证内容区 230px 居中；底部 20px 留给 fixed info-plane */
   display: flex;
   flex-direction: column;
-  position: relative;  /* 添加相对定位 */
+  position: relative;  /* 作为子面板 absolute 定位的包含块 */
   top: 0;  /* 确保容器从顶部开始 */
+}
+
+/* 次级面板打开时禁止主容器滚动，避免内容在子面板后方滚动 */
+body.secondary-panel-open .container {
+  overflow-y: hidden;
 }
 
 .icon-fill {
   fill: var(--text-color);
 }  
 
-/* 隐藏主面板滚动条（限定作用域，不影响调整面板） */
-#app ::-webkit-scrollbar {
-  display: none;
+/* 主面板滚动条：与绘画工具箱同款 10px 圆角滚动条 */
+#app .container::-webkit-scrollbar,
+#app .strokesetting::-webkit-scrollbar,
+#app .color-settings-panel::-webkit-scrollbar,
+#app .gradient-picker::-webkit-scrollbar,
+#app .pattern-picker::-webkit-scrollbar {
+  width: 10px;
+}
+
+#app .container::-webkit-scrollbar-thumb,
+#app .strokesetting::-webkit-scrollbar-thumb,
+#app .color-settings-panel::-webkit-scrollbar-thumb,
+#app .gradient-picker::-webkit-scrollbar-thumb,
+#app .pattern-picker::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+#app .container::-webkit-scrollbar-thumb:hover,
+#app .strokesetting::-webkit-scrollbar-thumb:hover,
+#app .color-settings-panel::-webkit-scrollbar-thumb:hover,
+#app .gradient-picker::-webkit-scrollbar-thumb:hover,
+#app .pattern-picker::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in oklab, var(--scrollbar-thumb) 90%, rgb(255, 255, 255) 10%);
+}
+
+#app .container::-webkit-scrollbar-track,
+#app .strokesetting::-webkit-scrollbar-track,
+#app .color-settings-panel::-webkit-scrollbar-track,
+#app .gradient-picker::-webkit-scrollbar-track,
+#app .pattern-picker::-webkit-scrollbar-track {
+  background-color: var(--scrollbar-track);
+  border-radius: 8px;
 }
 
 .title {
@@ -377,6 +423,54 @@ sp-switch {
 .switch-label {
   font-size: 13px;
   color: var(--text-color);
+}
+
+/* 自定义开关（替代 sp-switch，规避 PS 升级兼容性问题）。
+   轨道/圆点 4px 圆角，与 .main-button 统一；开启态轨道变主题色、圆点右移。
+   组件见 src/components/CustomSwitch.tsx。 */
+.custom-switch {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+  box-sizing: border-box;
+}
+
+.custom-switch-track {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 9999px;
+  background-color: var(--disabled-color);
+  border: 1px solid var(--border-color);
+  box-sizing: border-box;
+  transition: background-color 0.2s ease;
+}
+
+.custom-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background-color: #fff;
+  box-sizing: border-box;
+  transition: transform 0.2s ease;
+}
+
+.custom-switch.on .custom-switch-track {
+  background-color: var(--primary-color);
+  border-color: var(--primary-color);
+}
+
+.custom-switch.on .custom-switch-thumb {
+  transform: translateX(16px);
+}
+
+.custom-switch.disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 

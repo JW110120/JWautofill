@@ -1,16 +1,25 @@
 /* 渐变选择器样式优化 */
 .gradient-picker {
-    position: sticky;
+    position: absolute;
     top: 0;
     left: 0;
-    width: 250px;
+    width: 100%;
     height: calc(100% - 20px);
     background-color: var(--bg-color);
-    padding: 5px;
+    padding: 10px;
     box-sizing: border-box;
-    z-index: 10;
+    z-index: 9999;
     display: flex;
     flex-direction: column;
+    justify-content: flex-start;
+    overflow-y: auto;
+}
+
+/* 子面板变矮时，各区块保持自身固有高度、不被 flex 压缩（默认 flex-shrink:1 会让
+   预设区/编辑区/设置区/预览区随面板高度一起被压扁）。高度不足时改由 .gradient-picker
+   自身出现竖直滚动条，与纯色面板行为一致。 */
+.gradient-picker > * {
+    flex-shrink: 0;
 }
 
 .gradient-subtitle {
@@ -34,28 +43,36 @@
 
 /* 预设区域样式 */
 .gradient-presets-area {
-    height: 15% ;
-    min-height: 105px;
+    /* 固定高度（不随面板高度变化）：图标栏由 .gradient-icon-container 用 flex:1 的
+       预设列表顶到底部，始终紧贴下沿。 */
+    height: 105px;
     width: 100%;
     position: relative;
     display: flex;
-    flex-direction: column ;
+    flex-direction: column;
     border: 1px solid var(--border-color);
     background-color: var(--dark-bg-color);
     margin-bottom: 10px;
     border-radius: 4px;
     z-index: 11;
-    overflow: hidden; /* 新增：确保内容和背景不会溢出圆角 */
+    box-sizing: border-box;
+    /* 关键：留 4px 内边距，使第一个预设格的边框不再紧贴区域左上圆角，
+       避免两层 1px 边框在圆角处重叠混色（用户反馈的「边框与边框混合变亮」）。 */
+    padding: 4px;
+    overflow: hidden; /* 确保内容和背景不会溢出圆角 */
 }
 
 .gradient-presets {
     width: 100%;
-    height: calc(100% - 31px);
+    /* 占满预设区除图标栏外的剩余高度，把图标栏顶到底部 */
+    flex: 1 1 auto;
+    min-height: 0;
     position: relative;
     display: flex;
     flex-direction: row;
     flex-wrap: wrap;
     align-items: flex-start;
+    align-content: flex-start;
     overflow-y: auto;
     top: 0;
     left: 0;
@@ -71,6 +88,9 @@
     border-radius: 4px;
     overflow: hidden;
     cursor: pointer;
+    background-color: var(--dark-bg-color);
+    box-sizing: border-box;
+    outline: none;
 }
 
 .preset-item.selected {
@@ -91,6 +111,12 @@
 
 .gradient-icon-container {
     position: relative;
+    /* 不伸缩，保持固有高度 */
+    flex: 0 0 auto;
+    /* 关键：用 auto 上外边距把图标栏顶到预设区底部。
+       即便 .gradient-presets 在 UXP 下未能按 flex:1 撑满，图标栏也能紧贴下沿，
+       不会悬在预设列表下方与底栏之间留出空隙。 */
+    margin-top: auto;
     border-top: 1px solid var(--border-color);
     background-color: var(--bg-color);
     background-clip: padding-box; /* 新增这一行 */
@@ -102,8 +128,10 @@
     border-radius: 4px;
     margin-bottom: 10px;
     width: 100%;
-    padding: 0 0 10px 0;
-    overflow-y: auto;
+    /* 上下左右内边距统一 10px；border-box 让 100% 宽度含边框与内边距，
+       内容区 = 230 - 2 - 20 = 208px */
+    padding: 10px;
+    box-sizing: border-box;
     display: flex;
     flex-direction: column;
 }
@@ -126,6 +154,7 @@
   border: 1px solid var(--border-color);
   border-radius: 4px;
   color: var(--text-color);
+  font-size: 12px;
   appearance: none;
   -webkit-appearance: none;
   box-sizing: border-box;
@@ -144,7 +173,9 @@
     height: 20px;
     border-radius: 4px;
     background: transparent;
-    margin: 0px 14px -13px 14px;
+    /* 原本 14px 由容器无左右内边距时的外边距提供；现在容器已有 10px 内边距，
+       这里收窄到 4px，使轨道距容器边框仍为 14px，视觉位置不变。 */
+    margin: 0px 4px -13px 4px;
     /* 添加以下属性 */
     overflow: visible;
 }
@@ -174,11 +205,16 @@
 
 .gradient-preview {
     height: 24px;
-    width: calc(100% - 28px); 
-    margin: 10px 10px 10px 14px;
+    /* 内容区 208px：4 + 200 + 4，左右留白对称，与容器 10px 内边距合计仍为 14px 缩进 */
+    width: calc(100% - 8px);
+    margin: 10px 4px 10px 4px;
     border: 1px solid var(--border-color); 
     position: relative;  
     overflow: hidden;
+    background-color: var(--dark-bg-color);
+    box-sizing: border-box;
+    outline: none;
+    box-shadow: none;
 }
 
 .color-slider-track {
@@ -186,7 +222,8 @@
   height: 20px;
   border-radius: 4px;
   background: transparent;
-  margin: -12px 14px 0 14px;
+  /* 同 .gradient-slider-track：容器 10px 内边距 + 4px 外边距 = 14px 视觉缩进 */
+  margin: -12px 4px 0 4px;
   /* 添加以下属性 */
   overflow: visible;
 }
@@ -214,7 +251,7 @@
 }
 .color-prefix {
   font-family: monospace;
-  font-size: 14px;
+  font-size: 12px;
   color: var(--text-color);
 }
 
@@ -233,9 +270,18 @@
 .color-input-container input[type="text"] {
   width: 60px;
   height: 24px;
-  padding: 2px 0px;
+  padding: 2px 4px;
   border: 1px solid var(--border-color);
   border-radius: 4px;
+  /* 与透明度输入框（.opacity-input input[type="number"]）完全统一：
+     字号、盒子模型、外观重置、背景、文字色一致，消除“字体过大/大小不一”。 */
+  color: var(--text-color);
+  font-size: 12px;
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  background-color: var(--dropdown-bg-color);
+  background-image: none;
 }
 
 .color-preview {
@@ -264,10 +310,12 @@ sp-color-slider {
 .gradient-settings-area {
     border: 1px solid var(--border-color);
     border-radius: 4px;
+    /* 上下左右内边距统一 10px；高度由内容决定且不再随面板高度伸缩
+       （见 .gradient-picker > * { flex-shrink: 0 }） */
     padding: 10px;
-    height: 18%;
-    min-height: 80px; 
-    overflow-y: auto;
+    height: auto;
+    width: 100%;
+    box-sizing: border-box;
     display: flex;
     flex-direction: column;
     margin-bottom: 10px;
@@ -415,15 +463,20 @@ sp-color-slider {
   position: relative;
   border-radius: 4px;
   display: flex;
-  height: 20%; 
+  height: auto;
+  min-height: 120px;
   width: 100%;
   border: 1px solid var(--border-color);
-  flex-direction: column;
+    flex-direction: column;
 }
 
 .final-preview {
     position: relative;
-    height: 100%;  
+    /* 修复“变成一条线”：父容器 .final-preview-container 是 height:auto，
+       子元素 height:100% 会解析为 0 而塌陷。改为 flex:1 在 flex 列布局中
+       撑满剩余高度（min-height 兜底），预览框恒定可见。 */
+    flex: 1 1 auto;
+    min-height: 100px;
     margin: 10px; 
     border-radius: 4px;
     justify-content: center;

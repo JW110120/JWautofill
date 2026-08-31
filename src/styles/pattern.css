@@ -1,9 +1,9 @@
 /* 图案选择器样式 */
-.pattern-picker {
-    position: sticky;
+  .pattern-picker {
+    position: absolute;
     top: 0;
     left: 0;
-    width: 250px;
+    width: 100%;
     height: calc(100% - 20px);
     background-color: var(--bg-color);
     padding: 8px;
@@ -11,14 +11,21 @@
     z-index: 9999 !important;
     display: flex;
     flex-direction: column;
+    justify-content: flex-start;
+    overflow-y: auto;
   }
-  
+
+  /* 子面板变矮时各区块保持自身固有高度、不被 flex 压缩（默认 flex-shrink:1 会让
+     图案区/设置区/预览区随面板高度一起被压扁）。高度不足时改由 .pattern-picker
+     自身出现竖直滚动条，与纯色/渐变面板行为一致。 */
+  .pattern-picker > * {
+    flex-shrink: 0;
+  }
+
   .pattern-container {
     min-height: 130px;
-    height: 25%;
+    height: auto;
     width: 100%;
-    overflow-y: auto;
-    overflow-x: auto;
     border-radius: 4px;
     position: relative;
     background-color: var(--dark-bg-color);
@@ -28,12 +35,13 @@
     display: flex;
     flex-wrap: wrap;
     flex-direction: column;
-    overflow: hidden; /* 新增：确保内容和背景不会溢出圆角 */
+    overflow: hidden; /* 确保内容和背景不会溢出圆角 */
   }
   
   .pattern-preset {
     width: 100%;
-    height: calc(100% - 31px);
+    height: auto;
+    min-height: 100px;
     padding: 0 1px;
     top: 0;
     left: 0;
@@ -45,6 +53,7 @@
     flex-wrap: wrap;
     flex-direction: row;
     align-content: flex-start;
+    background-color: var(--dark-bg-color);
   }
   
 
@@ -102,6 +111,7 @@
   .icon-group {
     display: flex;
     justify-content: flex-end;
+    align-items: center;
   }
   
   .icon-button {
@@ -148,11 +158,12 @@
   
   .pattern-settings-area {
     position: relative;
-    width: 234px;
+    width: 100%;
+    height: auto;
     min-height: 100px;
     border: 1px solid var(--border-color);
     border-radius: 4px;
-    padding: auto 10px;
+    padding: 0;
     color: var(--text-color);
     margin-bottom: 10px;
   }
@@ -161,17 +172,17 @@
     display: flex;
     flex-direction: column;
     margin: 10px 0 10px 0;
-    padding: auto 10px;
+    padding: 0;
     border-bottom: 1px solid var(--border-color);
   }
-  
+
   .pattern-setting-item {
     max-width: 100%;
     position: relative;
     overflow: hidden;
     display: flex;
     align-items: center;
-    padding: auto 10px;
+    padding: 0;
     color: var(--text-color);
     flex-direction: column;
   }
@@ -342,7 +353,8 @@
   .pattern-final-preview-container {
     position: relative;
     width: 100%;
-    height: 28%;
+    height: auto;
+    min-height: 120px;
     border: 1px solid var(--border-color);
     flex-direction: column;
     overflow: hidden;
