@@ -237,13 +237,21 @@ export class LicenseManager {
     private static async computeLicenseState(): Promise<LicenseState> {
         const fallback = { isLicensed: false, isTrial: false, trialDaysRemaining: 0, expired: false, needsReverification: false };
         try {
-            const status = await this.checkLicenseStatus();
-            const cachedInfo: any = status.info || (await this.getCachedLicense());
+            /*
+             * 仅一次文件读取：主面板与绘画工具箱共享此 Promise（见 stateCache），
+             * 谁先发起谁付这次 I/O 的代价，另一方同 tick 拿到同一结果。
+             * ⚠️ 早期实现里 compute 先 checkLicenseStatus() 读一遍、再 isTrialExpired()
+             *    读第二遍（共两次本地文件读取），把异步延迟翻倍，导致工具箱遮罩比主面板
+             *    弹窗明显晚出现。现改为只读一次，过期判断用本次读到的 cachedInfo 内联计算。
+             */
+            const cachedInfo: any = await this.getCachedLicense();
             const key = cachedInfo && cachedInfo.key ? String(cachedInfo.key) : '';
             const isTrialKey = key.startsWith('TRIAL_');
 
-            // 只有 TRIAL_ 才带 expiryDate，故过期判断只对试用生效
-            const expired = isTrialKey ? await this.isTrialExpired() : false;
+            // 只有 TRIAL_ 才带 expiryDate，故过期判断只对试用生效（用本次已读到的 cachedInfo 内联算）
+            const expired = isTrialKey && !!cachedInfo && !!cachedInfo.expiryDate
+                ? new Date() > new Date(cachedInfo.expiryDate)
+                : false;
 
             let trialDaysRemaining = 0;
             if (isTrialKey && cachedInfo && cachedInfo.expiryDate) {
@@ -251,17 +259,13 @@ export class LicenseManager {
                 trialDaysRemaining = Math.max(0, Math.ceil((expire - Date.now()) / (24 * 60 * 60 * 1000)));
             }
 
-            // 自动复验只对正式授权执行，避免对 TRIAL_ 触发无意义的网络请求
-            if (status.needsReverification && !isTrialKey) {
-                try { await this.autoReverifyIfNeeded(); } catch (e) { /* 复验失败不阻断 */ }
-            }
-
             return {
-                isLicensed: !!status.isValid && !isTrialKey && !expired,
+                // 离线方案无需周期性在线复验：needsReverification 恒 false
+                isLicensed: !!cachedInfo && cachedInfo.isValid === true && !isTrialKey && !expired,
                 isTrial: isTrialKey && !expired,
                 trialDaysRemaining,
                 expired,
-                needsReverification: !!status.needsReverification
+                needsReverification: false
             };
         } catch (error) {
             console.error('读取授权状态失败:', error);

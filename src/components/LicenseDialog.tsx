@@ -233,7 +233,7 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
         return (
             <div className="license-content">
                 <div className="license-head">
-                    <span className="license-title">欢迎使用选区填充</span>
+                    <span className="license-title">欢迎使用易修</span>
                 </div>
 
                 {/* 激活区：输入在上、按钮在下 */}
@@ -529,35 +529,25 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
                 }
 
                 /*
-                 * 「联系作者」专用样式（不复用 --primary-color）：
-                 * 主色 rgb(38,128,235) 在 darkest/dark 深底上明度不足、偏暗。
-                 * ⚠️ 元素必须是 <span> 而非 <a>：
-                 *    ① UXP 会强制用自带链接色渲染 <a> 文字，作者 color 被忽略，
-                 *       深色主题下文字回退成默认暗蓝、比下划线深一截（实测）；
-                 *    ② UXP 对动态子树 var() 解析不稳，故这里也不用 var(--link-color)，
-                 *       按四主题写字面色 + @media 覆盖，取值与 theme.ts 的 --link-color 一致
-                 *       （深底亮蓝 / 浅底深蓝）。
-                 *    <span> 的文字颜色完全由 CSS 控制，与下划线同色稳定渲染。
+                 * 「联系作者」样式。
+                 * 根因（2026-08-31 实测）：UXP 会强制用自带链接色渲染 <a> 文字，
+                 * 作者 color 被忽略、深色主题下文字回退成默认暗蓝、比下划线深一截。
+                 * 故链接用可点击 <span>（UXP 内 <a href> 本也不唤起浏览器，走 shell.openExternal），
+                 * 文字颜色完全由 CSS 控制、与下划线同色稳定渲染。
+                 * 颜色取 --primary-color 的恒定值 rgb(38,128,235)：
+                 * 不写 var(--primary-color) 是因为项目硬规则禁止在动态注入的组件 <style> 里用 var()
+                 * （UXP 对动态子树 var() 解析不稳、整条声明会被丢弃）；字面量等价且零风险。
                  */
                 .license-link {
-                    color: rgb(122, 190, 255);
+                    color: rgb(38, 128, 235);
                     text-decoration: none;
                     /* UXP 下 text-decoration:underline 不保证渲染，改用 border-bottom 画下划线 */
-                    border-bottom: 1px solid rgb(122, 190, 255);
+                    border-bottom: 1px solid rgb(38, 128, 235);
                     display: inline-block;
                     line-height: 1.25;
                     cursor: pointer;
                     /* 绝不能被父级 opacity 连带压暗 */
                     opacity: 1;
-                }
-                @media (prefers-color-scheme: dark) {
-                    .license-link { color: rgb(140, 200, 255); border-bottom-color: rgb(140, 200, 255); }
-                }
-                @media (prefers-color-scheme: light) {
-                    .license-link { color: rgb(0, 90, 200); border-bottom-color: rgb(0, 90, 200); }
-                }
-                @media (prefers-color-scheme: lightest) {
-                    .license-link { color: rgb(0, 82, 190); border-bottom-color: rgb(0, 82, 190); }
                 }
 
                 .license-message {
