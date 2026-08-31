@@ -3,7 +3,7 @@ import { storage, shell } from 'uxp';
 import {
   HotkeyEntry, connectHotkeyDaemon, onConfig, enumerateBrushes,
   onDaemonStatus, pushConfig, requestHotkeyRecording, cancelHotkeyRecording,
-  onHotkeyTriggered, disconnectDaemon, registerUninstallHandler,
+  onHotkeyTriggered, disconnectDaemon, sendDaemonCommand, registerUninstallHandler,
   setMainToggleCombo, getMainToggleCombo,
   detectAllBrushTypes
 } from './HotkeyBridge';
@@ -127,26 +127,28 @@ export default function BrushHotkeySection() {
     return true;
   };
 
-  // 「加载守护进程」：脚本已随插件分发在固定位置，直接静默运行，不再弹文件选择框。
-  // 安装成功的窗口会 5 秒倒计时自动关闭，所以这里通常不会打扰用户。
+  // 「加载守护进程」：直接静默拉起守护进程 exe（已编译为 Windows GUI 子系统，无控制台窗口）。
+  // 守护进程自身完成「拷贝到安装目录 + 注册开机自启」，全程无窗口；
+  // 加载进度与结果一律走面板文字通知（下方 showMessage），不再弹任何 cmd/PowerShell 窗口。
   const loadDaemon = async () => {
     if (busy) return;
+    if (daemonConnectedRef.current) { showMessage('快捷键服务已在运行'); return; }
     setBusy(true);
     try {
-      const ok = await openBundled('native/HotkeyDaemon/install.bat');
+      const ok = await openBundled('native/HotkeyDaemon/publish/JWautofillHotkeyDaemon.exe');
       if (!ok) {
-        showMessage('加载失败：未找到安装脚本，请手动双击插件目录 native/HotkeyDaemon/install.bat');
+        showMessage('启动失败：未找到快捷键服务，请手动双击插件目录 native/HotkeyDaemon/publish/JWautofillHotkeyDaemon.exe');
         return;
       }
-      showMessage('正在加载守护进程…');
+      showMessage('正在启动快捷键服务…');
       for (let i = 0; i < 30; i++) {
         await new Promise(r => setTimeout(r, 1000));
-        if (daemonConnectedRef.current) { showMessage('守护进程已就绪'); return; }
+        if (daemonConnectedRef.current) { showMessage('快捷键服务已就绪'); return; }
       }
-      showMessage('未检测到守护进程：请在弹出的窗口中查看提示（加载失败时窗口不会自动关闭）');
+      showMessage('未检测到快捷键服务：请稍后重试，或手动双击插件目录 native/HotkeyDaemon/publish/JWautofillHotkeyDaemon.exe');
     } catch (e: any) {
       const msg = e && e.message ? String(e.message) : (typeof e === 'string' ? e : JSON.stringify(e));
-      showMessage('加载守护进程失败：' + msg + '（可手动双击插件目录 native/HotkeyDaemon/install.bat）');
+      showMessage('启动快捷键服务失败：' + msg + '（可手动双击插件目录 native/HotkeyDaemon/publish/JWautofillHotkeyDaemon.exe）');
     } finally {
       setBusy(false);
     }
@@ -156,32 +158,44 @@ export default function BrushHotkeySection() {
   // 这是卸载前必须的准备动作——卸载脚本要删安装目录，而运行中的 exe 会锁住目录里的日志文件。
   const stopDaemon = async () => {
     if (busy) return;
-    if (!disconnectDaemon()) { showMessage('当前未连接到守护进程，无需断开'); return; }
+    if (!disconnectDaemon()) { showMessage('当前未连接到快捷键服务，无需停止'); return; }
     setBusy(true);
-    showMessage('正在断开守护进程…');
+    showMessage('正在停止快捷键服务…');
     try {
       for (let i = 0; i < 20; i++) {
         await new Promise(r => setTimeout(r, 500));
-        if (!daemonConnectedRef.current) { showMessage('守护进程已断开（快捷键已停止生效，此时可安全卸载）'); return; }
+        if (!daemonConnectedRef.current) { showMessage('快捷键服务已停止（快捷键已停止生效，此时可安全卸载）'); return; }
       }
-      showMessage('守护进程无响应，请稍后重试；若仍无法断开，请重启电脑后再卸载。');
+      showMessage('快捷键服务无响应，请稍后重试；若仍无法停止，请重启电脑后再卸载。');
     } finally {
       setBusy(false);
     }
   };
 
   // 卸载：低频操作，入口在面板右上角菜单里（见 MenuManager / AdjustmentMenu）。
-  // 流程：先断连（保证 exe 不再占用文件）→ 运行卸载脚本 → 轮询确认。
+  // 优先走静默通道：直接让守护进程自删（移除开机自启 + 删除安装目录 + 退出），无窗口；
+  // 仅在未连接守护进程（无法发指令）时，才退回到会弹窗的脚本方式。
   const uninstallDaemon = async (): Promise<string> => {
     setCollapsed(false);
     if (daemonConnectedRef.current) {
-      showMessage('正在先断开守护进程…');
-      disconnectDaemon();
-      for (let i = 0; i < 20; i++) {
-        await new Promise(r => setTimeout(r, 500));
-        if (!daemonConnectedRef.current) break;
+      showMessage('正在卸载快捷键服务…');
+      const sent = sendDaemonCommand('uninstall');
+      if (sent) {
+        for (let i = 0; i < 20; i++) {
+          await new Promise(r => setTimeout(r, 500));
+          if (!daemonConnectedRef.current) {
+            const ret = '已卸载快捷键服务：开机自启已移除，安装目录已删除。';
+            showMessage(ret);
+            return ret;
+          }
+        }
+        const ret = '卸载指令已发送但快捷键服务未退出，请稍后重试，或手动删除安装目录。';
+        showMessage(ret);
+        return ret;
       }
+      // 已连接却发指令失败：落到脚本兜底
     }
+    showMessage('未连接到快捷键服务，改用脚本卸载…');
     let ok = false;
     try { ok = await openBundled('native/HotkeyDaemon/uninstall.bat'); } catch (err: any) {
       console.error('唤起内置卸载程序失败:', err);
@@ -191,7 +205,7 @@ export default function BrushHotkeySection() {
       showMessage(ret);
       return ret;
     }
-    showMessage('卸载程序已打开：成功时窗口会倒计时自动关闭，失败时会保留在屏幕上。');
+    showMessage('卸载程序已打开，请在弹出的窗口中查看结果。');
     return '卸载程序已打开，请在弹出的窗口中查看结果。';
   };
 
@@ -203,7 +217,7 @@ export default function BrushHotkeySection() {
   // 录制由 native 守护进程完成（Windows 全局键盘钩子），UXP 只发指令并等待结果。
   const startRecord = async () => {
     if (!selectedBrush) { showMessage('请先在左侧选择一支笔刷'); return; }
-    if (!daemonConnected) { showMessage('守护进程未连接，无法录制（请先加载守护进程）'); return; }
+    if (!daemonConnected) { showMessage('快捷键服务未连接，无法录制（请先启动快捷键服务）'); return; }
     const mainCombo = getMainToggleCombo();
     setRecording(true);
     showMessage('正在录制：请在任意位置按下要绑定的组合键，Esc 取消');
@@ -220,7 +234,7 @@ export default function BrushHotkeySection() {
     const next = [...entries.filter(x => x.action === 'toggleMain' || x.combo !== combo), entry];
     setEntries(next);
     if (pushConfig(next)) showMessage('已保存：' + combo + ' → ' + selectedBrush);
-    else showMessage('推送配置失败（守护进程未运行？）');
+    else showMessage('推送配置失败（快捷键服务未运行？）');
   };
 
   // 用户主动取消当前录制
@@ -258,7 +272,7 @@ export default function BrushHotkeySection() {
     if (selectedIds.length !== 1) return;
     const target = entries.find(e => e.id === selectedIds[0]);
     if (!target) return;
-    if (!daemonConnected) { showMessage('守护进程未连接，无法录制（请先加载守护进程）'); return; }
+    if (!daemonConnected) { showMessage('快捷键服务未连接，无法录制（请先启动快捷键服务）'); return; }
     const isMain = target.action === 'toggleMain';
     setRecording(true);
     showMessage('正在重录：请按下新的组合键，Esc 取消');
@@ -279,7 +293,7 @@ export default function BrushHotkeySection() {
       const next = entries.map(e => (e.id === target.id ? { ...e, combo } : e));
       setEntries(next);
       if (pushConfig(next)) showMessage('已重录：' + combo + ' → ' + target.brush);
-      else showMessage('推送配置失败（守护进程未运行？）');
+      else showMessage('推送配置失败（快捷键服务未运行？）');
     }
   };
 
@@ -343,7 +357,7 @@ export default function BrushHotkeySection() {
   return (
     <div className="adjust-expand-section">
       <div className="adjust-expand-header" onClick={() => setCollapsed(c => !c)}
-           title="通过本地守护进程实现全局快捷键，直接在画布上按快捷键切换笔刷（无需录制动作）。">
+           title="通过本地快捷键服务实现全局快捷键，直接在画布上按快捷键切换笔刷（无需录制动作）。">
         <div className={`adjust-expand-icon ${collapsed ? '' : 'expanded'}`}>
           <ExpandIcon expanded={!collapsed} />
         </div>
@@ -355,7 +369,7 @@ export default function BrushHotkeySection() {
           <div className="mask-sync-status-bar">
             <span className={`mask-sync-status-dot ${daemonConnected ? 'ok' : 'warn'}`} />
             <span className="mask-sync-status-ready">
-              {daemonConnected ? '守护进程就绪' : (busy ? '守护进程处理中…' : '守护进程未加载')}
+              {daemonConnected ? '快捷键服务已就绪' : (busy ? '快捷键服务处理中…' : '快捷键服务未启动')}
             </span>
             <span style={{ flex: 1 }} />
             <div
@@ -363,14 +377,14 @@ export default function BrushHotkeySection() {
               tabIndex={0}
               className={`adjustment-button auto compact${busy ? ' disabled' : ''}`}
               title={daemonConnected
-                ? '让守护进程退出。卸载插件前必须先断开，否则安装目录里的文件被占用删不掉'
-                : '安装并启动随插件分发的守护进程（默认的选区填充开关 Ctrl+Q 也由它驱动）'}
+                ? '让快捷键服务退出。卸载插件前必须先停止，否则安装目录里的文件被占用删不掉'
+                : '安装并启动随插件分发的快捷键服务（默认的选区填充开关 Ctrl+Q 也由它驱动）'}
               onClick={(e) => {
                 e.stopPropagation(); // 避免冒泡到分区头部触发折叠
                 if (!busy) { if (daemonConnected) void stopDaemon(); else void loadDaemon(); }
               }}
             >
-              {daemonConnected ? '断开守护进程' : '加载守护进程'}
+              {daemonConnected ? '停止快捷键服务' : '启动快捷键服务'}
             </div>
           </div>
 
@@ -423,7 +437,7 @@ export default function BrushHotkeySection() {
                     '选中一支笔刷后点这个圆点，然后在任意位置按下要绑定的组合键即可。\n' +
                     '可绑定的键：字母 A-Z、数字 0-9、F1-F24，以及 ; \' , . / - = ` [ ] \\ 等符号键，\n' +
                     '还有方向键 / 空格 / 回车 / 退格 / Tab / Insert / Delete / Home / End / PageUp / PageDown\n' +
-                    '以及小键盘 Num0-Num9。录制由守护进程的全局键盘钩子完成，无需面板获得焦点。\n' +
+                    '以及小键盘 Num0-Num9。录制由快捷键服务的全局键盘钩子完成，无需面板获得焦点。\n' +
                     '录制中按 Esc 取消。'
                   }
                   onClick={(e) => {

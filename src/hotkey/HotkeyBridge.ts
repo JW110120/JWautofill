@@ -107,6 +107,18 @@ export function disconnectDaemon(): boolean {
   return false;
 }
 
+// 通过 WebSocket 向守护进程发送一条指令（如 "uninstall"）。
+// 用于「卸载」等需要进程自身完成清理并退出的动作，全程无窗口。
+export function sendDaemonCommand(type: string): boolean {
+  try {
+    if (currentWs && currentWs.readyState === (currentWs.OPEN ?? 1)) {
+      currentWs.send(JSON.stringify({ type }));
+      return true;
+    }
+  } catch { /* ignore */ }
+  return false;
+}
+
 // ⚠️ 历史坑（2026-08-30）：这里曾经是「注册一个面板内回调，热键到达时直接调用」。
 // 但 UXP 的每个面板都是独立 JS 上下文，本模块在每个面板里都有一份实例：
 // App 面板注册的那份回调，绘画工具箱面板根本看不见。于是热键在绘画工具箱面板里被收到，

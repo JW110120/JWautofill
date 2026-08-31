@@ -509,9 +509,14 @@ button:hover {
   border-top: 1px solid var(--border-color);
 }
 
-/* 大 checkbox 容器：固定高度 120，内部两列 */
+/* 大 checkbox 容器：固定高度 90，内部两列。
+   上下内边距相等（15px），配合子容器 space-around，使「顶部留白 / 相邻行距 / 底部留白」三者始终相等；
+   padding:15px 0 几何上让上行下移 5px、下行上移 5px、行距缩小 10px。
+   新增选项时：height 同步增高（约 +26px/行），上下内边距保持相等、相邻两行行距自动相等
+   （由 .checkbox-label-container / .checkbox-input-container 的 space-around 保证）。 */
 .checkbox-main-container {
   height: 90px;
+  padding: 10px 0;   /* 上下内边距相等：把两行向中间收拢、缩小行距 */
   box-sizing: border-box;
   display: flex;
   flex-direction: row;

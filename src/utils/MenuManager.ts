@@ -162,7 +162,7 @@ export class MenuManager {
             },
             {
               id: "uninstallHotkeyDaemon",
-              label: "卸载笔刷热键守护进程"
+              label: "卸载快捷键服务"
             }
           ],
           invokeMenu(id: string) {

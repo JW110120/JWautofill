@@ -23,6 +23,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using Microsoft.Win32;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
@@ -221,9 +222,168 @@ namespace JWautofillHotkeyDaemon
             WriteIndented = true
         };
 
+        // 安装目录（与 install.ps1 保持一致）：拷贝到这里运行，避免锁住插件目录，
+        // 且开机自启指向稳定路径。
+        private static string InstallDir =>
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "JWautofill", "daemon");
+        private static string InstalledExePath => Path.Combine(InstallDir, "JWautofillHotkeyDaemon.exe");
+
+        // 把标准输出/错误重定向到日志文件：守护进程是 GUI 子系统、无控制台窗口，
+        // 所有原本打向控制台的诊断信息改落盘，排障时不丢失。
+        private static void RedirectConsoleToFile()
+        {
+            try
+            {
+                var dir = InstallDir;
+                Directory.CreateDirectory(dir);
+                var fs = new FileStream(Path.Combine(dir, "daemon.log"), FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
+                var sw = new StreamWriter(fs, Encoding.UTF8) { AutoFlush = true };
+                Console.SetOut(sw);
+                Console.SetError(sw);
+            }
+            catch { /* 日志重定向失败不影响运行 */ }
+        }
+
+        // 自安装：若当前 exe 不在安装目录，则拷贝/更新到安装目录并从那里重新拉起自身
+        // （原进程退出），保证常驻的是安装目录副本（卸载脚本可干净停止）。
+        // 无论是否已安装，都确保注册开机自启。全程无窗口。
+        private static void EnsureSelfInstalled()
+        {
+            try
+            {
+                var self = Process.GetCurrentProcess().MainModule?.FileName ?? "";
+                if (string.IsNullOrEmpty(self)) return;
+                bool alreadyInstalled = string.Equals(Path.GetFullPath(self), Path.GetFullPath(InstalledExePath), StringComparison.OrdinalIgnoreCase);
+
+                if (!alreadyInstalled)
+                {
+                    try
+                    {
+                        Directory.CreateDirectory(InstallDir);
+                        bool needCopy = true;
+                        if (File.Exists(InstalledExePath))
+                        {
+                            try { needCopy = !string.Equals(GetFileHash(self), GetFileHash(InstalledExePath), StringComparison.OrdinalIgnoreCase); }
+                            catch { needCopy = true; }
+                        }
+                        if (needCopy)
+                        {
+                            // 先停掉占用旧副本的实例，避免文件被锁导致拷贝失败
+                            foreach (var p in Process.GetProcessesByName("JWautofillHotkeyDaemon"))
+                            {
+                                try
+                                {
+                                    if (p.Id != Process.GetCurrentProcess().Id &&
+                                        string.Equals(Path.GetFullPath(p.MainModule?.FileName ?? ""), Path.GetFullPath(InstalledExePath), StringComparison.OrdinalIgnoreCase))
+                                        p.Kill();
+                                }
+                                catch { }
+                            }
+                            File.Copy(self, InstalledExePath, true);
+                        }
+                    }
+                    catch (Exception ex) { Console.WriteLine("[HotkeyDaemon] 拷贝到安装目录失败（将以当前位置运行）: " + ex.Message); }
+                }
+
+                RegisterAutostart(InstalledExePath);
+
+                // 源自插件目录（非安装目录）时，尽量切换到安装目录副本运行：
+                // - 安装副本存在且未在跑 → 拉起它，本进程退出；
+                // - 安装副本已在跑 → 不重复拉起，本进程直接退出（由已有副本服务）；
+                // - 安装副本不存在（拷贝失败）→ 不退出，直接以当前位置运行（本次会话仍可用）。
+                if (!alreadyInstalled)
+                {
+                    bool otherRunning = false;
+                    if (File.Exists(InstalledExePath))
+                    {
+                        foreach (var p in Process.GetProcessesByName("JWautofillHotkeyDaemon"))
+                        {
+                            try
+                            {
+                                if (p.Id != Process.GetCurrentProcess().Id &&
+                                    string.Equals(Path.GetFullPath(p.MainModule?.FileName ?? ""), Path.GetFullPath(InstalledExePath), StringComparison.OrdinalIgnoreCase))
+                                { otherRunning = true; break; }
+                            }
+                            catch { }
+                        }
+                        if (!otherRunning)
+                        {
+                            var psi = new ProcessStartInfo(InstalledExePath, "--autostart")
+                            {
+                                UseShellExecute = true,
+                                WindowStyle = ProcessWindowStyle.Hidden,
+                                CreateNoWindow = true
+                            };
+                            Process.Start(psi);
+                        }
+                        Environment.Exit(0);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("[HotkeyDaemon] 自安装跳过（将以当前位置运行）: " + ex.Message);
+            }
+        }
+
+        // 注册/更新开机自启（当前用户，无需管理员）。指向安装目录副本，隐藏启动。
+        private static void RegisterAutostart(string exePath)
+        {
+            try
+            {
+                using var key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
+                key?.SetValue("JWautofillHotkeyDaemon", "\"" + exePath + "\" --autostart");
+            }
+            catch (Exception ex) { Console.WriteLine("[HotkeyDaemon] 注册开机自启失败（不影响本次运行）: " + ex.Message); }
+        }
+
+        private static string GetFileHash(string path)
+        {
+            using var md5 = MD5.Create();
+            using var fs = File.OpenRead(path);
+            var hash = md5.ComputeHash(fs);
+            return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
+        }
+
+        // 卸载：移除开机自启并删除安装目录（含自身），随后退出。
+        // 由面板「卸载」指令（WebSocket type:"uninstall"）触发，全程无窗口。
+        private static void DoUninstall()
+        {
+            try
+            {
+                Console.WriteLine("[HotkeyDaemon] 开始卸载…");
+                try
+                {
+                    using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
+                    key?.DeleteValue("JWautofillHotkeyDaemon", false);
+                }
+                catch (Exception ex) { Console.WriteLine("[HotkeyDaemon] 移除开机自启失败: " + ex.Message); }
+
+                // 进程退出后再删目录（此时 exe 已不在运行，rmdir 不会因文件占用失败）
+                var psi = new ProcessStartInfo("cmd.exe", "/c timeout /t 1 /nobreak > nul & rmdir /s /q \"" + InstallDir + "\"")
+                {
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    CreateNoWindow = true,
+                    UseShellExecute = false
+                };
+                Process.Start(psi);
+            }
+            catch (Exception ex) { Console.WriteLine("[HotkeyDaemon] 卸载异常: " + ex.Message); }
+            finally { Environment.Exit(0); }
+        }
+
         static void Main(string[] args)
         {
+            RedirectConsoleToFile();
             _mainThreadId = Win32.GetCurrentThreadId();
+
+            // 卸载模式：由面板的「卸载」指令拉起（type:"uninstall"），无窗口完成清理后退出。
+            if (args.Any(a => a == "--uninstall"))
+            {
+                DoUninstall();
+                return;
+            }
 
             // 仅当参数是文件路径（不以 - 开头）时才当作配置文件，避免把 --autostart 等标志误当路径
             foreach (var a in args)
@@ -250,6 +410,9 @@ namespace JWautofillHotkeyDaemon
             }
             if (string.IsNullOrWhiteSpace(_configPath))
                 _configPath = DefaultConfigPath;
+            // 自安装（拷贝到安装目录 + 注册开机自启，必要时重新拉起自身）。
+            // 若触发重新拉起，本进程会在此退出。
+            EnsureSelfInstalled();
             Console.WriteLine("[HotkeyDaemon] 版本: " + Version);
             Console.WriteLine("[HotkeyDaemon] 配置路径: " + _configPath);
 
@@ -810,6 +973,12 @@ namespace JWautofillHotkeyDaemon
                             Console.WriteLine("[HotkeyDaemon] 收到断开指令，正在退出…");
                             try { SendToClient(client, JsonSerializer.Serialize(new { type = "bye" }, JsonOpts)); } catch { }
                             _ = Task.Run(async () => { await Task.Delay(300); Environment.Exit(0); });
+                        }
+                        else if (type == "uninstall")
+                        {
+                            // 面板点「卸载」：移除开机自启 + 删除安装目录，全程无窗口。
+                            Console.WriteLine("[HotkeyDaemon] 收到卸载指令");
+                            DoUninstall();
                         }
                         else if (type == "config")
                         {

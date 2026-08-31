@@ -347,7 +347,7 @@ class App extends React.Component<AppProps, AppState> {
         try {
             if (!isDaemonConnected()) {
                 await core.showAlert({
-                    message: '守护进程未连接，无法录制快捷键。\n请到「像素调整」面板的「笔刷热键」分区点一下「加载守护进程」。'
+                    message: '快捷键服务未连接，无法录制快捷键。\n请到「像素调整」面板的「笔刷热键」分区点一下「启动快捷键服务」。'
                 });
                 return;
             }
@@ -365,7 +365,7 @@ class App extends React.Component<AppProps, AppState> {
             await core.showAlert({
                 message: ok
                     ? `主开关快捷键已设为：${res.combo}`
-                    : '设置失败：守护进程未响应，请重新加载守护进程后重试。'
+                    : '设置失败：快捷键服务未响应，请重新启动快捷键服务后重试。'
             });
         } catch (e) {
             console.error('❌ 设置主开关快捷键失败:', e);

@@ -26,6 +26,7 @@
 - 下拉「标签 + 下拉同行、下拉自适应宽度、二者占满整行」参考边缘平滑「平滑模式」：容器 `flex-direction:row; align-items:center`；**标签取内容宽度 `flex:0 0 auto;white-space:nowrap`**（不要用 `flex:1 1 auto` 撑满，也不要给下拉设 px 上限——UXP 下会把下拉压窄到选项换行/横排），下拉（`.mask-sync-select-wrap`）`flex:1 1 auto; min-width:0` 自适应占满剩余整行。例：渐变「样式」下拉 `.gradient-type-setting`；其标签与下方「角度：」标签用同一条 `.gradient-setting-item > label` 规则，保证两行控件左端对齐。与「标签占满整行 + 下拉全宽」纵向堆叠是两套不同需求，按需选用。
 - **渐变「角度」行约定（用户拍板）**：径向模式下**置 disabled 而非隐藏**（行始终渲染、保留占位高度），以保持 `.gradient-settings-area` 容器高度在线性/径向两种模式下恒定，避免切换时下拉相对容器上移/间距变化的观感。禁用态：RangeSlider/input 传 `disabled`、`label` 去掉拖拽 `onMouseDown` + 光标 `not-allowed`，样式见 `.gradient-angle-setting.disabled`（label 用 `--disabled-color`、滑块/数字 `opacity:0.4`）。`gradient-settings-area` 基础块恒定 `height:18%;min-height:80px;overflow-y:auto`，不要再加 `radial-mode`/`linear-mode`/`compact` 这类按模式改高度的死样式。
 - **一行两组 checkbox 的对齐**：整行用 `.field-row-two`，左组内容靠行左端、右组内容靠行右端——`.xxx.field-row-two > .field-cell:first-child{justify-content:flex-start}` + `> .field-cell:last-child:not(:only-child){justify-content:flex-end}`（`:not(:only-child)` 保证只有一组时仍左对齐）。例：图案面板平铺态 `.pattern-checkbox-container`。
+- **主面板底部大 checkbox 容器（`.checkbox-main-container`）间距规范（用户拍板）**：容器 `height` 固定 + `padding:15px 0`（上下内边距**相等**），内部 `.checkbox-label-container`/`.checkbox-input-container` 用 `justify-content:space-around` 让「顶部留白 / 相邻行距 / 底部留白」三者恒等。整体收放只调这一处 `padding` 与 `height`，**不要**去改子容器的 `space-around` 或加 margin。**新增选项时：`height` 必须同步增高（约 +26px/行），以保证上下内边距相等、相邻两行行距相等**（行距由 space-around 自动均分）。详见 `src/styles/styles.css` 该类的注释。
 
 ### UI 约定（笔刷热键 & 蒙版同步）
 - 主题色=`var(--text-color)`；图标按钮无边框无背景纯图标，hover 蓝；禁用态 `.disabled`→`color:var(--disabled-color)`+`cursor:not-allowed`+onClick 拦截；录制中红 `rgb(239,83,80)` 优先。
@@ -44,6 +45,11 @@
 - **UXP/React**：`addNotificationListener` 首参须字符串数组；React19 dev 白屏→入口最优先 import `uxpPerfPatch.ts`；仓库统一 LF；`.info-plane` 须 `position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:250px;height:20px;z-index:2000`；元素凭空消失先查祖先 `max-height`/`overflow:hidden`。
 - **算法**：分块补色 cand 用 `distanceToMask`；清像素须显式清零；扣白/扣黑公式与 N 计算见历史日志。
 - **Windows 守护进程/全局热键**：C# `System.Text.Json` 须 CamelCase+CaseInsensitive；钩子回调只 Enqueue+PostThreadMessage，绝不网络/同步 I/O；`.ps1` 纯 ASCII；会话沙箱回收后台子进程需 HKCU Run 自启。
+- **面向画师的 UI 命名约定**：代码/注释/日志里仍称「守护进程 / daemon」，但**用户可见文案统一叫「快捷键服务」**（状态栏、按钮、通知、提示、菜单项）。按钮动词用「启动/停止」（不用「加载/断开」），更口语、去技术/AI 味。改动只在 `BrushHotkeySection.tsx` / `app.tsx` / `MenuManager.ts` 的展示字符串，不动标识符与日志。
+  - **守护进程静默架构（2026-08-31 落地）**：exe 编译为 **WinExe（GUI 子系统）**，永不弹控制台窗口；日志改落盘 `%LOCALAPPDATA%\JWautofill\daemon\daemon.log`（`Program.RedirectConsoleToFile` 在 Main 首行把 stdout/stderr 重定向到文件）。
+  - **自安装**：`Program.EnsureSelfInstalled()` 在 Main 里把自身拷贝/哈希同步到 `%LOCALAPPDATA%\JWautofill\daemon\`、注册 HKCU\Run 开机自启（指向安装目录副本）、再从安装目录重新拉起自身后退出；面板只静默 `shell.openPath(publish/JWautofillHotkeyDaemon.exe)`，**不再经 install.bat/install.ps1 的弹窗包装**。
+  - **卸载静默**：面板「卸载」走 WebSocket `type:"uninstall"` → 守护进程 `DoUninstall()` 移除自启 + 1s 后 `rmdir /s /q` 删安装目录 + 退出；仅在未连接时才回退到会弹窗的 uninstall.bat。
+  - **加载/卸载反馈一律走面板文字通知**（`BrushHotkeySection.showMessage`），不再依赖任何 cmd/PowerShell 窗口。
 - **跨面板热键**：`connectHotkeyDaemon()` 须幂等；主开关跨面板用 `settings/main-toggle.json` 共享，热键只翻共享态不直接调回调。
 - **批量删除顺序**：先删笔刷条目（setEntries+pushConfig）再解绑主开关（setMainToggleCombo('')），反序会复原已删条目。
 - **sp-menu 不可 CSS 改背景** → 一律用自绘 Select，勿再引入 sp-picker。
