@@ -14,7 +14,7 @@ export async function openPluginDoc(relPath: string): Promise<void> {
     const folder: any = await storage.localFileSystem.getPluginFolder();
     const root: string = folder?.nativePath;
     if (!root) {
-      console.warn('⚠️ 无法定位插件目录，无法打开功能文档');
+      console.warn('⚠️ 无法定位插件目录，无法打开使用手册');
       return;
     }
     const sep = root.includes('\\') ? '\\' : '/';
@@ -22,9 +22,9 @@ export async function openPluginDoc(relPath: string): Promise<void> {
     const full = [root, ...parts].join(sep);
     const r: any = await shell.openPath(full);
     if (typeof r === 'string' && r.length > 0) {
-      console.warn('⚠️ 打开功能文档失败:', r);
+      console.warn('⚠️ 打开使用手册失败:', r);
     }
   } catch (e) {
-    console.error('打开功能文档异常:', e);
+    console.error('打开使用手册异常:', e);
   }
 }

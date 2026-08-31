@@ -22,7 +22,7 @@
       --danger: #b91c1c; --danger-bg: rgba(185, 28, 28, 0.12);
       --radius: 14px;
       --shadow: 0 1px 2px rgba(16,24,40,.05), 0 6px 18px rgba(16,24,40,.05);
-      --maxw: 900px;
+      --maxw: 960px;
       --sidebar: 264px;
       --ff: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
       --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
@@ -68,7 +68,7 @@
     .hero { margin: 0 -40px 8px; padding: 46px 40px 34px; background: linear-gradient(135deg, var(--accent-soft), transparent 70%); border-bottom: 1px solid var(--line); }
     .hero .eyebrow { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .6px; color: var(--accent-strong); background: var(--accent-soft); padding: 4px 10px; border-radius: 999px; margin-bottom: 14px; }
     .hero h1 { margin: 0 0 10px; font-size: 32px; line-height: 1.2; letter-spacing: -.4px; }
-    .hero p { margin: 0; color: var(--muted); font-size: 16px; max-width: 640px; }
+    .hero p { margin: 0; color: var(--muted); font-size: 16px; max-width: 720px; }
     .hero .meta { margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
     .badge { font-size: 12px; color: var(--muted); background: var(--panel-2); border: 1px solid var(--line); padding: 4px 10px; border-radius: 999px; }
 
@@ -86,8 +86,7 @@
     .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
     @media (max-width: 640px){ .grid2 { grid-template-columns: 1fr; } }
 
-    .callout { display: flex; gap: 12px; border-radius: 12px; padding: 12px 14px; margin: 14px 0; border: 1px solid; font-size: 14px; line-height: 1.65; }
-    .callout .ic { flex: 0 0 auto; font-size: 16px; line-height: 1.5; }
+    .callout { border-radius: 12px; padding: 12px 14px 12px 16px; margin: 14px 0; border: 1px solid; border-left-width: 4px; font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
     .callout.note { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
     .callout.warn { background: var(--warn-bg); border-color: color-mix(in srgb, var(--warn) 32%, transparent); }
     .callout.danger { background: var(--danger-bg); border-color: color-mix(in srgb, var(--danger) 32%, transparent); }
@@ -102,6 +101,7 @@
 
     .figure { margin: 14px 0; border: 1px dashed color-mix(in srgb, var(--muted) 40%, transparent); border-radius: 12px; background: var(--panel-2); overflow: hidden; }
     .figure .ph { display: flex; align-items: center; justify-content: center; min-height: 150px; color: var(--muted); font-size: 13.5px; text-align: center; padding: 24px; }
+    .figure img { display: block; width: auto; max-width: 100%; height: auto; margin: 0 auto; }
     .figure figcaption { padding: 9px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
 
     footer { margin-top: 50px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
@@ -136,7 +136,7 @@
       <div class="hero">
         <span class="eyebrow">JWautofill · 绘画工具箱</span>
         <h1>绘画工具箱 使用说明</h1>
-        <p>一组针对「选区像素」的批处理算法（分块均值、补色、木刻、锐化、边缘平滑、alpha 对齐、扣白 / 扣黑等），一个「蒙版同步」引擎，以及「笔刷热键」服务（仿 Brusherator，全局快捷键直接切笔刷）。</p>
+        <p>一组针对「选区像素」的批处理算法（分块均值、补色、木刻、锐化、边缘平滑、alpha 对齐、扣白 / 扣黑等），一个「蒙版同步」引擎，以及「笔刷热键」服务：用全局快捷键直接切换笔刷，无需录制动作。</p>
         <div class="meta">
           <span class="badge">版本 2.0.0</span>
           <span class="badge">更新于 2026-08</span>
@@ -152,10 +152,10 @@
           <ul>
             <li><b>选区像素算法</b>：分块平均 / 补色 / 木刻 / 锐化 / 边缘平滑 / alpha 对齐 / 扣白扣黑等。</li>
             <li><b>蒙版同步引擎</b>：把某图层通道实时复制到目标蒙版（事件驱动 + 兜底轮询）。</li>
-            <li><b>笔刷热键（快捷键服务）</b>：快捷键服务提供 Windows 全局快捷键，直接在画布上切笔刷，无需录制动作。</li>
+            <li><b>笔刷热键</b>：通过快捷键服务提供的 Windows 全局快捷键，直接在画布上切换笔刷，无需录制动作。</li>
           </ul>
         </div>
-        <figure class="figure"><div class="ph">截图待补：绘画工具箱面板整体布局</div><figcaption>面板整体：快捷操作 / 细节调整 / 边缘处理 / 蒙版同步 / 笔刷热键 分区。</figcaption></figure>
+        <figure class="figure"><img src="img/quickAction.jpg" alt="绘画工具箱面板整体布局"><figcaption>面板整体：快捷操作 / 细节调整 / 边缘处理 / 蒙版同步 / 笔刷热键 分区。</figcaption></figure>
       </section>
 
       <section id="layout">
@@ -224,6 +224,7 @@
         <p>强度 1–10 级；更「硬」的局部锐化，强化过渡边缘。</p>
         <h3>高频增强</h3>
         <p>强度 1–10 级、范围 1–10 级；提升细小纹理与微对比。</p>
+        <figure class="figure"><img src="img/detailAdjust.jpg" alt="细节调整分区"><figcaption>细节调整分区：像素过渡 / 梯度修改 / 特殊锐化 / 高频增强。</figcaption></figure>
       </section>
 
       <section id="edge">
@@ -243,7 +244,8 @@
           <tr><td>保底下对齐（alpha 对齐含背景）</td><td>用于低透明度背景（如 alpha=50 色块）上画线，统一交叉凸起同时保护背景与线条自身。</td></tr>
         </table>
         <h3>线条加黑</h3>
-        <p>增强边缘线条 alpha，使轮廓更清晰。仅普通像素层；背景层会报警「请选择不透明底的线稿图层！」。</p>
+        <p>增强边缘线条 alpha，使轮廓更清晰。仅普通像素层；背景层会提示「请选择不透明底的线稿图层！」。</p>
+        <figure class="figure"><img src="img/edgeProcessing.jpg" alt="边缘处理分区"><figcaption>边缘处理分区：边缘平滑 / alpha 对齐 / 线条加黑。</figcaption></figure>
       </section>
 
       <section id="mask">
@@ -259,6 +261,7 @@
           <tr><td>同步 / 立即同步 / 删除</td><td>同步开关（事件驱动 + 兜底轮询）、立即同步图标、删除图标；双击可重命名。</td></tr>
         </table>
         <p>底部「<b>+</b>」新建同步任务（空态显示「点击 + 新建同步任务」）。每条任务有「上次同步状态」行，如「已写入蒙版 12:30:01」或「未配置完成：请选择样本图层、通道与目标蒙版」。</p>
+        <figure class="figure"><img src="img/maskSync.jpg" alt="蒙版同步分区"><figcaption>蒙版同步分区：样本 / 通道 / 蒙版 / 反相 / 同步任务列表。</figcaption></figure>
       </section>
 
       <section id="hotkey">
@@ -266,15 +269,15 @@
         <p>分区标题「笔刷热键」。原理：通过「快捷键服务」实现 Windows 全局快捷键，直接在画布上按快捷键切换笔刷——<b>无需录制 Photoshop 动作</b>。</p>
 
         <h3>总开关（选区填充开关）</h3>
-        <p>快捷键列表里的一条特殊条目：动作固定为「切换选区填充主开关」、名称显示「选区填充开关」、默认组合键 <code>Ctrl+Q</code>。它在配置中长期存在；「解绑」是把 combo 置空（不真正删除），需要重新指定时去主面板菜单。</p>
+        <p>快捷键列表里的一条特殊条目：动作固定为「切换选区填充主开关」、名称显示「选区填充开关」、默认组合键 <code>Ctrl+Q</code>。它在配置中长期存在；「解绑」是把组合键置空（不真正删除），需要重新指定时去主面板菜单。</p>
 
-        <h3>笔刷 → 快捷键绑定（仿 Brusherator）</h3>
+        <h3>笔刷 → 快捷键绑定</h3>
         <ol>
-          <li>在「选择笔刷」下拉中选一支笔刷（自动枚举 PS 笔刷预设并检测类型：画笔 / 混合器画笔 / 涂抹等；枚举失败则回退「手动输入笔刷预设名，需与 PS 完全一致」）。</li>
+          <li>在「选择笔刷」下拉中选一支笔刷（自动读取 Photoshop 笔刷预设并识别类型：画笔 / 混合器画笔 / 涂抹等；若无法自动读取，可手动输入笔刷预设名，需与 Photoshop 中的名称完全一致）。</li>
           <li>点红色录制圆点 → 快捷键服务用 Windows 全局键盘钩子捕获组合键（可绑 A–Z、0–9、F1–F24、符号键、方向 / 空格 / 回车 / 退格 / Tab / Insert / Delete / Home / End / PageUp / PageDown、小键盘 Num0–9）→ 录完保存为「应用笔刷」条目。</li>
           <li>录制中可点「停止」方块取消（等同 <span class="kbd">Esc</span>）；<span class="kbd">Esc</span> 亦可取消录制。</li>
         </ol>
-        <div class="callout note">绑定后直接切换画笔工具并按笔刷名称选中预设，不走动作录制，因此比传统 Brusherator 方案更轻量、更稳定。</div>
+        <div class="callout note">绑定后直接切换画笔工具并按笔刷名称选中预设，无需录制 Photoshop 动作，切换即时且稳定。</div>
 
         <h3>连接与状态</h3>
         <p>状态条显示「快捷键服务已就绪 / 处理中… / 未启动」（绿点 / 黄点）。右侧按钮「启动快捷键服务 / 停止快捷键服务」：</p>
@@ -289,6 +292,7 @@
 
         <h3>卸载快捷键服务</h3>
         <p>优先让快捷键服务自行移除（取消开机自启并删除安装目录）；未连接时回退到卸载脚本。成功提示「已卸载快捷键服务：开机自启已移除，安装目录已删除。」</p>
+        <figure class="figure"><img src="img/brushHotkey.jpg" alt="笔刷热键分区"><figcaption>笔刷热键分区：总开关 / 笔刷下拉 / 录制 / 列表与状态。</figcaption></figure>
       </section>
 
       <section id="menu">
@@ -300,9 +304,9 @@
           <tr><td>隐藏 / 显示分区</td><td>打开「隐藏 / 显示分区」模态，列出各分区开关。</td></tr>
           <tr><td>复位分区顺序</td><td>恢复默认顺序与子功能。</td></tr>
           <tr><td>参数复位</td><td>分区 / 子功能回归默认 + 基础参数复位（半径 / sigma / 锐化 / 梯度 / 高频 / 木刻 / 边缘平滑等）+ 关闭可见性面板。</td></tr>
-          <tr><td><b>图层像素 alpha 采样</b></td><td>把当前图层像素的 alpha 通道以矩阵形式打印到控制台（每行 <code>y=N: a,b,c…</code>），用于调试。限制：仅非背景的普通像素图层；图层尺寸 W×H ≤ 250000（过大提示「请用选区框选笔画区域后再试」）；空层提示先绘制；背景层报警「alpha 采样仅支持非背景的普通像素图层」。</td></tr>
+          <tr><td><b>图层像素 alpha 采样</b></td><td>把当前图层像素的 alpha 通道以矩阵形式打印到控制台（每行 <code>y=N: a,b,c…</code>），用于调试。限制：仅非背景的普通像素图层；图层尺寸 W×H ≤ 250000（过大提示「请用选区框选笔画区域后再试」）；空层提示先绘制；背景层提示「alpha 采样仅支持非背景的普通像素图层」。</td></tr>
           <tr><td>卸载快捷键服务</td><td>见第 7 节。</td></tr>
-          <tr><td><b>功能文档</b></td><td>分隔线下方，点击在默认浏览器打开本说明。</td></tr>
+          <tr><td><b>使用手册</b></td><td>分隔线下方，点击在默认浏览器打开本使用手册。</td></tr>
         </table>
       </section>
 

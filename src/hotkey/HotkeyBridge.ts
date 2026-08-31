@@ -369,7 +369,7 @@ export function setMainToggleCombo(combo: string): boolean {
   return pushConfig(cachedConfig);
 }
 
-// ===== 直接切笔刷（不依赖录制动作，仿 Brusherator）=====
+// ===== 直接切笔刷（不依赖录制动作）=====
 // 正确的 descriptor（UXP 论坛 7168 帖 #12 与 2127 帖 IanBarber 实例双重确认）：
 //   { _obj:'select', _target:[{ _ref:'brush', _name:'笔刷名' }] }
 // 注意两点：

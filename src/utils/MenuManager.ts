@@ -180,7 +180,7 @@ export class MenuManager {
             },
             {
               id: "resetAppParameters",
-              label: "参数复位（保留已加载图案与新建渐变预设）"
+              label: "参数复位"
             },
             {
               id: "spacerApp1",
@@ -192,11 +192,11 @@ export class MenuManager {
             },
             {
               id: "spacerApp2",
-              label: "-" // 分隔符（设置主开关快捷键 与 功能文档 之间）
+              label: "-" // 分隔符（设置主开关快捷键 与使用手册 之间）
             },
             {
               id: "openDocsFill",
-              label: "功能文档"
+              label: "使用手册"
             }
           ],
           invokeMenu(id: string) {
@@ -244,11 +244,11 @@ export class MenuManager {
             },
             {
               id: "spacer3",
-              label: "-" // 分隔符（卸载快捷键服务 与 功能文档 之间）
+              label: "-" // 分隔符（卸载快捷键服务 与使用手册 之间）
             },
             {
               id: "openDocsToolbox",
-              label: "功能文档"
+              label: "使用手册"
             }
           ],
           invokeMenu(id: string) {

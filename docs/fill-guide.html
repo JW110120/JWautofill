@@ -22,7 +22,7 @@
       --danger: #b91c1c; --danger-bg: rgba(185, 28, 28, 0.12);
       --radius: 14px;
       --shadow: 0 1px 2px rgba(16,24,40,.05), 0 6px 18px rgba(16,24,40,.05);
-      --maxw: 900px;
+      --maxw: 960px;
       --sidebar: 264px;
       --ff: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
       --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
@@ -94,7 +94,7 @@
     }
     .hero .eyebrow { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .6px; color: var(--accent-strong); background: var(--accent-soft); padding: 4px 10px; border-radius: 999px; margin-bottom: 14px; }
     .hero h1 { margin: 0 0 10px; font-size: 32px; line-height: 1.2; letter-spacing: -.4px; }
-    .hero p { margin: 0; color: var(--muted); font-size: 16px; max-width: 640px; }
+    .hero p { margin: 0; color: var(--muted); font-size: 16px; max-width: 720px; }
     .hero .meta { margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
     .badge { font-size: 12px; color: var(--muted); background: var(--panel-2); border: 1px solid var(--line); padding: 4px 10px; border-radius: 999px; }
 
@@ -111,8 +111,7 @@
     .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
     @media (max-width: 640px){ .grid2 { grid-template-columns: 1fr; } }
 
-    .callout { display: flex; gap: 12px; border-radius: 12px; padding: 12px 14px; margin: 14px 0; border: 1px solid; font-size: 14px; line-height: 1.65; }
-    .callout .ic { flex: 0 0 auto; font-size: 16px; line-height: 1.5; }
+    .callout { border-radius: 12px; padding: 12px 14px 12px 16px; margin: 14px 0; border: 1px solid; border-left-width: 4px; font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
     .callout.note { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
     .callout.warn { background: var(--warn-bg); border-color: color-mix(in srgb, var(--warn) 32%, transparent); }
     .callout.danger { background: var(--danger-bg); border-color: color-mix(in srgb, var(--danger) 32%, transparent); }
@@ -127,6 +126,7 @@
 
     .figure { margin: 14px 0; border: 1px dashed color-mix(in srgb, var(--muted) 40%, transparent); border-radius: 12px; background: var(--panel-2); overflow: hidden; }
     .figure .ph { display: flex; align-items: center; justify-content: center; min-height: 150px; color: var(--muted); font-size: 13.5px; text-align: center; padding: 24px; }
+    .figure img { display: block; width: auto; max-width: 100%; height: auto; margin: 0 auto; }
     .figure figcaption { padding: 9px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
 
     footer { margin-top: 50px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
@@ -181,7 +181,7 @@
             <li><b>子面板</b>：选中对应填充模式后展开「颜色动态设置 / 选择图案 / 渐变设置 / 描边设置」。</li>
           </ul>
         </div>
-        <figure class="figure"><div class="ph">截图待补：选区填充面板整体布局</div><figcaption>面板整体：主开关 → 混合模式 → 不透明度/羽化 → 选区选项 → 填充选项 → 子面板。</figcaption></figure>
+        <figure class="figure"><img src="img/mainPanel.jpg" alt="选区填充面板整体布局"><figcaption>面板整体：主开关 → 混合模式 → 不透明度/羽化 → 选区选项 → 填充选项 → 子面板。</figcaption></figure>
       </section>
 
       <section id="toggle">
@@ -223,6 +223,7 @@
           <li>「选择图案文件」从系统载入 jpg/png 作为预设；预设支持 <span class="kbd">Shift</span> / <span class="kbd">Ctrl</span> 多选、拖拽排序、删除。</li>
           <li>图案填充支持 PNG 不透明度通道（保留透明度）。</li>
         </ul>
+        <figure class="figure"><img src="img/patternPanel.jpg" alt="图案填充设置"><figcaption>图案模式下的「选择图案」子面板：载入 jpg/png、缩放、单次/平铺、旋转阵列。</figcaption></figure>
 
         <h3>3.3 渐变</h3>
         <p>用户自设起止色 / 角度 / 滑块；当前仅支持<b>线性</b>与<b>径向</b>。点设置图标打开「渐变设置」。</p>
@@ -234,6 +235,7 @@
           <tr><td>角度</td><td>角度值（径向模式下禁用但仍占位）。</td></tr>
           <tr><td>反向 / 保留不透明度</td><td>两个开关。</td></tr>
         </table>
+        <figure class="figure"><img src="img/gradientPanel.jpg" alt="渐变设置"><figcaption>渐变模式下的「渐变设置」子面板：起止色、角度、滑块、线性/径向。</figcaption></figure>
 
         <h3>3.4 清除模式</h3>
         <p>以下方所选模式「删除」选区内容（与「新建图层」互斥）。采用绝对计算：<b>白 = 100% 删除，黑 = 不删除</b>。</p>
@@ -275,6 +277,7 @@
           <tr><td>混合模式</td><td>下拉（清除模式下隐藏）。</td></tr>
           <tr><td>不透明度</td><td>0–100%。</td></tr>
         </table>
+        <figure class="figure"><img src="img/strokePanel.jpg" alt="描边设置"><figcaption>描边设置子面板：宽度、位置、混合模式、不透明度。</figcaption></figure>
       </section>
 
       <section id="color">
@@ -289,6 +292,7 @@
           <tr><td>不透明度抖动</td><td>0–100%（始终显示）。</td></tr>
           <tr><td>计算方法</td><td>绝对 / 相对（单选）。</td></tr>
         </table>
+        <figure class="figure"><img src="img/colorPanel.jpg" alt="颜色动态设置"><figcaption>颜色动态设置子面板：色相 / 饱和度 / 亮度 / 灰度 / 不透明度抖动。</figcaption></figure>
       </section>
 
       <section id="menu">
@@ -300,7 +304,7 @@
           <tr><td>打开激活与试用面板</td><td>弹出激活 / 试用对话框。</td></tr>
           <tr><td>参数复位（保留已加载图案与新建渐变预设）</td><td>复位除图案 / 渐变预设外的参数；UI 展开态与授权状态保留。</td></tr>
           <tr><td>设置选区填充主开关快捷键</td><td>重新录制 Ctrl+Q 等主开关快捷键（见第 2 节）。</td></tr>
-          <tr><td><b>功能文档</b></td><td>分隔线下方，点击在默认浏览器打开本说明。</td></tr>
+          <tr><td><b>使用手册</b></td><td>分隔线下方，点击在默认浏览器打开本使用手册。</td></tr>
         </table>
       </section>
 

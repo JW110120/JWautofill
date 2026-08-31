@@ -11,7 +11,7 @@ import { ExpandIcon, DeleteIcon, RefreshIcon, DataRefreshIcon, RecordCircleIcon,
 import BrushSelect, { BrushSelectOption } from './BrushSelect';
 
 // 笔刷热键分区：在调整面板内录制「笔刷 + 快捷键」，持久化到共享配置，
-// 由本地守护进程在全局捕获按键后直接切换笔刷（仿 Brusherator，不录制动作）。
+// 由本地守护进程在全局捕获按键后直接切换笔刷，不录制动作。
 // 注意：组合键的「录制」由 native 守护进程用 Windows 全局键盘钩子完成，
 // UXP 面板只负责选笔刷 + 发指令 + 等结果；面板本身无法稳定捕获键盘事件。
 const rowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', marginTop: 8 };
@@ -326,7 +326,7 @@ export default function BrushHotkeySection() {
       setEntries(next);
       pushConfig(next);
     }
-    // 主开关不真正删除，改为「解绑」（combo 置空并落盘），
+    // 主开关不真正删除，改为「解绑」（组合键置空并落盘），
     // 这样下次打开插件不会又把默认的 Ctrl+Q 补回来；需要时可到主面板菜单重新指定。
     if (unbindMain) setMainToggleCombo('');
     const parts: string[] = [];
