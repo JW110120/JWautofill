@@ -1342,7 +1342,6 @@ title={helpTexts.selectionFill.opacity}>
                         max="100"
                         value={this.state.opacity}
                         onChange={(e) => this.setState({ opacity: Number(e.target.value) })}
-                        className="slider-number-input"
                         title={helpTexts.selectionFill.opacityInput}
                     />
                     </div>
@@ -1382,7 +1381,6 @@ title={helpTexts.selectionFill.feather}>
                         max="20"
                         value={this.state.feather}
                         onChange={(e) => this.setState({ feather: Number(e.target.value) })}
-                        className="slider-number-input"
                         title={helpTexts.selectionFill.featherInput}
                         />
                     </div>
@@ -1442,8 +1440,7 @@ title={helpTexts.selectionFill.selectionSmooth}>
                                             max="100"
                                             value={this.state.selectionSmooth}
                                             onChange={(e) => this.setState({ selectionSmooth: Number(e.target.value) })}
-                                            className="slider-number-input"
-                                            title={helpTexts.selectionFill.selectionSmoothInput}
+                                                                title={helpTexts.selectionFill.selectionSmoothInput}
                                         />
                                         </div>
                                         <span className="num-unit">%</span>
@@ -1479,8 +1476,7 @@ title={helpTexts.selectionFill.selectionContrast}>
                                             max="100"
                                             value={this.state.selectionContrast}
                                             onChange={(e) => this.setState({ selectionContrast: Number(e.target.value) })}
-                                            className="slider-number-input"
-                                            title={helpTexts.selectionFill.selectionContrastInput}
+                                                                title={helpTexts.selectionFill.selectionContrastInput}
                                         />
                                         </div>
                                         <span className="num-unit">%</span>
@@ -1515,8 +1511,7 @@ title={helpTexts.selectionFill.selectionExpand}>
                                             max="100"
                                             value={this.state.selectionExpand}
                                             onChange={(e) => this.setState({ selectionExpand: Number(e.target.value) })}
-                                            className="slider-number-input"
-                                            title={helpTexts.selectionFill.selectionExpandInput}
+                                                                title={helpTexts.selectionFill.selectionExpandInput}
                                         />
                                         </div>
                                         <span className="num-unit">%</span>

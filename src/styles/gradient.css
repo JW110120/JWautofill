@@ -1,5 +1,6 @@
 /* 渐变选择器样式优化 */
 .gradient-picker {
+    --adjust-scrollbar-w: 10px;
     position: absolute;
     top: 0;
     left: 0;
@@ -53,7 +54,7 @@
     border: 1px solid var(--border-color);
     background-color: var(--dark-bg-color);
     margin-bottom: 10px;
-    border-radius: 4px;
+    border-radius: 3px;
     z-index: 11;
     box-sizing: border-box;
     /* 与图案子面板一致：预设区与下方图标栏紧贴外部容器边框（不再留 4px 内边距），
@@ -87,7 +88,7 @@
     width: 35px;
     aspect-ratio: 1;
     border: 1px solid var(--border-color);
-    border-radius: 4px;
+    border-radius: 3px;
     overflow: hidden;
     cursor: pointer;
     background-color: var(--dark-bg-color);
@@ -127,7 +128,7 @@
 /* 渐变颜色区域样式 */
 .gradient-edit-area {
     border: 1px solid var(--border-color);
-    border-radius: 4px;
+    border-radius: 3px;
     margin-bottom: 10px;
     width: 100%;
     /* 上下左右内边距统一 10px；border-box 让 100% 宽度含边框与内边距，
@@ -154,7 +155,7 @@
   height: 24px;
   padding: 2px 4px;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 3px;
   color: var(--text-color);
   font-size: 12px;
   appearance: none;
@@ -173,7 +174,7 @@
 .gradient-slider-track {
     position: relative;
     height: 20px;
-    border-radius: 4px;
+    border-radius: 3px;
     background: transparent;
     /* 原本 14px 由容器无左右内边距时的外边距提供；现在容器已有 10px 内边距，
        这里收窄到 4px，使轨道距容器边框仍为 14px，视觉位置不变。 */
@@ -222,7 +223,7 @@
 .color-slider-track {
   position: relative;
   height: 20px;
-  border-radius: 4px;
+  border-radius: 3px;
   background: transparent;
   /* 同 .gradient-slider-track：容器 10px 内边距 + 4px 外边距 = 14px 视觉缩进 */
   margin: -12px 4px 0 4px;
@@ -274,7 +275,7 @@
   height: 24px;
   padding: 2px 4px;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 3px;
   /* 与透明度输入框（.opacity-input input[type="number"]）完全统一：
      字号、盒子模型、外观重置、背景、文字色一致，消除“字体过大/大小不一”。 */
   color: var(--text-color);
@@ -311,7 +312,7 @@ sp-color-slider {
 /* 渐变设置区域样式 */
 .gradient-settings-area {
     border: 1px solid var(--border-color);
-    border-radius: 4px;
+    border-radius: 3px;
     /* 上下左右内边距统一 10px；高度由内容决定且不再随面板高度伸缩
        （见 .gradient-picker > * { flex-shrink: 0 }） */
     padding: 10px;
@@ -374,7 +375,7 @@ sp-color-slider {
 .gradient-setting-item select {
     flex: 1;
     padding: 5px;
-    border-radius: 4px;
+    border-radius: 3px;
     background-color: var(--button-bg);
     color: var(--text-color);
     border: 1px solid var(--border-color);
@@ -469,7 +470,7 @@ sp-color-slider {
 /* 最终预览区域样式 */
 .final-preview-container {
   position: relative;
-  border-radius: 4px;
+  border-radius: 3px;
   display: flex;
   height: auto;
   min-height: 120px;
@@ -486,7 +487,7 @@ sp-color-slider {
     flex: 1 1 auto;
     min-height: 100px;
     margin: 10px; 
-    border-radius: 4px;
+    border-radius: 3px;
     justify-content: center;
     background-color: var(--dark-bg-color);
     box-sizing: border-box;

@@ -28,7 +28,7 @@ html, body {
 .range-slider {
   position: relative;
   display: block;
-  height: 18px;
+  height: 12px;
   cursor: pointer;
   outline: none;
   -webkit-user-select: none;
@@ -46,7 +46,7 @@ html, body {
   top: 50%;
   height: 4px;
   margin-top: -2px;
-  border-radius: 2px;
+  border-radius: 3px;
   background-color: var(--border-color);
   pointer-events: none;
 }
@@ -56,7 +56,7 @@ html, body {
   left: 0;
   top: 0;
   height: 100%;
-  border-radius: 2px;
+  border-radius: 3px;
   background-color: var(--primary-color);
   pointer-events: none;
 }
@@ -80,39 +80,26 @@ html, body {
   border-color: var(--primary-color);
 }
 
-/* 统一选区填充面板中所有滑块 number-input 的字号（原默认约13px，减小2px）与字体 */
-#app input[type="number"] {
-  font-size: 11px;
-  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
-  /* 修复 UXP 原生 number 输入框绘制区横向越界压住边框（与激活/试用面板 input 同类问题）：
-     appearance:none 让输入框按 CSS 盒绘制，不再溢出覆盖左右边框；边框改由 CSS 提供，
-     背景与下拉同色避免 UXP 下 transparent 被绘成纯黑；box-sizing:border-box 让边框计入宽度。 */
-  appearance: none;
-  -webkit-appearance: none;
-  box-sizing: border-box;
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-  background-color: var(--dropdown-bg-color);
-  background-image: none;
-  padding: 0 3px;
-  /* 固定高度 + 基线居中：行内上下文下 type=number 默认按基线对齐会留出 descender 间隙，
-     表现为输入框整体下沉、下边框越界；统一 22px 高度并 vertical-align:middle 消除该间隙。 */
-  height: 22px;
-  vertical-align: middle;
+/* 把「输入框容器 + 单位符号」绑成一组（flex 行、垂直居中），作为 slider-parameter-collection /
+   selection-slider-item / stroke 容器的直接子元素，与文字标签保持「标签 | 数字组」两列布局。 */
+.num-input-wrap {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
 }
 
 /* 主面板滑块数字输入：单位符号在输入框容器之外（.num-unit），裁剪容器只包数字输入本身。
-   UXUP 原生 number 的实际绘制区恒高于 input 的 CSS 盒（CSS 高度压不掉原生绘制高度），
+   UXP 原生 number 的实际绘制区恒高于 input 的 CSS 盒（CSS 高度压不掉原生绘制高度），
    所以绝不能让 input 撑满容器（实测撑满必从底部越界）。
    定稿（2026-09-01 用户逐轮实测）：容器（视觉输入框）32px、input 24px——上下各留 4px
    缓冲容纳原生绘制区（与激活码 .license-input-wrap 同一套已验证比例），
    flex align-items:center 居中，缓冲吃掉原生溢出，各分辨率完整不越界。
    注意：input 的 CSS 高度不改变原生控件的绘制大小，只决定留多少缓冲，故用 24px（4px 缓冲）
-   而非更大值——缓冲不足时下越界会复发（27px 撑满时实测复发）。 */
-#app .num-input-row {
+   而非更大值——缓冲不足时下越界会复发 */
+.num-input-row {
   display: flex;
   align-items: center;
-  height: 32px;
+  height: 24px;
   padding: 0;
   box-sizing: border-box;
   border: 1px solid var(--border-color);
@@ -122,30 +109,24 @@ html, body {
   overflow: hidden;
 }
 
-#app .num-input-row:focus-within {
+.num-input-row:focus-within {
   border-color: var(--primary-color);
   box-shadow: 0 0 0 2px var(--hover-bg);
 }
 
-#app .num-input-row input[type="number"] {
-  display: block;
-  flex: 0 0 35px;
-  width: 35px;
+.num-input-row input[type="number"] {
+  display: flex;
+  align-items: center;
+  width: 24px;
   height: 24px;
-  margin: 0;
-  padding: 0 3px;
   box-sizing: border-box;
-  border: none;
   background-color: var(--dropdown-bg-color);
-  background-image: none;
   color: var(--text-color);
-  font-size: 11px;
+  font-size: 12px;
   font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
   text-align: center;
-  line-height: 24px;
-  outline: none;
+  line-height: 32px;
   appearance: none;
-  -webkit-appearance: none;
 }
 
 /* 单位符号：独立于数字输入框容器之外，与输入框保持小间距（不进裁剪框、不被裁掉） */
@@ -155,70 +136,9 @@ html, body {
   color: var(--text-color);
   white-space: nowrap;
   flex: 0 0 auto;
-}
-
-/* 把「输入框容器 + 单位符号」绑成一组（flex 行、垂直居中），作为 slider-parameter-collection /
-   selection-slider-item / stroke 容器的直接子元素，与文字标签保持「标签 | 数字组」两列布局。 */
-.num-input-wrap {
   display: flex;
-  align-items: center;
-  flex: 0 0 auto;
+  align-items: right;
 }
-
-/* 绘画工具箱复用同一裁剪容器（与 .adjustment-number-input 配合）：
-   .unit-container 内单位符号已是独立 .adjustment-unit，这里只把输入框包进裁剪容器。 */
-#pixeladjustment .num-input-row {
-  display: flex;
-  align-items: center;
-  flex: 0 0 35px;
-  width: 35px;
-  height: 32px;
-  padding: 0;
-  box-sizing: border-box;
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-  background-color: var(--dropdown-bg-color);
-  background-image: none;
-  overflow: hidden;
-}
-
-#pixeladjustment .num-input-row:focus-within {
-  border-color: var(--primary-color);
-  box-shadow: 0 0 0 2px var(--hover-bg);
-}
-
-/* 用 input[type="number"] 而非 .adjustment-number-input：纯色/图案/渐变子面板的
-   number input 没有类名，同样需要裁剪+缓冲防越界，统一按类型命中。 */
-#pixeladjustment .num-input-row input[type="number"] {
-  display: block;
-  width: 35px;
-  border: none;
-  background-color: var(--dropdown-bg-color);
-  background-image: none;
-  color: var(--text-color);
-  font-size: 11px;
-  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
-  text-align: center;
-  /* input 24px + 上下各 4px 缓冲：与主面板同一套已验证比例，
-     绝不能让 input 撑满容器（原生绘制区恒高于 CSS 盒，撑满必从底部越界）。 */
-  height: 24px;
-  margin: 0;
-  padding: 0 3px;
-  box-sizing: border-box;
-  line-height: 24px;
-  outline: none;
-  appearance: none;
-  -webkit-appearance: none;
-}
-
-/* 主面板滑块数字输入统一类（不透明度/羽化/平滑/锐度/扩散 + 描边宽度/不透明度）。
-   外观、边框、背景、高度由上方 #app input[type="number"] 统一提供，这里只控宽度与层级；
-   35px：提交 94266de 为修输入框越界/三位数显示不全拉宽到 46px，实测过宽，两面板所有数字输入统一缩到 35px。 */
-.slider-number-input {
-  width: 35px;
-  z-index: 1;
-}
-
 
 .icon-fill {
   fill: var(--text-color);
@@ -238,7 +158,7 @@ html, body {
   background: transparent;
   color: var(--text-color);
   border: none;
-  border-radius: 4px;
+  border-radius: 3px;
   cursor: pointer;
   box-sizing: border-box;
   user-select: none;
@@ -367,7 +287,7 @@ body.secondary-panel-open .container {
 }
 
 .main-button {
-  border-radius: 4px;
+  border-radius: 3px;
   cursor: pointer;
   height: 100%;
   width: 80%;
@@ -494,7 +414,7 @@ sp-radio[disabled] {
   background-color: var(--bg-color);
   border: 1px solid var(--border-color);
   border-radius: 3px;
-  padding: 16px 0 0px 0;
+  padding: 20px 0 0px 0;
   margin: 0 auto;
   z-index: 1; 
 }
@@ -504,11 +424,12 @@ sp-radio[disabled] {
    混合模式容器在 slider-container 外部，margin-bottom:-10px 骑在卡片上边缘 */
 .entire-slider {
   width: 100%;
-  margin: 0 0 15px 0;
+  margin: 0 0 20px 0;
 }
 
 /* 行容器：装「文字标签 + 数字输入 + 单位符号」三个元素 */
 .slider-parameter-collection {
+  height: 32px;
   width: calc(100% - 20px);
   margin: 0 auto;
   display: flex;
@@ -539,20 +460,6 @@ sp-radio[disabled] {
 .slider-text-4 { width: 47px; }
 .slider-text-5 { width: 60px; }
 .slider-text-6 { width: 73px; }
-
-/* 分成两行的滑块（不透明度/羽化）里「数字输入 + 单位符号」组合的
-   单位符号容器：统一宽度 14px、不换行、作为 flex 子项不伸缩，
-   与数字输入（35px）一起被行容器 space-between 推到最右端，
-   两行滑块的单位符号容器与数字输入容器各自水平居中对齐。 */
-.slider-parameter-collection > div > span {
-  width: 14px;
-  flex: none;
-  white-space: nowrap;
-  display: flex;
-  align-items: center;
-  font-size: 13px;
-  color: var(--text-color);
-}
 
 .slider-input {
   width: calc(100% - 20px);
@@ -625,19 +532,9 @@ sp-radio[disabled] {
   display: flex;
   flex-direction: row;
   align-items: center;
+  margin: 10px 0 10px 0;
 }
 
-/* 滑块数字输入容器，宽度统一改由 .slider-number-input 控制 */
-.selection-slider-item input[type="number"]  {
-  appearance: none;
-  -webkit-appearance: none;
-  box-sizing: border-box;
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-  background-color: var(--dropdown-bg-color);
-  background-image: none;
-  padding: 0 3px;
-}
 
 /* 滑块文字容器 */
 .selection-slider-label {
@@ -649,12 +546,6 @@ sp-radio[disabled] {
   margin-right: 10px;
 }
 
-/* 滑块（数字输入容器+单位符号容器）的组合容器 */
-.selection-slider-item div {
-  align-items: center;
-  display: flex;
-}
-
 /* 滑块条容器（单行滑块：标签 + 滑块条 + 数字输入 + 单位符号 同行）。
    用 flex:1 1 auto 占满行容器剩余宽度，使滑块条长度 = 行宽 - 标签宽 - 数字输入(35px) - 单位符号(14px) - 间距，
    即“随标签字数与行容器宽度综合得出”，从根本上避免两字标签被固定 140px 挤换行。 */
@@ -664,17 +555,6 @@ sp-radio[disabled] {
   cursor: pointer;
   display: flex;
   justify-content: center;
-}
-
-/* 滑块单位符号容器，与主面板两行滑块、各子面板统一：宽度14px、不换行、不伸缩 */
-.selection-slider-item span {
-  font-size: 13px;
-  color: var(--text-color);
-  align-items: center;
-  display: flex;  
-  width: 14px;
-  white-space: nowrap;
-  flex: none;
 }
 
 .selection-slider-label.dragging {
@@ -704,54 +584,6 @@ sp-switch {
 .switch-label {
   font-size: 13px;
   color: var(--text-color);
-}
-
-/* 自定义开关（替代 sp-switch，规避 PS 升级兼容性问题）。
-   轨道/圆点 4px 圆角，与 .main-button 统一；开启态轨道变主题色、圆点右移。
-   组件见 src/components/CustomSwitch.tsx。 */
-.custom-switch {
-  display: inline-flex;
-  align-items: center;
-  cursor: pointer;
-  user-select: none;
-  box-sizing: border-box;
-}
-
-.custom-switch-track {
-  position: relative;
-  width: 36px;
-  height: 20px;
-  border-radius: 9999px;
-  background-color: var(--disabled-color);
-  border: 1px solid var(--border-color);
-  box-sizing: border-box;
-  transition: background-color 0.2s ease;
-}
-
-.custom-switch-thumb {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background-color: #fff;
-  box-sizing: border-box;
-  transition: transform 0.2s ease;
-}
-
-.custom-switch.on .custom-switch-track {
-  background-color: var(--primary-color);
-  border-color: var(--primary-color);
-}
-
-.custom-switch.on .custom-switch-thumb {
-  transform: translateX(16px);
-}
-
-.custom-switch.disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
 }
 
 /* （颜色预览容器+设置图标容器）组合容器 */
@@ -785,8 +617,8 @@ sp-switch {
   width: 20px;
   height: 20px;
   cursor: pointer;
-  margin-left: 10px;
-  border-radius: 2px;
+  margin: 0 5px 0 10px;
+  border-radius: 3px;
 }
 
 
@@ -894,7 +726,7 @@ button {
   padding: 5px 10px;
   background-color: var(--button-bg);
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 3px;
   color: var(--text-color);
   cursor: pointer;
   appearance: none;
@@ -908,7 +740,7 @@ button:hover {
 /* 底部checkbox选项外部容器 */
 .bottom-checkbox-options {
   padding: 10px 10px;
-  height: 90px;
+  height: 100px;
   box-sizing: border-box;
   display: flex;
   flex-direction: row;
@@ -952,7 +784,6 @@ button:hover {
   white-space: nowrap;  /* 文字不换行 */
   display: flex;
   align-items: center;  /* 标签文字在行内竖直居中，与对应勾选框对齐 */
-  margin-right: 6px;    /* label 与 input 之间的间距 */
 }
 
 /* 添加禁用状态的标签样式 */
@@ -964,6 +795,7 @@ button:hover {
 
 .checkbox-input {
   cursor: pointer;
+  justify-content: flex-end;
 }
 
 .checkbox-input:disabled {

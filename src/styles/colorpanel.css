@@ -1,5 +1,6 @@
 /* 颜色设置面板样式 */
   .color-settings-panel {
+    --adjust-scrollbar-w: 10px;
     position: absolute;
     top: 0;
     left: 0;

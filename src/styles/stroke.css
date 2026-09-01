@@ -82,7 +82,7 @@
 }
 
 .stroke-wide-container input[type="number"] {
-  /* 宽度统一改由 .slider-number-input 控制（原 42px 已移除） */
+  /* 宽度统一由 .num-input-row input[type="number"] 控制（统一 24px） */
   margin-left: 0;
   text-align: center;
   appearance: none;

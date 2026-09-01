@@ -1,5 +1,4 @@
 /* 调整面板样式 */
-
 /* 授权/试用状态提示样式。
    ⚠️ .adjustment-container 是 flex 列 + overflow-y:auto，默认 flex-shrink:1 会让本卡片在
    下方分区展开、内容超出高度时被纵向压缩到只剩文字高度。
@@ -10,12 +9,11 @@
 .license-status-banner {
   display: flex;
   align-items: center;
-  gap: 8px;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.08);
   color: var(--text-color);
   padding: 6px 10px;
-  border-radius: 4px;
+  border-radius: 3px;
   margin-bottom: 6px;
   font-size: 12px;
   /* 实测定稿（2026-08-31）：宽度就用 100%，右边距问题与 width 无关——
@@ -162,15 +160,15 @@
 
 /* 分区容器 */
 .adjustment-section {
-  width: calc(100% - 2px);
+  width: 100%;
   max-width: 280px;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  padding: 13px 12px 6px 12px;
+  padding: 10px 10px;
   margin-bottom: 20px;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 3px;
   margin-left: 0;
   margin-right: 0;
 }
@@ -184,17 +182,17 @@
   width: 100%;
 }
 
-/* 按钮样式（与主面板主开关 .main-button 保持一致） */
+/* 四字按钮按钮样式 */
 .adjustment-button {
   height: 30px;
   /* 4 字档：width = 13×4 + 20 = 72px，按钮容器无内边距（左右间距由宽度算法统一给出） */
   width: 72px;
-  margin: 0 0 8px -2px;
+  margin: 0;
   padding: 0;
   background-color: var(--button-bg);
   color: var(--text-color);
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 3px;
   font-size: 13px;
   font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
   cursor: pointer;
@@ -217,25 +215,25 @@
   transform: scale(0.98);
 }
 
-/* 自适应宽度：与 .adjustment-button 同一套视觉，仅放开 80px 固定宽度，
-   用于「录制快捷键」「断开守护进程」这类超过 4 字的按钮文案。 */
-.adjustment-button.auto {
-  width: auto;
-  min-width: 0;
-  padding: 0;
-  margin: 0;
-}
+  /* 自适应宽度：与 .adjustment-button 同一套视觉，仅放开 80px 固定宽度，
+    用于「录制快捷键」「断开守护进程」这类超过 4 字的按钮文案。 */
+  .adjustment-button.auto {
+    width: auto;
+    min-width: 0;
+    padding: 0;
+    margin: 0;
+  }
 
-/* 紧凑尺寸：守护进程状态条高 24px，条内按钮需同高才不撑破布局 */
-/* 紧凑档（守护进程状态条，font 12）：width = 12×7 + 20 = 104px
-   （启动/停止快捷键服务均为 7 字），无内边距 */
-.adjustment-button.compact {
-  height: 24px;
-  font-size: 12px;
-  width: 104px;
-  padding: 0;
-  margin: 0;
-}
+  /* 紧凑尺寸：守护进程状态条高 24px，条内按钮需同高才不撑破布局 */
+  /* 紧凑档（守护进程状态条，font 12）：width = 12×7 + 20 = 104px
+    （启动/停止快捷键服务均为 7 字），无内边距 */
+  .adjustment-button.compact {
+    height: 24px;
+    font-size: 12px;
+    width: 104px;
+    padding: 0;
+    margin: 0;
+  }
 
 /* 禁用态：div[role=button] 没有原生 disabled 语义，靠类控制 */
 .adjustment-button.disabled {
@@ -260,7 +258,7 @@
   background: transparent;
   color: var(--text-color);
   border: none;
-  border-radius: 4px;
+  border-radius: 3px;
   cursor: pointer;
   box-sizing: border-box;
   user-select: none;
@@ -291,16 +289,6 @@
 
 .hotkey-icon-button.disabled:hover {
   color: var(--disabled-color);
-}
-
-/* 三个图标按钮的固定宽度大容器：下拉可自由伸缩，图标组宽度恒为 3×28=84px。
-   每个按钮各占一个等宽小格子并在格内居中，格间距即按钮间距、恒定一致；
-   开启录制时停止键出现在预留的中间格子里，刷新与录制因此都不会位移。 */
-/* 含垃圾桶的包装层自身成为 flex 居中容器：24px 的 .hotkey-icon-button 在任意行高下
-   都与左侧图标垂直居中对齐（替换 sp-action-button 后曾因固定高度顶对齐而偏上） */
-.delete-button-wrapper {
-  display: flex;
-  align-items: center;
 }
 
 .hotkey-icon-group {
@@ -373,9 +361,9 @@
 /* 所有已录制快捷键的边框可见大容器（参考蒙版同步任务卡片 .mask-sync-task 风格） */
 .hotkey-entry-box {
   border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 8px;            /* 上下内边距相等 → 首条上边/末条下边到边框距离一致 */
-  margin-top: 8px;
+  border-radius: 3px;
+  padding: 10px;            /* 上下内边距相等 → 首条上边/末条下边到边框距离一致 */
+  margin-top: 10px;
   background: var(--bg-color);
   box-sizing: border-box;
 }
@@ -391,7 +379,7 @@
   display: flex;
   align-items: center;
   padding: 6px 8px;
-  border-radius: 6px;
+  border-radius: 3px;
   background: var(--entry-bg);
   font-size: 12px;
   box-sizing: border-box;
@@ -434,6 +422,7 @@
   cursor: default;
 }
 
+/* 组合键 */
 .hotkey-entry-combo {
   width: 110px;
   flex: 0 0 110px;
@@ -443,6 +432,7 @@
   white-space: nowrap;
 }
 
+/* 竖分割线 */
 .hotkey-entry-sep {
   flex: 0 0 auto;
   margin: 0 8px;
@@ -469,7 +459,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 6px;
+  margin-top: 10px;
 }
 
 .hotkey-selected-count {
@@ -489,10 +479,9 @@
   align-items: center;
   justify-content: center;
   width: 90px; 
-  margin-bottom: 5px;
 }
 
-/* 开关标签 */
+/* 开关文字标签 */
 .adjustment-swtich-label {
   color: var(--text-color);
   display: flex;
@@ -500,10 +489,9 @@
   cursor: pointer;
 }
 
-/* 滑块容器 */
+/* 滑块最外级容器，内部可能包含若干个滑块组 */
 .adjustment-slider-container {
   width: 100%;
-  margin-bottom: 3px;
 }
 
 /* 下拉行（平滑模式 / 线稿参考）：上下各留 10px，与上下元素保持间距 */
@@ -512,20 +500,13 @@
   margin-bottom: 10px;
 }
 
-/* 下拉行内部与紧随行（如 中间值半径）之间的间距：容器 margin 只作用于容器外，
-   容器内 item 之间需单独加 margin-bottom */
-.adjustment-slider-item-gap-bottom {
-  margin-bottom: 8px;
-}
-
 /* 滑块项 */
 .adjustment-slider-item {
   width: 100%;
+  margin: 10px 0;
   display: flex;
   align-items: center;
   flex-direction: row;
-  justify-content: flex-start;
-  gap: 3px;
 }
 
 /* 滑块标签 */
@@ -549,7 +530,7 @@
   flex: 0 0 47px;
 }
 
-/* 宽的单位标签 */
+/* 线稿参考单位标签 */
 .wide-adjustment-slider-label {
   color: var(--text-color);
   display: flex;
@@ -560,7 +541,7 @@
   white-space: nowrap;
 }
 
-/* 更宽的单位标签 */
+/* 中间值半径的单位标签 */
 .wider-adjustment-slider-label {
   color: var(--text-color);
   display: flex;
@@ -571,30 +552,8 @@
   white-space: nowrap;
 }
 
-/* 滑块输入 */
-.adjustment-slider-input {
-  display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
-  cursor: pointer;
-  background: var(--bg-color);
-  margin-top: 15px;
-}
-
-/* 窄的滑块 */
-.narrow-adjustment-slider-input{
-  display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
-  cursor: pointer;
-  background: var(--bg-color);
-  margin-top: 15px;
-}
-
 /* RangeSlider 在调整面板中的适配（替代 PS 27.9 后失效的原生 range） */
-.adjustment-slider-input.range-slider,
-.narrow-adjustment-slider-input.range-slider,
-.narrower-adjustment-slider-input.range-slider {
+.adjustment-slider-input.range-slider {
   display: block;
   position: relative;
   flex: 1 1 auto;
@@ -608,22 +567,57 @@
   --rs-track-inset: 13px;
 }
 
-/* 更窄的滑块 */
-.narrower-adjustment-slider-input{
-  display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
-  cursor: pointer;
-  background: var(--bg-color);
-  margin-top: 15px;
-}
-
 .unit-container{
   display: flex;
   align-items: center;
   flex: 1 1 auto;
   min-width: 0;
   gap: 3px;
+}
+
+/* 绘画工具箱复用同一裁剪容器（与 .adjustment-number-input 配合）：
+   .unit-container 内单位符号已是独立 .adjustment-unit，这里只把输入框包进裁剪容器。 */
+#pixeladjustment .num-input-row {
+  display: flex;
+  align-items: center;
+  flex: 0 0 35px;
+  height: 24px;
+  padding: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background-color: var(--dropdown-bg-color);
+  background-image: none;
+  overflow: hidden;
+}
+
+#pixeladjustment .num-input-row:focus-within {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px var(--hover-bg);
+}
+
+/* 用 input[type="number"] 而非 .adjustment-number-input：纯色/图案/渐变子面板的
+   number input 没有类名，同样需要裁剪+缓冲防越界，统一按类型命中。 */
+#pixeladjustment .num-input-row input[type="number"] {
+  display: block;
+  width: 35px;
+  border: none;
+  background-color: var(--dropdown-bg-color);
+  background-image: none;
+  color: var(--text-color);
+  font-size: 12px;
+  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
+  text-align: center;
+  /* input 24px + 上下各 4px 缓冲：与主面板同一套已验证比例，
+     绝不能让 input 撑满容器（原生绘制区恒高于 CSS 盒，撑满必从底部越界）。 */
+  height: 32px;
+  margin: 0;
+  padding: 0 3px;
+  box-sizing: border-box;
+  line-height: 32px;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 /* 数值输入框 */
@@ -680,30 +674,33 @@
   font-size: 12px;
   background: var(--bg-color);
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 3px;
   margin-left: auto;
   margin-right: -2px;
 }
 
-/* 单位标签 */
+/* 单位标签：与主面板滑块单位符号容器 .num-unit 完全一致的样式
+   （font-size 13 / 主题色 / 不换行 / 内容宽度不伸缩）。
+   去掉 opacity:0.8 —— 否则单位符号比主面板暗一截，两面板观感不统一。
+   与数字输入的间距由父级 .unit-container 的 gap 提供（主面板用 .num-unit 的
+   margin-left:4px 同源，效果一致，故此处不重复加 margin，避免与 gap 叠加成 7px）。 */
 .adjustment-unit {
-  color: var(--text-color);
+  margin-left: 4px;
   font-size: 13px;
-  opacity: 0.8;
-  width: 14px;
-  flex: 0 0 14px;
-  text-align: left;
+  color: var(--text-color);
+  
   white-space: nowrap;
+  flex: 0 0 auto;
   display: flex;
-  align-items: center;
+  align-items: right;
 }
 
-/* 分隔线 */
+/* 水平实现分割线 */
 .adjustment-divider {
-  width: calc(100% + 26px);
+  width: calc(100% + 20px);
   height: 1px;
   background-color: var(--border-color);
-  margin: 7px 13px 13px -13px;
+  margin: 15px 10px 15px -10px;
 }
 
 /* 按钮三档宽度：按按钮汉字字数 2 / 4 / 6 分级。
@@ -737,7 +734,7 @@
    - 左右各留 14px，不贯通容器；不透明度 0.5。 */
 .adjustment-dashed-divider {
   height: 1px;
-  margin: 7px 0px 13px 0px;
+  margin: 15px 0px;
   display: flex;
   flex-direction: row;
   align-items: flex-start;
@@ -815,7 +812,7 @@
   background: var(--bg-color);
   color: var(--text-color);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: 3px;
   width: 280px;
   max-width: 92vw;
   padding: 10px 10px;
@@ -865,7 +862,7 @@
   background: transparent;
   color: var(--text-color);
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 3px;
   width: 22px;
   height: 22px;
   padding: 0; /* 去掉 padding-top 偏移，让 × 在 flex 下真正竖直居中 */
@@ -892,7 +889,6 @@
   padding: 0;
   margin: 0 0 20px 0;
   border: none;
-  border-radius: 0;
   background: transparent;
 }
 
@@ -902,7 +898,7 @@
    配合上下对称的 padding，使「首个卡片上边↔框上边界」=「加号按钮下边↔框下边界」 */
 .mask-sync-card-list {
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: 3px;
   padding: 8px;
   margin-top: 0; /* 与上方引擎状态条的 margin-bottom:8px 配合留白 */
   background: var(--bg-color);
@@ -968,7 +964,7 @@
   align-items: center;
   padding: 4px 8px;
   margin-bottom: 8px;
-  border-radius: 4px;
+  border-radius: 3px;
   /* 状态通知容器背景统一为 --bg-color（设计语言：状态类容器透明融入面板，不另起色块） */
   background: var(--bg-color);
   border: 1px solid var(--border-color);
@@ -1022,7 +1018,7 @@
   align-items: flex-start;
   padding: 3px 6px;
   margin: 2px 0 4px 0;
-  border-radius: 4px;
+  border-radius: 3px;
   font-size: 11px;
   line-height: 1.35;
   user-select: none;
@@ -1061,7 +1057,7 @@
 .mask-sync-task {
   background: var(--entry-bg);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: 3px;
   padding: 8px 10px;   /* 上下内边距相等（原为上 9 / 下 8） */
   margin-bottom: 0;    /* 间距改由下方「后续卡片」规则提供 */
   box-sizing: border-box;
@@ -1120,7 +1116,7 @@
 .mask-sync-divider {
   height: 1px;
   background-color: var(--border-color);
-  margin: 8px 0;
+  margin: 10px 0;
 }
 
 /* 配置行：标签 + 控件 space-between，放不下换行。
@@ -1185,7 +1181,7 @@
   /* 统一设计语言：头部背景走主题变量（theme.ts --dropdown-bg-color），与主面板下拉一致 */
   background: var(--dropdown-bg-color);
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 3px;
   box-sizing: border-box;
   font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
   cursor: pointer;
@@ -1279,7 +1275,7 @@
   overflow-y: auto;
   background: var(--dropdown-bg-color);
   border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border-radius: 3px;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
   padding: 2px 0;
   box-sizing: border-box;
@@ -1392,6 +1388,3 @@
   justify-content: flex-start;
   width: auto;
 }
-
-/* 立即同步 / 删除 已统一改用 .hotkey-icon-button（无边框、透明背景、--text-color），
-   见 AdjustmentPanel.tsx 蒙版同步页脚 */

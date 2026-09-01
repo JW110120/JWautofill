@@ -2809,7 +2809,7 @@ const renderEdgeProcessingContent = () => (
     <div role="button" tabIndex={0} className="adjustment-button" onClick={handleSmartEdgeSmooth} title={helpTexts.adjustment.edgeSmooth}>边缘平滑</div>
 
     <div className="adjustment-slider-container adjustment-slider-container-vpad">
-      <div className="adjustment-slider-item adjustment-slider-item-no-gap adjustment-slider-item-gap-bottom">
+      <div className="adjustment-slider-item adjustment-slider-item-no-gap adjustment-slider-item">
         <div className="adjustment-slider-label adjustment-slider-label-4" title={helpTexts.adjustment.edgeSmoothMode}>平滑模式</div>
         <div className="unit-container">
           <MaskSyncSelect
@@ -3272,8 +3272,9 @@ const renderQuickActionContent = () => (
           <div className="adjustment-unit">%</div>
         </div>
       </div>
-
-      <div className="adjustment-swtich-container" style={{ marginTop: '6px', justifyContent: 'flex-start', width: 'auto' }}>
+    </div>
+    
+    <div className="adjustment-swtich-container" style={{ marginTop: '6px', justifyContent: 'flex-start', width: 'auto' }}>
         <label
           className="adjustment-swtich-label"
           onClick={() => setSpecialWoodcutPreview(!specialWoodcutPreview)}
@@ -3285,7 +3286,6 @@ const renderQuickActionContent = () => (
           onChange={(e) => setSpecialWoodcutPreview(e.target.checked)}
           style={{ marginLeft: '8px' }}
         />
-      </div>
     </div>
 
     <div className="adjustment-divider"></div>
