@@ -411,7 +411,7 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
                     color: var(--text-color);
                     background-color: var(--button-bg);
                     border: 1px solid var(--border-color);
-                    border-radius: 4px;
+                    border-radius: 3px;
                     cursor: pointer;
                     appearance: none;
                     -webkit-appearance: none;
@@ -467,7 +467,7 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
                     padding: 0;
                     box-sizing: border-box;
                     border: 1px solid var(--border-color);
-                    border-radius: 4px;
+                    border-radius: 3px;
                     background-color: var(--dropdown-bg-color);
                     background-image: none;
                     overflow: hidden;
@@ -584,7 +584,7 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
                     width: 100%;
                     margin-top: 12px;
                     padding: 8px 10px;
-                    border-radius: 4px;
+                    border-radius: 3px;
                     font-size: 12px;
                     text-align: center;
                     line-height: 1.4;
