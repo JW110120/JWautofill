@@ -187,10 +187,10 @@
 /* 按钮样式（与主面板主开关 .main-button 保持一致） */
 .adjustment-button {
   height: 30px;
-  width: 80px;
+  /* 4 字档：width = 13×4 + 20 = 72px，按钮容器无内边距（左右间距由宽度算法统一给出） */
+  width: 72px;
   margin: 0 0 8px -2px;
-  /* 4 字档默认内边距：保证文字与按钮左右边框有足够间距 */
-  padding: 0 10px;
+  padding: 0;
   background-color: var(--button-bg);
   color: var(--text-color);
   border: 1px solid var(--border-color);
@@ -221,16 +221,19 @@
    用于「录制快捷键」「断开守护进程」这类超过 4 字的按钮文案。 */
 .adjustment-button.auto {
   width: auto;
-  min-width: 76px;
-  padding: 0 12px;
+  min-width: 0;
+  padding: 0;
   margin: 0;
 }
 
 /* 紧凑尺寸：守护进程状态条高 24px，条内按钮需同高才不撑破布局 */
+/* 紧凑档（守护进程状态条，font 12）：width = 12×7 + 20 = 104px
+   （启动/停止快捷键服务均为 7 字），无内边距 */
 .adjustment-button.compact {
   height: 24px;
   font-size: 12px;
-  padding: 0 10px;
+  width: 104px;
+  padding: 0;
   margin: 0;
 }
 
@@ -529,6 +532,7 @@
 .adjustment-slider-label {
   color: var(--text-color);
   display: flex;
+  align-items: center;
   font-size: 13px;
   flex: 0 0 20px;
   white-space: nowrap;
@@ -549,6 +553,7 @@
 .wide-adjustment-slider-label {
   color: var(--text-color);
   display: flex;
+  align-items: center;
   font-size: 13px;
   flex: 0 0 50px;
   cursor: pointer;
@@ -559,6 +564,7 @@
 .wider-adjustment-slider-label {
   color: var(--text-color);
   display: flex;
+  align-items: center;
   font-size: 13px;
   flex: 0 0 60px;
   cursor: pointer;
@@ -684,9 +690,12 @@
   color: var(--text-color);
   font-size: 13px;
   opacity: 0.8;
-  width: 15px;
-  flex: 0 0 15px;
+  width: 14px;
+  flex: 0 0 14px;
   text-align: left;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
 }
 
 /* 分隔线 */
@@ -703,17 +712,24 @@
    - 2 字档 .adjustment-button-lv2；
    - 6 字档 .adjustment-button-wide。 */
 .adjustment-button-lv2 {
-  width: 64px;
-  padding: 0 10px;
+  /* 2 字档：width = 13×2 + 20 = 46px，无内边距 */
+  width: 46px;
+  padding: 0;
 }
 
 /* 6 字按钮（浅线/深线同层补色、alpha 上/下对齐、保底下对齐、线条加黑）：
    自适应宽度并留内边距，保证文字与按钮左右边缘有足够间距 */
+/* 长文案兜底（8 字宽档）：width = 13×8 + 20 = 124px，无内边距；
+   实际按钮已按各自字数改用 -5/-6/-7/-8 精确档，此条仅作兼容兜底 */
 .adjustment-button-wide {
-  width: auto;
-  min-width: 112px;
-  padding: 0 10px;
+  width: 124px;
+  padding: 0;
 }
+/* 按字数精确分档（width = 13×字数 + 20，无内边距）：5/6/7/8 字 = 85/98/111/124px */
+.adjustment-button-5 { width: 85px; padding: 0; }
+.adjustment-button-6 { width: 98px; padding: 0; }
+.adjustment-button-7 { width: 111px; padding: 0; }
+.adjustment-button-8 { width: 124px; padding: 0; }
 
 /* 虚线分隔线（同层补色 与 分层补色 之间）：
    - 纯 DOM 方案：DashedDivider 渲染 6px 短线 span 序列（6px 短线 + 6px 空 = 12px 周期），
@@ -1181,8 +1197,10 @@
   border-color: rgb(38, 128, 235);
 }
 
+/* 禁用态：文字（含箭头，currentColor）变灰 --disabled-color，不用 opacity——
+   灰色直接由 --disabled-color 给出，两面板（选区填充/绘画工具箱）禁用下拉观感一致 */
 .mask-sync-select-head.disabled {
-  opacity: 0.5;
+  color: var(--disabled-color);
   cursor: not-allowed;
 }
 

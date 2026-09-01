@@ -7,6 +7,7 @@ import { LayerInfoHandler } from '../utils/LayerInfoHandler';
 import { PresetManager } from '../utils/PresetManager';
 import RangeSlider from './RangeSlider';
 import Select from './Select';
+import { helpTexts } from '../constants/helpTexts';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -1324,7 +1325,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 
                 <div className="gradient-icon-container">
                     <div className="icon-group">
-                        <IconButton title="添加预设" onClick={handleAddPreset}>
+                        <IconButton title={helpTexts.gradient.addPreset} onClick={handleAddPreset}>
                             <AddIcon style={{ width: 15, height: 15, display: 'block' }} />
                         </IconButton>
                         <div className="delete-button-wrapper">
@@ -1332,7 +1333,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             className={`hotkey-icon-button${((selectedPreset === null && selectedPresets.size === 0) || presets.length === 0) ? ' disabled' : ''}`}
                             role="button"
                             tabIndex={0}
-                            title="删除预设"
+                            title={helpTexts.gradient.deletePreset}
                             style={{
                             cursor: ((selectedPreset === null && selectedPresets.size === 0) || presets.length === 0) ? 'not-allowed' : 'pointer',
                             opacity: ((selectedPreset === null && selectedPresets.size === 0) || presets.length === 0) ? 0.4 : 1,
@@ -1388,23 +1389,25 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         >
                             不透明度：
                         </label>
-                        <input
-                            type="number"
-                            min="0"
-                            max="100"
-                            value={Math.round(parseFloat(stops[selectedStopIndex].color.match(/,\s*([\d.]+)\s*\)$/)?.[1] || '1') * 100)}
-                            onChange={(e) => {
-                                const opacityValue = Math.max(0, Math.min(100, Number(e.target.value)));
-                                handleStopChange(selectedStopIndex, undefined, undefined, opacityValue);
-                            }}
-                        />
+                        <div className="num-input-row">
+                            <input
+                                type="number"
+                                min="0"
+                                max="100"
+                                value={Math.round(parseFloat(stops[selectedStopIndex].color.match(/,\s*([\d.]+)\s*\)$/)?.[1] || '1') * 100)}
+                                onChange={(e) => {
+                                    const opacityValue = Math.max(0, Math.min(100, Number(e.target.value)));
+                                    handleStopChange(selectedStopIndex, undefined, undefined, opacityValue);
+                                }}
+                            />
+                        </div>
                         <label className="gradient-subtitle">%</label>
                         <div className="delete-button-wrapper">
                         <div
                             className={`hotkey-icon-button${stops.length <= 2 ? ' disabled' : ''}`}
                             role="button"
                             tabIndex={0}
-                            title="删除色标"
+                            title={helpTexts.gradient.deleteStop}
                             style={{
                             cursor: stops.length <= 2 ? 'not-allowed' : 'pointer',
                             opacity: stops.length <= 2 ? 0.5 : 1,
@@ -1719,7 +1722,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             className={`hotkey-icon-button${stops.length <= 2 ? ' disabled' : ''}`}
                             role="button"
                             tabIndex={0}
-                            title="删除色标"
+                            title={helpTexts.gradient.deleteStop}
                             style={{
                             cursor: stops.length <= 2 ? 'not-allowed' : 'pointer',
                             opacity: stops.length <= 2 ? 0.5 : 1,
@@ -1770,19 +1773,21 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         step={1}
                         value={angle}
                         className="gradient-angle-range"
-                        title="调整渐变角度"
+                        title={helpTexts.gradient.adjustAngle}
                         disabled={gradientType === 'radial'}
                         onChange={(v) => setAngle(v)}
                     />
-                    <div>
-                        <input
-                            type="number"
-                            min="0" 
-                            max="360"
-                            value={angle}
-                            disabled={gradientType === 'radial'}
-                            onChange={(e) => setAngle(Number(e.target.value))}
-                        />
+                    <div className="num-input-wrap">
+                        <div className="num-input-row">
+                            <input
+                                type="number"
+                                min="0"
+                                max="360"
+                                value={angle}
+                                disabled={gradientType === 'radial'}
+                                onChange={(e) => setAngle(Number(e.target.value))}
+                            />
+                        </div>
                       <span>°</span>
                     </div>
                 </div>

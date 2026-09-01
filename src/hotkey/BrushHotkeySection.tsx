@@ -9,6 +9,7 @@ import {
 } from './HotkeyBridge';
 import { ExpandIcon, DeleteIcon, RefreshIcon, DataRefreshIcon, RecordCircleIcon, StopSquareIcon, BrushToolIcon, SmudgeToolIcon, MixerToolIcon, CloneStampIcon } from '../styles/Icons';
 import BrushSelect, { BrushSelectOption } from './BrushSelect';
+import { helpTexts } from '../constants/helpTexts';
 
 // 笔刷热键分区：在调整面板内录制「笔刷 + 快捷键」，持久化到共享配置，
 // 由本地守护进程在全局捕获按键后直接切换笔刷，不录制动作。
@@ -26,8 +27,7 @@ export default function BrushHotkeySection() {
   const [brushTypes, setBrushTypes] = useState<Record<string, string>>({});
   const [entries, setEntries] = useState<HotkeyEntry[]>([]);
   const [selectedBrush, setSelectedBrush] = useState('');
-  // 下拉选中的「唯一键」：同名笔刷各自有不同的 value（见下方 brushOptions），
-  // 此 state 仅用于驱动 BrushSelect 的选中高亮，真实笔刷名仍由 selectedBrush 持有。
+  // 下拉选中高亮键：value 即笔刷名（去重后唯一），与 selectedBrush 同步。
   const [selectedKey, setSelectedKey] = useState('');
   const [usePicker, setUsePicker] = useState(true);
   const [recording, setRecording] = useState(false);
@@ -88,7 +88,7 @@ export default function BrushHotkeySection() {
           : ('选区填充开关已' + (info.enabled ? '开启' : '关闭'))));
       }
     });
-    void loadBrushes(false);
+    void loadBrushes(false, false);
     return () => { unsub(); unsubConfig(); unsubStatus(); unsubHotkey(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -96,15 +96,21 @@ export default function BrushHotkeySection() {
   // 重新枚举笔刷列表 + 自动检测每支预设的类型（混合器/涂抹/画笔…）。
   // detectAllBrushTypes 会短暂切换当前笔刷并自动还原；纯画笔笔尖预设不暴露类型会标「画笔」。
   // notify=false 用于初始化静默加载（不弹通知）。
-  const loadBrushes = async (notify: boolean) => {
+  // detect=false 时只枚举笔刷名（不切笔刷），用于插件加载等「不能改动用户当前笔刷」的场景；
+  // detect=true 才扫描每支预设的类型（会短暂切换笔刷并自动还原），仅手动刷新时触发。
+  const loadBrushes = async (notify: boolean, detect: boolean = notify) => {
     if (notify) showMessage('正在刷新笔刷列表…');
     try {
       const names = await enumerateBrushes();
       setBrushes(names);
       setUsePicker(names.length > 0);
       if (names.length) {
-        const types = await detectAllBrushTypes();
-        setBrushTypes(types);
+        if (detect) {
+          const types = await detectAllBrushTypes();
+          setBrushTypes(types);
+        } else {
+          setBrushTypes({});
+        }
       } else {
         setBrushTypes({});
       }
@@ -248,6 +254,7 @@ export default function BrushHotkeySection() {
       showMessage('该组合键已被选区填充开关占用，请换一个');
       return;
     }
+    // 注意：不支持同名笔刷——只按名称绑定，PS 会选中 Brushes 列表最上方那支同名项。
     const entry: HotkeyEntry = { id: 'bk_' + Date.now(), combo, action: 'applyBrush', brush: selectedBrush };
     // 覆盖同组合键的旧映射，但主开关条目必须原样保留（它不参与笔刷热键的覆盖）
     const next = [...entries.filter(x => x.action === 'toggleMain' || x.combo !== combo), entry];
@@ -326,14 +333,12 @@ export default function BrushHotkeySection() {
     });
   }, [entries]);
 
-  // 下拉选中键与真实笔刷名对齐：当已选笔刷（真实名）存在、但选中键为空时，
-  // 把选中键补到第一个同名项的索引，保证高亮正确（例如刷新笔刷列表后回灌选中态）。
+  // 下拉选中键与真实笔刷名对齐（value 即笔刷名）：手动输入笔刷名等场景下回灌选中高亮。
   useEffect(() => {
     if (selectedBrush && !selectedKey) {
-      const gi = brushes.indexOf(selectedBrush);
-      if (gi >= 0) setSelectedKey(String(gi));
+      setSelectedKey(selectedBrush);
     }
-  }, [selectedBrush, selectedKey, brushes]);
+  }, [selectedBrush, selectedKey]);
 
   // 选中项里真正"可处理"的条数：笔刷条目可删除；
   // 选区填充开关只能解绑不能删除，且已解绑（combo 为空）时不可再操作
@@ -450,21 +455,14 @@ export default function BrushHotkeySection() {
     }
   };
 
-  // 同名笔刷区分：PS 笔刷名被用作热键 key，若两支重名则下拉里必须各自可被独立选中。
-  // 旧逻辑把 value 直接设为真实笔刷名，导致两个同名项 value 撞车：
-  // 点下方那支永远只选中列表较上方的那支，下方的同名笔刷无法在下拉里选出。
-  // 现改为：option.value 用「列表索引」保证唯一，显示名对第 2 个及以后追加「 (1)」「 (2)」…；
-  // 选中后再用索引反查真实笔刷名（brushes[index]）用于热键录制，热键语义不变。
-  const seenCount: Record<string, number> = {};
-  const brushOptions: BrushSelectOption[] = brushes.map((b, gi) => {
-    const dupIdx = (seenCount[b] = (seenCount[b] || 0) + 1) - 1; // 第几个同名项（0 起）
-    return {
-      value: String(gi),
-      main: dupIdx === 0 ? b : `${b} (${dupIdx})`,
-      // 笔刷类型（混合器/涂抹/画笔/图案图章…）渲染为图标；取不到类型则该项无 tag
-      tag: brushTypeTag(brushTypes[b] || '')
-    };
-  });
+  // 不支持同名笔刷（PS 按 _name 选中只会命中列表最上方那支，无法区分重名预设，
+  // 详见用户手册）。下拉里每个笔刷名只显示一次：value 直接用笔刷名（去重后唯一）。
+  const brushOptions: BrushSelectOption[] = Array.from(new Set(brushes)).map(b => ({
+    value: b,
+    main: b,
+    // 笔刷类型（混合器/涂抹/画笔/图案图章…）渲染为图标；取不到类型则该项无 tag
+    tag: brushTypeTag(brushTypes[b] || '')
+  }));
 
   // 渲染顺序：选区填充开关（toggleMain）始终置顶固定，其余笔刷记录保持存储顺序；
   // 长按拖拽只重排其余记录，不影响置顶项。
@@ -476,7 +474,7 @@ export default function BrushHotkeySection() {
   return (
     <div className="adjust-expand-section">
       <div className="adjust-expand-header" onClick={() => setCollapsed(c => !c)}
-           title="通过本地快捷键服务实现全局快捷键，直接在画布上按快捷键切换笔刷（无需录制动作）。">
+           title={helpTexts.hotkey.header}>
         <div className={`adjust-expand-icon ${collapsed ? '' : 'expanded'}`}>
           <ExpandIcon expanded={!collapsed} />
         </div>
@@ -496,8 +494,8 @@ export default function BrushHotkeySection() {
               tabIndex={0}
               className={`adjustment-button auto compact${busy ? ' disabled' : ''}`}
               title={daemonConnected
-                ? '让快捷键服务退出。卸载插件前必须先停止，否则安装目录里的文件被占用删不掉'
-                : '安装并启动随插件分发的快捷键服务（默认的选区填充开关 Ctrl+Q 也由它驱动）'}
+                ? helpTexts.hotkey.daemonStop
+                : helpTexts.hotkey.daemonStart}
               onClick={(e) => {
                 e.stopPropagation(); // 避免冒泡到分区头部触发折叠
                 if (!busy) { if (daemonConnected) void stopDaemon(); else void loadDaemon(); }
@@ -513,13 +511,12 @@ export default function BrushHotkeySection() {
                 value={selectedKey}
                 options={brushOptions}
                 onChange={(v) => {
-                  // 下拉 value 是唯一索引，反查真实笔刷名（用于热键录制）；
-                  // 同时记下选中的索引键，供选中高亮使用。
-                  setSelectedBrush(brushes[Number(v)] ?? v);
+                  // value 即笔刷名（去重后唯一），直接作为录制用的真实笔刷名
+                  setSelectedBrush(v);
                   setSelectedKey(v);
                 }}
                 placeholder="选择笔刷"
-                title="选择要绑定快捷键的笔刷预设（名称需与 Brushes 面板一致）"
+                title={helpTexts.hotkey.brushSelect}
                 style={{ flex: '1 1 auto', minWidth: 0 }}
               />
             ) : (
@@ -535,7 +532,7 @@ export default function BrushHotkeySection() {
                   <div
                     className="hotkey-icon-button"
                     onClick={() => void loadBrushes(true)}
-                    title="刷新笔刷列表"
+                    title={helpTexts.hotkey.refreshBrushes}
                   >
                     <RefreshIcon style={{ width: 14, height: 14, display: 'block' }} />
                   </div>
@@ -546,7 +543,7 @@ export default function BrushHotkeySection() {
                   role="button"
                   tabIndex={0}
                   className={`hotkey-circle-button${recording ? '' : ' disabled'}`}
-                  title={recording ? '放弃本次录制（等同于在录制过程中按 Esc）' : '仅在录制过程中可取消本次录制'}
+                  title={recording ? helpTexts.hotkey.recordCancelActive : helpTexts.hotkey.recordCancelIdle}
                   onClick={(e) => { e.stopPropagation(); if (recording) cancelRecord(); }}
                 >
                   <StopSquareIcon style={{ width: 16, height: 16, display: 'block' }} />
@@ -557,13 +554,7 @@ export default function BrushHotkeySection() {
                   role="button"
                   tabIndex={0}
                   className={`hotkey-circle-button${recording ? ' recording' : ''}${!selectedBrush ? ' disabled' : ''}`}
-                  title={
-                    '选中一支笔刷后点这个圆点，然后在任意位置按下要绑定的组合键即可。\n' +
-                    '可绑定的键：字母 A-Z、数字 0-9、F1-F24，以及 ; \' , . / - = ` [ ] \\ 等符号键，\n' +
-                    '还有方向键 / 空格 / 回车 / 退格 / Tab / Insert / Delete / Home / End / PageUp / PageDown\n' +
-                    '以及小键盘 Num0-Num9。录制由快捷键服务的全局键盘钩子完成，无需面板获得焦点。\n' +
-                    '录制中按 Esc 取消。'
-                  }
+                  title={helpTexts.hotkey.recordHint}
                   onClick={(e) => {
                     e.stopPropagation();
                     if (!recording && selectedBrush) void startRecord();
@@ -600,8 +591,8 @@ export default function BrushHotkeySection() {
                   ref={(el) => { rowRefs.current[e.id] = el; }}
                   className={rowClass}
                   title={isPinned
-                    ? '选区填充开关：始终置顶固定，不可拖动'
-                    : '单击选中；Ctrl + 单击 加选/减选；Shift + 单击 选中从锚点到本条；长按可拖拽调整顺序'}
+                    ? helpTexts.hotkey.entryPinned
+                    : helpTexts.hotkey.entryNormal}
                   onClick={(ev) => handleEntryClick(e.id, ev)}
                   onMouseDown={(ev) => startPress(ev, e)}
                   onMouseUp={endPress}
@@ -629,7 +620,7 @@ export default function BrushHotkeySection() {
                 tabIndex={0}
                 className={`hotkey-icon-button${(selectedIds.length !== 1 || recording || !daemonConnected) ? ' disabled' : ''}`}
                 style={{ marginRight: 4 }}
-                title={selectedIds.length === 1 ? '重录选中的这一条（无需再从上方下拉菜单选择）' : '选中单条快捷键后可重录'}
+                title={selectedIds.length === 1 ? helpTexts.hotkey.reRecordOne : helpTexts.hotkey.reRecord}
                 onClick={() => { if (selectedIds.length === 1 && !recording && daemonConnected) void reRecordEntry(); }}
               >
                 <DataRefreshIcon style={{ width: 14, height: 14, display: 'block' }} />

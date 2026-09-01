@@ -55,19 +55,26 @@
     width: 100%;
   }
 
-  /* 标签 + 数值 + 单位 同行容器（套娃第一层，原 colorsettings-slider-header） */
+  /* 标签 + 数值 + 单位 同行容器（套娃第一层，原 colorsettings-slider-header）：
+     行容器负责布局（两端对齐）与 ew-resize 光标，宽度与 APP/图案面板统一 */
   .colorsettings-slider-parameter-collection {
     display: flex;
     flex-direction: row;
     justify-content: space-between;
     align-items: center;
-    margin:0 0 0 8px;
+    width: calc(100% - 20px);
+    margin: 0 auto;
     padding: 0px;
+    cursor: ew-resize;
+  }
+
+  .colorsettings-slider-parameter-collection.dragging {
+    cursor: grabbing;
   }
 
   .colorsettings-slider-item .colorsettings-slider-range {
-    width: 100%;
-    margin: -5px 0 0 0;
+    width: calc(100% - 20px);
+    margin: -5px auto 0 auto;
     cursor: pointer;
   }
 
@@ -85,21 +92,32 @@
     padding: 0 3px;
   }
 
-  .colorsettings-slider-item label {
-    display: flex;
+  /* 文字标签：仅承载文字本身；布局/光标样式归上行容器。
+     宽度沿用工具箱标签算法：2字=20px、每字约13.3px 线性插值
+     （W(n)=20+(n-2)×13.3 → 2/3/4/5/6字 = 20/33/47/60/73px），由 -2~-6 修饰类指定 */
+  .colorsettings-slider-item .colorsettings-slider-text {
+    display: block;
     color: var(--text-color);
-    cursor: ew-resize;
-    align-items: center;
-    margin-left: -3px;
-    margin-bottom: 5px;
+    flex: none;
     font-size: 13px;
+    /* 与工具箱/APP/图案面板一致：文字不换行，盒子略窄时允许轻微溢出而非折行 */
+    white-space: nowrap;
   }
+  .colorsettings-slider-item .colorsettings-slider-text-2 { width: 20px; }
+  .colorsettings-slider-item .colorsettings-slider-text-3 { width: 33px; }
+  .colorsettings-slider-item .colorsettings-slider-text-4 { width: 47px; }
+  .colorsettings-slider-item .colorsettings-slider-text-5 { width: 60px; }
+  .colorsettings-slider-item .colorsettings-slider-text-6 { width: 73px; }
 
   
   .colorsettings-slider-item span {
     font-size: 13px;
     color: var(--text-color);
-    width: 8px;
+    width: 14px;
+    flex: none;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
   }
   
   .colorsettings-slider-group {
@@ -112,7 +130,7 @@
     pointer-events: none;
   }
 
-  .colorsettings-slider-item.disabled label {
+  .colorsettings-slider-item.disabled .colorsettings-slider-text {
     cursor: not-allowed;
     color: var(--disabled-color);
   }
@@ -123,7 +141,7 @@
     opacity: 0.6;
   }
 
-  .colorsettings-slider-label.disabled {
+  .colorsettings-slider-text.disabled {
     cursor: not-allowed !important;
     color: var(--disabled-color)!important;
   }

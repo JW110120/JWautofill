@@ -31,6 +31,7 @@ import { PanelStateManager } from '../utils/PanelStateManager';
 import { maskSyncEngine, MASK_SYNC_CHANNEL_LABELS, LayerTreeEntry, MaskSyncTask, MaskSyncChannel, SyncState } from '../utils/MaskSyncEngine';
 import BrushHotkeySection from '../hotkey/BrushHotkeySection';
 import RangeSlider from '../components/RangeSlider';
+import { helpTexts } from '../constants/helpTexts';
 
 // 单位换算为像素（兼容普通数字与带 _unit/_value 的单位对象）
 const toPixels = (v: any, resolution: number) => {
@@ -2710,22 +2711,14 @@ const renderDetailAdjustContent = () => (
   <div className="adjustment-section">
 
     <div className="adjustment-double-buttons">
-      <div role="button" tabIndex={0} className="adjustment-button" onClick={handlePixelTransition} title={`● 特制类高斯模糊过渡滤镜，特点是屏蔽alpha为0的像素，从而更好保护形状。
-
-● 半径决定参考范围大小；强度决定过渡幅度。
-
-即：半径大→过渡范围更广；强度大→边缘更平滑。
-
-● 强力模式开启后，算法自动识别选区内的色块厚度并估算等效中间值半径（类似 PS 中间值滤镜），无需手动调节半径/强度。`}>像素过渡</div>
+      <div role="button" tabIndex={0} className="adjustment-button" onClick={handlePixelTransition} title={helpTexts.adjustment.pixelTransition}>像素过渡</div>
 
       <div className="adjustment-swtich-container">
         <label
           className="adjustment-swtich-label"
           onClick={() => setUsePowerfulMode(!usePowerfulMode)}
           style={{ cursor: 'pointer' }}
-          title={`● 强力模式：自动估算等效中间值半径。
-\n● 15px 笔触约对应半径 18。
-\n● 开启后隐藏下方的半径/强度滑块。`}
+          title={helpTexts.adjustment.powerfulMode}
         >强力模式</label>
         <sp-switch
           checked={usePowerfulMode}
@@ -2738,26 +2731,18 @@ const renderDetailAdjustContent = () => (
     {!usePowerfulMode && (
       <div className="adjustment-slider-container">
         <div className="adjustment-slider-item">
-          <div className="adjustment-slider-label" title={`● 控制处理时参考的邻域大小，单位 px。
-
-● 半径越大，影响范围越宽，过渡更柔和但更慢。
-
-示例：小图建议 5–10px；大图建议 10–20px。`}>半径</div>
+          <div className="adjustment-slider-label" title={helpTexts.adjustment.radius}>半径</div>
           <div className="unit-container">
             <RangeSlider min={5} max={20} step={1} value={radius} onChange={handleRadiusChange} className="adjustment-slider-input" />
-            <input type="number" min="5" max="20" step="1" value={radius} onChange={handleRadiusNumberChange} className="adjustment-number-input" />
+            <div className="num-input-row"><input type="number" min="5" max="20" step="1" value={radius} onChange={handleRadiusNumberChange} className="adjustment-number-input" /></div>
             <div className="adjustment-unit">px</div>
           </div>
         </div>
         <div className="adjustment-slider-item">
-          <div className="adjustment-slider-label" title={`● 控制过渡力度，单位级。
-
-● 强度越高，对比被削弱越多，边缘更圆滑。
-
-示例：轻微处理用 1–2 级；明显去锯齿用 3–5 级。`}>强度</div>
+          <div className="adjustment-slider-label" title={helpTexts.adjustment.sigma}>强度</div>
           <div className="unit-container">
             <RangeSlider min={1} max={5} step={0.5} value={sigma} onChange={handleSigmaChange} className="adjustment-slider-input" />
-            <input type="number" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaNumberChange} className="adjustment-number-input" />
+            <div className="num-input-row"><input type="number" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaNumberChange} className="adjustment-number-input" /></div>
             <div className="adjustment-unit">级</div>
           </div>
         </div>
@@ -2766,24 +2751,14 @@ const renderDetailAdjustContent = () => (
 
     <div className="adjustment-divider"></div>
 
-    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleGradientModify} title={`● 修改选区内的梯度形态：负值放缓（过渡更宽更柔），正值陡峭（过渡更窄更硬）。
-
-● 同时作用于颜色与不透明度（alpha）的过渡。
-
-● 计算时屏蔽选区外像素，避免透明外部拖低边缘导致露出选区边界。`}>梯度修改</div>
+    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleGradientModify} title={helpTexts.adjustment.gradientModify}>梯度修改</div>
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" title={`● -10 到 -1：放缓梯度（过渡更宽、更柔和）。
-
-● 0：不做修改。
-
-● 1 到 10：陡峭梯度（过渡更窄、更明显）。
-
-提示：绝对值越大，影响越明显且更慢。`}>程度</div>
+        <div className="adjustment-slider-label" title={helpTexts.adjustment.gradientRelax}>程度</div>
         <div className="unit-container">
           <RangeSlider min={-10} max={10} step={1} value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthChange} className="adjustment-slider-input" />
-          <input type="number" min="-10" max="10" step="1" value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthNumberChange} className="adjustment-number-input" />
+          <div className="num-input-row"><input type="number" min="-10" max="10" step="1" value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthNumberChange} className="adjustment-number-input" /></div>
           <div className="adjustment-unit">级</div>
         </div>
       </div>
@@ -2791,20 +2766,14 @@ const renderDetailAdjustContent = () => (
 
     <div className="adjustment-divider"></div>
 
-    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleSpecialSharpen} title={`● 一种更“硬”的局部锐化方式，用于强化过渡边缘与对比。
-
-● 仅对选区内生效，并尽量避免选区边界露出。
-
-● 数值越大效果越强，也越慢。`}>特殊锐化</div>
+    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleSpecialSharpen} title={helpTexts.adjustment.specialSharpen}>特殊锐化</div>
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" title={`● 控制锐化强度，单位级。
-
-● 建议 2–6 用于轻中度增强，7–10 用于强烈强化。`}>强度</div>
+        <div className="adjustment-slider-label" title={helpTexts.adjustment.specialSharpenStrength}>强度</div>
         <div className="unit-container">
           <RangeSlider min={1} max={10} step={0.5} value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthChange} className="adjustment-slider-input" />
-          <input type="number" min="1" max="10" step="0.5" value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthNumberChange} className="adjustment-number-input" />
+          <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthNumberChange} className="adjustment-number-input" /></div>
           <div className="adjustment-unit">级</div>
         </div>
       </div>
@@ -2812,32 +2781,22 @@ const renderDetailAdjustContent = () => (
 
     <div className="adjustment-divider"></div>
 
-    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleHighFrequencyEnhancement} title={`● 提升细小纹理与微对比，使画面更清晰。
-
-● 仅对选区内的高频细节生效，低频形状不被破坏。
-
-● 强度决定增强幅度；范围决定纳入的细节尺度宽度。
-
-示例：强度高→更锐利；范围大→兼顾更粗的纹理。`}>高频增强</div>
+    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleHighFrequencyEnhancement} title={helpTexts.adjustment.highFreq}>高频增强</div>
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" title={`● 控制细节增强强弱，单位级。
-
-● 建议 1–4 用于精修，5–8 用于明显锐化。`}>强度</div>
+        <div className="adjustment-slider-label" title={helpTexts.adjustment.highFreqIntensity}>强度</div>
         <div className="unit-container">
           <RangeSlider min={1} max={10} step={0.5} value={highFreqIntensity} onChange={handleHighFreqIntensityChange} className="adjustment-slider-input" />
-          <input type="number" min="1" max="10" step="0.5" value={highFreqIntensity} onChange={handleHighFreqIntensityNumberChange} className="adjustment-number-input" />
+          <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={highFreqIntensity} onChange={handleHighFreqIntensityNumberChange} className="adjustment-number-input" /></div>
           <div className="adjustment-unit">级</div>
         </div>
       </div>
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" title={`● 控制被视为高频的细节宽度，单位级。
-
-● 值小偏向极细纹理；值大兼顾较粗纹理。`}>范围</div>
+        <div className="adjustment-slider-label" title={helpTexts.adjustment.highFreqRange}>范围</div>
         <div className="unit-container">
           <RangeSlider min={1} max={10} step={0.5} value={highFreqRange} onChange={handleHighFreqRangeChange} className="adjustment-slider-input" />
-          <input type="number" min="1" max="10" step="0.5" value={highFreqRange} onChange={handleHighFreqRangeNumberChange} className="adjustment-number-input" />
+          <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={highFreqRange} onChange={handleHighFreqRangeNumberChange} className="adjustment-number-input" /></div>
           <div className="adjustment-unit">级</div>
         </div>
       </div>
@@ -2847,21 +2806,17 @@ const renderDetailAdjustContent = () => (
 
 const renderEdgeProcessingContent = () => (
   <div className="adjustment-section">
-    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleSmartEdgeSmooth} title={`● 两种模式：色块边界的“中间值”平滑；或对线条做“抹除→方向平滑→回写”。
-
-● 普通图层会对 RGBA 四通道处理；背景图层只处理 RGB。`}>边缘平滑</div>
+    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleSmartEdgeSmooth} title={helpTexts.adjustment.edgeSmooth}>边缘平滑</div>
 
     <div className="adjustment-slider-container adjustment-slider-container-vpad">
       <div className="adjustment-slider-item adjustment-slider-item-no-gap adjustment-slider-item-gap-bottom">
-        <div className="adjustment-slider-label adjustment-slider-label-4" title={`● 仅色块边界：对选区做“中间值”平滑，并在选区边缘做渐隐避免边界感。
-
-● 仅主线条：先对选区做“中间值”抹除，再对线条方向做平滑并写回。`}>平滑模式</div>
+        <div className="adjustment-slider-label adjustment-slider-label-4" title={helpTexts.adjustment.edgeSmoothMode}>平滑模式</div>
         <div className="unit-container">
           <MaskSyncSelect
             value={edgeSmoothMode}
             onChange={handleEdgeSmoothModeChange}
             className="adjustment-smooth-mode-select"
-            title="选择边缘平滑的模式"
+            title={helpTexts.adjustment.edgeSmoothModeSelect}
             showCheck
             options={[
               { value: 'edge', main: '仅色块边界' },
@@ -2874,10 +2829,10 @@ const renderEdgeProcessingContent = () => (
       {edgeSmoothMode === 'edge' && (
         <>
           <div className="adjustment-slider-item">
-            <div className="wider-adjustment-slider-label" title={`● PS 自带“中间值”滤镜半径。半径越大，边缘越柔和但更慢。`}>中间值半径</div>
+            <div className="wider-adjustment-slider-label" title={helpTexts.adjustment.edgeMedianRadius}>中间值半径</div>
             <div className="unit-container">
               <RangeSlider min={10} max={30} step={1} value={edgeMedianRadius} onChange={handleEdgeMedianRadiusChange} className="adjustment-slider-input" />
-              <input type="number" min="10" max="30" step="1" value={edgeMedianRadius} onChange={handleEdgeMedianRadiusNumberChange} className="adjustment-number-input" />
+              <div className="num-input-row"><input type="number" min="10" max="30" step="1" value={edgeMedianRadius} onChange={handleEdgeMedianRadiusNumberChange} className="adjustment-number-input" /></div>
               <div className="adjustment-unit">px</div>
             </div>
           </div>
@@ -2887,20 +2842,19 @@ const renderEdgeProcessingContent = () => (
       {edgeSmoothMode === 'line' && (
         <>
           <div className="adjustment-slider-item">
-            <div className="wide-adjustment-slider-label" title={`● 控制线条平滑的力度（默认 100%）。算法沿线条方向做非对称平滑：暗痕（反复描线）被磨平拉实，亮痕保持，同时极大削弱毛刺感。
-● 强度越低，改动越保守（仅磨掉最明显的起伏）。`}>平滑力度</div>
+            <div className="wide-adjustment-slider-label" title={helpTexts.adjustment.edgeLineStrength}>平滑力度</div>
             <div className="unit-container">
               <RangeSlider min={0} max={100} step={1} value={edgeLineStrength} onChange={handleEdgeLineStrengthChange} className="adjustment-slider-input" />
-              <input type="number" min="0" max="100" step="1" value={edgeLineStrength} onChange={handleEdgeLineStrengthNumberChange} className="adjustment-number-input" />
+              <div className="num-input-row"><input type="number" min="0" max="100" step="1" value={edgeLineStrength} onChange={handleEdgeLineStrengthNumberChange} className="adjustment-number-input" /></div>
               <div className="adjustment-unit">%</div>
             </div>
           </div>
 
           <div className="adjustment-slider-item">
-            <div className="wide-adjustment-slider-label" title={`● 控制沿线条方向的采样范围（默认 8px）。范围越大越能把长距离的起伏磨平，但过大会让弯折处轻微走形。`}>平滑范围</div>
+            <div className="wide-adjustment-slider-label" title={helpTexts.adjustment.edgeLineRange}>平滑范围</div>
             <div className="unit-container">
               <RangeSlider min={3} max={12} step={1} value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusChange} className="adjustment-slider-input" />
-              <input type="number" min="3" max="12" step="1" value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusNumberChange} className="adjustment-number-input" />
+              <div className="num-input-row"><input type="number" min="3" max="12" step="1" value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusNumberChange} className="adjustment-number-input" /></div>
               <div className="adjustment-unit">px</div>
             </div>
           </div>
@@ -2912,39 +2866,15 @@ const renderEdgeProcessingContent = () => (
     <div className="adjustment-divider"></div>
 
     <div className="adjustment-double-buttons">
-      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-wide" onClick={() => handleAlphaAlign(false, 'down')} title={`● 统一半透明笔刷交叉点的不透明度，消除两笔交汇处出现的"深色点"。
+      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-8" onClick={() => handleAlphaAlign(false, 'down')} title={helpTexts.adjustment.alphaDown}>alpha下对齐</div>
 
-● 分析选区内像素的 alpha，把局部异常偏高（如交叉叠加）的区域拉回周围线条的自然水平，与周边自然衔接。
-
-● 自适应识别 1~100px 的细线与粗线交叉（含粗细混排），无需手动切换模式。
-
-● 仅对非背景的普通像素图层生效，只修改选区内 Alpha>0 的区域（RGB 不变）。
-
-● 会排除选区内的羽化渐变与极低不透明度残留的干扰。`}>alpha下对齐</div>
-
-      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-wide" onClick={() => handleAlphaAlign(false, 'up')} title={`● 与 alpha下对齐 对称：检测线条上比主体偏淡/被削弱的像素（淡斑、断点、被擦淡处），以周围线条主体水平为参照拉高，让线条更均匀。
-
-● 只修"明显偏淡"（参照比像素高 ≥5）：自然软边过渡、整条均匀偏淡的线条不会被误拉。
-
-● 仅对非背景的普通像素图层生效，只修改选区内 Alpha>0 的区域（RGB 不变）。`}>alpha上对齐</div>
+      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-8" onClick={() => handleAlphaAlign(false, 'up')} title={helpTexts.adjustment.alphaUp}>alpha上对齐</div>
     </div>
 
     <div className="adjustment-double-buttons">
-      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-wide" onClick={() => handleAlphaAlign(true, 'down')} title={`● 与 alpha下对齐 类似，但用于"低透明度背景（如 alpha=50 的色块）上画线"的场景——统一化线条交叉区域的叠加凸起，同时保护背景色块与线条自身不被侵蚀。
+      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-5" onClick={() => handleAlphaAlign(true, 'down')} title={helpTexts.adjustment.alphaBgDown}>保底下对齐</div>
 
-● 参照估计会排除背景水平（环带中位数），只以线条主体水平为参照：交叉凸起拉回线水平，背景保持不变。
-
-● 自动识别并保护普通线条像素（非交叉区的线 core 不会被误拉低），只修"明显凸起"（参照比像素低 ≥10）。
-
-● 自适应识别各种宽度的线条交错（细×细、细×粗、粗×粗）。
-
-● 仅对非背景的普通像素图层生效，只修改选区内 Alpha>0 的区域（RGB 不变）。`}>保底下对齐</div>
-
-      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-wide" onClick={handleLineEnhancement} title={`● 针对边缘线条的 Alpha 进行增强，使轮廓更清晰。
-
-● 适合线稿、UI 描边、图标轮廓等。
-
-● 无选区时默认对整幅图处理。`}>线条加黑</div>
+      <div role="button" tabIndex={0} className="adjustment-button" onClick={handleLineEnhancement} title={helpTexts.adjustment.lineEnhance}>线条加黑</div>
     </div>
   </div>
 );
@@ -3035,7 +2965,7 @@ const renderMaskSyncContent = () => (
             <span
               className="mask-sync-task-name"
               onDoubleClick={() => startMaskSyncRename(task)}
-              title="双击重命名"
+              title={helpTexts.adjustment.maskSyncRename}
             >{task.name}</span>
           )}
         </div>
@@ -3049,7 +2979,7 @@ const renderMaskSyncContent = () => (
             value={task.sampleLayerId != null ? String(task.sampleLayerId) : ''}
             onChange={(v) => handleMaskSyncSampleChange(task, v)}
             onOpen={refreshMaskSyncOptions}
-            title="选择样本图层（像素/调整/背景）"
+            title={helpTexts.adjustment.maskSyncSampleLayer}
             options={maskSyncSampleOptions.map(opt => {
               const { main, tag } = splitLabelTag(opt.label);
               // 像素/调整/背景图层可選；带蒙版的图层组也可作为样本（只能取蒙版通道）
@@ -3078,7 +3008,7 @@ const renderMaskSyncContent = () => (
             value={task.targetLayerId != null ? String(task.targetLayerId) : ''}
             onChange={(v) => handleMaskSyncTargetChange(task, v)}
             onOpen={refreshMaskSyncOptions}
-            title="选择带蒙版的目标图层"
+            title={helpTexts.adjustment.maskSyncTargetLayer}
             options={maskSyncTargetOptions.map(opt => {
               const { main, tag } = splitLabelTag(opt.label);
               return { value: String(opt.id), main, tag, depth: opt.depth };
@@ -3090,7 +3020,7 @@ const renderMaskSyncContent = () => (
           <label
             className="mask-sync-checkbox"
             style={{ color: 'var(--text-color)' }}
-            title="开启后通道灰度取反（255-值）"
+            title={helpTexts.adjustment.maskSyncInvert}
           >
             <span style={{ color: 'var(--text-color)' }}>反相</span>
             <input
@@ -3121,7 +3051,7 @@ const renderMaskSyncContent = () => (
             <label
               className="adjustment-swtich-label"
               style={{ cursor: 'pointer' }}
-              title="开启后按“事件驱动+兜底轮询”自动同步样本通道到目标蒙版"
+              title={helpTexts.adjustment.maskSyncEnabled}
             >同步</label>
             <sp-switch
               checked={task.enabled}
@@ -3139,7 +3069,7 @@ const renderMaskSyncContent = () => (
                 tabIndex={0}
                 className={`hotkey-icon-button${syncDisabled ? ' disabled' : ''}`}
                 style={{ marginLeft: 4 }}
-                title={syncDisabled ? '请先选择样本图层、通道和目标蒙版' : '立即执行一次同步，结果会显示在上方状态行'}
+                title={syncDisabled ? helpTexts.adjustment.maskSyncNowDisabled : helpTexts.adjustment.maskSyncNow}
                 onClick={() => { if (!syncDisabled) handleMaskSyncNow(task); }}
               >
                 <SyncIcon style={{ width: 16, height: 16, display: 'block' }} />
@@ -3153,7 +3083,7 @@ const renderMaskSyncContent = () => (
             className="hotkey-icon-button"
             style={{ marginLeft: 4 }}
             onClick={() => handleMaskSyncRemove(task.id)}
-            title="删除该同步任务"
+            title={helpTexts.adjustment.maskSyncDelete}
           >
             <DeleteIcon style={{ width: 16, height: 16, display: 'block' }} />
           </div>
@@ -3164,7 +3094,7 @@ const renderMaskSyncContent = () => (
 
     {/* 新建同步任务按钮：位于容器 A（卡片大容器）底部 */}
     <div className="mask-sync-add-row">
-      <sp-action-button quiet class="mask-sync-add-button" onClick={handleMaskSyncAdd} title="新建同步任务">
+      <sp-action-button quiet class="mask-sync-add-button" onClick={handleMaskSyncAdd} title={helpTexts.adjustment.maskSyncAdd}>
         <AddIcon />
       </sp-action-button>
     </div>
@@ -3238,16 +3168,14 @@ const renderQuickActionContent = () => (
   <div className="adjustment-section">
 
     <div className="adjustment-double-buttons">
-      <div role="button" tabIndex={0} className="adjustment-button" onClick={handleBlockAverage} title={`● 按网格对选区分块做加权平均，降低噪点和斑驳。
-
-● 加权模式让中心权重更高，保留主体轮廓。`}>分块平均</div>
+      <div role="button" tabIndex={0} className="adjustment-button" onClick={handleBlockAverage} title={helpTexts.adjustment.blockAverage}>分块平均</div>
       
       <div className="adjustment-swtich-container">
         <label 
           className="adjustment-swtich-label"
           onClick={() => setUseWeightedAverage(!useWeightedAverage)}
           style={{ cursor: 'pointer' }}
-          title={`● 开启后中心像素影响更大，边缘影响更小，保留主体。`}
+          title={helpTexts.adjustment.weightedMode}
         >加权模式</label>
         <sp-switch 
           checked={useWeightedAverage}
@@ -3260,14 +3188,10 @@ const renderQuickActionContent = () => (
     {useWeightedAverage && (
       <div className="adjustment-slider-container">
         <div className="adjustment-slider-item">
-          <div className="adjustment-slider-label" title={`● 控制分块平滑力度，单位级。
-
-● 值越大，纹理被弱化越多。
-
-示例：照片降噪用 2–6；UI 底色统一用 6–10。`}>强度</div>
+          <div className="adjustment-slider-label" title={helpTexts.adjustment.weightedIntensity}>强度</div>
           <div className="unit-container">
             <RangeSlider min={1} max={10} step={0.5} value={weightedIntensity} onChange={handleWeightedIntensityChange} className="adjustment-slider-input" />
-            <input type="number" min="1" max="10" step="0.5" value={weightedIntensity} onChange={handleWeightedIntensityNumberChange} className="adjustment-number-input" />
+            <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={weightedIntensity} onChange={handleWeightedIntensityNumberChange} className="adjustment-number-input" /></div>
             <div className="adjustment-unit">级</div>
           </div>
         </div>
@@ -3276,38 +3200,24 @@ const renderQuickActionContent = () => (
 
     <div className="adjustment-divider"></div>
 
-    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleBlockGradient} title={`● 对每个不相连选区（连通块）分别采样一次渐变颜色并填充。
-
-● 渐变数据来自主面板“渐变设置”的最终预览（含角度与反向）。
-
-● 每个连通块取形状质心，沿渐变方向投影后做归一化映射。`}>分块渐变</div>
+    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleBlockGradient} title={helpTexts.adjustment.blockGradient}>分块渐变</div>
 
     <div className="adjustment-divider"></div>
 
     <div className="adjustment-double-buttons">
-      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-wide" onClick={handleBlockColorPatchLightLine} title={`● 浅线同层补色：线稿与内部填充在同一图层，且线条颜色比内部填充浅（如浅灰线 + 深色填充）。
-● 按亮度均值分界，只把"较深的内部填充色"作为颜色传播源——线稿浅色不参与，补色不会带上线稿色。
-● 几何补全与"同层补色"一致：尖角头部、缝隙、孔洞全部填实（alpha→255），RGB 取就近填充色。
-● 仅在选区内生效（无选区 = 整层）。`}>浅线同层补色</div>
+      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-7" onClick={handleBlockColorPatchLightLine} title={helpTexts.adjustment.patchLightLine}>浅线同层补色</div>
 
-      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-wide" onClick={handleBlockColorPatchDarkLine} title={`● 深线同层补色：线稿与内部填充在同一图层，且线条颜色比内部填充深（如黑色线稿 + 红色填充）。
-● 按亮度均值分界，只把"较浅的内部填充色"作为颜色传播源——深色线稿不参与，补色不会把线条染黑。
-● 几何补全与"同层补色"一致：尖角头部、缝隙、孔洞全部填实（alpha→255），RGB 取就近填充色。
-● 仅在选区内生效（无选区 = 整层）。`}>深线同层补色</div>
+      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-7" onClick={handleBlockColorPatchDarkLine} title={helpTexts.adjustment.patchDarkLine}>深线同层补色</div>
     </div>
 
     {/* 虚线分割线：同层补色 与 分层补色 之间（JS 拼渐变渲染，短线/空各 6px） */}
     <DashedDivider />
 
-    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleBlockColorPatchLayered} title={`● 分层补色：线稿与内部填充不在同一图层时使用。
-● 线稿轮廓内部 = 填充应覆盖区，尖角/孔洞/缝隙一网打尽（线稿帮助封闭帽顶/V 形缺口）。
-● 线稿参考默认自动取当前层上方最近的像素图层，可在下方下拉手动指定。
-● 仅在选区内生效（无选区 = 整层）。`}>分层补色</div>
+    <div role="button" tabIndex={0} className="adjustment-button" onClick={handleBlockColorPatchLayered} title={helpTexts.adjustment.patchLayered}>分层补色</div>
 
     <div className="adjustment-slider-container adjustment-slider-container-vpad">
       <div className="adjustment-slider-item adjustment-slider-item-no-gap">
-        <div className="wide-adjustment-slider-label" title={`● 指定用于识别"填充应覆盖区域"的线稿图层（分层补色使用）。
-● 默认"自动"：取当前激活图层上方最近的像素图层；找不到可用线稿层时分层补色自动退回同层算法。`}>线稿参考</div>
+        <div className="wide-adjustment-slider-label" title={helpTexts.adjustment.lineReference}>线稿参考</div>
         <div className="unit-container">
           <MaskSyncSelect
             value={lineReferenceLayerId ? String(lineReferenceLayerId) : 'auto'}
@@ -3320,7 +3230,7 @@ const renderQuickActionContent = () => (
               })
             ]}
             showCheck
-            title="线稿参考层（分层补色使用）"
+            title={helpTexts.adjustment.lineReferenceSelect}
             className="adjustment-smooth-mode-select"
           />
         </div>
@@ -3330,39 +3240,35 @@ const renderQuickActionContent = () => (
     <div className="adjustment-divider"></div>
 
     <div className="adjustment-double-buttons">
-      <div role="button" tabIndex={0} className="adjustment-button" onClick={() => handleSpecialWoodcut(false)} title={`● 木刻量化会让颜色出现阶梯状色阶。
+      <div role="button" tabIndex={0} className="adjustment-button" onClick={() => handleSpecialWoodcut(false)} title={helpTexts.adjustment.woodcut}>特殊木刻</div>
 
-● 本功能会额外识别透明/半透明边缘，并在边缘处按强度叠加木刻量化，使边缘与内部风格一致。
-
-● 仅修改 RGB，alpha 保持不变。`}>特殊木刻</div>
-
-      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-lv2" onClick={resetSpecialWoodcutParams} title="一键恢复默认参数">重置</div>
+      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-lv2" onClick={resetSpecialWoodcutParams} title={helpTexts.adjustment.woodcutReset}>重置</div>
     </div>
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label adjustment-slider-label-3" title="色阶数（2–16），数值越小越“硬”，越大越细腻。">色阶数</div>
+        <div className="adjustment-slider-label adjustment-slider-label-3" title={helpTexts.adjustment.woodcutLevels}>色阶数</div>
         <div className="unit-container">
           <RangeSlider min={2} max={16} step={1} value={specialWoodcutLevels} onChange={handleSpecialWoodcutLevelsChange} className="adjustment-slider-input" />
-          <input type="number" min="2" max="16" step="1" value={specialWoodcutLevels} onChange={handleSpecialWoodcutLevelsNumberChange} className="adjustment-number-input" />
+          <div className="num-input-row"><input type="number" min="2" max="16" step="1" value={specialWoodcutLevels} onChange={handleSpecialWoodcutLevelsNumberChange} className="adjustment-number-input" /></div>
           <div className="adjustment-unit">级</div>
         </div>
       </div>
 
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label adjustment-slider-label-4" title="边缘强度阈值（0–255），越低越容易把更多区域视为边缘。">边缘阈值</div>
+        <div className="adjustment-slider-label adjustment-slider-label-4" title={helpTexts.adjustment.woodcutEdgeThreshold}>边缘阈值</div>
         <div className="unit-container">
           <RangeSlider min={0} max={255} step={1} value={specialWoodcutEdgeThreshold} onChange={handleSpecialWoodcutEdgeThresholdChange} className="adjustment-slider-input" />
-          <input type="number" min="0" max="255" step="1" value={specialWoodcutEdgeThreshold} onChange={handleSpecialWoodcutEdgeThresholdNumberChange} className="adjustment-number-input" />
+          <div className="num-input-row"><input type="number" min="0" max="255" step="1" value={specialWoodcutEdgeThreshold} onChange={handleSpecialWoodcutEdgeThresholdNumberChange} className="adjustment-number-input" /></div>
           <div className="adjustment-unit">值</div>
         </div>
       </div>
 
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label adjustment-slider-label-4" title="边缘木刻叠加强度（0–100%）。">边缘强度</div>
+        <div className="adjustment-slider-label adjustment-slider-label-4" title={helpTexts.adjustment.woodcutEdgeStrength}>边缘强度</div>
         <div className="unit-container">
           <RangeSlider min={0} max={100} step={1} value={specialWoodcutEdgeStrength} onChange={handleSpecialWoodcutEdgeStrengthChange} className="adjustment-slider-input" />
-          <input type="number" min="0" max="100" step="1" value={specialWoodcutEdgeStrength} onChange={handleSpecialWoodcutEdgeStrengthNumberChange} className="adjustment-number-input" />
+          <div className="num-input-row"><input type="number" min="0" max="100" step="1" value={specialWoodcutEdgeStrength} onChange={handleSpecialWoodcutEdgeStrengthNumberChange} className="adjustment-number-input" /></div>
           <div className="adjustment-unit">%</div>
         </div>
       </div>
@@ -3372,7 +3278,7 @@ const renderQuickActionContent = () => (
           className="adjustment-swtich-label"
           onClick={() => setSpecialWoodcutPreview(!specialWoodcutPreview)}
           style={{ cursor: 'pointer' }}
-          title="开启后参数变化会在 300ms 内自动刷新预览。"
+          title={helpTexts.adjustment.woodcutPreview}
         >预览</label>
         <sp-switch
           checked={specialWoodcutPreview}
@@ -3385,12 +3291,8 @@ const renderQuickActionContent = () => (
     <div className="adjustment-divider"></div>
 
     <div className="adjustment-double-buttons">
-      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-lv2" onClick={handleKnockoutWhite} title={`● 仅普通像素图层可用，背景图层不可用。
-● 复刻手动验证方案：Ctrl+点击 RGB 通道载入亮度选区 → Delete 清除亮部 → 复制 N 份合并增强 alpha（N 自动按内容亮度计算，最少 7 份）。
-● 用于把“纯白底上叠加的半透明内容”抠回透明底；结果放在白底上与原图视觉一致。`}>扣白</div>
-      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-lv2" onClick={handleKnockoutBlack} title={`● 仅普通像素图层可用，背景图层不可用。
-● 反色法纠正思路：先 Invert 把黑底问题转成白底问题，再走扣白流程，最后 Invert 回来（数学上与“反选删暗部”等价，但份数自动放大到 alpha 收敛，解决偏暗）。
-● 用于把“纯黑底上叠加的半透明内容”抠回透明底；结果放在黑底上与原图视觉一致。`}>扣黑</div>
+      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-lv2" onClick={handleKnockoutWhite} title={helpTexts.adjustment.knockoutWhite}>扣白</div>
+      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-lv2" onClick={handleKnockoutBlack} title={helpTexts.adjustment.knockoutBlack}>扣黑</div>
     </div>
   </div>
 );

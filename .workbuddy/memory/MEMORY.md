@@ -38,6 +38,9 @@
 - 锁定/模态遮罩下隐藏可编辑控件：`body.adjustment-lock-open #pixeladjustment input,textarea` / `body.license-dialog-open #app …` + `visibility:hidden!important;opacity:0!important;pointer-events:none!important`（写在 `adjustment-input.css`/`input-fix.css`，必须带 `!important`）。
 - `flex` 列里固定高度卡片须 `flex:none`+`min-height`+`box-sizing:border-box` 防压缩。
 - 面板禁止写 `.xxx-item div{}`/`span{}` 通配后代选择器（会命中自绘弹层）。
+- **sp-radio 的 slot 内不要指望行内流布局**（display:flex/inline-flex 的 div 按钮都会被挤到下一行）→ 自定义按钮放 radio 行内时一律绝对定位：容器 `position:relative` + 按钮 `position:absolute;right:0;top:50%`，文字标签 `margin-right` 让位。**规则必须 scoped，绝不挂全局 `.radio-item`/`.radio-item-label`**——颜色面板「计算方法」radio 复用了 `.radio-item-label`，全局加 margin-right 会把它的单行布局挤崩成两行（2026-09-01 实测）。填充模式齿轮定稿：`.fill-mode-group .radio-item{position:relative}` + 按钮 `margin-top:-9px`（几何中心 -12px 偏高 3px，视觉实测 -9px 才与文字/radio 符号对齐）。
+- **原生 number input 防越界+尺寸定稿（2026-09-01 终版：容器 32px + input 24px 缓冲）**：UXP 原生 number 的实际绘制区**恒高于 input 的 CSS 盒**（CSS 高度压不掉原生绘制高度，input 的 CSS 高度只决定留多少缓冲、不改变视觉）。**绝不能让 input 撑满容器**（撑满实测下越界复发）。定稿 = 激活码 `.license-input-wrap` 缓冲方案：容器（视觉输入框，含边框背景）`.num-input-row` 32px + input 24px（上下各留 4px 缓冲吃掉原生溢出）+ `line-height:24px` + flex align-items:center。**全部落点**：主面板 `#app`（5 处）、描边面板 StrokeSetting（2 处）、绘画工具箱 `#pixeladjustment`（13 处）、纯色/图案/渐变子面板（ColorSettingsPanel 1 处 + PatternPicker 2 处 + GradientPicker 2 处，JSX 已包 `.num-input-row`；工具箱内层选择器用 `input[type=number]` 而非类名以覆盖子面板无名输入）。单位符号一律在裁剪容器外（`.num-unit`/`.gradient-subtitle`/裸 span）；stroke.css `.stroke-wide-container span` 的旧负边距会用 `​.stroke-wide-container .num-unit{margin:0 0 0 4px}` 归零。
+- **产品决策：笔刷热键不支持同名笔刷**（多轮 _index/_id 方案均不可靠已全部回退）。绑定/切换只按 `_name`，同名只选 Brushes 列表最上方那支；README 与 docs/toolbox-guide.html 已注明。下拉里每个笔刷名**只显示一次**（`Array.from(new Set(brushes))` 去重，value 即笔刷名），(1)/(2) 角标已一并删除。
 
 ## 五、算法
 - 分块补色/渐变/线稿引导/alpha 对齐见历史日志；清像素须显式清零；扣白/扣黑公式与 N 计算见当日记录。
@@ -45,3 +48,29 @@
 ## 六、文档与README同步约定
 - **每当重大版本更新，文档（docs/fill-guide.html、docs/toolbox-guide.html）与 README.md 必须同步跟进**：功能增删、菜单项变化、快捷键/授权流程变更都要同步到两处面板文档与 README，避免说明与功能脱节。
 - 文档为自包含 HTML（侧边栏导航 + 滚动高亮 + 卡片/表格/提示框，支持明暗主题），由面板右上角「⋮」菜单「功能文档」经 `openPluginDoc()`（`src/utils/openDocs.ts`：`getPluginFolder().nativePath` + `shell.openPath`）在默认浏览器打开；webpack 已把 `docs/` 拷贝进 `dist/docs/`。
+
+## 七、布局算法（滑块标签宽度 / 按钮宽度）—— 2026-09-01 定稿
+
+### 滑块文字标签容器宽度（APP 三面板统一）
+- 算法源自工具箱 `src/adjustments/adjustment.css`：以「2字=20px、5字=60px」为锚点按字数线性插值，每字≈13.33px：
+  **W(n) = 20 + (n−2) × 13.33**（四舍五入），n=2/3/4/5/6 → 20/33/47/60/73px。
+- 标签只承载文字，宽度由 `-2`~`-6` 修饰类给出（容器 `flex:none`）；数字输入+单位符号是行容器的另两个子元素，行容器 `.slider-parameter-collection` 负责布局与 ew-resize 光标。
+- 三面板均已落地（类名前缀不同）：
+  - 选区填充 `styles.css` → `.slider-text-2`~`-6`，app.tsx 不透明度(4字)挂 `-4`、羽化(2字)挂 `-2`。
+  - 图案 `pattern.css` → `.pattern-slider-text-2`~`-6`，PatternPicker 角度：/缩放：(各3字含全角冒号)挂 `-3`。
+  - 纯色 `colorpanel.css` → `.colorsettings-slider-text-2`~`-6`，`SliderControl.tsx` 按 `label.length` 自动挂 `-N`（clamp 2~6，1字按2字=20px）。
+
+### 工具箱按钮容器宽度（高度维持两档现状）
+- 算法：**width = 字数 × 字号 + 20px，按钮容器无内边距（padding:0）**。
+  - 普通档 height 30px / font 13 → **W = 13×n + 20**（n=2→46、3→59、4→72、5→85、6→98、7→111、8→124px）。
+  - 紧凑档 height 24px / font 12（守护进程状态条，如「启动/停止快捷键服务」7字）→ **W = 12×n + 20**（7字→104px）。
+- 落地（`src/adjustments/adjustment.css`）：`.adjustment-button`=72(4字默认)、`.adjustment-button-lv2`=46(2字)、`.adjustment-button-wide`=124(8字兜底)；新增 `.adjustment-button-5/6/7/8`=85/98/111/124；`.auto` 仅与 compact 同用（去 padding）；`.compact`=104(7字,font12)。所有档 padding:0。
+- AdjustmentPanel.tsx 的 wide 按钮已按实际字数改挂精确档：alpha下/上对齐(8)→-8、浅/深线同层补色(7)→-7、保底下对齐(5)→-5、线条加黑(4)→默认（去掉 wide）。
+
+## 八、说明文案（hover title）集中管理 —— 2026-09-01
+- **所有面板 hover 说明统一收口到 `src/constants/helpTexts.ts`**，按面板分组：`selectionFill`（选区填充主面板 app.tsx）、`adjustment`（绘画工具箱 AdjustmentPanel.tsx）、`hotkey`（快捷键区 BrushHotkeySection.tsx）、`gradient`（渐变子面板 GradientPicker.tsx）、`pattern`（图案子面板 PatternPicker.tsx）。
+- 调用方一律 `title={helpTexts.<section>.<key>}`，**禁止在 JSX 内联长字符串**（之前多行 `●` 模板字符串正是导致排版乱、且必须用原生 `title` 属性才能左对齐+`\n\n` 间隔一行的根因）。
+- 多行 `●` 说明在 helpTexts.ts 里以 `\n\n` 拼接（保证 hover 时每条一行、间隔一行、左对齐）；单行短提示也一并收口以保持统一。
+- import 相对路径：**文件在 `src/` 下用 `./constants/helpTexts`**；在 `src/adjustments/`、`src/hotkey/` 下用 `../constants/helpTexts`；在 `src/components/` 下用 `../constants/helpTexts`（注意 components 只上一层到 src，不是 `../../`）。
+- 通用组件（IconButton/CustomSwitch/RangeSlider/Select/BrushSelect/MaskSyncSelect）的 `title={title}` 是 prop 透传，**不要动**；只改调用处传入的字面量 title。
+- 激活面板（LicenseDialog）与 ColorSettingsPanel/StrokeSetting 无 `title=` 静态说明，无需收口。

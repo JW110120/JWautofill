@@ -7,6 +7,7 @@ import { LayerInfoHandler } from '../utils/LayerInfoHandler';
 import { PresetManager } from '../utils/PresetManager';
 import RangeSlider from './RangeSlider';
 import Select from './Select';
+import { helpTexts } from '../constants/helpTexts';
 
 interface PatternPickerProps {
     isOpen: boolean;
@@ -1717,7 +1718,7 @@ interface PatternPickerProps {
                     </div> 
                      <div className="pattern-icon-container">
                         <div className="icon-group">
-                            <IconButton title="选择图案文件" onClick={handleFileSelect}>
+                            <IconButton title={helpTexts.pattern.selectFile} onClick={handleFileSelect}>
                                 <FileIcon style={{ width: 15, height: 15, display: 'block' }} />
                             </IconButton>
                             <div className="delete-button-wrapper">
@@ -1725,7 +1726,7 @@ interface PatternPickerProps {
                                 className={`hotkey-icon-button${(!selectedPattern && selectedPatterns.size === 0) ? ' disabled' : ''}`}
                                 role="button"
                                 tabIndex={0}
-                                title="删除图案"
+                                title={helpTexts.pattern.deletePattern}
                                 style={{
                                     cursor: (!selectedPattern && selectedPatterns.size === 0) ? 'not-allowed' : 'pointer',
                                     opacity: (!selectedPattern && selectedPatterns.size === 0) ? 0.4 : 1
@@ -1754,18 +1755,19 @@ interface PatternPickerProps {
                     <div className="pattern-setting-item">
                         <div className="pattern-entire-slider">
                         <div className="pattern-slider-parameter-collection">
-                        <label onMouseDown={(e) => handleMouseDown(e, 'angle')} style={{ cursor: isSliderDragging && dragTarget === 'angle' ? 'ew-resize' : 'ew-resize' }}>角度：
-                            <div>
-                            <input
-                                type="number"
-                                min="0"
-                                max="360"
-                                value={angle}
-                                onChange={handleAngleChange}
-                            />
-                            <span>°</span>
+                        <label className="pattern-slider-text pattern-slider-text-3" onMouseDown={(e) => handleMouseDown(e, 'angle')}>角度：</label>
+                            <div className="num-input-wrap">
+                                <div className="num-input-row">
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        max="360"
+                                        value={angle}
+                                        onChange={handleAngleChange}
+                                    />
+                                </div>
+                                <span>°</span>
                             </div>
-                        </label>
                         </div>
 
                         <RangeSlider
@@ -1783,18 +1785,19 @@ interface PatternPickerProps {
                     <div className="pattern-setting-item">
                         <div className="pattern-entire-slider">
                         <div className="pattern-slider-parameter-collection">
-                        <label onMouseDown={(e) => handleMouseDown(e, 'scale')} style={{ cursor: isSliderDragging && dragTarget === 'scale' ? 'ew-resize' : 'ew-resize' }}>缩放：
-                            <div>
-                                <input
-                                    type="number"
-                                    min="20"
-                                    max="300"
-                                    value={scale}
-                                    onChange={handleScaleChange}
-                                />
+                        <label className="pattern-slider-text pattern-slider-text-3" onMouseDown={(e) => handleMouseDown(e, 'scale')}>缩放：</label>
+                            <div className="num-input-wrap">
+                                <div className="num-input-row">
+                                    <input
+                                        type="number"
+                                        min="20"
+                                        max="300"
+                                        value={scale}
+                                        onChange={handleScaleChange}
+                                    />
+                                </div>
                                 <span>%</span>
                             </div>
-                        </label>
                         </div>
                         <RangeSlider
                             min={20}

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { app, action } from 'photoshop';
 import { ColorSettings } from '../types/state';
-import SliderControl from './SliderControl';
+import RangeSlider from './RangeSlider';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
 
 interface ColorSettingsProps {
@@ -176,6 +176,61 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
         };
     }, [isOpen]); 
 
+    // 单个滑块渲染：结构与其他面板的滑块一致（行容器装 文字标签 + 数字输入 + 单位符号）。
+    // widthClass 显式指定文字标签宽度修饰类（沿用工具箱标签算法：2/3/4/5/6字 = 20/33/47/60/73px），
+    // 不再用 label.length 动态拼类名，避免不同长度标签算错宽度。
+    const renderSlider = (
+        settingKey: keyof ColorSettings,
+        label: string,
+        value: number,
+        min: number,
+        max: number,
+        unit: string,
+        widthClass: string
+    ) => {
+        const isDraggingActive = isDragging && dragTarget === settingKey;
+        const handleRangeChange = (v: number) => {
+            handleNumberInputChange(settingKey, v);
+        };
+
+        return (
+            <div className="colorsettings-slider-item">
+                <div className="colorsettings-entire-slider">
+                    <div className={`colorsettings-slider-parameter-collection ${isDraggingActive ? 'dragging' : 'not-dragging'}`}>
+                        <label
+                            className={`colorsettings-slider-text ${widthClass}`}
+                            onMouseDown={(e) => handleLabelMouseDown(e, settingKey)}
+                        >
+                            {label}
+                        </label>
+
+                        <div className="num-input-wrap">
+                            <div className="num-input-row">
+                                <input
+                                    type="number"
+                                    min={min}
+                                    max={max}
+                                    value={value || 0}
+                                    onChange={(e) => handleNumberInputChange(settingKey, Number(e.target.value))}
+                                />
+                            </div>
+                            <span className="num-unit">{unit}</span>
+                        </div>
+                    </div>
+
+                    <RangeSlider
+                        min={min}
+                        max={max}
+                        step={1}
+                        value={value || 0}
+                        onChange={handleRangeChange}
+                        className="colorsettings-slider-range"
+                    />
+                </div>
+            </div>
+        );
+    };
+
     if (!isOpen) return null;
 
     // 判断是否应该显示灰度抖动：清除模式 || 快速蒙版 || 图层蒙版 || 单通道
@@ -191,69 +246,17 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
             
             <div className="colorsettings-slider-group">
                 {shouldShowGrayVariation ? (
-                    <>
-                        <SliderControl
-                            settingKey="grayVariation"
-                            label="灰度抖动"
-                            value={settings.grayVariation}
-                            min={0}
-                            max={100}
-                            unit="%"
-                            isDraggingActive={isDragging && dragTarget === 'grayVariation'}
-                            onValueChange={handleNumberInputChange}
-                            onLabelMouseDown={handleLabelMouseDown}
-                        />
-                    </>
+                    renderSlider('grayVariation', '灰度抖动', settings.grayVariation, 0, 100, '%', 'colorsettings-slider-text-4')
                 ) : (
                     <>
-                        <SliderControl
-                            settingKey="hueVariation"
-                            label="色相抖动"
-                            value={settings.hueVariation}
-                            min={0}
-                            max={360}
-                            unit="°"
-                            isDraggingActive={isDragging && dragTarget === 'hueVariation'}
-                            onValueChange={handleNumberInputChange}
-                            onLabelMouseDown={handleLabelMouseDown}
-                        />
-                        <SliderControl
-                            settingKey="saturationVariation"
-                            label="饱和度抖动"
-                            value={settings.saturationVariation}
-                            min={0}
-                            max={100}
-                            unit="%"
-                            isDraggingActive={isDragging && dragTarget === 'saturationVariation'}
-                            onValueChange={handleNumberInputChange}
-                            onLabelMouseDown={handleLabelMouseDown}
-                        />
-                        <SliderControl
-                            settingKey="brightnessVariation"
-                            label="亮度抖动"
-                            value={settings.brightnessVariation}
-                            min={0}
-                            max={100}
-                            unit="%"
-                            isDraggingActive={isDragging && dragTarget === 'brightnessVariation'}
-                            onValueChange={handleNumberInputChange}
-                            onLabelMouseDown={handleLabelMouseDown}
-                        />
+                        {renderSlider('hueVariation', '色相抖动', settings.hueVariation, 0, 360, '°', 'colorsettings-slider-text-4')}
+                        {renderSlider('saturationVariation', '饱和度抖动', settings.saturationVariation, 0, 100, '%', 'colorsettings-slider-text-4')}
+                        {renderSlider('brightnessVariation', '亮度抖动', settings.brightnessVariation, 0, 100, '%', 'colorsettings-slider-text-4')}
                     </>
                 )}
 
-                <SliderControl
-                    settingKey="opacityVariation"
-                    label="不透明度抖动"
-                    value={settings.opacityVariation}
-                    min={0}
-                    max={100}
-                    unit="%"
-                    isDraggingActive={isDragging && dragTarget === 'opacityVariation'}
-                    onValueChange={handleNumberInputChange}
-                    onLabelMouseDown={handleLabelMouseDown}
-                />
-                
+                {renderSlider('opacityVariation', '不透明度抖动', settings.opacityVariation, 0, 100, '%', 'colorsettings-slider-text-5')}
+
                 {/* 计算模式选择器 */}
                 <div className="colorsettings-calculation-mode">
                     <label>计算方法</label>

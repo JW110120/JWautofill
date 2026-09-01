@@ -56,14 +56,16 @@
     border-radius: 4px;
     z-index: 11;
     box-sizing: border-box;
-    /* 关键：留 4px 内边距，使第一个预设格的边框不再紧贴区域左上圆角，
-       避免两层 1px 边框在圆角处重叠混色（用户反馈的「边框与边框混合变亮」）。 */
-    padding: 4px;
+    /* 与图案子面板一致：预设区与下方图标栏紧贴外部容器边框（不再留 4px 内边距），
+       圆角处两层 1px 边框的重叠表现与图案面板相同。 */
+    padding: 0;
     overflow: hidden; /* 确保内容和背景不会溢出圆角 */
 }
 
 .gradient-presets {
     width: 100%;
+    /* 与图案子面板 .pattern-preset 一致：仅留 1px 水平内边距，使预设格紧贴区域边框 */
+    padding: 0px;
     /* 占满预设区除图标栏外的剩余高度，把图标栏顶到底部 */
     flex: 1 1 auto;
     min-height: 0;
@@ -415,6 +417,12 @@ sp-color-slider {
     font-size: 13px;
     margin-left: -4px;
     color: var(--text-color);
+    /* 单位符号容器统一：宽度 14px、不换行、不伸缩、内部文字左对齐并垂直居中 */
+    width: 14px;
+    flex: none;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
 }
 
 /* 渐变角度行在「径向」模式下仅禁用（不隐藏）：整体置灰、禁用指针，

@@ -16,713 +16,10 @@ html, body {
   padding: 0;
   display: flex;
   justify-content: center;
-  align-items: flex-start;  /* 改为 flex-start，使容器从顶部开始对齐 */
+  align-items: flex-start;  
   font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
   background-color: var(--bg-color);
   color: var(--text-color);
-}
-
-uxp-panel[panelid="com.listen2me.pixeladjustment"],
-#pixeladjustment {
-  height: 100vh;
-  width: 100%;
-  overflow: hidden;
-}
-
-uxp-panel[panelid="com.listen2me.jwautofill"],
-#app {
-  height: 100vh;
-  width: 100%;
-  overflow: hidden;
-}
-
-.selection-fill-container {
-  width: 250px;
-  height: 100%;
-  max-height: 100%;
-  box-sizing: border-box;
-  overflow-y: auto;
-  background-color: var(--bg-color);
-  padding: 10px; 
-  display: flex;
-  flex-direction: column;
-  position: relative;  /* 作为子面板 absolute 定位的包含块 */
-}
-
-/* 次级面板打开时禁止主容器滚动，避免内容在子面板后方滚动 */
-body.secondary-panel-open .container {
-  overflow-y: hidden;
-}
-
-.icon-fill {
-  fill: var(--text-color);
-}  
-
-/* 主面板滚动条：与绘画工具箱同款 10px 圆角滚动条 */
-#app .container::-webkit-scrollbar,
-#app .strokesetting::-webkit-scrollbar,
-#app .color-settings-panel::-webkit-scrollbar,
-#app .gradient-picker::-webkit-scrollbar,
-#app .pattern-picker::-webkit-scrollbar {
-  width: 10px;
-}
-
-#app .container::-webkit-scrollbar-thumb,
-#app .strokesetting::-webkit-scrollbar-thumb,
-#app .color-settings-panel::-webkit-scrollbar-thumb,
-#app .gradient-picker::-webkit-scrollbar-thumb,
-#app .pattern-picker::-webkit-scrollbar-thumb {
-  background-color: var(--scrollbar-thumb);
-  border-radius: 8px;
-  border: 2px solid transparent;
-  background-clip: content-box;
-}
-
-#app .container::-webkit-scrollbar-thumb:hover,
-#app .strokesetting::-webkit-scrollbar-thumb:hover,
-#app .color-settings-panel::-webkit-scrollbar-thumb:hover,
-#app .gradient-picker::-webkit-scrollbar-thumb:hover,
-#app .pattern-picker::-webkit-scrollbar-thumb:hover {
-  background-color: color-mix(in oklab, var(--scrollbar-thumb) 90%, rgb(255, 255, 255) 10%);
-}
-
-#app .container::-webkit-scrollbar-track,
-#app .strokesetting::-webkit-scrollbar-track,
-#app .color-settings-panel::-webkit-scrollbar-track,
-#app .gradient-picker::-webkit-scrollbar-track,
-#app .pattern-picker::-webkit-scrollbar-track {
-  background-color: var(--scrollbar-track);
-  border-radius: 8px;
-}
-
-.selection-fill-title {
-  text-align: center;
-  font-weight: bold;
-  padding: 0 0 10px 0px; 
-  border-bottom: 1px solid var(--border-color);
-  color: var(--text-color);
-  position: relative;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 3000; /* 确保标题及右上角入口位于顶部 */
-}   
-
-.selection-fill-title-text {
-  font-size: 20px;
-}
-
-.main-button-container {
-  align-items: center; 
-  margin: 10px 0 10px 0; 
-  padding: 0px;
-  height: 50px;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-}
-
-.main-button {
-  border-radius: 4px;
-  cursor: pointer;
-  height: 100%;
-  width: 80%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  background-color: var(--button-bg);
-  border: 1px solid var(--border-color);
-  color: var(--text-color);
-  transition: all 0.3s ease;
-  box-sizing: border-box;
-}
-
-.main-button:hover {
-    /* hover 与下方选区选项一致：半透明蓝（--hover-bg），开启/关闭态相同 */
-    background-color: var(--hover-bg);
-}
-
-.main-button:active {
-    background-color: var(--button-down);
-    transform: scale(0.98);
-}
-
-/* 功能开启：背景与边框保持主题色不变，仅文字变亮（深主题白 / 浅主题黑）+ 绿灯亮起 */
-.main-button.enabled .button-text {
-    color: var(--enabled-text-color);
-}
-
-.main-button.enabled .button-indicator {
-    /* 提示灯：与 AdjustmentPanel 绿灯一致 */
-    background-color: rgb(46, 204, 113);
-}
-
-/* 禁用状态下的悬停效果 */
-.main-button:hover .button-text.disabled {
-    color: rgba(128, 128, 128, 0.7); /* 略微提高禁用状态下的文字透明度 */
-}
-
-.main-button-content {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  transform: translateX(-5px);  /* 交换状态灯与文字后整体左移 5px，避免视觉偏右 */
-}
-
-.main-button-text {
-  font-size: 16px;
-  font-weight: bold;
-}
-
-.main-button-text.disabled {
-  color: rgba(128, 128, 128, 0.5);
-}
-
-.main-button-indicator {
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  margin-right: 10px;
-  flex-shrink: 0;
-}
-
-.main-button-indicator.enabled {
-  /* 与 AdjustmentPanel 绿灯一致 */
-  background-color: rgb(46, 204, 113);
-}
-
-.main-button-indicator.disabled {
-  background-color: rgba(128, 128, 128, 0.5);
-}
-
-.selection-fill-blend-mode-container {
-  display: flex;
-  margin-bottom: -10px;
-  align-items: center;
-  background-color: var(--bg-color);
-  position: relative;  
-  width: calc(100% - 20px);  
-  left: 50%;
-  transform: translateX(-50%);
-  isolation: isolate; /* 添加这一行 */
-}
-
-.selection-fill-blend-mode-label {
-  font-size: 13px;
-  color: var(--text-color);
-}
-
-/* 主面板下拉已统一改用自定义 .mask-sync-select-* 组件（src/components/Select.tsx），
-   不再依赖 sp-picker / sp-menu（其展开菜单背景在 UXP 下无法被 CSS 覆盖）。
-   下拉配色走 theme.ts 的 --dropdown-bg-color 等主题变量，与调整面板完全一致。 */
-
-/* 通用 Spectrum 控件禁用状态：cursor 统一改为 not-allowed，
-   包括开关、按钮、单选等所有可点击控件；新增 disabled 控件只需在 React 端
-   设置 disabled 属性即可，无需额外 CSS。 */
-sp-switch[disabled],
-sp-button[disabled],
-sp-action-button[disabled],
-sp-radio[disabled] {
-  cursor: not-allowed;
-}
-
-/* 开关禁用时，左侧标签文字也变灰，hover 同样显示禁止光标 */
-.switch-container:has(sp-switch[disabled]) .switch-label {
-  cursor: not-allowed;
-  color: var(--disabled-color);
-}
-
-.blend-mode-label.disabled {
-  opacity: 0.5;
-}
-
-.slider-container {
-  width: 100%;
-  background-color: var(--bg-color);
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-  padding: 0;
-  margin: 0 auto;
-  z-index: 1;       /* 确保在混合模式容器下方 */
-}
-
-.slider-label {
-  font-size: 13px;
-
-  color: var(--text-color);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.slider-value {
-  font-size: 13px;
-  color: var(--text-color);
-}
-
-.slider-label.dragging {
-  cursor: grabbing;
-}
-
-.slider-label.not-dragging {
-  cursor: ew-resize;
-}
-
-.slider-input {
-  width: calc(100% - 20px);
-  margin: 0 auto;
-  cursor: pointer;
-  display: flex;
-  justify-content: center;
-}
-
-/* 滑块三层容器结构（选区填充面板）：
-   slider-container（外层卡片）> selection-fill-slider-group（组）> entire-slider（单个滑块）> slider-parameter-collection（标签+数值+单位）
-   混合模式容器在 slider-container 外部，margin-bottom:-10px 骑在卡片上边缘 */
-.entire-slider {
-  width: 100%;
-}
-
-.slider-parameter-collection {
-  width: calc(100% - 20px);
-  margin:0 auto;
-}
-
-
-.expand-section {
-  background-color:var(--bg-color);
-  margin-bottom: -1px;
-  z-index: 1;
-}
-
-.expand-header {
-  display: flex;
-  align-items: center;
-  cursor: pointer;
-  font-size: 13px;
-  padding: 10px 0;
-  color: var(--text-color);
-  transition: background-color 0.3s;
-}
-
-.expand-header:hover {
-  background-color: var(--hover-bg);
-}
-
-.expand-icon {
-  padding-left: 5px;
-  margin-right: 2px;
-  display: flex;
-  align-items: center;
-}
-
-.expand-icon svg {
-  transition: transform 0.3s;
-}
-
-.expand-icon.expanded svg {
-  transform: rotate(0deg);
-}
-
-.expand-content {
-  max-height: 0px;
-  overflow: hidden;
-  transition: max-height 0.3s ease-out;
-}
-
-.expand-content.expanded {
-  /* 原 400px 过小：填充选项内容（含底部 checkbox 区）超过该高度会被 overflow:hidden 裁掉，
-     表现为最底部的 checkbox 区"整片消失"。放宽到足以容纳全部内容。 */
-  max-height: 1400px;
-}
-
-.expand-icon path.fill {
-  fill: var(--text-color);
-}
-
-.selection-slider-container {
-  flex-direction: column;
-  padding: 0px 10px 10px 10px; 
-
-}
-
-.selection-slider-item {
-  width: 100%;
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.selection-slider-item input[type="number"]  {
-  /* 宽度统一改由 .slider-number-input 控制（原 44px 已移除） */
-  appearance: none;
-  -webkit-appearance: none;
-  box-sizing: border-box;
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-  background-color: var(--dropdown-bg-color);
-  background-image: none;
-  padding: 0 3px;
-}
-
-.selection-slider-item div {
-  margin-right: 3px;
-  align-items: center;
-  display: flex;
-}
-
-.selection-slider-item span {
-  font-size: 13px;
-  color: var(--text-color);
-  width: 8px;
-}
-
-.selection-slider-item:not(:last-child) {
-  margin-bottom: -5px;
-}
-
-.selection-slider-label {
-  font-size: 13px; 
-  margin-right: -5px;
-  color: var(--text-color);
-  display: flex;
-  align-items: center;
-}
-
-.selection-slider-input {
-  width: 140px; 
-  margin: -2px 0 0 -2px;
-  cursor: pointer;
-  display: flex;
-  justify-content: center;
-}
-
-.selection-slider-label.dragging {
-  cursor: grabbing;
-}
-
-.selection-slider-label.not-dragging {
-  cursor: ew-resize;
-}
-
-/* 开关容器样式 */
-.switch-container {
-  display: flex;
-  justify-content: flex-start;
-  align-items: center;
-  padding: 5px 10px;
-  border-bottom: 1px solid var(--border-color);
-  gap: 8px;
-}
-
-sp-switch {
-  margin-left: auto; /* 添加这行使开关靠右 */
-  right: 0px;
-  cursor: pointer;
-}
-
-.switch-label {
-  font-size: 13px;
-  color: var(--text-color);
-}
-
-/* 自定义开关（替代 sp-switch，规避 PS 升级兼容性问题）。
-   轨道/圆点 4px 圆角，与 .main-button 统一；开启态轨道变主题色、圆点右移。
-   组件见 src/components/CustomSwitch.tsx。 */
-.custom-switch {
-  display: inline-flex;
-  align-items: center;
-  cursor: pointer;
-  user-select: none;
-  box-sizing: border-box;
-}
-
-.custom-switch-track {
-  position: relative;
-  width: 36px;
-  height: 20px;
-  border-radius: 9999px;
-  background-color: var(--disabled-color);
-  border: 1px solid var(--border-color);
-  box-sizing: border-box;
-  transition: background-color 0.2s ease;
-}
-
-.custom-switch-thumb {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background-color: #fff;
-  box-sizing: border-box;
-  transition: transform 0.2s ease;
-}
-
-.custom-switch.on .custom-switch-track {
-  background-color: var(--primary-color);
-  border-color: var(--primary-color);
-}
-
-.custom-switch.on .custom-switch-thumb {
-  transform: translateX(16px);
-}
-
-.custom-switch.disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-
-.stroke-settings-icon {
-  display: flex;
-  align-items: center;
-  line-height: 32px; /* 保持一致的行高 */
-}
-
-.stroke-settings-icon:hover .icon-fill {
-  fill: var(--hover-icon);
-}
-
-.stroke-settings-icon:active {
-  background-color: var(--button-down);
-}
-
-.stroke-settings-icon-path {
-  fill: var(--text-color);
-}
-
-.stroke-color-preview {
-  width: 20px;
-  height: 20px;
-  cursor: pointer;
-  margin-left: 10px;
-  border-radius: 2px;
-}
-
-.stroke-color-group {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: flex-start;
-}
-
-/* 填充模式组样式 */
-.fill-mode-group {
-  padding: 5px 10px;
-  margin: 5px -16px 5px 0;
-}
-
-.radio-group-label {
-  font-size: 13px;
-  color: var(--text-color);
-
-}
-
-sp-radio-group {
-  width: 100%;
-}
-
-sp-radio {
-  display: flex;
-  align-items: center;
-  height: 32px;
-  padding: 0; /* 添加padding: 0确保没有额外的内边距 */
-}
-
-.radio-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  margin: 2px -3px 2px 0;
-  color: var(--text-color);
-  cursor: pointer;
-  transition: background-color 0.2s;
-  line-height: 32px;
-}
-
-.radio-item-label {
-  display: inline-flex;
-  margin: 0 -3px;
-  align-items: center;
-}
-
-.settings-icon {
-  display: inline-flex;
-  align-items: center;
-  margin: 0 -1px 0 3px;
-  padding:-5px;
-}
-
-.settings-icon:hover .icon-fill {
-  fill: var(--hover-icon);
-}
-
-.settings-icon:active {
-  background-color: var(--button-down);
-}
-
-.info-plane {
-  width: 250px;
-  height: 20px;
-  background-color: var(--bg-color);
-  border-top: 1px solid var(--border-color);
-  display: flex;
-  position: fixed;  /* 固定定位：紧贴面板最下方 */
-  bottom: 0;
-  left: 50%;  /* 水平居中 */
-  transform: translateX(-50%);
-  z-index: 2000;  /* 确保在最上层 */
-}
-
-.copyright {
-  width: 100%;
-  text-align: center;
-  font-size: 8px;
-  color: var(--disabled-color);
-  position: fixed; /* 固定定位 */
-  bottom: 3px;
-  left: 50%;
-  transform: translateX(-50%);
-  pointer-events: none;
-  z-index: 2000;
-}
-
-/* 通用按钮样式 */
-button {
-  padding: 5px 10px;
-  background-color: var(--button-bg);
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  color: var(--text-color);
-  cursor: pointer;
-  /* 去除新版 UXP 后端的原生按钮外观，确保完全由 CSS 控制颜色与形状 */
-  appearance: none;
-  -webkit-appearance: none;
-}
-
-button:hover {
-  background-color: var(--hover-bg);
-}
-
-.bottom-options {
-  padding: 0px 10px;
-  border-top: 1px solid var(--border-color);
-}
-
-/* 大 checkbox 容器：固定高度 90，内部两列。
-   上下内边距相等（15px），配合子容器 space-around，使「顶部留白 / 相邻行距 / 底部留白」三者始终相等；
-   padding:15px 0 几何上让上行下移 5px、下行上移 5px、行距缩小 10px。
-   新增选项时：height 同步增高（约 +26px/行），上下内边距保持相等、相邻两行行距自动相等
-   （由 .checkbox-label-container / .checkbox-input-container 的 space-around 保证）。 */
-.checkbox-main-container {
-  height: 90px;
-  padding: 10px 0;   /* 上下内边距相等：把两行向中间收拢、缩小行距 */
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: row;
-  justify-content: space-between;
-}
-
-/* 每列：左标签容器 + 右 checkbox 容器 */
-.checkbox-column {
-  flex: 1;
-  display: flex;
-  flex-direction: row;
-}
-
-.checkbox-column:not(:last-child) {
-  margin-right: 16px;
-}
-
-/* 标签容器：竖向堆叠，space-around 保证每行与 checkbox 对齐 */
-.checkbox-label-container {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-around;
-}
-
-/* checkbox 容器：竖向堆叠，space-around 保证每行与标签对齐；align-items 使勾选框水平居中 */
-.checkbox-input-container {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-around;
-  align-items: center;
-}
-
-.checkbox-input {
-  cursor: pointer;
-}
-
-.checkbox-input:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.checkbox-label {
-  font-size: 13px;
-  color: var(--text-color);
-  cursor: pointer;
-  white-space: nowrap;  /* 文字不换行 */
-  display: flex;
-  align-items: center;  /* 标签文字在行内竖直居中，与对应勾选框对齐 */
-}
-
-/* 通用两列排版：一行排「标签 + 控件(checkbox / switch / input)」两个，等宽。
-   结构：.field-row-two > .field-cell(可多个) > .field-cell-label + .field-cell-control
-   参考主面板底部 checkbox 区（.checkbox-main-container 等）；
-   今后任何「一行两个 标签+控件」的排版统一用此结构，禁止临时 inline 拼凑。 */
-.field-row-two {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  width: 100%;
-  box-sizing: border-box;
-}
-.field-row-two > .field-cell {
-  flex: 1 1 0;
-  min-width: 0;
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  box-sizing: border-box;
-}
-.field-row-two > .field-cell:not(:last-child) {
-  margin-right: 16px;
-}
-.field-cell-label {
-  flex: 1 1 auto;
-  min-width: 0;
-  margin-right: 6px;
-  font-size: 12px;
-  color: var(--text-color);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
-}
-.field-cell-control {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* 添加禁用状态的标签样式 */
-.checkbox-label.disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  color: var(--disabled-color);
-}
-
-/* sp-action-button 边框控制 */
-sp-action-button {
-  border: none;
 }
 
 /* ==========================================================================
@@ -804,10 +101,879 @@ sp-action-button {
   vertical-align: middle;
 }
 
+/* 主面板滑块数字输入：单位符号在输入框容器之外（.num-unit），裁剪容器只包数字输入本身。
+   UXUP 原生 number 的实际绘制区恒高于 input 的 CSS 盒（CSS 高度压不掉原生绘制高度），
+   所以绝不能让 input 撑满容器（实测撑满必从底部越界）。
+   定稿（2026-09-01 用户逐轮实测）：容器（视觉输入框）32px、input 24px——上下各留 4px
+   缓冲容纳原生绘制区（与激活码 .license-input-wrap 同一套已验证比例），
+   flex align-items:center 居中，缓冲吃掉原生溢出，各分辨率完整不越界。
+   注意：input 的 CSS 高度不改变原生控件的绘制大小，只决定留多少缓冲，故用 24px（4px 缓冲）
+   而非更大值——缓冲不足时下越界会复发（27px 撑满时实测复发）。 */
+#app .num-input-row {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background-color: var(--dropdown-bg-color);
+  background-image: none;
+  overflow: hidden;
+}
+
+#app .num-input-row:focus-within {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px var(--hover-bg);
+}
+
+#app .num-input-row input[type="number"] {
+  display: block;
+  flex: 0 0 35px;
+  width: 35px;
+  height: 24px;
+  margin: 0;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border: none;
+  background-color: var(--dropdown-bg-color);
+  background-image: none;
+  color: var(--text-color);
+  font-size: 11px;
+  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
+  text-align: center;
+  line-height: 24px;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+/* 单位符号：独立于数字输入框容器之外，与输入框保持小间距（不进裁剪框、不被裁掉） */
+.num-unit {
+  margin-left: 4px;
+  font-size: 13px;
+  color: var(--text-color);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+/* 把「输入框容器 + 单位符号」绑成一组（flex 行、垂直居中），作为 slider-parameter-collection /
+   selection-slider-item / stroke 容器的直接子元素，与文字标签保持「标签 | 数字组」两列布局。 */
+.num-input-wrap {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+/* 绘画工具箱复用同一裁剪容器（与 .adjustment-number-input 配合）：
+   .unit-container 内单位符号已是独立 .adjustment-unit，这里只把输入框包进裁剪容器。 */
+#pixeladjustment .num-input-row {
+  display: flex;
+  align-items: center;
+  flex: 0 0 35px;
+  width: 35px;
+  height: 32px;
+  padding: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background-color: var(--dropdown-bg-color);
+  background-image: none;
+  overflow: hidden;
+}
+
+#pixeladjustment .num-input-row:focus-within {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px var(--hover-bg);
+}
+
+/* 用 input[type="number"] 而非 .adjustment-number-input：纯色/图案/渐变子面板的
+   number input 没有类名，同样需要裁剪+缓冲防越界，统一按类型命中。 */
+#pixeladjustment .num-input-row input[type="number"] {
+  display: block;
+  width: 35px;
+  border: none;
+  background-color: var(--dropdown-bg-color);
+  background-image: none;
+  color: var(--text-color);
+  font-size: 11px;
+  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
+  text-align: center;
+  /* input 24px + 上下各 4px 缓冲：与主面板同一套已验证比例，
+     绝不能让 input 撑满容器（原生绘制区恒高于 CSS 盒，撑满必从底部越界）。 */
+  height: 24px;
+  margin: 0;
+  padding: 0 3px;
+  box-sizing: border-box;
+  line-height: 24px;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
 /* 主面板滑块数字输入统一类（不透明度/羽化/平滑/锐度/扩散 + 描边宽度/不透明度）。
    外观、边框、背景、高度由上方 #app input[type="number"] 统一提供，这里只控宽度与层级；
    35px：提交 94266de 为修输入框越界/三位数显示不全拉宽到 46px，实测过宽，两面板所有数字输入统一缩到 35px。 */
 .slider-number-input {
   width: 35px;
   z-index: 1;
+}
+
+
+.icon-fill {
+  fill: var(--text-color);
+}
+
+/* 与绘画工具箱「垃圾桶」同一套图标按钮样式：透明背景、无边框、--text-color 图标、
+   hover 变蓝（--hover-icon）、点击轻微缩放、禁用态灰显。主面板齿轮（设置）按钮复用此样式，
+   使两个面板视觉一致。 */
+.hotkey-icon-button {
+  display: inline-flex;
+  vertical-align: middle;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-color);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  box-sizing: border-box;
+  user-select: none;
+}
+
+.hotkey-icon-button:hover {
+  color: var(--hover-icon);
+}
+
+.hotkey-icon-button:hover .icon-fill {
+  fill: var(--hover-icon);
+}
+
+.hotkey-icon-button:active {
+  transform: scale(0.94);
+}
+
+.hotkey-icon-button.disabled {
+  color: var(--disabled-color);
+  cursor: not-allowed;
+}
+
+.hotkey-icon-button.disabled .icon-fill {
+  fill: var(--disabled-color);
+}
+
+.hotkey-icon-button.disabled:hover {
+  color: var(--disabled-color);
+}
+
+uxp-panel[panelid="com.listen2me.pixeladjustment"],
+#pixeladjustment {
+  height: 100vh;
+  width: 100%;
+  overflow: hidden;
+}
+
+uxp-panel[panelid="com.listen2me.jwautofill"],
+#app {
+  height: 100vh;
+  width: 100%;
+  overflow: hidden;
+}
+
+.selection-fill-container {
+  width: 250px;
+  height: 100%;
+  max-height: 100%;
+  box-sizing: border-box;
+  overflow-y: auto;
+  background-color: var(--bg-color);
+  padding: 10px; 
+  display: flex;
+  flex-direction: column;
+  position: relative;  
+}
+
+/* 次级面板打开时禁止主容器滚动，避免内容在子面板后方滚动 */
+body.secondary-panel-open .container {
+  overflow-y: hidden;
+}
+
+/* 主面板滚动条：与绘画工具箱同款 10px 圆角滚动条 */
+#app .container::-webkit-scrollbar,
+#app .strokesetting::-webkit-scrollbar,
+#app .color-settings-panel::-webkit-scrollbar,
+#app .gradient-picker::-webkit-scrollbar,
+#app .pattern-picker::-webkit-scrollbar {
+  width: 10px;
+}
+
+#app .container::-webkit-scrollbar-thumb,
+#app .strokesetting::-webkit-scrollbar-thumb,
+#app .color-settings-panel::-webkit-scrollbar-thumb,
+#app .gradient-picker::-webkit-scrollbar-thumb,
+#app .pattern-picker::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+#app .container::-webkit-scrollbar-thumb:hover,
+#app .strokesetting::-webkit-scrollbar-thumb:hover,
+#app .color-settings-panel::-webkit-scrollbar-thumb:hover,
+#app .gradient-picker::-webkit-scrollbar-thumb:hover,
+#app .pattern-picker::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in oklab, var(--scrollbar-thumb) 90%, rgb(255, 255, 255) 10%);
+}
+
+#app .container::-webkit-scrollbar-track,
+#app .strokesetting::-webkit-scrollbar-track,
+#app .color-settings-panel::-webkit-scrollbar-track,
+#app .gradient-picker::-webkit-scrollbar-track,
+#app .pattern-picker::-webkit-scrollbar-track {
+  background-color: var(--scrollbar-track);
+  border-radius: 8px;
+}
+
+.selection-fill-title {
+  text-align: center;
+  font-weight: bold;
+  padding: 0 0 10px 0px; 
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-color);
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 3000; 
+}   
+
+.selection-fill-title-text {
+  font-size: 20px;
+}
+
+/* 主按钮外部容器 */
+.main-button-container {
+  align-items: center; 
+  margin: 10px 0 15px 0; 
+  padding: 0px;
+  height: 50px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-button {
+  border-radius: 4px;
+  cursor: pointer;
+  height: 100%;
+  width: 80%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: var(--button-bg);
+  border: 1px solid var(--border-color);
+  color: var(--text-color);
+  transition: all 0.3s ease;
+  box-sizing: border-box;
+}
+
+/* hover 与选区选项一致：半透明蓝（--hover-bg），开启/关闭态相同 */
+.main-button:hover {
+    background-color: var(--hover-bg);
+    border-color: var(--primary-color);
+}
+
+.main-button:active {
+    background-color: var(--button-down);
+    transform: scale(0.98);
+}
+
+/* 功能开启：背景与边框保持主题色不变，仅文字变亮（深主题白 / 浅主题黑）+ 绿灯亮起 */
+.main-button.enabled .button-text {
+    color: var(--enabled-text-color);
+}
+
+/* 主按钮提示灯：与 AdjustmentPanel 绿灯颜色一致 */
+.main-button.enabled .button-indicator {
+    background-color: rgb(46, 204, 113);
+}
+
+/* 主按钮禁用状态下的悬停效果 */
+.main-button:hover .button-text.disabled {
+    color: rgba(128, 128, 128, 0.7); /* 略微提高禁用状态下的文字透明度 */
+}
+
+/* 主按钮内部内容：状态灯 + 文字 */
+.main-button-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  transform: translateX(-5px); 
+}
+
+.main-button-text {
+  font-size: 16px;
+  font-weight: bold;
+}
+
+.main-button-text.disabled {
+  color: rgba(128, 128, 128, 0.5);
+}
+
+/* 主按钮状态灯容器 */
+.main-button-indicator {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  margin-right: 10px;
+  flex-shrink: 0;
+}
+
+/* 与 AdjustmentPanel 绿灯一致 */
+.main-button-indicator.enabled {
+  background-color: rgb(46, 204, 113);
+}
+
+.main-button-indicator.disabled {
+  background-color: rgba(128, 128, 128, 0.5);
+}
+
+/* 混合模式容器 */
+.selection-fill-blend-mode-container {
+  display: flex;
+  margin-bottom: -12px;
+  align-items: center;
+  background-color: var(--bg-color);
+  box-sizing: border-box;
+  position: relative;  
+  width: calc(100% - 20px);  
+  left: 50%;
+  transform: translateX(-50%);
+  isolation: isolate; /* 添加这一行 */
+}
+
+/* 混合模式文字标签 */
+.selection-fill-blend-mode-label {
+  font-size: 13px;
+  color: var(--text-color);
+}
+
+/* 主面板下拉已统一改用自定义 .mask-sync-select 组件（src/components/Select.tsx），
+   不再依赖 sp-picker / sp-menu（其展开菜单背景在 UXP 下无法被 CSS 覆盖）。
+   下拉配色走 theme.ts 的 --dropdown-bg-color 等主题变量，与调整面板完全一致。 */
+
+/* 通用 Spectrum 控件禁用状态：cursor 统一改为 not-allowed，
+   包括开关、按钮、单选等所有可点击控件；新增 disabled 控件只需在 React 端
+   设置 disabled 属性即可，无需额外 CSS。 */
+sp-switch[disabled],
+sp-button[disabled],
+sp-action-button[disabled],
+sp-radio[disabled] {
+  cursor: not-allowed;
+}
+
+/* 开关自身被禁用时（如新建图层模式下清除模式开关置灰），左侧标签文字也变灰 */
+.switch-container:has(sp-switch[disabled]) .switch-label {
+  cursor: not-allowed;
+  color: var(--disabled-color);
+}
+
+/* 清除模式开启时：混合模式标签与下拉文字变灰 --disabled-color（不用 opacity，
+   灰色由 --disabled-color 直接给出，四主题一致） */
+.selection-fill-blend-mode-label.disabled {
+  color: var(--disabled-color);
+}
+
+.slider-container {
+  width: 100%;
+  background-color: var(--bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  padding: 16px 0 0px 0;
+  margin: 0 auto;
+  z-index: 1; 
+}
+
+/* 滑块两层容器结构（选区填充面板）：
+   slider-container（外层卡片）> entire-slider（单个滑块）> slider-parameter-collection（标签+数值+单位）
+   混合模式容器在 slider-container 外部，margin-bottom:-10px 骑在卡片上边缘 */
+.entire-slider {
+  width: 100%;
+  margin: 0 0 15px 0;
+}
+
+/* 行容器：装「文字标签 + 数字输入 + 单位符号」三个元素 */
+.slider-parameter-collection {
+  width: calc(100% - 20px);
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.slider-parameter-collection.dragging {
+  cursor: grabbing;
+}
+
+.slider-parameter-collection.not-dragging {
+  cursor: ew-resize;
+}
+
+/* 文字标签：仅承载文字本身；布局/光标等样式归行容器 .slider-parameter-collection。
+   宽度沿用工具箱标签算法：2字=20px、每字约13.3px 线性插值
+   （W(n) = 20 + (n-2)×13.3 → 2/3/4/5/6字 = 20/33/47/60/73px），由 -2~-6 修饰类指定 */
+.slider-text {
+  font-size: 13px;
+  color: var(--text-color);
+  display: block;
+  flex: none;
+  white-space: nowrap;
+}
+.slider-text-2 { width: 20px; }
+.slider-text-3 { width: 33px; }
+.slider-text-4 { width: 47px; }
+.slider-text-5 { width: 60px; }
+.slider-text-6 { width: 73px; }
+
+/* 分成两行的滑块（不透明度/羽化）里「数字输入 + 单位符号」组合的
+   单位符号容器：统一宽度 14px、不换行、作为 flex 子项不伸缩，
+   与数字输入（35px）一起被行容器 space-between 推到最右端，
+   两行滑块的单位符号容器与数字输入容器各自水平居中对齐。 */
+.slider-parameter-collection > div > span {
+  width: 14px;
+  flex: none;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  color: var(--text-color);
+}
+
+.slider-input {
+  width: calc(100% - 20px);
+  margin: 0 auto;
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
+}
+
+.expand-section {
+  background-color:var(--bg-color);
+  margin-bottom: -1px;
+  z-index: 1;
+}
+
+.expand-header {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 10px 0;
+  color: var(--text-color);
+  transition: background-color 0.3s;
+}
+
+.expand-header:hover {
+  background-color: var(--hover-bg);
+}
+
+.expand-icon {
+  padding-left: 5px;
+  margin-right: 2px;
+  display: flex;
+  align-items: center;
+}
+
+.expand-icon svg {
+  transition: transform 0.3s;
+}
+
+.expand-icon.expanded svg {
+  transform: rotate(0deg);
+}
+
+.expand-content {
+  max-height: 0px;
+  overflow: hidden;
+  transition: max-height 0.3s ease-out;
+}
+
+.expand-content.expanded {
+  /* 原 400px 过小：填充选项内容（含底部 checkbox 区）超过该高度会被 overflow:hidden 裁掉，
+     表现为最底部的 checkbox 区"整片消失"。放宽到足以容纳全部内容。 */
+  max-height: 1400px;
+}
+
+.expand-icon path.fill {
+  fill: var(--text-color);
+}
+
+.selection-slider-container {
+  flex-direction: column;
+  padding: 0px 10px 0 10px; 
+
+}
+
+ /* 选区选项滑块所在行容器 */
+.selection-slider-item {
+  width: 100%;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+/* 滑块数字输入容器，宽度统一改由 .slider-number-input 控制 */
+.selection-slider-item input[type="number"]  {
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background-color: var(--dropdown-bg-color);
+  background-image: none;
+  padding: 0 3px;
+}
+
+/* 滑块文字容器 */
+.selection-slider-label {
+  font-size: 13px; 
+  color: var(--text-color);
+  display: flex;
+  align-items: center;
+  white-space: nowrap;  /* 不换行 + 作为 flex 子项不伸缩：文字恒为内容宽度、永不被压缩换行，滑块条（flex:1）据此自动算出“行宽 - 标签宽 - 数字输入 - 单位符号”的长度 */
+  margin-right: 10px;
+}
+
+/* 滑块（数字输入容器+单位符号容器）的组合容器 */
+.selection-slider-item div {
+  align-items: center;
+  display: flex;
+}
+
+/* 滑块条容器（单行滑块：标签 + 滑块条 + 数字输入 + 单位符号 同行）。
+   用 flex:1 1 auto 占满行容器剩余宽度，使滑块条长度 = 行宽 - 标签宽 - 数字输入(35px) - 单位符号(14px) - 间距，
+   即“随标签字数与行容器宽度综合得出”，从根本上避免两字标签被固定 140px 挤换行。 */
+.selection-slider-input {
+  flex: 1 1 auto;
+  min-width: 50px;
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
+}
+
+/* 滑块单位符号容器，与主面板两行滑块、各子面板统一：宽度14px、不换行、不伸缩 */
+.selection-slider-item span {
+  font-size: 13px;
+  color: var(--text-color);
+  align-items: center;
+  display: flex;  
+  width: 14px;
+  white-space: nowrap;
+  flex: none;
+}
+
+.selection-slider-label.dragging {
+  cursor: grabbing;
+}
+
+.selection-slider-label.not-dragging {
+  cursor: ew-resize;
+}
+
+/* 开关行容器样式 */
+.switch-container {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  padding: 5px 10px 5px 10px;
+  border-bottom: 1px solid var(--border-color);
+  gap: 8px;
+}
+
+sp-switch {
+  margin-left: auto; /* 添加这行使开关靠右 */
+  right: 0px;
+  cursor: pointer;
+}
+
+.switch-label {
+  font-size: 13px;
+  color: var(--text-color);
+}
+
+/* 自定义开关（替代 sp-switch，规避 PS 升级兼容性问题）。
+   轨道/圆点 4px 圆角，与 .main-button 统一；开启态轨道变主题色、圆点右移。
+   组件见 src/components/CustomSwitch.tsx。 */
+.custom-switch {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+  box-sizing: border-box;
+}
+
+.custom-switch-track {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 9999px;
+  background-color: var(--disabled-color);
+  border: 1px solid var(--border-color);
+  box-sizing: border-box;
+  transition: background-color 0.2s ease;
+}
+
+.custom-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background-color: #fff;
+  box-sizing: border-box;
+  transition: transform 0.2s ease;
+}
+
+.custom-switch.on .custom-switch-track {
+  background-color: var(--primary-color);
+  border-color: var(--primary-color);
+}
+
+.custom-switch.on .custom-switch-thumb {
+  transform: translateX(16px);
+}
+
+.custom-switch.disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* （颜色预览容器+设置图标容器）组合容器 */
+.stroke-color-group {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.stroke-settings-icon {
+  display: flex;
+  align-items: center;
+  line-height: 24px;
+  width: 24px;
+}
+
+.stroke-settings-icon:hover .icon-fill {
+  fill: var(--hover-icon);
+}
+
+.stroke-settings-icon:active {
+  background-color: var(--button-down);
+}
+
+.stroke-settings-icon-path {
+  fill: var(--text-color);
+}
+
+.stroke-color-preview {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  margin-left: 10px;
+  border-radius: 2px;
+}
+
+
+/* 填充模式组样式 */
+.fill-mode-group {
+  padding: 5px 10px;
+  margin: 5px 0 5px 0;
+}
+
+.radio-group-label {
+  font-size: 13px;
+  color: var(--text-color);
+
+}
+
+sp-radio-group {
+  width: 100%;
+}
+
+sp-radio {
+  display: flex;
+  align-items: center;
+  height: 32px; 
+}
+
+.radio-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin: 2px auto 2px auto;
+  color: var(--text-color);
+  cursor: pointer;
+  transition: background-color 0.2s;
+  line-height: 32px;
+}
+
+/* 填充模式行内的齿轮按钮：scoped 到 .fill-mode-group，绝不能挂在全局 .radio-item 上——
+   颜色面板「计算方法」的 radio 复用了 .radio-item-label，全局改动会把它的单行布局挤崩。
+   绝对定位绕开 sp-radio slot 布局（slot 内 div 会被挤到文字下一行），钉在行右缘；
+   行高 32px、按钮 24px，top:50% 后上移 9px（视觉实测比几何中心 -12px 低 3px 才与文字对齐）。 */
+.fill-mode-group .radio-item {
+  position: relative;
+}
+
+.fill-mode-group .radio-item .hotkey-icon-button {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  margin-top: -9px;
+}
+
+.fill-mode-group .radio-item-label {
+  /* 给右缘的绝对定位齿轮（24px）让位，避免文字与其重叠 */
+  margin-right: 28px;
+}
+
+.radio-item-label {
+  display: inline-flex;
+  align-items: center;
+}
+
+.settings-icon {
+  display: inline-flex;
+  align-items: center;
+  width: 32px;
+}
+
+.settings-icon:hover .icon-fill {
+  fill: var(--hover-icon);
+}
+
+.settings-icon:active {
+  background-color: var(--button-down);
+}
+
+.info-plane {
+  width: 100%;
+  height: 20px;
+  background-color: var(--bg-color);
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  position: fixed;  /* 固定定位：紧贴面板最下方 */
+  bottom: 0;
+  left: 50%;  /* 水平居中 */
+  transform: translateX(-50%);
+  z-index: 2000;  /* 确保在最上层 */
+}
+
+.copyright {
+  width: 100%;
+  text-align: center;
+  font-size: 8px;
+  color: var(--disabled-color);
+  position: fixed; /* 固定定位 */
+  bottom: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
+  z-index: 2000;
+}
+
+/* 去除新版 UXP 后端的原生按钮外观，确保完全由 CSS 控制颜色与形状 */
+button {
+  padding: 5px 10px;
+  background-color: var(--button-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-color);
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+button:hover {
+  background-color: var(--hover-bg);
+}
+
+/* 底部checkbox选项外部容器 */
+.bottom-checkbox-options {
+  padding: 10px 10px;
+  height: 90px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  border-top: 1px solid var(--border-color);
+}
+
+/* 每列：竖向堆叠各个 checkbox-group */
+.checkbox-column-left {
+  left: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.checkbox-column-right {
+  right: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 每个 group：label + input 横向排列，左列整体靠左对齐 */
+.checkbox-group-left {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+/* 每个 group：label + input 横向排列，右列整体靠右对齐 */
+.checkbox-group-right {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.checkbox-label {
+  font-size: 13px;
+  color: var(--text-color);
+  cursor: pointer;
+  white-space: nowrap;  /* 文字不换行 */
+  display: flex;
+  align-items: center;  /* 标签文字在行内竖直居中，与对应勾选框对齐 */
+  margin-right: 6px;    /* label 与 input 之间的间距 */
+}
+
+/* 添加禁用状态的标签样式 */
+.checkbox-label.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  color: var(--disabled-color);
+}
+
+.checkbox-input {
+  cursor: pointer;
+}
+
+.checkbox-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+
+
+/* sp-action-button 边框控制 */
+sp-action-button {
+  border: none;
 }

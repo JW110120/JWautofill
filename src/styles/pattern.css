@@ -199,23 +199,33 @@
     width: 100%;
   }
 
-  /* 标签 + 数值 + 单位 同行容器（套娃第一层） */
+  /* 标签 + 数值 + 单位 同行容器（套娃第一层）：
+     行容器负责布局（两端对齐）与 ew-resize 光标，宽度与 APP 面板统一 */
   .pattern-setting-item .pattern-slider-parameter-collection {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
+    justify-content: space-between;
     align-items: center;
-    width: 100%;
+    width: calc(100% - 20px);
+    margin: 0 auto;
+    cursor: ew-resize;
   }
 
-  .pattern-setting-item label {
+  /* 文字标签：仅承载文字本身；布局/光标样式归上行容器。
+     宽度沿用工具箱标签算法（2字=20px、每字约13.3px 线性：20/33/47/60/73px），
+     「角度：/缩放：」含全角冒号按 3 字算 → 33px */
+  .pattern-setting-item .pattern-slider-text {
     font-size: 13px;
-    justify-content: space-between;
-    flex-direction: row;
-    width: calc(100% - 20px);
-    position: relative;
-    display: flex;
     color: var(--text-color);
+    display: block;
+    flex: none;
+    white-space: nowrap;
   }
+  .pattern-setting-item .pattern-slider-text-2 { width: 20px; }
+  .pattern-setting-item .pattern-slider-text-3 { width: 33px; }
+  .pattern-setting-item .pattern-slider-text-4 { width: 47px; }
+  .pattern-setting-item .pattern-slider-text-5 { width: 60px; }
+  .pattern-setting-item .pattern-slider-text-6 { width: 73px; }
   
   .pattern-setting-item div{
     display: flex;
@@ -227,13 +237,24 @@
     margin-left: -3px;
     color: var(--text-color);
   }
+
+  /* 图案面板两行滑块里「数字输入 + 单位符号」组合的单位符号容器：
+     统一宽度 14px、不换行、不伸缩（与主面板两行滑块及其它子面板一致）。
+     限定在 .pattern-slider-parameter-collection > div 内，避免命中下方
+     平铺/单次等 .pattern-radio-item-label 单选文字 span（否则固定 14px 会把选项文字压窄）。 */
+  .pattern-setting-item .pattern-slider-parameter-collection > div > span {
+    width: 14px;
+    flex: none;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+  }
   
   .pattern-setting-item .pattern-angle-range,
   .pattern-setting-item .pattern-scale-range {
-      width: 210px;  
-      margin-left: 6px; 
+      width: calc(100% - 20px);
+      margin: -5px auto 0 auto;
       cursor: pointer;
-      margin-top: -5px;
       display: block;
   }
 

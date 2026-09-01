@@ -12,7 +12,8 @@ export interface HotkeyEntry {
   id: string;
   combo: string;                 // 例如 "Ctrl+Shift+R"、"Alt+F1"
   action: 'toggleMain' | 'applyBrush';
-  brush?: string;                // applyBrush 时的笔刷名（PS 预设名，需精确匹配）
+  brush?: string;                // applyBrush 时的笔刷名（PS 预设名，需精确匹配）。
+                                  // 注意：不支持同名笔刷——PS 按 _name 只会选中 Brushes 列表最上方那支。
 }
 
 const WS_URL = 'ws://127.0.0.1:18923';
@@ -296,6 +297,7 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
     return;
   }
   if (msg.action === 'applyBrush' && msg.brush) {
+    // 守护进程按组合键命中后回传笔刷名，按名称选中对应笔刷预设。
     applyBrush(msg.brush).then((ok) => {
       // 把触发结果广播给 UI：用户按快捷键后面板立刻显示是否命中、切换是否成功
       for (const l of hotkeyListeners) { try { l({ combo: msg.combo ?? '', action: 'applyBrush', brush: msg.brush, ok }); } catch { /* ignore */ } }
@@ -377,7 +379,8 @@ export function setMainToggleCombo(combo: string): boolean {
 //    顶层 name: 字段——那种引用 PS 无法解析，batchPlay 静默无效（不报错但也不切笔刷）。
 // 2) 不要加 _options:{dialogOptions:'dontDisplay'}——该选项实际效果相反：会弹 PS 错误框
 //    且异常不进 catch；去掉后笔刷名不存在时会正常 throw，可被下方 catch 捕获并打日志。
-// 一次完整的「切到画笔工具 + 选中笔刷预设」调用
+// 一次完整的「切到画笔工具 + 选中笔刷预设」调用。
+// 注意：不支持同名笔刷——按 _name 选中时 PS 只会命中 Brushes 列表最上方那支同名项。
 async function selectBrushCommands(brushName: string) {
   // 先确保当前是画笔工具（用标准 select 切工具；工具已是画笔时可能报错，忽略）
   try {
@@ -566,7 +569,7 @@ export async function getSelectedBrushToolEnum(): Promise<string | null> {
 }
 
 /** 当前笔刷的聚合信息（类型 / 名称 / 直径），用于下拉展示。 */
-export interface BrushInfo {
+export interface BrushNameId {
   toolEnum: string | null;   // 原始 _enum，如 paintbrushTool
   type: string | null;      // 中文类型名，未知时回退为原始 _enum
   name: string | null;      // 当前笔刷名（来自 currentToolOptions.brush.name）
@@ -574,8 +577,8 @@ export interface BrushInfo {
 }
 
 /** 读取当前选中笔刷的聚合信息（非破坏性，只读）。 */
-export async function getSelectedBrushInfo(): Promise<BrushInfo> {
-  const info: BrushInfo = { toolEnum: null, type: null, name: null, diameter: null };
+export async function getSelectedBrushNameId(): Promise<BrushNameId> {
+  const info: BrushNameId = { toolEnum: null, type: null, name: null, diameter: null };
   try {
     const r: any = await action.batchPlay(
       [{ _obj: 'get', _target: [{ _property: 'currentToolOptions' }, APP_TARGET], _options: { dialogOptions: 'dontDisplay' } }],
@@ -616,7 +619,7 @@ async function selectBrushForDetection(name: string): Promise<void> {
 
 /** 记录用户当前笔刷，供扫描后还原。 */
 async function captureCurrentBrush(): Promise<{ toolEnum: string | null; brushName: string | null }> {
-  const info = await getSelectedBrushInfo();
+  const info = await getSelectedBrushNameId();
   return { toolEnum: info.toolEnum, brushName: info.name };
 }
 

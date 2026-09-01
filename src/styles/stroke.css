@@ -66,6 +66,15 @@
   text-align: center; /* 数值居中显示 */
 }
 
+/* 数字输入的单位符号（px/%）独立于裁剪容器之外（.num-unit）：
+   上面 .stroke-wide-container span 的负边距是旧结构（单位紧贴裸输入框）的补正，
+   会把单位拉得偏上偏左、叠到输入框边框上，必须归零并给正常间距。 */
+.stroke-wide-container .num-unit {
+  margin: 0 0 0 4px;
+  display: flex;
+  align-items: center;
+}
+
 .stroke-wide-container .range-slider {
   margin :3px -10px -7px -8px;
   width: 130px;

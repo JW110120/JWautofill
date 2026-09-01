@@ -15,6 +15,7 @@ import StrokeSetting from './components/StrokeSetting';
 import Select from './components/Select';
 import LicenseDialog from './components/LicenseDialog';
 import RangeSlider from './components/RangeSlider';
+import IconButton from './components/IconButton';
 import { LicenseManager } from './utils/LicenseManager';
 import { ExpandIcon, SettingsIcon } from './styles/Icons';
 import { calculateRandomColor, hsbToRgb, rgbToGray } from './utils/ColorUtils';
@@ -33,6 +34,7 @@ import {
   isDaemonConnected, getMainToggleCombo, setMainToggleCombo, requestHotkeyRecording
 } from './hotkey/HotkeyBridge';
 import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/MainToggleBus';
+import { helpTexts } from './constants/helpTexts';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -47,6 +49,11 @@ class App extends React.Component<AppProps, AppState> {
     private isInQuickMask = false;
     private isInSingleColorChannel = false;
     private selectionChangeListener: any = null;
+    // 面板状态持久化门闩：componentDidMount 里 PanelStateManager.initialize 异步读取完成之前，
+    // MainToggleBus 轮询（250ms）等来源就可能 setState isEnabled 触发 componentDidUpdate 的
+    // 「有变更即保存」逻辑——用默认值整体覆盖 panel-state.json，把用户已保存的
+    // 自动关开关/自动切套索等选项冲掉（表现为这些开关重启后不持久化）。加载完成前禁止保存。
+    private panelStateLoaded = false;
 
     constructor(props: AppProps) {
         super(props);
@@ -145,6 +152,13 @@ class App extends React.Component<AppProps, AppState> {
                     ...initialState,
                     selectedPattern: keepPattern,
                     selectedGradient: keepGradient,
+                    // 选项类开关不属于「参数」，复位时保持用户当前选择（含持久化语义，勿回默认值）
+                    deselectAfterFill: this.state.deselectAfterFill,
+                    autoUpdateHistory: this.state.autoUpdateHistory,
+                    switchToLassoOnEnable: this.state.switchToLassoOnEnable,
+                    autoOffOnOtherTool: this.state.autoOffOnOtherTool,
+                    strokeEnabled: this.state.strokeEnabled,
+                    createNewLayer: this.state.createNewLayer,
                     // UI 相关展开/面板开关保持为当前值以避免打断用户操作
                     isColorSettingsOpen: this.state.isColorSettingsOpen,
                     isPatternPickerOpen: this.state.isPatternPickerOpen,
@@ -221,6 +235,9 @@ class App extends React.Component<AppProps, AppState> {
             }
         } catch (e) {
             console.warn('⚠️ 面板状态加载失败，使用默认状态:', e);
+        } finally {
+            // 加载完成（无论成败）才允许后续的持久化保存，避免启动期默认值覆盖已存状态
+            this.panelStateLoaded = true;
         }
 
         // ========= 主开关：与跨面板共享状态对齐 =========
@@ -266,6 +283,9 @@ class App extends React.Component<AppProps, AppState> {
         }
 
         // ========= 面板状态：有变更则保存 =========
+        // 初始加载完成前不保存：此时 state 还是默认值，任何 setState（如 MainToggleBus
+        // 轮询到的 isEnabled）都会以默认值覆盖 panel-state.json 里用户已保存的选项。
+        if (!this.panelStateLoaded) return;
         const watchedKeys: Array<keyof typeof this.state> = [
             'isEnabled',
             'isExpanded',
@@ -1266,15 +1286,7 @@ class App extends React.Component<AppProps, AppState> {
                     onClose={this.closeLicenseDialog}
                 />
                 <div className="selection-fill-container">
-                <h3 className="selection-fill-title" 
-title={`● 生成选区时，插件会自动根据选择的模式填充/删除内容。
-
-● 选区模式只有作为【新选区】时，才会触发自动填充，加选，减选，交叉选择不会自动填充。
-
-● 由于核心功能使用了imageAPI，所有和渐变与图案相关的功能需要至少PS版本24.2（PS2023第二个版本）才能使用。
-
-● 由于每次生成选区后，插件会立刻执行若干个步骤。因此想要撤销本次的自动填充，建议回溯历史记录。`
-}>
+                <h3 className="selection-fill-title" title={helpTexts.selectionFill.panelTitle}>
                     <span className="selection-fill-title-text">选区填充2.0</span>                    
                 </h3>
                 <div className="main-button-container">
@@ -1283,14 +1295,7 @@ title={`● 生成选区时，插件会自动根据选择的模式填充/删除�
                     tabIndex={0}
                     className={`main-button ${this.state.isEnabled ? 'enabled' : ''}`} 
                     onClick={this.handleButtonClick}
-title={`● 功能开启后，PS工具栏羽化参数设为0时，自动填充才可正常使用。
-
-● 推荐由下方的插件面板设置想要的羽化值。
-
-● 处于套索等工具时，依次按下【Enter → 数字1 → Enter】，可以把工具栏的羽化值设为1，暂停自动填充。
-
-● 依次按下【Enter → 数字0 → Enter】，可以把羽化值改回0，恢复自动填充。`
-}>
+title={helpTexts.selectionFill.mainButton}>
                         <div className="main-button-content">
                             <div className={`main-button-indicator ${this.state.isEnabled ? 'enabled' : 'disabled'}`}></div>
                             <span className={`main-button-text ${!this.state.isEnabled ? 'disabled' : ''}`}>
@@ -1302,12 +1307,7 @@ title={`● 功能开启后，PS工具栏羽化参数设为0时，自动填充�
 
                 <div className="selection-fill-blend-mode-container">
                     <span className={`selection-fill-blend-mode-label ${this.state.clearMode ? 'disabled' : ''}`} 
-title={`● 混合模式支持纯色，图案和渐变三种模式。描边的混合模式需要在描边的面板中独立设置。
-  
-● 在新建图层模式下：该混合模式下拉菜单修改的是新建图层的混合模式。至于本次在新图层中填充的内容，采取的混合模式是【正常】。
-    
-● 在清除模式下：开启后默认设为【清除】，混合模式不支持修改。`
-}>
+title={helpTexts.selectionFill.blendMode}>
                     混合模式：
                     </span>
 
@@ -1316,32 +1316,26 @@ title={`● 混合模式支持纯色，图案和渐变三种模式。描边的�
                         groups={BLEND_MODE_OPTIONS}
                         disabled={this.state.clearMode}
                         onChange={(v) => this.handleBlendModeChange({ target: { value: v } } as React.ChangeEvent<HTMLSelectElement>)}
-                        title="选择填充时使用的混合模式，计算方式与PS原生一致。"
+                        title={helpTexts.selectionFill.blendModeSelect}
                     />
                 </div>
 
                 <div className="slider-container">
-                <div className="selection-fill-slider-group">
                     <div className="entire-slider">
-                    <div className="slider-parameter-collection">
-                    <label
-                        className={`slider-label ${
+                    <div className={`slider-parameter-collection ${
                             this.state.isDragging && this.state.dragTarget === 'opacity'
-                            ? 'dragging' 
+                            ? 'dragging'
                             : 'not-dragging'
-                        }`}
+                        }`}>
+                    <label
+                        className="slider-text slider-text-4"
                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'opacity')}
-title={`● 调整填充内容的不透明度，不透明度间采用【乘算】。
-    
-● 在填充模式下：假设原本填充的图案中有一个自带50%的不透明度的区域，插件面板中不透明度设为50%，则最终填充该区域的不透明度为50%*50%*（受羽化影响产生的不透明度）。
-
-● 在清除模式下：不透明度计算方式与填充模式相同。
-
-● 在新建图层模式下：影响的是新图层的不透明度，假设填充的图案或者渐变原先带有不透明度，填充的内容仍保持原来的不透明度。`
-}>
+title={helpTexts.selectionFill.opacity}>
                     不透明度
-                    
-                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                    </label>
+
+                    <div className="num-input-wrap">
+                    <div className="num-input-row">
                     <input
                         type="number"
                         min="0"
@@ -1349,12 +1343,12 @@ title={`● 调整填充内容的不透明度，不透明度间采用【乘算�
                         value={this.state.opacity}
                         onChange={(e) => this.setState({ opacity: Number(e.target.value) })}
                         className="slider-number-input"
-                        title="输入填充内容的不透明度（0-100）。"
+                        title={helpTexts.selectionFill.opacityInput}
                     />
-                    <span style={{ fontSize: '13px' }}>%</span>
+                    </div>
+                    <span className="num-unit">%</span>
                     </div>
 
-                    </label>
                     </div>
                     <RangeSlider
                         min={0}
@@ -1363,28 +1357,25 @@ title={`● 调整填充内容的不透明度，不透明度间采用【乘算�
                         value={this.state.opacity}
                         onChange={this.handleOpacityChange}
                         className="slider-input"
-                        title="调整填充的不透明度，0%为完全透明，100%为完全不透明。"
+                        title={helpTexts.selectionFill.opacitySlider}
                     />
                     </div>
 
                     <div className="entire-slider">
-                    <div className="slider-parameter-collection">
-                    <label
-                        className={`slider-label ${
-                            this.state.isDragging && this.state.dragTarget === 'feather' 
-                            ? 'dragging' 
+                    <div className={`slider-parameter-collection ${
+                            this.state.isDragging && this.state.dragTarget === 'feather'
+                            ? 'dragging'
                             : 'not-dragging'
-                        }`}
+                        }`}>
+                    <label
+                        className="slider-text slider-text-2"
                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'feather')}
-title={`● 改造选区使用的羽化值，也就是对选区的灰度通道使用了高斯模糊。
-
-● 羽化值越大，选区边缘越柔和，填充内容的不透明度也会相应降低。
-
-● 羽化值也会直接影响描边的羽化程度与不透明度。`
-}>
+title={helpTexts.selectionFill.feather}>
                         羽化
+                    </label>
 
-                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                    <div className="num-input-wrap">
+                    <div className="num-input-row">
                     <input
                         type="number"
                         min="0"
@@ -1392,12 +1383,12 @@ title={`● 改造选区使用的羽化值，也就是对选区的灰度通道�
                         value={this.state.feather}
                         onChange={(e) => this.setState({ feather: Number(e.target.value) })}
                         className="slider-number-input"
-                        title="输入改造选区使用的羽化值（0-20像素）。"
+                        title={helpTexts.selectionFill.featherInput}
                         />
-                    <span style={{ fontSize: '13px' }}>px</span>
+                    </div>
+                    <span className="num-unit">px</span>
                     </div>
 
-                    </label>
                     </div>
                     <RangeSlider
                         min={0}
@@ -1406,16 +1397,15 @@ title={`● 改造选区使用的羽化值，也就是对选区的灰度通道�
                         value={this.state.feather}
                         onChange={this.handleFeatherChange}
                         className="slider-input"
-                        title="调整选区边缘的羽化程度，数值越大边缘越柔和。"
+                        title={helpTexts.selectionFill.featherSlider}
                     />
                     </div>
                 </div>
                 </div>
-            </div>
 
  {/* 新增选区选项区域 */}
             <div className="expand-section">
-                            <div className="expand-header" onClick={this.toggleSelectionOptions} title="点击展开/折叠选区选项设置。">
+                            <div className="expand-header" onClick={this.toggleSelectionOptions} title={helpTexts.selectionFill.selectionOptionsToggle}>
 
                                 <div className={`expand-icon ${this.state.isSelectionOptionsExpanded ? 'expanded' : ''}`}>
                                     <ExpandIcon expanded={this.state.isSelectionOptionsExpanded} />
@@ -1424,7 +1414,7 @@ title={`● 改造选区使用的羽化值，也就是对选区的灰度通道�
                             </div>
                             <div className={`expand-content ${this.state.isSelectionOptionsExpanded ? 'expanded' : ''}`}>
                                 <div className="selection-slider-container">
-                                <div className="selection-slider-item">
+                                    <div className="selection-slider-item">
                                     <label
                                         className={`selection-slider-label ${
                                             this.state.isDragging && this.state.dragTarget === 'selectionSmooth' 
@@ -1432,12 +1422,7 @@ title={`● 改造选区使用的羽化值，也就是对选区的灰度通道�
                                             : 'not-dragging'
                                         }`}
                                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionSmooth')}
-title={`● 在填充前，以降低选区灰度通道中的高频信息的方式修改选区。
-    
-● 具体实现是直接挪用【选择并遮住】中的平滑选区边缘功能，减小选区边缘的锯齿与起伏。
-    
-● 当该值设为0时，不会修改选区，可以显著提高连续自动填充的流畅度。`
-}>
+title={helpTexts.selectionFill.selectionSmooth}>
                                         平滑
                                     </label>
                                     <RangeSlider
@@ -1447,9 +1432,10 @@ title={`● 在填充前，以降低选区灰度通道中的高频信息的方�
                                         value={this.state.selectionSmooth}
                                         onChange={this.handleSelectionSmoothChange}
                                         className="selection-slider-input"
-                                        title="平滑选区边缘，减少凹凸起伏，数值越大平滑效果越明显。"
+                                        title={helpTexts.selectionFill.selectionSmoothSlider}
                                     />
-                                    <div style={{ display: 'flex', alignItems: 'center'}}>
+                                    <div className="num-input-wrap">
+                                        <div className="num-input-row">
                                         <input
                                             type="number"
                                             min="0"
@@ -1457,9 +1443,10 @@ title={`● 在填充前，以降低选区灰度通道中的高频信息的方�
                                             value={this.state.selectionSmooth}
                                             onChange={(e) => this.setState({ selectionSmooth: Number(e.target.value) })}
                                             className="slider-number-input"
-                                            title="直接输入平滑数值（0-100%）。"
+                                            title={helpTexts.selectionFill.selectionSmoothInput}
                                         />
-                                        <span style={{ fontSize: '13px' }}>%</span>
+                                        </div>
+                                        <span className="num-unit">%</span>
                                     </div>
                                     </div>
                             
@@ -1471,12 +1458,7 @@ title={`● 在填充前，以降低选区灰度通道中的高频信息的方�
                                             : 'not-dragging'
                                         }`}
                                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionContrast')}
-title={`● 在填充前，以锐化选区灰度通道方式修改选区。
-
-● 具体实现是直接挪用【选择并遮住】中的锐化选区边缘功能，增强选区边缘的锐度。
-
-● 当该值设为0时，不会修改选区，可以显著提高连续自动填充的流畅度。`
-}>
+title={helpTexts.selectionFill.selectionContrast}>
                                         锐度
 
                                     </label>
@@ -1487,9 +1469,10 @@ title={`● 在填充前，以锐化选区灰度通道方式修改选区。
                                         value={this.state.selectionContrast}
                                         onChange={this.handleSelectionContrastChange}
                                         className="selection-slider-input"
-                                        title="增强选区边缘的锐度，使边缘更加清晰明确。"
+                                        title={helpTexts.selectionFill.selectionContrastSlider}
                                     />
-                                    <div style={{ display: 'flex', alignItems: 'center'}}>
+                                    <div className="num-input-wrap">
+                                        <div className="num-input-row">
                                         <input
                                             type="number"
                                             min="0"
@@ -1497,9 +1480,10 @@ title={`● 在填充前，以锐化选区灰度通道方式修改选区。
                                             value={this.state.selectionContrast}
                                             onChange={(e) => this.setState({ selectionContrast: Number(e.target.value) })}
                                             className="slider-number-input"
-                                            title="直接输入锐度数值（0-100%）。"
+                                            title={helpTexts.selectionFill.selectionContrastInput}
                                         />
-                                        <span style={{ fontSize: '13px' }}>%</span>
+                                        </div>
+                                        <span className="num-unit">%</span>
                                     </div>
                                     </div>
 
@@ -1511,10 +1495,7 @@ title={`● 在填充前，以锐化选区灰度通道方式修改选区。
                                             : 'not-dragging'
                                         }`}
                                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionExpand')}
-title={`● 参考PS滤镜库中数次叠加喷溅的算法，以喷溅的方式扩展选区范围。
-
-● 未来打算扩展更多的参数，以对选区进行更丰富的改造。`
-}>
+title={helpTexts.selectionFill.selectionExpand}>
                                         扩散
                                     </label>
                                     <RangeSlider
@@ -1524,9 +1505,10 @@ title={`● 参考PS滤镜库中数次叠加喷溅的算法，以喷溅的方式
                                         value={this.state.selectionExpand}
                                         onChange={this.handleSelectionExpandChange}
                                         className="selection-slider-input"
-                                        title="以喷溅的方式改造选区，数值越大选区向外喷溅的强度越高。"
+                                        title={helpTexts.selectionFill.selectionExpandSlider}
                                     />
-                                    <div style={{ display: 'flex', alignItems: 'center'}}>
+                                    <div className="num-input-wrap">
+                                        <div className="num-input-row">
                                         <input
                                             type="number"
                                             min="0"
@@ -1534,9 +1516,10 @@ title={`● 参考PS滤镜库中数次叠加喷溅的算法，以喷溅的方式
                                             value={this.state.selectionExpand}
                                             onChange={(e) => this.setState({ selectionExpand: Number(e.target.value) })}
                                             className="slider-number-input"
-                                            title="直接输入扩散数值（0-100%）。"
+                                            title={helpTexts.selectionFill.selectionExpandInput}
                                         />
-                                       <span style={{ fontSize: '13px' }}>%</span>
+                                        </div>
+                                        <span className="num-unit">%</span>
                                     </div>
                                     </div>
                                 </div>
@@ -1545,7 +1528,7 @@ title={`● 参考PS滤镜库中数次叠加喷溅的算法，以喷溅的方式
 
 
             <div className="expand-section">
-                    <div className="expand-header" onClick={this.toggleExpand} title="点击展开/折叠填充选项设置。">
+                    <div className="expand-header" onClick={this.toggleExpand} title={helpTexts.selectionFill.fillOptionsToggle}>
                         <div className={`expand-icon ${this.state.isExpanded ? 'expanded' : ''}`}>
                             <ExpandIcon expanded={this.state.isExpanded} />
                         </div>
@@ -1557,29 +1540,26 @@ title={`● 参考PS滤镜库中数次叠加喷溅的算法，以喷溅的方式
                         {/* 新建图层开关 */}
                         <div className="switch-container">
                             <span className="switch-label" 
-title={`● 每次填充前都会以设置的参数新建一个图层，在该新图层上填充内容。
-
-● 新建图层模式与清除模式互斥，不能同时开启。`
-}>
+title={helpTexts.selectionFill.createNewLayer}>
                             新建图层
                             </span>
                             <sp-switch 
                                 checked={this.state.createNewLayer}
                                 onChange={this.toggleCreateNewLayer}
                                 disabled={this.state.clearMode || this.state.isInQuickMask}
-                                title="开启后在新图层上进行填充，保持下方图层不受影响。"
+                                title={helpTexts.selectionFill.createNewLayerSwitch}
                             />
                         </div>
 
                        {/* 描边模式开关 */}
                        <div className="switch-container">
-                            <label className="switch-label" title="在填充后自动为选区边缘增加描边效果。开启右侧开关后，将会显示设置描边颜色和设置具体描边的参数的区域。">描边模式</label>
+                            <label className="switch-label" title={helpTexts.selectionFill.strokeModeLabel}>描边模式</label>
                             {this.state.strokeEnabled && (
                                 <div className="stroke-color-group">
                                 <div 
                                     className="stroke-color-preview"
                                     style={this.getStrokeColorPreviewStyle()}
-                                    title="点击选择描边颜色，在编辑蒙版等灰度通道时，这里将会显示选中颜色的灰度。"
+                                    title={helpTexts.selectionFill.strokeColorPreview}
                                     onClick={async () => {
                                         try {
                                             // 1. 保存当前前景色
@@ -1650,208 +1630,161 @@ title={`● 每次填充前都会以设置的参数新建一个图层，在该�
                                             console.error('颜色选择器错误:', error);
                                         }
                                     }}/>
-                                <sp-action-button 
-                                    quiet 
-                                    className="stroke-settings-icon"
+                                <IconButton
                                     onClick={this.toggleStrokeSetting}
-                                    title="打开描边设置面板，调整描边宽度、位置等参数。"
+                                    title={helpTexts.selectionFill.strokeSettingsButton}
                                 >
                                     <SettingsIcon/>
-                                </sp-action-button>
+                                </IconButton>
                                 </div>
                             )}
                             <sp-switch 
                                 checked={this.state.strokeEnabled}
                                 onChange={this.toggleStrokeEnabled}
-                                title="开启描边模式，在填充后自动为选区边缘增加描边效果。"
+                                title={helpTexts.selectionFill.strokeEnabledSwitch}
                             />
                         </div>
 
                         {/* 清除模式开关 */}
                         <div className="switch-container">
                             <label className="switch-label" 
-title={`● 开启清除模式，以下方选择的模式删除选区内容。
-
-● 关闭清除模式的情况下称作填充模式，填充模式与清除模式支持修改像素图层、红、绿、蓝通道、快速蒙版，图层蒙版、用户保存的选区的自定义alpha通道。
-
-● 清除模式的计算方法采取绝对计算，对纯色、图案与渐变在保留不透明度的基础上采用统一的逻辑：先转化为灰度，白色代表100%删除，黑色代表完全不删除。
-（因此删除纯色，需要先把前景色设为白色）
-
-● 未来考虑增加相对计算模式，即考虑一个删除系数，当被删除对象的颜色的灰度越高（或不透明度越高），它被删除的百分比越高。
-
-● 清除模式与新建图层模式互斥，不能同时开启。`
-}>
+title={helpTexts.selectionFill.clearMode}>
                             清除模式
                             </label>
                             <sp-switch 
                                 checked={this.state.clearMode}
                                 onChange={this.toggleClearMode}
                                 disabled={this.state.createNewLayer}
-                                title="开启清除模式，以下方选择的模式删除选区内容。"
+                                title={helpTexts.selectionFill.clearModeSwitch}
                             />
                         </div>
 
                         {/* 填充模式选择 */}
                         <div className="fill-mode-group">
-                            <div className="radio-group-label" title="选择填充类型：纯色、图案或渐变。">填充模式</div>
+                            <div className="radio-group-label" title={helpTexts.selectionFill.fillModeLabel}>填充模式</div>
                             <sp-radio-group 
                                 selected={this.state.fillMode} 
                                 name="fillMode"
                                 onChange={this.handleFillModeChange}
                             >
-                                <sp-radio value="foreground" className="radio-item" title="使用【纯色】改写选区中的内容。">
+                                <sp-radio value="foreground" className="radio-item" title={helpTexts.selectionFill.fgRadio}>
                                     <span className="radio-item-label" 
-title={`● 基础的纯色填充模式，当监测到生成选区后，立刻填充前景色。
-
-● 右侧的纯色参数面板，通过算法使得每次自动填充会以当前前景色作为原点，在参数设定的颜色区间内随机选择颜色填充。
-
-● 编辑RGB通道时，会提供4个可编辑选项。在编辑蒙版等灰度通道时，只提供2个可编辑选项。`
-}>
+title={helpTexts.selectionFill.fgDetail}>
                                     纯色
                                     </span>
-                                    <sp-action-button 
-                                        quiet 
-                                        className="settings-icon"
+                                    <IconButton
                                         onClick={this.toggleColorSettings}
-                                        title="打开纯色设置面板，调整纯色变化参数。"
+                                        title={helpTexts.selectionFill.fgSettings}
                                     >
                                         <SettingsIcon/>
-                                    </sp-action-button>
+                                    </IconButton>
                                 </sp-radio>
-                                <sp-radio value="pattern" className="radio-item" title="使用【图案】改写选区中的内容。">
+                                <sp-radio value="pattern" className="radio-item" title={helpTexts.selectionFill.patternRadio}>
                                     <span className="radio-item-label" 
-title={`● 图案填充模式，需要用户用系统中加载jpg、png等图片文件，作为图案的预设。
-    
-● 由于图案接口未开放，当前版本不支持PS内部的图案。
-    
-● 支持Shift，Ctrl等修改键多选管理预设。
-
-● 提供两种不同的填充方案，支持旋转与缩放；支持PNG的不透明度通道。
-
-● 当前PS没有开放预览旋转图案的接口，当开放后会跟进。`
-}>
+title={helpTexts.selectionFill.patternDetail}>
                                     图案
                                     </span>
-                                    <sp-action-button 
-                                        quiet 
-                                        className="settings-icon"
+                                    <IconButton
                                         onClick={this.openPatternPicker}
-                                        title="打开图案面板，管理图案预设，设置相关的参数。"
+                                        title={helpTexts.selectionFill.patternSettings}
                                     >
                                         <SettingsIcon/>
-                                    </sp-action-button>
+                                    </IconButton>
                                 </sp-radio>
-                                <sp-radio value="gradient" className="radio-item" title="使用【渐变】改写选区中的内容。">
+                                <sp-radio value="gradient" className="radio-item" title={helpTexts.selectionFill.gradientRadio}>
                                     <span className="radio-item-label" 
-title={`● 渐变填充模式，需要用户自行设置渐变的起始颜色、结束颜色、角度等参数，以制作渐变的预设。
-
-● 已经存在的渐变预设，可以点击选中后，修改面板中的参数以修改预设。   
-
-● 可以点击渐变条增加滑块，不透明度与颜色滑块一一对应，由于需要统一逻辑，插件中不透明度滑块白色代表100%不透明，黑色代表完全透明。
-    
-● 点击渐变预设区的空白可以取消选择。支持Shift，Ctrl等修改键多选管理预设。
-
-● 由于渐变接口未开放，当前版本不支持PS内部的渐变预设；由于浏览器的问题，渐变的种类暂时只支持线性与径向两种，未来可能会补充其他类型的渐变。`
-}>
+title={helpTexts.selectionFill.gradientDetail}>
                                     渐变
                                     </span>
-                                    <sp-action-button 
-                                        quiet 
-                                        className="settings-icon"
+                                    <IconButton
                                         onClick={this.openGradientPicker}
-                                        title="打开渐变选择器，设置渐变预设与角度等参数。"
+                                        title={helpTexts.selectionFill.gradientSettings}
                                     >
                                         <SettingsIcon/>
-                                    </sp-action-button>
+                                    </IconButton>
                                 </sp-radio>
                             </sp-radio-group>
                         </div>
-                        {/* 底部选项 */}
-                        <div className="bottom-options">
-                            {/* 大 checkbox 容器：高度 120 */}
-                            <div className="checkbox-main-container">
+                        {/* 底部checkbox选项外部容器 */}
+                        <div className="bottom-checkbox-options">
                                 {/* 左列：取消选区 / 更新历史源 */}
-                                <div className="checkbox-column">
-                                    <div className="checkbox-label-container">
+                                <div className="checkbox-column-left">
+                                    <div className="checkbox-group-left">
                                         <label
                                             htmlFor="deselectCheckbox"
                                             className="checkbox-label"
                                             onClick={this.toggleDeselectAfterFill}
-                                            title="填充完成后自动取消选区。
-取消勾选后会保留已经修改后的选区，而不是最初生成的选区。"
+                                            title={helpTexts.selectionFill.deselectLabel}
                                         >
                                             自动删选区:
                                         </label>
-                                        <label
-                                            htmlFor="historyCheckbox"
-                                            className="checkbox-label"
-                                            onClick={this.toggleAutoUpdateHistory}
-                                            title="自动把历史记录画笔的源图像设置为每次生成选区的那一刻，
-从而可以结合历史记录画笔增强或者削弱本次填充的效果。"
-                                        >
-                                            更新历史源:
-                                        </label>
-                                    </div>
-                                    <div className="checkbox-input-container">
                                         <input
                                             type='checkbox'
                                             id="deselectCheckbox"
                                             checked={this.state.deselectAfterFill}
                                             onChange={this.toggleDeselectAfterFill}
                                             className="checkbox-input"
-                                            title="切换自动取消选区的状态。"
+                                            title={helpTexts.selectionFill.deselectInput}
                                         />
+                                    </div>
+                                    <div className="checkbox-group-left">
+                                        <label
+                                            htmlFor="historyCheckbox"
+                                            className="checkbox-label"
+                                            onClick={this.toggleAutoUpdateHistory}
+                                            title={helpTexts.selectionFill.historyLabel}
+                                        >
+                                            更新历史源:
+                                        </label>
                                         <input
                                             type='checkbox'
                                             id="historyCheckbox"
                                             checked={this.state.autoUpdateHistory}
                                             onChange={this.toggleAutoUpdateHistory}
                                             className="checkbox-input"
-                                            title="切换自动更新历史记录画笔的源图像的状态。"
+                                            title={helpTexts.selectionFill.historyInput}
                                         />
                                     </div>
                                 </div>
                                 {/* 右列：开启后切套索 / 切其它工具即关 */}
-                                <div className="checkbox-column">
-                                    <div className="checkbox-label-container">
-                                         <label
+                                <div className="checkbox-column-right">
+                                    <div className="checkbox-group-right">
+                                        <label
                                             htmlFor="autoOffOnToolCheckbox"
                                             className="checkbox-label"
                                             onClick={this.toggleAutoOffOnOtherTool}
-                                            title="主开关处于开启状态时，若把当前工具切到画笔/铅笔/橡皮/混合器/油漆桶/渐变/移动/涂抹等其它工具，则自动关闭主开关。"
+                                            title={helpTexts.selectionFill.autoOffLabel}
                                         >
                                             自动关开关:
                                         </label>
-                                        <label
-                                            htmlFor="lassoOnEnableCheckbox"
-                                            className="checkbox-label"
-                                            onClick={this.toggleSwitchToLassoOnEnable}
-                                            title="主开关从「关闭」切到「开启」时，自动把当前工具切换为套索工具，便于直接框选选区。"
-                                        >
-                                            自动切套索:
-                                        </label>
-                                       
-                                    </div>
-                                    <div className="checkbox-input-container">
-                                        <input
-                                            type='checkbox'
-                                            id="lassoOnEnableCheckbox"
-                                            checked={this.state.switchToLassoOnEnable}
-                                            onChange={this.toggleSwitchToLassoOnEnable}
-                                            className="checkbox-input"
-                                            title="切换：主开关开启时自动切换为套索工具。"
-                                        />
                                         <input
                                             type='checkbox'
                                             id="autoOffOnToolCheckbox"
                                             checked={this.state.autoOffOnOtherTool}
                                             onChange={this.toggleAutoOffOnOtherTool}
                                             className="checkbox-input"
-                                            title="切换：主开关开启时切到其它工具自动关闭主开关。"
+                                            title={helpTexts.selectionFill.autoOffInput}
+                                        />
+                                    </div>
+                                    <div className="checkbox-group-right">
+                                        <label
+                                            htmlFor="lassoOnEnableCheckbox"
+                                            className="checkbox-label"
+                                            onClick={this.toggleSwitchToLassoOnEnable}
+                                            title={helpTexts.selectionFill.lassoLabel}
+                                        >
+                                            自动切套索:
+                                        </label>
+                                        <input
+                                            type='checkbox'
+                                            id="lassoOnEnableCheckbox"
+                                            checked={this.state.switchToLassoOnEnable}
+                                            onChange={this.toggleSwitchToLassoOnEnable}
+                                            className="checkbox-input"
+                                            title={helpTexts.selectionFill.lassoInput}
                                         />
                                     </div>
                                 </div>
-                            </div>
                         </div>
                     </div>
                 </div>
