@@ -6,6 +6,9 @@ import { createRoot } from 'react-dom/client';
 import App from './app';
 import { initializeTheme } from './styles/theme.ts';
 import './styles/styles.css';
+// 激活弹窗（LicenseDialog）独立样式：必须在 styles.css 之后引入，
+// 让弹窗规则排在面板规则之后（原先是组件内 <style>，注入时机最晚）。
+import './styles/license.css';
 import { defaultTheme, Provider } from '@adobe/react-spectrum';
 import ColorSettingsPanel from './components/ColorSettingsPanel';
 import PatternPicker from './components/PatternPicker';
@@ -32,14 +35,8 @@ if (container) {
   const Root = () => {
     return (
       <Provider theme={defaultTheme} colorScheme="dark">
-        <div style={{ 
-          width: '100%', 
-          height: '100%', 
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'flex-start',
-          alignItems: 'center'
-        }}>
+        {/* 布局样式见 styles.css 的 .app-root */}
+        <div className="app-root">
           <App />
         </div>
       </Provider>
@@ -58,17 +55,8 @@ if (pixelAdjustmentContainer) {
   const PixelAdjustmentRoot = () => {
     return (
       <Provider theme={defaultTheme} colorScheme="dark" height="100%">
-        <div style={{ 
-          width: '100%', 
-          height: '100%', 
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'flex-start',
-          alignItems: 'stretch',
-          backgroundColor: 'var(--bg-color)',
-          color: 'var(--text-color)',
-          overflow: 'hidden'
-        }}>
+        {/* 布局样式见 adjustment.css 的 .pixeladjustment-root */}
+        <div className="pixeladjustment-root">
           <AdjustmentPanel />
         </div>
       </Provider>

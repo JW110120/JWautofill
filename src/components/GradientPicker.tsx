@@ -1290,33 +1290,16 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                     handlePresetSelect(index, e);
                                 }}
                             >
-                                <div className="preset-preview" style={{
-                                    position: 'relative',
-                                    width: '100%',
-                                    height: '100%',
-                                    overflow: 'hidden'
-                                }}>
+                                <div className="preset-preview">
                                     {/* 棋盘格背景 */}
-                                    <div style={{
-                                        position: 'absolute',
-                                        top: 0,
-                                        left: 0,
-                                        width: '100%',
-                                        height: '100%',
-                                        zIndex: 1
-                                    }}>
+                                    <div className="opacity-checkerboard">
                                         {renderCheckerboard(50, 50, 4)}
                                     </div>
                                     {/* 渐变覆盖层 */}
-                                    <div style={{
-                                        position: 'absolute',
-                                        top: 0,
-                                        left: 0,
-                                        width: '100%',
-                                        height: '100%',
-                                        background: presetGradientStyle,
-                                        zIndex: 2
-                                    }} />
+                                    <div
+                                        className="gradient-fill-layer"
+                                        style={{ background: presetGradientStyle }}
+                                    />
                                 </div>
                             </div>
                         );
@@ -1326,7 +1309,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 <div className="gradient-icon-container">
                     <div className="icon-group">
                         <IconButton title={helpTexts.gradient.addPreset} onClick={handleAddPreset}>
-                            <AddIcon style={{ width: 15, height: 15, display: 'block' }} />
+                            <AddIcon className="icon-15" />
                         </IconButton>
                         <div className="delete-button-wrapper">
                         <div
@@ -1334,11 +1317,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             role="button"
                             tabIndex={0}
                             title={helpTexts.gradient.deletePreset}
-                            style={{
-                            cursor: ((selectedPreset === null && selectedPresets.size === 0) || presets.length === 0) ? 'not-allowed' : 'pointer',
-                            opacity: ((selectedPreset === null && selectedPresets.size === 0) || presets.length === 0) ? 0.4 : 1,
-                            marginLeft: 'auto'
-                            }}
                             onClick={() => {
                             if (selectedPresets.size > 0) {
                                 handleDeletePreset();
@@ -1347,11 +1325,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             }
                             }}
                         >
-                            <DeleteIcon style={{
-                                width: '15px',
-                                height: '15px',
-                                display: 'block'
-                            }} />
+                            <DeleteIcon className="icon-15" />
                         </div>
                         </div>
                     </div>
@@ -1408,22 +1382,13 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             role="button"
                             tabIndex={0}
                             title={helpTexts.gradient.deleteStop}
-                            style={{
-                            cursor: stops.length <= 2 ? 'not-allowed' : 'pointer',
-                            opacity: stops.length <= 2 ? 0.5 : 1,
-                            marginLeft: 'auto'
-                            }}
                             onClick={() => {
                             if (stops.length > 2) {
                                 handleRemoveStop(selectedStopIndex);
                             }
                             }}
                         >
-                            <DeleteIcon style={{
-                                width: '15px',
-                                height: '15px',
-                                display: 'block'
-                            }} />
+                            <DeleteIcon className="icon-15" />
                         </div>
                         </div>
                     </div>
@@ -1481,17 +1446,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                     <div
                                         className="midpoint-slider"
                                         style={{
-                                            position: 'absolute',
-                                            left: `${leftStop.opacityPosition + (stops[selectedStopIndex].opacityPosition - leftStop.opacityPosition) * (leftStop.midpoint || 50) / 100}%`,
-                                            top: '50%',
-                                            transform: 'translate(-50%, -50%)',
-                                            width: '6px',
-                                            height: '6px',
-                                            backgroundColor: 'white',
-                                            border: '1px solid rgb(102, 102, 102)',
-                                            borderRadius: '50%',
-                                            cursor: 'ew-resize',
-                                            zIndex: 10
+                                            left: `${leftStop.opacityPosition + (stops[selectedStopIndex].opacityPosition - leftStop.opacityPosition) * (leftStop.midpoint || 50) / 100}%`
                                         }}
                                         onMouseDown={(e) => handleOpacityMidpointMouseDown(e, leftStopIndex)}
                                     />
@@ -1508,17 +1463,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                     <div
                                         className="midpoint-slider"
                                         style={{
-                                            position: 'absolute',
-                                            left: `${stops[selectedStopIndex].opacityPosition + (rightStops[0].opacityPosition - stops[selectedStopIndex].opacityPosition) * (stops[selectedStopIndex].midpoint || 50) / 100}%`,
-                                            top: '50%',
-                                            transform: 'translate(-50%, -50%)',
-                                            width: '6px',
-                                            height: '6px',
-                                            backgroundColor: 'white',
-                                            border: '1px solid rgb(102, 102, 102)',
-                                            borderRadius: '50%',
-                                            cursor: 'ew-resize',
-                                            zIndex: 10
+                                            left: `${stops[selectedStopIndex].opacityPosition + (rightStops[0].opacityPosition - stops[selectedStopIndex].opacityPosition) * (stops[selectedStopIndex].midpoint || 50) / 100}%`
                                         }}
                                         onMouseDown={(e) => handleOpacityMidpointMouseDown(e, selectedStopIndex)}
                                     />
@@ -1530,31 +1475,12 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
 
                    {/* 渐变预览区域 */}
                    <div className="gradient-preview">
-                    <div 
-                        className="opacity-checkerboard"
-                        style={{
-                            position: 'absolute',
-                            top: 0,
-                            left: 0,
-                            width: '100%',
-                            height: '100%',
-                            overflow: 'hidden', // 裁切超出部分
-                            zIndex: 1
-                        }}
-                    >
+                    <div className="opacity-checkerboard">
                         {renderCheckerboard(220, 24)}
                     </div>
-                    <div 
-                        style={{
-                            position: 'absolute',
-                            top: 0,
-                            left: 0,
-                            right: 0,
-                            bottom: 0,
-                            background: getPreviewGradientStyle(),
-                            cursor: 'pointer',
-                            zIndex: 2
-                        }}
+                    <div
+                        className="gradient-fill-layer is-clickable"
+                        style={{ background: getPreviewGradientStyle() }}
                         onClick={handleAddStop}
                     />
                 </div>
@@ -1608,17 +1534,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                     <div
                                         className="midpoint-slider"
                                         style={{
-                                            position: 'absolute',
-                                            left: `${leftStop.colorPosition + (stops[selectedStopIndex].colorPosition - leftStop.colorPosition) * (leftStop.midpoint || 50) / 100}%`,
-                                            top: '50%',
-                                            transform: 'translate(-50%, -50%)',
-                                            width: '6px',
-                                            height: '6px',
-                                            backgroundColor: 'white',
-                                            border: '1px solid rgb(102, 102, 102)',
-                                            borderRadius: '50%',
-                                            cursor: 'ew-resize',
-                                            zIndex: 10
+                                            left: `${leftStop.colorPosition + (stops[selectedStopIndex].colorPosition - leftStop.colorPosition) * (leftStop.midpoint || 50) / 100}%`
                                         }}
                                         onMouseDown={(e) => handleColorMidpointMouseDown(e, leftStopIndex)}
                                     />
@@ -1646,17 +1562,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                     <div
                                         className="midpoint-slider"
                                         style={{
-                                            position: 'absolute',
-                                            left: `${stops[selectedStopIndex].colorPosition + (rightStop.colorPosition - stops[selectedStopIndex].colorPosition) * (stops[selectedStopIndex].midpoint || 50) / 100}%`,
-                                            top: '50%',
-                                            transform: 'translate(-50%, -50%)',
-                                            width: '6px',
-                                            height: '6px',
-                                            backgroundColor: 'white',
-                                            border: '1px solid rgb(102, 102, 102)',
-                                            borderRadius: '50%',
-                                            cursor: 'ew-resize',
-                                            zIndex: 10
+                                            left: `${stops[selectedStopIndex].colorPosition + (rightStop.colorPosition - stops[selectedStopIndex].colorPosition) * (stops[selectedStopIndex].midpoint || 50) / 100}%`
                                         }}
                                         onMouseDown={(e) => handleColorMidpointMouseDown(e, selectedStopIndex)}
                                     />
@@ -1677,16 +1583,9 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             onChange={handleColorInputChange}
                             maxLength={6}
                         />
-                        <div 
+                        <div
                             className="color-preview"
-                            style={{
-                                width: '20px',
-                                height: '20px',
-                                backgroundColor: getRGBColor(stops[selectedStopIndex].color),
-                                cursor: 'pointer',
-                                border: '1px solid var(--border-color)',
-                                borderRadius: '2px'
-                            }}
+                            style={{ backgroundColor: getRGBColor(stops[selectedStopIndex].color) }}
                             onClick={async () => {
                                 try {
                                     const result = await executeAsModal(async () => {
@@ -1723,22 +1622,13 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             role="button"
                             tabIndex={0}
                             title={helpTexts.gradient.deleteStop}
-                            style={{
-                            cursor: stops.length <= 2 ? 'not-allowed' : 'pointer',
-                            opacity: stops.length <= 2 ? 0.5 : 1,
-                            marginLeft: 'auto'
-                            }}
                             onClick={() => {
                             if (stops.length > 2) {
                                 handleRemoveStop(selectedStopIndex);
                             }
                             }}
                         >
-                            <DeleteIcon style={{
-                                width: '15px',
-                                height: '15px',
-                                display: 'block'
-                            }} />
+                            <DeleteIcon className="icon-15" />
                         </div>
                         </div>
                     </div>
@@ -1763,9 +1653,11 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     这样 .gradient-settings-area 的容器高度在两种模式下保持一致，
                     不会再出现切换径向时下拉相对容器上移/间距变化的观感。 */}
                 <div className={`gradient-setting-item gradient-angle-setting ${gradientType === 'radial' ? 'disabled' : ''}`}>
+                    {/* 光标：常态 ew-resize 由 .draggable-label 给出；径向禁用态的
+                        not-allowed 由 .gradient-angle-setting.disabled label 覆盖（特异性更高） */}
                     <label
+                        className="draggable-label"
                         onMouseDown={gradientType === 'radial' ? undefined : handleAngleMouseDown}
-                        style={{ cursor: gradientType === 'radial' ? 'not-allowed' : 'ew-resize' }}
                     >角度：</label>
                     <RangeSlider
                         min={0}
@@ -1832,57 +1724,24 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 <div className="final-preview">
                     {/* 当选中多个预设时渲染提示词 */}
                     {selectedPresets.size > 0 ? (
-                        <div style={{
-                            position: 'absolute',
-                            top: '50%',
-                            left: '50%',
-                            transform: 'translate(-50%, -50%)',
-                            color: 'rgb(102, 102, 102)',
-                            fontSize: '12px',
-                            zIndex: 3,
-                            pointerEvents: 'none'
-                        }}>
+                        <div className="final-preview-hint">
                             已选中多个预设
                         </div>
                     ) : selectedPreset === null ? (
-                        <div style={{
-                            position: 'absolute',
-                            top: '50%',
-                            left: '50%',
-                            transform: 'translate(-50%, -50%)',
-                            color: 'rgb(102, 102, 102)',
-                            fontSize: '12px',
-                            zIndex: 3,
-                            pointerEvents: 'none'
-                        }}>
+                        <div className="final-preview-hint">
                             请选择一个渐变预设
                         </div>
                     ) : (
                         <>
                             {/* 棋盘格背景 */}
-                            <div className="opacity-checkerboard" 
-                                style={{
-                                    position: 'absolute',
-                                    top: 0,
-                                    left: 0,
-                                    width: '100%',
-                                    height: '100%',
-                                    overflow: 'hidden', // 裁切超出部分
-                                    zIndex: 1
-                                }}
-                            >
+                            <div className="opacity-checkerboard">
                                 {renderCheckerboard(220, 150)}
                             </div>
                             {/* 渐变覆盖层 */}
-                            <div style={{
-                                position: 'absolute',
-                                top: 0,
-                                left: 0,
-                                width: '100%',
-                                height: '100%',
-                                background: getGradientStyle(),
-                                zIndex: 2
-                            }} />
+                            <div
+                                className="gradient-fill-layer"
+                                style={{ background: getGradientStyle() }}
+                            />
                             {/* 当渐变完全透明时显示提示 */}
                             {(() => {
                                 const hasVisibleOpacity = stops.some(stop => {
@@ -1892,16 +1751,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                 
                                 if (!hasVisibleOpacity) {
                                     return (
-                                        <div style={{
-                                            position: 'absolute',
-                                            top: '50%',
-                                            left: '50%',
-                                            transform: 'translate(-50%, -50%)',
-                                            color: 'rgb(102, 102, 102)',
-                                            fontSize: '12px',
-                                            zIndex: 3,
-                                            pointerEvents: 'none'
-                                        }}>
+                                        <div className="final-preview-hint">
                                             渐变完全透明
                                         </div>
                                     );

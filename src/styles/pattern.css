@@ -91,6 +91,39 @@
     object-fit: contain;
     display: block;
   }
+
+  /* 预设缩略图（.photo-container > img）：等比缩放居中、4px 内边距、淡入过渡。
+     ⚠️ 必须写成两级类：.photo-container img 的特异性是 (0,1,1)，
+     单类选择器压不住它的 width/height:100%。
+     opacity 仍走内联 —— 随 loadedImages 状态在 0/1 之间切换。 */
+  .photo-container .pattern-thumb-img {
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    display: block;
+    padding: 4px;
+    transition: opacity 0.2s;
+  }
+
+  /* 缩略图加载中 / 加载失败遮罩（原内联样式）。
+     ⚠️ 文字色用 --black-text-（theme.ts 里变量名末尾确实带一个短横）：
+     原内联写的是 var(--black-text)，该变量不存在 → 声明无效 → 文字继承 --text-color，
+     在白色遮罩上几乎看不见。 */
+  .pattern-thumb-loading {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background-color: rgba(255, 255, 255, 0.8);
+    border-radius: 4px;
+    color: var(--black-text-);
+  }
   
   .photo-container.selected {
     border-color: var(--primary-color);
@@ -349,21 +382,6 @@
     margin-left: auto;
   }
 
-  .zoom-select {
-    background-color: var(--bg-color);
-    border: 1px solid var(--border-color);
-    color: var(--text-color);
-    padding: 2px 6px;
-    border-radius: 3px;
-    font-size: 12px;
-    min-width: 60px;
-  }
-
-  .zoom-select:focus {
-    outline: none;
-    border-color: var(--primary-color);
-  }
-
   .pattern-subtitle {
     display: flex;
     align-items: center;
@@ -411,8 +429,14 @@
   user-select: none;
 }
 
+/* 最终预览图：以容器中心为锚点定位（top/left 50% + transform 平移居中）。
+   原内联里的 top/left/object-fit 是静态值，已搬到这里；
+   maxWidth/maxHeight（缩放）、transform（平移+旋转）、imageRendering 仍随状态走内联。 */
 .pattern-final-preview {
   position: absolute;
+  top: 50%;
+  left: 50%;
+  object-fit: contain;
   transform-origin: center center;
   max-width: none;
   max-height: none;

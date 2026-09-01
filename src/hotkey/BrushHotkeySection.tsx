@@ -15,7 +15,7 @@ import { helpTexts } from '../constants/helpTexts';
 // 由本地守护进程在全局捕获按键后直接切换笔刷，不录制动作。
 // 注意：组合键的「录制」由 native 守护进程用 Windows 全局键盘钩子完成，
 // UXP 面板只负责选笔刷 + 发指令 + 等结果；面板本身无法稳定捕获键盘事件。
-const rowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', marginTop: 8 };
+// 注：笔刷选择行的布局样式见 adjustment.css 的 .hotkey-brush-row（不再用内联 rowStyle）。
 
 // 通知自动消失时间：提示是「瞬时反馈」而非常驻说明，5 秒足够读完，
 // 也避免下一次操作后还挂着上一条早已过期的提示（例如刷新完笔刷还显示"请选择"）。
@@ -488,7 +488,7 @@ export default function BrushHotkeySection() {
             <span className="mask-sync-status-ready">
               {daemonConnected ? '快捷键服务已就绪' : (busy ? '快捷键服务处理中…' : '快捷键服务未启动')}
             </span>
-            <span style={{ flex: 1 }} />
+            <span className="mask-sync-status-spacer" />
             <div
               role="button"
               tabIndex={0}
@@ -505,7 +505,7 @@ export default function BrushHotkeySection() {
             </div>
           </div>
 
-          <div style={rowStyle}>
+          <div className="hotkey-brush-row">
             {usePicker ? (
               <BrushSelect
                 value={selectedKey}
@@ -517,10 +517,10 @@ export default function BrushHotkeySection() {
                 }}
                 placeholder="选择笔刷"
                 title={helpTexts.hotkey.brushSelect}
-                style={{ flex: '1 1 auto', minWidth: 0 }}
+                className="hotkey-brush-field"
               />
             ) : (
-              <sp-textfield size="s" placeholder="输入笔刷预设名（需与 PS 完全一致）" style={{ flex: '1 1 auto', minWidth: 0 }}
+              <sp-textfield size="s" className="hotkey-brush-field" placeholder="输入笔刷预设名（需与 PS 完全一致）"
                 value={selectedBrush} onInput={(e: any) => setSelectedBrush(e.target.value)} />
             )}
             {/* 三个图标共用一个固定宽度大容器：下拉自由伸缩，图标组恒为 3×28px，
@@ -534,7 +534,7 @@ export default function BrushHotkeySection() {
                     onClick={() => void loadBrushes(true)}
                     title={helpTexts.hotkey.refreshBrushes}
                   >
-                    <RefreshIcon style={{ width: 14, height: 14, display: 'block' }} />
+                    <RefreshIcon className="icon-14" />
                   </div>
                 )}
               </div>
@@ -546,7 +546,7 @@ export default function BrushHotkeySection() {
                   title={recording ? helpTexts.hotkey.recordCancelActive : helpTexts.hotkey.recordCancelIdle}
                   onClick={(e) => { e.stopPropagation(); if (recording) cancelRecord(); }}
                 >
-                  <StopSquareIcon style={{ width: 16, height: 16, display: 'block' }} />
+                  <StopSquareIcon className="icon-16" />
                 </div>
               </div>
               <div className="hotkey-icon-cell">
@@ -560,7 +560,7 @@ export default function BrushHotkeySection() {
                     if (!recording && selectedBrush) void startRecord();
                   }}
                 >
-                  <RecordCircleIcon style={{ width: 16, height: 16, display: 'block' }} />
+                  <RecordCircleIcon className="icon-16" />
                 </div>
               </div>
             </div>
@@ -623,7 +623,7 @@ export default function BrushHotkeySection() {
                 title={selectedIds.length === 1 ? helpTexts.hotkey.reRecordOne : helpTexts.hotkey.reRecord}
                 onClick={() => { if (selectedIds.length === 1 && !recording && daemonConnected) void reRecordEntry(); }}
               >
-                <DataRefreshIcon style={{ width: 14, height: 14, display: 'block' }} />
+                <DataRefreshIcon className="icon-14" />
               </div>
               <div
                 role="button"
@@ -634,7 +634,7 @@ export default function BrushHotkeySection() {
                   : '请先在上方单击选中要删除的快捷键'}
                 onClick={() => removeSelectedEntries()}
               >
-                <DeleteIcon style={{ width: 14, height: 14, display: 'block' }} />
+                <DeleteIcon className="icon-14" />
               </div>
             </div>
           </div>

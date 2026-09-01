@@ -1,5 +1,11 @@
 import React from 'react';
 
+/** 图标通用入参：尺寸/布局交给 CSS 类（.icon-14/.icon-15/.icon-16），style 仅作兜底。 */
+export interface IconSvgProps {
+  className?: string;
+  style?: React.CSSProperties;
+}
+
 export const ExpandIcon = ({ expanded }: { expanded: boolean }) => (
   expanded ? (
     <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18">
@@ -18,14 +24,14 @@ export const SettingsIcon = () => (
   </svg>
 );
 
-export const FileIcon = ({ style }: { style?: React.CSSProperties }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18" style={style}>
+export const FileIcon = ({ className, style }: IconSvgProps) => (
+  <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18" className={className} style={style}>
     <path className="icon-fill" d="M15.83,4H8.8545a1.17346,1.17346,0,0,1-.65-.1965L5.795,2.1965A1.17149,1.17149,0,0,0,5.146,2H2.17A1.17,1.17,0,0,0,1,3.17V13.83A1.17,1.17,0,0,0,2.17,15H15.83A1.17,1.17,0,0,0,17,13.83V5.17A1.17,1.17,0,0,0,15.83,4ZM2,5.75A.75.75,0,0,1,2.75,5h12.5a.75.75,0,0,1,.75.75V6H2Z" />
   </svg>
 );
 
-export const AddIcon = ({ style }: { style?: React.CSSProperties }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18" style={style}>
+export const AddIcon = ({ className, style }: IconSvgProps) => (
+  <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18" className={className} style={style}>
     <path className="icon-fill" d="M14.5,8H10V3.5A.5.5,0,0,0,9.5,3h-1a.5.5,0,0,0-.5.5V8H3.5a.5.5,0,0,0-.5.5v1a.5.5,0,0,0,.5.5H8v4.5a.5.5,0,0,0,.5.5h1a.5.5,0,0,0,.5-.5V10h4.5a.5.5,0,0,0,.5-.5v-1A.5.5,0,0,0,14.5,8Z" />
   </svg>
 );
@@ -33,8 +39,8 @@ export const AddIcon = ({ style }: { style?: React.CSSProperties }) => (
 /**
  * 刷新（参考 PS「S Refresh 18 N」）：双向环形箭头，颜色由父级 currentColor 控制（--text-color / hover 蓝）。
  */
-export const RefreshIcon = ({ style }: { style?: React.CSSProperties }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18" style={style}>
+export const RefreshIcon = ({ className, style }: IconSvgProps) => (
+  <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18" className={className} style={style}>
     <path fill="currentColor" d="M16.337,10H15.39a.6075.6075,0,0,0-.581.469A5.7235,5.7235,0,0,1,5.25,13.006l-.346-.3465L6.8815,10.682A.392.392,0,0,0,7,10.4a.4.4,0,0,0-.377-.4H1.25a.25.25,0,0,0-.25.25v5.375A.4.4,0,0,0,1.4,16a.3905.3905,0,0,0,.28-.118l1.8085-1.8085.178.1785a8.09048,8.09048,0,0,0,3.642,2.1655,7.715,7.715,0,0,0,9.4379-5.47434q.04733-.178.0861-.35816A.5.5,0,0,0,16.337,10Z" />
     <path fill="currentColor" d="M16.6,2a.3905.3905,0,0,0-.28.118L14.5095,3.9265l-.178-.1765a8.09048,8.09048,0,0,0-3.642-2.1655A7.715,7.715,0,0,0,1.25269,7.06072q-.04677.17612-.08519.35428A.5.5,0,0,0,1.663,8H2.61a.6075.6075,0,0,0,.581-.469A5.7235,5.7235,0,0,1,12.75,4.994l.346.3465L11.1185,7.318A.392.392,0,0,0,11,7.6a.4.4,0,0,0,.377.4H16.75A.25.25,0,0,0,17,7.75V2.377A.4.4,0,0,0,16.6,2Z" />
   </svg>
@@ -44,8 +50,8 @@ export const RefreshIcon = ({ style }: { style?: React.CSSProperties }) => (
  * 重录（参考 PS「S DataRefresh 18 N」）：数据表 + 刷新箭头，颜色由父级 currentColor 控制（--text-color / hover 蓝）。
  * 用于「重录选中单条快捷键」按钮。
  */
-export const DataRefreshIcon = ({ style }: { style?: React.CSSProperties }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18" style={style}>
+export const DataRefreshIcon = ({ className, style }: IconSvgProps) => (
+  <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18" className={className} style={style}>
     <ellipse cx="9" cy="3.5" rx="8" ry="2.5" fill="currentColor" />
     <path fill="currentColor" d="M7.4,15.1V13.45a4.80943,4.80943,0,0,1,.058-.55,6.53769,6.53769,0,0,1,.1855-.812C5.1165,11.923,1.75,11.322,1,10.135V14.5c0,1.2095,2.75,2.218,6.4,2.45Z" />
     <path fill="currentColor" d="M13.5,7.4a6.05744,6.05744,0,0,1,3.15.925l.2075-.212L17,7.967V5.135c-1.2235,1.5475-5.532,2-8,2s-7.106-.584-8-2V8.5c0,1.28,3.079,2.3335,7.047,2.4805A6.08649,6.08649,0,0,1,13.5,7.4Z" />
@@ -54,8 +60,8 @@ export const DataRefreshIcon = ({ style }: { style?: React.CSSProperties }) => (
   </svg>
 );
 
-export const DeleteIcon = ({ style }: { style?: React.CSSProperties }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18" style={style}>
+export const DeleteIcon = ({ className, style }: IconSvgProps) => (
+  <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18" className={className} style={style}>
     <path className="icon-fill" d="M15.75,3H12V2a1,1,0,0,0-1-1H6A1,1,0,0,0,5,2V3H1.25A.25.25,0,0,0,1,3.25v.5A.25.25,0,0,0,1.25,4h1L3.4565,16.55a.5.5,0,0,0,.5.45H13.046a.5.5,0,0,0,.5-.45L14.75,4h1A.25.25,0,0,0,16,3.75v-.5A.25.25,0,0,0,15.75,3ZM5.5325,14.5a.5.5,0,0,1-.53245-.46529L5,14.034l-.5355-8a.50112.50112,0,0,1,1-.067l.5355,8a.5.5,0,0,1-.46486.53283ZM9,14a.5.5,0,0,1-1,0V6A.5.5,0,0,1,9,6ZM11,3H6V2h5Zm1,11.034a.50112.50112,0,0,1-1-.067l.5355-8a.50112.50112,0,1,1,1,.067Z" />
   </svg>
 );
@@ -65,8 +71,8 @@ export const DeleteIcon = ({ style }: { style?: React.CSSProperties }) => (
  * 常态为主题色，录制中由 CSS 改为红色。几何取自 Spectrum「S Circle 18 N」但去掉透明画布矩形、
  * 固定色改为 currentColor，以跟随主题。
  */
-export const RecordCircleIcon = ({ style }: { style?: React.CSSProperties }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18" style={style}>
+export const RecordCircleIcon = ({ className, style }: IconSvgProps) => (
+  <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18" className={className} style={style}>
     <circle cx="9" cy="9" r="7" fill="currentColor" />
   </svg>
 );
@@ -75,8 +81,8 @@ export const RecordCircleIcon = ({ style }: { style?: React.CSSProperties }) => 
  * 停止/取消按钮（参考 PS「S Stop 18 N」方形停止）：圆角方块，颜色由父级 currentColor 控制，
  * 去掉文字与边框，仅作图标；录制中点击它放弃本次录制。
  */
-export const StopSquareIcon = ({ style }: { style?: React.CSSProperties }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18" style={style}>
+export const StopSquareIcon = ({ className, style }: IconSvgProps) => (
+  <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18" className={className} style={style}>
     <rect x="3" y="2" width="12" height="12" rx="0.5" fill="currentColor" />
   </svg>
 );
@@ -85,8 +91,8 @@ export const StopSquareIcon = ({ style }: { style?: React.CSSProperties }) => (
  * 立即同步（参考 PS「S Sync 18 N」环形双箭头）：颜色由父级 currentColor 控制（--text-color），
  * 无边框无背景，仅作图标。
  */
-export const SyncIcon = ({ style }: { style?: React.CSSProperties }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" height="16" viewBox="0 0 18 18" width="16" style={style}>
+export const SyncIcon = ({ className, style }: IconSvgProps) => (
+  <svg xmlns="http://www.w3.org/2000/svg" height="16" viewBox="0 0 18 18" width="16" className={className} style={style}>
     <path fill="currentColor" d="M10.5,8a.5.5,0,0,0,.5-.5v-3a.5.5,0,0,0-.5-.5H5V1.8675A.3665.3665,0,0,0,4.63451,1.5h-.004a.359.359,0,0,0-.2565.108L.0945,5.508a.36751.36751,0,0,0,0,.492L4.374,10.392a.359.359,0,0,0,.2565.108A.3665.3665,0,0,0,5,10.13651V8Z" />
     <path fill="currentColor" d="M17.9055,12,13.626,7.608a.359.359,0,0,0-.2565-.108A.3665.3665,0,0,0,13,7.86349V10H7.5a.5.5,0,0,0-.5.5v3a.5.5,0,0,0,.5.5H13v2.1325a.3665.3665,0,0,0,.36549.36751h.004a.359.359,0,0,0,.2565-.108l4.2795-3.9A.36751.36751,0,0,0,17.9055,12Z" />
   </svg>
@@ -96,8 +102,8 @@ export const SyncIcon = ({ style }: { style?: React.CSSProperties }) => (
  * 笔刷类型图标（普通画笔）。fill 用 currentColor 跟随主题（--text-color）。
  * 用户指定普通画笔使用「S AnnotatePen 18 N」图形。
  */
-export const BrushToolIcon = ({ style }: { style?: React.CSSProperties }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" height="16" viewBox="0 0 18 18" width="16" style={style}>
+export const BrushToolIcon = ({ className, style }: IconSvgProps) => (
+  <svg xmlns="http://www.w3.org/2000/svg" height="16" viewBox="0 0 18 18" width="16" className={className} style={style}>
     <path fill="currentColor" d="M14.0115,2.18A.48351.48351,0,0,0,13.99,1.5a.48151.48151,0,0,0-.68058-.0224L13.309,1.478a.781.781,0,0,0-.059.072l-.0055-.007-4.37,4.368.006.008a.36036.36036,0,0,0-.0725.0595.4965.4965,0,1,0,.762.629l.0065.0065L13.946,2.2455l-.0075-.007A.407.407,0,0,0,14.0115,2.18Z" />
     <path fill="currentColor" d="M14.9,2.9415c-.36.3605-4.7685,4.8225-4.794,4.85a1.107,1.107,0,0,1-1.181.0145l-.3835-.3625L3.143,12.737a.7498.7498,0,0,0-.1635.24L2.044,16.18a.1875.1875,0,0,0,.25.2455L5.508,15.45a.75011.75011,0,0,0,.23-.1565L16.53,4.5395Z" />
     <path fill="currentColor" d="M15.407,2.086,16.96,3.564a1.39,1.39,0,0,0-.4035-1.614,1.65,1.65,0,0,0-1.61-.53c-.0895.032.0325.15.069.1875S15.383,2.038,15.407,2.086Z" />
@@ -106,8 +112,8 @@ export const BrushToolIcon = ({ style }: { style?: React.CSSProperties }) => (
 );
 
 /** 混合器画笔图标（独立组件，使用「S Brush 18 N」图形，不再与画笔共用）。 */
-export const MixerToolIcon = ({ style }: { style?: React.CSSProperties }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" height="16" viewBox="0 0 18 18" width="16" style={style}>
+export const MixerToolIcon = ({ className, style }: IconSvgProps) => (
+  <svg xmlns="http://www.w3.org/2000/svg" height="16" viewBox="0 0 18 18" width="16" className={className} style={style}>
     <path fill="currentColor" d="M6.2545,10.515a2.46051,2.46051,0,0,0-2.0975.6,6.46753,6.46753,0,0,0-1.3395,2.391,2.80972,2.80972,0,0,1-1.68,2.386.3.3,0,0,0-.1705.356.45.45,0,0,0,.3225.329c.2925.073.6265.142.9885.2,1.3035.2045,3.74.369,5.403-.826a3.44365,3.44365,0,0,0,1.411-2.273A3.4065,3.4065,0,0,0,6.2545,10.515Z" />
     <path fill="currentColor" d="M9.95,12.05c3.6175-4.1135,8.211-9.7675,7.008-10.9705S10.773,5.488,7.19,9.415A5.02547,5.02547,0,0,1,9.95,12.05Z" />
   </svg>
@@ -116,8 +122,8 @@ export const MixerToolIcon = ({ style }: { style?: React.CSSProperties }) => (
 /**
  * 涂抹图标（参考 PS「S Engagement 18 N」）。fill 用 currentColor 跟随主题。
  */
-export const SmudgeToolIcon = ({ style }: { style?: React.CSSProperties }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" height="16" viewBox="0 0 18 18" width="16" style={style}>
+export const SmudgeToolIcon = ({ className, style }: IconSvgProps) => (
+  <svg xmlns="http://www.w3.org/2000/svg" height="16" viewBox="0 0 18 18" width="16" className={className} style={style}>
     <path fill="currentColor" d="M4.1,13.271c.021.0395.0915.1415.2.2945A27.01537,27.01537,0,0,1,6.8,18H15c.543-1.477,1.4625-4.3235.8185-5.274a2.167,2.167,0,0,0-1.228-.618,3.9497,3.9497,0,0,1-.2945-.3245,1.68,1.68,0,0,0-.9895-.618,3.38582,3.38582,0,0,0-.554-.0085.68851.68851,0,0,1-.6655-.364,1.564,1.564,0,0,0-.906-.554c-.3845-.062-.5865.1955-.828.1795-.2-.087-.2575-.708-.2575-.708V5.522a1.0355,1.0355,0,1,0-2.0525,0V11.05a4.86664,4.86664,0,0,1-.3635,1.8525c-.057.112-.288.4175-.408.5865a7.06959,7.06959,0,0,1-1.6805-1.8,2.757,2.757,0,0,0-1.26-1.218.77249.77249,0,0,0-.858.1125c-.7.43-.117,1.4165.394,2.286C3.953,13.0185,4.0355,13.1545,4.1,13.271Z" />
     <path fill="currentColor" d="M9,.75A4.872,4.872,0,0,0,6.375,9.7285V8.3a3.75,3.75,0,1,1,5.303-.053l-.053.053V9.729A4.872,4.872,0,0,0,9,.75Z" />
   </svg>
@@ -127,8 +133,8 @@ export const SmudgeToolIcon = ({ style }: { style?: React.CSSProperties }) => (
  * 图案图章图标（用户提供 PS「S CloneStamp 18 N」图形）。fill 用 currentColor 跟随主题
  * （--text-color / hover 蓝），与笔刷类型其它图标一致；去掉透明画布矩形，固定色改为 currentColor。
  */
-export const CloneStampIcon = ({ style }: { style?: React.CSSProperties }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" height="16" viewBox="0 0 18 18" width="16" style={style}>
+export const CloneStampIcon = ({ className, style }: IconSvgProps) => (
+  <svg xmlns="http://www.w3.org/2000/svg" height="16" viewBox="0 0 18 18" width="16" className={className} style={style}>
     <path fill="currentColor" d="M10.3235,10.81A14.99435,14.99435,0,0,1,9.938,8.221a4.98554,4.98554,0,0,1,.306-1.4725,2.8775,2.8775,0,0,0,1.8155-2.874,3.0555,3.0555,0,0,0-6.111-.00068V3.8745A2.874,2.874,0,0,0,7.754,6.7465,5.23327,5.23327,0,0,1,8.065,8.221a15.69591,15.69591,0,0,1-.3885,2.5895,52.68094,52.68094,0,0,0-6.24,1.1755A.573.573,0,0,0,1,12.55v1.8645a.5765.5765,0,0,0,.56742.58544L1.573,15H16.4285A.577.577,0,0,0,17,14.418V12.55a.573.573,0,0,0-.4365-.5655A52.95552,52.95552,0,0,0,10.3235,10.81Z" />
     <rect fill="currentColor" height="1" rx="0.25" width="14" x="2" y="16" />
   </svg>

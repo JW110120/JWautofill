@@ -1656,8 +1656,10 @@ interface PatternPickerProps {
                                 handlePatternSelect(pattern.id, e);
                             }}
                         >
-                            <img 
-                                src={getPreviewUrl(pattern)} 
+                            {/* 静态布局见 .pattern-thumb-img；这里只留随加载状态切换的 opacity */}
+                            <img
+                                className="pattern-thumb-img"
+                                src={getPreviewUrl(pattern)}
                                 alt={pattern.name}
                                 onLoad={async (e) => {
                                     const img = e.currentTarget;
@@ -1684,32 +1686,10 @@ interface PatternPickerProps {
                                     console.error(`图片加载失败 - ${pattern.name}:`, e);
                                     setLoadedImages(prev => ({...prev, [pattern.id]: false}));
                                 }}
-                                style={{
-                                    maxWidth: '100%',
-                                    maxHeight: '100%',
-                                    width: 'auto',
-                                    height: 'auto',
-                                    objectFit: 'contain',
-                                    display: 'block', // 移除条件显示
-                                    opacity: loadedImages[pattern.id] ? 1 : 0, // 使用透明度来控制显示
-                                    transition: 'opacity 0.2s',
-                                    padding: '4px'
-                                }}
+                                style={{ opacity: loadedImages[pattern.id] ? 1 : 0 }}
                             />
                             {(!loadedImages[pattern.id] && loadedImages[pattern.id] !== true) && ( // 修改判断条件
-                                <div style={{
-                                    position: 'absolute',
-                                    top: '0%',
-                                    left: '0%',
-                                    width: '100%',
-                                    height: '100%',
-                                    display: 'flex',
-                                    justifyContent: 'center',
-                                    alignItems: 'center',
-                                    backgroundColor: 'rgba(255,255,255,0.8)',
-                                    borderRadius: '4px',
-                                    color: 'var(--black-text)',
-                                }}>
+                                <div className="pattern-thumb-loading">
                                     {loadedImages[pattern.id] === false ? '加载失败' : '加载中...'}
                                 </div>
                             )}
@@ -1719,7 +1699,7 @@ interface PatternPickerProps {
                      <div className="pattern-icon-container">
                         <div className="icon-group">
                             <IconButton title={helpTexts.pattern.selectFile} onClick={handleFileSelect}>
-                                <FileIcon style={{ width: 15, height: 15, display: 'block' }} />
+                                <FileIcon className="icon-15" />
                             </IconButton>
                             <div className="delete-button-wrapper">
                             <div
@@ -1727,21 +1707,13 @@ interface PatternPickerProps {
                                 role="button"
                                 tabIndex={0}
                                 title={helpTexts.pattern.deletePattern}
-                                style={{
-                                    cursor: (!selectedPattern && selectedPatterns.size === 0) ? 'not-allowed' : 'pointer',
-                                    opacity: (!selectedPattern && selectedPatterns.size === 0) ? 0.4 : 1
-                                }}
                                 onClick={() => {
                                     if (selectedPatterns.size > 0 || selectedPattern) {
                                         handleDelete();
                                     }
                                 }}
                             >
-                                <DeleteIcon style={{
-                                    width: '15px',
-                                    height: '15px',
-                                    display: 'block'
-                                }} />
+                                <DeleteIcon className="icon-15" />
                             </div>
                         </div>
                         </div>
@@ -1887,7 +1859,8 @@ interface PatternPickerProps {
                         </div>
                     )}
                 </div>
-                <div 
+                {/* .preview-wrapper 已提供 overflow/position，内联只留随拖拽状态变化的光标 */}
+                <div
                     className="preview-wrapper"
                     ref={previewWrapperRef}
                     onWheel={selectedPattern ? handlePreviewWheel : undefined}
@@ -1895,9 +1868,7 @@ interface PatternPickerProps {
                     onMouseMove={selectedPattern ? handlePreviewMouseMove : undefined}
                     onMouseUp={selectedPattern ? handlePreviewMouseUp : undefined}
                     style={{
-                        cursor: selectedPattern && previewZoom > 100 ? (isPreviewDragging ? 'grabbing' : 'grab') : 'default',
-                        overflow: 'hidden',
-                        position: 'relative'
+                        cursor: selectedPattern && previewZoom > 100 ? (isPreviewDragging ? 'grabbing' : 'grab') : 'default'
                     }}
                 >
                     {selectedPattern ? (
@@ -1907,16 +1878,9 @@ interface PatternPickerProps {
                                 src={patterns.find(p => p.id === selectedPattern) ? getPreviewUrl(patterns.find(p => p.id === selectedPattern)!) : ''}
                                 alt="Pattern Preview"
                                 style={{
-                                    position: 'absolute',
-                                    top: '50%',
-                                    left: '50%',
                                     maxWidth: `${previewZoom * (scale / 100)}%`,
                                     maxHeight: `${previewZoom * (scale / 100)}%`,
-                                    width: 'auto',
-                                    height: 'auto',
-                                    objectFit: 'contain',
                                     transform: `translate(-50%, -50%) translate(${previewOffset.x}px, ${previewOffset.y}px) rotate(${angle}deg)`,
-                                    transformOrigin: 'center center',
                                     imageRendering: previewZoom > 400 ? 'pixelated' : 'auto'
                                 }}
                             />
@@ -1927,16 +1891,7 @@ interface PatternPickerProps {
                             )}
                         </>
                     ) : (
-                        <div style={{
-                            position: 'absolute',
-                            top: '50%',
-                            left: '50%',
-                            transform: 'translate(-50%, -50%)',
-                            color: 'rgb(102, 102, 102)',
-                            fontSize: '12px',
-                            zIndex: 3,
-                            pointerEvents: 'none'
-                        }}>
+                        <div className="final-preview-hint">
                             请选择一个图案预设
                         </div>
                     )}

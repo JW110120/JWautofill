@@ -3,6 +3,8 @@
 @import './pattern.css';
 @import './stroke.css';
 @import './input-fix.css';
+/* 注：激活弹窗样式在 src/styles/license.css，由 index.tsx 在 styles.css 之后单独引入，
+   以保证它的层叠顺序排在主面板样式之后（弹窗原本用组件内 <style> 最后注入）。 */
 @font-face {
   font-family: 'SourceHanSansCN-Normal';
   src: url('../assets/SourceHanSansCN-Normal.otf') format('opentype');
@@ -20,6 +22,16 @@ html, body {
   font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
   background-color: var(--bg-color);
   color: var(--text-color);
+}
+
+/* 主面板根容器（index.tsx 中 #app 内的包裹层） */
+.app-root {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
 }
 
 /* ==========================================================================
@@ -144,6 +156,42 @@ html, body {
   fill: var(--text-color);
 }
 
+/* 图标尺寸三档（原为各面板散落的内联 style={{ width/height/display }}）。
+   尺寸收敛为 14 / 15 / 16 三档，调用处写 className="icon-15" 即可。 */
+.icon-14,
+.icon-15,
+.icon-16 {
+  display: block;
+}
+
+.icon-14 {
+  width: 14px;
+  height: 14px;
+}
+
+.icon-15 {
+  width: 15px;
+  height: 15px;
+}
+
+.icon-16 {
+  width: 16px;
+  height: 16px;
+}
+
+/* 预览区居中灰字提示，渐变面板（多选预设 / 未选预设 / 渐变全透明）与
+   图案面板（未选图案）共用，原为重复四遍的内联样式。 */
+.final-preview-hint {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: rgb(102, 102, 102);
+  font-size: 12px;
+  z-index: 3;
+  pointer-events: none;
+}
+
 /* 与绘画工具箱「垃圾桶」同一套图标按钮样式：透明背景、无边框、--text-color 图标、
    hover 变蓝（--hover-icon）、点击轻微缩放、禁用态灰显。主面板齿轮（设置）按钮复用此样式，
    使两个面板视觉一致。 */
@@ -187,6 +235,20 @@ html, body {
 
 .hotkey-icon-button.disabled:hover {
   color: var(--disabled-color);
+}
+
+/* 「删除」图标按钮（渐变预设 / 渐变色标 / 图案预设三处共用 .delete-button-wrapper）：
+   - margin-left:auto：在图标行内右对齐（原内联）
+   - 禁用态整体半透明（原内联 opacity:0.4，渐变色标处原为 0.5，统一为 0.4）
+   ⚠️ cursor 原本也是内联的，但 .hotkey-icon-button 已给 pointer、
+     .hotkey-icon-button.disabled 已给 not-allowed，那份内联纯属重复，已删除。
+   透明度规则只作用于 .delete-button-wrapper 内部，不影响其它面板的 .disabled 图标按钮。 */
+.delete-button-wrapper .hotkey-icon-button {
+  margin-left: auto;
+}
+
+.delete-button-wrapper .hotkey-icon-button.disabled {
+  opacity: 0.4;
 }
 
 uxp-panel[panelid="com.listen2me.pixeladjustment"],
@@ -594,25 +656,6 @@ sp-switch {
   justify-content: flex-start;
 }
 
-.stroke-settings-icon {
-  display: flex;
-  align-items: center;
-  line-height: 24px;
-  width: 24px;
-}
-
-.stroke-settings-icon:hover .icon-fill {
-  fill: var(--hover-icon);
-}
-
-.stroke-settings-icon:active {
-  background-color: var(--button-down);
-}
-
-.stroke-settings-icon-path {
-  fill: var(--text-color);
-}
-
 .stroke-color-preview {
   width: 20px;
   height: 20px;
@@ -679,20 +722,6 @@ sp-radio {
 .radio-item-label {
   display: inline-flex;
   align-items: center;
-}
-
-.settings-icon {
-  display: inline-flex;
-  align-items: center;
-  width: 32px;
-}
-
-.settings-icon:hover .icon-fill {
-  fill: var(--hover-icon);
-}
-
-.settings-icon:active {
-  background-color: var(--button-down);
 }
 
 .info-plane {

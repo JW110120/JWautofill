@@ -22,7 +22,7 @@ export interface IconButtonProps {
  *
  * 用法：
  *   <IconButton title="添加预设" onClick={handleAddPreset}>
- *     <AddIcon style={{ width: 15, height: 15, display: 'block' }} />
+ *     <AddIcon className="icon-15" />
  *   </IconButton>
  */
 export default function IconButton({ onClick, title, disabled, children, className = '', style }: IconButtonProps) {

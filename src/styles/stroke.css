@@ -101,14 +101,6 @@
 
 
 /*位置*/
-.stroke-subtitle {
-  margin-top: 15px;
-}
-.stroke-subtitle h3{
-  margin: 5px;
-  font-size: 13px;
-  color: var(--text-color);
-}
 
 
 
@@ -150,9 +142,6 @@
   margin-right: 45px; /* 调整间距值 */
 }
 
-.position-radio-item-label {
-  align-items: center;
-}
 
 
 
@@ -196,6 +185,18 @@
   min-width: 60px;
   font-size: 14px;
   color: var(--text-color);
+}
+
+/* 可横向拖拽调值的标签（宽度/不透明度）：手型 + 禁止选中文本。
+   宽度标签原本靠 .stroke-wide-container label 拿到同样两条属性（特异性更高，不受影响）。 */
+.stroke-label {
+  cursor: ew-resize;
+  user-select: none;
+}
+
+/* 不透明度标签与右侧滑块之间的间距（原为内联 marginRight:5px） */
+.stroke-opacity-control .stroke-label {
+  margin-right: 5px;
 }
 
 .stroke-opacity-control .stroke-opacity-range {

@@ -4,7 +4,6 @@ import { getPopRoot } from '../utils/popRoot';
 import {
   createOcclusionSession,
   estimatePopRect,
-  POP_LAYER_STYLE,
 } from '../utils/popOverlay';
 
 // 通用自绘下拉：与调整面板里的自绘下拉（MaskSyncSelect / BrushSelect）共用同一套
@@ -181,7 +180,7 @@ export default function Select({
         <div
           ref={popRef}
           className="mask-sync-select-pop"
-          style={{ left: pos.left, top: pos.top, width: pos.width, ...POP_LAYER_STYLE }}
+          style={{ left: pos.left, top: pos.top, width: pos.width }}
         >
           {groups ? (
             groups.map((g, gi) => (

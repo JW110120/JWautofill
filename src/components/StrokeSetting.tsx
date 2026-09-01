@@ -169,10 +169,9 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         )} 
         
         <div className="stroke-opacity-control">
-          <label 
+          <label
             className={`stroke-label ${isDragging && dragTarget === 'opacity' ? 'dragging' : 'not-dragging'}`}
             onMouseDown={(e) => handleLabelMouseDown(e, 'opacity')}
-            style={{ cursor: 'ew-resize', marginRight:'5px', userSelect: 'none' }}
           >
             不透明度
           </label>

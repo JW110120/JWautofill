@@ -108,9 +108,40 @@
 }
 
 .preset-preview {
+    position: relative;
     width: 100%;
     height: 100%;
+    overflow: hidden;
 }
+
+/* 渐变预览内部的「棋盘格底层」与「渐变覆盖层」。
+   两层原本都靠内联 style 叠绝对定位（preset 预览 / 上方渐变预览 / 最终预览三处复用），
+   这里收敛成两个通用类：棋盘格层 z-index:1，渐变层 z-index:2（保持原层级顺序）。 */
+.opacity-checkerboard {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    z-index: 1;
+}
+
+.gradient-fill-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 2;
+}
+
+/* 可点击的渐变层（点击即在预览条上新增色标） */
+.gradient-fill-layer.is-clickable {
+    cursor: pointer;
+}
+
+/* 「预览区居中的灰字提示」样式（渐变与图案面板共用）在 styles.css 的 .final-preview-hint */
 
 .gradient-icon-container {
     position: relative;
@@ -287,17 +318,29 @@
   background-image: none;
 }
 
+/* 色值输入框右侧的当前色小方块（可点击唤起 PS 取色器）。
+   宽高/光标/边框/圆角原为内联样式，仅 backgroundColor 随色标动态变化、仍走内联。 */
 .color-preview {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border-color);
   border-radius: 2px;
+  cursor: pointer;
 }
 
-.color-picker-container {
-  position: sticky;
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  width: 200px;
-  height: 160px;
+/* 渐变/透明度中点滑块：静态外观收口到此（原四处内联重复样式），
+   仅 left 由各 stop 位置动态计算、仍走内联。 */
+.midpoint-slider {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 6px;
+  height: 6px;
+  background: white;
+  border: 1px solid rgb(102, 102, 102);
+  border-radius: 50%;
+  cursor: ew-resize;
+  z-index: 10;
 }
 
 sp-color-area {

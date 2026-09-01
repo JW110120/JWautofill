@@ -1,4 +1,18 @@
 /* 调整面板样式 */
+
+/* 绘画工具箱根容器（index.tsx 中 #pixeladjustment 内的包裹层） */
+.pixeladjustment-root {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: stretch;
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  overflow: hidden;
+}
+
 /* 授权/试用状态提示样式。
    ⚠️ .adjustment-container 是 flex 列 + overflow-y:auto，默认 flex-shrink:1 会让本卡片在
    下方分区展开、内容超出高度时被纵向压缩到只剩文字高度。
@@ -489,6 +503,18 @@
   cursor: pointer;
 }
 
+/* 开关与文字标签间距（margin 实现，UXP 不支持 flex gap）；原各处内联 marginLeft:8px 收口到此 */
+.adjustment-swtich-container > sp-switch {
+  margin-left: 8px;
+}
+
+/* 独立左对齐开关（如木刻预览）：覆盖默认居中 + 固定宽度，并上留 6px（原内联 style 收口到此） */
+.adjustment-swtich-align-left {
+  justify-content: flex-start;
+  width: auto;
+  margin-top: 6px;
+}
+
 /* 滑块最外级容器，内部可能包含若干个滑块组 */
 .adjustment-slider-container {
   width: 100%;
@@ -665,20 +691,6 @@
   vertical-align: middle;
 }
 
-.adjustment-select {
-  position: relative;
-  z-index: auto;
-  width: 170px;
-  height: 24px;
-  color: var(--text-color);
-  font-size: 12px;
-  background: var(--bg-color);
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-  margin-left: auto;
-  margin-right: -2px;
-}
-
 /* 单位标签：与主面板滑块单位符号容器 .num-unit 完全一致的样式
    （font-size 13 / 主题色 / 不换行 / 内容宽度不伸缩）。
    去掉 opacity:0.8 —— 否则单位符号比主面板暗一截，两面板观感不统一。
@@ -703,11 +715,10 @@
   margin: 15px 10px 15px -10px;
 }
 
-/* 按钮三档宽度：按按钮汉字字数 2 / 4 / 6 分级。
-   各档均使用 box-sizing: border-box + 左右 padding，保证文字与按钮左右边框有足够边距。
+/* 按钮宽度分档：按按钮汉字字数精确分级，均使用 box-sizing: border-box + 无内边距。
    - 4 字档为 .adjustment-button 默认（width: 80px + padding 0 10px）；
-   - 2 字档 .adjustment-button-lv2；
-   - 6 字档 .adjustment-button-wide。 */
+   - 2 字档 .adjustment-button-lv2（width: 46px）；
+   - 5/7/8 字档 .adjustment-button-5/-7/-8（85/111/124px）。 */
 .adjustment-button-lv2 {
   /* 2 字档：width = 13×2 + 20 = 46px，无内边距 */
   width: 46px;
@@ -1134,10 +1145,6 @@
   margin-bottom: 2px;
 }
 
-.mask-sync-row-wrap {
-  row-gap: 5px;
-}
-
 /* 标签统一宽度（4 个汉字宽），与下拉控件之间 6px 间距 */
 .mask-sync-label {
   color: var(--text-color);
@@ -1287,6 +1294,9 @@
      变量"已定义但为空"时不触发 fallback → 选中背景变透明。这里局部重声明，
      让 .sel 子元素取到的是我们自己的主色蓝。 */
   --primary-color: rgb(38, 128, 235);
+  /* 强制独立合成层（UXP 偶发弹层闪烁/重绘异常）；原内联 POP_LAYER_STYLE 已收口到此 */
+  transform: translateZ(0);
+  will-change: transform;
 }
 
 .mask-sync-select-opt {
@@ -1380,6 +1390,11 @@
   margin-top: 2px;
 }
 
+/* 底部同步/删除图标按钮间距（原内联 marginLeft:4 收口到此） */
+.mask-sync-footer .hotkey-icon-button {
+  margin-left: 4px;
+}
+
 /* 立即同步按钮与删除按钮之间的间距（margin 实现，UXP 不支持 flex gap） */
 /* 同步开关左对齐（覆盖 adjustment-swtich-container 默认居中） */
 .mask-sync-switch {
@@ -1387,4 +1402,33 @@
   min-width: 0;
   justify-content: flex-start;
   width: auto;
+}
+
+/* ==========================================================================
+   笔刷热键分区：从 BrushHotkeySection.tsx 内联样式搬来的静态布局
+   ========================================================================== */
+
+/* 笔刷选择行：下拉（或手动输入框）与右侧三个图标按钮同一行居中对齐
+   （原为 const rowStyle = { display:flex, alignItems:center, marginTop:8 }） */
+.hotkey-brush-row {
+  display: flex;
+  align-items: center;
+  margin-top: 8px;
+}
+
+/* 行内的笔刷下拉 / 手动输入框：占满图标组之外的剩余宽度，且允许收缩到 0，
+   避免长笔刷名把图标组挤出容器（原内联 flex:1 1 auto + minWidth:0） */
+.hotkey-brush-field {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 守护进程状态条里的弹性占位：把右侧「启动/停止快捷键服务」按钮推到最右 */
+.mask-sync-status-spacer {
+  flex: 1 1 auto;
+}
+
+/* 重录按钮与删除按钮之间的间距（margin 实现，UXP 不支持 flex gap） */
+.hotkey-entry-actions .hotkey-icon-button {
+  margin-right: 4px;
 }

@@ -4,7 +4,6 @@ import { getPopRoot } from '../utils/popRoot';
 import {
   createOcclusionSession,
   estimatePopRect,
-  POP_LAYER_STYLE,
 } from '../utils/popOverlay';
 import { processBlockAverage } from './blockAverageProcessor';
 import { processBlockGradient } from './blockGradientProcessor';
@@ -1100,7 +1099,7 @@ const MaskSyncSelect: React.FC<{
         <div
           ref={popRef}
           className="mask-sync-select-pop"
-          style={{ left: pos.left, top: pos.top, width: pos.width, ...POP_LAYER_STYLE }}
+          style={{ left: pos.left, top: pos.top, width: pos.width }}
         >
           {options.map(o => (
             <div
@@ -2717,13 +2716,11 @@ const renderDetailAdjustContent = () => (
         <label
           className="adjustment-swtich-label"
           onClick={() => setUsePowerfulMode(!usePowerfulMode)}
-          style={{ cursor: 'pointer' }}
           title={helpTexts.adjustment.powerfulMode}
         >强力模式</label>
         <sp-switch
           checked={usePowerfulMode}
           onChange={(e) => setUsePowerfulMode((e.target as HTMLInputElement).checked)}
-          style={{ marginLeft: '8px' }}
         />
       </div>
     </div>
@@ -3019,10 +3016,9 @@ const renderMaskSyncContent = () => (
         <div className="mask-sync-row mask-sync-invert-row">
           <label
             className="mask-sync-checkbox"
-            style={{ color: 'var(--text-color)' }}
             title={helpTexts.adjustment.maskSyncInvert}
           >
-            <span style={{ color: 'var(--text-color)' }}>反相</span>
+            <span>反相</span>
             <input
               type="checkbox"
               checked={task.invert}
@@ -3047,16 +3043,14 @@ const renderMaskSyncContent = () => (
 
         {/* 部分三：同步开关 + 立即同步 + 删除 */}
         <div className="mask-sync-footer">
-          <div className="adjustment-swtich-container mask-sync-switch" style={{ width: 'auto', marginBottom: 0 }}>
+          <div className="adjustment-swtich-container mask-sync-switch">
             <label
               className="adjustment-swtich-label"
-              style={{ cursor: 'pointer' }}
               title={helpTexts.adjustment.maskSyncEnabled}
             >同步</label>
             <sp-switch
               checked={task.enabled}
               onChange={(e) => handleMaskSyncEnabledChange(task, (e.target as HTMLInputElement).checked)}
-              style={{ marginLeft: '8px' }}
             />
           </div>
           {/* 立即同步：改成与刷新一致的无边框图标按钮（--text-color / 16px），不再显示文字。
@@ -3068,11 +3062,10 @@ const renderMaskSyncContent = () => (
                 role="button"
                 tabIndex={0}
                 className={`hotkey-icon-button${syncDisabled ? ' disabled' : ''}`}
-                style={{ marginLeft: 4 }}
                 title={syncDisabled ? helpTexts.adjustment.maskSyncNowDisabled : helpTexts.adjustment.maskSyncNow}
                 onClick={() => { if (!syncDisabled) handleMaskSyncNow(task); }}
               >
-                <SyncIcon style={{ width: 16, height: 16, display: 'block' }} />
+                <SyncIcon className="icon-16" />
               </div>
             );
           })()}
@@ -3081,11 +3074,10 @@ const renderMaskSyncContent = () => (
             role="button"
             tabIndex={0}
             className="hotkey-icon-button"
-            style={{ marginLeft: 4 }}
             onClick={() => handleMaskSyncRemove(task.id)}
             title={helpTexts.adjustment.maskSyncDelete}
           >
-            <DeleteIcon style={{ width: 16, height: 16, display: 'block' }} />
+            <DeleteIcon className="icon-16" />
           </div>
         </div>
       </div>
@@ -3174,13 +3166,11 @@ const renderQuickActionContent = () => (
         <label 
           className="adjustment-swtich-label"
           onClick={() => setUseWeightedAverage(!useWeightedAverage)}
-          style={{ cursor: 'pointer' }}
           title={helpTexts.adjustment.weightedMode}
         >加权模式</label>
         <sp-switch 
           checked={useWeightedAverage}
           onChange={(e) => setUseWeightedAverage(e.target.checked)}
-          style={{ marginLeft: '8px' }}
         />
       </div>
     </div>
@@ -3274,17 +3264,15 @@ const renderQuickActionContent = () => (
       </div>
     </div>
     
-    <div className="adjustment-swtich-container" style={{ marginTop: '6px', justifyContent: 'flex-start', width: 'auto' }}>
+    <div className="adjustment-swtich-container adjustment-swtich-align-left">
         <label
           className="adjustment-swtich-label"
           onClick={() => setSpecialWoodcutPreview(!specialWoodcutPreview)}
-          style={{ cursor: 'pointer' }}
           title={helpTexts.adjustment.woodcutPreview}
         >预览</label>
         <sp-switch
           checked={specialWoodcutPreview}
           onChange={(e) => setSpecialWoodcutPreview(e.target.checked)}
-          style={{ marginLeft: '8px' }}
         />
     </div>
 

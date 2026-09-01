@@ -261,17 +261,6 @@ export function createOcclusionSession(): OcclusionSession {
 }
 
 /**
- * 弹层内联样式：尽最大可能抬升渲染层级。
- * 说明：对「可编辑控件」无效（见文件头注释），但对滑块 thumb、sticky 面板等
- * 普通 DOM 有效；translateZ(0) 额外强制生成独立合成层。
- */
-export const POP_LAYER_STYLE: React.CSSProperties = {
-  zIndex: 99998,
-  transform: 'translateZ(0)',
-  willChange: 'transform',
-};
-
-/**
  * 兜底矩形：UXP 偶发在刚插入 DOM 时 getBoundingClientRect 返回 0 尺寸，
  * 此时用「已知定位 + 估算高度」代替，保证遮挡判断不至于整体失效。
  */

@@ -17,10 +17,11 @@ interface Props {
   onChange: (v: string) => void;
   placeholder?: string;
   title?: string;
+  className?: string;
   style?: React.CSSProperties;
 }
 
-export default function BrushSelect({ value, options, onChange, placeholder, title, style }: Props) {
+export default function BrushSelect({ value, options, onChange, placeholder, title, className, style }: Props) {
   const mapped: SelectOption[] = options.map(o => ({
     value: o.value,
     label: o.main,
