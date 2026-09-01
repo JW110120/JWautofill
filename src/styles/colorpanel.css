@@ -48,7 +48,15 @@
     box-sizing: border-box;
   }
 
-  .colorsettings-slider-header {
+  /* 单个滑块整体容器：parameter-collection + 滑块本体（套娃第二层） */
+  .colorsettings-entire-slider {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+  }
+
+  /* 标签 + 数值 + 单位 同行容器（套娃第一层，原 colorsettings-slider-header） */
+  .colorsettings-slider-parameter-collection {
     display: flex;
     flex-direction: row;
     justify-content: space-between;
@@ -64,7 +72,7 @@
   }
 
   .colorsettings-slider-item input[type="number"] {
-    width: 40px;
+    width: 35px;
     display: inline-block;
     text-align: justify;
     appearance: none;

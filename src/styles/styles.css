@@ -277,6 +277,18 @@ sp-radio[disabled] {
   justify-content: center;
 }
 
+/* 滑块三层容器结构（选区填充面板）：
+   slider-container（外层卡片）> selection-fill-slider-group（组）> entire-slider（单个滑块）> slider-parameter-collection（标签+数值+单位）
+   混合模式容器在 slider-container 外部，margin-bottom:-10px 骑在卡片上边缘 */
+.entire-slider {
+  width: 100%;
+}
+
+.slider-parameter-collection {
+  width: calc(100% - 20px);
+  margin:0 auto;
+}
+
 
 .expand-section {
   background-color:var(--bg-color);
@@ -344,7 +356,7 @@ sp-radio[disabled] {
 }
 
 .selection-slider-item input[type="number"]  {
-  width: 44px;
+  /* 宽度统一改由 .slider-number-input 控制（原 44px 已移除） */
   appearance: none;
   -webkit-appearance: none;
   box-sizing: border-box;
@@ -790,4 +802,12 @@ sp-action-button {
      表现为输入框整体下沉、下边框越界；统一 22px 高度并 vertical-align:middle 消除该间隙。 */
   height: 22px;
   vertical-align: middle;
+}
+
+/* 主面板滑块数字输入统一类（不透明度/羽化/平滑/锐度/扩散 + 描边宽度/不透明度）。
+   外观、边框、背景、高度由上方 #app input[type="number"] 统一提供，这里只控宽度与层级；
+   35px：提交 94266de 为修输入框越界/三位数显示不全拉宽到 46px，实测过宽，两面板所有数字输入统一缩到 35px。 */
+.slider-number-input {
+  width: 35px;
+  z-index: 1;
 }

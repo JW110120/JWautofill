@@ -131,7 +131,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
               step="0.5"
               value={width}
               onChange={(e) => onWidthChange(Number(e.target.value))}
-              style={{ marginLeft:'-5px', width: '24px', textAlign: 'center' }}
+              className="slider-number-input"
             />
            <span>px</span>
           </div>
@@ -190,7 +190,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
               max="100"
               value={opacity}
               onChange={(e) => onOpacityChange(Number(e.target.value))}
-              style={{ width: '30px', textAlign: 'center' }}
+              className="slider-number-input"
             />
           <span style={{ marginLeft:'-20px', fontSize: '13px' }}>%</span>
           </div>

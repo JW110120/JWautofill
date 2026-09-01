@@ -1752,6 +1752,8 @@ interface PatternPickerProps {
             <div className="pattern-settings-area">
                 <div className="pattern-setting-item-group">
                     <div className="pattern-setting-item">
+                        <div className="pattern-entire-slider">
+                        <div className="pattern-slider-parameter-collection">
                         <label onMouseDown={(e) => handleMouseDown(e, 'angle')} style={{ cursor: isSliderDragging && dragTarget === 'angle' ? 'ew-resize' : 'ew-resize' }}>角度：
                             <div>
                             <input
@@ -1764,6 +1766,7 @@ interface PatternPickerProps {
                             <span>°</span>
                             </div>
                         </label>
+                        </div>
 
                         <RangeSlider
                             min={0}
@@ -1774,9 +1777,12 @@ interface PatternPickerProps {
                             onChange={(v) => setAngle(v)}
                             onDragEnd={() => { if (selectedPattern) updatePatternTransform(selectedPattern, scale, angle); }}
                         />
+                        </div>
                     </div>
 
                     <div className="pattern-setting-item">
+                        <div className="pattern-entire-slider">
+                        <div className="pattern-slider-parameter-collection">
                         <label onMouseDown={(e) => handleMouseDown(e, 'scale')} style={{ cursor: isSliderDragging && dragTarget === 'scale' ? 'ew-resize' : 'ew-resize' }}>缩放：
                             <div>
                                 <input
@@ -1789,6 +1795,7 @@ interface PatternPickerProps {
                                 <span>%</span>
                             </div>
                         </label>
+                        </div>
                         <RangeSlider
                             min={20}
                             max={300}
@@ -1798,6 +1805,7 @@ interface PatternPickerProps {
                             onChange={(v) => setScale(v)}
                             onDragEnd={() => { if (selectedPattern) updatePatternTransform(selectedPattern, scale, angle); }}
                         />
+                        </div>
                     </div>
                 </div>
                

@@ -39,34 +39,36 @@ const SliderControl: React.FC<SliderControlProps> = ({
 
     return (
         <div className="colorsettings-slider-item">
-            <div className="colorsettings-slider-header">
-                <label
-                    className={`colorsettings-slider-label ${isDraggingActive ? 'dragging' : 'not-dragging'}`}
-                    onMouseDown={(e) => onLabelMouseDown(e, settingKey)}
-                >
-                    {label}
-                </label>
+            <div className="colorsettings-entire-slider">
+                <div className="colorsettings-slider-parameter-collection">
+                    <label
+                        className={`colorsettings-slider-label ${isDraggingActive ? 'dragging' : 'not-dragging'}`}
+                        onMouseDown={(e) => onLabelMouseDown(e, settingKey)}
+                    >
+                        {label}
+                    </label>
 
-                <div style={{ display: 'flex', alignItems: 'center' }}>
-                    <input
-                        type="number"
-                        min={min}
-                        max={max}
-                        value={value || 0}
-                        onChange={handleInputChange}
-                    />
-                    <span>{unit}</span>
+                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                        <input
+                            type="number"
+                            min={min}
+                            max={max}
+                            value={value || 0}
+                            onChange={handleInputChange}
+                        />
+                        <span>{unit}</span>
+                    </div>
                 </div>
-            </div>
 
-            <RangeSlider
-                min={min}
-                max={max}
-                step={1}
-                value={value || 0}
-                onChange={handleRangeChange}
-                className="colorsettings-slider-range"
-            />
+                <RangeSlider
+                    min={min}
+                    max={max}
+                    step={1}
+                    value={value || 0}
+                    onChange={handleRangeChange}
+                    className="colorsettings-slider-range"
+                />
+            </div>
         </div>
     );
 };

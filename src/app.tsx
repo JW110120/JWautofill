@@ -1318,12 +1318,15 @@ title={`● 混合模式支持纯色，图案和渐变三种模式。描边的�
                         onChange={(v) => this.handleBlendModeChange({ target: { value: v } } as React.ChangeEvent<HTMLSelectElement>)}
                         title="选择填充时使用的混合模式，计算方式与PS原生一致。"
                     />
-                </div> 
+                </div>
 
                 <div className="slider-container">
+                <div className="selection-fill-slider-group">
+                    <div className="entire-slider">
+                    <div className="slider-parameter-collection">
                     <label
                         className={`slider-label ${
-                            this.state.isDragging && this.state.dragTarget === 'opacity' 
+                            this.state.isDragging && this.state.dragTarget === 'opacity'
                             ? 'dragging' 
                             : 'not-dragging'
                         }`}
@@ -1345,13 +1348,14 @@ title={`● 调整填充内容的不透明度，不透明度间采用【乘算�
                         max="100"
                         value={this.state.opacity}
                         onChange={(e) => this.setState({ opacity: Number(e.target.value) })}
-                        style={{ width: '30px', zIndex: 1 }}
+                        className="slider-number-input"
                         title="输入填充内容的不透明度（0-100）。"
                     />
                     <span style={{ fontSize: '13px' }}>%</span>
                     </div>
 
                     </label>
+                    </div>
                     <RangeSlider
                         min={0}
                         max={100}
@@ -1361,7 +1365,10 @@ title={`● 调整填充内容的不透明度，不透明度间采用【乘算�
                         className="slider-input"
                         title="调整填充的不透明度，0%为完全透明，100%为完全不透明。"
                     />
-                    
+                    </div>
+
+                    <div className="entire-slider">
+                    <div className="slider-parameter-collection">
                     <label
                         className={`slider-label ${
                             this.state.isDragging && this.state.dragTarget === 'feather' 
@@ -1384,13 +1391,14 @@ title={`● 改造选区使用的羽化值，也就是对选区的灰度通道�
                         max="20"
                         value={this.state.feather}
                         onChange={(e) => this.setState({ feather: Number(e.target.value) })}
-                        style={{ width: '30px', zIndex: 1 }}
+                        className="slider-number-input"
                         title="输入改造选区使用的羽化值（0-20像素）。"
                         />
                     <span style={{ fontSize: '13px' }}>px</span>
                     </div>
 
                     </label>
+                    </div>
                     <RangeSlider
                         min={0}
                         max={20}
@@ -1400,6 +1408,8 @@ title={`● 改造选区使用的羽化值，也就是对选区的灰度通道�
                         className="slider-input"
                         title="调整选区边缘的羽化程度，数值越大边缘越柔和。"
                     />
+                    </div>
+                </div>
                 </div>
             </div>
 
@@ -1446,7 +1456,7 @@ title={`● 在填充前，以降低选区灰度通道中的高频信息的方�
                                             max="100"
                                             value={this.state.selectionSmooth}
                                             onChange={(e) => this.setState({ selectionSmooth: Number(e.target.value) })}
-                                            style={{ marginLeft: '-10px', width: '30px', zIndex: 1 }}
+                                            className="slider-number-input"
                                             title="直接输入平滑数值（0-100%）。"
                                         />
                                         <span style={{ fontSize: '13px' }}>%</span>
@@ -1486,7 +1496,7 @@ title={`● 在填充前，以锐化选区灰度通道方式修改选区。
                                             max="100"
                                             value={this.state.selectionContrast}
                                             onChange={(e) => this.setState({ selectionContrast: Number(e.target.value) })}
-                                            style={{ marginLeft: '-10px', width: '30px', zIndex: 1 }}
+                                            className="slider-number-input"
                                             title="直接输入锐度数值（0-100%）。"
                                         />
                                         <span style={{ fontSize: '13px' }}>%</span>
@@ -1523,7 +1533,7 @@ title={`● 参考PS滤镜库中数次叠加喷溅的算法，以喷溅的方式
                                             max="100"
                                             value={this.state.selectionExpand}
                                             onChange={(e) => this.setState({ selectionExpand: Number(e.target.value) })}
-                                            style={{ marginLeft: '-10px', width: '30px', zIndex: 1 }}
+                                            className="slider-number-input"
                                             title="直接输入扩散数值（0-100%）。"
                                         />
                                        <span style={{ fontSize: '13px' }}>%</span>
