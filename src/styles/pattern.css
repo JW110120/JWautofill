@@ -1,27 +1,10 @@
-/* 图案选择器样式 */
-  .pattern-picker {
-    --adjust-scrollbar-w: 10px;
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: calc(100% - 20px);
-    background-color: var(--bg-color);
-    padding: 8px;
-    box-sizing: border-box;
-    z-index: 9999 !important;
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-start;
-    overflow-y: auto;
-  }
-
-  /* 子面板变矮时各区块保持自身固有高度、不被 flex 压缩（默认 flex-shrink:1 会让
-     图案区/设置区/预览区随面板高度一起被压扁）。高度不足时改由 .pattern-picker
-     自身出现竖直滚动条，与纯色/渐变面板行为一致。 */
-  .pattern-picker > * {
-    flex-shrink: 0;
-  }
+/* 图案选择器样式
+   ⚠️ 通用组件（滑块文字标签 / range-slider / number-input / 单位符号 / 图标按钮 /
+   关闭按钮 / 双列 radio / 双列 checkbox / 拖拽光标锁）已统一收口到 common.css，
+   本文件只保留图案面板「独有」的布局与缩略图样式。改通用组件请去 common.css。 */
+  /* ↳ 外壳已统一收口到 common.css：布局由 common.css 子面板外壳块提供；
+     > * 的 flex-shrink:0 也由 common.css 统一；z-index:9999 !important 由
+     input-fix.css 强制，此处不再重复声明。 */
 
   .pattern-container {
     min-height: 130px;
@@ -125,11 +108,6 @@
     color: var(--black-text-);
   }
   
-  .photo-container.selected {
-    border-color: var(--primary-color);
-    border-width: 2px;
-  }
-  
   .pattern-icon-container {
     position: absolute;
     height: 30px;
@@ -146,48 +124,6 @@
     display: flex;
     justify-content: flex-end;
     align-items: center;
-  }
-  
-  .icon-button {
-    padding: 4px;
-    background: none;
-    border-radius: 3px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-  }
-  
-  .icon-button:hover:not(:disabled) .icon-fill {
-    fill: var(--hover-icon);
-  }
-
-  .icon-button svg {
-    width: 15px;
-    height: 15px;
-    display: block;
-  }
-  
-  .icon-button .icon-fill {
-    fill: var(--text-color);
-  }
-  
-  .close-button {
-    /* 去除新版 UXP 后端的原生按钮外观，保证纯红色圆角矩形按钮完全由 CSS 呈现 */
-    appearance: none;
-    -webkit-appearance: none;
-    background-color: rgb(191, 17, 14) !important;
-    border: 1px solid var(--border-color) !important;
-    border-radius: 3px !important;
-    box-shadow: none !important;
-    font-size: 14px;
-    cursor: pointer;
-    color: rgb(255, 255, 255) !important;
-    width: 25px;
-    height: 25px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
   }
   
   .pattern-settings-area {
@@ -233,81 +169,15 @@
     width: 100%;
   }
 
-  /* 标签 + 数值 + 单位 同行容器（套娃第一层）：
-     行容器负责布局（两端对齐）与 ew-resize 光标，宽度与 APP 面板统一 */
-  .pattern-setting-item .pattern-slider-parameter-collection {
-    display: flex;
-    flex-direction: row;
-    justify-content: space-between;
-    align-items: center;
-    width: calc(100% - 20px);
-    margin: 0 auto;
-    cursor: ew-resize;
-  }
-
-  /* 行容器整行可拖拽调值，但其中的数字输入框仍需保持可输入语义：
-     覆盖从容器继承来的 ew-resize，避免用户误以为该处不能点。 */
-  .pattern-setting-item .pattern-slider-parameter-collection input[type="number"] {
-    cursor: text;
-  }
-
-  /* 文字标签：仅承载文字本身；布局/光标样式归上行容器。
-     宽度沿用工具箱标签算法（2字=20px、每字约13.3px 线性：20/33/47/60/73px），
-     「角度：/缩放：」含全角冒号按 3 字算 → 33px */
-  .pattern-setting-item .pattern-slider-text {
-    font-size: 13px;
-    color: var(--text-color);
-    display: block;
-    flex: none;
-    white-space: nowrap;
-  }
-  .pattern-setting-item .pattern-slider-text-2 { width: 20px; }
-  .pattern-setting-item .pattern-slider-text-3 { width: 33px; }
-  .pattern-setting-item .pattern-slider-text-4 { width: 47px; }
-  .pattern-setting-item .pattern-slider-text-5 { width: 60px; }
-  .pattern-setting-item .pattern-slider-text-6 { width: 73px; }
-  
   .pattern-setting-item div{
     display: flex;
     align-items: center ;
   }
 
-  .pattern-setting-item span {
-    font-size: 13px;
-    margin-left: -3px;
-    color: var(--text-color);
-  }
-
-  /* 图案面板两行滑块里「数字输入 + 单位符号」组合的单位符号容器：
-     统一宽度 14px、不换行、不伸缩（与主面板两行滑块及其它子面板一致）。
-     限定在 .pattern-slider-parameter-collection > div 内，避免命中下方
-     平铺/单次等 .pattern-radio-item-label 单选文字 span（否则固定 14px 会把选项文字压窄）。 */
-  .pattern-setting-item .pattern-slider-parameter-collection > div > span {
-    width: 14px;
-    flex: none;
-    white-space: nowrap;
-    display: flex;
-    align-items: center;
-  }
-  
-  .pattern-setting-item .pattern-angle-range,
-  .pattern-setting-item .pattern-scale-range {
-      width: calc(100% - 20px);
-      margin: -5px auto 0 auto;
-      cursor: pointer;
-      display: block;
-  }
-
-  .pattern-setting-item input[type="number"] {
-    width: 35px;
-    text-align: center;
-    appearance: none;
-    -webkit-appearance: none;
-    box-sizing: border-box;
-    background-color: var(--dropdown-bg-color);
-    background-image: none;
-    padding: 0 3px;
-}
+  /* ↳ 滑块单位符号（°/%）已改用 common.css 的 .num-unit（TSX 同步加类名），
+     原 .pattern-setting-item span（margin-left:-3px）与 14px 单位容器规则已删。
+   ↳ 设置项数字输入：输入框都在 .num-input-row 内，统一走 common 的 24px，
+     原 35px 覆盖规则已删。 */
 
 /* ---------------------------------------------------------------------------------------------------------------- */
   .pattern-fillmode-container {
@@ -316,69 +186,24 @@
     flex-direction: column;
   }
 
+  /* ↳ sp-radio-group / sp-radio 的两列布局本体已收口到 common.css（「两列 radio 行布局」块）；
+     .pattern-fillmode-radio 本体走 common 的 radio 别名；span 标签走 common 的
+     .pattern-radio-item-label（原 margin-top:20px 为漂移已删）。
+     面板仅保留本面板的组上边距补偿与选项间距。 */
   .pattern-fillmode-container sp-radio-group {
-    display: flex;
-    align-items: center;
     margin: -8px 0 0 0px;
-    width: 100%;
-  }
-
-  .pattern-fillmode-container sp-radio {
-    align-items: center;
-    justify-content: space-between;
-    flex: 1;
-  }
-
-  .pattern-fillmode-radio {
-    width: 100%;
-    cursor: pointer;
-    transition: background-color 0.2s;
-  }
-
-  .pattern-fillmode-radio span{
-    margin-top: 20px;
   }
 
   .pattern-fillmode-container sp-radio:not(:last-child) {
     margin-right: 105px;
   }
-  /* Checkbox 区域：整行容器（分隔线 + 左右内边距），两列等宽布局由通用类 .field-row-two 提供 */
-  .pattern-checkbox-container {
-      width: 100%;
-      box-sizing: border-box;
-      margin: 0 0 5px 0px;
-      padding: 5px 8px 2px 8px;
-      border-top: 1px solid var(--border-color);
-  }
-
-  /* 标签不撑满（覆盖通用 .field-cell-label 的 flex:1 1 auto），使复选框紧贴标签，
-     避免标签拉伸后与复选框间距过大；下拉菜单等场景不受影响。 */
-  .pattern-checkbox-container .field-cell-label {
-      flex: 0 0 auto;
-      white-space: nowrap;
-  }
-
-  /* 整行分两组（平铺状态下为「剪贴蒙版」+「旋转阵列」）：
-     左组内容靠整行左端（左对齐），右组内容靠整行右端（右对齐）。
-     仅一组时（单次模式）保持左对齐，避免内容被推到行尾。 */
-  .pattern-checkbox-container.field-row-two > .field-cell:first-child {
-      justify-content: flex-start;
-  }
-  .pattern-checkbox-container.field-row-two > .field-cell:last-child:not(:only-child) {
-      justify-content: flex-end;
-  }
-
-  .pattern-checkbox-input {
-      cursor: pointer;
-      margin-left: 2px;
-  }
-
-  .pattern-checkbox-label {
-      font-size: 13px;
-      color: var(--text-color);
-      cursor: pointer;
-      white-space: nowrap;
-  }
+  /* ↳ Checkbox 区域已全部由 common.css 通用 checkbox 规则提供（单一来源）：
+     - .pattern-checkbox-container 容器（padding:10 / height / border-top / space-between）
+     - .field-cell / .field-cell-label / .pattern-checkbox-input / .pattern-checkbox-label
+     - .field-row-two 左右分组对齐
+     原面板「紧凑间距（padding:5px 8px 2px、margin-bottom:5px）」与
+     「.field-cell-label 不撑满」两条覆盖为漂移，已删——与 APP 底部选项区完全
+     同一套，改 common 一处即全插件生效。 */
 
 
   .preview-controls {
@@ -447,12 +272,4 @@
   max-height: none;
   width: auto;
   height: auto;
-}
-
-/* 拖拽期间把全局光标钉死为 ew-resize（详见 src/utils/dragCursor.ts）：
-   按下即横向拖调，与标签常态光标一致；鼠标移出行容器/标签后由
-   body.label-drag-cursor 全局兜底，全程维持 ew-resize。 */
-body.label-drag-cursor,
-body.label-drag-cursor * {
-  cursor: ew-resize !important;
 }

@@ -1,212 +1,79 @@
-/* 颜色设置面板样式 */
-  .color-settings-panel {
-    --adjust-scrollbar-w: 10px;
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: calc(100% - 20px);
-    background-color: var(--bg-color);
-    padding: 10px;
-    box-sizing: border-box;
-    overflow-y: auto;
-    justify-content: flex-start;
-    z-index: 9999 !important;
-  }
+/* 颜色设置面板样式（仅保留本面板独有布局；滑块/数字输入/标签/拖拽光标锁见 common.css） */
+/* ↳ 外壳已统一收口到 common.css：布局由 common.css 子面板外壳块提供；
+   > * 的 flex-shrink:0 也由 common.css 统一；z-index:9999 !important 由
+   input-fix.css 强制，此处不再重复声明。 */
 
-  /* 子面板变矮时各区块保持自身固有高度、不被 flex 压缩（默认 flex-shrink:1 会让
-     标题/滑块组/计算模式区随面板高度一起被压扁，连带间距一起缩短）。高度不足时改由
-     .color-settings-panel 自身出现竖直滚动条，与纯色面板一致。 */
-  .color-settings-panel > * {
-    flex-shrink: 0;
-  }
+/* ↳ 子面板标题栏（原名 .panel-header → .subpanel-header）已统一收口到 common.css */
 
-  .panel-header {
-    display: flex;
-    min-height: 20px;
-    height: auto;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 5px;
-  }
+/* 单个滑块整体容器：parameter-collection + 滑块本体（套娃第二层） */
+.colorsettings-slider-item {
+  display: flex;
+  flex-direction: column;
+  /* 内容区宽度 = 面板 250 - 左右 padding 10*2 = 230；max-width:100% + auto 外边距保证
+     面板宽度变化时滑块容器始终居中且不被撑破。 */
+  margin: 0 auto 15px auto;
+  width: 230px;
+  max-width: 100%;
+  box-sizing: border-box;
+}
 
-  .panel-header h3 {
-    font-size: 18px;
-    margin-left: 5px;
-    color: var(--text-color);
-    font-weight: bold;
-  }
-  
-  
-  .colorsettings-slider-item {
-    display: flex;
-    flex-direction: column;
-    /* 内容区宽度 = 面板 250 - 左右 padding 10*2 = 230；max-width:100% + auto 外边距保证
-       面板宽度变化时滑块容器始终居中且不被撑破。 */
-    margin: 0 auto 15px auto;
-    width: 230px;
-    max-width: 100%;
-    box-sizing: border-box;
-  }
+.colorsettings-entire-slider {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
 
-  /* 单个滑块整体容器：parameter-collection + 滑块本体（套娃第二层） */
-  .colorsettings-entire-slider {
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-  }
+.colorsettings-slider-group {
+  margin-bottom: 15px;
+}
 
-  /* 标签 + 数值 + 单位 同行容器（套娃第一层，原 colorsettings-slider-header）：
-     行容器负责布局（两端对齐）与 ew-resize 光标，宽度与 APP/图案面板统一 */
-  .colorsettings-slider-parameter-collection {
-    display: flex;
-    flex-direction: row;
-    justify-content: space-between;
-    align-items: center;
-    width: calc(100% - 20px);
-    margin: 0 auto;
-    padding: 0px;
-    cursor: ew-resize;
-  }
+/* 快速蒙版模式下的禁用样式（本面板独有） */
+.colorsettings-slider-item.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
 
-  /* 拖拽中与非拖拽态均为 ew-resize（横向拖调，光标连续一致）；鼠标移出容器后由
-     body.label-drag-cursor 全局兜底仍为 ew-resize。 */
-  .colorsettings-slider-parameter-collection.dragging {
-    cursor: ew-resize;
-  }
+.colorsettings-slider-item.disabled .colorsettings-slider-text {
+  cursor: not-allowed;
+  color: var(--disabled-color);
+}
 
-  /* 行容器整行可拖拽调值，但其中的数字输入框仍需保持可输入语义：
-     覆盖从容器继承来的 ew-resize，避免用户误以为该处不能点。 */
-  .colorsettings-slider-parameter-collection input[type="number"] {
-    cursor: text;
-  }
+.colorsettings-slider-item.disabled .colorsettings-slider-range,
+.colorsettings-slider-item.disabled input[type="number"] {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
 
-  .colorsettings-slider-item .colorsettings-slider-range {
-    width: calc(100% - 20px);
-    margin: -5px auto 0 auto;
-    cursor: pointer;
-  }
+.colorsettings-slider-text.disabled {
+  cursor: not-allowed !important;
+  color: var(--disabled-color) !important;
+}
 
-  .colorsettings-slider-item input[type="number"] {
-    width: 35px;
-    display: inline-block;
-    text-align: justify;
-    appearance: none;
-    -webkit-appearance: none;
-    box-sizing: border-box;
-    background-color: var(--dropdown-bg-color);
-    background-image: none;
-    padding: 0 3px;
-  }
-
-  /* 文字标签：仅承载文字本身；布局/光标样式归上行容器。
-     宽度沿用工具箱标签算法：2字=20px、每字约13.3px 线性插值
-     （W(n)=20+(n-2)×13.3 → 2/3/4/5/6字 = 20/33/47/60/73px），由 -2~-6 修饰类指定 */
-  .colorsettings-slider-item .colorsettings-slider-text {
-    display: block;
-    color: var(--text-color);
-    flex: none;
-    font-size: 13px;
-    /* 与工具箱/APP/图案面板一致：文字不换行，盒子略窄时允许轻微溢出而非折行 */
-    white-space: nowrap;
-  }
-  .colorsettings-slider-item .colorsettings-slider-text-2 { width: 20px; }
-  .colorsettings-slider-item .colorsettings-slider-text-3 { width: 33px; }
-  .colorsettings-slider-item .colorsettings-slider-text-4 { width: 47px; }
-  .colorsettings-slider-item .colorsettings-slider-text-5 { width: 60px; }
-  .colorsettings-slider-item .colorsettings-slider-text-6 { width: 73px; }
-
-  
-  .colorsettings-slider-item span {
-    font-size: 13px;
-    color: var(--text-color);
-    width: 14px;
-    flex: none;
-    white-space: nowrap;
-    display: flex;
-    align-items: center;
-  }
-  
-  .colorsettings-slider-group {
-    margin-bottom: 15px;
-  }
-
-  /* 快速蒙版模式下的禁用样式 */
-  .colorsettings-slider-item.disabled {
-    opacity: 0.5;
-    pointer-events: none;
-  }
-
-  .colorsettings-slider-item.disabled .colorsettings-slider-text {
-    cursor: not-allowed;
-    color: var(--disabled-color);
-  }
-
-  .colorsettings-slider-item.disabled .colorsettings-slider-range,
-  .colorsettings-slider-item.disabled input[type="number"] {
-    cursor: not-allowed;
-    opacity: 0.6;
-  }
-
-  .colorsettings-slider-text.disabled {
-    cursor: not-allowed !important;
-    color: var(--disabled-color)!important;
-  }
-
-/* 计算模式选择器样式 */
+/* 计算模式选择器（本面板独有布局；radio 本体见 common.css .radio-item） */
 .colorsettings-calculation-mode {
-    display: flex;
-    flex-direction: column;
-    margin: 30px -10px 0 -10px;
-    padding-top: 15px;
-    border-top: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  margin: 30px -10px 0 -10px;
+  padding-top: 15px;
+  border-top: 1px solid var(--border-color);
 }
 
 .colorsettings-calculation-mode label {
-    margin: 10px 0 10px 20px;
-    font-size: 16px;
-    color: var(--text-color);
-    font-weight: 600;
-    white-space: nowrap;
-
+  margin: 10px 0 10px 20px;
+  font-size: 16px;
+  color: var(--text-color);
+  font-weight: 600;
+  white-space: nowrap;
 }
 
+/* ↳ sp-radio-group / sp-radio 的两列布局本体已收口到 common.css（「两列 radio 行布局」块）；
+   .calculation-mode-radio 本体走 common 的 radio 别名（flex:1 由 common 的
+   sp-radio flex:1 提供），radio-item-label 字号/颜色走 common（13px）。
+   面板仅保留组左补偿与选项间距。 */
 .colorsettings-calculation-mode sp-radio-group {
-    display: flex;
-    flex-direction: row;
-    align-items: center;  
-    justify-content: space-around;
-    margin-left: 5px;
-    width: 100%;
+  margin-left: 5px;
 }
 
-.colorsettings-calculation-mode sp-radio{
-  display: flex;
-  align-items: center;  
-  justify-content: space-between;
-  flex: 1;
-}
-
-.colorsettings-calculation-mode sp-radio:not(:last-child){
+.colorsettings-calculation-mode sp-radio:not(:last-child) {
   margin-right: 110px;
-}
-
-
-.calculation-mode-radio {
-    flex: 1;
-    cursor: pointer;
-    transition: background-color 0.2s;
-}
-
-.calculation-mode-radio .radio-item-label {
-    font-size: 13px;
-    margin-top: 3px;
-    color: var(--text-color);
-}
-/* 拖拽期间把全局光标钉死为 ew-resize（详见 src/utils/dragCursor.ts）：
-   按下即横向拖调，与标签常态光标一致；鼠标移出行容器/标签后由
-   body.label-drag-cursor 全局兜底，全程维持 ew-resize。 */
-body.label-drag-cursor,
-body.label-drag-cursor * {
-  cursor: ew-resize !important;
 }

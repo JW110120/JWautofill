@@ -1,34 +1,13 @@
-.strokesetting {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: calc(100% - 20px);
-  background-color: var(--bg-color);
-  padding: 10px;
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-start;
-  overflow-y: auto;
-  z-index: 9999;
-}
+/* 描边（stroke）子面板样式
+   ⚠️ 通用组件（滑块文字标签 / 可拖拽标签光标 / range-slider / number-input / 单位符号 /
+   双列 radio 布局 / 关闭按钮 / 拖拽光标锁）已统一收口到 common.css，本文件只保留描边面板
+   「独有」的行容器布局（描边宽度行、位置 radio 容器、混合模式行、不透明度行）与选项间距。
+   改通用组件请去 common.css；标签一律用 common 的 .slider-text / .draggable-label。 */
+/* ↳ 外壳已统一收口到 common.css：布局由 common.css 子面板外壳块提供；
+   > * 的 flex-shrink:0 也由 common.css 统一；z-index:9999 由 input-fix.css
+   强制（此处原非 !important 副本已删，避免与 !important 版本并存造成歧义）。 */
 
-/* 子面板变矮时各区块保持自身固有高度、不被 flex 压缩（默认 flex-shrink:1 会让
-   描边宽度/位置/混合/不透明度各行随面板高度一起被压扁，连带行内 padding 与之间的
-   间距一起缩短）。高度不足时改由 .strokesetting 自身出现竖直滚动条，与纯色面板一致。 */
-.strokesetting > * {
-  flex-shrink: 0;
-}
-
-/* 描边面板标题与关闭按钮紧贴内容容器边缘 */
-.strokesetting .panel-header {
-  padding: 0;
-}
-
-.strokesetting .panel-header h3 {
-  margin-left: 0;
-}
+/* ↳ 描边面板标题栏不再单独覆盖，统一走 common.css 的 .subpanel-header */
 
 /*描边宽度*/
 .stroke-wide-container {
@@ -42,26 +21,13 @@
   border-bottom: 1px solid var(--border-color);
 }
 
-/* 两字文字容器 */
-.stroke-label-2{
-  font-size: 13px; 
-  color: var(--text-color);
-  display: flex;
-  align-items: center;
-  white-space: nowrap;  /* 不换行 + 作为 flex 子项不伸缩：文字恒为内容宽度、永不被压缩换行，滑块条（flex:1）据此自动算出“行宽 - 标签宽 - 数字输入 - 单位符号”的长度 */
-  margin-right: 10px;
-}
+/* ↳ 「宽度：」标签已改用 common 类名 .slider-text + .draggable-label（TSX 同步改）：
+   字体/颜色/nowrap 走 common 的 .slider-text 基础组，拖拽光标走 common 的
+   .draggable-label 别名组，右侧 10px 间距由 common 的
+   .stroke-wide-container .slider-text 提供。原 .stroke-label-2 全部规则已删。 */
 
-/* 拖拽中切 ew-resize（按下即抓住元素横向拖动，符合「抓取移动」语义）；非拖拽态仍
-   ew-resize 表示可横向拖调。鼠标移出标签后由 body.label-drag-cursor 全局兜底仍为 ew-resize。 */
-.stroke-label-2.dragging {
-  cursor: ew-resize;
-}
-
-.stroke-label-2.not-dragging {
-  cursor: ew-resize;
-}
-
+/* RangeSlider 在描边行内的布局覆盖：作为 flex 子项占满剩余宽度（common.css 拥有
+   .range-slider 的基础外观：轨道/填充/手柄/高度 12px）。 */
 .stroke-wide-container .range-slider {
   position: relative;
   flex: 1 1 auto;
@@ -69,54 +35,6 @@
   height: 12px;
   cursor: pointer;
   box-sizing: border-box;
-}
-
-.stroke-wide-container .num-input-wrap {
-  display: flex;
-  align-items: center;
-  flex: 0 0 auto;
-  margin-left: 7px;
-}
-
-.stroke-wide-container .num-input-row {
-  display: flex;
-  align-items: center;
-  height: 24px;
-  padding: 0;
-  box-sizing: border-box;
-  background-color: var(--dropdown-bg-color);
-  background-image: none;
-  overflow: hidden;
-
-}
-
-.stroke-wide-container input[type="number"] {
-  /* 宽度统一由 .num-input-row input[type="number"] 控制（统一 24px） */
-  display: flex;
-  align-items: center;
-  width: 24px;
-  height: 24px;
-  box-sizing: border-box;
-  background-color: var(--dropdown-bg-color);
-  color: var(--text-color);
-  font-size: 12px;
-  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
-  text-align: center;
-  line-height: 24px;
-  appearance: none;
-}
-
-/* 数字输入的单位符号（px/%）独立于裁剪容器之外（.num-unit）：
-   上面 .stroke-wide-container span 的负边距是旧结构（单位紧贴裸输入框）的补正，
-   会把单位拉得偏上偏左、叠到输入框边框上，必须归零并给正常间距。 */
-.stroke-wide-container .num-unit {
-  margin-left: 4px;
-  font-size: 13px;
-  color: var(--text-color);
-  white-space: nowrap;
-  flex: 0 0 auto;
-  display: flex;
-  align-items: right;
 }
 
 /*位置*/
@@ -130,30 +48,8 @@
   margin-bottom: 20px;
 }
 
-.position-radio-group sp-radio-group {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  flex-direction: row;
-  justify-content: space-around;
-}
-
-.position-radio-group sp-radio {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex: 1;
-}
-
-.position-radio-item {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  color: var(--text-color);
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
+/* ↳ sp-radio-group / sp-radio 布局本体已收口到 common.css（「两列 radio 行布局」块）；
+   面板仅保留选项间距。 */
 .position-radio-group sp-radio:not(:last-child) {
   margin-right: 45px; /* 调整间距值 */
 }
@@ -169,18 +65,8 @@
   margin-bottom: 20px;
 }
 
-/*混合模式四字文字标签*/
-.stroke-blende-mode label {
-  font-size: 13px;
-  margin-right: 6px;
-  /* 改为按内容宽度（4 字约 52px > 原 47px）：配合 nowrap 确保“混合模式”永不换行，
-     下拉框随行 flex 填充剩余宽度（与工具箱 .mask-sync-select-wrap flex:1 一致）。 */
-  flex: 0 0 auto;
-  white-space: nowrap;
-  color: var(--text-color);
-}
-
-
+/* ↳ 混合模式标签的 6px 右间距已收口到 common.css（.stroke-blende-mode label），
+   标签本体走 common 的 .slider-text（TSX 已加类名），下拉框随行 flex 填充剩余宽度。 */
 
 /*不透明度*/
 .stroke-opacity-control {
@@ -193,27 +79,10 @@
   border-bottom: 1px solid var(--border-color);
 }
 
-/* 可横向拖拽调值的标签（宽度/不透明度）：手型 + 禁止选中文本。
-   宽度标签原本靠 .stroke-wide-container label 拿到同样两条属性（特异性更高，不受影响）。 */
-.stroke-label-4 {
-  width: 47px;
-  font-size: 13px;
-  align-items: left;
-  text-align: left;
-  white-space: nowrap;
-  color: var(--text-color);
-  cursor: ew-resize;
-  user-select: none;
-  margin-right: 10px;
-}
-
-.stroke-label-4.dragging {
-  cursor: ew-resize;
-}
-
-.stroke-label-4.not-dragging {
-  cursor: ew-resize;
-}
+/* ↳ 「不透明度」标签已改用 common 类名 .slider-text + .draggable-label（TSX 同步改）：
+   字体/颜色/nowrap 走 common 的 .slider-text 基础组，拖拽光标走 common 的
+   .draggable-label 别名组，右侧 10px 间距由 common 的
+   .stroke-opacity-control .slider-text 提供。原 .stroke-label-4 全部规则已删。 */
 
 .stroke-opacity-control .stroke-opacity-range {
   position: relative;
@@ -222,11 +91,4 @@
   height: 12px;
   cursor: pointer;
   box-sizing: border-box;
-}
-/* 拖拽期间把全局光标钉死为 ew-resize（详见 src/utils/dragCursor.ts）：
-   按下即横向拖调，与标签常态光标一致；鼠标移出行容器/标签后由
-   body.label-drag-cursor 全局兜底，全程维持 ew-resize。 */
-body.label-drag-cursor,
-body.label-drag-cursor * {
-  cursor: ew-resize !important;
 }

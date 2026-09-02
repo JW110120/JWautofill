@@ -1638,7 +1638,7 @@ interface PatternPickerProps {
 
     return (
         <div className="pattern-picker">
-            <div className="panel-header">
+            <div className="subpanel-header">
                 <h3>选择图案</h3>
                 <div className="close-button" role="button" tabIndex={0} onClick={() => {
                     onClose();
@@ -1746,7 +1746,7 @@ interface PatternPickerProps {
                                         onChange={handleAngleChange}
                                     />
                                 </div>
-                                <span>°</span>
+                                <span className="num-unit">°</span>
                             </div>
                         </div>
 
@@ -1776,7 +1776,7 @@ interface PatternPickerProps {
                                         onChange={handleScaleChange}
                                     />
                                 </div>
-                                <span>%</span>
+                                <span className="num-unit">%</span>
                             </div>
                         </div>
                         <RangeSlider

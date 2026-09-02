@@ -125,14 +125,6 @@
 }
 
 .adjustment-container {
-  /*
-   * 面板滚动条宽度。容器自身滚动时会把它从内容区里扣掉——
-   * 这正是普通文档流里的 .license-status-banner 边距「正确」的原因：
-   * 它由滚动条感知的普通内容盒决定。锁定遮罩不装任何内容（从卡片下方开始），
-   * 因此不再需要任何滚动条宽度补偿。
-   * ⚠️ 改这个值时要同步改下面 ::-webkit-scrollbar 的 width（两者必须一致）。
-   */
-  --adjust-scrollbar-w: 10px;
   width: 100%;
   height: 100%;
   max-height: 100%;
@@ -144,33 +136,10 @@
   flex-direction: column;
   justify-content: flex-start;
   align-items: stretch;
-  padding: 10px;
-  box-sizing: border-box;
-  /* 新增：当内容超出时，允许垂直滚动 */
-  overflow-y: auto;
-  /* 避免出现横向滚动条 */
-  overflow-x: hidden;
 }
 
-/* 调整面板专属滚动条（仅作用于第二入口容器）。
-   ⚠️ width 必须与 .adjustment-container 的 --adjust-scrollbar-w 保持一致；
-   这里刻意写字面值 10px —— 伪元素里用 var() 在 UXP 下不保证解析。 */
-.adjustment-container::-webkit-scrollbar {
-  width: 10px;
-}
-.adjustment-container::-webkit-scrollbar-thumb {
-  background-color: var(--scrollbar-thumb);
-  border-radius: 8px;
-  border: 2px solid transparent;
-  background-clip: content-box;
-}
-.adjustment-container::-webkit-scrollbar-thumb:hover {
-  background-color: color-mix(in oklab, var(--scrollbar-thumb) 90%, rgb(255, 255, 255) 10%);
-}
-.adjustment-container::-webkit-scrollbar-track {
-  background-color: var(--scrollbar-track);
-  border-radius: 8px;
-}
+/* ↳ 工具箱与 4 个子面板的外壳滚动条（::-webkit-scrollbar thumb/track）已统一收口到 common.css，
+   覆盖 .adjustment-container / .color-settings-panel / .gradient-picker / .strokesetting / .pattern-picker */
 
 /* 分区容器 */
 .adjustment-section {
@@ -201,115 +170,7 @@
   margin-bottom: 10px;
 }
 
-/* 四字按钮按钮样式 */
-.adjustment-button {
-  height: 30px;
-  /* 4 字档：width = 13×4 + 20 = 72px，按钮容器无内边距（左右间距由宽度算法统一给出） */
-  width: 72px;
-  margin: 0;
-  padding: 0;
-  background-color: var(--button-bg);
-  color: var(--text-color);
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-  font-size: 13px;
-  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-  user-select: none;
-}
-
-.adjustment-button:hover {
-  background-color: var(--hover-bg);
-  border-color: var(--primary-color);
-  transform: scale(1.02);
-}
-
-.adjustment-button:active {
-  background-color: var(--button-down);
-  transform: scale(0.98);
-}
-
-  /* 自适应宽度：与 .adjustment-button 同一套视觉，仅放开 80px 固定宽度，
-    用于「录制快捷键」「断开守护进程」这类超过 4 字的按钮文案。 */
-  .adjustment-button.auto {
-    width: auto;
-    min-width: 0;
-    padding: 0;
-    margin: 0;
-  }
-
-  /* 紧凑尺寸：守护进程状态条高 24px，条内按钮需同高才不撑破布局 */
-  /* 紧凑档（守护进程状态条，font 12）：width = 12×7 + 20 = 104px
-    （启动/停止快捷键服务均为 7 字），无内边距 */
-  .adjustment-button.compact {
-    height: 24px;
-    font-size: 12px;
-    width: 104px;
-    padding: 0;
-    margin: 0;
-  }
-
-/* 禁用态：div[role=button] 没有原生 disabled 语义，靠类控制 */
-.adjustment-button.disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.adjustment-button.disabled:hover {
-  background-color: var(--button-bg);
-  border-color: var(--border-color);
-  transform: none;
-}
-
-/* 笔刷热键：图标按钮（刷新 / 删除）——无边框无背景，仅图标，与 PS 原生图标按钮一致 */
-.hotkey-icon-button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  background: transparent;
-  color: var(--text-color);
-  border: none;
-  border-radius: 3px;
-  cursor: pointer;
-  box-sizing: border-box;
-  user-select: none;
-}
-
-/* hover 与 APP 面板齿轮统一：icon 变蓝（--hover-icon），背景无变化 */
-.hotkey-icon-button:hover {
-  color: var(--hover-icon);
-}
-
-.hotkey-icon-button:hover .icon-fill {
-  fill: var(--hover-icon);
-}
-
-.hotkey-icon-button:active {
-  transform: scale(0.94);
-}
-
-/* 禁用态（如选区填充开关解绑时的删除图标、三下拉未选时的立即同步）：icon 灰 + 禁用光标，背景不变 */
-.hotkey-icon-button.disabled {
-  color: var(--disabled-color);
-  cursor: not-allowed;
-}
-
-.hotkey-icon-button.disabled .icon-fill {
-  fill: var(--disabled-color);
-}
-
-.hotkey-icon-button.disabled:hover {
-  color: var(--disabled-color);
-}
-
+  /* ↳ 通用按钮样式（.adjustment-button 及其 .auto/.compact/.disabled 变体）已统一收口到 common.css */
 .hotkey-icon-group {
   display: flex;
   align-items: center;
@@ -491,35 +352,7 @@
   white-space: nowrap;
 }
 
-.adjustment-swtich-container {
-  display: flex;
-  right: 0;
-  flex-direction: row;
-  align-items: center;
-  justify-content: center;
-  width: 90px; 
-}
-
-/* 开关文字标签 */
-.adjustment-swtich-label {
-  color: var(--text-color);
-  display: flex;
-  font-size: 13px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-/* 开关与文字标签间距（margin 实现，UXP 不支持 flex gap）；原各处内联 marginLeft:8px 收口到此 */
-.adjustment-swtich-container > sp-switch {
-  margin-left: 8px;
-}
-
-/* 独立左对齐开关（如木刻预览）：覆盖默认居中 + 固定宽度，并上留 6px（原内联 style 收口到此） */
-.adjustment-swtich-align-left {
-  justify-content: flex-start;
-  width: auto;
-  margin-top: 6px;
-}
+  /* ↳ 开关行（.adjustment-swtich-container / -label / -align-left）已统一收口到 common.css */
 
 /* 滑块最外级容器，内部可能包含若干个滑块组 */
 .adjustment-slider-container {
@@ -532,88 +365,19 @@
   margin-bottom: 10px;
 }
 
-/* 滑块项 */
-.adjustment-slider-item {
-  width: 100%;
-  margin: 10px 0;
-  display: flex;
-  align-items: center;
-  flex-direction: row;
-}
+  /* ↳ 行内滑块项（.adjustment-slider-item）已统一收口到 common.css 的 .selection-slider-item,.adjustment-slider-item */
 
-/* 滑块标签 */
-.adjustment-slider-label {
-  color: var(--text-color);
-  display: flex;
-  align-items: center;
-  font-size: 13px;
-  flex: 0 0 20px;
-  white-space: nowrap;
-}
+  /* ↳ 滑块标签基础档（.adjustment-slider-label / -3 / -4）已统一收口到 common.css；
+     下方仅保留工具箱专属的拖拽/静态标签修饰与单位标签宽度。 */
 
-/* 3字标签专用宽度：参考 2字=20px、5字=60px 按字数线性插值（每字约13.3px），
-   保证标签文字不溢出、滑块两端间距与其他滑块一致 */
-.adjustment-slider-label-3 {
-  flex: 0 0 33px;
-}
+  /* ↳ 拖拽光标锁（body.label-drag-cursor）已统一收口到 common.css */
 
-/* 4字标签专用宽度 */
-.adjustment-slider-label-4 {
-  flex: 0 0 47px;
-}
-
-/* 可横向拖拽调值的滑块标签（对齐 APP 主面板 .selection-slider-label 的光标语义）：
-   常态与拖拽中均为 ew-resize（横向拖调，光标连续一致）；拖拽中鼠标移出标签后的
-   光标由 body.label-drag-cursor 统一接管。 */
-.adjustment-slider-label-drag {
-  user-select: none;
-  cursor: ew-resize;
-}
-.adjustment-slider-label-drag.dragging {
-  cursor: ew-resize;
-}
-
-/* 拖拽期间把全局光标钉死为 ew-resize（详见 src/utils/dragCursor.ts）：
-   按下即抓住元素横向拖动，符合「抓取移动」语义；鼠标移出行容器/标签后由
-   body.label-drag-cursor 全局兜底，全程维持 ew-resize。 */
-body.label-drag-cursor,
-body.label-drag-cursor * {
-  cursor: ew-resize !important;
-}
-
-/* 不可拖拽的标签（下拉行：平滑模式 / 线稿参考）→ 普通箭头光标，不出现手型 */
-.adjustment-slider-label-static {
-  cursor: default;
-  /* 下拉行标签（平滑模式 / 线稿参考）：按内容宽度自适应，不套用滑块的
-     固定宽度修饰类（如 -4 / -wide），否则 4 字标签（~52px）会溢出 47/50px
-     的固定框，把 margin-right:6px 吃掉，肉眼看起来像紧贴。 */
-  flex: 0 0 auto;
-  /* 与下拉框之间统一 6px 间距；仅命中下拉行标签，
-     不影响真实滑块（真实滑块标签用 .adjustment-slider-label-drag）。 */
-  margin-right: 6px;
-}
-
-/* 线稿参考单位标签 */
-.wide-adjustment-slider-label {
-  color: var(--text-color);
-  display: flex;
-  align-items: center;
-  font-size: 13px;
-  flex: 0 0 50px;
-  white-space: nowrap;
-  /* 光标由 .adjustment-slider-label-drag / -static 决定，此处不设 pointer */
-}
-
-/* 中间值半径的单位标签 */
-.wider-adjustment-slider-label {
-  color: var(--text-color);
-  display: flex;
-  align-items: center;
-  font-size: 13px;
-  flex: 0 0 60px;
-  white-space: nowrap;
-  /* 光标由 .adjustment-slider-label-drag / -static 决定，此处不设 pointer */
-}
+  /* ↳ 可拖拽滑块标签（.adjustment-slider-label-drag + .dragging）已收口到 common.css
+     （与渐变 .draggable-label 同一别名组）；
+   ↳ 下拉行静态标签（.adjustment-slider-label-static：cursor:default/flex:none/6px 间距）
+     已收口到 common.css；
+   ↳ 单位标签（.wide-.wider-adjustment-slider-label）本体已由 common.css 基础标签组提供
+     （字号/颜色/nowrap/flex:none 内容宽度），原 50px/60px 固定 flex-basis 覆盖已删。 */
 
 /* RangeSlider 在调整面板中的适配（替代 PS 27.9 后失效的原生 range） */
 .adjustment-slider-input.range-slider {
@@ -638,111 +402,20 @@ body.label-drag-cursor * {
   gap: 3px;
 }
 
-/* 绘画工具箱复用同一裁剪容器（与 .adjustment-number-input 配合）：
-   .unit-container 内单位符号已是独立 .adjustment-unit，这里只把输入框包进裁剪容器。 */
-#pixeladjustment .num-input-row {
-  display: flex;
-  align-items: center;
-  flex: 0 0 35px;
-  height: 24px;
-  padding: 0;
-  box-sizing: border-box;
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-  background-color: var(--dropdown-bg-color);
-  background-image: none;
-  overflow: hidden;
-}
+/* ↳ 工具箱数字输入已统一收口到 common.css：.num-input-row 裁剪容器（含 :focus-within）
+   与内部 input（24px）直接复用 common 规则；原 #pixeladjustment 作用域的
+   flex-basis:35px / input 35px×32px 覆盖已删（2026-09-02 用户定稿：全插件数字输入
+   一律 24px，工具箱与子面板同一套）。 */
 
-#pixeladjustment .num-input-row:focus-within {
-  border-color: var(--primary-color);
-  box-shadow: 0 0 0 2px var(--hover-bg);
-}
+/* ↳ .adjustment-number-input 本体已由 common.css 提供（24px、无边框、appearance:none）。
+   原工具箱 35px 带 border 的覆盖副本已删——该输入总在 .num-input-row 内，
+   视觉边框由外层裁剪容器提供（写 border 会叠成「框里框」）。 */
 
-/* 用 input[type="number"] 而非 .adjustment-number-input：纯色/图案/渐变子面板的
-   number input 没有类名，同样需要裁剪+缓冲防越界，统一按类型命中。 */
-#pixeladjustment .num-input-row input[type="number"] {
-  display: block;
-  width: 35px;
-  border: none;
-  background-color: var(--dropdown-bg-color);
-  background-image: none;
-  color: var(--text-color);
-  font-size: 12px;
-  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
-  text-align: center;
-  /* input 24px + 上下各 4px 缓冲：与主面板同一套已验证比例，
-     绝不能让 input 撑满容器（原生绘制区恒高于 CSS 盒，撑满必从底部越界）。 */
-  height: 32px;
-  margin: 0;
-  padding: 0 3px;
-  box-sizing: border-box;
-  line-height: 32px;
-  outline: none;
-  appearance: none;
-  -webkit-appearance: none;
-}
+/* ↳ #pixeladjustment input[type="number"]（appearance/边框/22px 高）已删：
+   appearance:none 由 common.css 的全局 input[type="number"] 规则提供；
+   数字输入统一走 .num-input-row + common 24px，不再有第二套尺寸。 */
 
-/* 数值输入框 */
-.adjustment-number-input {
-  /* 保证跟随容器折叠且不浮到最上层 */
-  position: relative;
-  z-index: auto;
-  /* 35px：提交 94266de 拉宽到 46px 后实测过宽，两面板所有数字输入统一 35px（flex-basis 需同步） */
-  width: 35px;
-  flex: 0 0 35px;
-  height: 24px;
-  color: var(--text-color);
-  font-size: 11px;
-  text-align: center;
-  /* 取消负边距：加上 CSS 边框后负边距会与左侧滑块/单位重叠，反而压住边框 */
-  margin-left: 0;
-  /* 字体与选区填充面板统一 */
-  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
-  /* 移除z-index，让它跟随父容器的折叠状态 */
-  /* 修复 UXP 原生 number 输入框绘制区横向越界压住边框（与激活/试用面板 input 同类问题）：
-     appearance:none 让输入框按 CSS 盒绘制，不再溢出覆盖左右边框；边框改由 CSS 提供，
-     背景与下拉同色避免 UXP 下 transparent 被绘成纯黑；box-sizing:border-box 让边框计入宽度。 */
-  appearance: none;
-  -webkit-appearance: none;
-  box-sizing: border-box;
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-  background-color: var(--dropdown-bg-color);
-  background-image: none;
-  padding: 0 3px;
-}
-
-/* 绘画工具箱（含图案/渐变/颜色/描边子面板）内所有 number-input 统一按上述方式修复越界 */
-#pixeladjustment input[type="number"] {
-  appearance: none;
-  -webkit-appearance: none;
-  box-sizing: border-box;
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-  background-color: var(--dropdown-bg-color);
-  background-image: none;
-  padding: 0 3px;
-  /* 与 #app 面板统一：固定 22px 高度 + 基线居中，消除行内上下文下的下方越界 */
-  height: 22px;
-  vertical-align: middle;
-}
-
-/* 单位标签：与主面板滑块单位符号容器 .num-unit 完全一致的样式
-   （font-size 13 / 主题色 / 不换行 / 内容宽度不伸缩）。
-   去掉 opacity:0.8 —— 否则单位符号比主面板暗一截，两面板观感不统一。
-   与数字输入的间距由父级 .unit-container 的 gap 提供（主面板用 .num-unit 的
-   margin-left:4px 同源，效果一致，故此处不重复加 margin，避免与 gap 叠加成 7px）。 */
-.adjustment-unit {
-  margin-left: 4px;
-  font-size: 13px;
-  color: var(--text-color);
-  
-  white-space: nowrap;
-  flex: 0 0 auto;
-  display: flex;
-  align-items: right;
-}
+  /* ↳ 单位符号（.adjustment-unit）已统一收口到 common.css 的 .num-unit,.adjustment-unit */
 
 /* 水平实现分割线 */
 .adjustment-divider {
@@ -752,41 +425,7 @@ body.label-drag-cursor * {
   margin: 15px 10px 15px -10px;
 }
 
-/* 按钮宽度分档：按按钮汉字字数精确分级，均使用 box-sizing: border-box + 无内边距。
-   - 4 字档为 .adjustment-button 默认（width: 80px + padding 0 10px）；
-   - 2 字档 .adjustment-button-lv2（width: 46px）；
-   - 5/7/8 字档 .adjustment-button-5/-7/-8（85/111/124px）。 */
-.adjustment-button-lv2 {
-  /* 2 字档：width = 13×2 + 20 = 46px，无内边距 */
-  width: 46px;
-  padding: 0;
-}
-
-/* 6 字按钮（浅线/深线同层补色、alpha 上/下对齐、保底下对齐、线条加黑）：
-   自适应宽度并留内边距，保证文字与按钮左右边缘有足够间距 */
-/* 长文案兜底（8 字宽档）：width = 13×8 + 20 = 124px，无内边距；
-   实际按钮已按各自字数改用 -5/-6/-7/-8 精确档，此条仅作兼容兜底 */
-.adjustment-button-wide {
-  width: 124px;
-  padding: 0;
-}
-/* 按字数精确分档（width = 13×字数 + 20，无内边距）：5/6/7/8 字 = 85/98/111/124px */
-.adjustment-button-5 { width: 85px; padding: 0; }
-.adjustment-button-6 { width: 98px; padding: 0; }
-.adjustment-button-7 { width: 111px; padding: 0; }
-.adjustment-button-8 { width: 124px; padding: 0; }
-
-/* 边缘处理 2×2 按钮组（alpha下对齐 / alpha上对齐 / 保底下对齐 / 线条加黑）统一列宽：
-   - 92px 取自 alpha 上/下对齐：中英混排（alpha + 3 汉字）按「13×字数+20」的纯汉字算法
-     会算到 8 字档 124px 明显偏宽，实际视觉宽度落在 5 字档(85) 与 6 字档(98) 之间，取中值 92px；
-   - 四颗统一 92px 后两行总宽相同，父级 space-between 才会把左右两列严格对齐，
-     否则会出现「第一行第二颗 x=136 / 第二行第二颗 x=188」的 52px 错位；
-   - flex:none 防止父级压缩导致宽度不可预期。 */
-.adjustment-button-quad {
-  width: 92px;
-  padding: 0;
-  flex: none;
-}
+  /* ↳ 按钮宽度分档（.adjustment-button-lv2 / -wide / -5..-8 / -quad）已统一收口到 common.css */
 
 /* 虚线分隔线（同层补色 与 分层补色 之间）：
    - 纯 DOM 方案：DashedDivider 渲染 6px 短线 span 序列（6px 短线 + 6px 空 = 12px 周期），

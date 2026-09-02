@@ -99,7 +99,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
 
   return (
     <div className="strokesetting">
-        <div className="panel-header">
+        <div className="subpanel-header">
           <h3>描边设置</h3>
           <div className="close-button" role="button" tabIndex={0} onClick={() => {
                     // 触发所有回调以确保状态更新
@@ -114,7 +114,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         
         <div className="stroke-wide-container">
           <label 
-            className={`stroke-label-2 ${isDragging && dragTarget === 'width' ? 'dragging' : 'not-dragging'}`}
+            className={`slider-text draggable-label ${isDragging && dragTarget === 'width' ? 'dragging' : 'not-dragging'}`}
             onMouseDown={(e) => handleLabelMouseDown(e, 'width')}
           >
             宽度
@@ -163,7 +163,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         
         {!clearMode && (
           <div className="stroke-blende-mode">
-            <label>混合模式</label>
+            <label className="slider-text">混合模式</label>
             <Select
               value={blendMode}
               groups={BLEND_MODE_OPTIONS}
@@ -174,7 +174,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         
         <div className="stroke-opacity-control">
           <label
-            className={`stroke-label-4 ${isDragging && dragTarget === 'opacity' ? 'dragging' : 'not-dragging'}`}
+            className={`slider-text draggable-label ${isDragging && dragTarget === 'opacity' ? 'dragging' : 'not-dragging'}`}
             onMouseDown={(e) => handleLabelMouseDown(e, 'opacity')}
           >
             不透明度

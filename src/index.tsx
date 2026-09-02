@@ -1,6 +1,10 @@
 // ⚠️ 必须最先加载：修补 UXP 的 performance.mark/measure，否则 React 19 dev 构建
 // 首次渲染即抛 NotFoundError 并进入 "Should not already be working" 死锁，面板停止渲染
 import './uxpPerfPatch';
+// ⚠️ 通用组件样式「单一来源」必须最先加载：common.css 定义滑块/按钮/开关/radio/
+// checkbox/图标按钮/拖拽光标锁的视觉规则，其后各面板 CSS 只保留面板独有布局。
+// 改通用组件只需动 common.css 一处，所有面板同步生效，杜绝「某面板漏改导致漂移」。
+import './styles/common.css';
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './app';

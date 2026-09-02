@@ -1,27 +1,7 @@
-/* 渐变选择器样式优化 */
-.gradient-picker {
-    --adjust-scrollbar-w: 10px;
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: calc(100% - 20px);
-    background-color: var(--bg-color);
-    padding: 10px;
-    box-sizing: border-box;
-    z-index: 9999;
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-start;
-    overflow-y: auto;
-}
-
-/* 子面板变矮时，各区块保持自身固有高度、不被 flex 压缩（默认 flex-shrink:1 会让
-   预设区/编辑区/设置区/预览区随面板高度一起被压扁）。高度不足时改由 .gradient-picker
-   自身出现竖直滚动条，与纯色面板行为一致。 */
-.gradient-picker > * {
-    flex-shrink: 0;
-}
+/* 渐变选择器样式优化（仅保留本面板独有布局；通用组件见 common.css） */
+/* ↳ 外壳已统一收口到 common.css：布局由 common.css 子面板外壳块提供；
+   > * 的 flex-shrink:0 也由 common.css 统一；z-index:9999 由 input-fix.css
+   强制（此处原非 !important 副本已删）。 */
 
 .gradient-subtitle {
   color: var(--text-color);
@@ -29,11 +9,8 @@
   font-size: 12px;
 }
 
-.draggable-label {
-  cursor: ew-resize;
-  user-select: none;
-  -webkit-user-select: none;
-}
+/* ↳ .draggable-label（可拖拽标签光标语义）已收口到 common.css
+   （与工具箱 .adjustment-slider-label-drag 为同一别名组） */
 
 .gradient-subtitle h3 {
   margin: 5px;
@@ -41,11 +18,8 @@
   color: var(--text-color);
 }
 
-
 /* 预设区域样式 */
 .gradient-presets-area {
-    /* 固定高度（不随面板高度变化）：图标栏由 .gradient-icon-container 用 flex:1 的
-       预设列表顶到底部，始终紧贴下沿。 */
     height: 105px;
     width: 100%;
     position: relative;
@@ -141,7 +115,7 @@
     cursor: pointer;
 }
 
-/* 「预览区居中的灰字提示」样式（渐变与图案面板共用）在 styles.css 的 .final-preview-hint */
+/* 「预览区居中的灰字提示」样式（渐变与图案面板共用）在 common.css 的 .final-preview-hint */
 
 .gradient-icon-container {
     position: relative;
@@ -181,24 +155,9 @@
   margin-left: auto;
 }
 
-.opacity-input input[type="number"] {
-  width: 35px;
-  height: 24px;
-  padding: 2px 4px;
-  color: var(--text-color);
-  font-size: 12px;
-  appearance: none;
-  -webkit-appearance: none;
-  box-sizing: border-box;
-  background-color: var(--dropdown-bg-color);
-  background-image: none;
-}
-
-.opacity-input input[type="number"]::-webkit-inner-spin-button,
-.opacity-input input[type="number"]::-webkit-outer-spin-button {
-  opacity: 1;
-  height: 20px;
-}
+/* ↳ 不透明度数字输入：原 35px 覆盖（width:35px + spinner 强制显示）已删。
+   该输入在 .num-input-row 内，统一走 common.css 的
+   .num-input-row input[type="number"]（24px），与全插件数字输入一致。 */
 
 .gradient-slider-track {
     position: relative;
@@ -240,8 +199,8 @@
     /* 内容区 208px：4 + 200 + 4，左右留白对称，与容器 10px 内边距合计仍为 14px 缩进 */
     width: calc(100% - 8px);
     margin: 10px 4px 10px 4px;
-    border: 1px solid var(--border-color); 
-    position: relative;  
+    border: 1px solid var(--border-color);
+    position: relative;
     overflow: hidden;
     background-color: var(--dark-bg-color);
     box-sizing: border-box;
@@ -347,7 +306,7 @@ sp-color-area {
 
 sp-color-slider {
   margin: 10px;
-  width : 20px;
+  width: 20px;
 }
 
 /* 渐变设置区域样式 */
@@ -376,20 +335,12 @@ sp-color-slider {
     align-items: center;
 }
 
-.gradient-setting-item label {
-    font-size: 12px;
-    color: var(--text-color);
-    white-space: nowrap;
-}
+/* ↳ 设置项标签（「样式：」「角度：」）已改用 common.css 的 .slider-text（TSX 同步加类名），
+   原 .gradient-setting-item label 的 12px 字号规则已删，与全插件滑块标签统一 13px。 */
 
-/* 设置区标签统一取内容宽度（不伸缩）：「样式：」与下方「角度：」同为两字+全角冒号，
-   宽度天然一致，两行的下拉/滑块左端严格对齐。 */
-.gradient-setting-item > label {
-    flex: 0 0 auto;
-    white-space: nowrap;
-    margin-bottom: 0;
-    margin-right: 6px;
-}
+/* ↳ 设置区标签（「样式：」「角度：」）的 6px 右间距与 flex:none 已收口到 common.css
+   （.gradient-setting-item > label，与工具箱下拉行/描边混合模式行同一条规则），
+   标签本体走 common 的 .slider-text（TSX 已加类名）。 */
 
 /* 渐变“样式”下拉：标签与下拉同行（参考边缘平滑“平滑模式”），标签固定为内容宽度，
    下拉自适应占满剩余宽度，标签+下拉正好占满整行（取消 190px 上限，避免被压窄到
@@ -414,14 +365,8 @@ sp-color-slider {
     width: auto;
 }
 
-.gradient-setting-item select {
-    flex: 1;
-    padding: 5px;
-    border-radius: 3px;
-    background-color: var(--button-bg);
-    color: var(--text-color);
-    border: 1px solid var(--border-color);
-}
+/* ↳ 原生 <select> 全项目已无实例（下拉统一用 common 的 .mask-sync-select-wrap），
+   此规则为死代码，已删。 */
 
 .gradient-setting-item .gradient-angle-range {
     margin: 3px -4px 0 0px;
@@ -429,16 +374,8 @@ sp-color-slider {
     flex: 1;
 }
 
-.gradient-setting-item input[type="number"]{
-  width: 35px;
-  text-align: center;
-  appearance: none;
-  -webkit-appearance: none;
-  box-sizing: border-box;
-  background-color: var(--dropdown-bg-color);
-  background-image: none;
-  padding: 0 3px;
-}
+/* ↳ 设置项数字输入（35px）已收口到 common.css 单一来源（见 .gradient-setting-item
+   input[type="number"], .pattern-setting-item input[type="number"]）。 */
 
 /* 只作用于直接子 div（数值输入框的包裹层、下拉容器）。
    必须限定子选择器：写成 `.gradient-setting-item div` 会命中下拉弹层内部元素，
@@ -448,23 +385,9 @@ sp-color-slider {
   align-items: center;
 }
 
-/* 只命中「数字输入框后面的单位符号（°）」这一层。
-   原写法 `.gradient-setting-item span`（后代选择器）会命中自绘下拉头部内部的
-   .mask-sync-select-value / .mask-sync-select-caret 两个 span：
-     · font-size:13px 覆盖头部的 12px → 与其它下拉字号不一致；
-     · margin-left:-4px 覆盖箭头的 margin-left:auto → 箭头紧贴文字而非右对齐。
-   收紧为 `> div > span` 后，下拉内部（wrap > head > span）不再被命中。 */
-.gradient-setting-item > div > span {
-    font-size: 13px;
-    margin-left: -4px;
-    color: var(--text-color);
-    /* 单位符号容器统一：宽度 14px、不换行、不伸缩、内部文字左对齐并垂直居中 */
-    width: 14px;
-    flex: none;
-    white-space: nowrap;
-    display: flex;
-    align-items: center;
-}
+/* ↳ 角度行单位符号（°）已改用 common.css 的 .num-unit（TSX 同步加类名），
+   原 .gradient-setting-item > div > span（margin-left:-4px / width:14px）已删，
+   与主面板及描边/纯色面板的单位符号完全一致。 */
 
 /* 渐变角度行在「径向」模式下仅禁用（不隐藏）：整体置灰、禁用指针，
    但保留占位高度，使容器高度在线性/径向两种模式下恒定。 */
@@ -484,30 +407,6 @@ sp-color-slider {
     color: var(--disabled-color);
 }
 
-.reverse-checkbox-group {
-  margin: 10px 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.reverse-checkbox-container {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.reverse-checkbox-container input[type="checkbox"] {
-  margin: 0;
-  cursor: pointer;
-}
-
-.reverse-checkbox-container label {
-  color: var(--text-color);
-  cursor: pointer;
-  font-size: 12px;
-}
-/* 最终预览区域样式 */
 .final-preview-container {
   position: relative;
   border-radius: 3px;
@@ -526,17 +425,10 @@ sp-color-slider {
        撑满剩余高度（min-height 兜底），预览框恒定可见。 */
     flex: 1 1 auto;
     min-height: 100px;
-    margin: 10px; 
+    margin: 10px;
     border-radius: 3px;
     justify-content: center;
     background-color: var(--dark-bg-color);
     box-sizing: border-box;
     border: 1px solid var(--border-color);
-}
-/* 拖拽期间把全局光标钉死为 ew-resize（详见 src/utils/dragCursor.ts）：
-   按下即横向拖调，与标签常态光标一致；鼠标移出行容器/标签后由
-   body.label-drag-cursor 全局兜底，全程维持 ew-resize。 */
-body.label-drag-cursor,
-body.label-drag-cursor * {
-  cursor: ew-resize !important;
 }

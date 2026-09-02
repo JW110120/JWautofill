@@ -1268,7 +1268,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
 
     return (
         <div className="gradient-picker">
-            <div className="panel-header">
+            <div className="subpanel-header">
                 <h3>渐变设置</h3>
                 <div className="close-button" role="button" tabIndex={0} onClick={onClose}>×</div>
             </div>
@@ -1344,7 +1344,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 {selectedStopIndex !== null && selectedStopType === 'opacity' && (
                     <div className="opacity-input">
                         <label 
-                            className="gradient-subtitle draggable-label"
+                            className="slider-text draggable-label"
                             onMouseDown={(e) => {
                                 e.preventDefault();
                                 const startX = e.clientX;
@@ -1379,7 +1379,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                 }}
                             />
                         </div>
-                        <label className="gradient-subtitle">%</label>
+                        <span className="num-unit">%</span>
                         <div className="delete-button-wrapper">
                         <div
                             className={`hotkey-icon-button${stops.length <= 2 ? ' disabled' : ''}`}
@@ -1579,7 +1579,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 {/* 颜色控制 */}
                 {selectedStopIndex !== null && selectedStopType === 'color' && (
                     <div className="color-input-container">
-                        <label className="gradient-subtitle">颜色：</label>
+                        <label className="slider-text">颜色：</label>
                         <span className="color-prefix">#</span>
                         <input
                             type="text"
@@ -1642,7 +1642,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             {/* 渐变类型设置 */}
             <div className="gradient-settings-area">
                 <div className="gradient-setting-item gradient-type-setting">
-                    <label>样式：</label>
+                    <label className="slider-text">样式：</label>
                     <Select
                         value={gradientType}
                         options={[
@@ -1660,7 +1660,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     {/* 光标：常态 ew-resize 由 .draggable-label 给出；径向禁用态的
                         not-allowed 由 .gradient-angle-setting.disabled label 覆盖（特异性更高） */}
                     <label
-                        className="draggable-label"
+                        className="draggable-label slider-text"
                         onMouseDown={gradientType === 'radial' ? undefined : handleAngleMouseDown}
                     >角度：</label>
                     <RangeSlider
@@ -1684,7 +1684,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                 onChange={(e) => setAngle(Number(e.target.value))}
                             />
                         </div>
-                      <span>°</span>
+                      <span className="num-unit">°</span>
                     </div>
                 </div>
 
