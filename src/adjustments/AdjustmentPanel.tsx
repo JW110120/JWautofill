@@ -243,7 +243,7 @@ const getSelectionData = async () => {
 
 // 新增：分区与子功能类型
 interface SectionConfig {
-  id: 'quickAction' | 'detailAdjust' | 'edgeProcessing' | string;
+  id: 'quickAction' | 'detailAdjust' | 'edgeProcessing' | 'maskSync' | 'brushHotkey' | string;
   title: string;
   isCollapsed: boolean;
   isVisible: boolean;
@@ -263,7 +263,8 @@ const defaultSections: SectionConfig[] = [
   { id: 'quickAction', title: '快捷操作', isCollapsed: false, isVisible: true, order: 0 },
   { id: 'detailAdjust', title: '细节调整', isCollapsed: false, isVisible: true, order: 1 },
   { id: 'edgeProcessing', title: '边缘处理', isCollapsed: false, isVisible: true, order: 2 },
-  { id: 'maskSync', title: '蒙版同步', isCollapsed: false, isVisible: true, order: 3 }
+  { id: 'maskSync', title: '蒙版同步', isCollapsed: false, isVisible: true, order: 3 },
+  { id: 'brushHotkey', title: '笔刷热键', isCollapsed: false, isVisible: true, order: 4 }
 ];
 
 // 默认子功能配置
@@ -348,6 +349,9 @@ const [licenseChecked, setLicenseChecked] = useState(false);
 const [sections, setSections] = useState<SectionConfig[]>(defaultSections);
 const [subFeatures, setSubFeatures] = useState<SubFeature[]>(defaultSubFeatures);
 const [isDragMode, setIsDragMode] = useState(false);
+// 分区级拖拽：记录「被拖起的分区」与「当前悬停的落点分区」，用于落点虚线 + 拖起半透明
+const [dragSourceId, setDragSourceId] = useState<string | null>(null);
+const [dragOverId, setDragOverId] = useState<string | null>(null);
 // 标记：面板状态是否已从本地加载完成（避免初次写入覆盖旧值）
 const [panelStateLoaded, setPanelStateLoaded] = useState(false);
 
@@ -2683,16 +2687,30 @@ const toggleSectionVisibility = (id: string) => {
 // 拖拽排序（分区级）
 const handleDragStart = (e: React.DragEvent, id: string) => {
   e.dataTransfer.setData('text/plain', id);
+  e.dataTransfer.effectAllowed = 'move';
+  setDragSourceId(id);
+  setDragOverId(null);
   setIsDragMode(true);
 };
 
-const handleDragOver = (e: React.DragEvent) => {
+const handleDragOver = (e: React.DragEvent, id: string) => {
   e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  if (id !== dragSourceId) setDragOverId(id);
+};
+
+const handleDragEnd = () => {
+  setDragSourceId(null);
+  setDragOverId(null);
+  setIsDragMode(false);
 };
 
 const handleDrop = (e: React.DragEvent, targetId: string) => {
   e.preventDefault();
   const sourceId = e.dataTransfer.getData('text/plain');
+  setDragSourceId(null);
+  setDragOverId(null);
+  setIsDragMode(false);
   if (!sourceId || sourceId === targetId) return;
   setSections(prev => {
     const ordered = prev.slice().sort((a,b)=>a.order-b.order);
@@ -2703,7 +2721,6 @@ const handleDrop = (e: React.DragEvent, targetId: string) => {
     ordered.splice(tgtIdx,0,moved);
     return ordered.map((s,idx)=>({ ...s, order: idx }));
   });
-  setIsDragMode(false);
 };
 
 // ============================================================================
@@ -2972,9 +2989,9 @@ const renderMaskSyncContent = () => (
         {maskSyncEngineReady ? '引擎就绪' : '引擎初始化中…'}
       </span>
       {maskSyncEngineReady && (
-        <span className="mask-sync-status-info">
-          {maskSyncEngine.getDocName() || '无文档'}
-        </span>
+        maskSyncEngine.getDocName()
+          ? <span className="mask-sync-status-info">{maskSyncEngine.getDocName()}</span>
+          : <span className="mask-sync-status-info idle" title="未打开文档时蒙版同步不运行，属正常状态">未打开文档</span>
       )}
     </div>
 
@@ -3343,17 +3360,24 @@ const renderSectionContent = (sectionId: string) => {
   if (sectionId === 'detailAdjust') return renderDetailAdjustContent();
   if (sectionId === 'edgeProcessing') return renderEdgeProcessingContent();
   if (sectionId === 'maskSync') return renderMaskSyncContent();
+  if (sectionId === 'brushHotkey') return <BrushHotkeySection />;
   return null;
 };
 
 const renderSection = (section: SectionConfig) => (
-  <div key={section.id} className="adjust-expand-section">
+  <div key={section.id} className={
+    'adjust-expand-section' +
+    (dragSourceId === section.id ? ' dragging' : '') +
+    (dragOverId === section.id && dragSourceId !== section.id ? ' drop-target' : '')
+  }>
     <div className="adjust-expand-header"
          draggable
          onDragStart={(e)=>handleDragStart(e, section.id)}
-         onDragOver={handleDragOver}
+         onDragOver={(e)=>handleDragOver(e, section.id)}
+         onDragEnd={handleDragEnd}
          onDrop={(e)=>handleDrop(e, section.id)}
          onClick={()=>toggleSectionCollapse(section.id)}
+         title={section.id === 'brushHotkey' ? helpTexts.hotkey.header : undefined}
     >
       <div className={`adjust-expand-icon ${section.isCollapsed ? '' : 'expanded'}`}>
         <ExpandIcon expanded={!section.isCollapsed} />
@@ -3418,9 +3442,6 @@ return (
       .filter(section => section.isVisible)
       .sort((a, b) => a.order - b.order)
       .map(section => renderSection(section))}
-
-    {/* 笔刷热键分区 */}
-    <BrushHotkeySection />
 
     {/* 隐藏/显示分区模态框 */}
     {showVisibilityPanel && (

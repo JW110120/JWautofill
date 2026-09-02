@@ -1,84 +1,45 @@
-# JWautofill 项目长期记忆
+# JWautofill 长期记忆（精简）
 
-## 一、设计规范
-### 颜色（硬性约定）
-- 禁止 HEX，一律 rgb()/rgba()；走 theme.ts 主题变量，禁止硬编码。核心变量：`--bg-color`(面板背景) / `--text-color`(文字，主题色非固定蓝) / `--entry-bg`(行/卡片背景) / `--border-color` / `--disabled-color` / `--primary-color`(恒定 `rgb(38,128,235)`) / `--hover-bg`(主色 10~35% 透明) / `--button-bg` / `--dropdown-bg-color`(四主题固定 darkest `rgb(32,32,32)`/dark `rgb(57,57,57)`/light `rgb(218,218,218)`/lightest `rgb(255,255,255)`) / `--link-color` / `--notify-{ok,fail,warn}-{fg,bg,border}`。
-- **遮罩配色定稿**：不透明度恒 0.80，主题只调深浅——`darkest rgba(0,0,0,.80)` / `dark rgba(29,29,29,.80)` / `light rgba(92,92,92,.80)` / `lightest rgba(128,128,128,.80)`。字面 rgba 写进 `theme.ts` 末尾 `.license-dialog-overlay,.adjustment-lock-overlay{background-color:…}` + `@media` 块，**绝不用 `var(--overlay-scrim)`**（UXP 动态注入 var() 解析不稳→声明被丢）。
-- **面板命名**：`com.listen2me.jwautofill`=选区填充主面板(`src/app.tsx`)；`com.listen2me.pixeladjustment`=绘画工具箱(`src/adjustments/AdjustmentPanel.tsx`)。「主面板」=选区填充面板。
+## 设计规范
+- 颜色：禁止 HEX，一律 rgb()/rgba() 走 theme.ts 主题变量（--bg-color/--text-color/--entry-bg/--border-color/--primary-color:rgb(38,128,235)/--hover-bg/--dropdown-bg-color/--notify-*）。遮罩 0.80 不透明度字面写 theme.ts（darkest/dark/light/lightest 四档），绝不用 var(--overlay-scrim)。
+- 面板：选区填充=com.listen2me.jwautofill(src/app.tsx)；绘画工具箱=com.listen2me.pixeladjustment(src/adjustments/AdjustmentPanel.tsx)。
 
-### LicenseDialog & 授权横幅（2026-08-31 定稿）
-- 激活弹窗：遮罩 `padding:10px` + 卡片 `width:100%`（面板250→卡片230，上/左/右恒10px）；按钮用原生 `<button class="license-btn">` 对齐全局 button 规则，全宽32px；间距一律 margin 不用 flex gap；标题14/600 vs 正文12；卡片圆角3px（对齐 `.slider-container`）。
-- **「联系作者」链接**：必须用可点击 `<span role="button">` 绝不用 `<a>`（UXP 强制 `<a>` 用自带链接色、作者 color 被忽略、深色回退暗蓝，`<span>` 文字色才受控）；颜色字面 `rgb(38,128,235)` 四主题统一，组件 `<style>` 内**仍不得用 `var()`**；容器不设 opacity（连带压暗链接），仅普通文字 `.license-contact-dim{opacity:.7}`；外链 `shell.openExternal`；下划线用 `border-bottom`。
-- **`.license-status-banner` 永远留普通文档流**，绝不塞进 `position:fixed` 遮罩（fixed 包含块比内容区宽、右缘被滚动条压住补不回）→ 宽度定稿 `width:100%`。
-- 锁定遮罩 `.adjustment-lock-overlay` 从卡片下方开始：JSX 内联 `top:46px`/`height:calc(100% - 46px)`（无卡片 top:10px）；基础 CSS 只留 left/right/bottom/width/z-index。
+## LicenseDialog（2026-08-31）
+- 激活弹窗遮罩 padding:10px + 卡片 width:100%（面板250→卡片230），按钮原生 <button class="license-btn"> 全宽32px，间距用 margin。
+- 联系作者：可点击 <span role="button">（非 <a>），色字面 rgb(38,128,235)，下划线用 border-bottom，外链 shell.openExternal。
+- .license-status-banner 永远普通文档流，width:100%。
+- 双面板授权状态唯一来源 LicenseManager.getLicenseState()（带 stateCache 记忆化）；saveLicenseInfo/clearLicense 须置空缓存。激活/试用成功由 app.tsx 弹窗关闭同刻 dispatch license-updated；注销 clearLicense 立即广播。
 
-### 双面板授权状态同步（2026-08-31 定稿）
-- `LicenseManager.getLicenseState()` 带记忆化（`stateCache` 静态 Promise，同 bundle 共享）→ 启动弹窗与工具箱遮罩同刻出现；`saveLicenseInfo`/`clearLicense` 须置空缓存。
-- 广播时机：激活/试用成功 → `saveLicenseInfo` **不广播**，由 app.tsx `handleLicenseVerified`/`handleTrialStarted` 在**弹窗关闭同刻** dispatch `license-updated`；注销 → `clearLicense` 立即广播。app.tsx `checkLicenseStatus` 完成也 dispatch 一次。
-- 降低初始延迟：`computeLicenseState` 只做一次本地文件读取；两面板共享同一 Promise、同 tick 解出。
+## 分区系统（AdjustmentPanel）
+- SectionConfig[]（order/isCollapsed/isVisible）驱动渲染；renderSection 头部 draggable + onDragStart/Over/Drop 长按拖拽排序，dragSourceId/dragOverId 控制 .dragging(透明0.45)/.drop-target(虚线 outline:2px dashed var(--primary-color))。
+- 笔刷热键已并入 sections（id:'brushHotkey', order:4），内容由 renderSectionContent 分发；BrushHotkeySection 只返回 Fragment（无外层 section 包裹），头部/折叠/拖拽归父分区所有。
+- 可见性弹窗遍历 sections，新增分区自动支持隐藏/显示。
 
-### 滑块标签横向拖拽（2026-09-02 统一）
-- **通用 hook `src/utils/useLabelDrag.ts`**：`useLabelDrag(configs, applyValue)` → `{dragTarget, onLabelMouseDown, labelClass}`。起点存 ref，effect 依赖仅 `[dragTarget]`，值先按灵敏度放大 → 吸附 step → 夹 [min,max]。**新面板优先复用它**，别再手写 document 监听。
-- **灵敏度标定：sensitivity = step / 5**（即每 5px 鼠标位移 = 1 步长）。量程极大者放宽：0~255 用 0.5。
-- APP 主面板（`app.tsx`，class 组件）仍走 `utils/DragHandler.ts` 的 `configs` 表 + `handleLabelMouseDown/handleMouseMove/handleMouseUp`。
-  **新增可拖拽标签必须同步往 `DragHandler.configs` 注册**，漏注册=静默失效（光标会变但值不动，无报错）。
-- 工具箱（`AdjustmentPanel.tsx`）：`SLIDER_DRAG_CONFIGS` 表 + `sliderLabelClass(key, base)`；
-  可拖拽标签加 `.adjustment-slider-label-drag`（ew-resize，拖拽中 `.dragging`→grabbing），
-  下拉行标签（平滑模式/线稿参考）加 `.adjustment-slider-label-static`（cursor:default）。
-  `.wide-/.wider-adjustment-slider-label` 不得再写死 `cursor:pointer`。
-- 描边子面板（`StrokeSetting.tsx`）自行维护 `STROKE_DRAG_CONFIG`，宽度 0~20/0.5→0.1、不透明度 0~100/1→0.2。
-- **2×2（多行）按钮组必须同宽**：父级统一 `justify-content:space-between`，若各行按钮总宽不同会导致列错位。
-  边缘处理四颗（alpha下/alpha上/保底下对齐/线条加黑）统一 `.adjustment-button-quad{width:92px;flex:none}`；
-  92px = alpha 中英混排文案在 5字档(85) 与 6字档(98) 间的取值，四颗同宽后两行总宽均为 184（内容区 260）→ 严格对齐。
-  行间距用 `.adjustment-double-buttons-mb{margin-bottom:10px}`，只给非末行加。
+## 滑块标签横向拖拽
+- 通用 hook useLabelDrag(configs, applyValue)；灵敏度 = step/5。APP 主面板走 utils/DragHandler.configs（新标签须注册，否则静默失效），工具箱走 SLIDER_DRAG_CONFIGS。
+- 双行滑块：onMouseDown/title 挂上层行容器整行可拖；单行滑块只挂标签。容器 handler 须排除 INPUT/TEXTAREA 防吞聚焦。
+- 拖拽中光标统一 grabbing：setDragCursorActive(true/false) + body.label-drag-cursor *{cursor:grabbing!important}（引用计数防多面板叠加误摘）。工具箱样式在 src/adjustments/adjustment.css（勿改已删的 src/styles/adjustment.css）。
 
-## 二、下拉/选择器
-- 统一自绘 `src/components/Select.tsx`（`.mask-sync-select-*` 在 `adjustment.css`），不再用 `sp-picker`/`sp-menu`。弹层 `createPortal` 到面板根（`#app`/`#pixeladjustment`，`utils/popRoot.ts`），**绝不挂 body**。`.mask-sync-select-pop{position:fixed;z-index:99998;min-width:96px}`；选中项背景写死 `rgb(38,128,235)`（portal 子树 var() 不稳）。头部/内部用「两级类」防面板 `div>span` 规则覆盖。
+## 下拉/选择器
+- 自绘 src/components/Select.tsx，createPortal 到面板根(#app/#pixeladjustment)，绝不挂 body；选中项背景写死 rgb(38,128,235)。
 
-## 三、架构
-- 入口 `src/index.tsx`：`#app`+`#pixeladjustment` 同文档同 bundle；`MenuManager.setup()`；蒙版同步 `MaskSyncEngine.ts` 单例。
-- 授权状态唯一来源 `LicenseManager.getLicenseState()`（返回 `{isLicensed,isTrial,trialDaysRemaining,expired,needsReverification}`），两面板禁用各自判定。`TRIAL_` 开头永算试用、只对 TRIAL 判过期、自动复验只对正式授权。
-- 提交约定：每次 commit `git add -A` 纳入 `.workbuddy/memory/` 全部记忆与日志。
-- 文案：代码称「守护进程/daemon」，用户可见统一叫「快捷键服务」。守护进程静默：exe WinExe 不弹控制台、日志落 `%LOCALAPPDATA%\JWautofill\daemon\daemon.log`、`EnsureSelfInstalled()` 自拷贝+注册 HKCU\Run。
+## UXP 避坑
+- 原生 input：background:transparent + 容器32px/input24px 缓冲 + onFocus/onBlur 切 .is-focused + appearance:none。
+- flex gap 不可靠→margin；容器 opacity 压暗子链接→只降文字透明。<a> 不唤起浏览器→shell.openExternal；自定义色链接用 <span role="button">。
+- number input 防越界：容器32px+input24px（input 绝不能撑满容器），单位符号放裁剪容器外（.num-unit 等）。
+- 遮罩下隐藏控件：body.adjustment-lock-overlay #pixeladjustment input,textarea / body.license-dialog-open #app … + visibility:hidden!important;opacity:0!important;pointer-events:none!important。
+- 面板禁止 .xxx-item div{} 通配后代选择器（命中自绘弹层）；radio 自定义按钮绝对定位，规则 scoped 不挂全局。
 
-## 四、UXP 避坑（硬限制）
-- 原生 `<input>`：① `background:transparent` 绘成纯黑→input 与 wrap 同色 `--dropdown-bg-color`；② 原生绘制区恒高于 CSS 盒且 `overflow:hidden` 裁不掉→容器 32px + input 24px（上下各4px缓冲）；聚焦用 React `onFocus/onBlur` 切 `.is-focused` 勿 `:focus-within`；`appearance:none` 消 UA 异色外圈。
-- `flex gap` 不可靠→一律 margin。容器 `opacity` 连带压暗子链接→只给文字降透明。
-- `<a href>` 不唤起浏览器→`shell.openExternal`；自定义色链接一律用可点击 `<span role="button">`（UXP 强制 `<a>` 用自带链接色）。`text-decoration:underline` 不可靠→`border-bottom`。
-- 遮罩下隐藏可编辑控件：`body.adjustment-lock-open #pixeladjustment input,textarea` / `body.license-dialog-open #app …` + `visibility:hidden!important;opacity:0!important;pointer-events:none!important`（须带 `!important`）。
-- `flex` 列里固定高度卡片须 `flex:none`+`min-height`+`box-sizing:border-box` 防压缩。
-- 面板禁止 `.xxx-item div{}`/`span{}` 通配后代选择器（命中自绘弹层）。
-- sp-radio slot 内不行内流布局→自定义按钮绝对定位：容器 `position:relative` + 按钮 `position:absolute;right:0;top:50%`，文字 `margin-right` 让位；规则必须 scoped 绝不挂全局 `.radio-item`/`.radio-item-label`（颜色面板「计算方法」radio 复用 `.radio-item-label`，全局改会挤崩）。填充模式齿轮：`.fill-mode-group .radio-item{position:relative}` + 按钮 `margin-top:-9px`。
-- **原生 number input 防越界定稿（2026-09-01 终版：容器32px+input24px缓冲）**：UXP 原生 number 绘制区恒高于 CSS 盒，CSS 高度压不掉、只决定缓冲；**绝不能让 input 撑满容器**（撑满必越界复发）。落点：主面板 `#app`(5)、描边 StrokeSetting(2)、工具箱 `#pixeladjustment`(13)、子面板(ColorSettingsPanel 1 + PatternPicker 2 + GradientPicker 2，JSX 包 `.num-input-row`；工具箱内层用 `input[type=number]` 覆盖无名输入)。单位符号一律在裁剪容器外（`.num-unit`/`.gradient-subtitle`/裸 span）。
-- **产品决策：笔刷热键不支持同名笔刷**（多轮方案不可靠已回退）。绑定/切换只按 `_name`，同名只选最上方；下拉笔刷名去重 `Array.from(new Set(brushes))`，value 即笔刷名，(1)/(2) 角标已删。
+## 布局宽度（定稿）
+- 滑块文字标签宽度：W(n)=20+(n-2)×13.33（n=2..6 → 20/33/47/60/73px），由 -2~-6 修饰类，容器 flex:none。
+- 按钮宽度：字数×字号+20px（普通 height30/font13；紧凑 height24/font12）。落点 adjustment.css .adjustment-button 系列（默认72/-lv2 46/-wide 124/-5~8 精确档）。
 
-- **滑块拖拽热区规则（2026-09-02 定稿）**：
-  - **双行滑块**（第一行=标签+数字输入+单位，第二行=滑块条）→ `onMouseDown`+`title` 挂**上层行容器**（`.slider-parameter-collection` / `.pattern-slider-parameter-collection` / `.colorsettings-slider-parameter-collection`），第一行整行（含中间空白）可拖。落点：APP 不透明度/羽化、图案 角度/缩放、纯色 `renderSlider` 全部 4 个。
-  - **单行滑块**（label 与 RangeSlider 同行）→ 只挂标签，整行可拖会与滑块条自身点击跳转/拖动冲突。落点：APP 选区选项 3 个、工具箱 13 个、描边 2 个。
-  - **任何挂到容器的拖拽 handler 开头必须排除输入框**：`const el = event.target as HTMLElement|null; if (el && (el.tagName==='INPUT'||el.tagName==='TEXTAREA')) return;`——容器上的 `preventDefault()` 会吞掉 number input 的聚焦/编辑。
-  - 配套 CSS：行容器内的 `input[type="number"]` 显式 `cursor:text`，覆盖继承来的 `ew-resize`。
-  - **拖拽期间光标语义（2026-09-02 修订）**：常态/悬停恒 `ew-resize`（表示可横向拖调），
-    **拖拽中（dragging 状态）统一 `grabbing`**（按下即抓住元素横拖，符合「抓取移动」语义）。
-    统一调用 `src/utils/dragCursor.ts` 的 `setDragCursorActive(true/false)`，由
-    `body.label-drag-cursor *{cursor:grabbing !important}` 全局兜底（鼠标移出容器/标签也保持 grabbing，不变回箭头）。
-    六个面板（APP/工具箱 via useLabelDrag/图案/纯色/描边/渐变）的 mousedown 加 `true`、mouseup 加 `false`；
-    CSS 规则在 styles/adjustment/pattern/colorpanel/gradient/stroke 六份各自带一份（UXP 子面板独立 document）。
-    `dragCursor.ts` 用引用计数而非布尔，避免同 bundle 多面板叠加拖拽时误摘。
-    ⚠️ 工具箱真实样式是 `src/adjustments/adjustment.css`，不要误改到无引用的 `src/styles/adjustment.css`（已删除）。
+## 说明文案
+- 所有 hover title 收口 src/constants/helpTexts.ts（selectionFill/adjustment/hotkey/gradient/pattern），调用处 title={helpTexts.x.y}，禁止 JSX 内联长字符串（多行用 \n\n 拼接）。
 
-## 五、算法
-- 分块补色/渐变/线稿引导/alpha 对齐见历史日志；清像素须显式清零；扣白/扣黑公式与 N 计算见当日记录。
-
-## 六、文档与 README 同步
-- 重大版本更新：文档（docs/fill-guide.html、docs/toolbox-guide.html）与 README.md 必须同步（功能增删、菜单/快捷键/授权流程变更）。
-- 文档为自包含 HTML（侧边栏导航+滚动高亮+卡片/表格/提示框，明暗主题），由「⋮」菜单「功能文档」经 `openPluginDoc()`（`src/utils/openDocs.ts`：`getPluginFolder().nativePath` + `shell.openPath`）在默认浏览器打开；webpack 已拷贝 `docs/` 进 `dist/docs/`。
-
-## 七、布局算法（滑块标签/按钮宽度）—— 2026-09-01 定稿
-- **滑块文字标签宽度**（APP 三面板统一）：以「2字=20px、5字=60px」线性插值，每字≈13.33px：**W(n)=20+(n−2)×13.33**（四舍五入）→ n=2/3/4/5/6 = 20/33/47/60/73px。由 `-2`~`-6` 修饰类给出（容器 `flex:none`）。三面板落地：选区填充 `styles.css` `.slider-text-2`~`-6`；图案 `pattern.css` `.pattern-slider-text-2`~`-6`；纯色 `colorpanel.css` `.colorsettings-slider-text-2`~`-6`（`SliderControl.tsx` 按 `label.length` 自动挂，-N clamp 2~6，1字按2字）。
-- **工具箱按钮宽度**：**W = 字数×字号 + 20px，容器 padding:0**。普通档 height30/font13 → `13×n+20`（2→46/3→59/4→72/5→85/6→98/7→111/8→124）；紧凑档 height24/font12（守护进程状态条）→ `12×n+20`（7字→104）。落地：`adjustment.css` `.adjustment-button`(72默认)/`-lv2`(46)/`-wide`(124兜底)/`-5/6/7/8`(85/98/111/124)，`.auto`(去padding)/`.compact`(104)。AdjustmentPanel 宽按钮按字数挂精确档（8→-8、7→-7、5→-5、4→默认）。
-
-## 八、说明文案（hover title）集中管理 —— 2026-09-01
-- 所有面板 hover 说明收口到 `src/constants/helpTexts.ts`，按面板分组：`selectionFill`(app.tsx)/`adjustment`(AdjustmentPanel.tsx)/`hotkey`(BrushHotkeySection.tsx)/`gradient`(GradientPicker.tsx)/`pattern`(PatternPicker.tsx)。
-- 调用处一律 `title={helpTexts.<section>.<key>}`，**禁止 JSX 内联长字符串**（多行 `●` 模板字符串致排版乱、须原生 `title` 才左对齐+`\n\n` 间隔）。多行说明在 helpTexts.ts 以 `\n\n` 拼接。
-- import 路径：文件在 `src/` 下 `./constants/helpTexts`；`src/adjustments/`、`src/hotkey/`、`src/components/` 下均 `../constants/helpTexts`。
-- 通用组件（IconButton/CustomSwitch/RangeSlider/Select/BrushSelect/MaskSyncSelect）的 `title={title}` 是 prop 透传勿动；只改调用处字面量。激活面板 LicenseDialog 与 ColorSettingsPanel/StrokeSetting 无静态 title，无需收口。
+## 其它
+- 守护进程：代码称 daemon，用户可见「快捷键服务」；exe 静默、日志 %LOCALAPPDATA%\JWautofill\daemon\daemon.log、自拷贝+注册 HKCU\Run。笔刷热键不支持同名笔刷（按 _name 绑定，PS 选最上方）。
+- 蒙版同步：MaskSyncEngine.ts 单例；无活动文档时状态条显示静默（不弹警告），"未打开文档" opacity:0.45 省去告警观感。
+- 文档/README 同步：重大变更须同步 docs/fill-guide.html、docs/toolbox-guide.html、README.md。
+- 提交约定：git add -A 纳入 .workbuddy/memory/ 全部记忆与日志。
+- 算法：分块补色/渐变/线稿引导/alpha 对齐见历史日志；清像素须显式清零。

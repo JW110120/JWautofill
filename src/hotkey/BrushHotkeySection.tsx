@@ -7,7 +7,7 @@ import {
   setMainToggleCombo, getMainToggleCombo,
   detectAllBrushTypes
 } from './HotkeyBridge';
-import { ExpandIcon, DeleteIcon, RefreshIcon, DataRefreshIcon, RecordCircleIcon, StopSquareIcon, BrushToolIcon, SmudgeToolIcon, MixerToolIcon, CloneStampIcon } from '../styles/Icons';
+import { DeleteIcon, RefreshIcon, DataRefreshIcon, RecordCircleIcon, StopSquareIcon, BrushToolIcon, SmudgeToolIcon, MixerToolIcon, CloneStampIcon } from '../styles/Icons';
 import BrushSelect, { BrushSelectOption } from './BrushSelect';
 import { helpTexts } from '../constants/helpTexts';
 
@@ -22,7 +22,6 @@ import { helpTexts } from '../constants/helpTexts';
 const MESSAGE_TTL_MS = 5000;
 
 export default function BrushHotkeySection() {
-  const [collapsed, setCollapsed] = useState(false);
   const [brushes, setBrushes] = useState<string[]>([]);
   const [brushTypes, setBrushTypes] = useState<Record<string, string>>({});
   const [entries, setEntries] = useState<HotkeyEntry[]>([]);
@@ -201,7 +200,6 @@ export default function BrushHotkeySection() {
   // 优先走静默通道：直接让守护进程自删（移除开机自启 + 删除安装目录 + 退出），无窗口；
   // 仅在未连接守护进程（无法发指令）时，才退回到会弹窗的脚本方式。
   const uninstallDaemon = async (): Promise<string> => {
-    setCollapsed(false);
     if (daemonConnectedRef.current) {
       showMessage('正在卸载快捷键服务…');
       const sent = sendDaemonCommand('uninstall');
@@ -472,181 +470,170 @@ export default function BrushHotkeySection() {
     : entries;
 
   return (
-    <div className="adjust-expand-section">
-      <div className="adjust-expand-header" onClick={() => setCollapsed(c => !c)}
-           title={helpTexts.hotkey.header}>
-        <div className={`adjust-expand-icon ${collapsed ? '' : 'expanded'}`}>
-          <ExpandIcon expanded={!collapsed} />
+    <>
+      {/* 守护进程状态条：与「蒙版同步」的引擎状态条同一套视觉，左侧状态点+文字，右侧操作按钮 */}
+      <div className="mask-sync-status-bar">
+        <span className={`mask-sync-status-dot ${daemonConnected ? 'ok' : 'warn'}`} />
+        <span className="mask-sync-status-ready">
+          {daemonConnected ? '快捷键服务已就绪' : (busy ? '快捷键服务处理中…' : '快捷键服务未启动')}
+        </span>
+        <span className="mask-sync-status-spacer" />
+        <div
+          role="button"
+          tabIndex={0}
+          className={`adjustment-button auto compact${busy ? ' disabled' : ''}`}
+          title={daemonConnected
+            ? helpTexts.hotkey.daemonStop
+            : helpTexts.hotkey.daemonStart}
+          onClick={(e) => {
+            e.stopPropagation(); // 避免冒泡到分区头部触发折叠
+            if (!busy) { if (daemonConnected) void stopDaemon(); else void loadDaemon(); }
+          }}
+        >
+          {daemonConnected ? '停止快捷键服务' : '启动快捷键服务'}
         </div>
-        <div>笔刷热键</div>
       </div>
-      {!collapsed && (
-        <div className="adjust-expand-content expanded">
-          {/* 守护进程状态条：与「蒙版同步」的引擎状态条同一套视觉，左侧状态点+文字，右侧操作按钮 */}
-          <div className="mask-sync-status-bar">
-            <span className={`mask-sync-status-dot ${daemonConnected ? 'ok' : 'warn'}`} />
-            <span className="mask-sync-status-ready">
-              {daemonConnected ? '快捷键服务已就绪' : (busy ? '快捷键服务处理中…' : '快捷键服务未启动')}
-            </span>
-            <span className="mask-sync-status-spacer" />
+
+      <div className="hotkey-brush-row">
+        {usePicker ? (
+          <BrushSelect
+            value={selectedKey}
+            options={brushOptions}
+            onChange={(v) => {
+              // value 即笔刷名（去重后唯一），直接作为录制用的真实笔刷名
+              setSelectedBrush(v);
+              setSelectedKey(v);
+            }}
+            placeholder="选择笔刷"
+            title={helpTexts.hotkey.brushSelect}
+            className="hotkey-brush-field"
+          />
+        ) : (
+          <sp-textfield size="s" className="hotkey-brush-field" placeholder="输入笔刷预设名（需与 PS 完全一致）"
+            value={selectedBrush} onInput={(e: any) => setSelectedBrush(e.target.value)} />
+        )}
+        {/* 三个图标共用一个固定宽度大容器：下拉自由伸缩，图标组恒为 3×28px，
+            录制键恒在最右格；停止键出现/消失在预留的中间格子内，
+            因此刷新与录制都不会位移，三者间距也始终一致 */}
+        <div className="hotkey-icon-group">
+          <div className="hotkey-icon-cell">
+            {usePicker && (
+              <div
+                className="hotkey-icon-button"
+                onClick={() => void loadBrushes(true)}
+                title={helpTexts.hotkey.refreshBrushes}
+              >
+                <RefreshIcon className="icon-14" />
+              </div>
+            )}
+          </div>
+          <div className="hotkey-icon-cell">
             <div
               role="button"
               tabIndex={0}
-              className={`adjustment-button auto compact${busy ? ' disabled' : ''}`}
-              title={daemonConnected
-                ? helpTexts.hotkey.daemonStop
-                : helpTexts.hotkey.daemonStart}
+              className={`hotkey-circle-button${recording ? '' : ' disabled'}`}
+              title={recording ? helpTexts.hotkey.recordCancelActive : helpTexts.hotkey.recordCancelIdle}
+              onClick={(e) => { e.stopPropagation(); if (recording) cancelRecord(); }}
+            >
+              <StopSquareIcon className="icon-16" />
+            </div>
+          </div>
+          <div className="hotkey-icon-cell">
+            <div
+              role="button"
+              tabIndex={0}
+              className={`hotkey-circle-button${recording ? ' recording' : ''}${!selectedBrush ? ' disabled' : ''}`}
+              title={helpTexts.hotkey.recordHint}
               onClick={(e) => {
-                e.stopPropagation(); // 避免冒泡到分区头部触发折叠
-                if (!busy) { if (daemonConnected) void stopDaemon(); else void loadDaemon(); }
+                e.stopPropagation();
+                if (!recording && selectedBrush) void startRecord();
               }}
             >
-              {daemonConnected ? '停止快捷键服务' : '启动快捷键服务'}
+              <RecordCircleIcon className="icon-16" />
             </div>
           </div>
-
-          <div className="hotkey-brush-row">
-            {usePicker ? (
-              <BrushSelect
-                value={selectedKey}
-                options={brushOptions}
-                onChange={(v) => {
-                  // value 即笔刷名（去重后唯一），直接作为录制用的真实笔刷名
-                  setSelectedBrush(v);
-                  setSelectedKey(v);
-                }}
-                placeholder="选择笔刷"
-                title={helpTexts.hotkey.brushSelect}
-                className="hotkey-brush-field"
-              />
-            ) : (
-              <sp-textfield size="s" className="hotkey-brush-field" placeholder="输入笔刷预设名（需与 PS 完全一致）"
-                value={selectedBrush} onInput={(e: any) => setSelectedBrush(e.target.value)} />
-            )}
-            {/* 三个图标共用一个固定宽度大容器：下拉自由伸缩，图标组恒为 3×28px，
-                录制键恒在最右格；停止键出现/消失在预留的中间格子内，
-                因此刷新与录制都不会位移，三者间距也始终一致 */}
-            <div className="hotkey-icon-group">
-              <div className="hotkey-icon-cell">
-                {usePicker && (
-                  <div
-                    className="hotkey-icon-button"
-                    onClick={() => void loadBrushes(true)}
-                    title={helpTexts.hotkey.refreshBrushes}
-                  >
-                    <RefreshIcon className="icon-14" />
-                  </div>
-                )}
-              </div>
-              <div className="hotkey-icon-cell">
-                <div
-                  role="button"
-                  tabIndex={0}
-                  className={`hotkey-circle-button${recording ? '' : ' disabled'}`}
-                  title={recording ? helpTexts.hotkey.recordCancelActive : helpTexts.hotkey.recordCancelIdle}
-                  onClick={(e) => { e.stopPropagation(); if (recording) cancelRecord(); }}
-                >
-                  <StopSquareIcon className="icon-16" />
-                </div>
-              </div>
-              <div className="hotkey-icon-cell">
-                <div
-                  role="button"
-                  tabIndex={0}
-                  className={`hotkey-circle-button${recording ? ' recording' : ''}${!selectedBrush ? ' disabled' : ''}`}
-                  title={helpTexts.hotkey.recordHint}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (!recording && selectedBrush) void startRecord();
-                  }}
-                >
-                  <RecordCircleIcon className="icon-16" />
-                </div>
-              </div>
-            </div>
-          </div>
-          {!usePicker && (
-            <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>
-              未能自动枚举笔刷，已切换为手动输入；点「录制快捷键」前请先填好笔刷名（需与 PS 完全一致）。
-            </div>
-          )}
-
-          {/* 所有录好的快捷键都装在一个边框可见的大容器里（参考蒙版同步卡片外部的大容器）；
-              删除键移到容器外的右下角，见下方 .hotkey-entry-actions */}
-          <div className="hotkey-entry-box">
-            <div className="hotkey-entry-list">
-              {displayEntries.length === 0 && <div style={{ fontSize: 12, opacity: 0.6 }}>尚未绑定任何快捷键</div>}
-              {displayEntries.map(e => {
-                const isPinned = e.action === 'toggleMain';
-                const rowClass = [
-                  'hotkey-entry-row',
-                  selectedIds.includes(e.id) ? 'selected' : '',
-                  isPinned ? 'pinned' : '',
-                  dragId === e.id ? 'dragging' : '',
-                  (dropId === e.id && dragId !== null && dragId !== e.id) ? 'drop-target' : '',
-                ].join(' ');
-                return (
-                <div
-                  key={e.id}
-                  ref={(el) => { rowRefs.current[e.id] = el; }}
-                  className={rowClass}
-                  title={isPinned
-                    ? helpTexts.hotkey.entryPinned
-                    : helpTexts.hotkey.entryNormal}
-                  onClick={(ev) => handleEntryClick(e.id, ev)}
-                  onMouseDown={(ev) => startPress(ev, e)}
-                  onMouseUp={endPress}
-                  onMouseMove={onRowMove}
-                >
-                  {/* 快捷键列定宽：分隔线紧贴它，因此跨条目始终对齐 */}
-                  <span className="hotkey-entry-combo">{e.combo || '未绑定'}</span>
-                  <span className="hotkey-entry-sep">丨</span>
-                  <span className="hotkey-entry-name">
-                    {isPinned ? '选区填充开关' : e.brush}
-                  </span>
-                </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* 选中条数提示 + 重录 + 删除：列表大容器外右下角，说明文字上方。
-              左侧「已选中 N 条」左对齐；右侧重录（仅选中单条时）与删除图标按钮相邻 */}
-          <div className="hotkey-entry-actions">
-            <span className="hotkey-selected-count">已选中 {selectedIds.length} 条</span>
-            <div style={{ display: 'flex', alignItems: 'center' }}>
-              <div
-                role="button"
-                tabIndex={0}
-                className={`hotkey-icon-button${(selectedIds.length !== 1 || recording || !daemonConnected) ? ' disabled' : ''}`}
-                style={{ marginRight: 4 }}
-                title={selectedIds.length === 1 ? helpTexts.hotkey.reRecordOne : helpTexts.hotkey.reRecord}
-                onClick={() => { if (selectedIds.length === 1 && !recording && daemonConnected) void reRecordEntry(); }}
-              >
-                <DataRefreshIcon className="icon-14" />
-              </div>
-              <div
-                role="button"
-                tabIndex={0}
-                className={`hotkey-icon-button${deletableCount ? '' : ' disabled'}`}
-                title={deletableCount
-                  ? ('删除选中的 ' + deletableCount + ' 条（选区填充开关为解绑而非删除）')
-                  : '请先在上方单击选中要删除的快捷键'}
-                onClick={() => removeSelectedEntries()}
-              >
-                <DeleteIcon className="icon-14" />
-              </div>
-            </div>
-          </div>
-
-          {/* 底部文字通知：与「蒙版同步」的 .mask-sync-result 同一套样式（ok 绿 / warn 橙） */}
-          {message && (
-            <div className={`mask-sync-result ${daemonConnected ? 'ok' : 'warn'}`}>
-              {message}
-            </div>
-          )}
+        </div>
+      </div>
+      {!usePicker && (
+        <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>
+          未能自动枚举笔刷，已切换为手动输入；点「录制快捷键」前请先填好笔刷名（需与 PS 完全一致）。
         </div>
       )}
-    </div>
+
+      {/* 所有录好的快捷键都装在一个边框可见的大容器里（参考蒙版同步卡片外部的大容器）；
+          删除键移到容器外的右下角，见下方 .hotkey-entry-actions */}
+      <div className="hotkey-entry-box">
+        <div className="hotkey-entry-list">
+          {displayEntries.length === 0 && <div style={{ fontSize: 12, opacity: 0.6 }}>尚未绑定任何快捷键</div>}
+          {displayEntries.map(e => {
+            const isPinned = e.action === 'toggleMain';
+            const rowClass = [
+              'hotkey-entry-row',
+              selectedIds.includes(e.id) ? 'selected' : '',
+              isPinned ? 'pinned' : '',
+              dragId === e.id ? 'dragging' : '',
+              (dropId === e.id && dragId !== null && dragId !== e.id) ? 'drop-target' : '',
+            ].join(' ');
+            return (
+            <div
+              key={e.id}
+              ref={(el) => { rowRefs.current[e.id] = el; }}
+              className={rowClass}
+              title={isPinned
+                ? helpTexts.hotkey.entryPinned
+                : helpTexts.hotkey.entryNormal}
+              onClick={(ev) => handleEntryClick(e.id, ev)}
+              onMouseDown={(ev) => startPress(ev, e)}
+              onMouseUp={endPress}
+              onMouseMove={onRowMove}
+            >
+              {/* 快捷键列定宽：分隔线紧贴它，因此跨条目始终对齐 */}
+              <span className="hotkey-entry-combo">{e.combo || '未绑定'}</span>
+              <span className="hotkey-entry-sep">丨</span>
+              <span className="hotkey-entry-name">
+                {isPinned ? '选区填充开关' : e.brush}
+              </span>
+            </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 选中条数提示 + 重录 + 删除：列表大容器外右下角，说明文字上方。
+          左侧「已选中 N 条」左对齐；右侧重录（仅选中单条时）与删除图标按钮相邻 */}
+      <div className="hotkey-entry-actions">
+        <span className="hotkey-selected-count">已选中 {selectedIds.length} 条</span>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <div
+            role="button"
+            tabIndex={0}
+            className={`hotkey-icon-button${(selectedIds.length !== 1 || recording || !daemonConnected) ? ' disabled' : ''}`}
+            style={{ marginRight: 4 }}
+            title={selectedIds.length === 1 ? helpTexts.hotkey.reRecordOne : helpTexts.hotkey.reRecord}
+            onClick={() => { if (selectedIds.length === 1 && !recording && daemonConnected) void reRecordEntry(); }}
+          >
+            <DataRefreshIcon className="icon-14" />
+          </div>
+          <div
+            role="button"
+            tabIndex={0}
+            className={`hotkey-icon-button${deletableCount ? '' : ' disabled'}`}
+            title={deletableCount
+              ? ('删除选中的 ' + deletableCount + ' 条（选区填充开关为解绑而非删除）')
+              : '请先在上方单击选中要删除的快捷键'}
+            onClick={() => removeSelectedEntries()}
+          >
+            <DeleteIcon className="icon-14" />
+          </div>
+        </div>
+      </div>
+
+      {/* 底部文字通知：与「蒙版同步」的 .mask-sync-result 同一套样式（ok 绿 / warn 橙） */}
+      {message && (
+        <div className={`mask-sync-result ${daemonConnected ? 'ok' : 'warn'}`}>
+          {message}
+        </div>
+      )}
+    </>
   );
 }

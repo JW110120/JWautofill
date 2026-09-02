@@ -845,6 +845,16 @@ body.label-drag-cursor * {
   fill: var(--text-color);
 }
 
+/* 分区级拖拽排序：拖起的分区半透明、落点分区用主题蓝虚线描边指示插入位置，
+   与笔刷热键记录重排（.hotkey-entry-row.dragging/.drop-target）同一套视觉 */
+.adjust-expand-section.dragging {
+  opacity: 0.45;
+}
+.adjust-expand-section.drop-target {
+  outline: 2px dashed var(--primary-color);
+  outline-offset: -2px;
+}
+
 /* 模态框遮罩与内容*/
 .adjustment-modal-overlay {
   position: fixed;
@@ -1062,6 +1072,11 @@ body.label-drag-cursor * {
   max-width: 60%; /* 限制标题容器宽度，长文档名截断而非挤压/重叠左侧状态 */
   min-width: 0;   /* 允许 flex 收缩以触发 ellipsis，而非溢出重叠 */
   flex-shrink: 1;
+}
+
+/* 无活动文档时的静默提示：弱化显示，避免每次开 PS 都像「告警」 */
+.mask-sync-status-info.idle {
+  opacity: 0.45;
 }
 
 /* 每任务上次同步结果 */
