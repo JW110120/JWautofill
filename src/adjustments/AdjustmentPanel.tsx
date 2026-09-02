@@ -31,6 +31,7 @@ import { maskSyncEngine, MASK_SYNC_CHANNEL_LABELS, LayerTreeEntry, MaskSyncTask,
 import BrushHotkeySection from '../hotkey/BrushHotkeySection';
 import RangeSlider from '../components/RangeSlider';
 import { helpTexts } from '../constants/helpTexts';
+import { useLabelDrag } from '../utils/useLabelDrag';
 
 // 单位换算为像素（兼容普通数字与带 _unit/_value 的单位对象）
 const toPixels = (v: any, resolution: number) => {
@@ -2705,6 +2706,53 @@ const handleDrop = (e: React.DragEvent, targetId: string) => {
   setIsDragMode(false);
 };
 
+// ============================================================================
+// 滑块文字标签横向拖拽调值（对齐 APP 主面板：按住标签左右拖 = 改滑块值）
+// 灵敏度统一按「每 5px 鼠标位移 ≈ 1 个步长」标定，即 sensitivity ≈ 步长 / 5。
+// ============================================================================
+const SLIDER_DRAG_CONFIGS = {
+  radius:                      { min: 5,   max: 20,  step: 1,   sensitivity: 0.2   },
+  sigma:                       { min: 1,   max: 5,   step: 0.5, sensitivity: 0.1   },
+  gradientRelaxStrength:       { min: -10, max: 10,  step: 1,   sensitivity: 0.2   },
+  specialSharpenStrength:      { min: 1,   max: 10,  step: 0.5, sensitivity: 0.1   },
+  highFreqIntensity:           { min: 1,   max: 10,  step: 0.5, sensitivity: 0.1   },
+  highFreqRange:               { min: 1,   max: 10,  step: 0.5, sensitivity: 0.1   },
+  edgeMedianRadius:            { min: 10,  max: 30,  step: 1,   sensitivity: 0.2   },
+  edgeLineStrength:            { min: 0,   max: 100, step: 1,   sensitivity: 0.2   },
+  edgeLineSmoothRadius:        { min: 3,   max: 12,  step: 1,   sensitivity: 0.2   },
+  weightedIntensity:           { min: 1,   max: 10,  step: 0.5, sensitivity: 0.1   },
+  specialWoodcutLevels:        { min: 2,   max: 16,  step: 1,   sensitivity: 0.2   },
+  specialWoodcutEdgeThreshold: { min: 0,   max: 255, step: 1,   sensitivity: 0.5   },
+  specialWoodcutEdgeStrength:  { min: 0,   max: 100, step: 1,   sensitivity: 0.2   }
+} as const;
+
+type SliderDragKey = keyof typeof SLIDER_DRAG_CONFIGS;
+
+const { dragTarget: sliderDragTarget, onLabelMouseDown: onSliderLabelMouseDown } = useLabelDrag(
+  SLIDER_DRAG_CONFIGS as Record<SliderDragKey, { min: number; max: number; step?: number; sensitivity?: number }>,
+  (key: SliderDragKey, value: number) => {
+    switch (key) {
+      case 'radius': handleRadiusChange(value); break;
+      case 'sigma': handleSigmaChange(value); break;
+      case 'gradientRelaxStrength': handleGradientRelaxStrengthChange(value); break;
+      case 'specialSharpenStrength': handleSpecialSharpenStrengthChange(value); break;
+      case 'highFreqIntensity': handleHighFreqIntensityChange(value); break;
+      case 'highFreqRange': handleHighFreqRangeChange(value); break;
+      case 'edgeMedianRadius': handleEdgeMedianRadiusChange(value); break;
+      case 'edgeLineStrength': handleEdgeLineStrengthChange(value); break;
+      case 'edgeLineSmoothRadius': handleEdgeLineSmoothRadiusChange(value); break;
+      case 'weightedIntensity': handleWeightedIntensityChange(value); break;
+      case 'specialWoodcutLevels': handleSpecialWoodcutLevelsChange(value); break;
+      case 'specialWoodcutEdgeThreshold': handleSpecialWoodcutEdgeThresholdChange(value); break;
+      case 'specialWoodcutEdgeStrength': handleSpecialWoodcutEdgeStrengthChange(value); break;
+    }
+  }
+);
+
+/** 可拖拽滑块标签的统一 className：基类 + 可拖拽修饰类 + 拖拽中/未拖拽 */
+const sliderLabelClass = (key: SliderDragKey, base: string) =>
+  `${base} adjustment-slider-label-drag ${sliderDragTarget === key ? 'dragging' : 'not-dragging'}`;
+
 // 渲染子功能内容
 const renderDetailAdjustContent = () => (
   <div className="adjustment-section">
@@ -2728,7 +2776,7 @@ const renderDetailAdjustContent = () => (
     {!usePowerfulMode && (
       <div className="adjustment-slider-container">
         <div className="adjustment-slider-item">
-          <div className="adjustment-slider-label" title={helpTexts.adjustment.radius}>半径</div>
+          <div className={sliderLabelClass('radius', 'adjustment-slider-label')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'radius', radius)} title={helpTexts.adjustment.radius}>半径</div>
           <div className="unit-container">
             <RangeSlider min={5} max={20} step={1} value={radius} onChange={handleRadiusChange} className="adjustment-slider-input" />
             <div className="num-input-row"><input type="number" min="5" max="20" step="1" value={radius} onChange={handleRadiusNumberChange} className="adjustment-number-input" /></div>
@@ -2736,7 +2784,7 @@ const renderDetailAdjustContent = () => (
           </div>
         </div>
         <div className="adjustment-slider-item">
-          <div className="adjustment-slider-label" title={helpTexts.adjustment.sigma}>强度</div>
+          <div className={sliderLabelClass('sigma', 'adjustment-slider-label')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'sigma', sigma)} title={helpTexts.adjustment.sigma}>强度</div>
           <div className="unit-container">
             <RangeSlider min={1} max={5} step={0.5} value={sigma} onChange={handleSigmaChange} className="adjustment-slider-input" />
             <div className="num-input-row"><input type="number" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaNumberChange} className="adjustment-number-input" /></div>
@@ -2752,7 +2800,7 @@ const renderDetailAdjustContent = () => (
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" title={helpTexts.adjustment.gradientRelax}>程度</div>
+        <div className={sliderLabelClass('gradientRelaxStrength', 'adjustment-slider-label')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'gradientRelaxStrength', gradientRelaxStrength)} title={helpTexts.adjustment.gradientRelax}>程度</div>
         <div className="unit-container">
           <RangeSlider min={-10} max={10} step={1} value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthChange} className="adjustment-slider-input" />
           <div className="num-input-row"><input type="number" min="-10" max="10" step="1" value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthNumberChange} className="adjustment-number-input" /></div>
@@ -2767,7 +2815,7 @@ const renderDetailAdjustContent = () => (
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" title={helpTexts.adjustment.specialSharpenStrength}>强度</div>
+        <div className={sliderLabelClass('specialSharpenStrength', 'adjustment-slider-label')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialSharpenStrength', specialSharpenStrength)} title={helpTexts.adjustment.specialSharpenStrength}>强度</div>
         <div className="unit-container">
           <RangeSlider min={1} max={10} step={0.5} value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthChange} className="adjustment-slider-input" />
           <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthNumberChange} className="adjustment-number-input" /></div>
@@ -2782,7 +2830,7 @@ const renderDetailAdjustContent = () => (
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" title={helpTexts.adjustment.highFreqIntensity}>强度</div>
+        <div className={sliderLabelClass('highFreqIntensity', 'adjustment-slider-label')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'highFreqIntensity', highFreqIntensity)} title={helpTexts.adjustment.highFreqIntensity}>强度</div>
         <div className="unit-container">
           <RangeSlider min={1} max={10} step={0.5} value={highFreqIntensity} onChange={handleHighFreqIntensityChange} className="adjustment-slider-input" />
           <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={highFreqIntensity} onChange={handleHighFreqIntensityNumberChange} className="adjustment-number-input" /></div>
@@ -2790,7 +2838,7 @@ const renderDetailAdjustContent = () => (
         </div>
       </div>
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label" title={helpTexts.adjustment.highFreqRange}>范围</div>
+        <div className={sliderLabelClass('highFreqRange', 'adjustment-slider-label')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'highFreqRange', highFreqRange)} title={helpTexts.adjustment.highFreqRange}>范围</div>
         <div className="unit-container">
           <RangeSlider min={1} max={10} step={0.5} value={highFreqRange} onChange={handleHighFreqRangeChange} className="adjustment-slider-input" />
           <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={highFreqRange} onChange={handleHighFreqRangeNumberChange} className="adjustment-number-input" /></div>
@@ -2807,7 +2855,8 @@ const renderEdgeProcessingContent = () => (
 
     <div className="adjustment-slider-container adjustment-slider-container-vpad">
       <div className="adjustment-slider-item adjustment-slider-item-no-gap adjustment-slider-item">
-        <div className="adjustment-slider-label adjustment-slider-label-4" title={helpTexts.adjustment.edgeSmoothMode}>平滑模式</div>
+        {/* 下拉行：标签不可拖拽，光标保持 default（与可拖拽滑块标签区分） */}
+        <div className="adjustment-slider-label adjustment-slider-label-4 adjustment-slider-label-static" title={helpTexts.adjustment.edgeSmoothMode}>平滑模式</div>
         <div className="unit-container">
           <MaskSyncSelect
             value={edgeSmoothMode}
@@ -2826,7 +2875,7 @@ const renderEdgeProcessingContent = () => (
       {edgeSmoothMode === 'edge' && (
         <>
           <div className="adjustment-slider-item">
-            <div className="wider-adjustment-slider-label" title={helpTexts.adjustment.edgeMedianRadius}>中间值半径</div>
+            <div className={sliderLabelClass('edgeMedianRadius', 'wider-adjustment-slider-label')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeMedianRadius', edgeMedianRadius)} title={helpTexts.adjustment.edgeMedianRadius}>中间值半径</div>
             <div className="unit-container">
               <RangeSlider min={10} max={30} step={1} value={edgeMedianRadius} onChange={handleEdgeMedianRadiusChange} className="adjustment-slider-input" />
               <div className="num-input-row"><input type="number" min="10" max="30" step="1" value={edgeMedianRadius} onChange={handleEdgeMedianRadiusNumberChange} className="adjustment-number-input" /></div>
@@ -2839,7 +2888,7 @@ const renderEdgeProcessingContent = () => (
       {edgeSmoothMode === 'line' && (
         <>
           <div className="adjustment-slider-item">
-            <div className="wide-adjustment-slider-label" title={helpTexts.adjustment.edgeLineStrength}>平滑力度</div>
+            <div className={sliderLabelClass('edgeLineStrength', 'wide-adjustment-slider-label')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeLineStrength', edgeLineStrength)} title={helpTexts.adjustment.edgeLineStrength}>平滑力度</div>
             <div className="unit-container">
               <RangeSlider min={0} max={100} step={1} value={edgeLineStrength} onChange={handleEdgeLineStrengthChange} className="adjustment-slider-input" />
               <div className="num-input-row"><input type="number" min="0" max="100" step="1" value={edgeLineStrength} onChange={handleEdgeLineStrengthNumberChange} className="adjustment-number-input" /></div>
@@ -2848,7 +2897,7 @@ const renderEdgeProcessingContent = () => (
           </div>
 
           <div className="adjustment-slider-item">
-            <div className="wide-adjustment-slider-label" title={helpTexts.adjustment.edgeLineRange}>平滑范围</div>
+            <div className={sliderLabelClass('edgeLineSmoothRadius', 'wide-adjustment-slider-label')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeLineSmoothRadius', edgeLineSmoothRadius)} title={helpTexts.adjustment.edgeLineRange}>平滑范围</div>
             <div className="unit-container">
               <RangeSlider min={3} max={12} step={1} value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusChange} className="adjustment-slider-input" />
               <div className="num-input-row"><input type="number" min="3" max="12" step="1" value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusNumberChange} className="adjustment-number-input" /></div>
@@ -2862,16 +2911,18 @@ const renderEdgeProcessingContent = () => (
 
     <div className="adjustment-divider"></div>
 
-    <div className="adjustment-double-buttons">
-      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-8" onClick={() => handleAlphaAlign(false, 'down')} title={helpTexts.adjustment.alphaDown}>alpha下对齐</div>
+    {/* 2×2 按钮组：四颗统一 .adjustment-button-quad(92px) 保证左右两列严格对齐；
+        仅第一行底部留 10px 与下一行分隔，第二行不加 */}
+    <div className="adjustment-double-buttons adjustment-double-buttons-mb">
+      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-quad" onClick={() => handleAlphaAlign(false, 'down')} title={helpTexts.adjustment.alphaDown}>alpha下对齐</div>
 
-      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-8" onClick={() => handleAlphaAlign(false, 'up')} title={helpTexts.adjustment.alphaUp}>alpha上对齐</div>
+      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-quad" onClick={() => handleAlphaAlign(false, 'up')} title={helpTexts.adjustment.alphaUp}>alpha上对齐</div>
     </div>
 
     <div className="adjustment-double-buttons">
-      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-5" onClick={() => handleAlphaAlign(true, 'down')} title={helpTexts.adjustment.alphaBgDown}>保底下对齐</div>
+      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-quad" onClick={() => handleAlphaAlign(true, 'down')} title={helpTexts.adjustment.alphaBgDown}>保底下对齐</div>
 
-      <div role="button" tabIndex={0} className="adjustment-button" onClick={handleLineEnhancement} title={helpTexts.adjustment.lineEnhance}>线条加黑</div>
+      <div role="button" tabIndex={0} className="adjustment-button adjustment-button-quad" onClick={handleLineEnhancement} title={helpTexts.adjustment.lineEnhance}>线条加黑</div>
     </div>
   </div>
 );
@@ -3178,7 +3229,7 @@ const renderQuickActionContent = () => (
     {useWeightedAverage && (
       <div className="adjustment-slider-container">
         <div className="adjustment-slider-item">
-          <div className="adjustment-slider-label" title={helpTexts.adjustment.weightedIntensity}>强度</div>
+          <div className={sliderLabelClass('weightedIntensity', 'adjustment-slider-label')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'weightedIntensity', weightedIntensity)} title={helpTexts.adjustment.weightedIntensity}>强度</div>
           <div className="unit-container">
             <RangeSlider min={1} max={10} step={0.5} value={weightedIntensity} onChange={handleWeightedIntensityChange} className="adjustment-slider-input" />
             <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={weightedIntensity} onChange={handleWeightedIntensityNumberChange} className="adjustment-number-input" /></div>
@@ -3207,7 +3258,8 @@ const renderQuickActionContent = () => (
 
     <div className="adjustment-slider-container adjustment-slider-container-vpad">
       <div className="adjustment-slider-item adjustment-slider-item-no-gap">
-        <div className="wide-adjustment-slider-label" title={helpTexts.adjustment.lineReference}>线稿参考</div>
+        {/* 下拉行：标签不可拖拽，光标保持 default（原为 pointer，语义错误） */}
+        <div className="wide-adjustment-slider-label adjustment-slider-label-static" title={helpTexts.adjustment.lineReference}>线稿参考</div>
         <div className="unit-container">
           <MaskSyncSelect
             value={lineReferenceLayerId ? String(lineReferenceLayerId) : 'auto'}
@@ -3237,7 +3289,7 @@ const renderQuickActionContent = () => (
 
     <div className="adjustment-slider-container">
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label adjustment-slider-label-3" title={helpTexts.adjustment.woodcutLevels}>色阶数</div>
+        <div className={sliderLabelClass('specialWoodcutLevels', 'adjustment-slider-label adjustment-slider-label-3')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialWoodcutLevels', specialWoodcutLevels)} title={helpTexts.adjustment.woodcutLevels}>色阶数</div>
         <div className="unit-container">
           <RangeSlider min={2} max={16} step={1} value={specialWoodcutLevels} onChange={handleSpecialWoodcutLevelsChange} className="adjustment-slider-input" />
           <div className="num-input-row"><input type="number" min="2" max="16" step="1" value={specialWoodcutLevels} onChange={handleSpecialWoodcutLevelsNumberChange} className="adjustment-number-input" /></div>
@@ -3246,7 +3298,7 @@ const renderQuickActionContent = () => (
       </div>
 
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label adjustment-slider-label-4" title={helpTexts.adjustment.woodcutEdgeThreshold}>边缘阈值</div>
+        <div className={sliderLabelClass('specialWoodcutEdgeThreshold', 'adjustment-slider-label adjustment-slider-label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialWoodcutEdgeThreshold', specialWoodcutEdgeThreshold)} title={helpTexts.adjustment.woodcutEdgeThreshold}>边缘阈值</div>
         <div className="unit-container">
           <RangeSlider min={0} max={255} step={1} value={specialWoodcutEdgeThreshold} onChange={handleSpecialWoodcutEdgeThresholdChange} className="adjustment-slider-input" />
           <div className="num-input-row"><input type="number" min="0" max="255" step="1" value={specialWoodcutEdgeThreshold} onChange={handleSpecialWoodcutEdgeThresholdNumberChange} className="adjustment-number-input" /></div>
@@ -3255,7 +3307,7 @@ const renderQuickActionContent = () => (
       </div>
 
       <div className="adjustment-slider-item">
-        <div className="adjustment-slider-label adjustment-slider-label-4" title={helpTexts.adjustment.woodcutEdgeStrength}>边缘强度</div>
+        <div className={sliderLabelClass('specialWoodcutEdgeStrength', 'adjustment-slider-label adjustment-slider-label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialWoodcutEdgeStrength', specialWoodcutEdgeStrength)} title={helpTexts.adjustment.woodcutEdgeStrength}>边缘强度</div>
         <div className="unit-container">
           <RangeSlider min={0} max={100} step={1} value={specialWoodcutEdgeStrength} onChange={handleSpecialWoodcutEdgeStrengthChange} className="adjustment-slider-input" />
           <div className="num-input-row"><input type="number" min="0" max="100" step="1" value={specialWoodcutEdgeStrength} onChange={handleSpecialWoodcutEdgeStrengthNumberChange} className="adjustment-number-input" /></div>

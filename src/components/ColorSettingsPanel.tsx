@@ -3,6 +3,7 @@ import { app, action } from 'photoshop';
 import { ColorSettings } from '../types/state';
 import RangeSlider from './RangeSlider';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
+import { setDragCursorActive } from '../utils/dragCursor';
 
 interface ColorSettingsProps {
     isOpen: boolean;
@@ -70,8 +71,14 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
         }
     };
 
+    // 事件挂在「参数集合行容器」上（双行滑块的第一行整行可拖，含标签与中间空白），
+    // 因此必须排除落在数字输入框上的按下，否则输入框无法聚焦/编辑。
     const handleLabelMouseDown = (event: React.MouseEvent, key: keyof ColorSettings) => {
+        const el = event.target as HTMLElement | null;
+        if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
         event.preventDefault();
+        // 拖拽开始：把全局光标锁成 ew-resize，避免鼠标移出容器后光标变回普通箭头。
+        setDragCursorActive(true);
         setIsDragging(true);
         setDragTarget(key);
         setDragStartX(event.clientX);
@@ -97,6 +104,7 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
     };
 
     const handleMouseUp = () => {
+        setDragCursorActive(false);
         setIsDragging(false);
         setDragTarget(null);
     };
@@ -196,10 +204,12 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
         return (
             <div className="colorsettings-slider-item">
                 <div className="colorsettings-entire-slider">
-                    <div className={`colorsettings-slider-parameter-collection ${isDraggingActive ? 'dragging' : 'not-dragging'}`}>
+                    <div
+                        className={`colorsettings-slider-parameter-collection ${isDraggingActive ? 'dragging' : 'not-dragging'}`}
+                        onMouseDown={(e) => handleLabelMouseDown(e, settingKey)}
+                    >
                         <label
                             className={`colorsettings-slider-text ${widthClass}`}
-                            onMouseDown={(e) => handleLabelMouseDown(e, settingKey)}
                         >
                             {label}
                         </label>

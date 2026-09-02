@@ -5,6 +5,7 @@ import { BLEND_MODES } from './constants/blendModes';
 import { BLEND_MODE_OPTIONS } from './constants/blendModeOptions';
 import { AppState, initialState, Gradient } from './types/state';
 import { DragHandler } from './utils/DragHandler';
+import { setDragCursorActive } from './utils/dragCursor';
 import { FillHandler } from './utils/FillHandler';
 import { LayerInfoHandler } from './utils/LayerInfoHandler';
 import { ClearHandler } from './utils/ClearHandler';
@@ -987,9 +988,16 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     // 处理标签鼠标按下事件
+    // 事件挂在「参数集合行容器」上（双行滑块的第一行整行可拖，含标签与中间空白），
+    // 因此必须排除落在数字输入框上的按下，否则输入框无法聚焦/编辑。
     handleLabelMouseDown(event, target) {
         if (!this || !this.state) return;
+        const el = event.target as HTMLElement | null;
+        if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
         event.preventDefault();
+        // 拖拽开始：把全局光标锁成 ew-resize，避免鼠标移出容器后光标变回普通箭头。
+        // 松手时由 handleMouseUp 摘除（引用计数见 src/utils/dragCursor.ts）。
+        setDragCursorActive(true);
         this.setState({
             isDragging: true,
             dragStartX: event.clientX,
@@ -1015,6 +1023,7 @@ class App extends React.Component<AppProps, AppState> {
     // 处理鼠标释放事件
     handleMouseUp(): void {
         if (!this || !this.state) return;
+        setDragCursorActive(false);
         this.setState({ isDragging: false });
     }
 
@@ -1308,7 +1317,7 @@ title={helpTexts.selectionFill.mainButton}>
                 <div className="selection-fill-blend-mode-container">
                     <span className={`selection-fill-blend-mode-label ${this.state.clearMode ? 'disabled' : ''}`} 
 title={helpTexts.selectionFill.blendMode}>
-                    混合模式：
+                    混合模式
                     </span>
 
                     <Select
@@ -1326,11 +1335,11 @@ title={helpTexts.selectionFill.blendMode}>
                             this.state.isDragging && this.state.dragTarget === 'opacity'
                             ? 'dragging'
                             : 'not-dragging'
-                        }`}>
-                    <label
-                        className="slider-text slider-text-4"
+                        }`}
                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'opacity')}
-title={helpTexts.selectionFill.opacity}>
+                        title={helpTexts.selectionFill.opacity}>
+                    <label
+                        className="slider-text slider-text-4">
                     不透明度
                     </label>
 
@@ -1365,11 +1374,11 @@ title={helpTexts.selectionFill.opacity}>
                             this.state.isDragging && this.state.dragTarget === 'feather'
                             ? 'dragging'
                             : 'not-dragging'
-                        }`}>
-                    <label
-                        className="slider-text slider-text-2"
+                        }`}
                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'feather')}
-title={helpTexts.selectionFill.feather}>
+                        title={helpTexts.selectionFill.feather}>
+                    <label
+                        className="slider-text slider-text-2">
                         羽化
                     </label>
 

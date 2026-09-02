@@ -8,6 +8,7 @@ import { PresetManager } from '../utils/PresetManager';
 import RangeSlider from './RangeSlider';
 import Select from './Select';
 import { helpTexts } from '../constants/helpTexts';
+import { setDragCursorActive } from '../utils/dragCursor';
 
 interface PatternPickerProps {
     isOpen: boolean;
@@ -169,7 +170,13 @@ interface PatternPickerProps {
 
     //-------------------------------------------------------------------------------------------------
     // 新增滑块拖动事件处理
+    // 事件挂在「参数集合行容器」上（双行滑块的第一行整行可拖，含标签与中间空白），
+    // 因此必须排除落在数字输入框上的按下，否则输入框无法聚焦/编辑。
     const handleMouseDown = (event: React.MouseEvent, target: 'angle' | 'scale') => {
+        const el = event.target as HTMLElement | null;
+        if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
+        // 拖拽开始：把全局光标锁成 ew-resize，避免鼠标移出容器后光标变回普通箭头。
+        setDragCursorActive(true);
         setIsSliderDragging(true);
         setDragTarget(target);
         setDragStartX(event.clientX);
@@ -242,6 +249,7 @@ interface PatternPickerProps {
 
     // 处理滑块拖拽结束
     const handleMouseUp = () => {
+        setDragCursorActive(false);
         setIsSliderDragging(false);
         setDragTarget(null);
     };
@@ -1726,8 +1734,8 @@ interface PatternPickerProps {
                 <div className="pattern-setting-item-group">
                     <div className="pattern-setting-item">
                         <div className="pattern-entire-slider">
-                        <div className="pattern-slider-parameter-collection">
-                        <label className="pattern-slider-text pattern-slider-text-3" onMouseDown={(e) => handleMouseDown(e, 'angle')}>角度：</label>
+                        <div className="pattern-slider-parameter-collection" onMouseDown={(e) => handleMouseDown(e, 'angle')}>
+                        <label className="pattern-slider-text pattern-slider-text-3">角度：</label>
                             <div className="num-input-wrap">
                                 <div className="num-input-row">
                                     <input
@@ -1756,8 +1764,8 @@ interface PatternPickerProps {
 
                     <div className="pattern-setting-item">
                         <div className="pattern-entire-slider">
-                        <div className="pattern-slider-parameter-collection">
-                        <label className="pattern-slider-text pattern-slider-text-3" onMouseDown={(e) => handleMouseDown(e, 'scale')}>缩放：</label>
+                        <div className="pattern-slider-parameter-collection" onMouseDown={(e) => handleMouseDown(e, 'scale')}>
+                        <label className="pattern-slider-text pattern-slider-text-3">缩放：</label>
                             <div className="num-input-wrap">
                                 <div className="num-input-row">
                                     <input

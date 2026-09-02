@@ -8,6 +8,7 @@ import { PresetManager } from '../utils/PresetManager';
 import RangeSlider from './RangeSlider';
 import Select from './Select';
 import { helpTexts } from '../constants/helpTexts';
+import { setDragCursorActive } from '../utils/dragCursor';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -1119,28 +1120,31 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const handleAngleMouseDown = (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
+        // 拖拽开始：把全局光标锁成 ew-resize，避免鼠标移出标签后光标变回普通箭头。
+        setDragCursorActive(true);
         setIsDraggingAngle(true);
         setDragStartX(e.clientX);
         setDragStartAngle(angle);
-        
+
         const handleMouseMove = (moveEvent: MouseEvent) => {
             moveEvent.preventDefault();
             const deltaX = moveEvent.clientX - dragStartX;
             const sensitivity = 10;
-            
+
             let newAngle = dragStartAngle + deltaX * (sensitivity / 10);
             newAngle = Math.round(newAngle);
             newAngle = Math.min(360, Math.max(0, newAngle));
-            
+
             setAngle(newAngle);
         };
-        
+
         const handleMouseUp = () => {
+            setDragCursorActive(false);
             setIsDraggingAngle(false);
             document.removeEventListener('mousemove', handleMouseMove);
             document.removeEventListener('mouseup', handleMouseUp);
         };
-        
+
         document.addEventListener('mousemove', handleMouseMove);
         document.addEventListener('mouseup', handleMouseUp);
     };

@@ -34,6 +34,24 @@ html, body {
   align-items: center;
 }
 
+/* 文字标签：仅承载文字本身；
+   宽度沿用工具箱标签算法：2字=20px、每字约13.3px 线性插值
+   （W(n) = 20 + (n-2)×13.3 → 2/3/4/5/6字 = 20/33/47/60/73px），由 -2~-6 修饰类指定 */
+.slider-text {
+  font-size: 13px;
+  color: var(--text-color);
+  display: block;
+  flex: none;
+  white-space: nowrap;
+  align-items: left;
+  text-align: left;
+}
+.slider-text-2 { width: 20px; }
+.slider-text-3 { width: 33px; }
+.slider-text-4 { width: 47px; }
+.slider-text-5 { width: 60px; }
+.slider-text-6 { width: 73px; }
+
 /* ==========================================================================
    RangeSlider 自定义滑块（替代 PS 27.9 后失效的原生 input[type="range"]）
    ========================================================================== */
@@ -98,6 +116,7 @@ html, body {
   display: flex;
   align-items: center;
   flex: 0 0 auto;
+  margin-left: 7px;
 }
 
 /* 主面板滑块数字输入：单位符号在输入框容器之外（.num-unit），裁剪容器只包数字输入本身。
@@ -115,7 +134,6 @@ html, body {
   padding: 0;
   box-sizing: border-box;
   border: 1px solid var(--border-color);
-  border-radius: 3px;
   background-color: var(--dropdown-bg-color);
   background-image: none;
   overflow: hidden;
@@ -137,7 +155,7 @@ html, body {
   font-size: 12px;
   font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
   text-align: center;
-  line-height: 32px;
+  line-height: 24px;
   appearance: none;
 }
 
@@ -439,9 +457,10 @@ body.secondary-panel-open .container {
   isolation: isolate; /* 添加这一行 */
 }
 
-/* 混合模式文字标签 */
+/* 混合模式四字文字标签，由于特殊情况不能使用47的宽度 */
 .selection-fill-blend-mode-label {
   font-size: 13px;
+  margin-right: 6px;
   color: var(--text-color);
 }
 
@@ -499,6 +518,8 @@ sp-radio[disabled] {
   align-items: center;
 }
 
+/* 拖拽中切 grabbing（按下即抓住元素横向拖动，符合「抓取移动」语义）；非拖拽态仍
+   ew-resize 表示可横向拖调。鼠标移出行容器后由 body.label-drag-cursor 全局兜底仍为 grabbing。 */
 .slider-parameter-collection.dragging {
   cursor: grabbing;
 }
@@ -507,22 +528,14 @@ sp-radio[disabled] {
   cursor: ew-resize;
 }
 
-/* 文字标签：仅承载文字本身；布局/光标等样式归行容器 .slider-parameter-collection。
-   宽度沿用工具箱标签算法：2字=20px、每字约13.3px 线性插值
-   （W(n) = 20 + (n-2)×13.3 → 2/3/4/5/6字 = 20/33/47/60/73px），由 -2~-6 修饰类指定 */
-.slider-text {
-  font-size: 13px;
-  color: var(--text-color);
-  display: block;
-  flex: none;
-  white-space: nowrap;
+/* 行容器整行可拖拽调值，但其中的数字输入框仍需保持可输入语义：
+   覆盖从容器继承来的 ew-resize，避免用户误以为该处不能点。 */
+.slider-parameter-collection input[type="number"],
+.selection-slider-container input[type="number"] {
+  cursor: text;
 }
-.slider-text-2 { width: 20px; }
-.slider-text-3 { width: 33px; }
-.slider-text-4 { width: 47px; }
-.slider-text-5 { width: 60px; }
-.slider-text-6 { width: 73px; }
 
+/* 只适用于双行滑块的滑块条容器，占满整行 */
 .slider-input {
   width: calc(100% - 20px);
   margin: 0 auto;
@@ -598,25 +611,15 @@ sp-radio[disabled] {
 }
 
 
-/* 滑块文字容器 */
+/* 选区选项滑块文字容器 */
 .selection-slider-label {
   font-size: 13px; 
   color: var(--text-color);
   display: flex;
-  align-items: center;
+  align-items: left;
+  text-align: left;
   white-space: nowrap;  /* 不换行 + 作为 flex 子项不伸缩：文字恒为内容宽度、永不被压缩换行，滑块条（flex:1）据此自动算出“行宽 - 标签宽 - 数字输入 - 单位符号”的长度 */
   margin-right: 10px;
-}
-
-/* 滑块条容器（单行滑块：标签 + 滑块条 + 数字输入 + 单位符号 同行）。
-   用 flex:1 1 auto 占满行容器剩余宽度，使滑块条长度 = 行宽 - 标签宽 - 数字输入(35px) - 单位符号(14px) - 间距，
-   即“随标签字数与行容器宽度综合得出”，从根本上避免两字标签被固定 140px 挤换行。 */
-.selection-slider-input {
-  flex: 1 1 auto;
-  min-width: 50px;
-  cursor: pointer;
-  display: flex;
-  justify-content: center;
 }
 
 .selection-slider-label.dragging {
@@ -625,6 +628,17 @@ sp-radio[disabled] {
 
 .selection-slider-label.not-dragging {
   cursor: ew-resize;
+}
+
+/* 选区选项滑块条容器（单行滑块：标签 + 滑块条 + 数字输入 + 单位符号 同行）。
+   用 flex:1 1 auto 占满行容器剩余宽度，使滑块条长度 = 行宽 - 标签宽 - 数字输入(35px) - 单位符号(14px) - 间距，
+   即“随标签字数与行容器宽度综合得出”，从根本上避免两字标签被固定 140px 挤换行。 */
+.selection-slider-input {
+  flex: 1 1 auto;
+  min-width: 50px;
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
 }
 
 /* 开关行容器样式 */
@@ -837,4 +851,16 @@ button:hover {
 /* sp-action-button 边框控制 */
 sp-action-button {
   border: none;
+}
+
+/* 滑块拖拽期间的光标锁定（class 由 utils/dragCursor.ts 加到 document.body）。
+   元素自身的 `cursor: ew-resize` 只在鼠标悬停其上方时生效，拖拽中鼠标会移出标签，
+   光标随即被鼠标下方的元素接管变成普通箭头。这里在拖拽期间把整棵子树压成
+   grabbing（按下即抓住元素横向拖动，符合「抓取移动」语义），保证「按下→拖动→松手」
+   全程光标连续不变。
+   !important 是必需的：要压过面板里各处 button/label/input 的常规则与 cursor 声明。
+   作用域仅限拖拽期间，mouseup 立即摘除，不影响其它交互。 */
+body.label-drag-cursor,
+body.label-drag-cursor * {
+  cursor: grabbing !important;
 }

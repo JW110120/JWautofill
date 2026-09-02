@@ -17,6 +17,21 @@
 - 广播时机：激活/试用成功 → `saveLicenseInfo` **不广播**，由 app.tsx `handleLicenseVerified`/`handleTrialStarted` 在**弹窗关闭同刻** dispatch `license-updated`；注销 → `clearLicense` 立即广播。app.tsx `checkLicenseStatus` 完成也 dispatch 一次。
 - 降低初始延迟：`computeLicenseState` 只做一次本地文件读取；两面板共享同一 Promise、同 tick 解出。
 
+### 滑块标签横向拖拽（2026-09-02 统一）
+- **通用 hook `src/utils/useLabelDrag.ts`**：`useLabelDrag(configs, applyValue)` → `{dragTarget, onLabelMouseDown, labelClass}`。起点存 ref，effect 依赖仅 `[dragTarget]`，值先按灵敏度放大 → 吸附 step → 夹 [min,max]。**新面板优先复用它**，别再手写 document 监听。
+- **灵敏度标定：sensitivity = step / 5**（即每 5px 鼠标位移 = 1 步长）。量程极大者放宽：0~255 用 0.5。
+- APP 主面板（`app.tsx`，class 组件）仍走 `utils/DragHandler.ts` 的 `configs` 表 + `handleLabelMouseDown/handleMouseMove/handleMouseUp`。
+  **新增可拖拽标签必须同步往 `DragHandler.configs` 注册**，漏注册=静默失效（光标会变但值不动，无报错）。
+- 工具箱（`AdjustmentPanel.tsx`）：`SLIDER_DRAG_CONFIGS` 表 + `sliderLabelClass(key, base)`；
+  可拖拽标签加 `.adjustment-slider-label-drag`（ew-resize，拖拽中 `.dragging`→grabbing），
+  下拉行标签（平滑模式/线稿参考）加 `.adjustment-slider-label-static`（cursor:default）。
+  `.wide-/.wider-adjustment-slider-label` 不得再写死 `cursor:pointer`。
+- 描边子面板（`StrokeSetting.tsx`）自行维护 `STROKE_DRAG_CONFIG`，宽度 0~20/0.5→0.1、不透明度 0~100/1→0.2。
+- **2×2（多行）按钮组必须同宽**：父级统一 `justify-content:space-between`，若各行按钮总宽不同会导致列错位。
+  边缘处理四颗（alpha下/alpha上/保底下对齐/线条加黑）统一 `.adjustment-button-quad{width:92px;flex:none}`；
+  92px = alpha 中英混排文案在 5字档(85) 与 6字档(98) 间的取值，四颗同宽后两行总宽均为 184（内容区 260）→ 严格对齐。
+  行间距用 `.adjustment-double-buttons-mb{margin-bottom:10px}`，只给非末行加。
+
 ## 二、下拉/选择器
 - 统一自绘 `src/components/Select.tsx`（`.mask-sync-select-*` 在 `adjustment.css`），不再用 `sp-picker`/`sp-menu`。弹层 `createPortal` 到面板根（`#app`/`#pixeladjustment`，`utils/popRoot.ts`），**绝不挂 body**。`.mask-sync-select-pop{position:fixed;z-index:99998;min-width:96px}`；选中项背景写死 `rgb(38,128,235)`（portal 子树 var() 不稳）。头部/内部用「两级类」防面板 `div>span` 规则覆盖。
 
@@ -36,6 +51,20 @@
 - sp-radio slot 内不行内流布局→自定义按钮绝对定位：容器 `position:relative` + 按钮 `position:absolute;right:0;top:50%`，文字 `margin-right` 让位；规则必须 scoped 绝不挂全局 `.radio-item`/`.radio-item-label`（颜色面板「计算方法」radio 复用 `.radio-item-label`，全局改会挤崩）。填充模式齿轮：`.fill-mode-group .radio-item{position:relative}` + 按钮 `margin-top:-9px`。
 - **原生 number input 防越界定稿（2026-09-01 终版：容器32px+input24px缓冲）**：UXP 原生 number 绘制区恒高于 CSS 盒，CSS 高度压不掉、只决定缓冲；**绝不能让 input 撑满容器**（撑满必越界复发）。落点：主面板 `#app`(5)、描边 StrokeSetting(2)、工具箱 `#pixeladjustment`(13)、子面板(ColorSettingsPanel 1 + PatternPicker 2 + GradientPicker 2，JSX 包 `.num-input-row`；工具箱内层用 `input[type=number]` 覆盖无名输入)。单位符号一律在裁剪容器外（`.num-unit`/`.gradient-subtitle`/裸 span）。
 - **产品决策：笔刷热键不支持同名笔刷**（多轮方案不可靠已回退）。绑定/切换只按 `_name`，同名只选最上方；下拉笔刷名去重 `Array.from(new Set(brushes))`，value 即笔刷名，(1)/(2) 角标已删。
+
+- **滑块拖拽热区规则（2026-09-02 定稿）**：
+  - **双行滑块**（第一行=标签+数字输入+单位，第二行=滑块条）→ `onMouseDown`+`title` 挂**上层行容器**（`.slider-parameter-collection` / `.pattern-slider-parameter-collection` / `.colorsettings-slider-parameter-collection`），第一行整行（含中间空白）可拖。落点：APP 不透明度/羽化、图案 角度/缩放、纯色 `renderSlider` 全部 4 个。
+  - **单行滑块**（label 与 RangeSlider 同行）→ 只挂标签，整行可拖会与滑块条自身点击跳转/拖动冲突。落点：APP 选区选项 3 个、工具箱 13 个、描边 2 个。
+  - **任何挂到容器的拖拽 handler 开头必须排除输入框**：`const el = event.target as HTMLElement|null; if (el && (el.tagName==='INPUT'||el.tagName==='TEXTAREA')) return;`——容器上的 `preventDefault()` 会吞掉 number input 的聚焦/编辑。
+  - 配套 CSS：行容器内的 `input[type="number"]` 显式 `cursor:text`，覆盖继承来的 `ew-resize`。
+  - **拖拽期间光标语义（2026-09-02 修订）**：常态/悬停恒 `ew-resize`（表示可横向拖调），
+    **拖拽中（dragging 状态）统一 `grabbing`**（按下即抓住元素横拖，符合「抓取移动」语义）。
+    统一调用 `src/utils/dragCursor.ts` 的 `setDragCursorActive(true/false)`，由
+    `body.label-drag-cursor *{cursor:grabbing !important}` 全局兜底（鼠标移出容器/标签也保持 grabbing，不变回箭头）。
+    六个面板（APP/工具箱 via useLabelDrag/图案/纯色/描边/渐变）的 mousedown 加 `true`、mouseup 加 `false`；
+    CSS 规则在 styles/adjustment/pattern/colorpanel/gradient/stroke 六份各自带一份（UXP 子面板独立 document）。
+    `dragCursor.ts` 用引用计数而非布尔，避免同 bundle 多面板叠加拖拽时误摘。
+    ⚠️ 工具箱真实样式是 `src/adjustments/adjustment.css`，不要误改到无引用的 `src/styles/adjustment.css`（已删除）。
 
 ## 五、算法
 - 分块补色/渐变/线稿引导/alpha 对齐见历史日志；清像素须显式清零；扣白/扣黑公式与 N 计算见当日记录。

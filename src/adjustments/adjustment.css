@@ -196,6 +196,11 @@
   width: 100%;
 }
 
+/* 2×2 按钮组的第一行：与下一行按钮留出 10px 间距（第二行不加） */
+.adjustment-double-buttons-mb {
+  margin-bottom: 10px;
+}
+
 /* 四字按钮按钮样式 */
 .adjustment-button {
   height: 30px;
@@ -556,6 +561,30 @@
   flex: 0 0 47px;
 }
 
+/* 可横向拖拽调值的滑块标签（对齐 APP 主面板 .selection-slider-label 的光标语义）：
+   常态恒为 ew-resize 表示可横向拖调；拖拽中切 grabbing（按下即抓住元素横向拖动，
+   符合「抓取移动」语义）。拖拽中鼠标移出标签后的光标由 body.label-drag-cursor 统一接管。 */
+.adjustment-slider-label-drag {
+  user-select: none;
+  cursor: ew-resize;
+}
+.adjustment-slider-label-drag.dragging {
+  cursor: grabbing;
+}
+
+/* 拖拽期间把全局光标钉死为 grabbing（详见 src/utils/dragCursor.ts）：
+   按下即抓住元素横向拖动，符合「抓取移动」语义；鼠标移出行容器/标签后由
+   body.label-drag-cursor 全局兜底，全程维持 grabbing。 */
+body.label-drag-cursor,
+body.label-drag-cursor * {
+  cursor: grabbing !important;
+}
+
+/* 不可拖拽的标签（下拉行：平滑模式 / 线稿参考）→ 普通箭头光标，不出现手型 */
+.adjustment-slider-label-static {
+  cursor: default;
+}
+
 /* 线稿参考单位标签 */
 .wide-adjustment-slider-label {
   color: var(--text-color);
@@ -563,8 +592,8 @@
   align-items: center;
   font-size: 13px;
   flex: 0 0 50px;
-  cursor: pointer;
   white-space: nowrap;
+  /* 光标由 .adjustment-slider-label-drag / -static 决定，此处不设 pointer */
 }
 
 /* 中间值半径的单位标签 */
@@ -574,8 +603,8 @@
   align-items: center;
   font-size: 13px;
   flex: 0 0 60px;
-  cursor: pointer;
   white-space: nowrap;
+  /* 光标由 .adjustment-slider-label-drag / -static 决定，此处不设 pointer */
 }
 
 /* RangeSlider 在调整面板中的适配（替代 PS 27.9 后失效的原生 range） */
@@ -738,6 +767,18 @@
 .adjustment-button-6 { width: 98px; padding: 0; }
 .adjustment-button-7 { width: 111px; padding: 0; }
 .adjustment-button-8 { width: 124px; padding: 0; }
+
+/* 边缘处理 2×2 按钮组（alpha下对齐 / alpha上对齐 / 保底下对齐 / 线条加黑）统一列宽：
+   - 92px 取自 alpha 上/下对齐：中英混排（alpha + 3 汉字）按「13×字数+20」的纯汉字算法
+     会算到 8 字档 124px 明显偏宽，实际视觉宽度落在 5 字档(85) 与 6 字档(98) 之间，取中值 92px；
+   - 四颗统一 92px 后两行总宽相同，父级 space-between 才会把左右两列严格对齐，
+     否则会出现「第一行第二颗 x=136 / 第二行第二颗 x=188」的 52px 错位；
+   - flex:none 防止父级压缩导致宽度不可预期。 */
+.adjustment-button-quad {
+  width: 92px;
+  padding: 0;
+  flex: none;
+}
 
 /* 虚线分隔线（同层补色 与 分层补色 之间）：
    - 纯 DOM 方案：DashedDivider 渲染 6px 短线 span 序列（6px 短线 + 6px 空 = 12px 周期），

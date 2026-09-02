@@ -3,6 +3,7 @@ import { BlendMode } from '../constants/blendModes';
 import { BLEND_MODE_OPTIONS } from '../constants/blendModeOptions';
 import RangeSlider from './RangeSlider';
 import Select from './Select';
+import { setDragCursorActive } from '../utils/dragCursor';
 
 interface StrokeSettingProps {
   isOpen: boolean;
@@ -33,64 +34,66 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
 }) => {
   const [isDragging, setIsDragging] = React.useState(false);
   const [dragTarget, setDragTarget] = React.useState<string | null>(null);
-  const [dragStartX, setDragStartX] = React.useState(0);
-  const [dragStartValue, setDragStartValue] = React.useState(0);
+  // 拖拽起点存 ref：mousemove 回调只读 ref，effect 不必随值变化反复解绑/重绑监听
+  const dragRef = React.useRef({ startX: 0, startValue: 0, target: '' as string });
+  const valueRef = React.useRef({ width, opacity });
+  valueRef.current = { width, opacity };
+  const cbRef = React.useRef({ onWidthChange, onOpacityChange });
+  cbRef.current = { onWidthChange, onOpacityChange };
 
-  // 实时更新功能：当参数变化时自动调用回调函数
-  React.useEffect(() => {
-    // 这里不需要额外的逻辑，因为StrokeSetting的参数变化已经通过onChange回调实时传递给父组件
-    // 父组件会处理实时更新逻辑
-  }, [width, position, blendMode, opacity]);
+  // 拖拽灵敏度：统一按「每 5px 鼠标位移 = 1 个步长」标定
+  //   宽度 0~20 / step 0.5 → 40 步 × 5px = 200px 覆盖全程 → 0.1
+  //   不透明度 0~100 / step 1 → 100 步 × 5px = 500px 覆盖全程 → 0.2（与 APP 主面板不透明度一致）
+  const STROKE_DRAG_CONFIG: Record<string, { min: number; max: number; step: number; sensitivity: number }> = {
+    width: { min: 0, max: 20, step: 0.5, sensitivity: 0.1 },
+    opacity: { min: 0, max: 100, step: 1, sensitivity: 0.2 }
+  };
 
   const handleLabelMouseDown = (event: React.MouseEvent, target: string) => {
     event.preventDefault();
+    dragRef.current = {
+      startX: event.clientX,
+      startValue: target === 'width' ? valueRef.current.width : valueRef.current.opacity,
+      target
+    };
+    // 拖拽开始：把全局光标锁成 ew-resize，避免鼠标移出容器后光标变回普通箭头。
+    setDragCursorActive(true);
     setIsDragging(true);
     setDragTarget(target);
-    setDragStartX(event.clientX);
-    setDragStartValue(target === 'width' ? width : opacity);
   };
 
   React.useEffect(() => {
+    if (!isDragging) return;
+
     const handleMouseMove = (event: MouseEvent) => {
-      if (!isDragging || !dragTarget) return;
-      
-      const deltaX = event.clientX - dragStartX;
-      const sensitivity = dragTarget === 'width' ? 0.5 : 1;
-      const maxValue = dragTarget === 'width' ? 10 : 100;
-      const minValue = 0;
-      
-      let newValue = dragStartValue + deltaX * (sensitivity / 100);
-      
-      // 根据步长进行舍入
-      if (dragTarget === 'width') {
-        newValue = Math.round(newValue / 0.5) * 0.5;
-      } else {
-        newValue = Math.round(newValue);
-      }
-      
-      newValue = Math.min(maxValue, Math.max(minValue, newValue));
-      
-      if (dragTarget === 'width') {
-        onWidthChange(newValue);
-      } else if (dragTarget === 'opacity') {
-        onOpacityChange(newValue);
-      }
+      const { startX, startValue, target } = dragRef.current;
+      const config = STROKE_DRAG_CONFIG[target];
+      if (!config) return;
+
+      const deltaX = event.clientX - startX;
+      // 先按灵敏度算原始值，再吸附到步长、最后夹到量程（此前误把灵敏度又除了 100，等于迟钝 100 倍）
+      const raw = startValue + deltaX * config.sensitivity;
+      const snapped = Math.round(raw / config.step) * config.step;
+      const newValue = Math.min(config.max, Math.max(config.min, Number(snapped.toFixed(4))));
+
+      if (target === 'width') cbRef.current.onWidthChange(newValue);
+      else if (target === 'opacity') cbRef.current.onOpacityChange(newValue);
     };
 
     const handleMouseUp = () => {
+      // 拖拽结束：摘除全局光标锁定。
+      setDragCursorActive(false);
       setIsDragging(false);
       setDragTarget(null);
     };
 
-    if (isDragging) {
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
-      return () => {
-        document.removeEventListener('mousemove', handleMouseMove);
-        document.removeEventListener('mouseup', handleMouseUp);
-      };
-    }
-  }, [isDragging, dragTarget, dragStartX, dragStartValue, width, opacity, onWidthChange, onOpacityChange]);
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDragging]);
 
   if (!isOpen) return null;
 
@@ -111,7 +114,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         
         <div className="stroke-wide-container">
           <label 
-            className={`stroke-label ${isDragging && dragTarget === 'width' ? 'dragging' : 'not-dragging'}`}
+            className={`stroke-label-2 ${isDragging && dragTarget === 'width' ? 'dragging' : 'not-dragging'}`}
             onMouseDown={(e) => handleLabelMouseDown(e, 'width')}
           >
             宽度
@@ -121,6 +124,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
             max={20} 
             step={0.5}
             value={width}
+
             onChange={(v) => onWidthChange(v)}
           />
           <div className="num-input-wrap">
@@ -159,7 +163,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         
         {!clearMode && (
           <div className="stroke-blende-mode">
-            <label>混合模式：</label>
+            <label>混合模式</label>
             <Select
               value={blendMode}
               groups={BLEND_MODE_OPTIONS}
@@ -170,7 +174,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         
         <div className="stroke-opacity-control">
           <label
-            className={`stroke-label ${isDragging && dragTarget === 'opacity' ? 'dragging' : 'not-dragging'}`}
+            className={`stroke-label-4 ${isDragging && dragTarget === 'opacity' ? 'dragging' : 'not-dragging'}`}
             onMouseDown={(e) => handleLabelMouseDown(e, 'opacity')}
           >
             不透明度
