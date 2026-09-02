@@ -320,7 +320,7 @@ export class MaskSyncEngine {
           const isBackground = !!(layer as any)?.isBackgroundLayer;
           const isAdjustment = isAdjustmentKind(kind);
           const curIds = parentIds.concat([layer.id]);
-          // 层级缩进由 CSS 的 padding-left（按 depth）体现（见 MaskSyncSelect），
+          // 层级缩进由 CSS 的 padding-left（按 depth）体现（见 Select 组件），
           // 组内的图层/嵌套组前面再补一个 └ 符号增强层级辨识（depth>0 才加）。
           const indent = depth > 0 ? '└ ' : '';
           let kindSuffix = '';

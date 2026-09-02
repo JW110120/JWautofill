@@ -60,7 +60,7 @@ export function useLabelDrag<T extends string>(
 
     const handleMouseUp = () => setDragTarget(null);
 
-    // 拖拽期间把全局光标锁成 grabbing（按下即抓住元素横向拖动，符合「抓取移动」语义）：
+    // 拖拽期间把全局光标锁成 ew-resize（按下即抓住元素横向拖动，符合「抓取移动」语义）：
     // 鼠标移出标签后仍保持同一光标，否则光标会被鼠标下方的元素接管变成普通箭头。
     setDragCursorActive(true);
     document.addEventListener('mousemove', handleMouseMove);
@@ -79,7 +79,7 @@ export function useLabelDrag<T extends string>(
     setDragTarget(key);
   };
 
-  /** 生成标签 class：拖拽中 grabbing、常态 ew-resize（由 CSS 给出），全程光标连续 */
+  /** 生成标签 class：拖拽中 ew-resize、常态 ew-resize（由 CSS 给出），全程光标连续 */
   const labelClass = (key: T, base: string) =>
     `${base} ${dragTarget === key ? 'dragging' : 'not-dragging'}`;
 

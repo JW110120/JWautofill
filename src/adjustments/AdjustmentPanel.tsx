@@ -30,6 +30,7 @@ import { PanelStateManager } from '../utils/PanelStateManager';
 import { maskSyncEngine, MASK_SYNC_CHANNEL_LABELS, LayerTreeEntry, MaskSyncTask, MaskSyncChannel, SyncState } from '../utils/MaskSyncEngine';
 import BrushHotkeySection from '../hotkey/BrushHotkeySection';
 import RangeSlider from '../components/RangeSlider';
+import Select from '../components/Select';
 import { helpTexts } from '../constants/helpTexts';
 import { useLabelDrag } from '../utils/useLabelDrag';
 
@@ -936,204 +937,13 @@ const getMaskSyncChannelsForEntry = (entry?: LayerTreeEntry): MaskSyncChannel[] 
 /* ================= 自定义下拉（支持“注释右对齐”） =================
  * 原生 <option> 无法让“（像素）”这类注释右对齐，改用自绘下拉：
  * 主文本靠左、注释靠右，弹出层 fixed 定位避免被面板 overflow 裁剪。 */
-interface MaskSyncSelectOption {
-  value: string;
-  main: string; // 主文本
-  tag?: string; // 右对齐注释（如（像素））
-  disabled?: boolean;
-  depth?: number; // 图层在文档树中的层级（用于按层级缩进，体现图层结构）
-}
-
-/** 把 label 末尾的（注释）拆出来：'　└ 图层1（像素）' → main='　└ 图层1' tag='（像素）' */
-const splitLabelTag = (label: string): { main: string; tag: string } => {
+/** 把 label 末尾的（注释）拆出来：'　└ 图层1（像素）' → label='　└ 图层1' tag='（像素）' */
+const splitLabelTag = (label: string): { label: string; tag: string } => {
   const idx = label.lastIndexOf('（');
   if (idx > 0 && label.endsWith('）')) {
-    return { main: label.slice(0, idx), tag: label.slice(idx) };
+    return { label: label.slice(0, idx), tag: label.slice(idx) };
   }
-  return { main: label, tag: '' };
-};
-
-const MaskSyncSelect: React.FC<{
-  value: string;
-  onChange: (v: string) => void;
-  options: MaskSyncSelectOption[];
-  onOpen?: () => void;
-  title?: string;
-  /**
-   * 选中项右侧打勾（与主面板 Select 统一，de61f56 的样式）。
-   * 默认开启；实际是否绘制还要求「该项没有右侧注释（图层标记等）」——
-   * 即：右侧已有标记（如（像素）图层标记、笔刷图标）时不再画勾，避免视觉打架。
-   */
-  showCheck?: boolean;
-  /** 透传到外层 wrap，用于外部控制宽度/对齐。 */
-  className?: string;
-}> = ({ value, onChange, options, onOpen, title, showCheck = true, className }) => {
-  const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
-  const headRef = useRef<HTMLDivElement>(null);
-  const popRef = useRef<HTMLDivElement>(null);
-  const openAtRef = useRef(0);
-  const lastToggleAtRef = useRef(0);
-  // 自动关闭抑制截止时间：打开后（及 onOpen 刷新完成后缓冲期内）禁止任何
-  // 外部点击/滚动信号关闭菜单。刷新期间置为 Infinity——onOpen 的 batchPlay
-  // 耗时不定（可能远超固定 500ms 保护窗口），刷新完成时的 re-render 引发的
-  // 布局重排/输入重放正是"打开后立刻自动关闭"的根源。
-  const suppressCloseUntilRef = useRef(0);
-
-  /** 重新计算弹出层位置；位置没变时复用旧对象，避免无谓 re-render。 */
-  const reposition = () => {
-    const r = headRef.current?.getBoundingClientRect();
-    if (!r) return;
-    setPos(prev =>
-      prev &&
-      Math.abs(prev.left - r.left) < 1 &&
-      Math.abs(prev.top - (r.bottom + 2)) < 1 &&
-      Math.abs(prev.width - r.width) < 1
-        ? prev
-        : { left: r.left, top: r.bottom + 2, width: r.width }
-    );
-  };
-
-  // 点击弹出层外部时关闭；面板滚动时**不关闭**而是重新定位 pop（fixed 定位
-  // 不随滚动，重新定位才能跟随头部）。打开瞬间与 onOpen 刷新期间/缓冲期内的
-  // 一切关闭信号都忽略，避免 batchPlay 刷新完成后的 re-render 滚动/输入重放闪关。
-  useEffect(() => {
-    if (!open) return;
-    const onDocClick = (e: MouseEvent) => {
-      if (Date.now() < suppressCloseUntilRef.current) return; // 刷新期/缓冲期：绝不关闭
-      if (Date.now() - openAtRef.current < 500) return;
-      if (headRef.current?.contains(e.target as Node)) return;
-      if (popRef.current?.contains(e.target as Node)) return;
-      setOpen(false);
-    };
-    const onScrollReposition = (e: Event) => {
-      // 弹出层自身滚动（选项多时的内部滚动条）不处理
-      if (popRef.current && e.target instanceof Node && popRef.current.contains(e.target)) return;
-      if (Date.now() - openAtRef.current < 200) return; // 打开瞬间的布局滚动忽略
-      reposition();
-    };
-    document.addEventListener('mousedown', onDocClick);
-    document.addEventListener('scroll', onScrollReposition, true);
-    return () => {
-      document.removeEventListener('mousedown', onDocClick);
-      document.removeEventListener('scroll', onScrollReposition, true);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-
-  // onOpen 刷新完成后（options 变化）重新对齐 pop 位置，避免头部移位导致错位
-  useEffect(() => {
-    if (!open) return;
-    reposition();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [options, open]);
-
-  // UXP 限制：可编辑控件无视 z-index 永远画在最上层。弹层渲染出来后按实际矩形，
-  // 只把与弹层相交的那些临时隐藏，关闭时还原。
-  // 用「会话」管理：定位变化（滚动/重排）时 update 重算，不再相交的立即还原。
-  useLayoutEffect(() => {
-    if (!open || !pos) return;
-    const session = createOcclusionSession();
-    const root = getPopRoot(headRef.current);
-    const run = () => {
-      const pop = popRef.current;
-      if (!pop) return;
-      session.update(pop, root, estimatePopRect(pos, Math.max(options.length, 1)));
-    };
-    run();
-    // UXP 偶发在插入 DOM 当帧拿不到弹层尺寸，下一帧再补一次，避免漏隐藏
-    const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame(run) : 0;
-    return () => {
-      if (raf) cancelAnimationFrame(raf);
-      session.restore();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, pos]);
-
-  const sel = options.find(o => o.value === value);
-
-  // 挂载点：从下拉头部往上找到所属面板的根容器（#pixeladjustment / #app）。
-  // 不能挂 document.body —— UXP 只渲染当前激活的 <uxp-panel> 子树，挂到 body 的
-  // 弹层不会被绘制，表现为「下拉完全打不开」。
-  const popRoot = open && pos ? getPopRoot(headRef.current) : null;
-
-  const toggle = () => {
-    // 防重复触发：两次 toggle 间隔 < 100ms 时忽略（避免误触导致的闪开闪关）
-    const now = Date.now();
-    if (now - lastToggleAtRef.current < 100) return;
-    lastToggleAtRef.current = now;
-    if (!open) {
-      openAtRef.current = now;
-      if (onOpen) {
-        // 刷新期间禁止一切自动关闭；刷新完成后仍保留 600ms 缓冲，
-        // 盖住刷新引发的 re-render/滚动/输入重放（batchPlay 耗时不定，
-        // 固定 500ms 保护窗口盖不住）。
-        suppressCloseUntilRef.current = Number.MAX_SAFE_INTEGER;
-        Promise.resolve()
-          .then(() => onOpen())
-          .catch(() => {})
-          .finally(() => {
-            suppressCloseUntilRef.current = Date.now() + 600;
-          });
-      }
-      reposition();
-    }
-    setOpen(o => !o);
-  };
-
-  return (
-    <div className={`mask-sync-select-wrap ${className || ''}`} title={title}>
-      <div
-        ref={headRef}
-        className={`mask-sync-select-head ${open ? 'open' : ''}`}
-        onClick={toggle}
-      >
-        <span className="mask-sync-select-value">{sel ? sel.main : ''}</span>
-        {sel && sel.tag && <span className="mask-sync-select-opt-tag">{sel.tag}</span>}
-        <span className="mask-sync-select-caret">
-          {/* 与主面板一致的 ChevronDown 官方图标（Fluent 18x18，圆润下箭头） */}
-          <svg viewBox="0 0 18 18" width="16" height="16" aria-hidden="true" focusable="false">
-            <path d="M4,7.01a1,1,0,0,1,1.7055-.7055l3.289,3.286,3.289-3.286a1,1,0,0,1,1.437,1.3865l-.0245.0245L9.7,11.7075a1,1,0,0,1-1.4125,0L4.293,7.716A.9945.9945,0,0,1,4,7.01Z" fill="currentColor" />
-          </svg>
-        </span>
-      </div>
-      {/* 弹层 portal 到所属面板根容器（见 utils/popRoot.ts）：面板容器会创建层叠
-          上下文，留在内部再高的 z-index 也盖不住面板外元素；同时也避免被面板内
-          通用 div 规则命中导致选项横排。 */}
-      {open && pos && popRoot && createPortal(
-        <div
-          ref={popRef}
-          className="mask-sync-select-pop"
-          style={{ left: pos.left, top: pos.top, width: pos.width }}
-        >
-          {options.map(o => (
-            <div
-              key={o.value}
-              className={`mask-sync-select-opt ${o.value === value ? 'sel' : ''} ${o.disabled ? 'dis' : ''}`}
-              style={o.depth != null ? { paddingLeft: 8 + o.depth * 16 } : undefined}
-              onClick={() => {
-                if (o.disabled) return;
-                onChange(o.value);
-                setOpen(false);
-              }}
-            >
-              <span className="mask-sync-select-opt-main">{o.main}</span>
-              {o.tag && <span className="mask-sync-select-opt-tag">{o.tag}</span>}
-              {showCheck && !o.tag && o.value === value && (
-                <span className="mask-sync-select-check">
-                  {/* 与主面板 sp-picker 一致的 Spectrum 对勾（选中项右侧） */}
-                  <svg viewBox="0 0 36 36" width="12" height="12" aria-hidden="true" focusable="false">
-                    <path d="M9 16.4L14.6 22.1L27.4 9.6L29.4 11.6L14.6 26.3L9 20.4Z" fill="currentColor" />
-                  </svg>
-                </span>
-              )}
-            </div>
-          ))}
-        </div>,
-        popRoot
-      )}
-    </div>
-  );
+  return { label, tag: '' };
 };
 
 const handleMaskSyncSampleChange = async (task: MaskSyncTask, value: string) => {
@@ -1556,7 +1366,7 @@ const getAutoLineReferenceLayer = (doc: any, activeLayerId: number): any | null 
   return null;
 };
 
-/** 线稿参考层选择（MaskSyncSelect 下拉，value = 图层 id 或 'auto'）。 */
+/** 线稿参考层选择（Select 下拉，value = 图层 id 或 'auto'）。 */
 const handleLineReferenceSelect = (value: string) => {
   if (value === 'auto') {
     setLineReferenceLayerId(null);
@@ -2873,17 +2683,18 @@ const renderEdgeProcessingContent = () => (
     <div className="adjustment-slider-container adjustment-slider-container-vpad">
       <div className="adjustment-slider-item adjustment-slider-item-no-gap adjustment-slider-item">
         {/* 下拉行：标签不可拖拽，光标保持 default（与可拖拽滑块标签区分） */}
-        <div className="adjustment-slider-label adjustment-slider-label-4 adjustment-slider-label-static" title={helpTexts.adjustment.edgeSmoothMode}>平滑模式</div>
+        <div className="adjustment-slider-label adjustment-slider-label-static" title={helpTexts.adjustment.edgeSmoothMode}>平滑模式</div>
         <div className="unit-container">
-          <MaskSyncSelect
+          <Select
             value={edgeSmoothMode}
             onChange={handleEdgeSmoothModeChange}
             className="adjustment-smooth-mode-select"
             title={helpTexts.adjustment.edgeSmoothModeSelect}
             showCheck
+            placeholder=""
             options={[
-              { value: 'edge', main: '仅色块边界' },
-              { value: 'line', main: '仅主线条' },
+              { value: 'edge', label: '仅色块边界' },
+              { value: 'line', label: '仅主线条' },
             ]}
           />
         </div>
@@ -3040,27 +2851,29 @@ const renderMaskSyncContent = () => (
         {/* 部分一：样本（图层 + 通道 + 反相） */}
         <div className="mask-sync-row mask-sync-row-close">
           <span className="mask-sync-label">样本</span>
-          <MaskSyncSelect
+          <Select
             value={task.sampleLayerId != null ? String(task.sampleLayerId) : ''}
             onChange={(v) => handleMaskSyncSampleChange(task, v)}
             onOpen={refreshMaskSyncOptions}
             title={helpTexts.adjustment.maskSyncSampleLayer}
+            placeholder=""
             options={maskSyncSampleOptions.map(opt => {
-              const { main, tag } = splitLabelTag(opt.label);
+              const { label, tag } = splitLabelTag(opt.label);
               // 像素/调整/背景图层可選；带蒙版的图层组也可作为样本（只能取蒙版通道）
               const selectable = opt.kind === 'pixel' || opt.isAdjustment || opt.isBackground || (opt.kind === 'group' && opt.hasUserMask);
-              return { value: String(opt.id), main, tag, disabled: !selectable, depth: opt.depth };
+              return { value: String(opt.id), label, tag, disabled: !selectable, depth: opt.depth };
             })}
           />
         </div>
 
         <div className="mask-sync-row">
           <span className="mask-sync-label">通道</span>
-          <MaskSyncSelect
+          <Select
             value={task.channel || ''}
             onChange={(v) => handleMaskSyncChannelChange(task, v)}
             showCheck
-            options={channelOptions.map(ch => ({ value: ch, main: MASK_SYNC_CHANNEL_LABELS[ch] }))}
+            placeholder=""
+            options={channelOptions.map(ch => ({ value: ch, label: MASK_SYNC_CHANNEL_LABELS[ch] }))}
           />
         </div>
 
@@ -3069,14 +2882,15 @@ const renderMaskSyncContent = () => (
         {/* 部分二：目标（有蒙版的图层/组）+ 反相 */}
         <div className="mask-sync-row">
           <span className="mask-sync-label">蒙版</span>
-          <MaskSyncSelect
+          <Select
             value={task.targetLayerId != null ? String(task.targetLayerId) : ''}
             onChange={(v) => handleMaskSyncTargetChange(task, v)}
             onOpen={refreshMaskSyncOptions}
             title={helpTexts.adjustment.maskSyncTargetLayer}
+            placeholder=""
             options={maskSyncTargetOptions.map(opt => {
-              const { main, tag } = splitLabelTag(opt.label);
-              return { value: String(opt.id), main, tag, depth: opt.depth };
+              const { label, tag } = splitLabelTag(opt.label);
+              return { value: String(opt.id), label, tag, depth: opt.depth };
             })}
           />
         </div>
@@ -3276,16 +3090,17 @@ const renderQuickActionContent = () => (
     <div className="adjustment-slider-container adjustment-slider-container-vpad">
       <div className="adjustment-slider-item adjustment-slider-item-no-gap">
         {/* 下拉行：标签不可拖拽，光标保持 default（原为 pointer，语义错误） */}
-        <div className="wide-adjustment-slider-label adjustment-slider-label-static" title={helpTexts.adjustment.lineReference}>线稿参考</div>
+        <div className="adjustment-slider-label adjustment-slider-label-static" title={helpTexts.adjustment.lineReference}>线稿参考</div>
         <div className="unit-container">
-          <MaskSyncSelect
+          <Select
             value={lineReferenceLayerId ? String(lineReferenceLayerId) : 'auto'}
             onChange={handleLineReferenceSelect}
+            placeholder=""
             options={[
-              { value: 'auto', main: '自动', tag: '上方像素层' },
+              { value: 'auto', label: '自动', tag: '上方像素层' },
               ...lineReferenceOptions.map(opt => {
                 const s = splitLabelTag(opt.label);
-                return { value: opt.value, main: s.main, tag: s.tag, depth: opt.depth, disabled: opt.disabled };
+                return { value: opt.value, label: s.label, tag: s.tag, depth: opt.depth, disabled: opt.disabled };
               })
             ]}
             showCheck

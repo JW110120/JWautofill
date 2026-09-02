@@ -159,6 +159,14 @@ html, body {
   appearance: none;
 }
 
+/* 全插件 #app 主面板所有数字输入框统一去除原生外观：避免 UXP 原生 number 输入框
+   自带绘制盒与外围边框叠加形成“边框里又套边框”。工具箱侧由
+   #pixeladjustment input[type="number"]（adjustment.css）统一处理，两处语义一致。 */
+#app input[type="number"] {
+  appearance: none;
+  -webkit-appearance: none;
+}
+
 /* 单位符号：独立于数字输入框容器之外，与输入框保持小间距（不进裁剪框、不被裁掉） */
 .num-unit {
   margin-left: 4px;
@@ -462,6 +470,7 @@ body.secondary-panel-open .container {
   font-size: 13px;
   margin-right: 6px;
   color: var(--text-color);
+  white-space: nowrap;
 }
 
 /* 主面板下拉已统一改用自定义 .mask-sync-select 组件（src/components/Select.tsx），
@@ -518,10 +527,10 @@ sp-radio[disabled] {
   align-items: center;
 }
 
-/* 拖拽中切 grabbing（按下即抓住元素横向拖动，符合「抓取移动」语义）；非拖拽态仍
-   ew-resize 表示可横向拖调。鼠标移出行容器后由 body.label-drag-cursor 全局兜底仍为 grabbing。 */
+/* 拖拽中切 ew-resize（按下即抓住元素横向拖动，符合「抓取移动」语义）；非拖拽态仍
+   ew-resize 表示可横向拖调。鼠标移出行容器后由 body.label-drag-cursor 全局兜底仍为 ew-resize。 */
 .slider-parameter-collection.dragging {
-  cursor: grabbing;
+  cursor: ew-resize;
 }
 
 .slider-parameter-collection.not-dragging {
@@ -623,7 +632,7 @@ sp-radio[disabled] {
 }
 
 .selection-slider-label.dragging {
-  cursor: grabbing;
+  cursor: ew-resize;
 }
 
 .selection-slider-label.not-dragging {
@@ -736,6 +745,7 @@ sp-radio {
 .radio-item-label {
   display: inline-flex;
   align-items: center;
+  white-space: nowrap;
 }
 
 .info-plane {
@@ -856,11 +866,11 @@ sp-action-button {
 /* 滑块拖拽期间的光标锁定（class 由 utils/dragCursor.ts 加到 document.body）。
    元素自身的 `cursor: ew-resize` 只在鼠标悬停其上方时生效，拖拽中鼠标会移出标签，
    光标随即被鼠标下方的元素接管变成普通箭头。这里在拖拽期间把整棵子树压成
-   grabbing（按下即抓住元素横向拖动，符合「抓取移动」语义），保证「按下→拖动→松手」
+   ew-resize（横向拖调，与标签常态光标一致），保证「按下→拖动→松手」
    全程光标连续不变。
    !important 是必需的：要压过面板里各处 button/label/input 的常规则与 cursor 声明。
    作用域仅限拖拽期间，mouseup 立即摘除，不影响其它交互。 */
 body.label-drag-cursor,
 body.label-drag-cursor * {
-  cursor: grabbing !important;
+  cursor: ew-resize !important;
 }

@@ -52,10 +52,10 @@
   margin-right: 10px;
 }
 
-/* 拖拽中切 grabbing（按下即抓住元素横向拖动，符合「抓取移动」语义）；非拖拽态仍
-   ew-resize 表示可横向拖调。鼠标移出标签后由 body.label-drag-cursor 全局兜底仍为 grabbing。 */
+/* 拖拽中切 ew-resize（按下即抓住元素横向拖动，符合「抓取移动」语义）；非拖拽态仍
+   ew-resize 表示可横向拖调。鼠标移出标签后由 body.label-drag-cursor 全局兜底仍为 ew-resize。 */
 .stroke-label-2.dragging {
-  cursor: grabbing;
+  cursor: ew-resize;
 }
 
 .stroke-label-2.not-dragging {
@@ -172,8 +172,11 @@
 /*混合模式四字文字标签*/
 .stroke-blende-mode label {
   font-size: 13px;
-  margin-right: 10px;
-  width: 47px;
+  margin-right: 6px;
+  /* 改为按内容宽度（4 字约 52px > 原 47px）：配合 nowrap 确保“混合模式”永不换行，
+     下拉框随行 flex 填充剩余宽度（与工具箱 .mask-sync-select-wrap flex:1 一致）。 */
+  flex: 0 0 auto;
+  white-space: nowrap;
   color: var(--text-color);
 }
 
@@ -205,7 +208,7 @@
 }
 
 .stroke-label-4.dragging {
-  cursor: grabbing;
+  cursor: ew-resize;
 }
 
 .stroke-label-4.not-dragging {
@@ -220,10 +223,10 @@
   cursor: pointer;
   box-sizing: border-box;
 }
-/* 拖拽期间把全局光标钉死为 grabbing（详见 src/utils/dragCursor.ts）：
-   按下即抓住元素横向拖动，符合「抓取移动」语义；鼠标移出行容器/标签后由
-   body.label-drag-cursor 全局兜底，全程维持 grabbing。 */
+/* 拖拽期间把全局光标钉死为 ew-resize（详见 src/utils/dragCursor.ts）：
+   按下即横向拖调，与标签常态光标一致；鼠标移出行容器/标签后由
+   body.label-drag-cursor 全局兜底，全程维持 ew-resize。 */
 body.label-drag-cursor,
 body.label-drag-cursor * {
-  cursor: grabbing !important;
+  cursor: ew-resize !important;
 }

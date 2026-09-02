@@ -6,10 +6,13 @@ import {
   estimatePopRect,
 } from '../utils/popOverlay';
 
-// 通用自绘下拉：与调整面板里的自绘下拉（MaskSyncSelect / BrushSelect）共用同一套
+// 通用自绘下拉：与各面板里的自绘下拉（BrushSelect 等）共用同一套
 // CSS（.mask-sync-select-*，定义在 src/adjustments/adjustment.css），因此视觉上
-// 与主面板其它下拉完全一致，且背景/文字都走主题变量（--dropdown-bg-color 等），
+// 全插件下拉完全一致，且背景/文字都走主题变量（--dropdown-bg-color 等），
 // 不再依赖 sp-picker / sp-menu（其展开菜单背景在 UXP 下无法被 CSS 覆盖）。
+//
+// 原调整面板的 MaskSyncSelect 已收敛到本组件：图层树 depth 缩进走 SelectOption.depth，
+// 选中对勾由 showCheck 控制，展开前刷新（蒙版同步重新枚举图层）由 onOpen 钩子负责。
 //
 // 弹层通过 createPortal 挂到「所在面板的根容器」（#app / #pixeladjustment，见
 // utils/popRoot.ts），原因：
@@ -28,6 +31,7 @@ export interface SelectOption {
   label: string;
   disabled?: boolean;
   tag?: React.ReactNode; // 右侧标注（如图标/文字），仅 brush 下拉使用
+  depth?: number; // 图层树层级缩进（蒙版同步下拉使用）：padding-left = 8 + depth*16
 }
 
 interface Props {
@@ -40,6 +44,10 @@ interface Props {
   title?: string;
   className?: string;
   style?: React.CSSProperties;
+  /** 选中项右侧打勾（与蒙版同步下拉统一）。默认开启；实际绘制还要求「该项无右侧标注」。 */
+  showCheck?: boolean;
+  /** 展开前钩子：蒙版同步用它刷新图层树；刷新期间（及完成后 600ms 缓冲）抑制一切自动关闭。 */
+  onOpen?: () => void;
 }
 
 export default function Select({
@@ -52,12 +60,17 @@ export default function Select({
   title,
   className = '',
   style,
+  showCheck = true,
+  onOpen,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
   const headRef = useRef<HTMLDivElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
   const openAtRef = useRef(0);
+  // 自动关闭抑制截止时间：onOpen 刷新期间置 Infinity，刷新完成保留 600ms 缓冲，
+  // 盖住 re-render/滚动/输入重放导致的「打开后立刻自动关闭」。
+  const suppressCloseUntilRef = useRef(0);
 
   const allOptions = groups ? groups.flat() : (options ?? []);
   const sel = allOptions.find(o => o.value === value);
@@ -78,6 +91,7 @@ export default function Select({
   useEffect(() => {
     if (!open) return;
     const onDocClick = (e: MouseEvent) => {
+      if (Date.now() < suppressCloseUntilRef.current) return; // 刷新期/缓冲期：绝不关闭
       if (Date.now() - openAtRef.current < 300) return; // 打开瞬间的点击不关闭
       if (headRef.current?.contains(e.target as Node)) return;
       if (popRef.current?.contains(e.target as Node)) return;
@@ -98,7 +112,7 @@ export default function Select({
 
   useEffect(() => {
     if (open) reposition();
-  }, [open, reposition, value]);
+  }, [open, reposition, value, options, groups]);
 
   // UXP 限制：可编辑控件（滑块旁的 number 输入等）无视 z-index 永远画在最上层。
   // 弹层渲染出来后按实际矩形，只把与弹层相交的那些临时隐藏，关闭时还原。
@@ -124,7 +138,21 @@ export default function Select({
 
   const handleHeadClick = () => {
     if (disabled) return;
-    if (!open) { openAtRef.current = Date.now(); reposition(); }
+    if (!open) {
+      openAtRef.current = Date.now();
+      if (onOpen) {
+        // 展开前刷新（蒙版同步重新枚举图层）：刷新期间禁止一切自动关闭；
+        // 刷新完成后保留 600ms 缓冲，盖住 re-render/滚动/输入重放导致的闪关。
+        suppressCloseUntilRef.current = Number.MAX_SAFE_INTEGER;
+        Promise.resolve()
+          .then(() => onOpen())
+          .catch(() => {})
+          .finally(() => {
+            suppressCloseUntilRef.current = Date.now() + 600;
+          });
+      }
+      reposition();
+    }
     setOpen(o => !o);
   };
 
@@ -142,14 +170,14 @@ export default function Select({
       <div
         key={i}
         className={`mask-sync-select-opt ${o.value === value ? 'sel' : ''} ${o.disabled ? 'dis' : ''}`}
+        style={o.depth != null ? { paddingLeft: 8 + o.depth * 16 } : undefined}
         onClick={() => handleOptClick(o)}
       >
         <span className="mask-sync-select-opt-main">{o.label}</span>
         {o.tag && <span className="mask-sync-select-opt-tag">{o.tag}</span>}
         {/* 选中项右侧对勾：仅在该项没有右侧标记（笔刷图标 / 图层标记）时显示，
-            与调整面板 MaskSyncSelect 的 de61f56 样式一致。勾的颜色继承 .sel 的
-            白色前景，落在主色（蓝）背景上。 */}
-        {!o.tag && o.value === value && (
+            与蒙版同步下拉的样式一致。勾的颜色继承 .sel 的白色前景，落在主色（蓝）背景上。 */}
+        {showCheck && !o.tag && o.value === value && (
           <span className="mask-sync-select-check">
             <svg viewBox="0 0 36 36" width="12" height="12" aria-hidden="true" focusable="false">
               <path d="M9 16.4L14.6 22.1L27.4 9.6L29.4 11.6L14.6 26.3L9 20.4Z" fill="currentColor" />
