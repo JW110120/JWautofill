@@ -114,7 +114,7 @@ const RangeSlider: React.FC<RangeSliderProps> = ({
     return (
         <div
             ref={trackRef}
-            className={`${className || ''} range-slider ${disabled ? 'disabled' : ''}`}
+            className={className || 'range-slider'}
             title={title}
             role="slider"
             aria-valuemin={min}

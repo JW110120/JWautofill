@@ -239,7 +239,7 @@ async function strokeSelectionWithClearMode(strokeParams: any) {
         const foregroundGrayValue = rgbToGray(foregroundRGB.red, foregroundRGB.green, foregroundRGB.blue);
         console.log('🎨 前景色RGB:', foregroundRGB, '灰度值:', foregroundGrayValue);
         
-        // 计算清除模式描边的不透明度：(前景色灰度值/255) * strokesetting中的不透明度
+        // 计算清除模式描边的不透明度：(前景色灰度值/255) * .subpanel-fill 中的不透明度
         const clearModeOpacity = (foregroundGrayValue / 255) * strokeParams.opacity;
         console.log('🔧 清除模式不透明度:', clearModeOpacity);
 

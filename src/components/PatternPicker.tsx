@@ -1637,7 +1637,7 @@ interface PatternPickerProps {
     if (!isOpen) return null;
 
     return (
-        <div className="pattern-picker">
+        <div className="subpanel-fill">
             <div className="subpanel-header">
                 <h3>选择图案</h3>
                 <div className="close-button" role="button" tabIndex={0} onClick={() => {
@@ -1649,7 +1649,7 @@ interface PatternPickerProps {
                     {patterns.map((pattern, index) => (
                         <div
                             key={pattern.id}
-                            className={`photo-container ${selectedPattern === pattern.id ? 'selected' : ''} ${selectedPatterns.has(pattern.id) ? 'multi-selected' : ''}`}
+                            className={selectedPatterns.has(pattern.id) ? 'photo-container-multi-selected' : (selectedPattern === pattern.id ? 'photo-container-selected' : 'photo-container')}
                             draggable
                             onDragStart={(e) => handlePatternDragStart(e, index)}
                             onDragOver={(e) => handlePatternDragOver(e, index)}
@@ -1707,13 +1707,12 @@ interface PatternPickerProps {
                      <div className="pattern-icon-container">
                         <div className="icon-group">
                             <IconButton title={helpTexts.pattern.selectFile} onClick={handleFileSelect}>
-                                <FileIcon className="icon-15" />
+                                <FileIcon className="icon-14" />
                             </IconButton>
-                            <div className="delete-button-wrapper">
                             <div
-                                className={`hotkey-icon-button${(!selectedPattern && selectedPatterns.size === 0) ? ' disabled' : ''}`}
+                                className={(!selectedPattern && selectedPatterns.size === 0) ? 'icon-button-delete-disabled' : 'icon-button-delete'}
                                 role="button"
-                                tabIndex={0}
+                                tabIndex={(!selectedPattern && selectedPatterns.size === 0) ? -1 : 0}
                                 title={helpTexts.pattern.deletePattern}
                                 onClick={() => {
                                     if (selectedPatterns.size > 0 || selectedPattern) {
@@ -1721,9 +1720,8 @@ interface PatternPickerProps {
                                     }
                                 }}
                             >
-                                <DeleteIcon className="icon-15" />
+                                <DeleteIcon className="icon-14" />
                             </div>
-                        </div>
                         </div>
                      </div>
             </div>
@@ -1734,8 +1732,8 @@ interface PatternPickerProps {
                 <div className="pattern-setting-item-group">
                     <div className="pattern-setting-item">
                         <div className="pattern-entire-slider">
-                        <div className="pattern-slider-parameter-collection" onMouseDown={(e) => handleMouseDown(e, 'angle')}>
-                        <label className="pattern-slider-text pattern-slider-text-3">角度：</label>
+                        <div className="row-between" onMouseDown={(e) => handleMouseDown(e, 'angle')}>
+                        <label className="label-3">角度：</label>
                             <div className="num-input-wrap">
                                 <div className="num-input-row">
                                     <input
@@ -1755,7 +1753,7 @@ interface PatternPickerProps {
                             max={360}
                             step={1}
                             value={angle}
-                            className="pattern-angle-range"
+                            className="slider-input"
                             onChange={(v) => setAngle(v)}
                             onDragEnd={() => { if (selectedPattern) updatePatternTransform(selectedPattern, scale, angle); }}
                         />
@@ -1764,8 +1762,8 @@ interface PatternPickerProps {
 
                     <div className="pattern-setting-item">
                         <div className="pattern-entire-slider">
-                        <div className="pattern-slider-parameter-collection" onMouseDown={(e) => handleMouseDown(e, 'scale')}>
-                        <label className="pattern-slider-text pattern-slider-text-3">缩放：</label>
+                        <div className="row-between" onMouseDown={(e) => handleMouseDown(e, 'scale')}>
+                        <label className="label-3">缩放：</label>
                             <div className="num-input-wrap">
                                 <div className="num-input-row">
                                     <input
@@ -1784,7 +1782,7 @@ interface PatternPickerProps {
                             max={300}
                             step={1}
                             value={scale}
-                            className="pattern-scale-range"
+                            className="slider-input"
                             onChange={(v) => setScale(v)}
                             onDragEnd={() => { if (selectedPattern) updatePatternTransform(selectedPattern, scale, angle); }}
                         />
@@ -1798,56 +1796,48 @@ interface PatternPickerProps {
                             name="fillMode"
                             onChange={(e) => setFillMode(e.target.value as 'stamp' | 'tile')}
                         >
-                            <sp-radio value="stamp" className="pattern-fillmode-radio">
-                                <span className="pattern-radio-item-label">单次</span>
+                            <sp-radio value="stamp" className="radio-item">
+                                <span className="radio-item-label">单次</span>
                             </sp-radio>
-                            <sp-radio value="tile" className="pattern-fillmode-radio">
-                                <span className="pattern-radio-item-label">平铺</span>
+                            <sp-radio value="tile" className="radio-item">
+                                <span className="radio-item-label">平铺</span>
                             </sp-radio>
                         </sp-radio-group>
                 </div>
 
-                <div className="pattern-checkbox-container field-row-two">
-                    <div className="field-cell">
-                        <div className="field-cell-label">
-                            <label
-                                htmlFor="transparencyCheckbox"
-                                className="pattern-checkbox-label"
-                                onClick={() => setPreserveTransparency(!preserveTransparency)}
-                            >
-                                剪贴蒙版：
-                            </label>
-                        </div>
-                        <div className="field-cell-control">
-                            <input
-                                type="checkbox"
-                                id="transparencyCheckbox"
-                                checked={preserveTransparency}
-                                onChange={(e) => setPreserveTransparency(e.target.checked)}
-                                className="pattern-checkbox-input"
-                            />
-                        </div>
+                <div className="checkbox-options-row-two">
+                    <div className="checkbox-row">
+                        <label
+                            htmlFor="transparencyCheckbox"
+                            className="label-static"
+                            onClick={() => setPreserveTransparency(!preserveTransparency)}
+                        >
+                            剪贴蒙版：
+                        </label>
+                        <input
+                            type="checkbox"
+                            id="transparencyCheckbox"
+                            checked={preserveTransparency}
+                            onChange={(e) => setPreserveTransparency(e.target.checked)}
+                            className="checkbox-input"
+                        />
                     </div>
                     {fillMode === 'tile' && (
-                        <div className="field-cell">
-                            <div className="field-cell-label">
-                                <label
-                                    htmlFor="rotateAllCheckbox"
-                                    className="pattern-checkbox-label"
-                                    onClick={() => setRotateAll(!rotateAll)}
-                                >
-                                    旋转阵列：
-                                </label>
-                            </div>
-                            <div className="field-cell-control">
-                                <input
-                                    type="checkbox"
-                                    id="rotateAllCheckbox"
-                                    checked={rotateAll}
-                                    onChange={(e) => setRotateAll(e.target.checked)}
-                                    className="pattern-checkbox-input"
-                                />
-                            </div>
+                        <div className="checkbox-row">
+                            <label
+                                htmlFor="rotateAllCheckbox"
+                                className="label-static"
+                                onClick={() => setRotateAll(!rotateAll)}
+                            >
+                                旋转阵列：
+                            </label>
+                            <input
+                                type="checkbox"
+                                id="rotateAllCheckbox"
+                                checked={rotateAll}
+                                onChange={(e) => setRotateAll(e.target.checked)}
+                                className="checkbox-input"
+                            />
                         </div>
                     )}
                 </div>

@@ -10,7 +10,7 @@
 }
 
 /* ↳ .draggable-label（可拖拽标签光标语义）已收口到 common.css
-   （与工具箱 .adjustment-slider-label-drag 为同一别名组） */
+   （与工具箱 .draggable-label 为同一类） */
 
 .gradient-subtitle h3 {
   margin: 5px;
@@ -70,12 +70,34 @@
     outline: none;
 }
 
-.preset-item.selected {
+.preset-item-selected {
+    position: relative;
+    height: 35px;
+    width: 35px;
+    aspect-ratio: 1;
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    overflow: hidden;
+    cursor: pointer;
+    background-color: var(--dark-bg-color);
+    box-sizing: border-box;
+    outline: none;
     border-color: var(--primary-color);
     border-width: 2px;
 }
 
-.preset-item.multi-selected {
+.preset-item-multi-selected {
+    position: relative;
+    height: 35px;
+    width: 35px;
+    aspect-ratio: 1;
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    overflow: hidden;
+    cursor: pointer;
+    background-color: var(--dark-bg-color);
+    box-sizing: border-box;
+    outline: none;
     border-color: var(--secondary-color, rgb(255, 107, 53));
     border-width: 2px;
     background-color: rgba(255, 107, 53, 0.1);
@@ -110,8 +132,14 @@
     z-index: 2;
 }
 
-/* 可点击的渐变层（点击即在预览条上新增色标） */
-.gradient-fill-layer.is-clickable {
+/* 可点击的渐变层（点击即在预览条上新增色标）；自包含单类名（含 .gradient-fill-layer 基础层定位） */
+.gradient-fill-layer-clickable {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 2;
     cursor: pointer;
 }
 
@@ -151,7 +179,7 @@
   justify-content: space-between;
 }
 
-.opacity-input .delete-button-wrapper {
+.opacity-input .icon-button-delete {
   margin-left: auto;
 }
 
@@ -187,11 +215,22 @@
   touch-action: none;
 }
 
-.opacity-slider-thumb.selected {
+.opacity-slider-thumb-selected {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--border-color);
+  transform: translate(-50%, -50%) scale(1.1);
+  top: 50%;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  z-index: 10001;
+  pointer-events: auto;
+  touch-action: none;
   border-color: var(--primary-color);
   border-width: 3px;
-  z-index: 10001;
-  transform: translate(-50%, -50%) scale(1.1);
 }
 
 .gradient-preview {
@@ -234,11 +273,21 @@
   touch-action: none;
 }
 
-.color-slider-thumb.selected {
+.color-slider-thumb-selected {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border-color);
+  transform: translate(-50%, -50%) scale(1.1);
+  top: 50%;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  z-index: 10001;
+  pointer-events: auto;
+  touch-action: none;
   border-color: var(--primary-color);
   border-width: 3px;
-  z-index: 10001;
-  transform: translate(-50%, -50%) scale(1.1);
 }
 .color-prefix {
   font-family: monospace;
@@ -254,7 +303,7 @@
   justify-content: space-between;
 }
 
-.color-input-container .delete-button-wrapper {
+.color-input-container .icon-button-delete {
   margin-left: auto;
 }
 
@@ -314,7 +363,7 @@ sp-color-slider {
     border: 1px solid var(--border-color);
     border-radius: 3px;
     /* 上下左右内边距统一 10px；高度由内容决定且不再随面板高度伸缩
-       （见 .gradient-picker > * { flex-shrink: 0 }） */
+       （见 .subpanel-fill > * { flex-shrink: 0 }） */
     padding: 10px;
     height: auto;
     width: 100%;
@@ -345,21 +394,15 @@ sp-color-slider {
 /* 渐变“样式”下拉：标签与下拉同行（参考边缘平滑“平滑模式”），标签固定为内容宽度，
    下拉自适应占满剩余宽度，标签+下拉正好占满整行（取消 190px 上限，避免被压窄到
    选项换行/排成两列）。 */
-.gradient-type-setting {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    margin: 10px 0;
-}
+/* ↳ 原 .gradient-type-setting 为 .gradient-setting-item 的冗余别名，已删（TSX 直接用
+   .gradient-setting-item）；其样式完全等同于通用行容器，无独有布局。 */
 /* 下拉容器保持块级：`.gradient-setting-item > div{display:flex}` 会把 wrap 变成
    flex 容器，虽然 head 已能撑满，但块级更可控（与其它面板的下拉行为一致）。 */
 .gradient-setting-item > .mask-sync-select-wrap {
     display: block;
-}
-
-.gradient-type-setting .mask-sync-select-wrap {
     /* flex-basis 用 0（而非 auto）：auto 会以内容宽度为基准，在 UXP 下容易残留
-       内容宽度导致下拉被压窄；0 + grow:1 保证稳定占满标签之后的整行剩余宽度。 */
+       内容宽度导致下拉被压窄；0 + grow:1 保证稳定占满标签之后的整行剩余宽度。
+       （原仅 .gradient-type-setting 行需要，现并入通用子元素规则，类型行复用。） */
     flex: 1 1 0%;
     min-width: 0;
     width: auto;
@@ -369,6 +412,17 @@ sp-color-slider {
    此规则为死代码，已删。 */
 
 .gradient-setting-item .gradient-angle-range {
+    /* RangeSlider 根属性（className 为单类名 .gradient-angle-range，需自带根布局） */
+    position: relative;
+    display: block;
+    height: 12px;
+    cursor: pointer;
+    outline: none;
+    -webkit-user-select: none;
+    user-select: none;
+    touch-action: none;
+    box-sizing: border-box;
+    --rs-track-inset: 6px;
     margin: 3px -4px 0 0px;
     width: 104px;
     flex: 1;
@@ -389,20 +443,32 @@ sp-color-slider {
    原 .gradient-setting-item > div > span（margin-left:-4px / width:14px）已删，
    与主面板及描边/纯色面板的单位符号完全一致。 */
 
-/* 渐变角度行在「径向」模式下仅禁用（不隐藏）：整体置灰、禁用指针，
-   但保留占位高度，使容器高度在线性/径向两种模式下恒定。 */
-.gradient-angle-setting.disabled label {
+/* 角度行：自包含单类名（含 .gradient-setting-item 基础行布局）。「径向」模式下仅禁用（不隐藏）：
+   整体置灰、禁用指针，但保留占位高度，使容器高度在线性/径向两种模式下恒定。 */
+.gradient-setting-item-angle {
+    margin: 10px 0;
+    display: flex;
+    align-items: center;
+}
+
+.gradient-setting-item-angle-disabled {
+    margin: 10px 0;
+    display: flex;
+    align-items: center;
+}
+
+.gradient-setting-item-angle-disabled label {
     cursor: not-allowed;
     color: var(--disabled-color);
 }
 
-.gradient-angle-setting.disabled .gradient-angle-range,
-.gradient-angle-setting.disabled input[type="number"] {
+.gradient-setting-item-angle-disabled .gradient-angle-range,
+.gradient-setting-item-angle-disabled input[type="number"] {
     opacity: 0.4;
     cursor: not-allowed;
 }
 
-.gradient-angle-setting.disabled input[type="number"] {
+.gradient-setting-item-angle-disabled input[type="number"] {
     /* 原生 number 在 UXP 下禁用态不自动置灰，手动补 */
     color: var(--disabled-color);
 }

@@ -18,7 +18,7 @@
  *  1. 必须用 setProperty(prop, val, 'important') 写**带 !important 的内联样式**，
  *     以便压过任何“普通声明”的样式表规则。
  *  2. ⚠️ 与之配套：src/styles/input-fix.css 里那条
- *       .gradient-picker input[type="number"] { visibility: visible ... }
+ *       .subpanel-fill input[type="number"] { visibility: visible ... }
  *     次级面板输入框“确保可见”的规则**绝不可加 !important**。UXP 的 CSS 引擎在
  *     important 级会把「样式表 !important」判在「内联 !important」之上（与标准
  *     层叠相反），一旦它带 !important，本遮挡逻辑的内联 visibility:hidden !important
@@ -82,7 +82,7 @@ function intersects(a: Rect, b: Rect): boolean {
 /**
  * 取一个元素在视口中的有效矩形。
  *
- * ⚠️ UXP 已知坑：原生 number / text 输入控件（尤其次级面板 .gradient-picker 这类
+ * ⚠️ UXP 已知坑：原生 number / text 输入控件（尤其次级面板 .subpanel-fill 这类
  * z-index:9999 的作用域内）对 getBoundingClientRect() 常常返回**尺寸为 0** 的退化矩形
  * （控件本身画得出来、用户也看得到，但 JS 量到 0 宽/高）。旧逻辑一旦量到 0 就直接
  * `continue` 跳过该控件，导致「控件明明压在弹层上、却没被隐藏、数字浮在菜单上」——

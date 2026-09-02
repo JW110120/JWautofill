@@ -55,7 +55,7 @@ body.secondary-panel-open .container {
 }
 
 /* 主面板（#app .container）滚动条：与绘画工具箱同款 10px 圆角滚动条。
-   ⚠️ 4 个子面板（.strokesetting/.color-settings-panel/.gradient-picker/.pattern-picker）的
+   ⚠️ 4 个子面板（.subpanel-fill）的
    滚动条已统一收口到 common.css（无作用域，#app 与 #pixeladjustment 下都生效），此处不再重复。 */
 #app .container::-webkit-scrollbar {
   width: 10px;
@@ -118,8 +118,11 @@ body.secondary-panel-open .container {
 
 /* 清除模式开启时：混合模式标签与下拉文字变灰 --disabled-color（不用 opacity，
    灰色由 --disabled-color 直接给出，四主题一致） */
-.selection-fill-blend-mode-label.disabled {
+.selection-fill-blend-mode-label-disabled {
+  font-size: 13px;
+  margin-right: 6px;
   color: var(--disabled-color);
+  white-space: nowrap;
 }
 
 /* 滑块两层容器结构（选区填充面板）：
@@ -171,7 +174,7 @@ body.secondary-panel-open .container {
   transition: transform 0.3s;
 }
 
-.expand-icon.expanded svg {
+.expand-icon-expanded svg {
   transform: rotate(0deg);
 }
 
@@ -181,7 +184,7 @@ body.secondary-panel-open .container {
   transition: max-height 0.3s ease-out;
 }
 
-.expand-content.expanded {
+.expand-content-expanded {
   /* 原 400px 过小：填充选项内容（含底部 checkbox 区）超过该高度会被 overflow:hidden 裁掉，
      表现为最底部的 checkbox 区"整片消失"。放宽到足以容纳全部内容。 */
   max-height: 1400px;
@@ -217,7 +220,7 @@ body.secondary-panel-open .container {
   position: relative;
 }
 
-.fill-mode-group .radio-item .hotkey-icon-button {
+.fill-mode-group .radio-item .icon-button {
   position: absolute;
   right: 0;
   top: 50%;

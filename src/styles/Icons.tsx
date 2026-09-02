@@ -1,6 +1,6 @@
 import React from 'react';
 
-/** 图标通用入参：尺寸/布局交给 CSS 类（.icon-14/.icon-15/.icon-16），style 仅作兜底。 */
+/** 图标通用入参：尺寸/布局交给 CSS 类（.icon-14），style 仅作兜底。 */
 export interface IconSvgProps {
   className?: string;
   style?: React.CSSProperties;

@@ -7,18 +7,15 @@
 }
 
 /* 当次级面板打开时，主面板的input应该被遮盖 */
-.pattern-picker,
-.color-settings-panel,
-.gradient-picker,
-.strokesetting {
+.subpanel-fill {
     z-index: 9999 !important;
 }
 
 /* 授权对话框打开时，彻底隐藏主面板内所有数字输入，避免穿透和抢层级 */
 body.license-dialog-open #app .slider-container input[type="number"],
 body.license-dialog-open #app .expand-content input[type="number"],
-body.license-dialog-open #app .adjustment-slider-container input[type="number"],
-body.license-dialog-open #app .adjustment-number-input {
+body.license-dialog-open #app .expand-content-expanded input[type="number"],
+body.license-dialog-open #app .subpanel .row-between input[type="number"] {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
@@ -27,8 +24,8 @@ body.license-dialog-open #app .adjustment-number-input {
 /* 当任何次级面板打开时，隐藏主面板中的所有input number字段 */
 body.secondary-panel-open #app .slider-container input[type="number"],
 body.secondary-panel-open #app .expand-content input[type="number"],
-body.secondary-panel-open #app .adjustment-slider-container input[type="number"],
-body.secondary-panel-open #app .adjustment-number-input {
+body.secondary-panel-open #app .expand-content-expanded input[type="number"],
+body.secondary-panel-open #app .subpanel .row-between input[type="number"] {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
@@ -42,24 +39,21 @@ body.secondary-panel-open #app .adjustment-number-input {
    样式表 !important 判在内联 !important 之上，导致次级面板（渐变/图案/
    描边/颜色）的下拉菜单下方数字永远压不住、浮在菜单上。去掉 !important
    后，内联 important 正常胜过本普通声明，遮挡生效且不引起布局位移。 */
-.pattern-picker input[type="number"],
-.color-settings-panel input[type="number"],
-.gradient-picker input[type="number"],
-.strokesetting input[type="number"] {
+.subpanel-fill input[type="number"] {
     visibility: visible;
     opacity: 1;
     pointer-events: auto;
 }
 
 /* 确保主面板折叠状态下的input不显示 */
-#app .expand-content:not(.expanded) input[type="number"] {
+#app .expand-content input[type="number"] {
     visibility: hidden;
     opacity: 0;
     pointer-events: none;
 }
 
 /* 主面板展开状态下的input正常显示，但当次级面板打开时仍要隐藏 */
-#app .expand-content.expanded input[type="number"] {
+#app .expand-content-expanded input[type="number"] {
     visibility: visible;
     opacity: 1;
     pointer-events: auto;
@@ -67,7 +61,7 @@ body.secondary-panel-open #app .adjustment-number-input {
 }
 
 /* 当次级面板打开时，即使是展开状态的选区选项input也要隐藏 */
-body.secondary-panel-open #app .expand-content.expanded input[type="number"] {
+body.secondary-panel-open #app .expand-content-expanded input[type="number"] {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;

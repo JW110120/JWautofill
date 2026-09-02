@@ -16,7 +16,7 @@ import {
 //
 // 弹层通过 createPortal 挂到「所在面板的根容器」（#app / #pixeladjustment，见
 // utils/popRoot.ts），原因：
-//   1) 面板容器（.gradient-picker z-index:10 / .pattern-picker z-index:9999）会创建
+//   1) 面板容器（.subpanel-fill z-index:9999）会创建
 //      层叠上下文，弹层再高的 z-index 也被困在该上下文里，无法盖住面板外的元素；
 //   2) 弹层留在面板内会被 .gradient-setting-item div{display:flex} 之类的通用规则
 //      命中，导致选项横向排成两列；也会被设置区的 overflow(裁剪)/sticky 影响；
@@ -42,7 +42,6 @@ interface Props {
   disabled?: boolean;
   placeholder?: string;
   title?: string;
-  className?: string;
   style?: React.CSSProperties;
   /** 选中项右侧打勾（与蒙版同步下拉统一）。默认开启；实际绘制还要求「该项无右侧标注」。 */
   showCheck?: boolean;
@@ -58,7 +57,6 @@ export default function Select({
   disabled = false,
   placeholder = '请选择',
   title,
-  className = '',
   style,
   showCheck = true,
   onOpen,
@@ -169,14 +167,14 @@ export default function Select({
     opts.map((o, i) => (
       <div
         key={i}
-        className={`mask-sync-select-opt ${o.value === value ? 'sel' : ''} ${o.disabled ? 'dis' : ''}`}
+        className={o.value === value ? 'mask-sync-select-opt-sel' : o.disabled ? 'mask-sync-select-opt-dis' : 'mask-sync-select-opt'}
         style={o.depth != null ? { paddingLeft: 8 + o.depth * 16 } : undefined}
         onClick={() => handleOptClick(o)}
       >
         <span className="mask-sync-select-opt-main">{o.label}</span>
         {o.tag && <span className="mask-sync-select-opt-tag">{o.tag}</span>}
         {/* 选中项右侧对勾：仅在该项没有右侧标记（笔刷图标 / 图层标记）时显示，
-            与蒙版同步下拉的样式一致。勾的颜色继承 .sel 的白色前景，落在主色（蓝）背景上。 */}
+            与蒙版同步下拉的样式一致。勾的颜色继承 .mask-sync-select-opt-sel 的白色前景，落在主色（蓝）背景上。 */}
         {showCheck && !o.tag && o.value === value && (
           <span className="mask-sync-select-check">
             <svg viewBox="0 0 36 36" width="12" height="12" aria-hidden="true" focusable="false">
@@ -188,10 +186,10 @@ export default function Select({
     ));
 
   return (
-    <div className={`mask-sync-select-wrap ${className}`} title={title} style={style}>
+    <div className="mask-sync-select-wrap" title={title} style={style}>
       <div
         ref={headRef}
-        className={`mask-sync-select-head ${open ? 'open' : ''} ${disabled ? 'disabled' : ''}`}
+        className={disabled ? 'mask-sync-select-head-disabled' : open ? 'mask-sync-select-head-open' : 'mask-sync-select-head'}
         onClick={handleHeadClick}
       >
         <span className="mask-sync-select-value">
@@ -218,7 +216,7 @@ export default function Select({
               </React.Fragment>
             ))
           ) : allOptions.length === 0 ? (
-            <div className="mask-sync-select-opt dis">无可用选项</div>
+            <div className="mask-sync-select-opt-dis">无可用选项</div>
           ) : (
             renderOpts(allOptions)
           )}

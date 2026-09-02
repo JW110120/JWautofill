@@ -98,7 +98,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="strokesetting">
+    <div className="subpanel-fill">
         <div className="subpanel-header">
           <h3>描边设置</h3>
           <div className="close-button" role="button" tabIndex={0} onClick={() => {
@@ -114,7 +114,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         
         <div className="stroke-wide-container">
           <label 
-            className={`slider-text draggable-label ${isDragging && dragTarget === 'width' ? 'dragging' : 'not-dragging'}`}
+            className="label-drag"
             onMouseDown={(e) => handleLabelMouseDown(e, 'width')}
           >
             宽度
@@ -149,13 +149,13 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
               name="strokePosition"
               onChange={(e) => onPositionChange(e.target.value as any)}
             >
-              <sp-radio value="inside" className="position-radio-item">
+              <sp-radio value="inside" className="radio-item">
                 <span className="radio-item-label">内部</span>
               </sp-radio>
-              <sp-radio value="center" className="position-radio-item">
+              <sp-radio value="center" className="radio-item">
                 <span className="radio-item-label">居中</span>
               </sp-radio>
-              <sp-radio value="outside" className="position-radio-item">
+              <sp-radio value="outside" className="radio-item">
                 <span className="radio-item-label">外部</span>
               </sp-radio>
             </sp-radio-group>
@@ -163,7 +163,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         
         {!clearMode && (
           <div className="stroke-blende-mode">
-            <label className="slider-text">混合模式</label>
+            <label className="label-static">混合模式</label>
             <Select
               value={blendMode}
               groups={BLEND_MODE_OPTIONS}
@@ -174,7 +174,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         
         <div className="stroke-opacity-control">
           <label
-            className={`slider-text draggable-label ${isDragging && dragTarget === 'opacity' ? 'dragging' : 'not-dragging'}`}
+            className="label-drag"
             onMouseDown={(e) => handleLabelMouseDown(e, 'opacity')}
           >
             不透明度

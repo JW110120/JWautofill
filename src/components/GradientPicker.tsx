@@ -1267,7 +1267,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
 
 
     return (
-        <div className="gradient-picker">
+        <div className="subpanel-fill">
             <div className="subpanel-header">
                 <h3>渐变设置</h3>
                 <div className="close-button" role="button" tabIndex={0} onClick={onClose}>×</div>
@@ -1283,7 +1283,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         return (
                             <div 
                                 key={index} 
-                                className={`preset-item ${selectedPreset === index ? 'selected' : ''} ${selectedPresets.has(index) ? 'multi-selected' : ''}`}
+                                className={selectedPresets.has(index) ? 'preset-item-multi-selected' : (selectedPreset === index ? 'preset-item-selected' : 'preset-item')}
                                 draggable={true}
                                 onDragStart={(e) => handlePresetDragStart(e, index)}
                                 onDragOver={handlePresetDragOver}
@@ -1313,13 +1313,12 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 <div className="gradient-icon-container">
                     <div className="icon-group">
                         <IconButton title={helpTexts.gradient.addPreset} onClick={handleAddPreset}>
-                            <AddIcon className="icon-15" />
+                            <AddIcon className="icon-14" />
                         </IconButton>
-                        <div className="delete-button-wrapper">
                         <div
-                            className={`hotkey-icon-button${((selectedPreset === null && selectedPresets.size === 0) || presets.length === 0) ? ' disabled' : ''}`}
+                            className={((selectedPreset === null && selectedPresets.size === 0) || presets.length === 0) ? 'icon-button-delete-disabled' : 'icon-button-delete'}
                             role="button"
-                            tabIndex={0}
+                            tabIndex={((selectedPreset === null && selectedPresets.size === 0) || presets.length === 0) ? -1 : 0}
                             title={helpTexts.gradient.deletePreset}
                             onClick={() => {
                             if (selectedPresets.size > 0) {
@@ -1329,8 +1328,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             }
                             }}
                         >
-                            <DeleteIcon className="icon-15" />
-                        </div>
+                            <DeleteIcon className="icon-14" />
                         </div>
                     </div>
                 </div>
@@ -1344,7 +1342,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 {selectedStopIndex !== null && selectedStopType === 'opacity' && (
                     <div className="opacity-input">
                         <label 
-                            className="slider-text draggable-label"
+                            className="label-drag"
                             onMouseDown={(e) => {
                                 e.preventDefault();
                                 const startX = e.clientX;
@@ -1380,11 +1378,10 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             />
                         </div>
                         <span className="num-unit">%</span>
-                        <div className="delete-button-wrapper">
                         <div
-                            className={`hotkey-icon-button${stops.length <= 2 ? ' disabled' : ''}`}
+                            className={stops.length <= 2 ? 'icon-button-delete-disabled' : 'icon-button-delete'}
                             role="button"
-                            tabIndex={0}
+                            tabIndex={stops.length <= 2 ? -1 : 0}
                             title={helpTexts.gradient.deleteStop}
                             onClick={() => {
                             if (stops.length > 2) {
@@ -1392,8 +1389,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             }
                             }}
                         >
-                            <DeleteIcon className="icon-15" />
-                        </div>
+                            <DeleteIcon className="icon-14" />
                         </div>
                     </div>
                 )}
@@ -1409,9 +1405,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         return (
                             <div
                                 key={`opacity-${index}`}
-                                className={`opacity-slider-thumb ${
-                                    selectedStopIndex === index && selectedStopType === 'opacity' ? 'selected' : ''
-                                }`}
+                                className={selectedStopIndex === index && selectedStopType === 'opacity' ? 'opacity-slider-thumb-selected' : 'opacity-slider-thumb'}
                                 style={{ 
                                     left: `${stop.opacityPosition}%`,
                                     backgroundColor: displayColor,
@@ -1483,7 +1477,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         {renderCheckerboard(220, 24)}
                     </div>
                     <div
-                        className="gradient-fill-layer is-clickable"
+                        className="gradient-fill-layer-clickable"
                         style={{ background: getPreviewGradientStyle() }}
                         onClick={handleAddStop}
                     />
@@ -1494,9 +1488,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     {stops.map((stop, index) => (
                         <div
                             key={`color-${index}`}
-                            className={`color-slider-thumb ${
-                                selectedStopIndex === index && selectedStopType === 'color' ? 'selected' : ''
-                            }`}
+                            className={selectedStopIndex === index && selectedStopType === 'color' ? 'color-slider-thumb-selected' : 'color-slider-thumb'}
                             style={{ 
                                 left: `${stop.colorPosition}%`,
                                 backgroundColor: getRGBColor(stop.color),
@@ -1579,7 +1571,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 {/* 颜色控制 */}
                 {selectedStopIndex !== null && selectedStopType === 'color' && (
                     <div className="color-input-container">
-                        <label className="slider-text">颜色：</label>
+                        <label className="label-static">颜色：</label>
                         <span className="color-prefix">#</span>
                         <input
                             type="text"
@@ -1620,11 +1612,10 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             }}
                         />
                         
-                        <div className="delete-button-wrapper">
                         <div
-                            className={`hotkey-icon-button${stops.length <= 2 ? ' disabled' : ''}`}
+                            className={stops.length <= 2 ? 'icon-button-delete-disabled' : 'icon-button-delete'}
                             role="button"
-                            tabIndex={0}
+                            tabIndex={stops.length <= 2 ? -1 : 0}
                             title={helpTexts.gradient.deleteStop}
                             onClick={() => {
                             if (stops.length > 2) {
@@ -1632,8 +1623,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             }
                             }}
                         >
-                            <DeleteIcon className="icon-15" />
-                        </div>
+                            <DeleteIcon className="icon-14" />
                         </div>
                     </div>
                 )}
@@ -1641,8 +1631,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
 
             {/* 渐变类型设置 */}
             <div className="gradient-settings-area">
-                <div className="gradient-setting-item gradient-type-setting">
-                    <label className="slider-text">样式：</label>
+                <div className="gradient-setting-item">
+                    <label className="label-static">样式：</label>
                     <Select
                         value={gradientType}
                         options={[
@@ -1656,11 +1646,11 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 {/* 角度行始终渲染：径向模式下仅置为禁用态（而非隐藏），
                     这样 .gradient-settings-area 的容器高度在两种模式下保持一致，
                     不会再出现切换径向时下拉相对容器上移/间距变化的观感。 */}
-                <div className={`gradient-setting-item gradient-angle-setting ${gradientType === 'radial' ? 'disabled' : ''}`}>
-                    {/* 光标：常态 ew-resize 由 .draggable-label 给出；径向禁用态的
-                        not-allowed 由 .gradient-angle-setting.disabled label 覆盖（特异性更高） */}
+                <div className={gradientType === 'radial' ? 'gradient-setting-item-angle-disabled' : 'gradient-setting-item-angle'}>
+                    {/* 光标：常态 ew-resize 由 .label-drag 给出；径向禁用态的
+                        not-allowed 由 .gradient-setting-item-angle-disabled label 覆盖（特异性更高） */}
                     <label
-                        className="draggable-label slider-text"
+                        className="label-drag"
                         onMouseDown={gradientType === 'radial' ? undefined : handleAngleMouseDown}
                     >角度：</label>
                     <RangeSlider
@@ -1688,8 +1678,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     </div>
                 </div>
 
-                <div className="reverse-checkbox-group">
-                    <div className="reverse-checkbox-container">
+                <div className="checkbox-inline">
+                    <div>
                         <label 
                             htmlFor="reverseCheckbox"
                             onClick={() => setReverse(!reverse)}
@@ -1704,7 +1694,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         />
                     </div>
 
-                    <div className="reverse-checkbox-container">
+                    <div>
                          <label
                             htmlFor="transparencyCheckbox"
                             onClick={() => setPreserveTransparency(!preserveTransparency)}

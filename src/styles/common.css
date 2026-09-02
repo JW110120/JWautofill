@@ -6,29 +6,13 @@
    「该面板独有」的布局/间距，通用组件的视觉修改只改这里即可全局生效，
    不会再出现「某面板漏改一处导致样式漂移」的问题。
 
-   命名约定：每个通用组件的「权威类」取自已核查的 APP 主面板（styles.css），
-   其余子面板 / 工具箱的类名一律作为别名（逗号选择器）挂到同一条规则上，
-   因此改一处、所有别名同步生效。
+   命名约定：每个通用组件只保留一个「权威类」（取自 APP 主面板 styles.css），
+   子面板 / 工具箱共用同一类名，改一处全局生效。
    ========================================================================== */
 
 /* --------------------------------------------------------------------------
    1. 全局控件复位 / Spectrum 禁用态
    -------------------------------------------------------------------------- */
-button {
-  padding: 5px 10px;
-  background-color: var(--button-bg);
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-  color: var(--text-color);
-  cursor: pointer;
-  appearance: none;
-  -webkit-appearance: none;
-}
-
-button:hover {
-  background-color: var(--hover-bg);
-}
-
 /* 通用 Spectrum 控件禁用状态：cursor 统一改为 not-allowed，
    包括开关、按钮、单选等所有可点击控件；新增 disabled 控件只需在 React 端
    设置 disabled 属性即可，无需额外 CSS。 */
@@ -44,111 +28,59 @@ sp-action-button {
 }
 
 /* --------------------------------------------------------------------------
-   2. 滑块文字标签（不同字数 → 固定宽度档）
+   2. 表单标签（单元素单类名；不同字数 → 固定宽度档）
+   同时服务于：单行/多行滑块、下拉菜单、checkbox、switch、radio 的标签。
    W(n) = 20 + (n-2)×13.3 → 2/3/4/5/6 字 = 20/33/47/60/73px
-   权威类：.slider-text；别名：各子面板 / 工具箱的标签类。
-   注：行内滑块（选区选项 / 工具箱）的标签需要右侧间距，由各自的行容器补 margin。
+   - .label-2..6：可拖拽标签（ew-resize），固定宽度，右侧 10px 间距（滑块）
+   - .label-drag：可拖拽标签（内容宽度，如渐变「角度：」）
+   - .label-static：下拉/设置/checkbox/switch/radio 静态标签（内容宽度，普通光标，右侧 6px 间距）
+   全插件共用，TSX 每个标签只挂一个类。拖拽光标由 body.label-drag-cursor 统一锁定，
+   故不再需要 .dragging/.not-dragging 之类的状态类。
    -------------------------------------------------------------------------- */
-.slider-text,
-.colorsettings-slider-text,
-.pattern-slider-text,
-.selection-slider-label,
-.adjustment-slider-label,
-.wide-adjustment-slider-label,
-.wider-adjustment-slider-label {
+.label-2,
+.label-3,
+.label-4,
+.label-5,
+.label-6,
+.label-drag {
   font-size: 13px;
   color: var(--text-color);
   display: block;
   flex: none;
   white-space: nowrap;
-  align-items: left;
   text-align: left;
-}
-
-/* 宽度档：基础（无修饰类，2 字）→ 20px；其余按字数线性插值。
-   （原 .stroke-label-2/-4 别名已随描边标签改用 .slider-text 删除） */
-.slider-text-2,
-.colorsettings-slider-text-2,
-.pattern-slider-text-2,
-.adjustment-slider-label {      /* 工具箱基础标签（无 -N 修饰，承载 2 字标签） */
-  width: 20px;
-}
-
-.slider-text-3,
-.colorsettings-slider-text-3,
-.pattern-slider-text-3,
-.adjustment-slider-label-3 {
-  width: 33px;
-}
-
-.slider-text-4,
-.colorsettings-slider-text-4,
-.pattern-slider-text-4,
-.adjustment-slider-label-4 {
-  width: 47px;
-}
-
-.slider-text-5,
-.colorsettings-slider-text-5,
-.pattern-slider-text-5 {
-  width: 60px;
-}
-
-.slider-text-6,
-.colorsettings-slider-text-6,
-.pattern-slider-text-6 {
-  width: 73px;
-}
-
-/* 行内滑块（标签 + 滑块 + 数字 同处一行）的标签右侧间距 */
-.selection-slider-item .selection-slider-label,
-.selection-slider-item .slider-text,
-.adjustment-slider-item .adjustment-slider-label,
-.adjustment-slider-item .slider-text {
   margin-right: 10px;
-}
-
-/* 描边行（宽度 / 不透明度）的标签右侧间距（与上行同一 10px 约定） */
-.stroke-wide-container .slider-text,
-.stroke-opacity-control .slider-text {
-  margin-right: 10px;
-}
-
-/* 可横向拖拽调值的滑块标签（光标语义）：渐变 .draggable-label 与工具箱
-   .adjustment-slider-label-drag 为同一概念的两个别名（描边标签 TSX 亦用
-   .draggable-label）。拖拽中鼠标移出标签后的光标由 body.label-drag-cursor 统一接管。 */
-.draggable-label,
-.adjustment-slider-label-drag {
   cursor: ew-resize;
   user-select: none;
   -webkit-user-select: none;
 }
 
-.draggable-label.dragging,
-.draggable-label.not-dragging,
-.adjustment-slider-label-drag.dragging,
-.adjustment-slider-label-drag.not-dragging {
-  cursor: ew-resize;
-}
+/* 宽度档：2 字 → 20px，其余按字数线性插值 */
+.label-2 { width: 20px; }
+.label-3 { width: 33px; }
+.label-4 { width: 47px; }
+.label-5 { width: 60px; }
+.label-6 { width: 73px; }
 
-/* 下拉/设置行标签（非拖拽滑块行）：内容宽度 + 行内 6px 间距（全插件统一）。
-   工具箱下拉行（平滑模式/线稿参考，.adjustment-slider-label-static，普通箭头光标）、
-   渐变设置行（样式/角度）、描边混合模式行共用；下拉框随行 flex 填充剩余宽度。 */
-.adjustment-slider-label-static {
-  cursor: default;
-}
-
-.adjustment-slider-label-static,
-.gradient-setting-item > label,
-.stroke-blende-mode label {
+/* 下拉/设置/checkbox/switch/radio 静态标签：内容宽度、普通光标、右侧 6px 间距（全插件统一） */
+.label-static {
+  font-size: 13px;
+  color: var(--text-color);
+  display: block;
   flex: 0 0 auto;
+  white-space: nowrap;
+  text-align: left;
   margin-right: 6px;
-  margin-bottom: 0;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
 }
+
 
 /* --------------------------------------------------------------------------
    3. RangeSlider 自定义滑块（替代 PS 27.9 后失效的原生 input[type="range"]）
-   权威类：.range-slider；工具箱用 .adjustment-slider-input.range-slider 仅做布局覆盖。
+   权威类：.range-slider（根）。调用方传入的 className（.slider-input / .slider-track /
+   .gradient-angle-range）须自带本节根属性；未传 className 时组件回退到 .range-slider。
    -------------------------------------------------------------------------- */
 .range-slider {
   position: relative;
@@ -207,8 +139,8 @@ sp-action-button {
 
 /* --------------------------------------------------------------------------
    4. 数字输入框 + 单位符号（单行 / 双行滑块共用）
-   权威类：.num-input-wrap（数字+单位组）/ .num-input-row（裁剪容器）/
-          .num-unit（单位符号）；别名：工具箱 .adjustment-unit。
+   唯一类：.num-input-wrap（数字+单位组）/ .num-input-row（裁剪容器）/
+          .num-unit（单位符号）。
    定稿（2026-09-01 用户逐轮实测）：容器（视觉输入框）32px、input 24px——
    上下各留 4px 缓冲容纳 UXP 原生绘制区，各分辨率完整不越界。
    -------------------------------------------------------------------------- */
@@ -236,23 +168,11 @@ sp-action-button {
   box-shadow: 0 0 0 2px var(--hover-bg);
 }
 
+/* 数字输入框本体：始终在 .num-input-row 裁剪容器内（去边框避免「框里框」）。
+   工具箱与主面板共用此类，input 不挂任何独立类。 */
 .num-input-row input[type="number"] {
   display: flex;
   align-items: center;
-  width: 24px;
-  height: 24px;
-  box-sizing: border-box;
-  background-color: var(--dropdown-bg-color);
-  color: var(--text-color);
-  font-size: 12px;
-  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
-  text-align: center;
-  line-height: 24px;
-  appearance: none;
-}
-
-/* 工具箱数字输入：复用 .num-input-row 裁剪容器，内部 input 去边框避免「框里框」 */
-.adjustment-number-input {
   width: 24px;
   height: 24px;
   box-sizing: border-box;
@@ -271,17 +191,8 @@ sp-action-button {
   -webkit-appearance: none;
 }
 
-/* 全插件所有数字输入框统一去除原生外观：避免 UXP 原生 number 输入框自带绘制盒
-   与外围边框叠加形成「框里框」。（2026-09-02 由 #app / #pixeladjustment 两份
-   作用域副本收敛为全局单条；数字输入统一走 .num-input-row 24px。） */
-input[type="number"] {
-  appearance: none;
-  -webkit-appearance: none;
-}
-
 /* 单位符号：独立于数字输入框容器之外，与输入框保持小间距（不进裁剪框、不被裁掉） */
-.num-unit,
-.adjustment-unit {
+.num-unit {
   margin-left: 4px;
   font-size: 13px;
   color: var(--text-color);
@@ -292,96 +203,77 @@ input[type="number"] {
 }
 
 /* --------------------------------------------------------------------------
-   5. 单行滑块（标签 + 数字输入 在同一行；滑块条在下方独立一行）
-   权威类：.slider-parameter-collection（标签+数字行）/ .slider-input（滑块条行）
-   别名：.colorsettings-slider-parameter-collection / .pattern-slider-parameter-collection /
-        .colorsettings-slider-range / .pattern-angle-range / .pattern-scale-range
+   5. 通用 space-between 行容器（标签 + 控件 左右分布；全插件共用）
+   适用于：单行滑块「标签+数字」行、行内滑块「标签+滑块+数字」行、
+   填充选项里的 switch 开关行、双按钮行（原 adjustment-double-buttons）等。
+   唯一类：.row-between（基础，自带 10px 上下外边距）。
+   行内滑块条（RangeSlider 根）用 .slider-track；单行滑块条用 .slider-input。
    -------------------------------------------------------------------------- */
-.slider-parameter-collection,
-.colorsettings-slider-parameter-collection,
-.pattern-slider-parameter-collection {
-  height: 32px;
-  width: calc(100% - 20px);
-  margin: 0 auto;
+.row-between {
   display: flex;
   justify-content: space-between;
   align-items: center;
-}
-
-/* 拖拽中与非拖拽态均为 ew-resize（横向拖调，光标连续一致）；鼠标移出容器后由
-   body.label-drag-cursor 全局兜底仍为 ew-resize。 */
-.slider-parameter-collection.dragging,
-.colorsettings-slider-parameter-collection.dragging,
-.pattern-slider-parameter-collection.dragging,
-.slider-parameter-collection.not-dragging,
-.colorsettings-slider-parameter-collection.not-dragging,
-.pattern-slider-parameter-collection.not-dragging {
-  cursor: ew-resize;
+  width: calc(100% - 20px);
+  margin: 10px auto;
+  box-sizing: border-box;
 }
 
 /* 行容器整行可拖拽调值，但其中的数字输入框仍需保持可输入语义：
    覆盖从容器继承来的 ew-resize，避免用户误以为该处不能点。 */
-.slider-parameter-collection input[type="number"],
-.colorsettings-slider-parameter-collection input[type="number"],
-.pattern-slider-parameter-collection input[type="number"],
-.selection-slider-container input[type="number"] {
+.row-between input[type="number"] {
   cursor: text;
 }
 
-/* 滑块条所在行，占满整行、居中 */
-.slider-input,
-.colorsettings-slider-range,
-.pattern-angle-range,
-.pattern-scale-range {
+/* 滑块条所在行（单行滑块用），占满整行、居中（自带 range-slider 根属性，作 RangeSlider 根类） */
+.slider-input {
+  position: relative;
+  display: block;
+  height: 12px;
+  cursor: pointer;
+  outline: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+  box-sizing: border-box;
+  --rs-track-inset: 6px;
   width: calc(100% - 20px);
   margin: 0 auto;
-  cursor: pointer;
+}
+
+/* 行内滑块条（行内滑块用）：flex:1 在 .row-between 内横向拉伸；自带 range-slider 根属性 */
+.slider-track {
+  position: relative;
   display: flex;
   justify-content: center;
-}
-
-/* --------------------------------------------------------------------------
-   6. 双行 / 行内滑块（标签 + 滑块条 + 数字输入 同处一行）
-   权威类：.selection-slider-container / .selection-slider-item /
-          .selection-slider-input（滑块条，flex:1）
-   别名：.adjustment-slider-item / .adjustment-slider-input
-   -------------------------------------------------------------------------- */
-.selection-slider-container {
-  flex-direction: column;
-  padding: 0 10px 0 10px;
-}
-
-.selection-slider-item,
-.adjustment-slider-item {
-  width: 100%;
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  margin: 10px 0 10px 0;
-}
-
-.selection-slider-input,
-.adjustment-slider-input {
+  height: 12px;
+  cursor: pointer;
+  outline: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+  box-sizing: border-box;
+  --rs-track-inset: 6px;
   flex: 1 1 auto;
   min-width: 50px;
-  cursor: pointer;
-  display: flex;
-  justify-content: center;
 }
 
-.selection-slider-label.dragging,
-.adjustment-slider-label.dragging,
-.selection-slider-label.not-dragging,
-.adjustment-slider-label.not-dragging {
-  cursor: ew-resize;
+/* 行内滑块组容器（垂直堆叠多个 .row-between 滑块行）。原 .inline-slider-container，
+   仅作语义分组、无额外布局；各滑块行已是 .row-between（自带上下外边距）。 */
+.slider-stack {
+  display: flex;
+  flex-direction: column;
 }
 
 /* --------------------------------------------------------------------------
    7. 图标按钮（无边框 / 无背景，仅图标；hover 变蓝、点击缩放、禁用灰显）
-   权威类：.hotkey-icon-button（APP 齿轮、工具箱垃圾桶等共用）。
+   通用类：.icon-button（所有仅含一个图标的按钮，无外边框）。
+   .icon-button-delete 为「删除」按钮（合并原 .delete-button-wrapper，去掉冗余包裹 div）：
+   在图标行内右对齐，禁用态半透明 0.4。
+   禁用态为自包含单类 .icon-button-disabled / .icon-button-delete-disabled（一个元素只挂一个类）。
    仅此一处定义，原 adjustment.css 的同名副本已删除。
    -------------------------------------------------------------------------- */
-.hotkey-icon-button {
+.icon-button,
+.icon-button-delete {
   display: inline-flex;
   vertical-align: middle;
   align-items: center;
@@ -396,41 +288,53 @@ input[type="number"] {
   cursor: pointer;
   box-sizing: border-box;
   user-select: none;
+  appearance: none;
+  -webkit-appearance: none;
 }
 
-.hotkey-icon-button:hover {
+.icon-button:hover,
+.icon-button-delete:hover {
   color: var(--hover-icon);
 }
 
-.hotkey-icon-button:hover .icon-fill {
+.icon-button:hover .icon-fill,
+.icon-button-delete:hover .icon-fill {
   fill: var(--hover-icon);
 }
 
-.hotkey-icon-button:active {
+.icon-button:active,
+.icon-button-delete:active {
   transform: scale(0.94);
 }
 
-.hotkey-icon-button.disabled {
+/* 禁用态（自包含单类：布局与基础类一致，仅改色 + not-allowed） */
+.icon-button-disabled,
+.icon-button-delete-disabled {
+  display: inline-flex;
+  vertical-align: middle;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
   color: var(--disabled-color);
+  border: none;
+  border-radius: 3px;
   cursor: not-allowed;
+  box-sizing: border-box;
+  user-select: none;
+  appearance: none;
+  -webkit-appearance: none;
 }
 
-.hotkey-icon-button.disabled .icon-fill {
-  fill: var(--disabled-color);
-}
-
-.hotkey-icon-button.disabled:hover {
-  color: var(--disabled-color);
-}
-
-/* 「删除」图标按钮（渐变预设 / 渐变色标 / 图案预设三处共用 .delete-button-wrapper）：
-   - margin-left:auto：在图标行内右对齐
-   - 禁用态整体半透明（0.4） */
-.delete-button-wrapper .hotkey-icon-button {
+/* 「删除」按钮：在图标行内右对齐；禁用态整体半透明 0.4 */
+.icon-button-delete {
   margin-left: auto;
 }
 
-.delete-button-wrapper .hotkey-icon-button.disabled {
+.icon-button-delete-disabled {
+  margin-left: auto;
   opacity: 0.4;
 }
 
@@ -447,26 +351,22 @@ input[type="number"] {
   pointer-events: none;
 }
 
-/* 图标尺寸三档（原各面板散落的内联 style）。
-   尺寸收敛为 14 / 15 / 16 三档，调用处写 className="icon-15" 即可。 */
+/* 图标尺寸：统一收敛为 14px 一档（原 14/15/16 三档散落，现已全部收口于 14）。
+   调用处一律写 className="icon-14"。 */
 .icon-fill {
   fill: var(--text-color);
 }
 
-.icon-14,
-.icon-15,
-.icon-16 {
+.icon-14 {
   display: block;
+  width: 14px;
+  height: 14px;
 }
-
-.icon-14 { width: 14px; height: 14px; }
-.icon-15 { width: 15px; height: 15px; }
-.icon-16 { width: 16px; height: 16px; }
 
 /* --------------------------------------------------------------------------
    8. 普通按钮族
    8a. 总开关（主功能开启/关闭大按钮）：.main-button
-   8b. 动作按钮（不同字数 / 压扁 / 自适应）：.adjustment-button 系列
+   8b. 动作按钮（不同字数 / 压扁 / 自适应）：.action-button 系列（通用功能按钮）
    8c. 子面板关闭按钮（红色 ×）：.close-button
    -------------------------------------------------------------------------- */
 
@@ -506,18 +406,6 @@ input[type="number"] {
   transform: scale(0.98);
 }
 
-.main-button.enabled .button-text {
-  color: var(--enabled-text-color);
-}
-
-.main-button.enabled .button-indicator {
-  background-color: rgb(46, 204, 113);
-}
-
-.main-button:hover .button-text.disabled {
-  color: rgba(128, 128, 128, 0.7);
-}
-
 .main-button-content {
   display: flex;
   align-items: center;
@@ -531,28 +419,43 @@ input[type="number"] {
   font-weight: bold;
 }
 
-.main-button-text.disabled {
+.main-button-text-disabled {
+  font-size: 16px;
+  font-weight: bold;
   color: rgba(128, 128, 128, 0.5);
 }
 
-.main-button-indicator {
+.main-button-indicator-enabled {
   width: 13px;
   height: 13px;
   border-radius: 50%;
   margin-right: 10px;
   flex-shrink: 0;
-}
-
-.main-button-indicator.enabled {
   background-color: rgb(46, 204, 113);
 }
 
-.main-button-indicator.disabled {
+.main-button-indicator-disabled {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  margin-right: 10px;
+  flex-shrink: 0;
   background-color: rgba(128, 128, 128, 0.5);
 }
 
-/* —— 动作按钮（工具箱 / 通用） —— */
-.adjustment-button {
+/* —— 动作按钮（工具箱 / 通用）：每个按钮只挂一个类，宽度档/状态均为自包含类 —— */
+.action-button,
+.action-button-lv2,
+.action-button-5,
+.action-button-6,
+.action-button-7,
+.action-button-8,
+.action-button-wide,
+.action-button-quad,
+.action-button-auto,
+.action-button-compact,
+.action-button-run,
+.action-button-run-disabled {
   height: 30px;
   /* 4 字档默认：width = 13×4 + 20 = 72px（普通按钮宽度） */
   width: 72px;
@@ -573,58 +476,79 @@ input[type="number"] {
   user-select: none;
 }
 
-.adjustment-button:hover {
+.action-button:hover,
+.action-button-lv2:hover,
+.action-button-5:hover,
+.action-button-6:hover,
+.action-button-7:hover,
+.action-button-8:hover,
+.action-button-wide:hover,
+.action-button-quad:hover,
+.action-button-auto:hover,
+.action-button-compact:hover,
+.action-button-run:hover {
   background-color: var(--hover-bg);
   border-color: var(--primary-color);
   transform: scale(1.02);
 }
 
-.adjustment-button:active {
+.action-button:active,
+.action-button-lv2:active,
+.action-button-5:active,
+.action-button-6:active,
+.action-button-7:active,
+.action-button-8:active,
+.action-button-wide:active,
+.action-button-quad:active,
+.action-button-auto:active,
+.action-button-compact:active,
+.action-button-run:active {
   background-color: var(--button-down);
   transform: scale(0.98);
 }
 
 /* 自适应宽度：用于超过 4 字的按钮文案 */
-.adjustment-button.auto {
+.action-button-auto {
   width: auto;
   min-width: 0;
-  padding: 0;
-  margin: 0;
 }
 
 /* 紧凑尺寸（守护进程状态条，font 12）：width = 12×7 + 20 = 104px */
-.adjustment-button.compact {
+.action-button-compact {
   height: 24px;
   font-size: 12px;
   width: 104px;
-  padding: 0;
-  margin: 0;
 }
 
-.adjustment-button.disabled {
+/* 守护进程「开始/停止」按钮：auto + compact 合并为单类 */
+.action-button-run {
+  width: auto;
+  min-width: 0;
+  height: 24px;
+  font-size: 12px;
+}
+
+.action-button-run-disabled {
+  width: auto;
+  min-width: 0;
+  height: 24px;
+  font-size: 12px;
   opacity: 0.45;
   cursor: not-allowed;
 }
 
-.adjustment-button.disabled:hover {
-  background-color: var(--button-bg);
-  border-color: var(--border-color);
-  transform: none;
-}
-
 /* 按钮宽度分档：按按钮汉字字数精确分级，均 box-sizing:border-box + 无内边距。
    width = 13×字数 + 20。2 字=46 / 5 字=85 / 6 字=98 / 7 字=111 / 8 字=124。 */
-.adjustment-button-lv2 { width: 46px; padding: 0; }
-.adjustment-button-5  { width: 85px; padding: 0; }
-.adjustment-button-6  { width: 98px; padding: 0; }
-.adjustment-button-7  { width: 111px; padding: 0; }
-.adjustment-button-8  { width: 124px; padding: 0; }
-.adjustment-button-wide { width: 124px; padding: 0; }
+.action-button-lv2 { width: 46px; }
+.action-button-5  { width: 85px; }
+.action-button-6  { width: 98px; }
+.action-button-7  { width: 111px; }
+.action-button-8  { width: 124px; }
+.action-button-wide { width: 124px; }
 
 /* 2×2 按钮组统一列宽：92px（中英混排取中值，保证两列严格对齐） */
-.adjustment-button-quad {
+.action-button-quad {
   width: 92px;
-  padding: 0;
   flex: none;
 }
 
@@ -646,21 +570,21 @@ input[type="number"] {
   justify-content: center;
 }
 
+.close-button:hover {
+  background-color: rgb(220, 38, 34) !important;
+  border-color: var(--primary-color) !important;
+}
+
 /* --------------------------------------------------------------------------
-   8d. 子面板外壳（容器 + 竖直滚动 + 自定义滚动条 + 标题栏）
-   覆盖工具箱主容器与 4 个子面板容器，统一为同一套外壳：
-   - 内边距 10px、box-sizing:border-box、内容超出时竖直滚动（横向不滚）
-   - 自定义滚动条（thumb/track 用主题 --scrollbar-thumb/--scrollbar-track），
-     与工具箱 .adjustment-container 原样式一致，消除子面板回退默认滚动条的漂移
-   - 标题栏 .subpanel-header（子面板标题；原名 .panel-header，改名避免与大面板标题混淆）
-   各面板 CSS 仅保留「独有」定位/布局（absolute 定位、flex 主轴方向、字体等），
-   外壳通用属性一律交此处单一来源。
+   8d. 子面板外壳（统一收口为单一通用类，消除「逐个面板枚举」的重复 CSS）
+   - 主容器 / 工具箱根：.subpanel（内边距 10px、竖直滚动、自定义滚动条）
+   - 4 个子面板（纯色/渐变/描边/图案）：.subpanel-fill（在 .subpanel 基础上
+     绝对定位铺满父容器、减底部 20px 留白、纵向 flex 列、子项 flex-shrink:0）
+   每个面板根只挂一个类（.subpanel 或 .subpanel-fill），外壳通用属性在此单一来源。
+   ⚠️ 子面板 z-index:9999 由 input-fix.css 统一强制，此处不重复声明。
    -------------------------------------------------------------------------- */
-.adjustment-container,
-.color-settings-panel,
-.gradient-picker,
-.strokesetting,
-.pattern-picker {
+.subpanel,
+.subpanel-fill {
   --adjust-scrollbar-w: 10px;
   padding: 10px;
   box-sizing: border-box;
@@ -668,15 +592,9 @@ input[type="number"] {
   overflow-x: hidden;
 }
 
-/* 4 个子面板（纯色/渐变/描边/图案）共用外壳布局：绝对定位铺满父容器、减去底部 20px
-   留白、纵向 flex 列布局、内容超长时由自身滚动条滚动。工具箱 .adjustment-container
-   为整高（height:100%）且 align-items:stretch，布局不同，不在此列。
-   ⚠️ 子面板 z-index:9999 !important 由 input-fix.css（@import 进 styles.css）统一强制，
-   此处不重复声明，避免多份副本。 */
-.color-settings-panel,
-.gradient-picker,
-.strokesetting,
-.pattern-picker {
+/* 4 个子面板共用填充布局：绝对定位铺满父容器、减底部 20px 留白、纵向 flex 列。
+   子面板变矮时各区块保持固有高度、不被 flex 压缩（呼应 flex 列布局）。 */
+.subpanel-fill {
   position: absolute;
   top: 0;
   left: 0;
@@ -688,50 +606,33 @@ input[type="number"] {
   justify-content: flex-start;
 }
 
-/* 子面板变矮时各区块保持固有高度、不被 flex 压缩（呼应上面 flex 列布局）。 */
-.color-settings-panel > *,
-.gradient-picker > *,
-.strokesetting > *,
-.pattern-picker > * {
+.subpanel-fill > * {
   flex-shrink: 0;
 }
 
-/* ↳ 设置项数字输入：渐变/图案子面板的数字输入均已在 .num-input-row 内，
-   统一走上方 .num-input-row input[type="number"]（24px）。2026-09-02 用户定稿：
-   子面板数字宽度一律按 common 24px，原 35px 覆盖规则已删，不做第二套宽度。 */
+/* ↳ 设置项数字输入均已在 .num-input-row 内，统一走上方 .num-input-row
+   input[type="number"]（24px）。2026-09-02 定稿：子面板数字宽度一律 24px，
+   原 35px 覆盖规则已删，不做第二套宽度。 */
 
-/* 子面板外壳统一自定义滚动条：与工具箱 .adjustment-container 原 ::-webkit-scrollbar
-   完全一致。⚠️ 伪元素 width 刻意写字面值 10px（与上方 --adjust-scrollbar-w 同值），
-   因 UXP 下 ::-webkit-scrollbar 里用 var() 不保证解析。 */
-.adjustment-container::-webkit-scrollbar,
-.color-settings-panel::-webkit-scrollbar,
-.gradient-picker::-webkit-scrollbar,
-.strokesetting::-webkit-scrollbar,
-.pattern-picker::-webkit-scrollbar {
+/* 子面板外壳统一自定义滚动条。⚠️ 伪元素 width 写字面值 10px（与上方
+   --adjust-scrollbar-w 同值），因 UXP 下 ::-webkit-scrollbar 里用 var() 不保证解析。 */
+.subpanel::-webkit-scrollbar,
+.subpanel-fill::-webkit-scrollbar {
   width: 10px;
 }
-.adjustment-container::-webkit-scrollbar-thumb,
-.color-settings-panel::-webkit-scrollbar-thumb,
-.gradient-picker::-webkit-scrollbar-thumb,
-.strokesetting::-webkit-scrollbar-thumb,
-.pattern-picker::-webkit-scrollbar-thumb {
+.subpanel::-webkit-scrollbar-thumb,
+.subpanel-fill::-webkit-scrollbar-thumb {
   background-color: var(--scrollbar-thumb);
   border-radius: 8px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
-.adjustment-container::-webkit-scrollbar-thumb:hover,
-.color-settings-panel::-webkit-scrollbar-thumb:hover,
-.gradient-picker::-webkit-scrollbar-thumb:hover,
-.strokesetting::-webkit-scrollbar-thumb:hover,
-.pattern-picker::-webkit-scrollbar-thumb:hover {
+.subpanel::-webkit-scrollbar-thumb:hover,
+.subpanel-fill::-webkit-scrollbar-thumb:hover {
   background-color: color-mix(in oklab, var(--scrollbar-thumb) 90%, rgb(255, 255, 255) 10%);
 }
-.adjustment-container::-webkit-scrollbar-track,
-.color-settings-panel::-webkit-scrollbar-track,
-.gradient-picker::-webkit-scrollbar-track,
-.strokesetting::-webkit-scrollbar-track,
-.pattern-picker::-webkit-scrollbar-track {
+.subpanel::-webkit-scrollbar-track,
+.subpanel-fill::-webkit-scrollbar-track {
   background-color: var(--scrollbar-track);
   border-radius: 8px;
 }
@@ -755,9 +656,10 @@ input[type="number"] {
 }
 
 /* --------------------------------------------------------------------------
-   9. 开关行（sp-switch 容器 + 文字标签）
-   权威类：.switch-container / .switch-label（#app 主面板）；
-   工具箱同名概念用 .adjustment-swtich-container / .adjustment-swtich-label。
+   9. 开关行（sp-switch + 文字标签）
+   #app 主面板用 .switch-container（整行列表行，开关右侧对齐）；
+   工具箱用 .switch-row（内联容器，类似 .num-input-wrap，装「标签 + 开关」不占整行）。
+   标签统一用 .label-static；开关 sp-switch 样式仅此一处定义。
    -------------------------------------------------------------------------- */
 .switch-container {
   display: flex;
@@ -770,55 +672,34 @@ input[type="number"] {
 
 sp-switch {
   margin-left: auto;
-  right: 0;
   cursor: pointer;
 }
 
-.switch-label {
-  font-size: 13px;
-  color: var(--text-color);
-}
-
-/* 开关自身被禁用时（如新建图层模式下清除模式开关置灰），左侧标签文字也变灰 */
-.switch-container:has(sp-switch[disabled]) .switch-label {
+/* 开关被禁用时（如新建图层 / 清除模式），左侧标签文字变灰 */
+.switch-container:has(sp-switch[disabled]) .label-static,
+.switch-row:has(sp-switch[disabled]) .label-static {
   cursor: not-allowed;
   color: var(--disabled-color);
 }
 
-/* 工具箱开关行：默认居中、固定宽；align-left 变左对齐 */
-.adjustment-swtich-container {
-  display: flex;
-  right: 0;
-  flex-direction: row;
+/* 工具箱开关：内联容器，标签 + 开关横向排列、不占整行；标签右侧间距交给 gap */
+.switch-row {
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 90px;
+  gap: 8px;
+  flex: 0 0 auto;
 }
 
-.adjustment-swtich-label {
-  color: var(--text-color);
-  display: flex;
-  font-size: 13px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.adjustment-swtich-container > sp-switch {
-  margin-left: 8px;
-}
-
-.adjustment-swtich-align-left {
-  justify-content: flex-start;
-  width: auto;
-  margin-top: 6px;
+/* 开关行内标签不需要 .label-static 自带的 6px 右间距（已由 gap 提供） */
+.switch-container .label-static,
+.switch-row .label-static {
+  margin-right: 0;
 }
 
 /* --------------------------------------------------------------------------
    10. 双列 radio（填充模式 / 计算方法 / 位置 / 平铺方式 等）
-   权威类：sp-radio-group / sp-radio / .radio-item / .radio-item-label /
+   唯一类：sp-radio-group / sp-radio / .radio-item / .radio-item-label /
           .radio-group-label
-   别名：.calculation-mode-radio / .position-radio-item / .pattern-fillmode-radio /
-        .pattern-radio-item-label
    -------------------------------------------------------------------------- */
 .radio-group-label {
   font-size: 13px;
@@ -835,10 +716,7 @@ sp-radio {
   height: 32px;
 }
 
-.radio-item,
-.calculation-mode-radio,
-.position-radio-item,
-.pattern-fillmode-radio {
+.radio-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -850,8 +728,7 @@ sp-radio {
   line-height: 32px;
 }
 
-.radio-item-label,
-.pattern-radio-item-label {
+.radio-item-label {
   display: inline-flex;
   align-items: center;
   white-space: nowrap;
@@ -882,14 +759,12 @@ sp-radio {
 }
 
 /* --------------------------------------------------------------------------
-   11. 双列 checkbox（底部选项 / 图案剪贴蒙版+旋转阵列）
-   权威类：.bottom-checkbox-options / .checkbox-column-* / .checkbox-group-* /
-          .checkbox-label / .checkbox-input
-   别名：.pattern-checkbox-container / .field-cell / .field-cell-label /
-        .pattern-checkbox-label / .pattern-checkbox-input
+   11. checkbox 选项（底部选项条 / 图案剪贴蒙版 + 旋转阵列 共用）
+   外容器 .checkbox-options；每列 .checkbox-column；
+   每个「标签 + 勾选框」单元为内联容器 .checkbox-row（类似 .num-input-wrap，
+   装 .label-static + .checkbox-input，不占整行）。
    -------------------------------------------------------------------------- */
-.bottom-checkbox-options,
-.pattern-checkbox-container {
+.checkbox-options {
   padding: 10px;
   height: 100px;
   box-sizing: border-box;
@@ -899,46 +774,20 @@ sp-radio {
   border-top: 1px solid var(--border-color);
 }
 
-.checkbox-column-left,
-.checkbox-column-right {
+.checkbox-column {
   display: flex;
   flex-direction: column;
 }
 
-.checkbox-group-left,
-.checkbox-group-right,
-.field-cell {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: flex-start;
-}
-
-.checkbox-group-right {
-  justify-content: flex-end;
-}
-
-.checkbox-label,
-.field-cell-label,
-.pattern-checkbox-label {
-  font-size: 13px;
-  color: var(--text-color);
-  cursor: pointer;
-  white-space: nowrap;
+/* 单个「标签 + 勾选框」内联单元：横向排列、间距 6px，不占整行 */
+.checkbox-row {
   display: flex;
   align-items: center;
+  gap: 6px;
 }
 
-.checkbox-label.disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  color: var(--disabled-color);
-}
-
-.checkbox-input,
-.pattern-checkbox-input {
+.checkbox-input {
   cursor: pointer;
-  justify-content: flex-end;
   margin-left: 2px;
 }
 
@@ -947,43 +796,36 @@ sp-radio {
   opacity: 0.5;
 }
 
-/* 整行分两组（平铺状态下为「剪贴蒙版」+「旋转阵列」）：
-   左组内容靠整行左端，右组内容靠整行右端。仅一组时（单次模式）保持左对齐。 */
-.pattern-checkbox-container.field-row-two > .field-cell:first-child {
-  justify-content: flex-start;
-}
-
-.pattern-checkbox-container.field-row-two > .field-cell:last-child:not(:only-child) {
-  justify-content: flex-end;
+/* 勾选框禁用时，同单元标签文字变灰 */
+.checkbox-row:has(input:disabled) .label-static {
+  opacity: 0.5;
+  cursor: not-allowed;
+  color: var(--disabled-color);
 }
 
 /* --------------------------------------------------------------------------
    12. 单行 checkbox（渐变「反相」等行内单选式勾选）
-   权威类：.checkbox-inline；别名：.reverse-checkbox-group / .reverse-checkbox-container
+   唯一类：.checkbox-inline
    -------------------------------------------------------------------------- */
-.checkbox-inline,
-.reverse-checkbox-group {
+.checkbox-inline {
   margin: 10px 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
 
-.checkbox-inline > div,
-.reverse-checkbox-container {
+.checkbox-inline > div {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.checkbox-inline input[type="checkbox"],
-.reverse-checkbox-container input[type="checkbox"] {
+.checkbox-inline input[type="checkbox"] {
   margin: 0;
   cursor: pointer;
 }
 
-.checkbox-inline label,
-.reverse-checkbox-container label {
+.checkbox-inline label {
   color: var(--text-color);
   cursor: pointer;
   font-size: 12px;

@@ -2,9 +2,7 @@
 
 /* 当"隐藏/显示分区"模态框打开时，彻底隐藏调整面板内所有 number 输入，避免穿透与交互 */
 body.visibility-panel-open #pixeladjustment input[type="number"],
-body.visibility-panel-open #pixeladjustment .adjustment-number-input,
-body.visibility-panel-open #pixeladjustment .unit-container input[type="number"],
-body.visibility-panel-open #pixeladjustment .unit-container .adjustment-number-input {
+body.visibility-panel-open #pixeladjustment .unit-container input[type="number"] {
   /* 不再使用 display:none，改为完全透明并禁用交互，保留布局占位 */
   visibility: hidden !important;
   opacity: 0 !important;
@@ -13,9 +11,7 @@ body.visibility-panel-open #pixeladjustment .unit-container .adjustment-number-i
 
 /* 当"隐藏/显示分区"模态打开时，彻底隐藏本面板内所有数字输入、数值占位元素，避免穿透与叠出 */
 body.visibility-panel-open #pixeladjustment input[type="number"],
-body.visibility-panel-open #pixeladjustment .adjustment-number-input,
-body.visibility-panel-open #pixeladjustment .unit-container input[type="number"],
-body.visibility-panel-open #pixeladjustment .unit-container .adjustment-number-input {
+body.visibility-panel-open #pixeladjustment .unit-container input[type="number"] {
   /* 不再使用 display:none，改为完全透明并禁用交互，保留布局占位 */
   visibility: hidden !important;
   opacity: 0 !important;
@@ -27,28 +23,18 @@ body.visibility-panel-open #pixeladjustment .unit-container .adjustment-number-i
    z-index / transform / 层级都压不住，否则会浮在遮罩上方。
    做法与主面板（body.license-dialog-open）一致：由 AdjustmentPanel 在锁定态
    给 body 加 .adjustment-lock-open，此处统一隐藏（保留布局占位，不做 display:none）。
-   ⚠️ 必须带 !important：要压过下面 .adjust-expand-content.expanded 的 visibility:visible 规则。 */
+   ⚠️ 必须带 !important：要压过下面 .adjust-expand-content 的 visibility:visible 规则。 */
 body.adjustment-lock-open #pixeladjustment input,
 body.adjustment-lock-open #pixeladjustment textarea,
-body.adjustment-lock-open #pixeladjustment .adjustment-number-input,
 body.adjustment-lock-open #pixeladjustment .unit-container input {
   visibility: hidden !important;
   opacity: 0 !important;
   pointer-events: none !important;
 }
 
-/* 第二入口（调整面板）的折叠状态隐藏规则 - 确保折叠时数字输入完全隐藏 */
-#pixeladjustment .adjust-expand-content:not(.expanded) input[type="number"],
-#pixeladjustment .adjust-expand-content:not(.expanded) .adjustment-number-input,
-#pixeladjustment .adjust-expand-content:not(.expanded) .unit-container input[type="number"],
-#pixeladjustment .adjust-expand-content:not(.expanded) .unit-container .adjustment-number-input {
-  /* 不再使用 display:none，改为完全透明并禁用交互，保留布局占位 */
-  visibility: hidden !important;
-  opacity: 0 !important;
-  pointer-events: none !important;
-}
-#pixeladjustment .adjust-expand-content.expanded input[type="number"],
-#pixeladjustment .adjust-expand-content.expanded .adjustment-number-input {
+/* 调整面板分区内容：仅展开态才由 React 条件渲染（.adjust-expand-content 只存在于展开态），
+   其中的数字输入常态可见；未激活锁定时由 body.adjustment-lock-open 统一隐藏。 */
+#pixeladjustment .adjust-expand-content input[type="number"] {
   visibility: visible;
   opacity: 1;
   pointer-events: auto;

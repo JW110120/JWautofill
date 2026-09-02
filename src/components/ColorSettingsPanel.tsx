@@ -205,11 +205,11 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
             <div className="colorsettings-slider-item">
                 <div className="colorsettings-entire-slider">
                     <div
-                        className={`colorsettings-slider-parameter-collection ${isDraggingActive ? 'dragging' : 'not-dragging'}`}
+                        className="row-between"
                         onMouseDown={(e) => handleLabelMouseDown(e, settingKey)}
                     >
                         <label
-                            className={`colorsettings-slider-text ${widthClass}`}
+                            className={widthClass}
                         >
                             {label}
                         </label>
@@ -234,7 +234,7 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
                         step={1}
                         value={value || 0}
                         onChange={handleRangeChange}
-                        className="colorsettings-slider-range"
+                        className="slider-input"
                     />
                 </div>
             </div>
@@ -248,7 +248,7 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
 
 
     return (
-        <div className="color-settings-panel">
+        <div className="subpanel-fill">
             <div className="subpanel-header">
                 <h3>颜色动态设置</h3>
                 <div className="close-button" role="button" tabIndex={0} onClick={onClose}>×</div>
@@ -256,16 +256,16 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
             
             <div className="colorsettings-slider-group">
                 {shouldShowGrayVariation ? (
-                    renderSlider('grayVariation', '灰度抖动', settings.grayVariation, 0, 100, '%', 'colorsettings-slider-text-4')
+                    renderSlider('grayVariation', '灰度抖动', settings.grayVariation, 0, 100, '%', 'label-4')
                 ) : (
                     <>
-                        {renderSlider('hueVariation', '色相抖动', settings.hueVariation, 0, 360, '°', 'colorsettings-slider-text-4')}
-                        {renderSlider('saturationVariation', '饱和度抖动', settings.saturationVariation, 0, 100, '%', 'colorsettings-slider-text-4')}
-                        {renderSlider('brightnessVariation', '亮度抖动', settings.brightnessVariation, 0, 100, '%', 'colorsettings-slider-text-4')}
+                        {renderSlider('hueVariation', '色相抖动', settings.hueVariation, 0, 360, '°', 'label-4')}
+                        {renderSlider('saturationVariation', '饱和度抖动', settings.saturationVariation, 0, 100, '%', 'label-4')}
+                        {renderSlider('brightnessVariation', '亮度抖动', settings.brightnessVariation, 0, 100, '%', 'label-4')}
                     </>
                 )}
 
-                {renderSlider('opacityVariation', '不透明度抖动', settings.opacityVariation, 0, 100, '%', 'colorsettings-slider-text-5')}
+                {renderSlider('opacityVariation', '不透明度抖动', settings.opacityVariation, 0, 100, '%', 'label-5')}
 
                 {/* 计算模式选择器 */}
                 <div className="colorsettings-calculation-mode">
@@ -275,10 +275,10 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
                         name="calculationMode"
                         onChange={(e) => setSettings(prev => ({ ...prev, calculationMode: e.target.value as 'absolute' | 'relative' }))}
                     >
-                        <sp-radio value="absolute" className="calculation-mode-radio">
+                        <sp-radio value="absolute" className="radio-item">
                             <span className="radio-item-label">绝对</span>
                         </sp-radio>
-                        <sp-radio value="relative" className="calculation-mode-radio">
+                        <sp-radio value="relative" className="radio-item">
                             <span className="radio-item-label">相对</span>
                         </sp-radio>
                     </sp-radio-group>

@@ -296,19 +296,43 @@
     box-sizing: border-box;
 }
 
-.license-message.success {
+.license-message-success {
+    width: 100%;
+    margin-top: 12px;
+    padding: 8px 10px;
+    border-radius: 3px;
+    font-size: 12px;
+    text-align: center;
+    line-height: 1.4;
+    box-sizing: border-box;
     background: var(--notify-ok-bg);
     color: var(--notify-ok-fg);
     border: 1px solid var(--notify-ok-border);
 }
 
-.license-message.error {
+.license-message-error {
+    width: 100%;
+    margin-top: 12px;
+    padding: 8px 10px;
+    border-radius: 3px;
+    font-size: 12px;
+    text-align: center;
+    line-height: 1.4;
+    box-sizing: border-box;
     background: var(--notify-fail-bg);
     color: var(--notify-fail-fg);
     border: 1px solid var(--notify-fail-border);
 }
 
-.license-message.info {
+.license-message-info {
+    width: 100%;
+    margin-top: 12px;
+    padding: 8px 10px;
+    border-radius: 3px;
+    font-size: 12px;
+    text-align: center;
+    line-height: 1.4;
+    box-sizing: border-box;
     background: var(--entry-bg);
     color: var(--text-color);
     border: 1px solid var(--border-color);

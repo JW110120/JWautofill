@@ -473,7 +473,7 @@ export default function BrushHotkeySection() {
     <>
       {/* 守护进程状态条：与「蒙版同步」的引擎状态条同一套视觉，左侧状态点+文字，右侧操作按钮 */}
       <div className="mask-sync-status-bar">
-        <span className={`mask-sync-status-dot ${daemonConnected ? 'ok' : 'warn'}`} />
+        <span className={daemonConnected ? 'mask-sync-status-dot-ok' : 'mask-sync-status-dot-warn'} />
         <span className="mask-sync-status-ready">
           {daemonConnected ? '快捷键服务已就绪' : (busy ? '快捷键服务处理中…' : '快捷键服务未启动')}
         </span>
@@ -481,7 +481,7 @@ export default function BrushHotkeySection() {
         <div
           role="button"
           tabIndex={0}
-          className={`adjustment-button auto compact${busy ? ' disabled' : ''}`}
+          className={busy ? 'action-button-run-disabled' : 'action-button-run'}
           title={daemonConnected
             ? helpTexts.hotkey.daemonStop
             : helpTexts.hotkey.daemonStart}
@@ -519,7 +519,7 @@ export default function BrushHotkeySection() {
           <div className="hotkey-icon-cell">
             {usePicker && (
               <div
-                className="hotkey-icon-button"
+                className="icon-button"
                 onClick={() => void loadBrushes(true)}
                 title={helpTexts.hotkey.refreshBrushes}
               >
@@ -535,7 +535,7 @@ export default function BrushHotkeySection() {
               title={recording ? helpTexts.hotkey.recordCancelActive : helpTexts.hotkey.recordCancelIdle}
               onClick={(e) => { e.stopPropagation(); if (recording) cancelRecord(); }}
             >
-              <StopSquareIcon className="icon-16" />
+              <StopSquareIcon className="icon-14" />
             </div>
           </div>
           <div className="hotkey-icon-cell">
@@ -549,7 +549,7 @@ export default function BrushHotkeySection() {
                 if (!recording && selectedBrush) void startRecord();
               }}
             >
-              <RecordCircleIcon className="icon-16" />
+              <RecordCircleIcon className="icon-14" />
             </div>
           </div>
         </div>
@@ -607,7 +607,7 @@ export default function BrushHotkeySection() {
           <div
             role="button"
             tabIndex={0}
-            className={`hotkey-icon-button${(selectedIds.length !== 1 || recording || !daemonConnected) ? ' disabled' : ''}`}
+            className={(selectedIds.length !== 1 || recording || !daemonConnected) ? 'icon-button-disabled' : 'icon-button'}
             style={{ marginRight: 4 }}
             title={selectedIds.length === 1 ? helpTexts.hotkey.reRecordOne : helpTexts.hotkey.reRecord}
             onClick={() => { if (selectedIds.length === 1 && !recording && daemonConnected) void reRecordEntry(); }}
@@ -617,7 +617,7 @@ export default function BrushHotkeySection() {
           <div
             role="button"
             tabIndex={0}
-            className={`hotkey-icon-button${deletableCount ? '' : ' disabled'}`}
+            className={deletableCount ? 'icon-button' : 'icon-button-disabled'}
             title={deletableCount
               ? ('删除选中的 ' + deletableCount + ' 条（选区填充开关为解绑而非删除）')
               : '请先在上方单击选中要删除的快捷键'}
@@ -628,9 +628,9 @@ export default function BrushHotkeySection() {
         </div>
       </div>
 
-      {/* 底部文字通知：与「蒙版同步」的 .mask-sync-result 同一套样式（ok 绿 / warn 橙） */}
+      {/* 底部文字通知：与「蒙版同步」的 .mask-sync-result-ok 同一套样式（ok 绿 / warn 橙） */}
       {message && (
-        <div className={`mask-sync-result ${daemonConnected ? 'ok' : 'warn'}`}>
+        <div className={daemonConnected ? 'mask-sync-result-ok' : 'mask-sync-result-warn'}>
           {message}
         </div>
       )}

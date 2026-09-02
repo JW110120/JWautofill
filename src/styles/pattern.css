@@ -57,18 +57,46 @@
     flex: 0 0 auto;
   }
 
-  .photo-container.selected {
+.photo-container-selected {
+    aspect-ratio: 1;
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    overflow: hidden;
+    cursor: pointer;
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 76px;
+    height: 76px;
+    z-index: 2;
+    flex: 0 0 auto;
     border-color: var(--primary-color);
     border-width: 2px;
-  }
+}
 
-  .photo-container.multi-selected {
+.photo-container-multi-selected {
+    aspect-ratio: 1;
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    overflow: hidden;
+    cursor: pointer;
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 76px;
+    height: 76px;
+    z-index: 2;
+    flex: 0 0 auto;
     border-color: var(--secondary-color, rgb(255, 107, 53));
     border-width: 2px;
     background-color: rgba(255, 107, 53, 0.1);
-  }
+}
   
-  .photo-container img {
+  .photo-container img,
+  .photo-container-selected img,
+  .photo-container-multi-selected img {
     width: 100%;
     height: 100%;
     object-fit: contain;
@@ -79,7 +107,9 @@
      ⚠️ 必须写成两级类：.photo-container img 的特异性是 (0,1,1)，
      单类选择器压不住它的 width/height:100%。
      opacity 仍走内联 —— 随 loadedImages 状态在 0/1 之间切换。 */
-  .photo-container .pattern-thumb-img {
+  .photo-container .pattern-thumb-img,
+  .photo-container-selected .pattern-thumb-img,
+  .photo-container-multi-selected .pattern-thumb-img {
     max-width: 100%;
     max-height: 100%;
     width: auto;
@@ -187,8 +217,8 @@
   }
 
   /* ↳ sp-radio-group / sp-radio 的两列布局本体已收口到 common.css（「两列 radio 行布局」块）；
-     .pattern-fillmode-radio 本体走 common 的 radio 别名；span 标签走 common 的
-     .pattern-radio-item-label（原 margin-top:20px 为漂移已删）。
+     .pattern-fillmode-radio 已并入 common 的 .radio-item；span 标签走 common 的
+     .radio-item-label（原 margin-top:20px 为漂移已删）。
      面板仅保留本面板的组上边距补偿与选项间距。 */
   .pattern-fillmode-container sp-radio-group {
     margin: -8px 0 0 0px;
@@ -198,9 +228,11 @@
     margin-right: 105px;
   }
   /* ↳ Checkbox 区域已全部由 common.css 通用 checkbox 规则提供（单一来源）：
-     - .pattern-checkbox-container 容器（padding:10 / height / border-top / space-between）
-     - .field-cell / .field-cell-label / .pattern-checkbox-input / .pattern-checkbox-label
-     - .field-row-two 左右分组对齐
+     - .pattern-checkbox-container 已并入 common 的 .checkbox-options
+       （padding:10 / height / border-top / space-between）
+     - .field-cell 已并入 .checkbox-row；.field-cell-label / .pattern-checkbox-label
+       已并入 .label-static；.pattern-checkbox-input 已并入 .checkbox-input
+     - .field-row-two 左右分组对齐（已移到 common 的 .checkbox-options-row-two）
      原面板「紧凑间距（padding:5px 8px 2px、margin-bottom:5px）」与
      「.field-cell-label 不撑满」两条覆盖为漂移，已删——与 APP 底部选项区完全
      同一套，改 common 一处即全插件生效。 */

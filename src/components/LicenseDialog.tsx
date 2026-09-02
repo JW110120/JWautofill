@@ -292,7 +292,7 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
                 {getDialogContent()}
 
                 {message && (
-                    <div className={`license-message ${messageType}`}>
+                    <div className={`license-message-${messageType}`}>
                         {message}
                     </div>
                 )}

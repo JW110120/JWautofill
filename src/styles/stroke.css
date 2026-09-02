@@ -2,7 +2,7 @@
    ⚠️ 通用组件（滑块文字标签 / 可拖拽标签光标 / range-slider / number-input / 单位符号 /
    双列 radio 布局 / 关闭按钮 / 拖拽光标锁）已统一收口到 common.css，本文件只保留描边面板
    「独有」的行容器布局（描边宽度行、位置 radio 容器、混合模式行、不透明度行）与选项间距。
-   改通用组件请去 common.css；标签一律用 common 的 .slider-text / .draggable-label。 */
+   改通用组件请去 common.css；标签一律用 common 的 .label-drag / .label-static。 */
 /* ↳ 外壳已统一收口到 common.css：布局由 common.css 子面板外壳块提供；
    > * 的 flex-shrink:0 也由 common.css 统一；z-index:9999 由 input-fix.css
    强制（此处原非 !important 副本已删，避免与 !important 版本并存造成歧义）。 */
@@ -21,10 +21,9 @@
   border-bottom: 1px solid var(--border-color);
 }
 
-/* ↳ 「宽度：」标签已改用 common 类名 .slider-text + .draggable-label（TSX 同步改）：
-   字体/颜色/nowrap 走 common 的 .slider-text 基础组，拖拽光标走 common 的
-   .draggable-label 别名组，右侧 10px 间距由 common 的
-   .stroke-wide-container .slider-text 提供。原 .stroke-label-2 全部规则已删。 */
+/* ↳ 「宽度：」标签已改用 common 类名 .label-drag（TSX 同步改）：
+   字体/颜色/nowrap 走 common 的 .label-drag 组，拖拽光标（ew-resize）同组提供，
+   右侧 10px 间距由 common 的 .label-drag 提供。原 .stroke-label-2 全部规则已删。 */
 
 /* RangeSlider 在描边行内的布局覆盖：作为 flex 子项占满剩余宽度（common.css 拥有
    .range-slider 的基础外观：轨道/填充/手柄/高度 12px）。 */
@@ -79,10 +78,9 @@
   border-bottom: 1px solid var(--border-color);
 }
 
-/* ↳ 「不透明度」标签已改用 common 类名 .slider-text + .draggable-label（TSX 同步改）：
-   字体/颜色/nowrap 走 common 的 .slider-text 基础组，拖拽光标走 common 的
-   .draggable-label 别名组，右侧 10px 间距由 common 的
-   .stroke-opacity-control .slider-text 提供。原 .stroke-label-4 全部规则已删。 */
+/* ↳ 「不透明度」标签已改用 common 类名 .label-drag（TSX 同步改）：
+   字体/颜色/nowrap 走 common 的 .label-drag 组，拖拽光标（ew-resize）同组提供，
+   右侧 10px 间距由 common 的 .label-drag 提供。原 .stroke-label-4 全部规则已删。 */
 
 .stroke-opacity-control .stroke-opacity-range {
   position: relative;

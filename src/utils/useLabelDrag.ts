@@ -2,12 +2,11 @@ import React from 'react';
 import { setDragCursorActive } from './dragCursor';
 
 /**
- * 滑块文字标签横向拖拽调值（对齐 APP 主面板 selection-slider-label 的交互）。
+ * 滑块文字标签横向拖拽调值（对齐 APP 主面板 .label 的交互）。
  *
  * 用法：
  *   const { dragTarget, onLabelMouseDown } = useLabelDrag(CONFIGS, applyValue);
- *   <div className={`xxx-label ${dragTarget === 'radius' ? 'dragging' : 'not-dragging'}`}
- *        onMouseDown={(e) => onLabelMouseDown(e, 'radius', radius)}>半径</div>
+ *   <div className="label-drag" onMouseDown={(e) => onLabelMouseDown(e, 'radius', radius)}>半径</div>
  *
  * 说明：
  *   - 起点信息存 ref，mousemove 回调只读 ref，effect 只在「开始/结束拖拽」时解绑重绑，
@@ -79,9 +78,8 @@ export function useLabelDrag<T extends string>(
     setDragTarget(key);
   };
 
-  /** 生成标签 class：拖拽中 ew-resize、常态 ew-resize（由 CSS 给出），全程光标连续 */
-  const labelClass = (key: T, base: string) =>
-    `${base} ${dragTarget === key ? 'dragging' : 'not-dragging'}`;
+  /** 生成标签 class：单类名（拖拽光标由 body.label-drag-cursor 全局锁定，无需 .dragging/.not-dragging） */
+  const labelClass = (key: T, base: string) => base;
 
   return { dragTarget, onLabelMouseDown, labelClass };
 }

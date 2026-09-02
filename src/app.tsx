@@ -1302,12 +1302,12 @@ class App extends React.Component<AppProps, AppState> {
                     <div 
                     role="button"
                     tabIndex={0}
-                    className={`main-button ${this.state.isEnabled ? 'enabled' : ''}`} 
+                    className="main-button"
                     onClick={this.handleButtonClick}
 title={helpTexts.selectionFill.mainButton}>
                         <div className="main-button-content">
-                            <div className={`main-button-indicator ${this.state.isEnabled ? 'enabled' : 'disabled'}`}></div>
-                            <span className={`main-button-text ${!this.state.isEnabled ? 'disabled' : ''}`}>
+                            <div className={this.state.isEnabled ? 'main-button-indicator-enabled' : 'main-button-indicator-disabled'}></div>
+                            <span className={!this.state.isEnabled ? 'main-button-text-disabled' : 'main-button-text'}>
                                 {this.state.isEnabled ? '功能开启' : '功能关闭'}
                             </span>
                         </div>
@@ -1315,7 +1315,7 @@ title={helpTexts.selectionFill.mainButton}>
                 </div>
 
                 <div className="selection-fill-blend-mode-container">
-                    <span className={`selection-fill-blend-mode-label ${this.state.clearMode ? 'disabled' : ''}`} 
+                    <span className={this.state.clearMode ? 'selection-fill-blend-mode-label-disabled' : 'selection-fill-blend-mode-label'} 
 title={helpTexts.selectionFill.blendMode}>
                     混合模式
                     </span>
@@ -1331,15 +1331,11 @@ title={helpTexts.selectionFill.blendMode}>
 
                 <div className="slider-container">
                     <div className="entire-slider">
-                    <div className={`slider-parameter-collection ${
-                            this.state.isDragging && this.state.dragTarget === 'opacity'
-                            ? 'dragging'
-                            : 'not-dragging'
-                        }`}
+                    <div className="row-between"
                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'opacity')}
                         title={helpTexts.selectionFill.opacity}>
                     <label
-                        className="slider-text slider-text-4">
+                        className="label-4">
                     不透明度
                     </label>
 
@@ -1370,15 +1366,11 @@ title={helpTexts.selectionFill.blendMode}>
                     </div>
 
                     <div className="entire-slider">
-                    <div className={`slider-parameter-collection ${
-                            this.state.isDragging && this.state.dragTarget === 'feather'
-                            ? 'dragging'
-                            : 'not-dragging'
-                        }`}
+                    <div className="row-between"
                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'feather')}
                         title={helpTexts.selectionFill.feather}>
                     <label
-                        className="slider-text slider-text-2">
+                        className="label-2">
                         羽化
                     </label>
 
@@ -1414,20 +1406,15 @@ title={helpTexts.selectionFill.blendMode}>
             <div className="expand-section">
                             <div className="expand-header" onClick={this.toggleSelectionOptions} title={helpTexts.selectionFill.selectionOptionsToggle}>
 
-                                <div className={`expand-icon ${this.state.isSelectionOptionsExpanded ? 'expanded' : ''}`}>
+                                <div className={this.state.isSelectionOptionsExpanded ? 'expand-icon-expanded' : 'expand-icon'}>
                                     <ExpandIcon expanded={this.state.isSelectionOptionsExpanded} />
                                 </div>
                                 <span>选区选项</span>
                             </div>
-                            <div className={`expand-content ${this.state.isSelectionOptionsExpanded ? 'expanded' : ''}`}>
-                                <div className="selection-slider-container">
-                                    <div className="selection-slider-item">
+                            <div className={this.state.isSelectionOptionsExpanded ? 'expand-content-expanded' : 'expand-content'}>
+                                <div className="row-between">
                                     <label
-                                        className={`selection-slider-label ${
-                                            this.state.isDragging && this.state.dragTarget === 'selectionSmooth' 
-                                            ? 'dragging' 
-                                            : 'not-dragging'
-                                        }`}
+                                        className="label-drag"
                                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionSmooth')}
 title={helpTexts.selectionFill.selectionSmooth}>
                                         平滑
@@ -1438,7 +1425,7 @@ title={helpTexts.selectionFill.selectionSmooth}>
                                         step={1}
                                         value={this.state.selectionSmooth}
                                         onChange={this.handleSelectionSmoothChange}
-                                        className="selection-slider-input"
+                                        className="slider-track"
                                         title={helpTexts.selectionFill.selectionSmoothSlider}
                                     />
                                     <div className="num-input-wrap">
@@ -1456,13 +1443,9 @@ title={helpTexts.selectionFill.selectionSmooth}>
                                     </div>
                                     </div>
                             
-                                    <div className="selection-slider-item">
+                                    <div className="row-between">
                                     <label
-                                        className={`selection-slider-label ${
-                                            this.state.isDragging && this.state.dragTarget === 'selectionContrast' 
-                                            ? 'dragging' 
-                                            : 'not-dragging'
-                                        }`}
+                                        className="label-drag"
                                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionContrast')}
 title={helpTexts.selectionFill.selectionContrast}>
                                         锐度
@@ -1474,7 +1457,7 @@ title={helpTexts.selectionFill.selectionContrast}>
                                         step={1}
                                         value={this.state.selectionContrast}
                                         onChange={this.handleSelectionContrastChange}
-                                        className="selection-slider-input"
+                                        className="slider-track"
                                         title={helpTexts.selectionFill.selectionContrastSlider}
                                     />
                                     <div className="num-input-wrap">
@@ -1492,13 +1475,9 @@ title={helpTexts.selectionFill.selectionContrast}>
                                     </div>
                                     </div>
 
-                                    <div className="selection-slider-item">
+                                    <div className="row-between">
                                     <label
-                                        className={`selection-slider-label ${
-                                            this.state.isDragging && this.state.dragTarget === 'selectionExpand' 
-                                            ? 'dragging' 
-                                            : 'not-dragging'
-                                        }`}
+                                        className="label-drag"
                                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionExpand')}
 title={helpTexts.selectionFill.selectionExpand}>
                                         扩散
@@ -1509,7 +1488,7 @@ title={helpTexts.selectionFill.selectionExpand}>
                                         step={1}
                                         value={this.state.selectionExpand}
                                         onChange={this.handleSelectionExpandChange}
-                                        className="selection-slider-input"
+                                        className="slider-track"
                                         title={helpTexts.selectionFill.selectionExpandSlider}
                                     />
                                     <div className="num-input-wrap">
@@ -1526,24 +1505,23 @@ title={helpTexts.selectionFill.selectionExpand}>
                                         <span className="num-unit">%</span>
                                     </div>
                                     </div>
-                                </div>
                             </div>
                         </div>
 
 
             <div className="expand-section">
                     <div className="expand-header" onClick={this.toggleExpand} title={helpTexts.selectionFill.fillOptionsToggle}>
-                        <div className={`expand-icon ${this.state.isExpanded ? 'expanded' : ''}`}>
+                        <div className={this.state.isExpanded ? 'expand-icon-expanded' : 'expand-icon'}>
                             <ExpandIcon expanded={this.state.isExpanded} />
                         </div>
                         <span>填充选项</span>
                     </div>
-                    <div className={`expand-content ${this.state.isExpanded ? 'expanded' : ''}`}>
+                    <div className={this.state.isExpanded ? 'expand-content-expanded' : 'expand-content'}>
 
 
                         {/* 新建图层开关 */}
                         <div className="switch-container">
-                            <span className="switch-label" 
+                            <span className="label-static" 
 title={helpTexts.selectionFill.createNewLayer}>
                             新建图层
                             </span>
@@ -1557,7 +1535,7 @@ title={helpTexts.selectionFill.createNewLayer}>
 
                        {/* 描边模式开关 */}
                        <div className="switch-container">
-                            <label className="switch-label" title={helpTexts.selectionFill.strokeModeLabel}>描边模式</label>
+                            <label className="label-static" title={helpTexts.selectionFill.strokeModeLabel}>描边模式</label>
                             {this.state.strokeEnabled && (
                                 <div className="stroke-color-group">
                                 <div 
@@ -1651,7 +1629,7 @@ title={helpTexts.selectionFill.createNewLayer}>
 
                         {/* 清除模式开关 */}
                         <div className="switch-container">
-                            <label className="switch-label" 
+                            <label className="label-static" 
 title={helpTexts.selectionFill.clearMode}>
                             清除模式
                             </label>
@@ -1710,13 +1688,13 @@ title={helpTexts.selectionFill.gradientDetail}>
                             </sp-radio-group>
                         </div>
                         {/* 底部checkbox选项外部容器 */}
-                        <div className="bottom-checkbox-options">
+                        <div className="checkbox-options">
                                 {/* 左列：取消选区 / 更新历史源 */}
-                                <div className="checkbox-column-left">
-                                    <div className="checkbox-group-left">
+                                <div className="checkbox-column">
+                                    <div className="checkbox-row">
                                         <label
                                             htmlFor="deselectCheckbox"
-                                            className="checkbox-label"
+                                            className="label-static"
                                             onClick={this.toggleDeselectAfterFill}
                                             title={helpTexts.selectionFill.deselectLabel}
                                         >
@@ -1731,10 +1709,10 @@ title={helpTexts.selectionFill.gradientDetail}>
                                             title={helpTexts.selectionFill.deselectInput}
                                         />
                                     </div>
-                                    <div className="checkbox-group-left">
+                                    <div className="checkbox-row">
                                         <label
                                             htmlFor="historyCheckbox"
-                                            className="checkbox-label"
+                                            className="label-static"
                                             onClick={this.toggleAutoUpdateHistory}
                                             title={helpTexts.selectionFill.historyLabel}
                                         >
@@ -1751,11 +1729,11 @@ title={helpTexts.selectionFill.gradientDetail}>
                                     </div>
                                 </div>
                                 {/* 右列：开启后切套索 / 切其它工具即关 */}
-                                <div className="checkbox-column-right">
-                                    <div className="checkbox-group-right">
+                                <div className="checkbox-column">
+                                    <div className="checkbox-row">
                                         <label
                                             htmlFor="autoOffOnToolCheckbox"
-                                            className="checkbox-label"
+                                            className="label-static"
                                             onClick={this.toggleAutoOffOnOtherTool}
                                             title={helpTexts.selectionFill.autoOffLabel}
                                         >
@@ -1770,10 +1748,10 @@ title={helpTexts.selectionFill.gradientDetail}>
                                             title={helpTexts.selectionFill.autoOffInput}
                                         />
                                     </div>
-                                    <div className="checkbox-group-right">
+                                    <div className="checkbox-row">
                                         <label
                                             htmlFor="lassoOnEnableCheckbox"
-                                            className="checkbox-label"
+                                            className="label-static"
                                             onClick={this.toggleSwitchToLassoOnEnable}
                                             title={helpTexts.selectionFill.lassoLabel}
                                         >
