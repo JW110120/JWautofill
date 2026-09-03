@@ -33,12 +33,13 @@
 - 按钮宽度=字数×字号+20px，落点 common.css .adjustment-button 系列（默认72/-lv2 46/-wide 124/-5~8/-quad 92）。
 - 数字输入全插件统一 24px（common .num-input-row/.adjustment-number-input）；gradient.css 剩的 35px 是 .preset-item 预设格尺寸（非数字输入，保留）。
 
-## 通用组件 CSS 单一来源（common.css，2026-09-02 定稿）
-- 单一来源=src/styles/common.css，index.tsx 在 uxpPerfPatch 后、React 前首行 import（import 顺序=级联顺序，须最先）。目标「改一处全跟着改」：面板/工具箱 CSS 只留真独有组件/容器 + 「↳ 已收口」注释标记；样式漂移=改漏了，一律按 common 对齐，不留面板副本。
+## 通用组件 CSS 单一来源（common.css，2026-09-02 定稿；2026-09-03 接管整体）
+- 2026-09-03 地位调换：styles.css 已改名 app.css（仅 #app 主面板 + 其4子面板 + input-fix 的 @import 组）；common.css 接管「整体」——新增全局基础 section 0（@font-face + html,body 迁入），并成为静态入口（index.html <link>、manifest cssResources、webpack 拷贝均指向 common.css）。index.tsx import 顺序不变：common→app→license。
+- 单一来源=src/styles/common.css，index.tsx 在 uxpPerfPatch 后、React 前首行 import（import 顺序=级联顺序，须最先；因此 common.css 严禁挂 @import——@import 只能置于文件顶部，会把面板规则插到通用规则之前，破坏「common 最先」并回归 stroke 45px / pattern 105px 两处同特异性覆盖）。目标「改一处全跟着改」：面板/工具箱 CSS 只留真独有组件/容器 + 「↳ 已收口」注释标记；样式漂移=改漏了，一律按 common 对齐，不留面板副本。
 - 已收口：滑块行容器/标签宽度档/10px 与 6px 标签间距、可拖拽标签别名组（.draggable-label+.adjustment-slider-label-drag：ew-resize+user-select:none）、下拉行静态标签（.adjustment-slider-label-static）、描边行标签间距（.stroke-wide-container/.stroke-opacity-control .slider-text 10px）、range-slider、数字输入(.num-input-row/.adjustment-number-input 24px)+单位符号(.num-unit,.adjustment-unit)、全局 input[type=number] appearance 复位、icon 按钮、按钮族+宽度档+close-button、开关行、双列 radio（本体别名 + 两列布局块：.colorsettings-calculation-mode/.position-radio-group/.pattern-fillmode-container 前缀的 sp-radio-group[flex row space-around]/sp-radio[flex:1 space-between]，面板只留组 margin 与选项间距 110/45/105px）、双列/单列 checkbox（.pattern-checkbox-container 吃 common padding:10/height:100，图案原紧凑覆盖已删）、radio-item-label 13px、子面板外壳（padding:10/自定义滚动条/布局 absolute+calc(100%-20px)+flex 列+> * flex-shrink:0，标题 .subpanel-header）、拖拽光标锁、.final-preview-hint、.icon-14/15/16。
 - TSX 类名约定：标签一律 .slider-text（可拖拽再加 .draggable-label）；描边 .stroke-label-2/-4 已删（StrokeSetting.tsx 已改用 common 类名）。
 - 已删：CustomSwitch.tsx、死规则 .gradient-setting-item select（全项目无原生 <select>）。
-- 级联陷阱：① .adjustment-slider-item .adjustment-slider-label 10px(0,2,0) 压过 static 6px(0,1,0)→common 用 :not() 豁免；② #app 作用域选择器(1,1,1) 压过 common 无作用域(0,1,1)→styles.css 的 4 个 #app 子面板滚动条选择器已删，仅留 #app .container；③ 子面板 z-index:9999!important 真值在 input-fix.css（styles.css @import 加载，manifest cssResources 全插件生效），其功能性可见/遮挡规则绝不能动。
+- 级联陷阱：① .adjustment-slider-item .adjustment-slider-label 10px(0,2,0) 压过 static 6px(0,1,0)→common 用 :not() 豁免；② #app 作用域选择器(1,1,1) 压过 common 无作用域(0,1,1)→app.css 的 4 个 #app 子面板滚动条选择器已删，仅留 #app .container；③ 子面板 z-index:9999!important 真值在 input-fix.css（经 app.css @import 加载），其功能性可见/遮挡规则绝不能动。
 - 命名约定：common.css 定权威类+别名（.selection-* 权威，.adjustment-* 别名）。
 
 ## 说明文案

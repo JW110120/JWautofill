@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { shell } from 'uxp';
 import { LicenseManager } from '../utils/LicenseManager';
-// 弹窗样式已抽到 src/styles/license.css，由 index.tsx 在 styles.css 之后引入，
-// 保持「弹窗样式排在主面板样式之后」的层叠顺序；遮罩背景色仍由 theme.ts 统一给出。
+// 弹窗样式已抽到 src/styles/license.css，由 index.tsx 在 common.css / app.css 之后引入，
+// 保持「弹窗样式排在面板样式之后」的层叠顺序；遮罩背景色仍由 theme.ts 统一给出。
 
 interface LicenseDialogProps {
     isOpen: boolean;

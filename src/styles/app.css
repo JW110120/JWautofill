@@ -1,30 +1,19 @@
+/* ==========================================================================
+   app.css — #app 主面板（选区填充）独有样式
+   --------------------------------------------------------------------------
+   只承载 #app 主面板自身的布局与状态规则，以及它的 4 个子面板
+   （纯色/渐变/图案/描边）与 input-fix 的 @import —— 这些都属于 app 面板样式。
+   全局基础（@font-face / html,body）与全插件通用组件样式在 src/styles/common.css
+   （index.tsx 顶部最先引入，也是 index.html link / manifest cssResources 的静态入口），
+   本文件在其后引入，面板独有规则按特异性覆盖通用基线。
+   注：激活弹窗样式在 src/styles/license.css，由 index.tsx 在本文件之后单独引入，
+   以保证它的层叠顺序排在主面板样式之后（弹窗原本用组件内 <style> 最后注入）。
+   ========================================================================== */
 @import './colorpanel.css';
 @import './gradient.css';
 @import './pattern.css';
 @import './stroke.css';
 @import './input-fix.css';
-/* 注：激活弹窗样式在 src/styles/license.css，由 index.tsx 在 styles.css 之后单独引入，
-   以保证它的层叠顺序排在主面板样式之后（弹窗原本用组件内 <style> 最后注入）。
-   通用组件样式（滑块/按钮/开关/radio/checkbox/图标按钮/拖拽光标锁）已统一收口到
-   src/styles/common.css（index.tsx 顶部最先引入），本文件只保留 #app 主面板独有布局。 */
-@font-face {
-  font-family: 'SourceHanSansCN-Normal';
-  src: url('../assets/SourceHanSansCN-Normal.otf') format('opentype');
-  font-weight: normal;
-  font-style: normal;
-}
-
-html, body {
-  height: 100%;
-  width: 100%;
-  padding: 0;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
-  background-color: var(--bg-color);
-  color: var(--text-color);
-}
 
 /* 主面板根容器（index.tsx 中 #app 内的包裹层） */
 .app-root {
@@ -41,43 +30,62 @@ html, body {
   height: 100%;
   max-height: 100%;
   box-sizing: border-box;
-  overflow-y: auto;
   background-color: var(--bg-color);
-  padding: 10px;
+  padding: 0;
   display: flex;
   flex-direction: column;
   position: relative;
 }
 
-/* 次级面板打开时禁止主容器滚动，避免内容在子面板后方滚动 */
-body.secondary-panel-open .container {
+/* 主面板滚动区：可滚动内容全部在此裁剪，info 区在其下方文档流底部。
+   原先 .selection-fill-container 自带 padding:10 + overflow-y:auto，
+   info 区用 fixed 覆盖在底部——UXP 下 fixed 覆盖层压不住后绘制的
+   原生 number 输入，面板缩短时输入会叠到 info 区上（2026-09-03 修复）。 */
+.app-scroll-area {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 10px;
+  box-sizing: border-box;
+  /* 必须是 flex 列（与重构前 .selection-fill-container 一致）：
+     块级布局里 .app-blendmode-container 的 margin-bottom:-12px 会与
+     .slider-container 的 0 上边距发生 margin 折叠（UXP 算作 0），
+     「混合模式行压住滑块卡上缘」的重叠设计失效；flex 项间不折叠，
+     负 margin 直接生效，重叠恢复。 */
+  display: flex;
+  flex-direction: column;
+}
+
+/* 次级面板打开时禁止滚动区滚动，避免内容在子面板后方滚动 */
+body.secondary-panel-open #app .app-scroll-area {
   overflow-y: hidden;
 }
 
-/* 主面板（#app .container）滚动条：与绘画工具箱同款 10px 圆角滚动条。
+/* 主面板滚动区（#app .app-scroll-area）滚动条：与绘画工具箱同款 10px 圆角滚动条。
    ⚠️ 4 个子面板（.subpanel-fill）的
    滚动条已统一收口到 common.css（无作用域，#app 与 #pixeladjustment 下都生效），此处不再重复。 */
-#app .container::-webkit-scrollbar {
+#app .app-scroll-area::-webkit-scrollbar {
   width: 10px;
 }
 
-#app .container::-webkit-scrollbar-thumb {
+#app .app-scroll-area::-webkit-scrollbar-thumb {
   background-color: var(--scrollbar-thumb);
   border-radius: 8px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 
-#app .container::-webkit-scrollbar-thumb:hover {
+#app .app-scroll-area::-webkit-scrollbar-thumb:hover {
   background-color: color-mix(in oklab, var(--scrollbar-thumb) 90%, rgb(255, 255, 255) 10%);
 }
 
-#app .container::-webkit-scrollbar-track {
+#app .app-scroll-area::-webkit-scrollbar-track {
   background-color: var(--scrollbar-track);
   border-radius: 8px;
 }
 
-.selection-fill-title {
+.main-title {
   text-align: center;
   font-weight: bold;
   padding: 0 0 10px 0px;
@@ -90,12 +98,12 @@ body.secondary-panel-open .container {
   z-index: 3000;
 }
 
-.selection-fill-title-text {
+.main-title-text {
   font-size: 20px;
 }
 
 /* 混合模式容器 */
-.selection-fill-blend-mode-container {
+.app-blendmode-container {
   display: flex;
   margin-bottom: -12px;
   align-items: center;
@@ -109,7 +117,7 @@ body.secondary-panel-open .container {
 }
 
 /* 混合模式四字文字标签，由于特殊情况不能使用47的宽度 */
-.selection-fill-blend-mode-label {
+.app-blendmode-label {
   font-size: 13px;
   margin-right: 6px;
   color: var(--text-color);
@@ -118,7 +126,7 @@ body.secondary-panel-open .container {
 
 /* 清除模式开启时：混合模式标签与下拉文字变灰 --disabled-color（不用 opacity，
    灰色由 --disabled-color 直接给出，四主题一致） */
-.selection-fill-blend-mode-label-disabled {
+.app-blendmode-label-disabled {
   font-size: 13px;
   margin-right: 6px;
   color: var(--disabled-color);
@@ -190,6 +198,20 @@ body.secondary-panel-open .container {
   max-height: 1400px;
 }
 
+/* 展开内容首尾行不外折叠 margin（2026-09-03）：展开态的 .expand-content-expanded
+   没有 overflow:hidden，首/末 .row-between 的 10px 外边距会穿过它与 .expand-section
+   （两者均无 padding/border）折叠到分区盒外。UXP 不绘制这块「悬空 margin」区域的
+   任何背景，露出面板原生深色底——表现为「选区选项」展开后与「填充选项」之间
+   出现一条 10px 深色缝隙（收起时 .expand-content 的 overflow:hidden 挡住折叠链，
+   故缝隙只在展开后出现）。收掉后分区背景直接包住首尾行，间距由分区自身节奏承担。 */
+.expand-content-expanded .row-between:first-child {
+  margin-top: 0;
+}
+
+.expand-content-expanded .row-between:last-child {
+  margin-bottom: 0;
+}
+
 .expand-icon path.fill {
   fill: var(--text-color);
 }
@@ -232,18 +254,18 @@ body.secondary-panel-open .container {
   margin-right: 28px;
 }
 
-/* 版权 / 信息条（#app 主面板独有） */
+/* 版权 / 信息条（#app 主面板独有）：滚动区下方的文档流底栏。
+   不再用 position:fixed 覆盖层——UXP 下 fixed 压不住后绘制的原生 number 输入，
+   面板缩短时输入会叠到 info 区上（2026-09-03 改为流内底栏，滚动内容由
+   .app-scroll-area 裁剪，物理上不可能再重叠）。 */
 .info-plane {
   width: 100%;
   height: 20px;
+  flex: none;
   background-color: var(--bg-color);
   border-top: 1px solid var(--border-color);
   display: flex;
-  position: fixed;
-  bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 2000;
+  position: relative;
 }
 
 .copyright {
@@ -251,10 +273,9 @@ body.secondary-panel-open .container {
   text-align: center;
   font-size: 8px;
   color: var(--disabled-color);
-  position: fixed;
+  position: absolute;
   bottom: 3px;
   left: 50%;
   transform: translateX(-50%);
   pointer-events: none;
-  z-index: 2000;
 }

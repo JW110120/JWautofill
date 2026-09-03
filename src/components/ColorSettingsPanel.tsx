@@ -202,8 +202,8 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
         };
 
         return (
-            <div className="colorsettings-slider-item">
-                <div className="colorsettings-entire-slider">
+            <div className="subpanel-slider-item">
+                <div className="slider-stack">
                     <div
                         className="row-between"
                         onMouseDown={(e) => handleLabelMouseDown(e, settingKey)}
@@ -254,7 +254,7 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
                 <div className="close-button" role="button" tabIndex={0} onClick={onClose}>×</div>
             </div>
             
-            <div className="colorsettings-slider-group">
+            <div className="subpanel-section subpanel-section--col">
                 {shouldShowGrayVariation ? (
                     renderSlider('grayVariation', '灰度抖动', settings.grayVariation, 0, 100, '%', 'label-4')
                 ) : (
@@ -266,23 +266,23 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
                 )}
 
                 {renderSlider('opacityVariation', '不透明度抖动', settings.opacityVariation, 0, 100, '%', 'label-5')}
+            </div>
 
-                {/* 计算模式选择器 */}
-                <div className="colorsettings-calculation-mode">
-                    <label>计算方法</label>
-                    <sp-radio-group 
-                        selected={settings.calculationMode || 'absolute'}
-                        name="calculationMode"
-                        onChange={(e) => setSettings(prev => ({ ...prev, calculationMode: e.target.value as 'absolute' | 'relative' }))}
-                    >
-                        <sp-radio value="absolute" className="radio-item">
-                            <span className="radio-item-label">绝对</span>
-                        </sp-radio>
-                        <sp-radio value="relative" className="radio-item">
-                            <span className="radio-item-label">相对</span>
-                        </sp-radio>
-                    </sp-radio-group>
-                </div>
+            {/* 计算模式选择器（原 colorsettings-calculation-mode 分区容器作废，统一收口为子面板分区容器） */}
+            <div className="subpanel-section subpanel-section--col">
+                <label className="subpanel-title-2">计算方法</label>
+                <sp-radio-group 
+                    selected={settings.calculationMode || 'absolute'}
+                    name="calculationMode"
+                    onChange={(e) => setSettings(prev => ({ ...prev, calculationMode: e.target.value as 'absolute' | 'relative' }))}
+                >
+                    <sp-radio value="absolute" className="radio-item">
+                        <span className="radio-item-label">绝对</span>
+                    </sp-radio>
+                    <sp-radio value="relative" className="radio-item">
+                        <span className="radio-item-label">相对</span>
+                    </sp-radio>
+                </sp-radio-group>
             </div>
 
 

@@ -112,7 +112,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
                 }}>×</div>
         </div>
         
-        <div className="stroke-wide-container">
+        <div className="subpanel-section">
           <label 
             className="label-drag"
             onMouseDown={(e) => handleLabelMouseDown(e, 'width')}
@@ -124,7 +124,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
             max={20} 
             step={0.5}
             value={width}
-
+            className="slider-track"
             onChange={(v) => onWidthChange(v)}
           />
           <div className="num-input-wrap">
@@ -143,7 +143,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         </div>
         
 
-          <div className="position-radio-group">
+          <div className="subpanel-section position-radio-group">
             <sp-radio-group 
               selected={position}
               name="strokePosition"
@@ -162,7 +162,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
           </div>
         
         {!clearMode && (
-          <div className="stroke-blende-mode">
+          <div className="subpanel-section">
             <label className="label-static">混合模式</label>
             <Select
               value={blendMode}
@@ -172,7 +172,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
           </div>
         )} 
         
-        <div className="stroke-opacity-control">
+        <div className="subpanel-section">
           <label
             className="label-drag"
             onMouseDown={(e) => handleLabelMouseDown(e, 'opacity')}
@@ -184,7 +184,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
             max={100} 
             step={1}
             value={opacity}
-            className="stroke-opacity-range"
+            className="slider-track"
             onChange={(v) => onOpacityChange(v)}
           />
           <div className="num-input-wrap">

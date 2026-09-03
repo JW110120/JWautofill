@@ -1,14 +1,42 @@
 /* ==========================================================================
-   common.css — 全插件通用组件样式「单一来源」
+   common.css — 全插件「整体」样式入口
    --------------------------------------------------------------------------
    由 #app / #pixeladjustment 两个面板共享（单 bundle，均从 index.tsx 引入）。
-   本文件必须最先加载（见 index.tsx 顶部 import），其后各面板 CSS 仅保留
-   「该面板独有」的布局/间距，通用组件的视觉修改只改这里即可全局生效，
-   不会再出现「某面板漏改一处导致样式漂移」的问题。
+   本文件承担两层职责：
+   1. 全局基础：@font-face 字体 + html/body 根元素样式（原先散落在主面板样式里，
+      2026-09-03 收口至此，两个面板文档共用同一套根样式）；
+   2. 通用组件样式「单一来源」：滑块/按钮/开关/radio/checkbox/图标按钮/拖拽光标锁。
+   本文件必须最先加载（见 index.tsx 顶部 import），其后各面板 CSS（app.css /
+   adjustment.css 等）只保留「该面板独有」的布局/间距，通用组件的视觉修改只改
+   这里即可全局生效，不会再出现「某面板漏改一处导致样式漂移」的问题。
+   本文件同时是静态入口：index.html 的 <link>、manifest cssResources、
+   webpack 拷贝均指向本文件。
 
-   命名约定：每个通用组件只保留一个「权威类」（取自 APP 主面板 styles.css），
+   命名约定：每个通用组件只保留一个「权威类」（取自 APP 主面板 app.css），
    子面板 / 工具箱共用同一类名，改一处全局生效。
    ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   0. 全局基础：字体 + 根元素（原 app 面板样式文件中的全局块，2026-09-03 迁入）
+   -------------------------------------------------------------------------- */
+@font-face {
+  font-family: 'SourceHanSansCN-Normal';
+  src: url('../assets/SourceHanSansCN-Normal.otf') format('opentype');
+  font-weight: normal;
+  font-style: normal;
+}
+
+html, body {
+  height: 100%;
+  width: 100%;
+  padding: 0;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text-color);
+}
 
 /* --------------------------------------------------------------------------
    1. 全局控件复位 / Spectrum 禁用态
@@ -262,6 +290,37 @@ sp-action-button {
 .slider-stack {
   display: flex;
   flex-direction: column;
+}
+
+/* 子面板单个滑块块（颜色面板等，套在 .slider-stack 内：标题行 + 滑块条）。
+   原 colorpanel.css 的 colorsettings-slider-item 及其禁用态全部并入此类（单一来源），
+   各子面板滑块块统一走这里，不再各自声明。 */
+.subpanel-slider-item {
+  display: flex;
+  flex-direction: column;
+  /* 内容区宽度 = 面板 250 - 左右 padding 10*2 = 230；max-width:100% + auto 外边距保证
+     面板宽度变化时滑块容器始终居中且不被撑破。 */
+  margin: 0 auto 15px auto;
+  width: 230px;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+/* 快速蒙版模式下的禁用样式（随 .subpanel-slider-item 一起收口到 common） */
+.subpanel-slider-item.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.subpanel-slider-item.disabled label {
+  cursor: not-allowed;
+  color: var(--disabled-color);
+}
+
+.subpanel-slider-item.disabled .slider-input,
+.subpanel-slider-item.disabled input[type="number"] {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 /* --------------------------------------------------------------------------
@@ -656,6 +715,45 @@ sp-action-button {
 }
 
 /* --------------------------------------------------------------------------
+   8e. 子面板分区容器 / 二级标题（全子面板通用的「区块」与区块小标题）
+   唯一类：.subpanel-section（区块，底边分隔线统一断行，行式区块默认横向排列）/
+          .subpanel-section--col（列式区块修饰类：内容纵向堆叠）/
+          .subpanel-title-2（区块内二级标题，如「计算方法」）。
+   原 stroke.css 的 stroke-wide-container / stroke-blende-mode / stroke-opacity-control /
+   position-radio-group，与原 colorpanel.css 的 colorsettings-slider-group /
+   colorsettings-calculation-mode 全部并入此类；面板 CSS 不再各自声明「分区」样式，
+   改通用只需动这里一处，消除各面板 padding/margin 漂移。
+   -------------------------------------------------------------------------- */
+.subpanel-section {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--border-color);
+  padding: 15px 0;
+  margin-bottom: 15px;
+}
+
+/* 列式区块：内容纵向堆叠（颜色面板滑块组、计算方法选择器等） */
+.subpanel-section--col {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+}
+
+/* 子面板二级标题（区块内的小标题，如「计算方法」）。原 colorpanel.css 的
+   colorsettings-calculation-mode label 收口为通用类，各面板小标题统一走这里。 */
+.subpanel-title-2 {
+  margin: 10px 0 10px 20px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-color);
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------------------
    9. 开关行（sp-switch + 文字标签）
    #app 主面板用 .switch-container（整行列表行，开关右侧对齐）；
    工具箱用 .switch-row（内联容器，类似 .num-input-wrap，装「标签 + 开关」不占整行）。
@@ -736,11 +834,11 @@ sp-radio {
   color: var(--text-color);
 }
 
-/* 两列/多列 radio 行布局（纯色计算模式 / 描边位置 / 图案填充模式共用）：
-   组横向排列、space-around 分配，选项均分剩余宽度（flex:1）。
-   各面板仅保留自己的容器间距（组 margin、选项间 margin-right）。 */
-.colorsettings-calculation-mode sp-radio-group,
-.position-radio-group sp-radio-group,
+/* 两列 radio 行布局（计算方法 / 平铺方式 等；描边「位置」为三列，由 .position-radio-group
+   单独保留选项间距）。组横向排列、space-around 分配，选项均分剩余宽度（flex:1）。
+   分区容器统一用 .subpanel-section 后，此处前缀由原先的 colorsettings-calculation-mode /
+   position-radio-group 改为 .subpanel-section（图案面板仍用 .pattern-fillmode-container）。 */
+.subpanel-section sp-radio-group,
 .pattern-fillmode-container sp-radio-group {
   display: flex;
   align-items: center;
@@ -749,13 +847,17 @@ sp-radio {
   width: 100%;
 }
 
-.colorsettings-calculation-mode sp-radio,
-.position-radio-group sp-radio,
+.subpanel-section sp-radio,
 .pattern-fillmode-container sp-radio {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex: 1;
+}
+
+/* 两列 radio 选项间距（通用值）；描边位置三列由其自身规则覆盖 */
+.subpanel-section sp-radio:not(:last-child) {
+  margin-right: 110px;
 }
 
 /* --------------------------------------------------------------------------

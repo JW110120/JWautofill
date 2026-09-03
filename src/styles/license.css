@@ -1,7 +1,8 @@
 /*
  * 激活弹窗（LicenseDialog）样式。
  * 2026-09-01：从 LicenseDialog.tsx 的组件内 <style> 块整体搬到这里。
- * 之所以能搬到静态 CSS：本文件由 styles.css @import 引入，随 bundle 在启动时注入，
+ * 之所以能搬到静态 CSS：本文件由 index.tsx 在 common.css / app.css 之后引入，
+ * 随 bundle 在启动时注入，
  * 注入时机早于 theme.ts（theme.ts 在 index.tsx 模块体内调用），
  * 因此 theme.ts 里同特异性的遮罩配色规则仍能正常生效（后者覆盖前者）。
  *

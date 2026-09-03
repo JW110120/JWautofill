@@ -1295,8 +1295,12 @@ class App extends React.Component<AppProps, AppState> {
                     onClose={this.closeLicenseDialog}
                 />
                 <div className="selection-fill-container">
-                <h3 className="selection-fill-title" title={helpTexts.selectionFill.panelTitle}>
-                    <span className="selection-fill-title-text">选区填充2.0</span>                    
+                {/* 滚动区：主面板可滚动内容全部在这里，info 区在其下方的文档流底部。
+                    滚动内容被本容器裁剪，不会再叠到 info 区上方（UXP 下 fixed 覆盖层
+                    压不住后绘制的原生 number 输入，故 info 区不能用 fixed）。 */}
+                <div className="app-scroll-area">
+                <h3 className="main-title" title={helpTexts.selectionFill.panelTitle}>
+                    <span className="main-title-text">选区填充2.0</span>                    
                 </h3>
                 <div className="main-button-container">
                     <div 
@@ -1314,8 +1318,8 @@ title={helpTexts.selectionFill.mainButton}>
                     </div>
                 </div>
 
-                <div className="selection-fill-blend-mode-container">
-                    <span className={this.state.clearMode ? 'selection-fill-blend-mode-label-disabled' : 'selection-fill-blend-mode-label'} 
+                <div className="app-blendmode-container">
+                    <span className={this.state.clearMode ? 'app-blendmode-label-disabled' : 'app-blendmode-label'} 
 title={helpTexts.selectionFill.blendMode}>
                     混合模式
                     </span>
@@ -1770,13 +1774,12 @@ title={helpTexts.selectionFill.gradientDetail}>
                         </div>
                     </div>
                 </div>
-                
+                </div>
 
-
-                        
-<div className="info-plane">
-            <span className="copyright">Copyright © listen2me (JW)</span>
-        </div>
+                {/* info 区：滚动区之外的文档流底栏（不再用 fixed 覆盖层） */}
+                <div className="info-plane">
+                    <span className="copyright">Copyright © listen2me (JW)</span>
+                </div>
 
             {/* 颜色设置面板 */}
             <ColorSettingsPanel 

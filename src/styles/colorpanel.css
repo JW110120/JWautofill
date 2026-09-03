@@ -1,77 +1,9 @@
-/* 颜色设置面板样式（仅保留本面板独有布局；滑块/数字输入/标签/拖拽光标锁见 common.css） */
-/* ↳ 外壳已统一收口到 common.css：布局由 common.css 子面板外壳块提供；
-   > * 的 flex-shrink:0 也由 common.css 统一；z-index:9999 !important 由
-   input-fix.css 强制，此处不再重复声明。 */
-
-/* ↳ 子面板标题栏（原名 .panel-header → .subpanel-header）已统一收口到 common.css */
-
-/* 单个滑块整体容器：parameter-collection + 滑块本体（套娃第二层） */
-.colorsettings-slider-item {
-  display: flex;
-  flex-direction: column;
-  /* 内容区宽度 = 面板 250 - 左右 padding 10*2 = 230；max-width:100% + auto 外边距保证
-     面板宽度变化时滑块容器始终居中且不被撑破。 */
-  margin: 0 auto 15px auto;
-  width: 230px;
-  max-width: 100%;
-  box-sizing: border-box;
-}
-
-.colorsettings-entire-slider {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-}
-
-.colorsettings-slider-group {
-  margin-bottom: 15px;
-}
-
-/* 快速蒙版模式下的禁用样式（本面板独有） */
-.colorsettings-slider-item.disabled {
-  opacity: 0.5;
-  pointer-events: none;
-}
-
-.colorsettings-slider-item.disabled label {
-  cursor: not-allowed;
-  color: var(--disabled-color);
-}
-
-.colorsettings-slider-item.disabled .slider-input,
-.colorsettings-slider-item.disabled input[type="number"] {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-/* ↳ 死代码 .slider-text.disabled 已删：bare .slider-text 已不存在，禁用灰显由
-   .colorsettings-slider-item.disabled label 提供。 */
-
-/* 计算模式选择器（本面板独有布局；radio 本体见 common.css .radio-item） */
-.colorsettings-calculation-mode {
-  display: flex;
-  flex-direction: column;
-  margin: 30px -10px 0 -10px;
-  padding-top: 15px;
-  border-top: 1px solid var(--border-color);
-}
-
-.colorsettings-calculation-mode label {
-  margin: 10px 0 10px 20px;
-  font-size: 16px;
-  color: var(--text-color);
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-/* ↳ sp-radio-group / sp-radio 的两列布局本体已收口到 common.css（「两列 radio 行布局」块）；
-   .calculation-mode-radio 已并入 common 的 .radio-item（flex:1 由 common 的
-   sp-radio flex:1 提供），radio-item-label 字号/颜色走 common（13px）。
-   面板仅保留组左补偿与选项间距。 */
-.colorsettings-calculation-mode sp-radio-group {
-  margin-left: 5px;
-}
-
-.colorsettings-calculation-mode sp-radio:not(:last-child) {
-  margin-right: 110px;
-}
+/* 颜色设置面板样式
+   ⚠️ 本面板样式已全部收口到 common.css（单一来源），本文件不再保留任何规则：
+   - 分区容器（原 colorsettings-slider-group / colorsettings-calculation-mode）→ common.css 的 .subpanel-section / .subpanel-section--col
+   - 二级标题（原 colorsettings-calculation-mode label）→ common.css 的 .subpanel-title-2
+   - 单个滑块块（原 colorsettings-slider-item + 禁用态）→ common.css 的 .subpanel-slider-item
+   - 滑块内部堆叠（原 colorsettings-entire-slider）→ common.css 的 .slider-stack
+   - 计算方法两列 radio → common.css 的 .subpanel-section sp-radio(-group) 通用块
+   改通用组件请去 common.css 一处修改即可全局生效。
+   外壳 / 标题栏 / 子面板分区容器 / 二级标题 等见 common.css。 */

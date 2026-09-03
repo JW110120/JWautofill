@@ -115,7 +115,7 @@
         "localFileSystem": "fullAccess"
     },
     "build": {
-        "cssResources": ["styles.css"],
+        "cssResources": ["common.css"],
         "featureFlags": {
             "CSSNextSupport": true
         }
