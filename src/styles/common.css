@@ -206,6 +206,7 @@ sp-action-button {
 .num-input-row {
   display: flex;
   align-items: center;
+  flex-shrink: 0;          /* 在任意 flex 容器内（如 .opacity-input 直接子级）都不收缩，保证 32px 宽与数字完整可见 */
   height: 32px;            /* 高于 input(24) 留 4px 上下缓冲，防旧版 PS(≤27.8) 下越界 */
   padding: 0;
   box-sizing: border-box;
@@ -349,15 +350,13 @@ sp-action-button {
 /* --------------------------------------------------------------------------
    8. 图标按钮（无边框 / 无背景，仅图标；hover 变蓝、点击缩放、禁用灰显）
    通用类：.icon-button（所有仅含一个图标的按钮，无外边框）。
-   .icon-button-delete 为「删除」按钮（合并原 .delete-button-wrapper，去掉冗余包裹 div）：
-   在图标行内右对齐，禁用态半透明 0.4。
-   禁用态为自包含单类 .icon-button-disabled / .icon-button-delete-disabled（一个元素只挂一个类）。
+   .icon-button-delete 已收口于 .icon-button（不再单独成类）：删除按钮在图标组内
+   由 .icon-button-group 的 flex-end 统一右对齐。禁用态为自包含单类 .icon-button-disabled。
    仅此一处定义，原 adjustment.css 的同名副本已删除。
    .icon-button-group 为「把 N 个 .icon-button 打包在右侧」的容器（类似 .num-input-wrap 的角色），
    用于渐变/图案预设区图标栏、蒙版同步底部、笔刷热键录制区。带分隔线的「栏」用 --bar 修饰类。
    -------------------------------------------------------------------------- */
-.icon-button,
-.icon-button-delete {
+.icon-button {
   display: inline-flex;
   vertical-align: middle;
   align-items: center;
@@ -376,24 +375,20 @@ sp-action-button {
   -webkit-appearance: none;
 }
 
-.icon-button:hover,
-.icon-button-delete:hover {
+.icon-button:hover {
   color: var(--hover-icon);
 }
 
-.icon-button:hover .icon-fill,
-.icon-button-delete:hover .icon-fill {
+.icon-button:hover .icon-fill {
   fill: var(--hover-icon);
 }
 
-.icon-button:active,
-.icon-button-delete:active {
+.icon-button:active {
   transform: scale(0.94);
 }
 
 /* 禁用态（自包含单类：布局与基础类一致，仅改色 + not-allowed） */
-.icon-button-disabled,
-.icon-button-delete-disabled {
+.icon-button-disabled {
   display: inline-flex;
   vertical-align: middle;
   align-items: center;
@@ -412,16 +407,9 @@ sp-action-button {
   -webkit-appearance: none;
 }
 
-/* 「删除」按钮：在图标行内右对齐；禁用态整体半透明 0.4 */
-.icon-button-delete {
-  margin-left: auto;
-}
-
-.icon-button-delete-disabled {
-  margin-left: auto;
-  opacity: 0.4;
-}
-
+/* 「删除」按钮已收口于 .icon-button：在图标组内由 .icon-button-group 的
+   justify-content:flex-end 统一右对齐，不再单独成类（原 .icon-button-delete
+   及其 margin-left:auto 已删除，2026-09-03）。 */
 /* 预览区居中灰字提示，渐变面板（多选预设 / 未选预设 / 渐变全透明）与
    图案面板（未选图案）共用 */
 .final-preview-hint {
@@ -778,7 +766,6 @@ sp-action-button {
   justify-content: space-between;
   width: 100%;
   box-sizing: border-box;
-  border-bottom: 1px solid var(--border-color);
   padding: 15px 0;
   margin-bottom: 15px;
 }
@@ -798,6 +785,39 @@ sp-action-button {
   font-weight: 600;
   color: var(--text-color);
   white-space: nowrap;
+}
+
+/* --------------------------------------------------------------------------
+   8e-2. 通用分割线（主面板 / 子面板 / 工具箱共用，单一来源）
+   .divider：实线，几何与旧 .adjustment-divider 一致——
+     容器内容区左右各 10px 内边距，此处左 -10px、右 +10px、宽 100%+20px，
+     使分割线贯通容器左右边缘（不依赖父级 padding）。
+   .divider-dashed：虚线，纯 DOM 方案（span 短线序列）规避 UXP 对
+     background-repeat / 渐变 的渲染缺陷；左右各留 14px，不透明度 0.5。
+   -------------------------------------------------------------------------- */
+.divider {
+  width: calc(100% + 20px);
+  height: 1px;
+  background-color: var(--border-color);
+  margin: 15px 10px 15px -10px;
+}
+
+.divider-dashed {
+  height: 1px;
+  margin: 15px 0px;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  overflow: hidden;
+  opacity: 0.5;
+}
+
+.divider-dashed-dash {
+  width: 6px;
+  height: 1px;
+  flex-shrink: 0;
+  margin-right: 6px;
+  background-color: var(--border-color);
 }
 
 /* --------------------------------------------------------------------------
@@ -903,7 +923,9 @@ sp-action-button {
   margin-right: 8px;
 }
 
-sp-switch {
+/* 仅主面板整行开关（.switch-container）需要把开关甩到右侧；
+   工具箱内联 .switch-row 的开关由上方 .switch-row sp-switch 控制间距，不套用此 auto。 */
+.switch-container sp-switch {
   margin-left: auto;
   cursor: pointer;
 }
@@ -915,11 +937,18 @@ sp-switch {
   color: var(--disabled-color);
 }
 
-/* 工具箱开关：内联容器，标签 + 开关横向排列、不占整行；标签右侧间距用 margin 实现（UXP 不支持 flex gap） */
+/* 工具箱开关：内联容器，标签 + 开关横向排列、不占整行；标签右侧间距用 margin 实现（UXP 不支持 flex gap）。
+   align-self:flex-start 防止被 flex 列父级拉伸到整行（否则内部 sp-switch 的 margin-left:auto 会把开关推到右侧、形成 space-between 观感）。 */
 .switch-row {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
+  align-self: flex-start;
+}
+
+/* 工具箱开关的开关与标签间距（覆盖全局 sp-switch 的 margin-left:auto，使开关紧贴标签右侧而非甩到行尾） */
+.switch-row sp-switch {
+  margin-left: 8px;
 }
 
 /* --------------------------------------------------------------------------

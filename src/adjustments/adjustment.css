@@ -413,35 +413,10 @@
 
   /* ↳ 单位符号（原 .adjustment-unit 别名）已统一收口到 common.css 的 .num-unit */
 
-/* 水平实现分割线 */
-.adjustment-divider {
-  width: calc(100% + 20px);
-  height: 1px;
-  background-color: var(--border-color);
-  margin: 15px 10px 15px -10px;
-}
-
+  /* ↳ 水平实线分割线（.adjustment-divider）与虚线分割线（.adjustment-dashed-divider /
+     -dash）已收口到 common.css 的通用 .divider / .divider-dashed（单一来源），
+     改分割线样式只需动 common.css 一处。 */
   /* ↳ 按钮宽度分档（.action-button-lv2 / -wide / -5..-8 / -quad）已统一收口到 common.css */
-
-/* 虚线分隔线（同层补色 与 分层补色 之间）：
-   - 纯 DOM 方案：DashedDivider 渲染 6px 短线 span 序列（6px 短线 + 6px 空 = 12px 周期），
-     flex 排列 + overflow 裁剪，规避 UXP 对 background-repeat/渐变的渲染缺陷；
-   - 左右各留 14px，不贯通容器；不透明度 0.5。 */
-.adjustment-dashed-divider {
-  height: 1px;
-  margin: 15px 0px;
-  display: flex;
-  flex-direction: row;
-  align-items: flex-start;
-  overflow: hidden;
-  opacity: 0.5;
-}
-.adjustment-dashed-divider-dash {
-  width: 6px;
-  height: 1px;
-  flex-shrink: 0;
-  margin-right: 6px;
-}
 
 /* 折叠分区（工具箱子面板分区）样式已统一收口到 common.css 的
    .collapse-section / .collapse-header / .collapse-icon / .collapse-content /

@@ -208,7 +208,7 @@
 /* ---------------------------------------------------------------------------------------------------------------- */
   .pattern-fillmode-container {
     display: flex;
-    margin: 10px -26px 10px 8px;
+    margin: 10px 0;
     flex-direction: column;
   }
 

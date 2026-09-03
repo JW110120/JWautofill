@@ -178,10 +178,6 @@
   justify-content: space-between;
 }
 
-.opacity-input .icon-button-delete {
-  margin-left: auto;
-}
-
 /* ↳ 不透明度数字输入：原 35px 覆盖（width:35px + spinner 强制显示）已删。
    该输入在 .num-input-row 内，统一走 common.css 的
    .num-input-row input[type="number"]（宽 32px × 高 24px），与全插件数字输入一致。 */
@@ -300,10 +296,6 @@
   margin-left: 6px;
   position: relative;
   justify-content: space-between;
-}
-
-.color-input-container .icon-button-delete {
-  margin-left: auto;
 }
 
 .color-input-container input[type="text"] {

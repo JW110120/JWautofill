@@ -142,6 +142,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
           </div>
         </div>
         
+        <div className="divider"></div>
 
           <div className="subpanel-section position-radio-group">
             <sp-radio-group 
@@ -161,6 +162,8 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
             </sp-radio-group>
           </div>
         
+        <div className="divider"></div>
+
         {!clearMode && (
           <div className="subpanel-section">
             <label className="label-static">混合模式</label>
@@ -171,6 +174,8 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
             />
           </div>
         )} 
+
+        <div className="divider"></div>
         
         <div className="subpanel-section">
           <label

@@ -1316,7 +1316,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             <AddIcon className="icon-14" />
                         </IconButton>
                         <div
-                            className={((selectedPreset === null && selectedPresets.size === 0) || presets.length === 0) ? 'icon-button-delete-disabled' : 'icon-button-delete'}
+                            className={((selectedPreset === null && selectedPresets.size === 0) || presets.length === 0) ? 'icon-button-disabled' : 'icon-button'}
                             role="button"
                             tabIndex={((selectedPreset === null && selectedPresets.size === 0) || presets.length === 0) ? -1 : 0}
                             title={helpTexts.gradient.deletePreset}
@@ -1379,7 +1379,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         </div>
                         <span className="num-unit">%</span>
                         <div
-                            className={stops.length <= 2 ? 'icon-button-delete-disabled' : 'icon-button-delete'}
+                            className={stops.length <= 2 ? 'icon-button-disabled' : 'icon-button'}
                             role="button"
                             tabIndex={stops.length <= 2 ? -1 : 0}
                             title={helpTexts.gradient.deleteStop}
@@ -1613,7 +1613,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         />
                         
                         <div
-                            className={stops.length <= 2 ? 'icon-button-delete-disabled' : 'icon-button-delete'}
+                            className={stops.length <= 2 ? 'icon-button-disabled' : 'icon-button'}
                             role="button"
                             tabIndex={stops.length <= 2 ? -1 : 0}
                             title={helpTexts.gradient.deleteStop}

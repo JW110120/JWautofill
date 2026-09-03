@@ -1710,7 +1710,7 @@ interface PatternPickerProps {
                                 <FileIcon className="icon-14" />
                             </IconButton>
                             <div
-                                className={(!selectedPattern && selectedPatterns.size === 0) ? 'icon-button-delete-disabled' : 'icon-button-delete'}
+                                className={(!selectedPattern && selectedPatterns.size === 0) ? 'icon-button-disabled' : 'icon-button'}
                                 role="button"
                                 tabIndex={(!selectedPattern && selectedPatterns.size === 0) ? -1 : 0}
                                 title={helpTexts.pattern.deletePattern}
@@ -1804,6 +1804,8 @@ interface PatternPickerProps {
                             </sp-radio>
                         </sp-radio-group>
                 </div>
+
+                <div className="divider"></div>
 
                 <div className="checkbox-options-row-two">
                     <div className="checkbox-row">

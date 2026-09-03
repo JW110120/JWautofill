@@ -2692,7 +2692,7 @@ const renderDetailAdjustContent = () => (
       </>
     )}
 
-    <div className="adjustment-divider"></div>
+    <div className="divider"></div>
 
     <div role="button" tabIndex={0} className="action-button" onClick={handleGradientModify} title={helpTexts.adjustment.gradientModify}>梯度修改</div>
 
@@ -2705,7 +2705,7 @@ const renderDetailAdjustContent = () => (
         </div>
       </div>
 
-    <div className="adjustment-divider"></div>
+    <div className="divider"></div>
 
     <div role="button" tabIndex={0} className="action-button" onClick={handleSpecialSharpen} title={helpTexts.adjustment.specialSharpen}>特殊锐化</div>
 
@@ -2718,7 +2718,7 @@ const renderDetailAdjustContent = () => (
         </div>
       </div>
 
-    <div className="adjustment-divider"></div>
+    <div className="divider"></div>
 
     <div role="button" tabIndex={0} className="action-button" onClick={handleHighFrequencyEnhancement} title={helpTexts.adjustment.highFreq}>高频增强</div>
 
@@ -2800,7 +2800,7 @@ const renderEdgeProcessingContent = () => (
         </>
       )}
 
-    <div className="adjustment-divider"></div>
+    <div className="divider"></div>
 
     {/* 2×2 按钮组：四颗统一 .action-button-quad(92px) 保证左右两列严格对齐；
         仅第一行底部留 10px 与下一行分隔，第二行不加 */}
@@ -3000,6 +3000,7 @@ const renderMaskSyncContent = () => (
           </div>
           {/* 立即同步：改成与刷新一致的无边框图标按钮（--text-color / 16px），不再显示文字。
               当样本图层 / 通道 / 目标蒙版三下拉任一项未选时禁用（灰 + 不触发同步） */}
+          <div className="icon-button-group">
           {(() => {
             const syncDisabled = !task.sampleLayerId || !task.channel || !task.targetLayerId;
             return (
@@ -3022,9 +3023,10 @@ const renderMaskSyncContent = () => (
             onClick={() => handleMaskSyncRemove(task.id)}
             title={helpTexts.adjustment.maskSyncDelete}
           >
-            <DeleteIcon className="icon-14" />
+              <DeleteIcon className="icon-14" />
+            </div>
+            </div>
           </div>
-        </div>
       </div>
       );
     })}
@@ -3057,9 +3059,9 @@ const DashedDivider: React.FC = () => {
   }, []);
   // 60 段 × 12px = 720px，足以覆盖任意面板宽度（多余部分被 overflow 裁掉）
   return (
-    <div className="adjustment-dashed-divider">
+    <div className="divider-dashed">
       {Array.from({ length: 60 }, (_, i) => (
-        <span key={i} className="adjustment-dashed-divider-dash" style={{ backgroundColor: borderColor }} />
+        <span key={i} className="divider-dashed-dash" style={{ backgroundColor: borderColor }} />
       ))}
     </div>
   );
@@ -3131,11 +3133,11 @@ const renderQuickActionContent = () => (
         </div>
     )}
 
-    <div className="adjustment-divider"></div>
+    <div className="divider"></div>
 
     <div role="button" tabIndex={0} className="action-button" onClick={handleBlockGradient} title={helpTexts.adjustment.blockGradient}>分块渐变</div>
 
-    <div className="adjustment-divider"></div>
+    <div className="divider"></div>
 
     <div className="row-between">
       <div role="button" tabIndex={0} className="action-button-7" onClick={handleBlockColorPatchLightLine} title={helpTexts.adjustment.patchLightLine}>浅线同层补色</div>
@@ -3170,7 +3172,7 @@ const renderQuickActionContent = () => (
         </div>
       </div>
 
-    <div className="adjustment-divider"></div>
+    <div className="divider"></div>
 
     <div className="row-between">
       <div role="button" tabIndex={0} className="action-button" onClick={() => handleSpecialWoodcut(false)} title={helpTexts.adjustment.woodcut}>特殊木刻</div>
@@ -3217,11 +3219,11 @@ const renderQuickActionContent = () => (
         />
     </div>
 
-    <div className="adjustment-divider"></div>
+    <div className="divider"></div>
 
     <div className="row-between">
-      <div role="button" tabIndex={0} className="action-button-lv2" onClick={handleKnockoutWhite} title={helpTexts.adjustment.knockoutWhite}>扣白</div>
-      <div role="button" tabIndex={0} className="action-button-lv2" onClick={handleKnockoutBlack} title={helpTexts.adjustment.knockoutBlack}>扣黑</div>
+      <div role="button" tabIndex={0} className="action-button-2" onClick={handleKnockoutWhite} title={helpTexts.adjustment.knockoutWhite}>扣白</div>
+      <div role="button" tabIndex={0} className="action-button-2" onClick={handleKnockoutBlack} title={helpTexts.adjustment.knockoutBlack}>扣黑</div>
     </div>
   </div>
 );
