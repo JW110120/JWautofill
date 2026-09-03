@@ -1336,7 +1336,7 @@ class App extends React.Component<AppProps, AppState> {
 
     render() {
         return (
-            <div>
+            <div className="panel">
                 {/* 授权对话框 */}
                 <LicenseDialog
                     isOpen={this.state.isLicenseDialogOpen}
@@ -1347,10 +1347,10 @@ class App extends React.Component<AppProps, AppState> {
                     onTrialStarted={this.handleTrialStarted}
                     onClose={this.closeLicenseDialog}
                 />
-                <div className="selection-fill-container">
+                <div className="panel-section">
                 {/* 主面板滚动容器：直接挂 .panel 类（与绘画工具箱父面板同款外壳），
                     所有分区都放在这里，由 .panel 产生滑动条；4 个子面板是 absolute，
-                    挂在本容器上、不随滚动。 */}
+                    挂在 .panel-section 之后的同级节点上、不随滚动。 */}
                 <div className="panel" ref={this.panelRef}>
                 <h3 className="main-title" title={helpTexts.selectionFill.panelTitle}>
                     <span className="main-title-text">选区填充2.0</span>                    
@@ -1832,12 +1832,12 @@ title={helpTexts.selectionFill.gradientDetail}>
 
                 {/* info 条：滚动内容的最后一个元素（不再固定在面板底部），
                     滚到底才出现；父/子容器因此都铺满 100%，不再给底部留 20px。 */}
-                </div>
                 <div className="info-plane">
                     <span className="copyright">Copyright © listen2me (JW)</span>
                 </div>
                 </div>
                 </div>
+            </div>
 
             {/* 颜色设置面板 */}
             <ColorSettingsPanel 

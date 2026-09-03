@@ -1,13 +1,13 @@
 /* 描边（stroke）子面板样式
    ⚠️ 通用组件已统一收口到 common.css（滑块文字标签 / 可拖拽标签光标 / 单行·行内滑块 /
-   数字输入 / 单位符号 / 子面板分区容器 .subpanel-section / 二级标题 .subpanel-title-2 /
+   数字输入 / 单位符号 / 子面板分区容器 .panel-section / 二级标题 .subpanel-title-2 /
    双列 radio 布局 / 关闭按钮 / 拖拽光标锁）。本文件只保留描边面板「独有」的特殊规则。
    分区容器样式（原 stroke-wide-container / stroke-blende-mode / stroke-opacity-control /
    position-radio-group）与行内滑块（原 .range-slider / .stroke-opacity-range 覆盖）已全部
    收口到 common.css，改通用组件请去 common.css。 */
 
-/* 描边「位置」为三列 radio，选项间距特殊，保留（覆盖通用 .subpanel-section 的两列 110px）。
-   其余分区容器统一走 common.css 的 .subpanel-section。 */
+/* 描边「位置」为三列 radio，选项间距特殊，保留（覆盖通用 .panel-section 的两列 110px）。
+   其余分区容器统一走 common.css 的 .panel-section。 */
 .position-radio-group sp-radio:not(:last-child) {
   margin-right: 45px;
 }

@@ -246,13 +246,13 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
 
 
     return (
-        <div className="subpanel">
+        <div className="panel">
             <div className="subpanel-title-1">
-                <div className="subpanel-title-1-text">颜色动态设置</div>
+                <div>颜色动态设置</div>
                 <div className="close-button" role="button" tabIndex={0} onClick={onClose}>×</div>
             </div>
             
-            <div className="subpanel-section subpanel-section--col">
+            <div className="panel-section panel-section--col">
                 {shouldShowGrayVariation ? (
                     renderSlider('grayVariation', '灰度抖动', settings.grayVariation, 0, 100, '%', 'label-4')
                 ) : (
@@ -269,7 +269,7 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
             <div className="divider"></div>
 
             {/* 计算模式选择器（原 colorsettings-calculation-mode 分区容器作废，统一收口为子面板分区容器） */}
-            <div className="subpanel-section subpanel-section--col">
+            <div className="panel-section panel-section--col">
                 <label className="subpanel-title-2">计算方法</label>
                 <sp-radio-group 
                     selected={settings.calculationMode || 'absolute'}

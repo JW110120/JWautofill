@@ -131,7 +131,7 @@
   text-overflow: ellipsis;
 }
 
-/* 绘画工具箱根容器（原 .subpanel，现统一为父面板外壳 .panel，与 APP 主面板滚动区共用一套外壳） */
+/* 绘画工具箱根容器（原 .subpanel，该类已收口为通用 .panel，与 APP 主面板滚动区共用一套外壳） */
 .panel {
   width: 100%;
   height: 100%;
@@ -147,7 +147,7 @@
 }
 
 /* ↳ 工具箱与 4 个子面板的外壳滚动条（::-webkit-scrollbar thumb/track）已统一收口到 common.css，
-   覆盖 .panel / .subpanel */
+   覆盖 .panel（含 #app .panel-section ~ .panel 子面板） */
 
 /* 分区容器 */
 .adjustment-section {
@@ -871,7 +871,7 @@
 
 /* 弹出层：由 Select.tsx 用 createPortal 挂到所属面板根容器（#app /
    #pixeladjustment，见 utils/popRoot.ts），直接位于最上层，fixed 定位（相对视口），
-   既不被面板 overflow 裁剪，也不受面板容器层叠上下文（.subpanel z-index:9999）限制。
+   既不被面板 overflow 裁剪，也不受面板容器层叠上下文（#app .panel-section ~ .panel z-index:9999）限制。
    注意：不能挂 document.body —— UXP 只渲染当前激活的 <uxp-panel> 子树，挂到 body
    的弹层不会被绘制，表现为「下拉打不开」。
    z-index 必须高于渐变/颜色滑块 thumb（10000~10001）与标准 input[type=number]，

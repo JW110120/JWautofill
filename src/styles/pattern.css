@@ -219,7 +219,7 @@
   .pattern-fillmode-container sp-radio-group {
     margin: -8px 0 0 0px;
   }
-  /* ↳ 两列 radio 选项间距已统一收口到 common.css（.subpanel-section 与
+  /* ↳ 两列 radio 选项间距已统一收口到 common.css（.panel-section 与
      .pattern-fillmode-container 共用 110px，单一来源），本面板不再保留 105px 漂移。 */
   /* ↳ Checkbox 区域已全部由 common.css 通用 checkbox 规则提供（单一来源）：
      - .pattern-checkbox-container 已并入 common 的 .checkbox-options

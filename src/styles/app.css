@@ -15,19 +15,7 @@
 @import './stroke.css';
 @import './input-fix.css';
 
-/* #app 根元素背景兜底：common.css 的 html/body 虽带主题底色，但 UXP 宿主面板本体
-   （uxp-panel 原生层，非主题色 rgb(29,29,29)）可能从文档透明区透出。
-   给 #app 自身也铺主题底色，与工具箱 #pixeladjustment > .pixeladjustment-root
-   （adjustment.css）的兜底方式对齐：任何一层高度解析失败，露出的都是主题色。 */
-#app {
-  background-color: var(--bg-color);
-}
-
-/* 主面板根容器（index.tsx 中 #app 内的包裹层）。
-   ⚠️ 不用 flex 列：.selection-fill-container 若作为 flex 子项，其 height:100% 在 UXP 下
-   会与 flex 伸缩互斗（历史故障：内容截断、无滚动条、全收起后容器塌缩露出下方原生层）。
-   改块级父 + 百分比高度（UXP 下唯一验证可靠的定高路径）；自身也带主题底色兜底，
-   使「容器塌缩 / 高度链某层解析失败」时露出的永远是 --bg-color，与工具箱同级防护。 */
+/* app父面板根容器（index.tsx 中 #app 内的包裹层）。块级、定高、铺主题底色兜底。 */
 .app-root {
   width: 100%;
   height: 100%;
@@ -35,13 +23,29 @@
   background-color: var(--bg-color);
 }
 
-/* 主面板容器：定高普通块级容器（块级父 .app-root 的直接子项，height:100% 直接解析）。
-   250px 内容宽度用 margin:0 auto 水平居中（原 .app-root 的 align-items:center 职责）。
-   4 个子面板是 absolute，靠本容器的 position:relative 定位，不参与文档流。 */
-.selection-fill-container {
-  width: 250px;
+/* 主面板外壳（原 .app-shell）：#app 内 .app-root 的直接子项，挂通用 .panel 类。
+   .app-root 已是定高块级父，这里用 height:100% + flex 列把高度可靠往下传，
+   避免百分比高度对 auto 父级解析失败（历史上「主面板不能滚」的根因）。
+   自身不带入通用 .panel 的 10px padding（留给内层滚动 .panel），
+   铺主题底色兜底；position:relative 供 4 个绝对定位子面板（#app .panel-section ~ .panel）锚定。 */
+.app-root > .panel {
+  width: 100%;
   height: 100%;
-  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  background-color: var(--bg-color);
+  position: relative;
+}
+
+/* app父面板容器（原 .selection-fill-container，现收口为通用区块类 .panel-section）：
+   作为 .app-root > .panel（flex 列）的 flex 子项，用 flex:1 + min-height:0 填满
+   父级高度（不依赖百分比高度链，UXP 下比 height:100% 更稳）。自身 position:relative 供
+   内部区块定位。250px 内容宽度由面板本体（manifest width:250）决定，width:100% 铺满即可。 */
+.panel-section {
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   margin: 0 auto;
   box-sizing: border-box;
   background-color: var(--bg-color);
@@ -53,27 +57,33 @@
    滚动条 / padding / 滚动条样式均由 common.css 的 .panel 单一来源提供），
    不再单独套 app-scroll-area 这一层无意义的包裹。
    定高（height:100%）+ flex 列的组合原因：
-   ① height:100% —— 对块级父 .selection-fill-container（其 height:100% 已定高）直接
+   ① height:100% —— 对块级父 .panel-section（其 flex:1 已定高）直接
       解析，是 UXP 下最稳的定高路径，滚动条因此覆盖整个面板；
    ② display:flex; flex-direction:column —— 保留「混合模式负 margin 重叠」所需的
       非折叠布局（块级下 .app-blendmode-container 的 -12px 会与 .slider-container
       的 0 上边距折叠成 0，重叠失效）；同时 common.css 的 .panel > * { flex-shrink:0 }
       保证子项（主按钮 / 分区 / 卡片）不被压扁，溢出交给本容器滚动条承载。 */
-.selection-fill-container > .panel {
+.panel-section > .panel {
+  width: 100%;
   height: 100%;
   max-height: 100%;
+  /* 关键：与工具箱 .panel 同款。本容器是 flex 列滚动容器，min-height:0 保证在内容超高时
+     自身高度被父级约束、由 overflow-y:auto 产生滚动条，而非随内容撑高把高度链顶塌。 */
+  min-height: 0;
   background-color: var(--bg-color);
   display: flex;
   flex-direction: column;
 }
 
-/* 次级面板打开时禁止主面板滚动，避免内容在子面板后方滚动 */
-body.secondary-panel-open #app .panel {
+/* 次级面板打开时禁止主面板滚动，避免内容在子面板后方滚动。
+   ⚠️ 只锁主滚动容器 .panel-section > .panel，绝不锁 #app .panel（那会一并锁住
+   正在打开的子面板 .panel，使其自身无法滚动）。 */
+body.secondary-panel-open #app .panel-section > .panel {
   overflow-y: hidden;
 }
 
 /* 主面板滚动条的 padding / 溢出 / 自定义滚动条样式已统一收口到 common.css 的
-   .panel / .subpanel（无作用域，#app 与 #pixeladjustment 下都生效），此处不再重复。 */
+   .panel（无作用域，#app 与 #pixeladjustment 下都生效），此处不再重复。 */
 
 .main-title {
   text-align: center;

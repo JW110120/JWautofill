@@ -98,9 +98,9 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="subpanel">
+    <div className="panel">
         <div className="subpanel-title-1">
-          <div className="subpanel-title-1-text">描边设置</div>
+          <div>描边设置</div>
           <div className="close-button" role="button" tabIndex={0} onClick={() => {
                     // 触发所有回调以确保状态更新
                     onWidthChange(width);
@@ -112,7 +112,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
                 }}>×</div>
         </div>
         
-        <div className="subpanel-section">
+        <div className="panel-section">
           <label 
             className="label-drag"
             onMouseDown={(e) => handleLabelMouseDown(e, 'width')}
@@ -144,7 +144,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         
         <div className="divider"></div>
 
-          <div className="subpanel-section position-radio-group">
+          <div className="panel-section position-radio-group">
             <sp-radio-group 
               selected={position}
               name="strokePosition"
@@ -165,7 +165,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         <div className="divider"></div>
 
         {!clearMode && (
-          <div className="subpanel-section">
+          <div className="panel-section">
             <label className="label-static">混合模式</label>
             <Select
               value={blendMode}
@@ -177,7 +177,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
 
         <div className="divider"></div>
         
-        <div className="subpanel-section">
+        <div className="panel-section">
           <label
             className="label-drag"
             onMouseDown={(e) => handleLabelMouseDown(e, 'opacity')}

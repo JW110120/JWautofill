@@ -12,12 +12,11 @@
    本文件同时是静态入口：index.html 的 <link>、manifest cssResources、
    webpack 拷贝均指向本文件。
 
-   命名约定：每个通用组件只保留一个「权威类」（取自 APP 主面板 app.css），
-   子面板 / 工具箱共用同一类名，改一处全局生效。
+   命名约定：每个通用组件只保留一个「权威类」，app父面板/adjustmentpanel父面板/子面板共用同一类名，改一处全局生效。
    ========================================================================== */
 
 /* --------------------------------------------------------------------------
-   0. 全局基础：字体 + 根元素（原 app 面板样式文件中的全局块，2026-09-03 迁入）
+   0. 全局基础：字体 + 根元素
    -------------------------------------------------------------------------- */
 @font-face {
   font-family: 'SourceHanSansCN-Normal';
@@ -38,15 +37,15 @@ html, body {
   color: var(--text-color);
 }
 
-/* 根面板容器：补全 UXP 全高链。
+/* 根面板容器：
    body 是 flex 容器（align-items:flex-start），flex 子项默认 height:auto；
    #app/#pixeladjustment 若不显式定高，整条百分比高度链在根处就断了——
    父面板外壳的 height:100% 全部解析成 auto、随内容撑高，
    外层再被 overflow:hidden 裁掉 → 父面板「完全不能滚、内容截断」。
-   子面板 .subpanel 是 position:absolute + height:100%，高度直接对 UXP
+   子面板（#app .panel-section ~ .panel）是 position:absolute + height:100%，高度直接对 UXP
    面板本体解析，不依赖这条链（这正是历史上「子面板能滚、父面板不能滚」的来源）。
    只补 height（不补 width），避免撑宽 APP 主面板（其 250px 内容宽度由
-   .selection-fill-container 控制）。 */
+   .panel-section 控制）。 */
 #app,
 #pixeladjustment {
   height: 100%;
@@ -651,16 +650,15 @@ sp-action-button {
 }
 
 /* --------------------------------------------------------------------------
-   8d. 面板外壳（统一收口为单一通用类，消除「逐个面板枚举」的重复 CSS）
-   - 父面板外壳（APP 主面板滚动区 / 绘画工具箱根）：.panel
-     （内边距 10px、竖直滚动、自定义滚动条；APP 与工具箱共用同一套外壳）
-   - 4 个子面板（纯色/渐变/描边/图案）：.subpanel（在 .panel 内绝对定位铺满、
-     减底部 20px 留白、纵向 flex 列、子项 flex-shrink:0）
-   每个面板根只挂一个类（.panel 或 .subpanel），外壳通用属性在此单一来源。
+   8d. 面板外壳（统一收口为单一通用类 .panel，消除「父/子面板枚举」的重复 CSS）
+   所有面板容器（父面板滚动区 / 绘画工具箱根 / 4 个子面板）共用同一套外壳：
+   内边距 10px、竖直滚动、自定义滚动条、直接子项 flex-shrink:0、纵向 flex 列。
+   4 个子面板（纯色/渐变/描边/图案）也只挂 .panel，靠「#app .panel-section ~ .panel」
+   这一上下文选择器补绝对定位铺满（它们是 .panel-section 之后的同级 .panel），
+   不再有独立的 .subpanel 类。
    ⚠️ 子面板 z-index:9999 由 input-fix.css 统一强制，此处不重复声明。
    -------------------------------------------------------------------------- */
-.panel,
-.subpanel {
+.panel {
   --adjust-scrollbar-w: 10px;
   padding: 10px;
   box-sizing: border-box;
@@ -668,11 +666,11 @@ sp-action-button {
   overflow-x: hidden;
 }
 
-/* 4 个子面板共用填充布局：绝对定位铺满父容器、纵向 flex 列。
-   2026-09-03：取消原先的 height: calc(100% - 20px) —— 那 20px 是给 APP 底部
-   固定 info 条留的位置，现 info 条已改为随内容滚动的普通文档流元素，
-   父子容器一律铺满 100%（用户要求取消所有「高度 -20」设计）。 */
-.subpanel {
+/* 4 个子面板（#app .panel-section ~ .panel）共用填充布局：绝对定位铺满父面板、
+   纵向 flex 列。它们与 .panel-section 是同级的 .panel，靠上下文选择器识别，
+   不再单独挂 .subpanel 类。2026-09-03 起取消 height:calc(100% - 20px) 的
+   「底部 20px 留白」（info 条已改为随内容滚动的普通文档流元素）。 */
+#app .panel-section ~ .panel {
   position: absolute;
   top: 0;
   left: 0;
@@ -684,23 +682,22 @@ sp-action-button {
   justify-content: flex-start;
 }
 
-/* 面板外壳（父面板 .panel / 子面板 .subpanel）的直接子项一律不压缩：
+/* 面板外壳（.panel）的直接子项一律不压缩：
    外壳是「定高 + flex 列」，而 flex 子项默认 flex-shrink:1，内容超出高度时
    会被纵向压扁——表现为 APP 主按钮（50px）被压矮、卡片间距被吃掉。
    正确行为是保持各区块固有高度、由外壳自身的滚动条承载溢出
    （工具箱激活卡片当初用 flex:none 单独打的补丁，现统一收口于此）。 */
-.panel > *,
-.subpanel > * {
+.panel > * {
   flex-shrink: 0;
 }
 
-/* ⚠️ .panel（父面板外壳）自身不带 height 规则（2026-09-03）：
+/* ⚠️ .panel（父面板外壳）自身不带 height 规则：
    工具箱根 .panel 的定高（height:100%）由 adjustment.css 提供（其是
    .pixeladjustment-root 的唯一直接子项，height:100% 直接解析、实测可滚）；
-   APP 滚动区 .app-scroll-area 的定高由 app.css 提供，同样是 height:100%，
-   但其父 .selection-fill-container 已改为普通块级容器——flex 子项叠
-   height:100% 在 UXP 下会与 flex 伸缩打架（内容截断、无滚动条），
-   块级父容器 + 百分比高度是 UXP 下唯一被验证可靠的定高路径。
+   APP 主面板滚动区 .panel 的定高由 app.css 的「.panel-section > .panel」提供
+   （其父 .panel-section 是 .app-root > .panel 的 flex:1 子项）；
+   外壳 flex 子项叠 height:100% 在 UXP 下会与 flex 伸缩打架（内容截断、无滚动条），
+   故均走「定高块级父 + 百分比高度」这一被验证可靠的定高路径。
    折叠分区自身的 flex-shrink:0 由上方 .panel > * 统一兜底。 */
 
 /* ↳ 设置项数字输入均已在 .num-input-row 内，统一走上方 .num-input-row
@@ -708,58 +705,37 @@ sp-action-button {
    2026-09-03 定稿：数字字段宽一律 32px，原 35px / 24px 覆盖规则已删，
    不做第二套宽度。 */
 
-/* 父面板外壳（.panel）与子面板（.subpanel）统一自定义滚动条（唯一一套，
-   覆盖浮动窗口）。⚠️ 伪元素 width 写字面值 10px（与上方 --adjust-scrollbar-w
-   同值），因 UXP 下 ::-webkit-scrollbar 里用 var() 不保证解析。 */
-.panel::-webkit-scrollbar,
-.subpanel::-webkit-scrollbar {
+/* 面板外壳（.panel，含子面板的 #app .panel-section ~ .panel）统一自定义滚动条
+   （唯一一套，覆盖浮动窗口）。⚠️ 伪元素 width 写字面值 10px（与上方
+   --adjust-scrollbar-w 同值），因 UXP 下 ::-webkit-scrollbar 里用 var() 不保证解析。 */
+.panel::-webkit-scrollbar {
   width: 10px;
 }
-.panel::-webkit-scrollbar-thumb,
-.subpanel::-webkit-scrollbar-thumb {
+.panel::-webkit-scrollbar-thumb {
   background-color: var(--scrollbar-thumb);
   border-radius: 8px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
-.panel::-webkit-scrollbar-thumb:hover,
-.subpanel::-webkit-scrollbar-thumb:hover {
+.panel::-webkit-scrollbar-thumb:hover {
   background-color: color-mix(in oklab, var(--scrollbar-thumb) 90%, rgb(255, 255, 255) 10%);
 }
-.panel::-webkit-scrollbar-track,
-.subpanel::-webkit-scrollbar-track {
+.panel::-webkit-scrollbar-track {
   background-color: var(--scrollbar-track);
   border-radius: 8px;
 }
 
-/* 子面板标题栏（原 .subpanel-header）：标题与关闭按钮左右分布，与各子面板统一。 */
-.subpanel-title-1 {
-  display: flex;
-  min-height: 20px;
-  height: auto;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 5px;
-}
-
-.subpanel-title-1-text {
-  font-size: 18px;
-  margin-left: 5px;
-  color: var(--text-color);
-  font-weight: bold;
-}
-
 /* --------------------------------------------------------------------------
-   8e. 子面板分区容器 / 二级标题（全子面板通用的「区块」与区块小标题）
-   唯一类：.subpanel-section（区块，底边分隔线统一断行，行式区块默认横向排列）/
-          .subpanel-section--col（列式区块修饰类：内容纵向堆叠）/
+   8e. 面板分区容器 / 二级标题（全面板通用的「区块」与区块小标题）
+   唯一类：.panel-section（区块，底边分隔线统一断行，行式区块默认横向排列）/
+          .panel-section--col（列式区块修饰类：内容纵向堆叠）/
           .subpanel-title-2（区块内二级标题，如「计算方法」）。
    原 stroke.css 的 stroke-wide-container / stroke-blende-mode / stroke-opacity-control /
    position-radio-group，与原 colorpanel.css 的 colorsettings-slider-group /
    colorsettings-calculation-mode 全部并入此类；面板 CSS 不再各自声明「分区」样式，
    改通用只需动这里一处，消除各面板 padding/margin 漂移。
    -------------------------------------------------------------------------- */
-.subpanel-section {
+.panel-section {
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -771,10 +747,26 @@ sp-action-button {
 }
 
 /* 列式区块：内容纵向堆叠（颜色面板滑块组、计算方法选择器等） */
-.subpanel-section--col {
+.panel-section--col {
   flex-direction: column;
   align-items: stretch;
   justify-content: flex-start;
+}
+
+/* 子面板标题栏（原 .subpanel-header）：标题与关闭按钮左右分布，与各子面板统一。
+   标题文字的字体样式（18px / 粗体 / 主题色 / 左缩进 5px）已并入本类，
+   不再单独挂 .subpanel-title-1-text（合并为唯一标题类）。 */
+.subpanel-title-1 {
+  display: flex;
+  min-height: 20px;
+  height: auto;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 5px;
+  padding-left: 5px;
+  font-size: 18px;
+  font-weight: bold;
+  color: var(--text-color);
 }
 
 /* 子面板二级标题（区块内的小标题，如「计算方法」）。原 colorpanel.css 的
@@ -993,9 +985,9 @@ sp-radio {
 
 /* 两列 radio 行布局（计算方法 / 平铺方式 等；描边「位置」为三列，由 .position-radio-group
    单独保留选项间距）。组横向排列、space-around 分配，选项均分剩余宽度（flex:1）。
-   分区容器统一用 .subpanel-section 后，此处前缀由原先的 colorsettings-calculation-mode /
-   position-radio-group 改为 .subpanel-section（图案面板仍用 .pattern-fillmode-container）。 */
-.subpanel-section sp-radio-group,
+   分区容器统一用 .panel-section 后，此处前缀由原先的 colorsettings-calculation-mode /
+   position-radio-group 改为 .panel-section（图案面板仍用 .pattern-fillmode-container）。 */
+.panel-section sp-radio-group,
 .pattern-fillmode-container sp-radio-group {
   display: flex;
   align-items: center;
@@ -1004,7 +996,7 @@ sp-radio {
   width: 100%;
 }
 
-.subpanel-section sp-radio,
+.panel-section sp-radio,
 .pattern-fillmode-container sp-radio {
   display: flex;
   align-items: center;
@@ -1012,9 +1004,9 @@ sp-radio {
   flex: 1;
 }
 
-/* 两列 radio 选项间距（通用值，唯一来源）；subpanel-section 与 pattern-fillmode-container
+/* 两列 radio 选项间距（通用值，唯一来源）；panel-section 与 pattern-fillmode-container
    共用同一间距，改此处即全跟着改。描边位置三列（.position-radio-group）由其自身规则覆盖。 */
-.subpanel-section sp-radio:not(:last-child),
+.panel-section sp-radio:not(:last-child),
 .pattern-fillmode-container sp-radio:not(:last-child) {
   margin-right: 110px;
 }
