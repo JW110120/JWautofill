@@ -184,7 +184,7 @@
 
 /* ↳ 不透明度数字输入：原 35px 覆盖（width:35px + spinner 强制显示）已删。
    该输入在 .num-input-row 内，统一走 common.css 的
-   .num-input-row input[type="number"]（24px），与全插件数字输入一致。 */
+   .num-input-row input[type="number"]（宽 32px × 高 24px），与全插件数字输入一致。 */
 
 .gradient-slider-track {
     position: relative;

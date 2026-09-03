@@ -202,8 +202,8 @@
 
   /* ↳ 滑块单位符号（°/%）已改用 common.css 的 .num-unit（TSX 同步加类名），
      原 .pattern-setting-item span（margin-left:-3px）与 14px 单位容器规则已删。
-   ↳ 设置项数字输入：输入框都在 .num-input-row 内，统一走 common 的 24px，
-     原 35px 覆盖规则已删。 */
+   ↳ 设置项数字输入：输入框都在 .num-input-row 内，统一走 common 的
+     宽 32px × 高 24px（容器 32px 高留 4px 缓冲），原 35px 覆盖规则已删。 */
 
 /* ---------------------------------------------------------------------------------------------------------------- */
   .pattern-fillmode-container {

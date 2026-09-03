@@ -189,8 +189,12 @@ sp-action-button {
    4. 数字输入框 + 单位符号（单行 / 双行滑块共用）
    唯一类：.num-input-wrap（数字+单位组）/ .num-input-row（裁剪容器）/
           .num-unit（单位符号）。
-   定稿（2026-09-01 用户逐轮实测）：容器（视觉输入框）32px、input 24px——
-   上下各留 4px 缓冲容纳 UXP 原生绘制区，各分辨率完整不越界。
+   定稿（2026-09-01 用户逐轮实测；2026-09-03 因 PS 版本差异复修）：
+   .num-input-row 容器高 32px、input 高 24px × 宽 32px——
+   容器比 input 高 8px，上下各留 4px 缓冲容纳 UXP 原生控件绘制区。
+   跨 PS 版本：27.9+ 会裁剪原生控件、无越界；≤27.8 旧版不裁剪，
+   若容器与 input 等高（24=24）则原生控件下沿溢出 → 下越界。
+   故容器必须高于 input 留缓冲，高低版本均不越界；各分辨率完整显示。
    -------------------------------------------------------------------------- */
 .num-input-wrap {
   display: flex;
@@ -202,7 +206,7 @@ sp-action-button {
 .num-input-row {
   display: flex;
   align-items: center;
-  height: 24px;
+  height: 32px;            /* 高于 input(24) 留 4px 上下缓冲，防旧版 PS(≤27.8) 下越界 */
   padding: 0;
   box-sizing: border-box;
   border: 1px solid var(--border-color);
@@ -221,7 +225,7 @@ sp-action-button {
 .num-input-row input[type="number"] {
   display: flex;
   align-items: center;
-  width: 24px;
+  width: 32px;            /* 字段宽度 24→32（2026-09-03） */
   height: 24px;
   box-sizing: border-box;
   background-color: var(--dropdown-bg-color);
@@ -712,8 +716,9 @@ sp-action-button {
    折叠分区自身的 flex-shrink:0 由上方 .panel > * 统一兜底。 */
 
 /* ↳ 设置项数字输入均已在 .num-input-row 内，统一走上方 .num-input-row
-   input[type="number"]（24px）。2026-09-02 定稿：子面板数字宽度一律 24px，
-   原 35px 覆盖规则已删，不做第二套宽度。 */
+   input[type="number"]（宽 32px × 高 24px，容器 32px 高留 4px 缓冲）。
+   2026-09-03 定稿：数字字段宽一律 32px，原 35px / 24px 覆盖规则已删，
+   不做第二套宽度。 */
 
 /* 父面板外壳（.panel）与子面板（.subpanel）统一自定义滚动条（唯一一套，
    覆盖浮动窗口）。⚠️ 伪元素 width 写字面值 10px（与上方 --adjust-scrollbar-w

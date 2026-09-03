@@ -24,7 +24,7 @@
 - ⚠️ Select.tsx 的态类全是「独占类名」：head-open/head-disabled/opt-sel/opt-dis 不含基础类。基础样式必须写「三态共享组」（.head,.head-open,.head-disabled / .opt,.opt-sel,.opt-dis 合写 display/font-size/padding），否则展开瞬间退化成块（2026-09-03 修复：头部多一行/选中项字号变小/对勾不右对齐）。新加态类必须照此办理。
 
 ## UXP 避坑
-- 原生 input 容器32px+input24px 缓冲（input 绝不撑满容器）；单位符号放裁剪容器外（.num-unit）。
+- 原生 input 容器高32px+input高24px 缓冲（input 绝不撑满容器，上下各4px缓冲）；单位符号放裁剪容器外（.num-unit）。⚠️ 跨 PS 版本：27.9+ 会裁剪原生控件无越界；≤27.8 旧版不裁剪，容器必须与 input 等高(24=24) 才会下越界——故容器必须高于 input 留缓冲。字段宽 32px（2026-09-03 由 24 改 32）。
 - number-input appearance:none 由 common.css 全局 input[type="number"] 单条提供；input-fix.css 的 #app input z-index:1!important 是功能性修复不能动。
 - 「框里框」：视觉边框由外层 .num-input-row 提供，input 本体严禁 border/border-radius；新数字输入一律放 .num-input-row。
 - flex gap 不可靠→margin；<a> 不唤起浏览器→shell.openExternal。
@@ -49,7 +49,7 @@
 ## 布局宽度（定稿）
 - 滑块文字标签 W(n)=20+(n-2)×13.33（2..6字=20/33/47/60/73px），common.css 宽度档收口；.wide/.wider-* 为内容宽（flex:none）不在档内。
 - 按钮宽=字数×字号+20px，common .adjustment-button 系列（默认72/-lv2 46/-wide 124/-5~8/-quad 92）。
-- 数字输入全插件统一 24px（common .num-input-row/.adjustment-number-input）；gradient.css 剩的 35px 是 .preset-item 预设格尺寸（非输入，保留）。
+- 数字输入全插件统一：字段宽32px×高24px、容器高32px留4px上下缓冲（common .num-input-row）；gradient.css 剩的 35px 是 .preset-item 预设格尺寸（非输入，保留）。
 
 ## 通用组件 CSS 单一来源（common.css）
 - 2026-09-03：styles.css→app.css（仅 #app 主面板+4子面板+input-fix @import 组）；common.css 接管整体（全局基础：@font-face+html,body），并成静态入口（index.html <link>、manifest cssResources、webpack 拷贝均指 common.css）。index.tsx import 顺序：uxpPerfPatch→common→app→license。
