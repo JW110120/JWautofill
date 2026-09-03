@@ -39,7 +39,11 @@ if (container) {
   // 创建根组件
   const Root = () => {
     return (
-      <Provider theme={defaultTheme} colorScheme="dark">
+      /* ⚠️ height="100%" 不能省：Provider 会在 #app 与 .app-root 之间再插一层 div，
+         这层 div 默认 height:auto，会截断「#app → … → .app-scroll-area」的百分比高度链，
+         使滚动区高度退化为内容高 → 主面板永远不出现滚动条（内容被裁掉）。
+         绘画工具箱的 Provider 一直带这个属性，所以它滚动正常，主面板没有——差异全在这里。 */
+      <Provider theme={defaultTheme} colorScheme="dark" height="100%">
         {/* 布局样式见 app.css 的 .app-root */}
         <div className="app-root">
           <App />

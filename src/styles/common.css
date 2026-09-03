@@ -38,6 +38,26 @@ html, body {
   color: var(--text-color);
 }
 
+/* 根面板容器：补全 UXP 全高链。
+   body 是 flex 容器（align-items:flex-start），flex 子项默认 height:auto；
+   #app/#pixeladjustment 若不显式定高，整条百分比高度链在根处就断了——
+   父面板外壳的 height:100% 全部解析成 auto、随内容撑高，
+   外层再被 overflow:hidden 裁掉 → 父面板「完全不能滚、内容截断」。
+   子面板 .subpanel 是 position:absolute + height:100%，高度直接对 UXP
+   面板本体解析，不依赖这条链（这正是历史上「子面板能滚、父面板不能滚」的来源）。
+   只补 height（不补 width），避免撑宽 APP 主面板（其 250px 内容宽度由
+   .selection-fill-container 控制）。 */
+#app,
+#pixeladjustment {
+  height: 100%;
+}
+
+/* 链的更上端：uxp-panel 面板根节点本身也要定高，否则上面两个 id 的 100% 无解析基准。
+   UXP 只渲染当前激活的 <uxp-panel> 子树，未激活的被隐藏，height:100% 对它是惰性的。 */
+uxp-panel {
+  height: 100%;
+}
+
 /* --------------------------------------------------------------------------
    1. 全局控件复位 / Spectrum 禁用态
    -------------------------------------------------------------------------- */
@@ -235,7 +255,6 @@ sp-action-button {
    适用于：单行滑块「标签+数字」行、行内滑块「标签+滑块+数字」行、
    填充选项里的 switch 开关行、双按钮行（原 adjustment-double-buttons）等。
    唯一类：.row-between（基础，自带 10px 上下外边距）。
-   行内滑块条（RangeSlider 根）用 .slider-track；单行滑块条用 .slider-input。
    -------------------------------------------------------------------------- */
 .row-between {
   display: flex;
@@ -252,7 +271,23 @@ sp-action-button {
   cursor: text;
 }
 
-/* 滑块条所在行（单行滑块用），占满整行、居中（自带 range-slider 根属性，作 RangeSlider 根类） */
+/* --------------------------------------------------------------------------
+   6. 单行滑块（标签 + 数字 + 单位在上一行，滑块条独占下一行，共两行）
+   块容器唯一类：.slider-block（原 .subpanel-slider-item / APP .entire-slider /
+   图案 .pattern-entire-slider 三者本质相同，统一收口为此通用类；父/子面板共用）。
+   滑块条：.slider-input（自带 RangeSlider 根属性，作 RangeSlider 根类）。
+   -------------------------------------------------------------------------- */
+.slider-block {
+  display: flex;
+  flex-direction: column;
+  /* 宽度 100% 填满所在容器（子面板 230px 内容区 / 主面板卡片内都一致），
+     不再写死 230px，父面板单行滑块也能直接套用。 */
+  width: 100%;
+  margin: 0 0 15px 0;
+  box-sizing: border-box;
+}
+
+/* 滑块条所在行（单行滑块用），占满整行、居中（自带 range-slider 根属性） */
 .slider-input {
   position: relative;
   display: block;
@@ -268,7 +303,29 @@ sp-action-button {
   margin: 0 auto;
 }
 
-/* 行内滑块条（行内滑块用）：flex:1 在 .row-between 内横向拉伸；自带 range-slider 根属性 */
+/* 快速蒙版等禁用态（随 .slider-block 一起收口到 common，单类名自包含） */
+.slider-block.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.slider-block.disabled label {
+  cursor: not-allowed;
+  color: var(--disabled-color);
+}
+
+.slider-block.disabled .slider-input,
+.slider-block.disabled input[type="number"] {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* --------------------------------------------------------------------------
+   7. 行内滑块（标签 + 滑块 + 数字 + 单位 全部在同一行）
+   滑块条：.slider-track（flex:1 在 .row-between 内横向拉伸，自带 RangeSlider 根属性）。
+   原 .slider-stack（装多个行内滑块的容器）已废弃——行内滑块直接是 .row-between
+   行，无需额外包裹层，TSX 里把 <div className="slider-stack"> 包裹去掉即可。
+   -------------------------------------------------------------------------- */
 .slider-track {
   position: relative;
   display: flex;
@@ -285,51 +342,15 @@ sp-action-button {
   min-width: 50px;
 }
 
-/* 行内滑块组容器（垂直堆叠多个 .row-between 滑块行）。原 .inline-slider-container，
-   仅作语义分组、无额外布局；各滑块行已是 .row-between（自带上下外边距）。 */
-.slider-stack {
-  display: flex;
-  flex-direction: column;
-}
-
-/* 子面板单个滑块块（颜色面板等，套在 .slider-stack 内：标题行 + 滑块条）。
-   原 colorpanel.css 的 colorsettings-slider-item 及其禁用态全部并入此类（单一来源），
-   各子面板滑块块统一走这里，不再各自声明。 */
-.subpanel-slider-item {
-  display: flex;
-  flex-direction: column;
-  /* 内容区宽度 = 面板 250 - 左右 padding 10*2 = 230；max-width:100% + auto 外边距保证
-     面板宽度变化时滑块容器始终居中且不被撑破。 */
-  margin: 0 auto 15px auto;
-  width: 230px;
-  max-width: 100%;
-  box-sizing: border-box;
-}
-
-/* 快速蒙版模式下的禁用样式（随 .subpanel-slider-item 一起收口到 common） */
-.subpanel-slider-item.disabled {
-  opacity: 0.5;
-  pointer-events: none;
-}
-
-.subpanel-slider-item.disabled label {
-  cursor: not-allowed;
-  color: var(--disabled-color);
-}
-
-.subpanel-slider-item.disabled .slider-input,
-.subpanel-slider-item.disabled input[type="number"] {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
 /* --------------------------------------------------------------------------
-   7. 图标按钮（无边框 / 无背景，仅图标；hover 变蓝、点击缩放、禁用灰显）
+   8. 图标按钮（无边框 / 无背景，仅图标；hover 变蓝、点击缩放、禁用灰显）
    通用类：.icon-button（所有仅含一个图标的按钮，无外边框）。
    .icon-button-delete 为「删除」按钮（合并原 .delete-button-wrapper，去掉冗余包裹 div）：
    在图标行内右对齐，禁用态半透明 0.4。
    禁用态为自包含单类 .icon-button-disabled / .icon-button-delete-disabled（一个元素只挂一个类）。
    仅此一处定义，原 adjustment.css 的同名副本已删除。
+   .icon-button-group 为「把 N 个 .icon-button 打包在右侧」的容器（类似 .num-input-wrap 的角色），
+   用于渐变/图案预设区图标栏、蒙版同步底部、笔刷热键录制区。带分隔线的「栏」用 --bar 修饰类。
    -------------------------------------------------------------------------- */
 .icon-button,
 .icon-button-delete {
@@ -422,11 +443,28 @@ sp-action-button {
   height: 14px;
 }
 
+/* 图标按钮组：把 N 个 .icon-button 打包在右侧（类似 .num-input-wrap 的角色），
+   全插件共用唯一容器类。基础类仅作右对齐 flex 行；预设区底部那条带分隔线的
+   「栏」用 --bar 修饰类（与预设缩略图区视觉断开，gradient/pattern 一致）。 */
+.icon-button-group {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+}
+
+.icon-button-group--bar {
+  border-top: 1px solid var(--border-color);
+  background-color: var(--bg-color);
+  background-clip: padding-box;
+  margin-top: auto;
+}
+
 /* --------------------------------------------------------------------------
-   8. 普通按钮族
-   8a. 总开关（主功能开启/关闭大按钮）：.main-button
-   8b. 动作按钮（不同字数 / 压扁 / 自适应）：.action-button 系列（通用功能按钮）
-   8c. 子面板关闭按钮（红色 ×）：.close-button
+   9. 普通按钮族
+   9a. 总开关（主功能开启/关闭大按钮）：.main-button
+   9b. 动作按钮（不同字数 / 压扁 / 自适应）：.action-button 系列（通用功能按钮）
+   9c. 子面板关闭按钮（红色 ×）：.close-button
    -------------------------------------------------------------------------- */
 
 /* 主按钮外部容器（#app 独有布局，仅作占位，不放通用样式） */
@@ -504,15 +542,13 @@ sp-action-button {
 
 /* —— 动作按钮（工具箱 / 通用）：每个按钮只挂一个类，宽度档/状态均为自包含类 —— */
 .action-button,
-.action-button-lv2,
+.action-button-2,
 .action-button-5,
 .action-button-6,
 .action-button-7,
 .action-button-8,
-.action-button-wide,
 .action-button-quad,
 .action-button-auto,
-.action-button-compact,
 .action-button-run,
 .action-button-run-disabled {
   height: 30px;
@@ -536,15 +572,13 @@ sp-action-button {
 }
 
 .action-button:hover,
-.action-button-lv2:hover,
+.action-button-2:hover,
 .action-button-5:hover,
 .action-button-6:hover,
 .action-button-7:hover,
 .action-button-8:hover,
-.action-button-wide:hover,
 .action-button-quad:hover,
 .action-button-auto:hover,
-.action-button-compact:hover,
 .action-button-run:hover {
   background-color: var(--hover-bg);
   border-color: var(--primary-color);
@@ -552,15 +586,13 @@ sp-action-button {
 }
 
 .action-button:active,
-.action-button-lv2:active,
+.action-button-2:active,
 .action-button-5:active,
 .action-button-6:active,
 .action-button-7:active,
 .action-button-8:active,
-.action-button-wide:active,
 .action-button-quad:active,
 .action-button-auto:active,
-.action-button-compact:active,
 .action-button-run:active {
   background-color: var(--button-down);
   transform: scale(0.98);
@@ -570,13 +602,6 @@ sp-action-button {
 .action-button-auto {
   width: auto;
   min-width: 0;
-}
-
-/* 紧凑尺寸（守护进程状态条，font 12）：width = 12×7 + 20 = 104px */
-.action-button-compact {
-  height: 24px;
-  font-size: 12px;
-  width: 104px;
 }
 
 /* 守护进程「开始/停止」按钮：auto + compact 合并为单类 */
@@ -598,12 +623,11 @@ sp-action-button {
 
 /* 按钮宽度分档：按按钮汉字字数精确分级，均 box-sizing:border-box + 无内边距。
    width = 13×字数 + 20。2 字=46 / 5 字=85 / 6 字=98 / 7 字=111 / 8 字=124。 */
-.action-button-lv2 { width: 46px; }
+.action-button-2 { width: 46px; }
 .action-button-5  { width: 85px; }
 .action-button-6  { width: 98px; }
 .action-button-7  { width: 111px; }
 .action-button-8  { width: 124px; }
-.action-button-wide { width: 124px; }
 
 /* 2×2 按钮组统一列宽：92px（中英混排取中值，保证两列严格对齐） */
 .action-button-quad {
@@ -635,15 +659,16 @@ sp-action-button {
 }
 
 /* --------------------------------------------------------------------------
-   8d. 子面板外壳（统一收口为单一通用类，消除「逐个面板枚举」的重复 CSS）
-   - 主容器 / 工具箱根：.subpanel（内边距 10px、竖直滚动、自定义滚动条）
-   - 4 个子面板（纯色/渐变/描边/图案）：.subpanel-fill（在 .subpanel 基础上
-     绝对定位铺满父容器、减底部 20px 留白、纵向 flex 列、子项 flex-shrink:0）
-   每个面板根只挂一个类（.subpanel 或 .subpanel-fill），外壳通用属性在此单一来源。
+   8d. 面板外壳（统一收口为单一通用类，消除「逐个面板枚举」的重复 CSS）
+   - 父面板外壳（APP 主面板滚动区 / 绘画工具箱根）：.panel
+     （内边距 10px、竖直滚动、自定义滚动条；APP 与工具箱共用同一套外壳）
+   - 4 个子面板（纯色/渐变/描边/图案）：.subpanel（在 .panel 内绝对定位铺满、
+     减底部 20px 留白、纵向 flex 列、子项 flex-shrink:0）
+   每个面板根只挂一个类（.panel 或 .subpanel），外壳通用属性在此单一来源。
    ⚠️ 子面板 z-index:9999 由 input-fix.css 统一强制，此处不重复声明。
    -------------------------------------------------------------------------- */
-.subpanel,
-.subpanel-fill {
+.panel,
+.subpanel {
   --adjust-scrollbar-w: 10px;
   padding: 10px;
   box-sizing: border-box;
@@ -651,54 +676,71 @@ sp-action-button {
   overflow-x: hidden;
 }
 
-/* 4 个子面板共用填充布局：绝对定位铺满父容器、减底部 20px 留白、纵向 flex 列。
-   子面板变矮时各区块保持固有高度、不被 flex 压缩（呼应 flex 列布局）。 */
-.subpanel-fill {
+/* 4 个子面板共用填充布局：绝对定位铺满父容器、纵向 flex 列。
+   2026-09-03：取消原先的 height: calc(100% - 20px) —— 那 20px 是给 APP 底部
+   固定 info 条留的位置，现 info 条已改为随内容滚动的普通文档流元素，
+   父子容器一律铺满 100%（用户要求取消所有「高度 -20」设计）。 */
+.subpanel {
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
-  height: calc(100% - 20px);
+  height: 100%;
   background-color: var(--bg-color);
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
 }
 
-.subpanel-fill > * {
+/* 面板外壳（父面板 .panel / 子面板 .subpanel）的直接子项一律不压缩：
+   外壳是「定高 + flex 列」，而 flex 子项默认 flex-shrink:1，内容超出高度时
+   会被纵向压扁——表现为 APP 主按钮（50px）被压矮、卡片间距被吃掉。
+   正确行为是保持各区块固有高度、由外壳自身的滚动条承载溢出
+   （工具箱激活卡片当初用 flex:none 单独打的补丁，现统一收口于此）。 */
+.panel > *,
+.subpanel > * {
   flex-shrink: 0;
 }
+
+/* ⚠️ .panel（父面板外壳）自身不带 height 规则（2026-09-03）：
+   工具箱根 .panel 的定高（height:100%）由 adjustment.css 提供（其是
+   .pixeladjustment-root 的唯一直接子项，height:100% 直接解析、实测可滚）；
+   APP 滚动区 .app-scroll-area 的定高由 app.css 提供，同样是 height:100%，
+   但其父 .selection-fill-container 已改为普通块级容器——flex 子项叠
+   height:100% 在 UXP 下会与 flex 伸缩打架（内容截断、无滚动条），
+   块级父容器 + 百分比高度是 UXP 下唯一被验证可靠的定高路径。
+   折叠分区自身的 flex-shrink:0 由上方 .panel > * 统一兜底。 */
 
 /* ↳ 设置项数字输入均已在 .num-input-row 内，统一走上方 .num-input-row
    input[type="number"]（24px）。2026-09-02 定稿：子面板数字宽度一律 24px，
    原 35px 覆盖规则已删，不做第二套宽度。 */
 
-/* 子面板外壳统一自定义滚动条。⚠️ 伪元素 width 写字面值 10px（与上方
-   --adjust-scrollbar-w 同值），因 UXP 下 ::-webkit-scrollbar 里用 var() 不保证解析。 */
-.subpanel::-webkit-scrollbar,
-.subpanel-fill::-webkit-scrollbar {
+/* 父面板外壳（.panel）与子面板（.subpanel）统一自定义滚动条（唯一一套，
+   覆盖浮动窗口）。⚠️ 伪元素 width 写字面值 10px（与上方 --adjust-scrollbar-w
+   同值），因 UXP 下 ::-webkit-scrollbar 里用 var() 不保证解析。 */
+.panel::-webkit-scrollbar,
+.subpanel::-webkit-scrollbar {
   width: 10px;
 }
-.subpanel::-webkit-scrollbar-thumb,
-.subpanel-fill::-webkit-scrollbar-thumb {
+.panel::-webkit-scrollbar-thumb,
+.subpanel::-webkit-scrollbar-thumb {
   background-color: var(--scrollbar-thumb);
   border-radius: 8px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
-.subpanel::-webkit-scrollbar-thumb:hover,
-.subpanel-fill::-webkit-scrollbar-thumb:hover {
+.panel::-webkit-scrollbar-thumb:hover,
+.subpanel::-webkit-scrollbar-thumb:hover {
   background-color: color-mix(in oklab, var(--scrollbar-thumb) 90%, rgb(255, 255, 255) 10%);
 }
-.subpanel::-webkit-scrollbar-track,
-.subpanel-fill::-webkit-scrollbar-track {
+.panel::-webkit-scrollbar-track,
+.subpanel::-webkit-scrollbar-track {
   background-color: var(--scrollbar-track);
   border-radius: 8px;
 }
 
-/* 子面板标题栏（原名 .panel-header，改名避免与大面板标题混淆）：
-   标题与关闭按钮左右分布，stroke 不再单独覆盖，与其他子面板统一。 */
-.subpanel-header {
+/* 子面板标题栏（原 .subpanel-header）：标题与关闭按钮左右分布，与各子面板统一。 */
+.subpanel-title-1 {
   display: flex;
   min-height: 20px;
   height: auto;
@@ -707,7 +749,7 @@ sp-action-button {
   margin-bottom: 5px;
 }
 
-.subpanel-header h3 {
+.subpanel-title-1-text {
   font-size: 18px;
   margin-left: 5px;
   color: var(--text-color);
@@ -754,6 +796,91 @@ sp-action-button {
 }
 
 /* --------------------------------------------------------------------------
+   8f. 折叠分区（通用：主面板「选区/填充选项」与工具箱子面板分区共用同一套）
+   唯一类：.collapse-section / .collapse-header / .collapse-icon /
+          .collapse-icon-expanded / .collapse-content / .collapse-content-expanded
+   原 APP 的 .expand-*（app.css）与工具箱的 .adjust-expand-*（adjustment.css）
+   本质相同，现统一收口于此，改一处全跟着改。拖拽排序视觉（.dragging 半透明 /
+   .drop-target 主题蓝虚线）保留在分区上（工具箱分区重排复用）。
+   -------------------------------------------------------------------------- */
+.collapse-section {
+  background-color: var(--bg-color);
+  width: 100%;
+  box-sizing: border-box;
+  z-index: 1;
+  flex-shrink: 0;
+  margin-bottom: -1px; /* 相邻分区边框重叠 1px，避免双线 */
+}
+
+.collapse-header {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-size: 13px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 0;
+  color: var(--text-color);
+  transition: background-color 0.3s;
+}
+
+.collapse-header:hover {
+  background-color: var(--hover-bg);
+}
+
+.collapse-icon {
+  padding-left: 5px;
+  margin-right: 2px;
+  display: flex;
+  align-items: center;
+}
+
+.collapse-icon svg {
+  transition: transform 0.3s;
+}
+
+.collapse-icon-expanded svg {
+  transform: rotate(0deg);
+}
+
+.collapse-content {
+  max-height: 0px;
+  overflow: hidden;
+  transition: max-height 0.3s ease-out;
+}
+
+.collapse-content-expanded {
+  /* 放宽到足以容纳全部内容（填充选项含底部 checkbox 区），避免 overflow:hidden 裁掉 */
+  max-height: 1400px;
+}
+
+/* 折叠图标路径填充（与文本同色） */
+.collapse-icon path.fill {
+  fill: var(--text-color);
+}
+
+/* 展开内容首尾行不外折叠 margin（2026-09-03）：展开态无 overflow:hidden，
+   首/末 .row-between 的 10px 外边距会穿过分区盒折叠到盒外，露出面板深色底；
+   收掉后分区背景直接包住首尾行。 */
+.collapse-content-expanded .row-between:first-child {
+  margin-top: 0;
+}
+
+.collapse-content-expanded .row-between:last-child {
+  margin-bottom: 0;
+}
+
+/* 分区级拖拽排序（工具箱子面板分区重排）：拖起半透明、落点主题蓝虚线指示插入位置 */
+.collapse-section.dragging {
+  opacity: 0.45;
+}
+
+.collapse-section.drop-target {
+  outline: 2px dashed var(--primary-color);
+  outline-offset: -2px;
+}
+
+/* --------------------------------------------------------------------------
    9. 开关行（sp-switch + 文字标签）
    #app 主面板用 .switch-container（整行列表行，开关右侧对齐）；
    工具箱用 .switch-row（内联容器，类似 .num-input-wrap，装「标签 + 开关」不占整行）。
@@ -765,7 +892,10 @@ sp-action-button {
   align-items: center;
   padding: 5px 10px 5px 10px;
   border-bottom: 1px solid var(--border-color);
-  gap: 8px;
+}
+/* 标签与开关间距用 margin 实现（UXP 不支持 flex gap） */
+.switch-container > .label-static {
+  margin-right: 8px;
 }
 
 sp-switch {
@@ -780,18 +910,11 @@ sp-switch {
   color: var(--disabled-color);
 }
 
-/* 工具箱开关：内联容器，标签 + 开关横向排列、不占整行；标签右侧间距交给 gap */
+/* 工具箱开关：内联容器，标签 + 开关横向排列、不占整行；标签右侧间距用 margin 实现（UXP 不支持 flex gap） */
 .switch-row {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
   flex: 0 0 auto;
-}
-
-/* 开关行内标签不需要 .label-static 自带的 6px 右间距（已由 gap 提供） */
-.switch-container .label-static,
-.switch-row .label-static {
-  margin-right: 0;
 }
 
 /* --------------------------------------------------------------------------
@@ -855,8 +978,10 @@ sp-radio {
   flex: 1;
 }
 
-/* 两列 radio 选项间距（通用值）；描边位置三列由其自身规则覆盖 */
-.subpanel-section sp-radio:not(:last-child) {
+/* 两列 radio 选项间距（通用值，唯一来源）；subpanel-section 与 pattern-fillmode-container
+   共用同一间距，改此处即全跟着改。描边位置三列（.position-radio-group）由其自身规则覆盖。 */
+.subpanel-section sp-radio:not(:last-child),
+.pattern-fillmode-container sp-radio:not(:last-child) {
   margin-right: 110px;
 }
 
@@ -881,16 +1006,19 @@ sp-radio {
   flex-direction: column;
 }
 
-/* 单个「标签 + 勾选框」内联单元：横向排列、间距 6px，不占整行 */
+/* 单个「标签 + 勾选框」内联单元：横向排列、间距 6px，不占整行（UXP 不支持 flex gap，用 margin 实现） */
 .checkbox-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+}
+.checkbox-row > label,
+.checkbox-row > .label-static {
+  margin-right: 6px;
 }
 
 .checkbox-input {
   cursor: pointer;
-  margin-left: 2px;
+  margin-left: 0;
 }
 
 .checkbox-input:disabled {
@@ -906,32 +1034,54 @@ sp-radio {
 }
 
 /* --------------------------------------------------------------------------
-   12. 单行 checkbox（渐变「反相」等行内单选式勾选）
-   唯一类：.checkbox-inline
+   12. 信息通知区域（通用；原分散在 adjustment.css 的 .mask-sync-result-*）
+   唯一基类：.notify；状态修饰类：.notify-ok / .notify-warn / .notify-fail
+   （颜色走 --notify-*- token，四主题一致）。笔刷热键区底部文字通知、
+   蒙版同步结果等「瞬时/常驻状态条」统一走这里，改一处全跟着改。
    -------------------------------------------------------------------------- */
-.checkbox-inline {
-  margin: 10px 0;
+.notify {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  align-items: flex-start;
+  padding: 3px 6px;
+  margin: 2px 0 4px 0;
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 1.35;
+  user-select: none;
 }
 
-.checkbox-inline > div {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.notify-ok {
+  color: var(--notify-ok-fg);
+  background: var(--notify-ok-bg);
+  border: 1px solid var(--notify-ok-border);
 }
 
-.checkbox-inline input[type="checkbox"] {
-  margin: 0;
-  cursor: pointer;
+.notify-warn {
+  color: var(--notify-warn-fg);
+  background: var(--notify-warn-bg);
+  border: 1px solid var(--notify-warn-border);
 }
 
-.checkbox-inline label {
-  color: var(--text-color);
-  cursor: pointer;
-  font-size: 12px;
+.notify-fail {
+  color: var(--notify-fail-fg);
+  background: var(--notify-fail-bg);
+  border: 1px solid var(--notify-fail-border);
 }
+
+/* 通知内的小图标（● 等）与正文（自动换行） */
+.notify-icon {
+  flex: none;
+  margin-right: 5px;
+  font-size: 8px;
+  line-height: 1.6;
+}
+
+.notify-text {
+  word-break: break-all;
+}
+
+/* 原 .checkbox-inline（渐变「反相」行内勾选）已并入 .checkbox-row（见 11），
+   2026-09-03 删除。 */
 
 /* --------------------------------------------------------------------------
    13. 滑块拖拽期间的光标锁定（class 由 utils/dragCursor.ts 加到 document.body）。

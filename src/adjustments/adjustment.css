@@ -14,7 +14,7 @@
 }
 
 /* 授权/试用状态提示样式。
-   ⚠️ .subpanel 是 flex 列 + overflow-y:auto，默认 flex-shrink:1 会让本卡片在
+   ⚠️ .panel（工具箱根外壳）是 flex 列 + overflow-y:auto，默认 flex-shrink:1 会让本卡片在
    下方分区展开、内容超出高度时被纵向压缩到只剩文字高度。
    flex:none（= flex:0 0 auto）+ min-height 锁定 30px，保证任何展开组合下都不被压缩。
    ⚠️ 不要指望 z-index 让它浮在锁定遮罩之上：遮罩是 position:fixed，
@@ -67,7 +67,7 @@
    绝不要把卡片渲染进本遮罩内部：fixed 遮罩的包含块比普通内容区宽（不扣滚动条），
    卡片进遮罩后右缘会整体右移、被滚动条压住，margin/width 都补不回来（实测）。
 
-   position:fixed 而非 absolute：absolute 会随 .subpanel 的滚动一起滚动。
+   position:fixed 而非 absolute：absolute 会随 .panel 的滚动一起滚动。
 
    遮罩背景色统一由 theme.ts 定义（不透明度恒定 0.80，按主题调颜色深浅），
    此处不再写 background-color，避免组件/样式表顺序导致覆盖或 var() 解析失效。 */
@@ -131,7 +131,8 @@
   text-overflow: ellipsis;
 }
 
-.subpanel {
+/* 绘画工具箱根容器（原 .subpanel，现统一为父面板外壳 .panel，与 APP 主面板滚动区共用一套外壳） */
+.panel {
   width: 100%;
   height: 100%;
   max-height: 100%;
@@ -146,7 +147,7 @@
 }
 
 /* ↳ 工具箱与 4 个子面板的外壳滚动条（::-webkit-scrollbar thumb/track）已统一收口到 common.css，
-   覆盖 .subpanel / .subpanel-fill */
+   覆盖 .panel / .subpanel */
 
 /* 分区容器 */
 .adjustment-section {
@@ -167,10 +168,9 @@
      此处不再留副本。 */
 
   /* ↳ 通用按钮样式（.action-button 及其 .auto/.compact/.disabled 变体）已统一收口到 common.css */
-.hotkey-icon-group {
-  display: flex;
-  align-items: center;
-  flex: 0 0 auto;
+/* ↳ 笔刷热键录制区图标组已统一收口为 common.css 的 .icon-button-group（右对齐 flex）。
+   此处只补工具箱专属的 4px 左间距。 */
+.icon-button-group {
   margin-left: 4px;
 }
 
@@ -370,8 +370,10 @@
      .slider-text 基础标签组提供
      （字号/颜色/nowrap/flex:none 内容宽度），原 50px/60px 固定 flex-basis 覆盖已删。 */
 
-/* RangeSlider 在调整面板中的适配（替代 PS 27.9 后失效的原生 range） */
-.slider-stack .slider-track {
+/* RangeSlider 在调整面板中的适配（替代 PS 27.9 后失效的原生 range）。
+   ↳ 原 .slider-stack 包裹层已废弃（直接去掉 TSX 包裹 div），这里改用 #pixeladjustment
+   作用域锁定工具箱内的行内滑块，不影响 #app 下的子面板滑块。 */
+#pixeladjustment .slider-track {
   display: block;
   position: relative;
   flex: 1 1 auto;
@@ -390,7 +392,10 @@
   align-items: center;
   flex: 1 1 auto;
   min-width: 0;
-  gap: 3px;
+}
+/* 子项间距用 margin 实现（UXP 不支持 flex gap） */
+.unit-container > *:not(:first-child) {
+  margin-left: 3px;
 }
 
 /* ↳ 工具箱数字输入已统一收口到 common.css：.num-input-row 裁剪容器（含 :focus-within）
@@ -438,57 +443,10 @@
   margin-right: 6px;
 }
 
-.adjust-expand-section {
-  background-color: var(--bg-color);
-  width: 100%;
-  box-sizing: border-box;
-  z-index: 1;
-  flex-shrink: 0; /* 防止子元素被压缩导致重叠 */
-}
-
-.adjust-expand-header {
-  display: flex;
-  align-items: center;
-  cursor: pointer;
-  font-size: 13px;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 10px 0;
-  color: var(--text-color);
-  transition: background-color 0.3s;
-}
-.adjust-expand-header:hover {
-  background-color: var(--hover-bg);
-}
-.adjust-expand-icon {
-  padding-left: 5px;
-  margin-right: 2px;
-  display: flex;
-  align-items: center;
-}
-.adjust-expand-icon svg {
-  transition: transform 0.3s;
-}
-.adjust-expand-icon-expanded svg {
-  transform: rotate(0deg);
-}
-.adjust-expand-content {
-  width: 100%;
-  box-sizing: border-box;
-}
-.adjust-expand-icon path.fill {
-  fill: var(--text-color);
-}
-
-/* 分区级拖拽排序：拖起的分区半透明、落点分区用主题蓝虚线描边指示插入位置，
-   与笔刷热键记录重排（.hotkey-entry-row.dragging/.drop-target）同一套视觉 */
-.adjust-expand-section.dragging {
-  opacity: 0.45;
-}
-.adjust-expand-section.drop-target {
-  outline: 2px dashed var(--primary-color);
-  outline-offset: -2px;
-}
+/* 折叠分区（工具箱子面板分区）样式已统一收口到 common.css 的
+   .collapse-section / .collapse-header / .collapse-icon / .collapse-content /
+   .collapse-content-expanded（与 APP 主面板「选区/填充选项」同一套），
+   2026-09-03 删除本处副本。 */
 
 /* 模态框遮罩与内容*/
 .adjustment-modal-overlay {
@@ -531,19 +489,18 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-.adjustment-modal-item sp-switch { transform: scale(0.98); cursor: pointer; }
-.adjustment-modal-item-label { color: var(--text-color); font-size: 13px; user-select: none; }
-
-.adjustment-modal-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
   padding-left: 10px;
   padding-right: 10px;
+  margin-bottom: 10px;
 }
+/* 标签与开关间距用 margin 实现（UXP 不支持 flex gap） */
+.adjustment-modal-item-label {
+  color: var(--text-color);
+  font-size: 13px;
+  user-select: none;
+  margin-right: 10px;
+}
+.adjustment-modal-item sp-switch { transform: scale(0.98); cursor: pointer; }
 
 .adjustment-modal-item-label {
   flex: 1;
@@ -555,29 +512,15 @@
   padding-right: 10px;
 }
 
-.adjustment-modal-close {
-  background: transparent;
-  color: var(--text-color);
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-  width: 22px;
-  height: 22px;
-  padding: 0; /* 去掉 padding-top 偏移，让 × 在 flex 下真正竖直居中 */
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  box-sizing: border-box;
-}
-.adjustment-modal-close:hover { background: var(--hover-bg); }
+/* ↳ 关闭按钮已统一收口为 common.css 的 .close-button（子面板与浮动窗口共用），
+   2026-09-03 删除本处 .adjustment-modal-close 副本。 */
 
 /* ================= 蒙版同步分区 ================= */
 /* 蒙版同步分区：不再复用 .adjustment-section（其 border + padding 会在引擎状态条与
    卡片总容器外再套一层可见大容器）。这里只保留内边距/宽度/间距，去掉边框与圆角，
    使引擎状态条与卡片总容器 A 直接陈列在分区内，外面没有额外的可见框 */
 .mask-sync-section {
-  /* 对齐笔刷热键分区：内容通栏（.adjust-expand-content 本身无 padding），
+  /* 对齐笔刷热键分区：内容通栏（.collapse-content 本身无 padding），
      不加左右内边距、不限宽，使状态条与容器 A 与笔刷热键的盒子等宽 */
   width: 100%;
   box-sizing: border-box;
@@ -734,70 +677,8 @@
   flex-shrink: 1;
 }
 
-/* 每任务上次同步结果 */
-.mask-sync-result {
-  display: flex;
-  align-items: flex-start;
-  padding: 3px 6px;
-  margin: 2px 0 4px 0;
-  border-radius: 3px;
-  font-size: 11px;
-  line-height: 1.35;
-  user-select: none;
-}
-
-.mask-sync-result-ok {
-  display: flex;
-  align-items: flex-start;
-  padding: 3px 6px;
-  margin: 2px 0 4px 0;
-  border-radius: 3px;
-  font-size: 11px;
-  line-height: 1.35;
-  user-select: none;
-  color: var(--notify-ok-fg);
-  background: var(--notify-ok-bg);
-  border: 1px solid var(--notify-ok-border);
-}
-
-.mask-sync-result-fail {
-  display: flex;
-  align-items: flex-start;
-  padding: 3px 6px;
-  margin: 2px 0 4px 0;
-  border-radius: 3px;
-  font-size: 11px;
-  line-height: 1.35;
-  user-select: none;
-  color: var(--notify-fail-fg);
-  background: var(--notify-fail-bg);
-  border: 1px solid var(--notify-fail-border);
-}
-
-.mask-sync-result-warn {
-  display: flex;
-  align-items: flex-start;
-  padding: 3px 6px;
-  margin: 2px 0 4px 0;
-  border-radius: 3px;
-  font-size: 11px;
-  line-height: 1.35;
-  user-select: none;
-  color: var(--notify-warn-fg);
-  background: var(--notify-warn-bg);
-  border: 1px solid var(--notify-warn-border);
-}
-
-.mask-sync-result-icon {
-  flex: none;
-  margin-right: 5px;
-  font-size: 8px;
-  line-height: 1.6;
-}
-
-.mask-sync-result-text {
-  word-break: break-all;
-}
+/* 每任务上次同步结果：已收口到 common.css 的 .notify / .notify-ok / .notify-fail /
+   .notify-warn（图标 .notify-icon、正文 .notify-text）；此处不再留副本。 */
 
 /* 同步任务卡片：圆角矩形（背景与笔刷热键快捷键记录 .hotkey-entry-row 同一 --entry-bg，更精致统一） */
 .mask-sync-task {
@@ -910,14 +791,25 @@
    （例：.gradient-setting-item > div{display:flex}），此时 head 作为 flex item
    会退化到「内容宽度」，导致下拉框异常窄，而弹层宽度 = head 宽度，于是展开后的
    选项区也跟着变窄、文字换行看起来像排成两列。显式撑满即可，与 wrap 自身
-   是不是 flex 容器无关。 */
-.mask-sync-select-wrap > .mask-sync-select-head {
+   是不是 flex 容器无关。
+   ⚠️ 三态都要撑满：Select.tsx 里 open/disabled 是「独占类名」，不含
+   .mask-sync-select-head，若只写 .head，展开/禁用瞬间宽度会退化。 */
+.mask-sync-select-wrap > .mask-sync-select-head,
+.mask-sync-select-wrap > .mask-sync-select-head-open,
+.mask-sync-select-wrap > .mask-sync-select-head-disabled {
   flex: 1 1 auto;
   width: 100%;
   min-width: 0;
 }
 
-.mask-sync-select-head {
+/* 头部三态共用同一套基础样式。Select.tsx 中展开态（.head-open）与禁用态
+   （.head-disabled）是「独占类名」，不带基础 .head —— 基础布局若只写在 .head 上，
+   展开/禁用瞬间会退化成 display:block：高度失控、箭头（display:flex 会块级化）
+   掉到第二行、背景/边框丢失，头部重排成两行，看起来像「容器上方多出一行
+   显示选中项的名字」。基础样式必须落在三态共享组，open/disabled 只留修饰差异。 */
+.mask-sync-select-head,
+.mask-sync-select-head-open,
+.mask-sync-select-head-disabled {
   display: flex;
   align-items: center;
   height: 24px;
@@ -935,6 +827,7 @@
   overflow: hidden;
 }
 
+/* 展开态修饰：主色蓝描边（沿用闭合态全部基础样式） */
 .mask-sync-select-head-open {
   border-color: rgb(38, 128, 235);
 }
@@ -1003,7 +896,7 @@
 
 /* 弹出层：由 Select.tsx 用 createPortal 挂到所属面板根容器（#app /
    #pixeladjustment，见 utils/popRoot.ts），直接位于最上层，fixed 定位（相对视口），
-   既不被面板 overflow 裁剪，也不受面板容器层叠上下文（.subpanel-fill z-index:9999）限制。
+   既不被面板 overflow 裁剪，也不受面板容器层叠上下文（.subpanel z-index:9999）限制。
    注意：不能挂 document.body —— UXP 只渲染当前激活的 <uxp-panel> 子树，挂到 body
    的弹层不会被绘制，表现为「下拉打不开」。
    z-index 必须高于渐变/颜色滑块 thumb（10000~10001）与标准 input[type=number]，
@@ -1036,15 +929,25 @@
   will-change: transform;
 }
 
-.mask-sync-select-opt {
+/* 选项行三态共用同一套 flex 行布局/字号/内边距。Select.tsx 中选中态（.opt-sel）与
+   禁用态（.opt-dis）是「独占类名」，不带 .opt —— 若布局只写在 .opt 上，选中行会
+   退化成普通块：font-size 丢失（继承弹层字号、与其它行不一致而显得变小）、
+   margin-left:auto（对勾右对齐）失效（对勾紧跟文字而非行尾）、padding 消失。
+   基础样式必须落在三态共享组，sel/dis 只留修饰差异。 */
+.mask-sync-select-opt,
+.mask-sync-select-opt-sel,
+.mask-sync-select-opt-dis {
   display: flex;
   align-items: center;
   padding: 4px 8px;
   font-size: 12px;
-  color: var(--text-color);
-  cursor: pointer;
   user-select: none;
   white-space: nowrap;
+}
+
+.mask-sync-select-opt {
+  color: var(--text-color);
+  cursor: pointer;
 }
 
 .mask-sync-select-opt:hover {

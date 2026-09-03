@@ -2475,12 +2475,80 @@ const handleSpecialSharpen = async () => {
 };
 
 // 折叠/展开与排序等操作函数
+
+/* --------------------------------------------------------------------------
+   折叠分区的「原生控件兜底」
+   --------------------------------------------------------------------------
+   UXP 官方 Known Issue：input / textarea / sp-textfield 这类可编辑控件是
+   **原生视图**，永远绘制在同面板最上层——z-index、max-height:0+overflow:hidden
+   都裁不住它。因此工具箱分区折叠时走「条件渲染、不进 DOM」，从根上不产生控件。
+
+   但仅靠卸载仍不够稳：部分 UXP 版本在节点被卸载后**残留旧原生视图**（数字停在
+   原坐标，盖住下方内容）。两条兜底：
+   ① 折叠前先把分区内的控件就地置为 visibility:hidden（内联 !important），
+      这样即使视图残留，残留的也是隐藏态（主面板折叠区正是靠这一招压住的，
+      见 input-fix.css）；
+   ② 折叠/展开后轻微滚动 1px 再还原，逼 UXP 重排原生视图坐标。 */
+const NATIVE_WIDGET_SELECTOR = 'input, textarea, sp-textfield, [contenteditable="true"]';
+
+const hideNativeWidgetsIn = (container: Element | null | undefined) => {
+  if (!container) return;
+  let list: NodeListOf<Element>;
+  try {
+    list = container.querySelectorAll(NATIVE_WIDGET_SELECTOR);
+  } catch {
+    return;
+  }
+  for (let i = 0; i < list.length; i++) {
+    const s = (list[i] as HTMLElement).style;
+    s.setProperty('visibility', 'hidden', 'important');
+    s.setProperty('opacity', '0', 'important');
+    s.setProperty('pointer-events', 'none', 'important');
+  }
+};
+
+/** 折叠前隐藏若干分区内的原生控件（分区靠 data-section-id 定位） */
+const hideNativeWidgetsOfSections = (ids: string[]) => {
+  const root = rootRef.current;
+  if (!root) return;
+  ids.forEach(id => {
+    try {
+      hideNativeWidgetsIn(root.querySelector(`[data-section-id="${id}"]`));
+    } catch { /* 选择器异常时忽略，不影响折叠本身 */ }
+  });
+};
+
+/** 折叠/展开后强制 UXP 重排原生视图：滚动 1px 再还原（无溢出时跳过，避免抖动） */
+const resyncNativeWidgets = () => {
+  const nudge = () => {
+    const el = rootRef.current ?? document.getElementById('pixeladjustment');
+    if (!el) return;
+    const max = el.scrollHeight - el.clientHeight;
+    if (max <= 0) return;
+    const t = el.scrollTop;
+    el.scrollTop = t < max ? t + 1 : Math.max(0, t - 1);
+    const restore = () => { el.scrollTop = t; };
+    // rAF 在 UXP 下可用但不保险（项目里其它位置也做了 typeof 守卫），缺失时退化为同步还原
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(restore);
+    else restore();
+  };
+  // 必须等 React 提交完再量：同步调用量到的是旧布局，滚动兜底会失效
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(nudge);
+  else nudge();
+};
+
 const toggleSectionCollapse = (id: string) => {
+  const target = sections.find(s => s.id === id);
+  // 即将折叠（当前是展开态）→ 先隐藏原生控件，再让 React 卸载
+  if (target && !target.isCollapsed) hideNativeWidgetsOfSections([id]);
   setSections(prev => prev.map(s => s.id === id ? { ...s, isCollapsed: !s.isCollapsed } : s));
+  resyncNativeWidgets();
 };
 
 const toggleAllSections = (expanded: boolean) => {
+  if (!expanded) hideNativeWidgetsOfSections(sections.map(s => s.id));
   setSections(prev => prev.map(s => ({ ...s, isCollapsed: !expanded })));
+  resyncNativeWidgets();
 };
 
 const resetSectionOrder = () => {
@@ -2489,7 +2557,11 @@ const resetSectionOrder = () => {
 };
 
 const toggleSectionVisibility = (id: string) => {
+  const target = sections.find(s => s.id === id);
+  // 即将隐藏该分区 → 同样先隐藏其原生控件
+  if (target && target.isVisible) hideNativeWidgetsOfSections([id]);
   setSections(prev => prev.map(s => s.id === id ? { ...s, isVisible: !s.isVisible } : s));
+  resyncNativeWidgets();
 };
 
 
@@ -2600,7 +2672,7 @@ const renderDetailAdjustContent = () => (
     </div>
 
     {!usePowerfulMode && (
-      <div className="slider-stack">
+      <>
         <div className="row-between">
           <div className={sliderLabelClass('radius', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'radius', radius)} title={helpTexts.adjustment.radius}>半径</div>
           <div className="unit-container">
@@ -2617,14 +2689,13 @@ const renderDetailAdjustContent = () => (
             <div className="num-unit">级</div>
           </div>
         </div>
-      </div>
+      </>
     )}
 
     <div className="adjustment-divider"></div>
 
     <div role="button" tabIndex={0} className="action-button" onClick={handleGradientModify} title={helpTexts.adjustment.gradientModify}>梯度修改</div>
 
-    <div className="slider-stack">
       <div className="row-between">
         <div className={sliderLabelClass('gradientRelaxStrength', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'gradientRelaxStrength', gradientRelaxStrength)} title={helpTexts.adjustment.gradientRelax}>程度</div>
         <div className="unit-container">
@@ -2633,13 +2704,11 @@ const renderDetailAdjustContent = () => (
           <div className="num-unit">级</div>
         </div>
       </div>
-    </div>
 
     <div className="adjustment-divider"></div>
 
     <div role="button" tabIndex={0} className="action-button" onClick={handleSpecialSharpen} title={helpTexts.adjustment.specialSharpen}>特殊锐化</div>
 
-    <div className="slider-stack">
       <div className="row-between">
         <div className={sliderLabelClass('specialSharpenStrength', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialSharpenStrength', specialSharpenStrength)} title={helpTexts.adjustment.specialSharpenStrength}>强度</div>
         <div className="unit-container">
@@ -2648,13 +2717,11 @@ const renderDetailAdjustContent = () => (
           <div className="num-unit">级</div>
         </div>
       </div>
-    </div>
 
     <div className="adjustment-divider"></div>
 
     <div role="button" tabIndex={0} className="action-button" onClick={handleHighFrequencyEnhancement} title={helpTexts.adjustment.highFreq}>高频增强</div>
 
-    <div className="slider-stack">
       <div className="row-between">
         <div className={sliderLabelClass('highFreqIntensity', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'highFreqIntensity', highFreqIntensity)} title={helpTexts.adjustment.highFreqIntensity}>强度</div>
         <div className="unit-container">
@@ -2671,7 +2738,6 @@ const renderDetailAdjustContent = () => (
           <div className="num-unit">级</div>
         </div>
       </div>
-    </div>
   </div>
 );
 
@@ -2679,7 +2745,6 @@ const renderEdgeProcessingContent = () => (
   <div className="adjustment-section">
     <div role="button" tabIndex={0} className="action-button" onClick={handleSmartEdgeSmooth} title={helpTexts.adjustment.edgeSmooth}>边缘平滑</div>
 
-    <div className="slider-stack">
       <div className="row-between">
         {/* 下拉行：标签不可拖拽，光标保持 default（与可拖拽滑块标签区分） */}
         <div className="label-static" title={helpTexts.adjustment.edgeSmoothMode}>平滑模式</div>
@@ -2734,7 +2799,6 @@ const renderEdgeProcessingContent = () => (
 
         </>
       )}
-    </div>
 
     <div className="adjustment-divider"></div>
 
@@ -2915,9 +2979,9 @@ const renderMaskSyncContent = () => (
           const st = formatSyncState(task);
           if (!st) return null;
           return (
-            <div className={st.ok ? 'mask-sync-result-ok' : 'mask-sync-result-fail'}>
-              {st.ok && <span className="mask-sync-result-icon">●</span>}
-              <span className="mask-sync-result-text">{st.text}</span>
+            <div className={st.ok ? 'notify-ok' : 'notify-fail'}>
+              {st.ok && <span className="notify-icon">●</span>}
+              <span className="notify-text">{st.text}</span>
             </div>
           );
         })()}
@@ -3057,7 +3121,6 @@ const renderQuickActionContent = () => (
     </div>
 
     {useWeightedAverage && (
-      <div className="slider-stack">
         <div className="row-between">
           <div className={sliderLabelClass('weightedIntensity', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'weightedIntensity', weightedIntensity)} title={helpTexts.adjustment.weightedIntensity}>强度</div>
           <div className="unit-container">
@@ -3066,7 +3129,6 @@ const renderQuickActionContent = () => (
             <div className="num-unit">级</div>
           </div>
         </div>
-      </div>
     )}
 
     <div className="adjustment-divider"></div>
@@ -3086,7 +3148,6 @@ const renderQuickActionContent = () => (
 
     <div role="button" tabIndex={0} className="action-button" onClick={handleBlockColorPatchLayered} title={helpTexts.adjustment.patchLayered}>分层补色</div>
 
-    <div className="slider-stack">
       <div className="row-between">
         {/* 下拉行：标签不可拖拽，光标保持 default（原为 pointer，语义错误） */}
         <div className="label-static" title={helpTexts.adjustment.lineReference}>线稿参考</div>
@@ -3108,17 +3169,15 @@ const renderQuickActionContent = () => (
           />
         </div>
       </div>
-    </div>
 
     <div className="adjustment-divider"></div>
 
     <div className="row-between">
       <div role="button" tabIndex={0} className="action-button" onClick={() => handleSpecialWoodcut(false)} title={helpTexts.adjustment.woodcut}>特殊木刻</div>
 
-      <div role="button" tabIndex={0} className="action-button-lv2" onClick={resetSpecialWoodcutParams} title={helpTexts.adjustment.woodcutReset}>重置</div>
+      <div role="button" tabIndex={0} className="action-button-2" onClick={resetSpecialWoodcutParams} title={helpTexts.adjustment.woodcutReset}>重置</div>
     </div>
 
-    <div className="slider-stack">
       <div className="row-between">
         <div className={sliderLabelClass('specialWoodcutLevels', 'label-3')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialWoodcutLevels', specialWoodcutLevels)} title={helpTexts.adjustment.woodcutLevels}>色阶数</div>
         <div className="unit-container">
@@ -3145,7 +3204,6 @@ const renderQuickActionContent = () => (
           <div className="num-unit">%</div>
         </div>
       </div>
-    </div>
     
     <div className="switch-row">
         <label
@@ -3179,12 +3237,16 @@ const renderSectionContent = (sectionId: string) => {
 };
 
 const renderSection = (section: SectionConfig) => (
-  <div key={section.id} className={
-    'adjust-expand-section' +
+  /* data-section-id：折叠前按 id 定位分区，用于先隐藏分区内原生控件（见
+     hideNativeWidgetsOfSections），避免 UXP 残留旧原生视图。 */
+  <div key={section.id}
+       data-section-id={section.id}
+       className={
+    'collapse-section' +
     (dragSourceId === section.id ? ' dragging' : '') +
     (dragOverId === section.id && dragSourceId !== section.id ? ' drop-target' : '')
   }>
-    <div className="adjust-expand-header"
+    <div className="collapse-header"
          draggable
          onDragStart={(e)=>handleDragStart(e, section.id)}
          onDragOver={(e)=>handleDragOver(e, section.id)}
@@ -3193,13 +3255,18 @@ const renderSection = (section: SectionConfig) => (
          onClick={()=>toggleSectionCollapse(section.id)}
          title={section.id === 'brushHotkey' ? helpTexts.hotkey.header : undefined}
     >
-      <div className={section.isCollapsed ? 'adjust-expand-icon' : 'adjust-expand-icon-expanded'}>
+      <div className={section.isCollapsed ? 'collapse-icon' : 'collapse-icon-expanded'}>
         <ExpandIcon expanded={!section.isCollapsed} />
       </div>
       <div>{section.title}</div>
     </div>
+    {/* 工具箱分区：折叠态内容「条件渲染、不进 DOM」。
+        ⚠️ 不能像 APP 那样常驻 + max-height:0 裁剪——UXP 官方 Known Issue：
+        input 是原生视图，永远绘制在同面板最上层，z-index/overflow/max-height
+        都压不住，折叠后数字会浮到分区外。APP 主面板无原生数字直排层叠问题，
+        两套机制并存（APP 用 collapse-content/-expanded 切换，工具箱用条件渲染）。 */}
     {!section.isCollapsed && (
-      <div className="adjust-expand-content">
+      <div className="collapse-content-expanded">
         {renderSectionContent(section.id)}
       </div>
     )}
@@ -3226,7 +3293,7 @@ const bannerNode = (isTrial || (!isLicensed && !isTrial && trialDaysRemaining ==
 ) : null;
 
 return (
-  <div className="subpanel" ref={rootRef}>
+  <div className="panel" ref={rootRef}>
     {/*
      * 激活提示卡片 + 锁定遮罩（2026-08-31 二次定稿）：
      * ⚠️ 卡片必须永远留在普通文档流里渲染，绝不能塞进 position:fixed 的遮罩内部。
@@ -3263,7 +3330,7 @@ return (
         <div className="adjustment-modal-content" onClick={(e) => e.stopPropagation()}>
           <div className="adjustment-modal-header">
             <span>隐藏/显示分区</span>
-            <div role="button" tabIndex={0} className="adjustment-modal-close" onClick={() => setShowVisibilityPanel(false)}>×</div>
+            <div role="button" tabIndex={0} className="close-button" onClick={() => setShowVisibilityPanel(false)}>×</div>
           </div>
           <div className="adjustment-modal-list">
             {sections.sort((a,b)=>a.order-b.order).map(sec => (

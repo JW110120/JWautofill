@@ -138,23 +138,18 @@
     color: var(--black-text-);
   }
   
-  .pattern-icon-container {
+  /* ↳ 预设区底部图标栏：通用 .icon-button-group--bar（common.css）的「栏」修饰类，
+     此处只补图案面板专属的绝对定位（贴底栏）。内部图标组用 .icon-button-group。 */
+  .icon-button-group--bar {
     position: absolute;
     height: 30px;
     bottom: 0;
     right: 0;
     left: 0;
-    border-top: 1px solid var(--border-color);
-    background-color: var(--bg-color);
-    background-clip: padding-box;
     z-index: 3;
   }
   
-  .icon-group {
-    display: flex;
-    justify-content: flex-end;
-    align-items: center;
-  }
+  /* ↳ 内部图标组已统一收口为 common.css 的 .icon-button-group（右对齐 flex） */
   
   .pattern-settings-area {
     position: relative;
@@ -192,8 +187,9 @@
   }
 
   /* 单个滑块整体容器：parameter-collection + 滑块本体（套娃第二层）。
-     必须覆盖上方 .pattern-setting-item div{} 通配的横向 flex，否则滑块与参数行会被排成一行。 */
-  .pattern-setting-item .pattern-entire-slider {
+     必须覆盖上方 .pattern-setting-item div{} 通配的横向 flex，否则滑块与参数行会被排成一行。
+     ↳ .pattern-entire-slider 已并入 common.css 的 .slider-block（单行滑块块），2026-09-03 改名。 */
+  .pattern-setting-item .slider-block {
     display: flex;
     flex-direction: column;
     width: 100%;
@@ -223,10 +219,8 @@
   .pattern-fillmode-container sp-radio-group {
     margin: -8px 0 0 0px;
   }
-
-  .pattern-fillmode-container sp-radio:not(:last-child) {
-    margin-right: 105px;
-  }
+  /* ↳ 两列 radio 选项间距已统一收口到 common.css（.subpanel-section 与
+     .pattern-fillmode-container 共用 110px，单一来源），本面板不再保留 105px 漂移。 */
   /* ↳ Checkbox 区域已全部由 common.css 通用 checkbox 规则提供（单一来源）：
      - .pattern-checkbox-container 已并入 common 的 .checkbox-options
        （padding:10 / height / border-top / space-between）

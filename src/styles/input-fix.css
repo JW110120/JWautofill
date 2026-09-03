@@ -1,4 +1,7 @@
-/* 修复input number字段的z-index问题 - 限定到主面板作用域（仅主面板规则） */
+/* 原生可编辑控件（input / textarea / sp-textfield）的层叠穿透修复
+   --------------------------------------------------------------------------
+   作用域：#app 主面板（滑块容器 / 折叠区 / 次级面板）为主，
+   折叠区规则同时覆盖 #pixeladjustment 工具箱（两面板折叠区同一套，见下）。 */
 
 /* 主面板（#app）中的input number字段应该有较低的z-index */
 #app input[type="number"] {
@@ -7,25 +10,49 @@
 }
 
 /* 当次级面板打开时，主面板的input应该被遮盖 */
-.subpanel-fill {
+.subpanel {
     z-index: 9999 !important;
 }
 
-/* 授权对话框打开时，彻底隐藏主面板内所有数字输入，避免穿透和抢层级 */
-body.license-dialog-open #app .slider-container input[type="number"],
-body.license-dialog-open #app .expand-content input[type="number"],
-body.license-dialog-open #app .expand-content-expanded input[type="number"],
-body.license-dialog-open #app .subpanel .row-between input[type="number"] {
+/* --------------------------------------------------------------------------
+   原生可编辑控件（input / textarea / sp-textfield）在弹层打开时的统一隐藏
+   --------------------------------------------------------------------------
+   UXP 官方 Known Issue：可编辑控件是**原生视图**，永远绘制在同面板最上层，
+   z-index / transform / 换挂载点都压不住，只能隐藏。
+   下面两组「面板级弹层」沿用同一套做法：保留布局占位（不用 display:none），
+   用 visibility + opacity + pointer-events 三件套彻底隐形。 */
+
+/* 授权对话框打开时，彻底隐藏主面板内所有可编辑控件，避免穿透和抢层级 */
+body.license-dialog-open #app .slider-container input,
+body.license-dialog-open #app .slider-container textarea,
+body.license-dialog-open #app .slider-container sp-textfield,
+body.license-dialog-open #app .collapse-content input,
+body.license-dialog-open #app .collapse-content textarea,
+body.license-dialog-open #app .collapse-content sp-textfield,
+body.license-dialog-open #app .collapse-content-expanded input,
+body.license-dialog-open #app .collapse-content-expanded textarea,
+body.license-dialog-open #app .collapse-content-expanded sp-textfield,
+body.license-dialog-open #app .subpanel .row-between input,
+body.license-dialog-open #app .subpanel .row-between textarea,
+body.license-dialog-open #app .subpanel .row-between sp-textfield {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
 }
 
-/* 当任何次级面板打开时，隐藏主面板中的所有input number字段 */
-body.secondary-panel-open #app .slider-container input[type="number"],
-body.secondary-panel-open #app .expand-content input[type="number"],
-body.secondary-panel-open #app .expand-content-expanded input[type="number"],
-body.secondary-panel-open #app .subpanel .row-between input[type="number"] {
+/* 当任何次级面板打开时，隐藏主面板中的所有可编辑控件 */
+body.secondary-panel-open #app .slider-container input,
+body.secondary-panel-open #app .slider-container textarea,
+body.secondary-panel-open #app .slider-container sp-textfield,
+body.secondary-panel-open #app .collapse-content input,
+body.secondary-panel-open #app .collapse-content textarea,
+body.secondary-panel-open #app .collapse-content sp-textfield,
+body.secondary-panel-open #app .collapse-content-expanded input,
+body.secondary-panel-open #app .collapse-content-expanded textarea,
+body.secondary-panel-open #app .collapse-content-expanded sp-textfield,
+body.secondary-panel-open #app .subpanel .row-between input,
+body.secondary-panel-open #app .subpanel .row-between textarea,
+body.secondary-panel-open #app .subpanel .row-between sp-textfield {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
@@ -39,30 +66,48 @@ body.secondary-panel-open #app .subpanel .row-between input[type="number"] {
    样式表 !important 判在内联 !important 之上，导致次级面板（渐变/图案/
    描边/颜色）的下拉菜单下方数字永远压不住、浮在菜单上。去掉 !important
    后，内联 important 正常胜过本普通声明，遮挡生效且不引起布局位移。 */
-.subpanel-fill input[type="number"] {
+.subpanel input[type="number"] {
     visibility: visible;
     opacity: 1;
     pointer-events: auto;
 }
 
-/* 确保主面板折叠状态下的input不显示 */
-#app .expand-content input[type="number"] {
+/* --------------------------------------------------------------------------
+   折叠区（.collapse-content）内的原生控件——两个面板统一隐藏
+   --------------------------------------------------------------------------
+   折叠区靠 `max-height:0 + overflow:hidden` 收起内容，但 UXP 下这条裁剪
+   **压不住原生控件**：原生视图仍按布局坐标绘制，数字会浮到分区外面、盖住
+   下方内容（主面板与工具箱同病）。所以对折叠容器内的控件必须显式隐藏。
+
+   为什么这里不加 !important：`.collapse-content-expanded` 的“恢复可见”规则
+   与它同特异性但写在后面，展开态自然胜出；同时 popOverlay 的内联
+   `visibility:hidden !important` 也能正常盖住这里，不需要额外提权。
+   覆盖全部可编辑控件类型，不只 number（textarea / sp-textfield 同理会穿透）。 */
+#app .collapse-content input,
+#app .collapse-content textarea,
+#app .collapse-content sp-textfield,
+#pixeladjustment .collapse-content input,
+#pixeladjustment .collapse-content textarea,
+#pixeladjustment .collapse-content sp-textfield {
     visibility: hidden;
     opacity: 0;
     pointer-events: none;
 }
 
-/* 主面板展开状态下的input正常显示，但当次级面板打开时仍要隐藏 */
-#app .expand-content-expanded input[type="number"] {
+/* --------------------------------------------------------------------------
+   主面板展开状态下的可编辑控件正常显示。
+   注：授权弹窗 / 次级面板打开时的隐藏由上方两组 body.* !important 规则负责，
+   它们特异性更高且带 !important，能压过这里的“恢复可见”，此处不再重复。
+   -------------------------------------------------------------------------- */
+#app .collapse-content-expanded input,
+#app .collapse-content-expanded textarea,
+#app .collapse-content-expanded sp-textfield {
     visibility: visible;
     opacity: 1;
     pointer-events: auto;
     transition: opacity 0.3s ease;
 }
 
-/* 当次级面板打开时，即使是展开状态的选区选项input也要隐藏 */
-body.secondary-panel-open #app .expand-content-expanded input[type="number"] {
-    visibility: hidden !important;
-    opacity: 0 !important;
-    pointer-events: none !important;
-}
+/* 主面板展开状态下的input正常显示，但当次级面板打开时仍要隐藏。
+   注：授权弹窗 / 次级面板打开时的隐藏由上方两组 body.* !important 规则负责，
+   它们特异性更高且带 !important，能压过这里的“恢复可见”，此处不再重复。 */

@@ -40,6 +40,49 @@ import { helpTexts } from './constants/helpTexts';
 const { executeAsModal } = core;
 const { batchPlay } = action;
 
+/* --------------------------------------------------------------------------
+   UXP 原生控件收口（与绘画工具箱 AdjustmentPanel 同一套机制）
+   原生 input / textarea / sp-textfield 永远绘制在同面板最上层，z-index /
+   overflow / max-height 都压不住，只能隐藏。折叠前先就地写内联
+   visibility/opacity/pointer-events !important，再让 React 卸载内容，
+   即便 UXP 残留旧原生视图，残留的也是隐藏态；折叠/展开后再轻滚 1px 逼重排。
+   -------------------------------------------------------------------------- */
+const NATIVE_WIDGET_SELECTOR = 'input, textarea, sp-textfield, [contenteditable="true"]';
+
+const hideNativeWidgetsIn = (container: Element | null | undefined) => {
+  if (!container) return;
+  let list: NodeListOf<Element>;
+  try { list = container.querySelectorAll(NATIVE_WIDGET_SELECTOR); } catch { return; }
+  for (let i = 0; i < list.length; i++) {
+    const s = (list[i] as HTMLElement).style;
+    s.setProperty('visibility', 'hidden', 'important');
+    s.setProperty('opacity', '0', 'important');
+    s.setProperty('pointer-events', 'none', 'important');
+  }
+};
+
+const hideNativeWidgetsOfSections = (root: HTMLElement | null, ids: string[]) => {
+  if (!root) return;
+  ids.forEach(id => {
+    try { hideNativeWidgetsIn(root.querySelector(`[data-section-id="${id}"]`)); } catch { /* 选择器异常忽略 */ }
+  });
+};
+
+const resyncNativeWidgets = (root: HTMLElement | null) => {
+  const nudge = () => {
+    if (!root) return;
+    const max = root.scrollHeight - root.clientHeight;
+    if (max <= 0) return; /* 无溢出时跳过，避免抖动 */
+    const t = root.scrollTop;
+    root.scrollTop = t < max ? t + 1 : Math.max(0, t - 1);
+    const restore = () => { root.scrollTop = t; };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(restore);
+    else restore();
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(nudge);
+  else nudge();
+};
+
 interface AppProps {}
 
 class App extends React.Component<AppProps, AppState> {
@@ -55,6 +98,8 @@ class App extends React.Component<AppProps, AppState> {
     // 「有变更即保存」逻辑——用默认值整体覆盖 panel-state.json，把用户已保存的
     // 自动关开关/自动切套索等选项冲掉（表现为这些开关重启后不持久化）。加载完成前禁止保存。
     private panelStateLoaded = false;
+    // 主面板滚动容器（挂 .panel 类）引用，用于折叠/展开后逼 UXP 重排原生控件坐标
+    private panelRef = React.createRef<HTMLDivElement>();
 
     constructor(props: AppProps) {
         super(props);
@@ -397,9 +442,13 @@ class App extends React.Component<AppProps, AppState> {
 
     // 新增方法
     toggleSelectionOptions() {
+        const root = this.panelRef.current;
+        // 即将折叠（当前展开）→ 先隐藏分区内原生控件，再让 React 卸载内容
+        if (this.state.isSelectionOptionsExpanded) hideNativeWidgetsOfSections(root, ['selectionOptions']);
         this.setState(prevState => ({
             isSelectionOptionsExpanded: !prevState.isSelectionOptionsExpanded
         }));
+        resyncNativeWidgets(root);
     }
 
     handleSelectionSmoothChange(value: number) {
@@ -430,10 +479,14 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     toggleExpand() {
+        const root = this.panelRef.current;
+        // 即将折叠（当前展开）→ 先隐藏分区内原生控件，再让 React 卸载内容
+        if (this.state.isExpanded) hideNativeWidgetsOfSections(root, ['fillOptions']);
         this.setState(prevState => {
             const isExpanded = !prevState.isExpanded;
             return { isExpanded };
         });
+        resyncNativeWidgets(root);
     }
 
     toggleStrokeEnabled() {
@@ -1295,10 +1348,10 @@ class App extends React.Component<AppProps, AppState> {
                     onClose={this.closeLicenseDialog}
                 />
                 <div className="selection-fill-container">
-                {/* 滚动区：主面板可滚动内容全部在这里，info 区在其下方的文档流底部。
-                    滚动内容被本容器裁剪，不会再叠到 info 区上方（UXP 下 fixed 覆盖层
-                    压不住后绘制的原生 number 输入，故 info 区不能用 fixed）。 */}
-                <div className="app-scroll-area">
+                {/* 主面板滚动容器：直接挂 .panel 类（与绘画工具箱父面板同款外壳），
+                    所有分区都放在这里，由 .panel 产生滑动条；4 个子面板是 absolute，
+                    挂在本容器上、不随滚动。 */}
+                <div className="panel" ref={this.panelRef}>
                 <h3 className="main-title" title={helpTexts.selectionFill.panelTitle}>
                     <span className="main-title-text">选区填充2.0</span>                    
                 </h3>
@@ -1334,7 +1387,7 @@ title={helpTexts.selectionFill.blendMode}>
                 </div>
 
                 <div className="slider-container">
-                    <div className="entire-slider">
+                    <div className="slider-block">
                     <div className="row-between"
                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'opacity')}
                         title={helpTexts.selectionFill.opacity}>
@@ -1369,7 +1422,7 @@ title={helpTexts.selectionFill.blendMode}>
                     />
                     </div>
 
-                    <div className="entire-slider">
+                    <div className="slider-block">
                     <div className="row-between"
                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'feather')}
                         title={helpTexts.selectionFill.feather}>
@@ -1404,18 +1457,18 @@ title={helpTexts.selectionFill.blendMode}>
                     />
                     </div>
                 </div>
-                </div>
 
  {/* 新增选区选项区域 */}
-            <div className="expand-section">
-                            <div className="expand-header" onClick={this.toggleSelectionOptions} title={helpTexts.selectionFill.selectionOptionsToggle}>
+            <div className="collapse-section" data-section-id="selectionOptions">
+                            <div className="collapse-header" onClick={this.toggleSelectionOptions} title={helpTexts.selectionFill.selectionOptionsToggle}>
 
-                                <div className={this.state.isSelectionOptionsExpanded ? 'expand-icon-expanded' : 'expand-icon'}>
+                                <div className={this.state.isSelectionOptionsExpanded ? 'collapse-icon-expanded' : 'collapse-icon'}>
                                     <ExpandIcon expanded={this.state.isSelectionOptionsExpanded} />
                                 </div>
                                 <span>选区选项</span>
                             </div>
-                            <div className={this.state.isSelectionOptionsExpanded ? 'expand-content-expanded' : 'expand-content'}>
+                            {this.state.isSelectionOptionsExpanded && (
+                            <div className="collapse-content-expanded">
                                 <div className="row-between">
                                     <label
                                         className="label-drag"
@@ -1510,17 +1563,19 @@ title={helpTexts.selectionFill.selectionExpand}>
                                     </div>
                                     </div>
                             </div>
+                            )}
                         </div>
 
 
-            <div className="expand-section">
-                    <div className="expand-header" onClick={this.toggleExpand} title={helpTexts.selectionFill.fillOptionsToggle}>
-                        <div className={this.state.isExpanded ? 'expand-icon-expanded' : 'expand-icon'}>
+            <div className="collapse-section" data-section-id="fillOptions">
+                    <div className="collapse-header" onClick={this.toggleExpand} title={helpTexts.selectionFill.fillOptionsToggle}>
+                        <div className={this.state.isExpanded ? 'collapse-icon-expanded' : 'collapse-icon'}>
                             <ExpandIcon expanded={this.state.isExpanded} />
                         </div>
                         <span>填充选项</span>
                     </div>
-                    <div className={this.state.isExpanded ? 'expand-content-expanded' : 'expand-content'}>
+                    {this.state.isExpanded && (
+                    <div className="collapse-content-expanded">
 
 
                         {/* 新建图层开关 */}
@@ -1773,12 +1828,15 @@ title={helpTexts.selectionFill.gradientDetail}>
                                 </div>
                         </div>
                     </div>
-                </div>
-                </div>
+                    )}
 
-                {/* info 区：滚动区之外的文档流底栏（不再用 fixed 覆盖层） */}
+                {/* info 条：滚动内容的最后一个元素（不再固定在面板底部），
+                    滚到底才出现；父/子容器因此都铺满 100%，不再给底部留 20px。 */}
+                </div>
                 <div className="info-plane">
                     <span className="copyright">Copyright © listen2me (JW)</span>
+                </div>
+                </div>
                 </div>
 
             {/* 颜色设置面板 */}

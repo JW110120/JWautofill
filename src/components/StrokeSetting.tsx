@@ -98,9 +98,9 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="subpanel-fill">
-        <div className="subpanel-header">
-          <h3>描边设置</h3>
+    <div className="subpanel">
+        <div className="subpanel-title-1">
+          <div className="subpanel-title-1-text">描边设置</div>
           <div className="close-button" role="button" tabIndex={0} onClick={() => {
                     // 触发所有回调以确保状态更新
                     onWidthChange(width);

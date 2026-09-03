@@ -515,7 +515,7 @@ export default function BrushHotkeySection() {
         {/* 三个图标共用一个固定宽度大容器：下拉自由伸缩，图标组恒为 3×28px，
             录制键恒在最右格；停止键出现/消失在预留的中间格子内，
             因此刷新与录制都不会位移，三者间距也始终一致 */}
-        <div className="hotkey-icon-group">
+        <div className="icon-button-group">
           <div className="hotkey-icon-cell">
             {usePicker && (
               <div
@@ -628,9 +628,9 @@ export default function BrushHotkeySection() {
         </div>
       </div>
 
-      {/* 底部文字通知：与「蒙版同步」的 .mask-sync-result-ok 同一套样式（ok 绿 / warn 橙） */}
+      {/* 底部文字通知：已收口到 common.css 的 .notify / .notify-ok / .notify-warn（ok 绿 / warn 橙） */}
       {message && (
-        <div className={daemonConnected ? 'mask-sync-result-ok' : 'mask-sync-result-warn'}>
+        <div className={daemonConnected ? 'notify-ok' : 'notify-warn'}>
           {message}
         </div>
       )}

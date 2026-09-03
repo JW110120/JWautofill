@@ -1267,9 +1267,9 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
 
 
     return (
-        <div className="subpanel-fill">
-            <div className="subpanel-header">
-                <h3>渐变设置</h3>
+        <div className="subpanel">
+            <div className="subpanel-title-1">
+                <div className="subpanel-title-1-text">渐变设置</div>
                 <div className="close-button" role="button" tabIndex={0} onClick={onClose}>×</div>
             </div>
 
@@ -1310,8 +1310,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     })}
                 </div>
                 
-                <div className="gradient-icon-container">
-                    <div className="icon-group">
+                <div className="icon-button-group--bar">
+                    <div className="icon-button-group">
                         <IconButton title={helpTexts.gradient.addPreset} onClick={handleAddPreset}>
                             <AddIcon className="icon-14" />
                         </IconButton>
@@ -1678,7 +1678,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     </div>
                 </div>
 
-                <div className="checkbox-inline">
+                <div className="checkbox-row">
                     <div>
                         <label 
                             htmlFor="reverseCheckbox"

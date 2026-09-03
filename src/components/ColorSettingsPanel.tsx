@@ -202,8 +202,7 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
         };
 
         return (
-            <div className="subpanel-slider-item">
-                <div className="slider-stack">
+            <div className="slider-block">
                     <div
                         className="row-between"
                         onMouseDown={(e) => handleLabelMouseDown(e, settingKey)}
@@ -236,7 +235,6 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
                         onChange={handleRangeChange}
                         className="slider-input"
                     />
-                </div>
             </div>
         );
     };
@@ -248,9 +246,9 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
 
 
     return (
-        <div className="subpanel-fill">
-            <div className="subpanel-header">
-                <h3>颜色动态设置</h3>
+        <div className="subpanel">
+            <div className="subpanel-title-1">
+                <div className="subpanel-title-1-text">颜色动态设置</div>
                 <div className="close-button" role="button" tabIndex={0} onClick={onClose}>×</div>
             </div>
             

@@ -145,7 +145,9 @@
 
 /* 「预览区居中的灰字提示」样式（渐变与图案面板共用）在 common.css 的 .final-preview-hint */
 
-.gradient-icon-container {
+/* ↳ 预设区底部图标栏：通用 .icon-button-group--bar（common.css）的「栏」修饰类，
+   此处只补梯度面板专属的定位（顶到预设区底部）。内部图标组用 .icon-button-group。 */
+.icon-button-group--bar {
     position: relative;
     /* 不伸缩，保持固有高度 */
     flex: 0 0 auto;
@@ -153,9 +155,6 @@
        即便 .gradient-presets 在 UXP 下未能按 flex:1 撑满，图标栏也能紧贴下沿，
        不会悬在预设列表下方与底栏之间留出空隙。 */
     margin-top: auto;
-    border-top: 1px solid var(--border-color);
-    background-color: var(--bg-color);
-    background-clip: padding-box; /* 新增这一行 */
 }
 
 /* 渐变颜色区域样式 */

@@ -23,7 +23,7 @@ body.visibility-panel-open #pixeladjustment .unit-container input[type="number"]
    z-index / transform / 层级都压不住，否则会浮在遮罩上方。
    做法与主面板（body.license-dialog-open）一致：由 AdjustmentPanel 在锁定态
    给 body 加 .adjustment-lock-open，此处统一隐藏（保留布局占位，不做 display:none）。
-   ⚠️ 必须带 !important：要压过下面 .adjust-expand-content 的 visibility:visible 规则。 */
+   ⚠️ 必须带 !important：要压过下方 .collapse-content-expanded 的 visibility:visible 规则。 */
 body.adjustment-lock-open #pixeladjustment input,
 body.adjustment-lock-open #pixeladjustment textarea,
 body.adjustment-lock-open #pixeladjustment .unit-container input {
@@ -32,9 +32,17 @@ body.adjustment-lock-open #pixeladjustment .unit-container input {
   pointer-events: none !important;
 }
 
-/* 调整面板分区内容：仅展开态才由 React 条件渲染（.adjust-expand-content 只存在于展开态），
-   其中的数字输入常态可见；未激活锁定时由 body.adjustment-lock-open 统一隐藏。 */
-#pixeladjustment .adjust-expand-content input[type="number"] {
+/* 调整面板分区内容：折叠态由 React 条件渲染、不进 DOM（原生 input 压不住，
+   见上），展开态挂 .collapse-content-expanded；其中的可编辑控件常态可见；
+   未激活锁定时由 body.adjustment-lock-open 统一隐藏。
+
+   ⚠️ 这里绝不能加 !important：popOverlay 的遮挡逻辑靠内联
+   visibility:hidden !important 工作，样式表 !important 在 UXP 下会反过来压过它。
+   折叠容器（.collapse-content）的可编辑控件由 input-fix.css 统一隐藏——
+   本文件不再写该规则，两个面板共用同一套（单一来源）。 */
+#pixeladjustment .collapse-content-expanded input,
+#pixeladjustment .collapse-content-expanded textarea,
+#pixeladjustment .collapse-content-expanded sp-textfield {
   visibility: visible;
   opacity: 1;
   pointer-events: auto;

@@ -25,6 +25,11 @@
   align-items: center;
 }
 
+/* 主面板容器：定高普通块级容器（⚠️ 不用 flex 列）。
+   它是 .app-scroll-area 百分比高度的解析基准，必须是块级——flex 子项上再叠
+   height:100% 在 UXP 下会与 flex 伸缩互斗（历史故障：内容截断、无滚动条）。
+   唯一在流内的子项就是 .app-scroll-area；4 个子面板是 absolute，靠本容器的
+   position:relative 定位，不参与文档流、也不随滚动区滚动。 */
 .selection-fill-container {
   width: 250px;
   height: 100%;
@@ -32,58 +37,33 @@
   box-sizing: border-box;
   background-color: var(--bg-color);
   padding: 0;
-  display: flex;
-  flex-direction: column;
   position: relative;
 }
 
-/* 主面板滚动区：可滚动内容全部在此裁剪，info 区在其下方文档流底部。
-   原先 .selection-fill-container 自带 padding:10 + overflow-y:auto，
-   info 区用 fixed 覆盖在底部——UXP 下 fixed 覆盖层压不住后绘制的
-   原生 number 输入，面板缩短时输入会叠到 info 区上（2026-09-03 修复）。 */
-.app-scroll-area {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 10px;
-  box-sizing: border-box;
-  /* 必须是 flex 列（与重构前 .selection-fill-container 一致）：
-     块级布局里 .app-blendmode-container 的 margin-bottom:-12px 会与
-     .slider-container 的 0 上边距发生 margin 折叠（UXP 算作 0），
-     「混合模式行压住滑块卡上缘」的重叠设计失效；flex 项间不折叠，
-     负 margin 直接生效，重叠恢复。 */
+/* APP 主面板滚动容器：直接挂 .panel 类（与绘画工具箱父面板同款外壳，
+   滚动条 / padding / 滚动条样式均由 common.css 的 .panel 单一来源提供），
+   不再单独套 app-scroll-area 这一层无意义的包裹。
+   定高（height:100%）+ flex 列的组合原因：
+   ① height:100% —— 对块级父 .selection-fill-container（其 height:100% 已定高）直接
+      解析，是 UXP 下最稳的定高路径，滚动条因此覆盖整个面板；
+   ② display:flex; flex-direction:column —— 保留「混合模式负 margin 重叠」所需的
+      非折叠布局（块级下 .app-blendmode-container 的 -12px 会与 .slider-container
+      的 0 上边距折叠成 0，重叠失效）；同时 common.css 的 .panel > * { flex-shrink:0 }
+      保证子项（主按钮 / 分区 / 卡片）不被压扁，溢出交给本容器滚动条承载。 */
+.selection-fill-container > .panel {
+  height: 100%;
+  max-height: 100%;
   display: flex;
   flex-direction: column;
 }
 
-/* 次级面板打开时禁止滚动区滚动，避免内容在子面板后方滚动 */
-body.secondary-panel-open #app .app-scroll-area {
+/* 次级面板打开时禁止主面板滚动，避免内容在子面板后方滚动 */
+body.secondary-panel-open #app .panel {
   overflow-y: hidden;
 }
 
-/* 主面板滚动区（#app .app-scroll-area）滚动条：与绘画工具箱同款 10px 圆角滚动条。
-   ⚠️ 4 个子面板（.subpanel-fill）的
-   滚动条已统一收口到 common.css（无作用域，#app 与 #pixeladjustment 下都生效），此处不再重复。 */
-#app .app-scroll-area::-webkit-scrollbar {
-  width: 10px;
-}
-
-#app .app-scroll-area::-webkit-scrollbar-thumb {
-  background-color: var(--scrollbar-thumb);
-  border-radius: 8px;
-  border: 2px solid transparent;
-  background-clip: content-box;
-}
-
-#app .app-scroll-area::-webkit-scrollbar-thumb:hover {
-  background-color: color-mix(in oklab, var(--scrollbar-thumb) 90%, rgb(255, 255, 255) 10%);
-}
-
-#app .app-scroll-area::-webkit-scrollbar-track {
-  background-color: var(--scrollbar-track);
-  border-radius: 8px;
-}
+/* 主面板滚动条的 padding / 溢出 / 自定义滚动条样式已统一收口到 common.css 的
+   .panel / .subpanel（无作用域，#app 与 #pixeladjustment 下都生效），此处不再重复。 */
 
 .main-title {
   text-align: center;
@@ -134,7 +114,7 @@ body.secondary-panel-open #app .app-scroll-area {
 }
 
 /* 滑块两层容器结构（选区填充面板）：
-   slider-container（外层卡片）> entire-slider（单个滑块）> 行容器（见 common.css） */
+   slider-container（外层卡片）> slider-block（单个滑块块，见 common.css）> 行容器（见 common.css） */
 .slider-container {
   width: 100%;
   background-color: var(--bg-color);
@@ -145,77 +125,12 @@ body.secondary-panel-open #app .app-scroll-area {
   z-index: 1;
 }
 
-.entire-slider {
-  width: 100%;
-  margin: 0 0 20px 0;
-}
+/* ↳ 单个滑块块 .entire-slider 已并入 common.css 的 .slider-block（单行滑块：
+   标签+数字在上、滑块条在下），2026-09-03 删除本处副本。 */
 
-/* 折叠分区（选区选项 / 填充选项） */
-.expand-section {
-  background-color: var(--bg-color);
-  margin-bottom: -1px;
-  z-index: 1;
-}
-
-.expand-header {
-  display: flex;
-  align-items: center;
-  cursor: pointer;
-  font-size: 13px;
-  padding: 10px 0;
-  color: var(--text-color);
-  transition: background-color 0.3s;
-}
-
-.expand-header:hover {
-  background-color: var(--hover-bg);
-}
-
-.expand-icon {
-  padding-left: 5px;
-  margin-right: 2px;
-  display: flex;
-  align-items: center;
-}
-
-.expand-icon svg {
-  transition: transform 0.3s;
-}
-
-.expand-icon-expanded svg {
-  transform: rotate(0deg);
-}
-
-.expand-content {
-  max-height: 0px;
-  overflow: hidden;
-  transition: max-height 0.3s ease-out;
-}
-
-.expand-content-expanded {
-  /* 原 400px 过小：填充选项内容（含底部 checkbox 区）超过该高度会被 overflow:hidden 裁掉，
-     表现为最底部的 checkbox 区"整片消失"。放宽到足以容纳全部内容。 */
-  max-height: 1400px;
-}
-
-/* 展开内容首尾行不外折叠 margin（2026-09-03）：展开态的 .expand-content-expanded
-   没有 overflow:hidden，首/末 .row-between 的 10px 外边距会穿过它与 .expand-section
-   （两者均无 padding/border）折叠到分区盒外。UXP 不绘制这块「悬空 margin」区域的
-   任何背景，露出面板原生深色底——表现为「选区选项」展开后与「填充选项」之间
-   出现一条 10px 深色缝隙（收起时 .expand-content 的 overflow:hidden 挡住折叠链，
-   故缝隙只在展开后出现）。收掉后分区背景直接包住首尾行，间距由分区自身节奏承担。 */
-.expand-content-expanded .row-between:first-child {
-  margin-top: 0;
-}
-
-.expand-content-expanded .row-between:last-child {
-  margin-bottom: 0;
-}
-
-.expand-icon path.fill {
-  fill: var(--text-color);
-}
-
+/* 折叠分区（选区选项 / 填充选项）样式已统一收口到 common.css 的
+   .collapse-section / .collapse-header / .collapse-icon / .collapse-content /
+   .collapse-content-expanded（与工具箱子面板分区同一套），2026-09-03 删除本处副本。 */
 /* 描边颜色预览组（#app 主面板独有） */
 .stroke-color-group {
   display: flex;
@@ -254,14 +169,17 @@ body.secondary-panel-open #app .app-scroll-area {
   margin-right: 28px;
 }
 
-/* 版权 / 信息条（#app 主面板独有）：滚动区下方的文档流底栏。
-   不再用 position:fixed 覆盖层——UXP 下 fixed 压不住后绘制的原生 number 输入，
-   面板缩短时输入会叠到 info 区上（2026-09-03 改为流内底栏，滚动内容由
-   .app-scroll-area 裁剪，物理上不可能再重叠）。 */
+/* 版权 / 信息条（#app 主面板独有）：滚动内容的最后一行，随内容滚到底才可见。
+   历史三态收敛于此：① 最早 position:fixed 常驻底部——UXP 下 fixed 压不住后
+   绘制的原生 number 输入，面板缩短时输入会叠到它上面；
+   ② 改为滚动区下方的流内底栏，代价是滚动区要 calc(100% - 20px) 给它让位，
+      滚动条因此只覆盖面板上方、且滚动区被 flex 压缩（2026-09-03 修掉）；
+   ③ 现在父容器一律铺满 100%，info 条作为滚动内容的末元素（20px 高、上分隔线）。 */
 .info-plane {
   width: 100%;
   height: 20px;
   flex: none;
+  margin-top: 10px;
   background-color: var(--bg-color);
   border-top: 1px solid var(--border-color);
   display: flex;

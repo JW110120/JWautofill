@@ -1637,9 +1637,9 @@ interface PatternPickerProps {
     if (!isOpen) return null;
 
     return (
-        <div className="subpanel-fill">
-            <div className="subpanel-header">
-                <h3>选择图案</h3>
+        <div className="subpanel">
+            <div className="subpanel-title-1">
+                <div className="subpanel-title-1-text">选择图案</div>
                 <div className="close-button" role="button" tabIndex={0} onClick={() => {
                     onClose();
                 }}>×</div>
@@ -1704,8 +1704,8 @@ interface PatternPickerProps {
                         </div>
                     ))}
                     </div> 
-                     <div className="pattern-icon-container">
-                        <div className="icon-group">
+                     <div className="icon-button-group--bar">
+                        <div className="icon-button-group">
                             <IconButton title={helpTexts.pattern.selectFile} onClick={handleFileSelect}>
                                 <FileIcon className="icon-14" />
                             </IconButton>
@@ -1731,7 +1731,7 @@ interface PatternPickerProps {
             <div className="pattern-settings-area">
                 <div className="pattern-setting-item-group">
                     <div className="pattern-setting-item">
-                        <div className="pattern-entire-slider">
+                        <div className="slider-block">
                         <div className="row-between" onMouseDown={(e) => handleMouseDown(e, 'angle')}>
                         <label className="label-3">角度：</label>
                             <div className="num-input-wrap">
@@ -1761,7 +1761,7 @@ interface PatternPickerProps {
                     </div>
 
                     <div className="pattern-setting-item">
-                        <div className="pattern-entire-slider">
+                        <div className="slider-block">
                         <div className="row-between" onMouseDown={(e) => handleMouseDown(e, 'scale')}>
                         <label className="label-3">缩放：</label>
                             <div className="num-input-wrap">
