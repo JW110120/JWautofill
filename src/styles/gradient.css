@@ -402,8 +402,12 @@ sp-color-slider {
 /* ↳ 原生 <select> 全项目已无实例（下拉统一用 common 的 .mask-sync-select-wrap），
    此规则为死代码，已删。 */
 
-.gradient-setting-item .gradient-angle-range {
-    /* RangeSlider 根属性（className 为单类名 .gradient-angle-range，需自带根布局） */
+.gradient-angle-range {
+    /* RangeSlider 根属性：单类名自包含（注释要求「className 为单类名 .gradient-angle-range，
+       需自带根布局」）。原写法 .gradient-setting-item .gradient-angle-range 依赖父级挂
+       .gradient-setting-item，但角度行实际容器是 .gradient-setting-item-angle /
+       -disabled，选择器永不命中 → 滑块吃不到根样式而崩坏。改为单类名后自包含，
+       线性/径向（禁用）两种角度行都能正确命中。 */
     position: relative;
     display: block;
     height: 12px;
@@ -417,6 +421,7 @@ sp-color-slider {
     margin: 3px -4px 0 0px;
     width: 104px;
     flex: 1;
+    min-width: 60px;
 }
 
 /* ↳ 设置项数字输入（35px）已收口到 common.css 单一来源（见 .gradient-setting-item
@@ -462,6 +467,25 @@ sp-color-slider {
 .gradient-setting-item-angle-disabled input[type="number"] {
     /* 原生 number 在 UXP 下禁用态不自动置灰，手动补 */
     color: var(--disabled-color);
+}
+
+/* 渐变「反向 / 保留不透明度」双列勾选：.checkbox-row 直接装两个无类 <div> 单元，
+   通用 .checkbox-row 只把两单元横向并排，但单元内 label+checkbox 仅是行内流、且两单元
+   之间无间距 → 表现为「双列挤成一团、长标签溢出」。此处补：单元内 label+勾选框同行、
+   两单元之间留 28px 间距、整行与上方角度行留 10px 间距，恢复标准双列勾选布局。 */
+.gradient-settings-area .checkbox-row {
+  margin: 10px 0 0;
+}
+.gradient-settings-area .checkbox-row > div {
+  display: flex;
+  align-items: center;
+}
+.gradient-settings-area .checkbox-row > div > label {
+  margin-right: 6px;
+  cursor: pointer;
+}
+.gradient-settings-area .checkbox-row > div:first-child {
+  margin-right: 28px;
 }
 
 .final-preview-container {

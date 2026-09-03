@@ -129,6 +129,13 @@ namespace JWautofillHotkeyDaemon
         [DllImport("user32.dll")]
         public static extern short GetAsyncKeyState(int vKey);
 
+        // 焦点判断（用于「焦点不在 PS 时暂停监听」）：取当前前台窗口所属进程 PID。
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
         [StructLayout(LayoutKind.Sequential)]
         public struct KBDLLHOOKSTRUCT
         {
@@ -155,7 +162,7 @@ namespace JWautofillHotkeyDaemon
     internal static class Program
     {
         // 构建版本标识：用于区分安装目录里的新旧 daemon（历史上两次因版本错位误判问题）
-        internal const string Version = "2026-08-29.5";
+        internal const string Version = "2026-09-04.1";
 
         private static readonly int PORT = 18923;
         private static readonly string DefaultConfigPath =
@@ -175,6 +182,10 @@ namespace JWautofillHotkeyDaemon
         private static Dictionary<string, HotkeyItem> _comboMap = new(StringComparer.OrdinalIgnoreCase);
         private static List<HotkeyItem> _currentItems = new();
         private static bool _active = false;
+        // 当前运行的 Photoshop 进程 PID 集合（由 WatchPhotoshop 周期刷新）。
+        // 钩子线程在每次按键时据此判断前台窗口是否属 PS，避免在其它程序里拦截按键。
+        private static readonly object _psLock = new();
+        private static HashSet<int> _psPids = new();
         private static readonly object _clientsLock = new();
         private static readonly List<TcpClient> _clients = new();
         private static IntPtr _hwnd;
@@ -183,18 +194,18 @@ namespace JWautofillHotkeyDaemon
         // 避免在键盘钩子里做网络 I/O（钩子有严格超时，超时会被系统静默摘除）。
         private static int _mainThreadId = 0;
         private static readonly ConcurrentQueue<string> _hitQueue = new();
-        // 钩子回调用的日志队列：钩子过程里绝不能做 I/O。实测（2026-08-29）一旦
-        // Console.WriteLine 卡住（例如宿主线程的输出被重定向且写入阻塞），整个
-        // 低层键盘钩子会随之冻结——表现为「热键全部失灵且日志停更」。
-        // 所以钩子只入队，由录制线程在消息循环里落盘输出。
-        private static readonly ConcurrentQueue<string> _logQueue = new();
+        // 日志统一走队列：任何线程（含键盘钩子线程）只入队、绝不直接做文件 I/O，
+        // 由专门的日志线程落盘。此前钩子线程在 DrainLogQueue 里直接 Console.WriteLine 写文件，
+        // 一旦写阻塞，钩子消息循环卡死 → 全键盘失灵（只有杀进程/卸载才恢复）。
+        // Console.WriteLine 已重定向为「入队」，故钩子线程的日志也不会触碰文件句柄。
+        private static readonly BlockingCollection<string> _logQueue =
+            new(new ConcurrentQueue<string>());
 
         // ===== 组合键录制（全局键盘钩子）=====
         private const int WM_RECORD_START = 0x8002; // 录制线程：开始录制（常驻钩子已在运行）
         private const int WM_RECORD_STOP = 0x8003;  // 录制线程：结束录制
         private const int WM_HOTKEY_HIT = 0x8004;   // 主线程：钩子命中热键，去 _hitQueue 取出并广播
         private const int WM_HOOK_INSTALL = 0x8005; // 录制线程：安装常驻低层键盘钩子
-        private const int WM_DRAIN_LOG = 0x8006;    // 录制线程：把钩子入队的日志写出去
         private static readonly object _recLock = new();
         private static IntPtr _hookId = IntPtr.Zero;
         private static Win32.LowLevelKeyboardProc? _hookProc;
@@ -231,6 +242,9 @@ namespace JWautofillHotkeyDaemon
 
         // 把标准输出/错误重定向到日志文件：守护进程是 GUI 子系统、无控制台窗口，
         // 所有原本打向控制台的诊断信息改落盘，排障时不丢失。
+        // 关键：Console 输出先入内存队列，由独立日志线程落盘——调用线程（含键盘钩子线程）
+        // 绝不触碰文件句柄，避免文件写阻塞卡死钩子消息循环（会导致全键盘失灵）。
+        private static StreamWriter? _logWriter;
         private static void RedirectConsoleToFile()
         {
             try
@@ -238,11 +252,50 @@ namespace JWautofillHotkeyDaemon
                 var dir = InstallDir;
                 Directory.CreateDirectory(dir);
                 var fs = new FileStream(Path.Combine(dir, "daemon.log"), FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
-                var sw = new StreamWriter(fs, Encoding.UTF8) { AutoFlush = true };
-                Console.SetOut(sw);
-                Console.SetError(sw);
+                _logWriter = new StreamWriter(fs, Encoding.UTF8) { AutoFlush = true };
+                Console.SetOut(new QueueTextWriter());
+                Console.SetError(new QueueTextWriter());
+                var lt = new Thread(LoggerThreadProc) { IsBackground = true };
+                lt.Start();
             }
             catch { /* 日志重定向失败不影响运行 */ }
+        }
+
+        // 唯一持有 _logWriter 的线程：从队列取行落盘。写失败只忽略，绝不回堵生产者。
+        private static void LoggerThreadProc()
+        {
+            try
+            {
+                foreach (var line in _logQueue.GetConsumingEnumerable())
+                {
+                    try { _logWriter?.WriteLine(line); } catch { }
+                }
+            }
+            catch { }
+        }
+
+        // 把 Console 输出重定向到内存队列（不写盘），由日志线程异步落盘。
+        private class QueueTextWriter : TextWriter
+        {
+            private readonly StringBuilder _sb = new();
+            public override Encoding Encoding => Encoding.UTF8;
+            public override void Write(char value)
+            {
+                if (value == '\r') return;        // 跳过 \r，兼容 \r\n
+                if (value == '\n') { FlushLine(); return; }
+                _sb.Append(value);
+            }
+            public override void Write(string? value)
+            {
+                if (value == null) return;
+                foreach (var c in value) Write(c);
+            }
+            private void FlushLine()
+            {
+                try { _logQueue.Add(_sb.ToString()); } catch { }
+                _sb.Clear();
+            }
+            public override void Flush() { if (_sb.Length > 0) FlushLine(); }
         }
 
         // 自安装：若当前 exe 不在安装目录，则拷贝/更新到安装目录并从那里重新拉起自身
@@ -639,6 +692,38 @@ namespace JWautofillHotkeyDaemon
         // 进程监控：守护进程默认常驻，仅在 Photoshop 运行时才激活全局热键；
         // 若设置环境变量 JWAUTO_EXIT_WHEN_PS_CLOSED=1，则 PS 关闭后立即退出（需由启动器/插件再次拉起）。
         // 这样天然实现「随 PS 开启时开启、PS 关闭后关闭（或取消激活）」。
+        // 判断当前前台（焦点）窗口是否属于某个 Photoshop 进程。
+        // 仅比较 PID，避免每次按键都创建 Process 对象（轻量、无分配）。
+        private static bool IsPhotoshopForeground()
+        {
+            var hwnd = Win32.GetForegroundWindow();
+            if (hwnd == IntPtr.Zero) return false;
+            uint pid;
+            Win32.GetWindowThreadProcessId(hwnd, out pid);
+            if (pid == 0) return false;
+            HashSet<int> pids;
+            lock (_psLock) pids = _psPids;
+            return pids.Contains((int)pid);
+        }
+
+        // 刷新「当前运行的 Photoshop 进程 PID 集合」：钩子线程据此判断焦点是否落在 PS 上。
+        private static void RefreshPsPids(bool running)
+        {
+            var set = new HashSet<int>();
+            if (running)
+            {
+                try
+                {
+                    foreach (var p in Process.GetProcessesByName("photoshop"))
+                    {
+                        try { set.Add(p.Id); } catch { }
+                    }
+                }
+                catch { }
+            }
+            lock (_psLock) _psPids = set;
+        }
+
         private static void WatchPhotoshop()
         {
             bool exitWhenClosed = Environment.GetEnvironmentVariable("JWAUTO_EXIT_WHEN_PS_CLOSED") == "1";
@@ -648,6 +733,7 @@ namespace JWautofillHotkeyDaemon
                 Thread.Sleep(3000);
                 bool psRunning = false;
                 try { psRunning = Process.GetProcessesByName("photoshop").Length > 0; } catch { }
+                RefreshPsPids(psRunning);
                 if (psRunning)
                 {
                     sawPs = true;
@@ -717,8 +803,13 @@ namespace JWautofillHotkeyDaemon
         }
 
         // combo 为 null 表示取消（ESC 或 UXP 主动取消）
+        // 本方法可能在键盘钩子线程上被调用（钩子命中录制键时），故 SendToClient（同步网络写）
+        // 必须移交线程池：绝不能阻塞钩子线程——写阻塞会卡死钩子消息循环，导致全键盘失灵
+        // （只有杀进程/卸载才恢复）。这是「运行一段时间后键盘打不出字」的根因。
         private static void FinishRecordingInternal(string? combo)
         {
+            TcpClient? clientToSend = null;
+            string? payload = null;
             lock (_recLock)
             {
                 var client = _recordingClient;
@@ -726,15 +817,18 @@ namespace JWautofillHotkeyDaemon
                 string brush = _recordingBrush ?? "";
                 _recordingBrush = null;
                 if (client == null) return;
-                try
-                {
-                    if (combo == null)
-                        SendToClient(client, JsonSerializer.Serialize(new { type = "recordCancel", brush }, JsonOpts));
-                    else
-                        SendToClient(client, JsonSerializer.Serialize(new { type = "recordResult", brush, combo }, JsonOpts));
-                }
-                catch { try { client.Close(); } catch { } }
+                payload = combo == null
+                    ? JsonSerializer.Serialize(new { type = "recordCancel", brush }, JsonOpts)
+                    : JsonSerializer.Serialize(new { type = "recordResult", brush, combo }, JsonOpts);
+                clientToSend = client;
             }
+            var c = clientToSend;
+            var msg = payload!;
+            Task.Run(() =>
+            {
+                try { SendToClient(c, msg); }
+                catch { try { c.Close(); } catch { } }
+            });
         }
 
         // 录制线程：独立消息循环，专门用于承载 WH_KEYBOARD_LL 钩子。
@@ -754,25 +848,16 @@ namespace JWautofillHotkeyDaemon
                 if (msg.message == WM_HOOK_INSTALL) InstallPermanentHook();
                 else if (msg.message == WM_RECORD_START) StartRecordingInternal();
                 else if (msg.message == WM_RECORD_STOP) FinishRecordingInternal(null);
-                else if (msg.message == WM_DRAIN_LOG) DrainLogQueue();
                 // 线程消息（PostThreadMessage）没有窗口，无需 DispatchMessage
             }
             Console.WriteLine("[HotkeyDaemon] 钩子线程已退出");
         }
 
-        // 钩子线程专用：只入队 + 投递线程消息，绝不在此处做 I/O。
+        // 钩子线程专用：仅入队（Console.WriteLine 已重定向为入队），绝不在此处做 I/O / 线程消息。
+        // 此前这里会 PostThreadMessage(WM_DRAIN_LOG) 让钩子线程自己写文件——写阻塞即卡死钩子。
         private static void LogFromHook(string line)
         {
-            _logQueue.Enqueue(line);
-            if (_recThreadId != 0) Win32.PostThreadMessage(_recThreadId, WM_DRAIN_LOG, IntPtr.Zero, IntPtr.Zero);
-        }
-
-        private static void DrainLogQueue()
-        {
-            while (_logQueue.TryDequeue(out var line))
-            {
-                try { Console.WriteLine(line); } catch { /* 输出不可用时忽略，绝不影响钩子 */ }
-            }
+            Console.WriteLine(line);
         }
 
         private static IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam)
@@ -782,6 +867,11 @@ namespace JWautofillHotkeyDaemon
                 int msg = wParam.ToInt32();
                 if (msg == Win32.WM_KEYDOWN || msg == Win32.WM_SYSKEYDOWN)
                 {
+                    // 焦点不在 Photoshop 时暂停监听：直接放行，不拦截、不录制。
+                    // 这样用户在其它程序里打字/用快捷键不会被本守护进程吞掉。
+                    if (!IsPhotoshopForeground())
+                        return Win32.CallNextHookEx(_hookId, nCode, wParam, lParam);
+
                     int vk = Marshal.ReadInt32(lParam);              // KBDLLHOOKSTRUCT.vkCode 为首字段
                     uint flags = (uint)Marshal.ReadInt32(lParam, 8); // flags 偏移 8
                     // bit 30 = 上一帧按键状态（1 表示此前已按下，即系统自动重复），忽略重复
@@ -923,6 +1013,10 @@ namespace JWautofillHotkeyDaemon
             try
             {
                 var stream = client.GetStream();
+                // 给发送/接收各设超时：即便某条 SendToClient 不幸阻塞，也只会等到超时抛异常
+                // 而非永久卡住调用线程（钩子线程已通过 Task.Run 隔离，这里再兜底一层）。
+                client.SendTimeout = 2000;
+                client.ReceiveTimeout = 60000;
                 var buf = new byte[4096];
                 int read = await stream.ReadAsync(buf, 0, buf.Length);
                 if (read == 0) { client.Close(); return; }

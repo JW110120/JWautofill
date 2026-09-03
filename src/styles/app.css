@@ -136,6 +136,27 @@ body.secondary-panel-open #app .app-root > .panel {
   margin-right: 28px;
 }
 
+/* ⚠️ 覆盖通用「水平双列 radio」规则（common.css 的 .panel-section sp-radio-group /
+   .panel-section sp-radio）。由于本组位于带 .panel-section 类的列式内容容器内，
+   会误命中那条「display:flex; flex-direction:row; justify-content:space-around」
+   + sp-radio{flex:1} 的规则，把本应竖直堆叠的 3 个 radio 挤成单行/错位
+   （表现为第三行挤进第二行、首行不再是 space-between）。
+   本组使用独立 .fill-mode-group 类，此处显式还原为竖直堆叠并抵消 flex:1。
+   app.css 在 common.css 之后引入，同等特异性下本处胜出。 */
+.fill-mode-group sp-radio-group {
+  display: block;
+  width: 100%;
+}
+
+.fill-mode-group sp-radio {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  flex: 0 0 auto;            /* 抵消 .panel-section sp-radio 的 flex:1，避免被压成单行 */
+  justify-content: space-between;
+  height: 32px;
+}
+
 /* 版权 / 信息条（#app 主面板独有）：滚动内容的最后一行，随内容滚到底才可见。
    历史三态收敛于此：① 最早 position:fixed 常驻底部——UXP 下 fixed 压不住后
    绘制的原生 number 输入，面板缩短时输入会叠到它上面；

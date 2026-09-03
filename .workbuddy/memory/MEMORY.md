@@ -25,5 +25,9 @@
 - 标签 W(n)=20+(n-2)×13.33(2..6字=20/33/47/60/73px)。按钮宽=字数×字号+20px。数字输入统一 32×24(容器32留4缓冲)。
 
 ## 其它
-- 守护进程：代码 daemon，用户可见「快捷键服务」；exe 静默、日志 %LOCALAPPDATA%\JWautofill\daemon\daemon.log、自拷贝+HKCU\Run。
+- 守护进程：C#/.NET8 代码 daemon（native/HotkeyDaemon/Program.cs），用户可见「快捷键服务」；exe 静默、日志 %LOCALAPPDATA%\JWautofill\daemon\daemon.log、自拷贝+HKCU\Run。常驻 WH_KEYBOARD_LL 低层钩子装在独立录制线程（带消息循环）；命中后入队交主线程广播，并以 return 1 吞键防 PS 抢键。配置经 127.0.0.1:18923 本地 WebSocket 与 UXP 面板通信。
+  ⚠️ 低层键盘钩子线程**绝对禁止任何阻塞 I/O**：
+  ① 钩子线程（承载钩子的录制线程）一旦在钩子回调/消息循环里做同步网络写(SendToClient)或文件写(Console.WriteLine)，写阻塞即卡死钩子消息循环 → **全键盘失灵、只有杀进程/卸载才恢复**（用户实报「运行一段时间后打不出字」）。
+  ② 修复（2026-09-04）：日志统一经 QueueTextWriter 入 BlockingCollection，由专门 LoggerThread 落盘（钩子线程只入队）；录制结果 SendToClient 移交 Task.Run，绝不阻塞钩子线程；客户端 socket 设 SendTimeout=2000 兜底。
+  ③ 焦点闸门：LowLevelKeyboardProc 首行 `if (!IsPhotoshopForeground()) return CallNextHookEx(...)`——焦点不在 PS 时直接放行（暂停监听），避免吞掉其它程序的按键。WatchPhotoshop 周期刷新 `_psPids`（PS 进程 PID 集合），钩子线程按前台窗口 PID 比对，避免每次按键 new Process。
 - 重大变更同步 docs/*.html、README.md。hover title 收口 helpTexts.ts，禁止 JSX 内联长字符串。

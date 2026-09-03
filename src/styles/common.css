@@ -56,12 +56,20 @@ html, body {
    -------------------------------------------------------------------------- */
 .panel {
   --adjust-scrollbar-w: 10px;
+  /* 作为子面板（#app .panel-section ~ .panel）绝对定位的锚点：
+     子面板靠 absolute + inset:0 铺满覆盖父面板，必须在此建立定位上下文。 */
+  position: relative;
   padding: 10px;
   width: 100%;
   height: 100%;
   box-sizing: border-box;
   overflow-y: auto;
   overflow-x: hidden;
+  /* 预留滚动条槽位（stable）：折叠分区后总高度可能跌破滚动阈值，
+     竖向滚动条出现/消失会让内容宽度抖动 ±scrollbar 宽 → 折叠容器与内部
+     calc(100% - 20px) 元素随之变宽/变窄。stable 让槽位常驻，
+     滚动条显隐不再改变内容宽度，折叠时宽度稳定。 */
+  scrollbar-gutter: stable;
 }
 
 
@@ -805,14 +813,20 @@ sp-radio[disabled] {
   background-color: var(--hover-bg);
 }
 
-.collapse-icon {
+/* 折叠图标：展开(.collapse-icon-expanded)与折叠(.collapse-icon)两态必须共用同一套
+   盒模型（padding / margin / display / 对齐），否则切换时图标会因左右内/外边距不一致
+   而发生位移。原 .collapse-icon-expanded 只挂了 svg 旋转规则，盒模型继承自 .collapse-icon
+   的部分缺失，导致展开态图标左缩 5px、右缩 2px、且非 flex → 明显跳动。现合并两态。 */
+.collapse-icon,
+.collapse-icon-expanded {
   padding-left: 5px;
   margin-right: 2px;
   display: flex;
   align-items: center;
 }
 
-.collapse-icon svg {
+.collapse-icon svg,
+.collapse-icon-expanded svg {
   transition: transform 0.3s;
 }
 

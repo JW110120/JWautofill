@@ -9,8 +9,17 @@
     z-index: 1 !important;
 }
 
-/* 当次级面板打开时，主面板的input应该被遮盖 */
+/* 次级面板（纯色/渐变/图案/描边）绝对定位铺满父面板、直接覆盖其上，
+   而非流内渲染在 info-plane 下方。absolute + inset:0 使其覆盖整个 APP 主面板；
+   定位上下文由 common.css 的 .panel { position:relative } 提供。z-index 保持最高。
+   ⚠️ 此规则是「#app .panel-section ~ .panel」上下文中本应存在的绝对定位铺满，
+   此前仅剩 z-index、缺失 position/inset，导致子面板落到流内 info-plane 之下。 */
 #app .panel-section ~ .panel {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
     z-index: 9999 !important;
 }
 
@@ -23,36 +32,42 @@
    用 visibility + opacity + pointer-events 三件套彻底隐形。 */
 
 /* 授权对话框打开时，彻底隐藏主面板内所有可编辑控件，避免穿透和抢层级 */
-body.license-dialog-open #app .slider-container input,
-body.license-dialog-open #app .slider-container textarea,
-body.license-dialog-open #app .slider-container sp-textfield,
-body.license-dialog-open #app .collapse-content input,
-body.license-dialog-open #app .collapse-content textarea,
-body.license-dialog-open #app .collapse-content sp-textfield,
-body.license-dialog-open #app .collapse-content-expanded input,
-body.license-dialog-open #app .collapse-content-expanded textarea,
-body.license-dialog-open #app .collapse-content-expanded sp-textfield,
-body.license-dialog-open #app .panel-section ~ .panel .row-between input,
-body.license-dialog-open #app .panel-section ~ .panel .row-between textarea,
-body.license-dialog-open #app .panel-section ~ .panel .row-between sp-textfield {
+body.license-dialog-open #app .app-root > .panel > .panel-section .slider-container input,
+body.license-dialog-open #app .app-root > .panel > .panel-section .slider-container textarea,
+body.license-dialog-open #app .app-root > .panel > .panel-section .slider-container sp-textfield,
+body.license-dialog-open #app .app-root > .panel > .panel-section .collapse-content input,
+body.license-dialog-open #app .app-root > .panel > .panel-section .collapse-content textarea,
+body.license-dialog-open #app .app-root > .panel > .panel-section .collapse-content sp-textfield,
+body.license-dialog-open #app .app-root > .panel > .panel-section .collapse-content-expanded input,
+body.license-dialog-open #app .app-root > .panel > .panel-section .collapse-content-expanded textarea,
+body.license-dialog-open #app .app-root > .panel > .panel-section .collapse-content-expanded sp-textfield,
+body.license-dialog-open #app .app-root > .panel > .panel-section .row-between input,
+body.license-dialog-open #app .app-root > .panel > .panel-section .row-between textarea,
+body.license-dialog-open #app .app-root > .panel > .panel-section .row-between sp-textfield {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
 }
 
-/* 当任何次级面板打开时，隐藏主面板中的所有可编辑控件 */
-body.secondary-panel-open #app .slider-container input,
-body.secondary-panel-open #app .slider-container textarea,
-body.secondary-panel-open #app .slider-container sp-textfield,
-body.secondary-panel-open #app .collapse-content input,
-body.secondary-panel-open #app .collapse-content textarea,
-body.secondary-panel-open #app .collapse-content sp-textfield,
-body.secondary-panel-open #app .collapse-content-expanded input,
-body.secondary-panel-open #app .collapse-content-expanded textarea,
-body.secondary-panel-open #app .collapse-content-expanded sp-textfield,
-body.secondary-panel-open #app .panel-section ~ .panel .row-between input,
-body.secondary-panel-open #app .panel-section ~ .panel .row-between textarea,
-body.secondary-panel-open #app .panel-section ~ .panel .row-between sp-textfield {
+/* 当任何次级面板打开时，隐藏【主面板】中的所有可编辑控件（次级面板自身的控件保持可见，因其覆盖在上层）。
+   ⚠️ 必须用 #app .app-root > .panel > .panel-section 限定「主面板内容容器」：
+   ① 不能用 #app .slider-container（会漏到次级面板内部若其用同名类）；
+   ② 绝不能用 #app .panel-section ~ .panel .X（那反而只命中次级面板、把次级面板
+      自己的数字/输入也藏了——这正是「打开纯色/图案看不到数字」的根因，2026-09-03 修）；
+   ③ 子面板内部也挂 .panel-section，故必须靠 .app-root > .panel > .panel-section
+      （主内容 .panel-section 是滚动容器 .panel 的直接子项）与子面板（.panel）区分开。 */
+body.secondary-panel-open #app .app-root > .panel > .panel-section .slider-container input,
+body.secondary-panel-open #app .app-root > .panel > .panel-section .slider-container textarea,
+body.secondary-panel-open #app .app-root > .panel > .panel-section .slider-container sp-textfield,
+body.secondary-panel-open #app .app-root > .panel > .panel-section .collapse-content input,
+body.secondary-panel-open #app .app-root > .panel > .panel-section .collapse-content textarea,
+body.secondary-panel-open #app .app-root > .panel > .panel-section .collapse-content sp-textfield,
+body.secondary-panel-open #app .app-root > .panel > .panel-section .collapse-content-expanded input,
+body.secondary-panel-open #app .app-root > .panel > .panel-section .collapse-content-expanded textarea,
+body.secondary-panel-open #app .app-root > .panel > .panel-section .collapse-content-expanded sp-textfield,
+body.secondary-panel-open #app .app-root > .panel > .panel-section .row-between input,
+body.secondary-panel-open #app .app-root > .panel > .panel-section .row-between textarea,
+body.secondary-panel-open #app .app-root > .panel > .panel-section .row-between sp-textfield {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
