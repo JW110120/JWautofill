@@ -40,6 +40,7 @@
 - 逐级闭合：uxp-panel → #app/#pixeladjustment → **Provider 那层 div** → .app-root/.pixeladjustment-root → .selection-fill-container/.panel。断一层 → height 退化成 auto → 内容截断无滚动条。
 - index.tsx 两处 <Provider> 必须都传 height="100%"（Provider 默认插 height:auto div；历史上主面板漏传→不滚）。common.css 兜底 uxp-panel{height:100%} + #app,#pixeladjustment{height:100%}。
 - APP 次级面板打开时 body.secondary-panel-open #app .panel{overflow-y:hidden} 禁滚。
+- ⚠️ **背景兜底（防原生层漏出）**：UXP 宿主原生底色 rgb(29,29,29)，内容塌缩区若透明即透出（全收起后 info 下方占近半面板高的断层，四主题同色）。面板根链每一层都要铺 var(--bg-color)：工具箱 .pixeladjustment-root 自带（安全）；APP 侧 app.css 已给 #app/.app-root/容器/.panel 全铺（.app-root 必须 display:block——flex 子项叠 height:100% 解析不可靠会塌缩；水平居中用容器 margin:0 auto）。改高度链/新增包裹层时须同步补背景兜底。
 
 ## 折叠区原生控件残留（UXP 硬限制）
 - 三道防线：① 分区条件渲染；② 折叠/隐藏前 hideNativeWidgetsOfSections(ids) 按 [data-section-id] 写分区内 input/textarea/sp-textfield 内联 visibility/opacity/pointer-events !important 再卸载；③ 折叠后 resyncNativeWidgets() rAF 滚动1px 再还原逼 UXP 重排。

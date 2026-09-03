@@ -15,25 +15,34 @@
 @import './stroke.css';
 @import './input-fix.css';
 
-/* 主面板根容器（index.tsx 中 #app 内的包裹层） */
+/* #app 根元素背景兜底：common.css 的 html/body 虽带主题底色，但 UXP 宿主面板本体
+   （uxp-panel 原生层，非主题色 rgb(29,29,29)）可能从文档透明区透出。
+   给 #app 自身也铺主题底色，与工具箱 #pixeladjustment > .pixeladjustment-root
+   （adjustment.css）的兜底方式对齐：任何一层高度解析失败，露出的都是主题色。 */
+#app {
+  background-color: var(--bg-color);
+}
+
+/* 主面板根容器（index.tsx 中 #app 内的包裹层）。
+   ⚠️ 不用 flex 列：.selection-fill-container 若作为 flex 子项，其 height:100% 在 UXP 下
+   会与 flex 伸缩互斗（历史故障：内容截断、无滚动条、全收起后容器塌缩露出下方原生层）。
+   改块级父 + 百分比高度（UXP 下唯一验证可靠的定高路径）；自身也带主题底色兜底，
+   使「容器塌缩 / 高度链某层解析失败」时露出的永远是 --bg-color，与工具箱同级防护。 */
 .app-root {
   width: 100%;
   height: 100%;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-start;
-  align-items: center;
+  display: block;
+  background-color: var(--bg-color);
 }
 
-/* 主面板容器：定高普通块级容器（⚠️ 不用 flex 列）。
-   它是 .app-scroll-area 百分比高度的解析基准，必须是块级——flex 子项上再叠
-   height:100% 在 UXP 下会与 flex 伸缩互斗（历史故障：内容截断、无滚动条）。
-   唯一在流内的子项就是 .app-scroll-area；4 个子面板是 absolute，靠本容器的
-   position:relative 定位，不参与文档流、也不随滚动区滚动。 */
+/* 主面板容器：定高普通块级容器（块级父 .app-root 的直接子项，height:100% 直接解析）。
+   250px 内容宽度用 margin:0 auto 水平居中（原 .app-root 的 align-items:center 职责）。
+   4 个子面板是 absolute，靠本容器的 position:relative 定位，不参与文档流。 */
 .selection-fill-container {
   width: 250px;
   height: 100%;
   max-height: 100%;
+  margin: 0 auto;
   box-sizing: border-box;
   background-color: var(--bg-color);
   padding: 0;
@@ -53,6 +62,7 @@
 .selection-fill-container > .panel {
   height: 100%;
   max-height: 100%;
+  background-color: var(--bg-color);
   display: flex;
   flex-direction: column;
 }
