@@ -39,23 +39,117 @@ html, body {
 
 /* 根面板容器：
    body 是 flex 容器（align-items:flex-start），flex 子项默认 height:auto；
-   #app/#pixeladjustment 若不显式定高，整条百分比高度链在根处就断了——
-   父面板外壳的 height:100% 全部解析成 auto、随内容撑高，
-   外层再被 overflow:hidden 裁掉 → 父面板「完全不能滚、内容截断」。
-   子面板（#app .panel-section ~ .panel）是 position:absolute + height:100%，高度直接对 UXP
-   面板本体解析，不依赖这条链（这正是历史上「子面板能滚、父面板不能滚」的来源）。
-   只补 height（不补 width），避免撑宽 APP 主面板（其 250px 内容宽度由
-   .panel-section 控制）。 */
+   #app/#pixeladjustment 若不显式定高，整条百分比高度链在根处就断了,导致滑块条不限。*/
 #app,
 #pixeladjustment {
   height: 100%;
 }
 
-/* 链的更上端：uxp-panel 面板根节点本身也要定高，否则上面两个 id 的 100% 无解析基准。
-   UXP 只渲染当前激活的 <uxp-panel> 子树，未激活的被隐藏，height:100% 对它是惰性的。 */
-uxp-panel {
+/* --------------------------------------------------------------------------
+   8d. 面板外壳（统一收口为单一通用类 .panel，消除「父/子面板枚举」的重复 CSS）
+   所有面板容器（父面板滚动区 / 绘画工具箱根 / 4 个子面板）共用同一套外壳：
+   内边距 10px、竖直滚动、自定义滚动条、直接子项 flex-shrink:0、纵向 flex 列。
+   4 个子面板（纯色/渐变/描边/图案）也只挂 .panel，靠「#app .panel-section ~ .panel」
+   这一上下文选择器补绝对定位铺满（它们是 .panel-section 之后的同级 .panel），
+   不再有独立的 .subpanel 类。
+   ⚠️ 子面板 z-index:9999 由 input-fix.css 统一强制，此处不重复声明。
+   -------------------------------------------------------------------------- */
+.panel {
+  --adjust-scrollbar-w: 10px;
+  padding: 10px;
+  width: 100%;
   height: 100%;
+  box-sizing: border-box;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
+
+
+/* 面板外壳（.panel）的直接子项 + 列式区块（.panel-section--col）的直接子项一律不压缩：
+   外壳是滚动容器（工具箱为 flex 列；选区填充面板为 block + overflow-y:auto，二者都靠
+   最外层 .panel 的滚动条承载溢出）。flex 子项默认 flex-shrink:1，面板被压缩（高度变小）时
+   会被纵向压扁——表现为主按钮被压矮、组件间距被吃掉。
+   正确行为是保持各区块固有高度、由外壳自身的滚动条承载溢出
+   （工具箱激活卡片当初用 flex:none 单独打的补丁，现统一收口于此）。
+   .panel-section--col 本身是 flex 列容器，其内部组件也要防收缩，否则外层不压缩、内层仍被压。 */
+.panel > *,
+.panel-section--col > * {
+  flex-shrink: 0;
+}
+
+/* ⚠️ .panel（父面板外壳）自身不带 height 规则：
+   工具箱根 .panel 的定高（height:100%）由 adjustment.css 提供（其是
+   .pixeladjustment-root 的唯一直接子项，height:100% 直接解析、实测可滚）；
+   APP 主面板滚动区 .panel 的定高由 app.css 的「.panel-section > .panel」提供
+   （其父 .panel-section 是 .app-root > .panel 的 flex:1 子项）；
+   外壳 flex 子项叠 height:100% 在 UXP 下会与 flex 伸缩打架（内容截断、无滚动条），
+   故均走「定高块级父 + 百分比高度」这一被验证可靠的定高路径。
+   折叠分区自身的 flex-shrink:0 由上方 .panel > * 统一兜底。 */
+
+/* 面板外壳（.panel，含子面板的 #app .panel-section ~ .panel）统一自定义滚动条
+   （唯一一套，覆盖浮动窗口）。⚠️ 伪元素 width 写字面值 10px（与上方
+   --adjust-scrollbar-w 同值），因 UXP 下 ::-webkit-scrollbar 里用 var() 不保证解析。 */
+.panel::-webkit-scrollbar {
+  width: 10px;
+}
+.panel::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.panel::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in oklab, var(--scrollbar-thumb) 90%, rgb(255, 255, 255) 10%);
+}
+.panel::-webkit-scrollbar-track {
+  background-color: var(--scrollbar-track);
+  border-radius: 8px;
+}
+
+/* --------------------------------------------------------------------------
+   8e. 面板分区容器 / 二级标题（全面板通用的「区块」与区块小标题）
+   唯一类：.panel-section（区块，底边分隔线统一断行，行式区块默认横向排列）/
+          .panel-section--col（列式区块修饰类：内容纵向堆叠）/
+          .subpanel-title-2（区块内二级标题，如「计算方法」）。
+   原 stroke.css 的 stroke-wide-container / stroke-blende-mode / stroke-opacity-control /
+   position-radio-group，与原 colorpanel.css 的 colorsettings-slider-group /
+   colorsettings-calculation-mode 全部并入此类；面板 CSS 不再各自声明「分区」样式，
+   改通用只需动这里一处，消除各面板 padding/margin 漂移。
+   -------------------------------------------------------------------------- */
+.panel-section {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 15px 0;
+  margin-bottom: 15px;
+}
+
+/* 列式区块：内容纵向堆叠（颜色面板滑块组、计算方法选择器等） */
+.panel-section--col {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+}
+
+/* —— 主面板标题（APP 选区填充面板标题；原 APP 的 .main-title / .main-title-text 合并收口于此）——
+   单类名承载标题文字（20px 加粗）+ 居中布局；标题与下方内容的分割统一用 .divider，
+   不再用 border-bottom（避免分割线几何与 .divider 不一致）。 */
+.main-title {
+  text-align: center;
+  font-weight: bold;
+  font-size: 20px;
+  padding: 5px 0 8px 0;
+  color: var(--text-color);
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 3000;
+}
+
 
 /* --------------------------------------------------------------------------
    1. 全局控件复位 / Spectrum 禁用态
@@ -70,19 +164,14 @@ sp-radio[disabled] {
   cursor: not-allowed;
 }
 
-sp-action-button {
-  border: none;
-}
-
 /* --------------------------------------------------------------------------
    2. 表单标签（单元素单类名；不同字数 → 固定宽度档）
    同时服务于：单行/多行滑块、下拉菜单、checkbox、switch、radio 的标签。
    W(n) = 20 + (n-2)×13.3 → 2/3/4/5/6 字 = 20/33/47/60/73px
-   - .label-2..6：可拖拽标签（ew-resize），固定宽度，右侧 10px 间距（滑块）
+   - .label-2..6：标签（按字数定宽），右侧 10px 间距；可拖拽滑块标签另带 ew-resize 光标
    - .label-drag：可拖拽标签（内容宽度，如渐变「角度：」）
-   - .label-static：下拉/设置/checkbox/switch/radio 静态标签（内容宽度，普通光标，右侧 6px 间距）
-   全插件共用，TSX 每个标签只挂一个类。拖拽光标由 body.label-drag-cursor 统一锁定，
-   故不再需要 .dragging/.not-dragging 之类的状态类。
+   全插件共用，TSX 每个标签只挂一个类（按字数选 label-N，静态标签与可拖拽标签共用同一套）。
+   拖拽光标由 body.label-drag-cursor 统一锁定，故不再需要 .dragging/.not-dragging 之类的状态类。
    -------------------------------------------------------------------------- */
 .label-2,
 .label-3,
@@ -93,13 +182,10 @@ sp-action-button {
   font-size: 13px;
   color: var(--text-color);
   display: block;
-  flex: none;
   white-space: nowrap;
   text-align: left;
   margin-right: 10px;
   cursor: ew-resize;
-  user-select: none;
-  -webkit-user-select: none;
 }
 
 /* 宽度档：2 字 → 20px，其余按字数线性插值 */
@@ -109,19 +195,8 @@ sp-action-button {
 .label-5 { width: 60px; }
 .label-6 { width: 73px; }
 
-/* 下拉/设置/checkbox/switch/radio 静态标签：内容宽度、普通光标、右侧 6px 间距（全插件统一） */
-.label-static {
-  font-size: 13px;
-  color: var(--text-color);
-  display: block;
-  flex: 0 0 auto;
-  white-space: nowrap;
-  text-align: left;
-  margin-right: 6px;
-  cursor: default;
-  user-select: none;
-  -webkit-user-select: none;
-}
+/* 标签宽度档收口于 .label-2..6（见上文）；静态标签（下拉/开关/复选）的「非拖拽」语义
+   由下方「静态标签光标/不可选中」规则统一约束，不再用独立类。 */
 
 
 /* --------------------------------------------------------------------------
@@ -406,24 +481,8 @@ sp-action-button {
   -webkit-appearance: none;
 }
 
-/* 「删除」按钮已收口于 .icon-button：在图标组内由 .icon-button-group 的
-   justify-content:flex-end 统一右对齐，不再单独成类（原 .icon-button-delete
-   及其 margin-left:auto 已删除，2026-09-03）。 */
-/* 预览区居中灰字提示，渐变面板（多选预设 / 未选预设 / 渐变全透明）与
-   图案面板（未选图案）共用 */
-.final-preview-hint {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  color: rgb(102, 102, 102);
-  font-size: 12px;
-  z-index: 3;
-  pointer-events: none;
-}
 
-/* 图标尺寸：统一收敛为 14px 一档（原 14/15/16 三档散落，现已全部收口于 14）。
-   调用处一律写 className="icon-14"。 */
+/* 图标尺寸：统一收敛为 14px，调用处一律写 className="icon-14"。 */
 .icon-fill {
   fill: var(--text-color);
 }
@@ -454,7 +513,7 @@ sp-action-button {
 /* --------------------------------------------------------------------------
    9. 普通按钮族
    9a. 总开关（主功能开启/关闭大按钮）：.main-button
-   9b. 动作按钮（不同字数 / 压扁 / 自适应）：.action-button 系列（通用功能按钮）
+   9b. 动作按钮（不同字数 / 压扁 / 自适应）：.action-button-N 系列（通用功能按钮，N=字数）
    9c. 子面板关闭按钮（红色 ×）：.close-button
    -------------------------------------------------------------------------- */
 
@@ -532,8 +591,9 @@ sp-action-button {
 }
 
 /* —— 动作按钮（工具箱 / 通用）：每个按钮只挂一个类，宽度档/状态均为自包含类 —— */
-.action-button,
 .action-button-2,
+.action-button-3,
+.action-button-4,
 .action-button-5,
 .action-button-6,
 .action-button-7,
@@ -543,8 +603,6 @@ sp-action-button {
 .action-button-run,
 .action-button-run-disabled {
   height: 30px;
-  /* 4 字档默认：width = 13×4 + 20 = 72px（普通按钮宽度） */
-  width: 72px;
   margin: 0;
   padding: 0;
   background-color: var(--button-bg);
@@ -562,8 +620,9 @@ sp-action-button {
   user-select: none;
 }
 
-.action-button:hover,
 .action-button-2:hover,
+.action-button-3:hover
+.action-button-4:hover,
 .action-button-5:hover,
 .action-button-6:hover,
 .action-button-7:hover,
@@ -576,8 +635,9 @@ sp-action-button {
   transform: scale(1.02);
 }
 
-.action-button:active,
 .action-button-2:active,
+.action-button-3:active,
+.action-button-4:active,
 .action-button-5:active,
 .action-button-6:active,
 .action-button-7:active,
@@ -613,8 +673,10 @@ sp-action-button {
 }
 
 /* 按钮宽度分档：按按钮汉字字数精确分级，均 box-sizing:border-box + 无内边距。
-   width = 13×字数 + 20。2 字=46 / 5 字=85 / 6 字=98 / 7 字=111 / 8 字=124。 */
+   width = 13×字数 + 20。3 字=59 / 4 字=72 / 2 字=46 / 5 字=85 / 6 字=98 / 7 字=111 / 8 字=124。 */
 .action-button-2 { width: 46px; }
+.action-button-3 { width: 59px; }
+.action-button-4 { width: 72px; }
 .action-button-5  { width: 85px; }
 .action-button-6  { width: 98px; }
 .action-button-7  { width: 111px; }
@@ -649,109 +711,6 @@ sp-action-button {
   border-color: var(--primary-color) !important;
 }
 
-/* --------------------------------------------------------------------------
-   8d. 面板外壳（统一收口为单一通用类 .panel，消除「父/子面板枚举」的重复 CSS）
-   所有面板容器（父面板滚动区 / 绘画工具箱根 / 4 个子面板）共用同一套外壳：
-   内边距 10px、竖直滚动、自定义滚动条、直接子项 flex-shrink:0、纵向 flex 列。
-   4 个子面板（纯色/渐变/描边/图案）也只挂 .panel，靠「#app .panel-section ~ .panel」
-   这一上下文选择器补绝对定位铺满（它们是 .panel-section 之后的同级 .panel），
-   不再有独立的 .subpanel 类。
-   ⚠️ 子面板 z-index:9999 由 input-fix.css 统一强制，此处不重复声明。
-   -------------------------------------------------------------------------- */
-.panel {
-  --adjust-scrollbar-w: 10px;
-  padding: 10px;
-  box-sizing: border-box;
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-
-/* 4 个子面板（#app .panel-section ~ .panel）共用填充布局：绝对定位铺满父面板、
-   纵向 flex 列。它们与 .panel-section 是同级的 .panel，靠上下文选择器识别，
-   不再单独挂 .subpanel 类。2026-09-03 起取消 height:calc(100% - 20px) 的
-   「底部 20px 留白」（info 条已改为随内容滚动的普通文档流元素）。 */
-#app .panel-section ~ .panel {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: var(--bg-color);
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-start;
-}
-
-/* 面板外壳（.panel）的直接子项一律不压缩：
-   外壳是「定高 + flex 列」，而 flex 子项默认 flex-shrink:1，内容超出高度时
-   会被纵向压扁——表现为 APP 主按钮（50px）被压矮、卡片间距被吃掉。
-   正确行为是保持各区块固有高度、由外壳自身的滚动条承载溢出
-   （工具箱激活卡片当初用 flex:none 单独打的补丁，现统一收口于此）。 */
-.panel > * {
-  flex-shrink: 0;
-}
-
-/* ⚠️ .panel（父面板外壳）自身不带 height 规则：
-   工具箱根 .panel 的定高（height:100%）由 adjustment.css 提供（其是
-   .pixeladjustment-root 的唯一直接子项，height:100% 直接解析、实测可滚）；
-   APP 主面板滚动区 .panel 的定高由 app.css 的「.panel-section > .panel」提供
-   （其父 .panel-section 是 .app-root > .panel 的 flex:1 子项）；
-   外壳 flex 子项叠 height:100% 在 UXP 下会与 flex 伸缩打架（内容截断、无滚动条），
-   故均走「定高块级父 + 百分比高度」这一被验证可靠的定高路径。
-   折叠分区自身的 flex-shrink:0 由上方 .panel > * 统一兜底。 */
-
-/* ↳ 设置项数字输入均已在 .num-input-row 内，统一走上方 .num-input-row
-   input[type="number"]（宽 32px × 高 24px，容器 32px 高留 4px 缓冲）。
-   2026-09-03 定稿：数字字段宽一律 32px，原 35px / 24px 覆盖规则已删，
-   不做第二套宽度。 */
-
-/* 面板外壳（.panel，含子面板的 #app .panel-section ~ .panel）统一自定义滚动条
-   （唯一一套，覆盖浮动窗口）。⚠️ 伪元素 width 写字面值 10px（与上方
-   --adjust-scrollbar-w 同值），因 UXP 下 ::-webkit-scrollbar 里用 var() 不保证解析。 */
-.panel::-webkit-scrollbar {
-  width: 10px;
-}
-.panel::-webkit-scrollbar-thumb {
-  background-color: var(--scrollbar-thumb);
-  border-radius: 8px;
-  border: 2px solid transparent;
-  background-clip: content-box;
-}
-.panel::-webkit-scrollbar-thumb:hover {
-  background-color: color-mix(in oklab, var(--scrollbar-thumb) 90%, rgb(255, 255, 255) 10%);
-}
-.panel::-webkit-scrollbar-track {
-  background-color: var(--scrollbar-track);
-  border-radius: 8px;
-}
-
-/* --------------------------------------------------------------------------
-   8e. 面板分区容器 / 二级标题（全面板通用的「区块」与区块小标题）
-   唯一类：.panel-section（区块，底边分隔线统一断行，行式区块默认横向排列）/
-          .panel-section--col（列式区块修饰类：内容纵向堆叠）/
-          .subpanel-title-2（区块内二级标题，如「计算方法」）。
-   原 stroke.css 的 stroke-wide-container / stroke-blende-mode / stroke-opacity-control /
-   position-radio-group，与原 colorpanel.css 的 colorsettings-slider-group /
-   colorsettings-calculation-mode 全部并入此类；面板 CSS 不再各自声明「分区」样式，
-   改通用只需动这里一处，消除各面板 padding/margin 漂移。
-   -------------------------------------------------------------------------- */
-.panel-section {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 15px 0;
-  margin-bottom: 15px;
-}
-
-/* 列式区块：内容纵向堆叠（颜色面板滑块组、计算方法选择器等） */
-.panel-section--col {
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: flex-start;
-}
 
 /* 子面板标题栏（原 .subpanel-header）：标题与关闭按钮左右分布，与各子面板统一。
    标题文字的字体样式（18px / 粗体 / 主题色 / 左缩进 5px）已并入本类，
@@ -788,10 +747,10 @@ sp-action-button {
      background-repeat / 渐变 的渲染缺陷；左右各留 14px，不透明度 0.5。
    -------------------------------------------------------------------------- */
 .divider {
-  width: calc(100% + 20px);
+  width: 100%;
   height: 1px;
   background-color: var(--border-color);
-  margin: 15px 10px 15px -10px;
+  margin: 15px 0 15px 0;
 }
 
 .divider-dashed {
@@ -811,6 +770,7 @@ sp-action-button {
   margin-right: 6px;
   background-color: var(--border-color);
 }
+
 
 /* --------------------------------------------------------------------------
    8f. 折叠分区（通用：主面板「选区/填充选项」与工具箱子面板分区共用同一套）
@@ -901,7 +861,7 @@ sp-action-button {
    9. 开关行（sp-switch + 文字标签）
    #app 主面板用 .switch-container（整行列表行，开关右侧对齐）；
    工具箱用 .switch-row（内联容器，类似 .num-input-wrap，装「标签 + 开关」不占整行）。
-   标签统一用 .label-static；开关 sp-switch 样式仅此一处定义。
+   标签统一用 label-N（按字数定宽）；开关 sp-switch 样式仅此一处定义。
    -------------------------------------------------------------------------- */
 .switch-container {
   display: flex;
@@ -911,7 +871,7 @@ sp-action-button {
   border-bottom: 1px solid var(--border-color);
 }
 /* 标签与开关间距用 margin 实现（UXP 不支持 flex gap） */
-.switch-container > .label-static {
+.switch-container > [class^="label-"] {
   margin-right: 8px;
 }
 
@@ -923,8 +883,8 @@ sp-action-button {
 }
 
 /* 开关被禁用时（如新建图层 / 清除模式），左侧标签文字变灰 */
-.switch-container:has(sp-switch[disabled]) .label-static,
-.switch-row:has(sp-switch[disabled]) .label-static {
+.switch-container:has(sp-switch[disabled]) [class^="label-"],
+.switch-row:has(sp-switch[disabled]) [class^="label-"] {
   cursor: not-allowed;
   color: var(--disabled-color);
 }
@@ -1015,7 +975,7 @@ sp-radio {
    11. checkbox 选项（底部选项条 / 图案剪贴蒙版 + 旋转阵列 共用）
    外容器 .checkbox-options；每列 .checkbox-column；
    每个「标签 + 勾选框」单元为内联容器 .checkbox-row（类似 .num-input-wrap，
-   装 .label-static + .checkbox-input，不占整行）。
+   装 label-N + .checkbox-input，不占整行）。
    -------------------------------------------------------------------------- */
 .checkbox-options {
   padding: 10px;
@@ -1038,7 +998,7 @@ sp-radio {
   align-items: center;
 }
 .checkbox-row > label,
-.checkbox-row > .label-static {
+.checkbox-row > [class^="label-"] {
   margin-right: 6px;
 }
 
@@ -1053,7 +1013,7 @@ sp-radio {
 }
 
 /* 勾选框禁用时，同单元标签文字变灰 */
-.checkbox-row:has(input:disabled) .label-static {
+.checkbox-row:has(input:disabled) [class^="label-"] {
   opacity: 0.5;
   cursor: not-allowed;
   color: var(--disabled-color);
@@ -1119,4 +1079,17 @@ sp-radio {
 body.label-drag-cursor,
 body.label-drag-cursor * {
   cursor: ew-resize !important;
+}
+
+/* 预览区居中灰字提示，渐变面板（多选预设 / 未选预设 / 渐变全透明）与
+   图案面板（未选图案）共用 */
+.final-preview-hint {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: rgb(102, 102, 102);
+  font-size: 12px;
+  z-index: 3;
+  pointer-events: none;
 }

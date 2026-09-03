@@ -166,7 +166,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
 
         {!clearMode && (
           <div className="panel-section">
-            <label className="label-static">混合模式</label>
+            <label className="label-4">混合模式</label>
             <Select
               value={blendMode}
               groups={BLEND_MODE_OPTIONS}

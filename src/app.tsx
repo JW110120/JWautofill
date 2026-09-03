@@ -1336,7 +1336,7 @@ class App extends React.Component<AppProps, AppState> {
 
     render() {
         return (
-            <div className="panel">
+            <div className="panel" ref={this.panelRef}>
                 {/* 授权对话框 */}
                 <LicenseDialog
                     isOpen={this.state.isLicenseDialogOpen}
@@ -1347,14 +1347,16 @@ class App extends React.Component<AppProps, AppState> {
                     onTrialStarted={this.handleTrialStarted}
                     onClose={this.closeLicenseDialog}
                 />
-                <div className="panel-section">
-                {/* 主面板滚动容器：直接挂 .panel 类（与绘画工具箱父面板同款外壳），
-                    所有分区都放在这里，由 .panel 产生滑动条；4 个子面板是 absolute，
-                    挂在 .panel-section 之后的同级节点上、不随滚动。 */}
-                <div className="panel" ref={this.panelRef}>
+            <div className="panel-section panel-section--col">
+                {/* 主面板滚动容器即最外层 .panel（同绘画工具箱父面板同款外壳）：
+                    所有分区都放在 .panel-section 内，由它产生滑动条；4 个子面板是 absolute，
+                    挂在 .panel-section 之后的同级节点上、不随滚动。
+                    ⚠️ 不再额外套一层 .panel（之前 1354 内层 .panel 与外壳 .panel 各带 10px
+                    内边距，叠加成 20px，与工具箱 10px 不一致），现仅外壳 .panel 提供 10px。 */}
                 <h3 className="main-title" title={helpTexts.selectionFill.panelTitle}>
-                    <span className="main-title-text">选区填充2.0</span>                    
+                    选区填充2.0
                 </h3>
+                <div className="divider"></div>
                 <div className="main-button-container">
                     <div 
                     role="button"
@@ -1459,7 +1461,7 @@ title={helpTexts.selectionFill.blendMode}>
                 </div>
 
  {/* 新增选区选项区域 */}
-            <div className="collapse-section" data-section-id="selectionOptions">
+                <div className="collapse-section" data-section-id="selectionOptions">
                             <div className="collapse-header" onClick={this.toggleSelectionOptions} title={helpTexts.selectionFill.selectionOptionsToggle}>
 
                                 <div className={this.state.isSelectionOptionsExpanded ? 'collapse-icon-expanded' : 'collapse-icon'}>
@@ -1564,10 +1566,10 @@ title={helpTexts.selectionFill.selectionExpand}>
                                     </div>
                             </div>
                             )}
-                        </div>
+                </div>
 
 
-            <div className="collapse-section" data-section-id="fillOptions">
+                <div className="collapse-section" data-section-id="fillOptions">
                     <div className="collapse-header" onClick={this.toggleExpand} title={helpTexts.selectionFill.fillOptionsToggle}>
                         <div className={this.state.isExpanded ? 'collapse-icon-expanded' : 'collapse-icon'}>
                             <ExpandIcon expanded={this.state.isExpanded} />
@@ -1580,7 +1582,7 @@ title={helpTexts.selectionFill.selectionExpand}>
 
                         {/* 新建图层开关 */}
                         <div className="switch-container">
-                            <span className="label-static" 
+                            <span className="label-4" 
 title={helpTexts.selectionFill.createNewLayer}>
                             新建图层
                             </span>
@@ -1594,7 +1596,7 @@ title={helpTexts.selectionFill.createNewLayer}>
 
                        {/* 描边模式开关 */}
                        <div className="switch-container">
-                            <label className="label-static" title={helpTexts.selectionFill.strokeModeLabel}>描边模式</label>
+                            <label className="label-4" title={helpTexts.selectionFill.strokeModeLabel}>描边模式</label>
                             {this.state.strokeEnabled && (
                                 <div className="stroke-color-group">
                                 <div 
@@ -1688,7 +1690,7 @@ title={helpTexts.selectionFill.createNewLayer}>
 
                         {/* 清除模式开关 */}
                         <div className="switch-container">
-                            <label className="label-static" 
+                            <label className="label-4" 
 title={helpTexts.selectionFill.clearMode}>
                             清除模式
                             </label>
@@ -1753,7 +1755,7 @@ title={helpTexts.selectionFill.gradientDetail}>
                                     <div className="checkbox-row">
                                         <label
                                             htmlFor="deselectCheckbox"
-                                            className="label-static"
+                                            className="label-6"
                                             onClick={this.toggleDeselectAfterFill}
                                             title={helpTexts.selectionFill.deselectLabel}
                                         >
@@ -1771,7 +1773,7 @@ title={helpTexts.selectionFill.gradientDetail}>
                                     <div className="checkbox-row">
                                         <label
                                             htmlFor="historyCheckbox"
-                                            className="label-static"
+                                            className="label-6"
                                             onClick={this.toggleAutoUpdateHistory}
                                             title={helpTexts.selectionFill.historyLabel}
                                         >
@@ -1792,7 +1794,7 @@ title={helpTexts.selectionFill.gradientDetail}>
                                     <div className="checkbox-row">
                                         <label
                                             htmlFor="autoOffOnToolCheckbox"
-                                            className="label-static"
+                                            className="label-6"
                                             onClick={this.toggleAutoOffOnOtherTool}
                                             title={helpTexts.selectionFill.autoOffLabel}
                                         >
@@ -1810,7 +1812,7 @@ title={helpTexts.selectionFill.gradientDetail}>
                                     <div className="checkbox-row">
                                         <label
                                             htmlFor="lassoOnEnableCheckbox"
-                                            className="label-static"
+                                            className="label-6"
                                             onClick={this.toggleSwitchToLassoOnEnable}
                                             title={helpTexts.selectionFill.lassoLabel}
                                         >
@@ -1834,7 +1836,6 @@ title={helpTexts.selectionFill.gradientDetail}>
                     滚到底才出现；父/子容器因此都铺满 100%，不再给底部留 20px。 */}
                 <div className="info-plane">
                     <span className="copyright">Copyright © listen2me (JW)</span>
-                </div>
                 </div>
                 </div>
             </div>

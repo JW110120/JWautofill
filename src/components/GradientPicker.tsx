@@ -1571,7 +1571,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 {/* 颜色控制 */}
                 {selectedStopIndex !== null && selectedStopType === 'color' && (
                     <div className="color-input-container">
-                        <label className="label-static">颜色：</label>
+                        <label className="label-3">颜色：</label>
                         <span className="color-prefix">#</span>
                         <input
                             type="text"
@@ -1632,7 +1632,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             {/* 渐变类型设置 */}
             <div className="gradient-settings-area">
                 <div className="gradient-setting-item">
-                    <label className="label-static">样式：</label>
+                    <label className="label-3">样式：</label>
                     <Select
                         value={gradientType}
                         options={[

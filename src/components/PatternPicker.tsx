@@ -1811,7 +1811,7 @@ interface PatternPickerProps {
                     <div className="checkbox-row">
                         <label
                             htmlFor="transparencyCheckbox"
-                            className="label-static"
+                            className="label-5"
                             onClick={() => setPreserveTransparency(!preserveTransparency)}
                         >
                             剪贴蒙版：
@@ -1828,7 +1828,7 @@ interface PatternPickerProps {
                         <div className="checkbox-row">
                             <label
                                 htmlFor="rotateAllCheckbox"
-                                className="label-static"
+                                className="label-5"
                                 onClick={() => setRotateAll(!rotateAll)}
                             >
                                 旋转阵列：

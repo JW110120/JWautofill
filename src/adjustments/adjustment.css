@@ -167,7 +167,7 @@
   /* ↳ 双按钮行已统一收口到 common.css 的 .row-between（自带 10px 上下外边距），
      此处不再留副本。 */
 
-  /* ↳ 通用按钮样式（.action-button 及其 .auto/.compact/.disabled 变体）已统一收口到 common.css */
+  /* ↳ 通用按钮样式（.action-button-4 及其 .auto/.compact/.disabled 变体）已统一收口到 common.css */
 /* ↳ 笔刷热键录制区图标组已统一收口为 common.css 的 .icon-button-group（右对齐 flex）。
    此处只补工具箱专属的 4px 左间距。 */
 .icon-button-group {
@@ -364,8 +364,8 @@
 
   /* ↳ 可拖拽滑块标签（现 .label-drag，ew-resize 光标同组提供）已收口到 common.css
      （渐变 / 工具箱 / 描边标签同一类）；原 .draggable-label / .dragging 状态类已删；
-   ↳ 下拉行静态标签（.label-static：cursor:default/flex:none/6px 间距）
-     已收口到 common.css；
+   ↳ 下拉行静态标签（原 .label-static：cursor:default/flex:none/6px 间距）
+     已收口到 common.css 的 label-N（按字数定宽 + 静态光标规则）；
    ↳ 单位标签（原 .wide- / .wider-adjustment-slider-label 别名）本体已由 common.css 的
      .slider-text 基础标签组提供
      （字号/颜色/nowrap/flex:none 内容宽度），原 50px/60px 固定 flex-basis 覆盖已删。 */
@@ -416,7 +416,7 @@
   /* ↳ 水平实线分割线（.adjustment-divider）与虚线分割线（.adjustment-dashed-divider /
      -dash）已收口到 common.css 的通用 .divider / .divider-dashed（单一来源），
      改分割线样式只需动 common.css 一处。 */
-  /* ↳ 按钮宽度分档（.action-button-lv2 / -wide / -5..-8 / -quad）已统一收口到 common.css */
+  /* ↳ 按钮宽度分档（.action-button-2 / -3 / -4 / -5..-8 / -quad）已统一收口到 common.css */
 
 /* 折叠分区（工具箱子面板分区）样式已统一收口到 common.css 的
    .collapse-section / .collapse-header / .collapse-icon / .collapse-content /

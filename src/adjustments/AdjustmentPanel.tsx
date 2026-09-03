@@ -2656,11 +2656,11 @@ const renderDetailAdjustContent = () => (
   <div className="adjustment-section">
 
     <div className="row-between">
-      <div role="button" tabIndex={0} className="action-button" onClick={handlePixelTransition} title={helpTexts.adjustment.pixelTransition}>像素过渡</div>
+      <div role="button" tabIndex={0} className="action-button-4" onClick={handlePixelTransition} title={helpTexts.adjustment.pixelTransition}>像素过渡</div>
 
       <div className="switch-row">
         <label
-          className="label-static"
+          className="label-4"
           onClick={() => setUsePowerfulMode(!usePowerfulMode)}
           title={helpTexts.adjustment.powerfulMode}
         >强力模式</label>
@@ -2694,7 +2694,7 @@ const renderDetailAdjustContent = () => (
 
     <div className="divider"></div>
 
-    <div role="button" tabIndex={0} className="action-button" onClick={handleGradientModify} title={helpTexts.adjustment.gradientModify}>梯度修改</div>
+    <div role="button" tabIndex={0} className="action-button-4" onClick={handleGradientModify} title={helpTexts.adjustment.gradientModify}>梯度修改</div>
 
       <div className="row-between">
         <div className={sliderLabelClass('gradientRelaxStrength', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'gradientRelaxStrength', gradientRelaxStrength)} title={helpTexts.adjustment.gradientRelax}>程度</div>
@@ -2707,7 +2707,7 @@ const renderDetailAdjustContent = () => (
 
     <div className="divider"></div>
 
-    <div role="button" tabIndex={0} className="action-button" onClick={handleSpecialSharpen} title={helpTexts.adjustment.specialSharpen}>特殊锐化</div>
+    <div role="button" tabIndex={0} className="action-button-4" onClick={handleSpecialSharpen} title={helpTexts.adjustment.specialSharpen}>特殊锐化</div>
 
       <div className="row-between">
         <div className={sliderLabelClass('specialSharpenStrength', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialSharpenStrength', specialSharpenStrength)} title={helpTexts.adjustment.specialSharpenStrength}>强度</div>
@@ -2720,7 +2720,7 @@ const renderDetailAdjustContent = () => (
 
     <div className="divider"></div>
 
-    <div role="button" tabIndex={0} className="action-button" onClick={handleHighFrequencyEnhancement} title={helpTexts.adjustment.highFreq}>高频增强</div>
+    <div role="button" tabIndex={0} className="action-button-4" onClick={handleHighFrequencyEnhancement} title={helpTexts.adjustment.highFreq}>高频增强</div>
 
       <div className="row-between">
         <div className={sliderLabelClass('highFreqIntensity', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'highFreqIntensity', highFreqIntensity)} title={helpTexts.adjustment.highFreqIntensity}>强度</div>
@@ -2743,11 +2743,11 @@ const renderDetailAdjustContent = () => (
 
 const renderEdgeProcessingContent = () => (
   <div className="adjustment-section">
-    <div role="button" tabIndex={0} className="action-button" onClick={handleSmartEdgeSmooth} title={helpTexts.adjustment.edgeSmooth}>边缘平滑</div>
+    <div role="button" tabIndex={0} className="action-button-4" onClick={handleSmartEdgeSmooth} title={helpTexts.adjustment.edgeSmooth}>边缘平滑</div>
 
       <div className="row-between">
         {/* 下拉行：标签不可拖拽，光标保持 default（与可拖拽滑块标签区分） */}
-        <div className="label-static" title={helpTexts.adjustment.edgeSmoothMode}>平滑模式</div>
+        <div className="label-4" title={helpTexts.adjustment.edgeSmoothMode}>平滑模式</div>
         <div className="unit-container">
           <Select
             value={edgeSmoothMode}
@@ -2990,7 +2990,7 @@ const renderMaskSyncContent = () => (
         <div className="mask-sync-footer">
           <div className="switch-row">
             <label
-              className="label-static"
+              className="label-2"
               title={helpTexts.adjustment.maskSyncEnabled}
             >同步</label>
             <sp-switch
@@ -3107,11 +3107,11 @@ const renderQuickActionContent = () => (
   <div className="adjustment-section">
 
     <div className="row-between">
-      <div role="button" tabIndex={0} className="action-button" onClick={handleBlockAverage} title={helpTexts.adjustment.blockAverage}>分块平均</div>
+      <div role="button" tabIndex={0} className="action-button-4" onClick={handleBlockAverage} title={helpTexts.adjustment.blockAverage}>分块平均</div>
       
       <div className="switch-row">
         <label 
-          className="label-static"
+          className="label-4"
           onClick={() => setUseWeightedAverage(!useWeightedAverage)}
           title={helpTexts.adjustment.weightedMode}
         >加权模式</label>
@@ -3135,7 +3135,7 @@ const renderQuickActionContent = () => (
 
     <div className="divider"></div>
 
-    <div role="button" tabIndex={0} className="action-button" onClick={handleBlockGradient} title={helpTexts.adjustment.blockGradient}>分块渐变</div>
+    <div role="button" tabIndex={0} className="action-button-4" onClick={handleBlockGradient} title={helpTexts.adjustment.blockGradient}>分块渐变</div>
 
     <div className="divider"></div>
 
@@ -3148,11 +3148,11 @@ const renderQuickActionContent = () => (
     {/* 虚线分割线：同层补色 与 分层补色 之间（JS 拼渐变渲染，短线/空各 6px） */}
     <DashedDivider />
 
-    <div role="button" tabIndex={0} className="action-button" onClick={handleBlockColorPatchLayered} title={helpTexts.adjustment.patchLayered}>分层补色</div>
+    <div role="button" tabIndex={0} className="action-button-4" onClick={handleBlockColorPatchLayered} title={helpTexts.adjustment.patchLayered}>分层补色</div>
 
       <div className="row-between">
         {/* 下拉行：标签不可拖拽，光标保持 default（原为 pointer，语义错误） */}
-        <div className="label-static" title={helpTexts.adjustment.lineReference}>线稿参考</div>
+        <div className="label-4" title={helpTexts.adjustment.lineReference}>线稿参考</div>
         <div className="unit-container">
           <Select
             value={lineReferenceLayerId ? String(lineReferenceLayerId) : 'auto'}
@@ -3175,7 +3175,7 @@ const renderQuickActionContent = () => (
     <div className="divider"></div>
 
     <div className="row-between">
-      <div role="button" tabIndex={0} className="action-button" onClick={() => handleSpecialWoodcut(false)} title={helpTexts.adjustment.woodcut}>特殊木刻</div>
+      <div role="button" tabIndex={0} className="action-button-4" onClick={() => handleSpecialWoodcut(false)} title={helpTexts.adjustment.woodcut}>特殊木刻</div>
 
       <div role="button" tabIndex={0} className="action-button-2" onClick={resetSpecialWoodcutParams} title={helpTexts.adjustment.woodcutReset}>重置</div>
     </div>
@@ -3209,7 +3209,7 @@ const renderQuickActionContent = () => (
     
     <div className="switch-row">
         <label
-          className="label-static"
+          className="label-2"
           onClick={() => setSpecialWoodcutPreview(!specialWoodcutPreview)}
           title={helpTexts.adjustment.woodcutPreview}
         >预览</label>

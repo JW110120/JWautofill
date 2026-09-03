@@ -225,7 +225,7 @@
      - .pattern-checkbox-container 已并入 common 的 .checkbox-options
        （padding:10 / height / border-top / space-between）
      - .field-cell 已并入 .checkbox-row；.field-cell-label / .pattern-checkbox-label
-       已并入 .label-static；.pattern-checkbox-input 已并入 .checkbox-input
+       已并入 label-N（原 .label-static，按字数定宽）；.pattern-checkbox-input 已并入 .checkbox-input
      - .field-row-two 左右分组对齐（已移到 common 的 .checkbox-options-row-two）
      原面板「紧凑间距（padding:5px 8px 2px、margin-bottom:5px）」与
      「.field-cell-label 不撑满」两条覆盖为漂移，已删——与 APP 底部选项区完全
