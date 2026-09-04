@@ -60,6 +60,7 @@ html, body {
      子面板靠 absolute + inset:0 铺满覆盖父面板，必须在此建立定位上下文。 */
   position: relative;
   padding: 10px;
+  background-color: var(--bg-color);
   width: 100%;
   height: 100%;
   box-sizing: border-box;
@@ -73,15 +74,14 @@ html, body {
 }
 
 
-/* 面板外壳（.panel）的直接子项 + 列式区块（.panel-section--col）的直接子项一律不压缩：
-   外壳是滚动容器（工具箱为 flex 列；选区填充面板为 block + overflow-y:auto，二者都靠
-   最外层 .panel 的滚动条承载溢出）。flex 子项默认 flex-shrink:1，面板被压缩（高度变小）时
-   会被纵向压扁——表现为主按钮被压矮、组件间距被吃掉。
-   正确行为是保持各区块固有高度、由外壳自身的滚动条承载溢出
+/* 面板外壳（.panel）的直接子项 + 列式区块（.panel-section）的直接子项一律不压缩：
+   外壳是滚动容器（工具箱与选区填充面板均为 block + overflow-y:auto，靠最外层 .panel 的
+   滚动条承载溢出）。flex 子项默认 flex-shrink:1，面板被压缩（高度变小）时会被纵向压扁——
+   表现为主按钮被压矮、组件间距被吃掉。正确行为是保持各区块固有高度、由外壳滚动条承载溢出
    （工具箱激活卡片当初用 flex:none 单独打的补丁，现统一收口于此）。
-   .panel-section--col 本身是 flex 列容器，其内部组件也要防收缩，否则外层不压缩、内层仍被压。 */
+   .panel-section 本身是 flex 列容器，其内部组件也要防收缩，否则外层不压缩、内层仍被压。 */
 .panel > *,
-.panel-section--col > * {
+.panel-section > * {
   flex-shrink: 0;
 }
 
@@ -116,51 +116,42 @@ html, body {
 
 /* --------------------------------------------------------------------------
    8e. 面板分区容器 / 二级标题（全面板通用的「区块」与区块小标题）
-   唯一类：.panel-section（区块，底边分隔线统一断行，行式区块默认横向排列）/
-          .panel-section--col（列式区块修饰类：内容纵向堆叠）/
+   唯一类：.panel-section（区块容器，默认 flex 列、内容纵向堆叠，底边分隔线统一断行）/
           .subpanel-title-2（区块内二级标题，如「计算方法」）。
    原 stroke.css 的 stroke-wide-container / stroke-blende-mode / stroke-opacity-control /
    position-radio-group，与原 colorpanel.css 的 colorsettings-slider-group /
    colorsettings-calculation-mode 全部并入此类；面板 CSS 不再各自声明「分区」样式，
    改通用只需动这里一处，消除各面板 padding/margin 漂移。
+   区块内需要「标签在左、控件在右」的横向行时，给内部元素包一层通用 .row-between
+   （见 5. 通用 space-between 行容器），不再用独立的列修饰类。
    -------------------------------------------------------------------------- */
 .panel-section {
   display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
   width: 100%;
   box-sizing: border-box;
   padding: 15px 0;
   margin-bottom: 15px;
 }
 
-/* 列式区块：内容纵向堆叠（颜色面板滑块组、计算方法选择器等） */
-.panel-section--col {
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: flex-start;
-}
-
-/* —— 主面板标题（APP 选区填充面板标题；原 APP 的 .main-title / .main-title-text 合并收口于此）——
-   单类名承载标题文字（20px 加粗）+ 居中布局；标题与下方内容的分割统一用 .divider，
-   不再用 border-bottom（避免分割线几何与 .divider 不一致）。 */
+/* —— 主面板标题 ——
+   单类名承载标题文字（20px 加粗）+ 居中布局 */
 .main-title {
   text-align: center;
   font-weight: bold;
   font-size: 20px;
-  padding: 5px 0 8px 0;
   color: var(--text-color);
   position: relative;
   display: flex;
   justify-content: center;
   align-items: center;
-  z-index: 3000;
 }
 
 
 /* --------------------------------------------------------------------------
-   1. 全局控件复位 / Spectrum 禁用态
+   1. 全局控件禁用态
    -------------------------------------------------------------------------- */
 /* 通用 Spectrum 控件禁用状态：cursor 统一改为 not-allowed，
    包括开关、按钮、单选等所有可点击控件；新增 disabled 控件只需在 React 端

@@ -1,6 +1,6 @@
 /* 颜色设置面板样式
    ⚠️ 本面板样式已全部收口到 common.css（单一来源），本文件不再保留任何规则：
-   - 分区容器（原 colorsettings-slider-group / colorsettings-calculation-mode）→ common.css 的 .panel-section / .panel-section--col
+   - 分区容器（原 colorsettings-slider-group / colorsettings-calculation-mode）→ common.css 的 .panel-section（默认列，内部行用 .row-between）
    - 二级标题（原 colorsettings-calculation-mode label）→ common.css 的 .subpanel-title-2
    - 单个滑块块（原 colorsettings-slider-item + 禁用态）→ common.css 的 .subpanel-slider-item
    - 滑块内部堆叠（原 colorsettings-entire-slider）→ common.css 的 .slider-stack

@@ -14,9 +14,9 @@
 }
 
 /* 授权/试用状态提示样式。
-   ⚠️ .panel（工具箱根外壳）是 flex 列 + overflow-y:auto，默认 flex-shrink:1 会让本卡片在
-   下方分区展开、内容超出高度时被纵向压缩到只剩文字高度。
-   flex:none（= flex:0 0 auto）+ min-height 锁定 30px，保证任何展开组合下都不被压缩。
+   ⚠️ .panel（工具箱根外壳）已统一为 block + overflow-y:auto，块级子项本就不参与 flex 伸缩、
+   不会被纵向压扁，故下方 flex:none 仅为历史兼容、实际已无压缩风险；
+   min-height 锁定 30px 仍保留，保证任何展开组合下高度稳定。
    ⚠️ 不要指望 z-index 让它浮在锁定遮罩之上：遮罩是 position:fixed，
       UXP 下 fixed 元素绘制在普通内容之上，z-index 再高也会被盖住。
       正确做法见 AdjustmentPanel.tsx —— 锁定态时把卡片渲染进遮罩内部。 */
@@ -131,47 +131,19 @@
   text-overflow: ellipsis;
 }
 
-/* 绘画工具箱根容器（原 .subpanel，该类已收口为通用 .panel，与 APP 主面板滚动区共用一套外壳） */
-.panel {
-  width: 100%;
-  height: 100%;
-  max-height: 100%;
-  min-height: 0;
-  background-color: var(--bg-color);
-  color: var(--text-color);
-  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-start;
-  align-items: stretch;
-}
-
 /* ↳ 工具箱与 4 个子面板的外壳滚动条（::-webkit-scrollbar thumb/track）已统一收口到 common.css，
    覆盖 .panel（含 #app .panel-section ~ .panel 子面板） */
 
 /* 分区容器 */
 .adjustment-section {
   width: 100%;
-  max-width: 280px;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
   padding: 10px 10px;
-  margin-bottom: 20px;
+  margin: 0 0 20px 0;
   border: 1px solid var(--border-color);
   border-radius: 3px;
-  margin-left: 0;
-  margin-right: 0;
-}
-
-  /* ↳ 双按钮行已统一收口到 common.css 的 .row-between（自带 10px 上下外边距），
-     此处不再留副本。 */
-
-  /* ↳ 通用按钮样式（.action-button-4 及其 .auto/.compact/.disabled 变体）已统一收口到 common.css */
-/* ↳ 笔刷热键录制区图标组已统一收口为 common.css 的 .icon-button-group（右对齐 flex）。
-   此处只补工具箱专属的 4px 左间距。 */
-.icon-button-group {
-  margin-left: 4px;
 }
 
 .hotkey-icon-cell {
@@ -348,44 +320,7 @@
   white-space: nowrap;
 }
 
-  /* ↳ 开关行（.switch-container / .switch-row，原 .adjustment-swtich-container 等）已统一收口到 common.css */
 
-/* ↳ 行内滑块容器/项已统一收口到 common.css 的 .slider-stack（原
-   .inline-slider-container）/ .row-between（原 .inline-slider-item /
-   .selection-slider-item）/ .inline-slider-item-no-gap（→ .row-between）；此处不再留副本。 */
-
-  /* ↳ 行内滑块项已统一收口到 common.css 的 .row-between（工具箱
-     .adjustment-slider-item / .selection-slider-item 别名已删，TSX 直接写 .row-between） */
-
-  /* ↳ 滑块标签基础档（.slider-text / -3 / -4）已统一收口到 common.css；
-     下方仅保留工具箱专属的拖拽/静态标签修饰与单位标签宽度。 */
-
-  /* ↳ 拖拽光标锁（body.label-drag-cursor）已统一收口到 common.css */
-
-  /* ↳ 可拖拽滑块标签（现 .label-drag，ew-resize 光标同组提供）已收口到 common.css
-     （渐变 / 工具箱 / 描边标签同一类）；原 .draggable-label / .dragging 状态类已删；
-   ↳ 下拉行静态标签（原 .label-static：cursor:default/flex:none/6px 间距）
-     已收口到 common.css 的 label-N（按字数定宽 + 静态光标规则）；
-   ↳ 单位标签（原 .wide- / .wider-adjustment-slider-label 别名）本体已由 common.css 的
-     .slider-text 基础标签组提供
-     （字号/颜色/nowrap/flex:none 内容宽度），原 50px/60px 固定 flex-basis 覆盖已删。 */
-
-/* RangeSlider 在调整面板中的适配（替代 PS 27.9 后失效的原生 range）。
-   ↳ 原 .slider-stack 包裹层已废弃（直接去掉 TSX 包裹 div），这里改用 #pixeladjustment
-   作用域锁定工具箱内的行内滑块，不影响 #app 下的子面板滑块。 */
-#pixeladjustment .slider-track {
-  display: block;
-  position: relative;
-  flex: 1 1 auto;
-  min-width: 0;
-  height: 18px;
-  /* 与 number-input 纵向居中（unit-container 已 align-items:center），再上移2px */
-  margin-top: 1px;
-  background: transparent;
-  cursor: pointer;
-  /* 可见轨道宽度减少14px（左右各内缩7px，比上一轮再短4px，保证手柄在两端时与外部有足够间距） */
-  --rs-track-inset: 13px;
-}
 
 .unit-container{
   display: flex;
@@ -398,30 +333,6 @@
   margin-left: 3px;
 }
 
-/* ↳ 工具箱数字输入已统一收口到 common.css：.num-input-row 裁剪容器（含 :focus-within）
-   与内部 input（24px）直接复用 common 规则；原 #pixeladjustment 作用域的
-   flex-basis:35px / input 35px×32px 覆盖已删（2026-09-02 用户定稿：全插件数字输入
-   一律 24px，工具箱与子面板同一套）。 */
-
-/* ↳ .adjustment-number-input 本体已由 common.css 提供（24px、无边框、appearance:none）。
-   原工具箱 35px 带 border 的覆盖副本已删——该输入总在 .num-input-row 内，
-   视觉边框由外层裁剪容器提供（写 border 会叠成「框里框」）。 */
-
-/* ↳ #pixeladjustment input[type="number"]（appearance/边框/22px 高）已删：
-   appearance:none 由 common.css 的全局 input[type="number"] 规则提供；
-   数字输入统一走 .num-input-row + common 24px，不再有第二套尺寸。 */
-
-  /* ↳ 单位符号（原 .adjustment-unit 别名）已统一收口到 common.css 的 .num-unit */
-
-  /* ↳ 水平实线分割线（.adjustment-divider）与虚线分割线（.adjustment-dashed-divider /
-     -dash）已收口到 common.css 的通用 .divider / .divider-dashed（单一来源），
-     改分割线样式只需动 common.css 一处。 */
-  /* ↳ 按钮宽度分档（.action-button-2 / -3 / -4 / -5..-8 / -quad）已统一收口到 common.css */
-
-/* 折叠分区（工具箱子面板分区）样式已统一收口到 common.css 的
-   .collapse-section / .collapse-header / .collapse-icon / .collapse-content /
-   .collapse-content-expanded（与 APP 主面板「选区/填充选项」同一套），
-   2026-09-03 删除本处副本。 */
 
 /* 模态框遮罩与内容*/
 .adjustment-modal-overlay {
@@ -486,9 +397,6 @@
   padding-left: 10px;
   padding-right: 10px;
 }
-
-/* ↳ 关闭按钮已统一收口为 common.css 的 .close-button（子面板与浮动窗口共用），
-   2026-09-03 删除本处 .adjustment-modal-close 副本。 */
 
 /* ================= 蒙版同步分区 ================= */
 /* 蒙版同步分区：不再复用 .adjustment-section（其 border + padding 会在引擎状态条与
@@ -652,8 +560,6 @@
   flex-shrink: 1;
 }
 
-/* 每任务上次同步结果：已收口到 common.css 的 .notify / .notify-ok / .notify-fail /
-   .notify-warn（图标 .notify-icon、正文 .notify-text）；此处不再留副本。 */
 
 /* 同步任务卡片：圆角矩形（背景与笔刷热键快捷键记录 .hotkey-entry-row 同一 --entry-bg，更精致统一） */
 .mask-sync-task {
@@ -866,8 +772,6 @@
   margin-right: 0;
 }
 
-/* ↳ 下拉行内项无间距修饰已收口为 common.css 的自包含单类名
-   .row-between（原 .inline-slider-item-no-gap / .selection-slider-item-no-gap 别名已删）。 */
 
 /* 弹出层：由 Select.tsx 用 createPortal 挂到所属面板根容器（#app /
    #pixeladjustment，见 utils/popRoot.ts），直接位于最上层，fixed 定位（相对视口），

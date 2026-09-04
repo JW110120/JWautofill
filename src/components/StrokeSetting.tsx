@@ -113,6 +113,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         </div>
         
         <div className="panel-section">
+          <div className="row-between">
           <label 
             className="label-drag"
             onMouseDown={(e) => handleLabelMouseDown(e, 'width')}
@@ -140,11 +141,13 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
             </div>
             <span className="num-unit">px</span>
           </div>
+          </div>
         </div>
         
         <div className="divider"></div>
 
           <div className="panel-section position-radio-group">
+            <div className="row-between">
             <sp-radio-group 
               selected={position}
               name="strokePosition"
@@ -160,24 +163,28 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
                 <span className="radio-item-label">外部</span>
               </sp-radio>
             </sp-radio-group>
+            </div>
           </div>
         
         <div className="divider"></div>
 
         {!clearMode && (
           <div className="panel-section">
+            <div className="row-between">
             <label className="label-4">混合模式</label>
             <Select
               value={blendMode}
               groups={BLEND_MODE_OPTIONS}
               onChange={(v) => onBlendModeChange(v as BlendMode)}
             />
+            </div>
           </div>
         )} 
 
         <div className="divider"></div>
         
         <div className="panel-section">
+          <div className="row-between">
           <label
             className="label-drag"
             onMouseDown={(e) => handleLabelMouseDown(e, 'opacity')}
@@ -203,6 +210,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
             />
             </div>
             <span className="num-unit">%</span>
+          </div>
           </div>
         </div>
         

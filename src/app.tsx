@@ -1347,7 +1347,7 @@ class App extends React.Component<AppProps, AppState> {
                     onTrialStarted={this.handleTrialStarted}
                     onClose={this.closeLicenseDialog}
                 />
-            <div className="panel-section panel-section--col">
+            <div className="panel-section">
                 {/* 主面板滚动容器即最外层 .panel（同绘画工具箱父面板同款外壳）：
                     所有分区都放在 .panel-section 内，由它产生滑动条；4 个子面板是 absolute，
                     挂在 .panel-section 之后的同级节点上、不随滚动。
