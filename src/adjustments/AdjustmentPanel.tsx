@@ -2653,7 +2653,7 @@ const sliderLabelClass = (key: SliderDragKey, base: string) => base;
 
 // 渲染子功能内容
 const renderDetailAdjustContent = () => (
-  <div className="adjustment-section">
+  <div className="border-panel-section">
 
     <div className="row-between">
       <div role="button" tabIndex={0} className="action-button-4" onClick={handlePixelTransition} title={helpTexts.adjustment.pixelTransition}>像素过渡</div>
@@ -2742,7 +2742,7 @@ const renderDetailAdjustContent = () => (
 );
 
 const renderEdgeProcessingContent = () => (
-  <div className="adjustment-section">
+  <div className="border-panel-section">
     <div role="button" tabIndex={0} className="action-button-4" onClick={handleSmartEdgeSmooth} title={helpTexts.adjustment.edgeSmooth}>边缘平滑</div>
 
       <div className="row-between">
@@ -2980,7 +2980,7 @@ const renderMaskSyncContent = () => (
           if (!st) return null;
           return (
             <div className={st.ok ? 'notify-ok' : 'notify-fail'}>
-              {st.ok && <span className="notify-icon">●</span>}
+              <span className={st.ok ? 'indicator indicator--md indicator--ok' : 'indicator indicator--md indicator--fail'}></span>
               <span className="notify-text">{st.text}</span>
             </div>
           );
@@ -3104,7 +3104,7 @@ const handleKnockoutWhite = () => handleKnockout('white');
 const handleKnockoutBlack = () => handleKnockout('black');
 
 const renderQuickActionContent = () => (
-  <div className="adjustment-section">
+  <div className="border-panel-section">
 
     <div className="row-between">
       <div role="button" tabIndex={0} className="action-button-4" onClick={handleBlockAverage} title={helpTexts.adjustment.blockAverage}>分块平均</div>
@@ -3260,7 +3260,7 @@ const renderSection = (section: SectionConfig) => (
       <div className={section.isCollapsed ? 'collapse-icon' : 'collapse-icon-expanded'}>
         <ExpandIcon expanded={!section.isCollapsed} />
       </div>
-      <div>{section.title}</div>
+      <div className="label-4">{section.title}</div>
     </div>
     {/* 工具箱分区：折叠态内容「条件渲染、不进 DOM」。
         ⚠️ 不能像 APP 那样常驻 + max-height:0 裁剪——UXP 官方 Known Issue：

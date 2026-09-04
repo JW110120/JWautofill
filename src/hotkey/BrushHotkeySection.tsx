@@ -243,7 +243,7 @@ export default function BrushHotkeySection() {
     if (!daemonConnected) { showMessage('快捷键服务未连接，无法录制（请先启动快捷键服务）'); return; }
     const mainCombo = getMainToggleCombo();
     setRecording(true);
-    showMessage('正在录制：请在任意位置按下要绑定的组合键，Esc 取消');
+    showMessage('正在录制「' + selectedBrush + '」：请在任意位置按下要绑定的组合键，Esc 取消');
     const res = await requestHotkeyRecording(selectedBrush);
     setRecording(false);
     if (!res) { showMessage('已取消录制'); return; }
@@ -300,8 +300,9 @@ export default function BrushHotkeySection() {
     if (!target) return;
     if (!daemonConnected) { showMessage('快捷键服务未连接，无法录制（请先启动快捷键服务）'); return; }
     const isMain = target.action === 'toggleMain';
+    const reTargetName = isMain ? '选区填充开关' : target.brush;
     setRecording(true);
-    showMessage('正在重录：请按下新的组合键，Esc 取消');
+    showMessage('正在重录「' + reTargetName + '」：请按下新的组合键，Esc 取消');
     const res = await requestHotkeyRecording(isMain ? '__MAIN__' : target.brush);
     setRecording(false);
     if (!res) { showMessage('已取消录制'); return; }
@@ -628,10 +629,11 @@ export default function BrushHotkeySection() {
         </div>
       </div>
 
-      {/* 底部文字通知：已收口到 common.css 的 .notify / .notify-ok / .notify-warn（ok 绿 / warn 橙） */}
+      {/* 底部文字通知：已收口到 common.css 的 .notify / .notify-ok / .notify-warn（ok 绿 / warn 橙）
+          正文走通用 .notify-text（13px，与激活提示一致）。 */}
       {message && (
         <div className={daemonConnected ? 'notify-ok' : 'notify-warn'}>
-          {message}
+          <span className="notify-text">{message}</span>
         </div>
       )}
     </>

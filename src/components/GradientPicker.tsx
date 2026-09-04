@@ -1274,7 +1274,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             </div>
 
             {/* 预设区域 */}
-            <div className="gradient-presets-area">
+            <div className="preset-area">
                 <div className="gradient-presets" onClick={handleContainerClick}>
                     {presets.map((preset, index) => {
                         // 生成考虑中点插值的预设预览样式

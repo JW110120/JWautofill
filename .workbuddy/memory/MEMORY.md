@@ -13,6 +13,8 @@
 - 新增/改动包裹层必须带高度，绝不可裸 height:auto 夹在定高链中间（曾致滚动条消失）。背景兜底：每层铺 var(--bg-color) 防原生层 rgb(29,29,29) 透出。
 
 ## UXP 避坑
+- sp-radio 影子布局会把 slot 内容排到行右侧：radio 行内放自绘元素（如齿轮）绝不要绝对定位 pin 边缘（必与标签重叠）；用「.radio-item space-between + 内层 .row-end(flex-end) 文档流排布」。
+
 - 原生 input 是原生视图永远画最上层，overflow 裁不住→折叠分区必须条件渲染（折叠态不进 DOM）。容器高32px+input高24px 缓冲；单位符号放容器外(.num-unit)；字段宽32px。number-input appearance:none 由 common.css 全局提供。
 - flex gap 不可靠→margin；<a> 不唤起浏览器→shell.openExternal。面板禁止 .xxx-item div{} 通配后代选择器（命中自绘弹层）。
 

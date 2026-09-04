@@ -1,13 +1,12 @@
 /* ==========================================================================
-   app.css — #app 主面板（选区填充）独有样式
+   #app 父面板（选区填充）独有样式
    --------------------------------------------------------------------------
-   只承载 #app 主面板自身的布局与状态规则，以及它的 4 个子面板
-   （纯色/渐变/图案/描边）与 input-fix 的 @import —— 这些都属于 app 面板样式。
+   只承载 #app 主父面板自身的布局与状态规则，以及它的 4 个子面板（纯色/渐变/图案/描边）与 input-fix 的 @import —— 这些都属于 app 面板样式。
    全局基础（@font-face / html,body）与全插件通用组件样式在 src/styles/common.css
    （index.tsx 顶部最先引入，也是 index.html link / manifest cssResources 的静态入口），
    本文件在其后引入，面板独有规则按特异性覆盖通用基线。
-   注：激活弹窗样式在 src/styles/license.css，由 index.tsx 在本文件之后单独引入，
-   以保证它的层叠顺序排在主面板样式之后（弹窗原本用组件内 <style> 最后注入）。
+
+   注：激活弹窗样式在 src/styles/license.css，由 index.tsx 在本文件之后单独引入，以保证它的层叠顺序排在主面板样式之后（弹窗原本用组件内 <style> 最后注入）。
    ========================================================================== */
 @import './colorpanel.css';
 @import './gradient.css';
@@ -15,7 +14,7 @@
 @import './stroke.css';
 @import './input-fix.css';
 
-/* app父面板根容器（index.tsx 中 #app 内的包裹层）。块级、定高、铺主题底色兜底。 */
+/* app父面板根容器（index.tsx 中 #app 内的包裹层）。*/
 .app-root {
   width: 100%;
   height: 100%;
@@ -23,33 +22,14 @@
   background-color: var(--bg-color);
 }
 
-/* 主面板内容容器（原 .selection-fill-container，现收口为通用区块类 .panel-section）：
-   当前为 2 级结构，外层 .app-root > .panel 即滚动容器（block + height:100% + overflow-y:auto），
-   故本容器用 flex:0 0 auto（固有高度、绝不收缩）承载全部内容，由 .panel 出滚动条；
-   绝不能用旧的 flex:1 1 auto（flex-shrink:1 会随面板被压缩而纵向压扁、内部组件被挤）。
-   子面板内的行式 .panel-section 因 width:100% 仍铺满宽度，不受影响。position:relative 供内部区块绝对定位。 */
-.panel-section {
-  width: 100%;
-  flex: 0 0 auto;
-  min-height: 0;
-  margin: 0 auto;
-  box-sizing: border-box;
-  background-color: var(--bg-color);
-  padding: 0;
-  position: relative;
-}
 /* 次级面板打开时禁止主面板滚动，避免内容在子面板后方滚动。
-   ⚠️ 只锁主滚动容器 .app-root > .panel（现唯一 .panel 外壳，即滚动容器），
-   绝不锁 #app .panel（那会一并锁住正在打开的子面板 .panel，使其自身无法滚动）。 */
+⚠️ 必要！！！：去掉后打开子面板会看到父面板下方的checkbox区域。
+ */
 body.secondary-panel-open #app .app-root > .panel {
   overflow-y: hidden;
 }
 
-/* 主面板滚动条的 padding / 溢出 / 自定义滚动条样式已统一收口到 common.css 的
-   .panel（无作用域，#app 与 #pixeladjustment 下都生效），此处不再重复。 */
-
-
-/* 混合模式容器 */
+/* APP特殊混合模式容器，特殊在需要骑在混合模式下拉菜单上，实现一种设计感 */
 .app-blendmode-container {
   display: flex;
   margin-bottom: -12px;
@@ -60,10 +40,9 @@ body.secondary-panel-open #app .app-root > .panel {
   width: calc(100% - 20px);
   left: 50%;
   transform: translateX(-50%);
-  isolation: isolate; /* 添加这一行 */
 }
 
-/* 混合模式四字文字标签，由于特殊情况不能使用47的宽度 */
+/* 特殊的混合模式四字文字标签，特殊在由于整行需要骑在混合模式下拉菜单上，所以特意不使用47的容器宽度，而是用默认宽度，用margin-right来调整间距 */
 .app-blendmode-label {
   font-size: 13px;
   margin-right: 6px;
@@ -71,117 +50,20 @@ body.secondary-panel-open #app .app-root > .panel {
   white-space: nowrap;
 }
 
-/* 清除模式开启时：混合模式标签与下拉文字变灰 --disabled-color（不用 opacity，
-   灰色由 --disabled-color 直接给出，四主题一致） */
-.app-blendmode-label-disabled {
-  font-size: 13px;
-  margin-right: 6px;
-  color: var(--disabled-color);
-  white-space: nowrap;
-}
-
-/* 滑块两层容器结构（选区填充面板）：
-   slider-container（外层卡片）> slider-block（单个滑块块，见 common.css）> 行容器（见 common.css） */
+/* APP特殊的带外边框的滑块容器，装着不透明度和羽化两个滑块，特殊点是有较大的上padding，以让滑块与混合模式下拉菜单有足够的间距：*/
 .slider-container {
   width: 100%;
   background-color: var(--bg-color);
   border: 1px solid var(--border-color);
   border-radius: 3px;
-  padding: 20px 0 0px 0;  
-  margin: 0 auto;
-  z-index: 1;
+  padding: 20px 0 0px 0;
+  margin: 0 auto 15px auto;
 }
 
-/* ↳ 单个滑块块 .entire-slider 已并入 common.css 的 .slider-block（单行滑块：
-   标签+数字在上、滑块条在下），2026-09-03 删除本处副本。 */
-
-/* 折叠分区（选区选项 / 填充选项）样式已统一收口到 common.css 的
-   .collapse-section / .collapse-header / .collapse-icon / .collapse-content /
-   .collapse-content-expanded（与工具箱子面板分区同一套），2026-09-03 删除本处副本。 */
-/* 描边颜色预览组（#app 主面板独有） */
-.stroke-color-group {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: flex-start;
-}
-
-.stroke-color-preview {
-  width: 20px;
-  height: 20px;
-  cursor: pointer;
-  margin: 0 5px 0 10px;
-  border-radius: 3px;
-}
-
-/* 填充模式组（#app 主面板独有布局；radio 本体样式见 common.css .radio-item） */
-.fill-mode-group {
-  padding: 5px 10px;
-  margin: 5px 0 5px 0;
-}
-
-.fill-mode-group .radio-item {
-  position: relative;
-}
-
-.fill-mode-group .radio-item .icon-button {
-  position: absolute;
-  right: 0;
-  top: 50%;
-  margin-top: -9px;
-}
-
-.fill-mode-group .radio-item-label {
-  /* 给右缘的绝对定位齿轮（24px）让位，避免文字与其重叠 */
-  margin-right: 28px;
-}
-
-/* ⚠️ 覆盖通用「水平双列 radio」规则（common.css 的 .panel-section sp-radio-group /
-   .panel-section sp-radio）。由于本组位于带 .panel-section 类的列式内容容器内，
-   会误命中那条「display:flex; flex-direction:row; justify-content:space-around」
-   + sp-radio{flex:1} 的规则，把本应竖直堆叠的 3 个 radio 挤成单行/错位
-   （表现为第三行挤进第二行、首行不再是 space-between）。
-   本组使用独立 .fill-mode-group 类，此处显式还原为竖直堆叠并抵消 flex:1。
-   app.css 在 common.css 之后引入，同等特异性下本处胜出。 */
-.fill-mode-group sp-radio-group {
-  display: block;
-  width: 100%;
-}
-
-.fill-mode-group sp-radio {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  flex: 0 0 auto;            /* 抵消 .panel-section sp-radio 的 flex:1，避免被压成单行 */
-  justify-content: space-between;
-  height: 32px;
-}
-
-/* 版权 / 信息条（#app 主面板独有）：滚动内容的最后一行，随内容滚到底才可见。
-   历史三态收敛于此：① 最早 position:fixed 常驻底部——UXP 下 fixed 压不住后
-   绘制的原生 number 输入，面板缩短时输入会叠到它上面；
-   ② 改为滚动区下方的流内底栏，代价是滚动区要 calc(100% - 20px) 给它让位，
-      滚动条因此只覆盖面板上方、且滚动区被 flex 压缩（2026-09-03 修掉）；
-   ③ 现在父容器一律铺满 100%，info 条作为滚动内容的末元素（20px 高、上分隔线）。 */
-.info-plane {
-  width: 100%;
-  height: 30px;
-  flex: none;
-  margin-top: 10px;
-  background-color: var(--bg-color);
-  border-top: 1px solid var(--border-color);
-  display: flex;
-  position: relative;
-}
-
-.copyright {
-  width: 100%;
-  text-align: center;
-  font-size: 10px;
-  color: var(--disabled-color);
-  position: absolute;
-  bottom: 3px;
-  left: 50%;
-  transform: translateX(-50%);
-  pointer-events: none;
+/* 填充模式三行 radio 的齿轮图标：与标签一起包在 .row-end 中、处于正常文档流，
+   水平位置由 .radio-item 的 space-between（圆点居左、.row-end 整组靠右）+ .row-end
+   的 flex-end 共同排布，垂直居中由 .row-end 的 align-items:center 保证——
+   不再使用绝对定位（旧方案齿轮 pin 在 right:0，与 sp-radio 内部靠右排版的标签重叠）。 */
+.radio-item .row-end .icon-button {
+  margin-left: 8px;       /* UXP 无 flex gap，标签与齿轮的间距单独给 */
 }

@@ -402,7 +402,7 @@ interface PatternPickerProps {
         const readBgColor = (): string => {
             try {
                 // 优先从预览容器获取背景色
-                const el = previewWrapperRef.current || (document.querySelector('.preview-wrapper') as HTMLElement) || (document.querySelector('.pattern-container') as HTMLElement);
+                const el = previewWrapperRef.current || (document.querySelector('.preview-wrapper') as HTMLElement) || (document.querySelector('.preset-area') as HTMLElement);
                 if (el) {
                     const c = getComputedStyle(el).backgroundColor;
                     if (c && c !== 'rgba(0, 0, 0, 0)' && c !== 'transparent') return c.trim();
@@ -1219,7 +1219,7 @@ interface PatternPickerProps {
                     try {
                         // 查找预览容器元素
                         const previewWrapper = (previewWrapperRef.current as HTMLElement) || (document.querySelector('.preview-wrapper') as HTMLElement);
-                        const patternContainer = document.querySelector('.pattern-container') as HTMLElement;
+                        const patternContainer = document.querySelector('.preset-area') as HTMLElement;
                         
                         // 优先从预览容器获取背景色
                         let targetElement = previewWrapper || patternContainer;
@@ -1601,7 +1601,7 @@ interface PatternPickerProps {
         if (patterns.length > 0) {
             // 延迟检查DOM，确保React已完成渲染
             const timer = setTimeout(() => {
-                const imgElements = document.querySelectorAll('.photo-container img');
+                const imgElements = document.querySelectorAll('.thumb-box img');
                 imgElements.forEach((img, index) => {
                     console.log(`图片[${index}]实际尺寸:`, {
                         offsetWidth: img.offsetWidth,
@@ -1644,12 +1644,12 @@ interface PatternPickerProps {
                     onClose();
                 }}>×</div>
             </div>
-            <div className="pattern-container">
+            <div className="preset-area">
                  <div className="pattern-preset" onClick={handleContainerClick}>
                     {patterns.map((pattern, index) => (
                         <div
                             key={pattern.id}
-                            className={selectedPatterns.has(pattern.id) ? 'photo-container-multi-selected' : (selectedPattern === pattern.id ? 'photo-container-selected' : 'photo-container')}
+                            className={selectedPatterns.has(pattern.id) ? 'thumb-box photo-container-multi-selected' : (selectedPattern === pattern.id ? 'thumb-box photo-container-selected' : 'thumb-box')}
                             draggable
                             onDragStart={(e) => handlePatternDragStart(e, index)}
                             onDragOver={(e) => handlePatternDragOver(e, index)}
@@ -1728,82 +1728,75 @@ interface PatternPickerProps {
 
             
 
-            <div className="pattern-settings-area">
-                <div className="pattern-setting-item-group">
-                    <div className="pattern-setting-item">
-                        <div className="slider-block">
-                        <div className="row-between" onMouseDown={(e) => handleMouseDown(e, 'angle')}>
+            <div className="border-panel-section">
+                <div className="slider-block">
+                    <div className="row-between" onMouseDown={(e) => handleMouseDown(e, 'angle')}>
                         <label className="label-3">角度：</label>
-                            <div className="num-input-wrap">
-                                <div className="num-input-row">
-                                    <input
-                                        type="number"
-                                        min="0"
-                                        max="360"
-                                        value={angle}
-                                        onChange={handleAngleChange}
-                                    />
-                                </div>
-                                <span className="num-unit">°</span>
+                        <div className="num-input-wrap">
+                            <div className="num-input-row">
+                                <input
+                                    type="number"
+                                    min="0"
+                                    max="360"
+                                    value={angle}
+                                    onChange={handleAngleChange}
+                                />
                             </div>
-                        </div>
-
-                        <RangeSlider
-                            min={0}
-                            max={360}
-                            step={1}
-                            value={angle}
-                            className="slider-input"
-                            onChange={(v) => setAngle(v)}
-                            onDragEnd={() => { if (selectedPattern) updatePatternTransform(selectedPattern, scale, angle); }}
-                        />
+                            <span className="num-unit">°</span>
                         </div>
                     </div>
+                    <RangeSlider
+                        min={0}
+                        max={360}
+                        step={1}
+                        value={angle}
+                        className="slider-input"
+                        onChange={(v) => setAngle(v)}
+                        onDragEnd={() => { if (selectedPattern) updatePatternTransform(selectedPattern, scale, angle); }}
+                    />
+                </div>
 
-                    <div className="pattern-setting-item">
-                        <div className="slider-block">
-                        <div className="row-between" onMouseDown={(e) => handleMouseDown(e, 'scale')}>
+                <div className="slider-block">
+                    <div className="row-between" onMouseDown={(e) => handleMouseDown(e, 'scale')}>
                         <label className="label-3">缩放：</label>
-                            <div className="num-input-wrap">
-                                <div className="num-input-row">
-                                    <input
-                                        type="number"
-                                        min="20"
-                                        max="300"
-                                        value={scale}
-                                        onChange={handleScaleChange}
-                                    />
-                                </div>
-                                <span className="num-unit">%</span>
+                        <div className="num-input-wrap">
+                            <div className="num-input-row">
+                                <input
+                                    type="number"
+                                    min="20"
+                                    max="300"
+                                    value={scale}
+                                    onChange={handleScaleChange}
+                                />
                             </div>
-                        </div>
-                        <RangeSlider
-                            min={20}
-                            max={300}
-                            step={1}
-                            value={scale}
-                            className="slider-input"
-                            onChange={(v) => setScale(v)}
-                            onDragEnd={() => { if (selectedPattern) updatePatternTransform(selectedPattern, scale, angle); }}
-                        />
+                            <span className="num-unit">%</span>
                         </div>
                     </div>
+                    <RangeSlider
+                        min={20}
+                        max={300}
+                        step={1}
+                        value={scale}
+                        className="slider-input"
+                        onChange={(v) => setScale(v)}
+                        onDragEnd={() => { if (selectedPattern) updatePatternTransform(selectedPattern, scale, angle); }}
+                    />
                 </div>
-               
-                <div className="pattern-fillmode-container">
-                            <sp-radio-group 
-                            selected={fillMode}
-                            name="fillMode"
-                            onChange={(e) => setFillMode(e.target.value as 'stamp' | 'tile')}
-                        >
-                            <sp-radio value="stamp" className="radio-item">
-                                <span className="radio-item-label">单次</span>
-                            </sp-radio>
-                            <sp-radio value="tile" className="radio-item">
-                                <span className="radio-item-label">平铺</span>
-                            </sp-radio>
-                        </sp-radio-group>
-                </div>
+
+                <div className="divider"></div>
+
+                <sp-radio-group
+                    selected={fillMode}
+                    name="fillMode"
+                    onChange={(e) => setFillMode(e.target.value as 'stamp' | 'tile')}
+                >
+                    <sp-radio value="stamp" className="radio-item">
+                        <span className="radio-item-label">单次</span>
+                    </sp-radio>
+                    <sp-radio value="tile" className="radio-item">
+                        <span className="radio-item-label">平铺</span>
+                    </sp-radio>
+                </sp-radio-group>
 
                 <div className="divider"></div>
 
@@ -1843,20 +1836,17 @@ interface PatternPickerProps {
                         </div>
                     )}
                 </div>
-                
             </div>
-            <div className="pattern-final-preview-container">
-                <div className="pattern-subtitle">
-                    <h3>预览</h3>
+            <div className="final-preview-container">
+                <div className="row-between">
+                    <h3 className="subpanel-title-2">预览</h3>
                     {selectedPattern && (
-                        <div className="preview-controls">
-                            <Select
-                                value={previewZoom.toString()}
-                                options={zoomLevels.map(level => ({ value: level.toString(), label: `${level}%` }))}
-                                onChange={(v) => handlePreviewZoomChange({ target: { value: v } })}
-                                className="zoom-picker"
-                            />
-                        </div>
+                        <Select
+                            value={previewZoom.toString()}
+                            options={zoomLevels.map(level => ({ value: level.toString(), label: `${level}%` }))}
+                            onChange={(v) => handlePreviewZoomChange({ target: { value: v } })}
+                            className="zoom-picker"
+                        />
                     )}
                 </div>
                 {/* .preview-wrapper 已提供 overflow/position，内联只留随拖拽状态变化的光标 */}

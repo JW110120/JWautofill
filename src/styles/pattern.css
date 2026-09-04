@@ -1,293 +1,81 @@
-/* 图案选择器样式
-   ⚠️ 通用组件（滑块文字标签 / range-slider / number-input / 单位符号 / 图标按钮 /
-   关闭按钮 / 双列 radio / 双列 checkbox / 拖拽光标锁）已统一收口到 common.css，
-   本文件只保留图案面板「独有」的布局与缩略图样式。改通用组件请去 common.css。 */
-  /* ↳ 外壳已统一收口到 common.css：布局由 common.css 子面板外壳块提供；
-     > * 的 flex-shrink:0 也由 common.css 统一；z-index:9999 !important 由
-     input-fix.css 强制，此处不再重复声明。 */
+/* 图案选择器样式（仅保留本面板「独有」的样式；通用组件见 common.css）
+   ⚠️ 本文件只保留图案面板「独有」样式。通用组件请去 common.css。 */
 
-  .pattern-container {
-    min-height: 130px;
-    height: auto;
-    width: 100%;
-    border-radius: 3px;
-    position: relative;
-    background-color: var(--dark-bg-color);
-    border: 1px solid var(--border-color);
-    margin-bottom: 10px;
-    z-index: 1;
-    display: flex;
-    flex-wrap: wrap;
-    flex-direction: column;
-    overflow: hidden; /* 确保内容和背景不会溢出圆角 */
-  }
-  
-  .pattern-preset {
-    width: 100%;
-    height: auto;
-    min-height: 100px;
-    padding: 0 1px;
-    top: 0;
-    left: 0;
-    overflow-y: auto;
-    border-radius: 3px;
-    position: relative;
-    z-index: 1;
-    display: flex;
-    flex-wrap: wrap;
-    flex-direction: row;
-    align-content: flex-start;
-    background-color: var(--dark-bg-color);
-  }
-  
-
-  .photo-container {
-    aspect-ratio: 1;
-    border: 1px solid var(--border-color);
-    border-radius: 3px;
-    overflow: hidden;
-    cursor: pointer;
-    position: relative;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    width: 76px;
-    height: 76px;
-    z-index: 2;
-    flex: 0 0 auto;
-  }
-
-.photo-container-selected {
-    aspect-ratio: 1;
-    border: 1px solid var(--border-color);
-    border-radius: 3px;
-    overflow: hidden;
-    cursor: pointer;
-    position: relative;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    width: 76px;
-    height: 76px;
-    z-index: 2;
-    flex: 0 0 auto;
-    border-color: var(--primary-color);
-    border-width: 2px;
-}
-
-.photo-container-multi-selected {
-    aspect-ratio: 1;
-    border: 1px solid var(--border-color);
-    border-radius: 3px;
-    overflow: hidden;
-    cursor: pointer;
-    position: relative;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    width: 76px;
-    height: 76px;
-    z-index: 2;
-    flex: 0 0 auto;
-    border-color: var(--secondary-color, rgb(255, 107, 53));
-    border-width: 2px;
-    background-color: rgba(255, 107, 53, 0.1);
-}
-  
-  .photo-container img,
-  .photo-container-selected img,
-  .photo-container-multi-selected img {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-    display: block;
-  }
-
-  /* 预设缩略图（.photo-container > img）：等比缩放居中、4px 内边距、淡入过渡。
-     ⚠️ 必须写成两级类：.photo-container img 的特异性是 (0,1,1)，
-     单类选择器压不住它的 width/height:100%。
-     opacity 仍走内联 —— 随 loadedImages 状态在 0/1 之间切换。 */
-  .photo-container .pattern-thumb-img,
-  .photo-container-selected .pattern-thumb-img,
-  .photo-container-multi-selected .pattern-thumb-img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    display: block;
-    padding: 4px;
-    transition: opacity 0.2s;
-  }
-
-  /* 缩略图加载中 / 加载失败遮罩（原内联样式）。
-     ⚠️ 文字色用 --black-text-（theme.ts 里变量名末尾确实带一个短横）：
-     原内联写的是 var(--black-text)，该变量不存在 → 声明无效 → 文字继承 --text-color，
-     在白色遮罩上几乎看不见。 */
-  .pattern-thumb-loading {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    background-color: rgba(255, 255, 255, 0.8);
-    border-radius: 4px;
-    color: var(--black-text-);
-  }
-  
-  /* ↳ 预设区底部图标栏：通用 .icon-button-group--bar（common.css）的「栏」修饰类，
-     此处只补图案面板专属的绝对定位（贴底栏）。内部图标组用 .icon-button-group。 */
-  .icon-button-group--bar {
-    position: absolute;
-    height: 30px;
-    bottom: 0;
-    right: 0;
-    left: 0;
-    z-index: 3;
-  }
-  
-  /* ↳ 内部图标组已统一收口为 common.css 的 .icon-button-group（右对齐 flex） */
-  
-  .pattern-settings-area {
-    position: relative;
-    width: 100%;
-    height: auto;
-    min-height: 100px;
-    border: 1px solid var(--border-color);
-    border-radius: 3px;
-    padding: 0;
-    color: var(--text-color);
-    margin-bottom: 10px;
-  }
-  
-  .pattern-setting-item-group {
-    display: flex;
-    flex-direction: column;
-    margin: 10px 0 10px 0;
-    padding: 0;
-    border-bottom: 1px solid var(--border-color);
-  }
-
-  .pattern-setting-item {
-    max-width: 100%;
-    position: relative;
-    overflow: hidden;
-    display: flex;
-    align-items: center;
-    padding: 0;
-    color: var(--text-color);
-    flex-direction: column;
-  }
-
-  .pattern-setting-item:last-child {
-   margin-bottom: 10px;
-  }
-
-  /* 单个滑块整体容器：parameter-collection + 滑块本体（套娃第二层）。
-     必须覆盖上方 .pattern-setting-item div{} 通配的横向 flex，否则滑块与参数行会被排成一行。
-     ↳ .pattern-entire-slider 已并入 common.css 的 .slider-block（单行滑块块），2026-09-03 改名。 */
-  .pattern-setting-item .slider-block {
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-  }
-
-  .pattern-setting-item div{
-    display: flex;
-    align-items: center ;
-  }
-
-  /* ↳ 滑块单位符号（°/%）已改用 common.css 的 .num-unit（TSX 同步加类名），
-     原 .pattern-setting-item span（margin-left:-3px）与 14px 单位容器规则已删。
-   ↳ 设置项数字输入：输入框都在 .num-input-row 内，统一走 common 的
-     宽 32px × 高 24px（容器 32px 高留 4px 缓冲），原 35px 覆盖规则已删。 */
-
-/* ---------------------------------------------------------------------------------------------------------------- */
-  .pattern-fillmode-container {
-    display: flex;
-    margin: 10px 0;
-    flex-direction: column;
-  }
-
-  /* ↳ sp-radio-group / sp-radio 的两列布局本体已收口到 common.css（「两列 radio 行布局」块）；
-     .pattern-fillmode-radio 已并入 common 的 .radio-item；span 标签走 common 的
-     .radio-item-label（原 margin-top:20px 为漂移已删）。
-     面板仅保留本面板的组上边距补偿与选项间距。 */
-  .pattern-fillmode-container sp-radio-group {
-    margin: -8px 0 0 0px;
-  }
-  /* ↳ 两列 radio 选项间距已统一收口到 common.css（.panel-section 与
-     .pattern-fillmode-container 共用 110px，单一来源），本面板不再保留 105px 漂移。 */
-  /* ↳ Checkbox 区域已全部由 common.css 通用 checkbox 规则提供（单一来源）：
-     - .pattern-checkbox-container 已并入 common 的 .checkbox-options
-       （padding:10 / height / border-top / space-between）
-     - .field-cell 已并入 .checkbox-row；.field-cell-label / .pattern-checkbox-label
-       已并入 label-N（原 .label-static，按字数定宽）；.pattern-checkbox-input 已并入 .checkbox-input
-     - .field-row-two 左右分组对齐（已移到 common 的 .checkbox-options-row-two）
-     原面板「紧凑间距（padding:5px 8px 2px、margin-bottom:5px）」与
-     「.field-cell-label 不撑满」两条覆盖为漂移，已删——与 APP 底部选项区完全
-     同一套，改 common 一处即全插件生效。 */
-
-
-  .preview-controls {
-    display: flex;
-    align-items: center;
-    margin-left: auto;
-  }
-
-  .pattern-subtitle {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    width: calc(100% - 20px);
-  }
-
-  .pattern-subtitle h3 {
-    font-size: 14px;
-    color: var(--text-color);
-  }
-
-  .zoom-indicator {
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    background-color: rgba(0, 0, 0, 0.7);
-    color: white;
-    padding: 2px 6px;
-    border-radius: 3px;
-    font-size: 11px;
-    pointer-events: none;
-  }
-
-  .pattern-final-preview-container {
-    position: relative;
-    width: 100%;
-    height: auto;
-    min-height: 120px;
-    border: 1px solid var(--border-color);
-    flex-direction: column;
-    overflow: hidden;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.preview-wrapper {
+/* pattern特制的预设存放区容器：内部横向排列预设缩略图，排满后换行。
+   占满 .preset-area（common.css）除底部图标栏外的剩余高度并自带滚动——
+   修复「两行时滚动条占满整个预设区」：旧 height:auto 在定高 flex 列里无法触发
+   内部滚动，改为 flex:1 + min-height:0 使其撑满剩余高度、由自身 overflow-y 承载
+   滚动，底部图标栏经 .icon-button-group--bar 的 margin-top:auto 顶到底。
+   面板宽 248，padding 1px，每格 74px 紧贴区域边框。 */
+/* 等距布局（横纵统一 M=4）：
+   横向：面板 250 − .panel(pad10×2) − .preset-area(border1×2) = 228 内宽；
+         容器 border-box + 左右 padding 4 → 内容 220 = 4×B + 3×M；取 B=52、M=4 → 4×52+3×4=220 整除。
+   纵向：容器上下 padding 4 = 首行上缘距/末行下缘距；每格 margin-bottom 4 = 行距；末格清 margin 防双算。
+   单格 52(含1px描边)，五段横向间距与首/末上缘、行距均 4，不换行。 */
+.pattern-preset {
   position: relative;
+  top: 0;
+  left: 0;
+  flex: 1 1 auto;
+  min-height: 0;
   width: 100%;
-  height: 200px;
-  overflow: hidden;
-  border: 1px solid var(--border-color);
+  box-sizing: border-box;
+  padding: 4px;
+  overflow-y: auto;
+  border-radius: 3px;
+  display: flex;
+  flex-wrap: wrap;
+  flex-direction: row;
+  align-content: flex-start;
+  justify-content: flex-start;
   background-color: var(--dark-bg-color);
-  user-select: none;
+  z-index: 1;
 }
 
-/* 最终预览图：以容器中心为锚点定位（top/left 50% + transform 平移居中）。
-   原内联里的 top/left/object-fit 是静态值，已搬到这里；
-   maxWidth/maxHeight（缩放）、transform（平移+旋转）、imageRendering 仍随状态走内联。 */
+/* 格间距：每格右侧 4px + 底部 4px，与容器 padding(4) 相等 →
+   横：四格之间=首尾与边框均为 4；纵：行距=4、首行上缘/末行下缘由容器 padding-top/bottom 提供。 */
+.pattern-preset .thumb-box {
+  margin-right: 4px;
+  margin-bottom: 4px;
+}
+/* 每行第 4 个清右侧 margin：4 格 + 3 段间距 = 4×52 + 3×4 = 220 = 内容宽；
+   否则第 4 格仍带 4px 右 margin → 需 224px 超限，flex 会在第 3 格后折行（3+2）。
+   此规则锁定固定 4 列/行。 */
+.pattern-preset .thumb-box:nth-child(4n) {
+  margin-right: 0;
+}
+/* 末格清右侧/底部 margin，防与容器 padding 双算（仅真正最后一项） */
+.pattern-preset .thumb-box:last-child {
+  margin-right: 0;
+  margin-bottom: 0;
+}
+
+/* 选中态：仅覆盖描边色 / 宽（基础盒 .thumb-box 在 common.css）。 */
+.photo-container-selected {
+  border-color: var(--primary-color);
+  border-width: 2px;
+}
+
+/* 多选态（红）：仅覆盖尺寸 / 描边色 / 宽（基础盒 .thumb-box 在 common.css）。 */
+.photo-container-multi-selected {
+  border-color: var(--secondary-color, rgb(255, 107, 53));
+  border-width: 2px;
+}
+
+
+/* pattern特殊的缩放指示下拉菜单：需保留 */
+.zoom-indicator {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background-color: rgba(0, 0, 0, 0.7);
+  color: white;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+/* pattern特殊的最终预览图：以容器中心为锚点定位（top/left 50% + transform 平移居中），需保留 */
 .pattern-final-preview {
   position: absolute;
   top: 50%;

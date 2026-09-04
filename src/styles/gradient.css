@@ -18,24 +18,7 @@
   color: var(--text-color);
 }
 
-/* 预设区域样式 */
-.gradient-presets-area {
-    height: 105px;
-    width: 100%;
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    border: 1px solid var(--border-color);
-    background-color: var(--dark-bg-color);
-    margin-bottom: 10px;
-    border-radius: 3px;
-    z-index: 11;
-    box-sizing: border-box;
-    /* 与图案子面板一致：预设区与下方图标栏紧贴外部容器边框（不再留 4px 内边距），
-       圆角处两层 1px 边框的重叠表现与图案面板相同。 */
-    padding: 0;
-    overflow: hidden; /* 确保内容和背景不会溢出圆角 */
-}
+/* 预设区外容器已收口到 common.css 的 .preset-area（GradientPicker 改挂该类）。 */
 
 .gradient-presets {
     width: 100%;
@@ -145,17 +128,7 @@
 
 /* 「预览区居中的灰字提示」样式（渐变与图案面板共用）在 common.css 的 .final-preview-hint */
 
-/* ↳ 预设区底部图标栏：通用 .icon-button-group--bar（common.css）的「栏」修饰类，
-   此处只补梯度面板专属的定位（顶到预设区底部）。内部图标组用 .icon-button-group。 */
-.icon-button-group--bar {
-    position: relative;
-    /* 不伸缩，保持固有高度 */
-    flex: 0 0 auto;
-    /* 关键：用 auto 上外边距把图标栏顶到预设区底部。
-       即便 .gradient-presets 在 UXP 下未能按 flex:1 撑满，图标栏也能紧贴下沿，
-       不会悬在预设列表下方与底栏之间留出空隙。 */
-    margin-top: auto;
-}
+/* 预设区底部图标栏已收口到 common.css 的 .icon-button-group--bar（含高度 32px / margin-top:auto）。 */
 
 /* 渐变颜色区域样式 */
 .gradient-edit-area {
@@ -315,15 +288,9 @@
   background-image: none;
 }
 
-/* 色值输入框右侧的当前色小方块（可点击唤起 PS 取色器）。
-   宽高/光标/边框/圆角原为内联样式，仅 backgroundColor 随色标动态变化、仍走内联。 */
-.color-preview {
-  width: 20px;
-  height: 20px;
-  border: 1px solid var(--border-color);
-  border-radius: 2px;
-  cursor: pointer;
-}
+/* 色值输入框右侧的当前色小方块（可点击唤起 PS 取色器）样式已全收口到
+   common.css 的 .color-preview（尺寸 / 光标 / 边框 / 圆角 / 间距单一来源），
+   仅 backgroundColor 随色标动态变化、仍走内联。本文件不再保留任何 .color-preview 规则。 */
 
 /* 渐变/透明度中点滑块：静态外观收口到此（原四处内联重复样式），
    仅 left 由各 stop 位置动态计算、仍走内联。 */
@@ -488,16 +455,7 @@ sp-color-slider {
   margin-right: 28px;
 }
 
-.final-preview-container {
-  position: relative;
-  border-radius: 3px;
-  display: flex;
-  height: auto;
-  min-height: 120px;
-  width: 100%;
-  border: 1px solid var(--border-color);
-    flex-direction: column;
-}
+/* 最终预览区外容器已收口到 common.css 的 .final-preview-container（固定高度 120px）。 */
 
 .final-preview {
     position: relative;

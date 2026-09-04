@@ -1,18 +1,18 @@
 /* ==========================================================================
    common.css — 全插件「整体」样式入口
    --------------------------------------------------------------------------
-   由 #app / #pixeladjustment 两个面板共享（单 bundle，均从 index.tsx 引入）。
-   本文件承担两层职责：
+   由 #app / #pixeladjustment 两个面板共享（均从 index.tsx 引入）。本文件承担两层职责：
    1. 全局基础：@font-face 字体 + html/body 根元素样式（原先散落在主面板样式里，
       2026-09-03 收口至此，两个面板文档共用同一套根样式）；
-   2. 通用组件样式「单一来源」：滑块/按钮/开关/radio/checkbox/图标按钮/拖拽光标锁。
-   本文件必须最先加载（见 index.tsx 顶部 import），其后各面板 CSS（app.css /
-   adjustment.css 等）只保留「该面板独有」的布局/间距，通用组件的视觉修改只改
-   这里即可全局生效，不会再出现「某面板漏改一处导致样式漂移」的问题。
-   本文件同时是静态入口：index.html 的 <link>、manifest cssResources、
-   webpack 拷贝均指向本文件。
+   2. 通用组件样式：如滑块/按钮/开关/radio/checkbox/图标按钮/拖拽光标锁。
+   本文件必须最先加载（见 index.tsx 顶部 import），其后各面板 CSS（app.css /adjustment.css 等）只保留该面板独有的样式，
+   通用组件的视觉修改只改这里即可全局生效，不会再出现「某面板漏改一处导致样式漂移」的问题。
+   本文件同时是静态入口：index.html 的 <link>、manifest cssResources、 webpack 拷贝均指向本文件。
 
-   命名约定：每个通用组件只保留一个「权威类」，app父面板/adjustmentpanel父面板/子面板共用同一类名，改一处全局生效。
+   约定：
+   1.每个通用组件只保留一个，让common中不存在多余的类名，从别的文件收口过来的新样式，需要改为通用的类名。
+   2.UXP 不支持 gap
+   3.通常一个组件只挂一个类名，竟可能把类名下的样式合并，除非它可能会有禁用等状态变化。
    ========================================================================== */
 
 /* --------------------------------------------------------------------------
@@ -39,25 +39,19 @@ html, body {
 
 /* 根面板容器：
    body 是 flex 容器（align-items:flex-start），flex 子项默认 height:auto；
-   #app/#pixeladjustment 若不显式定高，整条百分比高度链在根处就断了,导致滑块条不限。*/
+   #app/#pixeladjustment 若不显式定高，整条百分比高度链在根处就断了,导致滑块条不显示。*/
 #app,
 #pixeladjustment {
   height: 100%;
 }
 
 /* --------------------------------------------------------------------------
-   8d. 面板外壳（统一收口为单一通用类 .panel，消除「父/子面板枚举」的重复 CSS）
+   8d. 面板外壳
    所有面板容器（父面板滚动区 / 绘画工具箱根 / 4 个子面板）共用同一套外壳：
    内边距 10px、竖直滚动、自定义滚动条、直接子项 flex-shrink:0、纵向 flex 列。
-   4 个子面板（纯色/渐变/描边/图案）也只挂 .panel，靠「#app .panel-section ~ .panel」
-   这一上下文选择器补绝对定位铺满（它们是 .panel-section 之后的同级 .panel），
-   不再有独立的 .subpanel 类。
-   ⚠️ 子面板 z-index:9999 由 input-fix.css 统一强制，此处不重复声明。
    -------------------------------------------------------------------------- */
 .panel {
   --adjust-scrollbar-w: 10px;
-  /* 作为子面板（#app .panel-section ~ .panel）绝对定位的锚点：
-     子面板靠 absolute + inset:0 铺满覆盖父面板，必须在此建立定位上下文。 */
   position: relative;
   padding: 10px;
   background-color: var(--bg-color);
@@ -126,14 +120,30 @@ html, body {
    （见 5. 通用 space-between 行容器），不再用独立的列修饰类。
    -------------------------------------------------------------------------- */
 .panel-section {
+  width: 100%;
   display: flex;
+  flex: 0 0 auto;
   flex-direction: column;
   align-items: stretch;
   justify-content: flex-start;
+  box-sizing: border-box;
+  padding: 0;
+  margin-bottom: 15px;
+  position: relative;
+}
+
+/* 通用描边分区（图案 .pattern-settings-area / 工具箱 .adjustment-section 收口于此）。
+   与 .panel 外壳几乎一致（padding 10px + flex 列 + 背景），仅多一道描边。 */
+.border-panel-section {
   width: 100%;
   box-sizing: border-box;
-  padding: 15px 0;
-  margin-bottom: 15px;
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  margin-bottom: 10px;
+  background-color: var(--bg-color);
 }
 
 /* —— 主面板标题 ——
@@ -193,6 +203,13 @@ sp-radio[disabled] {
 .label-4 { width: 47px; }
 .label-5 { width: 60px; }
 .label-6 { width: 73px; }
+
+/* 通用标签禁用态（单一来源）：仅改色，其余盒模型由基础 .label-* 提供。
+   原 APP .app-blendmode-label-disabled 收口于此；禁用标签直接叠加 .label-disabled
+   （如 'app-blendmode-label label-disabled'），不再为禁用态单开一个全量类。 */
+.label-disabled {
+  color: var(--disabled-color);
+}
 
 /* 标签宽度档收口于 .label-2..6（见上文）；静态标签（下拉/开关/复选）的「非拖拽」语义
    由下方「静态标签光标/不可选中」规则统一约束，不再用独立类。 */
@@ -338,7 +355,7 @@ sp-radio[disabled] {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  width: calc(100% - 20px);
+  width: 100%;
   margin: 10px auto;
   box-sizing: border-box;
 }
@@ -347,6 +364,55 @@ sp-radio[disabled] {
    覆盖从容器继承来的 ew-resize，避免用户误以为该处不能点。 */
 .row-between input[type="number"] {
   cursor: text;
+}
+
+/* --------------------------------------------------------------------------
+   5b. 通用横向行容器（左对齐 / 右对齐成组；全插件共用，单一来源）
+   .row-start：标签 / 颜色预览 / 图标按钮等左对齐排成一组（原 APP .stroke-color-group）。
+   .row-end：标签 + 图标按钮等右对齐排成一组（如填充模式三行 radio 的「文案 + 齿轮」）。
+   UXP 不支持 flex gap，组内元素间距由各自 margin 实现（如 .color-preview）。
+   -------------------------------------------------------------------------- */
+.row-start {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  flex: 0 0 auto;
+}
+
+.row-end {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+}
+
+/* --------------------------------------------------------------------------
+   5c. 通用颜色预览（可点击唤起取色器；描边 / 渐变子面板共用，单一来源）
+   仅承载尺寸 / 光标 / 圆角；描边预览无边框、渐变预览带 1px 边框由各自面板
+   CSS 的修饰规则补充（避免同一套外观在两处各写一份、日后漂移）。
+   -------------------------------------------------------------------------- */
+/* 通用颜色预览（可点击唤起取色器；描边 / 渐变子面板共用，单一来源）。
+   尺寸 / 光标 / 边框 / 圆角 / 间距全部收口于此，两面板不再保留任何 .color-preview 规则。
+   仅 backgroundColor 随色标动态变化、仍走内联。 */
+.color-preview {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  margin: 0 10px;
+  box-sizing: border-box;
+}
+
+/* 通用版权信息（单一来源）：原 APP .copyright 收口于此。 */
+.copyright {
+  width: 100%;
+  text-align: center;
+  font-size: 10px;
+  padding: 10px 0;
+  color: var(--disabled-color);
 }
 
 /* --------------------------------------------------------------------------
@@ -362,6 +428,7 @@ sp-radio[disabled] {
      不再写死 230px，父面板单行滑块也能直接套用。 */
   width: 100%;
   margin: 0 0 15px 0;
+  padding: 0 10px;
   box-sizing: border-box;
 }
 
@@ -377,7 +444,7 @@ sp-radio[disabled] {
   touch-action: none;
   box-sizing: border-box;
   --rs-track-inset: 6px;
-  width: calc(100% - 20px);
+  width: 100%;
   margin: 0 auto;
 }
 
@@ -506,7 +573,14 @@ sp-radio[disabled] {
   border-top: 1px solid var(--border-color);
   background-color: var(--bg-color);
   background-clip: padding-box;
+  height: 32px;
+  flex: 0 0 auto;
   margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 4px;
+  box-sizing: border-box;
 }
 
 /* --------------------------------------------------------------------------
@@ -516,25 +590,15 @@ sp-radio[disabled] {
    9c. 子面板关闭按钮（红色 ×）：.close-button
    -------------------------------------------------------------------------- */
 
-/* 主按钮外部容器（#app 独有布局，仅作占位，不放通用样式） */
-.main-button-container {
-  align-items: center;
-  margin: 10px 0 15px 0;
-  padding: 0;
-  height: 50px;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-}
-
 .main-button {
-  border-radius: 3px;
-  cursor: pointer;
-  height: 100%;
-  width: 80%;
   display: flex;
   justify-content: center;
   align-items: center;
+  width: 80%;
+  height: 50px;
+  margin: 10px auto 15px;
+  border-radius: 3px;
+  cursor: pointer;
   background-color: var(--button-bg);
   border: 1px solid var(--border-color);
   color: var(--text-color);
@@ -569,24 +633,6 @@ sp-radio[disabled] {
   font-size: 16px;
   font-weight: bold;
   color: rgba(128, 128, 128, 0.5);
-}
-
-.main-button-indicator-enabled {
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  margin-right: 10px;
-  flex-shrink: 0;
-  background-color: rgb(46, 204, 113);
-}
-
-.main-button-indicator-disabled {
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  margin-right: 10px;
-  flex-shrink: 0;
-  background-color: rgba(128, 128, 128, 0.5);
 }
 
 /* —— 动作按钮（工具箱 / 通用）：每个按钮只挂一个类，宽度档/状态均为自包含类 —— */
@@ -785,7 +831,6 @@ sp-radio[disabled] {
   box-sizing: border-box;
   z-index: 1;
   flex-shrink: 0;
-  margin-bottom: -1px; /* 相邻分区边框重叠 1px，避免双线 */
 }
 
 .collapse-header {
@@ -810,8 +855,7 @@ sp-radio[disabled] {
    的部分缺失，导致展开态图标左缩 5px、右缩 2px、且非 flex → 明显跳动。现合并两态。 */
 .collapse-icon,
 .collapse-icon-expanded {
-  padding-left: 5px;
-  margin-right: 2px;
+  margin: 0 5px 0 0;
   display: flex;
   align-items: center;
 }
@@ -832,27 +876,14 @@ sp-radio[disabled] {
 }
 
 .collapse-content-expanded {
-  /* 放宽到足以容纳全部内容（填充选项含底部 checkbox 区），避免 overflow:hidden 裁掉 */
   max-height: 1400px;
 }
 
-/* 折叠图标路径填充（与文本同色） */
 .collapse-icon path.fill {
   fill: var(--text-color);
 }
 
-/* 展开内容首尾行不外折叠 margin（2026-09-03）：展开态无 overflow:hidden，
-   首/末 .row-between 的 10px 外边距会穿过分区盒折叠到盒外，露出面板深色底；
-   收掉后分区背景直接包住首尾行。 */
-.collapse-content-expanded .row-between:first-child {
-  margin-top: 0;
-}
-
-.collapse-content-expanded .row-between:last-child {
-  margin-bottom: 0;
-}
-
-/* 分区级拖拽排序（工具箱子面板分区重排）：拖起半透明、落点主题蓝虚线指示插入位置 */
+/* 分区级拖拽排序：拖起半透明、落点主题蓝虚线指示插入位置 */
 .collapse-section.dragging {
   opacity: 0.45;
 }
@@ -872,10 +903,9 @@ sp-radio[disabled] {
   display: flex;
   justify-content: flex-start;
   align-items: center;
-  padding: 5px 10px 5px 10px;
-  border-bottom: 1px solid var(--border-color);
+  padding: 5px 0;
 }
-/* 标签与开关间距用 margin 实现（UXP 不支持 flex gap） */
+/* 标签与开关间距用 margin 实现*/
 .switch-container > [class^="label-"] {
   margin-right: 8px;
 }
@@ -910,14 +940,8 @@ sp-radio[disabled] {
 
 /* --------------------------------------------------------------------------
    10. 双列 radio（填充模式 / 计算方法 / 位置 / 平铺方式 等）
-   唯一类：sp-radio-group / sp-radio / .radio-item / .radio-item-label /
-          .radio-group-label
+   唯一类：sp-radio-group / sp-radio / .radio-item / .radio-item-label
    -------------------------------------------------------------------------- */
-.radio-group-label {
-  font-size: 13px;
-  color: var(--text-color);
-}
-
 sp-radio-group {
   width: 100%;
 }
@@ -929,6 +953,7 @@ sp-radio {
 }
 
 .radio-item {
+  position: relative;     /* 兜底定位作用域：radio 行内如有将来需要的绝对定位装饰，解析到本行 */
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -942,7 +967,7 @@ sp-radio {
 
 .radio-item-label {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-end;
   white-space: nowrap;
   font-size: 13px;
   color: var(--text-color);
@@ -951,9 +976,9 @@ sp-radio {
 /* 两列 radio 行布局（计算方法 / 平铺方式 等；描边「位置」为三列，由 .position-radio-group
    单独保留选项间距）。组横向排列、space-around 分配，选项均分剩余宽度（flex:1）。
    分区容器统一用 .panel-section 后，此处前缀由原先的 colorsettings-calculation-mode /
-   position-radio-group 改为 .panel-section（图案面板仍用 .pattern-fillmode-container）。 */
+   position-radio-group 改为 .panel-section（图案面板仍用 .border-panel-section）。 */
 .panel-section sp-radio-group,
-.pattern-fillmode-container sp-radio-group {
+.border-panel-section sp-radio-group {
   display: flex;
   align-items: center;
   flex-direction: row;
@@ -962,7 +987,7 @@ sp-radio {
 }
 
 .panel-section sp-radio,
-.pattern-fillmode-container sp-radio {
+.border-panel-section sp-radio {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -972,8 +997,19 @@ sp-radio {
 /* 两列 radio 选项间距（通用值，唯一来源）；panel-section 与 pattern-fillmode-container
    共用同一间距，改此处即全跟着改。描边位置三列（.position-radio-group）由其自身规则覆盖。 */
 .panel-section sp-radio:not(:last-child),
-.pattern-fillmode-container sp-radio:not(:last-child) {
+.border-panel-section sp-radio:not(:last-child) {
   margin-right: 110px;
+}
+
+/* 三行（纵向）radio 组：覆盖 .panel-section sp-radio-group 默认的横向双列布局。
+   仅作用于挂 .radio-group--vertical 的组（如填充模式「纯色 / 图案 / 渐变」三选一）。
+   纵向堆叠 + 每行占满整行，使每个 radio-item 的标签居左、齿轮 pin 到行右侧。 */
+.panel-section .radio-group--vertical {
+  flex-direction: column;
+}
+.panel-section .radio-group--vertical sp-radio {
+  flex: 0 0 auto;
+  width: 100%;
 }
 
 /* --------------------------------------------------------------------------
@@ -1059,20 +1095,50 @@ sp-radio {
   border: 1px solid var(--notify-fail-border);
 }
 
-/* 通知内的小图标（● 等）与正文（自动换行） */
-.notify-icon {
+/* 状态指示点（通用，原 .notify-icon 的 ● 收口为实心圆）：按尺寸 / 状态收口。
+   大号 .indicator--lg 用于主按钮（功能开启/关闭）；中号 .indicator--md 用于工具箱同步通知；
+   状态色统一语义：--enabled 绿（开启）、--disabled 灰（关闭）、--ok 绿（成功）、--fail 红（失败）。 */
+.indicator {
+  display: inline-block;
   flex: none;
-  margin-right: 5px;
-  font-size: 8px;
-  line-height: 1.6;
+  border-radius: 50%;
+  vertical-align: middle;
 }
 
+.indicator--lg {
+  width: 13px;
+  height: 13px;
+  margin-right: 10px;
+}
+
+.indicator--md {
+  width: 8px;
+  height: 8px;
+  margin-right: 5px;
+}
+
+.indicator--enabled {
+  background-color: rgb(46, 204, 113);
+}
+
+.indicator--disabled {
+  background-color: rgba(128, 128, 128, 0.5);
+}
+
+.indicator--ok {
+  background-color: var(--notify-ok-fg);
+}
+
+.indicator--fail {
+  background-color: var(--notify-fail-fg);
+}
+
+/* 通知正文：字号与激活提示（license-status-banner / 激活通知）统一 13px */
 .notify-text {
+  font-size: 13px;
+  line-height: 1.4;
   word-break: break-all;
 }
-
-/* 原 .checkbox-inline（渐变「反相」行内勾选）已并入 .checkbox-row（见 11），
-   2026-09-03 删除。 */
 
 /* --------------------------------------------------------------------------
    13. 滑块拖拽期间的光标锁定（class 由 utils/dragCursor.ts 加到 document.body）。
@@ -1086,6 +1152,91 @@ body.label-drag-cursor * {
   cursor: ew-resize !important;
 }
 
+
+/* --------------------------------------------------------------------------
+   X. 图案 / 渐变子面板共用收口（自 pattern.css / gradient.css 收口，单一来源）
+   -------------------------------------------------------------------------- */
+
+/* 预设区外容器（图案 .pattern-container / 渐变 .gradient-presets-area 收口于此）。
+   固定高度 130px、内部 flex 列：缩略图列表占满剩余高度并自带滚动，底部图标栏
+   经 margin-top:auto 顶到容器底。 */
+.preset-area {
+  position: relative;
+  width: 100%;
+  height: 150px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background-color: var(--dark-bg-color);
+  margin-bottom: 10px;
+  overflow: hidden;
+  z-index: 1;
+}
+
+/* 通用缩略图盒（图案预设格 / 选中 / 多选三态共用基础外观；差异态见 pattern.css）。 */
+.thumb-box {
+  aspect-ratio: 1;
+  width: 52px;
+  height: 52px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  overflow: hidden;
+  cursor: pointer;
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 2;
+  flex: 0 0 auto;
+}
+
+/* 缩略图内图片（含选中 / 多选态）：唯一一套，替代原 pattern.css 中 .photo-container
+   与 .pattern-thumb-img 两处重合规则——原 .photo-container img 的 width/height:100%
+ */
+.thumb-box img {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+  padding: 2px;
+  transition: opacity 0.2s;
+}
+
+/* 通用加载中 / 加载失败遮罩（图案预设缩略图等可加载缩略图区域共用）。
+   自 pattern.css .pattern-thumb-loading 收口。 */
+.pattern-thumb-loading {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: rgba(255, 255, 255, 0.8);
+  border-radius: 3px;
+  color: var(--black-text-);
+}
+
+/* 通用最终预览区外容器（图案 .pattern-final-preview-container / 渐变 .final-preview-container
+   收口于此），固定高度 120px。 */
+.final-preview-container {
+  position: relative;
+  width: 100%;
+  height: 300px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 /* 预览区居中灰字提示，渐变面板（多选预设 / 未选预设 / 渐变全透明）与
    图案面板（未选图案）共用 */
 .final-preview-hint {
@@ -1097,4 +1248,16 @@ body.label-drag-cursor * {
   font-size: 12px;
   z-index: 3;
   pointer-events: none;
+}
+
+/* 通用预览陈列区容器（图案 .preview-wrapper 收口于此）。 */
+.preview-wrapper {
+  position: relative;
+  width: 100%;
+  height: 200px;
+  overflow: hidden;
+  border-top: 1px solid var(--border-color);
+  background-color: var(--dark-bg-color);
+  user-select: none;
+  box-sizing: border-box;
 }

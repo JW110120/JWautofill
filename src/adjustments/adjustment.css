@@ -131,20 +131,6 @@
   text-overflow: ellipsis;
 }
 
-/* ↳ 工具箱与 4 个子面板的外壳滚动条（::-webkit-scrollbar thumb/track）已统一收口到 common.css，
-   覆盖 .panel（含 #app .panel-section ~ .panel 子面板） */
-
-/* 分区容器 */
-.adjustment-section {
-  width: 100%;
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  padding: 10px 10px;
-  margin: 0 0 20px 0;
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-}
 
 .hotkey-icon-cell {
   flex: 0 0 28px;

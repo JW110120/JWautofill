@@ -1357,24 +1357,22 @@ class App extends React.Component<AppProps, AppState> {
                     选区填充2.0
                 </h3>
                 <div className="divider"></div>
-                <div className="main-button-container">
-                    <div 
+                <div
                     role="button"
                     tabIndex={0}
                     className="main-button"
                     onClick={this.handleButtonClick}
 title={helpTexts.selectionFill.mainButton}>
-                        <div className="main-button-content">
-                            <div className={this.state.isEnabled ? 'main-button-indicator-enabled' : 'main-button-indicator-disabled'}></div>
-                            <span className={!this.state.isEnabled ? 'main-button-text-disabled' : 'main-button-text'}>
-                                {this.state.isEnabled ? '功能开启' : '功能关闭'}
-                            </span>
-                        </div>
+                    <div className="main-button-content">
+                        <div className={this.state.isEnabled ? 'indicator indicator--lg indicator--enabled' : 'indicator indicator--lg indicator--disabled'}></div>
+                        <span className={!this.state.isEnabled ? 'main-button-text-disabled' : 'main-button-text'}>
+                            {this.state.isEnabled ? '功能开启' : '功能关闭'}
+                        </span>
                     </div>
                 </div>
 
                 <div className="app-blendmode-container">
-                    <span className={this.state.clearMode ? 'app-blendmode-label-disabled' : 'app-blendmode-label'} 
+                    <span className={this.state.clearMode ? 'app-blendmode-label label-disabled' : 'app-blendmode-label'} 
 title={helpTexts.selectionFill.blendMode}>
                     混合模式
                     </span>
@@ -1467,7 +1465,7 @@ title={helpTexts.selectionFill.blendMode}>
                                 <div className={this.state.isSelectionOptionsExpanded ? 'collapse-icon-expanded' : 'collapse-icon'}>
                                     <ExpandIcon expanded={this.state.isSelectionOptionsExpanded} />
                                 </div>
-                                <span>选区选项</span>
+                                <span className="label-4">选区选项</span>
                             </div>
                             {this.state.isSelectionOptionsExpanded && (
                             <div className="collapse-content-expanded">
@@ -1574,7 +1572,7 @@ title={helpTexts.selectionFill.selectionExpand}>
                         <div className={this.state.isExpanded ? 'collapse-icon-expanded' : 'collapse-icon'}>
                             <ExpandIcon expanded={this.state.isExpanded} />
                         </div>
-                        <span>填充选项</span>
+                        <span className="label-4">填充选项</span>
                     </div>
                     {this.state.isExpanded && (
                     <div className="collapse-content-expanded">
@@ -1593,14 +1591,15 @@ title={helpTexts.selectionFill.createNewLayer}>
                                 title={helpTexts.selectionFill.createNewLayerSwitch}
                             />
                         </div>
+                        <div className="divider" />
 
                        {/* 描边模式开关 */}
                        <div className="switch-container">
                             <label className="label-4" title={helpTexts.selectionFill.strokeModeLabel}>描边模式</label>
                             {this.state.strokeEnabled && (
-                                <div className="stroke-color-group">
+                                <div className="row-start">
                                 <div 
-                                    className="stroke-color-preview"
+                                    className="color-preview"
                                     style={this.getStrokeColorPreviewStyle()}
                                     title={helpTexts.selectionFill.strokeColorPreview}
                                     onClick={async () => {
@@ -1687,6 +1686,7 @@ title={helpTexts.selectionFill.createNewLayer}>
                                 title={helpTexts.selectionFill.strokeEnabledSwitch}
                             />
                         </div>
+                        <div className="divider" />
 
                         {/* 清除模式开关 */}
                         <div className="switch-container">
@@ -1701,50 +1701,49 @@ title={helpTexts.selectionFill.clearMode}>
                                 title={helpTexts.selectionFill.clearModeSwitch}
                             />
                         </div>
+                        <div className="divider" />
 
                         {/* 填充模式选择 */}
-                        <div className="fill-mode-group">
-                            <div className="radio-group-label" title={helpTexts.selectionFill.fillModeLabel}>填充模式</div>
+                        <div className="panel-section">
+                            <div className="label-4" title={helpTexts.selectionFill.fillModeLabel}>填充模式</div>
                             <sp-radio-group 
+                                className="radio-group--vertical"
                                 selected={this.state.fillMode} 
                                 name="fillMode"
                                 onChange={this.handleFillModeChange}
                             >
                                 <sp-radio value="foreground" className="radio-item" title={helpTexts.selectionFill.fgRadio}>
-                                    <span className="radio-item-label" 
-title={helpTexts.selectionFill.fgDetail}>
-                                    纯色
-                                    </span>
-                                    <IconButton
-                                        onClick={this.toggleColorSettings}
-                                        title={helpTexts.selectionFill.fgSettings}
-                                    >
-                                        <SettingsIcon/>
-                                    </IconButton>
+                                    <div className="row-end">
+                                        <span className="radio-item-label" title={helpTexts.selectionFill.fgDetail}>纯色</span>
+                                        <IconButton
+                                            onClick={this.toggleColorSettings}
+                                            title={helpTexts.selectionFill.fgSettings}
+                                        >
+                                            <SettingsIcon/>
+                                        </IconButton>
+                                    </div>
                                 </sp-radio>
                                 <sp-radio value="pattern" className="radio-item" title={helpTexts.selectionFill.patternRadio}>
-                                    <span className="radio-item-label" 
-title={helpTexts.selectionFill.patternDetail}>
-                                    图案
-                                    </span>
-                                    <IconButton
-                                        onClick={this.openPatternPicker}
-                                        title={helpTexts.selectionFill.patternSettings}
-                                    >
-                                        <SettingsIcon/>
-                                    </IconButton>
+                                    <div className="row-end">
+                                        <span className="radio-item-label" title={helpTexts.selectionFill.patternDetail}>图案</span>
+                                        <IconButton
+                                            onClick={this.openPatternPicker}
+                                            title={helpTexts.selectionFill.patternSettings}
+                                        >
+                                            <SettingsIcon/>
+                                        </IconButton>
+                                    </div>
                                 </sp-radio>
                                 <sp-radio value="gradient" className="radio-item" title={helpTexts.selectionFill.gradientRadio}>
-                                    <span className="radio-item-label" 
-title={helpTexts.selectionFill.gradientDetail}>
-                                    渐变
-                                    </span>
-                                    <IconButton
-                                        onClick={this.openGradientPicker}
-                                        title={helpTexts.selectionFill.gradientSettings}
-                                    >
-                                        <SettingsIcon/>
-                                    </IconButton>
+                                    <div className="row-end">
+                                        <span className="radio-item-label" title={helpTexts.selectionFill.gradientDetail}>渐变</span>
+                                        <IconButton
+                                            onClick={this.openGradientPicker}
+                                            title={helpTexts.selectionFill.gradientSettings}
+                                        >
+                                            <SettingsIcon/>
+                                        </IconButton>
+                                    </div>
                                 </sp-radio>
                             </sp-radio-group>
                         </div>
@@ -1834,7 +1833,8 @@ title={helpTexts.selectionFill.gradientDetail}>
 
                 {/* info 条：滚动内容的最后一个元素（不再固定在面板底部），
                     滚到底才出现；父/子容器因此都铺满 100%，不再给底部留 20px。 */}
-                <div className="info-plane">
+                <div className="panel-section">
+                    <div className="divider"></div>
                     <span className="copyright">Copyright © listen2me (JW)</span>
                 </div>
                 </div>
