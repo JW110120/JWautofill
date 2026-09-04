@@ -707,6 +707,13 @@ useEffect(() => {
     onAlphaSample: () => {
       handleLayerAlphaSample();
     },
+    onRepairKeyboard: () => {
+      // 键盘被全局钩子拖死时的自救入口：此时用户打不出字，只能靠鼠标点菜单。
+      // 具体实现注册在 BrushHotkeySection（它持有状态提示），这里只做转发。
+      import('../hotkey/HotkeyBridge').then((m) => {
+        m.requestRepairKeyboard().then((msg) => { console.log('[键盘一键修复] ' + msg); });
+      }).catch((e) => console.error('键盘一键修复失败:', e));
+    },
     onUninstallHotkeyDaemon: () => {
       // 卸载守护进程是低频操作（通常在删除整个插件前），入口放在右上角菜单里。
       // 具体实现注册在 BrushHotkeySection（它持有状态提示），这里只做转发。

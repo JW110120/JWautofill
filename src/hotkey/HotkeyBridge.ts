@@ -142,6 +142,19 @@ export async function requestUninstall(): Promise<string> {
   catch (e: any) { return '卸载失败：' + (e?.message || String(e)); }
 }
 
+// 「键盘卡死一键修复」：同样由面板右上角菜单触发，实现留在 BrushHotkeySection。
+// 存在的意义：一旦系统的全局键盘钩子把输入拖死，用户连字都打不出来，
+// 唯一还能操作的就是鼠标——此时从菜单点一下即可自救，且脚本全程不需要任何键盘输入。
+let repairKeyboardHandler: (() => Promise<string>) | null = null;
+export function registerRepairKeyboardHandler(fn: () => Promise<string>) {
+  repairKeyboardHandler = fn;
+}
+export async function requestRepairKeyboard(): Promise<string> {
+  if (!repairKeyboardHandler) return '键盘修复功能尚未就绪（请展开「笔刷热键」分区后重试）';
+  try { return await repairKeyboardHandler(); }
+  catch (e: any) { return '键盘修复失败：' + (e?.message || String(e)); }
+}
+
 // 订阅热键触发事件（无论成败都会回调，ok=false 表示执行 batchPlay 失败）
 export function onHotkeyTriggered(fn: (info: { combo: string; action: string; brush?: string; ok: boolean; enabled?: boolean }) => void): () => void {
   hotkeyListeners.push(fn);

@@ -3,30 +3,27 @@
    > * 的 flex-shrink:0 也由 common.css 统一；z-index:9999 由 input-fix.css
    强制（此处原非 !important 副本已删）。 */
 
+/* 需要收口为subtitle-title-1 */
 .gradient-subtitle {
   color: var(--text-color);
   min-width: 40px;
   font-size: 12px;
 }
 
-/* ↳ .draggable-label（可拖拽标签光标语义）已收口到 common.css
-   （与工具箱 .draggable-label 为同一类） */
 
+/* 需要与收口后的subtitle-title-1合并 */
 .gradient-subtitle h3 {
   margin: 5px;
   font-size: 14px;
   color: var(--text-color);
 }
 
-/* 预设区外容器已收口到 common.css 的 .preset-area（GradientPicker 改挂该类）。 */
-
+/* 需要完全收口于preset-area */
 .gradient-presets {
     width: 100%;
-    /* 与图案子面板 .pattern-preset 一致：仅留 1px 水平内边距，使预设格紧贴区域边框 */
     padding: 0px;
     /* 占满预设区除图标栏外的剩余高度，把图标栏顶到底部 */
     flex: 1 1 auto;
-    min-height: 0;
     position: relative;
     display: flex;
     flex-direction: row;
@@ -39,6 +36,7 @@
     z-index: 12;
 }
 
+/* 渐变面板独有的预设box容器样式，不需要收口，完全保留 */
 .preset-item {
     position: relative;
     height: 35px;
@@ -53,6 +51,7 @@
     outline: none;
 }
 
+/* 需要与common中的通用选中样式完全收口 */
 .preset-item-selected {
     position: relative;
     height: 35px;
@@ -69,6 +68,7 @@
     border-width: 2px;
 }
 
+/* 需要与common中的通用多选样式完全收口 */
 .preset-item-multi-selected {
     position: relative;
     height: 35px;
@@ -86,26 +86,7 @@
     background-color: rgba(255, 107, 53, 0.1);
 }
 
-.preset-preview {
-    position: relative;
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
-}
-
-/* 渐变预览内部的「棋盘格底层」与「渐变覆盖层」。
-   两层原本都靠内联 style 叠绝对定位（preset 预览 / 上方渐变预览 / 最终预览三处复用），
-   这里收敛成两个通用类：棋盘格层 z-index:1，渐变层 z-index:2（保持原层级顺序）。 */
-.opacity-checkerboard {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
-    z-index: 1;
-}
-
+/* 渐变覆盖层，必要，确保渐变渲染在棋盘格上方，不用收口*/
 .gradient-fill-layer {
     position: absolute;
     top: 0;
@@ -125,10 +106,6 @@
     z-index: 2;
     cursor: pointer;
 }
-
-/* 「预览区居中的灰字提示」样式（渐变与图案面板共用）在 common.css 的 .final-preview-hint */
-
-/* 预设区底部图标栏已收口到 common.css 的 .icon-button-group--bar（含高度 32px / margin-top:auto）。 */
 
 /* 渐变颜色区域样式 */
 .gradient-edit-area {
@@ -151,10 +128,6 @@
   justify-content: space-between;
 }
 
-/* ↳ 不透明度数字输入：原 35px 覆盖（width:35px + spinner 强制显示）已删。
-   该输入在 .num-input-row 内，统一走 common.css 的
-   .num-input-row input[type="number"]（宽 32px × 高 24px），与全插件数字输入一致。 */
-
 .gradient-slider-track {
     position: relative;
     height: 20px;
@@ -167,6 +140,7 @@
     overflow: visible;
 }
 
+/* 独特的不透明度色标样式，不需要收口，完全保留 */
 .opacity-slider-thumb {
   position: absolute;
   width: 12px;
@@ -183,6 +157,7 @@
   touch-action: none;
 }
 
+/* 不透明度色标的选中样式，收口于通用选中样式 */
 .opacity-slider-thumb-selected {
   position: absolute;
   width: 12px;
@@ -198,9 +173,10 @@
   pointer-events: auto;
   touch-action: none;
   border-color: var(--primary-color);
-  border-width: 3px;
+  border-width: 2px;
 }
 
+/* 独特的渐变预览条样式，不需要收口，完全保留 */
 .gradient-preview {
     height: 24px;
     /* 内容区 208px：4 + 200 + 4，左右留白对称，与容器 10px 内边距合计仍为 14px 缩进 */
@@ -255,7 +231,7 @@
   pointer-events: auto;
   touch-action: none;
   border-color: var(--primary-color);
-  border-width: 3px;
+  border-width: 2px;
 }
 .color-prefix {
   font-family: monospace;

@@ -4,6 +4,7 @@ import {
   HotkeyEntry, connectHotkeyDaemon, onConfig, enumerateBrushes,
   onDaemonStatus, pushConfig, requestHotkeyRecording, cancelHotkeyRecording,
   onHotkeyTriggered, disconnectDaemon, sendDaemonCommand, registerUninstallHandler,
+  registerRepairKeyboardHandler,
   setMainToggleCombo, getMainToggleCombo,
   detectAllBrushTypes
 } from './HotkeyBridge';
@@ -232,9 +233,37 @@ export default function BrushHotkeySection() {
     return '卸载程序已打开，请在弹出的窗口中查看结果。';
   };
 
+  // 「键盘卡死一键修复」：当系统键盘被某个全局钩子拖住（打不出字）时的自救入口。
+  // 设计要点：
+  //   1) 修复脚本全程无交互——键盘卡死时用户根本无法输入，所以绝不等待按键；
+  //   2) 只做「停止服务 + 复位系统键盘钩子超时设置 + 释放卡住的修饰键」，
+  //      不删除热键配置与程序文件，修复后可随时重新启动快捷键服务；
+  //   3) 这里也不弹确认框，因为键盘失效时确认框同样难以操作。
+  const repairKeyboard = async (): Promise<string> => {
+    // 先让守护进程优雅退出（若还连着），确保它的全局键盘钩子被正常卸载
+    if (daemonConnectedRef.current) {
+      try { disconnectDaemon(); } catch { /* 优雅退出失败也无妨，脚本会强制结束进程 */ }
+      await new Promise(r => setTimeout(r, 600));
+    }
+    showMessage('正在修复键盘…');
+    let ok = false;
+    try { ok = await openBundled('native/HotkeyDaemon/fix-keyboard.bat'); } catch (err: any) {
+      console.error('唤起键盘修复脚本失败:', err);
+    }
+    if (!ok) {
+      const ret = '未找到键盘修复脚本，请手动双击 native/HotkeyDaemon/fix-keyboard.bat';
+      showMessage(ret);
+      return ret;
+    }
+    const ret = '键盘修复已执行：快捷键服务已停止，系统键盘钩子设置已复位。请立即测试键盘；热键配置已保留。';
+    showMessage(ret);
+    return ret;
+  };
+
   // 供右上角菜单调用（菜单回调注册在 AdjustmentPanel 里，具体实现留在本组件）
   useEffect(() => {
     registerUninstallHandler(uninstallDaemon);
+    registerRepairKeyboardHandler(repairKeyboard);
   }, []);
 
   // 录制由 native 守护进程完成（Windows 全局键盘钩子），UXP 只发指令并等待结果。

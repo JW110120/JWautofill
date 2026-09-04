@@ -1144,7 +1144,6 @@ body.label-drag-cursor * {
   cursor: ew-resize !important;
 }
 
-
 /* 通用预设区外容器
    内部 flex 列：缩略图列表占满剩余高度并自带滚动，底部图标栏
    经 margin-top:auto 顶到容器底。 */

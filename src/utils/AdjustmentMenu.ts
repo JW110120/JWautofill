@@ -11,6 +11,7 @@ export class AdjustmentMenu {
   private static resetParametersCallback: (() => void) | null = null;
   private static alphaSampleCallback: (() => void) | null = null;
   private static uninstallHotkeyDaemonCallback: (() => void) | null = null;
+  private static repairKeyboardCallback: (() => void) | null = null;
 
   constructor() {
     // Constructor
@@ -26,6 +27,7 @@ export class AdjustmentMenu {
     onResetParameters: () => void;
     onAlphaSample: () => void;
     onUninstallHotkeyDaemon: () => void;
+    onRepairKeyboard: () => void;
   }) {
     this.visibilityPanelCallback = callbacks.onToggleVisibilityPanel;
     this.collapseCallback = callbacks.onToggleAllCollapse;
@@ -33,6 +35,7 @@ export class AdjustmentMenu {
     this.resetParametersCallback = callbacks.onResetParameters;
     this.alphaSampleCallback = callbacks.onAlphaSample;
     this.uninstallHotkeyDaemonCallback = callbacks.onUninstallHotkeyDaemon;
+    this.repairKeyboardCallback = callbacks.onRepairKeyboard;
   }
 
   /**

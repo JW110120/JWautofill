@@ -179,13 +179,20 @@ namespace JWautofillHotkeyDaemon
         private static string _configPath = "";
         // 组合键 -> 配置条目。命中判定完全在内存里做（不再依赖 RegisterHotKey，
         // 因此不存在「注册失败 = 快捷键静默失效」的情况）。
-        private static Dictionary<string, HotkeyItem> _comboMap = new(StringComparer.OrdinalIgnoreCase);
+        // ⚠️ 以下三个字段会被「键盘钩子线程」直接读取，同时被其它线程整体替换。
+        // 必须声明为 volatile：保证钩子线程看到的是完整发布后的引用/值。
+        // 更重要的是：钩子回调路径上绝不获取任何锁——一旦锁被其它线程持有，
+        // 钩子回调就会阻塞，而低层键盘钩子阻塞 = 整个系统的键盘输入被冻结。
+        // 若系统注册表的 LowLevelHooksTimeout 被设得过大（有的机器上高达 25000 毫秒），
+        // 一次阻塞就会让键盘几十秒乃至持续无响应。这是「键盘打不出字」的根因。
+        private static volatile Dictionary<string, HotkeyItem> _comboMap = new(StringComparer.OrdinalIgnoreCase);
         private static List<HotkeyItem> _currentItems = new();
-        private static bool _active = false;
+        private static volatile bool _active = false;
         // 当前运行的 Photoshop 进程 PID 集合（由 WatchPhotoshop 周期刷新）。
         // 钩子线程在每次按键时据此判断前台窗口是否属 PS，避免在其它程序里拦截按键。
-        private static readonly object _psLock = new();
-        private static HashSet<int> _psPids = new();
+        // volatile：钩子线程每次按键都要读它，因此读取路径上绝不加锁
+        // （锁竞争会阻塞钩子回调 → 全系统键盘冻结）。写入方整体替换集合后再发布引用。
+        private static volatile HashSet<int> _psPids = new();
         private static readonly object _clientsLock = new();
         private static readonly List<TcpClient> _clients = new();
         private static IntPtr _hwnd;
@@ -211,6 +218,14 @@ namespace JWautofillHotkeyDaemon
         private static Win32.LowLevelKeyboardProc? _hookProc;
         private static TcpClient? _recordingClient;
         private static string? _recordingBrush;
+        // 录制状态：钩子线程只读这个 volatile 布尔量，绝不进入 _recLock。
+        private static volatile bool _recording = false;
+        // 熔断标志：一旦检测到钩子回调耗时超过预算，立即永久切换到「只放行、不处理」模式。
+        // 宁可快捷键失效，也绝不让本进程的钩子再把系统键盘拖住。
+        private static volatile bool _hookSafeMode = false;
+        // 单次钩子回调的耗时预算（毫秒）。Windows 对低层钩子有超时限制，超时会被系统摘除；
+        // 这里设得更保守，超预算即自我熔断，确保不会成为系统输入链的瓶颈。
+        private const long HookBudgetMs = 100;
         // 录制线程：持有独立消息循环，全局键盘钩子必须装在带消息循环的线程上
         private static int _recThreadId = 0;
         private static readonly ManualResetEventSlim _recThreadReady = new(false);
@@ -399,6 +414,42 @@ namespace JWautofillHotkeyDaemon
             return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
         }
 
+        // 读取系统对「低层钩子」的超时设置（毫秒）。
+        // 这是键盘安全的 total 关键项：该值过大时，任何全局键盘钩子只要卡顿一下，
+        // 整个系统的键盘输入就会被冻结这么久，表现为「打着打着突然打不出字」。
+        // 系统默认约 300~1000 毫秒；某些机器上会被改到 25000 毫秒，届时一次卡顿即长时间失灵。
+        private static int ReadLowLevelHooksTimeout()
+        {
+            try
+            {
+                using var key = Registry.CurrentUser.OpenSubKey(@"Control Panel\Desktop");
+                var v = key?.GetValue("LowLevelHooksTimeout");
+                if (v == null) return 0; // 未设置 = 使用系统默认
+                return Convert.ToInt32(v);
+            }
+            catch { return 0; }
+        }
+
+        // 启动自检：仅在日志里给出醒目告警，不擅自修改用户注册表。
+        // 需要一键复位时请从面板菜单执行「键盘卡死一键修复」。
+        private static void CheckHookTimeoutRisk()
+        {
+            var ms = ReadLowLevelHooksTimeout();
+            if (ms > 5000)
+            {
+                Console.WriteLine("[HotkeyDaemon] ⚠️⚠️ 检测到系统键盘钩子超时设置过大：" +
+                    "LowLevelHooksTimeout=" + ms + "ms（系统默认约 300~1000ms）。");
+                Console.WriteLine("[HotkeyDaemon]    该值过大时，任何全局键盘钩子一次卡顿就会冻结全系统键盘 " +
+                    ms + "ms，是「键盘突然打不出字」的常见放大器。");
+                Console.WriteLine("[HotkeyDaemon]    建议在面板菜单执行「键盘卡死一键修复」复位为系统默认值。");
+            }
+            else
+            {
+                Console.WriteLine("[HotkeyDaemon] 键盘钩子超时设置检查通过（LowLevelHooksTimeout=" +
+                    (ms == 0 ? "系统默认" : ms + "ms") + "）");
+            }
+        }
+
         // 卸载：移除开机自启并删除安装目录（含自身），随后退出。
         // 由面板「卸载」指令（WebSocket type:"uninstall"）触发，全程无窗口。
         private static void DoUninstall()
@@ -468,6 +519,7 @@ namespace JWautofillHotkeyDaemon
             EnsureSelfInstalled();
             Console.WriteLine("[HotkeyDaemon] 版本: " + Version);
             Console.WriteLine("[HotkeyDaemon] 配置路径: " + _configPath);
+            CheckHookTimeoutRisk();
 
             SetupConfigWatcher();
             ReloadConfig();
@@ -701,8 +753,8 @@ namespace JWautofillHotkeyDaemon
             uint pid;
             Win32.GetWindowThreadProcessId(hwnd, out pid);
             if (pid == 0) return false;
-            HashSet<int> pids;
-            lock (_psLock) pids = _psPids;
+            // 无锁读取（volatile 引用整体替换）
+            var pids = _psPids;
             return pids.Contains((int)pid);
         }
 
@@ -721,7 +773,8 @@ namespace JWautofillHotkeyDaemon
                 }
                 catch { }
             }
-            lock (_psLock) _psPids = set;
+            // 集合构建完成后再整体发布（volatile 写），读取方无需加锁
+            _psPids = set;
         }
 
         private static void WatchPhotoshop()
@@ -799,6 +852,9 @@ namespace JWautofillHotkeyDaemon
         private static void StartRecordingInternal()
         {
             if (_hookId == IntPtr.Zero) InstallPermanentHook();
+            // 先由 WebSocket 线程把 _recordingClient 写好，这里才把标志置为 true
+            // （volatile 写保证钩子线程随后一定能看到已设置的 client）
+            _recording = true;
             Console.WriteLine("[HotkeyDaemon] 录制已开始，等待组合键…");
         }
 
@@ -808,20 +864,25 @@ namespace JWautofillHotkeyDaemon
         // （只有杀进程/卸载才恢复）。这是「运行一段时间后键盘打不出字」的根因。
         private static void FinishRecordingInternal(string? combo)
         {
+            // 先关掉录制标志：钩子线程后续按键立刻回到「不处理」路径，
+            // 避免在下面的锁与序列化期间反复进入本方法。
+            _recording = false;
             TcpClient? clientToSend = null;
             string? payload = null;
+            string brush;
             lock (_recLock)
             {
                 var client = _recordingClient;
                 _recordingClient = null;
-                string brush = _recordingBrush ?? "";
+                brush = _recordingBrush ?? "";
                 _recordingBrush = null;
                 if (client == null) return;
-                payload = combo == null
-                    ? JsonSerializer.Serialize(new { type = "recordCancel", brush }, JsonOpts)
-                    : JsonSerializer.Serialize(new { type = "recordResult", brush, combo }, JsonOpts);
                 clientToSend = client;
             }
+            // JSON 序列化放在锁外：序列化有分配开销，不应持锁执行
+            payload = combo == null
+                ? JsonSerializer.Serialize(new { type = "recordCancel", brush }, JsonOpts)
+                : JsonSerializer.Serialize(new { type = "recordResult", brush, combo }, JsonOpts);
             var c = clientToSend;
             var msg = payload!;
             Task.Run(() =>
@@ -860,67 +921,107 @@ namespace JWautofillHotkeyDaemon
             Console.WriteLine(line);
         }
 
+        // 低层键盘钩子入口。
+        // ⚠️ 铁律：本方法内的每一步都必须是 O(1)、无锁、无 I/O、不向外抛异常。
+        //    本方法一旦阻塞，等于冻结整个系统的键盘输入；若注册表的
+        //    LowLevelHooksTimeout 被设得过大，一次阻塞就会演变为长时间「打不出字」。
+        // 因此真正的逻辑放在 HookDispatch，外层只负责计时与熔断：
+        // 只要发现一次回调耗时超预算，就永久降级为「纯放行」，宁可快捷键失效也不拖累系统。
         private static IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam)
         {
-            if (nCode >= 0)
+            long t0 = Stopwatch.GetTimestamp();
+            IntPtr result;
+            try
             {
-                int msg = wParam.ToInt32();
-                if (msg == Win32.WM_KEYDOWN || msg == Win32.WM_SYSKEYDOWN)
+                result = HookDispatch(nCode, wParam, lParam);
+            }
+            catch
+            {
+                // 绝不把异常抛回系统：钩子回调里抛异常会让输入链处于不稳定状态
+                result = Win32.CallNextHookEx(_hookId, nCode, wParam, lParam);
+            }
+
+            if (!_hookSafeMode)
+            {
+                long elapsedMs = (long)Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
+                if (elapsedMs > HookBudgetMs)
                 {
-                    // 焦点不在 Photoshop 时暂停监听：直接放行，不拦截、不录制。
-                    // 这样用户在其它程序里打字/用快捷键不会被本守护进程吞掉。
-                    if (!IsPhotoshopForeground())
-                        return Win32.CallNextHookEx(_hookId, nCode, wParam, lParam);
+                    _hookSafeMode = true;
+                    Console.WriteLine("[HotkeyDaemon] ⚠️ 键盘钩子回调耗时 " + elapsedMs + "ms（预算 " +
+                        HookBudgetMs + "ms），已熔断：此后只放行按键、不再处理，避免拖累系统输入。");
+                }
+            }
+            return result;
+        }
 
-                    int vk = Marshal.ReadInt32(lParam);              // KBDLLHOOKSTRUCT.vkCode 为首字段
-                    uint flags = (uint)Marshal.ReadInt32(lParam, 8); // flags 偏移 8
-                    // bit 30 = 上一帧按键状态（1 表示此前已按下，即系统自动重复），忽略重复
-                    bool repeat = (flags & (1u << 30)) != 0;
+        // 钩子实际逻辑（被 LowLevelKeyboardProc 包裹，便于统一计时熔断）
+        private static IntPtr HookDispatch(int nCode, IntPtr wParam, IntPtr lParam)
+        {
+            // 已熔断：退化成纯放行
+            if (_hookSafeMode)
+                return Win32.CallNextHookEx(_hookId, nCode, wParam, lParam);
 
-                    if (!repeat)
+            if (nCode < 0)
+                return Win32.CallNextHookEx(_hookId, nCode, wParam, lParam);
+
+            int msg = wParam.ToInt32();
+            if (msg != Win32.WM_KEYDOWN && msg != Win32.WM_SYSKEYDOWN)
+                return Win32.CallNextHookEx(_hookId, nCode, wParam, lParam);
+
+            // 焦点不在 Photoshop 时暂停监听：直接放行，不拦截、不录制。
+            // 这样用户在其它程序里打字/用快捷键不会被本守护进程吞掉。
+            if (!IsPhotoshopForeground())
+                return Win32.CallNextHookEx(_hookId, nCode, wParam, lParam);
+
+            int vk = Marshal.ReadInt32(lParam);              // KBDLLHOOKSTRUCT.vkCode 为首字段
+            uint flags = (uint)Marshal.ReadInt32(lParam, 8); // flags 偏移 8
+            // bit 30 = 上一帧按键状态（1 表示此前已按下，即系统自动重复），忽略重复
+            if ((flags & (1u << 30)) != 0)
+                return Win32.CallNextHookEx(_hookId, nCode, wParam, lParam);
+
+            // 录制状态读 volatile 布尔量，不取任何锁（锁竞争会让钩子回调阻塞 → 全键盘冻结）
+            if (_recording)
+            {
+                if (vk == 0x1B) // Escape => 取消录制
+                {
+                    LogFromHook("[HotkeyDaemon] 录制取消 (Esc)");
+                    FinishRecordingInternal(null);
+                    return Win32.CallNextHookEx(_hookId, nCode, wParam, lParam);
+                }
+
+                bool isModifier = vk == 0x11 || vk == 0x12 || vk == 0x10 || vk == 0x5B || vk == 0x5C;
+                if (!isModifier)
+                {
+                    string? combo = BuildCombo(vk);
+                    if (!string.IsNullOrEmpty(combo))
                     {
-                        bool recording;
-                        lock (_recLock) recording = _recordingClient != null;
+                        LogFromHook("[HotkeyDaemon] 录制到组合键: " + combo);
+                        FinishRecordingInternal(combo);
+                    }
+                }
+                return Win32.CallNextHookEx(_hookId, nCode, wParam, lParam);
+            }
 
-                        if (recording)
-                        {
-                            if (vk == 0x1B) // Escape => 取消录制
-                            {
-                                LogFromHook("[HotkeyDaemon] 录制取消 (Esc)");
-                                FinishRecordingInternal(null);
-                                return Win32.CallNextHookEx(_hookId, nCode, wParam, lParam);
-                            }
-
-                            bool isModifier = vk == 0x11 || vk == 0x12 || vk == 0x10 || vk == 0x5B || vk == 0x5C;
-                            if (!isModifier)
-                            {
-                                string? combo = BuildCombo(vk);
-                                if (!string.IsNullOrEmpty(combo))
-                                {
-                                    LogFromHook("[HotkeyDaemon] 录制到组合键: " + combo);
-                                    FinishRecordingInternal(combo);
-                                }
-                            }
-                            return Win32.CallNextHookEx(_hookId, nCode, wParam, lParam);
-                        }
-
-                        // 非录制状态：与已装载的热键表做匹配
-                        if (_active && _comboMap.Count > 0)
-                        {
-                            string? combo = BuildCombo(vk);
-                            if (combo != null && _comboMap.TryGetValue(combo, out var hit))
-                            {
-                                // 命中：把组合键丢进队列交给主线程广播，然后吞掉这个按键。
-                                // 吞掉很关键——否则 Photoshop 会同时收到该组合键并执行它自己的
-                                // 快捷键（如 Ctrl+Alt+Shift+K 弹出「键盘快捷键」对话框）。
-                                _hitQueue.Enqueue(hit.Combo);
-                                Win32.PostThreadMessage(_mainThreadId, WM_HOTKEY_HIT, IntPtr.Zero, IntPtr.Zero);
-                                return (IntPtr)1;
-                            }
-                        }
+            // 非录制状态：与已装载的热键表做匹配。
+            // volatile 读取一次引用后再使用，避免多次读取期间表被整体替换造成不一致。
+            if (_active)
+            {
+                var map = _comboMap;
+                if (map.Count > 0)
+                {
+                    string? combo = BuildCombo(vk);
+                    if (combo != null && map.TryGetValue(combo, out var hit))
+                    {
+                        // 命中：把组合键丢进队列交给主线程广播，然后吞掉这个按键。
+                        // 吞掉很关键——否则 Photoshop 会同时收到该组合键并执行它自己的
+                        // 快捷键（如 Ctrl+Alt+Shift+K 弹出「键盘快捷键」对话框）。
+                        _hitQueue.Enqueue(hit.Combo);
+                        Win32.PostThreadMessage(_mainThreadId, WM_HOTKEY_HIT, IntPtr.Zero, IntPtr.Zero);
+                        return (IntPtr)1;
                     }
                 }
             }
+
             return Win32.CallNextHookEx(_hookId, nCode, wParam, lParam);
         }
 
@@ -1096,6 +1197,8 @@ namespace JWautofillHotkeyDaemon
                                 version = Version,
                                 active = _active,
                                 hookInstalled = _hookId != IntPtr.Zero,
+                                hookSafeMode = _hookSafeMode,
+                                hookTimeoutMs = ReadLowLevelHooksTimeout(),
                                 comboCount = _comboMap.Count,
                                 combos = _comboMap.Keys.ToArray(),
                                 items = _currentItems.Count

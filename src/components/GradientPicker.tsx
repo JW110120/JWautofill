@@ -1294,9 +1294,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                     handlePresetSelect(index, e);
                                 }}
                             >
-                                <div className="preset-preview">
                                     {/* 棋盘格背景 */}
-                                    <div className="opacity-checkerboard">
+                                    <div>
                                         {renderCheckerboard(50, 50, 4)}
                                     </div>
                                     {/* 渐变覆盖层 */}
@@ -1304,7 +1303,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                         className="gradient-fill-layer"
                                         style={{ background: presetGradientStyle }}
                                     />
-                                </div>
                             </div>
                         );
                     })}

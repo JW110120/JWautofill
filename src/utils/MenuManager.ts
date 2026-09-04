@@ -236,14 +236,22 @@ export class MenuManager {
             },
             {
               id: "spacer2",
-              label: "-" // 分隔符（图层像素alpha采样 与 卸载守护进程 之间）
+              label: "-" // 分隔符（图层像素alpha采样 与 键盘卡死一键修复 之间）
+            },
+            {
+              id: "repairKeyboard",
+              label: "键盘卡死一键修复"
+            },
+            {
+              id: "spacer3",
+              label: "-" // 分隔符（键盘卡死一键修复 与 卸载快捷键服务 之间）
             },
             {
               id: "uninstallHotkeyDaemon",
               label: "卸载快捷键服务"
             },
             {
-              id: "spacer3",
+              id: "spacer4",
               label: "-" // 分隔符（卸载快捷键服务 与使用手册 之间）
             },
             {
