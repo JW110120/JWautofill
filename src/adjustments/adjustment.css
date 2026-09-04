@@ -221,9 +221,7 @@
   user-select: none;
   /* 横向分割线：与 丨（.hotkey-entry-sep）和外框（.hotkey-entry-box）同为 --border-color，保持横竖分割线一致 */
   border-bottom: 1px solid var(--border-color);
-  /* 选中态用 outline 占位（不引起位移），与横向分割线 border-bottom 不冲突 */
   outline: 2px solid transparent;
-  outline-offset: -2px;
 }
 
 /* 仅后续行有上间距 → 首行上边距为 0；配合 box 上下等 padding，首尾到边框距离对称 */
@@ -240,16 +238,7 @@
   outline-color: var(--primary-color);
 }
 
-/* 长按拖拽排序：拖起的行半透明，落点行用主题蓝虚线描边指示插入位置 */
-.hotkey-entry-row.dragging {
-  opacity: 0.45;
-  cursor: grabbing;
-}
-
-.hotkey-entry-row.drop-target {
-  outline-color: var(--primary-color);
-  outline-style: dashed;
-}
+/* 拖拽排序视觉（.dragging / .drop-target）已收口至 common.css「通用状态类」区。 */
 
 /* 置顶固定的「选区填充开关」行：明确不可拖动 */
 .hotkey-entry-row.pinned {

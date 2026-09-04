@@ -14,6 +14,10 @@ export class PresetManager {
     private static patternSavePromise: Promise<void> | null = null;
     // 记录上次成功保存的图案JSON，用于避免不必要的重复写入
     private static lastPatternJson: string | null = null;
+    // ⚡ 每图案序列化片段缓存：key = pattern 对象，值 = { sig 内容签名, frag JSON片段 }。
+    // 保存时签名一致就直接复用上次编码好的 JSON 片段，跳过 4 块二进制数据的
+    // base64 全量重编——拖拽排序等只改顺序的保存从"秒级"降到"毫秒级"。
+    private static patternFragCache = new WeakMap<object, { sig: string; frag: string }>();
 
     /**
      * 获取预设保存文件夹（使用UXP数据文件夹）
@@ -231,58 +235,77 @@ export class PresetManager {
 
     /**
      * 将Uint8Array转换为Base64字符串
+     * ⚡ 性能关键路径：直接从字节数组编码（省掉中间二进制串），输出端用
+     * number[] 累积字符码 + 每 0x8000 一次 fromCharCode.apply——全程只有
+     * 几百次大字符串追加，杜绝旧实现逐字符/逐 3 字节向大字符串 += 的
+     * 百万次拼接（UXP 引擎下即分钟级卡顿）。
      */
     private static uint8ArrayToBase64(uint8Array: Uint8Array): string {
         const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-        let result = '';
-        let i = 0;
         const len = uint8Array.length;
-        
-        while (i < len) {
-            const a = uint8Array[i++];
-            const b = i < len ? uint8Array[i++] : 0;
-            const c = i < len ? uint8Array[i++] : 0;
-            
+        const charCodes = new Array<number>(64);
+        for (let k = 0; k < 64; k++) charCodes[k] = chars.charCodeAt(k);
+        const PAD = 61; // '='
+
+        let result = '';
+        let acc: number[] = [];
+        for (let i = 0; i < len; i += 3) {
+            const a = uint8Array[i];
+            const b = i + 1 < len ? uint8Array[i + 1] : 0;
+            const c = i + 2 < len ? uint8Array[i + 2] : 0;
             const bitmap = (a << 16) | (b << 8) | c;
-            
-            result += chars.charAt((bitmap >> 18) & 63);
-            result += chars.charAt((bitmap >> 12) & 63);
-            result += i - 2 < len ? chars.charAt((bitmap >> 6) & 63) : '=';
-            result += i - 1 < len ? chars.charAt(bitmap & 63) : '=';
+            acc.push(
+                charCodes[(bitmap >> 18) & 63],
+                charCodes[(bitmap >> 12) & 63],
+                i + 1 < len ? charCodes[(bitmap >> 6) & 63] : PAD,
+                i + 2 < len ? charCodes[bitmap & 63] : PAD
+            );
+            if (acc.length >= 0x8000) {
+                result += String.fromCharCode.apply(null, acc as unknown as number[]);
+                acc = [];
+            }
         }
-        
+        if (acc.length > 0) {
+            result += String.fromCharCode.apply(null, acc as unknown as number[]);
+        }
         return result;
     }
 
+    // base64 → 字节值查找表（懒初始化；避免旧实现每字符对 64 字符串做 indexOf 线性扫描）
+    private static b64Lookup: Uint8Array | null = null;
+    private static getB64Lookup(): Uint8Array {
+        if (!this.b64Lookup) {
+            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+            const table = new Uint8Array(128).fill(255);
+            for (let i = 0; i < chars.length; i++) table[chars.charCodeAt(i)] = i;
+            this.b64Lookup = table;
+        }
+        return this.b64Lookup;
+    }
+
     /**
-     * 将Base64字符串转换为Uint8Array
+     * 将Base64字符串转换为Uint8Array（位缓冲单趟解码，替代旧版逐组 indexOf 扫描）
      */
     private static base64ToUint8Array(base64: string): Uint8Array {
-        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-        let result = '';
-        let i = 0;
-        
-        base64 = base64.replace(/[^A-Za-z0-9+/]/g, '');
-        
-        while (i < base64.length) {
-            const encoded1 = chars.indexOf(base64.charAt(i++));
-            const encoded2 = chars.indexOf(base64.charAt(i++));
-            const encoded3 = chars.indexOf(base64.charAt(i++));
-            const encoded4 = chars.indexOf(base64.charAt(i++));
-            
-            const bitmap = (encoded1 << 18) | (encoded2 << 12) | (encoded3 << 6) | encoded4;
-            
-            result += String.fromCharCode((bitmap >> 16) & 255);
-            if (encoded3 !== 64) result += String.fromCharCode((bitmap >> 8) & 255);
-            if (encoded4 !== 64) result += String.fromCharCode(bitmap & 255);
+        const clean = base64.replace(/[^A-Za-z0-9+/]/g, '');
+        const table = this.getB64Lookup();
+        const bytes = new Uint8Array(Math.floor(clean.length * 3 / 4));
+        let out = 0;
+        let buffer = 0;
+        let bits = 0;
+
+        for (let i = 0; i < clean.length; i++) {
+            const v = table[clean.charCodeAt(i) & 0x7f];
+            if (v === 255) continue;
+            buffer = (buffer << 6) | v;
+            bits += 6;
+            if (bits >= 8) {
+                bits -= 8;
+                bytes[out++] = (buffer >> bits) & 0xff;
+            }
         }
-        
-        const bytes = new Uint8Array(result.length);
-        for (let j = 0; j < result.length; j++) {
-            bytes[j] = result.charCodeAt(j);
-        }
-        
-        return bytes;
+
+        return out === bytes.length ? bytes : bytes.subarray(0, out);
     }
 
     /**
@@ -298,6 +321,28 @@ export class PresetManager {
     private static base64ToArrayBuffer(base64: string): ArrayBuffer {
         const uint8Array = this.base64ToUint8Array(base64);
         return uint8Array.buffer.slice(uint8Array.byteOffset, uint8Array.byteOffset + uint8Array.byteLength);
+    }
+
+    /**
+     * ⚡ 单图案内容签名：覆盖所有被序列化的字段（全部 O(1)，只读标量与 length）。
+     * 保存与加载共用——加载时用文件里现成的 base64 字符串回填片段缓存并预热
+     * 去重基线，避免重载后的首次自动保存把几 MB 二进制全部重编一遍。
+     */
+    private static patternSignature(pattern: Pattern): string {
+        return [
+            pattern.id, pattern.name, pattern.angle, pattern.scale,
+            pattern.preserveTransparency, pattern.fillMode, pattern.rotateAll,
+            pattern.originalFormat,
+            pattern.width, pattern.height,
+            pattern.originalWidth, pattern.originalHeight,
+            pattern.currentScale, pattern.currentAngle,
+            pattern.patternComponents, pattern.components, pattern.hasAlpha,
+            pattern.preview ? pattern.preview.length : 0,
+            pattern.data ? pattern.data.byteLength : 0,
+            pattern.patternRgbData ? pattern.patternRgbData.length : 0,
+            pattern.grayData ? pattern.grayData.length : 0,
+            pattern.originalGrayData ? pattern.originalGrayData.length : 0,
+        ].join('|');
     }
 
     /**
@@ -333,12 +378,18 @@ export class PresetManager {
         
         while (retryCount < maxRetries) {
             try {
-                console.log(`🔄 开始保存图案预设 (尝试 ${retryCount + 1}/${maxRetries})，共 ${patterns.length} 个预设`);
                 const presetFolder = await this.getPresetFolder();
-                console.log('📁 预设文件夹获取成功，路径:', presetFolder.nativePath);
-                
-                // 保存完整的图案数据，包括二进制数据（移除易变字段以便去重判断）
-                const serializablePatterns = patterns.map(pattern => {
+
+                // 保存完整的图案数据，包括二进制数据（移除易变字段以便去重判断）。
+                // ⚡ 先算内容签名（全部 O(1)，只读 length/标量），命中缓存即复用片段，
+                // 不再重新 base64 编码几 MB 的二进制——拖拽排序只改顺序，理应零编码。
+                // 签名覆盖所有被序列化的字段（含各缓冲区 length 与 preview 长度），
+                // 对象被原地改写导致任一字段变化时签名失配，自动重新编码，不会存脏数据。
+                const fragments = patterns.map(pattern => {
+                    const sig = this.patternSignature(pattern);
+                    const cached = this.patternFragCache.get(pattern);
+                    if (cached && cached.sig === sig) return cached.frag;
+
                     const serialized: any = {
                         id: pattern.id,
                         name: pattern.name,
@@ -381,119 +432,49 @@ export class PresetManager {
                         // 即使二进制数据编码失败，也保存其他数据
                     }
 
-                    return serialized;
+                    const frag = JSON.stringify(serialized);
+                    this.patternFragCache.set(pattern, { sig, frag });
+                    return frag;
                 });
 
-                // 待写入的稳定JSON字符串
-                const jsonData = JSON.stringify(serializablePatterns, null, 2);
+                // 待写入的JSON（不 pretty-print；片段按序拼装，输出与整表 stringify 完全一致）
+                const jsonData = '[' + fragments.join(',') + ']';
 
-                // 内容未变化则跳过写入（若最终文件已存在）
-                try {
-                    const existing = await presetFolder.getEntry(this.PATTERN_PRESETS_FILE);
-                    if (existing) {
-                        const formats = require('uxp').storage.formats;
-                        try {
-                            const existingContent = await (existing as any).read({ format: formats.utf8 });
-                            if (existingContent === jsonData) {
-                                console.log('⏭️ 图案预设内容未变化（与现有文件一致），跳过写入');
-                                currentResolve && currentResolve();
-                                this.patternSavePromise = null;
-                                return;
-                            }
-                        } catch (_) {
-                            // 读取失败则继续写入流程
-                        }
-                        if (this.lastPatternJson === jsonData) {
-                            console.log('⏭️ 图案预设内容未变化（与上次写入一致），跳过写入');
-                            currentResolve && currentResolve();
-                            this.patternSavePromise = null;
-                            return;
-                        }
-                    }
-                } catch (_) { /* 文件不存在时继续写入 */ }
-                
-                // 创建临时文件名，确保原子性写入
-                const tempFileName = `${this.PATTERN_PRESETS_FILE}.tmp`;
-                console.log('📝 创建临时文件:', tempFileName);
-                const tempFile = await presetFolder.createFile(tempFileName, { overwrite: true });
-                console.log('✅ 临时文件创建成功:', tempFile.nativePath);
-                
-                // 验证JSON数据有效性
-                console.log('🔍 验证JSON数据有效性...');
-                try {
-                    JSON.parse(jsonData);
-                    console.log('✅ JSON数据验证通过');
-                } catch (jsonError) {
-                    console.error('❌ JSON数据无效:', jsonError);
-                    throw new Error(`JSON数据格式错误: ${jsonError.message}`);
+                // ⚡ 内容与上次成功写入一致 → 零 I/O 直接返回。
+                // 30s 定时保存 / 多个 effect 重复触发时全部从这里短路，不再做任何文件读写。
+                if (this.lastPatternJson === jsonData) {
+                    currentResolve && currentResolve();
+                    this.patternSavePromise = null;
+                    return;
                 }
-                
-                // 写入数据到临时文件
-                console.log('💾 开始写入数据，大小:', jsonData.length, '字符');
-                await tempFile.write(jsonData, { format: require('uxp').storage.formats.utf8 });
-                console.log('✅ 数据写入完成');
-                
-                // 验证写入的文件内容
-                console.log('🔍 验证写入的文件内容...');
-                const writtenContent = await tempFile.read({ format: require('uxp').storage.formats.utf8 });
-                try {
-                    JSON.parse(writtenContent);
-                    console.log('✅ 写入文件内容验证通过');
-                } catch (verifyError) {
-                    console.error('❌ 写入文件内容验证失败:', verifyError);
-                    throw new Error(`写入文件内容无效: ${verifyError.message}`);
-                }
-                
-                // 使用更安全的文件替换策略
+
+                // 备份现有文件（纯重命名，代价极低），随后单次覆盖写入最终文件。
+                // 已删除：临时文件二次写盘、对刚构建字符串的 JSON.parse「验证」、
+                // 全文读回 + 再 parse 的双重校验、最终文件存在性读取——
+                // 这些对十几 MB 的 JSON 各是一次全量 I/O，是保存卡顿的大头；
+                // 写入内容本身由 JSON.stringify 产出，必然可解析，无需读回校验。
                 const finalFileName = this.PATTERN_PRESETS_FILE;
                 const backupFileName = `${this.PATTERN_PRESETS_FILE}.backup`;
-                
-                // 如果目标文件存在，先备份
                 try {
                     const existingFile = await presetFolder.getEntry(finalFileName);
                     if (existingFile) {
-                        console.log('📋 备份现有文件...');
                         // 删除旧备份（如果存在）
                         try {
                             const oldBackup = await presetFolder.getEntry(backupFileName);
                             await (oldBackup as any).delete();
                         } catch (e) { /* 忽略备份文件不存在的错误 */ }
-                        
                         // 创建备份
                         await (existingFile as any).moveTo(presetFolder, backupFileName);
-                        console.log('✅ 现有文件已备份');
                     }
-                } catch (e) {
-                    console.log('ℹ️ 目标文件不存在，无需备份');
-                }
-                
+                } catch (e) { /* 目标文件不存在，无需备份 */ }
+
                 // 直接写入最终文件（覆盖模式），避免 UXP moveTo 的 file exists 问题
-                console.log('✍️ 写入最终文件 (覆盖模式):', finalFileName);
-                try {
-                    const finalFile = await presetFolder.createFile(finalFileName, { overwrite: true });
-                    await finalFile.write(jsonData, { format: require('uxp').storage.formats.utf8 });
-                    console.log('✅ 最终文件写入成功');
-                } catch (writeErr) {
-                    console.error('❌ 写入最终文件失败:', writeErr);
-                    throw writeErr; // 让外层重试
-                }
-                
-                // 清理遗留的临时文件（容错）
-                try {
-                    const leftoverTmp = await presetFolder.getEntry(tempFileName);
-                    if (leftoverTmp) {
-                        await (leftoverTmp as any).delete();
-                        console.log('🧹 已清理遗留的临时文件');
-                    }
-                } catch (_) { /* 无需处理 */ }
-                
-                // 验证最终文件是否存在
-                const finalFile = await presetFolder.getEntry(this.PATTERN_PRESETS_FILE);
-                console.log('🔍 验证最终文件:', (finalFile as any).nativePath);
-                
+                const finalFile = await presetFolder.createFile(finalFileName, { overwrite: true });
+                await finalFile.write(jsonData, { format: require('uxp').storage.formats.utf8 });
+
                 // 记录本次成功保存的内容
                 this.lastPatternJson = jsonData;
-                console.log('✅ 图案预设已保存（完整数据）', serializablePatterns.length, '个预设');
+                console.log('✅ 图案预设已保存', patterns.length, '个预设,', jsonData.length, '字符');
                 currentResolve && currentResolve();
                 this.patternSavePromise = null;
                 return; // 成功保存，退出重试循环
@@ -522,6 +503,8 @@ export class PresetManager {
         try {
             const presetFolder = await this.getPresetFolder();
             let serializedPatterns: any[] | null = null;
+            // 是否来自本地数据文件（非 bundle 兜底）——决定是否预热保存去重基线
+            let loadedFromLocal = false;
 
             // 解析带恢复的辅助函数（与渐变一致）
             const parseWithRecovery = (content: string): any[] | null => {
@@ -552,6 +535,7 @@ export class PresetManager {
                     const parsed = parseWithRecovery(content);
                     if (parsed && parsed.length > 0) {
                         serializedPatterns = parsed;
+                        loadedFromLocal = true;
                     } else {
                         console.warn('⚠️ 图案预设主文件解析失败，尝试读取备份文件');
                         try {
@@ -562,8 +546,15 @@ export class PresetManager {
                                 if (backupParsed && backupParsed.length > 0) {
                                     console.log('✅ 使用备份文件恢复图案预设');
                                     serializedPatterns = backupParsed;
-                                    // 将备份内容写回主文件，恢复可用状态
-                                    try { await this.savePatternPresets(backupParsed as any); } catch (e) { /* 忽略写回失败 */ }
+                                    loadedFromLocal = true;
+                                    // 将备份内容原样写回主文件，恢复可用状态。
+                                    // ⚠️ 不能走 savePatternPresets(backupParsed)：backupParsed 是
+                                    // 序列化格式（仅含 base64 字符串、无解码缓冲区），重序列化会
+                                    // 丢失全部二进制字段，恢复出有损文件。
+                                    try {
+                                        const restored = await presetFolder.createFile(this.PATTERN_PRESETS_FILE, { overwrite: true });
+                                        await restored.write(backupContent, { format: formats.utf8 });
+                                    } catch (e) { /* 忽略写回失败 */ }
                                 }
                             }
                         } catch (_) { /* 忽略备份读取失败 */ }
@@ -634,9 +625,27 @@ export class PresetManager {
                     console.error('恢复图案二进制数据失败:', pattern.name, error);
                 }
 
+                // ⚡ 回填每图案序列化片段缓存（仅本地文件路径）：serialized 里就有现成的
+                // base64 字符串，直接 JSON.stringify 成片段入缓存，零编码。重载后的
+                // 首次自动保存直接复用，不再重编几 MB 二进制。
+                if (loadedFromLocal) {
+                    this.patternFragCache.set(pattern, {
+                        sig: this.patternSignature(pattern),
+                        frag: JSON.stringify(serialized)
+                    });
+                }
+
                 return pattern;
             });
-            
+
+            // ⚡ 预热保存去重基线（仅本地文件路径）：加载出的 patterns 重新序列化的结果
+            // 与文件内容一一对应（片段就来自文件本身），使重载后的首次 500ms 防抖保存
+            // 与 30s 定时保存命中"内容未变化"短路——否则每次 reload 打开面板都会
+            // 全量重编所有图案的 base64 并重写文件，正是"开场一段时间点选卡顿"的元凶。
+            if (loadedFromLocal && serializedPatterns) {
+                this.lastPatternJson = JSON.stringify(serializedPatterns);
+            }
+
             console.log('✅ 图案预设已加载（完整数据）', patterns.length, '个预设');
             return patterns;
         } catch (error) {

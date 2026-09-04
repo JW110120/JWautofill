@@ -2,16 +2,11 @@
    ⚠️ 本文件只保留图案面板「独有」样式。通用组件请去 common.css。 */
 
 /* pattern特制的预设存放区容器：内部横向排列预设缩略图，排满后换行。
-   占满 .preset-area（common.css）除底部图标栏外的剩余高度并自带滚动——
-   修复「两行时滚动条占满整个预设区」：旧 height:auto 在定高 flex 列里无法触发
-   内部滚动，改为 flex:1 + min-height:0 使其撑满剩余高度、由自身 overflow-y 承载
-   滚动，底部图标栏经 .icon-button-group--bar 的 margin-top:auto 顶到底。
-   面板宽 248，padding 1px，每格 74px 紧贴区域边框。 */
 /* 等距布局（横纵统一 M=4）：
    横向：面板 250 − .panel(pad10×2) − .preset-area(border1×2) = 228 内宽；
          容器 border-box + 左右 padding 4 → 内容 220 = 4×B + 3×M；取 B=52、M=4 → 4×52+3×4=220 整除。
    纵向：容器上下 padding 4 = 首行上缘距/末行下缘距；每格 margin-bottom 4 = 行距；末格清 margin 防双算。
-   单格 52(含1px描边)，五段横向间距与首/末上缘、行距均 4，不换行。 */
+   单格 52(border-box 含 1px 描边)，五段横向间距与首/末上缘、行距均 4，不换行。 */
 .pattern-preset {
   position: relative;
   top: 0;
@@ -50,20 +45,17 @@
   margin-bottom: 0;
 }
 
-/* 选中态：仅覆盖描边色 / 宽（基础盒 .thumb-box 在 common.css）。 */
-.photo-container-selected {
-  border-color: var(--primary-color);
-  border-width: 2px;
+/* 预览行（「预览」标题 + 缩放下拉）：标题↔下拉 6px、下拉右缘距容器 10px。
+   .preview-toolbar 为本面板专属修饰类，不影响其它面板的通用 .row-between；
+   UXP 不支持 flex gap → 标题用 margin-right 提供间距。 */
+.final-preview-container .preview-toolbar .subpanel-title-2 {
+  margin-right: 6px;
 }
 
-/* 多选态（红）：仅覆盖尺寸 / 描边色 / 宽（基础盒 .thumb-box 在 common.css）。 */
-.photo-container-multi-selected {
-  border-color: var(--secondary-color, rgb(255, 107, 53));
-  border-width: 2px;
+.final-preview-container .preview-toolbar {
+  padding-right: 10px;
 }
 
-
-/* pattern特殊的缩放指示下拉菜单：需保留 */
 .zoom-indicator {
   position: absolute;
   top: 8px;

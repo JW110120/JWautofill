@@ -822,8 +822,8 @@ sp-radio[disabled] {
    唯一类：.collapse-section / .collapse-header / .collapse-icon /
           .collapse-icon-expanded / .collapse-content / .collapse-content-expanded
    原 APP 的 .expand-*（app.css）与工具箱的 .adjust-expand-*（adjustment.css）
-   本质相同，现统一收口于此，改一处全跟着改。拖拽排序视觉（.dragging 半透明 /
-   .drop-target 主题蓝虚线）保留在分区上（工具箱分区重排复用）。
+   本质相同，现统一收口于此，改一处全跟着改。拖拽排序视觉：.dragging 已收口至
+   下方「通用状态类」，.drop-target（outline 虚线族）保留在分区上。
    -------------------------------------------------------------------------- */
 .collapse-section {
   background-color: var(--bg-color);
@@ -883,15 +883,7 @@ sp-radio[disabled] {
   fill: var(--text-color);
 }
 
-/* 分区级拖拽排序：拖起半透明、落点主题蓝虚线指示插入位置 */
-.collapse-section.dragging {
-  opacity: 0.45;
-}
-
-.collapse-section.drop-target {
-  outline: 2px dashed var(--primary-color);
-  outline-offset: -2px;
-}
+/* 分区拖拽排序视觉（.dragging / .drop-target）已收口至「通用状态类」区。 */
 
 /* --------------------------------------------------------------------------
    9. 开关行（sp-switch + 文字标签）
@@ -1153,12 +1145,8 @@ body.label-drag-cursor * {
 }
 
 
-/* --------------------------------------------------------------------------
-   X. 图案 / 渐变子面板共用收口（自 pattern.css / gradient.css 收口，单一来源）
-   -------------------------------------------------------------------------- */
-
-/* 预设区外容器（图案 .pattern-container / 渐变 .gradient-presets-area 收口于此）。
-   固定高度 130px、内部 flex 列：缩略图列表占满剩余高度并自带滚动，底部图标栏
+/* 通用预设区外容器
+   内部 flex 列：缩略图列表占满剩余高度并自带滚动，底部图标栏
    经 margin-top:auto 顶到容器底。 */
 .preset-area {
   position: relative;
@@ -1175,7 +1163,7 @@ body.label-drag-cursor * {
   z-index: 1;
 }
 
-/* 通用缩略图盒（图案预设格 / 选中 / 多选三态共用基础外观；差异态见 pattern.css）。 */
+/* 通用缩略图盒 */
 .thumb-box {
   aspect-ratio: 1;
   width: 52px;
@@ -1193,22 +1181,66 @@ body.label-drag-cursor * {
   flex: 0 0 auto;
 }
 
-/* 缩略图内图片（含选中 / 多选态）：唯一一套，替代原 pattern.css 中 .photo-container
-   与 .pattern-thumb-img 两处重合规则——原 .photo-container img 的 width/height:100%
- */
+/* 缩略图内图片。
+   ⚡ 尺寸上限固定 46px，选中态描边 1px→2px 会把
+   content-box 从 50 压到 48，百分比上限会让图片跟着缩 2px（"选中缩图"跳变）。
+   46 = 52(盒) − 2×1px(基础描边) − 2×2px(呼吸边距)；盒尺寸若再调整需同步此值。 */
 .thumb-box img {
-  width: auto;
-  height: auto;
-  max-width: 100%;
-  max-height: 100%;
+  width: 46px;
+  height: 46px;
   object-fit: contain;
   display: block;
-  padding: 2px;
   transition: opacity 0.2s;
 }
 
-/* 通用加载中 / 加载失败遮罩（图案预设缩略图等可加载缩略图区域共用）。
-   自 pattern.css .pattern-thumb-loading 收口。 */
+/* --------------------------------------------------------------------------
+   通用状态类：缩略图选中/多选 + 长按拖拽排序（全插件复用，勿在面板 css 重复定义）。
+   TSX 只挂这里的通用类名；选择器里的家族前缀仅用于特异性，不代表样式差异。
+   -------------------------------------------------------------------------- */
+/* 选中 / 多选（缩略图格）：共享 2px 加宽描边（"选中缩图"已由 .thumb-box img
+   固定 46px 与描边宽度解耦），仅描边色不同。 */
+.thumb-selected,
+.thumb-multi-selected {
+  border-width: 2px;
+}
+
+.thumb-selected {
+  border-color: var(--primary-color);
+}
+
+.thumb-multi-selected {
+  border-color: var(--secondary-color, rgb(255, 107, 53));
+}
+
+/* 拖起态（半透明 + 抓取光标）：缩略图 / 快捷键行 / 折叠分区共用一条。
+   分组列出各家族拿到 (0,2,0) 特异性，稳压各家 base 的 cursor
+   （如 .thumb-box 的 pointer、.hotkey-entry-row 的 pointer），与加载顺序无关。 */
+.thumb-box.dragging,
+.hotkey-entry-row.dragging,
+.collapse-section.dragging {
+  opacity: 0.45;
+  cursor: grabbing;
+}
+
+/* 落点指示（主题蓝虚线）按容器机制分两族，不能合成一个裸类：
+   A. .thumb-box 自带 1px 实线 border：必须复用 border 本身画虚线——若叠 outline，
+      落点格同时是选中态时会实线 border + 虚线 outline 双重描边（已踩坑）。
+      特异性(0,2,0) > 选中态(0,1,0)，dashed 直接取代其实线。
+   B. .hotkey-entry-row / .collapse-section 无实线 border 可复用：outline 虚线
+      （不占布局；⚠️ UXP 不支持 outline-offset，虚线画在盒外侧，
+      由行间 margin 容纳，勿写 outline-offset）。两条本质相同，归组为一条。 */
+.thumb-box.drop-target {
+  border-color: var(--primary-color);
+  border-style: dashed;
+  border-width: 2px;
+}
+
+.hotkey-entry-row.drop-target,
+.collapse-section.drop-target {
+  outline: 2px dashed var(--primary-color);
+}
+
+/* 通用加载中 / 加载失败的预览遮罩 */
 .pattern-thumb-loading {
   position: absolute;
   top: 0;
@@ -1223,8 +1255,7 @@ body.label-drag-cursor * {
   color: var(--black-text-);
 }
 
-/* 通用最终预览区外容器（图案 .pattern-final-preview-container / 渐变 .final-preview-container
-   收口于此），固定高度 120px。 */
+/* 通用最终预览区外容器 */
 .final-preview-container {
   position: relative;
   width: 100%;
@@ -1237,8 +1268,7 @@ body.label-drag-cursor * {
   overflow: hidden;
 }
 
-/* 预览区居中灰字提示，渐变面板（多选预设 / 未选预设 / 渐变全透明）与
-   图案面板（未选图案）共用 */
+/* 通用最终预览区灰字提示 */
 .final-preview-hint {
   position: absolute;
   top: 50%;
@@ -1250,11 +1280,11 @@ body.label-drag-cursor * {
   pointer-events: none;
 }
 
-/* 通用预览陈列区容器（图案 .preview-wrapper 收口于此）。 */
+/* 通用最终预览下部分容器 */
 .preview-wrapper {
   position: relative;
   width: 100%;
-  height: 200px;
+  height: 300px;
   overflow: hidden;
   border-top: 1px solid var(--border-color);
   background-color: var(--dark-bg-color);

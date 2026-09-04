@@ -21,6 +21,7 @@
 ## 通用组件 CSS 单一来源（common.css）
 - index.tsx 顺序：uxpPerfPatch→common→app→license。common.css 严禁 @import。已收口：滑块块/标签档/range-slider/数字输入+单位/input appearance/图标按钮/按钮族/主标题(.main-title 去 border-bottom 改 .divider)/开关行/radio/checkbox/折叠区/通知区/滚动条/拖拽光标锁。
 - .panel(外壳：padding:10+overflow-y:auto+min-height:0) 与 .panel-section(区块：row 布局，label+控件同行；列布局加 .panel-section--col) 全插件通用。
+- 状态类收口 common.css「通用状态类」区（约 .thumb-box img 之后）：通用类名 .thumb-selected / .thumb-multi-selected（共享 border-width:2px 归组，仅色不同）、拖起 .thumb-box/.hotkey-entry-row/.collapse-section.dragging 三家族分组一条（(0,2,0) 压各家 base cursor）、落点分两族——.thumb-box.drop-target(border 虚线族) 与 .hotkey-entry-row/.collapse-section.drop-target(outline 虚线族，归组一条)。UXP 禁 outline-offset。TSX 只挂通用类名。
 - Select.tsx 态类是独占类名(head-open/head-disabled/opt-sel/opt-dis 不含基础类)，基础样式须三态共享组(.head,.head-open,.head-disabled 合写)否则展开退化成块。
 
 ## 布局宽度

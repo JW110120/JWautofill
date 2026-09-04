@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Pattern } from '../types/state';
 import { FileIcon, DeleteIcon } from '../styles/Icons';
 import IconButton from '../components/IconButton';
@@ -50,9 +50,18 @@ interface PatternPickerProps {
     const [previewZoom, setPreviewZoom] = useState<number>(100); // 预览缩放级别
     const [previewOffset, setPreviewOffset] = useState<{x: number, y: number}>({x: 0, y: 0}); // 预览偏移
 
-    // 拖拽排序相关引用
-    const dragPatternIndexRef = useRef<number | null>(null);
-    const dragPatternActiveRef = useRef<boolean>(false);
+    // 长按拖拽排序（替代 HTML5 draggable：UXP 下 draggable 会把轻微手抖识别为
+    // 拖拽、吞掉 click，导致点击选中不跟手）。方案与 BrushHotkeySection 一致：
+    // 按下 300ms 无大幅移动才进入拖拽；期间 document 级 mousemove/mouseup 计算
+    // 落点并重排；didDragRef 抑制拖拽结束后的那次 click 误选中。
+    const didDragRef = useRef(false);
+    const pressStartRef = useRef<{ x: number; y: number } | null>(null);
+    const pressTimerRef = useRef<number | null>(null);
+    const [dragIndex, setDragIndex] = useState<number | null>(null);
+    const [dropIndex, setDropIndex] = useState<number | null>(null);
+    const dragIndexRef = useRef<number | null>(null);
+    const dropIndexRef = useRef<number | null>(null);
+    const thumbRefsRef = useRef<Record<number, HTMLDivElement | null>>({});
     
     
     // 预览缩放档位
@@ -73,9 +82,21 @@ interface PatternPickerProps {
     
     // 添加灰度预览URL缓存
     const [grayPreviewUrls, setGrayPreviewUrls] = useState<Record<string, string>>({});
+    // 主题（背景色）变化纪元：仅在实际变化时 +1，触发灰度预览按新底色重建
+    const [grayCacheEpoch, setGrayCacheEpoch] = useState<number>(0);
+    // grayPreviewUrls 的 ref 镜像（供 effect 内读取而不进入依赖，避免 setState→重跑 循环）
+    const grayPreviewUrlsRef = useRef<Record<string, string>>({});
+    grayPreviewUrlsRef.current = grayPreviewUrls;
+    // 正在生成中的灰度预览 id 集合（跨 effect 去重，防止重复 imaging 编码）
+    const pendingGrayUrlsRef = useRef<Set<string>>(new Set());
+    // 背景色比较用 ref（旧实现闭包捕获过期 state，会导致重复重建）
+    const currentBgColorRef = useRef<string>('');
+    // 灰度预览生成尺寸上限：缩略图盒 52px 的 2 倍（retina）。旧实现按图案原始尺寸
+    // （可达数千像素）走 PS imaging 编码，一张几百 ms 且每次缓存清空全部重来。
+    const GRAY_THUMB_MAX = 104;
     
-    // 添加当前背景色状态用于检测主题变化
-    const [currentBgColor, setCurrentBgColor] = useState<string>('');
+    // 当前背景色（仅用于主题变化检测比较，走 ref 避免闭包过期值）
+    const currentBgColorRef = useRef<string>('');
     
     // 添加preview wrapper的引用
     const previewWrapperRef = useRef<HTMLDivElement>(null);
@@ -136,19 +157,9 @@ interface PatternPickerProps {
         return () => clearTimeout(handle);
     }, [patterns]);
 
-    // 组件卸载时强制保存预设，确保数据不丢失
-    useEffect(() => {
-        return () => {
-            // 组件卸载时的清理函数
-            if (patterns.length > 0) {
-                console.log('🚨 PatternPicker: 组件卸载，强制保存预设');
-                // 使用同步方式尝试保存，虽然可能不完全可靠，但比不保存好
-                PresetManager.savePatternPresets(patterns).catch(error => {
-                    console.error('❌ PatternPicker: 组件卸载时保存失败:', error);
-                });
-            }
-        };
-    }, [patterns]);
+    // ⚡ 已删除「组件卸载时强制保存」effect：其 cleanup 在每次 patterns 变化时都会执行
+    // （依赖数组语义如此，并非真正卸载），等于每次变化都多一次全量序列化保存，
+    // 与上方 500ms 防抖保存重复。防抖保存 + 30s 自动保存已足够可靠。
 
     // 定期自动保存预设（每30秒）
     useEffect(() => {
@@ -184,49 +195,84 @@ interface PatternPickerProps {
         event.preventDefault();
     };
 
-    // ---------------- 拖拽排序（图案预设） 开始 ----------------
-    const handlePatternDragStart = (e: React.DragEvent<HTMLDivElement>, index: number) => {
-        dragPatternIndexRef.current = index;
-        dragPatternActiveRef.current = true;
-        try { e.dataTransfer.setData('text/plain', String(index)); } catch (_) {}
-        e.dataTransfer.effectAllowed = 'move';
+    // ---------------- 长按拖拽排序（图案预设） 开始 ----------------
+    const startThumbPress = (e: React.MouseEvent, index: number) => {
+        didDragRef.current = false;
+        pressStartRef.current = { x: e.clientX, y: e.clientY };
+        if (pressTimerRef.current != null) { clearTimeout(pressTimerRef.current); pressTimerRef.current = null; }
+        pressTimerRef.current = window.setTimeout(() => {
+            setDragIndex(index);
+            setDropIndex(index);
+            dragIndexRef.current = index;
+            dropIndexRef.current = index;
+            didDragRef.current = true; // 进入拖拽：松开后不再触发单击选中
+        }, 300);
     };
 
-    const handlePatternDragOver = (e: React.DragEvent<HTMLDivElement>, overIndex: number) => {
-        if (!dragPatternActiveRef.current) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-    };
-
-    const handlePatternDrop = async (e: React.DragEvent<HTMLDivElement>, dropIndex: number) => {
-        e.preventDefault();
-        if (!dragPatternActiveRef.current) return;
-        const from = dragPatternIndexRef.current;
-        const to = dropIndex;
-        dragPatternActiveRef.current = false;
-        dragPatternIndexRef.current = null;
-        if (from == null || to == null || from === to) return;
-
-        // 基于当前 patterns 计算新的顺序，避免 setState 异步导致的顺序不一致
-        const nextOrder = (() => {
-            const next = [...patterns];
-            const [moved] = next.splice(from, 1);
-            next.splice(to, 0, moved);
-            return next;
-        })();
-        setPatterns(nextOrder);
-        try {
-            await PresetManager.savePatternPresets(nextOrder);
-        } catch (err) {
-            console.error('保存拖拽后的图案预设顺序失败:', err);
+    // 长按计时未触发前若发生明显移动（手抖/滑动），取消长按，避免误触拖拽
+    const onThumbMove = (e: React.MouseEvent) => {
+        if (pressTimerRef.current != null && pressStartRef.current) {
+            const dx = Math.abs(e.clientX - pressStartRef.current.x);
+            const dy = Math.abs(e.clientY - pressStartRef.current.y);
+            if (dx > 4 || dy > 4) {
+                clearTimeout(pressTimerRef.current);
+                pressTimerRef.current = null;
+            }
         }
     };
 
-    const handlePatternDragEnd = () => {
-        dragPatternActiveRef.current = false;
-        dragPatternIndexRef.current = null;
+    const endThumbPress = () => {
+        if (pressTimerRef.current != null) {
+            clearTimeout(pressTimerRef.current);
+            pressTimerRef.current = null;
+        }
     };
-    // ---------------- 拖拽排序（图案预设） 结束 ----------------
+
+    // 拖拽进行中：document 级监听实时计算落点，松手重排并落盘（同 BrushHotkeySection 写法）
+    useEffect(() => {
+        if (dragIndex == null) return;
+        const onMove = (ev: MouseEvent) => {
+            let target: number | null = null;
+            for (const key of Object.keys(thumbRefsRef.current)) {
+                const el = thumbRefsRef.current[Number(key)];
+                if (!el) continue;
+                const r = el.getBoundingClientRect();
+                if (ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom) {
+                    target = Number(key);
+                    break;
+                }
+            }
+            if (target != null && target !== dropIndexRef.current) {
+                dropIndexRef.current = target;
+                setDropIndex(target);
+            }
+        };
+        const onUp = () => {
+            const from = dragIndexRef.current;
+            const to = dropIndexRef.current;
+            setDragIndex(null);
+            setDropIndex(null);
+            dragIndexRef.current = null;
+            dropIndexRef.current = null;
+            if (from == null || to == null || from === to) { didDragRef.current = true; return; }
+            // 基于当前 patterns 计算新的顺序，避免 setState 异步导致的顺序不一致
+            const next = [...patterns];
+            const [moved] = next.splice(from, 1);
+            next.splice(to, 0, moved);
+            setPatterns(next);
+            PresetManager.savePatternPresets(next).catch(err => {
+                console.error('保存拖拽后的图案预设顺序失败:', err);
+            });
+            didDragRef.current = true; // 抑制随后的单击选中
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+        return () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+        };
+    }, [dragIndex, patterns]);
+    // ---------------- 长按拖拽排序（图案预设） 结束 ----------------
     
     // 处理滑块拖拽开始
     const handleMouseMove = (event: MouseEvent) => {
@@ -438,20 +484,12 @@ interface PatternPickerProps {
 
         const regenerateIfChanged = () => {
             const newColor = readBgColor();
-            if (newColor && newColor !== currentBgColor) {
-                console.log('检测到背景色变化:', currentBgColor, '->', newColor);
-                setCurrentBgColor(newColor);
+            if (newColor && newColor !== currentBgColorRef.current) {
+                currentBgColorRef.current = newColor;
+                // 背景色变化 → PNG 灰度预览的底色混合失效：
+                // 清缓存 + bump epoch，由统一的灰度预览 effect 重建（此处不再逐个生成）。
                 setGrayPreviewUrls({});
-                const shouldShowGray = isClearMode || isInLayerMask || isInQuickMask || isInSingleColorChannel;
-                if (shouldShowGray) {
-                    patterns.forEach(p => {
-                        if (p.grayData) {
-                            generateGrayPreviewUrl(p)
-                                .then(url => setGrayPreviewUrls(prev => ({ ...prev, [p.id]: url })))
-                                .catch(err => console.error('主题变化后生成灰度预览失败:', err));
-                        }
-                    });
-                }
+                setGrayCacheEpoch(e => e + 1);
             }
         };
 
@@ -466,15 +504,10 @@ interface PatternPickerProps {
             window.matchMedia?.('(prefers-color-scheme: lightest)')
         ].filter(Boolean) as MediaQueryList[];
 
-        // 立即检测的事件处理器 - 更快响应
+        // 立即检测的事件处理器（主题切换可能延迟生效，补检一次即可，不再 4 连发）
         const onChangeImmediate = () => {
             regenerateIfChanged();
-            if (typeof requestAnimationFrame === 'function') {
-                requestAnimationFrame(() => regenerateIfChanged());
-            }
-            setTimeout(regenerateIfChanged, 50);
             setTimeout(regenerateIfChanged, 150);
-            setTimeout(regenerateIfChanged, 300);
         };
 
         // 为每个媒体查询添加监听器
@@ -507,10 +540,8 @@ interface PatternPickerProps {
             console.log('MutationObserver 不可用，使用备用轮询机制');
         }
 
-        // 备用轮询机制：保持1秒频率以确保响应及时
-        const pollingInterval = setInterval(() => {
-            regenerateIfChanged();
-        }, 1000);
+        // ⚡ 已删除每秒一次的 getComputedStyle 轮询：matchMedia + MutationObserver + focus
+        // 事件已覆盖 PS 主题切换的所有路径，轮询只会持续造成样式强制重算。
 
         return () => {
             mqs.forEach(mq => mq.removeEventListener?.('change', onChangeImmediate));
@@ -520,144 +551,36 @@ interface PatternPickerProps {
             if (styleObserver) {
                 styleObserver.disconnect();
             }
-            clearInterval(pollingInterval);
         };
-    }, [isOpen, isClearMode, isInLayerMask, isInQuickMask, isInSingleColorChannel, patterns.length]);
+    }, [isOpen, isClearMode, isInLayerMask, isInQuickMask, isInSingleColorChannel]);
 
-    // 图案数组变化时检测状态并生成灰度预览
+    // ⚡ 灰度预览统一生成入口（原三个级联 effect 合一）：
+    // patterns 变化 / 蒙版模式变化 / 主题背景变化（epoch）任一触发，只补生成缺失项。
+    // pending 集合跨 effect 去重；grayPreviewUrls 走 ref 镜像不进依赖，
+    // 彻底消除旧实现「setState → effect 重跑 → 再 setState」的渲染循环与重复 imaging 编码。
+    const patternsGraySig = useMemo(
+        () => patterns.map(p => p.id + ':' + (p.grayData ? '1' : '0')).join(','),
+        [patterns]
+    );
     useEffect(() => {
-        const handlePatternsChange = async () => {
-            if (patterns.length === 0) return;
-            
-            console.log('图案数组变化，开始检测状态...');
-            
-            // 先检测当前编辑状态
-            await checkMaskModes();
-            
-            // 延迟一点确保状态更新完成
-            setTimeout(async () => {
-                // 重新获取最新的状态
-                try {
-                    const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
-                    const currentIsInLayerMask = layerInfo?.isInLayerMask || false;
-                    const currentIsInQuickMask = layerInfo?.isInQuickMask || false;
-                    const currentIsInSingleColorChannel = layerInfo?.isInSingleColorChannel || false;
-                    
-                    const shouldShowGray = isClearMode || currentIsInLayerMask || currentIsInQuickMask || currentIsInSingleColorChannel;
-                    
-                    console.log('图案变化后状态检测结果:', {
-                        isClearMode,
-                        currentIsInLayerMask,
-                        currentIsInQuickMask,
-                        currentIsInSingleColorChannel,
-                        shouldShowGray,
-                        patternsCount: patterns.length
-                    });
-                    
-                    if (shouldShowGray) {
-                        patterns.forEach(pattern => {
-                            if (pattern.grayData && !grayPreviewUrls[pattern.id]) {
-                                console.log('为图案生成灰度预览:', pattern.name);
-                                generateGrayPreviewUrl(pattern).then(grayUrl => {
-                                    setGrayPreviewUrls(prev => ({
-                                        ...prev,
-                                        [pattern.id]: grayUrl
-                                    }));
-                                    console.log('灰度预览生成完成:', pattern.name);
-                                }).catch(error => {
-                                    console.error('生成灰度预览失败:', pattern.name, error);
-                                });
-                            }
-                        });
-                    }
-                } catch (error) {
-                    console.error('重新检测状态失败:', error);
-                }
-            }, 100); // 100ms延迟确保状态同步
-        };
-        
-        handlePatternsChange();
-    }, [patterns, isClearMode]);
+        const shouldShowGray = isClearMode || isInLayerMask || isInQuickMask || isInSingleColorChannel;
+        if (!shouldShowGray) return;
+        patterns.forEach(pattern => {
+            if (!pattern.grayData) return;
+            if (grayPreviewUrlsRef.current[pattern.id] || pendingGrayUrlsRef.current.has(pattern.id)) return;
+            pendingGrayUrlsRef.current.add(pattern.id);
+            generateGrayPreviewUrl(pattern)
+                .then(url => setGrayPreviewUrls(prev => ({ ...prev, [pattern.id]: url })))
+                .catch(error => console.error('生成灰度预览失败:', pattern.name, error))
+                .finally(() => pendingGrayUrlsRef.current.delete(pattern.id));
+        });
+    }, [patternsGraySig, isClearMode, isInLayerMask, isInQuickMask, isInSingleColorChannel, grayCacheEpoch]);
 
-    // 当蒙版模式状态变化时，重新检测并生成灰度预览
-    useEffect(() => {
-        const handleMaskModeChange = async () => {
-            // 清理现有的灰度预览缓存
-            setGrayPreviewUrls({});
-            
-            // 重新检测当前状态（确保状态是最新的）
-            await checkMaskModes();
-            
-            // 根据最新状态判断是否需要生成灰度预览
-            const shouldShowGray = isClearMode || isInLayerMask || isInQuickMask || isInSingleColorChannel;
-            console.log('蒙版模式变化检测:', {
-                isClearMode,
-                isInLayerMask,
-                isInQuickMask,
-                isInSingleColorChannel,
-                shouldShowGray,
-                patternsCount: patterns.length
-            });
-            
-            if (shouldShowGray && patterns.length > 0) {
-                patterns.forEach(pattern => {
-                    if (pattern.grayData) { // 确保有灰度数据才生成预览
-                        generateGrayPreviewUrl(pattern).then(grayUrl => {
-                            setGrayPreviewUrls(prev => ({
-                                ...prev,
-                                [pattern.id]: grayUrl
-                            }));
-                            console.log('已生成灰度预览:', pattern.name);
-                        }).catch(error => {
-                            console.error('生成灰度预览失败:', pattern.name, error);
-                        });
-                    } else {
-                        console.warn('图案缺少灰度数据，跳过预览生成:', pattern.name);
-                    }
-                });
-            }
-        };
-        
-        handleMaskModeChange();
-    }, [isClearMode, isInLayerMask, isInQuickMask, isInSingleColorChannel, patterns]);
+    // （原「蒙版模式变化时清缓存重建」effect 已并入上方统一入口：
+    //   模式标志本身就是依赖，且缓存按 pattern.id 持久、无需清空重建。）
 
-    // 当图案有了灰度数据后，立即检测状态并生成预览（针对异步加载的情况）
-    useEffect(() => {
-        const handleGrayDataReady = async () => {
-            // 再次检测当前状态
-            await checkMaskModes();
-            
-            const shouldShowGray = isClearMode || isInLayerMask || isInQuickMask || isInSingleColorChannel;
-            console.log('灰度数据就绪检测:', {
-                shouldShowGray,
-                patternsWithGrayData: patterns.filter(p => p.grayData).length,
-                totalPatterns: patterns.length
-            });
-            
-            if (shouldShowGray) {
-                patterns.forEach(pattern => {
-                    // 只处理有灰度数据但还没有灰度预览的图案
-                    if (pattern.grayData && !grayPreviewUrls[pattern.id]) {
-                        generateGrayPreviewUrl(pattern).then(grayUrl => {
-                            setGrayPreviewUrls(prev => ({
-                                ...prev,
-                                [pattern.id]: grayUrl
-                            }));
-                            console.log('灰度数据就绪后生成预览:', pattern.name);
-                        }).catch(error => {
-                            console.error('灰度数据就绪后生成预览失败:', pattern.name, error);
-                        });
-                    }
-                });
-            }
-        };
-        
-        // 检查是否有新加载的图案具有灰度数据
-        const patternsWithGrayData = patterns.filter(p => p.grayData);
-        if (patternsWithGrayData.length > 0) {
-            handleGrayDataReady();
-        }
-    }, [patterns.map(p => p.id + ':' + (p.grayData ? 'gray' : 'no-gray')).join(','), isClearMode, isInLayerMask, isInQuickMask, isInSingleColorChannel, grayPreviewUrls]);
+    // （原「灰度数据就绪后重建」effect 已并入上方统一入口：patternsGraySig 已涵盖
+    //   「图案新带上了 grayData」这一变化，且不再把 grayPreviewUrls 放进依赖。）
 
     // 监听通道切换和快速蒙版切换事件
     useEffect(() => {
@@ -705,9 +628,8 @@ interface PatternPickerProps {
             const fileExtension = file.name.split('.').pop()?.toLowerCase() || 'jpeg';
             const mimeType = mimeTypeMap[fileExtension] || 'image/png';
             
-            // 读取文件内容用于预览
-            const arrayBuffer = await file.read({ format: require('uxp').storage.formats.binary });
-            const base64String = arrayBufferToBase64(arrayBuffer);
+            // 读取文件内容用于预览（原生 base64 直读，避免 JS 侧全量编码）
+            const base64String = await arrayBufferToBase64(file);
             const dataUrl = `data:${mimeType};base64,${base64String}`;
             
             // 创建pattern对象，保存文件引用
@@ -726,14 +648,23 @@ interface PatternPickerProps {
         }
     };
 
-    // 使用辅助函数获取Base64信息
-    const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
-        let binary = '';
-        const bytes = new Uint8Array(buffer);
-        for (let i = 0; i < bytes.byteLength; i++) {
-            binary += String.fromCharCode(bytes[i]);
+    // ⚡ 性能关键：旧实现逐字符 binary += String.fromCharCode(...)（1MB 文件 =
+    // 百万次字符串拼接，UXP 引擎下耗时数分钟），是"导入 1MB 图片卡 3 分钟"的元凶。
+    // 现优先让 UXP 原生以 base64 格式直读文件（零 JS 编码）；不可用时退回分块编码。
+    const arrayBufferToBase64 = async (file: any): Promise<string> => {
+        const formats = require('uxp').storage.formats;
+        try {
+            return await file.read({ format: formats.base64 });
+        } catch (_) {
+            const arrayBuffer = await file.read({ format: formats.binary });
+            const bytes = new Uint8Array(arrayBuffer);
+            const CHUNK = 0x8000;
+            let bin = '';
+            for (let i = 0; i < bytes.length; i += CHUNK) {
+                bin += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, Math.min(i + CHUNK, bytes.length))) as unknown as number[]);
+            }
+            return btoa(bin);
         }
-        return btoa(binary);
     };
     
     // 新增选中文件的逻辑
@@ -1158,54 +1089,64 @@ interface PatternPickerProps {
     };
 
     // 生成灰度预览URL
+    // ⚡ 性能关键：预览只显示在 52px 缩略图盒里，按 GRAY_THUMB_MAX(104) 上限降采样后再走
+    // PS imaging 编码。旧实现按图案原始尺寸（可达数千像素）编码，一张几百 ms。
     const generateGrayPreviewUrl = async (pattern: Pattern): Promise<string> => {
         if (!pattern.grayData || !pattern.width || !pattern.height) {
             return pattern.preview; // 如果没有灰度数据，返回原始预览
         }
 
-        console.log('生成灰度预览 - 文件格式:', pattern.originalFormat, '通道数:', pattern.components, '文件名:', pattern.file?.name, 'hasAlpha:', pattern.hasAlpha);
+        const srcW = pattern.width;
+        const srcH = pattern.height;
+        const down = Math.min(1, GRAY_THUMB_MAX / Math.max(srcW, srcH));
+        const tw = Math.max(1, Math.round(srcW * down));
+        const th = Math.max(1, Math.round(srcH * down));
+        const sx = srcW / tw;
+        const sy = srcH / th;
 
         // 处理JPG无Alpha的情况 - 明确检查文件格式
-        const isJpegFormat = pattern.originalFormat === 'jpg' || pattern.originalFormat === 'jpeg' || 
+        const isJpegFormat = pattern.originalFormat === 'jpg' || pattern.originalFormat === 'jpeg' ||
                             (pattern.file?.name && (pattern.file.name.toLowerCase().endsWith('.jpg') || pattern.file.name.toLowerCase().endsWith('.jpeg')));
-        
+
         if (isJpegFormat) {
             try {
-                // 创建JPG的灰色版本预览的数据数组
-                const grayDataArray = new Uint8Array(pattern.width * pattern.height * 3);
-
-                // 将单通道灰度数据转换为RGB格式
-                for (let i = 0; i < pattern.width * pattern.height; i++) {
-                    const gray = pattern.grayData[i];
-                    grayDataArray[i * 3] = gray;
-                    grayDataArray[i * 3 + 1] = gray;
-                    grayDataArray[i * 3 + 2] = gray;
+                // 降采样后的灰度 RGB 缓冲（最近邻取样，缩略图观感与全尺寸一致）
+                const grayDataArray = new Uint8Array(tw * th * 3);
+                for (let y = 0; y < th; y++) {
+                    const srcY = Math.min(srcH - 1, (y * sy) | 0);
+                    for (let x = 0; x < tw; x++) {
+                        const gray = pattern.grayData[srcY * srcW + Math.min(srcW - 1, (x * sx) | 0)];
+                        const di = (y * tw + x) * 3;
+                        grayDataArray[di] = gray;
+                        grayDataArray[di + 1] = gray;
+                        grayDataArray[di + 2] = gray;
+                    }
                 }
 
                 // 若整体接近纯白，添加1px中灰对比边框
-                if (isBufferNearlyWhite(grayDataArray, pattern.width, pattern.height, 3)) {
-                    applyContrastBorder(grayDataArray, pattern.width, pattern.height, 3);
+                if (isBufferNearlyWhite(grayDataArray, tw, th, 3)) {
+                    applyContrastBorder(grayDataArray, tw, th, 3);
                 }
 
                 // 使用Photoshop的imaging API创建图像数据
                 const options = {
-                    width: pattern.width,
-                    height: pattern.height,
+                    width: tw,
+                    height: th,
                     chunky: true,
                     colorProfile: "sRGB IEC61966-2.1",
                     colorSpace: "RGB",
                     components: 3,
                     componentSize: 8
                 };
-                
+
                 const imageData = await imaging.createImageDataFromBuffer(grayDataArray, options);
 
                 // 将图像数据编码为JPEG格式的base64
                 const jpegData = await imaging.encodeImageData({"imageData": imageData, "base64": true, "format": "jpeg"});
-                
+
                 // 释放图像数据
                 imageData.dispose();
-                
+
                 return `data:image/jpeg;base64,${jpegData}`;
             } catch (error) {
                 console.error('JPG生成灰度预览失败:', error);
@@ -1303,62 +1244,67 @@ interface PatternPickerProps {
                 };
 
                 const backgroundColor = getBackgroundColor();
-                
-                // 创建PNG的灰色版本预览的数据数组（包含alpha通道）
-                const grayDataArray = new Uint8Array(pattern.width * pattern.height * 4);
-                
-                // 处理透明度混合
-                for (let i = 0; i < pattern.width * pattern.height; i++) {
-                    let finalGray;
-                    let alpha = 255; // 默认完全不透明
-                    
-                    if (pattern.hasAlpha && pattern.patternRgbData && pattern.patternComponents === 4) {
-                        // 从RGBA数据中获取RGB和alpha值
-                        const r = pattern.patternRgbData[i * 4];
-                        const g = pattern.patternRgbData[i * 4 + 1];
-                        const b = pattern.patternRgbData[i * 4 + 2];
-                        alpha = pattern.patternRgbData[i * 4 + 3]; // 保持原始alpha值
-                        
-                        // 先将RGB混合背景色，再转换为灰度
-                        if (alpha === 0) {
-                            // 完全透明区域：使用背景色的灰度
-                            finalGray = Math.round(0.299 * backgroundColor.r + 0.587 * backgroundColor.g + 0.114 * backgroundColor.b);
-                        } else if (alpha === 255) {
-                            // 完全不透明区域：直接从RGB转灰度
-                            finalGray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+
+                // 降采样后的小缓冲（最近邻取样）；alpha 混合在取样后进行，观感与全尺寸一致
+                const grayDataArray = new Uint8Array(tw * th * 4);
+                const hasAlphaInfo = pattern.hasAlpha && pattern.patternRgbData && pattern.patternComponents === 4;
+
+                for (let y = 0; y < th; y++) {
+                    const srcY = Math.min(srcH - 1, (y * sy) | 0);
+                    for (let x = 0; x < tw; x++) {
+                        const si = srcY * srcW + Math.min(srcW - 1, (x * sx) | 0);
+                        let finalGray;
+                        let alpha = 255; // 默认完全不透明
+
+                        if (hasAlphaInfo) {
+                            // 从RGBA数据中获取RGB和alpha值
+                            const r = pattern.patternRgbData![si * 4];
+                            const g = pattern.patternRgbData![si * 4 + 1];
+                            const b = pattern.patternRgbData![si * 4 + 2];
+                            alpha = pattern.patternRgbData![si * 4 + 3]; // 保持原始alpha值
+
+                            // 先将RGB混合背景色，再转换为灰度
+                            if (alpha === 0) {
+                                // 完全透明区域：使用背景色的灰度
+                                finalGray = Math.round(0.299 * backgroundColor.r + 0.587 * backgroundColor.g + 0.114 * backgroundColor.b);
+                            } else if (alpha === 255) {
+                                // 完全不透明区域：直接从RGB转灰度
+                                finalGray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+                            } else {
+                                // 半透明区域：先混合RGB和背景色，再转灰度
+                                const alphaRatio = alpha / 255;
+                                const blendedR = Math.round(r * alphaRatio + backgroundColor.r * (1 - alphaRatio));
+                                const blendedG = Math.round(g * alphaRatio + backgroundColor.g * (1 - alphaRatio));
+                                const blendedB = Math.round(b * alphaRatio + backgroundColor.b * (1 - alphaRatio));
+                                finalGray = Math.round(0.299 * blendedR + 0.587 * blendedG + 0.114 * blendedB);
+                            }
                         } else {
-                            // 半透明区域：先混合RGB和背景色，再转灰度
-                            const alphaRatio = alpha / 255;
-                            const blendedR = Math.round(r * alphaRatio + backgroundColor.r * (1 - alphaRatio));
-                            const blendedG = Math.round(g * alphaRatio + backgroundColor.g * (1 - alphaRatio));
-                            const blendedB = Math.round(b * alphaRatio + backgroundColor.b * (1 - alphaRatio));
-                            finalGray = Math.round(0.299 * blendedR + 0.587 * blendedG + 0.114 * blendedB);
+                            // 没有透明度信息，直接使用灰度值
+                            finalGray = pattern.grayData![si];
                         }
-                    } else {
-                        // 没有透明度信息，直接使用灰度值
-                        finalGray = pattern.grayData[i];
+
+                        // 保存RGBA格式的灰度数据，保持原始透明度
+                        const di = (y * tw + x) * 4;
+                        grayDataArray[di] = finalGray;     // R
+                        grayDataArray[di + 1] = finalGray; // G
+                        grayDataArray[di + 2] = finalGray; // B
+                        grayDataArray[di + 3] = alpha;     // A
                     }
-                    
-                    // 保存RGBA格式的灰度数据，保持原始透明度
-                    grayDataArray[i * 4] = finalGray;     // R
-                    grayDataArray[i * 4 + 1] = finalGray; // G
-                    grayDataArray[i * 4 + 2] = finalGray; // B
-                    grayDataArray[i * 4 + 3] = alpha;     // A
                 }
 
                 // 使用Photoshop的imaging API创建图像数据
                 // 注意：encodeImageData仅支持JPEG；为了避免透明边被错误处理，我们在上面已将灰度数据与背景合成，并保留A通道
                 // 这里构建RGB缓冲区（丢弃A）用于编码
-                const rgbBuffer = new Uint8Array(pattern.width * pattern.height * 3);
-                for (let i = 0; i < pattern.width * pattern.height; i++) {
+                const rgbBuffer = new Uint8Array(tw * th * 3);
+                for (let i = 0; i < tw * th; i++) {
                     rgbBuffer[i * 3] = grayDataArray[i * 4];
                     rgbBuffer[i * 3 + 1] = grayDataArray[i * 4 + 1];
                     rgbBuffer[i * 3 + 2] = grayDataArray[i * 4 + 2];
                 }
 
                 const options = {
-                    width: pattern.width,
-                    height: pattern.height,
+                    width: tw,
+                    height: th,
                     pixelFormat: "RGB",
                     isChunky: true,
                     colorProfile: "sRGB IEC61966-2.1",
@@ -1368,8 +1314,8 @@ interface PatternPickerProps {
                 };
 
                 // 若整体接近纯白，添加1px中灰对比边框
-                if (isBufferNearlyWhite(rgbBuffer, pattern.width, pattern.height, 3)) {
-                    applyContrastBorder(rgbBuffer, pattern.width, pattern.height, 3);
+                if (isBufferNearlyWhite(rgbBuffer, tw, th, 3)) {
+                    applyContrastBorder(rgbBuffer, tw, th, 3);
                 }
 
                 const imageData = await imaging.createImageDataFromBuffer(rgbBuffer, options);
@@ -1392,30 +1338,14 @@ interface PatternPickerProps {
     };
 
     // 获取预览URL（根据状态返回彩色或灰度）
+    // ⚡ 纯查找：生成一律由统一 effect 负责。旧实现在渲染期发起异步生成并 setState，
+    // 每次缓存未命中都多一轮渲染，是卡顿源之一。
     const getPreviewUrl = (pattern: Pattern): string => {
         const shouldShowGray = isClearMode || isInLayerMask || isInQuickMask || isInSingleColorChannel;
-        
         if (!shouldShowGray) {
             return pattern.preview;
         }
-
-        // 检查是否已有缓存的灰度预览
-        if (grayPreviewUrls[pattern.id]) {
-            return grayPreviewUrls[pattern.id];
-        }
-
-        // 异步生成并缓存灰度预览
-        generateGrayPreviewUrl(pattern).then(grayUrl => {
-            setGrayPreviewUrls(prev => ({
-                ...prev,
-                [pattern.id]: grayUrl
-            }));
-        }).catch(error => {
-            console.error('生成灰度预览失败:', error);
-        });
-
-        // 在灰度预览生成期间返回原始预览
-        return pattern.preview;
+        return grayPreviewUrls[pattern.id] || pattern.preview;
     };
     
     // 删除图案的逻辑
@@ -1564,6 +1494,11 @@ interface PatternPickerProps {
 
     // 处理点击空白区域取消选中
     const handleContainerClick = (event: React.MouseEvent) => {
+        // 拖拽排序结束后的 click 会落在容器上（mousedown/mouseup 的公共祖先），不得当作"点空白"
+        if (didDragRef.current) {
+            didDragRef.current = false;
+            return;
+        }
         // 检查点击的是否是预设区域的空白部分
         if (event.target === event.currentTarget) {
             setSelectedPattern(null);
@@ -1596,43 +1531,9 @@ interface PatternPickerProps {
     };
     
     //-------------------------------------------------------------------------------------------------
-    // 监听 patterns 加载情况，输出图案的具体信息。
-    useEffect(() => {
-        if (patterns.length > 0) {
-            // 延迟检查DOM，确保React已完成渲染
-            const timer = setTimeout(() => {
-                const imgElements = document.querySelectorAll('.thumb-box img');
-                imgElements.forEach((img, index) => {
-                    console.log(`图片[${index}]实际尺寸:`, {
-                        offsetWidth: img.offsetWidth,
-                        offsetHeight: img.offsetHeight,
-                        clientWidth: img.clientWidth,
-                        clientHeight: img.clientHeight,
-                        complete: img.complete,
-                        src: img.src.substring(0, 30) + '...'
-                    });
-                });
-            }, 500); // 延迟500ms
-            
-            return () => clearTimeout(timer);
-        }
-    }, [patterns]);
-
-    //-------------------------------------------------------------------------------------------------
-    // 监听 patterns 状态变化，检查 grayData 是否正确设置
-    useEffect(() => {
-        patterns.forEach(pattern => {
-            if (pattern.patternName && pattern.grayData) {
-                console.log('✅ 图案灰度数据已设置:', {
-                    patternId: pattern.id,
-                    patternName: pattern.patternName,
-                    hasGrayData: !!pattern.grayData,
-                    grayDataLength: pattern.grayData.length,
-                    patternDimensions: `${pattern.width}x${pattern.height}`,
-                });
-            }
-        });
-    }, [patterns]);
+    // ⚡ 已删除两个纯调试 effect：
+    // ① patterns 变化后 500ms 遍历 .thumb-box img 读 offsetWidth/offsetHeight（强制同步重排）；
+    // ② patterns 变化后遍历打印每张图的 grayData 长度。二者只输出日志、无业务作用。
 
     if (!isOpen) return null;
 
@@ -1646,18 +1547,20 @@ interface PatternPickerProps {
             </div>
             <div className="preset-area">
                  <div className="pattern-preset" onClick={handleContainerClick}>
-                    {patterns.map((pattern, index) => (
+                    {patterns.map((pattern, index) => {
+                        const baseCls = selectedPatterns.has(pattern.id) ? 'thumb-box thumb-multi-selected' : (selectedPattern === pattern.id ? 'thumb-box thumb-selected' : 'thumb-box');
+                        const dragCls = dragIndex == null ? '' : (dragIndex === index ? ' dragging' : (dropIndex === index && dragIndex !== index ? ' drop-target' : ''));
+                        return (
                         <div
                             key={pattern.id}
-                            className={selectedPatterns.has(pattern.id) ? 'thumb-box photo-container-multi-selected' : (selectedPattern === pattern.id ? 'thumb-box photo-container-selected' : 'thumb-box')}
-                            draggable
-                            onDragStart={(e) => handlePatternDragStart(e, index)}
-                            onDragOver={(e) => handlePatternDragOver(e, index)}
-                            onDrop={(e) => handlePatternDrop(e, index)}
-                            onDragEnd={handlePatternDragEnd}
+                            ref={(el) => { thumbRefsRef.current[index] = el; }}
+                            className={baseCls + dragCls}
+                            onMouseDown={(e) => startThumbPress(e, index)}
+                            onMouseMove={onThumbMove}
+                            onMouseUp={endThumbPress}
                             onClick={(e) => {
-                                if (dragPatternActiveRef.current) {
-                                    e.preventDefault();
+                                if (didDragRef.current) {
+                                    didDragRef.current = false;
                                     e.stopPropagation();
                                     return;
                                 }
@@ -1670,13 +1573,6 @@ interface PatternPickerProps {
                                 src={getPreviewUrl(pattern)}
                                 alt={pattern.name}
                                 onLoad={async (e) => {
-                                    const img = e.currentTarget;
-                                    console.log(`图片加载成功 - ${pattern.name}:`, {
-                                        naturalSize: `${img.naturalWidth}x${img.naturalHeight}`,
-                                        displaySize: `${img.offsetWidth}x${img.offsetHeight}`,
-                                        complete: img.complete
-                                    });
-                                    
                                     setLoadedImages(prev => ({...prev, [pattern.id]: true}));
                                     
                                     if (selectedPattern === pattern.id && !pattern.patternName) {
@@ -1702,8 +1598,9 @@ interface PatternPickerProps {
                                 </div>
                             )}
                         </div>
-                    ))}
-                    </div> 
+                        );
+                    })}
+                    </div>
                      <div className="icon-button-group--bar">
                         <div className="icon-button-group">
                             <IconButton title={helpTexts.pattern.selectFile} onClick={handleFileSelect}>
@@ -1838,7 +1735,7 @@ interface PatternPickerProps {
                 </div>
             </div>
             <div className="final-preview-container">
-                <div className="row-between">
+                <div className="row-between preview-toolbar">
                     <h3 className="subpanel-title-2">预览</h3>
                     {selectedPattern && (
                         <Select
