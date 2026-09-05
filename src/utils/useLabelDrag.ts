@@ -1,5 +1,4 @@
 import React from 'react';
-import { setDragCursorActive } from './dragCursor';
 
 /**
  * 滑块文字标签横向拖拽调值（对齐 APP 主面板 .label 的交互）。
@@ -59,15 +58,11 @@ export function useLabelDrag<T extends string>(
 
     const handleMouseUp = () => setDragTarget(null);
 
-    // 拖拽期间把全局光标锁成 ew-resize（按下即抓住元素横向拖动，符合「抓取移动」语义）：
-    // 鼠标移出标签后仍保持同一光标，否则光标会被鼠标下方的元素接管变成普通箭头。
-    setDragCursorActive(true);
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
-      setDragCursorActive(false);
     };
   }, [dragTarget]);
 
@@ -78,7 +73,7 @@ export function useLabelDrag<T extends string>(
     setDragTarget(key);
   };
 
-  /** 生成标签 class：单类名（拖拽光标由 body.label-drag-cursor 全局锁定，无需 .dragging/.not-dragging） */
+  /** 生成标签 class：单类名 */
   const labelClass = (key: T, base: string) => base;
 
   return { dragTarget, onLabelMouseDown, labelClass };

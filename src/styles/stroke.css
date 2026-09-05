@@ -6,8 +6,8 @@
    position-radio-group）与行内滑块（原 .range-slider / .stroke-opacity-range 覆盖）已全部
    收口到 common.css，改通用组件请去 common.css。 */
 
-/* 描边「位置」为三列 radio，选项间距特殊，保留（覆盖通用 .panel-section 的两列 110px）。
+/* 描边「位置」为三列 radio，选项间距特殊，保留（覆盖通用 .panel-section 的两列 40px）。
    其余分区容器统一走 common.css 的 .panel-section。 */
 .position-radio-group sp-radio:not(:last-child) {
-  margin-right: 45px;
+  margin-right: 25px;
 }

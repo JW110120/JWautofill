@@ -8,7 +8,6 @@ import { PresetManager } from '../utils/PresetManager';
 import RangeSlider from './RangeSlider';
 import Select from './Select';
 import { helpTexts } from '../constants/helpTexts';
-import { setDragCursorActive } from '../utils/dragCursor';
 
 interface PatternPickerProps {
     isOpen: boolean;
@@ -186,8 +185,6 @@ interface PatternPickerProps {
     const handleMouseDown = (event: React.MouseEvent, target: 'angle' | 'scale') => {
         const el = event.target as HTMLElement | null;
         if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
-        // 拖拽开始：把全局光标锁成 ew-resize，避免鼠标移出容器后光标变回普通箭头。
-        setDragCursorActive(true);
         setIsSliderDragging(true);
         setDragTarget(target);
         setDragStartX(event.clientX);
@@ -295,7 +292,6 @@ interface PatternPickerProps {
 
     // 处理滑块拖拽结束
     const handleMouseUp = () => {
-        setDragCursorActive(false);
         setIsSliderDragging(false);
         setDragTarget(null);
     };
@@ -650,21 +646,21 @@ interface PatternPickerProps {
 
     // ⚡ 性能关键：旧实现逐字符 binary += String.fromCharCode(...)（1MB 文件 =
     // 百万次字符串拼接，UXP 引擎下耗时数分钟），是"导入 1MB 图片卡 3 分钟"的元凶。
-    // 现优先让 UXP 原生以 base64 格式直读文件（零 JS 编码）；不可用时退回分块编码。
+    // 改为分块构建二进制串后一次 btoa 编码。
+    // ⚠️ UXP 的 storage.formats 只提供 binary / utf8 两种格式，根本不存在 base64：
+    // 若写 formats.base64（= undefined），file.read 不会抛异常，而是静默按 UTF-8 把
+    // 图片二进制解码成乱码字符串返回 → 拼出的 data URL 非法 → 缩略图一片漆黑。
+    // 这正是"新加载图案全黑、旧持久化图案正常"的根因，故一律以 binary 读取后再编码。
     const arrayBufferToBase64 = async (file: any): Promise<string> => {
         const formats = require('uxp').storage.formats;
-        try {
-            return await file.read({ format: formats.base64 });
-        } catch (_) {
-            const arrayBuffer = await file.read({ format: formats.binary });
-            const bytes = new Uint8Array(arrayBuffer);
-            const CHUNK = 0x8000;
-            let bin = '';
-            for (let i = 0; i < bytes.length; i += CHUNK) {
-                bin += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, Math.min(i + CHUNK, bytes.length))) as unknown as number[]);
-            }
-            return btoa(bin);
+        const arrayBuffer = await file.read({ format: formats.binary });
+        const bytes = new Uint8Array(arrayBuffer);
+        const CHUNK = 0x8000;
+        let bin = '';
+        for (let i = 0; i < bytes.length; i += CHUNK) {
+            bin += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, Math.min(i + CHUNK, bytes.length))) as unknown as number[]);
         }
+        return btoa(bin);
     };
     
     // 新增选中文件的逻辑
@@ -1601,8 +1597,8 @@ interface PatternPickerProps {
                         );
                     })}
                     </div>
-                     <div className="icon-button-group--bar">
-                        <div className="icon-button-group">
+                     <div className="icon-button-group-bar">
+                        <div className="row-end">
                             <IconButton title={helpTexts.pattern.selectFile} onClick={handleFileSelect}>
                                 <FileIcon className="icon-14" />
                             </IconButton>
@@ -1629,7 +1625,7 @@ interface PatternPickerProps {
                 <div className="slider-block">
                     <div className="row-between" onMouseDown={(e) => handleMouseDown(e, 'angle')}>
                         <label className="label-3">角度：</label>
-                        <div className="num-input-wrap">
+                        <div className="row-start">
                             <div className="num-input-row">
                                 <input
                                     type="number"
@@ -1656,7 +1652,7 @@ interface PatternPickerProps {
                 <div className="slider-block">
                     <div className="row-between" onMouseDown={(e) => handleMouseDown(e, 'scale')}>
                         <label className="label-3">缩放：</label>
-                        <div className="num-input-wrap">
+                        <div className="row-start">
                             <div className="num-input-row">
                                 <input
                                     type="number"
@@ -1682,23 +1678,26 @@ interface PatternPickerProps {
 
                 <div className="divider"></div>
 
+                <div className="panel-section">
                 <sp-radio-group
                     selected={fillMode}
                     name="fillMode"
                     onChange={(e) => setFillMode(e.target.value as 'stamp' | 'tile')}
                 >
-                    <sp-radio value="stamp" className="radio-item">
-                        <span className="radio-item-label">单次</span>
+                    <sp-radio value="stamp" className="">
+                        <span className="label-2">单次</span>
                     </sp-radio>
-                    <sp-radio value="tile" className="radio-item">
-                        <span className="radio-item-label">平铺</span>
+                    <sp-radio value="tile" className="">
+                        <span className="label-2">平铺</span>
                     </sp-radio>
                 </sp-radio-group>
+                </div>
 
                 <div className="divider"></div>
 
-                <div className="checkbox-options-row-two">
-                    <div className="checkbox-row">
+                <div className="row-between">
+                    <div className="column-default">
+                    <div className="row-start">
                         <label
                             htmlFor="transparencyCheckbox"
                             className="label-5"
@@ -1714,8 +1713,10 @@ interface PatternPickerProps {
                             className="checkbox-input"
                         />
                     </div>
+                    </div>
                     {fillMode === 'tile' && (
-                        <div className="checkbox-row">
+                        <div className="column default">
+                        <div className="row-start">
                             <label
                                 htmlFor="rotateAllCheckbox"
                                 className="label-5"
@@ -1730,6 +1731,7 @@ interface PatternPickerProps {
                                 onChange={(e) => setRotateAll(e.target.checked)}
                                 className="checkbox-input"
                             />
+                        </div>
                         </div>
                     )}
                 </div>

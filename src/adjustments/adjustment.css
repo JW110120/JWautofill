@@ -13,6 +13,13 @@
   overflow: hidden;
 }
 
+/* adjustment 面板独有的 2×2 按钮（92px 等宽，保证左右两列严格对齐）；
+   基础态/hover/active 由 common.css 的 .action-button-* 通用族统一提供。 */
+.action-button-quad {
+  width: 92px;
+  flex: none;
+}
+
 /* 授权/试用状态提示样式。
    ⚠️ .panel（工具箱根外壳）已统一为 block + overflow-y:auto，块级子项本就不参与 flex 伸缩、
    不会被纵向压扁，故下方 flex:none 仅为历史兼容、实际已无压缩风险；

@@ -8,7 +8,6 @@ import { PresetManager } from '../utils/PresetManager';
 import RangeSlider from './RangeSlider';
 import Select from './Select';
 import { helpTexts } from '../constants/helpTexts';
-import { setDragCursorActive } from '../utils/dragCursor';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
@@ -1021,8 +1020,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 }
             }
             
-            // 修复选择器 - 透明度拖拽应该使用gradient-slider-track
-            const trackElement = document.querySelector('.gradient-slider-track') as HTMLElement;
+            // 修复选择器 - 透明度拖拽应该使用opacity-slider-track
+            const trackElement = document.querySelector('.opacity-slider-track') as HTMLElement;
             if (!trackElement) return;
             
             const rect = trackElement.getBoundingClientRect();
@@ -1092,7 +1091,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         
         const handleMouseMove = (moveEvent: MouseEvent) => {
             moveEvent.preventDefault();
-            const trackElement = document.querySelector('.gradient-slider-track') as HTMLElement;
+            const trackElement = document.querySelector('.opacity-slider-track') as HTMLElement;
             if (!trackElement) return;
             
             const rect = trackElement.getBoundingClientRect();
@@ -1121,7 +1120,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         e.preventDefault();
         e.stopPropagation();
         // 拖拽开始：把全局光标锁成 ew-resize，避免鼠标移出标签后光标变回普通箭头。
-        setDragCursorActive(true);
         setIsDraggingAngle(true);
         setDragStartX(e.clientX);
         setDragStartAngle(angle);
@@ -1139,7 +1137,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         };
 
         const handleMouseUp = () => {
-            setDragCursorActive(false);
             setIsDraggingAngle(false);
             document.removeEventListener('mousemove', handleMouseMove);
             document.removeEventListener('mouseup', handleMouseUp);
@@ -1238,10 +1235,13 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
 
     // 添加渲染棋盘格的函数
     const renderCheckerboard = (containerWidth: number, containerHeight: number, tileSize: number = 8) => {
-        const tilesPerRow = Math.ceil(containerWidth / tileSize);
-        const rows = Math.ceil(containerHeight / tileSize);
+        // 过量渲染：父容器实际尺寸可能比传入值略大（如 最终预览 width:100%），
+        // 多铺 64px 余量保证铺满，超出部分由父级 overflow:hidden 裁掉（消除右侧漏底缝隙）。
+        const OVERSCAN = 64;
+        const tilesPerRow = Math.ceil((containerWidth + OVERSCAN) / tileSize);
+        const rows = Math.ceil((containerHeight + OVERSCAN) / tileSize);
         const tiles = [];
-        
+
         for (let row = 0; row < rows; row++) {
             for (let col = 0; col < tilesPerRow; col++) {
                 const isLight = (row + col) % 2 === 0;
@@ -1252,10 +1252,11 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             position: 'absolute',
                             left: col * tileSize,
                             top: row * tileSize,
-                            width: tileSize,
-                            height: tileSize,
-                            backgroundColor: isLight ? 'rgb(255, 255, 255)' : 'rgb(204, 204, 204)',
-                            // 确保无缝拼接
+                            // 宽高各 +1px：与相邻方块 1px 重叠，由后绘制（同行右侧/下行）的方块覆盖，
+                            // 彻底消除 UXP 下整数坐标相邻方块间的亚像素缝隙（描边/漏底），任意缩放比都生效。
+                            width: tileSize + 1,
+                            height: tileSize + 1,
+                            backgroundColor: isLight ? 'rgb(255, 255, 255)' : 'rgb(224, 224, 224)',
                             boxSizing: 'border-box'
                         }}
                     />
@@ -1264,7 +1265,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         }
         return tiles;
     };
-
 
     return (
         <div className="panel">
@@ -1283,7 +1283,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         return (
                             <div 
                                 key={index} 
-                                className={selectedPresets.has(index) ? 'preset-item-multi-selected' : (selectedPreset === index ? 'preset-item-selected' : 'preset-item')}
+                                className={'preset-item ' + (selectedPresets.has(index) ? 'thumb-multi-selected' : (selectedPreset === index ? 'thumb-selected' : ''))}
                                 draggable={true}
                                 onDragStart={(e) => handlePresetDragStart(e, index)}
                                 onDragOver={handlePresetDragOver}
@@ -1308,8 +1308,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     })}
                 </div>
                 
-                <div className="icon-button-group--bar">
-                    <div className="icon-button-group">
+                <div className="icon-button-group-bar">
+                    <div className="row-end">
                         <IconButton title={helpTexts.gradient.addPreset} onClick={handleAddPreset}>
                             <AddIcon className="icon-14" />
                         </IconButton>
@@ -1333,12 +1333,12 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             </div>
 
             {/* 渐变编辑区域 */}
-            <div className="gradient-edit-area">
-                <div className="gradient-subtitle"><h3>颜色渐变</h3></div>
+            <div className="border-panel-section">
+                <div className="subpanel-title-1"><h3>颜色渐变</h3></div>
                 
                 {/* 不透明度控制 */}
                 {selectedStopIndex !== null && selectedStopType === 'opacity' && (
-                    <div className="opacity-input">
+                    <div className="row-between">
                         <label 
                             className="label-drag"
                             onMouseDown={(e) => {
@@ -1393,7 +1393,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 )}
 
                 {/* 透明度滑块 */}
-                <div className="gradient-slider-track">
+                <div className="opacity-slider-track">
                     {stops.map((stop, index) => {
                         const rgbaMatch = stop.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/);
                         const alpha = rgbaMatch ? parseFloat(rgbaMatch[4]) : 1;
@@ -1403,7 +1403,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         return (
                             <div
                                 key={`opacity-${index}`}
-                                className={selectedStopIndex === index && selectedStopType === 'opacity' ? 'opacity-slider-thumb-selected' : 'opacity-slider-thumb'}
+                                className={'opacity-slider-thumb' + (selectedStopIndex === index && selectedStopType === 'opacity' ? ' slider-thumb-selected' : '')}
                                 style={{ 
                                     left: `${stop.opacityPosition}%`,
                                     backgroundColor: displayColor,
@@ -1475,7 +1475,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         {renderCheckerboard(220, 24)}
                     </div>
                     <div
-                        className="gradient-fill-layer-clickable"
+                        className="gradient-fill-layer"
                         style={{ background: getPreviewGradientStyle() }}
                         onClick={handleAddStop}
                     />
@@ -1486,7 +1486,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     {stops.map((stop, index) => (
                         <div
                             key={`color-${index}`}
-                            className={selectedStopIndex === index && selectedStopType === 'color' ? 'color-slider-thumb-selected' : 'color-slider-thumb'}
+                            className={'color-slider-thumb' + (selectedStopIndex === index && selectedStopType === 'color' ? ' slider-thumb-selected' : '')}
                             style={{ 
                                 left: `${stop.colorPosition}%`,
                                 backgroundColor: getRGBColor(stop.color),
@@ -1568,15 +1568,17 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 
                 {/* 颜色控制 */}
                 {selectedStopIndex !== null && selectedStopType === 'color' && (
-                    <div className="color-input-container">
+                    <div className="row-between">
                         <label className="label-3">颜色：</label>
-                        <span className="color-prefix">#</span>
-                        <input
-                            type="text"
-                            value={getRGBColor(stops[selectedStopIndex].color).slice(1)}
-                            onChange={handleColorInputChange}
-                            maxLength={6}
-                        />
+                        <span className="num-unit">#</span>
+                        <div className="num-input-row">
+                            <input
+                                type="text"
+                                value={getRGBColor(stops[selectedStopIndex].color).slice(1)}
+                                onChange={handleColorInputChange}
+                                maxLength={6}
+                            />
+                        </div>
                         <div
                             className="color-preview"
                             style={{ backgroundColor: getRGBColor(stops[selectedStopIndex].color) }}
@@ -1628,8 +1630,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             </div>
 
             {/* 渐变类型设置 */}
-            <div className="gradient-settings-area">
-                <div className="gradient-setting-item">
+            <div className="border-panel-section">
+                <div className="row-between">
                     <label className="label-3">样式：</label>
                     <Select
                         value={gradientType}
@@ -1641,12 +1643,14 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     />
                 </div>
 
+                <div className="divider"></div>
+
                 {/* 角度行始终渲染：径向模式下仅置为禁用态（而非隐藏），
                     这样 .gradient-settings-area 的容器高度在两种模式下保持一致，
                     不会再出现切换径向时下拉相对容器上移/间距变化的观感。 */}
-                <div className={gradientType === 'radial' ? 'gradient-setting-item-angle-disabled' : 'gradient-setting-item-angle'}>
+                <div className={gradientType === 'radial' ? 'row-between disabled' : 'row-between'}>
                     {/* 光标：常态 ew-resize 由 .label-drag 给出；径向禁用态的
-                        not-allowed 由 .gradient-setting-item-angle-disabled label 覆盖（特异性更高） */}
+                        not-allowed 由 .row-between disabled label 覆盖（特异性更高） */}
                     <label
                         className="label-drag"
                         onMouseDown={gradientType === 'radial' ? undefined : handleAngleMouseDown}
@@ -1656,12 +1660,12 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         max={360}
                         step={1}
                         value={angle}
-                        className="gradient-angle-range"
+                        className="slider-track"
                         title={helpTexts.gradient.adjustAngle}
                         disabled={gradientType === 'radial'}
                         onChange={(v) => setAngle(v)}
                     />
-                    <div className="num-input-wrap">
+                    <div className="row-start">
                         <div className="num-input-row">
                             <input
                                 type="number"
@@ -1676,9 +1680,13 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     </div>
                 </div>
 
-                <div className="checkbox-row">
-                    <div>
+                <div className="divider"></div>
+
+                <div className="row-between">
+                    <div className="column default">
+                    <div className="row-between">
                         <label 
+                            className="label-2"
                             htmlFor="reverseCheckbox"
                             onClick={() => setReverse(!reverse)}
                         >
@@ -1691,9 +1699,12 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             onChange={(e) => setReverse(e.target.checked)}
                         />
                     </div>
+                    </div>
 
-                    <div>
+                    <div className="column default">
+                    <div className="row-between">
                          <label
+                            className="label-6"
                             htmlFor="transparencyCheckbox"
                             onClick={() => setPreserveTransparency(!preserveTransparency)}
                         >
@@ -1705,15 +1716,15 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             checked={preserveTransparency}
                             onChange={(e) => setPreserveTransparency(e.target.checked)}
                         />
-                       
+                    </div>
                     </div>
                 </div>
             </div>
 
             {/* 最终预览区域 */}
             <div className="final-preview-container">
-                <div className="gradient-subtitle"><h3>最终预览</h3></div>
-                <div className="final-preview">
+                <div className="subpanel-title-1"><h3>最终预览</h3></div>
+                <div className="preview-wrapper">
                     {/* 当选中多个预设时渲染提示词 */}
                     {selectedPresets.size > 0 ? (
                         <div className="final-preview-hint">
@@ -1725,9 +1736,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         </div>
                     ) : (
                         <>
-                            {/* 棋盘格背景 */}
                             <div className="opacity-checkerboard">
-                                {renderCheckerboard(220, 150)}
+                                {renderCheckerboard(240, 300, 12)}
                             </div>
                             {/* 渐变覆盖层 */}
                             <div

@@ -511,7 +511,7 @@ export default function BrushHotkeySection() {
         <div
           role="button"
           tabIndex={0}
-          className={busy ? 'action-button-run-disabled' : 'action-button-run'}
+          className={busy ? 'action-button-disabled' : 'action-button-auto'}
           title={daemonConnected
             ? helpTexts.hotkey.daemonStop
             : helpTexts.hotkey.daemonStart}
@@ -545,7 +545,7 @@ export default function BrushHotkeySection() {
         {/* 三个图标共用一个固定宽度大容器：下拉自由伸缩，图标组恒为 3×28px，
             录制键恒在最右格；停止键出现/消失在预留的中间格子内，
             因此刷新与录制都不会位移，三者间距也始终一致 */}
-        <div className="icon-button-group">
+        <div className="row-end">
           <div className="hotkey-icon-cell">
             {usePicker && (
               <div
@@ -633,7 +633,7 @@ export default function BrushHotkeySection() {
           左侧「已选中 N 条」左对齐；右侧重录（仅选中单条时）与删除图标按钮相邻 */}
       <div className="hotkey-entry-actions">
         <span className="hotkey-selected-count">已选中 {selectedIds.length} 条</span>
-        <div style={{ display: 'flex', alignItems: 'center' }}>
+        <div className="row-end">
           <div
             role="button"
             tabIndex={0}

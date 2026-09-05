@@ -3,22 +3,7 @@
    > * 的 flex-shrink:0 也由 common.css 统一；z-index:9999 由 input-fix.css
    强制（此处原非 !important 副本已删）。 */
 
-/* 需要收口为subtitle-title-1 */
-.gradient-subtitle {
-  color: var(--text-color);
-  min-width: 40px;
-  font-size: 12px;
-}
-
-
-/* 需要与收口后的subtitle-title-1合并 */
-.gradient-subtitle h3 {
-  margin: 5px;
-  font-size: 14px;
-  color: var(--text-color);
-}
-
-/* 需要完全收口于preset-area */
+/* 上部份存放渐变预设的容器 */
 .gradient-presets {
     width: 100%;
     padding: 0px;
@@ -51,42 +36,7 @@
     outline: none;
 }
 
-/* 需要与common中的通用选中样式完全收口 */
-.preset-item-selected {
-    position: relative;
-    height: 35px;
-    width: 35px;
-    aspect-ratio: 1;
-    border: 1px solid var(--border-color);
-    border-radius: 3px;
-    overflow: hidden;
-    cursor: pointer;
-    background-color: var(--dark-bg-color);
-    box-sizing: border-box;
-    outline: none;
-    border-color: var(--primary-color);
-    border-width: 2px;
-}
-
-/* 需要与common中的通用多选样式完全收口 */
-.preset-item-multi-selected {
-    position: relative;
-    height: 35px;
-    width: 35px;
-    aspect-ratio: 1;
-    border: 1px solid var(--border-color);
-    border-radius: 3px;
-    overflow: hidden;
-    cursor: pointer;
-    background-color: var(--dark-bg-color);
-    box-sizing: border-box;
-    outline: none;
-    border-color: var(--secondary-color, rgb(255, 107, 53));
-    border-width: 2px;
-    background-color: rgba(255, 107, 53, 0.1);
-}
-
-/* 渐变覆盖层，必要，确保渐变渲染在棋盘格上方，不用收口*/
+/* 渐变覆盖层（用在渐变方块、渐变条和最终预览），必要，确保渐变渲染在棋盘格上方，不用收口*/
 .gradient-fill-layer {
     position: absolute;
     top: 0;
@@ -96,47 +46,24 @@
     z-index: 2;
 }
 
-/* 可点击的渐变层（点击即在预览条上新增色标）；自包含单类名（含 .gradient-fill-layer 基础层定位） */
-.gradient-fill-layer-clickable {
+/* 棋盘格底板：铺满父容器并作为方块的定位基准。
+   方块用整数 px + 各 +1px 重叠过量渲染，父级 overflow:hidden 裁切，
+   彻底消除格子间亚像素缝隙（描边/漏底），且与渐变条渲染一致。 */
+.opacity-checkerboard {
     position: absolute;
     top: 0;
     left: 0;
     width: 100%;
     height: 100%;
-    z-index: 2;
-    cursor: pointer;
 }
 
-/* 渐变颜色区域样式 */
-.gradient-edit-area {
-    border: 1px solid var(--border-color);
-    border-radius: 3px;
-    margin-bottom: 10px;
-    width: 100%;
-    /* 上下左右内边距统一 10px；border-box 让 100% 宽度含边框与内边距，
-       内容区 = 230 - 2 - 20 = 208px */
-    padding: 10px;
-    box-sizing: border-box;
-    display: flex;
-    flex-direction: column;
-}
-
-.opacity-input {
-  display: flex;
-  margin-left: 6px;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.gradient-slider-track {
+/* 独特装有不透明度色标的轨道容器，不需要收口，完全保留 */
+.opacity-slider-track {
     position: relative;
     height: 20px;
     border-radius: 3px;
     background: transparent;
-    /* 原本 14px 由容器无左右内边距时的外边距提供；现在容器已有 10px 内边距，
-       这里收窄到 4px，使轨道距容器边框仍为 14px，视觉位置不变。 */
     margin: 0px 4px -13px 4px;
-    /* 添加以下属性 */
     overflow: visible;
 }
 
@@ -157,26 +84,7 @@
   touch-action: none;
 }
 
-/* 不透明度色标的选中样式，收口于通用选中样式 */
-.opacity-slider-thumb-selected {
-  position: absolute;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  border: 2px solid var(--border-color);
-  transform: translate(-50%, -50%) scale(1.1);
-  top: 50%;
-  cursor: pointer;
-  user-select: none;
-  -webkit-user-select: none;
-  z-index: 10001;
-  pointer-events: auto;
-  touch-action: none;
-  border-color: var(--primary-color);
-  border-width: 2px;
-}
-
-/* 独特的渐变预览条样式，不需要收口，完全保留 */
+/* 独特的渐变预览条容器，不需要收口，完全保留 */
 .gradient-preview {
     height: 24px;
     /* 内容区 208px：4 + 200 + 4，左右留白对称，与容器 10px 内边距合计仍为 14px 缩进 */
@@ -191,17 +99,17 @@
     box-shadow: none;
 }
 
+/* 独特装有颜色色标的轨道容器，不需要收口，完全保留 */
 .color-slider-track {
   position: relative;
   height: 20px;
   border-radius: 3px;
   background: transparent;
-  /* 同 .gradient-slider-track：容器 10px 内边距 + 4px 外边距 = 14px 视觉缩进 */
   margin: -12px 4px 0 4px;
-  /* 添加以下属性 */
   overflow: visible;
 }
 
+/* 独特的方形颜色色标样式，不需要收口，完全保留 */
 .color-slider-thumb {
   position: absolute;
   width: 12px;
@@ -217,59 +125,7 @@
   touch-action: none;
 }
 
-.color-slider-thumb-selected {
-  position: absolute;
-  width: 12px;
-  height: 12px;
-  border: 2px solid var(--border-color);
-  transform: translate(-50%, -50%) scale(1.1);
-  top: 50%;
-  cursor: pointer;
-  user-select: none;
-  -webkit-user-select: none;
-  z-index: 10001;
-  pointer-events: auto;
-  touch-action: none;
-  border-color: var(--primary-color);
-  border-width: 2px;
-}
-.color-prefix {
-  font-family: monospace;
-  font-size: 12px;
-  color: var(--text-color);
-}
-
-.color-input-container {
-  display: flex;
-  align-items: center;
-  margin-left: 6px;
-  position: relative;
-  justify-content: space-between;
-}
-
-.color-input-container input[type="text"] {
-  width: 60px;
-  height: 24px;
-  padding: 2px 4px;
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-  /* 与透明度输入框（.opacity-input input[type="number"]）完全统一：
-     字号、盒子模型、外观重置、背景、文字色一致，消除“字体过大/大小不一”。 */
-  color: var(--text-color);
-  font-size: 12px;
-  appearance: none;
-  -webkit-appearance: none;
-  box-sizing: border-box;
-  background-color: var(--dropdown-bg-color);
-  background-image: none;
-}
-
-/* 色值输入框右侧的当前色小方块（可点击唤起 PS 取色器）样式已全收口到
-   common.css 的 .color-preview（尺寸 / 光标 / 边框 / 圆角 / 间距单一来源），
-   仅 backgroundColor 随色标动态变化、仍走内联。本文件不再保留任何 .color-preview 规则。 */
-
-/* 渐变/透明度中点滑块：静态外观收口到此（原四处内联重复样式），
-   仅 left 由各 stop 位置动态计算、仍走内联。 */
+/* 独特的渐变/透明度中点滑块，不做收口 */
 .midpoint-slider {
   position: absolute;
   top: 50%;
@@ -283,167 +139,13 @@
   z-index: 10;
 }
 
-sp-color-area {
-  margin: 10px;
-}
-
-sp-color-slider {
-  margin: 10px;
-  width: 20px;
-}
-
-/* 渐变设置区域样式 */
-.gradient-settings-area {
-    border: 1px solid var(--border-color);
-    border-radius: 3px;
-    /* 上下左右内边距统一 10px；高度由内容决定且不再随面板高度伸缩
-       （见 .subpanel-fill > * { flex-shrink: 0 }） */
-    padding: 10px;
-    height: auto;
-    width: 100%;
-    box-sizing: border-box;
-    display: flex;
-    flex-direction: column;
-    margin-bottom: 10px;
-}
-
-/* 渐变角度滑块样式 */
-.gradient-setting-item {
-    /* 三组（样式下拉 / 角度 / checkbox）统一用 10px 上下间距：配合 .gradient-settings-area
-       的 10px padding，下拉顶到容器上边距 == checkbox 底到容器下边距，两种模式下恒定。
-       角度行在径向模式下仅置 disabled（不再隐藏），容器高度在两种模式下保持一致，
-       不会再出现切换径向时下拉相对容器上移/间距变化的观感。 */
-    margin: 10px 0;
-    display: flex;
-    align-items: center;
-}
-
-/* ↳ 设置项标签（「样式：」「角度：」）已改用 common.css 的 .slider-text（TSX 同步加类名），
-   原 .gradient-setting-item label 的 12px 字号规则已删，与全插件滑块标签统一 13px。 */
-
-/* ↳ 设置区标签（「样式：」「角度：」）的 6px 右间距与 flex:none 已收口到 common.css
-   （.gradient-setting-item > label，与工具箱下拉行/描边混合模式行同一条规则），
-   标签本体走 common 的 .slider-text（TSX 已加类名）。 */
-
-/* 渐变“样式”下拉：标签与下拉同行（参考边缘平滑“平滑模式”），标签固定为内容宽度，
-   下拉自适应占满剩余宽度，标签+下拉正好占满整行（取消 190px 上限，避免被压窄到
-   选项换行/排成两列）。 */
-/* ↳ 原 .gradient-type-setting 为 .gradient-setting-item 的冗余别名，已删（TSX 直接用
-   .gradient-setting-item）；其样式完全等同于通用行容器，无独有布局。 */
-/* 下拉容器保持块级：`.gradient-setting-item > div{display:flex}` 会把 wrap 变成
-   flex 容器，虽然 head 已能撑满，但块级更可控（与其它面板的下拉行为一致）。 */
-.gradient-setting-item > .mask-sync-select-wrap {
+.row-between > .mask-sync-select-wrap {
     display: block;
-    /* flex-basis 用 0（而非 auto）：auto 会以内容宽度为基准，在 UXP 下容易残留
-       内容宽度导致下拉被压窄；0 + grow:1 保证稳定占满标签之后的整行剩余宽度。
-       （原仅 .gradient-type-setting 行需要，现并入通用子元素规则，类型行复用。） */
     flex: 1 1 0%;
     min-width: 0;
     width: auto;
 }
 
-/* ↳ 原生 <select> 全项目已无实例（下拉统一用 common 的 .mask-sync-select-wrap），
-   此规则为死代码，已删。 */
-
-.gradient-angle-range {
-    /* RangeSlider 根属性：单类名自包含（注释要求「className 为单类名 .gradient-angle-range，
-       需自带根布局」）。原写法 .gradient-setting-item .gradient-angle-range 依赖父级挂
-       .gradient-setting-item，但角度行实际容器是 .gradient-setting-item-angle /
-       -disabled，选择器永不命中 → 滑块吃不到根样式而崩坏。改为单类名后自包含，
-       线性/径向（禁用）两种角度行都能正确命中。 */
-    position: relative;
-    display: block;
-    height: 12px;
-    cursor: pointer;
-    outline: none;
-    -webkit-user-select: none;
-    user-select: none;
-    touch-action: none;
-    box-sizing: border-box;
-    --rs-track-inset: 6px;
-    margin: 3px -4px 0 0px;
-    width: 104px;
-    flex: 1;
-    min-width: 60px;
-}
-
-/* ↳ 设置项数字输入（35px）已收口到 common.css 单一来源（见 .gradient-setting-item
-   input[type="number"], .pattern-setting-item input[type="number"]）。 */
-
-/* 只作用于直接子 div（数值输入框的包裹层、下拉容器）。
-   必须限定子选择器：写成 `.gradient-setting-item div` 会命中下拉弹层内部元素，
-   弹层若未显式声明 display 就会变成 flex 行容器，选项被横排成两列。 */
-.gradient-setting-item > div {
-  display: flex;
-  align-items: center;
-}
-
-/* ↳ 角度行单位符号（°）已改用 common.css 的 .num-unit（TSX 同步加类名），
-   原 .gradient-setting-item > div > span（margin-left:-4px / width:14px）已删，
-   与主面板及描边/纯色面板的单位符号完全一致。 */
-
-/* 角度行：自包含单类名（含 .gradient-setting-item 基础行布局）。「径向」模式下仅禁用（不隐藏）：
-   整体置灰、禁用指针，但保留占位高度，使容器高度在线性/径向两种模式下恒定。 */
-.gradient-setting-item-angle {
-    margin: 10px 0;
-    display: flex;
-    align-items: center;
-}
-
-.gradient-setting-item-angle-disabled {
-    margin: 10px 0;
-    display: flex;
-    align-items: center;
-}
-
-.gradient-setting-item-angle-disabled label {
-    cursor: not-allowed;
-    color: var(--disabled-color);
-}
-
-.gradient-setting-item-angle-disabled .gradient-angle-range,
-.gradient-setting-item-angle-disabled input[type="number"] {
-    opacity: 0.4;
-    cursor: not-allowed;
-}
-
-.gradient-setting-item-angle-disabled input[type="number"] {
-    /* 原生 number 在 UXP 下禁用态不自动置灰，手动补 */
-    color: var(--disabled-color);
-}
-
-/* 渐变「反向 / 保留不透明度」双列勾选：.checkbox-row 直接装两个无类 <div> 单元，
-   通用 .checkbox-row 只把两单元横向并排，但单元内 label+checkbox 仅是行内流、且两单元
-   之间无间距 → 表现为「双列挤成一团、长标签溢出」。此处补：单元内 label+勾选框同行、
-   两单元之间留 28px 间距、整行与上方角度行留 10px 间距，恢复标准双列勾选布局。 */
-.gradient-settings-area .checkbox-row {
-  margin: 10px 0 0;
-}
-.gradient-settings-area .checkbox-row > div {
-  display: flex;
-  align-items: center;
-}
-.gradient-settings-area .checkbox-row > div > label {
-  margin-right: 6px;
-  cursor: pointer;
-}
-.gradient-settings-area .checkbox-row > div:first-child {
-  margin-right: 28px;
-}
-
-/* 最终预览区外容器已收口到 common.css 的 .final-preview-container（固定高度 120px）。 */
-
-.final-preview {
-    position: relative;
-    /* 修复“变成一条线”：父容器 .final-preview-container 是 height:auto，
-       子元素 height:100% 会解析为 0 而塌陷。改为 flex:1 在 flex 列布局中
-       撑满剩余高度（min-height 兜底），预览框恒定可见。 */
-    flex: 1 1 auto;
-    min-height: 100px;
-    margin: 10px;
-    border-radius: 3px;
-    justify-content: center;
-    background-color: var(--dark-bg-color);
-    box-sizing: border-box;
-    border: 1px solid var(--border-color);
+.final-preview-container:has(> .subpanel-title-1) .preview-wrapper {
+  overflow: visible;
 }

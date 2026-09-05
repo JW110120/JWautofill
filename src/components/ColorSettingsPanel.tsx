@@ -3,7 +3,6 @@ import { app, action } from 'photoshop';
 import { ColorSettings } from '../types/state';
 import RangeSlider from './RangeSlider';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
-import { setDragCursorActive } from '../utils/dragCursor';
 
 interface ColorSettingsProps {
     isOpen: boolean;
@@ -77,8 +76,6 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
         const el = event.target as HTMLElement | null;
         if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
         event.preventDefault();
-        // 拖拽开始：把全局光标锁成 ew-resize，避免鼠标移出容器后光标变回普通箭头。
-        setDragCursorActive(true);
         setIsDragging(true);
         setDragTarget(key);
         setDragStartX(event.clientX);
@@ -104,7 +101,6 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
     };
 
     const handleMouseUp = () => {
-        setDragCursorActive(false);
         setIsDragging(false);
         setDragTarget(null);
     };
@@ -213,7 +209,7 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
                             {label}
                         </label>
 
-                        <div className="num-input-wrap">
+                        <div className="row-start">
                             <div className="num-input-row">
                                 <input
                                     type="number"
@@ -276,11 +272,11 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
                     name="calculationMode"
                     onChange={(e) => setSettings(prev => ({ ...prev, calculationMode: e.target.value as 'absolute' | 'relative' }))}
                 >
-                    <sp-radio value="absolute" className="radio-item">
-                        <span className="radio-item-label">绝对</span>
+                    <sp-radio value="absolute" className="">
+                        <span className="label-2">绝对</span>
                     </sp-radio>
-                    <sp-radio value="relative" className="radio-item">
-                        <span className="radio-item-label">相对</span>
+                    <sp-radio value="relative" className="">
+                        <span className="label-2">相对</span>
                     </sp-radio>
                 </sp-radio-group>
             </div>

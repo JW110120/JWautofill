@@ -3,7 +3,6 @@ import { BlendMode } from '../constants/blendModes';
 import { BLEND_MODE_OPTIONS } from '../constants/blendModeOptions';
 import RangeSlider from './RangeSlider';
 import Select from './Select';
-import { setDragCursorActive } from '../utils/dragCursor';
 
 interface StrokeSettingProps {
   isOpen: boolean;
@@ -57,7 +56,6 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
       target
     };
     // 拖拽开始：把全局光标锁成 ew-resize，避免鼠标移出容器后光标变回普通箭头。
-    setDragCursorActive(true);
     setIsDragging(true);
     setDragTarget(target);
   };
@@ -81,8 +79,6 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
     };
 
     const handleMouseUp = () => {
-      // 拖拽结束：摘除全局光标锁定。
-      setDragCursorActive(false);
       setIsDragging(false);
       setDragTarget(null);
     };
@@ -128,7 +124,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
             className="slider-track"
             onChange={(v) => onWidthChange(v)}
           />
-          <div className="num-input-wrap">
+          <div className="row-start">
             <div className="num-input-row">
             <input
               type="number"
@@ -153,14 +149,14 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
               name="strokePosition"
               onChange={(e) => onPositionChange(e.target.value as any)}
             >
-              <sp-radio value="inside" className="radio-item">
-                <span className="radio-item-label">内部</span>
+              <sp-radio value="inside" className="">
+                <span className="label-2">内部</span>
               </sp-radio>
-              <sp-radio value="center" className="radio-item">
-                <span className="radio-item-label">居中</span>
+              <sp-radio value="center" className="">
+                <span className="label-2">居中</span>
               </sp-radio>
-              <sp-radio value="outside" className="radio-item">
-                <span className="radio-item-label">外部</span>
+              <sp-radio value="outside" className="">
+                <span className="label-2">外部</span>
               </sp-radio>
             </sp-radio-group>
             </div>
@@ -199,7 +195,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
             className="slider-track"
             onChange={(v) => onOpacityChange(v)}
           />
-          <div className="num-input-wrap">
+          <div className="row-start">
             <div className="num-input-row">
             <input
               type="number"

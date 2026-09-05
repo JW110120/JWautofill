@@ -15,9 +15,7 @@
    3.通常一个组件只挂一个类名，竟可能把类名下的样式合并，除非它可能会有禁用等状态变化。
    ========================================================================== */
 
-/* --------------------------------------------------------------------------
-   0. 全局基础：字体 + 根元素
-   -------------------------------------------------------------------------- */
+/* 全局基础：字体 + 根元素 */
 @font-face {
   font-family: 'SourceHanSansCN-Normal';
   src: url('../assets/SourceHanSansCN-Normal.otf') format('opentype');
@@ -37,19 +35,13 @@ html, body {
   color: var(--text-color);
 }
 
-/* 根面板容器：
-   body 是 flex 容器（align-items:flex-start），flex 子项默认 height:auto；
-   #app/#pixeladjustment 若不显式定高，整条百分比高度链在根处就断了,导致滑块条不显示。*/
+/* 根面板容器：#app/#pixeladjustment 若删除，整条百分比高度链就断了,导致滑块条不显示。*/
 #app,
 #pixeladjustment {
   height: 100%;
 }
 
-/* --------------------------------------------------------------------------
-   8d. 面板外壳
-   所有面板容器（父面板滚动区 / 绘画工具箱根 / 4 个子面板）共用同一套外壳：
-   内边距 10px、竖直滚动、自定义滚动条、直接子项 flex-shrink:0、纵向 flex 列。
-   -------------------------------------------------------------------------- */
+/* 通用面板外壳容器：所有面板容器共用同一套外壳： */
 .panel {
   --adjust-scrollbar-w: 10px;
   position: relative;
@@ -68,29 +60,13 @@ html, body {
 }
 
 
-/* 面板外壳（.panel）的直接子项 + 列式区块（.panel-section）的直接子项一律不压缩：
-   外壳是滚动容器（工具箱与选区填充面板均为 block + overflow-y:auto，靠最外层 .panel 的
-   滚动条承载溢出）。flex 子项默认 flex-shrink:1，面板被压缩（高度变小）时会被纵向压扁——
-   表现为主按钮被压矮、组件间距被吃掉。正确行为是保持各区块固有高度、由外壳滚动条承载溢出
-   （工具箱激活卡片当初用 flex:none 单独打的补丁，现统一收口于此）。
-   .panel-section 本身是 flex 列容器，其内部组件也要防收缩，否则外层不压缩、内层仍被压。 */
+/* 面板外壳（.panel）的直接子项 + 列式区块（.panel-section）的直接子项一律不压缩。 */
 .panel > *,
 .panel-section > * {
   flex-shrink: 0;
 }
 
-/* ⚠️ .panel（父面板外壳）自身不带 height 规则：
-   工具箱根 .panel 的定高（height:100%）由 adjustment.css 提供（其是
-   .pixeladjustment-root 的唯一直接子项，height:100% 直接解析、实测可滚）；
-   APP 主面板滚动区 .panel 的定高由 app.css 的「.panel-section > .panel」提供
-   （其父 .panel-section 是 .app-root > .panel 的 flex:1 子项）；
-   外壳 flex 子项叠 height:100% 在 UXP 下会与 flex 伸缩打架（内容截断、无滚动条），
-   故均走「定高块级父 + 百分比高度」这一被验证可靠的定高路径。
-   折叠分区自身的 flex-shrink:0 由上方 .panel > * 统一兜底。 */
-
-/* 面板外壳（.panel，含子面板的 #app .panel-section ~ .panel）统一自定义滚动条
-   （唯一一套，覆盖浮动窗口）。⚠️ 伪元素 width 写字面值 10px（与上方
-   --adjust-scrollbar-w 同值），因 UXP 下 ::-webkit-scrollbar 里用 var() 不保证解析。 */
+/* 通用面板容器自定义滚动条 */
 .panel::-webkit-scrollbar {
   width: 10px;
 }
@@ -108,17 +84,7 @@ html, body {
   border-radius: 8px;
 }
 
-/* --------------------------------------------------------------------------
-   8e. 面板分区容器 / 二级标题（全面板通用的「区块」与区块小标题）
-   唯一类：.panel-section（区块容器，默认 flex 列、内容纵向堆叠，底边分隔线统一断行）/
-          .subpanel-title-2（区块内二级标题，如「计算方法」）。
-   原 stroke.css 的 stroke-wide-container / stroke-blende-mode / stroke-opacity-control /
-   position-radio-group，与原 colorpanel.css 的 colorsettings-slider-group /
-   colorsettings-calculation-mode 全部并入此类；面板 CSS 不再各自声明「分区」样式，
-   改通用只需动这里一处，消除各面板 padding/margin 漂移。
-   区块内需要「标签在左、控件在右」的横向行时，给内部元素包一层通用 .row-between
-   （见 5. 通用 space-between 行容器），不再用独立的列修饰类。
-   -------------------------------------------------------------------------- */
+/* 通用面板分区容器 */
 .panel-section {
   width: 100%;
   display: flex;
@@ -132,8 +98,7 @@ html, body {
   position: relative;
 }
 
-/* 通用描边分区（图案 .pattern-settings-area / 工具箱 .adjustment-section 收口于此）。
-   与 .panel 外壳几乎一致（padding 10px + flex 列 + 背景），仅多一道描边。 */
+/* 通用带描边的分区容器 */
 .border-panel-section {
   width: 100%;
   box-sizing: border-box;
@@ -146,8 +111,7 @@ html, body {
   background-color: var(--bg-color);
 }
 
-/* —— 主面板标题 ——
-   单类名承载标题文字（20px 加粗）+ 居中布局 */
+/* 通用面板主标题 */
 .main-title {
   text-align: center;
   font-weight: bold;
@@ -160,12 +124,7 @@ html, body {
 }
 
 
-/* --------------------------------------------------------------------------
-   1. 全局控件禁用态
-   -------------------------------------------------------------------------- */
-/* 通用 Spectrum 控件禁用状态：cursor 统一改为 not-allowed，
-   包括开关、按钮、单选等所有可点击控件；新增 disabled 控件只需在 React 端
-   设置 disabled 属性即可，无需额外 CSS。 */
+/* 全局控件光标禁用态 */
 sp-switch[disabled],
 sp-button[disabled],
 sp-action-button[disabled],
@@ -173,8 +132,7 @@ sp-radio[disabled] {
   cursor: not-allowed;
 }
 
-/* --------------------------------------------------------------------------
-   2. 表单标签（单元素单类名；不同字数 → 固定宽度档）
+/* 通用标签（单元素单类名；不同字数 → 固定宽度档）
    同时服务于：单行/多行滑块、下拉菜单、checkbox、switch、radio 的标签。
    W(n) = 20 + (n-2)×13.3 → 2/3/4/5/6 字 = 20/33/47/60/73px
    - .label-2..6：标签（按字数定宽），右侧 10px 间距；可拖拽滑块标签另带 ew-resize 光标
@@ -194,7 +152,6 @@ sp-radio[disabled] {
   white-space: nowrap;
   text-align: left;
   margin-right: 10px;
-  cursor: ew-resize;
 }
 
 /* 宽度档：2 字 → 20px，其余按字数线性插值 */
@@ -204,22 +161,16 @@ sp-radio[disabled] {
 .label-5 { width: 60px; }
 .label-6 { width: 73px; }
 
-/* 通用标签禁用态（单一来源）：仅改色，其余盒模型由基础 .label-* 提供。
-   原 APP .app-blendmode-label-disabled 收口于此；禁用标签直接叠加 .label-disabled
-   （如 'app-blendmode-label label-disabled'），不再为禁用态单开一个全量类。 */
+.label-drag {
+  cursor: ew-resize;
+}
+
+/* 通用--disabled-color禁用态，所有--disabled-color最好都收口一下 */
 .label-disabled {
   color: var(--disabled-color);
 }
 
-/* 标签宽度档收口于 .label-2..6（见上文）；静态标签（下拉/开关/复选）的「非拖拽」语义
-   由下方「静态标签光标/不可选中」规则统一约束，不再用独立类。 */
-
-
-/* --------------------------------------------------------------------------
-   3. RangeSlider 自定义滑块（替代 PS 27.9 后失效的原生 input[type="range"]）
-   权威类：.range-slider（根）。调用方传入的 className（.slider-input / .slider-track /
-   .gradient-angle-range）须自带本节根属性；未传 className 时组件回退到 .range-slider。
-   -------------------------------------------------------------------------- */
+/* 通用自定义滑块 */
 .range-slider {
   position: relative;
   display: block;
@@ -234,6 +185,7 @@ sp-radio[disabled] {
   --rs-track-inset: 6px;
 }
 
+/* 通用自定义滑块轨道 */
 .range-slider-track {
   position: absolute;
   left: var(--rs-track-inset);
@@ -246,6 +198,7 @@ sp-radio[disabled] {
   pointer-events: none;
 }
 
+/* 通用自定义滑块填充 */
 .range-slider-fill {
   position: absolute;
   left: 0;
@@ -256,6 +209,7 @@ sp-radio[disabled] {
   pointer-events: none;
 }
 
+/* 通用自定义滑块色标 */
 .range-slider-thumb {
   position: absolute;
   top: 50%;
@@ -265,39 +219,16 @@ sp-radio[disabled] {
   margin-left: -6px;
   border-radius: 50%;
   background-color: rgb(255, 255, 255);
-  border: 1px solid var(--primary-color);
   box-sizing: border-box;
   pointer-events: none;
 }
 
-.range-slider:hover .range-slider-thumb,
-.range-slider:focus .range-slider-thumb {
-  border-color: var(--primary-color);
-}
-
-/* --------------------------------------------------------------------------
-   4. 数字输入框 + 单位符号（单行 / 双行滑块共用）
-   唯一类：.num-input-wrap（数字+单位组）/ .num-input-row（裁剪容器）/
-          .num-unit（单位符号）。
-   定稿（2026-09-01 用户逐轮实测；2026-09-03 因 PS 版本差异复修）：
-   .num-input-row 容器高 32px、input 高 24px × 宽 32px——
-   容器比 input 高 8px，上下各留 4px 缓冲容纳 UXP 原生控件绘制区。
-   跨 PS 版本：27.9+ 会裁剪原生控件、无越界；≤27.8 旧版不裁剪，
-   若容器与 input 等高（24=24）则原生控件下沿溢出 → 下越界。
-   故容器必须高于 input 留缓冲，高低版本均不越界；各分辨率完整显示。
-   -------------------------------------------------------------------------- */
-.num-input-wrap {
-  display: flex;
-  align-items: center;
-  flex: 0 0 auto;
-  margin-left: 7px;
-}
-
+/* 通用数字输入框容器 */
 .num-input-row {
   display: flex;
   align-items: center;
-  flex-shrink: 0;          /* 在任意 flex 容器内（如 .opacity-input 直接子级）都不收缩，保证 32px 宽与数字完整可见 */
-  height: 32px;            /* 高于 input(24) 留 4px 上下缓冲，防旧版 PS(≤27.8) 下越界 */
+  flex-shrink: 0; 
+  height: 32px;          
   padding: 0;
   box-sizing: border-box;
   border: 1px solid var(--border-color);
@@ -306,17 +237,11 @@ sp-radio[disabled] {
   overflow: hidden;
 }
 
-.num-input-row:focus-within {
-  border-color: var(--primary-color);
-  box-shadow: 0 0 0 2px var(--hover-bg);
-}
-
-/* 数字输入框本体：始终在 .num-input-row 裁剪容器内（去边框避免「框里框」）。
-   工具箱与主面板共用此类，input 不挂任何独立类。 */
-.num-input-row input[type="number"] {
+/* 通用数字输入框本体：始终在 .num-input-row 裁剪容器内（去边框避免「框里框」）。 */
+.num-input-row input {
   display: flex;
   align-items: center;
-  width: 32px;            /* 字段宽度 24→32（2026-09-03） */
+  width: 32px;
   height: 24px;
   box-sizing: border-box;
   background-color: var(--dropdown-bg-color);
@@ -334,7 +259,11 @@ sp-radio[disabled] {
   -webkit-appearance: none;
 }
 
-/* 单位符号：独立于数字输入框容器之外，与输入框保持小间距（不进裁剪框、不被裁掉） */
+.num-input-row input[type="text"] {
+  width: 60px;
+}
+
+/* 通用单位符号 */
 .num-unit {
   margin-left: 4px;
   font-size: 13px;
@@ -345,12 +274,7 @@ sp-radio[disabled] {
   align-items: right;
 }
 
-/* --------------------------------------------------------------------------
-   5. 通用 space-between 行容器（标签 + 控件 左右分布；全插件共用）
-   适用于：单行滑块「标签+数字」行、行内滑块「标签+滑块+数字」行、
-   填充选项里的 switch 开关行、双按钮行（原 adjustment-double-buttons）等。
-   唯一类：.row-between（基础，自带 10px 上下外边距）。
-   -------------------------------------------------------------------------- */
+/* 通用行容器space-between */
 .row-between {
   display: flex;
   justify-content: space-between;
@@ -360,18 +284,7 @@ sp-radio[disabled] {
   box-sizing: border-box;
 }
 
-/* 行容器整行可拖拽调值，但其中的数字输入框仍需保持可输入语义：
-   覆盖从容器继承来的 ew-resize，避免用户误以为该处不能点。 */
-.row-between input[type="number"] {
-  cursor: text;
-}
-
-/* --------------------------------------------------------------------------
-   5b. 通用横向行容器（左对齐 / 右对齐成组；全插件共用，单一来源）
-   .row-start：标签 / 颜色预览 / 图标按钮等左对齐排成一组（原 APP .stroke-color-group）。
-   .row-end：标签 + 图标按钮等右对齐排成一组（如填充模式三行 radio 的「文案 + 齿轮」）。
-   UXP 不支持 flex gap，组内元素间距由各自 margin 实现（如 .color-preview）。
-   -------------------------------------------------------------------------- */
+/* 通用行容器左对齐 */
 .row-start {
   display: flex;
   flex-direction: row;
@@ -380,6 +293,7 @@ sp-radio[disabled] {
   flex: 0 0 auto;
 }
 
+/* 通用行容器右对齐 */
 .row-end {
   display: flex;
   flex-direction: row;
@@ -388,14 +302,13 @@ sp-radio[disabled] {
   flex: 0 0 auto;
 }
 
-/* --------------------------------------------------------------------------
-   5c. 通用颜色预览（可点击唤起取色器；描边 / 渐变子面板共用，单一来源）
-   仅承载尺寸 / 光标 / 圆角；描边预览无边框、渐变预览带 1px 边框由各自面板
-   CSS 的修饰规则补充（避免同一套外观在两处各写一份、日后漂移）。
-   -------------------------------------------------------------------------- */
-/* 通用颜色预览（可点击唤起取色器；描边 / 渐变子面板共用，单一来源）。
-   尺寸 / 光标 / 边框 / 圆角 / 间距全部收口于此，两面板不再保留任何 .color-preview 规则。
-   仅 backgroundColor 随色标动态变化、仍走内联。 */
+/* 通用列容器（checkbox-column 收口得到） */
+.column-default {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 通用颜色预览 */
 .color-preview {
   width: 20px;
   height: 20px;
@@ -406,7 +319,7 @@ sp-radio[disabled] {
   box-sizing: border-box;
 }
 
-/* 通用版权信息（单一来源）：原 APP .copyright 收口于此。 */
+/* 通用版权信息文字 */
 .copyright {
   width: 100%;
   text-align: center;
@@ -415,24 +328,16 @@ sp-radio[disabled] {
   color: var(--disabled-color);
 }
 
-/* --------------------------------------------------------------------------
-   6. 单行滑块（标签 + 数字 + 单位在上一行，滑块条独占下一行，共两行）
-   块容器唯一类：.slider-block（原 .subpanel-slider-item / APP .entire-slider /
-   图案 .pattern-entire-slider 三者本质相同，统一收口为此通用类；父/子面板共用）。
-   滑块条：.slider-input（自带 RangeSlider 根属性，作 RangeSlider 根类）。
-   -------------------------------------------------------------------------- */
+/* 通用滑块组合容器：滑块条独占下一行，标签 + 数字 + 单位在上一行，共两行。*/
 .slider-block {
   display: flex;
   flex-direction: column;
-  /* 宽度 100% 填满所在容器（子面板 230px 内容区 / 主面板卡片内都一致），
-     不再写死 230px，父面板单行滑块也能直接套用。 */
   width: 100%;
   margin: 0 0 15px 0;
-  padding: 0 10px;
   box-sizing: border-box;
 }
 
-/* 滑块条所在行（单行滑块用），占满整行、居中（自带 range-slider 根属性） */
+/* 通用滑块条独占行容器 */
 .slider-input {
   position: relative;
   display: block;
@@ -448,29 +353,25 @@ sp-radio[disabled] {
   margin: 0 auto;
 }
 
-/* 快速蒙版等禁用态（随 .slider-block 一起收口到 common，单类名自包含） */
+/* 通用半透明禁用态 */
 .slider-block.disabled {
   opacity: 0.5;
-  pointer-events: none;
 }
 
+/* 通用--disabled-color、禁止操作禁用态，所有相同的类型都收口一下 */
 .slider-block.disabled label {
   cursor: not-allowed;
   color: var(--disabled-color);
 }
 
+/* 没有特殊的样式，需要收口在通用半透明、禁止操作禁用态 */
 .slider-block.disabled .slider-input,
 .slider-block.disabled input[type="number"] {
   cursor: not-allowed;
-  opacity: 0.6;
+  opacity: 0.5;
 }
 
-/* --------------------------------------------------------------------------
-   7. 行内滑块（标签 + 滑块 + 数字 + 单位 全部在同一行）
-   滑块条：.slider-track（flex:1 在 .row-between 内横向拉伸，自带 RangeSlider 根属性）。
-   原 .slider-stack（装多个行内滑块的容器）已废弃——行内滑块直接是 .row-between
-   行，无需额外包裹层，TSX 里把 <div className="slider-stack"> 包裹去掉即可。
-   -------------------------------------------------------------------------- */
+/* 通用行内滑块（标签 + 滑块 + 数字 + 单位 全部在同一行） */
 .slider-track {
   position: relative;
   display: flex;
@@ -487,16 +388,9 @@ sp-radio[disabled] {
   min-width: 50px;
 }
 
-/* --------------------------------------------------------------------------
-   8. 图标按钮（无边框 / 无背景，仅图标；hover 变蓝、点击缩放、禁用灰显）
-   通用类：.icon-button（所有仅含一个图标的按钮，无外边框）。
-   .icon-button-delete 已收口于 .icon-button（不再单独成类）：删除按钮在图标组内
-   由 .icon-button-group 的 flex-end 统一右对齐。禁用态为自包含单类 .icon-button-disabled。
-   仅此一处定义，原 adjustment.css 的同名副本已删除。
-   .icon-button-group 为「把 N 个 .icon-button 打包在右侧」的容器（类似 .num-input-wrap 的角色），
-   用于渐变/图案预设区图标栏、蒙版同步底部、笔刷热键录制区。带分隔线的「栏」用 --bar 修饰类。
-   -------------------------------------------------------------------------- */
-.icon-button {
+/* 通用图标按钮容器（含禁用态：禁用仅变色不丢盒模型） */
+.icon-button,
+.icon-button-disabled {
   display: inline-flex;
   vertical-align: middle;
   align-items: center;
@@ -515,61 +409,42 @@ sp-radio[disabled] {
   -webkit-appearance: none;
 }
 
-.icon-button:hover {
-  color: var(--hover-icon);
-}
+/* 图标按钮样式原则：以下所有图标按钮的状态，改变的之后内部的icon，后面的容器不发生变化，不符合的需要收口 */
 
+/* 通用图标按钮hover状态 */
 .icon-button:hover .icon-fill {
   fill: var(--hover-icon);
 }
 
+/* 通用图标按钮点击状态 */
 .icon-button:active {
   transform: scale(0.94);
 }
 
-/* 禁用态（自包含单类：布局与基础类一致，仅改色 + not-allowed） */
+/* 通用--disabled-color禁用态，需要检查tsx是否调用正确 */
 .icon-button-disabled {
-  display: inline-flex;
-  vertical-align: middle;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  background: transparent;
   color: var(--disabled-color);
-  border: none;
-  border-radius: 3px;
   cursor: not-allowed;
-  box-sizing: border-box;
-  user-select: none;
-  appearance: none;
-  -webkit-appearance: none;
 }
 
+.icon-button-disabled .icon-fill {
+  fill: var(--disabled-color);
+}
 
-/* 图标尺寸：统一收敛为 14px，调用处一律写 className="icon-14"。 */
+/* 通用图标填充颜色 */
 .icon-fill {
   fill: var(--text-color);
 }
 
+/* 通用图标尺寸 */
 .icon-14 {
   display: block;
   width: 14px;
   height: 14px;
 }
 
-/* 图标按钮组：把 N 个 .icon-button 打包在右侧（类似 .num-input-wrap 的角色），
-   全插件共用唯一容器类。基础类仅作右对齐 flex 行；预设区底部那条带分隔线的
-   「栏」用 --bar 修饰类（与预设缩略图区视觉断开，gradient/pattern 一致）。 */
-.icon-button-group {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex: 0 0 auto;
-}
-
-.icon-button-group--bar {
+/* 通用预览区下方图标按钮区 */
+.icon-button-group-bar {
   border-top: 1px solid var(--border-color);
   background-color: var(--bg-color);
   background-clip: padding-box;
@@ -583,13 +458,7 @@ sp-radio[disabled] {
   box-sizing: border-box;
 }
 
-/* --------------------------------------------------------------------------
-   9. 普通按钮族
-   9a. 总开关（主功能开启/关闭大按钮）：.main-button
-   9b. 动作按钮（不同字数 / 压扁 / 自适应）：.action-button-N 系列（通用功能按钮，N=字数）
-   9c. 子面板关闭按钮（红色 ×）：.close-button
-   -------------------------------------------------------------------------- */
-
+/* 通用总开关容器 */
 .main-button {
   display: flex;
   justify-content: center;
@@ -606,33 +475,30 @@ sp-radio[disabled] {
   box-sizing: border-box;
 }
 
+/* 通用action按钮hover状态，所有的action-button按钮hover都要收口在一起 */
 .main-button:hover {
   background-color: var(--hover-bg);
   border-color: var(--primary-color);
 }
 
+/* 通用action按钮点击状态，所有的action-button按钮点击都要收口在一起 */
 .main-button:active {
   background-color: var(--button-down);
   transform: scale(0.98);
 }
 
+/* 通用总开关内容容器 */
 .main-button-content {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 100%;
-  transform: translateX(-5px);
 }
 
+/* 通用总开关文案样式 */
 .main-button-text {
   font-size: 16px;
   font-weight: bold;
-}
-
-.main-button-text-disabled {
-  font-size: 16px;
-  font-weight: bold;
-  color: rgba(128, 128, 128, 0.5);
 }
 
 /* —— 动作按钮（工具箱 / 通用）：每个按钮只挂一个类，宽度档/状态均为自包含类 —— */
@@ -644,9 +510,7 @@ sp-radio[disabled] {
 .action-button-7,
 .action-button-8,
 .action-button-quad,
-.action-button-auto,
-.action-button-run,
-.action-button-run-disabled {
+.action-button-auto {
   height: 30px;
   margin: 0;
   padding: 0;
@@ -673,8 +537,7 @@ sp-radio[disabled] {
 .action-button-7:hover,
 .action-button-8:hover,
 .action-button-quad:hover,
-.action-button-auto:hover,
-.action-button-run:hover {
+.action-button-auto:hover {
   background-color: var(--hover-bg);
   border-color: var(--primary-color);
   transform: scale(1.02);
@@ -688,32 +551,21 @@ sp-radio[disabled] {
 .action-button-7:active,
 .action-button-8:active,
 .action-button-quad:active,
-.action-button-auto:active,
-.action-button-run:active {
+.action-button-auto:active {
   background-color: var(--button-down);
   transform: scale(0.98);
 }
 
-/* 自适应宽度：用于超过 4 字的按钮文案 */
+/* 自适应宽度：用于超过 8 字的按钮文案 */
 .action-button-auto {
   width: auto;
+  padding: 0 10px;
   min-width: 0;
 }
 
-/* 守护进程「开始/停止」按钮：auto + compact 合并为单类 */
-.action-button-run {
-  width: auto;
-  min-width: 0;
-  height: 24px;
-  font-size: 12px;
-}
-
-.action-button-run-disabled {
-  width: auto;
-  min-width: 0;
-  height: 24px;
-  font-size: 12px;
-  opacity: 0.45;
+/* 通用半透明、禁止操作禁用态（action-button-run / run-disabled 收口于此） */
+.action-button-disabled {
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
@@ -727,13 +579,7 @@ sp-radio[disabled] {
 .action-button-7  { width: 111px; }
 .action-button-8  { width: 124px; }
 
-/* 2×2 按钮组统一列宽：92px（中英混排取中值，保证两列严格对齐） */
-.action-button-quad {
-  width: 92px;
-  flex: none;
-}
-
-/* —— 子面板关闭按钮（红色 ×）—— */
+/* 通用子面板关闭按钮 */
 .close-button {
   appearance: none;
   -webkit-appearance: none;
@@ -751,15 +597,14 @@ sp-radio[disabled] {
   justify-content: center;
 }
 
+/* 通用子面板关闭按钮悬停状态 */
 .close-button:hover {
   background-color: rgb(220, 38, 34) !important;
   border-color: var(--primary-color) !important;
 }
 
 
-/* 子面板标题栏（原 .subpanel-header）：标题与关闭按钮左右分布，与各子面板统一。
-   标题文字的字体样式（18px / 粗体 / 主题色 / 左缩进 5px）已并入本类，
-   不再单独挂 .subpanel-title-1-text（合并为唯一标题类）。 */
+/* 通用子面板标题栏一级标题 */
 .subpanel-title-1 {
   display: flex;
   min-height: 20px;
@@ -773,8 +618,7 @@ sp-radio[disabled] {
   color: var(--text-color);
 }
 
-/* 子面板二级标题（区块内的小标题，如「计算方法」）。原 colorpanel.css 的
-   colorsettings-calculation-mode label 收口为通用类，各面板小标题统一走这里。 */
+/* 通用子面板二级标题 */
 .subpanel-title-2 {
   margin: 10px 0 10px 20px;
   font-size: 16px;
@@ -783,14 +627,7 @@ sp-radio[disabled] {
   white-space: nowrap;
 }
 
-/* --------------------------------------------------------------------------
-   8e-2. 通用分割线（主面板 / 子面板 / 工具箱共用，单一来源）
-   .divider：实线，几何与旧 .adjustment-divider 一致——
-     容器内容区左右各 10px 内边距，此处左 -10px、右 +10px、宽 100%+20px，
-     使分割线贯通容器左右边缘（不依赖父级 padding）。
-   .divider-dashed：虚线，纯 DOM 方案（span 短线序列）规避 UXP 对
-     background-repeat / 渐变 的渲染缺陷；左右各留 14px，不透明度 0.5。
-   -------------------------------------------------------------------------- */
+/* 通用实线分割线 */
 .divider {
   width: 100%;
   height: 1px;
@@ -798,6 +635,15 @@ sp-radio[disabled] {
   margin: 15px 0 15px 0;
 }
 
+.border-panel-section .divider {
+  width: calc(100% + 20px);
+  margin-left: -10px;
+  margin-right: -10px;
+}
+
+/* 通用虚线分割线
+  纯 DOM 方案（span 短线序列）规避 UXP 对
+  background-repeat / 渐变 的渲染缺陷；左右各留 14px，不透明度 0.5。*/
 .divider-dashed {
   height: 1px;
   margin: 15px 0px;
@@ -817,14 +663,7 @@ sp-radio[disabled] {
 }
 
 
-/* --------------------------------------------------------------------------
-   8f. 折叠分区（通用：主面板「选区/填充选项」与工具箱子面板分区共用同一套）
-   唯一类：.collapse-section / .collapse-header / .collapse-icon /
-          .collapse-icon-expanded / .collapse-content / .collapse-content-expanded
-   原 APP 的 .expand-*（app.css）与工具箱的 .adjust-expand-*（adjustment.css）
-   本质相同，现统一收口于此，改一处全跟着改。拖拽排序视觉：.dragging 已收口至
-   下方「通用状态类」，.drop-target（outline 虚线族）保留在分区上。
-   -------------------------------------------------------------------------- */
+/* 通用折叠分区 */
 .collapse-section {
   background-color: var(--bg-color);
   width: 100%;
@@ -833,6 +672,7 @@ sp-radio[disabled] {
   flex-shrink: 0;
 }
 
+/* 通用折叠分区标题 */
 .collapse-header {
   display: flex;
   align-items: center;
@@ -845,14 +685,12 @@ sp-radio[disabled] {
   transition: background-color 0.3s;
 }
 
+/* 请收口于通用hover状态 */
 .collapse-header:hover {
   background-color: var(--hover-bg);
 }
 
-/* 折叠图标：展开(.collapse-icon-expanded)与折叠(.collapse-icon)两态必须共用同一套
-   盒模型（padding / margin / display / 对齐），否则切换时图标会因左右内/外边距不一致
-   而发生位移。原 .collapse-icon-expanded 只挂了 svg 旋转规则，盒模型继承自 .collapse-icon
-   的部分缺失，导致展开态图标左缩 5px、右缩 2px、且非 flex → 明显跳动。现合并两态。 */
+/* 通用折叠图标 */
 .collapse-icon,
 .collapse-icon-expanded {
   margin: 0 5px 0 0;
@@ -860,115 +698,37 @@ sp-radio[disabled] {
   align-items: center;
 }
 
+/* 通用折叠图标变化状态 */
 .collapse-icon svg,
 .collapse-icon-expanded svg {
   transition: transform 0.3s;
 }
 
-.collapse-icon-expanded svg {
-  transform: rotate(0deg);
-}
-
-.collapse-content {
-  max-height: 0px;
-  overflow: hidden;
-  transition: max-height 0.3s ease-out;
-}
-
+/* 通用折叠展开样式 */
 .collapse-content-expanded {
   max-height: 1400px;
 }
 
-.collapse-icon path.fill {
-  fill: var(--text-color);
-}
-
-/* 分区拖拽排序视觉（.dragging / .drop-target）已收口至「通用状态类」区。 */
-
-/* --------------------------------------------------------------------------
-   9. 开关行（sp-switch + 文字标签）
-   #app 主面板用 .switch-container（整行列表行，开关右侧对齐）；
-   工具箱用 .switch-row（内联容器，类似 .num-input-wrap，装「标签 + 开关」不占整行）。
-   标签统一用 label-N（按字数定宽）；开关 sp-switch 样式仅此一处定义。
-   -------------------------------------------------------------------------- */
-.switch-container {
-  display: flex;
-  justify-content: flex-start;
-  align-items: center;
-  padding: 5px 0;
-}
-/* 标签与开关间距用 margin 实现*/
-.switch-container > [class^="label-"] {
-  margin-right: 8px;
-}
-
-/* 仅主面板整行开关（.switch-container）需要把开关甩到右侧；
-   工具箱内联 .switch-row 的开关由上方 .switch-row sp-switch 控制间距，不套用此 auto。 */
-.switch-container sp-switch {
-  margin-left: auto;
-  cursor: pointer;
-}
-
-/* 开关被禁用时（如新建图层 / 清除模式），左侧标签文字变灰 */
-.switch-container:has(sp-switch[disabled]) [class^="label-"],
-.switch-row:has(sp-switch[disabled]) [class^="label-"] {
+/* 禁用态 label：switch 容器与 switch-row 收口为 row-between / row-start 后，下落到通用行容器 */
+.row-between:has(sp-switch[disabled]) [class^="label-"],
+.row-start:has(sp-switch[disabled]) [class^="label-"] {
   cursor: not-allowed;
   color: var(--disabled-color);
 }
 
-/* 工具箱开关：内联容器，标签 + 开关横向排列、不占整行；标签右侧间距用 margin 实现（UXP 不支持 flex gap）。
-   align-self:flex-start 防止被 flex 列父级拉伸到整行（否则内部 sp-switch 的 margin-left:auto 会把开关推到右侧、形成 space-between 观感）。 */
-.switch-row {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  align-self: flex-start;
-}
-
-/* 工具箱开关的开关与标签间距（覆盖全局 sp-switch 的 margin-left:auto，使开关紧贴标签右侧而非甩到行尾） */
-.switch-row sp-switch {
-  margin-left: 8px;
-}
-
-/* --------------------------------------------------------------------------
-   10. 双列 radio（填充模式 / 计算方法 / 位置 / 平铺方式 等）
-   唯一类：sp-radio-group / sp-radio / .radio-item / .radio-item-label
-   -------------------------------------------------------------------------- */
+/* 通用 radio 样式*/
 sp-radio-group {
   width: 100%;
 }
 
+/* 通用 radio 选项 */
 sp-radio {
   display: flex;
   align-items: center;
   height: 32px;
 }
 
-.radio-item {
-  position: relative;     /* 兜底定位作用域：radio 行内如有将来需要的绝对定位装饰，解析到本行 */
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  margin: 2px auto 2px auto;
-  color: var(--text-color);
-  cursor: pointer;
-  transition: background-color 0.2s;
-  line-height: 32px;
-}
-
-.radio-item-label {
-  display: inline-flex;
-  align-items: flex-end;
-  white-space: nowrap;
-  font-size: 13px;
-  color: var(--text-color);
-}
-
-/* 两列 radio 行布局（计算方法 / 平铺方式 等；描边「位置」为三列，由 .position-radio-group
-   单独保留选项间距）。组横向排列、space-around 分配，选项均分剩余宽度（flex:1）。
-   分区容器统一用 .panel-section 后，此处前缀由原先的 colorsettings-calculation-mode /
-   position-radio-group 改为 .panel-section（图案面板仍用 .border-panel-section）。 */
+/* 两列 radio 布局 */
 .panel-section sp-radio-group,
 .border-panel-section sp-radio-group {
   display: flex;
@@ -978,6 +738,7 @@ sp-radio {
   width: 100%;
 }
 
+/* 子面板多列 radio 选项布局 */
 .panel-section sp-radio,
 .border-panel-section sp-radio {
   display: flex;
@@ -986,78 +747,65 @@ sp-radio {
   flex: 1;
 }
 
-/* 两列 radio 选项间距（通用值，唯一来源）；panel-section 与 pattern-fillmode-container
-   共用同一间距，改此处即全跟着改。描边位置三列（.position-radio-group）由其自身规则覆盖。 */
+/* 通用两列 radio 选项间距 */
 .panel-section sp-radio:not(:last-child),
 .border-panel-section sp-radio:not(:last-child) {
-  margin-right: 110px;
+  margin-right: 80px;
 }
 
-/* 三行（纵向）radio 组：覆盖 .panel-section sp-radio-group 默认的横向双列布局。
-   仅作用于挂 .radio-group--vertical 的组（如填充模式「纯色 / 图案 / 渐变」三选一）。
-   纵向堆叠 + 每行占满整行，使每个 radio-item 的标签居左、齿轮 pin 到行右侧。 */
-.panel-section .radio-group--vertical {
+.panel-section sp-radio-group.radio-group-vertical,
+.border-panel-section sp-radio-group.radio-group-vertical {
   flex-direction: column;
 }
-.panel-section .radio-group--vertical sp-radio {
+
+.panel-section sp-radio-group.radio-group-vertical sp-radio,
+.border-panel-section sp-radio-group.radio-group-vertical sp-radio {
   flex: 0 0 auto;
   width: 100%;
 }
 
-/* --------------------------------------------------------------------------
-   11. checkbox 选项（底部选项条 / 图案剪贴蒙版 + 旋转阵列 共用）
-   外容器 .checkbox-options；每列 .checkbox-column；
-   每个「标签 + 勾选框」单元为内联容器 .checkbox-row（类似 .num-input-wrap，
-   装 label-N + .checkbox-input，不占整行）。
-   -------------------------------------------------------------------------- */
-.checkbox-options {
-  padding: 10px;
-  height: 100px;
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: row;
-  justify-content: space-between;
-  border-top: 1px solid var(--border-color);
-}
-
-.checkbox-column {
-  display: flex;
-  flex-direction: column;
-}
-
-/* 单个「标签 + 勾选框」内联单元：横向排列、间距 6px，不占整行（UXP 不支持 flex gap，用 margin 实现） */
-.checkbox-row {
-  display: flex;
-  align-items: center;
-}
-.checkbox-row > label,
-.checkbox-row > [class^="label-"] {
+/* 原样式已修改，请相应修改 */
+.row-start > label,
+.row-start > [class^="label-"] {
   margin-right: 6px;
 }
 
+/* 通用勾选框样式 */
 .checkbox-input {
   cursor: pointer;
   margin-left: 0;
 }
 
+/* 请收口于半透明、禁操作禁用态 */
 .checkbox-input:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
 
-/* 勾选框禁用时，同单元标签文字变灰 */
-.checkbox-row:has(input:disabled) [class^="label-"] {
-  opacity: 0.5;
+/* 原样式已修改，请相应修改，请收口于--disabled-color、禁操作禁用态 */
+.row-start:has(input:disabled) [class^="label-"] {
   cursor: not-allowed;
   color: var(--disabled-color);
 }
 
-/* --------------------------------------------------------------------------
-   12. 信息通知区域（通用；原分散在 adjustment.css 的 .mask-sync-result-*）
-   唯一基类：.notify；状态修饰类：.notify-ok / .notify-warn / .notify-fail
-   （颜色走 --notify-*- token，四主题一致）。笔刷热键区底部文字通知、
-   蒙版同步结果等「瞬时/常驻状态条」统一走这里，改一处全跟着改。
-   -------------------------------------------------------------------------- */
+/* 通用禁用行：含禁用控件时整行置灰、禁操作（gradient 角度行等收口于此） */
+.row-between.disabled,
+.row-start.disabled {
+  cursor: not-allowed;
+}
+.row-between.disabled [class^="label-"],
+.row-start.disabled [class^="label-"] {
+  cursor: not-allowed;
+  color: var(--disabled-color);
+}
+.row-between.disabled .range-slider,
+.row-between.disabled input,
+.row-start.disabled input {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 通用信息通知区域 */
 .notify {
   display: flex;
   align-items: flex-start;
@@ -1065,31 +813,38 @@ sp-radio {
   margin: 2px 0 4px 0;
   border-radius: 3px;
   font-size: 11px;
-  line-height: 1.35;
+  line-height: 1.4;
   user-select: none;
 }
 
+/* 通用积极信息 */
 .notify-ok {
   color: var(--notify-ok-fg);
   background: var(--notify-ok-bg);
   border: 1px solid var(--notify-ok-border);
 }
 
+/* 通用警告信息 */
 .notify-warn {
   color: var(--notify-warn-fg);
   background: var(--notify-warn-bg);
   border: 1px solid var(--notify-warn-border);
 }
-
+/* 通用消极信息 */
 .notify-fail {
   color: var(--notify-fail-fg);
   background: var(--notify-fail-bg);
   border: 1px solid var(--notify-fail-border);
 }
 
-/* 状态指示点（通用，原 .notify-icon 的 ● 收口为实心圆）：按尺寸 / 状态收口。
-   大号 .indicator--lg 用于主按钮（功能开启/关闭）；中号 .indicator--md 用于工具箱同步通知；
-   状态色统一语义：--enabled 绿（开启）、--disabled 灰（关闭）、--ok 绿（成功）、--fail 红（失败）。 */
+/* 通用通知正文 */
+.notify-text {
+  font-size: 13px;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+/* 状态指示点 */
 .indicator {
   display: inline-block;
   flex: none;
@@ -1097,56 +852,41 @@ sp-radio {
   vertical-align: middle;
 }
 
+/* 大号状态点 */
 .indicator--lg {
   width: 13px;
   height: 13px;
   margin-right: 10px;
 }
 
+/* 中号状态点 */
 .indicator--md {
   width: 8px;
   height: 8px;
   margin-right: 5px;
 }
 
+/* 启用状态点 */
 .indicator--enabled {
   background-color: rgb(46, 204, 113);
 }
 
+/* 禁用状态点 */  
 .indicator--disabled {
   background-color: rgba(128, 128, 128, 0.5);
 }
 
+/* 通用积极状态点 */
 .indicator--ok {
   background-color: var(--notify-ok-fg);
 }
 
+/* 通用消极状态点 */
 .indicator--fail {
   background-color: var(--notify-fail-fg);
 }
 
-/* 通知正文：字号与激活提示（license-status-banner / 激活通知）统一 13px */
-.notify-text {
-  font-size: 13px;
-  line-height: 1.4;
-  word-break: break-all;
-}
-
-/* --------------------------------------------------------------------------
-   13. 滑块拖拽期间的光标锁定（class 由 utils/dragCursor.ts 加到 document.body）。
-   元素自身的 cursor 只在鼠标悬停时生效，拖拽中鼠标会移出标签，光标随即被
-   鼠标下方元素接管。这里在拖拽期间把整棵子树压成 ew-resize，保证全程连续。
-   !important 必需：压过面板里各处 button/label/input 的常规则与 cursor 声明。
-   仅此一处定义，其余面板 CSS 的同名块已删除。
-   -------------------------------------------------------------------------- */
-body.label-drag-cursor,
-body.label-drag-cursor * {
-  cursor: ew-resize !important;
-}
-
-/* 通用预设区外容器
-   内部 flex 列：缩略图列表占满剩余高度并自带滚动，底部图标栏
-   经 margin-top:auto 顶到容器底。 */
+/* 通用预设区总容器 */
 .preset-area {
   position: relative;
   width: 100%;
@@ -1180,10 +920,7 @@ body.label-drag-cursor * {
   flex: 0 0 auto;
 }
 
-/* 缩略图内图片。
-   ⚡ 尺寸上限固定 46px，选中态描边 1px→2px 会把
-   content-box 从 50 压到 48，百分比上限会让图片跟着缩 2px（"选中缩图"跳变）。
-   46 = 52(盒) − 2×1px(基础描边) − 2×2px(呼吸边距)；盒尺寸若再调整需同步此值。 */
+/* 通用缩略图内图片 */
 .thumb-box img {
   width: 46px;
   height: 46px;
@@ -1192,61 +929,59 @@ body.label-drag-cursor * {
   transition: opacity 0.2s;
 }
 
-/* --------------------------------------------------------------------------
-   通用状态类：缩略图选中/多选 + 长按拖拽排序（全插件复用，勿在面板 css 重复定义）。
-   TSX 只挂这里的通用类名；选择器里的家族前缀仅用于特异性，不代表样式差异。
-   -------------------------------------------------------------------------- */
-/* 选中 / 多选（缩略图格）：共享 2px 加宽描边（"选中缩图"已由 .thumb-box img
-   固定 46px 与描边宽度解耦），仅描边色不同。 */
+/* 通用选中样式（!important 保证压过各面板 .preset-item / .thumb-box 自带 border） */
 .thumb-selected,
 .thumb-multi-selected {
-  border-width: 2px;
+  border-width: 2px !important;
 }
 
+/* 通用选中样式 */
 .thumb-selected {
-  border-color: var(--primary-color);
+  border-color: var(--primary-color) !important;
 }
 
+/* 通用多选样式 */
 .thumb-multi-selected {
-  border-color: var(--secondary-color, rgb(255, 107, 53));
+  border-color: var(--secondary-color, rgb(255, 107, 53)) !important;
 }
 
-/* 拖起态（半透明 + 抓取光标）：缩略图 / 快捷键行 / 折叠分区共用一条。
-   分组列出各家族拿到 (0,2,0) 特异性，稳压各家 base 的 cursor
-   （如 .thumb-box 的 pointer、.hotkey-entry-row 的 pointer），与加载顺序无关。 */
+/* 通用色标（opacity / color slider thumb）选中样式 */
+.slider-thumb-selected {
+  transform: translate(-50%, -50%) scale(1.1);
+  z-index: 10001 !important;
+  border-color: var(--primary-color) !important;
+  border-width: 2px !important;
+}
+
+/* 拖起态 */
 .thumb-box.dragging,
 .hotkey-entry-row.dragging,
 .collapse-section.dragging {
-  opacity: 0.45;
+  opacity: 0.5;
   cursor: grabbing;
 }
 
-/* 落点指示（主题蓝虚线）按容器机制分两族，不能合成一个裸类：
-   A. .thumb-box 自带 1px 实线 border：必须复用 border 本身画虚线——若叠 outline，
-      落点格同时是选中态时会实线 border + 虚线 outline 双重描边（已踩坑）。
-      特异性(0,2,0) > 选中态(0,1,0)，dashed 直接取代其实线。
-   B. .hotkey-entry-row / .collapse-section 无实线 border 可复用：outline 虚线
-      （不占布局；⚠️ UXP 不支持 outline-offset，虚线画在盒外侧，
-      由行间 margin 容纳，勿写 outline-offset）。两条本质相同，归组为一条。 */
+/* 通用落点指示样式 */
 .thumb-box.drop-target {
   border-color: var(--primary-color);
   border-style: dashed;
   border-width: 2px;
 }
 
+/* 请收口于common.css中的通用落点指示样式 */
 .hotkey-entry-row.drop-target,
 .collapse-section.drop-target {
-  outline: 2px dashed var(--primary-color);
+  border: 2px dashed var(--primary-color);
 }
 
-/* 通用加载中 / 加载失败的预览遮罩 */
+/* 通用加载中、加载失败的预览遮罩 */
 .pattern-thumb-loading {
   position: absolute;
-  top: 0;
-  left: 0;
   width: 100%;
   height: 100%;
   display: flex;
+  text-align: center;
+  font-size: 10px;
   justify-content: center;
   align-items: center;
   background-color: rgba(255, 255, 255, 0.8);

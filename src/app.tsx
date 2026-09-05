@@ -5,7 +5,6 @@ import { BLEND_MODES } from './constants/blendModes';
 import { BLEND_MODE_OPTIONS } from './constants/blendModeOptions';
 import { AppState, initialState, Gradient } from './types/state';
 import { DragHandler } from './utils/DragHandler';
-import { setDragCursorActive } from './utils/dragCursor';
 import { FillHandler } from './utils/FillHandler';
 import { LayerInfoHandler } from './utils/LayerInfoHandler';
 import { ClearHandler } from './utils/ClearHandler';
@@ -1048,9 +1047,6 @@ class App extends React.Component<AppProps, AppState> {
         const el = event.target as HTMLElement | null;
         if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
         event.preventDefault();
-        // 拖拽开始：把全局光标锁成 ew-resize，避免鼠标移出容器后光标变回普通箭头。
-        // 松手时由 handleMouseUp 摘除（引用计数见 src/utils/dragCursor.ts）。
-        setDragCursorActive(true);
         this.setState({
             isDragging: true,
             dragStartX: event.clientX,
@@ -1076,7 +1072,6 @@ class App extends React.Component<AppProps, AppState> {
     // 处理鼠标释放事件
     handleMouseUp(): void {
         if (!this || !this.state) return;
-        setDragCursorActive(false);
         this.setState({ isDragging: false });
     }
 
@@ -1365,7 +1360,7 @@ class App extends React.Component<AppProps, AppState> {
 title={helpTexts.selectionFill.mainButton}>
                     <div className="main-button-content">
                         <div className={this.state.isEnabled ? 'indicator indicator--lg indicator--enabled' : 'indicator indicator--lg indicator--disabled'}></div>
-                        <span className={!this.state.isEnabled ? 'main-button-text-disabled' : 'main-button-text'}>
+                        <span className={!this.state.isEnabled ? 'label-disabled' : 'main-button-text'}>
                             {this.state.isEnabled ? '功能开启' : '功能关闭'}
                         </span>
                     </div>
@@ -1396,7 +1391,7 @@ title={helpTexts.selectionFill.blendMode}>
                     不透明度
                     </label>
 
-                    <div className="num-input-wrap">
+                    <div className="row-start">
                     <div className="num-input-row">
                     <input
                         type="number"
@@ -1431,7 +1426,7 @@ title={helpTexts.selectionFill.blendMode}>
                         羽化
                     </label>
 
-                    <div className="num-input-wrap">
+                    <div className="row-start">
                     <div className="num-input-row">
                     <input
                         type="number"
@@ -1485,7 +1480,7 @@ title={helpTexts.selectionFill.selectionSmooth}>
                                         className="slider-track"
                                         title={helpTexts.selectionFill.selectionSmoothSlider}
                                     />
-                                    <div className="num-input-wrap">
+                                    <div className="row-start">
                                         <div className="num-input-row">
                                         <input
                                             type="number"
@@ -1517,7 +1512,7 @@ title={helpTexts.selectionFill.selectionContrast}>
                                         className="slider-track"
                                         title={helpTexts.selectionFill.selectionContrastSlider}
                                     />
-                                    <div className="num-input-wrap">
+                                    <div className="row-start">
                                         <div className="num-input-row">
                                         <input
                                             type="number"
@@ -1548,7 +1543,7 @@ title={helpTexts.selectionFill.selectionExpand}>
                                         className="slider-track"
                                         title={helpTexts.selectionFill.selectionExpandSlider}
                                     />
-                                    <div className="num-input-wrap">
+                                    <div className="row-start">
                                         <div className="num-input-row">
                                         <input
                                             type="number"
@@ -1579,7 +1574,7 @@ title={helpTexts.selectionFill.selectionExpand}>
 
 
                         {/* 新建图层开关 */}
-                        <div className="switch-container">
+                        <div className="row-between">
                             <span className="label-4" 
 title={helpTexts.selectionFill.createNewLayer}>
                             新建图层
@@ -1594,7 +1589,7 @@ title={helpTexts.selectionFill.createNewLayer}>
                         <div className="divider" />
 
                        {/* 描边模式开关 */}
-                       <div className="switch-container">
+                       <div className="row-between">
                             <label className="label-4" title={helpTexts.selectionFill.strokeModeLabel}>描边模式</label>
                             {this.state.strokeEnabled && (
                                 <div className="row-start">
@@ -1689,7 +1684,7 @@ title={helpTexts.selectionFill.createNewLayer}>
                         <div className="divider" />
 
                         {/* 清除模式开关 */}
-                        <div className="switch-container">
+                        <div className="row-between">
                             <label className="label-4" 
 title={helpTexts.selectionFill.clearMode}>
                             清除模式
@@ -1707,14 +1702,14 @@ title={helpTexts.selectionFill.clearMode}>
                         <div className="panel-section">
                             <div className="label-4" title={helpTexts.selectionFill.fillModeLabel}>填充模式</div>
                             <sp-radio-group 
-                                className="radio-group--vertical"
+                                className="radio-group-vertical"
                                 selected={this.state.fillMode} 
                                 name="fillMode"
                                 onChange={this.handleFillModeChange}
                             >
-                                <sp-radio value="foreground" className="radio-item" title={helpTexts.selectionFill.fgRadio}>
+                                <sp-radio value="foreground" className="" title={helpTexts.selectionFill.fgRadio}>
                                     <div className="row-end">
-                                        <span className="radio-item-label" title={helpTexts.selectionFill.fgDetail}>纯色</span>
+                                        <span className="label-2" title={helpTexts.selectionFill.fgDetail}>纯色</span>
                                         <IconButton
                                             onClick={this.toggleColorSettings}
                                             title={helpTexts.selectionFill.fgSettings}
@@ -1723,9 +1718,9 @@ title={helpTexts.selectionFill.clearMode}>
                                         </IconButton>
                                     </div>
                                 </sp-radio>
-                                <sp-radio value="pattern" className="radio-item" title={helpTexts.selectionFill.patternRadio}>
+                                <sp-radio value="pattern" className="" title={helpTexts.selectionFill.patternRadio}>
                                     <div className="row-end">
-                                        <span className="radio-item-label" title={helpTexts.selectionFill.patternDetail}>图案</span>
+                                        <span className="label-2" title={helpTexts.selectionFill.patternDetail}>图案</span>
                                         <IconButton
                                             onClick={this.openPatternPicker}
                                             title={helpTexts.selectionFill.patternSettings}
@@ -1734,9 +1729,9 @@ title={helpTexts.selectionFill.clearMode}>
                                         </IconButton>
                                     </div>
                                 </sp-radio>
-                                <sp-radio value="gradient" className="radio-item" title={helpTexts.selectionFill.gradientRadio}>
+                                <sp-radio value="gradient" className="" title={helpTexts.selectionFill.gradientRadio}>
                                     <div className="row-end">
-                                        <span className="radio-item-label" title={helpTexts.selectionFill.gradientDetail}>渐变</span>
+                                        <span className="label-2" title={helpTexts.selectionFill.gradientDetail}>渐变</span>
                                         <IconButton
                                             onClick={this.openGradientPicker}
                                             title={helpTexts.selectionFill.gradientSettings}
@@ -1748,10 +1743,11 @@ title={helpTexts.selectionFill.clearMode}>
                             </sp-radio-group>
                         </div>
                         {/* 底部checkbox选项外部容器 */}
-                        <div className="checkbox-options">
+                        <div className="divider"></div>
+                        <div className="row-between">
                                 {/* 左列：取消选区 / 更新历史源 */}
-                                <div className="checkbox-column">
-                                    <div className="checkbox-row">
+                                <div className="column-default">
+                                    <div className="row-between">
                                         <label
                                             htmlFor="deselectCheckbox"
                                             className="label-6"
@@ -1769,7 +1765,7 @@ title={helpTexts.selectionFill.clearMode}>
                                             title={helpTexts.selectionFill.deselectInput}
                                         />
                                     </div>
-                                    <div className="checkbox-row">
+                                    <div className="row-between">
                                         <label
                                             htmlFor="historyCheckbox"
                                             className="label-6"
@@ -1789,8 +1785,8 @@ title={helpTexts.selectionFill.clearMode}>
                                     </div>
                                 </div>
                                 {/* 右列：开启后切套索 / 切其它工具即关 */}
-                                <div className="checkbox-column">
-                                    <div className="checkbox-row">
+                                <div className="column-default">
+                                    <div className="row-between">
                                         <label
                                             htmlFor="autoOffOnToolCheckbox"
                                             className="label-6"
@@ -1808,7 +1804,7 @@ title={helpTexts.selectionFill.clearMode}>
                                             title={helpTexts.selectionFill.autoOffInput}
                                         />
                                     </div>
-                                    <div className="checkbox-row">
+                                    <div className="row-between">
                                         <label
                                             htmlFor="lassoOnEnableCheckbox"
                                             className="label-6"

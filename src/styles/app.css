@@ -60,10 +60,20 @@ body.secondary-panel-open #app .app-root > .panel {
   margin: 0 auto 15px auto;
 }
 
+.slider-container .slider-block {
+  padding: 0 10px;
+}
+
 /* 填充模式三行 radio 的齿轮图标：与标签一起包在 .row-end 中、处于正常文档流，
-   水平位置由 .radio-item 的 space-between（圆点居左、.row-end 整组靠右）+ .row-end
+   水平位置由 sp-radio 的 space-between（圆点居左、.row-end 整组靠右）+ .row-end
    的 flex-end 共同排布，垂直居中由 .row-end 的 align-items:center 保证——
    不再使用绝对定位（旧方案齿轮 pin 在 right:0，与 sp-radio 内部靠右排版的标签重叠）。 */
-.radio-item .row-end .icon-button {
+sp-radio .row-end .icon-button {
   margin-left: 8px;       /* UXP 无 flex gap，标签与齿轮的间距单独给 */
+}
+
+/* APP 主开关内容容器的 -5px 水平偏移（原公共 .main-button-content 的 APP 专属点，
+   已按注释从 common.css 转移到此处） */
+#app .main-button-content {
+  transform: translateX(-5px);
 }

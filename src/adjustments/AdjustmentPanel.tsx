@@ -2655,7 +2655,7 @@ const { dragTarget: sliderDragTarget, onLabelMouseDown: onSliderLabelMouseDown }
   }
 );
 
-/** 可拖拽滑块标签的统一 className：单类名（拖拽光标由 body.label-drag-cursor 全局锁定） */
+/** 可拖拽滑块标签的统一 className：单类名 */
 const sliderLabelClass = (key: SliderDragKey, base: string) => base;
 
 // 渲染子功能内容
@@ -2665,7 +2665,7 @@ const renderDetailAdjustContent = () => (
     <div className="row-between">
       <div role="button" tabIndex={0} className="action-button-4" onClick={handlePixelTransition} title={helpTexts.adjustment.pixelTransition}>像素过渡</div>
 
-      <div className="switch-row">
+      <div className="row-start">
         <label
           className="label-4"
           onClick={() => setUsePowerfulMode(!usePowerfulMode)}
@@ -2995,7 +2995,7 @@ const renderMaskSyncContent = () => (
 
         {/* 部分三：同步开关 + 立即同步 + 删除 */}
         <div className="mask-sync-footer">
-          <div className="switch-row">
+          <div className="row-start">
             <label
               className="label-2"
               title={helpTexts.adjustment.maskSyncEnabled}
@@ -3007,7 +3007,7 @@ const renderMaskSyncContent = () => (
           </div>
           {/* 立即同步：改成与刷新一致的无边框图标按钮（--text-color / 16px），不再显示文字。
               当样本图层 / 通道 / 目标蒙版三下拉任一项未选时禁用（灰 + 不触发同步） */}
-          <div className="icon-button-group">
+          <div className="row-end">
           {(() => {
             const syncDisabled = !task.sampleLayerId || !task.channel || !task.targetLayerId;
             return (
@@ -3116,7 +3116,7 @@ const renderQuickActionContent = () => (
     <div className="row-between">
       <div role="button" tabIndex={0} className="action-button-4" onClick={handleBlockAverage} title={helpTexts.adjustment.blockAverage}>分块平均</div>
       
-      <div className="switch-row">
+      <div className="row-start">
         <label 
           className="label-4"
           onClick={() => setUseWeightedAverage(!useWeightedAverage)}
@@ -3214,7 +3214,7 @@ const renderQuickActionContent = () => (
         </div>
       </div>
     
-    <div className="switch-row">
+    <div className="row-start">
         <label
           className="label-2"
           onClick={() => setSpecialWoodcutPreview(!specialWoodcutPreview)}

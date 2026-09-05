@@ -17,6 +17,9 @@
 
 - 原生 input 是原生视图永远画最上层，overflow 裁不住→折叠分区必须条件渲染（折叠态不进 DOM）。容器高32px+input高24px 缓冲；单位符号放容器外(.num-unit)；字段宽32px。number-input appearance:none 由 common.css 全局提供。
 - flex gap 不可靠→margin；<a> 不唤起浏览器→shell.openExternal。面板禁止 .xxx-item div{} 通配后代选择器（命中自绘弹层）。
+- ⚠️ **UXP 内 JS 测量容器尺寸（offsetWidth/offsetHeight + useLayoutEffect）不可靠**：面板组件关闭时 return null、打开时才挂载，测量时机难保证，两轮实测均失败。凡「铺满容器」的平铺背景（棋盘格等）一律用**整数 px 坐标格子过量渲染 + 容器 overflow:hidden 裁剪**（如模块级常量 FINAL_PREVIEW_CHECKER_TILES：8px 格铺满 240×320，一次生成零 reconcile）；⚠️ 百分比/% 小数坐标在 UXP 必产生亚像素缝隙，+0.25% 重叠也盖不住，禁用。
+- 棋盘格「格子间缝隙/描边」根因与修法（2026-09-05 渐变面板排查）：相邻整数 px 方块在 UXP/CEF 仍会出 ~1px 亚像素缝；渐变条看似无缝是因为 gradient-fill-layer(opaque) 盖住了，而最终预览渐变含 alpha 让缝隙透出。修法=① 每个方块 `width/height = tileSize+1` 与右侧/下行方块 1px 重叠（后绘制者覆盖缝，任意 DPR 生效）；② 棋盘格底板 `.opacity-checkerboard{position:absolute;inset:0;width/height:100%}` 铺满父容器 + 渲染时多铺 64px OVERSCAN，消除「硬写 240px 但父级 width:100% 更宽」导致的右侧漏底缝。父级须 overflow:hidden。
+- ⚠️ **UXP `storage.formats` 只有 `binary` / `utf8`，没有 `base64`**。任何 `file.read({format: formats.base64})` 都是 undefined，且 `file.read({format:undefined})` 不报错、静默按 UTF-8 解码返回乱码字符串（不是抛异常），用来拼 data URL 必黑屏。读图转预览一律 `file.read({format: formats.binary})` 取 ArrayBuffer → `btoa`。这是 2026-09-05 图案面板新加载全黑回归的根因。
 
 ## 通用组件 CSS 单一来源（common.css）
 - index.tsx 顺序：uxpPerfPatch→common→app→license。common.css 严禁 @import。已收口：滑块块/标签档/range-slider/数字输入+单位/input appearance/图标按钮/按钮族/主标题(.main-title 去 border-bottom 改 .divider)/开关行/radio/checkbox/折叠区/通知区/滚动条/拖拽光标锁。
@@ -26,6 +29,7 @@
 
 ## 布局宽度
 - 标签 W(n)=20+(n-2)×13.33(2..6字=20/33/47/60/73px)。按钮宽=字数×字号+20px。数字输入统一 32×24(容器32留4缓冲)。
+- 两列 radio 间距：space-around 会摊开剩余空间，margin 只是「最窄容器不换行」的下限——通用两列 40px、描边位置三列 20px（最窄处=图案面板 border-panel-section ≈200px，label-N 定宽后 110px/45px 必换行）。divider 在 border-panel-section 内用负 margin ±10px 撑满容器宽。
 
 ## 其它
 - 守护进程：C#/.NET8 代码 daemon（native/HotkeyDaemon/Program.cs），用户可见「快捷键服务」；exe 静默、日志 %LOCALAPPDATA%\JWautofill\daemon\daemon.log、自拷贝+HKCU\Run。常驻 WH_KEYBOARD_LL 低层钩子装在独立录制线程（带消息循环）；命中后入队交主线程广播，并以 return 1 吞键防 PS 抢键。配置经 127.0.0.1:18923 本地 WebSocket 与 UXP 面板通信。
