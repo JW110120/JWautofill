@@ -186,7 +186,8 @@ export const helpTexts = {
       '● 普通图层会对 RGBA 四通道处理；背景图层只处理 RGB。',
     edgeSmoothMode:
       '● 仅色块边界：对选区做“中间值”平滑，并在选区边缘做渐隐避免边界感。\n\n' +
-      '● 仅主线条：先对选区做“中间值”抹除，再对线条方向做平滑并写回。',
+      '● 仅主线条：先对选区做“中间值”抹除，再对线条方向做平滑并写回。\n\n' +
+      '● 未建立选区时会自动全选整张图后再处理。',
     edgeSmoothModeSelect: '选择边缘平滑的模式',
     edgeMedianRadius: '● PS 自带“中间值”滤镜半径。半径越大，边缘越柔和但更慢。',
     edgeLineStrength:

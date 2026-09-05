@@ -1,6 +1,4 @@
-/* 调整面板样式 */
-
-/* 绘画工具箱根容器（index.tsx 中 #pixeladjustment 内的包裹层） */
+/* 绘画工具箱根容器 */
 .pixeladjustment-root {
   width: 100%;
   height: 100%;
@@ -20,15 +18,7 @@
   flex: none;
 }
 
-/* 授权/试用状态提示样式。
-   ⚠️ .panel（工具箱根外壳）已统一为 block + overflow-y:auto，块级子项本就不参与 flex 伸缩、
-   不会被纵向压扁，故下方 flex:none 仅为历史兼容、实际已无压缩风险；
-   min-height 锁定 30px 仍保留，保证任何展开组合下高度稳定。
-   ⚠️ 不要指望 z-index 让它浮在锁定遮罩之上：遮罩是 position:fixed，
-      UXP 下 fixed 元素绘制在普通内容之上，z-index 再高也会被盖住。
-      正确做法见 AdjustmentPanel.tsx —— 锁定态时把卡片渲染进遮罩内部。 */
-/* 激活提示卡片：单一类名承载「基础样式 + 试用/过期态」，
-   不再用 license-status-banner + is-trial/is-expired 双类并列（违反单类名规则）。
+/* 试用状态激活提示卡片。
    基础样式原样内联到两个态类里；试用态走 --notify-ok-*，过期态走半透明黑底 + 橙边。 */
 .license-status-banner-is-trial {
   display: flex;
@@ -48,6 +38,7 @@
   position: relative;
 }
 
+/* 过期状态激活提示卡片 */
 .license-status-banner-is-expired {
   display: flex;
   align-items: center;
@@ -66,18 +57,7 @@
   position: relative;
 }
 
-/* 未激活锁定遮罩（绘画工具箱）：与激活弹窗遮罩同源（--overlay-scrim），
-   盖住激活提示卡片下方的全部面板内容。
-
-   ⚠️ top / height 由 AdjustmentPanel 以内联样式给定（卡片存在时 top:46px、
-   height:calc(100% - 46px)）——遮罩从卡片下方开始，卡片永远留在普通文档流里。
-   绝不要把卡片渲染进本遮罩内部：fixed 遮罩的包含块比普通内容区宽（不扣滚动条），
-   卡片进遮罩后右缘会整体右移、被滚动条压住，margin/width 都补不回来（实测）。
-
-   position:fixed 而非 absolute：absolute 会随 .panel 的滚动一起滚动。
-
-   遮罩背景色统一由 theme.ts 定义（不透明度恒定 0.80，按主题调颜色深浅），
-   此处不再写 background-color，避免组件/样式表顺序导致覆盖或 var() 解析失效。 */
+/* adjustment 独有的遮罩样式 */
 .adjustment-lock-overlay {
   position: fixed;
   left: 0;
@@ -88,7 +68,7 @@
   z-index: 9997;
 }
 
-/* 指示灯与蒙版同步引擎状态灯 .mask-sync-status-dot 保持一致：8px、margin-right 6px、圆形、带辉光 */
+/* 非独有样式，需要与common中通用的中号状态点收口 */
 .license-status-banner-is-trial .badge-dot,
 .license-status-banner-is-expired .badge-dot {
   width: 8px;
@@ -101,7 +81,7 @@
   display: inline-block;
 }
 
-/* 未激活/过期态：与蒙版同步引擎的 warn（橙）灯一致，而非红，保证两处指示灯语义统一 */
+/* 非独有样式，需要与common中通用的中号状态点收口 */
 .license-status-banner-is-trial .badge-dot-danger,
 .license-status-banner-is-expired .badge-dot-danger {
   width: 8px;
@@ -114,6 +94,7 @@
   box-shadow: 0 0 4px rgba(243, 156, 18, 0.6);
 }
 
+/* adjustment独有的试用状态通知 */
 .license-status-banner-is-trial .trial-status,
 .license-status-banner-is-expired .trial-status {
   font-weight: 600;
@@ -125,7 +106,7 @@
   text-overflow: ellipsis;
 }
 
-/* 与 .badge-dot-danger 状态灯同色（见上方 .is-expired 说明） */
+/* adjustment独有的试用过期状态通知 */
 .license-status-banner-is-trial .trial-expired,
 .license-status-banner-is-expired .trial-expired {
   color: rgb(243, 156, 18);
@@ -138,7 +119,7 @@
   text-overflow: ellipsis;
 }
 
-
+/* adjustment独有的三连图标单元 */
 .hotkey-icon-cell {
   flex: 0 0 28px;
   width: 28px;
@@ -148,8 +129,7 @@
   justify-content: center;
 }
 
-/* 录制 / 取消：圆形图标按钮（参考 PS 原生动作面板的录制圆点），无文字无边框；
-   颜色跟随 --text-color（深色主题为白色、浅色主题为黑色），录制中变红，禁用态为灰色 */
+/* 请将录制按钮收口为common中的通用录制按钮 */
 .hotkey-circle-button {
   display: flex;
   align-items: center;
@@ -179,12 +159,13 @@
   transform: scale(0.94);
 }
 
-/* 录制中：圆点变红（停止混色，明确提示正在捕获按键） */
+/* 请将录制按钮收口为common中的通用录制按钮 */
 .hotkey-circle-button.recording {
   color: rgb(239, 83, 80);
   cursor: default;
 }
 
+/* 请将录制按钮收口为common中的通用录制按钮 */
 .hotkey-circle-button.recording:hover {
   color: rgb(239, 83, 80);
 }
@@ -199,7 +180,7 @@
   color: var(--disabled-color);
 }
 
-/* 所有已录制快捷键的边框可见大容器（参考蒙版同步任务卡片 .mask-sync-task 风格） */
+/* 非独有样式，请收口为common的border-panel-section */
 .hotkey-entry-box {
   border: 1px solid var(--border-color);
   border-radius: 3px;
@@ -209,26 +190,17 @@
   box-sizing: border-box;
 }
 
-/* 列表本身在边框容器内，外间距由 .hotkey-entry-box 提供 */
-.hotkey-entry-list {
-  margin-top: 0;
-}
-
-/* 单条：只保留【快捷键 丨 名字】，快捷键靠左、名字靠右。
-   删除键已移出，名字独占整行剩余宽度，"选区填充开关" 六个字不再被截断。 */
+/* 独有的【快捷键 丨 名字】行容器 */
 .hotkey-entry-row {
   display: flex;
   align-items: center;
-  padding: 6px 8px;
+  padding: 8px;
   border-radius: 3px;
   background: var(--entry-bg);
   font-size: 12px;
   box-sizing: border-box;
   cursor: pointer;
   user-select: none;
-  /* 横向分割线：与 丨（.hotkey-entry-sep）和外框（.hotkey-entry-box）同为 --border-color，保持横竖分割线一致 */
-  border-bottom: 1px solid var(--border-color);
-  outline: 2px solid transparent;
 }
 
 /* 仅后续行有上间距 → 首行上边距为 0；配合 box 上下等 padding，首尾到边框距离对称 */
@@ -242,17 +214,15 @@
 
 /* 选中态：与图案子面板被选中的图案一致——2px 主题蓝描边（用 outline，零位移） */
 .hotkey-entry-row.selected {
-  outline-color: var(--primary-color);
+   outline-color: var(--primary-color);
 }
-
-/* 拖拽排序视觉（.dragging / .drop-target）已收口至 common.css「通用状态类」区。 */
 
 /* 置顶固定的「选区填充开关」行：明确不可拖动 */
 .hotkey-entry-row.pinned {
   cursor: default;
 }
 
-/* 组合键 */
+/* 独有的组合键 */
 .hotkey-entry-combo {
   width: 110px;
   flex: 0 0 110px;
@@ -262,7 +232,7 @@
   white-space: nowrap;
 }
 
-/* 竖分割线 */
+/* 收口为通用的竖分割线 */
 .hotkey-entry-sep {
   flex: 0 0 auto;
   margin: 0 8px;
@@ -271,8 +241,7 @@
   pointer-events: none;
 }
 
-/* 名称列占满剩余宽度并右对齐，与左侧快捷键形成两端对齐（space-between 观感）；
-   分隔线紧贴定宽的快捷键列，因此跨条目始终对齐 */
+/* 独有的快捷键名样式 */
 .hotkey-entry-name {
   flex: 1 1 auto;
   min-width: 0;
@@ -283,8 +252,7 @@
   white-space: nowrap;
 }
 
-/* 删除键 +「已选中 N 条」：位于列表大容器外、说明文字上方。
-   提示文字左对齐（space-between 顶到最左），删除键仍在最右 */
+/* 非独有样式，请收口为common.css中的row between */
 .hotkey-entry-actions {
   display: flex;
   align-items: center;
@@ -292,6 +260,7 @@
   margin-top: 10px;
 }
 
+/* 独有的已选中 N 条提示样式 */
 .hotkey-selected-count {
   font-size: 11px;
   color: var(--text-color);
@@ -303,20 +272,20 @@
 }
 
 
-
+/* 无效样式请删除该类名的引用 */
 .unit-container{
   display: flex;
   align-items: center;
   flex: 1 1 auto;
   min-width: 0;
 }
-/* 子项间距用 margin 实现（UXP 不支持 flex gap） */
+/* 无效样式请删除该类名的引用 */
 .unit-container > *:not(:first-child) {
   margin-left: 3px;
 }
 
 
-/* 模态框遮罩与内容*/
+/* 窗口中一个遮罩中挖出一个悬浮窗口的样式，请将激活窗口的实现方法与之统一，并且收口在common.css作为通用悬浮窗口样式  */
 .adjustment-modal-overlay {
   position: fixed;
   top: 0;
@@ -331,17 +300,18 @@
   z-index: 99999; /* 置顶，超过其他面板 */
 }
 
+/* 遮罩内的浮动窗口，请激活窗口的悬浮窗口与之统一，收口为common.css中的通用悬浮窗口样式 */
 .adjustment-modal-content {
   background: var(--bg-color);
   color: var(--text-color);
   border: 1px solid var(--border-color);
   border-radius: 3px;
-  width: 280px;
-  max-width: 92vw;
+  width: calc(100% - 20px);
   padding: 10px 10px;
   box-shadow: 0 10px 24px rgba(0,0,0,0.35);
 }
 
+/* 一个多余的容器样式、可以收口于common.css中的row-between，再给span添加subpanel-title-1的样式 */
 .adjustment-modal-header {
   display: flex;
   align-items: center;
@@ -351,7 +321,7 @@
   color: var(--text-color);
 }
 
-/* 列表与条目统一排版 */
+/* 这两个都没有独特性，adjustment-modal-list请换成panel-section，adjustment-modal-item请换成row-between */
 .adjustment-modal-list { margin-top: 4px; }
 .adjustment-modal-item {
   display: flex;
@@ -361,32 +331,18 @@
   padding-right: 10px;
   margin-bottom: 10px;
 }
-/* 标签与开关间距用 margin 实现（UXP 不支持 flex gap） */
+/* 请收口为label-N */
 .adjustment-modal-item-label {
   color: var(--text-color);
   font-size: 13px;
   user-select: none;
   margin-right: 10px;
-}
-.adjustment-modal-item sp-switch { transform: scale(0.98); cursor: pointer; }
-
-.adjustment-modal-item-label {
   flex: 1;
   user-select: none;
 }
 
-.adjustment-modal-content {
-  padding-left: 10px;
-  padding-right: 10px;
-}
-
-/* ================= 蒙版同步分区 ================= */
-/* 蒙版同步分区：不再复用 .adjustment-section（其 border + padding 会在引擎状态条与
-   卡片总容器外再套一层可见大容器）。这里只保留内边距/宽度/间距，去掉边框与圆角，
-   使引擎状态条与卡片总容器 A 直接陈列在分区内，外面没有额外的可见框 */
+/* 请收口为common.css中的panel-section */
 .mask-sync-section {
-  /* 对齐笔刷热键分区：内容通栏（.collapse-content 本身无 padding），
-     不加左右内边距、不限宽，使状态条与容器 A 与笔刷热键的盒子等宽 */
   width: 100%;
   box-sizing: border-box;
   display: flex;
@@ -397,10 +353,7 @@
   background: transparent;
 }
 
-/* 同步任务卡片大容器（容器 A）：与笔刷热键的 .hotkey-entry-box 完全同一套盒模型
-   （1px 边框 + radius 8 + 上下左右等距 padding 8 + --bg-color）。
-   内部留白原则同笔刷热键：首个子元素上边距为 0、后续元素才加 margin-top，
-   配合上下对称的 padding，使「首个卡片上边↔框上边界」=「加号按钮下边↔框下边界」 */
+/* 非独特样式，请收口为common.css中的border-panel-section */
 .mask-sync-card-list {
   border: 1px solid var(--border-color);
   border-radius: 3px;
@@ -410,9 +363,7 @@
   box-sizing: border-box;
 }
 
-/* 新建任务：圆形 + 号按钮（位于任务卡片列表底部）。
-   margin-top 6px 与卡片间距一致（对标 .hotkey-entry-row + .hotkey-entry-row），
-   margin-bottom 0 → 底部留白只来自容器 A 的 padding，上下对称 */
+/* 非独特样式，请收口为common.css中的row-between */
 .mask-sync-add-row {
   display: flex;
   justify-content: center;
@@ -421,6 +372,7 @@
   margin-bottom: 0;
 }
 
+/* 请在common.css中收口这个样式作为通用圆形按钮 */
 .mask-sync-add-button {
   width: 32px;
   height: 32px;
@@ -444,13 +396,14 @@
   fill: var(--text-color);
 }
 
+/* 请在common.css中收口这个样式作为通用圆形按钮 */
 .mask-sync-add-button svg {
   width: 16px;
   height: 16px;
   display: block;
 }
 
-/* 空态提示：位于容器 A 内，padding 归零 → 上下留白全由容器 A 的 8px 提供，保持对称 */
+/* 独有的空态提示 */
 .mask-sync-empty {
   text-align: center;
   color: var(--text-color);

@@ -19,7 +19,13 @@
 - flex gap 不可靠→margin；<a> 不唤起浏览器→shell.openExternal。面板禁止 .xxx-item div{} 通配后代选择器（命中自绘弹层）。
 - ⚠️ **UXP 内 JS 测量容器尺寸（offsetWidth/offsetHeight + useLayoutEffect）不可靠**：面板组件关闭时 return null、打开时才挂载，测量时机难保证，两轮实测均失败。凡「铺满容器」的平铺背景（棋盘格等）一律用**整数 px 坐标格子过量渲染 + 容器 overflow:hidden 裁剪**（如模块级常量 FINAL_PREVIEW_CHECKER_TILES：8px 格铺满 240×320，一次生成零 reconcile）；⚠️ 百分比/% 小数坐标在 UXP 必产生亚像素缝隙，+0.25% 重叠也盖不住，禁用。
 - 棋盘格「格子间缝隙/描边」根因与修法（2026-09-05 渐变面板排查）：相邻整数 px 方块在 UXP/CEF 仍会出 ~1px 亚像素缝；渐变条看似无缝是因为 gradient-fill-layer(opaque) 盖住了，而最终预览渐变含 alpha 让缝隙透出。修法=① 每个方块 `width/height = tileSize+1` 与右侧/下行方块 1px 重叠（后绘制者覆盖缝，任意 DPR 生效）；② 棋盘格底板 `.opacity-checkerboard{position:absolute;inset:0;width/height:100%}` 铺满父容器 + 渲染时多铺 64px OVERSCAN，消除「硬写 240px 但父级 width:100% 更宽」导致的右侧漏底缝。父级须 overflow:hidden。
+- ⚠️ **`imaging.getPixels` 会把 `sourceBounds` 裁剪到图层 bounds，再把裁剩下的内容重采样到 `targetSize`**。因此「图层只有一小块、却按大区域尺寸请求」= 内容被**拉伸**铺满请求区域，写回后图层外接矩形撑满文档（2026-09-05 边缘平滑「仅色块边界」实测）。正确口径（与 `pixelDataProcessor.processPixelData` 一致）：先取图层实时 bounds（`layer.bounds`，滤镜可能改变它，要在滤镜之后再取）→ 只请求「需要区域 ∩ 图层 bounds」→ **source 尺寸与 targetSize 严格 1:1** → 再按文档坐标摆进大缓冲。另：`getPixels` 返回尺寸可能被 UXP 取整/裁剪，解析一律用 `imageData.width/height`，并守卫 `raw.length === w*h*4 || w*h*3`，否则返回 null 而不是写脏数据。透明像素不计入图层 bounds，写透明不会撑大图层。
+- ⚠️ **历史记录压缩**：一串 batchPlay（全选/复制图层/滤镜/删除图层/选回原层）+ putPixels 会各自留一条历史项。把整段包进 `doc.suspendHistory(async()=>{...}, '名称')` 即可合并为一条（可嵌套在 `executeAsModal` 内，见 `knockoutBatchProcessor.runKnockoutBatch`）。若内部 `applyProcessedPixels` 也自带 suspendHistory，需传 `{ skipHistorySuspend: true }` 跳过，避免嵌套多出第二条。
 - ⚠️ **UXP `storage.formats` 只有 `binary` / `utf8`，没有 `base64`**。任何 `file.read({format: formats.base64})` 都是 undefined，且 `file.read({format:undefined})` 不报错、静默按 UTF-8 解码返回乱码字符串（不是抛异常），用来拼 data URL 必黑屏。读图转预览一律 `file.read({format: formats.binary})` 取 ArrayBuffer → `btoa`。这是 2026-09-05 图案面板新加载全黑回归的根因。
+
+## 像素算法架构（2026-09-05 定稿）
+- ⚠️ **lineSmoothProcessor（仅主线条，SDF）：全局量绝不能被选区截断**。lineMask/SDF/strokeAlpha 一律全图计算，选区只决定「写回范围」；跨选区边界的邻居判定用 effAlpha（选区内=平滑结果、选区外=原值 alpha，即「实际最终输出」）。四环（lineMask/SDF/Phase C/Phase D+E 邻居判定）任一被 sel 截断 → 选区边缘一圈像素被误删（透明环，2026-09-05 用户实报）。binaryOpen 等形态学必须全范围循环+越界邻居跳过，否则画布边缘 r px 条带整体被挖空。
+- edge 模式参数已精简至 mode/edgeMedianRadius/lineSmoothStrength/lineSmoothRadius 四字段；旧预设字段（backgroundSmoothRadius/linePreserveDetail/lineStrength/lineWidthScale/lineHardness 等）已从接口与面板 state 全删，不再兼容。PanelStateManager.ts 里 toggles.preserveDetail（加权平均）与 highFrequencyEnhancer 的 intensity 是别的功能的同名物，勿误删。
 
 ## 通用组件 CSS 单一来源（common.css）
 - index.tsx 顺序：uxpPerfPatch→common→app→license。common.css 严禁 @import。已收口：滑块块/标签档/range-slider/数字输入+单位/input appearance/图标按钮/按钮族/主标题(.main-title 去 border-bottom 改 .divider)/开关行/radio/checkbox/折叠区/通知区/滚动条/拖拽光标锁。

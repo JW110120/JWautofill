@@ -64,8 +64,9 @@ const selectAllDocument = async () => {
 };
 
 // 轻量获取文档与选区边界（不读取像素数据）。
-// 当没有有效选区时，自动通过 batchPlay 全选整个文档（isFullDocument=true）。
-const getSelectionBounds = async () => {
+// autoSelectAll=true（默认）：当没有有效选区时，自动通过 batchPlay 全选整个文档（isFullDocument=true）。
+// autoSelectAll=false：只探测，不改动选区；调用方可据此自行决定何时全选（用于把“全选”并进同一条历史记录）。
+const getSelectionBounds = async (autoSelectAll: boolean = true) => {
   try {
     const [docResult, selectionResult] = await Promise.all([
       action.batchPlay([
@@ -107,6 +108,17 @@ const getSelectionBounds = async () => {
 
     let isFullDocument = false;
     if (!hasSelection) {
+      // 只探测：直接返回空选区，交给调用方决定
+      if (!autoSelectAll) {
+        return {
+          hasSelection,
+          isFullDocument,
+          left: 0, top: 0, right: 0, bottom: 0,
+          width: 0, height: 0,
+          docWidth,
+          docHeight
+        };
+      }
       // 没有选区：默认全选整个文档
       await selectAllDocument();
       left = 0; top = 0; right = docWidth; bottom = docHeight;
@@ -385,10 +397,8 @@ const lineReferenceSelectionRef = useRef<{ id: number | null; name: string }>({ 
 // 智能边缘平滑参数
 const [edgeSmoothMode, setEdgeSmoothMode] = useState((defaultSmartEdgeSmoothParams.mode as any) || 'edge');
 const [edgeMedianRadius, setEdgeMedianRadius] = useState(defaultSmartEdgeSmoothParams.edgeMedianRadius ?? 16);
-const [edgeBackgroundSmoothRadius, setEdgeBackgroundSmoothRadius] = useState(defaultSmartEdgeSmoothParams.backgroundSmoothRadius ?? 16);
-const [edgeLineStrength, setEdgeLineStrength] = useState(Math.round((defaultSmartEdgeSmoothParams.lineSmoothStrength ?? defaultSmartEdgeSmoothParams.lineStrength ?? 1) * 100));
+const [edgeLineStrength, setEdgeLineStrength] = useState(Math.round((defaultSmartEdgeSmoothParams.lineSmoothStrength ?? 1) * 100));
 const [edgeLineSmoothRadius, setEdgeLineSmoothRadius] = useState(defaultSmartEdgeSmoothParams.lineSmoothRadius ?? 10);
-const [edgeLinePreserveDetail, setEdgeLinePreserveDetail] = useState(Math.round((defaultSmartEdgeSmoothParams.linePreserveDetail ?? defaultSmartEdgeSmoothParams.lineHardness ?? 1) * 100));
 
 // ===== 蒙版同步 =====
 const [maskSyncTasks, setMaskSyncTasks] = useState<MaskSyncTask[]>([]);
@@ -543,12 +553,8 @@ useEffect(() => {
           if (typeof ap.values.lineReferenceLayerName === 'string') setLineReferenceLayerName(ap.values.lineReferenceLayerName);
           if (typeof ap.values.edgeSmoothMode === 'string') setEdgeSmoothMode(ap.values.edgeSmoothMode === 'line' ? 'line' : 'edge');
           if (typeof ap.values.edgeMedianRadius === 'number') setEdgeMedianRadius(Math.max(10, Math.min(30, Math.round(ap.values.edgeMedianRadius))));
-          if (typeof ap.values.edgeBackgroundSmoothRadius === 'number') setEdgeBackgroundSmoothRadius(Math.max(10, Math.min(30, Math.round(ap.values.edgeBackgroundSmoothRadius))));
           if (typeof ap.values.edgeLineStrength === 'number') setEdgeLineStrength(ap.values.edgeLineStrength);
           if (typeof ap.values.edgeLineSmoothRadius === 'number') setEdgeLineSmoothRadius(Math.max(3, Math.min(12, Math.round(ap.values.edgeLineSmoothRadius))));
-          else if (typeof ap.values.edgeLineWidthScale === 'number') setEdgeLineSmoothRadius(Math.max(3, Math.min(12, Math.round(ap.values.edgeLineWidthScale * 8))));
-          if (typeof ap.values.edgeLinePreserveDetail === 'number') setEdgeLinePreserveDetail(Math.max(0, Math.min(100, Math.round(ap.values.edgeLinePreserveDetail))));
-          else if (typeof ap.values.edgeLineHardness === 'number') setEdgeLinePreserveDetail(Math.max(0, Math.min(100, Math.round(ap.values.edgeLineHardness))));
         }
       }
       setPanelStateLoaded(true);
@@ -585,10 +591,8 @@ useEffect(() => {
         lineReferenceLayerName,
         edgeSmoothMode,
         edgeMedianRadius,
-        edgeBackgroundSmoothRadius,
         edgeLineStrength,
         edgeLineSmoothRadius,
-        edgeLinePreserveDetail,
       },
     },
   }, { debounceMs: 400 }).catch(e => console.warn('⚠️ 保存像素调整面板状态失败:', e));
@@ -613,10 +617,8 @@ useEffect(() => {
   lineReferenceLayerName,
   edgeSmoothMode,
   edgeMedianRadius,
-  edgeBackgroundSmoothRadius,
   edgeLineStrength,
   edgeLineSmoothRadius,
-  edgeLinePreserveDetail,
 ]);
 
 useEffect(() => {
@@ -697,10 +699,8 @@ useEffect(() => {
       // 3) 智能边缘平滑参数复位
       setEdgeSmoothMode((defaultSmartEdgeSmoothParams.mode as any) || 'edge');
       setEdgeMedianRadius(defaultSmartEdgeSmoothParams.edgeMedianRadius ?? 20);
-      setEdgeBackgroundSmoothRadius(defaultSmartEdgeSmoothParams.backgroundSmoothRadius ?? 16);
-      setEdgeLineStrength(Math.round((defaultSmartEdgeSmoothParams.lineSmoothStrength ?? defaultSmartEdgeSmoothParams.lineStrength ?? 1) * 100));
+      setEdgeLineStrength(Math.round((defaultSmartEdgeSmoothParams.lineSmoothStrength ?? 1) * 100));
       setEdgeLineSmoothRadius(defaultSmartEdgeSmoothParams.lineSmoothRadius ?? 10);
-      setEdgeLinePreserveDetail(Math.round((defaultSmartEdgeSmoothParams.linePreserveDetail ?? defaultSmartEdgeSmoothParams.lineHardness ?? 1) * 100));
       // 4) 关闭可见性面板
       setShowVisibilityPanel(false);
     },
@@ -1446,17 +1446,6 @@ const handleEdgeLineSmoothRadiusNumberChange = (event: React.ChangeEvent<HTMLInp
   }
 };
 
-const handleEdgeLinePreserveDetailChange = (value: number) => {
-  setEdgeLinePreserveDetail(value);
-};
-
-const handleEdgeLinePreserveDetailNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-  const value = parseInt(event.target.value, 10);
-  if (!isNaN(value) && value >= 0 && value <= 100) {
-    setEdgeLinePreserveDetail(value);
-  }
-};
-
 // 图层锁定处理工具函数（记录-解锁-恢复）
 const getCurrentLayerLockState = async () => {
   try {
@@ -2182,68 +2171,89 @@ const handleSmartEdgeSmooth = async () => {
       }
       
       const { layer, isBackgroundLayer } = editingState;
-      
-      // 获取选区边界信息
-      const selectionBounds = await getSelectionData();
-      if (!selectionBounds) {
-        await core.showAlert({ message: '获取文档信息失败' });
+      const doc = app.activeDocument;
+      if (!doc) {
+        await core.showAlert({ message: '未找到活动文档' });
         return;
       }
-      
-      await runWithTemporaryUnlock(async () => {
-        const isLineMode = edgeSmoothMode === 'line';
-        const prePixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
-        
-        // 创建完整文档尺寸的选区掩码数组
-        const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
-        let maskIndex = 0;
-        for (let docIndex of prePixelResult.selectionIndices) {
-          fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
-          maskIndex++;
+
+      let needAlertNoDocInfo = false;
+
+      // 整段流程（自动全选 / 复制临时图层 / 中间值 / 删除临时层 / 像素写回）
+      // 用 suspendHistory 合并成【一条】名为「边缘平滑」的历史记录，
+      // 不再在历史面板里留下一长串条目。
+      await doc.suspendHistory(async () => {
+        // 步骤1：没有选区时，先自动全选整张图，再执行后续操作
+        // （PS「中间值」滤镜受选区约束，必须先有全图选区才能作用到整幅画面）
+        const probe = await getSelectionBounds(false);
+        if (probe && !probe.hasSelection) {
+          await selectAllDocument();
         }
 
-        let postPixelResult = prePixelResult;
-        let baseAfterMedianBuffer: ArrayBuffer | undefined = undefined;
+        // 步骤2：获取选区边界信息
+        const selectionBounds = await getSelectionData();
+        if (!selectionBounds) {
+          needAlertNoDocInfo = true;
+          return;
+        }
+      
+        await runWithTemporaryUnlock(async () => {
+          const isLineMode = edgeSmoothMode === 'line';
+          const prePixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
         
-        // 步骤3：用智能边缘平滑算法处理像素数据
-        // 注意：传递完整的像素数据而不是选区像素数据，因为算法需要邻域信息
-        // 仅主线条模式（line）已重构为纯像素算法（结构张量方向场 + 沿切线平滑），
-        // 不再需要 PS「中间值」预处理；参数精简为：平滑力度(默认100%) + 平滑范围(默认8px)
-        const processedPixels = await processSmartEdgeSmooth(
-          prePixelResult.fullPixelData.buffer, 
-          fullSelectionMask.buffer, 
-          { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
-          {
-            mode: isLineMode ? 'line' : 'edge',
-            edgeMedianRadius: edgeMedianRadius,
-            backgroundSmoothRadius: edgeBackgroundSmoothRadius,
-            lineSmoothStrength: edgeLineStrength / 100,
-            lineSmoothRadius: edgeLineSmoothRadius
-          },
-          isBackgroundLayer,
-          isLineMode ? undefined : { documentID: app.activeDocument.id, layerID: layer.id },
-          baseAfterMedianBuffer
-        );
-        
-        console.log('✅ 智能边缘平滑处理完成，长度:', processedPixels.byteLength);
-        
-        // 步骤4：应用处理后的像素数据
-        // 将ArrayBuffer转换为Uint8Array
-        const processedPixelsArray = new Uint8Array(processedPixels);
-        const coeffLen = postPixelResult.selectionBounds.selectionCoefficients?.length || 0;
-        const selectionCoefficients = coeffLen > 0 ? new Float32Array(coeffLen) : new Float32Array(0);
-        selectionCoefficients.fill(1);
-        const resultForWriteback = {
-          ...postPixelResult,
-          selectionBounds: {
-            ...postPixelResult.selectionBounds,
-            selectionCoefficients
+          // 创建完整文档尺寸的选区掩码数组
+          const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
+          let maskIndex = 0;
+          for (let docIndex of prePixelResult.selectionIndices) {
+            fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
+            maskIndex++;
           }
-        };
-        await applyProcessedPixels(processedPixelsArray, resultForWriteback as any, '边缘平滑');
+
+          const postPixelResult = prePixelResult;
         
-        console.log('✅ 智能边缘平滑处理完成');
-      });
+          // 步骤3：用智能边缘平滑算法处理像素数据
+          // 注意：传递完整的像素数据而不是选区像素数据，因为算法需要邻域信息
+          // 仅主线条模式（line）已重构为纯像素算法（有符号距离场 SDF 高斯平滑，
+          // 见 lineSmoothProcessor.ts）；参数精简为：平滑力度(默认100%) + 平滑范围(默认8px)
+          const processedPixels = await processSmartEdgeSmooth(
+            prePixelResult.fullPixelData.buffer, 
+            fullSelectionMask.buffer, 
+            { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
+            {
+              mode: isLineMode ? 'line' : 'edge',
+              edgeMedianRadius: edgeMedianRadius,
+              lineSmoothStrength: edgeLineStrength / 100,
+              lineSmoothRadius: edgeLineSmoothRadius
+            },
+            isBackgroundLayer,
+            isLineMode ? undefined : { documentID: doc.id, layerID: layer.id }
+          );
+        
+          console.log('✅ 智能边缘平滑处理完成，长度:', processedPixels.byteLength);
+        
+          // 步骤4：应用处理后的像素数据
+          // 将ArrayBuffer转换为Uint8Array
+          const processedPixelsArray = new Uint8Array(processedPixels);
+          const coeffLen = postPixelResult.selectionBounds.selectionCoefficients?.length || 0;
+          const selectionCoefficients = coeffLen > 0 ? new Float32Array(coeffLen) : new Float32Array(0);
+          selectionCoefficients.fill(1);
+          const resultForWriteback = {
+            ...postPixelResult,
+            selectionBounds: {
+              ...postPixelResult.selectionBounds,
+              selectionCoefficients
+            }
+          };
+          // 外层已统一登记历史态，这里跳过函数内部的 suspendHistory，避免多出一条
+          await applyProcessedPixels(processedPixelsArray, resultForWriteback as any, '边缘平滑', { skipHistorySuspend: true });
+        
+          console.log('✅ 智能边缘平滑处理完成');
+        });
+      }, '边缘平滑');
+
+      if (needAlertNoDocInfo) {
+        await core.showAlert({ message: '获取文档信息失败' });
+      }
     });
     giveFocusBackToPS();
   } catch (error) {

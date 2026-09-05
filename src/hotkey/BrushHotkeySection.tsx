@@ -593,7 +593,6 @@ export default function BrushHotkeySection() {
       {/* 所有录好的快捷键都装在一个边框可见的大容器里（参考蒙版同步卡片外部的大容器）；
           删除键移到容器外的右下角，见下方 .hotkey-entry-actions */}
       <div className="hotkey-entry-box">
-        <div className="hotkey-entry-list">
           {displayEntries.length === 0 && <div style={{ fontSize: 12, opacity: 0.6 }}>尚未绑定任何快捷键</div>}
           {displayEntries.map(e => {
             const isPinned = e.action === 'toggleMain';
@@ -626,7 +625,6 @@ export default function BrushHotkeySection() {
             </div>
             );
           })}
-        </div>
       </div>
 
       {/* 选中条数提示 + 重录 + 删除：列表大容器外右下角，说明文字上方。

@@ -20,6 +20,8 @@
  *
  * 管线：
  *   Phase A  构建有符号距离场 sd（线内为正、线外为负；绝对精确欧氏距离 Felzenszwalb）
+ *            —— sd/lineMask/密度覆盖 全图计算，与选区无关；选区仅决定写回范围。
+ *            若按选区截断，选区边界处的线条会被当成断口，产生「选区边缘透明环」bug。
  *   Phase B  高斯平滑 sd（几何抛光）+ 高斯平滑原 alpha（密度抛光）
  *   Phase C  由 sd_blur 重建反锯齿覆盖 cov（决定平滑轮廓形状+抗锯齿），再乘密度：
  *            · 原线像素 → 抛光后的真实密度（保留笔压深浅）
@@ -86,20 +88,24 @@ export async function processLineSmooth(
   }
   if (selCount === 0) return out.buffer;
 
-  // ---- 原始线稿：alpha 与线条掩码（仅选区内的线像素） ----
+  // ---- 原始线稿：alpha 与线条掩码 ----
+  // lineMask 必须全图统计（不受选区限制）：若按选区截断，选区边界处的线条会被当成
+  // 「被切开的断口」，binaryOpen 在断口处腐蚀 + SDF 判为线外(cov=0)，最终选区边缘
+  // 一圈原线像素被误删（历史 bug：选区边缘出现透明环）。选区只决定「哪些像素允许写回」。
   const alpha = new Float32Array(pixelCount);
   const lineMask = new Uint8Array(pixelCount);
   for (let i = 0; i < pixelCount; i++) {
     const a = pixels[i * 4 + 3] || 0;
     alpha[i] = a;
-    if (a > THR && sel[i]) lineMask[i] = 1;
+    if (a > THR) lineMask[i] = 1;
   }
 
   // ================= Phase A：形态学前置清理 + 有符号距离场 =================
   // 先用半径 2 开运算（腐蚀→膨胀）去掉原线稿边缘 1~2px 孤立杂点/毛刺，
   // 再建 SDF。这样锯齿/碎点不会作为「线内实体」被保留，对 20px 左右粗线影响很小。
   const lineMaskClean = binaryOpen(lineMask, width, height, 2);
-  const sd = buildSignedDistance(lineMaskClean, sel, width, height);
+  // SDF 全图计算（与选区无关），保证选区边界两侧的距离场连续
+  const sd = buildSignedDistance(lineMaskClean, width, height);
 
   // ================= Phase A.5：原线连通域标注（面积 / 小杂点标记） =================
   // 对 lineMask 做 8 连通分量分析，记录每个原线像素所属的连通域 id 与面积。
@@ -218,8 +224,9 @@ export async function processLineSmooth(
   //                            避免把核心深色密度硬套到边界灰阶像素，产生黑色杂点。
   const T = 0;
   const strokeAlpha = new Float32Array(pixelCount);
+  // 全图计算（不受选区限制）：选区边界处的 strokeAlpha 必须连续，否则 Phase D/E
+  // 的邻居判定会把边界处当成「空邻居」，再次产生选区边缘透明环。写回阶段才用 sel。
   for (let i = 0; i < pixelCount; i++) {
-    if (sel[i] !== 1) continue;
     const cov = smoothstep((sdB[i] - T) / band);   // 0..1 覆盖（边界软过渡→抗锯齿）
     // 密度：原线像素用抛光真实密度；非原线像素用最近原线 alpha（与洪泛取色同源的局部密度）
     let density: number;
@@ -240,6 +247,14 @@ export async function processLineSmooth(
   // 规则（二者满足其一即剪枝）：
   //   A) 输出 alpha>THR，但在 8 邻域内输出也>THR 的邻居 ≤1 个 → 孤立像素；
   //   B) 输出 alpha>THR，但 8 邻域内没有任何原线像素(alpha>THR) → 完全游离。
+  // 「实际最终输出 alpha」：选区内=平滑结果，选区外=原值（写回不会动选区外像素）。
+  // 邻居判定必须用它：若用 strokeAlpha 判选区外邻居，会把「选区外实际保留的原线」
+  // 当成空邻居，导致选区边缘像素被误清（透明环 bug 的另一半成因）。
+  const effAlpha = new Float32Array(pixelCount);
+  for (let i = 0; i < pixelCount; i++) {
+    effAlpha[i] = sel[i] === 1 ? strokeAlpha[i] : alpha[i];
+  }
+
   const cleaned = new Float32Array(pixelCount);
   for (let i = 0; i < pixelCount; i++) cleaned[i] = strokeAlpha[i];
   for (let y = 1; y < height - 1; y++) for (let x = 1; x < width - 1; x++) {
@@ -252,7 +267,7 @@ export async function processLineSmooth(
       if (dx === 0 && dy === 0) continue;
       const j = i + dy * width + dx;
       if (j < 0 || j >= pixelCount) continue;
-      if (strokeAlpha[j] > THR) lineNbr++;
+      if (effAlpha[j] > THR) lineNbr++;
       if (alpha[j] > THR) origNbr++;
     }
     if (lineNbr <= 1 || origNbr === 0) cleaned[i] = 0;
@@ -270,8 +285,8 @@ export async function processLineSmooth(
   const COVER_MIN = 0.25;
   const compHits = new Float32Array(lineCompSize.length);
   const compCnts = new Float32Array(lineCompSize.length);
+  // 覆盖率按全图分量统计（衡量 SDF 对整个线条分量的处理效果），不按选区截断
   for (let i = 0; i < pixelCount; i++) {
-    if (sel[i] !== 1) continue;
     const cid = lineCompId[i];
     if (cid <= 0) continue;
     compCnts[cid]++;
@@ -322,7 +337,7 @@ export async function processLineSmooth(
             if (dx === 0 && dy === 0) continue;
             const xx = cx + dx;
             if (xx < 0 || xx >= width) continue;
-            if (strokeAlpha[yy * width + xx] <= 0) { hasEmptyNbr = true; break; }
+            if (effAlpha[yy * width + xx] <= 0) { hasEmptyNbr = true; break; }
           }
         }
         if (hasEmptyNbr) {
@@ -340,12 +355,14 @@ export async function processLineSmooth(
 }
 
 // ================= 工具：有符号距离场（Felzenszwalb 精确欧氏 EDT） =================
-function buildSignedDistance(lineMask: Uint8Array, sel: Uint8Array, w: number, h: number): Float64Array {
+// 全图计算，与选区无关：选区边界若参与「线内/线外」判定，会把被选区截断的线条
+// 当成断口，边界处 sd 变负 → cov=0 → 写回阶段误删选区边缘一圈像素。
+function buildSignedDistance(lineMask: Uint8Array, w: number, h: number): Float64Array {
   const n = w * h;
   const fBg = new Float64Array(n);    // 种子=背景(0)，线内=INF → EDT=距最近背景
   const fLine = new Float64Array(n);  // 种子=线(0)，背景=INF → EDT=距最近线
   for (let i = 0; i < n; i++) {
-    if (lineMask[i] && sel[i]) { fBg[i] = INF; fLine[i] = 0; }
+    if (lineMask[i]) { fBg[i] = INF; fLine[i] = 0; }
     else { fBg[i] = 0; fLine[i] = INF; }
   }
   const dIn2 = edtSquared(fBg, w, h);
@@ -353,7 +370,7 @@ function buildSignedDistance(lineMask: Uint8Array, sel: Uint8Array, w: number, h
   const sd = new Float64Array(n);
   const CAP = 1e6;
   for (let i = 0; i < n; i++) {
-    if (lineMask[i] && sel[i]) {
+    if (lineMask[i]) {
       const d = Math.sqrt(dIn2[i]);
       sd[i] = d > CAP ? CAP : d;
     } else {
@@ -461,27 +478,39 @@ export const defaultLineSmoothParams: LineSmoothParams = {
 };
 
 // ================= 工具：半径 r 二值开运算（去 rpx 边缘杂点/毛刺） =================
+// 旧实现把循环限制在 [r, h-r)，导致画布边缘 r 像素条带整体变 0（贴边线条被挖出缺口）。
+// 现全范围处理，越界邻居直接跳过：腐蚀阶段不因越界而失败（贴边线条不被腐蚀），
+// 膨胀阶段不因越界而命中。
 function binaryOpen(src: Uint8Array, w: number, h: number, r: number): Uint8Array {
   const eroded = new Uint8Array(w * h);
-  for (let y = r; y < h - r; y++) for (let x = r; x < w - r; x++) {
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const i = y * w + x;
     if (!src[i]) continue;
     let ok = 1;
     for (let dy = -r; dy <= r && ok; dy++) {
       const yy = y + dy;
+      if (yy < 0 || yy >= h) continue;
       for (let dx = -r; dx <= r && ok; dx++) {
-        if (!src[yy * w + (x + dx)]) { ok = 0; break; }
+        const xx = x + dx;
+        if (xx < 0 || xx >= w) continue;
+        if (!src[yy * w + xx]) { ok = 0; break; }
       }
     }
     eroded[i] = ok;
   }
   const opened = new Uint8Array(w * h);
-  for (let y = r; y < h - r; y++) for (let x = r; x < w - r; x++) {
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const i = y * w + x;
     if (eroded[i]) { opened[i] = 1; continue; }
     let hit = 0;
-    for (let dy = -r; dy <= r && !hit; dy++) for (let dx = -r; dx <= r && !hit; dx++) {
-      if (eroded[(y + dy) * w + (x + dx)]) hit = 1;
+    for (let dy = -r; dy <= r && !hit; dy++) {
+      const yy = y + dy;
+      if (yy < 0 || yy >= h) continue;
+      for (let dx = -r; dx <= r && !hit; dx++) {
+        const xx = x + dx;
+        if (xx < 0 || xx >= w) continue;
+        if (eroded[yy * w + xx]) hit = 1;
+      }
     }
     opened[i] = hit;
   }

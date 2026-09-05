@@ -32,6 +32,10 @@ body.adjustment-lock-open #pixeladjustment .unit-container input {
   pointer-events: none !important;
 }
 
+body.adjustment-lock-open #pixeladjustment .panel {
+  overflow-y: hidden;
+}
+
 /* 调整面板分区内容：折叠态由 React 条件渲染、不进 DOM（原生 input 压不住，
    见上），展开态挂 .collapse-content-expanded；其中的可编辑控件常态可见；
    未激活锁定时由 body.adjustment-lock-open 统一隐藏。

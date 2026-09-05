@@ -227,10 +227,13 @@ export const processPixelData = async (selectionBounds: SelectionBounds, layer: 
 
 // 应用处理后的像素数据到图层
 // historyName：写回时登记的 Photoshop 历史记录名称（避免清一色显示“置入像素”）
+// options.skipHistorySuspend：调用方已经用外层 suspendHistory 包住了整段流程时，
+//   传 true 跳过本函数的历史态登记，避免嵌套产生第二条历史记录。
 export const applyProcessedPixels = async (
   processedPixels: Uint8Array,
   result: PixelProcessingResult,
-  historyName: string = '像素处理'
+  historyName: string = '像素处理',
+  options?: { skipHistorySuspend?: boolean }
 ): Promise<void> => {
   const { fullPixelData, selectionIndices, selectionBounds, layer, isBackgroundLayer } = result;
   const doc = app.activeDocument;
@@ -240,7 +243,7 @@ export const applyProcessedPixels = async (
 
   // 用 suspendHistory 把整次 putPixels 合并为【一条】带自定义名称的历史记录，
   // 覆盖 PS 默认的“置入像素”项名，方便在历史面板里区分不同算法。
-  await doc.suspendHistory(async () => {
+  const writePixels = async () => {
     // 应用处理后的像素数据
     const newFullPixelData = new Uint8Array(fullPixelData.length);
     newFullPixelData.set(fullPixelData); // 复制原始数据
@@ -317,7 +320,13 @@ export const applyProcessedPixels = async (
 
     // 释放内存
     newImageData.dispose();
-  }, historyName);
+  };
+
+  if (options?.skipHistorySuspend) {
+    await writePixels();
+  } else {
+    await doc.suspendHistory(writePixels, historyName);
+  }
 };
 
 // 将完整文档尺寸的 RGBA 像素数据原样写回图层（不做选区混合）。

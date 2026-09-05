@@ -1,46 +1,30 @@
-import { action, imaging } from 'photoshop';
+import { action, app, imaging } from 'photoshop';
 import { processLineSmooth } from './lineSmoothProcessor';
 
 /*
   这个文件实现「边缘平滑」功能，分成两种用户能理解的模式：
 
-  1) 仅色块边界（edge）
+  1) 仅色块边界（edge）——本文件实现
      目标：让色块边界更干净、更“磨平”，但不要让用户看出选区边界。
      做法：用 Photoshop 自带的「中间值（median）」滤镜生成参考结果（读取后立即撤销），
            对整个选区写回 median 结果，并在选区边缘做渐隐，避免出现“选区边界感”。
 
-  2) 仅主线条（line）
-     目标：先把选区内杂线/噪点“磨平”，再对线条方向做平滑并写回去（不强求拟合成单根线条）。
-     做法顺序：
-       - 用 PS 的「中间值」把选区磨平（作为“干净底图”）
-       - 在选区内估计线条方向场，沿方向做带保边缘权重的平滑
-       - 把平滑后的结果写回“干净底图”
+  2) 仅主线条（line）——已下沉到 lineSmoothProcessor
+     本文件只做参数转发，不再保留任何线条平滑实现。
+     算法：有符号距离场(SDF)高斯平滑（纯像素算法，不依赖 PS 滤镜）。
 */
 
 /*
-  边缘平滑的参数说明（面板上能调的是其中一部分）：
-  - mode:
-      edge：仅色块边界
-      line：仅主线条
-  - edgeMedianRadius：色块边界的中间值半径（PS median 半径）
-  - backgroundSmoothRadius：主线条模式里用于“先磨平”的中间值半径（PS median 半径）
-  - lineSmoothStrength/lineSmoothRadius/linePreserveDetail：主线条方向平滑的力度、范围、保细节
+  边缘平滑的参数说明（面板当前只暴露这三个参数，不支持旧预设）：
+  - mode：edge=仅色块边界（本文件实现）；line=仅主线条（转发给 lineSmoothProcessor）
+  - edgeMedianRadius：色块边界的中间值半径（PS median 半径）——仅 edge 使用
+  - lineSmoothStrength / lineSmoothRadius：主线条平滑的力度(0~1) / 范围(px)——仅 line 使用
 */
 interface EdgeDetectionParams {
-  alphaThreshold?: number;
-  colorThreshold?: number;
-  smoothRadius?: number;
-  preserveDetail?: boolean;
-  intensity?: number;
   mode?: 'edge' | 'line';
   edgeMedianRadius?: number;
-  backgroundSmoothRadius?: number;
   lineSmoothStrength?: number;
   lineSmoothRadius?: number;
-  linePreserveDetail?: number;
-  lineStrength?: number;
-  lineWidthScale?: number;
-  lineHardness?: number;
 }
 
 const clampInt = (v: number, lo: number, hi: number) => (v < lo ? lo : (v > hi ? hi : v));
@@ -74,6 +58,65 @@ function normalizePixelsToRGBA(
   rgba.fill(0);
   for (let i = 0; i < pixelCount; i++) rgba[i * 4 + 3] = 255;
   return rgba;
+}
+
+/*
+  把图层 bounds 规整成整数像素矩形（文档坐标系）。
+  UXP 的 Layer.bounds 理论上已是像素，但图层被滤镜/变换后可能带小数，这里统一取整。
+*/
+function normalizeLayerBounds(raw: any): { left: number; top: number; right: number; bottom: number } | null {
+  if (!raw) return null;
+  const left = Math.round(Number(raw.left));
+  const top = Math.round(Number(raw.top));
+  const right = Math.round(Number(raw.right));
+  const bottom = Math.round(Number(raw.bottom));
+  if (![left, top, right, bottom].every((v) => Number.isFinite(v))) return null;
+  return { left, top, right, bottom };
+}
+
+function findLayerByIdRecursive(layers: any[], layerId: number): any | null {
+  for (const layer of layers || []) {
+    if (!layer) continue;
+    if (layer.id === layerId) return layer;
+    const children = (layer as any).layers;
+    if (children && children.length > 0) {
+      const hit = findLayerByIdRecursive(children, layerId);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+/*
+  读取某个图层的实时像素 bounds（文档坐标系，单位 px）。
+
+  这是「仅色块边界」正确性的命脉：imaging.getPixels 会把 sourceBounds 裁剪到图层
+  bounds，然后再把裁剩下的内容重采样到 targetSize。因此当图层只有一小块、而我们
+  按整个选区尺寸去请求时，那一小块会被【拉伸】铺满整个区域，写回后整幅画面被撑满
+  文档。正确做法与 pixelDataProcessor.processPixelData 一致：先取图层真实 bounds，
+  只请求「需要区域 ∩ 图层 bounds」，并保证 source 尺寸与 targetSize 严格 1:1。
+*/
+function getLayerPixelBounds(
+  documentID: number,
+  layerID: number
+): { left: number; top: number; right: number; bottom: number } | null {
+  try {
+    const doc = app.activeDocument;
+    if (!doc || doc.id !== documentID) return null;
+
+    // duplicate 之后临时图层就是当前激活图层，优先直接取，省一次遍历
+    const active = doc.activeLayers?.[0];
+    if (active && active.id === layerID && active.bounds) {
+      const b = normalizeLayerBounds(active.bounds);
+      if (b) return b;
+    }
+
+    const found = findLayerByIdRecursive(doc.layers as any, layerID);
+    if (found && found.bounds) return normalizeLayerBounds(found.bounds);
+    return null;
+  } catch (e) {
+    return null;
+  }
 }
 
 async function getMedianFilteredSelectionRegionRGBA(
@@ -116,21 +159,72 @@ async function getMedianFilteredSelectionRegionRGBA(
       }
     ], { synchronousExecution: true });
 
+    // 滤镜可能改变图层 bounds，所以 median 之后再取一次实时 bounds
+    const layerBounds = getLayerPixelBounds(ps.documentID, tempLayerId);
+    if (!layerBounds) return null;
+
+    // 只请求「处理区域 ∩ 图层 bounds」，source 与 target 尺寸严格 1:1（不做任何缩放）
+    const sx0 = Math.max(bounds.x0, layerBounds.left);
+    const sy0 = Math.max(bounds.y0, layerBounds.top);
+    const sx1 = Math.min(bounds.x1 + 1, layerBounds.right);
+    const sy1 = Math.min(bounds.y1 + 1, layerBounds.bottom);
+    const sw = sx1 - sx0;
+    const sh = sy1 - sy0;
+    if (sw <= 0 || sh <= 0) return null;
+
     const pixels = await imaging.getPixels({
       documentID: ps.documentID,
       layerID: tempLayerId,
       sourceBounds: {
-        left: bounds.x0,
-        top: bounds.y0,
-        right: bounds.x1 + 1,
-        bottom: bounds.y1 + 1
+        left: sx0,
+        top: sy0,
+        right: sx1,
+        bottom: sy1
       },
-      targetSize: { width: regionW, height: regionH }
+      targetSize: { width: sw, height: sh },
+      componentSize: 8
     });
 
     const raw = new Uint8Array(await pixels.imageData.getData());
+    // 请求尺寸可能被 UXP 取整/裁剪，一律按返回的实际宽高解析（见项目踩坑记录）
+    const gotW = (pixels.imageData as any).width || 0;
+    const gotH = (pixels.imageData as any).height || 0;
     pixels.imageData.dispose();
-    return normalizePixelsToRGBA(raw, regionW * regionH);
+    if (gotW <= 0 || gotH <= 0) return null;
+
+    // 长度必须是 gotW*gotH 的 3 倍或 4 倍，否则说明解析口径不对。
+    // 这里宁可直接放弃（返回 null = 不做改动），也绝不能把错误数据写回图层。
+    const pixelCount = gotW * gotH;
+    if (raw.length !== pixelCount * 4 && raw.length !== pixelCount * 3) {
+      console.warn('⚠️ 中间值图层像素长度异常，跳过本次处理:', raw.length, gotW, gotH);
+      return null;
+    }
+
+    const srcRGBA = normalizePixelsToRGBA(raw, pixelCount);
+
+    // 按文档坐标把图层像素摆回“区域缓冲”，区域其余部分保持全透明（RGBA=0）。
+    // 透明像素不计入图层 bounds，所以不会把图层外接矩形撑成文档大小。
+    const region = new Uint8Array(regionW * regionH * 4);
+    const scaleX = sw / gotW;
+    const scaleY = sh / gotH;
+    for (let sy = 0; sy < gotH; sy++) {
+      const dy = sy0 + Math.round(sy * scaleY);
+      if (dy < bounds.y0 || dy > bounds.y1) continue;
+      const ry = dy - bounds.y0;
+      for (let sx = 0; sx < gotW; sx++) {
+        const dx = sx0 + Math.round(sx * scaleX);
+        if (dx < bounds.x0 || dx > bounds.x1) continue;
+        const rx = dx - bounds.x0;
+        const si = (sy * gotW + sx) * 4;
+        const di = (ry * regionW + rx) * 4;
+        region[di] = srcRGBA[si];
+        region[di + 1] = srcRGBA[si + 1];
+        region[di + 2] = srcRGBA[si + 2];
+        region[di + 3] = srcRGBA[si + 3];
+      }
+    }
+
+    return region;
   } catch (e) {
     return null;
   } finally {
@@ -258,14 +352,6 @@ function buildSelectionInnerFadeRegion(
 }
 
 /*
-  把“预乘 alpha”的 RGB（rP/gP/bP）转换成亮度（0~255）。
-  这里用的是近似 Rec.601 的整数权重，足够用于边缘检测。
-*/
-function lumaFromPremult(rP: number, gP: number, bP: number): number {
-  return (77 * rP + 150 * gP + 29 * bP + 128) >> 8;
-}
-
-/*
   从 selectionMask（0 表示不在选区内）计算选区的包围盒。
   返回的是选区像素的最小/最大 x/y，用于后续只处理必要区域。
 */
@@ -288,834 +374,6 @@ function computeSelectionBounds(selectionMask: Uint8Array, width: number, height
 }
 
 /*
-  在选区内做一个简单的梯度幅值（边缘强度）估计，并同时统计直方图：
-  - gradMag：每个像素的梯度强度（0~2047）
-  - edgeThreshold：用于判定“可能是边缘”的阈值（从直方图的分位数估计）
-*/
-function buildGradMagHistogram(
-  lumaP: Uint8Array,
-  selectionMask: Uint8Array,
-  width: number,
-  height: number
-) {
-  const pixelCount = width * height;
-  const gradMag = new Uint16Array(pixelCount);
-  const hist = new Uint32Array(2048);
-  let selectedCount = 0;
-
-  const getL = (x: number, y: number) => lumaP[y * width + x] || 0;
-
-  for (let y = 1; y < height - 1; y++) {
-    const rowBase = y * width;
-    for (let x = 1; x < width - 1; x++) {
-      const idx = rowBase + x;
-      if ((selectionMask[idx] || 0) === 0) continue;
-
-      const p00 = getL(x - 1, y - 1);
-      const p10 = getL(x, y - 1);
-      const p20 = getL(x + 1, y - 1);
-      const p01 = getL(x - 1, y);
-      const p21 = getL(x + 1, y);
-      const p02 = getL(x - 1, y + 1);
-      const p12 = getL(x, y + 1);
-      const p22 = getL(x + 1, y + 1);
-
-      const gx = -p00 - 2 * p01 - p02 + p20 + 2 * p21 + p22;
-      const gy = -p00 - 2 * p10 - p20 + p02 + 2 * p12 + p22;
-
-      const g = Math.abs(gx) + Math.abs(gy);
-      const gClamped = g > 2047 ? 2047 : g;
-      gradMag[idx] = gClamped;
-      hist[gClamped]++;
-      selectedCount++;
-    }
-  }
-
-  const getPercentile = (p01: number) => {
-    if (selectedCount <= 0) return 0;
-    const target = Math.max(0, Math.min(selectedCount - 1, Math.round(p01 * (selectedCount - 1))));
-    let acc = 0;
-    for (let i = 0; i < hist.length; i++) {
-      acc += hist[i] || 0;
-      if (acc > target) return i;
-    }
-    return hist.length - 1;
-  };
-
-  const p70 = getPercentile(0.7);
-  const p92 = getPercentile(0.92);
-  const edgeThreshold = Math.max(24, Math.min(700, p70));
-
-  return { gradMag, edgeThreshold, selectedCount };
-}
-
-/*
-  在 bounds 范围内，对亮度做“只在选区权重内参与”的盒式模糊（box blur）。
-  它的作用不是最终效果，而是给“主线条识别/抹除”提供一个更平滑的背景亮度参考（bgLuma）。
-*/
-function maskedBoxBlurLuma(
-  lumaP: Uint8Array,
-  selectionMask: Uint8Array,
-  width: number,
-  height: number,
-  bounds: { x0: number; y0: number; x1: number; y1: number },
-  radius: number
-) {
-  const { x0, y0, x1, y1 } = bounds;
-  const regionW = x1 - x0 + 1;
-  const regionH = y1 - y0 + 1;
-  const regionSize = regionW * regionH;
-
-  const hSumL = new Uint32Array(regionSize);
-  const hSumW = new Uint32Array(regionSize);
-
-  const clampX = (x: number) => (x < x0 ? x0 : (x > x1 ? x1 : x));
-
-  for (let ry = 0; ry < regionH; ry++) {
-    const y = y0 + ry;
-    const docRow = y * width;
-    const base = ry * regionW;
-    let sumL = 0;
-    let sumW = 0;
-
-    for (let dx = -radius; dx <= radius; dx++) {
-      const xx = clampX(x0 + dx);
-      const idx = docRow + xx;
-      const w = selectionMask[idx] || 0;
-      sumW += w;
-      sumL += (lumaP[idx] || 0) * w;
-    }
-
-    hSumL[base] = sumL;
-    hSumW[base] = sumW;
-
-    for (let rx = 1; rx < regionW; rx++) {
-      const outX = clampX(x0 + rx - radius - 1);
-      const inX = clampX(x0 + rx + radius);
-      const outIdx = docRow + outX;
-      const inIdx = docRow + inX;
-      const wOut = selectionMask[outIdx] || 0;
-      const wIn = selectionMask[inIdx] || 0;
-      sumW += wIn - wOut;
-      sumL += (lumaP[inIdx] || 0) * wIn - (lumaP[outIdx] || 0) * wOut;
-      hSumL[base + rx] = sumL;
-      hSumW[base + rx] = sumW;
-    }
-  }
-
-  const out = new Uint8Array(width * height);
-  const clampY = (y: number) => (y < y0 ? y0 : (y > y1 ? y1 : y));
-
-  for (let rx = 0; rx < regionW; rx++) {
-    let sumL = 0;
-    let sumW = 0;
-    for (let dy = -radius; dy <= radius; dy++) {
-      const yy = clampY(y0 + dy);
-      const ri = (yy - y0) * regionW + rx;
-      sumL += hSumL[ri] || 0;
-      sumW += hSumW[ri] || 0;
-    }
-
-    const firstDocIdx = y0 * width + (x0 + rx);
-    if (sumW > 0) out[firstDocIdx] = Math.round(sumL / sumW);
-
-    for (let ry = 1; ry < regionH; ry++) {
-      const outY = clampY(y0 + ry - radius - 1);
-      const inY = clampY(y0 + ry + radius);
-      const outRi = (outY - y0) * regionW + rx;
-      const inRi = (inY - y0) * regionW + rx;
-      sumL += (hSumL[inRi] || 0) - (hSumL[outRi] || 0);
-      sumW += (hSumW[inRi] || 0) - (hSumW[outRi] || 0);
-      const docIdx = (y0 + ry) * width + (x0 + rx);
-      if (sumW > 0) out[docIdx] = Math.round(sumL / sumW);
-    }
-  }
-
-  return out;
-}
-
-/*
-  和 maskedBoxBlurLuma 类似，只不过处理的是 alpha 通道。
-  用途：在普通图层里，抹除/回写时需要一个平滑的背景 alpha 参考（bgAlpha），避免硬边突兀。
-*/
-function maskedBoxBlurAlpha(
-  alpha: Uint8Array,
-  selectionMask: Uint8Array,
-  width: number,
-  height: number,
-  bounds: { x0: number; y0: number; x1: number; y1: number },
-  radius: number
-) {
-  const { x0, y0, x1, y1 } = bounds;
-  const regionW = x1 - x0 + 1;
-  const regionH = y1 - y0 + 1;
-  const regionSize = regionW * regionH;
-
-  const hSumA = new Uint32Array(regionSize);
-  const hSumW = new Uint32Array(regionSize);
-
-  const clampX = (x: number) => (x < x0 ? x0 : (x > x1 ? x1 : x));
-
-  for (let ry = 0; ry < regionH; ry++) {
-    const y = y0 + ry;
-    const docRow = y * width;
-    const base = ry * regionW;
-    let sumA = 0;
-    let sumW = 0;
-    for (let dx = -radius; dx <= radius; dx++) {
-      const xx = clampX(x0 + dx);
-      const idx = docRow + xx;
-      const w = selectionMask[idx] || 0;
-      sumW += w;
-      sumA += (alpha[idx] || 0) * w;
-    }
-    hSumA[base] = sumA;
-    hSumW[base] = sumW;
-    for (let rx = 1; rx < regionW; rx++) {
-      const outX = clampX(x0 + rx - radius - 1);
-      const inX = clampX(x0 + rx + radius);
-      const outIdx = docRow + outX;
-      const inIdx = docRow + inX;
-      const wOut = selectionMask[outIdx] || 0;
-      const wIn = selectionMask[inIdx] || 0;
-      sumW += wIn - wOut;
-      sumA += (alpha[inIdx] || 0) * wIn - (alpha[outIdx] || 0) * wOut;
-      hSumA[base + rx] = sumA;
-      hSumW[base + rx] = sumW;
-    }
-  }
-
-  const out = new Uint8Array(width * height);
-  const clampY = (y: number) => (y < y0 ? y0 : (y > y1 ? y1 : y));
-
-  for (let rx = 0; rx < regionW; rx++) {
-    let sumA = 0;
-    let sumW = 0;
-    for (let dy = -radius; dy <= radius; dy++) {
-      const yy = clampY(y0 + dy);
-      const ri = (yy - y0) * regionW + rx;
-      sumA += hSumA[ri] || 0;
-      sumW += hSumW[ri] || 0;
-    }
-    const firstDocIdx = y0 * width + (x0 + rx);
-    if (sumW > 0) out[firstDocIdx] = Math.round(sumA / sumW);
-
-    for (let ry = 1; ry < regionH; ry++) {
-      const outY = clampY(y0 + ry - radius - 1);
-      const inY = clampY(y0 + ry + radius);
-      const outRi = (outY - y0) * regionW + rx;
-      const inRi = (inY - y0) * regionW + rx;
-      sumA += (hSumA[inRi] || 0) - (hSumA[outRi] || 0);
-      sumW += (hSumW[inRi] || 0) - (hSumW[outRi] || 0);
-      const docIdx = (y0 + ry) * width + (x0 + rx);
-      if (sumW > 0) out[docIdx] = Math.round(sumA / sumW);
-    }
-  }
-
-  return out;
-}
-
-/*
-  用 PCA（主成分分析）的思路，估计一组像素点的“主方向”。
-  输入是像素索引（1D），需要 width 才能还原 (x, y)。
-  输出是单位向量 v=(x,y)，表示线条整体朝向。
-*/
-function buildStrokeEdgeMaskInBounds(
-  lumaP: Uint8Array,
-  bgLuma: Uint8Array,
-  gradMag: Uint16Array,
-  selectionMask: Uint8Array,
-  pixelData: Uint8Array,
-  alpha: Uint8Array,
-  bgAlpha: Uint8Array | null,
-  width: number,
-  height: number,
-  bounds: { x0: number; y0: number; x1: number; y1: number },
-  edgeThreshold: number,
-  isBackgroundLayer: boolean
-) {
-  const regionW = bounds.x1 - bounds.x0 + 1;
-  const regionH = bounds.y1 - bounds.y0 + 1;
-  const regionSize = regionW * regionH;
-
-  const diffHist = new Uint32Array(256);
-  let nSel = 0;
-
-  for (let y = bounds.y0; y <= bounds.y1; y++) {
-    const rowBase = y * width;
-    for (let x = bounds.x0; x <= bounds.x1; x++) {
-      const idx = rowBase + x;
-      if ((selectionMask[idx] || 0) === 0) continue;
-      if (!isBackgroundLayer) {
-        const a = pixelData[idx * 4 + 3] || 0;
-        if (a <= 0) continue;
-      }
-      const dL = Math.abs((lumaP[idx] || 0) - (bgLuma[idx] || 0)) & 255;
-      const dA = (!isBackgroundLayer && bgAlpha) ? (Math.abs((alpha[idx] || 0) - (bgAlpha[idx] || 0)) & 255) : 0;
-      const d = dA > dL ? dA : dL;
-      diffHist[d]++;
-      nSel++;
-    }
-  }
-
-  const getDiffPercentile = (p01: number) => {
-    if (nSel <= 0) return 0;
-    const target = Math.max(0, Math.min(nSel - 1, Math.round(p01 * (nSel - 1))));
-    let acc = 0;
-    for (let i = 0; i < 256; i++) {
-      acc += diffHist[i] || 0;
-      if (acc > target) return i;
-    }
-    return 255;
-  };
-
-  const diffThr = Math.max(8, Math.min(80, getDiffPercentile(0.82)));
-  const gThr = Math.max(8, edgeThreshold * 0.55);
-
-  const edgeMask = new Uint8Array(regionSize);
-  let count = 0;
-
-  for (let y = bounds.y0; y <= bounds.y1; y++) {
-    const rowBase = y * width;
-    const ry = y - bounds.y0;
-    const base = ry * regionW;
-    for (let x = bounds.x0; x <= bounds.x1; x++) {
-      const idx = rowBase + x;
-      if ((selectionMask[idx] || 0) === 0) continue;
-      const dL = Math.abs((lumaP[idx] || 0) - (bgLuma[idx] || 0)) & 255;
-      const dA = (!isBackgroundLayer && bgAlpha) ? (Math.abs((alpha[idx] || 0) - (bgAlpha[idx] || 0)) & 255) : 0;
-      const d = dA > dL ? dA : dL;
-      if (d < diffThr) continue;
-
-      const gL = gradMag[idx] || 0;
-      let gA = 0;
-      if (!isBackgroundLayer && bgAlpha && x > 0 && x + 1 < width && y > 0 && y + 1 < height) {
-        const idxL = idx - 1;
-        const idxR = idx + 1;
-        const idxU = idx - width;
-        const idxD = idx + width;
-        const gxA = (alpha[idxR] || 0) - (alpha[idxL] || 0);
-        const gyA = (alpha[idxD] || 0) - (alpha[idxU] || 0);
-        gA = Math.min(2047, Math.abs(gxA) + Math.abs(gyA));
-      }
-      if ((gL >= gThr ? gL : gA) < gThr) continue;
-
-      const rx = x - bounds.x0;
-      edgeMask[base + rx] = 255;
-      count++;
-    }
-  }
-
-  return { edgeMask, diffThr, gThr, count, regionW, regionH };
-}
-
-function dilateMask8(mask: Uint8Array, regionW: number, regionH: number, iterations: number) {
-  if (iterations <= 0) return mask;
-  let src = mask;
-  let dst = new Uint8Array(src.length);
-
-  for (let it = 0; it < iterations; it++) {
-    dst.fill(0);
-    for (let y = 0; y < regionH; y++) {
-      const rowBase = y * regionW;
-      for (let x = 0; x < regionW; x++) {
-        const i = rowBase + x;
-        if ((src[i] || 0) !== 0) {
-          dst[i] = 255;
-          continue;
-        }
-        let hit = false;
-        const y0 = y > 0 ? y - 1 : y;
-        const y1 = y + 1 < regionH ? y + 1 : y;
-        const x0 = x > 0 ? x - 1 : x;
-        const x1 = x + 1 < regionW ? x + 1 : x;
-        for (let yy = y0; yy <= y1 && !hit; yy++) {
-          const base = yy * regionW;
-          for (let xx = x0; xx <= x1; xx++) {
-            if ((src[base + xx] || 0) !== 0) { hit = true; break; }
-          }
-        }
-        if (hit) dst[i] = 255;
-      }
-    }
-    const tmp = src;
-    src = dst;
-    dst = tmp;
-  }
-  return src;
-}
-
-function buildGaussianLut256(sigma: number) {
-  const s = Math.max(1e-3, sigma);
-  const denom = 2 * s * s;
-  const lut = new Uint16Array(256);
-  for (let i = 0; i < 256; i++) {
-    const w = Math.exp(-(i * i) / denom);
-    lut[i] = clampInt(Math.round(w * 1024), 0, 1024);
-  }
-  return lut;
-}
-
-function quantizeStepFromVector(vx: number, vy: number) {
-  const ax = Math.abs(vx);
-  const ay = Math.abs(vy);
-  if (ax < 1e-6 && ay < 1e-6) return { dx: 1 as -1 | 0 | 1, dy: 0 as -1 | 0 | 1 };
-  const sx = vx >= 0 ? 1 : -1;
-  const sy = vy >= 0 ? 1 : -1;
-  if (ay * 2 <= ax) return { dx: sx as any, dy: 0 as any };
-  if (ax * 2 <= ay) return { dx: 0 as any, dy: sy as any };
-  return { dx: sx as any, dy: sy as any };
-}
-
-function estimateDirectionFromMaskPCA(mask: Uint8Array, regionW: number, regionH: number) {
-  let meanX = 0;
-  let meanY = 0;
-  let cxx = 0;
-  let cxy = 0;
-  let cyy = 0;
-  let n = 0;
-
-  for (let y = 0; y < regionH; y++) {
-    const base = y * regionW;
-    for (let x = 0; x < regionW; x++) {
-      if ((mask[base + x] || 0) === 0) continue;
-      n++;
-      const dx = x - meanX;
-      meanX += dx / n;
-      const dy = y - meanY;
-      meanY += dy / n;
-      cxx += dx * (x - meanX);
-      cyy += dy * (y - meanY);
-      cxy += dx * (y - meanY);
-    }
-  }
-
-  if (n <= 1) return { x: 1, y: 0 };
-
-  const sxx = cxx;
-  const syy = cyy;
-  const sxy = cxy;
-  const tr = sxx + syy;
-  const det = sxx * syy - sxy * sxy;
-  const disc = Math.max(0, tr * tr - 4 * det);
-  const lambda1 = (tr + Math.sqrt(disc)) / 2;
-  let vx = 1;
-  let vy = 0;
-  if (Math.abs(sxy) > 1e-6) {
-    vx = lambda1 - syy;
-    vy = sxy;
-  } else if (sxx >= syy) {
-    vx = 1;
-    vy = 0;
-  } else {
-    vx = 0;
-    vy = 1;
-  }
-  const len = Math.hypot(vx, vy) || 1;
-  return { x: vx / len, y: vy / len };
-}
-
-function applyLineDirectionalSmoothInBounds(
-  outputData: Uint8Array,
-  pixelData: Uint8Array,
-  selectionMask: Uint8Array,
-  selectionInnerFade: Uint8Array,
-  lumaP: Uint8Array,
-  bgLuma: Uint8Array,
-  gradMag: Uint16Array,
-  alpha: Uint8Array,
-  bgAlpha: Uint8Array | null,
-  width: number,
-  height: number,
-  bounds: { x0: number; y0: number; x1: number; y1: number },
-  isBackgroundLayer: boolean,
-  edgeThreshold: number,
-  smoothStrength01: number,
-  smoothRadiusPx: number,
-  preserveDetail01: number
-) {
-  const regionW = bounds.x1 - bounds.x0 + 1;
-  const regionH = bounds.y1 - bounds.y0 + 1;
-  const regionSize = regionW * regionH;
-
-  const { edgeMask } = buildStrokeEdgeMaskInBounds(
-    lumaP,
-    bgLuma,
-    gradMag,
-    selectionMask,
-    pixelData,
-    alpha,
-    bgAlpha,
-    width,
-    height,
-    bounds,
-    edgeThreshold,
-    isBackgroundLayer
-  );
-
-  const dilateIters = clampInt(Math.round(Math.max(2, Math.min(6, smoothRadiusPx * 0.35))), 2, 6);
-  const strokeMask = dilateMask8(edgeMask, regionW, regionH, dilateIters);
-
-  let strokeCount = 0;
-  for (let i = 0; i < regionSize; i++) {
-    if ((strokeMask[i] || 0) !== 0) strokeCount++;
-  }
-  if (strokeCount <= 0) return;
-
-  const guideRadius = clampInt(Math.round(Math.max(4, Math.min(12, smoothRadiusPx * 0.4))), 4, 12);
-  const dirGuide = isBackgroundLayer
-    ? maskedBoxBlurLuma(lumaP, selectionMask, width, height, bounds, guideRadius)
-    : maskedBoxBlurAlpha(alpha, selectionMask, width, height, bounds, guideRadius);
-  const simGuide = isBackgroundLayer ? lumaP : alpha;
-
-  const vGlobal = estimateDirectionFromMaskPCA(strokeMask, regionW, regionH);
-  const globalStep = quantizeStepFromVector(vGlobal.x, vGlobal.y);
-
-  const stepX = new Int8Array(regionSize);
-  const stepY = new Int8Array(regionSize);
-
-  for (let y = 0; y < regionH; y++) {
-    const docY = bounds.y0 + y;
-    const base = y * regionW;
-    for (let x = 0; x < regionW; x++) {
-      const ri = base + x;
-      if ((strokeMask[ri] || 0) === 0) continue;
-      const docX = bounds.x0 + x;
-      const cx = docX;
-      const cy = docY;
-
-      const xm1 = cx > 0 ? cx - 1 : cx;
-      const xp1 = cx + 1 < width ? cx + 1 : cx;
-      const ym1 = cy > 0 ? cy - 1 : cy;
-      const yp1 = cy + 1 < height ? cy + 1 : cy;
-
-      const a00 = dirGuide[ym1 * width + xm1] || 0;
-      const a10 = dirGuide[ym1 * width + cx] || 0;
-      const a20 = dirGuide[ym1 * width + xp1] || 0;
-      const a01 = dirGuide[cy * width + xm1] || 0;
-      const a21 = dirGuide[cy * width + xp1] || 0;
-      const a02 = dirGuide[yp1 * width + xm1] || 0;
-      const a12 = dirGuide[yp1 * width + cx] || 0;
-      const a22 = dirGuide[yp1 * width + xp1] || 0;
-
-      const gx = (a20 + 2 * a21 + a22) - (a00 + 2 * a01 + a02);
-      const gy = (a02 + 2 * a12 + a22) - (a00 + 2 * a10 + a20);
-      const tx = -gy;
-      const ty = gx;
-      const mag = Math.abs(tx) + Math.abs(ty);
-
-      if (mag < 24) {
-        stepX[ri] = globalStep.dx;
-        stepY[ri] = globalStep.dy;
-      } else {
-        const q = quantizeStepFromVector(tx, ty);
-        stepX[ri] = q.dx;
-        stepY[ri] = q.dy;
-      }
-    }
-  }
-
-  const s = clamp01(smoothStrength01);
-  if (s <= 0.001) return;
-
-  const iterations = clampInt(Math.round(2 + s * 4), 2, 6);
-  let sigmaBase = 10 + (1 - clamp01(preserveDetail01)) * 70;
-  if (!isBackgroundLayer) {
-    sigmaBase = Math.max(sigmaBase, 40 + (1 - clamp01(preserveDetail01)) * 100);
-  }
-  const simLut = buildGaussianLut256(sigmaBase);
-
-  const d3 = clampInt(Math.round(Math.max(2, Math.min(24, smoothRadiusPx))), 2, 24);
-  const d2 = clampInt(Math.round(d3 * 0.66), 1, d3);
-  const d1 = clampInt(Math.round(d3 * 0.33), 1, d2);
-  const dist: number[] = [];
-  dist.push(d1);
-  if (d2 !== d1) dist.push(d2);
-  if (d3 !== d2) dist.push(d3);
-
-  const w0 = 512;
-  const w1 = 256;
-  const w2 = 128;
-  const w3 = 64;
-
-  const srcR0 = new Uint8Array(regionSize);
-  const srcG0 = new Uint8Array(regionSize);
-  const srcB0 = new Uint8Array(regionSize);
-  const srcA0 = new Uint8Array(regionSize);
-
-  for (let y = 0; y < regionH; y++) {
-    const docY = bounds.y0 + y;
-    const rowBase = docY * width;
-    const base = y * regionW;
-    for (let x = 0; x < regionW; x++) {
-      const ri = base + x;
-      const docX = bounds.x0 + x;
-      const idx = rowBase + docX;
-      if ((selectionMask[idx] || 0) === 0) continue;
-      const p = idx * 4;
-      const a = isBackgroundLayer ? 255 : (pixelData[p + 3] || 0);
-      srcA0[ri] = a;
-      srcR0[ri] = Math.round(((pixelData[p] || 0) * a + 127) / 255);
-      srcG0[ri] = Math.round(((pixelData[p + 1] || 0) * a + 127) / 255);
-      srcB0[ri] = Math.round(((pixelData[p + 2] || 0) * a + 127) / 255);
-    }
-  }
-
-  let curR = srcR0;
-  let curG = srcG0;
-  let curB = srcB0;
-  let curA = srcA0;
-
-  let tmpR = new Uint8Array(regionSize);
-  let tmpG = new Uint8Array(regionSize);
-  let tmpB = new Uint8Array(regionSize);
-  let tmpA = new Uint8Array(regionSize);
-
-  for (let it = 0; it < iterations; it++) {
-    tmpR.set(curR);
-    tmpG.set(curG);
-    tmpB.set(curB);
-    tmpA.set(curA);
-
-    for (let y = 0; y < regionH; y++) {
-      const base = y * regionW;
-      for (let x = 0; x < regionW; x++) {
-        const ri = base + x;
-        if ((strokeMask[ri] || 0) === 0) continue;
-        const dx = stepX[ri] | 0;
-        const dy = stepY[ri] | 0;
-        if (dx === 0 && dy === 0) continue;
-
-        const g0 = simGuide[(bounds.y0 + y) * width + (bounds.x0 + x)] || 0;
-
-        let sumW = 0;
-        let sumR = 0;
-        let sumG = 0;
-        let sumB = 0;
-        let sumA = 0;
-
-        const centerA = curA[ri] || 0;
-        const wCenterBase = w0 * 1024;
-        const wCenter = (wCenterBase * (isBackgroundLayer ? 255 : centerA)) >> 8;
-        
-        if (wCenter > 0) {
-          sumW += wCenter;
-          sumR += (curR[ri] || 0) * wCenter;
-          sumG += (curG[ri] || 0) * wCenter;
-          sumB += (curB[ri] || 0) * wCenter;
-          sumA += (curA[ri] || 0) * wCenter;
-        }
-
-        for (let k = 0; k < dist.length; k++) {
-          const dd = dist[k] as number;
-          const bw = k === 0 ? w1 : (k === 1 ? w2 : w3);
-          const rx1 = x + dx * dd;
-          const ry1 = y + dy * dd;
-          if (rx1 >= 0 && rx1 < regionW && ry1 >= 0 && ry1 < regionH) {
-            const rj = ry1 * regionW + rx1;
-            if ((strokeMask[rj] || 0) !== 0) {
-              const gj = simGuide[(bounds.y0 + ry1) * width + (bounds.x0 + rx1)] || 0;
-              const sim = simLut[Math.abs(gj - g0) & 255] || 0;
-              const aj = isBackgroundLayer ? 255 : (curA[rj] || 0);
-              const w = (bw * sim * aj) >> 8;
-              if (w > 0) {
-                sumW += w;
-                sumR += (curR[rj] || 0) * w;
-                sumG += (curG[rj] || 0) * w;
-                sumB += (curB[rj] || 0) * w;
-                sumA += (curA[rj] || 0) * w;
-              }
-            }
-          }
-          const rx2 = x - dx * dd;
-          const ry2 = y - dy * dd;
-          if (rx2 >= 0 && rx2 < regionW && ry2 >= 0 && ry2 < regionH) {
-            const rj = ry2 * regionW + rx2;
-            if ((strokeMask[rj] || 0) !== 0) {
-              const gj = simGuide[(bounds.y0 + ry2) * width + (bounds.x0 + rx2)] || 0;
-              const sim = simLut[Math.abs(gj - g0) & 255] || 0;
-              const aj = isBackgroundLayer ? 255 : (curA[rj] || 0);
-              const w = (bw * sim * aj) >> 8;
-              if (w > 0) {
-                sumW += w;
-                sumR += (curR[rj] || 0) * w;
-                sumG += (curG[rj] || 0) * w;
-                sumB += (curB[rj] || 0) * w;
-                sumA += (curA[rj] || 0) * w;
-              }
-            }
-          }
-        }
-
-        if (sumW <= 0) continue;
-        tmpR[ri] = clampInt(Math.round(sumR / sumW), 0, 255);
-        tmpG[ri] = clampInt(Math.round(sumG / sumW), 0, 255);
-        tmpB[ri] = clampInt(Math.round(sumB / sumW), 0, 255);
-        tmpA[ri] = clampInt(Math.round(sumA / sumW), 0, 255);
-      }
-    }
-
-    const swapR = curR; curR = tmpR; tmpR = swapR;
-    const swapG = curG; curG = tmpG; tmpG = swapG;
-    const swapB = curB; curB = tmpB; tmpB = swapB;
-    const swapA = curA; curA = tmpA; tmpA = swapA;
-  }
-
-  const mixQ = clampInt(Math.round(s * 256), 0, 256);
-
-  const outPR0 = new Uint8Array(srcR0);
-  const outPG0 = new Uint8Array(srcG0);
-  const outPB0 = new Uint8Array(srcB0);
-  const outA0 = new Uint8Array(srcA0);
-
-  for (let y = 0; y < regionH; y++) {
-    const docY = bounds.y0 + y;
-    const rowBase = docY * width;
-    const base = y * regionW;
-    for (let x = 0; x < regionW; x++) {
-      const ri = base + x;
-      if ((strokeMask[ri] || 0) === 0) continue;
-      const docX = bounds.x0 + x;
-      const idx = rowBase + docX;
-      if ((selectionMask[idx] || 0) === 0) continue;
-
-      const fade01 = (selectionInnerFade[ri] || 0) / 255;
-      if (fade01 <= 0.001) continue;
-
-      const or = srcR0[ri] || 0;
-      const og = srcG0[ri] || 0;
-      const ob = srcB0[ri] || 0;
-      const oa = srcA0[ri] || 0;
-
-      const sr = curR[ri] || 0;
-      const sg = curG[ri] || 0;
-      const sb = curB[ri] || 0;
-      const sa = curA[ri] || 0;
-
-      const pr = ((or * (256 - mixQ) + sr * mixQ + 128) >> 8) & 255;
-      const pg = ((og * (256 - mixQ) + sg * mixQ + 128) >> 8) & 255;
-      const pb = ((ob * (256 - mixQ) + sb * mixQ + 128) >> 8) & 255;
-      const pa = ((oa * (256 - mixQ) + sa * mixQ + 128) >> 8) & 255;
-
-      const lpr = pr;
-      const lpg = pg;
-      const lpb = pb;
-      const limitedSmoothA = pa;
-      
-      const srcP = idx * 4;
-      const srcA = isBackgroundLayer ? 255 : (pixelData[srcP + 3] || 0);
-      const srcR_P = clampInt(Math.round((pixelData[srcP] || 0) * srcA / 255), 0, 255);
-      const srcG_P = clampInt(Math.round((pixelData[srcP + 1] || 0) * srcA / 255), 0, 255);
-      const srcB_P = clampInt(Math.round((pixelData[srcP + 2] || 0) * srcA / 255), 0, 255);
-      
-      const w = fade01;
-      const outPR = clampInt(Math.round(lpr * w + srcR_P * (1 - w)), 0, 255);
-      const outPG = clampInt(Math.round(lpg * w + srcG_P * (1 - w)), 0, 255);
-      const outPB = clampInt(Math.round(lpb * w + srcB_P * (1 - w)), 0, 255);
-      const outA = clampInt(Math.round(limitedSmoothA * w + srcA * (1 - w)), 0, 255);
-
-      outPR0[ri] = outPR;
-      outPG0[ri] = outPG;
-      outPB0[ri] = outPB;
-      outA0[ri] = outA;
-    }
-  }
-
-  if (!isBackgroundLayer) {
-    const aaRadius = clampInt(Math.round(Math.max(1, Math.min(3, smoothRadiusPx * 0.25))), 1, 3);
-    const aaMixQ = clampInt(Math.round((0.2 + s * 0.6) * 256), 0, 256);
-    if (aaMixQ > 0 && aaRadius > 0) {
-      const aaPR = tmpR;
-      const aaPG = tmpG;
-      const aaPB = tmpB;
-      const aaA = tmpA;
-      aaPR.fill(0);
-      aaPG.fill(0);
-      aaPB.fill(0);
-      aaA.fill(0);
-
-      for (let y = 0; y < regionH; y++) {
-        const base = y * regionW;
-        for (let x = 0; x < regionW; x++) {
-          const ri = base + x;
-          if ((strokeMask[ri] || 0) === 0) continue;
-          if ((selectionInnerFade[ri] || 0) === 0) continue;
-          const a0 = outA0[ri] || 0;
-          if (a0 <= 0 || a0 >= 250) continue;
-
-          let sumA = 0;
-          let sumR = 0;
-          let sumG = 0;
-          let sumB = 0;
-          let cnt = 0;
-
-          const y0 = y - aaRadius < 0 ? 0 : y - aaRadius;
-          const y1 = y + aaRadius >= regionH ? regionH - 1 : y + aaRadius;
-          const x0 = x - aaRadius < 0 ? 0 : x - aaRadius;
-          const x1 = x + aaRadius >= regionW ? regionW - 1 : x + aaRadius;
-
-          for (let yy = y0; yy <= y1; yy++) {
-            const b2 = yy * regionW;
-            for (let xx = x0; xx <= x1; xx++) {
-              const rj = b2 + xx;
-              if ((selectionInnerFade[rj] || 0) === 0) continue;
-              sumA += outA0[rj] || 0;
-              sumR += outPR0[rj] || 0;
-              sumG += outPG0[rj] || 0;
-              sumB += outPB0[rj] || 0;
-              cnt++;
-            }
-          }
-
-          if (cnt <= 0) continue;
-          aaA[ri] = clampInt(Math.round(sumA / cnt), 0, 255);
-          aaPR[ri] = clampInt(Math.round(sumR / cnt), 0, 255);
-          aaPG[ri] = clampInt(Math.round(sumG / cnt), 0, 255);
-          aaPB[ri] = clampInt(Math.round(sumB / cnt), 0, 255);
-        }
-      }
-
-      const invQ = 256 - aaMixQ;
-      for (let i = 0; i < regionSize; i++) {
-        if ((aaA[i] || 0) === 0) continue;
-        outA0[i] = ((outA0[i] * invQ + aaA[i] * aaMixQ + 128) >> 8) & 255;
-        outPR0[i] = ((outPR0[i] * invQ + aaPR[i] * aaMixQ + 128) >> 8) & 255;
-        outPG0[i] = ((outPG0[i] * invQ + aaPG[i] * aaMixQ + 128) >> 8) & 255;
-        outPB0[i] = ((outPB0[i] * invQ + aaPB[i] * aaMixQ + 128) >> 8) & 255;
-      }
-    }
-  }
-
-  for (let y = 0; y < regionH; y++) {
-    const docY = bounds.y0 + y;
-    const rowBase = docY * width;
-    const base = y * regionW;
-    for (let x = 0; x < regionW; x++) {
-      const ri = base + x;
-      if ((strokeMask[ri] || 0) === 0) continue;
-      const docX = bounds.x0 + x;
-      const idx = rowBase + docX;
-      if ((selectionMask[idx] || 0) === 0) continue;
-
-      const a = isBackgroundLayer ? 255 : (outA0[ri] || 0);
-      const p = idx * 4;
-      if (a <= 0) {
-        outputData[p] = 0;
-        outputData[p + 1] = 0;
-        outputData[p + 2] = 0;
-        outputData[p + 3] = isBackgroundLayer ? 255 : 0;
-        continue;
-      }
-
-      outputData[p] = clampInt(Math.round(((outPR0[ri] || 0) * 255) / a), 0, 255);
-      outputData[p + 1] = clampInt(Math.round(((outPG0[ri] || 0) * 255) / a), 0, 255);
-      outputData[p + 2] = clampInt(Math.round(((outPB0[ri] || 0) * 255) / a), 0, 255);
-      outputData[p + 3] = isBackgroundLayer ? 255 : a;
-    }
-  }
-}
-
-/*
   主入口：对整张“文档尺寸”的像素数据做处理，返回同尺寸 RGBA ArrayBuffer。
 
   注意：
@@ -1128,8 +386,7 @@ export async function processSmartEdgeSmooth(
   dimensions: { width: number; height: number },
   _params: EdgeDetectionParams,
   isBackgroundLayer: boolean = false,
-  ps?: PhotoshopContext,
-  basePixelDataAfterMedianBuffer?: ArrayBuffer
+  ps?: PhotoshopContext
 ): Promise<ArrayBuffer> {
   // 这个函数返回“完整文档尺寸”的像素数组（RGBA，背景图层也带 A=255），由调用方统一写回图层。
   const params = (_params || {}) as EdgeDetectionParams;
@@ -1149,30 +406,30 @@ export async function processSmartEdgeSmooth(
   const outputData = new Uint8Array(pixelData.length);
   outputData.set(pixelData);
 
-  const lumaP = new Uint8Array(pixelCount);
-  const alpha = new Uint8Array(pixelCount);
-  for (let i = 0; i < pixelCount; i++) {
-    const p = i * 4;
-    const a = isBackgroundLayer ? 255 : (pixelData[p + 3] || 0);
-    alpha[i] = a;
-    const rP = (pixelData[p] * a + 127) / 255;
-    const gP = (pixelData[p + 1] * a + 127) / 255;
-    const bP = (pixelData[p + 2] * a + 127) / 255;
-    lumaP[i] = lumaFromPremult(rP, gP, bP);
-  }
-
   const sel = computeSelectionBounds(selectionMask, width, height);
   if (sel.maxX < 0) return outputData.buffer;
 
   const mode = params.mode || 'edge';
-  const edgeMedianRadius = clampInt(Math.round(params.edgeMedianRadius ?? 16), 10, 30);
-  const eraseMedianRadius = clampInt(Math.round(params.backgroundSmoothRadius ?? 16), 10, 30);
-  // 「仅主线条」参数（精简为两个）：平滑力度（默认 100%）、平滑范围（默认 8px）
-  const lineSmoothStrength = clamp01(params.lineSmoothStrength ?? params.lineStrength ?? 1);
-  const lineSmoothRadius = clampInt(Math.round(params.lineSmoothRadius ?? 8), 3, 12);
-  const linePreserveDetail = clamp01(params.linePreserveDetail ?? params.lineHardness ?? 0);
 
-  const regionPad = Math.max(edgeMedianRadius + 2, eraseMedianRadius + 2);
+  // 「仅主线条」：整体转发给 lineSmoothProcessor，本文件不再参与。
+  // 面板只暴露两个参数：平滑力度（默认 100%）、平滑范围（默认 8px）。
+  if (mode === 'line') {
+    const lineSmoothStrength = clamp01(params.lineSmoothStrength ?? 1);
+    const lineSmoothRadius = clampInt(Math.round(params.lineSmoothRadius ?? 8), 3, 12);
+    return processLineSmooth(
+      pixelDataBuffer,
+      selectionMaskBuffer,
+      { width, height },
+      {
+        strength: lineSmoothStrength,
+        radius: lineSmoothRadius
+      }
+    );
+  }
+
+  // 以下是「仅色块边界」：处理区域与渐隐宽度只由中间值半径决定
+  const edgeMedianRadius = clampInt(Math.round(params.edgeMedianRadius ?? 16), 10, 30);
+  const regionPad = edgeMedianRadius + 2;
   const bounds = {
     x0: clampInt(sel.minX - regionPad, 0, width - 1),
     y0: clampInt(sel.minY - regionPad, 0, height - 1),
@@ -1181,7 +438,7 @@ export async function processSmartEdgeSmooth(
   };
   const regionW = bounds.x1 - bounds.x0 + 1;
   const regionH = bounds.y1 - bounds.y0 + 1;
-  const selectionInnerFadeWidth = clampInt(Math.round(Math.max(edgeMedianRadius, eraseMedianRadius) * 0.5), 2, 12);
+  const selectionInnerFadeWidth = clampInt(Math.round(edgeMedianRadius * 0.5), 2, 12);
   const selectionInnerFade = buildSelectionInnerFadeRegion(selectionMask, width, height, bounds, selectionInnerFadeWidth);
 
   const writeMedianIntoSelection = (regionRGBA: Uint8Array, baseRGBA: Uint8Array) => {
@@ -1215,58 +472,18 @@ export async function processSmartEdgeSmooth(
     }
   };
 
-  if (mode === 'edge') {
-    const edgeRegion = ps ? await getMedianFilteredSelectionRegionRGBA(ps, bounds, edgeMedianRadius) : null;
-    if (edgeRegion) {
-      writeMedianIntoSelection(edgeRegion, pixelData);
-    }
-    return outputData.buffer;
-  }
-
-  const { gradMag, edgeThreshold, selectedCount } = buildGradMagHistogram(lumaP, selectionMask, width, height);
-  if (selectedCount <= 0) return outputData.buffer;
-
-  const bgLuma = eraseMedianRadius > 0
-    ? maskedBoxBlurLuma(lumaP, selectionMask, width, height, bounds, Math.max(0, Math.min(40, eraseMedianRadius)))
-    : lumaP;
-
-  const bgAlpha = (!isBackgroundLayer)
-    ? maskedBoxBlurAlpha(alpha, selectionMask, width, height, bounds, Math.max(4, Math.round(Math.max(0, Math.min(40, eraseMedianRadius)) * 0.7)))
-    : null;
-
-  if (mode === 'line') {
-    // 「仅主线条」模式：委托给 lineSmoothProcessor（纯像素算法，结构张量方向场 +
-    // 沿切线各向异性平滑 + 局部主体收敛）。参数只暴露两个：
-    //   - strength：平滑力度（0~1，默认 1=100%）
-    //   - radius：平滑范围 px（默认 8）
-    return processLineSmooth(
-      pixelDataBuffer,
-      selectionMaskBuffer,
-      { width, height },
-      {
-        strength: lineSmoothStrength,
-        radius: lineSmoothRadius
-      }
-    );
+  // 拿到 PS 原生「中间值」结果后，按选区（含边缘渐隐）混合回输出缓冲
+  const edgeRegion = ps ? await getMedianFilteredSelectionRegionRGBA(ps, bounds, edgeMedianRadius) : null;
+  if (edgeRegion) {
+    writeMedianIntoSelection(edgeRegion, pixelData);
   }
 
   return outputData.buffer;
 }
 
 export const defaultSmartEdgeSmoothParams: EdgeDetectionParams = {
-  alphaThreshold: 10,
-  colorThreshold: 10,
-  smoothRadius: 20,
-  preserveDetail: true,
-  intensity: 10,
   mode: 'edge',
   edgeMedianRadius: 16,
-  backgroundSmoothRadius: 16,
   lineSmoothStrength: 1,       // 平滑力度默认 100%
-  lineSmoothRadius: 8,         // 平滑范围默认 8px
-  linePreserveDetail: 0,       // 保护细节默认 0
-  lineStrength: 1,
-  lineWidthScale: 1,
-  lineHardness: 0
+  lineSmoothRadius: 8          // 平滑范围默认 8px
 };
-

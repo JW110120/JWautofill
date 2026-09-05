@@ -52,16 +52,13 @@ html, body {
   box-sizing: border-box;
   overflow-y: auto;
   overflow-x: hidden;
-  /* 预留滚动条槽位（stable）：折叠分区后总高度可能跌破滚动阈值，
-     竖向滚动条出现/消失会让内容宽度抖动 ±scrollbar 宽 → 折叠容器与内部
-     calc(100% - 20px) 元素随之变宽/变窄。stable 让槽位常驻，
-     滚动条显隐不再改变内容宽度，折叠时宽度稳定。 */
   scrollbar-gutter: stable;
 }
 
 
 /* 面板外壳（.panel）的直接子项 + 列式区块（.panel-section）的直接子项一律不压缩。 */
 .panel > *,
+.border-panel-section > *,
 .panel-section > * {
   flex-shrink: 0;
 }
@@ -132,13 +129,10 @@ sp-radio[disabled] {
   cursor: not-allowed;
 }
 
-/* 通用标签（单元素单类名；不同字数 → 固定宽度档）
-   同时服务于：单行/多行滑块、下拉菜单、checkbox、switch、radio 的标签。
+/* 通用标签
    W(n) = 20 + (n-2)×13.3 → 2/3/4/5/6 字 = 20/33/47/60/73px
-   - .label-2..6：标签（按字数定宽），右侧 10px 间距；可拖拽滑块标签另带 ew-resize 光标
-   - .label-drag：可拖拽标签（内容宽度，如渐变「角度：」）
-   全插件共用，TSX 每个标签只挂一个类（按字数选 label-N，静态标签与可拖拽标签共用同一套）。
-   拖拽光标由 body.label-drag-cursor 统一锁定，故不再需要 .dragging/.not-dragging 之类的状态类。
+   - .label-2..6：标签（按字数定宽）
+   - .label-drag：可拖拽标签，另带 ew-resize 光标
    -------------------------------------------------------------------------- */
 .label-2,
 .label-3,
@@ -154,7 +148,7 @@ sp-radio[disabled] {
   margin-right: 10px;
 }
 
-/* 宽度档：2 字 → 20px，其余按字数线性插值 */
+/* 宽度档 */
 .label-2 { width: 20px; }
 .label-3 { width: 33px; }
 .label-4 { width: 47px; }
@@ -335,6 +329,10 @@ sp-radio[disabled] {
   width: 100%;
   margin: 0 0 15px 0;
   box-sizing: border-box;
+}
+
+.slider-block > .row-between > label {
+  cursor: ew-resize;
 }
 
 /* 通用滑块条独占行容器 */
