@@ -16,7 +16,7 @@ import { helpTexts } from '../constants/helpTexts';
 // 由本地守护进程在全局捕获按键后直接切换笔刷，不录制动作。
 // 注意：组合键的「录制」由 native 守护进程用 Windows 全局键盘钩子完成，
 // UXP 面板只负责选笔刷 + 发指令 + 等结果；面板本身无法稳定捕获键盘事件。
-// 注：笔刷选择行的布局样式见 adjustment.css 的 .hotkey-brush-row（不再用内联 rowStyle）。
+// 注：笔刷选择行用 common.css 的 .row-between（不再用内联 rowStyle / 面板私有类）。
 
 // 通知自动消失时间：提示是「瞬时反馈」而非常驻说明，5 秒足够读完，
 // 也避免下一次操作后还挂着上一条早已过期的提示（例如刷新完笔刷还显示"请选择"）。
@@ -502,16 +502,16 @@ export default function BrushHotkeySection() {
   return (
     <>
       {/* 守护进程状态条：与「蒙版同步」的引擎状态条同一套视觉，左侧状态点+文字，右侧操作按钮 */}
-      <div className="mask-sync-status-bar">
-        <span className={daemonConnected ? 'mask-sync-status-dot-ok' : 'mask-sync-status-dot-warn'} />
-        <span className="mask-sync-status-ready">
+      <div className="notify-bar">
+        <span className={daemonConnected ? 'indicator indicator-md indicator-ok' : 'indicator indicator-md indicator-warn'} />
+        <span className="notify-text">
           {daemonConnected ? '快捷键服务已就绪' : (busy ? '快捷键服务处理中…' : '快捷键服务未启动')}
         </span>
         <span className="mask-sync-status-spacer" />
         <div
           role="button"
           tabIndex={0}
-          className={busy ? 'action-button-disabled' : 'action-button-auto'}
+          className={busy ? 'action-button-auto action-button-disabled' : 'action-button-auto'}
           title={daemonConnected
             ? helpTexts.hotkey.daemonStop
             : helpTexts.hotkey.daemonStart}
@@ -524,7 +524,7 @@ export default function BrushHotkeySection() {
         </div>
       </div>
 
-      <div className="hotkey-brush-row">
+      <div className="row-between">
         {usePicker ? (
           <BrushSelect
             value={selectedKey}
@@ -536,10 +536,9 @@ export default function BrushHotkeySection() {
             }}
             placeholder="选择笔刷"
             title={helpTexts.hotkey.brushSelect}
-            className="hotkey-brush-field"
           />
         ) : (
-          <sp-textfield size="s" className="hotkey-brush-field" placeholder="输入笔刷预设名（需与 PS 完全一致）"
+          <sp-textfield size="s" className="field-grow" placeholder="输入笔刷预设名（需与 PS 完全一致）"
             value={selectedBrush} onInput={(e: any) => setSelectedBrush(e.target.value)} />
         )}
         {/* 三个图标共用一个固定宽度大容器：下拉自由伸缩，图标组恒为 3×28px，
@@ -561,7 +560,7 @@ export default function BrushHotkeySection() {
             <div
               role="button"
               tabIndex={0}
-              className={`hotkey-circle-button${recording ? '' : ' disabled'}`}
+              className={recording ? 'record-button' : 'record-button-disabled'}
               title={recording ? helpTexts.hotkey.recordCancelActive : helpTexts.hotkey.recordCancelIdle}
               onClick={(e) => { e.stopPropagation(); if (recording) cancelRecord(); }}
             >
@@ -572,7 +571,7 @@ export default function BrushHotkeySection() {
             <div
               role="button"
               tabIndex={0}
-              className={`hotkey-circle-button${recording ? ' recording' : ''}${!selectedBrush ? ' disabled' : ''}`}
+              className={!selectedBrush ? 'record-button-disabled' : recording ? 'record-button-recording' : 'record-button'}
               title={helpTexts.hotkey.recordHint}
               onClick={(e) => {
                 e.stopPropagation();
@@ -590,9 +589,9 @@ export default function BrushHotkeySection() {
         </div>
       )}
 
-      {/* 所有录好的快捷键都装在一个边框可见的大容器里（参考蒙版同步卡片外部的大容器）；
-          删除键移到容器外的右下角，见下方 .hotkey-entry-actions */}
-      <div className="hotkey-entry-box">
+      {/* 所有录好的快捷键都装在一个边框可见的大容器里（common.css 的 .border-panel-section）；
+          删除键移到容器外的右下角，见下方 .row-between */}
+      <div className="border-panel-section">
           {displayEntries.length === 0 && <div style={{ fontSize: 12, opacity: 0.6 }}>尚未绑定任何快捷键</div>}
           {displayEntries.map(e => {
             const isPinned = e.action === 'toggleMain';
@@ -618,7 +617,7 @@ export default function BrushHotkeySection() {
             >
               {/* 快捷键列定宽：分隔线紧贴它，因此跨条目始终对齐 */}
               <span className="hotkey-entry-combo">{e.combo || '未绑定'}</span>
-              <span className="hotkey-entry-sep">丨</span>
+              <span className="divider-vertical">丨</span>
               <span className="hotkey-entry-name">
                 {isPinned ? '选区填充开关' : e.brush}
               </span>
@@ -629,7 +628,7 @@ export default function BrushHotkeySection() {
 
       {/* 选中条数提示 + 重录 + 删除：列表大容器外右下角，说明文字上方。
           左侧「已选中 N 条」左对齐；右侧重录（仅选中单条时）与删除图标按钮相邻 */}
-      <div className="hotkey-entry-actions">
+      <div className="row-between">
         <span className="hotkey-selected-count">已选中 {selectedIds.length} 条</span>
         <div className="row-end">
           <div
@@ -656,10 +655,11 @@ export default function BrushHotkeySection() {
         </div>
       </div>
 
-      {/* 底部文字通知：已收口到 common.css 的 .notify / .notify-ok / .notify-warn（ok 绿 / warn 橙）
-          正文走通用 .notify-text（13px，与激活提示一致）。 */}
+      {/* 底部文字通知：与面板顶部「激活提示」同款横幅（common.css 的 .notify-banner），
+          容器 + 状态点 + 12px 正文一致；ok=绿点（服务就绪时）、warn=橙点（未启动/处理中）。 */}
       {message && (
-        <div className={daemonConnected ? 'notify-ok' : 'notify-warn'}>
+        <div className={daemonConnected ? 'notify-banner notify-banner-ok' : 'notify-banner notify-banner-warn'}>
+          <span className={daemonConnected ? 'indicator indicator-md indicator-ok' : 'indicator indicator-md indicator-warn'} />
           <span className="notify-text">{message}</span>
         </div>
       )}

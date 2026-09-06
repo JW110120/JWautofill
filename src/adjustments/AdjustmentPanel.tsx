@@ -710,8 +710,12 @@ useEffect(() => {
     onRepairKeyboard: () => {
       // 键盘被全局钩子拖死时的自救入口：此时用户打不出字，只能靠鼠标点菜单。
       // 具体实现注册在 BrushHotkeySection（它持有状态提示），这里只做转发。
+      // ⚠️ 必须用弹窗给明确反馈：此前只 console.log，而修复结果只显示在「笔刷热键」分区
+      //    （该分区折叠时不可见），导致用户以为「点了没反应、也没修好」。
       import('../hotkey/HotkeyBridge').then((m) => {
-        m.requestRepairKeyboard().then((msg) => { console.log('[键盘一键修复] ' + msg); });
+        m.requestRepairKeyboard()
+          .then((msg) => { try { dialogs.alert(msg); } catch { console.log('[键盘一键修复] ' + msg); } })
+          .catch((e) => { try { dialogs.alert('键盘一键修复失败：' + (e && (e as any).message ? (e as any).message : String(e))); } catch { console.error('键盘一键修复失败:', e); } });
       }).catch((e) => console.error('键盘一键修复失败:', e));
     },
     onUninstallHotkeyDaemon: () => {
@@ -896,9 +900,23 @@ useEffect(() => {
 // 蒙版同步任务操作
 const handleMaskSyncAdd = async () => {
   try {
+    // 未打开文档时给出明确反馈（issue：蒙版同步 + 号按钮静默无反应）
+    if (!maskSyncEngine.getDocName()) {
+      try {
+        await dialogs.alert('请先打开一个 Photoshop 文档，再新建蒙版同步任务。');
+      } catch {
+        console.warn('⚠️ 未打开文档：请先打开一个 Photoshop 文档，再新建蒙版同步任务。');
+      }
+      return;
+    }
     await maskSyncEngine.addTask();
   } catch (e) {
-    console.warn('⚠️ 新建同步任务失败:', e);
+    const msg = '新建同步任务失败：' + (e && (e as any).message ? (e as any).message : String(e));
+    try {
+      await dialogs.alert(msg);
+    } catch {
+      console.warn('⚠️ ' + msg);
+    }
   }
 };
 
@@ -2692,16 +2710,16 @@ const renderDetailAdjustContent = () => (
       <>
         <div className="row-between">
           <div className={sliderLabelClass('radius', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'radius', radius)} title={helpTexts.adjustment.radius}>半径</div>
-          <div className="unit-container">
-            <RangeSlider min={5} max={20} step={1} value={radius} onChange={handleRadiusChange} className="slider-track" />
+          <RangeSlider min={5} max={20} step={1} value={radius} onChange={handleRadiusChange} className="slider-track" />
+          <div className="row-start">
             <div className="num-input-row"><input type="number" min="5" max="20" step="1" value={radius} onChange={handleRadiusNumberChange} /></div>
             <div className="num-unit">px</div>
           </div>
         </div>
         <div className="row-between">
           <div className={sliderLabelClass('sigma', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'sigma', sigma)} title={helpTexts.adjustment.sigma}>强度</div>
-          <div className="unit-container">
-            <RangeSlider min={1} max={5} step={0.5} value={sigma} onChange={handleSigmaChange} className="slider-track" />
+          <RangeSlider min={1} max={5} step={0.5} value={sigma} onChange={handleSigmaChange} className="slider-track" />
+          <div className="row-start">
             <div className="num-input-row"><input type="number" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaNumberChange} /></div>
             <div className="num-unit">级</div>
           </div>
@@ -2715,8 +2733,8 @@ const renderDetailAdjustContent = () => (
 
       <div className="row-between">
         <div className={sliderLabelClass('gradientRelaxStrength', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'gradientRelaxStrength', gradientRelaxStrength)} title={helpTexts.adjustment.gradientRelax}>程度</div>
-        <div className="unit-container">
-          <RangeSlider min={-10} max={10} step={1} value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthChange} className="slider-track" />
+        <RangeSlider min={-10} max={10} step={1} value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthChange} className="slider-track" />
+        <div className="row-start">
           <div className="num-input-row"><input type="number" min="-10" max="10" step="1" value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthNumberChange} /></div>
           <div className="num-unit">级</div>
         </div>
@@ -2728,8 +2746,8 @@ const renderDetailAdjustContent = () => (
 
       <div className="row-between">
         <div className={sliderLabelClass('specialSharpenStrength', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialSharpenStrength', specialSharpenStrength)} title={helpTexts.adjustment.specialSharpenStrength}>强度</div>
-        <div className="unit-container">
-          <RangeSlider min={1} max={10} step={0.5} value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthChange} className="slider-track" />
+        <RangeSlider min={1} max={10} step={0.5} value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthChange} className="slider-track" />
+        <div className="row-start">
           <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthNumberChange} /></div>
           <div className="num-unit">级</div>
         </div>
@@ -2741,16 +2759,16 @@ const renderDetailAdjustContent = () => (
 
       <div className="row-between">
         <div className={sliderLabelClass('highFreqIntensity', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'highFreqIntensity', highFreqIntensity)} title={helpTexts.adjustment.highFreqIntensity}>强度</div>
-        <div className="unit-container">
-          <RangeSlider min={1} max={10} step={0.5} value={highFreqIntensity} onChange={handleHighFreqIntensityChange} className="slider-track" />
+        <RangeSlider min={1} max={10} step={0.5} value={highFreqIntensity} onChange={handleHighFreqIntensityChange} className="slider-track" />
+        <div className="row-start">
           <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={highFreqIntensity} onChange={handleHighFreqIntensityNumberChange} /></div>
           <div className="num-unit">级</div>
         </div>
       </div>
       <div className="row-between">
         <div className={sliderLabelClass('highFreqRange', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'highFreqRange', highFreqRange)} title={helpTexts.adjustment.highFreqRange}>范围</div>
-        <div className="unit-container">
-          <RangeSlider min={1} max={10} step={0.5} value={highFreqRange} onChange={handleHighFreqRangeChange} className="slider-track" />
+        <RangeSlider min={1} max={10} step={0.5} value={highFreqRange} onChange={handleHighFreqRangeChange} className="slider-track" />
+        <div className="row-start">
           <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={highFreqRange} onChange={handleHighFreqRangeNumberChange} /></div>
           <div className="num-unit">级</div>
         </div>
@@ -2765,28 +2783,25 @@ const renderEdgeProcessingContent = () => (
       <div className="row-between">
         {/* 下拉行：标签不可拖拽，光标保持 default（与可拖拽滑块标签区分） */}
         <div className="label-4" title={helpTexts.adjustment.edgeSmoothMode}>平滑模式</div>
-        <div className="unit-container">
-          <Select
-            value={edgeSmoothMode}
-            onChange={handleEdgeSmoothModeChange}
-            className="adjustment-smooth-mode-select"
-            title={helpTexts.adjustment.edgeSmoothModeSelect}
-            showCheck
-            placeholder=""
-            options={[
-              { value: 'edge', label: '仅色块边界' },
-              { value: 'line', label: '仅主线条' },
-            ]}
-          />
-        </div>
+        <Select
+          value={edgeSmoothMode}
+          onChange={handleEdgeSmoothModeChange}
+          title={helpTexts.adjustment.edgeSmoothModeSelect}
+          showCheck
+          placeholder=""
+          options={[
+            { value: 'edge', label: '仅色块边界' },
+            { value: 'line', label: '仅主线条' },
+          ]}
+        />
       </div>
 
       {edgeSmoothMode === 'edge' && (
         <>
           <div className="row-between">
             <div className={sliderLabelClass('edgeMedianRadius', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeMedianRadius', edgeMedianRadius)} title={helpTexts.adjustment.edgeMedianRadius}>中间值半径</div>
-            <div className="unit-container">
-              <RangeSlider min={10} max={30} step={1} value={edgeMedianRadius} onChange={handleEdgeMedianRadiusChange} className="slider-track" />
+            <RangeSlider min={10} max={30} step={1} value={edgeMedianRadius} onChange={handleEdgeMedianRadiusChange} className="slider-track" />
+            <div className="row-start">
               <div className="num-input-row"><input type="number" min="10" max="30" step="1" value={edgeMedianRadius} onChange={handleEdgeMedianRadiusNumberChange} /></div>
               <div className="num-unit">px</div>
             </div>
@@ -2798,8 +2813,8 @@ const renderEdgeProcessingContent = () => (
         <>
           <div className="row-between">
             <div className={sliderLabelClass('edgeLineStrength', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeLineStrength', edgeLineStrength)} title={helpTexts.adjustment.edgeLineStrength}>平滑力度</div>
-            <div className="unit-container">
-              <RangeSlider min={0} max={100} step={1} value={edgeLineStrength} onChange={handleEdgeLineStrengthChange} className="slider-track" />
+            <RangeSlider min={0} max={100} step={1} value={edgeLineStrength} onChange={handleEdgeLineStrengthChange} className="slider-track" />
+            <div className="row-start">
               <div className="num-input-row"><input type="number" min="0" max="100" step="1" value={edgeLineStrength} onChange={handleEdgeLineStrengthNumberChange} /></div>
               <div className="num-unit">%</div>
             </div>
@@ -2807,8 +2822,8 @@ const renderEdgeProcessingContent = () => (
 
           <div className="row-between">
             <div className={sliderLabelClass('edgeLineSmoothRadius', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeLineSmoothRadius', edgeLineSmoothRadius)} title={helpTexts.adjustment.edgeLineRange}>平滑范围</div>
-            <div className="unit-container">
-              <RangeSlider min={3} max={12} step={1} value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusChange} className="slider-track" />
+            <RangeSlider min={3} max={12} step={1} value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusChange} className="slider-track" />
+            <div className="row-start">
               <div className="num-input-row"><input type="number" min="3" max="12" step="1" value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusNumberChange} /></div>
               <div className="num-unit">px</div>
             </div>
@@ -2868,29 +2883,26 @@ const formatSyncState = (task: MaskSyncTask): { text: string; ok: boolean } | nu
 };
 
 const renderMaskSyncContent = () => (
-  <div className="mask-sync-section">
-    {/* 不再复用 .adjustment-section：它自带 border + padding，会在「引擎状态条」与
-        「卡片总容器 A」之外再套一层可见的大容器。改用 .mask-sync-section，
-        仅保留内边距/宽度/间距，无边框，外面不再有可见的框 */}
-    {/* 引擎状态条：确认插件已加载最新代码。绿点+引擎就绪 左对齐，文档名+任务数 右对齐。
+  <div className="panel-section">
+    {/* 引擎状态条：确认插件已加载最新代码。绿点+引擎就绪 左对齐，文档名右对齐。
         已挪到「卡片大容器」外部（上方），不再包裹在任务卡片列表里 */}
-    <div className="mask-sync-status-bar">
-      <span className={maskSyncEngineReady ? 'mask-sync-status-dot-ok' : 'mask-sync-status-dot-warn'} />
-      <span className="mask-sync-status-ready">
+    <div className="notify-bar">
+      <span className={maskSyncEngineReady ? 'indicator indicator-md indicator-ok' : 'indicator indicator-md indicator-warn'} />
+      <span className="notify-text">
         {maskSyncEngineReady ? '引擎就绪' : '引擎初始化中…'}
       </span>
       {maskSyncEngineReady && (
         maskSyncEngine.getDocName()
           ? <span className="mask-sync-status-info">{maskSyncEngine.getDocName()}</span>
-          : <span className="mask-sync-status-info-idle" title="未打开文档时蒙版同步不运行，属正常状态">未打开文档</span>
+          : <span className="mask-sync-status-info info-idle" title="未打开文档时蒙版同步不运行，属正常状态">未打开文档</span>
       )}
     </div>
 
     {/* 容器 A（边框可见）：仅包裹任务卡片 + 新建按钮；
-        引擎状态条 .mask-sync-status-bar 位于其外部上方（不在容器内），
+        引擎状态条 .notify-bar 位于其外部上方（不在容器内），
         且引擎状态与容器 A 之外不再套任何有边框的外层容器。
         空态提示也放进容器 A（对齐笔刷热键：空态在边框盒内），保证上下留白对称 */}
-    <div className="mask-sync-card-list">
+    <div className="border-panel-section">
     {maskSyncTasks.length === 0 && (
       <div className="mask-sync-empty">点击 + 新建同步任务</div>
     )}
@@ -2899,9 +2911,9 @@ const renderMaskSyncContent = () => (
       const sampleEntry = maskSyncSampleOptions.find(o => o.id === task.sampleLayerId);
       const channelOptions = getMaskSyncChannelsForEntry(sampleEntry);
       return (
-      <div key={task.id} className="mask-sync-task">
+      <div key={task.id} className="task-card">
         {/* 任务名：双击重命名 */}
-        <div className="mask-sync-task-header">
+        <div className="row-start">
           {maskSyncEditingId === task.id ? (
             <input
               className="mask-sync-name-input"
@@ -2926,11 +2938,11 @@ const renderMaskSyncContent = () => (
           )}
         </div>
 
-        <div className="mask-sync-divider" />
+        <div className="divider" />
 
         {/* 部分一：样本（图层 + 通道 + 反相） */}
-        <div className="mask-sync-row-close">
-          <span className="mask-sync-label">样本</span>
+        <div className="row-between-close">
+          <span className="label-2">样本</span>
           <Select
             value={task.sampleLayerId != null ? String(task.sampleLayerId) : ''}
             onChange={(v) => handleMaskSyncSampleChange(task, v)}
@@ -2946,8 +2958,8 @@ const renderMaskSyncContent = () => (
           />
         </div>
 
-        <div className="mask-sync-row">
-          <span className="mask-sync-label">通道</span>
+        <div className="row-between">
+          <span className="label-2">通道</span>
           <Select
             value={task.channel || ''}
             onChange={(v) => handleMaskSyncChannelChange(task, v)}
@@ -2957,11 +2969,11 @@ const renderMaskSyncContent = () => (
           />
         </div>
 
-        <div className="mask-sync-divider" />
+        <div className="divider" />
 
         {/* 部分二：目标（有蒙版的图层/组）+ 反相 */}
-        <div className="mask-sync-row">
-          <span className="mask-sync-label">蒙版</span>
+        <div className="row-between">
+          <span className="label-2">蒙版</span>
           <Select
             value={task.targetLayerId != null ? String(task.targetLayerId) : ''}
             onChange={(v) => handleMaskSyncTargetChange(task, v)}
@@ -2975,36 +2987,32 @@ const renderMaskSyncContent = () => (
           />
         </div>
 
-        <div className="mask-sync-invert-row">
-          <label
-            className="mask-sync-checkbox"
-            title={helpTexts.adjustment.maskSyncInvert}
-          >
-            <span>反相</span>
-            <input
+        <div className="row-start">
+          <span className="label-2" title={helpTexts.adjustment.maskSyncInvert}>反相</span>
+          <input
               type="checkbox"
+              className="checkbox-input"
               checked={task.invert}
               onChange={(e) => handleMaskSyncInvertChange(task, e.target.checked)}
-            />
-          </label>
+          />
         </div>
 
-        <div className="mask-sync-divider" />
+        <div className="divider" />
 
         {/* 上次同步状态（无需 console 即可诊断） */}
         {(() => {
           const st = formatSyncState(task);
           if (!st) return null;
           return (
-            <div className={st.ok ? 'notify-ok' : 'notify-fail'}>
-              <span className={st.ok ? 'indicator indicator--md indicator--ok' : 'indicator indicator--md indicator--fail'}></span>
+            <div className={st.ok ? 'notify-banner notify-banner-ok' : 'notify-banner notify-banner-fail'}>
+              <span className={st.ok ? 'indicator indicator-md indicator-ok' : 'indicator indicator-md indicator-fail'}></span>
               <span className="notify-text">{st.text}</span>
             </div>
           );
         })()}
 
         {/* 部分三：同步开关 + 立即同步 + 删除 */}
-        <div className="mask-sync-footer">
+        <div className="row-between">
           <div className="row-start">
             <label
               className="label-2"
@@ -3049,8 +3057,8 @@ const renderMaskSyncContent = () => (
     })}
 
     {/* 新建同步任务按钮：位于容器 A（卡片大容器）底部 */}
-    <div className="mask-sync-add-row">
-      <sp-action-button quiet class="mask-sync-add-button" onClick={handleMaskSyncAdd} title={helpTexts.adjustment.maskSyncAdd}>
+    <div className="row-center">
+      <sp-action-button quiet class="circle-button" onClick={handleMaskSyncAdd} title={helpTexts.adjustment.maskSyncAdd}>
         <AddIcon />
       </sp-action-button>
     </div>
@@ -3142,8 +3150,8 @@ const renderQuickActionContent = () => (
     {useWeightedAverage && (
         <div className="row-between">
           <div className={sliderLabelClass('weightedIntensity', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'weightedIntensity', weightedIntensity)} title={helpTexts.adjustment.weightedIntensity}>强度</div>
-          <div className="unit-container">
-            <RangeSlider min={1} max={10} step={0.5} value={weightedIntensity} onChange={handleWeightedIntensityChange} className="slider-track" />
+          <RangeSlider min={1} max={10} step={0.5} value={weightedIntensity} onChange={handleWeightedIntensityChange} className="slider-track" />
+          <div className="row-start">
             <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={weightedIntensity} onChange={handleWeightedIntensityNumberChange} /></div>
             <div className="num-unit">级</div>
           </div>
@@ -3170,23 +3178,20 @@ const renderQuickActionContent = () => (
       <div className="row-between">
         {/* 下拉行：标签不可拖拽，光标保持 default（原为 pointer，语义错误） */}
         <div className="label-4" title={helpTexts.adjustment.lineReference}>线稿参考</div>
-        <div className="unit-container">
-          <Select
-            value={lineReferenceLayerId ? String(lineReferenceLayerId) : 'auto'}
-            onChange={handleLineReferenceSelect}
-            placeholder=""
-            options={[
-              { value: 'auto', label: '自动', tag: '上方像素层' },
-              ...lineReferenceOptions.map(opt => {
-                const s = splitLabelTag(opt.label);
-                return { value: opt.value, label: s.label, tag: s.tag, depth: opt.depth, disabled: opt.disabled };
-              })
-            ]}
-            showCheck
-            title={helpTexts.adjustment.lineReferenceSelect}
-            className="adjustment-smooth-mode-select"
-          />
-        </div>
+        <Select
+          value={lineReferenceLayerId ? String(lineReferenceLayerId) : 'auto'}
+          onChange={handleLineReferenceSelect}
+          placeholder=""
+          options={[
+            { value: 'auto', label: '自动', tag: '上方像素层' },
+            ...lineReferenceOptions.map(opt => {
+              const s = splitLabelTag(opt.label);
+              return { value: opt.value, label: s.label, tag: s.tag, depth: opt.depth, disabled: opt.disabled };
+            })
+          ]}
+          showCheck
+          title={helpTexts.adjustment.lineReferenceSelect}
+        />
       </div>
 
     <div className="divider"></div>
@@ -3199,8 +3204,8 @@ const renderQuickActionContent = () => (
 
       <div className="row-between">
         <div className={sliderLabelClass('specialWoodcutLevels', 'label-3')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialWoodcutLevels', specialWoodcutLevels)} title={helpTexts.adjustment.woodcutLevels}>色阶数</div>
-        <div className="unit-container">
-          <RangeSlider min={2} max={16} step={1} value={specialWoodcutLevels} onChange={handleSpecialWoodcutLevelsChange} className="slider-track" />
+        <RangeSlider min={2} max={16} step={1} value={specialWoodcutLevels} onChange={handleSpecialWoodcutLevelsChange} className="slider-track" />
+        <div className="row-start">
           <div className="num-input-row"><input type="number" min="2" max="16" step="1" value={specialWoodcutLevels} onChange={handleSpecialWoodcutLevelsNumberChange} /></div>
           <div className="num-unit">级</div>
         </div>
@@ -3208,8 +3213,8 @@ const renderQuickActionContent = () => (
 
       <div className="row-between">
         <div className={sliderLabelClass('specialWoodcutEdgeThreshold', 'label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialWoodcutEdgeThreshold', specialWoodcutEdgeThreshold)} title={helpTexts.adjustment.woodcutEdgeThreshold}>边缘阈值</div>
-        <div className="unit-container">
-          <RangeSlider min={0} max={255} step={1} value={specialWoodcutEdgeThreshold} onChange={handleSpecialWoodcutEdgeThresholdChange} className="slider-track" />
+        <RangeSlider min={0} max={255} step={1} value={specialWoodcutEdgeThreshold} onChange={handleSpecialWoodcutEdgeThresholdChange} className="slider-track" />
+        <div className="row-start">
           <div className="num-input-row"><input type="number" min="0" max="255" step="1" value={specialWoodcutEdgeThreshold} onChange={handleSpecialWoodcutEdgeThresholdNumberChange} /></div>
           <div className="num-unit">值</div>
         </div>
@@ -3217,8 +3222,8 @@ const renderQuickActionContent = () => (
 
       <div className="row-between">
         <div className={sliderLabelClass('specialWoodcutEdgeStrength', 'label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialWoodcutEdgeStrength', specialWoodcutEdgeStrength)} title={helpTexts.adjustment.woodcutEdgeStrength}>边缘强度</div>
-        <div className="unit-container">
-          <RangeSlider min={0} max={100} step={1} value={specialWoodcutEdgeStrength} onChange={handleSpecialWoodcutEdgeStrengthChange} className="slider-track" />
+        <RangeSlider min={0} max={100} step={1} value={specialWoodcutEdgeStrength} onChange={handleSpecialWoodcutEdgeStrengthChange} className="slider-track" />
+        <div className="row-start">
           <div className="num-input-row"><input type="number" min="0" max="100" step="1" value={specialWoodcutEdgeStrength} onChange={handleSpecialWoodcutEdgeStrengthNumberChange} /></div>
           <div className="num-unit">%</div>
         </div>
@@ -3299,12 +3304,12 @@ const bannerNode = (isTrial || (!isLicensed && !isTrial && trialDaysRemaining ==
   <div className={isTrial ? 'license-status-banner-is-trial' : 'license-status-banner-is-expired'}>
     {isTrial && trialDaysRemaining > 0 ? (
       <>
-        <span className="badge-dot" />
+        <span className="indicator indicator-md indicator-ok" />
         <span className="trial-status">试用还剩 {trialDaysRemaining} 天</span>
       </>
     ) : (
       <>
-        <span className="badge-dot-danger" />
+        <span className="indicator indicator-md indicator-warn" />
         <span className="trial-expired">需要在选区填充面板激活</span>
       </>
     )}
@@ -3345,17 +3350,17 @@ return (
 
     {/* 隐藏/显示分区模态框 */}
     {showVisibilityPanel && (
-      <div className="adjustment-modal-overlay" onClick={() => setShowVisibilityPanel(false)}>
-        <div className="adjustment-modal-content" onClick={(e) => e.stopPropagation()}>
-          <div className="adjustment-modal-header">
-            <span>隐藏/显示分区</span>
+      <div className="float-overlay" onClick={() => setShowVisibilityPanel(false)}>
+        <div className="float-window" onClick={(e) => e.stopPropagation()}>
+          <div className="row-between">
+            <span className="subpanel-title-1">隐藏/显示分区</span>
             <div role="button" tabIndex={0} className="close-button" onClick={() => setShowVisibilityPanel(false)}>×</div>
           </div>
-          <div className="adjustment-modal-list">
+          <div className="panel-section">
             {sections.sort((a,b)=>a.order-b.order).map(sec => (
-              <div key={sec.id} className="adjustment-modal-item">
+              <div key={sec.id} className="row-between">
                 <span
-                  className="adjustment-modal-item-label"
+                  className="label-4"
                   onClick={() => toggleSectionVisibility(sec.id)}
                 >{sec.title}</span>
                 <sp-switch

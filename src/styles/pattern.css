@@ -79,3 +79,8 @@
   width: auto;
   height: auto;
 }
+
+/* 图案「填充方式」两列 radio（单次/平铺）整体右移 10px（独立样式） */
+.pattern-fill-radio {
+  transform: translateX(10px);
+}

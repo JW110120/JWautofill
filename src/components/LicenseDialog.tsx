@@ -287,8 +287,8 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
     };
 
     return (
-        <div className="license-dialog-overlay" onClick={handleOverlayClick}>
-            <div className="license-dialog" onClick={handleDialogClick}>
+        <div className="float-overlay" onClick={handleOverlayClick}>
+            <div className="float-window" onClick={handleDialogClick}>
                 {getDialogContent()}
 
                 {message && (

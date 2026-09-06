@@ -1359,7 +1359,7 @@ class App extends React.Component<AppProps, AppState> {
                     onClick={this.handleButtonClick}
 title={helpTexts.selectionFill.mainButton}>
                     <div className="main-button-content">
-                        <div className={this.state.isEnabled ? 'indicator indicator--lg indicator--enabled' : 'indicator indicator--lg indicator--disabled'}></div>
+                        <div className={this.state.isEnabled ? 'indicator indicator-lg indicator-ok' : 'indicator indicator-lg indicator-disabled'}></div>
                         <span className={!this.state.isEnabled ? 'label-disabled' : 'main-button-text'}>
                             {this.state.isEnabled ? '功能开启' : '功能关闭'}
                         </span>
@@ -1588,11 +1588,11 @@ title={helpTexts.selectionFill.createNewLayer}>
                         </div>
                         <div className="divider" />
 
-                       {/* 描边模式开关 */}
+                       {/* 描边模式开关：label 在左，color-preview + 设置图标 + 开关整体收进右侧的 row-start（作为一个单元右对齐） */}
                        <div className="row-between">
                             <label className="label-4" title={helpTexts.selectionFill.strokeModeLabel}>描边模式</label>
+                            <div className="row-start">
                             {this.state.strokeEnabled && (
-                                <div className="row-start">
                                 <div 
                                     className="color-preview"
                                     style={this.getStrokeColorPreviewStyle()}
@@ -1666,20 +1666,21 @@ title={helpTexts.selectionFill.createNewLayer}>
                                         } catch (error) {
                                             console.error('颜色选择器错误:', error);
                                         }
-                                    }}/>
+                                    }}/>)}
+                            {this.state.strokeEnabled && (
                                 <IconButton
                                     onClick={this.toggleStrokeSetting}
                                     title={helpTexts.selectionFill.strokeSettingsButton}
                                 >
                                     <SettingsIcon/>
                                 </IconButton>
-                                </div>
                             )}
                             <sp-switch 
                                 checked={this.state.strokeEnabled}
                                 onChange={this.toggleStrokeEnabled}
                                 title={helpTexts.selectionFill.strokeEnabledSwitch}
                             />
+                            </div>
                         </div>
                         <div className="divider" />
 
@@ -1708,7 +1709,7 @@ title={helpTexts.selectionFill.clearMode}>
                                 onChange={this.handleFillModeChange}
                             >
                                 <sp-radio value="foreground" className="" title={helpTexts.selectionFill.fgRadio}>
-                                    <div className="row-end">
+                                    <div className="row-start">
                                         <span className="label-2" title={helpTexts.selectionFill.fgDetail}>纯色</span>
                                         <IconButton
                                             onClick={this.toggleColorSettings}
@@ -1719,7 +1720,7 @@ title={helpTexts.selectionFill.clearMode}>
                                     </div>
                                 </sp-radio>
                                 <sp-radio value="pattern" className="" title={helpTexts.selectionFill.patternRadio}>
-                                    <div className="row-end">
+                                    <div className="row-start">
                                         <span className="label-2" title={helpTexts.selectionFill.patternDetail}>图案</span>
                                         <IconButton
                                             onClick={this.openPatternPicker}
@@ -1730,7 +1731,7 @@ title={helpTexts.selectionFill.clearMode}>
                                     </div>
                                 </sp-radio>
                                 <sp-radio value="gradient" className="" title={helpTexts.selectionFill.gradientRadio}>
-                                    <div className="row-end">
+                                    <div className="row-start">
                                         <span className="label-2" title={helpTexts.selectionFill.gradientDetail}>渐变</span>
                                         <IconButton
                                             onClick={this.openGradientPicker}
@@ -1750,11 +1751,11 @@ title={helpTexts.selectionFill.clearMode}>
                                     <div className="row-between">
                                         <label
                                             htmlFor="deselectCheckbox"
-                                            className="label-6"
+                                            className="label-5"
                                             onClick={this.toggleDeselectAfterFill}
                                             title={helpTexts.selectionFill.deselectLabel}
                                         >
-                                            自动删选区:
+                                            自动删选区
                                         </label>
                                         <input
                                             type='checkbox'
@@ -1768,11 +1769,11 @@ title={helpTexts.selectionFill.clearMode}>
                                     <div className="row-between">
                                         <label
                                             htmlFor="historyCheckbox"
-                                            className="label-6"
+                                            className="label-5"
                                             onClick={this.toggleAutoUpdateHistory}
                                             title={helpTexts.selectionFill.historyLabel}
                                         >
-                                            更新历史源:
+                                            更新历史源
                                         </label>
                                         <input
                                             type='checkbox'
@@ -1789,11 +1790,11 @@ title={helpTexts.selectionFill.clearMode}>
                                     <div className="row-between">
                                         <label
                                             htmlFor="autoOffOnToolCheckbox"
-                                            className="label-6"
+                                            className="label-5"
                                             onClick={this.toggleAutoOffOnOtherTool}
                                             title={helpTexts.selectionFill.autoOffLabel}
                                         >
-                                            自动关开关:
+                                            自动关开关
                                         </label>
                                         <input
                                             type='checkbox'
@@ -1807,11 +1808,11 @@ title={helpTexts.selectionFill.clearMode}>
                                     <div className="row-between">
                                         <label
                                             htmlFor="lassoOnEnableCheckbox"
-                                            className="label-6"
+                                            className="label-5"
                                             onClick={this.toggleSwitchToLassoOnEnable}
                                             title={helpTexts.selectionFill.lassoLabel}
                                         >
-                                            自动切套索:
+                                            自动切套索
                                         </label>
                                         <input
                                             type='checkbox'

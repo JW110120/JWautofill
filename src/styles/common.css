@@ -13,6 +13,7 @@
    1.每个通用组件只保留一个，让common中不存在多余的类名，从别的文件收口过来的新样式，需要改为通用的类名。
    2.UXP 不支持 gap
    3.通常一个组件只挂一个类名，竟可能把类名下的样式合并，除非它可能会有禁用等状态变化。
+   4.类名的命名不用--这种两个连在一起的双破折号，只用单破折号。
    ========================================================================== */
 
 /* 全局基础：字体 + 根元素 */
@@ -268,10 +269,26 @@ sp-radio[disabled] {
   align-items: right;
 }
 
-/* 通用行容器space-between */
-.row-between {
+/* 通用行容器space-between（.row-between-close 为紧凑下边距版，基础样式两者共享） */
+.row-between,
+.row-between-close {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  margin: 10px auto;
+  box-sizing: border-box;
+}
+
+/* 紧凑行间距版：其余与 .row-between 一致，仅下边距收紧到 2px */
+.row-between-close {
+  margin-bottom: 2px;
+}
+
+/* 通用行容器居中对齐 */
+.row-center {
+  display: flex;
+  justify-content: center;
   align-items: center;
   width: 100%;
   margin: 10px auto;
@@ -285,6 +302,13 @@ sp-radio[disabled] {
   align-items: center;
   justify-content: flex-start;
   flex: 0 0 auto;
+}
+
+/* 通用「占满行内剩余宽度」的控件容器：sp-textfield 等原生控件不会自动拉伸，
+   必须显式给出 flex 基准，否则在 .row-between 里只会保持自然宽度。 */
+.field-grow {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 /* 通用行容器右对齐 */
@@ -434,6 +458,66 @@ sp-radio[disabled] {
   fill: var(--text-color);
 }
 
+/* —— 通用圆形录制按钮 ——
+   三态（基础 / 录制中 / 禁用）为「独占类名」，基础盒模型必须写成三态共享组：
+   若只写在 .record-button 上，录制中/禁用瞬间会退化成 display:block，
+   图标掉出圆形、背景与边框丢失、整行重排。状态类只保留修饰差异。 */
+.record-button,
+.record-button-recording,
+.record-button-disabled {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--text-color);
+  box-sizing: border-box;
+  user-select: none;
+}
+
+/* 基础态：hover 与齿轮图标统一（icon 变蓝 --hover-icon，背景无变化） */
+.record-button {
+  cursor: pointer;
+}
+.record-button:hover {
+  color: var(--hover-icon);
+}
+.record-button:hover .icon-fill {
+  fill: var(--hover-icon);
+}
+.record-button:active {
+  transform: scale(0.94);
+}
+
+/* 录制中：红色常亮，hover 不变色，不可点击 */
+.record-button-recording {
+  color: rgb(239, 83, 80);
+  cursor: default;
+}
+.record-button-recording:hover {
+  color: rgb(239, 83, 80);
+}
+.record-button-recording:hover .icon-fill {
+  fill: rgb(239, 83, 80);
+}
+
+/* 禁用态：图标变灰（--disabled-color），与 APP 总开关禁用态一致 */
+.record-button-disabled {
+  color: var(--disabled-color);
+  cursor: not-allowed;
+}
+.record-button-disabled:hover {
+  color: var(--disabled-color);
+}
+.record-button-disabled:hover .icon-fill {
+  fill: var(--disabled-color);
+}
+
+
 /* 通用图标尺寸 */
 .icon-14 {
   display: block;
@@ -561,10 +645,18 @@ sp-radio[disabled] {
   min-width: 0;
 }
 
-/* 通用半透明、禁止操作禁用态（action-button-run / run-disabled 收口于此） */
+/* 通用半透明、禁止操作禁用态（action-button-run / run-disabled 收口于此）。
+   ⚠️ 禁用态必须与原生按钮基样式同挂一个元素（如 action-button-auto action-button-disabled），
+   才能保留边框/字号/高度；单独使用会丢失 .action-button-* 的盒模型导致「边框消失、文字变大」。 */
 .action-button-disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+/* 禁用态不应有悬停反馈（避免处理中按钮仍高亮/缩放） */
+.action-button-auto.action-button-disabled:hover {
+  background-color: var(--button-bg);
+  border-color: var(--border-color);
+  transform: none;
 }
 
 /* 按钮宽度分档：按按钮汉字字数精确分级，均 box-sizing:border-box + 无内边距。
@@ -576,6 +668,8 @@ sp-radio[disabled] {
 .action-button-6  { width: 98px; }
 .action-button-7  { width: 111px; }
 .action-button-8  { width: 124px; }
+/* 2×2 网格按钮档（绘画工具箱 alpha 对齐四联按钮）：左右两列严格等宽对齐 */
+.action-button-quad { width: 92px; flex: none; }
 
 /* 通用子面板关闭按钮 */
 .close-button {
@@ -658,6 +752,15 @@ sp-radio[disabled] {
   flex-shrink: 0;
   margin-right: 6px;
   background-color: var(--border-color);
+}
+
+/* 通用竖分割线（文字型：内容为「丨」等竖直字符，与横分割线、外框同色） */
+.divider-vertical {
+  flex: 0 0 auto;
+  margin: 0 8px;
+  color: var(--border-color);
+  user-select: none;
+  pointer-events: none;
 }
 
 
@@ -762,16 +865,23 @@ sp-radio {
   width: 100%;
 }
 
-/* 原样式已修改，请相应修改 */
-.row-start > label,
-.row-start > [class^="label-"] {
-  margin-right: 6px;
+/* 行内右侧控件间距：row-between / row-center / row-end 内，sp-switch 与 checkbox 左侧留 6px。
+   ⚠️ 不加在 label-N 的右侧兄弟上——那样会误伤行内滑块（RangeSlider）的标签，产生不需要的间距。
+   只针对具体控件类型（开关/勾选框）。 */
+.row-between sp-switch,
+.row-between input[type="checkbox"],
+.row-center sp-switch,
+.row-center input[type="checkbox"],
+.row-end sp-switch,
+.row-end input[type="checkbox"] {
+  margin-left: 4px;
 }
 
 /* 通用勾选框样式 */
 .checkbox-input {
   cursor: pointer;
-  margin-left: 0;
+  /* 勾选态统一用主题主色蓝（与各面板原 mask-sync-checkbox 一致） */
+  accent-color: var(--primary-color);
 }
 
 /* 请收口于半透明、禁操作禁用态 */
@@ -807,11 +917,8 @@ sp-radio {
 .notify {
   display: flex;
   align-items: flex-start;
-  padding: 3px 6px;
-  margin: 2px 0 4px 0;
+  padding: 5px;
   border-radius: 3px;
-  font-size: 11px;
-  line-height: 1.4;
   user-select: none;
 }
 
@@ -835,11 +942,54 @@ sp-radio {
   border: 1px solid var(--notify-fail-border);
 }
 
+/* 通用通知横幅：与面板顶部「激活提示」卡片（adjustment.css 的 .license-status-banner-*）同款容器/状态点/字号。
+   issue 5 收口目标——笔刷热键底部通知、蒙版同步内部通知统一到这一款。内部复用 .indicator-md（状态点）+ .notify-text（正文）。 */
+.notify-banner {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 30px;
+  min-height: 30px;
+  flex: none;
+  padding: 6px 10px;
+  border-radius: 3px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-color);
+  color: var(--text-color);
+  font-size: 12px;
+  box-sizing: border-box;
+  user-select: none;
+}
+.notify-banner.notify-banner-ok   { border-color: var(--notify-ok-border);   background: var(--notify-ok-bg); }
+.notify-banner.notify-banner-warn { border-color: var(--notify-warn-border); background: var(--notify-warn-bg); }
+.notify-banner.notify-banner-fail { border-color: var(--notify-fail-border); background: var(--notify-fail-bg); }
+/* 字号/换行对齐顶部激活提示卡片（正文 12px，单行过长时换行而非裁切） */
+.notify-banner .notify-text { font-size: 12px; opacity: 1; white-space: normal; line-height: 1.4; }
+
+/* 通用状态条通知：状态点 + 正文（+ 右侧信息/操作）。
+   与 .notify-* 同族，但自带描边与 --bg-color 底（状态类容器透明融入面板，不另起色块）。 */
+.notify-bar {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 3px 6px;
+  margin-bottom: 8px;
+  border-radius: 3px;
+  background: var(--bg-color);
+  border: 1px solid var(--border-color);
+  box-sizing: border-box;
+  user-select: none;
+}
+
 /* 通用通知正文 */
 .notify-text {
-  font-size: 13px;
+  font-size: 11px;
   line-height: 1.4;
   word-break: break-all;
+  color: var(--text-color);
+  opacity: 0.85;
+  white-space: nowrap;
 }
 
 /* 状态指示点 */
@@ -851,37 +1001,45 @@ sp-radio {
 }
 
 /* 大号状态点 */
-.indicator--lg {
+.indicator-lg {
   width: 13px;
   height: 13px;
   margin-right: 10px;
 }
 
 /* 中号状态点 */
-.indicator--md {
+.indicator-md {
   width: 8px;
   height: 8px;
   margin-right: 5px;
 }
 
 /* 启用状态点 */
-.indicator--enabled {
+.indicator-md {
   background-color: rgb(46, 204, 113);
 }
 
 /* 禁用状态点 */  
-.indicator--disabled {
+.indicator-disabled {
   background-color: rgba(128, 128, 128, 0.5);
 }
 
-/* 通用积极状态点 */
-.indicator--ok {
+/* 通用积极状态点（带同色微光，与文字通知的积极色一致） */
+.indicator-ok {
   background-color: var(--notify-ok-fg);
+  box-shadow: 0 0 4px rgba(46, 204, 113, 0.6);
+}
+
+/* 通用警告状态点 */
+.indicator-warn {
+  background-color: var(--notify-warn-fg);
+  box-shadow: 0 0 4px rgba(243, 156, 18, 0.6);
 }
 
 /* 通用消极状态点 */
-.indicator--fail {
+.indicator-fail {
   background-color: var(--notify-fail-fg);
+  box-shadow: 0 0 4px rgba(231, 76, 60, 0.6);
 }
 
 /* 通用预设区总容器 */
@@ -1012,6 +1170,91 @@ sp-radio {
   pointer-events: none;
 }
 
+/* —— 通用悬浮窗口（遮罩 + 窗口）——
+   激活弹窗、分区显隐弹窗等所有「遮罩里挖一个窗口」的场景共用这一套实现。
+   ⚠️ 遮罩背景色一律由 theme.ts 按主题注入（不透明度恒定 0.80），
+      本文件绝不写 background-color —— 纯 var() 写法在 UXP 下曾出现
+      「能拦截点击但背景完全不绘制（看不见）」的问题。 */
+.float-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  /* 显式宽高兜底：仅靠 top/left/right/bottom 拉伸时，
+     个别 UXP 版本下背景绘制区域会异常 */
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  /* 四周 10px 内边距 → 窗口与面板上/左/右边缘边距恒为 10px */
+  padding: 10px;
+  box-sizing: border-box;
+  z-index: 99999 !important;
+}
+
+/* 遮罩内的浮动窗口 */
+.float-window {
+  width: 100%;
+  background: var(--bg-color);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  padding: 10px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  position: relative;
+}
+
+/* 通用任务卡片（蒙版同步任务卡片等同类卡片共用） */
+.task-card {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--entry-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  /* 上下内边距相等；卡片间距由下方「后续卡片」规则提供 */
+  padding: 8px 10px;
+  margin: 0;
+}
+
+.task-card + .task-card {
+  margin-top: 10px;
+}
+
+/* 通用圆形图标按钮（32px，描边） */
+.circle-button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: var(--button-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text-color);
+  box-sizing: border-box;
+}
+
+.circle-button:hover {
+  background: var(--hover-bg);
+  border-color: var(--primary-color);
+}
+
+.circle-button .icon-fill {
+  fill: var(--text-color);
+}
+
+.circle-button svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
 /* 通用最终预览下部分容器 */
 .preview-wrapper {
   position: relative;
@@ -1022,4 +1265,181 @@ sp-radio {
   background-color: var(--dark-bg-color);
   user-select: none;
   box-sizing: border-box;
+}
+
+/* ==========================================================================
+   通用自绘下拉组件（src/components/Select.tsx）
+   --------------------------------------------------------------------------
+   全插件所有下拉（蒙版同步 / 平滑模式 / 笔刷 / 描边 / 渐变 / 图案）共用这一套，
+   不再依赖 sp-picker / sp-menu（其展开菜单背景在 UXP 下无法被 CSS 覆盖）。
+   ⚠️ 头部与选项的「三态」都是 Select.tsx 里的独占类名（不带基础类名），
+      因此基础样式必须写成「三态共享组」，否则展开/禁用瞬间会退化成
+      display:block：高度失控、箭头掉到第二行、背景边框丢失（表现为
+      「容器上方多出一行显示选中项的名字」）。
+   ========================================================================== */
+.select-wrap {
+  flex: 1 1 120px;
+  min-width: 0;
+  position: relative;
+  /* 与弹层 .select-pop 同理：局部重声明主色蓝，覆盖 Spectrum <Provider>
+     作用域内被改写的 --primary-color，保证头部展开边框取到我们的主色蓝。 */
+  --primary-color: rgb(38, 128, 235);
+}
+
+/* 头部必须撑满 wrap 的宽度：部分面板会把 wrap 变成 flex 容器
+   （例：.gradient-setting-item > div{display:flex}），此时 head 作为 flex item
+   会退化到「内容宽度」，导致下拉框异常窄，而弹层宽度 = head 宽度，于是展开后的
+   选项区也跟着变窄、文字换行看起来像排成两列。显式撑满即可，与 wrap 自身
+   是不是 flex 容器无关。三态都要撑满。 */
+.select-wrap > .select-head,
+.select-wrap > .select-head-open,
+.select-wrap > .select-head-disabled {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+}
+
+/* 头部三态共用同一套基础样式 */
+.select-head,
+.select-head-open,
+.select-head-disabled {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 6px;
+  color: var(--text-color);
+  font-size: 12px;
+  background: var(--dropdown-bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  box-sizing: border-box;
+  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
+  cursor: pointer;
+  user-select: none;
+  overflow: hidden;
+}
+
+/* 展开态修饰：主色蓝描边（沿用闭合态全部基础样式） */
+.select-head-open {
+  border-color: var(--primary-color);
+}
+
+/* 禁用态：文字（含箭头，currentColor）变灰 --disabled-color，不用 opacity */
+.select-head-disabled {
+  color: var(--disabled-color);
+  cursor: not-allowed;
+}
+
+/* 分组下拉的分隔线（与 sp-picker 的分组线观感一致） */
+.select-divider {
+  height: 1px;
+  margin: 2px 0;
+  background: var(--border-color);
+}
+
+/* 头部内部元素统一用「两级类」提高特异性：面板里常有 `.xxx-setting-item span{...}`
+   这类后代规则（特异性 0,1,1），会盖掉这里的字号与 margin-left:auto（箭头右对齐）。 */
+.select-wrap .select-value {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.select-wrap .select-caret {
+  flex: 0 0 auto;
+  /* margin-left:auto：无 tag 时把箭头推到最右；有 tag（flex:1 撑满）时位于行尾 */
+  margin-left: auto;
+  padding-left: 6px;
+  display: flex;
+  align-items: center;
+  opacity: 0.6;
+}
+
+/* 选中项右侧对勾（与 sp-picker 的 Spectrum 勾样式一致） */
+.select-check {
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  opacity: 0.9;
+}
+
+/* 下拉弹层：position:fixed + 由 Select.tsx 按头部矩形实时定位 */
+.select-pop {
+  position: fixed;
+  z-index: 99998;
+  display: block;
+  min-width: 96px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--dropdown-bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  padding: 2px 0;
+  box-sizing: border-box;
+  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
+  --primary-color: rgb(38, 128, 235);
+  transform: translateZ(0);
+  will-change: transform;
+}
+
+/* 选项行三态共用同一套 flex 行布局/字号/内边距 */
+.select-opt,
+.select-opt-sel,
+.select-opt-dis {
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  font-size: 12px;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.select-opt {
+  color: var(--text-color);
+  cursor: pointer;
+}
+
+.select-opt:hover {
+  background: var(--hover-bg, rgba(128, 128, 128, 0.15));
+}
+
+/* 选中项背景：直接用字面色值 rgb(38,128,235)，不再走 var(--primary-color)。
+   原因：弹层经 createPortal 挂到面板根（<Provider> 作用域内），UXP 下 var()
+   在该子树里解析不稳定，曾出现选中背景解析不到主色蓝、回退成面板底色的情况。
+   --primary-color 在四套主题里本就是恒定 rgb(38,128,235)，故字面值与主题完全一致。 */
+.select-opt-sel {
+  background: var(--primary-color);
+  color: rgb(255, 255, 255);
+}
+
+.select-opt-dis {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.select-opt-main {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 选项/头部右侧标注（笔刷类型图标等）右对齐；
+   用 flex + justify-content:flex-end 而非 text-align，能可靠地把 inline SVG 推到最右。 */
+.select-opt-tag {
+  flex: 1 1 auto;
+  margin-left: 10px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  text-align: right;
+  font-size: 11px;
+  opacity: 0.7;
+  white-space: nowrap;
 }

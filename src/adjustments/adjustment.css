@@ -1,3 +1,16 @@
+/* ==========================================================================
+   adjustment.css — 绘画工具箱（#pixeladjustment）「独有」样式
+   --------------------------------------------------------------------------
+   本文件只保留绘画工具箱独有的样式；所有与其它面板共用的通用组件样式一律
+   收口在 src/styles/common.css。已收口到 common.css 的通用类：
+     .action-button-quad / .row-between / .row-between-close / .row-center /
+     .row-start / .row-end / .border-panel-section / .panel-section /
+     .divider / .divider-dashed / .divider-vertical / .label-N /
+     .checkbox-input / .notify-bar / .notify-text / .indicator* /
+     .task-card / .circle-button / .float-overlay / .float-window /
+     .record-button* / .select-*（通用自绘下拉）
+   ========================================================================== */
+
 /* 绘画工具箱根容器 */
 .pixeladjustment-root {
   width: 100%;
@@ -9,13 +22,6 @@
   background-color: var(--bg-color);
   color: var(--text-color);
   overflow: hidden;
-}
-
-/* adjustment 面板独有的 2×2 按钮（92px 等宽，保证左右两列严格对齐）；
-   基础态/hover/active 由 common.css 的 .action-button-* 通用族统一提供。 */
-.action-button-quad {
-  width: 92px;
-  flex: none;
 }
 
 /* 试用状态激活提示卡片。
@@ -57,7 +63,7 @@
   position: relative;
 }
 
-/* adjustment 独有的遮罩样式 */
+/* adjustment 独有的遮罩样式（配色由 theme.ts 按主题注入） */
 .adjustment-lock-overlay {
   position: fixed;
   left: 0;
@@ -66,32 +72,6 @@
   width: 100%;
   box-sizing: border-box;
   z-index: 9997;
-}
-
-/* 非独有样式，需要与common中通用的中号状态点收口 */
-.license-status-banner-is-trial .badge-dot,
-.license-status-banner-is-expired .badge-dot {
-  width: 8px;
-  height: 8px;
-  margin-right: 6px;
-  border-radius: 50%;
-  flex: none;
-  background: rgb(46, 204, 113);
-  box-shadow: 0 0 4px rgba(46, 204, 113, 0.6);
-  display: inline-block;
-}
-
-/* 非独有样式，需要与common中通用的中号状态点收口 */
-.license-status-banner-is-trial .badge-dot-danger,
-.license-status-banner-is-expired .badge-dot-danger {
-  width: 8px;
-  height: 8px;
-  margin-right: 6px;
-  border-radius: 50%;
-  flex: none;
-  display: inline-block;
-  background: rgb(243, 156, 18);
-  box-shadow: 0 0 4px rgba(243, 156, 18, 0.6);
 }
 
 /* adjustment独有的试用状态通知 */
@@ -119,7 +99,7 @@
   text-overflow: ellipsis;
 }
 
-/* adjustment独有的三连图标单元 */
+/* adjustment独有的三连图标单元（笔刷下拉右侧：刷新 / 停止 / 录制） */
 .hotkey-icon-cell {
   flex: 0 0 28px;
   width: 28px;
@@ -129,66 +109,9 @@
   justify-content: center;
 }
 
-/* 请将录制按钮收口为common中的通用录制按钮 */
-.hotkey-circle-button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  background: transparent;
-  border: none;
-  border-radius: 50%;
-  color: var(--text-color);
-  cursor: pointer;
-  box-sizing: border-box;
-  user-select: none;
-}
-
-/* hover 与 APP 面板齿轮统一：icon 变蓝（--hover-icon），背景无变化 */
-.hotkey-circle-button:hover {
-  color: var(--hover-icon);
-}
-
-.hotkey-circle-button:hover .icon-fill {
-  fill: var(--hover-icon);
-}
-
-.hotkey-circle-button:active {
-  transform: scale(0.94);
-}
-
-/* 请将录制按钮收口为common中的通用录制按钮 */
-.hotkey-circle-button.recording {
-  color: rgb(239, 83, 80);
-  cursor: default;
-}
-
-/* 请将录制按钮收口为common中的通用录制按钮 */
-.hotkey-circle-button.recording:hover {
-  color: rgb(239, 83, 80);
-}
-
-/* 禁用态（未选笔刷）：图标呈灰色（与 APP 总开关禁用态 --disabled-color 一致）+ 禁用光标 */
-.hotkey-circle-button.disabled {
-  color: var(--disabled-color);
-  cursor: not-allowed;
-}
-
-.hotkey-circle-button.disabled:hover {
-  color: var(--disabled-color);
-}
-
-/* 非独有样式，请收口为common的border-panel-section */
-.hotkey-entry-box {
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-  padding: 10px;            /* 上下内边距相等 → 首条上边/末条下边到边框距离一致 */
-  margin-top: 10px;
-  background: var(--bg-color);
-  box-sizing: border-box;
-}
+/* ==========================================================================
+   快捷键条目列表（绘画工具箱）
+   ========================================================================== */
 
 /* 独有的【快捷键 丨 名字】行容器 */
 .hotkey-entry-row {
@@ -208,13 +131,9 @@
   margin-top: 6px;
 }
 
-.hotkey-entry-row:last-child {
-  border-bottom: none;
-}
-
 /* 选中态：与图案子面板被选中的图案一致——2px 主题蓝描边（用 outline，零位移） */
 .hotkey-entry-row.selected {
-   outline-color: var(--primary-color);
+  outline-color: var(--primary-color);
 }
 
 /* 置顶固定的「选区填充开关」行：明确不可拖动 */
@@ -232,15 +151,6 @@
   white-space: nowrap;
 }
 
-/* 收口为通用的竖分割线 */
-.hotkey-entry-sep {
-  flex: 0 0 auto;
-  margin: 0 8px;
-  color: var(--border-color);   /* 与横向分割线、外框同色，保持横竖分割线一致 */
-  user-select: none;
-  pointer-events: none;
-}
-
 /* 独有的快捷键名样式 */
 .hotkey-entry-name {
   flex: 1 1 auto;
@@ -250,14 +160,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* 非独有样式，请收口为common.css中的row between */
-.hotkey-entry-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 10px;
 }
 
 /* 独有的已选中 N 条提示样式 */
@@ -271,137 +173,9 @@
   white-space: nowrap;
 }
 
-
-/* 无效样式请删除该类名的引用 */
-.unit-container{
-  display: flex;
-  align-items: center;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-/* 无效样式请删除该类名的引用 */
-.unit-container > *:not(:first-child) {
-  margin-left: 3px;
-}
-
-
-/* 窗口中一个遮罩中挖出一个悬浮窗口的样式，请将激活窗口的实现方法与之统一，并且收口在common.css作为通用悬浮窗口样式  */
-.adjustment-modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.35); /* 降低透明度，保持半透明背景效果 */
-  display: flex;
-  align-items: flex-start; /* 顶部对齐 */
-  justify-content: center; /* 居中 */
-  padding-top: 12px; /* 与顶部留白 */
-  z-index: 99999; /* 置顶，超过其他面板 */
-}
-
-/* 遮罩内的浮动窗口，请激活窗口的悬浮窗口与之统一，收口为common.css中的通用悬浮窗口样式 */
-.adjustment-modal-content {
-  background: var(--bg-color);
-  color: var(--text-color);
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-  width: calc(100% - 20px);
-  padding: 10px 10px;
-  box-shadow: 0 10px 24px rgba(0,0,0,0.35);
-}
-
-/* 一个多余的容器样式、可以收口于common.css中的row-between，再给span添加subpanel-title-1的样式 */
-.adjustment-modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
-  font-weight: 600;
-  color: var(--text-color);
-}
-
-/* 这两个都没有独特性，adjustment-modal-list请换成panel-section，adjustment-modal-item请换成row-between */
-.adjustment-modal-list { margin-top: 4px; }
-.adjustment-modal-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding-left: 10px;
-  padding-right: 10px;
-  margin-bottom: 10px;
-}
-/* 请收口为label-N */
-.adjustment-modal-item-label {
-  color: var(--text-color);
-  font-size: 13px;
-  user-select: none;
-  margin-right: 10px;
-  flex: 1;
-  user-select: none;
-}
-
-/* 请收口为common.css中的panel-section */
-.mask-sync-section {
-  width: 100%;
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  padding: 0;
-  margin: 0 0 20px 0;
-  border: none;
-  background: transparent;
-}
-
-/* 非独特样式，请收口为common.css中的border-panel-section */
-.mask-sync-card-list {
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-  padding: 8px;
-  margin-top: 0; /* 与上方引擎状态条的 margin-bottom:8px 配合留白 */
-  background: var(--bg-color);
-  box-sizing: border-box;
-}
-
-/* 非独特样式，请收口为common.css中的row-between */
-.mask-sync-add-row {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  margin-top: 6px;
-  margin-bottom: 0;
-}
-
-/* 请在common.css中收口这个样式作为通用圆形按钮 */
-.mask-sync-add-button {
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  background: var(--button-bg);
-  border: 1px solid var(--border-color);
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  color: var(--text-color);
-}
-
-.mask-sync-add-button:hover {
-  background: var(--hover-bg);
-  border-color: var(--primary-color);
-}
-
-.mask-sync-add-button .icon-fill {
-  fill: var(--text-color);
-}
-
-/* 请在common.css中收口这个样式作为通用圆形按钮 */
-.mask-sync-add-button svg {
-  width: 16px;
-  height: 16px;
-  display: block;
-}
+/* ==========================================================================
+   蒙版同步
+   ========================================================================== */
 
 /* 独有的空态提示 */
 .mask-sync-empty {
@@ -414,478 +188,72 @@
   user-select: none;
 }
 
-/* 引擎状态条：绿点+“引擎就绪”左对齐，文档名+任务数右对齐。
-   左右 padding 用 8px（与下方容器 A 的 padding 一致），
-   使状态条内文字与卡片内文字左边缘对齐（同有 1px 边框） */
-.mask-sync-status-bar {
-  display: flex;
-  align-items: center;
-  padding: 4px 8px;
-  margin-bottom: 8px;
-  border-radius: 3px;
-  /* 状态通知容器背景统一为 --bg-color（设计语言：状态类容器透明融入面板，不另起色块） */
-  background: var(--bg-color);
-  border: 1px solid var(--border-color);
-  user-select: none;
-}
-
-.mask-sync-status-dot {
-  width: 8px;
-  height: 8px;
-  margin-right: 6px; /* 绿点与“引擎就绪”之间留出足够空隙 */
-  border-radius: 50%;
-  flex: none;
-}
-
-.mask-sync-status-dot-ok {
-  width: 8px;
-  height: 8px;
-  margin-right: 6px;
-  border-radius: 50%;
-  flex: none;
-  background: rgb(46, 204, 113);
-  box-shadow: 0 0 4px rgba(46, 204, 113, 0.6);
-}
-
-.mask-sync-status-dot-warn {
-  width: 8px;
-  height: 8px;
-  margin-right: 6px;
-  border-radius: 50%;
-  flex: none;
-  background: rgb(243, 156, 18);
-  box-shadow: 0 0 4px rgba(243, 156, 18, 0.6);
-}
-
-/* “引擎就绪”左对齐（紧跟绿点） */
-.mask-sync-status-ready {
-  font-size: 11px;
-  color: var(--text-color);
-  opacity: 0.85;
-  white-space: nowrap;
-}
-
-/* 文档名：右对齐；限制宽度并允许收缩+省略号，避免长标题与左侧状态栏（绿点+引擎就绪）重叠 */
+/* 状态条右侧的文档名：推到最右，长文档名截断而非挤压/重叠左侧状态 */
 .mask-sync-status-info {
-  margin-left: auto; /* 推到最右 */
-  text-align: right;
-  font-size: 11px;
-  color: var(--text-color);
-  opacity: 0.85;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 60%; /* 限制标题容器宽度，长文档名截断而非挤压/重叠左侧状态 */
-  min-width: 0;   /* 允许 flex 收缩以触发 ellipsis，而非溢出重叠 */
-  flex-shrink: 1;
-}
-
-/* 无活动文档时的静默提示：弱化显示，避免每次开 PS 都像「告警」 */
-.mask-sync-status-info-idle {
   margin-left: auto;
   text-align: right;
   font-size: 11px;
   color: var(--text-color);
-  opacity: 0.45;
+  opacity: 0.85;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 60%;
-  min-width: 0;
+  min-width: 0;   /* 允许 flex 收缩以触发 ellipsis，而非溢出重叠 */
   flex-shrink: 1;
 }
 
-
-/* 同步任务卡片：圆角矩形（背景与笔刷热键快捷键记录 .hotkey-entry-row 同一 --entry-bg，更精致统一） */
-.mask-sync-task {
-  background: var(--entry-bg);
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-  padding: 8px 10px;   /* 上下内边距相等（原为上 9 / 下 8） */
-  margin-bottom: 0;    /* 间距改由下方「后续卡片」规则提供 */
-  box-sizing: border-box;
-  width: 100%;
+/* 无活动文档时的静默提示：必须与 .mask-sync-status-info 叠加使用（而非替换），
+   否则会丢掉 margin-left:auto 等右对齐属性 */
+.info-idle {
+  opacity: 0.5;
 }
 
-/* 仅后续卡片有上间距（6px，与笔刷热键 .hotkey-entry-row 的间距一致）；
-   首张卡片上边距为 0，配合容器 A 上下对称的 8px padding → 上下留白相等 */
-.mask-sync-task + .mask-sync-task {
-  margin-top: 6px;
-}
-
-/* 任务标题行 */
-.mask-sync-task-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 20px;
-}
-
+/* 独有的卡片标题字体 */
 .mask-sync-task-name {
   color: var(--text-color);
   font-size: 13px;
   font-weight: 600;
-  flex: 1 1 auto;
+  flex: 1 1 0%;
   min-width: 0;
+  height: 22px;
+  line-height: 22px;
+  box-sizing: border-box;
   overflow: hidden;
+  border-radius: 3px;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: text;
   user-select: none;
-  padding: 1px 2px;
-  border-radius: 3px;
 }
 
+/* 独有的卡片标题字体悬停样式 */
 .mask-sync-task-name:hover {
   background: var(--hover-bg);
   outline: 1px dashed var(--border-color);
 }
 
+/* 标题重命名输入框：与 .mask-sync-task-name 同高（22px）、同宽（flex:1 1 0%），
+   仅多出 1px 亮边框 + 4px 左右内边距 —— 激活后不再发生「变高、变窄」的跳变。
+   ⚠️ 必须显式写 flex 基准与宽高：input 在 UXP 下有默认 width/内边距，
+      只写 flex:1 1 auto 会按默认宽度算基准，与 span 的内容基准不一致。 */
 .mask-sync-name-input {
-  flex: 1 1 auto;
+  flex: 1 1 0%;
   min-width: 0;
   height: 22px;
+  padding: 0 4px;
+  margin: 0;
   color: var(--text-color);
   background: var(--bg-color);
   border: 1px solid var(--primary-color);
   border-radius: 3px;
   font-size: 13px;
+  font-weight: 600;
   font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
-  padding: 0 4px;
   box-sizing: border-box;
 }
 
-/* 卡片内部三段分割线 */
-.mask-sync-divider {
-  height: 1px;
-  background-color: var(--border-color);
-  margin: 10px 0;
-}
-
-/* 配置行：标签 + 控件 space-between，放不下换行。
-   注意：UXP 环境 flex gap 不生效，间距一律用 margin 实现。 */
-.mask-sync-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 7px;
-  flex-wrap: wrap;
-}
-
-/* 样本图层行与通道行之间更紧凑（亲密性原则） */
-.mask-sync-row-close {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 2px;
-  flex-wrap: wrap;
-}
-
-/* 标签统一宽度（4 个汉字宽），与下拉控件之间 6px 间距 */
-.mask-sync-label {
-  color: var(--text-color);
-  font-size: 12px;
-  flex: 0 0 auto;
-  width: 25px; /* “样本图层”/“目标蒙版” 4 字宽，让“通道”容器同宽 */
-  margin-right: 6px;
-  white-space: nowrap;
-  user-select: none;
-}
-
-/* 自绘下拉：头部（闭合状态） */
-.mask-sync-select-wrap {
-  flex: 1 1 120px;
-  min-width: 0;
-  position: relative;
-  /* 与弹层 .mask-sync-select-pop 同理：局部重声明主色蓝，覆盖 Spectrum
-     <Provider> 作用域内被改写的 --primary-color，保证头部展开边框（.head.open）
-     取到的是我们的主色蓝而非 Spectrum 值。 */
-  --primary-color: rgb(38, 128, 235);
-}
-
-/* 头部必须撑满 wrap 的宽度：部分面板会把 wrap 变成 flex 容器
-   （例：.gradient-setting-item > div{display:flex}），此时 head 作为 flex item
-   会退化到「内容宽度」，导致下拉框异常窄，而弹层宽度 = head 宽度，于是展开后的
-   选项区也跟着变窄、文字换行看起来像排成两列。显式撑满即可，与 wrap 自身
-   是不是 flex 容器无关。
-   ⚠️ 三态都要撑满：Select.tsx 里 open/disabled 是「独占类名」，不含
-   .mask-sync-select-head，若只写 .head，展开/禁用瞬间宽度会退化。 */
-.mask-sync-select-wrap > .mask-sync-select-head,
-.mask-sync-select-wrap > .mask-sync-select-head-open,
-.mask-sync-select-wrap > .mask-sync-select-head-disabled {
-  flex: 1 1 auto;
-  width: 100%;
-  min-width: 0;
-}
-
-/* 头部三态共用同一套基础样式。Select.tsx 中展开态（.head-open）与禁用态
-   （.head-disabled）是「独占类名」，不带基础 .head —— 基础布局若只写在 .head 上，
-   展开/禁用瞬间会退化成 display:block：高度失控、箭头（display:flex 会块级化）
-   掉到第二行、背景/边框丢失，头部重排成两行，看起来像「容器上方多出一行
-   显示选中项的名字」。基础样式必须落在三态共享组，open/disabled 只留修饰差异。 */
-.mask-sync-select-head,
-.mask-sync-select-head-open,
-.mask-sync-select-head-disabled {
-  display: flex;
-  align-items: center;
-  height: 24px;
-  padding: 0 6px;
-  color: var(--text-color);
-  font-size: 12px;
-  /* 统一设计语言：头部背景走主题变量（theme.ts --dropdown-bg-color），与主面板下拉一致 */
-  background: var(--dropdown-bg-color);
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-  box-sizing: border-box;
-  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
-  cursor: pointer;
-  user-select: none;
-  overflow: hidden;
-}
-
-/* 展开态修饰：主色蓝描边（沿用闭合态全部基础样式） */
-.mask-sync-select-head-open {
-  border-color: rgb(38, 128, 235);
-}
-
-/* 禁用态：文字（含箭头，currentColor）变灰 --disabled-color，不用 opacity——
-   灰色直接由 --disabled-color 给出，两面板（选区填充/绘画工具箱）禁用下拉观感一致 */
-.mask-sync-select-head-disabled {
-  color: var(--disabled-color);
-  cursor: not-allowed;
-}
-
-/* 分组下拉的分隔线（与主面板 sp-picker 的分组线观感一致） */
-.mask-sync-select-divider {
-  height: 1px;
-  margin: 2px 0;
-  background: var(--border-color);
-}
-
-/* 头部内部元素统一用「两级类」提高特异性：面板里常有 `.xxx-setting-item span{...}`
-   这类后代规则（特异性 0,1,1），会盖掉这里的字号与 `margin-left:auto`（箭头右对齐），
-   表现为某个下拉的箭头紧贴文字、字号与其它下拉不一致。 */
-.mask-sync-select-wrap .mask-sync-select-value {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-}
-
-.mask-sync-select-wrap .mask-sync-select-caret {
-  flex: 0 0 auto;
-  /* margin-left: auto：无 tag 时把箭头推到最右；有 tag（flex:1 撑满）时箭头位于行尾，
-     任何情况下都右对齐（与主面板 sp-picker 的箭头位置一致） */
-  margin-left: auto;
-  padding-left: 6px;
-  display: flex;
-  align-items: center;
-  opacity: 0.6;
-}
-
-/* 选中项右侧对勾（与主面板 sp-picker 的 Spectrum 勾样式一致） */
-.mask-sync-select-check {
-  flex: 0 0 auto;
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  opacity: 0.9;
-}
-
-/* 边缘平滑"平滑模式" / 分层补色"线稿参考"下拉：
-   优先宽度 190px（面板过窄时可收缩），不再右对齐；
-   与左侧标签间距 8px 由 select 的 margin-left 精确控制（UXP 不支持 flex gap，
-   故配合 item 的 no-gap 修饰类，保证间距在任何渲染环境下都是精确 8px） */
-.adjustment-smooth-mode-select {
-  /* 容器宽度不再固定：随行 flex 填充（标签宽度 + 行容器剩余宽度共同决定），
-     与全插件其它下拉一致。标签已用 margin-right:6px 提供间距，故移除左侧 8px。 */
-  flex: 1 1 0%;
-  min-width: 0;
-  margin-left: 0;
-  margin-right: 0;
-}
-
-
-/* 弹出层：由 Select.tsx 用 createPortal 挂到所属面板根容器（#app /
-   #pixeladjustment，见 utils/popRoot.ts），直接位于最上层，fixed 定位（相对视口），
-   既不被面板 overflow 裁剪，也不受面板容器层叠上下文（#app .panel-section ~ .panel z-index:9999）限制。
-   注意：不能挂 document.body —— UXP 只渲染当前激活的 <uxp-panel> 子树，挂到 body
-   的弹层不会被绘制，表现为「下拉打不开」。
-   z-index 必须高于渐变/颜色滑块 thumb（10000~10001）与标准 input[type=number]，
-   低于模态遮罩 99999。
-   display:block 必须显式声明：面板内有 `.xxx-setting-item div{display:flex}`
-   这类通用规则，一旦弹层留在面板内被命中，选项会横向排成两列。 */
-.mask-sync-select-pop {
-  position: fixed;
-  z-index: 99998;
-  display: block;
-  min-width: 96px;
-  max-height: 200px;
-  overflow-y: auto;
-  background: var(--dropdown-bg-color);
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
-  padding: 2px 0;
-  box-sizing: border-box;
-  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
-  /* 关键：在弹层作用域内显式声明主色蓝。
-     @adobe/react-spectrum 的 <Provider> 会在其作用域根（#app / #pixeladjustment）
-     上覆盖一批 CSS 变量，其中就含 --primary-color（被设成 Spectrum 自身语义值）。
-     弹层 portal 到 #app 后，.sel 的 var(--primary-color) 会解析到 Spectrum 的值，
-     变量"已定义但为空"时不触发 fallback → 选中背景变透明。这里局部重声明，
-     让 .sel 子元素取到的是我们自己的主色蓝。 */
-  --primary-color: rgb(38, 128, 235);
-  /* 强制独立合成层（UXP 偶发弹层闪烁/重绘异常）；原内联 POP_LAYER_STYLE 已收口到此 */
-  transform: translateZ(0);
-  will-change: transform;
-}
-
-/* 选项行三态共用同一套 flex 行布局/字号/内边距。Select.tsx 中选中态（.opt-sel）与
-   禁用态（.opt-dis）是「独占类名」，不带 .opt —— 若布局只写在 .opt 上，选中行会
-   退化成普通块：font-size 丢失（继承弹层字号、与其它行不一致而显得变小）、
-   margin-left:auto（对勾右对齐）失效（对勾紧跟文字而非行尾）、padding 消失。
-   基础样式必须落在三态共享组，sel/dis 只留修饰差异。 */
-.mask-sync-select-opt,
-.mask-sync-select-opt-sel,
-.mask-sync-select-opt-dis {
-  display: flex;
-  align-items: center;
-  padding: 4px 8px;
-  font-size: 12px;
-  user-select: none;
-  white-space: nowrap;
-}
-
-.mask-sync-select-opt {
-  color: var(--text-color);
-  cursor: pointer;
-}
-
-.mask-sync-select-opt:hover {
-  background: var(--hover-bg, rgba(128, 128, 128, 0.15));
-}
-
-/* 选中项背景：直接用字面色值 rgb(38,128,235)，不再走 var(--primary-color)。
-   原因：弹层经 createPortal 挂到 #app（<Provider> 作用域内），UXP 下 var() 在该
-   子树里解析不稳定，曾出现选中背景解析不到主色蓝、回退成面板底色的情况。
-   --primary-color 在四套主题里本就是恒定 rgb(38,128,235)，故字面值与主题完全一致，
-   且不依赖任何变量解析。 */
-.mask-sync-select-opt-sel {
-  background: rgb(38, 128, 235);
-  color: rgb(255, 255, 255);
-}
-
-.mask-sync-select-opt-dis {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.mask-sync-select-opt-main {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* 笔刷类型图标/文字右对齐；闭合头部与弹出选项共用此规则。
-   用 flex + justify-content:flex-end 而非 text-align，能可靠地把 inline SVG 推到最右。 */
-.mask-sync-select-opt-tag {
-  flex: 1 1 auto;
-  margin-left: 10px;
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  text-align: right;
-  font-size: 11px;
-  opacity: 0.7;
-  white-space: nowrap;
-}
-
-.mask-sync-checkbox {
-  display: flex;
-  align-items: center;
-  color: var(--text-color);
-  font-size: 12px;
-  cursor: pointer;
-  user-select: none;
-  flex: 0 0 auto;
-}
-
-/* 反相文字显式指定颜色，避免深色主题下被默认样式盖成深灰；
-   标签与 checkbox 间距 4px（margin 实现，UXP 不支持 flex gap） */
-.mask-sync-checkbox span {
-  color: var(--text-color);
-  margin-right: 4px;
-}
-
-.mask-sync-checkbox input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
-  accent-color: var(--primary-color);
-  cursor: pointer;
-  margin-left: 5px; /* 间距由上面的 span margin-right 控制 */
-}
-
-/* 反相行：左对齐（反相标签在左、checkbox 在右） */
-.mask-sync-invert-row {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  margin-bottom: 0;
-  flex-wrap: wrap;
-}
-
-/* 底部：同步开关 + 立即同步 + 圆形删除按钮 */
-.mask-sync-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 2px;
-}
-
-/* 底部同步/删除图标按钮间距（原内联 marginLeft:4 收口到此） */
-.mask-sync-footer .icon-button {
-  margin-left: 4px;
-}
-
-/* 立即同步按钮与删除按钮之间的间距（margin 实现，UXP 不支持 flex gap） */
-/* 同步开关左对齐（覆盖 adjustment-swtich-container 默认居中） */
-.mask-sync-switch {
-  flex: 1 1 auto;
-  min-width: 0;
-  justify-content: flex-start;
-  width: auto;
-}
-
-/* ==========================================================================
-   笔刷热键分区：从 BrushHotkeySection.tsx 内联样式搬来的静态布局
-   ========================================================================== */
-
-/* 笔刷选择行：下拉（或手动输入框）与右侧三个图标按钮同一行居中对齐
-   （原为 const rowStyle = { display:flex, alignItems:center, marginTop:8 }） */
-.hotkey-brush-row {
-  display: flex;
-  align-items: center;
-  margin-top: 8px;
-}
-
-/* 行内的笔刷下拉 / 手动输入框：占满图标组之外的剩余宽度，且允许收缩到 0，
-   避免长笔刷名把图标组挤出容器（原内联 flex:1 1 auto + minWidth:0） */
-.hotkey-brush-field {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-/* 守护进程状态条里的弹性占位：把右侧「启动/停止快捷键服务」按钮推到最右 */
+/* 独有的弹性占位：把右侧「启动/停止快捷键服务」按钮推到最右 */
 .mask-sync-status-spacer {
   flex: 1 1 auto;
-}
-
-/* 重录按钮与删除按钮之间的间距（margin 实现，UXP 不支持 flex gap） */
-.hotkey-entry-actions .icon-button {
-  margin-right: 4px;
 }

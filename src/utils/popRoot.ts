@@ -1,5 +1,5 @@
 /**
- * 自绘下拉弹层（.mask-sync-select-pop）的挂载点。
+ * 自绘下拉弹层（.select-pop）的挂载点。
  *
  * ⚠️ UXP 关键坑：插件文档里同时存在多个 <uxp-panel>（主面板里的 #app、
  * 像素调整面板里的 #pixeladjustment），而 UXP 只渲染「当前激活」的那一个
@@ -8,7 +8,7 @@
  *
  * 因此弹层必须挂到「所在面板的根容器」：
  *   - 仍在被渲染的子树内（能正常显示）；
- *   - 同时脱离面板内部各层叠上下文（.subpanel-fill z-index:9999 等），配合 .mask-sync-select-pop 的高
+ *   - 同时脱离面板内部各层叠上下文（.subpanel-fill z-index:9999 等），配合 .select-pop 的高
  *     z-index 才能真正盖在最上层，不再需要「展开时隐藏滑块数字」这类 hack。
  *
  * @param from 触发弹层的元素（下拉头部），用于定位它所属的面板；为空时回退到 #app。

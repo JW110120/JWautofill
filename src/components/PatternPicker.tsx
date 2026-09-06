@@ -1624,7 +1624,7 @@ interface PatternPickerProps {
             <div className="border-panel-section">
                 <div className="slider-block">
                     <div className="row-between" onMouseDown={(e) => handleMouseDown(e, 'angle')}>
-                        <label className="label-3">角度：</label>
+                        <label className="label-2">角度</label>
                         <div className="row-start">
                             <div className="num-input-row">
                                 <input
@@ -1651,7 +1651,7 @@ interface PatternPickerProps {
 
                 <div className="slider-block">
                     <div className="row-between" onMouseDown={(e) => handleMouseDown(e, 'scale')}>
-                        <label className="label-3">缩放：</label>
+                        <label className="label-2">缩放</label>
                         <div className="row-start">
                             <div className="num-input-row">
                                 <input
@@ -1680,6 +1680,7 @@ interface PatternPickerProps {
 
                 <div className="panel-section">
                 <sp-radio-group
+                    className="pattern-fill-radio"
                     selected={fillMode}
                     name="fillMode"
                     onChange={(e) => setFillMode(e.target.value as 'stamp' | 'tile')}
@@ -1700,10 +1701,10 @@ interface PatternPickerProps {
                     <div className="row-start">
                         <label
                             htmlFor="transparencyCheckbox"
-                            className="label-5"
+                            className="label-4"
                             onClick={() => setPreserveTransparency(!preserveTransparency)}
                         >
-                            剪贴蒙版：
+                            剪贴蒙版
                         </label>
                         <input
                             type="checkbox"
@@ -1719,10 +1720,10 @@ interface PatternPickerProps {
                         <div className="row-start">
                             <label
                                 htmlFor="rotateAllCheckbox"
-                                className="label-5"
+                                className="label-4"
                                 onClick={() => setRotateAll(!rotateAll)}
                             >
-                                旋转阵列：
+                                旋转阵列
                             </label>
                             <input
                                 type="checkbox"

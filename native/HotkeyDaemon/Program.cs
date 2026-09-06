@@ -162,7 +162,7 @@ namespace JWautofillHotkeyDaemon
     internal static class Program
     {
         // 构建版本标识：用于区分安装目录里的新旧 daemon（历史上两次因版本错位误判问题）
-        internal const string Version = "2026-09-04.1";
+        internal const string Version = "2026-09-06.1";
 
         private static readonly int PORT = 18923;
         private static readonly string DefaultConfigPath =
@@ -474,7 +474,12 @@ namespace JWautofillHotkeyDaemon
                 Process.Start(psi);
             }
             catch (Exception ex) { Console.WriteLine("[HotkeyDaemon] 卸载异常: " + ex.Message); }
-            finally { Environment.Exit(0); }
+            finally {
+                // 显式卸载全局键盘钩子：即便 Environment.Exit 略有延迟，也先释放钩子，
+                // 避免进程退出前钩子仍挂在系统输入链上造成键盘短暂失灵。
+                try { if (_hookId != IntPtr.Zero) Win32.UnhookWindowsHookEx(_hookId); } catch { }
+                Environment.Exit(0);
+            }
         }
 
         static void Main(string[] args)

@@ -139,7 +139,7 @@
   z-index: 10;
 }
 
-.row-between > .mask-sync-select-wrap {
+.row-between > .select-wrap {
     display: block;
     flex: 1 1 0%;
     min-width: 0;

@@ -11,3 +11,8 @@
 .position-radio-group sp-radio:not(:last-child) {
   margin-right: 25px;
 }
+
+/* 描边「位置」三列 radio 整体右移 10px（独立样式，不依赖通用行间距） */
+.position-radio-group {
+  transform: translateX(10px);
+}

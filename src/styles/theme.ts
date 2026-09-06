@@ -178,31 +178,31 @@ const createThemeStyles = () => {
     }
 
     /*
-     * 遮罩（激活弹窗 .license-dialog-overlay / 绘画工具箱锁定层 .adjustment-lock-overlay）实际配色。
+     * 遮罩（通用悬浮窗口遮罩 .float-overlay / 绘画工具箱锁定层 .adjustment-lock-overlay）实际配色。
      * 规则：不透明度恒定 0.80（必须挡住下方内容），主题差异体现在「颜色深浅」上
      *      （darkest 纯黑 → dark/light/lightest 逐级中性灰），浅色主题下不刺眼且始终可见。
      * 这里刻意用字面值而非 var(--overlay-scrim)：UXP 对动态注入的 var() 解析不稳定，
      * 纯 var() 写法曾出现「遮罩能拦截点击但背景完全不绘制（看不见）」的问题。
      * ⚠️ 改遮罩颜色只改这一处；上面的 --overlay-scrim 仅作文档/其它用途的同步记录。
      */
-    .license-dialog-overlay,
+    .float-overlay,
     .adjustment-lock-overlay {
       background-color: rgba(0, 0, 0, 0.80);
     }
     @media (prefers-color-scheme: darkest) {
-      .license-dialog-overlay,
+      .float-overlay,
       .adjustment-lock-overlay { background-color: rgba(0, 0, 0, 0.80); }
     }
     @media (prefers-color-scheme: dark) {
-      .license-dialog-overlay,
+      .float-overlay,
       .adjustment-lock-overlay { background-color: rgba(29, 29, 29, 0.80); }
     }
     @media (prefers-color-scheme: light) {
-      .license-dialog-overlay,
+      .float-overlay,
       .adjustment-lock-overlay { background-color: rgba(92, 92, 92, 0.80); }
     }
     @media (prefers-color-scheme: lightest) {
-      .license-dialog-overlay,
+      .float-overlay,
       .adjustment-lock-overlay { background-color: rgba(128, 128, 128, 0.80); }
     }
   `;

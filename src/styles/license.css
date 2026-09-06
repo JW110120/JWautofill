@@ -15,40 +15,11 @@
  */
 
 /*
- * 遮罩只负责布局，背景色统一由 theme.ts 定义（不透明度恒定 0.80、按主题调颜色深浅）。
- * ⚠️ 这里绝对不要写 background-color：遮罩配色是 theme.ts 末尾那组字面 rgba 规则。
+ * 遮罩（.float-overlay）与窗口（.float-window）已收口到 common.css 的
+ * 「通用悬浮窗口」区：激活弹窗与绘画工具箱的分区显隐弹窗共用同一套实现。
+ * 遮罩背景色统一由 theme.ts 定义（不透明度恒定 0.80、按主题调颜色深浅），
+ * ⚠️ 本文件不再定义遮罩/窗口，也绝对不要再写 background-color。
  */
-.license-dialog-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    /* 显式宽高兜底：仅靠 top/left/right/bottom 拉伸时，
-       个别 UXP 版本下背景绘制区域会异常 */
-    width: 100%;
-    height: 100%;
-    right: 0;
-    bottom: 0;
-    display: flex;
-    align-items: flex-start;
-    justify-content: center;
-    /* 四周 10px 内边距 → 卡片与面板上/左/右边缘边距恒为 10px */
-    padding: 10px;
-    box-sizing: border-box;
-    z-index: 99999 !important;
-}
-
-.license-dialog {
-    width: 100%;
-    background: var(--bg-color);
-    border: 1px solid var(--border-color);
-    /* 与绘画工具箱容器（.slider-container）圆角一致：3px */
-    border-radius: 3px;
-    padding: 14px;
-    box-sizing: border-box;
-    overflow-y: auto;
-    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
-    position: relative;
-}
 
 .license-content {
     display: flex;

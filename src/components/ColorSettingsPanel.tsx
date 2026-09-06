@@ -268,6 +268,7 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
             <div className="panel-section">
                 <label className="subpanel-title-2">计算方法</label>
                 <sp-radio-group 
+                    className="color-calc-radio"
                     selected={settings.calculationMode || 'absolute'}
                     name="calculationMode"
                     onChange={(e) => setSettings(prev => ({ ...prev, calculationMode: e.target.value as 'absolute' | 'relative' }))}

@@ -7,7 +7,7 @@ import {
 } from '../utils/popOverlay';
 
 // 通用自绘下拉：与各面板里的自绘下拉（BrushSelect 等）共用同一套
-// CSS（.mask-sync-select-*，定义在 src/adjustments/adjustment.css），因此视觉上
+// CSS（.select-*，定义在 src/styles/common.css「通用自绘下拉组件」区），因此视觉上
 // 全插件下拉完全一致，且背景/文字都走主题变量（--dropdown-bg-color 等），
 // 不再依赖 sp-picker / sp-menu（其展开菜单背景在 UXP 下无法被 CSS 覆盖）。
 //
@@ -167,16 +167,16 @@ export default function Select({
     opts.map((o, i) => (
       <div
         key={i}
-        className={o.value === value ? 'mask-sync-select-opt-sel' : o.disabled ? 'mask-sync-select-opt-dis' : 'mask-sync-select-opt'}
+        className={o.value === value ? 'select-opt-sel' : o.disabled ? 'select-opt-dis' : 'select-opt'}
         style={o.depth != null ? { paddingLeft: 8 + o.depth * 16 } : undefined}
         onClick={() => handleOptClick(o)}
       >
-        <span className="mask-sync-select-opt-main">{o.label}</span>
-        {o.tag && <span className="mask-sync-select-opt-tag">{o.tag}</span>}
+        <span className="select-opt-main">{o.label}</span>
+        {o.tag && <span className="select-opt-tag">{o.tag}</span>}
         {/* 选中项右侧对勾：仅在该项没有右侧标记（笔刷图标 / 图层标记）时显示，
-            与蒙版同步下拉的样式一致。勾的颜色继承 .mask-sync-select-opt-sel 的白色前景，落在主色（蓝）背景上。 */}
+            与蒙版同步下拉的样式一致。勾的颜色继承 .select-opt-sel 的白色前景，落在主色（蓝）背景上。 */}
         {showCheck && !o.tag && o.value === value && (
-          <span className="mask-sync-select-check">
+          <span className="select-check">
             <svg viewBox="0 0 36 36" width="12" height="12" aria-hidden="true" focusable="false">
               <path d="M9 16.4L14.6 22.1L27.4 9.6L29.4 11.6L14.6 26.3L9 20.4Z" fill="currentColor" />
             </svg>
@@ -186,17 +186,17 @@ export default function Select({
     ));
 
   return (
-    <div className="mask-sync-select-wrap" title={title} style={style}>
+    <div className="select-wrap" title={title} style={style}>
       <div
         ref={headRef}
-        className={disabled ? 'mask-sync-select-head-disabled' : open ? 'mask-sync-select-head-open' : 'mask-sync-select-head'}
+        className={disabled ? 'select-head-disabled' : open ? 'select-head-open' : 'select-head'}
         onClick={handleHeadClick}
       >
-        <span className="mask-sync-select-value">
+        <span className="select-value">
           {sel ? sel.label : placeholder}
         </span>
-        {sel?.tag && <span className="mask-sync-select-opt-tag">{sel.tag}</span>}
-        <span className="mask-sync-select-caret">
+        {sel?.tag && <span className="select-opt-tag">{sel.tag}</span>}
+        <span className="select-caret">
           <svg viewBox="0 0 18 18" width="16" height="16" aria-hidden="true" focusable="false">
             <path d="M4,7.01a1,1,0,0,1,1.7055-.7055l3.289,3.286,3.289-3.286a1,1,0,0,1,1.437,1.3865l-.0245.0245L9.7,11.7075a1,1,0,0,1-1.4125,0L4.293,7.716A.9945.9945,0,0,1,4,7.01Z" fill="currentColor" />
           </svg>
@@ -205,18 +205,18 @@ export default function Select({
       {open && pos && popRoot && !disabled && createPortal(
         <div
           ref={popRef}
-          className="mask-sync-select-pop"
+          className="select-pop"
           style={{ left: pos.left, top: pos.top, width: pos.width }}
         >
           {groups ? (
             groups.map((g, gi) => (
               <React.Fragment key={gi}>
-                {gi > 0 && <div className="mask-sync-select-divider" />}
+                {gi > 0 && <div className="select-divider" />}
                 {renderOpts(g)}
               </React.Fragment>
             ))
           ) : allOptions.length === 0 ? (
-            <div className="mask-sync-select-opt-dis">无可用选项</div>
+            <div className="select-opt-dis">无可用选项</div>
           ) : (
             renderOpts(allOptions)
           )}
