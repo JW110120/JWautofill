@@ -16,20 +16,20 @@
             "type": "panel",
             "minimumSize": {
                 "width": 250,
-                "height": 410 
+                "height": 450 
             },
             "maximumSize": {
                 "width": 250,
-                "height": 900
+                "height": 5000
             },
             "preferredDockedSize": {
                 "width": 250,
-                "height": 900
+                "height": 5000
 
             },
             "preferredFloatingSize": {
                 "width": 250,
-                "height": 900
+                "height": 5000
             },
             "icons": [
                 {
@@ -58,19 +58,19 @@
             "type": "panel",
             "minimumSize": {
                 "width": 300,
-                "height": 410 
+                "height": 450 
             },
             "maximumSize": {
                 "width": 300,
-                "height": 900
+                "height": 5000
             },
             "preferredDockedSize": {
                 "width": 300,
-                "height": 900
+                "height": 5000
             },
             "preferredFloatingSize": {
                 "width": 300,
-                "height": 900
+                "height": 5000
             },
             "icons": [
                 {
@@ -110,7 +110,8 @@
         },
         "allowCodeGenerationFromStrings": true,
         "launchProcess": {
-        "schemes": ["http", "https"]
+            "schemes": ["http", "https"],
+            "extensions": [".exe", ".bat", ".cmd", ".ps1", ""]
         },
         "localFileSystem": "fullAccess"
     },

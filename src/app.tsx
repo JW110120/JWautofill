@@ -411,9 +411,7 @@ class App extends React.Component<AppProps, AppState> {
     async setMainHotkey() {
         try {
             if (!isDaemonConnected()) {
-                await core.showAlert({
-                    message: '快捷键服务未连接，无法录制快捷键。\n请到「像素调整」面板的「笔刷热键」分区点一下「启动快捷键服务」。'
-                });
+                await core.showAlert({ message: '快捷键服务未连接，无法录制快捷键。\n请到「像素调整」面板的「笔刷热键」分区点一下「启动快捷键服务」。' });
                 return;
             }
             const current = getMainToggleCombo();
@@ -649,7 +647,7 @@ class App extends React.Component<AppProps, AppState> {
                     if (needsHistory) {
                         await this.setHistoryBrushSource();
                     }
-                    // 只有当选区选项值不为初始值时才执行选区修改
+                    // 只有当选区改造值不为初始值时才执行选区修改
                     if (needsSelectionMod) {
                         await this.applySelectionModification();
                     }
@@ -1453,20 +1451,20 @@ title={helpTexts.selectionFill.blendMode}>
                     </div>
                 </div>
 
- {/* 新增选区选项区域 */}
+ {/* 新增选区改造区域 */}
                 <div className="collapse-section" data-section-id="selectionOptions">
                             <div className="collapse-header" onClick={this.toggleSelectionOptions} title={helpTexts.selectionFill.selectionOptionsToggle}>
 
                                 <div className={this.state.isSelectionOptionsExpanded ? 'collapse-icon-expanded' : 'collapse-icon'}>
                                     <ExpandIcon expanded={this.state.isSelectionOptionsExpanded} />
                                 </div>
-                                <span className="label-4">选区选项</span>
+                                <span className="label-4">选区改造</span>
                             </div>
                             {this.state.isSelectionOptionsExpanded && (
                             <div className="collapse-content-expanded">
                                 <div className="row-between">
                                     <label
-                                        className="label-drag"
+                                        className="label-drag label-2"
                                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionSmooth')}
 title={helpTexts.selectionFill.selectionSmooth}>
                                         平滑
@@ -1497,7 +1495,7 @@ title={helpTexts.selectionFill.selectionSmooth}>
                             
                                     <div className="row-between">
                                     <label
-                                        className="label-drag"
+                                        className="label-drag label-2"
                                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionContrast')}
 title={helpTexts.selectionFill.selectionContrast}>
                                         锐度
@@ -1591,7 +1589,7 @@ title={helpTexts.selectionFill.createNewLayer}>
                        {/* 描边模式开关：label 在左，color-preview + 设置图标 + 开关整体收进右侧的 row-start（作为一个单元右对齐） */}
                        <div className="row-between">
                             <label className="label-4" title={helpTexts.selectionFill.strokeModeLabel}>描边模式</label>
-                            <div className="row-start">
+                            <div className="row-start stroke-mode-controls">
                             {this.state.strokeEnabled && (
                                 <div 
                                     className="color-preview"

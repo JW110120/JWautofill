@@ -247,11 +247,18 @@ export default function BrushHotkeySection() {
     }
     showMessage('正在修复键盘…');
     let ok = false;
-    try { ok = await openBundled('native/HotkeyDaemon/fix-keyboard.bat'); } catch (err: any) {
-      console.error('唤起键盘修复脚本失败:', err);
+    // ⚠️ 唤起 .exe 而非 .bat：UXP 的 shell.openPath 对 .bat/.ps1 只会「用编辑器打开而非执行」，
+    // 对 .exe 才会真正运行并弹出可见控制台窗口。FixKeyboard.exe 内部再调用 fix-keyboard.ps1。
+    try { ok = await openBundled('native/HotkeyDaemon/FixKeyboard.exe'); } catch (err: any) {
+      console.error('唤起键盘修复工具失败:', err);
     }
     if (!ok) {
-      const ret = '未找到键盘修复脚本，请手动双击 native/HotkeyDaemon/fix-keyboard.bat';
+      // 兜底：唤起失败时打开工具所在目录，鼠标双击 FixKeyboard.exe 即可（键盘卡死时只有鼠标可用）
+      try {
+        const dir = await getBundledNativePath('native/HotkeyDaemon');
+        if (dir) await shell.openPath(dir);
+      } catch { /* 目录打不开就只能提示手动操作 */ }
+      const ret = '未找到/无法唤起键盘修复工具，已为你打开工具所在目录；若未弹出请手动双击 native/HotkeyDaemon/FixKeyboard.exe';
       showMessage(ret);
       return ret;
     }
@@ -501,8 +508,9 @@ export default function BrushHotkeySection() {
 
   return (
     <>
-      {/* 守护进程状态条：与「蒙版同步」的引擎状态条同一套视觉，左侧状态点+文字，右侧操作按钮 */}
-      <div className="notify-bar">
+      {/* 守护进程状态条：与「蒙版同步」的引擎状态条同一套视觉，左侧状态点+文字，右侧操作按钮。
+          外描边随状态变化：ok=绿 / warn=橙（common.css 的 .notify-bar-ok/warn） */}
+      <div className={daemonConnected ? 'notify-bar notify-bar-ok' : 'notify-bar notify-bar-warn'}>
         <span className={daemonConnected ? 'indicator indicator-md indicator-ok' : 'indicator indicator-md indicator-warn'} />
         <span className="notify-text">
           {daemonConnected ? '快捷键服务已就绪' : (busy ? '快捷键服务处理中…' : '快捷键服务未启动')}
@@ -655,10 +663,10 @@ export default function BrushHotkeySection() {
         </div>
       </div>
 
-      {/* 底部文字通知：与面板顶部「激活提示」同款横幅（common.css 的 .notify-banner），
+      {/* 底部文字通知：与面板顶部「激活提示」同款横幅（common.css 的 .status-banner），
           容器 + 状态点 + 12px 正文一致；ok=绿点（服务就绪时）、warn=橙点（未启动/处理中）。 */}
       {message && (
-        <div className={daemonConnected ? 'notify-banner notify-banner-ok' : 'notify-banner notify-banner-warn'}>
+        <div className={daemonConnected ? 'status-banner status-banner-ok' : 'status-banner status-banner-warn'}>
           <span className={daemonConnected ? 'indicator indicator-md indicator-ok' : 'indicator indicator-md indicator-warn'} />
           <span className="notify-text">{message}</span>
         </div>

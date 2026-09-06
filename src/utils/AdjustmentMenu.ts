@@ -69,6 +69,11 @@ export class AdjustmentMenu {
           this.alphaSampleCallback();
         }
         break;
+      case "repairKeyboard":
+        if (this.repairKeyboardCallback) {
+          this.repairKeyboardCallback();
+        }
+        break;
       case "uninstallHotkeyDaemon":
         if (this.uninstallHotkeyDaemonCallback) {
           this.uninstallHotkeyDaemonCallback();

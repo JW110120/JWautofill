@@ -30,8 +30,11 @@
 ## 通用组件 CSS 单一来源（common.css）
 - index.tsx 顺序：uxpPerfPatch→common→app→license。common.css 严禁 @import。已收口：滑块块/标签档/range-slider/数字输入+单位/input appearance/图标按钮/按钮族/主标题(.main-title 去 border-bottom 改 .divider)/开关行/radio/checkbox/折叠区/通知区/滚动条/拖拽光标锁。
 - .panel(外壳：padding:10+overflow-y:auto+min-height:0) 与 .panel-section(区块：row 布局，label+控件同行；列布局加 .panel-section--col) 全插件通用。
-- 状态类收口 common.css「通用状态类」区（约 .thumb-box img 之后）：通用类名 .thumb-selected / .thumb-multi-selected（共享 border-width:2px 归组，仅色不同）、拖起 .thumb-box/.hotkey-entry-row/.collapse-section.dragging 三家族分组一条（(0,2,0) 压各家 base cursor）、落点分两族——.thumb-box.drop-target(border 虚线族) 与 .hotkey-entry-row/.collapse-section.drop-target(outline 虚线族，归组一条)。UXP 禁 outline-offset。TSX 只挂通用类名。
+- ⚠️ **状态样式集中区（2026-09-06 定稿）**：所有禁用/hover/active/选中/多选/dragging/drop-target 规则统一放 common.css **文件最底部**「通用状态样式（集中管理区）」（分 悬停按下/禁用/选中/拖拽交换 四小节）；基础样式留在各组件段。新增状态规则一律进该区，不改别处。状态类只写修饰差异，盒模型必须与基础类共享（否则切换瞬间塌陷）。
+- ⚠️ **一切「选中/落点」视觉一律 border 变化，禁 outline（UXP 无 outline-offset 且 outline 需基线才可见）**：需要状态描边的元素基础类挂 `border:1px solid/dashed transparent` 占位，状态类只变色 → 零位移。.hotkey-entry-row/.mask-sync-task-name 均已如此（2026-09-06：selected 只写 outline-color 但无基线=完全无效，用户实报）。
+- 通知体系定稿：`.status-banner`=通用通知横幅（顶部激活卡片 license-status-banner-* 只剩状态配色 + 笔刷热键底部 + 蒙版同步内部，三处共同挂载；**min-height:30px 不写死 height**，换行时容器增高保边距）；`.notify-bar`=单行状态条（引擎状态/快捷键服务状态，挂 notify-bar-ok/warn/fail 状态描边）；`.notify-text` 全项目**唯一定义**（12px/可换行/word-break）。勿再起 notify-banner 之类近似名。
 - Select.tsx 态类是独占类名(head-open/head-disabled/opt-sel/opt-dis 不含基础类)，基础样式须三态共享组(.head,.head-open,.head-disabled 合写)否则展开退化成块。
+- ⚠️ **UXP 弹窗用 `core.showAlert({message})`（PS 原生弹窗）；`dialogs.alert`（uxp 模块）在 PS 里只打印 UXP 控制台、界面无弹窗**（2026-09-06 实测）。且若跨分区注册回调（如笔刷热键分区的 handler），分区折叠=组件未挂载=回调为 null → 必须在 bridge 层兜底（参考 HotkeyBridge.requestRepairKeyboard 无 handler 时直接 shell.openPath 修复脚本）。
 
 ## 布局宽度
 - 标签 W(n)=20+(n-2)×13.33(2..6字=20/33/47/60/73px)。按钮宽=字数×字号+20px。数字输入统一 32×24(容器32留4缓冲)。
@@ -44,3 +47,6 @@
   ② 修复（2026-09-04）：日志统一经 QueueTextWriter 入 BlockingCollection，由专门 LoggerThread 落盘（钩子线程只入队）；录制结果 SendToClient 移交 Task.Run，绝不阻塞钩子线程；客户端 socket 设 SendTimeout=2000 兜底。
   ③ 焦点闸门：LowLevelKeyboardProc 首行 `if (!IsPhotoshopForeground()) return CallNextHookEx(...)`——焦点不在 PS 时直接放行（暂停监听），避免吞掉其它程序的按键。WatchPhotoshop 周期刷新 `_psPids`（PS 进程 PID 集合），钩子线程按前台窗口 PID 比对，避免每次按键 new Process。
 - 重大变更同步 docs/*.html、README.md。hover title 收口 helpTexts.ts，禁止 JSX 内联长字符串。
+- daemon 重编：SDK 8.0.424 已装于 `C:\Users\Administrator\.dotnet-sdk`（**用户要求永久保留，绝不删 SDK/安装包**）；编译命令与 Git Bash 环境变量坑（NuGet path1 null / ProgramFiles(x86) 须 env 前缀 / System32 tar 解 zip）见技能 dotnet-publish-windows（~/.workbuddy/skills/）。编译后用户在面板停止→启动快捷键服务换版。
+- ⚠️ UXP `shell.openPath` 受 manifest `launchProcess.extensions` 扩展名白名单管控：已声明 `[".exe",".bat",".cmd",".ps1",""]`（""=开文件夹）。改任何 openPath 目标类型前先核对白名单。前端改完必须 UDT Reload/重启 PS 才生效，UXP 不热更新 bundle。
+- 一键修复链路定稿（2026-09-06）：菜单→requestRepairKeyboard（分区未挂载兜底直唤 fix-keyboard.bat）→openPath 失败则 core.showAlert+打开脚本目录；CMD 15 秒自动关；脚本日志 %TEMP%\jwautofill_fixkeyboard.log。反馈一律 core.showAlert（dialogs.alert 在 PS 里只进 UXP 控制台）。

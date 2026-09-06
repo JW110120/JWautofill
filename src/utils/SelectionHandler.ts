@@ -1,6 +1,6 @@
 import { action, app, imaging } from "photoshop";
 
-// 选区选项参数接口
+// 选区改造参数接口
 export interface SelectionOptions {
     selectionSmooth: number;
     selectionContrast: number;

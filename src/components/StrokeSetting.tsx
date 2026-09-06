@@ -110,8 +110,8 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         
         <div className="panel-section">
           <div className="row-between">
-          <label 
-            className="label-drag"
+          <label
+            className="label-drag label-2"
             onMouseDown={(e) => handleLabelMouseDown(e, 'width')}
           >
             宽度
@@ -182,7 +182,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         <div className="panel-section">
           <div className="row-between">
           <label
-            className="label-drag"
+            className="label-drag label-4"
             onMouseDown={(e) => handleLabelMouseDown(e, 'opacity')}
           >
             不透明度

@@ -97,7 +97,7 @@ export interface AppState {
         green: number;
         blue: number;
     };
-     // 新增选区选项状态
+     // 新增选区改造状态
      isSelectionOptionsExpanded: boolean;
      selectionSmooth: number;
      selectionContrast: number;

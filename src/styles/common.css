@@ -122,14 +122,6 @@ html, body {
 }
 
 
-/* 全局控件光标禁用态 */
-sp-switch[disabled],
-sp-button[disabled],
-sp-action-button[disabled],
-sp-radio[disabled] {
-  cursor: not-allowed;
-}
-
 /* 通用标签
    W(n) = 20 + (n-2)×13.3 → 2/3/4/5/6 字 = 20/33/47/60/73px
    - .label-2..6：标签（按字数定宽）
@@ -158,11 +150,6 @@ sp-radio[disabled] {
 
 .label-drag {
   cursor: ew-resize;
-}
-
-/* 通用--disabled-color禁用态，所有--disabled-color最好都收口一下 */
-.label-disabled {
-  color: var(--disabled-color);
 }
 
 /* 通用自定义滑块 */
@@ -375,24 +362,6 @@ sp-radio[disabled] {
   margin: 0 auto;
 }
 
-/* 通用半透明禁用态 */
-.slider-block.disabled {
-  opacity: 0.5;
-}
-
-/* 通用--disabled-color、禁止操作禁用态，所有相同的类型都收口一下 */
-.slider-block.disabled label {
-  cursor: not-allowed;
-  color: var(--disabled-color);
-}
-
-/* 没有特殊的样式，需要收口在通用半透明、禁止操作禁用态 */
-.slider-block.disabled .slider-input,
-.slider-block.disabled input[type="number"] {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
 /* 通用行内滑块（标签 + 滑块 + 数字 + 单位 全部在同一行） */
 .slider-track {
   position: relative;
@@ -433,26 +402,6 @@ sp-radio[disabled] {
 
 /* 图标按钮样式原则：以下所有图标按钮的状态，改变的之后内部的icon，后面的容器不发生变化，不符合的需要收口 */
 
-/* 通用图标按钮hover状态 */
-.icon-button:hover .icon-fill {
-  fill: var(--hover-icon);
-}
-
-/* 通用图标按钮点击状态 */
-.icon-button:active {
-  transform: scale(0.94);
-}
-
-/* 通用--disabled-color禁用态，需要检查tsx是否调用正确 */
-.icon-button-disabled {
-  color: var(--disabled-color);
-  cursor: not-allowed;
-}
-
-.icon-button-disabled .icon-fill {
-  fill: var(--disabled-color);
-}
-
 /* 通用图标填充颜色 */
 .icon-fill {
   fill: var(--text-color);
@@ -479,42 +428,9 @@ sp-radio[disabled] {
   user-select: none;
 }
 
-/* 基础态：hover 与齿轮图标统一（icon 变蓝 --hover-icon，背景无变化） */
+/* 基础态光标（hover/录制中/禁用等状态规则统一收口在文件底部「通用状态样式」区） */
 .record-button {
   cursor: pointer;
-}
-.record-button:hover {
-  color: var(--hover-icon);
-}
-.record-button:hover .icon-fill {
-  fill: var(--hover-icon);
-}
-.record-button:active {
-  transform: scale(0.94);
-}
-
-/* 录制中：红色常亮，hover 不变色，不可点击 */
-.record-button-recording {
-  color: rgb(239, 83, 80);
-  cursor: default;
-}
-.record-button-recording:hover {
-  color: rgb(239, 83, 80);
-}
-.record-button-recording:hover .icon-fill {
-  fill: rgb(239, 83, 80);
-}
-
-/* 禁用态：图标变灰（--disabled-color），与 APP 总开关禁用态一致 */
-.record-button-disabled {
-  color: var(--disabled-color);
-  cursor: not-allowed;
-}
-.record-button-disabled:hover {
-  color: var(--disabled-color);
-}
-.record-button-disabled:hover .icon-fill {
-  fill: var(--disabled-color);
 }
 
 
@@ -555,18 +471,6 @@ sp-radio[disabled] {
   color: var(--text-color);
   transition: all 0.3s ease;
   box-sizing: border-box;
-}
-
-/* 通用action按钮hover状态，所有的action-button按钮hover都要收口在一起 */
-.main-button:hover {
-  background-color: var(--hover-bg);
-  border-color: var(--primary-color);
-}
-
-/* 通用action按钮点击状态，所有的action-button按钮点击都要收口在一起 */
-.main-button:active {
-  background-color: var(--button-down);
-  transform: scale(0.98);
 }
 
 /* 通用总开关内容容器 */
@@ -611,52 +515,11 @@ sp-radio[disabled] {
   user-select: none;
 }
 
-.action-button-2:hover,
-.action-button-3:hover
-.action-button-4:hover,
-.action-button-5:hover,
-.action-button-6:hover,
-.action-button-7:hover,
-.action-button-8:hover,
-.action-button-quad:hover,
-.action-button-auto:hover {
-  background-color: var(--hover-bg);
-  border-color: var(--primary-color);
-  transform: scale(1.02);
-}
-
-.action-button-2:active,
-.action-button-3:active,
-.action-button-4:active,
-.action-button-5:active,
-.action-button-6:active,
-.action-button-7:active,
-.action-button-8:active,
-.action-button-quad:active,
-.action-button-auto:active {
-  background-color: var(--button-down);
-  transform: scale(0.98);
-}
-
 /* 自适应宽度：用于超过 8 字的按钮文案 */
 .action-button-auto {
   width: auto;
   padding: 0 10px;
   min-width: 0;
-}
-
-/* 通用半透明、禁止操作禁用态（action-button-run / run-disabled 收口于此）。
-   ⚠️ 禁用态必须与原生按钮基样式同挂一个元素（如 action-button-auto action-button-disabled），
-   才能保留边框/字号/高度；单独使用会丢失 .action-button-* 的盒模型导致「边框消失、文字变大」。 */
-.action-button-disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-/* 禁用态不应有悬停反馈（避免处理中按钮仍高亮/缩放） */
-.action-button-auto.action-button-disabled:hover {
-  background-color: var(--button-bg);
-  border-color: var(--border-color);
-  transform: none;
 }
 
 /* 按钮宽度分档：按按钮汉字字数精确分级，均 box-sizing:border-box + 无内边距。
@@ -688,13 +551,6 @@ sp-radio[disabled] {
   align-items: center;
   justify-content: center;
 }
-
-/* 通用子面板关闭按钮悬停状态 */
-.close-button:hover {
-  background-color: rgb(220, 38, 34) !important;
-  border-color: var(--primary-color) !important;
-}
-
 
 /* 通用子面板标题栏一级标题 */
 .subpanel-title-1 {
@@ -786,11 +642,6 @@ sp-radio[disabled] {
   transition: background-color 0.3s;
 }
 
-/* 请收口于通用hover状态 */
-.collapse-header:hover {
-  background-color: var(--hover-bg);
-}
-
 /* 通用折叠图标 */
 .collapse-icon,
 .collapse-icon-expanded {
@@ -808,13 +659,6 @@ sp-radio[disabled] {
 /* 通用折叠展开样式 */
 .collapse-content-expanded {
   max-height: 1400px;
-}
-
-/* 禁用态 label：switch 容器与 switch-row 收口为 row-between / row-start 后，下落到通用行容器 */
-.row-between:has(sp-switch[disabled]) [class^="label-"],
-.row-start:has(sp-switch[disabled]) [class^="label-"] {
-  cursor: not-allowed;
-  color: var(--disabled-color);
 }
 
 /* 通用 radio 样式*/
@@ -884,34 +728,7 @@ sp-radio {
   accent-color: var(--primary-color);
 }
 
-/* 请收口于半透明、禁操作禁用态 */
-.checkbox-input:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-/* 原样式已修改，请相应修改，请收口于--disabled-color、禁操作禁用态 */
-.row-start:has(input:disabled) [class^="label-"] {
-  cursor: not-allowed;
-  color: var(--disabled-color);
-}
-
-/* 通用禁用行：含禁用控件时整行置灰、禁操作（gradient 角度行等收口于此） */
-.row-between.disabled,
-.row-start.disabled {
-  cursor: not-allowed;
-}
-.row-between.disabled [class^="label-"],
-.row-start.disabled [class^="label-"] {
-  cursor: not-allowed;
-  color: var(--disabled-color);
-}
-.row-between.disabled .range-slider,
-.row-between.disabled input,
-.row-start.disabled input {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+/* 通用禁用行：含禁用控件时整行置灰、禁操作（gradient 角度行等收口于此，规则在文件底部状态区） */
 
 /* 通用信息通知区域 */
 .notify {
@@ -942,33 +759,8 @@ sp-radio {
   border: 1px solid var(--notify-fail-border);
 }
 
-/* 通用通知横幅：与面板顶部「激活提示」卡片（adjustment.css 的 .license-status-banner-*）同款容器/状态点/字号。
-   issue 5 收口目标——笔刷热键底部通知、蒙版同步内部通知统一到这一款。内部复用 .indicator-md（状态点）+ .notify-text（正文）。 */
-.notify-banner {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  height: 30px;
-  min-height: 30px;
-  flex: none;
-  padding: 6px 10px;
-  border-radius: 3px;
-  margin-bottom: 6px;
-  border: 1px solid var(--border-color);
-  background: var(--bg-color);
-  color: var(--text-color);
-  font-size: 12px;
-  box-sizing: border-box;
-  user-select: none;
-}
-.notify-banner.notify-banner-ok   { border-color: var(--notify-ok-border);   background: var(--notify-ok-bg); }
-.notify-banner.notify-banner-warn { border-color: var(--notify-warn-border); background: var(--notify-warn-bg); }
-.notify-banner.notify-banner-fail { border-color: var(--notify-fail-border); background: var(--notify-fail-bg); }
-/* 字号/换行对齐顶部激活提示卡片（正文 12px，单行过长时换行而非裁切） */
-.notify-banner .notify-text { font-size: 12px; opacity: 1; white-space: normal; line-height: 1.4; }
-
-/* 通用状态条通知：状态点 + 正文（+ 右侧信息/操作）。
-   与 .notify-* 同族，但自带描边与 --bg-color 底（状态类容器透明融入面板，不另起色块）。 */
+/* 通用状态条通知（引擎状态条等单行状态行）：状态点 + 正文（+ 右侧信息/操作）。
+   外描边随状态变化：ok=绿描边 / warn=橙描边 / fail=红描边（由 TSX 按状态挂修饰类）。 */
 .notify-bar {
   display: flex;
   align-items: center;
@@ -981,15 +773,44 @@ sp-radio {
   box-sizing: border-box;
   user-select: none;
 }
+.notify-bar.notify-bar-ok   { border-color: var(--notify-ok-border);   background: var(--notify-ok-bg); }
+.notify-bar.notify-bar-warn { border-color: var(--notify-warn-border); background: var(--notify-warn-bg); }
+.notify-bar.notify-bar-fail { border-color: var(--notify-fail-border); background: var(--notify-fail-bg); }
 
-/* 通用通知正文 */
+/* 通用通知横幅（唯一收口名，勿再起 notify-banner 之类近似名与 .notify-bar 混淆）：
+   与面板顶部「激活提示」卡片同款容器/状态点/字号，三处共同挂载——
+   ① 顶部激活卡片（license-status-banner-* 作为状态修饰类叠加）
+   ② 笔刷热键底部通知  ③ 蒙版同步任务内部通知。
+   ⚠️ 只用 min-height 不写死 height：正文换行时容器随之增高，避免 30px 内被撑满失去边距。 */
+.status-banner {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 30px;
+  flex: none;
+  padding: 6px 10px;
+  border-radius: 3px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-color);
+  color: var(--text-color);
+  font-size: 12px;
+  box-sizing: border-box;
+  user-select: none;
+}
+.status-banner.status-banner-ok   { border-color: var(--notify-ok-border);   background: var(--notify-ok-bg); }
+.status-banner.status-banner-warn { border-color: var(--notify-warn-border); background: var(--notify-warn-bg); }
+.status-banner.status-banner-fail { border-color: var(--notify-fail-border); background: var(--notify-fail-bg); }
+
+/* 通用通知正文（全插件唯一定义：notify / notify-bar / status-banner 内的正文都用它）。
+   12px、允许换行（超长文案折行而非溢出/裁切），配合容器的 min-height 保证边距。 */
 .notify-text {
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.4;
   word-break: break-all;
+  white-space: normal;
   color: var(--text-color);
-  opacity: 0.85;
-  white-space: nowrap;
+  min-width: 0;
 }
 
 /* 状态指示点 */
@@ -1083,51 +904,6 @@ sp-radio {
   object-fit: contain;
   display: block;
   transition: opacity 0.2s;
-}
-
-/* 通用选中样式（!important 保证压过各面板 .preset-item / .thumb-box 自带 border） */
-.thumb-selected,
-.thumb-multi-selected {
-  border-width: 2px !important;
-}
-
-/* 通用选中样式 */
-.thumb-selected {
-  border-color: var(--primary-color) !important;
-}
-
-/* 通用多选样式 */
-.thumb-multi-selected {
-  border-color: var(--secondary-color, rgb(255, 107, 53)) !important;
-}
-
-/* 通用色标（opacity / color slider thumb）选中样式 */
-.slider-thumb-selected {
-  transform: translate(-50%, -50%) scale(1.1);
-  z-index: 10001 !important;
-  border-color: var(--primary-color) !important;
-  border-width: 2px !important;
-}
-
-/* 拖起态 */
-.thumb-box.dragging,
-.hotkey-entry-row.dragging,
-.collapse-section.dragging {
-  opacity: 0.5;
-  cursor: grabbing;
-}
-
-/* 通用落点指示样式 */
-.thumb-box.drop-target {
-  border-color: var(--primary-color);
-  border-style: dashed;
-  border-width: 2px;
-}
-
-/* 请收口于common.css中的通用落点指示样式 */
-.hotkey-entry-row.drop-target,
-.collapse-section.drop-target {
-  border: 2px dashed var(--primary-color);
 }
 
 /* 通用加载中、加载失败的预览遮罩 */
@@ -1240,11 +1016,6 @@ sp-radio {
   box-sizing: border-box;
 }
 
-.circle-button:hover {
-  background: var(--hover-bg);
-  border-color: var(--primary-color);
-}
-
 .circle-button .icon-fill {
   fill: var(--text-color);
 }
@@ -1319,16 +1090,9 @@ sp-radio {
   overflow: hidden;
 }
 
-/* 展开态修饰：主色蓝描边（沿用闭合态全部基础样式） */
-.select-head-open {
-  border-color: var(--primary-color);
-}
+/* 展开态修饰：主色蓝描边（沿用闭合态全部基础样式；规则在文件底部状态区） */
 
-/* 禁用态：文字（含箭头，currentColor）变灰 --disabled-color，不用 opacity */
-.select-head-disabled {
-  color: var(--disabled-color);
-  cursor: not-allowed;
-}
+/* 禁用态：文字（含箭头，currentColor）变灰 --disabled-color（规则在文件底部状态区） */
 
 /* 分组下拉的分隔线（与 sp-picker 的分组线观感一致） */
 .select-divider {
@@ -1404,23 +1168,11 @@ sp-radio {
   cursor: pointer;
 }
 
-.select-opt:hover {
-  background: var(--hover-bg, rgba(128, 128, 128, 0.15));
-}
-
 /* 选中项背景：直接用字面色值 rgb(38,128,235)，不再走 var(--primary-color)。
    原因：弹层经 createPortal 挂到面板根（<Provider> 作用域内），UXP 下 var()
    在该子树里解析不稳定，曾出现选中背景解析不到主色蓝、回退成面板底色的情况。
-   --primary-color 在四套主题里本就是恒定 rgb(38,128,235)，故字面值与主题完全一致。 */
-.select-opt-sel {
-  background: var(--primary-color);
-  color: rgb(255, 255, 255);
-}
-
-.select-opt-dis {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+   --primary-color 在四套主题里本就是恒定 rgb(38,128,235)，故字面值与主题完全一致。
+   （hover / 选中 / 禁用状态规则统一收口在文件底部「通用状态样式」区） */
 
 .select-opt-main {
   flex: 0 1 auto;
@@ -1442,4 +1194,288 @@ sp-radio {
   font-size: 11px;
   opacity: 0.7;
   white-space: nowrap;
+}
+
+/* ==========================================================================
+   通用状态样式（集中管理区）
+   --------------------------------------------------------------------------
+   所有「状态类」规则统一收口在本区（文件最底部），便于统一管理：
+   · 悬停/按下（hover / active）
+   · 禁用（disabled）：--disabled-color / opacity / cursor:not-allowed
+   · 选中（selected / open / sel / 多选）
+   · 拖拽与交换（dragging / drop-target）：长按拖起、落点虚线
+     ⚠️ UXP 禁 outline（且禁 outline-offset）：一切「选中/落点」视觉一律用 border 变化表达。
+   ⚠️ 状态类只写「修饰差异」，基础盒模型必须与基础类共享同一条规则（见上方各组件基础段）；
+      状态类若独自承担盒模型，会在状态切换瞬间布局塌陷（历史踩坑两次）。
+   ========================================================================== */
+
+/* ---------- 悬停 / 按下（hover / active） ---------- */
+
+/* 通用图标按钮 hover：只变内部 icon 颜色，容器不变 */
+.icon-button:hover .icon-fill {
+  fill: var(--hover-icon);
+}
+.icon-button:active {
+  transform: scale(0.94);
+}
+
+/* 通用圆形录制按钮 hover（与齿轮图标统一：icon 变蓝，背景无变化） */
+.record-button:hover {
+  color: var(--hover-icon);
+}
+.record-button:hover .icon-fill {
+  fill: var(--hover-icon);
+}
+.record-button:active {
+  transform: scale(0.94);
+}
+
+/* 录制中：红色常亮，hover 不变色，不可点击 */
+.record-button-recording {
+  color: rgb(239, 83, 80);
+  cursor: default;
+}
+.record-button-recording:hover {
+  color: rgb(239, 83, 80);
+}
+.record-button-recording:hover .icon-fill {
+  fill: rgb(239, 83, 80);
+}
+
+/* 通用总开关 hover/点击（所有 action-button 的 hover/active 都收口于此） */
+.main-button:hover {
+  background-color: var(--hover-bg);
+  border-color: var(--primary-color);
+}
+.main-button:active {
+  background-color: var(--button-down);
+  transform: scale(0.98);
+}
+
+/* 通用动作按钮 hover/点击 */
+.action-button-2:hover,
+.action-button-3:hover,
+.action-button-4:hover,
+.action-button-5:hover,
+.action-button-6:hover,
+.action-button-7:hover,
+.action-button-8:hover,
+.action-button-quad:hover,
+.action-button-auto:hover {
+  background-color: var(--hover-bg);
+  border-color: var(--primary-color);
+  transform: scale(1.02);
+}
+.action-button-2:active,
+.action-button-3:active,
+.action-button-4:active,
+.action-button-5:active,
+.action-button-6:active,
+.action-button-7:active,
+.action-button-8:active,
+.action-button-quad:active,
+.action-button-auto:active {
+  background-color: var(--button-down);
+  transform: scale(0.98);
+}
+
+/* 通用子面板关闭按钮 hover */
+.close-button:hover {
+  background-color: rgb(220, 38, 34) !important;
+  border-color: var(--primary-color) !important;
+}
+
+/* 通用折叠分区标题 hover */
+.collapse-header:hover {
+  background-color: var(--hover-bg);
+}
+
+/* 通用圆形图标按钮 hover */
+.circle-button:hover {
+  background: var(--hover-bg);
+  border-color: var(--primary-color);
+}
+
+/* 通用自绘下拉：选项 hover */
+.select-opt:hover {
+  background: var(--hover-bg, rgba(128, 128, 128, 0.15));
+}
+
+/* 蒙版同步卡片标题 hover（可点击重命名的暗示）：虚线用 border 表达，
+   基础类挂 1px transparent 虚线 border（见 adjustment.css），hover 只变色，零位移 */
+.mask-sync-task-name:hover {
+  background: var(--hover-bg);
+  border-color: var(--border-color);
+}
+
+/* ---------- 禁用（disabled） ---------- */
+
+/* 全局原生控件光标禁用态 */
+sp-switch[disabled],
+sp-button[disabled],
+sp-action-button[disabled],
+sp-radio[disabled] {
+  cursor: not-allowed;
+}
+
+/* 通用--disabled-color 文字禁用态 */
+.label-disabled {
+  color: var(--disabled-color);
+}
+
+/* 通用滑块块禁用态：半透明 + 禁操作 */
+.slider-block.disabled {
+  opacity: 0.5;
+}
+.slider-block.disabled label {
+  cursor: not-allowed;
+  color: var(--disabled-color);
+}
+.slider-block.disabled .slider-input,
+.slider-block.disabled input[type="number"] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* 通用图标按钮禁用态：只变 icon 颜色，容器盒模型不变 */
+.icon-button-disabled {
+  color: var(--disabled-color);
+  cursor: not-allowed;
+}
+.icon-button-disabled .icon-fill {
+  fill: var(--disabled-color);
+}
+
+/* 通用圆形录制按钮禁用态：图标变灰（与 APP 总开关禁用态一致） */
+.record-button-disabled {
+  color: var(--disabled-color);
+  cursor: not-allowed;
+}
+.record-button-disabled:hover {
+  color: var(--disabled-color);
+}
+.record-button-disabled:hover .icon-fill {
+  fill: var(--disabled-color);
+}
+
+/* 通用动作按钮禁用态（action-button-run / run-disabled 收口于此）。
+   ⚠️ 必须与基础按钮类同挂一个元素（如 action-button-auto action-button-disabled）
+   才能保留边框/字号/高度；单独使用会丢失 .action-button-* 盒模型导致「边框消失、文字变大」。 */
+.action-button-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+/* 禁用态不应有悬停反馈（避免处理中按钮仍高亮/缩放） */
+.action-button-auto.action-button-disabled:hover {
+  background-color: var(--button-bg);
+  border-color: var(--border-color);
+  transform: none;
+}
+
+/* 通用勾选框禁用态 */
+.checkbox-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* 行内含禁用 switch / input 时，行标签同步置灰禁操作 */
+.row-between:has(sp-switch[disabled]) [class^="label-"],
+.row-start:has(sp-switch[disabled]) [class^="label-"] {
+  cursor: not-allowed;
+  color: var(--disabled-color);
+}
+.row-start:has(input:disabled) [class^="label-"] {
+  cursor: not-allowed;
+  color: var(--disabled-color);
+}
+
+/* 通用禁用行：含禁用控件时整行置灰、禁操作（gradient 角度行等收口于此） */
+.row-between.disabled,
+.row-start.disabled {
+  cursor: not-allowed;
+}
+.row-between.disabled [class^="label-"],
+.row-start.disabled [class^="label-"] {
+  cursor: not-allowed;
+  color: var(--disabled-color);
+}
+.row-between.disabled .range-slider,
+.row-between.disabled input,
+.row-start.disabled input {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 通用自绘下拉：头部禁用态 / 选项禁用态 */
+.select-head-disabled {
+  color: var(--disabled-color);
+  cursor: not-allowed;
+}
+.select-opt-dis {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---------- 选中（selected / open / sel / 多选） ---------- */
+
+/* 通用缩略图选中/多选（!important 保证压过各面板 .preset-item / .thumb-box 自带 border） */
+.thumb-selected,
+.thumb-multi-selected {
+  border-width: 2px !important;
+}
+.thumb-selected {
+  border-color: var(--primary-color) !important;
+}
+.thumb-multi-selected {
+  border-color: var(--secondary-color, rgb(255, 107, 53)) !important;
+}
+
+/* 通用色标（opacity / color slider thumb）选中样式 */
+.slider-thumb-selected {
+  transform: translate(-50%, -50%) scale(1.1);
+  z-index: 10001 !important;
+  border-color: var(--primary-color) !important;
+  border-width: 2px !important;
+}
+
+/* 通用自绘下拉：头部展开态（主色蓝描边） */
+.select-head-open {
+  border-color: var(--primary-color);
+}
+
+/* 通用自绘下拉：选中项背景（字面色值原因见上方 .select-opt 注释） */
+.select-opt-sel {
+  background: var(--primary-color);
+  color: rgb(255, 255, 255);
+}
+
+/* 笔刷快捷键记录行选中态：主色蓝描边（border 变化，零位移；
+   基础类挂 1px transparent border，见 adjustment.css） */
+.hotkey-entry-row.selected {
+  border-color: var(--primary-color);
+}
+
+/* ---------- 拖拽 / 交换（dragging / drop-target） ---------- */
+
+/* 拖起态：半透明 + 抓取光标 */
+.thumb-box.dragging,
+.preset-item.dragging,
+.hotkey-entry-row.dragging,
+.collapse-section.dragging {
+  opacity: 0.5;
+  cursor: grabbing;
+}
+
+/* 落点指示（border 虚线族）：缩略图/渐变预设等自带 1px border 的方块 */
+.thumb-box.drop-target,
+.preset-item.drop-target {
+  border-color: var(--primary-color);
+  border-style: dashed;
+  border-width: 2px;
+}
+
+/* 落点指示（border 虚线族）：整行容器（快捷键记录行 / 折叠分区） */
+.hotkey-entry-row.drop-target,
+.collapse-section.drop-target {
+  border: 2px dashed var(--primary-color);
 }

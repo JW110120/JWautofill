@@ -26,7 +26,7 @@ export class DragHandler {
             max: 100,
             sensitivity: 0.5
         },
-        // 扩散：0~100，与「平滑 / 锐度」同为选区选项的百分比滑块，灵敏度保持一致
+        // 扩散：0~100，与「平滑 / 锐度」同为选区改造的百分比滑块，灵敏度保持一致
         selectionExpand: {
             min: 0,
             max: 100,

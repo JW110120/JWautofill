@@ -150,7 +150,32 @@ export function registerRepairKeyboardHandler(fn: () => Promise<string>) {
   repairKeyboardHandler = fn;
 }
 export async function requestRepairKeyboard(): Promise<string> {
-  if (!repairKeyboardHandler) return '键盘修复功能尚未就绪（请展开「笔刷热键」分区后重试）';
+  // ⚠️ 兜底（2026-09-06）：「笔刷热键」分区折叠时组件未挂载 → 没有任何实现注册进来，
+  // 旧版只会返回一句提示然后被吞掉（dialogs.alert 在 PS 里不显示）→ 用户点了毫无反应。
+  // 键盘卡死是自救场景，任何时候都必须可用：这里直接唤起内置修复脚本（会弹出 CMD 窗口显示结果）。
+  if (!repairKeyboardHandler) {
+    try {
+      const folder: any = await storage.localFileSystem.getPluginFolder();
+      const root: string = folder?.nativePath;
+      if (root) {
+        const sep = root.includes('\\') ? '\\' : '/';
+        // ⚠️ 必须唤起 .exe 而非 .bat：UXP 的 shell.openPath 对 .bat/.ps1 只会「用编辑器打开而非执行」，
+        // 对 .exe 才会真正运行并弹出可见控制台窗口（守护进程 JWautofillHotkeyDaemon.exe 即此方式启动）。
+        const full = root + sep + 'native' + sep + 'HotkeyDaemon' + sep + 'FixKeyboard.exe';
+        const r: any = await shell.openPath(full);
+        if (typeof r === 'string' && r.length > 0) {
+          // 兜底：直接唤起失败时打开脚本所在目录（manifest launchProcess.extensions 含 ""），
+          // 用户鼠标双击 FixKeyboard.exe 即可——键盘卡死场景只有鼠标可用，不能让用户自己找路径。
+          try { await shell.openPath(root + sep + 'native' + sep + 'HotkeyDaemon'); } catch { }
+          return '唤起键盘修复工具失败：' + r + '。已打开工具所在目录，请双击 FixKeyboard.exe。';
+        }
+        return '已打开键盘修复窗口（CMD），请按窗口内提示查看结果；修复完成后请立即测试键盘。';
+      }
+    } catch (e: any) {
+      return '键盘修复失败：' + (e?.message || String(e));
+    }
+    return '键盘修复功能尚未就绪（请展开「笔刷热键」分区后重试）';
+  }
   try { return await repairKeyboardHandler(); }
   catch (e: any) { return '键盘修复失败：' + (e?.message || String(e)); }
 }

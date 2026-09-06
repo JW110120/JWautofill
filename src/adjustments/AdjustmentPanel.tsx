@@ -21,6 +21,7 @@ import { checkEditingState, processPixelData, applyProcessedPixels, writeFullPix
 import { runKnockoutBatch } from './knockoutBatchProcessor';
 import { LicenseManager } from '../utils/LicenseManager';
 import { action, app, core, imaging } from 'photoshop';
+import { runCommand } from '../utils/commandProgress';
 import type { Gradient } from '../types/state';
 import './adjustment.css';
 import './adjustment-input.css';
@@ -33,6 +34,15 @@ import RangeSlider from '../components/RangeSlider';
 import Select from '../components/Select';
 import { helpTexts } from '../constants/helpTexts';
 import { useLabelDrag } from '../utils/useLabelDrag';
+// PS/UXP 在执行中手动取消时，batchPlay / executeAsModal 会抛出英文 "User cancelled"。
+// 把这类取消错误本地化，避免界面弹出「处理失败：user cancelled」这种中英混杂提示。
+const isUserCancelled = (m: string | undefined): boolean =>
+  /user[\s_-]?cancell?ed|operation was cancelled|已取消|用户取消/i.test(m || '');
+// 统一拼接「某某处理失败」弹窗文案；取消时显示中文「用户已取消」，否则原样透传错误。
+const formatFailMsg = (prefix: string, raw: string): string =>
+  isUserCancelled(raw) ? `${prefix}处理失败：用户已取消` : `${prefix}处理失败: ${raw}`;
+
+
 
 // 单位换算为像素（兼容普通数字与带 _unit/_value 的单位对象）
 const toPixels = (v: any, resolution: number) => {
@@ -710,12 +720,13 @@ useEffect(() => {
     onRepairKeyboard: () => {
       // 键盘被全局钩子拖死时的自救入口：此时用户打不出字，只能靠鼠标点菜单。
       // 具体实现注册在 BrushHotkeySection（它持有状态提示），这里只做转发。
-      // ⚠️ 必须用弹窗给明确反馈：此前只 console.log，而修复结果只显示在「笔刷热键」分区
-      //    （该分区折叠时不可见），导致用户以为「点了没反应、也没修好」。
+      // ⚠️ 必须用 core.showAlert（PS 原生弹窗）给明确反馈：dialogs.alert 在 PS 里
+      //    只打印到 UXP 控制台，界面上什么都看不到；此前还曾只 console.log，
+      //    导致用户以为「点了没反应、也没修好」。
       import('../hotkey/HotkeyBridge').then((m) => {
         m.requestRepairKeyboard()
-          .then((msg) => { try { dialogs.alert(msg); } catch { console.log('[键盘一键修复] ' + msg); } })
-          .catch((e) => { try { dialogs.alert('键盘一键修复失败：' + (e && (e as any).message ? (e as any).message : String(e))); } catch { console.error('键盘一键修复失败:', e); } });
+          .then((msg) => { try { core.showAlert({ message: msg }); } catch { console.log('[键盘一键修复] ' + msg); } })
+          .catch((e) => { try { core.showAlert({ message: '键盘一键修复失败：' + (e && (e as any).message ? (e as any).message : String(e)) }); } catch { console.error('键盘一键修复失败:', e); } });
       }).catch((e) => console.error('键盘一键修复失败:', e));
     },
     onUninstallHotkeyDaemon: () => {
@@ -899,24 +910,20 @@ useEffect(() => {
 
 // 蒙版同步任务操作
 const handleMaskSyncAdd = async () => {
+  // 统一用 core.showAlert（PS 原生弹窗）：dialogs.alert 在 PS 里只打印到 UXP 控制台，
+  // 用户在界面上看不到任何提示（2026-09-06 用户实测）。
   try {
     // 未打开文档时给出明确反馈（issue：蒙版同步 + 号按钮静默无反应）
     if (!maskSyncEngine.getDocName()) {
-      try {
-        await dialogs.alert('请先打开一个 Photoshop 文档，再新建蒙版同步任务。');
-      } catch {
-        console.warn('⚠️ 未打开文档：请先打开一个 Photoshop 文档，再新建蒙版同步任务。');
-      }
+      try { core.showAlert({ message: '请先打开一个 Photoshop 文档，再新建蒙版同步任务。' }); }
+      catch { console.warn('⚠️ 未打开文档：请先打开一个 Photoshop 文档，再新建蒙版同步任务。'); }
       return;
     }
     await maskSyncEngine.addTask();
   } catch (e) {
     const msg = '新建同步任务失败：' + (e && (e as any).message ? (e as any).message : String(e));
-    try {
-      await dialogs.alert(msg);
-    } catch {
-      console.warn('⚠️ ' + msg);
-    }
+    try { core.showAlert({ message: msg }); }
+    catch { console.warn('⚠️ ' + msg); }
   }
 };
 
@@ -1591,7 +1598,7 @@ const handleBlockAverage = async () => {
   try {
     const { executeAsModal } = core;
     
-    await executeAsModal(async () => {
+    await runCommand('分块平均', async () => {
       // 检测当前编辑状态
       const editingState = await checkEditingState();
       if (!editingState.isValid) {
@@ -1636,7 +1643,7 @@ const handleBlockAverage = async () => {
     giveFocusBackToPS();
   } catch (error) {
     console.error('❌ 分块平均处理失败:', error);
-    await core.showAlert({ message: '分块平均处理失败: ' + error.message });
+    await core.showAlert({ message: formatFailMsg('分块平均', error.message) });
   }
 };
 
@@ -1645,7 +1652,7 @@ const handleBlockGradient = async () => {
   try {
     const { executeAsModal } = core;
 
-    await executeAsModal(async () => {
+    await runCommand('分块渐变', async () => {
       const editingState = await checkEditingState();
       if (!editingState.isValid) {
         return;
@@ -1691,7 +1698,7 @@ const handleBlockGradient = async () => {
   } catch (error) {
     const msg = typeof error === 'string' ? error : (error && (error.message || (error as any).toString?.() || '未知错误'));
     console.error('❌ 分块渐变处理失败:', error);
-    await core.showAlert({ message: '分块渐变处理失败: ' + msg });
+    await core.showAlert({ message: formatFailMsg('分块渐变', msg) });
   }
 };
 
@@ -1749,12 +1756,12 @@ const readLineLayerAlphaMask = async (
 };
 
 /** 分块补色公共流程：sameOnly=true 走同层算法（lineColorMode 区分浅/深线）；false 走分层算法（线稿引导）。 */
-const runBlockColorPatch = async (sameOnly: boolean, lineColorMode?: 'lighter' | 'darker') => {
+const runBlockColorPatch = async (sameOnly: boolean, lineColorMode?: 'lighter' | 'darker', command: string = '同层补色') => {
   if (!handleLicenseBeforeAction()) return;
   try {
     const { executeAsModal } = core;
 
-    await executeAsModal(async () => {
+    await runCommand(command, async () => {
       const editingState = await checkEditingState();
       if (!editingState.isValid) {
         return;
@@ -1842,17 +1849,17 @@ const runBlockColorPatch = async (sameOnly: boolean, lineColorMode?: 'lighter' |
 
 /** 浅线同层补色：线条颜色比内部填充浅 → 只传播较深的内部填充色。 */
 const handleBlockColorPatchLightLine = async () => {
-  await runBlockColorPatch(true, 'lighter');
+  await runBlockColorPatch(true, 'lighter', '浅线同层补色');
 };
 
 /** 深线同层补色：线条颜色比内部填充深 → 只传播较浅的内部填充色。 */
 const handleBlockColorPatchDarkLine = async () => {
-  await runBlockColorPatch(true, 'darker');
+  await runBlockColorPatch(true, 'darker', '深线同层补色');
 };
 
 /** 分层补色：线稿与内部填充在不同图层，用线稿轮廓引导补全。 */
 const handleBlockColorPatchLayered = async () => {
-  await runBlockColorPatch(false);
+  await runBlockColorPatch(false, undefined, '分层补色');
 };
 
 // 还原特殊木刻预览：把保存的原始像素写回图层，并清除基线
@@ -1889,7 +1896,7 @@ const handleSpecialWoodcut = async (isPreview: boolean = false) => {
   try {
     const { executeAsModal } = core;
 
-    await executeAsModal(async () => {
+    await runCommand(isPreview ? '特殊木刻预览' : '特殊木刻', async () => {
       const editingState = await checkEditingState();
       if (!editingState.isValid) {
         return;
@@ -1953,7 +1960,7 @@ const handleSpecialWoodcut = async (isPreview: boolean = false) => {
         isBackgroundLayer
       );
 
-      await applyProcessedPixels(processedPixels, pixelResult, '特殊木刻');
+      await applyProcessedPixels(processedPixels, pixelResult, isPreview ? '特殊木刻预览' : '特殊木刻');
     });
     if (!isPreview) {
       // 正式应用：清除预览基线，提交当前结果
@@ -1964,7 +1971,7 @@ const handleSpecialWoodcut = async (isPreview: boolean = false) => {
     const msg = typeof error === 'string' ? error : (error && (error.message || (error as any).toString?.() || '未知错误'));
     console.error('❌ 特殊木刻处理失败:', error);
     if (!isPreview) {
-      await core.showAlert({ message: '特殊木刻处理失败: ' + msg });
+      await core.showAlert({ message: formatFailMsg('特殊木刻', msg) });
     }
   } finally {
     specialWoodcutApplyingRef.current = false;
@@ -1980,7 +1987,7 @@ const handleLineEnhancement = async () => {
     let pixelResult: any = null;
     let isBackgroundLayer = false;
     let abortedByBackgroundLayer = false;
-    await executeAsModal(async () => {
+    await runCommand('线条增强', async () => {
       const editingState = await checkEditingState();
       if (!editingState.isValid) {
         return;
@@ -2018,7 +2025,7 @@ const handleLineEnhancement = async () => {
       fullSelectionMask.buffer,
       { width: selectionBounds.docWidth, height: selectionBounds.docHeight }
     );
-    await executeAsModal(async () => {
+    await runCommand('线条增强', async () => {
       await runWithTemporaryUnlock(async () => {
         await applyProcessedPixels(processedPixels, pixelResult, '线条加黑');
       });
@@ -2027,7 +2034,7 @@ const handleLineEnhancement = async () => {
   } catch (error) {
     const msg = typeof error === 'string' ? error : (error && (error.message || (error as any).toString?.() || '未知错误'));
     console.error('❌ 线条增强处理失败:', error);
-    await core.showAlert({ message: '线条增强处理失败: ' + msg });
+    await core.showAlert({ message: formatFailMsg('线条增强', msg) });
   }
 };
 
@@ -2047,7 +2054,7 @@ const handleAlphaAlign = async (withBg: boolean = false, direction: 'down' | 'up
   try {
     const { executeAsModal } = core;
 
-    await executeAsModal(async () => {
+    await runCommand(name, async () => {
       // 检测当前编辑状态
       const editingState = await checkEditingState();
       if (!editingState.isValid) return;
@@ -2113,7 +2120,7 @@ const handleAlphaAlign = async (withBg: boolean = false, direction: 'down' | 'up
   } catch (error) {
     const msg = typeof error === 'string' ? error : (error && (error.message || (error as any).toString?.() || '未知错误'));
     console.error('❌ ' + name + '处理失败:', error);
-    await core.showAlert({ message: name + '处理失败: ' + msg });
+    await core.showAlert({ message: formatFailMsg(name, msg) });
   }
 };
 
@@ -2123,7 +2130,7 @@ const handleHighFrequencyEnhancement = async () => {
   try {
     const { executeAsModal } = core;
     
-    await executeAsModal(async () => {
+    await runCommand('高频增强', async () => {
       // 检测当前编辑状态
       const editingState = await checkEditingState();
       if (!editingState.isValid) {
@@ -2171,7 +2178,7 @@ const handleHighFrequencyEnhancement = async () => {
     giveFocusBackToPS();
   } catch (error) {
     console.error('❌ 高频增强处理失败:', error);
-    await core.showAlert({ message: '高频增强处理失败: ' + error.message });
+    await core.showAlert({ message: formatFailMsg('高频增强', error.message) });
   }
 };
 
@@ -2181,7 +2188,7 @@ const handleSmartEdgeSmooth = async () => {
   try {
     const { executeAsModal } = core;
     
-    await executeAsModal(async () => {
+    await runCommand('智能边缘平滑', async () => {
       // 检测当前编辑状态
       const editingState = await checkEditingState();
       if (!editingState.isValid) {
@@ -2276,7 +2283,7 @@ const handleSmartEdgeSmooth = async () => {
     giveFocusBackToPS();
   } catch (error) {
     console.error('❌ 智能边缘平滑处理失败:', error);
-    await core.showAlert({ message: '智能边缘平滑处理失败: ' + error.message });
+    await core.showAlert({ message: formatFailMsg('智能边缘平滑', error.message) });
   }
 };
 
@@ -2287,7 +2294,7 @@ const handleLayerAlphaSample = async () => {
   try {
     const { executeAsModal } = core;
 
-    await executeAsModal(async () => {
+    await runCommand('alpha采样', async () => {
       const editingState = await checkEditingState();
       if (!editingState.isValid) return;
       const { layer, isBackgroundLayer } = editingState;
@@ -2351,7 +2358,7 @@ const handlePixelTransition = async () => {
   try {
     const { executeAsModal } = core;
 
-    await executeAsModal(async () => {
+    await runCommand('像素过渡', async () => {
       // 检测当前编辑状态
       const editingState = await checkEditingState();
       if (!editingState.isValid) {
@@ -2410,7 +2417,7 @@ const handlePixelTransition = async () => {
     giveFocusBackToPS();
   } catch (error) {
     console.error('❌ 像素过渡处理失败:', error);
-    await core.showAlert({ message: '像素过渡处理失败: ' + error.message });
+    await core.showAlert({ message: formatFailMsg('像素过渡', error.message) });
   }
 };
 
@@ -2420,7 +2427,7 @@ const handleGradientModify = async () => {
   try {
     const { executeAsModal } = core;
 
-    await executeAsModal(async () => {
+    await runCommand('梯度修改', async () => {
       const editingState = await checkEditingState();
       if (!editingState.isValid) {
         return;
@@ -2458,7 +2465,7 @@ const handleGradientModify = async () => {
     giveFocusBackToPS();
   } catch (error) {
     console.error('❌ 梯度修改处理失败:', error);
-    await core.showAlert({ message: '梯度修改处理失败: ' + error.message });
+    await core.showAlert({ message: formatFailMsg('梯度修改', error.message) });
   }
 };
 
@@ -2467,7 +2474,7 @@ const handleSpecialSharpen = async () => {
   try {
     const { executeAsModal } = core;
 
-    await executeAsModal(async () => {
+    await runCommand('特殊锐化', async () => {
       const editingState = await checkEditingState();
       if (!editingState.isValid) {
         return;
@@ -2505,7 +2512,7 @@ const handleSpecialSharpen = async () => {
     giveFocusBackToPS();
   } catch (error) {
     console.error('❌ 特殊锐化处理失败:', error);
-    await core.showAlert({ message: '特殊锐化处理失败: ' + error.message });
+    await core.showAlert({ message: formatFailMsg('特殊锐化', error.message) });
   }
 };
 
@@ -2709,7 +2716,7 @@ const renderDetailAdjustContent = () => (
     {!usePowerfulMode && (
       <>
         <div className="row-between">
-          <div className={sliderLabelClass('radius', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'radius', radius)} title={helpTexts.adjustment.radius}>半径</div>
+          <div className={sliderLabelClass('radius', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'radius', radius)} title={helpTexts.adjustment.radius}>半径</div>
           <RangeSlider min={5} max={20} step={1} value={radius} onChange={handleRadiusChange} className="slider-track" />
           <div className="row-start">
             <div className="num-input-row"><input type="number" min="5" max="20" step="1" value={radius} onChange={handleRadiusNumberChange} /></div>
@@ -2717,7 +2724,7 @@ const renderDetailAdjustContent = () => (
           </div>
         </div>
         <div className="row-between">
-          <div className={sliderLabelClass('sigma', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'sigma', sigma)} title={helpTexts.adjustment.sigma}>强度</div>
+          <div className={sliderLabelClass('sigma', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'sigma', sigma)} title={helpTexts.adjustment.sigma}>强度</div>
           <RangeSlider min={1} max={5} step={0.5} value={sigma} onChange={handleSigmaChange} className="slider-track" />
           <div className="row-start">
             <div className="num-input-row"><input type="number" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaNumberChange} /></div>
@@ -2732,7 +2739,7 @@ const renderDetailAdjustContent = () => (
     <div role="button" tabIndex={0} className="action-button-4" onClick={handleGradientModify} title={helpTexts.adjustment.gradientModify}>梯度修改</div>
 
       <div className="row-between">
-        <div className={sliderLabelClass('gradientRelaxStrength', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'gradientRelaxStrength', gradientRelaxStrength)} title={helpTexts.adjustment.gradientRelax}>程度</div>
+        <div className={sliderLabelClass('gradientRelaxStrength', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'gradientRelaxStrength', gradientRelaxStrength)} title={helpTexts.adjustment.gradientRelax}>程度</div>
         <RangeSlider min={-10} max={10} step={1} value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthChange} className="slider-track" />
         <div className="row-start">
           <div className="num-input-row"><input type="number" min="-10" max="10" step="1" value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthNumberChange} /></div>
@@ -2766,7 +2773,7 @@ const renderDetailAdjustContent = () => (
         </div>
       </div>
       <div className="row-between">
-        <div className={sliderLabelClass('highFreqRange', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'highFreqRange', highFreqRange)} title={helpTexts.adjustment.highFreqRange}>范围</div>
+        <div className={sliderLabelClass('highFreqRange', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'highFreqRange', highFreqRange)} title={helpTexts.adjustment.highFreqRange}>范围</div>
         <RangeSlider min={1} max={10} step={0.5} value={highFreqRange} onChange={handleHighFreqRangeChange} className="slider-track" />
         <div className="row-start">
           <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={highFreqRange} onChange={handleHighFreqRangeNumberChange} /></div>
@@ -2885,8 +2892,9 @@ const formatSyncState = (task: MaskSyncTask): { text: string; ok: boolean } | nu
 const renderMaskSyncContent = () => (
   <div className="panel-section">
     {/* 引擎状态条：确认插件已加载最新代码。绿点+引擎就绪 左对齐，文档名右对齐。
+        外描边随状态变化：ok=绿 / warn=橙（common.css 的 .notify-bar-ok/warn）。
         已挪到「卡片大容器」外部（上方），不再包裹在任务卡片列表里 */}
-    <div className="notify-bar">
+    <div className={maskSyncEngineReady ? 'notify-bar notify-bar-ok' : 'notify-bar notify-bar-warn'}>
       <span className={maskSyncEngineReady ? 'indicator indicator-md indicator-ok' : 'indicator indicator-md indicator-warn'} />
       <span className="notify-text">
         {maskSyncEngineReady ? '引擎就绪' : '引擎初始化中…'}
@@ -3004,7 +3012,7 @@ const renderMaskSyncContent = () => (
           const st = formatSyncState(task);
           if (!st) return null;
           return (
-            <div className={st.ok ? 'notify-banner notify-banner-ok' : 'notify-banner notify-banner-fail'}>
+            <div className={st.ok ? 'status-banner status-banner-ok' : 'status-banner status-banner-fail'}>
               <span className={st.ok ? 'indicator indicator-md indicator-ok' : 'indicator indicator-md indicator-fail'}></span>
               <span className="notify-text">{st.text}</span>
             </div>
@@ -3101,7 +3109,7 @@ const handleKnockout = async (mode: 'white' | 'black') => {
   const label = mode === 'white' ? '白' : '黑';
   try {
     const { executeAsModal } = core;
-    await executeAsModal(async () => {
+    await runCommand(mode === 'white' ? '扣白' : '扣黑', async () => {
       const editingState = await checkEditingState();
       if (!editingState.isValid) return;
       const { isBackgroundLayer } = editingState;
@@ -3121,7 +3129,7 @@ const handleKnockout = async (mode: 'white' | 'black') => {
   } catch (error) {
     const msg = typeof error === 'string' ? error : (error && (error.message || (error as any).toString?.() || '未知错误'));
     console.error(`❌ 扣${label}处理失败:`, error);
-    try { await core.showAlert({ message: `扣${label}处理失败: ` + msg }); } catch {}
+    try { await core.showAlert({ message: formatFailMsg(`扣${label}`, msg) }); } catch {}
   }
 };
 
@@ -3149,7 +3157,7 @@ const renderQuickActionContent = () => (
 
     {useWeightedAverage && (
         <div className="row-between">
-          <div className={sliderLabelClass('weightedIntensity', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'weightedIntensity', weightedIntensity)} title={helpTexts.adjustment.weightedIntensity}>强度</div>
+          <div className={sliderLabelClass('weightedIntensity', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'weightedIntensity', weightedIntensity)} title={helpTexts.adjustment.weightedIntensity}>强度</div>
           <RangeSlider min={1} max={10} step={0.5} value={weightedIntensity} onChange={handleWeightedIntensityChange} className="slider-track" />
           <div className="row-start">
             <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={weightedIntensity} onChange={handleWeightedIntensityNumberChange} /></div>
@@ -3299,18 +3307,20 @@ const renderSection = (section: SectionConfig) => (
 
 const licenseLocked = licenseChecked && !isLicensed && !isTrial;
 
-/* 激活提示卡片节点：试用中 或 未激活且试用已结束 时显示 */
+/* 激活提示卡片节点：试用中 或 未激活且试用已结束 时显示。
+   容器统一挂通用 .status-banner（common.css），license-status-banner-* 只提供状态配色（adjustment.css）；
+   正文统一挂 .notify-text（字号/换行全插件唯一定义），trial-status/trial-expired 只补字重/颜色。 */
 const bannerNode = (isTrial || (!isLicensed && !isTrial && trialDaysRemaining === 0)) ? (
-  <div className={isTrial ? 'license-status-banner-is-trial' : 'license-status-banner-is-expired'}>
+  <div className={'status-banner ' + (isTrial ? 'license-status-banner-is-trial' : 'license-status-banner-is-expired')}>
     {isTrial && trialDaysRemaining > 0 ? (
       <>
         <span className="indicator indicator-md indicator-ok" />
-        <span className="trial-status">试用还剩 {trialDaysRemaining} 天</span>
+        <span className="notify-text trial-status">试用还剩 {trialDaysRemaining} 天</span>
       </>
     ) : (
       <>
         <span className="indicator indicator-md indicator-warn" />
-        <span className="trial-expired">需要在选区填充面板激活</span>
+        <span className="notify-text trial-expired">需要在选区填充面板激活</span>
       </>
     )}
   </div>

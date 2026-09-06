@@ -208,6 +208,9 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     // 拖拽排序所需的引用与状态
     const dragPresetIndexRef = useRef<number | null>(null);
     const dragPresetActiveRef = useRef<boolean>(false);
+    // 拖拽视觉反馈（挂通用 dragging / drop-target 类，common.css 统一样式）
+    const [dragPresetVisual, setDragPresetVisual] = useState<number | null>(null);
+    const [dragOverPresetVisual, setDragOverPresetVisual] = useState<number | null>(null);
 
     // 面板打开时加载已保存的渐变预设（加载期间禁止保存）
     useEffect(() => {
@@ -1150,15 +1153,17 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const handlePresetDragStart = (e: React.DragEvent<HTMLDivElement>, index: number) => {
         dragPresetIndexRef.current = index;
         dragPresetActiveRef.current = true;
+        setDragPresetVisual(index);
         if (e.dataTransfer) {
             e.dataTransfer.effectAllowed = 'move';
             try { e.dataTransfer.setData('text/plain', String(index)); } catch {}
         }
     };
 
-    const handlePresetDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    const handlePresetDragOver = (e: React.DragEvent<HTMLDivElement>, index: number) => {
         e.preventDefault();
         if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+        setDragOverPresetVisual((prev) => (prev === index ? prev : index));
     };
 
     const handlePresetDrop = async (e: React.DragEvent<HTMLDivElement>, dropIndex: number) => {
@@ -1170,6 +1175,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         const fromIndex = (dragIndexFromRef !== null && dragIndexFromRef !== undefined) ? dragIndexFromRef : dragIndexFromData;
         dragPresetActiveRef.current = false;
         dragPresetIndexRef.current = null;
+        setDragPresetVisual(null);
+        setDragOverPresetVisual(null);
         if (Number.isNaN(fromIndex) || fromIndex === dropIndex) {
             return;
         }
@@ -1190,6 +1197,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const handlePresetDragEnd = () => {
         dragPresetActiveRef.current = false;
         dragPresetIndexRef.current = null;
+        setDragPresetVisual(null);
+        setDragOverPresetVisual(null);
     };
 
     const getRGBColor = (rgbaColor: string): string => {
@@ -1281,12 +1290,15 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         const presetGradientStyle = generatePresetPreviewStyle(preset, isInLayerMask, isInQuickMask, isInSingleColorChannel, isClearMode);
                         
                         return (
-                            <div 
-                                key={index} 
-                                className={'preset-item ' + (selectedPresets.has(index) ? 'thumb-multi-selected' : (selectedPreset === index ? 'thumb-selected' : ''))}
+                            <div
+                                key={index}
+                                className={'preset-item'
+                                    + (dragPresetVisual === index ? ' dragging' : '')
+                                    + (dragPresetVisual !== null && dragOverPresetVisual === index && dragPresetVisual !== index ? ' drop-target' : '')
+                                    + (selectedPresets.has(index) ? ' thumb-multi-selected' : (selectedPreset === index ? ' thumb-selected' : ''))}
                                 draggable={true}
                                 onDragStart={(e) => handlePresetDragStart(e, index)}
-                                onDragOver={handlePresetDragOver}
+                                onDragOver={(e) => handlePresetDragOver(e, index)}
                                 onDrop={(e) => handlePresetDrop(e, index)}
                                 onDragEnd={handlePresetDragEnd}
                                 onClick={(e) => {
@@ -1340,7 +1352,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 {selectedStopIndex !== null && selectedStopType === 'opacity' && (
                     <div className="row-between">
                         <label 
-                            className="label-drag"
+                            className="label-drag label-4"
                             onMouseDown={(e) => {
                                 e.preventDefault();
                                 const startX = e.clientX;
@@ -1361,7 +1373,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                 document.addEventListener('mouseup', handleMouseUp);
                             }}
                         >
-                            不透明度：
+                            不透明度
                         </label>
                         <div className="num-input-row">
                             <input
@@ -1632,7 +1644,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             {/* 渐变类型设置 */}
             <div className="border-panel-section">
                 <div className="row-between">
-                    <label className="label-3">样式：</label>
+                    <label className="label-2">样式</label>
                     <Select
                         value={gradientType}
                         options={[
@@ -1652,9 +1664,9 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     {/* 光标：常态 ew-resize 由 .label-drag 给出；径向禁用态的
                         not-allowed 由 .row-between disabled label 覆盖（特异性更高） */}
                     <label
-                        className="label-drag"
+                        className="label-drag label-2"
                         onMouseDown={gradientType === 'radial' ? undefined : handleAngleMouseDown}
-                    >角度：</label>
+                    >角度</label>
                     <RangeSlider
                         min={0}
                         max={360}
@@ -1690,7 +1702,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             htmlFor="reverseCheckbox"
                             onClick={() => setReverse(!reverse)}
                         >
-                            反向：
+                            反向
                         </label>
                         <input
                             type="checkbox"
@@ -1708,7 +1720,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             htmlFor="transparencyCheckbox"
                             onClick={() => setPreserveTransparency(!preserveTransparency)}
                         >
-                            保留不透明度：
+                            保留不透明度
                         </label>
                         <input
                             type="checkbox"

@@ -77,3 +77,9 @@ sp-radio .row-end .icon-button {
 #app .main-button-content {
   transform: translateX(-5px);
 }
+
+/* 描边模式行右侧控件组（.stroke-mode-controls：color-preview + 设置齿轮 + sp-switch）：
+   UXP 无 flex gap，齿轮与开关之间单独给 4px 间距。 */
+.stroke-mode-controls .icon-button {
+  margin-right: 8px;
+}

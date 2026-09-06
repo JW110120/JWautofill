@@ -24,43 +24,17 @@
   overflow: hidden;
 }
 
-/* 试用状态激活提示卡片。
-   基础样式原样内联到两个态类里；试用态走 --notify-ok-*，过期态走半透明黑底 + 橙边。 */
+/* 激活提示卡片：容器统一挂通用 .status-banner（common.css 底部状态区），此处只保留两个状态的配色差异。
+   试用态走 --notify-ok-*，过期态走半透明黑底 + 橙边。 */
 .license-status-banner-is-trial {
-  display: flex;
-  align-items: center;
+  border-color: var(--notify-ok-border);
   background: var(--notify-ok-bg);
-  border: 1px solid var(--notify-ok-border);
-  color: var(--text-color);
-  padding: 6px 10px;
-  border-radius: 3px;
-  margin-bottom: 6px;
-  font-size: 12px;
-  width: 100%;
-  height: 30px;
-  min-height: 30px;
-  flex: none;
-  box-sizing: border-box;
-  position: relative;
 }
 
 /* 过期状态激活提示卡片 */
 .license-status-banner-is-expired {
-  display: flex;
-  align-items: center;
+  border-color: rgb(243, 156, 18);
   background: rgba(0, 0, 0, 0.55);
-  border: 1px solid rgb(243, 156, 18);
-  color: var(--text-color);
-  padding: 6px 10px;
-  border-radius: 3px;
-  margin-bottom: 6px;
-  font-size: 12px;
-  width: 100%;
-  height: 30px;
-  min-height: 30px;
-  flex: none;
-  box-sizing: border-box;
-  position: relative;
 }
 
 /* adjustment 独有的遮罩样式（配色由 theme.ts 按主题注入） */
@@ -74,29 +48,24 @@
   z-index: 9997;
 }
 
-/* adjustment独有的试用状态通知 */
+/* adjustment 独有的激活卡片正文修饰：字号/换行由通用 .notify-text 统一提供（TSX 同时挂两个类），
+   此处只保留字重、占位与截断差异。 */
 .license-status-banner-is-trial .trial-status,
-.license-status-banner-is-expired .trial-status {
+.license-status-banner-is-expired .trial-status,
+.license-status-banner-is-trial .trial-expired,
+.license-status-banner-is-expired .trial-expired {
   font-weight: 600;
   flex: 1 1 auto;
-  font-size: 12px;
   min-width: 0;
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* adjustment独有的试用过期状态通知 */
+/* 试用过期的正文颜色 */
 .license-status-banner-is-trial .trial-expired,
 .license-status-banner-is-expired .trial-expired {
   color: rgb(243, 156, 18);
-  font-weight: 600;
-  flex: 1 1 auto;
-  font-size: 12px;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* adjustment独有的三连图标单元（笔刷下拉右侧：刷新 / 停止 / 录制） */
@@ -114,10 +83,13 @@
    ========================================================================== */
 
 /* 独有的【快捷键 丨 名字】行容器 */
+/* ⚠️ 基础类挂 1px transparent border：选中（.selected，common.css 底部状态区）与
+   落点（.drop-target）都靠 border 变化表达，预先占位保证零位移（UXP 禁 outline）。 */
 .hotkey-entry-row {
   display: flex;
   align-items: center;
   padding: 8px;
+  border: 1px solid transparent;
   border-radius: 3px;
   background: var(--entry-bg);
   font-size: 12px;
@@ -131,10 +103,7 @@
   margin-top: 6px;
 }
 
-/* 选中态：与图案子面板被选中的图案一致——2px 主题蓝描边（用 outline，零位移） */
-.hotkey-entry-row.selected {
-  outline-color: var(--primary-color);
-}
+/* （选中态 .selected 的 border 规则收口在 common.css 底部「通用状态样式」区） */
 
 /* 置顶固定的「选区填充开关」行：明确不可拖动 */
 .hotkey-entry-row.pinned {
@@ -210,6 +179,7 @@
 }
 
 /* 独有的卡片标题字体 */
+/* 基础类挂 1px transparent 虚线 border：hover 提示（common.css 底部状态区）只变色，零位移 */
 .mask-sync-task-name {
   color: var(--text-color);
   font-size: 13px;
@@ -220,6 +190,7 @@
   line-height: 22px;
   box-sizing: border-box;
   overflow: hidden;
+  border: 1px dashed transparent;
   border-radius: 3px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -227,11 +198,7 @@
   user-select: none;
 }
 
-/* 独有的卡片标题字体悬停样式 */
-.mask-sync-task-name:hover {
-  background: var(--hover-bg);
-  outline: 1px dashed var(--border-color);
-}
+/* （hover 态规则收口在 common.css 底部「通用状态样式」区） */
 
 /* 标题重命名输入框：与 .mask-sync-task-name 同高（22px）、同宽（flex:1 1 0%），
    仅多出 1px 亮边框 + 4px 左右内边距 —— 激活后不再发生「变高、变窄」的跳变。

@@ -47,8 +47,8 @@ export const helpTexts = {
     featherInput: '输入改造选区使用的羽化值（0-20像素）。',
     featherSlider: '调整选区边缘的羽化程度，数值越大边缘越柔和。',
 
-    // 选区选项
-    selectionOptionsToggle: '点击展开/折叠选区选项设置。',
+    // 选区改造
+    selectionOptionsToggle: '点击展开/折叠选区改造设置。',
     selectionSmooth:
       '● 在填充前，以降低选区灰度通道中的高频信息的方式修改选区。\n\n' +
       '● 具体实现是直接挪用【选择并遮住】中的平滑选区边缘功能，减小选区边缘的锯齿与起伏。\n\n' +

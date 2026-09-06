@@ -192,7 +192,7 @@ Write-Host ""
 Write-Host "日志文件：$log"
 Write-Host ""
 
-for ($i = 8; $i -ge 1; $i--) {
+for ($i = 15; $i -ge 1; $i--) {
     Write-Host ("`r本窗口将在 " + $i + " 秒后自动关闭…   ") -NoNewline
     Start-Sleep -Seconds 1
 }
