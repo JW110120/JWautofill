@@ -236,7 +236,9 @@ export default function BrushHotkeySection() {
   // 「键盘卡死一键修复」：当系统键盘被某个全局钩子拖住（打不出字）时的自救入口。
   // 设计要点：
   //   1) 修复脚本全程无交互——键盘卡死时用户根本无法输入，所以绝不等待按键；
-  //   2) 只做「停止服务 + 复位系统键盘钩子超时设置 + 释放卡住的修饰键」，
+  //   2) 除了「停止服务 + 复位系统键盘钩子超时设置 + 释放卡住的修饰键」，还会对键盘设备
+  //      做软重置（程序化重新插拔，覆盖 HID/USB 设备层冻结）并关闭 USB 省电策略；
+  //      设备重置需要管理员权限，脚本会自动弹 UAC（UAC 用鼠标点击即可，不依赖键盘）；
   //      不删除热键配置与程序文件，修复后可随时重新启动快捷键服务；
   //   3) 这里也不弹确认框，因为键盘失效时确认框同样难以操作。
   const repairKeyboard = async (): Promise<string> => {
@@ -245,7 +247,7 @@ export default function BrushHotkeySection() {
       try { disconnectDaemon(); } catch { /* 优雅退出失败也无妨，脚本会强制结束进程 */ }
       await new Promise(r => setTimeout(r, 600));
     }
-    showMessage('正在修复键盘…');
+    showMessage('正在修复键盘…若弹出管理员授权窗口，请点击「是」');
     let ok = false;
     // ⚠️ 唤起 .exe 而非 .bat：UXP 的 shell.openPath 对 .bat/.ps1 只会「用编辑器打开而非执行」，
     // 对 .exe 才会真正运行并弹出可见控制台窗口。FixKeyboard.exe 内部再调用 fix-keyboard.ps1。
@@ -262,7 +264,7 @@ export default function BrushHotkeySection() {
       showMessage(ret);
       return ret;
     }
-    const ret = '键盘修复已执行：快捷键服务已停止，系统键盘钩子设置已复位。请立即测试键盘；热键配置已保留。';
+    const ret = '键盘修复已执行：快捷键服务已停止，键盘设备已软重置（程序化重新插拔），USB 省电策略已关闭。请立即测试键盘；热键配置已保留。';
     showMessage(ret);
     return ret;
   };
