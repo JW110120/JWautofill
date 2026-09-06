@@ -1097,14 +1097,29 @@ class App extends React.Component<AppProps, AppState> {
     // ===== 新增：主开关的两个联动选项 =====
     // 开启主开关时，若用户把当前工具切到这些「其它工具」，则自动关闭主开关
     private static readonly AUTO_OFF_TOOLS = [
-        'paintbrushTool',  // 画笔
-        'pencilTool',      // 铅笔
-        'eraserTool',      // 橡皮
-        'wetBrushTool',    // 混合器画笔
-        'bucketTool',      // 油漆桶
-        'gradientTool',    // 渐变
-        'moveTool',        // 移动
-        'smudgeTool',      // 涂抹
+        'paintbrushTool',           // 画笔
+        'pencilTool',               // 铅笔
+        'eraserTool',               // 橡皮
+        'wetBrushTool',             // 混合器画笔
+        'bucketTool',               // 油漆桶
+        'gradientTool',             // 渐变
+        'moveTool',                 // 移动
+        'smudgeTool',               // 涂抹
+        'eyedropperTool',           // 吸管
+        'historyBrushTool',         // 历史画笔
+        'blurTool',                 // 模糊
+        'magicWandTool',            // 魔棒
+        'cloneStampTool',           // 仿制图章
+        'penTool',                  // 钢笔
+        'freeformPenTool',          // 自由钢笔（磁性钢笔是它的子模式）
+        'curvaturePenTool',         // 曲率钢笔
+        'lineTool',                 // 直线
+        'spotHealingBrushTool',     // 污点修复画笔
+        'healingBrushTool',         // 修复画笔
+        'patchTool',                // 修补
+        'redEyeTool',               // 红眼
+        'contentAwareMoveTool',     // 内容感知移动
+        'colorReplacementBrushTool',// 颜色替换
     ];
 
     toggleSwitchToLassoOnEnable() {
