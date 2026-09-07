@@ -2,11 +2,9 @@
    #app 父面板（选区填充）独有样式
    --------------------------------------------------------------------------
    只承载 #app 主父面板自身的布局与状态规则，以及它的 4 个子面板（纯色/渐变/图案/描边）与 input-fix 的 @import —— 这些都属于 app 面板样式。
-   全局基础（@font-face / html,body）与全插件通用组件样式在 src/styles/common.css
-   （index.tsx 顶部最先引入，也是 index.html link / manifest cssResources 的静态入口），
-   本文件在其后引入，面板独有规则按特异性覆盖通用基线。
+   （index.tsx 顶部最先引入，也是 index.html link / manifest cssResources 的静态入口），本文件在其后引入，面板独有规则按特异性覆盖通用基线。）
 
-   注：激活弹窗样式在 src/styles/license.css，由 index.tsx 在本文件之后单独引入，以保证它的层叠顺序排在主面板样式之后（弹窗原本用组件内 <style> 最后注入）。
+   注：激活弹窗样式在 src/styles/license.css，由 index.tsx 在本文件之后单独引入，以保证它的层叠顺序排在主面板样式之后（弹窗原本用组件内 <style> 最后注入。
    ========================================================================== */
 @import './colorpanel.css';
 @import './gradient.css';
@@ -50,30 +48,28 @@ body.secondary-panel-open #app .app-root > .panel {
   white-space: nowrap;
 }
 
-/* APP特殊的带外边框的滑块容器，装着不透明度和羽化两个滑块，特殊点是有较大的上padding，以让滑块与混合模式下拉菜单有足够的间距：*/
+/* APP特殊的带外边框的滑块容器，装着不透明度和羽化两个行内滑块，特殊点是有较大的上padding，
+   以让滑块与混合模式下拉菜单有足够的间距；水平 padding 由容器统一给到内部行 */
 .slider-container {
   width: 100%;
   background-color: var(--bg-color);
   border: 1px solid var(--border-color);
   border-radius: 3px;
-  padding: 20px 0 0px 0;
+  padding: 20px 10px 0px 10px;
   margin: 0 auto 15px auto;
 }
 
-.slider-container .slider-block {
-  padding: 0 10px;
-}
-
-/* 填充模式三行 radio 的齿轮图标：与标签一起包在 .row-end 中、处于正常文档流，
-   水平位置由 sp-radio 的 space-between（圆点居左、.row-end 整组靠右）+ .row-end
-   的 flex-end 共同排布，垂直居中由 .row-end 的 align-items:center 保证——
-   不再使用绝对定位（旧方案齿轮 pin 在 right:0，与 sp-radio 内部靠右排版的标签重叠）。 */
+/* 填充模式三行 radio */
 sp-radio .row-end .icon-button {
-  margin-left: 8px;       /* UXP 无 flex gap，标签与齿轮的间距单独给 */
+  margin-left: 8px;
 }
 
-/* APP 主开关内容容器的 -5px 水平偏移（原公共 .main-button-content 的 APP 专属点，
-   已按注释从 common.css 转移到此处） */
+/* APP 主开关内容容器的 -5px 水平偏移 */
+#app .main-button-content {
+  transform: translateX(-5px);
+}
+
+/* APP 主开关内容容器的 -5px 水平偏移 */
 #app .main-button-content {
   transform: translateX(-5px);
 }

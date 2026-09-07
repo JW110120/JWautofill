@@ -80,7 +80,8 @@
   height: auto;
 }
 
-/* 图案「填充方式」两列 radio（单次/平铺）整体右移 10px（独立样式） */
-.pattern-fill-radio {
-  transform: translateX(10px);
+/* 边框分区内的「填充方式」radio 区块：.panel-section 默认 15px 下边距
+   让 radio 行上下留白不对称，收回到 10px（下方减小 5px） */
+.border-panel-section > .panel-section {
+  margin-bottom: 10px;
 }

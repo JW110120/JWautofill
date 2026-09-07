@@ -515,13 +515,13 @@ export default function BrushHotkeySection() {
       <div className={daemonConnected ? 'notify-bar notify-bar-ok' : 'notify-bar notify-bar-warn'}>
         <span className={daemonConnected ? 'indicator indicator-md indicator-ok' : 'indicator indicator-md indicator-warn'} />
         <span className="notify-text">
-          {daemonConnected ? '快捷键服务已就绪' : (busy ? '快捷键服务处理中…' : '快捷键服务未启动')}
+          {daemonConnected ? '服务已就绪' : (busy ? '服务处理中…' : '服务未启动')}
         </span>
         <span className="mask-sync-status-spacer" />
         <div
           role="button"
           tabIndex={0}
-          className={busy ? 'action-button-auto action-button-disabled' : 'action-button-auto'}
+          className={busy ? 'action-button-4 action-button-disabled' : 'action-button-4'}
           title={daemonConnected
             ? helpTexts.hotkey.daemonStop
             : helpTexts.hotkey.daemonStart}
@@ -530,7 +530,7 @@ export default function BrushHotkeySection() {
             if (!busy) { if (daemonConnected) void stopDaemon(); else void loadDaemon(); }
           }}
         >
-          {daemonConnected ? '停止快捷键服务' : '启动快捷键服务'}
+          {daemonConnected ? '停止服务' : '启动服务'}
         </div>
       </div>
 

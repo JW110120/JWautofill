@@ -3,6 +3,7 @@ import { BlendMode } from '../constants/blendModes';
 import { BLEND_MODE_OPTIONS } from '../constants/blendModeOptions';
 import RangeSlider from './RangeSlider';
 import Select from './Select';
+import { calcDragValue } from '../utils/dragSensitivity';
 
 interface StrokeSettingProps {
   isOpen: boolean;
@@ -40,12 +41,10 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
   const cbRef = React.useRef({ onWidthChange, onOpacityChange });
   cbRef.current = { onWidthChange, onOpacityChange };
 
-  // 拖拽灵敏度：统一按「每 5px 鼠标位移 = 1 个步长」标定
-  //   宽度 0~20 / step 0.5 → 40 步 × 5px = 200px 覆盖全程 → 0.1
-  //   不透明度 0~100 / step 1 → 100 步 × 5px = 500px 覆盖全程 → 0.2（与 APP 主面板不透明度一致）
-  const STROKE_DRAG_CONFIG: Record<string, { min: number; max: number; step: number; sensitivity: number }> = {
-    width: { min: 0, max: 20, step: 0.5, sensitivity: 0.1 },
-    opacity: { min: 0, max: 100, step: 1, sensitivity: 0.2 }
+  // 拖拽灵敏度不在此手写：只声明量程与步长，由 calcDragValue 按量程归一化（与其它面板同一手感）
+  const STROKE_DRAG_CONFIG: Record<string, { min: number; max: number; step: number }> = {
+    width: { min: 0, max: 20, step: 0.5 },
+    opacity: { min: 0, max: 100, step: 1 }
   };
 
   const handleLabelMouseDown = (event: React.MouseEvent, target: string) => {
@@ -69,10 +68,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
       if (!config) return;
 
       const deltaX = event.clientX - startX;
-      // 先按灵敏度算原始值，再吸附到步长、最后夹到量程（此前误把灵敏度又除了 100，等于迟钝 100 倍）
-      const raw = startValue + deltaX * config.sensitivity;
-      const snapped = Math.round(raw / config.step) * config.step;
-      const newValue = Math.min(config.max, Math.max(config.min, Number(snapped.toFixed(4))));
+      const newValue = calcDragValue(startValue, deltaX, config.min, config.max, config.step);
 
       if (target === 'width') cbRef.current.onWidthChange(newValue);
       else if (target === 'opacity') cbRef.current.onOpacityChange(newValue);

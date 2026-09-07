@@ -2649,28 +2649,29 @@ const handleDrop = (e: React.DragEvent, targetId: string) => {
 
 // ============================================================================
 // 滑块文字标签横向拖拽调值（对齐 APP 主面板：按住标签左右拖 = 改滑块值）
-// 灵敏度统一按「每 5px 鼠标位移 ≈ 1 个步长」标定，即 sensitivity ≈ 步长 / 5。
+// 灵敏度不在此手写：由 useLabelDrag → calcDragValue 按量程归一化（DRAG_TRAVEL_PX = 200px 扫完全程），
+// 这里只声明量程与步长。旧的手写 sensitivity 让各滑块扫完量程的行程从 40px 到 510px 不等。
 // ============================================================================
 const SLIDER_DRAG_CONFIGS = {
-  radius:                      { min: 5,   max: 20,  step: 1,   sensitivity: 0.2   },
-  sigma:                       { min: 1,   max: 5,   step: 0.5, sensitivity: 0.1   },
-  gradientRelaxStrength:       { min: -10, max: 10,  step: 1,   sensitivity: 0.2   },
-  specialSharpenStrength:      { min: 1,   max: 10,  step: 0.5, sensitivity: 0.1   },
-  highFreqIntensity:           { min: 1,   max: 10,  step: 0.5, sensitivity: 0.1   },
-  highFreqRange:               { min: 1,   max: 10,  step: 0.5, sensitivity: 0.1   },
-  edgeMedianRadius:            { min: 10,  max: 30,  step: 1,   sensitivity: 0.2   },
-  edgeLineStrength:            { min: 0,   max: 100, step: 1,   sensitivity: 0.2   },
-  edgeLineSmoothRadius:        { min: 3,   max: 12,  step: 1,   sensitivity: 0.2   },
-  weightedIntensity:           { min: 1,   max: 10,  step: 0.5, sensitivity: 0.1   },
-  specialWoodcutLevels:        { min: 2,   max: 16,  step: 1,   sensitivity: 0.2   },
-  specialWoodcutEdgeThreshold: { min: 0,   max: 255, step: 1,   sensitivity: 0.5   },
-  specialWoodcutEdgeStrength:  { min: 0,   max: 100, step: 1,   sensitivity: 0.2   }
+  radius:                      { min: 5,   max: 20,  step: 1   },
+  sigma:                       { min: 1,   max: 5,   step: 0.5 },
+  gradientRelaxStrength:       { min: -10, max: 10,  step: 1   },
+  specialSharpenStrength:      { min: 1,   max: 10,  step: 0.5 },
+  highFreqIntensity:           { min: 1,   max: 10,  step: 0.5 },
+  highFreqRange:               { min: 1,   max: 10,  step: 0.5 },
+  edgeMedianRadius:            { min: 10,  max: 30,  step: 1   },
+  edgeLineStrength:            { min: 0,   max: 100, step: 1   },
+  edgeLineSmoothRadius:        { min: 3,   max: 12,  step: 1   },
+  weightedIntensity:           { min: 1,   max: 10,  step: 0.5 },
+  specialWoodcutLevels:        { min: 2,   max: 16,  step: 1   },
+  specialWoodcutEdgeThreshold: { min: 0,   max: 255, step: 1   },
+  specialWoodcutEdgeStrength:  { min: 0,   max: 100, step: 1   }
 } as const;
 
 type SliderDragKey = keyof typeof SLIDER_DRAG_CONFIGS;
 
 const { dragTarget: sliderDragTarget, onLabelMouseDown: onSliderLabelMouseDown } = useLabelDrag(
-  SLIDER_DRAG_CONFIGS as Record<SliderDragKey, { min: number; max: number; step?: number; sensitivity?: number }>,
+  SLIDER_DRAG_CONFIGS as Record<SliderDragKey, { min: number; max: number; step?: number }>,
   (key: SliderDragKey, value: number) => {
     switch (key) {
       case 'radius': handleRadiusChange(value); break;
@@ -2735,9 +2736,10 @@ const renderDetailAdjustContent = () => (
     )}
 
     <div className="divider"></div>
-
+    
+    <div className="row-between">
     <div role="button" tabIndex={0} className="action-button-4" onClick={handleGradientModify} title={helpTexts.adjustment.gradientModify}>梯度修改</div>
-
+    </div>
       <div className="row-between">
         <div className={sliderLabelClass('gradientRelaxStrength', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'gradientRelaxStrength', gradientRelaxStrength)} title={helpTexts.adjustment.gradientRelax}>程度</div>
         <RangeSlider min={-10} max={10} step={1} value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthChange} className="slider-track" />
@@ -2748,11 +2750,11 @@ const renderDetailAdjustContent = () => (
       </div>
 
     <div className="divider"></div>
-
+    <div className="row-between">
     <div role="button" tabIndex={0} className="action-button-4" onClick={handleSpecialSharpen} title={helpTexts.adjustment.specialSharpen}>特殊锐化</div>
-
+    </div>
       <div className="row-between">
-        <div className={sliderLabelClass('specialSharpenStrength', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialSharpenStrength', specialSharpenStrength)} title={helpTexts.adjustment.specialSharpenStrength}>强度</div>
+        <div className={sliderLabelClass('specialSharpenStrength', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialSharpenStrength', specialSharpenStrength)} title={helpTexts.adjustment.specialSharpenStrength}>强度</div>
         <RangeSlider min={1} max={10} step={0.5} value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthChange} className="slider-track" />
         <div className="row-start">
           <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthNumberChange} /></div>
@@ -2761,11 +2763,11 @@ const renderDetailAdjustContent = () => (
       </div>
 
     <div className="divider"></div>
-
+    <div className="row-between">
     <div role="button" tabIndex={0} className="action-button-4" onClick={handleHighFrequencyEnhancement} title={helpTexts.adjustment.highFreq}>高频增强</div>
-
+    </div>
       <div className="row-between">
-        <div className={sliderLabelClass('highFreqIntensity', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'highFreqIntensity', highFreqIntensity)} title={helpTexts.adjustment.highFreqIntensity}>强度</div>
+        <div className={sliderLabelClass('highFreqIntensity', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'highFreqIntensity', highFreqIntensity)} title={helpTexts.adjustment.highFreqIntensity}>强度</div>
         <RangeSlider min={1} max={10} step={0.5} value={highFreqIntensity} onChange={handleHighFreqIntensityChange} className="slider-track" />
         <div className="row-start">
           <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={highFreqIntensity} onChange={handleHighFreqIntensityNumberChange} /></div>
@@ -2785,8 +2787,9 @@ const renderDetailAdjustContent = () => (
 
 const renderEdgeProcessingContent = () => (
   <div className="border-panel-section">
+    <div className="row-between">
     <div role="button" tabIndex={0} className="action-button-4" onClick={handleSmartEdgeSmooth} title={helpTexts.adjustment.edgeSmooth}>边缘平滑</div>
-
+    </div>
       <div className="row-between">
         {/* 下拉行：标签不可拖拽，光标保持 default（与可拖拽滑块标签区分） */}
         <div className="label-4" title={helpTexts.adjustment.edgeSmoothMode}>平滑模式</div>
@@ -2806,7 +2809,7 @@ const renderEdgeProcessingContent = () => (
       {edgeSmoothMode === 'edge' && (
         <>
           <div className="row-between">
-            <div className={sliderLabelClass('edgeMedianRadius', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeMedianRadius', edgeMedianRadius)} title={helpTexts.adjustment.edgeMedianRadius}>中间值半径</div>
+            <div className={sliderLabelClass('edgeMedianRadius', 'label-drag label-5')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeMedianRadius', edgeMedianRadius)} title={helpTexts.adjustment.edgeMedianRadius}>中间值半径</div>
             <RangeSlider min={10} max={30} step={1} value={edgeMedianRadius} onChange={handleEdgeMedianRadiusChange} className="slider-track" />
             <div className="row-start">
               <div className="num-input-row"><input type="number" min="10" max="30" step="1" value={edgeMedianRadius} onChange={handleEdgeMedianRadiusNumberChange} /></div>
@@ -2819,7 +2822,7 @@ const renderEdgeProcessingContent = () => (
       {edgeSmoothMode === 'line' && (
         <>
           <div className="row-between">
-            <div className={sliderLabelClass('edgeLineStrength', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeLineStrength', edgeLineStrength)} title={helpTexts.adjustment.edgeLineStrength}>平滑力度</div>
+            <div className={sliderLabelClass('edgeLineStrength', 'label-drag label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeLineStrength', edgeLineStrength)} title={helpTexts.adjustment.edgeLineStrength}>平滑力度</div>
             <RangeSlider min={0} max={100} step={1} value={edgeLineStrength} onChange={handleEdgeLineStrengthChange} className="slider-track" />
             <div className="row-start">
               <div className="num-input-row"><input type="number" min="0" max="100" step="1" value={edgeLineStrength} onChange={handleEdgeLineStrengthNumberChange} /></div>
@@ -2828,7 +2831,7 @@ const renderEdgeProcessingContent = () => (
           </div>
 
           <div className="row-between">
-            <div className={sliderLabelClass('edgeLineSmoothRadius', 'label-drag')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeLineSmoothRadius', edgeLineSmoothRadius)} title={helpTexts.adjustment.edgeLineRange}>平滑范围</div>
+            <div className={sliderLabelClass('edgeLineSmoothRadius', 'label-drag label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeLineSmoothRadius', edgeLineSmoothRadius)} title={helpTexts.adjustment.edgeLineRange}>平滑范围</div>
             <RangeSlider min={3} max={12} step={1} value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusChange} className="slider-track" />
             <div className="row-start">
               <div className="num-input-row"><input type="number" min="3" max="12" step="1" value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusNumberChange} /></div>
@@ -2949,7 +2952,7 @@ const renderMaskSyncContent = () => (
         <div className="divider" />
 
         {/* 部分一：样本（图层 + 通道 + 反相） */}
-        <div className="row-between-close">
+        <div className="row-between">
           <span className="label-2">样本</span>
           <Select
             value={task.sampleLayerId != null ? String(task.sampleLayerId) : ''}
@@ -3064,8 +3067,8 @@ const renderMaskSyncContent = () => (
       );
     })}
 
-    {/* 新建同步任务按钮：位于容器 A（卡片大容器）底部 */}
-    <div className="row-center">
+    {/* 新建同步任务按钮：位于容器 A（卡片大容器）底部，空白带正中（上下左右居中） */}
+    <div className="mask-sync-add-row">
       <sp-action-button quiet class="circle-button" onClick={handleMaskSyncAdd} title={helpTexts.adjustment.maskSyncAdd}>
         <AddIcon />
       </sp-action-button>
@@ -3167,23 +3170,26 @@ const renderQuickActionContent = () => (
     )}
 
     <div className="divider"></div>
-
+    
+    <div className="row-between">
     <div role="button" tabIndex={0} className="action-button-4" onClick={handleBlockGradient} title={helpTexts.adjustment.blockGradient}>分块渐变</div>
+    </div>
 
     <div className="divider"></div>
 
     <div className="row-between">
-      <div role="button" tabIndex={0} className="action-button-7" onClick={handleBlockColorPatchLightLine} title={helpTexts.adjustment.patchLightLine}>浅线同层补色</div>
+      <div role="button" tabIndex={0} className="action-button-6" onClick={handleBlockColorPatchLightLine} title={helpTexts.adjustment.patchLightLine}>浅线同层补色</div>
 
-      <div role="button" tabIndex={0} className="action-button-7" onClick={handleBlockColorPatchDarkLine} title={helpTexts.adjustment.patchDarkLine}>深线同层补色</div>
+      <div role="button" tabIndex={0} className="action-button-6" onClick={handleBlockColorPatchDarkLine} title={helpTexts.adjustment.patchDarkLine}>深线同层补色</div>
     </div>
 
     {/* 虚线分割线：同层补色 与 分层补色 之间（JS 拼渐变渲染，短线/空各 6px） */}
     <DashedDivider />
-
+    
+    <div className="row-between">
     <div role="button" tabIndex={0} className="action-button-4" onClick={handleBlockColorPatchLayered} title={helpTexts.adjustment.patchLayered}>分层补色</div>
-
-      <div className="row-between">
+    </div>
+    <div className="row-between">
         {/* 下拉行：标签不可拖拽，光标保持 default（原为 pointer，语义错误） */}
         <div className="label-4" title={helpTexts.adjustment.lineReference}>线稿参考</div>
         <Select
@@ -3200,7 +3206,7 @@ const renderQuickActionContent = () => (
           showCheck
           title={helpTexts.adjustment.lineReferenceSelect}
         />
-      </div>
+    </div>
 
     <div className="divider"></div>
 
@@ -3211,7 +3217,7 @@ const renderQuickActionContent = () => (
     </div>
 
       <div className="row-between">
-        <div className={sliderLabelClass('specialWoodcutLevels', 'label-3')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialWoodcutLevels', specialWoodcutLevels)} title={helpTexts.adjustment.woodcutLevels}>色阶数</div>
+        <div className={sliderLabelClass('specialWoodcutLevels', 'label-drag label-3')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialWoodcutLevels', specialWoodcutLevels)} title={helpTexts.adjustment.woodcutLevels}>色阶数</div>
         <RangeSlider min={2} max={16} step={1} value={specialWoodcutLevels} onChange={handleSpecialWoodcutLevelsChange} className="slider-track" />
         <div className="row-start">
           <div className="num-input-row"><input type="number" min="2" max="16" step="1" value={specialWoodcutLevels} onChange={handleSpecialWoodcutLevelsNumberChange} /></div>
@@ -3220,7 +3226,7 @@ const renderQuickActionContent = () => (
       </div>
 
       <div className="row-between">
-        <div className={sliderLabelClass('specialWoodcutEdgeThreshold', 'label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialWoodcutEdgeThreshold', specialWoodcutEdgeThreshold)} title={helpTexts.adjustment.woodcutEdgeThreshold}>边缘阈值</div>
+        <div className={sliderLabelClass('specialWoodcutEdgeThreshold', 'label-drag label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialWoodcutEdgeThreshold', specialWoodcutEdgeThreshold)} title={helpTexts.adjustment.woodcutEdgeThreshold}>边缘阈值</div>
         <RangeSlider min={0} max={255} step={1} value={specialWoodcutEdgeThreshold} onChange={handleSpecialWoodcutEdgeThresholdChange} className="slider-track" />
         <div className="row-start">
           <div className="num-input-row"><input type="number" min="0" max="255" step="1" value={specialWoodcutEdgeThreshold} onChange={handleSpecialWoodcutEdgeThresholdNumberChange} /></div>
@@ -3229,7 +3235,7 @@ const renderQuickActionContent = () => (
       </div>
 
       <div className="row-between">
-        <div className={sliderLabelClass('specialWoodcutEdgeStrength', 'label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialWoodcutEdgeStrength', specialWoodcutEdgeStrength)} title={helpTexts.adjustment.woodcutEdgeStrength}>边缘强度</div>
+        <div className={sliderLabelClass('specialWoodcutEdgeStrength', 'label-drag label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialWoodcutEdgeStrength', specialWoodcutEdgeStrength)} title={helpTexts.adjustment.woodcutEdgeStrength}>边缘强度</div>
         <RangeSlider min={0} max={100} step={1} value={specialWoodcutEdgeStrength} onChange={handleSpecialWoodcutEdgeStrengthChange} className="slider-track" />
         <div className="row-start">
           <div className="num-input-row"><input type="number" min="0" max="100" step="1" value={specialWoodcutEdgeStrength} onChange={handleSpecialWoodcutEdgeStrengthNumberChange} /></div>

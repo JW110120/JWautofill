@@ -29,7 +29,7 @@
             },
             "preferredFloatingSize": {
                 "width": 250,
-                "height": 5000
+                "height": 1000
             },
             "icons": [
                 {
@@ -57,20 +57,20 @@
             },
             "type": "panel",
             "minimumSize": {
-                "width": 300,
+                "width": 250,
                 "height": 450 
             },
             "maximumSize": {
-                "width": 300,
+                "width": 250,
                 "height": 5000
             },
             "preferredDockedSize": {
-                "width": 300,
+                "width": 250,
                 "height": 5000
             },
             "preferredFloatingSize": {
-                "width": 300,
-                "height": 5000
+                "width": 250,
+                "height": 1000
             },
             "icons": [
                 {

@@ -5,6 +5,7 @@ import IconButton from '../components/IconButton';
 import { app, action, core } from 'photoshop';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
 import { PresetManager } from '../utils/PresetManager';
+import { calcDragValue } from '../utils/dragSensitivity';
 import RangeSlider from './RangeSlider';
 import Select from './Select';
 import { helpTexts } from '../constants/helpTexts';
@@ -1129,14 +1130,13 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
 
         const handleMouseMove = (moveEvent: MouseEvent) => {
             moveEvent.preventDefault();
-            const deltaX = moveEvent.clientX - dragStartX;
-            const sensitivity = 10;
-
-            let newAngle = dragStartAngle + deltaX * (sensitivity / 10);
-            newAngle = Math.round(newAngle);
-            newAngle = Math.min(360, Math.max(0, newAngle));
-
-            setAngle(newAngle);
+            setAngle(calcDragValue(
+                dragStartAngle,
+                moveEvent.clientX - dragStartX,
+                0,
+                360,
+                1
+            ));
         };
 
         const handleMouseUp = () => {
@@ -1346,7 +1346,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
 
             {/* 渐变编辑区域 */}
             <div className="border-panel-section">
-                <div className="subpanel-title-1"><h3>颜色渐变</h3></div>
+                <div className="subpanel-title-2"><h3>颜色渐变</h3></div>
                 
                 {/* 不透明度控制 */}
                 {selectedStopIndex !== null && selectedStopType === 'opacity' && (
@@ -1359,8 +1359,13 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                 const startValue = Math.round(parseFloat(stops[selectedStopIndex].color.match(/,\s*([\d.]+)\s*\)$/)?.[1] || '1') * 100);
                                 
                                 const handleMouseMove = (moveEvent: MouseEvent) => {
-                                    const deltaX = moveEvent.clientX - startX;
-                                    const newValue = Math.max(0, Math.min(100, startValue + Math.round(deltaX / 2)));
+                                    const newValue = calcDragValue(
+                                        startValue,
+                                        moveEvent.clientX - startX,
+                                        0,
+                                        100,
+                                        1
+                                    );
                                     handleStopChange(selectedStopIndex, undefined, undefined, newValue);
                                 };
                                 
@@ -1375,6 +1380,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         >
                             不透明度
                         </label>
+                    <div className="row-start">
                         <div className="num-input-row">
                             <input
                                 type="number"
@@ -1388,6 +1394,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             />
                         </div>
                         <span className="num-unit">%</span>
+                    </div>
                         <div
                             className={stops.length <= 2 ? 'icon-button-disabled' : 'icon-button'}
                             role="button"
@@ -1581,8 +1588,9 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 {/* 颜色控制 */}
                 {selectedStopIndex !== null && selectedStopType === 'color' && (
                     <div className="row-between">
-                        <label className="label-3">颜色：</label>
-                        <span className="num-unit">#</span>
+                        <label className="label-2">颜色</label>
+                    <div className="row-start">
+                        <span className="num-unit num-unit-hash">#</span>
                         <div className="num-input-row">
                             <input
                                 type="text"
@@ -1623,7 +1631,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                 }
                             }}
                         />
-                        
+                    </div>   
                         <div
                             className={stops.length <= 2 ? 'icon-button-disabled' : 'icon-button'}
                             role="button"
@@ -1694,10 +1702,10 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
 
                 <div className="divider"></div>
 
-                <div className="row-between">
-                    <div className="column default">
-                    <div className="row-between">
-                        <label 
+                <div className="row-between checkbox-grid">
+                    <div className="column-default">
+                    <div className="row-start">
+                        <label
                             className="label-2"
                             htmlFor="reverseCheckbox"
                             onClick={() => setReverse(!reverse)}
@@ -1707,14 +1715,15 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         <input
                             type="checkbox"
                             id="reverseCheckbox"
+                            className="checkbox-input"
                             checked={reverse}
                             onChange={(e) => setReverse(e.target.checked)}
                         />
                     </div>
                     </div>
 
-                    <div className="column default">
-                    <div className="row-between">
+                    <div className="column-default">
+                    <div className="row-start">
                          <label
                             className="label-6"
                             htmlFor="transparencyCheckbox"
@@ -1725,6 +1734,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         <input
                             type="checkbox"
                             id="transparencyCheckbox"
+                            className="checkbox-input"
                             checked={preserveTransparency}
                             onChange={(e) => setPreserveTransparency(e.target.checked)}
                         />
@@ -1735,7 +1745,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
 
             {/* 最终预览区域 */}
             <div className="final-preview-container">
-                <div className="subpanel-title-1"><h3>最终预览</h3></div>
+                <div className="subpanel-title-2"><h3>最终预览</h3></div>
                 <div className="preview-wrapper">
                     {/* 当选中多个预设时渲染提示词 */}
                     {selectedPresets.size > 0 ? (

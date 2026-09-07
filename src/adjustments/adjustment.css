@@ -110,19 +110,21 @@
   cursor: default;
 }
 
-/* 独有的组合键 */
+/* 独有的组合键：与快捷键名各占一半（flex:1 1 0%），中间的竖分隔线严格落在行正中。
+   旧写法 flex:0 0 110px 定宽，面板 300→250 后分隔线明显偏右，不再居中。 */
 .hotkey-entry-combo {
-  width: 110px;
-  flex: 0 0 110px;
+  flex: 1 1 0%;
+  min-width: 0;
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* 独有的快捷键名样式 */
+/* 独有的快捷键名样式：与组合键同用 flex:1 1 0%（旧写法 1 1 auto 以文字自然宽为基准，
+   右列起点更大→右列更宽→中间的竖分隔线偏左）。基准相同才能各占一半，分隔线严格居中。 */
 .hotkey-entry-name {
-  flex: 1 1 auto;
+  flex: 1 1 0%;
   min-width: 0;
   text-align: right;
   opacity: 0.8;

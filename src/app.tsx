@@ -1096,6 +1096,7 @@ class App extends React.Component<AppProps, AppState> {
 
     // ===== 新增：主开关的两个联动选项 =====
     // 开启主开关时，若用户把当前工具切到这些「其它工具」，则自动关闭主开关
+    // ⚠️ 吸管工具已从名单剔除：取样时临时切到吸管属于常规操作，不应关闭主开关。
     private static readonly AUTO_OFF_TOOLS = [
         'paintbrushTool',           // 画笔
         'pencilTool',               // 铅笔
@@ -1105,7 +1106,6 @@ class App extends React.Component<AppProps, AppState> {
         'gradientTool',             // 渐变
         'moveTool',                 // 移动
         'smudgeTool',               // 涂抹
-        'eyedropperTool',           // 吸管
         'historyBrushTool',         // 历史画笔
         'blurTool',                 // 模糊
         'magicWandTool',            // 魔棒
@@ -1395,74 +1395,68 @@ title={helpTexts.selectionFill.blendMode}>
                 </div>
 
                 <div className="slider-container">
-                    <div className="slider-block">
                     <div className="row-between"
-                        onMouseDown={(e) => this.handleLabelMouseDown(e, 'opacity')}
                         title={helpTexts.selectionFill.opacity}>
-                    <label
-                        className="label-4">
-                    不透明度
-                    </label>
-
-                    <div className="row-start">
-                    <div className="num-input-row">
-                    <input
-                        type="number"
-                        min="0"
-                        max="100"
-                        value={this.state.opacity}
-                        onChange={(e) => this.setState({ opacity: Number(e.target.value) })}
-                        title={helpTexts.selectionFill.opacityInput}
-                    />
-                    </div>
-                    <span className="num-unit">%</span>
-                    </div>
-
-                    </div>
-                    <RangeSlider
-                        min={0}
-                        max={100}
-                        step={1}
-                        value={this.state.opacity}
-                        onChange={this.handleOpacityChange}
-                        className="slider-input"
-                        title={helpTexts.selectionFill.opacitySlider}
-                    />
-                    </div>
-
-                    <div className="slider-block">
-                    <div className="row-between"
-                        onMouseDown={(e) => this.handleLabelMouseDown(e, 'feather')}
-                        title={helpTexts.selectionFill.feather}>
-                    <label
-                        className="label-2">
-                        羽化
-                    </label>
-
-                    <div className="row-start">
-                    <div className="num-input-row">
-                    <input
-                        type="number"
-                        min="0"
-                        max="20"
-                        value={this.state.feather}
-                        onChange={(e) => this.setState({ feather: Number(e.target.value) })}
-                        title={helpTexts.selectionFill.featherInput}
+                        <label
+                            className="label-drag label-4"
+                            onMouseDown={(e) => this.handleLabelMouseDown(e, 'opacity')}
+                            title={helpTexts.selectionFill.opacity}>
+                            不透明度
+                        </label>
+                        <RangeSlider
+                            min={0}
+                            max={100}
+                            step={1}
+                            value={this.state.opacity}
+                            onChange={this.handleOpacityChange}
+                            className="slider-track"
+                            title={helpTexts.selectionFill.opacitySlider}
                         />
-                    </div>
-                    <span className="num-unit">px</span>
+                        <div className="row-start">
+                            <div className="num-input-row">
+                                <input
+                                    type="number"
+                                    min="0"
+                                    max="100"
+                                    value={this.state.opacity}
+                                    onChange={(e) => this.setState({ opacity: Number(e.target.value) })}
+                                    title={helpTexts.selectionFill.opacityInput}
+                                />
+                            </div>
+                            <span className="num-unit">%</span>
+                        </div>
                     </div>
 
-                    </div>
-                    <RangeSlider
-                        min={0}
-                        max={20}
-                        step={0.5}
-                        value={this.state.feather}
-                        onChange={this.handleFeatherChange}
-                        className="slider-input"
-                        title={helpTexts.selectionFill.featherSlider}
-                    />
+                    <div className="row-between"
+                        title={helpTexts.selectionFill.feather}>
+                        <label
+                            className="label-drag label-2"
+                            onMouseDown={(e) => this.handleLabelMouseDown(e, 'feather')}
+                            title={helpTexts.selectionFill.feather}>
+                            羽化
+                        </label>
+                        <RangeSlider
+                            min={0}
+                            max={20}
+                            step={0.5}
+                            value={this.state.feather}
+                            onChange={this.handleFeatherChange}
+                            className="slider-track"
+                            title={helpTexts.selectionFill.featherSlider}
+                        />
+                        <div className="row-start">
+                            <div className="num-input-row">
+                                <input
+                                    type="number"
+                                    min="0"
+                                    max="20"
+                                    value={this.state.feather}
+                                    onChange={(e) => this.setState({ feather: Number(e.target.value) })}
+                                    title={helpTexts.selectionFill.featherInput}
+                                />
+                            </div>
+                            <span className="num-unit">px</span>
+                        </div>
                     </div>
                 </div>
 
@@ -1758,10 +1752,10 @@ title={helpTexts.selectionFill.clearMode}>
                         </div>
                         {/* 底部checkbox选项外部容器 */}
                         <div className="divider"></div>
-                        <div className="row-between">
+                        <div className="row-between checkbox-grid">
                                 {/* 左列：取消选区 / 更新历史源 */}
                                 <div className="column-default">
-                                    <div className="row-between">
+                                    <div className="row-start">
                                         <label
                                             htmlFor="deselectCheckbox"
                                             className="label-5"
@@ -1779,7 +1773,7 @@ title={helpTexts.selectionFill.clearMode}>
                                             title={helpTexts.selectionFill.deselectInput}
                                         />
                                     </div>
-                                    <div className="row-between">
+                                    <div className="row-start">
                                         <label
                                             htmlFor="historyCheckbox"
                                             className="label-5"
@@ -1800,7 +1794,7 @@ title={helpTexts.selectionFill.clearMode}>
                                 </div>
                                 {/* 右列：开启后切套索 / 切其它工具即关 */}
                                 <div className="column-default">
-                                    <div className="row-between">
+                                    <div className="row-start">
                                         <label
                                             htmlFor="autoOffOnToolCheckbox"
                                             className="label-5"
@@ -1818,7 +1812,7 @@ title={helpTexts.selectionFill.clearMode}>
                                             title={helpTexts.selectionFill.autoOffInput}
                                         />
                                     </div>
-                                    <div className="row-between">
+                                    <div className="row-start">
                                         <label
                                             htmlFor="lassoOnEnableCheckbox"
                                             className="label-5"

@@ -3,6 +3,7 @@ import { app, action } from 'photoshop';
 import { ColorSettings } from '../types/state';
 import RangeSlider from './RangeSlider';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
+import { calcDragValue } from '../utils/dragSensitivity';
 
 interface ColorSettingsProps {
     isOpen: boolean;
@@ -85,13 +86,13 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
     const handleMouseMove = (event: MouseEvent) => {
         if (!isDragging || !dragTarget) return;
 
-        const deltaX = event.clientX - dragStartX;
-        const sensitivity = dragTarget === 'hueVariation' ? 1 : 0.5;
         const maxValue = dragTarget === 'hueVariation' ? 360 : 100;
-        
-        const newValue = Math.max(
+        const newValue = calcDragValue(
+            dragStartValue,
+            event.clientX - dragStartX,
             0,
-            Math.min(maxValue, Math.round(dragStartValue + (deltaX * sensitivity)))
+            maxValue,
+            1
         );
 
         setSettings(prev => ({
@@ -198,39 +199,33 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
         };
 
         return (
-            <div className="slider-block">
-                    <div
-                        className="row-between"
-                        onMouseDown={(e) => handleLabelMouseDown(e, settingKey)}
-                    >
-                        <label
-                            className={widthClass}
-                        >
-                            {label}
-                        </label>
-
-                        <div className="row-start">
-                            <div className="num-input-row">
-                                <input
-                                    type="number"
-                                    min={min}
-                                    max={max}
-                                    value={value || 0}
-                                    onChange={(e) => handleNumberInputChange(settingKey, Number(e.target.value))}
-                                />
-                            </div>
-                            <span className="num-unit">{unit}</span>
-                        </div>
+            <div className="row-between">
+                <label
+                    className={"label-drag " + widthClass}
+                    onMouseDown={(e) => handleLabelMouseDown(e, settingKey)}
+                >
+                    {label}
+                </label>
+                <RangeSlider
+                    min={min}
+                    max={max}
+                    step={1}
+                    value={value || 0}
+                    onChange={handleRangeChange}
+                    className="slider-track"
+                />
+                <div className="row-start">
+                    <div className="num-input-row">
+                        <input
+                            type="number"
+                            min={min}
+                            max={max}
+                            value={value || 0}
+                            onChange={(e) => handleNumberInputChange(settingKey, Number(e.target.value))}
+                        />
                     </div>
-
-                    <RangeSlider
-                        min={min}
-                        max={max}
-                        step={1}
-                        value={value || 0}
-                        onChange={handleRangeChange}
-                        className="slider-input"
-                    />
+                    <span className="num-unit">{unit}</span>
+                </div>
             </div>
         );
     };
@@ -254,12 +249,12 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
                 ) : (
                     <>
                         {renderSlider('hueVariation', '色相抖动', settings.hueVariation, 0, 360, '°', 'label-4')}
-                        {renderSlider('saturationVariation', '饱和度抖动', settings.saturationVariation, 0, 100, '%', 'label-4')}
+                        {renderSlider('saturationVariation', '饱和度抖动', settings.saturationVariation, 0, 100, '%', 'label-5')}
                         {renderSlider('brightnessVariation', '亮度抖动', settings.brightnessVariation, 0, 100, '%', 'label-4')}
                     </>
                 )}
 
-                {renderSlider('opacityVariation', '不透明度抖动', settings.opacityVariation, 0, 100, '%', 'label-5')}
+                {renderSlider('opacityVariation', '不透明度抖动', settings.opacityVariation, 0, 100, '%', 'label-6')}
             </div>
 
             <div className="divider"></div>
@@ -267,8 +262,8 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
             {/* 计算模式选择器（原 colorsettings-calculation-mode 分区容器作废，统一收口为子面板分区容器） */}
             <div className="panel-section">
                 <label className="subpanel-title-2">计算方法</label>
-                <sp-radio-group 
-                    className="color-calc-radio"
+                <sp-radio-group
+                    className="radio-pair-230"
                     selected={settings.calculationMode || 'absolute'}
                     name="calculationMode"
                     onChange={(e) => setSettings(prev => ({ ...prev, calculationMode: e.target.value as 'absolute' | 'relative' }))}

@@ -1,6 +1,3 @@
 /* 颜色设置面板样式
-   ⚠️ 本面板样式已收口到 common.css（单一来源）。唯一例外：下方「计算方法」两列 radio 的
-   整体右移 10px 为本面板独立样式（用户要求，不进通用块以免影响其它面板）。 */
-.color-calc-radio {
-  transform: translateX(10px);
-}
+   ⚠️ 本面板样式已收口到 common.css（单一来源）。
+   「计算方法」两列 radio 的贴边布局同样在 common.css（.radio-pair-230 / .radio-pair-210）。 */

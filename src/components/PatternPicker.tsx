@@ -5,6 +5,7 @@ import IconButton from '../components/IconButton';
 import { action, core, imaging, app } from 'photoshop';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
 import { PresetManager } from '../utils/PresetManager';
+import { calcDragValue } from '../utils/dragSensitivity';
 import RangeSlider from './RangeSlider';
 import Select from './Select';
 import { helpTexts } from '../constants/helpTexts';
@@ -276,17 +277,11 @@ interface PatternPickerProps {
         if (!isSliderDragging || !dragTarget) return;
         
         const deltaX = event.clientX - dragStartX;
-        const sensitivity = 10;
-        
-        let newValue = dragStartValue + deltaX * (sensitivity / 10);
-        newValue = Math.round(newValue);
-        
+
         if (dragTarget === 'angle') {
-            newValue = Math.min(360, Math.max(0, newValue));
-            setAngle(newValue);
+            setAngle(calcDragValue(dragStartValue, deltaX, 0, 360, 1));
         } else if (dragTarget === 'scale') {
-            newValue = Math.min(300, Math.max(20, newValue));
-            setScale(newValue);
+            setScale(calcDragValue(dragStartValue, deltaX, 20, 300, 1));
         }
     };
 
@@ -1622,65 +1617,61 @@ interface PatternPickerProps {
             
 
             <div className="border-panel-section">
-                <div className="slider-block">
-                    <div className="row-between" onMouseDown={(e) => handleMouseDown(e, 'angle')}>
-                        <label className="label-2">角度</label>
-                        <div className="row-start">
-                            <div className="num-input-row">
-                                <input
-                                    type="number"
-                                    min="0"
-                                    max="360"
-                                    value={angle}
-                                    onChange={handleAngleChange}
-                                />
-                            </div>
-                            <span className="num-unit">°</span>
-                        </div>
-                    </div>
+                <div className="row-between">
+                    <label className="label-drag label-2" onMouseDown={(e) => handleMouseDown(e, 'angle')}>角度</label>
                     <RangeSlider
                         min={0}
                         max={360}
                         step={1}
                         value={angle}
-                        className="slider-input"
+                        className="slider-track"
                         onChange={(v) => setAngle(v)}
                         onDragEnd={() => { if (selectedPattern) updatePatternTransform(selectedPattern, scale, angle); }}
                     />
+                    <div className="row-start">
+                        <div className="num-input-row">
+                            <input
+                                type="number"
+                                min="0"
+                                max="360"
+                                value={angle}
+                                onChange={handleAngleChange}
+                            />
+                        </div>
+                        <span className="num-unit">°</span>
+                    </div>
                 </div>
 
-                <div className="slider-block">
-                    <div className="row-between" onMouseDown={(e) => handleMouseDown(e, 'scale')}>
-                        <label className="label-2">缩放</label>
-                        <div className="row-start">
-                            <div className="num-input-row">
-                                <input
-                                    type="number"
-                                    min="20"
-                                    max="300"
-                                    value={scale}
-                                    onChange={handleScaleChange}
-                                />
-                            </div>
-                            <span className="num-unit">%</span>
-                        </div>
-                    </div>
+                <div className="row-between">
+                    <label className="label-drag label-2" onMouseDown={(e) => handleMouseDown(e, 'scale')}>缩放</label>
                     <RangeSlider
                         min={20}
                         max={300}
                         step={1}
                         value={scale}
-                        className="slider-input"
+                        className="slider-track"
                         onChange={(v) => setScale(v)}
                         onDragEnd={() => { if (selectedPattern) updatePatternTransform(selectedPattern, scale, angle); }}
                     />
+                    <div className="row-start">
+                        <div className="num-input-row">
+                            <input
+                                type="number"
+                                min="20"
+                                max="300"
+                                value={scale}
+                                onChange={handleScaleChange}
+                            />
+                        </div>
+                        <span className="num-unit">%</span>
+                    </div>
                 </div>
 
                 <div className="divider"></div>
 
                 <div className="panel-section">
                 <sp-radio-group
-                    className="pattern-fill-radio"
+                    className="radio-pair-210"
                     selected={fillMode}
                     name="fillMode"
                     onChange={(e) => setFillMode(e.target.value as 'stamp' | 'tile')}
@@ -1696,7 +1687,7 @@ interface PatternPickerProps {
 
                 <div className="divider"></div>
 
-                <div className="row-between">
+                <div className="row-between checkbox-grid">
                     <div className="column-default">
                     <div className="row-start">
                         <label
@@ -1716,7 +1707,7 @@ interface PatternPickerProps {
                     </div>
                     </div>
                     {fillMode === 'tile' && (
-                        <div className="column default">
+                        <div className="column-default">
                         <div className="row-start">
                             <label
                                 htmlFor="rotateAllCheckbox"
@@ -1739,7 +1730,7 @@ interface PatternPickerProps {
             </div>
             <div className="final-preview-container">
                 <div className="row-between preview-toolbar">
-                    <h3 className="subpanel-title-2">预览</h3>
+                    <h3 className="subpanel-title-2">图案预览</h3>
                     {selectedPattern && (
                         <Select
                             value={previewZoom.toString()}

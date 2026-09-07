@@ -1,4 +1,5 @@
 import React from 'react';
+import { calcDragValue } from './dragSensitivity';
 
 /**
  * 滑块文字标签横向拖拽调值（对齐 APP 主面板 .label 的交互）。
@@ -10,7 +11,8 @@ import React from 'react';
  * 说明：
  *   - 起点信息存 ref，mousemove 回调只读 ref，effect 只在「开始/结束拖拽」时解绑重绑，
  *     不会随滑块值每次变化反复 add/removeEventListener（UXP 下更稳）。
- *   - 值先按灵敏度放大位移，再吸附到 step，最后夹到 [min, max]。
+ *   - 灵敏度不手写、由 calcDragValue 按量程归一化（见 utils/dragSensitivity.ts），
+ *     保证不同量程/不同长度的滑块拖拽手感一致。
  *   - configs / applyValue 每次渲染都会刷新到 ref，闭包永远拿到最新值，无需进依赖数组。
  */
 export interface LabelDragConfig {
@@ -18,8 +20,6 @@ export interface LabelDragConfig {
   max: number;
   /** 吸附步长，默认 1 */
   step?: number;
-  /** 每 1px 鼠标位移对应的数值增量，默认 0.5 */
-  sensitivity?: number;
 }
 
 export function useLabelDrag<T extends string>(
@@ -48,10 +48,13 @@ export function useLabelDrag<T extends string>(
       if (!config) return;
 
       const step = config.step ?? 1;
-      const sensitivity = config.sensitivity ?? 0.5;
-      const raw = startValue + (event.clientX - startX) * sensitivity;
-      const snapped = Math.round(raw / step) * step;
-      const newValue = Math.min(config.max, Math.max(config.min, Number(snapped.toFixed(4))));
+      const newValue = calcDragValue(
+        startValue,
+        event.clientX - startX,
+        config.min,
+        config.max,
+        step
+      );
 
       applyRef.current(target, newValue);
     };

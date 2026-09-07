@@ -146,6 +146,19 @@
     width: auto;
 }
 
+/* 独特的「颜色」行 # 前缀符号：默认 .num-unit 只有 margin-left，
+   这里补右侧 8px 间距，隔开 # 与十六进制输入框 */
+.num-unit-hash {
+  margin-right: 8px;
+}
+
+/* 「颜色渐变」子标题：抵消 .border-panel-section 的 10px 内边距（同 .divider 负 margin 手法），
+   标题自身 padding 为 0、通栏顶格；底部保留 10px 与内容分隔 */
+.border-panel-section .subpanel-title-2 {
+  margin: -10px -10px 10px -10px;
+  padding: 0;
+}
+
 .final-preview-container:has(> .subpanel-title-1) .preview-wrapper {
   overflow: visible;
 }
