@@ -31,7 +31,8 @@ import { PresetManager } from './utils/PresetManager';
 import { PanelStateManager } from './utils/PanelStateManager';
 import {
   connectHotkeyDaemon,
-  isDaemonConnected, getMainToggleCombo, setMainToggleCombo, requestHotkeyRecording
+  isDaemonConnected, getMainToggleCombo, setMainToggleCombo, requestHotkeyRecording,
+  getSelectedBrushToolEnum
 } from './hotkey/HotkeyBridge';
 import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/MainToggleBus';
 import { helpTexts } from './constants/helpTexts';
@@ -99,6 +100,11 @@ class App extends React.Component<AppProps, AppState> {
     private panelStateLoaded = false;
     // 主面板滚动容器（挂 .panel 类）引用，用于折叠/展开后逼 UXP 重排原生控件坐标
     private panelRef = React.createRef<HTMLDivElement>();
+    // ===== 工具巡检（「自动关」的兜底通道，详见 pollToolChange 注释）=====
+    private toolWatchTimer: any = null;
+    private toolWatchBusy = false;
+    private toolWatchBusySince = 0;
+    private lastKnownTool: string | null = null;
 
     constructor(props: AppProps) {
         super(props);
@@ -296,9 +302,18 @@ class App extends React.Component<AppProps, AppState> {
         } catch (e) {
             console.warn('⚠️ 主开关共享状态初始化失败，仅使用面板本地状态:', e);
         }
+
+        // 主开关此刻已是最终值（可能来自共享状态），据此启停工具巡检
+        this.syncToolWatch();
     }
 
     componentDidUpdate(prevProps, prevState) {
+        // 主开关/自动关选项变化时同步巡检（放在最前：不受下方 panelStateLoaded 早退影响）
+        if (prevState.isEnabled !== this.state.isEnabled ||
+            prevState.autoOffOnOtherTool !== this.state.autoOffOnOtherTool) {
+            this.syncToolWatch();
+        }
+
         // 检查次级面板状态变化，添加或移除CSS类
         const isAnySecondaryPanelOpen = this.state.isColorSettingsOpen || 
                                        this.state.isPatternPickerOpen || 
@@ -383,6 +398,10 @@ class App extends React.Component<AppProps, AppState> {
         action.removeNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], this.handleNotification);
         document.removeEventListener('mousemove', this.handleMouseMove);
         document.removeEventListener('mouseup', this.handleMouseUp);
+        if (this.toolWatchTimer) {
+            clearInterval(this.toolWatchTimer);
+            this.toolWatchTimer = null;
+        }
         // 清理CSS类
         document.body.classList.remove('secondary-panel-open');
         document.body.classList.remove('license-dialog-open');
@@ -1101,7 +1120,10 @@ class App extends React.Component<AppProps, AppState> {
         'paintbrushTool',           // 画笔
         'pencilTool',               // 铅笔
         'eraserTool',               // 橡皮
+        'backgroundEraserTool',     // 背景橡皮
+        'magicEraserTool',          // 魔术橡皮
         'wetBrushTool',             // 混合器画笔
+        'artBrushTool',             // 艺术画笔
         'bucketTool',               // 油漆桶
         'gradientTool',             // 渐变
         'moveTool',                 // 移动
@@ -1110,6 +1132,7 @@ class App extends React.Component<AppProps, AppState> {
         'blurTool',                 // 模糊
         'magicWandTool',            // 魔棒
         'cloneStampTool',           // 仿制图章
+        'patternStampTool',         // 图案图章
         'penTool',                  // 钢笔
         'freeformPenTool',          // 自由钢笔（磁性钢笔是它的子模式）
         'curvaturePenTool',         // 曲率钢笔
@@ -1120,6 +1143,11 @@ class App extends React.Component<AppProps, AppState> {
         'redEyeTool',               // 红眼
         'contentAwareMoveTool',     // 内容感知移动
         'colorReplacementBrushTool',// 颜色替换
+        'artHistoryBrushTool',      // 历史记录艺术画笔
+        'sharpenTool',              // 锐化
+        'dodgeTool',                // 减淡
+        'burnTool',                 // 加深
+        'spongeTool',               // 海绵
     ];
 
     toggleSwitchToLassoOnEnable() {
@@ -1182,13 +1210,104 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     // 自动关闭主开关（切到其它工具时）
-    private async autoTurnOffMain() {
+    private async autoTurnOffMain(tool?: string) {
+        console.log('ℹ️ 自动关：当前工具已切到「' + (tool || '未知') + '」，主开关自动关闭');
         this.setState({ isEnabled: false }, () => {
             PanelStateManager.update({
                 appPanel: { isEnabled: false }
             }, { debounceMs: 0 }).catch(e => console.warn('⚠️ 主开关状态持久化失败:', e));
             setMainToggle(false).catch(e => console.warn('⚠️ 主开关共享状态写入失败:', e));
         });
+    }
+
+    // ===== 工具巡检：「切到其它工具自动关」的兜底通道 =====
+    // 只靠 select 通知不够——以下切工具路径 PS 不会以「带工具名」的形式广播 select：
+    //  1) 按快捷键/动作切出笔刷：通知里只有 { _ref:'brush' }（笔刷预设），工具是被预设
+    //     间接带过去的；混合器/涂抹类预设还会连工具一起换，通知里压根没有工具名；
+    //  2) 回放录好的 PS 动作（Action）切工具：回放链路不保证向 UXP 广播工具 select。
+    // 所以主开关开启期间按 300ms 轮询一次当前工具，只在「工具真的变了」时判定。
+    private static readonly TOOL_WATCH_INTERVAL_MS = 300;
+
+    // 判定某个工具是否属于「其它工具」（主开关开启时切到它就自动关）。
+    // 名单之外再按关键词兜底：绘制类工具的内部 ID 在不同 PS 版本下会变（混合器画笔就有
+    // mixerBrushTool / wetBrushTool 两种），穷举名单必然漏，带 brush/eraser/stamp/smudge
+    // 字样的 ID 一定属于「动笔」的工具，不会误伤选区类工具。
+    private static isOtherTool(tool: string | null): boolean {
+        if (!tool) return false;
+        if (App.AUTO_OFF_TOOLS.indexOf(tool) !== -1) return true;
+        return /brush|eraser|stamp|smudge/i.test(tool);
+    }
+
+    // 读取当前工具 ID：优先用 HotkeyBridge 里已验证过的 application.tool._enum，
+    // 读不到再退到 UXP 的 app.currentTool。
+    private async readCurrentToolId(): Promise<string | null> {
+        try {
+            const t = await getSelectedBrushToolEnum();
+            if (t) return t;
+        } catch { /* 退到 UXP API */ }
+        try {
+            const cur: any = (app as any)?.currentTool;
+            const id = typeof cur === 'string' ? cur : cur?.id;
+            return typeof id === 'string' && id ? id : null;
+        } catch { return null; }
+    }
+
+    // 按「主开关开启 + 选项开启」启停巡检：不需要时不跑，避免无谓轮询。
+    private syncToolWatch() {
+        const need = this.state.isEnabled && this.state.autoOffOnOtherTool;
+        if (need && !this.toolWatchTimer) {
+            this.lastKnownTool = null; // 新一轮先取基准，不追溯开开关之前的工具
+            this.toolWatchTimer = setInterval(() => { void this.pollToolChange(); }, App.TOOL_WATCH_INTERVAL_MS);
+            void this.pollToolChange();
+        } else if (!need && this.toolWatchTimer) {
+            clearInterval(this.toolWatchTimer);
+            this.toolWatchTimer = null;
+            this.lastKnownTool = null;
+        }
+    }
+
+    private async pollToolChange() {
+        if (!this.state.isEnabled || !this.state.autoOffOnOtherTool) return;
+        // 并发守卫；上一次查询若卡在模态状态里迟迟不返回，超过 3s 就放行，避免巡检永久停摆
+        if (this.toolWatchBusy && Date.now() - this.toolWatchBusySince < 3000) return;
+        this.toolWatchBusy = true;
+        this.toolWatchBusySince = Date.now();
+        try {
+            const tool = await this.readCurrentToolId();
+            if (!tool) return;
+            const prev = this.lastKnownTool;
+            this.lastKnownTool = tool;
+            // 首轮只记基准；工具没变也不判，避免「开关一开就被自己关掉」
+            if (prev === null || prev === tool) return;
+            if (App.isOtherTool(tool)) await this.autoTurnOffMain(tool);
+        } catch { /* 单次失败不影响下一轮 */ } finally {
+            this.toolWatchBusy = false;
+        }
+    }
+
+    // 通知里出现「笔刷/工具预设」引用：切预设通常会把工具一起带过去，
+    // 但 descriptor 里没有工具名，只能回查当前工具再判定。
+    private isToolPresetDescriptor(descriptor: any): boolean {
+        const target = descriptor?._target;
+        if (!Array.isArray(target)) return false;
+        return target.some((t: any) => {
+            const ref = t?._ref;
+            return typeof ref === 'string' && (ref === 'brush' || ref === 'toolPreset' || ref === 'preset');
+        });
+    }
+
+    // 事件通道判定：select 通知能解析出工具就直接判；解析不出但本次事件确实动了
+    // 笔刷/工具预设，就回查当前工具再判。
+    private async maybeAutoTurnOff(eventName?: string, descriptor?: any) {
+        if (!this.state.isEnabled || !this.state.autoOffOnOtherTool) return;
+        if (eventName !== 'select' && eventName !== 'set') return;
+        let tool = eventName === 'select' ? this.resolveSelectedTool(descriptor) : null;
+        if (!tool && this.isToolPresetDescriptor(descriptor)) {
+            tool = await this.readCurrentToolId();
+        }
+        if (!tool) return;
+        this.lastKnownTool = tool; // 与巡检共享基准，避免同一件事被判两次
+        if (App.isOtherTool(tool)) await this.autoTurnOffMain(tool);
     }
 
     // 检测蒙版模式状态
@@ -1218,14 +1337,9 @@ class App extends React.Component<AppProps, AppState> {
         }
 
         // 主开关处于开启状态，且开启了「切到其它工具即关」选项时，
-        // 若本次 select 事件确实是切换到了画笔/铅笔/橡皮等其它工具，则自动关闭主开关。
+        // 若本次事件确实把工具切到了画笔/铅笔/橡皮等其它工具，则自动关闭主开关。
         try {
-            if (this.state.isEnabled && this.state.autoOffOnOtherTool && eventName === 'select') {
-                const tool = this.resolveSelectedTool(descriptor);
-                if (tool && App.AUTO_OFF_TOOLS.indexOf(tool) !== -1) {
-                    await this.autoTurnOffMain();
-                }
-            }
+            await this.maybeAutoTurnOff(eventName, descriptor);
         } catch (e) {
             console.warn('⚠️ 工具切换自动关闭主开关判断失败:', e);
         }

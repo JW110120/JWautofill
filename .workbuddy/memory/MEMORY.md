@@ -10,6 +10,7 @@
 - 新增包裹层必须带高度，不可裸 height:auto 夹定高链；每层铺 --bg-color。
 
 ## UXP 避坑
+- 当前工具检测：不能只靠 select 通知——切笔刷预设的通知是 {_ref:'brush'}（工具被预设间接带过去，混合器/涂抹预设还会连工具一起换）、动作回放切工具也不保证广播工具 select。可靠读法是 application.tool._enum（HotkeyBridge.getSelectedBrushToolEnum）；需要时按 300ms 轮询兜底 + 关键词 /brush|eraser|stamp|smudge/ 判定。混合器画笔内部名有 mixerBrushTool 与 wetBrushTool 两种。
 - 原生 input 画最上层、overflow 裁不住→折叠分区条件渲染；数字输入 32×24、单位在容器外(.num-unit)。
 - JS 测量尺寸不可靠→铺满背景用整数 px 格子过量渲染+overflow:hidden；% 小数坐标必出亚像素缝；棋盘格方块+1px 重叠盖缝、底板 inset:0+OVERSCAN。
 - imaging.getPixels 把 sourceBounds 裁到图层 bounds 再重采样到 targetSize（小图层按大区域请求=拉伸）。正确：滤镜后取 layer.bounds→只请求「需要区∩bounds」→source 与 targetSize 严格 1:1；解析用 imageData.width/height 并守卫 raw.length。
