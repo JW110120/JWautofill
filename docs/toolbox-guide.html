@@ -139,7 +139,7 @@
         <p data-page-node-id="QN7bl3io5okhT1fmMJG9Aw">一组针对「选区像素」的批处理算法（分块均值、补色、木刻、锐化、边缘平滑、alpha 对齐、扣白 / 扣黑等），一个「蒙版同步」引擎，以及「笔刷热键」服务：用全局快捷键直接切换笔刷，无需录制动作。</p>
         <div class="meta" data-page-node-id="hBgsuj57YBpoQ8utTYvQ6v">
           <span class="badge" data-page-node-id="E0Tb4FL8cVkGyht0uEvvSp">版本 2.0.0</span>
-          <span class="badge" data-page-node-id="8fFIBSsTn2l99iKVxrYT3Z">更新于 2026-08</span>
+          <span class="badge" data-page-node-id="8fFIBSsTn2l99iKVxrYT3Z">更新于 2026-09</span>
         </div>
       </div>
 
@@ -292,13 +292,21 @@
         <p data-page-node-id="xHRNzWj1y4xssuGIW592Hn">按快捷键后会有即时提示：「选区填充开关已开启/关闭」或「已切换笔刷『笔刷名』」；若失败则会提示检查笔刷名是否与 Brushes 面板一致。</p>
 
         <h3 data-page-node-id="WJLXTeJ8QOI6yDEsaD6BVL">键盘卡死一键修复</h3>
-        <p data-page-node-id="hzjEPxeLFVr7Qe1TGbQDsc">如果系统键盘突然「打不出字」（多半是某个全局键盘钩子卡住导致输入链被拖死），用鼠标点这个菜单项即可自救。它会依次：</p>
+        <p data-page-node-id="hzjEPxeLFVr7Qe1TGbQDsc">系统键盘若出现以下任一种「卡死」，用鼠标点这个菜单项即可自救（全程不需要键盘输入）：</p>
+        <ul>
+          <li>① <b>全局低层键盘钩子卡住</b>：<code>LowLevelHooksTimeout</code> 被第三方软件改得过大，某个全局钩子卡一下就冻结整个系统键盘 → 打字完全没反应。</li>
+          <li>② <b>设备层冻结</b>：HID/USB 中断管道卡死、USB 省电唤醒失败 → 需重插键盘才恢复。</li>
+          <li>③ <b>第三种（2026-09 新增）「按键不停重复」</b>：按下某键后它不停重复、重插才恢复（按键卡在按下态）。<b>应急自救</b>：把同一个键<b>再按一次</b>，即可解除卡在按下态的键。</li>
+        </ul>
+        <p>修复会依次执行：</p>
         <ol data-page-node-id="fitPGraDs7c3w80DFseokL">
           <li data-page-node-id="oQH6nbhgiMs4ikqWlwMHiU">结束快捷键服务进程，释放本插件安装的键盘钩子；</li>
           <li data-page-node-id="88NFxyMNsnEujgxRQU8SUv">移除开机自启项，避免重启后再次拉起；</li>
           <li data-page-node-id="dVJnCJ5NTHOivpf9rRKFig">把系统的键盘钩子超时设置（<code data-page-node-id="7zaOSDwckkjeBJeaDnG7jr">LowLevelHooksTimeout</code>）复位为系统默认值；</li>
           <li data-page-node-id="u2AWkk59qHOwYeaz31UiN9">为 <span class="kbd" data-page-node-id="CivUgGBiPVHJZsDF5heO0W">Ctrl</span> / <span class="kbd" data-page-node-id="yzGFrMryQ0qnDDjWfJMkmq">Alt</span> / <span class="kbd" data-page-node-id="ViXQBRRActE8p0b2TBw9po">Shift</span> / <span class="kbd" data-page-node-id="GvTHKQI1LDYpQCZ0gPcXQO">Win</span> 各补发一次「抬起」事件，解除可能卡住的修饰键；</li>
-          <li data-page-node-id="tbaXd8hhNH9xpfpAQ2ogSn">重启输入法程序（ctfmon），处理输入法假死。</li>
+          <li data-page-node-id="tbaXd8hhNH9xpfpAQ2ogSn">重启输入法程序（ctfmon），处理输入法假死；</li>
+          <li>软重置键盘设备：程序化模拟「重新插拔」，无需物理拔线，解除设备层中断管道卡死；</li>
+          <li>关闭 USB 省电策略，防止设备因省电唤醒失败再次冻结。</li>
         </ol>
         <div class="callout note" data-page-node-id="qt6aY3asuHgaCkSaITRbca">修复过程<b data-page-node-id="CoRkPkDSM61jzeHp6zmLP5">全程不需要任何键盘输入</b>，也不会删除你的热键配置与程序文件。修复完成后快捷键服务处于停止状态，需要继续使用时在「笔刷热键」分区点「启动快捷键服务」即可。</div>
         <div class="callout warn" data-page-node-id="E04xHrkTOWjUisXPAVHmYK"><b data-page-node-id="VzubsWXqgVQz5HxImsyoPE">关于 LowLevelHooksTimeout。</b>这是 Windows 对低层键盘钩子的超时上限，系统默认约 300~1000 毫秒。某些机器上会被第三方软件改到几千甚至上万毫秒——那样一来，任何一个全局键盘钩子只要卡一下，整个系统的键盘就会被冻结同样长的时间，表现为「打字打着打着突然完全没反应」。复位成系统默认值后，钩子卡住最多造成一次极短延迟，随后会被系统自动摘除。</div>
