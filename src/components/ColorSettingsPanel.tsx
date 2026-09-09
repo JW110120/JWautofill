@@ -3,6 +3,7 @@ import { app, action } from 'photoshop';
 import { ColorSettings } from '../types/state';
 import RangeSlider from './RangeSlider';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
+import { debouncePsProbe } from '../utils/psProbe';
 import { calcDragValue } from '../utils/dragSensitivity';
 
 interface ColorSettingsProps {
@@ -163,13 +164,11 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
         };
 
         // 监听Photoshop事件来检查状态变化
-        const handleNotification = async () => {
-            try {
-                // 检测图层蒙版和快速蒙版状态
-                await checkMaskModes();
-            } catch (error) {
-                // 静默处理错误，避免频繁的错误日志
-            }
+        // 探测防抖：PS 命令（如合并图层）执行中途派发的事件立刻 get 会撞忙碌窗口，
+        // 弹出宿主报错框「命令"获取"当前不可用」，延迟到事件风暴平息后再探测
+        const maskProbe = debouncePsProbe(() => { checkMaskModes(); });
+        const handleNotification = () => {
+            maskProbe();
         };
 
         // 添加事件监听器
@@ -177,9 +176,10 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
 
         // 清理函数
         return () => {
+            maskProbe.cancel();
             action.removeNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], handleNotification);
         };
-    }, [isOpen]); 
+    }, [isOpen]);
 
     // 单个滑块渲染：结构与其他面板的滑块一致（行容器装 文字标签 + 数字输入 + 单位符号）。
     // widthClass 显式指定文字标签宽度修饰类（沿用工具箱标签算法：2/3/4/5/6字 = 20/33/47/60/73px），

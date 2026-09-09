@@ -17,6 +17,7 @@
 - 历史压缩：batchPlay+putPixels 包 doc.suspendHistory；内部已有则传 {skipHistorySuspend:true}。
 - storage.formats 只有 binary/utf8 无 base64；file.read({format:undefined}) 静默乱码，读图 binary→btoa。
 - 弹窗用 core.showAlert（dialogs.alert 在 PS 只进控制台）；跨分区回调折叠即 null，bridge 层兜底。
+- PS 通知事件在命令执行中途派发：监听器收到 make/delete/set 立刻 batchPlay get 会撞忙碌窗口，宿主弹「易修: 命令"获取"当前不可用」原生框，try/catch 与 dontDisplay 都拦不住。事件触发的探测必须走 psProbe.ts debouncePsProbe（200ms 防抖）延迟到命令结束后。
 - sp-radio 影子布局把 slot 排行右侧：radio 行内自绘元素走文档流，勿绝对定位 pin 边缘。
 
 ## common.css 单一来源

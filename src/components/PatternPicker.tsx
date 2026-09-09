@@ -4,6 +4,7 @@ import { FileIcon, DeleteIcon } from '../styles/Icons';
 import IconButton from '../components/IconButton';
 import { action, core, imaging, app } from 'photoshop';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
+import { debouncePsProbe } from '../utils/psProbe';
 import { PresetManager } from '../utils/PresetManager';
 import { calcDragValue } from '../utils/dragSensitivity';
 import RangeSlider from './RangeSlider';
@@ -592,13 +593,11 @@ interface PatternPickerProps {
         };
 
         // 监听Photoshop事件来检查状态变化
-        const handleNotification = async () => {
-            try {
-                // 检测图层蒙版和快速蒙版状态，包含isClearMode变化
-                await checkMaskModes();
-            } catch (error) {
-                // 静默处理错误，避免频繁的错误日志
-            }
+        // 探测防抖：PS 命令（如合并图层）执行中途派发的事件立刻 get 会撞忙碌窗口，
+        // 弹出宿主报错框「命令"获取"当前不可用」，延迟到事件风暴平息后再探测
+        const maskProbe = debouncePsProbe(() => { checkMaskModes(); });
+        const handleNotification = () => {
+            maskProbe();
         };
 
         // 添加事件监听器
@@ -606,6 +605,7 @@ interface PatternPickerProps {
 
         // 清理函数
         return () => {
+            maskProbe.cancel();
             action.removeNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], handleNotification);
         };
     }, [isOpen]);

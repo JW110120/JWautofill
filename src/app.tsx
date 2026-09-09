@@ -35,6 +35,7 @@ import {
   getSelectedBrushToolEnum
 } from './hotkey/HotkeyBridge';
 import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/MainToggleBus';
+import { debouncePsProbe } from './utils/psProbe';
 import { helpTexts } from './constants/helpTexts';
 
 const { executeAsModal } = core;
@@ -89,6 +90,7 @@ class App extends React.Component<AppProps, AppState> {
     private unsubMainToggle: (() => void) | null = null;
     private isFilling = false;
     private pendingSelection = false;
+    private maskProbeDebounced: (...args: any[]) => void = () => { };
     private isInLayerMask = false;
     private isInQuickMask = false;
     private isInSingleColorChannel = false;
@@ -144,6 +146,12 @@ class App extends React.Component<AppProps, AppState> {
         this.handleSelectionContrastChange = this.handleSelectionContrastChange.bind(this);
         this.handleSelectionExpandChange = this.handleSelectionExpandChange.bind(this);
         this.handleNotification = this.handleNotification.bind(this);
+        // 事件触发的蒙版/通道状态探测改为防抖执行（见 utils/psProbe.ts 根因说明）：
+        // 合并图层等 PS 命令中途派发的事件若立刻 get 会撞忙碌窗口，弹出宿主报错框
+        this.maskProbeDebounced = debouncePsProbe(async () => {
+            await this.checkMaskModes();
+            this.forceUpdate();
+        });
         // 许可证相关方法绑定
         this.handleLicenseVerified = this.handleLicenseVerified.bind(this);
         this.handleTrialStarted = this.handleTrialStarted.bind(this);
@@ -713,6 +721,7 @@ class App extends React.Component<AppProps, AppState> {
                             { _property: 'selection' },
                             { _ref: 'document', _enum: 'ordinal', _value: 'targetEnum' },
                         ],
+                        _options: { dialogOptions: 'dontDisplay' }
                     },
                 ],
                 { synchronousExecution: true }
@@ -1327,14 +1336,8 @@ class App extends React.Component<AppProps, AppState> {
 
     // 处理Photoshop通知事件
     async handleNotification(eventName?: string, descriptor?: any) {
-        try {
-            // 检测图层蒙版和快速蒙版状态
-            await this.checkMaskModes();
-            // 强制重新渲染以更新颜色预览
-            this.forceUpdate();
-        } catch (error) {
-            // 静默处理错误，避免频繁的错误日志
-        }
+        // 状态探测走防抖（不能立刻 get：PS 命令执行中途派发的事件会撞忙碌窗口）
+        this.maskProbeDebounced();
 
         // 主开关处于开启状态，且开启了「切到其它工具即关」选项时，
         // 若本次事件确实把工具切到了画笔/铅笔/橡皮等其它工具，则自动关闭主开关。
