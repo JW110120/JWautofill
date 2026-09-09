@@ -36,6 +36,9 @@
 - shell.openPath 受 manifest 扩展名白名单管控。前端改完须 UDT Reload。
 - daemon 重编：SDK 8.0.424 在 C:\Users\Administrator\.dotnet-sdk（永不删）；坑见技能 dotnet-publish-windows。
 
+## 技能（项目级 .workbuddy/skills/）
+- `uxp-frontend-spec`：UXP 前端规范（主题令牌/尺寸公式/通用类目录/状态样式/UXP 坑/新面板骨架）。新建面板或改样式前先加载；已取代并删除旧的 `uxp-themeable-dropdown`（内容并入前者）。
+
 ## Git/环境
 - ⚠️ .git/refs/remotes/origin/ 曾缺失→fetch 报成功但 origin/main 不更新（假成功），status 恒显 ahead；修法 mkdir 后 git update-ref。推送用 `git -c credential.helper=wincred push`（凭据在管理器 JW110120）。
 - dist/、analysis/、outputs/ 均 gitignore；入库大文件 FixKeyboard.exe(73MB)、daemon publish exe(64MB)，<100MB 上限。
