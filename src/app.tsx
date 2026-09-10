@@ -17,7 +17,7 @@ import LicenseDialog from './components/LicenseDialog';
 import RangeSlider from './components/RangeSlider';
 import IconButton from './components/IconButton';
 import { LicenseManager } from './utils/LicenseManager';
-import { ExpandIcon, SettingsIcon } from './styles/Icons';
+import { ExpandIcon, SettingsIcon, FocusStarIcon } from './styles/Icons';
 import { calculateRandomColor, hsbToRgb, rgbToGray } from './utils/ColorUtils';
 import { strokeSelection } from './utils/StrokeSelection';
 import { PatternFill } from './utils/PatternFill';
@@ -35,6 +35,7 @@ import {
   getSelectedBrushToolEnum
 } from './hotkey/HotkeyBridge';
 import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/MainToggleBus';
+import { setFocusMode } from './utils/FocusModeBus';
 import { debouncePsProbe } from './utils/psProbe';
 import { helpTexts } from './constants/helpTexts';
 
@@ -107,6 +108,28 @@ class App extends React.Component<AppProps, AppState> {
     private toolWatchBusy = false;
     private toolWatchBusySince = 0;
     private lastKnownTool: string | null = null;
+
+    /**
+     * 专注模式：APP 父面板里「自动关开关」+「自动切套索」同时勾选即自动成立，任一取消即退出。
+     * 它不是用户直接勾选的选项，而是一个推导结论：
+     *   1. 主开关的圆点换成星形图标；
+     *   2. 主开关热键变成「只开不关」（MainToggleBus 里读共享状态决定）；
+     *   3. 绘画工具箱笔刷热键分区里置顶那条记录的文案改为「选区填充」。
+     * 后两项发生在别的 JS 上下文，所以结论要写进共享文件（FocusModeBus）供它们读取。
+     */
+    private focusModeWritten: boolean | null = null;
+
+    private isFocusMode(): boolean {
+        return this.state.autoOffOnOtherTool && this.state.switchToLassoOnEnable;
+    }
+
+    /** 两个前置选项变化时把专注模式结论同步到共享总线（值没变就不写，避免无谓的文件 I/O） */
+    private syncFocusMode() {
+        const on = this.isFocusMode();
+        if (this.focusModeWritten === on) return;
+        this.focusModeWritten = on;
+        void setFocusMode(on).catch(e => console.warn('⚠️ 专注模式状态同步失败:', e));
+    }
 
     constructor(props: AppProps) {
         super(props);
@@ -298,6 +321,8 @@ class App extends React.Component<AppProps, AppState> {
             // 加载完成（无论成败）才允许后续的持久化保存，避免启动期默认值覆盖已存状态
             this.panelStateLoaded = true;
         }
+        // 选项已从磁盘合并进来，此刻把专注模式结论推给共享总线（下次会话未打开面板也有效）
+        this.syncFocusMode();
 
         // ========= 主开关：与跨面板共享状态对齐 =========
         // 共享文件存在（上次会话留下来的真实状态）就以它为准；不存在才用本面板持久化的值播种。
@@ -320,6 +345,11 @@ class App extends React.Component<AppProps, AppState> {
         if (prevState.isEnabled !== this.state.isEnabled ||
             prevState.autoOffOnOtherTool !== this.state.autoOffOnOtherTool) {
             this.syncToolWatch();
+        }
+        // 专注模式的两个前置选项变化时同步到共享总线（同样不受下方早退影响）
+        if (prevState.autoOffOnOtherTool !== this.state.autoOffOnOtherTool ||
+            prevState.switchToLassoOnEnable !== this.state.switchToLassoOnEnable) {
+            this.syncFocusMode();
         }
 
         // 检查次级面板状态变化，添加或移除CSS类
@@ -1460,6 +1490,8 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     render() {
+        // 专注模式：两个前置选项同时勾选即成立（推导值，不额外存 state）
+        const focusMode = this.isFocusMode();
         return (
             <div className="panel" ref={this.panelRef}>
                 {/* 授权对话框 */}
@@ -1487,10 +1519,20 @@ class App extends React.Component<AppProps, AppState> {
                     tabIndex={0}
                     className="main-button"
                     onClick={this.handleButtonClick}
-title={helpTexts.selectionFill.mainButton}>
+                    title={focusMode ? helpTexts.selectionFill.mainButtonFocus : helpTexts.selectionFill.mainButton}>
                     <div className="main-button-content">
-                        <div className={this.state.isEnabled ? 'indicator indicator-lg indicator-ok' : 'indicator indicator-lg indicator-disabled'}></div>
-                        <span className={!this.state.isEnabled ? 'label-disabled' : 'main-button-text'}>
+                        {/* 专注模式下圆点换成同尺寸、同双色的星形图标；非专注模式仍是原来的圆点 */}
+                        {focusMode ? (
+                            <FocusStarIcon
+                                className={this.state.isEnabled ? 'indicator-icon-lg indicator-icon-ok' : 'indicator-icon-lg'}
+                            />
+                        ) : (
+                            <div className={this.state.isEnabled ? 'indicator indicator-lg indicator-ok' : 'indicator indicator-lg indicator-disabled'}></div>
+                        )}
+                        {/* 文案两态共用定宽槽位 .main-button-label：切换开关时圆点不再左右位移 */}
+                        <span className={!this.state.isEnabled
+                            ? 'label-disabled main-button-label'
+                            : 'main-button-text main-button-label'}>
                             {this.state.isEnabled ? '功能开启' : '功能关闭'}
                         </span>
                     </div>

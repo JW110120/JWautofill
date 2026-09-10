@@ -20,11 +20,11 @@
             },
             "maximumSize": {
                 "width": 250,
-                "height": 5000
+                "height": 3840
             },
             "preferredDockedSize": {
                 "width": 250,
-                "height": 5000
+                "height": 1000
 
             },
             "preferredFloatingSize": {
@@ -62,11 +62,11 @@
             },
             "maximumSize": {
                 "width": 250,
-                "height": 5000
+                "height": 3840
             },
             "preferredDockedSize": {
                 "width": 250,
-                "height": 5000
+                "height": 1000
             },
             "preferredFloatingSize": {
                 "width": 250,

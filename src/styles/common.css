@@ -493,6 +493,19 @@ html, body {
   font-weight: bold;
 }
 
+/* 总开关文案的定宽居中槽位（4 字 × 16px = 64px）：
+   .main-button-content 是「width:100% + justify-content:center」的居中 flex 行，
+   而两态字号不同（开启=16px 粗体，关闭=继承字号），文字一变宽整组就变宽，
+   居中基准随之移动半个差值 —— 表现为切换开关时左边的圆点被挤动约半个字宽（文字本身中心不动）。
+   给两态套同一个定宽居中的槽位后，槽宽恒定 → 圆点不再位移；
+   文字虽粗细有别，但中心点固定，观感也保持一致。 */
+.main-button-label {
+  flex: none;
+  width: 64px;
+  text-align: center;
+  white-space: nowrap;
+}
+
 /* —— 动作按钮（工具箱 / 通用）：每个按钮只挂一个类，宽度档/状态均为自包含类 —— */
 .action-button-2,
 .action-button-3,
@@ -899,6 +912,30 @@ sp-radio-group:not(.radio-group-vertical) > sp-radio > .row-end > span {
 .indicator-fail {
   background-color: var(--notify-fail-fg);
   box-shadow: 0 0 4px rgba(231, 76, 60, 0.6);
+}
+
+/* 专注模式主开关图标：顶替 .indicator-lg 那颗圆点，尺寸/右间距与它完全一致，
+   填色与 .indicator-disabled（灰）/ .indicator-ok（绿）同源，保证两态视觉一致。 */
+.indicator-icon-lg {
+  display: inline-block;
+  flex: none;
+  width: 13px;
+  height: 13px;
+  margin-right: 10px;
+  vertical-align: middle;
+}
+
+/* 专注模式图标：禁用态灰（与 .indicator-disabled 同色） */
+.indicator-icon-lg .icon-fill {
+  fill: rgba(128, 128, 128, 0.5);
+}
+
+/* 专注模式图标：启用态绿 + 同色微光（与 .indicator-ok 同色同辉光） */
+.indicator-icon-lg.indicator-icon-ok .icon-fill {
+  fill: var(--notify-ok-fg);
+}
+.indicator-icon-lg.indicator-icon-ok {
+  filter: drop-shadow(0 0 4px rgba(46, 204, 113, 0.6));
 }
 
 /* 通用预设区总容器 */

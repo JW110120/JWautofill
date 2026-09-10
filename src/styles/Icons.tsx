@@ -88,6 +88,18 @@ export const StopSquareIcon = ({ className, style }: IconSvgProps) => (
 );
 
 /**
+ * 专注模式主开关图标（Spectrum「S Feature 18 N」实心星）。
+ * 只替换 .indicator-lg 那颗圆点：尺寸与它一致（13×13），填色交给 CSS 的
+ * .indicator-icon-lg / .indicator-icon-ok（与圆点的启用绿 / 禁用灰同一套色）。
+ * 去掉了源 SVG 里的透明画布矩形与 <defs><style>，fill 走 .icon-fill 以便跟随状态色。
+ */
+export const FocusStarIcon = ({ className, style }: IconSvgProps) => (
+  <svg xmlns="http://www.w3.org/2000/svg" height="13" viewBox="0 0 18 18" width="13" className={className} style={style}>
+    <path className="icon-fill" d="M9,1.1A7.9,7.9,0,1,0,16.9,9,7.9,7.9,0,0,0,9,1.1Zm6.1,6.287-3.363,2.696,1.137,4.154a.17749.17749,0,0,1-.11825.22142l-.00025.00008a.17549.17549,0,0,1-.153-.0245L9,12.072,5.397,14.4375a.1775.1775,0,0,1-.2715-.197l1.137-4.1575L2.9,7.387a.1775.1775,0,0,1,.104-.3195l4.305-.204L8.834,2.832a.1775.1775,0,0,1,.3355,0l1.525,4.0315,4.305.204a.1775.1775,0,0,1,.174.18093V7.2485A.1755.1755,0,0,1,15.1,7.387Z" />
+  </svg>
+);
+
+/**
  * 立即同步（参考 PS「S Sync 18 N」环形双箭头）：颜色由父级 currentColor 控制（--text-color），
  * 无边框无背景，仅作图标。
  */

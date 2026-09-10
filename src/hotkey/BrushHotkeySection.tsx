@@ -11,6 +11,7 @@ import {
 import { DeleteIcon, RefreshIcon, DataRefreshIcon, RecordCircleIcon, StopSquareIcon, BrushToolIcon, SmudgeToolIcon, MixerToolIcon, CloneStampIcon } from '../styles/Icons';
 import BrushSelect, { BrushSelectOption } from './BrushSelect';
 import { helpTexts } from '../constants/helpTexts';
+import { subscribeFocusMode } from '../utils/FocusModeBus';
 
 // 笔刷热键分区：在调整面板内录制「笔刷 + 快捷键」，持久化到共享配置，
 // 由本地守护进程在全局捕获按键后直接切换笔刷，不录制动作。
@@ -36,6 +37,9 @@ export default function BrushHotkeySection() {
   const [daemonConnected, setDaemonConnected] = useState(false);
   // 已录快捷键的选中集合：单击单选，Ctrl/Shift + 单击加选或减选，用于单个/批量删除
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // 专注模式：由 APP 父面板的两个选项推导，经共享总线同步过来。
+  // 开启时置顶的「选区填充开关」记录改显示「选区填充」（此时热键只开不关，不再是开关）。
+  const [focusMode, setFocusMode] = useState(false);
   // 多选锚点（shift 延伸的基准）：普通单击或 Ctrl 单击后更新为该条索引
   const anchorIndexRef = useRef<number>(-1);
 
@@ -89,7 +93,9 @@ export default function BrushHotkeySection() {
       }
     });
     void loadBrushes(false, false);
-    return () => { unsub(); unsubConfig(); unsubStatus(); unsubHotkey(); };
+    // 专注模式来自 APP 面板写入的共享文件（跨面板），这里只订阅不写入
+    const unsubFocus = subscribeFocusMode(setFocusMode);
+    return () => { unsub(); unsubConfig(); unsubStatus(); unsubHotkey(); unsubFocus(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -618,7 +624,7 @@ export default function BrushHotkeySection() {
               ref={(el) => { rowRefs.current[e.id] = el; }}
               className={rowClass}
               title={isPinned
-                ? helpTexts.hotkey.entryPinned
+                ? (focusMode ? helpTexts.hotkey.entryPinnedFocus : helpTexts.hotkey.entryPinned)
                 : helpTexts.hotkey.entryNormal}
               onClick={(ev) => handleEntryClick(e.id, ev)}
               onMouseDown={(ev) => startPress(ev, e)}
@@ -629,7 +635,7 @@ export default function BrushHotkeySection() {
               <span className="hotkey-entry-combo">{e.combo || '未绑定'}</span>
               <span className="divider-vertical">丨</span>
               <span className="hotkey-entry-name">
-                {isPinned ? '选区填充开关' : e.brush}
+                {isPinned ? (focusMode ? '选区填充' : '选区填充开关') : e.brush}
               </span>
             </div>
             );

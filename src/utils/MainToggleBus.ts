@@ -39,6 +39,8 @@ export type MainToggleState = {
 const SETTINGS_FOLDER = 'settings';
 const STATE_FILE = 'main-toggle.json';
 
+import { readFocusMode } from './FocusModeBus';
+
 // UXP 的 uxp 模块在 webpack 打包后用静态 import 有时拿不到，统一走 require 兜底，
 // 与 PanelStateManager 一致。
 function getLfs(): any {
@@ -104,6 +106,12 @@ let toggleChain: Promise<unknown> = Promise.resolve();
 async function doToggle(token: string): Promise<MainToggleState> {
     const cur = (await readRaw()) ?? cached ?? EMPTY;
     if (cur.token && cur.token === token) return cur; // 同一次命中已被处理过
+    // 专注模式（APP 父面板同时勾选「自动关开关」+「自动切套索」）：
+    // 热键只负责开启主开关，连按也不会关——关闭只能靠切到别的工具由「自动关」完成。
+    if (await readFocusMode()) {
+        if (cur.enabled) return cur; // 已经开着：什么都不做，绝不翻成关
+        return setMainToggle(true, token);
+    }
     return setMainToggle(!cur.enabled, token);
 }
 

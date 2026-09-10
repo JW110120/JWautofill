@@ -9,6 +9,11 @@
 - 4 子面板=同层 .panel，靠 input-fix.css `#app .panel-section ~ .panel`(absolute+z9999) 识别；子面板开时 body.secondary-panel-open 只锁 .app-root>.panel。工具箱：#pixeladjustment→.pixeladjustment-root(flex列)→.panel(min-height:0;overflow-y:auto)。
 - 新增包裹层必须带高度，不可裸 height:auto 夹定高链；每层铺 --bg-color。
 
+## 专注模式（Focus Mode）
+- 条件：APP 父面板「自动关开关」+「自动切套索」同时勾选即成立（推导值，不额外存 state）。
+- 共享：`utils/FocusModeBus.ts`（settings/focus-mode.json），跨面板同 MainToggleBus 机制；APP 面板写入、其它上下文只读。
+- 行为：主开关热键「只开不关」（MainToggleBus.doToggle 分支），关闭只能靠切工具走 autoTurnOffMain；主开关圆点换星形图标（FocusStarIcon，13×13，与 indicator 同双色）；工具箱热键置顶记录文案改「选区填充」。
+
 ## UXP 避坑
 - 当前工具检测：不能只靠 select 通知——切笔刷预设的通知是 {_ref:'brush'}（工具被预设间接带过去，混合器/涂抹预设还会连工具一起换）、动作回放切工具也不保证广播工具 select。可靠读法是 application.tool._enum（HotkeyBridge.getSelectedBrushToolEnum）；需要时按 300ms 轮询兜底 + 关键词 /brush|eraser|stamp|smudge/ 判定。混合器画笔内部名有 mixerBrushTool 与 wetBrushTool 两种。
 - 原生 input 画最上层、overflow 裁不住→折叠分区条件渲染；数字输入 32×24、单位在容器外(.num-unit)。
@@ -26,6 +31,7 @@
 - 通知：.status-banner=通用横幅(min-height:30px 不定高)、.notify-bar=单行状态条、.notify-text 唯一定义。hover title 收口 helpTexts.ts。
 
 - 布局：标签 W(n)=20+(n-2)×13.33(2..6字)；按钮宽=字数×字号+20；数字输入 32×24。两列 radio margin 下限 40px、三列 20px。
+- ⚠️ 居中 flex 行（width:100%+justify-content:center）里若两态字号不同，组宽变化会让左侧固定元素（圆点/图标）位移半个差值；文字中心反而不动，易误判。解法：文案给定宽居中槽（n 字×字号 px，flex:none），见 .main-button-label。
 
 ## 像素算法
 - lineSmoothProcessor(SDF)：全局量绝不被选区截断，选区只定写回范围；跨选区邻居判定用 effAlpha（选区内=平滑结果、外=原值）。任一环截断→选区边缘透明环。binaryOpen 全范围+越界跳过。
