@@ -10,6 +10,8 @@ export type AppPanelState = {
   isEnabled?: boolean;
   isExpanded?: boolean;
   isSelectionOptionsExpanded?: boolean;
+  selectionOptionsVisible?: boolean;
+  fillOptionsVisible?: boolean;
   autoUpdateHistory?: boolean;
   deselectAfterFill?: boolean;
   switchToLassoOnEnable?: boolean;

@@ -11,7 +11,10 @@
      .record-button* / .select-*（通用自绘下拉）
    ========================================================================== */
 
-/* 绘画工具箱根容器 */
+/* 绘画工具箱根容器。
+   position: relative 供「隐藏/显示分区」浮窗定位：浮窗已移到 `.panel` 滚动容器之外
+   挂在本层，避免被滚动条压住；本层的 overflow: hidden 对绝对定位的浮窗无裁切影响
+   （浮窗 4 个方向都是 0，与根容器边界重合）。 */
 .pixeladjustment-root {
   width: 100%;
   height: 100%;
@@ -19,6 +22,7 @@
   flex-direction: column;
   justify-content: flex-start;
   align-items: stretch;
+  position: relative;
   background-color: var(--bg-color);
   color: var(--text-color);
   overflow: hidden;
@@ -225,4 +229,21 @@
 /* 独有的弹性占位：把右侧「启动/停止快捷键服务」按钮推到最右 */
 .mask-sync-status-spacer {
   flex: 1 1 auto;
+}
+
+/* ==========================================================================
+   行内滑块的纵向节奏（与主面板 #app 对齐）
+   --------------------------------------------------------------------------
+   两者都是 10px 外边距的行盒，差异来自容器与外边距折叠行为：
+     · 主面板：滑块排在 .slider-container（块容器）里 → 相邻外边距折叠，行间距 10px；
+     · 工具箱：滑块排在 .border-panel-section（display:flex; flex-direction:column）里 →
+       相邻外边距**不折叠**，10px + 10px = 20px，明显比主面板大。
+   把后一行的上外边距归零，两侧叠加就只剩 10px。
+   ⚠️ 用显式类名 .slider-row 标识（AdjustmentPanel.tsx 里 13 处行内滑块行），
+      不影响容器里的按钮行 / 开关行。
+   ⚠️ 不能用 `:has(.slider-track)` 代替 —— UXP 的 CSS 引擎不支持 `:has()`，
+      整条规则会被丢弃（本功能第一版正是这么写的，所以完全没生效）。
+   ========================================================================== */
+#pixeladjustment .border-panel-section .row-between.slider-row + .row-between.slider-row {
+  margin-top: 0;
 }

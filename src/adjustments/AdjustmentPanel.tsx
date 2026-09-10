@@ -2289,12 +2289,49 @@ const handleSmartEdgeSmooth = async () => {
   }
 };
 
-// 图层像素 alpha 采样：把当前图层像素的 alpha 通道以矩阵形式打印到控制台。
-// 用途：方便对照/调试，把图层像素的 alpha 数据导出到控制台供分析。
+// 保存位置改为「系统保存对话框由用户自选」（见 handleLayerAlphaSample）：
+// 之前那套「猜桌面目录（Desktop / OneDrive\Desktop / 桌面 …）→ 失败退插件数据目录」的
+// 多通道落盘已废弃 —— 猜不到就会静默存进 PluginData，用户根本找不到。
+// ⚠️ 仍然只用 UXP 的 localFileSystem（Entry API），**绝不要用 require('fs') / require('os')**：
+//    Photoshop UXP 没有内置 fs/os 模块，运行期 require 会报
+//    「…\node_modules\fs.json doesn't exist」，上一版控制台报错即此因。
+
+// 图层像素 alpha 采样：把当前图层像素的 alpha 通道以矩阵形式导出成 .log 文件。
+// 用途：方便对照/调试。数据量可达 250k 像素 × 每行一条，写文件既比刷控制台快，
+// 也省去从 UXP 控制台手动复制粘贴；控制台只留一行结果摘要。
+// 保存位置：由用户在系统「另存为」对话框里自选（不再猜桌面目录）。
 const handleLayerAlphaSample = async () => {
   if (!handleLicenseBeforeAction()) return;
   try {
-    const { executeAsModal } = core;
+    // ① 先算好建议文件名：图层名可能含 < > : " / \ | ? * 等非法字符，替换后再截断。
+    //    只读图层属性不需要模态范围，可以放在弹保存框之前。
+    const t = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const stamp = '' + t.getFullYear() + pad(t.getMonth() + 1) + pad(t.getDate())
+      + '-' + pad(t.getHours()) + pad(t.getMinutes()) + pad(t.getSeconds());
+    let currentLayerName = 'layer';
+    try {
+      const activeLayer: any = app.activeDocument && app.activeDocument.activeLayers && app.activeDocument.activeLayers[0];
+      if (activeLayer && activeLayer.name) currentLayerName = String(activeLayer.name);
+    } catch (err) { /* 取不到就用默认名，不影响后续流程 */ }
+    const safeName = currentLayerName.replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
+    const fileName = 'JWautofill-alpha采样-' + safeName + '-' + stamp + '.log';
+
+    // ② 让用户自选保存位置（系统「另存为」对话框）。
+    //    ⚠️ 必须在 executeAsModal **之外** 调用：文件选择器是交互式原生对话框，
+    //       在模态范围内调用会被 PS 拒绝（模态范围会锁住交互 UI）。
+    const lfs: any = require('uxp').storage.localFileSystem;
+    let targetFile: any = null;
+    try {
+      targetFile = await lfs.getFileForSaving(fileName, { types: ['log'] });
+    } catch (err) {
+      // 用户取消时，部分 PS 版本是抛错而不是返回 null —— 一律当「取消」处理。
+      targetFile = null;
+    }
+    if (!targetFile) {
+      console.log('[alpha采样] 用户取消了保存');
+      return;
+    }
 
     await runCommand('alpha采样', async () => {
       const editingState = await checkEditingState();
@@ -2332,18 +2369,40 @@ const handleLayerAlphaSample = async () => {
       const raw = new Uint8Array(await pixels.imageData.getData());
       const bpp = raw.length / (W * H);
 
-      console.log('===== [alpha采样] 图层: ' + layer.name + ' =====');
-      console.log('尺寸: ' + W + 'x' + H + ' 边界: (' + Math.round(bounds.left) + ',' + Math.round(bounds.top) + ')');
-      // alpha 矩阵：每行一条记录，便于直接复制
+      // alpha 矩阵：每行一条记录（y=行号: 逗号分隔的 alpha 值），便于直接复制或脚本解析
+      const lines: string[] = [
+        '===== [alpha采样] 图层: ' + layer.name + ' =====',
+        '尺寸: ' + W + 'x' + H + '  边界: (' + Math.round(bounds.left) + ',' + Math.round(bounds.top) + ')',
+        '时间: ' + new Date().toLocaleString(),
+        '通道: ' + (bpp === 4 ? 'RGBA（取 alpha 通道）' : '无 alpha 通道（全 255）'),
+        ''
+      ];
       for (let y = 0; y < H; y++) {
         const row: number[] = [];
         for (let x = 0; x < W; x++) {
           const idx = y * W + x;
           row.push(bpp === 4 ? raw[idx * 4 + 3] : 255);
         }
-        console.log('y=' + y + ': ' + row.join(','));
+        lines.push('y=' + y + ': ' + row.join(','));
       }
-      console.log('===== [alpha采样] 结束 =====');
+      lines.push('', '===== [alpha采样] 结束 =====');
+      const text = lines.join('\r\n') + '\r\n';
+
+      // ③ 写入用户在「另存为」对话框里选定的文件（getFileForSaving 已创建好该条目）。
+      let savedPath: string | null = null;
+      try {
+        await targetFile.write(text, { format: require('uxp').storage.formats.utf8 });
+        savedPath = String(targetFile.nativePath || fileName);
+      } catch (err) {
+        console.error('❌ alpha采样日志写入失败:', err);
+      }
+
+      console.log('===== [alpha采样] ' + layer.name + ' ' + W + 'x' + H + ' 已写入: ' + (savedPath || '失败'));
+      await core.showAlert({
+        message: savedPath
+          ? '已导出图层像素 alpha 采样日志：\n' + savedPath
+          : 'alpha 采样完成，但日志写入失败（详见控制台）。'
+      });
 
       pixels.imageData.dispose();
     });
@@ -2718,7 +2777,7 @@ const renderDetailAdjustContent = () => (
 
     {!usePowerfulMode && (
       <>
-        <div className="row-between">
+        <div className="row-between slider-row">
           <div className={sliderLabelClass('radius', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'radius', radius)} title={helpTexts.adjustment.radius}>半径</div>
           <RangeSlider min={5} max={20} step={1} value={radius} onChange={handleRadiusChange} className="slider-track" />
           <div className="row-start">
@@ -2726,7 +2785,7 @@ const renderDetailAdjustContent = () => (
             <div className="num-unit">px</div>
           </div>
         </div>
-        <div className="row-between">
+        <div className="row-between slider-row">
           <div className={sliderLabelClass('sigma', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'sigma', sigma)} title={helpTexts.adjustment.sigma}>强度</div>
           <RangeSlider min={1} max={5} step={0.5} value={sigma} onChange={handleSigmaChange} className="slider-track" />
           <div className="row-start">
@@ -2742,7 +2801,7 @@ const renderDetailAdjustContent = () => (
     <div className="row-between">
     <div role="button" tabIndex={0} className="action-button-4" onClick={handleGradientModify} title={helpTexts.adjustment.gradientModify}>梯度修改</div>
     </div>
-      <div className="row-between">
+      <div className="row-between slider-row">
         <div className={sliderLabelClass('gradientRelaxStrength', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'gradientRelaxStrength', gradientRelaxStrength)} title={helpTexts.adjustment.gradientRelax}>程度</div>
         <RangeSlider min={-10} max={10} step={1} value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthChange} className="slider-track" />
         <div className="row-start">
@@ -2755,7 +2814,7 @@ const renderDetailAdjustContent = () => (
     <div className="row-between">
     <div role="button" tabIndex={0} className="action-button-4" onClick={handleSpecialSharpen} title={helpTexts.adjustment.specialSharpen}>特殊锐化</div>
     </div>
-      <div className="row-between">
+      <div className="row-between slider-row">
         <div className={sliderLabelClass('specialSharpenStrength', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialSharpenStrength', specialSharpenStrength)} title={helpTexts.adjustment.specialSharpenStrength}>强度</div>
         <RangeSlider min={1} max={10} step={0.5} value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthChange} className="slider-track" />
         <div className="row-start">
@@ -2768,7 +2827,7 @@ const renderDetailAdjustContent = () => (
     <div className="row-between">
     <div role="button" tabIndex={0} className="action-button-4" onClick={handleHighFrequencyEnhancement} title={helpTexts.adjustment.highFreq}>高频增强</div>
     </div>
-      <div className="row-between">
+      <div className="row-between slider-row">
         <div className={sliderLabelClass('highFreqIntensity', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'highFreqIntensity', highFreqIntensity)} title={helpTexts.adjustment.highFreqIntensity}>强度</div>
         <RangeSlider min={1} max={10} step={0.5} value={highFreqIntensity} onChange={handleHighFreqIntensityChange} className="slider-track" />
         <div className="row-start">
@@ -2776,7 +2835,7 @@ const renderDetailAdjustContent = () => (
           <div className="num-unit">级</div>
         </div>
       </div>
-      <div className="row-between">
+      <div className="row-between slider-row">
         <div className={sliderLabelClass('highFreqRange', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'highFreqRange', highFreqRange)} title={helpTexts.adjustment.highFreqRange}>范围</div>
         <RangeSlider min={1} max={10} step={0.5} value={highFreqRange} onChange={handleHighFreqRangeChange} className="slider-track" />
         <div className="row-start">
@@ -2810,7 +2869,7 @@ const renderEdgeProcessingContent = () => (
 
       {edgeSmoothMode === 'edge' && (
         <>
-          <div className="row-between">
+          <div className="row-between slider-row">
             <div className={sliderLabelClass('edgeMedianRadius', 'label-drag label-5')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeMedianRadius', edgeMedianRadius)} title={helpTexts.adjustment.edgeMedianRadius}>中间值半径</div>
             <RangeSlider min={10} max={30} step={1} value={edgeMedianRadius} onChange={handleEdgeMedianRadiusChange} className="slider-track" />
             <div className="row-start">
@@ -2823,7 +2882,7 @@ const renderEdgeProcessingContent = () => (
 
       {edgeSmoothMode === 'line' && (
         <>
-          <div className="row-between">
+          <div className="row-between slider-row">
             <div className={sliderLabelClass('edgeLineStrength', 'label-drag label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeLineStrength', edgeLineStrength)} title={helpTexts.adjustment.edgeLineStrength}>平滑力度</div>
             <RangeSlider min={0} max={100} step={1} value={edgeLineStrength} onChange={handleEdgeLineStrengthChange} className="slider-track" />
             <div className="row-start">
@@ -2832,7 +2891,7 @@ const renderEdgeProcessingContent = () => (
             </div>
           </div>
 
-          <div className="row-between">
+          <div className="row-between slider-row">
             <div className={sliderLabelClass('edgeLineSmoothRadius', 'label-drag label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeLineSmoothRadius', edgeLineSmoothRadius)} title={helpTexts.adjustment.edgeLineRange}>平滑范围</div>
             <RangeSlider min={3} max={12} step={1} value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusChange} className="slider-track" />
             <div className="row-start">
@@ -3161,7 +3220,7 @@ const renderQuickActionContent = () => (
     </div>
 
     {useWeightedAverage && (
-        <div className="row-between">
+        <div className="row-between slider-row">
           <div className={sliderLabelClass('weightedIntensity', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'weightedIntensity', weightedIntensity)} title={helpTexts.adjustment.weightedIntensity}>强度</div>
           <RangeSlider min={1} max={10} step={0.5} value={weightedIntensity} onChange={handleWeightedIntensityChange} className="slider-track" />
           <div className="row-start">
@@ -3218,7 +3277,7 @@ const renderQuickActionContent = () => (
       <div role="button" tabIndex={0} className="action-button-2" onClick={resetSpecialWoodcutParams} title={helpTexts.adjustment.woodcutReset}>重置</div>
     </div>
 
-      <div className="row-between">
+      <div className="row-between slider-row">
         <div className={sliderLabelClass('specialWoodcutLevels', 'label-drag label-3')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialWoodcutLevels', specialWoodcutLevels)} title={helpTexts.adjustment.woodcutLevels}>色阶数</div>
         <RangeSlider min={2} max={16} step={1} value={specialWoodcutLevels} onChange={handleSpecialWoodcutLevelsChange} className="slider-track" />
         <div className="row-start">
@@ -3227,7 +3286,7 @@ const renderQuickActionContent = () => (
         </div>
       </div>
 
-      <div className="row-between">
+      <div className="row-between slider-row">
         <div className={sliderLabelClass('specialWoodcutEdgeThreshold', 'label-drag label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialWoodcutEdgeThreshold', specialWoodcutEdgeThreshold)} title={helpTexts.adjustment.woodcutEdgeThreshold}>边缘阈值</div>
         <RangeSlider min={0} max={255} step={1} value={specialWoodcutEdgeThreshold} onChange={handleSpecialWoodcutEdgeThresholdChange} className="slider-track" />
         <div className="row-start">
@@ -3236,7 +3295,7 @@ const renderQuickActionContent = () => (
         </div>
       </div>
 
-      <div className="row-between">
+      <div className="row-between slider-row">
         <div className={sliderLabelClass('specialWoodcutEdgeStrength', 'label-drag label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialWoodcutEdgeStrength', specialWoodcutEdgeStrength)} title={helpTexts.adjustment.woodcutEdgeStrength}>边缘强度</div>
         <RangeSlider min={0} max={100} step={1} value={specialWoodcutEdgeStrength} onChange={handleSpecialWoodcutEdgeStrengthChange} className="slider-track" />
         <div className="row-start">
@@ -3335,6 +3394,7 @@ const bannerNode = (isTrial || (!isLicensed && !isTrial && trialDaysRemaining ==
 ) : null;
 
 return (
+  <>
   <div className="panel" ref={rootRef}>
     {/*
      * 激活提示卡片 + 锁定遮罩（2026-08-31 二次定稿）：
@@ -3366,32 +3426,37 @@ return (
       .sort((a, b) => a.order - b.order)
       .map(section => renderSection(section))}
 
-    {/* 隐藏/显示分区模态框 */}
-    {showVisibilityPanel && (
-      <div className="float-overlay" onClick={() => setShowVisibilityPanel(false)}>
-        <div className="float-window" onClick={(e) => e.stopPropagation()}>
-          <div className="row-between">
-            <span className="subpanel-title-1">隐藏/显示分区</span>
-            <div role="button" tabIndex={0} className="close-button" onClick={() => setShowVisibilityPanel(false)}>×</div>
-          </div>
-          <div className="panel-section">
-            {sections.sort((a,b)=>a.order-b.order).map(sec => (
-              <div key={sec.id} className="row-between">
-                <span
-                  className="label-4"
-                  onClick={() => toggleSectionVisibility(sec.id)}
-                >{sec.title}</span>
-                <sp-switch
-                  checked={sec.isVisible}
-                  onChange={() => toggleSectionVisibility(sec.id)}
-                />
-              </div>
-            ))}
-          </div>
+  </div>
+
+  {/* 隐藏/显示分区模态框：
+      ⚠️ 必须挂在 `.panel` 滚动容器之外（渲染在 `.pixeladjustment-root` 层）。
+         模态框是 position: fixed 的全屏遮罩，若留在滚动容器内部，
+         面板滚动条会压在窗口右缘之上（UXP 下 fixed 的包含块不扣滚动条宽）。 */}
+  {showVisibilityPanel && (
+    <div className="float-overlay" onClick={() => setShowVisibilityPanel(false)}>
+      <div className="float-window" onClick={(e) => e.stopPropagation()}>
+        <div className="row-between">
+          <span className="subpanel-title-1">隐藏/显示分区</span>
+          <div role="button" tabIndex={0} className="close-button" onClick={() => setShowVisibilityPanel(false)}>×</div>
+        </div>
+        <div className="panel-section">
+          {sections.sort((a,b)=>a.order-b.order).map(sec => (
+            <div key={sec.id} className="row-between">
+              <span
+                className="label-4"
+                onClick={() => toggleSectionVisibility(sec.id)}
+              >{sec.title}</span>
+              <sp-switch
+                checked={sec.isVisible}
+                onChange={() => toggleSectionVisibility(sec.id)}
+              />
+            </div>
+          ))}
         </div>
       </div>
-    )}
-  </div>
+    </div>
+  )}
+  </>
 );
 
 };

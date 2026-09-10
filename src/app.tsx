@@ -108,6 +108,18 @@ class App extends React.Component<AppProps, AppState> {
     private toolWatchBusy = false;
     private toolWatchBusySince = 0;
     private lastKnownTool: string | null = null;
+    // ===== 快速蒙版巡检 =====
+    // 复合根因（2026-09-10 定位）：
+    //   ① checkMaskModes() 原先只写 this.isInQuickMask（实例字段）+ forceUpdate，
+    //      而开关的禁用态渲染读的是 state.isInQuickMask —— 通知通道即便拿到了新值，
+    //      界面也永远不会变（已改为回写 state）。
+    //   ② PS 按 Q 进出快速蒙版**不派发 set/select/make/delete 任何通知**，事件通道拿不到，
+    //      只能等下一次选区变更（handleSelectionChange）顺带刷新。
+    // 兜底：只读 activeDocument.quickMaskMode（廉价属性，与选中工具巡检同一类读法），
+    // 且仅在「填充选项」展开可见时轮询 —— 不可见时没有刷新的必要。
+    private quickMaskTimer: any = null;
+    private quickMaskBusy = false;
+    private static readonly QUICK_MASK_WATCH_INTERVAL_MS = 300;
 
     /**
      * 专注模式：APP 父面板里「自动关开关」+「自动切套索」同时勾选即自动成立，任一取消即退出。
@@ -198,7 +210,7 @@ class App extends React.Component<AppProps, AppState> {
         const scope = this.currentCompactScope();
         const on = !!(this.state.compactModes && this.state.compactModes[scope]);
         MenuManager.setCompactModeLabel(
-            `紧凑模式：${App.COMPACT_NAME[scope]}·${on ? '开' : '关'}`
+            `紧凑模式：${App.COMPACT_NAME[scope]} - ${on ? '开' : '关'}`
         );
     }
 
@@ -329,7 +341,8 @@ class App extends React.Component<AppProps, AppState> {
                 });
             },
             onToggleCompactMode: () => { this.toggleCompactMode(); },
-            onSetMainHotkey: () => { void this.setMainHotkey(); }
+            onSetMainHotkey: () => { void this.setMainHotkey(); },
+            onShowVisibilityPanel: () => { this.openVisibilityPanel(); }
         });
         this.selectionChangeListener = (eventName, descriptor) => {
             // 检查是否是选区相关的set事件
@@ -351,6 +364,8 @@ class App extends React.Component<AppProps, AppState> {
         
         // 初始化状态检测
         await this.checkMaskModes();
+        // 快速蒙版巡检（PS 不派发通知，只能轮询兜底；按展开/可见状态启停）
+        this.syncQuickMaskWatch();
         
         // 监听Photoshop事件来检查状态变化
         await action.addNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], this.handleNotification);
@@ -398,6 +413,8 @@ class App extends React.Component<AppProps, AppState> {
                         gradient: loaded.appPanel.compactModes?.gradient ?? initialCompactModes.gradient,
                         stroke: loaded.appPanel.compactModes?.stroke ?? initialCompactModes.stroke,
                     },
+                    selectionOptionsVisible: loaded.appPanel.selectionOptionsVisible ?? this.state.selectionOptionsVisible,
+                    fillOptionsVisible: loaded.appPanel.fillOptionsVisible ?? this.state.fillOptionsVisible,
                 });
             }
         } catch (e) {
@@ -433,6 +450,11 @@ class App extends React.Component<AppProps, AppState> {
         if (prevState.isEnabled !== this.state.isEnabled ||
             prevState.autoOffOnOtherTool !== this.state.autoOffOnOtherTool) {
             this.syncToolWatch();
+        }
+        // 「填充选项」展开/可见状态变化时同步快速蒙版巡检（同样放在早退之前）
+        if (prevState.isExpanded !== this.state.isExpanded ||
+            prevState.fillOptionsVisible !== this.state.fillOptionsVisible) {
+            this.syncQuickMaskWatch();
         }
         // 专注模式的两个前置选项变化时同步到共享总线（同样不受下方早退影响）
         if (prevState.autoOffOnOtherTool !== this.state.autoOffOnOtherTool ||
@@ -511,6 +533,8 @@ class App extends React.Component<AppProps, AppState> {
                     clearMode: this.state.clearMode,
                     compactModes: this.state.compactModes,
                     fillMode: this.state.fillMode,
+                    selectionOptionsVisible: this.state.selectionOptionsVisible,
+                    fillOptionsVisible: this.state.fillOptionsVisible,
                 },
             }, { debounceMs: 400 }).catch(e => console.warn('⚠️ 保存面板状态失败:', e));
         }
@@ -539,9 +563,14 @@ class App extends React.Component<AppProps, AppState> {
             clearInterval(this.toolWatchTimer);
             this.toolWatchTimer = null;
         }
-        // 清理CSS类
+        if (this.quickMaskTimer) {
+            clearInterval(this.quickMaskTimer);
+            this.quickMaskTimer = null;
+        }
+        // 清理CSS类（含本面板专属的可见性浮窗类，避免残留影响下次加载）
         document.body.classList.remove('secondary-panel-open');
         document.body.classList.remove('license-dialog-open');
+        document.body.classList.remove('app-visibility-panel-open');
     }
 
     handleButtonClick() {
@@ -642,8 +671,105 @@ class App extends React.Component<AppProps, AppState> {
         resyncNativeWidgets(root);
     }
 
+    /** 打开「隐藏/显示分区」浮窗（与像素调整面板同一套交互） */
+    openVisibilityPanel() {
+        // 与绘画工具箱同机制：浮窗打开时收起本面板滚动条 + 隐藏背后 number 输入，
+        // 避免浮窗被滚动条压住、以及遮挡下仍可点穿。
+        // ⚠️ 类名必须与工具箱的 `.visibility-panel-open` 区分开：两块面板共用同一个
+        //    document.body，同名类会让「一块面板开浮窗」连带把另一块面板的滚动条
+        //    收起、数字隐藏；且任何一块关闭时无条件移除，还会把另一块仍在开的浮窗
+        //    打回原状（数字浮到浮窗上方）。
+        document.body.classList.add('app-visibility-panel-open');
+        this.setState({ showVisibilityPanel: true });
+    }
+
+    closeVisibilityPanel() {
+        document.body.classList.remove('app-visibility-panel-open');
+        this.setState({ showVisibilityPanel: false });
+    }
+
+    /** 切换某个分区的可见性（选区改造 / 填充选项） */
+    toggleSectionVisibility(id: 'selectionOptions' | 'fillOptions') {
+        this.setState(prev => ({
+            selectionOptionsVisible: id === 'selectionOptions' ? !prev.selectionOptionsVisible : prev.selectionOptionsVisible,
+            fillOptionsVisible: id === 'fillOptions' ? !prev.fillOptionsVisible : prev.fillOptionsVisible,
+        }));
+    }
+
     toggleStrokeEnabled() {
         this.setState({ strokeEnabled: !this.state.strokeEnabled });
+    }
+
+    /** 描边色板：打开 PS 颜色选择器，选完写回 strokeColor 并恢复此前前景色 */
+    openStrokeColorPicker = async () => {
+        try {
+            // 1. 保存当前前景色
+            let savedForegroundColor: any;
+            await executeAsModal(async () => {
+                const foregroundColor = app.foregroundColor;
+                savedForegroundColor = {
+                    hue: {
+                        _unit: "angleUnit",
+                        _value: foregroundColor.hsb.hue
+                    },
+                    saturation: foregroundColor.hsb.saturation,
+                    brightness: foregroundColor.hsb.brightness
+                };
+            });
+
+            // 2. 显示颜色选择器
+            const result = await require("photoshop").core.executeAsModal(async () => {
+                return await batchPlay(
+                    [{
+                        _obj: "showColorPicker",
+                        _target: [{
+                            _ref: "application"
+                        }]
+                    }],
+                    {}
+                );
+            });
+
+            // 3. 处理颜色选择结果
+            if (result && result[0] && result[0].RGBFloatColor) {
+                const { red, grain, blue } = result[0].RGBFloatColor;
+                this.setState({
+                    strokeColor: {
+                        red: Math.round(red),
+                        green: Math.round(grain),
+                        blue: Math.round(blue)
+                    }
+                });
+            }
+
+            // 4. 恢复前景色
+            if (savedForegroundColor) {
+                await executeAsModal(async () => {
+                    await batchPlay(
+                        [{
+                            _obj: "set",
+                            _target: [{
+                                _ref: "color",
+                                _property: "foregroundColor"
+                            }],
+                            to: {
+                                _obj: "HSBColorClass",
+                                hue: savedForegroundColor.hue,
+                                saturation: savedForegroundColor.saturation,
+                                brightness: savedForegroundColor.brightness
+                            },
+                            source: "photoshopPicker",
+                            _options: {
+                                dialogOptions: "dontDisplay"
+                            }
+                        }],
+                        { synchronousExecution: true }
+                    );
+                }, { commandName: "恢复前景色" });
+            }
+        } catch (error) {
+            console.error('颜色选择器错误:', error);
+        }
     }
     
     toggleClearMode() {
@@ -1423,6 +1549,39 @@ class App extends React.Component<AppProps, AppState> {
         }
     }
 
+    // ===== 快速蒙版巡检（详见字段注释里的复合根因）=====
+    // 按「填充选项展开且可见」启停：不可见时没有刷新的必要，不跑无谓轮询。
+    private syncQuickMaskWatch() {
+        const need = this.state.fillOptionsVisible && this.state.isExpanded;
+        if (need && !this.quickMaskTimer) {
+            this.quickMaskTimer = setInterval(() => { void this.pollQuickMask(); }, App.QUICK_MASK_WATCH_INTERVAL_MS);
+            void this.pollQuickMask();
+        } else if (!need && this.quickMaskTimer) {
+            clearInterval(this.quickMaskTimer);
+            this.quickMaskTimer = null;
+        }
+    }
+
+    // 只读一个布尔属性，不进 executeAsModal；单次失败（撞忙碌窗口）不影响下一轮。
+    private async pollQuickMask() {
+        if (this.quickMaskBusy) return;
+        this.quickMaskBusy = true;
+        try {
+            const doc = app.activeDocument;
+            if (!doc) return;
+            const isInQuickMask = !!doc.quickMaskMode;
+            // 实例字段与 state 双写：前者供描边色板灰度判定，后者驱动开关禁用态。
+            this.isInQuickMask = isInQuickMask;
+            if (this.state.isInQuickMask !== isInQuickMask) {
+                this.setState({ isInQuickMask });
+            }
+        } catch {
+            // 忙碌窗口内读取失败：放弃本轮，等下一次轮询重试
+        } finally {
+            this.quickMaskBusy = false;
+        }
+    }
+
     // 通知里出现「笔刷/工具预设」引用：切预设通常会把工具一起带过去，
     // 但 descriptor 里没有工具名，只能回查当前工具再判定。
     private isToolPresetDescriptor(descriptor: any): boolean {
@@ -1455,6 +1614,12 @@ class App extends React.Component<AppProps, AppState> {
             this.isInLayerMask = layerInfo?.isInLayerMask || false;
             this.isInQuickMask = layerInfo?.isInQuickMask || false;
             this.isInSingleColorChannel = layerInfo?.isInSingleColorChannel || false;
+            // ⚠️ 必须回写 state：开关的禁用态渲染读的是 state.isInQuickMask，
+            // 只写实例字段再 forceUpdate 的话界面永远停在旧值（历史 bug：
+            // 进入快速蒙版后「新建图层」开关不变灰，直到下一次选区变更才刷新）。
+            if (this.state.isInQuickMask !== this.isInQuickMask) {
+                this.setState({ isInQuickMask: this.isInQuickMask });
+            }
         } catch (error) {
             console.error('检测蒙版模式失败:', error);
             this.isInLayerMask = false;
@@ -1594,17 +1759,8 @@ class App extends React.Component<AppProps, AppState> {
         // 紧凑模式（仅父面板作用域）：三行 radio 改三列、去掉齿轮，标签兼作子面板入口
         const compactApp = !!this.state.compactModes?.app;
         return (
+            <>
             <div className="panel" ref={this.panelRef}>
-                {/* 授权对话框 */}
-                <LicenseDialog
-                    isOpen={this.state.isLicenseDialogOpen}
-                    isLicensed={this.state.isLicensed}
-                    isTrial={this.state.isTrial}
-                    trialDaysRemaining={this.state.trialDaysRemaining}
-                    onLicenseVerified={this.handleLicenseVerified}
-                    onTrialStarted={this.handleTrialStarted}
-                    onClose={this.closeLicenseDialog}
-                />
             <div className="panel-section">
                 {/* 主面板滚动容器即最外层 .panel（同绘画工具箱父面板同款外壳）：
                     所有分区都放在 .panel-section 内，由它产生滑动条；4 个子面板是 absolute，
@@ -1615,6 +1771,23 @@ class App extends React.Component<AppProps, AppState> {
                     选区填充2.0
                 </h3>
                 <div className="divider"></div>
+                {compactApp && focusMode ? (
+                    /* 紧凑 + 专注模式：主按钮收成单行 notify-bar——左星形 indicator、中「专注模式」、
+                       右 sp-switch（开关即控制），省纵向高度。开关放右侧单独控制，点星/文案不触发切换。
+                       两态配色与主按钮一致：开=ok 绿描边绿星，关=disabled 灰描边灰星（不用 warn 橙，
+                       橙在本插件语义里是「异常/待处理」，关闭只是未启用）。文案沿用主按钮的
+                       「功能开启/功能关闭」，并标注当前处于专注模式。 */
+                    <div className={this.state.isEnabled ? 'notify-bar notify-bar-ok' : 'notify-bar notify-bar-disabled'}>
+                        <FocusStarIcon className={this.state.isEnabled ? 'indicator-icon-lg indicator-icon-ok' : 'indicator-icon-lg'} />
+                        <span className="notify-text">{this.state.isEnabled ? '功能开启（专注）' : '功能关闭'}</span>
+                        <span className="mask-sync-status-spacer" />
+                        <sp-switch
+                            checked={this.state.isEnabled}
+                            onChange={this.handleButtonClick}
+                            title={helpTexts.selectionFill.mainButtonFocus}
+                        />
+                    </div>
+                ) : (
                 <div
                     role="button"
                     tabIndex={0}
@@ -1638,6 +1811,7 @@ class App extends React.Component<AppProps, AppState> {
                         </span>
                     </div>
                 </div>
+                )}
 
                 <div className="app-blendmode-container">
                     <span className={this.state.clearMode ? 'app-blendmode-label label-disabled' : 'app-blendmode-label'} 
@@ -1721,6 +1895,7 @@ title={helpTexts.selectionFill.blendMode}>
                 </div>
 
  {/* 新增选区改造区域 */}
+                {this.state.selectionOptionsVisible && (
                 <div className="collapse-section" data-section-id="selectionOptions">
                             <div className="collapse-header" onClick={this.toggleSelectionOptions} title={helpTexts.selectionFill.selectionOptionsToggle}>
 
@@ -1827,8 +2002,10 @@ title={helpTexts.selectionFill.selectionExpand}>
                             </div>
                             )}
                 </div>
+                )}
 
 
+                {this.state.fillOptionsVisible && (
                 <div className="collapse-section" data-section-id="fillOptions">
                     <div className="collapse-header" onClick={this.toggleExpand} title={helpTexts.selectionFill.fillOptionsToggle}>
                         <div className={this.state.isExpanded ? 'collapse-icon-expanded' : 'collapse-icon'}>
@@ -1840,139 +2017,145 @@ title={helpTexts.selectionFill.selectionExpand}>
                     <div className="collapse-content-expanded">
 
 
-                        {/* 新建图层开关 */}
-                        <div className="row-between">
-                            <span className="label-4" 
+                        {compactApp ? (
+                            /* 紧凑模式：两列网格——新建图层/清除模式 同一行、描边模式/色板 同一行，省出一行纵向高度 */
+                            <>
+                                <div className="row-between row-grid">
+                                    <div className="grid-cell">
+                                        <div className={(this.state.clearMode || this.state.isInQuickMask) ? 'row-start disabled' : 'row-start'}>
+                                            <span className="label-4" title={helpTexts.selectionFill.createNewLayer}>新建图层</span>
+                                            <sp-switch
+                                                checked={this.state.createNewLayer}
+                                                onChange={this.toggleCreateNewLayer}
+                                                disabled={this.state.clearMode || this.state.isInQuickMask}
+                                                title={helpTexts.selectionFill.createNewLayerSwitch}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="grid-cell">
+                                        <div className={this.state.createNewLayer ? 'row-start disabled' : 'row-start'}>
+                                            <span className="label-4" title={helpTexts.selectionFill.clearMode}>清除模式</span>
+                                            <sp-switch
+                                                checked={this.state.clearMode}
+                                                onChange={this.toggleClearMode}
+                                                disabled={this.state.createNewLayer}
+                                                title={helpTexts.selectionFill.clearModeSwitch}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                                {/* 描边模式行（.row-grid-fit）：左列「标签 + 开关」按内容宽靠左，
+                                    右列撑满剩余宽度、内部用 row-end 把「色板 + 齿轮」推到内容盒右缘，
+                                    与上方「清除模式」开关的右缘对齐。 */}
+                                <div className="row-between row-grid row-grid-fit">
+                                    <div className="grid-cell">
+                                        <div className="row-start">
+                                            <span className="label-4" title={helpTexts.selectionFill.strokeModeLabel}>描边模式</span>
+                                            <sp-switch
+                                                checked={this.state.strokeEnabled}
+                                                onChange={this.toggleStrokeEnabled}
+                                                title={helpTexts.selectionFill.strokeEnabledSwitch}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="grid-cell">
+                                        <div className="row-end">
+                                            {this.state.strokeEnabled && (
+                                                <div
+                                                    className="color-preview"
+                                                    style={this.getStrokeColorPreviewStyle()}
+                                                    title={helpTexts.selectionFill.strokeColorPreview}
+                                                    onClick={this.openStrokeColorPicker}
+                                                />
+                                            )}
+                                            {this.state.strokeEnabled && (
+                                                <IconButton
+                                                    onClick={this.toggleStrokeSetting}
+                                                    title={helpTexts.selectionFill.strokeSettingsButton}
+                                                >
+                                                    <SettingsIcon/>
+                                                </IconButton>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            </>
+                        ) : (
+                            <>
+                                {/* 新建图层开关（禁用态给行挂 .disabled：`:has()` 已确认在 UXP 下无效） */}
+                                <div className={(this.state.clearMode || this.state.isInQuickMask) ? 'row-between disabled' : 'row-between'}>
+                                    <span className="label-4" 
 title={helpTexts.selectionFill.createNewLayer}>
                             新建图层
                             </span>
-                            <sp-switch 
-                                checked={this.state.createNewLayer}
-                                onChange={this.toggleCreateNewLayer}
-                                disabled={this.state.clearMode || this.state.isInQuickMask}
-                                title={helpTexts.selectionFill.createNewLayerSwitch}
-                            />
-                        </div>
-                        <div className="divider" />
+                                    <sp-switch 
+                                        checked={this.state.createNewLayer}
+                                        onChange={this.toggleCreateNewLayer}
+                                        disabled={this.state.clearMode || this.state.isInQuickMask}
+                                        title={helpTexts.selectionFill.createNewLayerSwitch}
+                                    />
+                                </div>
+                                <div className="divider" />
 
-                       {/* 描边模式开关：label 在左，color-preview + 设置图标 + 开关整体收进右侧的 row-start（作为一个单元右对齐） */}
-                       <div className="row-between">
-                            <label className="label-4" title={helpTexts.selectionFill.strokeModeLabel}>描边模式</label>
-                            <div className="row-start stroke-mode-controls">
-                            {this.state.strokeEnabled && (
-                                <div 
-                                    className="color-preview"
-                                    style={this.getStrokeColorPreviewStyle()}
-                                    title={helpTexts.selectionFill.strokeColorPreview}
-                                    onClick={async () => {
-                                        try {
-                                            // 1. 保存当前前景色
-                                            let savedForegroundColor;
-                                            await executeAsModal(async () => {
-                                                const foregroundColor = app.foregroundColor;
-                                                savedForegroundColor = {
-                                                    hue: {
-                                                        _unit: "angleUnit",
-                                                        _value: foregroundColor.hsb.hue
-                                                    },
-                                                    saturation: foregroundColor.hsb.saturation,
-                                                    brightness: foregroundColor.hsb.brightness
-                                                };
-                                            });
+                               {/* 描边模式开关：label 在左，color-preview + 设置图标 + 开关整体收进右侧的 row-start（作为一个单元右对齐） */}
+                               <div className="row-between">
+                                    <label className="label-4" title={helpTexts.selectionFill.strokeModeLabel}>描边模式</label>
+                                    <div className="row-start stroke-mode-controls">
+                                    {this.state.strokeEnabled && (
+                                        <div 
+                                            className="color-preview"
+                                            style={this.getStrokeColorPreviewStyle()}
+                                            title={helpTexts.selectionFill.strokeColorPreview}
+                                            onClick={this.openStrokeColorPicker}
+                                        />
+                                    )}
+                                    {this.state.strokeEnabled && (
+                                        <IconButton
+                                            onClick={this.toggleStrokeSetting}
+                                            title={helpTexts.selectionFill.strokeSettingsButton}
+                                        >
+                                            <SettingsIcon/>
+                                        </IconButton>
+                                    )}
+                                    <sp-switch 
+                                        checked={this.state.strokeEnabled}
+                                        onChange={this.toggleStrokeEnabled}
+                                        title={helpTexts.selectionFill.strokeEnabledSwitch}
+                                    />
+                                    </div>
+                                </div>
+                                <div className="divider" />
 
-                                            // 2. 显示颜色选择器
-                                            const result = await require("photoshop").core.executeAsModal(async (executionControl, descriptor) => {
-                                                return await batchPlay(
-                                                    [{
-                                                        _obj: "showColorPicker",
-                                                        _target: [{
-                                                            _ref: "application"
-                                                        }]
-                                                    }],
-                                                    {}
-                                                );
-                                            });
-                                        
-                                            // 3. 处理颜色选择结果
-                                            if (result && result[0] && result[0].RGBFloatColor) {
-                                                const { red, grain, blue } = result[0].RGBFloatColor;
-                                                this.setState({
-                                                    strokeColor: {
-                                                        red: Math.round(red),
-                                                        green: Math.round(grain),
-                                                        blue: Math.round(blue)
-                                                    }
-                                                });
-                                            }
-
-                                            // 4. 恢复前景色
-                                            if (savedForegroundColor) {
-                                                await executeAsModal(async () => {
-                                                    await batchPlay(
-                                                        [{
-                                                            _obj: "set",
-                                                            _target: [{
-                                                                _ref: "color",
-                                                                _property: "foregroundColor"
-                                                            }],
-                                                            to: {
-                                                                _obj: "HSBColorClass",
-                                                                hue: savedForegroundColor.hue,
-                                                                saturation: savedForegroundColor.saturation,
-                                                                brightness: savedForegroundColor.brightness
-                                                            },
-                                                            source: "photoshopPicker",
-                                                            _options: {
-                                                                dialogOptions: "dontDisplay"
-                                                            }
-                                                        }],
-                                                        { synchronousExecution: true }
-                                                    );
-                                                }, { commandName: "恢复前景色" });
-                                            }
-                                        } catch (error) {
-                                            console.error('颜色选择器错误:', error);
-                                        }
-                                    }}/>)}
-                            {this.state.strokeEnabled && (
-                                <IconButton
-                                    onClick={this.toggleStrokeSetting}
-                                    title={helpTexts.selectionFill.strokeSettingsButton}
-                                >
-                                    <SettingsIcon/>
-                                </IconButton>
-                            )}
-                            <sp-switch 
-                                checked={this.state.strokeEnabled}
-                                onChange={this.toggleStrokeEnabled}
-                                title={helpTexts.selectionFill.strokeEnabledSwitch}
-                            />
-                            </div>
-                        </div>
-                        <div className="divider" />
-
-                        {/* 清除模式开关 */}
-                        <div className="row-between">
-                            <label className="label-4" 
+                                {/* 清除模式开关（禁用态给行挂 .disabled，同上） */}
+                                <div className={this.state.createNewLayer ? 'row-between disabled' : 'row-between'}>
+                                    <label className="label-4" 
 title={helpTexts.selectionFill.clearMode}>
                             清除模式
                             </label>
-                            <sp-switch 
-                                checked={this.state.clearMode}
-                                onChange={this.toggleClearMode}
-                                disabled={this.state.createNewLayer}
-                                title={helpTexts.selectionFill.clearModeSwitch}
-                            />
-                        </div>
-                        <div className="divider" />
+                                    <sp-switch 
+                                        checked={this.state.clearMode}
+                                        onChange={this.toggleClearMode}
+                                        disabled={this.state.createNewLayer}
+                                        title={helpTexts.selectionFill.clearModeSwitch}
+                                    />
+                                </div>
+                                <div className="divider" />
+                            </>
+                        )}
 
                         {/* 填充模式选择 */}
                         <div className="panel-section">
-                            <div className="label-4" title={helpTexts.selectionFill.fillModeLabel}>填充模式</div>
+                            {/* 紧凑模式不再渲染「填充模式」标签：三列 radio 自带语义，
+                                省下标签盒高度让纵向更紧凑（点击标签开子面板的入口也一并省去，
+                                紧凑下改由点击「纯色/图案/渐变」文字打开对应子面板）。 */}
+                            {!compactApp && (
+                                <div className="label-4" title={helpTexts.selectionFill.fillModeLabel}>填充模式</div>
+                            )}
                             {compactApp ? (
-                                /* 紧凑模式：3 行 radio → 3 列（与描边子面板「位置」共用 .radio-trio），
+                                /* 紧凑模式：3 行 radio → 3 列（与描边子面板「位置」共用 .radio-trio）。
+                                   radio-trio-flush：三列是分区首元素，纵向margin归零。
                                    齿轮不再渲染，改由点击标签文字打开对应子面板。 */
-                                <div className="radio-trio">
+                                <div className="radio-trio radio-trio-flush">
                                 <sp-radio-group 
                                     selected={this.state.fillMode} 
                                     name="fillMode"
@@ -2034,9 +2217,9 @@ title={helpTexts.selectionFill.clearMode}>
                         </div>
                         {/* 底部checkbox选项外部容器 */}
                         <div className="divider"></div>
-                        <div className="row-between checkbox-grid">
+                        <div className="row-between row-grid row-grid-flush">
                                 {/* 左列：取消选区 / 更新历史源 */}
-                                <div className="column-default">
+                                <div className="grid-cell">
                                     <div className="row-start">
                                         <label
                                             htmlFor="deselectCheckbox"
@@ -2075,7 +2258,7 @@ title={helpTexts.selectionFill.clearMode}>
                                     </div>
                                 </div>
                                 {/* 右列：开启后切套索 / 切其它工具即关 */}
-                                <div className="column-default">
+                                <div className="grid-cell">
                                     <div className="row-start">
                                         <label
                                             htmlFor="autoOffOnToolCheckbox"
@@ -2121,11 +2304,14 @@ title={helpTexts.selectionFill.clearMode}>
                     滚到底才出现；父/子容器因此都铺满 100%，不再给底部留 20px。
                     ⚠️ 挂 .panel-footer 以便紧凑模式整块隐藏（只藏版权文字会留下
                     该分区 15px 的下外边距，底部凭空多出一段空白）。 */}
+                </div>
+                )}
+
                 <div className="panel-section panel-footer">
                     <div className="divider"></div>
                     <span className="copyright">Copyright © listen2me (JW)</span>
                 </div>
-                </div>
+
             </div>
 
             {/* 颜色设置面板 */}
@@ -2175,7 +2361,42 @@ title={helpTexts.selectionFill.clearMode}>
               onOpacityChange={(opacity) => this.setState({ strokeOpacity: opacity })}
               onClose={this.closeStrokeSetting}
             />
-        </div>
+            </div>
+
+            {/* 授权对话框 / 隐藏-显示分区浮窗：
+                ⚠️ 必须挂在 `.panel` 滚动容器之外（渲染在 `.app-root` 层）。
+                   两者都是 position: fixed 的全屏遮罩，若留在滚动容器内部，
+                   面板滚动条会压在窗口右缘之上（UXP 下 fixed 的包含块不扣滚动条宽）。 */}
+            <LicenseDialog
+                isOpen={this.state.isLicenseDialogOpen}
+                isLicensed={this.state.isLicensed}
+                isTrial={this.state.isTrial}
+                trialDaysRemaining={this.state.trialDaysRemaining}
+                onLicenseVerified={this.handleLicenseVerified}
+                onTrialStarted={this.handleTrialStarted}
+                onClose={this.closeLicenseDialog}
+            />
+            {this.state.showVisibilityPanel && (
+                <div className="float-overlay" onClick={() => this.closeVisibilityPanel()}>
+                    <div className="float-window" onClick={(e) => e.stopPropagation()}>
+                        <div className="row-between">
+                            <span className="subpanel-title-1">隐藏/显示分区</span>
+                            <div role="button" tabIndex={0} className="close-button" onClick={() => this.closeVisibilityPanel()}>×</div>
+                        </div>
+                        <div className="panel-section">
+                            <div className="row-between">
+                                <span className="label-4" onClick={() => this.toggleSectionVisibility('selectionOptions')}>选区改造</span>
+                                <sp-switch checked={this.state.selectionOptionsVisible} onChange={() => this.toggleSectionVisibility('selectionOptions')} />
+                            </div>
+                            <div className="row-between">
+                                <span className="label-4" onClick={() => this.toggleSectionVisibility('fillOptions')}>填充选项</span>
+                                <sp-switch checked={this.state.fillOptionsVisible} onChange={() => this.toggleSectionVisibility('fillOptions')} />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+            </>
         );
     }
 }

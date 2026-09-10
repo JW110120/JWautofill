@@ -281,29 +281,87 @@ html, body {
   margin-bottom: 2px;
 }
 
-/* checkbox 两列组（app 2×2 / 图案 / 渐变）：外层行与内层行的上下外边距一律清零。
-   与相邻 divider 的间距只由 divider 自己的 10px 外边距提供，
-   与容器下边缘的间距只由 .border-panel-section 的 10px 内边距提供；
-   否则 divider 10px + 行 10px 会叠加成 20px（渐变面板曾出现此偏差）。
-   ⚠️ 必须写成双类 .row-between.checkbox-grid：单类 .checkbox-grid 与 .row-between
-   同为 (0,1,0)，只能靠源码顺序险胜，渐变面板那处覆盖链不同即失效（同 radio-pair 的坑）。 */
-.row-between.checkbox-grid {
-  margin: 0 auto;
+/* ===== 两列网格（.row-grid / .grid-cell）=====
+   一行放两组「标签 + 控件」的通用容器，全插件唯一定义：
+   外层 .row-between.row-grid 把宽度二等分，内层 .grid-cell 承载其中一组，内层放一行
+   （紧凑模式的填充选项）或多行（2×2 复选框组）皆可。两列等宽，左列内容贴内容盒左缘、
+   右列内容贴内容盒右缘（各距面板外缘 10px，与 .row-between 行的「标签靠左 / 控件靠右」
+   一致，见下条 `.grid-cell + .grid-cell` 的 align-items）。
+   UXP 不支持 flex gap：列间距用 .grid-cell + .grid-cell 的 margin-left 提供。
+   ⚠️ 必须写成双类 .row-between.row-grid：单类 .row-grid 与 .row-between 同为 (0,1,0)，
+   只能靠源码顺序险胜，换一处覆盖链不同即失效（同 radio-pair 的坑）。
+   纵向节奏分两档（两档的行内容与邻居不同，不能强行合并）：
+     · 基础 .row-grid：自带 10px 上下外边距（与其它行一致），单元格内的行不再自带外边距，
+       相邻两个网格之间也是 10px（与下方复选框组的行距同档）；
+     · 修饰 .row-grid-flush：紧贴 divider / 描边容器内缘时纵向外边距清零，单个控件的呼吸
+       改由内层行的 5px 承担，避免 divider 的 10px 与网格的 10px 叠成 20px
+       （图案 / 渐变 / 填充选项底部的复选框组）。 */
+.row-between.row-grid {
+  margin: 10px auto;
 }
-.checkbox-grid .row-between,
-.checkbox-grid .row-start {
-  margin: 5px 0;
+.row-grid .grid-cell {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
-/* 同列上下相邻两行的行距：只由本规则一处提供（15px）。
-   复选框自身的上下外边距在网格内清零，否则 10+10+10=30px 三重叠加（间距翻倍）。 */
-.checkbox-grid .row-between + .row-between 
-.checkbox-grid .row-start + .row-start 
-{
-  margin-top: 15px;
+/* 列距（UXP 无 flex gap）+「右列内容贴内容盒右缘」。
+   两列网格的对称关系：左列默认 stretch（子行 .row-start 自带 justify-content:flex-start，
+   内容天然贴左缘），右列用 align-items:flex-end 让子行收成内容宽后靠右 ——
+   合起来就是 .row-between 行「标签靠左 / 控件靠右」的视觉，左右各距面板外缘 10px。
+   起因：此前两列都按 flex-start 摆放，右列停在二等分中缝上，整行墨迹集中在中缝以左、
+   看起来整体左偏，与其它容器（非紧凑行、radio 分区）不齐。
+   ⚠️ .grid-cell 是 column flex，水平位置靠 align-items（stretch/flex-end 只改水平位置，不改行高）。
+   ⚠️ 必须用「相邻兄弟」而不是 :last-child：只有一个 .grid-cell 的网格
+      （图案面板未勾选「阵列」时只剩一个「剪贴蒙版」）会同时命中 :first-child 与 :last-child，
+      按源码顺序 flex-end 胜出，会把唯一的左列整列推到最右缘。
+   ⚠️ .row-grid-fit（紧凑描边模式行）两列都是 flex:0 0 auto、列宽即内容宽，
+      本条的 flex-end 对它是空操作，不破坏「色板/齿轮紧跟开关」。 */
+.row-grid .grid-cell + .grid-cell {
+  margin-left: 10px;
+  align-items: flex-end;
 }
-.checkbox-grid .checkbox-input {
+.row-grid .row-start,
+.row-grid .row-between {
+  margin: 0;
+}
+/* 网格内复选框自身的上下外边距清零，行距只由行规则提供（否则 10+10 双重叠加）。 */
+.row-grid .checkbox-input {
   margin-top: 0;
   margin-bottom: 0;
+}
+/* 相邻两个网格的纵向间距：取「下方复选框组两行之间」的行距（5px + 5px = 10px），
+   即紧凑模式填充选项的「新建图层/清除模式」行与「描边模式」行之间。
+   （写入 10px 与基础 .row-grid 的 margin-bottom:10px 折叠后仍是 10px，与复选框组一致。） */
+.row-grid + .row-grid {
+  margin-top: 10px;
+}
+.row-between.row-grid.row-grid-flush {
+  margin: 0 auto;
+}
+/* 零外边距档：同列上下相邻两行仍是 10px（每行 5px）。 */
+.row-grid-flush .row-start,
+.row-grid-flush .row-between {
+  margin: 5px 0;
+}
+
+/* 按内容宽度摆放的两列网格（修饰 .row-grid-fit，紧凑模式描边模式行）：
+   左列按内容宽（标签 + 开关）起点对齐；右列撑满剩余宽度，由 `.grid-cell + .grid-cell`
+   的 align-items: flex-end 把「色板 + 齿轮」推到内容盒右缘 —— 与上方「清除模式」
+   开关的右缘对齐，行尾不再空一段（原两列都 flex: 0 0 auto，控件挤在左侧）。
+   列距 5px 由右列的 margin-left 提供（UXP 无 flex gap）。
+   ⚠️ 一律写成 .row-grid.row-grid-fit 双类：基础规则与修饰规则的关键选择器特异性相同，
+      只有靠更高一档的特异性才不会依赖源码顺序。
+   ⚠️ 必须保留 .row-grid 类名：纵向节奏规则 `.row-grid + .panel-section` 靠它命中。 */
+.row-grid.row-grid-fit {
+  justify-content: flex-start;
+}
+.row-grid.row-grid-fit .grid-cell:first-child {
+  flex: 0 0 auto;
+}
+.row-grid.row-grid-fit .grid-cell + .grid-cell {
+  flex: 1 1 auto;
+  margin-left: 5px;
 }
 
 /* 嵌套行容器：外层 .row-between 已有 10px 上下外边距，flex 列内兄弟外边距不折叠，
@@ -350,11 +408,7 @@ html, body {
   flex: 0 0 auto;
 }
 
-/* 通用列容器（checkbox-column 收口得到） */
-.column-default {
-  display: flex;
-  flex-direction: column;
-}
+/* 通用列容器已并入两列网格的 .grid-cell（见上方 .row-grid 区），不再单独定义。 */
 
 /* 通用颜色预览 */
 .color-preview {
@@ -717,11 +771,12 @@ sp-radio {
   flex: 1;
 }
 
-/* 两列/三列 radio 的文字标签相对圆点偏高，统一下移 4px 对齐
+/* 两列/三列 radio 的文字标签与圆点中心的垂直对齐：
+   标签基线天然比圆点中心低，用 margin-top 统一微调（4px → 2px，2026-09-10 再上移 2px）。
    （radio-group-vertical 垂直分组不处理；齿轮行的标签包在 .row-end 里，一并覆盖） */
 sp-radio-group:not(.radio-group-vertical) > sp-radio > span,
 sp-radio-group:not(.radio-group-vertical) > sp-radio > .row-end > span {
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
 .panel-section sp-radio-group.radio-group-vertical,
@@ -765,15 +820,51 @@ sp-radio-group:not(.radio-group-vertical) > sp-radio > .row-end > span {
   width: 100%;
 }
 
-/* 三列 radio 组（描边子面板「位置」与父面板紧凑模式下的「填充模式」共用）：
-   选项间距 25px，整组右移 10px 与分区左内边距对齐。
+/* 三列 radio 组（描边子面板「位置」与父面板紧凑模式下的「填充模式」共用）。
+   间距不写死：选项按内容宽、不伸缩（flex:0 0 auto），首项贴左、末项贴右，
+   剩余宽度由 sp-radio-group 的 justify-content: space-between 在两两之间等分 ——
+   纵向滚动条出现/消失时内容盒 230↔220，三列自动重新均分，恒铺满整行且不换行
+   （原先手写 25px / 12px 的固定值两头不讨好：阔时太散、窄时溢出换行）。
+   左右各内缩 10px（由 .radio-trio 的 padding 提供），与上方 .row-between / .row-grid 行对齐。
+   ⚠️ flex-wrap: nowrap 必须写在 sp-radio-group 上 —— 它才是 flex 容器；
+      写在外层 .radio-trio（块级 div）上是空操作。
+   ⚠️ 缩进用 padding、不要用 transform：transform 不参与布局，末项会被推出内容盒右缘。
+   ⚠️ 双类写法提升特异性：`.panel-section sp-radio-group` 的 space-around 与
+      `.panel-section sp-radio` 的 flex:1 都在同档，只靠源码顺序险胜不可靠。
    （2026-09-10 从 stroke.css 的 .position-radio-group 收口为通用类，两处必须完全一致。） */
-.radio-trio sp-radio:not(:last-child) {
-  margin-right: 25px;
+.panel-section .radio-trio sp-radio-group,
+.border-panel-section .radio-trio sp-radio-group {
+  justify-content: space-between;
+  flex-wrap: nowrap;
+}
+.panel-section .radio-trio sp-radio,
+.border-panel-section .radio-trio sp-radio {
+  flex: 0 0 auto;
+}
+/* 三列恒同行的关键：把单项宽度压到「三项之和 < 内容盒」。
+   ⚠️ 不要再指望 `flex-wrap:nowrap` 防换行 —— 实测那一行就是会换：截图量到单项外框
+      76px（内边距 15 + 圆点 14 + 圆点↔标签 11 + 标签盒 26 + 标签自带 10px 右外边距），
+      3 × 76 = 228 > 内容盒 210（无滚动条）/ 200（有滚动条）→ 第三列必然折行。
+      sp-radio-group 内部的均分/换行由宿主实现，外层怎么写都拦不住，
+      所以只能从这里把每项砍窄：宽度 26 → 22、去掉标签多余的 10px 右外边距
+      → 单项 ≈ 62px、三项 ≈ 186px，两档宽度下都留有余量（窄档余 14px）。
+      标签文字 26px 比盒宽多 4px，溢出部分落在本项尾部留白里，不会顶到下一列的圆点。 */
+.radio-trio sp-radio .label-2 {
+  width: 22px;
+  margin-right: 0;
 }
 
+/* 三列组容器：左右内缩 10px + 与 .row-between 同档的 10px 纵向外边距。
+   紧凑填充模式下的那个三列是分区首元素，用修饰档把纵向margin归零
+   （间距由 `.row-grid + .panel-section` 的 7px 提供，不能再叠 10px）。 */
 .radio-trio {
-  transform: translateX(10px);
+  padding: 0 10px;
+  box-sizing: border-box;
+  margin: 10px auto;
+}
+/* ⚠️ 双类写法：单类与 .radio-trio 同档，只靠源码顺序险胜不可靠。 */
+.radio-trio.radio-trio-flush {
+  margin: 0 auto;
 }
 
 /* 行内右侧控件间距：row-between / row-center / row-end 内，sp-switch 与 checkbox 左侧留 6px。
@@ -788,14 +879,14 @@ sp-radio-group:not(.radio-group-vertical) > sp-radio > .row-end > span {
   margin-left: 4px;
 }
 
-/* 通用勾选框样式 */
+/* 通用勾选框样式（网格内的行距见上方 .row-grid 区） */
 .checkbox-input {
   cursor: pointer;
   /* ⚠️ 必须显式给出上下外边距：UXP 原生 checkbox 自带默认外边距，不写就会被它撑开
      （渐变面板曾因漏挂本类，行内上下各多出一截，看起来像行距 20px）。
      此处上下 10px 为控件呼吸空间，左右 0；
      行内左侧 4px 间距由上方「行内右侧控件间距」规则（更高特异性）继续提供。
-     ⚠️ checkbox 网格（.checkbox-grid）内上下外边距被清零，行距统一由行规则提供。 */
+     ⚠️ 两列网格（.row-grid）内上下外边距被清零，行距统一由行规则提供。 */
   margin: 10px 0;
 }
 
@@ -831,11 +922,18 @@ sp-radio-group:not(.radio-group-vertical) > sp-radio > .row-end > span {
 }
 
 /* 通用状态条通知（引擎状态条等单行状态行）：状态点 + 正文（+ 右侧信息/操作）。
-   外描边随状态变化：ok=绿描边 / warn=橙描边 / fail=红描边（由 TSX 按状态挂修饰类）。 */
+   外描边随状态变化：ok=绿描边 / warn=橙描边 / fail=红描边（由 TSX 按状态挂修饰类）。
+   ⚠️ min-height 锁定为「含 sp-switch 时的高度」40px，让同一组状态条高度一致：
+      条内若含 sp-switch（笔刷热键的服务条 / APP 的紧凑+专注条），其原生盒高 32px
+      会把条撑到 40px（32 + 上下 padding 6 + 上下边框 2）；而纯文字的条
+      （蒙版同步「引擎就绪」）只有 25px —— 两条并排时高度不一致就是因为开关。
+      锁定后两者恒等；正文/状态点仍由 align-items:center 垂直居中。
+   ⚠️ 用 min-height 而非 height：正文换行时状态条仍可增高，不会被裁切。 */
 .notify-bar {
   display: flex;
   align-items: center;
   width: 100%;
+  min-height: 40px;
   padding: 3px 6px;
   margin-bottom: 8px;
   border-radius: 3px;
@@ -847,6 +945,11 @@ sp-radio-group:not(.radio-group-vertical) > sp-radio > .row-end > span {
 .notify-bar.notify-bar-ok   { border-color: var(--notify-ok-border);   background: var(--notify-ok-bg); }
 .notify-bar.notify-bar-warn { border-color: var(--notify-warn-border); background: var(--notify-warn-bg); }
 .notify-bar.notify-bar-fail { border-color: var(--notify-fail-border); background: var(--notify-fail-bg); }
+/* 未启用态（与 warn 橙区分：橙在插件语义里是「异常/待处理」，关闭只是没开）：
+   描边走中性灰 --disabled-color、底色回到面板底色，与同条内灰掉的星形图标同源。 */
+.notify-bar.notify-bar-disabled { border-color: var(--disabled-color); background: var(--bg-color); }
+/* 状态条内的开关不参与伸缩：右侧定位由 .mask-sync-status-spacer 负责，开关宽度恒定。 */
+.notify-bar sp-switch { flex: none; margin-left: 4px; }
 
 /* 通用通知横幅（唯一收口名，勿再起 notify-banner 之类近似名与 .notify-bar 混淆）：
    与面板顶部「激活提示」卡片同款容器/状态点/字号，三处共同挂载——
@@ -883,6 +986,17 @@ sp-radio-group:not(.radio-group-vertical) > sp-radio > .row-end > span {
   color: var(--text-color);
   min-width: 0;
 }
+
+/* 状态条弹性占位：把右侧操作（专注模式开关 / 启动快捷键服务等）推到最右。
+   绘画工具箱(adjustment.css)已定义一份，APP 面板(只加载 common.css)需在此收口。 */
+.mask-sync-status-spacer { flex: 1 1 auto; }
+
+/* ⚠️ 「浮窗打开时隐藏背后 number 输入」的两条规则**已按面板拆开**，不在这里写：
+   - 主面板(#app)：src/styles/input-fix.css `body.app-visibility-panel-open #app …`
+   - 绘画工具箱(#pixeladjustment)：src/adjustments/adjustment-input.css
+     `body.visibility-panel-open #pixeladjustment …`
+   原先此处留下一条 `body.visibility-panel-open #app input[type="number"]`（类名是
+   工具箱的），于是「开工具箱浮窗」会把主面板的数字一起隐藏，是两块面板串扰的根因。 */
 
 /* 状态指示点 */
 .indicator {
@@ -1077,6 +1191,24 @@ sp-radio-group:not(.radio-group-vertical) > sp-radio > .row-end > span {
   overflow-y: auto;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
   position: relative;
+}
+
+/* 浮窗打开时收起所在面板的滚动条。
+   --------------------------------------------------------------------------
+   UXP 下 position: fixed 的包含块 = 面板全宽（**不扣**右侧 10px 滚动条槽），
+   窗口右缘正好落在滚动条槽上，看起来像被滚动条挡住/裁掉。
+   遮罩常驻时本来就不该滚背景，直接让滚动条消失即可；同时补 10px 右内边距，
+   把内容盒宽度补回「有滚动条」时的 W-30，背景零重排（重排也藏在 0.80 遮罩后）。
+   ⚠️ 两块面板共用同一个 document.body，所以**类名必须按面板分开**
+      （主面板 app-visibility-panel-open / 工具箱 visibility-panel-open）：
+      只靠 #app / #pixeladjustment 限定还不够 —— 同名类会让一块开浮窗时
+      另一块的滚动条也被收起、内容盒被多塞 10px 内边距。
+   ⚠️ 遮罩本身是 position: fixed，不受本条的 overflow/内边距影响。 */
+body.license-dialog-open #app .app-root > .panel,
+body.app-visibility-panel-open #app .app-root > .panel,
+body.visibility-panel-open #pixeladjustment .pixeladjustment-root > .panel {
+  overflow-y: hidden;
+  padding-right: 20px;
 }
 
 /* 通用任务卡片（蒙版同步任务卡片等同类卡片共用） */
@@ -1472,18 +1604,11 @@ sp-radio[disabled] {
   opacity: 0.5;
 }
 
-/* 行内含禁用 switch / input 时，行标签同步置灰禁操作 */
-.row-between:has(sp-switch[disabled]) [class^="label-"],
-.row-start:has(sp-switch[disabled]) [class^="label-"] {
-  cursor: not-allowed;
-  color: var(--disabled-color);
-}
-.row-start:has(input:disabled) [class^="label-"] {
-  cursor: not-allowed;
-  color: var(--disabled-color);
-}
+/* 行内含禁用控件时行标签同步置灰：**不要用 `:has()`** —— UXP 的 CSS 引擎不支持它，
+   整条规则会被静默丢弃（构建与 DevTools 都不报错，2026-09-10 实测）。
+   改为由 TSX 在禁用态给行显式挂 `.disabled`，统一走下面那一组「通用禁用行」规则。 */
 
-/* 通用禁用行：含禁用控件时整行置灰、禁操作（gradient 角度行等收口于此） */
+/* 通用禁用行：含禁用控件时整行置灰、禁操作（由 TSX 按状态挂 .disabled）。 */
 .row-between.disabled,
 .row-start.disabled {
   cursor: not-allowed;

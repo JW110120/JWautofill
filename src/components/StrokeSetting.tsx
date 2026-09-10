@@ -138,8 +138,8 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         
         <div className="divider"></div>
 
-          <div className="panel-section radio-trio">
-            <div className="row-between">
+          <div className="panel-section">
+            <div className="radio-trio">
             <sp-radio-group 
               selected={position}
               name="strokePosition"

@@ -524,20 +524,18 @@ export default function BrushHotkeySection() {
           {daemonConnected ? '服务已就绪' : (busy ? '服务处理中…' : '服务未启动')}
         </span>
         <span className="mask-sync-status-spacer" />
-        <div
-          role="button"
-          tabIndex={0}
-          className={busy ? 'action-button-4 action-button-disabled' : 'action-button-4'}
+        {/* 与 APP 面板「紧凑 + 专注」状态条统一：右侧改用 sp-switch 代替「启动/停止服务」文字按钮。
+            开关状态即服务连接状态；服务处理中（busy）时禁用，避免重复触发。 */}
+        <sp-switch
+          checked={daemonConnected}
+          disabled={busy}
+          onChange={() => {
+            if (!busy) { if (daemonConnected) void stopDaemon(); else void loadDaemon(); }
+          }}
           title={daemonConnected
             ? helpTexts.hotkey.daemonStop
             : helpTexts.hotkey.daemonStart}
-          onClick={(e) => {
-            e.stopPropagation(); // 避免冒泡到分区头部触发折叠
-            if (!busy) { if (daemonConnected) void stopDaemon(); else void loadDaemon(); }
-          }}
-        >
-          {daemonConnected ? '停止服务' : '启动服务'}
-        </div>
+        />
       </div>
 
       <div className="row-between">

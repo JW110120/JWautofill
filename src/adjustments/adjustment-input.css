@@ -1,8 +1,16 @@
 /* adjustments 第二入口：输入样式（精简版） */
 
-/* 当"隐藏/显示分区"模态框打开时，彻底隐藏调整面板内所有 number 输入，避免穿透与交互 */
+/* 当本面板（工具箱）的「隐藏/显示分区」浮窗打开时，隐藏本面板内所有 number 输入，
+   避免原生控件穿透浮窗、显示在浮窗之上。
+   --------------------------------------------------------------------------
+   ⚠️ 类名必须按面板分开，且**必须带 #pixeladjustment 限定**：
+      两块面板共用同一个 document.body（见 common.css 浮窗区说明）。
+      主面板的对应规则是 input-fix.css 的 `body.app-visibility-panel-open #app …`；
+      两边各写各的类名、各限定各的面板根节点 —— 这样一块开浮窗只影响自己，
+      不会隐藏另一块的数字、不改另一块的滚动条、也不动另一块的渲染顺序。
+      旧版正是「工具箱的类名配上 #app 的作用域」写串了，才出现跨面板串扰。
+   ⚠️ 不得用 display:none —— 保留布局占位，遮罩背后零重排。 */
 body.visibility-panel-open #pixeladjustment input[type="number"] {
-  /* 不再使用 display:none，改为完全透明并禁用交互，保留布局占位 */
   visibility: hidden !important;
   opacity: 0 !important;
   pointer-events: none !important;

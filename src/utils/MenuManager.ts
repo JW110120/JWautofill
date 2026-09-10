@@ -16,6 +16,7 @@ export class MenuManager {
   private static appResetParametersCallback: (() => void) | null = null;
   private static appToggleCompactModeCallback: (() => void) | null = null;
   private static appSetMainHotkeyCallback: (() => void) | null = null;
+  private static appShowVisibilityPanelCallback: (() => void) | null = null;
   // 是否已正式激活（试用不算）：决定「注销激活状态」菜单项能否点击
   private static appLicenseActive: boolean = false;
 
@@ -32,12 +33,14 @@ export class MenuManager {
     onResetParameters: () => void;
     onToggleCompactMode?: () => void;
     onSetMainHotkey?: () => void;
+    onShowVisibilityPanel?: () => void;
   }) {
     this.appOpenLicenseCallback = callbacks.onOpenLicenseDialog;
     this.appResetLicenseCallback = callbacks.onResetLicense;
     this.appResetParametersCallback = callbacks.onResetParameters;
     this.appToggleCompactModeCallback = callbacks.onToggleCompactMode ?? null;
     this.appSetMainHotkeyCallback = callbacks.onSetMainHotkey ?? null;
+    this.appShowVisibilityPanelCallback = callbacks.onShowVisibilityPanel ?? null;
   }
 
   /**
@@ -165,6 +168,11 @@ export class MenuManager {
           this.appSetMainHotkeyCallback();
         }
         break;
+      case "appShowVisibilityPanel":
+        if (this.appShowVisibilityPanelCallback) {
+          this.appShowVisibilityPanelCallback();
+        }
+        break;
       case "openDocsFill":
         void openPluginDoc("docs/fill-guide.html");
         break;
@@ -224,13 +232,20 @@ export class MenuManager {
               label: "-" // 分隔符（打开激活与试用面板 与 参数复位 之间）
             },
             {
+              // ⚠️ id 必须与绘画工具箱的同类菜单项区分开：UXP 的菜单项 id 全局唯一，
+              //    两个面板用同一个 id 会在 entrypoints.setup 时抛
+              //    「Can't add menu item ... as it already exists」，并且整个面板都起不来。
+              id: "appShowVisibilityPanel",
+              label: "隐藏/显示分区"
+            },
+            {
               id: "resetAppParameters",
               label: "参数复位"
             },
             {
               id: "toggleCompactMode",
               // 初始文案；面板起来后由 MenuManager.setCompactModeLabel 按「当前面板 + 该面板状态」实时改写
-              label: "紧凑模式：选区填充·关"
+              label: "紧凑模式：选区填充 - 关"
             },
             {
               id: "spacerApp1",

@@ -1687,8 +1687,8 @@ interface PatternPickerProps {
 
                 <div className="divider"></div>
 
-                <div className="row-between checkbox-grid">
-                    <div className="column-default">
+                <div className="row-between row-grid row-grid-flush">
+                    <div className="grid-cell">
                     <div className="row-start">
                         <label
                             htmlFor="transparencyCheckbox"
@@ -1707,7 +1707,7 @@ interface PatternPickerProps {
                     </div>
                     </div>
                     {fillMode === 'tile' && (
-                        <div className="column-default">
+                        <div className="grid-cell">
                         <div className="row-start">
                             <label
                                 htmlFor="rotateAllCheckbox"

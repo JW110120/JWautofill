@@ -1702,8 +1702,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
 
                 <div className="divider"></div>
 
-                <div className="row-between checkbox-grid">
-                    <div className="column-default">
+                <div className="row-between row-grid row-grid-flush">
+                    <div className="grid-cell">
                     <div className="row-start">
                         <label
                             className="label-2"
@@ -1722,7 +1722,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     </div>
                     </div>
 
-                    <div className="column-default">
+                    <div className="grid-cell">
                     <div className="row-start">
                          <label
                             className="label-6"

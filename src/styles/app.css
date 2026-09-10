@@ -1,10 +1,9 @@
 /* ==========================================================================
    #app 父面板（选区填充）独有样式
    --------------------------------------------------------------------------
-   只承载 #app 主父面板自身的布局与状态规则，以及它的 4 个子面板（纯色/渐变/图案/描边）与 input-fix 的 @import —— 这些都属于 app 面板样式。
-   （index.tsx 顶部最先引入，也是 index.html link / manifest cssResources 的静态入口），本文件在其后引入，面板独有规则按特异性覆盖通用基线。）
-
-   注：激活弹窗样式在 src/styles/license.css，由 index.tsx 在本文件之后单独引入，以保证它的层叠顺序排在主面板样式之后（弹窗原本用组件内 <style> 最后注入。
+   只承载 #app 主父面板自身的布局与状态规则，以及它的 4 个子面板（纯色/渐变/图案/描边）与 input-fix 的 @import
+   —— 这些都属于 app 面板样式。（index.tsx 顶部最先引入，也是 index.html link / manifest cssResources 的静态入口）
+   注：激活弹窗样式在 src/styles/license.css，由 index.tsx 在本文件之后单独引入，保证层叠顺序排在主面板样式之后。
    ========================================================================== */
 @import './colorpanel.css';
 @import './gradient.css';
@@ -12,26 +11,25 @@
 @import './stroke.css';
 @import './input-fix.css';
 
-/* app父面板根容器（index.tsx 中 #app 内的包裹层）。*/
+/* app父面板根容器（index.tsx 中 #app 内的包裹层）。
+   position: relative 供浮动窗口定位：3 个浮窗（激活 / 隐藏显示分区）已移到
+   `.panel` 滚动容器之外挂在本层，避免被滚动条压住。 */
 .app-root {
   width: 100%;
   height: 100%;
   display: block;
+  position: relative;
   background-color: var(--bg-color);
 }
 
-/* 次级面板打开时禁止主面板滚动，避免内容在子面板后方滚动。
-⚠️ 必要！！！：去掉后打开子面板会看到父面板下方的checkbox区域。
- */
+/* ⚠️ 必要！！！次级面板打开时禁止主面板滚动：去掉后会看到父面板下方的 checkbox 区域。 */
 body.secondary-panel-open #app .app-root > .panel {
   overflow-y: hidden;
 }
 
-/* 主面板滚动容器不需要任何滚动条补偿：让槽位按需占位（无滚动条内容盒 230px、
-   有滚动条 220px）才是与 PS 宿主一致的行为，也是设计要的两档。
-   ⚠️ 别再往这里加 `overflow-y: scroll`、也别给 .panel 加 `scrollbar-gutter` ——
-   两者都会让原生控件（sp-switch / sp-radio slot）的右缘被面板右缘裁掉，
-   原因见 common.css `.panel` 内的说明。 */
+/* ⚠️ 主面板滚动容器不要加 `overflow-y: scroll`、也不要给 .panel 加 `scrollbar-gutter`：
+   两者都会让原生控件（sp-switch / sp-radio slot）的右缘被面板右缘裁掉。
+   槽位按需占位（无滚动条内容盒 230px、有滚动条 220px）才是与 PS 宿主一致的两档。 */
 
 /* APP特殊混合模式容器，特殊在需要骑在混合模式下拉菜单上，实现一种设计感 */
 .app-blendmode-container {
@@ -46,7 +44,7 @@ body.secondary-panel-open #app .app-root > .panel {
   transform: translateX(-50%);
 }
 
-/* 特殊的混合模式四字文字标签，特殊在由于整行需要骑在混合模式下拉菜单上，所以特意不使用47的容器宽度，而是用默认宽度，用margin-right来调整间距 */
+/* 特殊的混合模式四字文字标签：整行要骑在下拉菜单上，故不用 47px 容器宽，用 margin-right 调间距 */
 .app-blendmode-label {
   font-size: 13px;
   margin-right: 6px;
@@ -54,8 +52,8 @@ body.secondary-panel-open #app .app-root > .panel {
   white-space: nowrap;
 }
 
-/* APP特殊的带外边框的滑块容器，装着不透明度和羽化两个行内滑块，特殊点是有较大的上padding，
-   以让滑块与混合模式下拉菜单有足够的间距；水平 padding 由容器统一给到内部行 */
+/* APP 带外边框的滑块容器，装着不透明度和羽化两个行内滑块：上 padding 20px 拉开与混合模式下拉菜单的间距；
+   水平 padding 由容器统一给到内部行。 */
 .slider-container {
   width: 100%;
   background-color: var(--bg-color);
@@ -65,7 +63,7 @@ body.secondary-panel-open #app .app-root > .panel {
   margin: 0 auto 15px auto;
 }
 
-/* 填充模式三行 radio */
+/* 填充模式 radio 行的齿轮间距 */
 sp-radio .row-end .icon-button {
   margin-left: 8px;
 }
@@ -75,13 +73,8 @@ sp-radio .row-end .icon-button {
   transform: translateX(-5px);
 }
 
-/* APP 主开关内容容器的 -5px 水平偏移 */
-#app .main-button-content {
-  transform: translateX(-5px);
-}
-
 /* 描边模式行右侧控件组（.stroke-mode-controls：color-preview + 设置齿轮 + sp-switch）：
-   UXP 无 flex gap，齿轮与开关之间单独给 4px 间距。 */
+   UXP 无 flex gap，齿轮与开关之间单独给 8px 间距。 */
 .stroke-mode-controls .icon-button {
   margin-right: 8px;
 }
@@ -94,13 +87,9 @@ sp-radio .row-end .icon-button {
       4 个子面板。菜单项只作用于「当前面板」，文案形如「紧凑模式：图案·关」。
 
    每个作用域只隐藏自己那一层的装饰，绝不越界到别层：
-   - .main-title / .panel-footer 只有父面板有（子面板的标题栏是 .subpanel-title-1，
-     带关闭按钮，不能隐藏）；
-   - .divider 用「直接子节点链」限定作用域：父面板的分隔线都在
-     #app .app-root > .panel > .panel-section 内；4 个子面板是 .panel-section 的同级
-     .panel（absolute 覆盖，见 input-fix.css），靠各自的 .subpanel-* 类名识别。
-   过去一条 `body.compact-mode #app .divider` 会连带隐藏子面板的分隔线——这正是本次要
-   拆开的耦合；同理子面板开启也不能动父面板。
+   - .main-title / .panel-footer 只有父面板有（子面板的标题栏是 .subpanel-title-1，带关闭按钮，不能隐藏）；
+   - .divider 用「直接子节点链」限定作用域：父面板的分隔线在 #app .app-root > .panel > .panel-section 内；
+     4 个子面板是 .panel-section 的同级 .panel（absolute 覆盖），靠各自的 .subpanel-* 类名识别。
    ========================================================================== */
 body.compact-app #app .main-title,
 body.compact-app #app .panel-footer,
@@ -116,15 +105,68 @@ body.compact-stroke #app .subpanel-stroke .divider {
   display: none;
 }
 
-/* 父面板隐藏 divider 后「清除模式」行与「填充模式」分区之间的间距会变紧，补回 5px。
-   --------------------------------------------------------------------------
-   各行的间距由两行各自的 10px 外边距折叠而来（折叠后仍是 10px），而分区自身没有上外边距；
-   更关键的是行盒高 32px（sp-switch 32px）、分区首行标签盒高 22px，
-   两者半个高度差 (32−22)/2 = 5px 会让「行→分区」看起来比「行→行」更挤。
-   补到 15px（与行的 10px 折叠后取 15px）后两处视觉间距一致。
+/* 父面板隐藏 divider 后「清除模式」行与「填充模式」分区之间补 5px：
+   行盒 32px（sp-switch）与分区首行标签盒 22px 的半个高度差 (32−22)/2 = 5px，不补会显得比「行→行」更挤。
    ⚠️ divider 虽被 display: none 隐藏，仍在文档流里，相邻兄弟选择器照常命中。
-   ⚠️ 只作用于主面板滚动区内的分区：子面板（图案/描边）里 divider 后的分区首个子元素
-      是自带 10px 上外边距的 .row-between，不适用本条换算，不能一并套用。 */
+   ⚠️ 只作用于主面板滚动区内的分区：子面板里 divider 后的分区首元素是自带 10px 上外边距的 .row-between，
+      不适用本条换算，不能一并套用。 */
 body.compact-app #app .app-root > .panel > .panel-section .divider + .panel-section {
   margin-top: 15px;
+}
+
+/* 紧凑模式下两列网格（.row-grid）之后紧跟的「填充模式」分区：间距收 3px（10px → 7px）。
+   ⚠️ 光改本条无效：UXP 下 .panel-section 是 flex 列容器，相邻子项的外边距**不折叠**，
+      上方行的 10px 下外边距会与本条叠成 20px。故同时把那一行（.row-grid-fit）的下外边距归零。 */
+body.compact-app #app .app-root > .panel > .panel-section .row-grid-fit {
+  margin-bottom: 0;
+}
+body.compact-app #app .app-root > .panel > .panel-section .row-grid + .panel-section {
+  margin-top: 7px;
+}
+
+/* 紧凑模式下两行两列网格之间（「新建图层/清除模式」行 → 「描边模式」行）：
+   第二行上外边距归零，间距只由第一行的 10px 下外边距提供 —— 与下方复选框组的行距同档（5px + 5px）。
+   ⚠️ 两行各自 10px 在 flex 场景下会叠成 20px，视觉明显偏大。 */
+body.compact-app #app .app-root > .panel > .panel-section .row-grid + .row-grid {
+  margin-top: 0;
+}
+
+/* 网格行内的开关（紧凑填充选项）：把 sp-switch 的「透明留白」让给行距。
+   ⚠️ sp-switch 在 UXP 下原生盒高 32px，而可见胶囊只有 14px（上下都是透明留白），
+      会把网格行撑高，使两行网格之间的视觉间距明显大于下方复选框组。
+      对称负外边距把这部分留白让出去：开关盒纵向溢出，但胶囊本体（盒内居中）始终落在行内，不会被裁切。 */
+body.compact-app #app .app-root > .panel > .panel-section .row-grid sp-switch {
+  margin-top: -10px;
+  margin-bottom: -10px;
+}
+
+/* 描边模式行右侧的「色板 + 齿轮」槽彻底不参与行高。
+   ⚠️ 齿轮按钮盒 24px，比左侧「标签 + 开关」决定的 22px 行高多出 2px ——
+      描边开关一开一关，该行就从 22px 跳到 24px，本行下方的三列 radio 与复选框首行
+      都会跟着轻微跳动。
+      上一版用对称负外边距只做到「让盒溢出」，行高仍随内容出现与否变化；这里改成把
+      内容摘出文档流：右列只当定位上下文、高度恒为 0，行高完全由左列决定，
+      开关前后行高一模一样。 */
+body.compact-app #app .app-root > .panel > .panel-section .row-grid-fit .grid-cell + .grid-cell {
+  position: relative;
+}
+body.compact-app #app .app-root > .panel > .panel-section .row-grid-fit .grid-cell + .grid-cell .row-end {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* 紧凑模式下折叠分区的纵向节奏（折叠态 / 展开态都比默认更紧凑）。
+   --------------------------------------------------------------------------
+   ① 折叠态：折叠分区与上方 .slider-container 之间 —— 归零 slider-container 的下外边距；
+   ② 展开态：分区标题（.collapse-header，自带 10px 上下 padding）与内容区首元素之间 ——
+      内容首元素保留 5px 上外边距（+5px，与「折叠态 -5px」配合形成同一节奏）。
+   ⚠️ 只作用于主面板滚动区（#app .app-root > .panel > .panel-section）；
+      4 个子面板是 .panel-section 的同级 .panel，不受影响。 */
+body.compact-app #app .app-root > .panel > .panel-section .slider-container {
+  margin-bottom: 0px;
+}
+body.compact-app #app .app-root > .panel > .panel-section .collapse-content-expanded > :first-child {
+  margin-top: 5px;
 }

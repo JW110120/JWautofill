@@ -119,6 +119,10 @@ export interface AppState {
      selectionSmooth: number;
      selectionContrast: number;
      selectionExpand: number; // 改名为扩散
+     // 分区可见性（隐藏/显示分区浮窗控制，默认皆可见）：选区改造 / 填充选项
+     selectionOptionsVisible: boolean;
+     fillOptionsVisible: boolean;
+     showVisibilityPanel: boolean;  // 隐藏/显示分区浮窗是否打开
      // 许可证相关状态
      isLicensed: boolean;
      isTrial: boolean;
@@ -174,6 +178,10 @@ export const initialState: AppState = {
     selectionSmooth: 0, 
     selectionContrast: 0,
     selectionExpand: 0, // 改名为扩散
+    // 分区可见性（默认皆可见）
+    selectionOptionsVisible: true,
+    fillOptionsVisible: true,
+    showVisibilityPanel: false,
     // 新增：许可证默认状态
     isLicensed: false,
     isTrial: false,
