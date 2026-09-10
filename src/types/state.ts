@@ -65,6 +65,22 @@ export interface Stroke {
   }
 
 
+/**
+ * 紧凑模式作用域：选区填充父面板 + 4 个子面板（纯色/图案/渐变/描边）。
+ * 5 个作用域各自一个开关、互不干扰——父面板开启不会连带隐藏子面板的 divider，反之亦然。
+ * 菜单项文案随「当前面板 + 该面板自身状态」变化，见 app.tsx 的 currentCompactScope。
+ */
+export type CompactScope = 'app' | 'color' | 'pattern' | 'gradient' | 'stroke';
+export type CompactModes = Record<CompactScope, boolean>;
+
+export const initialCompactModes: CompactModes = {
+    app: false,
+    color: false,
+    pattern: false,
+    gradient: false,
+    stroke: false,
+};
+
 export interface AppState {
     opacity: number;
     feather: number;
@@ -82,6 +98,7 @@ export interface AppState {
     isExpanded: boolean;
     createNewLayer: boolean;  // 添加新状态
     clearMode: boolean;  // 添加清除模式状态
+    compactModes: CompactModes;  // 紧凑模式：按面板作用域分别记录（app=选区填充父面板，其余=4 个子面板）
     isInQuickMask: boolean;  // 添加快速蒙版状态
     fillMode: 'foreground' | 'pattern' | 'gradient';
     colorSettings: ColorSettings;
@@ -126,6 +143,7 @@ export const initialState: AppState = {
     isExpanded: true,
     createNewLayer: false,    // 添加初始值
     clearMode: false,    // 添加初始值
+    compactModes: { ...initialCompactModes },    // 紧凑模式默认全部关闭
     isInQuickMask: false,    // 添加快速蒙版初始值
     fillMode: 'foreground',
     colorSettings: {

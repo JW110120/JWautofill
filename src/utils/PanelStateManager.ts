@@ -1,4 +1,4 @@
-import type { Gradient } from '../types/state';
+import type { CompactModes, Gradient } from '../types/state';
 import { } from 'react';
 
 /**
@@ -17,6 +17,7 @@ export type AppPanelState = {
   strokeEnabled?: boolean;
   createNewLayer?: boolean;
   clearMode?: boolean;
+  compactModes?: CompactModes;
   fillMode?: 'foreground' | 'pattern' | 'gradient';
   selectedGradient?: Gradient | null;
 };

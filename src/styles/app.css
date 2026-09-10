@@ -27,6 +27,12 @@ body.secondary-panel-open #app .app-root > .panel {
   overflow-y: hidden;
 }
 
+/* 主面板滚动容器不需要任何滚动条补偿：让槽位按需占位（无滚动条内容盒 230px、
+   有滚动条 220px）才是与 PS 宿主一致的行为，也是设计要的两档。
+   ⚠️ 别再往这里加 `overflow-y: scroll`、也别给 .panel 加 `scrollbar-gutter` ——
+   两者都会让原生控件（sp-switch / sp-radio slot）的右缘被面板右缘裁掉，
+   原因见 common.css `.panel` 内的说明。 */
+
 /* APP特殊混合模式容器，特殊在需要骑在混合模式下拉菜单上，实现一种设计感 */
 .app-blendmode-container {
   display: flex;
@@ -78,4 +84,47 @@ sp-radio .row-end .icon-button {
    UXP 无 flex gap，齿轮与开关之间单独给 4px 间距。 */
 .stroke-mode-controls .icon-button {
   margin-right: 8px;
+}
+
+/* ==========================================================================
+   紧凑模式（右上角菜单切换，默认全部关闭）
+   --------------------------------------------------------------------------
+   ⚠️ 5 个作用域各自独立开关、互不干扰（见 app.tsx 的 COMPACT_CLASS / currentCompactScope）：
+      app = 选区填充父面板；color / pattern / gradient / stroke = 纯色 / 图案 / 渐变 / 描边
+      4 个子面板。菜单项只作用于「当前面板」，文案形如「紧凑模式：图案·关」。
+
+   每个作用域只隐藏自己那一层的装饰，绝不越界到别层：
+   - .main-title / .panel-footer 只有父面板有（子面板的标题栏是 .subpanel-title-1，
+     带关闭按钮，不能隐藏）；
+   - .divider 用「直接子节点链」限定作用域：父面板的分隔线都在
+     #app .app-root > .panel > .panel-section 内；4 个子面板是 .panel-section 的同级
+     .panel（absolute 覆盖，见 input-fix.css），靠各自的 .subpanel-* 类名识别。
+   过去一条 `body.compact-mode #app .divider` 会连带隐藏子面板的分隔线——这正是本次要
+   拆开的耦合；同理子面板开启也不能动父面板。
+   ========================================================================== */
+body.compact-app #app .main-title,
+body.compact-app #app .panel-footer,
+body.compact-app #app .app-root > .panel > .panel-section .divider {
+  display: none;
+}
+
+/* 4 个子面板：各自只隐藏自己内部的分隔线 */
+body.compact-color #app .subpanel-color .divider,
+body.compact-pattern #app .subpanel-pattern .divider,
+body.compact-gradient #app .subpanel-gradient .divider,
+body.compact-stroke #app .subpanel-stroke .divider {
+  display: none;
+}
+
+/* 父面板隐藏 divider 后「清除模式」行与「填充模式」分区之间的间距会变紧，补回 5px。
+   --------------------------------------------------------------------------
+   各行的间距由两行各自的 10px 外边距折叠而来（折叠后仍是 10px），而分区自身没有上外边距；
+   更关键的是行盒高 32px（sp-switch 32px）、分区首行标签盒高 22px，
+   两者半个高度差 (32−22)/2 = 5px 会让「行→分区」看起来比「行→行」更挤。
+   补到 15px（与行的 10px 折叠后取 15px）后两处视觉间距一致。
+   ⚠️ divider 虽被 display: none 隐藏，仍在文档流里，相邻兄弟选择器照常命中。
+   ⚠️ 只作用于主面板滚动区内的分区：子面板（图案/描边）里 divider 后的分区首个子元素
+      是自带 10px 上外边距的 .row-between，不适用本条换算，不能一并套用。 */
+body.compact-app #app .app-root > .panel > .panel-section .divider + .panel-section {
+  margin-top: 15px;
 }

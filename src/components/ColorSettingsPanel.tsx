@@ -237,7 +237,7 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
 
 
     return (
-        <div className="panel">
+        <div className="panel subpanel-color">
             <div className="subpanel-title-1">
                 <div>颜色动态设置</div>
                 <div className="close-button" role="button" tabIndex={0} onClick={onClose}>×</div>

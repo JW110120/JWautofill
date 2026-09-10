@@ -3,7 +3,7 @@ import { interaction, storage } from 'uxp';
 import { app, action, core } from 'photoshop';
 import { BLEND_MODES } from './constants/blendModes';
 import { BLEND_MODE_OPTIONS } from './constants/blendModeOptions';
-import { AppState, initialState, Gradient } from './types/state';
+import { AppState, initialState, Gradient, CompactModes, CompactScope, initialCompactModes } from './types/state';
 import { DragHandler } from './utils/DragHandler';
 import { FillHandler } from './utils/FillHandler';
 import { LayerInfoHandler } from './utils/LayerInfoHandler';
@@ -131,6 +131,77 @@ class App extends React.Component<AppProps, AppState> {
         void setFocusMode(on).catch(e => console.warn('⚠️ 专注模式状态同步失败:', e));
     }
 
+    /**
+     * 紧凑模式（右上角菜单切换，默认全关，随面板状态持久化）：
+     * 5 个作用域各自独立开关、互不干扰——选区填充父面板 + 纯色/图案/渐变/描边 4 个子面板，
+     * 哪一层的开关就只影响哪一层（父面板的 divider 与子面板的 divider 互不相干）。
+     * 菜单项只作用于「当前面板」：有子面板打开时是那个子面板，否则是父面板，
+     * 因此菜单文案必须写明是「哪个面板」以及它「此刻开还是关」。
+     * 实现走 body 上的 compact-{scope} 类（与本文件既有的 secondary-panel-open /
+     * license-dialog-open 同一套做法），具体隐藏规则见 app.css。
+     */
+    private static readonly COMPACT_CLASS: Record<CompactScope, string> = {
+        app: 'compact-app',
+        color: 'compact-color',
+        pattern: 'compact-pattern',
+        gradient: 'compact-gradient',
+        stroke: 'compact-stroke',
+    };
+
+    /** 各作用域在菜单文案里的面板名 */
+    private static readonly COMPACT_NAME: Record<CompactScope, string> = {
+        app: '选区填充',
+        color: '纯色',
+        pattern: '图案',
+        gradient: '渐变',
+        stroke: '描边',
+    };
+
+    /** 给定状态下菜单项应作用的作用域：任一子面板打开时是它，否则是父面板 */
+    private compactScopeOf(s: AppState): CompactScope {
+        if (s.isStrokeSettingOpen) return 'stroke';
+        if (s.isPatternPickerOpen) return 'pattern';
+        if (s.isGradientPickerOpen) return 'gradient';
+        if (s.isColorSettingsOpen) return 'color';
+        return 'app';
+    }
+
+    private currentCompactScope(): CompactScope {
+        return this.compactScopeOf(this.state);
+    }
+
+    /** 切换「当前面板」的紧凑模式（同一时刻只动一个作用域） */
+    toggleCompactMode() {
+        const scope = this.currentCompactScope();
+        this.setState(prev => {
+            const next: CompactModes = { ...prev.compactModes };
+            next[scope] = !next[scope];
+            return { compactModes: next };
+        });
+    }
+
+    /** 把 5 个作用域的开/关逐一落到 body 类上（幂等，可重复调用） */
+    private syncCompactModeClasses() {
+        const scopes = Object.keys(App.COMPACT_CLASS) as CompactScope[];
+        for (const scope of scopes) {
+            const cls = App.COMPACT_CLASS[scope];
+            if (this.state.compactModes && this.state.compactModes[scope]) {
+                document.body.classList.add(cls);
+            } else {
+                document.body.classList.remove(cls);
+            }
+        }
+    }
+
+    /** 菜单文案：`紧凑模式：{面板名}·{开/关}`（如「紧凑模式：图案·开」） */
+    private syncCompactMenuLabel() {
+        const scope = this.currentCompactScope();
+        const on = !!(this.state.compactModes && this.state.compactModes[scope]);
+        MenuManager.setCompactModeLabel(
+            `紧凑模式：${App.COMPACT_NAME[scope]}·${on ? '开' : '关'}`
+        );
+    }
+
     constructor(props: AppProps) {
         super(props);
         this.state = initialState;
@@ -149,6 +220,7 @@ class App extends React.Component<AppProps, AppState> {
         this.handleMouseUp = this.handleMouseUp.bind(this);
         this.toggleCreateNewLayer = this.toggleCreateNewLayer.bind(this);
         this.toggleClearMode = this.toggleClearMode.bind(this);
+        this.toggleCompactMode = this.toggleCompactMode.bind(this);
         this.toggleColorSettings = this.toggleColorSettings.bind(this);
         this.openPatternPicker = this.openPatternPicker.bind(this);
         this.openGradientPicker = this.openGradientPicker.bind(this);
@@ -252,8 +324,11 @@ class App extends React.Component<AppProps, AppState> {
                     isTrial: this.state.isTrial,
                     isLicenseDialogOpen: this.state.isLicenseDialogOpen,
                     trialDaysRemaining: this.state.trialDaysRemaining,
+                    // 紧凑模式是界面开关（5 个作用域各自独立），不属于「参数」，复位时保持用户当前选择
+                    compactModes: this.state.compactModes,
                 });
             },
+            onToggleCompactMode: () => { this.toggleCompactMode(); },
             onSetMainHotkey: () => { void this.setMainHotkey(); }
         });
         this.selectionChangeListener = (eventName, descriptor) => {
@@ -297,6 +372,7 @@ class App extends React.Component<AppProps, AppState> {
                     strokeEnabled: this.state.strokeEnabled,
                     createNewLayer: this.state.createNewLayer,
                     clearMode: this.state.clearMode,
+                    compactModes: this.state.compactModes,
                     fillMode: this.state.fillMode,
                 },
             });
@@ -313,6 +389,15 @@ class App extends React.Component<AppProps, AppState> {
                     createNewLayer: loaded.appPanel.createNewLayer ?? this.state.createNewLayer,
                     clearMode: loaded.appPanel.clearMode ?? this.state.clearMode,
                     fillMode: loaded.appPanel.fillMode ?? this.state.fillMode,
+                    // 紧凑模式按作用域合并：旧存档缺字段时逐项回落到默认（全关），
+                    // 避免「整体覆盖」把用户已开启的其它作用域冲掉
+                    compactModes: {
+                        app: loaded.appPanel.compactModes?.app ?? initialCompactModes.app,
+                        color: loaded.appPanel.compactModes?.color ?? initialCompactModes.color,
+                        pattern: loaded.appPanel.compactModes?.pattern ?? initialCompactModes.pattern,
+                        gradient: loaded.appPanel.compactModes?.gradient ?? initialCompactModes.gradient,
+                        stroke: loaded.appPanel.compactModes?.stroke ?? initialCompactModes.stroke,
+                    },
                 });
             }
         } catch (e) {
@@ -323,6 +408,9 @@ class App extends React.Component<AppProps, AppState> {
         }
         // 选项已从磁盘合并进来，此刻把专注模式结论推给共享总线（下次会话未打开面板也有效）
         this.syncFocusMode();
+        // 紧凑模式持久化状态恢复：把加载到的 5 个作用域逐一落到 body 类上，并同步菜单文案
+        this.syncCompactModeClasses();
+        this.syncCompactMenuLabel();
 
         // ========= 主开关：与跨面板共享状态对齐 =========
         // 共享文件存在（上次会话留下来的真实状态）就以它为准；不存在才用本面板持久化的值播种。
@@ -380,6 +468,15 @@ class App extends React.Component<AppProps, AppState> {
             }
         }
 
+        // 紧凑模式：开关变化 → 同步 body 类 + 重写菜单文案（面板名与状态都可能变）
+        if (prevState.compactModes !== this.state.compactModes) {
+            this.syncCompactModeClasses();
+            this.syncCompactMenuLabel();
+        } else if (this.compactScopeOf(prevState) !== this.currentCompactScope()) {
+            // 仅切换了当前面板（打开/关闭某个子面板）：文案里的面板名要跟着换
+            this.syncCompactMenuLabel();
+        }
+
         // ========= 面板状态：有变更则保存 =========
         // 初始加载完成前不保存：此时 state 还是默认值，任何 setState（如 MainToggleBus
         // 轮询到的 isEnabled）都会以默认值覆盖 panel-state.json 里用户已保存的选项。
@@ -395,6 +492,7 @@ class App extends React.Component<AppProps, AppState> {
             'strokeEnabled',
             'createNewLayer',
             'clearMode',
+            'compactModes',
             'fillMode',
         ];
         const changed = watchedKeys.some(k => prevState[k] !== this.state[k]);
@@ -411,6 +509,7 @@ class App extends React.Component<AppProps, AppState> {
                     strokeEnabled: this.state.strokeEnabled,
                     createNewLayer: this.state.createNewLayer,
                     clearMode: this.state.clearMode,
+                    compactModes: this.state.compactModes,
                     fillMode: this.state.fillMode,
                 },
             }, { debounceMs: 400 }).catch(e => console.warn('⚠️ 保存面板状态失败:', e));
@@ -1492,6 +1591,8 @@ class App extends React.Component<AppProps, AppState> {
     render() {
         // 专注模式：两个前置选项同时勾选即成立（推导值，不额外存 state）
         const focusMode = this.isFocusMode();
+        // 紧凑模式（仅父面板作用域）：三行 radio 改三列、去掉齿轮，标签兼作子面板入口
+        const compactApp = !!this.state.compactModes?.app;
         return (
             <div className="panel" ref={this.panelRef}>
                 {/* 授权对话框 */}
@@ -1868,46 +1969,68 @@ title={helpTexts.selectionFill.clearMode}>
                         {/* 填充模式选择 */}
                         <div className="panel-section">
                             <div className="label-4" title={helpTexts.selectionFill.fillModeLabel}>填充模式</div>
-                            <sp-radio-group 
-                                className="radio-group-vertical"
-                                selected={this.state.fillMode} 
-                                name="fillMode"
-                                onChange={this.handleFillModeChange}
-                            >
-                                <sp-radio value="foreground" className="" title={helpTexts.selectionFill.fgRadio}>
-                                    <div className="row-start">
-                                        <span className="label-2" title={helpTexts.selectionFill.fgDetail}>纯色</span>
-                                        <IconButton
-                                            onClick={this.toggleColorSettings}
-                                            title={helpTexts.selectionFill.fgSettings}
-                                        >
-                                            <SettingsIcon/>
-                                        </IconButton>
-                                    </div>
-                                </sp-radio>
-                                <sp-radio value="pattern" className="" title={helpTexts.selectionFill.patternRadio}>
-                                    <div className="row-start">
-                                        <span className="label-2" title={helpTexts.selectionFill.patternDetail}>图案</span>
-                                        <IconButton
-                                            onClick={this.openPatternPicker}
-                                            title={helpTexts.selectionFill.patternSettings}
-                                        >
-                                            <SettingsIcon/>
-                                        </IconButton>
-                                    </div>
-                                </sp-radio>
-                                <sp-radio value="gradient" className="" title={helpTexts.selectionFill.gradientRadio}>
-                                    <div className="row-start">
-                                        <span className="label-2" title={helpTexts.selectionFill.gradientDetail}>渐变</span>
-                                        <IconButton
-                                            onClick={this.openGradientPicker}
-                                            title={helpTexts.selectionFill.gradientSettings}
-                                        >
-                                            <SettingsIcon/>
-                                        </IconButton>
-                                    </div>
-                                </sp-radio>
-                            </sp-radio-group>
+                            {compactApp ? (
+                                /* 紧凑模式：3 行 radio → 3 列（与描边子面板「位置」共用 .radio-trio），
+                                   齿轮不再渲染，改由点击标签文字打开对应子面板。 */
+                                <div className="radio-trio">
+                                <sp-radio-group 
+                                    selected={this.state.fillMode} 
+                                    name="fillMode"
+                                    onChange={this.handleFillModeChange}
+                                >
+                                    <sp-radio value="foreground" className="" title={helpTexts.selectionFill.fgCompact}>
+                                        <span className="label-2" onClick={this.toggleColorSettings}>纯色</span>
+                                    </sp-radio>
+                                    <sp-radio value="pattern" className="" title={helpTexts.selectionFill.patternCompact}>
+                                        <span className="label-2" onClick={this.openPatternPicker}>图案</span>
+                                    </sp-radio>
+                                    <sp-radio value="gradient" className="" title={helpTexts.selectionFill.gradientCompact}>
+                                        <span className="label-2" onClick={this.openGradientPicker}>渐变</span>
+                                    </sp-radio>
+                                </sp-radio-group>
+                                </div>
+                            ) : (
+                                <sp-radio-group 
+                                    className="radio-group-vertical"
+                                    selected={this.state.fillMode} 
+                                    name="fillMode"
+                                    onChange={this.handleFillModeChange}
+                                >
+                                    <sp-radio value="foreground" className="" title={helpTexts.selectionFill.fgRadio}>
+                                        <div className="row-start">
+                                            <span className="label-2" title={helpTexts.selectionFill.fgDetail}>纯色</span>
+                                            <IconButton
+                                                onClick={this.toggleColorSettings}
+                                                title={helpTexts.selectionFill.fgSettings}
+                                            >
+                                                <SettingsIcon/>
+                                            </IconButton>
+                                        </div>
+                                    </sp-radio>
+                                    <sp-radio value="pattern" className="" title={helpTexts.selectionFill.patternRadio}>
+                                        <div className="row-start">
+                                            <span className="label-2" title={helpTexts.selectionFill.patternDetail}>图案</span>
+                                            <IconButton
+                                                onClick={this.openPatternPicker}
+                                                title={helpTexts.selectionFill.patternSettings}
+                                            >
+                                                <SettingsIcon/>
+                                            </IconButton>
+                                        </div>
+                                    </sp-radio>
+                                    <sp-radio value="gradient" className="" title={helpTexts.selectionFill.gradientRadio}>
+                                        <div className="row-start">
+                                            <span className="label-2" title={helpTexts.selectionFill.gradientDetail}>渐变</span>
+                                            <IconButton
+                                                onClick={this.openGradientPicker}
+                                                title={helpTexts.selectionFill.gradientSettings}
+                                            >
+                                                <SettingsIcon/>
+                                            </IconButton>
+                                        </div>
+                                    </sp-radio>
+                                </sp-radio-group>
+                            )}
                         </div>
                         {/* 底部checkbox选项外部容器 */}
                         <div className="divider"></div>
@@ -1995,8 +2118,10 @@ title={helpTexts.selectionFill.clearMode}>
                     )}
 
                 {/* info 条：滚动内容的最后一个元素（不再固定在面板底部），
-                    滚到底才出现；父/子容器因此都铺满 100%，不再给底部留 20px。 */}
-                <div className="panel-section">
+                    滚到底才出现；父/子容器因此都铺满 100%，不再给底部留 20px。
+                    ⚠️ 挂 .panel-footer 以便紧凑模式整块隐藏（只藏版权文字会留下
+                    该分区 15px 的下外边距，底部凭空多出一段空白）。 */}
+                <div className="panel-section panel-footer">
                     <div className="divider"></div>
                     <span className="copyright">Copyright © listen2me (JW)</span>
                 </div>

@@ -8,6 +8,24 @@
 - APP：uxp-panel→#app→Provider(100%)→.app-root→.app-root>.panel（最外层滚动容器）→.panel-section（flex:0 0 auto；纵向须挂 panel-section--col，否则继承 flex-row）。内层滚动 .panel 已删；common.css 对 .panel>* 统一 flex-shrink:0 兜底。
 - 4 子面板=同层 .panel，靠 input-fix.css `#app .panel-section ~ .panel`(absolute+z9999) 识别；子面板开时 body.secondary-panel-open 只锁 .app-root>.panel。工具箱：#pixeladjustment→.pixeladjustment-root(flex列)→.panel(min-height:0;overflow-y:auto)。
 - 新增包裹层必须带高度，不可裸 height:auto 夹定高链；每层铺 --bg-color。
+- ⚠️ 滚动条：**绝不能给 .panel 加 `scrollbar-gutter: stable`**（2026-09-10 用截图像素定位）。UXP 的 CSS 侧**会**照它预留 10px 槽位（实测内容盒 220px、右缘 x=230，而右侧 14 列**没有任何滚动条像素** —— 槽位预留了却没画滚动条，即用户说的「有/无滚动条的中间态」）；但 PS 宿主给原生控件（sp-switch / sp-radio 的 slot 内容）排版时**不扣**这份槽位 → 控件按「内容盒 230」摆位、右缘落到 x=240 探出 10px，被面板右缘裁掉右半截（面板高 ≈823px 时最明显）。删掉该属性 → 槽位只按需占位（无滚动条 230 / 有滚动条 220，正是设计要的两档），CSS 与宿主始终对齐。
+- 反面方案：`overflow-y: scroll` 也能消除裁切（滚动条真常驻、宿主就扣位），但内容盒被钉死 220 → 无滚动条时整块内容比设计窄 10px，且与 228px 内宽链的子面板不再自洽，已废弃。`padding-right` 预留也无效（scrollport = padding box − scrollbar，加 padding 内容盒更窄）。`::-webkit-scrollbar` 在 UXP 下同样不生效。
+- 为什么工具箱（#pixeladjustment）看不出这个坑：它的行都在 `.border-panel-section`（padding 10px）里，控件右缘本就内缩 10px，多出的 10px 刚好落进 padding。
+
+## 菜单（右上角 flyout）
+- `MenuManager.setup()` 里按面板 id 配 menuItems；APP 增删项要同步四处：`registerAppCallbacks` 的 callbacks 类型与赋值、`handleAppFlyout` 的 case、menuItems 数组、app.tsx 注册处的回调。
+- 已有：注销激活状态 / 打开激活与试用面板 / 参数复位 / 紧凑模式（文案动态）/ 设置选区填充主开关快捷键 / 使用手册。
+- 动态改菜单项：`getPanel(id).menuItems.getItem(id)` 拿项后直接改属性（label/enabled）；UXP 各版本 API 名不统一，须备 updateItem 与直接改数组两条降级。
+
+## 紧凑模式（Compact Mode）— 5 个作用域各自独立
+- `AppState.compactModes: CompactModes`（`types/state.ts` 定义 `CompactScope='app'|'color'|'pattern'|'gradient'|'stroke'`，`initialCompactModes` 全 false；`PanelStateManager.AppPanelState` 同步持久化；参数复位时保留）。⚠️ 旧的单个 `compactMode: boolean` 已废弃（存档字段名不同，无需迁移）。
+- 作用域 = 选区填充父面板 + 纯色/图案/渐变/描边 4 个子面板；互不干扰，父面板的 divider 与子面板的 divider 各管各的。
+- 菜单项只作用于「当前面板」（`compactScopeOf(state)`：任一子面板打开→它，否则父面板），文案动态：`${面板名}面板紧凑模式——已开启/已关闭`（面板名 app=选区填充 / color=纯色 / pattern=图案 / gradient=渐变 / stroke=描边）。改写走 `MenuManager.setCompactModeLabel()`，降级链 getItem→updateItem→直接改数组项（与 setLicenseLogoutEnabled 同款）。
+- app.tsx：`toggleCompactMode()`（只翻当前作用域）+ `syncCompactModeClasses()`（把 5 个 `body.compact-{scope}` 类逐一挂/摘）+ `syncCompactMenuLabel()`；componentDidUpdate 里 compactModes 变化或当前面板切换都要重写文案。
+- CSS（app.css）：父面板 `body.compact-app #app .main-title / .panel-footer / #app .app-root > .panel > .panel-section .divider`；子面板靠根节点钩子 `.subpanel-color / .subpanel-pattern / .subpanel-gradient / .subpanel-stroke`（4 个组件根 `<div className="panel subpanel-*">`）配 `body.compact-* #app .subpanel-* .divider`。
+- 子面板标题栏是 `.subpanel-title-1`（带关闭按钮）不可隐藏；底部 info 条挂 `.panel-footer` 整块隐藏（只藏文字会留下该分区 15px 下外边距）。
+- ⚠️ 隐藏 divider 后「清除模式」行 →「填充模式」分区的间距会变紧，需补 `margin-top: 15px`（选择器 `#app .app-root > .panel > .panel-section .divider + .panel-section`）。换算：行盒 32px（sp-switch 32px）、分区首行标签盒 22px，半个高度差 (32−22)/2 = 5px；行的外边距 10px 折叠后取 max(10,15)=15。**子面板里的 divider 后分区首个子元素是自带 10px 上边距的 .row-between，不适用该换算，必须把选择器收窄在主面板滚动区内。**
+
 
 ## 专注模式（Focus Mode）
 - 条件：APP 父面板「自动关开关」+「自动切套索」同时勾选即成立（推导值，不额外存 state）。
@@ -30,7 +48,7 @@
 - 状态样式统一放 common.css 最底部「集中管理区」；状态类只写修饰差异，盒模型与基础类共享。选中/落点视觉一律 border 变色（基础类挂 transparent 占位），禁 outline。
 - 通知：.status-banner=通用横幅(min-height:30px 不定高)、.notify-bar=单行状态条、.notify-text 唯一定义。hover title 收口 helpTexts.ts。
 
-- 布局：标签 W(n)=20+(n-2)×13.33(2..6字)；按钮宽=字数×字号+20；数字输入 32×24。两列 radio margin 下限 40px、三列 20px。
+- 布局：标签 W(n)=20+(n-2)×13.33(2..6字)；按钮宽=字数×字号+20；数字输入 32×24、容器 `.num-input-row` 圆角 3px（2026-09-10 用户指定）。两列 radio margin 下限 40px、三列 20px。
 - ⚠️ 居中 flex 行（width:100%+justify-content:center）里若两态字号不同，组宽变化会让左侧固定元素（圆点/图标）位移半个差值；文字中心反而不动，易误判。解法：文案给定宽居中槽（n 字×字号 px，flex:none），见 .main-button-label。
 
 ## 像素算法

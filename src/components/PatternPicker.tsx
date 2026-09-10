@@ -1529,7 +1529,7 @@ interface PatternPickerProps {
     if (!isOpen) return null;
 
     return (
-        <div className="panel">
+        <div className="panel subpanel-pattern">
             <div className="subpanel-title-1">
                 <div>选择图案</div>
                 <div className="close-button" role="button" tabIndex={0} onClick={() => {

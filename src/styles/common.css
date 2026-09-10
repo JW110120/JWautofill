@@ -53,7 +53,15 @@ html, body {
   box-sizing: border-box;
   overflow-y: auto;
   overflow-x: hidden;
-  scrollbar-gutter: stable;
+  /* ⚠️ 这里**不能**加 scrollbar-gutter: stable（2026-09-10 定位，代价是右缘被裁）：
+     UXP 的 CSS 侧确实会照它预留 10px 滚动条槽位，但 PS 宿主给原生控件
+     （sp-switch / sp-radio 的 slot 内容）排版时不扣这份槽位 —— 控件按「内容盒 230px」
+     摆位，右缘正好探出内容盒 10px，被面板右缘裁掉右半截。
+     面板高度 ≈823px、内容刚好压在滚动条出现阈值上（即「有/无滚动条的中间态」）时
+     最明显：槽位被预留（内容盒 220px）却看不到滚动条，控件仍按 230px 摆位。
+     槽位只按需占位才是与宿主一致的行为：无滚动条内容盒 230px、有滚动条 220px，
+     正好是设计要的两档，且控件与宿主始终对齐。
+     ::-webkit-scrollbar 在 UXP 下同样不生效（下方规则仅为将来引擎支持时生效）。 */
 }
 
 
@@ -214,6 +222,7 @@ html, body {
   padding: 0;
   box-sizing: border-box;
   border: 1px solid var(--border-color);
+  border-radius: 3px;
   background-color: var(--dropdown-bg-color);
   background-image: none;
   overflow: hidden;
@@ -754,6 +763,17 @@ sp-radio-group:not(.radio-group-vertical) > sp-radio > .row-end > span {
 .border-panel-section sp-radio-group.radio-group-vertical sp-radio {
   flex: 0 0 auto;
   width: 100%;
+}
+
+/* 三列 radio 组（描边子面板「位置」与父面板紧凑模式下的「填充模式」共用）：
+   选项间距 25px，整组右移 10px 与分区左内边距对齐。
+   （2026-09-10 从 stroke.css 的 .position-radio-group 收口为通用类，两处必须完全一致。） */
+.radio-trio sp-radio:not(:last-child) {
+  margin-right: 25px;
+}
+
+.radio-trio {
+  transform: translateX(10px);
 }
 
 /* 行内右侧控件间距：row-between / row-center / row-end 内，sp-switch 与 checkbox 左侧留 6px。

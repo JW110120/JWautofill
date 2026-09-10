@@ -1276,9 +1276,9 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     };
 
     return (
-        <div className="panel">
-            <div className="subpanel-title-1">
-                <div>渐变设置</div>
+            <div className="panel subpanel-gradient">
+                <div className="subpanel-title-1">
+                    <div>渐变设置</div>
                 <div className="close-button" role="button" tabIndex={0} onClick={onClose}>×</div>
             </div>
 

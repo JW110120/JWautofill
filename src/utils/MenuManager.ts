@@ -14,6 +14,7 @@ export class MenuManager {
   private static appOpenLicenseCallback: (() => void) | null = null;
   private static appResetLicenseCallback: (() => void) | null = null;
   private static appResetParametersCallback: (() => void) | null = null;
+  private static appToggleCompactModeCallback: (() => void) | null = null;
   private static appSetMainHotkeyCallback: (() => void) | null = null;
   // 是否已正式激活（试用不算）：决定「注销激活状态」菜单项能否点击
   private static appLicenseActive: boolean = false;
@@ -29,11 +30,13 @@ export class MenuManager {
     onOpenLicenseDialog: () => void;
     onResetLicense: () => void;
     onResetParameters: () => void;
+    onToggleCompactMode?: () => void;
     onSetMainHotkey?: () => void;
   }) {
     this.appOpenLicenseCallback = callbacks.onOpenLicenseDialog;
     this.appResetLicenseCallback = callbacks.onResetLicense;
     this.appResetParametersCallback = callbacks.onResetParameters;
+    this.appToggleCompactModeCallback = callbacks.onToggleCompactMode ?? null;
     this.appSetMainHotkeyCallback = callbacks.onSetMainHotkey ?? null;
   }
 
@@ -77,6 +80,43 @@ export class MenuManager {
   }
 
   /**
+   * 同步「紧凑模式」菜单项文案（随当前面板与它自身开关状态变化）。
+   * 文案形如「紧凑模式：图案·关」/「紧凑模式：选区填充·开」：
+   * 5 个作用域（选区填充父面板 + 纯色/图案/渐变/描边 4 个子面板）各自独立开关，
+   * 菜单项只作用于「当前面板」，所以文案里必须写明是哪个面板、以及它此刻是开还是关。
+   * 与 setLicenseLogoutEnabled 同一套降级链：getItem → updateItem → 直接改数组项。
+   */
+  public static setCompactModeLabel(label: string): void {
+    try {
+      const ep: any = (require("uxp") as any).entrypoints;
+      const panel: any = ep && typeof ep.getPanel === "function"
+        ? ep.getPanel("com.listen2me.jwautofill")
+        : null;
+      const menuItems: any = panel && (panel as any).menuItems;
+      if (!menuItems) return;
+
+      if (typeof (menuItems as any).getItem === "function") {
+        const item = (menuItems as any).getItem("toggleCompactMode");
+        if (item) {
+          item.label = label;
+          return;
+        }
+      }
+      if (typeof (menuItems as any).updateItem === "function") {
+        (menuItems as any).updateItem("toggleCompactMode", { label });
+        return;
+      }
+      const list: any[] = Array.isArray(menuItems) ? menuItems : ((menuItems as any).items || []);
+      const item = list.find((it: any) => it && it.id === "toggleCompactMode");
+      if (item) {
+        item.label = label;
+      }
+    } catch (err) {
+      console.warn("更新「紧凑模式」菜单项文案失败:", err);
+    }
+  }
+
+  /**
    * 处理主面板（App）菜单项点击事件
    */
   private static handleAppFlyout(id: string) {
@@ -113,6 +153,11 @@ export class MenuManager {
       case "resetAppParameters":
         if (this.appResetParametersCallback) {
           this.appResetParametersCallback();
+        }
+        break;
+      case "toggleCompactMode":
+        if (this.appToggleCompactModeCallback) {
+          this.appToggleCompactModeCallback();
         }
         break;
       case "setMainHotkey":
@@ -183,8 +228,13 @@ export class MenuManager {
               label: "参数复位"
             },
             {
+              id: "toggleCompactMode",
+              // 初始文案；面板起来后由 MenuManager.setCompactModeLabel 按「当前面板 + 该面板状态」实时改写
+              label: "紧凑模式：选区填充·关"
+            },
+            {
               id: "spacerApp1",
-              label: "-" // 分隔符（参数复位 与 设置主开关快捷键 之间）
+              label: "-" // 分隔符（紧凑模式 与 设置主开关快捷键 之间）
             },
             {
               id: "setMainHotkey",

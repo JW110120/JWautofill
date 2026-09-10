@@ -120,7 +120,36 @@ radio 行内自绘元素走文档流，**不要绝对定位去 pin 边缘**（`.
 
 ---
 
-## 15. 改完必须 Reload
+## 15. 千万别给滚动容器加 `scrollbar-gutter: stable`
+
+**现象**：面板高度压在某阈值（APP 面板 ≈823px）时出现「有滚动条 / 无滚动条的中间态」，
+右对齐的**原生控件**（`sp-switch`、`sp-radio` 的 slot 内容）右半截被裁掉；
+换到内容永远溢出、或外层带 10px 内边距的面板（绘画工具箱的 `.border-panel-section`）却完全正常。
+
+**根因（2026-09-10 用截图像素定位）**：UXP 的 CSS 侧**会**照 `scrollbar-gutter: stable` 预留 10px 槽位
+（实测：内容盒 220px、右缘 x=230，但整条右侧 14 列**没有任何滚动条像素** —— 槽位被预留却没画滚动条，
+这就是用户说的「中间态」）。而 PS 宿主给原生控件排版时**不扣这份槽位**：控件按「内容盒 230px」摆位，
+右缘落到 x=240，正好探出内容盒 10px，被面板右缘裁掉右半截。
+（对照：`.border-panel-section` 有 10px padding，控件右缘本就内缩 10px，多出的 10px 刚好落在 padding 里，所以工具箱看不出问题。）
+
+**解法：删掉 `scrollbar-gutter: stable`，让槽位只按需占位** —— 无滚动条内容盒 230px、有滚动条 220px，
+正好是设计要的两档，CSS 与宿主始终对齐：
+
+```css
+.panel { overflow-y: auto; overflow-x: hidden; }   /* 不要写 scrollbar-gutter */
+```
+
+**⚠️ 不要用 `overflow-y: scroll` 代替**：虽然它也能消除裁切（滚动条真的常驻，宿主就会扣位），
+但内容盒被钉死在 220px，无滚动条时整块内容比设计窄 10px、且与 228px 内宽链的子面板不再自洽。
+
+**⚠️ 不要试图用 `padding-right` 预留槽位**：Chromium 的 scrollport = padding box − scrollbar，
+加 padding 只会让内容盒再窄 10px（220 → 210），位移照旧。
+
+**⚠️ `::-webkit-scrollbar` 在 UXP 下不生效**，滚动条不可自定义样式（Adobe 官方论坛已确认）。
+
+---
+
+## 16. 改完必须 Reload
 
 前端任何改动都要 **UDT Reload** 才生效（webpack 输出的 `dist/` 与 `manifest.cssResources:["common.css"]` 一致）。新增 CSS 文件记得挂进 `index.tsx` 的引入链 / `app.css` 的 `@import` 聚合，否则不参与构建。
 
@@ -132,4 +161,5 @@ radio 行内自绘元素走文档流，**不要绝对定位去 pin 边缘**（`.
 2. 是不是高度链断？→ 查 ⑥，逐层确认 height / overflow
 3. 是不是 `var()` 没解析？→ 查 ⑤，改字面色
 4. 是不是间距/位置诡异？→ 查 ③⑪⑫⑬，确认没用 gap、没被通用后代规则反压
-5. 四套主题各看一遍 —— 主题漏写变量是最常见的「某主题下样式丢失」
+5. 是不是「某些高度下才出问题」的右侧裁切/抖动？→ 查 ⑮，确认滚动容器**没有** `scrollbar-gutter`、**没有**用 `overflow-y: scroll` 兜底
+6. 四套主题各看一遍 —— 主题漏写变量是最常见的「某主题下样式丢失」

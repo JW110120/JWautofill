@@ -90,7 +90,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="panel">
+    <div className="panel subpanel-stroke">
         <div className="subpanel-title-1">
           <div>描边设置</div>
           <div className="close-button" role="button" tabIndex={0} onClick={() => {
@@ -138,7 +138,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         
         <div className="divider"></div>
 
-          <div className="panel-section position-radio-group">
+          <div className="panel-section radio-trio">
             <div className="row-between">
             <sp-radio-group 
               selected={position}
