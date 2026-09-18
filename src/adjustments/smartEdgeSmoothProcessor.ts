@@ -18,13 +18,16 @@ import { processLineSmooth } from './lineSmoothProcessor';
   边缘平滑的参数说明（面板当前只暴露这三个参数，不支持旧预设）：
   - mode：edge=仅色块边界（本文件实现）；line=仅主线条（转发给 lineSmoothProcessor）
   - edgeMedianRadius：色块边界的中间值半径（PS median 半径）——仅 edge 使用
-  - lineSmoothStrength / lineSmoothRadius：主线条平滑的力度(0~1) / 范围(px)——仅 line 使用
+  - lineSmoothStrength：主线条平滑力度(0~1)——仅 line 使用
+  - lineSmoothRadius：轮廓平滑尺度(px，3~9)——仅 line 使用，受线宽封顶
+  - lineSmoothFlatten：宽度拉平尺度(px，0~700，0=关)——仅 line 使用，不受线宽封顶
 */
 interface EdgeDetectionParams {
   mode?: 'edge' | 'line';
   edgeMedianRadius?: number;
   lineSmoothStrength?: number;
   lineSmoothRadius?: number;
+  lineSmoothFlatten?: number;
 }
 
 const clampInt = (v: number, lo: number, hi: number) => (v < lo ? lo : (v > hi ? hi : v));
@@ -400,17 +403,19 @@ export async function processSmartEdgeSmooth(
   // 「仅主线条」：整体转发给 lineSmoothProcessor（它自带选区二值化与窗口化），本文件不再参与。
   // 必须先分派：下面那三段（二值化整张选区掩码 / 拷贝整图输出缓冲 / 扫描选区包围盒）
   // 都是「仅色块边界」才需要的全图开销，放在这里会让 line 模式白白多跑 2~3 遍全图。
-  // 面板只暴露两个参数：平滑力度（默认 100%）、平滑范围（默认 8px）。
+  // 面板暴露三个参数：平滑力度（默认 100%）、轮廓平滑（默认 8px）、宽度拉平（默认 0 = 关）。
   if (mode === 'line') {
     const lineSmoothStrength = clamp01(params.lineSmoothStrength ?? 1);
-    const lineSmoothRadius = clampInt(Math.round(params.lineSmoothRadius ?? 8), 3, 12);
+    const lineSmoothRadius = clampInt(Math.round(params.lineSmoothRadius ?? 8), 3, 9);
+    const lineSmoothFlatten = clampInt(Math.round(params.lineSmoothFlatten ?? 0), 0, 700);
     return processLineSmooth(
       pixelDataBuffer,
       selectionMaskBuffer,
       { width, height },
       {
         strength: lineSmoothStrength,
-        radius: lineSmoothRadius
+        radius: lineSmoothRadius,
+        flattenRadius: lineSmoothFlatten
       }
     );
   }
@@ -488,5 +493,6 @@ export const defaultSmartEdgeSmoothParams: EdgeDetectionParams = {
   mode: 'edge',
   edgeMedianRadius: 16,
   lineSmoothStrength: 1,       // 平滑力度默认 100%
-  lineSmoothRadius: 8          // 平滑范围默认 8px
+  lineSmoothRadius: 8,         // 轮廓平滑默认 8px
+  lineSmoothFlatten: 0         // 宽度拉平默认 0（关）
 };

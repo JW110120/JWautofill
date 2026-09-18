@@ -413,6 +413,7 @@ const [edgeSmoothMode, setEdgeSmoothMode] = useState((defaultSmartEdgeSmoothPara
 const [edgeMedianRadius, setEdgeMedianRadius] = useState(defaultSmartEdgeSmoothParams.edgeMedianRadius ?? 16);
 const [edgeLineStrength, setEdgeLineStrength] = useState(Math.round((defaultSmartEdgeSmoothParams.lineSmoothStrength ?? 1) * 100));
 const [edgeLineSmoothRadius, setEdgeLineSmoothRadius] = useState(defaultSmartEdgeSmoothParams.lineSmoothRadius ?? 10);
+const [edgeLineFlatten, setEdgeLineFlatten] = useState(defaultSmartEdgeSmoothParams.lineSmoothFlatten ?? 0);
 
 // 消除锯齿参数
 const [aliasSoftWidth, setAliasSoftWidth] = useState(defaultAliasSmoothParams.softWidth ?? 2);
@@ -571,7 +572,8 @@ useEffect(() => {
           if (typeof ap.values.edgeSmoothMode === 'string') setEdgeSmoothMode(ap.values.edgeSmoothMode === 'line' ? 'line' : 'edge');
           if (typeof ap.values.edgeMedianRadius === 'number') setEdgeMedianRadius(Math.max(10, Math.min(30, Math.round(ap.values.edgeMedianRadius))));
           if (typeof ap.values.edgeLineStrength === 'number') setEdgeLineStrength(ap.values.edgeLineStrength);
-          if (typeof ap.values.edgeLineSmoothRadius === 'number') setEdgeLineSmoothRadius(Math.max(3, Math.min(12, Math.round(ap.values.edgeLineSmoothRadius))));
+          if (typeof ap.values.edgeLineSmoothRadius === 'number') setEdgeLineSmoothRadius(Math.max(3, Math.min(9, Math.round(ap.values.edgeLineSmoothRadius))));
+          if (typeof (ap.values as any).edgeLineFlatten === 'number') setEdgeLineFlatten(Math.max(0, Math.min(700, Math.round((ap.values as any).edgeLineFlatten))));
           if (typeof ap.values.aliasSoftWidth === 'number') setAliasSoftWidth(Math.max(0.5, Math.min(2, ap.values.aliasSoftWidth)));
         }
       }
@@ -611,6 +613,7 @@ useEffect(() => {
         edgeMedianRadius,
         edgeLineStrength,
         edgeLineSmoothRadius,
+        edgeLineFlatten,
         aliasSoftWidth,
       },
     },
@@ -638,6 +641,7 @@ useEffect(() => {
   edgeMedianRadius,
   edgeLineStrength,
   edgeLineSmoothRadius,
+  edgeLineFlatten,
   aliasSoftWidth,
 ]);
 
@@ -721,6 +725,7 @@ useEffect(() => {
       setEdgeMedianRadius(defaultSmartEdgeSmoothParams.edgeMedianRadius ?? 20);
       setEdgeLineStrength(Math.round((defaultSmartEdgeSmoothParams.lineSmoothStrength ?? 1) * 100));
       setEdgeLineSmoothRadius(defaultSmartEdgeSmoothParams.lineSmoothRadius ?? 10);
+      setEdgeLineFlatten(defaultSmartEdgeSmoothParams.lineSmoothFlatten ?? 0);
       // 3.5) 消除锯齿参数复位
       setAliasSoftWidth(defaultAliasSmoothParams.softWidth ?? 2);
       // 4) 关闭可见性面板
@@ -1478,8 +1483,19 @@ const handleEdgeLineSmoothRadiusChange = (value: number) => {
 
 const handleEdgeLineSmoothRadiusNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
   const value = parseInt(event.target.value, 10);
-  if (!isNaN(value) && value >= 3 && value <= 12) {
+  if (!isNaN(value) && value >= 3 && value <= 9) {
     setEdgeLineSmoothRadius(value);
+  }
+};
+
+const handleEdgeLineFlattenChange = (value: number) => {
+  setEdgeLineFlatten(value);
+};
+
+const handleEdgeLineFlattenNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const value = parseInt(event.target.value, 10);
+  if (!isNaN(value) && value >= 0 && value <= 700) {
+    setEdgeLineFlatten(value);
   }
 };
 
@@ -2316,7 +2332,7 @@ const handleSmartEdgeSmooth = async () => {
           // 步骤3：用智能边缘平滑算法处理像素数据
           // 注意：传递完整的像素数据而不是选区像素数据，因为算法需要邻域信息
           // 仅主线条模式（line）已重构为纯像素算法（有符号距离场 SDF 高斯平滑，
-          // 见 lineSmoothProcessor.ts）；参数精简为：平滑力度(默认100%) + 平滑范围(默认8px)
+          // 见 lineSmoothProcessor.ts）；参数为：平滑力度(默认100%) + 轮廓平滑(默认8px) + 宽度拉平(默认0=关)
           const processedPixels = await processSmartEdgeSmooth(
             prePixelResult.fullPixelData.buffer, 
             fullSelectionMask.buffer, 
@@ -2325,7 +2341,8 @@ const handleSmartEdgeSmooth = async () => {
               mode: isLineMode ? 'line' : 'edge',
               edgeMedianRadius: edgeMedianRadius,
               lineSmoothStrength: edgeLineStrength / 100,
-              lineSmoothRadius: edgeLineSmoothRadius
+              lineSmoothRadius: edgeLineSmoothRadius,
+              lineSmoothFlatten: edgeLineFlatten
             },
             isBackgroundLayer,
             isLineMode ? undefined : { documentID: doc.id, layerID: layer.id }
@@ -2880,7 +2897,8 @@ const SLIDER_DRAG_CONFIGS = {
   highFreqRange:               { min: 1,   max: 10,  step: 0.5 },
   edgeMedianRadius:            { min: 10,  max: 30,  step: 1   },
   edgeLineStrength:            { min: 0,   max: 100, step: 1   },
-  edgeLineSmoothRadius:        { min: 3,   max: 12,  step: 1   },
+  edgeLineSmoothRadius:        { min: 3,   max: 9,   step: 1   },
+  edgeLineFlatten:             { min: 0,   max: 700, step: 50  },
   aliasSoftWidth:              { min: 0.5, max: 2,   step: 0.5 },
   contrastReductionIntensity:           { min: 1,   max: 10,  step: 0.5 },
   specialWoodcutLevels:        { min: 2,   max: 16,  step: 1   },
@@ -2903,6 +2921,7 @@ const { dragTarget: sliderDragTarget, onLabelMouseDown: onSliderLabelMouseDown }
       case 'edgeMedianRadius': handleEdgeMedianRadiusChange(value); break;
       case 'edgeLineStrength': handleEdgeLineStrengthChange(value); break;
       case 'edgeLineSmoothRadius': handleEdgeLineSmoothRadiusChange(value); break;
+      case 'edgeLineFlatten': handleEdgeLineFlattenChange(value); break;
       case 'aliasSoftWidth': handleAliasSoftWidthChange(value); break;
       case 'contrastReductionIntensity': handleContrastReductionIntensityChange(value); break;
       case 'specialWoodcutLevels': handleSpecialWoodcutLevelsChange(value); break;
@@ -3052,10 +3071,19 @@ const renderEdgeProcessingContent = () => (
           </div>
 
           <div className="row-between slider-row">
-            <div className={sliderLabelClass('edgeLineSmoothRadius', 'label-drag label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeLineSmoothRadius', edgeLineSmoothRadius)} title={helpTexts.adjustment.edgeLineRange}>平滑范围</div>
-            <RangeSlider min={3} max={12} step={1} value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusChange} className="slider-track" />
+            <div className={sliderLabelClass('edgeLineSmoothRadius', 'label-drag label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeLineSmoothRadius', edgeLineSmoothRadius)} title={helpTexts.adjustment.edgeLineRange}>轮廓平滑</div>
+            <RangeSlider min={3} max={9} step={1} value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusChange} className="slider-track" />
             <div className="row-start">
-              <div className="num-input-row"><input type="number" min="3" max="12" step="1" value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusNumberChange} /></div>
+              <div className="num-input-row"><input type="number" min="3" max="9" step="1" value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusNumberChange} /></div>
+              <div className="num-unit">px</div>
+            </div>
+          </div>
+
+          <div className="row-between slider-row">
+            <div className={sliderLabelClass('edgeLineFlatten', 'label-drag label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeLineFlatten', edgeLineFlatten)} title={helpTexts.adjustment.edgeLineFlatten}>宽度拉平</div>
+            <RangeSlider min={0} max={700} step={50} value={edgeLineFlatten} onChange={handleEdgeLineFlattenChange} className="slider-track" />
+            <div className="row-start">
+              <div className="num-input-row"><input type="number" min="0" max="700" step="50" value={edgeLineFlatten} onChange={handleEdgeLineFlattenNumberChange} /></div>
               <div className="num-unit">px</div>
             </div>
           </div>
