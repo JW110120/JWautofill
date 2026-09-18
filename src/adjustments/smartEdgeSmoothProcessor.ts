@@ -395,23 +395,11 @@ export async function processSmartEdgeSmooth(
   const { width, height } = dimensions;
   const pixelCount = width * height;
 
-  // selectionMaskRaw 可能是 0~255 的羽化值或透明度选区值。
-  // 为避免“半透明选区几乎没效果”（值会被重复当成权重衰减），这里统一转成二值选区：
-  // 只要 >0 就当作“在选区内”，值固定为 255。
-  const selectionMask = new Uint8Array(pixelCount);
-  for (let i = 0; i < pixelCount; i++) {
-    selectionMask[i] = (selectionMaskRaw[i] || 0) > 0 ? 255 : 0;
-  }
-
-  const outputData = new Uint8Array(pixelData.length);
-  outputData.set(pixelData);
-
-  const sel = computeSelectionBounds(selectionMask, width, height);
-  if (sel.maxX < 0) return outputData.buffer;
-
   const mode = params.mode || 'edge';
 
-  // 「仅主线条」：整体转发给 lineSmoothProcessor，本文件不再参与。
+  // 「仅主线条」：整体转发给 lineSmoothProcessor（它自带选区二值化与窗口化），本文件不再参与。
+  // 必须先分派：下面那三段（二值化整张选区掩码 / 拷贝整图输出缓冲 / 扫描选区包围盒）
+  // 都是「仅色块边界」才需要的全图开销，放在这里会让 line 模式白白多跑 2~3 遍全图。
   // 面板只暴露两个参数：平滑力度（默认 100%）、平滑范围（默认 8px）。
   if (mode === 'line') {
     const lineSmoothStrength = clamp01(params.lineSmoothStrength ?? 1);
@@ -426,6 +414,21 @@ export async function processSmartEdgeSmooth(
       }
     );
   }
+
+  // ================= 以下仅「仅色块边界」使用 =================
+  // selectionMaskRaw 可能是 0~255 的羽化值或透明度选区值。
+  // 为避免“半透明选区几乎没效果”（值会被重复当成权重衰减），这里统一转成二值选区：
+  // 只要 >0 就当作“在选区内”，值固定为 255。
+  const selectionMask = new Uint8Array(pixelCount);
+  for (let i = 0; i < pixelCount; i++) {
+    selectionMask[i] = (selectionMaskRaw[i] || 0) > 0 ? 255 : 0;
+  }
+
+  const outputData = new Uint8Array(pixelData.length);
+  outputData.set(pixelData);
+
+  const sel = computeSelectionBounds(selectionMask, width, height);
+  if (sel.maxX < 0) return outputData.buffer;
 
   // 以下是「仅色块边界」：处理区域与渐隐宽度只由中间值半径决定
   const edgeMedianRadius = clampInt(Math.round(params.edgeMedianRadius ?? 16), 10, 30);
