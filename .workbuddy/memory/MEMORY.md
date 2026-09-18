@@ -92,5 +92,15 @@
   旧的 `withBg`（保底下对齐）已整体删除，由众对齐取代；`processAlphaAlign` 现在只有 `(…, isBg, direction)` 五个参数。
 - edge 模式参数=mode/edgeMedianRadius/lineSmoothStrength/lineSmoothRadius；toggles.preserveDetail 与 highFrequencyEnhancer.intensity 是别的功能同名物，勿误删。
 
+## 用户文案（src/constants/helpTexts.ts）
+- **读者 = 精通 PS 的画师**：羽化、不透明度、通道、蒙版、中间值、混合模式、alpha **一律不解释**（解释了反而像外行）；
+  要改的只有「PS 范围之外的词」：邻域、连通块、直方图、归一化、颜色传播源、高频/低频、事件驱动、全局键盘钩子。
+- **语气 = 说明文，不是教程**：禁「一句话：」「解决什么问题：」「你可以」「不用自己试」这类教程腔与第二人称；
+  补主语是补「插件 / 该值 / 选区」等语法主语，且**仅在易歧义处补**。大白话＝不用生僻词 ≠ 口语化。
+- **改法 = 手术式修订**：只动真有问题的条目，合格句子逐字保留（曾因 117/117 全改被整体回退）；
+  动笔前先读源码核实语义（如 `blockGradient` 实为"每块填单一颜色"，原文"质心+归一化映射"会让人理解错）。
+- 验证：key 集合/顺序 vs `git show HEAD:` 比对 + node `ts.transpileModule` 实跑导出 + 术语黑名单 grep。
+- ⚠️ `git checkout .` 会连 `.workbuddy/memory/` 一起回退。
+
 ## 守护进程
 - C#/.NET8 daemon(native/HotkeyDaemon/Program.cs)：WH_KEYBOARD_LL 独立线程，钩子线程严禁阻塞 I/O，焦点闸门 IsPhotoshopForeground 否则放行。WS 127.0.0.1:18923。冻结三形态与 ps1 七步见技能 windows-keyboard-device-reset；改 ps1 后同步 dist/。shell.openPath 受 manifest 扩展名白名单管控。
