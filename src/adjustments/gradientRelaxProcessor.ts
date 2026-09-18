@@ -339,7 +339,12 @@ export async function processGradientRelax(
       const supportFactor = (ch === 3 ? (supportAlpha255[i] || 0) : (supportColor255[i] || 0)) / 255;
       let k = kBase * supportFactor;
       const p = i * 4;
-      if (hasAlpha && ch !== 3) k *= alphaToColorWeight01(pixels[p + 3] || 0);
+      const a0 = pixels[p + 3] || 0;
+      // 写回只作用于原本 alpha>0 的像素：alpha=0 的像素整像素不动。
+      // 负值时该 alpha 模糊分支尤其依赖这条约束 —— alpha=0 的像素其 RGB 已被预乘清零，
+      // 一旦被摊上邻居的 alpha，反预乘后就是一圈半透明黑边（负值时的暗色光环）。
+      if (hasAlpha && a0 === 0) continue;
+      if (hasAlpha && ch !== 3) k *= alphaToColorWeight01(a0);
       if (k <= 0) continue;
 
       const mn = minCh[i];
@@ -351,7 +356,6 @@ export async function processGradientRelax(
         const edge = smootherstep01(clamp01(range / 64));
         const kA = k * edge;
         if (kA > 0) {
-          const a0 = pixels[p + 3] || 0;
           const ab = blurAlpha[i] || 0;
           out[p + 3] = Math.round(a0 * (1 - kA) + ab * kA);
         }
@@ -369,6 +373,17 @@ export async function processGradientRelax(
   if (hasAlpha) {
     for (let i = 0; i < width * height; i++) {
       const p = i * 4;
+      const a0 = pixels[p + 3] || 0;
+      // 两类像素整像素原样还原，写回不碰它们：
+      //   · 原本 alpha=0 的像素（写回只影响 alpha>0 的像素，选区内也一样）；
+      //   · 选区外的像素（从未被任何分支改写，避免预乘→反预乘往返的 ±1 舍入漂移）。
+      if (a0 === 0 || (selectionMask[i] || 0) === 0) {
+        out[p] = pixels[p] || 0;
+        out[p + 1] = pixels[p + 1] || 0;
+        out[p + 2] = pixels[p + 2] || 0;
+        out[p + 3] = pixels[p + 3] || 0;
+        continue;
+      }
       const a = out[p + 3] || 0;
       if (a <= 1) {
         out[p] = 0;

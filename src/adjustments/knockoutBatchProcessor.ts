@@ -1,5 +1,5 @@
 /**
- * 扣白 / 扣黑 —— batchPlay 版（替代原像素级 knockoutProcessor，原算法弃用）。
+ * 扣除纯白 / 扣除纯黑 —— batchPlay 版（替代原像素级 knockoutProcessor，原算法弃用）。
  *
  * 思路来源（用户手动验证）：
  *   图层 X 与纯白底合并得 Y（Y = X·a + 白·(1−a)）。
@@ -8,17 +8,17 @@
  *   → 复制 P 为 N 份并合并 → alpha 按 1−(1−a)^N 增强，得到近似 X 的图层。
  *
  * 数学说明（为什么能“还原”）：
- *   · 扣白：Y 上越接近背景（白）的像素 alpha 越低，Delete 亮部后
+ *   · 扣除纯白：Y 上越接近背景（白）的像素 alpha 越低，Delete 亮部后
  *     alpha = 1 − luma(Y)。复制 N 份合并后 alpha = 1 − luma(Y)^N，
  *     N 足够大时该图层放在白底上的视觉 ≈ 原 Y（≈ X 在白底上的视觉）。
- * *   · 扣黑：Invert → 载入亮度选区 → Clear → 复制 N 份合并（增强 alpha，得到
+ * *   · 扣除纯黑：Invert → 载入亮度选区 → Clear → 复制 N 份合并（增强 alpha，得到
  *     可靠的内容/背景遮罩）→ Invert 回来。关键点：反色往返会把 straight 图层
  *     “解除预乘”——内容图层 X=(x,a) 经往返后变成 (x,1)，放在黑底上观感是
  *     x（而非原 X 在黑底上的 x·a），故明显偏亮。因此最后用处理前抓取的
  *     预乘值 rgb·(alpha/255) 覆盖 RGB、遮罩内 alpha 置 255，使 Z 在黑底上的
  *     观感 == 原图层在黑底上的观感（严格相等，误差 0）。N 动态计算(clamp[3,40])
  *     仅为保证内容遮罩可靠，不影响黑底观感。
- *   · 扣白：载入亮度选区 → Clear → 复制 N 份合并。N 至少 7 份（用户验证），
+ *   · 扣除纯白：载入亮度选区 → Clear → 复制 N 份合并。N 至少 7 份（用户验证），
  *     保证合并后 alpha ≥ 99.5%，白底观感误差 < 1/255。
  *
  * 实现（均等效用户手动操作）：
@@ -129,7 +129,7 @@ async function duplicateAndMergeDown(n: number, startLayer: any) {
 
 /**
  * 抓取图层每个像素的「预乘 RGB」= rgb · (alpha/255)。
- * 这就是该像素放在纯黑底上的观感（黑底合成值），也是扣黑结果在黑底上
+ * 这就是该像素放在纯黑底上的观感（黑底合成值），也是扣除纯黑结果在黑底上
  * 必须还原的目标值。getPixels 返回的是 straight(alpha 未预乘) 数据，
  * 故此处手动乘以 alpha 得到预乘值。
  */
@@ -238,9 +238,9 @@ async function applyPremultiplied(layer: any, cap: CapturedPremult): Promise<voi
 }
 
 /**
- * 执行扣白 / 扣黑（batchPlay 版）。
- * 扣白：载入亮度选区 → Clear → 复制 N 份合并。
- * 扣黑：Invert → (同上) → Invert。N 动态计算（内容暗时自动增大）。
+ * 执行扣除纯白 / 扣除纯黑（batchPlay 版）。
+ * 扣除纯白：载入亮度选区 → Clear → 复制 N 份合并。
+ * 扣除纯黑：Invert → (同上) → Invert。N 动态计算（内容暗时自动增大）。
  * 调用方须保证：普通像素图层、已处于 executeAsModal 作用域。
  * 整段操作通过 doc.suspendHistory 合并为【一条】历史记录（反色/载入选区/
  * Clear/复制合并/像素写回全部归入同一历史态，不再产生一长串历史项）。
@@ -254,7 +254,7 @@ export async function runKnockoutBatch(mode: KnockoutBatchMode): Promise<void> {
   if (!layer) {
     throw new Error('未找到活动图层，请先选中一个普通像素图层（不支持背景图层）。');
   }
-  const historyName = mode === 'white' ? '扣白' : '扣黑';
+  const historyName = mode === 'white' ? '扣除纯白' : '扣除纯黑';
 
   // 用 suspendHistory 把整段操作（反色 / 载入选区 / Clear / 复制合并 / 像素写回）
   // 合并成【一条】历史记录，避免生成一长串历史项。suspendHistory 本身是
@@ -262,21 +262,21 @@ export async function runKnockoutBatch(mode: KnockoutBatchMode): Promise<void> {
   await doc.suspendHistory(async () => {
     const origName = layer.name;
 
-    // 扣黑：处理前先抓取原图预乘值（黑底观感），用于事后还原，
+    // 扣除纯黑：处理前先抓取原图预乘值（黑底观感），用于事后还原，
     // 抵消反色往返带来的“解除预乘 → 黑底偏亮”问题。
     let premultCap: CapturedPremult | null = null;
     if (mode === 'black') {
       premultCap = await capturePremultiplied(layer);
-      // 反色：把“黑底合成”变成“反色内容的白底合成”，复用扣白流程
+      // 反色：把“黑底合成”变成“反色内容的白底合成”，复用扣除纯白流程
       await invertLayer();
     }
 
     // 1) 载入 RGB 复合通道亮度选区（等效 Ctrl+点击）
     await loadRGBChannelSelection();
 
-    // 2) 按内容亮度动态估算复制份数：扣白至少 7 份（用户验证），扣黑至少 3 份
+    // 2) 按内容亮度动态估算复制份数：扣除纯白至少 7 份（用户验证），扣除纯黑至少 3 份
     const copies = await estimateCopies(mode === 'white' ? 7 : 3);
-    console.log(`🎯 扣${mode === 'white' ? '白' : '黑'}: 复制份数 N = ${copies}`);
+    console.log(`🎯 ${mode === 'white' ? '扣除纯白' : '扣除纯黑'}: 复制份数 N = ${copies}`);
 
     // 3) Delete 清除亮部 → 内容保留、背景透明
     await clearSelection();

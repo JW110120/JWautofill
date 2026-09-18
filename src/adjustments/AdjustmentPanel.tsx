@@ -14,7 +14,7 @@ import { processGradientRelax } from './gradientRelaxProcessor';
 import { processSpecialSharpen } from './specialSharpenProcessor';
 import { processSpecialWoodcut } from './specialWoodcutProcessor';
 import { processLineEnhancement } from './lineProcessing';
-import { processAlphaAlign } from './alphaAlignProcessor';
+import { processAlphaAlign, processAlphaModeAlign } from './alphaAlignProcessor';
 import { processHighFrequencyEnhancement } from './highFrequencyEnhancer';
 import { processSmartEdgeSmooth, defaultSmartEdgeSmoothParams } from './smartEdgeSmoothProcessor';
 import { checkEditingState, processPixelData, applyProcessedPixels, writeFullPixelsToLayer } from './pixelDataProcessor';
@@ -2041,18 +2041,15 @@ const handleLineEnhancement = async () => {
 };
 
 // alpha对齐功能：统一半透明笔刷交叉点的不透明度
-// withBg=true 时是"保底下对齐"（原"背景保护"）：处理"低透明度背景（如 alpha=50 的色块）上画线"的场景——
-// 参照估计排除背景水平（环带中位数），只以线条主体水平为参照，交叉凸起拉回线水平，
-// 背景色块不透明度保持不变；自动识别并保护普通线条像素（非交叉区线 core 不修改）；
-// 参照须比像素低至少 BRIGHT_DELTA（只修明显凸起，保护线自身）。
 // direction='up' 时是"alpha上对齐"：检测线条上比主体偏淡/被削弱的像素（淡斑、断点），
 // 以周围线条主体水平为参照拉高，让线条更均匀（与下对齐对称，只增不减）。
+// 局部对齐只修"局部凸起/局部坑"，不改动整片的平台（叠画带这种"整片偏高"由 alpha众对齐处理）。
 // I/O 模式参考 handleGradientModify：整文档 getPixels → 算法 → 整文档 putPixels，
 // 选区外像素由掩码系数 (mask/255) 混合保留。环形邻域参考所有画过的线条像素（不受选区限制），
 // 因此小选区也能引用选区外的线条找到"单线水平"真正统一交叉点。
-const handleAlphaAlign = async (withBg: boolean = false, direction: 'down' | 'up' = 'down') => {
+const handleAlphaAlign = async (direction: 'down' | 'up' = 'down') => {
   if (!handleLicenseBeforeAction()) return;
-  const name = withBg ? '保底下对齐' : (direction === 'up' ? 'alpha上对齐' : 'alpha下对齐');
+  const name = direction === 'up' ? 'alpha上对齐' : 'alpha下对齐';
   try {
     const { executeAsModal } = core;
 
@@ -2110,11 +2107,67 @@ const handleAlphaAlign = async (withBg: boolean = false, direction: 'down' | 'up
           { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
           {},
           false,
-          withBg, // 保底下对齐：参照排除低透明度背景，只以线条主体水平为参照
           direction // 上对齐：把比主体偏淡的像素拉高到线条主体水平
         );
 
         // 写回：按选区羽化系数混合，选区内写入计算结果，选区外保留原像素
+        await applyProcessedPixels(processedPixels, pixelResult, name);
+      });
+    });
+    giveFocusBackToPS();
+  } catch (error) {
+    const msg = typeof error === 'string' ? error : (error && (error.message || (error as any).toString?.() || '未知错误'));
+    console.error('❌ ' + name + '处理失败:', error);
+    await core.showAlert({ message: formatFailMsg(name, msg) });
+  }
+};
+
+// alpha众对齐：把选区内所有 alpha>0 的像素统一到"出现次数最多的那个 alpha"（众数）。
+// 用于整片内容的不透明度统一化：同一支半透明笔刷反复叠画后各处 alpha 参差不齐，
+// 或色块内部有噪声，用它一次性把整片拉到同一个不透明度（基准 = 选区直方图众数）。
+// 与上/下对齐的"局部"参照不同，这里基准由整个选区唯一确定 —— 天然空间一致，
+// 不会出现"同片区域分别对齐到不同层级"的斑驳/条纹，也不会只改一部分。
+const handleAlphaModeAlign = async () => {
+  if (!handleLicenseBeforeAction()) return;
+  const name = 'alpha众对齐';
+  try {
+    const { executeAsModal } = core;
+
+    await runCommand(name, async () => {
+      const editingState = await checkEditingState();
+      if (!editingState.isValid) return;
+      const { layer, isBackgroundLayer } = editingState;
+      if (isBackgroundLayer) {
+        await core.showAlert({ message: name + '仅支持非背景的普通像素图层，请选择像素图层后再使用。' });
+        return;
+      }
+
+      const selectionBounds = await getSelectionData();
+      if (!selectionBounds) {
+        await core.showAlert({ message: '获取文档信息失败' });
+        return;
+      }
+      console.log('✅ [' + name + '] 选区像素数=' + (selectionBounds.selectionDocIndices ? selectionBounds.selectionDocIndices.size : -1) +
+        ' 文档=' + selectionBounds.docWidth + 'x' + selectionBounds.docHeight);
+
+      await runWithTemporaryUnlock(async () => {
+        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+
+        const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
+        let maskIndex = 0;
+        for (let docIndex of pixelResult.selectionIndices) {
+          fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
+          maskIndex++;
+        }
+
+        const processedPixels = await processAlphaModeAlign(
+          pixelResult.fullPixelData.buffer,
+          fullSelectionMask.buffer,
+          { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
+          {},
+          false
+        );
+
         await applyProcessedPixels(processedPixels, pixelResult, name);
       });
     });
@@ -2902,22 +2955,6 @@ const renderEdgeProcessingContent = () => (
 
         </>
       )}
-
-    <div className="divider"></div>
-
-    {/* 2×2 按钮组：四颗统一 .action-button-quad(92px) 保证左右两列严格对齐；
-        仅第一行底部留 10px 与下一行分隔，第二行不加 */}
-    <div className="row-between">
-      <div role="button" tabIndex={0} className="action-button-quad" onClick={() => handleAlphaAlign(false, 'down')} title={helpTexts.adjustment.alphaDown}>alpha下对齐</div>
-
-      <div role="button" tabIndex={0} className="action-button-quad" onClick={() => handleAlphaAlign(false, 'up')} title={helpTexts.adjustment.alphaUp}>alpha上对齐</div>
-    </div>
-
-    <div className="row-between">
-      <div role="button" tabIndex={0} className="action-button-quad" onClick={() => handleAlphaAlign(true, 'down')} title={helpTexts.adjustment.alphaBgDown}>保底下对齐</div>
-
-      <div role="button" tabIndex={0} className="action-button-quad" onClick={handleLineEnhancement} title={helpTexts.adjustment.lineEnhance}>线条加黑</div>
-    </div>
   </div>
 );
 
@@ -3164,36 +3201,36 @@ const DashedDivider: React.FC = () => {
   );
 };
 
-// 扣白 / 扣黑（batchPlay 版，替代原像素级算法）：
+// 扣除纯白 / 扣除纯黑（batchPlay 版，替代原像素级算法）：
 // 复刻手动验证的方案 —— 载入 RGB 复合通道亮度选区（Ctrl+点击）→ Delete 清除亮部
-// → 复制 N 份合并增强 alpha。扣黑用反色法（Invert→扣白流程→Invert）纠正“偏暗”，
+// → 复制 N 份合并增强 alpha。扣除纯黑用反色法（Invert→扣除纯白流程→Invert）纠正“偏暗”，
 // N 按内容亮度动态计算。仅普通像素图层可用；背景图层直接警告并终止。
 const handleKnockout = async (mode: 'white' | 'black') => {
   if (!handleLicenseBeforeAction()) return;
-  const label = mode === 'white' ? '白' : '黑';
+  const label = mode === 'white' ? '扣除纯白' : '扣除纯黑';
   try {
     const { executeAsModal } = core;
-    await runCommand(mode === 'white' ? '扣白' : '扣黑', async () => {
+    await runCommand(label, async () => {
       const editingState = await checkEditingState();
       if (!editingState.isValid) return;
       const { isBackgroundLayer } = editingState;
 
       // 仅普通像素图层可用，背景图层弹出警告并终止
       if (isBackgroundLayer) {
-        await core.showAlert({ message: `扣${label}功能仅支持普通像素图层，不能用于背景图层。` });
+        await core.showAlert({ message: `${label}功能仅支持普通像素图层，不能用于背景图层。` });
         return;
       }
 
       await runWithTemporaryUnlock(async () => {
-        // batchPlay 原生流程：反色(仅扣黑) → 载入亮度选区 → Clear → 复制N份合并 → 反色(仅扣黑)
+        // batchPlay 原生流程：反色(仅扣除纯黑) → 载入亮度选区 → Clear → 复制N份合并 → 反色(仅扣除纯黑)
         await runKnockoutBatch(mode);
       });
     });
     giveFocusBackToPS();
   } catch (error) {
     const msg = typeof error === 'string' ? error : (error && (error.message || (error as any).toString?.() || '未知错误'));
-    console.error(`❌ 扣${label}处理失败:`, error);
-    try { await core.showAlert({ message: formatFailMsg(`扣${label}`, msg) }); } catch {}
+    console.error(`❌ ${label}处理失败:`, error);
+    try { await core.showAlert({ message: formatFailMsg(label, msg) }); } catch {}
   }
 };
 
@@ -3319,8 +3356,25 @@ const renderQuickActionContent = () => (
     <div className="divider"></div>
 
     <div className="row-between">
-      <div role="button" tabIndex={0} className="action-button-2" onClick={handleKnockoutWhite} title={helpTexts.adjustment.knockoutWhite}>扣白</div>
-      <div role="button" tabIndex={0} className="action-button-2" onClick={handleKnockoutBlack} title={helpTexts.adjustment.knockoutBlack}>扣黑</div>
+      <div role="button" tabIndex={0} className="action-button-4" onClick={handleKnockoutWhite} title={helpTexts.adjustment.knockoutWhite}>扣除纯白</div>
+      <div role="button" tabIndex={0} className="action-button-4" onClick={handleKnockoutBlack} title={helpTexts.adjustment.knockoutBlack}>扣除纯黑</div>
+    </div>
+
+    <div className="divider"></div>
+
+    {/* 2×2 按钮组（alpha 对齐 / 线条加黑）：整块作为一个子分区挂在快捷操作最下方。
+        四颗统一 .action-button-quad(92px) 保证左右两列严格对齐；
+        仅第一行底部留 10px 与下一行分隔，第二行不加 */}
+    <div className="row-between">
+      <div role="button" tabIndex={0} className="action-button-quad" onClick={() => handleAlphaAlign('down')} title={helpTexts.adjustment.alphaDown}>alpha下对齐</div>
+
+      <div role="button" tabIndex={0} className="action-button-quad" onClick={() => handleAlphaAlign('up')} title={helpTexts.adjustment.alphaUp}>alpha上对齐</div>
+    </div>
+
+    <div className="row-between">
+      <div role="button" tabIndex={0} className="action-button-quad" onClick={handleAlphaModeAlign} title={helpTexts.adjustment.alphaMode}>alpha众对齐</div>
+
+      <div role="button" tabIndex={0} className="action-button-quad" onClick={handleLineEnhancement} title={helpTexts.adjustment.lineEnhance}>线条加黑</div>
     </div>
   </div>
 );

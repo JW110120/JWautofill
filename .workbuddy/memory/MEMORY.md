@@ -80,6 +80,16 @@
   对比减弱：`factor = (coeff/255)·(强度×0.07)·t/(1+t)`，`t = |亮度−块均值亮度| / max(σ_L,6)`；α 用同一 factor 但不乘 φ。
   **内置混合颜色带柔化（参数写死、不暴露 UI、无持久化）**：`φ = clamp(1 − (u−1.5τ)/4.5τ, 0, 1)`，只作用于 RGB。
 - lineSmoothProcessor(SDF)：全局量不被选区截断，选区只定写回范围；跨选区邻居用 effAlpha(内=平滑结果/外=原值)。任一环截断→选区边缘透明环；binaryOpen 全范围+越界跳过。
+- 梯度修改（gradientRelaxProcessor.ts）：写回**只影响原本 alpha>0 的像素**（通道循环统一 `if (hasAlpha && a0===0) continue`）；
+  末尾反预乘 pass 对「a=0 或选区外」像素整像素还原原始字节（预乘→反预乘往返有 ±1 漂移，只在真正改过的像素上做）。
+  负值 alpha 走 blurAlpha 邻域加权均值，a=0 被冻结 ⇒ 放缓只能**向内**摊，不回扩 alpha。
+- alpha对齐（alphaAlignProcessor.ts v5）：**局部多尺度环带参照 + 参照场窗口共识 + 众对齐**。
+  众对齐 = 选区内 alpha>0 直方图**众数**为基准，全部 alpha>0 像素对齐到它（天然无斑驳，"对齐彻底"的正解）。
+  三条铁律：①平坦判据必须用**绝对数**（`nearCount ≥ HIGH_CLUSTER_MIN(4)`）——占比判据会被远处另一层高值带飞；
+  ②**上对齐**必须加"本层邻域"护栏（`bandMax > a + BRIGHT_GAP` 的尺度直接跳过），**下对齐不能加**
+  （它往低处找"周围水平"，环带逸出到更暗底色层正是"把交叉凸起拉回周围"的语义）；
+  ③补判门槛 `REF_FILL_PROTECTED_DELTA = BRIGHT_GAP/2`，且补判对象仍须 `a ≥ MIN_ALPHA`（否则近透明边角被抬到主体水平、凭空放大轮廓）。
+  旧的 `withBg`（保底下对齐）已整体删除，由众对齐取代；`processAlphaAlign` 现在只有 `(…, isBg, direction)` 五个参数。
 - edge 模式参数=mode/edgeMedianRadius/lineSmoothStrength/lineSmoothRadius；toggles.preserveDetail 与 highFrequencyEnhancer.intensity 是别的功能同名物，勿误删。
 
 ## 守护进程

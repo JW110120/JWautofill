@@ -11,9 +11,13 @@ agent_created: true
 
 ## 铁律（踩过的坑）
 
-1. **本机 bash 缺 coreutils** — `ls`/`head`/`sed`/`grep`/`dirname` 全部 `command not found`，管道会静默返回空。
-   文件操作一律走 `node -e` 或 PowerShell 工具，**不要用 bash 管道**。
-2. **零依赖解码 PNG**：直接复制下面的解码器，不要 `npm i pngjs`（这个仓库的 node_modules 是 UXP 用的，别污染）。
+1. **bash 可用，但 `Edit` 不可信** — Git Bash 下 `ls`/`grep`/`head`/管道/`python - <<PY` 都正常
+   （2026-09-18 复测；早期"缺 coreutils"的结论已过时）。真正的坑是 **Edit 工具在本仓库经常"报成功但没落盘"**
+   （多点、多行修改尤其明显，本轮 3 次里中招 1 次）。**每次改完必须 `grep` 逐串复核**；
+   改动多时直接 `Write` 整文件重写，或用 Python 读改写（`assert old in s` 后再 `replace`，
+   写回统一 `newline='\n'`，本仓库行尾是 LF）。
+2. **解码 PNG**：Python 侧用 PIL（`C:\Users\Administrator\.workbuddy\binaries\python\versions\3.13.12\python.exe`，
+   已装 Pillow 12）；Node 侧直接复制下面的解码器，不要 `npm i pngjs`（这个仓库的 node_modules 是 UXP 用的，别污染）。
 3. **素材路径**：用户粘贴的截图在 `C:\Users\Administrator\.workbuddy\clipboard-images\clipboard-<ISO>-<hash>.png`，
    用 Glob 取最新的那个；不要凭文件名猜。
 4. ⚠️ **扫描网格上限必须等于实测数据最大值，不能外扩**。`max − end` 型指标（"是否单调""反转量"）
@@ -33,6 +37,35 @@ agent_created: true
    根本不用看它好看不好看。
 11. **否定一条实现路线时，要算出它对「目标之外」的影响**，别只讲道理。本项目否决 batchPlay 复制+合并路线时，
    除 alpha 通胀（可解析证明）外，还实测出「选区外灰值 100 会被抬亮 42–69 级」——比 alpha 更有说服力。
+
+## 算法级对拍：绕开 PS，直接跑 TS 源
+
+看截图只能看结果，定位不到"哪个像素被改成了什么"。算法类问题（斑驳 / 条纹 / 对齐不彻底 / 花屏）
+走这条闭环，`outputs/` 下已有可复用脚本（已 gitignore，仅本机）：
+
+1. `python outputs/aa_img.py dump <png> <out.raw> <meta.json>` —— PIL 解码成裸 RGBA。
+2. `node outputs/aa_run.cjs <src.raw> <w> <h> <mode>` —— **用 `typescript.transpileModule`
+   把 `src/adjustments/*.ts` 现场编译后 require 真函数**（保证与插件同源，不要手抄一份算法），
+   跑完输出裸 RGBA + 指标 + 关键 console 日志。
+3. `python outputs/aa_img.py comp <out.raw> <w> <h> <srcpng> <o.png> <scale>` —— 回合成垫纯白 PNG 肉眼看；
+   `python outputs/aa_diag.py down up` —— 定位"斑驳"像素，并打印局部区块的 `源 alpha / 结果 alpha` 对照表
+   （这是最有用的一步：能直接看出"相邻像素被拉到了不同层级"）。
+4. `python outputs/aa_compare.py` —— 出多面板 before/after 对比图
+   （PIL + `C:\Windows\Fonts\msyh.ttc` 可画中文标签）。
+
+⚠️ **先用用户给的截图复现**：本轮复现图与用户截图逐点一致后才开始改 —— 否则所有结论都是猜的。
+
+### 三个够用的度量（远好于"看起来还行"）
+- **一阶差分粗糙度** = `mean(|a(x,y) − a(x±1,y)|)`（alpha>0 像素，横/纵分开）。斑驳与条纹的直接代理量。
+- **3×3 中位数离群点占比** = `|a − median(3×3)| ≥ 20` 的比例。专抓棋盘格式斑驳。
+- **直方图不同值数** + **输出均值 vs 选区众数**：一眼判断"对齐是否彻底、落到了哪一层"。
+
+### 逐像素参照类算法的通病（本项目 alpha 对齐 v5 踩到）
+逐像素**独立**估计参照 → 邻域内相邻像素选中不同层级（实测 73 / 157 交替）→ 斑驳；
+沿笔触方向连成线就是条纹；大量像素判为"不改"→ 对齐不彻底。
+**修法不是再调阈值，而是给参照场加一次"窗口共识"**：窗口内出现次数达标的参照取极值
+（下对齐取最低、上对齐取下中位数），并对"没拿到参照"的像素按落差补判。
+补判门槛取 `参照量程/2` 这类**有语义的锚点**，不要选扫描出来的数值最优 —— 那是在过拟合单张素材。
 
 ## 标准流程
 
@@ -114,6 +147,16 @@ RGB 用 `1 − w·k·phi`，alpha 用 `1 − w·k`（不乘 phi）。功能上�
   背景压缩从 24% 掉到 5%，且强度随选区均值在色阶中的位置漂移 —— 端点固定的斜坡不能照搬进「偏离归一化」的公式。
 - **柔化与选择比是对冲的**：把「偏离大的像素」保留回来，正是差值驱动机制的产出，二者不可兼得。
   本图实测线条带保留率从 51%（无柔化）→ 61%（λ=1），选择比 2.04 → 1.62。
+
+## 已知结论（本项目 · alpha 对齐）
+
+`src/adjustments/alphaAlignProcessor.ts` v5：局部多尺度环带参照 + **参照场窗口共识**
+（`REF_CONSENSUS_RADIUS=6`、`REF_CONSENSUS_SUPPORT=3`、补判门槛 `REF_FILL_PROTECTED_DELTA=BRIGHT_GAP/2`）
++ 新增**众对齐**（选区内 alpha>0 直方图众数，全部对齐到它）。
+两处"串层"修复值得记住：①平坦判据必须用**绝对数**（`nearCount ≥ 4`），占比判据会被远处另一层的高值带飞；
+②上对齐必须加"本层邻域"护栏（`bandMax > a + BRIGHT_GAP` 的尺度跳过），下对齐不能加（它往低处找"周围水平"）。
+实测（实验.png 全文档选区）：下对齐粗糙度 10.56/8.89 → 7.23/5.16、离群点 284 → 171；
+上对齐（12.44/9.79 → 12.01/9.09）不再恶化；众对齐粗糙度 0.000、不同值数 2。
 
 ## 三条标定铁律
 

@@ -1,35 +1,52 @@
-// alpha对齐 算法 v4 —— 多尺度环带参照 + 高端平台簇 + 中位数回退（无需手动切换粗细线模式）
+// alpha对齐 算法 v5 —— 参照场空间一致化；移除"保底下对齐"，新增 alpha众对齐
 //
-// 目标（与 v1 相同）：画师用半透明（带羽化）笔刷画线时，两笔交叉处会因不透明度叠加而
-// 形成一个较"深"（不透明度更高）的暗点。本算法把这种局部凸起的 alpha 拉回到周围线条的
-// 自然水平，使交叉点与周边自然衔接，几乎看不出不透明度异常提高。
+// 目标（与 v1 相同）：画师用半透明（带羽化）笔刷画线时，两笔交叉/叠画处会因不透明度
+// 叠加而形成一个较"深"（不透明度更高）的区域。本算法把这种局部凸起的 alpha 拉回到周围
+// 线条的自然水平，使叠加区与周边自然衔接，几乎看不出不透明度异常提高。
 //
-// v4 相对 v3 的改进（修复"细线差一口气/色块杂点无法统一化/线条斑驳"）：
+// ─────────────────────────────────────────────────────────────────────────
+// v5 相对 v4 的改动
+// ─────────────────────────────────────────────────────────────────────────
 //
-//  1. 多尺度环带参照（核心改动）：
-//     v3 只用 k4 + k112 两个固定尺度：软笔刷细线（core 仅 1~2px 宽）的环带 [4,7] 内
-//     采样到的大多是"羽化带"值（如 42），众数判据把参照算成 42 → 交叉中心被拉到过暗、
-//     单线 core 被误拉低（斑驳）；而细线场景 k112 大环带又采样不到线（cnt≈0）→ 卡死。
-//     v4 改为尺度序列 k = [1, 4, 14, 42, 112] 从内到外逐个尝试，用两个新判据：
-//       - "高端平台簇"：在 [minAlpha, alpha-peakThresh) 区间内，从高到低找第一个
-//         计数达标（≥max(5, 10%环带)）的值作为参照。软笔刷细线交叉中心（alpha 212）
-//         的 k1 环带里：羽化 42 有 18 个、core 150 有 8 个——从高到低先命中 150，
-//         而不再被 42 污染（v3 的众数=42 是错的）；
-//       - "自身平台拦截"：若环带 [alpha..255] 区间像素数 ≥ max(6, 15%环带)，
-//         说明该像素处于"不低于自身水平"的平台/渐变中（单线 core、线羽化、渐变），
-//         不是凸起 → 放大尺度再试；所有尺度都如此 → 不改。
-//         （这也顺带修复了 v3 中 k112 大环带被"线端羽化孤立值"污染、
-//          把单线 core 误拉低成斑驳的问题——孤立值环带 cnt 太小，直接被跳过。）
-//  2. 中位数回退：当所有尺度都找不到稳定平台（如色块内部 alpha 不均匀/渐变波动，
-//     v3 的"众数+占比"判据全部失败 → 杂点像素卡死、怎么点都无法统一化）时，
-//     用最大环带（k112）的 alpha 中位数作为参照——波动色块的中位数≈色块主体水平，
-//     杂点被正确拉回。
-//  3. 两遍处理（保留）：第一遍用原始 alpha 处理能判定的像素；第二遍对"第一遍未解决"
-//     的像素用"第一遍修改后的 alpha"重新判定——凸包区域被拉平后环带参照自然正确。
-//  4. 性能（保留）：快速筛选（8方向×2半径×4尺度≈64次采样）排除绝大多数普通线条像素；
-//     只有可疑像素进入完整分析；环带扫描直接遍历环形带像素（Chebyshev 带）。
+//  1. 参照场空间一致化（v5 核心修复，解决"斑驳与条纹/对齐不彻底"）：
+//     v1~v4 都是**逐像素独立**估计参照。对同一片连续区域，相邻像素因为"环带里正好
+//     混进另一层水平"的概率不同，会各自选中**不同的层级**（实测：同一条叠画带上
+//     相邻像素分别把参照判成浅色层 73 与笔画层 157），拉平后就成了 73/157 交替的
+//     棋盘 —— 视觉上即"斑驳"；沿笔触方向这种交替连成线就是"条纹"。
+//     另有大量像素被分析阶段判为"不改"，保留原值，于是"对齐不彻底"（实测下对齐
+//     只改了 35% 的像素）。
+//     v5 在所有参照算完后，对参照场做一次**窗口内出现次数达标的参照极值共识**：
+//       - 下对齐取窗口内"计数达标的最低参照"，上对齐取最高的；
+//       - 同一片区域的像素因此收敛到同一个层级；
+//       - 对"分析阶段没有拿到参照"的像素补判：若窗口共识层级与自身明显不同
+//         （下对齐：自身明显更高；上对齐：自身明显更低），说明它属于同一片区域
+//         却被漏判了，一并对齐 —— 修复"对齐不彻底"。
+//     这一步只作用于"参照/目标"，不引入任何新的空间滤波，因此不会糊掉自然软边。
 //
-// 其余语义与 v1 完全一致：
+//  2. 移除"保底下对齐"（withBg）：该模式已由新增的 **alpha众对齐** 取代
+//     （见 processAlphaModeAlign）。随之删除 BRIGHT_*_BG / BRIGHT_DELTA 及相关分支，
+//     非含背景路径的逻辑与 v4 完全一致。
+//
+//  3. 新增 alpha众对齐（processAlphaModeAlign）：统计选区内 alpha>0 像素的 alpha
+//     直方图，取**出现次数最多的 alpha（众数）**为基准，把所有 alpha>0 像素的 alpha
+//     统一到该值（RGB 不变）。这是"把整片内容统一到单一不透明度"的稳健做法 ——
+//     不存在逐像素参照选择，因此天然不会产生斑驳/条纹，也不会"只改一部分"。
+//
+//  ── 与 1 配套的三处"串层"修复（实测数据见各常量注释）──
+//  3a. 平坦判据改用**绝对数**（nearCount ≥ HIGH_CLUSTER_MIN），不再用占比：
+//      大环带里混进远处另一层的高值会让占比判据误判"非平坦"，把本层像素交给
+//      远处那一层处理（实测浅色层被抬到 118/157）。
+//  3b. 上对齐加"本层邻域"护栏（bandMax > a + BRIGHT_GAP 的尺度直接跳过）：
+//      上对齐的语义是"拉高到所在线条的主体水平"，参照必须来自同一条线附近；
+//      环带一旦跑出本层，采到的是别的层，不能当参照。下对齐不加此护栏——
+//      它往低处找"周围水平"，环带逸出到更暗的底色层正是"把交叉凸起拉回周围
+//      自然水平"的语义，且只降不升，没有带飞风险。
+//  3c. 补判（fill）越过"已受保护"像素：叠画带里会有孤立像素被误判成保护对象
+//      （实测残留 158/162/143），与窗口共识落差 ≥ REF_FILL_PROTECTED_DELTA 时
+//      一并对齐；补判对象仍要求 alpha ≥ MIN_ALPHA（MIN_ALPHA 以下视为残留，
+//      否则会把近乎透明的边角抬到主体水平、凭空放大轮廓）。
+//
+// 其余语义与 v4 完全一致：
 //   - 只处理"选区内 alpha > 0"的像素作为修改候选；只改 alpha，RGB 保持不变。
 //   - 环形邻域的参考像素是**所有画过的线条像素**（alpha ≥ MIN_ALPHA），不受选区限制，
 //     这样小选区也能引用选区外的线条找到"单线水平"，真正统一交叉点；
@@ -38,8 +55,8 @@
 //   - 选区边缘用 support 羽化；rate = strength（默认 1.0）把交叉点拉回单线水平。
 //
 // 说明：本函数只修改 alpha 通道，RGB 保持不变（图层存储的是 straight alpha，颜色
-//       不随不透明度改变）。
-//       返回的 out 数组与 layerPixelData 同尺寸；调用方按选区系数混合后再写回图层。
+//       不随不透明度改变）。返回的 out 数组与 layerPixelData 同尺寸；
+//       调用方按选区系数混合后再写回图层。
 
 type Bounds = { width: number; height: number };
 
@@ -49,7 +66,16 @@ export type AlphaAlignParams = {
   mode?: 'standard' | 'thick';
 };
 
+export type AlphaModeAlignParams = {
+  strength?: number; // 0~1，默认 1，整体缩放对齐比例
+};
+
 const clamp01 = (v: number) => (v < 0 ? 0 : (v > 1 ? 1 : v));
+
+const smootherstep01 = (t: number) => {
+  const x = Math.max(0, Math.min(1, t));
+  return x * x * x * (x * (x * 6 - 15) + 10);
+};
 
 // ---- 算法核心常量 ----
 const RING_WIDTH = 3;                  // 每个环形邻域的宽度（Chebyshev 带 [k, k+RING_WIDTH]）
@@ -86,12 +112,6 @@ const BRIGHT_CLUSTER_MIN_RATIO = 0.10; // 在 [minAlpha, alpha-peakThresh) 区�
                                        // 找第一个计数 ≥ max(5, 10%环带) 的值作为参照——
                                        // 软笔刷细线环带里羽化 42 数量多但比 core 150 暗，
                                        // 从高到低先命中 150，不被羽化带污染
-const BRIGHT_CLUSTER_MIN_RATIO_BG = 0.05; // "含背景"模式（withBg）的参照平台比例：
-                                       // cntHigh 是环带内 >med（背景水平）的"线上像素"数，
-                                       // 10% 对细线仍过大——软笔刷 4px 线 core 在环带里
-                                       // 只有 8~24 个像素，10%×cntHigh（如 8~11）会卡在
-                                       // 达标线之上，导致线 core 不被选中、羽化带当选，
-                                       // 把交叉区边缘线像素拉低。5% + 绝对数下限 5 兜住。
 const QUANTILE_MIN_COUNT = 128;        // 中位数回退所需的最小环带有效像素：所有尺度都无
                                        // 稳定平台时（色块内部 alpha 不均匀/渐变波动），
                                        // 用最大环带（k112）的 alpha 中位数作参照
@@ -105,12 +125,32 @@ const BRIGHT_GAP = 60;                 // 高端参照区间的宽度：参照�
                                        // 内找（线 core 位于环带高值区）。软笔刷线的羽化带
                                        // （如 8px 线的 42/73/109/138）是中低值，被排除在外，
                                        // 防止交叉外缘的线 core 像素被羽化值误拉过头
-const BRIGHT_DELTA = 10;               // "含背景"模式（withBg）的参照差距门槛：参照必须比
-                                       // alpha 低至少该值才修改——只修"明显凸起"的交叉叠加
-                                       // （交叉中心差 50+、十字臂/边缘过渡差 10+），避免把
-                                       // "线条自身 vs 另一条略不同 alpha 的线"误拉低
-                                       // （如 153 竖线 vs 145 横线差 8 < 10 不改；
-                                       // 线自身像素另有"平坦拦截"保护，这是第二道防线）
+
+// v5 参照场空间一致化参数
+const REF_CONSENSUS_RADIUS = 6;        // 共识窗口半径（方形窗口，单位像素）：
+                                       // 窗口越大越"整片统一"，越小越保守。
+                                       // 6 覆盖 ~13×13 范围，远大于斑驳的特征尺度（1~2px），
+                                       // 又小于线条交叉凸包的尺度（几十px），不会跨区域串层。
+const REF_CONSENSUS_SUPPORT = 3;       // 参照值在窗口内出现次数下限：达不到的视为孤立参照，
+                                       // 不作为共识依据（防止个别噪点把整片拉偏）
+const REF_CONSENSUS_FILL = true;       // 是否对"分析阶段没有拿到参照"的像素补判：
+                                       // 窗口共识层级与自身明显不同时一并对齐，
+                                       // 修复"对齐不彻底"（同一片区域只改了一部分）
+const REF_FILL_PROTECTED_DELTA = BRIGHT_GAP / 2; // (=30) 越过"已受保护"像素所需的落差门槛：
+                                       // 保护（flatAll）本意是"自然软边/自身平台不动"，
+                                       // 但大环带污染会让叠画带里的孤立像素被误判成保护对象
+                                       // （实测残留 158/162/143 等孤立点，在白底上就是斑驳）。
+                                       // 落差 ≥ 30 说明它属于"另一层"而不是本层的自然渐变
+                                       // —— 越过保护一并对齐。
+                                       // 实测定档：门槛 30 时下对齐的一阶差分粗糙度
+                                       // 从 v4 的 10.56/8.89 降到 7.23/5.16、离群点从 284 → 171；
+                                       // 放宽到 60 会漏掉落差 40~60 的残留（离群点回升到 271），
+                                       // 收紧到 20 收益已接近饱和且更易伤自然渐变。
+const REF_CONSENSUS_UP_USE_MAX = false; // 上对齐的共识取值规则：
+                                       // false（默认）= 取窗口内参照的**下中位数**≈像素所在层的水平，
+                                       //   只把真正的淡斑抬到本层，不会被窗口里更亮的层（叠画带）带飞；
+                                       // true = 取窗口内达标的最高参照（会整片抬到最亮层，实测粗糙度反弹，
+                                       //   仅作对照保留）
 
 // 分块处理所需的最大邻域半径（halo），保证块边缘像素也能取到完整的环形邻域
 export const ALPHA_ALIGN_HALO = RAY_LEN + 2; // = 117
@@ -121,13 +161,83 @@ const DIRS8: ReadonlyArray<readonly [number, number]> = [
   [-1, 0], [-1, -1], [0, -1], [1, -1],
 ];
 
+/**
+ * 选区羽化 support（box 级联近似高斯，σ≈10，语义同 v1，但 O(n)）。
+ * box 半径 b = FEATHER_RADIUS/2，3 次级联 σ ≈ b/√3 × √3 = b ≈ 10。
+ * 用滑窗求和，边界按"窗口内有效像素数"归一化（等价 v1 的 weightSum 归一化）。
+ * 返回区域坐标（x0,y0,rw,rh）下的 0~255 掩码均值。
+ */
+function buildSelectionSupport(
+  selectionMask: Uint8Array,
+  width: number, height: number,
+  x0: number, y0: number, rw: number, rh: number
+): Float32Array {
+  const b = Math.max(1, Math.round(FEATHER_RADIUS * 0.5)); // = 10
+  const support = new Float32Array(rw * rh);
+  const tmp1 = new Float32Array(rw * rh);
+  const y1 = y0 + rh - 1;
+
+  // 水平 box：输入 selectionMask（文档坐标），输出到 tmp1（区域坐标）
+  for (let ry = 0; ry < rh; ry++) {
+    const docY = y0 + ry;
+    const rowBaseDoc = docY * width;
+    const rowBaseR = ry * rw;
+    let sum = 0;
+    let cnt = 0;
+    for (let x = -b; x <= b; x++) {
+      const sx = x0 + x;
+      if (sx >= 0 && sx < width) { sum += selectionMask[rowBaseDoc + sx]; cnt++; }
+    }
+    for (let rx = 0; rx < rw; rx++) {
+      tmp1[rowBaseR + rx] = cnt > 0 ? sum / cnt : 0;
+      const removeX = x0 + (rx - b);
+      const addX = x0 + (rx + b + 1);
+      if (removeX >= 0 && removeX < width) { sum -= selectionMask[rowBaseDoc + removeX]; cnt--; }
+      if (addX >= 0 && addX < width) { sum += selectionMask[rowBaseDoc + addX]; cnt++; }
+    }
+  }
+  // 垂直 box：输入 tmp1（区域坐标），输出到 support
+  for (let rx = 0; rx < rw; rx++) {
+    let sum = 0;
+    let cnt = 0;
+    for (let y = -b; y <= b; y++) {
+      const sy = y0 + y;
+      if (sy >= y0 && sy <= y1) { sum += tmp1[(sy - y0) * rw + rx]; cnt++; }
+    }
+    for (let ry = 0; ry < rh; ry++) {
+      support[ry * rw + rx] = cnt > 0 ? sum / cnt : 0;
+      const removeY = ry - b;
+      const addY = ry + b + 1;
+      if (removeY >= 0) { sum -= tmp1[removeY * rw + rx]; cnt--; }
+      if (addY < rh) { sum += tmp1[addY * rw + rx]; cnt++; }
+    }
+  }
+  // 再水平 box：输入 support（区域坐标），输出到 tmp1，然后拷贝回 support
+  for (let ry = 0; ry < rh; ry++) {
+    const rowBaseR = ry * rw;
+    let sum = 0;
+    let cnt = 0;
+    for (let x = -b; x <= b; x++) {
+      if (x >= 0 && x < rw) { sum += support[rowBaseR + x]; cnt++; }
+    }
+    for (let rx = 0; rx < rw; rx++) {
+      tmp1[rowBaseR + rx] = cnt > 0 ? sum / cnt : 0;
+      const removeX = rx - b;
+      const addX = rx + b + 1;
+      if (removeX >= 0) { sum -= support[rowBaseR + removeX]; cnt--; }
+      if (addX < rw) { sum += support[rowBaseR + addX]; cnt++; }
+    }
+  }
+  support.set(tmp1);
+  return support;
+}
+
 export async function processAlphaAlign(
   layerPixelData: ArrayBuffer,
   selectionData: ArrayBuffer,
   bounds: Bounds,
   params: AlphaAlignParams = {},
   isBackgroundLayer: boolean = false,
-  withBg: boolean = false,
   direction: 'down' | 'up' = 'down'
 ): Promise<Uint8Array> {
   const width = Math.max(1, bounds.width | 0);
@@ -175,7 +285,7 @@ export async function processAlphaAlign(
     console.log('🔍 [alpha对齐] validCount=0（选区内没有 alpha>0 的像素），直接返回');
     return out;
   }
-  console.log('🔍 [alpha对齐 v3] 尺寸=' + width + 'x' + height + ' validCount=' + validCount +
+  console.log('🔍 [alpha对齐 v5] 尺寸=' + width + 'x' + height + ' validCount=' + validCount +
     ' 选区包围盒=(' + minX + ',' + minY + ')→(' + maxX + ',' + maxY + ')');
 
   // 2. 只处理"选区包围盒 + 外扩 halo"区域，节省内存；环形邻域可引用选区外的线条像素
@@ -362,24 +472,11 @@ export async function processAlphaAlign(
     //   - 该簇 ≥ alpha（如凸包中心值）→ 像素在凸包/渐变中 → 放大尺度再试。
     // 高端区间限制防止"线羽化带"（软笔刷线的 73/138 等中低值）被误当参照——
     // 参照必须是环带高值区的稳定簇（线 core 水平），羽化值是中低值被排除。
-    //
-    // 含背景模式（withBg）：处理"低透明度背景（如 alpha=50 的色块）上画线"的场景。
-    //   - 每尺度先估计背景水平（环带中位数 med），只统计 >med 的"线上像素"
-    //     （cntHigh）做参照——簇阈值 bMin 基于 cntHigh 而非全环带，细线在背景
-    //     主导的环带里也能命中（修复 1px 线交叉中心被拉向背景）；
-    //   - 参照必须比 alpha 低至少 BRIGHT_DELTA（只修"明显凸起"的交叉叠加），
-    //     避免把"线条自身/另一条略不同 alpha 的线"误拉低（如 153 竖线 vs 145 横线）；
-    //   - 中位数回退取 ">med 像素" 的中位数（线主体水平），同样要求差 ≥BRIGHT_DELTA；
-    //   - 背景像素（alpha≈med、环带主体是自身）被平坦拦截保护，不会被改。
-    // 参照须比 alpha 低/高至少 refDelta（含背景模式更克制，只修明显凸起/明显偏淡）
-    const refDelta = withBg ? BRIGHT_DELTA : peakThresh;
-
     const analyzePixel = (ri: number): number => {
       const a = readSrc[ri];
-      // 参照候选：含背景模式取**最高**候选（大尺度环带采到的羽化带/背景过渡值较低，
-      // 取最高 = 线 core）；非含背景模式取**最低**候选（大尺度环带里线 core 胜出，
-      // 纠正小尺度误选交叉过渡值）。
-      let bestRef = withBg ? -1 : 65535;
+      // 参照候选：取**最低**候选（大尺度环带里线 core 胜出，纠正小尺度误选
+      // 交叉过渡值）
+      let bestRef = 65535;
       let qHist: Uint16Array | null = null; // 中位数回退用直方图（有效的大尺度候选）
       let qCnt = 0;
       // 中尺度（k14/k42）的平坦性：若中尺度确认"像素在自身平台"（线 core 等），
@@ -405,24 +502,6 @@ export async function processAlphaAlign(
           clearHist();
           continue;
         }
-        // 含背景模式：估计背景水平（环带中位数）与"线上像素数"（>med）
-        let bgMed = -1;
-        let cntHigh = cnt; // 非含背景：全部有效像素
-        if (withBg) {
-          const half = cnt / 2;
-          let acc = 0;
-          for (let v = 0; v < 256; v++) {
-            acc += histBuf[v];
-            if (acc >= half) { bgMed = v; break; }
-          }
-          cntHigh = 0;
-          for (let v = bgMed + 1; v < 256; v++) cntHigh += histBuf[v];
-          if (cntHigh < RING_MIN_COUNT) {
-            // 该尺度几乎全是背景（无线上像素，如细线的 k112 大环带）→ 无参照信息
-            clearHist();
-            continue;
-          }
-        }
         // 自身平台/渐变拦截：环带内 alpha ≥ a 的像素数达阈值，说明像素处于
         // "不低于自身水平"的区域中（单线 core、线羽化、渐变、凸包中心）。
         // 进一步用"平坦度"区分：
@@ -435,14 +514,14 @@ export async function processAlphaAlign(
           let nearCount = 0;
           const nearMax = a + CLOSE_DELTA > 255 ? 255 : a + CLOSE_DELTA;
           for (let v = a; v <= nearMax; v++) nearCount += histBuf[v];
-          // 含背景模式：平坦判据用"与自身同水平像素的绝对数"（≥HIGH_CLUSTER_MIN）——
-          // 大环带（k42/k112）常混入"另一条线/交叉区"的高值（如距交叉区 42-45px
-          // 处环带采到 198×1/195×2），使 highCount 虚高、占比判据误判"非平坦"，
-          // 导致线 core 像素不被保护、被交叉过渡值（140）拉低。
-          // 只要环带里存在 ≥4 个"与自身同水平"（[a, a+CLOSE_DELTA]）的像素，
-          // 说明像素处于自身线 core/平台上 → 拦截（放大尺度再试）。
-          // 非含背景模式：保留占比判据（行为已调优）。
-          const flat = withBg ? (nearCount >= HIGH_CLUSTER_MIN) : (nearCount * 2 >= highCount);
+          // v5：平坦判据改用**绝对数**（与 v4 的含背景模式一致）。
+          // 原来的占比判据（nearCount*2 >= highCount）在大环带里会被"远处另一层的
+          // 高值"污染：highCount 因为环带里混进更亮的区域而虚高，占比永远追不上，
+          // 于是"像素明明在自己层上是连续的"却被判成非平坦，进而被远处更亮/更暗的
+          // 层带飞（实测：浅色层像素被抬到 118/157，上对齐粗糙度反而上升 19%）。
+          // 绝对数判据只问"环带里有没有 ≥4 个与我同水平的像素"——有，说明我在自己的
+          // 层上是连续的（单线 core / 色块 / 羽化平台），不是凸起/坑。
+          const flat = nearCount >= HIGH_CLUSTER_MIN;
           if (flat) {
             // 平坦平台：不是凸起
             if (si === 2 || si === 3) midFlat = true; // k14/k42：中尺度平坦
@@ -452,10 +531,9 @@ export async function processAlphaAlign(
         }
         // 高端区间内找第一个计数达标的簇
         if (si === 2 || si === 3) midNonFlat = true; // k14/k42：中尺度非平坦（凸起带）
-        const bMin = brightClusterMin(cntHigh, withBg ? BRIGHT_CLUSTER_MIN_RATIO_BG : BRIGHT_CLUSTER_MIN_RATIO); // 含背景模式基于"线上像素数"（背景不稀释阈值）
+        const bMin = brightClusterMin(cnt, BRIGHT_CLUSTER_MIN_RATIO);
         let loV = r.bandMax - BRIGHT_GAP;
         if (loV < minAlpha) loV = minAlpha;
-        if (withBg && bgMed + 1 > loV) loV = bgMed + 1; // 参照须高于背景
         let v1 = -1;
         for (let v = r.bandMax; v >= loV; v--) {
           if (histBuf[v] >= bMin) { v1 = v; break; }
@@ -465,31 +543,26 @@ export async function processAlphaAlign(
           // 记录"有效的中位数候选"（后面的更大尺度覆盖前面的）：
           // 中位数回退不能只依赖 k112——色块/线条较小或贴边时，k112 环带可能完全
           // 落在内容之外（cnt=0），此时应回退到仍有足够采样的大尺度（如 k42）。
-          if (withBg ? (cntHigh >= QUANTILE_MIN_COUNT) : (cnt >= QUANTILE_MIN_COUNT)) {
+          if (cnt >= QUANTILE_MIN_COUNT) {
             qHist = new Uint16Array(histBuf);
-            qCnt = withBg ? cntHigh : cnt;
+            qCnt = cnt;
           }
           clearHist();
           continue;
         }
-        if (v1 < a - refDelta) {
+        if (v1 < a - peakThresh) {
           // 显著低于 alpha → 凸起，采纳为参照候选。
-          // 含背景模式：取**最高**候选——大尺度环带（k42/k112）会采到另一条线的
-          // 羽化带/背景过渡值（如 125/54），若取最低会被污染、把线像素拉到过暗；
-          // 线 core 是环带高端簇，取最高 = 线 core（正确参照）。
-          // 非含背景模式：取**最低**候选——小尺度环带可能命中交叉过渡值
-          // （如 6px 交叉的 181），大尺度环带里线 core 占比上升、胜出，纠正误选。
-          if (withBg ? (v1 > bestRef) : (v1 < bestRef)) bestRef = v1;
+          // 取**最低**候选——小尺度环带可能命中交叉过渡值（如 6px 交叉的 181），
+          // 大尺度环带里线 core 占比上升、胜出，纠正误选。
+          if (v1 < bestRef) bestRef = v1;
           clearHist();
           continue;
         }
         if (v1 < a) {
-          // 接近 alpha（差 < refDelta）：环带中存在"与自身同水平的稳定簇"。
-          // 含背景模式：这可能是另一条略不同 alpha 的线（153 vs 145 差 8）或
-          // 线 core 与交叉凸起之间的过渡像素（如 160 附近有 153×8 的线 core）——
+          // 接近 alpha（差 < peakThresh）：环带中存在"与自身同水平的稳定簇"
+          // （另一条略不同 alpha 的线，或线 core 与交叉凸起之间的过渡像素）——
           // 像素基本处于线条自身水平附近，不是"显著凸起"，应该**保护**而非跳过
-          // 继续找更低值（继续找会命中另一条线的羽化带 125，把线像素侵蚀变淡）。
-          // 非含背景模式：同样语义，像素处于自身水平附近，不是凸起。
+          // 继续找更低值（继续找会命中另一条线的羽化带，把线像素侵蚀变淡）。
           flatAll[ri] = 1;
           clearHist();
           return 65535;
@@ -499,85 +572,22 @@ export async function processAlphaAlign(
         clearHist();
         continue;
       }
-      // 含背景模式：中尺度（k14/k42）确认像素在自身平台、且无"非平坦"信号 →
-      // 该像素是**普通线条像素**（处于自身线 core/羽化平台上），不是交叉凸起。
-      // 此时任何尺度找到的参照都不可信——尤其 k112 大环带会避开交叉区、采到
-      // 另一条线的羽化带/线端过渡值（如 125），把线 core（153）误拉低成"被背景
-      // 侵蚀"的淡痕。必须优先保护（修复：交叉区外缘线像素 153→125 的侵蚀）。
-      // 注意顺序：此保护必须放在 bestRef 返回之前，否则被大尺度参照短路。
-      if (withBg && midFlat && !midNonFlat) {
-        flatAll[ri] = 1;
-        return 65535;
-      }
-      if (withBg ? (bestRef >= 0) : (bestRef < 65535)) return bestRef;
-      // 含背景模式：所有尺度都"低于周围线水平"（v1 ≥ alpha，像素在 core 的羽化
-      // 渐变带上，从未被判定为凸起）→ 不是凸起，禁用中位数回退（中位数会被
-      // 羽化带值拉低，把线羽化边缘侵蚀变淡，如软 10px 线的 135→70、细线穿过
-      // 粗线羽化区的 131→78）。
-      if (withBg && sawAbove) {
-        flatAll[ri] = 1;
-        return 65535;
-      }
+      if (bestRef < 65535) return bestRef;
       // 中尺度确认像素在自身平台 → 不是凸起，禁用中位数回退。
-      // 含背景模式：只要 k14 平坦就保护（线 core/羽化像素；k42/k112 环带可能混入
-      // 另一条线的羽化带/过渡值，若因此判定"非平坦"会误伤线自身）；
       // 非含背景模式：还需 k42 无非平坦信号（凸起带场景需要中位数回退修）。
-      if (midFlat && (withBg || !midNonFlat)) {
+      if (midFlat && !midNonFlat) {
         flatAll[ri] = 1;
         return 65535;
       }
       // 所有尺度都无有效参照：中位数回退（色块内部 alpha 不均匀等）
-      if (qHist !== null && (withBg ? (qCnt >= RING_MIN_COUNT) : (qCnt >= QUANTILE_MIN_COUNT))) {
-        if (withBg) {
-          // 含背景模式：先检查环带中是否存在"与 alpha 接近"的稳定像素群
-          // （[a-refDelta, a+CLOSE_DELTA] 内 ≥HIGH_CLUSTER_MIN 个）——说明像素处于
-          // 自身线水平附近（如细线 core 153 穿过粗线羽化带叠加成 154），中位数回退
-          // 会被"另一条线的羽化带"（如粗线 79）主导拉低 → 保护。
-          // 交叉凸起中心（200）附近无此像素群（环带远离交叉区），不受影响。
-          let nearSelf = 0;
-          const loS = a - refDelta < 0 ? 0 : a - refDelta;
-          const hiS = a + CLOSE_DELTA > 255 ? 255 : a + CLOSE_DELTA;
-          for (let v = loS; v <= hiS; v++) nearSelf += qHist[v];
-          if (nearSelf >= HIGH_CLUSTER_MIN) {
-            flatAll[ri] = 1;
-            return 65535;
-          }
-          // med 可能是"低水平背景"（如 alpha=50 的色块）主导。
-          // 取 ">med 像素" 的中位数（线主体水平）作为参照，避免把画在背景上的
-          // 线条/交叉凸起误拉向背景水平；参照仍须比 alpha 低至少 BRIGHT_DELTA。
-          let total = 0;
-          for (let v = 0; v < 256; v++) total += qHist[v];
-          const half = total / 2;
-          let acc = 0;
-          let bgMed = -1;
-          for (let v = 0; v < 256; v++) {
-            acc += qHist[v];
-            if (acc >= half) { bgMed = v; break; }
-          }
-          if (bgMed >= 0) {
-            let cnt2 = 0;
-            for (let v = bgMed + 1; v < 256; v++) cnt2 += qHist[v];
-            if (cnt2 >= RING_MIN_COUNT) {
-              const half2 = cnt2 / 2;
-              let acc2 = 0;
-              for (let v = bgMed + 1; v < 256; v++) {
-                acc2 += qHist[v];
-                if (acc2 >= half2) {
-                  if (v < a - refDelta) return v;
-                  break;
-                }
-              }
-            }
-          }
-        } else {
-          const half = qCnt / 2;
-          let acc = 0;
-          for (let v = 0; v < 256; v++) {
-            acc += qHist[v];
-            if (acc >= half) {
-              if (v < a - peakThresh) return v;
-              break;
-            }
+      if (qHist !== null && qCnt >= QUANTILE_MIN_COUNT) {
+        const half = qCnt / 2;
+        let acc = 0;
+        for (let v = 0; v < 256; v++) {
+          acc += qHist[v];
+          if (acc >= half) {
+            if (v < a - peakThresh) return v;
+            break;
           }
         }
       }
@@ -588,7 +598,7 @@ export async function processAlphaAlign(
 
     // ---- 上对齐（alignUp）：检测线条上"比主体偏淡"的像素（淡斑/断点/被削弱处），
     //     以周围线条主体水平为参照拉高，让线条更均匀。与下对齐对称：
-    //      - 参照从环带"高端稳定簇"（线 core 水平）中找，且必须比 alpha 高至少 refDelta；
+    //      - 参照从环带"高端稳定簇"（线 core 水平）中找，且必须比 alpha 高至少 peakThresh；
     //      - 平坦拦截：环带内"≥alpha 的像素"中 ≥50% 集中在 [a, a+CLOSE_DELTA] →
     //        像素周围是与自身同水平的平台（整条线均匀偏淡 / 自然软边过渡带）→ 保护
     //        （自然软边不会被误拉成硬边；只有"局部明显偏淡"的坑才被修复）；
@@ -611,6 +621,18 @@ export async function processAlphaAlign(
           clearHist();
           continue;
         }
+        // v5 护栏（上对齐）：环带里最亮的值已经比自身高出 BRIGHT_GAP 以上 → 该环带
+        // 已经跑出"本像素所在的那一层"，采到的是远处更亮的内容（叠画带 / 另一条线 /
+        // 过渡带）。它的"高端簇"不能当作本层的线 core 水平——上对齐的语义是
+        // "把偏淡像素拉高到所在线条的主体水平"，参照必须来自同一条线附近。
+        // 实测：没有这道护栏时，浅色层（65）的环带会把 157 的叠画带当成参照，
+        // 一路抬到 118/157，粗糙度反而上升 19%。
+        // 下对齐不加这道护栏：它往低处找"周围水平"（环带逸出到更暗的底色层
+        // 正是"把交叉凸起拉回周围自然水平"的语义），且只降不升，没有带飞风险。
+        if (r.bandMax > a + BRIGHT_GAP) {
+          clearHist();
+          continue;
+        }
         // 平坦拦截：环带内 ≥alpha 的像素若大部分集中在自身水平附近 → 平台
         let highCount = 0;
         for (let v = a; v < 256; v++) highCount += histBuf[v];
@@ -618,7 +640,8 @@ export async function processAlphaAlign(
           let nearCount = 0;
           const nearMax = a + CLOSE_DELTA > 255 ? 255 : a + CLOSE_DELTA;
           for (let v = a; v <= nearMax; v++) nearCount += histBuf[v];
-          const flat = nearCount * 2 >= highCount;
+          // v5：与下对齐同口径 —— 平坦判据用绝对数（见 analyzePixel 的说明）
+          const flat = nearCount >= HIGH_CLUSTER_MIN;
           if (flat) {
             if (si === 2 || si === 3) midFlat = true; // k14/k42：中尺度平坦
             clearHist();
@@ -643,14 +666,14 @@ export async function processAlphaAlign(
           clearHist();
           continue;
         }
-        if (v1 > a + refDelta) {
+        if (v1 > a + peakThresh) {
           // 显著高于 alpha → 偏淡像素，采纳为参照候选（取最高 = 线 core）
           if (v1 > bestRef) bestRef = v1;
           clearHist();
           continue;
         }
         if (v1 > a) {
-          // 接近 alpha（差 < refDelta）：像素基本处于线条主体水平附近，不是明显偏淡 → 保护
+          // 接近 alpha（差 < peakThresh）：像素基本处于线条主体水平附近，不是明显偏淡 → 保护
           flatAll[ri] = 1;
           clearHist();
           return 65535;
@@ -692,9 +715,8 @@ export async function processAlphaAlign(
       return 65535;
     };
 
-    // 按方向分发：上对齐走 analyzePixelUp；其余（含保底下对齐 withBg）走 analyzePixel
-    const analyze = (ri: number): number =>
-      (alignUp && !withBg) ? analyzePixelUp(ri) : analyzePixel(ri);
+    // 按方向分发：上对齐走 analyzePixelUp；下对齐走 analyzePixel
+    const analyze = (ri: number): number => (alignUp ? analyzePixelUp(ri) : analyzePixel(ri));
 
     let analyzedCount = 0;
     // ---- 第一遍：处理主体 ----
@@ -729,85 +751,119 @@ export async function processAlphaAlign(
       }
     }
     console.log('🔍 [alpha对齐] 完整分析像素数=' + analyzedCount);
+
+    // ---- 4.5 参照场空间一致化（v5 新增）----
+    // 逐像素独立估计的参照在"同一片区域"里可能落到不同层级（例如浅色层 73 与
+    // 笔画层 157 相邻），拉平后形成 73/157 交替的棋盘 —— 斑驳与条纹的来源。
+    // 这里对参照场做一次"窗口内出现次数达标的参照极值共识"：
+    //   - 下对齐取窗口内计数达标的最低参照，上对齐取最高的；
+    //   - 同一片区域的像素因此收敛到同一层级（消除斑驳/条纹）；
+    //   - 补判（REF_CONSENSUS_FILL）：分析阶段没拿到参照、也未被保护（flatAll=0）的
+    //     像素，若窗口共识层级与自身明显不同，说明它属于同一片区域却被漏判 —— 一并对齐，
+    //     修复"对齐不彻底（只改了一部分像素）"。
+    if (REF_CONSENSUS_RADIUS > 0) {
+      const base = new Uint16Array(refMin); // 读原始参照场，避免边写边读
+      const R = REF_CONSENSUS_RADIUS;
+      const chi = new Uint16Array(256);
+      let fixedCount = 0;
+      let filledCount = 0;
+      let protectedFilledCount = 0; // 其中"越过保护"补判的像素数（诊断用）
+      for (let ry = 0; ry < rh; ry++) {
+        for (let rx = 0; rx < rw; rx++) {
+          const ri = ry * rw + rx;
+          if (vR[ri] === 0) continue;
+          // 收集窗口内参照直方图
+          const ny0 = ry - R < 0 ? 0 : ry - R;
+          const ny1 = ry + R >= rh ? rh - 1 : ry + R;
+          const nx0 = rx - R < 0 ? 0 : rx - R;
+          const nx1 = rx + R >= rw ? rw - 1 : rx + R;
+          let refCnt = 0;
+          for (let ny = ny0; ny <= ny1; ny++) {
+            const rowBase = ny * rw;
+            for (let nx = nx0; nx <= nx1; nx++) {
+              const v = base[rowBase + nx];
+              if (v >= 65535) continue;
+              chi[v]++;
+              refCnt++;
+            }
+          }
+          if (refCnt === 0) continue;
+          // 取"共识层级"：
+          //   下对齐 = 窗口内计数达标的**最低**参照（把叠画带整片拉回底色水平，
+          //            这也正是"下对齐"的语义：只降不升，取最低不会带来副作用）；
+          //   上对齐 = 窗口内参照的**下中位数**（≈像素所在层的水平）；取最高会把整片
+          //            抬到窗口里最亮的层（如叠画带 157），实测粗糙度反而反弹。
+          let chosen = -1;
+          if (!alignUp) {
+            for (let v = 0; v < 256; v++) {
+              if (chi[v] >= REF_CONSENSUS_SUPPORT) { chosen = v; break; }
+            }
+          } else if (REF_CONSENSUS_UP_USE_MAX) {
+            for (let v = 255; v >= 0; v--) {
+              if (chi[v] >= REF_CONSENSUS_SUPPORT) { chosen = v; break; }
+            }
+          } else {
+            const half = refCnt / 2;
+            let acc = 0;
+            for (let v = 0; v < 256; v++) {
+              acc += chi[v];
+              if (acc >= half) { chosen = v; break; }
+            }
+          }
+          for (let v = 0; v < 256; v++) chi[v] = 0;
+          if (chosen < 0) continue;
+          const own = base[ri];
+          if (own < 65535) {
+            // 已有参照：向共识层级收敛（下对齐只降不升 / 上对齐只升不降）
+            const merged = alignUp ? (chosen > own ? chosen : own)
+                                   : (chosen < own ? chosen : own);
+            if (merged !== own) {
+              refMin[ri] = merged;
+              fixedCount++;
+            }
+          } else {
+            // 无参照：补判。阈值按"是否已被判为平台"分档——
+            //   未受保护（flatAll=0，即分析阶段从未把它判成平台）→ peakThresh，
+            //     只要窗口共识与自身明显不同就补上（修复"同片区域只改了一部分"）；
+            //   已受保护（flatAll=1）→ 要求偏离超过 REF_FILL_PROTECTED_DELTA(=BRIGHT_GAP)：
+            //     半个量程以上的落差说明它其实属于"另一层"而非本层的自然渐变，
+            //     是保护判据的漏网（实测：叠画带里残留 158/162/143 等孤立点，
+            //     在白底上就是一粒粒深色斑驳）。小落差仍尊重保护（自然软边不动）。
+            const a = aR[ri];
+            // 补判对象仍须满足 minAlpha（与"修改候选"同一口径）：
+            // MIN_ALPHA 以下视为残留/羽化尘埃，补判它们会把"几乎透明的边角"
+            // 一路抬到主体水平（实测 (0,0) 的 a=8 被抬到 118），等于凭空放大轮廓。
+            if (a < minAlpha) continue;
+            const wasProtected = flatAll[ri] !== 0;
+            const fillThresh = wasProtected ? REF_FILL_PROTECTED_DELTA : peakThresh;
+            const deviates = alignUp ? (a < chosen - fillThresh) : (a > chosen + fillThresh);
+            if (deviates) {
+              refMin[ri] = chosen;
+              flatAll[ri] = 0;
+              filledCount++;
+              if (wasProtected) protectedFilledCount++;
+            }
+          }
+        }
+      }
+      // 诊断：受保护（flatAll=1）但明显偏离窗口共识的像素 —— 保护判据可能过宽
+      console.log('🔍 [alpha对齐] 参照场一致化(R=' + R + ')：收敛 ' + fixedCount +
+        ' 个 / 补判 ' + filledCount + ' 个（其中越过保护 ' + protectedFilledCount + ' 个）');
+    }
   }
 
   // 5. 选区边缘羽化 support（box 级联近似高斯，σ≈10，语义同 v1，但 O(n)）
-  //    box 半径 b = FEATHER_RADIUS/2，3 次级联 σ ≈ b/√3 × √3 = b ≈ 10。
-  //    用滑窗求和，边界按"窗口内有效像素数"归一化（等价 v1 的 weightSum 归一化）。
-  const b = Math.max(1, Math.round(FEATHER_RADIUS * 0.5)); // = 10
-  const support = new Float32Array(rn);
-  const tmp1 = new Float32Array(rn);
-  {
-    // 水平 box：输入 selectionMask（文档坐标），输出到 tmp1（区域坐标）
-    for (let ry = 0; ry < rh; ry++) {
-      const docY = y0 + ry;
-      const rowBaseDoc = docY * width;
-      const rowBaseR = ry * rw;
-      let sum = 0;
-      let cnt = 0;
-      for (let x = -b; x <= b; x++) {
-        const sx = x0 + x;
-        if (sx >= 0 && sx < width) { sum += selectionMask[rowBaseDoc + sx]; cnt++; }
-      }
-      for (let rx = 0; rx < rw; rx++) {
-        tmp1[rowBaseR + rx] = cnt > 0 ? sum / cnt : 0;
-        const removeX = x0 + (rx - b);
-        const addX = x0 + (rx + b + 1);
-        if (removeX >= 0 && removeX < width) { sum -= selectionMask[rowBaseDoc + removeX]; cnt--; }
-        if (addX >= 0 && addX < width) { sum += selectionMask[rowBaseDoc + addX]; cnt++; }
-      }
-    }
-    // 垂直 box：输入 tmp1（区域坐标），输出到 support
-    for (let rx = 0; rx < rw; rx++) {
-      let sum = 0;
-      let cnt = 0;
-      for (let y = -b; y <= b; y++) {
-        const sy = y0 + y;
-        if (sy >= y0 && sy <= y1) { sum += tmp1[(sy - y0) * rw + rx]; cnt++; }
-      }
-      for (let ry = 0; ry < rh; ry++) {
-        support[ry * rw + rx] = cnt > 0 ? sum / cnt : 0;
-        const removeY = ry - b;
-        const addY = ry + b + 1;
-        if (removeY >= 0) { sum -= tmp1[removeY * rw + rx]; cnt--; }
-        if (addY < rh) { sum += tmp1[addY * rw + rx]; cnt++; }
-      }
-    }
-    // 再水平 box：输入 support（区域坐标），输出到 tmp1，然后拷贝回 support
-    for (let ry = 0; ry < rh; ry++) {
-      const rowBaseR = ry * rw;
-      let sum = 0;
-      let cnt = 0;
-      for (let x = -b; x <= b; x++) {
-        if (x >= 0 && x < rw) { sum += support[rowBaseR + x]; cnt++; }
-      }
-      for (let rx = 0; rx < rw; rx++) {
-        tmp1[rowBaseR + rx] = cnt > 0 ? sum / cnt : 0;
-        const removeX = rx - b;
-        const addX = rx + b + 1;
-        if (removeX >= 0) { sum -= support[rowBaseR + removeX]; cnt--; }
-        if (addX < rw) { sum += support[rowBaseR + addX]; cnt++; }
-      }
-    }
-    support.set(tmp1);
-  }
+  const support = buildSelectionSupport(selectionMask, width, height, x0, y0, rw, rh);
 
   // 6. 对每个可疑像素：下对齐把高出"线条水平"的 alpha 拉低；上对齐把偏淡像素拉高
   let changedCount = 0;
   let changedSample = '';
-
-  // 选区边缘羽化（同 v1）：用 support 把 alpha 改动从"全改"渐变到"不改"，避免边界生硬
-  const smootherstep01 = (t: number) => {
-    const x = Math.max(0, Math.min(1, t));
-    return x * x * x * (x * (x * 6 - 15) + 10);
-  };
 
   for (let ry = 0; ry < rh; ry++) {
     const docY = y0 + ry;
     const rowBaseR = ry * rw;
     for (let rx = 0; rx < rw; rx++) {
       const ri = rowBaseR + rx;
-      if (suspicious[ri] === 0) continue;
       const a = aR[ri];
       const ref = refMin[ri];
       if (ref >= 65535) continue;
@@ -838,6 +894,112 @@ export async function processAlphaAlign(
     }
   }
   console.log('🔍 [alpha对齐' + (alignUp ? '上' : '下') + '] 修改像素数=' + changedCount + (changedSample ? ' 样例: ' + changedSample : ''));
+
+  return out;
+}
+
+/**
+ * alpha众对齐：把选区内**所有 alpha>0 的像素**统一到"出现次数最多的那个 alpha"（众数）。
+ *
+ * 用途：整片内容的不透明度统一化（同一支半透明笔刷反复叠画后，各处 alpha 参差不齐）。
+ * 与局部对齐（processAlphaAlign）不同，这里不做任何邻域参照估计 —— 基准值由整个选区的
+ * 直方图唯一确定，因此：
+ *   - 天然空间一致，不会出现"同片区域分别对齐到不同层级"的斑驳/条纹；
+ *   - 不会"只改一部分"，对齐彻底。
+ * 只修改 alpha，RGB 不变。选区边缘仍按 support 羽化（非全文档选区时边界自然过渡）。
+ */
+export async function processAlphaModeAlign(
+  layerPixelData: ArrayBuffer,
+  selectionData: ArrayBuffer,
+  bounds: Bounds,
+  params: AlphaModeAlignParams = {},
+  isBackgroundLayer: boolean = false
+): Promise<Uint8Array> {
+  const width = Math.max(1, bounds.width | 0);
+  const height = Math.max(1, bounds.height | 0);
+  const pixelCount = width * height;
+
+  const pixels = new Uint8Array(layerPixelData);
+  const selectionMask = new Uint8Array(selectionData);
+  const out = new Uint8Array(pixels.length);
+  out.set(pixels);
+
+  if (isBackgroundLayer) return out;
+  if (pixels.length < pixelCount * 4) return out;
+
+  const rate = clamp01(typeof params.strength === 'number' ? params.strength : 1);
+
+  // 1. 统计选区内 alpha>0 的直方图，并求选区包围盒
+  const hist = new Uint32Array(256);
+  let validCount = 0;
+  let minX = width, minY = height, maxX = -1, maxY = -1;
+  for (let i = 0; i < pixelCount; i++) {
+    if ((selectionMask[i] || 0) === 0) continue;
+    const a = pixels[i * 4 + 3] || 0;
+    if (a === 0) continue;
+    hist[a]++;
+    validCount++;
+    const x = i % width;
+    const y = (i - x) / width;
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  if (validCount === 0) {
+    console.log('🔍 [alpha众对齐] 选区内没有 alpha>0 的像素，直接返回');
+    return out;
+  }
+
+  // 2. 众数 = 出现次数最多的 alpha（并列时取更高的 alpha，避免整体偏淡）
+  let modeA = 1;
+  let modeCnt = -1;
+  for (let v = 1; v < 256; v++) {
+    const c = hist[v];
+    if (c > modeCnt || (c === modeCnt && v > modeA)) {
+      modeCnt = c;
+      modeA = v;
+    }
+  }
+  console.log('🔍 [alpha众对齐] 选区 alpha>0 像素=' + validCount + '  众数 alpha=' + modeA +
+    '（' + modeCnt + ' 个，占 ' + (100 * modeCnt / validCount).toFixed(1) + '%）' +
+    (modeA < MIN_ALPHA ? '  ⚠️ 众数低于 MIN_ALPHA，多由羽化/残留构成，结果会整体变淡，请留意' : ''));
+
+  // 3. 选区羽化 support（与局部对齐同源）：中心完全对齐、选区边缘自然过渡
+  const pad = FEATHER_RADIUS + 2;
+  const x0 = minX - pad < 0 ? 0 : minX - pad;
+  const y0 = minY - pad < 0 ? 0 : minY - pad;
+  const x1 = maxX + pad >= width ? width - 1 : maxX + pad;
+  const y1 = maxY + pad >= height ? height - 1 : maxY + pad;
+  const rw = x1 - x0 + 1;
+  const rh = y1 - y0 + 1;
+  const support = buildSelectionSupport(selectionMask, width, height, x0, y0, rw, rh);
+
+  // 4. 写回：alpha>0 的像素统一到众数（alpha=0 的像素不动，不注入新的透明度）
+  let changedCount = 0;
+  let changedSample = '';
+  for (let ry = 0; ry < rh; ry++) {
+    const docY = y0 + ry;
+    const rowBaseR = ry * rw;
+    for (let rx = 0; rx < rw; rx++) {
+      const di = docY * width + (x0 + rx);
+      const a = pixels[di * 4 + 3] || 0;
+      if (a === 0) continue;
+      const s01 = support[rowBaseR + rx] * (1 / 255);
+      const t = Math.max(0, Math.min(1, (s01 - 0.22) / (0.995 - 0.22)));
+      const fade = smootherstep01(smootherstep01(t));
+      let na = Math.round(a + (modeA - a) * rate * fade);
+      if (na < 0) na = 0;
+      else if (na > 255) na = 255;
+      if (na === a) continue;
+      out[di * 4 + 3] = na;
+      changedCount++;
+      if (changedSample === '' && changedCount <= 3) {
+        changedSample += '[' + (x0 + rx) + ',' + docY + ']a' + a + '→' + na + ' ';
+      }
+    }
+  }
+  console.log('🔍 [alpha众对齐] 修改像素数=' + changedCount + (changedSample ? ' 样例: ' + changedSample : ''));
 
   return out;
 }
