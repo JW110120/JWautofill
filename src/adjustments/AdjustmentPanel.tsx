@@ -17,6 +17,7 @@ import { processLineEnhancement } from './lineProcessing';
 import { processAlphaAlign, processAlphaModeAlign } from './alphaAlignProcessor';
 import { processHighFrequencyEnhancement } from './highFrequencyEnhancer';
 import { processSmartEdgeSmooth, defaultSmartEdgeSmoothParams } from './smartEdgeSmoothProcessor';
+import { processAliasSmooth, defaultAliasSmoothParams } from './aliasSmoothProcessor';
 import { checkEditingState, processPixelData, applyProcessedPixels, writeFullPixelsToLayer } from './pixelDataProcessor';
 import { runKnockoutBatch } from './knockoutBatchProcessor';
 import { LicenseManager } from '../utils/LicenseManager';
@@ -276,7 +277,7 @@ interface SectionConfig {
 }
 
 interface SubFeature {
-  id: 'pixelTransition' | 'highFreqEnhancement' | 'edgeSmooth' | 'lineEnhancement' | string;
+  id: 'pixelTransition' | 'highFreqEnhancement' | 'edgeSmooth' | 'aliasSmooth' | 'lineEnhancement' | string;
   parentId: SectionConfig['id'];
   title: string;
   isVisible: boolean;
@@ -298,6 +299,7 @@ const defaultSubFeatures: SubFeature[] = [
   { id: 'gradientRelax', parentId: 'detailAdjust', title: '梯度修改', isVisible: true, order: 1 },
   { id: 'highFreqEnhancement', parentId: 'detailAdjust', title: '高频增强', isVisible: true, order: 2 },
   { id: 'edgeSmooth', parentId: 'edgeProcessing', title: '边缘平滑', isVisible: true, order: 0 },
+  { id: 'aliasSmooth', parentId: 'edgeProcessing', title: '消除锯齿', isVisible: true, order: 1 },
   { id: 'lineEnhancement', parentId: 'edgeProcessing', title: '线条加黑', isVisible: true, order: 2 }
 ];
 
@@ -411,6 +413,9 @@ const [edgeSmoothMode, setEdgeSmoothMode] = useState((defaultSmartEdgeSmoothPara
 const [edgeMedianRadius, setEdgeMedianRadius] = useState(defaultSmartEdgeSmoothParams.edgeMedianRadius ?? 16);
 const [edgeLineStrength, setEdgeLineStrength] = useState(Math.round((defaultSmartEdgeSmoothParams.lineSmoothStrength ?? 1) * 100));
 const [edgeLineSmoothRadius, setEdgeLineSmoothRadius] = useState(defaultSmartEdgeSmoothParams.lineSmoothRadius ?? 10);
+
+// 消除锯齿参数
+const [aliasSoftWidth, setAliasSoftWidth] = useState(defaultAliasSmoothParams.softWidth ?? 2);
 
 // ===== 蒙版同步 =====
 const [maskSyncTasks, setMaskSyncTasks] = useState<MaskSyncTask[]>([]);
@@ -567,6 +572,7 @@ useEffect(() => {
           if (typeof ap.values.edgeMedianRadius === 'number') setEdgeMedianRadius(Math.max(10, Math.min(30, Math.round(ap.values.edgeMedianRadius))));
           if (typeof ap.values.edgeLineStrength === 'number') setEdgeLineStrength(ap.values.edgeLineStrength);
           if (typeof ap.values.edgeLineSmoothRadius === 'number') setEdgeLineSmoothRadius(Math.max(3, Math.min(12, Math.round(ap.values.edgeLineSmoothRadius))));
+          if (typeof ap.values.aliasSoftWidth === 'number') setAliasSoftWidth(Math.max(0.5, Math.min(2, ap.values.aliasSoftWidth)));
         }
       }
       setPanelStateLoaded(true);
@@ -605,6 +611,7 @@ useEffect(() => {
         edgeMedianRadius,
         edgeLineStrength,
         edgeLineSmoothRadius,
+        aliasSoftWidth,
       },
     },
   }, { debounceMs: 400 }).catch(e => console.warn('⚠️ 保存像素调整面板状态失败:', e));
@@ -631,6 +638,7 @@ useEffect(() => {
   edgeMedianRadius,
   edgeLineStrength,
   edgeLineSmoothRadius,
+  aliasSoftWidth,
 ]);
 
 useEffect(() => {
@@ -713,6 +721,8 @@ useEffect(() => {
       setEdgeMedianRadius(defaultSmartEdgeSmoothParams.edgeMedianRadius ?? 20);
       setEdgeLineStrength(Math.round((defaultSmartEdgeSmoothParams.lineSmoothStrength ?? 1) * 100));
       setEdgeLineSmoothRadius(defaultSmartEdgeSmoothParams.lineSmoothRadius ?? 10);
+      // 3.5) 消除锯齿参数复位
+      setAliasSoftWidth(defaultAliasSmoothParams.softWidth ?? 2);
       // 4) 关闭可见性面板
       setShowVisibilityPanel(false);
     },
@@ -1472,6 +1482,18 @@ const handleEdgeLineSmoothRadiusNumberChange = (event: React.ChangeEvent<HTMLInp
     setEdgeLineSmoothRadius(value);
   }
 };
+
+const handleAliasSoftWidthChange = (value: number) => {
+  setAliasSoftWidth(value);
+};
+
+const handleAliasSoftWidthNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const value = parseFloat(event.target.value);
+  if (!isNaN(value) && value >= 0.5 && value <= 2) {
+    setAliasSoftWidth(value);
+  }
+};
+
 
 // 图层锁定处理工具函数（记录-解锁-恢复）
 const getCurrentLayerLockState = async () => {
@@ -2342,6 +2364,89 @@ const handleSmartEdgeSmooth = async () => {
   }
 };
 
+// 消除锯齿：重建轮廓的过渡带（覆盖率重建，见 aliasSmoothProcessor）
+//  - 不改变轮廓位置与形状：过渡带按形状自身的不透明度等比生成，且永不高于本体
+//    （早期「铅笔去锯齿」把过渡带按不透明笔触标定，半透明形状的轮廓会被推到接近全不透明 —— 湿边）
+//  - 阈值按选区内容自动推算，因此半透明色块同样能被识别
+const handleAliasSmooth = async () => {
+  if (!handleLicenseBeforeAction()) return;
+  try {
+    const { executeAsModal } = core;
+
+    await runCommand('消除锯齿', async () => {
+      const editingState = await checkEditingState();
+      if (!editingState.isValid) {
+        return;
+      }
+
+      const { layer, isBackgroundLayer } = editingState;
+      // 背景图层不透明度恒为 255，没有"轮廓过渡带"可重建，只能读轮廓的透明边缘
+      if (isBackgroundLayer) {
+        await core.showAlert({ message: '消除锯齿需要读取轮廓的透明边缘，请先选择非背景的普通像素图层。' });
+        return;
+      }
+
+      const doc = app.activeDocument;
+      if (!doc) {
+        await core.showAlert({ message: '未找到活动文档' });
+        return;
+      }
+
+      let needAlertNoDocInfo = false;
+
+      // 整段流程（自动全选 / 读像素 / 重建过渡带 / 写回）合并成【一条】名为「消除锯齿」的历史记录
+      await doc.suspendHistory(async () => {
+        // 没有选区时先自动全选整张图，再执行后续操作（并入同一条历史记录）
+        const probe = await getSelectionBounds(false);
+        if (probe && !probe.hasSelection) {
+          await selectAllDocument();
+        }
+
+        const selectionBounds = await getSelectionData();
+        if (!selectionBounds) {
+          needAlertNoDocInfo = true;
+          return;
+        }
+
+        await runWithTemporaryUnlock(async () => {
+          const pixelResult = await processPixelData(selectionBounds, layer, false);
+
+          // 创建完整文档尺寸的选区掩码（选区内为羽化值 0-255，选区外为 0）
+          const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
+          let maskIndex = 0;
+          for (const docIndex of pixelResult.selectionIndices) {
+            fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
+            maskIndex++;
+          }
+
+          // 传入 fullPixelData：距离场与本体不透明度都必须参照轮廓外的像素，不能被选区截断
+          const processedPixels = await processAliasSmooth(
+            pixelResult.fullPixelData.buffer,
+            fullSelectionMask.buffer,
+            { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
+            {
+              softWidth: aliasSoftWidth,
+              strength: 1, // 固定 100%：混合依赖当前像素值会破坏幂等（多次点击边缘逐次变实变粗）
+            },
+            false
+          );
+
+          // 外层已统一登记历史态，这里跳过函数内部的 suspendHistory，避免多出一条
+          await applyProcessedPixels(new Uint8Array(processedPixels), pixelResult, '消除锯齿', { skipHistorySuspend: true });
+        });
+      }, '消除锯齿');
+
+      if (needAlertNoDocInfo) {
+        await core.showAlert({ message: '获取文档信息失败' });
+      }
+    });
+    giveFocusBackToPS();
+  } catch (error) {
+    console.error('❌ 消除锯齿处理失败:', error);
+    await core.showAlert({ message: formatFailMsg('消除锯齿', error.message) });
+  }
+};
+
 // 保存位置改为「系统保存对话框由用户自选」（见 handleLayerAlphaSample）：
 // 之前那套「猜桌面目录（Desktop / OneDrive\Desktop / 桌面 …）→ 失败退插件数据目录」的
 // 多通道落盘已废弃 —— 猜不到就会静默存进 PluginData，用户根本找不到。
@@ -2776,6 +2881,7 @@ const SLIDER_DRAG_CONFIGS = {
   edgeMedianRadius:            { min: 10,  max: 30,  step: 1   },
   edgeLineStrength:            { min: 0,   max: 100, step: 1   },
   edgeLineSmoothRadius:        { min: 3,   max: 12,  step: 1   },
+  aliasSoftWidth:              { min: 0.5, max: 2,   step: 0.5 },
   contrastReductionIntensity:           { min: 1,   max: 10,  step: 0.5 },
   specialWoodcutLevels:        { min: 2,   max: 16,  step: 1   },
   specialWoodcutEdgeThreshold: { min: 0,   max: 255, step: 1   },
@@ -2797,6 +2903,7 @@ const { dragTarget: sliderDragTarget, onLabelMouseDown: onSliderLabelMouseDown }
       case 'edgeMedianRadius': handleEdgeMedianRadiusChange(value); break;
       case 'edgeLineStrength': handleEdgeLineStrengthChange(value); break;
       case 'edgeLineSmoothRadius': handleEdgeLineSmoothRadiusChange(value); break;
+      case 'aliasSoftWidth': handleAliasSoftWidthChange(value); break;
       case 'contrastReductionIntensity': handleContrastReductionIntensityChange(value); break;
       case 'specialWoodcutLevels': handleSpecialWoodcutLevelsChange(value); break;
       case 'specialWoodcutEdgeThreshold': handleSpecialWoodcutEdgeThresholdChange(value); break;
@@ -2955,6 +3062,21 @@ const renderEdgeProcessingContent = () => (
 
         </>
       )}
+
+    <div className="divider"></div>
+
+    <div className="row-between">
+      <div role="button" tabIndex={0} className="action-button-4" onClick={handleAliasSmooth} title={helpTexts.adjustment.aliasSmooth}>消除锯齿</div>
+    </div>
+
+    <div className="row-between slider-row">
+      <div className={sliderLabelClass('aliasSoftWidth', 'label-drag label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'aliasSoftWidth', aliasSoftWidth)} title={helpTexts.adjustment.aliasSoftWidth}>柔化宽度</div>
+      <RangeSlider min={0.5} max={2} step={0.5} value={aliasSoftWidth} onChange={handleAliasSoftWidthChange} className="slider-track" />
+      <div className="row-start">
+        <div className="num-input-row"><input type="number" min="0.5" max="2" step="0.5" value={aliasSoftWidth} onChange={handleAliasSoftWidthNumberChange} /></div>
+        <div className="num-unit">px</div>
+      </div>
+    </div>
   </div>
 );
 

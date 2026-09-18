@@ -47,6 +47,7 @@ export type AdjustmentPanelState = {
     specialWoodcutLevels?: number;
     specialWoodcutEdgeThreshold?: number;
     specialWoodcutEdgeStrength?: number;
+    aliasSoftWidth?: number;
   };
 };
 

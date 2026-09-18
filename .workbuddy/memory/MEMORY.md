@@ -91,6 +91,15 @@
   ③补判门槛 `REF_FILL_PROTECTED_DELTA = BRIGHT_GAP/2`，且补判对象仍须 `a ≥ MIN_ALPHA`（否则近透明边角被抬到主体水平、凭空放大轮廓）。
   旧的 `withBg`（保底下对齐）已整体删除，由众对齐取代；`processAlphaAlign` 现在只有 `(…, isBg, direction)` 五个参数。
 - edge 模式参数=mode/edgeMedianRadius/lineSmoothStrength/lineSmoothRadius；toggles.preserveDetail 与 highFrequencyEnhancer.intensity 是别的功能同名物，勿误删。
+- 消除锯齿（aliasSmoothProcessor.ts，原 `pencilAASmoothProcessor` 于 `1ac1e6d` 删除、本轮还原并推广到所有色块轮廓）：
+  覆盖率重建 —— mask（alpha≥thr）→ box 模糊成渐变场 → 4×4 子采样得 cov → `aRecon = 本体不透明度 × profile(cov)`。
+  **四条不变量（改动前先想清楚）**：①阈值自适应（选区内 alpha 直方图众数/2，取值必须只依赖胜出档的下边界，
+  用档内均值会因过渡带像素漂移而破坏幂等）；②本体不透明度由 EDT 从「距轮廓 ≥2px」的种子传播（窄条 ≤5px 整段当种子），
+  并**硬性封顶 `aRecon ≤ 本体`**、**循环里必须 `if (distOut2 >= 4) continue`**（这些种子自身若被改写，本体水平会逐次下漂）；
+  ③内侧 `∈[thr, 原值]` 只削不抬、外侧 `∈(原值, thr-1]` 只补不削；④锚定 mask 内 ≥thr / 外 ≤thr-1 → 输出 mask 不变 = 严格幂等。
+  「湿边」= 旧版把按不透明笔触标定的绝对表当不透明度用（外围被压到 127、细线保护关掉时内侧冲到 253）。
+  旧版死代码已删：`bgAlpha` 稳定背景 EDT 与 `bgAlpha > 127` 色块保护判据恒不成立（bg 种子要求 mask==0 ⇒ alpha<thr），
+  「背景不被侵蚀」由不变量③从根上保证。测试脚本 `outputs/alias_smooth_test.cjs` + `alias_compare_old_new.cjs`。
 
 ## 用户文案（src/constants/helpTexts.ts）
 - **读者 = 精通 PS 的画师**：羽化、不透明度、通道、蒙版、中间值、混合模式、alpha **一律不解释**（解释了反而像外行）；
@@ -102,5 +111,18 @@
 - 验证：key 集合/顺序 vs `git show HEAD:` 比对 + node `ts.transpileModule` 实跑导出 + 术语黑名单 grep。
 - ⚠️ `git checkout .` 会连 `.workbuddy/memory/` 一起回退。
 
+- 消除锯齿（aliasSmoothProcessor.ts）：粗图形走 blur+F 表覆盖率重建；**细线（线宽 ≤4px = thinFlag d2≤4）走几何重建** ——
+  游程→链→平台中心插值还原亚像素边界→刚性带宽（众数厚度）+上下边界均值定心→墨量守恒 ink·cov/Σcov。
+  铁律①墨量跨距取几何区间 [⌊eT⌋,⌈eB⌉-1]（取 mask 游程会让肩部掉出 mask、墨量逐轮流失）；
+  ②幂等闸门 = 「边缘是否已成亚像素过渡」：以**本行**游程内最大 alpha 为基准，窗口内出现 0.25~0.75 基准的像素的行过半即判
+  已平滑（只认领不改写）。**不能用"窗口内有任何中间 alpha"**（PS 铅笔/笔刷在硬边上也留一圈极淡毛刺 → 真实笔触全被拦掉，
+  细线"没有任何现象"）；也**不能用全链最大当基准**（压感渐变会被整段误判成已抗锯齿而跳过整条）；③主路径用
+  thinScope(认领)+thinDone(去重) 避让，认领游程 ±2px，否则 3~4px 线外侧会被主路径补出 ~107 虚边。
+  ⚠️ `estimateBodyLevel` 直方图必须**按墨量投票**（`hist[a>>3] += a`，不是 `++`）：细线毛刺像素比本体多（1px 线每行 ~2:1）
+  → 按个数统计众数落到毛刺档 → thr 124→4、mask 吞掉整圈毛刺，细线彻底失效（这就是"没有任何现象"的直接原因）。
+  ⚠️ `makePlateauInterp` 首/尾平台常被链边界截断，观测中心≠真实中心 → 按典型平台长度（内部平台中位数）重建中心，
+  否则端部十几行亚像素位置偏最多半个平台长（1:40 实测 0.38px / 7% 行）；写出循环不写链外一行（否则凭空造虚边）；
+  被 `aRecon ≤ a0` 截断丢掉的墨要转投到外侧肩部像素（cap = thr-1），否则每次点击峰值降 2~3 级（爬行）。
+  旧「细线保护」开关已删除（它只跳过细线、什么也不做）。
 ## 守护进程
 - C#/.NET8 daemon(native/HotkeyDaemon/Program.cs)：WH_KEYBOARD_LL 独立线程，钩子线程严禁阻塞 I/O，焦点闸门 IsPhotoshopForeground 否则放行。WS 127.0.0.1:18923。冻结三形态与 ps1 七步见技能 windows-keyboard-device-reset；改 ps1 后同步 dist/。shell.openPath 受 manifest 扩展名白名单管控。
