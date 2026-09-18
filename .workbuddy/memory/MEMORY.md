@@ -19,7 +19,8 @@
   APP 增删项必须**四处同步**：`registerAppCallbacks` 类型+赋值、`handleAppFlyout` 的 case、menuItems 数组、app.tsx 注册处（技能 ⑰）。
 - ⚠️ UXP 无内置 `fs`/`os`（编译期正常、运行期才炸，`node_modules\fs.json doesn't exist`）；落盘只用 `localFileSystem`，
   URL 写 `file:/C:/…`；让用户自选路径用 `getFileForSaving`（必须在 `executeAsModal` **之外**调）。见技能 ⑲。
-- ⚠️ Repo/Edit 偶发「报成功但没落盘」→ 每次编辑后用 grep / 脚本逐串复核。
+- ⚠️ Edit 常「报成功但没落盘」（多点修改会静默丢大半）；且本仓**行尾不统一**（如 `blockAverageProcessor.ts` 是 CRLF，`.tsx` 是 LF）
+  → 含换行的多行 old_string 在 CRLF 文件里必失配，跨行替换别用字符串匹配：改用 node 脚本按行数组 splice + 写回前逐行断言 + 打印 OK/FAIL，改完 grep 逐串复核。
 - ⚠️ `.git/refs/remotes/origin/` 曾缺失 → fetch 假成功、status 恒 ahead；修法 mkdir 后 git update-ref。推送用 `git -c credential.helper=wincred push`。dist/、analysis/、outputs/ 已 gitignore。
 - 前端改完须 **UDT Reload**；daemon 重编 SDK 8.0.424 在 `C:\Users\Administrator\.dotnet-sdk`（永不删）。
 
@@ -75,6 +76,9 @@
   （⚠️ 不能用 `body.compact-app … .radio-trio{margin:0}` 收口：会连带命中描边子面板的同名容器）。
 
 ## 像素算法
+- 分块平均/对比减弱（blockAverageProcessor.ts）：「分块」= **不连通选区各自成块**（非色块），普通模式各自求均值填平。
+  对比减弱：`factor = (coeff/255)·(强度×0.07)·t/(1+t)`，`t = |亮度−块均值亮度| / max(σ_L,6)`；α 用同一 factor 但不乘 φ。
+  **内置混合颜色带柔化（参数写死、不暴露 UI、无持久化）**：`φ = clamp(1 − (u−1.5τ)/4.5τ, 0, 1)`，只作用于 RGB。
 - lineSmoothProcessor(SDF)：全局量不被选区截断，选区只定写回范围；跨选区邻居用 effAlpha(内=平滑结果/外=原值)。任一环截断→选区边缘透明环；binaryOpen 全范围+越界跳过。
 - edge 模式参数=mode/edgeMedianRadius/lineSmoothStrength/lineSmoothRadius；toggles.preserveDetail 与 highFrequencyEnhancer.intensity 是别的功能同名物，勿误删。
 

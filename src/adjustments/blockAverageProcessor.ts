@@ -1,5 +1,5 @@
-// 分块平均处理算法 - 对独立的选区分别计算平均值（优化版本）
-export async function processBlockAverage(layerPixelData: ArrayBuffer, selectionData: ArrayBuffer, bounds: { width: number; height: number }, isBackgroundLayer: boolean = false, useWeightedAverage: boolean = false, weightedIntensity: number = 1): Promise<Uint8Array> {
+// 分块平均处理算法 - 对独立的选区（连通块）分别计算平均值，支持普通平均与对比减弱两种模式
+export async function processBlockAverage(layerPixelData: ArrayBuffer, selectionData: ArrayBuffer, bounds: { width: number; height: number }, isBackgroundLayer: boolean = false, useContrastReduction: boolean = false, contrastReductionIntensity: number = 8): Promise<Uint8Array> {
   const layerPixels = new Uint8Array(layerPixelData);
   const selectionPixels = new Uint8Array(selectionData);
   const result = new Uint8Array(layerPixels.length);
@@ -95,91 +95,74 @@ export async function processBlockAverage(layerPixelData: ArrayBuffer, selection
       if (compSize > 0) {
         regionCount++;
         
-        if (useWeightedAverage) {
-          // 简化的加权算法：使用近似颜色聚类（减少计算）
-          const colorTolerance = 900; // 使用平方距离避免sqrt
+        if (useContrastReduction) {
+          // 对比减弱：按像素与所在连通块均值的偏离量自适应压缩。
+          // 偏离小的像素（大面积底色）几乎不动，偏离大的像素（线条）大幅向均值靠拢，保留块内原有层次。
+          let totalR = 0, totalG = 0, totalB = 0, totalA = 0, totalL = 0, totalL2 = 0;
+          let validPixelCount = 0;
           
-          // 简化聚类：最多16个颜色簇，减少内存分配
-          const maxClusters = 16;
-          const clusterR = new Uint8Array(maxClusters);
-          const clusterG = new Uint8Array(maxClusters);
-          const clusterB = new Uint8Array(maxClusters);
-          const clusterA = new Uint8Array(maxClusters);
-          const clusterCount = new Uint16Array(maxClusters);
-          let numClusters = 0;
-          
-          // 快速聚类（避免对象分配）
           for (let ci = 0; ci < compSize; ci++) {
-            const idx = componentIdxs[ci];
-            const pIdx = idx << 2; // * 4
+            const pIdx = componentIdxs[ci] << 2;
+            if (layerPixels[pIdx + 3] === 0) continue;
+            
             const r = layerPixels[pIdx];
             const g = layerPixels[pIdx + 1];
             const b = layerPixels[pIdx + 2];
-            const a = layerPixels[pIdx + 3];
+            const l = 0.299 * r + 0.587 * g + 0.114 * b;
             
-            if (a === 0) continue;
-            
-            let clusterFound = false;
-            for (let c = 0; c < numClusters; c++) {
-              const dr = r - clusterR[c];
-              const dg = g - clusterG[c];
-              const db = b - clusterB[c];
-              const da = a - clusterA[c];
-              if (dr*dr + dg*dg + db*db + da*da <= colorTolerance) {
-                const newCount = clusterCount[c] + 1;
-                clusterR[c] = ((clusterR[c] * clusterCount[c] + r) / newCount) | 0;
-                clusterG[c] = ((clusterG[c] * clusterCount[c] + g) / newCount) | 0;
-                clusterB[c] = ((clusterB[c] * clusterCount[c] + b) / newCount) | 0;
-                clusterA[c] = ((clusterA[c] * clusterCount[c] + a) / newCount) | 0;
-                clusterCount[c] = newCount;
-                clusterFound = true;
-                break;
-              }
-            }
-            
-            if (!clusterFound && numClusters < maxClusters) {
-              clusterR[numClusters] = r;
-              clusterG[numClusters] = g;
-              clusterB[numClusters] = b;
-              clusterA[numClusters] = a;
-              clusterCount[numClusters] = 1;
-              numClusters++;
-            }
+            totalR += r;
+            totalG += g;
+            totalB += b;
+            totalA += layerPixels[pIdx + 3];
+            totalL += l;
+            totalL2 += l * l;
+            validPixelCount++;
           }
           
-          // 计算加权平均
-          let weightedR = 0, weightedG = 0, weightedB = 0, weightedA = 0, totalWeight = 0;
-          for (let c = 0; c < numClusters; c++) {
-            const weight = clusterCount[c];
-            weightedR += clusterR[c] * weight;
-            weightedG += clusterG[c] * weight;
-            weightedB += clusterB[c] * weight;
-            weightedA += clusterA[c] * weight;
-            totalWeight += weight;
-          }
+          if (validPixelCount === 0) continue;
           
-          if (totalWeight > 0) {
-            const avgR = (weightedR / totalWeight) | 0;
-            const avgG = (weightedG / totalWeight) | 0;
-            const avgB = (weightedB / totalWeight) | 0;
-            const avgA = (weightedA / totalWeight) | 0;
-            const intensityFactor = weightedIntensity * 0.1; // /10
+          const avgR = totalR / validPixelCount;
+          const avgG = totalG / validPixelCount;
+          const avgB = totalB / validPixelCount;
+          const avgA = totalA / validPixelCount;
+          const avgL = totalL / validPixelCount;
+          
+          // 压缩尺度取该连通块自身的亮度标准差，下限 6 防止近纯色块被自身噪声主导
+          const sigmaL = Math.sqrt(Math.max(0, totalL2 / validPixelCount - avgL * avgL));
+          const tau = sigmaL > 6 ? sigmaL : 6;
+          
+          // 强度 1-10 映射为偏离的最大抹除比例 7%-70%（只有偏离最大的像素才会触到这个上限）
+          const maxReduction = contrastReductionIntensity * 0.07;
+          
+          // 混合颜色带（内置行为，参数写死，不对用户暴露）：偏离 ≤1.5σ 的像素完全不受此影响（平台段），
+          // 1.5σ–6σ 之间线性过渡，≥6σ 的像素完全保留原值，使大反差特征不至于被压平。alpha 不参与该柔化。
+          const blendIfStart = 1.5 * tau;
+          const blendIfSpan = 4.5 * tau;
+          
+          for (let ci = 0; ci < compSize; ci++) {
+            const idx = componentIdxs[ci];
+            const pIdx = idx << 2;
+            if (layerPixels[pIdx + 3] === 0) continue;
             
-            // 应用混合
-            for (let ci = 0; ci < compSize; ci++) {
-              const idx = componentIdxs[ci];
-              const pIdx = idx << 2;
-              if (layerPixels[pIdx + 3] === 0) continue;
-              
-              const coeff = selectionCoefficients[idx] * 0.00392156863; // /255
-              const blendFactor = coeff * intensityFactor;
-              const invBlend = 1 - blendFactor;
-              
-              result[pIdx] = (layerPixels[pIdx] * invBlend + avgR * blendFactor) | 0;
-              result[pIdx + 1] = (layerPixels[pIdx + 1] * invBlend + avgG * blendFactor) | 0;
-              result[pIdx + 2] = (layerPixels[pIdx + 2] * invBlend + avgB * blendFactor) | 0;
-              result[pIdx + 3] = (layerPixels[pIdx + 3] * invBlend + avgA * blendFactor) | 0;
+            const l = 0.299 * layerPixels[pIdx] + 0.587 * layerPixels[pIdx + 1] + 0.114 * layerPixels[pIdx + 2];
+            const u = Math.abs(l - avgL);
+            const ratio = u / tau;
+            const coeff = selectionCoefficients[idx] * 0.00392156863; // /255
+            const factor = coeff * maxReduction * (ratio / (1 + ratio));
+            
+            let phi = 1;
+            if (u > blendIfStart) {
+              const q = (u - blendIfStart) / blendIfSpan;
+              phi = q > 1 ? 0 : 1 - q;
             }
+            
+            const invRgb = 1 - factor * phi;
+            const invAlpha = 1 - factor;
+            
+            result[pIdx] = (layerPixels[pIdx] * invRgb + avgR * factor * phi) | 0;
+            result[pIdx + 1] = (layerPixels[pIdx + 1] * invRgb + avgG * factor * phi) | 0;
+            result[pIdx + 2] = (layerPixels[pIdx + 2] * invRgb + avgB * factor * phi) | 0;
+            result[pIdx + 3] = (layerPixels[pIdx + 3] * invAlpha + avgA * factor) | 0;
           }
         } else {
           // 简单平均算法（优化版）

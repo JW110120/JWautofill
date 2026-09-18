@@ -29,7 +29,7 @@ export type AdjustmentPanelState = {
   subFeatures?: Array<{ id: string; parentId: string; isVisible: boolean; order: number }>;
   // 新增：面板内的“开关”类状态
   toggles?: {
-    useWeightedAverage?: boolean;
+    useContrastReduction?: boolean;
     preserveDetail?: boolean;
     specialWoodcutPreview?: boolean;
   };
@@ -37,7 +37,7 @@ export type AdjustmentPanelState = {
   values?: {
     radius?: number;
     sigma?: number;
-    weightedIntensity?: number;
+    contrastReductionIntensity?: number;
     highFreqIntensity?: number;
     highFreqRange?: number;
     edgeAlphaThreshold?: number;

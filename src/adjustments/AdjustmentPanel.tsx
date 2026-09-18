@@ -389,8 +389,8 @@ const [sigma, setSigma] = useState(5);
 const [specialSharpenStrength, setSpecialSharpenStrength] = useState(5);
 const [gradientRelaxStrength, setGradientRelaxStrength] = useState(-5);
 
-const [useWeightedAverage, setUseWeightedAverage] = useState(true);
-const [weightedIntensity, setWeightedIntensity] = useState(5);
+const [useContrastReduction, setUseContrastReduction] = useState(true);
+const [contrastReductionIntensity, setContrastReductionIntensity] = useState(8);
 const [usePowerfulMode, setUsePowerfulMode] = useState(false);
 const [highFreqIntensity, setHighFreqIntensity] = useState(5);
 const [highFreqRange, setHighFreqRange] = useState(3);
@@ -506,7 +506,7 @@ useEffect(() => {
         adjustmentPanel: {
           sections,
           subFeatures,
-          toggles: { useWeightedAverage, usePowerfulMode },
+          toggles: { useContrastReduction, usePowerfulMode },
         },
       });
       const ap = loaded && loaded.adjustmentPanel;
@@ -534,8 +534,8 @@ useEffect(() => {
           setSubFeatures(migratedSubFeatures);
         }
         if (ap.toggles) {
-          if (typeof ap.toggles.useWeightedAverage === 'boolean') {
-            setUseWeightedAverage(ap.toggles.useWeightedAverage);
+          if (typeof ap.toggles.useContrastReduction === 'boolean') {
+            setUseContrastReduction(ap.toggles.useContrastReduction);
           }
           if (typeof ap.toggles.usePowerfulMode === 'boolean') {
             setUsePowerfulMode(ap.toggles.usePowerfulMode);
@@ -555,7 +555,7 @@ useEffect(() => {
             const next = signedReady ? Math.max(-10, Math.min(10, v)) : (v === 0 ? 0 : -clampedAbs);
             setGradientRelaxStrength(next);
           }
-          if (typeof ap.values.weightedIntensity === 'number') setWeightedIntensity(ap.values.weightedIntensity);
+          if (typeof ap.values.contrastReductionIntensity === 'number') setContrastReductionIntensity(ap.values.contrastReductionIntensity);
           if (typeof ap.values.highFreqIntensity === 'number') setHighFreqIntensity(ap.values.highFreqIntensity);
           if (typeof ap.values.highFreqRange === 'number') setHighFreqRange(ap.values.highFreqRange);
           if (typeof (ap.values as any).specialWoodcutLevels === 'number') setSpecialWoodcutLevels(Math.max(2, Math.min(16, Math.round((ap.values as any).specialWoodcutLevels))));
@@ -586,14 +586,14 @@ useEffect(() => {
     adjustmentPanel: {
       sections,
       subFeatures,
-      toggles: { useWeightedAverage, usePowerfulMode, specialWoodcutPreview },
+      toggles: { useContrastReduction, usePowerfulMode, specialWoodcutPreview },
       values: {
         radius,
         sigma,
         specialSharpenStrength,
         gradientRelaxStrength,
         gradientModifySigned: true,
-        weightedIntensity,
+        contrastReductionIntensity,
         highFreqIntensity,
         highFreqRange,
         specialWoodcutLevels,
@@ -612,14 +612,14 @@ useEffect(() => {
   panelStateLoaded,
   sections,
   subFeatures,
-  useWeightedAverage,
+  useContrastReduction,
   usePowerfulMode,
   specialWoodcutPreview,
   radius,
   sigma,
   specialSharpenStrength,
   gradientRelaxStrength,
-  weightedIntensity,
+  contrastReductionIntensity,
   highFreqIntensity,
   highFreqRange,
   specialWoodcutLevels,
@@ -698,8 +698,8 @@ useEffect(() => {
       setSigma(5);
       setSpecialSharpenStrength(5);
       setGradientRelaxStrength(-5);
-      setUseWeightedAverage(true);
-      setWeightedIntensity(5);
+      setUseContrastReduction(true);
+      setContrastReductionIntensity(8);
       setHighFreqIntensity(5);
       setHighFreqRange(3);
       setSpecialWoodcutLevels(4);
@@ -1211,15 +1211,15 @@ const handleGradientRelaxStrengthNumberChange = (event: React.ChangeEvent<HTMLIn
   }
 };
 
-// 加权强度滑块处理
-const handleWeightedIntensityChange = (value: number) => {
-  setWeightedIntensity(value);
+// 减弱强度滑块处理
+const handleContrastReductionIntensityChange = (value: number) => {
+  setContrastReductionIntensity(value);
 };
 
-const handleWeightedIntensityNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+const handleContrastReductionIntensityNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
   const value = parseFloat(event.target.value);
   if (!isNaN(value) && value >= 1 && value <= 10) {
-    setWeightedIntensity(value);
+    setContrastReductionIntensity(value);
   }
 };
 
@@ -1634,12 +1634,12 @@ const handleBlockAverage = async () => {
           fullSelectionMask.buffer, 
           { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
           isBackgroundLayer,
-          useWeightedAverage,
-          weightedIntensity
+          useContrastReduction,
+          contrastReductionIntensity
         );
         
         // 步骤4：应用处理后的像素数据
-        await applyProcessedPixels(processedPixels, pixelResult, '分块平均');
+        await applyProcessedPixels(processedPixels, pixelResult, useContrastReduction ? '对比减弱' : '分块平均');
       });
     });
     giveFocusBackToPS();
@@ -2723,7 +2723,7 @@ const SLIDER_DRAG_CONFIGS = {
   edgeMedianRadius:            { min: 10,  max: 30,  step: 1   },
   edgeLineStrength:            { min: 0,   max: 100, step: 1   },
   edgeLineSmoothRadius:        { min: 3,   max: 12,  step: 1   },
-  weightedIntensity:           { min: 1,   max: 10,  step: 0.5 },
+  contrastReductionIntensity:           { min: 1,   max: 10,  step: 0.5 },
   specialWoodcutLevels:        { min: 2,   max: 16,  step: 1   },
   specialWoodcutEdgeThreshold: { min: 0,   max: 255, step: 1   },
   specialWoodcutEdgeStrength:  { min: 0,   max: 100, step: 1   }
@@ -2744,7 +2744,7 @@ const { dragTarget: sliderDragTarget, onLabelMouseDown: onSliderLabelMouseDown }
       case 'edgeMedianRadius': handleEdgeMedianRadiusChange(value); break;
       case 'edgeLineStrength': handleEdgeLineStrengthChange(value); break;
       case 'edgeLineSmoothRadius': handleEdgeLineSmoothRadiusChange(value); break;
-      case 'weightedIntensity': handleWeightedIntensityChange(value); break;
+      case 'contrastReductionIntensity': handleContrastReductionIntensityChange(value); break;
       case 'specialWoodcutLevels': handleSpecialWoodcutLevelsChange(value); break;
       case 'specialWoodcutEdgeThreshold': handleSpecialWoodcutEdgeThresholdChange(value); break;
       case 'specialWoodcutEdgeStrength': handleSpecialWoodcutEdgeStrengthChange(value); break;
@@ -3209,22 +3209,22 @@ const renderQuickActionContent = () => (
       <div className="row-start">
         <label 
           className="label-4"
-          onClick={() => setUseWeightedAverage(!useWeightedAverage)}
-          title={helpTexts.adjustment.weightedMode}
-        >加权模式</label>
+          onClick={() => setUseContrastReduction(!useContrastReduction)}
+          title={helpTexts.adjustment.contrastReduce}
+        >对比减弱</label>
         <sp-switch 
-          checked={useWeightedAverage}
-          onChange={(e) => setUseWeightedAverage(e.target.checked)}
+          checked={useContrastReduction}
+          onChange={(e) => setUseContrastReduction(e.target.checked)}
         />
       </div>
     </div>
 
-    {useWeightedAverage && (
+    {useContrastReduction && (
         <div className="row-between slider-row">
-          <div className={sliderLabelClass('weightedIntensity', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'weightedIntensity', weightedIntensity)} title={helpTexts.adjustment.weightedIntensity}>强度</div>
-          <RangeSlider min={1} max={10} step={0.5} value={weightedIntensity} onChange={handleWeightedIntensityChange} className="slider-track" />
+          <div className={sliderLabelClass('contrastReductionIntensity', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'contrastReductionIntensity', contrastReductionIntensity)} title={helpTexts.adjustment.contrastReductionIntensity}>强度</div>
+          <RangeSlider min={1} max={10} step={0.5} value={contrastReductionIntensity} onChange={handleContrastReductionIntensityChange} className="slider-track" />
           <div className="row-start">
-            <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={weightedIntensity} onChange={handleWeightedIntensityNumberChange} /></div>
+            <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={contrastReductionIntensity} onChange={handleContrastReductionIntensityNumberChange} /></div>
             <div className="num-unit">级</div>
           </div>
         </div>
