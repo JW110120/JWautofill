@@ -28,6 +28,7 @@ interface EdgeDetectionParams {
   lineSmoothStrength?: number;
   lineSmoothRadius?: number;
   lineSmoothFlatten?: number;
+  lineSmoothOpacity?: number;
 }
 
 const clampInt = (v: number, lo: number, hi: number) => (v < lo ? lo : (v > hi ? hi : v));
@@ -403,11 +404,13 @@ export async function processSmartEdgeSmooth(
   // 「仅主线条」：整体转发给 lineSmoothProcessor（它自带选区二值化与窗口化），本文件不再参与。
   // 必须先分派：下面那三段（二值化整张选区掩码 / 拷贝整图输出缓冲 / 扫描选区包围盒）
   // 都是「仅色块边界」才需要的全图开销，放在这里会让 line 模式白白多跑 2~3 遍全图。
-  // 面板暴露三个参数：平滑力度（默认 100%）、轮廓平滑（默认 8px）、宽度拉平（默认 0 = 关）。
+  // 面板暴露四个参数：平滑力度（默认 100%）、曲率平滑（默认 8px）、宽度平滑（默认 0 = 关）、
+  // 不透明度平滑（默认 250，与 lineSmoothProcessor 的 opacityRadius 默认值一致）。
   if (mode === 'line') {
     const lineSmoothStrength = clamp01(params.lineSmoothStrength ?? 1);
     const lineSmoothRadius = clampInt(Math.round(params.lineSmoothRadius ?? 8), 3, 9);
     const lineSmoothFlatten = clampInt(Math.round(params.lineSmoothFlatten ?? 0), 0, 700);
+    const lineSmoothOpacity = clampInt(Math.round(params.lineSmoothOpacity ?? 250), 0, 700);
     return processLineSmooth(
       pixelDataBuffer,
       selectionMaskBuffer,
@@ -415,7 +418,8 @@ export async function processSmartEdgeSmooth(
       {
         strength: lineSmoothStrength,
         radius: lineSmoothRadius,
-        flattenRadius: lineSmoothFlatten
+        flattenRadius: lineSmoothFlatten,
+        opacityRadius: lineSmoothOpacity
       }
     );
   }
@@ -493,6 +497,7 @@ export const defaultSmartEdgeSmoothParams: EdgeDetectionParams = {
   mode: 'edge',
   edgeMedianRadius: 16,
   lineSmoothStrength: 1,       // 平滑力度默认 100%
-  lineSmoothRadius: 8,         // 轮廓平滑默认 8px
-  lineSmoothFlatten: 0         // 宽度拉平默认 0（关）
+  lineSmoothRadius: 8,         // 曲率平滑默认 8px
+  lineSmoothFlatten: 0,        // 宽度平滑默认 0（关）
+  lineSmoothOpacity: 250       // 不透明度平滑默认 250（与 lineSmoothProcessor 的默认一致）
 };
