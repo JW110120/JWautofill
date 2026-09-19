@@ -1187,6 +1187,18 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             return updated;
         })();
         setPresets(nextOrder);
+        // 选中态必须跟着预设一起搬家：选中项存的是「索引/位置」而不是身份，
+        // 交换后若不重映射，高亮会停在旧位置（显示的是被换过来的那个预设），
+        // 而编辑区仍是原选中预设的数据 —— 此后一动滑块，实时同步 effect 就会把
+        // 原选中预设的数据写进新占位的那个预设，静默改写别人的数据。
+        const remapIndex = (i: number) => {
+            if (i === fromIndex) return dropIndex;
+            if (fromIndex < dropIndex) return (i > fromIndex && i <= dropIndex) ? i - 1 : i;
+            return (i >= dropIndex && i < fromIndex) ? i + 1 : i;
+        };
+        if (selectedPreset !== null) setSelectedPreset(remapIndex(selectedPreset));
+        if (selectedPresets.size > 0) setSelectedPresets(new Set(Array.from(selectedPresets).map(remapIndex)));
+        if (lastClickedPreset !== null) setLastClickedPreset(remapIndex(lastClickedPreset));
         try {
             await PresetManager.saveGradientPresets(nextOrder);
         } catch (err) {

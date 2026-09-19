@@ -2268,8 +2268,12 @@ const handleHighFrequencyEnhancement = async () => {
         }
         
         // 步骤3：用高频增强算法处理像素数据
+        // ⚠️ 必须传 fullPixelData（整层真实像素），不能传 selectionPixelData：
+        // 后者只复制了选区内像素、选区外一律为 0，卷积采样到这批 0 会在选区边缘
+        // 伪造出巨额"高频"并顶到 255 —— 即历史上反复出现的「选区边缘白边」。
+        // 区域判定由处理器内部的选区掩码负责，写回范围仍由 applyProcessedPixels 控制。
         const processedPixels = await processHighFrequencyEnhancement(
-          pixelResult.selectionPixelData.buffer, 
+          pixelResult.fullPixelData.buffer, 
           fullSelectionMask.buffer, 
           { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
           { intensity: highFreqIntensity, thresholdRange: highFreqRange },

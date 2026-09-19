@@ -27,55 +27,59 @@ export async function processHighFrequencyEnhancement(
     [-1, -1, -1]
   ];
   
-  // 创建低通滤波核 - 用于获取低频信息
-  const lowPassKernel = [
-    [1/16, 2/16, 1/16],
-    [2/16, 4/16, 2/16],
-    [1/16, 2/16, 1/16]
-  ];
-  
   // 第一步：计算高频信息
+  //
+  // ⚠️ 两条边界铁律（缺一则写回后沿内容轮廓出现一圈白边）：
+  //  ① 区域判定只能用「选区掩码 > 0」，不能再按「alpha > 0」判定 ——
+  //     写回范围是 selectionDocIndices（掩码>0），按 alpha 判定会让统计口径与写回口径不一致。
+  //  ② 采样到「数据缺失」像素（图层外/全透明，即 RGBA 全 0）时，必须用中心像素值顶替（边缘延拓）。
+  //     直接采到 0 会让 8·c − Σ邻居 凭空变成 8·c 的"高频"，enhanced = c + 8c·k 当场顶到 255；
+  //     选区边缘与图层 alpha 边缘两条路径同因，这也是本功能反复出现「边缘白边」的根因。
+  // 原低通分支（lowPassKernel / lowFreqData）只写不读，已删。
   const highFreqData = new Float32Array(pixels.length);
-  const lowFreqData = new Float32Array(pixels.length);
-  
+
   for (let y = 1; y < height - 1; y++) {
     for (let x = 1; x < width - 1; x++) {
       const centerIdx = (y * width + x) * 4;
-      
-      // 检查是否在选区内
-      let inSelection = false;
-      if (isBackgroundLayer) {
-        const selectionValue = selectionMask[y * width + x] || 0;
-        inSelection = selectionValue > 0;
-      } else {
-        const centerAlpha = pixels[centerIdx + 3];
-        inSelection = centerAlpha > 0;
+      const pixelIdx = y * width + x;
+
+      if ((selectionMask[pixelIdx] || 0) === 0) {
+        continue;
       }
-      
-      if (inSelection) {
-        // 对每个颜色通道计算高频和低频信息
-        for (let channel = 0; channel < 3; channel++) {
-          let highFreqSum = 0;
-          let lowFreqSum = 0;
-          
-          // 应用3x3卷积核
-          for (let ky = -1; ky <= 1; ky++) {
-            for (let kx = -1; kx <= 1; kx++) {
-              const sampleIdx = ((y + ky) * width + (x + kx)) * 4;
-              const pixelValue = pixels[sampleIdx + channel];
-              
-              // 高频检测
-              highFreqSum += pixelValue * highPassKernel[ky + 1][kx + 1];
-              
-              // 低频检测
-              lowFreqSum += pixelValue * lowPassKernel[ky + 1][kx + 1];
-            }
+
+      const centerR = pixels[centerIdx];
+      const centerG = pixels[centerIdx + 1];
+      const centerB = pixels[centerIdx + 2];
+
+      let hpR = 0;
+      let hpG = 0;
+      let hpB = 0;
+
+      // 应用3x3高通卷积核
+      for (let ky = -1; ky <= 1; ky++) {
+        for (let kx = -1; kx <= 1; kx++) {
+          const sampleIdx = ((y + ky) * width + (x + kx)) * 4;
+          const kernel = highPassKernel[ky + 1][kx + 1];
+
+          let sR = pixels[sampleIdx];
+          let sG = pixels[sampleIdx + 1];
+          let sB = pixels[sampleIdx + 2];
+
+          if (sR === 0 && sG === 0 && sB === 0 && pixels[sampleIdx + 3] === 0) {
+            sR = centerR;
+            sG = centerG;
+            sB = centerB;
           }
-          
-          highFreqData[centerIdx + channel] = highFreqSum;
-          lowFreqData[centerIdx + channel] = lowFreqSum;
+
+          hpR += sR * kernel;
+          hpG += sG * kernel;
+          hpB += sB * kernel;
         }
       }
+
+      highFreqData[centerIdx] = hpR;
+      highFreqData[centerIdx + 1] = hpG;
+      highFreqData[centerIdx + 2] = hpB;
     }
   }
   
@@ -111,21 +115,11 @@ export async function processHighFrequencyEnhancement(
       const centerIdx = (y * width + x) * 4;
       const pixelIdx = y * width + x;
       
-      // 检查是否在选区内
-      let inSelection = false;
-      let selectionCoeff = 0;
-      
-      if (isBackgroundLayer) {
-        const selectionValue = selectionMask[pixelIdx] || 0;
-        inSelection = selectionValue > 0;
-        selectionCoeff = selectionValue / 255;
-      } else {
-        const centerAlpha = pixels[centerIdx + 3];
-        inSelection = centerAlpha > 0;
-        selectionCoeff = centerAlpha / 255;
-      }
-      
-      if (inSelection) {
+      // 区域与系数一律以选区掩码为准（与写回范围 selectionDocIndices 同口径，背景层亦是）
+      const maskValue = selectionMask[pixelIdx] || 0;
+
+      if (maskValue > 0) {
+        const selectionCoeff = maskValue / 255;
         const currentIntensity = highFreqIntensity[pixelIdx];
         
         // 只对高频区域进行增强
@@ -138,6 +132,8 @@ export async function processHighFrequencyEnhancement(
           let variance = 0;
           let sampleCount = 0;
           let avgValue = 0;
+          // 数据缺失像素同样用中心像素灰度顶替，否则轮廓处方差被 0 拉爆、varianceFactor 直接取 1
+          const centerGray = (pixels[centerIdx] + pixels[centerIdx + 1] + pixels[centerIdx + 2]) / 3;
           
           // 计算5x5区域的方差
           for (let ky = -2; ky <= 2; ky++) {
@@ -147,7 +143,12 @@ export async function processHighFrequencyEnhancement(
               
               if (sampleY >= 0 && sampleY < height && sampleX >= 0 && sampleX < width) {
                 const sampleIdx = (sampleY * width + sampleX) * 4;
-                const grayValue = (pixels[sampleIdx] + pixels[sampleIdx + 1] + pixels[sampleIdx + 2]) / 3;
+                const sR = pixels[sampleIdx];
+                const sG = pixels[sampleIdx + 1];
+                const sB = pixels[sampleIdx + 2];
+                const grayValue = (sR === 0 && sG === 0 && sB === 0 && pixels[sampleIdx + 3] === 0)
+                  ? centerGray
+                  : (sR + sG + sB) / 3;
                 avgValue += grayValue;
                 sampleCount++;
               }
@@ -164,7 +165,12 @@ export async function processHighFrequencyEnhancement(
               
               if (sampleY >= 0 && sampleY < height && sampleX >= 0 && sampleX < width) {
                 const sampleIdx = (sampleY * width + sampleX) * 4;
-                const grayValue = (pixels[sampleIdx] + pixels[sampleIdx + 1] + pixels[sampleIdx + 2]) / 3;
+                const sR = pixels[sampleIdx];
+                const sG = pixels[sampleIdx + 1];
+                const sB = pixels[sampleIdx + 2];
+                const grayValue = (sR === 0 && sG === 0 && sB === 0 && pixels[sampleIdx + 3] === 0)
+                  ? centerGray
+                  : (sR + sG + sB) / 3;
                 variance += Math.pow(grayValue - avgValue, 2);
               }
             }
