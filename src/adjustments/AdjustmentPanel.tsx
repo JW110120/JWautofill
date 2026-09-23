@@ -2153,15 +2153,15 @@ const handleAlphaAlign = async (direction: 'down' | 'up' = 'down') => {
         }
 
         // 关键：传入 fullPixelData（完整 alpha）而非 selectionPixelData。
-        // 这样环形邻域能引用选区外的线条像素找到"单线水平"，
-        // 而 fullSelectionMask 只决定"哪些像素会被修改"。
+        // 基准由处理器内按选区直方图统计（v10：下对齐=选区内最小 alpha、上对齐=最大），
+        // 因此这里需要完整 alpha；fullSelectionMask 决定"统计与写回的范围"。
         const processedPixels = await processAlphaAlign(
           pixelResult.fullPixelData.buffer,
           fullSelectionMask.buffer,
           { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
           {},
           false,
-          direction // 上对齐：把比主体偏淡的像素拉高到线条主体水平
+          direction // 'down' = 基准取选区内最浅档；'up' = 基准取选区内最深档
         );
 
         // 写回：按选区羽化系数混合，选区内写入计算结果，选区外保留原像素
@@ -3051,23 +3051,21 @@ const renderDetailAdjustContent = () => (
 const renderEdgeProcessingContent = () => (
   <div className="border-panel-section">
     <div className="row-between">
-    <div role="button" tabIndex={0} className="action-button-4" onClick={handleSmartEdgeSmooth} title={helpTexts.adjustment.edgeSmooth}>边缘平滑</div>
-    </div>
-      <div className="row-between">
-        {/* 下拉行：标签不可拖拽，光标保持 default（与可拖拽滑块标签区分） */}
-        <div className="label-4" title={helpTexts.adjustment.edgeSmoothMode}>平滑模式</div>
-        <Select
-          value={edgeSmoothMode}
-          onChange={handleEdgeSmoothModeChange}
-          title={helpTexts.adjustment.edgeSmoothModeSelect}
-          showCheck
-          placeholder=""
-          options={[
-            { value: 'edge', label: '仅色块边界' },
-            { value: 'line', label: '仅主线条' },
-          ]}
+      <div role="button" tabIndex={0} className="action-button-4" onClick={handleSmartEdgeSmooth} title={helpTexts.adjustment.edgeSmooth}>边缘平滑</div>
+      {/* 平滑模式开关 + 静态标签（取代原「平滑模式」下拉，2026-09-23）：
+          开 = 色块边缘模式（edge）、关 = 主线条模式（line），默认关。
+          标签用 .label-6（6 字 73px，与全插件标签同档，自带 10px 右外边距），
+          与开关同排成组靠右；开关行的左侧间距由既有规则提供，不新增 CSS。
+          下方参数行按同一个 edgeSmoothMode 状态切换，与开关互为镜像。 */}
+      <div className="row-start">
+        <div className="label-4" title={helpTexts.adjustment.edgeSmoothModeSwitch}>色块边缘</div>
+        <sp-switch
+          checked={edgeSmoothMode === 'edge'}
+          onChange={(e: any) => handleEdgeSmoothModeChange(e.target.checked ? 'edge' : 'line')}
+          title={helpTexts.adjustment.edgeSmoothModeSwitch}
         />
       </div>
+    </div>
 
       {edgeSmoothMode === 'edge' && (
         <>
@@ -3125,8 +3123,10 @@ const renderEdgeProcessingContent = () => (
 
     <div className="divider"></div>
 
+    {/* 消除锯齿 + 线条加黑 并排（线条加黑原在「快捷操作」区块，2026-09-23 移来） */}
     <div className="row-between">
       <div role="button" tabIndex={0} className="action-button-4" onClick={handleAliasSmooth} title={helpTexts.adjustment.aliasSmooth}>消除锯齿</div>
+      <div role="button" tabIndex={0} className="action-button-4" onClick={handleLineEnhancement} title={helpTexts.adjustment.lineEnhance}>线条加黑</div>
     </div>
 
     <div className="row-between slider-row">
@@ -3544,9 +3544,8 @@ const renderQuickActionContent = () => (
 
     <div className="divider"></div>
 
-    {/* 2×2 按钮组（alpha 对齐 / 线条加黑）：整块作为一个子分区挂在快捷操作最下方。
-        四颗统一 .action-button-quad(92px) 保证左右两列严格对齐；
-        仅第一行底部留 10px 与下一行分隔，第二行不加 */}
+    {/* alpha 对齐三联（原 2×2 网格里的「线条加黑」已移到「边缘处理 → 消除锯齿」右侧）：
+        三颗统一 .action-button-quad(92px)，左缘与上方行对齐；众对齐独占第二行左侧。 */}
     <div className="row-between">
       <div role="button" tabIndex={0} className="action-button-quad" onClick={() => handleAlphaAlign('down')} title={helpTexts.adjustment.alphaDown}>alpha下对齐</div>
 
@@ -3555,8 +3554,6 @@ const renderQuickActionContent = () => (
 
     <div className="row-between">
       <div role="button" tabIndex={0} className="action-button-quad" onClick={handleAlphaModeAlign} title={helpTexts.adjustment.alphaMode}>alpha众对齐</div>
-
-      <div role="button" tabIndex={0} className="action-button-quad" onClick={handleLineEnhancement} title={helpTexts.adjustment.lineEnhance}>线条加黑</div>
     </div>
   </div>
 );

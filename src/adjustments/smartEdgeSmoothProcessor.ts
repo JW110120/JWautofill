@@ -494,7 +494,7 @@ export async function processSmartEdgeSmooth(
 }
 
 export const defaultSmartEdgeSmoothParams: EdgeDetectionParams = {
-  mode: 'edge',
+  mode: 'line',                // 面板右侧开关默认关闭 = 线条模式（色块边缘模式需手动开启）
   edgeMedianRadius: 16,
   lineSmoothStrength: 1,       // 平滑力度默认 100%
   lineSmoothRadius: 8,         // 曲率平滑默认 8px
