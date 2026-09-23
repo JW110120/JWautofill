@@ -14,7 +14,7 @@ import { processGradientRelax } from './gradientRelaxProcessor';
 import { processSpecialSharpen } from './specialSharpenProcessor';
 import { processSpecialWoodcut } from './specialWoodcutProcessor';
 import { processLineEnhancement } from './lineProcessing';
-import { processAlphaAlign, processAlphaModeAlign } from './alphaAlignProcessor';
+import { processAlphaAlign, processAlphaModeAlign, processExtremeAlign } from './alphaAlignProcessor';
 import { processHighFrequencyEnhancement } from './highFrequencyEnhancer';
 import { processSmartEdgeSmooth, defaultSmartEdgeSmoothParams } from './smartEdgeSmoothProcessor';
 import { processAliasSmooth, defaultAliasSmoothParams } from './aliasSmoothProcessor';
@@ -2233,6 +2233,75 @@ const handleAlphaModeAlign = async () => {
   }
 };
 
+// 极值微调：**线条上的污渍**专用（提升下极值 / 削弱上极值）。
+// 与上面三个"整片归一"按钮的分工：
+//   · 三个 alpha 对齐按钮 = **整片**抹平（基准取整个选区直方图的极值/众数，只动 alpha）；
+//   · 这两个 = **逐像素多尺度环带参照**的**局部**修正，且 RGB 与 alpha 一起修：
+//       提升下极值 raiseLow  ：把偏低的值（淡斑、被擦淡、颜色被压暗）抬回本线条主体水平，只增不减；
+//       削弱上极值 weakenHigh：把偏高的值（叠画凸起、色斑发亮）压低到线条主体水平，只减不增。
+// 算法与 v5（提交 d648017）的多尺度环带参照一致，扩展为四通道各自生效。
+// I/O 与 handleAlphaAlign 相同：整文档 getPixels → 算法 → 整文档 putPixels，选区外像素由
+// 掩码系数混合保留；环带参照读得到选区外的线条像素，因此小选区也能找到"单线水平"。
+const handleExtremeAlign = async (direction: 'raiseLow' | 'weakenHigh') => {
+  if (!handleLicenseBeforeAction()) return;
+  const name = direction === 'raiseLow' ? '提升下极值' : '削弱上极值';
+  try {
+    const { executeAsModal } = core;
+
+    await runCommand(name, async () => {
+      // 检测当前编辑状态
+      const editingState = await checkEditingState();
+      if (!editingState.isValid) return;
+      const { layer, isBackgroundLayer } = editingState;
+      if (isBackgroundLayer) {
+        await core.showAlert({ message: name + '仅支持非背景的普通像素图层，请选择像素图层后再使用。' });
+        return;
+      }
+
+      // 获取选区边界与选区像素数据（无选区时内部会自动 batchPlay 全选文档）
+      const selectionBounds = await getSelectionData();
+      if (!selectionBounds) {
+        await core.showAlert({ message: '获取文档信息失败' });
+        return;
+      }
+      console.log('✅ [' + name + '] 选区像素数=' + (selectionBounds.selectionDocIndices ? selectionBounds.selectionDocIndices.size : -1) +
+        ' 文档=' + selectionBounds.docWidth + 'x' + selectionBounds.docHeight +
+        ' 选区=' + selectionBounds.left + ',' + selectionBounds.top + ',' + selectionBounds.right + ',' + selectionBounds.bottom);
+
+      await runWithTemporaryUnlock(async () => {
+        // 使用与像素过渡等已验证功能完全相同的共享像素数据处理流程
+        const pixelResult = await processPixelData(selectionBounds, layer, isBackgroundLayer);
+
+        // 创建完整文档尺寸的选区掩码（选区内为羽化值 0-255，选区外为 0）
+        const fullSelectionMask = new Uint8Array(selectionBounds.docWidth * selectionBounds.docHeight);
+        let maskIndex = 0;
+        for (let docIndex of pixelResult.selectionIndices) {
+          fullSelectionMask[docIndex] = selectionBounds.selectionValues[maskIndex];
+          maskIndex++;
+        }
+
+        // 传入 fullPixelData：环带参照要能读选区外的线条像素；RGB 与 alpha 都要参与修正。
+        const processedPixels = await processExtremeAlign(
+          pixelResult.fullPixelData.buffer,
+          fullSelectionMask.buffer,
+          { width: selectionBounds.docWidth, height: selectionBounds.docHeight },
+          {},
+          false,
+          direction
+        );
+
+        // 写回：按选区羽化系数混合，选区内写入计算结果，选区外保留原像素
+        await applyProcessedPixels(processedPixels, pixelResult, name);
+      });
+    });
+    giveFocusBackToPS();
+  } catch (error) {
+    const msg = typeof error === 'string' ? error : (error && (error.message || (error as any).toString?.() || '未知错误'));
+    console.error('❌ ' + name + '处理失败:', error);
+    await core.showAlert({ message: formatFailMsg(name, msg) });
+  }
+};
+
 // 高频增强功能
 const handleHighFrequencyEnhancement = async () => {
   if (!handleLicenseBeforeAction()) return;
@@ -3136,6 +3205,18 @@ const renderEdgeProcessingContent = () => (
         <div className="num-input-row"><input type="number" min="0.5" max="2" step="0.5" value={aliasSoftWidth} onChange={handleAliasSoftWidthNumberChange} /></div>
         <div className="num-unit">px</div>
       </div>
+    </div>
+
+    <div className="divider"></div>
+
+    {/* 极值微调：线条上的污渍专用。与「快捷操作」里那三个 alpha 对齐按钮分工不同 ——
+        那三个是整片归一（只动 alpha、抹平整片），这两个是逐像素多尺度环带参照的
+        局部修正，且 RGB 与 alpha 一起修。两颗 5 字按钮统一 .action-button-5(85px)，
+        与上方各行左缘对齐。 */}
+    <div className="row-between">
+      <div role="button" tabIndex={0} className="action-button-5" onClick={() => handleExtremeAlign('raiseLow')} title={helpTexts.adjustment.extremeRaiseLow}>提升下极值</div>
+
+      <div role="button" tabIndex={0} className="action-button-5" onClick={() => handleExtremeAlign('weakenHigh')} title={helpTexts.adjustment.extremeWeakenHigh}>削弱上极值</div>
     </div>
   </div>
 );

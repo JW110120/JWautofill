@@ -205,6 +205,33 @@ globalThis.__TRACE = new Set([1863, 1864]);   // 只打印关心的像素，别�
 
 `git show <sha>:<path>` 取不到 —— 文件正是在那个提交里被删的。正确姿势：`git show <sha>^:<path>`（父提交的树）。
 先 `git log --oneline --follow -- <path>` 看该文件的历史，确认改了几轮、要不要取更早的版本。
+（若只是**后续提交改掉了算法**、文件还在，则直接 `git show <sha>:<path>` 即可 —— 2026-09-23 移植 alpha 环带参照时就是这种。）
+
+### 移植旧算法回来：用「逐字节保真比对」代替肉眼截图（2026-09-23 新立）
+
+用户说「旧版算法在该场景有可取之处，恢复它，但作用通道要扩展」时，**先把旧版整份拿出来当参照实现**，
+再用台架证明新实现的**旧通道部分与旧版逐字节一致**。这比任何 before/after 截图都硬：
+
+1. `git show <sha>:<path> > outputs/refactor_refs/<name>_old_<sha前7>.ts`（**保留在 outputs/ 下当固定参照**）。
+2. 同一脚本里 `typescript.transpileModule` **两个文件各转一份**再 `require`，一次跑出两版输出：
+   ```js
+   const NEW = loadTs('src/adjustments/xxxProcessor.ts');
+   const OLD = loadTs('outputs/refactor_refs/xxx_old_abcdef1.ts');
+   // 同一输入 buffer.slice(0) 喂两次（就地写回的处理器必须各给一份副本）
+   for (let i = 0; i < W*H; i++) if (outNew[i*4+3] !== outOld[i*4+3]) diff++;
+   ```
+   断言 `diff === 0` ⇒ 「移植是忠实的」这句话才成立。**扩展的通道（新能力）单独断言语义**，别混在一起。
+3. **扩展通道时，先找出旧版里"与通道语义绑定"的常量**，它们不能照搬：
+   - 旧版若只处理 alpha，`minAlpha` 之类的下限会被写进各项夹取（如"参照区间下界"）——
+     换成 RGB 后那个下限必须回落成 0，否则深色内容（RGB=30）整个找不到参照。
+   - 旧版的"层保护/邻域护栏"若依赖 alpha 的物理语义（另一条线、叠画带），**不要照搬到颜色通道**：
+     颜色没有"层"，通道落差本身就是待修的对象。这类取舍要写进注释与 refs，并在 console 打出命中计数
+     （便于用户判断该不该放宽），**不要静默改阈值**。
+4. **"不激进"要用改动像素数证明**：同一素材分别跑新按钮与旧实现（本项目是 v10 整片归一），
+   报**改动像素数 + 档位数变化**。本次 `_aa_like` 0/2116 改 vs v10 23350/4063 改、档位数 5→5（v10 5→2），
+   一句话就能回答"它到底有多保守、有没有保留层次"。
+5. ⚠️ **别漏了"没有污渍时必须是 0 改动"这组用例**（纯平直线 / 同水平交叉）：移植类改动最怕的就是
+   在正常内容上乱动，而这组用例是唯一的探针。
 
 ## 改「平滑/距离场类」算法时的对拍口径（2026-09-18 lineSmooth 细线修复）
 
@@ -311,11 +338,16 @@ globalThis.__TRACE = new Set([1863, 1864]);   // 只打印关心的像素，别�
 
 1. **类型校验（不是构建）**：
    ```
-   node node_modules/typescript/bin/tsc -p analysis/line_vis/tsconfig.tc.json
+   node node_modules/typescript/bin/tsc -p outputs/tc_<目标>.json
    ```
-   配置 = `extends` 根 tsconfig + **`types: []`** + 只 `include` `../../src/**`。
+   ⚠️ `analysis/line_vis/tsconfig.tc.json` **本机已不存在**（analysis/ 被清过，2026-09-23 确认）——
+   临时配置写在 `outputs/`（已 gitignore），形如：
+   `compilerOptions = { target:"es5", module:"es2015", moduleResolution:"node",
+   lib:["es5","es2015.promise","dom"], types:[], strict:false, noEmit:true, skipLibCheck:true }`，
+   `files` 只指要查的文件（面板另加 `jsx:"react"`）。
    ⚠️ **`types: []` 是必需的**：默认会加载 `@types/node`，其 `ffi.d.ts` 含 TS1109/TS1128 语法错 →
    **tsc 提前中止、一条 src 报错都不输出（＝假通过）**。第一次全量 tsc 就是这样：50 条全在 node_modules、`src` 命中 0。
+   ⚠️ **`lib` 里必须带 `es2015.promise`**：否则每个 `async` 函数报 TS2705（与目标文件无关的假报错）。
 2. **判据不看报错总数**（本仓库约 700 条环境噪声：TS2705 / TS2550 / TS2583 / TS2591 / TS2307），
    只看**新增标识符是否出现在任何报错里**。本轮 `flatten` 0 命中 + 新增 UI 区间 3060–3100 与调用点 2330–2360
    均 0 报错，才算过。
