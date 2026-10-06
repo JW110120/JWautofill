@@ -187,21 +187,44 @@ export function createOcclusionSession(): OcclusionSession {
     //   不到「相交」，数字就一直浮在菜单上（短菜单如渐变「样式」下拉尤易触发，因为
     //   它只 2 个选项、矩形又小，坐标稍微错乱就彻底漏检）。
     const measured = popEl.getBoundingClientRect();
-    const measuredH = measured && measured.height >= 24 ? measured.height : 0;
+    // 阈值 24 只是「量到了没有」的探测下限，不代表真实行高（真实 ≈28，见 estimatePopRect）
+    const measuredH = measured && measured.height >= 8 ? measured.height : 0;
     const measuredW = measured && measured.width > 0 ? measured.width : 0;
 
     // 原点（X/Y）与宽度：优先用 fallbackRect（=pos，可靠）；measured 不可信时降级。
     const baseLeft = fallbackRect ? fallbackRect.left : (measured ? measured.left : 0);
     const baseTop = fallbackRect ? fallbackRect.top : (measured ? measured.top : 0);
+    // ⚠️ 宽度同理不可只信实测：UXP 偶发返回 0 宽，叠加 PAD 后横向会漏判
+    //（输入框在菜单右侧时尤其明显）。故实测优先、退化时用 pos.width（写入时已知）。
     const w = measuredW || (fallbackRect ? fallbackRect.right - fallbackRect.left : 0);
 
-    // 高度取「实测高度」与「兜底高度」的较大值：实测往往偏短（UXP 偶发只量到部分
-    // 选项），兜底高度（来自 pos + 充裕估算）保证盖住头部正下方那一列的文本控件
-    // （UXP 下文本控件无视 z-index 永远画在最上层，头部正下方的 number 会透过菜单
-    // 显示出来，必须纳入遮挡带）。
-    const fallbackH = fallbackRect ? fallbackRect.bottom - fallbackRect.top : 0;
-    const h = Math.max(measuredH, fallbackH);
-    if (w <= 0 || h <= 0) return;
+    // 高度：实测优先，退化时用 estimatePopRect 的兜底估算。
+    //
+    // ⚠️ 这里**刻意不做上限裁剪**（曾按 CSS max-height:200px 硬裁，导致 7+ 层
+    //   明明被挡住却不隐藏 —— 用户实测反推菜单真实高度 ≈218px > 200px）。
+    //   也**不再取 max(实测, 兜底)**：兜底已按实测行高 28 校准，取 max 会在
+    //   实测偏短的帧里把判定带撑大、误藏刚好在菜单边缘外的输入框。
+    //   判据：实测够大就用实测（贴合真实菜单），够小才用估算（宁可略高）。
+    const MIN_TRUSTED_H = 8; // 低于此值视为「没量到」，改用兜底
+    let h: number;
+    if (measuredH >= MIN_TRUSTED_H) {
+        h = measuredH;
+    } else {
+        h = fallbackRect ? fallbackRect.bottom - fallbackRect.top : 0;
+    }
+
+    // ⚠️ 不要再按CSS max-height 硬裁到 200px（2026-10-06 二次修正，7+ 层仍不隐藏）。
+    //   上一轮我加了 `if (h > 200) h = 200`，本意是「菜单被滚动容器裁掉的部分不算遮挡」，
+    //   但实测证明 **UXP 下菜单并没有被 200px 裁掉**：按用户截图反推，7 层（含背景，
+    //   8 个选项）时菜单真实高度约 218px > 200px，且确实盖住了边缘强度的数字框。
+    //   硬裁到 200 会让判定带比真实菜单短 ≈18px ⇒ 边缘强度恰好落在带外 ⇒ 判为不相交
+    //   ⇒ 数字不被隐藏（用户实测：菜单明明挡住输入框，数字却始终显示）。
+    //   ⇒ 判定必须以【实测高度】为准，不做上限裁剪；滚动裁剪由浏览器自己负责，
+    //   我们只需保证判定带 ⊇ 屏幕上真实存在的菜单区域。
+    if (w <= 0 || h <= 0) {
+      restore();
+      return;
+    }
 
     const popRect: Rect = {
       left: baseLeft,
@@ -210,8 +233,11 @@ export function createOcclusionSession(): OcclusionSession {
       bottom: baseTop + h,
     };
 
-    // 对判定矩形做小幅外扩，避免「菜单边缘刚好压在数字框 1~2px 上」时被判定为不相交。
-    const PAD = 8;
+    // 对判定矩形做**极小**外扩，仅用于吸收「菜单边缘刚好压在数字框描边上」的亚像素误差。
+    // ⚠️ 不可放大（2026-10-06 修正）：PAD 曾为 8px，加上判定矩形本身的过宽，
+    // 会把菜单下方明明露在外面的数字框也圈进遮挡带 → 无谓隐藏（Bug 1 的 2/4/6 层现象）。
+    // 取 2px 足以覆盖描边级别的误差，又不会多吃掉一整行的可见区域。
+    const PAD = 2;
     const testRect: Rect = {
       left: popRect.left - PAD,
       top: popRect.top - PAD,
@@ -223,6 +249,8 @@ export function createOcclusionSession(): OcclusionSession {
     try {
       list = root.querySelectorAll(WIDGET_SELECTOR);
     } catch {
+      // 同上：退化路径也必须还原，不能把输入框留在隐藏态
+      restore();
       return;
     }
 
@@ -263,14 +291,24 @@ export function createOcclusionSession(): OcclusionSession {
 /**
  * 兜底矩形：UXP 偶发在刚插入 DOM 时 getBoundingClientRect 返回 0 尺寸，
  * 此时用「已知定位 + 估算高度」代替，保证遮挡判断不至于整体失效。
+ *
+ * ⚠️ 高度公式（2026-10-06 二次修正）：
+ *   · **不按 200px 封顶**。实测（用户截图反推）7 层 / 8 选项时菜单真实高度约 218px，
+ *     已超 CSS max-height:200px —— UXP 下该上限并未把菜单裁到 200。
+ *     旧兜底再套一层 min(200,…) 会让判定带短于真实菜单 ⇒ 边缘强度的数字框
+ *     落在带外判为不相交 ⇒ 明明被挡住却不隐藏（用户实测）。
+ *   · **行高按 28 而非 24**：`.select-opt` 是 font-size:12 + padding 4×2，但 UXP
+ *     下 12px 文字的实际行盒高于 12（实测 ≈27~28px/行）。沿用 24 会整体低估，
+ *     菜单越长低估越多（8 项就差 ≈32px），同样导致末端输入框漏判。
+ *   · 保留一点余量（CHROME）覆盖 padding 与描边，宁可略高不可略低：
+ *     判定带略高只是多藏一个刚出界的输入框（下一帧即还原），略低则直接穿帮。
  */
 export function estimatePopRect(
-  pos: { left: number; top: number; width: number },
-  optionCount: number
+    pos: { left: number; top: number; width: number },
+    optionCount: number
 ): Rect {
-  // 高度给足：UXP 里 getBoundingClientRect 经常取不到真实高度，此时只能靠兜底。
-  // 下限 90px 足以覆盖「下拉头部 → 正下方数字框」的常见下间距（如渐变「样式」下拉
-  // 与「角度」输入框）；上限仍为 CSS 的 max-height(200)。
-  const h = Math.min(200, Math.max(90, optionCount * 24 + 12));
-  return { left: pos.left, top: pos.top, right: pos.left + pos.width, bottom: pos.top + h };
+    const ROW_H = 28;   // 实测每选项行高（含 padding 4×2）
+    const CHROME = 8;   // .select-pop 上下 padding 2×2 + 描边 1×2 + 余量
+    const h = optionCount * ROW_H + CHROME;
+    return { left: pos.left, top: pos.top, right: pos.left + pos.width, bottom: pos.top + h };
 }

@@ -69,9 +69,25 @@ export default function Select({
   // 自动关闭抑制截止时间：onOpen 刷新期间置 Infinity，刷新完成保留 600ms 缓冲，
   // 盖住 re-render/滚动/输入重放导致的「打开后立刻自动关闭」。
   const suppressCloseUntilRef = useRef(0);
+  // 遮挡会话的当前 run（供滚动回调复用）。**必须声明在 onScroll 之前**：
+  // const 存在暂存区，在同一次渲染中先于声明处调用会抛 ReferenceError(TDZ)。
+  const occlusionRunRef = useRef<(() => void) | null>(null);
 
   const allOptions = groups ? groups.flat() : (options ?? []);
   const sel = allOptions.find(o => o.value === value);
+
+  /**
+   * 选项内容签名：用于在「菜单已展开、用户增删/重命名图层」时驱动遮挡重算。
+   *
+   * ⚠️ 必须同时包含 value 与 label：
+   *   · value（=图层 id）变化 ⇒ 增删图层 ⇒ 菜单项数/高度变；
+   *   · label 变化        ⇒ 重命名/移动图层 ⇒ 行文本变，但项数可能不变，
+   *     而高度仍可能因换行/缩进变化（depth 也会影响），故一并纳入。
+   * 只用 length 不足以覆盖「改名但数量不变」的场景。
+   */
+  const optionsSignature = allOptions
+    .map(o => `${o.value}|${o.label}|${o.depth ?? ''}`)
+    .join('~');
 
   const reposition = useCallback(() => {
     const r = headRef.current?.getBoundingClientRect();
@@ -95,16 +111,41 @@ export default function Select({
       if (popRef.current?.contains(e.target as Node)) return;
       setOpen(false);
     };
+    let popScrollRaf = 0;
     const onScroll = (e: Event) => {
-      if (popRef.current && e.target instanceof Node && popRef.current.contains(e.target)) return;
+      // ⚠️ 菜单**自身**滚动（.select-pop overflow-y:auto，选项多到 7+ 层时必然出现）
+      //   同样必须重算遮挡：滚动会改变「哪些选项真正可见」，进而改变下方输入框
+      //   是否被覆盖。旧实现对 pop 内部滚动直接 return，导致
+      //   「离菜单底边最近的边缘强度」在滚动后显隐不实时（用户实测）。
+      if (popRef.current && e.target instanceof Node && popRef.current.contains(e.target)) {
+        // 按帧合并：scroll 触发频率高，逐次重算会白跑 DOM 测量
+        if (popScrollRaf) return;
+        const schedule = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : null;
+        if (!schedule) {
+          occlusionRunRef.current?.();
+          return;
+        }
+        popScrollRaf = schedule(() => {
+          popScrollRaf = 0;
+          occlusionRunRef.current?.();
+        });
+        return;
+      }
       if (Date.now() - openAtRef.current < 200) return;
       reposition();
+      // 面板滚动 → 头部位置变了 → pos 变化会触发 effect 重算；
+      // 但位移不足 1px 时 reposition 会去重（返回同一引用），故这里直接补一次遮挡重算，
+      // 避免「面板轻微滚动后遮挡状态停留在旧值」。
+      occlusionRunRef.current?.();
     };
     document.addEventListener('mousedown', onDocClick);
     document.addEventListener('scroll', onScroll, true);
     return () => {
       document.removeEventListener('mousedown', onDocClick);
       document.removeEventListener('scroll', onScroll, true);
+      if (popScrollRaf && typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(popScrollRaf);
+      }
     };
   }, [open, reposition]);
 
@@ -115,6 +156,13 @@ export default function Select({
   // UXP 限制：可编辑控件（滑块旁的 number 输入等）无视 z-index 永远画在最上层。
   // 弹层渲染出来后按实际矩形，只把与弹层相交的那些临时隐藏，关闭时还原。
   // 用「会话」管理：定位变化（滚动/重排）时 update 重算，不再相交的立即还原。
+  //
+  // ⚠️ 依赖里必须含 optionsSignature（2026-10-06 修正，实时性缺陷）：
+  //   展开状态下用户增删图层时，选项数组变了 ⇒ 菜单高度变了 ⇒ 遮挡集合也应随之变化。
+  //   但 reposition() 对 pos 做了 <1px 的去抖（头部位置几乎不动），**pos 引用不变**，
+  //   若依赖只有 [open, pos]，本 effect 根本不会重跑 ⇒ 数字框的显隐停留在展开那一刻，
+  //   必须折叠再展开才刷新（用户实测症状）。
+  //   改成签名后：选项内容/数量一变就重算，遮挡与菜单实际覆盖范围实时一致。
   useLayoutEffect(() => {
     if (!open || !pos) return;
     const session = createOcclusionSession();
@@ -125,14 +173,22 @@ export default function Select({
       session.update(pop, root, estimatePopRect(pos, Math.max(allOptions.length, 1)));
     };
     run();
+    // 暴露给滚动回调：菜单自身滚动时也要能即时重算遮挡（见 onScroll 注释）
+    occlusionRunRef.current = run;
     // UXP 偶发在插入 DOM 当帧拿不到弹层尺寸，下一帧再补一次，避免漏隐藏
     const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame(run) : 0;
+    // 选项变化后 UXP 的布局可能滞后一帧再稳定，补第二拍确保高度已更新
+    const raf2 = typeof requestAnimationFrame === 'function'
+      ? requestAnimationFrame(() => requestAnimationFrame(run))
+      : 0;
     return () => {
       if (raf) cancelAnimationFrame(raf);
+      if (raf2) cancelAnimationFrame(raf2);
+      occlusionRunRef.current = null;
       session.restore();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, pos]);
+  }, [open, pos, optionsSignature]);
 
   const handleHeadClick = () => {
     if (disabled) return;

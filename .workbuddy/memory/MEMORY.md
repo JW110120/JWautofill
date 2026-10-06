@@ -6,6 +6,69 @@
 > **改样式/布局/新建面板前先加载技能；改像素处理器前先读 refs**。本文件只放铁律与索引。
 
 ## 项目铁律
+- ⚠️ **下拉菜单「遮挡数字框」不是 z-index/stacking context 问题，别往层叠上修**。
+  Adobe 官方 UXP 硬限制：`input[type=number]`/textarea **无视 z-index 永远画在同一面板最上层**
+  （"Text fields…always render the text editor above everything else"），内联样式/transform 提层/换 portal
+  **全都无效**。官方出路只有②「隐藏被盖住的控件」→ `src/utils/popOverlay.ts` 用「与弹层矩形相交
+  ⇒ `visibility:hidden`（带 !important 内联）」实现。  ⇒ **判定矩形必须 ⊇ 屏幕上真实存在的菜单区域：宁可略高、绝不可略低**
+  （略高只是多藏一个刚出界的输入框、下一帧即还原；略低直接穿帮）。
+  ·❌ **不要在判定里按 CSS `max-height` 裁剪** —— 实测 UXP 下菜单并未被裁：
+    9 选项时真实高度 ≈218px > `max-height:200px`（按截图反推），曾因硬裁到 200
+    导致「明明挡住输入框却不隐藏」。
+  · 兜底高度用 `optionCount * 28 + 8`，**不封顶**；真实行高在 24~29 波动
+    （`font-size:12 + padding:4×2`，但 UXP 行盒高于 12），取 28 偏保守。
+  · 实测阈值放宽到 `height >= 8`（写 24 会被真实行高误判成"没量到"）；宽度同样
+    "实测优先 + 退化用 pos.width"，横向也不可只信实测。
+  · 高度取「实测优先，退化才用兜底」，**不要取 max(实测,兜底)**（兜底已校准，取 max 会在
+    实测偏短的帧里撑大判定带、误藏刚出界的输入框）。
+  · **每条退出路径都要先 `restore()` 再 return**（尺寸退化、querySelector 抛错）：
+    裸 `return` 跳过还原 ⇒ 上一轮 hidden 的输入框**永久残留隐藏**，表现为
+    「显隐不实时、必须折叠菜单才刷新」。
+  · `.select-pop` 是 `max-height + overflow-y:auto`，选项多时**必然内部滚动**：
+    菜单自身滚动**也必须重算遮挡**（滚动改变"哪些选项真正可见"）；
+    面板滚动分支也要补一次——`reposition` 对 <1px 位移去重，pos 不变时 effect 不会重跑。
+  · 排查「部分元素实时、部分不实时」：别只看 DOM 深度，要看**哪个元素离弹层边界最近**
+    ⇒ 通常指向「弹层自身滚动/裁剪改变了可见范围」。
+  · ⚠️ **方法论**：当「视觉重叠」与「代码判定结果」矛盾时，先怀疑自己的几何假设，
+    用可观测事实（截图反推尺寸）校准，**不要在未经验证的假设上继续叠补丁**。
+    本 bug 连错两轮即源于此（详见 .workbuddy/memory/2026-10-06.md）。
+- ⚠️ **写文件禁用不可见控制字符做分隔符**：用 Edit 插入 `|`/可见分隔符，别用 U+0000/U+0001
+  （会变成模板字符串里的字面分隔符，且让 grep 把源码当 binary 报误导性行数）。
+  改完用 `node -e` 扫字节确认 NUL/控制符为 0：`for(...)if(b[i]===0)n++`。
+  ⚠️ **`const` ref/回调必须声明在使用点之前**（TDZ：同一次渲染中先于声明调用会抛 ReferenceError），
+  跨 effect 共享时优先 `useRef` + `?.` 保护。
+- ⚠️ **启动期的一次性 PS 加载（笔刷枚举 / presetManager / 文档尺寸等 `batchPlay get`）必须走
+  `runWhenIdle` 守卫**，不可裸调：插件挂载瞬间 PS 正在处理面板创建与文档初始化，正是忙碌窗口峰值
+  （表现「启动时列表空，点一下刷新就好」）。卸载时记得 `.cancel()`。
+  ⚠️ **`runWhenIdle` 的顺延上限**：第 3 参 `maxDeferrals`（0=不限）。忙碌时顺延无上限会让任务
+  **永不执行**，对启动加载类等于功能永久缺失 ⇒ **一次性加载必须传有限值**（如 5），
+  超限后宁可冒险执行；「周期性探测」才可传 0。
+  ⚠️ 调度器用 `useRef` + 懒初始化持有，**不要用 const**（`runWhenIdle` 每次渲染返回新函数
+  ⇒ 重渲染丢调度；且 useEffect 回调在声明前定义会 TDZ）。循环里要判断 setState 结果时读镜像
+  ref（如 `brushesRef`），别读闭包里的旧 state。
+  ⚠️ 排查「刷新一下才好」先分清是**枚举失败**（列表空）还是**下游数据缺失**（有名字无内容）——
+  两者根因与修法完全不同，别一律当时机问题（笔刷无图标属后者，且是刻意设计：
+  类型检测会逐支切换用户当前笔刷，仅手动刷新才做）。
+- ⚠️ **图标按钮三态配色**（用户 2026-10-06 拍板）：常态 `--text-color` → hover `--hover-icon`
+  → **按下 `--active-icon`（新增令牌，四套主题已写）**。按下前基本已 hover，
+  故按下色必须**比 hover 明显更深**才有按压感；`transform: scale(0.94)` 幅度太小、几乎看不出，
+  不能单独承担按压反馈。⚠️ 用户**明确要求按下态不改边框和背景**——只变内部 `.icon-fill` 的 fill
+  （沿用「状态只改内部 icon、容器不变」原则）。深色主题取同色相降L，浅色主题另用更暗的蓝。
+- ⚠️ **图标按钮 hover 失效多半不是缺规则，而是图标用了内联 `fill="currentColor"`**：
+  内联属性优先级高于样式表 `fill`，`.icon-button:hover .icon-fill{fill:var(--hover-icon)}` 对它
+  **静默失效**（对比 `DeleteIcon` 用 `className="icon-fill"` 就正常）。所有 `.icon-button` 内的图标
+  path 一律 `className="icon-fill"`。改 hover 时注意：① UXP 禁 outline，边框靠基础类预挂
+  `1px solid transparent` 占位防位移；② **禁用态必须写 `.xxx-disabled:hover` 反向覆盖**
+  （同为单类选择器、靠写在后面取胜），否则禁用按钮悬停仍亮主色像可点。
+- ⚠️ **通知回调内禁止任何同步 DOM 读取**（`app.activeDocument` / `doc.layers` / `layer.name` 每次读都向宿主发 `get`）。
+  PS 的 set/delete/make 通知在命令**中途**派发，此刻读文档必撞忙碌窗口 → 宿主弹
+  「易修: 命令"获取"当前不可用」。**该原生弹框绕过 JS try/catch 与 `_options.dialogOptions`，
+  唯一有效防护是「不发 get」** ⇒ 防护必须加在读取动作**之前**，加在 try/catch 之后无效。
+  统一走 `utils/psProbe.ts`（`debouncePsProbe` 防抖 / `markPsBusy`+`isPsBusy` 忙碌守卫），静默期 **300ms**。
+  三条反直觉细则：① `markPsBusy` 只在**事件到达瞬间**打，**不可**放在探测函数体内
+  （探测自身会再触发 → 窗口自我延长、永远等不到空闲）；② 被守卫的函数与调用方**不可**互相
+  `markPsBusy`（入口 `isPsBusy` + 调用方先标记 = 自锁，功能永不执行）；③ `const` 探测器必须
+  定义在监听回调**之前**（TDZ）。**「节流(`if(timer) return`)」会丢弃后续事件、让刷新落在忙碌期，必须用真防抖**。
 - 禁 HEX，一律 rgb()/rgba() 走 theme.ts 变量；遮罩不透明度 0.80 字面写。UXP 无 flex gap→一律 margin。数字输入 32×24、`.num-input-row` 圆角 3px。
 - ⚠️ UXP 不支持 `:has()`：静默失效、构建与 DevTools 都不报错 →「按后代特征选中祖先」只能在 TSX 加显式类名（技能 ㉑）。
 - 术语：APP 与 AdjustmentPanel 皆「父面板」；纯色/图案/渐变/描边=「子面板」(src/app.tsx 内 absolute)。

@@ -1,4 +1,5 @@
 import { app, action, core, imaging } from 'photoshop';
+import { isPsBusy, markPsBusy } from './psProbe';
 
 /**
  * 蒙版同步引擎（MaskSyncEngine）
@@ -148,6 +149,19 @@ const NOTIF_EVENTS = ['set', 'select', 'clearEvent', 'delete', 'make', 'rename',
 const SYNC_DEBOUNCE_MS = 200; // 事件驱动防抖（更及时）
 const POLL_INTERVAL_MS = 2000; // 兜底轮询（更及时）
 const SYNC_MIN_INTERVAL_MS = 150; // 同一任务两次同步的最小间隔（防止抖动）
+
+/**
+ * PS 忙碌窗口守卫时长（毫秒）。
+ *
+ * PS 的通知在命令执行【中途】派发，此时读文档（app.activeDocument / doc.layers /
+ * layer.name）会向宿主发get 并被拒绝 → 宿主弹「易修: 命令"获取"当前不可用」。
+ * 该原生弹框绕过 JS try/catch 与 _options.dialogOptions，**唯一有效防护是不发 get**。
+ * 快速连续删除时事件密集（delete + set 交替），200ms 静默期常被后续事件打断，
+ * 探测会反复落在忙碌窗口内；这里取 300ms 覆盖「连续操作后停手」的实际节奏。
+ */
+const BUSY_GUARD_MS = 300;
+/** 轮询自身发起读取前，先为自己预留的忙碌窗口。 */
+const POLL_BUSY_GUARD_MS = 300;
 
 type Listener = (info: { docChanged: boolean; results?: Record<string, SyncState> }) => void;
 
@@ -1124,37 +1138,71 @@ export class MaskSyncEngine {
         const evtName = typeof event === 'string' ? event : (event as any)?.eventName || '';
         console.log(`[蒙版同步] 收到事件: ${evtName || '(unknown)'}`);
       }
-      // 检测文档切换：切换后立即通知 React 重载任务并同步
-      const docChanged = this.refreshActiveDoc();
-      if (docChanged) {
-        this.notify();
-        this.scheduleSync(300);
-        return;
-      }
+      // ⚠️ 回调内禁止同步读取文档（refreshActiveDoc 会读 app.activeDocument 与
+      // d.name，各是一次宿主 get）。PS 通知在命令执行【中途】派发，此刻文档正忙，
+      // 此时 get 会被宿主拒绝并弹出「易修: 命令"获取"当前不可用」原生框——
+      // 该弹框绕过 JS try/catch 与 dialogOptions，唯一有效防护是「不发 get」。
+      // 故此处只做纯字符串判断（读事件名不碰文档），实际读取全部推迟到同步回调内。
       const evt = typeof event === 'string' ? event : (event as any)?.eventName || '';
+      // 标记 PS 忙碌，供引擎内部与其它面板的探测点自查后顺延
+      markPsBusy(BUSY_GUARD_MS);
       // make/delete 会改变图层结构，需要重建文件树上下文（重解析引用）
       if (evt === 'make' || evt === 'delete') {
-        this.scheduleSync(200);
+        this.scheduleSync(SYNC_DEBOUNCE_MS, true);
         return;
       }
-      this.scheduleSync(SYNC_DEBOUNCE_MS);
+      this.scheduleSync(SYNC_DEBOUNCE_MS, true);
     } catch {
-      this.scheduleSync(SYNC_DEBOUNCE_MS);
+      this.scheduleSync(SYNC_DEBOUNCE_MS, true);
     }
   };
 
-  /** 防抖调度同步。delay=0 表示立即（下一帧）。 */
-  private scheduleSync(delay: number): void {
+  /**
+   * 防抖调度同步。delay=0 表示立即（下一帧）。
+   *
+   * @param checkDocFirst 传入 true 时，把「检测文档切换」也移入定时器内执行
+   *   （通知回调里不能同步读 app.activeDocument，理由见 handleNotification 注释）。
+   */
+  private scheduleSync(delay: number, checkDocFirst = false): void {
     if (!this.running) return;
     if (this.syncTimer) clearTimeout(this.syncTimer);
     this.syncTimer = setTimeout(() => {
       this.syncTimer = 0;
+      // 先在空闲后检测文档切换（此处才允许读activeDocument）
+      if (checkDocFirst) {
+        let docChanged = false;
+        try {
+          docChanged = this.refreshActiveDoc();
+        } catch {
+          docChanged = false;
+        }
+        if (docChanged) {
+          this.notify();
+          this.scheduleSync(300);
+          return;
+        }
+      }
       this.doTimedSync();
     }, Math.max(0, delay));
   }
 
+  /**
+   * 同步主流程（事件驱动与兜底轮询的共同入口）。
+   *
+   * ⚠️ 忙碌闸门：这里读 app.activeDocument / docSignature 都会向宿主发 get。
+   * 事件与轮询都可能在 PS 忙碌窗口内抵达本函数，故统一在此收口：
+   * 忙碌则顺延到下一轮（不硬闯），从根上杜绝宿主「命令"获取"当前不可用」弹框。
+   */
   private async doTimedSync(): Promise<void> {
     try {
+      if (isPsBusy()) {
+        // 顺延下一轮而非硬闯。这里【不能】由调用方先 markPsBusy 再调本函数——
+        // 那样本函数的守卫会拦下自己，导致同步永远不执行（自锁）。
+        this.scheduleSync(SYNC_DEBOUNCE_MS);
+        return;
+      }
+      // 通过守卫后，为本次读取自身预留窗口，避免与用户操作/其它面板探测互撞。
+      markPsBusy(POLL_BUSY_GUARD_MS);
       const d = app.activeDocument;
       if (!d) return;
       this.refreshActiveDoc();
@@ -1194,6 +1242,11 @@ export class MaskSyncEngine {
   private startPolling(): void {
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer = setInterval(() => {
+      // ⚠️ 忙碌闸门：轮询 tick 与用户的删除/新建操作**完全异步**，无论事件防抖
+      // 做得多好，只要 tick 落在 PS 的忙碌窗口内，refreshActiveDoc/doTimedSync
+      // 里的 get 就会触发宿主原生报错框（本弹框「有一定概率」出现的关键来源）。
+      // 忙碌时顺延到下一轮而非硬闯 —— 兜底同步晚一轮无副作用（内容一致时本就不写入）。
+      if (isPsBusy()) return;
       try {
         const prevKey = this.currentDocKey;
         this.refreshActiveDoc();
@@ -1205,8 +1258,10 @@ export class MaskSyncEngine {
           return;
         }
         // 兜底同步：即使事件驱动失效（如 set 事件未触发），也周期性执行启用任务的
-        // 同步。syncTask 内部有 unchanged 差异检测 + 150ms 节流，内容一致时不会写入，
+        // 同步。syncTask 内部有unchanged 差异检测 + 150ms 节流，内容一致时不会写入，
         // 不会造成写回震荡。
+        // ⚠️ 不要在此 markPsBusy：doTimedSync 入口自带 isPsBusy 守卫，
+        //    调用方先打标记会让它拦下自己 ⇒ 同步永不执行（自锁）。
         this.doTimedSync();
       } catch {}
     }, POLL_INTERVAL_MS);

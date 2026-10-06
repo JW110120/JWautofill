@@ -35,6 +35,7 @@ import RangeSlider from '../components/RangeSlider';
 import Select from '../components/Select';
 import { helpTexts } from '../constants/helpTexts';
 import { useLabelDrag } from '../utils/useLabelDrag';
+import { debouncePsProbe, markPsBusy } from '../utils/psProbe';
 // PS/UXP 在执行中手动取消时，batchPlay / executeAsModal 会抛出英文 "User cancelled"。
 // 把这类取消错误本地化，避免界面弹出「处理失败：user cancelled」这种中英混杂提示。
 const isUserCancelled = (m: string | undefined): boolean =>
@@ -42,6 +43,19 @@ const isUserCancelled = (m: string | undefined): boolean =>
 // 统一拼接「某某处理失败」弹窗文案；取消时显示中文「用户已取消」，否则原样透传错误。
 const formatFailMsg = (prefix: string, raw: string): string =>
   isUserCancelled(raw) ? `${prefix}处理失败：用户已取消` : `${prefix}处理失败: ${raw}`;
+
+/**
+ * PS 事件驱动探测的「空闲等待」时长（毫秒）。
+ *
+ * 为什么是300 而不是原来的 80/120/200：
+ * PS 的通知在命令执行【中途】派发，文档此刻处于忙碌状态，此时任何 DOM 读取
+ * （app.activeDocument / doc.layers / layer.name）都会向宿主发 get 并被拒绝，
+ * 宿主直接弹「易修: 命令"获取"当前不可用」——该原生弹框绕过 JS try/catch 与
+ * _options.dialogOptions，**唯一有效防护是不发出 get**。
+ * 快速连续删除时事件密集，200ms 静默期常被后续事件打断 ⇒ 探测反复落在忙碌窗口；
+ * 300ms 更契合"用户连续操作后停手"的实际节奏。
+ */
+const PROBE_IDLE_MS = 300;
 
 
 
@@ -469,40 +483,59 @@ useEffect(() => {
 }, [lineReferenceLayerId, lineReferenceLayerName]);
 
 useEffect(() => {
-  let timer: any = 0;
-  const scheduleRefresh = (docOverride?: any) => {
-    if (timer) return;
-    timer = setTimeout(() => {
-      timer = 0;
-      refreshLineReferenceOptions(docOverride);
-    }, 80);
-  };
-  const handleNotification = async (eventName?: any) => {
-    try {
-      const doc = app.activeDocument;
-      const layers = doc?.layers || [];
-      const docId = doc?.id ?? null;
-      const hash = computeLayerSignature(layers);
-      const prev = lineReferenceSignatureRef.current;
-      const evt = typeof eventName === 'string' ? eventName : '';
-      if (evt === 'make' || evt === 'delete') {
-        scheduleRefresh(doc);
-        return;
-      }
-      if (prev.docId !== docId || prev.hash !== hash) {
-        scheduleRefresh(doc);
-      }
-    } catch {
-      scheduleRefresh();
-    }
-  };
-  action.addNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], handleNotification);
-  return () => {
-    try {
-      if (timer) clearTimeout(timer);
-    } catch {}
-    action.removeNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], handleNotification);
-  };
+    let timer: any = 0;
+    // 等事件静默后再读：连续快速删除时事件不断，末尾静默期才真正代表 PS 空闲。
+    // ⚠️ 此处不要调 markPsBusy —— 本函数会被探测自身回调再次调用，
+    // 自我延长忙碌窗口会让后续探测一直等不到空闲。忙碌标记统一在
+    // handleNotification（事件到达瞬间）打。
+    const scheduleRefresh = (docOverride?: any) => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+            timer = 0;
+            refreshLineReferenceOptions(docOverride);
+        }, PROBE_IDLE_MS);
+    };
+    // ⚠️ 回调内【禁止】任何同步 DOM 读取（app.activeDocument / doc.layers /
+    // computeLayerSignature 都会逐层向宿主发 get）。PS 的通知在命令执行【中途】
+    // 派发，此刻文档正忙；一旦在此刻 get，宿主直接弹
+    // 「易修: 命令"获取"当前不可用」——该弹框绕过 JS try/catch 与 dialogOptions，
+    // 唯一有效防护是「不发 get」。原实现在此同步读 activeDocument + 遍历整棵图层树
+    // 做签名对比，是本弹框的首要来源。事件类型判断不需读文档，可安全留在回调内。
+    // ⚠️ 必须先于 handleNotification 定义：const 存在暂存区，
+    //    在定义前被调用会抛 ReferenceError（TDZ）。
+    const scheduleStructureProbe = debouncePsProbe(() => {
+        // 结构对比放在防抖之后：此时 PS 已空闲，读 activeDocument 才安全。
+        try {
+            const doc = app.activeDocument;
+            const layers = doc?.layers || [];
+            const docId = doc?.id ?? null;
+            const hash = computeLayerSignature(layers);
+            const prev = lineReferenceSignatureRef.current;
+            if (prev.docId !== docId || prev.hash !== hash) {
+                scheduleRefresh(doc);
+            }
+        } catch {
+            scheduleRefresh();
+        }
+    }, PROBE_IDLE_MS);
+    const handleNotification = (eventName?: any) => {
+        const evt = typeof eventName === 'string' ? eventName : '';
+        // make/delete 必然改变图层结构，直接排一次刷新；
+        // 其余事件（set/select/clearEvent）才需要读签名对比，且同样推迟到空闲后。
+        markPsBusy(PROBE_IDLE_MS);
+        scheduleRefresh();
+        if (evt === 'set' || evt === 'select' || evt === 'clearEvent') {
+            scheduleStructureProbe();
+        }
+    };
+    action.addNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], handleNotification);
+    return () => {
+        try {
+            if (timer) clearTimeout(timer);
+        } catch {}
+        scheduleStructureProbe.cancel();
+        action.removeNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], handleNotification);
+    };
 }, []);
 
 // ========= 像素调整面板状态：加载 =========
@@ -889,23 +922,26 @@ useEffect(() => {
 
 // 图层结构变化（新建/删除/重命名/移动图层）时刷新文件树下拉，并重解析失效引用
 useEffect(() => {
-  let timer: any = 0;
-  const scheduleRefresh = () => {
-    if (timer) return;
-    timer = setTimeout(() => {
-      timer = 0;
-      refreshMaskSyncOptions();
-      maskSyncEngine.reconcileTasks().then(changed => {
-        if (changed) {
-          const t2 = maskSyncEngine.getTasks();
-          setMaskSyncTasks(prev => (sameMaskSyncTasks(prev, t2) ? prev : t2));
-        }
-      });
-    }, 120);
-  };
+  // ⚠️ 原实现是 `if (timer) return` 的【节流】：首个事件立即锁定窗口，
+  // 随后的删除事件被直接丢弃 —— 于是刷新恰好落在"用户还在连续删除"的忙碌期，
+  // buildLayerTree 内部的批量 get 会触发宿主「命令"获取"当前不可用」弹框。
+  // 改为真正的防抖（顺延）+ 忙碌守卫：等事件静默、PS 空闲后再读。
+  const scheduleRefresh = debouncePsProbe(() => {
+    // ⚠️ 读取动作本体。不在此处 markPsBusy（忙碌标记由事件到达时打）：
+    // 本回调也可能被 reconcileTasks 的二次触发链调到，自我延长会让他方探测一直等不到空闲。
+    refreshMaskSyncOptions();
+    maskSyncEngine.reconcileTasks().then(changed => {
+      if (changed) {
+        const t2 = maskSyncEngine.getTasks();
+        setMaskSyncTasks(prev => (sameMaskSyncTasks(prev, t2) ? prev : t2));
+      }
+    });
+  }, PROBE_IDLE_MS);
   const handleMaskSyncNotif = (eventName?: any) => {
     const evt = typeof eventName === 'string' ? eventName : '';
     if (evt === 'make' || evt === 'delete' || evt === 'set' || evt === 'rename' || evt === 'move') {
+      // 收到事件即标记忙碌：即便防抖窗口内又来新事件，守卫也知道 PS 尚未空闲
+      markPsBusy(PROBE_IDLE_MS);
       scheduleRefresh();
     }
   };
@@ -919,7 +955,7 @@ useEffect(() => {
   }
   return () => {
     try {
-      if (timer) clearTimeout(timer);
+      scheduleRefresh.cancel();
       for (const evt of refreshEvents) {
         try {
           action.removeNotificationListener([evt] as any, handleMaskSyncNotif);

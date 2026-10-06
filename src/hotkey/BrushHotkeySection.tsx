@@ -12,6 +12,7 @@ import { DeleteIcon, RefreshIcon, DataRefreshIcon, RecordCircleIcon, StopSquareI
 import BrushSelect, { BrushSelectOption } from './BrushSelect';
 import { helpTexts } from '../constants/helpTexts';
 import { subscribeFocusMode } from '../utils/FocusModeBus';
+import { runWhenIdle } from '../utils/psProbe';
 
 // 笔刷热键分区：在调整面板内录制「笔刷 + 快捷键」，持久化到共享配置，
 // 由本地守护进程在全局捕获按键后直接切换笔刷，不录制动作。
@@ -22,6 +23,18 @@ import { subscribeFocusMode } from '../utils/FocusModeBus';
 // 通知自动消失时间：提示是「瞬时反馈」而非常驻说明，5 秒足够读完，
 // 也避免下一次操作后还挂着上一条早已过期的提示（例如刷新完笔刷还显示"请选择"）。
 const MESSAGE_TTL_MS = 5000;
+
+// 启动首刷的节奏控制（2026-10-06）：
+// BRUSH_LOAD_IDLE_MS  —— 推迟多久再发起首个 get。插件挂载瞬间 PS 仍在处理面板创建
+//   与文档初始化，等这个时长避开最密的忙碌窗口。
+// INITIAL_LOAD_ATTEMPTS / INITIAL_LOAD_RETRY_MS —— 空结果的重试次数与递增间隔。
+//   enumerateBrushes 撞忙碌窗口与「PS 真的没笔刷」都返回 []，无法区分，故做有限重试。
+//   次数刻意压得很低：每次重试都是一次宿主命令调用，过多会与用户操作抢通道。
+const BRUSH_LOAD_IDLE_MS = 600;
+const INITIAL_LOAD_ATTEMPTS = 3;
+const INITIAL_LOAD_RETRY_MS = 500;
+// 因忙碌而顺延的上限：600ms × 5 ≈ 3s 后宁可冒险执行，也不让首刷永久挂起。
+const BRUSH_LOAD_MAX_DEFERRALS = 5;
 
 export default function BrushHotkeySection() {
   const [brushes, setBrushes] = useState<string[]>([]);
@@ -62,6 +75,10 @@ export default function BrushHotkeySection() {
   // refs：供轮询读取最新值，避免闭包拿到旧值
   const daemonConnectedRef = useRef(daemonConnected);
   useEffect(() => { daemonConnectedRef.current = daemonConnected; }, [daemonConnected]);
+  // 笔刷列表镜像：启动首刷的重试循环要判断「这次枚举是否拿到了笔刷」，
+  // 而 setBrushes 是异步的、闭包里的 brushes 仍是旧值，故用 ref 读最新结果。
+  const brushesRef = useRef<string[]>(brushes);
+  useEffect(() => { brushesRef.current = brushes; }, [brushes]);
 
   // 通知：统一走这里，5 秒后自动清空。有新通知时重置计时，
   // 保证用户看到的永远是「最近一条操作」的结果。
@@ -92,10 +109,25 @@ export default function BrushHotkeySection() {
           : ('选区填充开关已' + (info.enabled ? '开启' : '关闭'))));
       }
     });
-    void loadBrushes(false, false);
+    // ⚠️ 启动首刷必须**推迟到PS 空闲之后**（2026-10-06）。
+    //   enumerateBrushes() 内部是`batchPlay get presetManager`，与今天修复的
+    //   「易修: 命令"获取"当前不可用」是同一条高危路径：PS 的通知/初始化命令在
+    //   执行中途派发，此刻 get 会被宿主拒绝并弹**原生框**（绕过 JS try/catch 与
+    //   dialogOptions，唯一有效防护是不发get）。
+    //   useEffect 这一刻插件刚挂载、PS 正在处理面板创建与文档初始化，正是忙碌窗口
+    //   最容易命中的时刻 —— 表现就是「启动时笔刷列表空，点一下刷新就好了」。
+    //   runWhenIdle：忙碌则顺延、绝不硬闯；且同一时刻只跑一个实例（重入直接丢弃）。
+    //
+    //   detect 仍传 false（保持现状）：类型检测会逐支切换用户当前笔刷，
+    //   属改动文档状态的操作，只在用户手动刷新时才做。
+    void initialLoadRef.current?.();
     // 专注模式来自 APP 面板写入的共享文件（跨面板），这里只订阅不写入
     const unsubFocus = subscribeFocusMode(setFocusMode);
-    return () => { unsub(); unsubConfig(); unsubStatus(); unsubHotkey(); unsubFocus(); };
+    return () => {
+      unsub(); unsubConfig(); unsubStatus(); unsubHotkey(); unsubFocus();
+      // 卸载时取消待执行的首刷：避免面板已卸载仍发 get（会撞上 PS 忙碌窗口）
+      initialLoadRef.current?.cancel();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -131,6 +163,44 @@ export default function BrushHotkeySection() {
       if (notify) showMessage('枚举笔刷失败，可手动输入笔刷名（需与 PS 完全一致）');
     }
   };
+
+  /**
+   * 启动时的笔刷列表首刷：**空闲后执行 + 空结果静默重试**。
+   *
+   * 为何需要重试：`enumerateBrushes()` 走 batchPlay get，撞上 PS 忙碌窗口时会被拒绝
+   * 并返回 `[]`，与「PS 确实没有笔刷预设」无法区分。启动期最容易命中（面板刚创建、
+   * 文档正在初始化），于是列表空、用户点一下刷新才正常。
+   *
+   * 约束（务必保持）：
+   *  1. **全程 notify=false** —— 静默失败/重试不弹提示，只有用户手动刷新才给反馈；
+   *  2. **不无限重试**：最多 INITIAL_LOAD_ATTEMPTS 次、间隔递增，避免持续占用宿主命令通道；
+   *  3. **不自动检测类型**（detect 恒 false）：类型检测会逐支切换用户当前笔刷，
+   *     属改动文档状态的操作，保留为「手动刷新」专属（经用户确认保持现状）。
+   *
+   * 用 ref 持有调度器而非 const：`runWhenIdle` 在每次渲染都会返回新函数，
+   * 直接用 const 既是 TDZ 隐患（useEffect 回调在声明前定义）也会在重渲染时丢调度。
+   */
+  const initialLoadRef = useRef<(() => void) & { cancel: () => void } | null>(null);
+  if (!initialLoadRef.current) {
+    initialLoadRef.current = runWhenIdle(async () => {
+      for (let attempt = 1; attempt <= INITIAL_LOAD_ATTEMPTS; attempt++) {
+        await loadBrushes(false, false);
+        // 拿到笔刷即成功，结束重试（brushesRef 读最新值，setBrushes 是异步的）
+        if (brushesRef.current.length) {
+          console.log(`[笔刷列表] 启动首刷成功（第 ${attempt} 次尝试，共 ${brushesRef.current.length} 支）`);
+          return;
+        }
+        if (attempt < INITIAL_LOAD_ATTEMPTS) {
+          const wait = attempt * INITIAL_LOAD_RETRY_MS;
+          console.log(`[笔刷列表] 启动首刷为空（第 ${attempt} 次），${wait}ms 后重试——疑似撞上 PS 忙碌窗口`);
+          await new Promise<void>(r => setTimeout(r, wait));
+        }
+      }
+      console.warn('[笔刷列表] 启动首刷重试后仍为空：可能 PS 确实未安装笔刷预设，或持续处于忙碌状态；点「刷新笔刷列表」可重试');
+      // BRUSH_LOAD_MAX_DEFERRALS：顺延上限。必须有限——否则 PS 持续忙碌时首刷会被
+      //   无限推迟，「启动后笔刷列表一直为空」；超限后宁可冒险执行一次也不能不加载。
+    }, BRUSH_LOAD_IDLE_MS, BRUSH_LOAD_MAX_DEFERRALS);
+  }
 
   // 将插件内相对路径解析为真实 OS 路径：用 getPluginFolder().nativePath，
   // 绕开沙箱下 getEntry('native') 找不到目录的问题。

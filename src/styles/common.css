@@ -1455,6 +1455,13 @@ body.visibility-panel-open #pixeladjustment .pixeladjustment-root > .panel {
 .icon-button:hover .icon-fill {
   fill: var(--hover-icon);
 }
+/* 通用图标按钮按下（active）：图标换成 --active-icon（比 primary 稍暗的蓝）。
+   按下前基本已处于 hover，所以必须有一个可辨识的更暗档才看得出变化。
+   ⚠️ 严格只改内部 .icon-fill 的 fill：**不动 border / background**（用户明确要求），
+   容器盒模型保持不变，切换瞬间零位移。 */
+.icon-button:active .icon-fill {
+  fill: var(--active-icon);
+}
 .icon-button:active {
   transform: scale(0.94);
 }

@@ -15,6 +15,10 @@ const createThemeStyles = () => {
       --disabled-color: rgb(132, 132, 132);
       --hover-bg: rgba(38, 128, 235, 0.1);
       --hover-icon: rgb(83, 69, 234);
+      /* 图标按钮「按下」态图标色：比 --hover-icon 稍暗的同色相蓝。
+         按下前基本已处于 hover，故需一个可辨识的更暗档才看得出变化；
+         深色主题上 hover-icon 本就偏紫，按下统一回到主色蓝的暗档。 */
+      --active-icon: rgb(17, 103, 205);
       --button-bg: rgb(60, 60, 60);
       --button-down: rgb(40, 40, 40);
       --slider-bg: rgb(238, 238, 238);
@@ -58,6 +62,7 @@ const createThemeStyles = () => {
         --disabled-color:rgb(80, 80, 80);
         --hover-bg: rgba(38, 128, 235, 0.1);
         --hover-icon: rgb(38, 128, 235);
+        --active-icon: rgb(17, 103, 205);
         --button-bg: rgb(60, 60, 60);
         --button-down: rgb(40, 40, 40);
         --slider-bg: rgb(238, 238, 238);
@@ -90,6 +95,8 @@ const createThemeStyles = () => {
         --disabled-color:rgb(100, 100, 100);
         --hover-bg: rgba(38, 128, 235, 0.2);
         --hover-icon:rgb(0, 115, 255); 
+        /* 浅色主题背景更亮，按下态需比 hover 明显更暗才看得出变化 */
+        --active-icon: rgb(0, 82, 184);
         --button-bg: rgb(93, 93, 93);
         --button-down: rgb(73, 73, 73);
         --slider-bg: rgb(238, 238, 238);
@@ -122,6 +129,7 @@ const createThemeStyles = () => {
         --disabled-color:rgb(151, 151, 151);
         --hover-bg: rgba(38, 128, 235, 0.3);
         --hover-icon:rgb(22, 127, 255);
+        --active-icon: rgb(0, 82, 184);
         --button-bg: rgb(194, 194, 194);
         --button-down: rgb(174, 174, 174);
         --slider-bg: rgb(221, 221, 221);
@@ -156,6 +164,7 @@ const createThemeStyles = () => {
         --disabled-color:rgb(194, 194, 194);
         --hover-bg: rgba(38, 128, 235, 0.35);
         --hover-icon: rgb(38, 128, 235);
+        --active-icon: rgb(17, 103, 205);
         --button-bg: rgb(250, 250, 250);
         --button-down: rgb(230, 230, 230);
         --slider-bg: rgb(221, 221, 221);
