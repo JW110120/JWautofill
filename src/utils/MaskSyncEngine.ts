@@ -1,5 +1,6 @@
 import { app, action, core, imaging } from 'photoshop';
 import { isPsBusy, markPsBusy } from './psProbe';
+import { getLayerSnapshot, invalidateLayerSnapshot, LayerSnapshotEntry } from './layerTreeSnapshot';
 
 /**
  * 蒙版同步引擎（MaskSyncEngine）
@@ -317,47 +318,66 @@ export class MaskSyncEngine {
    * ⚠️ 图层名通过 batchPlay 查询（而非直接读 DOM layer.name）：
    * UXP DOM 的 layer.name 在"删除→新建→改名"后会返回缓存旧值，
    * 导致文件树下拉显示旧名称；batchPlay 按 id 实时查询名称可避免该问题。
+   *
+   * ⚠️ 性能（2026-10-06）：结构遍历已抽到共享快照 layerTreeSnapshot。
+   * `snapEntries` 传入时**完全跳过 DOM 遍历**，只保留必需的 batchPlay 查询。
+   * 旧实现每次都自己走一遍树（5 次属性读/层），而调用点密度很高
+   * （面板通知 + 引擎轮询 + Select 的 onOpen），叠加后主线程长期被 IPC 阻塞。
    */
-  async buildLayerTree(doc?: any): Promise<LayerTreeEntry[]> {
+  async buildLayerTree(doc?: any, snapEntries?: LayerSnapshotEntry[]): Promise<LayerTreeEntry[]> {
     try {
       const d = doc || app.activeDocument;
       if (!d) return [];
-      const layers = d.layers || [];
       const entries: LayerTreeEntry[] = [];
       const idPath: number[][] = []; // 与 entries 对应的 id 路径（用于实时名称重建 path）
-      const walk = (list: any[], parentIds: number[], depth: number) => {
-        for (const layer of list || []) {
-          if (!layer || typeof layer.id !== 'number') continue;
-          const children = (layer as any)?.layers;
-          const hasChildren = !!(children && Array.isArray(children) && children.length > 0);
-          const kind = (layer as any)?.kind;
-          const isBackground = !!(layer as any)?.isBackgroundLayer;
+
+      // 优先用共享快照（零 DOM 遍历）；调用方未提供时才自己取快照。
+      const src = snapEntries ?? getLayerSnapshot()?.entries;
+      if (src) {
+        for (const s of src) {
+          const kind = s.kind;
           const isAdjustment = isAdjustmentKind(kind);
-          const curIds = parentIds.concat([layer.id]);
-          // 层级缩进由 CSS 的 padding-left（按 depth）体现（见 Select 组件），
-          // 组内的图层/嵌套组前面再补一个 └ 符号增强层级辨识（depth>0 才加）。
-          const indent = depth > 0 ? '└ ' : '';
-          let kindSuffix = '';
-          if (hasChildren) kindSuffix = '（组）';
-          else if (isBackground) kindSuffix = '（背景）';
-          else if (isAdjustment) kindSuffix = '（调整）';
-          else if (kind === 'pixel') kindSuffix = '（像素）';
           entries.push({
-            id: layer.id,
-            name: layer.name || `图层 ${layer.id}`,
-            path: curIds.map(() => ''),
+            id: s.id,
+            name: s.name || `图层 ${s.id}`,
+            path: s.path.map(() => ''),
             kind,
-            isBackground,
+            isBackground: s.isBackground,
             isAdjustment,
-            depth,
+            depth: s.depth,
             hasUserMask: false,
-            label: `${indent}${layer.name || `图层 ${layer.id}`}${kindSuffix}`,
+            label: '',
           });
-          idPath.push(curIds);
-          if (hasChildren) walk(children, curIds, depth + 1);
+          idPath.push(s.path);
         }
-      };
-      walk(layers, [], 0);
+      } else {
+        const layers = d.layers || [];
+        const walk = (list: any[], parentIds: number[], depth: number) => {
+          for (const layer of list || []) {
+            if (!layer || typeof layer.id !== 'number') continue;
+            const children = (layer as any)?.layers;
+            const hasChildren = !!(children && Array.isArray(children) && children.length > 0);
+            const kind = (layer as any)?.kind;
+            const isBackground = !!(layer as any)?.isBackgroundLayer;
+            const isAdjustment = isAdjustmentKind(kind);
+            const curIds = parentIds.concat([layer.id]);
+            entries.push({
+              id: layer.id,
+              name: layer.name || `图层 ${layer.id}`,
+              path: curIds.map(() => ''),
+              kind,
+              isBackground,
+              isAdjustment,
+              depth,
+              hasUserMask: false,
+              label: '',
+            });
+            idPath.push(curIds);
+            if (hasChildren) walk(children, curIds, depth + 1);
+          }
+        };
+        walk(layers, [], 0);
+      }
 
       // ① 批量查询每个图层的实时名称（按 id 路径逐级查询，避免 DOM 缓存旧名）
       const nameMap = await this.fetchLayerNamesByIds(d, idPath);
@@ -700,7 +720,7 @@ export class MaskSyncEngine {
 
   /** 把当前文档任务中的图层引用与当前文件树对齐（文档切换/重开时调用）：
    *  按名称路径重新解析 layerId（文档重开后 id 会变化）；路径失效的引用置为 null（由用户重新选择）。 */
-  async reconcileTasks(tree?: LayerTreeEntry[]): Promise<boolean> {
+  async reconcileTasks(tree?: LayerTreeEntry[], snapEntries?: LayerSnapshotEntry[]): Promise<boolean> {
     const key = this.currentDocKey;
     if (!key) return false;
     const list = this.persisted[key] || [];
@@ -710,7 +730,7 @@ export class MaskSyncEngine {
       (t.targetLayerPath && t.targetLayerPath.length)
     );
     if (!hasPaths) return false;
-    const entries = tree || (await this.buildLayerTree());
+    const entries = tree || (await this.buildLayerTree(undefined, snapEntries));
     const byId = new Map<number, LayerTreeEntry>();
     for (const e of entries) byId.set(e.id, e);
     let changed = false;
@@ -1087,32 +1107,6 @@ export class MaskSyncEngine {
     return false;
   }
 
-  private docSignature(): string {
-    try {
-      const d = app.activeDocument;
-      if (!d) return 'none';
-      const layers = d.layers || [];
-      let h = 2166136261 >>> 0;
-      const walk = (list: any[]) => {
-        for (const layer of list || []) {
-          if (!layer) continue;
-          const id = layer.id || 0;
-          const kind = layer.kind === 'pixel' ? 1 : (layer.kind === 'group' ? 2 : 3);
-          h = Math.imul(h ^ id, 16777619) >>> 0;
-          h = Math.imul(h ^ kind, 16777619) >>> 0;
-          const name = layer.name || '';
-          for (let i = 0; i < name.length; i++) {
-            h = Math.imul(h ^ name.charCodeAt(i), 16777619) >>> 0;
-          }
-          walk((layer as any)?.layers);
-        }
-      };
-      walk(layers);
-      return d.name + '#' + h.toString(36);
-    } catch {
-      return 'none';
-    }
-  }
 
   private registerNotification(): void {
     // 逐个注册：UXP 对事件数组中的非法事件名会整体抛错，逐个注册可保证
@@ -1146,6 +1140,10 @@ export class MaskSyncEngine {
       const evt = typeof event === 'string' ? event : (event as any)?.eventName || '';
       // 标记 PS 忙碌，供引擎内部与其它面板的探测点自查后顺延
       markPsBusy(BUSY_GUARD_MS);
+      // ⚠️ 纯内存操作（零 IPC），可在通知回调里安全调用：
+      // 打脏共享图层树快照，让下一次真正读取时重遍历。
+      // 旧实现是「每个消费者各自重遍历一遍」，同一事件会引发多次全树扫描。
+      invalidateLayerSnapshot();
       // make/delete 会改变图层结构，需要重建文件树上下文（重解析引用）
       if (evt === 'make' || evt === 'delete') {
         this.scheduleSync(SYNC_DEBOUNCE_MS, true);
@@ -1189,7 +1187,7 @@ export class MaskSyncEngine {
   /**
    * 同步主流程（事件驱动与兜底轮询的共同入口）。
    *
-   * ⚠️ 忙碌闸门：这里读 app.activeDocument / docSignature 都会向宿主发 get。
+   * ⚠️ 忙碌闸门：这里读 app.activeDocument / 图层树快照都会向宿主发 get。
    * 事件与轮询都可能在 PS 忙碌窗口内抵达本函数，故统一在此收口：
    * 忙碌则顺延到下一轮（不硬闯），从根上杜绝宿主「命令"获取"当前不可用」弹框。
    */
@@ -1214,17 +1212,39 @@ export class MaskSyncEngine {
       }
       const key = this.currentDocKey;
       const list = this.persisted[key] || [];
-      // 仅当图层结构签名变化时才按路径重解析引用（避免每次同步都全文档 batchPlay）
-      const sig = this.docSignature();
-      const sigChanged = sig !== this.lastDocSignature;
-      this.lastDocSignature = sig;
+      // ⚠️ 性能（2026-10-06）：本轮若既没有任务、也没有任务带图层路径，
+      // 则下面所有工作（结构签名 + reconcile + syncAll）都是无意义的。
+      // 而结构签名在旧实现里是一次全树遍历（≈3N 次同步 IPC），由 2s 轮询
+      // 无条件触发 —— 大量图层时它是主线程卡顿的主要来源。
+      // 「当前文档一个蒙版同步任务都没有」是最常见状态，直接短路返回。
+      if (list.length === 0) {
+        this.notify();
+        return;
+      }
       const hasPaths = list.some(t => (
         (t.sampleLayerPath && t.sampleLayerPath.length) ||
         (t.targetLayerPath && t.targetLayerPath.length)
       ));
-      if (sigChanged && hasPaths) {
-        const changed = await this.reconcileTasks();
-        if (changed) this.notify();
+      // 仅当确实存在按路径解析的需求时才取结构签名。
+      // ⚠️ 性能（2026-10-06）：这里原先调用私有的 docSignature()，而它是
+      // 「每次都自己遍历整棵图层树、逐层读 id/kind/name」（≈3N 次同步宿主 IPC），
+      // 由 2 秒兜底轮询无条件触发 —— 大量图层时每 2 秒就有上千次同步 IPC
+      // 阻塞主线程，用户点折叠标题时 click 排在后面，表现为「点击无响应」。
+      // 现在统一读共享快照（layerTreeSnapshot）：
+      //   · 与 AdjustmentPanel 的结构探针、选项构建、buildLayerTree 共用同一次遍历；
+      //   · 传 maxAgeMs=POLL_INTERVAL_MS ⇒ 结构未变时直接吃缓存，稳态零遍历；
+      //   · PS 通知到达时由 invalidateLayerSnapshot() 打脏标记（纯内存、零 IPC），
+      //     故事件驱动的时效性完全不受 maxAge 影响。
+      if (hasPaths) {
+        const snap = getLayerSnapshot(POLL_INTERVAL_MS);
+        const sig = snap ? snap.signature : 'none';
+        if (sig !== this.lastDocSignature) {
+          this.lastDocSignature = sig;
+          // 把刚读到的快照条目传下去：reconcileTasks 内的 buildLayerTree
+          // 直接复用，不再重复走一次取快照的流程。
+          const changed = await this.reconcileTasks(undefined, snap?.entries);
+          if (changed) this.notify();
+        }
       }
       const wrote = await this.syncAll(d);
       if (wrote > 0) {

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import Select, { SelectOption } from '../components/Select';
 
 // 笔刷下拉：复用通用 Select 组件（同 .select-* CSS、同主题变量），
@@ -22,11 +22,13 @@ interface Props {
 }
 
 export default function BrushSelect({ value, options, onChange, placeholder, title, className, style }: Props) {
-  const mapped: SelectOption[] = options.map(o => ({
+  // ⚠️ 性能（2026-10-06）：必须 memo 化。Select 已用 React.memo 包裹，靠引用比较
+  // 跳过重渲染；若这里每次渲染都新建数组，memo 完全失效（笔刷多时上百项）。
+  const mapped: SelectOption[] = useMemo(() => options.map(o => ({
     value: o.value,
     label: o.main,
     tag: o.tag,
-  }));
+  })), [options]);
   return (
     <Select
       value={value}

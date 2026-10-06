@@ -32,11 +32,68 @@
   · ⚠️ **方法论**：当「视觉重叠」与「代码判定结果」矛盾时，先怀疑自己的几何假设，
     用可观测事实（截图反推尺寸）校准，**不要在未经验证的假设上继续叠补丁**。
     本 bug 连错两轮即源于此（详见 .workbuddy/memory/2026-10-06.md）。
+- ⚠️ **UXP 图层树只有一份快照，别让每个消费者各自遍历**（`utils/layerTreeSnapshot.ts`，2026-10-06）。
+  `layer.id/name/kind/layers/isBackgroundLayer` **每读一次都是一次同步宿主 IPC** ⇒
+  遍历 N 层树 ≈ 3N~5N 次往返。优化前有三处独立遍历（引擎 2s 轮询签名 / 面板结构探针 /
+  线稿参考选项构建）在同时跑，500 图层时稳态每 2 秒约 1500 次同步 IPC
+  ⇒ **主线程被占满，折叠标题的 click 排在后面 = 「点击无响应」**。
+  铁律：① 读树一律走 `getLayerSnapshot(maxAgeMs?)`；② 通知回调里只调
+  `invalidateLayerSnapshot()`（**纯内存零 IPC**，唯一允许在回调内做的）；
+  ③ 要判断「结构有没有变」先问 `isLayerSnapshotDirty()`，**别为了确认没变化而遍历一次**。
+  ⚠️ 签名算法：先序顺序+id+kind+name+depth 参与 FNV-1a（顺序敏感才能识别「移动图层」）；
+  签名只在会话内自比较、不持久化 ⇒ 改算法无兼容负担。
+- ⚠️ **大列表下拉的 `options` 必须 `useMemo` + 组件必须 `React.memo`**（2026-10-06）。
+  `Select` 已 `export default React.memo(Select)`，靠**引用比较**跳过重渲染；
+  调用方若写 `options={raw.map(...)}` 则 memo 完全失效。配套铁律：
+  ① 选项数组一律 `useMemo`/模块级常量，**永远不要在 JSX 里现 map**；
+  ② `Select` 内的 `allOptions`/`sel`/`optionsSignature` 必须 `useMemo`
+  （`optionsSignature` 是全量 `map+join`，N=500 时每次渲染数千次字符串分配）；
+  ③ **`useMemo` 绝不能放进 `.map()` 回调**（Hooks 数量随列表长度变化会崩）——
+    per-item 派生值走模块级 `Record` 缓存或提到父级 `useMemo`；
+  ④ 渲染路径上的 `arr.find(...)` 逐项调用要换成模块级 `Map` 索引（O(N·M)→O(N+M)）。
+  ⚠️ 背景：面板是「3800 行单组件、全部 JSX 一个 return」，折叠任一分区都会让
+  **所有**已展开分区重渲染（含 UXP 原生 `input[type=number]`，同步成本极高），
+  所以「折叠一个分区」的重渲染代价必须按 O(分区数 × 控件数) 来估，不是 O(1)。
+- ⛔⛔ **【血泪】组件内 `useMemo`/JSX 里调用了组件体内更下方才声明的 `const` ⇒ 整块面板白屏**
+  （2026-10-06 实际发生过一次：`TypeError: Xxx is not a function`，堆栈
+  `Array.map` → `[as useMemo]`，adjustment-panel 全白）。**报错不是 TDZ 的
+  "Cannot access before initialization"，而是 "is not a function"** ——
+  因为 `tsconfig` target=**es5**，ts-loader 把 `const` 降级为 `var`
+  （**提升但值为 undefined**），拿到 undefined 再调用就是这个报错。
+  ⚠️ **这类 bug 编译期与 webpack 全都查不出来**（`transpileOnly` 无类型检查、
+  且 TDZ 违反在 es5 下不报错），只能靠「声明顺序」人工核对。
+  铁律：① **纯函数（只依赖入参、不读组件 state）一律放模块级**，永不放组件体内 ——
+  组件体内的辅助 const 迟早会被新加的 Hook 抢跑；
+  ② 在组件体内新增 `useMemo`/`useState` 初始值/`return` 前的同步语句前，
+  先确认它调用的每个 `const` 都已在**更早的行**声明（模块级或组件体开头）；
+  ③ **发现 TDZ 隐患时修法选「提到模块级」，不要选「把 Hook 挪到声明之后」** ——
+  后者能让 Hooks 远离相关 state，维护者极易再次插错位置。
+  ⚠️ **验证手段**：不能用 `grep` 生产 bundle（已 mangle），要用
+  `ts.transpileModule(src,{target:ES5})` 单独产出未压缩 es5，再核对声明行号顺序；
+  更进一步可把函数从 es5 产物原样抽出丢进 `vm` 按真实调用方式执行一遍。
+  排查工具：AST 分析（TS compiler API）判定「渲染期立即执行区」=
+  组件体顶层语句 + useMemo/useState 初始值回调体（含 `.map(x=>...)` 同步迭代器）；
+  `useEffect`/事件处理器/`setTimeout` 属延迟区，不受组件体内 TDZ 影响。
+  ⚠️ **两个检测器要点（复用时必读）**：
+  ① 组件内辅助函数只有被「渲染期真正**调用**」才算立即执行区，**仅被引用**
+  （如 `onClick={handleX}` 传值）不算 —— 漏了这条会漏报 GradientPicker 的历史 bug；
+  ② `AdjustmentPanel.tsx` 的组件体是**零缩进**（顶层语句缩进为 0），缩进启发式完全失效，
+  必须用 AST 括号配对确定组件边界。
+- ⚠️ **GradientPicker 的两套插值函数不可合并**（`interpolate*AtPosition` vs `...ForPreset`）：
+  算法同构，但入参类型不同（`ExtendedGradientStop[]` vs `any[]`）且**透明度正则的
+  alpha 组语义不同** —— ForPreset 版 alpha **可选**（兼容无 alpha 的 `rgb()`），
+  组件版 alpha **必需**（不匹配则回退 1）。合并会改掉 `rgb()` 兜底行为。
+  这四个已全部提到模块级（2026-10-06）；同文件另有 21 个组件内辅助 const 顺序安全。
 - ⚠️ **写文件禁用不可见控制字符做分隔符**：用 Edit 插入 `|`/可见分隔符，别用 U+0000/U+0001
   （会变成模板字符串里的字面分隔符，且让 grep 把源码当 binary 报误导性行数）。
   改完用 `node -e` 扫字节确认 NUL/控制符为 0：`for(...)if(b[i]===0)n++`。
   ⚠️ **`const` ref/回调必须声明在使用点之前**（TDZ：同一次渲染中先于声明调用会抛 ReferenceError），
   跨 effect 共享时优先 `useRef` + `?.` 保护。
+  ⚠️⚠️ **本项目 target=es5 ⇒ TDZ 违规表现为「is not a function」而非「before initialization」**
+  （`const` 被降级为 `var`，提升但值为 undefined），且**编译期/webpack 全部查不出**。
+  在组件体内新增 `useMemo` 时调用组件体内后声明的 `const`，会**让整块面板白屏**
+  （2026-10-06 真实事故）。**纯函数一律放模块级**，详见「大列表下拉的 options」那条铁律下的
+  ⛔⛔ 子条（含正确的验证手段）。
 - ⚠️ **启动期的一次性 PS 加载（笔刷枚举 / presetManager / 文档尺寸等 `batchPlay get`）必须走
   `runWhenIdle` 守卫**，不可裸调：插件挂载瞬间 PS 正在处理面板创建与文档初始化，正是忙碌窗口峰值
   （表现「启动时列表空，点一下刷新就好」）。卸载时记得 `.cancel()`。

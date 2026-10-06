@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { getPopRoot } from '../utils/popRoot';
 import {
@@ -49,7 +49,7 @@ interface Props {
   onOpen?: () => void;
 }
 
-export default function Select({
+function Select({
   value,
   options,
   groups,
@@ -60,8 +60,7 @@ export default function Select({
   style,
   showCheck = true,
   onOpen,
-}: Props) {
-  const [open, setOpen] = useState(false);
+}: Props) {  const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
   const headRef = useRef<HTMLDivElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
@@ -73,8 +72,15 @@ export default function Select({
   // const 存在暂存区，在同一次渲染中先于声明处调用会抛 ReferenceError(TDZ)。
   const occlusionRunRef = useRef<(() => void) | null>(null);
 
-  const allOptions = groups ? groups.flat() : (options ?? []);
-  const sel = allOptions.find(o => o.value === value);
+  const allOptions = useMemo(
+    () => (groups ? groups.flat() : (options ?? [])),
+    [groups, options]
+  );
+  // 选中项查表：图层下拉动辄数百项，旧实现每次渲染都 O(N) 线性 find。
+  const sel = useMemo(
+    () => allOptions.find(o => o.value === value),
+    [allOptions, value]
+  );
 
   /**
    * 选项内容签名：用于在「菜单已展开、用户增删/重命名图层」时驱动遮挡重算。
@@ -84,10 +90,17 @@ export default function Select({
    *   · label 变化        ⇒ 重命名/移动图层 ⇒ 行文本变，但项数可能不变，
    *     而高度仍可能因换行/缩进变化（depth 也会影响），故一并纳入。
    * 只用 length 不足以覆盖「改名但数量不变」的场景。
+   *
+   * ⚠️ 性能（2026-10-06）：旧实现是**无 memo 的每次渲染全量重建**。
+   * 图层下拉有数百项，而父组件（面板分区内容）每次折叠/展开都会重渲染，
+   * 于是「折叠一个分区」要为每个 Select 重建一遍全量签名（N 次 map + join），
+   * 多个任务 × 2 个下拉 ⇒ 数千次字符串分配。这正是「大量图层下折叠变卡」的一环。
+   * 现在用 useMemo：仅当选项内容真正变化时才重算，折叠引发的无关重渲染直接复用。
    */
-  const optionsSignature = allOptions
-    .map(o => `${o.value}|${o.label}|${o.depth ?? ''}`)
-    .join('~');
+  const optionsSignature = useMemo(
+    () => allOptions.map(o => `${o.value}|${o.label}|${o.depth ?? ''}`).join('~'),
+    [allOptions]
+  );
 
   const reposition = useCallback(() => {
     const r = headRef.current?.getBoundingClientRect();
@@ -282,3 +295,17 @@ export default function Select({
     </div>
   );
 }
+
+/**
+ * ⚠️ 性能（2026-10-06）：用 React.memo 包一层。
+ *
+ * 面板的分区内容（AdjustmentPanel / app.tsx）都是「一个大组件返回全部 JSX」，
+ * 折叠任一分区都会让**所有**已展开分区重渲染，其中包含若干图层下拉。
+ * 图层下拉的 options 有数百项，重渲染一次的成本并不低。
+ * memo 让「选项数组引用未变」的下拉整体跳过重渲染。
+ *
+ * ⚠️ 依赖此优化的前提：**调用方传入的 options 必须是 memo 化的稳定引用**。
+ * 若调用方写 `options={rawArray.map(...)}`（每次新建数组），memo 会因引用
+ * 变化而失效（不会更差，但也没有收益）。调用方请配合 useMemo。
+ */
+export default React.memo(Select);

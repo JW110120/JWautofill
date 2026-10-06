@@ -178,8 +178,148 @@ const interpolateOpacityAtPositionForPreset = (position: number, opacityStops: a
 interface ExtendedGradientStop extends GradientStop {
     colorPosition: number;    // 颜色stop的位置
     opacityPosition: number;  // 透明度stop的位置
-    midpoint?: number;        // 与下一个stop之间的中点位置 
+    midpoint?: number;        // 与下一个stop之间的中点位置
 }
+
+/* ==========================================================================
+   颜色 / 透明度插值（模块级纯函数，2026-10-06 从组件体内提到这里）
+   --------------------------------------------------------------------------
+   提到模块级的原因（**TDZ 白屏隐患**，与 AdjustmentPanel 那次同源）：
+   组件体内的 `getPreviewGradientStyle`（预览渐变的 style 生成器）会调用
+   `interpolateColorAtPosition` / `interpolateOpacityAtPosition`，而这两个 const
+   当时声明在**它下方**。ts-loader 按 es5 转译把 const 降级为 var（提升但值为
+   undefined）⇒ 一旦有人把 getPreviewGradientStyle() 改成在组件体顶层同步调用
+   （例如 `const style = getPreviewGradientStyle()`），预览条就会抛
+   「TypeError: interpolateColorAtPosition is not a function」。
+
+   原先只是「侥幸安全」——因为唯一的调用点在 return 之后的 JSX 里
+   （此时组件体早已执行完毕）。这种靠调用位置躲过 TDZ 的模式极脆弱，
+   必须从结构上消除：四个东西都只依赖入参、不读任何组件 state，本就该在模块级。
+
+   ⚠️ 与上面的 `interpolate*AtPositionForPreset` **算法同构但不可合并**：
+   那两个用 `any[]`，且透明度正则的 alpha 组是**可选**的
+   （`/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/`，兼容无 alpha 的 rgb()）；
+   下面这两个用 `ExtendedGradientStop[]`，透明度正则的 alpha 组是**必需的**
+   （`/rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/`）。语义有别，保持各自独立。 */
+
+// 正则提到模块级：常量字面量每次渲染重建没有收益，且插值函数在模块级需要它们先就绪。
+const GRADIENT_RGBA_REGEX = /rgba?\((\d+),\s*(\d+),\s*(\d+)/;
+const GRADIENT_RGBA_WITH_ALPHA_REGEX = /rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/;
+
+// 优化的颜色插值函数 - 减少重复计算
+const interpolateColorAtPosition = (position: number, colorStops: ExtendedGradientStop[]) => {
+    // 找到位置两侧的color-stop
+    let leftStop = colorStops[0];
+    let rightStop = colorStops[colorStops.length - 1];
+
+    for (let i = 0; i < colorStops.length - 1; i++) {
+        if (colorStops[i].colorPosition <= position && colorStops[i + 1].colorPosition >= position) {
+            leftStop = colorStops[i];
+            rightStop = colorStops[i + 1];
+            break;
+        }
+    }
+
+    // 如果位置相同，直接返回左侧stop的颜色
+    if (leftStop.colorPosition === rightStop.colorPosition) {
+        const rgbaMatch = leftStop.color.match(GRADIENT_RGBA_REGEX);
+        if (rgbaMatch) {
+            return {
+                r: parseInt(rgbaMatch[1]),
+                g: parseInt(rgbaMatch[2]),
+                b: parseInt(rgbaMatch[3])
+            };
+        }
+        return { r: 0, g: 0, b: 0 };
+    }
+
+    // 计算基础插值比例
+    let ratio = (position - leftStop.colorPosition) / (rightStop.colorPosition - leftStop.colorPosition);
+
+    // 应用中点调整
+    const midpoint = (leftStop.midpoint || 50) / 100;
+    if (midpoint !== 0.5) {
+        if (ratio < midpoint) {
+            ratio = (ratio / midpoint) * 0.5;
+        } else {
+            ratio = 0.5 + ((ratio - midpoint) / (1 - midpoint)) * 0.5;
+        }
+    }
+
+    // 插值RGB颜色
+    const leftRgba = leftStop.color.match(GRADIENT_RGBA_REGEX);
+    const rightRgba = rightStop.color.match(GRADIENT_RGBA_REGEX);
+
+    if (leftRgba && rightRgba) {
+        const leftR = parseInt(leftRgba[1]);
+        const leftG = parseInt(leftRgba[2]);
+        const leftB = parseInt(leftRgba[3]);
+        const rightR = parseInt(rightRgba[1]);
+        const rightG = parseInt(rightRgba[2]);
+        const rightB = parseInt(rightRgba[3]);
+
+        return {
+            r: leftR * (1 - ratio) + rightR * ratio,
+            g: leftG * (1 - ratio) + rightG * ratio,
+            b: leftB * (1 - ratio) + rightB * ratio
+        };
+    }
+
+    return { r: 0, g: 0, b: 0 };
+};
+
+// 优化的透明度插值函数 - 减少重复计算
+const interpolateOpacityAtPosition = (position: number, opacityStops: ExtendedGradientStop[]) => {
+    // 找到位置两侧的opacity-stop
+    let leftStop = opacityStops[0];
+    let rightStop = opacityStops[opacityStops.length - 1];
+
+    for (let i = 0; i < opacityStops.length - 1; i++) {
+        if (opacityStops[i].opacityPosition <= position && opacityStops[i + 1].opacityPosition >= position) {
+            leftStop = opacityStops[i];
+            rightStop = opacityStops[i + 1];
+            break;
+        }
+    }
+
+    // 如果位置相同，直接返回左侧stop的透明度
+    if (leftStop.opacityPosition === rightStop.opacityPosition) {
+        const rgbaMatch = leftStop.color.match(GRADIENT_RGBA_WITH_ALPHA_REGEX);
+        return rgbaMatch ? parseFloat(rgbaMatch[4]) : 1;
+    }
+
+    // 计算基础插值比例
+    let ratio = (position - leftStop.opacityPosition) / (rightStop.opacityPosition - leftStop.opacityPosition);
+
+    // 应用中点调整
+    const midpoint = (leftStop.midpoint || 50) / 100;
+    if (midpoint !== 0.5) {
+        if (ratio < midpoint) {
+            ratio = (ratio / midpoint) * 0.5;
+        } else {
+            ratio = 0.5 + ((ratio - midpoint) / (1 - midpoint)) * 0.5;
+        }
+    }
+
+    // 插值透明度
+    const leftRgba = leftStop.color.match(GRADIENT_RGBA_WITH_ALPHA_REGEX);
+    const rightRgba = rightStop.color.match(GRADIENT_RGBA_WITH_ALPHA_REGEX);
+
+    if (leftRgba && rightRgba) {
+        const leftAlpha = parseFloat(leftRgba[4]);
+        const rightAlpha = parseFloat(rightRgba[4]);
+        return leftAlpha * (1 - ratio) + rightAlpha * ratio;
+    }
+
+    return 1;
+};
+
+// 渐变类型下拉的选项：提到模块级常量，保持引用稳定
+// （Select 已用 React.memo 包裹，内联新建数组会让 memo 失效）。
+const GRADIENT_TYPE_OPTIONS = [
+    { value: 'linear', label: '线性' },
+    { value: 'radial', label: '径向' },
+];
 
 const GradientPicker: React.FC<GradientPickerProps> = ({
     isOpen,  
@@ -650,119 +790,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         return `linear-gradient(to right, ${gradientStops.join(', ')})`;
     };
 
-    // 缓存正则表达式以提升性能
-    const rgbaRegex = /rgba?\((\d+),\s*(\d+),\s*(\d+)/;
-    
-    // 优化的颜色插值函数 - 减少重复计算
-    const interpolateColorAtPosition = (position: number, colorStops: ExtendedGradientStop[]) => {
-        // 找到位置两侧的color-stop
-        let leftStop = colorStops[0];
-        let rightStop = colorStops[colorStops.length - 1];
-        
-        for (let i = 0; i < colorStops.length - 1; i++) {
-            if (colorStops[i].colorPosition <= position && colorStops[i + 1].colorPosition >= position) {
-                leftStop = colorStops[i];
-                rightStop = colorStops[i + 1];
-                break;
-            }
-        }
-        
-        // 如果位置相同，直接返回左侧stop的颜色
-        if (leftStop.colorPosition === rightStop.colorPosition) {
-            const rgbaMatch = leftStop.color.match(rgbaRegex);
-            if (rgbaMatch) {
-                return {
-                    r: parseInt(rgbaMatch[1]),
-                    g: parseInt(rgbaMatch[2]),
-                    b: parseInt(rgbaMatch[3])
-                };
-            }
-            return { r: 0, g: 0, b: 0 };
-        }
-        
-        // 计算基础插值比例
-        let ratio = (position - leftStop.colorPosition) / (rightStop.colorPosition - leftStop.colorPosition);
-        
-        // 应用中点调整
-        const midpoint = (leftStop.midpoint || 50) / 100;
-        if (midpoint !== 0.5) {
-            if (ratio < midpoint) {
-                ratio = (ratio / midpoint) * 0.5;
-            } else {
-                ratio = 0.5 + ((ratio - midpoint) / (1 - midpoint)) * 0.5;
-            }
-        }
-        
-        // 插值RGB颜色
-        const leftRgba = leftStop.color.match(rgbaRegex);
-        const rightRgba = rightStop.color.match(rgbaRegex);
-        
-        if (leftRgba && rightRgba) {
-            const leftR = parseInt(leftRgba[1]);
-            const leftG = parseInt(leftRgba[2]);
-            const leftB = parseInt(leftRgba[3]);
-            const rightR = parseInt(rightRgba[1]);
-            const rightG = parseInt(rightRgba[2]);
-            const rightB = parseInt(rightRgba[3]);
-            
-            return {
-                r: leftR * (1 - ratio) + rightR * ratio,
-                g: leftG * (1 - ratio) + rightG * ratio,
-                b: leftB * (1 - ratio) + rightB * ratio
-            };
-        }
-        
-        return { r: 0, g: 0, b: 0 };
-    };
-
-    // 缓存透明度正则表达式
-    const rgbaWithAlphaRegex = /rgba?\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/;
-    
-    // 优化的透明度插值函数 - 减少重复计算
-    const interpolateOpacityAtPosition = (position: number, opacityStops: ExtendedGradientStop[]) => {
-        // 找到位置两侧的opacity-stop
-        let leftStop = opacityStops[0];
-        let rightStop = opacityStops[opacityStops.length - 1];
-        
-        for (let i = 0; i < opacityStops.length - 1; i++) {
-            if (opacityStops[i].opacityPosition <= position && opacityStops[i + 1].opacityPosition >= position) {
-                leftStop = opacityStops[i];
-                rightStop = opacityStops[i + 1];
-                break;
-            }
-        }
-        
-        // 如果位置相同，直接返回左侧stop的透明度
-        if (leftStop.opacityPosition === rightStop.opacityPosition) {
-            const rgbaMatch = leftStop.color.match(rgbaWithAlphaRegex);
-            return rgbaMatch ? parseFloat(rgbaMatch[4]) : 1;
-        }
-        
-        // 计算基础插值比例
-        let ratio = (position - leftStop.opacityPosition) / (rightStop.opacityPosition - leftStop.opacityPosition);
-        
-        // 应用中点调整
-        const midpoint = (leftStop.midpoint || 50) / 100;
-        if (midpoint !== 0.5) {
-            if (ratio < midpoint) {
-                ratio = (ratio / midpoint) * 0.5;
-            } else {
-                ratio = 0.5 + ((ratio - midpoint) / (1 - midpoint)) * 0.5;
-            }
-        }
-        
-        // 插值透明度
-        const leftRgba = leftStop.color.match(rgbaWithAlphaRegex);
-        const rightRgba = rightStop.color.match(rgbaWithAlphaRegex);
-        
-        if (leftRgba && rightRgba) {
-            const leftAlpha = parseFloat(leftRgba[4]);
-            const rightAlpha = parseFloat(rightRgba[4]);
-            return leftAlpha * (1 - ratio) + rightAlpha * ratio;
-        }
-        
-        return 1;
-    };
 
     const getGradientStyle = () => {
         if (stops.length === 0) return '';
@@ -1667,10 +1694,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     <label className="label-2">样式</label>
                     <Select
                         value={gradientType}
-                        options={[
-                            { value: 'linear', label: '线性' },
-                            { value: 'radial', label: '径向' },
-                        ]}
+                        options={GRADIENT_TYPE_OPTIONS}
                         onChange={(v) => setGradientType(v as typeof gradientType)}
                     />
                 </div>

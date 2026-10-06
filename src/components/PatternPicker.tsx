@@ -17,6 +17,15 @@ interface PatternPickerProps {
     onSelect: (pattern: Pattern) => void;
     isClearMode?: boolean;
 }
+
+// 预览缩放档位 + 其下拉选项：模块级常量，保持引用稳定。
+// ⚠️ 性能（2026-10-06）：选项数组必须在渲染外构建。Select 已用 React.memo
+// 包裹（靠引用比较跳过重渲染），若在 JSX 里现 map/现建数组，memo 完全失效。
+const ZOOM_LEVELS = [12.5, 25, 33, 50, 67, 100, 150, 200, 300, 400, 500, 600, 800, 1000, 1200, 1600];
+const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
+    value: level.toString(),
+    label: `${level}%`,
+}));
     //-------------------------------------------------------------------------------------------------
     // 定义图案面板上的核心选项参数
     const PatternPicker: React.FC<PatternPickerProps> = ({
@@ -66,7 +75,7 @@ interface PatternPickerProps {
     
     
     // 预览缩放档位
-    const zoomLevels = [12.5, 25, 33, 50, 67, 100, 150, 200, 300, 400, 500, 600, 800, 1000, 1200, 1600];
+    const zoomLevels = ZOOM_LEVELS;
 
     // 定义可载入图案类型
     const mimeTypeMap = {
@@ -1734,7 +1743,7 @@ interface PatternPickerProps {
                     {selectedPattern && (
                         <Select
                             value={previewZoom.toString()}
-                            options={zoomLevels.map(level => ({ value: level.toString(), label: `${level}%` }))}
+                            options={ZOOM_LEVEL_OPTIONS}
                             onChange={(v) => handlePreviewZoomChange({ target: { value: v } })}
                             className="zoom-picker"
                         />

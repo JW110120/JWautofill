@@ -71,8 +71,12 @@ const hideNativeWidgetsOfSections = (root: HTMLElement | null, ids: string[]) =>
   });
 };
 
-const resyncNativeWidgets = (root: HTMLElement | null) => {
-  const nudge = () => {
+// ⚠️ 性能（2026-10-06）：读 scrollHeight/clientHeight 会触发**强制同步布局**。
+// 旧实现每次调用都排一个 rAF，同一帧内多次触发会重复强制重排
+// （例如「折叠/展开所有分区」会连续调用两次）。这里做帧内幂等合并。
+let resyncScheduled = 0;
+
+const doResyncNativeWidgets = (root: HTMLElement | null) => {
     if (!root) return;
     const max = root.scrollHeight - root.clientHeight;
     if (max <= 0) return; /* 无溢出时跳过，避免抖动 */
@@ -81,9 +85,16 @@ const resyncNativeWidgets = (root: HTMLElement | null) => {
     const restore = () => { root.scrollTop = t; };
     if (typeof requestAnimationFrame === 'function') requestAnimationFrame(restore);
     else restore();
-  };
-  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(nudge);
-  else nudge();
+};
+
+const resyncNativeWidgets = (root: HTMLElement | null) => {
+    if (resyncScheduled) return;
+    const schedule = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : null;
+    if (!schedule) { doResyncNativeWidgets(root); return; }
+    resyncScheduled = schedule(() => {
+        resyncScheduled = 0;
+        doResyncNativeWidgets(root);
+    });
 };
 
 interface AppProps {}

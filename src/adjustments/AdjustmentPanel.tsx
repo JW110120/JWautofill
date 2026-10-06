@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { getPopRoot } from '../utils/popRoot';
 import {
@@ -37,6 +37,12 @@ import ToggleSwitch from '../components/ToggleSwitch';
 import { helpTexts } from '../constants/helpTexts';
 import { useLabelDrag } from '../utils/useLabelDrag';
 import { debouncePsProbe, markPsBusy } from '../utils/psProbe';
+import {
+  getLayerSnapshot,
+  invalidateLayerSnapshot,
+  isLayerSnapshotDirty,
+  findInSnapshot,
+} from '../utils/layerTreeSnapshot';
 // PS/UXP 在执行中手动取消时，batchPlay / executeAsModal 会抛出英文 "User cancelled"。
 // 把这类取消错误本地化，避免界面弹出「处理失败：user cancelled」这种中英混杂提示。
 const isUserCancelled = (m: string | undefined): boolean =>
@@ -362,6 +368,70 @@ const mergeSections = (
   return result;
 };
 
+/* ==========================================================================
+   蒙版同步 / 线稿参考的「标签拆分」与「通道选项」纯函数
+   --------------------------------------------------------------------------
+   ⚠️ 必须放在模块级（组件体外），2026-10-06 修复过一个白屏事故：
+   组件体内的 useMemo（派生下拉选项）会调用 splitLabelTag，而该 const 当时
+   声明在组件体更下方 ⇒ **声明在使用点之后**。ts-loader 按 es5 转译把 const
+   降级为 var（提升但值为 undefined），运行时直接在 useMemo 的 map 回调里
+   抛「TypeError: xxx is not a function」，导致 AdjustmentPanel 整块白屏。
+
+   这三个函数都只依赖入参、不读组件 state，本就该是模块级；
+   顺带也避免了「为躲开 TDZ 而把 Hook 挪到文件尾部」这种可读性更差的修法。 */
+
+/** 把 label 末尾的（注释）拆出来：'　└ 图层1（像素）' → label='　└ 图层1' tag='（像素）' */
+const splitLabelTag = (label: string): { label: string; tag: string } => {
+  const idx = label.lastIndexOf('（');
+  if (idx > 0 && label.endsWith('）')) {
+    return { label: label.slice(0, idx), tag: label.slice(idx) };
+  }
+  return { label, tag: '' };
+};
+
+/**
+ * 根据样本图层类型返回可用的通道：
+ * - 背景图层（只有 RGB 三通道）：灰度、R、G、B + 色相、饱和度（无 A、无蒙版）
+ * - 调整图层（无 A 通道）：灰度、R、G、B、蒙版
+ * - 普通像素图层：灰度、R、G、B、A、蒙版 + 色相、饱和度
+ * 色相/饱和度通道依赖真实 RGB，仅背景图层与普通像素图层提供（调整图层/带蒙版组不提供）。
+ */
+const getMaskSyncChannelsForEntry = (entry?: LayerTreeEntry): MaskSyncChannel[] => {
+  // 色相/饱和度通道：仅样本图层有真实 RGB 时可用（背景图层 / 普通像素图层）
+  if (!entry) return ['gray', 'r', 'g', 'b', 'a', 'mask', 'hue', 'sat'];
+  // 带蒙版的图层组：样本只能取该组自身的蒙版通道
+  if (entry.kind === 'group' && entry.hasUserMask) return ['mask'];
+  if (entry.isBackground) return ['gray', 'r', 'g', 'b', 'hue', 'sat'];
+  if (entry.isAdjustment) return ['gray', 'r', 'g', 'b', 'mask'];
+  return ['gray', 'r', 'g', 'b', 'a', 'mask', 'hue', 'sat'];
+};
+
+/**
+ * 通道下拉的选项数组（**稳定引用**，性能）。
+ *
+ * getMaskSyncChannelsForEntry 的返回值只有 5 种可能，若在渲染里现 map，
+ * 每次重渲染都会新建数组 → 击穿通道下拉的 React.memo。
+ * 这里按「通道集合的键」缓存已构建好的数组，命中即复用同一引用。
+ * 键取自决定通道集合的那几个字段，与 getMaskSyncChannelsForEntry 的分支一一对应。
+ */
+const CHANNEL_OPTIONS_CACHE: Record<string, Array<{ value: string; label: string }>> = {};
+const getChannelSelectOptions = (entry?: LayerTreeEntry): Array<{ value: string; label: string }> => {
+  const key = !entry
+    ? 'all'
+    : (entry.kind === 'group' && entry.hasUserMask) ? 'mask'
+    : entry.isBackground ? 'bg'
+    : entry.isAdjustment ? 'adj'
+    : 'all';
+  const cached = CHANNEL_OPTIONS_CACHE[key];
+  if (cached) return cached;
+  const built = getMaskSyncChannelsForEntry(entry).map(ch => ({
+    value: ch as string,
+    label: MASK_SYNC_CHANNEL_LABELS[ch],
+  }));
+  CHANNEL_OPTIONS_CACHE[key] = built;
+  return built;
+};
+
 const AdjustmentPanel: React.FC = () => {
 // DOM引用，用于绑定键盘事件
 const rootRef = useRef<HTMLDivElement>(null);
@@ -420,7 +490,10 @@ const [specialWoodcutPreview, setSpecialWoodcutPreview] = useState(true);
 const [lineReferenceLayerId, setLineReferenceLayerId] = useState<number | null>(null);
 const [lineReferenceLayerName, setLineReferenceLayerName] = useState<string>('');
 const [lineReferenceOptions, setLineReferenceOptions] = useState<Array<{ value: string; label: string; depth: number; disabled?: boolean }>>([]);
-const lineReferenceSignatureRef = useRef<{ docId: number | null; hash: number }>({ docId: null, hash: 0 });
+// 图层结构签名缓存（字符串，与共享快照 layerTreeSnapshot.signature 同源）。
+// 性能：旧实现存 {docId, hash:number} 且每次比较都要重算 hash（一次全树遍历）。
+// 现在签名由快照统一产出，本 ref 只做 O(1) 字符串比较。
+const lineReferenceSignatureRef = useRef<string>('');
 const lineReferenceSelectionRef = useRef<{ id: number | null; name: string }>({ id: null, name: '' });
 
 // 智能边缘平滑参数
@@ -442,6 +515,56 @@ const [maskSyncEditingId, setMaskSyncEditingId] = useState<string | null>(null);
 const [maskSyncEditingName, setMaskSyncEditingName] = useState('');
 const [maskSyncResults, setMaskSyncResults] = useState<Record<string, SyncState>>({});
 const [maskSyncEngineReady, setMaskSyncEngineReady] = useState(false);
+
+/* --------------------------------------------------------------------------
+   派生下拉选项：useMemo 化（性能，2026-10-06）
+   --------------------------------------------------------------------------
+   为什么必须做：折叠/展开改的是本组件顶层的 `sections` state，而本组件
+   把**所有分区的 JSX 写在同一个 return 里** ⇒ 折叠任一分区都会让全部已展开
+   分区重渲染。若下拉的 options 在 JSX 里现算（`raw.map(...)`），每次重渲染
+   都要为每个下拉重建 N 个对象（N = 图层数，可达数百），再叠加 Select 内部的
+   签名计算 ⇒ 单次折叠产生数千次对象/字符串分配，这是「大量图层下折叠变卡」
+   的第二个主因。
+
+   memo 化后：只有图层树**真的变了**（maskSync*Options / lineReferenceOptions
+   引用变化）才重建数组；折叠引发的重渲染直接复用同一份引用，配合 Select 的
+   React.memo 可整块跳过重渲染。
+
+   ⚠️ 与 Select 的 React.memo 是配套的：memo 靠引用比较，调用方必须给稳定引用。 */
+const maskSyncSampleSelectOptions = useMemo(
+  () => maskSyncSampleOptions.map(opt => {
+    const { label, tag } = splitLabelTag(opt.label);
+    // 像素/调整/背景图层可選；带蒙版的图层组也可作为样本（只能取蒙版通道）
+    const selectable = opt.kind === 'pixel' || opt.isAdjustment || opt.isBackground || (opt.kind === 'group' && opt.hasUserMask);
+    return { value: String(opt.id), label, tag, disabled: !selectable, depth: opt.depth };
+  }),
+  [maskSyncSampleOptions]
+);
+const maskSyncTargetSelectOptions = useMemo(
+  () => maskSyncTargetOptions.map(opt => {
+    const { label, tag } = splitLabelTag(opt.label);
+    return { value: String(opt.id), label, tag, depth: opt.depth };
+  }),
+  [maskSyncTargetOptions]
+);
+// 图层 id → 条目 的索引：renderMaskSyncContent 里每个任务都要 find 一次样本图层，
+// O(任务数 × 图层数) 在大量图层下不可接受（线性 find）。改为建一次 Map 查表。
+const maskSyncSampleIndex = useMemo(() => {
+  const m = new Map<number, LayerTreeEntry>();
+  for (const o of maskSyncSampleOptions) m.set(o.id, o);
+  return m;
+}, [maskSyncSampleOptions]);
+
+const lineReferenceSelectOptions = useMemo(
+  () => [
+    { value: 'auto', label: '自动', tag: '上方像素层' },
+    ...lineReferenceOptions.map(opt => {
+      const s = splitLabelTag(opt.label);
+      return { value: opt.value, label: s.label, tag: s.tag, depth: opt.depth, disabled: opt.disabled };
+    })
+  ],
+  [lineReferenceOptions]
+);
 
 // 许可证相关 Hook 和函数
 useEffect(() => {
@@ -497,7 +620,7 @@ useEffect(() => {
         }, PROBE_IDLE_MS);
     };
     // ⚠️ 回调内【禁止】任何同步 DOM 读取（app.activeDocument / doc.layers /
-    // computeLayerSignature 都会逐层向宿主发 get）。PS 的通知在命令执行【中途】
+    // 图层树快照都会逐层向宿主发 get）。PS 的通知在命令执行【中途】
     // 派发，此刻文档正忙；一旦在此刻 get，宿主直接弹
     // 「易修: 命令"获取"当前不可用」——该弹框绕过 JS try/catch 与 dialogOptions，
     // 唯一有效防护是「不发 get」。原实现在此同步读 activeDocument + 遍历整棵图层树
@@ -505,16 +628,14 @@ useEffect(() => {
     // ⚠️ 必须先于 handleNotification 定义：const 存在暂存区，
     //    在定义前被调用会抛 ReferenceError（TDZ）。
     const scheduleStructureProbe = debouncePsProbe(() => {
-        // 结构对比放在防抖之后：此时 PS 已空闲，读 activeDocument 才安全。
+        // 结构对比放在防抖之后：此时 PS 已空闲，读文档才安全。
         try {
-            const doc = app.activeDocument;
-            const layers = doc?.layers || [];
-            const docId = doc?.id ?? null;
-            const hash = computeLayerSignature(layers);
-            const prev = lineReferenceSignatureRef.current;
-            if (prev.docId !== docId || prev.hash !== hash) {
-                scheduleRefresh(doc);
-            }
+            // ⚠️ 性能（2026-10-06）：签名改由共享快照产出（getLayerSnapshot）。
+            // 通知到达时只调 invalidateLayerSnapshot()（纯内存、零 IPC），
+            // 因此这里若快照仍是干净的，说明结构确实没变 → 直接跳过刷新，
+            // 省掉一整轮「选项重建 + setState」。
+            if (!isLayerSnapshotDirty()) return;
+            scheduleRefresh();
         } catch {
             scheduleRefresh();
         }
@@ -524,6 +645,8 @@ useEffect(() => {
         // make/delete 必然改变图层结构，直接排一次刷新；
         // 其余事件（set/select/clearEvent）才需要读签名对比，且同样推迟到空闲后。
         markPsBusy(PROBE_IDLE_MS);
+        // 纯内存标记（零 IPC），可在通知回调里安全调用。
+        invalidateLayerSnapshot();
         scheduleRefresh();
         if (evt === 'set' || evt === 'select' || evt === 'clearEvent') {
             scheduleStructureProbe();
@@ -864,9 +987,19 @@ const sameSyncResults = (a: Record<string, SyncState> | undefined, b: Record<str
   return true;
 };
 
+/**
+ * 刷新蒙版同步的图层下拉数据。
+ *
+ * ⚠️ 性能（2026-10-06）：
+ * ① 结构遍历改走共享快照（buildLayerTree 不再自己遍历图层树）；
+ * ② 返回值供调用方喂给 reconcileTasks —— 旧调用点是
+ *    `refreshMaskSyncOptions(); reconcileTasks()`，后者在未拿到 tree 时
+ *    **又构建一次全树 + 2×(N/40) 次 batchPlay**，同一防抖回调内重复一遍。
+ */
 const refreshMaskSyncOptions = async (): Promise<LayerTreeEntry[] | null> => {
   try {
-    const tree = await maskSyncEngine.buildLayerTree();
+    const snap = getLayerSnapshot();
+    const tree = await maskSyncEngine.buildLayerTree(undefined, snap?.entries);
     // 树内容没变就不 setState（比较引用/内容后再决定），切断
     // "刷新 → re-render → 布局重排/输入重放 → 下拉闪关"的链路。
     setMaskSyncSampleOptions(prev => (sameLayerTree(prev, tree) ? prev : tree));
@@ -877,6 +1010,22 @@ const refreshMaskSyncOptions = async (): Promise<LayerTreeEntry[] | null> => {
     console.warn('⚠️ 刷新蒙版同步文件树失败:', e);
     return null;
   }
+};
+
+/**
+ * 图层结构变化后刷新下拉 + 重解析失效引用。
+ *
+ * ⚠️ 关键性能点：把已构建好的 tree 传给 reconcileTasks，
+ * 否则它会**再遍历一次图层树 + 再跑两轮 batchPlay**（大量图层时这笔开销很大）。
+ */
+const refreshMaskSyncAndReconcile = async () => {
+  const tree = await refreshMaskSyncOptions();
+  maskSyncEngine.reconcileTasks(tree || undefined).then(changed => {
+    if (changed) {
+      const t2 = maskSyncEngine.getTasks();
+      setMaskSyncTasks(prev => (sameMaskSyncTasks(prev, t2) ? prev : t2));
+    }
+  });
 };
 
 useEffect(() => {
@@ -896,13 +1045,7 @@ useEffect(() => {
       }
       // 文档切换/重开：刷新文件树下拉，并按名称路径重解析失效的图层引用
       if (info.docChanged) {
-        refreshMaskSyncOptions();
-        maskSyncEngine.reconcileTasks().then(changed => {
-          if (changed) {
-            const t2 = maskSyncEngine.getTasks();
-            setMaskSyncTasks(prev => (sameMaskSyncTasks(prev, t2) ? prev : t2));
-          }
-        });
+        refreshMaskSyncAndReconcile();
       }
     });
     refreshMaskSyncOptions();
@@ -930,19 +1073,15 @@ useEffect(() => {
   const scheduleRefresh = debouncePsProbe(() => {
     // ⚠️ 读取动作本体。不在此处 markPsBusy（忙碌标记由事件到达时打）：
     // 本回调也可能被 reconcileTasks 的二次触发链调到，自我延长会让他方探测一直等不到空闲。
-    refreshMaskSyncOptions();
-    maskSyncEngine.reconcileTasks().then(changed => {
-      if (changed) {
-        const t2 = maskSyncEngine.getTasks();
-        setMaskSyncTasks(prev => (sameMaskSyncTasks(prev, t2) ? prev : t2));
-      }
-    });
+    refreshMaskSyncAndReconcile();
   }, PROBE_IDLE_MS);
   const handleMaskSyncNotif = (eventName?: any) => {
     const evt = typeof eventName === 'string' ? eventName : '';
     if (evt === 'make' || evt === 'delete' || evt === 'set' || evt === 'rename' || evt === 'move') {
       // 收到事件即标记忙碌：即便防抖窗口内又来新事件，守卫也知道 PS 尚未空闲
       markPsBusy(PROBE_IDLE_MS);
+      // 纯内存标记（零 IPC），可在通知回调里安全调用。
+      invalidateLayerSnapshot();
       scheduleRefresh();
     }
   };
@@ -1008,35 +1147,9 @@ const patchMaskSyncTask = async (taskId: string, patch: Partial<MaskSyncTask>) =
   }
 };
 
-/**
- * 根据样本图层类型返回可用的通道下拉选项：
- * - 背景图层（只有 RGB 三通道）：灰度、R、G、B + 色相、饱和度（无 A、无蒙版）
- * - 调整图层（无 A 通道）：灰度、R、G、B、蒙版
- * - 普通像素图层：灰度、R、G、B、A、蒙版 + 色相、饱和度
- * 色相/饱和度通道依赖真实 RGB，仅背景图层与普通像素图层提供（调整图层/带蒙版组不提供）。
- */
-const getMaskSyncChannelsForEntry = (entry?: LayerTreeEntry): MaskSyncChannel[] => {
-  // 色相/饱和度通道：仅样本图层有真实 RGB 时可用（背景图层 / 普通像素图层）
-  if (!entry) return ['gray', 'r', 'g', 'b', 'a', 'mask', 'hue', 'sat'];
-  // 带蒙版的图层组：样本只能取该组自身的蒙版通道
-  if (entry.kind === 'group' && entry.hasUserMask) return ['mask'];
-  if (entry.isBackground) return ['gray', 'r', 'g', 'b', 'hue', 'sat'];
-  if (entry.isAdjustment) return ['gray', 'r', 'g', 'b', 'mask'];
-  return ['gray', 'r', 'g', 'b', 'a', 'mask', 'hue', 'sat'];
-};
-
 /* ================= 自定义下拉（支持“注释右对齐”） =================
  * 原生 <option> 无法让“（像素）”这类注释右对齐，改用自绘下拉：
  * 主文本靠左、注释靠右，弹出层 fixed 定位避免被面板 overflow 裁剪。 */
-/** 把 label 末尾的（注释）拆出来：'　└ 图层1（像素）' → label='　└ 图层1' tag='（像素）' */
-const splitLabelTag = (label: string): { label: string; tag: string } => {
-  const idx = label.lastIndexOf('（');
-  if (idx > 0 && label.endsWith('）')) {
-    return { label: label.slice(0, idx), tag: label.slice(idx) };
-  }
-  return { label, tag: '' };
-};
-
 const handleMaskSyncSampleChange = async (task: MaskSyncTask, value: string) => {
   const id = parseInt(value, 10);
   if (!Number.isFinite(id)) return;
@@ -1369,66 +1482,62 @@ const findLayerById = (layers: any[], id: number): any | null => {
   return null;
 };
 
-const computeLayerSignature = (layers: any[]): number => {
-  let h = 2166136261 >>> 0;
-  const stack = [...(layers || [])];
-  while (stack.length) {
-    const layer = stack.pop();
-    if (!layer) continue;
-    const id = layer.id || 0;
-    const kind = layer.kind === 'pixel' ? 1 : (layer.kind === 'group' ? 2 : 3);
-    h = Math.imul(h ^ id, 16777619) >>> 0;
-    h = Math.imul(h ^ kind, 16777619) >>> 0;
-    const name = layer.name || '';
-    for (let i = 0; i < name.length; i++) {
-      h = Math.imul(h ^ name.charCodeAt(i), 16777619) >>> 0;
-    }
-    const children = (layer as any)?.layers;
-    if (children && Array.isArray(children) && children.length > 0) {
-      for (let i = 0; i < children.length; i++) stack.push(children[i]);
-    }
-  }
-  return h >>> 0;
+/**
+ * 结构探针用的签名。
+ *
+ * ⚠️ 性能（2026-10-06）：旧实现自己遍历整棵图层树、逐层读 id/kind/name，
+ * UXP 下每次属性读都是一次同步宿主 IPC（≈3N 次）。本探针由**每次 PS 通知**
+ * 触发（防抖 300ms），与 MaskSyncEngine 的 2s 轮询签名、选项构建的遍历
+ * 三者叠加，大量图层时主线程被长期占满 → 折叠/展开点击无响应。
+ *
+ * 现在统一读共享快照（layerTreeSnapshot）：全插件只遍历一次，
+ * 本函数退化为 O(1) 的字符串比较。
+ */
+const computeLayerSignature = (): string => {
+  const snap = getLayerSnapshot();
+  return snap ? snap.signature : 'none';
 };
 
-const buildLineReferenceOptions = (layers: any[], depth: number, out: Array<{ value: string; label: string; depth: number; disabled?: boolean }>) => {
-  for (const layer of layers || []) {
-    if (!layer) continue;
-    const children = (layer as any)?.layers;
-    const hasChildren = !!(children && Array.isArray(children) && children.length > 0);
-    // 层级缩进改为按 depth 在 CSS 层用 padding-left 体现（与蒙版同步样本下拉一致），
+/**
+ * 线稿参考层的下拉选项。
+ *
+ * ⚠️ 性能：与结构探针共用同一份快照，**不再自己遍历图层树**。
+ */
+const buildLineReferenceOptions = (
+  out: Array<{ value: string; label: string; depth: number; disabled?: boolean }>
+) => {
+  const snap = getLayerSnapshot();
+  if (!snap) return;
+  for (const s of snap.entries) {
     // 组内图层/嵌套组前面补一个 └ 符号增强层级辨识（depth>0 才加）
-    const indent = depth > 0 ? '└ ' : '';
-    const kind = (layer as any)?.kind;
-    const isPixel = kind === 'pixel';
-    const labelSuffix = hasChildren ? '（组）' : (isPixel ? '（像素）' : '（不可用）');
+    const indent = s.depth > 0 ? '└ ' : '';
+    const isPixel = s.kind === 'pixel';
+    const labelSuffix = s.hasChildren ? '（组）' : (isPixel ? '（像素）' : '（不可用）');
     out.push({
-      value: String(layer.id),
-      label: `${indent}${layer.name || `图层 ${layer.id}`}${labelSuffix}`,
-      depth,
+      value: String(s.id),
+      label: `${indent}${s.name || `图层 ${s.id}`}${labelSuffix}`,
+      depth: s.depth,
       disabled: !isPixel
     });
-    if (hasChildren) buildLineReferenceOptions(children, depth + 1, out);
   }
 };
 
 const refreshLineReferenceOptions = (docOverride?: any) => {
   try {
-    const doc = docOverride || app.activeDocument;
-    const layers = doc?.layers || [];
     const out: Array<{ value: string; label: string; depth: number; disabled?: boolean }> = [];
-    buildLineReferenceOptions(layers, 0, out);
+    buildLineReferenceOptions(out);
     setLineReferenceOptions(out);
-    const docId = doc?.id ?? null;
-    lineReferenceSignatureRef.current = { docId, hash: computeLayerSignature(layers) };
+    // 签名与选项来自同一次快照遍历（不再额外遍历）。
+    lineReferenceSignatureRef.current = computeLayerSignature();
     const sel = lineReferenceSelectionRef.current;
     if (typeof sel.id === 'number') {
-      const layer = findLayerById(layers, sel.id);
-      if (!layer || layer.kind !== 'pixel') {
+      // 有效性判定改查快照（O(N) 查表但不发 IPC），不再遍历图层树。
+      const entry = findInSnapshot(getLayerSnapshot(), sel.id);
+      if (!entry || entry.kind !== 'pixel') {
         setLineReferenceLayerId(null);
         setLineReferenceLayerName('');
-      } else if ((layer.name || '') !== sel.name) {
-        setLineReferenceLayerName(layer.name || '');
+      } else if ((entry.name || '') !== sel.name) {
+        setLineReferenceLayerName(entry.name || '');
       }
     }
   } catch (e) {
@@ -2923,23 +3032,41 @@ const hideNativeWidgetsOfSections = (ids: string[]) => {
   });
 };
 
-/** 折叠/展开后强制 UXP 重排原生视图：滚动 1px 再还原（无溢出时跳过，避免抖动） */
+/**
+ * 折叠/展开后强制 UXP 重排原生视图：滚动 1px 再还原（无溢出时跳过，避免抖动）
+ *
+ * ⚠️ 性能（2026-10-06）：本函数读 scrollHeight/clientHeight 会触发**强制同步布局**，
+ * 且旧实现是「每次调用都排一个 rAF」。分区排序拖拽、批量折叠等操作会在同一帧内
+ * 多次触发它 ⇒ 同一帧内重复强制重排。现在用模块级标志做**帧内幂等合并**：
+ * 同一帧内多次调用只真正执行一次，下一帧若再次被请求则重新执行。
+ */
+let resyncScheduled = 0;
+
+const doResyncNativeWidgets = () => {
+  const el = rootRef.current ?? document.getElementById('pixeladjustment');
+  if (!el) return;
+  const max = el.scrollHeight - el.clientHeight;
+  if (max <= 0) return;
+  const t = el.scrollTop;
+  el.scrollTop = t < max ? t + 1 : Math.max(0, t - 1);
+  const restore = () => { el.scrollTop = t; };
+  // rAF 在 UXP 下可用但不保险（项目里其它位置也做了 typeof 守卫），缺失时退化为同步还原
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(restore);
+  else restore();
+};
+
 const resyncNativeWidgets = () => {
-  const nudge = () => {
-    const el = rootRef.current ?? document.getElementById('pixeladjustment');
-    if (!el) return;
-    const max = el.scrollHeight - el.clientHeight;
-    if (max <= 0) return;
-    const t = el.scrollTop;
-    el.scrollTop = t < max ? t + 1 : Math.max(0, t - 1);
-    const restore = () => { el.scrollTop = t; };
-    // rAF 在 UXP 下可用但不保险（项目里其它位置也做了 typeof 守卫），缺失时退化为同步还原
-    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(restore);
-    else restore();
-  };
-  // 必须等 React 提交完再量：同步调用量到的是旧布局，滚动兜底会失效
-  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(nudge);
-  else nudge();
+  if (resyncScheduled) return;
+  const schedule = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : null;
+  if (!schedule) {
+    // rAF 不可用：退化为同步执行（保持旧行为）
+    doResyncNativeWidgets();
+    return;
+  }
+  resyncScheduled = schedule(() => {
+    resyncScheduled = 0;
+    doResyncNativeWidgets();
+  });
 };
 
 const toggleSectionCollapse = (id: string) => {
@@ -3310,8 +3437,8 @@ const renderMaskSyncContent = () => (
     )}
 
     {maskSyncTasks.map(task => {
-      const sampleEntry = maskSyncSampleOptions.find(o => o.id === task.sampleLayerId);
-      const channelOptions = getMaskSyncChannelsForEntry(sampleEntry);
+      const sampleEntry = task.sampleLayerId != null ? maskSyncSampleIndex.get(task.sampleLayerId) : undefined;
+      const channelSelectOptions = getChannelSelectOptions(sampleEntry);
       return (
       <div key={task.id} className="task-card">
         {/* 任务名：双击重命名 */}
@@ -3351,12 +3478,7 @@ const renderMaskSyncContent = () => (
             onOpen={refreshMaskSyncOptions}
             title={helpTexts.adjustment.maskSyncSampleLayer}
             placeholder=""
-            options={maskSyncSampleOptions.map(opt => {
-              const { label, tag } = splitLabelTag(opt.label);
-              // 像素/调整/背景图层可選；带蒙版的图层组也可作为样本（只能取蒙版通道）
-              const selectable = opt.kind === 'pixel' || opt.isAdjustment || opt.isBackground || (opt.kind === 'group' && opt.hasUserMask);
-              return { value: String(opt.id), label, tag, disabled: !selectable, depth: opt.depth };
-            })}
+            options={maskSyncSampleSelectOptions}
           />
         </div>
 
@@ -3367,7 +3489,7 @@ const renderMaskSyncContent = () => (
             onChange={(v) => handleMaskSyncChannelChange(task, v)}
             showCheck
             placeholder=""
-            options={channelOptions.map(ch => ({ value: ch, label: MASK_SYNC_CHANNEL_LABELS[ch] }))}
+            options={channelSelectOptions}
           />
         </div>
 
@@ -3382,10 +3504,7 @@ const renderMaskSyncContent = () => (
             onOpen={refreshMaskSyncOptions}
             title={helpTexts.adjustment.maskSyncTargetLayer}
             placeholder=""
-            options={maskSyncTargetOptions.map(opt => {
-              const { label, tag } = splitLabelTag(opt.label);
-              return { value: String(opt.id), label, tag, depth: opt.depth };
-            })}
+            options={maskSyncTargetSelectOptions}
           />
         </div>
 
@@ -3581,13 +3700,7 @@ const renderQuickActionContent = () => (
           value={lineReferenceLayerId ? String(lineReferenceLayerId) : 'auto'}
           onChange={handleLineReferenceSelect}
           placeholder=""
-          options={[
-            { value: 'auto', label: '自动', tag: '上方像素层' },
-            ...lineReferenceOptions.map(opt => {
-              const s = splitLabelTag(opt.label);
-              return { value: opt.value, label: s.label, tag: s.tag, depth: opt.depth, disabled: opt.disabled };
-            })
-          ]}
+          options={lineReferenceSelectOptions}
           showCheck
           title={helpTexts.adjustment.lineReferenceSelect}
         />
