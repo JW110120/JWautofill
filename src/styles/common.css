@@ -213,6 +213,89 @@ html, body {
   pointer-events: none;
 }
 
+/* —— 自绘开关（.toggle-switch，替代原生 sp-switch）——
+   为什么自绘：sp-switch 的胶囊颜色由 PS Spectrum 主题接管、UXP 下无法用 CSS 覆盖，
+   在 darkest / lightest 下关闭态胶囊色≈面板底色，看起来只是个圆点（2026-10-06 实测）。
+   自绘后开启态=--primary-color、关闭态与背景有明确反差，且与滑块同一套设计语言
+   （轨道色 --border-color、圆点白色、圆角 999）。
+
+   尺寸：可见胶囊 33×16、圆点 12px；占位盒高 24px（:before 撑起），
+   与滑块(12px 轨道)、数字输入(24px) 同一基线，行内垂直居中无需额外调整。
+   ⚠️ 占位用 :before 而非 margin/padding，避免挤压同行元素。
+
+   ⚠️ 圆角**不能写 border-radius:999px**：UXP 下该值未按「高度一半」正确解析成胶囊，
+   实测两端渲染为尖角、整体像纺锤，且伪元素溢出容器后左右各鼓出一个小凸起
+   （用户 2026-10-06 反馈，见「音频波」现象）。
+   ⇒ 改用**显式数值** 8px（= 16px 高的一半，等价于完美半圆端），
+     并同时给 -webkit- 前缀，UXP 的 WebKit 后端更认它。 */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 33px;      /* ⚠️ 必须与下方伪元素胶囊同宽，否则伪元素溢出 → 两端鼓包 */
+  height: 24px;      /* 占位盒高：只用于垂直居中，视觉本体仅 16px */
+  vertical-align: middle;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  box-sizing: border-box;
+  outline: none;
+}
+/* 胶囊本体：绝对定位居中，与占位盒分离 ⇒ 不影响同行布局 */
+.toggle-switch:before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 33px;
+  height: 16px;
+  margin-top: -8px;
+  /* 8px = 16px 高的一半 ⇒ 端部为完美半圆（与图2 目标一致） */
+  border-radius: 8px;
+  -webkit-border-radius: 8px;
+  /* 关闭态：与背景有足够反差 —— 用 --border-color（比 --bg-color 明显一档），
+     不透明度0.80 字面写。UXP 下 background:transparent 会渲染成纯黑，不能用。 */
+  background-color: var(--border-color);
+  opacity: 0.80;
+  box-sizing: border-box;
+  transition: background-color 0.2s ease, opacity 0.2s ease;
+}
+/* 圆点：12px 白点。开启时移到右端：left = 胶囊宽 33 − 圆点 12 − 内边距 2 = 19 */
+.toggle-switch-knob {
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  margin-top: -6px;
+  border-radius: 50%;
+  -webkit-border-radius: 50%;
+  background-color: rgb(255, 255, 255);
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 1;
+  transition: left 0.2s ease;
+}
+/* 开启态：胶囊 = 主色蓝（与滑块填充色一致），圆点移到右侧 */
+.toggle-switch-on:before {
+  background-color: var(--primary-color);
+  opacity: 1;
+}
+.toggle-switch-on .toggle-switch-knob {
+  left: 19px;
+}
+/* 焦点态：UXP 禁 outline，用圆点外扩的一层浅色环表达键盘焦点 */
+.toggle-switch:focus-visible .toggle-switch-knob {
+  box-shadow: 0 0 0 2px rgba(38, 128, 235, 0.35);
+}
+/* 禁用态：整体置灰、不可交互（容器盒模型不变，只改颜色/透明度） */
+.toggle-switch-disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.toggle-switch-disabled .toggle-switch-knob {
+  background-color: var(--disabled-color);
+}
+
 /* 通用数字输入框容器 */
 .num-input-row {
   display: flex;
@@ -867,14 +950,15 @@ sp-radio-group:not(.radio-group-vertical) > sp-radio > .row-end > span {
   margin: 0 auto;
 }
 
-/* 行内右侧控件间距：row-between / row-center / row-end 内，sp-switch 与 checkbox 左侧留 6px。
+/* 行内右侧控件间距：row-between / row-center / row-end 内，开关与 checkbox 左侧留 4px。
+   ⚠️ 2026-10-06：选择器由 sp-switch 改为 .toggle-switch（自绘开关全量替换原生控件）。
    ⚠️ 不加在 label-N 的右侧兄弟上——那样会误伤行内滑块（RangeSlider）的标签，产生不需要的间距。
    只针对具体控件类型（开关/勾选框）。 */
-.row-between sp-switch,
+.row-between .toggle-switch,
 .row-between input[type="checkbox"],
-.row-center sp-switch,
+.row-center .toggle-switch,
 .row-center input[type="checkbox"],
-.row-end sp-switch,
+.row-end .toggle-switch,
 .row-end input[type="checkbox"] {
   margin-left: 4px;
 }
@@ -923,17 +1007,16 @@ sp-radio-group:not(.radio-group-vertical) > sp-radio > .row-end > span {
 
 /* 通用状态条通知（引擎状态条等单行状态行）：状态点 + 正文（+ 右侧信息/操作）。
    外描边随状态变化：ok=绿描边 / warn=橙描边 / fail=红描边（由 TSX 按状态挂修饰类）。
-   ⚠️ min-height 锁定为「含 sp-switch 时的高度」40px，让同一组状态条高度一致：
-      条内若含 sp-switch（笔刷热键的服务条 / APP 的紧凑+专注条），其原生盒高 32px
-      会把条撑到 40px（32 + 上下 padding 6 + 上下边框 2）；而纯文字的条
-      （蒙版同步「引擎就绪」）只有 25px —— 两条并排时高度不一致就是因为开关。
-      锁定后两者恒等；正文/状态点仍由 align-items:center 垂直居中。
+   ⚠️ min-height 用于「含开关的条」与「纯文字的条」等高：
+      2026-10-06 开关由原生 sp-switch（盒高 32px）换成自绘 .toggle-switch（占位盒高 24px），
+      原 40px = 32+上下 padding 6+边框 2 ⇒ 现按 24px 重算为 **32px**。
+      若沿用 40 会让含开关的状态条比纯文字条明显高一截。
    ⚠️ 用 min-height 而非 height：正文换行时状态条仍可增高，不会被裁切。 */
 .notify-bar {
   display: flex;
   align-items: center;
   width: 100%;
-  min-height: 40px;
+  min-height: 32px;
   padding: 3px 6px;
   margin-bottom: 8px;
   border-radius: 3px;
@@ -948,8 +1031,9 @@ sp-radio-group:not(.radio-group-vertical) > sp-radio > .row-end > span {
 /* 未启用态（与 warn 橙区分：橙在插件语义里是「异常/待处理」，关闭只是没开）：
    描边走中性灰 --disabled-color、底色回到面板底色，与同条内灰掉的星形图标同源。 */
 .notify-bar.notify-bar-disabled { border-color: var(--disabled-color); background: var(--bg-color); }
-/* 状态条内的开关不参与伸缩：右侧定位由 .mask-sync-status-spacer 负责，开关宽度恒定。 */
-.notify-bar sp-switch { flex: none; margin-left: 4px; }
+/* 状态条内的开关不参与伸缩：右侧定位由 .mask-sync-status-spacer 负责，开关宽度恒定。
+   2026-10-06：选择器随原生 sp-switch → 自绘 .toggle-switch 同步更新。 */
+.notify-bar .toggle-switch { flex: none; margin-left: 4px; }
 
 /* 通用通知横幅（唯一收口名，勿再起 notify-banner 之类近似名与 .notify-bar 混淆）：
    与面板顶部「激活提示」卡片同款容器/状态点/字号，三处共同挂载——
@@ -1048,8 +1132,11 @@ sp-radio-group:not(.radio-group-vertical) > sp-radio > .row-end > span {
   box-shadow: 0 0 4px rgba(231, 76, 60, 0.6);
 }
 
-/* 专注模式主开关图标：顶替 .indicator-lg 那颗圆点，尺寸/右间距与它完全一致，
-   填色与 .indicator-disabled（灰）/ .indicator-ok（绿）同源，保证两态视觉一致。 */
+/* 专注模式主开关图标：顶替 .indicator-lg那颗圆点，尺寸/右间距与它完全一致，
+   填色与 .indicator-disabled（灰）/ .indicator-ok（绿）同源，保证两态视觉一致。
+   ⚠️ 2026-10-06 图形由五角星换成 Spectrum「Target」靶心（FocusTargetIcon 内联官方 path）。
+      靶心图标含 <path>（外圆环）+ <circle>（内点）两个元素，**两者都必须挂 .icon-fill**，
+      否则内圈缺色；下面的选择器对两者同时生效，无需额外规则。 */
 .indicator-icon-lg {
   display: inline-block;
   flex: none;

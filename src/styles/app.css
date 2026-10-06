@@ -105,8 +105,12 @@ body.compact-stroke #app .subpanel-stroke .divider {
   display: none;
 }
 
-/* 父面板隐藏 divider 后「清除模式」行与「填充模式」分区之间补 5px：
-   行盒 32px（sp-switch）与分区首行标签盒 22px 的半个高度差 (32−22)/2 = 5px，不补会显得比「行→行」更挤。
+/* 父面板隐藏 divider 后「清除模式」行与「填充模式」分区之间补 5px。
+   ⚠️ 2026-10-06：原注释按「原生 sp-switch 盒高 32px 与分区首行标签盒 22px 的差的一半 = 5px」
+      换算。开关换成自绘 .toggle-switch（占位盒高 24px）后该行盒降为 24px，
+      理论差值变为 (24−22)/2 = 1px；但**保留 5px 不调**：
+      分区间距属观感参数、且 15px=10+5 是既有版式基准，调成 11px 会让全插件分区节奏突变。
+      此处只更新注释以免后人按过期算式误改。后续若要精确对齐，再连同全插件分区节奏一起调。
    ⚠️ divider 虽被 display: none 隐藏，仍在文档流里，相邻兄弟选择器照常命中。
    ⚠️ 只作用于主面板滚动区内的分区：子面板里 divider 后的分区首元素是自带 10px 上外边距的 .row-between，
       不适用本条换算，不能一并套用。 */
@@ -131,14 +135,14 @@ body.compact-app #app .app-root > .panel > .panel-section .row-grid + .row-grid 
   margin-top: 0;
 }
 
-/* 网格行内的开关（紧凑填充选项）：把 sp-switch 的「透明留白」让给行距。
-   ⚠️ sp-switch 在 UXP 下原生盒高 32px，而可见胶囊只有 14px（上下都是透明留白），
-      会把网格行撑高，使两行网格之间的视觉间距明显大于下方复选框组。
-      对称负外边距把这部分留白让出去：开关盒纵向溢出，但胶囊本体（盒内居中）始终落在行内，不会被裁切。 */
-body.compact-app #app .app-root > .panel > .panel-section .row-grid sp-switch {
-  margin-top: -10px;
-  margin-bottom: -10px;
-}
+/* 网格行内的开关（紧凑填充选项）。
+   ⚠️ 2026-10-06：此处原有针对原生 `sp-switch` 的 `margin: -10px` 对称负外边距，
+      用于抵消它 32px 的原生盒高（可见胶囊仅 14px，上下都是透明留白）。
+      现已全量替换为自绘 `.toggle-switch`（占位盒高 24px、胶囊绝对定位居中），
+      该补偿**不再需要**，故移除。保留会误导：自绘开关不需要负边距，
+      且若真加上去会把开关拉出行外。
+      新的对齐基准：.toggle-switch 占位盒高 24px，与滑块(12px)、数字输入(24px) 同基线，
+      行内垂直居中由 `display:inline-block` + 占位盒自动完成，无需额外补偿。 */
 
 /* 描边模式行右侧的「色板 + 齿轮」槽彻底不参与行高。
    ⚠️ 齿轮按钮盒 24px，比左侧「标签 + 开关」决定的 22px 行高多出 2px ——

@@ -13,6 +13,7 @@ import BrushSelect, { BrushSelectOption } from './BrushSelect';
 import { helpTexts } from '../constants/helpTexts';
 import { subscribeFocusMode } from '../utils/FocusModeBus';
 import { runWhenIdle } from '../utils/psProbe';
+import ToggleSwitch from '../components/ToggleSwitch';
 
 // 笔刷热键分区：在调整面板内录制「笔刷 + 快捷键」，持久化到共享配置，
 // 由本地守护进程在全局捕获按键后直接切换笔刷，不录制动作。
@@ -596,16 +597,7 @@ export default function BrushHotkeySection() {
         <span className="mask-sync-status-spacer" />
         {/* 与 APP 面板「紧凑 + 专注」状态条统一：右侧改用 sp-switch 代替「启动/停止服务」文字按钮。
             开关状态即服务连接状态；服务处理中（busy）时禁用，避免重复触发。 */}
-        <sp-switch
-          checked={daemonConnected}
-          disabled={busy}
-          onChange={() => {
-            if (!busy) { if (daemonConnected) void stopDaemon(); else void loadDaemon(); }
-          }}
-          title={daemonConnected
-            ? helpTexts.hotkey.daemonStop
-            : helpTexts.hotkey.daemonStart}
-        />
+        <ToggleSwitch checked={daemonConnected} disabled={busy} onChange={() => { if (!busy) { if (daemonConnected) void stopDaemon(); else void loadDaemon(); } }} title={daemonConnected ? helpTexts.hotkey.daemonStop : helpTexts.hotkey.daemonStart}  />
       </div>
 
       <div className="row-between">

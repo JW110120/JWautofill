@@ -33,6 +33,7 @@ import { maskSyncEngine, MASK_SYNC_CHANNEL_LABELS, LayerTreeEntry, MaskSyncTask,
 import BrushHotkeySection from '../hotkey/BrushHotkeySection';
 import RangeSlider from '../components/RangeSlider';
 import Select from '../components/Select';
+import ToggleSwitch from '../components/ToggleSwitch';
 import { helpTexts } from '../constants/helpTexts';
 import { useLabelDrag } from '../utils/useLabelDrag';
 import { debouncePsProbe, markPsBusy } from '../utils/psProbe';
@@ -3075,10 +3076,7 @@ const renderDetailAdjustContent = () => (
           onClick={() => setUsePowerfulMode(!usePowerfulMode)}
           title={helpTexts.adjustment.powerfulMode}
         >强力模式</label>
-        <sp-switch
-          checked={usePowerfulMode}
-          onChange={(e) => setUsePowerfulMode((e.target as HTMLInputElement).checked)}
-        />
+        <ToggleSwitch checked={usePowerfulMode} onChange={(e) => setUsePowerfulMode((e.target as HTMLInputElement).checked)}  />
       </div>
     </div>
 
@@ -3164,11 +3162,7 @@ const renderEdgeProcessingContent = () => (
           下方参数行按同一个 edgeSmoothMode 状态切换，与开关互为镜像。 */}
       <div className="row-start">
         <div className="label-4" title={helpTexts.adjustment.edgeSmoothModeSwitch}>色块边缘</div>
-        <sp-switch
-          checked={edgeSmoothMode === 'edge'}
-          onChange={(e: any) => handleEdgeSmoothModeChange(e.target.checked ? 'edge' : 'line')}
-          title={helpTexts.adjustment.edgeSmoothModeSwitch}
-        />
+        <ToggleSwitch checked={edgeSmoothMode === 'edge'} onChange={(e: any) => handleEdgeSmoothModeChange(e.target.checked ? 'edge' : 'line')} title={helpTexts.adjustment.edgeSmoothModeSwitch}  />
       </div>
     </div>
 
@@ -3426,10 +3420,7 @@ const renderMaskSyncContent = () => (
               className="label-2"
               title={helpTexts.adjustment.maskSyncEnabled}
             >同步</label>
-            <sp-switch
-              checked={task.enabled}
-              onChange={(e) => handleMaskSyncEnabledChange(task, (e.target as HTMLInputElement).checked)}
-            />
+            <ToggleSwitch checked={task.enabled} onChange={(e) => handleMaskSyncEnabledChange(task, (e.target as HTMLInputElement).checked)}  />
           </div>
           {/* 立即同步：改成与刷新一致的无边框图标按钮（--text-color / 16px），不再显示文字。
               当样本图层 / 通道 / 目标蒙版三下拉任一项未选时禁用（灰 + 不触发同步） */}
@@ -3548,10 +3539,7 @@ const renderQuickActionContent = () => (
           onClick={() => setUseContrastReduction(!useContrastReduction)}
           title={helpTexts.adjustment.contrastReduce}
         >对比减弱</label>
-        <sp-switch 
-          checked={useContrastReduction}
-          onChange={(e) => setUseContrastReduction(e.target.checked)}
-        />
+        <ToggleSwitch checked={useContrastReduction} onChange={(e) => setUseContrastReduction(e.target.checked)}  />
       </div>
     </div>
 
@@ -3646,10 +3634,7 @@ const renderQuickActionContent = () => (
           onClick={() => setSpecialWoodcutPreview(!specialWoodcutPreview)}
           title={helpTexts.adjustment.woodcutPreview}
         >预览</label>
-        <sp-switch
-          checked={specialWoodcutPreview}
-          onChange={(e) => setSpecialWoodcutPreview(e.target.checked)}
-        />
+        <ToggleSwitch checked={specialWoodcutPreview} onChange={(e) => setSpecialWoodcutPreview(e.target.checked)}  />
     </div>
 
     <div className="divider"></div>
@@ -3796,10 +3781,7 @@ return (
                 className="label-4"
                 onClick={() => toggleSectionVisibility(sec.id)}
               >{sec.title}</span>
-              <sp-switch
-                checked={sec.isVisible}
-                onChange={() => toggleSectionVisibility(sec.id)}
-              />
+              <ToggleSwitch checked={sec.isVisible} onChange={() => toggleSectionVisibility(sec.id)}  />
             </div>
           ))}
         </div>

@@ -17,7 +17,7 @@ import LicenseDialog from './components/LicenseDialog';
 import RangeSlider from './components/RangeSlider';
 import IconButton from './components/IconButton';
 import { LicenseManager } from './utils/LicenseManager';
-import { ExpandIcon, SettingsIcon, FocusStarIcon } from './styles/Icons';
+import { ExpandIcon, SettingsIcon, FocusTargetIcon } from './styles/Icons';
 import { calculateRandomColor, hsbToRgb, rgbToGray } from './utils/ColorUtils';
 import { strokeSelection } from './utils/StrokeSelection';
 import { PatternFill } from './utils/PatternFill';
@@ -37,6 +37,7 @@ import {
 import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/MainToggleBus';
 import { setFocusMode } from './utils/FocusModeBus';
 import { debouncePsProbe } from './utils/psProbe';
+import ToggleSwitch from './components/ToggleSwitch';
 import { helpTexts } from './constants/helpTexts';
 
 const { executeAsModal } = core;
@@ -1778,14 +1779,10 @@ class App extends React.Component<AppProps, AppState> {
                        橙在本插件语义里是「异常/待处理」，关闭只是未启用）。文案沿用主按钮的
                        「功能开启/功能关闭」，并标注当前处于专注模式。 */
                     <div className={this.state.isEnabled ? 'notify-bar notify-bar-ok' : 'notify-bar notify-bar-disabled'}>
-                        <FocusStarIcon className={this.state.isEnabled ? 'indicator-icon-lg indicator-icon-ok' : 'indicator-icon-lg'} />
+                        <FocusTargetIcon className={this.state.isEnabled ? 'indicator-icon-lg indicator-icon-ok' : 'indicator-icon-lg'} />
                         <span className="notify-text">{this.state.isEnabled ? '功能开启（专注）' : '功能关闭'}</span>
                         <span className="mask-sync-status-spacer" />
-                        <sp-switch
-                            checked={this.state.isEnabled}
-                            onChange={this.handleButtonClick}
-                            title={helpTexts.selectionFill.mainButtonFocus}
-                        />
+                        <ToggleSwitch checked={this.state.isEnabled} onChange={this.handleButtonClick} title={helpTexts.selectionFill.mainButtonFocus}  />
                     </div>
                 ) : (
                 <div
@@ -1795,9 +1792,9 @@ class App extends React.Component<AppProps, AppState> {
                     onClick={this.handleButtonClick}
                     title={focusMode ? helpTexts.selectionFill.mainButtonFocus : helpTexts.selectionFill.mainButton}>
                     <div className="main-button-content">
-                        {/* 专注模式下圆点换成同尺寸、同双色的星形图标；非专注模式仍是原来的圆点 */}
+                        {/* 专注模式下圆点换成同尺寸、同双色的靶心图标（Spectrum Target）；非专注模式仍是原来的圆点 */}
                         {focusMode ? (
-                            <FocusStarIcon
+                            <FocusTargetIcon
                                 className={this.state.isEnabled ? 'indicator-icon-lg indicator-icon-ok' : 'indicator-icon-lg'}
                             />
                         ) : (
@@ -2024,23 +2021,13 @@ title={helpTexts.selectionFill.selectionExpand}>
                                     <div className="grid-cell">
                                         <div className={(this.state.clearMode || this.state.isInQuickMask) ? 'row-start disabled' : 'row-start'}>
                                             <span className="label-4" title={helpTexts.selectionFill.createNewLayer}>新建图层</span>
-                                            <sp-switch
-                                                checked={this.state.createNewLayer}
-                                                onChange={this.toggleCreateNewLayer}
-                                                disabled={this.state.clearMode || this.state.isInQuickMask}
-                                                title={helpTexts.selectionFill.createNewLayerSwitch}
-                                            />
+                                            <ToggleSwitch checked={this.state.createNewLayer} onChange={this.toggleCreateNewLayer} disabled={this.state.clearMode || this.state.isInQuickMask} title={helpTexts.selectionFill.createNewLayerSwitch}  />
                                         </div>
                                     </div>
                                     <div className="grid-cell">
                                         <div className={this.state.createNewLayer ? 'row-start disabled' : 'row-start'}>
                                             <span className="label-4" title={helpTexts.selectionFill.clearMode}>清除模式</span>
-                                            <sp-switch
-                                                checked={this.state.clearMode}
-                                                onChange={this.toggleClearMode}
-                                                disabled={this.state.createNewLayer}
-                                                title={helpTexts.selectionFill.clearModeSwitch}
-                                            />
+                                            <ToggleSwitch checked={this.state.clearMode} onChange={this.toggleClearMode} disabled={this.state.createNewLayer} title={helpTexts.selectionFill.clearModeSwitch}  />
                                         </div>
                                     </div>
                                 </div>
@@ -2051,11 +2038,7 @@ title={helpTexts.selectionFill.selectionExpand}>
                                     <div className="grid-cell">
                                         <div className="row-start">
                                             <span className="label-4" title={helpTexts.selectionFill.strokeModeLabel}>描边模式</span>
-                                            <sp-switch
-                                                checked={this.state.strokeEnabled}
-                                                onChange={this.toggleStrokeEnabled}
-                                                title={helpTexts.selectionFill.strokeEnabledSwitch}
-                                            />
+                                            <ToggleSwitch checked={this.state.strokeEnabled} onChange={this.toggleStrokeEnabled} title={helpTexts.selectionFill.strokeEnabledSwitch}  />
                                         </div>
                                     </div>
                                     <div className="grid-cell">
@@ -2088,12 +2071,7 @@ title={helpTexts.selectionFill.selectionExpand}>
 title={helpTexts.selectionFill.createNewLayer}>
                             新建图层
                             </span>
-                                    <sp-switch 
-                                        checked={this.state.createNewLayer}
-                                        onChange={this.toggleCreateNewLayer}
-                                        disabled={this.state.clearMode || this.state.isInQuickMask}
-                                        title={helpTexts.selectionFill.createNewLayerSwitch}
-                                    />
+                                    <ToggleSwitch checked={this.state.createNewLayer} onChange={this.toggleCreateNewLayer} disabled={this.state.clearMode || this.state.isInQuickMask} title={helpTexts.selectionFill.createNewLayerSwitch}  />
                                 </div>
                                 <div className="divider" />
 
@@ -2117,11 +2095,7 @@ title={helpTexts.selectionFill.createNewLayer}>
                                             <SettingsIcon/>
                                         </IconButton>
                                     )}
-                                    <sp-switch 
-                                        checked={this.state.strokeEnabled}
-                                        onChange={this.toggleStrokeEnabled}
-                                        title={helpTexts.selectionFill.strokeEnabledSwitch}
-                                    />
+                                    <ToggleSwitch checked={this.state.strokeEnabled} onChange={this.toggleStrokeEnabled} title={helpTexts.selectionFill.strokeEnabledSwitch}  />
                                     </div>
                                 </div>
                                 <div className="divider" />
@@ -2132,12 +2106,7 @@ title={helpTexts.selectionFill.createNewLayer}>
 title={helpTexts.selectionFill.clearMode}>
                             清除模式
                             </label>
-                                    <sp-switch 
-                                        checked={this.state.clearMode}
-                                        onChange={this.toggleClearMode}
-                                        disabled={this.state.createNewLayer}
-                                        title={helpTexts.selectionFill.clearModeSwitch}
-                                    />
+                                    <ToggleSwitch checked={this.state.clearMode} onChange={this.toggleClearMode} disabled={this.state.createNewLayer} title={helpTexts.selectionFill.clearModeSwitch}  />
                                 </div>
                                 <div className="divider" />
                             </>
@@ -2386,11 +2355,11 @@ title={helpTexts.selectionFill.clearMode}>
                         <div className="panel-section">
                             <div className="row-between">
                                 <span className="label-4" onClick={() => this.toggleSectionVisibility('selectionOptions')}>选区改造</span>
-                                <sp-switch checked={this.state.selectionOptionsVisible} onChange={() => this.toggleSectionVisibility('selectionOptions')} />
+                                <ToggleSwitch checked={this.state.selectionOptionsVisible} onChange={() => this.toggleSectionVisibility('selectionOptions')}  />
                             </div>
                             <div className="row-between">
                                 <span className="label-4" onClick={() => this.toggleSectionVisibility('fillOptions')}>填充选项</span>
-                                <sp-switch checked={this.state.fillOptionsVisible} onChange={() => this.toggleSectionVisibility('fillOptions')} />
+                                <ToggleSwitch checked={this.state.fillOptionsVisible} onChange={() => this.toggleSectionVisibility('fillOptions')}  />
                             </div>
                         </div>
                     </div>

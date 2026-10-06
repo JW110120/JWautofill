@@ -88,14 +88,25 @@ export const StopSquareIcon = ({ className, style }: IconSvgProps) => (
 );
 
 /**
- * 专注模式主开关图标（Spectrum「S Star 18 N」五角星，用户指定图形）。
- * 只替换 .indicator-lg 那颗圆点：尺寸与它一致（13×13），填色交给 CSS 的
+ * 专注模式主开关图标（Spectrum Workflow「Target」靶心图标，2026-10-06 替换原五角星）。
+ *
+ * 数据来源：@spectrum-web-components/icons-workflow@1.12.4 `src/icons/Target.js`
+ * 的 `TargetIcon`，此处**内联其原始 path/circle**，未引入该npm 包——
+ * 原因：① 该包会连带拖入 icons-workflow + icon + base 三个包（unpacked 约 11MB /
+ * 10488 个文件），只为换一个 13px 图标不划算；② 它导出的是 LitElement Web Component
+ *（sp-icon-target），UXP 对第三方自定义元素/Shadow DOM 支持很差，易白屏或渲染不出。
+ * 内联后视觉与官方完全一致，且继续复用本文件既有的 .icon-fill 填色机制。
+ *
+ * 只替换 .indicator-lg那颗圆点：尺寸与它一致（13×13），填色交给 CSS 的
  * .indicator-icon-lg / .indicator-icon-ok（与圆点的启用绿 / 禁用灰同一套色）。
- * 去掉了源 SVG 里的 <defs><style> 与透明画布矩形，fill 走 .icon-fill 以便跟随状态色。
+ * ⚠️ 官方原 svg 是 fill="currentColor"，这里改用 class="icon-fill" 以便跟随状态色；
+ *    <circle> 同样挂 .icon-fill，否则内圈会缺色。
+ * ⚠️ viewBox 保持官方的 0 0 36 36（path 坐标按 36 网格绘制，不可缩放到 18）。
  */
-export const FocusStarIcon = ({ className, style }: IconSvgProps) => (
-  <svg xmlns="http://www.w3.org/2000/svg" height="13" viewBox="0 0 18 18" width="13" className={className} style={style}>
-    <path className="icon-fill" d="M9.2385.2965,11.4,6.0145l6.106.289a.255.255,0,0,1,.15.454l-4.77,3.823,1.612,5.8965a.255.255,0,0,1-.386.2805L9,13.4025l-5.11,3.355a.255.255,0,0,1-.386-.2805l1.612-5.8965L.346,6.7575a.255.255,0,0,1,.15-.454L6.6,6.0145,8.7615.2965a.255.255,0,0,1,.477,0Z" />
+export const FocusTargetIcon = ({ className, style }: IconSvgProps) => (
+  <svg xmlns="http://www.w3.org/2000/svg" height="13" viewBox="0 0 36 36" width="13" className={className} style={style}>
+    <path className="icon-fill" d="M18 2a16 16 0 1 0 16 16A16 16 0 0 0 18 2Zm0 26.2A10.2 10.2 0 1 1 28.2 18 10.2 10.2 0 0 1 18 28.2Z" />
+    <circle className="icon-fill" cx="18" cy="18" r="4" />
   </svg>
 );
 

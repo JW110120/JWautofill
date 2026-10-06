@@ -49,6 +49,34 @@
   ⚠️ 排查「刷新一下才好」先分清是**枚举失败**（列表空）还是**下游数据缺失**（有名字无内容）——
   两者根因与修法完全不同，别一律当时机问题（笔刷无图标属后者，且是刻意设计：
   类型检测会逐支切换用户当前笔刷，仅手动刷新才做）。
+- ⚠️ **原生 `sp-switch` 已全量替换为自绘 `.toggle-switch`**（2026-10-06，16 处调用）。
+  换的原因：其胶囊颜色由 **PS Spectrum 主题接管、UXP 下 CSS 无法覆盖**，darkest/lightest 下
+  关闭态胶囊色≈面板底色、看着像个圆点；**开启态也无法改成 --primary-color**。
+  ⚠️ 替换原生控件时**必须连带核查这三类联动**，否则静默失效或版式突变：
+  ① 挂元素的间距/定位选择器（`sp-switch` → `.toggle-switch`）；
+  ② **由原生盒高换算出来的固定尺寸**（原生 32px → 自绘 24px，如 `.notify-bar` 的
+  `min-height: 40px` 须改 32px = 24+padding 6+边框 2）；
+  ③ **为抵消原生透明留白而设的负外边距**（如 `.row-grid sp-switch{margin:-10px}` 须删除，
+  自绘开关不需要，加了反而拉出行外）。
+  ⚠️ 自绘开关设计约定：胶囊 28×16 / 圆点 12px 白 / 圆角 999；开启 `--primary-color`、
+  关闭 `--border-color`+opacity 0.80（**禁用 `background:transparent`**，UXP 下会渲染成纯黑）；
+  **占位盒 24px** 与滑块(12px)、数字输入(24px) 同基线，胶囊用绝对定位居中。
+  ⚠️ 组件 `onChange` 刻意回传 `{target:{checked}}` 兼容原生签名 ⇒ 旧调用零改动，
+  以后新增控件也应保持这种"兼容原生事件形状"的设计。
+  ⚠️ **UXP 圆角不写超大值**：`border-radius:999px` 不会被解析成胶囊，实测渲染接近矩形、
+  两端尖角（"纺锤感"）⇒ 一律写**显式像素值 = 高/2**（16px 高→ `8px`），并补
+  `-webkit-border-radius`（UXP 的 WebKit 后端更认它）。
+  ⚠️ **伪元素绝对定位做"胶囊本体"时，父占位盒宽高必须与伪元素完全相等**，
+  否则溢出端各鼓出一个小凸起（曾被误认为"音频波"）。改胶囊长度时**必须同步**
+  圆点位移 `left` = 胶囊宽 − 圆点 − 内边距，否则圆点不贴端。
+- ⚠️ **换Spectrum 图标一律「内联官方 path」，不要装 `@spectrum-web-components/icons-*`**：
+  这些包是 **LitElement Web Component**（`sp-icon-*` 自定义元素），UXP 对第三方自定义元素/
+  Shadow DOM 支持很差（易白屏）；且单个 icons-workflow 即 **11MB / 10488 文件**、还会连带
+  拖入 `icon`+`base`（带整套 Spectrum 样式），为一个 13px 图标不值。取数据的正确路径是
+  `unpkg.com/<pkg>@<ver>/?meta` 列文件 → 找 `/src/icons/<Name>.js`（**不是** `/icons/`，
+  也不叫 `IconXxx.js`）；内联时把官方 `fill="currentColor"` 改成 `class="icon-fill"`
+  以复用项目状态色。⚠️ 复合图标（外环 path + 内点 circle）**每个元素都要挂 `.icon-fill`**，
+  漏一个则内圈缺色。
 - ⚠️ **图标按钮三态配色**（用户 2026-10-06 拍板）：常态 `--text-color` → hover `--hover-icon`
   → **按下 `--active-icon`（新增令牌，四套主题已写）**。按下前基本已 hover，
   故按下色必须**比 hover 明显更深**才有按压感；`transform: scale(0.94)` 幅度太小、几乎看不出，
