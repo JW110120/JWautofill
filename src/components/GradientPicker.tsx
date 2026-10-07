@@ -19,6 +19,13 @@ interface GradientPickerProps {
     onClose: () => void;
     onSelect: (gradient: Gradient | null) => void;
     isClearMode?: boolean;
+    /**
+     * 父面板「参数复位」信号（自增计数）。本面板参数（类型/角度/缩放/反向/色标/透明度）
+     * 活在自己的 state 里，父面板复位管不到 ⇒ 靠它回到默认值。
+     * ⚠️ 复位**不动presets**（预设列表）：预设是用户资产，不是参数。
+     * 首次挂载为 0，用 prevResetTokenRef 跳过第一次。
+     */
+    resetToken?: number;
 }
 
 // 生成考虑中点插值的预设预览样式
@@ -325,7 +332,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     isOpen,  
     onClose,
     onSelect,
-    isClearMode = false
+    isClearMode = false,
+    resetToken = 0
 }) => {
     const [presets, setPresets] = useState<(Gradient & { id?: string; name?: string; preview?: string })[]>([]);
     const [selectedPreset, setSelectedPreset] = useState<number | null>(null);
@@ -353,6 +361,32 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     // 拖拽视觉反馈（挂通用 dragging / drop-target 类，common.css 统一样式）
     const [dragPresetVisual, setDragPresetVisual] = useState<number | null>(null);
     const [dragOverPresetVisual, setDragOverPresetVisual] = useState<number | null>(null);
+
+    // 参数复位：只回参数，不碰预设。
+    // ⚠️ **必须先清选中态**：下面那条「参数变化 → 回写当前选中预设」的 effect
+    //    在 selectedPreset !== null 时会把此刻的参数覆盖进那个预设。
+    //    若复位时保留选中态，用户的预设会被就地改写成默认值（等于悄悄毁掉预设）。
+    //    先清选中态让该 effect 落空，预设内容原封不动。
+    // ⚠️ 不 setPresets —— 预设是用户资产，「参数复位」不该删掉后添加的预设。
+    // ⚠️ 跳过首次（prevResetTokenRef 初始即 resetToken），否则每次打开面板都被清空。
+    const prevResetTokenRef = useRef(resetToken);
+    useEffect(() => {
+        if (prevResetTokenRef.current === resetToken) return;
+        prevResetTokenRef.current = resetToken;
+        setSelectedPreset(null);
+        setSelectedPresets(new Set());
+        setLastClickedPreset(null);
+        setSelectedStopIndex(null);
+        setGradientType('linear');
+        setAngle(0);
+        setScale(100);
+        setReverse(false);
+        setPreserveTransparency(false);
+        setStops([
+            { color: 'rgba(0, 0, 0, 1)', position: 0, colorPosition: 0, opacityPosition: 0, midpoint: 50 },
+            { color: 'rgba(255, 255, 255, 1)', position: 100, colorPosition: 100, opacityPosition: 100, midpoint: 50 }
+        ]);
+    }, [resetToken]);
 
     // 面板打开时加载已保存的渐变预设（加载期间禁止保存）
     useEffect(() => {
@@ -1630,7 +1664,10 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         <label className="label-2">颜色</label>
                     <div className="row-start">
                         <span className="num-unit num-unit-hash">#</span>
-                        <div className="num-input-row">
+                        {/* ⚠️ num-input-row-wide：.num-input-row 已固定 34px（对齐单位符号），
+                            此处是 6 位色值（#RRGGBB）需要 60px ⇒ 必须挂显式宽度档，
+                            否则会被裁掉右侧 2/3（UXP 不支持 :has()，无法靠类型选择器自动匹配）。 */}
+                        <div className="num-input-row num-input-row-wide">
                             <input
                                 type="text"
                                 value={getRGBColor(stops[selectedStopIndex].color).slice(1)}

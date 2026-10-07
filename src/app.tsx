@@ -38,10 +38,23 @@ import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/Main
 import { setFocusMode } from './utils/FocusModeBus';
 import { debouncePsProbe } from './utils/psProbe';
 import ToggleSwitch from './components/ToggleSwitch';
+import RadioGroup, { RadioOption } from './components/RadioGroup';
 import { helpTexts } from './constants/helpTexts';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
+
+/**
+ * 「填充模式」三列 radio 的选项表：模块级常量（保持引用稳定，
+ * 免得每次渲染重建数组让 React.memo 失效）。
+ * ⚠️ 必须放模块级：helpTexts 在 import 之后才可用，
+ *    放组件体内会成为「渲染期立即执行区」的 TDZ 隐患（本项目 target=es5）。
+ */
+const FILL_MODE_RADIO_OPTIONS: RadioOption[] = [
+    { value: 'foreground', label: '纯色', title: helpTexts.selectionFill.fgCompact },
+    { value: 'pattern', label: '图案', title: helpTexts.selectionFill.patternCompact },
+    { value: 'gradient', label: '渐变', title: helpTexts.selectionFill.gradientCompact },
+];
 
 /* --------------------------------------------------------------------------
    UXP 原生控件收口（与绘画工具箱 AdjustmentPanel 同一套机制）
@@ -337,6 +350,11 @@ class App extends React.Component<AppProps, AppState> {
                     autoOffOnOtherTool: this.state.autoOffOnOtherTool,
                     strokeEnabled: this.state.strokeEnabled,
                     createNewLayer: this.state.createNewLayer,
+                    // 复位信号自增：纯色/图案/渐变三个子面板的参数在它们各自的组件
+                    // 内部 state 里（父面板复位管不到），靠这个信号通知它们回到默认值。
+                    // ⚠️ 必须写在 ...initialState 之后：initialState.resetToken 恒为 0，
+                    //    放在展开之前会被覆盖成 0，三个子面板收到 0 而不触发复位。
+                    resetToken: this.state.resetToken + 1,
                     // UI 相关展开/面板开关保持为当前值以避免打断用户操作
                     isColorSettingsOpen: this.state.isColorSettingsOpen,
                     isPatternPickerOpen: this.state.isPatternPickerOpen,
@@ -491,6 +509,10 @@ class App extends React.Component<AppProps, AppState> {
             } else {
                 document.body.classList.remove('secondary-panel-open');
             }
+            // 4 个子面板内部没有分区 ⇒ 期间把菜单里的「隐藏/显示分区」置灰，
+            // 否则点了只会打开一个「父面板分区」浮窗，语义对不上。
+            // ⚠️ 只改 enabled、绝不 removeAt/insertAt（会损坏整个菜单，见 MenuManager 注释）。
+            MenuManager.setAppVisibilityItemEnabled(!isAnySecondaryPanelOpen);
         }
 
         // 检查授权对话框状态变化，添加或移除CSS类
@@ -2024,6 +2046,85 @@ title={helpTexts.selectionFill.selectionExpand}>
                     {this.state.isExpanded && (
                     <div className="collapse-content-expanded">
 
+                        {/* 填充模式选择：置于「填充选项」内容区首位（普通/紧凑模式一致）。
+                            逻辑理由：它是本分区的主决策项——决定后续按纯色/图案/渐变哪条链路执行，
+                            应当先于「新建图层 / 描边模式 / 清除模式」这几个执行期开关出现。
+                            ⚠️ .fill-mode-section 是给 app.css 定位用的显式类名：UXP 不支持 :has()，
+                               不能靠「.panel-section 是首元素」这类结构关系反推定位。 */}
+                        <div className="panel-section fill-mode-section">
+                            {/* ⚠️ 2026-10-07 删除「填充模式」标签（用户反馈不美观）：
+                                三行圆点 + 「纯色 / 图案 / 渐变」文字本身已自解释，
+                                再加一行同义的标题纯属冗余，且让本区块凭空多占一行高度。
+                                原生时代那个标签还兼作 tooltip 载体，现在每个选项自己都有 title。 */}
+                            {compactApp ? (
+                                /* 紧凑模式：3 行 radio → 3 列（与描边子面板「位置」共用 .radio-trio-group）。
+                                   齿轮不渲染，改由点击文字打开对应子面板（见 labelRenderer）。 */
+                                /* 🔴 2026-10-07 移除 .radio-trio 包裹层，理由同 StrokeSetting：
+                                   两层嵌套在 UXP 下算不出正确容器宽度，导致三列竖排。 */
+                                <RadioGroup
+                                        value={this.state.fillMode}
+                                        onChange={this.handleFillModeChange}
+                                        options={FILL_MODE_RADIO_OPTIONS}
+                                        className="radio-trio-group"
+                                        // 紧凑模式下文字兼作子面板入口：点文字开面板，点圆点只切模式。
+                                        // ⚠️ stopPropagation 不可省 —— 否则点文字会连带触发外层 radio-option
+                                        //    的选中（父面板的 handleFillModeChange），出现「开面板同时切模式」。
+                                        labelRenderer={(label, opt) => (
+                                            <span
+                                                className="radio-option-label radio-option-label-link"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    if (opt.value === 'foreground') this.toggleColorSettings();
+                                                    else if (opt.value === 'pattern') this.openPatternPicker();
+                                                    else this.openGradientPicker();
+                                                }}
+                                            >
+                                                {label}
+                                            </span>
+                                        )}
+                                    />
+                            ) : (
+                                /* 普通模式：纵向三行，每行右侧带齿轮（原 .radio-group-vertical + .row-end 的替代）。
+                                   选项表在 render 内构造：齿轮要绑 this 的方法与 title，无法提到模块级。 */
+                                <RadioGroup
+                                    value={this.state.fillMode}
+                                    onChange={this.handleFillModeChange}
+                                    className="radio-vertical"
+                                    options={[
+                                        {
+                                            value: 'foreground',
+                                            label: '纯色',
+                                            title: helpTexts.selectionFill.fgRadio,
+                                            suffix: (
+                                                <IconButton onClick={this.toggleColorSettings} title={helpTexts.selectionFill.fgSettings}>
+                                                    <SettingsIcon/>
+                                                </IconButton>
+                                            ),
+                                        },
+                                        {
+                                            value: 'pattern',
+                                            label: '图案',
+                                            title: helpTexts.selectionFill.patternRadio,
+                                            suffix: (
+                                                <IconButton onClick={this.openPatternPicker} title={helpTexts.selectionFill.patternSettings}>
+                                                    <SettingsIcon/>
+                                                </IconButton>
+                                            ),
+                                        },
+                                        {
+                                            value: 'gradient',
+                                            label: '渐变',
+                                            title: helpTexts.selectionFill.gradientRadio,
+                                            suffix: (
+                                                <IconButton onClick={this.openGradientPicker} title={helpTexts.selectionFill.gradientSettings}>
+                                                    <SettingsIcon/>
+                                                </IconButton>
+                                            ),
+                                        },
+                                    ]}
+                                />
+                            )}
+                        </div>
 
                         {compactApp ? (
                             /* 紧凑模式：两列网格——新建图层/清除模式 同一行、描边模式/色板 同一行，省出一行纵向高度 */
@@ -2043,8 +2144,11 @@ title={helpTexts.selectionFill.selectionExpand}>
                                     </div>
                                 </div>
                                 {/* 描边模式行（.row-grid-fit）：左列「标签 + 开关」按内容宽靠左，
-                                    右列撑满剩余宽度、内部用 row-end 把「色板 + 齿轮」推到内容盒右缘，
-                                    与上方「清除模式」开关的右缘对齐。 */}
+                                    右列撑满剩余宽度、内部用 row-end 把「描边设置 + 色板」推到内容盒右缘。
+                                    ⚠️ 2026-10-07 齿轮改文字按钮后，右列控件组总宽固定为 94px
+                                    （.label-4 47 + 其右外边距 10 + 槽左外边距 4 + 控件槽 33，
+                                     槽宽 = .toggle-switch 宽）
+                                    ⇒ 与上一行「清除模式 + 开关」同宽，右对齐后**左右缘双向对齐**。 */}
                                 <div className="row-between row-grid row-grid-fit">
                                     <div className="grid-cell">
                                         <div className="row-start">
@@ -2054,21 +2158,35 @@ title={helpTexts.selectionFill.selectionExpand}>
                                     </div>
                                     <div className="grid-cell">
                                         <div className="row-end">
+                                            {/* ⚠️ 2026-10-07 齿轮按钮改为文字按钮「描边设置」（用户要求）：
+                                                样式与上方三列 radio 的「纯色/图案/渐变」标签按钮一致
+                                                （.text-button 提供 hover/按下三态，颜色走令牌）。
+                                                复用 .label-4 而非自定义宽度，是为了拿到同一套 13px 字盒
+                                                + 10px 右外边距 —— 「清除模式」也是 .label-4、同为四字，
+                                                两者字盒宽相同 ⇒ 右对齐后**左缘严格对齐**。
+                                                点击行为与原齿轮完全一致（开关描边设置面板）。 */}
                                             {this.state.strokeEnabled && (
-                                                <div
-                                                    className="color-preview"
-                                                    style={this.getStrokeColorPreviewStyle()}
-                                                    title={helpTexts.selectionFill.strokeColorPreview}
-                                                    onClick={this.openStrokeColorPicker}
-                                                />
+                                                <span
+                                                    className="label-4 text-button"
+                                                    title={helpTexts.selectionFill.strokeSettingsButton}
+                                                    onClick={this.toggleStrokeSetting}
+                                                >
+                                                    描边设置
+                                                </span>
                                             )}
                                             {this.state.strokeEnabled && (
-                                                <IconButton
-                                                    onClick={this.toggleStrokeSetting}
-                                                    title={helpTexts.selectionFill.strokeSettingsButton}
-                                                >
-                                                    <SettingsIcon/>
-                                                </IconButton>
+                                                /* 色框置于文字按钮右侧。外层槽宽 33px = .toggle-switch 宽，
+                                                   槽内右对齐 ⇒ 色框右缘与上一行「清除模式」开关右缘对齐；
+                                                   同时右列两组控件总宽都等于 94px（47+10+4+33），
+                                                   右对齐后左缘也随之对齐。 */
+                                                <div className="stroke-color-slot">
+                                                    <div
+                                                        className="color-preview"
+                                                        style={this.getStrokeColorPreviewStyle()}
+                                                        title={helpTexts.selectionFill.strokeColorPreview}
+                                                        onClick={this.openStrokeColorPicker}
+                                                    />
+                                                </div>
                                             )}
                                         </div>
                                     </div>
@@ -2076,9 +2194,17 @@ title={helpTexts.selectionFill.selectionExpand}>
                             </>
                         ) : (
                             <>
+                                {/* ⚠️ 分割线随「填充模式」移位而重排（2026-10-07）：
+                                    填充模式分区已提到内容区首位，原来夹在「清除模式」与
+                                    「填充模式」之间、以及「填充模式」与 checkbox 组之间的两条分割线
+                                    随该块一起移走了。若这里不补一条，「新建图层」会紧贴上方
+                                    「填充模式」的 radio 组、视觉上黏成一块。
+                                    三行开关彼此之间、以及与下方 checkbox 组之间的分割线保持原样。 */}
+                                <div className="divider" />
+
                                 {/* 新建图层开关（禁用态给行挂 .disabled：`:has()` 已确认在 UXP 下无效） */}
                                 <div className={(this.state.clearMode || this.state.isInQuickMask) ? 'row-between disabled' : 'row-between'}>
-                                    <span className="label-4" 
+                                    <span className="label-4"
 title={helpTexts.selectionFill.createNewLayer}>
                             新建图层
                             </span>
@@ -2119,83 +2245,12 @@ title={helpTexts.selectionFill.clearMode}>
                             </label>
                                     <ToggleSwitch checked={this.state.clearMode} onChange={this.toggleClearMode} disabled={this.state.createNewLayer} title={helpTexts.selectionFill.clearModeSwitch}  />
                                 </div>
-                                <div className="divider" />
                             </>
                         )}
 
-                        {/* 填充模式选择 */}
-                        <div className="panel-section">
-                            {/* 紧凑模式不再渲染「填充模式」标签：三列 radio 自带语义，
-                                省下标签盒高度让纵向更紧凑（点击标签开子面板的入口也一并省去，
-                                紧凑下改由点击「纯色/图案/渐变」文字打开对应子面板）。 */}
-                            {!compactApp && (
-                                <div className="label-4" title={helpTexts.selectionFill.fillModeLabel}>填充模式</div>
-                            )}
-                            {compactApp ? (
-                                /* 紧凑模式：3 行 radio → 3 列（与描边子面板「位置」共用 .radio-trio）。
-                                   radio-trio-flush：三列是分区首元素，纵向margin归零。
-                                   齿轮不再渲染，改由点击标签文字打开对应子面板。 */
-                                <div className="radio-trio radio-trio-flush">
-                                <sp-radio-group 
-                                    selected={this.state.fillMode} 
-                                    name="fillMode"
-                                    onChange={this.handleFillModeChange}
-                                >
-                                    <sp-radio value="foreground" className="" title={helpTexts.selectionFill.fgCompact}>
-                                        <span className="label-2" onClick={this.toggleColorSettings}>纯色</span>
-                                    </sp-radio>
-                                    <sp-radio value="pattern" className="" title={helpTexts.selectionFill.patternCompact}>
-                                        <span className="label-2" onClick={this.openPatternPicker}>图案</span>
-                                    </sp-radio>
-                                    <sp-radio value="gradient" className="" title={helpTexts.selectionFill.gradientCompact}>
-                                        <span className="label-2" onClick={this.openGradientPicker}>渐变</span>
-                                    </sp-radio>
-                                </sp-radio-group>
-                                </div>
-                            ) : (
-                                <sp-radio-group 
-                                    className="radio-group-vertical"
-                                    selected={this.state.fillMode} 
-                                    name="fillMode"
-                                    onChange={this.handleFillModeChange}
-                                >
-                                    <sp-radio value="foreground" className="" title={helpTexts.selectionFill.fgRadio}>
-                                        <div className="row-start">
-                                            <span className="label-2" title={helpTexts.selectionFill.fgDetail}>纯色</span>
-                                            <IconButton
-                                                onClick={this.toggleColorSettings}
-                                                title={helpTexts.selectionFill.fgSettings}
-                                            >
-                                                <SettingsIcon/>
-                                            </IconButton>
-                                        </div>
-                                    </sp-radio>
-                                    <sp-radio value="pattern" className="" title={helpTexts.selectionFill.patternRadio}>
-                                        <div className="row-start">
-                                            <span className="label-2" title={helpTexts.selectionFill.patternDetail}>图案</span>
-                                            <IconButton
-                                                onClick={this.openPatternPicker}
-                                                title={helpTexts.selectionFill.patternSettings}
-                                            >
-                                                <SettingsIcon/>
-                                            </IconButton>
-                                        </div>
-                                    </sp-radio>
-                                    <sp-radio value="gradient" className="" title={helpTexts.selectionFill.gradientRadio}>
-                                        <div className="row-start">
-                                            <span className="label-2" title={helpTexts.selectionFill.gradientDetail}>渐变</span>
-                                            <IconButton
-                                                onClick={this.openGradientPicker}
-                                                title={helpTexts.selectionFill.gradientSettings}
-                                            >
-                                                <SettingsIcon/>
-                                            </IconButton>
-                                        </div>
-                                    </sp-radio>
-                                </sp-radio-group>
-                            )}
-                        </div>
-                        {/* 底部checkbox选项外部容器 */}
+                        {/* 底部 checkbox 组与上方开关行之间的分割线。
+                            ⚠️ 紧凑模式下上方没有这三行开关，紧凑模式自己的纵向节奏见 app.css；
+                               此处的 divider 在紧凑模式下被 `display:none` 隐藏（仍在文档流）。 */}
                         <div className="divider"></div>
                         <div className="row-between row-grid row-grid-flush">
                                 {/* 左列：取消选区 / 更新历史源 */}
@@ -2309,6 +2364,7 @@ title={helpTexts.selectionFill.clearMode}>
                 }}
                 isClearMode={this.state.clearMode}
                 isQuickMaskMode={false}
+                resetToken={this.state.resetToken}
             />
 
             {/* 图案选择器 */}
@@ -2317,6 +2373,7 @@ title={helpTexts.selectionFill.clearMode}>
                 onClose={this.closePatternPicker} 
                 onSelect={this.handlePatternSelect} 
                 isClearMode={this.state.clearMode}
+                resetToken={this.state.resetToken}
             />
 
             {/* 渐变选择器 */}
@@ -2325,6 +2382,7 @@ title={helpTexts.selectionFill.clearMode}>
                 onClose={this.closeGradientPicker} 
                 onSelect={this.handleGradientSelect} 
                 isClearMode={this.state.clearMode}
+                resetToken={this.state.resetToken}
             />
 
                 {/* 描边设置面板 */}

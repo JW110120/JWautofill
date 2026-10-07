@@ -4,6 +4,16 @@ export interface ColorSettings {
     brightnessVariation: number;
     opacityVariation: number;
     grayVariation?: number; // 灰度抖动，用于快速蒙版模式
+    /**
+     * 计算方法：'absolute' 绝对 / 'relative' 相对。
+     * ⚠️ 该字段此前只存在于 initialState 与各处字面量里、**未声明在接口上**，
+     *    于是 ColorSettingsPanel 的 settings.calculationMode、
+     *    handleColorSettingsSave 的 settings.calculationMode 等读取全部报
+     *    TS2339「Property 'calculationMode' does not exist on type 'ColorSettings'」。
+     *    ts-loader 是 transpileOnly ⇒ 这些报错从不阻塞构建，直到跑 tsc 才暴露。
+     *    声明为可选：老存档 / 调用方不传时回落到 'absolute'（各处读取处已如此兜底）。
+     */
+    calculationMode?: 'absolute' | 'relative';
 }
 
 export interface Pattern {
@@ -123,6 +133,11 @@ export interface AppState {
      selectionOptionsVisible: boolean;
      fillOptionsVisible: boolean;
      showVisibilityPanel: boolean;  // 隐藏/显示分区浮窗是否打开
+    // 参数复位信号（自增计数）：描边子面板的参数由父面板 state 直接驱动，
+    // 而纯色/图案/渐变三个子面板的参数活在各自的组件内部 state 里，
+    // 父面板复位时它们无从得知 ⇒ 用这个自增信号通知它们「复位了，请回到默认值」。
+    // 首次挂载为 0，三个子面板各自跳过第一次即可。
+    resetToken: number;
      // 许可证相关状态
      isLicensed: boolean;
      isTrial: boolean;
@@ -182,6 +197,7 @@ export const initialState: AppState = {
     selectionOptionsVisible: true,
     fillOptionsVisible: true,
     showVisibilityPanel: false,
+    resetToken: 0,
     // 新增：许可证默认状态
     isLicensed: false,
     isTrial: false,

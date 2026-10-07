@@ -26,6 +26,18 @@ const createThemeStyles = () => {
       --scrollbar-track: rgba(255, 255, 255, 0.1);
       /* 主按钮「功能开启」态文字色：深主题为白，浅主题在下方 override 为黑 */
       --enabled-text-color: rgb(255, 255, 255);
+      /* 自绘控件「可拖动部件」的通用手柄色（2026-10-07）：
+         自绘滑块的圆点(12px) 与自绘开关的手柄(12px) 都用它。
+         ⚠️ 之前两者硬编码 rgb(255,255,255)，在 light / lightest 两个亮色主题下
+            白手柄压在浅灰轨道/胶囊上几乎看不见（用户 2026-10-07 反馈可读性差）。
+         ⇒ 规则：**深主题用白**（深底上白最跳）、**亮主题用近黑**（浅底上黑最跳），
+            与 .main-button-label / --text-color 的深浅反转逻辑同源。
+            禁用态另由 --disabled-color 覆盖（见 common.css 的 .toggle-switch-disabled）。 */
+      --control-handle-color: rgb(255, 255, 255);
+      /* 自绘 radio 选中项的填色（2026-10-07）：与手柄同一套深浅反转逻辑 ——
+         深主题白点、亮主题近黑点。⚠️ 不复用 --primary-color：那会让「选中」在视觉上
+         与「开启态胶囊/滑块填充」同色，弱化 radio 与 switch 的区分。 */
+      --radio-checked-color: rgb(255, 255, 255);
       /* 下拉菜单背景（统一设计语言，仅用 RGB 表示）：
          darkest rgb(32,32,32) / dark rgb(57,57,57) / light rgb(218,218,218) / lightest rgb(255,255,255) */
       --dropdown-bg-color: rgb(57, 57, 57);
@@ -139,7 +151,11 @@ const createThemeStyles = () => {
       --enabled-text-color: rgb(10, 10, 10);
       --dropdown-bg-color: rgb(218, 218, 218);
       --link-color: rgb(0, 90, 200);
-      --notify-ok-fg: rgb(21, 128, 61);
+      /* 2026-10-07：亮色主题下手柄/选中点改用近黑（浅底上黑最跳），
+         并把 notify-ok-fg 调深以提高在浅灰底上的反差（原 rgb(21,128,61) 偏灰暗）。 */
+      --control-handle-color: rgb(10, 10, 10);
+      --radio-checked-color: rgb(10, 10, 10);
+      --notify-ok-fg: rgb(15, 109, 52);
       --notify-ok-bg: rgba(21, 128, 61, 0.14);
       --notify-ok-border: rgba(21, 128, 61, 0.30);
       --notify-fail-fg: rgb(198, 40, 40);
@@ -173,7 +189,11 @@ const createThemeStyles = () => {
       --enabled-text-color: rgb(10, 10, 10);
       --dropdown-bg-color: rgb(255, 255, 255);
       --link-color: rgb(0, 82, 190);
-      --notify-ok-fg: rgb(21, 128, 61);
+      /* 2026-10-07：与 light 主题同款深色手柄 + 加深后的绿色
+         （原 rgb(21,128,61) 在近白底上偏灰暗、状态灯看着发灰，见 light 主题注释）。 */
+      --control-handle-color: rgb(10, 10, 10);
+      --radio-checked-color: rgb(10, 10, 10);
+      --notify-ok-fg: rgb(15, 109, 52);
       --notify-ok-bg: rgba(21, 128, 61, 0.12);
       --notify-ok-border: rgba(21, 128, 61, 0.28);
       --notify-fail-fg: rgb(198, 40, 40);

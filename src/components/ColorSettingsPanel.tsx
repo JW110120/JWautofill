@@ -1,10 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { app, action } from 'photoshop';
 import { ColorSettings } from '../types/state';
 import RangeSlider from './RangeSlider';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
 import { debouncePsProbe } from '../utils/psProbe';
 import { calcDragValue } from '../utils/dragSensitivity';
+import RadioGroup, { RadioOption } from './RadioGroup';
+
+/** 「计算方法」两列选项：模块级常量，保持引用稳定（RadioGroup 已 React.memo）。 */
+const CALCULATION_MODE_OPTIONS: RadioOption[] = [
+    { value: 'absolute', label: '绝对' },
+    { value: 'relative', label: '相对' },
+];
 
 interface ColorSettingsProps {
     isOpen: boolean;
@@ -12,8 +19,24 @@ interface ColorSettingsProps {
     onSave: (settings: ColorSettings) => void;
     initialSettings?: ColorSettings;
     isQuickMaskMode?: boolean;
-    isClearMode?: boolean; 
+    isClearMode?: boolean;
+    /**
+     * 父面板「参数复位」信号（自增计数）。
+     * 本面板参数活在自己的 state 里，父面板复位管不到 ⇒ 靠它回到默认值。
+     * 首次挂载为 0，用 prevTokenRef 跳过第一次，避免打开面板就被清空。
+     */
+    resetToken?: number;
 }
+
+/** 复位目标值：与 types/state.ts 的 initialState.colorSettings 保持一致。 */
+const DEFAULT_COLOR_SETTINGS: ColorSettings = {
+    hueVariation: 0,
+    saturationVariation: 0,
+    brightnessVariation: 0,
+    opacityVariation: 0,
+    grayVariation: 0,
+    calculationMode: 'absolute'
+};
 
 const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
     isOpen,
@@ -27,7 +50,8 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
         grayVariation: 0
     },
     isQuickMaskMode: propIsQuickMaskMode = false,
-    isClearMode = false
+    isClearMode = false,
+    resetToken = 0
 }) => {
     const [internalQuickMaskMode, setInternalQuickMaskMode] = useState(propIsQuickMaskMode);
     const [isInLayerMask, setIsInLayerMask] = useState(false);
@@ -115,6 +139,18 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
             document.removeEventListener('mouseup', handleMouseUp);
         };
     }, [isDragging, dragTarget, dragStartX, dragStartValue]);
+
+    // 参数复位：把五个抖动值与计算方法一起回到默认。
+    // ⚠️ setSettings 会触发下面那条 300ms 防抖的 onSave ⇒ 父面板的 colorSettings
+    //    同步回到默认，不需要额外回传。
+    // ⚠️ 跳过首次（prevTokenRef 初始就是 resetToken ⇒ 首次比较相等、不复位），
+    //    否则每次打开面板都会被清空一次。
+    const prevResetTokenRef = useRef(resetToken);
+    useEffect(() => {
+        if (prevResetTokenRef.current === resetToken) return;
+        prevResetTokenRef.current = resetToken;
+        setSettings({ ...DEFAULT_COLOR_SETTINGS });
+    }, [resetToken]);
 
     // 检测图层蒙版和快速蒙版模式
     useEffect(() => {
@@ -262,19 +298,12 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
             {/* 计算模式选择器（原 colorsettings-calculation-mode 分区容器作废，统一收口为子面板分区容器） */}
             <div className="panel-section">
                 <label className="subpanel-title-2">计算方法</label>
-                <sp-radio-group
-                    className="radio-pair-230"
-                    selected={settings.calculationMode || 'absolute'}
-                    name="calculationMode"
+                <RadioGroup
+                    value={settings.calculationMode || 'absolute'}
                     onChange={(e) => setSettings(prev => ({ ...prev, calculationMode: e.target.value as 'absolute' | 'relative' }))}
-                >
-                    <sp-radio value="absolute" className="">
-                        <span className="label-2">绝对</span>
-                    </sp-radio>
-                    <sp-radio value="relative" className="">
-                        <span className="label-2">相对</span>
-                    </sp-radio>
-                </sp-radio-group>
+                    options={CALCULATION_MODE_OPTIONS}
+                    className="radio-pair-group"
+                />
             </div>
 
 

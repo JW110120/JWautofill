@@ -9,13 +9,27 @@ import { PresetManager } from '../utils/PresetManager';
 import { calcDragValue } from '../utils/dragSensitivity';
 import RangeSlider from './RangeSlider';
 import Select from './Select';
+import RadioGroup, { RadioOption } from './RadioGroup';
 import { helpTexts } from '../constants/helpTexts';
+
+/** 图案「填充方式」两列选项：模块级常量，保持引用稳定（RadioGroup 已 React.memo）。 */
+const PATTERN_FILL_MODE_OPTIONS: RadioOption[] = [
+    { value: 'stamp', label: '单次' },
+    { value: 'tile', label: '平铺' },
+];
 
 interface PatternPickerProps {
     isOpen: boolean;
     onClose: () => void;
     onSelect: (pattern: Pattern) => void;
     isClearMode?: boolean;
+    /**
+     * 父面板「参数复位」信号（自增计数）。本面板参数（角度/缩放/填充方式/旋转/透明度）
+     * 活在自己的 state 里，父面板复位管不到 ⇒ 靠它回到默认值。
+     * ⚠️ 复位**不动patterns**（预设列表）：预设是用户资产，不是参数。
+     * 首次挂载为 0，用 prevResetTokenRef 跳过第一次。
+     */
+    resetToken?: number;
 }
 
 // 预览缩放档位 + 其下拉选项：模块级常量，保持引用稳定。
@@ -32,7 +46,8 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
         isOpen,
         onClose,
         onSelect,
-        isClearMode = false
+        isClearMode = false,
+        resetToken = 0
     }) => {
     const [patterns, setPatterns] = useState<Pattern[]>([]);
     const [selectedPattern, setSelectedPattern] = useState<string | null>(null);
@@ -140,6 +155,30 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
             return () => clearTimeout(debounceTimeoutId);
         }
     }, [selectedPattern, angle, scale, fillMode, rotateAll, preserveTransparency, patterns, selectedPatterns.size]);
+
+    // 参数复位：只回参数，不碰预设。
+    // ⚠️ 刻意不 setPatterns —— 预设列表是用户资产，「参数复位」不该删掉后添加的预设
+    //    （同时 setSelectedPattern(null)：图案的变换参数是「叠在选中图案之上」的，
+    //    参数归零后原有选中态已不对应任何有效组合，清掉更干净；
+    //    上面那条 onSelect 实时更新 effect 依赖 selectedPattern，会随之回传一次）。
+    // ⚠️ 跳过首次（prevResetTokenRef 初始即 resetToken），否则每次打开面板都被清空。
+    const prevResetTokenRef = useRef(resetToken);
+    useEffect(() => {
+        if (prevResetTokenRef.current === resetToken) return;
+        prevResetTokenRef.current = resetToken;
+        setSelectedPattern(null);
+        setSelectedPatterns(new Set());
+        setLastClickedPattern(null);
+        setAngle(0);
+        setScale(100);
+        setFillMode('stamp');
+        setRotateAll(true);
+        setPreserveTransparency(false);
+        setPreviewZoom(100);
+        setPreviewOffset({ x: 0, y: 0 });
+        setDragIndex(null);
+        setDropIndex(null);
+    }, [resetToken]);
 
     // 面板打开时加载已保存的图案预设
     useEffect(() => {
@@ -1678,21 +1717,17 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
 
                 <div className="divider"></div>
 
-                <div className="panel-section">
-                <sp-radio-group
-                    className="radio-pair-210"
-                    selected={fillMode}
-                    name="fillMode"
+                {/* ⚠️ 原本这里还有一层 <div className="panel-section"> 包裹（2026-10-07 移除）：
+                    两列 radio 现在是自绘的、直接占满父容器内容盒，多一层 panel-section
+                    只会带来 15px 下边距 + 一层无意义的盒子（曾导致上下留白不对称，
+                    且要靠 pattern.css 的 `.border-panel-section > .panel-section{margin-bottom:10px}`
+                    特判来抵消）。直接挂在 .border-panel-section 下即可。 */}
+                <RadioGroup
+                    value={fillMode}
                     onChange={(e) => setFillMode(e.target.value as 'stamp' | 'tile')}
-                >
-                    <sp-radio value="stamp" className="">
-                        <span className="label-2">单次</span>
-                    </sp-radio>
-                    <sp-radio value="tile" className="">
-                        <span className="label-2">平铺</span>
-                    </sp-radio>
-                </sp-radio-group>
-                </div>
+                    options={PATTERN_FILL_MODE_OPTIONS}
+                    className="radio-pair-group"
+                />
 
                 <div className="divider"></div>
 

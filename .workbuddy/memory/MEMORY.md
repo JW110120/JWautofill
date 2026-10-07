@@ -1,253 +1,174 @@
 # JWautofill 长期记忆
 
-> 展开页：`refs/pixel-algorithms.md`（像素处理器算法详述）、`refs/frontend-css.md`（紧凑/专注模式、common.css 单一来源、helpTexts 文案规范）、
+> 展开页：`refs/pixel-algorithms.md`（像素处理器算法详述+实测）、`refs/frontend-css.md`（紧凑/专注模式、折叠分区纵向节奏、common.css 单一来源、helpTexts 文案规范）、
 > `refs/uxp-api-layer.md`（UXP/PS 接口层实测行为）。
-> UXP 坑清单（①–㉑）、组件类目录/尺寸公式、新面板模板在**项目技能** `.workbuddy/skills/uxp-frontend-spec/`。
-> **改样式/布局/新建面板前先加载技能；改像素处理器前先读 refs**。本文件只放铁律与索引。
+> UXP 坑清单（①–㉕）、组件类目录/尺寸公式、新面板模板在**项目技能** `.workbuddy/skills/uxp-frontend-spec/`。
+> **改样式/布局/新建面板前先加载技能；改像素处理器前先读 refs**。本文件只放铁律与索引（细则请下沉到 refs，勿在本文堆实测数据）。
 
-## 项目铁律
-- ⚠️ **下拉菜单「遮挡数字框」不是 z-index/stacking context 问题，别往层叠上修**。
-  Adobe 官方 UXP 硬限制：`input[type=number]`/textarea **无视 z-index 永远画在同一面板最上层**
-  （"Text fields…always render the text editor above everything else"），内联样式/transform 提层/换 portal
-  **全都无效**。官方出路只有②「隐藏被盖住的控件」→ `src/utils/popOverlay.ts` 用「与弹层矩形相交
-  ⇒ `visibility:hidden`（带 !important 内联）」实现。  ⇒ **判定矩形必须 ⊇ 屏幕上真实存在的菜单区域：宁可略高、绝不可略低**
-  （略高只是多藏一个刚出界的输入框、下一帧即还原；略低直接穿帮）。
-  ·❌ **不要在判定里按 CSS `max-height` 裁剪** —— 实测 UXP 下菜单并未被裁：
-    9 选项时真实高度 ≈218px > `max-height:200px`（按截图反推），曾因硬裁到 200
-    导致「明明挡住输入框却不隐藏」。
-  · 兜底高度用 `optionCount * 28 + 8`，**不封顶**；真实行高在 24~29 波动
-    （`font-size:12 + padding:4×2`，但 UXP 行盒高于 12），取 28 偏保守。
-  · 实测阈值放宽到 `height >= 8`（写 24 会被真实行高误判成"没量到"）；宽度同样
-    "实测优先 + 退化用 pos.width"，横向也不可只信实测。
-  · 高度取「实测优先，退化才用兜底」，**不要取 max(实测,兜底)**（兜底已校准，取 max 会在
-    实测偏短的帧里撑大判定带、误藏刚出界的输入框）。
-  · **每条退出路径都要先 `restore()` 再 return**（尺寸退化、querySelector 抛错）：
-    裸 `return` 跳过还原 ⇒ 上一轮 hidden 的输入框**永久残留隐藏**，表现为
-    「显隐不实时、必须折叠菜单才刷新」。
-  · `.select-pop` 是 `max-height + overflow-y:auto`，选项多时**必然内部滚动**：
-    菜单自身滚动**也必须重算遮挡**（滚动改变"哪些选项真正可见"）；
-    面板滚动分支也要补一次——`reposition` 对 <1px 位移去重，pos 不变时 effect 不会重跑。
-  · 排查「部分元素实时、部分不实时」：别只看 DOM 深度，要看**哪个元素离弹层边界最近**
-    ⇒ 通常指向「弹层自身滚动/裁剪改变了可见范围」。
-  · ⚠️ **方法论**：当「视觉重叠」与「代码判定结果」矛盾时，先怀疑自己的几何假设，
-    用可观测事实（截图反推尺寸）校准，**不要在未经验证的假设上继续叠补丁**。
-    本 bug 连错两轮即源于此（详见 .workbuddy/memory/2026-10-06.md）。
-- ⚠️ **UXP 图层树只有一份快照，别让每个消费者各自遍历**（`utils/layerTreeSnapshot.ts`，2026-10-06）。
-  `layer.id/name/kind/layers/isBackgroundLayer` **每读一次都是一次同步宿主 IPC** ⇒
-  遍历 N 层树 ≈ 3N~5N 次往返。优化前有三处独立遍历（引擎 2s 轮询签名 / 面板结构探针 /
-  线稿参考选项构建）在同时跑，500 图层时稳态每 2 秒约 1500 次同步 IPC
-  ⇒ **主线程被占满，折叠标题的 click 排在后面 = 「点击无响应」**。
-  铁律：① 读树一律走 `getLayerSnapshot(maxAgeMs?)`；② 通知回调里只调
-  `invalidateLayerSnapshot()`（**纯内存零 IPC**，唯一允许在回调内做的）；
-  ③ 要判断「结构有没有变」先问 `isLayerSnapshotDirty()`，**别为了确认没变化而遍历一次**。
-  ⚠️ 签名算法：先序顺序+id+kind+name+depth 参与 FNV-1a（顺序敏感才能识别「移动图层」）；
-  签名只在会话内自比较、不持久化 ⇒ 改算法无兼容负担。
-- ⚠️ **大列表下拉的 `options` 必须 `useMemo` + 组件必须 `React.memo`**（2026-10-06）。
-  `Select` 已 `export default React.memo(Select)`，靠**引用比较**跳过重渲染；
-  调用方若写 `options={raw.map(...)}` 则 memo 完全失效。配套铁律：
-  ① 选项数组一律 `useMemo`/模块级常量，**永远不要在 JSX 里现 map**；
-  ② `Select` 内的 `allOptions`/`sel`/`optionsSignature` 必须 `useMemo`
-  （`optionsSignature` 是全量 `map+join`，N=500 时每次渲染数千次字符串分配）；
-  ③ **`useMemo` 绝不能放进 `.map()` 回调**（Hooks 数量随列表长度变化会崩）——
-    per-item 派生值走模块级 `Record` 缓存或提到父级 `useMemo`；
-  ④ 渲染路径上的 `arr.find(...)` 逐项调用要换成模块级 `Map` 索引（O(N·M)→O(N+M)）。
-  ⚠️ 背景：面板是「3800 行单组件、全部 JSX 一个 return」，折叠任一分区都会让
-  **所有**已展开分区重渲染（含 UXP 原生 `input[type=number]`，同步成本极高），
-  所以「折叠一个分区」的重渲染代价必须按 O(分区数 × 控件数) 来估，不是 O(1)。
+## CSS / 样式铁律
+- ⛔⛔⛔ **【血泪，2026-10-07】注释块外的「游离文本」会被当成选择器，静默吃掉紧随其后的整条规则。**
+  `common.css` 里 `.radio-trio-group` 与 `.radio-vertical` 两条规则**被同一手法连坐吃掉**，
+  导致「三列 radio 竖排成三行」连查 5 轮、前 4 轮所有 CSS 修复全是空转（规则根本没挂上去）。
+  机制：写中文注释时多打/挪动了一个注释结束符 ⇒ 注释提前闭合 ⇒ 后面的文案跑到注释外 ⇒
+  解析器把它当选择器 ⇒ `{ …声明… }` 成了那个垃圾选择器的声明块 ⇒ 规则永不命中。
+  三条纪律：
+  ① 编辑中文注释**不要移动/重复注释结束符**，且**注释正文里禁止出现该结束符的字面两字符形式**
+  （写「注释结束符」这个说法），否则连「提醒后人」的注释本身都会再次踩坑（本轮已自踩一次）；
+  ② **改完 CSS 必须机器校验**：注释开/闭计数相等，且逐字符扫描「注释外不得出现结束符」。
+  ⚠️ 校验要区分「未闭合」与「游离结束符」——`pattern.css` 的 `/* … /* … */` 是**嵌套写法的假警报**（内层 `/*` 在 CSS 里只是文本）。
+  ③ **「反复改却毫无效果」时立即停止调声明**，先验证**规则是否命中元素**（postcss 解析出选择器 / 浏览器实测 rect）。
+  本 bug 曾被误读为「容器塌缩成 52.5px」——那其实是「每项占满整行时文字墨迹的右缘」（详见 2026-10-07 日志）。
+  实证手法：`postcss.parse(css)` 后 `walkRules` 打印选择器；或 headless 浏览器注入探针打印
+  `getComputedStyle + getBoundingClientRect`（修复前 `三项各 w=230@x=20`，修复后 `w=44@x=20/113/206`）。
+  ④ **修完必须复查同区域注释里是否残留「与新结论冲突的旧处方」** —— 错误处方比没有注释更危险，
+  后来者会当权威照抄（本轮同一段里就并存过「必须 `flex:1 1 0` 等分」与「必须 `flex:0 0 auto`」两套对立说法）。
+- ⚠️ **状态灯/辉光不要写死半透明浅色**：`.indicator-ok` 的 `box-shadow: rgba(46,204,113,0.6)` 在浅色底上冲淡成灰绿（用户反馈"发灰"）
+  ⇒ 辉光改 `currentColor`（自动跟随令牌）+ 亮色主题 `--notify-ok-fg` 调深为 `rgb(15,109,52)`。专注模式靶心 `drop-shadow` 同理。
+- ⚠️ UXP 不支持 `:has()`：静默失效、构建与 DevTools 都不报错 ⇒「按后代特征选中祖先」只能在 TSX 加显式类名（技能 ㉑）。
+  （`:last-child` / `:nth-child()` **可用**，pattern.css 已实测。）
+- ⚠️ **替换原生控件时，必须核对「调用方从事件对象的哪个属性取值」**（2026-10-07 血泪）：
+  自绘 radio「怎么点都没反应」= `app.tsx` 从 **`event.target.selected`** 取值，而自绘组件回传裸字符串 ⇒ `event.target` undefined，
+  **异常又被函数体 `try/catch{}` 静默吞掉** ⇒ 不报错、点了没反应。
+  ⇒ ① 只看类型签名（都是 `(e)=>void`）会漏判；② **`try/catch` 吞异常会把 bug 伪装成「点击无响应」**，
+  排查此类问题先 grep 调用方取值属性，别怀疑布局/层叠；③ `onChange` 回传 `{target:{value, selected}}` **两个键都给** ⇒ 两条路径都能工作、调用方零改动；
+  ④ **替换组件后必须逐个复核调用点签名**，不能只改 JSX 标签名。
+- ⚠️ **原生 `sp-radio-group` 不可控，一律用自绘 `components/RadioGroup.tsx`**（自绘后原生已清零）。
+  原生两条硬伤：内部排版由宿主实现（`flex-wrap:nowrap`/`justify-content` 拦不住折行）；自带 **15px 水平内边距**。
+  ⚠️ 自绘版版式要点：`.radio-trio-group`/`.radio-pair-group` 容器 `space-between` + **项按内容宽 `flex: 0 0 auto`**
+  ⇒ 首末项贴边（内缩 0）、三项等宽时中项**精确**落在容器中心。**不要再改成 `flex:1 1 0` 等分**（项盒宽于内容 ⇒ 内容靠格左缘 ⇒ 首末项反而内缩）。
+  ⚠️ 历史上「容器两边有大空隙」的真因是**两层 padding 叠加**（`.radio-trio` 包装层 `padding:0 10px` + 父容器已有 10px；
+  包装层已删除，现行结构是 `.panel-section > .radio-trio-group`）。另一因：`margin:auto` 的**横向 auto 会禁用 stretch**。
+  ⚠️ **通用教训：「元素没占满容器」要查整条祖先链上每层的 padding/border/margin（尤其两层都有的叠加）**，
+  只盯目标元素加 width 会连续无效。
+  ⚠️ `.radio-option` 必须显式写 `justify-content: flex-start`：**UXP 的 flex 容器隐式默认是 `center`**（非 web 的 flex-start），
+  凡「盒宽大于内容宽」的版式都会把内容居中、看起来像被加了左右 padding（`.radio-vertical` 早先就踩过）。
+- ⚠️ **「两组控件要双向对齐」的唯一可靠做法是让两组总宽相等**，而不是给某一组加 padding 去凑
+  （2026-10-07 实例：紧凑描边行右列组 = `.label-4`(47) + 其 `margin-right`(10) + **4** + 尾控件槽(33) = **94px**，
+  与上一行「清除模式 + 开关」严格同宽 ⇒ 右对齐后左右缘偏差实测均为 0）。
+  ⚠️ 那 4px 来自**后代选择器**型通用规则 `.row-between .toggle-switch{margin-left:4px}`
+  （`.row-start` 里的开关也会命中）—— 排查「莫名差 N px」先怀疑这类规则在异地生效。
+- ⚠️ **折叠分区「标题 → 内容首行」的间距 = 标题 `padding-bottom`(10) + 内容首元素自身的 `margin-top`**
+  （`.collapse-content-expanded` 是块容器，首元素外边距会折叠穿透到它身上）。
+  ⇒ 首元素是 `.row-between` = 20px；是 `.panel-section`（**只有 margin-bottom、无 margin-top**）= 10px
+  ⇒ **拿 `.panel-section` 当分区首元素必然比 `.row-between` 少 10px**（2026-10-07「填充选项→纯色」实测）。
+  紧凑模式由 `… .collapse-content-expanded > :first-child{margin-top:5px}` 把两类一起拉平（皆 15px），**别重复补偿**。
+  ⚠️ **间距令牌一律取「盒对齐」不取「墨迹对齐」**：墨迹偏移由控件盒高/图标尺寸决定，
+  写进 margin 会把无关尺寸耦合进令牌（本轮若按墨迹对齐要写 7.5px，图标一改即静默失配）。细则见 `refs/frontend-css.md`。
+- ⚠️ **改版式前先用像素脚本量用户截图**，不要目测估：缩放（用已知尺寸控件反推，本仓截图为 **1.5×**）、
+  内容盒宽（父面板 **230px** = 250 − padding 10×2）、行 pitch、控件几何都能量出来。
+  ⚠️ 用 headless 浏览器搭测量台时**必须复刻完整祖先链**（`.panel > .panel-section > …`）：
+  少一层就会让整族 `body.compact-app …` scoped 规则静默失效，两模式测出同一组数据（本轮白跑一次）。
+- ⚠️ **数字输入框与单位符号必须定宽**（29 处调用点）：
+  ① `.num-input-row { width: 34px }`（border 1px×2 + input 32px）；② `.num-input-row input { width: 100% }`；
+  ③ `.num-unit { margin-left: 0; width: 16px; flex: 0 0 16px; justify-content: flex-end }`
+  （`%`/`px`/`°` 字符宽不同 ⇒ 不定宽则单位右缘随内容漂移；16px 按最宽单位 `px` 的字身宽上限取）。
+  ⚠️ 不要写 `.num-input-row:has(input[type="text"])`（`:has()` 静默失效）⇒ 更宽变体（渐变 `#RRGGBB`）
+  走显式类 `.num-input-row-wide{width:62px}` 由 TSX 挂上。⚠️ `align-items: right` **不是合法值**、会被忽略 ⇒ 用 `center`。
+
+## 性能 / React 铁律
+- ⚠️ **UXP 图层树只有一份快照，别让每个消费者各自遍历**（`utils/layerTreeSnapshot.ts`）：
+  `layer.id/name/kind/layers/isBackgroundLayer` **每读一次都是一次同步宿主 IPC** ⇒ 遍历 N 层树 ≈ 3N~5N 次往返。
+  三处并发遍历（引擎 2s 轮询签名 / 面板结构探针 / 线稿参考选项）在 500 图层时每 2 秒约 1500 次同步 IPC
+  ⇒ **主线程占满，折叠标题 click 排队 = 「点击无响应」**。
+  ① 读树一律 `getLayerSnapshot(maxAgeMs?)`；② 通知回调里只调 `invalidateLayerSnapshot()`（纯内存零 IPC，唯一允许在回调内做的）；
+  ③ 判断「结构变没变」先问 `isLayerSnapshotDirty()`，别为了确认没变化而遍历一次。
+  签名 = 先序顺序+id+kind+name+depth 参与 FNV-1a（顺序敏感才能识别「移动图层」）；只在会话内自比较、不持久化。
+- ⚠️ **大列表下拉的 `options` 必须 `useMemo` + 组件必须 `React.memo`**：`Select` 已 memo，靠**引用比较**跳过重渲染 ⇒
+  调用方写 `options={raw.map(...)}` 会让 memo 完全失效。配套：① 选项数组一律 `useMemo`/模块级常量，**永远不要在 JSX 里现 map**；
+  ② `Select` 内 `allOptions`/`sel`/`optionsSignature` 必须 `useMemo`；③ **`useMemo` 绝不能放进 `.map()` 回调**（Hooks 数随长度变化会崩）；
+  ④ 渲染路径上的 `arr.find(...)` 换成模块级 `Map` 索引（O(N·M)→O(N+M)）。
+  ⚠️ 背景：面板是「3800 行单组件、全部 JSX 一个 return」，折叠任一分区会让**所有**已展开分区重渲染
+  （含 UXP 原生 `input[type=number]`，同步成本极高）⇒ 折叠代价按 O(分区数 × 控件数) 估，不是 O(1)。
 - ⛔⛔ **【血泪】组件内 `useMemo`/JSX 里调用了组件体内更下方才声明的 `const` ⇒ 整块面板白屏**
-  （2026-10-06 实际发生过一次：`TypeError: Xxx is not a function`，堆栈
-  `Array.map` → `[as useMemo]`，adjustment-panel 全白）。**报错不是 TDZ 的
-  "Cannot access before initialization"，而是 "is not a function"** ——
-  因为 `tsconfig` target=**es5**，ts-loader 把 `const` 降级为 `var`
-  （**提升但值为 undefined**），拿到 undefined 再调用就是这个报错。
-  ⚠️ **这类 bug 编译期与 webpack 全都查不出来**（`transpileOnly` 无类型检查、
-  且 TDZ 违反在 es5 下不报错），只能靠「声明顺序」人工核对。
-  铁律：① **纯函数（只依赖入参、不读组件 state）一律放模块级**，永不放组件体内 ——
-  组件体内的辅助 const 迟早会被新加的 Hook 抢跑；
-  ② 在组件体内新增 `useMemo`/`useState` 初始值/`return` 前的同步语句前，
-  先确认它调用的每个 `const` 都已在**更早的行**声明（模块级或组件体开头）；
-  ③ **发现 TDZ 隐患时修法选「提到模块级」，不要选「把 Hook 挪到声明之后」** ——
-  后者能让 Hooks 远离相关 state，维护者极易再次插错位置。
-  ⚠️ **验证手段**：不能用 `grep` 生产 bundle（已 mangle），要用
-  `ts.transpileModule(src,{target:ES5})` 单独产出未压缩 es5，再核对声明行号顺序；
-  更进一步可把函数从 es5 产物原样抽出丢进 `vm` 按真实调用方式执行一遍。
-  排查工具：AST 分析（TS compiler API）判定「渲染期立即执行区」=
-  组件体顶层语句 + useMemo/useState 初始值回调体（含 `.map(x=>...)` 同步迭代器）；
-  `useEffect`/事件处理器/`setTimeout` 属延迟区，不受组件体内 TDZ 影响。
-  ⚠️ **两个检测器要点（复用时必读）**：
-  ① 组件内辅助函数只有被「渲染期真正**调用**」才算立即执行区，**仅被引用**
-  （如 `onClick={handleX}` 传值）不算 —— 漏了这条会漏报 GradientPicker 的历史 bug；
-  ② `AdjustmentPanel.tsx` 的组件体是**零缩进**（顶层语句缩进为 0），缩进启发式完全失效，
-  必须用 AST 括号配对确定组件边界。
-- ⚠️ **GradientPicker 的两套插值函数不可合并**（`interpolate*AtPosition` vs `...ForPreset`）：
-  算法同构，但入参类型不同（`ExtendedGradientStop[]` vs `any[]`）且**透明度正则的
-  alpha 组语义不同** —— ForPreset 版 alpha **可选**（兼容无 alpha 的 `rgb()`），
-  组件版 alpha **必需**（不匹配则回退 1）。合并会改掉 `rgb()` 兜底行为。
-  这四个已全部提到模块级（2026-10-06）；同文件另有 21 个组件内辅助 const 顺序安全。
-- ⚠️ **写文件禁用不可见控制字符做分隔符**：用 Edit 插入 `|`/可见分隔符，别用 U+0000/U+0001
-  （会变成模板字符串里的字面分隔符，且让 grep 把源码当 binary 报误导性行数）。
-  改完用 `node -e` 扫字节确认 NUL/控制符为 0：`for(...)if(b[i]===0)n++`。
-  ⚠️ **`const` ref/回调必须声明在使用点之前**（TDZ：同一次渲染中先于声明调用会抛 ReferenceError），
-  跨 effect 共享时优先 `useRef` + `?.` 保护。
-  ⚠️⚠️ **本项目 target=es5 ⇒ TDZ 违规表现为「is not a function」而非「before initialization」**
-  （`const` 被降级为 `var`，提升但值为 undefined），且**编译期/webpack 全部查不出**。
-  在组件体内新增 `useMemo` 时调用组件体内后声明的 `const`，会**让整块面板白屏**
-  （2026-10-06 真实事故）。**纯函数一律放模块级**，详见「大列表下拉的 options」那条铁律下的
-  ⛔⛔ 子条（含正确的验证手段）。
-- ⚠️ **启动期的一次性 PS 加载（笔刷枚举 / presetManager / 文档尺寸等 `batchPlay get`）必须走
-  `runWhenIdle` 守卫**，不可裸调：插件挂载瞬间 PS 正在处理面板创建与文档初始化，正是忙碌窗口峰值
-  （表现「启动时列表空，点一下刷新就好」）。卸载时记得 `.cancel()`。
-  ⚠️ **`runWhenIdle` 的顺延上限**：第 3 参 `maxDeferrals`（0=不限）。忙碌时顺延无上限会让任务
-  **永不执行**，对启动加载类等于功能永久缺失 ⇒ **一次性加载必须传有限值**（如 5），
-  超限后宁可冒险执行；「周期性探测」才可传 0。
-  ⚠️ 调度器用 `useRef` + 懒初始化持有，**不要用 const**（`runWhenIdle` 每次渲染返回新函数
-  ⇒ 重渲染丢调度；且 useEffect 回调在声明前定义会 TDZ）。循环里要判断 setState 结果时读镜像
-  ref（如 `brushesRef`），别读闭包里的旧 state。
-  ⚠️ 排查「刷新一下才好」先分清是**枚举失败**（列表空）还是**下游数据缺失**（有名字无内容）——
-  两者根因与修法完全不同，别一律当时机问题（笔刷无图标属后者，且是刻意设计：
-  类型检测会逐支切换用户当前笔刷，仅手动刷新才做）。
-- ⚠️ **原生 `sp-switch` 已全量替换为自绘 `.toggle-switch`**（2026-10-06，16 处调用）。
-  换的原因：其胶囊颜色由 **PS Spectrum 主题接管、UXP 下 CSS 无法覆盖**，darkest/lightest 下
-  关闭态胶囊色≈面板底色、看着像个圆点；**开启态也无法改成 --primary-color**。
-  ⚠️ 替换原生控件时**必须连带核查这三类联动**，否则静默失效或版式突变：
-  ① 挂元素的间距/定位选择器（`sp-switch` → `.toggle-switch`）；
-  ② **由原生盒高换算出来的固定尺寸**（原生 32px → 自绘 24px，如 `.notify-bar` 的
-  `min-height: 40px` 须改 32px = 24+padding 6+边框 2）；
-  ③ **为抵消原生透明留白而设的负外边距**（如 `.row-grid sp-switch{margin:-10px}` 须删除，
-  自绘开关不需要，加了反而拉出行外）。
-  ⚠️ 自绘开关设计约定：胶囊 28×16 / 圆点 12px 白 / 圆角 999；开启 `--primary-color`、
-  关闭 `--border-color`+opacity 0.80（**禁用 `background:transparent`**，UXP 下会渲染成纯黑）；
-  **占位盒 24px** 与滑块(12px)、数字输入(24px) 同基线，胶囊用绝对定位居中。
-  ⚠️ 组件 `onChange` 刻意回传 `{target:{checked}}` 兼容原生签名 ⇒ 旧调用零改动，
-  以后新增控件也应保持这种"兼容原生事件形状"的设计。
-  ⚠️ **UXP 圆角不写超大值**：`border-radius:999px` 不会被解析成胶囊，实测渲染接近矩形、
-  两端尖角（"纺锤感"）⇒ 一律写**显式像素值 = 高/2**（16px 高→ `8px`），并补
-  `-webkit-border-radius`（UXP 的 WebKit 后端更认它）。
-  ⚠️ **伪元素绝对定位做"胶囊本体"时，父占位盒宽高必须与伪元素完全相等**，
-  否则溢出端各鼓出一个小凸起（曾被误认为"音频波"）。改胶囊长度时**必须同步**
-  圆点位移 `left` = 胶囊宽 − 圆点 − 内边距，否则圆点不贴端。
-- ⚠️ **换Spectrum 图标一律「内联官方 path」，不要装 `@spectrum-web-components/icons-*`**：
-  这些包是 **LitElement Web Component**（`sp-icon-*` 自定义元素），UXP 对第三方自定义元素/
-  Shadow DOM 支持很差（易白屏）；且单个 icons-workflow 即 **11MB / 10488 文件**、还会连带
-  拖入 `icon`+`base`（带整套 Spectrum 样式），为一个 13px 图标不值。取数据的正确路径是
-  `unpkg.com/<pkg>@<ver>/?meta` 列文件 → 找 `/src/icons/<Name>.js`（**不是** `/icons/`，
-  也不叫 `IconXxx.js`）；内联时把官方 `fill="currentColor"` 改成 `class="icon-fill"`
-  以复用项目状态色。⚠️ 复合图标（外环 path + 内点 circle）**每个元素都要挂 `.icon-fill`**，
-  漏一个则内圈缺色。
-- ⚠️ **图标按钮三态配色**（用户 2026-10-06 拍板）：常态 `--text-color` → hover `--hover-icon`
-  → **按下 `--active-icon`（新增令牌，四套主题已写）**。按下前基本已 hover，
-  故按下色必须**比 hover 明显更深**才有按压感；`transform: scale(0.94)` 幅度太小、几乎看不出，
-  不能单独承担按压反馈。⚠️ 用户**明确要求按下态不改边框和背景**——只变内部 `.icon-fill` 的 fill
-  （沿用「状态只改内部 icon、容器不变」原则）。深色主题取同色相降L，浅色主题另用更暗的蓝。
-- ⚠️ **图标按钮 hover 失效多半不是缺规则，而是图标用了内联 `fill="currentColor"`**：
-  内联属性优先级高于样式表 `fill`，`.icon-button:hover .icon-fill{fill:var(--hover-icon)}` 对它
-  **静默失效**（对比 `DeleteIcon` 用 `className="icon-fill"` 就正常）。所有 `.icon-button` 内的图标
-  path 一律 `className="icon-fill"`。改 hover 时注意：① UXP 禁 outline，边框靠基础类预挂
-  `1px solid transparent` 占位防位移；② **禁用态必须写 `.xxx-disabled:hover` 反向覆盖**
-  （同为单类选择器、靠写在后面取胜），否则禁用按钮悬停仍亮主色像可点。
-- ⚠️ **通知回调内禁止任何同步 DOM 读取**（`app.activeDocument` / `doc.layers` / `layer.name` 每次读都向宿主发 `get`）。
-  PS 的 set/delete/make 通知在命令**中途**派发，此刻读文档必撞忙碌窗口 → 宿主弹
-  「易修: 命令"获取"当前不可用」。**该原生弹框绕过 JS try/catch 与 `_options.dialogOptions`，
-  唯一有效防护是「不发 get」** ⇒ 防护必须加在读取动作**之前**，加在 try/catch 之后无效。
-  统一走 `utils/psProbe.ts`（`debouncePsProbe` 防抖 / `markPsBusy`+`isPsBusy` 忙碌守卫），静默期 **300ms**。
-  三条反直觉细则：① `markPsBusy` 只在**事件到达瞬间**打，**不可**放在探测函数体内
-  （探测自身会再触发 → 窗口自我延长、永远等不到空闲）；② 被守卫的函数与调用方**不可**互相
-  `markPsBusy`（入口 `isPsBusy` + 调用方先标记 = 自锁，功能永不执行）；③ `const` 探测器必须
-  定义在监听回调**之前**（TDZ）。**「节流(`if(timer) return`)」会丢弃后续事件、让刷新落在忙碌期，必须用真防抖**。
-- 禁 HEX，一律 rgb()/rgba() 走 theme.ts 变量；遮罩不透明度 0.80 字面写。UXP 无 flex gap→一律 margin。数字输入 32×24、`.num-input-row` 圆角 3px。
-- ⚠️ UXP 不支持 `:has()`：静默失效、构建与 DevTools 都不报错 →「按后代特征选中祖先」只能在 TSX 加显式类名（技能 ㉑）。
-- 术语：APP 与 AdjustmentPanel 皆「父面板」；纯色/图案/渐变/描边=「子面板」(src/app.tsx 内 absolute)。
-- ⚠️ 两块面板共用同一 `document.body` → body 状态类名按面板分（主面板 license-dialog-open/secondary-panel-open/
-  app-visibility-panel-open；工具箱 visibility-panel-open/adjustment-lock-open）。**隐藏规则必须「属主类名 + 属主根节点」成对写**，
-  否则出现代偿现象（技能 ⑱）。
-- ⚠️ menuItems id 插件级全局唯一：同名 → `entrypoints.setup()` 抛 "already exists"、**两块面板一起空白**。
-  APP 增删项必须四处同步：`registerAppCallbacks` 类型+赋值、`handleAppFlyout` case、menuItems 数组、app.tsx 注册处（技能 ⑰）。
-- ⚠️ UXP 无内置 `fs`/`os`（编译期正常、运行期才炸）；落盘只用 `localFileSystem`（URL 写 `file:/C:/…`），
+  （真实事故：`TypeError: Xxx is not a function`，堆栈 `Array.map` → `[as useMemo]`）。
+  ⚠️ **报错不是 TDZ 的 "Cannot access before initialization"，而是 "is not a function"** ——
+  因为 target=**es5**，ts-loader 把 `const` 降级为 `var`（**提升但值为 undefined**），拿 undefined 调用就是这个报错。
+  ⚠️ **编译期与 webpack 全都查不出来**（`transpileOnly` 无类型检查 + TDZ 违反在 es5 下不报错），只能靠人工核对声明顺序。
+  铁律：① **纯函数（只依赖入参、不读组件 state）一律放模块级**，永不放组件体内；
+  ② 在组件体内新增 `useMemo`/`useState` 初始值/`return` 前的同步语句前，先确认它调用的每个 `const` 都已在**更早的行**声明；
+  ③ **发现 TDZ 隐患时修法选「提到模块级」**，不要「把 Hook 挪到声明之后」（会让 Hooks 远离相关 state、后人极易再插错）。
+  ⚠️ 验证：不能用 `grep` 生产 bundle（已 mangle）⇒ 用 `ts.transpileModule(src,{target:ES5})` 产出未压缩 es5 核对声明行号；
+  更进一步把函数原样抽出丢进 `vm` 按真实调用方式执行。AST 检测器要点：
+  ① 组件内辅助函数**只有被渲染期真正「调用」**才算立即执行区，仅被引用（`onClick={handleX}` 传值）不算；
+  ② `AdjustmentPanel.tsx` 组件体是**零缩进**，缩进启发式失效，必须用 AST 括号配对定边界。
+  （渲染期立即执行区 = 组件体顶层语句 + useMemo/useState 初始值回调体含 `.map()` 同步迭代器；`useEffect`/事件处理器/`setTimeout` 不受影响。）
+- ⚠️ **`ts-loader transpileOnly:true` ⇒ 类型缺陷永不阻塞构建，只在跑 tsc 时才暴露**
+  （实例：`ColorSettings` 接口缺 `calculationMode`，三处在读写它，长期挂 3 条 TS2339/TS2322 无人发现）
+  ⇒ **新增跨组件共享字段必须同步补进 `types/state.ts` 接口**。
+  ⚠️ 排查手法：先 `git stash` 跑 tsc 存**基线行数**（本仓约 731 行，多为 es5 lib 报错），改完对比，只看新增标识符是否出现在报错里。
+- ⚠️ **父面板复位/批量操作要覆盖子面板内部 state，必须发「自增信号」**：纯色/图案/渐变参数活在各自 state 里，
+  父面板 `...initialState` 管不到（描边正常是因为其参数本就在父面板 state）。解法：`AppState.resetToken` 自增 → prop →
+  子面板 `prevResetTokenRef` 跳过首次、变化时回默认值。
+  ⚠️ `resetToken` 必须写在 `...initialState` **之后**（`initialState` 里恒为 0，放展开前会被覆盖）。
+  ⚠️ **复位前必须先清「选中预设」**（GradientPicker 有「参数变→回写选中预设」的 effect，保留会把用户预设改写成默认值 = 悄悄毁预设）。
+  ⚠️ 复位**不动 presets/patterns 列表** —— 预设是用户资产，不是参数。
+- ⚠️ **启动期一次性 PS 加载（笔刷枚举 / presetManager / 文档尺寸等 `batchPlay get`）必须走 `runWhenIdle` 守卫**，不可裸调：
+  插件挂载瞬间 PS 正在处理面板创建与文档初始化，正是忙碌峰值（表现「启动时列表空，点一下刷新就好」）。卸载时 `.cancel()`。
+  ⚠️ 第 3 参 `maxDeferrals`（0=不限）：忙碌时无上限顺延会让任务**永不执行** ⇒ **一次性加载必须传有限值**（如 5）；
+  「周期性探测」才可传 0。⚠️ 调度器用 `useRef` + 懒初始化（`runWhenIdle` 每次渲染返回新函数 ⇒ const 会丢调度、且 TDZ）；
+  循环里判断 setState 结果要读镜像 ref（如 `brushesRef`）而非闭包旧 state。
+  ⚠️ 排查「刷新一下才好」先分清**枚举失败**（列表空）vs **下游数据缺失**（有名字无内容）——根因与修法完全不同
+  （笔刷无图标属后者，且是刻意设计：类型检测会逐支切换用户当前笔刷，仅手动刷新才做）。
+- ⚠️ **通知回调内禁止任何同步 DOM 读取**（`app.activeDocument`/`doc.layers`/`layer.name` 每次读都发 `get`）：
+  PS 的 set/delete/make 通知在命令**中途**派发，此刻读文档必撞忙碌窗口 → 宿主弹「命令"获取"当前不可用」。
+  **该原生弹框绕过 JS try/catch 与 `_options.dialogOptions`，唯一有效防护是「不发 get」** ⇒ 防护必须在读取动作**之前**（加在 try/catch 之后无效）。
+  统一走 `utils/psProbe.ts`（`debouncePsProbe` / `markPsBusy`+`isPsBusy`），静默期 **300ms**。
+  三条反直觉细则：① `markPsBusy` 只在**事件到达瞬间**打，**不可**放探测函数体内（否则窗口自我延长、永远等不到空闲）；
+  ② 被守卫函数与调用方**不可**互相 `markPsBusy`（= 自锁、功能永不执行）；③ `const` 探测器必须定义在监听回调**之前**（TDZ）。
+  **「节流(`if(timer) return`)」会丢弃后续事件、让刷新落在忙碌期 ⇒ 必须真防抖。**
+- ⚠️ **GradientPicker 两套插值函数不可合并**（`interpolate*AtPosition` vs `...ForPreset`）：算法同构但入参类型不同，
+  且**透明度正则的 alpha 组语义不同**（ForPreset 版 alpha **可选**、兼容无 alpha 的 `rgb()`；组件版 alpha **必需**、不匹配回退 1）——
+  合并会改掉 `rgb()` 兜底行为。四个已全部提到模块级。
+
+## 环境 / 工具链
+- ⚠️ 两块面板共用同一 `document.body` ⇒ body 状态类名按面板分（主面板 license-dialog-open / secondary-panel-open / app-visibility-panel-open；
+  工具箱 visibility-panel-open / adjustment-lock-open）。**隐藏规则必须「属主类名 + 属主根节点」成对写**，否则出现代偿现象（技能 ⑱）。
+- ⚠️ **menuItems id 插件级全局唯一，且菜单项只能置灰、绝不能删**：
+  同名 id → `entrypoints.setup()` 抛 "already exists"、**两块面板一起空白**。
+  🔴 **`removeAt()` 与宿主内部状态不同步**（官方论坛确认）：「removeAt + insertAt 挂回」反复执行后**菜单项越来越少**。
+  ⇒ **只能用 `enabled` 做隐藏/禁用，绝不 removeAt/insertAt**；找项按 id 遍历（不能按固定下标）。
+  ⚠️ 工具箱改 `id` 同样撞 "already exists" ⇒ 只改 label。APP 增删项必须四处同步：
+  `registerAppCallbacks` 类型+赋值、`handleAppFlyout` case、menuItems 数组、app.tsx 注册处（技能 ⑰）。
+- ⚠️ UXP 无内置 `fs`/`os`（编译期正常、运行期才炸）；落盘只用 `localFileSystem`（URL 写 `file:/C:/…`）；
   用户自选路径用 `getFileForSaving`（必须在 `executeAsModal` **之外**调）。技能 ⑲。
-- ⚠️ Edit 常「报成功但没落盘」；本仓行尾不统一（blockAverageProcessor.ts CRLF、.tsx LF、`analysis/line_vis/*.mjs` LF）
-  → 改前先确认行尾，改完必须 grep 复核。
-- ⚠️ `.git/refs/remotes/origin/` 曾缺失 → fetch 假成功、status 恒 ahead；修法 mkdir 后 git update-ref。
+- ⚠️ **写文件禁用不可见控制字符做分隔符**：用可见分隔符（`|`），别用 U+0000/U+0001
+  （会变成模板字符串里的字面分隔符，且让 grep 把源码当 binary 报误导性行数）。改完用 `node -e` 扫字节确认 NUL/控制符为 0。
+- ⚠️ Edit 常「报成功但没落盘」；本仓行尾不统一（部分文件 CRLF、.tsx LF）⇒ 改前确认行尾，**改完必须 grep 复核**。
+  ⚠️ 大段中文注释的改动，用脚本按锚点精确替换比反复试 Edit 快（Edit 对空格/全角半角差异会匹配失败）。
+- ⚠️ `.git/refs/remotes/origin/` 曾缺失 → fetch 假成功、status 恒 ahead；修法 mkdir 后 `git update-ref`。
   推送用 `git -c credential.helper=wincred push`。dist/、analysis/、outputs/ 已 gitignore。
-- 前端改完须 UDT Reload；daemon 重编 SDK 8.0.424 在 `C:\Users\Administrator\.dotnet-sdk`（永不删）。
-- 构建 `node node_modules/webpack/bin/webpack.js --mode=production`；⚠️ **ts-loader `transpileOnly:true` ⇒ 只转译、不做类型检查**，
-  漏加接口字段/漏写转发**不报错、只静默失效**。类型校验用 `tsc -p analysis/line_vis/tsconfig.tc.json`
-  （必须 `types:[]` 绕开 `@types/node/ffi.d.ts` 的 TS1109 ⇒ 否则 tsc 提前中止 = **假通过**）；判据只看新增标识符是否出现在报错里。
-- ⚠️ 本机工具坑：**bash 的 PATH 已损坏**（dirname/ls/tail 全 not found）⇒ 一律 PowerShell；**PowerShell 工具 stdout 不回显**
-  ⇒ 命令里显式 `Out-File` 到文件再用 Read 读（UTF-8 落盘，避免 GBK 管道乱码）。
+- 前端改完须 UDT Reload；daemon 重编 SDK 8.0.424 在 `C:\Users\Administrator\.dotnet-sdk`（**永不删**）。
+- 构建 `node node_modules/webpack/bin/webpack.js --mode=production`（或 `yarn build`）。
+  ⚠️ `transpileOnly:true` ⇒ 只转译不做类型检查，漏加接口字段/漏转发**不报错、只静默失效**。
+  类型校验用 `tsc -p analysis/line_vis/tsconfig.tc.json`（必须 `types:[]` 绕开 `@types/node/ffi.d.ts` 的 TS1109，否则 tsc 提前中止 = **假通过**）。
+- ⚠️ 本机工具：**bash（Git Bash）现可用**（历史上曾 PATH 损坏）；`dangerouslyDisableSandbox` 之外的普通命令一律走 bash 更省事。
+  PowerShell 工具 **stdout 不回显** ⇒ 需读输出时显式 `Out-File` 再用 Read（UTF-8 落盘，避免 GBK 乱码）。
+- 术语：APP 与 AdjustmentPanel 皆「父面板」；纯色/图案/渐变/描边 = 「子面板」（`src/app.tsx` 内 absolute）。
 
-## 像素算法（细节、推导与实测数据见 refs/pixel-algorithms.md）
-- ⚠️ 写回型处理器两条边界铁律（高频增强白边，2026-09-19）：区域判定**只用选区掩码>0**（= 写回范围
-  `selectionDocIndices`；用 alpha>0 会让统计口径 ≠ 写回口径）；采样到「RGBA 全 0」的数据缺失点必须
-  **用中心像素边缘延拓**。否则卷积/方差把 0 当真实像素 ⇒ 选区边缘 + 图层 alpha 轮廓齐出白边，
-  且伪影会**劫持 maxIntensity** 让功能对选区内部失效。台架 `analysis/line_vis/repro_hf_edge.mjs`。
-- 分块平均/对比减弱：分块=不连通选区各自成块；φ 颜色带柔化写死不暴露。
+## 像素算法（**细则、推导与实测数据一律下沉到 `refs/pixel-algorithms.md`**）
+- ⚠️ 写回型处理器两条边界铁律（高频增强白边）：区域判定**只用选区掩码>0**（= 写回范围 `selectionDocIndices`）；
+  采样到「RGBA 全 0」的数据缺失点必须**用中心像素边缘延拓**。否则选区边缘 + 图层 alpha 轮廓齐出白边，且伪影会**劫持 maxIntensity**。
+- alpha 对齐 `alphaAlignProcessor.ts` 现为 **v10 三档整片归一**（v1~v9 五条路线已全部推倒，**勿重走**）；
+  唯一例外：v5「多尺度环带参照」以「**极值微调**」两个按钮复活（线条污渍专用，作用通道 alpha→RGBA）。
+  语义：三档 = 上对齐(选区 a 最大值) / 下对齐(最小值) / 众对齐(众数)，共用同一次选区直方图，写回**无条件覆盖选区内所有 `a ≥ 32`**。
+  ⚠️ 极值档可能是**孤立极值**带走整片 —— **用户选定的语义，勿擅自加门槛**（只在 console 对 <1% 的基准档打 ⚠️）。
+  ⚠️ **v7 教训**：「区间填充/占用量」型判据与「连续达标段选目标」**都不要再用**；保护规则越少越好（v10 只剩 `a<32`）。
+- 消除锯齿 `aliasSmoothProcessor.ts`：覆盖率重建 + EDT 本体传播 + 墨量守恒；细线 ≤4px 走几何重建。
+  ⚠️ 「厚度置信度」必须按**距边界的半径**判定，不能用「局部 3×3 反差」（内缩会让粗线在 7px 处被误判成细线 ⇒ 宽度 -2px；2026-10-06 修）。
+- 分块平均/对比减弱：分块 = 不连通选区各自成块；φ 颜色带柔化写死不暴露。
 - 梯度修改：写回只影响原 alpha>0；反预乘 pass 整像素还原 a=0/选区外。
-- alpha 对齐 **v10 三档整片归一**（`alphaAlignProcessor.ts`；v1~v9 五条路线——逐像素多尺度环带参照 / 参照场共识 / 全局平台基准 /
-  单侧写回 / 同侧最强档——**已全部推倒，勿重走**。⚠️ **例外（2026-09-23）**：v5 的「多尺度环带参照」已以
-  **「极值微调」两个新按钮的形式复活**，专给线条污渍用，见下面那条；v10 三档归一继续只服务色块）。**语义（用户 2026-09-23 二次纠正）：三个按钮共用同一次「选区直方图」，
-  只是取的统计量不同，都是整片归一到该水平**：
-  ① **上对齐 = 选区内 `a` 的最大值**；② **下对齐 = 选区内 `a` 的最小值**（"与之对应"）；③ 众对齐 = 众数（另一个函数，未改）。
-  直方图 = **选区本身**（v10 起不再用 halo；halo 是旧"环带找周围水平"路线的残留，已删 `ALPHA_ALIGN_HALO`），只统计 `a ≥ MIN_ALPHA(32)`。
-  写回**无条件、覆盖选区内所有 `a ≥ 32` 像素**：`na = round(a + (target-a)×rate×fade)` ⇒ 结构上不可能有遗留；目标只依赖直方图
-  ⇒ 同一 alpha 处处同一结果（完全空间一致，无斑驳/条纹）。唯一跳过 `a<32`。常量只剩 `MIN_ALPHA / FEATHER_RADIUS / EXTREME_WARN_SHARE`。
-  ⚠️ **为什么最小值/最大值必须从 `a≥32` 起算**：低于 32 的是没擦干净的残留与 AA 尘埃；若让它们参与"最小值"，下对齐会把整片压到
-  近乎全透明（实测恢复素材：min=32 只有 116px ⇒ 整片 mean 74.2 → **29.5**，等于擦掉画面）。用户自己的稿子 AA 全在 32 以下
-  （域内全 ≥82）⇒ 该下限对他无副作用。若某稿 AA 落在 32~80，最小值就会落在 AA 尾上——日志会打 ⚠️（`EXTREME_WARN_SHARE 1%`）。
-  ⚠️ **已知取舍（用户选定的语义，勿擅自加门槛）**：极值档可能是**孤立极值**（实测 `_real` 代理素材 max=168 只有 **1 px**、`_aa_like` max=207 有 48px）
-  ⇒ 整片会被它带走；v9 曾用"该侧计数最多 + 规模门槛"规避，但那是**用户明确否掉的方向**（他要的就是极值）。所以 v10 不加门槛，
-  只在 console 里对 <1% 的基准档打 ⚠️ 提示。真要排除就缩小选区。
-  ⚠️ **硬事实**：内容全在众数之上时（用户稿：域内 30642 像素全 ≥82、众数 87）任何"只抬偏淡像素"的语义恒为空转 —— 这是 v8 的根因。
-  ⚠️ **v7 教训（核心）**：v7"平台保护 + 渐变带保护"合起来吃光 100% 候选 ⇒ 修改=0（① 平台 = 连续达标段，真实稿直方图连片 ⇒
-  覆盖 65%；② `区间填充 ≥ hist[a]×2` 在真实稿**恒真**）。**"区间填充/占用量"型判据与"连续达标段选目标"都不要再用**；
-  保护规则越少越好（v10 只剩 `a<32`）。详细实测见 refs；台架 `outputs/aa_run.cjs`（每次用唯一 outPrefix）。
-  📷 **素材恢复法**：截图 → 非白 bbox 与外接矩形比值定缩放 → 块中心 NN 采样 + 3×3 中值（`_aa_recover*.py`；`_aa_like.py` 造同构合成稿）。
-  ⚠️ 恢复素材是**AA 饱和**的（137 个不同档），真实画稿只有 4~8 档 ⇒ 恢复素材的 min/max 会落在 AA 尾/孤立极值上，**不能当作
-  用户真实稿的极值代理**，只可用于对齐 console 的平台列表/计数。
-- **极值微调**（`alphaAlignProcessor.ts` 的 `processExtremeAlign`，2026-09-23 新立）：**线条上的污渍**专用，
-  按钮在 APP 面板「**边缘处理**」分区最下方 —— **提升下极值** = d648017 版 v5「上对齐」（只增不减）/
-  **削弱上极值** = v5「下对齐」（只减不增），即逐像素多尺度环带参照（k=1/4/14/42/112 + 高端平台簇 + 平坦拦截 +
-  中位数回退 + 两遍 + 参照场共识 R=6 + 漏判补判）。**与 v5 的唯一差别：作用通道 alpha → RGBA**（四通道同一套算法各跑一遍；
-  "属于线条"的闸门恒为 `alpha ≥ MIN_ALPHA(32)`，各通道用自己的值 ⇒ **alpha 通道与 v5 逐字节一致，已实测验证**）。
-  ⚠️ 两处刻意取舍（通道语义决定）：① v5「本层邻域」护栏 `bandMax > v+BRIGHT_GAP(60)` 的尺度跳过**只对 alpha 生效**
-  （RGB 没有"层"语义，通道落差本身就是污渍）；② 参照高端区间下界由 minAlpha 改 **0**（否则深色线条 RGB=30 找不到参照）。
-  ⚠️ 护栏的可测边界：alpha 只能修 `(线水平−60, 线水平)` 内的偏低值，**落差 >60 的坑不动**（console 打 `护栏拦下=N`）。
-  实测（台架 `outputs/ex_run.cjs` / `ex_real.cjs`）：合成 5 类污渍语义全对、「污渍块之外 0 改动」、纯平直线与同水平十字交叉
-  两个方向都 **0 改动**；"不激进"对照（同素材全图选区，改动像素数）——`_aa_like` 0/2116 vs v10 23350/4063、
-  `_real` 5647/6424 vs v10 32730/32615，档位数 5→5 / 169→169&141（v10 抹到 2 档）⇒ 只动离群点、保留层次。
-  ⚠️ 软笔刷素材的改动里约 85% 来自 v5 的「参照场补判」（`REF_FILL_PROTECTED_DELTA=30` 越过平坦保护把羽化档抬到 core）；
-  要"只修坑不动羽化"就让补判也受护栏约束。详见 refs。
-- 消除锯齿：覆盖率重建+EDT 本体传播+墨量守恒；细线 ≤4px 走几何重建。
-- 「仅主线条」lineSmoothProcessor.ts（**现为 V7 中轴重建**，见下辖小节）早期已修四个缺陷（详见 refs）：①细线失效 → 面积开运算 + 逐像素自适应 σ（σ ≤ 0.56×线宽）；
-  ②连点变细/断裂「棘轮」→ `BAND_LATTICE=0.30` 定值 + `SIGMA_THICK_RATIO=1.80` + density 取 `max(原 alpha, 抛光值)`
-  （三条同时改，缺一无效）；③「宽度拉平」凹陷无补偿 → 门槛参照改**双侧邻域最大半宽 Href**；
-  ④「宽度拉平」单侧凸起把平缓侧推成凹陷 → **中轴跟随**（δh ± δc 按 ∇half 分侧）。
-- ⚠️ 「宽度拉平」两条量纲铁律（都踩过、代价大）：去趋势的通道**必须平行于轴**（`k=gy·gw+gx` ⇒ alongY 时 stride=gw）；
-  中轴重分配量**必须封顶为 |Δ|**（`|δc| ≤ |δh|` 恒成立；不封顶则等宽长弧横移 5px）。
-- 参数命名：「仅主线条」四参数 = 平滑力度(strength,0~100%) / **曲率平滑**(radius,3~9px) / **宽度平滑**(flattenRadius,0~700,默认0关) /
-  **不透明度平滑**(opacityRadius,0~700,默认250)。链路 `edgeLineFlatten`→`lineSmoothFlatten`→`flattenRadius`，加新参数必须同步 4 处：
-  接口(`EdgeDetectionParams`/`LineSmoothParams`)、转发、`defaultSmartEdgeSmoothParams`、面板（状态/加载/保存+依赖/复位/转发/SLIDER_DRAG_CONFIGS/分派 case/UI 行/handler——共 10 处）。
-- 改完必须同时报「回归 diff vs 旧版」与「作用量 vs 原图」；判「不该动的笔画有没有被动」要看**墨迹外沿（alpha≥32）位移**，不是字节差。
-
-### 「仅主线条」V7 中轴重建：两条保墨铁律（缺一则逐遍墨量单向漂移）
-- ① **密度源用横截面「保墨平均」`mp = Σalpha·step/(wl+wr)`，绝不用峰值 `ap`**。峰值作密度源 ⇒ 每个横截面被抬到自身峰值、**只升不降**
-  （实测 img1 逐遍 +8.87/+4.86/+1.34%，93% 增量落在内部 [64,127] 像素、边界仅 1/14）。改 `mp` 后 `Σ(tl+tr)/Σ(wl+wr)=1.0000`、`ta/mp=1.0000`。
-  `ap` 现仅用于半高交点几何（`penalizedSmooth(mp,…)`）。
-- ② **未覆盖（aValid=0）像素的密度抛光必须「掩码归一」`bodyBlur = blur(alpha·m)/blur(m)`**，绝不用 `max(alpha, blur·scale)`。
-  `max` 单向 ⇒ 保墨后残留棘轮主因（该分支 +148394/15987/−562）。掩码归一自带「边缘不压暗」故 max 不再需要，且对称 ⇒ 幂等。
-  用 `gaussianBlurPair`（两通道同核一次遍历）把代价从 +10% 降到 +5%。
-  ⚠️ 解析近似 `blur(m)≈Φ(sd/σBody)` **不可用**：曲率处 sdB<sd ⇒ w 高估 ⇒ 逐遍 −1.67%（vs 精确 −0.11%）。
-  A/B（img1 flat0/250 峰RMS）：掩码归一 3.84/3.23 ≪ 不归一 5.04/4.22 ≪ 不抛光 5.40/4.42（V5 5.00/5.89）⇒ 必须保抛光**且**必须归一。
-- ⚠️ ⑧「首要不伤害」护栏阈值 `0.35` **不可放松**（0.55/0.75 ⇒ flat450 棘轮 −1.94%→−5.03%）；放松剔除阈值会重现锥形伪影。
-- ⚠️ 新代码禁用 `Math.hypot`（本仓 target es5 默认 lib 无 hypot，且它**不被 TS 转译** ⇒ UXP 运行期风险）→ 一律 `Math.sqrt(x*x+y*y)`。
-- 最终站位（`_accept_v7.txt`）：峰RMS 3.84/3.36/3.23/3.20/3.25（flat0/150/250/450/700）、横截断崖 141/82‰（V5 134‰）、
-  棘轮 flat0 **−0.11%** / flat450 −2.47%、性能 **1.237/1.076/1.192**、粗线墨量偏差 ≤1.6%、宽二阶 5.9/6.5/3.0。
-  **未达标**：峰RMS（目标 3.0）、横截断崖（目标 45‰）、flat450 棘轮（目标 0.5%）。线索：flat450 第 3 遍 ① 重建覆盖 0 像素（疑 ⑧ 触发）、② 各 −0.9%/遍。
-- 台架：`accept_v7.mjs`（8 组验收）、`perf_v7.mjs`（V5/V7 交替 9 轮取 min/med，抗抖动）、`ab_polish.mjs`、`diag_v7_ink.mjs`
-  （按输入 alpha 分 bin + 边界/内部归属）、`diag_v7_branch.mjs`（按密度分支归属，可传 flattenRadius）、`diag_v7_recon.mjs`、`opac_test.mjs`。
-- ⚠️ **`accept_v7.mjs` 的产出路径相对 CWD**（`analysis/line_vis/_accept_v7.txt`、`out_v7/`）⇒ **必须从仓库根运行**，
-  否则写进嵌套目录并读到旧文件（本次因此误读一次验收数据）。
+- 「仅主线条」`lineSmoothProcessor.ts`（**现为 V7 中轴重建**）：四参数 = 平滑力度 / 曲率平滑(radius) / 宽度平滑(flattenRadius,默认0关) /
+  不透明度平滑(opacityRadius,默认250)；加新参数必须同步 **10 处**（接口、转发、`defaultSmartEdgeSmoothParams`、面板状态/加载/保存+依赖/复位/转发/SLIDER_DRAG_CONFIGS/分派 case/UI 行/handler）。
+  ⚠️ **两条保墨铁律**（缺一则逐遍墨量单向漂移）：① 密度源用横截面**保墨平均** `mp`，绝不用峰值 `ap`；
+  ② 未覆盖像素的密度抛光必须**掩码归一** `bodyBlur = blur(alpha·m)/blur(m)`，绝不用 `max(alpha, blur·scale)`。
+  ⚠️ ⑧「首要不伤害」护栏阈值 `0.35` **不可放松**；新代码**禁用 `Math.hypot`**（target es5 无、且不被 TS 转译）⇒ 用 `Math.sqrt(x*x+y*y)`。
+  ⚠️ 宽度拉平两条量纲铁律：去趋势通道**必须平行于轴**；中轴重分配量**必须封顶为 |Δ|**。
+- ⚠️ **构建不做类型检查 ⇒ 像素算法的参数/转发缺陷只会静默失效**（改完必须端到端跑一遍台架）。
+- 台架均在 `analysis/line_vis/`（`accept_v7.mjs`/`perf_v7.mjs`/`verify_flatten.mjs`/`repro_hf_edge.mjs`…）：
+  ⚠️ **`accept_v7.mjs` 产出路径相对 CWD** ⇒ **必须从仓库根运行**，否则写进嵌套目录并读到旧文件（曾误读一次验收数据）。
+- ⚠️ 改完必须同时报「回归 diff vs 旧版」与「作用量 vs 原图」；判「不该动的笔画有没有被动」看**墨迹外沿（alpha≥32）位移**，不是字节差。
 
 ## 守护进程
-- C#/.NET8 daemon（native/HotkeyDaemon/Program.cs）：WH_KEYBOARD_LL 独立线程，钩子线程严禁阻塞 I/O，
-  焦点闸门 IsPhotoshopForeground 否则放行。WS 127.0.0.1:18923。冻结三形态与 ps1 七步见技能
-  windows-keyboard-device-reset；改 ps1 后同步 dist/。`shell.openPath` 受 manifest 扩展名白名单管控。
+- C#/.NET8 daemon（`native/HotkeyDaemon/Program.cs`）：WH_KEYBOARD_LL 独立线程，钩子线程严禁阻塞 I/O，
+  焦点闸门 `IsPhotoshopForeground` 否则放行。WS 127.0.0.1:18923。冻结三形态与 ps1 七步见技能
+  `windows-keyboard-device-reset`；改 ps1 后同步 dist/。`shell.openPath` 受 manifest 扩展名白名单管控。

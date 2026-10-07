@@ -199,7 +199,10 @@ html, body {
   pointer-events: none;
 }
 
-/* 通用自定义滑块色标 */
+/* 通用自定义滑块色标
+   ⚠️ 2026-10-07：颜色由硬编码 rgb(255,255,255) 改为 var(--control-handle-color) ——
+      亮色主题（light / lightest）下白圆点压在浅灰轨道上几乎看不见（用户反馈可读性差）。
+      令牌规则：深主题白、亮主题近黑（定义见 theme.ts）。 */
 .range-slider-thumb {
   position: absolute;
   top: 50%;
@@ -208,7 +211,8 @@ html, body {
   margin-top: -6px;
   margin-left: -6px;
   border-radius: 50%;
-  background-color: rgb(255, 255, 255);
+  -webkit-border-radius: 50%;
+  background-color: var(--control-handle-color);
   box-sizing: border-box;
   pointer-events: none;
 }
@@ -259,7 +263,9 @@ html, body {
   box-sizing: border-box;
   transition: background-color 0.2s ease, opacity 0.2s ease;
 }
-/* 圆点：12px 白点。开启时移到右端：left = 胶囊宽 33 − 圆点 12 − 内边距 2 = 19 */
+/* 圆点：12px 实心点。⚠️ 2026-10-07 由硬编码 rgb(255,255,255) 改为 var(--control-handle-color)
+   —— 亮色主题下白手柄压在浅色胶囊上几乎不可见（用户反馈可读性差）。
+   开启时移到右端：left = 胶囊宽 33 − 圆点 12 − 内边距 2 = 19 */
 .toggle-switch-knob {
   position: absolute;
   left: 2px;
@@ -269,7 +275,7 @@ html, body {
   margin-top: -6px;
   border-radius: 50%;
   -webkit-border-radius: 50%;
-  background-color: rgb(255, 255, 255);
+  background-color: var(--control-handle-color);
   box-sizing: border-box;
   pointer-events: none;
   z-index: 1;
@@ -296,12 +302,21 @@ html, body {
   background-color: var(--disabled-color);
 }
 
-/* 通用数字输入框容器 */
+/* 通用数字输入框容器
+   🔴 2026-10-07 必须给**固定宽度**（用户反馈「单位符号的容器宽度没统一」）：
+      本元素只声明了 height、**没声明 width** ⇒ 宽度由内容（数字位数）撑开：
+      `0` 时窄、`100` 时宽 ⇒ 同一列里每行的输入框宽度都不同，
+      后面的 `.num-unit`（%）自然跟着左右漂移，视觉上「单位符号没对齐」。
+      UXP 的 input[type=number] 还自带 spinner 占位，位数不同占位也不同 ⇒ 漂移更明显。
+   ⚠️ 宽度必须与内部 input 的 width（32px）+ 容器左右 border（1px×2）严格对齐：
+      34px = 1 + 32 + 1，input 正好填满裁剪区，不会出现内侧空隙。
+   ⚠️ 统一改这里即可覆盖全插件 29 处调用点（grep 确认无修饰类变体）。 */
 .num-input-row {
   display: flex;
   align-items: center;
-  flex-shrink: 0; 
-  height: 32px;          
+  flex-shrink: 0;
+  height: 32px;
+  width: 34px;          /* = 左右 border 1px + input 32px；固定宽 ⇒ 单位符号纵向对齐 */
   padding: 0;
   box-sizing: border-box;
   border: 1px solid var(--border-color);
@@ -311,11 +326,14 @@ html, body {
   overflow: hidden;
 }
 
-/* 通用数字输入框本体：始终在 .num-input-row 裁剪容器内（去边框避免「框里框」）。 */
+/* 通用数字输入框本体：始终在 .num-input-row 裁剪容器内（去边框避免「框里框」）。
+   ⚠️ 2026-10-07 宽度改 100%（填满 .num-input-row 的固定 34px）：
+      原 `width: 32px` 是配合「容器宽度由内容撑开」的旧写法；
+      容器固定宽后必须让 input 填满，否则数字会在 34px 盒里偏左、右侧留白。 */
 .num-input-row input {
   display: flex;
   align-items: center;
-  width: 32px;
+  width: 100%;
   height: 24px;
   box-sizing: border-box;
   background-color: var(--dropdown-bg-color);
@@ -333,19 +351,50 @@ html, body {
   -webkit-appearance: none;
 }
 
+/* text 型变体（渐变面板的 #RRGGBB 六位色值，LicenseDialog 走自己的 .license-input-wrap 不在此列）。
+   ⚠️ 2026-10-07：.num-input-row 已固定 34px，此处必须**同步固定 62px**（1+60+1），
+      否则 60px 的 input 会被 34px 容器裁掉右侧 2/3（overflow:hidden）。
+   ⚠️ 用显式修饰类 `.num-input-row-wide`，**不要写 `:has(input[type=text])`** ——
+      UXP 不支持 :has()、静默失效（项目铁律），必须由 TSX 挂类名。 */
 .num-input-row input[type="text"] {
   width: 60px;
 }
+.num-input-row-wide {
+  width: 62px;
+}
 
-/* 通用单位符号 */
+/* 通用单位符号
+   ⚠️ 2026-10-07 加**定宽槽位**（用户反馈「单位符号的容器宽度没统一」）：
+      `%` / `px` / `°` 字符宽度不同 ⇒ 单位符号自身宽度不一致，
+      即使输入框已定宽，单位符号的**右缘**仍会随字符左右漂移。
+      给固定宽度 + 右对齐 ⇒ 所有行的单位符号占据同一个槽位、纵向成一条直线。
+
+   ⚠️ 2026-10-07 第二次调整（用户反馈「容器太宽，整个滑块的重心看起来偏左」）：
+      本元素是行内最右侧的兄弟（.row-between 是 space-between，它被推到内容盒右缘），
+      槽位每宽 1px 就从中间的滑块轨道 (.slider-track, flex:1) 抠掉 1px ⇒
+      槽位过宽 = 轨道被压短 + 右侧留一截空白 = 整行视觉重心左移。两处一起改才有效：
+        ① margin-left 4px → 0（与 .num-input-row 紧贴，不再额外左推输入框）；
+        ② 宽度 20px → 16px（16px 是三种单位里最宽的 "px" 的完整字身宽上限：
+           Source Han Sans 13px 下 p≈0.573em + x≈0.513em ≈ 14.1px，
+           留 ~2px 余量；再窄 "px" 就会溢出槽位、压回输入框上。比原 20px 让出 4px 给滑块轨道）。
+      配合 justify-content: flex-end（文字紧贴槽位右缘）——
+      原居中写法会在符号右侧留 (20−8)/2 = 6px 死白，那正是「重心偏左」的另一半来源。
+   ⚠️ `align-items: right`（原写法）不是合法值、会被忽略 ⇒ 视觉上文字未真正垂直居中，
+      这里改用 center（配合行容器的 align-items:center 保持一致）。
+   ⚠️ 宽度必须按「最宽单位符号 px」算，不能按 `%` 单独算窄（% 的墨迹只有 8px）——
+      否则不透明度面板的羽化、描边面板的宽度两行会溢出压回输入框。
+   ⚠️ 渐变面板的 `#` 走 .num-unit-hash，必须把这里的三个值全部钉回去（见 gradient.css）。 */
 .num-unit {
-  margin-left: 4px;
+  margin-left: 0;
+  width: 16px;
+  flex: 0 0 16px;
   font-size: 13px;
   color: var(--text-color);
   white-space: nowrap;
-  flex: 0 0 auto;
+  text-align: right;
   display: flex;
-  align-items: right;
+  align-items: center;
+  justify-content: flex-end;
 }
 
 /* 通用行容器space-between（.row-between-close 为紧凑下边距版，基础样式两者共享） */
@@ -557,6 +606,19 @@ html, body {
 /* 通用图标填充颜色 */
 .icon-fill {
   fill: var(--text-color);
+}
+
+/* 通用文字按钮（.text-button）：字面即按钮，无盒背景、无边框、无内边距。
+   ⚠️ 与 .icon-button 同一套三态约定（常态 → hover → 按下，逐档加深），
+      但改的是 `color` 而非 `.icon-fill`（本类没有图标）。
+   ⚠️ hover 取 `--primary-color` 而**不是** `--hover-icon`：后者在深色主题下偏紫，
+      与同为「文字可点」的 `.radio-option-label-link` 不一致（用户要求两者同款）。
+   ⚠️ 本类只提供「可点」语义 + 三态配色，**不带字盒宽度**——通常与 .label-4 等标签类复合：
+      标签类给字盒宽度与右外边距，本类补光标与状态色。
+      hover 靠**源码顺序**取胜（本类位于 .label-* 之后，同为单类选择器、特异性相同）。
+   ⚠️ 基础态只写光标；hover/按下规则收口在文件底部「通用状态样式」区。 */
+.text-button {
+  cursor: pointer;
 }
 
 /* —— 通用圆形录制按钮 ——
@@ -823,132 +885,232 @@ html, body {
   max-height: 1400px;
 }
 
-/* 通用 radio 样式*/
-sp-radio-group {
+
+/* ===== 自绘单选组（RadioGroup.tsx）=====
+   2026-10-07 起替代原生 sp-radio-group。三处使用：父面板紧凑模式的「填充模式」、
+   描边子面板「位置」，以及两列场景（颜色面板「计算方法」）另行加 .radio-pair 类即可复用。
+
+   为什么弃用原生（详见 RadioGroup.tsx 头注）：
+     ① 内部排版由宿主实现，flex-wrap:nowrap / space-between 全都拦不住它折行；
+     ② 自带 15px 水平内边距，三项 45px 被吞进盒内，想不局促就只能砍标签宽度。
+
+   尺寸（对齐项目内既有度量）：
+     - 圆点 12px（与滑块同基线），圆角写显式 6px（= 高的一半），
+       **不写 999px**——UXP 下未按高度一半解析，实测渲染成尖角纺锤。
+     - 圆点↔文字间距 6px（UXP 无 flex gap，用 margin）。
+     - 文字 font-size 13px，与 .label-2..6 同档；宽度不写死（交给 flex）。 */
+.radio-group {
+  display: flex;
+  align-items: center;
   width: 100%;
 }
-
-/* 通用 radio 选项 */
-sp-radio {
+.radio-option {
   display: flex;
-  align-items: center;
-  height: 32px;
-}
-
-/* 两列 radio 布局 */
-.panel-section sp-radio-group,
-.border-panel-section sp-radio-group {
-  display: flex;
-  align-items: center;
-  flex-direction: row;
-  justify-content: space-around;
-  width: 100%;
-}
-
-/* 子面板多列 radio 选项布局 */
-.panel-section sp-radio,
-.border-panel-section sp-radio {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex: 1;
-}
-
-/* 两列/三列 radio 的文字标签与圆点中心的垂直对齐：
-   标签基线天然比圆点中心低，用 margin-top 统一微调（4px → 2px，2026-09-10 再上移 2px）。
-   （radio-group-vertical 垂直分组不处理；齿轮行的标签包在 .row-end 里，一并覆盖） */
-sp-radio-group:not(.radio-group-vertical) > sp-radio > span,
-sp-radio-group:not(.radio-group-vertical) > sp-radio > .row-end > span {
-  margin-top: 2px;
-}
-
-.panel-section sp-radio-group.radio-group-vertical,
-.border-panel-section sp-radio-group.radio-group-vertical {
-  flex-direction: column;
-}
-
-/* 「两列 radio 精确贴边」布局（颜色面板可用宽 230px / 图案面板可用宽 210px，两档通用）：
-   左选项保持文档流自然宽度——圆点落在分区 10px 内边距处，即距容器左缘 10px；
-   右选项绝对定位贴容器右缘——盒宽收缩为内容宽，文字右缘即距容器右缘 10px。
-   不依赖选项文字宽度与面板宽度，无需再按宽度手调中缝 margin。 */
-/* ⚠️ 必须带上父级 .panel-section / .border-panel-section 提升权重：
-   上面的通用规则 .panel-section sp-radio-group 权重 (0,1,1) 会把
-   justify-content:space-around 反压回来（单类选择器只有 (0,1,0)，改不动）。 */
-.panel-section sp-radio-group.radio-pair-230,
-.panel-section sp-radio-group.radio-pair-210,
-.border-panel-section sp-radio-group.radio-pair-230,
-.border-panel-section sp-radio-group.radio-pair-210 {
-  position: relative;
-  /* 右选项绝对定位后不占文档流，通用规则继承来的 space-around 会把
-     剩下的左选项推到中间（整体偏右）——改回起点对齐，圆点贴左缘 10px */
+  /* ⚠️ 必须显式写 justify-content：UXP 的 flex 容器**隐式默认是 `center`**（不是 web 的
+     flex-start）⇒ 凡「盒宽大于内容宽」的版式都会把内容居中，看起来像被加了左右 padding。
+     `.radio-vertical` 早先就是踩到这个（选项盒宽 100%、内容被居中）才补的 flex-start，
+     这里提到基础规则，全版式一致。 */
   justify-content: flex-start;
+  align-items: center;
+  cursor: pointer;
+  box-sizing: border-box;
 }
-.radio-pair-230 > sp-radio:first-child,
-.radio-pair-210 > sp-radio:first-child {
-  flex: 0 0 auto;
-  margin-right: 0;
+/* 未选中：空心圆（仅描边）。⚠️ 不用 background:transparent —— UXP 下会渲染成纯黑。 */
+.radio-option-dot {
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  -webkit-border-radius: 6px;
+  background-color: var(--entry-bg);
+  box-sizing: border-box;
+  flex-shrink: 0;
 }
-.radio-pair-230 > sp-radio:last-child,
-.radio-pair-210 > sp-radio:last-child {
-  position: absolute;
-  top: 0;
-  right: 0;
-  flex: 0 0 auto;
-  margin: 0;
+/* 选中：圆心填 --radio-checked-color，**不加任何描边**。
+   ⚠️ 2026-10-07 用户要求「与滑块手柄统一」⇒ 去掉原先的 `border-color: var(--primary-color)`。
+      滑块圆点/开关手柄都没有描边，radio 若留一圈蓝环就会与它们不像一家人；
+      且亮色主题下蓝环 + 近黑圆心会显得脏。选中与否靠「实心 vs 空心」区分即可。
+   ⚠️ inset 留白用 --bg-color（随主题深浅反转），不用 --entry-bg。 */
+.radio-option-checked .radio-option-dot {
+  background-color: var(--radio-checked-color);
+  box-shadow: inset 0 0 0 2px var(--bg-color);
+}
+.radio-option-label {
+  font-size: 13px;
+  color: var(--text-color);
+  white-space: nowrap;
+  margin-left: 6px;
+}
+/* 紧凑模式下文字兼作子面板入口：加手型光标 + hover 主色，语义上可点。 */
+.radio-option-label-link {
+  cursor: pointer;
+}
+.radio-option-label-link:hover {
+  color: var(--primary-color);
+}
+/* 禁用态：与 .row-between.disabled 同款（灰字 + 半透明），光标禁用。 */
+.radio-option-disabled {
+  cursor: not-allowed;
+}
+.radio-option-disabled .radio-option-label {
+  color: var(--disabled-color);
+}
+.radio-option-disabled .radio-option-dot {
+  opacity: 0.5;
 }
 
-.panel-section sp-radio-group.radio-group-vertical sp-radio,
-.border-panel-section sp-radio-group.radio-group-vertical sp-radio {
-  flex: 0 0 auto;
-  width: 100%;
-}
+/* ===== 三种版式容器 =====
+   ⚠️ 2026-10-07 用户实测反馈「三列没占满整行容器」：原先只写了
+   `justify-content: space-between` 而**没写 width**，作为块级元素在 UXP 下未被拉伸到
+   父内容盒 ⇒ 三列挤在左侧一小块。
+   ⇒ 三种版式一律显式 `width: 100%` + `box-sizing: border-box`，不再依赖隐式拉伸。
+   （注：当时的 `.radio-trio` 中转包裹层已删除，三列容器现在直接是 `.panel-section` 的子项。）
 
-/* 三列 radio 组（描边子面板「位置」与父面板紧凑模式下的「填充模式」共用）。
-   间距不写死：选项按内容宽、不伸缩（flex:0 0 auto），首项贴左、末项贴右，
-   剩余宽度由 sp-radio-group 的 justify-content: space-between 在两两之间等分 ——
-   纵向滚动条出现/消失时内容盒 230↔220，三列自动重新均分，恒铺满整行且不换行
-   （原先手写 25px / 12px 的固定值两头不讨好：阔时太散、窄时溢出换行）。
-   左右各内缩 10px（由 .radio-trio 的 padding 提供），与上方 .row-between / .row-grid 行对齐。
-   ⚠️ flex-wrap: nowrap 必须写在 sp-radio-group 上 —— 它才是 flex 容器；
-      写在外层 .radio-trio（块级 div）上是空操作。
-   ⚠️ 缩进用 padding、不要用 transform：transform 不参与布局，末项会被推出内容盒右缘。
-   ⚠️ 双类写法提升特异性：`.panel-section sp-radio-group` 的 space-around 与
-      `.panel-section sp-radio` 的 flex:1 都在同档，只靠源码顺序险胜不可靠。
-   （2026-09-10 从 stroke.css 的 .position-radio-group 收口为通用类，两处必须完全一致。） */
-.panel-section .radio-trio sp-radio-group,
-.border-panel-section .radio-trio sp-radio-group {
+  ⚠️⚠️ 2026-10-07 用户曾反馈「三列/两列的首末项与容器左右边缘有 15~30px 内缩，要改为 0」。
+      ⚠️ **那次反馈本身是伪影**：本规则当时已被下方的「游离文本」缺陷整体吃掉（见下「真根因」段），
+      根本没挂到元素上 ⇒ 用户量到的是「未生效版式」的几何，据此推出的
+      「保留等分 + 逐项覆盖格内对齐」处方**也是错的**（第 5 轮已推翻，勿再采用）。
+
+      ✅ 第 5 轮定稿（浏览器实测复核）：
+         **项按内容宽 `flex: 0 0 auto`（不收缩） + 容器 `justify-content: space-between`**
+         · 首项左缘 = 容器左缘、末项右缘 = 容器右缘 ⇒ 内缩天然为 0，**不需要任何逐项对齐覆盖**；
+         · 项间两段空白自动均分，三项等宽时中项**严格**落在容器中心。
+         · 实测（`dist/common.css`，容器 230px @ x=20）：
+             内部 @x=20 w=44 ｜ 居中 @x=113 w=44 ｜ 外部 @x=206 w=44。
+      ⚠️ 三列/两列的项都**不写 margin**：任何左右 margin 都会破坏「贴边」。
+      ⚠️ **不要引入 `flex: 1 1 0` 等分**：那会让项盒宽于内容、内容默认靠格左缘，
+        首末项反而内缩，还得再补逐项对齐绕远路（理由详见下方「项」规则）。
+
+   🔴🔴🔴 2026-10-07 第 5 轮定位的**真根因**（本条是整件事的关键，改这里之前务必读完）：
+      上面这几段文案在第 2 轮补写「去掉等分」时**多写了一个注释结束符**，
+      导致紧跟着的「三列（.radio-trio-group）……」两行跑出了注释块**外面**，
+      而它们后面紧跟的正是本规则的 `{`。
+      ⇒ 解析器把这两行中文当成**选择器**，于是 `{ display:flex; flex-direction:row; … }`
+        整块成了那个垃圾选择器的声明块 ⇒ **本规则被整体丢弃，选择器从未命中过元素**。
+      ⇒ 现象：`.radio-trio-group` 退化为普通块级 div，三个 `.radio-option` 各占一行，
+        即「三列变三行」；而**紧邻的 `.radio-pair-group` 规则结构完好 ⇒ 两列正常** ——
+        「三列坏 / 两列好」这个诡异差异来自这里，**与项数无关、也不是 UXP 的锅**。
+      ⇒ 也解释了第 1~4 轮所有 CSS 修复为什么「明明改了却一点效果都没有」：
+        规则压根没挂上去，怎么调声明都是空转。
+      ⚠️ 纪律：编辑中文注释时**不要误写注释结束符**（本文里连它的字面两字符形式
+        都不能出现，否则注释会在这里提前结束）；每次改完必须核对「注释块外是否
+        残留游离文本」—— 游离文本会被当成选择器，静默吃掉紧随其后的整条规则。
+
+   三列（.radio-trio-group）：项按内容宽（`flex: 0 0 auto`）+ 容器 `space-between`
+   ⇒ 首项左缘、末项右缘各贴容器边缘（内缩 0），中项精确居中，项间空白自动均分。 */
+.panel-section .radio-trio-group,
+.border-panel-section .radio-trio-group {
+  display: flex;
+  /* ⚠️ flex-direction 必须显式写 row：UXP 对「未指定方向的 flex 容器 + 宽度塌缩场景」
+     的默认行为不可靠，实测会退化成 column（即三列竖排）。显式声明消除歧义。 */
+  flex-direction: row;
+  align-items: center;
+  /* ⚠️ 必须显式写：UXP 的 flex 容器**隐式默认是 `center`**（不是 web 的 flex-start），
+     不写会把三列整体挤到容器中间。本属性负责「首末项贴边 + 中项居中」的全部工作
+     （项按内容宽摆放 ⇒ 三段空白均分后，首项左缘=容器左缘、末项右缘=容器右缘、
+       三项等宽时中项严格落在容器中心）。 */
   justify-content: space-between;
   flex-wrap: nowrap;
-}
-.panel-section .radio-trio sp-radio,
-.border-panel-section .radio-trio sp-radio {
-  flex: 0 0 auto;
-}
-/* 三列恒同行的关键：把单项宽度压到「三项之和 < 内容盒」。
-   ⚠️ 不要再指望 `flex-wrap:nowrap` 防换行 —— 实测那一行就是会换：截图量到单项外框
-      76px（内边距 15 + 圆点 14 + 圆点↔标签 11 + 标签盒 26 + 标签自带 10px 右外边距），
-      3 × 76 = 228 > 内容盒 210（无滚动条）/ 200（有滚动条）→ 第三列必然折行。
-      sp-radio-group 内部的均分/换行由宿主实现，外层怎么写都拦不住，
-      所以只能从这里把每项砍窄：宽度 26 → 22、去掉标签多余的 10px 右外边距
-      → 单项 ≈ 62px、三项 ≈ 186px，两档宽度下都留有余量（窄档余 14px）。
-      标签文字 26px 比盒宽多 4px，溢出部分落在本项尾部留白里，不会顶到下一列的圆点。 */
-.radio-trio sp-radio .label-2 {
-  width: 22px;
-  margin-right: 0;
+  width: 100%;
+  /* ⚠️ align-self: stretch —— 父容器 .panel-section 的 align-items 是 stretch，
+     但一旦任何一层出现 margin/auto，stretch 在 UXP 下会失效。
+     显式声明保证本容器始终撑满父内容盒宽度（这是三列能排在一行的前提）。 */
+  align-self: stretch;
+  box-sizing: border-box;
 }
 
-/* 三列组容器：左右内缩 10px + 与 .row-between 同档的 10px 纵向外边距。
-   紧凑填充模式下的那个三列是分区首元素，用修饰档把纵向margin归零
-   （间距由 `.row-grid + .panel-section` 的 7px 提供，不能再叠 10px）。 */
-.radio-trio {
-  padding: 0 10px;
+/* 两列（.radio-pair-group）：同样按内容宽 + space-between，首末项贴容器两端。
+   用于颜色面板「计算方法」（原 .radio-pair-230）、图案面板「填充方式」
+   （原 .radio-pair-210）—— 原来两档宽度各写一套类名、靠绝对定位硬贴边，
+   自绘后统一成同一套写法，**不再需要按面板宽度分别手调**。 */
+.panel-section .radio-pair-group,
+.border-panel-section .radio-pair-group {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: nowrap;
+  width: 100%;
+  align-self: stretch;
   box-sizing: border-box;
-  margin: 10px auto;
 }
-/* ⚠️ 双类写法：单类与 .radio-trio 同档，只靠源码顺序险胜不可靠。 */
-.radio-trio.radio-trio-flush {
-  margin: 0 auto;
+/* 三列/两列的项：**按内容宽、不收缩**（`flex: 0 0 auto`）。
+   ⚠️ 「首末贴边 + 中项居中」是**容器 `space-between` + 内容宽项**共同完成的：
+      项盒宽 = 内容宽 ⇒ 首项左缘即容器左缘、末项右缘即容器右缘（内缩 0）；
+      两段空白均分后，三项等宽（内部/居中/外部、纯色/图案/渐变都是两字）时
+      中项**严格**落在容器中心。
+   ⚠️ 不要改成 `flex: 1 1 0` 等分：项盒会宽于内容，内容默认靠格子左缘
+      ⇒ 首末项反而内缩，还得再补 per-item 对齐把首末项拉回边缘（绕远路）。
+   ⚠️ 项上不写 margin：任何左右 margin 都会让「贴边」失效。 */
+.panel-section .radio-trio-group > .radio-option,
+.border-panel-section .radio-trio-group > .radio-option,
+.panel-section .radio-pair-group > .radio-option,
+.border-panel-section .radio-pair-group > .radio-option {
+  flex: 0 0 auto;
 }
+
+/* 纵向（.radio-vertical）：父面板普通模式的填充模式 —— 每行一个选项，
+   右侧可挂齿轮按钮（原 sp-radio + .row-end 的替代）。
+   ⚠️⚠️⚠️ **本条已改错四次**（用户四次反馈：偏大→更小→没变→偏大→仍偏大）。
+      完整教训链见下方，**改这里前务必读完再动手**。
+
+      【核心教训】用户参照的量既不是「视觉白缝」也不是「行步进 pitch」，
+      而是**肉眼看到的三行整体疏密**。前三次我分别按白缝、pitch、行盒=内容高推导，
+      全部被否。**现在改用「先量出用户认可的目标截图的 pitch，再 1:1 复刻」的做法**，
+      不再从公式反推。
+
+      🔴 2026-10-07 第 5 轮修复：本行原本在此处多写了一个注释结束符，使下面「【基准实测】…」
+         整段跑到注释外，并吃掉紧随其后的 `.panel-section .radio-vertical` 规则（同一 bug，见
+         `.radio-trio-group` 处的完整记录）。现合并为一整段注释，规则恢复生效。
+
+      【基准实测】父面板「选区改造」滑块行（截图量算，缩放 1.5）：
+        行盒 32.67px（.num-input-row 满高）+ 行距 9.33px ⇒ pitch 42.00px
+      【实测演进】用户反馈          行盒  行距  pitch
+        第一轮「太宽，要收窄」      32     0    32     （原状）
+        第二轮「反而变小了」        24     0    24
+        第三轮「原封不动」          27     0    27.55  ← 24→27 只差 3px，肉眼无感
+        第四轮「偏大」              33    10    43
+        第五轮「仍偏大，减 5px」    28    10    38
+        本轮  「继续减 5px」        23    10    33     ← 行盒再降 5px
+      ⚠️ 本轮按用户字面要求**再减 5px**：行盒 28 → 23，pitch 38 → 33px。
+         行距 10px **保持不变**（它是与滑块行 9.33px 对齐的那一档，不动）。
+      ⚠️ 若下次反馈仍偏大/偏小，**直接量当前截图的 pitch 与目标差值**，
+         只修行盒高（行距恒 10px），不要再重推整条公式。
+      ⚠️ 行盒必须 ≥ 齿轮墨迹 16.67px（否则齿轮会溢出或挤压），当前 23px 仍有余量，
+         但已接近下限 —— 再减就需改齿轮图标尺寸，或把 10px 行距让出来。
+      ⚠️ **行距必须用 `margin-top` 且排除末项**：
+         .radio-vertical 是 flex 列容器 ⇒ 子项外边距**不折叠**，末项若带 margin 会额外
+         撑大「渐变行 → divider」的距离，破坏已校准好的对称关系。
+         用相邻兄弟 `.radio-option + .radio-option` 天然只命中第 2 项起、末项自动排除
+         （UXP 对 `:has()` 静默失效、`:not()` 支持性未验证，`+` 是本仓已验证的可靠写法）。 */
+.panel-section .radio-vertical,
+.border-panel-section .radio-vertical {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  box-sizing: border-box;
+}
+.radio-vertical .radio-option {
+  display: flex;
+  align-items: center;
+  height: 23px;
+  flex-shrink: 0;
+  /* 文字与右侧齿轮分居两端：label 靠左、齿轮靠右（还原原 .row-end 的右对齐效果） */
+  justify-content: flex-start;
+}
+/* 行距：前两项各加 10px 上外边距 ⇒ 相邻两项 pitch = 行盒 + 10（与滑块行 9.33px 同档）。
+   ⚠️ 必须用相邻兄弟选择器 `+` 而非 `:not(:last-child)`，理由见上方注释。 */
+.radio-vertical .radio-option + .radio-option {
+  margin-top: 10px;
+}
+/* 纵向版式里文字不缩紧，让齿轮自然被推到行尾（.radio-option 的 justify-content
+   加上 label 的 flex:1 把剩余空间吃掉，齿轮自然落到右缘）。 */
+.radio-vertical .radio-option-label {
+  flex: 1 1 auto;
+}
+
+
 
 /* 行内右侧控件间距：row-between / row-center / row-end 内，开关与 checkbox 左侧留 4px。
    ⚠️ 2026-10-06：选择器由 sp-switch 改为 .toggle-switch（自绘开关全量替换原生控件）。
@@ -1114,10 +1276,16 @@ sp-radio-group:not(.radio-group-vertical) > sp-radio > .row-end > span {
   background-color: rgba(128, 128, 128, 0.5);
 }
 
-/* 通用积极状态点（带同色微光，与文字通知的积极色一致） */
+/* 通用积极状态点（带同色微光，与文字通知的积极色一致）
+   ⚠️ 2026-10-07 辉光色由固定的 `rgba(46,204,113,0.6)`（亮绿）改为 `currentColor` 驱动：
+     那层外圈辉光是**半透明浅绿**，在 light / lightest 的浅灰底上会把状态灯整体「冲淡」成灰绿色
+     （用户反馈"绿色有点灰暗"，截图里那颗点看着发灰不跳）。
+     改为用**加深后的 --notify-ok-fg**（currentColor 即 fill 色，亮色主题已调深为 rgb(15,109,52)）
+     配更实的不透明度 ⇒ 亮色主题下形成真正的深绿点 + 深绿光晕，反差明显提升。
+     ⚠️ 深色主题下 currentColor = rgb(74,222,128)，比原色更亮 ⇒ 光晕反而更明显，无副作用。 */
 .indicator-ok {
   background-color: var(--notify-ok-fg);
-  box-shadow: 0 0 4px rgba(46, 204, 113, 0.6);
+  box-shadow: 0 0 4px currentColor;
 }
 
 /* 通用警告状态点 */
@@ -1156,7 +1324,7 @@ sp-radio-group:not(.radio-group-vertical) > sp-radio > .row-end > span {
   fill: var(--notify-ok-fg);
 }
 .indicator-icon-lg.indicator-icon-ok {
-  filter: drop-shadow(0 0 4px rgba(46, 204, 113, 0.6));
+  filter: drop-shadow(0 0 4px currentColor);
 }
 
 /* 通用预设区总容器 */
@@ -1549,8 +1717,23 @@ body.visibility-panel-open #pixeladjustment .pixeladjustment-root > .panel {
 .icon-button:active .icon-fill {
   fill: var(--active-icon);
 }
+
 .icon-button:active {
   transform: scale(0.94);
+}
+
+/* 通用文字按钮 hover / 按下。
+   ⚠️ hover 与 `.radio-option-label-link:hover` 同色（--primary-color），保证
+      「纯色/图案/渐变」标签与「描边设置」按钮观感一致（用户要求）。
+   ⚠️ 两条都是 (0,2,0)（伪类算一个类），**特异性高于** `.label-4` 的 (0,1,0)，
+      所以不依赖源码顺序即可覆盖标签类的 `color`。
+   ⚠️ 按下必须再用 --active-icon 压一档：按下前基本已处于 hover 态，
+      若与 hover 同色则完全看不出按压反馈（同 .icon-button 的处理）。 */
+.text-button:hover {
+  color: var(--primary-color);
+}
+.text-button:active {
+  color: var(--active-icon);
 }
 
 /* 通用圆形录制按钮 hover（与齿轮图标统一：icon 变蓝，背景无变化） */

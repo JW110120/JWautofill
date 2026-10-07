@@ -1,3 +1,38 @@
 /* 颜色设置面板样式
    ⚠️ 本面板样式已收口到 common.css（单一来源）。
    「计算方法」两列 radio 的贴边布局同样在 common.css（.radio-pair-230 / .radio-pair-210）。 */
+
+/* 「计算方法」二级标题与下方两列 radio 的间距（2026-10-07 用户反馈「太近」）。
+   ⚠️ 为什么不用改通用 .subpanel-title-2 的 margin-bottom（10px）：
+      该类被三个子面板共用（渐变的「颜色渐变」等），放大它会连带改变那些地方的版式；
+      而本面板的「标题 + 紧随其后的控件」是**唯一**贴得太近的一处 ⇒ 只在这里局部放大。
+   ⚠️ 15px = .panel-section 的分区下边距档位，与「标题 → 内容」应有的层级感同档；
+      再大就会把「计算方法」推得离上方分割线过近（上方只有 divider 的 10px）。 */
+.subpanel-color .subpanel-title-2 {
+  margin-bottom: 15px;
+}
+
+/* 「计算方法」分区与上方 divider 的间距 = 「不透明度抖动」行与 divider 的间距
+   （2026-10-07 用户两次反馈「偏小」：实测上 25.07px / 下 14.91px）。
+   ⚠️🔴 **上一轮我用了 `.subpanel-color > .panel-section:nth-of-type(2)`，规则完全没生效**
+      —— `:nth-of-type` 统计的是**同类型元素（全部 div）在父节点内的序号**，
+      而 `.subpanel-color` 的子节点依次是：
+        `.subpanel-title-1`(div，**第 1 个 div**) → `.panel-section`(div，**第 2 个 div**)
+        → `.divider` → `.panel-section`(div，第 4 个 div)。
+      ⇒ 第 2 个 div 是**滑块区**，不是「计算方法」区！我把 margin-top 加错了元素，
+      界面毫无变化，我却误判成「已改但偏小」继续加码 —— **教训：`:nth-of-type` 在混合标签名
+      的容器里绝不能用来数「第几个特定 class」，必须改用 class 组合或相邻兄弟关系。**
+   ⚠️ 改用「divider 之后紧邻的 panel-section」这一结构关系（UXP 支持相邻兄弟选择器，
+      本仓已在 compact 模式大量使用，见 app.css 的 `.divider + .panel-section`）：
+        `.divider + .panel-section` 精确命中「计算方法」区，且与前一个区是什么无关。
+   ⚠️ 折叠推导（.panel 是块容器 ⇒ 相邻兄弟外边距折叠取 max）：
+        【上方】不透明度抖动行底 → divider 顶
+                = 行内 .row-between 的 margin-bottom 10 + max(section 15, divider 10) = **25px**
+                （实测 25.07 ✓）
+        【下方】divider 底 → 计算方法标题顶
+                = max(divider 下 10, section margin-top X) + .subpanel-title-2 的 margin-top 0
+        X ≤ 10 时折叠成 10；X ≥ 10 时折叠成 X ⇒ **只有 X = 25 能得到 25**（与上方严格相等）。
+   ⚠️ 特异性 (0,2,0) 高于通用 `.panel-section` 的 (0,1,0)，稳定压过，不依赖源码顺序。 */
+.subpanel-color .divider + .panel-section {
+  margin-top: 25px;
+}

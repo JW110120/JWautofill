@@ -19,6 +19,9 @@ export class MenuManager {
   private static appShowVisibilityPanelCallback: (() => void) | null = null;
   // 是否已正式激活（试用不算）：决定「注销激活状态」菜单项能否点击
   private static appLicenseActive: boolean = false;
+  // 「隐藏/显示分区」菜单项当前是否可点（子面板打开期间置灰）。
+  // ⚠️ 只同步 `enabled`，**绝不 removeAt/insertAt**——那会损坏整个菜单（见 setAppVisibilityItemEnabled）。
+  private static appVisibilityItemEnabled: boolean = true;
 
   constructor() {
     // Constructor
@@ -120,9 +123,66 @@ export class MenuManager {
   }
 
   /**
+   * 子面板打开期间「隐藏/显示分区」项的可用状态。
+   *
+   * 用途：4 个子面板（纯色/图案/渐变/描边）内部**没有分区**，子面板打开期间
+   * 这个入口点了只会打开一个「父面板分区」的浮窗，语义对不上 ⇒ 期间置灰。
+   *
+   * 🔴 **为什么用 enabled 而不是 removeAt/insertAt 真删（2026-10-07 血泪）**：
+   *  「删除再插入」看起来更贴合「隐藏」二字，但 UXP 的 `menuItems.removeAt()`
+   *  在 PS 上**与宿主内部状态不同步**（Adobe 官方论坛已确认：removeAt 后项在宿主
+   *  内存里仍然残留、getItem 返回 null，无法再按同 id 插入）。
+   *  本项目实测后果：反复开关子面板后，菜单项**越来越少**——每次 insertAt
+   *  插回的位置都被宿主算到既有项之前，累积挤压掉其它菜单项。
+   *  `enabled` 是官方文档保证「立即生效」的**幂等**属性，反复设置无副作用、
+   *  不改变菜单结构 ⇒ 绝不会有累积损坏。
+   * ⚠️ 代价：该行仍占位、呈灰态（不是完全消失）。这是「不破坏菜单」的自觉取舍：
+   *    真删会损坏整个菜单，两者取其轻。
+   * ⚠️ 仍然全程 try/catch 且失败只警告：菜单属于宿主 UI，动它绝不能连带影响面板功能。
+   */
+  public static setAppVisibilityItemEnabled(enabled: boolean): void {
+    if (enabled === this.appVisibilityItemEnabled) return;
+    try {
+      const ep: any = (require("uxp") as any).entrypoints;
+      const panel: any = ep && typeof ep.getPanel === "function"
+        ? ep.getPanel("com.listen2me.jwautofill")
+        : null;
+      const menuItems: any = panel && (panel as any).menuItems;
+      if (!menuItems) return;
+
+      // 逐个按 id 前缀找（历史遗留可能已有多份残留项，全部同步状态）
+      if (typeof menuItems.getItemAt === "function") {
+        const n = menuItems.size as number;
+        for (let i = 0; i < n; i++) {
+          const it: any = menuItems.getItemAt(i);
+          if (it && this.normalizeMenuId(it.id) === "appShowVisibilityPanel") {
+            it.enabled = !!enabled;
+          }
+        }
+      }
+      this.appVisibilityItemEnabled = !!enabled;
+    } catch (err) {
+      console.warn("切换「隐藏/显示分区」菜单项状态失败:", err);
+    }
+  }
+
+  /**
+   * 去掉动态菜单项 id 上的 `#轮次` 后缀，使分派逻辑与轮次无关。
+   * ⚠️ 这是 2026-10-07 那版 removeAt/insertAt 方案留下的兼容处理：
+   *   若用户在跑过旧版本后重载插件，宿主侧可能仍残留带 `#` 后缀的项，
+   *   保留此方法让它们也能被正确识别与分派（属无害冗余，不再新增带后缀的 id）。
+   */
+  private static normalizeMenuId(id: string): string {
+    if (typeof id !== "string") return "";
+    const hash = id.indexOf("#");
+    return hash >= 0 ? id.slice(0, hash) : id;
+  }
+
+  /**
    * 处理主面板（App）菜单项点击事件
    */
-  private static handleAppFlyout(id: string) {
+  private static handleAppFlyout(rawId: string) {
+    const id = this.normalizeMenuId(rawId);
     console.log(`App Flyout: ${id}`);
     switch (id) {
       case "resetLicense":

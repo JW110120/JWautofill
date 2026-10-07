@@ -3,7 +3,15 @@ import { BlendMode } from '../constants/blendModes';
 import { BLEND_MODE_OPTIONS } from '../constants/blendModeOptions';
 import RangeSlider from './RangeSlider';
 import Select from './Select';
+import RadioGroup, { RadioOption } from './RadioGroup';
 import { calcDragValue } from '../utils/dragSensitivity';
+
+/** 描边位置三列选项：模块级常量，保持引用稳定（RadioGroup 已 React.memo）。 */
+const STROKE_POSITION_OPTIONS: RadioOption[] = [
+  { value: 'inside', label: '内部' },
+  { value: 'center', label: '居中' },
+  { value: 'outside', label: '外部' },
+];
 
 interface StrokeSettingProps {
   isOpen: boolean;
@@ -139,23 +147,23 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         <div className="divider"></div>
 
           <div className="panel-section">
-            <div className="radio-trio">
-            <sp-radio-group 
-              selected={position}
-              name="strokePosition"
-              onChange={(e) => onPositionChange(e.target.value as any)}
-            >
-              <sp-radio value="inside" className="">
-                <span className="label-2">内部</span>
-              </sp-radio>
-              <sp-radio value="center" className="">
-                <span className="label-2">居中</span>
-              </sp-radio>
-              <sp-radio value="outside" className="">
-                <span className="label-2">外部</span>
-              </sp-radio>
-            </sp-radio-group>
-            </div>
+            {/* 🔴 2026-10-07 移除 .radio-trio 包裹层（本轮换方法的修复）。
+                原结构是 `<div className="radio-trio"><RadioGroup className="radio-trio-group"/></div>`
+                —— 两层嵌套 div。.radio-trio 唯一职责是提供纵向 margin，
+                但它同时是 .panel-section（flex 列容器）的子项，
+                **而 margin 会干扰 stretch**：实测三列在该结构下始终竖排，
+                且内容右缘只到 52.5px（容器本应 230px），加 `margin:0`、`flex:0 0 auto`
+                均无效 —— 说明 UXP 在「flex 列容器 > 带 margin 的 div > flex 行容器」
+                这层嵌套上算不出正确宽度。
+                ⇒ 直接让 .radio-trio-group 成为 .panel-section 的子项，少一层就少一个风险点。
+                ⚠️ 纵向行距改由本文件 CSS 给 .radio-trio-group 补 padding 承担（见 stroke.css），
+                   不再依赖被删掉的包裹层。 */}
+            <RadioGroup
+                value={position}
+                onChange={(e) => onPositionChange(e.target.value as 'inside' | 'center' | 'outside')}
+                options={STROKE_POSITION_OPTIONS}
+                className="radio-trio-group"
+            />
           </div>
         
         <div className="divider"></div>
