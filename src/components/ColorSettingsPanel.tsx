@@ -3,7 +3,7 @@ import { app, action } from 'photoshop';
 import { ColorSettings } from '../types/state';
 import RangeSlider from './RangeSlider';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
-import { debouncePsProbe } from '../utils/psProbe';
+import { debouncePsProbe, markPsBusyForEvent, runWhenIdle } from '../utils/psProbe';
 import { calcDragValue } from '../utils/dragSensitivity';
 import RadioGroup, { RadioOption } from './RadioGroup';
 
@@ -175,9 +175,13 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
             }
         };
 
-        // 面板打开时检测一次
+        // 面板打开时检测一次。
+        // ⚠️ 必须走 runWhenIdle：本 effect 的依赖里含 propIsQuickMaskMode，
+        // 而父面板正是在「文档切换探测完成」后回写该值 ⇒ 切文档后这里会被连带触发，
+        // 若直接 get 就又撞回忙碌窗口。runWhenIdle 会顺延到空闲后再读。
         if (isOpen) {
-            checkMaskModes();
+            const probe = runWhenIdle(() => { checkMaskModes(); }, 300, 12);
+            probe();
         }
     }, [isOpen, propIsQuickMaskMode]);
 
@@ -203,7 +207,11 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
         // 探测防抖：PS 命令（如合并图层）执行中途派发的事件立刻 get 会撞忙碌窗口，
         // 弹出宿主报错框「命令"获取"当前不可用」，延迟到事件风暴平息后再探测
         const maskProbe = debouncePsProbe(() => { checkMaskModes(); });
-        const handleNotification = () => {
+        const handleNotification = (eventName?: any, descriptor?: any) => {
+            // ⚠️ 事件到达瞬间打忙碌标记（回调内唯一允许做的事）：checkMaskModes 会读
+            // app.activeDocument / doc.activeLayers并发多次 batchPlay get。
+            // 切文档的忙碌窗口比普通事件长得多，由 markPsBusyForEvent 按事件类型裁定。
+            markPsBusyForEvent(typeof eventName === 'string' ? eventName : '', descriptor);
             maskProbe();
         };
 

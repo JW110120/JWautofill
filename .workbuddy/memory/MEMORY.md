@@ -112,10 +112,13 @@
 - ⚠️ **通知回调内禁止任何同步 DOM 读取**（`app.activeDocument`/`doc.layers`/`layer.name` 每次读都发 `get`）：
   PS 的 set/delete/make 通知在命令**中途**派发，此刻读文档必撞忙碌窗口 → 宿主弹「命令"获取"当前不可用」。
   **该原生弹框绕过 JS try/catch 与 `_options.dialogOptions`，唯一有效防护是「不发 get」** ⇒ 防护必须在读取动作**之前**（加在 try/catch 之后无效）。
-  统一走 `utils/psProbe.ts`（`debouncePsProbe` / `markPsBusy`+`isPsBusy`），静默期 **300ms**。
-  三条反直觉细则：① `markPsBusy` 只在**事件到达瞬间**打，**不可**放探测函数体内（否则窗口自我延长、永远等不到空闲）；
-  ② 被守卫函数与调用方**不可**互相 `markPsBusy`（= 自锁、功能永不执行）；③ `const` 探测器必须定义在监听回调**之前**（TDZ）。
+  统一走 `utils/psProbe.ts`（`debouncePsProbe` / `markPsBusyForEvent`+`isPsBusy`），静默期 **300ms**。
+  四条反直觉细则：① `markPsBusyForEvent` 只在**事件到达瞬间**打，**不可**放探测函数体内（否则窗口自我延长、永远等不到空闲）；
+  ② 被守卫函数与调用方**不可**互相 `markPsBusy`（= 自锁、功能永不执行）；③ `const` 探测器必须定义在监听回调**之前**（TDZ）；
+  ④ **固定等待不够**：切文档是长命令（忙碌窗口 ~1.2s），`debouncePsProbe` 与各定时器都必须**在回调里再查 `isPsBusy()` 并顺延**，
+  且**任何无条件 `setInterval` 读文档/get 的轮询都必须 `if (isPsBusy()) return`** —— 这是「切文档必弹框」的首要缺口。
   **「节流(`if(timer) return`)」会丢弃后续事件、让刷新落在忙碌期 ⇒ 必须真防抖。**
+  ⚠️ 细节与「切文档 = 长命令」「UXP 无 currentDocumentChanged」「同名文档互切须按 id 判定」见 `refs/uxp-api-layer.md`。
 - ⚠️ **GradientPicker 两套插值函数不可合并**（`interpolate*AtPosition` vs `...ForPreset`）：算法同构但入参类型不同，
   且**透明度正则的 alpha 组语义不同**（ForPreset 版 alpha **可选**、兼容无 alpha 的 `rgb()`；组件版 alpha **必需**、不匹配回退 1）——
   合并会改掉 `rgb()` 兜底行为。四个已全部提到模块级。

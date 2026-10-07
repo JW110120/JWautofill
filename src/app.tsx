@@ -36,7 +36,7 @@ import {
 } from './hotkey/HotkeyBridge';
 import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/MainToggleBus';
 import { setFocusMode } from './utils/FocusModeBus';
-import { debouncePsProbe } from './utils/psProbe';
+import { debouncePsProbe, isPsBusy, markPsBusyForEvent, psBusyRemain, runWhenIdle } from './utils/psProbe';
 import ToggleSwitch from './components/ToggleSwitch';
 import RadioGroup, { RadioOption } from './components/RadioGroup';
 import { helpTexts } from './constants/helpTexts';
@@ -121,6 +121,9 @@ class App extends React.Component<AppProps, AppState> {
     private isInQuickMask = false;
     private isInSingleColorChannel = false;
     private selectionChangeListener: any = null;
+    // 选区填充的忙碌顺延（见 handleSelectionChange 顶部的闸门说明）
+    private selectionRetryTimer: any = null;
+    private selectionBusyDeferrals = 0;
     // 面板状态持久化门闩：componentDidMount 里 PanelStateManager.initialize 异步读取完成之前，
     // MainToggleBus 轮询（250ms）等来源就可能 setState isEnabled 触发 componentDidUpdate 的
     // 「有变更即保存」逻辑——用默认值整体覆盖 panel-state.json，把用户已保存的
@@ -375,6 +378,9 @@ class App extends React.Component<AppProps, AppState> {
             onShowVisibilityPanel: () => { this.openVisibilityPanel(); }
         });
         this.selectionChangeListener = (eventName, descriptor) => {
+            // ⚠️ 事件到达瞬间先打忙碌标记（回调内唯一允许做的事，不碰 DOM）：
+            // 后面 handleSelectionChange 会读 app.activeDocument / 选区，必须知道 PS 正忙。
+            markPsBusyForEvent(eventName, descriptor);
             // 检查是否是选区相关的set事件
             if (descriptor && descriptor._target && Array.isArray(descriptor._target)) {
                 const isSelectionEvent = descriptor._target.some(target => 
@@ -393,7 +399,11 @@ class App extends React.Component<AppProps, AppState> {
         document.addEventListener('mouseup', this.handleMouseUp);
         
         // 初始化状态检测
-        await this.checkMaskModes();
+        // ⚠️ 走 runWhenIdle（有限顺延）：插件挂载瞬间 PS 正在创建面板与初始化文档，
+        // 是忙碌峰值；此处直接 get 会弹宿主「命令"获取"当前不可用」。
+        //顺延到空闲后再读；上限 12 次保证不会永远不执行。
+        const initialMaskProbe = runWhenIdle(() => { void this.checkMaskModes(); }, 300, 12);
+        initialMaskProbe();
         // 快速蒙版巡检（PS 不派发通知，只能轮询兜底；按展开/可见状态启停）
         this.syncQuickMaskWatch();
         
@@ -589,6 +599,10 @@ class App extends React.Component<AppProps, AppState> {
         }
         if (this.selectionChangeListener) {
             action.removeNotificationListener(['set'], this.selectionChangeListener);
+        }
+        if (this.selectionRetryTimer) {
+            clearTimeout(this.selectionRetryTimer);
+            this.selectionRetryTimer = null;
         }
         action.removeNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], this.handleNotification);
         document.removeEventListener('mousemove', this.handleMouseMove);
@@ -901,6 +915,25 @@ class App extends React.Component<AppProps, AppState> {
         if (event && event.feather) {
             return;
         }
+
+        // ⚠️ 忙碌闸门（2026-10-07 修「切换活动文档时弹命令"获取"当前不可用」）：
+        // 本函数由 PS 通知回调直接调用，而回调是在命令执行【中途】派发的 ——
+        // 切文档时 PS 要重建文档窗口/图层面板，忙碌窗口可达 1s 以上（见 psProbe 的
+        // BUSY_AFTER_DOC_SWITCH_MS）。此处第一个动作就是读 app.activeDocument，
+        // 此刻发 get 必被宿主拒绝并弹出原生报错框（该框绕过 try/catch 与 dialogOptions）。
+        // ⇒ 忙碌时**顺延**到空闲后重入，而不是硬闯；顺延有上限，避免极端情况下永不执行。
+        if (isPsBusy() && this.selectionBusyDeferrals < 10) {
+            this.selectionBusyDeferrals++;
+            if (this.selectionRetryTimer) clearTimeout(this.selectionRetryTimer);
+            // ⚠️ 事件对象要一并带过去：否则 feather 事件的「跳过」语义会丢失，
+            // 可能对无意义的羽化事件也跑一次填充。
+            this.selectionRetryTimer = setTimeout(() => {
+                this.selectionRetryTimer = null;
+                void this.handleSelectionChange(event);
+            }, Math.max(120, psBusyRemain()));
+            return;
+        }
+        this.selectionBusyDeferrals = 0;
 
         // 【同步锁】检查是否正在处理；必须在任何 await 之前完成，避免竞态
         if (this.isFilling) {
@@ -1568,6 +1601,9 @@ class App extends React.Component<AppProps, AppState> {
         if (!this.state.isEnabled || !this.state.autoOffOnOtherTool) return;
         // 并发守卫；上一次查询若卡在模态状态里迟迟不返回，超过 3s 就放行，避免巡检永久停摆
         if (this.toolWatchBusy && Date.now() - this.toolWatchBusySince < 3000) return;
+        // ⚠️ 忙碌闸门：readCurrentToolId 会发 batchPlay get（application.tool）。
+        // 本轮询与用户操作完全异步，切文档期间落进忙碌窗口就会弹宿主原生报错框。
+        if (isPsBusy()) return;
         this.toolWatchBusy = true;
         this.toolWatchBusySince = Date.now();
         try {
@@ -1596,9 +1632,14 @@ class App extends React.Component<AppProps, AppState> {
         }
     }
 
-    // 只读一个布尔属性，不进 executeAsModal；单次失败（撞忙碌窗口）不影响下一轮。
+    // 只读一个布尔属性，不进executeAsModal；单次失败（撞忙碌窗口）不影响下一轮。
     private async pollQuickMask() {
         if (this.quickMaskBusy) return;
+        // ⚠️ 忙碌闸门：本函数读 app.activeDocument + doc.quickMaskMode（两次宿主 get），
+        // 且是**无条件 300ms 轮询**——完全与用户的操作异步。切文档这类长命令期间
+        // 轮询必然有机会落进忙碌窗口 → 宿主弹「易修: 命令"获取"当前不可用」。
+        // 忙碌时跳过本轮，等下一次轮询（快速蒙版状态不要求实时）。
+        if (isPsBusy()) return;
         this.quickMaskBusy = true;
         try {
             const doc = app.activeDocument;
@@ -1633,7 +1674,14 @@ class App extends React.Component<AppProps, AppState> {
         if (!this.state.isEnabled || !this.state.autoOffOnOtherTool) return;
         if (eventName !== 'select' && eventName !== 'set') return;
         let tool = eventName === 'select' ? this.resolveSelectedTool(descriptor) : null;
+        // ⚠️ 忙碌闸门：本函数由通知回调直接调用，而 descriptor 里带工具/笔刷预设引用时
+        // 需要 readCurrentToolId() 发一次 batchPlay get。通知是在命令执行【中途】派发，
+        // 此刻发 get 会被宿主拒绝并弹原生报错框（绕过 try/catch）。
+        // 这里直接放弃本轮：同样的判定由 pollToolChange（300ms 轮询兜底）覆盖，
+        // 且它的前置条件与本函数完全一致（isEnabled + autoOffOnOtherTool），
+        // 因此不存在「放弃就永远不判定」的缺口。
         if (!tool && this.isToolPresetDescriptor(descriptor)) {
+            if (isPsBusy()) return;
             tool = await this.readCurrentToolId();
         }
         if (!tool) return;
@@ -1664,6 +1712,9 @@ class App extends React.Component<AppProps, AppState> {
 
     // 处理Photoshop通知事件
     async handleNotification(eventName?: string, descriptor?: any) {
+        // ⚠️ 事件到达瞬间打忙碌标记（切文档用更长的窗口，见 psProbe）。
+        // 必须在这里打、且不能打到探测函数体内，否则窗口自我延长成自锁。
+        markPsBusyForEvent(eventName, descriptor);
         // 状态探测走防抖（不能立刻 get：PS 命令执行中途派发的事件会撞忙碌窗口）
         this.maskProbeDebounced();
 

@@ -36,7 +36,7 @@ import Select from '../components/Select';
 import ToggleSwitch from '../components/ToggleSwitch';
 import { helpTexts } from '../constants/helpTexts';
 import { useLabelDrag } from '../utils/useLabelDrag';
-import { debouncePsProbe, markPsBusy } from '../utils/psProbe';
+import { debouncePsProbe, markPsBusyForEvent, isPsBusy, psBusyRemain, runWhenIdle } from '../utils/psProbe';
 import {
   getLayerSnapshot,
   invalidateLayerSnapshot,
@@ -598,7 +598,11 @@ useEffect(() => {
 }, [licenseChecked, isLicensed, isTrial]);
 
 useEffect(() => {
-  refreshLineReferenceOptions();
+  // ⚠️ 走 runWhenIdle（有限顺延）：挂载瞬间 PS 正在创建面板/初始化文档，是忙碌峰值，
+  // 此时 refreshLineReferenceOptions 会遍历整棵图层树（≈5N 次同步 get），
+  // 撞上忙碌窗口就是宿主「命令"获取"当前不可用」弹框。
+  const probe = runWhenIdle(() => { refreshLineReferenceOptions(); }, 300, 12);
+  probe();
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, []);
 
@@ -608,16 +612,27 @@ useEffect(() => {
 
 useEffect(() => {
     let timer: any = 0;
+    let busyDeferrals = 0;
     // 等事件静默后再读：连续快速删除时事件不断，末尾静默期才真正代表 PS 空闲。
     // ⚠️ 此处不要调 markPsBusy —— 本函数会被探测自身回调再次调用，
     // 自我延长忙碌窗口会让后续探测一直等不到空闲。忙碌标记统一在
     // handleNotification（事件到达瞬间）打。
     const scheduleRefresh = (docOverride?: any) => {
         if (timer) clearTimeout(timer);
-        timer = setTimeout(() => {
-            timer = 0;
+        busyDeferrals = 0;   // 新事件重新起算顺延次数
+        const run = () => {
+            // ⚠️ 忙碌感知：固定 300ms 对「切文档」这种长命令不够（PS 重建文档窗口
+            // /图层面板可达1s+）。仍忙碌就顺延到窗口结束，最多顺延 12 次。
+            // ⚠️ 只判断不打标记（打标记会自我延长成自锁）。
+            if (isPsBusy() && busyDeferrals < 12) {
+                busyDeferrals++;
+                timer = setTimeout(() => { timer = 0; run(); }, Math.max(PROBE_IDLE_MS, psBusyRemain()));
+                return;
+            }
+            busyDeferrals = 0;
             refreshLineReferenceOptions(docOverride);
-        }, PROBE_IDLE_MS);
+        };
+        timer = setTimeout(() => { timer = 0; run(); }, PROBE_IDLE_MS);
     };
     // ⚠️ 回调内【禁止】任何同步 DOM 读取（app.activeDocument / doc.layers /
     // 图层树快照都会逐层向宿主发 get）。PS 的通知在命令执行【中途】
@@ -640,11 +655,12 @@ useEffect(() => {
             scheduleRefresh();
         }
     }, PROBE_IDLE_MS);
-    const handleNotification = (eventName?: any) => {
+    const handleNotification = (eventName?: any, descriptor?: any) => {
         const evt = typeof eventName === 'string' ? eventName : '';
         // make/delete 必然改变图层结构，直接排一次刷新；
         // 其余事件（set/select/clearEvent）才需要读签名对比，且同样推迟到空闲后。
-        markPsBusy(PROBE_IDLE_MS);
+        // ⚠️ 切文档（select + _ref:'document'）用更长的忙碌窗口，见 psProbe。
+        markPsBusyForEvent(evt, descriptor);
         // 纯内存标记（零 IPC），可在通知回调里安全调用。
         invalidateLayerSnapshot();
         scheduleRefresh();
@@ -1048,12 +1064,18 @@ useEffect(() => {
         refreshMaskSyncAndReconcile();
       }
     });
-    refreshMaskSyncOptions();
+    // ⚠️ 走 runWhenIdle（有限顺延）：refreshMaskSyncOptions 会构建整棵文件树
+    // （全树遍历 + 2×(N/40) 次 batchPlay）。插件挂载瞬间 PS 正忙，硬闯就是
+    // 宿主「命令"获取"当前不可用」弹框。
+    const bootProbe = runWhenIdle(() => {
+      refreshMaskSyncOptions();
+      // 首次挂载/插件重载：任务引用可能是旧会话的 layerId，按路径重解析一次
+      maskSyncEngine.reconcileTasks().then(changed => {
+        if (changed) setMaskSyncTasks(maskSyncEngine.getTasks());
+      });
+    }, 300, 12);
+    bootProbe();
     setMaskSyncTasks(maskSyncEngine.getTasks());
-    // 首次挂载/插件重载：任务引用可能是旧会话的 layerId，按路径重解析一次
-    maskSyncEngine.reconcileTasks().then(changed => {
-      if (changed) setMaskSyncTasks(maskSyncEngine.getTasks());
-    });
   };
   boot();
   return () => {
@@ -1075,11 +1097,12 @@ useEffect(() => {
     // 本回调也可能被 reconcileTasks 的二次触发链调到，自我延长会让他方探测一直等不到空闲。
     refreshMaskSyncAndReconcile();
   }, PROBE_IDLE_MS);
-  const handleMaskSyncNotif = (eventName?: any) => {
+  const handleMaskSyncNotif = (eventName?: any, descriptor?: any) => {
     const evt = typeof eventName === 'string' ? eventName : '';
     if (evt === 'make' || evt === 'delete' || evt === 'set' || evt === 'rename' || evt === 'move') {
       // 收到事件即标记忙碌：即便防抖窗口内又来新事件，守卫也知道 PS 尚未空闲
-      markPsBusy(PROBE_IDLE_MS);
+      // ⚠️ 切文档时长窗口更长，见 psProbe.markPsBusyForEvent。
+      markPsBusyForEvent(evt, descriptor);
       // 纯内存标记（零 IPC），可在通知回调里安全调用。
       invalidateLayerSnapshot();
       scheduleRefresh();

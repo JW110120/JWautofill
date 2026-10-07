@@ -1,4 +1,53 @@
 /**
+ * 「普通」PS 通知（set/select/make/delete…）之后的忙碌窗口时长。
+ */
+export const BUSY_AFTER_EVENT_MS = 300;
+
+/**
+ * 切换活动文档之后的忙碌窗口时长（毫秒）。
+ *
+ * 为什么必须比普通事件长：切文档不是一次瞬时命令 —— PS 要重建文档窗口、
+ * 图层面板、历史状态，大文档（PSD/PSB、上千图层）明显更久，300ms 远远不够。
+ * 期间任何 `app.activeDocument` / `doc.layers` / batchPlay get 都会被宿主拒绝，
+ * 弹出「易修: 命令"获取"当前不可用」。这里取1200ms 覆盖切文档的实际耗时。
+ */
+export const BUSY_AFTER_DOC_SWITCH_MS = 1200;
+
+/**
+ * 判断一个通知是否是「切换了活动文档」。
+ *
+ * PS 在两个已打开文档间切换时派发 `select`，descriptor 形如
+ * `{ _obj:'select', _target:[{ _ref:'document', … }] }`；而选区/图层选择
+ * 的 `_ref` 分别是 `channel` / `layer`。因此「事件是 select」+「target 里有
+ * document」两个条件即可精确命中，**纯对象判断、不碰 DOM**（通知回调内唯一
+ * 允许做的事）。
+ *
+ * ⚠️ 为什么要限定 select：`set` 事件的 `_target` 里也可能出现 document 引用
+ *（改文档级属性），若不限定事件名会把普通 set 也误判成切文档 ⇒ 平白多等 900ms。
+ *
+ * ⚠️ 依据：Adobe 官方 Action/Core 事件表里都**没有** `currentDocumentChanged`
+ *（那是 ExtendScript Generator 的网络事件，UXP 用不了），UXP 只能靠
+ * `select` + descriptor 识别切文档 —— 官方论坛结论一致：「在已打开文档之间
+ * 切换会派发 select，descriptor._target[0]._ref === 'document'」。
+ */
+export function isDocSwitchDescriptor(eventName?: string, descriptor?: any): boolean {
+    if (eventName !== 'select') return false;
+    const target = descriptor?._target;
+    if (!Array.isArray(target)) return false;
+    return target.some((t: any) => t && t._ref === 'document');
+}
+
+/**
+ * 通知到达瞬间打忙碌标记（**唯一允许在通知回调内做的重活之外的动作**）。
+ *
+ * ⚠️ 必须在事件到达时调用，不能放到探测函数体内 —— 否则忙碌窗口会被探测自身
+ * 反复延长，形成「永远等不到空闲」的自锁。
+ */
+export function markPsBusyForEvent(eventName?: string, descriptor?: any): void {
+    markPsBusy(isDocSwitchDescriptor(eventName, descriptor) ? BUSY_AFTER_DOC_SWITCH_MS : BUSY_AFTER_EVENT_MS);
+}
+
+/**
  * PS 事件触发的「状态探测」防抖器。
  *
  * 根因：Photoshop 的通知（set/select/make/delete 等）是在命令执行【中途】派发的——
@@ -10,22 +59,44 @@
  *
  * 对策：事件触发的探测统一走此防抖——默认 200ms 内无新事件才真正执行，
  * 此时 PS 命令已结束、忙碌窗口已过，get 正常返回，弹框不再出现。
+ *
+ * ⚠️ 忙碌感知（2026-10-07 修「切换活动文档时弹『命令"获取"当前不可用』）：
+ * 固定等待对「切文档」这种长命令不够 —— 200ms 后PS 可能仍在切换。
+ * 因此到期后先问 `isPsBusy()`：仍忙碌就顺延到忙碌窗口结束再执行，
+ * 最多顺延 maxBusyDeferrals 次（防止忙碌持续时探测永不执行）。
  */
 export function debouncePsProbe<A extends any[]>(
     fn: (...args: A) => any,
-    wait = 200
+    wait = 200,
+    maxBusyDeferrals = 12
 ): ((...args: A) => void) & { cancel: () => void } {
     let timer: any = 0;
+    let busyDeferrals = 0;
+    const run = (args: A) => {
+        //仍处于忙碌窗口（切文档 / 长命令）⇒ 顺延，绝不硬闯。
+        // ⚠️ 这里只判断、不打标记（打标记会自我延长成自锁）。
+        if (isPsBusy() && busyDeferrals < maxBusyDeferrals) {
+            busyDeferrals++;
+            timer = setTimeout(() => {
+                timer = 0;
+                run(args);
+            }, Math.max(wait, psBusyRemain()));
+            return;
+        }
+        busyDeferrals = 0;
+        try {
+            const r = fn(...args);
+            if (r && typeof r.catch === 'function') r.catch(() => { });
+        } catch {
+            // 忙碌窗口内的探测直接放弃，等下一次事件重新调度
+        }
+    };
     const wrapped = (...args: A) => {
         if (timer) clearTimeout(timer);
+        busyDeferrals = 0;   // 新事件重新起算顺延次数
         timer = setTimeout(() => {
             timer = 0;
-            try {
-                const r = fn(...args);
-                if (r && typeof r.catch === 'function') r.catch(() => { });
-            } catch {
-                // 忙碌窗口内的探测直接放弃，等下一次事件重新调度
-            }
+            run(args);
         }, wait);
     };
     (wrapped as any).cancel = () => {

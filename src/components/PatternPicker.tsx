@@ -4,7 +4,7 @@ import { FileIcon, DeleteIcon } from '../styles/Icons';
 import IconButton from '../components/IconButton';
 import { action, core, imaging, app } from 'photoshop';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
-import { debouncePsProbe } from '../utils/psProbe';
+import { debouncePsProbe, markPsBusyForEvent, runWhenIdle } from '../utils/psProbe';
 import { PresetManager } from '../utils/PresetManager';
 import { calcDragValue } from '../utils/dragSensitivity';
 import RangeSlider from './RangeSlider';
@@ -477,7 +477,10 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
     // 面板打开时检测一次，包含isClearMode检查
     useEffect(() => {
         if (isOpen) {
-            checkMaskModes();
+            // ⚠️ 走 runWhenIdle：切文档后父面板回写 quickMask 相关 prop 会连带触发本
+            // effect，直接 get 会撞回忙碌窗口。顺延到空闲后再读。
+            const probe = runWhenIdle(() => { checkMaskModes(); }, 300, 12);
+            probe();
         }
     }, [isOpen, isClearMode]);
 
@@ -644,7 +647,11 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
         // 探测防抖：PS 命令（如合并图层）执行中途派发的事件立刻 get 会撞忙碌窗口，
         // 弹出宿主报错框「命令"获取"当前不可用」，延迟到事件风暴平息后再探测
         const maskProbe = debouncePsProbe(() => { checkMaskModes(); });
-        const handleNotification = () => {
+        const handleNotification = (eventName?: any, descriptor?: any) => {
+            // ⚠️ 事件到达瞬间打忙碌标记（回调内唯一允许做的事）：checkMaskModes 会读
+            // app.activeDocument / doc.activeLayers 并发多次 batchPlay get。
+            // 切文档的忙碌窗口比普通事件长得多，由 markPsBusyForEvent 按事件类型裁定。
+            markPsBusyForEvent(typeof eventName === 'string' ? eventName : '', descriptor);
             maskProbe();
         };
 

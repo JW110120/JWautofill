@@ -1,5 +1,5 @@
 import { app, action, core, imaging } from 'photoshop';
-import { isPsBusy, markPsBusy } from './psProbe';
+import { isPsBusy, markPsBusy, markPsBusyForEvent, runWhenIdle } from './psProbe';
 import { getLayerSnapshot, invalidateLayerSnapshot, LayerSnapshotEntry } from './layerTreeSnapshot';
 
 /**
@@ -159,8 +159,11 @@ const SYNC_MIN_INTERVAL_MS = 150; // 同一任务两次同步的最小间隔（�
  * 该原生弹框绕过 JS try/catch 与 _options.dialogOptions，**唯一有效防护是不发 get**。
  * 快速连续删除时事件密集（delete + set 交替），200ms 静默期常被后续事件打断，
  * 探测会反复落在忙碌窗口内；这里取 300ms 覆盖「连续操作后停手」的实际节奏。
+ *
+ * ⚠️ 常量已迁到 `psProbe.ts`（BUSY_AFTER_EVENT_MS / BUSY_AFTER_DOC_SWITCH_MS），
+ *    由 markPsBusyForEvent 按事件类型统一裁定——切文档的窗口比普通事件长得多，
+ *    在这里写死单一值就是「切文档必弹框」的根因。此处不再重复定义。
  */
-const BUSY_GUARD_MS = 300;
 /** 轮询自身发起读取前，先为自己预留的忙碌窗口。 */
 const POLL_BUSY_GUARD_MS = 300;
 
@@ -181,9 +184,15 @@ export class MaskSyncEngine {
   // ---------------- 运行时状态 ----------------
   private refCount = 0;
   private listeners: Set<Listener> = new Set();
-  private lastNotifiedDocKey: string | null = null;
+  private lastNotifiedDocId: number | null = null;
   private currentDocKey = '';
   private currentDocName = '';
+  /**
+   * 当前活动文档的 id（切换判定用）。
+   * ⚠️ 与 currentDocKey（文档名，持久化 key）职责不同：不同文档可能同名，
+   *    判定「是否切换了文档」必须看 id，否则同名文档互切会被漏判。
+   */
+  private currentDocId: number | null = null;
   private syncTimer: any = 0;
   private pollTimer: any = 0;
   private running = false;
@@ -202,14 +211,20 @@ export class MaskSyncEngine {
     if (this.running) return;
     this.running = true;
     await this.loadPersisted();
-    this.refreshActiveDoc();
+    // ⚠️ refreshActiveDoc 会读 app.activeDocument + doc.name（两次宿主 get），
+    // 而 init 由面板挂载时调用 —— 那一刻 PS 正在创建面板与初始化文档，是忙碌峰值，
+    // 硬闯就会弹宿主「命令"获取"当前不可用」。顺延到空闲后再读（有限次，保证必执行）。
+    runWhenIdle(() => {
+      this.refreshActiveDoc();
+      this.notify();
+      console.log(
+        `[蒙版同步] 初始化完成 ${MASK_SYNC_ENGINE_VERSION}：文档=${this.currentDocName || '（无）'}，` +
+        `任务数=${(this.persisted[this.currentDocKey] || []).length}`
+      );
+    }, 300, 12)();
     this.registerNotification();
     this.startPolling();
     this.notify();
-    console.log(
-      `[蒙版同步] 初始化完成 ${MASK_SYNC_ENGINE_VERSION}：文档=${this.currentDocName || '（无）'}，` +
-      `任务数=${(this.persisted[this.currentDocKey] || []).length}`
-    );
   }
 
   /** 读取某任务最近一次同步状态（供 UI 展示）。 */
@@ -1087,17 +1102,27 @@ export class MaskSyncEngine {
   private refreshActiveDoc(): boolean {
     let docKey = '';
     let docName = '';
+    let docId: number | null = null;
     try {
       const d = app.activeDocument;
       if (d) {
         docKey = d.name || '';
         docName = d.name || '';
+        // ⚠️ 切换判定必须用 **文档 id**，不能只用名字：两个不同文档可能同名
+        // （例如从两个文件夹各打开一个 untitled.psd），用名字会把「切文档」
+        // 判成「没变」⇒ currentDocKey 不更新、任务列表与文件树仍指向旧文档。
+        // id 只用于判定与日志；持久化的 key仍是名字（保持既有存档兼容）。
+        docId = typeof d.id === 'number' ? d.id : null;
       }
     } catch {
       docKey = '';
       docName = '';
+      docId = null;
     }
-    if (docKey !== this.currentDocKey) {
+    // 首个文档（上次为空、本次有值）与真正的切换，都算docChanged。
+    const changed = this.currentDocId !== docId || docKey !== this.currentDocKey;
+    if (changed) {
+      this.currentDocId = docId;
       this.currentDocKey = docKey;
       this.currentDocName = docName;
       this.lastDocSignature = '';
@@ -1123,7 +1148,7 @@ export class MaskSyncEngine {
     }
   }
 
-  private handleNotification = (event?: any) => {
+  private handleNotification = (event?: any, descriptor?: any) => {
     try {
       // 节流打印事件（避免高频操作刷屏）
       const now = Date.now();
@@ -1138,11 +1163,14 @@ export class MaskSyncEngine {
       // 该弹框绕过 JS try/catch 与 dialogOptions，唯一有效防护是「不发 get」。
       // 故此处只做纯字符串判断（读事件名不碰文档），实际读取全部推迟到同步回调内。
       const evt = typeof event === 'string' ? event : (event as any)?.eventName || '';
-      // 标记 PS 忙碌，供引擎内部与其它面板的探测点自查后顺延
-      markPsBusy(BUSY_GUARD_MS);
-      // ⚠️ 纯内存操作（零 IPC），可在通知回调里安全调用：
+      // 标记 PS 忙碌，供引擎内部与其它面板的探测点自查后顺延。
+      // ⚠️ 切换活动文档（select + _ref:'document'）的忙碌窗口远长于普通事件，
+      //    统一由 markPsBusyForEvent 按事件类型裁定。
+      markPsBusyForEvent(evt, descriptor);
+      // 纯内存操作（零 IPC），可在通知回调里安全调用：
       // 打脏共享图层树快照，让下一次真正读取时重遍历。
-      // 旧实现是「每个消费者各自重遍历一遍」，同一事件会引发多次全树扫描。
+      // ⚠️ 切文档也必须打脏：快照缓存的是「上一份文档」的树，
+      //    切换后若不重遍历，线稿参考/蒙版同步的下拉会一直显示上一个文档的图层。
       invalidateLayerSnapshot();
       // make/delete 会改变图层结构，需要重建文件树上下文（重解析引用）
       if (evt === 'make' || evt === 'delete') {
@@ -1166,6 +1194,14 @@ export class MaskSyncEngine {
     if (this.syncTimer) clearTimeout(this.syncTimer);
     this.syncTimer = setTimeout(() => {
       this.syncTimer = 0;
+      // ⚠️ 忙碌闸门必须放在**定时器最开头**：下面 checkDocFirst 分支的
+      // refreshActiveDoc() 会读 app.activeDocument + doc.name（两次宿主 get），
+      // 而它不受 doTimedSync 的守卫保护。切文档时事件后 200ms PS 往往仍在切换，
+      // 无守卫地读就会弹「易修: 命令"获取"当前不可用」。忙碌则整轮顺延。
+      if (isPsBusy()) {
+        this.scheduleSync(SYNC_DEBOUNCE_MS, checkDocFirst);
+        return;
+      }
       // 先在空闲后检测文档切换（此处才允许读activeDocument）
       if (checkDocFirst) {
         let docChanged = false;
@@ -1268,10 +1304,10 @@ export class MaskSyncEngine {
       // 忙碌时顺延到下一轮而非硬闯 —— 兜底同步晚一轮无副作用（内容一致时本就不写入）。
       if (isPsBusy()) return;
       try {
-        const prevKey = this.currentDocKey;
-        this.refreshActiveDoc();
-        const keyChanged = prevKey !== this.currentDocKey;
-        if (keyChanged) {
+        // ⚠️ 用 refreshActiveDoc 的返回值判定切换（内部已按 id+名字双口径），
+        // 不要在外面自己比对 currentDocKey —— 同名文档互切会被漏判。
+        const docChanged = this.refreshActiveDoc();
+        if (docChanged) {
           this.lastDocSignature = ''; // 强制下次 reconcile
           this.notify(); // React 侧重新加载当前文档任务 + 刷新文件树
           this.scheduleSync(300);
@@ -1288,8 +1324,11 @@ export class MaskSyncEngine {
   }
 
   private notify(): void {
-    const docChanged = this.currentDocKey !== this.lastNotifiedDocKey;
-    this.lastNotifiedDocKey = this.currentDocKey;
+    // ⚠️ 用文档 id 判定 docChanged（与 refreshActiveDoc 同口径）：
+    // 同名文档互切时按名字比对会判成「没变」⇒ React侧不刷新文件树/任务列表，
+    // 面板继续显示上一个文档的图层。
+    const docChanged = this.currentDocId !== this.lastNotifiedDocId;
+    this.lastNotifiedDocId = this.currentDocId;
     const results = { ...this.lastSyncResults };
     this.listeners.forEach(fn => {
       try {
