@@ -178,6 +178,8 @@ class App extends React.Component<AppProps, AppState> {
     private docLatchLastOkAt = 0;
     /** 连续成功的**次数**（任一失败即清零）。见 DOC_LATCH_CONFIRM_COUNT。 */
     private docLatchOkStreak = 0;
+    /** 探测**连续失败**的次数（成功即清零）——驱动探测间隔的指数退避。 */
+    private docLatchProbeFailures = 0;
     // 面板状态持久化门闩：componentDidMount 里 PanelStateManager.initialize 异步读取完成之前，
     // MainToggleBus 轮询（250ms）等来源就可能 setState isEnabled 触发 componentDidUpdate 的
     // 「有变更即保存」逻辑——用默认值整体覆盖 panel-state.json，把用户已保存的
@@ -229,6 +231,17 @@ class App extends React.Component<AppProps, AppState> {
      * 相当于每 0.4s 问一次「好了吗」，既不会堆积请求，也能在就绪后迅速放行。
      */
     private static readonly DOC_LATCH_PROBE_MS = 400;
+    /**
+     * 闩锁探测的**指数退避**上限档位。
+     *
+     * 探测本身就是一次 `executeAsModal`（只拿锁不读数据）。固定 400ms 间隔在
+     * 「打开 400MB PSD 要几十秒」的场景下 = 几十次模态命令，UXP 会打内部警告
+     * 「Too many modal scope commands」（uxp-internal/ps-common.js，真机已复现 60 次）。
+     * 对策：探测连续失败时把间隔翻倍（400→800→1600→3200 封顶）；一旦某次成功
+     * 立即清零退避 —— 确认阶段（连续 3 次、间隔 ≤1200ms）回到 400ms 快速连测，
+     * 放行延迟几乎不受影响。
+     */
+    private static readonly DOC_LATCH_PROBE_MAX_SHIFT = 3;
 
     /**
      * 闩锁放行所需的**连续成功探测次数**。
@@ -1883,10 +1896,17 @@ class App extends React.Component<AppProps, AppState> {
             if (!free) {
                 // 宿主仍在自己的模态作用域里（打开 / 关闭 / 保存大文档尚未结束）
                 // ⇒ 续期闩锁：所有读取（含未走 psRead 的裸读）继续一起退避。
+                // 同时拉长下一次探测的间隔（指数退避，见 DOC_LATCH_PROBE_MAX_SHIFT）：
+                // 打开大文档动辄几十秒，固定 400ms 会打出几十次模态命令，
+                // 触发 UXP 内部警告「Too many modal scope commands」。
                 this.docLatchLastOkAt = 0;
                 this.docLatchOkStreak = 0;   // 失败即清零：成功必须**连续**
+                this.docLatchProbeFailures = Math.min(this.docLatchProbeFailures + 1, App.DOC_LATCH_PROBE_MAX_SHIFT);
                 extendDocLatch();
             } else {
+                // ✅ 探测成功 ⇒ 退避立即清零：随后的确认连测回到 400ms 快速节奏，
+                // 「连续 3 次、间隔 ≤1200ms」的放行判据不受退避拖累。
+                this.docLatchProbeFailures = 0;
                 const prevOkAt = this.docLatchLastOkAt;
                 this.docLatchLastOkAt = now;
                 this.docLatchOkStreak = (prevOkAt > 0 && now - prevOkAt <= App.DOC_LATCH_CONFIRM_MS)
@@ -1928,7 +1948,11 @@ class App extends React.Component<AppProps, AppState> {
         }
         // 放行后的身份采样若又登记了一次文档级变化（闩锁被重新开启），
         // 立刻补一次探测把它收掉 —— 此时宿主刚确认空闲，不会无限递归。
-        if (isDocLatchActive()) this.scheduleDocLatchProbe(released ? 0 : App.DOC_LATCH_PROBE_MS);
+        // 未放行 ⇒ 按连续失败次数指数退避（400→800→1600→3200 封顶）。
+        const nextDelay = released
+            ? 0
+            : App.DOC_LATCH_PROBE_MS * (1 << this.docLatchProbeFailures);
+        if (isDocLatchActive()) this.scheduleDocLatchProbe(nextDelay);
     }
 
     /** 排一次闩锁探测（同一时刻只允许一个 pending）。 */

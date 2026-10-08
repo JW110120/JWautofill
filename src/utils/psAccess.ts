@@ -267,6 +267,33 @@ function sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
 }
 
+// ============================================================================
+// 模态命令节奏控制（针对 UXP 内部告警「Too many modal scope commands」）
+// ----------------------------------------------------------------------------
+// UXP 会对「短时间内发起过多次 executeAsModal」打内部警告（uxp-internal/
+// ps-common.js）。它不是宿主报错框，但意味着：① 每次进模态都有调度开销；
+// ② 未来 UXP 版本可能把警告升级为限流/拒绝。来源 = 闩锁探测 + 各轮询读
+// 全都在抢模态作用域。对策两层：
+//   · 全局最小间隔（这里）：两次模态命令之间至少隔 MIN_MODAL_GAP_MS；
+//   · 闩锁探测指数退避（app.tsx advanceDocLatch）：失败越多次隔越长。
+// ⚠️ 只约束**本模块**的读取/探测；写路径（填充/描边）直接调
+//    core.executeAsModal，是用户主动触发，不受也不应受此节流。
+// ============================================================================
+const MIN_MODAL_GAP_MS = 300;
+let lastModalEntryAt = 0;
+
+/** psTryRead 用：距上次模态命令不足间隔则稍候，然后登记本次发起时刻。 */
+async function spaceModalEntry(): Promise<void> {
+    const gap = MIN_MODAL_GAP_MS - (Date.now() - lastModalEntryAt);
+    if (gap > 0) await sleep(gap);
+    lastModalEntryAt = Date.now();
+}
+
+/** probeHostIdle 用：距上次模态命令不足间隔 ⇒ 本轮直接跳过（拿不到证据≠忙）。 */
+function modalEntryTooSoon(): boolean {
+    return Date.now() - lastModalEntryAt < MIN_MODAL_GAP_MS;
+}
+
 /**
  * 在**受保护的模态作用域**内执行一次 PS 读取。
  *
@@ -312,6 +339,8 @@ export async function psTryRead<T>(
     try {
         for (let attempt = 0; ; attempt++) {
             try {
+                // 节奏控制：与上一次模态命令至少隔 MIN_MODAL_GAP_MS（见头部说明）。
+                await spaceModalEntry();
                 const value = await core.executeAsModal(
                     async () => await fn(),
                     {
@@ -416,7 +445,12 @@ export async function psRead<T>(
  */
 export async function probeHostIdle(timeOutMs = 300): Promise<boolean> {
     if (isInOwnModalScope()) return true;
+    // 距上次模态命令太近 ⇒ 本轮跳过（返回 false = 「无证据」，调用方会续期闩锁、
+    // 下一轮再来）。**不要**在这里 noteHostUnresponsive：跳过 ≠ 宿主忙，
+    // 作废租约会让同步裸读白白停摆一轮。
+    if (modalEntryTooSoon()) return false;
     try {
+        lastModalEntryAt = Date.now();
         await core.executeAsModal(
             async () => { /* 空操作：只为拿一次锁，刻意不读任何数据 */ },
             {

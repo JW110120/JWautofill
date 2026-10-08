@@ -199,3 +199,19 @@ B 组为静态契约（含「`handleSelectionChange` 内 `app.activeDocument` �
 真的切到了函数体。** 变异测试：`node outputs/busy_gate_mutate.cjs`（生成）+
 `bash outputs/busy_gate_mutation.sh`（驱动，6/6 捕获）；本机 **Node 嵌套 spawnSync
 被静默拦截**（status=null 无报错）⇒ 变异测试必须 bash 驱动，不能用 Node 一把跑。
+
+---
+
+## 第四轮：模态命令节流（「Too many modal scope commands」对策）
+
+- ⚠️ **UXP 会对过密的 `executeAsModal` 打内部警告**（`uxp-internal/ps-common.js`，
+  真机 60 次）——不是宿主报错框，但意味着调度开销 + 未来可能升级为限流。
+  闩锁探测固定 400ms × 几十秒大文档打开 = 主要来源。
+- ⛔ **闩锁探测必须指数退避**：连续失败间隔翻倍（400→800→1600→3200 封顶，
+  `DOC_LATCH_PROBE_MAX_SHIFT=3`）；**任一成功立即清零**——否则确认阶段
+  「连续 3 次、间隔 ≤1200ms」会被退避拖爆（成功间隔超过 1200ms 连击就断）。
+- ⛔ **全局模态命令最小间隔 `MIN_MODAL_GAP_MS=300`**（psAccess）：`psTryRead` 进模态前
+  `spaceModalEntry()` 整形；`probeHostIdle` 太近**跳过本轮**——跳过 ≠ 忙，
+  **绝不能在跳过路径调 `noteHostUnresponsive()`**（会白合作废同步裸读的租约）。
+- ⛔ 写路径（填充/描边）**不受**该节流——用户主动触发，直接调 `core.executeAsModal`。
+- 真机证据：`[蒙版同步] 收到事件: open` ⇒ **open 事件确实被派发**（此前只是文档+论坛推断）。
