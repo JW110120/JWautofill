@@ -136,9 +136,26 @@ async function probeChannelState(): Promise<{ inLayerMask: boolean; inSingleChan
     const result = { inLayerMask: false, inSingleChannel: false };
     try {
         const doc0: any = app.activeDocument;
-        // 多通道保护：多选通道时语义不确定，直接按「非单通道/非蒙版」处理。
-        const activeChannelsCount = doc0?.activeChannels?.length || 0;
-        if (activeChannelsCount > 1) return result;
+
+        // ---- 多通道保护（必须**独立** try/catch，见下方根因说明）----
+        // ⚠️⚠️ 图层蒙版激活时读取 `doc.activeChannels` 会**抛异常**
+        //   （"Unknown or unsupported active channels"，PS 官方论坛与 UXP 文档均确认：
+        //    图层蒙版/快速蒙版激活时该属性不可用）。这**不是**「多通道选择」，恰恰是
+        //    「正在编辑蒙版」的强信号 —— 必须吞掉异常**继续往下探测**，否则整段探测
+        //    直接 return 两个 false ⇒ `isInLayerMask` 恒为 false：
+        //      · 图案/渐变填充落到常规分支 ⇒ 写进新建的 RGB 图层而非图层蒙版；
+        //      · 「仅描边」落到像素图层分支（还会 make layer）⇒ 描在 RGB 图层上；
+        //      · 「仅清除」落到像素清除分支 ⇒ 纯色走 clearEnum 的 fill，弹原生「填充」框；
+        //      · 「描边+清除」落到像素清除分支 ⇒ clearEnum 的 stroke，弹原生「描边」框。
+        //    ⇒ 图层蒙版 12 组合里 11 组失效，全由这一处引起（2026-10-08 用户实测）。
+        //    ⚠️ 旧实现本就把这段包在内层 try/catch 里；9a909c0 把两个探测合并成
+        //       probeChannelState 时**丢掉了内层 catch**，异常逃逸到外层 ⇒ 属**回归**。
+        try {
+            const activeChannelsCount = doc0?.activeChannels?.length || 0;
+            if (activeChannelsCount > 1) return result;
+        } catch (e) {
+            // 吞掉即可：图层蒙版/快速蒙版激活 ⇒ 继续原样探测（与旧实现一致）
+        }
 
         const inQuickMask = !!doc0?.quickMaskMode;
 

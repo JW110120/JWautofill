@@ -110,6 +110,14 @@ export interface AppState {
     clearMode: boolean;  // 添加清除模式状态
     compactModes: CompactModes;  // 紧凑模式：按面板作用域分别记录（app=选区填充父面板，其余=4 个子面板）
     isInQuickMask: boolean;  // 添加快速蒙版状态
+    // 图层蒙版编辑状态。
+    // ⚠️ 与 isInQuickMask / isInSingleColorChannel 同理：必须进 state —— 「新建图层」开关的禁用态
+    //    读它来决定是否置灰，只写实例字段再 forceUpdate 会让界面停在旧值。
+    isInLayerMask: boolean;
+    // 单通道（红/绿/蓝 或 自建 Alpha 通道）编辑状态。
+    // ⚠️ 必须进 state（而非仅实例字段）：描边色板的灰度显示、以及「新建图层」开关的禁用态
+    //    都依赖它触发重渲染；只写实例字段再 forceUpdate 会让界面停在旧值（同 isInQuickMask 的历史 bug）。
+    isInSingleColorChannel: boolean;
     fillMode: 'foreground' | 'pattern' | 'gradient';
     colorSettings: ColorSettings;
     selectedPattern: Pattern | null;
@@ -164,6 +172,8 @@ export const initialState: AppState = {
     clearMode: false,    // 添加初始值
     compactModes: { ...initialCompactModes },    // 紧凑模式默认全部关闭
     isInQuickMask: false,    // 添加快速蒙版初始值
+    isInLayerMask: false,    // 图层蒙版编辑默认关闭（由 checkMaskModes / 选区事件探测回写）
+    isInSingleColorChannel: false,    // 单通道编辑默认关闭（由 checkMaskModes / 选区事件探测回写）
     fillMode: 'foreground',
     colorSettings: {
         hueVariation: 0,

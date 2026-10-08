@@ -165,13 +165,13 @@ export class GradientFill {
         };
 
         try {
-            await action.batchPlay([createGradientLayer], {});
-            await action.batchPlay([setLayerProperties], {});
+            await action.batchPlay([createGradientLayer], { dialogOptions: 'dontDisplayDialogs' });
+            await action.batchPlay([setLayerProperties], { dialogOptions: 'dontDisplayDialogs' });
 
             // 新图层模式：渐变内容图层自身即为目标新图层，下方无内容可裁切，
             // 不能做剪贴蒙版（会把渐变裁掉）
             if (options.preserveTransparency && !createNewLayer) {
-                await action.batchPlay([createClippingMask], {});
+                await action.batchPlay([createClippingMask], { dialogOptions: 'dontDisplayDialogs' });
             }
             
             // 根据图层与新图层模式决定最后的操作
@@ -179,13 +179,13 @@ export class GradientFill {
                 // 新图层模式：渐变内容图层本身就是新图层，仅栅格化，不向下合并，
                 // 否则 mergeLayersNew 会跳过新建的空白图层、把渐变合并进原图层。
                 // 之后应用图层蒙版（apply），让结果图层处于“已应用蒙版、无蒙版”的状态。
-                await action.batchPlay([rasterizeLayer], {});
-                await action.batchPlay([applyMask], {});
+                await action.batchPlay([rasterizeLayer], { dialogOptions: 'dontDisplayDialogs' });
+                await action.batchPlay([applyMask], { dialogOptions: 'dontDisplayDialogs' });
             } else if (!layerInfo.hasPixels) {
-                await action.batchPlay([rasterizeLayer], {});
-                await action.batchPlay([applyMask], {});
+                await action.batchPlay([rasterizeLayer], { dialogOptions: 'dontDisplayDialogs' });
+                await action.batchPlay([applyMask], { dialogOptions: 'dontDisplayDialogs' });
             } else {
-                await action.batchPlay([mergeLayers], {});
+                await action.batchPlay([mergeLayers], { dialogOptions: 'dontDisplayDialogs' });
             }
 
             // 选中上一个选区
@@ -204,7 +204,7 @@ export class GradientFill {
                 _options: {
                     dialogOptions: "dontDisplay"
                 }
-            }], { synchronousExecution: true });
+            }], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
 
         } catch (error) {
             console.error("❌ 渐变填充失败:", error);
@@ -478,7 +478,7 @@ export class GradientFill {
                             }
                         ]
                     }
-                ], { synchronousExecution: true }),
+                ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }),
                 action.batchPlay([
                     {
                         _obj: "get",
@@ -493,7 +493,7 @@ export class GradientFill {
                             }
                         ]
                     }
-                ], { synchronousExecution: true })
+                ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' })
             ]);
             
             if (!selectionResult?.[0]?.selection) {
@@ -607,7 +607,7 @@ export class GradientFill {
                         dialogOptions: "dontDisplay"
                     }
                 }
-            ], { synchronousExecution: true });
+            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
             
             return {
                 left,
@@ -647,7 +647,7 @@ export class GradientFill {
                         }
                     ]
                 }
-            ], { synchronousExecution: true });
+            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
             
             // 获取colorIndicates信息
             let isSelectedAreas = false;
@@ -690,7 +690,7 @@ export class GradientFill {
                         dialogOptions: "dontDisplay"
                     }
                 }
-            ], { synchronousExecution: true });
+            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
             
  
                 // 判断左上角和右下角是否需要填充
@@ -741,7 +741,7 @@ export class GradientFill {
                                         }
                                     }
                                 }
-                            ], { synchronousExecution: true });
+                            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
                         } else if (!topLeftIsEmpty && bottomRightIsEmpty) {
                             // 只有右下角为空，选择右下角像素
                             console.log('只有右下角为空，选择右下角像素');
@@ -774,7 +774,7 @@ export class GradientFill {
                                         }
                                     }
                                 }
-                            ], { synchronousExecution: true });
+                            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
                         } else if (topLeftIsEmpty && bottomRightIsEmpty) {
                             console.log('两个角都为空，选择两个角的像素');
                              await action.batchPlay([
@@ -806,7 +806,7 @@ export class GradientFill {
                                         }
                                     }
                                 }
-                            ], { synchronousExecution: true });
+                            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
                             await action.batchPlay([
                                 {
                                     _obj: "addTo",
@@ -836,7 +836,7 @@ export class GradientFill {
                                         }
                                     }
                                 }
-                            ], { synchronousExecution: true });
+                            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
                         }
 
                         // 执行填充操作
@@ -869,7 +869,7 @@ export class GradientFill {
                                     dialogOptions: "dontDisplay"
                                 }
                             }
-                        ], { synchronousExecution: true });
+                        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
 
                         await action.batchPlay([
                             {
@@ -890,7 +890,7 @@ export class GradientFill {
                                     dialogOptions: "dontDisplay"
                                 }
                             }
-                        ], { synchronousExecution: true });
+                        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
                     }
                 }
             
@@ -1006,7 +1006,7 @@ export class GradientFill {
                     dialogOptions: "dontDisplay"
                 }
             }
-        ], { synchronousExecution: true });
+        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
 
         // 获取像素的直方图
         const result = await action.batchPlay([
@@ -1019,7 +1019,7 @@ export class GradientFill {
                     }
                 ]
             }
-        ], { synchronousExecution: true });
+        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
         
         // 分析直方图找出数量为1的色阶值
         const histogram = result[0].histogram;
@@ -1092,7 +1092,7 @@ export class GradientFill {
                     dialogOptions: "dontDisplay"
                 }
             }
-        ], { synchronousExecution: true });
+        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
     }
     
     //----------------------------------------------------------------------------------
@@ -1115,7 +1115,7 @@ export class GradientFill {
                     dialogOptions: "dontDisplay"
                 }
             }
-        ], { synchronousExecution: true });
+        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
     }
 
     //----------------------------------------------------------------------------------
@@ -1456,7 +1456,7 @@ export class GradientFill {
                         }
                     ]
                 }
-            ], { synchronousExecution: true });
+            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
             
             return result[0]?.layerID;
         } catch (error) {
@@ -1742,7 +1742,7 @@ export class GradientFill {
                     dialogOptions: "dontDisplay"
                 }
                 }
-            ], { synchronousExecution: true });
+            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
             
             // 检查是否需要恢复选区
             if (state && !state.deselectAfterFill && bounds.selectionValues) {

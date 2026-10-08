@@ -19,6 +19,7 @@ import IconButton from './components/IconButton';
 import { LicenseManager } from './utils/LicenseManager';
 import { ExpandIcon, SettingsIcon, FocusTargetIcon } from './styles/Icons';
 import { calculateRandomColor, hsbToRgb, rgbToGray } from './utils/ColorUtils';
+import { pickColorWithInitial } from './utils/ColorPicker';
 import { strokeSelection } from './utils/StrokeSelection';
 import { PatternFill } from './utils/PatternFill';
 import { GradientFill } from './utils/GradientFill';
@@ -766,75 +767,13 @@ class App extends React.Component<AppProps, AppState> {
         this.setState({ strokeEnabled: !this.state.strokeEnabled });
     }
 
-    /** 描边色板：打开 PS 颜色选择器，选完写回 strokeColor 并恢复此前前景色 */
+    /** 描边色板：打开 PS 颜色选择器，选完写回 strokeColor（前景色的保存/还原由 pickColorWithInitial 负责） */
     openStrokeColorPicker = async () => {
-        try {
-            // 1. 保存当前前景色
-            let savedForegroundColor: any;
-            await executeAsModal(async () => {
-                const foregroundColor = app.foregroundColor;
-                savedForegroundColor = {
-                    hue: {
-                        _unit: "angleUnit",
-                        _value: foregroundColor.hsb.hue
-                    },
-                    saturation: foregroundColor.hsb.saturation,
-                    brightness: foregroundColor.hsb.brightness
-                };
-            });
-
-            // 2. 显示颜色选择器
-            const result = await require("photoshop").core.executeAsModal(async () => {
-                return await batchPlay(
-                    [{
-                        _obj: "showColorPicker",
-                        _target: [{
-                            _ref: "application"
-                        }]
-                    }],
-                    {}
-                );
-            });
-
-            // 3. 处理颜色选择结果
-            if (result && result[0] && result[0].RGBFloatColor) {
-                const { red, grain, blue } = result[0].RGBFloatColor;
-                this.setState({
-                    strokeColor: {
-                        red: Math.round(red),
-                        green: Math.round(grain),
-                        blue: Math.round(blue)
-                    }
-                });
-            }
-
-            // 4. 恢复前景色
-            if (savedForegroundColor) {
-                await executeAsModal(async () => {
-                    await batchPlay(
-                        [{
-                            _obj: "set",
-                            _target: [{
-                                _ref: "color",
-                                _property: "foregroundColor"
-                            }],
-                            to: {
-                                _obj: "HSBColorClass",
-                                hue: savedForegroundColor.hue,
-                                saturation: savedForegroundColor.saturation,
-                                brightness: savedForegroundColor.brightness
-                            },
-                            source: "photoshopPicker",
-                            _options: {
-                                dialogOptions: "dontDisplay"
-                            }
-                        }],
-                        { synchronousExecution: true }
-                    );
-                }, { commandName: "恢复前景色" });
-            }
-        } catch (error) {
-            console.error('颜色选择器错误:', error);
+        // ⚠️ 初始色必须传「色板当前显示的颜色」：showColorPicker 无参、只认当前前景色，
+        //    不先把前景色设成它，面板显示 A 而拾色器打开 B（旧缺陷）。
+        const picked = await pickColorWithInitial(this.getStrokeDisplayColor(), '选择描边颜色');
+        if (picked) {
+            this.setState({ strokeColor: picked });
         }
     }
     
@@ -1031,9 +970,24 @@ class App extends React.Component<AppProps, AppState> {
                     const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
                     if (!layerInfo) return;
 
-                    // 快速蒙版状态随layerInfo 一起带回，替代原先外层的独立读取
+                    // 快速蒙版 / 单通道状态随layerInfo 一起带回，替代原先外层的独立读取
+                    // ⚠️ 单通道必须一并回写 state：它决定「新建图层」开关的禁用态与
+                    //    描边色板的灰度显示（只写实例字段会漏刷新）。
+                    const maskPatch: any = {};
                     if (this.state.isInQuickMask !== layerInfo.isInQuickMask) {
-                        this.setState({ isInQuickMask: layerInfo.isInQuickMask });
+                        maskPatch.isInQuickMask = layerInfo.isInQuickMask;
+                    }
+                    // 图层蒙版：决定「新建图层」开关的禁用态（填充图层蒙版时该项无意义且会破坏蒙版编辑）
+                    this.isInLayerMask = !!layerInfo.isInLayerMask;
+                    if (this.state.isInLayerMask !== this.isInLayerMask) {
+                        maskPatch.isInLayerMask = this.isInLayerMask;
+                    }
+                    this.isInSingleColorChannel = !!layerInfo.isInSingleColorChannel;
+                    if (this.state.isInSingleColorChannel !== this.isInSingleColorChannel) {
+                        maskPatch.isInSingleColorChannel = this.isInSingleColorChannel;
+                    }
+                    if (Object.keys(maskPatch).length > 0) {
+                        this.setState(maskPatch);
                     }
 
                     // ⚠️ 「取消选区」并入 fill 的同一次 batchPlay（省一次同步 IPC）。
@@ -1122,7 +1076,7 @@ class App extends React.Component<AppProps, AppState> {
                         _options: { dialogOptions: 'dontDisplay' }
                     },
                 ],
-                { synchronousExecution: true }
+                { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }
             );
             if (result && result.length > 0 && result[0].selection) {
                 return result[0].selection;
@@ -1160,7 +1114,7 @@ class App extends React.Component<AppProps, AppState> {
                         }
                     }
                 ],
-                {}
+                { dialogOptions: 'dontDisplayDialogs' }
             );
         } catch (error) {
             // 历史栈为空（新建文档尚未落笔）时 PS 会拒绝该命令，属预期情况，静默忽略
@@ -1178,7 +1132,7 @@ class App extends React.Component<AppProps, AppState> {
                     _isCommand: true
                 },
             ],
-            { synchronousExecution: true, modalBehavior: 'execute' }
+            { synchronousExecution: true, modalBehavior: 'execute', dialogOptions: 'dontDisplayDialogs' }
         );
     }
 
@@ -1188,6 +1142,22 @@ class App extends React.Component<AppProps, AppState> {
             createNewLayer: !prevState.createNewLayer,
             clearMode: prevState.createNewLayer ? prevState.clearMode : false 
         }));
+    }
+
+    /**
+     * 「新建图层」开关的禁用条件 —— **唯一事实来源**（两套版式共用，避免两处条件漂移）。
+     *   · 清除模式：清除是就地减淡，不产生新图层；
+     *   · 快速蒙版：快速蒙版编辑的是通道，不是图层；
+     *   · 图层蒙版：填充/描边都直接落在蒙版通道上，新建图层既无意义，也会把
+     *     活动目标从蒙版切走 ⇒ 必须禁用（2026-10-08 用户要求）；
+     *   · **单通道（红/绿/蓝/Alpha）**：填充经 SingleChannelHandler 写回当前通道，
+     *     新建图层既无意义、又会把活动通道切回 RGB 复合通道 ⇒ 必须禁用（2026-10-08 用户要求）。
+     */
+    isCreateNewLayerDisabled() {
+        return this.state.clearMode
+            || this.state.isInQuickMask
+            || this.state.isInLayerMask
+            || this.state.isInSingleColorChannel;
     }
 
     async fillSelection(layerInfo?: LayerInfo | null, withDeselect = false, stateForFill?: AppState) {
@@ -1229,7 +1199,7 @@ class App extends React.Component<AppProps, AppState> {
             needToggleVisibility = !!(layerInfo.isHidden && !this.state.createNewLayer);
             if (needToggleVisibility) {
                 try {
-                    await action.batchPlay([showTargetLayer], {});
+                    await action.batchPlay([showTargetLayer], { dialogOptions: 'dontDisplayDialogs' });
                 } catch (e) {
                     console.warn('切换图层可见性失败，继续执行填充流程:', e);
                 }
@@ -1270,7 +1240,10 @@ class App extends React.Component<AppProps, AppState> {
                 return true;
             }
 
-            if (this.state.createNewLayer && this.state.fillMode !== 'gradient') {
+            // ⚠️ 图层蒙版下**不得**新建图层：`make layer` 会立刻把活动目标从蒙版通道切到新图层，
+            //    紧随的 fill 就落到新图层而不是蒙版（第一类失效的另一半原因）。
+            //    与「新建图层」开关在图层蒙版下被禁用的语义一致（见 isCreateNewLayerDisabled）。
+            if (this.state.createNewLayer && this.state.fillMode !== 'gradient' && !layerInfo.isInLayerMask) {
                 await action.batchPlay(
                     [{
                         _obj: "make",
@@ -1284,7 +1257,7 @@ class App extends React.Component<AppProps, AppState> {
                         },
                         _options: { dialogOptions: "dontDisplay" }
                     }],
-                    { synchronousExecution: true }
+                    { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }
                 );
                 // 新建图层后活动图层已改变 ⇒ 必须让layerInfo 缓存失效，
                 // 否则下一次填充会拿到「新建之前那个图层」的信息。
@@ -1341,7 +1314,7 @@ class App extends React.Component<AppProps, AppState> {
                                     }
                                 ]
                             }
-                        ], { synchronousExecution: true });
+                        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
                         
                         let isSelectedAreas = false;
                         if (channelResult[0] && 
@@ -1407,7 +1380,7 @@ class App extends React.Component<AppProps, AppState> {
         } finally {
             try {
                 if (needToggleVisibility) {
-                    await action.batchPlay([hideTargetLayer], {});
+                    await action.batchPlay([hideTargetLayer], { dialogOptions: 'dontDisplayDialogs' });
                 }
             } catch (e) {
                 console.warn('恢复图层隐藏状态失败:', e);
@@ -1430,7 +1403,7 @@ class App extends React.Component<AppProps, AppState> {
                     },
                     _options: { dialogOptions: "dontDisplay" }
                 }
-            ], { synchronousExecution: true });
+            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
         } catch (error) {}
     }
 
@@ -1449,7 +1422,7 @@ class App extends React.Component<AppProps, AppState> {
                     },
                     _options: { dialogOptions: "dontDisplay" }
                 }
-            ], { synchronousExecution: true });
+            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
         } catch (error) {}
     }
 
@@ -1601,12 +1574,12 @@ class App extends React.Component<AppProps, AppState> {
             _isCommand: false
         };
         try {
-            await action.batchPlay([descriptor], { synchronousExecution: true });
+            await action.batchPlay([descriptor], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
         } catch (directErr) {
             // 直连失败 → 回退模态作用域（与 applyBrush 一致）
             try {
                 await core.executeAsModal(async () => {
-                    await action.batchPlay([descriptor], { synchronousExecution: true });
+                    await action.batchPlay([descriptor], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
                 }, { commandName: '切换套索工具' });
             } catch (e) {
                 console.warn('⚠️ 自动切换套索工具失败（主开关开启时）:', e);
@@ -1786,8 +1759,20 @@ class App extends React.Component<AppProps, AppState> {
             // ⚠️ 必须回写 state：开关的禁用态渲染读的是 state.isInQuickMask，
             // 只写实例字段再 forceUpdate 的话界面永远停在旧值（历史 bug：
             // 进入快速蒙版后「新建图层」开关不变灰，直到下一次选区变更才刷新）。
+            // 单通道同理：它的禁用态（「新建图层」）与描边色板灰度都读 state。
+            // 图层蒙版同理：它的禁用态（「新建图层」）也读 state。
+            const patch: any = {};
             if (this.state.isInQuickMask !== this.isInQuickMask) {
-                this.setState({ isInQuickMask: this.isInQuickMask });
+                patch.isInQuickMask = this.isInQuickMask;
+            }
+            if (this.state.isInLayerMask !== this.isInLayerMask) {
+                patch.isInLayerMask = this.isInLayerMask;
+            }
+            if (this.state.isInSingleColorChannel !== this.isInSingleColorChannel) {
+                patch.isInSingleColorChannel = this.isInSingleColorChannel;
+            }
+            if (Object.keys(patch).length > 0) {
+                this.setState(patch);
             }
         } catch (error) {
             console.error('检测蒙版模式失败:', error);
@@ -1820,23 +1805,33 @@ class App extends React.Component<AppProps, AppState> {
         }
     }
 
+    /**
+     * 描边色板当前**显示**的 RGB —— 唯一事实来源。
+     * 色板渲染与拾色器初始色都取自这里，保证「面板显示什么，拾色器就打开什么」。
+     * 蒙版/单通道/清除模式下描边只用灰度 ⇒ 色板显示灰度值。
+     */
+    getStrokeDisplayColor() {
+        const { strokeColor, clearMode } = this.state;
+        if (!strokeColor) {
+            return { red: 0, green: 0, blue: 0 };
+        }
+        // 四个标志一律读 state（而非实例字段）：它们是渲染期唯一事实来源，
+        // 三层蒙版/单通道的灰度显示与「新建图层」禁用都靠 state 变化触发重渲染。
+        const shouldShowGray = clearMode
+            || this.state.isInLayerMask
+            || this.state.isInQuickMask
+            || this.state.isInSingleColorChannel;
+        if (!shouldShowGray) {
+            return { red: strokeColor.red, green: strokeColor.green, blue: strokeColor.blue };
+        }
+        const grayValue = Math.round(strokeColor.red * 0.299 + strokeColor.green * 0.587 + strokeColor.blue * 0.114);
+        return { red: grayValue, green: grayValue, blue: grayValue };
+    }
+
     // 获取描边颜色预览样式
     getStrokeColorPreviewStyle() {
-        const { strokeColor, clearMode } = this.state;
-        const shouldShowGray = clearMode || this.isInLayerMask || this.isInQuickMask || this.isInSingleColorChannel;
-        
-        if (!strokeColor) {
-            return { backgroundColor: 'rgb(0, 0, 0)' };
-        }
-        
-        if (shouldShowGray) {
-            // 使用灰度显示：将RGB转换为灰度值
-            const grayValue = Math.round(strokeColor.red * 0.299 + strokeColor.green * 0.587 + strokeColor.blue * 0.114);
-            return { backgroundColor: `rgb(${grayValue}, ${grayValue}, ${grayValue})` };
-        } else {
-            // 正常彩色显示
-            return { backgroundColor: `rgb(${strokeColor.red}, ${strokeColor.green}, ${strokeColor.blue})` };
-        }
+        const { red, green, blue } = this.getStrokeDisplayColor();
+        return { backgroundColor: `rgb(${red}, ${green}, ${blue})` };
     }  
 
     // ===== 许可证相关方法 =====
@@ -2043,10 +2038,12 @@ title={helpTexts.selectionFill.blendMode}>
                             title={helpTexts.selectionFill.feather}>
                             羽化
                         </label>
+                        {/* ⚠️ 步长必须与数字输入框一致为 1：滑杆若仍走 0.5，会写入「X.5」，
+                            而 .num-input-row 是定宽 34px，小数位显示不下（只显出「1…」）。 */}
                         <RangeSlider
                             min={0}
                             max={20}
-                            step={0.5}
+                            step={1}
                             value={this.state.feather}
                             onChange={this.handleFeatherChange}
                             className="slider-track"
@@ -2058,6 +2055,7 @@ title={helpTexts.selectionFill.blendMode}>
                                     type="number"
                                     min="0"
                                     max="20"
+                                    step="1"
                                     value={this.state.feather}
                                     onChange={(e) => this.setState({ feather: Number(e.target.value) })}
                                     title={helpTexts.selectionFill.featherInput}
@@ -2275,9 +2273,9 @@ title={helpTexts.selectionFill.selectionExpand}>
                             <>
                                 <div className="row-between row-grid">
                                     <div className="grid-cell">
-                                        <div className={(this.state.clearMode || this.state.isInQuickMask) ? 'row-start disabled' : 'row-start'}>
+                                        <div className={this.isCreateNewLayerDisabled() ? 'row-start disabled' : 'row-start'}>
                                             <span className="label-4" title={helpTexts.selectionFill.createNewLayer}>新建图层</span>
-                                            <ToggleSwitch checked={this.state.createNewLayer} onChange={this.toggleCreateNewLayer} disabled={this.state.clearMode || this.state.isInQuickMask} title={helpTexts.selectionFill.createNewLayerSwitch}  />
+                                            <ToggleSwitch checked={this.state.createNewLayer} onChange={this.toggleCreateNewLayer} disabled={this.isCreateNewLayerDisabled()} title={helpTexts.selectionFill.createNewLayerSwitch}  />
                                         </div>
                                     </div>
                                     <div className="grid-cell">
@@ -2346,13 +2344,14 @@ title={helpTexts.selectionFill.selectionExpand}>
                                     三行开关彼此之间、以及与下方 checkbox 组之间的分割线保持原样。 */}
                                 <div className="divider" />
 
-                                {/* 新建图层开关（禁用态给行挂 .disabled：`:has()` 已确认在 UXP 下无效） */}
-                                <div className={(this.state.clearMode || this.state.isInQuickMask) ? 'row-between disabled' : 'row-between'}>
+                                {/* 新建图层开关（禁用态给行挂 .disabled：`:has()` 已确认在 UXP 下无效）
+                                    禁用条件走 isCreateNewLayerDisabled()：清除模式 / 快速蒙版 / 单通道编辑 */}
+                                <div className={this.isCreateNewLayerDisabled() ? 'row-between disabled' : 'row-between'}>
                                     <span className="label-4"
 title={helpTexts.selectionFill.createNewLayer}>
                             新建图层
                             </span>
-                                    <ToggleSwitch checked={this.state.createNewLayer} onChange={this.toggleCreateNewLayer} disabled={this.state.clearMode || this.state.isInQuickMask} title={helpTexts.selectionFill.createNewLayerSwitch}  />
+                                    <ToggleSwitch checked={this.state.createNewLayer} onChange={this.toggleCreateNewLayer} disabled={this.isCreateNewLayerDisabled()} title={helpTexts.selectionFill.createNewLayerSwitch}  />
                                 </div>
                                 <div className="divider" />
 

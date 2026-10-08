@@ -404,7 +404,7 @@ export class SingleChannelHandler {
                         dialogOptions: "dontDisplay"
                     }
                 }
-            ], { synchronousExecution: true });
+            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
             
             if (targetChannelResult[0]) {
                 const targetChannelInfo = targetChannelResult[0];
@@ -461,7 +461,7 @@ export class SingleChannelHandler {
                             }
                         ]
                     }
-                ], { synchronousExecution: true }),
+                ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }),
                 action.batchPlay([
                     {
                         _obj: "get",
@@ -476,7 +476,7 @@ export class SingleChannelHandler {
                             }
                         ]
                     }
-                ], { synchronousExecution: true })
+                ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' })
             ]);
             
             if (!selectionResult?.[0]?.selection) {
@@ -621,7 +621,7 @@ export class SingleChannelHandler {
                     },
                     "_isCommand": false
                 }
-            ], {});
+            ], { dialogOptions: 'dontDisplayDialogs' });
             
             // 2. 获取该临时灰度图层ID，以备后续重新选中它。
             const tempGrayLayerResult = await action.batchPlay([
@@ -635,7 +635,7 @@ export class SingleChannelHandler {
                         }
                     ]
                 }
-            ], { synchronousExecution: true });
+            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
             
             const tempGrayLayerId = tempGrayLayerResult[0]?.layerID;
 
@@ -658,7 +658,7 @@ export class SingleChannelHandler {
                     "_value": "none"
                 }
                 }
-            ], { synchronousExecution: true });
+            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
 
             // 对临时灰度图层使用应用图像，将目标【自定义alpha通道】的灰度值给临时灰度图层的RGB复合通道，此时临时灰度图层的R、G、B通道的灰度与目标【自定义alpha通道】的灰度一样。
             // 通过应用图像，临时灰度图层的RGB复合通道的不透明度通道默认为255。
@@ -674,7 +674,7 @@ export class SingleChannelHandler {
                     },
                     "_isCommand": false
                 }
-            ], { synchronousExecution: true });
+            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
 
              // 使用imaging.getPixels获取文档长度的RGB图像数据，然后提取对应通道
             const tempGrayLayerPixelOptions = {
@@ -729,7 +729,7 @@ export class SingleChannelHandler {
                     ],
                     "_isCommand": false
                 }
-            ], {});
+            ], { dialogOptions: 'dontDisplayDialogs' });
 
             // 7，使用imaging.getPixels获取原图层的完整RGB图像数据作为originalRgbaData。对于目标【自定义alpha通道】，获取原图层的完整RGBA图像数据是不必要的。
             // 因为目标【自定义alpha通道】的灰度值已经被提取到singleChannelData中了，无需再获取原图层的完整RGBA图像数据，只是由于getChannelPixels需要返回两个参数：channelData、originalRgbaData。
@@ -1371,7 +1371,7 @@ export class SingleChannelHandler {
                     },
                     "_isCommand": false
                 }
-            ], {});
+            ], { dialogOptions: 'dontDisplayDialogs' });
             
             // 获取临时图层ID（使用batchPlay确保准确性）
             const tempLayerResult = await action.batchPlay([
@@ -1385,7 +1385,7 @@ export class SingleChannelHandler {
                         }
                     ]
                 }
-            ], { synchronousExecution: true });
+            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
             
             const tempLayerId = tempLayerResult[0]?.layerID;
             if (!tempLayerId) {
@@ -1479,7 +1479,7 @@ export class SingleChannelHandler {
                     ],
                     "_isCommand": false
                 }
-            ], {});
+            ], { dialogOptions: 'dontDisplayDialogs' });
             
             // 4. 选择目标通道
             await action.batchPlay([
@@ -1494,7 +1494,7 @@ export class SingleChannelHandler {
                     ],
                     "_isCommand": false
                 }
-            ], {});
+            ], { dialogOptions: 'dontDisplayDialogs' });
             
             // 5. 使用应用图像API将临时图层的指定通道复制到原图层的目标通道
             await action.batchPlay([
@@ -1519,7 +1519,7 @@ export class SingleChannelHandler {
                     },
                     "_isCommand": false
                 }
-            ], {});
+            ], { dialogOptions: 'dontDisplayDialogs' });
             
             // 6. 删除临时图层
             await action.batchPlay([
@@ -1533,7 +1533,7 @@ export class SingleChannelHandler {
                     ],
                     "_isCommand": false
                 }
-            ], {});
+            ], { dialogOptions: 'dontDisplayDialogs' });
 
             // 7. 再次选择目标通道
             await action.batchPlay([
@@ -1548,7 +1548,7 @@ export class SingleChannelHandler {
                     ],
                     "_isCommand": false
                 }
-            ], {});
+            ], { dialogOptions: 'dontDisplayDialogs' });
         } catch (error) {
             console.error('❌ SingleChannelHandler - 更新通道像素数据失败:', error);
             throw error;
@@ -1605,7 +1605,7 @@ export class SingleChannelHandler {
                     },
                     "_isCommand": false
                 }
-            ], {});
+            ], { dialogOptions: 'dontDisplayDialogs' });
             
             // 获取临时图层ID
             const tempLayerResult = await action.batchPlay([
@@ -1619,7 +1619,7 @@ export class SingleChannelHandler {
                         }
                     ]
                 }
-            ], { synchronousExecution: true });
+            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
             
             const tempLayerId = tempLayerResult[0]?.layerID;
             if (!tempLayerId) {
@@ -1672,7 +1672,7 @@ export class SingleChannelHandler {
                     ],
                     "_isCommand": false
                 }
-            ], {});
+            ], { dialogOptions: 'dontDisplayDialogs' });
             
             // 使用应用图像API将临时图层的红通道复制到目标Alpha通道
             await action.batchPlay([
@@ -1697,7 +1697,7 @@ export class SingleChannelHandler {
                     },
                     "_isCommand": false
                 }
-            ], {});
+            ], { dialogOptions: 'dontDisplayDialogs' });
             
             // 删除临时图层
             await action.batchPlay([
@@ -1711,7 +1711,7 @@ export class SingleChannelHandler {
                     ],
                     "_isCommand": false
                 }
-            ], {});
+            ], { dialogOptions: 'dontDisplayDialogs' });
             
             // 重新选择目标Alpha通道
             await action.batchPlay([
@@ -1725,7 +1725,7 @@ export class SingleChannelHandler {
                     ],
                     "_isCommand": false
                 }
-            ], {});
+            ], { dialogOptions: 'dontDisplayDialogs' });
             
             console.log('✅ Alpha通道更新完成');
         } catch (error) {

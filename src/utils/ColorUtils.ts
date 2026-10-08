@@ -177,6 +177,39 @@ export function hsbToRgb(hue: number, saturation: number, brightness: number): {
     };
 }
 
+// RGB转HSB的辅助函数（与 hsbToRgb 互逆；hue 0-360，saturation / brightness 0-100）
+// ⚠️ PS 前景色只用 HSB，而面板状态存的是 RGB ⇒ 给拾色器注入初始色时必须先转过来。
+export function rgbToHsb(red: number, green: number, blue: number): { hue: number; saturation: number; brightness: number } {
+    const r = (red || 0) / 255;
+    const g = (green || 0) / 255;
+    const b = (blue || 0) / 255;
+
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const delta = max - min;
+
+    let hue = 0;
+    if (delta !== 0) {
+        if (max === r) hue = 60 * (((g - b) / delta) % 6);
+        else if (max === g) hue = 60 * (((b - r) / delta) + 2);
+        else hue = 60 * (((r - g) / delta) + 4);
+    }
+    if (hue < 0) hue += 360;
+
+    return {
+        hue,
+        saturation: max === 0 ? 0 : (delta / max) * 100,
+        brightness: max * 100
+    };
+}
+
+// 解析 CSS `rgb()/rgba()` 字符串为 RGB 分量（渐变预设的色标就存成这种字符串）
+export function parseCssRgb(color: string): { red: number; green: number; blue: number } | null {
+    const matched = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i.exec(color || '');
+    if (!matched) return null;
+    return { red: Number(matched[1]), green: Number(matched[2]), blue: Number(matched[3]) };
+}
+
 // RGB转灰度的辅助函数
 const RED_LUMINANCE_COEFFICIENT = 0.299;
 const GREEN_LUMINANCE_COEFFICIENT = 0.587;

@@ -112,7 +112,7 @@ export class ClearHandler {
                     _options: {
                         dialogOptions: "dontDisplay"
                     }
-                }], { synchronousExecution: true });
+                }], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
                 
                 return;
             }
@@ -172,7 +172,7 @@ export class ClearHandler {
                     _options: {
                         dialogOptions: "dontDisplay"
                     }
-                }], { synchronousExecution: true });
+                }], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
                 
                 console.log('🎨 已设置前景色为抖动计算结果:', {
                     hue: randomColorResult.hsb.hue,
@@ -198,7 +198,7 @@ export class ClearHandler {
                     _options: {
                         dialogOptions: "dontDisplay"
                     }
-                }], { synchronousExecution: true });
+                }], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
             } finally {
                 // 恢复原来的前景色
                 await action.batchPlay([{
@@ -217,7 +217,7 @@ export class ClearHandler {
                     _options: {
                         dialogOptions: "dontDisplay"
                     }
-                }], { synchronousExecution: true });
+                }], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
             }
             
         } catch (error) {
@@ -580,7 +580,7 @@ export class ClearHandler {
                         dialogOptions: "dontDisplay"
                     }
                 }
-            ], { synchronousExecution: true });
+            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
             // ⚠️ 与其它填充/清除分支保持一致（2026-10-08）：
             // 本方法前面的 putSelection 已经把选区改写成了「待删除的灰度掩码」，
             // 而 getSelectionData() 内部也早已取消过选区。当用户关闭「自动删选区」
@@ -668,7 +668,7 @@ export class ClearHandler {
                     dialogOptions: "dontDisplay"
                 }
             }
-        ], { synchronousExecution: true });
+        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
 
         // 获取像素的直方图
         const result = await action.batchPlay([
@@ -681,7 +681,7 @@ export class ClearHandler {
                     }
                 ]
             }
-        ], { synchronousExecution: true });
+        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
         
         // 分析直方图找出数量为1的色阶值
         const histogram = result[0].histogram;
@@ -791,7 +791,7 @@ export class ClearHandler {
                             }
                         ]
                     }
-                ], { synchronousExecution: true }),
+                ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }),
                 action.batchPlay([
                     {
                         _obj: "get",
@@ -806,7 +806,7 @@ export class ClearHandler {
                             }
                         ]
                     }
-                ], { synchronousExecution: true })
+                ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' })
             ]);
             
            // 获取文档尺寸信息
@@ -910,7 +910,7 @@ export class ClearHandler {
                     dialogOptions: "dontDisplay"
                 }
             }
-        ], { synchronousExecution: true });
+        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
         
         return {
             left,
@@ -948,7 +948,7 @@ export class ClearHandler {
                         }
                     ]
                 }
-            ], { synchronousExecution: true });
+            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
             
             // 获取colorIndicates信息
             let isSelectedAreas = false;
@@ -991,7 +991,7 @@ export class ClearHandler {
                         dialogOptions: "dontDisplay"
                     }
                 }
-            ], { synchronousExecution: true });
+            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
             
             if (maskStatus.isEmpty) {
                 await core.showAlert({ message: '您的快速蒙版已经为空！' });
@@ -1055,7 +1055,7 @@ export class ClearHandler {
                                         }
                                     }
                                 }
-                            ], { synchronousExecution: true });
+                            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
                         } else if (!topLeftIsEmpty && bottomRightIsEmpty) {
                             // 只有右下角为空，选择右下角像素
                             console.log('只有右下角为空，选择右下角像素');
@@ -1088,7 +1088,7 @@ export class ClearHandler {
                                         }
                                     }
                                 }
-                            ], { synchronousExecution: true });
+                            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
                         } else if (topLeftIsEmpty && bottomRightIsEmpty) {
                             console.log('两个角都为空，选择两个角的像素');
                              await action.batchPlay([
@@ -1120,7 +1120,7 @@ export class ClearHandler {
                                         }
                                     }
                                 }
-                            ], { synchronousExecution: true });
+                            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
                             await action.batchPlay([
                                 {
                                     _obj: "addTo",
@@ -1150,7 +1150,7 @@ export class ClearHandler {
                                         }
                                     }
                                 }
-                            ], { synchronousExecution: true });
+                            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
                         }
 
                         // 执行填充操作
@@ -1183,7 +1183,7 @@ export class ClearHandler {
                                     dialogOptions: "dontDisplay"
                                 }
                             }
-                        ], { synchronousExecution: true });
+                        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
 
                         await action.batchPlay([
                             {
@@ -1204,7 +1204,7 @@ export class ClearHandler {
                                     dialogOptions: "dontDisplay"
                                 }
                             }
-                        ], { synchronousExecution: true });
+                        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
                     }
                 }
             }
@@ -1336,7 +1336,7 @@ export class ClearHandler {
                     dialogOptions: "dontDisplay"
                 }
             }
-        ], { synchronousExecution: true });
+        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
     }
     
     // 执行全选操作
@@ -1358,7 +1358,7 @@ export class ClearHandler {
                     dialogOptions: "dontDisplay"
                 }
             }
-        ], { synchronousExecution: true });
+        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
     }
 
     //-------------------------------------------------------------------------------------------------
@@ -2639,7 +2639,7 @@ export class ClearHandler {
                     dialogOptions: "dontDisplay"
                 }
                 }
-            ], { synchronousExecution: true });
+            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
             
             // 根据state参数和bounds.selectionValues判断是否需要恢复选区
             if (state && state.deselectAfterFill === false && bounds && bounds.selectionValues && bounds.selectionValues.length > 0) {
@@ -2869,7 +2869,7 @@ export class ClearHandler {
                         }
                     ]
                 }
-            ], { synchronousExecution: true });
+            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
             
             return result[0]?.layerID;
         } catch (error) {

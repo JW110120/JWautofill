@@ -658,7 +658,7 @@ async function getPixelValue(action: any, x: number, y: number): Promise<number>
                 dialogOptions: "dontDisplay"
             }
         }
-    ], { synchronousExecution: true });
+    ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
 
     // 获取像素的直方图
     const result = await action.batchPlay([
@@ -671,7 +671,7 @@ async function getPixelValue(action: any, x: number, y: number): Promise<number>
                 }
             ]
         }
-    ], { synchronousExecution: true });
+    ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
     
     // 分析直方图找出数量为1的色阶值
     const histogram = result[0].histogram;
@@ -934,25 +934,25 @@ export class PatternFill {
 
         try {
             // 新建待处理图层
-            await action.batchPlay([createBlankLayer], {});
-            await action.batchPlay([setLayerName], {});
-            await action.batchPlay([createLayerMask], {});
+            await action.batchPlay([createBlankLayer], { dialogOptions: 'dontDisplayDialogs' });
+            await action.batchPlay([setLayerName], { dialogOptions: 'dontDisplayDialogs' });
+            await action.batchPlay([createLayerMask], { dialogOptions: 'dontDisplayDialogs' });
 
             
             // 填充图案数据
             await fillPatternData();
             
             // 设置图层属性
-            await action.batchPlay([setLayerProperties], {});
+            await action.batchPlay([setLayerProperties], { dialogOptions: 'dontDisplayDialogs' });
             
             // 根据checkbox信息是否创建剪贴蒙版。
             if (options.preserveTransparency) {
-                await action.batchPlay([createClippingMask], {});
+                await action.batchPlay([createClippingMask], { dialogOptions: 'dontDisplayDialogs' });
             }
             
 
-            await action.batchPlay([applyMask], {});
-            await action.batchPlay([mergeLayers], {});
+            await action.batchPlay([applyMask], { dialogOptions: 'dontDisplayDialogs' });
+            await action.batchPlay([mergeLayers], { dialogOptions: 'dontDisplayDialogs' });
 
 
             // 选中上一个选区，为主面板的清除选区留后路。
@@ -971,7 +971,7 @@ export class PatternFill {
                 _options: {
                     dialogOptions: "dontDisplay"
                 }
-            }], { synchronousExecution: true });
+            }], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
 
             console.log("✅ 图案填充完成");
         } catch (error) {
@@ -1043,7 +1043,7 @@ export class PatternFill {
                         }
                     ]
                 }
-            ], { synchronousExecution: true });
+            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
             
             console.log('✅ 获取当前激活图层ID:', layerResult[0].layerID);
             return layerResult[0].layerID;
@@ -1626,7 +1626,7 @@ export class PatternFill {
                             }
                         ]
                     }
-                ], { synchronousExecution: true }),
+                ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }),
                 action.batchPlay([
                     {
                         _obj: "get",
@@ -1641,7 +1641,7 @@ export class PatternFill {
                             }
                         ]
                     }
-                ], { synchronousExecution: true })
+                ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' })
             ]);
             
            // 获取文档尺寸信息
@@ -1746,7 +1746,7 @@ export class PatternFill {
                     dialogOptions: "dontDisplay"
                 }
             }
-        ], { synchronousExecution: true });
+        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
         
         return {
             left,
@@ -1785,7 +1785,7 @@ export class PatternFill {
                         }
                     ]
                 }
-            ], { synchronousExecution: true });
+            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
 
             // 获取colorIndicates信息
             let isSelectedAreas = false;
@@ -1827,7 +1827,7 @@ export class PatternFill {
                         dialogOptions: "dontDisplay"
                     }
                 }
-            ], { synchronousExecution: true });
+            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
 
             if (maskStatus.isEmpty) {
                 console.log('快速蒙版为空，填充快速蒙版');
@@ -1862,7 +1862,7 @@ export class PatternFill {
                             dialogOptions: "dontDisplay"
                         }
                     }
-                ], { synchronousExecution: true });
+                ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
 
                 // 第二步：使用前景色填充
                 await action.batchPlay([
@@ -1884,7 +1884,7 @@ export class PatternFill {
                             dialogOptions: "dontDisplay"
                         }
                     }
-                ], { synchronousExecution: true });
+                ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
                 
             } else {
 
@@ -1936,7 +1936,7 @@ export class PatternFill {
                                         }
                                     }
                                 }
-                            ], { synchronousExecution: true });
+                            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
                         } else if (!topLeftIsEmpty && bottomRightIsEmpty) {
                             // 只有右下角为空，选择右下角像素
                             console.log('只有右下角为空，选择右下角像素');
@@ -1969,7 +1969,7 @@ export class PatternFill {
                                         }
                                     }
                                 }
-                            ], { synchronousExecution: true });
+                            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
                         } else if (topLeftIsEmpty && bottomRightIsEmpty) {
                             console.log('两个角都为空，选择两个角的像素');
                              await action.batchPlay([
@@ -2001,7 +2001,7 @@ export class PatternFill {
                                         }
                                     }
                                 }
-                            ], { synchronousExecution: true });
+                            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
                             await action.batchPlay([
                                 {
                                     _obj: "addTo",
@@ -2031,7 +2031,7 @@ export class PatternFill {
                                         }
                                     }
                                 }
-                            ], { synchronousExecution: true });
+                            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
                         }
 
                         // 执行填充操作
@@ -2064,7 +2064,7 @@ export class PatternFill {
                                     dialogOptions: "dontDisplay"
                                 }
                             }
-                        ], { synchronousExecution: true });
+                        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
 
                         await action.batchPlay([
                             {
@@ -2085,7 +2085,7 @@ export class PatternFill {
                                     dialogOptions: "dontDisplay"
                                 }
                             }
-                        ], { synchronousExecution: true });
+                        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
                     }
                 }
             }
@@ -2257,7 +2257,7 @@ export class PatternFill {
                     dialogOptions: "dontDisplay"
                 }
             }
-        ], { synchronousExecution: true });
+        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
     }
      
     //-------------------------------------------------------------------------------------------------
@@ -2280,7 +2280,7 @@ export class PatternFill {
                     dialogOptions: "dontDisplay"
                 }
             }
-        ], { synchronousExecution: true });
+        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
     }
 
     //-------------------------------------------------------------------------------------------------
@@ -2778,7 +2778,7 @@ export class PatternFill {
                     dialogOptions: "dontDisplay"
                 }
                 }
-            ], { synchronousExecution: true });
+            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
             
             // 检查APP主面板的取消选区checkbox状态，如果为false则使用imagingAPI恢复选区
             if (state && state.deselectAfterFill === false && bounds.selectionValues && bounds.selectionDocIndices) {

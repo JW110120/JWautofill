@@ -168,18 +168,22 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         
         <div className="divider"></div>
 
-        {!clearMode && (
-          <div className="panel-section">
-            <div className="row-between">
-            <label className="label-4">混合模式</label>
-            <Select
-              value={blendMode}
-              groups={BLEND_MODE_OPTIONS}
-              onChange={(v) => onBlendModeChange(v as BlendMode)}
-            />
-            </div>
+        {/* 混合模式：清除模式下该值不起作用（清除描边固定走 clearEnum / 减去，
+            见 StrokeSelection.ts 的清除分支），但**不再整行隐藏** ——
+            改为「标签 + 下拉」都进入禁用态，保持面板版式稳定，
+            也让用户能看到「混合模式在这里不可用」这一信息（2026-10-08 用户要求）。
+            与主面板 `.app-blendmode-container` 的处理方式一致。 */}
+        <div className="panel-section">
+          <div className="row-between">
+          <label className={clearMode ? 'label-4 label-disabled' : 'label-4'}>混合模式</label>
+          <Select
+            value={blendMode}
+            groups={BLEND_MODE_OPTIONS}
+            disabled={clearMode}
+            onChange={(v) => onBlendModeChange(v as BlendMode)}
+          />
           </div>
-        )} 
+        </div>
 
         <div className="divider"></div>
         

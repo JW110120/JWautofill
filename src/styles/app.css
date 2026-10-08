@@ -52,6 +52,17 @@ body.secondary-panel-open #app .app-root > .panel {
   white-space: nowrap;
 }
 
+/* 禁用态：混合模式下拉被禁用（清除模式）时，标签同步置灰。
+   ⚠️ 必须写成「两级类」选择器：`.label-disabled`（common.css）与 `.app-blendmode-label`（app.css）
+      特异性同为 (0,1,0)，而 common.css 是 index.html 里的静态 <link>、app.css 由 style-loader
+      在运行时**后**注入 ⇒ 上面那条 `color: var(--text-color)` 会盖掉 `.label-disabled`
+      的 `--disabled-color`，标签看着根本没禁用（2026-10-08 用户实测缺陷）。
+      写法与本仓既有的 `.select-wrap .select-value` 同源（同为「两级类提特异性」）。
+      ⚠️ 不要改用 `.app-blendmode-container.disabled` 之类的新结构：那要改 TSX 且与既有惯例不符。 */
+.app-blendmode-label.label-disabled {
+  color: var(--disabled-color);
+}
+
 /* APP 带外边框的滑块容器，装着不透明度和羽化两个行内滑块：上 padding 20px 拉开与混合模式下拉菜单的间距；
    水平 padding 由容器统一给到内部行。 */
 .slider-container {

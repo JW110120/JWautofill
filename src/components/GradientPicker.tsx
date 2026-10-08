@@ -6,13 +6,12 @@ import { app, action, core } from 'photoshop';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
 import { debouncePsProbe, markPsBusyForEvent, runWhenIdle } from '../utils/psProbe';
 import { PresetManager } from '../utils/PresetManager';
+import { pickColorWithInitial } from '../utils/ColorPicker';
+import { parseCssRgb } from '../utils/ColorUtils';
 import { calcDragValue } from '../utils/dragSensitivity';
 import RangeSlider from './RangeSlider';
 import Select from './Select';
 import { helpTexts } from '../constants/helpTexts';
-
-const { executeAsModal } = core;
-const { batchPlay } = action;
 
 interface GradientPickerProps {
     isOpen: boolean;
@@ -27,6 +26,36 @@ interface GradientPickerProps {
      */
     resetToken?: number;
 }
+
+/**
+ * 灰色显示态判定：清除模式 / 图层蒙版 / 快速蒙版 / 单通道（红绿蓝·Alpha）编辑时，
+ * 颜色落到画布上的实际效果都是灰度 ⇒ 面板内的色板、渐变预览条、预设缩略图一律按灰度显示。
+ * 四个标志统一走这一个判定，避免各处条件漂移。
+ */
+const isGrayDisplayMode = (
+    isClearMode: boolean,
+    isInLayerMask: boolean,
+    isInQuickMask: boolean,
+    isInSingleColorChannel: boolean
+): boolean => isClearMode || isInLayerMask || isInQuickMask || isInSingleColorChannel;
+
+/**
+ * 面板色板显示色（纯函数，模块级 —— 禁止下沉进组件体内，es5 下 `const` 提升会导致白屏）。
+ *   · 普通模式：原色 `#rrggbb`；
+ *   · 灰色态：按 0.299/0.587/0.114 转灰度（口径与渐变预览条 / 预设缩略图完全一致）。
+ * ⚠️ 只影响**显示**，不改动 stops 里存着的真实颜色；退出灰色态后自然恢复彩色。
+ */
+const getDisplayColorHex = (cssColor: string, gray: boolean): string => {
+    const m = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i.exec(cssColor || '');
+    if (!m) return 'rgb(0, 0, 0)';
+    const r = parseInt(m[1], 10);
+    const g = parseInt(m[2], 10);
+    const b = parseInt(m[3], 10);
+    const hex = (n: number) => n.toString(16).padStart(2, '0');
+    if (!gray) return `#${hex(r)}${hex(g)}${hex(b)}`;
+    const v = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+    return `#${hex(v)}${hex(v)}${hex(v)}`;
+};
 
 // 生成考虑中点插值的预设预览样式
 const generatePresetPreviewStyle = (preset: Gradient, isInLayerMask: boolean = false, isInQuickMask: boolean = false, isInSingleColorChannel: boolean = false, isClearMode: boolean = false): string => {
@@ -489,6 +518,10 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const [isInLayerMask, setIsInLayerMask] = useState(false);
     const [isInQuickMask, setIsInQuickMask] = useState(false);
     const [isInSingleColorChannel, setIsInSingleColorChannel] = useState(false);
+
+    // 灰色显示态（唯一事实来源）：色板与渐变预览条共用，保证两者口径一致。
+    // ⚠️ 必须声明在组件体靠前处：JSX 里读它，若放到下方声明会因 es5 的 `const` 提升而白屏。
+    const grayDisplay = isGrayDisplayMode(isClearMode, isInLayerMask, isInQuickMask, isInSingleColorChannel);
 
     // 检测图层蒙版和快速蒙版模式
     useEffect(() => {
@@ -1588,7 +1621,11 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             className={'color-slider-thumb' + (selectedStopIndex === index && selectedStopType === 'color' ? ' slider-thumb-selected' : '')}
                             style={{ 
                                 left: `${stop.colorPosition}%`,
-                                backgroundColor: getRGBColor(stop.color),
+                                // ⚠️ 灰色态（清除/图层蒙版/快速蒙版/单通道）下色标也要同步灰化：
+                                //    上一轮只改了「颜色」行的 .color-preview，遗漏了轨道上这排方形色标
+                                //    ⇒ 预览条已灰、色标仍是彩色的（2026-10-08 用户指出）。
+                                //    getDisplayColorHex 只影响显示，stops 里仍存原色，退出灰色态自动恢复。
+                                backgroundColor: getDisplayColorHex(stop.color, grayDisplay),
                                 ...(isDraggingColor && dragStopIndex === index ? {
                                     cursor: 'grabbing'
                                 } : {})
@@ -1684,34 +1721,19 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         </div>
                         <div
                             className="color-preview"
-                            style={{ backgroundColor: getRGBColor(stops[selectedStopIndex].color) }}
+                            style={{ backgroundColor: getDisplayColorHex(stops[selectedStopIndex].color, grayDisplay) }}
                             onClick={async () => {
-                                try {
-                                    const result = await executeAsModal(async () => {
-                                        return await batchPlay(
-                                            [{
-                                                _obj: "showColorPicker",
-                                                _target: [{
-                                                    _ref: "application"
-                                                }]
-                                            }],
-                                            {}
-                                        );
-                                    }, { commandName: '选择颜色' });
-
-                                    if (result && result[0] && result[0].RGBFloatColor) {
-                                        const { red, grain, blue } = result[0].RGBFloatColor;
-                                        const r = Math.round(red);
-                                        const g = Math.round(grain);
-                                        const b = Math.round(blue);
-                                        const currentAlpha = stops[selectedStopIndex].color.match(/,\s*([\d.]+)\s*\)$/)?.[1] || '1';
-                                        const newColor = `rgba(${r}, ${g}, ${b}, ${currentAlpha})`;
-                                        
-                                        handleStopChange(selectedStopIndex, newColor);
-                                    }
-                                } catch (error) {
-                                    console.error('显示颜色选择器时出错:', error);
-                                }
+                                // ⚠️ 初始色必须传「色标当前颜色」：showColorPicker 无参、只认当前前景色，
+                                //    不先把前景色设成它，色板显示 A 而拾色器打开 PS 前景色 B（旧缺陷）。
+                                //    前景色的保存/还原由 pickColorWithInitial 内部负责。
+                                const stop = stops[selectedStopIndex];
+                                const picked = await pickColorWithInitial(
+                                    parseCssRgb(stop.color) || { red: 0, green: 0, blue: 0 },
+                                    '选择颜色'
+                                );
+                                if (!picked) return;
+                                const currentAlpha = stop.color.match(/,\s*([\d.]+)\s*\)$/)?.[1] || '1';
+                                handleStopChange(selectedStopIndex, `rgba(${picked.red}, ${picked.green}, ${picked.blue}, ${currentAlpha})`);
                             }}
                         />
                     </div>   

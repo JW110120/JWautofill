@@ -441,7 +441,7 @@ export class MaskSyncEngine {
         _options: { dialogOptions: 'dontDisplay' },
       }));
       try {
-        const results = await action.batchPlay(descriptors, { synchronousExecution: true });
+        const results = await action.batchPlay(descriptors, { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
         if (Array.isArray(results)) {
           for (let i = 0; i < results.length && i < chunk.length; i++) {
             const r = results[i];
@@ -1084,7 +1084,7 @@ export class MaskSyncEngine {
         _options: { dialogOptions: 'dontDisplay' },
       }));
       try {
-        const results = await action.batchPlay(descriptors, { synchronousExecution: true });
+        const results = await action.batchPlay(descriptors, { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
         if (Array.isArray(results)) {
           for (let i = 0; i < results.length && i < chunk.length; i++) {
             const r = results[i];

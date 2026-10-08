@@ -49,7 +49,7 @@ export class SelectionHandler {
                         dialogOptions: "dontDisplay"
                     }
                 }
-            ], {});
+            ], { dialogOptions: 'dontDisplayDialogs' });
         } catch (error) {
             console.error('选择并遮住失败:', error);
             throw error;
@@ -110,7 +110,7 @@ export class SelectionHandler {
                             }
                         ]
                     }
-                ], { synchronousExecution: true }),
+                ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }),
                 action.batchPlay([
                     {
                         _obj: "get",
@@ -125,7 +125,7 @@ export class SelectionHandler {
                             }
                         ]
                     }
-                ], { synchronousExecution: true })
+                ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' })
             ]);
             
             // 获取文档尺寸信息
