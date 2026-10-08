@@ -5,6 +5,7 @@ import IconButton from '../components/IconButton';
 import { app, action, core } from 'photoshop';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
 import { debouncePsProbe, markPsBusyForEvent, runWhenIdle } from '../utils/psProbe';
+import { addPsNotificationListeners, removePsNotificationListeners } from '../utils/psAccess';
 import { PresetManager } from '../utils/PresetManager';
 import { pickColorWithInitial } from '../utils/ColorPicker';
 import { parseCssRgb } from '../utils/ColorUtils';
@@ -579,12 +580,12 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         };
 
         // 添加事件监听器
-        action.addNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], handleNotification);
+        addPsNotificationListeners(handleNotification);
 
         // 清理函数
         return () => {
             maskProbe.cancel();
-            action.removeNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], handleNotification);
+            removePsNotificationListeners(handleNotification);
         };
     }, [isOpen]);
 

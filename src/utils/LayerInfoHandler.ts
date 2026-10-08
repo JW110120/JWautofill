@@ -1,4 +1,6 @@
 import { app, action } from 'photoshop';
+import { psRead } from './psAccess';
+import { getDocGeneration } from './psProbe';
 
 export interface LayerInfo {
     isBackground: boolean;
@@ -35,6 +37,16 @@ const CACHE_TTL_MS = 300;
 let cacheKey: string | null = null;
 let cacheValue: LayerInfo | null = null;
 let cacheStamp = 0;
+/**
+ * 产出该缓存条目时的**文档世代号**（见 psProbe.getDocGeneration）。
+ *
+ * ⚠️ 为什么必须有它（根因 R2 的后果）：活动图层 id 在**整个宿主会话内**唯一，
+ * 但「关闭再打开同一份文档」拿到的是**新的** id ⇒ id 口径能防住这一半；
+ * 而「同名文档互切」「文档被销毁后读取落到别的文档」这些场合，id 口径防不住
+ * （甚至可能因为图层 id 复用得恰巧相同而误命中）。世代号是文档级变化的**唯一**
+ * 权威信号：不相等 ⇒ 无条件 miss。
+ */
+let cacheGen = -1;
 
 function nowMs(): number {
     return Date.now();
@@ -56,6 +68,7 @@ export function invalidateLayerInfoCache(): void {
     cacheKey = null;
     cacheValue = null;
     cacheStamp = 0;
+    cacheGen = -1;
 }
 
 /** 判断某个事件是否需要让图层信息缓存失效。 */
@@ -218,51 +231,74 @@ async function probeChannelState(): Promise<{ inLayerMask: boolean; inSingleChan
     return result;
 }
 
+/**
+ * 一次性完成「DOM 属性读 + 通道探测 + 写缓存」的满读取。
+ *
+ * ⚠️ **必须在模态作用域内调用**（`psRead` 负责），理由：`app.activeDocument` /
+ * `activeLayer.bounds` 是**无法异步化的 DOM 属性读**，忙碌期读它就会被宿主拒绝
+ * 并弹出原生报错框 —— 那条路径绕过 try/catch，唯一的防护是「在持有模态作用域
+ * 时读」。
+ *
+ * @param gen 进入本次读取前的文档世代号。写缓存时一并记下；若读取期间文档变了，
+ *            `psRead` 会把结果作废（不会走到这里的写入）。
+ */
+async function probeLayerInfo(gen: number): Promise<LayerInfo | null> {
+    const doc = app.activeDocument;
+    if (!doc) return null;
+
+    const activeLayer = doc.activeLayers && doc.activeLayers.length > 0 ? doc.activeLayers[0] : null;
+    if (!activeLayer) return null;
+
+    // 图层 id 快路径：同一个模态作用域内被连续调用（填充 + 巡检 tick）时省掉
+    // 那几条 batchPlay；跨世代（切文档）已由上面的 cacheGen 挡住。
+    const key = `${activeLayer.id}`;
+    if (cacheKey === key && cacheGen === gen && cacheValue && nowMs() - cacheStamp < CACHE_TTL_MS) {
+        return cacheValue;
+    }
+
+    const domInfo = readLayerDomInfo(doc);
+    if (!domInfo) return null;
+
+    const channelState = await probeChannelState();
+    const info: LayerInfo = {
+        isBackground: domInfo.isBackground,
+        hasTransparencyLocked: domInfo.hasTransparencyLocked,
+        hasPixels: domInfo.hasPixels,
+        isHidden: domInfo.isHidden,
+        isInQuickMask: !!doc.quickMaskMode,
+        isInLayerMask: channelState.inLayerMask,
+        isInSingleColorChannel: channelState.inSingleChannel
+    };
+
+    cacheKey = key;
+    cacheValue = info;
+    cacheStamp = nowMs();
+    cacheGen = gen;
+    return info;
+}
+
 export class LayerInfoHandler {
     /**
      * 取当前活动图层信息。
      *
      * 性能契约（2026-10-08）：
      *   · 缓存命中 → **0 次** IPC；
-     *   · 缓存未命中 → **1 次** batchPlay（内部两条 get 同批下发）+ 少量 DOM 属性读。
-     * 优化前是 6~7 次独立的同步 batchPlay get（约 18 次 IPC 往返）。
+     *   · 缓存未命中 → 一次 `psRead`（内部 1 次 batchPlay + 少量 DOM 属性读）。
+     *
+     * ⚠️ 语义变化（2026-10-08 第二轮）：未命中时读取走 `psRead` ⇒ **PS 明显忙碌时
+     * 返回 null 而不是硬闯**。调用方一律按「没拿到 ⇒ 走保守分支」处理（既有代码
+     * 早已如此，因为旧实现在忙碌期也会抛错并 return null）。
      */
     static async getActiveLayerInfo(): Promise<LayerInfo | null> {
-        try {
-            const doc = app.activeDocument;
-            if (!doc) return null;
-
-            const activeLayer = doc.activeLayers && doc.activeLayers.length > 0 ? doc.activeLayers[0] : null;
-            if (!activeLayer) return null;
-
-            // 缓存 key 用活动图层 id：PS 的图层 id 在**整个宿主会话内唯一**，
-            // 因此不必再读 doc.id（那也是一次宿主 get）。换图层 / 换文档都会自动 miss。
-            const key = `${activeLayer.id}`;
-            if (cacheKey === key && cacheValue && nowMs() - cacheStamp < CACHE_TTL_MS) {
-                return cacheValue;
-            }
-
-            const domInfo = readLayerDomInfo(doc);
-            if (!domInfo) return null;
-
-            const channelState = await probeChannelState();
-            const info: LayerInfo = {
-                isBackground: domInfo.isBackground,
-                hasTransparencyLocked: domInfo.hasTransparencyLocked,
-                hasPixels: domInfo.hasPixels,
-                isHidden: domInfo.isHidden,
-                isInQuickMask: !!doc.quickMaskMode,
-                isInLayerMask: channelState.inLayerMask,
-                isInSingleColorChannel: channelState.inSingleChannel
-            };
-
-            cacheKey = key;
-            cacheValue = info;
-            cacheStamp = nowMs();
-            return info;
-        } catch (error) {
-            return null;
+        const gen = getDocGeneration();
+        // 快路径（零 IPC）：世代号未变 + TTL 未过期。
+        // ⚠️ 不再校验「活动图层 id」—— 那需要一次 DOM 读（必须进模态作用域，反而
+        //    比它想省的那点开销更贵）。「切换图层」必然派发 select ⇒
+        //    shouldInvalidateLayerInfo 已让缓存失效；300ms TTL 再兜一层底。
+        if (cacheValue && cacheGen === gen && nowMs() - cacheStamp < CACHE_TTL_MS) {
+            return cacheValue;
         }
+        return await psRead<LayerInfo | null>(() => probeLayerInfo(gen), { label: '读取图层信息' });
     }
 
     /**

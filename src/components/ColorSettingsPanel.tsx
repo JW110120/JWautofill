@@ -4,6 +4,7 @@ import { ColorSettings } from '../types/state';
 import RangeSlider from './RangeSlider';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
 import { debouncePsProbe, markPsBusyForEvent, runWhenIdle } from '../utils/psProbe';
+import { addPsNotificationListeners, removePsNotificationListeners } from '../utils/psAccess';
 import { calcDragValue } from '../utils/dragSensitivity';
 import RadioGroup, { RadioOption } from './RadioGroup';
 
@@ -216,12 +217,12 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
         };
 
         // 添加事件监听器
-        action.addNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], handleNotification);
+        addPsNotificationListeners(handleNotification);
 
         // 清理函数
         return () => {
             maskProbe.cancel();
-            action.removeNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], handleNotification);
+            removePsNotificationListeners(handleNotification);
         };
     }, [isOpen]);
 

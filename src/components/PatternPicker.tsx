@@ -5,6 +5,7 @@ import IconButton from '../components/IconButton';
 import { action, core, imaging, app } from 'photoshop';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
 import { debouncePsProbe, markPsBusyForEvent, runWhenIdle } from '../utils/psProbe';
+import { addPsNotificationListeners, removePsNotificationListeners } from '../utils/psAccess';
 import { PresetManager } from '../utils/PresetManager';
 import { calcDragValue } from '../utils/dragSensitivity';
 import RangeSlider from './RangeSlider';
@@ -656,12 +657,12 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
         };
 
         // 添加事件监听器
-        action.addNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], handleNotification);
+        addPsNotificationListeners(handleNotification);
 
         // 清理函数
         return () => {
             maskProbe.cancel();
-            action.removeNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], handleNotification);
+            removePsNotificationListeners(handleNotification);
         };
     }, [isOpen]);
 

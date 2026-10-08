@@ -40,8 +40,25 @@ import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/Main
 import { setFocusMode } from './utils/FocusModeBus';
 import {
   debouncePsProbe, isPsBusy, markPsBusyForEvent, psBusyRemain, runWhenIdle,
-  markPsBusy, fillReadyRemain
+  markPsBusy, fillReadyRemain,
+  // 文档级变化（打开/关闭/切文档）的显式登记入口：供「活动文档 id 巡检」兜底通路使用。
+  noteDocLevelEvent,
+  // 文档级「持续忙碌」闩锁：时间常数堵不住「打开/关闭大文档要好几秒」，
+  // 闩锁期间粗筛恒为真 ⇒ 连未走 psRead 的裸读也一起退避；释放靠模态探测。
+  isDocLatchActive, endDocLatch, extendDocLatch,
+  // 闩锁的「最短保持」判定：打开大文档是**分阶段**的，宿主可能在阶段间隙里
+  // 短暂松开模态锁 ⇒ 光靠一次成功的探测不足以放行（见 advanceDocLatch）。
+  isDocLatchMinHoldElapsed
 } from './utils/psProbe';
+import {
+  // PS 访问层：所有「失败即弹宿主原生框」的读取都必须经它（模态作用域兜底正确性）。
+  psRead, psTryRead,
+  // 宿主空闲探测：**只拿锁不读数据**，是文档级闩锁唯一的释放判据。
+  probeHostIdle,
+  // 通知注册：逐事件名容错，且事件名单含 open/close/save（见 PS_NOTIF_EVENTS 的根因说明）。
+  addPsNotificationListeners, removePsNotificationListeners
+} from './utils/psAccess';
+import { invalidateLayerSnapshot } from './utils/layerTreeSnapshot';
 import ToggleSwitch from './components/ToggleSwitch';
 import RadioGroup, { RadioOption } from './components/RadioGroup';
 import { helpTexts } from './constants/helpTexts';
@@ -142,6 +159,25 @@ class App extends React.Component<AppProps, AppState> {
     // ⚠️ 上限 1 次：必须是**有界**重试，否则宿主持续忙碌时会变成无限重试循环
     // （每次失败都再排一个 timer，永远停不下来）。
     private selectionRetryCount = 0;
+    // ===== 活动文档身份巡检（文档级事件覆盖的**兜底通路**）=====
+    // 为什么需要：`open` / `close` 这两个事件名是唯一无法在本仓离线验证的假设
+    // （UXP 的事件名存在重命名先例）。万一某宿主版本不派发它们，切文档期间
+    // `isPsBusy()` 会恒为 false ⇒ 轮询照常发 get ⇒ 弹框。
+    // 巡检每 500ms 读一次 `app.activeDocument.id`（一次廉价属性读，经 psRead 保护），
+    // 发现 id 变了就按「文档级变化」处理：世代号 ++ / 打长静默窗口 / 清缓存。
+    // ⚠️ 2026-10-08 第二轮起它还承担**第二个职责**：文档级闩锁生效期间，它是唯一被
+    // 允许继续跑的通路，负责用「空模态请求」探测宿主是否已空闲，从而**释放**闩锁
+    // （见 advanceDocLatch）。两条职责共用这一个定时器，避免多一个轮询源。
+    private docWatchTimer: any = null;
+    private lastDocId: number | null = null;
+    /** 闩锁探测的并发守卫（探测可能排队 300ms，防重叠）。 */
+    private docLatchProbeBusy = false;
+    /** 闩锁探测的自调度定时器（同一个时刻只允许一个 pending）。 */
+    private docLatchProbeTimer: any = null;
+    /** 上一次「探测成功」的时刻（0 = 尚无）；用于要求**连续多次**成功才放行。 */
+    private docLatchLastOkAt = 0;
+    /** 连续成功的**次数**（任一失败即清零）。见 DOC_LATCH_CONFIRM_COUNT。 */
+    private docLatchOkStreak = 0;
     // 面板状态持久化门闩：componentDidMount 里 PanelStateManager.initialize 异步读取完成之前，
     // MainToggleBus 轮询（250ms）等来源就可能 setState isEnabled 触发 componentDidUpdate 的
     // 「有变更即保存」逻辑——用默认值整体覆盖 panel-state.json，把用户已保存的
@@ -166,6 +202,50 @@ class App extends React.Component<AppProps, AppState> {
     private quickMaskTimer: any = null;
     private quickMaskBusy = false;
     private static readonly QUICK_MASK_WATCH_INTERVAL_MS = 300;
+    /**
+     * 活动文档身份巡检间隔（毫秒）。
+     * 500ms ⇒ 每秒 2 次廉价属性读，代价可忽略；而它兜住的是「文档级事件
+     * 未被派发/未被识别」这一最坏情况 —— 那条路径一旦漏掉就是必弹框。
+     */
+    private static readonly DOC_WATCH_INTERVAL_MS = 500;
+    /**
+     * 闩锁期间「宿主空闲探测」的排队时限（毫秒）。
+     *
+     * 探测本身就是一次 `executeAsModal` 空请求（**不读任何数据**）：
+     *   · 拿得到锁 ⇒ 宿主已可控 ⇒ 释放闩锁；
+     *   · 拿不到（排队超时）⇒ 宿主仍在自己的模态作用域里 ⇒ 续期闩锁。
+     * 取 300ms 是为了「快速失败、下一个周期再来」：巡检间隔 500ms，
+     * 两者叠加相当于每半秒问一次，既不会堆积请求，也能在大文档就绪后迅速放行。
+     */
+    private static readonly DOC_LATCH_PROBE_TIMEOUT_MS = 300;
+    /**
+     * 两次「探测成功」的间隔上限（毫秒）：只有在该时限内的**连续两次**成功
+     * 才认定宿主真的空闲。超过 ⇒ 视为新的探测序列，再确认一次。
+     */
+    private static readonly DOC_LATCH_CONFIRM_MS = 1200;
+    /**
+     * 闩锁期间两次探测之间的间隔（毫秒）。
+     * 400ms ⇒ 一次快速切文档最多被多压 ~0.8s（首探 + 确认），而大文档打开期间
+     * 相当于每 0.4s 问一次「好了吗」，既不会堆积请求，也能在就绪后迅速放行。
+     */
+    private static readonly DOC_LATCH_PROBE_MS = 400;
+
+    /**
+     * 闩锁放行所需的**连续成功探测次数**。
+     *
+     * ⚠️ 为什么不是 1：打开大文档是**分阶段**的（解析 → 建树 → 生成缩略图 → 建窗口），
+     * 宿主完全可能在某些阶段之间短暂松开模态锁 —— 那一刻探测会成功，但紧接着发起的
+     * 读取照样撞回忙碌窗口。要求连续多次成功（任一次失败即清零）才能过滤掉这类间隙。
+     */
+    private static readonly DOC_LATCH_CONFIRM_COUNT = 3;
+    /**
+     * 闩锁的**最短保持时长**（毫秒）。
+     *
+     * 只有「文档级事件」或「读取失败」进入的闩锁才要求它（那两种情况都有正在跑的
+     * 重命令）。「身份巡检首次发现文档」进入的闩锁不要求 —— 那时我们刚成功读到
+     * 宿主的回答，宿主并不忙，强制多等只是白白拖慢插件启动后的首次刷新。
+     */
+    private static readonly DOC_LATCH_MIN_HOLD_MS = 1500;
 
     /**
      * 专注模式：APP 父面板里「自动关开关」+「自动切套索」同时勾选即自动成立，任一取消即退出。
@@ -434,9 +514,15 @@ class App extends React.Component<AppProps, AppState> {
         initialMaskProbe();
         // 快速蒙版巡检（PS 不派发通知，只能轮询兜底；按展开/可见状态启停）
         this.syncQuickMaskWatch();
+        // 活动文档身份巡检（文档级事件的兜底通路，见 docWatchTimer 字段注释）
+        this.startDocWatch();
         
         // 监听Photoshop事件来检查状态变化
-        await action.addNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], this.handleNotification);
+        // ⚠️ 事件名单与注册方式统一走 psAccess（唯一事实来源）：名单里含 `open` /
+        // `close`（历史上全仓无人注册 ⇒ 开关文档全程无闸门，必弹框），并且**逐个
+        // 注册**——UXP 对数组里的非法事件名会整体抛错，逐个注册可保证「某版本不
+        // 认识 open/close」时其余事件仍生效。
+        addPsNotificationListeners(this.handleNotification);
 
         // 许可证：检查当前状态并尝试自动重新验证
         await this.checkLicenseStatus();
@@ -651,9 +737,17 @@ class App extends React.Component<AppProps, AppState> {
         }
         this.selectionRetryCount = 0;
         invalidateLayerInfoCache();
-        action.removeNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], this.handleNotification);
+        removePsNotificationListeners(this.handleNotification);
         document.removeEventListener('mousemove', this.handleMouseMove);
         document.removeEventListener('mouseup', this.handleMouseUp);
+        if (this.docWatchTimer) {
+            clearInterval(this.docWatchTimer);
+            this.docWatchTimer = null;
+        }
+        if (this.docLatchProbeTimer) {
+            clearTimeout(this.docLatchProbeTimer);
+            this.docLatchProbeTimer = null;
+        }
         if (this.toolWatchTimer) {
             clearInterval(this.toolWatchTimer);
             this.toolWatchTimer = null;
@@ -910,23 +1004,20 @@ class App extends React.Component<AppProps, AppState> {
             return;
         }
 
-        // ⚠️ 忙碌闸门（2026-10-07 修「切换活动文档时弹命令"获取"当前不可用」）：
-        // 本函数由 PS 通知回调直接调用，而回调是在命令执行【中途】派发的 ——
-        // 切文档时 PS 要重建文档窗口/图层面板，忙碌窗口可达 1s 以上（见 psProbe 的
-        // BUSY_AFTER_DOC_SWITCH_MS）。此刻发 get 必被宿主拒绝并弹出原生报错框
-        // （该框绕过 try/catch 与 dialogOptions）⇒ 必须等空闲后再动手。
+        // ⚠️ 填充路径的**私有**冷却（不是 `isPsBusy()`）：
+        // `isPsBusy()` 是全局共享粗筛闸门，被 pollQuickMask / pollToolChange /
+        // MaskSyncEngine / debouncePsProbe / runWhenIdle 等 9 处依赖 ——
+        // **绝不为「填充更快」而缩短**（2026-10-08 已付过代价：缩短后那些轮询在
+        // PS 仍忙时提前放闸 ⇒ 四类弹框）。
+        // 填充要的「快」走这份私有冷却：纯选区事件只等 ~60ms；只有「最近 600ms
+        // 内发生过重命令」（删除/新建/打开/关闭/切文档）时才服从全局静默剩余时间。
         //
-        // ⚠️⚠️ 这里用 `fillReadyRemain()`（填充**私有**冷却），**不是** `isPsBusy()`：
-        // `isPsBusy()` 是全局共享闸门，被 pollQuickMask / pollToolChange /
-        // MaskSyncEngine / debouncePsProbe / runWhenIdle 等 9 处依赖。
-        // 2026-10-08 曾把选区事件的全局窗口压到 60ms想给填充提速，
-        // 结果那 9 处轮询在 PS 仍忙时提前放闸 ⇒ 宿主弹「命令"获取"当前不可用」，
-        // 表现为：快速删图层必报错 / 删完立刻套索必报错 / 切文档首次报错 /
-        // 快速蒙版下三种填充全报错。**缩短全局窗口不是提速的正确手段。**
-        //现在：全局窗口恒为 300/1200ms（不动），只有填充走自己的私有冷却，
-        // 且「最近 600ms 有过重命令」时会自动退回保守等待。
+        // ⚠️⚠️ 正确性**不再**由这里保证：等待只为「少在模态里排队」，真正防弹框的是
+        // 下面 `executeAsModal` 的模态作用域（详见 psAccess.psRead 的长注释）。
+        // 因此顺延**上不封顶** —— 旧实现「第 11 次顺延就硬闯」本身就是弹框出口之一。
+        // 忙碌窗口是时间驱动的有限值，不会出现「永远等不到」。
         const fillWait = fillReadyRemain();
-        if (fillWait > 0 && this.selectionBusyDeferrals < 10) {
+        if (fillWait > 0) {
             this.selectionBusyDeferrals++;
             if (this.selectionRetryTimer) clearTimeout(this.selectionRetryTimer);
             // ⚠️ 事件对象要一并带过去：否则 feather 事件的「跳过」语义会丢失，
@@ -948,20 +1039,18 @@ class App extends React.Component<AppProps, AppState> {
         }
 
         try {
-            const doc = app.activeDocument;
-            if (!doc) {
-                return;
-            }
-
             // 上锁（在任何 await 之前同步置位，让后续事件被 pendingSelection 捕获）
             this.isFilling = true;
 
-            // ⚠️ 优化（2026-10-08）：此处**不再**做「外层 getSelection + 外层 quickMaskMode 读」。
-            // 原因：两者与模态内的重复查询拿到的是同一份数据，纯属多花 2 次同步 IPC
-            //（低端机 10~30ms）。现在统一只在 executeAsModal 内读一次：
+            // ⚠️ 优化（2026-10-08）：外层**不再**做任何 PS 读取。
             //   · 选区是否存在 → 由模态内的校验负责（它更靠近真正的 fill，语义更准）；
-            //   · 快速蒙版状态 → 由 layerInfo.isInQuickMask 带回（本次填充本来就要取layerInfo）。
-            // 外层只剩一次 app.activeDocument（模态作用域与 suspendHistory 都要用）。
+            //   · 快速蒙版状态 → 由 layerInfo.isInQuickMask 带回（本次填充本来就要取 layerInfo）；
+            //   · **活动文档** → 一并移入模态作用域（见下）。它是填充路径上模态外
+            //     **唯一**的 PS 访问，也正是「删完图层立刻套索并填充」弹
+            //     「命令"获取"当前不可用」的直接触发点：闸门一旦判断失误（忙碌期超过
+            //     顺延上限），第一个撞上 PS 的读就发生在模态作用域**之外**。
+            // ⇒ 移入后填充路径在模态外**零 PS 访问**，于是「抢时间」的快速通道彻底
+            //   不再需要：安静路径几乎立即开填，忙碌路径在模态内排队而不是弹框。
 
             const featherAmount = Number(this.state.feather);
             const needsFeather = featherAmount > 0;
@@ -976,6 +1065,13 @@ class App extends React.Component<AppProps, AppState> {
             const needsHistory = this.state.autoUpdateHistory;
 
             await core.executeAsModal(async () => {
+                // ⚠️ 模态作用域内的第一件事：取活动文档。
+                // 原先这一步在模态**外**（填充路径上唯一的模态外 PS 访问）——
+                // 闸门判断失误时它第一个撞上忙碌的宿主，直接换回一个原生报错框。
+                // 现在模态态由本插件持有，宿主不会拒 get。
+                const doc = app.activeDocument;
+                if (!doc) return;
+
                 // 【关键防御】校验选区非空 —— 前一次填充若开了 deselectAfterFill，
                 // 选区可能已在排队期间被清空；空选区下 fill 整个图层
                 // 表现为"填充整个文档"。直接放弃本轮，避免误伤整张画布。
@@ -1064,10 +1160,13 @@ class App extends React.Component<AppProps, AppState> {
                 }, modeLabel);
             }, { commandName: '正在处理选区中......' });
         } catch (error) {
-            // ⚠️ 降级重试：填充私有冷却（60ms）可能仍撞上宿主忙碌期
-            // （极长命令 / 大文档 / 刚删完图层就套索）。此时打一段保守窗口再试一次。
-            // ⚠️ 只重试一次（selectionRetryCount 上限）：宿主若持续忙碌，
-            //    无界重试会变成永不停止的循环。
+            // ⚠️ 降级重试：填充在模态内排队/被拒（宿主忙碌）时，打一段保守窗口再试一次。
+            // ⚠️⚠️ 新设计下本分支**不再是弹框路径**：模态作用域把「不可捕获的宿主
+            //   原生框」降级成了「可捕获的 rejection」—— 走到这里只表示这一轮没填上，
+            //   用户不会被打扰。重试是为了让这次填充最终落地。
+            // ⚠️ 只重试一次（selectionRetryCount 上限）：不能无界重试，
+            //    否则宿主持续忙碌时它变成永不停止的循环；而且「填充已跑了一半才抛错」
+            //    的场合，多次重试有重复填充的风险。
             if (this.selectionRetryCount < 1) {
                 this.selectionRetryCount++;
                 markPsBusy(FILL_RETRY_GUARD_MS);
@@ -1668,16 +1767,26 @@ class App extends React.Component<AppProps, AppState> {
 
     // 读取当前工具 ID：优先用 HotkeyBridge 里已验证过的 application.tool._enum，
     // 读不到再退到 UXP 的 app.currentTool。
+    //
+    // ⚠️ 两次读取都必须走 psRead（模态作用域）：本函数既被 300ms 巡检调用，
+    // 也被通知回调（maybeAutoTurnOff）调用 —— 后者落在 PS 忙碌窗口内时，
+    // 裸读会直接换回一个宿主原生报错框（绕过 try/catch）。
     private async readCurrentToolId(): Promise<string | null> {
-        try {
-            const t = await getSelectedBrushToolEnum();
-            if (t) return t;
-        } catch { /* 退到 UXP API */ }
-        try {
+        // ⚠️ 两次读取都放进**同一个**模态作用域（2026-10-08 第二轮）：
+        // `getSelectedBrushToolEnum()` 是裸 batchPlay get（`application.tool`），
+        // 而本函数由 300ms 工具巡检与通知回调共同调用 —— 它落在文档级忙碌窗口里
+        // 就是一次宿主原生弹框（本轮用户实测「打开/关闭超大文档连点八下」的来源之一）。
+        // 以前只把 `app.currentTool` 那一步包进了 psRead，第一条仍然是裸读。
+        // retries:0 —— 巡检每 300ms 一轮，丢一轮无副作用，不值得为它排队。
+        return await psRead<string | null>(async () => {
+            try {
+                const t = await getSelectedBrushToolEnum();
+                if (t) return t;
+            } catch { /* 退到 UXP API */ }
             const cur: any = (app as any)?.currentTool;
             const id = typeof cur === 'string' ? cur : cur?.id;
             return typeof id === 'string' && id ? id : null;
-        } catch { return null; }
+        }, { label: '读取当前工具', retries: 0 });
     }
 
     // 按「主开关开启 + 选项开启」启停巡检：不需要时不跑，避免无谓轮询。
@@ -1716,6 +1825,165 @@ class App extends React.Component<AppProps, AppState> {
         }
     }
 
+    // ===== 活动文档身份巡检（文档级事件的兜底通路）=====
+    // 与「快速蒙版巡检」不同，本巡检**始终开启**：它守的是正确性（文档换了却没人
+    // 知道 ⇒ 缓存/快照指向已销毁的文档、闸门不生效），而不是某个可选功能的刷新。
+    private startDocWatch() {
+        if (this.docWatchTimer) return;
+        this.docWatchTimer = setInterval(() => { void this.pollDocIdentity(); }, App.DOC_WATCH_INTERVAL_MS);
+        void this.pollDocIdentity();
+    }
+
+    /**
+     * 读一次活动文档 id，与上次比对；变了就按「文档级变化」处理。
+     *
+     * ⚠️ 必须用 `psTryRead` 而不是 `psRead`：后者把「读失败」与「读到 null」
+     * 都压成 null，而这两者语义完全相反 —— 读失败（忙碌期）**不能**当作
+     * 「文档没了」（否则会误判成切文档、白白作废在途任务与缓存）。
+     */
+    private async pollDocIdentity() {
+        // ① 闩锁生效期间：本巡检是**唯一**被允许继续跑的通路，负责推进并释放闩锁。
+        //    ⚠️ 必须先于粗筛判断 —— 闩锁本身就让 isPsBusy() 恒为真，先判粗筛会导致
+        //    「闩锁一开就再也没人去关它」（自锁）。
+        if (isDocLatchActive()) {
+            await this.advanceDocLatch();
+            return;
+        }
+        // ② 常规分支：粗筛 + 一次模态作用域内的身份读。
+        // 粗筛：明显还在忙就不去读（本轮跳过，下一轮再看）。文档级事件本身也会
+        // 打长窗口，因此忙碌期通常正是「刚发生文档级变化」的时段。
+        if (isPsBusy()) return;
+        const r = await psTryRead<number | null>(() => {
+            const d = app.activeDocument;
+            return d ? (typeof d.id === 'number' ? d.id : null) : null;
+        }, { label: '检测活动文档', retries: 0 });
+        if (!r.ok) return;                       // 没读到 ⇒ 不做任何判定
+        this.applyDocIdentity(r.value);
+    }
+
+    /**
+     * 推进文档级闩锁：用「**只拿锁、不读数据**」的空模态请求问宿主是否已可控。
+     *
+     * 为什么必须是「不读数据」的探测：任何 get 在宿主忙碌期都会弹一次原生
+     * 「命令"获取"当前不可用」，探测本身就会变成用户看到的那堆警告窗口。
+     * `executeAsModal` 的锁语义是官方的互斥原语：PS 自己握着模态作用域时请求
+     * 只会排队到超时（可捕获的异常），拿到锁则说明 PS 已把控制权交出来。
+     *
+     * 连续两次成功才放行（`DOC_LATCH_CONFIRM_MS` 内）：单次成功可能只是宿主在
+     * 两个阶段之间短暂松手，此时放行会让图层树快照 / 蒙版同步那几条**裸读**
+     * 撞回忙碌窗口 —— 那正是本轮要修的现象。
+     */
+    private async advanceDocLatch() {
+        if (this.docLatchProbeBusy) return;
+        this.docLatchProbeBusy = true;
+        let released = false;
+        try {
+            const now = Date.now();
+            const free = await probeHostIdle(App.DOC_LATCH_PROBE_TIMEOUT_MS);
+            if (!free) {
+                // 宿主仍在自己的模态作用域里（打开 / 关闭 / 保存大文档尚未结束）
+                // ⇒ 续期闩锁：所有读取（含未走 psRead 的裸读）继续一起退避。
+                this.docLatchLastOkAt = 0;
+                this.docLatchOkStreak = 0;   // 失败即清零：成功必须**连续**
+                extendDocLatch();
+            } else {
+                const prevOkAt = this.docLatchLastOkAt;
+                this.docLatchLastOkAt = now;
+                this.docLatchOkStreak = (prevOkAt > 0 && now - prevOkAt <= App.DOC_LATCH_CONFIRM_MS)
+                    ? this.docLatchOkStreak + 1
+                    : 1;
+                // 三个条件**同时**成立才允许放行（任一不满足就继续压）：
+                //   ① 连续成功探测次数达标 —— 过滤「阶段间隙里的偶发松手」；
+                //   ② 闩锁已保持够久 —— 打开大文档是分阶段的，阶段数越多间隙越多；
+                //   ③ 补一次**受保护的数据读取**并真的读到 —— 拿到锁 ≠ 拿得到数据。
+                //      这是最关键的一条：它把「宿主愿意给锁」和「宿主真能回答 get」
+                //      区分开来，而后者才是我们真正需要的许可。
+                if (this.docLatchOkStreak >= App.DOC_LATCH_CONFIRM_COUNT
+                    && isDocLatchMinHoldElapsed(App.DOC_LATCH_MIN_HOLD_MS)) {
+                    // 用 bypassCoarseGate 穿透闩锁自身的粗筛（闩锁期间恒为真）。
+                    // 读取本身在模态作用域内 ⇒ 即使判断错也只是可捕获的失败，不会弹框。
+                    const r = await psTryRead<number | null>(() => {
+                        const d = app.activeDocument;
+                        return d ? (typeof d.id === 'number' ? d.id : null) : null;
+                    }, { label: '闩锁放行前确认', retries: 0, bypassCoarseGate: true });
+                    if (r.ok) {
+                        // ✅ 宿主既给了锁、也答了 get ⇒ 真正可控。
+                        released = true;
+                        endDocLatch();
+                        this.docLatchLastOkAt = 0;
+                        this.docLatchOkStreak = 0;
+                        // 这次确认读取本身就是一次身份采样，直接落账（省一轮 500ms 巡检）。
+                        this.applyDocIdentity(r.value);
+                    } else {
+                        // 拿得到锁却读不到 ⇒ 宿主还在忙（典型：解析中但未持锁）。
+                        // 这是「持续忙碌」的直接证据 ⇒ 清零并续期，等下一轮重来。
+                        this.docLatchLastOkAt = 0;
+                        this.docLatchOkStreak = 0;
+                        extendDocLatch();
+                    }
+                }
+            }
+        } finally {
+            this.docLatchProbeBusy = false;
+        }
+        // 放行后的身份采样若又登记了一次文档级变化（闩锁被重新开启），
+        // 立刻补一次探测把它收掉 —— 此时宿主刚确认空闲，不会无限递归。
+        if (isDocLatchActive()) this.scheduleDocLatchProbe(released ? 0 : App.DOC_LATCH_PROBE_MS);
+    }
+
+    /** 排一次闩锁探测（同一时刻只允许一个 pending）。 */
+    private scheduleDocLatchProbe(delay: number) {
+        if (this.docLatchProbeTimer) return;
+        this.docLatchProbeTimer = setTimeout(() => {
+            this.docLatchProbeTimer = null;
+            void this.advanceDocLatch();
+        }, Math.max(0, delay));
+    }
+
+    /** 把一次身份采样结果落到状态上（两条分支共用，避免逻辑漂移）。 */
+    private applyDocIdentity(id: number | null) {
+        if (this.lastDocId === null && id === null) return;   // 双方都「没有文档」⇒ 无事
+        if (this.lastDocId === null && id !== null) {
+            // ⚠️⚠️ 2026-10-08 第三轮修正：这里**必须**登记文档级变化。
+            //
+            // 旧写法认为「新开文档的 open 事件通路已经覆盖了」，于是只记基准就返回。
+            // 但**冷启动**（PS 刚启动 / 插件刚重载 / 第一份文档正在打开）恰恰是
+            // open 事件最不可靠的时刻 —— 兜底通路于是在它唯一被需要的场景里静默失效：
+            // 整个解析/建树期间既没有闩锁、也不推进世代号，所有读取照常发出去。
+            // 用户实测「每次重开 PS、重载插件、打开 400MB PSD ⇒ 触发率 100%」正是它。
+            //
+            // 代价核算：若事件通路已登记过一次，这里只是**再**推进一次世代号 + 续期
+            // 静默窗口（多等一点、多作废一份缓存）；而漏登记的代价是宿主原生弹框。
+            // ⇒ 重复登记是安全侧，一律登记。
+            //
+            // ⚠️ requireMinHold=false：本分支意味着我们**刚刚成功读到**宿主的回答
+            // （正是这次读取告诉我们「有文档了」），宿主并不忙，不必强制多等。
+            this.lastDocId = id;
+            this.onDocumentLevelChange(false);
+            return;
+        }
+        if (id === this.lastDocId) return;
+        this.lastDocId = id;
+        this.onDocumentLevelChange(true);
+    }
+
+    /**
+     * 文档级变化的统一善后：作废在途读取与缓存。
+     *
+     * ⚠️ 必须「先登记世代号（== 打长静默窗口 + 开闩锁）、再清缓存」：
+     *   · `noteDocLevelEvent()` ⇒ `docGeneration++`，让 `psAccess.psTryRead` 作废
+     *     **在途**读取的返回值（防止用已销毁文档的数据回写 UI）；
+     *   · 清 layerInfo 短 TTL 缓存与图层树快照 ⇒ 防止**新**读取吃到旧文档的数据。
+     *
+     * @param requireMinHold 是否要求闩锁至少保持 `DOC_LATCH_MIN_HOLD_MS` 才允许放行
+     *   （见 `DOC_LATCH_MIN_HOLD_MS` 的说明）。
+     */
+    private onDocumentLevelChange(requireMinHold = true) {
+        noteDocLevelEvent(requireMinHold);
+        invalidateLayerInfoCache();
+        invalidateLayerSnapshot();
+    }
+
     // ===== 快速蒙版巡检（详见字段注释里的复合根因）=====
     // 按「填充选项展开且可见」启停：不可见时没有刷新的必要，不跑无谓轮询。
     private syncQuickMaskWatch() {
@@ -1729,26 +1997,37 @@ class App extends React.Component<AppProps, AppState> {
         }
     }
 
-    // 只读一个布尔属性，不进executeAsModal；单次失败（撞忙碌窗口）不影响下一轮。
+    // 只读两个属性（id / quickMaskMode），经 psRead 进模态作用域；
+    // 单次失败（撞忙碌窗口）不影响下一轮。
     private async pollQuickMask() {
         if (this.quickMaskBusy) return;
-        // ⚠️ 忙碌闸门：本函数读 app.activeDocument + doc.quickMaskMode（两次宿主 get），
-        // 且是**无条件 300ms 轮询**——完全与用户的操作异步。切文档这类长命令期间
-        // 轮询必然有机会落进忙碌窗口 → 宿主弹「易修: 命令"获取"当前不可用」。
-        // 忙碌时跳过本轮，等下一次轮询（快速蒙版状态不要求实时）。
+        // ⚠️ 粗筛：本函数是**无条件 300ms 轮询**，与用户操作完全异步，切文档这类
+        // 长命令期间必然有机会落进忙碌窗口。忙碌时跳过本轮（快速蒙版状态不要求实时）。
         if (isPsBusy()) return;
         this.quickMaskBusy = true;
         try {
-            const doc = app.activeDocument;
-            if (!doc) return;
-            const isInQuickMask = !!doc.quickMaskMode;
+            const r = await psTryRead<{ id: number | null; isInQuickMask: boolean } | null>(() => {
+                const doc = app.activeDocument;
+                if (!doc) return null;
+                return {
+                    id: typeof doc.id === 'number' ? doc.id : null,
+                    isInQuickMask: !!doc.quickMaskMode,
+                };
+            }, { label: '读取快速蒙版状态', retries: 0 });
+            if (!r.ok || !r.value) return;
+            const { id, isInQuickMask } = r.value;
+            // 顺带承担「活动文档身份」的一次采样：多读的只是一个已经读到的属性。
+            if (id !== null && this.lastDocId !== null && id !== this.lastDocId) {
+                this.lastDocId = id;
+                this.onDocumentLevelChange();
+                return;   // 文档刚换 ⇒ 本轮的 quickMask 结论属于上一份文档，丢弃
+            }
+            if (id !== null) this.lastDocId = id;
             // 实例字段与 state 双写：前者供描边色板灰度判定，后者驱动开关禁用态。
             this.isInQuickMask = isInQuickMask;
             if (this.state.isInQuickMask !== isInQuickMask) {
                 this.setState({ isInQuickMask });
             }
-        } catch {
-            // 忙碌窗口内读取失败：放弃本轮，等下一次轮询重试
         } finally {
             this.quickMaskBusy = false;
         }

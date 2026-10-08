@@ -37,8 +37,10 @@ import ToggleSwitch from '../components/ToggleSwitch';
 import { helpTexts } from '../constants/helpTexts';
 import { useLabelDrag } from '../utils/useLabelDrag';
 import { debouncePsProbe, markPsBusyForEvent, isPsBusy, psBusyRemain, runWhenIdle } from '../utils/psProbe';
+import { addPsNotificationListeners, removePsNotificationListeners } from '../utils/psAccess';
 import {
   getLayerSnapshot,
+  refreshLayerSnapshot,
   invalidateLayerSnapshot,
   isLayerSnapshotDirty,
   findInSnapshot,
@@ -622,9 +624,16 @@ useEffect(() => {
         busyDeferrals = 0;   // 新事件重新起算顺延次数
         const run = () => {
             // ⚠️ 忙碌感知：固定 300ms 对「切文档」这种长命令不够（PS 重建文档窗口
-            // /图层面板可达1s+）。仍忙碌就顺延到窗口结束，最多顺延 12 次。
+            // /图层面板可达1s+）。仍忙碌就顺延到窗口结束。
             // ⚠️ 只判断不打标记（打标记会自我延长成自锁）。
-            if (isPsBusy() && busyDeferrals < 12) {
+            // ⚠️⚠️ **绝不硬闯**（2026-10-08 修正）：旧实现「顺延 12 次后直接执行」
+            //    是宿主弹框的最终出口之一。现在改为顺延次数用尽就**放弃本轮**，
+            //    等下一次事件/防抖重新调度 —— 忙碌窗口是时间驱动的有限值，不会永不到来。
+            if (isPsBusy()) {
+                if (busyDeferrals >= 12) {
+                    busyDeferrals = 0;
+                    return;
+                }
                 busyDeferrals++;
                 timer = setTimeout(() => { timer = 0; run(); }, Math.max(PROBE_IDLE_MS, psBusyRemain()));
                 return;
@@ -668,13 +677,13 @@ useEffect(() => {
             scheduleStructureProbe();
         }
     };
-    action.addNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], handleNotification);
+    addPsNotificationListeners(handleNotification);
     return () => {
         try {
             if (timer) clearTimeout(timer);
         } catch {}
         scheduleStructureProbe.cancel();
-        action.removeNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], handleNotification);
+        removePsNotificationListeners(handleNotification);
     };
 }, []);
 
@@ -1013,8 +1022,13 @@ const sameSyncResults = (a: Record<string, SyncState> | undefined, b: Record<str
  *    **又构建一次全树 + 2×(N/40) 次 batchPlay**，同一防抖回调内重复一遍。
  */
 const refreshMaskSyncOptions = async (): Promise<LayerTreeEntry[] | null> => {
+  // ⚠️ 忙碌期直接放弃本轮（同 refreshLineReferenceOptions）：既不读快照，
+  // 也不把空列表写进 state（那会让下拉闪空）。事件驱动的刷新会在空闲后重来。
+  if (isPsBusy()) return null;
   try {
-    const snap = getLayerSnapshot();
+    // ⚠️ 走**受保护**的刷新（遍历在 executeAsModal 内）：同步的 getLayerSnapshot()
+    // 现在只在持有「宿主可读租约」时才遍历，直接从它取会拿不到新数据。
+    const snap = await refreshLayerSnapshot();
     const tree = await maskSyncEngine.buildLayerTree(undefined, snap?.entries);
     // 树内容没变就不 setState（比较引用/内容后再决定），切断
     // "刷新 → re-render → 布局重排/输入重放 → 下拉闪关"的链路。
@@ -1545,8 +1559,18 @@ const buildLineReferenceOptions = (
   }
 };
 
-const refreshLineReferenceOptions = (docOverride?: any) => {
+const refreshLineReferenceOptions = async (docOverride?: any) => {
+  // ⚠️ 忙碌期**保持现状**（2026-10-08 第二轮）：本函数会读图层树快照（每层 5 次
+  // 宿主 get）。若此刻硬读，轻则拿到旧快照、重则被宿主拒绝并弹原生报错框。直接返回。
+  if (isPsBusy()) return;
   try {
+    // ⚠️ 第三轮：先做一次**受保护**的快照刷新（遍历在 executeAsModal 内执行）。
+    // 同步的 getLayerSnapshot() 现在只在持有「宿主可读租约」时才遍历，
+    // 因此必须由这里把新数据读进来；下面全部改读缓存（零 IPC）。
+    const snap = await refreshLayerSnapshot();
+    // 拿不到任何快照（无活动文档 / 读取被宿主忙碌挡住）⇒ **保持现状**：
+    // 绝不能把下拉清空，否则用户会看到图层列表闪空。
+    if (!snap) return;
     const out: Array<{ value: string; label: string; depth: number; disabled?: boolean }> = [];
     buildLineReferenceOptions(out);
     setLineReferenceOptions(out);

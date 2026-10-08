@@ -1,6 +1,9 @@
 import { app, action, core, imaging } from 'photoshop';
-import { isPsBusy, markPsBusy, markPsBusyForEvent, runWhenIdle } from './psProbe';
-import { getLayerSnapshot, invalidateLayerSnapshot, LayerSnapshotEntry } from './layerTreeSnapshot';
+import { isPsBusy, markPsBusyForEvent, runWhenIdle, canSyncReadHost } from './psProbe';
+import {
+  refreshLayerSnapshot, invalidateLayerSnapshot, LayerSnapshotEntry
+} from './layerTreeSnapshot';
+import { psRead, psTryRead, markPsAccess } from './psAccess';
 import { invalidateLayerInfoCache, shouldInvalidateLayerInfo } from './LayerInfoHandler';
 
 /**
@@ -147,7 +150,18 @@ export interface SyncState {
   detail?: string; // 补充说明（如错误信息截断）
 }
 
-const NOTIF_EVENTS = ['set', 'select', 'clearEvent', 'delete', 'make', 'rename', 'move'];
+/**
+ * 本引擎关心的通知事件。
+ *
+ * ⚠️ 必须包含 `open` / `close`（2026-10-08 根因 R2）：打开大 PSD / 关闭文档是
+ * 全流程里耗时**最长**的两条命令，而历史上没有任何监听器注册它们 ⇒ 整个
+ * 解析建树 / teardown 期间 `isPsBusy()` 恒为 false ⇒ 2000ms 兜底轮询照常发 get
+ * ⇒ 必弹框。这也解释了「关闭再打开来回切又报错」。
+ *
+ * `save` 与它们同类（保存大文档同样是「PS 自己握着模态作用域数秒」的命令）。
+ * ⚠️ 名单必须与 `psAccess.PS_NOTIF_EVENTS` 保持一致（差异只允许「本引擎不关心」）。
+ */
+const NOTIF_EVENTS = ['set', 'select', 'clearEvent', 'delete', 'make', 'rename', 'move', 'open', 'close', 'save'];
 const SYNC_DEBOUNCE_MS = 200; // 事件驱动防抖（更及时）
 const POLL_INTERVAL_MS = 2000; // 兜底轮询（更及时）
 const SYNC_MIN_INTERVAL_MS = 150; // 同一任务两次同步的最小间隔（防止抖动）
@@ -161,12 +175,14 @@ const SYNC_MIN_INTERVAL_MS = 150; // 同一任务两次同步的最小间隔（�
  * 快速连续删除时事件密集（delete + set 交替），200ms 静默期常被后续事件打断，
  * 探测会反复落在忙碌窗口内；这里取 300ms 覆盖「连续操作后停手」的实际节奏。
  *
- * ⚠️ 常量已迁到 `psProbe.ts`（BUSY_AFTER_EVENT_MS / BUSY_AFTER_DOC_SWITCH_MS），
+ * ⚠️ 常量已迁到 `psProbe.ts`（QUIET_AFTER_EVENT_MS / QUIET_AFTER_DOC_EVENT_MS），
  *    由 markPsBusyForEvent 按事件类型统一裁定——切文档的窗口比普通事件长得多，
  *    在这里写死单一值就是「切文档必弹框」的根因。此处不再重复定义。
+ *
+ * ⚠️ 2026-10-08：原先还有一条「轮询自己先 markPsBusy 预留窗口」的守卫，**已删除**。
+ *    读取不派发通知 ⇒ 自我预留只会让整个面板持续处于忙态、把填充的冷却无谓拉长
+ *    （历史「自锁」来源之一）。写入自带通知，无需手工预留。
  */
-/** 轮询自身发起读取前，先为自己预留的忙碌窗口。 */
-const POLL_BUSY_GUARD_MS = 300;
 
 type Listener = (info: { docChanged: boolean; results?: Record<string, SyncState> }) => void;
 
@@ -215,8 +231,10 @@ export class MaskSyncEngine {
     // ⚠️ refreshActiveDoc 会读 app.activeDocument + doc.name（两次宿主 get），
     // 而 init 由面板挂载时调用 —— 那一刻 PS 正在创建面板与初始化文档，是忙碌峰值，
     // 硬闯就会弹宿主「命令"获取"当前不可用」。顺延到空闲后再读（有限次，保证必执行）。
-    runWhenIdle(() => {
-      this.refreshActiveDoc();
+    // ⚠️ 第三轮：refreshActiveDoc 已改为异步（受保护读取）⇒ 回调改 async 并 await，
+    //    否则下面那行「初始化完成」日志会先于文档判定打印（文档名恒为「无」）。
+    runWhenIdle(async () => {
+      await this.refreshActiveDoc();
       this.notify();
       console.log(
         `[蒙版同步] 初始化完成 ${MASK_SYNC_ENGINE_VERSION}：文档=${this.currentDocName || '（无）'}，` +
@@ -342,13 +360,18 @@ export class MaskSyncEngine {
    */
   async buildLayerTree(doc?: any, snapEntries?: LayerSnapshotEntry[]): Promise<LayerTreeEntry[]> {
     try {
-      const d = doc || app.activeDocument;
+      // ⚠️ 第三轮：`doc` 未由调用方传入时必须**受保护地**取 —— 裸读 app.activeDocument
+      // 在宿主忙碌期是一次宿主原生弹框，而本函数由「面板通知 + 引擎轮询 + 下拉
+      // onOpen」三路高频调用，命中概率很高。
+      const d = doc || await psRead<any>(() => app.activeDocument,
+        { label: '取活动文档（构建图层树）', retries: 0 });
       if (!d) return [];
       const entries: LayerTreeEntry[] = [];
       const idPath: number[][] = []; // 与 entries 对应的 id 路径（用于实时名称重建 path）
 
-      // 优先用共享快照（零 DOM 遍历）；调用方未提供时才自己取快照。
-      const src = snapEntries ?? getLayerSnapshot()?.entries;
+      // 优先用共享快照（零 DOM 遍历）；调用方未提供时走**受保护**的刷新
+      // （同步的 getLayerSnapshot() 只在持有租约时才遍历，这里不能用它取新数据）。
+      const src = snapEntries ?? (await refreshLayerSnapshot())?.entries;
       if (src) {
         for (const s of src) {
           const kind = s.kind;
@@ -367,6 +390,10 @@ export class MaskSyncEngine {
           idPath.push(s.path);
         }
       } else {
+        // ⚠️ 无快照可用时必须放弃本轮：下面这段是**裸遍历** `d.layers`（每层 5 次
+        // 宿主 get）。判据从 `isPsBusy()` 收紧为 `canSyncReadHost()`（肯定式租约）——
+        // 「打开大文档期间没有任何事件」正是否定式判断覆盖不到的窗口。
+        if (!canSyncReadHost()) return [];
         const layers = d.layers || [];
         const walk = (list: any[], parentIds: number[], depth: number) => {
           for (const layer of list || []) {
@@ -441,7 +468,11 @@ export class MaskSyncEngine {
         _options: { dialogOptions: 'dontDisplay' },
       }));
       try {
-        const results = await action.batchPlay(descriptors, { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
+        // ⚠️ 第三轮：batchPlay get 一律走 psRead（模态作用域）。本批可能几十条 get，
+        // 裸发时每一条被拒都会弹一次原生框 —— 这正是「连点八下」的放大机制。
+        const results = await psRead<any[]>(
+          () => action.batchPlay(descriptors, { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }),
+          { label: '查询图层名称', retries: 0 });
         if (Array.isArray(results)) {
           for (let i = 0; i < results.length && i < chunk.length; i++) {
             const r = results[i];
@@ -509,7 +540,9 @@ export class MaskSyncEngine {
 
   private async runSync(task: MaskSyncTask, doc?: any): Promise<SyncResult> {
     try {
-      const d = doc || app.activeDocument;
+      // ⚠️ 第三轮：兜底取文档也要受保护（裸读 app.activeDocument = 一次宿主 get）。
+      const d = doc || await psRead<any>(() => app.activeDocument,
+        { label: '取活动文档（同步）', retries: 0 });
       if (!d || !task || !task.sampleLayerId || !task.targetLayerId) {
         return { synced: false, reason: 'incomplete' };
       }
@@ -712,7 +745,9 @@ export class MaskSyncEngine {
 
   /** 同步当前文档中所有"启用且引用完整"的任务。返回实际写入蒙版的任务数。 */
   async syncAll(doc?: any): Promise<number> {
-    const d = doc || app.activeDocument;
+    // ⚠️ 第三轮：兜底取文档也要受保护（裸读 app.activeDocument = 一次宿主 get）。
+    const d = doc || await psRead<any>(() => app.activeDocument,
+      { label: '取活动文档（全量同步）', retries: 0 });
     if (!d) return 0;
     const key = this.docKeyOf(d);
     const tasks = this.persisted[key] || [];
@@ -865,7 +900,9 @@ export class MaskSyncEngine {
     bounds: { left: number; top: number; right: number; bottom: number };
   } | null> {
     try {
-      const d = app.activeDocument;
+      // ⚠️ 第三轮：受保护取文档（本函数会遍历 d.layers 找目标图层）。
+      const d = await psRead<any>(() => app.activeDocument,
+        { label: '取活动文档（图层元信息）', retries: 0 });
       if (!d || !doc || d.id !== doc.id) return null;
       const walk = (list: any[]): any | null => {
         for (const layer of list || []) {
@@ -959,14 +996,16 @@ export class MaskSyncEngine {
    * 只取 activeHistoryState.id，不构造整条历史列表——这个方法每 2 秒的兜底轮询
    * 都会调用，避免每次都去实例化几十个 HistoryState 对象。
    */
-  private readActiveHistoryId(doc: any): number | null {
-    try {
+  private async readActiveHistoryId(doc: any): Promise<number | null> {
+    // ⚠️ 第三轮：这是**裸读**（`doc.activeHistoryState` 是一次宿主 get），而 2 秒的
+    // 兜底轮询**每轮都会**调用它（在 `list.length === 0` 短路之前）⇒ 它曾是文档级
+    // 忙碌期最稳定的弹框源之一。现在走 psRead（模态作用域）；读不到返回 null
+    // （=「放弃门控」），与旧行为一致，功能不受影响。
+    return await psRead<number | null>(() => {
       const active: any = doc?.activeHistoryState;
       const id = active?.id;
       return typeof id === 'number' ? id : null;
-    } catch {
-      return null;
-    }
+    }, { label: '读取活动历史状态', retries: 0 });
   }
 
   // （已移除 readLeftStateName：撤回门控不再读取「刚离开的历史名」，只做暂停）
@@ -975,8 +1014,8 @@ export class MaskSyncEngine {
    * 自动同步前的门控判定。返回 'skip' 表示本轮不要同步。
    * 同时负责维护 histLastActiveId / histUndoHold。
    */
-  private checkUndoGate(doc: any): 'proceed' | 'skip' {
-    const curId = this.readActiveHistoryId(doc);
+  private async checkUndoGate(doc: any): Promise<'proceed' | 'skip'> {
+    const curId = await this.readActiveHistoryId(doc);
     if (curId === null) return 'proceed'; // 读不到历史信息 → 保持原有行为，不因门控而丢功能
     const prev = this.histLastActiveId;
     this.histLastActiveId = curId;
@@ -1084,7 +1123,10 @@ export class MaskSyncEngine {
         _options: { dialogOptions: 'dontDisplay' },
       }));
       try {
-        const results = await action.batchPlay(descriptors, { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
+        // ⚠️ 第三轮：同上，走 psRead（模态作用域）。
+        const results = await psRead<any[]>(
+          () => action.batchPlay(descriptors, { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }),
+          { label: '查询图层蒙版状态', retries: 0 });
         if (Array.isArray(results)) {
           for (let i = 0; i < results.length && i < chunk.length; i++) {
             const r = results[i];
@@ -1099,27 +1141,38 @@ export class MaskSyncEngine {
     }
   }
 
-  /** 刷新活动文档上下文；返回是否发生了文档切换。 */
-  private refreshActiveDoc(): boolean {
-    let docKey = '';
-    let docName = '';
-    let docId: number | null = null;
-    try {
+  /**
+   * 刷新活动文档上下文；返回是否发生了文档切换。
+   *
+   * ⚠️⚠️ 第三轮（2026-10-08 真机复现「打开 400MB PSD 必弹框」后重构）：
+   * 本函数原先是**同步裸读**（`activeDocument` + `.name` + `.id` = 3 次宿主 get），
+   * 而 2s 兜底轮询会**无条件**走到这里，scheduleSync 的每条通路也都会调它 ——
+   * 只要判忙失误一次，每个周期就是 2~3 个宿主原生「命令"获取"当前不可用」弹框。
+   *
+   * 现在读取走 `psTryRead`（模态作用域，官方互斥原语）：宿主忙碌时最坏只是一次
+   * **可捕获的失败**，永远不会变成原生弹框。三种结果严格区分：
+   *   · 读到文档   ⇒ 正常判定切换；
+   *   · 读到 null  ⇒ 确实没有活动文档（等价旧行为：docKey/id 置空）；
+   *   · **读失败** ⇒ 返回 false（**保持现状**，不做任何判定）—— 绝不能把
+   *     「读不到」当成「文档没了」，那会误判成切文档并作废在途任务与缓存。
+   */
+  private async refreshActiveDoc(): Promise<boolean> {
+    const r = await psTryRead<{ id: number | null; name: string } | null>(() => {
       const d = app.activeDocument;
-      if (d) {
-        docKey = d.name || '';
-        docName = d.name || '';
+      if (!d) return null;
+      return {
         // ⚠️ 切换判定必须用 **文档 id**，不能只用名字：两个不同文档可能同名
         // （例如从两个文件夹各打开一个 untitled.psd），用名字会把「切文档」
         // 判成「没变」⇒ currentDocKey 不更新、任务列表与文件树仍指向旧文档。
-        // id 只用于判定与日志；持久化的 key仍是名字（保持既有存档兼容）。
-        docId = typeof d.id === 'number' ? d.id : null;
-      }
-    } catch {
-      docKey = '';
-      docName = '';
-      docId = null;
-    }
+        id: typeof (d as any).id === 'number' ? (d as any).id : null,
+        name: (d as any).name || '',
+      };
+    }, { label: '检测蒙版同步文档', retries: 0 });
+    if (!r.ok) return false;   // 读不到 ⇒ 不判定（安全降级）
+
+    const docKey = r.value ? r.value.name : '';
+    const docName = r.value ? r.value.name : '';
+    const docId = r.value ? r.value.id : null;
     // 首个文档（上次为空、本次有值）与真正的切换，都算docChanged。
     const changed = this.currentDocId !== docId || docKey !== this.currentDocKey;
     if (changed) {
@@ -1208,21 +1261,25 @@ export class MaskSyncEngine {
         this.scheduleSync(SYNC_DEBOUNCE_MS, checkDocFirst);
         return;
       }
-      // 先在空闲后检测文档切换（此处才允许读activeDocument）
-      if (checkDocFirst) {
-        let docChanged = false;
-        try {
-          docChanged = this.refreshActiveDoc();
-        } catch {
-          docChanged = false;
+      // ⚠️ refreshActiveDoc 已改为**受保护读取**（异步）⇒ 定时器回调内需要 await，
+      //    故包一层 IIFE。守卫仍在最前面（上面那行），语义与改前一致。
+      void (async () => {
+        // 先在空闲后检测文档切换（此处才允许读activeDocument）
+        if (checkDocFirst) {
+          let docChanged = false;
+          try {
+            docChanged = await this.refreshActiveDoc();
+          } catch {
+            docChanged = false;
+          }
+          if (docChanged) {
+            this.notify();
+            this.scheduleSync(300);
+            return;
+          }
         }
-        if (docChanged) {
-          this.notify();
-          this.scheduleSync(300);
-          return;
-        }
-      }
-      this.doTimedSync();
+        this.doTimedSync();
+      })();
     }, Math.max(0, delay));
   }
 
@@ -1241,11 +1298,18 @@ export class MaskSyncEngine {
         this.scheduleSync(SYNC_DEBOUNCE_MS);
         return;
       }
-      // 通过守卫后，为本次读取自身预留窗口，避免与用户操作/其它面板探测互撞。
-      markPsBusy(POLL_BUSY_GUARD_MS);
-      const d = app.activeDocument;
+      // ⚠️ 2026-10-08：这里原先会 `markPsBusy(POLL_BUSY_GUARD_MS)`（为自己预留
+      //    窗口）。**已删除** —— 读取不产生通知，自我延长只会让整个面板持续处于
+      //    「忙」态，把填充路径的冷却无谓拉长（历史「自锁」来源之一）。
+      //    真正需要保护的是**写入**：下面 syncAll 的写操作会走自己的
+      //    executeAsModal/batchPlay，且写入本身会派发 set 通知 ⇒ 由
+      //    markPsBusyForEvent 自动为其它读者打上窗口。
+      // ⚠️ 第三轮：**取文档对象本身也必须受保护**。裸读 `app.activeDocument`
+      //    在宿主忙碌期同样是一次原生「命令"获取"当前不可用」弹框 —— 2s 兜底轮询
+      //    会无条件走到这里，是「打开大文档期间连环弹框」的又一个来源。
+      const d = await psRead<any>(() => app.activeDocument, { label: '取活动文档', retries: 0 });
       if (!d) return;
-      this.refreshActiveDoc();
+      await this.refreshActiveDoc();
       // 撤回门控：用户正在 Ctrl+Z 时不要同步，否则会不断产生新的「蒙版同步」
       // 历史步，把用户永远挡在自己的操作之外。
       if (await this.checkUndoGate(d) === 'skip') {
@@ -1278,7 +1342,11 @@ export class MaskSyncEngine {
       //   · PS 通知到达时由 invalidateLayerSnapshot() 打脏标记（纯内存、零 IPC），
       //     故事件驱动的时效性完全不受 maxAge 影响。
       if (hasPaths) {
-        const snap = getLayerSnapshot(POLL_INTERVAL_MS);
+        // ⚠️ 第三轮：改用**受保护**的 refreshLayerSnapshot（遍历在模态作用域内）。
+        // 同步的 getLayerSnapshot 现在只在持有「宿主可读租约」时才遍历，本函数
+        // 走的是 2s 兜底轮询，不能指望租约 —— 用同步版会永远吃到旧签名，
+        // reconcile 再也不会被触发。
+        const snap = await refreshLayerSnapshot(POLL_INTERVAL_MS);
         const sig = snap ? snap.signature : 'none';
         if (sig !== this.lastDocSignature) {
           this.lastDocSignature = sig;
@@ -1292,7 +1360,7 @@ export class MaskSyncEngine {
       if (wrote > 0) {
         // 引擎刚刚产生了一条「蒙版同步」历史：把它记录为已知的活动状态，
         // 否则下一轮门控会把它误判成「用户的新操作」，撤回判定就失效了。
-        const after = this.readActiveHistoryId(d);
+        const after = await this.readActiveHistoryId(d);
         if (after !== null) this.histLastActiveId = after;
       }
       this.notify(); // 同步完成后刷新面板上的同步状态
@@ -1309,23 +1377,27 @@ export class MaskSyncEngine {
       // 里的 get 就会触发宿主原生报错框（本弹框「有一定概率」出现的关键来源）。
       // 忙碌时顺延到下一轮而非硬闯 —— 兜底同步晚一轮无副作用（内容一致时本就不写入）。
       if (isPsBusy()) return;
-      try {
-        // ⚠️ 用 refreshActiveDoc 的返回值判定切换（内部已按 id+名字双口径），
-        // 不要在外面自己比对 currentDocKey —— 同名文档互切会被漏判。
-        const docChanged = this.refreshActiveDoc();
-        if (docChanged) {
-          this.lastDocSignature = ''; // 强制下次 reconcile
-          this.notify(); // React 侧重新加载当前文档任务 + 刷新文件树
-          this.scheduleSync(300);
-          return;
-        }
-        // 兜底同步：即使事件驱动失效（如 set 事件未触发），也周期性执行启用任务的
-        // 同步。syncTask 内部有unchanged 差异检测 + 150ms 节流，内容一致时不会写入，
-        // 不会造成写回震荡。
-        // ⚠️ 不要在此 markPsBusy：doTimedSync 入口自带 isPsBusy 守卫，
-        //    调用方先打标记会让它拦下自己 ⇒ 同步永不执行（自锁）。
-        this.doTimedSync();
-      } catch {}
+      // ⚠️ refreshActiveDoc 已改为**受保护读取**（异步）⇒ tick 内需要 await。
+      //    改前这里是无条件同步裸读（3 次宿主 get），是文档级忙碌期的固定弹框源。
+      void (async () => {
+        try {
+          // ⚠️ 用 refreshActiveDoc 的返回值判定切换（内部已按 id+名字双口径），
+          // 不要在外面自己比对 currentDocKey —— 同名文档互切会被漏判。
+          const docChanged = await this.refreshActiveDoc();
+          if (docChanged) {
+            this.lastDocSignature = ''; // 强制下次 reconcile
+            this.notify(); // React 侧重新加载当前文档任务 + 刷新文件树
+            this.scheduleSync(300);
+            return;
+          }
+          // 兜底同步：即使事件驱动失效（如 set 事件未触发），也周期性执行启用任务的
+          // 同步。syncTask 内部有unchanged 差异检测 + 150ms 节流，内容一致时不会写入，
+          // 不会造成写回震荡。
+          // ⚠️ 不要在此 markPsBusy：doTimedSync 入口自带 isPsBusy 守卫，
+          //    调用方先打标记会让它拦下自己 ⇒ 同步永不执行（自锁）。
+          this.doTimedSync();
+        } catch {}
+      })();
     }, POLL_INTERVAL_MS);
   }
 

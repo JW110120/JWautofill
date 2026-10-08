@@ -1,4 +1,6 @@
 import { app } from 'photoshop';
+import { canSyncReadHost, isPsBusy } from './psProbe';
+import { markPsAccess, psTryRead } from './psAccess';
 
 /**
  * 图层树共享快照（Layer Tree Snapshot）
@@ -30,6 +32,17 @@ import { app } from 'photoshop';
  *  该原生弹框绕过 JS try/catch 与 dialogOptions，唯一有效防护就是「不发 get」）。
  * 正确用法一律是：通知回调里只调 `invalidateLayerSnapshot()`（纯内存标记，零 IPC），
  * 真正读取交给 `debouncePsProbe` / `runWhenIdle` / 定时器等空闲时机。
+ *
+ * ⚠️⚠️ 第三轮（2026-10-08 真机「打开 400MB PSD 必弹框」之后）——**两个入口，别用错**：
+ *   · `refreshLayerSnapshot()`（async，**默认选它**）：遍历在 `executeAsModal` 模态
+ *     作用域内执行 ⇒ 宿主忙碌时最坏也只是「返回旧缓存/拿不到」，**永不弹框**。
+ *     事件驱动与轮询驱动的消费方一律用它。
+ *   · `getLayerSnapshot()`（sync）：**只在持有「宿主可读租约」时才遍历**
+ *     （见 psProbe.canSyncReadHost），否则直接返回缓存。它剩下的用途是给
+ *     React 渲染/同步决策读缓存（零 IPC），**不要**指望它把新数据读进来。
+ *   ⇒ 原因：同步遍历是**裸 get**。PS 打开大文档时可以连着忙好几秒、期间可能一条
+ *     事件都不派发，任何「猜它忙不忙」的判断一旦错，一棵 N 层的树就是 N 次宿主原生
+ *     弹框（用户实测「连点八下」的机制）。所以判据必须从「猜」换成「**肯定式证据**」。
  */
 
 /** 快照中的单个图层条目（扁平化，按文档顺序的先序遍历）。 */
@@ -100,11 +113,21 @@ export function isLayerSnapshotDirty(): boolean {
 /**
  * 读取图层树快照，必要时重新遍历。
  *
+ * ⚠️⚠️ **同步路径的最后一道闸是「宿主可读租约」**（2026-10-08 第三轮）。
+ * 本函数是**同步裸读**：`app.activeDocument` + 每层 5 个属性 get。它曾经只判
+ * `isPsBusy()` —— 那是否定式判断，而「打开 400MB PSD」这类操作**不出现在任何
+ * 事件里**（或事件名不被派发）、却让 PS 连着忙好几秒，于是判断一旦错，
+ * 一棵 N 层的树就是 N 次宿主原生弹框（用户实测「打开超大文档连点八下」的机制）。
+ *
+ * 现在改为肯定式：只有 `canSyncReadHost()`（最近 800ms 内有过**两次**经模态作用域
+ * 成功返回的读取）才允许遍历，否则**返回缓存并跳过**。异步消费方请改用
+ * `refreshLayerSnapshot()` —— 它把遍历放进 `executeAsModal`，永远不会弹框。
+ *
  * @param maxAgeMs 若给定，且现有快照的年龄小于该值，则**直接返回缓存、跳过遍历**。
  *                 用于兜底轮询这类「结构大概率未变」的场合：把稳态轮询的
  *                 遍历成本从「每轮 5N 次 IPC」降到「0 次」。
  *                 传 0 / 不传 ⇒ dirty 时必重新遍历（精确路径）。
- * @returns 快照；无活动文档或读取抛错时返回 null（调用方需自行降级）。
+ * @returns 快照；读不到/被冻结时返回**缓存（可能为 null）**，调用方需自行降级。
  */
 export function getLayerSnapshot(maxAgeMs = 0): LayerSnapshot | null {
   const now = Date.now();
@@ -116,18 +139,73 @@ export function getLayerSnapshot(maxAgeMs = 0): LayerSnapshot | null {
     dirty = false;
     return cached;
   }
+  // ⚠️ 冻结条件：宿主可读租约无效（粗筛被判忙、或最近没有成功的受保护读取）。
+  if (!canSyncReadHost()) return cached;
 
-  let doc: any = null;
-  try {
-    doc = app.activeDocument;
-  } catch {
-    return null;
+  return commit(traverseNow(now, '遍历图层树（同步路径）'));
+}
+
+/**
+ * **受保护**的图层树刷新：遍历在 `executeAsModal` 模态作用域内执行。
+ *
+ * 这是所有「由事件/轮询驱动」的消费方唯一该用的入口：
+ *   · 宿主空闲 ⇒ 立即拿到新快照；
+ *   · 宿主忙碌（打开/关闭/保存大文档…）⇒ `psRead` 返回失败 ⇒ **保持旧缓存**，
+ *     等下一次事件/轮询再来。全程不会向宿主发出一次裸 get。
+ *
+ * @param maxAgeMs 同 `getLayerSnapshot`：缓存足够新则直接复用，零 IPC。
+ */
+export async function refreshLayerSnapshot(maxAgeMs = 0): Promise<LayerSnapshot | null> {
+  const now = Date.now();
+  if (cached && !dirty) return cached;
+  if (cached && maxAgeMs > 0 && now - cached.at < maxAgeMs) {
+    dirty = false;
+    return cached;
   }
-  if (!doc) {
+  if (isPsBusy()) return cached;
+
+  const r = await psTryRead<TraverseResult>(() => traverseNow(now, '遍历图层树（受保护）'),
+    { label: '读取图层树', retries: 0 });
+  // 读取失败（宿主忙碌 / 模态被拒）⇒ 保持旧缓存，绝不把「读不到」当成「树是空的」。
+  if (!r.ok) return cached;
+  return commit(r.value);
+}
+
+/** 遍历结果：区分「读到」/「没有活动文档」/「读失败」——三者语义完全不同。 */
+type TraverseResult =
+  | { kind: 'ok'; snap: LayerSnapshot }
+  | { kind: 'none' }
+  | { kind: 'fail' };
+
+/** 把一次遍历结果落进缓存。`fail` 一律保持原状（宁可陈旧，也不清空）。 */
+function commit(r: TraverseResult): LayerSnapshot | null {
+  if (!r || r.kind === 'fail') return cached;
+  if (r.kind === 'none') {
     cached = null;
     dirty = false;
     return null;
   }
+  cached = r.snap;
+  dirty = false;
+  return cached;
+}
+
+/**
+ * 真正发 get 的遍历本体（纯读取，不碰缓存）。
+ *
+ * ⚠️ 调用方负责保证它只在**安全时机**被执行：同步路径必须先过 `canSyncReadHost()`，
+ * 异步路径必须包在 `psRead` 里。**本函数自身不做任何忙碌判断**
+ * （它一旦开始，get 就已经在路上了 —— 判断必须发生在进入之前）。
+ */
+function traverseNow(now: number, markLabel: string): TraverseResult {
+  markPsAccess(markLabel);
+  let doc: any = null;
+  try {
+    doc = app.activeDocument;
+  } catch {
+    return { kind: 'fail' };
+  }
+  if (!doc) return { kind: 'none' };
 
   const entries: LayerSnapshotEntry[] = [];
   let h = FNV_OFFSET;
@@ -164,7 +242,7 @@ export function getLayerSnapshot(maxAgeMs = 0): LayerSnapshot | null {
   try {
     walk(doc.layers || [], 0, []);
   } catch {
-    return null;
+    return { kind: 'fail' };
   }
 
   let docId: number | null = null;
@@ -176,16 +254,17 @@ export function getLayerSnapshot(maxAgeMs = 0): LayerSnapshot | null {
     /* 名称读不到不影响结构判定 */
   }
 
-  cached = {
-    docId,
-    docName,
-    signature: `${docId ?? 'none'}#${h.toString(36)}`,
-    entries,
-    count: entries.length,
-    at: now,
+  return {
+    kind: 'ok',
+    snap: {
+      docId,
+      docName,
+      signature: `${docId ?? 'none'}#${h.toString(36)}`,
+      entries,
+      count: entries.length,
+      at: now,
+    },
   };
-  dirty = false;
-  return cached;
 }
 
 /** 按 id 在快照中查找条目（O(1)，不触发遍历、不发 IPC）。 */
