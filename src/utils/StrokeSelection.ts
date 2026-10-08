@@ -1,6 +1,13 @@
 import { app, action, core, imaging } from 'photoshop';
 import { BLEND_MODES } from '../constants/blendModes';
 import { AppState } from '../types/state';
+import {
+    planStrokeBlend,
+    invertRgb,
+    ClearTargetKind,
+    BackgroundClearAlgorithm,
+    BinaryClearAlgorithm,
+} from './ClearAlgorithms';
 
 // 计算RGB颜色的灰度值
 function rgbToGray(red: number, green: number, blue: number): number {
@@ -111,11 +118,38 @@ export async function strokeSelection(state: AppState, layerInfo?: LayerInfo) {
         }
     };
 
+    /**
+     * 清除模式下把「用户选的算法」翻译成「PS 混合模式 + 描边色处理」。
+     *
+     * 为什么需要这一层：填充（纯色/图案/渐变）由插件逐像素算，公式可以随便定；
+     * 而描边的**形状**（宽度/内中外/羽化）只有 PS 原生 `stroke` 命令算得准，
+     * 插件只能选它的混合模式 ⇒ 必须证明「某个混合模式 ≡ 某个算法公式」。
+     * 证明见 ClearAlgorithms.planStrokeBlend 的注释：
+     *   · 减法 X − F×t            ⟺ blendSubtraction
+     *   · 乘法 X × (1 − F/255×t)  ⟺ multiply + 描边色反相（因 PS 的 multiply 是 S 越暗压得越狠）
+     *   · 趋白 C + (255−C)×F/255×t ⟺ screen
+     * 三者在不透明度为 100% 时与填充侧严格等价，任意不透明度下也一致（PS 的混合模式
+     * 本身即「结果 = lerp(底色, 混合结果, opacity)」）。
+     */
+    const withClearPlan = (
+        kind: ClearTargetKind,
+        algo: BackgroundClearAlgorithm | BinaryClearAlgorithm
+    ) => {
+        const plan = planStrokeBlend(kind, algo);
+        return {
+            ...strokeParams,
+            blendMode: plan.blendMode,
+            color: plan.invertColor ? invertRgb(strokeParams.color) : strokeParams.color,
+        };
+    };
+
     // 如果在快速蒙版状态，使用简化的直接描边
     if (layerInfo?.isInQuickMask) {
         // 如果同时开启了清除模式，使用特殊的颜色计算描边
         if (state.clearMode) {
-            await strokeSelectionWithColorCalculation(strokeParams, state);
+            await strokeSelectionWithColorCalculation(
+                withClearPlan('channel', state.clearChannelAlgorithm)
+            );
         } else {
             await strokeSelectionDirect(strokeParams);
         }
@@ -126,7 +160,9 @@ export async function strokeSelection(state: AppState, layerInfo?: LayerInfo) {
     if (layerInfo?.isInLayerMask) {
         // 如果同时开启了清除模式，使用图层蒙版清除模式描边
         if (state.clearMode) {
-            await strokeSelectionInLayerMaskWithClearMode(strokeParams);
+            await strokeSelectionInLayerMaskWithClearMode(
+                withClearPlan('channel', state.clearChannelAlgorithm)
+            );
         } else {
             await strokeSelectionInLayerMask(strokeParams);
         }
@@ -142,7 +178,9 @@ export async function strokeSelection(state: AppState, layerInfo?: LayerInfo) {
     //    专用分支 = 直接在当前通道描边 + 末尾还原通道，语义对齐快速蒙版的描边。
     if (layerInfo?.isInSingleColorChannel) {
         if (state.clearMode) {
-            await strokeSelectionInSingleChannelWithClearMode(strokeParams);
+            await strokeSelectionInSingleChannelWithClearMode(
+                withClearPlan('channel', state.clearChannelAlgorithm)
+            );
         } else {
             await strokeSelectionInSingleChannel(strokeParams);
         }
@@ -157,12 +195,17 @@ export async function strokeSelection(state: AppState, layerInfo?: LayerInfo) {
         //    PS 遇到不可用的 clearEnum **不报错**，而是弹出原生「描边」对话框、
         //    随后按普通填充把描边画成描边色 —— 就是用户实测的背景图层 12 组合里
         //    那 3 种「填充 + 描边 + 清除」失效（2026-10-08）。
-        //    ⇒ 这类上下文改用 `blendSubtraction`（减去），与快速蒙版 / 单通道的
-        //      描边删除同构：减去量正比于描边色的灰度 ⇒「以该描边的灰度删除描边内部的内容」。
+        //    这类目标只能改颜色（无 alpha 可控），因此使用第一类「背景图层」的三个算法。
         if (layerInfo?.isBackground || layerInfo?.hasTransparencyLocked) {
-            await strokeSelectionOnOpaqueLayer(strokeParams);
+            await strokeSelectionOnOpaqueLayer(
+                withClearPlan('background', state.clearBackgroundAlgorithm)
+            );
             return;
         }
+        // 普通像素图层：清除 = 降低不透明度（第三类）。
+        // ⚠️ 受 PS 原生限制，这里只能用 clearEnum —— 它的语义是 A' = A×(1−opacity)，
+        //    对应「乘法」式降低；「减法」（A−k）需要按像素改写 alpha，原生 stroke 做不到。
+        //    在不透明区域（A = 255）两者数值完全等价，差异只出现在半透明边缘。
         await strokeSelectionWithClearMode(strokeParams);
         return;
     }
@@ -311,7 +354,12 @@ async function strokeSelectionNormal(strokeParams: any) {
     }
 }
 
-// 2.像素图层的清除模式的特殊描边√
+// 2.普通像素图层的清除模式描边（第三类 · 降低不透明度）
+//   语义 = 按描边色的灰度降低选区边缘区域的不透明度，等价于「乘法」式降低：
+//     A' = A × (1 − opacity)，其中 opacity = 描边色灰度/255 × 面板不透明度。
+//   ⚠️ 受 PS 原生限制这是本类唯一可用的实现：`clearEnum`（清除）在带透明度的普通
+//      图层上正好就是「按比例降低 alpha」。用户的「减法」选项（A − k）需要逐像素
+//      改写 alpha，原生 stroke 表达不了；在不透明区域（A = 255）两者数值等价。
 async function strokeSelectionWithClearMode(strokeParams: any) {
     try {
         console.log('🔄 开始非快速蒙版清除模式描边，描边参数:', strokeParams);
@@ -331,23 +379,14 @@ async function strokeSelectionWithClearMode(strokeParams: any) {
         });
         console.log('✅ 已保存前景色');
 
-        // 获取当前前景色的RGB值并计算灰度值
-        let foregroundRGB;
-        await executeAsModal(async () => {
-            const foregroundColor = app.foregroundColor;
-            foregroundRGB = {
-                red: foregroundColor.rgb.red,
-                green: foregroundColor.rgb.green,
-                blue: foregroundColor.rgb.blue
-            };
-        });
-        
-        // 计算前景色灰度值
-        const foregroundGrayValue = rgbToGray(foregroundRGB.red, foregroundRGB.green, foregroundRGB.blue);
-        console.log('🎨 前景色RGB:', foregroundRGB, '灰度值:', foregroundGrayValue);
-        
-        // 计算清除模式描边的不透明度：(前景色灰度值/255) * .subpanel-fill 中的不透明度
-        const clearModeOpacity = (foregroundGrayValue / 255) * strokeParams.opacity;
+        // 计算描边色的灰度 —— 清除强度以**描边色**为准。
+        // ⚠️ 重构前这里取的是**前景色**的灰度：改描边色不影响删除强度，改前景色反而会，
+        //    与「输入端（描边色）的灰度决定删除量」的定义相反。现已修正。
+        const colorGrayValue = rgbToGray(strokeParams.color.red, strokeParams.color.green, strokeParams.color.blue);
+
+        // 清除模式描边的不透明度 = (描边色灰度 / 255) × 面板不透明度
+        // = clearEnum 的「乘法」式降低：A' = A × (1 − opacity)
+        const clearModeOpacity = (colorGrayValue / 255) * strokeParams.opacity;
         console.log('🔧 清除模式不透明度:', clearModeOpacity);
 
         // 2. 以清除模式描边
@@ -492,32 +531,17 @@ async function strokeSelectionDirect(strokeParams: any) {
 }
 
 // 4.快速蒙版状态且清除模式下的特殊描边
-async function strokeSelectionWithColorCalculation(strokeParams: any, state: any) {
+//   ⚠️ 重构前本分支的混合模式由「快速蒙版 colorIndicates」决定：
+//      selectedAreas → linearDodge（加亮）、其余 → blendSubtraction（减暗）。
+//      而**同一目标的填充路径**（ClearHandler.clearInQuickMask）从头到尾按「减少蒙版值」
+//      计算，根本不看 colorIndicates ⇒ 同一个「快速蒙版 + 清除」，填充与描边方向相反。
+//      现在两条路径统一：方向恒为「减少蒙版覆盖」，算法由用户选的减法/乘法决定。
+//      （同时省掉一次 `get channel 快速蒙版` 的同步 IPC。）
+async function strokeSelectionWithColorCalculation(strokeParams: any) {
     try {
         console.log('🔄 开始清除模式快速蒙版描边，描边参数:', strokeParams);
-        
-        // 1. 获取快速蒙版通道信息，判断是否为selectedAreas
-        const channelResult = await batchPlay([
-            {
-                _obj: "get",
-                _target: [
-                    {
-                        _ref: "channel",
-                        _name: "快速蒙版"  // 快速蒙版通道名称
-                    }
-                ]
-            }
-        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
 
-        let isSelectedAreas = false;
-        if (channelResult[0] && 
-            channelResult[0].alphaChannelOptions && 
-            channelResult[0].alphaChannelOptions.colorIndicates) {
-            isSelectedAreas = channelResult[0].alphaChannelOptions.colorIndicates._value === "selectedAreas";
-        }
-        console.log(`🔍 检测到colorIndicates为${isSelectedAreas ? 'selectedAreas' : '非selectedAreas'}`);
-        
-        // 2. 记录前景色
+        // 记录前景色（stroke 描述符自带 color，这里只为保持与其它分支一致的手感）
         let savedForegroundColor;
         await executeAsModal(async () => {
             const foregroundColor = app.foregroundColor;
@@ -530,12 +554,7 @@ async function strokeSelectionWithColorCalculation(strokeParams: any, state: any
                 brightness: foregroundColor.hsb.brightness
             };
         });
-        console.log('✅ 已保存前景色');
 
-        // 3. 根据selectedAreas状态选择混合模式执行描边
-        const blendMode = isSelectedAreas ? "linearDodge" : "blendSubtraction";
-        console.log(`🎨 使用混合模式: ${blendMode}`);
-        
         await batchPlay(
             [{
                 _obj: "stroke",
@@ -550,7 +569,7 @@ async function strokeSelectionWithColorCalculation(strokeParams: any, state: any
                 },
                 mode: {
                     _enum: "blendMode",
-                    _value: blendMode
+                    _value: strokeParams.blendMode
                 },
                 color: {
                     _obj: "RGBColor",
@@ -566,7 +585,7 @@ async function strokeSelectionWithColorCalculation(strokeParams: any, state: any
         );
         console.log('✅ 描边执行完成');
 
-        // 4. 恢复前景色
+        // 恢复前景色
         if (savedForegroundColor) {
             await batchPlay(
                 [{
@@ -684,6 +703,8 @@ async function strokeSelectionInLayerMask(strokeParams: any) {
 }
 
 // 6.图层蒙版状态下的清除模式特殊描边
+//   混合模式来自用户选择的算法（减法 → blendSubtraction，乘法 → multiply + 反相描边色）；
+//   ⚠️ 不用 clearEnum —— 通道上下文里 PS 不接受该混合模式（会弹原生框并按面板色直接填充）。
 async function strokeSelectionInLayerMaskWithClearMode(strokeParams: any) {
     try {
         console.log('🔄 开始图层蒙版清除模式描边，描边参数:', strokeParams);
@@ -721,7 +742,8 @@ async function strokeSelectionInLayerMaskWithClearMode(strokeParams: any) {
                 },
                 mode: {
                     _enum: "blendMode",
-                    _value: "blendSubtraction"  // 固定为减去模式
+                    // 由用户选的算法决定：减法 → 减去；乘法 → 正片叠底（描边色已在入口反相）
+                    _value: strokeParams.blendMode
                 },
                 color: {
                     _obj: "RGBColor",
@@ -905,7 +927,8 @@ async function strokeSelectionInSingleChannelWithClearMode(strokeParams: any) {
                 },
                 mode: {
                     _enum: "blendMode",
-                    _value: "blendSubtraction"  // 固定为减去模式（与快速蒙版描边删除一致）
+                    // 同上：由算法决定（乘法时描边色已反相）
+                    _value: strokeParams.blendMode
                 },
                 color: {
                     _obj: "RGBColor",
@@ -990,8 +1013,8 @@ async function strokeSelectionOnOpaqueLayer(strokeParams: any) {
                 },
                 mode: {
                     _enum: "blendMode",
-                    // 固定「减去」：不透明目标上 clearEnum 不可用（见上方说明）
-                    _value: "blendSubtraction"
+                    // 由用户选的第一类算法决定：趋白 → 滤色；减法 → 减去；乘法 → 正片叠底（色已反相）
+                    _value: strokeParams.blendMode
                 },
                 color: {
                     _obj: "RGBColor",

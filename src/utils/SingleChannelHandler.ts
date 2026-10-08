@@ -3,6 +3,7 @@ import { LayerInfoHandler } from './LayerInfoHandler';
 import { Pattern, Gradient } from '../types/state';
 import { BLEND_MODE_CALCULATIONS } from './BlendModeCalculations';
 import { calculateRandomColor, hsbToRgb, rgbToGray } from './ColorUtils';
+import { clearStrength, clearChannelValue, BinaryClearAlgorithm } from './ClearAlgorithms';
 import { createStampPatternData, createTilePatternData } from './PatternFill';
 import { GradientFill } from './GradientFill';
 
@@ -295,14 +296,15 @@ export class SingleChannelHandler {
                     throw new Error('不支持的清除模式');
             }
             
-            // 混合计算（清除模式）
+            // 混合计算（清除模式）：算法由用户在清除子面板中选择（第二类 · 黑白通道）
             const finalData = await this.calculateClearBlend(
                 selectionChannelData,
                 clearData,
                 alphaData,
                 options.opacity,
                 bounds,
-                channelData  // 传入完整的channelData，用于图案外区域获取原始值
+                channelData,  // 传入完整的channelData，用于图案外区域获取原始值
+                state?.clearChannelAlgorithm
             );
             
            // 写回通道数据
@@ -1251,66 +1253,57 @@ export class SingleChannelHandler {
     }
     
     // 计算清除
-    // 计算清除混合
+    // 第二类 · 黑白通道（单一通道 R/G/B/Alpha）
+    //   ⚠️ 重构前本函数是**唯一**采用「乘法衰减」的通道路径（快速蒙版 / 图层蒙版用减法），
+    //      同一个「清除」在两处给出不同结果。现在与蒙版共用 ClearAlgorithms 的
+    //      clearChannelValue，算法由用户在清除子面板中选择（默认减法，与蒙版一致）。
+    //   ⚠️ 无 alphaData 时 α 视为 0（保持原值）——沿用重构前的防御语义：
+    //      覆盖率数据缺失时宁可不动，也不要按「完全不透明」把整片区域清掉。
     private static async calculateClearBlend(
         selectionChannelData: Uint8Array, // 选区内的单通道数据 (长度: bounds.selectionDocIndices.size)
         selectionClearData: Uint8Array,   // 选区内的清除数据 (长度: bounds.selectionDocIndices.size)
         selectionAlphaData: Uint8Array | undefined, // 选区内的清除内容的透明度数据 (长度: bounds.selectionDocIndices.size)
         opacity: number,
         bounds: any,
-        channelData?: Uint8Array  // 添加完整的channelData参数，用于获取图案外区域的原始值
+        channelData?: Uint8Array,  // 添加完整的channelData参数，用于获取图案外区域的原始值
+        algorithm?: BinaryClearAlgorithm
     ): Promise<Uint8Array> {
-        
-        // 最终输出的数据，是两个选区长度 (bounds.selectionDocIndices.size)的数组计算得到的，分别是选区内的原始通道值和选区内的清除值
+
         const clearedSelectionData = new Uint8Array(bounds.selectionDocIndices.size);
-        const opacityRatio = opacity * 0.01; // 避免重复除法
-        
-        // 检查是否有选区羽化系数
-        const hasFeathering = bounds?.selectionCoefficients?.length > 0;
+        const algo: BinaryClearAlgorithm = algorithm || 'subtract';
         const selectionCoefficients = bounds?.selectionCoefficients;
-        
+        const hasFeathering = !!(selectionCoefficients && selectionCoefficients.length > 0);
+        // 一次性取出文档索引（原实现在循环内对 α=0 的分支重复 Array.from，属冗余转换）
+        const selectionIndicesArray = bounds.selectionIndicesArray || Array.from(bounds.selectionDocIndices);
+
         for (let i = 0; i < selectionChannelData.length; i++) {
             const baseValue = selectionChannelData[i]; // 选区内原始通道值
-            const clearValue = selectionClearData[i];  // 选区内清除值（图案灰度值）
-            
-            // 关键修复：优先检查alpha值，如果alpha为0（图案外区域），直接跳过清除操作
+            const clearValue = selectionClearData[i];  // 选区内清除值（内容灰度值）
+
+            // α 缺失 / 为 0 ⇒ t = 0 ⇒ 保持原值（图案范围外、渐变全透明处都不参与清除）
             const alphaValue = selectionAlphaData ? selectionAlphaData[i] : 0;
-            
-            // 如果alpha为0，说明该像素位于图案外区域，直接保持原始值，不参与任何清除计算
-            if (alphaValue === 0) {
-                clearedSelectionData[i] = baseValue;
+            const t = clearStrength(
+                opacity,
+                alphaValue,
+                hasFeathering ? selectionCoefficients[i] : undefined
+            );
+
+            if (t <= 0) {
+                // 盖图章模式下 α=0 的区域需要从完整 channelData 取回该像素的真值
+                let restored = baseValue;
+                if (channelData && bounds.selectionDocIndices) {
+                    const globalIndex = selectionIndicesArray[i];
+                    if (globalIndex !== undefined && globalIndex < channelData.length) {
+                        restored = channelData[globalIndex];
+                    }
+                }
+                clearedSelectionData[i] = restored;
                 continue;
             }
-            
-            // 计算清除内容的最终的透明度（图案/渐变透明度 × 整体不透明度）
-            const finalAlpha = (alphaValue / 255) * opacityRatio;
-            
-            // 双重保险：如果最终透明度为0，也直接保持原始值
-            if (finalAlpha === 0) {
-                clearedSelectionData[i] = baseValue;
-                continue;
-            }
-            
-            // 修正清除算法：根据图案灰度值计算清除强度
-            // clearValue是图案的灰度值(0-255)，需要转换为清除强度(0-1)
-            // 灰度值越高，清除强度越大；灰度值为0时不清除，灰度值为255时完全清除
-            const clearIntensity = (clearValue / 255) * finalAlpha;
-            
-            // 计算清除后的结果：原始值 × (1 - 清除强度)
-            let clearedResult = baseValue * (1 - clearIntensity);
-            
-            // 应用羽化系数（如果存在）
-            if (hasFeathering && selectionCoefficients && selectionCoefficients[i] !== undefined) {
-                const featherCoeff = selectionCoefficients[i];
-                // 羽化混合：原始值 * (1 - 羽化系数) + 清除结果 * 羽化系数
-                const invFeatherCoeff = 1 - featherCoeff;
-                clearedResult = baseValue * invFeatherCoeff + clearedResult * featherCoeff;
-            }
-            
-            // 快速边界检查和取整
-            clearedSelectionData[i] = clearedResult < 0 ? 0 : (clearedResult > 255 ? 255 : Math.round(clearedResult));
+
+            clearedSelectionData[i] = clearChannelValue(baseValue, clearValue, t, algo);
         }
-        
+
         return clearedSelectionData;
     }
     

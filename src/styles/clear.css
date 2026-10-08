@@ -1,0 +1,48 @@
+/* 清除（clear）子面板样式
+   ⚠️ 与 stroke.css 同一套思路：通用组件（.panel / .subpanel-title-1 / .panel-section /
+   .divider / .label-4 / .radio-trio-group / .radio-pair-group / .close-button）全部来自
+   common.css，本文件只保留清除面板「独有」的三组选项纵向节奏。
+
+   ⚠️ 纵向节奏必须与「描边设置」「纯色/图案/渐变」统一为 20px 档，否则从描边面板切到
+      清除面板时会看出间距跳变。算法同 stroke.css（见那里的完整推导）：
+        section 内边距 10 + divider 外边距 max(10, 0) = 20px
+      ⇒ divider ↔ 内容 = 20px；内容 ↔ divider = 20px。
+
+   ⚠️ 间距一律用 **padding** 而不是 margin：.panel-section 是 flex 列容器，
+      子项 margin 会干扰 stretch、导致容器宽度算错（三列被 UXP 竖排）。
+      padding 是容器内部间距，不参与父级宽度计算，天然安全。
+   ⚠️ 必须带 .subpanel-clear 前缀限定作用域：.panel-section 是全插件通用类，
+      裸写会波及父面板与另外四个子面板。 */
+
+.subpanel-clear > .panel-section {
+  margin-bottom: 10px;
+}
+
+/* 分组标题（背景图层 / 蒙版&通道 / 像素图层）：与上方分割线拉开 10px，
+   与下方选项组之间由 .radio-*-group 的 padding-top 再承担 10px。 */
+.subpanel-clear > .panel-section > .label-4 {
+  padding-top: 10px;
+}
+
+/* 「蒙版&通道」= 4 个汉字 + 1 个 & ，装不进 .label-4 的 47px 字盒（4 字宽）。
+   ⚠️ 不换成 .label-5（60px）的原因：13px 汉字 ×4 = 52px，再加 & 的约 9px 墨迹宽 ≈ 61px，
+      仍差 1px；这里直接给一个按实际墨迹算出来的专用字盒，不留「差一点」的模糊地带。
+   ⚠️ 它独占一行（.panel-section 是列容器）、左对齐，所以字盒变宽不影响与其它标题的对齐。 */
+.subpanel-clear .clear-group-label {
+  width: 62px;
+}
+
+/* 三列（背景图层）/ 两列（蒙版通道、像素图层）选项组：
+   横向 padding 必须为 0 —— 任何横向内缩都会破坏「首末项贴容器两端」的对齐。 */
+.subpanel-clear > .panel-section > .radio-trio-group,
+.subpanel-clear > .panel-section > .radio-pair-group {
+  padding: 10px 0;
+}
+
+/* 末段（像素图层）收尾：与「描边设置」的末行同档 20px。
+   ⚠️ 末段的最后一项是选项组、自带 10px padding-bottom，若再叠 section 的 10px 下边距
+      与 .panel 的 10px 内边距，底部会变成 30px，比描边面板多 10px。
+      归零末段下边距 ⇒ 10(组 padding-bottom) + 10(.panel 内边距) = **20px**，两面板一致。 */
+.subpanel-clear > .panel-section:last-child {
+  margin-bottom: 0;
+}

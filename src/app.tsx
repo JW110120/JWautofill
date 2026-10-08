@@ -12,6 +12,7 @@ import ColorSettingsPanel from './components/ColorSettingsPanel';
 import PatternPicker from './components/PatternPicker';
 import GradientPicker from './components/GradientPicker';
 import StrokeSetting from './components/StrokeSetting';
+import ClearSetting from './components/ClearSetting';
 import Select from './components/Select';
 import LicenseDialog from './components/LicenseDialog';
 import RangeSlider from './components/RangeSlider';
@@ -203,6 +204,7 @@ class App extends React.Component<AppProps, AppState> {
         pattern: 'compact-pattern',
         gradient: 'compact-gradient',
         stroke: 'compact-stroke',
+        clear: 'compact-clear',
     };
 
     /** 各作用域在菜单文案里的面板名 */
@@ -212,11 +214,13 @@ class App extends React.Component<AppProps, AppState> {
         pattern: '图案',
         gradient: '渐变',
         stroke: '描边',
+        clear: '清除',
     };
 
     /** 给定状态下菜单项应作用的作用域：任一子面板打开时是它，否则是父面板 */
     private compactScopeOf(s: AppState): CompactScope {
         if (s.isStrokeSettingOpen) return 'stroke';
+        if (s.isClearSettingOpen) return 'clear';
         if (s.isPatternPickerOpen) return 'pattern';
         if (s.isGradientPickerOpen) return 'gradient';
         if (s.isColorSettingsOpen) return 'color';
@@ -292,6 +296,8 @@ class App extends React.Component<AppProps, AppState> {
         this.closeStrokeSetting = this.closeStrokeSetting.bind(this);
         this.toggleStrokeEnabled = this.toggleStrokeEnabled.bind(this);
         this.toggleStrokeSetting = this.toggleStrokeSetting.bind(this);
+        this.closeClearSetting = this.closeClearSetting.bind(this);
+        this.toggleClearSetting = this.toggleClearSetting.bind(this);
         // 新增绑定
         this.toggleSelectionOptions = this.toggleSelectionOptions.bind(this);
         this.handleSelectionSmoothChange = this.handleSelectionSmoothChange.bind(this);
@@ -370,6 +376,11 @@ class App extends React.Component<AppProps, AppState> {
                     autoOffOnOtherTool: this.state.autoOffOnOtherTool,
                     strokeEnabled: this.state.strokeEnabled,
                     createNewLayer: this.state.createNewLayer,
+                    // 清除算法属于「用户选项」而非「参数」：复位不应把用户选好的
+                    // 减法 / 乘法 / 趋白打回默认值（与 deselectAfterFill 等同理）。
+                    clearBackgroundAlgorithm: this.state.clearBackgroundAlgorithm,
+                    clearChannelAlgorithm: this.state.clearChannelAlgorithm,
+                    clearLayerAlgorithm: this.state.clearLayerAlgorithm,
                     // 复位信号自增：纯色/图案/渐变三个子面板的参数在它们各自的组件
                     // 内部 state 里（父面板复位管不到），靠这个信号通知它们回到默认值。
                     // ⚠️ 必须写在 ...initialState 之后：initialState.resetToken 恒为 0，
@@ -444,6 +455,9 @@ class App extends React.Component<AppProps, AppState> {
                     strokeEnabled: this.state.strokeEnabled,
                     createNewLayer: this.state.createNewLayer,
                     clearMode: this.state.clearMode,
+                    clearBackgroundAlgorithm: this.state.clearBackgroundAlgorithm,
+                    clearChannelAlgorithm: this.state.clearChannelAlgorithm,
+                    clearLayerAlgorithm: this.state.clearLayerAlgorithm,
                     compactModes: this.state.compactModes,
                     fillMode: this.state.fillMode,
                 },
@@ -460,6 +474,11 @@ class App extends React.Component<AppProps, AppState> {
                     strokeEnabled: loaded.appPanel.strokeEnabled ?? this.state.strokeEnabled,
                     createNewLayer: loaded.appPanel.createNewLayer ?? this.state.createNewLayer,
                     clearMode: loaded.appPanel.clearMode ?? this.state.clearMode,
+                    // 清除算法：旧存档没有这三个字段 ⇒ 回落到 initialState 的默认
+                    // （趋白 / 减法 / 乘法），与重构前的既有行为一致。
+                    clearBackgroundAlgorithm: loaded.appPanel.clearBackgroundAlgorithm ?? this.state.clearBackgroundAlgorithm,
+                    clearChannelAlgorithm: loaded.appPanel.clearChannelAlgorithm ?? this.state.clearChannelAlgorithm,
+                    clearLayerAlgorithm: loaded.appPanel.clearLayerAlgorithm ?? this.state.clearLayerAlgorithm,
                     fillMode: loaded.appPanel.fillMode ?? this.state.fillMode,
                     // 紧凑模式按作用域合并：旧存档缺字段时逐项回落到默认（全关），
                     // 避免「整体覆盖」把用户已开启的其它作用域冲掉
@@ -469,6 +488,7 @@ class App extends React.Component<AppProps, AppState> {
                         pattern: loaded.appPanel.compactModes?.pattern ?? initialCompactModes.pattern,
                         gradient: loaded.appPanel.compactModes?.gradient ?? initialCompactModes.gradient,
                         stroke: loaded.appPanel.compactModes?.stroke ?? initialCompactModes.stroke,
+                        clear: loaded.appPanel.compactModes?.clear ?? initialCompactModes.clear,
                     },
                     selectionOptionsVisible: loaded.appPanel.selectionOptionsVisible ?? this.state.selectionOptionsVisible,
                     fillOptionsVisible: loaded.appPanel.fillOptionsVisible ?? this.state.fillOptionsVisible,
@@ -523,12 +543,14 @@ class App extends React.Component<AppProps, AppState> {
         const isAnySecondaryPanelOpen = this.state.isColorSettingsOpen || 
                                        this.state.isPatternPickerOpen || 
                                        this.state.isGradientPickerOpen || 
-                                       this.state.isStrokeSettingOpen;
+                                       this.state.isStrokeSettingOpen ||
+                                       this.state.isClearSettingOpen;
         
         const wasAnySecondaryPanelOpen = prevState.isColorSettingsOpen || 
                                         prevState.isPatternPickerOpen || 
                                         prevState.isGradientPickerOpen || 
-                                        prevState.isStrokeSettingOpen;
+                                        prevState.isStrokeSettingOpen ||
+                                        prevState.isClearSettingOpen;
         
         if (isAnySecondaryPanelOpen !== wasAnySecondaryPanelOpen) {
             if (isAnySecondaryPanelOpen) {
@@ -536,7 +558,7 @@ class App extends React.Component<AppProps, AppState> {
             } else {
                 document.body.classList.remove('secondary-panel-open');
             }
-            // 4 个子面板内部没有分区 ⇒ 期间把菜单里的「隐藏/显示分区」置灰，
+            // 5 个子面板内部没有分区 ⇒ 期间把菜单里的「隐藏/显示分区」置灰，
             // 否则点了只会打开一个「父面板分区」浮窗，语义对不上。
             // ⚠️ 只改 enabled、绝不 removeAt/insertAt（会损坏整个菜单，见 MenuManager 注释）。
             MenuManager.setAppVisibilityItemEnabled(!isAnySecondaryPanelOpen);
@@ -575,6 +597,9 @@ class App extends React.Component<AppProps, AppState> {
             'strokeEnabled',
             'createNewLayer',
             'clearMode',
+            'clearBackgroundAlgorithm',
+            'clearChannelAlgorithm',
+            'clearLayerAlgorithm',
             'compactModes',
             'fillMode',
         ];
@@ -592,6 +617,9 @@ class App extends React.Component<AppProps, AppState> {
                     strokeEnabled: this.state.strokeEnabled,
                     createNewLayer: this.state.createNewLayer,
                     clearMode: this.state.clearMode,
+                    clearBackgroundAlgorithm: this.state.clearBackgroundAlgorithm,
+                    clearChannelAlgorithm: this.state.clearChannelAlgorithm,
+                    clearLayerAlgorithm: this.state.clearLayerAlgorithm,
                     compactModes: this.state.compactModes,
                     fillMode: this.state.fillMode,
                     selectionOptionsVisible: this.state.selectionOptionsVisible,
@@ -864,6 +892,15 @@ class App extends React.Component<AppProps, AppState> {
 
     closeStrokeSetting() {
         this.setState({ isStrokeSettingOpen: false });
+    }
+
+    /** 打开清除设置子面板（紧凑模式下由「清除模式」label 触发，普通模式下由齿轮触发） */
+    toggleClearSetting() {
+        this.setState({ isClearSettingOpen: true });
+    }
+
+    closeClearSetting() {
+        this.setState({ isClearSettingOpen: false });
     }
 
     async handleSelectionChange(event?: any) {
@@ -2280,47 +2317,45 @@ title={helpTexts.selectionFill.selectionExpand}>
                                     </div>
                                     <div className="grid-cell">
                                         <div className={this.state.createNewLayer ? 'row-start disabled' : 'row-start'}>
-                                            <span className="label-4" title={helpTexts.selectionFill.clearMode}>清除模式</span>
+                                            {/* 紧凑模式下清除模式**没有**齿轮按钮（横向没有位置），
+                                                入口交给 label 本身：开启后 label 复合 .text-button
+                                                拿到 hover/按下三态，点击进入清除设置子面板（2026-10-08 用户要求）。
+                                                ⚠️ onClick 仅在该开关可交互时挂上：关闭态 / 被「新建图层」禁用时
+                                                   一律传 undefined，避免点到一个「看起来是标签」的死按钮。 */}
+                                            <span
+                                                className={this.state.clearMode ? 'label-4 text-button' : 'label-4'}
+                                                title={helpTexts.selectionFill.clearMode}
+                                                onClick={this.state.clearMode ? this.toggleClearSetting : undefined}
+                                            >清除模式</span>
                                             <ToggleSwitch checked={this.state.clearMode} onChange={this.toggleClearMode} disabled={this.state.createNewLayer} title={helpTexts.selectionFill.clearModeSwitch}  />
                                         </div>
                                     </div>
                                 </div>
                                 {/* 描边模式行（.row-grid-fit）：左列「标签 + 开关」按内容宽靠左，
-                                    右列撑满剩余宽度、内部用 row-end 把「描边设置 + 色板」推到内容盒右缘。
-                                    ⚠️ 2026-10-07 齿轮改文字按钮后，右列控件组总宽固定为 94px
-                                    （.label-4 47 + 其右外边距 10 + 槽左外边距 4 + 控件槽 33，
-                                     槽宽 = .toggle-switch 宽）
-                                    ⇒ 与上一行「清除模式 + 开关」同宽，右对齐后**左右缘双向对齐**。 */}
+                                    右列撑满剩余宽度、内部用 row-end 把色板推到内容盒右缘。
+                                    ⚠️ 2026-10-08 删除「描边设置」文字按钮（用户要求），功能交给
+                                       「描边模式」label 本身承载 —— 与上一行「清除模式」label 完全同构：
+                                       开启后复合 .text-button，点击进入对应子面板。
+                                    对齐关系随之简化：右列只剩色板（槽宽 33 + 左外边距 4 = 37px），
+                                       靠 .row-end 右对齐 ⇒ 色板右缘与「清除模式」开关右缘严格对齐。
+                                       （原来那套「47+10+4+33 = 94px 两组同宽才能左右缘双对齐」的
+                                        换算随文字按钮一起失效，见 app.css 的 .stroke-color-slot 注释。） */}
                                 <div className="row-between row-grid row-grid-fit">
                                     <div className="grid-cell">
                                         <div className="row-start">
-                                            <span className="label-4" title={helpTexts.selectionFill.strokeModeLabel}>描边模式</span>
+                                            <span
+                                                className={this.state.strokeEnabled ? 'label-4 text-button' : 'label-4'}
+                                                title={helpTexts.selectionFill.strokeModeLabel}
+                                                onClick={this.state.strokeEnabled ? this.toggleStrokeSetting : undefined}
+                                            >描边模式</span>
                                             <ToggleSwitch checked={this.state.strokeEnabled} onChange={this.toggleStrokeEnabled} title={helpTexts.selectionFill.strokeEnabledSwitch}  />
                                         </div>
                                     </div>
                                     <div className="grid-cell">
                                         <div className="row-end">
-                                            {/* ⚠️ 2026-10-07 齿轮按钮改为文字按钮「描边设置」（用户要求）：
-                                                样式与上方三列 radio 的「纯色/图案/渐变」标签按钮一致
-                                                （.text-button 提供 hover/按下三态，颜色走令牌）。
-                                                复用 .label-4 而非自定义宽度，是为了拿到同一套 13px 字盒
-                                                + 10px 右外边距 —— 「清除模式」也是 .label-4、同为四字，
-                                                两者字盒宽相同 ⇒ 右对齐后**左缘严格对齐**。
-                                                点击行为与原齿轮完全一致（开关描边设置面板）。 */}
                                             {this.state.strokeEnabled && (
-                                                <span
-                                                    className="label-4 text-button"
-                                                    title={helpTexts.selectionFill.strokeSettingsButton}
-                                                    onClick={this.toggleStrokeSetting}
-                                                >
-                                                    描边设置
-                                                </span>
-                                            )}
-                                            {this.state.strokeEnabled && (
-                                                /* 色框置于文字按钮右侧。外层槽宽 33px = .toggle-switch 宽，
-                                                   槽内右对齐 ⇒ 色框右缘与上一行「清除模式」开关右缘对齐；
-                                                   同时右列两组控件总宽都等于 94px（47+10+4+33），
-                                                   右对齐后左缘也随之对齐。 */
+                                                /* 色框右对齐，与上一行「清除模式」开关右缘对齐。
+                                                   外层槽宽 33px = .toggle-switch 宽，槽内右对齐。 */
                                                 <div className="stroke-color-slot">
                                                     <div
                                                         className="color-preview"
@@ -2380,13 +2415,28 @@ title={helpTexts.selectionFill.createNewLayer}>
                                 </div>
                                 <div className="divider" />
 
-                                {/* 清除模式开关（禁用态给行挂 .disabled，同上） */}
+                                {/* 清除模式开关（禁用态给行挂 .disabled，同上）。
+                                    齿轮按钮的挂载方式与「描边模式」完全同构：开启后
+                                    「齿轮 + 开关」作为一个整体收进右侧 .row-start 右对齐
+                                    （2026-10-08 用户要求：清除模式子面板入口）。
+                                    清除模式没有色板，所以控件组只有齿轮 + 开关。
+                                    ⚠️ 与紧凑模式的区别：紧凑模式横向没有位置，入口改挂在 label 上。 */}
                                 <div className={this.state.createNewLayer ? 'row-between disabled' : 'row-between'}>
                                     <label className="label-4" 
 title={helpTexts.selectionFill.clearMode}>
                             清除模式
                             </label>
-                                    <ToggleSwitch checked={this.state.clearMode} onChange={this.toggleClearMode} disabled={this.state.createNewLayer} title={helpTexts.selectionFill.clearModeSwitch}  />
+                                    <div className="row-start clear-mode-controls">
+                                        {this.state.clearMode && (
+                                            <IconButton
+                                                onClick={this.toggleClearSetting}
+                                                title={helpTexts.selectionFill.clearSettingsButton}
+                                            >
+                                                <SettingsIcon/>
+                                            </IconButton>
+                                        )}
+                                        <ToggleSwitch checked={this.state.clearMode} onChange={this.toggleClearMode} disabled={this.state.createNewLayer} title={helpTexts.selectionFill.clearModeSwitch}  />
+                                    </div>
                                 </div>
                             </>
                         )}
@@ -2541,6 +2591,18 @@ title={helpTexts.selectionFill.clearMode}>
               onBlendModeChange={(blendMode) => this.setState({ strokeBlendMode: blendMode })}
               onOpacityChange={(opacity) => this.setState({ strokeOpacity: opacity })}
               onClose={this.closeStrokeSetting}
+            />
+
+                {/* 清除设置面板（结构与描边设置同构） */}
+            <ClearSetting
+              isOpen={this.state.isClearSettingOpen ?? false}
+              backgroundAlgorithm={this.state.clearBackgroundAlgorithm}
+              channelAlgorithm={this.state.clearChannelAlgorithm}
+              layerAlgorithm={this.state.clearLayerAlgorithm}
+              onBackgroundAlgorithmChange={(v) => this.setState({ clearBackgroundAlgorithm: v })}
+              onChannelAlgorithmChange={(v) => this.setState({ clearChannelAlgorithm: v })}
+              onLayerAlgorithmChange={(v) => this.setState({ clearLayerAlgorithm: v })}
+              onClose={this.closeClearSetting}
             />
             </div>
 

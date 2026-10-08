@@ -1,7 +1,7 @@
 /* ==========================================================================
    #app 父面板（选区填充）独有样式
    --------------------------------------------------------------------------
-   只承载 #app 主父面板自身的布局与状态规则，以及它的 4 个子面板（纯色/渐变/图案/描边）与 input-fix 的 @import
+   只承载 #app 主父面板自身的布局与状态规则，以及它的 5 个子面板（纯色/渐变/图案/描边/清除）与 input-fix 的 @import
    —— 这些都属于 app 面板样式。（index.tsx 顶部最先引入，也是 index.html link / manifest cssResources 的静态入口）
    注：激活弹窗样式在 src/styles/license.css，由 index.tsx 在本文件之后单独引入，保证层叠顺序排在主面板样式之后。
    ========================================================================== */
@@ -9,6 +9,7 @@
 @import './gradient.css';
 @import './pattern.css';
 @import './stroke.css';
+@import './clear.css';
 @import './input-fix.css';
 
 /* app父面板根容器（index.tsx 中 #app 内的包裹层）。
@@ -87,27 +88,29 @@ body.secondary-panel-open #app .app-root > .panel {
   transform: translateX(-5px);
 }
 
-/* 描边模式行右侧控件组（.stroke-mode-controls：color-preview + 设置齿轮 + sp-switch）：
+/* 「描边模式」「清除模式」行右侧控件组的齿轮间距
+   （.stroke-mode-controls：color-preview + 设置齿轮 + 开关；
+     .clear-mode-controls：设置齿轮 + 开关，清除模式没有色板）。
    UXP 无 flex gap，齿轮与开关之间单独给 8px 间距。
-   ⚠️ 只作用于**普通模式**那一行；紧凑模式已改用「描边设置」文字按钮 + 色框槽（见下方）。 */
-.stroke-mode-controls .icon-button {
+   ⚠️ 两个类共用同一条规则（单一来源）：新增加「齿轮 + 开关」行时只需把类名并进来，
+      不要各写一条 —— 否则间距会漂移。
+   ⚠️ 只作用于**普通模式**那两行；紧凑模式没有齿轮（清除模式的入口在 label 上，
+      描边模式那一行的齿轮已在 2026-10-08 删除，功能交给 label）。 */
+.stroke-mode-controls .icon-button,
+.clear-mode-controls .icon-button {
   margin-right: 8px;
 }
 
 /* 紧凑模式描边模式行右侧的「色框槽」。
-   ⚠️ 2026-10-07 齿轮按钮改为文字按钮「描边设置」后，色框移到文字按钮右侧，
-      并套进这个定宽槽里。槽宽固定 33px = `.toggle-switch` 的宽，槽内色框右对齐 ⇒
-      **色框右缘与上一行「清除模式」开关的右缘严丝合缝**。
-      同时整组总宽 = 47(.label-4 字盒) + 10(标签右外边距) + 4(槽左外边距) + 33(槽) = **94px**，
-      与上一行「清除模式 + 开关」那组**严格同宽**（该组 = 47 + 10 + 4(开关的通用左边距) + 33）；
-      两组都靠 `.row-end` 右对齐 ⇒ 「描边设置」与「清除模式」的**左缘**也随之对齐
-      （用户要求的两条对齐一次满足，实测 Δ 左缘 = 0、Δ 右缘 = 0）。
+   ⚠️ 2026-10-08 删除「描边设置」文字按钮后（用户要求，功能交给「描边模式」label），
+      右列只剩色框一个控件，槽内右对齐 ⇒ **色框右缘与上一行「清除模式」开关的右缘对齐**
+      这一条依然成立（右列是 .row-grid-fit 的 flex:1 撑满列，.row-end 把它推到内容盒右缘）。
+      原注释里那套「47(.label-4) + 10 + 4 + 33 = 94px，与上一行同宽才能左右缘双对齐」的
+      换算随文字按钮一起失效 —— 现在右列不再需要凑宽度，**只有右缘一条约束**。
    ⚠️ 槽宽是字面量而非 `calc`：`.toggle-switch` 的宽也是字面量，UXP 下没有可靠的
       「引用另一元素宽度」手段，改开关宽度时**必须同步改这里**（两处都写了 33px）。
-   ⚠️ `margin-left: 4px` 不可省：上一行开关吃到了通用规则 `.row-between .toggle-switch
-      {margin-left:4px}`（该规则是**后代**选择器，.row-start 里也会命中），
-      本槽不以 .toggle-switch 为类名、拿不到那 4px ⇒ 两组总宽会差 4px、左缘错开。
-      这里手动补上同一档 4px，两组总宽同为 94px（47 + 10 + 4 + 33）。 */
+   ⚠️ `margin-left: 4px` 保留：让色框与左列的开关之间保持与全插件一致的那档呼吸间距
+      （通用规则 `.row-between .toggle-switch {margin-left:4px}` 的同一档 4px）。 */
 .stroke-color-slot {
   width: 33px;
   margin-left: 4px;
@@ -125,14 +128,14 @@ body.secondary-panel-open #app .app-root > .panel {
 /* ==========================================================================
    紧凑模式（右上角菜单切换，默认全部关闭）
    --------------------------------------------------------------------------
-   ⚠️ 5 个作用域各自独立开关、互不干扰（见 app.tsx 的 COMPACT_CLASS / currentCompactScope）：
-      app = 选区填充父面板；color / pattern / gradient / stroke = 纯色 / 图案 / 渐变 / 描边
-      4 个子面板。菜单项只作用于「当前面板」，文案形如「紧凑模式：图案·关」。
+   ⚠️ 6 个作用域各自独立开关、互不干扰（见 app.tsx 的 COMPACT_CLASS / currentCompactScope）：
+      app = 选区填充父面板；color / pattern / gradient / stroke / clear = 纯色 / 图案 / 渐变 /
+      描边 / 清除，共 5 个子面板。菜单项只作用于「当前面板」，文案形如「紧凑模式：图案·关」。
 
    每个作用域只隐藏自己那一层的装饰，绝不越界到别层：
    - .main-title / .panel-footer 只有父面板有（子面板的标题栏是 .subpanel-title-1，带关闭按钮，不能隐藏）；
    - .divider 用「直接子节点链」限定作用域：父面板的分隔线在 #app .app-root > .panel > .panel-section 内；
-     4 个子面板是 .panel-section 的同级 .panel（absolute 覆盖），靠各自的 .subpanel-* 类名识别。
+     5 个子面板是 .panel-section 的同级 .panel（absolute 覆盖），靠各自的 .subpanel-* 类名识别。
    ========================================================================== */
 body.compact-app #app .main-title,
 body.compact-app #app .panel-footer,
@@ -140,11 +143,12 @@ body.compact-app #app .app-root > .panel > .panel-section .divider {
   display: none;
 }
 
-/* 4 个子面板：各自只隐藏自己内部的分隔线 */
+/* 5 个子面板：各自只隐藏自己内部的分隔线 */
 body.compact-color #app .subpanel-color .divider,
 body.compact-pattern #app .subpanel-pattern .divider,
 body.compact-gradient #app .subpanel-gradient .divider,
-body.compact-stroke #app .subpanel-stroke .divider {
+body.compact-stroke #app .subpanel-stroke .divider,
+body.compact-clear #app .subpanel-clear .divider {
   display: none;
 }
 

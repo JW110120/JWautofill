@@ -1,638 +1,805 @@
 import { action, app, core, imaging } from "photoshop";
 import { calculateRandomColor, hsbToRgb, rgbToGray } from './ColorUtils';
 import { Pattern } from '../types/state';
+import {
+    clearStrength,
+    clearChannelValue,
+    clearAlphaValue,
+    clearBackgroundColor,
+    BackgroundClearAlgorithm,
+    BinaryClearAlgorithm,
+} from './ClearAlgorithms';
+
+/**
+ * 清除内容的灰度数据包：F（灰度）与可选 α（内容自身透明度）。
+ * 四类内容（纯色/图案/渐变/描边）在本文件里都归约成这个形状，
+ * 后面的写回路径不再区分内容类型 —— 这正是「合并多余算法」的落点。
+ */
+/**
+ * 一个文档坐标下的矩形（左/上/右/下，右/下不含）。
+ * 用于「读区域」与「图层像素边界」两处 —— 抽成具名类型是为了让
+ * 回归台架能干净地切出这些方法执行（见 outputs/clear_pixel_geometry_verify.cjs）。
+ */
+type PixelRect = { left: number; top: number; right: number; bottom: number };
+
+/**
+ * 背景图层解锁结果。⛔ 必须一起带出 `layerId`：真机上该转换可能换掉图层 id，
+ * 用旧 id 继续读写会命中 `invalid target sheet`。
+ */
+interface BackgroundUnlockResult {
+    converted: boolean;
+    layerId: number;
+}
+
+/** 活动图层最小快照（只取 id 与背景标记；任一项读不到即 null） */
+interface ActiveLayerSnapshot {
+    id: number | null;
+    isBackgroundLayer: boolean | null;
+}
+
+interface ClearFillData {
+    gray: Uint8Array;
+    alpha?: Uint8Array;
+}
+
+/**
+ * 一次「读像素 → 改写 → 写回」的数据块。
+ *
+ * ⚠️ 数据与几何必须**成对传递**：`left/top/width/height` 是数据真正覆盖的文档矩形，
+ *    由 `imaging.getPixels` 的**返回值 `sourceBounds`** 给出，**不是**我们请求的区域
+ *    （PS 会把请求区域裁剪到「真有像素」的范围）。下标换算一律走这块几何。
+ */
+interface LayerPixelBlock {
+    data: Uint8Array;
+    /** 每像素分量数：3 = RGB（无 alpha，背景式目标）/ 4 = RGBA（普通像素图层） */
+    components: number;
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+}
+
+/**
+ * **文档全尺寸**的写回缓冲（不是图层边界，也不是选区外接矩形）。
+ *
+ * ⚠️⚠️ 这个「全文档」不是性能取舍，而是正确性的**硬要求**，理由见
+ *    `writeLayerPixels` 的注释（`putPixels` 的 `replace` 默认为 true）。
+ *    缓冲区里「选区外」的字节就是读取时的原值 ⇒ 写回后严格恒等，
+ *    这就是用户要求的「选区外部不受影响」。
+ */
+interface DocumentPixelBlock {
+    data: Uint8Array;
+    components: number;
+    width: number;
+    height: number;
+}
+
+/**
+ * 背景图层 → 普通图层（PS 菜单「图层来自背景」/ Layer From Background）。
+ *
+ * ⛔ 描述符**逐字取自用户真机监听到的 PS 自身下发内容**，不得凭外部检索改写；
+ *    唯一的改动是把记录里的 `layerID: 4` 换成运行时的目标图层 id。
+ *
+ * ⚠️ 必须在 `core.executeAsModal` 作用域内调用（本项目所有像素/图层写操作的要求）。
+ * ⚠️ 该描述符会把不透明度/混合模式置为 100 / normal —— 这是记录里 PS 自己下发的值，
+ *    背景图层在 PS 中恒为「100% + 正常」，故正常路径下不会丢失用户设置。
+ *
+ * ⛔⛔ **这个命令在真机上「报错但生效」**（2026-10-08 用户实测 + 控制台证据链）：
+ *    它会把背景图层真的变成普通像素图层，**同时**命令以 `invalid target sheet` 报错。
+ *    ⇒ **绝不能用「有没有抛错」判定解锁成功**，必须以回读 `isBackgroundLayer` 为准
+ *      （见 `unlockBackgroundLayer`）。旧实现把它当失败 ⇒ 既不还原背景图层，
+ *      又在「刚被改过类型」的图层上继续读像素而失败。
+ */
+const BACKGROUND_TO_LAYER_DESCRIPTOR = {
+    _obj: "set",
+    _target: [{ _ref: "layer", _property: "background" }],
+    to: {
+        _obj: "layer",
+        opacity: { _unit: "percentUnit", _value: 100 },
+        mode: { _enum: "blendMode", _value: "normal" },
+    },
+    _isCommand: false,
+};
+
+/**
+ * 普通图层 → 背景图层（PS 菜单「背景来自图层」/ Background From Layer）。
+ *
+ * ⛔ 同上，描述符逐字取自用户真机监听，不得改写。
+ * ⚠️ 该命令会把图层的透明区**按背景色合成掉**（默认白）—— 这正是「橡皮擦背景图层」
+ *    观感的来源；本文件在背景族算法下 alpha 恒为 255，故合成是恒等操作，
+ *    它的作用只是把图层类型还给用户（不清除模式不该永久改动用户的图层结构）。
+ */
+const LAYER_TO_BACKGROUND_DESCRIPTOR = {
+    _obj: "make",
+    _target: [{ _ref: "backgroundLayer" }],
+    using: { _ref: "layer", _enum: "ordinal", _value: "targetEnum" },
+    _isCommand: false,
+};
 
 export class ClearHandler {
+    /**
+     * 清除模式总入口（由 app.tsx 的 fillSelection 调用）。
+     *
+     * 分发只剩三级，与 utils/ClearAlgorithms.ts 的三类目标一一对应：
+     *   快速蒙版 / 图层蒙版 → 第二类「黑白通道」；像素图层与背景图层 → 第三类/第一类。
+     *   （单一通道另有 SingleChannelHandler，它在 app.tsx 就更早分流，不经过这里。）
+     */
     static async clearWithOpacity(opacity: number, state?: any, layerInfo?: any) {
         try {
-            // 获取当前文档信息
             const document = app.activeDocument;
-            const isInQuickMask = document.quickMaskMode;
-            
-            // 快速蒙版执行特殊填充逻辑
-            if (isInQuickMask && state) {
+
+            if (document.quickMaskMode && state) {
                 await this.clearInQuickMask(state);
                 return;
             }
-            
-            // 图层蒙版执行特殊填充逻辑
+
             if (layerInfo && layerInfo.isInLayerMask && state) {
-                console.log('🎭 当前在图层蒙版状态，使用图层蒙版清除方法');
-                if (state.fillMode === 'foreground') {
-                    await this.clearLayerMaskSolidColor(layerInfo, state, opacity);
-                } else if (state.fillMode === 'pattern') {
-                    if (state.selectedPattern) {
-                        await this.clearLayerMaskPattern(layerInfo, state, opacity);
-                    } else {
-                        // 缺少图案预设，显示警告并跳过清除
-                        await core.showAlert({ message: '请先选择一个图案预设' });
-                        return;
-                    }
-                } else if (state.fillMode === 'gradient') {
-                    if (state.selectedGradient) {
-                        await this.clearLayerMaskGradient(layerInfo, state, opacity);
-                    } else {
-                        // 缺少渐变预设，显示警告并跳过清除
-                        await core.showAlert({ message: '请先选择一个渐变预设' });
-                        return;
-                    }
-                }
+                await this.clearLayerMask(state, opacity);
                 return;
             }
-            
-            // 像素图层的清除逻辑
-            if (state && state.fillMode === 'foreground') {
-                // 情况1：清除模式，删除纯色
-                await this.clearSolidColor(opacity, state, layerInfo);
-            } else if (state && state.fillMode === 'pattern') {
-                if (state.selectedPattern) {
-                    // 情况2：清除模式，删除图案
-                    await this.clearPattern(opacity, state);
-                } else {
-                    // 缺少图案预设，显示警告并跳过清除
-                    await core.showAlert({ message: '请先选择一个图案预设' });
-                    return;
-                }
-            } else if (state && state.fillMode === 'gradient') {
-                if (state.selectedGradient) {
-                    // 情况3：清除模式，删除渐变
-                    await this.clearGradient(opacity, state);
-                } else {
-                    // 缺少渐变预设，显示警告并跳过清除
-                    await core.showAlert({ message: '请先选择一个渐变预设' });
-                    return;
-                }
-            } 
+
+            if (state) {
+                await this.clearPixelLayer(state, opacity, layerInfo);
+            }
         } catch (error) {
             console.error('清除选区失败:', error);
             throw error;
         }
     }
 
-    //-------------------------------------------------------------------------------------------------
-    // 情况1：清除模式，像素图层，删除纯色√
-    static async clearSolidColor(opacity: number, state: any, layerInfo?: any) {
+    //=================================================================================
+    // 第一类（背景图层）/ 第三类（普通像素图层）—— 读像素 → 改 → 写回
+    //=================================================================================
+
+    /**
+     * 背景图层与普通像素图层的统一清除入口。
+     *
+     * 两类目标共用同一条「读取 → 逐像素改写 → 写回」的流水线：
+     *   · 背景图层      ⇒ 先转成普通像素图层，再改写 R/G/B（提亮 / 减黑 / 乘黑），最后转回背景图层；
+     *   · 普通像素图层  ⇒ RGB 不动、只改写 A（减法 / 乘法降低不透明度）。
+     * 重构前这两类目标分别走 levels / clearEnum / putSelection+delete 三条宿主路径，
+     * 结果不可预测（背景图层图案清除会变成「填背景色」）；现在全部由本文件算出结果。
+     *
+     * ⚠️⚠️ 2026-10-08 真机二次修复（用户报告：普通像素图层与背景图层都会把**选区外**
+     *     整层像素变成透明 / 变白）。根因见 `writeLayerPixels` 的注释 —— `putPixels` 的
+     *     `replace` 默认为 true，局部写会把整层内容先清空。现在统一改为
+     *     「文档全尺寸缓冲 + 原点写回」，与 MaskSyncEngine / pixelDataProcessor /
+     *     knockoutBatchProcessor 三处已验证的整图写回完全一致。
+     *
+     * ⚠️ 走哪一类由 `layer.isBackgroundLayer`（DOM 实测）决定；`layerInfo` 只是探测快照，
+     *    可能滞后于刚刚发生的图层类型变化，仅在 DOM 读不到该属性时兜底。
+     *
+     * ⛔⛔ 2026-10-08 真机**第三次**修复（背景图层：解锁后什么都没发生、也没还原成背景图层，
+     *    控制台报 `invalid target sheet`）—— 关键结论：**图层类型转换之后一次 DOM 都不要读**，
+     *    docId / 目标图层 id / 读区域必须前置捕获；解锁成败以**回读图层类型**为准。
+     *    完整证据链与推演见方法体首段注释。
+     */
+    static async clearPixelLayer(state: any, opacity: number, layerInfo?: any) {
         try {
-            console.log('🎨 执行纯色清除模式');
-            
-            // 背景图层特殊处理：使用色阶调整实现白色填充效果，避免弹出对话框
-            if (layerInfo && layerInfo.isBackground) {
-                console.log('🎯 检测到背景图层，使用色阶调整');
-                
-                // 根据不透明度计算色阶输出值：X = opacity/100 * 255
-                const outputValue = Math.round((opacity / 100) * 255);
-                
-                console.log('🎛️ 色阶参数:', {
-                    opacity: opacity,
-                    outputValue: outputValue
-                });
-                
-                // 使用色阶调整实现白色填充效果
-                await action.batchPlay([{
-                    _obj: "levels",
-                    presetKind: {
-                        _enum: "presetKindType",
-                        _value: "presetKindCustom"
-                    },
-                    adjustment: [
-                        {
-                            _obj: "levelsAdjustment",
-                            channel: {
-                                _ref: "channel",
-                                _enum: "channel",
-                                _value: "composite"
-                            },
-                            output: [
-                                outputValue,
-                                255
-                            ]
-                        }
-                    ],
-                    _isCommand: false,
-                    _options: {
-                        dialogOptions: "dontDisplay"
-                    }
-                }], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
-                
+            const bounds = await this.getSelectionData();
+            if (!bounds) {
+                console.warn('❌ 没有选区，无法执行清除操作');
                 return;
             }
-            
-            // 非背景图层的原有逻辑
-            // 计算抖动后的颜色
-            const randomColorResult = calculateRandomColor(
-                {
-                    hueVariation: state.hueVariation || 0,
-                    saturationVariation: state.saturationVariation || 0,
-                    brightnessVariation: state.brightnessVariation || 0,
-                    opacityVariation: state.opacityVariation || 0,
-                    calculationMode: state.calculationMode || 'absolute'
-                },
-                opacity,
-                undefined, // 使用当前前景色
-                false // 非快速蒙版模式
-            );
-            
-            // 只使用面板不透明度，不考虑前景色灰度
-            const finalOpacity = Math.round(randomColorResult.opacity);
-            
-            console.log('🔢 颜色计算结果:', {
-                originalOpacity: randomColorResult.opacity,
-                finalOpacity: finalOpacity,
-            });
-            
-            // 保存当前前景色
-            const foregroundColor = app.foregroundColor;
-            const savedForegroundColor = {
-                hue: {
-                    _unit: "angleUnit",
-                    _value: foregroundColor.hsb.hue
-                },
-                saturation: foregroundColor.hsb.saturation,
-                brightness: foregroundColor.hsb.brightness
-            };
-            
+
+            const fill = await this.buildClearFillData(state, bounds);
+            if (!fill) return;
+
+            // ⛔⛔ 2026-10-08 真机第三次修复（用户报告：背景图层「解锁后什么都没发生、
+            //     也没有还原成背景图层」，控制台报 `invalid target sheet`）。证据链：
+            //       ① 报错上方那行是 `⚠️ 背景图层解锁失败（将按背景图层原样处理）`
+            //          —— 该文案全仓只出现在 `unlockBackgroundLayer` 的 catch 里；
+            //       ② 用户同时看到「背景图层已经变成普通像素图层」。
+            //     ⇒ 真相：**解锁命令确实把图层类型改掉了，但命令本身报错**。
+            //       旧实现把「抛错」当「没解锁」⇒ 不还原背景图层；而且紧接着
+            //       `app.activeDocument.activeLayers[0]` / `layer.boundsNoEffects`
+            //       又一次读取「刚被改过类型」的图层 ⇒ 抛 `invalid target sheet`，
+            //       而 `boundsNoEffects` 那处在 try 之外 ⇒ 异常直接逃逸、整轮静默失败。
+            //     ⇒ 现在：**转换后一次 DOM 都不读**。docId / 目标图层 id / 读区域
+            //       全部在转换前取好，像素读写只吃这些数字。
+            let layer: any = app.activeDocument.activeLayers[0];
+            if (!layer) {
+                console.warn('⚠️ 取不到活动图层，跳过清除');
+                return;
+            }
+            // ① 前置捕获（**必须在图层类型转换之前**，见上方说明）：
+            //    docId / 文档尺寸 / 目标图层 id / 读区域。
+            const docId = app.activeDocument.id;
+            const docW = Math.max(1, Math.round(Number(bounds.docWidth) || 1));
+            const docH = Math.max(1, Math.round(Number(bounds.docHeight) || 1));
+            let targetLayerId = layer.id;
+
+            // 背景图层判定以 DOM 实测为准（layerInfo 可能滞后于图层类型变化）
+            const isBackground = typeof layer.isBackgroundLayer === 'boolean'
+                ? layer.isBackgroundLayer
+                : !!(layerInfo && layerInfo.isBackground);
+
+            // 读区域：按**图层实有像素边界**（`boundsNoEffects`）取，与普通图层同口径 ——
+            // 本仓已记录过「全文档 sourceBounds 在图层没画满画布时会被裁剪甚至报
+            // `Missing image`」（`MaskSyncEngine` 实测），所以不改成读文档矩形。
+            // ⚠️ 这一次读必须在**图层类型转换之前**完成（转换后读图层属性可能抛
+            //    `invalid target sheet`）；背景图层恒铺满画布，转换也不会改动像素范围。
+            const layerBounds = this.readLayerBounds(layer);
+            const readRegion: PixelRect = layerBounds || { left: 0, top: 0, right: docW, bottom: docH };
+            if (!layerBounds) {
+                console.warn('⚠️ 取不到图层像素边界，退回按文档矩形读取:', readRegion);
+            }
+
+            // ② 边界处理③：若锁了「透明像素」，写回 alpha 会被 PS 静默忽略
+            //    ⇒ 必须先解锁、清除完再还原锁定状态。
+            // ⚠️ 这一读必须放在**图层类型转换之前**：转换后旧代理可能失效，
+            //    而且背景图层本来就不可能有这个锁（needUnlockPixels 对背景恒为 false）。
+            let transparencyLocked = !!(layerInfo && layerInfo.hasTransparencyLocked);
             try {
-                // 设置前景色为抖动计算的结果
-                await action.batchPlay([{
-                    _obj: "set",
-                    _target: [{
-                        _ref: "color",
-                        _property: "foregroundColor"
-                    }],
-                    to: {
-                        _obj: "HSBColorClass",
-                        hue: {
-                            _unit: "angleUnit",
-                            _value: randomColorResult.hsb.hue
-                        },
-                        saturation: randomColorResult.hsb.saturation,
-                        brightness: randomColorResult.hsb.brightness
-                    },
-                    source: "photoshopPicker",
-                    _options: {
-                        dialogOptions: "dontDisplay"
+                if (typeof layer.transparentPixelsLocked === 'boolean') {
+                    transparencyLocked = layer.transparentPixelsLocked;
+                }
+            } catch (e) {
+                // 探测失败不能影响主流程（回归高发点：多步探测的每一步都要自带 catch）
+                console.warn('⚠️ 读取「锁定透明像素」状态失败，回退到 layerInfo:', e);
+            }
+            const needUnlockPixels = !isBackground && transparencyLocked;
+
+            // ③ 背景图层 → 普通像素图层（「图层来自背景」）。
+            //    为什么必须解锁：`putPixels` 的契约原文是「The target layer must be a pixel layer」，
+            //    背景图层上写会报 `invalid target sheet`（真机实测）。
+            //    ⚠️ 成败以**回读图层类型**为准（命令会报错但生效），且回读顺带刷新图层 id。
+            let backgroundUnlocked = false;
+            if (isBackground) {
+                const unlock = await this.unlockBackgroundLayer(targetLayerId);
+                backgroundUnlocked = unlock.converted;
+                targetLayerId = unlock.layerId;
+                if (!backgroundUnlocked) {
+                    console.warn('⛔ 背景图层未能转为普通像素图层，本轮不写回（背景图层无法被 putPixels 写入）');
+                }
+            }
+
+            if (needUnlockPixels) {
+                await this.setTransparencyLock(false);
+            }
+
+            try {
+                // ⚠️ 这里**不允许**再读 `app.activeDocument` / 图层属性：转换后这些读取
+                //    可能抛 `invalid target sheet`，用前置捕获的 docId / targetLayerId / 读区域。
+                if (backgroundUnlocked || !isBackground) {
+                    const block = await this.readLayerPixels(targetLayerId, docId, readRegion);
+                    if (!block) {
+                        console.warn('⚠️ 目标图层没有可读像素（空图层 / 全透明），跳过清除');
+                    } else if (block.components !== 3 && block.components !== 4) {
+                        console.warn(`⚠️ 目标像素分量数异常（${block.components}），跳过清除`);
+                    } else {
+                        // 摊平成文档全尺寸缓冲：图层没有像素的地方保持全 0（透明），
+                        // 选区外的字节 = 读出来的原值 ⇒ 写回后严格恒等。
+                        const docBlock = this.expandToDocument(block, bounds);
+                        if (isBackground) {
+                            this.applyBackgroundClear(docBlock, fill, opacity, bounds, state);
+                        } else {
+                            this.applyLayerAlphaClear(docBlock, fill, opacity, bounds, state);
+                        }
+                        await this.writeLayerPixels(docBlock, targetLayerId, docId);
                     }
-                }], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
-                
-                console.log('🎨 已设置前景色为抖动计算结果:', {
-                    hue: randomColorResult.hsb.hue,
-                    saturation: randomColorResult.hsb.saturation,
-                    brightness: randomColorResult.hsb.brightness
-                });
-                
-                // 使用前景色执行填充操作
-                await action.batchPlay([{
-                    _obj: "fill",
-                    using: {
-                        _enum: "fillContents",
-                        _value: "foregroundColor"
-                    },
-                    opacity: {
-                        _unit: "percentUnit",
-                        _value: finalOpacity
-                    },
-                    mode: {
-                        _enum: "blendMode",
-                        _value: "clearEnum"
-                    },
-                    _options: {
-                        dialogOptions: "dontDisplay"
-                    }
-                }], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
+                }
             } finally {
-                // 恢复原来的前景色
-                await action.batchPlay([{
-                    _obj: "set",
-                    _target: [{
-                        _ref: "color",
-                        _property: "foregroundColor"
-                    }],
-                    to: {
-                        _obj: "HSBColorClass",
-                        hue: savedForegroundColor.hue,
-                        saturation: savedForegroundColor.saturation,
-                        brightness: savedForegroundColor.brightness
-                    },
-                    source: "photoshopPicker",
-                    _options: {
-                        dialogOptions: "dontDisplay"
-                    }
-                }], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
-            }
-            
-        } catch (error) {
-            console.error('❌ 纯色清除失败:', error);
-            throw error;
-        }
-    }
-
-    //-------------------------------------------------------------------------------------------------
-    // 情况2：清除模式，像素图层，删除图案
-    static async clearPattern(opacity: number, state: any) {
-        try {
-            console.log('🔳 执行图案清除模式');
-            
-            // 第一步：获取选区边界信息
-            const selectionBounds = await this.getSelectionData();
-            if (!selectionBounds) {
-                console.warn('❌ 没有选区，无法执行图案清除操作');
-                return;
-            }
-            
-            // 第二步：获取图案的灰度数据
-            const patternGrayData = await this.getPatternFillGrayData(state, selectionBounds);
-            
-            // 第三步：计算最终灰度值（图案清除模式的特殊公式）
-            const finalGrayData = await this.calculatePatternClearValues(patternGrayData, opacity, state, selectionBounds);
-            
-            // 第四步：用putSelection修改选区并删除内容
-            await this.applySelectionAndDelete(finalGrayData, selectionBounds, state);
-        } catch (error) {
-            console.error('❌ 图案清除失败:', error);
-            throw error;
-        }
-    }
-
-    //-------------------------------------------------------------------------------------------------
-    // 情况3：清除模式，像素图层，删除渐变
-    static async clearGradient(opacity: number, state: any) {
-        try {
-            console.log('🌈 执行渐变清除模式');
-            
-            // 第一步：获取选区边界信息
-            const selectionBounds = await this.getSelectionData();
-            if (!selectionBounds) {
-                console.warn('❌ 没有选区，无法执行渐变清除操作');
-                return;
-            }
-            
-            // 第二步：获取渐变的灰度数据
-            const gradientGrayData = await this.getGradientFillGrayData(state, selectionBounds);
-            
-            // 第三步：计算最终灰度值（渐变清除模式的特殊公式）
-            const finalGrayData = await this.calculateGradientClearValues(gradientGrayData, opacity, state, selectionBounds);
-            
-            // 第四步：用putSelection修改选区并删除内容
-            await this.applySelectionAndDelete(finalGrayData, selectionBounds, state);
-        } catch (error) {
-            console.error('❌ 渐变清除失败:', error);
-            throw error;
-        }
-    }
-
-  //-------------------------------------------------------------------------------------------------
-    // 计算图案清除模式的最终灰度值（性能优化版本）
-    static async calculatePatternClearValues(
-        patternGrayData: Uint8Array,
-        opacity: number,
-        state: any,
-        bounds: any
-    ): Promise<Uint8Array> {
-        console.log('🔳 开始计算图案清除模式的最终灰度值');
-        
-        const finalData = new Uint8Array(patternGrayData.length);
-        const opacityFactor = opacity / 100;
-        
-        // 检查是否有透明度信息需要处理（PNG图案自带透明区域）
-        const hasAlpha = state?.selectedPattern && state.selectedPattern.hasAlpha && 
-                         state.selectedPattern.patternRgbData && state.selectedPattern.patternComponents === 4;
-        
-        // 如果有透明度信息，生成对应的透明度数据
-        let alphaData: Uint8Array | undefined;
-        if (hasAlpha && state?.selectedPattern) {
-            const pattern = state.selectedPattern;
-            const patternWidth = pattern.width || pattern.originalWidth || 100;
-            const patternHeight = pattern.height || pattern.originalHeight || 100;
-            const scale = pattern.currentScale || pattern.scale || 100;
-            const scaledPatternWidth = Math.round(patternWidth * scale / 100);
-            const scaledPatternHeight = Math.round(patternHeight * scale / 100);
-            const angle = pattern.currentAngle || pattern.angle || 0;
-            
-            // 预计算常用值以提高性能
-            const boundsLeft = bounds.left;
-            const boundsTop = bounds.top;
-            const boundsWidth = bounds.width;
-            const boundsHeight = bounds.height;
-            const docWidth = bounds.docWidth;
-            
-            if (pattern.fillMode === 'stamp') {
-                // 盖图章模式：使用createStampPatternData生成透明度数据
-                const stampAlphaResult = await ClearHandler.createStampPatternData(
-                    pattern.patternRgbData,
-                    patternWidth,
-                    patternHeight,
-                    4, // RGBA数据
-                    boundsWidth,
-                    boundsHeight,
-                    scaledPatternWidth,
-                    scaledPatternHeight,
-                    angle,
-                    bounds,
-                    false, // 非灰度模式
-                    true // 生成透明度数据
-                );
-                
-                if (stampAlphaResult.alphaData && bounds.selectionDocIndices) {
-                    // 提取选区内的透明度数据 - 性能优化版本
-                    alphaData = new Uint8Array(bounds.selectionDocIndices.size);
-                    const selectionIndices = Array.from(bounds.selectionDocIndices);
-                    const alphaDataSource = stampAlphaResult.alphaData;
-                    
-                    // 批量处理，减少重复计算
-                    for (let i = 0; i < selectionIndices.length; i++) {
-                        const docIndex: number = selectionIndices[i];
-                        const docX = docIndex % docWidth;
-                        const docY = Math.floor(docIndex / docWidth);
-                        const boundsX = docX - boundsLeft;
-                        const boundsY = docY - boundsTop;
-                        
-                        if (boundsX >= 0 && boundsX < boundsWidth && boundsY >= 0 && boundsY < boundsHeight) {
-                            const boundsIndex = boundsY * boundsWidth + boundsX;
-                            alphaData[i] = boundsIndex < alphaDataSource.length ? alphaDataSource[boundsIndex] : 0;
-                        } else {
-                            alphaData[i] = 0; // 图案外部为透明
-                        }
-                    }
+                if (needUnlockPixels) {
+                    await this.setTransparencyLock(true);
                 }
+                // ④ 还原背景图层。放在 finally 里：即使上面抛错也要还，
+                //    否则用户的图层结构被永久改动（不清除模式不该有这种副作用）。
+                //    ⚠️ 目标校验在 lockBackgroundLayer 内部做，且是**尽力而为**的：
+                //    读不到活动图层也照常还原（不还原才是更糟的结果）。
+                if (backgroundUnlocked) {
+                    await this.lockBackgroundLayer(targetLayerId);
+                }
+            }
+
+            // ⚠️ 无条件还原选区：`getSelectionData` 内部已把选区取消，
+            //    若因「无像素可改」提前跳过写回，用户会白丢一次选区。
+            await this.restoreSelectionIfKept(bounds, state);
+        } catch (error) {
+            console.error('❌ 像素图层清除失败:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * 把当前「内容」归约成选区内的灰度 F 与可选透明度 α。
+     * 三种内容共用一个出口，缺预设时弹原生提示并返回 null（调用方据此放弃本轮）。
+     *
+     * @param foregroundColor 快速蒙版必须在**退出快速蒙版之前**抓取前景色后传入
+     * @param quickMask       快速蒙版的纯色抖动走灰度通道口径（与像素图层不同）
+     */
+    static async buildClearFillData(
+        state: any,
+        bounds: any,
+        foregroundColor?: any,
+        quickMask: boolean = false
+    ): Promise<ClearFillData | null> {
+        if (state.fillMode === 'pattern') {
+            if (!state.selectedPattern) {
+                await core.showAlert({ message: '请先选择一个图案预设' });
+                return null;
+            }
+            const gray = await this.getPatternFillGrayData(state, bounds);
+            // 边界处理②：图案自带透明区（α = 0）的位置必须保持目标像素不变。
+            // 透传 α 后由 clearStrength 归零 t，语义即为「该处不参与清除」。
+            const alpha = await this.generateLayerMaskAlphaData(state.selectedPattern, bounds);
+            return { gray, alpha: alpha || undefined };
+        }
+
+        if (state.fillMode === 'gradient') {
+            if (!state.selectedGradient) {
+                await core.showAlert({ message: '请先选择一个渐变预设' });
+                return null;
+            }
+            const gray = await this.getGradientFillGrayData(state, bounds);
+            // 边界处理④：渐变透明度**只在这里**生效一次。
+            // 重构前 getGradientFillGrayData 已把 stop 不透明度乘进灰度，这里又乘一次 α
+            // ⇒ 半透明区段被平方衰减。现在灰度是纯颜色灰度，α 独立承载不透明度。
+            const alpha = await this.generateGradientAlphaData(state, bounds);
+            return { gray, alpha: alpha || undefined };
+        }
+
+        const gray = await this.getSolidFillGrayData(state, bounds, foregroundColor, quickMask);
+        return { gray };
+    }
+
+    /**
+     * 第一类 · 背景图层：改写 R/G/B（提亮 / 减法变黑 / 乘法变黑）。
+     *
+     * 缓冲区是**文档全尺寸**的，下标直接用文档坐标换算（`docY * docWidth + docX`），
+     * 与 `selectionDocIndices` 的构造口径（同一个 `docWidth`）严格一致 —— 不再有任何
+     * 「块内偏移」环节，也就不存在偏移错位这一类缺陷。
+     *
+     * ⚠️ **只改写落在选区内的像素**：遍历的是 `selectionDocIndices`（选区掩码 > 0 的文档索引），
+     *    选区外的字节在缓冲区里保持读出来的原值 ⇒ 用户要求的「选区外部不受影响」由此保证。
+     *    （这是第二道保险；第一道在 `writeLayerPixels` 的整图写回。）
+     */
+    static applyBackgroundClear(
+        block: DocumentPixelBlock,
+        fill: ClearFillData,
+        opacity: number,
+        bounds: any,
+        state: any
+    ) {
+        const algo: BackgroundClearAlgorithm = state?.clearBackgroundAlgorithm || 'whiten';
+        const { data, components, width, height } = block;
+
+        const indices = bounds.selectionDocIndices ? Array.from<number>(bounds.selectionDocIndices) : [];
+        const coeffs = bounds.selectionCoefficients;
+        const docWidth = Math.round(bounds.docWidth);
+
+        for (let i = 0; i < indices.length && i < fill.gray.length; i++) {
+            const docIndex = indices[i];
+            const docX = docIndex % docWidth;
+            const docY = (docIndex - docX) / docWidth;
+            if (docX < 0 || docY < 0 || docX >= width || docY >= height) continue;
+
+            const t = clearStrength(opacity, fill.alpha && fill.alpha[i], coeffs && coeffs[i]);
+            if (t <= 0) continue;
+
+            const base = (docY * width + docX) * components;
+            const gray = fill.gray[i];
+            // 背景族只动 R/G/B：即便解锁后缓冲区是 RGBA，alpha 也保持 255（还原背景图层时无需合成）
+            for (let c = 0; c < 3 && c < components; c++) {
+                data[base + c] = clearBackgroundColor(data[base + c], gray, t, algo);
+            }
+        }
+    }
+
+    /** 第三类 · 普通像素图层：只改写 alpha（减法 / 乘法降低不透明度），RGB 原封不动 */
+    static applyLayerAlphaClear(
+        block: DocumentPixelBlock,
+        fill: ClearFillData,
+        opacity: number,
+        bounds: any,
+        state: any
+    ) {
+        const algo: BinaryClearAlgorithm = state?.clearLayerAlgorithm || 'multiply';
+        const { data, components, width, height } = block;
+        if (components < 4) {
+            // 目标没有 alpha（读不到第 4 分量），无从「降低不透明度」
+            console.warn('⚠️ 目标像素无 alpha 分量，跳过像素图层清除');
+            return;
+        }
+
+        const indices = bounds.selectionDocIndices ? Array.from<number>(bounds.selectionDocIndices) : [];
+        const coeffs = bounds.selectionCoefficients;
+        const docWidth = Math.round(bounds.docWidth);
+
+        for (let i = 0; i < indices.length && i < fill.gray.length; i++) {
+            const docIndex = indices[i];
+            const docX = docIndex % docWidth;
+            const docY = (docIndex - docX) / docWidth;
+            if (docX < 0 || docY < 0 || docX >= width || docY >= height) continue;
+
+            const t = clearStrength(opacity, fill.alpha && fill.alpha[i], coeffs && coeffs[i]);
+            if (t <= 0) continue;
+
+            const aIndex = (docY * width + docX) * components + 3;
+            data[aIndex] = clearAlphaValue(data[aIndex], fill.gray[i], t, algo);
+        }
+    }
+
+    /**
+     * 读取目标图层的**实有像素块**（1:1，不缩放、不重采样）。
+     *
+     * ⚠️⚠️ 改这里之前先把下面 6 条读完 —— 前两轮的真机缺陷全部出自这一类「参数级」踩坑：
+     *
+     *  ① **参数名是 `sourceBounds`，不是 `bounds`**。`GetPixelsOptions` 里没有 `bounds`
+     *     字段 ⇒ 传它等于没传，PS 会按「整个图层」取值，再把整层**重采样**到 `targetSize`
+     *     ⇒ 整幅画面被压进一个小矩形里。（`smartEdgeSmoothProcessor.ts` 早有同源记录。）
+     *  ② **绝不传 `applyAlpha: true`**。官方原文：「If true, then RGBA pixels will be converted
+     *     to RGB by matting on **white**. The returned imageData property will **not contain an
+     *     alpha channel**.」⇒ 它专门抹掉普通像素图层最需要的 α，正是旧版那条
+     *     「目标图层无 alpha 通道，跳过像素图层清除」的来源。
+     *  ③ **按「图层实有像素边界」读**（`boundsNoEffects`，由调用方在转换图层类型**之前**
+     *     取好并作为 `region` 传入），不要按选区、也不要按全文档：
+     *     · 按选区读会漏掉「图层有像素但在选区外」的部分，而那些像素**必须原样写回**；
+     *     · 全文档 `sourceBounds` 在图层没画满画布时会被裁剪甚至报 `Missing image`
+     *       （`MaskSyncEngine` 的实测结论）。
+     *     用 `boundsNoEffects` 而非 `bounds`：含效果的外扩范围不是像素。
+     *  ④ **`targetSize` 与 `sourceBounds` 同尺寸** ⇒ 明确声明「不缩放」，数据 1:1。
+     *  ⑤ **回读返回值**：`sourceBounds` 定原点（PS 会把请求区域裁剪到实有像素范围），
+     *     `imageData.width/height` 定数组形状。用「请求值」当地图就会整体错位。
+     *  ⑥ **不传 `colorProfile`**：读写都走文档自己的工作空间，往返即恒等；强行指定 sRGB
+     *     会在读、写两侧各做一次色彩转换，留下舍入残差。
+     *  ⑦ **本函数不做任何 DOM 读取**（`documentID` / `layerID` / `region` 全部由调用方传入）：
+     *     背景图层解锁后读取图层/DOM 可能抛 `invalid target sheet`（真机实测）⇒
+     *     像素读写只吃数字，这条是把「转换后零 DOM 读取」落地的关键一环。
+     *
+     * @returns null 表示没有可读像素（空图层 / 全透明 / 完全落在画布之外）
+     */
+    static async readLayerPixels(
+        layerId: number,
+        docId: number,
+        region: PixelRect
+    ): Promise<LayerPixelBlock | null> {
+        const left = Math.round(Number(region.left) || 0);
+        const top = Math.round(Number(region.top) || 0);
+        const width = Math.round(Number(region.right) || 0) - left;
+        const height = Math.round(Number(region.bottom) || 0) - top;
+        if (width <= 0 || height <= 0) return null;
+
+        try {
+            const result = await imaging.getPixels({
+                documentID: docId,
+                layerID: layerId,
+                sourceBounds: { left, top, right: left + width, bottom: top + height },
+                targetSize: { width, height },
+                componentSize: 8,
+            });
+
+            const data = new Uint8Array(await result.imageData.getData());
+            // ⚠️ 宽高必须在 dispose() 之前读出来；数组形状以 imageData 实际宽高为准
+            //    （请求尺寸可能被 UXP 取整/裁剪）
+            const gotW = Math.max(1, Math.round(Number(result.imageData.width) || width));
+            const gotH = Math.max(1, Math.round(Number(result.imageData.height) || height));
+            const sb: any = result.sourceBounds;
+            result.imageData.dispose();
+
+            const components = Math.round(data.length / (gotW * gotH));
+            if (components !== 3 && components !== 4) {
+                console.warn(
+                    `⚠️ 目标图层像素分量数异常（components=${components}，` +
+                    `${gotW}x${gotH}，${data.length} 字节），放弃清除`
+                );
+                return null;
+            }
+
+            // 原点优先取返回的 sourceBounds（可能被裁剪），缺失时退回请求值
+            const bLeft = sb && Number.isFinite(Number(sb.left)) ? Math.round(Number(sb.left)) : left;
+            const bTop = sb && Number.isFinite(Number(sb.top)) ? Math.round(Number(sb.top)) : top;
+
+            return { data, components, left: bLeft, top: bTop, width: gotW, height: gotH };
+        } catch (e) {
+            // PS 在「请求区域内没有任何像素」时会抛错（No pixels in the requested area）
+            console.warn('⚠️ 读取目标图层像素失败（图层可能为空）:', e);
+            return null;
+        }
+    }
+
+    /**
+     * 把「按图层边界读到的像素块」摊平成**文档全尺寸**的写回缓冲。
+     *
+     * 图层没有像素的地方保持全 0（= 透明）；落在画布之外的像素被丢弃 ——
+     * 画布外像素不参与显示，本仓 `pixelDataProcessor` / `knockoutBatchProcessor`
+     * 的整图写回也是这个口径（这里额外留一条 warn，让越界情形可被察觉）。
+     */
+    static expandToDocument(block: LayerPixelBlock, bounds: any): DocumentPixelBlock {
+        const width = Math.max(1, Math.round(Number(bounds.docWidth) || 1));
+        const height = Math.max(1, Math.round(Number(bounds.docHeight) || 1));
+        const { components } = block;
+        const data = new Uint8Array(width * height * components);
+
+        const right = block.left + block.width;
+        const bottom = block.top + block.height;
+        if (block.left < 0 || block.top < 0 || right > width || bottom > height) {
+            console.warn(
+                '⚠️ 图层像素范围超出画布，画布外的像素将被丢弃:',
+                block.left, block.top, right, bottom, '画布', width, height
+            );
+        }
+
+        for (let y = 0; y < block.height; y++) {
+            const dy = block.top + y;
+            if (dy < 0 || dy >= height) continue;
+            const srcRow = y * block.width;
+            const dstRow = dy * width;
+            for (let x = 0; x < block.width; x++) {
+                const dx = block.left + x;
+                if (dx < 0 || dx >= width) continue;
+                const s = (srcRow + x) * components;
+                const d = (dstRow + dx) * components;
+                for (let c = 0; c < components; c++) {
+                    data[d + c] = block.data[s + c];
+                }
+            }
+        }
+        return { data, components, width, height };
+    }
+
+    /**
+     * 整图写回：**文档全尺寸**缓冲 + 原点定位，不带 `targetBounds`。
+     *
+     * ⛔⛔ 这里是本轮两个真机缺陷（普通像素图层 / 背景图层都会把**选区外**整层像素
+     *    变成透明或白色）的**唯一根因**，改之前务必读完官方原文：
+     *
+     *   `putPixels` → `replace`：
+     *   「If true, then existing pixels in the layer are **discarded** before adding new
+     *     pixels. If false, then the new pixels are added to the existing pixel content
+     *     in the layer. **The default value is true.**」
+     *
+     *   ⇒ 只要给了 `targetBounds` 又没显式给 `replace`，PS 的语义就是
+     *     **「先把整层内容清空，再把这块数据放到 targetBounds 处」**。
+     *     原先在「选区外接矩形」上写回 ⇒ 选区外的整层像素被清空成透明
+     *     （背景图层不能透明，PS 就按背景色填成白色）—— 与算法毫无关系。
+     *
+     *   本仓 `MaskSyncEngine` 早记过同源结论（「局部写 targetBounds + replace:false 不可靠，
+     *   改用整图写回」）；`pixelDataProcessor` / `knockoutBatchProcessor` 的写回也都是整图。
+     *
+     * ⚠️ 因此本函数的契约是：`block` 必须是**文档全尺寸**（由 `expandToDocument` 产出），
+     *    其中「选区外」的字节保持读取时的原值 ⇒ 整层被这份缓冲完整替换后严格恒等，
+     *    这就是用户要求的「选区外部不受影响」。
+     * ⚠️ 刻意**不传 `targetBounds`**：官方说明「If the value is not provided, then pixels are
+     *    inserted at the origin `(0, 0)` of the document」，正是我们要的整图覆盖；
+     *    而且 `targetBounds` 只认 `left` / `top`（「Dimension keys width and height are
+     *    not used.」），尺寸一律取自 `imageData` 自身，传它只会让意图变得含混。
+     * ⚠️ `colorSpace` / `pixelFormat` / `components` 三项组合与 `pixelDataProcessor` 的
+     *    写回分支保持一致 —— 那是本仓已验证可用的像素写回实现。
+     * ⚠️ 与 `readLayerPixels` 同理：**不做任何 DOM 读取**，`documentID` / `layerID`
+     *    由调用方在图层类型转换**之前**取好并传入（转换后读 DOM 可能抛
+     *    `invalid target sheet`）。
+     */
+    static async writeLayerPixels(block: DocumentPixelBlock, layerId: number, docId: number) {
+        const imageData = await imaging.createImageDataFromBuffer(block.data, {
+            width: block.width,
+            height: block.height,
+            components: block.components,
+            chunky: true,
+            colorSpace: 'RGB',
+            pixelFormat: block.components === 4 ? 'RGBA' : 'RGB',
+            componentSize: 8,
+        });
+        await imaging.putPixels({
+            documentID: docId,
+            layerID: layerId,
+            imageData,
+        });
+        imageData.dispose();
+    }
+
+    /**
+     * 边界处理③配套：设置 / 撤销「锁定透明像素」。
+     * 描述符形状与 app.tsx 的 lockLayerTransparency / unlockLayerTransparency 完全一致
+     * （必须走 `layerLocking` 子对象，不能写成 `transparency: true` —— 后者 PS 会静默忽略）。
+     */
+    static async setTransparencyLock(locked: boolean) {
+        try {
+            await action.batchPlay([{
+                _obj: "applyLocking",
+                _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }],
+                layerLocking: {
+                    _obj: "layerLocking",
+                    ...(locked ? { protectTransparency: true } : { protectNone: true }),
+                },
+                _options: { dialogOptions: "dontDisplay" },
+            }], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
+        } catch (e) {
+            console.warn('⚠️ 切换透明像素锁定失败:', e);
+        }
+    }
+
+    /**
+     * 背景图层 → 普通像素图层（PS 菜单「图层来自背景」/ Layer From Background）。
+     *
+     * ⚠️ 为什么必须解锁：
+     *   · `putPixels` 的契约原文是「`layerID` — The id of the target layer.
+     *     **The target layer must be a pixel layer.**」，背景图层不是像素图层；
+     *   · 解锁后读取恒为 RGBA（4 分量），彻底消除「3 分量 / 4 分量」的分歧，
+     *     也让背景族算法与像素族算法共用同一条读写流水线。
+     * ⚠️ 清除完成后**必须**用 `lockBackgroundLayer` 还原 —— 不清除模式不该永久改动
+     *    用户的图层结构（这一步在 `clearPixelLayer` 的 finally 里，异常也会还）。
+     *
+     * ⛔⛔ **判定标准是「回读到的图层类型」，不是「有没有抛错」**（真机实测）：
+     *      该命令会报 `invalid target sheet`，但图层类型**确实已经改掉**。
+     *      旧实现把抛错当失败（返回 false）⇒ ① 不还原背景图层；
+     *      ② 后续仍按「背景图层」继续，读像素/写像素全部失败。
+     *
+     * @returns `converted` = 图层类型是否**确认**已是普通图层（读不到类型时按「继续尝试」处理，
+     *          只有明确读到「仍是背景图层」才判失败）；
+     *          `layerId` = 转换后的目标图层 id（PS 内部实现可能换掉 id，必须用回读值）
+     */
+    static async unlockBackgroundLayer(layerId: number): Promise<BackgroundUnlockResult> {
+        try {
+            const result = await action.batchPlay(
+                [{ ...BACKGROUND_TO_LAYER_DESCRIPTOR, layerID: layerId }],
+                { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }
+            );
+            const err = this.batchPlayError(result);
+            if (err) {
+                console.warn('⚠️ 背景图层解锁命令回报了错误（可能仍然生效，下面回读图层类型确认）:', err);
+            }
+        } catch (e) {
+            console.warn('⚠️ 背景图层解锁命令被拒绝（可能仍然生效，下面回读图层类型确认）:', e);
+        }
+
+        // ⛔ 只信回读结果。读不到（null）不等于失败：真机上「刚改过图层类型」的窗口里
+        //    读取本身就可能失败，若据此判失败，用户会永远清不掉背景图层。
+        const cur = await this.readActiveLayer();
+        if (cur && cur.isBackgroundLayer === true) {
+            console.warn('⚠️ 回读结果：目标仍是背景图层 ⇒ 解锁未生效，跳过本轮清除');
+            return { converted: false, layerId };
+        }
+        if (!cur || cur.isBackgroundLayer === null) {
+            console.warn('⚠️ 回读不到图层类型 ⇒ 无法确认解锁是否生效，仍按「已解锁」继续（写回失败会另行报错）');
+        } else {
+            console.log(`✅ 背景图层已解锁（目标图层 id ${cur.id ?? layerId}）`);
+        }
+        return { converted: true, layerId: cur && cur.id !== null ? cur.id : layerId };
+    }
+
+    /**
+     * 普通图层 → 背景图层（PS 菜单「背景来自图层」）：`unlockBackgroundLayer` 的还原步骤。
+     *
+     * ⛔ 描述符形状逐字取自用户真机监听（`make {_ref:"backgroundLayer"}` + `using: {layer, targetEnum}`），不得改写。
+     * ⚠️ 还原打的是 `targetEnum` = **活动图层**，理论上应先确认活动图层仍是目标图层；
+     *    但真机实测「刚改过图层类型」的窗口里读活动图层可能抛错，所以这里的校验是**尽力而为**：
+     *    读不到也照常还原并 warn —— 不还原才是更糟的结果（用户的图层结构被永久改成普通图层，
+     *    正是上一轮的真机缺陷）。只有**明确读到**活动图层已换成别的图层时才放弃还原。
+     */
+    static async lockBackgroundLayer(expectedLayerId?: number) {
+        if (expectedLayerId !== undefined) {
+            const cur = await this.readActiveLayer();
+            if (cur && cur.id !== null && cur.id !== expectedLayerId) {
+                console.warn(
+                    `⚠️ 活动图层已改变（期望 id ${expectedLayerId}，实际 ${cur.id}），` +
+                    '跳过还原背景图层以免误改其他图层'
+                );
+                return;
+            }
+        }
+        try {
+            const result = await action.batchPlay(
+                [{ ...LAYER_TO_BACKGROUND_DESCRIPTOR }],
+                { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }
+            );
+            const err = this.batchPlayError(result);
+            if (err) {
+                console.warn('⚠️ 还原为背景图层：命令回报错误（图层可能停留在普通图层）:', err);
             } else {
-                // 贴墙纸模式：使用createTilePatternData生成透明度数据
-                const alphaResult = ClearHandler.createTilePatternData(
-                    pattern.patternRgbData,
-                    patternWidth,
-                    patternHeight,
-                    4, // RGBA数据
-                    boundsWidth,
-                    boundsHeight,
-                    scaledPatternWidth,
-                    scaledPatternHeight,
-                    angle,
-                    pattern.rotateAll !== false,
-                    bounds,
-                    true // 生成透明度数据
-                );
-                
-                // 提取选区内的透明度数据 - 性能优化版本
-                if (alphaResult.alphaData && bounds.selectionDocIndices) {
-                    const selectionIndices = Array.from(bounds.selectionDocIndices);
-                    alphaData = new Uint8Array(selectionIndices.length);
-                    const alphaDataSource = alphaResult.alphaData;
-                    
-                    // 批量处理，减少重复计算
-                    for (let i = 0; i < selectionIndices.length; i++) {
-                        const docIndex: number = selectionIndices[i];
-                        const docX = docIndex % docWidth;
-                        const docY = Math.floor(docIndex / docWidth);
-                        const boundsX = docX - boundsLeft;
-                        const boundsY = docY - boundsTop;
-                        
-                        if (boundsX >= 0 && boundsX < boundsWidth && boundsY >= 0 && boundsY < boundsHeight) {
-                            const boundsIndex = boundsY * boundsWidth + boundsX;
-                            alphaData[i] = boundsIndex < alphaDataSource.length ? alphaDataSource[boundsIndex] : 0;
-                        } else {
-                            alphaData[i] = 0; // 图案外部为透明
-                        }
-                    }
-                }
+                console.log('✅ 已还原为背景图层');
             }
+        } catch (e) {
+            console.warn('⚠️ 还原为背景图层失败（图层结构可能停留在普通图层）:', e);
         }
-        
-        // 图案清除模式的计算公式：最终结果 = 图案灰度 * 不透明度
-        // 对于图案外部的像素（透明区域），最终值为0
-        const dataLength = patternGrayData.length;
-        
-        // 检查是否有选区羽化系数
-        const hasFeathering = bounds.selectionCoefficients && bounds.selectionCoefficients.length > 0;
-        
-        if (hasAlpha && alphaData) {
-            // 有透明度数据的情况（绝对公式）
-            for (let i = 0; i < dataLength; i++) {
-                const alpha = alphaData[i];
-                if (alpha === 0) {
-                    finalData[i] = 0; // 透明区域直接设为0
-                } else {
-                    // 计算有效不透明度并应用
-                    let effectiveOpacity = (opacity * alpha) / 25500; // 合并除法运算 (opacity * alpha / 255 / 100)
-                    
-                    // 应用选区羽化系数
-                    if (hasFeathering && i < bounds.selectionCoefficients.length) {
-                        effectiveOpacity *= bounds.selectionCoefficients[i];
-                    }
-                    
-                    finalData[i] = Math.floor(patternGrayData[i] * effectiveOpacity);
-                }
-            }
-        } else {
-            // 无透明度数据的情况（绝对公式）
-            for (let i = 0; i < dataLength; i++) {
-                let effectiveOpacityFactor = opacityFactor;
-                
-                // 应用选区羽化系数
-                if (hasFeathering && i < bounds.selectionCoefficients.length) {
-                    effectiveOpacityFactor *= bounds.selectionCoefficients[i];
-                }
-                
-                finalData[i] = Math.floor(patternGrayData[i] * effectiveOpacityFactor);
-            }
-        }
-        
-        console.log('✅ 图案清除模式灰度值计算完成');
-        return finalData;
     }
-    
-    //-------------------------------------------------------------------------------------------------
-    // 计算渐变清除模式的最终灰度值（性能优化版本）
-    static async calculateGradientClearValues(
-        gradientGrayData: Uint8Array,
-        opacity: number,
-        state: any,
-        bounds: any
-    ): Promise<Uint8Array> {
-        console.log('🌈 开始计算渐变清除模式的最终灰度值');
-        
-        const finalData = new Uint8Array(gradientGrayData.length);
-        const opacityFactor = opacity / 100;
-        const dataLength = gradientGrayData.length;
-        
-        // 检查是否有选区羽化系数
-        const hasFeathering = bounds.selectionCoefficients && bounds.selectionCoefficients.length > 0;
-        
-        // 检查是否有渐变透明度信息需要处理
-        const hasGradientAlpha = state?.selectedGradient && state.selectedGradient.stops;
-        
-        // 如果有渐变透明度信息，生成对应的透明度数据
-        let alphaData: Uint8Array | undefined;
-        if (hasGradientAlpha && state?.selectedGradient) {
-            alphaData = await this.generateGradientAlphaData(state, bounds);
-        }
-        
-        if (hasGradientAlpha && alphaData) {
-            // 有透明度数据的情况（考虑渐变透明度）
-            for (let i = 0; i < dataLength; i++) {
-                const alpha = alphaData[i];
-                if (alpha === 0) {
-                    finalData[i] = 0; // 透明区域直接设为0
-                } else {
-                    // 计算有效不透明度并应用
-                    let effectiveOpacity = (opacity * alpha) / 25500; // 合并除法运算 (opacity * alpha / 255 / 100)
-                    
-                    // 应用选区羽化系数
-                    if (hasFeathering && i < bounds.selectionCoefficients.length) {
-                        effectiveOpacity *= bounds.selectionCoefficients[i];
-                    }
-                    
-                    finalData[i] = Math.floor(gradientGrayData[i] * effectiveOpacity);
-                }
-            }
-        } else {
-            // 无透明度数据的情况（原有逻辑）
-            for (let i = 0; i < dataLength; i++) {
-                let effectiveOpacityFactor = opacityFactor;
-                
-                // 应用选区羽化系数
-                if (hasFeathering && i < bounds.selectionCoefficients.length) {
-                    effectiveOpacityFactor *= bounds.selectionCoefficients[i];
-                }
-                
-                finalData[i] = Math.floor(gradientGrayData[i] * effectiveOpacityFactor);
+
+    /**
+     * batchPlay 在「命令无法处理」时**不一定抛错**：官方文档说明多数情况下会成功 resolve，
+     * 并把错误放在返回列表里（`{_obj: "error", message, result}`）。
+     * 只看 try/catch 会把这类**静默失败**当成成功 ⇒ 图层类型转换这类关键命令必须查返回项。
+     */
+    static batchPlayError(result: any): string | null {
+        if (!Array.isArray(result)) return null;
+        for (const item of result) {
+            if (!item) continue;
+            if (item._obj === 'error' || item._obj === 'Error') {
+                const code = item.result !== undefined ? ` (result=${item.result})` : '';
+                return `${item.message || '未知错误'}${code}`;
             }
         }
-        return finalData;
+        return null;
     }
-    
-    //-------------------------------------------------------------------------------------------------
-    // 用putSelection修改选区并删除内容（修复索引映射版本）
-    static async applySelectionAndDelete(finalGrayData: Uint8Array, bounds: any, state?: any) {
+
+    /**
+     * 安全读取活动图层的 id 与「是否背景图层」。
+     *
+     * ⚠️ 两步探测**各自独立 try/catch**（本仓铁律：可能抛异常的多步探测，每一步的 catch
+     *    都必须原样保留，否则异常会逃逸成「整段失效」）；任一失败返回 null，不打断主流程。
+     */
+    static async readActiveLayer(): Promise<ActiveLayerSnapshot> {
+        let layer: any = null;
         try {
-            console.log('🎯 开始应用选区并删除内容');
-            
-            const documentColorProfile = "Dot Gain 15%"; // 默认值
-            
-            // 创建文档大小的ImageData选项
-            const selectionOptions = {
-                width: bounds.docWidth,
-                height: bounds.docHeight,
+            layer = app.activeDocument.activeLayers[0];
+        } catch (e) {
+            console.warn('⚠️ 读取活动图层失败:', e);
+            return { id: null, isBackgroundLayer: null };
+        }
+        if (!layer) return { id: null, isBackgroundLayer: null };
+
+        let id: number | null = null;
+        try {
+            id = typeof layer.id === 'number' ? layer.id : null;
+        } catch (e) {
+            // 单步兜底：读不到 id 不影响后面读背景标记
+        }
+        let isBackgroundLayer: boolean | null = null;
+        try {
+            isBackgroundLayer = typeof layer.isBackgroundLayer === 'boolean' ? layer.isBackgroundLayer : null;
+        } catch (e) {
+            // 单步兜底（同上）
+        }
+        return { id, isBackgroundLayer };
+    }
+
+    /**
+     * 安全读取图层的像素外接矩形（`boundsNoEffects` 优先：含效果的范围不是像素）。
+     * 读失败返回 null，由调用方回退到文档矩形 —— **绝不把异常抛给主流程**。
+     */
+    static readLayerBounds(layer: any): PixelRect | null {
+        try {
+            const b = (layer && (layer.boundsNoEffects || layer.bounds)) || null;
+            if (!b) return null;
+            const left = Math.round(Number(b.left) || 0);
+            const top = Math.round(Number(b.top) || 0);
+            const right = Math.round(Number(b.right) || 0);
+            const bottom = Math.round(Number(b.bottom) || 0);
+            if (!(right > left) || !(bottom > top)) return null;
+            return { left, top, right, bottom };
+        } catch (e) {
+            console.warn('⚠️ 读取图层边界失败（回退到文档矩形）:', e);
+            return null;
+        }
+    }
+
+    /** 「自动删选区」关闭时还原原选区（所有写回路径的统一收尾） */
+    static async restoreSelectionIfKept(bounds: any, state: any) {
+        if (!state || state.deselectAfterFill !== false) return;
+        if (!bounds || !bounds.selectionValues || bounds.selectionValues.length === 0) return;
+        try {
+            const docW = Math.round(bounds.docWidth);
+            const docH = Math.round(bounds.docHeight);
+            const fullSelectionData = new Uint8Array(docW * docH);
+            if (bounds.selectionDocIndices && bounds.selectionDocIndices.size > 0) {
+                const selectionIndices = Array.from<number>(bounds.selectionDocIndices);
+                let valueIndex = 0;
+                for (const docIndex of selectionIndices) {
+                    if (docIndex < fullSelectionData.length && valueIndex < bounds.selectionValues.length) {
+                        fullSelectionData[docIndex] = bounds.selectionValues[valueIndex];
+                        valueIndex++;
+                    } else if (valueIndex >= bounds.selectionValues.length) {
+                        break;
+                    }
+                }
+            }
+            const selectionImageData = await imaging.createImageDataFromBuffer(fullSelectionData, {
+                width: docW,
+                height: docH,
                 components: 1,
                 chunky: true,
-                colorProfile: documentColorProfile,
-                colorSpace: "Grayscale"
-            };
-            
-            // 创建完整文档大小的灰度数据数组
-            const fullDocumentData = new Uint8Array(bounds.docWidth * bounds.docHeight);
-            
-            if (bounds.selectionDocIndices && bounds.selectionDocIndices.size > 0) {
-                // 先将所有像素设为0（透明）
-                fullDocumentData.fill(0);
-                
-                // 直接按照文档索引设置选区内像素的灰度值
-                const selectionIndicesArray = Array.from(bounds.selectionDocIndices);
-                for (let i = 0; i < selectionIndicesArray.length && i < finalGrayData.length; i++) {
-                    const docIndex = selectionIndicesArray[i];
-                    // 确保文档索引在有效范围内
-                    if (docIndex >= 0 && docIndex < fullDocumentData.length) {
-                        fullDocumentData[docIndex] = finalGrayData[i];
-                    }
-                }
-            } else {
-                // 如果没有选区索引信息，将最终灰度数据映射到边界区域
-                fullDocumentData.fill(0);
-                const boundsWidth = bounds.width;
-                const boundsLeft = bounds.left;
-                const boundsTop = bounds.top;
-                const docWidth = bounds.docWidth;
-                
-                let dataIndex = 0;
-                for (let y = 0; y < bounds.height && dataIndex < finalGrayData.length; y++) {
-                    for (let x = 0; x < boundsWidth && dataIndex < finalGrayData.length; x++) {
-                        const docX = boundsLeft + x;
-                        const docY = boundsTop + y;
-                        const docIndex = docY * docWidth + docX;
-                        
-                        if (docIndex >= 0 && docIndex < fullDocumentData.length) {
-                            fullDocumentData[docIndex] = finalGrayData[dataIndex];
-                        }
-                        dataIndex++;
-                    }
-                }
-            }
-            
-            const imageData = await imaging.createImageDataFromBuffer(fullDocumentData, selectionOptions);
-            
-            // 使用putSelection将灰度数据作为选区应用（覆盖整个文档）
+                colorProfile: "Dot Gain 15%",
+                colorSpace: "Grayscale",
+            });
             await imaging.putSelection({
                 documentID: app.activeDocument.id,
-                imageData: imageData,
-                sourceBounds: {
-                    left: 0,
-                    top: 0,
-                    right: bounds.docWidth,
-                    bottom: bounds.docHeight
-                }
+                imageData: selectionImageData,
             });
-            
-            imageData.dispose();
-            
-            // 删除选区内容
-            await action.batchPlay([
-                {
-                    _obj: "delete",
-                    _options: {
-                        dialogOptions: "dontDisplay"
-                    }
-                }
-            ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
-            // ⚠️ 与其它填充/清除分支保持一致（2026-10-08）：
-            // 本方法前面的 putSelection 已经把选区改写成了「待删除的灰度掩码」，
-            // 而 getSelectionData() 内部也早已取消过选区。当用户关闭「自动删选区」
-            // (deselectAfterFill === false) 时，必须把原选区还原回去 ——
-            // 否则「图案/渐变 + 清除 + 描边」会沿被改写的掩码描边，而不是原选区轮廓。
-            // 闸门与 updateQuickMaskChannel / updateLayerMask / PatternFill / GradientFill /
-            // SingleChannelHandler 完全同构：仅 deselectAfterFill === false 才还原，
-            // 默认（true）行为不变。
-            if (state && state.deselectAfterFill === false
-                && bounds && bounds.selectionValues && bounds.selectionValues.length > 0) {
-                try {
-                    const docW = Math.round(bounds.docWidth);
-                    const docH = Math.round(bounds.docHeight);
-                    const fullSelectionData = new Uint8Array(docW * docH);
-                    if (bounds.selectionDocIndices && bounds.selectionDocIndices.size > 0) {
-                        // ⚠️ 显式给 Array.from 收敛元素类型：bounds 是 any，不写 <number> 会推出
-                        // unknown[] ⇒ docIndex 变 unknown ⇒ fullSelectionData[docIndex] 报 TS2538。
-                        const selectionIndices = Array.from<number>(bounds.selectionDocIndices);
-                        let valueIndex = 0;
-                        for (const docIndex of selectionIndices) {
-                            if (docIndex < fullSelectionData.length && valueIndex < bounds.selectionValues.length) {
-                                fullSelectionData[docIndex] = bounds.selectionValues[valueIndex];
-                                valueIndex++;
-                            } else if (valueIndex >= bounds.selectionValues.length) {
-                                break;
-                            }
-                        }
-                    }
-                    const selectionOptions = {
-                        width: docW,
-                        height: docH,
-                        components: 1,
-                        chunky: true,
-                        colorProfile: documentColorProfile,
-                        colorSpace: "Grayscale"
-                    };
-                    const selectionImageData = await imaging.createImageDataFromBuffer(fullSelectionData, selectionOptions);
-                    await imaging.putSelection({
-                        documentID: app.activeDocument.id,
-                        imageData: selectionImageData
-                    });
-                    selectionImageData.dispose();
-                } catch (selectionError) {
-                    console.error('恢复选区失败:', selectionError);
-                }
-            }
-        } catch (error) {
-            console.error('❌ 应用选区并删除内容失败:', error);
-            throw error;
+            selectionImageData.dispose();
+        } catch (selectionError) {
+            console.error('恢复选区失败:', selectionError);
         }
     }
-    
+
     // 收集左上角和右下角像素的值，并且做处理
     static async getPixelValue(action: any, x: number, y: number): Promise<number> {
         // 选择指定坐标的1x1像素区域
@@ -692,84 +859,120 @@ export class ClearHandler {
 
 
     //-------------------------------------------------------------------------------------------------
-    // 处于清除模式，并且文档状态为快速蒙版状态下，修改快速蒙版通道像素的方法
+    // 第二类 · 黑白通道 · 快速蒙版
+    //   清除 = 从蒙版里「减去」内容。重构前本路径与图层蒙版各写一份公式、
+    //   且另一处描边路径还按 colorIndicates 做了方向反转 ⇒ 同一操作两种结果。
+    //   现在与图层蒙版共用 computeChannelClear，方向统一为「减少蒙版覆盖」。
     static async clearInQuickMask(state: any) {
         try {
-            
-            // 只有在纯色填充模式下才获取前景色
-            // 这必须在getQuickMaskPixels调用之前，因为该方法会撤销快速蒙版
-            let quickMaskForegroundColor = null;
-            if (state.fillMode === 'foreground') {
-                quickMaskForegroundColor = app.foregroundColor;
-            } else {
-                console.log('🔄 非纯色填充模式，跳过前景色获取，当前模式:', state.fillMode);
-            }
-            
-            // 获取当前选区边界信息（第一次获取）
-            const selectionBounds = await this.getSelectionData();
-            if (!selectionBounds) {
+            // ⚠️ 纯色模式的前景色必须在 getQuickMaskPixels **之前**抓取 —— 该方法会退出快速蒙版，
+            //    退出后 app.foregroundColor 读到的已不是用户操作时的前景色。
+            const quickMaskForegroundColor = state.fillMode === 'foreground' ? app.foregroundColor : null;
+
+            const bounds = await this.getSelectionData();
+            if (!bounds) {
                 console.warn('❌ 没有选区，无法执行快速蒙版清除操作');
                 return;
             }
-            
-            // 获取快速蒙版通道的像素数据和colorIndicates信息
-            const { quickMaskPixels, isSelectedAreas, isEmpty, topLeftIsEmpty, bottomRightIsEmpty, originalTopLeft, originalBottomRight } = await this.getQuickMaskPixels(selectionBounds);
 
-            // 如果快速蒙版为空，直接返回，不执行后续操作
+            const { quickMaskPixels, isEmpty } = await this.getQuickMaskPixels(bounds);
             if (isEmpty) {
-                console.log('⚠️ 快速蒙版为空，跳过后续填充操作');
-                return;
-            }
-            
-            // 根据填充模式获取填充内容的灰度数据，对应情况4、5、6
-            let fillGrayData;
-            if (state.fillMode === 'foreground') {
-                console.log('🎨 使用纯色填充模式');
-                fillGrayData = await this.getSolidFillGrayData(state, selectionBounds, quickMaskForegroundColor);
-            } else if (state.fillMode === 'pattern') {
-                if (state.selectedPattern) {
-                    console.log('🔳 使用图案填充模式');
-                    fillGrayData = await this.getPatternFillGrayData(state, selectionBounds);
-                } else {
-                    // 缺少图案预设，显示警告并跳过清除
-                    await core.showAlert({ message: '请先选择一个图案预设' });
-                    return;
-                }
-            } else if (state.fillMode === 'gradient') {
-                if (state.selectedGradient) {
-                    console.log('🌈 使用渐变填充模式');
-                    fillGrayData = await this.getGradientFillGrayData(state, selectionBounds);
-                } else {
-                    // 缺少渐变预设，显示警告并跳过清除
-                    await core.showAlert({ message: '请先选择一个渐变预设' });
-                    return;
-                }
-            } else {
-                console.warn('❌ 未知的填充模式或缺少填充数据，填充模式:', state.fillMode);
+                console.log('⚠️ 快速蒙版为空，跳过后续清除操作');
                 return;
             }
 
-            // 应用新的混合公式计算最终灰度值
-            const finalGrayData = await this.calculateFinalGrayValues(
-                quickMaskPixels, 
-                fillGrayData, 
-                isSelectedAreas, 
+            const fill = await this.buildClearFillData(state, bounds, quickMaskForegroundColor, true);
+            if (!fill) return;
+
+            const newMask = this.computeChannelClear(
+                quickMaskPixels,
+                fill,
                 state.opacity,
-                isEmpty,
-                selectionBounds,
-                topLeftIsEmpty,
-                bottomRightIsEmpty,
-                originalTopLeft,
-                originalBottomRight,
-                state
+                bounds,
+                state.clearChannelAlgorithm
             );
-            
-            // 将计算后的灰度数据写回快速蒙版通道
-            await this.updateQuickMaskChannel(finalGrayData, selectionBounds, state);
-            
+            await this.updateQuickMaskChannel(newMask, bounds, state);
         } catch (error) {
-            console.error('❌ 快速蒙版特殊填充失败:', error);
+            console.error('❌ 快速蒙版清除失败:', error);
             throw error;
+        }
+    }
+
+    /**
+     * 第二类 · 黑白通道的**唯一**计算公式（快速蒙版 / 图层蒙版共用）。
+     *
+     * 与重构前两份实现相比，这里同时收掉了三处冗余特例：
+     *   · `mask === 0 → 0`：减法在 0 处本来就被 clamp 到 0，乘法 0×k 也是 0，特例多余；
+     *   · `alpha === 0 → 保持原值`：已由 clearStrength 把 t 归零统一表达；
+     *   · 选区内值需要先「提取」成压缩数组：现在直接用文档索引就地读写，省一次拷贝。
+     *
+     * @param maskData 完整文档尺寸的通道灰度
+     * @returns 新的完整文档尺寸灰度数组（未选中区域保持原值）
+     */
+    static computeChannelClear(
+        maskData: Uint8Array,
+        fill: ClearFillData,
+        opacity: number,
+        bounds: any,
+        algorithm?: BinaryClearAlgorithm
+    ): Uint8Array {
+        const algo: BinaryClearAlgorithm = algorithm || 'subtract';
+        const out = new Uint8Array(maskData.length);
+        out.set(maskData);
+
+        if (!bounds || !bounds.selectionDocIndices || bounds.selectionDocIndices.size === 0) {
+            return out;
+        }
+
+        const indices = Array.from<number>(bounds.selectionDocIndices);
+        const coeffs = bounds.selectionCoefficients;
+
+        for (let i = 0; i < indices.length && i < fill.gray.length; i++) {
+            const docIndex = indices[i];
+            if (docIndex < 0 || docIndex >= out.length) continue;
+            const t = clearStrength(opacity, fill.alpha && fill.alpha[i], coeffs && coeffs[i]);
+            if (t <= 0) continue;
+            out[docIndex] = clearChannelValue(maskData[docIndex], fill.gray[i], t, algo);
+        }
+
+        return out;
+    }
+
+    //-------------------------------------------------------------------------------------------------
+    // 第二类 · 黑白通道 · 图层蒙版（与快速蒙版同一公式，仅写回 API 不同）
+    static async clearLayerMask(state: any, opacity: number) {
+        try {
+            const bounds = await this.getSelectionData();
+            if (!bounds) {
+                console.log('❌ 无法获取选区边界');
+                return;
+            }
+
+            const layerId = await this.getCurrentLayerId();
+            if (!layerId) {
+                console.log('❌ 无法获取当前图层ID');
+                return;
+            }
+
+            const maskResult = await this.getLayerMaskPixels(bounds, layerId);
+            if (!maskResult) {
+                console.log('❌ 无法获取图层蒙版像素数据');
+                return;
+            }
+
+            const fill = await this.buildClearFillData(state, bounds);
+            if (!fill) return;
+
+            const newMask = this.computeChannelClear(
+                maskResult.maskData,
+                fill,
+                opacity,
+                bounds,
+                state.clearChannelAlgorithm
+            );
+            await this.updateLayerMask(newMask, bounds, layerId, state);
+        } catch (error) {
+            console.error('❌ 图层蒙版清除失败:', error);
         }
     }
 
@@ -1362,26 +1565,34 @@ export class ClearHandler {
     }
 
     //-------------------------------------------------------------------------------------------------
-    // 获取纯色填充的灰度数据
-    static async getSolidFillGrayData(state: any, bounds: any, quickMaskForegroundColor?: any) {
-        console.log('🔍 调试getSolidFillGrayData - state.opacity:', state.opacity);
-        
-        // 使用传入的快速蒙版前景色，如果没有则实时获取当前前景色
-        const currentForegroundColor = quickMaskForegroundColor || app.foregroundColor;
-        
-        const pixelCount = bounds.width * bounds.height;
+    // 获取纯色填充的灰度数据（第一/二/三类目标共用）
+    //
+    // ⚠️ 本函数此前**恒按快速蒙版口径**取抖动（isQuickMaskMode = true），
+    //    而像素图层的纯色清除走的是另一条「设前景色 + fill clearEnum」的宿主路径。
+    //    统一到本函数后必须把口径参数化：快速蒙版用灰度抖动，其它目标用 HSB 抖动再转灰度。
+    // ⚠️ 数组长度改用「选区内像素数」：旧实现用外接矩形面积（width×height），
+    //    与 computeChannelClear 的下标语义不一致（下标是第 i 个**选区像素**）。
+    static async getSolidFillGrayData(
+        state: any,
+        bounds: any,
+        foregroundColor?: any,
+        quickMask: boolean = false
+    ) {
+        const currentForegroundColor = foregroundColor || app.foregroundColor;
+        const pixelCount = bounds.selectionDocIndices
+            ? bounds.selectionDocIndices.size
+            : bounds.width * bounds.height;
         const grayData = new Uint8Array(pixelCount);
-        
-        // 在快速蒙版模式下，使用灰度抖动而不是HSB颜色抖动
-        const isQuickMaskMode = true; // 在getSolidFillGrayData中，我们总是处于快速蒙版模式
-        const panelColor = calculateRandomColor(state.colorSettings, state.opacity, currentForegroundColor, isQuickMaskMode);
-        console.log('🔍 填充的纯色 - panelColor:', panelColor);
-        
-        // 将HSB颜色转换为灰度值
+
+        const panelColor = calculateRandomColor(
+            state.colorSettings,
+            state.opacity,
+            currentForegroundColor,
+            quickMask
+        );
+
         const rgb = hsbToRgb(panelColor.hsb.hue, panelColor.hsb.saturation, panelColor.hsb.brightness);
-        const grayValue = rgbToGray(rgb.red, rgb.green, rgb.blue);
-        grayData.fill(grayValue);
-        
+        grayData.fill(rgbToGray(rgb.red, rgb.green, rgb.blue));
         return grayData;
     }
     
@@ -2051,19 +2262,19 @@ export class ClearHandler {
                     }
                 }
                 
-                // 根据位置插值渐变颜色并转换为灰度，同时考虑透明度
+                // 根据位置插值渐变颜色并转换为灰度。
+                // ⚠️ 边界处理④：这里**只取颜色灰度**，不乘停止点不透明度。
+                //    重构前此处是 `(色灰度/255) × (不透明度/100) × 255`，而调用方
+                //    （buildClearFillData）随后又通过 generateGradientAlphaData 把同一个
+                //    不透明度作为 α 应用一次 ⇒ 半透明区段的清除量被**平方衰减**
+                //    （50% 不透明的色标只清除 25% 的量）。现在不透明度只由 α 承载一次。
                 const colorWithOpacity = this.interpolateGradientColorWithOpacity(gradient.stops, position);
-                
-                // 计算颜色的灰度值
-                const colorGrayscale = Math.round(
-                    0.299 * colorWithOpacity.red + 
-                    0.587 * colorWithOpacity.green + 
+
+                grayData[i] = Math.round(
+                    0.299 * colorWithOpacity.red +
+                    0.587 * colorWithOpacity.green +
                     0.114 * colorWithOpacity.blue
                 );
-                
-                // 综合考虑颜色灰度和透明度：灰度值 = (颜色灰度/255) × (不透明度/100) × 255
-                const finalGrayValue = Math.round((colorGrayscale / 255) * (colorWithOpacity.opacity / 100) * 255);
-                grayData[i] = finalGrayValue;
             }
             
             console.log('✅ 渐变灰度数据生成完成，数据长度:', grayData.length);
@@ -2268,327 +2479,6 @@ export class ClearHandler {
 
 
     //-------------------------------------------------------------------------------------------------
-    // 应用新的混合公式计算最终灰度值（优化版本，避免栈溢出）
-    static async calculateFinalGrayValues(
-        maskData: Uint8Array, 
-        fillData: Uint8Array, 
-        isSelectedAreas: boolean = true, 
-        opacity: number = 100,
-        isEmpty: boolean = false,
-        bounds?: any,
-        topLeftIsEmpty: boolean = false,
-        bottomRightIsEmpty: boolean = false,
-        originalTopLeft: number = 0,
-        originalBottomRight: number = 0,
-        state?: any
-    ): Promise<Uint8Array> {
-        console.log('🔍 开始混合计算:', {
-            maskDataLength: maskData.length,
-            fillDataLength: fillData.length,
-            isSelectedAreas: isSelectedAreas,
-            isEmpty: isEmpty,
-            topLeftIsEmpty: topLeftIsEmpty,
-            bottomRightIsEmpty: bottomRightIsEmpty
-        });
-        
-        // maskData现在是完整文档的快速蒙版数据，fillData是选区内填充的数据
-        // 需要从maskData中提取出真正在选区内的像素数据
-        const selectedMaskData = new Uint8Array(fillData.length);
-        
-        if (bounds && bounds.selectionDocIndices && bounds.selectionDocIndices.size > 0) {
-            // 使用selectionDocIndices直接获取选区内像素
-            let fillIndex = 0;
-            const selectionIndices = Array.from(bounds.selectionDocIndices);
-            
-            for (const docIndex of selectionIndices) {
-                if (docIndex >= 0 && docIndex < maskData.length && fillIndex < selectedMaskData.length) {
-                    selectedMaskData[fillIndex] = maskData[docIndex];
-                    fillIndex++;
-                }
-            }
-            
-            console.log(`📊 通过selectionDocIndices提取了【快速蒙版】中 ${fillIndex} 个像素`);
-        }
-        
-        // 创建完整文档尺寸的新蒙版数组
-        const newMaskValue = new Uint8Array(maskData.length);
-        
-        // 如果是空白快速蒙版，先将整个数组设为0
-        if (isEmpty) {
-            newMaskValue.fill(0);
-        } else {
-            // 否则复制原始maskData作为基础
-            newMaskValue.set(maskData);
-        }
-        
-        // 计算选区内的混合结果
-        const finalData = new Uint8Array(fillData.length);
-        
-        // 预先计算选区索引数组，避免在循环中重复转换
-        const selectionIndices = bounds.selectionDocIndices ? Array.from(bounds.selectionDocIndices) : null;
-        
-        // 检查是否有透明度信息需要处理（PNG图案自带透明区域或渐变透明度）
-        // 注意：在清除模式下，只有当前正在清除的填充类型才应该生成透明度数据
-        // 避免图案的透明度数据影响渐变的计算
-        const isCurrentlyProcessingPattern = state?.fillMode === 'pattern';
-        const isCurrentlyProcessingGradient = state?.fillMode === 'gradient';
-        
-        const hasPatternAlpha = isCurrentlyProcessingPattern && state?.selectedPattern && state.selectedPattern.hasAlpha && 
-                               state.selectedPattern.patternRgbData && state.selectedPattern.patternComponents === 4;
-        const hasGradientAlpha = isCurrentlyProcessingGradient && state?.selectedGradient;
-        const hasAlpha = hasPatternAlpha || hasGradientAlpha;
-        
-        console.log('🔍 透明度检查:', {
-            isCurrentlyProcessingPattern: isCurrentlyProcessingPattern,
-            isCurrentlyProcessingGradient: isCurrentlyProcessingGradient,
-            hasSelectedPattern: !!state?.selectedPattern,
-            hasPatternAlpha: hasPatternAlpha,
-            hasGradientAlpha: hasGradientAlpha,
-            finalHasAlpha: hasAlpha
-        });
-        
-        // 如果有透明度信息，生成对应的透明度数据
-        let alphaData: Uint8Array | undefined;
-        if (hasPatternAlpha && state?.selectedPattern) {
-            const pattern = state.selectedPattern;
-            const patternWidth = pattern.width || pattern.originalWidth || 100;
-            const patternHeight = pattern.height || pattern.originalHeight || 100;
-            const scale = pattern.currentScale || pattern.scale || 100;
-            const scaledPatternWidth = Math.round(patternWidth * scale / 100);
-            const scaledPatternHeight = Math.round(patternHeight * scale / 100);
-            const angle = pattern.currentAngle || pattern.angle || 0;
-            
-            if (pattern.fillMode === 'stamp') {
-                // 盖图章模式：使用createStampPatternData生成透明度数据
-                const stampAlphaResult = await ClearHandler.createStampPatternData(
-                    pattern.patternRgbData,
-                    patternWidth,
-                    patternHeight,
-                    4, // RGBA数据
-                    bounds.width,
-                    bounds.height,
-                    scaledPatternWidth,
-                    scaledPatternHeight,
-                    angle,
-                    bounds,
-                    false, // 非灰度模式
-                    true // 生成透明度数据
-                );
-                
-                if (stampAlphaResult.alphaData && bounds.selectionDocIndices) {
-                    // 提取选区内的透明度数据
-                    alphaData = new Uint8Array(bounds.selectionDocIndices.size);
-                    const selectionIndices = Array.from(bounds.selectionDocIndices);
-                    
-                    for (let i = 0; i < selectionIndices.length; i++) {
-                        const docIndex: number = selectionIndices[i];
-                        const docX = docIndex % bounds.docWidth;
-                        const docY = Math.floor(docIndex / bounds.docWidth);
-                        const boundsX = docX - bounds.left;
-                        const boundsY = docY - bounds.top;
-                        
-                        if (boundsX >= 0 && boundsX < bounds.width && boundsY >= 0 && boundsY < bounds.height) {
-                            const boundsIndex = boundsY * bounds.width + boundsX;
-                            if (boundsIndex < stampAlphaResult.alphaData.length) {
-                                alphaData[i] = stampAlphaResult.alphaData[boundsIndex];
-                            } else {
-                                alphaData[i] = 0; // 图案外部为透明
-                            }
-                        } else {
-                            alphaData[i] = 0; // 图案外部为透明
-                        }
-                    }
-                }
-            } else {
-                // 贴墙纸模式：使用createTilePatternData生成透明度数据
-                const alphaResult = ClearHandler.createTilePatternData(
-                    pattern.patternRgbData,
-                    patternWidth,
-                    patternHeight,
-                    4, // RGBA数据
-                    bounds.width,
-                    bounds.height,
-                    scaledPatternWidth,
-                    scaledPatternHeight,
-                    angle,
-                    pattern.rotateAll !== false,
-                    bounds,
-                    true // 生成透明度数据
-                );
-                
-                // 提取选区内的透明度数据
-                if (alphaResult.alphaData && bounds.selectionDocIndices) {
-                    const selectionIndices = Array.from(bounds.selectionDocIndices);
-                    alphaData = new Uint8Array(selectionIndices.length);
-                    
-                    for (let i = 0; i < selectionIndices.length; i++) {
-                        const docIndex: number = selectionIndices[i];
-                        const docX = docIndex % bounds.docWidth;
-                        const docY = Math.floor(docIndex / bounds.docWidth);
-                        const boundsX = docX - bounds.left;
-                        const boundsY = docY - bounds.top;
-                        
-                        if (boundsX >= 0 && boundsX < bounds.width && boundsY >= 0 && boundsY < bounds.height) {
-                            const boundsIndex = boundsY * bounds.width + boundsX;
-                            if (boundsIndex < alphaResult.alphaData.length) {
-                                alphaData[i] = alphaResult.alphaData[boundsIndex];
-                            } else {
-                                alphaData[i] = 0; // 图案外部为透明
-                            }
-                        } else {
-                            alphaData[i] = 0; // 图案外部为透明
-                        }
-                    }
-                }
-            }
-        } else if (hasGradientAlpha && state?.selectedGradient) {
-            console.log('🌈 生成渐变透明度数据');
-            alphaData = await this.generateGradientAlphaData(state, bounds);
-        }
-        
-        // 如果当前不是正在处理的填充类型，不应该生成透明度数据
-        if (!isCurrentlyProcessingPattern && !isCurrentlyProcessingGradient) {
-            alphaData = undefined;
-            console.log('⚠️ 当前不是正在处理的填充类型，跳过透明度数据生成');
-        }
-        
-        if (hasAlpha) {
-            console.log('🎨 透明度数据生成完成:', {
-                hasAlphaData: !!alphaData,
-                alphaDataLength: alphaData?.length,
-                fillDataLength: fillData.length,
-                sampleAlphaValues: alphaData ? Array.from(alphaData.slice(0, 10)) : null
-            });
-        }
-        
-        // 分批处理，避免一次性处理过多数据导致栈溢出
-        const BATCH_SIZE = 10000; // 每批处理1万个像素
-        
-        for (let batchStart = 0; batchStart < fillData.length; batchStart += BATCH_SIZE) {
-            const batchEnd = Math.min(batchStart + BATCH_SIZE, fillData.length);
-            
-            await new Promise(resolve => {
-                setTimeout(() => {
-                    // 使用修正后的清除公式，支持PNG透明度处理
-                    for (let i = batchStart; i < batchEnd; i++) {
-                        const selectedMaskValue = selectedMaskData[i];  // 选区内快速蒙版像素值 (0-255)
-                        let fillValue = fillData[i]; // 填充像素值 (0-255)
-                        let effectiveOpacity = opacity; // 有效不透明度
-                        
-                        // 处理透明度信息（PNG图案自带透明区域或渐变透明度）
-                        if (hasAlpha && alphaData && i < alphaData.length) {
-                            const alpha = alphaData[i];
-                            // 透明度影响有效不透明度：alpha=0时完全透明，不参与清除；alpha=255时完全不透明，正常清除
-                            effectiveOpacity = Math.round(opacity * alpha / 255);
-                        }
-                        
-                        // 应用修正后的清除公式，主面板不透明度转换为0-1范围
-                        const opacityFactor = effectiveOpacity / 100;
-                        
-                        // 修正后的清除公式：
-                        // 1. 当maskvalue=0时，结果始终为0
-                        // 2. 当maskvalue>0时，根据fillvalue/255的比例删除相应百分比的灰度
-                        // 3. fillvalue越大，删除的百分比越高，最终结果越小
-                        // 4. 透明区域（effectiveOpacity=0）不参与清除，保持原始蒙版值
-                        let finalValue;
-                        if (selectedMaskValue === 0) {
-                            // maskvalue为0时，结果始终为0
-                            finalValue = 0;
-                        } else if (effectiveOpacity === 0) {
-                            // 完全透明区域，保持原始蒙版值，不参与清除
-                            finalValue = selectedMaskValue;
-                        } else {
-                            // maskvalue>0且有效不透明度>0时，应用绝对删除公式（参考图层蒙版）
-                            // 绝对公式：蒙版值 - (清除值 * 有效不透明度)
-                            // 最终值 = maskValue - (fillValue * opacityFactor)
-                            const subtractAmount = fillValue * opacityFactor;
-                            finalValue = selectedMaskValue - subtractAmount;
-                        }
-                        
-                        finalData[i] = Math.min(255, Math.max(0, Math.round(finalValue)));
-                    }
-                    resolve(void 0);
-                }, 0);
-            });
-        }
-        
-        // 将计算结果映射回完整文档的newMaskValue中
-        if (bounds && bounds.selectionDocIndices && bounds.selectionDocIndices.size > 0) {
-            console.log('🎯 使用selectionDocIndices映射选区内的最终计算结果');
-            const selectionIndices = Array.from(bounds.selectionDocIndices);
-            let resultIndex = 0;
-            let mappedCount = 0;
-            let featheredCount = 0;
-            
-            // 检查是否有羽化系数
-            const hasFeathering = bounds.selectionCoefficients && bounds.selectionCoefficients.length > 0;
-            if (hasFeathering) {
-                console.log('🌟 检测到选区羽化系数，将应用羽化混合效果');
-            }
-            
-            for (const docIndex of selectionIndices) {
-                if (docIndex < newMaskValue.length && resultIndex < finalData.length) {
-                    // 支持选区羽化：使用selectionCoefficients进行混合
-                    if (hasFeathering && bounds.selectionCoefficients[resultIndex] !== undefined) {
-                        const selectionCoefficient = bounds.selectionCoefficients[resultIndex];
-                        const originalValue = isEmpty ? 0 : maskData[docIndex];
-                        const newValue = finalData[resultIndex];
-                        
-                        // 羽化混合公式：最终值 = 原始值 * (1 - 羽化系数) + 新值 * 羽化系数
-                        // 羽化系数越接近1，新值的影响越大；越接近0，原始值保持不变
-                        const blendedValue = originalValue * (1 - selectionCoefficient) + newValue * selectionCoefficient;
-                        newMaskValue[docIndex] = Math.round(Math.min(255, Math.max(0, blendedValue)));
-                        
-                        featheredCount++;
-                    } else {
-                        // 没有羽化信息时直接使用计算结果
-                        newMaskValue[docIndex] = finalData[resultIndex];
-                    }
-                    
-                    mappedCount++;
-                    resultIndex++;
-                }
-            }
-            
-            console.log(`🎯 selectionDocIndices映射完成，映射了 ${mappedCount} 个像素`);
-            if (featheredCount > 0) {
-                console.log(`🌟 应用羽化效果的像素数量: ${featheredCount}`);
-            }
-        } else {
-            return finalData;
-        }
-        
-        // 如果是不完整蒙版，根据是否在选区内决定是否还原角落像素值
-        if (topLeftIsEmpty) {
-            console.log('🔄 检查是否需要还原左上角像素值');
-            // 检查左上角是否在选区内
-            const topLeftInSelection = maskData[0] !== 0;
-            
-            // 只有当像素不在选区内时，才将其还原为0
-            if (!topLeftInSelection) {
-                console.log('⚪ 左上角像素不在选区内，还原为0');
-                newMaskValue[0] = 0;
-            }
-        }
-
-        if (bottomRightIsEmpty) {
-            console.log('🔄 检查是否需要还原右下角像素值');
-            // 检查右下角是否在选区内
-            const bottomRightInSelection = maskData[maskData.length - 1] !== 0;
-            
-            // 只有当像素不在选区内时，才将其还原为0
-            if (!bottomRightInSelection) {
-                console.log('⚪ 右下角像素不在选区内，还原为0');
-                newMaskValue[newMaskValue.length - 1] = 0;
-            }
-        }
-        
-        return newMaskValue;
-    }
-
-
-
-    //-------------------------------------------------------------------------------------------------
     // 将计算后的灰度数据写回快速蒙版通道
     static async updateQuickMaskChannel(grayData: Uint8Array, bounds: any, state?: any) {
         try {
@@ -2691,169 +2581,6 @@ export class ClearHandler {
         }
     }
 
-    //-------------------------------------------------------------------------------------------------
-    // 图层蒙版纯色清除
-    static async clearLayerMaskSolidColor(layerInfo: any, state: any, opacity: number) {
-        try {
-            console.log('🎨 开始图层蒙版纯色清除');
-            
-            // 获取选区边界
-            const bounds = await this.getSelectionData();
-            if (!bounds) {
-                console.log('❌ 无法获取选区边界');
-                return;
-            }
-            
-            // 获取当前图层ID
-            const currentLayerId = await this.getCurrentLayerId();
-            if (!currentLayerId) {
-                console.log('❌ 无法获取当前图层ID');
-                return;
-            }
-            
-            // 获取图层蒙版像素数据
-            const maskResult = await this.getLayerMaskPixels(bounds, currentLayerId);
-            if (!maskResult) {
-                console.log('❌ 无法获取图层蒙版像素数据');
-                return;
-            }
-            
-            const { maskData, selectedMaskData, stats } = maskResult;
-            
-            // 生成纯色灰度数据（固定为255，表示完全清除）
-            const solidGrayData = new Uint8Array(selectedMaskData.length).fill(255);
-            
-            // 计算最终灰度值（减去模式）
-            const finalGrayData = await this.calculateLayerMaskClearValues(
-                selectedMaskData,
-                solidGrayData,
-                opacity,
-                bounds,
-                maskData,
-                stats.isEmpty
-            );
-            
-            // 更新图层蒙版
-            await this.updateLayerMask(finalGrayData, bounds, currentLayerId, state);
-        } catch (error) {
-            console.error('❌ 图层蒙版纯色清除失败:', error);
-        }
-    }
-    
-    //-------------------------------------------------------------------------------------------------
-    // 图层蒙版图案清除
-    static async clearLayerMaskPattern(layerInfo: any, state: any, opacity: number) {
-        try {
-            console.log('🎨 开始图层蒙版图案清除');
-            
-            // 获取选区边界
-            const bounds = await this.getSelectionData();
-            if (!bounds) {
-                console.log('❌ 无法获取选区边界');
-                return;
-            }
-            
-            // 获取当前图层ID
-            const currentLayerId = await this.getCurrentLayerId();
-            if (!currentLayerId) {
-                console.log('❌ 无法获取当前图层ID');
-                return;
-            }
-            
-            // 获取图层蒙版像素数据
-            const maskResult = await this.getLayerMaskPixels(bounds, currentLayerId);
-            if (!maskResult) {
-                console.log('❌ 无法获取图层蒙版像素数据');
-                return;
-            }
-            
-            const { maskData, selectedMaskData, stats } = maskResult;
-            
-            // 获取图案灰度数据
-            const patternGrayData = await this.getPatternFillGrayData(state, bounds);
-            if (!patternGrayData) {
-                console.log('❌ 无法获取图案灰度数据');
-                return;
-            }
-            
-            // 生成PNG透明度数据（如果图案支持透明度）
-            const patternAlphaData = await this.generateLayerMaskAlphaData(state.selectedPattern, bounds);
-            
-            // 计算最终灰度值（减去模式，支持PNG透明度）
-            const finalGrayData = await this.calculateLayerMaskClearValuesWithAlpha(
-                selectedMaskData,
-                patternGrayData,
-                patternAlphaData,
-                opacity,
-                bounds,
-                maskData,
-                stats.isEmpty
-            );
-            
-            // 更新图层蒙版
-            await this.updateLayerMask(finalGrayData, bounds, currentLayerId, state);
-        } catch (error) {
-            console.error('❌ 图层蒙版图案清除失败:', error);
-        }
-    }
-    
-    //-------------------------------------------------------------------------------------------------
-    // 图层蒙版渐变清除
-    static async clearLayerMaskGradient(layerInfo: any, state: any, opacity: number) {
-        try {
-            console.log('🎨 开始图层蒙版渐变清除');
-            
-            // 获取选区边界
-            const bounds = await this.getSelectionData();
-            if (!bounds) {
-                console.log('❌ 无法获取选区边界');
-                return;
-            }
-            
-            // 获取当前图层ID
-            const currentLayerId = await this.getCurrentLayerId();
-            if (!currentLayerId) {
-                console.log('❌ 无法获取当前图层ID');
-                return;
-            }
-            
-            // 获取图层蒙版像素数据
-            const maskResult = await this.getLayerMaskPixels(bounds, currentLayerId);
-            if (!maskResult) {
-                console.log('❌ 无法获取图层蒙版像素数据');
-                return;
-            }
-            
-            const { maskData, selectedMaskData, stats } = maskResult;
-            
-            // 获取渐变灰度数据
-            const gradientGrayData = await this.getGradientFillGrayData(state, bounds);
-            if (!gradientGrayData) {
-                console.log('❌ 无法获取渐变灰度数据');
-                return;
-            }
-            
-            // 为渐变生成透明度数据（基于渐变stops中的透明度信息）
-            const gradientAlphaData = await this.generateGradientAlphaData(state, bounds);
-            
-            // 计算最终灰度值（减去模式，支持渐变透明度）
-            const finalGrayData = await this.calculateLayerMaskClearValuesWithAlpha(
-                selectedMaskData,
-                gradientGrayData,
-                gradientAlphaData,
-                opacity,
-                bounds,
-                maskData,
-                stats.isEmpty
-            );
-            
-            // 更新图层蒙版
-            await this.updateLayerMask(finalGrayData, bounds, currentLayerId, state);
-        } catch (error) {
-            console.error('❌ 图层蒙版渐变清除失败:', error);
-        }
-    }
-    
     //-------------------------------------------------------------------------------------------------
     // 获取当前激活图层的ID
     static async getCurrentLayerId() {
@@ -3177,162 +2904,6 @@ export class ClearHandler {
         } catch (error) {
             console.error('❌ 获取图层蒙版像素数据失败:', error);
             throw error;
-        }
-    }
-    
-    //-------------------------------------------------------------------------------------------------
-    // 计算图层蒙版清除的最终灰度值（减去模式，支持选区羽化）
-    static async calculateLayerMaskClearValues(
-        selectedMaskData: Uint8Array,
-        clearData: Uint8Array,
-        opacity: number,
-        bounds: any,
-        maskData: Uint8Array,
-        isEmpty: boolean
-    ) {
-        try {
-            console.log('🧮 计算最终灰度值（减去模式，支持选区羽化）');
-            
-            const finalData = new Uint8Array(selectedMaskData.length);
-            const newMaskValue = new Uint8Array(maskData.length);
-            
-            // 复制原始蒙版数据
-            newMaskValue.set(maskData);
-            
-            // 检查是否有选区羽化系数
-            const hasFeathering = bounds.selectionCoefficients && bounds.selectionCoefficients.length > 0;
-            const opacityFactor = opacity / 100;
-            
-            // 分批处理，避免一次性处理过多数据导致栈溢出
-            const BATCH_SIZE = 10000;
-            
-            for (let batchStart = 0; batchStart < selectedMaskData.length; batchStart += BATCH_SIZE) {
-                const batchEnd = Math.min(batchStart + BATCH_SIZE, selectedMaskData.length);
-                
-                await new Promise(resolve => {
-                    setTimeout(() => {
-                        // 使用减去模式的清除公式，支持选区羽化
-                        for (let i = batchStart; i < batchEnd; i++) {
-                            const maskValue = selectedMaskData[i];  // 蒙版像素值 (0-255)
-                            const clearValue = clearData[i]; // 清除像素值 (0-255)
-                            
-                            // 计算有效不透明度（考虑选区羽化系数）
-                            let effectiveOpacity = opacityFactor;
-                            if (hasFeathering && i < bounds.selectionCoefficients.length) {
-                                effectiveOpacity *= bounds.selectionCoefficients[i];
-                            }
-                            
-                            // 减去模式：蒙版值 - 清除值 * 有效不透明度
-                            const subtractAmount = clearValue * effectiveOpacity;
-                            const finalValue = maskValue - subtractAmount;
-                            
-                            finalData[i] = Math.min(255, Math.max(0, Math.round(finalValue)));
-                        }
-                        resolve(void 0);
-                    }, 0);
-                });
-            }
-            
-            // 将计算结果映射回完整文档的newMaskValue中
-            if (bounds && bounds.selectionDocIndices && bounds.selectionDocIndices.size > 0) {
-                const selectionIndices = Array.from(bounds.selectionDocIndices);
-                let resultIndex = 0;
-                
-                for (const docIndex of selectionIndices) {
-                    if (docIndex < newMaskValue.length && resultIndex < finalData.length) {
-                        newMaskValue[docIndex] = finalData[resultIndex];
-                        resultIndex++;
-                    }
-                }
-            }
-            
-            return newMaskValue;
-        } catch (error) {
-            console.error('❌ 计算最终灰度值失败:', error);
-            return null;
-        }
-    }
-    
-    //-------------------------------------------------------------------------------------------------
-    // 计算图层蒙版清除的最终灰度值（减去模式，支持PNG透明度和选区羽化）
-    static async calculateLayerMaskClearValuesWithAlpha(
-        selectedMaskData: Uint8Array,
-        clearData: Uint8Array,
-        alphaData: Uint8Array | null,
-        opacity: number,
-        bounds: any,
-        maskData: Uint8Array,
-        isEmpty: boolean
-    ) {
-        try {
-            console.log('🧮 计算最终灰度值（减去模式，支持PNG透明度和选区羽化）');
-            
-            const finalData = new Uint8Array(selectedMaskData.length);
-            const newMaskValue = new Uint8Array(maskData.length);
-            
-            // 复制原始蒙版数据
-            newMaskValue.set(maskData);
-            
-            // 检查是否有选区羽化系数
-            const hasFeathering = bounds.selectionCoefficients && bounds.selectionCoefficients.length > 0;
-            const opacityFactor = opacity / 100;
-            
-            // 分批处理，避免一次性处理过多数据导致栈溢出
-            const BATCH_SIZE = 10000;
-            
-            for (let batchStart = 0; batchStart < selectedMaskData.length; batchStart += BATCH_SIZE) {
-                const batchEnd = Math.min(batchStart + BATCH_SIZE, selectedMaskData.length);
-                
-                await new Promise(resolve => {
-                    setTimeout(() => {
-                        // 使用减去模式的清除公式，支持PNG透明度和选区羽化
-                        for (let i = batchStart; i < batchEnd; i++) {
-                            const maskValue = selectedMaskData[i];  // 蒙版像素值 (0-255)
-                            const clearValue = clearData[i]; // 清除像素值 (0-255)
-                            const alpha = alphaData ? alphaData[i] : 255; // PNG透明度 (0-255)
-                            
-                            // 如果图案完全透明，不进行清除操作
-                            if (alpha === 0) {
-                                finalData[i] = maskValue;
-                                continue;
-                            }
-                            
-                            // 计算有效不透明度（考虑选区羽化系数）
-                            let effectiveOpacity = opacityFactor;
-                            if (hasFeathering && i < bounds.selectionCoefficients.length) {
-                                effectiveOpacity *= bounds.selectionCoefficients[i];
-                            }
-                            
-                            // 减去模式：蒙版值 - (清除值 * 有效不透明度 * PNG透明度)
-                            const alphaFactor = alpha / 255;
-                            const subtractAmount = clearValue * effectiveOpacity * alphaFactor;
-                            const finalValue = maskValue - subtractAmount;
-                            
-                            finalData[i] = Math.min(255, Math.max(0, Math.round(finalValue)));
-                        }
-                        resolve(void 0);
-                    }, 0);
-                });
-            }
-            
-            // 将计算结果映射回完整文档的newMaskValue中
-            if (bounds && bounds.selectionDocIndices && bounds.selectionDocIndices.size > 0) {
-                const selectionIndices = Array.from(bounds.selectionDocIndices);
-                let resultIndex = 0;
-                
-                for (const docIndex of selectionIndices) {
-                    if (docIndex < newMaskValue.length && resultIndex < finalData.length) {
-                        newMaskValue[docIndex] = finalData[resultIndex];
-                        resultIndex++;
-                    }
-                }
-            }
-            
-            console.log('✅ 支持PNG透明度的图层蒙版清除计算完成');
-            return newMaskValue;
-        } catch (error) {
-            console.error('❌ 计算最终灰度值失败:', error);
-            return null;
         }
     }
     

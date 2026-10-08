@@ -12,6 +12,51 @@
 ## 铁律速查（详述见 refs）
 
 ### 填充 / 描边（2026-10-08 新增）
+- ⛔ **清除算法的唯一来源 = `src/utils/ClearAlgorithms.ts`**（三类：背景图层 `背景提亮|减法变黑|乘法变黑`、
+  黑白通道 `减法|乘法`、像素图层 `减法|乘法`）。三者由 `state.clear{Background,Channel,Layer}Algorithm`
+  承载，UI 在**清除设置子面板**（`ClearSetting.tsx` / `clear.css`）。改公式只改这一个文件。
+  ⚠️ PS 的 `multiply` 是 `C × S/255`（S 越暗删得越多），与本插件 `C × (1 − F/255 × t)` **方向相反**
+  ⇒ 描边走乘法分支必须 `invertRgb(描边色)` 才等价（`planStrokeBlend` 是唯一裁决处）。
+  ⚠️ 快速蒙版与图层蒙版**共用 `ClearHandler.computeChannelClear`**，不再各写一份（历史上已漂移过）。
+- ⛔⛔⛔ **`imaging.putPixels` 的 `replace` 默认为 `true`（官方原文：existing pixels in the layer are
+  **discarded** before adding new pixels）** ⇒ **局部写是陷阱**：带了 `targetBounds` 又没显式给 `replace`，
+  PS 的语义就是「**先把整层清空**，再把这块数据放到 targetBounds 处」。2026-10-08 用「选区外接矩形」
+  写回 ⇒ **选区外整层像素被清空成透明**（背景图层不能透明，PS 按背景色填成**白色**），
+  与算法完全无关。**唯一正确做法 = 文档全尺寸缓冲 + 不传 `targetBounds`**（原点 (0,0)，
+  「Dimension keys width and height are not used」），选区外字节保持读出的原值 ⇒ 整体替换后严格恒等。
+  ⚠️ `MaskSyncEngine` 头部早有同源结论（「局部写 targetBounds+replace:false 不可靠 ⇒ 整图写回」）；
+  `pixelDataProcessor` / `knockoutBatchProcessor` / `PatternFill` 的写回也都是整图/整层。
+  ⇒ 新写任何像素写回前，先抄这三处的形状，不要自创局部写。
+- ⛔ **背景图层（ClearHandler）走「解锁 → 清除 → 还原」**：`putPixels` 契约要求目标**必须是像素图层**，
+  背景图层不是 ⇒ 先「图层来自背景」转普通图层（描述符逐字取自用户真机监听：
+  `set {_target:[{_ref:"layer",_property:"background"}]}` + 顶层 `layerID`），
+  清除后必须 `make {_ref:"backgroundLayer"}` 还原，**还原写在 `finally` 里**（异常也要还，否则永久改动
+  用户图层结构）。还原前要校验活动图层 id 未变（描述符打的是 `targetEnum`）。
+  解锁后读取恒为 RGBA，3/4 分量歧义随之消失；后台族算法只动 R/G/B、alpha 恒 255 ⇒ 还原是恒等操作。
+- ⛔⛔ **`imaging.getPixels` 四条参数铁律（改任何「读像素→改→写回」前先背下来）**：
+  ① 选项名是 **`sourceBounds`**，**没有 `bounds`** —— 传错 = 整个图层被 `targetSize` 重采样进选区
+  （症状：选区外变白 / 内容错位；`smartEdgeSmoothProcessor` 早已记录过，2026-10-08 又踩一次）；
+  ② **绝不传 `applyAlpha: true`** —— 它会把 RGBA **按白底压成 RGB、丢掉 alpha**
+  （症状：普通像素图层被判「无 alpha 通道」直接跳过）；
+  ③ **按 `layer.boundsNoEffects` 读**（不要按选区、不要按全文档）：按选区会漏掉「有像素但在选区外」
+  的部分；全文档在图层没画满画布时会被裁剪甚至报 `Missing image`（MaskSyncEngine 实测）。
+  `targetSize` 与请求同尺寸即声明不缩放；**不传 `colorProfile`**（读写都走文档工作空间才往返恒等）；
+  ④ **必须回读返回值的 `sourceBounds`**定原点（PS 会裁到「真有像素」范围），
+  **数组形状取 `imageData.width/height`**（须在 `dispose()` 前读出）。
+  写回时 `createImageDataFromBuffer` 的 `colorSpace/pixelFormat/components` 三项组合
+  **照抄 `pixelDataProcessor` 的写回分支**（本仓已验证）。
+  ⇒ 台架：`node outputs/clear_pixel_geometry_verify.cjs`（**157 项**；T1/T7 是**全缓冲逐字节 oracle**，
+  T11 静态契约扫 `writeLayerPixels`/`readLayerPixels`/`clearPixelLayer`，T12 注入假 `imaging`
+  真跑 `readLayerPixels`；`CLEAR_HANDLER_SRC` 指向变异副本做变异测试，现有 10 个变异全部被抓）。
+- ⛔ **分支选择要看「数据」不要看「探测结果」**：`clearPixelLayer` 走背景族还是像素族，
+  由 `getPixels` 返回的**分量数**（3=RGB / 4=RGBA）决定，不看 `layerInfo.isBackground` ——
+  探测与实际不一致时旧写法会静默跳过，用户看不到任何解释。
+- ⛔ **子面板入口有两种形态，别只做一种**：普通模式 = 控件右侧的**齿轮 IconButton**
+  （`.stroke-mode-controls` / `.clear-mode-controls`，两者**共用一条 8px 间距规则**）；
+  紧凑模式 = **标签本身**复合 `.text-button`（横向没有位置），点击进子面板。
+  ⇒ 新增子面板必须同时给「普通模式齿轮 + 紧凑模式标签入口」。
+  ⛔ **紧凑模式作用域已从 5 个增到 6 个**（app/color/pattern/gradient/stroke/**clear**）：
+  `CompactScope` / `COMPACT_CLASS` / `COMPACT_NAME` / `compactScopeOf` / app.css 的 `body.compact-*` 五处同步。
 - ⛔ **填充路径会「提前消费选区」**：`PatternFill` / `GradientFill` / `ClearHandler` / `SingleChannelHandler`
   写回像素时用 `imaging.putSelection` 覆盖选区，且**仅在 `state.deselectAfterFill === false` 时才还原**。
   该开关默认 `true` ⇒ 填充返回后选区已空，紧随的 `strokeSelection` 无从下手（= 描边「失效」）。
@@ -90,11 +135,30 @@
   靠**同文件内后置规则**取胜 ⇒ 写成 `className="label-4 label-disabled"` 即可；
   但**跨文件**（app.css 的类 vs common.css 的 `.label-disabled`）就必须用两级类（见 CSS 段）。
 
+### 清除模式 / 背景图层（2026-10-08 新增）
+- ⛔⛔ **「图层来自背景」命令会报错，但图层类型确实已改**（真机 `invalid target sheet`）。
+  ⇒ 解锁成败**只能看回读的 `isBackgroundLayer`**，绝不能看有没有抛错；回读失败（null）≠ 失败
+  （否则背景图层永远清不掉）。查 batchPlay 静默失败要**扫返回项里的 `{_obj:"error"}` 描述符**
+  （`batchPlayError(result)`），因为目标非法时 batchPlay 多半是 resolve 而不是 reject。
+- ⛔⛔ **图层类型转换之后，一次 DOM 都不能读**：`app.activeDocument` / `activeLayers[0]` /
+  `layer.boundsNoEffects` 撞上「刚改过类型的图层」都会抛 `invalid target sheet`，异常一逃逸就整轮静默失败
+  ⇒ `docId` / 目标图层 id / 读区域必须**转换前**捕获成普通数字；`readLayerPixels(layerId, docId, region)` /
+  `writeLayerPixels(block, layerId, docId)` 是**纯函数**（不吃图层对象、不引用 `app.`）。
+- ⛔ **还原背景图层必须尽力而为**：只有**明确读到**活动图层换成了别的图层才允许放弃还原；
+  读不到也要还（skip 会把用户图层结构永久改成普通图层）。读区域用 `readLayerBounds`（`boundsNoEffects` 优先，
+  含效果的外扩范围不是像素）；可能抛异常的多步探测**每一步各自 try/catch**。
+- 台架：`node outputs/clear_pixel_geometry_verify.cjs`（**203 项**；T11 静态契约含「转换后零 DOM 读取」护栏 /
+  T12 读像素 / T13 读边界 / T14 解锁成败判定 —— 均**注入假 API 真跑源码切片**）；
+  变异批 `node outputs/_mk.cjs`（10 变异体经 `CLEAR_HANDLER_SRC` 整跑，**10/10 捕获**）。
+  ⚠️ 台架自身坑：`extractMethod` 返回的是**源码字符串**（要 `new Function` 编译才能当函数用）；
+  静态扫描前必须 `stripComments`（文档注释会引用 `app.` 反例字样）。
+
 ### CSS / 样式
 - ⛔⛔⛔ CSS 注释块外的**游离文本**会被当成选择器、静默吃掉紧随其后的整条规则
   ⇒ ① 编辑中文注释不移动/重复注释结束符，注释正文禁出现其字面两字符形式；
   ② 改完 CSS 必须机器校验注释开/闭配对；③ **「反复改却毫无效果」立即停手，先验证规则是否命中元素**。
-  ✅ 机器校验：`node outputs/css_comment_check.cjs`（扫 `src/styles/*.css`，报未闭合 + 注释体内开启符）。
+  ✅ 机器校验：`node outputs/_css_comment_guard.cjs`（扫 `src/styles/*.css`，报未闭合 + 注释体内开启符 + 大括号不配对）。
+  ⚠️ 旧记忆里的 `outputs/css_comment_check.cjs` **并不存在**，已由本脚本取代（2026-10-08）。
 - ⛔ **「标签随控件同步置灰」必须用两级类**（如 `.app-blendmode-label.label-disabled`）：
   `common.css` 是 `index.html` 里的**静态 `<link>`**，而 `app.css` 由 style-loader **运行时后注入**
   ⇒ 两者同为 (0,1,0) 单类时，**app.css 自带的 `color` 会盖掉 `.label-disabled`**，
