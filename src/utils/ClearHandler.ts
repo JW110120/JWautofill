@@ -246,7 +246,7 @@ export class ClearHandler {
             const finalGrayData = await this.calculatePatternClearValues(patternGrayData, opacity, state, selectionBounds);
             
             // 第四步：用putSelection修改选区并删除内容
-            await this.applySelectionAndDelete(finalGrayData, selectionBounds);
+            await this.applySelectionAndDelete(finalGrayData, selectionBounds, state);
         } catch (error) {
             console.error('❌ 图案清除失败:', error);
             throw error;
@@ -273,7 +273,7 @@ export class ClearHandler {
             const finalGrayData = await this.calculateGradientClearValues(gradientGrayData, opacity, state, selectionBounds);
             
             // 第四步：用putSelection修改选区并删除内容
-            await this.applySelectionAndDelete(finalGrayData, selectionBounds);
+            await this.applySelectionAndDelete(finalGrayData, selectionBounds, state);
         } catch (error) {
             console.error('❌ 渐变清除失败:', error);
             throw error;
@@ -501,7 +501,7 @@ export class ClearHandler {
     
     //-------------------------------------------------------------------------------------------------
     // 用putSelection修改选区并删除内容（修复索引映射版本）
-    static async applySelectionAndDelete(finalGrayData: Uint8Array, bounds: any) {
+    static async applySelectionAndDelete(finalGrayData: Uint8Array, bounds: any, state?: any) {
         try {
             console.log('🎯 开始应用选区并删除内容');
             
@@ -581,6 +581,52 @@ export class ClearHandler {
                     }
                 }
             ], { synchronousExecution: true });
+            // ⚠️ 与其它填充/清除分支保持一致（2026-10-08）：
+            // 本方法前面的 putSelection 已经把选区改写成了「待删除的灰度掩码」，
+            // 而 getSelectionData() 内部也早已取消过选区。当用户关闭「自动删选区」
+            // (deselectAfterFill === false) 时，必须把原选区还原回去 ——
+            // 否则「图案/渐变 + 清除 + 描边」会沿被改写的掩码描边，而不是原选区轮廓。
+            // 闸门与 updateQuickMaskChannel / updateLayerMask / PatternFill / GradientFill /
+            // SingleChannelHandler 完全同构：仅 deselectAfterFill === false 才还原，
+            // 默认（true）行为不变。
+            if (state && state.deselectAfterFill === false
+                && bounds && bounds.selectionValues && bounds.selectionValues.length > 0) {
+                try {
+                    const docW = Math.round(bounds.docWidth);
+                    const docH = Math.round(bounds.docHeight);
+                    const fullSelectionData = new Uint8Array(docW * docH);
+                    if (bounds.selectionDocIndices && bounds.selectionDocIndices.size > 0) {
+                        // ⚠️ 显式给 Array.from 收敛元素类型：bounds 是 any，不写 <number> 会推出
+                        // unknown[] ⇒ docIndex 变 unknown ⇒ fullSelectionData[docIndex] 报 TS2538。
+                        const selectionIndices = Array.from<number>(bounds.selectionDocIndices);
+                        let valueIndex = 0;
+                        for (const docIndex of selectionIndices) {
+                            if (docIndex < fullSelectionData.length && valueIndex < bounds.selectionValues.length) {
+                                fullSelectionData[docIndex] = bounds.selectionValues[valueIndex];
+                                valueIndex++;
+                            } else if (valueIndex >= bounds.selectionValues.length) {
+                                break;
+                            }
+                        }
+                    }
+                    const selectionOptions = {
+                        width: docW,
+                        height: docH,
+                        components: 1,
+                        chunky: true,
+                        colorProfile: documentColorProfile,
+                        colorSpace: "Grayscale"
+                    };
+                    const selectionImageData = await imaging.createImageDataFromBuffer(fullSelectionData, selectionOptions);
+                    await imaging.putSelection({
+                        documentID: app.activeDocument.id,
+                        imageData: selectionImageData
+                    });
+                    selectionImageData.dispose();
+                } catch (selectionError) {
+                    console.error('恢复选区失败:', selectionError);
+                }
+            }
         } catch (error) {
             console.error('❌ 应用选区并删除内容失败:', error);
             throw error;

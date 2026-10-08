@@ -123,7 +123,7 @@ async function strokeSelectionNormal(strokeParams: any) {
                     _value: strokeParams.width
                 },
                 location: {
-                    _enum: "strokeLocation",
+                    _enum: "strokeLength",
                     _value: strokeParams.position
                 },
                 opacity: {
@@ -266,7 +266,7 @@ async function strokeSelectionWithClearMode(strokeParams: any) {
                     _value: strokeParams.width
                 },
                 location: {
-                    _enum: "strokeLocation",
+                    _enum: "strokeLength",
                     _value: strokeParams.position
                 },
                 opacity: {
@@ -344,7 +344,7 @@ async function strokeSelectionDirect(strokeParams: any) {
             _obj: "stroke",
             width: strokeParams.width,
             location: {
-                _enum: "strokeLocation",
+                _enum: "strokeLength",
                 _value: strokeParams.position
             },
             opacity: {
@@ -533,7 +533,7 @@ async function strokeSelectionInLayerMask(strokeParams: any) {
                     _value: strokeParams.width
                 },
                 location: {
-                    _enum: "strokeLocation",
+                    _enum: "strokeLength",
                     _value: strokeParams.position
                 },
                 opacity: {
@@ -619,7 +619,7 @@ async function strokeSelectionInLayerMaskWithClearMode(strokeParams: any) {
                     _value: strokeParams.width
                 },
                 location: {
-                    _enum: "strokeLocation",
+                    _enum: "strokeLength",
                     _value: strokeParams.position
                 },
                 opacity: {

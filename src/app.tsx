@@ -1049,7 +1049,18 @@ class App extends React.Component<AppProps, AppState> {
                         && !this.state.clearMode
                         && !layerInfo.isInSingleColorChannel;
 
-                    const fillSuccess = await this.fillSelection(layerInfo, mergeDeselect);
+                    // ⚠️⚠️ 需要描边时，必须让填充**保留下选区**：
+                    // PatternFill / GradientFill / ClearHandler / SingleChannelHandler 写回像素时
+                    // 会用 imaging.putSelection 覆盖选区，且只在 `deselectAfterFill === false` 时还原。
+                    // 而「自动删选区」默认是开（true）⇒ 以前这 5 种组合都在填充后把选区清空了，
+                    // 紧随的 strokeSelection 无选区可描 ⇒ 表现为「描边失效」。
+                    // 这里给填充下发一份把 deselectAfterFill 固定为 false 的状态副本；
+                    // 用户「自动删选区」的原意由下面的 stroke 之后统一兑现（needsDeselect 分支）。
+                    const stateForFill = needsStroke
+                        ? { ...this.state, deselectAfterFill: false }
+                        : this.state;
+
+                    const fillSuccess = await this.fillSelection(layerInfo, mergeDeselect, stateForFill);
                     if (needsStroke && fillSuccess) {
                         await strokeSelection(this.state, layerInfo);
                         if (needsDeselect) {
@@ -1179,7 +1190,7 @@ class App extends React.Component<AppProps, AppState> {
         }));
     }
 
-    async fillSelection(layerInfo?: LayerInfo | null, withDeselect = false) {
+    async fillSelection(layerInfo?: LayerInfo | null, withDeselect = false, stateForFill?: AppState) {
         // 统一处理：若当前目标图层被隐藏，在操作前临时显示，操作后恢复隐藏
         // 注意：当选择"新建图层"时，目标会变为新图层（可见），无需临时显示原图层
         let needToggleVisibility = false;
@@ -1224,6 +1235,16 @@ class App extends React.Component<AppProps, AppState> {
                 }
             }
 
+            // ⚠️⚠️ 描边需要选区「活到 strokeSelection 之后」，但四个填充处理器
+            // （PatternFill / GradientFill / ClearHandler / SingleChannelHandler）在写回像素时
+            // 会用 `imaging.putSelection` **覆盖当前选区**，且**仅当 `state.deselectAfterFill === false`**
+            // 才把原选区还原回去；该开关默认 `true`（=「自动删选区」默认开）
+            // ⇒ 填充一返回选区就空了，紧随的描边无从下手（表现为「描边未生效」）。
+            // 因此调用方在 `needsStroke` 时会传一份 `{...this.state, deselectAfterFill:false}`；
+            // 用户「自动删选区」的原意由 handleSelectionChange 在**描边之后**统一兑现，语义不变。
+            // 无描边（无描边 / 仅清除）时调用方传 undefined ⇒ 这里退回 this.state，行为与旧版完全一致。
+            const fillState: AppState = stateForFill || this.state;
+
             // 单通道模式判定同样直接用 layerInfo（字段含义与旧 checkSingleColorChannelMode 一致）
             const isInSingleChannel = !!layerInfo.isInSingleColorChannel;
             if (isInSingleChannel) {
@@ -1236,16 +1257,16 @@ class App extends React.Component<AppProps, AppState> {
                 };
 
                 if (this.state.clearMode) {
-                    const ok = await SingleChannelHandler.clearSingleChannel(fillOptions, this.state.fillMode, this.state);
+                    const ok = await SingleChannelHandler.clearSingleChannel(fillOptions, fillState.fillMode, fillState);
                     return ok === undefined ? true : !!ok; // 若内部未显式返回，视为成功
                 } else {
-                    const ok = await SingleChannelHandler.fillSingleChannel(fillOptions, this.state.fillMode, this.state);
+                    const ok = await SingleChannelHandler.fillSingleChannel(fillOptions, fillState.fillMode, fillState);
                     return ok === undefined ? true : !!ok;
                 }
             }
 
             if (this.state.clearMode) {
-                await ClearHandler.clearWithOpacity(this.state.opacity, this.state, layerInfo);
+                await ClearHandler.clearWithOpacity(fillState.opacity, fillState, layerInfo);
                 return true;
             }
 
@@ -1279,7 +1300,7 @@ class App extends React.Component<AppProps, AppState> {
                         blendMode: this.state.blendMode,
                         pattern: this.state.selectedPattern,
                         preserveTransparency: this.state.selectedPattern.preserveTransparency
-                    }, layerInfo, this.state);
+                    }, layerInfo, fillState);
                     return true;
                 } else {
                     // 缺少图案预设，显示警告并跳过填充
@@ -1293,7 +1314,7 @@ class App extends React.Component<AppProps, AppState> {
                         blendMode: this.state.blendMode,
                         gradient: this.state.selectedGradient,
                         preserveTransparency: this.state.selectedGradient.preserveTransparency
-                    }, layerInfo, this.state, this.state.createNewLayer);
+                    }, layerInfo, fillState, fillState.createNewLayer);
                     return true;
                 } else {
                     // 缺少渐变预设，显示警告并跳过填充
