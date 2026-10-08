@@ -7,194 +7,263 @@ export interface LayerInfo {
     isInQuickMask: boolean;
     isInLayerMask: boolean;
     isInSingleColorChannel: boolean;
+    /**
+     * 活动图层当前是否被隐藏。
+     * 填充路径需要它来决定「要不要临时 show → 填充 → 恢复 hide」；
+     * 旧实现在 fillSelection 里单独再读一次 `activeLayers[0].visible`（2 次 IPC），
+     * 现在随 layerInfo 一起带回，零额外往返。
+     */
+    isHidden?: boolean;
+}
+
+/**
+ * 图层信息的缓存有效期（毫秒）。
+ *
+ * 为什么需要缓存：`getActiveLayerInfo` 的消费方遍布多处（填充 / 图案 / 渐变 /
+ * 颜色面板的每个 effect），而每次调用都要打若干次**同步**宿主 get。
+ * 同一次填充流程里它会被连续调用多次（填充路径 + 面板巡检 tick），
+ * 而这些调用之间图层结构/通道选择**不可能变化**（都发生在同一次 executeAsModal 内）。
+ *
+ * 取 300ms：要大于「一次填充 + 紧随其后的巡检 tick」的间隔，又要小到用户
+ * 手动改通道 / 切图层后不会看到过期状态（那种操作本身也会派发通知，会主动失效缓存）。
+ */
+const CACHE_TTL_MS = 300;
+
+/**
+ * 缓存条目：key = 活动图层 id（PS 会在换图层 / 换文档时换id ⇒ 自动 miss）。
+ */
+let cacheKey: string | null = null;
+let cacheValue: LayerInfo | null = null;
+let cacheStamp = 0;
+
+function nowMs(): number {
+    return Date.now();
+}
+
+/**
+ * 主动失效缓存。
+ *
+ * 必须在「图层结构 / 通道选择可能变了」的时机调用：
+ *   · 收到 make / delete / select 通知（新建、删除、切图层、切通道、切文档）；
+ *   · 填充/ 描边 / 蒙版同步等会改动图层的命令**之后**；
+ *   · 插件挂载与卸载时。
+ *
+ * ⚠️ 不要在纯选区 set 事件里失效：选区变化**不影响**本缓存的任何一个字段
+ *（isBackground / transparentPixelsLocked / kind / bounds / 通道索引），
+ * 失效只会白白丢掉缓存命中率，正好抵消这次优化的收益。
+ */
+export function invalidateLayerInfoCache(): void {
+    cacheKey = null;
+    cacheValue = null;
+    cacheStamp = 0;
+}
+
+/** 判断某个事件是否需要让图层信息缓存失效。 */
+export function shouldInvalidateLayerInfo(eventName?: string, descriptor?: any): boolean {
+    if (eventName === 'make' || eventName === 'delete' || eventName === 'clearEvent') {
+        return true;
+    }
+    if (eventName === 'select') {
+        // 切活动文档 / 图层 / 通道都会改变 layerInfo 的内容
+        return true;
+    }
+    if (eventName === 'set') {
+        const target = descriptor?._target;
+        if (!Array.isArray(target)) return false;
+        // ⚠️ channel/selection 是**选区**变化，与本缓存无关 ⇒ 不失效（保留命中率）。
+        return target.some(
+            (t: any) => t && (t._ref === 'layer' || t._ref === 'document' || t._ref === 'channel')
+                && !(t._ref === 'channel' && t._property === 'selection')
+        );
+    }
+    return false;
+}
+
+/** 从 DOM 属性读出「不需要 batchPlay」的那部分字段。 */
+function readLayerDomInfo(doc: any): LayerInfo | null {
+    const activeLayer = doc.activeLayers && doc.activeLayers.length > 0 ? doc.activeLayers[0] : null;
+    if (!activeLayer) return null;
+
+    const isBackgroundLayer = !!activeLayer.isBackgroundLayer;
+    // ⚠️ bounds 只读一次并复用：bounds 本身是一次宿主 get，
+    // 再对它取 .width/.height 会各多一次（旧代码里 checkLayerHasPixels 就是这么写的）。
+    //
+    // ⚠️⚠️ 背景图层**也必须**读 bounds：旧 checkLayerHasPixels 对所有图层一视同仁，
+    // 而 hasPixels 是 app.tsx 里 `hasTransparencyLocked && hasPixels` 这个分支的判据。
+    // 若对背景图层跳过 bounds 而硬给 false，背景图层就会被误判成「无像素」
+    // ⇒ 走进 fillLockedWithoutPixels（解锁→填充→重锁）而不是 fillBackground，
+    // 属于**功能行为回归**（多两次 applyLocking、锁定状态可能被改写）。
+    const bounds = activeLayer.bounds;
+    const hasPixels = activeLayer.kind === 'pixel'
+        && !!bounds && bounds.width > 0 && bounds.height > 0;
+
+    return {
+        isBackground: isBackgroundLayer,
+        hasTransparencyLocked: !!activeLayer.transparentPixelsLocked,
+        hasPixels,
+        isHidden: !activeLayer.visible,
+        // ⚠️ 快速蒙版 / 图层蒙版 / 单通道三个字段在 probeChannelState() 里补齐
+        isInQuickMask: false,
+        isInLayerMask: false,
+        isInSingleColorChannel: false
+    };
+}
+
+/**
+ * 一次 batchPlay 同时取「目标通道」与「图层蒙版通道」两条信息。
+ *
+ * 优化前checkLayerMaskMode + checkSingleColorChannelMode 是**两个独立方法**，
+ * 且后者内部又完整调了一次前者 ⇒ 单次 getActiveLayerInfo 里
+ * 「取蒙版通道」这组get 被跑了两遍（4 次同步 get）。合并后只跑一遍（2 次），
+ * 且两次 get 放在**同一个 batchPlay 数组**里，一次 IPC 往返拿全。
+ */
+/**
+ * 探测「是否在编辑图层蒙版/ 单个颜色通道」。
+ *
+ * ⚠️⚠️ 快速蒙版下**必须跳过 mask 通道 get**（2026-10-08 用户实测报错）：
+ *  快速蒙版时 PS 的 mask 通道语义与常规不同，`get channel mask` 是本函数里
+ *  唯一会失败的一条命令。而 2026-10-08 之前它被单独调用、且外面包着 try/catch；
+ *  合并成「两条 get 同批下发」之后，**第一条失败会连带整批失败**，
+ *  且宿主对失败命令的原生报错框**绕过 JS try/catch** ⇒ 快速蒙版下三种填充
+ *  （含打开图案/渐变面板时的灰色预览）全部报「命令"获取"当前不可用」。
+ *  快速蒙版下 `isInLayerMask` 本来就无意义（`inQuickMask` 会把单通道判定排除），
+ *  所以直接跳过这条 get —— 既修掉报错，又少一次 IPC。
+ *
+ * 另外两条 get 也**分开下发**（而非同批）：保持「一条失败不影响另一条」的语义，
+ * 这与合并前的旧行为一致。
+ */
+async function probeChannelState(): Promise<{ inLayerMask: boolean; inSingleChannel: boolean }> {
+    const result = { inLayerMask: false, inSingleChannel: false };
+    try {
+        const doc0: any = app.activeDocument;
+        // 多通道保护：多选通道时语义不确定，直接按「非单通道/非蒙版」处理。
+        const activeChannelsCount = doc0?.activeChannels?.length || 0;
+        if (activeChannelsCount > 1) return result;
+
+        const inQuickMask = !!doc0?.quickMaskMode;
+
+        // ---- 目标通道（两条判定都要它）----
+        let targetChannelInfo: any = null;
+        try {
+            const r = await action.batchPlay(
+                [
+                    {
+                        _obj: 'get',
+                        _target: [{ _ref: 'channel', _enum: 'ordinal', _value: 'targetEnum' }],
+                        _options: { dialogOptions: 'dontDisplay' }
+                    }
+                ],
+                { synchronousExecution: true }
+            );
+            targetChannelInfo = r?.[0] || null;
+        } catch {
+            // 目标通道取不到 ⇒ 按「非单通道/非蒙版」处理（与旧实现一致）
+            return result;
+        }
+
+        // ---- 图层蒙版通道（快速蒙版下跳过，见上方说明）----
+        if (!inQuickMask) {
+            try {
+                const r = await action.batchPlay(
+                    [
+                        {
+                            _obj: 'get',
+                            _target: [{ _ref: 'channel', _enum: 'channel', _value: 'mask' }],
+                            _options: { dialogOptions: 'dontDisplay' }
+                        }
+                    ],
+                    { synchronousExecution: true }
+                );
+                const maskChannelName = r?.[0]?.channelName;
+                const targetChannelName = targetChannelInfo?.channelName;
+                // 图层蒙版：目标通道就是 mask 通道
+                if (maskChannelName && targetChannelName && maskChannelName === targetChannelName) {
+                    result.inLayerMask = true;
+                }
+            } catch {
+                // 取不到 mask 通道 ⇒ 视为「不在图层蒙版」（旧实现同样catch 后返回 false）
+            }
+        }
+
+        const targetChannelName = targetChannelInfo?.channelName;
+        const itemIndex = typeof targetChannelInfo?.itemIndex === 'number' ? targetChannelInfo.itemIndex : -1;
+
+        // RGB 单通道：通道名命中红/绿/蓝（R/G/B 及中英文各拼写都收，兼容旧逻辑的名单）
+        const rgbChannels = ["红", "绿", "蓝", "Red", "Grain", "Blue", "R", "G", "B"];
+        const isRgbChannel = !!targetChannelName && rgbChannels.indexOf(targetChannelName) >= 0;
+        // Alpha 通道：索引 >= 4，且既不在快速蒙版也不在图层蒙版
+        const isAlphaChannel = itemIndex >= 4 && !inQuickMask && !result.inLayerMask;
+
+        result.inSingleChannel = isRgbChannel || isAlphaChannel;
+    } catch {
+        // 取不到就按「普通像素图层」处理，不阻断主流程（旧逻辑同样是 catch 后返回 false）
+    }
+    return result;
 }
 
 export class LayerInfoHandler {
+    /**
+     * 取当前活动图层信息。
+     *
+     * 性能契约（2026-10-08）：
+     *   · 缓存命中 → **0 次** IPC；
+     *   · 缓存未命中 → **1 次** batchPlay（内部两条 get 同批下发）+ 少量 DOM 属性读。
+     * 优化前是 6~7 次独立的同步 batchPlay get（约 18 次 IPC 往返）。
+     */
     static async getActiveLayerInfo(): Promise<LayerInfo | null> {
         try {
             const doc = app.activeDocument;
-            if (!doc) {
-                return null;
+            if (!doc) return null;
+
+            const activeLayer = doc.activeLayers && doc.activeLayers.length > 0 ? doc.activeLayers[0] : null;
+            if (!activeLayer) return null;
+
+            // 缓存 key 用活动图层 id：PS 的图层 id 在**整个宿主会话内唯一**，
+            // 因此不必再读 doc.id（那也是一次宿主 get）。换图层 / 换文档都会自动 miss。
+            const key = `${activeLayer.id}`;
+            if (cacheKey === key && cacheValue && nowMs() - cacheStamp < CACHE_TTL_MS) {
+                return cacheValue;
             }
-            
-            const activeLayer = doc.activeLayers[0];
-            if (!activeLayer) {
-                return null;
-            }
-            
-            const document = app.activeDocument;
-            const isInQuickMask = document.quickMaskMode;
-            
-            // 检测是否在编辑图层蒙版（背景图层跳过此检测）
-            const isInLayerMask = activeLayer.isBackgroundLayer ? false : await this.checkLayerMaskMode();
-            
-            // 检测是否选中了单个颜色通道
-            const isInSingleColorChannel = await this.checkSingleColorChannelMode();
-            
-            return {
-                isBackground: activeLayer.isBackgroundLayer,
-                hasTransparencyLocked: activeLayer.transparentPixelsLocked,
-                hasPixels: this.checkLayerHasPixels(activeLayer),
-                isInQuickMask: isInQuickMask,
-                isInLayerMask: isInLayerMask,
-                isInSingleColorChannel: isInSingleColorChannel
+
+            const domInfo = readLayerDomInfo(doc);
+            if (!domInfo) return null;
+
+            const channelState = await probeChannelState();
+            const info: LayerInfo = {
+                isBackground: domInfo.isBackground,
+                hasTransparencyLocked: domInfo.hasTransparencyLocked,
+                hasPixels: domInfo.hasPixels,
+                isHidden: domInfo.isHidden,
+                isInQuickMask: !!doc.quickMaskMode,
+                isInLayerMask: channelState.inLayerMask,
+                isInSingleColorChannel: channelState.inSingleChannel
             };
+
+            cacheKey = key;
+            cacheValue = info;
+            cacheStamp = nowMs();
+            return info;
         } catch (error) {
             return null;
         }
     }
 
-    private static checkLayerHasPixels(layer: any): boolean {
-        if (layer.kind !== 'pixel') {
-            return false;
-        }
-        
-        return !!(layer.bounds && 
-                 layer.bounds.width > 0 && 
-                 layer.bounds.height > 0);
-    }
-
-    // 检测是否在编辑图层蒙版
+    /**
+     * 检测是否在编辑图层蒙版（保留旧签名，旧调用点无需改动）。
+     * ⚠️ 现在只做一次通道探测，不再像旧实现那样额外跑两遍 get。
+     */
     static async checkLayerMaskMode(): Promise<boolean> {
-        try {
-            // 多通道保护：如果当前选择了多个通道，直接返回 false，避免 batchPlay 获取报错
-            try {
-                const activeChannelsCount = (app.activeDocument as any)?.activeChannels?.length || 0;
-                if (activeChannelsCount > 1) {
-                    console.log(`🚫 检测到多通道选择 (${activeChannelsCount} 个通道)，跳过图层蒙版检测`);
-                    return false;
-                }
-            } catch (error) {
-                console.log('⚠️ 无法检测多通道状态，继续图层蒙版检测');
-            }
-
-            // 第一步：获取图层蒙版信息
-            const maskResult = await action.batchPlay([
-                {
-                    _obj: "get",
-                    _target: [
-                        {
-                            _ref: "channel",
-                            _enum: "channel",
-                            _value: "mask"
-                        }
-                    ],
-                    _options: {
-                        dialogOptions: "dontDisplay"
-                    }
-                }
-            ], { synchronousExecution: true });
-
-            // 第二步：获取当前激活的通道（使用 batchPlay）            
-            const targetChannelResult = await action.batchPlay([
-                {
-                    _obj: "get",
-                    _target: [
-                        {
-                            _ref: "channel",
-                            _enum: "ordinal",
-                            _value: "targetEnum"
-                        }
-                    ],
-                    _options: {
-                        dialogOptions: "dontDisplay"
-                    }
-                }
-            ], { synchronousExecution: true });
-
-            // 第三步：比对蒙版通道与当前目标通道
-            if (maskResult[0] && targetChannelResult[0]) {
-                const maskInfo = maskResult[0];
-                const targetChannelInfo = targetChannelResult[0];
-                
-                // 简化逻辑：比较channelName参数
-                const maskChannelName = maskInfo.channelName;
-                const targetChannelName = targetChannelInfo.channelName;
-                
-                if (maskChannelName && targetChannelName && maskChannelName === targetChannelName) {
-                    console.log("✅ 正在编辑图层蒙版");
-                    return true;
-                } else {
-                    return false;
-                }
-            }
-            
-            console.log("❌ 未找到蒙版信息或激活通道信息");
-            return false;
-        } catch (error) {
-            console.error("❌ 检测图层蒙版模式失败:", error);
-            return false;
-        }
+        const info = await this.getActiveLayerInfo();
+        return !!info?.isInLayerMask;
     }
 
-    // 检测是否选中了单个颜色通道（红、绿、蓝、Alpha）
+    /**
+     * 检测是否选中了单个颜色通道（红/绿/蓝/Alpha）。
+     * ⚠️ 现在复用 getActiveLayerInfo 的缓存 —— 旧实现里每次调用都重新跑一遍
+     * 「取mask 通道 + 取目标通道 + 取快速蒙版 + 再取一次蒙版」共约 7 次 IPC。
+     */
     static async checkSingleColorChannelMode(): Promise<boolean> {
-        try {
-            // 先检测是否多选了通道
-            try {
-                const activeChannelsCount = (app.activeDocument as any)?.activeChannels?.length || 0;
-                if (activeChannelsCount > 1) {
-                    console.log(`🚫 检测到多通道选择 (${activeChannelsCount} 个通道)，跳过单通道操作`);
-                    return false;
-                }
-            } catch (error) {
-                console.log('⚠️ 无法检测多通道状态，继续单通道检测');
-            }
-
-            // 获取当前激活的通道信息
-            const targetChannelResult = await action.batchPlay([
-                {
-                    _obj: "get",
-                    _target: [
-                        {
-                            _ref: "channel",
-                            _enum: "ordinal",
-                            _value: "targetEnum"
-                        }
-                    ],
-                    _options: {
-                        dialogOptions: "dontDisplay"
-                    }
-                }
-            ], { synchronousExecution: true });
-
-            if (targetChannelResult[0]) {
-                const targetChannelInfo = targetChannelResult[0];
-                const channelName = targetChannelInfo.channelName;
-                const itemIndex = targetChannelInfo.itemIndex;
-                
-                console.log("🔍 当前激活通道:", channelName);
-                console.log("🔍 当前激活通道的索引:", itemIndex);
-
-                // 获取快速蒙版状态
-                const document = app.activeDocument;
-                const isInQuickMask = document.quickMaskMode;
-                
-                // 获取图层蒙版状态
-                const activeLayer = document.activeLayers[0];
-                const isInLayerMask = activeLayer && !activeLayer.isBackgroundLayer ? await this.checkLayerMaskMode() : false;
-                
-                // 检测是否为RGB颜色通道（红、绿、蓝）
-                // 通常这些通道的名称为 "红"、"绿"、"蓝" 或 "Red"、"Grain"、"Blue"
-                const rgbChannels = ["红", "绿", "蓝", "Red", "Grain", "Blue", "R", "G", "B"];
-                const isRgbChannel = rgbChannels.includes(channelName);
-                
-                // Alpha通道为通道指数 >=4且不为快速蒙版、图层蒙版的通道（因为快速蒙版、图层蒙版也在蓝通道下方，通道索引大于3）
-                const isAlphaChannel = itemIndex >= 4 && !isInQuickMask && !isInLayerMask;
-                
-                // 对于单通道操作，支持RGB通道和Alpha通道
-                const isInSingleColorChannel = isRgbChannel || isAlphaChannel;
-                
-                console.log(`🎯 当前通道是RGB复合通道吗: ${isRgbChannel}, 是单通道吗: ${isInSingleColorChannel}`);
-
-
-                return isInSingleColorChannel;
-            }
-            
-            return false;
-        } catch (error) {
-            console.error("❌ 检测单个颜色通道模式失败:", error);
-            return false;
-        }
+        const info = await this.getActiveLayerInfo();
+        return !!info?.isInSingleColorChannel;
     }
 }

@@ -6,7 +6,7 @@ import { BLEND_MODE_OPTIONS } from './constants/blendModeOptions';
 import { AppState, initialState, Gradient, CompactModes, CompactScope, initialCompactModes } from './types/state';
 import { DragHandler } from './utils/DragHandler';
 import { FillHandler } from './utils/FillHandler';
-import { LayerInfoHandler } from './utils/LayerInfoHandler';
+import { LayerInfoHandler, invalidateLayerInfoCache, shouldInvalidateLayerInfo } from './utils/LayerInfoHandler';
 import { ClearHandler } from './utils/ClearHandler';
 import ColorSettingsPanel from './components/ColorSettingsPanel';
 import PatternPicker from './components/PatternPicker';
@@ -36,13 +36,25 @@ import {
 } from './hotkey/HotkeyBridge';
 import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/MainToggleBus';
 import { setFocusMode } from './utils/FocusModeBus';
-import { debouncePsProbe, isPsBusy, markPsBusyForEvent, psBusyRemain, runWhenIdle } from './utils/psProbe';
+import {
+  debouncePsProbe, isPsBusy, markPsBusyForEvent, psBusyRemain, runWhenIdle,
+  markPsBusy, fillReadyRemain
+} from './utils/psProbe';
 import ToggleSwitch from './components/ToggleSwitch';
 import RadioGroup, { RadioOption } from './components/RadioGroup';
 import { helpTexts } from './constants/helpTexts';
 
 const { executeAsModal } = core;
 const { batchPlay } = action;
+
+/**
+ * 填充失败后的降级重试冷却（毫秒）。
+ *
+ * 填充路径的正常冷却是 `fillReadyRemain()`（私有、约 60ms）；
+ * 万一仍撞上宿主忙碌期（极长命令 / 大文档 / 刚删完图层就套索），
+ * 用这个保守值再等一次再试。
+ */
+const FILL_RETRY_GUARD_MS = 400;
 
 /**
  * 「填充模式」三列 radio 的选项表：模块级常量（保持引用稳定，
@@ -124,6 +136,10 @@ class App extends React.Component<AppProps, AppState> {
     // 选区填充的忙碌顺延（见 handleSelectionChange 顶部的闸门说明）
     private selectionRetryTimer: any = null;
     private selectionBusyDeferrals = 0;
+    // 「撞上宿主忙碌期 → 长窗口重试」的闸门，防止缩短忙碌窗口后偶发丢填充。
+    // ⚠️ 上限 1 次：必须是**有界**重试，否则宿主持续忙碌时会变成无限重试循环
+    // （每次失败都再排一个 timer，永远停不下来）。
+    private selectionRetryCount = 0;
     // 面板状态持久化门闩：componentDidMount 里 PanelStateManager.initialize 异步读取完成之前，
     // MainToggleBus 轮询（250ms）等来源就可能 setState isEnabled 触发 componentDidUpdate 的
     // 「有变更即保存」逻辑——用默认值整体覆盖 panel-state.json，把用户已保存的
@@ -383,10 +399,10 @@ class App extends React.Component<AppProps, AppState> {
             markPsBusyForEvent(eventName, descriptor);
             // 检查是否是选区相关的set事件
             if (descriptor && descriptor._target && Array.isArray(descriptor._target)) {
-                const isSelectionEvent = descriptor._target.some(target => 
+                const isSelectionEvent = descriptor._target.some(target =>
                     target._ref === 'channel' && target._property === 'selection'
                 );
-                
+
                 if (isSelectionEvent) {
                     this.handleSelectionChange(descriptor);
                 } else {
@@ -604,6 +620,8 @@ class App extends React.Component<AppProps, AppState> {
             clearTimeout(this.selectionRetryTimer);
             this.selectionRetryTimer = null;
         }
+        this.selectionRetryCount = 0;
+        invalidateLayerInfoCache();
         action.removeNotificationListener(['set', 'select', 'clearEvent', 'delete', 'make'], this.handleNotification);
         document.removeEventListener('mousemove', this.handleMouseMove);
         document.removeEventListener('mouseup', this.handleMouseUp);
@@ -919,10 +937,20 @@ class App extends React.Component<AppProps, AppState> {
         // ⚠️ 忙碌闸门（2026-10-07 修「切换活动文档时弹命令"获取"当前不可用」）：
         // 本函数由 PS 通知回调直接调用，而回调是在命令执行【中途】派发的 ——
         // 切文档时 PS 要重建文档窗口/图层面板，忙碌窗口可达 1s 以上（见 psProbe 的
-        // BUSY_AFTER_DOC_SWITCH_MS）。此处第一个动作就是读 app.activeDocument，
-        // 此刻发 get 必被宿主拒绝并弹出原生报错框（该框绕过 try/catch 与 dialogOptions）。
-        // ⇒ 忙碌时**顺延**到空闲后重入，而不是硬闯；顺延有上限，避免极端情况下永不执行。
-        if (isPsBusy() && this.selectionBusyDeferrals < 10) {
+        // BUSY_AFTER_DOC_SWITCH_MS）。此刻发 get 必被宿主拒绝并弹出原生报错框
+        // （该框绕过 try/catch 与 dialogOptions）⇒ 必须等空闲后再动手。
+        //
+        // ⚠️⚠️ 这里用 `fillReadyRemain()`（填充**私有**冷却），**不是** `isPsBusy()`：
+        // `isPsBusy()` 是全局共享闸门，被 pollQuickMask / pollToolChange /
+        // MaskSyncEngine / debouncePsProbe / runWhenIdle 等 9 处依赖。
+        // 2026-10-08 曾把选区事件的全局窗口压到 60ms想给填充提速，
+        // 结果那 9 处轮询在 PS 仍忙时提前放闸 ⇒ 宿主弹「命令"获取"当前不可用」，
+        // 表现为：快速删图层必报错 / 删完立刻套索必报错 / 切文档首次报错 /
+        // 快速蒙版下三种填充全报错。**缩短全局窗口不是提速的正确手段。**
+        //现在：全局窗口恒为 300/1200ms（不动），只有填充走自己的私有冷却，
+        // 且「最近 600ms 有过重命令」时会自动退回保守等待。
+        const fillWait = fillReadyRemain();
+        if (fillWait > 0 && this.selectionBusyDeferrals < 10) {
             this.selectionBusyDeferrals++;
             if (this.selectionRetryTimer) clearTimeout(this.selectionRetryTimer);
             // ⚠️ 事件对象要一并带过去：否则 feather 事件的「跳过」语义会丢失，
@@ -930,7 +958,7 @@ class App extends React.Component<AppProps, AppState> {
             this.selectionRetryTimer = setTimeout(() => {
                 this.selectionRetryTimer = null;
                 void this.handleSelectionChange(event);
-            }, Math.max(120, psBusyRemain()));
+            }, fillWait);
             return;
         }
         this.selectionBusyDeferrals = 0;
@@ -949,20 +977,15 @@ class App extends React.Component<AppProps, AppState> {
                 return;
             }
 
-            // 检测快速蒙版状态（廉价读取，不阻塞）
-            const isInQuickMask = doc.quickMaskMode;
-            if (this.state.isInQuickMask !== isInQuickMask) {
-                this.setState({ isInQuickMask });
-            }
-
             // 上锁（在任何 await 之前同步置位，让后续事件被 pendingSelection 捕获）
             this.isFilling = true;
 
-            const selection = await this.getSelection();
-            if (!selection) {
-                // 选区为空，跳过填充
-                return;
-            }
+            // ⚠️ 优化（2026-10-08）：此处**不再**做「外层 getSelection + 外层 quickMaskMode 读」。
+            // 原因：两者与模态内的重复查询拿到的是同一份数据，纯属多花 2 次同步 IPC
+            //（低端机 10~30ms）。现在统一只在 executeAsModal 内读一次：
+            //   · 选区是否存在 → 由模态内的校验负责（它更靠近真正的 fill，语义更准）；
+            //   · 快速蒙版状态 → 由 layerInfo.isInQuickMask 带回（本次填充本来就要取layerInfo）。
+            // 外层只剩一次 app.activeDocument（模态作用域与 suspendHistory 都要用）。
 
             const featherAmount = Number(this.state.feather);
             const needsFeather = featherAmount > 0;
@@ -977,12 +1000,13 @@ class App extends React.Component<AppProps, AppState> {
             const needsHistory = this.state.autoUpdateHistory;
 
             await core.executeAsModal(async () => {
-                // 【关键防御】重新校验选区——前一次填充若开了 deselectAfterFill，
-                // 这里的 selection 可能已经在排队期间被清空；空选区下 fill 整个图层
+                // 【关键防御】校验选区非空 —— 前一次填充若开了 deselectAfterFill，
+                // 选区可能已在排队期间被清空；空选区下 fill 整个图层
                 // 表现为"填充整个文档"。直接放弃本轮，避免误伤整张画布。
-                const innerSelection = await this.getSelection();
-                if (!innerSelection) {
-                    console.warn('⚠️ 选区已为空，跳过本次填充（避免填充整个图层）');
+                // ⚠️ 这一句是**唯一**的选区校验（原实现内外各查一次，重复）。
+                // 它必须在 executeAsModal 作用域内：模态态由本插件持有，宿主不会拒 get。
+                const selection = await this.getSelection();
+                if (!selection) {
                     return;
                 }
 
@@ -1005,19 +1029,60 @@ class App extends React.Component<AppProps, AppState> {
                         await this.applyFeather(featherAmount);
                     }
                     const layerInfo = await LayerInfoHandler.getActiveLayerInfo();
-                    const fillSuccess = await this.fillSelection(layerInfo);
+                    if (!layerInfo) return;
+
+                    // 快速蒙版状态随layerInfo 一起带回，替代原先外层的独立读取
+                    if (this.state.isInQuickMask !== layerInfo.isInQuickMask) {
+                        this.setState({ isInQuickMask: layerInfo.isInQuickMask });
+                    }
+
+                    // ⚠️ 「取消选区」并入 fill 的同一次 batchPlay（省一次同步 IPC）。
+                    // ⚠️ 三个前置条件缺一不可，否则 deselect 会被**静默丢掉**：
+                    //   ① fillMode 必须是「纯色」—— 图案/渐变走各自的 Handler，
+                    //      不接受 withDeselect，也不会顺手取消选区；
+                    //   ② 不能是清除模式（ClearHandler 独立实现）；
+                    //   ③ 不能是单通道模式（SingleChannelHandler 独立实现）。
+                    //   ④ 不能描边：描边依赖选区存在，必须排在 deselect 之前。
+                    const mergeDeselect = needsDeselect
+                        && !needsStroke
+                        && this.state.fillMode === 'foreground'
+                        && !this.state.clearMode
+                        && !layerInfo.isInSingleColorChannel;
+
+                    const fillSuccess = await this.fillSelection(layerInfo, mergeDeselect);
                     if (needsStroke && fillSuccess) {
                         await strokeSelection(this.state, layerInfo);
-                    }
-                    if (needsDeselect) {
+                        if (needsDeselect) {
+                            await this.deselectSelection();
+                        }
+                    } else if (needsDeselect && !mergeDeselect) {
+                        // 未被合并（含填充失败）⇒ 照常单独取消选区，保持旧语义
                         await this.deselectSelection();
                     }
                 }, modeLabel);
             }, { commandName: '正在处理选区中......' });
         } catch (error) {
+            // ⚠️ 降级重试：填充私有冷却（60ms）可能仍撞上宿主忙碌期
+            // （极长命令 / 大文档 / 刚删完图层就套索）。此时打一段保守窗口再试一次。
+            // ⚠️ 只重试一次（selectionRetryCount 上限）：宿主若持续忙碌，
+            //    无界重试会变成永不停止的循环。
+            if (this.selectionRetryCount < 1) {
+                this.selectionRetryCount++;
+                markPsBusy(FILL_RETRY_GUARD_MS);
+                if (this.selectionRetryTimer) clearTimeout(this.selectionRetryTimer);
+                this.selectionRetryTimer = setTimeout(() => {
+                    this.selectionRetryTimer = null;
+                    void this.handleSelectionChange(event);
+                }, FILL_RETRY_GUARD_MS);
+                return;
+            }
             console.error('❌ 处理失败:', error);
         } finally {
             this.isFilling = false;
+            // 本轮（含降级重试）正常走完 ⇒ 允许下次失败时再次降级重试
+            if (!this.selectionRetryTimer) {
+                this.selectionRetryCount = 0;
+            }
             // 若填充期间又有新的选区事件进来，再处理一次，
             // 这样套索连点也不会丢选区
             if (this.pendingSelection) {
@@ -1060,18 +1125,10 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     async setHistoryBrushSource() {
-        const doc = app.activeDocument;
-        if (!doc) {
-            console.warn('⚠️ 没有打开的文档，跳过更新历史记录画笔源');
-            return;
-        }
-
-        const historyStates = doc.historyStates;
-        if (historyStates.length === 0) {
-            console.warn('⚠️ 历史记录堆栈为空，跳过更新历史记录画笔源');
-            return;
-        }
-
+        // ⚠️ 优化（2026-10-08）：原实现先读 `doc.historyStates` 判空，代价是一次
+        // 同步 get，且返回的是**整条历史记录数组**（大文档上可能有上百条，
+        // 序列化开销明显）。历史栈为空时 set 会直接抛错，已被下面的 catch 覆盖，
+        // 因此判空步骤纯属多余 IPC —— 删掉。行为等价（空栈 → 抛错 → catch 忽略）。
         try {
             await action.batchPlay(
                 [
@@ -1095,8 +1152,8 @@ class App extends React.Component<AppProps, AppState> {
                 {}
             );
         } catch (error) {
-            console.error(error);
-        }  
+            // 历史栈为空（新建文档尚未落笔）时 PS 会拒绝该命令，属预期情况，静默忽略
+        }
     }
 
     async applyFeather(featherAmount: number) {
@@ -1122,7 +1179,7 @@ class App extends React.Component<AppProps, AppState> {
         }));
     }
 
-    async fillSelection(layerInfo?: LayerInfo | null) {
+    async fillSelection(layerInfo?: LayerInfo | null, withDeselect = false) {
         // 统一处理：若当前目标图层被隐藏，在操作前临时显示，操作后恢复隐藏
         // 注意：当选择"新建图层"时，目标会变为新图层（可见），无需临时显示原图层
         let needToggleVisibility = false;
@@ -1140,24 +1197,35 @@ class App extends React.Component<AppProps, AppState> {
             // 授权门控：未授权且非试用，打开授权窗口并阻止功能
             if (!this.state.isLicensed && !this.state.isTrial) {
                 this.setState({ isLicenseDialogOpen: true });
+                // ⚠️ 提前返回前必须兑现「已合并的取消选区」，否则调用方会以为
+                // deselect 已经下发而不再单独补一次 ⇒ 选区被留在画布上（行为回归）。
+                if (withDeselect) await this.deselectSelection();
+                return false;
+            }
+
+            // 先确保拿到 layerInfo：可见性、单通道状态都从这里取，避免重复查询
+            if (!layerInfo) {
+                layerInfo = await LayerInfoHandler.getActiveLayerInfo();
+            }
+            if (!layerInfo) {
+                if (withDeselect) await this.deselectSelection();
                 return false;
             }
 
             // 记录原始活动图层的可见性（当不新建图层时需要临时显示隐藏图层以避免合并/删除警告）
-            try {
-                const activeDoc = app.activeDocument;
-                const originalLayer = activeDoc.activeLayers && activeDoc.activeLayers.length > 0 ? activeDoc.activeLayers[0] : null;
-                const originalWasHidden = originalLayer ? (originalLayer.visible === false) : false;
-                needToggleVisibility = !!(originalWasHidden && !this.state.createNewLayer);
-                if (needToggleVisibility) {
+            // ⚠️ 优化（2026-10-08）：可见性已随 layerInfo 带回（旧实现在这里额外
+            // 读 activeLayers[0].visible，白花 2 次同步 IPC）。
+            needToggleVisibility = !!(layerInfo.isHidden && !this.state.createNewLayer);
+            if (needToggleVisibility) {
+                try {
                     await action.batchPlay([showTargetLayer], {});
+                } catch (e) {
+                    console.warn('切换图层可见性失败，继续执行填充流程:', e);
                 }
-            } catch (e) {
-                console.warn('读取/切换图层可见性失败，继续执行填充流程:', e);
             }
 
-            // 检查是否在单通道模式
-            const isInSingleChannel = await LayerInfoHandler.checkSingleColorChannelMode();
+            // 单通道模式判定同样直接用 layerInfo（字段含义与旧 checkSingleColorChannelMode 一致）
+            const isInSingleChannel = !!layerInfo.isInSingleColorChannel;
             if (isInSingleChannel) {
 
                 const fillOptions = {
@@ -1175,12 +1243,6 @@ class App extends React.Component<AppProps, AppState> {
                     return ok === undefined ? true : !!ok;
                 }
             }
-
-            // 复用调用方已查询的 layerInfo，避免在一次填充中重复 3 次 batchPlay
-            if (!layerInfo) {
-                layerInfo = await LayerInfoHandler.getActiveLayerInfo();
-            }
-            if (!layerInfo) return false;
 
             if (this.state.clearMode) {
                 await ClearHandler.clearWithOpacity(this.state.opacity, this.state, layerInfo);
@@ -1203,6 +1265,9 @@ class App extends React.Component<AppProps, AppState> {
                     }],
                     { synchronousExecution: true }
                 );
+                // 新建图层后活动图层已改变 ⇒ 必须让layerInfo 缓存失效，
+                // 否则下一次填充会拿到「新建之前那个图层」的信息。
+                invalidateLayerInfoCache();
             }
 
             const { isBackground, hasTransparencyLocked, hasPixels } = layerInfo;
@@ -1297,20 +1362,21 @@ class App extends React.Component<AppProps, AppState> {
                 const command = FillHandler.createColorFillCommand(fillOptions);
     
                 if (isBackground) {
-                    await FillHandler.fillBackground(fillOptions);
-                } 
+                    await FillHandler.fillBackground(fillOptions, withDeselect);
+                }
                 else if (hasTransparencyLocked && hasPixels) {
-                    await FillHandler.fillLockedWithPixels(fillOptions);
-                } 
+                    await FillHandler.fillLockedWithPixels(fillOptions, withDeselect);
+                }
                 else if (hasTransparencyLocked && !hasPixels) {
                     await FillHandler.fillLockedWithoutPixels(
                         fillOptions,
                         () => this.unlockLayerTransparency(),
-                        () => this.lockLayerTransparency()
+                        () => this.lockLayerTransparency(),
+                        withDeselect
                     );
-                } 
+                }
                 else if (!hasTransparencyLocked && !isBackground) {
-                    await FillHandler.fillUnlocked(fillOptions);
+                    await FillHandler.fillUnlocked(fillOptions, withDeselect);
                 }
                 return true;
             }
@@ -1715,6 +1781,12 @@ class App extends React.Component<AppProps, AppState> {
         // ⚠️ 事件到达瞬间打忙碌标记（切文档用更长的窗口，见 psProbe）。
         // 必须在这里打、且不能打到探测函数体内，否则窗口自我延长成自锁。
         markPsBusyForEvent(eventName, descriptor);
+        // 图层结构/ 通道选择可能变了 ⇒ 让 layerInfo 缓存失效（纯内存，零 IPC）。
+        // ⚠️ 纯选区 set事件**不**失效（见 shouldInvalidateLayerInfo 的注释）：
+        // 那会让每次套索都丢掉缓存命中率，正好抵消这次优化的收益。
+        if (shouldInvalidateLayerInfo(eventName, descriptor)) {
+            invalidateLayerInfoCache();
+        }
         // 状态探测走防抖（不能立刻 get：PS 命令执行中途派发的事件会撞忙碌窗口）
         this.maskProbeDebounced();
 

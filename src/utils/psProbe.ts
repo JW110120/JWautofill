@@ -4,6 +4,28 @@
 export const BUSY_AFTER_EVENT_MS = 300;
 
 /**
+ * 「选区变更」事件的**填充专用**冷却时长（毫秒）—— 只给填充路径用。
+ *
+ * ⚠️⚠️ **不要拿它去调 markPsBusyForEvent 的全局窗口**（2026-10-08 血泪）：
+ * `isPsBusy()` 是**全局共享闸门**，被 9 处消费方依赖 ——
+ * `pollQuickMask`(300ms 轮询) / `pollToolChange`(300ms 轮询) / MaskSyncEngine 的
+ * 轮询与两处同步入口 / AdjustmentPanel 的探测 / `debouncePsProbe` / `runWhenIdle`。
+ * 一旦把选区事件的全局窗口从 300ms 缩短，这些**轮询与探测**就会在PS 仍处于
+ * 忙碌期时提前放闸 ⇒ 集体发出 `get` ⇒ 宿主弹「命令"获取"当前不可用」。
+ * 症状：①快速删图层必报错 ②删完立刻套索必报错 ③切文档首次报错
+ * ④**快速蒙版下三种填充全报错**（快速蒙版会持续派发选区 set ⇒ 闸门反复被压到 60ms）。
+ * ⇒ 正确做法：**全局窗口一律保持 300/1200ms 不动**，只给填充路径一份**私有冷却**，
+ * 见 `fillReadyRemain()`。
+ */
+export const BUSY_AFTER_SELECTION_EVENT_MS = 60;
+
+/**
+ * 选区填充失败后的降级重试窗口（毫秒）。
+ * 首次尝试走短窗口（抢时间），失败才用这个长窗口顺延重试（保正确）。
+ */
+export const BUSY_AFTER_SELECTION_RETRY_MS = 400;
+
+/**
  * 切换活动文档之后的忙碌窗口时长（毫秒）。
  *
  * 为什么必须比普通事件长：切文档不是一次瞬时命令 —— PS 要重建文档窗口、
@@ -38,13 +60,95 @@ export function isDocSwitchDescriptor(eventName?: string, descriptor?: any): boo
 }
 
 /**
- * 通知到达瞬间打忙碌标记（**唯一允许在通知回调内做的重活之外的动作**）。
+ * 判断一个通知是否是「选区变更」。
+ *
+ * PS 在套索/魔棒/选区修改/取消选区后派发 `set`，descriptor 形如
+ * `{ _obj:'set', _target:[{ _ref:'channel', _property:'selection', … }] }`。
+ * 这类事件**在孤立发生时**用短忙碌窗口（见 BUSY_AFTER_SELECTION_EVENT_MS 的说明）。
+ */
+export function isSelectionDescriptor(descriptor?: any): boolean {
+    const target = descriptor?._target;
+    if (!Array.isArray(target)) return false;
+    return target.some(
+        (t: any) => t && t._ref === 'channel' && t._property === 'selection'
+    );
+}
+
+/**
+ * 「刚刚发生过非选区事件」的时间戳（0 = 从未）。
+ *
+ * 用途：**只**给填充路径的私有冷却做「邻居判断」——
+ * 若最近发生过 make/delete/select 等事件，说明 PS 可能还在处理重命令，
+ * 此时填充宁可多等一会儿，也不要在忙碌期发 get。
+ *
+ * ⚠️ 这个变量**不参与**全局 `markPsBusy` 的窗口计算（全局窗口一律 300/1200ms），
+ * 缩短全局窗口会让 9 处轮询/探测提前放闸并弹宿主原生报错框（见上方血泪说明）。
+ */
+const LONG_EVENT_NEIGHBOR_MS = 600;
+// ⚠️ 用 -1 而不是 0 表示「从未发生」：0 是falsy，会让下面的 `if (lastLongEventAt && …)`
+// 短路 ⇒ 在时间戳恰为 0 的场景（测试台/时钟回拨）下保护失效。
+let lastLongEventAt = -1;      // 最近一次「非选区事件」时刻
+let lastSelectionEventAt = -1; // 最近一次「选区事件」时刻
+
+/** 仅供测试/诊断：重置事件记忆。 */
+export function resetLongEventMemory(): void {
+    lastLongEventAt = -1;
+    lastSelectionEventAt = -1;
+}
+
+/**
+ * 通知到达瞬间打**全局**忙碌标记（**唯一允许在通知回调内做的重活之外的动作**）。
  *
  * ⚠️ 必须在事件到达时调用，不能放到探测函数体内 —— 否则忙碌窗口会被探测自身
  * 反复延长，形成「永远等不到空闲」的自锁。
+ *
+ * ⚠️⚠️ **全局窗口只有两档，且不得为「填充更快」而缩短**（2026-10-08 血泪）：
+ *本函数产出的是**全局共享**闸门（`isPsBusy()`），被 9 处轮询/探测依赖。
+ * 一旦按事件类型缩短选区窗口，那些轮询会在PS 忙碌期提前发 get ⇒ 宿主原生报错框。
+ *   · 切文档（select + document）→ BUSY_AFTER_DOC_SWITCH_MS：PS 要重建文档窗口 /
+ *     图层面板 / 历史状态，1s+。
+ *   · **其它一切（含选区 set）→ BUSY_AFTER_EVENT_MS：保守，不动。**
+ *
+ * 填充路径要的「快」不走这里，而走 `fillReadyRemain()`（私有冷却）。
  */
 export function markPsBusyForEvent(eventName?: string, descriptor?: any): void {
-    markPsBusy(isDocSwitchDescriptor(eventName, descriptor) ? BUSY_AFTER_DOC_SWITCH_MS : BUSY_AFTER_EVENT_MS);
+    if (isDocSwitchDescriptor(eventName, descriptor)) {
+        // ⚠️ 切文档必须**同时**记成「重命令邻居」：否则「切文档 → 立刻套索」时，
+        // 选区事件会走「纯选区」分支只等60ms，而此时文档切换仍在进行（窗口 1200ms）
+        // ⇒ 在切换中途发 get ⇒ 宿主原生报错框。用户实测「切文档后必报错」即此。
+        lastLongEventAt = Date.now();
+        markPsBusy(BUSY_AFTER_DOC_SWITCH_MS);
+        return;
+    }
+    if (isSelectionDescriptor(descriptor)) {
+        lastSelectionEventAt = Date.now();
+    } else {
+        // 记录「重命令邻居」供填充路径的私有冷却判断（纯内存，不影响全局窗口）
+        lastLongEventAt = Date.now();
+    }
+    // ⚠️ 全局窗口一律保守：选区事件也用 300ms，绝不为了填充更快而缩短（见上方血泪）
+    markPsBusy(BUSY_AFTER_EVENT_MS);
+}
+
+/**
+ * 填充路径的**私有**冷却剩余毫秒数（0 = 现在就可以进填充）。
+ *
+ * 这是「填充要快」与「全局闸门必须保守」两个矛盾的解法：
+ *   · **全局** `isPsBusy()` 保持 300/1200ms 不动 ⇒ 9 处轮询/探测不再提前放闸，
+ *     「快速删图层 / 删完立刻套索 / 切文档 / 快速蒙版」四类弹框回归修复；
+ *   · **填充路径**单独看自己的冷却 ⇒ 套索这类轻量命令不必等满 300ms。
+ *
+ * 判定（返回「还要等多少 ms」）：
+ *   · 最近 600ms 内发生过任何**非选区**事件（make/delete/**切文档**…）
+ *     ⇒ PS 可能还在处理重命令 ⇒ 服从**全局**剩余时间（保守，可高达 1200ms）；
+ *   · 否则（纯选区变更）⇒ 只等私有的 60ms 冷却。
+ */
+export function fillReadyRemain(): number {
+    const now = Date.now();
+    if (lastLongEventAt >= 0 && now - lastLongEventAt < LONG_EVENT_NEIGHBOR_MS) {
+        return psBusyRemain();
+    }
+    return Math.max(0, lastSelectionEventAt + BUSY_AFTER_SELECTION_EVENT_MS - now);
 }
 
 /**

@@ -1,6 +1,7 @@
 import { app, action, core, imaging } from 'photoshop';
 import { isPsBusy, markPsBusy, markPsBusyForEvent, runWhenIdle } from './psProbe';
 import { getLayerSnapshot, invalidateLayerSnapshot, LayerSnapshotEntry } from './layerTreeSnapshot';
+import { invalidateLayerInfoCache, shouldInvalidateLayerInfo } from './LayerInfoHandler';
 
 /**
  * 蒙版同步引擎（MaskSyncEngine）
@@ -1172,6 +1173,11 @@ export class MaskSyncEngine {
       // ⚠️ 切文档也必须打脏：快照缓存的是「上一份文档」的树，
       //    切换后若不重遍历，线稿参考/蒙版同步的下拉会一直显示上一个文档的图层。
       invalidateLayerSnapshot();
+      // 蒙版同步会写图层蒙版 / 改图层内容 ⇒ 活动图层信息可能已变，
+      // 让 layerInfo 的短 TTL 缓存失效（纯内存、零 IPC）。
+      if (shouldInvalidateLayerInfo(evt, descriptor)) {
+        invalidateLayerInfoCache();
+      }
       // make/delete 会改变图层结构，需要重建文件树上下文（重解析引用）
       if (evt === 'make' || evt === 'delete') {
         this.scheduleSync(SYNC_DEBOUNCE_MS, true);

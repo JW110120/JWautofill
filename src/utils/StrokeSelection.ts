@@ -11,6 +11,20 @@ function rgbToGray(red: number, green: number, blue: number): number {
 const { executeAsModal } = core;
 const { batchPlay } = action;
 
+/**
+ * ⚠️ 本文件所有 batchPlay 的 options **必须**带 `dialogOptions: 'dontDisplayDialogs'`
+ * （2026-10-08 用户实测修「清除模式下自动弹出 PS 原生描边对话框」）。
+ *
+ * 根因：原先只在**描述符内部**写了 `_options: { dialogOptions: "dontDisplay" }`，
+ * 而 batchPlay 的**第二参数**（options）没有声明。PS 的 `stroke` 命令在
+ * 「混合模式 = 清除(clearEnum)」这类参数下会**忽略描述符内的 _options**，
+ * 转而弹出原生「描边」对话框（就是用户截图那个带确定/取消的窗口）。
+ *描述符内保留 `_options.dialogOptions` 无害，两层都写最稳。
+ *
+ * ⚠️ 顺带：本文件有 16 处 batchPlay，统一带上options 层的 dialogOptions
+ * 可杜绝同类问题（任何一条命令弹原生框都会打断交互）。
+ */
+
 interface LayerInfo {
     hasPixels: boolean;
     isInQuickMask: boolean;
@@ -82,7 +96,7 @@ async function strokeSelectionNormal(strokeParams: any) {
                     dialogOptions: "dontDisplay"
                 }
             }],
-            { synchronousExecution: true }
+            { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }
         );
         console.log("✅ 新建图层成功");
 
@@ -130,7 +144,7 @@ async function strokeSelectionNormal(strokeParams: any) {
                     dialogOptions: "dontDisplay"
                 }
             }],
-            { synchronousExecution: true }
+            { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }
         );
 
         // 4. 根据用户描边面板的不透明度和混合模式修改描边图层不透明度和混合模式
@@ -159,7 +173,7 @@ async function strokeSelectionNormal(strokeParams: any) {
                     dialogOptions: "dontDisplay"
                 }
             }],
-            { synchronousExecution: true }
+            { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }
         );
         
         // 5. 向下合并图层
@@ -170,7 +184,7 @@ async function strokeSelectionNormal(strokeParams: any) {
                     dialogOptions: "dontDisplay"
                 }
             }],
-            { synchronousExecution: true }
+            { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }
         );
 
         // 6. 恢复前景色
@@ -193,7 +207,7 @@ async function strokeSelectionNormal(strokeParams: any) {
                         dialogOptions: "dontDisplay"
                     }
                 }],
-                { synchronousExecution: true }
+                { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }
             );
         }
 
@@ -273,7 +287,7 @@ async function strokeSelectionWithClearMode(strokeParams: any) {
                     dialogOptions: "dontDisplay"
                 }
             }],
-            { synchronousExecution: true }
+            { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }
         );
         console.log('✅ 清除模式描边完成');
 
@@ -297,7 +311,7 @@ async function strokeSelectionWithClearMode(strokeParams: any) {
                         dialogOptions: "dontDisplay"
                     }
                 }],
-                { synchronousExecution: true }
+                { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }
             );
             console.log('✅ 已恢复前景色');
         }
@@ -352,7 +366,7 @@ async function strokeSelectionDirect(strokeParams: any) {
             }
         };
 
-        await batchPlay([strokeDirect], { synchronousExecution: true });
+        await batchPlay([strokeDirect], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
 
         // 恢复前景色
         if (savedForegroundColor) {
@@ -374,7 +388,7 @@ async function strokeSelectionDirect(strokeParams: any) {
                         dialogOptions: "dontDisplay"
                     }
                 }],
-                { synchronousExecution: true }
+                { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }
             );
         }
 
@@ -400,7 +414,7 @@ async function strokeSelectionWithColorCalculation(strokeParams: any, state: any
                     }
                 ]
             }
-        ], { synchronousExecution: true });
+        ], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
 
         let isSelectedAreas = false;
         if (channelResult[0] && 
@@ -455,7 +469,7 @@ async function strokeSelectionWithColorCalculation(strokeParams: any, state: any
                     dialogOptions: "dontDisplay"
                 }
             }],
-            { synchronousExecution: true }
+            { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }
         );
         console.log('✅ 描边执行完成');
 
@@ -479,7 +493,7 @@ async function strokeSelectionWithColorCalculation(strokeParams: any, state: any
                         dialogOptions: "dontDisplay"
                     }
                 }],
-                { synchronousExecution: true }
+                { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }
             );
             console.log('✅ 已恢复前景色');
         }
@@ -540,7 +554,7 @@ async function strokeSelectionInLayerMask(strokeParams: any) {
                     dialogOptions: "dontDisplay"
                 }
             }],
-            { synchronousExecution: true }
+            { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }
         );
         console.log('✅ 图层蒙版描边执行完成');
 
@@ -564,7 +578,7 @@ async function strokeSelectionInLayerMask(strokeParams: any) {
                         dialogOptions: "dontDisplay"
                     }
                 }],
-                { synchronousExecution: true }
+                { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }
             );
             console.log('✅ 已恢复前景色');
         }
@@ -626,7 +640,7 @@ async function strokeSelectionInLayerMaskWithClearMode(strokeParams: any) {
                     dialogOptions: "dontDisplay"
                 }
             }],
-            { synchronousExecution: true }
+            { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }
         );
         console.log('✅ 图层蒙版清除模式描边执行完成');
 
@@ -650,7 +664,7 @@ async function strokeSelectionInLayerMaskWithClearMode(strokeParams: any) {
                         dialogOptions: "dontDisplay"
                     }
                 }],
-                { synchronousExecution: true }
+                { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }
             );
             console.log('✅ 已恢复前景色');
         }
