@@ -77,12 +77,23 @@
   触发入口 = `pollDocIdentity`（闩锁期间唯一允许继续跑的通路）。`DOC_LATCH_MAX_MS`(30s) 兜底 + 5s 冷却防活锁。
 - ⛔⛔ **`psRead` 遇宿主模态冲突（`error.number === 9` 或消息含 `modal`）⇒ 延长闩锁 + 返回失败，
   绝不降级裸读**（旧 `already in a modal` 直读兜底**已删除**——宿主忙碌期的裸 get 正是弹框来源）。
-- ⛔⛔ **同步裸读必须在入口判 `isPsBusy()`**（闩锁期间它们就靠这一句被挡住）：
-  `getLayerSnapshot()` 返回缓存不遍历、`MaskSyncEngine.refreshActiveDoc()` 返回 false、
-  `buildLayerTree` 无快照时返回 `[]`、`AdjustmentPanel` 的刷新回调保持现状（**别清空下拉**）。
+- ⛔⛔⛔ **禁采信 `core.isModal()`**（2026-10-09 真机探针已定性：本插件未持模态时它照样返回 true，
+  会算上**宿主**的模态态）⇒ 唯一判据是 `psAccess.getOwnModalDepth() > 0`。
+  **任何进入模态的代码都必须走 `psAccess.runAsModal()`**（它维护那个计数）；漏一处 ⇒ 该写路径
+  内部的 `psRead`/`getLayerSnapshot`/`getActiveLayerInfo` 会看到 depth=0 ⇒ 去嵌套 executeAsModal
+  ⇒ UXP 拒绝嵌套 ⇒ **读取静默失败**（症状「点了没反应」，不是弹框，更难查）。
+  自检：`grep -rn "core.executeAsModal" src/` 只应剩注释。
+- ⛔⛔ **同步接口永不遍历**：`getLayerSnapshot()` 已无 traverse 路径（只读缓存）。
+  「同步裸读 + 5N 次 get」是**乘法放大器**（16 层 = 80 次 get），判据再准也不该留着（旧「入口判
+  `isPsBusy()` / 租约」写法已被证明存在放行出口）；要新数据一律走 `refreshLayerSnapshot()`。
+  `MaskSyncEngine.buildLayerTree` 无快照时 `return []`（别清空下拉）。
+- ⛔⛔ **事件窗口三档**（都不得为填充提速而缩短）：文档级 open/close/save/切文档 = 长窗口 + 闩锁 +
+  世代号++；**结构类**（delete/make/move/rename/**合并/拼合/栅格化**） = `QUIET_AFTER_STRUCTURAL_EVENT_MS`(600ms)
+  **且作废宿主租约**（`noteHostUnresponsive`）；纯选区（set+channel/selection） = 300ms 且**不**动作租约。
+  图层数减少的所有操作（Delete / Ctrl+E / Ctrl+Shift+E / 拼合 / 盖印 / 栅格化）在事件层都表现为
+  `delete`+`make`（命令**中途**派发），统一按结构类处理即可。
 - ⛔⛔ **禁止把多条「可能失败」的 get 合并进同一 batchPlay**（一条失败连带整批；宿主原生弹框绕过 JS try/catch）。
-- ⛔ **「顺延上限用尽即硬闯」禁止**（三旧出口已铲，台架 B1 盯着）；读取方**不得** `markPsBusy` 自我预留（自锁来源）；
-  `executeAsModal` **不可嵌套** ⇒ `psRead` 先判 `core.isModal()`（文档语义 = **本插件**是否在模态态，含 `readonlyDepth` 兜底）。
+- ⛔ **「顺延上限用尽即硬闯」禁止**（三旧出口已铲，台架 B1 盯着）；读取方**不得** `markPsBusy` 自我预留（自锁来源）。
 - ⛔ 宿主原生「命令"获取"当前不可用」绕过 try/catch 与 dialogOptions ⇒ 防护两层：① **通知回调内零 IPC**
   （只允许 `invalidate*`）；② **模态作用域内读取**。⛔ **`open` / `close` / `save` 必须监听**（曾无人注册 ⇒ 开关/保存文档全程无闸门）；
   注册一律走 `addPsNotificationListeners`（逐名容错）。⛔ 文档级变化两入口：事件通路 + `pollDocIdentity` 兜底巡检。

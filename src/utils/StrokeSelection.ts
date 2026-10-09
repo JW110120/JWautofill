@@ -1,4 +1,5 @@
-import { app, action, core, imaging } from 'photoshop';
+import { app, action, imaging } from 'photoshop';
+import { runAsModal } from './psAccess';
 import { BLEND_MODES } from '../constants/blendModes';
 import { AppState } from '../types/state';
 import {
@@ -15,7 +16,8 @@ function rgbToGray(red: number, green: number, blue: number): number {
     return Math.round(0.299 * red + 0.587 * green + 0.114 * blue);
 }
 
-const { executeAsModal } = core;
+// runAsModal ≡ core.executeAsModal，但会维护「本插件自己的模态计数」（见 psAccess）。
+const executeAsModal = runAsModal;
 const { batchPlay } = action;
 
 /**

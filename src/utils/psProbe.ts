@@ -28,6 +28,31 @@
 export const QUIET_AFTER_EVENT_MS = 300;
 
 /**
+ * 「结构类命令」（删图层 / 合并 / 拼合 / 栅格化 / 新建 / 移动 / 改名 / 盖印…）
+ * 之后的**静默阈值**（毫秒）—— 比普通事件长，比文档级事件短。
+ *
+ * ⚠️ 为什么必须与「选区事件」分开（2026-10-09 补）：
+ * 这些命令的**共同后果是图层数/结构变化**，而 README 里那套「读图层树」的消费方
+ * （图层下拉、蒙版同步、线稿参考层解析）正是**逐层 5 次 get** 的重消费者 ——
+ * 一次误判不是弹一个框，是弹一屏框。尤其：
+ *   · `Delete Layer`、`Ctrl+E 合并图层`、`Ctrl+Shift+E 合并可见图层`、
+ *     `拼合图像`、`盖印可见图层`、`栅格化图层/所有图层`、多选合并、组内的合并 ——
+ *     **凡是让图层数减少的操作，都会在命令中途派发 `delete`（并常伴随 `make`）**，
+ *     而合并/拼合往往比单次删除更慢（要重算合成结果）。
+ *   · 事件到达时命令**还没结束**（通知是在命令执行中途派的），所以窗口必须比
+ *     单次删除更宽，否则窗口一到期、命令尾部那几百毫秒就完全暴露。
+ *
+ * ⚠️ 只影响**非选区**事件：纯选区变更（`set` + channel/selection）继续用
+ * `QUIET_AFTER_EVENT_MS`，**不得**被本常数拖慢 —— 填充的「快」依赖它。
+ *
+ * ⚠️ 取值刻意与下方 `HEAVY_EVENT_NEIGHBOR_MS`（= 填充路径用来判断「最近有重命令」的
+ * 窗口）保持一致：两者回答的是同一个问题（「结构类命令大概还要跑多久」），
+ * 用同一个数字就不会出现「闸门以为忙、填充以为闲」的错位。未合并成同一个常量是因为
+ * 本常数在文件顶部导出、而 `HEAVY_EVENT_NEIGHBOR_MS` 是私有且声明在后（TDZ）。
+ */
+export const QUIET_AFTER_STRUCTURAL_EVENT_MS = 600;
+
+/**
  * 「文档级重命令」（切文档 / 打开 / 关闭）之后的**静默阈值**（毫秒）。
  *
  * 为什么必须比普通事件长：切文档不是一次瞬时命令 —— PS 要重建文档窗口、
@@ -297,9 +322,13 @@ export function endDocLatch(): void {
  * ⚠️ 必须在事件到达时调用，不能放到探测函数体内 —— 否则忙碌窗口会被探测自身
  * 反复延长，形成「永远等不到空闲」的自锁。
  *
- * ⚠️⚠️ 窗口只有两档，且**不得为「填充更快」而缩短**：本函数产出的是全局共享
- * 粗筛闸门，被 9 处轮询/探测依赖。缩短它 ⇒ 那些调用点在 PS 忙碌期提前放闸 ⇒
- * 宿主弹框（2026-10-08 已付过代价）。填充要的「快」走 `fillReadyRemain()`。
+ * ⚠️⚠️ 窗口现在有**三档**（2026-10-09 起），且**都不得为「填充更快」而缩短**：
+ * 本函数产出的是全局共享粗筛闸门，被 9 处轮询/探测依赖。缩短它 ⇒ 那些调用点在
+ * PS 忙碌期提前放闸 ⇒ 宿主弹框（2026-10-08 已付过代价）。填充要的「快」走
+ * `fillReadyRemain()`（它只看**选区**事件的短冷却）。
+ *   · 文档级（open/close/save/切文档）⇒ 长阈值 + 闩锁 + 世代号 ++；
+ *   · 结构类（delete/make/move/rename/合并/拼合/栅格化…）⇒ 中阈值 + 作废宿主租约；
+ *   · 纯选区（set + channel/selection）⇒ 短阈值，不作废租约。
  */
 export function markPsBusyForEvent(eventName?: string, descriptor?: any): void {
     if (isDocLevelDescriptor(eventName, descriptor)) {
@@ -309,14 +338,26 @@ export function markPsBusyForEvent(eventName?: string, descriptor?: any): void {
     }
     const now = Date.now();
     lastEventAt = now;
+
     if (isSelectionDescriptor(descriptor)) {
         lastSelectionEventAt = now;
-    } else {
-        // 记录「重命令邻居」供填充路径的私有冷却判断（纯内存，不影响窗口语义）
-        lastHeavyEventAt = now;
+        // ⚠️ 纯选区变更**不**作废宿主租约：它不代表「宿主刚执行过重命令」，
+        //    而且填充要紧接着读 PS（`fillReadyRemain` 的短冷却就建立在这条上）。
+        psBusyUntil = Math.max(psBusyUntil, now + QUIET_AFTER_EVENT_MS);
+        return;
     }
-    // ⚠️ 全局窗口一律保守：选区事件也用同一档，绝不为填充更快而缩短
-    psBusyUntil = Math.max(psBusyUntil, now + QUIET_AFTER_EVENT_MS);
+
+    // ---- 结构类事件：删图层 / 合并 / 拼合 / 栅格化 / 新建 / 移动 / 改名 ----
+    // 记录「重命令邻居」供填充路径的私有冷却判断（纯内存，不影响窗口语义）。
+    lastHeavyEventAt = now;
+    // ⚠️ 这里是**不对称补齐**（2026-10-09）：此前 `noteHostUnresponsive()` 只在
+    //    `beginDocLatch()` / `extendDocLatch()` 里被调，而 `delete`/`make` 这类
+    //    结构事件**既不在文档级名单里、也不开闩锁** ⇒ 它们从不作废「宿主可读租约」。
+    //    稳态下 3 个 300/500ms 的轮询会让 `hostOkStreak` 长期 ≥2、`lastHostOkAt`
+    //    永远新鲜 ⇒ `canSyncReadHost()` 实际退化成只看 `isPsBusy()`（与设计意图相反）。
+    //    现在：一次结构事件就是「宿主刚忙过」的**证据**，立即作废租约。
+    noteHostUnresponsive();
+    psBusyUntil = Math.max(psBusyUntil, now + QUIET_AFTER_STRUCTURAL_EVENT_MS);
 }
 
 // ---------------- 忙碌窗口（F1 静默阈值的落地形式） ----------------
@@ -378,6 +419,11 @@ export function psBusyRemain(): number {
  *
  * ⚠️ 租约只是**同步裸读**的最后一道闸，不是正确性依据：异步路径一律走
  * `psAccess.psRead()` 的模态作用域（官方互斥原语，最坏也只是可捕获的失败）。
+ * ⚠️ 现状（2026-10-09）：本仓**已不再有同步裸读** —— `getLayerSnapshot()` 与
+ * `MaskSyncEngine.buildLayerTree` 的同步遍历路径都已删除（理由见各自注释：
+ * 同步遍历是 5N 次 get 的**乘法放大器**，判据再准也不该留着）。因此租约目前的
+ * 消费者只剩**诊断**（`dumpPsGateState` / `__jwPs.state()`）。保留它是因为
+ * 「肯定式证据」这个思路本身仍是排查时的关键信息，且未来若新增同步读取可直接复用。
  */
 const HOST_LEASE_MS = 800;
 let lastHostOkAt = -1;

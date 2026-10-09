@@ -4,10 +4,11 @@
 // - 插件只通过 WebSocket 向守护进程拉取/推送配置（getConfig / config），避免跨进程文件系统耦合。
 // - 守护进程全局捕获按键后广播 hotkey 事件，插件执行「总开关切换 / 直接 select 笔刷」。
 
-import { action, core, app } from 'photoshop';
+import { action, app } from 'photoshop';
 import { shell, storage } from 'uxp';
 import { MainToggleState, requestMainToggle } from '../utils/MainToggleBus';
 import { requestFillPanelToggle } from '../utils/FillPanelToggleBus';
+import { psRead, runAsModal } from '../utils/psAccess';
 
 export interface HotkeyEntry {
   id: string;
@@ -500,7 +501,7 @@ export async function applyBrush(brushName: string): Promise<boolean> {
     } catch (directErr) {
       // 某些 PS 版本/某些状态下会要求 batchPlay 必须在模态作用域里执行，
       // 这里做一次回退；两条路都不通才判定失败。
-      await core.executeAsModal(async () => {
+      await runAsModal(async () => {
         await selectBrushCommands(brushName);
       }, { commandName: '切换笔刷' });
       return true;
@@ -522,7 +523,11 @@ export async function enumerateBrushes(): Promise<string[]> {
     const brushesApi: any = (app as any)?.brushes;
     if (brushesApi && typeof brushesApi.get === 'function') {
       try {
-        const list: any[] = await brushesApi.get();
+        // ⚠️ DOM 集合的 get 同样是一次宿主往返 ⇒ 走 psRead（模态作用域）。
+        const list: any[] = await psRead<any[]>(
+          () => brushesApi.get(),
+          { label: '枚举笔刷预设', retries: 0 }
+        ) as any;
         if (Array.isArray(list)) {
           const names = list.map((b: any) => (b?.name ?? '')).filter((x: any) => !!x);
           if (names.length) return names as string[];
@@ -530,17 +535,21 @@ export async function enumerateBrushes(): Promise<string[]> {
       } catch { /* 退回到 batchPlay */ }
     }
 
-    // 2) 读取 application 描述符里的 presetManager
-    const res: any = await action.batchPlay([
-      {
-        _obj: 'get',
-        _target: [
-          { _ref: 'property', _property: 'presetManager' },
-          { _ref: 'application', _enum: 'ordinal', _value: 'targetEnum' }
-        ],
-        _options: { dialogOptions: 'dontDisplay' }
-      }
-    ], { synchronousExecution: true });
+    // 2) 读取 application 描述符里的 presetManager（⚠️ 走 psRead，原为裸 batchPlay get）
+    const res: any = await psRead<any>(
+      () => action.batchPlay([
+        {
+          _obj: 'get',
+          _target: [
+            { _ref: 'property', _property: 'presetManager' },
+            { _ref: 'application', _enum: 'ordinal', _value: 'targetEnum' }
+          ],
+          _options: { dialogOptions: 'dontDisplay' }
+        }
+      ], { synchronousExecution: true }),
+      { label: '读取笔刷预设表', retries: 0 }
+    );
+    if (!res) return [];
 
     const appDesc: any = Array.isArray(res) ? res[0] : res;
     let pm: any = appDesc?.presetManager;
@@ -692,20 +701,27 @@ const TOOL_TYPE_CN: Record<string, string> = {
   artBrushTool: '艺术画笔',
 };
 
-/** 读取当前工具类型（_enum），例如 paintbrushTool；读不到返回 null。 */
+/**
+ * 读取当前工具类型（_enum），例如 paintbrushTool；读不到返回 null。
+ *
+ * ⚠️ 2026-10-09 收口：此前是**裸 batchPlay get**（记忆里登记的残余缺口）。
+ * application 级 get 在宿主忙碌期（删除 / 合并 / 拼合 / 打开 / 保存大文档…）
+ * 会弹出宿主原生「命令"获取"当前不可用」—— 而本函数的调用点之一是
+ * 「笔刷类型扫描」，那段整包在模态作用域里，命中概率不低。现在统一走 `psRead`。
+ * （`psRead` 在自家模态作用域内会自动降级为直读，因此不会嵌套报错。）
+ */
 export async function getSelectedBrushToolEnum(): Promise<string | null> {
-  try {
-    const r: any = await action.batchPlay(
+  const r: any = await psRead<any>(
+    () => action.batchPlay(
       [{ _obj: 'get', _target: [{ _property: 'tool' }, APP_TARGET], _options: { dialogOptions: 'dontDisplay' } }],
       { synchronousExecution: true }
-    );
-    if (!isGetOk(r)) return null;
-    const d = Array.isArray(r) ? r[0] : r;
-    const tool = d?.tool?._enum || d?.tool?._value || null;
-    return typeof tool === 'string' ? tool : null;
-  } catch {
-    return null;
-  }
+    ),
+    { label: '读取当前工具', retries: 0 }
+  );
+  if (!r || !isGetOk(r)) return null;
+  const d = Array.isArray(r) ? r[0] : r;
+  const tool = d?.tool?._enum || d?.tool?._value || null;
+  return typeof tool === 'string' ? tool : null;
 }
 
 /** 当前笔刷的聚合信息（类型 / 名称 / 直径），用于下拉展示。 */
@@ -716,24 +732,28 @@ export interface BrushNameId {
   diameter: number | null;  // 笔尖直径（px）
 }
 
-/** 读取当前选中笔刷的聚合信息（非破坏性，只读）。 */
+/**
+ * 读取当前选中笔刷的聚合信息（非破坏性，只读）。
+ * ⚠️ 同样已收口到 `psRead`（原为裸 batchPlay get，见 getSelectedBrushToolEnum 的说明）。
+ */
 export async function getSelectedBrushNameId(): Promise<BrushNameId> {
   const info: BrushNameId = { toolEnum: null, type: null, name: null, diameter: null };
-  try {
-    const r: any = await action.batchPlay(
+  const r: any = await psRead<any>(
+    () => action.batchPlay(
       [{ _obj: 'get', _target: [{ _property: 'currentToolOptions' }, APP_TARGET], _options: { dialogOptions: 'dontDisplay' } }],
       { synchronousExecution: true }
-    );
-    if (isGetOk(r)) {
-      const d = Array.isArray(r) ? r[0] : r;
-      const brush = d?.currentToolOptions?.brush;
-      if (brush && typeof brush === 'object') {
-        info.name = typeof brush.name === 'string' ? brush.name : null;
-        const dia = brush.diameter;
-        if (dia && typeof dia._value === 'number') info.diameter = dia._value;
-      }
+    ),
+    { label: '读取当前笔刷', retries: 0 }
+  );
+  if (r && isGetOk(r)) {
+    const d = Array.isArray(r) ? r[0] : r;
+    const brush = d?.currentToolOptions?.brush;
+    if (brush && typeof brush === 'object') {
+      info.name = typeof brush.name === 'string' ? brush.name : null;
+      const dia = brush.diameter;
+      if (dia && typeof dia._value === 'number') info.diameter = dia._value;
     }
-  } catch { /* 非关键 */ }
+  }
   info.toolEnum = await getSelectedBrushToolEnum();
   info.type = info.toolEnum ? (TOOL_TYPE_CN[info.toolEnum] || info.toolEnum) : null;
   return info;
@@ -745,7 +765,7 @@ export async function getSelectedBrushNameId(): Promise<BrushNameId> {
 // 关键实现点：
 //   1) 选中预设时【不强制切到画笔工具】——否则会掩盖真实工具类型，全标成「画笔」。
 //   2) 扫描前记录用户当前笔刷，扫描后【尽力还原】（finally 中），避免丢失用户状态。
-//   3) 整段包在 core.executeAsModal 里，作为一次逻辑操作，扫描期间不穿插其它命令。
+//   3) 整段包在 runAsModal（≡ core.executeAsModal）里，作为一次逻辑操作，扫描期间不穿插其它命令。
 //   4) 每支独立 try/catch：一支失败不影响其余；读不到类型就留空（下拉不显示类型列）。
 //   5) 并发守卫：防止用户连点触发多轮扫描互相干扰。
 let brushTypeDetecting = false;
@@ -799,7 +819,7 @@ export async function detectAllBrushTypes(
     const saved = await captureCurrentBrush();
     const total = names.length;
     try {
-      await core.executeAsModal(async () => {
+      await runAsModal(async () => {
         for (let i = 0; i < total; i++) {
           const name = names[i];
           if (onProgress) onProgress(i, total, name);

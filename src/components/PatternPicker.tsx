@@ -5,7 +5,7 @@ import IconButton from '../components/IconButton';
 import { action, core, imaging, app } from 'photoshop';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
 import { debouncePsProbe, markPsBusyForEvent, runWhenIdle } from '../utils/psProbe';
-import { addPsNotificationListeners, removePsNotificationListeners } from '../utils/psAccess';
+import { addPsNotificationListeners, removePsNotificationListeners, runAsModal } from '../utils/psAccess';
 import { PresetManager } from '../utils/PresetManager';
 import { calcDragValue } from '../utils/dragSensitivity';
 import RangeSlider from './RangeSlider';
@@ -805,7 +805,9 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
             let rgbData: Uint8Array | null = null;
             
             // 在modal scope中执行创建图案操作
-            await core.executeAsModal(async () => {
+            // ⚠️ 经 runAsModal（不是裸 core.executeAsModal）：进入模态要登记
+            //    「本插件自己的模态计数」，供 psRead 的直读分支判断（见 psAccess）。
+            await runAsModal(async () => {
                 // 为了减少界面闪烁，使用较小的临时文档尺寸，后续会调整
                 const tempWidth = Math.min(imgElement.naturalWidth, 512);
                 const tempHeight = Math.min(imgElement.naturalHeight, 512);

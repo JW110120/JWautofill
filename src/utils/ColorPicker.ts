@@ -1,7 +1,9 @@
-import { app, action, core } from 'photoshop';
+import { app, action } from 'photoshop';
+import { runAsModal } from './psAccess';
 import { rgbToHsb } from './ColorUtils';
 
-const { executeAsModal } = core;
+// runAsModal ≡ core.executeAsModal，但会维护「本插件自己的模态计数」（见 psAccess）。
+const executeAsModal = runAsModal;
 const { batchPlay } = action;
 
 export interface RGBColor {

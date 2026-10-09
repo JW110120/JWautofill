@@ -1,4 +1,4 @@
-import { core } from 'photoshop';
+import { runAsModal } from './psAccess';
 
 /**
  * 包装一次阻塞式 PS 命令执行：让 PS 原生进度条显示「正在执行：<命令> n%」。
@@ -7,6 +7,9 @@ import { core } from 'photoshop';
  *   （命令内部没有天然的细分进度数据，故用渐近爬升的模拟百分比：越接近 95% 越慢，
  *   执行结束立即置 100%，不谎报完成）。
  * - setInterval 在 executeAsModal 作用域内可用（UXP 事件循环照常运行，命令 await 间隙即触发）。
+ * - ⚠️ 必须经 `psAccess.runAsModal()` 进入模态：`fn` 内部的读取（`getActiveLayerInfo`
+ *   / `refreshLayerSnapshot` / `psRead`）要靠「本插件自己的模态计数」走直读分支，
+ *   裸 `core.executeAsModal` 不会让那个计数 +1 ⇒ 内部读取会去嵌套模态 ⇒ 静默失败。
  */
 export async function runCommand(command: string, fn: () => Promise<void> | void): Promise<void> {
   let pct = 0;
@@ -23,7 +26,7 @@ export async function runCommand(command: string, fn: () => Promise<void> | void
     }
   };
 
-  await core.executeAsModal(async (ec) => {
+  await runAsModal(async (ec) => {
     report(ec);
     timer = setInterval(() => {
       // 每次爬升剩余差距的 3%（+0.5 保底），渐进逼近 95%

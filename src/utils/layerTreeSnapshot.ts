@@ -1,5 +1,5 @@
 import { app } from 'photoshop';
-import { canSyncReadHost, isPsBusy } from './psProbe';
+import { isPsBusy } from './psProbe';
 import { markPsAccess, psTryRead } from './psAccess';
 
 /**
@@ -37,12 +37,12 @@ import { markPsAccess, psTryRead } from './psAccess';
  *   · `refreshLayerSnapshot()`（async，**默认选它**）：遍历在 `executeAsModal` 模态
  *     作用域内执行 ⇒ 宿主忙碌时最坏也只是「返回旧缓存/拿不到」，**永不弹框**。
  *     事件驱动与轮询驱动的消费方一律用它。
- *   · `getLayerSnapshot()`（sync）：**只在持有「宿主可读租约」时才遍历**
- *     （见 psProbe.canSyncReadHost），否则直接返回缓存。它剩下的用途是给
- *     React 渲染/同步决策读缓存（零 IPC），**不要**指望它把新数据读进来。
- *   ⇒ 原因：同步遍历是**裸 get**。PS 打开大文档时可以连着忙好几秒、期间可能一条
- *     事件都不派发，任何「猜它忙不忙」的判断一旦错，一棵 N 层的树就是 N 次宿主原生
- *     弹框（用户实测「连点八下」的机制）。所以判据必须从「猜」换成「**肯定式证据**」。
+ *   · `getLayerSnapshot()`（sync）：**纯读缓存，零 IPC**（2026-10-09 起彻底删除了
+ *     同步遍历路径，见函数注释）。只给 React 渲染/同步决策用，**不要**指望它把
+ *     新数据读进来。
+ *   ⇒ 原因：同步遍历是**裸 get**，且是**乘法放大器**（一棵 16 层的树 = 80 次宿主
+ *     往返）。任何「猜它忙不忙」的判断一旦错，代价不是旧数据而是一屏原生弹框
+ *     （用户实测「连点八下」+ 2026-10-09「删一个图层即弹框」）。
  */
 
 /** 快照中的单个图层条目（扁平化，按文档顺序的先序遍历）。 */
@@ -111,38 +111,38 @@ export function isLayerSnapshotDirty(): boolean {
 }
 
 /**
- * 读取图层树快照，必要时重新遍历。
+ * 读取图层树快照缓存（**纯内存，永不发 get**）。
  *
- * ⚠️⚠️ **同步路径的最后一道闸是「宿主可读租约」**（2026-10-08 第三轮）。
- * 本函数是**同步裸读**：`app.activeDocument` + 每层 5 个属性 get。它曾经只判
- * `isPsBusy()` —— 那是否定式判断，而「打开 400MB PSD」这类操作**不出现在任何
- * 事件里**（或事件名不被派发）、却让 PS 连着忙好几秒，于是判断一旦错，
- * 一棵 N 层的树就是 N 次宿主原生弹框（用户实测「打开超大文档连点八下」的机制）。
+ * ⚠️⚠️ 2026-10-09 起本函数**不再有任何遍历路径**（原先那条「持有宿主可读租约时
+ * 同步遍历」已删除）。原因是一条明确的乘法关系：
  *
- * 现在改为肯定式：只有 `canSyncReadHost()`（最近 800ms 内有过**两次**经模态作用域
- * 成功返回的读取）才允许遍历，否则**返回缓存并跳过**。异步消费方请改用
- * `refreshLayerSnapshot()` —— 它把遍历放进 `executeAsModal`，永远不会弹框。
+ *   · 同步遍历是**裸 get**，一棵 N 层的树 = 5N 次宿主往返（N=16 ⇒ 80 次）；
+ *   · 判据无论多保守，它终究是「猜」或「租约」这类**间接**证据；
+ *   · 一旦判错，代价不是「读到旧数据」，而是**一屏宿主原生弹框** —— 因为 5N 次
+ *     get 里有任意一次撞上宿主模态作用域，就会弹一个「命令"获取"当前不可用」。
  *
- * @param maxAgeMs 若给定，且现有快照的年龄小于该值，则**直接返回缓存、跳过遍历**。
- *                 用于兜底轮询这类「结构大概率未变」的场合：把稳态轮询的
- *                 遍历成本从「每轮 5N 次 IPC」降到「0 次」。
- *                 传 0 / 不传 ⇒ dirty 时必重新遍历（精确路径）。
- * @returns 快照；读不到/被冻结时返回**缓存（可能为 null）**，调用方需自行降级。
+ * 真机取证（`src/utils/isModalProbe.ts`）已证实：`isModal()` 会在宿主忙碌时误报
+ * true，而这套「间接证据」体系里至少有一环会因此放行 ⇒ 只要遍历路径还在，弹框
+ * 就还有出口。因此把**放大器本身**拆掉：上游判据最坏也只是「数据旧」，不再可能
+ * 变成「一屏弹框」。需要新数据一律走 `refreshLayerSnapshot()`（模态作用域内遍历，
+ * 永不弹框）。
+ *
+ * @param maxAgeMs 若给定，且现有快照的年龄小于该值，则顺带把 dirty 标记清掉
+ *                 （表示「这轮不再需要遍历」，供兜底轮询使用）。
+ * @returns 当前缓存（可能为 `null`，表示还没有任何可用快照）；调用方需自行降级。
  */
 export function getLayerSnapshot(maxAgeMs = 0): LayerSnapshot | null {
-  const now = Date.now();
   if (cached && !dirty) return cached;
-  if (cached && maxAgeMs > 0 && now - cached.at < maxAgeMs) {
+  if (cached && maxAgeMs > 0 && Date.now() - cached.at < maxAgeMs) {
     // 轮询兜底窗口内直接复用：省掉整轮遍历。
     // ⚠️ 这会让轮询在结构变化后最多延迟 maxAgeMs 才被发现——这正是轮询作为
     //    「兜底」的定位：真正的时效性由事件驱动的 invalidate + 精确读取保证。
     dirty = false;
     return cached;
   }
-  // ⚠️ 冻结条件：宿主可读租约无效（粗筛被判忙、或最近没有成功的受保护读取）。
-  if (!canSyncReadHost()) return cached;
-
-  return commit(traverseNow(now, '遍历图层树（同步路径）'));
+  // 结构已被标记为脏（或还没有快照）⇒ 如实返回旧的缓存值，
+  // 由调用方在下一个空闲窗口走 `refreshLayerSnapshot()` 取新数据。
+  return cached;
 }
 
 /**
@@ -193,8 +193,8 @@ function commit(r: TraverseResult): LayerSnapshot | null {
 /**
  * 真正发 get 的遍历本体（纯读取，不碰缓存）。
  *
- * ⚠️ 调用方负责保证它只在**安全时机**被执行：同步路径必须先过 `canSyncReadHost()`，
- * 异步路径必须包在 `psRead` 里。**本函数自身不做任何忙碌判断**
+ * ⚠️ 调用方负责保证它只在**安全时机**被执行：**唯一**合法路径是包在
+ * `psTryRead` 里（`refreshLayerSnapshot` 已如此）。**本函数自身不做任何忙碌判断**
  * （它一旦开始，get 就已经在路上了 —— 判断必须发生在进入之前）。
  */
 function traverseNow(now: number, markLabel: string): TraverseResult {

@@ -38,7 +38,7 @@ import ToggleSwitch from '../components/ToggleSwitch';
 import { helpTexts } from '../constants/helpTexts';
 import { useLabelDrag } from '../utils/useLabelDrag';
 import { debouncePsProbe, markPsBusyForEvent, isPsBusy, psBusyRemain, runWhenIdle } from '../utils/psProbe';
-import { addPsNotificationListeners, removePsNotificationListeners } from '../utils/psAccess';
+import { addPsNotificationListeners, removePsNotificationListeners, runAsModal } from '../utils/psAccess';
 import {
   getLayerSnapshot,
   refreshLayerSnapshot,
@@ -844,7 +844,8 @@ useEffect(() => {
       specialWoodcutPreviewTimerRef.current = 0;
       // 关闭预览时，若存在预览基线则还原原始像素
       if (specialWoodcutPreviewBaselineRef.current) {
-        const { executeAsModal } = core;
+        // runAsModal ≡ core.executeAsModal，但会维护「本插件自己的模态计数」（见 psAccess）。
+        const executeAsModal = runAsModal;
         executeAsModal(async () => {
           try {
             await restoreSpecialWoodcutBaseline();
@@ -1862,7 +1863,8 @@ const giveFocusBackToPS = () => {
 const handleBlockAverage = async () => {
   if (!handleLicenseBeforeAction()) return;
   try {
-    const { executeAsModal } = core;
+    // runAsModal ≡ core.executeAsModal，但会维护「本插件自己的模态计数」（见 psAccess）。
+    const executeAsModal = runAsModal;
     
     await runCommand('分块平均', async () => {
       // 检测当前编辑状态
@@ -1916,7 +1918,8 @@ const handleBlockAverage = async () => {
 const handleBlockGradient = async () => {
   if (!handleLicenseBeforeAction()) return;
   try {
-    const { executeAsModal } = core;
+    // runAsModal ≡ core.executeAsModal，但会维护「本插件自己的模态计数」（见 psAccess）。
+    const executeAsModal = runAsModal;
 
     await runCommand('分块渐变', async () => {
       const editingState = await checkEditingState();
@@ -2025,7 +2028,8 @@ const readLineLayerAlphaMask = async (
 const runBlockColorPatch = async (sameOnly: boolean, lineColorMode?: 'lighter' | 'darker', command: string = '同层补色') => {
   if (!handleLicenseBeforeAction()) return;
   try {
-    const { executeAsModal } = core;
+    // runAsModal ≡ core.executeAsModal，但会维护「本插件自己的模态计数」（见 psAccess）。
+    const executeAsModal = runAsModal;
 
     await runCommand(command, async () => {
       const editingState = await checkEditingState();
@@ -2160,7 +2164,8 @@ const handleSpecialWoodcut = async (isPreview: boolean = false) => {
   if (specialWoodcutApplyingRef.current) return;
   specialWoodcutApplyingRef.current = true;
   try {
-    const { executeAsModal } = core;
+    // runAsModal ≡ core.executeAsModal，但会维护「本插件自己的模态计数」（见 psAccess）。
+    const executeAsModal = runAsModal;
 
     await runCommand(isPreview ? '特殊木刻预览' : '特殊木刻', async () => {
       const editingState = await checkEditingState();
@@ -2248,7 +2253,8 @@ const handleSpecialWoodcut = async (isPreview: boolean = false) => {
 const handleLineEnhancement = async () => {
   if (!handleLicenseBeforeAction()) return;
   try {
-    const { executeAsModal } = core;
+    // runAsModal ≡ core.executeAsModal，但会维护「本插件自己的模态计数」（见 psAccess）。
+    const executeAsModal = runAsModal;
     let selectionBounds: any = null;
     let pixelResult: any = null;
     let isBackgroundLayer = false;
@@ -2315,7 +2321,8 @@ const handleAlphaAlign = async (direction: 'down' | 'up' = 'down') => {
   if (!handleLicenseBeforeAction()) return;
   const name = direction === 'up' ? 'alpha上对齐' : 'alpha下对齐';
   try {
-    const { executeAsModal } = core;
+    // runAsModal ≡ core.executeAsModal，但会维护「本插件自己的模态计数」（见 psAccess）。
+    const executeAsModal = runAsModal;
 
     await runCommand(name, async () => {
       // 检测当前编辑状态
@@ -2395,7 +2402,8 @@ const handleAlphaModeAlign = async () => {
   if (!handleLicenseBeforeAction()) return;
   const name = 'alpha众对齐';
   try {
-    const { executeAsModal } = core;
+    // runAsModal ≡ core.executeAsModal，但会维护「本插件自己的模态计数」（见 psAccess）。
+    const executeAsModal = runAsModal;
 
     await runCommand(name, async () => {
       const editingState = await checkEditingState();
@@ -2456,7 +2464,8 @@ const handleExtremeAlign = async (direction: 'raiseLow' | 'weakenHigh') => {
   if (!handleLicenseBeforeAction()) return;
   const name = direction === 'raiseLow' ? '提升下极值' : '削弱上极值';
   try {
-    const { executeAsModal } = core;
+    // runAsModal ≡ core.executeAsModal，但会维护「本插件自己的模态计数」（见 psAccess）。
+    const executeAsModal = runAsModal;
 
     await runCommand(name, async () => {
       // 检测当前编辑状态
@@ -2516,7 +2525,8 @@ const handleExtremeAlign = async (direction: 'raiseLow' | 'weakenHigh') => {
 const handleHighFrequencyEnhancement = async () => {
   if (!handleLicenseBeforeAction()) return;
   try {
-    const { executeAsModal } = core;
+    // runAsModal ≡ core.executeAsModal，但会维护「本插件自己的模态计数」（见 psAccess）。
+    const executeAsModal = runAsModal;
     
     await runCommand('高频增强', async () => {
       // 检测当前编辑状态
@@ -2578,7 +2588,8 @@ const handleHighFrequencyEnhancement = async () => {
 const handleSmartEdgeSmooth = async () => {
   if (!handleLicenseBeforeAction()) return;
   try {
-    const { executeAsModal } = core;
+    // runAsModal ≡ core.executeAsModal，但会维护「本插件自己的模态计数」（见 psAccess）。
+    const executeAsModal = runAsModal;
     
     await runCommand('智能边缘平滑', async () => {
       // 检测当前编辑状态
@@ -2688,7 +2699,8 @@ const handleSmartEdgeSmooth = async () => {
 const handleAliasSmooth = async () => {
   if (!handleLicenseBeforeAction()) return;
   try {
-    const { executeAsModal } = core;
+    // runAsModal ≡ core.executeAsModal，但会维护「本插件自己的模态计数」（见 psAccess）。
+    const executeAsModal = runAsModal;
 
     await runCommand('消除锯齿', async () => {
       const editingState = await checkEditingState();
@@ -2892,7 +2904,8 @@ const handleLayerAlphaSample = async () => {
 const handlePixelTransition = async () => {
   if (!handleLicenseBeforeAction()) return;
   try {
-    const { executeAsModal } = core;
+    // runAsModal ≡ core.executeAsModal，但会维护「本插件自己的模态计数」（见 psAccess）。
+    const executeAsModal = runAsModal;
 
     await runCommand('像素过渡', async () => {
       // 检测当前编辑状态
@@ -2961,7 +2974,8 @@ const handleGradientModify = async () => {
   if (!handleLicenseBeforeAction()) return;
   if (gradientRelaxStrength === 0) return;
   try {
-    const { executeAsModal } = core;
+    // runAsModal ≡ core.executeAsModal，但会维护「本插件自己的模态计数」（见 psAccess）。
+    const executeAsModal = runAsModal;
 
     await runCommand('梯度修改', async () => {
       const editingState = await checkEditingState();
@@ -3008,7 +3022,8 @@ const handleGradientModify = async () => {
 const handleSpecialSharpen = async () => {
   if (!handleLicenseBeforeAction()) return;
   try {
-    const { executeAsModal } = core;
+    // runAsModal ≡ core.executeAsModal，但会维护「本插件自己的模态计数」（见 psAccess）。
+    const executeAsModal = runAsModal;
 
     await runCommand('特殊锐化', async () => {
       const editingState = await checkEditingState();
@@ -3682,7 +3697,8 @@ const handleKnockout = async (mode: 'white' | 'black') => {
   if (!handleLicenseBeforeAction()) return;
   const label = mode === 'white' ? '扣除纯白' : '扣除纯黑';
   try {
-    const { executeAsModal } = core;
+    // runAsModal ≡ core.executeAsModal，但会维护「本插件自己的模态计数」（见 psAccess）。
+    const executeAsModal = runAsModal;
     await runCommand(label, async () => {
       const editingState = await checkEditingState();
       if (!editingState.isValid) return;

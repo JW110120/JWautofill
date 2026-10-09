@@ -54,6 +54,9 @@ import {
 import {
   // PS 访问层：所有「失败即弹宿主原生框」的读取都必须经它（模态作用域兜底正确性）。
   psRead, psTryRead,
+  // 进入本插件模态作用域的**唯一入口**：它维护「自家模态计数」，是 psRead 直读分支
+  // 的判据来源（不能再依赖 core.isModal()，见 psAccess.isInOwnModalScope 的取证说明）。
+  runAsModal,
   // 宿主空闲探测：**只拿锁不读数据**，是文档级闩锁唯一的释放判据。
   probeHostIdle,
   // 通知注册：逐事件名容错，且事件名单含 open/close/save（见 PS_NOTIF_EVENTS 的根因说明）。
@@ -64,7 +67,6 @@ import ToggleSwitch from './components/ToggleSwitch';
 import RadioGroup, { RadioOption } from './components/RadioGroup';
 import { helpTexts } from './constants/helpTexts';
 
-const { executeAsModal } = core;
 const { batchPlay } = action;
 
 /**
@@ -1115,7 +1117,11 @@ class App extends React.Component<AppProps, AppState> {
             const needsDeselect = this.state.deselectAfterFill;
             const needsHistory = this.state.autoUpdateHistory;
 
-            await core.executeAsModal(async () => {
+            // ⚠️ 经 `runAsModal` 进入（不是裸 core.executeAsModal）：本段内部调用
+            //    `LayerInfoHandler.getActiveLayerInfo()` → `psRead`，而 psRead 的
+            //    「已在模态内 ⇒ 直读」判据是**本插件自己的模态计数**。用裸 API 会让
+            //    计数为 0 ⇒ psRead 去嵌套 executeAsModal ⇒ UXP 不允许嵌套 ⇒ 读取失败。
+            await runAsModal(async () => {
                 // ⚠️ 模态作用域内的第一件事：取活动文档。
                 // 原先这一步在模态**外**（填充路径上唯一的模态外 PS 访问）——
                 // 闸门判断失误时它第一个撞上忙碌的宿主，直接换回一个原生报错框。
@@ -1765,7 +1771,7 @@ class App extends React.Component<AppProps, AppState> {
         } catch (directErr) {
             // 直连失败 → 回退模态作用域（与 applyBrush 一致）
             try {
-                await core.executeAsModal(async () => {
+                await runAsModal(async () => {
                     await action.batchPlay([descriptor], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
                 }, { commandName: '切换套索工具' });
             } catch (e) {

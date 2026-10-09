@@ -13,7 +13,7 @@ import { DeleteIcon, RefreshIcon, DataRefreshIcon, RecordCircleIcon, StopSquareI
 import BrushSelect, { BrushSelectOption } from './BrushSelect';
 import { helpTexts } from '../constants/helpTexts';
 import { getFuncHotkeyLabel } from './funcHotkeyDefs';
-import { runWhenIdle } from '../utils/psProbe';
+import { runWhenIdle, isPsBusy, psBusyRemain } from '../utils/psProbe';
 import ToggleSwitch from '../components/ToggleSwitch';
 
 // 笔刷热键分区：在调整面板内录制「笔刷 + 快捷键」，持久化到共享配置，
@@ -198,6 +198,13 @@ export default function BrushHotkeySection() {
   if (!initialLoadRef.current) {
     initialLoadRef.current = runWhenIdle(async () => {
       for (let attempt = 1; attempt <= INITIAL_LOAD_ATTEMPTS; attempt++) {
+        // ⚠️ 每一轮**先复查忙碌闸门**（2026-10-09 补）：宿主仍忙时这一轮必然又拿到 []，
+        //    却照样发一次 get —— 而宿主忙碌期的 get 正是原生弹框的来源。先等窗口过去。
+        if (isPsBusy()) {
+          const wait = Math.max(INITIAL_LOAD_RETRY_MS, psBusyRemain());
+          console.log(`[笔刷列表] 宿主仍忙，${wait}ms 后再试（第 ${attempt} 次机会）`);
+          await new Promise<void>(r => setTimeout(r, wait));
+        }
         await loadBrushes(false, false);
         // 拿到笔刷即成功，结束重试（brushesRef 读最新值，setBrushes 是异步的）
         if (brushesRef.current.length) {

@@ -1,9 +1,9 @@
 import { app, action, core, imaging } from 'photoshop';
-import { isPsBusy, markPsBusyForEvent, runWhenIdle, canSyncReadHost } from './psProbe';
+import { isPsBusy, markPsBusyForEvent, runWhenIdle } from './psProbe';
 import {
   refreshLayerSnapshot, invalidateLayerSnapshot, LayerSnapshotEntry
 } from './layerTreeSnapshot';
-import { psRead, psTryRead, markPsAccess } from './psAccess';
+import { psRead, psTryRead, markPsAccess, runAsModal } from './psAccess';
 import { invalidateLayerInfoCache, shouldInvalidateLayerInfo } from './LayerInfoHandler';
 
 /**
@@ -390,36 +390,14 @@ export class MaskSyncEngine {
           idPath.push(s.path);
         }
       } else {
-        // ⚠️ 无快照可用时必须放弃本轮：下面这段是**裸遍历** `d.layers`（每层 5 次
-        // 宿主 get）。判据从 `isPsBusy()` 收紧为 `canSyncReadHost()`（肯定式租约）——
-        // 「打开大文档期间没有任何事件」正是否定式判断覆盖不到的窗口。
-        if (!canSyncReadHost()) return [];
-        const layers = d.layers || [];
-        const walk = (list: any[], parentIds: number[], depth: number) => {
-          for (const layer of list || []) {
-            if (!layer || typeof layer.id !== 'number') continue;
-            const children = (layer as any)?.layers;
-            const hasChildren = !!(children && Array.isArray(children) && children.length > 0);
-            const kind = (layer as any)?.kind;
-            const isBackground = !!(layer as any)?.isBackgroundLayer;
-            const isAdjustment = isAdjustmentKind(kind);
-            const curIds = parentIds.concat([layer.id]);
-            entries.push({
-              id: layer.id,
-              name: layer.name || `图层 ${layer.id}`,
-              path: curIds.map(() => ''),
-              kind,
-              isBackground,
-              isAdjustment,
-              depth,
-              hasUserMask: false,
-              label: '',
-            });
-            idPath.push(curIds);
-            if (hasChildren) walk(children, curIds, depth + 1);
-          }
-        };
-        walk(layers, [], 0);
+        // ⚠️ 2026-10-09：此处的「裸遍历 `d.layers` 兜底」已**删除**。
+        // 理由与 layerTreeSnapshot.getLayerSnapshot 同源：裸遍历是**乘法放大器**
+        // （每层 5 次宿主 get），而它此前依赖 `canSyncReadHost()` 这一**间接**证据。
+        // 真机取证已证实 `isModal()` 会在宿主忙碌时误报、间接证据链存在放行出口，
+        // 于是「一次判错」= 一屏原生「命令"获取"当前不可用」弹框。
+        // 现在：没有快照就**放弃本轮**（返回空列表），由下一次事件/轮询经
+        // `refreshLayerSnapshot()`（模态作用域内遍历）把数据补上。
+        return [];
       }
 
       // ① 批量查询每个图层的实时名称（按 id 路径逐级查询，避免 DOM 缓存旧名）
@@ -558,9 +536,13 @@ export class MaskSyncEngine {
       this.lastSyncAt[taskKey] = now;
 
       // imaging API 必须在 executeAsModal 内执行；同步流程（读+写）全部包在 modal 中
+      // ⚠️ 走 `runAsModal`（不是裸 `core.executeAsModal`）：本段内部会经 `psRead`
+      //    读活动文档/图层元信息，而 `psRead` 的「直读分支」判据是**本插件自己的
+      //    模态计数**——漏了这一步，深度为 0 ⇒ 它会去嵌套 executeAsModal ⇒
+      //    UXP 不允许嵌套 ⇒ 读取静默失败（表现为蒙版同步「点了没反应」）。
       let result: SyncResult = { synced: false, reason: 'error' };
       try {
-        await core.executeAsModal(async () => {
+        await runAsModal(async () => {
           // 1) 文档像素尺寸（像素单位，batchPlay 换算）
           const docSize = await this.getDocPixelSize(d);
           if (!docSize) { result = { synced: false, reason: 'no-doc-size' }; return; }

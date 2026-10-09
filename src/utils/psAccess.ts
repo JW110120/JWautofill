@@ -39,7 +39,10 @@ import {
  *   · 本模块 `psRead()` = **正确性兜底**：即使粗筛判断失误，宿主也不会弹框。
  *   · 本模块 `probeHostIdle()` = **闩锁出口**：只拿锁不读数据，用来判定
  *     「宿主是否已可控」，是文档级闩锁唯一的释放判据。
- *   · 写路径（fill / stroke / 蒙版同步）继续用自己的 `executeAsModal`，不走本模块。
+ *   · 写路径（fill / stroke / 蒙版同步 / 清除 / 进度包装 / 笔刷切换…）**必须**经
+ *     `runAsModal()` 进入模态（不要直接调 `core.executeAsModal`）—— 见
+ *     `isInOwnModalScope()` 的说明：本模块要靠这个计数区分「宿主握着锁」与
+ *     「我们握着锁」，漏了一处就会让该写路径内部的读取静默失效。
  */
 
 /** 一次读取所需的最小配置。省略即用默认值。 */
@@ -95,6 +98,14 @@ export type PsReadResult<T> = { ok: true; value: T } | { ok: false };
  * `save` 与 `open` / `close` 同类（2026-10-08 第二轮补）：保存大文档同样是「PS 自己
  * 握着模态作用域、长达数秒」的命令，插件期间的 get 会被拒 —— 论坛上的复现条件正是
  * 「保存 / 拼合 / 打开时随机弹框」。
+ *
+ * ⚠️ 关于「合并 / 拼合 / 栅格化」这类**图层数减少**的候选事件名（2026-10-09 补）：
+ * 经验证据是它们**在命令中途就派发 `delete` / `make`**（本仓注释早有记录：Ctrl+E
+ * 合并时 delete/make 在命令尚未结束时到达各面板监听器）⇒ 事件层面已被覆盖。这里
+ * 额外注册一批**候选名**属于「宁可多听一个」：宿主是否真的派发它们无需事先确认，
+ * 因为注册是**逐个容错**的（不认识的名字只被跳过，不会拖垮其余监听）。
+ * 名字来源：宿主自带的 UXP 运行时 `Required/UXP/app.js` 里同名的命令构造器
+ * （`mergeVisible` / `flattenImage` / `rasterizeAll` / `splitChannels`）。
  */
 export const PS_NOTIF_EVENTS: readonly string[] = [
     'set',
@@ -102,6 +113,16 @@ export const PS_NOTIF_EVENTS: readonly string[] = [
     'clearEvent',
     'delete',
     'make',
+    // 「图层结构/顺序可能变了」—— 此前漏注册（只有 MaskSyncEngine / AdjustmentPanel
+    // 各自单独注册它们），统一提到这里，避免「某个面板独立注册」造成的覆盖不一致。
+    'move',
+    'rename',
+    // 图层数减少类（合并 / 拼合 / 栅格化 / 盖印…）的候选事件名（见上方说明）。
+    'mergeVisible',
+    'flattenImage',
+    'rasterizeAll',
+    'rasterizeAllPlaced',
+    'splitChannels',
     'open',
     'close',
     'save',
@@ -214,9 +235,20 @@ export function dumpPsGateState(): void {
     const lease = getHostLeaseState();
     console.log(
         `[PS闸门] busy=${isPsBusy()} latch=${isDocLatchActive()} latchAge=${getDocLatchAgeMs()}ms ` +
+        `ownModalDepth=${getOwnModalDepth()} ` +
         `okStreak=${lease.streak} lastOk=${lease.lastOkAt < 0 ? 'never' : `${Date.now() - lease.lastOkAt}ms ago`} ` +
         `leaseValid=${lease.valid}`
     );
+}
+
+/**
+ * 仅供诊断：本插件**自己**持有的模态作用域深度。
+ *
+ * 用途：真机复现弹框时对照 `__jwPs.state()` —— 若弹框瞬间 `ownModalDepth === 0`，
+ * 说明当时**不是**我们在持锁，那么任何直读都是非法的（应该被闸门拦下）。
+ */
+export function getOwnModalDepth(): number {
+    return ownModalDepth;
 }
 
 /** 开关实时 trace（排查时打开，平时关着以免刷屏）。 */
@@ -239,29 +271,67 @@ try {
  * ------------------------------------------------------------------ */
 
 /**
- * 当前是否**已经**处于本插件的模态作用域内。
+ * 当前是否**已经**处于本插件自己的模态作用域内。
  *
- * ⚠️ 为什么必须先判断：UXP 的 `executeAsModal` **不可嵌套**（在模态作用域内
- * 再次调用会抛错）。凡是会被「外层已持模态作用域」的调用方复用的读取
- * （最典型：填充路径在 `executeAsModal` 内调 `getActiveLayerInfo()`），
- * 都必须走这里的直读分支，否则会在改造后立刻报错。
+ * ⚠️⚠️ 为什么不再采信 `core.isModal()`（2026-10-09 真机取证定性，**勿回退**）
+ * ----------------------------------------------------------------------------
+ * 本函数的返回值决定 `psTryRead()` 的第 ① 分支走不走 —— 走就意味着「**直读**」，
+ * 即不经 `executeAsModal` 的**裸 get**。历史上判据是 `core.isModal()`。
  *
- * 退化路径：宿主未提供 `core.isModal` 时用本模块自己的重入计数兜底。
+ * 真机探针（`src/utils/isModalProbe.ts`，采样 200ms）实测结果：
+ *   · **本插件并未持有任何模态作用域**（用户只是打开了「另存为」对话框）；
+ *   · `isModal()` 仍返回 true —— 53 个样本里 7 个 true，最长连续 true 达 **1025ms**；
+ *   · 交叉表：这 7 个 true 样本中，粗筛闸门拦住了 6 个、**放行了 1 个**。
+ * ⇒ `isModal()` 的真实语义是「**任意**模态态（含宿主自己、其它插件）」，
+ *   而不是文档字面的「the plugin is currently in a modal state」。
+ *   Adobe 开发者论坛的现场结论一致：「*not only your plugin can start modal state
+ *   and it is not easy to find out. Built-in method does not work as expected.*」
+ *
+ * 后果：宿主正握着模态作用域（删除 / 合并 / 拼合 / 打开 / 保存大文档…）的瞬间，
+ * 第 ① 分支会把「受保护的读取」退化成**裸 get** ⇒ 每发一次就弹一次宿主原生
+ * 「命令"获取"当前不可用」。而一棵 16 层的树 = 5×16 = **80 次 get**，
+ * 所以一次误判表现为**一屏弹框**（这正是用户「删一个图层即弹框」的机制）。
+ *
+ * 现在改为**自己记账**：只有经 `runAsModal()` 进入、且此刻**确实在回调体内**
+ * （= 我们真的握着锁）才为 true。宿主忙不忙再也影响不到这个判断。
  */
 export function isInOwnModalScope(): boolean {
-    const isModal = (core as any)?.isModal;
-    if (typeof isModal === 'function') {
-        try {
-            return !!isModal.call(core);
-        } catch {
-            /* 落到计数兜底 */
-        }
-    }
-    return readonlyDepth > 0;
+    return ownModalDepth > 0;
 }
 
-/** 兜底用的重入深度（仅在宿主没有 `core.isModal` 时参与判断）。 */
-let readonlyDepth = 0;
+/** 本插件持有的模态作用域深度。由 `runAsModal()` 维护，本文件之外只读。 */
+let ownModalDepth = 0;
+
+/**
+ * 进入本插件模态作用域的**唯一入口**。
+ *
+ * 语义与 `core.executeAsModal(fn, opts)` 完全一致（同样的回调参数 `executionContext`、
+ * 同样的返回值与抛错），只多一件事：**在回调真正开始执行时把自家模态深度 +1**，
+ * 结束（含抛错）时 -1 —— 这使 `isInOwnModalScope()` 有了**不依赖宿主**的判据。
+ *
+ * ⚠️ 计数必须在**回调体内**增减，不能包在 `executeAsModal` 外面：宿主忙碌时
+ * `executeAsModal` 会先**排队**（25.10 起是排队重试语义），排队期间我们并没有握着锁；
+ * 若那时把 `isInOwnModalScope()` 判为真，并发的轮询就会误以为可以直读 ⇒ 又变成裸 get。
+ *
+ * ⚠️⚠️ **所有**直接调用 `core.executeAsModal` 的写路径都必须改走本函数
+ * （填充 / 描边 / 蒙版同步 / 清除 / `runCommand` 进度包装 / 笔刷切换 / 图案导入 …），
+ * 否则它们内部的 `psRead()` / `refreshLayerSnapshot()` / `getActiveLayerInfo()` 会看到
+ * 深度为 0，转而去嵌套一次 `executeAsModal` —— 而 UXP **不允许嵌套模态**，
+ * 结果不是弹框而是**读取静默失败**（功能看起来「点了没反应」）。
+ */
+export async function runAsModal<T = any>(
+    fn: (executionContext?: any) => T | Promise<T>,
+    opts?: { commandName?: string; interactive?: boolean; timeOut?: number; [k: string]: any }
+): Promise<T> {
+    return await (core as any).executeAsModal(async (ec?: any) => {
+        ownModalDepth++;
+        try {
+            return await fn(ec);
+        } finally {
+            ownModalDepth--;
+        }
+    }, opts as any) as T;
+}
 
 function sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
@@ -315,7 +385,8 @@ export async function psTryRead<T>(
     const retries = Math.max(0, opts.retries ?? 2);
     const guard = opts.guardGeneration !== false;
 
-    // ① 已在模态作用域内：直读（嵌套 executeAsModal 会被宿主拒绝）
+    // ① 已在自家模态作用域内：直读（嵌套 executeAsModal 会被宿主拒绝）
+    //    ⚠️ 判据是 `isInOwnModalScope()` = **我们自己的**模态计数，不是 `core.isModal()`。
     if (isInOwnModalScope()) {
         try {
             const value = await fn();
@@ -335,56 +406,55 @@ export async function psTryRead<T>(
     let delay = Math.max(0, opts.retryDelayMs ?? 120);
 
     // ③ 模态作用域内读取 + 有界退避重发
-    readonlyDepth++;
-    try {
-        for (let attempt = 0; ; attempt++) {
-            try {
-                // 节奏控制：与上一次模态命令至少隔 MIN_MODAL_GAP_MS（见头部说明）。
-                await spaceModalEntry();
-                const value = await core.executeAsModal(
-                    async () => await fn(),
-                    {
-                        commandName: label,
-                        interactive: false,
-                        timeOut: Math.max(0, opts.timeOutMs ?? 1000),
-                    } as any
-                );
-                // 读取期间若发生文档级变化（切文档/打开/关闭）⇒ 数据可能来自
-                // 已销毁的文档，作废本次结果（根因 R2 的直接后果）。
-                if (guard && getDocGeneration() !== gen) {
-                    noteHostResponsive();   // 宿主确实答了（只是世代号变了）
-                    markPsAccess(`${label}（世代号已变，作废）`, 'skip');
-                    return { ok: false };
+    for (let attempt = 0; ; attempt++) {
+        try {
+            // 节奏控制：与上一次模态命令至少隔 MIN_MODAL_GAP_MS（见头部说明）。
+            await spaceModalEntry();
+            // ⚠️ 必须**复查**一次粗筛：上面那句 `await spaceModalEntry()` 可能睡满
+            //    MIN_MODAL_GAP_MS(300ms)，期间完全可能刚收到 delete / 合并 / 切文档
+            //    等通知。少了这一句，就会把「已知宿主正忙」的读取照样送进模态。
+            if (!opts.bypassCoarseGate && isPsBusy()) return { ok: false };
+            const value = await runAsModal(
+                async () => await fn(),
+                {
+                    commandName: label,
+                    interactive: false,
+                    timeOut: Math.max(0, opts.timeOutMs ?? 1000),
                 }
-                // ✅ 宿主答了 ⇒ 这是**肯定式证据**：get 通道刚才畅通。
-                //    同步裸读的租约据此续期（见 psProbe.canSyncReadHost）。
-                noteHostResponsive();
-                markPsAccess(label, 'ok');
-                return { ok: true, value };
-            } catch (e) {
-                // ⚠️⚠️ 宿主「有自己的模态作用域在跑」（打开/关闭/保存大文档、
-                // 拼合、其它插件持锁）时的正确反应是**退避，而不是降级裸读**。
-                // 判据：error.number === 9（官方文档给的就是这个码），或消息里出现
-                // modal（"host is in a modal state" / "…is running a modal command"）。
-                // 曾经的「消息命中 ⇒ 直读兜底」写法在这里是**危险的**：宿主忙碌期的
-                // 裸 get 正是原生「命令"获取"当前不可用」弹框的来源，越兜越弹。
-                // 现在改为：作废租约 + 延长文档级闩锁（让所有读取一起退避）并返回失败。
-                noteHostUnresponsive();
-                if (isHostModalError(e)) {
-                    markPsAccess(`${label}：宿主模态冲突`, 'fail');
-                    extendDocLatch();
-                    return { ok: false };
-                }
-                if (attempt >= retries) {
-                    markPsAccess(`${label}：${accessErrText(e)}`, 'fail');
-                    return { ok: false };
-                }
-                await sleep(delay);
-                delay *= 2;
+            );
+            // 读取期间若发生文档级变化（切文档/打开/关闭）⇒ 数据可能来自
+            // 已销毁的文档，作废本次结果（根因 R2 的直接后果）。
+            if (guard && getDocGeneration() !== gen) {
+                noteHostResponsive();   // 宿主确实答了（只是世代号变了）
+                markPsAccess(`${label}（世代号已变，作废）`, 'skip');
+                return { ok: false };
             }
+            // ✅ 宿主答了 ⇒ 这是**肯定式证据**：get 通道刚才畅通。
+            //    同步裸读的租约据此续期（见 psProbe.canSyncReadHost）。
+            noteHostResponsive();
+            markPsAccess(label, 'ok');
+            return { ok: true, value };
+        } catch (e) {
+            // ⚠️⚠️ 宿主「有自己的模态作用域在跑」（打开/关闭/保存大文档、拼合、
+            // 删除/合并、其它插件持锁）时的正确反应是**退避，而不是降级裸读**。
+            // 判据：error.number === 9（官方文档给的就是这个码），或消息里出现
+            // modal（"host is in a modal state" / "…is running a modal command"）。
+            // 曾经的「消息命中 ⇒ 直读兜底」写法在这里是**危险的**：宿主忙碌期的
+            // 裸 get 正是原生「命令"获取"当前不可用」弹框的来源，越兜越弹。
+            // 现在改为：作废租约 + 延长文档级闩锁（让所有读取一起退避）并返回失败。
+            noteHostUnresponsive();
+            if (isHostModalError(e)) {
+                markPsAccess(`${label}：宿主模态冲突`, 'fail');
+                extendDocLatch();
+                return { ok: false };
+            }
+            if (attempt >= retries) {
+                markPsAccess(`${label}：${accessErrText(e)}`, 'fail');
+                return { ok: false };
+            }
+            await sleep(delay);
+            delay *= 2;
         }
-    } finally {
-        readonlyDepth--;
     }
 }
 
@@ -444,6 +514,10 @@ export async function psRead<T>(
  * @returns `true` = 宿主可控（调用方应释放闩锁）；`false` = 仍在忙（续期闩锁）。
  */
 export async function probeHostIdle(timeOutMs = 300): Promise<boolean> {
+    // 我们自己已经握着锁 ⇒ 宿主当然可控。
+    // ⚠️ 这里同样**不能**用 `core.isModal()`：它会把「宿主自己握着锁」误判成
+    //    「我们握着锁」，于是闩锁会在宿主仍然忙碌时被判「已可控」而提前释放
+    //    —— 这正是「打开/关闭大文档始终高频弹框」的另一半机制（2026-10-09 定性）。
     if (isInOwnModalScope()) return true;
     // 距上次模态命令太近 ⇒ 本轮跳过（返回 false = 「无证据」，调用方会续期闩锁、
     // 下一轮再来）。**不要**在这里 noteHostUnresponsive：跳过 ≠ 宿主忙，
@@ -451,13 +525,13 @@ export async function probeHostIdle(timeOutMs = 300): Promise<boolean> {
     if (modalEntryTooSoon()) return false;
     try {
         lastModalEntryAt = Date.now();
-        await core.executeAsModal(
+        await runAsModal(
             async () => { /* 空操作：只为拿一次锁，刻意不读任何数据 */ },
             {
                 commandName: '检测 Photoshop 空闲',
                 interactive: false,
                 timeOut: Math.max(0, timeOutMs),
-            } as any
+            }
         );
         // ✅ 拿到锁 ⇒ 宿主可控。这对同步裸读是**肯定式证据**（见 psProbe.canSyncReadHost）。
         noteHostResponsive();
