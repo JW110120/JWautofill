@@ -4,7 +4,7 @@
  * 背景（与 MainToggleBus 相同的面板隔离问题）：
  * UXP 每个面板都是独立 JS 上下文。子面板的展开状态（isColorSettingsOpen /
  * isPatternPickerOpen / isGradientPickerOpen）是 APP 面板（#app）的 React state，
- * 而功能快捷键浮窗挂在绘画工具箱面板（#pixeladjustment）——热键命中后广播到所有面板，
+ * 而功能快捷键子面板挂在绘画工具箱面板（#pixeladjustment）——热键命中后广播到所有面板，
  * 任何面板都不能直接改 APP 面板的 state。
  *
  * 解法：共享「事件」而不是共享「状态」。热键命中方把 {panel, token} 写进共享文件，

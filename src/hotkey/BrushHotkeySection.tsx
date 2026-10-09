@@ -22,7 +22,7 @@ import ToggleSwitch from '../components/ToggleSwitch';
 // UXP 面板只负责选笔刷 + 发指令 + 等结果；面板本身无法稳定捕获键盘事件。
 // 注：笔刷选择行用 common.css 的 .row-between（不再用内联 rowStyle / 面板私有类）。
 // 「选区填充开关」等非笔刷功能的快捷键已迁出本分区，统一在右上角菜单
-// 「功能快捷键」浮窗里管理（见 FuncHotkeyPanel.tsx）；本分区只显示笔刷记录。
+// 「功能快捷键」子面板里管理（见 FuncHotkeyPanel.tsx）；本分区只显示笔刷记录。
 
 // 通知自动消失时间：提示是「瞬时反馈」而非常驻说明，5 秒足够读完，
 // 也避免下一次操作后还挂着上一条早已过期的提示（例如刷新完笔刷还显示"请选择"）。
@@ -111,7 +111,7 @@ export default function BrushHotkeySection() {
       } else if (info.action === 'toggleMain') {
         // 提示必须反映共享总线的真实结果：以前无条件显示「已切换」，
         // 实际上回调在另一个面板上下文里是 null，什么都没切换，误导性极强。
-        // （选区填充开关的录制已迁往「功能快捷键」浮窗，但触发反馈仍保留在这里，
+        // （选区填充开关的录制已迁往「功能快捷键」子面板，但触发反馈仍保留在这里，
         //   因为笔刷热键分区是调整面板里唯一常驻挂载的热键 UI。）
         showMessage('热键触发：' + (info.combo ? info.combo + ' → ' : '') + (info.enabled === undefined
           ? '选区填充开关切换失败'
@@ -367,7 +367,7 @@ export default function BrushHotkeySection() {
 
   // 录制由 native 守护进程完成（Windows 全局键盘钩子），UXP 只发指令并等待结果。
   // 两段式：按下组合键 → 回车确认（Esc 取消，见 HotkeyBridge.requestHotkeyRecording）。
-  // 冲突策略（与「功能快捷键」浮窗一致）：新组合键被任何已有条目（其它笔刷 / 主开关 /
+  // 冲突策略（与「功能快捷键」子面板一致）：新组合键被任何已有条目（其它笔刷 / 主开关 /
   // 功能快捷键）占用时只提示、不覆盖——两边唯一关联就是占用提示，配置互不侵扰。
   const startRecord = async () => {
     if (!selectedBrush) { showMessage('请先在左侧选择一支笔刷'); return; }
@@ -495,7 +495,7 @@ export default function BrushHotkeySection() {
   // 选中项里真正"可处理"的条数：本分区只显示笔刷条目，全部可删除
   const deletableCount = selectedIds.length;
 
-  // ===== 退格解绑（「单击选中 + 非录制态按退格」通路，与功能快捷键浮窗同款交互）=====
+  // ===== 退格解绑（「单击选中 + 非录制态按退格」通路，与功能快捷键子面板同款交互）=====
   // 语义与删除按钮刻意区分：退格 = 组合键置空、条目保留在列表（显示「未绑定」）；
   // 删除按钮 = 整条移除。仅在恰好选中一条且不在录制中时布防生效。
   useEffect(() => {
@@ -645,7 +645,7 @@ export default function BrushHotkeySection() {
   // 渲染顺序：本分区只显示笔刷记录（applyBrush），按存储顺序展示。
   // ⚠️ 必须是白名单过滤而不是「排除 toggleMain」：配置是共享的，功能快捷键（runFunc）
   // 条目也在同一份配置里，漏过滤会把「分块平均」之类的功能记录串进笔刷列表。
-  // 「选区填充开关」与功能按钮的快捷键在右上角菜单「功能快捷键」浮窗里管理。
+  // 「选区填充开关」与功能按钮的快捷键在右上角菜单「功能快捷键」子面板里管理。
   const displayEntries = entries.filter(e => e.action === 'applyBrush');
 
   return (
@@ -752,7 +752,7 @@ export default function BrushHotkeySection() {
               onMouseUp={endPress}
               onMouseMove={onRowMove}
             >
-              {/* 名称在左、快捷键在右（与「功能快捷键」浮窗一致）：分隔线居中，两列各占一半 */}
+              {/* 名称在左、快捷键在右（与「功能快捷键」子面板一致）：分隔线居中，两列各占一半 */}
               <span className="hotkey-entry-name">{e.brush}</span>
               <span className="divider-vertical">丨</span>
               <span className="hotkey-entry-combo">{e.combo || '未绑定'}</span>

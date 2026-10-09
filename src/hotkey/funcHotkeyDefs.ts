@@ -1,9 +1,9 @@
-// 功能快捷键清单：可在「功能快捷键」浮窗里录制全局快捷键的非笔刷功能。
+// 功能快捷键清单：可在「功能快捷键」子面板里录制全局快捷键的非笔刷功能。
 // id 同时是 hotkeys.json 里 runFunc 条目 brush 字段承载的功能标识，
 // 也用于执行侧的映射，两侧必须保持一致：
 //   - 常规功能按钮 → AdjustmentPanel 的 funcRunnerRef（执行权在绘画工具箱面板）；
 //   - fillPanel:* 前缀 → HotkeyBridge 直接路由到 FillPanelToggleBus（执行权在 APP 面板）。
-// section = 该功能实际所在的面板分区，浮窗按它分组展示（同区分集中、异区分容器）。
+// section = 该功能实际所在的面板分区，子面板按它分组展示（同区分集中、异区分容器）。
 // 注意：分区名须与面板分区标题一致（选区填充/快捷操作/细节调整/边缘处理）。
 export interface FuncHotkeyDef {
   id: string;

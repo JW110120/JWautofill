@@ -277,9 +277,18 @@ class App extends React.Component<AppProps, AppState> {
         return this.state.autoOffOnOtherTool && this.state.switchToLassoOnEnable;
     }
 
-    /** 两个前置选项变化时把专注模式结论同步到共享总线（值没变就不写，避免无谓的文件 I/O） */
-    private syncFocusMode() {
-        const on = this.isFocusMode();
+    /**
+     * 把专注模式结论同步到共享总线（值没变就不写，避免无谓的文件 I/O）。
+     *
+     * @param explicit 已知结论时直接传入，**跳过读 this.state**。
+     *   ⛔ 启动期必须用它：componentDidMount 里 setState 之后紧跟着调用本方法时，
+     *   React 的自动批处理让 this.state 仍是**旧值**（默认 false/false）——
+     *   直接读会把 false 写进共享文件（把上次会话留下的 true 覆盖掉），
+     *   随后 componentDidUpdate 才纠回 true。中间窗口里 MainToggleBus 读到的
+     *   是 false ⇒ 主开关热键短暂失去「只开不关」语义（专注模式下的关键行为）。
+     */
+    private syncFocusMode(explicit?: boolean) {
+        const on = explicit !== undefined ? explicit : this.isFocusMode();
         if (this.focusModeWritten === on) return;
         this.focusModeWritten = on;
         void setFocusMode(on).catch(e => console.warn('⚠️ 专注模式状态同步失败:', e));
@@ -549,6 +558,9 @@ class App extends React.Component<AppProps, AppState> {
         await this.checkLicenseStatus();
 
         // ========= 面板状态：加载并合并 =========
+        // 专注模式的结论直接由「合并后的两个前置选项」算出（不读 this.state）：
+        // 下面的 setState 是异步的，此刻 this.state 仍是默认值 false/false。
+        let focusAfterMerge = this.isFocusMode();
         try {
             const loaded = await PanelStateManager.initialize({
                 appPanel: {
@@ -570,6 +582,11 @@ class App extends React.Component<AppProps, AppState> {
                 },
             });
             if (loaded && loaded.appPanel) {
+                // 合并后的两个前置选项真值（与下面 setState 里写的合并规则逐字一致）：
+                // 存档缺字段时回落到当前 this.state（即 initialState 默认）。
+                const mergedLasso = loaded.appPanel.switchToLassoOnEnable ?? this.state.switchToLassoOnEnable;
+                const mergedAutoOff = loaded.appPanel.autoOffOnOtherTool ?? this.state.autoOffOnOtherTool;
+                focusAfterMerge = !!(mergedAutoOff && mergedLasso);
                 this.setState({
                     isEnabled: loaded.appPanel.isEnabled ?? this.state.isEnabled,
                     isExpanded: loaded.appPanel.isExpanded ?? this.state.isExpanded,
@@ -607,8 +624,12 @@ class App extends React.Component<AppProps, AppState> {
             // 加载完成（无论成败）才允许后续的持久化保存，避免启动期默认值覆盖已存状态
             this.panelStateLoaded = true;
         }
-        // 选项已从磁盘合并进来，此刻把专注模式结论推给共享总线（下次会话未打开面板也有效）
-        this.syncFocusMode();
+        // 选项已从磁盘合并进来，此刻把专注模式结论推给共享总线（下次会话未打开面板也有效）。
+        // ⚠️ 必须传显式值 focusAfterMerge，不能让 syncFocusMode 去读 this.state：
+        //    上面那个 setState 尚未生效（自动批处理），读到的仍是默认 false/false，
+        //    会把 false 写进共享文件、覆盖上次会话留下的 true，之后虽被 componentDidUpdate
+        //    纠回，但那个窗口里主开关热键会失去「只开不关」的专注模式语义。
+        this.syncFocusMode(focusAfterMerge);
         // 紧凑模式持久化状态恢复：把加载到的 5 个作用域逐一落到 body 类上，并同步菜单文案
         this.syncCompactModeClasses();
         this.syncCompactMenuLabel();
@@ -669,15 +690,6 @@ class App extends React.Component<AppProps, AppState> {
             // 否则点了只会打开一个「父面板分区」浮窗，语义对不上。
             // ⚠️ 只改 enabled、绝不 removeAt/insertAt（会损坏整个菜单，见 MenuManager 注释）。
             MenuManager.setAppVisibilityItemEnabled(!isAnySecondaryPanelOpen);
-        }
-
-        // 检查授权对话框状态变化，添加或移除CSS类
-        if (this.state.isLicenseDialogOpen !== prevState.isLicenseDialogOpen) {
-            if (this.state.isLicenseDialogOpen) {
-                document.body.classList.add('license-dialog-open');
-            } else {
-                document.body.classList.remove('license-dialog-open');
-            }
         }
 
         // 紧凑模式：开关变化 → 同步 body 类 + 重写菜单文案（面板名与状态都可能变）
@@ -2201,6 +2213,25 @@ class App extends React.Component<AppProps, AppState> {
     }  
 
     // ===== 许可证相关方法 =====
+
+    /**
+     * 把「授权对话框是否打开」同步到 body 的 `license-dialog-open` 类。
+     *
+     * 由 render() 每次调用（幂等）：先按目标态 add/remove，再回读校验，
+     * 修掉「宿主/CSSOM 把类弄丢了却没人补」的不一致（唯一写点，不与其它副作用打架）。
+     *
+     * 为什么必须渲染期同步而不是 componentDidUpdate 的 `!==` 判断：
+     * isLicenseDialogOpen 初始值就是 true（types/state.ts），首次加载时
+     * prevState === state ⇒ `!==` 恒假 ⇒ 类加不上 ⇒ number 输入穿透覆盖授权面板。
+     */
+    syncLicenseDialogClass() {
+        const shouldOpen = !!this.state.isLicenseDialogOpen;
+        const has = document.body.classList.contains('license-dialog-open');
+        if (shouldOpen === has) return;
+        if (shouldOpen) document.body.classList.add('license-dialog-open');
+        else document.body.classList.remove('license-dialog-open');
+    }
+
     async checkLicenseStatus() {
         try {
             // 统一判定（唯一事实来源）：TRIAL_ 密钥只算试用，永不计入正式授权。
@@ -2229,8 +2260,7 @@ class App extends React.Component<AppProps, AppState> {
 
     handleLicenseVerified() {
         this.setState({ isLicensed: true, isTrial: false, isLicenseDialogOpen: false });
-        // 对话框关闭，移除类名恢复输入框
-        document.body.classList.remove('license-dialog-open');
+        // body 类由 render() 里的 syncLicenseDialogClass() 按 state 派生，无需手动 remove。
         // 在弹窗关闭的同刻广播：绘画工具箱的锁定遮罩随之解除，两遮罩同步消失。
         // （广播不能更早 —— LicenseDialog 验证成功后还要停留 800ms 展示「激活成功！」）
         document.dispatchEvent(new Event('license-updated'));
@@ -2241,8 +2271,7 @@ class App extends React.Component<AppProps, AppState> {
     handleTrialStarted() {
         // 试用7天
         this.setState({ isLicensed: false, isTrial: true, isLicenseDialogOpen: false, trialDaysRemaining: 7 });
-        // 对话框关闭，移除类名恢复输入框
-        document.body.classList.remove('license-dialog-open');
+        // body 类同上，由 render() 派生
         // 同上：弹窗关闭同刻广播，工具箱同步切换到试用态（横幅变绿、不锁定）
         document.dispatchEvent(new Event('license-updated'));
         // 试用状态不允许注销
@@ -2251,15 +2280,15 @@ class App extends React.Component<AppProps, AppState> {
 
     closeLicenseDialog() {
         this.setState({ isLicenseDialogOpen: false });
-        // 移除body类名，恢复输入框显示
-        document.body.classList.remove('license-dialog-open');
+        // body 类同上，由 render() 派生
     }
 
     // 新增：手动打开授权对话框
     openLicenseDialog() {
+        // ⚠️ 这里**不要**再手动 add body 类：class 与 state 的对应关系由
+        // render() → syncLicenseDialogClass() 单点维护（曾因初始 state 即 true
+        // 而 componentDidUpdate 的 `!==` 判断恒假，导致首次加载时类加不上）。
         this.setState({ isLicenseDialogOpen: true });
-        // 添加body类名，隐藏输入框
-        document.body.classList.add('license-dialog-open');
     }
 
     // 临时调试方法：重置许可证状态
@@ -2293,6 +2322,17 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     render() {
+        // 「授权对话框打开」的 body 类：**渲染期由 state 单向派生**（幂等、每次渲染都对齐）。
+        // ⚠️ 为什么必须放在这里，不能靠 componentDidUpdate 的 `!==` 判断：
+        //      isLicenseDialogOpen 的**初始值就是 true**（types/state.ts），首次加载时
+        //      prevState === state（都是 true）⇒ `!==` 恒假 ⇒ 类永远加不上 ⇒ 面板出现但
+        //      下方 number 输入（原生视图，永远画在最上层）穿透覆盖在面板之上。
+        //      再次点击入口时 state 由 false→true，`!==` 才成立 ⇒ 类正常加上 ⇒ 表现为
+        //      「首次加载有 bug、再次唤出正常」。派生式写法对「初始即 true」和后续
+        //      任意切换都成立，同时天然覆盖首次加载 / 自动激活后 / 注销后重开三条路径。
+        //      （原 componentDidUpdate 里那段 add/remove、以及各处的 remove 调用均已删除，
+        //        避免多写点互相打架；本行是唯一写点。）
+        this.syncLicenseDialogClass();
         // 专注模式：两个前置选项同时勾选即成立（推导值，不额外存 state）
         const focusMode = this.isFocusMode();
         // 紧凑模式（仅父面板作用域）：三行 radio 改三列、去掉齿轮，标签兼作子面板入口

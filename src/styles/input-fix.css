@@ -31,19 +31,18 @@
    下面两组「面板级弹层」沿用同一套做法：保留布局占位（不用 display:none），
    用 visibility + opacity + pointer-events 三件套彻底隐形。 */
 
-/* 授权对话框打开时，彻底隐藏主面板内所有可编辑控件，避免穿透和抢层级 */
-body.license-dialog-open #app .app-root > .panel > .panel-section .slider-container input,
-body.license-dialog-open #app .app-root > .panel > .panel-section .slider-container textarea,
-body.license-dialog-open #app .app-root > .panel > .panel-section .slider-container sp-textfield,
-body.license-dialog-open #app .app-root > .panel > .panel-section .collapse-content input,
-body.license-dialog-open #app .app-root > .panel > .panel-section .collapse-content textarea,
-body.license-dialog-open #app .app-root > .panel > .panel-section .collapse-content sp-textfield,
-body.license-dialog-open #app .app-root > .panel > .panel-section .collapse-content-expanded input,
-body.license-dialog-open #app .app-root > .panel > .panel-section .collapse-content-expanded textarea,
-body.license-dialog-open #app .app-root > .panel > .panel-section .collapse-content-expanded sp-textfield,
-body.license-dialog-open #app .app-root > .panel > .panel-section .row-between input,
-body.license-dialog-open #app .app-root > .panel > .panel-section .row-between textarea,
-body.license-dialog-open #app .app-root > .panel > .panel-section .row-between sp-textfield {
+/* 授权对话框打开时，彻底隐藏主面板内所有可编辑控件，避免穿透和抢层级
+   ⚠️ 用「主面板内容区 = .app-root > .panel 的全部后代」而不是逐个列举容器类名
+      （.slider-container / .collapse-content / .collapse-content-expanded / .row-between …）。
+      逐个列举会漏：不透明度/羽化的 number 走在 .row-start > .num-input-row 里，
+      不属于任何一个被列举的容器 ⇒ 类加上了它照样穿透（这是「首次加载穿透」的第二根因）。
+      授权对话框是全屏遮罩，被遮住的主面板内容**没有任何需要保留可见的输入**，
+      所以「全部后代」才是与语义等价的正确范围。
+   ⚠️ 必须带 !important：要压过下方 `#app .panel-section ~ .panel input[type="number"]`
+      的 visibility:visible（那条特异性 (1,3,1) 高于本条）。 */
+body.license-dialog-open #app .app-root > .panel input,
+body.license-dialog-open #app .app-root > .panel textarea,
+body.license-dialog-open #app .app-root > .panel sp-textfield {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;

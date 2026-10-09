@@ -5,10 +5,10 @@ import {
   armBackspaceDelete, disarmBackspaceDelete, onBackspaceDelete,
 } from './HotkeyBridge';
 import { helpTexts } from '../constants/helpTexts';
-import { subscribeFocusMode } from '../utils/FocusModeBus';
+import { subscribeFocusMode, peekFocusMode } from '../utils/FocusModeBus';
 import { FUNC_HOTKEY_DEFS, FUNC_HOTKEY_SECTION_ORDER, getFuncHotkeyLabel } from './funcHotkeyDefs';
 
-// 「功能快捷键」浮窗面板：由右上角菜单打开，专门管理**非笔刷功能**的全局快捷键。
+// 「功能快捷键」子面板：由右上角菜单打开，专门管理**非笔刷功能**的全局快捷键。
 // 形态：**占满整个面板的子面板**（不是居中卡片），纵向两段：
 //   滚动区（.func-hotkey-body，从面板顶端 y=0 贯通到底部）
 //     ├─ 标题段 .func-hotkey-head（「功能快捷键」+ 关闭按钮 + 未连接提示，**随内容滚走**）
@@ -25,7 +25,7 @@ import { FUNC_HOTKEY_DEFS, FUNC_HOTKEY_SECTION_ORDER, getFuncHotkeyLabel } from 
 //   单击行 → 选中（布防）：选中后按退格键解绑该条（条目保留，显示「未绑定」）；
 //   双击行 → 开始录制/重录（守护进程全局捕获组合键，行内实时显示「按下组合键…」）；
 //   捕获到组合键后该行显示「XXX · 回车确认」→ 回车保存；Esc 取消；
-//   关闭浮窗/再次双击其它行前须先结束当前编辑。
+//   关闭子面板/再次双击其它行前须先结束当前编辑。
 //   ⚠️ 标题随内容滚走 ⇒ 关闭按钮会滚出视野，Esc 作为退路关闭本子面板
 //      （录制期间不接管 Esc —— 那时归守护进程的「取消录制」）。
 // 录制/选中期间该行高亮（复用 .selected 边框）。
@@ -41,7 +41,10 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   const [entries, setEntries] = useState<HotkeyEntry[]>([]);
   const [daemonConnected, setDaemonConnected] = useState(false);
   // 专注模式：来自共享总线（APP 面板写入），只影响主开关行的显示名。
-  const [focusMode, setFocusMode] = useState(false);
+  // ⚠️ 初值取 peekFocusMode() 的内存真值（null 才是「未知」→ 退回 false）：
+  //    只靠 subscribeFocusMode 的首次回调，首帧会先渲染成「选区填充开关」
+  //    再闪一下纠正。两个面板共享同一模块实例，主面板启动时写入的值这里能同步读到。
+  const [focusMode, setFocusMode] = useState(() => peekFocusMode() ?? false);
   // 当前编辑中的行 + 已捕获待确认的组合键（空串 = 捕获阶段，还没按到组合键）
   const [editingTarget, setEditingTarget] = useState<EditTarget>(null);
   const [capturedCombo, setCapturedCombo] = useState('');
@@ -50,8 +53,8 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   const [selectedTarget, setSelectedTarget] = useState<EditTarget>(null);
 
   const msgTimerRef = useRef<any>(null);
-  // 浮窗根节点：面板内直捕退格用——只有按键目标落在浮窗内（行被点击聚焦后）
-  // 才劫持退格，避免污染浮窗外的其它输入控件。
+  // 子面板根节点：面板内直捕退格用——只有按键目标落在子面板内（行被点击聚焦后）
+  // 才劫持退格，避免污染子面板外的其它输入控件。
   const floatWinRef = useRef<HTMLDivElement | null>(null);
   const showMessage = useCallback((text: string) => {
     if (msgTimerRef.current) { clearTimeout(msgTimerRef.current); msgTimerRef.current = null; }
@@ -60,7 +63,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   }, []);
   useEffect(() => () => { if (msgTimerRef.current) clearTimeout(msgTimerRef.current); }, []);
 
-  // 编辑期间关闭浮窗：主动取消录制，避免守护进程一直挂着等按键；
+  // 编辑期间关闭子面板：主动取消录制，避免守护进程一直挂着等按键；
   // 卸载/关闭时同步撤防「退格解绑」（面板都没了，布防必须归还）。
   const editingRef = useRef<EditTarget>(null);
   useEffect(() => { editingRef.current = editingTarget; }, [editingTarget]);
@@ -93,14 +96,14 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   }), []);
 
   // 面板内直捕退格（不依赖守护进程布防，reload 即生效）：行被点击聚焦后，
-  // 按键目标在浮窗内 → 退格解绑选中条。与布防通路互斥不重复：
+  // 按键目标在子面板内 → 退格解绑选中条。与布防通路互斥不重复：
   // 新版守护进程会在低层钩子里吞掉退格并回传 backspaceDelete（此时 UXP 收不到按键事件）；
   // 旧版守护进程放行按键，由本监听兜底。
   useEffect(() => {
     const onDocKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Backspace') return;
       const win = floatWinRef.current;
-      if (!win || !win.contains(e.target as Node)) return; // 焦点不在浮窗内不劫持
+      if (!win || !win.contains(e.target as Node)) return; // 焦点不在子面板内不劫持
       const target = selectedRef.current;
       if (!target || editingRef.current) return;
       e.preventDefault();
@@ -220,7 +223,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
         title={title}
         tabIndex={0}
         onClick={(ev) => {
-          // 行可聚焦：点击即聚焦，让随后的退格落在浮窗内（面板内直捕退格的焦点依据）
+          // 行可聚焦：点击即聚焦，让随后的退格落在子面板内（面板内直捕退格的焦点依据）
           (ev.currentTarget as HTMLElement).focus();
           if (editingTarget) return;
           // 单击选中 / 再击取消；选中即布防（按退格解绑），由上方 effect 同步给守护进程

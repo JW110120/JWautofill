@@ -50,6 +50,21 @@
 - ⚠️ 颜色一律走 CSS 令牌（`--primary-color` / `--entry-bg` / `--border-color` / `--text-color` / `--hover-bg` /
   `--bg-color` / `--notify-*` / `--spectrum-global-color-*`），**禁硬编码 HEX**；对比度 ≥ WCAG 4.5:1；三档主题 darkest/dark/light。
 
+### 跨面板共享状态（专注模式 / 主开关）→ `refs/uxp-api-layer.md`
+- ⛔ **两个面板同上下文**：`#app` 与 `#pixeladjustment` 在**同一 HTML 文档、同一个 bundle**
+  ⇒ `FocusModeBus` / `MainToggleBus` 的模块级 `cached` 是**跨面板共享**的（设计前提，改动前务必确认）。
+- ⛔⛔ **订阅/轮询的去重基线绝不能用共享缓存播种**：`let last = cached?.focus ?? null` 会让
+  「缓存值恰好 == 文件值」时首次回调永不触发 ⇒ 订阅方 `useState` 初值成为最终值且**永不纠正**
+  （曾致「专注模式已开但功能快捷键面板显示『选区填充开关』」）。必须从 `null` 起（=「未知」）。
+- ⛔ **读不到 ≠ 为false**：`readRaw()` 返回 null 时**本轮不表态**（不更新 `last`），
+  否则会把订阅方从 true 硬拽回 false。
+- ⛔ **`setState` 之后立刻读 `this.state` 拿到的是旧值**（React 19 自动批处理）：
+  启动期算派生结论必须由「合并后的局部变量」显式传入（`syncFocusMode(explicit)`），别读 `this.state`。
+- ⚠️ 共享状态台架（`analysis/focus-mode/repro.mjs`，tsc 就地转译 + 内存 UXP FS 跑真实代码）：
+  **每场景必须独立模块实例**（模块级 `cached`/`writeChain` 会跨场景造假失败）；
+  内存 FS 必须实现 `folder.createFile`（缺了被源码 `catch` 吞掉、只更内存不落盘）。
+  支持 `node repro.mjs <旧版路径>` 做**对照实验**验台架有鉴别力。
+
 ### 性能 / React / 闸门 → `refs/uxp-api-layer.md` + **`refs/busy-gate.md`**（闸门 2026-10-08 重构，先读它）
 - ⛔⛔ UXP 交互延迟的主因是**串行同步 IPC 往返**，不是像素计算（`app.activeDocument` / `layer.bounds` 每次读 = 一次往返；
   **batchPlay 数组整体只算一次**）。填充提速只能来自「读一次复用 + 合并无依赖命令」，**不能来自缩短等待**。

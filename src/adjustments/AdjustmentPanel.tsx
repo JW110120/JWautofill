@@ -474,7 +474,7 @@ const [panelStateLoaded, setPanelStateLoaded] = useState(false);
 // 控制"隐藏/显示分区"面板
 const [showVisibilityPanel, setShowVisibilityPanel] = useState(false);
 
-// 控制「功能快捷键」浮窗（右上角菜单 → 功能快捷键）：管理非笔刷功能的快捷键
+// 控制「功能快捷键」子面板（右上角菜单 → 功能快捷键）：管理非笔刷功能的快捷键
 const [showFuncHotkeyPanel, setShowFuncHotkeyPanel] = useState(false);
 
 const [radius, setRadius] = useState(15);
@@ -960,7 +960,7 @@ useEffect(() => {
   return () => document.body.classList.remove('visibility-panel-open');
 }, [showVisibilityPanel]);
 
-// 「功能快捷键」浮窗同样遮住背景：复用同一套 body 类收起滚动条/隐藏背后输入
+// 「功能快捷键」子面板同样遮住背景：复用同一套 body 类收起滚动条/隐藏背后输入
 useEffect(() => {
   if (showFuncHotkeyPanel) {
     document.body.classList.add('visibility-panel-open');
@@ -3711,7 +3711,7 @@ const handleKnockoutWhite = () => handleKnockout('white');
 const handleKnockoutBlack = () => handleKnockout('black');
 
 // ===== 功能快捷键（runFunc）执行器 =====
-// 「功能快捷键」浮窗（FuncHotkeyPanel）录制的功能按钮快捷键命中后，
+// 「功能快捷键」子面板（FuncHotkeyPanel）录制的功能按钮快捷键命中后，
 // HotkeyBridge 按 funcHotkeyDefs.ts 里的功能 id 调到这里。id 与 defs 必须一一对应。
 // handler 每次渲染都会重建 ⇒ 用 ref 持有映射、执行时取最新值；
 // 注册本身是模块级单例（registerFuncRunner），只在挂载后做一次。
@@ -4010,8 +4010,9 @@ return (
       </div>
     </div>
   )}
-  {/* 功能快捷键浮窗：右上角菜单 → 功能快捷键。遮罩/窗口结构由组件自带
-      （与上方隐藏/显示分区同款 float-overlay/float-window），点遮罩关闭。 */}
+  {/* 功能快捷键子面板：右上角菜单 → 功能快捷键。**占满整个面板**，
+      遮罩/面板结构由组件自带（复用 float-overlay/float-window 基类），
+      点遮罩关闭；滚动槽贴面板最右缘、纵向贯通整高，notify 恒钉底部。 */}
   {showFuncHotkeyPanel && (
     <FuncHotkeyPanel onClose={() => setShowFuncHotkeyPanel(false)} />
   )}

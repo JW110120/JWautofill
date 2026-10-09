@@ -32,25 +32,17 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
     const [message, setMessage] = useState('');
     const [messageType, setMessageType] = useState<'success' | 'error' | 'info'>('info');
 
-    // 打开时添加遮罩类，关闭/卸载时移除，解决 number input 层级问题
-    useEffect(() => {
-        if (isOpen) {
-            document.body.classList.add('license-dialog-open');
-        } else {
-            document.body.classList.remove('license-dialog-open');
-        }
-        return () => {
-            document.body.classList.remove('license-dialog-open');
-        };
-    }, [isOpen]);
-
-    /**
-     * 每次开关都清空面板内部状态。
-     * 场景：激活成功 → 点「注销激活状态」→ 面板重新打开时，
-     * 若不清空会残留上一次输入的激活码与「激活成功」提示。
-     * 注意依赖数组只放 isOpen：若把 isLicensed/isTrial 也放进来，
-     * 激活成功时状态变化会把「激活成功」提示立刻清掉，看不到反馈。
-     */
+    // ⚠️ 这里**不再**管理 body 的 `license-dialog-open` 类。
+    // 该类由父级 App 的 render() → syncLicenseDialogClass() 按 state 单向派生
+    // （唯一写点）。本组件曾有一个 [isOpen] effect 负责 add/remove，但它的
+    // cleanup 会在卸载时无条件 remove，与父级派生式互相覆盖；且首次加载时
+    // isOpen 初始即 true，effect 的时机也不可靠。统一交给父级，本组件只管内容。
+    //
+    // 每次开关都清空面板内部状态。
+    // 场景：激活成功 → 点「注销激活状态」→ 面板重新打开时，
+    // 若不清空会残留上一次输入的激活码与「激活成功」提示。
+    // 注意依赖数组只放 isOpen：若把 isLicensed/isTrial 也放进来，
+    // 激活成功时状态变化会把「激活成功」提示立刻清掉，看不到反馈。
     useEffect(() => {
         setLicenseKey('');
         setMessage('');
