@@ -83,6 +83,22 @@
   内部的 `psRead`/`getLayerSnapshot`/`getActiveLayerInfo` 会看到 depth=0 ⇒ 去嵌套 executeAsModal
   ⇒ UXP 拒绝嵌套 ⇒ **读取静默失败**（症状「点了没反应」，不是弹框，更难查）。
   自检：`grep -rn "core.executeAsModal" src/` 只应剩注释。
+- ⛔⛔⛔ **`runAsModal` 绝不把可能为 `undefined` 的 `opts` 传作第二实参**：UXP 原生绑定对
+  「显式 undefined 的 object 形参」**严格校验** ⇒ 抛 `Argument 2 has an invalid type.
+  Expected type: object actual type: undefined`。`opts` 是可选参数，全仓 **11 处**
+  `executeAsModal(fn)` 不传它 ⇒ 实现必须分岔：`opts == null ? executeAsModal(wrapped)
+  : executeAsModal(wrapped, opts)`。2026-10-09 就因这一行「描边 8 分支全挂 + 取色器全挂」
+  （症状：`✅ 新建图层成功` 紧接 `❌ … Argument 2 …`；12 组合里 3 仅描边 + 3 清除+描边失效）。
+- ⛔⛔ **通知包装器必须按 handler 记忆化（`WeakMap`）**：`removeNotificationListener` 按**引用**匹配，
+  而 `wrapDocLevelLogger` 每次新建闭包 ⇒ add/remove 拿到不同对象 ⇒ 注销失败
+  （`Notifications could not be registered`）+ **监听器泄漏**（子面板按 `[isOpen]` 每开合泄漏 16 个）
+  ⇒ 此后每条 PS 通知被全部残留回调处理 ⇒ 本仓**唯一「无上限累加」的模态命令放大器**
+  （「Too many modal scope commands」红色计数 153 → 240+ 的机制）。
+- ⛔ **智能对象/置入图层事件名必须注册**（`psProbe.PLACED_LAYER_EVENTS`，含用户真机给出的
+  `newPlacedLayer` = 「转换为智能对象」，通知描述符 `_isCommand:false`），并按**文档级**处理
+  （`beginDocLatch`，但**不**调 `noteDocLevelEvent` ⇒ 不推进世代号）：宿主内部要
+  「新建临时文档 → 合成 → 置入 → 关闭」，与 open/save 同型。名字未注册 = 该重命令全程无闸门。
+- ✅ 上述三条有静态守卫：`node outputs/_modal_contract_guard.cjs`（G1-B / G2-A / G2-B / G3-A / G3-B）。
 - ⛔⛔ **同步接口永不遍历**：`getLayerSnapshot()` 已无 traverse 路径（只读缓存）。
   「同步裸读 + 5N 次 get」是**乘法放大器**（16 层 = 80 次 get），判据再准也不该留着（旧「入口判
   `isPsBusy()` / 租约」写法已被证明存在放行出口）；要新数据一律走 `refreshLayerSnapshot()`。

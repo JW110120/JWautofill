@@ -930,9 +930,18 @@ class App extends React.Component<AppProps, AppState> {
 
     /** 描边色板：打开 PS 颜色选择器，选完写回 strokeColor（前景色的保存/还原由 pickColorWithInitial 负责） */
     openStrokeColorPicker = async () => {
-        // ⚠️ 初始色必须传「色板当前显示的颜色」：showColorPicker 无参、只认当前前景色，
-        //    不先把前景色设成它，面板显示 A 而拾色器打开 B（旧缺陷）。
-        const picked = await pickColorWithInitial(this.getStrokeDisplayColor(), '选择描边颜色');
+        // ⚠️ 初始色必须是「真实描边色 strokeColor」，**不能**用灰色显示色 getStrokeDisplayColor()：
+        //    灰色显示态（清除/图层蒙版/快速蒙版/单通道）下后者返回的是灰度值，用它当初值会连踩两坑
+        //    （用户 2026-10-09 报的「先点开拾色器就再也回不到原色」）：
+        //      ① 拾色器一打开就显示灰（#b34d4d → #6b6b6b）；
+        //      ② 用户确认后把那个灰度 setState 回 strokeColor ⇒ 真实色被永久覆盖，
+        //         退出灰色态也恢复不了（灰色态本应只影响显示）。
+        //    showColorPicker 无参、只认当前前景色 ⇒ 仍需先把前景色设成真实色，这由 pickColorWithInitial 负责。
+        const { strokeColor } = this.state;
+        const initial = strokeColor
+            ? { red: strokeColor.red, green: strokeColor.green, blue: strokeColor.blue }
+            : { red: 0, green: 0, blue: 0 };
+        const picked = await pickColorWithInitial(initial, '选择描边颜色');
         if (picked) {
             this.setState({ strokeColor: picked });
         }

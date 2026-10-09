@@ -132,13 +132,22 @@
 - ⛔ **PS 原生拾色器 `showColorPicker` 无参、只认「当前前景色」为初始值** ⇒ **禁止裸调**！
   一律走 `src/utils/ColorPicker.ts` 的 `pickColorWithInitial(initial, name)`：
   记真前景色 → 注入 `initial` → 打开 → 读回 → **finally 还原**（不还原就会改掉用户前景色）。
-  面板「显示色 ↔ 拾色器初值」必须**同源**（描边色板：`getStrokeDisplayColor()` 是唯一事实来源）。
+  ⛔⛔ **拾色器初值 = 真实色，绝不是「灰色显示色」**（2026-10-09 用户报障后的修正）：
+  灰色显示态下 `getStrokeDisplayColor()` 返回的是**灰度值**，用它当初值会连踩两坑 ——
+  ① 拾色器一打开就显示灰（`#b34d4d` → `#6b6b6b`）；② 用户确认后把灰度 `setState` 回 `strokeColor`
+  ⇒ **真实色被永久覆盖**，退出灰色态也恢复不了。⇒ 描边板初值取 `state.strokeColor`（真实色）；
+  渐变板取 `parseCssRgb(stop.color)`（stops 从不灰化）。「同源」指的是**同一个真实色**，
+  不是「把显示值喂给拾色器」。守卫：`outputs/_color_picker_contract_guard.cjs`（G1/G2/G3）。
   ⚠️ 返回值绿色分量 `grain` / `green` **两键都认** + `Number.isFinite` + 0–255 clamp：
   只认一个时拿到 `undefined` ⇒ `Math.round(undefined)=NaN` ⇒ `rgb(r, NaN, b)` **非法颜色串**
   ⇒ 色板没有背景色、透出面板底色（看着像一块 `#333333`，而非纯黑）。
 
 ## 灰色显示态
 
+- ⛔⛔ **灰态「只影响显示」是硬边界**：任何**写回**路径都不许让灰度进入真实数据。
+  最典型的翻车点是 **PS 原生拾色器初值** —— 灰态下把 `getStrokeDisplayColor()` 当 `initial`
+  ⇒ ① 一打开就显示灰；② 确认后灰度写回 `strokeColor` ⇒ 原色永久丢失（2026-10-09 用户报障：
+  「开启清除模式后先点开拾色器，退出后色板就永远停在灰」）。拾色器初值一律取**真实色**。
 - ⚠️ 「灰色显示态」四标志（清除模式 / 图层蒙版 / 快速蒙版 / 单通道）在 GradientPicker 里统一走
   `isGrayDisplayMode()` + `getDisplayColorHex()`（**模块级纯函数**）：色板与渐变预览条口径必须一致
   （0.299/0.587/0.114）；灰化**只影响显示**，stops 里仍存原色，退出灰色态自然恢复。

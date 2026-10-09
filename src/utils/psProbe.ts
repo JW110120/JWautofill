@@ -130,6 +130,43 @@ export function isDocLevelDescriptor(eventName?: string, descriptor?: any): bool
 }
 
 /**
+ * 「智能对象 / 置入图层」类事件名 —— 本仓事件命名口径下，**事件名即描述符 `_obj`**。
+ *
+ * ⚠️ 为什么必须单列一类（2026-10-09 用户真机报障）：
+ * 「转换为智能对象」派发的描述符是 `{ _obj: 'newPlacedLayer', _isCommand: false }`
+ * （`_isCommand: false` = 通知型描述符，即通知回调收到的那个）。
+ * 该名字**不在** `PS_NOTIF_EVENTS` 里 ⇒ 这条重命令**全程没有任何忙碌窗口**，
+ * 与 `open` / `close` 的历史缺口（根因 R2）**完全同型**：
+ * 命令执行期间闸门恒为 false，各轮询/事件驱动读取照常发起，有几率撞上宿主
+ * 的模态作用域 ⇒ 宿主原生「命令"获取"当前不可用」。用户实测「对若干图层执行
+ * 转换为智能对象时有几率复现」。
+ *
+ * 为什么按**文档级**处理（而不是普通结构类 600ms）：宿主执行「转换为智能对象」
+ * 时内部要「新建临时文档 → 合成 → 置入 → 关闭临时文档」，是与 `open` / `save`
+ * 同型的「宿主自己握着模态作用域、可能达数秒」的重命令 —— 任何常数窗口都堵不住
+ * 它尾部那段不可观测的忙碌期（这正是 `QUIET_AFTER_DOC_EVENT_MS` 当年不够用的原因）。
+ *
+ * 名字来源：`newPlacedLayer` 由用户真机描述符直接给出；其余为 Photoshop 动作
+ * 事件表里同族的置入图层命令名，属于「宁可多听一个」——注册是**逐名容错**的，
+ * 宿主不认识的名字只被跳过，不会拖垮其余监听。
+ */
+export const PLACED_LAYER_EVENTS: readonly string[] = [
+    // 「转换为智能对象」（用户真机取证的确切名字）
+    'newPlacedLayer',
+    // 同族：编辑内容 / 转为链接智能对象 / 重新链接 / 替换内容
+    'placedLayerEditContents',
+    'placedLayerConvertToLinked',
+    'placedLayerRelinkToFile',
+    'placedLayerReplaceContents',
+];
+
+/** 通知名是否属于「智能对象 / 置入图层」类（见 `PLACED_LAYER_EVENTS`）。 */
+export function isPlacedLayerEvent(eventName?: string): boolean {
+    if (!eventName) return false;
+    return PLACED_LAYER_EVENTS.indexOf(eventName) >= 0;
+}
+
+/**
  * 判断一个通知是否是「选区变更」。
  *
  * PS 在套索/魔棒/选区修改/取消选区后派发 `set`，descriptor 形如
@@ -344,6 +381,18 @@ export function markPsBusyForEvent(eventName?: string, descriptor?: any): void {
         // ⚠️ 纯选区变更**不**作废宿主租约：它不代表「宿主刚执行过重命令」，
         //    而且填充要紧接着读 PS（`fillReadyRemain` 的短冷却就建立在这条上）。
         psBusyUntil = Math.max(psBusyUntil, now + QUIET_AFTER_EVENT_MS);
+        return;
+    }
+
+    // ---- 智能对象 / 置入图层类：按**文档级**重命令处理（见 PLACED_LAYER_EVENTS）----
+    // 这条分支补的是一个「事件覆盖缺口」：名字不在监听名单里 ⇒ 以前根本没有窗口。
+    // 命中后与 open/save 同待遇：长窗口 + 文档级闩锁 + 作废宿主租约。
+    // ⚠️ 不调 `noteDocLevelEvent()`（它会 `docGeneration++`）：这里文档实例并没有换
+    //    （只是图层结构变了），推进世代号会让在途读取被无谓作废。
+    if (isPlacedLayerEvent(eventName)) {
+        lastEventAt = now;
+        lastHeavyEventAt = now;
+        beginDocLatch();
         return;
     }
 

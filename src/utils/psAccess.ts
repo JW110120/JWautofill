@@ -1,7 +1,8 @@
 import { action, core } from 'photoshop';
 import {
     extendDocLatch, getDocGeneration, isPsBusy, noteHostResponsive, noteHostUnresponsive,
-    isDocLevelDescriptor, isDocLatchActive, getDocLatchAgeMs, getHostLeaseState
+    isDocLevelDescriptor, isPlacedLayerEvent, PLACED_LAYER_EVENTS,
+    isDocLatchActive, getDocLatchAgeMs, getHostLeaseState
 } from './psProbe';
 
 /**
@@ -123,6 +124,11 @@ export const PS_NOTIF_EVENTS: readonly string[] = [
     'rasterizeAll',
     'rasterizeAllPlaced',
     'splitChannels',
+    // 「智能对象 / 置入图层」类（2026-10-09 补）—— 补的是**事件覆盖缺口**：
+    // 「转换为智能对象」派发的通知描述符是 `{_obj:'newPlacedLayer', _isCommand:false}`，
+    // 名字不在名单里 ⇒ 该命令全程无闸门、有几率弹宿主原生「命令"获取"当前不可用」。
+    // 走同一套逐名容错注册；分类（按文档级重命令处理）见 psProbe.markPsBusyForEvent。
+    ...PLACED_LAYER_EVENTS,
     'open',
     'close',
     'save',
@@ -175,17 +181,48 @@ export function removePsNotificationListeners(
  *   · 控制台出现 `📂 [PS事件] open` ⇒ 事件通路正常，问题在闩锁的保持/释放；
  *   · 完全不出现 ⇒ 事件名不对（或未被派发），兜底巡检是唯一防线。
  */
+/**
+ * 包装器缓存：**同一个 handler 必须永远映射到同一个包装函数**。
+ *
+ * ⚠️⚠️ 这是 `removePsNotificationListeners` 能否生效的**唯一前提**（2026-10-09 修复）。
+ *
+ * 背景：UXP 的 `removeNotificationListener(events, listener)` 是**按引用**匹配的 ——
+ * 它只认当初 `addNotificationListener` 传进去的那个函数对象。而本函数每调用一次都会
+ * 返回一个**新的闭包**；`add` 与 `remove` 各自调用它一次 ⇒ 两者拿到的是**不同**的
+ * 函数对象 ⇒ 注销永远找不到目标。
+ *
+ * 症状（用户真机 Console）：关闭图案 / 渐变子面板时，16 个事件名**逐个**报
+ * 「⚠️ 通知监听注销失败（已跳过）: <事件名> Error: Notifications could not be registered」
+ * （`PatternPicker.tsx` / `GradientPicker.tsx` 的 effect cleanup → 本模块）。
+ *
+ * 后果不只是刷屏：**监听器泄漏**。子面板按 `[isOpen]` 挂载/卸载，每开合一次就多留
+ * 16 个永不注销的回调；此后**每条 PS 通知都会被全部残留回调处理一次** ⇒ 事件驱动的
+ * 刷新（→ `psTryRead` → `executeAsModal`）随开合次数**累加**，正是 UXP 内部告警
+ * 「Too many modal scope commands」计数会从 153 一路涨到 240+ 的机制（唯一具有
+ * 「无上限累加」形状的放大器）。
+ */
+const docLevelWrapperCache = new WeakMap<object, (eventName?: any, descriptor?: any) => void>();
+
 function wrapDocLevelLogger(
     handler: (eventName?: any, descriptor?: any) => void
 ): (eventName?: any, descriptor?: any) => void {
-    return (eventName?: any, descriptor?: any) => {
+    const cached = docLevelWrapperCache.get(handler as unknown as object);
+    if (cached) return cached;
+
+    const wrapped = (eventName?: any, descriptor?: any) => {
         try {
             if (isDocLevelDescriptor(eventName, descriptor)) {
                 console.log(`📂 [PS事件] ${String(eventName)} @${Date.now()}（文档级）`);
+            } else if (isPlacedLayerEvent(eventName)) {
+                // 与文档级同样固定开日志：智能对象转换是「刚补上的覆盖缺口」，
+                // 真机是否真的派发这个事件名需要一行**决定性证据**（零噪声，频率极低）。
+                console.log(`🧩 [PS事件] ${String(eventName)} @${Date.now()}（智能对象/置入图层）`);
             }
         } catch { /* 日志失败绝不能影响通知处理 */ }
         handler(eventName, descriptor);
     };
+    docLevelWrapperCache.set(handler as unknown as object, wrapped);
+    return wrapped;
 }
 
 /* ------------------------------------------------------------------ *
@@ -323,14 +360,37 @@ export async function runAsModal<T = any>(
     fn: (executionContext?: any) => T | Promise<T>,
     opts?: { commandName?: string; interactive?: boolean; timeOut?: number; [k: string]: any }
 ): Promise<T> {
-    return await (core as any).executeAsModal(async (ec?: any) => {
+    const wrapped = async (ec?: any) => {
         ownModalDepth++;
         try {
             return await fn(ec);
         } finally {
             ownModalDepth--;
         }
-    }, opts as any) as T;
+    };
+
+    // ⚠️⚠️ **绝不能**把 `opts` 无条件作为第二实参传下去（2026-10-09 修复）。
+    //
+    // `opts` 是可选的：`executeAsModal(fn)` 这种「不传 opts」的调用在本仓有 11 处
+    // （`StrokeSelection` 8 处「保存前景色」步骤、`ColorPicker` 的
+    //  capture/apply 前景色、`AdjustmentPanel` 还原特殊木刻基线）。
+    // 旧写法 `core.executeAsModal(wrapped, opts as any)` 在 `opts === undefined` 时
+    // **仍然占用了第二个实参位**，而 UXP 的原生绑定对「显式 undefined 的 object 形参」
+    // 是**严格校验**的，会抛：
+    //
+    //     Argument 2 has an invalid type. Expected type: object actual type: undefined
+    //
+    // 后果（用户真机 Console，「每次描边必然报错」的根因）：
+    //   · `StrokeSelection` 的 8 个分支**全部**在「保存前景色」这一步抛错
+    //     ⇒ 12 组合里「仅描边」3 种、「清除 + 描边」3 种**彻底失效**
+    //       （日志顺序完全吻合：`✅ 新建图层成功` → `❌ 普通描边失败: Argument 2 …`）；
+    //   · `ColorPicker.captureForegroundColor` 抛错 ⇒ `pickColorWithInitial` 整体失效；
+    //   · 重试把整段填充再跑一遍 ⇒ 叠加出多余图层与额外的模态命令。
+    //
+    // 语义完全等价于直接调 `core.executeAsModal`：**只在真正提供了 opts 时才传第二个实参**。
+    return opts == null
+        ? await (core as any).executeAsModal(wrapped) as T
+        : await (core as any).executeAsModal(wrapped, opts) as T;
 }
 
 function sleep(ms: number): Promise<void> {
