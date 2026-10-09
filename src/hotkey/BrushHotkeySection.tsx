@@ -3,15 +3,16 @@ import { storage, shell } from 'uxp';
 import {
   HotkeyEntry, connectHotkeyDaemon, onConfig, enumerateBrushes,
   onDaemonStatus, pushConfig, requestHotkeyRecording, cancelHotkeyRecording,
-  onHotkeyTriggered, disconnectDaemon, sendDaemonCommand, registerUninstallHandler,
+  onHotkeyTriggered, onRecordProgress, disconnectDaemon, sendDaemonCommand, registerUninstallHandler,
   registerRepairKeyboardHandler,
-  setMainToggleCombo, getMainToggleCombo,
+  getMainToggleCombo,
+  armBackspaceDelete, disarmBackspaceDelete, onBackspaceDelete,
   detectAllBrushTypes
 } from './HotkeyBridge';
 import { DeleteIcon, RefreshIcon, DataRefreshIcon, RecordCircleIcon, StopSquareIcon, BrushToolIcon, SmudgeToolIcon, MixerToolIcon, CloneStampIcon } from '../styles/Icons';
 import BrushSelect, { BrushSelectOption } from './BrushSelect';
 import { helpTexts } from '../constants/helpTexts';
-import { subscribeFocusMode } from '../utils/FocusModeBus';
+import { getFuncHotkeyLabel } from './funcHotkeyDefs';
 import { runWhenIdle } from '../utils/psProbe';
 import ToggleSwitch from '../components/ToggleSwitch';
 
@@ -20,6 +21,8 @@ import ToggleSwitch from '../components/ToggleSwitch';
 // 注意：组合键的「录制」由 native 守护进程用 Windows 全局键盘钩子完成，
 // UXP 面板只负责选笔刷 + 发指令 + 等结果；面板本身无法稳定捕获键盘事件。
 // 注：笔刷选择行用 common.css 的 .row-between（不再用内联 rowStyle / 面板私有类）。
+// 「选区填充开关」等非笔刷功能的快捷键已迁出本分区，统一在右上角菜单
+// 「功能快捷键」浮窗里管理（见 FuncHotkeyPanel.tsx）；本分区只显示笔刷记录。
 
 // 通知自动消失时间：提示是「瞬时反馈」而非常驻说明，5 秒足够读完，
 // 也避免下一次操作后还挂着上一条早已过期的提示（例如刷新完笔刷还显示"请选择"）。
@@ -51,9 +54,6 @@ export default function BrushHotkeySection() {
   const [daemonConnected, setDaemonConnected] = useState(false);
   // 已录快捷键的选中集合：单击单选，Ctrl/Shift + 单击加选或减选，用于单个/批量删除
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  // 专注模式：由 APP 父面板的两个选项推导，经共享总线同步过来。
-  // 开启时置顶的「选区填充开关」记录改显示「选区填充」（此时热键只开不关，不再是开关）。
-  const [focusMode, setFocusMode] = useState(false);
   // 多选锚点（shift 延伸的基准）：普通单击或 Ctrl 单击后更新为该条索引
   const anchorIndexRef = useRef<number>(-1);
 
@@ -68,8 +68,14 @@ export default function BrushHotkeySection() {
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const entriesRef = useRef<HotkeyEntry[]>(entries);
   useEffect(() => { entriesRef.current = entries; }, [entries]);
-  const mainEntryRef = useRef<HotkeyEntry | undefined>(undefined);
-  useEffect(() => { mainEntryRef.current = entries.find(e => e.action === 'toggleMain'); }, [entries]);
+  // 退格解绑通路的闭包镜像：handler 在挂载时注册一次，执行时读 ref 拿最新值
+  const recordingRef = useRef(recording);
+  useEffect(() => { recordingRef.current = recording; }, [recording]);
+  const selectedIdsRef = useRef(selectedIds);
+  useEffect(() => { selectedIdsRef.current = selectedIds; }, [selectedIds]);
+  // 快捷键列表容器：面板内直捕退格用——只有按键目标落在本列表内（行被点击聚焦后）
+  // 才劫持退格，避免污染面板里其它输入控件（数字框、拾色器等）。
+  const listRef = useRef<HTMLDivElement | null>(null);
   const setDrag = (id: string | null) => { dragIdRef.current = id; setDragId(id); };
   const setDrop = (id: string | null) => { dropIdRef.current = id; setDropId(id); };
 
@@ -105,10 +111,19 @@ export default function BrushHotkeySection() {
       } else if (info.action === 'toggleMain') {
         // 提示必须反映共享总线的真实结果：以前无条件显示「已切换」，
         // 实际上回调在另一个面板上下文里是 null，什么都没切换，误导性极强。
+        // （选区填充开关的录制已迁往「功能快捷键」浮窗，但触发反馈仍保留在这里，
+        //   因为笔刷热键分区是调整面板里唯一常驻挂载的热键 UI。）
         showMessage('热键触发：' + (info.combo ? info.combo + ' → ' : '') + (info.enabled === undefined
           ? '选区填充开关切换失败'
           : ('选区填充开关已' + (info.enabled ? '开启' : '关闭'))));
+      } else if (info.action === 'runFunc') {
+        // 功能快捷键（分块平均等）触发反馈：实现在 AdjustmentPanel 注册的执行器里
+        showMessage('热键触发：' + (info.combo ? info.combo + ' → ' : '') + '执行「' + getFuncHotkeyLabel(info.brush || '') + '」' + (info.ok ? '' : '失败'));
       }
+    });
+    // 两段式录制的实时进度：捕获到组合键、等待回车确认期间给出行内提示
+    const unsubProgress = onRecordProgress((combo) => {
+      showMessage('已捕获 ' + combo + '：回车确认，Esc 取消');
     });
     // ⚠️ 启动首刷必须**推迟到PS 空闲之后**（2026-10-06）。
     //   enumerateBrushes() 内部是`batchPlay get presetManager`，与今天修复的
@@ -122,10 +137,8 @@ export default function BrushHotkeySection() {
     //   detect 仍传 false（保持现状）：类型检测会逐支切换用户当前笔刷，
     //   属改动文档状态的操作，只在用户手动刷新时才做。
     void initialLoadRef.current?.();
-    // 专注模式来自 APP 面板写入的共享文件（跨面板），这里只订阅不写入
-    const unsubFocus = subscribeFocusMode(setFocusMode);
     return () => {
-      unsub(); unsubConfig(); unsubStatus(); unsubHotkey(); unsubFocus();
+      unsub(); unsubConfig(); unsubStatus(); unsubHotkey(); unsubProgress();
       // 卸载时取消待执行的首刷：避免面板已卸载仍发 get（会撞上 PS 忙碌窗口）
       initialLoadRef.current?.cancel();
     };
@@ -353,12 +366,15 @@ export default function BrushHotkeySection() {
   }, []);
 
   // 录制由 native 守护进程完成（Windows 全局键盘钩子），UXP 只发指令并等待结果。
+  // 两段式：按下组合键 → 回车确认（Esc 取消，见 HotkeyBridge.requestHotkeyRecording）。
+  // 冲突策略（与「功能快捷键」浮窗一致）：新组合键被任何已有条目（其它笔刷 / 主开关 /
+  // 功能快捷键）占用时只提示、不覆盖——两边唯一关联就是占用提示，配置互不侵扰。
   const startRecord = async () => {
     if (!selectedBrush) { showMessage('请先在左侧选择一支笔刷'); return; }
     if (!daemonConnected) { showMessage('快捷键服务未连接，无法录制（请先启动快捷键服务）'); return; }
     const mainCombo = getMainToggleCombo();
     setRecording(true);
-    showMessage('正在录制「' + selectedBrush + '」：请在任意位置按下要绑定的组合键，Esc 取消');
+    showMessage('正在录制「' + selectedBrush + '」：请按下要绑定的组合键，回车确认，Esc 取消');
     const res = await requestHotkeyRecording(selectedBrush);
     setRecording(false);
     if (!res) { showMessage('已取消录制'); return; }
@@ -367,10 +383,18 @@ export default function BrushHotkeySection() {
       showMessage('该组合键已被选区填充开关占用，请换一个');
       return;
     }
+    const dup = entries.find(e => e.combo === combo);
+    if (dup) {
+      if (dup.action === 'applyBrush' && dup.brush === selectedBrush) {
+        showMessage('该组合键已绑定到「' + selectedBrush + '」，无需重复录制');
+        return;
+      }
+      showMessage('该组合键已被「' + entryDisplayName(dup) + '」占用，请换一个');
+      return;
+    }
     // 注意：不支持同名笔刷——只按名称绑定，PS 会选中 Brushes 列表最上方那支同名项。
     const entry: HotkeyEntry = { id: 'bk_' + Date.now(), combo, action: 'applyBrush', brush: selectedBrush };
-    // 覆盖同组合键的旧映射，但主开关条目必须原样保留（它不参与笔刷热键的覆盖）
-    const next = [...entries.filter(x => x.action === 'toggleMain' || x.combo !== combo), entry];
+    const next = [...entries, entry];
     setEntries(next);
     if (pushConfig(next)) showMessage('已保存：' + combo + ' → ' + selectedBrush);
     else showMessage('推送配置失败（快捷键服务未运行？）');
@@ -388,6 +412,8 @@ export default function BrushHotkeySection() {
   // - Ctrl/Meta + 单击：在已选集合里对该单条加选/减选（toggle），并把锚点设为它；
   // - Shift + 单击：选中「锚点 ~ 当前」之间的所有记录（含两端），锚点保持不变以便继续延伸。
   const handleEntryClick = (id: string, ev: React.MouseEvent) => {
+    // 行可聚焦：点击即聚焦，让随后的退格落在本列表容器内（面板内直捕退格的焦点依据）
+    (ev.currentTarget as HTMLElement).focus();
     // 本次按下触发了长按拖拽：松开后的单击只应结束拖拽，不应再选中该行
     if (didDragRef.current) { didDragRef.current = false; return; }
     const idx = entries.findIndex(e => e.id === id);
@@ -407,36 +433,48 @@ export default function BrushHotkeySection() {
     anchorIndexRef.current = idx;
   };
 
-  // 重录选中单条：直接对该记录的笔刷（或选区填充开关）发起一次新的录制，
-  // 无需回到上方下拉菜单重新选择。仅当恰好选中一条时可用。
+  // 条目在冲突提示里的显示名：主开关 / 功能快捷键 / 笔刷统一在这里翻译
+  const entryDisplayName = (e: HotkeyEntry): string => {
+    if (e.action === 'toggleMain') return '选区填充开关';
+    if (e.action === 'runFunc') return getFuncHotkeyLabel(e.brush || '');
+    return e.brush || '';
+  };
+
+  // 重录指定条目（双击行或选中单条后点重录按钮共用）：直接对该条目的笔刷发起一次新的录制，
+  // 无需回到上方下拉菜单重新选择。待确认阶段按退格不再有特殊语义（守护进程已禁绑退格）；
+  // 解绑走「单击选中 + 退格」的布防通路（见下方 onBackspaceDelete）。
+  const reRecordEntryById = async (target: HotkeyEntry) => {
+    if (recording) return;
+    if (!daemonConnected) { showMessage('快捷键服务未连接，无法录制（请先启动快捷键服务）'); return; }
+    const mainCombo = getMainToggleCombo();
+    setRecording(true);
+    showMessage('正在重录「' + target.brush + '」：请按下新的组合键，回车确认，Esc 取消');
+    const res = await requestHotkeyRecording(target.brush);
+    setRecording(false);
+    if (!res) { showMessage('已取消录制'); return; }
+    const combo = res.combo;
+    // 冲突检查：新组合键是否被其它条目（主开关/功能快捷键/其它笔刷）占用？占用则提示并放弃本次重录
+    if (mainCombo && combo === mainCombo && target.combo !== mainCombo) {
+      showMessage('该组合键已被选区填充开关占用，请换一个');
+      return;
+    }
+    const dup = entries.find(e => e.id !== target.id && e.combo === combo);
+    if (dup) {
+      showMessage('该组合键已被「' + entryDisplayName(dup) + '」占用，请换一个');
+      return;
+    }
+    const next = entries.map(e => (e.id === target.id ? { ...e, combo } : e));
+    setEntries(next);
+    if (pushConfig(next)) showMessage('已重录：' + combo + ' → ' + target.brush);
+    else showMessage('推送配置失败（快捷键服务未运行？）');
+  };
+
+  // 重录选中单条（重录图标按钮入口）。仅当恰好选中一条时可用。
   const reRecordEntry = async () => {
     if (selectedIds.length !== 1) return;
     const target = entries.find(e => e.id === selectedIds[0]);
     if (!target) return;
-    if (!daemonConnected) { showMessage('快捷键服务未连接，无法录制（请先启动快捷键服务）'); return; }
-    const isMain = target.action === 'toggleMain';
-    const reTargetName = isMain ? '选区填充开关' : target.brush;
-    setRecording(true);
-    showMessage('正在重录「' + reTargetName + '」：请按下新的组合键，Esc 取消');
-    const res = await requestHotkeyRecording(isMain ? '__MAIN__' : target.brush);
-    setRecording(false);
-    if (!res) { showMessage('已取消录制'); return; }
-    const combo = res.combo;
-    // 冲突检查：新组合键是否被其它记录（含主开关）占用？占用则提示并放弃本次重录
-    const dup = entries.find(e => e.id !== target.id && e.combo === combo);
-    if (dup) {
-      showMessage('该组合键已被「' + (dup.action === 'toggleMain' ? '选区填充开关' : dup.brush) + '」占用，请换一个');
-      return;
-    }
-    if (isMain) {
-      setMainToggleCombo(combo);
-      showMessage('已重录选区填充开关：' + combo);
-    } else {
-      const next = entries.map(e => (e.id === target.id ? { ...e, combo } : e));
-      setEntries(next);
-      if (pushConfig(next)) showMessage('已重录：' + combo + ' → ' + target.brush);
-      else showMessage('推送配置失败（快捷键服务未运行？）');
-    }
+    await reRecordEntryById(target);
   };
 
   // 条目被删除/解绑/守护进程回灌配置后，剔除已不存在的选中项，避免选中数虚高
@@ -454,41 +492,68 @@ export default function BrushHotkeySection() {
     }
   }, [selectedBrush, selectedKey]);
 
-  // 选中项里真正"可处理"的条数：笔刷条目可删除；
-  // 选区填充开关只能解绑不能删除，且已解绑（combo 为空）时不可再操作
-  const deletableCount = selectedIds.filter(id => {
-    const e = entries.find(x => x.id === id);
-    return !!e && (e.action !== 'toggleMain' || !!e.combo);
-  }).length;
+  // 选中项里真正"可处理"的条数：本分区只显示笔刷条目，全部可删除
+  const deletableCount = selectedIds.length;
 
-  // 批量删除选中项：先删笔刷条目并落盘，再解绑主开关（两者都靠 pushConfig 同步 bridge 缓存）
+  // ===== 退格解绑（「单击选中 + 非录制态按退格」通路，与功能快捷键浮窗同款交互）=====
+  // 语义与删除按钮刻意区分：退格 = 组合键置空、条目保留在列表（显示「未绑定」）；
+  // 删除按钮 = 整条移除。仅在恰好选中一条且不在录制中时布防生效。
+  useEffect(() => {
+    if (selectedIds.length === 1 && !recording) armBackspaceDelete('brush');
+    else disarmBackspaceDelete('brush');
+  }, [selectedIds, recording]);
+  useEffect(() => () => disarmBackspaceDelete('brush'), []);
+  const unbindByBackspace = () => {
+    if (recordingRef.current) return;
+    const ids = selectedIdsRef.current;
+    if (ids.length !== 1) return;
+    const target = entriesRef.current.find(e => e.id === ids[0]);
+    if (!target || target.action !== 'applyBrush') return;
+    if (!target.combo) { showMessage('该条目尚未绑定快捷键'); return; }
+    const next = entriesRef.current.map(e => (e.id === target.id ? { ...e, combo: '' } : e));
+    setEntries(next);
+    if (pushConfig(next)) showMessage('已解绑「' + target.brush + '」的快捷键（条目已保留）');
+    else showMessage('推送配置失败（快捷键服务未运行？）');
+  };
+  useEffect(() => onBackspaceDelete((owner) => {
+    if (owner !== 'brush') return; // 只认领自己的布防
+    unbindByBackspace();
+  }), []);
+
+  // 面板内直捕退格（不依赖守护进程布防，reload 即生效）：行被点击聚焦后，
+  // 按键目标在本列表容器内 → 退格解绑选中条。与布防通路互斥不重复：
+  // 新版守护进程会在低层钩子里吞掉退格并回传 backspaceDelete（此时 UXP 收不到按键事件）；
+  // 旧版守护进程放行按键，由本监听兜底。
+  useEffect(() => {
+    const onDocKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Backspace') return;
+      const list = listRef.current;
+      if (!list || !list.contains(e.target as Node)) return; // 焦点不在本列表内不劫持
+      if (selectedIdsRef.current.length !== 1) return;
+      e.preventDefault();
+      e.stopPropagation();
+      unbindByBackspace();
+    };
+    document.addEventListener('keydown', onDocKeyDown, { capture: true } as any);
+    return () => document.removeEventListener('keydown', onDocKeyDown, { capture: true } as any);
+  }, []);
+
+  // 批量删除选中项：删除笔刷条目并落盘（pushConfig 同步 bridge 缓存）
   const removeSelectedEntries = () => {
     if (selectedIds.length === 0) return;
-    const sel = new Set(selectedIds);
-    const unbindMain = entries.some(e => sel.has(e.id) && e.action === 'toggleMain' && e.combo);
-    const brushIds = entries.filter(e => sel.has(e.id) && e.action !== 'toggleMain').map(e => e.id);
-    if (!unbindMain && brushIds.length === 0) { showMessage('选中的条目无需处理'); return; }
+    const brushIds = entries.filter(e => selectedIds.includes(e.id)).map(e => e.id);
+    if (brushIds.length === 0) { showMessage('选中的条目无需处理'); return; }
     setSelectedIds([]);
-    // 先删笔刷条目：pushConfig 会同步 bridge 内缓存，保证随后的 setMainToggleCombo 基于最新列表
-    if (brushIds.length) {
-      const next = entries.filter(e => !brushIds.includes(e.id));
-      setEntries(next);
-      pushConfig(next);
-    }
-    // 主开关不真正删除，改为「解绑」（组合键置空并落盘），
-    // 这样下次打开插件不会又把默认的 Ctrl+Q 补回来；需要时可到主面板菜单重新指定。
-    if (unbindMain) setMainToggleCombo('');
-    const parts: string[] = [];
-    if (brushIds.length) parts.push('已删除 ' + brushIds.length + ' 条快捷键');
-    if (unbindMain) parts.push('已解绑选区填充开关');
-    showMessage(parts.join('，'));
+    const next = entries.filter(e => !brushIds.includes(e.id));
+    setEntries(next);
+    pushConfig(next);
+    showMessage('已删除 ' + brushIds.length + ' 条快捷键');
   };
 
   // 把检测到的中文类型渲染成对应图标；其它类型（橡皮擦等）无专用图标则回退显示文字，
   // 空串则不显示任何 tag。
-  // ---- 长按拖拽排序（仅作用于非「选区填充开关」的笔刷记录；开关始终置顶固定）----
+  // ---- 长按拖拽排序（本分区只有笔刷记录，全部可拖） ----
   const startPress = (e: React.MouseEvent, entry: HotkeyEntry) => {
-    if (entry.action === 'toggleMain') return; // 置顶固定项不可拖动
     didDragRef.current = false;
     pressStartRef.current = { x: e.clientX, y: e.clientY };
     if (pressTimerRef.current != null) { clearTimeout(pressTimerRef.current); pressTimerRef.current = null; }
@@ -529,8 +594,8 @@ export default function BrushHotkeySection() {
         const r = el.getBoundingClientRect();
         if (ev.clientY >= r.top && ev.clientY <= r.bottom) { targetId = id; break; }
       }
-      // 置顶固定的「选区填充开关」行不可作为落点：悬停其上时不更新落点（避免虚线误提示）
-      if (targetId && targetId !== mainEntryRef.current?.id && targetId !== dropIdRef.current) setDrop(targetId);
+      // 落点行：悬停其上时更新落点（虚线提示）
+      if (targetId && targetId !== dropIdRef.current) setDrop(targetId);
     };
     const onUp = () => {
       const fromId = dragIdRef.current;
@@ -538,16 +603,15 @@ export default function BrushHotkeySection() {
       setDrag(null);
       setDrop(null);
       if (!fromId || !toId || fromId === toId) { didDragRef.current = true; return; }
-      const others = entriesRef.current.filter(e => e.action !== 'toggleMain');
-      const fromIdx = others.findIndex(e => e.id === fromId);
-      const toIdx = others.findIndex(e => e.id === toId);
+      const list = entriesRef.current;
+      const fromIdx = list.findIndex(e => e.id === fromId);
+      const toIdx = list.findIndex(e => e.id === toId);
       if (fromIdx < 0 || toIdx < 0) { didDragRef.current = true; return; }
-      const next = [...others];
+      const next = [...list];
       const [moved] = next.splice(fromIdx, 1);
       next.splice(toIdx, 0, moved);
-      const nextEntries = mainEntryRef.current ? [mainEntryRef.current, ...next] : next;
-      setEntries(nextEntries);
-      pushConfig(nextEntries);
+      setEntries(next);
+      pushConfig(next);
       didDragRef.current = true; // 抑制随后的单击选中
     };
     document.addEventListener('mousemove', onMove);
@@ -578,12 +642,11 @@ export default function BrushHotkeySection() {
     tag: brushTypeTag(brushTypes[b] || '')
   }));
 
-  // 渲染顺序：选区填充开关（toggleMain）始终置顶固定，其余笔刷记录保持存储顺序；
-  // 长按拖拽只重排其余记录，不影响置顶项。
-  const mainEntry = entries.find(e => e.action === 'toggleMain');
-  const displayEntries = mainEntry
-    ? [mainEntry, ...entries.filter(e => e.action !== 'toggleMain')]
-    : entries;
+  // 渲染顺序：本分区只显示笔刷记录（applyBrush），按存储顺序展示。
+  // ⚠️ 必须是白名单过滤而不是「排除 toggleMain」：配置是共享的，功能快捷键（runFunc）
+  // 条目也在同一份配置里，漏过滤会把「分块平均」之类的功能记录串进笔刷列表。
+  // 「选区填充开关」与功能按钮的快捷键在右上角菜单「功能快捷键」浮窗里管理。
+  const displayEntries = entries.filter(e => e.action === 'applyBrush');
 
   return (
     <>
@@ -667,14 +730,12 @@ export default function BrushHotkeySection() {
 
       {/* 所有录好的快捷键都装在一个边框可见的大容器里（common.css 的 .border-panel-section）；
           删除键移到容器外的右下角，见下方 .row-between */}
-      <div className="border-panel-section">
-          {displayEntries.length === 0 && <div style={{ fontSize: 12, opacity: 0.6 }}>尚未绑定任何快捷键</div>}
+      <div className="border-panel-section" ref={listRef}>
+          {displayEntries.length === 0 && <div style={{ fontSize: 12, opacity: 0.6 }}>尚未绑定任何笔刷快捷键</div>}
           {displayEntries.map(e => {
-            const isPinned = e.action === 'toggleMain';
             const rowClass = [
               'hotkey-entry-row',
               selectedIds.includes(e.id) ? 'selected' : '',
-              isPinned ? 'pinned' : '',
               dragId === e.id ? 'dragging' : '',
               (dropId === e.id && dragId !== null && dragId !== e.id) ? 'drop-target' : '',
             ].join(' ');
@@ -683,20 +744,18 @@ export default function BrushHotkeySection() {
               key={e.id}
               ref={(el) => { rowRefs.current[e.id] = el; }}
               className={rowClass}
-              title={isPinned
-                ? (focusMode ? helpTexts.hotkey.entryPinnedFocus : helpTexts.hotkey.entryPinned)
-                : helpTexts.hotkey.entryNormal}
+              title={helpTexts.hotkey.entryNormal}
+              tabIndex={0}
               onClick={(ev) => handleEntryClick(e.id, ev)}
+              onDoubleClick={(ev) => { ev.stopPropagation(); void reRecordEntryById(e); }}
               onMouseDown={(ev) => startPress(ev, e)}
               onMouseUp={endPress}
               onMouseMove={onRowMove}
             >
-              {/* 快捷键列定宽：分隔线紧贴它，因此跨条目始终对齐 */}
-              <span className="hotkey-entry-combo">{e.combo || '未绑定'}</span>
+              {/* 名称在左、快捷键在右（与「功能快捷键」浮窗一致）：分隔线居中，两列各占一半 */}
+              <span className="hotkey-entry-name">{e.brush}</span>
               <span className="divider-vertical">丨</span>
-              <span className="hotkey-entry-name">
-                {isPinned ? (focusMode ? '选区填充' : '选区填充开关') : e.brush}
-              </span>
+              <span className="hotkey-entry-combo">{e.combo || '未绑定'}</span>
             </div>
             );
           })}
@@ -722,7 +781,7 @@ export default function BrushHotkeySection() {
             tabIndex={0}
             className={deletableCount ? 'icon-button' : 'icon-button-disabled'}
             title={deletableCount
-              ? ('删除选中的 ' + deletableCount + ' 条（选区填充开关为解绑而非删除）')
+              ? ('删除选中的 ' + deletableCount + ' 条快捷键')
               : '请先在上方单击选中要删除的快捷键'}
             onClick={() => removeSelectedEntries()}
           >

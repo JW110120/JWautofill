@@ -361,15 +361,19 @@ export class MenuManager {
             },
             {
               id: "spacer2",
-              label: "-" // 分隔符（图层像素alpha采样 与 键盘卡死一键修复 之间）
+              label: "-" // 分隔符（图层像素alpha采样 与 功能快捷键 之间）
+            },
+            {
+              id: "funcHotkeys",
+              label: "功能快捷键"
+            },
+            {
+              id: "spacer5",
+              label: "-" // 分隔符（功能快捷键 与 「键盘卡死一键修复 + 卸载快捷键服务」分组 之间）
             },
             {
               id: "repairKeyboard",
               label: "键盘卡死一键修复"
-            },
-            {
-              id: "spacer3",
-              label: "-" // 分隔符（键盘卡死一键修复 与 卸载快捷键服务 之间）
             },
             {
               id: "uninstallHotkeyDaemon",

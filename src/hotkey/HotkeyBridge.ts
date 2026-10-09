@@ -7,13 +7,16 @@
 import { action, core, app } from 'photoshop';
 import { shell, storage } from 'uxp';
 import { MainToggleState, requestMainToggle } from '../utils/MainToggleBus';
+import { requestFillPanelToggle } from '../utils/FillPanelToggleBus';
 
 export interface HotkeyEntry {
   id: string;
   combo: string;                 // 例如 "Ctrl+Shift+R"、"Alt+F1"
-  action: 'toggleMain' | 'applyBrush';
+  action: 'toggleMain' | 'applyBrush' | 'runFunc';
   brush?: string;                // applyBrush 时的笔刷名（PS 预设名，需精确匹配）。
                                   // 注意：不支持同名笔刷——PS 按 _name 只会选中 Brushes 列表最上方那支。
+                                  // runFunc 时复用本字段承载功能 id（见 funcHotkeyDefs.ts），
+                                  // 守护进程对该字段不解释、只透传，因此无需改守护进程。
 }
 
 const WS_URL = 'ws://127.0.0.1:18923';
@@ -60,6 +63,9 @@ let currentWs: any = null;
 let connected = false;
 // 当前挂起的录制请求（守护进程回传 recordResult/recordCancel 时兑现）
 let pendingRecord: ((r: { combo: string } | null) => void) | null = null;
+// 录制进度监听（两段式录制第一阶段）：守护进程捕获到组合键后广播 recordCaptured，
+// 面板据此把该行显示为「已捕获 XXX，待确认」。录制的确认/取消仍由 recordResult/recordCancel 兑现。
+const recordProgressListeners: ((combo: string) => void)[] = [];
 const statusListeners: ((c: boolean) => void)[] = [];
 // 热键触发监听（供面板显示触发反馈，也便于用户确认事件链路是否打通）
 // enabled 仅对 toggleMain 有效，取自共享总线翻转后的真实状态——
@@ -195,10 +201,12 @@ function normalizeEntry(e: any): HotkeyEntry | null {
   const action = (e.action ?? e.Action ?? '') as HotkeyEntry['action'];
   const brush: string | undefined = e.brush ?? e.Brush ?? undefined;
   const id: string = e.id ?? e.Id ?? ('bk_' + Math.random().toString(36).slice(2));
-  if (action !== 'toggleMain' && action !== 'applyBrush') return null;
-  // 主开关允许 combo 为空（表示用户已解绑，不能再被补回默认值）；
-  // 其余条目没有组合键就没有意义，直接丢弃。
-  if (!combo && action !== 'toggleMain') return null;
+  if (action !== 'toggleMain' && action !== 'applyBrush' && action !== 'runFunc') return null;
+  // combo 为空的合法条目：主开关（'' = 已解绑）、笔刷（'' = 已解绑但条目保留在列表，
+  // 单击选中后按退格即解绑，与「删除」按钮区分）。runFunc 空组合键无意义，直接丢弃。
+  if (!combo && action !== 'toggleMain' && action !== 'applyBrush') return null;
+  // runFunc 必须携带功能 id（复用 brush 字段），缺了就无法执行，丢弃。
+  if (action === 'runFunc' && !brush) return null;
   return { id, combo, action, brush };
 }
 
@@ -261,6 +269,11 @@ export function connectHotkeyDaemon(): () => void {
             if (cp) ws.send(JSON.stringify({ type: 'setConfigPath', path: cp }));
           } catch { /* ignore */ }
           try { ws.send(JSON.stringify({ type: 'getConfig' })); } catch { /* ignore */ }
+          // 重连后同步布防状态：守护进程在客户端断开时会撤防，
+          // 若本上下文仍持有布防权（选中未变），这里重发一次 armDelete。
+          if (armedDeleteOwner) {
+            try { ws.send(JSON.stringify({ type: 'armDelete', owner: armedDeleteOwner })); } catch { /* ignore */ }
+          }
         })();
       };
       ws.onmessage = (ev: any) => {
@@ -274,11 +287,21 @@ export function connectHotkeyDaemon(): () => void {
             ensureMainToggleEntry();
             emitConfig();
           }
+          else if (msg?.type === 'recordCaptured') {
+            const captured: string = typeof msg.combo === 'string' ? msg.combo : '';
+            for (const l of recordProgressListeners) { try { l(captured); } catch { /* ignore */ } }
+          }
           else if (msg?.type === 'recordResult') {
             if (pendingRecord) { const r = pendingRecord; pendingRecord = null; r({ combo: msg.combo }); }
           }
           else if (msg?.type === 'recordCancel') {
             if (pendingRecord) { const r = pendingRecord; pendingRecord = null; r(null); }
+          }
+          else if (msg?.type === 'backspaceDelete') {
+            // 布防通路命中：用户在 PS 前台按了退格。分发给所有监听方，
+            // 由监听方自行核对 owner（只有当前布防的 UI 会认领）。
+            const owner: string = typeof msg.owner === 'string' ? msg.owner : '';
+            for (const l of backspaceDeleteListeners) { try { l(owner); } catch { /* ignore */ } }
           }
         } catch { /* ignore */ }
       };
@@ -314,6 +337,15 @@ export function connectHotkeyDaemon(): () => void {
   }
 }
 
+// ===== 功能快捷键（runFunc）=====
+// 功能按钮（分块平均/扣除纯白等）的执行权在调整面板里，这里只做转发：
+// 面板挂载后 registerFuncRunner 注册一个「功能 id → handler」的分发器，
+// 热键命中 runFunc 时按 id 调用。分发器内部持有 ref 读取最新 handler（handler 每次渲染重建）。
+let funcRunner: ((funcId: string) => void) | null = null;
+export function registerFuncRunner(fn: (funcId: string) => void) {
+  funcRunner = fn;
+}
+
 function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?: string }) {
   if (msg.action === 'toggleMain') {
     // 主开关：翻转「共享状态」而不是调用本面板内的回调。
@@ -332,6 +364,32 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
           try { l({ combo, action: 'toggleMain', ok: false }); } catch { /* ignore */ }
         }
       });
+    return;
+  }
+  if (msg.action === 'runFunc' && msg.brush?.startsWith('fillPanel:')) {
+    // 选区填充子面板开关（纯色/图案/渐变）：实现权在 APP 面板（子面板展开状态是它的 React state），
+    // 与 MainToggleBus 同理经共享文件分发 + token 去重——守护进程向所有面板广播同一次命中，
+    // 只有第一个写文件的请求生效，APP 面板轮询到新修订号后翻一次，绝不翻两次。
+    const panel = msg.brush.slice('fillPanel:'.length) as 'color' | 'pattern' | 'gradient';
+    const token = 'fillPanel|' + panel + '|' + Math.floor(Date.now() / 400);
+    const combo = msg.combo ?? '';
+    const broadcast = (ok: boolean) => {
+      for (const l of hotkeyListeners) { try { l({ combo, action: 'runFunc', brush: msg.brush!, ok }); } catch { /* ignore */ } }
+    };
+    void requestFillPanelToggle(panel, token).then(() => broadcast(true)).catch(() => broadcast(false));
+    return;
+  }
+  if (msg.action === 'runFunc' && msg.brush) {
+    // 功能快捷键：先广播触发反馈（面板据此显示「热键触发：执行…」），再执行对应功能。
+    // ok 取决于分发器是否注册了该功能 id；未注册时只打日志，不抛错。
+    let ok = false;
+    if (funcRunner) {
+      try { funcRunner(msg.brush); ok = true; }
+      catch (e) { console.error('⚠️ 功能快捷键执行失败（' + msg.brush + '）:', e); }
+    } else {
+      console.warn('⚠️ 功能快捷键命中但调整面板尚未注册执行器（' + msg.brush + '）');
+    }
+    for (const l of hotkeyListeners) { try { l({ combo: msg.combo ?? '', action: 'runFunc', brush: msg.brush, ok }); } catch { /* ignore */ } }
     return;
   }
   if (msg.action === 'applyBrush' && msg.brush) {
@@ -516,8 +574,11 @@ export async function enumerateBrushes(): Promise<string[]> {
 
 
 // ===== 请求守护进程录制组合键（UXP 不再自行监听键盘）=====
-// 守护进程用 Windows 全局键盘钩子捕获，捕获到后回传 {type:'recordResult',combo}，
-// 或被用户按 Esc 取消回传 {type:'recordCancel'}。返回 Promise：{combo} 或 null(取消/失败)。
+// 两段式录制：守护进程先捕获组合键（recordCaptured 实时回显，订阅 onRecordProgress），
+// 用户按回车确认后回传 {type:'recordResult',combo}；Esc 取消回传 recordCancel。
+// 退格不参与录制（录制期既不绑定为组合键、也不删除绑定）；
+// 删除绑定走「单击选中 + 退格」的 backspaceDelete 布防通路（见 armBackspaceDelete）。
+// 返回 Promise：{combo} 或 null(取消/失败)。
 export function requestHotkeyRecording(brush: string): Promise<{ combo: string } | null> {
   return new Promise((resolve) => {
     const WS = resolveWs();
@@ -539,6 +600,47 @@ export function cancelHotkeyRecording(): boolean {
     try { currentWs.send(JSON.stringify({ type: 'recordCancel' })); return true; } catch { /* ignore */ }
   }
   return false;
+}
+
+// 订阅录制进度（捕获到组合键、尚未确认时回调；确认/取消后不再有进度）。
+// 返回退订函数。录制会话同一时刻只有一个，所有订阅方都会收到同一份进度。
+export function onRecordProgress(fn: (combo: string) => void): () => void {
+  recordProgressListeners.push(fn);
+  return () => { const i = recordProgressListeners.indexOf(fn); if (i >= 0) recordProgressListeners.splice(i, 1); };
+}
+
+// ===== 退格删除绑定（「单击选中条目 + 非录制态按退格 = 解绑」通路）=====
+// 守护进程布防后，在 PS 前台按退格会回传 backspaceDelete（按键被守护进程吞掉，
+// 不会唤出 PS 的「填充」对话框）；具体解绑哪条由布防的 UI 自己决定。
+// 同一时刻只有一个 UI 持有布防权：armedOwner 幂等去重，重复布防/撤防不重发指令。
+const backspaceDeleteListeners: ((owner: string) => void)[] = [];
+let armedDeleteOwner: string | null = null;
+
+export function onBackspaceDelete(fn: (owner: string) => void): () => void {
+  backspaceDeleteListeners.push(fn);
+  return () => { const i = backspaceDeleteListeners.indexOf(fn); if (i >= 0) backspaceDeleteListeners.splice(i, 1); };
+}
+
+/** 布防：当前 UI 选中了条目，此后 PS 前台按退格 = 请求解绑（守护进程吞掉该按键）。 */
+export function armBackspaceDelete(owner: string): void {
+  if (armedDeleteOwner === owner) return; // 幂等：同一 UI 重复布防不重发
+  armedDeleteOwner = owner;
+  try {
+    if (currentWs && currentWs.readyState === (currentWs.OPEN ?? 1)) {
+      currentWs.send(JSON.stringify({ type: 'armDelete', owner }));
+    }
+  } catch { /* ignore */ }
+}
+
+/** 撤防：仅当 owner 仍是当前布防方才生效（后布防的 UI 不被先前的撤防误伤）。 */
+export function disarmBackspaceDelete(owner: string): void {
+  if (armedDeleteOwner !== owner) return;
+  armedDeleteOwner = null;
+  try {
+    if (currentWs && currentWs.readyState === (currentWs.OPEN ?? 1)) {
+      currentWs.send(JSON.stringify({ type: 'disarmDelete' }));
+    }
+  } catch { /* ignore */ }
 }
 
 // ============================================================================

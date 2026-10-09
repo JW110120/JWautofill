@@ -220,6 +220,17 @@ namespace JWautofillHotkeyDaemon
         private static string? _recordingBrush;
         // 录制状态：钩子线程只读这个 volatile 布尔量，绝不进入 _recLock。
         private static volatile bool _recording = false;
+        // 录制「待确认」组合键（两段式录制第二阶段）：
+        // null = 捕获阶段（等待用户按下组合键）；非 null = 确认阶段（已捕获，等待回车确认）。
+        // 只在钩子线程上读写（StartRecording / FinishRecording / HookDispatch 同在钩子线程串行执行），无需加锁。
+        private static string? _recPendingCombo = null;
+        // ===== 退格删除绑定（「单击选中条目 + 非录制态按退格 = 解绑」通路）=====
+        // 面板里某条快捷键被单击选中后，面板发 armDelete 布防；此后在 PS 前台按退格，
+        // 钩子把 backspaceDelete 回给布防的客户端并吞掉按键（PS 里退格会唤出「填充」对话框）。
+        // 与录制互斥：录制期间退格不参与任何逻辑（既不绑定、也不删除）。
+        private static volatile string? _deleteArmOwner = null; // null = 未布防
+        private static TcpClient? _deleteArmClient;
+        private static readonly object _armLock = new();
         // 熔断标志：一旦检测到钩子回调耗时超过预算，立即永久切换到「只放行、不处理」模式。
         // 宁可快捷键失效，也绝不让本进程的钩子再把系统键盘拖住。
         private static volatile bool _hookSafeMode = false;
@@ -857,6 +868,8 @@ namespace JWautofillHotkeyDaemon
         private static void StartRecordingInternal()
         {
             if (_hookId == IntPtr.Zero) InstallPermanentHook();
+            // 清空上一轮遗留的待确认组合键，确保新录制从「捕获阶段」开始
+            _recPendingCombo = null;
             // 先由 WebSocket 线程把 _recordingClient 写好，这里才把标志置为 true
             // （volatile 写保证钩子线程随后一定能看到已设置的 client）
             _recording = true;
@@ -872,6 +885,7 @@ namespace JWautofillHotkeyDaemon
             // 先关掉录制标志：钩子线程后续按键立刻回到「不处理」路径，
             // 避免在下面的锁与序列化期间反复进入本方法。
             _recording = false;
+            _recPendingCombo = null;
             TcpClient? clientToSend = null;
             string? payload = null;
             string brush;
@@ -894,6 +908,29 @@ namespace JWautofillHotkeyDaemon
             {
                 try { SendToClient(c, msg); }
                 catch { try { c.Close(); } catch { } }
+            });
+        }
+
+        // 录制进度回显（两段式录制第一阶段）：捕获到组合键后立即推给面板显示「待确认」，
+        // 录制会话继续保持，直到回车确认（recordResult）或 Esc 取消（recordCancel）。
+        // 退格不参与录制（录制期既不绑定也不删除）；删除绑定走 armDelete/backspaceDelete 布防通路。
+        // 与 FinishRecordingInternal 同样的铁律：可能在钩子线程上被调用——
+        // 锁内只做引用快照（无 I/O），序列化与网络写全部移交线程池。
+        private static void SendRecordingProgress(string combo)
+        {
+            TcpClient? client;
+            string brush;
+            lock (_recLock)
+            {
+                client = _recordingClient;
+                brush = _recordingBrush ?? "";
+            }
+            if (client == null) return;
+            var msg = JsonSerializer.Serialize(new { type = "recordCaptured", brush, combo }, JsonOpts);
+            Task.Run(() =>
+            {
+                try { SendToClient(client, msg); }
+                catch { try { client.Close(); } catch { } }
             });
         }
 
@@ -987,7 +1024,7 @@ namespace JWautofillHotkeyDaemon
             // 录制状态读 volatile 布尔量，不取任何锁（锁竞争会让钩子回调阻塞 → 全键盘冻结）
             if (_recording)
             {
-                if (vk == 0x1B) // Escape => 取消录制
+                if (vk == 0x1B) // Escape => 取消录制（捕获/确认两阶段通用）
                 {
                     LogFromHook("[HotkeyDaemon] 录制取消 (Esc)");
                     FinishRecordingInternal(null);
@@ -997,14 +1034,66 @@ namespace JWautofillHotkeyDaemon
                 bool isModifier = vk == 0x11 || vk == 0x12 || vk == 0x10 || vk == 0x5B || vk == 0x5C;
                 if (!isModifier)
                 {
+                    // 退格在录制期间不参与任何逻辑：既不绑定为组合键（旧版会误把退格录进绑定），
+                    // 也不承担「删除绑定」——删除统一走「单击选中条目 + 非录制态按退格」的布防通路。
+                    if (vk == 0x08) return Win32.CallNextHookEx(_hookId, nCode, wParam, lParam);
+
+                    if (_recPendingCombo != null)
+                    {
+                        // ===== 确认阶段：已捕获组合键，等待回车确认 / 其它按键重新捕获 =====
+                        if (vk == 0x0D) // Enter => 确认，正常结束录制
+                        {
+                            string confirmed = _recPendingCombo;
+                            LogFromHook("[HotkeyDaemon] 录制确认 (Enter): " + confirmed);
+                            FinishRecordingInternal(confirmed);
+                            // 吞掉 Enter：确认键不该继续传给 Photoshop（画布上回车可能触发其它行为）
+                            return (IntPtr)1;
+                        }
+                        // 其它非修饰键：重新捕获（替换待确认组合键），方便按错后直接改按正确的键
+                        string? recapture = BuildCombo(vk);
+                        if (!string.IsNullOrEmpty(recapture))
+                        {
+                            _recPendingCombo = recapture;
+                            LogFromHook("[HotkeyDaemon] 重新捕获组合键（待确认）: " + recapture);
+                            SendRecordingProgress(recapture);
+                        }
+                        return Win32.CallNextHookEx(_hookId, nCode, wParam, lParam);
+                    }
+
+                    // ===== 捕获阶段：第一组非修饰键即被捕获，进入确认阶段（录制不结束）=====
                     string? combo = BuildCombo(vk);
                     if (!string.IsNullOrEmpty(combo))
                     {
-                        LogFromHook("[HotkeyDaemon] 录制到组合键: " + combo);
-                        FinishRecordingInternal(combo);
+                        _recPendingCombo = combo;
+                        LogFromHook("[HotkeyDaemon] 已捕获组合键（待确认）: " + combo);
+                        SendRecordingProgress(combo);
                     }
+                    return Win32.CallNextHookEx(_hookId, nCode, wParam, lParam);
                 }
                 return Win32.CallNextHookEx(_hookId, nCode, wParam, lParam);
+            }
+
+            // 退格删除绑定：面板已布防（用户单击选中了某条快捷键）时，退格 = 请求解绑该条。
+            // 读路径与录制状态同理：volatile 快速失败，仅在真正命中时才短暂进锁取客户端引用。
+            // 必须吞掉按键：PS 里退格会唤出「填充」对话框，绑定期不应穿透。
+            if (vk == 0x08 && _deleteArmOwner != null)
+            {
+                TcpClient? armClient;
+                string owner;
+                lock (_armLock) { owner = _deleteArmOwner ?? ""; armClient = _deleteArmClient; }
+                if (armClient != null)
+                {
+                    // ⚠️ 局部名不能用 msg：外层钩子回调已声明 int msg（wParam），同名会 CS0136
+                    var delMsg = JsonSerializer.Serialize(new { type = "backspaceDelete", owner }, JsonOpts);
+                    var c = armClient;
+                    LogFromHook("[HotkeyDaemon] 退格解绑请求 -> " + owner);
+                    Task.Run(() =>
+                    {
+                        try { SendToClient(c, delMsg); }
+                        catch { try { c.Close(); } catch { } }
+                    });
+                }
+                return (IntPtr)1;
             }
 
             // 非录制状态：与已装载的热键表做匹配。
@@ -1222,6 +1311,22 @@ namespace JWautofillHotkeyDaemon
                         {
                             Win32.PostThreadMessage(_recThreadId, WM_RECORD_STOP, IntPtr.Zero, IntPtr.Zero);
                         }
+                        else if (type == "armDelete")
+                        {
+                            // 布防「退格删除绑定」：记录布防方与归属（后布防覆盖先布防）。
+                            // 钩子线程只在用户按退格时才短暂进 _armLock，无热路径锁竞争。
+                            string? owner = null;
+                            if (doc.RootElement.TryGetProperty("owner", out var oEl)) owner = oEl.GetString();
+                            lock (_armLock) { _deleteArmClient = client; _deleteArmOwner = owner; }
+                        }
+                        else if (type == "disarmDelete")
+                        {
+                            // 撤防：仅当请求来自当前布防方才生效，避免误撤其它面板的布防
+                            lock (_armLock)
+                            {
+                                if (_deleteArmClient == client) { _deleteArmClient = null; _deleteArmOwner = null; }
+                            }
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -1235,6 +1340,11 @@ namespace JWautofillHotkeyDaemon
                 // 若断开的是正在录制的一方，取消录制（卸载钩子）
                 if (_recordingClient == client)
                     Win32.PostThreadMessage(_recThreadId, WM_RECORD_STOP, IntPtr.Zero, IntPtr.Zero);
+                // 若断开的是已布防「退格删除」的一方，同步撤防（否则退格会被永久吞掉）
+                lock (_armLock)
+                {
+                    if (_deleteArmClient == client) { _deleteArmClient = null; _deleteArmOwner = null; }
+                }
                 lock (_clientsLock) _clients.Remove(client);
                 try { client.Close(); } catch { }
             }

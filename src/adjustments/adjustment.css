@@ -109,32 +109,120 @@
 
 /* （选中态 .selected 的 border 规则收口在 common.css 底部「通用状态样式」区） */
 
-/* 置顶固定的「选区填充开关」行：明确不可拖动 */
-.hotkey-entry-row.pinned {
-  cursor: default;
+/* 独有的快捷键名样式（行的左半列）：与组合键各占一半（flex:1 1 0%），
+   中间的竖分隔线严格落在行正中。旧写法 flex:0 0 110px 定宽，面板 300→250 后
+   分隔线明显偏右，不再居中。 */
+.hotkey-entry-name {
+  flex: 1 1 0%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* 独有的组合键：与快捷键名各占一半（flex:1 1 0%），中间的竖分隔线严格落在行正中。
-   旧写法 flex:0 0 110px 定宽，面板 300→250 后分隔线明显偏右，不再居中。 */
+/* 独有的组合键样式（行的右半列）：与快捷键名同用 flex:1 1 0%（旧写法 1 1 auto 以文字自然宽为基准，
+   两列起点不一致→分隔线偏离正中）。基准相同才能各占一半，分隔线严格居中。
+   名称在左、快捷键在右（用户习惯），组合键靠右对齐。 */
 .hotkey-entry-combo {
   flex: 1 1 0%;
   min-width: 0;
   font-weight: 500;
+  text-align: right;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* 独有的快捷键名样式：与组合键同用 flex:1 1 0%（旧写法 1 1 auto 以文字自然宽为基准，
-   右列起点更大→右列更宽→中间的竖分隔线偏左）。基准相同才能各占一半，分隔线严格居中。 */
-.hotkey-entry-name {
+/* 「功能快捷键」浮窗的分组标题：每组（.border-panel-section 容器）上方的小标题。
+   用继承色 + opacity 压暗，不硬编码颜色，三档主题下自动适配。 */
+.func-group-title {
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0.75;
+  margin: 10px 2px 6px;
+}
+
+/* 「功能快捷键」遮罩：去掉通用 .float-overlay 的 10px 内边距，让子面板铺满整个面板。
+   ⚠️ 两级类：遮罩底色/几何来自 .float-overlay（common.css 静态 <link>）与 theme.ts
+      **运行时**注入的 .float-overlay 规则（adjustment.css 也走 style-loader 运行时注入，
+      两者先后不确定）⇒ 同为 (0,1,0) 时靠源码顺序决胜不可靠，
+      写成 .float-overlay.func-hotkey-overlay 把特异性抬到 (0,2,0) 稳赢。
+   ⚠️ **不要**在这里写 `background: var(--bg-color)`：UXP 对 style-loader 运行时注入的
+      var() 解析不稳定（theme.ts 明确记录过「遮罩能拦点击但背景完全不绘制」），
+      且不写也不会漏 —— 子面板铺满面板后遮罩被完全盖住，底色由 .float-window 提供。
+   ⚠️ 不能用 :has() 限定「含 .func-hotkey-window 的遮罩」：UXP 静默不支持。 */
+.float-overlay.func-hotkey-overlay {
+  padding: 0;
+}
+
+/* 「功能快捷键」浮窗：**占满整个面板的子面板**（不再是居中卡片）。
+   纵向 flex 两段：.func-hotkey-body 滚动区（内含标题 + 列表）/ 通知段。
+   ⚠️ 两级类理由同上（.float-window 在 common.css 静态 <link>，仍显式抬特异性，
+      避免日后调整导入顺序时静默失效 —— CSS 铁律：反复改却毫无效果 = 规则没命中元素）。
+   ⚠️ 不写 background / color：沿用 .float-window 的 var() 版本（静态 <link>，解析可靠）。
+
+   ⚠️ 必须用 `height: 100%` 而不是 `max-height: 100%`：浮窗是 .float-overlay
+      （position: fixed + height: 100%）的 flex 子项，UXP 对 flex 子项的百分比
+      max-height 解析不可靠 → 约束失效、浮窗按内容高度撑开，于是浮窗自身溢出滚动，
+      与列表区滚动叠成「双滚动条」（实测）。height: 100% 走确定高度路径，UXP 支持。
+   ⚠️ 浮窗自身 overflow-y: hidden：滚动只允许发生在滚动区这一层。
+   ⚠️ 去掉边框/圆角/投影：铺满后面板边缘就是子面板边缘，卡片边框会与面板边缘叠出双线。
+   ⚠️ 横向内边距 0、纵向 padding 也交给内部两层：滚动槽要压在**内容盒内部**，
+      浮窗一旦带 padding，槽就被挤到 padding 里侧，横向到不了面板最右缘、
+      纵向到不了面板顶部。 */
+.float-window.func-hotkey-window {
+  height: 100%;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  overflow-y: hidden;
+  display: flex;
+  flex-direction: column;
+  /* UXP flex 容器交叉轴隐式 center，子元素会缩成内容宽——显式撑满 */
+  align-items: stretch;
+}
+
+/* 通知段：钉在子面板底部、不参与滚动 ⇒ 录制任意位置都看得见。
+   常驻（不随 message 条件渲染）⇒ 消息出现/消失时滚动区高度不跳动。
+   右缩 26px = 10px + 16px 滚动槽宽，保证 notify 卡片与列表卡片左右对齐。 */
+.func-hotkey-foot {
+  flex: none;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0 26px 10px 10px;
+}
+
+/* 滚动区：**从面板顶端 y=0 贯通到底部**（标题段 + 列表段都在这一层），
+   所以滚动槽也贯通整高（实测：改前槽从 y=67 起，顶部 67px 被标题行占掉）。
+   flex: 1 1 0% + min-height: 0 缺一不可：basis 0 让初始高度为 0、grow 吃掉剩余
+   高度；min-height: 0 解除「自动最小尺寸 = 内容高」对收缩的阻止
+   （否则子元素被内容顶回原高，滚动条又跑到浮窗那一层）。
+   ⚠️ 本层**不能有横向 padding / border**：UXP 实测滚动槽（16px）压在滚动容器的
+      内容盒内部右侧（不是像桌面浏览器那样贴在 padding 外侧），容器一旦内缩，
+      滚动条就跟着内缩，永远到不了面板最右缘。⇒ 本层宽度 = 面板全宽、
+      无横向内边距，文字缩进交给内层 .func-hotkey-list。 */
+.func-hotkey-body {
   flex: 1 1 0%;
-  min-width: 0;
-  text-align: right;
-  opacity: 0.8;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-height: 0;
+  width: 100%;
+  overflow-y: auto;
+}
+
+/* 标题段（含守护进程未连接提示）：**在滚动区内**，随内容一起滚走
+   （用户选择：让滚动槽从面板顶部就开始，代价是标题不再固定）。
+   顶 10px + 左 10px 提供与面板边缘的留白；右 26px 与列表卡片右缘对齐。 */
+.func-hotkey-head {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 26px 0 10px;
+}
+
+/* 列表内层：只承担文字与滚动条之间的 10px 间隙（滚动条占 16px，压在内容盒内）。 */
+.func-hotkey-list {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0 10px;
 }
 
 /* 独有的已选中 N 条提示样式 */

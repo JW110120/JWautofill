@@ -15,5 +15,9 @@
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <!-- 守护进程仅面向 Windows（GUI 子系统 + 注册表自启），平台兼容性告警无意义 -->
     <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <!-- 子项目 FixKeyboard/ 不参与本工程编译：它有独立入口点（独立 exe），
+         其 Program.cs 与 obj\**\*.cs 会被 SDK 默认的 **\*.cs 通配捞进来，
+         造成 CS0017（多入口点）与 CS0579（TargetFrameworkAttribute 重复）假错。 -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);FixKeyboard/**</DefaultItemExcludes>
   </PropertyGroup>
 </Project>

@@ -37,6 +37,7 @@ import {
   getSelectedBrushToolEnum
 } from './hotkey/HotkeyBridge';
 import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/MainToggleBus';
+import { FillPanelId, subscribeFillPanelToggle } from './utils/FillPanelToggleBus';
 import { setFocusMode } from './utils/FocusModeBus';
 import {
   debouncePsProbe, isPsBusy, markPsBusyForEvent, psBusyRemain, runWhenIdle,
@@ -145,6 +146,8 @@ interface AppProps {}
 
 class App extends React.Component<AppProps, AppState> {
     private unsubMainToggle: (() => void) | null = null;
+    // 功能快捷键：纯色/图案/渐变子面板开关注订器（FillPanelToggleBus 轮询分发，卸载时退订）
+    private unsubFillPanelToggle: (() => void) | null = null;
     private isFilling = false;
     private pendingSelection = false;
     private maskProbeDebounced: (...args: any[]) => void = () => { };
@@ -429,6 +432,11 @@ class App extends React.Component<AppProps, AppState> {
                     this.setState({ isEnabled: st.enabled });
                     void this.onMainToggleChanged(prev, st.enabled);
                 }
+            });
+            // 功能快捷键：三个子面板开关（纯色/图案/渐变）的热键通路。
+            // 命令经共享文件 + token 去重后到达这里，翻的本来就是本面板自己的 state。
+            this.unsubFillPanelToggle = subscribeFillPanelToggle((panel) => {
+                this.applyFillPanelHotkey(panel);
             });
         } catch (e) {
             console.error('⚠️ 建立热键链路失败:', e);
@@ -741,6 +749,10 @@ class App extends React.Component<AppProps, AppState> {
             try { this.unsubMainToggle(); } catch { /* ignore */ }
             this.unsubMainToggle = null;
         }
+        if (this.unsubFillPanelToggle) {
+            try { this.unsubFillPanelToggle(); } catch { /* ignore */ }
+            this.unsubFillPanelToggle = null;
+        }
         if (this.selectionChangeListener) {
             action.removeNotificationListener(['set'], this.selectionChangeListener);
         }
@@ -936,6 +948,20 @@ class App extends React.Component<AppProps, AppState> {
 
     toggleColorSettings() {
         this.setState(prev => ({ isColorSettingsOpen: !prev.isColorSettingsOpen }));
+    }
+
+    /**
+     * 功能快捷键通路：切换纯色/图案/渐变子面板的开关。
+     * 与面板里齿轮/标签入口的语义一致——开就关、关就开；
+     * 图案/渐变的既有入口只开不关，热键这里是真正的开关（用户按同键可收起）。
+     */
+    applyFillPanelHotkey(panel: FillPanelId) {
+        this.setState(prev => {
+            if (panel === 'color') return { isColorSettingsOpen: !prev.isColorSettingsOpen };
+            if (panel === 'pattern') return { isPatternPickerOpen: !prev.isPatternPickerOpen };
+            if (panel === 'gradient') return { isGradientPickerOpen: !prev.isGradientPickerOpen };
+            return null;
+        });
     }
 
     openPatternPicker() {

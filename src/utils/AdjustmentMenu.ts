@@ -12,6 +12,7 @@ export class AdjustmentMenu {
   private static alphaSampleCallback: (() => void) | null = null;
   private static uninstallHotkeyDaemonCallback: (() => void) | null = null;
   private static repairKeyboardCallback: (() => void) | null = null;
+  private static showFuncHotkeyPanelCallback: (() => void) | null = null;
 
   constructor() {
     // Constructor
@@ -28,6 +29,7 @@ export class AdjustmentMenu {
     onAlphaSample: () => void;
     onUninstallHotkeyDaemon: () => void;
     onRepairKeyboard: () => void;
+    onShowFuncHotkeyPanel?: () => void;
   }) {
     this.visibilityPanelCallback = callbacks.onToggleVisibilityPanel;
     this.collapseCallback = callbacks.onToggleAllCollapse;
@@ -36,6 +38,7 @@ export class AdjustmentMenu {
     this.alphaSampleCallback = callbacks.onAlphaSample;
     this.uninstallHotkeyDaemonCallback = callbacks.onUninstallHotkeyDaemon;
     this.repairKeyboardCallback = callbacks.onRepairKeyboard;
+    this.showFuncHotkeyPanelCallback = callbacks.onShowFuncHotkeyPanel ?? null;
   }
 
   /**
@@ -67,6 +70,11 @@ export class AdjustmentMenu {
       case "alphaSample":
         if (this.alphaSampleCallback) {
           this.alphaSampleCallback();
+        }
+        break;
+      case "funcHotkeys":
+        if (this.showFuncHotkeyPanelCallback) {
+          this.showFuncHotkeyPanelCallback();
         }
         break;
       case "repairKeyboard":

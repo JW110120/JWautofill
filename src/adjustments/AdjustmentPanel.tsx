@@ -31,6 +31,7 @@ import { ExpandIcon, AddIcon, DeleteIcon, SyncIcon } from '../styles/Icons';
 import { PanelStateManager } from '../utils/PanelStateManager';
 import { maskSyncEngine, MASK_SYNC_CHANNEL_LABELS, LayerTreeEntry, MaskSyncTask, MaskSyncChannel, SyncState } from '../utils/MaskSyncEngine';
 import BrushHotkeySection from '../hotkey/BrushHotkeySection';
+import FuncHotkeyPanel from '../hotkey/FuncHotkeyPanel';
 import RangeSlider from '../components/RangeSlider';
 import Select from '../components/Select';
 import ToggleSwitch from '../components/ToggleSwitch';
@@ -472,6 +473,9 @@ const [panelStateLoaded, setPanelStateLoaded] = useState(false);
 
 // 控制"隐藏/显示分区"面板
 const [showVisibilityPanel, setShowVisibilityPanel] = useState(false);
+
+// 控制「功能快捷键」浮窗（右上角菜单 → 功能快捷键）：管理非笔刷功能的快捷键
+const [showFuncHotkeyPanel, setShowFuncHotkeyPanel] = useState(false);
 
 const [radius, setRadius] = useState(15);
 const [sigma, setSigma] = useState(5);
@@ -939,6 +943,9 @@ useEffect(() => {
       import('../hotkey/HotkeyBridge').then((m) => {
         m.requestUninstall().then((msg) => { console.log('[卸载守护进程] ' + msg); });
       }).catch((e) => console.error('卸载守护进程失败:', e));
+    },
+    onShowFuncHotkeyPanel: () => {
+      setShowFuncHotkeyPanel(true);
     }
   });
 }, [sections]);
@@ -952,6 +959,16 @@ useEffect(() => {
   }
   return () => document.body.classList.remove('visibility-panel-open');
 }, [showVisibilityPanel]);
+
+// 「功能快捷键」浮窗同样遮住背景：复用同一套 body 类收起滚动条/隐藏背后输入
+useEffect(() => {
+  if (showFuncHotkeyPanel) {
+    document.body.classList.add('visibility-panel-open');
+  } else {
+    document.body.classList.remove('visibility-panel-open');
+  }
+  return () => document.body.classList.remove('visibility-panel-open');
+}, [showFuncHotkeyPanel]);
 
 // ================= 蒙版同步：初始化与监听 =================
 
@@ -3693,6 +3710,51 @@ const handleKnockout = async (mode: 'white' | 'black') => {
 const handleKnockoutWhite = () => handleKnockout('white');
 const handleKnockoutBlack = () => handleKnockout('black');
 
+// ===== 功能快捷键（runFunc）执行器 =====
+// 「功能快捷键」浮窗（FuncHotkeyPanel）录制的功能按钮快捷键命中后，
+// HotkeyBridge 按 funcHotkeyDefs.ts 里的功能 id 调到这里。id 与 defs 必须一一对应。
+// handler 每次渲染都会重建 ⇒ 用 ref 持有映射、执行时取最新值；
+// 注册本身是模块级单例（registerFuncRunner），只在挂载后做一次。
+const funcRunnerRef = useRef<Record<string, () => void>>({});
+funcRunnerRef.current = {
+  blockAverage: () => { void handleBlockAverage(); },
+  blockGradient: () => { void handleBlockGradient(); },
+  patchLightLine: () => { void handleBlockColorPatchLightLine(); },
+  patchDarkLine: () => { void handleBlockColorPatchDarkLine(); },
+  patchLayered: () => { void handleBlockColorPatchLayered(); },
+  woodcut: () => { void handleSpecialWoodcut(false); },
+  knockoutWhite: () => { void handleKnockoutWhite(); },
+  knockoutBlack: () => { void handleKnockoutBlack(); },
+  alphaDown: () => { void handleAlphaAlign('down'); },
+  alphaUp: () => { void handleAlphaAlign('up'); },
+  alphaMode: () => { void handleAlphaModeAlign(); },
+  // 细节调整分区
+  pixelTransition: () => { void handlePixelTransition(); },
+  gradientModify: () => { void handleGradientModify(); },
+  specialSharpen: () => { void handleSpecialSharpen(); },
+  highFreq: () => { void handleHighFrequencyEnhancement(); },
+  // 边缘处理分区
+  edgeSmooth: () => { void handleSmartEdgeSmooth(); },
+  aliasSmooth: () => { void handleAliasSmooth(); },
+  lineEnhance: () => { void handleLineEnhancement(); },
+  extremeRaiseLow: () => { void handleExtremeAlign('raiseLow'); },
+  extremeWeakenHigh: () => { void handleExtremeAlign('weakenHigh'); },
+  // fillPanel:* 前缀不进这里：HotkeyBridge 直接路由到 FillPanelToggleBus（执行权在 APP 面板）
+};
+
+useEffect(() => {
+  let mounted = true;
+  import('../hotkey/HotkeyBridge').then((m) => {
+    if (!mounted) return;
+    m.registerFuncRunner((id: string) => {
+      const fn = funcRunnerRef.current[id];
+      if (fn) { fn(); return; }
+      console.warn('⚠️ 功能快捷键命中但未注册对应实现: ' + id);
+    });
+  }).catch((e) => console.error('注册功能快捷键执行器失败:', e));
+  return () => { mounted = false; };
+}, []);
+
 const renderQuickActionContent = () => (
   <div className="border-panel-section">
 
@@ -3947,6 +4009,11 @@ return (
         </div>
       </div>
     </div>
+  )}
+  {/* 功能快捷键浮窗：右上角菜单 → 功能快捷键。遮罩/窗口结构由组件自带
+      （与上方隐藏/显示分区同款 float-overlay/float-window），点遮罩关闭。 */}
+  {showFuncHotkeyPanel && (
+    <FuncHotkeyPanel onClose={() => setShowFuncHotkeyPanel(false)} />
   )}
   </>
 );
