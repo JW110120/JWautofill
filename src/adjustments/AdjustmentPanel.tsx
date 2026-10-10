@@ -457,7 +457,6 @@ const [licenseChecked, setLicenseChecked] = useState(false);
 // 分区状态管理
 const [sections, setSections] = useState<SectionConfig[]>(defaultSections);
 const [subFeatures, setSubFeatures] = useState<SubFeature[]>(defaultSubFeatures);
-const [isDragMode, setIsDragMode] = useState(false);
 // 分区级拖拽：记录「被拖起的分区」与「当前悬停的落点分区」，用于落点虚线 + 拖起半透明
 const [dragSourceId, setDragSourceId] = useState<string | null>(null);
 const [dragOverId, setDragOverId] = useState<string | null>(null);
@@ -3139,7 +3138,6 @@ const handleDragStart = (e: React.DragEvent, id: string) => {
   e.dataTransfer.effectAllowed = 'move';
   setDragSourceId(id);
   setDragOverId(null);
-  setIsDragMode(true);
 };
 
 const handleDragOver = (e: React.DragEvent, id: string) => {
@@ -3151,7 +3149,6 @@ const handleDragOver = (e: React.DragEvent, id: string) => {
 const handleDragEnd = () => {
   setDragSourceId(null);
   setDragOverId(null);
-  setIsDragMode(false);
 };
 
 const handleDrop = (e: React.DragEvent, targetId: string) => {
@@ -3159,7 +3156,6 @@ const handleDrop = (e: React.DragEvent, targetId: string) => {
   const sourceId = e.dataTransfer.getData('text/plain');
   setDragSourceId(null);
   setDragOverId(null);
-  setIsDragMode(false);
   if (!sourceId || sourceId === targetId) return;
   setSections(prev => {
     const ordered = prev.slice().sort((a,b)=>a.order-b.order);

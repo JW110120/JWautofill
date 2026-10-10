@@ -108,7 +108,8 @@ const createGradientSampler = (gradient: Gradient) => {
         g: rgba.g,
         b: rgba.b,
         a: rgba.a,
-        midpoint: s.midpoint ?? (i < stops.length - 1 ? 50 : 50)
+        // 不透明度停靠点用独立的 opacityMidpoint
+        midpoint: s.opacityMidpoint ?? (i < stops.length - 1 ? 50 : 50)
       };
     })
     .sort((a, b) => a.position - b.position);

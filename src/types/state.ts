@@ -49,7 +49,8 @@ export interface GradientStop {
     // 扩展属性，用于支持独立的颜色和透明度位置以及中点
     colorPosition?: number;
     opacityPosition?: number;
-    midpoint?: number;
+    midpoint?: number;          // 颜色 stop 之间的中点位置
+    opacityMidpoint?: number;   // 不透明度 stop 之间的中点位置
 }
 
 export interface Gradient {

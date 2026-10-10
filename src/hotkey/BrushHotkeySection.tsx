@@ -40,6 +40,47 @@ const INITIAL_LOAD_RETRY_MS = 500;
 // 因忙碌而顺延的上限：600ms × 5 ≈ 3s 后宁可冒险执行，也不让首刷永久挂起。
 const BRUSH_LOAD_MAX_DEFERRALS = 5;
 
+/**
+ * 归一化「笔刷热键」条目：**同一笔刷名只保留一条记录**。
+ *
+ * ⚠️ 为什么必须去重：笔刷热键按**笔刷名**匹配（PS 的 select 只认 `_name`，同名预设
+ * 只命中 Brushes 列表最上方那支）⇒ 同一个笔刷名绑定多条快捷键在语义上是冗余的
+ * （两条最终都切到同一支笔刷）。历史上「手动输入同一笔刷名」「枚举列表里重复选择
+ * 同一笔刷名」都会各新增一条，于是记录列表里出现两个「圆头」。
+ *
+ * 保留策略：同名条目里**优先保留已绑定组合键的那条**（都为空则保留先出现的），
+ * 其余同名条目丢弃。非 `applyBrush` 条目（主开关 / 功能快捷键）原样保留、不参与去重
+ * —— `runFunc` 复用 `brush` 字段承载功能 id，绝不能与笔刷名混同处理。
+ *
+ * ⚠️ 必须是**模块级纯函数**：本仓有「组件体内更下方声明的 const 被上方 JSX/useEffect
+ * 引用 ⇒ es5 下 var 提升 ⇒ 白屏」的历史坑，纯函数一律放模块级。
+ *
+ * @returns 归一化后的列表与「是否发生变化」（供调用方决定是否回推守护进程）。
+ */
+function dedupeBrushEntries(list: HotkeyEntry[]): { list: HotkeyEntry[]; changed: boolean } {
+  const keptByName = new Map<string, HotkeyEntry>();
+  const out: HotkeyEntry[] = [];
+  let changed = false;
+  for (const e of list) {
+    if (e.action !== 'applyBrush' || !e.brush) { out.push(e); continue; }
+    const prev = keptByName.get(e.brush);
+    if (!prev) {
+      keptByName.set(e.brush, e);
+      out.push(e);
+      continue;
+    }
+    // 已存在同名条目 ⇒ 本次丢弃（记录发生变化）。
+    changed = true;
+    // 但若保留的那条未绑定组合键、而本次这条绑了，则换成它（避免丢掉已有绑定）。
+    if (!prev.combo && e.combo) {
+      const idx = out.indexOf(prev);
+      if (idx >= 0) out[idx] = e;
+      keptByName.set(e.brush, e);
+    }
+  }
+  return { list: out, changed };
+}
+
 export default function BrushHotkeySection() {
   const [brushes, setBrushes] = useState<string[]>([]);
   const [brushTypes, setBrushTypes] = useState<Record<string, string>>({});
@@ -99,7 +140,13 @@ export default function BrushHotkeySection() {
 
   useEffect(() => {
     const unsub = connectHotkeyDaemon();
-    const unsubConfig = onConfig((list)  => setEntries(list));
+    // 收到配置即归一化：历史遗留的「同名笔刷多条」在这里被合并；若有变化则回推守护进程
+    // 落盘，避免下次启动又读回冗余条目（pushConfig 会同步 bridge 缓存，不会回环放大）。
+    const unsubConfig = onConfig((list) => {
+      const { list: normalized, changed } = dedupeBrushEntries(list);
+      setEntries(normalized);
+      if (changed) pushConfig(normalized);
+    });
     const unsubStatus = onDaemonStatus(setDaemonConnected);
     // 热键触发即时反馈：用户按快捷键后面板直接显示是否命中、切换是否成功
     // （这是诊断「按了快捷键没反应」的关键观测点：无任何显示 = 事件根本没到达面板）
@@ -390,16 +437,36 @@ export default function BrushHotkeySection() {
       showMessage('该组合键已被选区填充开关占用，请换一个');
       return;
     }
-    const dup = entries.find(e => e.combo === combo);
+    // 同名笔刷的既有条目（可能不止一条：历史遗留的冗余）。它们会被「替换 + 合并」，
+    // 因此**不参与**下方的「组合键占用」判定 —— 否则会自己占用自己、误报冲突。
+    const sameName = entries.filter(e => e.action === 'applyBrush' && e.brush === selectedBrush);
+    const sameNameIds = new Set(sameName.map(e => e.id));
+    const dup = entries.find(e => e.combo === combo && !sameNameIds.has(e.id));
     if (dup) {
-      if (dup.action === 'applyBrush' && dup.brush === selectedBrush) {
-        showMessage('该组合键已绑定到「' + selectedBrush + '」，无需重复录制');
-        return;
-      }
       showMessage('该组合键已被「' + entryDisplayName(dup) + '」占用，请换一个');
       return;
     }
-    // 注意：不支持同名笔刷——只按名称绑定，PS 会选中 Brushes 列表最上方那支同名项。
+    // ⚠️ 不支持同名笔刷（PS 按 _name 只会命中 Brushes 列表最上方那支），因此重复选择
+    //    同一笔刷名时应当**替换**它原有的快捷键，而不是新增一条（否则列表出现两个「圆头」，
+    //    同一笔刷名匹配多个快捷键）。手动输入与枚举选择两条路径最终都落到这里，行为一致。
+    if (sameName.length) {
+      if (sameName.length === 1 && sameName[0].combo === combo) {
+        showMessage('该组合键已绑定到「' + selectedBrush + '」，无需重复录制');
+        return;
+      }
+      // 保留首条并更新其 combo，其余同名条目一并删除（顺手合并历史冗余）。
+      const keepId = sameName[0].id;
+      const next = entries
+        .filter(e => !sameNameIds.has(e.id) || e.id === keepId)
+        .map(e => (e.id === keepId ? { ...e, combo } : e));
+      setEntries(next);
+      if (pushConfig(next)) {
+        showMessage(sameName.length > 1
+          ? ('已合并重名「' + selectedBrush + '」并更新为：' + combo)
+          : ('已更新「' + selectedBrush + '」的快捷键：' + combo));
+      } else showMessage('推送配置失败（快捷键服务未运行？）');
+      return;
+    }
     const entry: HotkeyEntry = { id: 'bk_' + Date.now(), combo, action: 'applyBrush', brush: selectedBrush };
     const next = [...entries, entry];
     setEntries(next);
@@ -470,7 +537,10 @@ export default function BrushHotkeySection() {
       showMessage('该组合键已被「' + entryDisplayName(dup) + '」占用，请换一个');
       return;
     }
-    const next = entries.map(e => (e.id === target.id ? { ...e, combo } : e));
+    // 顺带合并同名的历史冗余条目：只保留被重录的这条（与 startRecord 的去重口径一致）。
+    const next = entries
+      .filter(e => e.action !== 'applyBrush' || !e.brush || e.brush !== target.brush || e.id === target.id)
+      .map(e => (e.id === target.id ? { ...e, combo } : e));
     setEntries(next);
     if (pushConfig(next)) showMessage('已重录：' + combo + ' → ' + target.brush);
     else showMessage('推送配置失败（快捷键服务未运行？）');
@@ -692,15 +762,18 @@ export default function BrushHotkeySection() {
             因此刷新与录制都不会位移，三者间距也始终一致 */}
         <div className="row-end">
           <div className="hotkey-icon-cell">
-            {usePicker && (
-              <div
-                className="icon-button"
-                onClick={() => void loadBrushes(true)}
-                title={helpTexts.hotkey.refreshBrushes}
-              >
-                <RefreshIcon className="icon-14" />
-              </div>
-            )}
+            {/* ⚠️ 刷新按钮**始终渲染**（不再用 `usePicker &&` 门控）：
+                枚举失败会自动切到手动输入（usePicker=false），若此时把刷新按钮一并藏掉，
+                用户就失去了「重新枚举笔刷列表」的唯一入口 —— 只能靠改笔刷名或重开面板。
+                保持常显后，手动输入态下点它即可再枚举一次，成功会自动切回下拉选择。
+                图标组恒为 3×28px，本格一直存在 ⇒ 显示/隐藏不会造成布局位移。 */}
+            <div
+              className="icon-button"
+              onClick={() => void loadBrushes(true)}
+              title={helpTexts.hotkey.refreshBrushes}
+            >
+              <RefreshIcon className="icon-14" />
+            </div>
           </div>
           <div className="hotkey-icon-cell">
             <div

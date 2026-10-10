@@ -2410,7 +2410,7 @@ export class ClearHandler {
     }
     
     // 插值渐变颜色（包含透明度）
-    static interpolateGradientColorWithOpacity(stops: any[], position: number) {
+    static interpolateGradientColorWithOpacity(stops: any[], position: number, forOpacity: boolean = false) {
         if (!stops || stops.length === 0) {
             return { red: 128, green: 128, blue: 128, opacity: 100 };
         }
@@ -2452,8 +2452,10 @@ export class ClearHandler {
         // 计算插值比例，考虑中点位置
         let ratio = (position * 100 - leftStop.position) / (rightStop.position - leftStop.position);
         
-        // 如果存在中点信息，应用中点插值
-        const midpoint = leftStop.midpoint ?? rightStop.midpoint ?? 50;
+        // 如果存在中点信息，应用中点插值（灰度/颜色用 midpoint，不透明度用 opacityMidpoint）
+        const midpoint = forOpacity
+            ? (leftStop.opacityMidpoint ?? rightStop.opacityMidpoint ?? 50)
+            : (leftStop.midpoint ?? rightStop.midpoint ?? 50);
         if (midpoint !== 50) {
             const midpointRatio = midpoint / 100;
             if (ratio <= midpointRatio) {
@@ -2684,7 +2686,7 @@ export class ClearHandler {
                 }
                 
                 // 根据位置插值渐变透明度
-                const colorWithOpacity = this.interpolateGradientColorWithOpacity(gradient.stops, position);
+                const colorWithOpacity = this.interpolateGradientColorWithOpacity(gradient.stops, position, true);
                 
                 // 将不透明度转换为0-255范围的透明度值
                 alphaData[i] = Math.round((colorWithOpacity.opacity / 100) * 255);

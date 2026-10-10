@@ -64,7 +64,8 @@ const generatePresetPreviewStyle = (preset: Gradient, isInLayerMask: boolean = f
         ...stop,
         colorPosition: stop.colorPosition !== undefined ? stop.colorPosition : stop.position,
         opacityPosition: stop.opacityPosition !== undefined ? stop.opacityPosition : stop.position,
-        midpoint: stop.midpoint !== undefined ? stop.midpoint : (i < preset.stops.length - 1 ? 50 : undefined)
+        midpoint: stop.midpoint !== undefined ? stop.midpoint : (i < preset.stops.length - 1 ? 50 : undefined),
+        opacityMidpoint: stop.opacityMidpoint !== undefined ? stop.opacityMidpoint : (i < preset.stops.length - 1 ? 50 : undefined)
     }));
     
     const sortedColorStops = [...extendedStops].sort((a, b) => a.colorPosition - b.colorPosition);
@@ -192,7 +193,7 @@ const interpolateOpacityAtPositionForPreset = (position: number, opacityStops: a
     let ratio = (position - leftStop.opacityPosition) / (rightStop.opacityPosition - leftStop.opacityPosition);
     
     // 应用中点调整
-    const midpoint = (leftStop.midpoint || 50) / 100;
+    const midpoint = (leftStop.opacityMidpoint || 50) / 100;
     if (midpoint !== 0.5) {
         if (ratio < midpoint) {
             ratio = (ratio / midpoint) * 0.5;
@@ -214,7 +215,8 @@ const interpolateOpacityAtPositionForPreset = (position: number, opacityStops: a
 interface ExtendedGradientStop extends GradientStop {
     colorPosition: number;    // 颜色stop的位置
     opacityPosition: number;  // 透明度stop的位置
-    midpoint?: number;        // 与下一个stop之间的中点位置
+    midpoint?: number;        // 颜色stop与下一个stop之间的中点位置
+    opacityMidpoint?: number; // 透明度stop与下一个stop之间的中点位置
 }
 
 /* ==========================================================================
@@ -328,7 +330,7 @@ const interpolateOpacityAtPosition = (position: number, opacityStops: ExtendedGr
     let ratio = (position - leftStop.opacityPosition) / (rightStop.opacityPosition - leftStop.opacityPosition);
 
     // 应用中点调整
-    const midpoint = (leftStop.midpoint || 50) / 100;
+    const midpoint = (leftStop.opacityMidpoint || 50) / 100;
     if (midpoint !== 0.5) {
         if (ratio < midpoint) {
             ratio = (ratio / midpoint) * 0.5;
@@ -370,14 +372,13 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const [lastClickedPreset, setLastClickedPreset] = useState<number | null>(null);
     const [gradientType, setGradientType] = useState<'linear' | 'radial'>('linear');
     const [angle, setAngle] = useState(0);
-    const [scale, setScale] = useState(100);
     const [reverse, setReverse] = useState(false);
     const [preserveTransparency, setPreserveTransparency] = useState<boolean>(false); // 添加新状态
     const [selectedStopIndex, setSelectedStopIndex] = useState<number | null>(null);
     const [selectedStopType, setSelectedStopType] = useState<'color' | 'opacity'>('color');
     const [stops, setStops] = useState<ExtendedGradientStop[]>([ 
-        { color: 'rgba(0, 0, 0, 1)', position: 0, colorPosition: 0, opacityPosition: 0, midpoint: 50 },
-        { color: 'rgba(255, 255, 255, 1)', position: 100, colorPosition: 100, opacityPosition: 100, midpoint: 50 }
+        { color: 'rgba(0, 0, 0, 1)', position: 0, colorPosition: 0, opacityPosition: 0, midpoint: 50, opacityMidpoint: 50 },
+        { color: 'rgba(255, 255, 255, 1)', position: 100, colorPosition: 100, opacityPosition: 100, midpoint: 50, opacityMidpoint: 50 }
     ]);
     // 保存控制：加载中标志/防抖定时器/脏标记
     const isLoadingRef = useRef(false);
@@ -408,12 +409,11 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         setSelectedStopIndex(null);
         setGradientType('linear');
         setAngle(0);
-        setScale(100);
         setReverse(false);
         setPreserveTransparency(false);
         setStops([
-            { color: 'rgba(0, 0, 0, 1)', position: 0, colorPosition: 0, opacityPosition: 0, midpoint: 50 },
-            { color: 'rgba(255, 255, 255, 1)', position: 100, colorPosition: 100, opacityPosition: 100, midpoint: 50 }
+            { color: 'rgba(0, 0, 0, 1)', position: 0, colorPosition: 0, opacityPosition: 0, midpoint: 50, opacityMidpoint: 50 },
+            { color: 'rgba(255, 255, 255, 1)', position: 100, colorPosition: 100, opacityPosition: 100, midpoint: 50, opacityMidpoint: 50 }
         ]);
     }, [resetToken]);
 
@@ -509,10 +509,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     // 分离的拖拽状态
     const [isDraggingColor, setIsDraggingColor] = useState(false);
     const [isDraggingOpacity, setIsDraggingOpacity] = useState(false);
-    const [isDraggingMidpoint, setIsDraggingMidpoint] = useState(false);
-    const [isDraggingAngle, setIsDraggingAngle] = useState(false);
     const [dragStartX, setDragStartX] = useState(0);
-    const [dragStartPosition, setDragStartPosition] = useState(0);
     const [dragStartAngle, setDragStartAngle] = useState(0); 
     const [dragStopIndex, setDragStopIndex] = useState<number | null>(null);
     const [isInLayerMask, setIsInLayerMask] = useState(false);
@@ -608,7 +605,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     // 保存扩展属性到自定义字段中
                     colorPosition: stop.colorPosition,
                     opacityPosition: stop.opacityPosition,
-                    midpoint: stop.midpoint
+                    midpoint: stop.midpoint,
+                    opacityMidpoint: stop.opacityMidpoint
                 })),
                 preserveTransparency
             };
@@ -639,7 +637,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 // 保存扩展属性到自定义字段中
                 colorPosition: stop.colorPosition,
                 opacityPosition: stop.opacityPosition,
-                midpoint: stop.midpoint
+                midpoint: stop.midpoint,
+                opacityMidpoint: stop.opacityMidpoint
             }))
         };
         const newPresets = [...presets, newPreset];
@@ -684,14 +683,14 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     const previousPreset = newPresets[newSelectedIndex];
                     setGradientType(previousPreset.type);
                     setAngle(previousPreset.angle || 0);
-                    setScale(previousPreset.scale || 100);
                     setReverse(previousPreset.reverse || false);
                     setStops(previousPreset.stops.map((stop, i) => ({
                         ...stop,
                         // 如果预设中保存了扩展属性，则使用保存的值，否则使用默认值
                         colorPosition: stop.colorPosition !== undefined ? stop.colorPosition : stop.position,
                         opacityPosition: stop.opacityPosition !== undefined ? stop.opacityPosition : stop.position,
-                        midpoint: stop.midpoint !== undefined ? stop.midpoint : (i < previousPreset.stops.length - 1 ? 50 : undefined)
+                        midpoint: stop.midpoint !== undefined ? stop.midpoint : (i < previousPreset.stops.length - 1 ? 50 : undefined),
+                        opacityMidpoint: stop.opacityMidpoint !== undefined ? stop.opacityMidpoint : (i < previousPreset.stops.length - 1 ? 50 : undefined)
                     })));
                 }
             } else if (selectedPreset !== null && selectedPreset > index) {
@@ -742,13 +741,13 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 const preset = presets[remainingIndex];
                 setGradientType(preset.type);
                 setAngle(preset.angle || 0);
-                setScale(preset.scale || 100);
                 setReverse(preset.reverse || false);
                 setStops(preset.stops.map((stop, i) => ({
                     ...stop,
                     colorPosition: stop.colorPosition !== undefined ? stop.colorPosition : stop.position,
                     opacityPosition: stop.opacityPosition !== undefined ? stop.opacityPosition : stop.position,
-                    midpoint: stop.midpoint !== undefined ? stop.midpoint : (i < preset.stops.length - 1 ? 50 : undefined)
+                    midpoint: stop.midpoint !== undefined ? stop.midpoint : (i < preset.stops.length - 1 ? 50 : undefined),
+                    opacityMidpoint: stop.opacityMidpoint !== undefined ? stop.opacityMidpoint : (i < preset.stops.length - 1 ? 50 : undefined)
                 })));
             } else {
                 // 多选时清空单选状态
@@ -780,13 +779,13 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 const preset = presets[index];
                 setGradientType(preset.type);
                 setAngle(preset.angle || 0);
-                setScale(preset.scale || 100);
                 setReverse(preset.reverse || false);
                 setStops(preset.stops.map((stop, i) => ({
                     ...stop,
                     colorPosition: stop.colorPosition !== undefined ? stop.colorPosition : stop.position,
                     opacityPosition: stop.opacityPosition !== undefined ? stop.opacityPosition : stop.position,
-                    midpoint: stop.midpoint !== undefined ? stop.midpoint : (i < preset.stops.length - 1 ? 50 : undefined)
+                    midpoint: stop.midpoint !== undefined ? stop.midpoint : (i < preset.stops.length - 1 ? 50 : undefined),
+                    opacityMidpoint: stop.opacityMidpoint !== undefined ? stop.opacityMidpoint : (i < preset.stops.length - 1 ? 50 : undefined)
                 })));
             } else {
                 // 多选时清空单选状态
@@ -801,14 +800,14 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             const preset = presets[index];
             setGradientType(preset.type);
             setAngle(preset.angle || 0);
-            setScale(preset.scale || 100);
             setReverse(preset.reverse || false);
             setStops(preset.stops.map((stop, i) => ({
                 ...stop,
                 // 如果预设中保存了扩展属性，则使用保存的值，否则使用默认值
                 colorPosition: stop.colorPosition !== undefined ? stop.colorPosition : stop.position,
                 opacityPosition: stop.opacityPosition !== undefined ? stop.opacityPosition : stop.position,
-                midpoint: stop.midpoint !== undefined ? stop.midpoint : (i < preset.stops.length - 1 ? 50 : undefined)
+                midpoint: stop.midpoint !== undefined ? stop.midpoint : (i < preset.stops.length - 1 ? 50 : undefined),
+                opacityMidpoint: stop.opacityMidpoint !== undefined ? stop.opacityMidpoint : (i < preset.stops.length - 1 ? 50 : undefined)
             })));
         }
     };
@@ -946,7 +945,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 position: newPosition, 
                 colorPosition: newPosition,
                 opacityPosition: newPosition,
-                midpoint: 50 
+                midpoint: 50,
+                opacityMidpoint: 50 
             }];
             const sortedStops = newStops.sort((a, b) => a.position - b.position);
             
@@ -954,6 +954,9 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             for (let i = 0; i < sortedStops.length - 1; i++) {
                 if (!sortedStops[i].midpoint) {
                     sortedStops[i].midpoint = 50;
+                }
+                if (!sortedStops[i].opacityMidpoint) {
+                    sortedStops[i].opacityMidpoint = 50;
                 }
             }
             
@@ -1026,6 +1029,9 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 if (!newStops[i].midpoint) {
                     newStops[i].midpoint = 50;
                 }
+                if (!newStops[i].opacityMidpoint) {
+                    newStops[i].opacityMidpoint = 50;
+                }
             }
             setStops(newStops);
             setSelectedStopIndex(null);
@@ -1047,7 +1053,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         const startX = e.clientX;
         const startPosition = stops[index].colorPosition;
         setDragStartX(startX);
-        setDragStartPosition(startPosition);
         setDragStopIndex(index);
         
         let hasMoved = false;
@@ -1106,7 +1111,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         const startX = e.clientX;
         const startPosition = stops[index].opacityPosition;
         setDragStartX(startX);
-        setDragStartPosition(startPosition);
         setDragStopIndex(index);
         
         let hasMoved = false;
@@ -1154,7 +1158,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const handleColorMidpointMouseDown = (e: React.MouseEvent, index: number) => {
         e.preventDefault();
         e.stopPropagation();
-        setIsDraggingMidpoint(true);
         
         const startX = e.clientX;
         const startMidpoint = stops[index].midpoint || 50;
@@ -1175,7 +1178,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         };
         
         const handleMouseUp = () => {
-            setIsDraggingMidpoint(false);
             setDragStopIndex(null);
             document.removeEventListener('mousemove', handleMouseMove);
             document.removeEventListener('mouseup', handleMouseUp);
@@ -1189,10 +1191,9 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const handleOpacityMidpointMouseDown = (e: React.MouseEvent, index: number) => {
         e.preventDefault();
         e.stopPropagation();
-        setIsDraggingMidpoint(true);
         
         const startX = e.clientX;
-        const startMidpoint = stops[index].midpoint || 50;
+        const startMidpoint = stops[index].opacityMidpoint || 50;
         
         const handleMouseMove = (moveEvent: MouseEvent) => {
             moveEvent.preventDefault();
@@ -1205,12 +1206,11 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             const newMidpoint = Math.max(1, Math.min(99, startMidpoint + deltaPercent));
             
             const newStops = [...stops];
-            newStops[index] = { ...newStops[index], midpoint: newMidpoint };
+            newStops[index] = { ...newStops[index], opacityMidpoint: newMidpoint };
             setStops(newStops);
         };
         
         const handleMouseUp = () => {
-            setIsDraggingMidpoint(false);
             setDragStopIndex(null);
             document.removeEventListener('mousemove', handleMouseMove);
             document.removeEventListener('mouseup', handleMouseUp);
@@ -1224,8 +1224,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const handleAngleMouseDown = (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        // 拖拽开始：把全局光标锁成 ew-resize，避免鼠标移出标签后光标变回普通箭头。
-        setIsDraggingAngle(true);
         setDragStartX(e.clientX);
         setDragStartAngle(angle);
 
@@ -1241,7 +1239,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         };
 
         const handleMouseUp = () => {
-            setIsDraggingAngle(false);
             document.removeEventListener('mousemove', handleMouseMove);
             document.removeEventListener('mouseup', handleMouseUp);
         };
@@ -1574,7 +1571,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                     <div
                                         className="midpoint-slider"
                                         style={{
-                                            left: `${leftStop.opacityPosition + (stops[selectedStopIndex].opacityPosition - leftStop.opacityPosition) * (leftStop.midpoint || 50) / 100}%`
+                                            left: `${leftStop.opacityPosition + (stops[selectedStopIndex].opacityPosition - leftStop.opacityPosition) * (leftStop.opacityMidpoint || 50) / 100}%`
                                         }}
                                         onMouseDown={(e) => handleOpacityMidpointMouseDown(e, leftStopIndex)}
                                     />
@@ -1591,7 +1588,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                     <div
                                         className="midpoint-slider"
                                         style={{
-                                            left: `${stops[selectedStopIndex].opacityPosition + (rightStops[0].opacityPosition - stops[selectedStopIndex].opacityPosition) * (stops[selectedStopIndex].midpoint || 50) / 100}%`
+                                            left: `${stops[selectedStopIndex].opacityPosition + (rightStops[0].opacityPosition - stops[selectedStopIndex].opacityPosition) * (stops[selectedStopIndex].opacityMidpoint || 50) / 100}%`
                                         }}
                                         onMouseDown={(e) => handleOpacityMidpointMouseDown(e, selectedStopIndex)}
                                     />

@@ -41,7 +41,6 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
   onClose
 }) => {
   const [isDragging, setIsDragging] = React.useState(false);
-  const [dragTarget, setDragTarget] = React.useState<string | null>(null);
   // 拖拽起点存 ref：mousemove 回调只读 ref，effect 不必随值变化反复解绑/重绑监听
   const dragRef = React.useRef({ startX: 0, startValue: 0, target: '' as string });
   const valueRef = React.useRef({ width, opacity });
@@ -64,7 +63,6 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
     };
     // 拖拽开始：把全局光标锁成 ew-resize，避免鼠标移出容器后光标变回普通箭头。
     setIsDragging(true);
-    setDragTarget(target);
   };
 
   React.useEffect(() => {
@@ -84,7 +82,6 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
 
     const handleMouseUp = () => {
       setIsDragging(false);
-      setDragTarget(null);
     };
 
     document.addEventListener('mousemove', handleMouseMove);

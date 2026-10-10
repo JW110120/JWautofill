@@ -704,7 +704,8 @@ export class PresetManager {
                         position: stop.position,
                         colorPosition: stop.colorPosition,
                         opacityPosition: stop.opacityPosition,
-                        midpoint: stop.midpoint
+                        midpoint: stop.midpoint,
+                        opacityMidpoint: stop.opacityMidpoint
                     })),
                     presets: gradient.presets ? gradient.presets.map(preset => ({
                         preview: preset.preview,
@@ -716,7 +717,8 @@ export class PresetManager {
                             position: stop.position,
                             colorPosition: stop.colorPosition,
                             opacityPosition: stop.opacityPosition,
-                            midpoint: stop.midpoint
+                            midpoint: stop.midpoint,
+                            opacityMidpoint: stop.opacityMidpoint
                         }))
                     })) : undefined
                 }));
@@ -970,7 +972,8 @@ export class PresetManager {
                     position: stop.position || 0,
                     colorPosition: stop.colorPosition,
                     opacityPosition: stop.opacityPosition,
-                    midpoint: stop.midpoint
+                    midpoint: stop.midpoint,
+                    opacityMidpoint: stop.opacityMidpoint
                 })),
                 presets: serialized.presets ? serialized.presets.map((preset: any) => ({
                     preview: preset.preview || '',
@@ -982,7 +985,8 @@ export class PresetManager {
                         position: stop.position || 0,
                         colorPosition: stop.colorPosition,
                         opacityPosition: stop.opacityPosition,
-                        midpoint: stop.midpoint
+                        midpoint: stop.midpoint,
+                        opacityMidpoint: stop.opacityMidpoint
                     }))
                 })) : undefined
             }));

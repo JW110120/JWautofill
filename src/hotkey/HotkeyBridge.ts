@@ -9,6 +9,7 @@ import { shell, storage } from 'uxp';
 import { MainToggleState, requestMainToggle } from '../utils/MainToggleBus';
 import { requestFillPanelToggle } from '../utils/FillPanelToggleBus';
 import { psRead, runAsModal } from '../utils/psAccess';
+import { isPsBusy, psBusyRemain } from '../utils/psProbe';
 
 export interface HotkeyEntry {
   id: string;
@@ -516,7 +517,10 @@ export async function applyBrush(brushName: string): Promise<boolean> {
 // 第 7 组 = Tool Presets）。这是 UXP 下枚举笔刷名最可靠的方式（论坛 How-to-get-all-
 // brush-or-tool-presets 确认）。老写法用 get + brushPreset ordinal all 取到的结构里
 // 拿不到 name 列表，所以一直枚举为空。
-export async function enumerateBrushes(): Promise<string[]> {
+//
+// ⚠️ 本函数是**单次尝试**（不做等待/重试），仅供同文件的 `enumerateBrushes()` 内部调用；
+//    外部一律走 `enumerateBrushes()`（带等闸门放行的有界重试，见其说明）。
+async function enumerateBrushesOnce(): Promise<string[]> {
   try {
     // 1) 优先用现代 app.brushes 集合（部分较新 PS 版本提供）
     const brushesApi: any = (app as any)?.brushes;
@@ -578,6 +582,62 @@ export async function enumerateBrushes(): Promise<string[]> {
     console.warn('⚠️ 枚举笔刷失败（可手动输入笔刷名）:', e);
     return [];
   }
+}
+
+// 等闸门放行的总预算与最大尝试次数（见 enumerateBrushes 说明）。
+// 4000ms 是权衡：足够跨过普通静默窗口（300~1200ms）与文档级闩锁释放，又不至于让
+// 「点刷新」长时间无反馈；超限即放弃，由上层（启动首刷 / 用户再点刷新）继续。
+const BRUSH_ENUM_TOTAL_WAIT_MS = 4000;
+const BRUSH_ENUM_ATTEMPTS = 4;
+
+/**
+ * 枚举笔刷预设（对外唯一入口）—— 带「等闸门放行 + 有界重试」的健壮版本。
+ *
+ * ⚠️ 为什么需要它（2026-10-10，自 0f996ce 起的高频枚举失败）：
+ *   0f996ce 把本函数的读取收口到 `psRead()`（模态作用域），这是**正确**的
+ *   —— 裸 get 撞上宿主忙碌窗口会弹宿主原生「命令"获取"当前不可用」框。
+ *   但 `psRead` → `psTryRead` 的第一道关是**粗筛** `isPsBusy()`：一旦命中就
+ *   **立即返回失败**（设计如此：后台轮询丢一轮无副作用）。而本函数的消费方却是
+ *   「启动首刷 / 用户点刷新」这类**一次性**动作：
+ *     · PS 里任何一次选区变更 / 图层操作都会点亮 300~1200ms 的忙碌窗口；
+ *     · 切文档 / 打开 / 关闭 / 保存会点亮**文档级闩锁**（可长达数秒）。
+ *   ⇒ 「点刷新时恰好撞上某个窗口」的概率极高，表现为**可复现的枚举失败**。
+ *
+ * ⚠️ 修法（不违背「避免触发获取失败」策略）：
+ *   粗筛命中时**不发 get**，只**顺延等待**其放行（保持原策略：忙碌期绝不裸读），
+ *   放行后再尝试；等待有**总预算**上限，超限即放弃并交给上层重试。
+ *   ⚠️ 绝不使用 `bypassCoarseGate` 硬闯：那条路会在闩锁期把读取排进模态队列，
+ *      与「等闸门」的既有语义相悖，且会加剧 "Too many modal scope commands"。
+ *
+ * @param opts.totalWaitMs 等闸门放行的总预算（ms）。默认 4000。
+ * @param opts.attempts    最多尝试次数（含等待后的首次）。默认 4。
+ */
+export async function enumerateBrushes(
+  opts: { totalWaitMs?: number; attempts?: number } = {}
+): Promise<string[]> {
+  const totalWaitMs = Math.max(0, opts.totalWaitMs ?? BRUSH_ENUM_TOTAL_WAIT_MS);
+  const attempts = Math.max(1, opts.attempts ?? BRUSH_ENUM_ATTEMPTS);
+  const deadline = Date.now() + totalWaitMs;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    // 等闸门放行：忙碌期只顺延、绝不发 get（保持「避免触发获取失败」策略）。
+    // ⚠️ 每次最多睡 400ms —— 闩锁一释放就能立刻重试，而不是被一次长睡眠越过去
+    //    （psBusyRemain 在闩锁期返回的是节流值，可能远小于真实剩余时间）。
+    while (isPsBusy() && Date.now() < deadline) {
+      const step = Math.min(Math.max(psBusyRemain(), 100), 400);
+      await new Promise<void>(r => setTimeout(r, step));
+    }
+    const names = await enumerateBrushesOnce();
+    if (names.length) {
+      if (attempt > 1) {
+        console.log(`[笔刷列表] 枚举成功（第 ${attempt} 次尝试，共 ${names.length} 支）`);
+      }
+      return names;
+    }
+    if (Date.now() >= deadline) break;
+    // 空结果且仍有预算：短暂停顿后再来一轮（可能是刚清空/刚启动的瞬时态）。
+    await new Promise<void>(r => setTimeout(r, 200));
+  }
+  return [];
 }
 
 
