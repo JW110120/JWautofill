@@ -9,6 +9,139 @@ import { AdjustmentMenu } from './AdjustmentMenu';
 import { LicenseManager } from './LicenseManager';
 import { openPluginDoc } from './openDocs';
 
+/** 菜单项定义（与 UXP entrypoints.setup 的 menuItems 元素同形） */
+type MenuItemDef = { id: string; label: string; enabled?: boolean };
+
+/**
+ * 主面板（App / 选区填充）flyout 菜单项 —— **唯一来源**：
+ * 既喂给 entrypoints.setup，也用于「注册面板打开期整菜单置灰」的 id 遍历，
+ * 两处共用同一数组，杜绝 id 双写漂移。分隔符 id 以 "spacer" 开头，门控时跳过。
+ */
+const APP_MENU_ITEMS: MenuItemDef[] = [
+  {
+    id: "resetLicense",
+    label: "注销激活状态",
+    // 默认禁用：仅在正式激活（非试用）后由 setLicenseLogoutEnabled(true) 放开
+    enabled: false
+  },
+  {
+    id: "openLicenseDialog",
+    label: "打开激活与试用面板"
+  },
+  {
+    id: "spacerApp0",
+    label: "-" // 分隔符（打开激活与试用面板 与 隐藏/显示分区 之间）
+  },
+  {
+    // ⚠️ id 必须与绘画工具箱的同类菜单项区分开：UXP 的菜单项 id 全局唯一，
+    //    两个面板用同一个 id 会在 entrypoints.setup 时抛
+    //    「Can't add menu item ... as it already exists」，并且整个面板都起不来。
+    id: "appShowVisibilityPanel",
+    label: "隐藏/显示分区"
+  },
+  {
+    id: "toggleCompactMode",
+    // 初始文案；面板起来后由 MenuManager.setCompactModeLabel 按「当前面板 + 该面板状态」实时改写
+    label: "紧凑模式：选区填充 - 关"
+  },
+  {
+    id: "spacerApp1",
+    label: "-" // 分隔符（紧凑模式 与「参数复位/填充设置/设置主开关快捷键」分区 之间）
+  },
+  {
+    id: "resetAppParameters",
+    label: "参数复位"
+  },
+  {
+    id: "appFillSettings",
+    label: "填充设置"
+  },
+  {
+    // 「设置主开关快捷键」自成一组（2026-10-10 用户要求「单分一栏」）：
+    // 它是「录制全局快捷键」这一独立动作，与上面的参数复位 / 填充设置不属于同类；
+    // 混在一起容易被误点 ⇒ 前后各一条分隔符，独占一栏。
+    id: "spacerApp3",
+    label: "-" // 分隔符（填充设置 与 设置主开关快捷键 之间）
+  },
+  {
+    id: "setMainHotkey",
+    label: "设置主开关快捷键"
+  },
+  {
+    id: "spacerApp2",
+    label: "-" // 分隔符（设置主开关快捷键 与使用手册 之间）
+  },
+  {
+    id: "openDocsFill",
+    label: "使用手册"
+  }
+];
+
+/**
+ * 像素调整面板（绘画工具箱）flyout 菜单项 —— **唯一来源**（同 APP_MENU_ITEMS）。
+ */
+const ADJUSTMENT_MENU_ITEMS: MenuItemDef[] = [
+  {
+    id: "toggleCollapseAll",
+    label: "折叠/展开所有分区"
+  },
+  {
+    id: "showVisibilityPanel",
+    label: "隐藏/显示分区"
+  },
+  {
+    id: "resetOrder",
+    label: "复位分区顺序"
+  },
+  {
+    id: "spacer1",
+    label: "-" // 分隔符（「布局类」折叠/显示/排序 与 后续功能项 之间）
+  },
+  {
+    id: "alphaSample",
+    label: "图层像素alpha采样"
+  },
+  {
+    id: "spacer2",
+    label: "-" // 分隔符（图层像素alpha采样 与 参数复位 之间）
+  },
+  {
+    // 「参数复位」自成一组（2026-10-10 用户要求）：它是一次性重写全部参数的
+    // 动作，与上面的「折叠 / 隐藏显示 / 复位分区顺序」这类布局操作不同类，
+    // 混在一起容易被误点 ⇒ 前后各留一条分隔符，独占一栏。
+    id: "resetParameters",
+    label: "参数复位"
+  },
+  {
+    id: "spacer6",
+    label: "-" // 分隔符（参数复位 与 功能快捷键 之间）
+  },
+  {
+    id: "funcHotkeys",
+    label: "功能快捷键"
+  },
+  {
+    id: "spacer5",
+    label: "-" // 分隔符（功能快捷键 与 「键盘卡死一键修复 + 卸载快捷键服务」分组 之间）
+  },
+  {
+    id: "repairKeyboard",
+    label: "键盘卡死一键修复"
+  },
+  {
+    id: "uninstallHotkeyDaemon",
+    label: "卸载快捷键服务"
+  },
+  {
+    id: "spacer4",
+    label: "-" // 分隔符（卸载快捷键服务 与使用手册 之间）
+  },
+  {
+    id: "openDocsToolbox",
+    label: "使用手册"
+  }
+];
+
 export class MenuManager {
   // 主面板 APP 的回调
   private static appOpenLicenseCallback: (() => void) | null = null;
@@ -20,9 +153,33 @@ export class MenuManager {
   private static appFillSettingsCallback: (() => void) | null = null;
   // 是否已正式激活（试用不算）：决定「注销激活状态」菜单项能否点击
   private static appLicenseActive: boolean = false;
-  // 「隐藏/显示分区」菜单项当前是否可点（子面板打开期间置灰）。
-  // ⚠️ 只同步 `enabled`，**绝不 removeAt/insertAt**——那会损坏整个菜单（见 setAppVisibilityItemEnabled）。
-  private static appVisibilityItemEnabled: boolean = true;
+
+  // 两个 UXP 面板 id（与 setup() 里一致）
+  private static readonly APP_PANEL_ID = "com.listen2me.jwautofill";
+  private static readonly ADJUSTMENT_PANEL_ID = "com.listen2me.pixeladjustment";
+
+  // 各面板菜单项 id 清单（**不含分隔符**）：直接从菜单源数组派生，
+  // 供「注册面板打开期整菜单置灰」遍历。与 setup() 共用同一来源，杜绝 id 漂移。
+  private static appMenuIds: string[] =
+    APP_MENU_ITEMS.map((it) => it.id).filter((id) => id.indexOf("spacer") !== 0);
+  private static adjustmentMenuIds: string[] =
+    ADJUSTMENT_MENU_ITEMS.map((it) => it.id).filter((id) => id.indexOf("spacer") !== 0);
+
+  // 「注册（激活）面板打开」态上一次应用到宿主菜单的值（null = 尚未应用过）。
+  // 用于让 setLicenseDialogOpen 幂等：态未变则不重复写宿主菜单。
+  private static licenseMenuGated: boolean | null = null;
+
+  /**
+   * 「注册（激活）面板打开期间」各父面板菜单里**保留可点**的白名单：
+   *   APP（选区填充） → 打开激活与试用面板 + 使用手册
+   *   工具箱（adjustment） → 使用手册
+   *   （工具箱本身没有激活入口：设计上激活只在选区填充面板做，锁定横幅也提示「需要在选区填充面板激活」）
+   * 白名单以外的项（含分隔符之外的普通项）一律置灰。分隔符不参与 enabled 变更。
+   */
+  private static readonly LICENSE_DIALOG_ALLOW: Record<string, string[]> = {
+    [MenuManager.APP_PANEL_ID]: ["openLicenseDialog", "openDocsFill"],
+    [MenuManager.ADJUSTMENT_PANEL_ID]: ["openDocsToolbox"]
+  };
 
   constructor() {
     // Constructor
@@ -50,42 +207,92 @@ export class MenuManager {
   }
 
   /**
-   * 同步「注销激活状态」菜单项的可用状态。
-   * 规则：仅正式激活后可点击；未激活与试用状态下均为禁用。
-   * 说明：UXP 动态更新菜单项走 getPanel(id).menuItems.getItem(id) 后直接改属性；
-   *       不同版本 API 名称不统一，故依次尝试 getItem → updateItem → 直接改数组项，
-   *       全部失败也只是菜单项保持旧状态（handler 里还有一层拦截）。
+   * 底层：按面板 id + 菜单项 id 更新指定菜单项属性（enabled / label）。
+   * UXP 动态更新菜单项走 getPanel(id).menuItems.getItem(id) 后直接改属性；
+   * 不同版本 API 名称不统一，故依次尝试 getItem → updateItem → 直接改数组项，
+   * 全部失败也只是菜单项保持旧状态（handler 里还有一层拦截）。
    */
-  public static setLicenseLogoutEnabled(active: boolean): void {
-    this.appLicenseActive = !!active;
+  private static updateMenuItem(
+    panelId: string,
+    id: string,
+    patch: { enabled?: boolean; label?: string }
+  ): void {
     try {
       const ep: any = (require("uxp") as any).entrypoints;
       const panel: any = ep && typeof ep.getPanel === "function"
-        ? ep.getPanel("com.listen2me.jwautofill")
+        ? ep.getPanel(panelId)
         : null;
       const menuItems: any = panel && (panel as any).menuItems;
       if (!menuItems) return;
 
+      const applyTo = (item: any): boolean => {
+        if (!item) return false;
+        if (patch.enabled !== undefined) item.enabled = patch.enabled;
+        if (patch.label !== undefined) item.label = patch.label;
+        return true;
+      };
+
       // 官方动态更新方式：getItem(id) 取到菜单项后直接改属性
       if (typeof (menuItems as any).getItem === "function") {
-        const item = (menuItems as any).getItem("resetLicense");
-        if (item) {
-          item.enabled = !!active;
-          return;
-        }
+        if (applyTo((menuItems as any).getItem(id))) return;
       }
       if (typeof (menuItems as any).updateItem === "function") {
-        (menuItems as any).updateItem("resetLicense", { enabled: !!active });
+        (menuItems as any).updateItem(id, patch);
         return;
       }
       const list: any[] = Array.isArray(menuItems) ? menuItems : ((menuItems as any).items || []);
-      const item = list.find((it: any) => it && it.id === "resetLicense");
-      if (item) {
-        item.enabled = !!active;
-      }
+      const item = list.find((it: any) => it && it.id === id);
+      applyTo(item);
     } catch (err) {
-      console.warn("更新「注销激活状态」菜单项状态失败:", err);
+      console.warn(`更新菜单项 ${id} 状态失败:`, err);
     }
+  }
+
+  /**
+   * 菜单项的「默认可用态」（非注册面板门控期）：
+   * 除「注销激活状态」依正式激活态外，其余一律可用。
+   */
+  private static defaultMenuItemEnabled(id: string): boolean {
+    return id === "resetLicense" ? this.appLicenseActive : true;
+  }
+
+  /**
+   * 把一个面板的全部菜单项按当前「注册面板门控态」写成 enabled。
+   * gated=true  → 仅白名单可点，其余置灰；
+   * gated=false → 还原各面板默认可用态。
+   */
+  private static applyPanelMenuGating(panelId: string, ids: string[], gated: boolean): void {
+    const allow = this.LICENSE_DIALOG_ALLOW[panelId] || [];
+    for (const id of ids) {
+      const enabled = gated ? allow.indexOf(id) >= 0 : this.defaultMenuItemEnabled(id);
+      this.updateMenuItem(panelId, id, { enabled });
+    }
+  }
+
+  /**
+   * 注册（激活）面板打开期间：两个父面板菜单只保留白名单项可点，其余全部置灰；
+   * 关闭后按各面板「默认可用态」还原（仅「注销激活状态」例外，依正式激活态）。
+   * 幂等：门控态未变则直接返回，不重复写宿主菜单。
+   * 由 app.tsx 的 syncLicenseDialogClass()（唯一 body 类派生点）在每次渲染时调用。
+   */
+  public static setLicenseDialogOpen(open: boolean): void {
+    const next = !!open;
+    if (this.licenseMenuGated === next) return;
+    this.licenseMenuGated = next;
+    this.applyPanelMenuGating(this.APP_PANEL_ID, this.appMenuIds, next);
+    this.applyPanelMenuGating(this.ADJUSTMENT_PANEL_ID, this.adjustmentMenuIds, next);
+  }
+
+  /**
+   * 同步「注销激活状态」菜单项的可用状态。
+   * 规则：仅正式激活后可点击；未激活与试用状态下均为禁用。
+   */
+  public static setLicenseLogoutEnabled(active: boolean): void {
+    this.appLicenseActive = !!active;
+    // 注册面板门控期：该项属白名单外，保持置灰（避免本调用越过门控把它点亮）。
+    // 门控解除时 applyPanelMenuGating(false) 会按 appLicenseActive 重新还原。
+    const enabled = this.licenseMenuGated ? false : !!active;
+    this.updateMenuItem(this.APP_PANEL_ID, "resetLicense", { enabled });
   }
 
   /**
@@ -93,80 +300,9 @@ export class MenuManager {
    * 文案形如「紧凑模式：图案·关」/「紧凑模式：选区填充·开」：
    * 5 个作用域（选区填充父面板 + 纯色/图案/渐变/描边 4 个子面板）各自独立开关，
    * 菜单项只作用于「当前面板」，所以文案里必须写明是哪个面板、以及它此刻是开还是关。
-   * 与 setLicenseLogoutEnabled 同一套降级链：getItem → updateItem → 直接改数组项。
    */
   public static setCompactModeLabel(label: string): void {
-    try {
-      const ep: any = (require("uxp") as any).entrypoints;
-      const panel: any = ep && typeof ep.getPanel === "function"
-        ? ep.getPanel("com.listen2me.jwautofill")
-        : null;
-      const menuItems: any = panel && (panel as any).menuItems;
-      if (!menuItems) return;
-
-      if (typeof (menuItems as any).getItem === "function") {
-        const item = (menuItems as any).getItem("toggleCompactMode");
-        if (item) {
-          item.label = label;
-          return;
-        }
-      }
-      if (typeof (menuItems as any).updateItem === "function") {
-        (menuItems as any).updateItem("toggleCompactMode", { label });
-        return;
-      }
-      const list: any[] = Array.isArray(menuItems) ? menuItems : ((menuItems as any).items || []);
-      const item = list.find((it: any) => it && it.id === "toggleCompactMode");
-      if (item) {
-        item.label = label;
-      }
-    } catch (err) {
-      console.warn("更新「紧凑模式」菜单项文案失败:", err);
-    }
-  }
-
-  /**
-   * 子面板打开期间「隐藏/显示分区」项的可用状态。
-   *
-   * 用途：4 个子面板（纯色/图案/渐变/描边）内部**没有分区**，子面板打开期间
-   * 这个入口点了只会打开一个「父面板分区」的浮窗，语义对不上 ⇒ 期间置灰。
-   *
-   * 🔴 **为什么用 enabled 而不是 removeAt/insertAt 真删（2026-10-07 血泪）**：
-   *  「删除再插入」看起来更贴合「隐藏」二字，但 UXP 的 `menuItems.removeAt()`
-   *  在 PS 上**与宿主内部状态不同步**（Adobe 官方论坛已确认：removeAt 后项在宿主
-   *  内存里仍然残留、getItem 返回 null，无法再按同 id 插入）。
-   *  本项目实测后果：反复开关子面板后，菜单项**越来越少**——每次 insertAt
-   *  插回的位置都被宿主算到既有项之前，累积挤压掉其它菜单项。
-   *  `enabled` 是官方文档保证「立即生效」的**幂等**属性，反复设置无副作用、
-   *  不改变菜单结构 ⇒ 绝不会有累积损坏。
-   * ⚠️ 代价：该行仍占位、呈灰态（不是完全消失）。这是「不破坏菜单」的自觉取舍：
-   *    真删会损坏整个菜单，两者取其轻。
-   * ⚠️ 仍然全程 try/catch 且失败只警告：菜单属于宿主 UI，动它绝不能连带影响面板功能。
-   */
-  public static setAppVisibilityItemEnabled(enabled: boolean): void {
-    if (enabled === this.appVisibilityItemEnabled) return;
-    try {
-      const ep: any = (require("uxp") as any).entrypoints;
-      const panel: any = ep && typeof ep.getPanel === "function"
-        ? ep.getPanel("com.listen2me.jwautofill")
-        : null;
-      const menuItems: any = panel && (panel as any).menuItems;
-      if (!menuItems) return;
-
-      // 逐个按 id 前缀找（历史遗留可能已有多份残留项，全部同步状态）
-      if (typeof menuItems.getItemAt === "function") {
-        const n = menuItems.size as number;
-        for (let i = 0; i < n; i++) {
-          const it: any = menuItems.getItemAt(i);
-          if (it && this.normalizeMenuId(it.id) === "appShowVisibilityPanel") {
-            it.enabled = !!enabled;
-          }
-        }
-      }
-      this.appVisibilityItemEnabled = !!enabled;
-    } catch (err) {
-      console.warn("切换「隐藏/显示分区」菜单项状态失败:", err);
-    }
+    this.updateMenuItem(this.APP_PANEL_ID, "toggleCompactMode", { label });
   }
 
   /**
@@ -284,58 +420,7 @@ export class MenuManager {
           show() {
             console.log("JW AutoFill Panel shown");
           },
-          menuItems: [
-            {
-              id: "resetLicense",
-              label: "注销激活状态",
-              // 默认禁用：仅在正式激活（非试用）后由 setLicenseLogoutEnabled(true) 放开
-              enabled: false
-            },
-            {
-              id: "openLicenseDialog",
-              label: "打开激活与试用面板"
-            },
-            {
-              id: "spacerApp0",
-              label: "-" // 分隔符（打开激活与试用面板 与 隐藏/显示分区 之间）
-            },
-            {
-              // ⚠️ id 必须与绘画工具箱的同类菜单项区分开：UXP 的菜单项 id 全局唯一，
-              //    两个面板用同一个 id 会在 entrypoints.setup 时抛
-              //    「Can't add menu item ... as it already exists」，并且整个面板都起不来。
-              id: "appShowVisibilityPanel",
-              label: "隐藏/显示分区"
-            },
-            {
-              id: "toggleCompactMode",
-              // 初始文案；面板起来后由 MenuManager.setCompactModeLabel 按「当前面板 + 该面板状态」实时改写
-              label: "紧凑模式：选区填充 - 关"
-            },
-            {
-              id: "spacerApp1",
-              label: "-" // 分隔符（紧凑模式 与「参数复位/填充设置/设置主开关快捷键」分区 之间）
-            },
-            {
-              id: "resetAppParameters",
-              label: "参数复位"
-            },
-            {
-              id: "appFillSettings",
-              label: "填充设置"
-            },
-            {
-              id: "setMainHotkey",
-              label: "设置主开关快捷键"
-            },
-            {
-              id: "spacerApp2",
-              label: "-" // 分隔符（设置主开关快捷键 与使用手册 之间）
-            },
-            {
-              id: "openDocsFill",
-              label: "使用手册"
-            }
-          ],
+          menuItems: APP_MENU_ITEMS,
           invokeMenu(id: string) {
             MenuManager.handleAppFlyout(id);
           }
@@ -346,60 +431,7 @@ export class MenuManager {
             // 面板显示时的初始化代码
             console.log("Adjustment Panel shown");
           },
-          menuItems: [
-            {
-              id: "toggleCollapseAll",
-              label: "折叠/展开所有分区"
-            },
-            {
-              id: "showVisibilityPanel",
-              label: "隐藏/显示分区"
-            },
-            {
-              id: "resetOrder", 
-              label: "复位分区顺序"
-            },
-            {
-              id: "resetParameters",
-              label: "参数复位"
-            },
-            {
-              id: "spacer1",
-              label: "-" // 分隔符（参数复位 与 图层像素alpha采样 之间）
-            },
-            {
-              id: "alphaSample",
-              label: "图层像素alpha采样"
-            },
-            {
-              id: "spacer2",
-              label: "-" // 分隔符（图层像素alpha采样 与 功能快捷键 之间）
-            },
-            {
-              id: "funcHotkeys",
-              label: "功能快捷键"
-            },
-            {
-              id: "spacer5",
-              label: "-" // 分隔符（功能快捷键 与 「键盘卡死一键修复 + 卸载快捷键服务」分组 之间）
-            },
-            {
-              id: "repairKeyboard",
-              label: "键盘卡死一键修复"
-            },
-            {
-              id: "uninstallHotkeyDaemon",
-              label: "卸载快捷键服务"
-            },
-            {
-              id: "spacer4",
-              label: "-" // 分隔符（卸载快捷键服务 与使用手册 之间）
-            },
-            {
-              id: "openDocsToolbox",
-              label: "使用手册"
-            }
-          ],
+          menuItems: ADJUSTMENT_MENU_ITEMS,
           invokeMenu(id: string) {
             MenuManager.handleAdjustmentFlyout(id);
           }

@@ -442,8 +442,6 @@ const AdjustmentPanel: React.FC = () => {
 const rootRef = useRef<HTMLDivElement>(null);
 const specialWoodcutPreviewTimerRef = useRef<any>(0);
 const specialWoodcutApplyingRef = useRef(false);
-// 标记面板是否已完成首次挂载，避免刚打开面板就自动执行一次预览写入
-const specialWoodcutPreviewMountedRef = useRef(false);
 // 预览基线：记录应用预览前图层的原始像素，用于在参数变化或关闭预览时还原
 const specialWoodcutPreviewBaselineRef = useRef<{
   docId: number;
@@ -492,7 +490,9 @@ const [highFreqRange, setHighFreqRange] = useState(3);
 const [specialWoodcutLevels, setSpecialWoodcutLevels] = useState(4);
 const [specialWoodcutEdgeThreshold, setSpecialWoodcutEdgeThreshold] = useState(32);
 const [specialWoodcutEdgeStrength, setSpecialWoodcutEdgeStrength] = useState(60);
-const [specialWoodcutPreview, setSpecialWoodcutPreview] = useState(true);
+// ⚠️ 预览**默认关闭**（2026-10-10 用户要求）：预览会真的往图层写像素，
+//    默认开启会让「打开面板 / 复位参数 / UXP 重载」都莫名其妙地改动用户的图。
+const [specialWoodcutPreview, setSpecialWoodcutPreview] = useState(false);
 
 const [lineReferenceLayerId, setLineReferenceLayerId] = useState<number | null>(null);
 const [lineReferenceLayerName, setLineReferenceLayerName] = useState<string>('');
@@ -836,48 +836,32 @@ useEffect(() => {
   aliasSoftWidth,
 ]);
 
+// ========= 特殊木刻：预览的「关闭即还原」副作用 =========
+// ⚠️ 这里**只处理关闭**，绝不在开启 / 参数变化时自动执行预览（2026-10-10 用户要求）。
+//    为什么必须拿掉旧的「参数变化 ⇒ 延迟 300ms 自动预览」那条：
+//      · 预览会**真的往图层写像素**，而参数变化既可能来自用户、也可能来自**程序**——
+//        「复位参数」把三个值写回默认、UXP 重载时 panel-state.json 回填状态，
+//        都会触发那条 effect ⇒ 用户只是重载插件或点复位，图就被木刻了，莫名其妙。
+//      · 现在预览改由「用户操作显式驱动」：滑块 onChange / 数字框 onChange /
+//        「重置」按钮各自调用 scheduleSpecialWoodcutPreview()（见各处理函数）。
+//    关闭时的还原保留在此：关掉预览 ⇒ 把基线像素写回图层。
 useEffect(() => {
-  try {
-    if (!specialWoodcutPreview) {
-      if (specialWoodcutPreviewTimerRef.current) {
-        clearTimeout(specialWoodcutPreviewTimerRef.current);
-      }
-      specialWoodcutPreviewTimerRef.current = 0;
-      // 关闭预览时，若存在预览基线则还原原始像素
-      if (specialWoodcutPreviewBaselineRef.current) {
-        // runAsModal ≡ core.executeAsModal，但会维护「本插件自己的模态计数」（见 psAccess）。
-        const executeAsModal = runAsModal;
-        executeAsModal(async () => {
-          try {
-            await restoreSpecialWoodcutBaseline();
-          } catch (e) {
-            console.warn('⚠️ 还原特殊木刻预览失败:', e);
-          }
-        }).catch(() => {});
-      }
-      return;
-    }
-    if (specialWoodcutPreviewTimerRef.current) {
-      clearTimeout(specialWoodcutPreviewTimerRef.current);
-    }
-    // 首次挂载时不自动预览，仅在用户实际调整参数后才触发
-    if (!specialWoodcutPreviewMountedRef.current) {
-      specialWoodcutPreviewMountedRef.current = true;
-      return;
-    }
-    specialWoodcutPreviewTimerRef.current = setTimeout(() => {
-      handleSpecialWoodcut(true);
-    }, 300);
-    return () => {
-      if (specialWoodcutPreviewTimerRef.current) {
-        clearTimeout(specialWoodcutPreviewTimerRef.current);
-      }
-      specialWoodcutPreviewTimerRef.current = 0;
-    };
-  } catch {
-    return;
+  if (specialWoodcutPreview) return; // 开启预览本身不做任何事（不写图）
+  if (specialWoodcutPreviewTimerRef.current) {
+    clearTimeout(specialWoodcutPreviewTimerRef.current);
   }
-}, [specialWoodcutPreview, specialWoodcutLevels, specialWoodcutEdgeThreshold, specialWoodcutEdgeStrength]);
+  specialWoodcutPreviewTimerRef.current = 0;
+  if (specialWoodcutPreviewBaselineRef.current) {
+    // runAsModal ≡ core.executeAsModal，但会维护「本插件自己的模态计数」（见 psAccess）。
+    runAsModal(async () => {
+      try {
+        await restoreSpecialWoodcutBaseline();
+      } catch (e) {
+        console.warn('⚠️ 还原特殊木刻预览失败:', e);
+      }
+    }).catch(() => {});
+  }
+}, [specialWoodcutPreview]);
 
 // 注册Flyout菜单回调
 useEffect(() => {
@@ -909,7 +893,10 @@ useEffect(() => {
       setSpecialWoodcutLevels(4);
       setSpecialWoodcutEdgeThreshold(32);
       setSpecialWoodcutEdgeStrength(60);
-      setSpecialWoodcutPreview(true);
+      // ⚠️ 复位到**默认关闭**（与 useState 初值一致）。复位是程序性写入，
+      //    绝不能顺带把预览打开——旧实现写 true，配合旧的「参数变化即预览」
+      //    effect，会让用户点一次「复位参数」就白白木刻一遍图（2026-10-10 修复）。
+      setSpecialWoodcutPreview(false);
       setLineReferenceLayerId(null);
       setLineReferenceLayerName('');
       // 3) 智能边缘平滑参数复位
@@ -952,25 +939,30 @@ useEffect(() => {
   });
 }, [sections]);
 
-// 当“隐藏/显示分区”模态打开时，为 body 添加类，配合 CSS 隐藏背后 number 输入
+/**
+ * 工具箱遮罩态 body 类（隐藏本面板全部 number + 收起滚动条），**单一派生来源**。
+ *
+ * 🔴 为什么必须合并成一个 effect（2026-10-10 用户报「关掉浮窗后父面板数字压在
+ *    子面板上方」的根因）：
+ *    「隐藏/显示分区」浮窗与「功能快捷键」子面板原先是**两个各自独立**的 effect，
+ *    都在关闭时无条件 `classList.remove('visibility-panel-open')`。
+ *    于是两者同时开着、只关掉浮窗时，另一个（子面板）仍在开，类却被摘掉
+ *    ⇒ 工具箱的数字重新变可见、浮到子面板之上（原生控件无视 z-index，只能隐藏）。
+ *   ⇒ 合并为「任一开启即挂类」，关闭一方不再影响另一方。
+ *   类比：主面板 #app 用两个**不同**的 body 类把「浮窗」与「子面板」分开
+ *   （app-visibility-panel-open / secondary-panel-open），天然不会互相摘除；
+ *   工具箱这边两类面板的视觉需求完全一致（都要隐藏数字 + 收滚动条 + 补 10px 内容盒），
+ *   故用一个类、由「或」关系派生，比拆成两个类再各写一份 CSS 更简单且不会漏。
+ */
 useEffect(() => {
-  if (showVisibilityPanel) {
+  const anyOverlayOpen = showVisibilityPanel || showFuncHotkeyPanel;
+  if (anyOverlayOpen) {
     document.body.classList.add('visibility-panel-open');
   } else {
     document.body.classList.remove('visibility-panel-open');
   }
   return () => document.body.classList.remove('visibility-panel-open');
-}, [showVisibilityPanel]);
-
-// 「功能快捷键」子面板同样遮住背景：复用同一套 body 类收起滚动条/隐藏背后输入
-useEffect(() => {
-  if (showFuncHotkeyPanel) {
-    document.body.classList.add('visibility-panel-open');
-  } else {
-    document.body.classList.remove('visibility-panel-open');
-  }
-  return () => document.body.classList.remove('visibility-panel-open');
-}, [showFuncHotkeyPanel]);
+}, [showVisibilityPanel, showFuncHotkeyPanel]);
 
 // ================= 蒙版同步：初始化与监听 =================
 
@@ -1473,36 +1465,61 @@ const handleHighFreqRangeNumberChange = (event: React.ChangeEvent<HTMLInputEleme
   }
 };
 
+/**
+ * 调度一次「特殊木刻预览」（防抖 300ms 合并连续拖动）。
+ *
+ * ⚠️ 只有**用户显式操作**才允许调用它：滑块 onChange / 数字框 onChange / 「重置」按钮。
+ *    绝不放进任何 useEffect ——「复位参数」写回默认值、panel-state.json 回填状态、
+ *    UXP 重载都是程序性写入，用户并没有要求木刻，不能被自动执行（2026-10-10 用户要求）。
+ *    预览关闭时直接返回（不写图层）。
+ */
+const scheduleSpecialWoodcutPreview = () => {
+  if (!specialWoodcutPreview) return;
+  if (specialWoodcutPreviewTimerRef.current) {
+    clearTimeout(specialWoodcutPreviewTimerRef.current);
+  }
+  specialWoodcutPreviewTimerRef.current = setTimeout(() => {
+    specialWoodcutPreviewTimerRef.current = 0;
+    void handleSpecialWoodcut(true);
+  }, 300);
+};
+
 const handleSpecialWoodcutLevelsChange = (value: number) => {
   setSpecialWoodcutLevels(value);
+  scheduleSpecialWoodcutPreview();
 };
 
 const handleSpecialWoodcutLevelsNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
   const value = parseInt(event.target.value, 10);
   if (!isNaN(value) && value >= 2 && value <= 16) {
     setSpecialWoodcutLevels(value);
+    scheduleSpecialWoodcutPreview();
   }
 };
 
 const handleSpecialWoodcutEdgeThresholdChange = (value: number) => {
   setSpecialWoodcutEdgeThreshold(value);
+  scheduleSpecialWoodcutPreview();
 };
 
 const handleSpecialWoodcutEdgeThresholdNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
   const value = parseInt(event.target.value, 10);
   if (!isNaN(value) && value >= 0 && value <= 255) {
     setSpecialWoodcutEdgeThreshold(value);
+    scheduleSpecialWoodcutPreview();
   }
 };
 
 const handleSpecialWoodcutEdgeStrengthChange = (value: number) => {
   setSpecialWoodcutEdgeStrength(value);
+  scheduleSpecialWoodcutPreview();
 };
 
 const handleSpecialWoodcutEdgeStrengthNumberChange = (event: React.ChangeEvent<HTMLInputElement>) => {
   const value = parseInt(event.target.value, 10);
   if (!isNaN(value) && value >= 0 && value <= 100) {
     setSpecialWoodcutEdgeStrength(value);
+    scheduleSpecialWoodcutPreview();
   }
 };
 
@@ -1510,7 +1527,9 @@ const resetSpecialWoodcutParams = () => {
   setSpecialWoodcutLevels(4);
   setSpecialWoodcutEdgeThreshold(32);
   setSpecialWoodcutEdgeStrength(60);
-  setSpecialWoodcutPreview(true);
+  // ⚠️ 不再顺带把预览打开（见 specialWoodcutPreview 的默认值注释）。
+  //    预览**已开启**时，用默认参数执行一次预览；关闭时这个调用会直接返回。
+  scheduleSpecialWoodcutPreview();
 };
 
 const flattenLayers = (layers: any[], out: any[] = []) => {
@@ -3969,8 +3988,12 @@ return (
   {showVisibilityPanel && (
     <div className="float-overlay" onClick={() => setShowVisibilityPanel(false)}>
       <div className="float-window" onClick={(e) => e.stopPropagation()}>
-        <div className="row-between">
-          <span className="subpanel-title-1" title={helpTexts.adjustment.visibilityPanelTitle}>隐藏/显示分区</span>
+        {/* 标题行与其它子面板同构：标题 + 红 × 同处 .subpanel-title-1（自带
+            space-between + align-items:center）⇒ 两者严格垂直居中。
+            ⚠️ 勿用 .row-between 包一层：.subpanel-title-1 的 margin-bottom:10px
+            会在 align-items:center 的外层 flex 里把标题上移 5px。 */}
+        <div className="subpanel-title-1">
+          <span title={helpTexts.adjustment.visibilityPanelTitle}>隐藏/显示分区</span>
           <div role="button" tabIndex={0} className="close-button" onClick={() => setShowVisibilityPanel(false)} title={helpTexts.adjustment.visibilityClose}>×</div>
         </div>
         <div className="panel-section">

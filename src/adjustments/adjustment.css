@@ -150,9 +150,17 @@
    ⚠️ **不要**在这里写 `background: var(--bg-color)`：UXP 对 style-loader 运行时注入的
       var() 解析不稳定（theme.ts 明确记录过「遮罩能拦点击但背景完全不绘制」），
       且不写也不会漏 —— 子面板铺满面板后遮罩被完全盖住，底色由 .float-window 提供。
-   ⚠️ 不能用 :has() 限定「含 .func-hotkey-window 的遮罩」：UXP 静默不支持。 */
+   ⚠️ 不能用 :has() 限定「含 .func-hotkey-window 的遮罩」：UXP 静默不支持。
+   ⚠️ z-index 显式降到**子面板档 9999**（2026-10-10）：本面板的真·浮窗是「隐藏/显示分区」
+      （通用 .float-overlay，99999）。两者同为 99999 时靠源码顺序决胜，而本子面板写在
+      浮窗之后（AdjustmentPanel 里 FuncHotkeyPanel 在 showVisibilityPanel 之后渲染）
+      ⇒ 开了子面板再开浮窗，浮窗反而被压在下面（用户报的正是这一形态）。
+      降一档后「浮窗始终置顶」在工具箱同样成立，与主面板 5 个子面板同一档位。
+      ⚠️ 必须两级类 (0,2,0) + !important：才能压过 common.css 的 `.float-overlay`
+         (0,1,0) + !important（同为 important 时按特异性决胜）。 */
 .float-overlay.func-hotkey-overlay {
   padding: 0;
+  z-index: 9999 !important;
 }
 
 /* 「功能快捷键」子面板：**占满整个面板**（不再是居中浮窗卡片）。
@@ -218,6 +226,19 @@
   width: 100%;
   box-sizing: border-box;
   padding: 10px;
+}
+
+/* 标题行（.subpanel-title-1 内含标题 + 关闭按钮）：与其它子面板同构。
+   ⚠️ 标题下边距归零（2026-10-10）：`.subpanel-title-1` 自带 margin-bottom:10px，
+      若保留，会让「功能快捷键」标题到下方首个分组标题「选区填充」的间距 =
+      10(标题 mb) + 10(head padding-bottom) + 10(func-group-title 的 margin-top) = 30px，
+      明显偏大（正是用户报的「间距过大」）。
+      归零后间距 = 10(head padding-bottom) + 10(分组标题 margin-top) = **20px**，
+      与其它子面板「标题 → 首个内容行」的 20px 节奏一致。
+   ⚠️ 必须两级类（.func-hotkey-head .subpanel-title-1，特异性 0,2,0）压过 common.css
+      的通用 .subpanel-title-1（0,1,0）——不依赖两个文件的注入顺序。 */
+.func-hotkey-head .subpanel-title-1 {
+  margin-bottom: 0;
 }
 
 /* 列表内层：只承担文字与滚动条之间的 10px 间隙（滚动条占 16px，压在内容盒内）。 */

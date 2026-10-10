@@ -31,8 +31,6 @@ import { ColorSettings, Pattern } from './types/state';
 import { MenuManager } from './utils/MenuManager';
 import { PresetManager } from './utils/PresetManager';
 import { PanelStateManager } from './utils/PanelStateManager';
-// 浮窗遮挡数字输入：与「展开下拉菜单」复用同一套「按矩形相交精确隐藏」的实现。
-import { createOcclusionSession } from './utils/popOverlay';
 import {
   connectHotkeyDaemon,
   isDaemonConnected, getMainToggleCombo, setMainToggleCombo, requestHotkeyRecording,
@@ -191,17 +189,6 @@ class App extends React.Component<AppProps, AppState> {
     private panelStateLoaded = false;
     // 主面板滚动容器（挂 .panel 类）引用，用于折叠/展开后逼 UXP 重排原生控件坐标
     private panelRef = React.createRef<HTMLDivElement>();
-    // ===== 浮窗数字输入遮挡（与「展开下拉菜单」同一套逻辑，2026-10-10）=====
-    // 为什么不再是「浮窗一开就隐藏全部 number」：用户要求「浮窗范围之外（上下留白、
-    // 被折叠区挡住的区域）的数字保持可见」，与下拉菜单一致 —— 只隐藏真正被浮窗压住的。
-    // 实现走 utils/popOverlay.ts：量出浮窗矩形，逐控件判相交，只隐藏相交者；关闭时还原。
-    // ⚠️ 只允许**一个**会话：两块浮窗（隐藏/显示分区、填充设置）互斥打开，
-    //    若各用一个会话，后开的会把「已被前者写成 hidden 的内联值」当原值记下来，
-    //    先开的 restore 后元素又被后开的会话写回 hidden ⇒ 数字永久消失（泄漏）。
-    private floatOcclusion = createOcclusionSession();
-    private visibilityFloatWindowEl: HTMLElement | null = null;
-    private fillFloatWindowEl: HTMLElement | null = null;
-    private floatOcclusionTimer: any = null;
     // ===== 工具巡检（「自动关」的兜底通道，详见 pollToolChange 注释）=====
     private toolWatchTimer: any = null;
     private toolWatchBusy = false;
@@ -518,6 +505,12 @@ class App extends React.Component<AppProps, AppState> {
                     isGradientPickerOpen: this.state.isGradientPickerOpen,
                     isStrokeSettingOpen: this.state.isStrokeSettingOpen,
                     isExpanded: this.state.isExpanded,
+                    // 浮窗同属「面板开关」而非「参数」：复位时保持开启（并同步保留堆叠顺序）。
+                    // ⚠️ 若这里不保留，浮窗会随 ...initialState 一起关掉；虽然 body 类已改为
+                    //    由 state 派生（不会留下悬空类），但用户正在用的窗口突然消失同样算打断操作。
+                    showVisibilityPanel: this.state.showVisibilityPanel,
+                    isFillSettingsOpen: this.state.isFillSettingsOpen,
+                    floatOrder: this.state.floatOrder,
                     // 授权状态不应被参数复位影响
                     isLicensed: this.state.isLicensed,
                     isTrial: this.state.isTrial,
@@ -714,10 +707,18 @@ class App extends React.Component<AppProps, AppState> {
             } else {
                 document.body.classList.remove('secondary-panel-open');
             }
-            // 5 个子面板内部没有分区 ⇒ 期间把菜单里的「隐藏/显示分区」置灰，
-            // 否则点了只会打开一个「父面板分区」浮窗，语义对不上。
-            // ⚠️ 只改 enabled、绝不 removeAt/insertAt（会损坏整个菜单，见 MenuManager 注释）。
-            MenuManager.setAppVisibilityItemEnabled(!isAnySecondaryPanelOpen);
+            // ⚠️ 2026-10-10 起**不再**在子面板打开期间置灰「隐藏/显示分区」菜单项。
+            //    旧的置灰理由是「5 个子面板内部没有分区，点了只会打开父面板分区浮窗、语义对不上」；
+            //    但用户要求子面板与浮窗可以共存、且浮窗始终置顶（见 common.css「浮窗始终置顶」段），
+            //    于是这条限制失去意义 —— 保留它反而让用户以为菜单坏了（点了没反应）。
+            //    ⇒ 该菜单项常驻可点；直接调用 MenuManager.setAppVisibilityItemEnabled 的写法已删除。
+        }
+
+        // 浮窗 body 类：与上面「子面板」同款，**由 state 派生**（不是开关时手写）。
+        // 只在「浮窗开合状态真的变了」时同步，避免每次 update 都去量一次滚动条。
+        if (prevState.showVisibilityPanel !== this.state.showVisibilityPanel ||
+            prevState.isFillSettingsOpen !== this.state.isFillSettingsOpen) {
+            this.syncFloatPanelClasses();
         }
 
         // 紧凑模式：开关变化 → 同步 body 类 + 重写菜单文案（面板名与状态都可能变）
@@ -828,14 +829,7 @@ class App extends React.Component<AppProps, AppState> {
         document.body.classList.remove('license-dialog-open');
         document.body.classList.remove('app-visibility-panel-open');
         document.body.classList.remove('app-fill-settings-open');
-        document.body.classList.remove('app-float-occlusion-fallback');
         document.body.classList.remove('app-panel-gutter');
-        // 浮窗遮挡会话：还原所有被临时隐藏的数字输入 + 取消待重算的定时器
-        if (this.floatOcclusionTimer) {
-            clearTimeout(this.floatOcclusionTimer);
-            this.floatOcclusionTimer = null;
-        }
-        try { this.floatOcclusion.restore(); } catch { /* ignore */ }
     }
 
     handleButtonClick() {
@@ -965,96 +959,139 @@ class App extends React.Component<AppProps, AppState> {
         else document.body.classList.remove('app-panel-gutter');
     }
 
-    /** 浮窗元素引用（callback ref）：挂上/卸载时各重算一次遮挡 */
-    private bindVisibilityFloatWindow = (el: HTMLElement | null) => {
-        this.visibilityFloatWindowEl = el;
-        this.scheduleFloatOcclusion();
-    };
-
-    private bindFillFloatWindow = (el: HTMLElement | null) => {
-        this.fillFloatWindowEl = el;
-        this.scheduleFloatOcclusion();
-    };
-
     /**
-     * 重算浮窗遮挡：量出浮窗矩形，只隐藏与它相交的数字输入（「展开下拉菜单」同一逻辑）。
+     * 打开「隐藏/显示分区」浮窗（与像素调整面板同一套交互）。
      *
-     * ⚠️ 为什么必须延后多拍再量：UXP 在「提交后那一帧」对刚插入的节点常返回 0 尺寸矩形，
-     *    此时会话会判为「无相交」而整体放行 ⇒ 数字浮在浮窗之上（旧的「全量隐藏」正是
-     *    为了绕开这一点）。这里用 立即 + rAF + 60ms 三拍取覆盖，任何一拍量到真矩形即生效。
-     * ⚠️ 一个矩形都量不到时退回 body.app-float-occlusion-fallback（CSS 全量隐藏兜底）：
-     *    宁可多藏几个，也绝不让原生 number 穿到遮罩之上。
+     * ⚠️ 多个浮窗**共用一个遮罩、纵向堆叠**（2026-10-10 用户要求）：
+     *    不许各自一个 .float-overlay —— 那会让遮罩层数随窗口数增加，
+     *    视觉上「越开越黑」；且后开的窗口会盖住先开的（用户明确要求「新开的排在下面」）。
+     *    实现：state.floatOrder 记录开启先后（数组即 DOM 顺序），渲染时统一挂在一个
+     *    .float-overlay > .float-stack 里，堆叠间距 10px（见 common.css .float-stack）。
+     *    body 类不在这里挂：统一由 componentDidUpdate 按 state 派生（见 syncFloatPanelClasses），
+     *    这样「参数复位」等绕过本方法的 state 变更也不会留下悬空类（悬空 = 数字永久隐藏）。
      */
-    private scheduleFloatOcclusion() {
-        if (this.floatOcclusionTimer) {
-            clearTimeout(this.floatOcclusionTimer);
-            this.floatOcclusionTimer = null;
-        }
-        const run = () => { this.applyFloatOcclusion(); };
-        run();
-        if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
-        this.floatOcclusionTimer = setTimeout(run, 60);
-    }
-
-    private applyFloatOcclusion() {
-        const win = this.fillFloatWindowEl || this.visibilityFloatWindowEl;
-        const root = document.getElementById('app');
-
-        if (!win || !root) {
-            this.floatOcclusion.restore();
-            document.body.classList.remove('app-float-occlusion-fallback');
-            return;
-        }
-
-        const r = win.getBoundingClientRect();
-        if (!r || r.width <= 0 || r.height <= 0) {
-            // 量不到 ⇒ 会话无法判定，退回全量隐藏兜底
-            this.floatOcclusion.restore();
-            document.body.classList.add('app-float-occlusion-fallback');
-            return;
-        }
-
-        document.body.classList.remove('app-float-occlusion-fallback');
-        this.floatOcclusion.update(win, root);
-    }
-
-    /** 打开「隐藏/显示分区」浮窗（与像素调整面板同一套交互） */
     openVisibilityPanel() {
-        // 与绘画工具箱同机制：浮窗打开时收起本面板滚动条 + 隐藏背后 number 输入，
-        // 避免浮窗被滚动条压住、以及遮挡下仍可点穿。
-        // ⚠️ 类名必须与工具箱的 `.visibility-panel-open` 区分开：两块面板共用同一个
-        //    document.body，同名类会让「一块面板开浮窗」连带把另一块面板的滚动条
-        //    收起、数字隐藏；且任何一块关闭时无条件移除，还会把另一块仍在开的浮窗
-        //    打回原状（数字浮到浮窗上方）。
-        // ⚠️ 先测滚动条状态（此时 overflow-y 还是 auto），再挂类。
-        this.syncPanelGutter();
-        document.body.classList.add('app-visibility-panel-open');
-        this.setState({ showVisibilityPanel: true });
+        this.setState(prev => ({
+            showVisibilityPanel: true,
+            floatOrder: prev.floatOrder.indexOf('visibility') >= 0
+                ? prev.floatOrder
+                : prev.floatOrder.concat('visibility'),
+        }));
     }
 
     closeVisibilityPanel() {
-        document.body.classList.remove('app-visibility-panel-open');
-        document.body.classList.remove('app-panel-gutter');
-        this.setState({ showVisibilityPanel: false });
+        this.setState(prev => ({
+            showVisibilityPanel: false,
+            floatOrder: prev.floatOrder.filter(id => id !== 'visibility'),
+        }));
     }
 
     /**
-     * 打开「填充设置」浮窗（承载原面板底部的四个 checkbox）。
-     * 与「隐藏/显示分区」浮窗同一套机制：浮窗打开时收起本面板滚动条 + 隐藏背后
-     * number 输入，避免浮窗被滚动条压住、以及遮挡下仍可点穿。
-     * ⚠️ 类名沿用「按面板分开」的约定（app-fill-settings-open），与工具箱区分开：
-     *    两块面板共用同一个 document.body，同名类会互相串扰（见 common.css 浮窗区）。
+     * 打开「填充设置」浮窗（承载原面板底部的四个选项）。
+     * 与「隐藏/显示分区」浮窗同一套机制：共用一个遮罩、纵向堆叠（后开的排在下面）。
      */
     openFillSettingsPanel() {
-        this.syncPanelGutter();
-        document.body.classList.add('app-fill-settings-open');
-        this.setState({ isFillSettingsOpen: true });
+        this.setState(prev => ({
+            isFillSettingsOpen: true,
+            floatOrder: prev.floatOrder.indexOf('fill') >= 0
+                ? prev.floatOrder
+                : prev.floatOrder.concat('fill'),
+        }));
     }
 
     closeFillSettingsPanel() {
-        document.body.classList.remove('app-fill-settings-open');
-        document.body.classList.remove('app-panel-gutter');
-        this.setState({ isFillSettingsOpen: false });
+        this.setState(prev => ({
+            isFillSettingsOpen: false,
+            floatOrder: prev.floatOrder.filter(id => id !== 'fill'),
+        }));
+    }
+
+    /** 关闭全部浮窗（点遮罩空白处 = 整层取消，语义与「弹层被点掉」一致） */
+    closeAllFloatWindows() {
+        this.setState({ showVisibilityPanel: false, isFillSettingsOpen: false, floatOrder: [] });
+    }
+
+    /**
+     * 浮窗相关 body 类**由 state 派生**（与 secondary-panel-open 同款，2026-10-10）。
+     *
+     * 🔴 为什么不再在 open/close 里直接 classList.add/remove：
+     *   `onResetParameters` 用 `...initialState` 整体覆盖 state（把两个浮窗布尔量打回 false），
+     *   但它**绕过**了 closeXxx() ⇒ 旧写法会把 body.app-visibility-panel-open 留在身上，
+     *   而该类的职责是「隐藏本面板全部 number」⇒ 参数复位后所有数字**永久消失**、
+     *   且再开一次浮窗才能恢复（用户可见的“数字不见了”事故）。
+     *   派生式同步对「任何」state 变更都成立，天然没有这个死角。
+     */
+    private syncFloatPanelClasses() {
+        const vis = !!this.state.showVisibilityPanel;
+        const fill = !!this.state.isFillSettingsOpen;
+        if (vis || fill) this.syncPanelGutter();
+        else document.body.classList.remove('app-panel-gutter');
+        document.body.classList.toggle('app-visibility-panel-open', vis);
+        document.body.classList.toggle('app-fill-settings-open', fill);
+    }
+
+    /**
+     * 「隐藏/显示分区」浮窗内容（标题行 + 两行开关）。
+     * 单独抽成方法：浮窗本体改由 floatOrder 统一渲染，内容按 id 取用（见 render 里的浮窗图层）。
+     * ⚠️ 标题行必须与其它子面板同构（标题 + 红 × 同处 .subpanel-title-1，它自带
+     *    justify-content:space-between + align-items:center）。勿再用 .row-between 包一层：
+     *    .subpanel-title-1 自带 margin-bottom:10px，在 align-items:center 的外层 flex 里
+     *    会把标题整体上移 5px（历史错位根因）。
+     */
+    private renderVisibilityFloatContent() {
+        return (
+            <>
+                <div className="subpanel-title-1">
+                    <span title={helpTexts.selectionFill.visibilityPanelTitle}>隐藏/显示分区</span>
+                    <div role="button" tabIndex={0} className="close-button" title={helpTexts.selectionFill.floatClose} onClick={() => this.closeVisibilityPanel()}>×</div>
+                </div>
+                <div className="panel-section">
+                    <div className="row-between">
+                        <span className="label-4" title={helpTexts.selectionFill.visibilitySection} onClick={() => this.toggleSectionVisibility('selectionOptions')}>选区改造</span>
+                        <ToggleSwitch checked={this.state.selectionOptionsVisible} onChange={() => this.toggleSectionVisibility('selectionOptions')} title={helpTexts.selectionFill.visibilitySection}  />
+                    </div>
+                    <div className="row-between">
+                        <span className="label-4" title={helpTexts.selectionFill.visibilitySection} onClick={() => this.toggleSectionVisibility('fillOptions')}>填充选项</span>
+                        <ToggleSwitch checked={this.state.fillOptionsVisible} onChange={() => this.toggleSectionVisibility('fillOptions')} title={helpTexts.selectionFill.visibilitySection}  />
+                    </div>
+                </div>
+            </>
+        );
+    }
+
+    /**
+     * 「填充设置」浮窗内容：承载原面板底部的四个选项。
+     * 2026-10-10 改造：由「2×2 原生 checkbox」改为「四行自绘开关（row-between）」，
+     * 与「隐藏/显示分区」浮窗、各面板的「标签 + 开关」行同构 —— 视觉更统一、
+     * 触摸目标更大，也彻底避开 UXP 原生 checkbox 的墨迹内缩对齐问题。
+     */
+    private renderFillSettingsFloatContent() {
+        return (
+            <>
+                <div className="subpanel-title-1">
+                    <span title={helpTexts.selectionFill.fillSettingsTitle}>填充设置</span>
+                    <div role="button" tabIndex={0} className="close-button" title={helpTexts.selectionFill.floatClose} onClick={() => this.closeFillSettingsPanel()}>×</div>
+                </div>
+                <div className="panel-section">
+                    <div className="row-between">
+                        <span className="label-5" title={helpTexts.selectionFill.deselectLabel} onClick={this.toggleDeselectAfterFill}>自动删选区</span>
+                        <ToggleSwitch checked={this.state.deselectAfterFill} onChange={this.toggleDeselectAfterFill} title={helpTexts.selectionFill.deselectInput} />
+                    </div>
+                    <div className="row-between">
+                        <span className="label-5" title={helpTexts.selectionFill.historyLabel} onClick={this.toggleAutoUpdateHistory}>更新历史源</span>
+                        <ToggleSwitch checked={this.state.autoUpdateHistory} onChange={this.toggleAutoUpdateHistory} title={helpTexts.selectionFill.historyInput} />
+                    </div>
+                    <div className="row-between">
+                        <span className="label-5" title={helpTexts.selectionFill.autoOffLabel} onClick={this.toggleAutoOffOnOtherTool}>自动关开关</span>
+                        <ToggleSwitch checked={this.state.autoOffOnOtherTool} onChange={this.toggleAutoOffOnOtherTool} title={helpTexts.selectionFill.autoOffInput} />
+                    </div>
+                    <div className="row-between">
+                        <span className="label-5" title={helpTexts.selectionFill.lassoLabel} onClick={this.toggleSwitchToLassoOnEnable}>自动切套索</span>
+                        <ToggleSwitch checked={this.state.switchToLassoOnEnable} onChange={this.toggleSwitchToLassoOnEnable} title={helpTexts.selectionFill.lassoInput} />
+                    </div>
+                </div>
+            </>
+        );
     }
 
     /** 「显示公式」开关（四处各自独立；随面板状态持久化） */
@@ -1119,33 +1156,55 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     toggleStrokeSetting() {
-        this.setState({ isStrokeSettingOpen: true });
+        this.setSecondaryPanel('stroke', true);
     }
 
     toggleColorSettings() {
-        this.setState(prev => ({ isColorSettingsOpen: !prev.isColorSettingsOpen }));
+        this.setSecondaryPanel('color', !this.state.isColorSettingsOpen);
+    }
+
+    /**
+     * 子面板互斥（铁律，2026-10-10 用户要求）：
+     * 同一父面板**同时只允许一个子面板**，打开新的即顶掉先前打开的。
+     *
+     * ⚠️ 必须写成「一次 setState 全量设定 5 个布尔量」而不是各写各的 true：
+     *    旧写法（每个入口只置自己 true）会让纯色 + 图案 + 描边同时挂在面板上，
+     *    而子面板都是 absolute 铺满父面板、z-index 同为 9999 ⇒ 只能看到最后渲染的那个，
+     *    关掉它以后下面的又露出来，用户以为「点关闭没关干净」。
+     * ⚠️ 数字遮挡（body.secondary-panel-open）由 componentDidUpdate 按这 5 个布尔量派生，
+     *    所以「顶掉」与「新开的面板遮住父面板数字」两件事自动一致。
+     */
+    private setSecondaryPanel(id: 'color' | 'pattern' | 'gradient' | 'stroke' | 'clear', open: boolean) {
+        this.setState({
+            isColorSettingsOpen: id === 'color' ? open : false,
+            isPatternPickerOpen: id === 'pattern' ? open : false,
+            isGradientPickerOpen: id === 'gradient' ? open : false,
+            isStrokeSettingOpen: id === 'stroke' ? open : false,
+            isClearSettingOpen: id === 'clear' ? open : false,
+        });
     }
 
     /**
      * 功能快捷键通路：切换纯色/图案/渐变子面板的开关。
      * 与面板里齿轮/标签入口的语义一致——开就关、关就开；
      * 图案/渐变的既有入口只开不关，热键这里是真正的开关（用户按同键可收起）。
+     * ⚠️ 走的仍是 setSecondaryPanel ⇒ 同样遵守「同时只有一个子面板」的铁律。
      */
     applyFillPanelHotkey(panel: FillPanelId) {
-        this.setState(prev => {
-            if (panel === 'color') return { isColorSettingsOpen: !prev.isColorSettingsOpen };
-            if (panel === 'pattern') return { isPatternPickerOpen: !prev.isPatternPickerOpen };
-            if (panel === 'gradient') return { isGradientPickerOpen: !prev.isGradientPickerOpen };
-            return null;
-        });
+        const isOpen = panel === 'color'
+            ? this.state.isColorSettingsOpen
+            : panel === 'pattern'
+                ? this.state.isPatternPickerOpen
+                : this.state.isGradientPickerOpen;
+        this.setSecondaryPanel(panel, !isOpen);
     }
 
     openPatternPicker() {
-        this.setState({ isPatternPickerOpen: true });
+        this.setSecondaryPanel('pattern', true);
     }
 
     openGradientPicker() {
-        this.setState({ isGradientPickerOpen: true });
+        this.setSecondaryPanel('gradient', true);
     }
 
     handleColorSettingsSave(settings: ColorSettings) {
@@ -1205,7 +1264,7 @@ class App extends React.Component<AppProps, AppState> {
 
     /** 打开清除设置子面板（紧凑模式下由「清除模式」label 触发，普通模式下由齿轮触发） */
     toggleClearSetting() {
-        this.setState({ isClearSettingOpen: true });
+        this.setSecondaryPanel('clear', true);
     }
 
     closeClearSetting() {
@@ -2390,6 +2449,10 @@ class App extends React.Component<AppProps, AppState> {
      */
     syncLicenseDialogClass() {
         const shouldOpen = !!this.state.isLicenseDialogOpen;
+        // 注册（激活）面板打开期间：两个父面板的 flyout 菜单只留「打开激活与试用面板 / 使用手册」
+        // 可点，其余全部置灰；关闭后按各面板默认可用态还原。MenuManager 内部幂等（态未变不重复写宿主），
+        // 故可安全地在此（渲染期、唯一 body 类派生点）每次调用。
+        MenuManager.setLicenseDialogOpen(shouldOpen);
         const has = document.body.classList.contains('license-dialog-open');
         if (shouldOpen === has) return;
         if (shouldOpen) document.body.classList.add('license-dialog-open');
@@ -3070,118 +3133,25 @@ title={helpTexts.selectionFill.clearMode}>
                 onTrialStarted={this.handleTrialStarted}
                 onClose={this.closeLicenseDialog}
             />
-            {this.state.showVisibilityPanel && (
-                <div className="float-overlay" onClick={() => this.closeVisibilityPanel()}>
-                    <div className="float-window" ref={this.bindVisibilityFloatWindow} onClick={(e) => e.stopPropagation()}>
-                        <div className="row-between">
-                            <span className="subpanel-title-1" title={helpTexts.selectionFill.visibilityPanelTitle}>隐藏/显示分区</span>
-                            <div role="button" tabIndex={0} className="close-button" title={helpTexts.selectionFill.floatClose} onClick={() => this.closeVisibilityPanel()}>×</div>
-                        </div>
-                        <div className="panel-section">
-                            <div className="row-between">
-                                <span className="label-4" title={helpTexts.selectionFill.visibilitySection} onClick={() => this.toggleSectionVisibility('selectionOptions')}>选区改造</span>
-                                <ToggleSwitch checked={this.state.selectionOptionsVisible} onChange={() => this.toggleSectionVisibility('selectionOptions')} title={helpTexts.selectionFill.visibilitySection}  />
+            {/* 浮窗图层（隐藏/显示分区 · 填充设置）：多个浮窗**共用一个遮罩 + 纵向堆叠**。
+                · 遮罩只有一层 ⇒ 开多个浮窗时暗度恒定，不会「越开越黑」（用户要求）；
+                · 排列顺序取 state.floatOrder（= 开启先后）⇒ **后开的排在下面**；
+                · 堆叠间距 10px、关闭上方后下方自动顺延 —— 由 .float-stack 的
+                  `margin-top:10px` 相邻选择器实现（见 common.css）；
+                · 点遮罩空白 = 整层收起；单个关闭走各窗口标题行右侧的 ×。
+                ⚠️ 遮罩与窗口都必须在 .panel 滚动容器之外（渲染在 .app-root 层）：
+                   position:fixed 的包含块在 UXP 下不扣滚动条宽，留在滚动容器内
+                   会被滚动条压住右缘。 */}
+            {this.state.floatOrder.length > 0 && (
+                <div className="float-overlay" onClick={() => this.closeAllFloatWindows()}>
+                    <div className="float-stack">
+                        {this.state.floatOrder.map(id => (
+                            <div key={id} className="float-window" onClick={(e) => e.stopPropagation()}>
+                                {id === 'visibility'
+                                    ? this.renderVisibilityFloatContent()
+                                    : this.renderFillSettingsFloatContent()}
                             </div>
-                            <div className="row-between">
-                                <span className="label-4" title={helpTexts.selectionFill.visibilitySection} onClick={() => this.toggleSectionVisibility('fillOptions')}>填充选项</span>
-                                <ToggleSwitch checked={this.state.fillOptionsVisible} onChange={() => this.toggleSectionVisibility('fillOptions')} title={helpTexts.selectionFill.visibilitySection}  />
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
-            {/* 填充设置浮窗：承载原面板底部的四个 checkbox。
-                与「隐藏/显示分区」浮窗同一套外壳（.float-overlay + .float-window），
-                内容沿用原两列网格（.row-between.row-grid.row-grid-flush）以保持视觉连续。 */}
-            {this.state.isFillSettingsOpen && (
-                <div className="float-overlay" onClick={() => this.closeFillSettingsPanel()}>
-                    <div className="float-window" ref={this.bindFillFloatWindow} onClick={(e) => e.stopPropagation()}>
-                        <div className="row-between">
-                            <span className="subpanel-title-1" title={helpTexts.selectionFill.fillSettingsTitle}>填充设置</span>
-                            <div role="button" tabIndex={0} className="close-button" title={helpTexts.selectionFill.floatClose} onClick={() => this.closeFillSettingsPanel()}>×</div>
-                        </div>
-                        <div className="panel-section">
-                            <div className="row-between row-grid row-grid-flush">
-                                {/* 左列：取消选区 / 更新历史源 */}
-                                <div className="grid-cell">
-                                    <div className="row-start">
-                                        <label
-                                            htmlFor="deselectCheckbox"
-                                            className="label-5"
-                                            onClick={this.toggleDeselectAfterFill}
-                                            title={helpTexts.selectionFill.deselectLabel}
-                                        >
-                                            自动删选区
-                                        </label>
-                                        <input
-                                            type='checkbox'
-                                            id="deselectCheckbox"
-                                            checked={this.state.deselectAfterFill}
-                                            onChange={this.toggleDeselectAfterFill}
-                                            className="checkbox-input"
-                                            title={helpTexts.selectionFill.deselectInput}
-                                        />
-                                    </div>
-                                    <div className="row-start">
-                                        <label
-                                            htmlFor="historyCheckbox"
-                                            className="label-5"
-                                            onClick={this.toggleAutoUpdateHistory}
-                                            title={helpTexts.selectionFill.historyLabel}
-                                        >
-                                            更新历史源
-                                        </label>
-                                        <input
-                                            type='checkbox'
-                                            id="historyCheckbox"
-                                            checked={this.state.autoUpdateHistory}
-                                            onChange={this.toggleAutoUpdateHistory}
-                                            className="checkbox-input"
-                                            title={helpTexts.selectionFill.historyInput}
-                                        />
-                                    </div>
-                                </div>
-                                {/* 右列：开启后切套索 / 切其它工具即关 */}
-                                <div className="grid-cell">
-                                    <div className="row-start">
-                                        <label
-                                            htmlFor="autoOffOnToolCheckbox"
-                                            className="label-5"
-                                            onClick={this.toggleAutoOffOnOtherTool}
-                                            title={helpTexts.selectionFill.autoOffLabel}
-                                        >
-                                            自动关开关
-                                        </label>
-                                        <input
-                                            type='checkbox'
-                                            id="autoOffOnToolCheckbox"
-                                            checked={this.state.autoOffOnOtherTool}
-                                            onChange={this.toggleAutoOffOnOtherTool}
-                                            className="checkbox-input"
-                                            title={helpTexts.selectionFill.autoOffInput}
-                                        />
-                                    </div>
-                                    <div className="row-start">
-                                        <label
-                                            htmlFor="lassoOnEnableCheckbox"
-                                            className="label-5"
-                                            onClick={this.toggleSwitchToLassoOnEnable}
-                                            title={helpTexts.selectionFill.lassoLabel}
-                                        >
-                                            自动切套索
-                                        </label>
-                                        <input
-                                            type='checkbox'
-                                            id="lassoOnEnableCheckbox"
-                                            checked={this.state.switchToLassoOnEnable}
-                                            onChange={this.toggleSwitchToLassoOnEnable}
-                                            className="checkbox-input"
-                                            title={helpTexts.selectionFill.lassoInput}
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+                        ))}
                     </div>
                 </div>
             )}

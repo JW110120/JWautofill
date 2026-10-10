@@ -69,6 +69,28 @@ export class PresetManager {
     }
 
     /**
+     * 把 entry 移动到 targetFolder 并改名为 newName（同名已存在时覆盖）。
+     *
+     * ⛔⛔ UXP 的 `Entry.moveTo(folder, options)` 第二个参数是**选项对象**
+     *   `{ newName?: string; overwrite?: boolean }`，**不是**文件名字符串。
+     *   传字符串时 UXP 的原生绑定会严格校验并抛错（Argument 2 has an invalid type），
+     *   而调用点又普遍包在 `try { … } catch (_) {}` 里 ⇒ 错误被静默吞掉、移动从未发生。
+     *
+     *   2026-10-10「图案预设只剩 .tmp、正式文件消失」事故的根因就在此：
+     *   ① 备份步 `existingFile.moveTo(folder, '…backup')` 抛错被外层 catch 吞掉
+     *      ⇒ 原始数据没有被备份走；
+     *   ② 替换步 `tempFile.moveTo(folder, '…json')` 抛错 → 兜底分支 `getEntry(正式文件)`
+     *      取到**仍在原处**的正式文件并 `delete()` 掉 → 重试 moveTo 再次抛错
+     *      ⇒ 正式文件已被删除、.backup 从未生成、只剩一个 .tmp，数据永久丢失。
+     *   渐变面板同样写错签名，只是它有 `createFile+write` 兜底才「看起来正常」。
+     *   统一走本方法（带 overwrite ⇒ 目标残留也能直接覆盖，无需「先删目标再重试」），
+     *   杜绝再次写错签名。
+     */
+    private static async moveEntryTo(entry: any, targetFolder: any, newName: string): Promise<void> {
+        await entry.moveTo(targetFolder, { newName, overwrite: true });
+    }
+
+    /**
      * 测试文件系统访问权限
      */
     static async testFileSystemAccess(): Promise<boolean> {
@@ -464,31 +486,21 @@ export class PresetManager {
                 const tempFile = await presetFolder.createFile(tempFileName, { overwrite: true });
                 await (tempFile as any).write(jsonData, { format: require('uxp').storage.formats.utf8 });
 
-                // 备份现有正式文件（先删旧备份再改名；任何一步中断都还剩一份完整数据）
+                // 备份现有正式文件：**直接改名成 .backup 并带 overwrite** ——
+                // 不必先 getEntry(旧备份)+delete()（少一次 I/O，也少一个中间失败点）。
                 try {
                     const existingFile = await presetFolder.getEntry(finalFileName);
                     if (existingFile) {
-                        try {
-                            const oldBackup = await presetFolder.getEntry(backupFileName);
-                            await (oldBackup as any).delete();
-                        } catch (e) { /* 旧备份不存在，忽略 */ }
-                        await (existingFile as any).moveTo(presetFolder, backupFileName);
+                        await this.moveEntryTo(existingFile, presetFolder, backupFileName);
                     }
                 } catch (e) { /* 目标文件不存在，无需备份 */ }
 
-                // 原子替换：moveTo 因目标残留而失败时，先删目标再重试。
+                // 原子替换：moveTo 带 overwrite ⇒ 目标残留也能直接覆盖，
+                // 无需「先删目标再重试」那套（那套在签名写错时还会把正式文件删掉，见 moveEntryTo 注释）。
                 // ⚠️ 此处绝不回退到 createFile(overwrite)+write（那正是清零事故的来源）；
-                //    万一两步 moveTo 都失败，正式文件可能短暂缺失，但 .backup 是完整的，
-                //    加载侧的备份恢复分支会兜住，外层重试也会再走一遍本流程。
-                try {
-                    await (tempFile as any).moveTo(presetFolder, finalFileName);
-                } catch (_) {
-                    try {
-                        const maybeExisting = await presetFolder.getEntry(finalFileName);
-                        if (maybeExisting) { await (maybeExisting as any).delete(); }
-                    } catch (_) { /* 忽略 */ }
-                    await (tempFile as any).moveTo(presetFolder, finalFileName);
-                }
+                //    万一失败，正式文件可能在极短窗口内缺失，但加载侧的 .tmp/.backup 恢复链会兜住，
+                //    外层重试也会再走一遍本流程。
+                await this.moveEntryTo(tempFile, presetFolder, finalFileName);
 
                 // 记录本次成功保存的内容
                 this.lastPatternJson = jsonData;
@@ -545,7 +557,7 @@ export class PresetManager {
 
             const formats = require('uxp').storage.formats;
 
-            // 先尝试从数据文件夹读取
+            // 先尝试从数据文件夹读取正式文件
             try {
                 const presetsFile = await presetFolder.getEntry(this.PATTERN_PRESETS_FILE);
                 if (presetsFile) {
@@ -554,31 +566,55 @@ export class PresetManager {
                     if (parsed && parsed.length > 0) {
                         serializedPatterns = parsed;
                         loadedFromLocal = true;
-                    } else {
-                        console.warn('⚠️ 图案预设主文件解析失败，尝试读取备份文件');
-                        try {
-                            const backupFile = await presetFolder.getEntry(`${this.PATTERN_PRESETS_FILE}.backup`);
-                            if (backupFile) {
-                                const backupContent = await (backupFile as any).read({ format: formats.utf8 });
-                                const backupParsed = parseWithRecovery(backupContent);
-                                if (backupParsed && backupParsed.length > 0) {
-                                    console.log('✅ 使用备份文件恢复图案预设');
-                                    serializedPatterns = backupParsed;
-                                    loadedFromLocal = true;
-                                    // 将备份内容原样写回主文件，恢复可用状态。
-                                    // ⚠️ 不能走 savePatternPresets(backupParsed)：backupParsed 是
-                                    // 序列化格式（仅含 base64 字符串、无解码缓冲区），重序列化会
-                                    // 丢失全部二进制字段，恢复出有损文件。
-                                    try {
-                                        const restored = await presetFolder.createFile(this.PATTERN_PRESETS_FILE, { overwrite: true });
-                                        await restored.write(backupContent, { format: formats.utf8 });
-                                    } catch (e) { /* 忽略写回失败 */ }
-                                }
-                            }
-                        } catch (_) { /* 忽略备份读取失败 */ }
                     }
                 }
-            } catch (_) { /* 数据文件不存在或解析失败时回退到bundle */ }
+            } catch (_) { /* 数据文件不存在或解析失败时，走下方恢复链 */ }
+
+            // ⚠️ 恢复链（2026-10-10 加固）：正式文件不可用 → `.tmp` → `.backup`。
+            //   为什么必须处理「正式文件**不存在**」这种形态：
+            //     原子替换由两步改名组成（正式文件 → .backup、.tmp → 正式文件）。
+            //     进程在两步之间被打断（最常见：UDT Reload 直接杀 UXP 宿主）时，
+            //     正式文件就不存在了。旧实现只在「正式文件存在但解析失败」时才去读 .backup，
+            //     「文件不存在」会直接掉到 bundle ⇒ 用户的预设全部消失（用户报的正是这一形态）。
+            //   ⚠️ `.tmp` 走**严格** JSON.parse：它可能来自被中途打断的写入，残缺内容绝不采信
+            //      （parseWithRecovery 的「掐头去尾」修复会把半截数组救成短数组 = 脏数据）。
+            //   ⚠️ 恢复即「把被打断的原子替换补完」：把该文件改名回正式文件名（带 overwrite），
+            //      比 createFile+write 安全得多——后者对几十 MB 的预设正是「先清零再写」的老事故源。
+            const restoreFrom = async (fileName: string, strict: boolean): Promise<boolean> => {
+                try {
+                    const entry = await presetFolder.getEntry(fileName);
+                    if (!entry) return false;
+                    const content = await (entry as any).read({ format: formats.utf8 });
+                    let parsed: any[] | null = null;
+                    if (strict) {
+                        try {
+                            const p = JSON.parse(content);
+                            parsed = Array.isArray(p) ? p : null;
+                        } catch (_) { parsed = null; }
+                    } else {
+                        parsed = parseWithRecovery(content);
+                    }
+                    if (!parsed || parsed.length === 0) return false;
+                    serializedPatterns = parsed;
+                    loadedFromLocal = true;
+                    try {
+                        await this.moveEntryTo(entry, presetFolder, this.PATTERN_PRESETS_FILE);
+                        console.log('✅ 已用', fileName, '恢复图案预设并补完替换');
+                    } catch (e) {
+                        console.warn('⚠️ 图案预设已从', fileName, '读出，但补写回正式文件失败:', e);
+                    }
+                    return true;
+                } catch (_) { /* 候选文件不存在 / 不可读，继续下一个 */ }
+                return false;
+            };
+
+            if (!serializedPatterns || serializedPatterns.length === 0) {
+                console.warn('⚠️ 图案预设正式文件缺失或不可解析，尝试 .tmp / .backup 恢复');
+                await restoreFrom(`${this.PATTERN_PRESETS_FILE}.tmp`, true);
+            }
+            if (!serializedPatterns || serializedPatterns.length === 0) {
+                await restoreFrom(`${this.PATTERN_PRESETS_FILE}.backup`, false);
+            }
 
             // 若数据文件夹无有效数据，尝试从bundle读取默认预设
             if (!serializedPatterns || serializedPatterns.length === 0) {
@@ -777,33 +813,23 @@ export class PresetManager {
                 const finalFileName = this.GRADIENT_PRESETS_FILE;
                 const backupFileName = `${this.GRADIENT_PRESETS_FILE}.backup`;
 
-                // 若目标存在则先备份
+                // 若目标存在则先备份（moveTo 带 overwrite ⇒ 无需先删旧备份）
                 try {
                     const existingFile = await presetFolder.getEntry(finalFileName);
                     if (existingFile) {
-                        try {
-                            const oldBackup = await presetFolder.getEntry(backupFileName);
-                            await (oldBackup as any).delete();
-                        } catch (_) { }
-                        await (existingFile as any).moveTo(presetFolder, backupFileName);
+                        await this.moveEntryTo(existingFile, presetFolder, backupFileName);
                     }
                 } catch (_) { }
 
-                // 将临时文件移动为正式文件，必要时删除目标文件后重试；再不行则直接覆盖写入
+                // 把临时文件改名为正式文件：moveTo 带 overwrite ⇒ 目标残留也能直接覆盖。
+                // ⚠️ 渐变预设只有 1~2KB、毫秒级写完，所以失败时保留 createFile+write 兜底；
+                //    图案预设几十 MB，绝不能这么兜（那正是清零事故的来源，见 savePatternPresets）。
                 try {
-                    await (tempFile as any).moveTo(presetFolder, finalFileName);
+                    await this.moveEntryTo(tempFile, presetFolder, finalFileName);
                 } catch (_) {
-                    try {
-                        const maybeExisting = await presetFolder.getEntry(finalFileName);
-                        if (maybeExisting) { await (maybeExisting as any).delete(); }
-                    } catch (_) { }
-                    try {
-                        await (tempFile as any).moveTo(presetFolder, finalFileName);
-                    } catch (_) {
-                        const finalFile = await presetFolder.createFile(finalFileName, { overwrite: true });
-                        await (finalFile as any).write(jsonData, { format: require('uxp').storage.formats.utf8 });
-                        try { await (tempFile as any).delete(); } catch (_) { }
-                    }
+                    const finalFile = await presetFolder.createFile(finalFileName, { overwrite: true });
+                    await (finalFile as any).write(jsonData, { format: require('uxp').storage.formats.utf8 });
+                    try { await (tempFile as any).delete(); } catch (_) { }
                 }
 
                 // 验证最终文件
@@ -916,7 +942,7 @@ export class PresetManager {
 
             const formats = require('uxp').storage.formats;
 
-            // 先尝试从数据文件夹读取
+            // 先尝试从数据文件夹读取正式文件
             try {
                 const presetsFile = await presetFolder.getEntry(this.GRADIENT_PRESETS_FILE);
                 if (presetsFile) {
@@ -924,24 +950,49 @@ export class PresetManager {
                     const parsed = parseWithRecovery(content);
                     if (parsed && parsed.length > 0) {
                         serializedGradients = parsed;
-                    } else {
-                        console.warn('⚠️ 渐变预设主文件解析失败，尝试读取备份文件');
-                        try {
-                            const backupFile = await presetFolder.getEntry(`${this.GRADIENT_PRESETS_FILE}.backup`);
-                            if (backupFile) {
-                                const backupContent = await (backupFile as any).read({ format: formats.utf8 });
-                                const backupParsed = parseWithRecovery(backupContent);
-                                if (backupParsed && backupParsed.length > 0) {
-                                    console.log('✅ 使用备份文件恢复渐变预设');
-                                    serializedGradients = backupParsed;
-                                    // 将备份内容写回主文件，恢复可用状态
-                                    try { await this.saveGradientPresets(backupParsed as any); } catch (e) { /* 忽略写回失败 */ }
-                                }
-                            }
-                        } catch (_) { /* 忽略备份读取失败 */ }
                     }
                 }
-            } catch (_) { /* 忽略，后续回退到bundle */ }
+            } catch (_) { /* 忽略，后续走恢复链 / bundle */ }
+
+            // ⚠️ 恢复链（与图案预设同构）：正式文件缺失或不可解析 → `.tmp` → `.backup`。
+            //    原子替换是两步改名（正式文件→.backup、.tmp→正式文件），进程在两步之间被打断
+            //    （UDT Reload 杀宿主）会让正式文件直接消失；旧实现只在「正式文件存在但解析失败」
+            //    时才读 .backup，「文件不存在」会掉到 bundle ⇒ 用户预设丢失。
+            //    `.tmp` 走严格 JSON.parse（可能来自被打断的写入，残缺内容不采信）。
+            const restoreFrom = async (fileName: string, strict: boolean): Promise<boolean> => {
+                try {
+                    const entry = await presetFolder.getEntry(fileName);
+                    if (!entry) return false;
+                    const content = await (entry as any).read({ format: formats.utf8 });
+                    let parsed: any[] | null = null;
+                    if (strict) {
+                        try {
+                            const p = JSON.parse(content);
+                            parsed = Array.isArray(p) ? p : null;
+                        } catch (_) { parsed = null; }
+                    } else {
+                        parsed = parseWithRecovery(content);
+                    }
+                    if (!parsed || parsed.length === 0) return false;
+                    serializedGradients = parsed;
+                    try {
+                        await this.moveEntryTo(entry, presetFolder, this.GRADIENT_PRESETS_FILE);
+                        console.log('✅ 已用', fileName, '恢复渐变预设并补完替换');
+                    } catch (e) {
+                        console.warn('⚠️ 渐变预设已从', fileName, '读出，但补写回正式文件失败:', e);
+                    }
+                    return true;
+                } catch (_) { /* 候选文件不存在 / 不可读，继续下一个 */ }
+                return false;
+            };
+
+            if (!serializedGradients || serializedGradients.length === 0) {
+                console.warn('⚠️ 渐变预设正式文件缺失或不可解析，尝试 .tmp / .backup 恢复');
+                await restoreFrom(`${this.GRADIENT_PRESETS_FILE}.tmp`, true);
+            }
+            if (!serializedGradients || serializedGradients.length === 0) {
+                await restoreFrom(`${this.GRADIENT_PRESETS_FILE}.backup`, false);
+            }
 
             // 若数据文件夹无有效数据，尝试从bundle读取默认预设并回写
             if (!serializedGradients || serializedGradients.length === 0) {

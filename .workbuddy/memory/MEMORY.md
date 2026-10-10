@@ -47,6 +47,27 @@
 - ⚠️ 间距令牌取「**盒对齐**」不取「墨迹对齐」；折叠分区「标题→首行」间距 = 标题 `padding-bottom` + 首元素自身 `margin-top`。
 - ⚠️ 改版式前用像素脚本量用户截图（本仓截图 1.5×、内容盒 230px）；headless 测量台必须复刻完整祖先链。
 - ⚠️ 数字输入框与单位符号必须定宽（`.num-input-row` 34px / `.num-unit` 16px；更宽变体走显式类）。
+- ⚠️ 原生 `checkbox` 的布局盒比可见方块宽、方块**居中** ⇒ 墨迹左右各留 ≈**4px**（不是旧说的 10px）
+  ⇒ 贴右缘的两列复选框组补偿 `width: calc(100% + 4px); margin: 0 -4px 0 0`（`.border-panel-section` 作用域）。
+- ⚠️ 浮窗（`.float-window`）高度是内容包裹 ⇒ 末行下方节奏归零（`.panel-section` 与末子元素 `margin-bottom:0`），
+  底距 = 窗口自身 `padding` 10px；不归零会到 40px。
+- ⚠️ 浮窗遮挡 = `number` 输入**无条件全隐藏**（`input-fix.css`，须 `!important`）；popOverlay 只服务下拉菜单。
+- ⛔ **浮窗与子面板可共存，浮窗「始终置顶」**：子面板/子面板级浮层 = 9999、浮窗 = 99999/100000、激活弹窗 = 100001；
+  工具箱「功能快捷键」子面板必须显式降到 9999（它与浮窗同用 `.float-overlay`，同档靠 DOM 顺序会被压住）。
+  APP 已取消「开子面板即置灰『隐藏/显示分区』」。层级表与不可照抄的原因见 `refs/frontend-css.md`。
+- ⛔ **多浮窗 = 单遮罩 + 一个 `.float-stack`**（2026-10-10 重构）：别再给每个浮窗各挂 `.float-overlay`
+  （会叠遮罩变暗 + 靠 DOM 顺序互相盖）。堆叠顺序取 `state.floatOrder` 数组（= DOM 顺序，**后开的排下面**），
+  间距 `10px` 靠 `.float-stack > .float-window + .float-window{margin-top:10px}`；关上方自动上移、点遮罩空白整层关。
+- ⛔ **子面板互斥铁律（同时只开一个）**：唯一入口 `app.tsx` 的 `setSecondaryPanel(id, open)`——**一次 setState 写全 5 个 boolean**
+  （目标 true、其余 false）⇒ 开新的自动顶掉旧的；所有入口方法一律 delegate 过去，别再各写各的 boolean。
+- ⛔ **面板 body 类一律「按 state 派生」，禁止 imperative add/remove**：
+  `syncFloatPanelClasses()` 在 `componentDidUpdate` 里 toggle `app-*-open`（`onResetParameters` 的 `...initialState`
+  会绕过 close 方法 ⇒ 手写 add/remove 必留悬空类）。
+- ⛔ **同一 body 类只能有一个派生点**：`AdjustmentPanel` 曾有两条 effect 各自 cleanup
+  `remove('visibility-panel-open')` ⇒ 关浮窗会误摘子面板所需的类（数字冒到子面板上方）；
+  **浮窗与子面板共用的 body 类必须合并成单条派生 effect**（依赖两个 boolean）。
+- ⚠️ **灰度显示不改预览的真实尺寸基准**：降采样缩略图（`GRAY_THUMB_MAX=104`）的 `onLoad` **不得**写
+  `previewNaturalRef`（只在非灰度时记）⇒ 否则最终预览 `refW/refH` 被钉 104、`fit` 饱和为 1，缩放/预览下拉「失灵」。
 - ⚠️ 颜色一律走 CSS 令牌（`--primary-color` / `--entry-bg` / `--border-color` / `--text-color` / `--hover-bg` /
   `--bg-color` / `--notify-*` / `--spectrum-global-color-*`），**禁硬编码 HEX**；对比度 ≥ WCAG 4.5:1；三档主题 darkest/dark/light。
 
@@ -126,6 +147,14 @@
 - ⚠️ 启动期一次性 PS 加载必须走 `runWhenIdle`。
 
 ### 环境 / 工具链
+- ⛔⛔ **`Entry.moveTo(folder, ...)` 第二参是选项对象 `{newName, overwrite}`，不是文件名**；
+  传字符串会抛错且**被 `try/catch` 静默吞掉**（2026-10-10 图案预设「只剩 .tmp」事故根因）。
+  文件落盘一律走 `PresetManager.moveEntryTo`；加载侧须配「正式文件缺失/坏 → `.tmp` → `.backup`」恢复链。
+- ⛔ **两份 flyout 菜单的数组是唯一来源**（`MenuManager` 顶部 `APP_MENU_ITEMS` / `ADJUSTMENT_MENU_ITEMS`）：
+  `entrypoints.setup()` 与所有「按 id 遍历」的静态字段都从它派生（去 `spacer*`），增删项只改一处。
+- ⛔ **注册（激活）面板打开期「整菜单门控」**：`MenuManager.setLicenseDialogOpen(open)` 按白名单写 `enabled`——
+  APP 留 `openLicenseDialog`+`openDocsFill`、工具箱留 `openDocsToolbox`，其余全灰；关闭后按默认还原
+  （仅 `resetLicense` 依 `appLicenseActive`）。幂等（`licenseMenuGated` 去重），调用点 = `syncLicenseDialogClass()`。
 - 见 `refs/toolchain-and-env.md`（构建命令、tsc 校验、菜单项「只置灰不删」、UXP 无 `fs`、Edit 假成功、守护进程）。
 
 ## 像素算法（细则、推导与实测数据一律见 `refs/pixel-algorithms.md`）

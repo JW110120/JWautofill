@@ -255,8 +255,13 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
         <div className="func-hotkey-body">
         {/* 标题段（含守护进程未连接提示）：随内容滚动 */}
         <div className="func-hotkey-head">
-          <div className="row-between">
-            <span className="subpanel-title-1">功能快捷键</span>
+          {/* 标题行与其它子面板同构：标题 + 红 × 同处 .subpanel-title-1（自带 space-between +
+              align-items:center）⇒ 两者严格垂直居中。
+              ⚠️ 勿用 .row-between 包一层：.subpanel-title-1 的 margin-bottom:10px 会在
+              align-items:center 的外层 flex 里把标题上移 5px（错位根因）；同时 .row-between 的
+              10px 下外边距会让「标题 → 选区填充」间距多出一截（见 adjustment.css 的归零规则）。 */}
+          <div className="subpanel-title-1">
+            <span>功能快捷键</span>
             <div role="button" tabIndex={0} className="close-button" title={helpTexts.funcHotkey.close} onClick={onClose}>×</div>
           </div>
 

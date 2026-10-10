@@ -487,51 +487,30 @@ html, body {
   margin: 0 auto;
 }
 
-/* 右列右缘对齐「同容器内分割线的右端」（2026-10-10 第二次修正）。
-   【上一次为什么完全没生效 —— 根因】
-     .row-between 自带 `width: 100%`，而本行是 .border-panel-section
-     （flex 列容器，align-items: stretch）的 flex 子项 ⇒ 交叉轴尺寸被 `width` 钉死在
-     容器内容盒宽；只给 `margin-right: -10px` 时，负外边距只影响行尾的剩余空间分配，
-     **不会把盒子右移** ⇒ 视觉零变化（实测：右缘仍在原处）。
-   【实测（headless 探针，内容盒 230px）】
-     右列 checkbox 右缘距面板外缘 **21px**；而同一 .border-panel-section 内的
-     .divider（自带 width: calc(100% + 20px) + 左右 -10px）右端在 **11px**
-     ⇒ 分割线比复选框多伸出 10px，这正是用户看到的「右边距约 20px 没变小」。
-   【修法】必须连 width 一起放大：+10px 恰好补进 .border-panel-section 的 10px 内边距，
-     右列右缘与分割线右端严格重合（实测 484.5 = 484.5，距面板外缘 11px ≈ 10px 档）。
-     左侧不动（保持与上方 radio / 滑块的左缘对齐）。
-   ⚠️ 作用域限定 .border-panel-section：填充/图案底部的复选框组、渐变「样式」行都在
-      描边容器里，需要与容器内的分割线右端对齐。 */
+/* 右列内容盒右缘外扩「原生 checkbox 的盒内右侧空档」（2026-10-10 第三次修正）。
+   --------------------------------------------------------------------------
+   目标：右列 checkbox 的**墨迹**右缘距容器（.border-panel-section）内缘 = 10px。
+   【为什么必须靠行宽外扩 —— 不是布局问题，是原生控件的盒内空档】
+     · 右列 `.row-start` 已经贴齐行右缘（.grid-cell + .grid-cell 的 align-items:flex-end）；
+     · 但 UXP 的 `input[type=checkbox]` 布局盒比可见方块宽，方块**居中**画在盒内
+       ⇒ 墨迹与盒子边缘之间留有左右各 ≈4px 空档（不是旧注释假设的 10px）。
+   【真机实测（渐变面板「反向 / 保留不透明度」行，用户截图 1.5× 逐像素量）】
+     · 容器内缘右 = 行右缘 = x345.5；右列 checkbox 墨迹右缘 = x339
+       ⇒ 盒内右侧空档 6.5px@1.5× ≈ **4.3px**；墨迹距容器内缘只剩 4.3px（用户报「偏小」）
+     · 左列：内容盒左缘距容器内缘 15px@1.5× = 10px ✓（「反向」墨迹 10.3px，差的是字形左边距）
+     · 旧值 +10px 正是按「空档 = 10px」假设定的 ⇒ 实机上把复选框**多推出 6px**。
+   【修法】补偿 = 实测空档 4px（而不是 10px）：右列盒子右缘落在内容盒右缘外 4px
+     ⇒ 墨迹右缘距容器内缘 ≈10px（实测 10.3px，与左侧 10.3px 对称）。
+     ⚠️ 必须连 width 一起放大：`.row-between` 自带 width:100%，本行是
+       .border-panel-section（flex 列，align-items:stretch）的子项 ⇒ 只给负 margin
+       **不会把盒子右移**（负 margin 只影响行尾剩余空间分配）。
+   ⚠️ 作用域限定 .border-panel-section：渐变「反向 / 保留不透明度」行、图案底部
+      「剪贴蒙版 / 旋转阵列」行都是本结构，一条修复对两者同时生效。
+   ⚠️ 不需要为 `.float-window` 再写一条：浮窗内已无 row-grid（填充设置浮窗已改为
+      逐行 `.row-between` + 自绘 ToggleSwitch，开关无原生墨迹空档）。 */
 .border-panel-section > .row-between.row-grid.row-grid-flush {
-  width: calc(100% + 10px);
-  margin: 0 -10px 0 0;
-}
-
-/* 「填充设置」浮窗内两列复选框组：右列再向外推 10px，与标题行红 × 右缘齐平（2026-10-10）。
-   【为什么上面那条不够用 —— 根因】
-     浮窗的两列组挂在 `.float-window > .panel-section` 下，**不在 .border-panel-section 内**
-     ⇒ 上面那条作用域规则自然不命中，右列一直差 10px 到位（用户报「到现在还没改掉」）。
-   【用户截图逐像素实测（量的都是墨迹）】
-     · 窗口外缘右 = x234；红 × 的盒子右缘 = x224（= 内容盒右缘，距窗口外缘 10px + 1px 边框）
-     · 右列复选框墨迹右缘 = x215 ⇒ 距窗口外缘 **20px**，比红 × 多缩进 10px
-     · 对照：渐变面板同口径量得 10px —— 那正是靠下面这条同款规则达成的（用户已确认）。
-   【10px 差在哪 —— 不是布局，是原生控件自身的墨迹内缩】
-     右列 `.row-start`（标签 + 复选框）**已经贴齐内容盒右缘**，问题出在 UXP 的
-     `input[type=checkbox]`：它的布局盒比可见方块宽得多（按截图标定 ≈28px，而方块仅 15px），
-     方块画在盒子左侧 ⇒ 墨迹右侧留下约 9–10px 空盒。该内缩在渐变/图案面板
-     （同样由 `.border-panel-section > …` 那条 +10px 补偿）上量值完全一致。
-   【修法】与渐变面板**逐字同款**：宽度 +10px 伸进 .float-window 的 10px 内边距，
-     右缘落到窗口内边框处 ⇒ 复选框墨迹右缘 ≈225，与红 × 的 224 重合（≤1px 误差）。
-     左列不动，仍距窗口外缘 10px，左右对称。
-   【Chromium 实测（outputs/_float_window_measure.cjs，两变体对照）】
-     before：`.row-between.row-grid` 右缘 = 内容盒右缘 = × 右缘（735）；左列左缘 21
-     after ：同一行右缘 745（+10px，正好落在窗口内边框处）；× 右缘仍 735；左列左缘仍 21
-     ⇒ 规则只外推右列 10px；行右缘未越出窗口内边框（不产生横向滚动条）。
-   ⚠️ 只命中浮窗里的网格行：`.panel-section` 是 `.float-window` 的直接子项，
-      标题行是 `.row-between` 而非 `.row-grid` ⇒ 红 × 位置不受影响。 */
-.float-window > .panel-section > .row-between.row-grid.row-grid-flush {
-  width: calc(100% + 10px);
-  margin: 0 -10px 0 0;
+  width: calc(100% + 4px);
+  margin: 0 -4px 0 0;
 }
 /* 零外边距档：同列上下相邻两行仍是 10px（每行 5px）。 */
 .row-grid-flush .row-start,
@@ -1200,38 +1179,55 @@ html, body {
 
 /* ===== 公式提示条（清除设置 / 纯色设置：所选模式的计算公式）=====
    紧跟对应 radio 选项组下方，随所选模式实时切换文本；单一样式来源（两个面板共用）。
-   参数名全用中文（原值 / 输入灰度 / 强度 / 不透明度），主行 12px、系数行 11px。
-   ⚠️ 颜色一律走 --text-color / --entry-bg / --border-color，四套主题对比度均 ≥ 4.5:1；
-      不用 opacity 压暗（会拉低对比度）。
+   --------------------------------------------------------------------------
+   排版设计（2026-10-10 优化，按 CRAP 四大原则，呈 markdown 式层次）：
+     · 结构：主公式（重点）→ 分隔线 → 辅助说明（强度系数 / 术语释义），
+       对应 Markdown 的「引用块 → 水平分割线 → 定义列表」。
+     · Contrast（对比）：主公式加粗 12px；辅助说明 11px 常规 —— 拉开视觉权重，
+       「重点」一眼可辨。
+     · Repetition（重复）：所有公式条共用同一套「主行 + 说明区」结构，术语一律加粗。
+     · Alignment（对齐）：内容统一左对齐；左侧 3px 主色条标出「这是一个公式块」。
+     · Proximity（亲密）：术语与其释义紧贴，辅助说明与主公式之间用分隔线 + 空白隔开。
+   ⚠️ 颜色一律走 --text-color / --entry-bg / --border-color / --primary-color，
+      四套主题对比度均 ≥ 4.5:1；**不用 opacity 压暗**（会拉低对比度）。
    ⚠️ margin-top 由本处给 10px 基准；清除面板的选项组自带 10px 下内边距，
       在 clear.css 里把本处 margin 归零，避免变成 20px。 */
 .formula-hint {
   width: 100%;
   box-sizing: border-box;
   margin: 10px 0 0 0;
-  padding: 6px 8px;
+  padding: 8px 10px;
   background: var(--entry-bg);
   border: 1px solid var(--border-color);
+  /* 左侧主色条：把「公式块」从周围纯文本里标记出来（markdown 引用块的视觉语言） */
+  border-left: 3px solid var(--primary-color);
   border-radius: 3px;
   color: var(--text-color);
   white-space: normal;
   word-break: break-word;
 }
+/* 主公式：整个提示条的「重点」，视觉权重最重的一层。 */
 .formula-hint-main {
   font-size: 12px;
+  font-weight: 700;
   line-height: 1.5;
 }
-.formula-hint-sub {
-  margin-top: 3px;
-  font-size: 11px;
-  line-height: 1.5;
+/* 辅助说明区：与主公式之间一条分隔线（markdown 的 ---），正文整体降一档字号。 */
+.formula-hint-notes {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color);
 }
-/* 「羽化系数」释义行：生僻词的可见解释（2026-10-10）。
-   与 sub 同字号、同色（不用 opacity 压暗——会拉低对比度，见文件头注释）。 */
-.formula-hint-gloss {
-  margin-top: 3px;
+.formula-hint-note {
   font-size: 11px;
-  line-height: 1.5;
+  line-height: 1.6;
+}
+.formula-hint-note + .formula-hint-note {
+  margin-top: 5px;
+}
+/* 术语加粗（markdown 的 **term**）：与常规释义形成对比，方便扫读定位。 */
+.formula-hint-term {
+  font-weight: 700;
 }
 
 
@@ -1570,6 +1566,82 @@ html, body {
   overflow-y: auto;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
   position: relative;
+}
+
+/* 浮窗底部呼吸恒为 10px（= 本窗口自己的 padding-bottom）。
+   --------------------------------------------------------------------------
+   【问题】浮窗是「内容包裹型」容器，高度由内容决定；可它内部沿用了普通面板的
+   **版面节奏外边距**：`.panel-section` 自带 margin-bottom:15px、末行 `.row-between`
+   自带 margin-bottom:10px。两者叠在 10px 内边距之下，把「窗口下边缘 → 最后一行」
+   的距离顶到约 40px（用户截图实测：末行 switch 墨迹底 y348、窗口下边框 y408，
+   60px @1.5× = 40px），看起来像内容没填满。
+   【修法】浮窗内**取消纵向版面节奏**，让 10px 内边距独任其职：
+     · `.panel-section` 的下外边距归零（它上面还有标题行，上方节奏不受影响）；
+     · 末个子元素的下外边距归零（末行是 .row-between ⇒ 10px；其余行之间的 20px 不动）。
+   实测（同一张截图口径）：末行墨迹底 → 窗口下边缘 ≈ 11px。
+   ⚠️ 只作用 `.float-window` 直接子级：普通面板里的 `.panel-section` 仍需 15px 节奏。 */
+
+/* 浮窗内末行下方的版面节奏归零 */
+.float-window > .panel-section {
+  margin-bottom: 0;
+}
+.float-window > .panel-section > *:last-child {
+  margin-bottom: 0;
+}
+
+/* ── 浮窗堆叠（同一父面板可同时开多个浮窗，2026-10-10）────────────────────────
+   规则（用户明确要求）：
+     · 多个浮窗**共用一个 .float-overlay 遮罩** ⇒ 暗度恒定，不会「越开越黑」；
+       （旧写法每个浮窗各挂一个遮罩，层数越多越暗，且后开的会盖住先开的。）
+     · 纵向依次排列，**后开的排在下面** —— 顺序由 state.floatOrder 写进 DOM，
+       本文件只负责视觉：相邻窗口之间 10px（= 与遮罩四周内边距同一档）；
+     · 关闭上方窗口后，下方窗口自然上移补齐（流式布局，无需任何 JS）。
+   ⚠️ 用「相邻兄弟 margin-top」而非 flex `gap`：UXP 的 flex gap 不可靠（见项目铁律），
+      margin+padding 是本仓唯一可靠的间距表达方式。
+   ⚠️ 宽度 100% 是相对 .float-stack 的内容盒；.float-stack 又在 .float-overlay
+      （padding 10px、box-sizing border-box、align-items flex-start）内拉满 ⇒
+      窗口左右缘与遮罩内边距维持 10px，与单窗口时完全一致。
+   ⚠️ max-height + overflow-y 只在「窗口总高超出面板」时兜底（内容很短，正常用不到）：
+      宁可整列滚动，也不让窗口被裁掉一半。 */
+.float-stack {
+  width: 100%;
+  max-height: 100%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+.float-stack > .float-window + .float-window {
+  margin-top: 10px;
+}
+
+/* ── 浮窗「始终置顶」 ────────────────────────────────────────────────────────
+   两个父面板里，浮窗（隐藏/显示分区 / 填充设置）都必须压在其「子面板」之上：
+     · 主面板 #app 的 5 个子面板（纯色/图案/渐变/描边/清除）—— z-index 9999，
+       来自 input-fix.css 的 `#app .panel-section ~ .panel`；
+     · 工具箱 #pixeladjustment 的「功能快捷键」子面板 —— z-index 9999，
+       来自 adjustment.css 的 `.float-overlay.func-hotkey-overlay`（已显式降到这一档）。
+   .float-overlay 本身是 99999，数值上已高出一档；这里再按面板作用域显式抬到 100000，
+   把「浮窗永远在最上」写成确定的规则，不依赖数值比较，也不依赖 DOM 顺序。
+   ⚠️ 必须按面板加 body 类限定：#app 与 #pixeladjustment 共用同一个 document.body。
+   ⚠️ 工具箱**不能**照抄这一条：它的 body 类（visibility-panel-open）同时服务于
+      「隐藏/显示分区」浮窗与「功能快捷键」子面板 ⇒ 用它抬层级会把子面板也抬到 100000，
+      两者同档后又退回 DOM 顺序决胜（子面板写在后面 ⇒ 反而压住浮窗）。
+      工具箱靠「子面板降到 9999」那条区分，浮窗保持 99999 即天然在上。 */
+body.app-visibility-panel-open #app .float-overlay,
+body.app-fill-settings-open #app .float-overlay {
+  z-index: 100000 !important;
+}
+
+/* 激活弹窗永远在最上（2026-10-10 补）：
+   `.license-dialog-overlay` 是 LicenseDialog 遮罩的专属类（仅此一处使用）。
+   上面把浮窗抬到 100000 后，若浮窗还开着、又从宿主菜单打开激活弹窗，
+   激活弹窗（通用 .float-overlay = 99999）就会被浮窗压住。
+   这里把它再抬一档；特异性 (1,3,1) 高于浮窗那条 (1,2,1)，不依赖源码顺序。
+   ⚠️ 必须带专属类：不带的话会把同面板内**所有** .float-overlay（含浮窗）一起抬高，
+      两者同档又退回 DOM 顺序决胜，等于没修。 */
+body.license-dialog-open #app .float-overlay.license-dialog-overlay {
+  z-index: 100001 !important;
 }
 
 /* 浮窗打开时收起所在面板的滚动条。

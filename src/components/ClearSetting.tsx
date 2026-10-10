@@ -72,15 +72,21 @@ const LAYER_FORMULA: Record<ClearBinaryAlgorithm, string> = {
 
 /**
  * 公式提示条：紧贴对应选项组下方，实时显示所选模式的计算公式。
- * 三行结构：模式公式（12px）→ 强度系数（11px）→ 羽化系数释义（11px）。
- * ⚠️ 「羽化系数」是生僻词，必须有**可见**的一行释义（2026-10-10 用户要求），
- *    不能只放在 tooltip 里；tooltip 保留 formulaNote（输入灰度 / 内容不透明度）。
+ * 排版（2026-10-10 优化为 markdown 式层次，详见 common.css 的公式条注释）：
+ *   主公式（加粗 = 重点）→ 分隔线 → 辅助说明（强度系数公式 / 羽化系数释义）。
+ * ⚠️「羽化系数」拆成「术语 + 释义」两段，术语加粗（markdown 的 **term**）；
+ *    术语 / 释义文案见 helpTexts.clear.formulaGlossTerm / formulaGloss。
  */
 const FormulaHint: React.FC<{ formula: string }> = ({ formula }) => (
     <div className="formula-hint" title={helpTexts.clear.formulaNote}>
         <div className="formula-hint-main">{formula}</div>
-        <div className="formula-hint-sub">{helpTexts.clear.formulaStrength}</div>
-        <div className="formula-hint-gloss">{helpTexts.clear.formulaGloss}</div>
+        <div className="formula-hint-notes">
+            <div className="formula-hint-note">{helpTexts.clear.formulaStrength}</div>
+            <div className="formula-hint-note">
+                <span className="formula-hint-term">{helpTexts.clear.formulaGlossTerm}：</span>
+                {helpTexts.clear.formulaGloss}
+            </div>
+        </div>
     </div>
 );
 

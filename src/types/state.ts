@@ -118,6 +118,13 @@ export const initialFormulaVisibility: FormulaVisibility = {
 };
 
 /**
+ * APP 面板的浮窗种类（同一父面板允许同时打开多个浮窗：
+ * 它们共用一个遮罩、纵向堆叠、间距 10px，后开的排在下面）。
+ * 顺序由 AppState.floatOrder 记录 —— 数组即 DOM 顺序，下标 0 在最上。
+ */
+export type FloatWindowId = 'visibility' | 'fill';
+
+/**
  * 清除算法的三类目标（与 utils/ClearAlgorithms.ts 的 ClearTargetKind 对应）。
  *
  * 为什么分成三组而不是一个总开关：三类目标的**物理载体不同**，
@@ -200,6 +207,11 @@ export interface AppState {
      fillOptionsVisible: boolean;
      showVisibilityPanel: boolean;  // 隐藏/显示分区浮窗是否打开
     isFillSettingsOpen: boolean;  // 填充设置浮窗是否打开（承载原面板底部的四个 checkbox）
+    // 浮窗堆叠顺序（= 开启先后）：APP 面板允许同时打开多个浮窗，它们在同一个遮罩里
+    // 纵向排列、间距 10px，**后开的排在下面**。数组即 DOM 顺序（下标 0 在最上）。
+    // ⚠️ 与上面两个布尔量必须同步维护（开 = push 到末尾；关 = 过滤掉），
+    //    否则会出现「状态为开但不在堆叠里 ⇒ 窗口不渲染」的死角。
+    floatOrder: FloatWindowId[];
     // 参数复位信号（自增计数）：描边子面板的参数由父面板 state 直接驱动，
     // 而纯色/图案/渐变三个子面板的参数活在各自的组件内部 state 里，
     // 父面板复位时它们无从得知 ⇒ 用这个自增信号通知它们「复位了，请回到默认值」。
@@ -276,6 +288,7 @@ export const initialState: AppState = {
     fillOptionsVisible: true,
     showVisibilityPanel: false,
     isFillSettingsOpen: false,
+    floatOrder: [],
     resetToken: 0,
     // 新增：许可证默认状态
     isLicensed: false,

@@ -64,15 +64,20 @@
   缩进走容器 `padding:0 10px`（**不用 transform**，不参与布局会被推出右缘）；两处 DOM 同构 `.panel-section > .radio-trio > sp-radio-group`；
   紧凑填充用 `.radio-trio-flush{margin:0 auto}` 归零纵向外边距（⚠️ 不能用 `body.compact-app … .radio-trio{margin:0}`，会连带命中描边子面板同名容器）。
 - 滑块行统一 DOM：行容器 `calc(100% - 20px)`、`ew-resize`，70px 文案标签 + 数字输入框 + `.num-unit` 单位符号。
-- ⚠️ **UXP 原生 `input[type="checkbox"]` 的布局盒远宽于可见方块（≈28px vs 15px，方块画在盒左侧）**
-  ⇒ 右列贴边时墨迹右侧天然留 **9–10px 空盒**（渐变 / 图案面板靠这条 `+10px` 补偿后墨迹才量到 10px）。
-  浮窗「右列 checkbox 与红 × 不对齐」的真因即此，**不是布局没贴齐**（2026-10-10 定性）。
-  修法 = 照抄渐变面板同款、作用域限定到浮窗：
-  `.float-window > .panel-section > .row-between.row-grid.row-grid-flush { width: calc(100% + 10px); margin: 0 -10px 0 0; }`
+- ⚠️ **UXP 原生 `input[type="checkbox"]` 的布局盒比可见方块宽，方块居中画在盒内**
+  ⇒ 墨迹与盒子边缘之间**左右各 ≈4px 空档**（2026-10-10 第三次真机复测，**推翻了旧版
+  「盒 ≈28px、方块贴盒子左侧 ⇒ 右侧空 9–10px」的假设**——那条按 headless 标定，实机不成立）。
+  实测口径（用户截图，**本仓截图恒 1.5×**）：渐变「反向 / 保留不透明度」行，容器内缘右 = 行右缘
+  = x345.5，右列 checkbox 墨迹右缘 = x339 ⇒ 空档 6.5px@1.5× ≈ 4.3px。
+  两条补偿规则（`.border-panel-section` 作用域，渐变 + 图案共用）：
+  `… > .row-between.row-grid.row-grid-flush { width: calc(100% + 4px); margin: 0 -4px 0 0; }`
   ⚠️ 必须连 `width` 一起放大：`.row-between` 自带 `width:100%`，作 flex 子项时交叉轴被钉死，
-  **只写 `margin-right:-10px` 无任何视觉位移**（上一轮已确认的根因）。
-  实测（headless 复刻真实祖先链，1×）：窗口外缘 234 / 红 × 盒右缘 224 / 右列墨迹 215（距外缘 20px）；
-  after 行右缘 735→745，× 仍 735、左列左缘 21 不变（只动右列、不扰左列与标题行）。
+  **只写 `margin-right` 无任何视觉位移**（已确认的根因）。
+  ⚠️ 补偿值 = 原生盒内空档实测值（4px），**不是 10px**；写 10px 会把复选框多推 6px，
+  墨迹右缘距容器内缘只剩 4.3px（用户报「偏小」）。
+  ⚠️ 左列本来就对：内容盒左缘距容器内缘 10px（「反向」墨迹 10.3px，差的 0.3 是字形左边距）。
+  ⚠️ 浮窗内**已无 row-grid**（填充设置浮窗改成逐行 `.row-between` + 自绘 `ToggleSwitch`，
+  开关无原生墨迹空档）⇒ 旧的 `.float-window > .panel-section > …row-grid` 那条已删，勿再加回。
 - ⛔ **自包含状态类：一个元素只挂一个类，基态盒模型写进共享选择器列表**。
   `.icon-button` / `.icon-button-disabled` / `.icon-button-latched` 共享盒模型块，各自只加差异声明；
   常亮态不得靠「同时挂基态 + 修饰类」实现（会引入顺序依赖）。
@@ -83,16 +88,82 @@
   `.icon-button:active .icon-fill{fill:…}` 与 `.icon-button:active .icon-stroke{stroke:…}` 分开写。
   合并成一条 `… .icon-fill, … .icon-stroke { fill:… }` 会让 (0,2,0) 的 `fill` 压过 `.icon-stroke{fill:none}`(0,1,0)，
   把开放路径 fill 成实心。
-- ⛔ **浮窗遮挡一律复用 `src/utils/popOverlay.ts` 的 `createOcclusionSession()`，且全局只允许一个会话**。
-  语义 = 「量出弹层矩形 → 只隐藏与其相交的文本控件」，与展开下拉菜单同一逻辑（用户明确要求）。
-  ⚠️ UXP 对原生控件常返回 0 尺寸 ⇒ 必须 `robustRect()` 兜底、并挂 CSS 兜底类 `app-float-occlusion-fallback`
-  （兜底类里才允许「无条件全隐藏」，正常路径绝不全隐藏）。
-  ⚠️ 只在 `restore()` 时还原；**不要每帧新建会话** ⇒ 会泄漏内联样式。
-  ⚠️ 隐藏用**内联 `visibility:hidden !important`** 才能压过普通样式表规则；反之「确保可见」的规则**绝不可带 `!important`**
-  （UXP 下样式表 `!important` 反而压过内联 `!important`）。
-  ⚠️ 反复量不到尺寸时用「callback ref + 立即 + rAF + 60ms 三拍」重算，解决 UXP 提交帧 0 尺寸。
-  实测（真实 `popOverlay.ts` 转译产物跑台架）：浮窗矩形 top10/bottom130，
-  相交 3 个文本控件 → hidden、不相交 2 个 → 无内联、`restore()` 全部回基线。
+- ⛔ **浮窗打开时：`number` 输入一律「无条件全量隐藏」**（2026-10-10 用户要求回退，
+  **作废**「按矩形相交精确隐藏」那版）：`input-fix.css` 的
+  `body.app-visibility-panel-open #app input[type="number"]` / `body.app-fill-settings-open …`
+  （**必须带 `!important`**，压过 `.panel-section ~ .panel input[type=number]{visibility:visible}` 的 (1,3,1)）。
+  原因：`number` 是原生视图，永远画在面板最上层，浮窗压不住；「只藏相交者」实测效果差。
+  `utils/popOverlay.ts` 的 `createOcclusionSession()` **仍服务「展开下拉菜单」**（Select.tsx），
+  不是死代码；其语义/兜底/内联 `!important` 规则见文件内注释，勿套回浮窗。
+- ⚠️ **浮窗高度 = 内容包裹**，末行下方不得再叠「版面节奏」外边距：
+  `.float-window > .panel-section{margin-bottom:0}` +
+  `.float-window > .panel-section > *:last-child{margin-bottom:0}`
+  ⇒ 底距 = 窗口自身 `padding-bottom` 10px。
+  不归零时 = 10(窗口 padding) + 15(`.panel-section` 下边距) + 10(末行 `.row-between` 下边距)
+  + ≈5(行盒下沿) ≈ **40px**（用户截图实测 60px@1.5×）。
+  ⚠️ 只作用 `.float-window` 直接子级——普通面板的 `.panel-section` 仍需 15px 节奏
+  （同款手法见 `clear.css` 的 `.subpanel-clear > .panel-section:last-child`）。
+- ⛔ **浮窗「始终置顶」：浮窗与子面板可以共存，浮窗必须在上**（2026-10-10）。
+  层级表：子面板/子面板级浮层 = **9999**；真·浮窗（隐藏/显示分区 / 填充设置）= **99999**；
+  `#app` 浮窗在 `body.app-{visibility-panel,fill-settings}-open` 下再抬 **100000**；
+  激活弹窗 = **100001**（专属类 `.license-dialog-overlay`，仅 LicenseDialog 用）。
+  · 主面板 5 个子面板的 9999 来自 `input-fix.css` 的 `#app .panel-section ~ .panel`；
+  · 工具箱「功能快捷键」**必须**在 `adjustment.css` 里显式降到 9999
+    （`.float-overlay.func-hotkey-overlay{z-index:9999 !important}`）——
+    它与「隐藏/显示分区」同用 `.float-overlay`（99999），同档时靠源码顺序决胜，
+    而它写在浮窗**之后** ⇒ 开了子面板再开浮窗，浮窗反被压住（用户报的形态）。
+  ⚠️ ⛔ **工具箱不能照抄 `#app` 那条抬到 100000 的规则**：它的 body 类
+    `visibility-panel-open` 同时服务浮窗与功能快捷键子面板，抬层级会把两者一起抬
+    ⇒ 同档后又退回 DOM 顺序决胜，等于没修。工具箱只靠「子面板降 9999」区分。
+  ⚠️ 子面板 / 浮窗共存时，下层子面板的原生 `number` 输入同样被隐藏
+    （`#app` 由 input-fix.css 的 body 类规则覆盖到全部后代，含 5 个子面板；
+     工具箱由 adjustment-input.css 的 `body.visibility-panel-open #pixeladjustment …`）。
+  ⚠️ `MenuManager.setAppVisibilityItemEnabled` **已删除**：子面板打开期间不再置灰
+    「隐藏/显示分区」菜单项（浮窗可共存且置顶后，那条限制失去意义）。
+
+### ⛔ 多浮窗「堆叠」模型（2026-10-10 重构，取代「每窗一层遮罩」）
+- **旧实现的病**：每个浮窗各挂一层 `.float-overlay`（z=99999）⇒ 开两个时
+  ① 两层半透明遮罩叠加 ⇒ 视觉变暗；② 两个 `.float-window` 同档靠源码顺序决胜 ⇒ 后开的盖住先开的。
+- **新结构**：**单层 `.float-overlay`（遮罩恒一层，不透明度不叠加）> 一个 `.float-stack` > 多个 `.float-window`**。
+  - 堆叠顺序 = `state.floatOrder: FloatWindowId[]`（类型 `'visibility' | 'fill'`，见 `types/state.ts`），
+    数组顺序即 DOM 顺序 ⇒ **后开的 concat 到末尾 = 排在下面**（用户要的「新开的在下面」）。
+  - 关闭 = `filter` 掉该 id ⇒ 数组缩短、下方自动**上移顺延**（无需手写位移）。
+  - 间距 10px 靠 `.float-stack > .float-window + .float-window{margin-top:10px}`（**相邻兄弟**，只给 2 个以上时）。
+  - `.float-stack{width:100%;max-height:100%;overflow-y:auto;display:flex;flex-direction:column;align-items:stretch}`
+    —— 单列纵向、可滚动；宽度/高度继承遮罩，浮窗自身 `padding` 与 `max-height` 语义不变。
+  - 点遮罩空白 = `closeAllFloatWindows()`（清空 `floatOrder` + 关两浮窗 = 整层关闭）。
+- ⚠️ 浮窗本体的 `z-index` 现在只剩 `.float-overlay` 这一档（99999 / `#app` 下 100000），
+  下面的 `.float-window` 不再各自带层级（同层内靠 flex 顺序排布，不再需要 z 决胜）。
+
+### ⛔ body 遮挡类一律「按 state 派生」（消除悬空类）
+- `app.tsx` 新增 `syncFloatPanelClasses()`，只在 `componentDidUpdate` 里、且两个浮窗 boolean 变化时跑：
+  `toggle('app-visibility-panel-open', vis)` / `toggle('app-fill-settings-open', fill)`。
+- **为什么不能 imperative add/remove**：`onResetParameters` 走 `...initialState` 整体覆盖，**绕过**
+  `closeVisibilityPanel/closeFillSettingsPanel` ⇒ 若在 close 里 `classList.remove`，复位后 body 类**悬空**
+  ⇒ `input-fix.css` 的「浮窗期隐藏 number」永久生效（数字再也不显示）。
+- reset 现值须保留 `showVisibilityPanel` / `isFillSettingsOpen` / `floatOrder`（浮窗不属于「参数」，不复位）。
+- ⛔ **共用 body 类只能有一个派生点**：工具箱 `AdjustmentPanel.tsx` 曾有**两条独立 effect** 都无条件
+  `classList.remove('visibility-panel-open')`（一条管浮窗、一条管「功能快捷键」子面板）⇒ 关浮窗时前一条
+  cleanup 摘掉类 ⇒ 子面板仍在开、数字重新冒到它上方（用户报的「工具箱有、APP 无」形态，根因即此）。
+  已合并为**单条派生 effect**：`const anyOverlayOpen = showVisibilityPanel || showFuncHotkeyPanel` 才 add，
+  cleanup 才 remove，依赖 `[showVisibilityPanel, showFuncHotkeyPanel]`。
+
+### ⛔ 子面板互斥铁律（一个父面板同时只能开一个子面板）
+- 唯一入口 `app.tsx::setSecondaryPanel(id: 'color'|'pattern'|'gradient'|'stroke'|'clear', open: boolean)`：
+  **一次 `setState` 同时写全部 5 个 boolean**（`id===open` 者 true，其余 false）⇒ 天然互斥，开新的顶掉旧的。
+- 所有入口（`toggleStrokeSetting` / `toggleColorSettings` / `openPatternPicker` / `openGradientPicker` /
+  `toggleClearSetting` / `applyFillPanelHotkey`）**一律 delegate 到它**，**禁止**再各写各的 boolean。
+- 加新子面板时：在 `setSecondaryPanel` 的 id 联合类型与 5 个 boolean 列表里同步补一处（**唯一改动点**）。
+- 浮窗不受此限（一个父面板可**多个浮窗**并存）；只有「子面板」互斥。
+
+### ⚠️ 灰度显示不得污染预览的「真实尺寸基准」
+- 灰度态缩略图是**降采样**的（`PatternPicker.tsx` `GRAY_THUMB_MAX = 104`px，为 52px 缩略框服务）。
+  其 `onLoad` 曾**无条件**写 `previewNaturalRef.current[id] = {w,h}` ⇒ 把最终预览的基准钉成 104px
+  ⇒ 预览 `fit = min(1, refW/…)` 饱和为 1 ⇒ **「缩放」参数与预览右侧下拉「失灵」**（需求 3 的根因）。
+- 铁律：`previewNaturalRef` **只记真实（非灰度）图片的自然尺寸** —
+  `if (!grayPreviewUrlsRef.current[pattern.id]) previewNaturalRef.current[pattern.id] = {w,h}`。
+- 灰度态最终预览要「全尺寸」：烘图 effect 触发条件由 `previewAngleDeg !== 0`
+  放宽为 `previewAngleDeg !== 0 || shouldShowGray`（角度 0 的灰度也要烘一张全尺寸灰度图）。
 
 ## 用户文案（src/constants/helpTexts.ts）
 - **读者 = 精通 PS 的画师**：羽化、不透明度、通道、蒙版、中间值、混合模式、alpha 一律不解释；

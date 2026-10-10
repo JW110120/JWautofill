@@ -11,6 +11,21 @@
   ⇒ **只能用 `enabled` 做隐藏/禁用，绝不 removeAt/insertAt**；找项按 id 遍历（不能按固定下标）。
   ⚠️ 工具箱改 `id` 同样撞 "already exists" ⇒ 只改 label。APP 增删项必须四处同步：
   `registerAppCallbacks` 类型+赋值、`handleAppFlyout` case、menuItems 数组、app.tsx 注册处（技能 ⑰）。
+- **菜单项数组是「唯一来源」**（2026-10-10 重构）：两份菜单提到模块级常量
+  `APP_MENU_ITEMS` / `ADJUSTMENT_MENU_ITEMS`（`src/utils/MenuManager.ts` 顶部），
+  `entrypoints.setup()` 只引用它们；各类「按 id 遍历」的静态字段（如门控用的 `appMenuIds`）
+  也**从同一数组派生**（`filter(id => id.indexOf("spacer") !== 0)` 去分隔符）⇒ 增删项只改一处，杜绝 id 漂移。
+- **注册（激活）面板打开期间「整菜单门控」**（2026-10-10 用户要求）：`MenuManager.setLicenseDialogOpen(open)`
+  把两个父面板的菜单项按白名单写 `enabled`：APP 白名单 = `openLicenseDialog` + `openDocsFill`，
+  工具箱白名单 = `openDocsToolbox`（工具箱本就无激活入口，设计上激活只在选区填充面板做）；
+  其余（含 `resetLicense` / `toggleCompactMode` / 各布局与功能项）一律置灰。关闭后按「默认可用态」还原
+  （`defaultMenuItemEnabled`：仅 `resetLicense` 依 `appLicenseActive`，其余恒 true）。
+  · 幂等：类内 `licenseMenuGated` 记住上次门控态，态未变直接返回，不重复写宿主菜单。
+  · 调用点 = `app.tsx::syncLicenseDialogClass()`（唯一 body 类派生点，每次 render 调用）。
+  · 底层统一走 `updateMenuItem(panelId, id, patch)`（getItem → updateItem → 数组项 三级降级），
+    `setLicenseLogoutEnabled` / `setCompactModeLabel` 也已改走它。
+  · ⚠️ `setLicenseLogoutEnabled` 在门控期强制写 `false`（避免有路径越过门控把「注销激活状态」点亮）；
+    门控解除时由 `applyPanelMenuGating(false)` 按 `appLicenseActive` 重新还原。
 
 ## 文件与 IO
 - UXP 无内置 `fs`/`os`（编译期正常、运行期才炸）；落盘只用 `localFileSystem`（URL 写 `file:/C:/…`）；
@@ -29,17 +44,28 @@
 - ⛔ **禁止 `createFile(正式文件名, {overwrite:true})` 后直接 `write()`**：`overwrite:true` 会
   **先把文件截断为 0 字节**再写内容。写入窗口内任何中断（**UDT Reload 会直接杀死 UXP 宿主**、
   大文件写入数秒~数十秒、宿主异常）都会把正式文件**永久留在 0 字节** ⇒ 下次加载解析失败 ⇒ 数据全丢。
+- ⛔⛔⛔ **`Entry.moveTo(folder, ...)` 第二参是「选项对象」，不是字符串**：
+  正确签名 `moveTo(folder, { newName: 'x.json', overwrite: true })`。
+  传字符串 ⇒ UXP 原生绑定严格校验抛错（`Argument 2 has an invalid type`），
+  而调用点普遍包在 `try{…}catch(_){}` 里 ⇒ **错误被静默吞掉、移动从未发生**。
+  ⚠️ **上一条铁律旧版就是这么写错的**（写成了 `tmpFile.moveTo(folder, 正式文件名)`），
+  于是「原子替换」的最后一步恒失败 ⇒ 2026-10-10 图案预设只剩 `.tmp`、正式文件消失。
+  统一走 `PresetManager.moveEntryTo(entry, folder, newName)`（内部只此一处拼装选项对象）。
 - ✅ 正确顺序：① `createFile(name + '.tmp', {overwrite:true})` → `write()`；
-  ② 备份现有正式文件（先删旧 `.backup` 再 `moveTo` 成 `.backup`）；
-  ③ `tmpFile.moveTo(folder, 正式文件名)` 替换（失败时先删目标再重试）。
+  ② 备份现有正式文件（`moveEntryTo(现有文件, folder, '….backup')`，带 overwrite ⇒ 不必先删旧备份）；
+  ③ `moveEntryTo(tmpFile, folder, 正式文件名)` 替换（带 overwrite ⇒ 不必先删目标再重试）。
   ⇒ 写 tmp 失败时正式文件**分毫未动**；任何时刻磁盘上至少有一份完整数据。
-- ⛔ **绝不回退到 `createFile(overwrite)+write`**（那正是清零来源）。宁可让外层重试 + `.backup` 兜底。
-- 加载侧必须配「主文件为空/解析失败 → 读 `.backup` → 成功则原样写回主文件」的分支
-  （`PresetManager.loadPatternPresets` 已有；注意写回时**原样写字符串**，不要走 save 重新序列化，
-  否则会丢掉仅存于文件里的 base64 字段）。
-- 参考实现：`PresetManager.saveGradientPresets`（一直是对的）；`savePatternPresets` 曾漏掉此保护。
+  ⚠️ **不要**写「moveTo 失败先删目标再重试」：目标被删而重试又失败时，数据就没了。
+- ⛔ 图案预设**绝不回退到 `createFile(overwrite)+write`**（那正是清零来源）；
+  渐变预设 1~2KB、毫秒写完，**允许**保留该兜底（见 `saveGradientPresets`）。
+- 加载侧必须配恢复链：**正式文件缺失或不可解析 → `.tmp`（严格 `JSON.parse`，残缺不采信）→ `.backup`
+  （可用「掐头去尾」修复）**。⚠️ 只处理「存在但解析失败」不够 —— 原子替换是两步改名，
+  进程在两步之间被打断会让正式文件**直接不存在**，旧实现此时直接掉 bundle ⇒ 预设全空。
+  恢复动作 = 把该文件 `moveEntryTo` 回正式文件名（**补完那次被打断的替换**），
+  比 `createFile+write` 安全得多。
 - ⚠️ **教训**：同一 `PresetManager` 里两条保存路径实现不一致时，小数据那条的健壮性会**掩盖**
-  大数据那条的缺陷（渐变 1~2KB 毫秒写完，从未出事 ⇒ 无人察觉 pattern 路径缺原子写入）。
+  大数据那条的缺陷（渐变有 `createFile+write` 兜底，即使 moveTo 写错签名也「看起来正常」
+  ⇒ 无人察觉 pattern 路径的原子替换恒失败）。
 
 ## 构建 / 类型检查
 - 构建 `node node_modules/webpack/bin/webpack.js --mode=production`（或 `yarn build`）。

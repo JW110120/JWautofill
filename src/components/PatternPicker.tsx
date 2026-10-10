@@ -768,10 +768,15 @@ const rotatePatternPreview = (
     // （原「灰度数据就绪后重建」effect 已并入上方统一入口：patternsGraySig 已涵盖
     //   「图案新带上了 grayData」这一变化，且不再把 grayPreviewUrls 放进依赖。）
 
-    // 最终预览的「按角度旋转图」——只在角度 ≠ 0 时生成，按 (图案|角度|灰度) 缓存。
-    // 拖拽/连续改角度时不生成（120ms 防抖，拖动中计时器不断被重置），松手后才跑一次
-    // 重采样 + PNG 编码（同步执行，但输出长边 ≤512 ⇒ 开销恒定有界）。
-    // 缓存值带上旋转图自身的像素尺寸 w/h：外接矩形随角度变化，渲染侧要按它算显式显示尺寸。
+    // 最终预览的「烘图」入口——按 (图案|角度|灰度) 缓存。两种情形需要烘：
+    //   ① 角度 ≠ 0：UXP 不支持 CSS rotate()、SVG <image> 也不渲染（见 rotatePatternPreview
+    //      注释），只能自己像素级重采样；拖拽/连续改角度时不烘（120ms 防抖），松手后才跑一次。
+    //   ② 角度 = 0 但处于**灰度显示态**（清除/图层蒙版/快速蒙版/单通道）：
+    //      缩略图用的灰度图是为 52px 盒子降采样到 ≤104px 的（GRAY_THUMB_MAX），
+    //      直接当最终预览会又小又糊；这里用同一套重采样+编码在「长边 ≤512」上烘一张全尺寸灰度图。
+    //      ⚠️ 这条是 2026-10-10「灰度显示预设时缩放参数/预览缩放下拉失灵」修复的另一半：
+    //         仅修 onLoad 里的尺寸采集即可让尺寸算对，但预览图仍会被 104px 的灰度图拉伸变糊。
+    // 缓存键带 `g`/`c` 与 w/h：灰度与否、外接矩形尺寸都会影响渲染侧的显式显示尺寸。
     const [rotatedPreview, setRotatedPreview] = useState<{ pid: string; url: string; w: number; h: number } | null>(null);
     const rotatedPreviewCacheRef = useRef<Map<string, { url: string; w: number; h: number }>>(new Map());
     const rotatedPreviewSeqRef = useRef(0);
@@ -780,11 +785,12 @@ const rotatePatternPreview = (
     useEffect(() => {
         if (!isOpen) return;
         const pattern = selectedPattern ? patterns.find(p => p.id === selectedPattern) : null;
-        if (!pattern || previewAngleDeg === 0) {
+        const shouldShowGray = isClearMode || isInLayerMask || isInQuickMask || isInSingleColorChannel;
+        // 角度 0 且非灰度态：直接吃预览图原图，无需烘图
+        if (!pattern || (previewAngleDeg === 0 && !shouldShowGray)) {
             setRotatedPreview(null);
             return;
         }
-        const shouldShowGray = isClearMode || isInLayerMask || isInQuickMask || isInSingleColorChannel;
         // ⚠️ 缓存键**不需要**带主题/底色：旋转图现在是真透明（alpha=0），与预览区底色无关。
         //    旧实现把矩形外补成 --dark-bg-color，换主题又不失效，才出现「浅色主题下还是黑三角」。
         const cacheKey = `${pattern.id}|${previewAngleDeg}|${shouldShowGray ? 'g' : 'c'}`;
@@ -1808,7 +1814,21 @@ const rotatePatternPreview = (
                                     const nh = e.currentTarget.naturalHeight;
                                     // 记录预览图原始像素尺寸（缩略图与最终预览用同一 URL），
                                     // 供最终预览换算显示尺寸 + createPatternFromImage 建图案。
-                                    previewNaturalRef.current[pattern.id] = { w: nw, h: nh };
+                                    //
+                                    // 🔴 只在「真实预览图」加载时记录，**绝不能**让灰度预览图覆盖它
+                                    //    （2026-10-10 用户报「灰度显示预设时缩放参数与预览缩放下拉失灵」的根因）：
+                                    //    灰度显示态下 src 是 getPreviewUrl() 返回的**灰度图**，而灰度图是为
+                                    //    52px 缩略图盒专门降采样到 ≤104px 的（见 GRAY_THUMB_MAX）。
+                                    //    它的 naturalWidth 不是图案真实尺寸；用它覆盖后：
+                                    //      natScale = 104 / 真实宽、refW = nat.w = 104
+                                    //      ⇒ 最终预览的显式尺寸被钉死在 104px，
+                                    //        `fit = min(1, 容器宽×factor / refW)` 在所有档位都饱和到 1
+                                    //      ⇒ 预览缩放（下拉/滚轮）与缩放参数**全部失去视觉效果**。
+                                    //    真图与灰度图共用同一个 <img>，切换 src 会各触发一次 onLoad，
+                                    //    故用「当前 URL 是不是灰度图」判定即可（grayPreviewUrlsRef 是同步镜像）。
+                                    if (!grayPreviewUrlsRef.current[pattern.id]) {
+                                        previewNaturalRef.current[pattern.id] = { w: nw, h: nh };
+                                    }
                                     setLoadedImages(prev => ({...prev, [pattern.id]: true}));
                                     
                                     if (selectedPattern === pattern.id && !pattern.patternName) {
@@ -2007,9 +2027,12 @@ const rotatePatternPreview = (
                         const pat = patterns.find(p => p.id === selectedPattern);
                         if (!pat) return null;
                         const nat = previewNaturalRef.current[pat.id];
-                        // 角度 ≠ 0 时显示「烘进像素的旋转图」（见 rotatePatternPreview）：
-                        // 自然尺寸是**旋转后矩形的外接矩形**，比原图大（45° 时 1.41 倍）。
-                        // 尚未生成/生成失败/无像素数据时退回原图，绝不空白。
+                        // 有「烘图」时优先用它（见上方「最终预览的烘图入口」）：
+                        //   · 角度 ≠ 0 ⇒ 烘进像素的旋转图，自然尺寸是**旋转后矩形的外接矩形**
+                        //     （比原图大，45° 时 1.41 倍）；
+                        //   · 角度 = 0 且灰度显示态 ⇒ 全尺寸灰度图（缩略图那张被降采样到 ≤104px，
+                        //     拿来当最终预览会又小又糊）。
+                        // 尚未生成/生成失败/无像素数据时退回 getPreviewUrl 的图，绝不空白。
                         const rot = rotatedPreview && rotatedPreview.pid === pat.id ? rotatedPreview : null;
                         const src = rot ? rot.url : getPreviewUrl(pat);
                         const previewStyle: React.CSSProperties = {
