@@ -1,168 +1,117 @@
-# JWautofill 长期记忆
+# JWautofill 项目记忆（主索引）
 
-> 展开页（**细节一律下沉到 refs，勿在本文堆实测数据**）：
-> - `refs/fill-and-stroke.md` —— 填充/描边/清除 API 铁律（putPixels/getPixels 语义、背景图层解锁还原、
->   clearEnum 不可用面、通道上下文分支 7/8/9、选区生命周期、静默化、拾色器、灰色显示态、子面板入口）
-> - `refs/frontend-css.md` —— CSS 铁律细则、紧凑/专注模式、折叠分区纵向节奏、common.css 单一来源、helpTexts 文案规范
-> - `refs/uxp-api-layer.md` —— UXP/PS 接口层实测行为 + 性能/React 铁律细则
-> - **`refs/busy-gate.md`** —— 忙碌闸门/模态作用域/文档世代号 2026-10-08 重构后的**唯一权威**（先读它）
-> - `refs/toolchain-and-env.md` —— 构建/类型检查/菜单/文件 IO/守护进程
-> - `refs/pixel-algorithms.md` —— 像素处理器算法详述 + 实测数据
->
-> UXP 坑清单（①–㉕）、组件类目录/尺寸公式、新面板模板在**项目技能** `.workbuddy/skills/uxp-frontend-spec/`。
-> **改样式/布局/新建面板前先加载技能；改像素处理器前先读 refs；改填充/描边/清除前先读 refs/fill-and-stroke.md。**
+> 这是主入口。**细节全部下沉到 `refs/`**，本文件只放「一眼能用」的铁律与导航，不堆实测数据、不写历史版本。
+> 2026-10-10 整理：逐日流水账蒸馏为 `HISTORY.md`，规则按主题归位到 `refs/`。
+> 约定：⛔ = 违反必炸（多来自真机事故）｜⚠️ = 容易踩、易复发｜✅ = 有机器守卫盯着。
 
-## 铁律速查（一句话版；详述一律见 refs）
+## 先看这里：我要改什么 → 读哪里
+
+| 要动的东西 | 先读 |
+| --- | --- |
+| 填充 / 描边 / 清除 | `refs/fill-and-stroke.md` |
+| CSS / 布局 / 新建面板 / 主题 | 技能 **uxp-frontend-spec** → `refs/frontend-css.md` |
+| 忙碌闸门 / 模态作用域 / 文档世代号 | `refs/busy-gate.md`（唯一权威） |
+| UXP 接口行为 / 性能 / React | `refs/uxp-api-layer.md` |
+| 像素处理器算法 | `refs/pixel-algorithms.md` |
+| 构建 / 菜单 / 文件 IO / 守护进程 | `refs/toolchain-and-env.md` |
+| 「当初为什么这么设计」 | `HISTORY.md` |
+
+**改完必备校验**：`node scripts/_css_comment_guard.cjs`（改过 CSS）、`node scripts/_modal_contract_guard.cjs`、`node scripts/_color_picker_contract_guard.cjs`；类型校验 `npx tsc --noEmit`（只看 `src/` 有无**新增**报错）。
+
+## 仓库地图
+
+| 路径 | 作用 |
+| --- | --- |
+| `src/app.tsx` | 选区填充父面板（APP）：浮窗、5 个子面板、填充路径编排 |
+| `src/adjustments/AdjustmentPanel.tsx` | 绘画工具箱父面板（单组件，约 3800 行） |
+| `src/utils/psProbe.ts` · `utils/psAccess.ts` | 忙碌闸门 · 模态作用域（见 `refs/busy-gate.md`） |
+| `src/utils/ClearAlgorithms.ts` | 清除算法唯一来源 |
+| `src/adjustments/*Processor.ts` | 像素处理器（自包含、零 import，便于离线对拍） |
+| `src/styles/common.css` | 通用样式唯一来源（+ 底部「状态集中管理区」） |
+| `src/styles/theme.ts` | 四套主题令牌 darkest/dark/light/lightest + 遮罩字面色 |
+| `src/constants/helpTexts.ts` | 全部 hover 文案 |
+| `scripts/` | 契约守卫脚本（CSS 注释 / 模态 / 取色器） |
+| `.workbuddy/memory/`、`.workbuddy/skills/` | 本套记忆与技能 |
+| `analysis/`、`outputs/` | 本地临时产物，**已 gitignore、不跨机同步**——记忆与技能**不得**依赖其内容 |
+
+---
+
+## 铁律（按主题）
 
 ### 填充 / 描边 / 清除 → `refs/fill-and-stroke.md`
-- 清除算法唯一来源 `src/utils/ClearAlgorithms.ts`；PS 的 `multiply` 与插件方向相反 ⇒ 描边走乘法须反相。
-- ⛔ `imaging.putPixels` 的 `replace` 默认 `true` ⇒ **局部写会清空整层**；写回一律**文档全尺寸缓冲、不传 `targetBounds`**。
-- ⛔ `imaging.getPixels` 四参数：`sourceBounds`（不是 `bounds`）、**不传 `applyAlpha`**、按 `boundsNoEffects` 读、
-  回读返回的 `sourceBounds` 定原点、数组形状取 `imageData.width/height`（dispose 前）、不传 `colorProfile`。
-- ⛔ 背景图层走「解锁 → 清除 → **finally 还原**」；解锁成败**只信回读 `isBackgroundLayer`**，不看抛错；
-  **图层类型转换后一次 DOM 都不能读**（`docId`/图层 id/读区域必须转换前捕获成数字）。
-- ⛔ `clearEnum` 在**背景图层 / 锁透明像素**的图层上不可用（PS 弹原生框后按普通填充处理）⇒ 走分支 9 `blendSubtraction`。
-- ⛔ 单通道描边必须走分支 7/8（不 `make layer`、还原通道、`blendSubtraction`），分发顺序在像素图层兜底**之前**。
-- ⛔ 全部九处 `location._enum` 一律 `strokeLength`；`width` 有意保留两种写法（通道上下文为裸数字），**未经授权不要动**。
+- ⛔ `imaging.putPixels` 的 `replace` 默认 `true` ⇒ **局部写会清空整层**。写回一律「文档全尺寸缓冲 + 不传 `targetBounds`」。
+- ⛔ `imaging.getPixels` 四参数：用 `sourceBounds`（不是 `bounds`）；不传 `applyAlpha`；按 `layer.boundsNoEffects` 读；用回读的 `sourceBounds` 定原点；数组形状取 `imageData.width/height`（dispose 前）；不传 `colorProfile`。
+- ⛔ 背景图层：解锁 → 清除 → **finally 还原**；解锁成败只信回读 `isBackgroundLayer`；**图层类型转换后一次 DOM 都不能读**（`docId`/图层 id/读区域必须转换前捕获成数字）。
+- ⛔ `clearEnum` 在背景图层 / 锁透明像素的图层上不可用（PS 静默弹原生框、按普通填充处理）⇒ 走「分支 9 `blendSubtraction`」。
+- ⛔ 单通道描边必须走分支 7/8（不 `make layer`、还原通道、`blendSubtraction`），分发顺序放在像素图层兜底**之前**。
+- ⛔ 九处 `location._enum` 一律 `strokeLength`；`width` 有意保留两种写法（通道上下文为裸数字），**未经授权不要动**。
 - ⛔ 描边色 `color._obj` 必须是 `RGBColor`（`RGBColorClass` 是无效类名）。
 - ⛔ `needsStroke` 时必须给填充处理器传 `deselectAfterFill:false`（否则填充提前消费选区 ⇒ 描边失效）。
-- ⛔ 静默化只认 batchPlay 的 **options 层**（描述符内 `_options` 会被 `fill`/`stroke` 忽略）。
-- ⛔ `showColorPicker` 无参、只认前景色 ⇒ 一律走 `ColorPicker.pickColorWithInitial()`（finally 还原前景色）。
-- ⛔ `doc.activeChannels` 在图层蒙版激活时**抛异常** ⇒ 必须独立 try/catch 吞掉后继续（合并探测时勿丢内层 catch）。
-- ⛔ 灰色显示态必须覆盖**所有**颜色显示点（含渐变轨道色标），统一走 `getDisplayColorHex(..., grayDisplay)`。
-- ⛔ 子面板入口两种形态（普通模式齿轮 / 紧凑模式 label），紧凑作用域 5 → **6**（+clear）五处同步。
+- ⛔ 静默化只认 batchPlay 的 **options 层**（描述符内的 `_options` 会被 `fill`/`stroke` 忽略）。
+- ⛔ PS 原生拾色器 `showColorPicker` 无参、只认前景色 ⇒ 一律走 `ColorPicker.pickColorWithInitial()`（finally 还原前景色）；**初值必须是真实色，绝不是灰色显示色**。
+- ⛔ `doc.activeChannels` 在图层蒙版激活时**抛异常** ⇒ 必须独立 try/catch 吞掉后继续（合并多步探测时勿丢内层 catch）。
+- ⛔ 灰色显示态必须覆盖**所有**颜色显示点（含渐变轨道色标），统一走 `getDisplayColorHex(..., grayDisplay)`；灰态**只影响显示**、不写回真实数据。
+- ⛔ 子面板入口两种形态（普通模式齿轮 / 紧凑模式 label）；紧凑作用域共 6 个（app/color/pattern/gradient/stroke/clear）。
 - ⛔ 控件不可用时**不要整行隐藏**，改「标签 + 控件」双禁用态。
 
-### CSS / 样式 → `refs/frontend-css.md`
-- ⛔⛔⛔ CSS 注释块外**游离文本**会被当成选择器、静默吃掉紧随其后的整条规则 ⇒ 改完必须机器校验
-  （`node outputs/_css_comment_guard.cjs`）；**「反复改却毫无效果」立即停手，先验证规则是否命中元素**。
-- ⛔ 「标签随控件同步置灰」**跨文件时必须用两级类**：`common.css` 是静态 `<link>`，`app.css` 由 style-loader
-  运行时后注入 ⇒ 同为 (0,1,0) 时 app.css 的 `color` 会盖掉 `.label-disabled`（写成 `.app-xxx.label-disabled`）。
-  同文件内（如 common.css 的 `.label-4` + `.label-disabled`）靠后置规则即可，无需两级。
-- ⚠️ UXP 不支持 `:has()`（静默失效）；UXP flex 容器隐式 `center`；间距统一用 margin+padding（`gap` 不可靠）。
-- ⚠️ 原生 `sp-radio-group` / `sp-switch` 不可控 ⇒ 一律用自绘 `RadioGroup.tsx` / `ToggleSwitch`；
-  替换原生控件必须核对调用方从事件对象取哪个属性（`try/catch` 会把异常伪装成「点击无响应」）。
-- ⚠️ 「元素没占满容器」要查**整条祖先链每层的 padding/border/margin（尤其两层叠加）**；
-  「两组控件双向对齐」的唯一可靠做法 = **让两组总宽相等**（不是加 padding 去凑）。
-- ⚠️ 间距令牌取「**盒对齐**」不取「墨迹对齐」；折叠分区「标题→首行」间距 = 标题 `padding-bottom` + 首元素自身 `margin-top`。
-- ⚠️ 改版式前用像素脚本量用户截图（本仓截图 1.5×、内容盒 230px）；headless 测量台必须复刻完整祖先链。
-- ⚠️ 数字输入框与单位符号必须定宽（`.num-input-row` 34px / `.num-unit` 16px；更宽变体走显式类）。
-- ⚠️ 原生 `checkbox` 的布局盒比可见方块宽、方块**居中** ⇒ 墨迹左右各留 ≈**4px**（不是旧说的 10px）
-  ⇒ 贴右缘的两列复选框组补偿 `width: calc(100% + 4px); margin: 0 -4px 0 0`（`.border-panel-section` 作用域）。
-- ⚠️ 浮窗（`.float-window`）高度是内容包裹 ⇒ 末行下方节奏归零（`.panel-section` 与末子元素 `margin-bottom:0`），
-  底距 = 窗口自身 `padding` 10px；不归零会到 40px。
-- ⚠️ 浮窗遮挡 = `number` 输入**无条件全隐藏**（`input-fix.css`，须 `!important`）；popOverlay 只服务下拉菜单。
-- ⛔ **浮窗与子面板可共存，浮窗「始终置顶」**：子面板/子面板级浮层 = 9999、浮窗 = 99999/100000、激活弹窗 = 100001；
-  工具箱「功能快捷键」子面板必须显式降到 9999（它与浮窗同用 `.float-overlay`，同档靠 DOM 顺序会被压住）。
-  APP 已取消「开子面板即置灰『隐藏/显示分区』」。层级表与不可照抄的原因见 `refs/frontend-css.md`。
-- ⛔ **多浮窗 = 单遮罩 + 一个 `.float-stack`**（2026-10-10 重构）：别再给每个浮窗各挂 `.float-overlay`
-  （会叠遮罩变暗 + 靠 DOM 顺序互相盖）。堆叠顺序取 `state.floatOrder` 数组（= DOM 顺序，**后开的排下面**），
-  间距 `10px` 靠 `.float-stack > .float-window + .float-window{margin-top:10px}`；关上方自动上移、点遮罩空白整层关。
-- ⛔ **子面板互斥铁律（同时只开一个）**：唯一入口 `app.tsx` 的 `setSecondaryPanel(id, open)`——**一次 setState 写全 5 个 boolean**
-  （目标 true、其余 false）⇒ 开新的自动顶掉旧的；所有入口方法一律 delegate 过去，别再各写各的 boolean。
-- ⛔ **面板 body 类一律「按 state 派生」，禁止 imperative add/remove**：
-  `syncFloatPanelClasses()` 在 `componentDidUpdate` 里 toggle `app-*-open`（`onResetParameters` 的 `...initialState`
-  会绕过 close 方法 ⇒ 手写 add/remove 必留悬空类）。
-- ⛔ **同一 body 类只能有一个派生点**：`AdjustmentPanel` 曾有两条 effect 各自 cleanup
-  `remove('visibility-panel-open')` ⇒ 关浮窗会误摘子面板所需的类（数字冒到子面板上方）；
-  **浮窗与子面板共用的 body 类必须合并成单条派生 effect**（依赖两个 boolean）。
-- ⚠️ **灰度显示不改预览的真实尺寸基准**：降采样缩略图（`GRAY_THUMB_MAX=104`）的 `onLoad` **不得**写
-  `previewNaturalRef`（只在非灰度时记）⇒ 否则最终预览 `refW/refH` 被钉 104、`fit` 饱和为 1，缩放/预览下拉「失灵」。
-- ⚠️ 颜色一律走 CSS 令牌（`--primary-color` / `--entry-bg` / `--border-color` / `--text-color` / `--hover-bg` /
-  `--bg-color` / `--notify-*` / `--spectrum-global-color-*`），**禁硬编码 HEX**；对比度 ≥ WCAG 4.5:1；三档主题 darkest/dark/light。
+### UXP CSS / 布局 → `refs/frontend-css.md` + 技能 **uxp-frontend-spec**
+- ⛔⛔⛔ CSS 注释块外的**游离文本**会被当成选择器、静默吃掉紧随其后的整条规则 ⇒ 改完必须机器校验 `node scripts/_css_comment_guard.cjs`。**「反复改却毫无效果」立即停手，先验证规则是否命中元素**。
+- ⛔ 「标签随控件同步置灰」跨文件必须用**两级类**：`common.css` 静态 `<link>` 先加载、`app.css` 由 style-loader 后注入 ⇒ 同为 (0,1,0) 时 app.css 的 `color` 会盖掉 `.label-disabled`（写成 `.app-xxx.label-disabled`）；同文件内靠后置规则即可。
+- ⚠️ UXP 不支持 `:has()`（静默失效）、不支持 `rotate()`（transform 只有 scale/translate）；flex 容器隐式 `center`；间距统一用 margin+padding（`gap` 不可靠）。
+- ⚠️ 原生不可控控件一律自绘：`RadioGroup.tsx`（替 `sp-radio-group`）、`ToggleSwitch`（替 `sp-switch`）、`Select.tsx`（替 `sp-picker`）、`RangeSlider.tsx`（替 `input[type=range]`）；替换时必须核对调用方从**事件对象的哪个属性**取值。
+- ⚠️「元素没占满容器」查**整条祖先链每层的 padding/border/margin（尤其两层叠加）**；「两组控件双向对齐」的唯一可靠做法 = 让两组**总宽相等**。
+- ⚠️ 间距令牌取「**盒对齐**」不取「墨迹对齐」；折叠分区「标题→首行」间距 = 标题 `padding-bottom` + 首元素 `margin-top`。
+- ⚠️ 数字输入框与单位符号必须定宽（`.num-input-row` 34px / `.num-unit` 16px）；原生 checkbox 布局盒比可见方块宽、方块居中 ⇒ 墨迹左右各留 ≈4px。
+- ⚠️ 颜色一律走 CSS 令牌，禁硬编码 HEX（遮罩例外，由 `theme.ts` 注入字面色）；对比度 ≥ WCAG 4.5:1；四套主题都要写。
 
-### 跨面板共享状态（专注模式 / 主开关）→ `refs/uxp-api-layer.md`
-- ⛔ **两个面板同上下文**：`#app` 与 `#pixeladjustment` 在**同一 HTML 文档、同一个 bundle**
-  ⇒ `FocusModeBus` / `MainToggleBus` 的模块级 `cached` 是**跨面板共享**的（设计前提，改动前务必确认）。
-- ⛔⛔ **订阅/轮询的去重基线绝不能用共享缓存播种**：`let last = cached?.focus ?? null` 会让
-  「缓存值恰好 == 文件值」时首次回调永不触发 ⇒ 订阅方 `useState` 初值成为最终值且**永不纠正**
-  （曾致「专注模式已开但功能快捷键面板显示『选区填充开关』」）。必须从 `null` 起（=「未知」）。
-- ⛔ **读不到 ≠ 为false**：`readRaw()` 返回 null 时**本轮不表态**（不更新 `last`），
-  否则会把订阅方从 true 硬拽回 false。
-- ⛔ **`setState` 之后立刻读 `this.state` 拿到的是旧值**（React 19 自动批处理）：
-  启动期算派生结论必须由「合并后的局部变量」显式传入（`syncFocusMode(explicit)`），别读 `this.state`。
-- ⚠️ 共享状态台架（`analysis/focus-mode/repro.mjs`，tsc 就地转译 + 内存 UXP FS 跑真实代码）：
-  **每场景必须独立模块实例**（模块级 `cached`/`writeChain` 会跨场景造假失败）；
-  内存 FS 必须实现 `folder.createFile`（缺了被源码 `catch` 吞掉、只更内存不落盘）。
-  支持 `node repro.mjs <旧版路径>` 做**对照实验**验台架有鉴别力。
+### 浮窗 / 子面板 / 面板遮挡 → `refs/frontend-css.md`
+- ⛔ **多浮窗 = 单遮罩 + 一个 `.float-stack`**：别再给每个浮窗各挂 `.float-overlay`（会叠遮罩变暗 + 靠 DOM 顺序互相盖）。堆叠顺序取 `state.floatOrder`（数组顺序 = DOM 顺序，**后开的排下面**），间距 10px 靠相邻兄弟 `margin-top`，关上方自动上移。
+- ⛔ **子面板互斥铁律（一个父面板同时只开一个）**：唯一入口 `app.tsx::setSecondaryPanel(id, open)`，**一次 `setState` 写全 5 个 boolean**；所有入口方法一律 delegate 过去。
+- ⛔ **面板 body 遮挡类一律「按 state 派生」，禁止 imperative add/remove**：`onResetParameters` 的 `...initialState` 会绕过 close 方法 ⇒ 手写 add/remove 必留悬空类。同一 body 类只能有**一个**派生点。
+- ⛔ **浮窗始终置顶**：子面板 9999、真浮窗 99999（`#app` 下再抬 100000）、激活弹窗 100001；工具箱「功能快捷键」与浮窗同用 `.float-overlay` ⇒ 它必须显式降到 9999。
+- ⛔ **灰度显示不得污染预览的真实尺寸基准**：降采样灰度缩略图的 `onLoad` **不得**写 `previewNaturalRef`（只在非灰度时记），否则预览被钉在缩略图尺寸、缩放/预览下拉「失灵」。
 
-### 性能 / React / 闸门 → `refs/uxp-api-layer.md` + **`refs/busy-gate.md`**（闸门 2026-10-08 重构，先读它）
-- ⛔⛔ UXP 交互延迟的主因是**串行同步 IPC 往返**，不是像素计算（`app.activeDocument` / `layer.bounds` 每次读 = 一次往返；
-  **batchPlay 数组整体只算一次**）。填充提速只能来自「读一次复用 + 合并无依赖命令」，**不能来自缩短等待**。
-- ⛔⛔⛔ **闸门是三件套**：① 粗筛 `isPsBusy()`（快速失败）；② **文档级「持续忙碌」闩锁**
-  （`beginDocLatch` / `extendDocLatch` / `endDocLatch`；**闩锁期间 `isPsBusy()` 恒为真**）——
-  时间常数堵不住「打开/关闭/保存大文档要好几秒」；③ `psAccess.psRead()` 的模态作用域兜底。
-  **会打断用户操作、失败即弹框的读取必须走 `psRead`**；后台轮询可只用粗筛。填充的「快」走 `fillReadyRemain()`。
-- ⛔⛔ **闩锁的释放判据是「能不能拿到模态锁」，不是时间**：`psAccess.probeHostIdle()`
-  = 一次**只拿锁、不读任何数据**的空 `executeAsModal`（拿不到只是可捕获异常，不会弹框）。
-  触发入口 = `pollDocIdentity`（闩锁期间唯一允许继续跑的通路）。`DOC_LATCH_MAX_MS`(30s) 兜底 + 5s 冷却防活锁。
-- ⛔⛔ **`psRead` 遇宿主模态冲突（`error.number === 9` 或消息含 `modal`）⇒ 延长闩锁 + 返回失败，
-  绝不降级裸读**（旧 `already in a modal` 直读兜底**已删除**——宿主忙碌期的裸 get 正是弹框来源）。
-- ⛔⛔⛔ **禁采信 `core.isModal()`**（2026-10-09 真机探针已定性：本插件未持模态时它照样返回 true，
-  会算上**宿主**的模态态）⇒ 唯一判据是 `psAccess.getOwnModalDepth() > 0`。
-  **任何进入模态的代码都必须走 `psAccess.runAsModal()`**（它维护那个计数）；漏一处 ⇒ 该写路径
-  内部的 `psRead`/`getLayerSnapshot`/`getActiveLayerInfo` 会看到 depth=0 ⇒ 去嵌套 executeAsModal
-  ⇒ UXP 拒绝嵌套 ⇒ **读取静默失败**（症状「点了没反应」，不是弹框，更难查）。
-  自检：`grep -rn "core.executeAsModal" src/` 只应剩注释。
-- ⛔⛔⛔ **`runAsModal` 绝不把可能为 `undefined` 的 `opts` 传作第二实参**：UXP 原生绑定对
-  「显式 undefined 的 object 形参」**严格校验** ⇒ 抛 `Argument 2 has an invalid type.
-  Expected type: object actual type: undefined`。`opts` 是可选参数，全仓 **11 处**
-  `executeAsModal(fn)` 不传它 ⇒ 实现必须分岔：`opts == null ? executeAsModal(wrapped)
-  : executeAsModal(wrapped, opts)`。2026-10-09 就因这一行「描边 8 分支全挂 + 取色器全挂」
-  （症状：`✅ 新建图层成功` 紧接 `❌ … Argument 2 …`；12 组合里 3 仅描边 + 3 清除+描边失效）。
-- ⛔⛔ **通知包装器必须按 handler 记忆化（`WeakMap`）**：`removeNotificationListener` 按**引用**匹配，
-  而 `wrapDocLevelLogger` 每次新建闭包 ⇒ add/remove 拿到不同对象 ⇒ 注销失败
-  （`Notifications could not be registered`）+ **监听器泄漏**（子面板按 `[isOpen]` 每开合泄漏 16 个）
-  ⇒ 此后每条 PS 通知被全部残留回调处理 ⇒ 本仓**唯一「无上限累加」的模态命令放大器**
-  （「Too many modal scope commands」红色计数 153 → 240+ 的机制）。
-- ⛔ **智能对象/置入图层事件名必须注册**（`psProbe.PLACED_LAYER_EVENTS`，含用户真机给出的
-  `newPlacedLayer` = 「转换为智能对象」，通知描述符 `_isCommand:false`），并按**文档级**处理
-  （`beginDocLatch`，但**不**调 `noteDocLevelEvent` ⇒ 不推进世代号）：宿主内部要
-  「新建临时文档 → 合成 → 置入 → 关闭」，与 open/save 同型。名字未注册 = 该重命令全程无闸门。
-- ✅ 上述三条有静态守卫：`node outputs/_modal_contract_guard.cjs`（G1-B / G2-A / G2-B / G3-A / G3-B）。
-- ⛔⛔ **同步接口永不遍历**：`getLayerSnapshot()` 已无 traverse 路径（只读缓存）。
-  「同步裸读 + 5N 次 get」是**乘法放大器**（16 层 = 80 次 get），判据再准也不该留着（旧「入口判
-  `isPsBusy()` / 租约」写法已被证明存在放行出口）；要新数据一律走 `refreshLayerSnapshot()`。
-  `MaskSyncEngine.buildLayerTree` 无快照时 `return []`（别清空下拉）。
-- ⛔⛔ **事件窗口三档**（都不得为填充提速而缩短）：文档级 open/close/save/切文档 = 长窗口 + 闩锁 +
-  世代号++；**结构类**（delete/make/move/rename/**合并/拼合/栅格化**） = `QUIET_AFTER_STRUCTURAL_EVENT_MS`(600ms)
-  **且作废宿主租约**（`noteHostUnresponsive`）；纯选区（set+channel/selection） = 300ms 且**不**动作租约。
-  图层数减少的所有操作（Delete / Ctrl+E / Ctrl+Shift+E / 拼合 / 盖印 / 栅格化）在事件层都表现为
-  `delete`+`make`（命令**中途**派发），统一按结构类处理即可。
-- ⛔⛔ **禁止把多条「可能失败」的 get 合并进同一 batchPlay**（一条失败连带整批；宿主原生弹框绕过 JS try/catch）。
-- ⛔ **「顺延上限用尽即硬闯」禁止**（三旧出口已铲，台架 B1 盯着）；读取方**不得** `markPsBusy` 自我预留（自锁来源）。
-- ⛔ 宿主原生「命令"获取"当前不可用」绕过 try/catch 与 dialogOptions ⇒ 防护两层：① **通知回调内零 IPC**
-  （只允许 `invalidate*`）；② **模态作用域内读取**。⛔ **`open` / `close` / `save` 必须监听**（曾无人注册 ⇒ 开关/保存文档全程无闸门）；
-  注册一律走 `addPsNotificationListeners`（逐名容错）。⛔ 文档级变化两入口：事件通路 + `pollDocIdentity` 兜底巡检。
-- ⛔ 宿主事实（Adobe 文档 + 论坛现场证据）：`executeAsModal` 25.10 起是**排队重试**（`timeOut` **默认 1 秒**）而非立即拒绝，
-  冲突错误码 = `9`；**PS 执行 `open`/`close`/`save` 时握着模态作用域，而 `open` 正是在该作用域内派发的** ⇒ 收到即读必被拒。
-- ⚠️ 无条件 `setInterval` 读文档/get 的轮询必须 `if (isPsBusy()) return`；防抖必须**真防抖**（节流会丢弃事件）。
-  `readCurrentToolId` 里的 `getSelectedBrushToolEnum`（裸 batchPlay get）已移进 `psRead`。
-- ⚠️ 图层树只读一份快照（`getLayerSnapshot`）；`getActiveLayerInfo` = 世代号 + 300ms TTL 缓存（满读取走 `psRead`）。
-- ⚠️ 大列表 `options` 必须 `useMemo` + 组件 `React.memo`（**永远不要在 JSX 里现 map**）。
-- ⛔⛔ 组件内 `useMemo`/JSX 调用**组件体内更下方**声明的 `const` ⇒ 白屏（es5 下 `const`→`var` 提升；编译/webpack 都查不出）
-  ⇒ **纯函数一律放模块级**。
+### 跨面板共享状态 → `refs/uxp-api-layer.md`
+- ⛔ 两个面板（`#app` / `#pixeladjustment`）**同 HTML 文档、同 bundle** ⇒ `FocusModeBus`/`MainToggleBus` 的模块级 `cached` 是**跨面板共享**的。
+- ⛔ 订阅/轮询的去重基线**绝不能用共享缓存播种**（`let last = cached?.focus ?? null`）⇒ 首次回调可能永不触发、订阅方初值成为最终值且永不纠正。必须从 `null`（=未知）起。
+- ⛔ **读不到 ≠ 为 false**：`readRaw()` 返回 null 时本轮不表态（不更新 `last`）。
+- ⛔ `setState` 之后立刻读 `this.state` 拿到的是旧值（React 19 批处理）⇒ 启动期派生结论必须由合并后的局部变量显式传入。
+
+### 闸门 / 模态 / 性能 → `refs/busy-gate.md`（先读它）+ `refs/uxp-api-layer.md`
+- ⛔⛔ 交互延迟的主因是**串行同步 IPC 往返**，不是像素计算（每次属性读 = 一次宿主往返；**batchPlay 数组整体只算一次**）。提速只能来自「读一次复用 + 合并无依赖命令」，不能来自缩短等待。
+- ⛔⛔⛔ 闸门是三件套：粗筛 `isPsBusy()` + **文档级持续忙碌闩锁**（闩锁期间 `isPsBusy()` 恒真）+ `psAccess.psRead()` 模态作用域兜底。会打断用户操作、失败即弹框的读取必须走 `psRead`。
+- ⛔⛔ **禁采信 `core.isModal()`**（会算上宿主模态）⇒ 唯一判据 `psAccess.getOwnModalDepth() > 0`；**任何进入模态的代码都必须走 `psAccess.runAsModal()`**（自检：`grep -rn "core.executeAsModal" src/` 只应剩注释）。
+- ⛔⛔ `runAsModal` **绝不把可能为 undefined 的 `opts` 传作第二实参**（UXP 严格校验会抛 `Argument 2 has an invalid type`）⇒ 必须按 `opts == null` 分岔。
+- ⛔⛔ 通知包装器必须按 handler 记忆化（`WeakMap`），否则 `removeNotificationListener` 按引用找不到目标 ⇒ 注销失败 + 监听器泄漏（本仓唯一的「无上限累加」模态命令放大器）。
+- ⛔⛔ **同步接口永不遍历**（`getLayerSnapshot()` 只读缓存）——「同步裸读 + N 层遍历」是乘法放大器；要新数据走 `refreshLayerSnapshot()`。
+- ⛔ **禁止把多条「可能失败」的 get 合并进同一 batchPlay**（一条失败连带整批，且宿主原生弹框绕过 JS try/catch）。
+- ⛔ 事件窗口三档（**不得为提速缩短**）：文档级 open/close/save/切文档 = 长窗口 + 闩锁 + 世代号++；结构类（delete/make/move/rename/合并/拼合/栅格化）= 600ms 且作废宿主租约；纯选区 = 300ms 且不动租约。
+- ⚠️ 无条件 `setInterval` 读文档/get 的轮询必须 `if (isPsBusy()) return`；防抖必须**真防抖**（节流会丢事件）。
+- ⚠️ 启动期一次性 PS 加载必须走 `runWhenIdle`（一次性加载要传有限 `maxDeferrals`）。
 - ⚠️ `ts-loader transpileOnly:true` ⇒ 类型缺陷永不阻塞构建 ⇒ **新增跨组件共享字段必须同步补 `types/state.ts` 接口**。
-- ⚠️ 父面板复位要覆盖子面板内部 state ⇒ 用 `resetToken` 自增（写在 `...initialState` **之后**）；复位前先清「选中预设」。
-- ⚠️ 启动期一次性 PS 加载必须走 `runWhenIdle`。
+- ⚠️ 组件内 `useMemo`/JSX 调用**组件体内更下方**声明的 `const` ⇒ 白屏（es5 下 `const`→`var` 提升）⇒ **纯函数一律放模块级**。
+- ⚠️ 大列表 `options` 必须 `useMemo` + 组件 `React.memo`（永远不要在 JSX 里现 map）。
+- ⚠️ 父面板复位要覆盖子面板内部 state ⇒ 用 `resetToken` 自增（写在 `...initialState` 之后），复位前先清「选中预设」。
 
-### 环境 / 工具链
-- ⛔⛔ **`Entry.moveTo(folder, ...)` 第二参是选项对象 `{newName, overwrite}`，不是文件名**；
-  传字符串会抛错且**被 `try/catch` 静默吞掉**（2026-10-10 图案预设「只剩 .tmp」事故根因）。
-  文件落盘一律走 `PresetManager.moveEntryTo`；加载侧须配「正式文件缺失/坏 → `.tmp` → `.backup`」恢复链。
-- ⛔ **两份 flyout 菜单的数组是唯一来源**（`MenuManager` 顶部 `APP_MENU_ITEMS` / `ADJUSTMENT_MENU_ITEMS`）：
-  `entrypoints.setup()` 与所有「按 id 遍历」的静态字段都从它派生（去 `spacer*`），增删项只改一处。
-- ⛔ **注册（激活）面板打开期「整菜单门控」**：`MenuManager.setLicenseDialogOpen(open)` 按白名单写 `enabled`——
-  APP 留 `openLicenseDialog`+`openDocsFill`、工具箱留 `openDocsToolbox`，其余全灰；关闭后按默认还原
-  （仅 `resetLicense` 依 `appLicenseActive`）。幂等（`licenseMenuGated` 去重），调用点 = `syncLicenseDialogClass()`。
-- 见 `refs/toolchain-and-env.md`（构建命令、tsc 校验、菜单项「只置灰不删」、UXP 无 `fs`、Edit 假成功、守护进程）。
-
-## 像素算法（细则、推导与实测数据一律见 `refs/pixel-algorithms.md`）
-- 写回型处理器两条边界铁律：区域判定**只用选区掩码>0**；采样到「RGBA 全 0」的数据缺失点必须**用中心像素边缘延拓**。
-- alpha 对齐 `alphaAlignProcessor.ts` 现为 **v10 三档整片归一**（v1~v9 五条路线已全部推倒，**勿重走**）；
-  唯一例外：v5「多尺度环带参照」以「极值微调」按钮复活（线条污渍专用）。
+### 像素算法 → `refs/pixel-algorithms.md`
+- 写回型处理器两条边界铁律：区域判定**只用选区掩码 > 0**；采样到「RGBA 全 0」的数据缺失点必须**用中心像素边缘延拓**。
+- alpha 对齐 `alphaAlignProcessor.ts` = **v10 三档整片归一**（上=max / 下=min / 众=众数）；另有两个「极值微调」按钮（v5 环带参照复活，线条污渍专用）。
 - 消除锯齿 `aliasSmoothProcessor.ts`：覆盖率重建 + EDT 本体传播 + 墨量守恒；细线 ≤4px 走几何重建。
-- 「仅主线条」`lineSmoothProcessor.ts` 现为 **V7 中轴重建**；加新参数必须同步 **10 处**（清单见 refs）。
-- ⚠️ 构建不做类型检查 ⇒ 像素算法的参数/转发缺陷只会**静默失效**（改完必须端到端跑一遍台架）。
-- 台架均在 `analysis/line_vis/`（⚠️ `accept_v7.mjs` 产出路径相对 CWD ⇒ **必须从仓库根运行**）；
-  改完必须同时报「回归 diff vs 旧版」与「作用量 vs 原图」。
+- 「仅主线条」`lineSmoothProcessor.ts` = **V7 中轴重建**；加新参数必须同步「面板 → 转发 → 处理器」整条链（约 10 处）。
+- ⚠️ 构建不做类型检查 ⇒ 参数/转发缺陷只会**静默失效**（改完必须端到端跑一遍对拍）。
+- ⚠️ 像素算法的对拍台架是本地草稿（见技能 `algo-param-bench`）；改完必须同时报「回归 vs 旧版」与「作用量 vs 原图」。
+
+### 工具链 / 环境 → `refs/toolchain-and-env.md`
+- ⛔⛔ 文件落盘必须「临时文件 + `moveTo` 原子替换」；`Entry.moveTo(folder, {newName, overwrite})` 第二参是**选项对象**，传字符串会抛错且被 `try/catch` 静默吞掉。统一走 `PresetManager.moveEntryTo`。
+- ⛔ 两份 flyout 菜单的数组是**唯一来源**（`MenuManager` 顶部常量）；按 id 遍历的字段都从它派生；菜单项**只能置灰不能删**（UXP id 插件级全局唯一，同名会整块面板起不来）。
+- ⛔ 注册（激活）面板打开期「整菜单门控」：`MenuManager.setLicenseDialogOpen(open)` 按白名单写 `enabled`（APP 留 `openLicenseDialog`+`openDocsFill`；工具箱留 `openDocsToolbox`），其余全灰；关闭后按默认还原。
+- ⚠️ UXP 无 `fs`/`os`；落盘只用 `localFileSystem`；`getFileForSaving` 必须在 `executeAsModal` 之外调。
+- ⚠️ Edit 工具偶发「报成功但没落盘」⇒ 改完必须 grep 复核。
+
+---
+
+## 记忆维护约定
+- `MEMORY.md`（本文件）= 索引 + 铁律；`refs/*.md` = 主题明细；`HISTORY.md` = 精简项目历程。
+- 新知识按主题归入对应 refs；只有「一眼要用」的才上提到本文件。
+- **不写「某次改了什么」的流水账**，只留结论 / 铁律 / 踩坑点；废弃版本仅在「防止重走」时留一行。
+- 配套技能：`.workbuddy/skills/uxp-frontend-spec`（前端规范）、`.workbuddy/skills/algo-param-bench`（算法对拍）。

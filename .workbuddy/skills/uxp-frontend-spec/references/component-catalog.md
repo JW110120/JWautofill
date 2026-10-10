@@ -141,9 +141,10 @@ import RangeSlider from '../components/RangeSlider';
   <span className="num-unit">%</span>
 </div>
 ```
-- `.num-input-row` 32×24，描边 `--border-color`，底 `--dropdown-bg-color`，`overflow:hidden`
-- input 无边框（`border:none`），居中，12px；`input[type=text]` 自动 60px 宽
-- **单位符号必须放在容器外**（`.num-unit`，`margin-left:4px`），放容器内会被裁
+- `.num-input-row` **34×32**（= 左右 border 1px + input 32px），描边 `--border-color`，底 `--dropdown-bg-color`，`overflow:hidden`
+- 内部 input 无边框（`border:none`）、`height:20px`（垂直居中修正，详见 pitfalls）、居中、12px
+- text 型变体：`.num-input-row` 上加 `.num-input-row-wide`（62px，内 `input[type=text]` 60px）；**不要写 `:has(input[type=text])`**（UXP 不支持，须由 TSX 挂类）
+- **单位符号必须放在容器外**（`.num-unit`，紧跟输入框、**定宽 16px**、`margin-left:0`、`justify-content:flex-end` 右对齐），放容器内会被裁
 
 ---
 
@@ -257,11 +258,12 @@ import RangeSlider from '../components/RangeSlider';
 | `.task-card` | 卡片：底 `--entry-bg`，描边，`padding:8px 10px`，`+ .task-card` 自动 `margin-top:10px` |
 | `.mask-sync-add-row` | 卡片底部的「+」行（上下居中，`margin:0 auto -10px` 吃掉容器下内边距） |
 | `.hotkey-entry-row` | 工具箱列表行：`padding:8px`，底 `--entry-bg`，预挂 `1px solid transparent`；`.selected` 主色边框，`.pinned` 禁拖；内部 `.hotkey-entry-combo` / `.hotkey-entry-name` 各 `flex:1 1 0%` 保证竖线居中 |
-| `.float-overlay` + `.float-window` | 通用遮罩 + 浮动窗口（激活弹窗、分区显隐等共用）：遮罩 `padding:10px` → 窗口距面板上/左/右恒 10px；窗口 `overflow-y:auto` + 阴影。**挂载点必须在滚动容器 `.panel` 之外**（APP 挂 `.app-root` 层、工具箱挂 `.pixeladjustment-root` 层，两者都要 `position:relative`），否则被面板滚动条压住 —— 详见 uxp-pitfalls ⑱ |
+| `.float-overlay` + `.float-stack` + `.float-window` | 通用遮罩 + 浮窗体系（激活弹窗、分区显隐、填充设置等共用）：遮罩 `padding:10px` → 窗口距面板上/左/右恒 10px；窗口 `overflow-y:auto` + 阴影。**多浮窗用单遮罩 + 一个 `.float-stack` 包多个 `.float-window`**（顺序由 state 数组决定、后开的在下，间距靠相邻兄弟 `margin-top`），**别给每个浮窗各挂遮罩**（会叠暗 + DOM 顺序互盖）。**挂载点必须在滚动容器 `.panel` 之外**（APP 挂 `.app-root` 层、工具箱挂 `.pixeladjustment-root` 层，两者都要 `position:relative`），否则被面板滚动条压住 —— 详见 uxp-pitfalls ⑲㉗ |
 | `.adjustment-lock-overlay` | 工具箱未激活锁定遮罩 |
 | `.pixeladjustment-root` | 工具箱根容器（flex 列，`overflow:hidden`） |
 
-⚠️ 遮罩的 `background-color` **由 theme.ts 注入**，common.css 不写。
+⚠️ 遮罩的 `background-color` **由 theme.ts 注入**（不透明度恒 0.80），common.css 不写。
+⚠️ **子面板互斥**：一个父面板可开多个浮窗，但**同时只能开一个子面板**；唯一入口 `app.tsx::setSecondaryPanel(id, open)`（一次 `setState` 写全 5 个 boolean）。**子面板层级 9999 / 真浮窗 99999 / 激活弹窗 100001**。
 
 ---
 

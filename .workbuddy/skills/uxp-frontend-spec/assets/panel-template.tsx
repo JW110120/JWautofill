@@ -169,8 +169,10 @@ const MyPanel: React.FC = () => {
 
             <div className="copyright">© JWautofill</div>
 
-            {/* 遮罩 + 浮动窗口：遮罩背景由 theme.ts 注入，此处绝不写 background-color。
-                打开时记得给 body 加状态类隐藏本面板内所有 input/textarea（原生控件穿透）。 */}
+            {/* 浮层：遮罩 + 浮窗。遮罩背景由 theme.ts 注入，此处绝不写 background-color。
+                打开时记得给 body 加状态类隐藏本面板内所有 input/textarea（原生控件穿透）。
+                · 多个浮窗时用「单遮罩 > .float-stack > 多个 .float-window」（别每个各挂遮罩）。
+                · 一个父面板同时只能开一个子面板（见 setSecondaryPanel）。 */}
             {showModal && (
                 <div className="float-overlay" onClick={() => setShowModal(false)}>
                     <div className="float-window" onClick={(e) => e.stopPropagation()}>
