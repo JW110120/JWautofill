@@ -329,12 +329,24 @@ html, body {
 /* 通用数字输入框本体：始终在 .num-input-row 裁剪容器内（去边框避免「框里框」）。
    ⚠️ 2026-10-07 宽度改 100%（填满 .num-input-row 的固定 34px）：
       原 `width: 32px` 是配合「容器宽度由内容撑开」的旧写法；
-      容器固定宽后必须让 input 填满，否则数字会在 34px 盒里偏左、右侧留白。 */
+      容器固定宽后必须让 input 填满，否则数字会在 34px 盒里偏左、右侧留白。
+   🔴 2026-10-10 垂直定位修正（用户反馈「数字位于输入框偏上，不在垂直中央」）：
+      UXP 的原生输入框**不按 CSS line-height 做行盒居中**，而是从「原生绘制区上缘」
+      往下画字体自身的行盒（ascent+descent）⇒ 视觉上文字整体偏上。
+      像素实测（1× 截图，尺寸标注均 1:1）：外框 y6..37（32px，中心 21.5），
+      「100」墨迹仅 y15..23（中心 19）⇒ 偏上 2.5px；按思源黑体度量反推，
+      墨迹顶 = 绘制区上缘 + 5.1px，即绘制区上缘必须落在容器 21.5−9.5 = 12px 处。
+      ⚠️ 第一版用 `padding-top: 2px` 把内容盒下移——实测基本无效（原生控件的
+         绘制区不随内容盒走，padding 只改内部排版、不改绘制区起点）。
+      正确做法是**移动 input 这个盒子本身**：height 24px→20px 后，行容器
+      （32px、align-items:center）给它的上下留白从 4px 变 6px ⇒ 盒顶 10→12px，
+      墨迹随之落回容器几何中心。
+      ⚠️ 不能用 line-height 调（原生控件忽略它）；别再改回 padding 方案。 */
 .num-input-row input {
   display: flex;
   align-items: center;
   width: 100%;
-  height: 24px;
+  height: 20px;
   box-sizing: border-box;
   background-color: var(--dropdown-bg-color);
   background-image: none;
@@ -342,7 +354,7 @@ html, body {
   font-size: 12px;
   font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
   text-align: center;
-  line-height: 24px;
+  line-height: 20px;
   border: none;
   border-radius: 0;
   padding: 0 3px;

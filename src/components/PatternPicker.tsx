@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useLayoutEffect } from 'react';
 import { Pattern } from '../types/state';
 import { FileIcon, DeleteIcon } from '../styles/Icons';
 import IconButton from '../components/IconButton';
@@ -8,6 +8,7 @@ import { debouncePsProbe, markPsBusyForEvent, runWhenIdle } from '../utils/psPro
 import { addPsNotificationListeners, removePsNotificationListeners, runAsModal } from '../utils/psAccess';
 import { PresetManager } from '../utils/PresetManager';
 import { calcDragValue } from '../utils/dragSensitivity';
+import { encodePngRgba, bytesToBase64 } from '../utils/pngEncode';
 import RangeSlider from './RangeSlider';
 import Select from './Select';
 import RadioGroup, { RadioOption } from './RadioGroup';
@@ -41,6 +42,125 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
     value: level.toString(),
     label: `${level}%`,
 }));
+
+/**
+ * 把「图案最终预览」按角度烘进像素，返回可直接喂给 <img> 的 data URL。
+ * ⚠️ 为什么旋转不能交给 CSS / SVG（2026-10-10 逐条实测后的定论）：
+ *    ① UXP 的 CSS transform 只实现 scaleX/scaleY/translate/transform-origin，
+ *       rotate() 不在支持面内、被静默忽略（Adobe 官方论坛回复「Rotation is not
+ *       currently supported」）—— 这正是「设置角度后预览不倾斜」的根因；
+ *    ② UXP 的 SVG 渲染器「只面向简单图标」，<svg><image href="data:…"> 不渲染
+ *       （实测：整个预览区空白）。
+ *    故唯一可行路径是自己重采样。
+ * ⛔ 输出边界 = **旋转后矩形的外接矩形**；外接矩形里「旋转矩形之外」的部分 alpha=0（全透明）。
+ *    旧实现输出与源**同尺寸**、把外面的像素补成 --dark-bg-color，两个后果都不可接受：
+ *    ① 旋转矩形的角被原尺寸裁掉 ⇒ 预览里看着像平行四边形、两个角缺了；
+ *    ② 补的底色在 darkest 主题下是 rgb(30,30,30)（近乎纯黑），而缓存键只有「图案|角度|灰度」
+ *       ⇒ 换成浅色主题后缓存命中不失效，那块黑三角照旧（用户实测反馈）。
+ *    ⇒「透明」只能由 alpha 通道表达，而 UXP 的 imaging.encodeImageData 只支持 JPEG（无 alpha），
+ *      故这里自己编码 PNG（见 utils/pngEncode.ts）。
+ *    外接矩形的代价是「斜角下要显示更大范围」⇒ 渲染侧按外接矩形尺寸整体缩放（完整展示，
+ *    不裁切）；角度回到 0 时外接矩形退化为原尺寸，无缝衔接。
+ *
+ * 采样：**双线性 + 预乘 alpha**。
+ *    预乘是必须的 —— 直接对 RGB 插值会把「透明像素的脏 RGB」混进边缘（黑边）；
+ *    预乘后按 Σ(w·a) 归一，透明像素自然不参与颜色平均，边界只留下 1px 的抗锯齿过渡。
+ *    越界一律按「完全透明」参与（**不是** clamp 到边缘像素），否则旋转矩形外会拖出边缘色带。
+ *
+ * 数据源 patternRgbData（PresetManager 已随预设持久化 ⇒ 无上下文依赖、reload 后依旧可用）。
+ * gray=true 时按同一套 luma 公式转灰，与灰度预览语义对齐。
+ * 输出长边封顶 MAX_ROTATED_PX：45° 时外接矩形是原图的 1.41 倍，
+ * 封顶既控制 PNG 体积（未压缩 deflate ≈ 4 字节/像素），也让重采样开销恒定有界。
+ */
+const MAX_ROTATED_PX = 512;
+
+const rotatePatternPreview = (
+    pattern: Pattern,
+    angleDeg: number,
+    gray: boolean
+): { url: string; w: number; h: number } | null => {
+    const src = pattern.patternRgbData;
+    const width = pattern.width || 0;
+    const height = pattern.height || 0;
+    const components = pattern.components || pattern.patternComponents || (pattern.hasAlpha ? 4 : 3);
+    if (!src || !width || !height) return null;
+    if (components !== 3 && components !== 4) return null;
+
+    const hasAlpha = components === 4;
+    const theta = (angleDeg * Math.PI) / 180;
+    const cos = Math.cos(theta);
+    const sin = Math.sin(theta);
+
+    // 旋转后矩形的外接矩形（源像素单位），超过上限时等比降采样
+    const boxW = width * Math.abs(cos) + height * Math.abs(sin);
+    const boxH = width * Math.abs(sin) + height * Math.abs(cos);
+    const k = Math.min(1, MAX_ROTATED_PX / Math.max(boxW, boxH));
+    const outW = Math.max(1, Math.round(boxW * k));
+    const outH = Math.max(1, Math.round(boxH * k));
+
+    const cx = width / 2;
+    const cy = height / 2;
+    const out = new Uint8Array(outW * outH * 4);
+    for (let y = 0; y < outH; y++) {
+        const dyo = (y + 0.5 - outH / 2) / k;
+        for (let x = 0; x < outW; x++) {
+            const dxo = (x + 0.5 - outW / 2) / k;
+            // 输出 → 源的反向映射；方向与 CSS rotate 一致（正角度顺时针）
+            const sx = cx + dxo * cos + dyo * sin;
+            const sy = cy - dxo * sin + dyo * cos;
+
+            // 源坐标以「像素中心 = 整数」计，故减 0.5 换算到像素索引空间
+            const ix = sx - 0.5;
+            const iy = sy - 0.5;
+            const x0 = Math.floor(ix);
+            const y0 = Math.floor(iy);
+            const fx = ix - x0;
+            const fy = iy - y0;
+            let accA = 0;
+            let accR = 0;
+            let accG = 0;
+            let accB = 0;
+            for (let j = 0; j < 2; j++) {
+                const yy = y0 + j;
+                if (yy < 0 || yy >= height) continue;
+                const wy = j === 0 ? 1 - fy : fy;
+                if (wy <= 0) continue;
+                for (let i = 0; i < 2; i++) {
+                    const xx = x0 + i;
+                    if (xx < 0 || xx >= width) continue;
+                    const wx = i === 0 ? 1 - fx : fx;
+                    if (wx <= 0) continue;
+                    const si = (yy * width + xx) * components;
+                    const alpha = hasAlpha ? src[si + 3] : 255;
+                    if (alpha === 0) continue;
+                    const wa = wx * wy * alpha;
+                    accA += wa;
+                    accR += src[si] * wa;
+                    accG += src[si + 1] * wa;
+                    accB += src[si + 2] * wa;
+                }
+            }
+            const di = (y * outW + x) * 4;
+            if (accA <= 0) continue; // 旋转矩形之外 ⇒ 保持全透明
+            let r = accR / accA;
+            let g = accG / accA;
+            let b = accB / accA;
+            if (gray) {
+                const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+                r = luma;
+                g = luma;
+                b = luma;
+            }
+            out[di] = Math.round(r);
+            out[di + 1] = Math.round(g);
+            out[di + 2] = Math.round(b);
+            out[di + 3] = accA > 255 ? 255 : Math.round(accA);
+        }
+    }
+
+    const png = encodePngRgba(out, outW, outH);
+    return { url: `data:image/png;base64,${bytesToBase64(png)}`, w: outW, h: outH };
+};
     //-------------------------------------------------------------------------------------------------
     // 定义图案面板上的核心选项参数
     const PatternPicker: React.FC<PatternPickerProps> = ({
@@ -125,6 +245,29 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
     
     // 添加preview wrapper的引用
     const previewWrapperRef = useRef<HTMLDivElement>(null);
+
+    // 预览区「容器实测像素尺寸」：预览图要按容器尺寸 × 缩放档位算出**显式像素尺寸**
+    // （旋转图的自然尺寸是「旋转外接矩形」、与原图不同，只有显式定尺寸才换算得准），
+    // 因此必须在挂载后量一次。面板每次打开都会重新挂载 ⇒ 依赖 isOpen 即可。
+    // useLayoutEffect（非 useEffect）：在首帧绘制前完成测量+回填，不闪。
+    const [previewSize, setPreviewSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+    useLayoutEffect(() => {
+        if (!isOpen) return;
+        const el = previewWrapperRef.current;
+        if (!el) return;
+        const w = Math.round(el.offsetWidth);
+        const h = Math.round(el.offsetHeight);
+        if (w > 0 && h > 0) setPreviewSize(prev => (prev.w === w && prev.h === h ? prev : { w, h }));
+    }, [isOpen, selectedPattern]);
+
+    // 选中图案预览图的「原始像素尺寸」。
+    // 缩略图与最终预览用的是同一个 URL（getPreviewUrl），所以直接复用缩略图 onLoad
+    // 捕获的 naturalWidth/Height：① 最终预览据此换算显示尺寸（保持与旧 <img>
+    // 的 max-width/max-height 语义一致）；② createPatternFromImage 据此建 PS 图案。
+    // ⚠️ 不再靠 document.querySelector('.pattern-final-preview') 读尺寸：改用本 ref
+    //    （最终预览挂的就是 <img>，但它在角度≠0 时换成旋转图、自然尺寸不同，
+    //      显式尺寸必须按「原图」算，故必须走 ref 缓存）。
+    const previewNaturalRef = useRef<Record<string, { w: number; h: number }>>({});
 
     // 实时更新功能：使用防抖机制避免频繁调用
     useEffect(() => {
@@ -625,6 +768,53 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
     // （原「灰度数据就绪后重建」effect 已并入上方统一入口：patternsGraySig 已涵盖
     //   「图案新带上了 grayData」这一变化，且不再把 grayPreviewUrls 放进依赖。）
 
+    // 最终预览的「按角度旋转图」——只在角度 ≠ 0 时生成，按 (图案|角度|灰度) 缓存。
+    // 拖拽/连续改角度时不生成（120ms 防抖，拖动中计时器不断被重置），松手后才跑一次
+    // 重采样 + PNG 编码（同步执行，但输出长边 ≤512 ⇒ 开销恒定有界）。
+    // 缓存值带上旋转图自身的像素尺寸 w/h：外接矩形随角度变化，渲染侧要按它算显式显示尺寸。
+    const [rotatedPreview, setRotatedPreview] = useState<{ pid: string; url: string; w: number; h: number } | null>(null);
+    const rotatedPreviewCacheRef = useRef<Map<string, { url: string; w: number; h: number }>>(new Map());
+    const rotatedPreviewSeqRef = useRef(0);
+    const previewAngleDeg = ((Math.round(angle) % 360) + 360) % 360;
+
+    useEffect(() => {
+        if (!isOpen) return;
+        const pattern = selectedPattern ? patterns.find(p => p.id === selectedPattern) : null;
+        if (!pattern || previewAngleDeg === 0) {
+            setRotatedPreview(null);
+            return;
+        }
+        const shouldShowGray = isClearMode || isInLayerMask || isInQuickMask || isInSingleColorChannel;
+        // ⚠️ 缓存键**不需要**带主题/底色：旋转图现在是真透明（alpha=0），与预览区底色无关。
+        //    旧实现把矩形外补成 --dark-bg-color，换主题又不失效，才出现「浅色主题下还是黑三角」。
+        const cacheKey = `${pattern.id}|${previewAngleDeg}|${shouldShowGray ? 'g' : 'c'}`;
+        const cached = rotatedPreviewCacheRef.current.get(cacheKey);
+        if (cached) {
+            setRotatedPreview({ pid: pattern.id, url: cached.url, w: cached.w, h: cached.h });
+            return;
+        }
+
+        const seq = ++rotatedPreviewSeqRef.current;
+        const timer = setTimeout(() => {
+            try {
+                const result = rotatePatternPreview(pattern, previewAngleDeg, shouldShowGray);
+                // 只认最后一次请求的结果，避免快速改角度时旧结果后到覆盖新结果
+                if (seq !== rotatedPreviewSeqRef.current || !result) return;
+                const cache = rotatedPreviewCacheRef.current;
+                if (cache.size >= 24) {
+                    const oldest = cache.keys().next().value;
+                    if (oldest !== undefined) cache.delete(oldest);
+                }
+                cache.set(cacheKey, result);
+                setRotatedPreview({ pid: pattern.id, url: result.url, w: result.w, h: result.h });
+            } catch (error) {
+                console.error('生成旋转预览失败:', pattern.name, error);
+            }
+        }, 120);
+
+        return () => clearTimeout(timer);
+    }, [isOpen, selectedPattern, previewAngleDeg, patterns, isClearMode, isInLayerMask, isInQuickMask, isInSingleColorChannel]);
+
     // 监听通道切换和快速蒙版切换事件
     useEffect(() => {
         if (!isOpen) return;
@@ -773,20 +963,13 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
         const docName = `Pattern_${Date.now()}`;
         const patternName = `Pattern_${Date.now()}`;
         
-        // 获取图片元素以读取实际尺寸
-        const imgElement = document.querySelector('.pattern-final-preview') as HTMLImageElement;
-        if (!imgElement || !imgElement.complete) {
-            console.error('❌ 图片元素未找到或未完全加载');
-            return;
-        }
-        
-        // 验证图片尺寸
-        if (!imgElement.naturalWidth || !imgElement.naturalHeight || 
-            imgElement.naturalWidth <= 0 || imgElement.naturalHeight <= 0) {
-            console.error('❌ 图片尺寸无效:', {
-                naturalWidth: imgElement.naturalWidth,
-                naturalHeight: imgElement.naturalHeight
-            });
+        // 读取预览图原始像素尺寸（由缩略图 onLoad 捕获；二者 URL 相同）。
+        // ⚠️ 原实现靠 querySelector('.pattern-final-preview') 读天然尺寸，但角度≠0 时
+        //    该元素挂的是「烘进像素的旋转图」（自然尺寸是降采样后的 ≤512），
+        //    只有 previewNaturalRef 记的才是图案真正的原始尺寸。
+        const nat = previewNaturalRef.current[selectedPatternData.id];
+        if (!nat || !nat.w || !nat.h) {
+            console.error('❌ 图案原始尺寸未知（预览图尚未加载完成）');
             return;
         }
         
@@ -807,8 +990,8 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
             //    「本插件自己的模态计数」，供 psRead 的直读分支判断（见 psAccess）。
             await runAsModal(async () => {
                 // 为了减少界面闪烁，使用较小的临时文档尺寸，后续会调整
-                const tempWidth = Math.min(imgElement.naturalWidth, 512);
-                const tempHeight = Math.min(imgElement.naturalHeight, 512);
+                const tempWidth = Math.min(nat.w, 512);
+                const tempHeight = Math.min(nat.h, 512);
                 
                 await action.batchPlay(
                     [
@@ -855,11 +1038,11 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
                             },
                             width: {
                                 _unit: "pixelsUnit",
-                                _value: imgElement.naturalWidth
+                                _value: nat.w
                             },
                             height: {
                                 _unit: "pixelsUnit",
-                                _value: imgElement.naturalHeight
+                                _value: nat.h
                             },
                             _options: {
                                 dialogOptions: "dontDisplay"
@@ -891,8 +1074,8 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
                 
                 
                 // 设置默认值
-                const defaultWidth = imgElement.naturalWidth;
-                const defaultHeight = imgElement.naturalHeight;
+                const defaultWidth = nat.w;
+                const defaultHeight = nat.h;
                 
                 try {
                     const activeDoc = app.activeDocument;
@@ -903,8 +1086,8 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
                     let options = {
                         "documentID": activeDoc.id,
                         "targetSize": {
-                            "height": imgElement.naturalHeight,
-                            "width": imgElement.naturalWidth
+                            "height": nat.h,
+                            "width": nat.w
                         },
                         "componentSize": 8,
                         "applyAlpha": false, // 设置为false以保留alpha通道，获取真正的RGBA数据
@@ -912,8 +1095,8 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
                         "bounds": {
                             "left": 0,
                             "top": 0,
-                            "right": imgElement.naturalWidth,
-                            "bottom": imgElement.naturalHeight
+                            "right": nat.w,
+                            "bottom": nat.h
                         }
                     };
 
@@ -1002,8 +1185,8 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
                 
                 
                 // 在释放前捕获原始尺寸，避免后续访问已释放的 imageData 导致错误
-                const capturedOriginalWidth = (pixelData && pixelData.imageData && typeof pixelData.imageData.width === 'number') ? pixelData.imageData.width : imgElement.naturalWidth;
-                const capturedOriginalHeight = (pixelData && pixelData.imageData && typeof pixelData.imageData.height === 'number') ? pixelData.imageData.height : imgElement.naturalHeight;
+                const capturedOriginalWidth = (pixelData && pixelData.imageData && typeof pixelData.imageData.width === 'number') ? pixelData.imageData.width : nat.w;
+                const capturedOriginalHeight = (pixelData && pixelData.imageData && typeof pixelData.imageData.height === 'number') ? pixelData.imageData.height : nat.h;
                 
                 // 释放图像数据以避免内存泄漏
                 if (pixelData && pixelData.imageData && pixelData.imageData.dispose) {
@@ -1618,6 +1801,13 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
                                 src={getPreviewUrl(pattern)}
                                 alt={pattern.name}
                                 onLoad={async (e) => {
+                                    // 先取值：React 合成事件在 handler 返回后 currentTarget 会被置空，
+                                    // await 之后再读会得到 null。
+                                    const nw = e.currentTarget.naturalWidth;
+                                    const nh = e.currentTarget.naturalHeight;
+                                    // 记录预览图原始像素尺寸（缩略图与最终预览用同一 URL），
+                                    // 供最终预览换算显示尺寸 + createPatternFromImage 建图案。
+                                    previewNaturalRef.current[pattern.id] = { w: nw, h: nh };
                                     setLoadedImages(prev => ({...prev, [pattern.id]: true}));
                                     
                                     if (selectedPattern === pattern.id && !pattern.patternName) {
@@ -1625,7 +1815,7 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
                                         if (patternName) {
                                             console.log('图案创建请求完成', {
                                                 patternName: patternName,
-                                                imageSize: `${img.naturalWidth}x${img.naturalHeight}`,
+                                                imageSize: `${nw}x${nh}`,
                                                 note: '灰度数据将在状态更新后可用'
                                             });
                                         }
@@ -1802,26 +1992,56 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
                         cursor: selectedPattern && previewZoom > 100 ? (isPreviewDragging ? 'grabbing' : 'grab') : 'default'
                     }}
                 >
-                    {selectedPattern ? (
-                        <>
-                            <img
-                                className="pattern-final-preview"
-                                src={patterns.find(p => p.id === selectedPattern) ? getPreviewUrl(patterns.find(p => p.id === selectedPattern)!) : ''}
-                                alt="Pattern Preview"
-                                style={{
-                                    maxWidth: `${previewZoom * (scale / 100)}%`,
-                                    maxHeight: `${previewZoom * (scale / 100)}%`,
-                                    transform: `translate(-50%, -50%) translate(${previewOffset.x}px, ${previewOffset.y}px) rotate(${angle}deg)`,
-                                    imageRendering: previewZoom > 400 ? 'pixelated' : 'auto'
-                                }}
-                            />
-                            {previewZoom > 100 && (
-                                <div className="zoom-indicator">
-                                    {previewZoom}%
-                                </div>
-                            )}
-                        </>
-                    ) : (
+                    {selectedPattern ? (() => {
+                        const pat = patterns.find(p => p.id === selectedPattern);
+                        if (!pat) return null;
+                        const nat = previewNaturalRef.current[pat.id];
+                        // 角度 ≠ 0 时显示「烘进像素的旋转图」（见 rotatePatternPreview）：
+                        // 自然尺寸是**旋转后矩形的外接矩形**，比原图大（45° 时 1.41 倍）。
+                        // 尚未生成/生成失败/无像素数据时退回原图，绝不空白。
+                        const rot = rotatedPreview && rotatedPreview.pid === pat.id ? rotatedPreview : null;
+                        const src = rot ? rot.url : getPreviewUrl(pat);
+                        const previewStyle: React.CSSProperties = {
+                            // ⚠️ 只保留 UXP 支持的 translate；rotate() 由像素承担（见 rotatePatternPreview）。
+                            transform: `translate(-50%, -50%) translate(${previewOffset.x}px, ${previewOffset.y}px)`,
+                            imageRendering: previewZoom > 400 ? 'pixelated' : 'auto'
+                        };
+                        // 显示尺寸 =「自然像素参考系」× 缩放系数，参考系分两种：
+                        //   未旋转 ⇒ 原图自然尺寸 nat（缩略图 onLoad 捕获）；
+                        //   已旋转 ⇒ 外接矩形换算回原图自然像素。
+                        //   ⚠️ 换算必须乘 k = 原图自然宽 / 数据宽：旋转图跑在 ≤512 的**重采样数据**上，
+                        //      不换算就会被当成 1:1 像素 ⇒ 显示尺寸突然放大好几倍。
+                        // 两者都按「容器内 contain 且不放大」取值（min(1, …)）：外接矩形比原图大
+                        // ⇒ 斜角下整体缩小以**完整展示**（不裁切），角度回到 0 时无缝接回原尺寸。
+                        // ⚠️ 必须显式给 px：旋转图自然尺寸与原图不同，退回 CSS 百分比会跳变。
+                        const natScale = (nat && nat.w > 0 && pat.width) ? nat.w / pat.width : 1;
+                        const refW = rot ? rot.w * natScale : (nat ? nat.w : 0);
+                        const refH = rot ? rot.h * natScale : (nat ? nat.h : 0);
+                        if (refW > 0 && refH > 0 && previewSize.w > 0 && previewSize.h > 0) {
+                            const factor = (previewZoom * (scale / 100)) / 100;
+                            const fit = Math.min(1, (previewSize.w * factor) / refW, (previewSize.h * factor) / refH);
+                            previewStyle.width = `${refW * fit}px`;
+                            previewStyle.height = `${refH * fit}px`;
+                        } else {
+                            previewStyle.maxWidth = `${previewZoom * (scale / 100)}%`;
+                            previewStyle.maxHeight = `${previewZoom * (scale / 100)}%`;
+                        }
+                        return (
+                            <>
+                                <img
+                                    className="pattern-final-preview"
+                                    src={src}
+                                    alt="Pattern Preview"
+                                    style={previewStyle}
+                                />
+                                {previewZoom > 100 && (
+                                    <div className="zoom-indicator">
+                                        {previewZoom}%
+                                    </div>
+                                )}
+                            </>
+                        );
+                    })() : (
                         <div className="final-preview-hint">
                             请选择一个图案预设
                         </div>

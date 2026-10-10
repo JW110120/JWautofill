@@ -68,7 +68,12 @@
   font-size: 11px;
 }
 
-/* pattern特殊的最终预览图：以容器中心为锚点定位（top/left 50% + transform 平移居中），需保留 */
+/* 图案最终预览：以容器中心为锚点定位（top/left 50% + transform 平移居中），需保留。
+   显示尺寸由 TSX 以内联 width/height 精确给定，自然尺寸参考系有两种：
+     未旋转 = 原图自然尺寸；已旋转 = 旋转外接矩形换算回原图尺度（见 PatternPicker）。
+   两者都取「容器内 contain 且不放大」⇒ 斜角下整体缩小以**完整展示**旋转后的图案
+   （外接矩形比原图大，硬套原尺寸就等于把四角裁掉、又变回「平行四边形」）。
+   ⚠️ 不要在这里写 width/height:100% —— 会盖掉 <img> 的自然尺寸语义。 */
 .pattern-final-preview {
   position: absolute;
   top: 50%;

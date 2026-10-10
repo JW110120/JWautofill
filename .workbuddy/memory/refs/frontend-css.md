@@ -135,3 +135,37 @@
   （`%`/`px`/`°` 字符宽不同 ⇒ 不定宽则单位右缘随内容漂移；16px 按最宽单位 `px` 的字身宽上限取）。
   ⚠️ 不要写 `.num-input-row:has(input[type="text"])`（`:has()` 静默失效）⇒ 更宽变体（渐变 `#RRGGBB`）
   走显式类 `.num-input-row-wide{width:62px}` 由 TSX 挂上。⚠️ `align-items: right` **不是合法值**、会被忽略 ⇒ 用 `center`。
+
+## ⛔ 三条「平台级不可能」——别再走第二次（2026-10-10 实测定论）
+- ⛔⛔⛔ **UXP 的 CSS transform 只实现 `scaleX/scaleY` + `translate` + `transform-origin`，没有 `rotate()`。**
+  依据：UXP Changelog v8.0.1（`CSSNextSupport`）新增能力清单只有这三项；Adobe 论坛官方回复
+  「Rotate a div 90 degrees… **Rotation is not currently supported**」。
+  ⇒ **加在任何元素上的 `rotate()` 都被静默忽略**（不只 `<img>`；加 `translate()` 定位却生效，
+  所以「图片位置对、只是不倾斜」正是这个组合的症状）。
+  需要倾斜只能**把旋转烘进像素**（本仓 `PatternPicker.tsx` 的 `rotatePatternPreview()`：
+  反向映射 **双线性 + 预乘 alpha** 重采样 → **输出取旋转矩形的外接矩形、矩形外 alpha=0**
+  → 自己编码 PNG（`src/utils/pngEncode.ts`）→ 普通 `<img>`）。
+  ⚠️ 推论：**不要把 `rotate()` 写进内联 style 后期待它生效**——会静默失效且无任何报错。
+- ⛔⛔ **UXP 的 SVG 渲染器只服务「简单图标」，`<svg><image href|xlink:href="data:…">` 不渲染。**
+  依据：官方 Known Issues「UXP's SVG renderer is targeted for simple icons and the like」；
+  本仓把图案预览从 `<img>` 改成 `<svg><image>` 后**预览整片空白**（实测）。
+  ⇒ 需要「按数据 URL 画一张图」时**一律用 `<img>`**，不要绕 SVG/`foreignObject`（后者必然不支持）。
+  另注：UXP 无 Canvas（官方 unsupported 清单），像素改写只能走 `imaging.*`。
+- ⛔⛔ **`imaging.encodeImageData` 只支持 JPEG**（官方类型定义原文：*With the current version of UXP you
+  must use jpeg/base64 encoding when assigning to an image element*）⇒ **JPEG 无 alpha ⇒ UXP 里「透明」
+  无法由该 API 表达**。「矩形外要透明」这类需求只有一条路：**自己编码 PNG**。
+  本仓 `src/utils/pngEncode.ts`：手写 IHDR/IDAT/IEND + CRC-32 + Adler-32，deflate 只发**存储块(BTYPE=00)**
+  （零依赖、零算法风险，膨胀 ~0.008%，数据量由调用方封顶 `MAX_ROTATED_PX`）；
+  `bytesToBase64` = 分块 `String.fromCharCode` + 一次 `btoa`（UXP **有** `btoa`）。
+  ⇒ 别再试 `format:'png'`；也别指望 Canvas（UXP 无）或 node 的 zlib（UXP 无）。
+
+## ⛔ 原生输入框的文字垂直位置：**只能移动盒子，padding 无效**
+- UXP 的 `input` 是**原生视图**，其文字绘制区**锚在控件盒上缘**、不按 CSS `line-height` 做行盒居中，
+  也**不随 `padding` 的内盒变化走**（`padding-top` 实测基本无效，只会「好一点点」）。
+- 实测数据（1× 截图，`.num-input-row` 行容器）：容器 y6..37（32px，几何中心 21.5），
+  12px 思源黑体的「100」墨迹 y15..23（中心 19）⇒ **偏上 2.5px**；
+  反推「墨迹顶 = 绘制区上缘 + 5.1px」⇒ 绘制区上缘必须落在容器 12px 处。
+- ✅ 正确杠杆 = **改 `input` 自身盒子**：`.num-input-row`(32px, `align-items:center`) 下，
+  `height: 24px → 20px` 让上下留白 4px→6px、盒顶 10→12px，墨迹即落回几何中心。
+  **统一规律：盒高每减 2px，文字下移 1px。** 微调就按这个 1px 步进走（同步改 `line-height` 保持一致）。
+- ⛔ 不要用 `line-height` 调（原生控件忽略）；不要再回到 `padding-top` 方案（已验证无效）。

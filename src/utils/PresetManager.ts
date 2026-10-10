@@ -448,29 +448,47 @@ export class PresetManager {
                     return;
                 }
 
-                // 备份现有文件（纯重命名，代价极低），随后单次覆盖写入最终文件。
-                // 已删除：临时文件二次写盘、对刚构建字符串的 JSON.parse「验证」、
-                // 全文读回 + 再 parse 的双重校验、最终文件存在性读取——
-                // 这些对十几 MB 的 JSON 各是一次全量 I/O，是保存卡顿的大头；
-                // 写入内容本身由 JSON.stringify 产出，必然可解析，无需读回校验。
+                // ⛔⛔ 必须「先写临时文件、再原子替换」，禁止直接 createFile(overwrite) 写正式文件。
+                //   2026-10-10 事故根因：createFile(final, {overwrite:true}) 会**先把正式文件截断成
+                //   0 字节**，然后才写内容。而图案预设动辄几十 MB（单张图案的 patternRgbDataBase64
+                //   实测可达 44MB），写入窗口长达数十秒；窗口内任何中断（最常见：UDT Reload
+                //   直接杀死 UXP 宿主）都会让正式文件永久停在 0 字节 ⇒ 加载侧 JSON.parse('') 失败
+                //   ⇒ 面板预设全部消失。而此时旧备份已在「替换前」被删除，数据再也回不来。
+                //   渐变预设（1~2KB、毫秒级写完）一直用的就是原子写入 —— 本函数此前漏了这层保护，
+                //   属实现不一致，现补齐。
+                // 语义：内容先完整落进 .tmp；只有 .tmp 写成功后才 moveTo 替换正式文件。
+                //   写 .tmp 失败 ⇒ 正式文件分毫未动，原始数据始终安全。
                 const finalFileName = this.PATTERN_PRESETS_FILE;
                 const backupFileName = `${this.PATTERN_PRESETS_FILE}.backup`;
+                const tempFileName = `${this.PATTERN_PRESETS_FILE}.tmp`;
+                const tempFile = await presetFolder.createFile(tempFileName, { overwrite: true });
+                await (tempFile as any).write(jsonData, { format: require('uxp').storage.formats.utf8 });
+
+                // 备份现有正式文件（先删旧备份再改名；任何一步中断都还剩一份完整数据）
                 try {
                     const existingFile = await presetFolder.getEntry(finalFileName);
                     if (existingFile) {
-                        // 删除旧备份（如果存在）
                         try {
                             const oldBackup = await presetFolder.getEntry(backupFileName);
                             await (oldBackup as any).delete();
-                        } catch (e) { /* 忽略备份文件不存在的错误 */ }
-                        // 创建备份
+                        } catch (e) { /* 旧备份不存在，忽略 */ }
                         await (existingFile as any).moveTo(presetFolder, backupFileName);
                     }
                 } catch (e) { /* 目标文件不存在，无需备份 */ }
 
-                // 直接写入最终文件（覆盖模式），避免 UXP moveTo 的 file exists 问题
-                const finalFile = await presetFolder.createFile(finalFileName, { overwrite: true });
-                await finalFile.write(jsonData, { format: require('uxp').storage.formats.utf8 });
+                // 原子替换：moveTo 因目标残留而失败时，先删目标再重试。
+                // ⚠️ 此处绝不回退到 createFile(overwrite)+write（那正是清零事故的来源）；
+                //    万一两步 moveTo 都失败，正式文件可能短暂缺失，但 .backup 是完整的，
+                //    加载侧的备份恢复分支会兜住，外层重试也会再走一遍本流程。
+                try {
+                    await (tempFile as any).moveTo(presetFolder, finalFileName);
+                } catch (_) {
+                    try {
+                        const maybeExisting = await presetFolder.getEntry(finalFileName);
+                        if (maybeExisting) { await (maybeExisting as any).delete(); }
+                    } catch (_) { /* 忽略 */ }
+                    await (tempFile as any).moveTo(presetFolder, finalFileName);
+                }
 
                 // 记录本次成功保存的内容
                 this.lastPatternJson = jsonData;

@@ -25,6 +25,22 @@
   推送用 `git -c credential.helper=wincred push`。dist/、analysis/、outputs/ 已 gitignore。
 - 前端改完须 UDT Reload；daemon 重编 SDK 8.0.424 在 `C:\Users\Administrator\.dotnet-sdk`（**永不删**）。
 
+## ⛔⛔ 文件落盘铁律：必须「临时文件 + moveTo 原子替换」（2026-10-10 丢数据事故定论）
+- ⛔ **禁止 `createFile(正式文件名, {overwrite:true})` 后直接 `write()`**：`overwrite:true` 会
+  **先把文件截断为 0 字节**再写内容。写入窗口内任何中断（**UDT Reload 会直接杀死 UXP 宿主**、
+  大文件写入数秒~数十秒、宿主异常）都会把正式文件**永久留在 0 字节** ⇒ 下次加载解析失败 ⇒ 数据全丢。
+- ✅ 正确顺序：① `createFile(name + '.tmp', {overwrite:true})` → `write()`；
+  ② 备份现有正式文件（先删旧 `.backup` 再 `moveTo` 成 `.backup`）；
+  ③ `tmpFile.moveTo(folder, 正式文件名)` 替换（失败时先删目标再重试）。
+  ⇒ 写 tmp 失败时正式文件**分毫未动**；任何时刻磁盘上至少有一份完整数据。
+- ⛔ **绝不回退到 `createFile(overwrite)+write`**（那正是清零来源）。宁可让外层重试 + `.backup` 兜底。
+- 加载侧必须配「主文件为空/解析失败 → 读 `.backup` → 成功则原样写回主文件」的分支
+  （`PresetManager.loadPatternPresets` 已有；注意写回时**原样写字符串**，不要走 save 重新序列化，
+  否则会丢掉仅存于文件里的 base64 字段）。
+- 参考实现：`PresetManager.saveGradientPresets`（一直是对的）；`savePatternPresets` 曾漏掉此保护。
+- ⚠️ **教训**：同一 `PresetManager` 里两条保存路径实现不一致时，小数据那条的健壮性会**掩盖**
+  大数据那条的缺陷（渐变 1~2KB 毫秒写完，从未出事 ⇒ 无人察觉 pattern 路径缺原子写入）。
+
 ## 构建 / 类型检查
 - 构建 `node node_modules/webpack/bin/webpack.js --mode=production`（或 `yarn build`）。
   ⚠️ `transpileOnly:true` ⇒ 只转译不做类型检查，漏加接口字段/漏转发**不报错、只静默失效**。
