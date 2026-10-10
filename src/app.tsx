@@ -515,7 +515,8 @@ class App extends React.Component<AppProps, AppState> {
             },
             onToggleCompactMode: () => { this.toggleCompactMode(); },
             onSetMainHotkey: () => { void this.setMainHotkey(); },
-            onShowVisibilityPanel: () => { this.openVisibilityPanel(); }
+            onShowVisibilityPanel: () => { this.openVisibilityPanel(); },
+            onOpenFillSettings: () => { this.openFillSettingsPanel(); }
         });
         this.selectionChangeListener = (eventName, descriptor) => {
             // ⚠️ 事件到达瞬间先打忙碌标记（回调内唯一允许做的事，不碰 DOM）：
@@ -799,6 +800,7 @@ class App extends React.Component<AppProps, AppState> {
         document.body.classList.remove('secondary-panel-open');
         document.body.classList.remove('license-dialog-open');
         document.body.classList.remove('app-visibility-panel-open');
+        document.body.classList.remove('app-fill-settings-open');
     }
 
     handleButtonClick() {
@@ -914,6 +916,23 @@ class App extends React.Component<AppProps, AppState> {
     closeVisibilityPanel() {
         document.body.classList.remove('app-visibility-panel-open');
         this.setState({ showVisibilityPanel: false });
+    }
+
+    /**
+     * 打开「填充设置」浮窗（承载原面板底部的四个 checkbox）。
+     * 与「隐藏/显示分区」浮窗同一套机制：浮窗打开时收起本面板滚动条 + 隐藏背后
+     * number 输入，避免浮窗被滚动条压住、以及遮挡下仍可点穿。
+     * ⚠️ 类名沿用「按面板分开」的约定（app-fill-settings-open），与工具箱区分开：
+     *    两块面板共用同一个 document.body，同名类会互相串扰（见 common.css 浮窗区）。
+     */
+    openFillSettingsPanel() {
+        document.body.classList.add('app-fill-settings-open');
+        this.setState({ isFillSettingsOpen: true });
+    }
+
+    closeFillSettingsPanel() {
+        document.body.classList.remove('app-fill-settings-open');
+        this.setState({ isFillSettingsOpen: false });
     }
 
     /** 切换某个分区的可见性（选区改造 / 填充选项） */
@@ -2824,12 +2843,131 @@ title={helpTexts.selectionFill.clearMode}>
                                 </div>
                             </>
                         )}
+                    </div>
+                    )}
 
-                        {/* 底部 checkbox 组与上方开关行之间的分割线。
-                            ⚠️ 紧凑模式下上方没有这三行开关，紧凑模式自己的纵向节奏见 app.css；
-                               此处的 divider 在紧凑模式下被 `display:none` 隐藏（仍在文档流）。 */}
-                        <div className="divider"></div>
-                        <div className="row-between row-grid row-grid-flush">
+                </div>
+                )}
+
+            </div>
+
+            {/* 颜色设置面板 */}
+            <ColorSettingsPanel 
+                isOpen={this.state?.isColorSettingsOpen ?? false} 
+                onClose={this.closeColorSettings} 
+                onSave={this.handleColorSettingsSave} 
+                initialSettings={this.state?.colorSettings ?? {
+                    hueVariation: 0,
+                    saturationVariation: 0,
+                    brightnessVariation: 0,
+                    opacityVariation: 0,
+                    grayVariation: 0,
+                    calculationMode: 'absolute'
+                }}
+                isClearMode={this.state.clearMode}
+                isQuickMaskMode={false}
+                resetToken={this.state.resetToken}
+            />
+
+            {/* 图案选择器 */}
+            <PatternPicker 
+                isOpen={this.state?.isPatternPickerOpen ?? false} 
+                onClose={this.closePatternPicker} 
+                onSelect={this.handlePatternSelect} 
+                isClearMode={this.state.clearMode}
+                resetToken={this.state.resetToken}
+            />
+
+            {/* 渐变选择器 */}
+            <GradientPicker 
+                isOpen={this.state?.isGradientPickerOpen ?? false}    
+                onClose={this.closeGradientPicker} 
+                onSelect={this.handleGradientSelect} 
+                isClearMode={this.state.clearMode}
+                resetToken={this.state.resetToken}
+            />
+
+                {/* 描边设置面板 */}
+            <StrokeSetting
+              isOpen={this.state.isStrokeSettingOpen ?? false}
+              width={this.state.strokeWidth}
+              position={this.state.strokePosition}
+              blendMode={this.state.strokeBlendMode}
+              opacity={this.state.strokeOpacity}
+              clearMode={this.state.clearMode}
+              onWidthChange={(width) => this.setState({ strokeWidth: width })}
+              onPositionChange={(position) => this.setState({ strokePosition: position })}
+              onBlendModeChange={(blendMode) => this.setState({ strokeBlendMode: blendMode })}
+              onOpacityChange={(opacity) => this.setState({ strokeOpacity: opacity })}
+              onClose={this.closeStrokeSetting}
+            />
+
+                {/* 清除设置面板（结构与描边设置同构） */}
+            <ClearSetting
+              isOpen={this.state.isClearSettingOpen ?? false}
+              backgroundAlgorithm={this.state.clearBackgroundAlgorithm}
+              channelAlgorithm={this.state.clearChannelAlgorithm}
+              layerAlgorithm={this.state.clearLayerAlgorithm}
+              onBackgroundAlgorithmChange={(v) => this.setState({ clearBackgroundAlgorithm: v })}
+              onChannelAlgorithmChange={(v) => this.setState({ clearChannelAlgorithm: v })}
+              onLayerAlgorithmChange={(v) => this.setState({ clearLayerAlgorithm: v })}
+              onClose={this.closeClearSetting}
+            />
+            </div>
+
+            {/* 页脚版权条：常驻面板最下方、不参与 `.panel` 滚动 ⇒ 始终可见
+                （与绘画工具箱「功能快捷键」的 notify 同一套「滚动区 + 常驻底栏」模型）。
+                ⚠️ 必须在 `.panel` 之外（与滚动容器同级）：留在滚动内容里就会随内容滚走。
+                背景在 app.css 的 .panel-footer 里显式取 var(--bg-color)，四套主题各自覆盖。 */}
+            <div className="panel-footer">
+                <span className="copyright">Copyright © listen2me (JW)</span>
+            </div>
+
+            {/* 授权对话框 / 隐藏-显示分区浮窗：
+                ⚠️ 必须挂在 `.panel` 滚动容器之外（渲染在 `.app-root` 层）。
+                   两者都是 position: fixed 的全屏遮罩，若留在滚动容器内部，
+                   面板滚动条会压在窗口右缘之上（UXP 下 fixed 的包含块不扣滚动条宽）。 */}
+            <LicenseDialog
+                isOpen={this.state.isLicenseDialogOpen}
+                isLicensed={this.state.isLicensed}
+                isTrial={this.state.isTrial}
+                trialDaysRemaining={this.state.trialDaysRemaining}
+                onLicenseVerified={this.handleLicenseVerified}
+                onTrialStarted={this.handleTrialStarted}
+                onClose={this.closeLicenseDialog}
+            />
+            {this.state.showVisibilityPanel && (
+                <div className="float-overlay" onClick={() => this.closeVisibilityPanel()}>
+                    <div className="float-window" onClick={(e) => e.stopPropagation()}>
+                        <div className="row-between">
+                            <span className="subpanel-title-1">隐藏/显示分区</span>
+                            <div role="button" tabIndex={0} className="close-button" onClick={() => this.closeVisibilityPanel()}>×</div>
+                        </div>
+                        <div className="panel-section">
+                            <div className="row-between">
+                                <span className="label-4" onClick={() => this.toggleSectionVisibility('selectionOptions')}>选区改造</span>
+                                <ToggleSwitch checked={this.state.selectionOptionsVisible} onChange={() => this.toggleSectionVisibility('selectionOptions')}  />
+                            </div>
+                            <div className="row-between">
+                                <span className="label-4" onClick={() => this.toggleSectionVisibility('fillOptions')}>填充选项</span>
+                                <ToggleSwitch checked={this.state.fillOptionsVisible} onChange={() => this.toggleSectionVisibility('fillOptions')}  />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {/* 填充设置浮窗：承载原面板底部的四个 checkbox。
+                与「隐藏/显示分区」浮窗同一套外壳（.float-overlay + .float-window），
+                内容沿用原两列网格（.row-between.row-grid.row-grid-flush）以保持视觉连续。 */}
+            {this.state.isFillSettingsOpen && (
+                <div className="float-overlay" onClick={() => this.closeFillSettingsPanel()}>
+                    <div className="float-window" onClick={(e) => e.stopPropagation()}>
+                        <div className="row-between">
+                            <span className="subpanel-title-1">填充设置</span>
+                            <div role="button" tabIndex={0} className="close-button" onClick={() => this.closeFillSettingsPanel()}>×</div>
+                        </div>
+                        <div className="panel-section">
+                            <div className="row-between row-grid row-grid-flush">
                                 {/* 左列：取消选区 / 更新历史源 */}
                                 <div className="grid-cell">
                                     <div className="row-start">
@@ -2908,116 +3046,6 @@ title={helpTexts.selectionFill.clearMode}>
                                         />
                                     </div>
                                 </div>
-                        </div>
-                    </div>
-                    )}
-
-                {/* info 条：滚动内容的最后一个元素（不再固定在面板底部），
-                    滚到底才出现；父/子容器因此都铺满 100%，不再给底部留 20px。
-                    ⚠️ 挂 .panel-footer 以便紧凑模式整块隐藏（只藏版权文字会留下
-                    该分区 15px 的下外边距，底部凭空多出一段空白）。 */}
-                </div>
-                )}
-
-                <div className="panel-section panel-footer">
-                    <div className="divider"></div>
-                    <span className="copyright">Copyright © listen2me (JW)</span>
-                </div>
-
-            </div>
-
-            {/* 颜色设置面板 */}
-            <ColorSettingsPanel 
-                isOpen={this.state?.isColorSettingsOpen ?? false} 
-                onClose={this.closeColorSettings} 
-                onSave={this.handleColorSettingsSave} 
-                initialSettings={this.state?.colorSettings ?? {
-                    hueVariation: 0,
-                    saturationVariation: 0,
-                    brightnessVariation: 0,
-                    opacityVariation: 0,
-                    grayVariation: 0,
-                    calculationMode: 'absolute'
-                }}
-                isClearMode={this.state.clearMode}
-                isQuickMaskMode={false}
-                resetToken={this.state.resetToken}
-            />
-
-            {/* 图案选择器 */}
-            <PatternPicker 
-                isOpen={this.state?.isPatternPickerOpen ?? false} 
-                onClose={this.closePatternPicker} 
-                onSelect={this.handlePatternSelect} 
-                isClearMode={this.state.clearMode}
-                resetToken={this.state.resetToken}
-            />
-
-            {/* 渐变选择器 */}
-            <GradientPicker 
-                isOpen={this.state?.isGradientPickerOpen ?? false}    
-                onClose={this.closeGradientPicker} 
-                onSelect={this.handleGradientSelect} 
-                isClearMode={this.state.clearMode}
-                resetToken={this.state.resetToken}
-            />
-
-                {/* 描边设置面板 */}
-            <StrokeSetting
-              isOpen={this.state.isStrokeSettingOpen ?? false}
-              width={this.state.strokeWidth}
-              position={this.state.strokePosition}
-              blendMode={this.state.strokeBlendMode}
-              opacity={this.state.strokeOpacity}
-              clearMode={this.state.clearMode}
-              onWidthChange={(width) => this.setState({ strokeWidth: width })}
-              onPositionChange={(position) => this.setState({ strokePosition: position })}
-              onBlendModeChange={(blendMode) => this.setState({ strokeBlendMode: blendMode })}
-              onOpacityChange={(opacity) => this.setState({ strokeOpacity: opacity })}
-              onClose={this.closeStrokeSetting}
-            />
-
-                {/* 清除设置面板（结构与描边设置同构） */}
-            <ClearSetting
-              isOpen={this.state.isClearSettingOpen ?? false}
-              backgroundAlgorithm={this.state.clearBackgroundAlgorithm}
-              channelAlgorithm={this.state.clearChannelAlgorithm}
-              layerAlgorithm={this.state.clearLayerAlgorithm}
-              onBackgroundAlgorithmChange={(v) => this.setState({ clearBackgroundAlgorithm: v })}
-              onChannelAlgorithmChange={(v) => this.setState({ clearChannelAlgorithm: v })}
-              onLayerAlgorithmChange={(v) => this.setState({ clearLayerAlgorithm: v })}
-              onClose={this.closeClearSetting}
-            />
-            </div>
-
-            {/* 授权对话框 / 隐藏-显示分区浮窗：
-                ⚠️ 必须挂在 `.panel` 滚动容器之外（渲染在 `.app-root` 层）。
-                   两者都是 position: fixed 的全屏遮罩，若留在滚动容器内部，
-                   面板滚动条会压在窗口右缘之上（UXP 下 fixed 的包含块不扣滚动条宽）。 */}
-            <LicenseDialog
-                isOpen={this.state.isLicenseDialogOpen}
-                isLicensed={this.state.isLicensed}
-                isTrial={this.state.isTrial}
-                trialDaysRemaining={this.state.trialDaysRemaining}
-                onLicenseVerified={this.handleLicenseVerified}
-                onTrialStarted={this.handleTrialStarted}
-                onClose={this.closeLicenseDialog}
-            />
-            {this.state.showVisibilityPanel && (
-                <div className="float-overlay" onClick={() => this.closeVisibilityPanel()}>
-                    <div className="float-window" onClick={(e) => e.stopPropagation()}>
-                        <div className="row-between">
-                            <span className="subpanel-title-1">隐藏/显示分区</span>
-                            <div role="button" tabIndex={0} className="close-button" onClick={() => this.closeVisibilityPanel()}>×</div>
-                        </div>
-                        <div className="panel-section">
-                            <div className="row-between">
-                                <span className="label-4" onClick={() => this.toggleSectionVisibility('selectionOptions')}>选区改造</span>
-                                <ToggleSwitch checked={this.state.selectionOptionsVisible} onChange={() => this.toggleSectionVisibility('selectionOptions')}  />
-                            </div>
-                            <div className="row-between">
-                                <span className="label-4" onClick={() => this.toggleSectionVisibility('fillOptions')}>填充选项</span>
-                                <ToggleSwitch checked={this.state.fillOptionsVisible} onChange={() => this.toggleSectionVisibility('fillOptions')}  />
                             </div>
                         </div>
                     </div>

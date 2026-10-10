@@ -13,17 +13,48 @@
 @import './input-fix.css';
 
 /* app父面板根容器（index.tsx 中 #app 内的包裹层）。
-   position: relative 供浮动窗口定位：3 个浮窗（激活 / 隐藏显示分区）已移到
-   `.panel` 滚动容器之外挂在本层，避免被滚动条压住。 */
+   position: relative 供浮动窗口定位：浮窗（激活 / 隐藏显示分区 / 填充设置）已移到
+   `.panel` 滚动容器之外挂在本层，避免被滚动条压住。
+
+   纵向 flex：滚动区（.panel）吃掉剩余高度并自身滚动，底部版权条（.panel-footer）
+   钉在最下方 —— 与绘画工具箱「功能快捷键」的 notify 同一套「滚动区 + 常驻底栏」模型。 */
 .app-root {
   width: 100%;
   height: 100%;
-  display: block;
+  display: flex;
+  flex-direction: column;
   position: relative;
   background-color: var(--bg-color);
 }
 
-/* ⚠️ 必要！！！次级面板打开时禁止主面板滚动：去掉后会看到父面板下方的 checkbox 区域。 */
+/* 主面板滚动容器：在 .app-root 的纵向 flex 里吃满剩余高度（自身仍是滚动容器）。
+   ⚠️ height: auto 覆盖 common.css 的 `.panel{height:100%}`：flex 主尺寸由 flex-basis/grow
+      决定，写死 100% 会与 flex 计算打架。
+   ⚠️ min-height: 0 缺不得：否则「自动最小尺寸 = 内容高」会把容器顶高，底部版权条被挤出可视区。 */
+#app .app-root > .panel {
+  flex: 1 1 0%;
+  height: auto;
+  min-height: 0;
+}
+
+/* 页脚版权条：钉在 .app-root 最下方、不参与 .panel 滚动 ⇒ 始终可见。
+   背景显式取 --bg-color（darkest / dark / light / lightest 四套主题各自覆盖），
+   与 .panel / .app-root 同色，滚动内容与底栏之间不出现色差条。
+   ⚠️ 必须显式 flex 列：`.copyright` 是 inline <span>，靠 flex item 的块化才能吃到
+      自身的 width:100% / text-align:center（原先是 .panel-section 提供的 flex 列，
+      移出后若不补，版权文字会变成左对齐）。 */
+.panel-footer {
+  flex: none;
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  background-color: var(--bg-color);
+}
+
+/* ⚠️ 必要！！！次级面板（纯色/图案/渐变/描边/清除，absolute 铺满）打开时禁止主面板滚动：
+   去掉后浮层背后仍可滚动，且原生 number 输入会穿透到浮层之上。 */
 body.secondary-panel-open #app .app-root > .panel {
   overflow-y: hidden;
 }
@@ -133,12 +164,13 @@ body.secondary-panel-open #app .app-root > .panel {
       描边 / 清除，共 5 个子面板。菜单项只作用于「当前面板」，文案形如「紧凑模式：图案·关」。
 
    每个作用域只隐藏自己那一层的装饰，绝不越界到别层：
-   - .main-title / .panel-footer 只有父面板有（子面板的标题栏是 .subpanel-title-1，带关闭按钮，不能隐藏）；
+   - .main-title 只有父面板有（子面板的标题栏是 .subpanel-title-1，带关闭按钮，不能隐藏）；
+     ⚠️ .panel-footer（版权条）不再随紧凑模式隐藏：它已移出滚动容器、常驻面板最下方
+        （见本文件顶部 .app-root / .panel-footer 注释），两种模式都保持可见。
    - .divider 用「直接子节点链」限定作用域：父面板的分隔线在 #app .app-root > .panel > .panel-section 内；
      5 个子面板是 .panel-section 的同级 .panel（absolute 覆盖），靠各自的 .subpanel-* 类名识别。
    ========================================================================== */
 body.compact-app #app .main-title,
-body.compact-app #app .panel-footer,
 body.compact-app #app .app-root > .panel > .panel-section .divider {
   display: none;
 }
@@ -152,19 +184,6 @@ body.compact-clear #app .subpanel-clear .divider {
   display: none;
 }
 
-/* 父面板隐藏 divider 后「清除模式」行与后续行之间的间距补偿。
-   ⚠️ 2026-10-06：原注释按「原生 sp-switch 盒高 32px 与分区首行标签盒 22px 的差的一半 = 5px」
-      换算。开关换成自绘 .toggle-switch（占位盒高 24px）后该行盒降为 24px，
-      理论差值变为 (24−22)/2 = 1px；但**保留 5px 不调**：
-      分区间距属观感参数、且 15px=10+5 是既有版式基准，调成 11px 会让全插件分区节奏突变。
-      此处只更新注释以免后人按过期算式误改。后续若要精确对齐，再连同全插件分区节奏一起调。
-   ⚠️ divider 虽被 display: none 隐藏，仍在文档流里，相邻兄弟选择器照常命中。
-   ⚠️ 只作用于主面板滚动区内的分区：子面板里 divider 后的分区首元素是自带 10px 上外边距的 .row-between，
-      不适用本条换算，不能一并套用。 */
-body.compact-app #app .app-root > .panel > .panel-section .divider + .panel-section {
-  margin-top: 15px;
-}
-
 /* 「填充模式」分区已提到「填充选项」内容区首位（2026-10-07）：它是主决策项，
    应先于三个执行期开关出现。它下方紧跟紧凑模式的两行网格（新建图层/清除模式、
    描边模式），原来的「网格之后才是 panel-section」相邻关系已反转，
@@ -176,16 +195,11 @@ body.compact-app #app .app-root > .panel > .panel-section .divider + .panel-sect
 
    ⚠️⚠️ 2026-10-07 第二轮：用户反馈「填充选项里每行的间距都偏小」，要求整体 +3px。
       本区行距原为**统一 10px**（截图量算：行盒 24 + 行距 10 = pitch 34px，与代码一致），
-      本轮把 4 处行距一律提到 **13px**。⚠️ 必须**同时**改，只改一两处会露出
-      「有的 13 有的 10」的错档，看起来像随手改的：
+      本轮把行距一律提到 **13px**。现在只剩两处网格行距需要管（原「网格 → 复选框组」
+      与其内部行距两处随复选框组迁到「填充设置」浮窗而删除）：
         ① radio 行 → 网格第 1 行     ：`.fill-mode-section + .row-grid` 的 margin-top（13px）
         ② 网格第 1 行 → 网格第 2 行   ：网格第 1 行的 margin-bottom（13px；
                                        第 2 行的 margin-top 已被 `.row-grid + .row-grid` 归零）
-        ③ 网格第 2 行 → 复选框组      ：`.row-grid-fit` 下边距 **8px** + 复选框组首行 5px = 13px
-        ④ 复选框组内部相邻两行        ：逐行 5px 下边距 + 「第 2 行起」8px 上外边距 = 13px
-      ⚠️ ④ 特意**不动首行的 5px 上外边距**（它是 ③ 的另一半）与**末行的 5px 下外边距**
-        （那是本区到面板底部的呼吸），只给「第 2 行起」补 8px 上外边距 ⇒
-        组内两行 13px，而「组 → 面板底」仍与改动前一致。
       ⚠️ 整组只用 `body.compact-app` + 主面板滚动区链限定，**不动 common.css 的通用 10px 档**：
         图案 / 渐变 / 颜色面板的网格节奏是各自校准过的，不能连坐。 */
 
@@ -240,44 +254,11 @@ body.compact-app #app .app-root > .panel > .panel-section .fill-mode-section + .
   margin-bottom: 13px;
 }
 
-/* 描边模式行（.row-grid-fit，紧凑模式网格的最后一行）的下外边距。
-   ⚠️ 2026-10-07 四轮调整记录（同一处反复，务必看完整历史再改）：
-      ① 原为 `0`   —— 理由是「其后紧跟 divider，不归零会叠 20px」。
-         但 divider 在紧凑模式下是 `display:none`、**不占任何空间** ⇒ 归零让
-         「描边模式」直接贴住「自动删选区」（用户反馈"间距明显偏小"）。
-      ② 改为 `10px` —— 用户反馈"间距偏大"（上方复选框组两行之间才是 5px+5px，
-         这里给到 10px 明显比其它行距松）。
-      ③ 曾为 `5px`  —— 与下方复选框组内部的行距（`.row-grid-flush .row-start{margin:5px 0}`）
-         **同档**：checkbox 组两行之间也是 5px+5px 叠出 10px 视觉间隔，
-         这里单侧给 5px + 组内首行的 5px = 10px 视觉间隔，两段节奏一致。
-      ④ 现为 `8px`  —— 用户要求「填充选项每行间距整体 +3px」（10px → 13px）。
-         本条只给到 8px 而非 13px：因为组内首行**还有** 5px 上外边距（见下方注释），
-         8 + 5 = 13px，与 ①② 两处 13px 严格同档。
-   ⚠️ UXP 下 .panel-section 是 flex 列容器、相邻子项外边距**不折叠** ⇒ 两条相加即最终行距。
-   ⚠️ 下方 checkbox 组自带 `.row-grid-flush{margin:0}`，其首行 `.row-start` 有 5px 上外边距，
-      本条的 8px 与它相加 ⇒ 「描边模式 ↔ 自动删选区」= 13px，与其它行距同档。 */
-body.compact-app #app .app-root > .panel > .panel-section .row-grid-fit {
-  margin-bottom: 8px;
-}
-
 /* 紧凑模式下两行两列网格之间（「新建图层/清除模式」行 → 「描边模式」行）：
    第二行上外边距归零，间距只由第一行的下外边距提供（现为 13px，见上方 ②）。
    ⚠️ 两行各自带外边距在 flex 场景下会叠成双倍，视觉明显偏大 —— 所以只保留一侧。 */
 body.compact-app #app .app-root > .panel > .panel-section .row-grid + .row-grid {
   margin-top: 0;
-}
-
-/* ④ 紧凑模式复选框组**内部**相邻两行的行距（用户要求整体 +3px：10px → 13px）。
-   ⚠️ 只加在「第 2 行起」（相邻兄弟选择器天然排除首行与末行），是刻意的：
-      · 首行不动 ⇒ 它与上方 `.row-grid-fit` 的 8px 下边距合成 ③ 的 13px（5 + 8）；
-      · 末行不动 ⇒ 本区到面板底部的 5px 呼吸保持不变（用户没要求改这一处）；
-      · 组内两行 = 首行 5px 下边距 + 第 2 行 8px 上外边距 = 13px。
-   ⚠️ 必须用相邻兄弟 `+`：UXP 对 `:has()` 静默失效，`:not()` 支持性未验证，
-      而 `+` 是本仓已在 `.radio-vertical .radio-option + .radio-option` 验证过的可靠写法。
-   ⚠️ 通用档（common.css 的 `.row-grid-flush .row-start{margin:5px 0}`）保持 5px 不动 ——
-      本条的「1 id + 5 class + 3 element」特异性远高于它，不会与图案/渐变面板互相污染。 */
-body.compact-app #app .app-root > .panel > .panel-section .row-grid-flush .row-start + .row-start {
-  margin-top: 8px;
 }
 
 /* 网格行内的开关（紧凑填充选项）。
@@ -291,8 +272,7 @@ body.compact-app #app .app-root > .panel > .panel-section .row-grid-flush .row-s
 
 /* 描边模式行右侧的「色板 + 齿轮」槽彻底不参与行高。
    ⚠️ 齿轮按钮盒 24px，比左侧「标签 + 开关」决定的 22px 行高多出 2px ——
-      描边开关一开一关，该行就从 22px 跳到 24px，本行下方的三列 radio 与复选框首行
-      都会跟着轻微跳动。
+      描边开关一开一关，该行就从 22px 跳到 24px，整段分区高度跟着抖。
       上一版用对称负外边距只做到「让盒溢出」，行高仍随内容出现与否变化；这里改成把
       内容摘出文档流：右列只当定位上下文、高度恒为 0，行高完全由左列决定，
       开关前后行高一模一样。 */

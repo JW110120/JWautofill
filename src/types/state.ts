@@ -167,6 +167,7 @@ export interface AppState {
      selectionOptionsVisible: boolean;
      fillOptionsVisible: boolean;
      showVisibilityPanel: boolean;  // 隐藏/显示分区浮窗是否打开
+    isFillSettingsOpen: boolean;  // 填充设置浮窗是否打开（承载原面板底部的四个 checkbox）
     // 参数复位信号（自增计数）：描边子面板的参数由父面板 state 直接驱动，
     // 而纯色/图案/渐变三个子面板的参数活在各自的组件内部 state 里，
     // 父面板复位时它们无从得知 ⇒ 用这个自增信号通知它们「复位了，请回到默认值」。
@@ -241,6 +242,7 @@ export const initialState: AppState = {
     selectionOptionsVisible: true,
     fillOptionsVisible: true,
     showVisibilityPanel: false,
+    isFillSettingsOpen: false,
     resetToken: 0,
     // 新增：许可证默认状态
     isLicensed: false,

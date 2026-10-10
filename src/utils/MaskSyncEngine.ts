@@ -170,7 +170,7 @@ const SYNC_MIN_INTERVAL_MS = 150; // 同一任务两次同步的最小间隔（�
  * PS 忙碌窗口守卫时长（毫秒）。
  *
  * PS 的通知在命令执行【中途】派发，此时读文档（app.activeDocument / doc.layers /
- * layer.name）会向宿主发get 并被拒绝 → 宿主弹「易修: 命令"获取"当前不可用」。
+ * layer.name）会向宿主发get 并被拒绝 → 宿主弹「悦绘: 命令"获取"当前不可用」。
  * 该原生弹框绕过 JS try/catch 与 _options.dialogOptions，**唯一有效防护是不发 get**。
  * 快速连续删除时事件密集（delete + set 交替），200ms 静默期常被后续事件打断，
  * 探测会反复落在忙碌窗口内；这里取 300ms 覆盖「连续操作后停手」的实际节奏。
@@ -1195,7 +1195,7 @@ export class MaskSyncEngine {
       }
       // ⚠️ 回调内禁止同步读取文档（refreshActiveDoc 会读 app.activeDocument 与
       // d.name，各是一次宿主 get）。PS 通知在命令执行【中途】派发，此刻文档正忙，
-      // 此时 get 会被宿主拒绝并弹出「易修: 命令"获取"当前不可用」原生框——
+      // 此时 get 会被宿主拒绝并弹出「悦绘: 命令"获取"当前不可用」原生框——
       // 该弹框绕过 JS try/catch 与 dialogOptions，唯一有效防护是「不发 get」。
       // 故此处只做纯字符串判断（读事件名不碰文档），实际读取全部推迟到同步回调内。
       const evt = typeof event === 'string' ? event : (event as any)?.eventName || '';
@@ -1238,7 +1238,7 @@ export class MaskSyncEngine {
       // ⚠️ 忙碌闸门必须放在**定时器最开头**：下面 checkDocFirst 分支的
       // refreshActiveDoc() 会读 app.activeDocument + doc.name（两次宿主 get），
       // 而它不受 doTimedSync 的守卫保护。切文档时事件后 200ms PS 往往仍在切换，
-      // 无守卫地读就会弹「易修: 命令"获取"当前不可用」。忙碌则整轮顺延。
+      // 无守卫地读就会弹「悦绘: 命令"获取"当前不可用」。忙碌则整轮顺延。
       if (isPsBusy()) {
         this.scheduleSync(SYNC_DEBOUNCE_MS, checkDocFirst);
         return;

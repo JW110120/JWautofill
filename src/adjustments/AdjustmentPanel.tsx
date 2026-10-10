@@ -60,7 +60,7 @@ const formatFailMsg = (prefix: string, raw: string): string =>
  * 为什么是300 而不是原来的 80/120/200：
  * PS 的通知在命令执行【中途】派发，文档此刻处于忙碌状态，此时任何 DOM 读取
  * （app.activeDocument / doc.layers / layer.name）都会向宿主发 get 并被拒绝，
- * 宿主直接弹「易修: 命令"获取"当前不可用」——该原生弹框绕过 JS try/catch 与
+ * 宿主直接弹「悦绘: 命令"获取"当前不可用」——该原生弹框绕过 JS try/catch 与
  * _options.dialogOptions，**唯一有效防护是不发出 get**。
  * 快速连续删除时事件密集，200ms 静默期常被后续事件打断 ⇒ 探测反复落在忙碌窗口；
  * 300ms 更契合"用户连续操作后停手"的实际节奏。
@@ -650,7 +650,7 @@ useEffect(() => {
     // ⚠️ 回调内【禁止】任何同步 DOM 读取（app.activeDocument / doc.layers /
     // 图层树快照都会逐层向宿主发 get）。PS 的通知在命令执行【中途】
     // 派发，此刻文档正忙；一旦在此刻 get，宿主直接弹
-    // 「易修: 命令"获取"当前不可用」——该弹框绕过 JS try/catch 与 dialogOptions，
+    // 「悦绘: 命令"获取"当前不可用」——该弹框绕过 JS try/catch 与 dialogOptions，
     // 唯一有效防护是「不发 get」。原实现在此同步读 activeDocument + 遍历整棵图层树
     // 做签名对比，是本弹框的首要来源。事件类型判断不需读文档，可安全留在回调内。
     // ⚠️ 必须先于 handleNotification 定义：const 存在暂存区，

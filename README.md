@@ -1,4 +1,4 @@
-# JW AutoFill（易修）
+# JW AutoFill（悦绘）
 
 > Photoshop 选区填充与绘画工具箱插件：生成选区即自动填充，配套像素级批处理算法与全局笔刷热键。
 

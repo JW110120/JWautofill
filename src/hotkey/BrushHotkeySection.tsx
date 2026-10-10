@@ -127,7 +127,7 @@ export default function BrushHotkeySection() {
     });
     // ⚠️ 启动首刷必须**推迟到PS 空闲之后**（2026-10-06）。
     //   enumerateBrushes() 内部是`batchPlay get presetManager`，与今天修复的
-    //   「易修: 命令"获取"当前不可用」是同一条高危路径：PS 的通知/初始化命令在
+    //   「悦绘: 命令"获取"当前不可用」是同一条高危路径：PS 的通知/初始化命令在
     //   执行中途派发，此刻 get 会被宿主拒绝并弹**原生框**（绕过 JS try/catch 与
     //   dialogOptions，唯一有效防护是不发get）。
     //   useEffect 这一刻插件刚挂载、PS 正在处理面板创建与文档初始化，正是忙碌窗口

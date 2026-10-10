@@ -1455,12 +1455,13 @@ html, body {
    遮罩常驻时本来就不该滚背景，直接让滚动条消失即可；同时补 10px 右内边距，
    把内容盒宽度补回「有滚动条」时的 W-30，背景零重排（重排也藏在 0.80 遮罩后）。
    ⚠️ 两块面板共用同一个 document.body，所以**类名必须按面板分开**
-      （主面板 app-visibility-panel-open / 工具箱 visibility-panel-open）：
+      （主面板 app-visibility-panel-open / app-fill-settings-open / 工具箱 visibility-panel-open）：
       只靠 #app / #pixeladjustment 限定还不够 —— 同名类会让一块开浮窗时
       另一块的滚动条也被收起、内容盒被多塞 10px 内边距。
    ⚠️ 遮罩本身是 position: fixed，不受本条的 overflow/内边距影响。 */
 body.license-dialog-open #app .app-root > .panel,
 body.app-visibility-panel-open #app .app-root > .panel,
+body.app-fill-settings-open #app .app-root > .panel,
 body.visibility-panel-open #pixeladjustment .pixeladjustment-root > .panel {
   overflow-y: hidden;
   padding-right: 20px;

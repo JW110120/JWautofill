@@ -1,6 +1,6 @@
 {
     "manifestVersion": 4,
-    "name": "易修",
+    "name": "悦绘",
     "version": "2.0.0",
     "host": {
         "app": "PS",
@@ -16,7 +16,7 @@
             "type": "panel",
             "minimumSize": {
                 "width": 250,
-                "height": 450 
+                "height": 225 
             },
             "maximumSize": {
                 "width": 250,
@@ -29,7 +29,7 @@
             },
             "preferredFloatingSize": {
                 "width": 250,
-                "height": 1000
+                "height": 800
             },
             "icons": [
                 {

@@ -246,7 +246,7 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
         return (
             <div className="license-content">
                 <div className="license-head">
-                    <span className="license-title">欢迎使用易修</span>
+                    <span className="license-title">欢迎使用悦绘</span>
                 </div>
 
                 {/* 激活区：输入在上、按钮在下 */}

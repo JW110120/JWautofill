@@ -22,7 +22,7 @@
 PS 通知常在**命令中途**派发 ⇒ 收到 make/delete/set 立刻 get 会撞上「忙碌窗口」。
 ⇒ 事件探测统一走 `psProbe.debouncePsProbe(200ms)`，且**必须带忙碌感知**（见下）。
 
-## 切换活动文档 = 长命令（2026-10-07 定位，弹「易修: 命令"获取"当前不可用」根因）
+## 切换活动文档 = 长命令（2026-10-07 定位，弹「悦绘: 命令"获取"当前不可用」根因）
 - **UXP 没有 `currentDocumentChanged` 事件**。Adobe 官方 Action 事件表（eventcodes）与 Core 事件表里都没有它 ——
   那是 ExtendScript / Generator 的网络事件，UXP 用不了。`app.on()` 也不在官方 Photoshop 类文档里，别指望。
   唯一可行的识别方式：**`select` 事件+ `descriptor._target` 里有 `{_ref:'document'}`**（官方论坛确认「已打开文档之间切换会派发 select」）。
