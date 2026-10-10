@@ -6,12 +6,19 @@ import { debouncePsProbe, markPsBusyForEvent, runWhenIdle } from '../utils/psPro
 import { addPsNotificationListeners, removePsNotificationListeners } from '../utils/psAccess';
 import { calcDragValue } from '../utils/dragSensitivity';
 import RadioGroup, { RadioOption } from './RadioGroup';
+import { helpTexts } from '../constants/helpTexts';
 
 /** 「计算方法」两列选项：模块级常量，保持引用稳定（RadioGroup 已 React.memo）。 */
 const CALCULATION_MODE_OPTIONS: RadioOption[] = [
-    { value: 'absolute', label: '绝对' },
-    { value: 'relative', label: '相对' },
+    { value: 'absolute', label: '绝对', title: helpTexts.color.calcModeAbsolute },
+    { value: 'relative', label: '相对', title: helpTexts.color.calcModeRelative },
 ];
+
+/** 所选计算方法 → 公式文案（参数一律用中文；随选择实时切换）。 */
+const CALCULATION_FORMULA: Record<'absolute' | 'relative', string> = {
+    absolute: helpTexts.color.calcFormulaAbsolute,
+    relative: helpTexts.color.calcFormulaRelative,
+};
 
 interface ColorSettingsProps {
     isOpen: boolean;
@@ -219,6 +226,7 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
     // 单个滑块渲染：结构与其他面板的滑块一致（行容器装 文字标签 + 数字输入 + 单位符号）。
     // widthClass 显式指定文字标签宽度修饰类（沿用工具箱标签算法：2/3/4/5/6字 = 20/33/47/60/73px），
     // 不再用 label.length 动态拼类名，避免不同长度标签算错宽度。
+    // title 同时挂到行容器、拖拽标签、滑块与数字输入上，保证悬停任意位置都能看到说明。
     const renderSlider = (
         settingKey: keyof ColorSettings,
         label: string,
@@ -226,17 +234,19 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
         min: number,
         max: number,
         unit: string,
-        widthClass: string
+        widthClass: string,
+        title: string
     ) => {
         const handleRangeChange = (v: number) => {
             handleNumberInputChange(settingKey, v);
         };
 
         return (
-            <div className="row-between">
+            <div className="row-between" title={title}>
                 <label
                     className={"label-drag " + widthClass}
                     onMouseDown={(e) => handleLabelMouseDown(e, settingKey)}
+                    title={title}
                 >
                     {label}
                 </label>
@@ -247,6 +257,7 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
                     value={value || 0}
                     onChange={handleRangeChange}
                     className="slider-track"
+                    title={title}
                 />
                 <div className="row-start">
                     <div className="num-input-row">
@@ -256,6 +267,7 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
                             max={max}
                             value={value || 0}
                             onChange={(e) => handleNumberInputChange(settingKey, Number(e.target.value))}
+                            title={title}
                         />
                     </div>
                     <span className="num-unit">{unit}</span>
@@ -273,35 +285,38 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
     return (
         <div className="panel subpanel-color">
             <div className="subpanel-title-1">
-                <div>颜色动态设置</div>
-                <div className="close-button" role="button" tabIndex={0} onClick={onClose}>×</div>
+                <div title={helpTexts.color.panelTitle}>颜色动态设置</div>
+                <div className="close-button" role="button" tabIndex={0} onClick={onClose} title={helpTexts.selectionFill.floatClose}>×</div>
             </div>
             
             <div className="panel-section">
                 {shouldShowGrayVariation ? (
-                    renderSlider('grayVariation', '灰度抖动', settings.grayVariation, 0, 100, '%', 'label-4')
+                    renderSlider('grayVariation', '灰度抖动', settings.grayVariation, 0, 100, '%', 'label-4', helpTexts.color.grayVariation)
                 ) : (
                     <>
-                        {renderSlider('hueVariation', '色相抖动', settings.hueVariation, 0, 360, '°', 'label-4')}
-                        {renderSlider('saturationVariation', '饱和度抖动', settings.saturationVariation, 0, 100, '%', 'label-5')}
-                        {renderSlider('brightnessVariation', '亮度抖动', settings.brightnessVariation, 0, 100, '%', 'label-4')}
+                        {renderSlider('hueVariation', '色相抖动', settings.hueVariation, 0, 360, '°', 'label-4', helpTexts.color.hueVariation)}
+                        {renderSlider('saturationVariation', '饱和度抖动', settings.saturationVariation, 0, 100, '%', 'label-5', helpTexts.color.saturationVariation)}
+                        {renderSlider('brightnessVariation', '亮度抖动', settings.brightnessVariation, 0, 100, '%', 'label-4', helpTexts.color.brightnessVariation)}
                     </>
                 )}
 
-                {renderSlider('opacityVariation', '不透明度抖动', settings.opacityVariation, 0, 100, '%', 'label-6')}
+                {renderSlider('opacityVariation', '不透明度抖动', settings.opacityVariation, 0, 100, '%', 'label-6', helpTexts.color.opacityVariation)}
             </div>
 
             <div className="divider"></div>
 
             {/* 计算模式选择器（原 colorsettings-calculation-mode 分区容器作废，统一收口为子面板分区容器） */}
             <div className="panel-section">
-                <label className="subpanel-title-2">计算方法</label>
+                <label className="subpanel-title-2" title={helpTexts.color.calcModeLabel}>计算方法</label>
                 <RadioGroup
                     value={settings.calculationMode || 'absolute'}
                     onChange={(e) => setSettings(prev => ({ ...prev, calculationMode: e.target.value as 'absolute' | 'relative' }))}
                     options={CALCULATION_MODE_OPTIONS}
                     className="radio-pair-group"
                 />
+                <div className="formula-hint" title={helpTexts.color.calcFormulaNote}>
+                    <div className="formula-hint-main">{CALCULATION_FORMULA[settings.calculationMode || 'absolute']}</div>
+                </div>
             </div>
 
 

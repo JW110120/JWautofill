@@ -61,6 +61,14 @@ const formatFailMsg = (prefix: string, raw: string): string =>
  */
 const PROBE_IDLE_MS = 300;
 
+const SECTION_HEADER_HELP: Record<string, string> = {
+  quickAction: helpTexts.adjustment.sectionQuickAction,
+  detailAdjust: helpTexts.adjustment.sectionDetailAdjust,
+  edgeProcessing: helpTexts.adjustment.sectionEdgeProcessing,
+  maskSync: helpTexts.adjustment.sectionMaskSync,
+  brushHotkey: helpTexts.hotkey.header,
+};
+
 
 
 // 单位换算为像素（兼容普通数字与带 _unit/_value 的单位对象）
@@ -3234,7 +3242,7 @@ const renderDetailAdjustContent = () => (
           onClick={() => setUsePowerfulMode(!usePowerfulMode)}
           title={helpTexts.adjustment.powerfulMode}
         >强力模式</label>
-        <ToggleSwitch checked={usePowerfulMode} onChange={(e) => setUsePowerfulMode((e.target as HTMLInputElement).checked)}  />
+        <ToggleSwitch checked={usePowerfulMode} onChange={(e) => setUsePowerfulMode((e.target as HTMLInputElement).checked)} title={helpTexts.adjustment.powerfulMode}  />
       </div>
     </div>
 
@@ -3242,17 +3250,17 @@ const renderDetailAdjustContent = () => (
       <>
         <div className="row-between slider-row">
           <div className={sliderLabelClass('radius', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'radius', radius)} title={helpTexts.adjustment.radius}>半径</div>
-          <RangeSlider min={5} max={20} step={1} value={radius} onChange={handleRadiusChange} className="slider-track" />
+          <RangeSlider min={5} max={20} step={1} value={radius} onChange={handleRadiusChange} className="slider-track" title={helpTexts.adjustment.radius} />
           <div className="row-start">
-            <div className="num-input-row"><input type="number" min="5" max="20" step="1" value={radius} onChange={handleRadiusNumberChange} /></div>
+            <div className="num-input-row"><input type="number" min="5" max="20" step="1" value={radius} onChange={handleRadiusNumberChange} title={helpTexts.adjustment.radius} /></div>
             <div className="num-unit">px</div>
           </div>
         </div>
         <div className="row-between slider-row">
           <div className={sliderLabelClass('sigma', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'sigma', sigma)} title={helpTexts.adjustment.sigma}>强度</div>
-          <RangeSlider min={1} max={5} step={0.5} value={sigma} onChange={handleSigmaChange} className="slider-track" />
+          <RangeSlider min={1} max={5} step={0.5} value={sigma} onChange={handleSigmaChange} className="slider-track" title={helpTexts.adjustment.sigma} />
           <div className="row-start">
-            <div className="num-input-row"><input type="number" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaNumberChange} /></div>
+            <div className="num-input-row"><input type="number" min="1" max="5" step="0.5" value={sigma} onChange={handleSigmaNumberChange} title={helpTexts.adjustment.sigma} /></div>
             <div className="num-unit">级</div>
           </div>
         </div>
@@ -3266,9 +3274,9 @@ const renderDetailAdjustContent = () => (
     </div>
       <div className="row-between slider-row">
         <div className={sliderLabelClass('gradientRelaxStrength', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'gradientRelaxStrength', gradientRelaxStrength)} title={helpTexts.adjustment.gradientRelax}>程度</div>
-        <RangeSlider min={-10} max={10} step={1} value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthChange} className="slider-track" />
+        <RangeSlider min={-10} max={10} step={1} value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthChange} className="slider-track" title={helpTexts.adjustment.gradientRelax} />
         <div className="row-start">
-          <div className="num-input-row"><input type="number" min="-10" max="10" step="1" value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthNumberChange} /></div>
+          <div className="num-input-row"><input type="number" min="-10" max="10" step="1" value={gradientRelaxStrength} onChange={handleGradientRelaxStrengthNumberChange} title={helpTexts.adjustment.gradientRelax} /></div>
           <div className="num-unit">级</div>
         </div>
       </div>
@@ -3279,9 +3287,9 @@ const renderDetailAdjustContent = () => (
     </div>
       <div className="row-between slider-row">
         <div className={sliderLabelClass('specialSharpenStrength', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialSharpenStrength', specialSharpenStrength)} title={helpTexts.adjustment.specialSharpenStrength}>强度</div>
-        <RangeSlider min={1} max={10} step={0.5} value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthChange} className="slider-track" />
+        <RangeSlider min={1} max={10} step={0.5} value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthChange} className="slider-track" title={helpTexts.adjustment.specialSharpenStrength} />
         <div className="row-start">
-          <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthNumberChange} /></div>
+          <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={specialSharpenStrength} onChange={handleSpecialSharpenStrengthNumberChange} title={helpTexts.adjustment.specialSharpenStrength} /></div>
           <div className="num-unit">级</div>
         </div>
       </div>
@@ -3292,17 +3300,17 @@ const renderDetailAdjustContent = () => (
     </div>
       <div className="row-between slider-row">
         <div className={sliderLabelClass('highFreqIntensity', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'highFreqIntensity', highFreqIntensity)} title={helpTexts.adjustment.highFreqIntensity}>强度</div>
-        <RangeSlider min={1} max={10} step={0.5} value={highFreqIntensity} onChange={handleHighFreqIntensityChange} className="slider-track" />
+        <RangeSlider min={1} max={10} step={0.5} value={highFreqIntensity} onChange={handleHighFreqIntensityChange} className="slider-track" title={helpTexts.adjustment.highFreqIntensity} />
         <div className="row-start">
-          <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={highFreqIntensity} onChange={handleHighFreqIntensityNumberChange} /></div>
+          <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={highFreqIntensity} onChange={handleHighFreqIntensityNumberChange} title={helpTexts.adjustment.highFreqIntensity} /></div>
           <div className="num-unit">级</div>
         </div>
       </div>
       <div className="row-between slider-row">
         <div className={sliderLabelClass('highFreqRange', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'highFreqRange', highFreqRange)} title={helpTexts.adjustment.highFreqRange}>范围</div>
-        <RangeSlider min={1} max={10} step={0.5} value={highFreqRange} onChange={handleHighFreqRangeChange} className="slider-track" />
+        <RangeSlider min={1} max={10} step={0.5} value={highFreqRange} onChange={handleHighFreqRangeChange} className="slider-track" title={helpTexts.adjustment.highFreqRange} />
         <div className="row-start">
-          <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={highFreqRange} onChange={handleHighFreqRangeNumberChange} /></div>
+          <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={highFreqRange} onChange={handleHighFreqRangeNumberChange} title={helpTexts.adjustment.highFreqRange} /></div>
           <div className="num-unit">级</div>
         </div>
       </div>
@@ -3328,9 +3336,9 @@ const renderEdgeProcessingContent = () => (
         <>
           <div className="row-between slider-row">
             <div className={sliderLabelClass('edgeMedianRadius', 'label-drag label-5')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeMedianRadius', edgeMedianRadius)} title={helpTexts.adjustment.edgeMedianRadius}>中间值半径</div>
-            <RangeSlider min={10} max={30} step={1} value={edgeMedianRadius} onChange={handleEdgeMedianRadiusChange} className="slider-track" />
+            <RangeSlider min={10} max={30} step={1} value={edgeMedianRadius} onChange={handleEdgeMedianRadiusChange} className="slider-track" title={helpTexts.adjustment.edgeMedianRadius} />
             <div className="row-start">
-              <div className="num-input-row"><input type="number" min="10" max="30" step="1" value={edgeMedianRadius} onChange={handleEdgeMedianRadiusNumberChange} /></div>
+              <div className="num-input-row"><input type="number" min="10" max="30" step="1" value={edgeMedianRadius} onChange={handleEdgeMedianRadiusNumberChange} title={helpTexts.adjustment.edgeMedianRadius} /></div>
               <div className="num-unit">px</div>
             </div>
           </div>
@@ -3341,36 +3349,36 @@ const renderEdgeProcessingContent = () => (
         <>
           <div className="row-between slider-row">
             <div className={sliderLabelClass('edgeLineStrength', 'label-drag label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeLineStrength', edgeLineStrength)} title={helpTexts.adjustment.edgeLineStrength}>平滑力度</div>
-            <RangeSlider min={0} max={100} step={1} value={edgeLineStrength} onChange={handleEdgeLineStrengthChange} className="slider-track" />
+            <RangeSlider min={0} max={100} step={1} value={edgeLineStrength} onChange={handleEdgeLineStrengthChange} className="slider-track" title={helpTexts.adjustment.edgeLineStrength} />
             <div className="row-start">
-              <div className="num-input-row"><input type="number" min="0" max="100" step="1" value={edgeLineStrength} onChange={handleEdgeLineStrengthNumberChange} /></div>
+              <div className="num-input-row"><input type="number" min="0" max="100" step="1" value={edgeLineStrength} onChange={handleEdgeLineStrengthNumberChange} title={helpTexts.adjustment.edgeLineStrength} /></div>
               <div className="num-unit">%</div>
             </div>
           </div>
 
           <div className="row-between slider-row">
             <div className={sliderLabelClass('edgeLineSmoothRadius', 'label-drag label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeLineSmoothRadius', edgeLineSmoothRadius)} title={helpTexts.adjustment.edgeLineRange}>曲率平滑</div>
-            <RangeSlider min={3} max={9} step={1} value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusChange} className="slider-track" />
+            <RangeSlider min={3} max={9} step={1} value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusChange} className="slider-track" title={helpTexts.adjustment.edgeLineRange} />
             <div className="row-start">
-              <div className="num-input-row"><input type="number" min="3" max="9" step="1" value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusNumberChange} /></div>
+              <div className="num-input-row"><input type="number" min="3" max="9" step="1" value={edgeLineSmoothRadius} onChange={handleEdgeLineSmoothRadiusNumberChange} title={helpTexts.adjustment.edgeLineRange} /></div>
               <div className="num-unit">px</div>
             </div>
           </div>
 
           <div className="row-between slider-row">
             <div className={sliderLabelClass('edgeLineFlatten', 'label-drag label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeLineFlatten', edgeLineFlatten)} title={helpTexts.adjustment.edgeLineFlatten}>宽度平滑</div>
-            <RangeSlider min={0} max={700} step={50} value={edgeLineFlatten} onChange={handleEdgeLineFlattenChange} className="slider-track" />
+            <RangeSlider min={0} max={700} step={50} value={edgeLineFlatten} onChange={handleEdgeLineFlattenChange} className="slider-track" title={helpTexts.adjustment.edgeLineFlatten} />
             <div className="row-start">
-              <div className="num-input-row"><input type="number" min="0" max="700" step="50" value={edgeLineFlatten} onChange={handleEdgeLineFlattenNumberChange} /></div>
+              <div className="num-input-row"><input type="number" min="0" max="700" step="50" value={edgeLineFlatten} onChange={handleEdgeLineFlattenNumberChange} title={helpTexts.adjustment.edgeLineFlatten} /></div>
               <div className="num-unit">px</div>
             </div>
           </div>
 
           <div className="row-between slider-row">
             <div className={sliderLabelClass('edgeLineOpacity', 'label-drag label-6')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'edgeLineOpacity', edgeLineOpacity)} title={helpTexts.adjustment.edgeLineOpacity}>不透明度平滑</div>
-            <RangeSlider min={0} max={700} step={50} value={edgeLineOpacity} onChange={handleEdgeLineOpacityChange} className="slider-track" />
+            <RangeSlider min={0} max={700} step={50} value={edgeLineOpacity} onChange={handleEdgeLineOpacityChange} className="slider-track" title={helpTexts.adjustment.edgeLineOpacity} />
             <div className="row-start">
-              <div className="num-input-row"><input type="number" min="0" max="700" step="50" value={edgeLineOpacity} onChange={handleEdgeLineOpacityNumberChange} /></div>
+              <div className="num-input-row"><input type="number" min="0" max="700" step="50" value={edgeLineOpacity} onChange={handleEdgeLineOpacityNumberChange} title={helpTexts.adjustment.edgeLineOpacity} /></div>
               <div className="num-unit">px</div>
             </div>
           </div>
@@ -3388,9 +3396,9 @@ const renderEdgeProcessingContent = () => (
 
     <div className="row-between slider-row">
       <div className={sliderLabelClass('aliasSoftWidth', 'label-drag label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'aliasSoftWidth', aliasSoftWidth)} title={helpTexts.adjustment.aliasSoftWidth}>柔化宽度</div>
-      <RangeSlider min={0.5} max={2} step={0.5} value={aliasSoftWidth} onChange={handleAliasSoftWidthChange} className="slider-track" />
+      <RangeSlider min={0.5} max={2} step={0.5} value={aliasSoftWidth} onChange={handleAliasSoftWidthChange} className="slider-track" title={helpTexts.adjustment.aliasSoftWidth} />
       <div className="row-start">
-        <div className="num-input-row"><input type="number" min="0.5" max="2" step="0.5" value={aliasSoftWidth} onChange={handleAliasSoftWidthNumberChange} /></div>
+        <div className="num-input-row"><input type="number" min="0.5" max="2" step="0.5" value={aliasSoftWidth} onChange={handleAliasSoftWidthNumberChange} title={helpTexts.adjustment.aliasSoftWidth} /></div>
         <div className="num-unit">px</div>
       </div>
     </div>
@@ -3477,6 +3485,7 @@ const renderMaskSyncContent = () => (
           {maskSyncEditingId === task.id ? (
             <input
               className="mask-sync-name-input"
+              title={helpTexts.adjustment.maskSyncRenameInput}
               value={maskSyncEditingName}
               autoFocus
               onChange={(e) => setMaskSyncEditingName(e.target.value)}
@@ -3518,6 +3527,7 @@ const renderMaskSyncContent = () => (
           <Select
             value={task.channel || ''}
             onChange={(v) => handleMaskSyncChannelChange(task, v)}
+            title={helpTexts.adjustment.maskSyncChannel}
             showCheck
             placeholder=""
             options={channelSelectOptions}
@@ -3544,6 +3554,7 @@ const renderMaskSyncContent = () => (
           <input
               type="checkbox"
               className="checkbox-input"
+              title={helpTexts.adjustment.maskSyncInvert}
               checked={task.invert}
               onChange={(e) => handleMaskSyncInvertChange(task, e.target.checked)}
           />
@@ -3570,7 +3581,7 @@ const renderMaskSyncContent = () => (
               className="label-2"
               title={helpTexts.adjustment.maskSyncEnabled}
             >同步</label>
-            <ToggleSwitch checked={task.enabled} onChange={(e) => handleMaskSyncEnabledChange(task, (e.target as HTMLInputElement).checked)}  />
+            <ToggleSwitch checked={task.enabled} onChange={(e) => handleMaskSyncEnabledChange(task, (e.target as HTMLInputElement).checked)} title={helpTexts.adjustment.maskSyncEnabled}  />
           </div>
           {/* 立即同步：改成与刷新一致的无边框图标按钮（--text-color / 16px），不再显示文字。
               当样本图层 / 通道 / 目标蒙版三下拉任一项未选时禁用（灰 + 不触发同步） */}
@@ -3733,16 +3744,16 @@ const renderQuickActionContent = () => (
           onClick={() => setUseContrastReduction(!useContrastReduction)}
           title={helpTexts.adjustment.contrastReduce}
         >对比减弱</label>
-        <ToggleSwitch checked={useContrastReduction} onChange={(e) => setUseContrastReduction(e.target.checked)}  />
+        <ToggleSwitch checked={useContrastReduction} onChange={(e) => setUseContrastReduction(e.target.checked)} title={helpTexts.adjustment.contrastReduce}  />
       </div>
     </div>
 
     {useContrastReduction && (
         <div className="row-between slider-row">
           <div className={sliderLabelClass('contrastReductionIntensity', 'label-drag label-2')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'contrastReductionIntensity', contrastReductionIntensity)} title={helpTexts.adjustment.contrastReductionIntensity}>强度</div>
-          <RangeSlider min={1} max={10} step={0.5} value={contrastReductionIntensity} onChange={handleContrastReductionIntensityChange} className="slider-track" />
+          <RangeSlider min={1} max={10} step={0.5} value={contrastReductionIntensity} onChange={handleContrastReductionIntensityChange} className="slider-track" title={helpTexts.adjustment.contrastReductionIntensity} />
           <div className="row-start">
-            <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={contrastReductionIntensity} onChange={handleContrastReductionIntensityNumberChange} /></div>
+            <div className="num-input-row"><input type="number" min="1" max="10" step="0.5" value={contrastReductionIntensity} onChange={handleContrastReductionIntensityNumberChange} title={helpTexts.adjustment.contrastReductionIntensity} /></div>
             <div className="num-unit">级</div>
           </div>
         </div>
@@ -3791,27 +3802,27 @@ const renderQuickActionContent = () => (
 
       <div className="row-between slider-row">
         <div className={sliderLabelClass('specialWoodcutLevels', 'label-drag label-3')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialWoodcutLevels', specialWoodcutLevels)} title={helpTexts.adjustment.woodcutLevels}>色阶数</div>
-        <RangeSlider min={2} max={16} step={1} value={specialWoodcutLevels} onChange={handleSpecialWoodcutLevelsChange} className="slider-track" />
+        <RangeSlider min={2} max={16} step={1} value={specialWoodcutLevels} onChange={handleSpecialWoodcutLevelsChange} className="slider-track" title={helpTexts.adjustment.woodcutLevels} />
         <div className="row-start">
-          <div className="num-input-row"><input type="number" min="2" max="16" step="1" value={specialWoodcutLevels} onChange={handleSpecialWoodcutLevelsNumberChange} /></div>
+          <div className="num-input-row"><input type="number" min="2" max="16" step="1" value={specialWoodcutLevels} onChange={handleSpecialWoodcutLevelsNumberChange} title={helpTexts.adjustment.woodcutLevels} /></div>
           <div className="num-unit">级</div>
         </div>
       </div>
 
       <div className="row-between slider-row">
         <div className={sliderLabelClass('specialWoodcutEdgeThreshold', 'label-drag label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialWoodcutEdgeThreshold', specialWoodcutEdgeThreshold)} title={helpTexts.adjustment.woodcutEdgeThreshold}>边缘阈值</div>
-        <RangeSlider min={0} max={255} step={1} value={specialWoodcutEdgeThreshold} onChange={handleSpecialWoodcutEdgeThresholdChange} className="slider-track" />
+        <RangeSlider min={0} max={255} step={1} value={specialWoodcutEdgeThreshold} onChange={handleSpecialWoodcutEdgeThresholdChange} className="slider-track" title={helpTexts.adjustment.woodcutEdgeThreshold} />
         <div className="row-start">
-          <div className="num-input-row"><input type="number" min="0" max="255" step="1" value={specialWoodcutEdgeThreshold} onChange={handleSpecialWoodcutEdgeThresholdNumberChange} /></div>
+          <div className="num-input-row"><input type="number" min="0" max="255" step="1" value={specialWoodcutEdgeThreshold} onChange={handleSpecialWoodcutEdgeThresholdNumberChange} title={helpTexts.adjustment.woodcutEdgeThreshold} /></div>
           <div className="num-unit">值</div>
         </div>
       </div>
 
       <div className="row-between slider-row">
         <div className={sliderLabelClass('specialWoodcutEdgeStrength', 'label-drag label-4')} onMouseDown={(e) => onSliderLabelMouseDown(e, 'specialWoodcutEdgeStrength', specialWoodcutEdgeStrength)} title={helpTexts.adjustment.woodcutEdgeStrength}>边缘强度</div>
-        <RangeSlider min={0} max={100} step={1} value={specialWoodcutEdgeStrength} onChange={handleSpecialWoodcutEdgeStrengthChange} className="slider-track" />
+        <RangeSlider min={0} max={100} step={1} value={specialWoodcutEdgeStrength} onChange={handleSpecialWoodcutEdgeStrengthChange} className="slider-track" title={helpTexts.adjustment.woodcutEdgeStrength} />
         <div className="row-start">
-          <div className="num-input-row"><input type="number" min="0" max="100" step="1" value={specialWoodcutEdgeStrength} onChange={handleSpecialWoodcutEdgeStrengthNumberChange} /></div>
+          <div className="num-input-row"><input type="number" min="0" max="100" step="1" value={specialWoodcutEdgeStrength} onChange={handleSpecialWoodcutEdgeStrengthNumberChange} title={helpTexts.adjustment.woodcutEdgeStrength} /></div>
           <div className="num-unit">%</div>
         </div>
       </div>
@@ -3822,7 +3833,7 @@ const renderQuickActionContent = () => (
           onClick={() => setSpecialWoodcutPreview(!specialWoodcutPreview)}
           title={helpTexts.adjustment.woodcutPreview}
         >预览</label>
-        <ToggleSwitch checked={specialWoodcutPreview} onChange={(e) => setSpecialWoodcutPreview(e.target.checked)}  />
+        <ToggleSwitch checked={specialWoodcutPreview} onChange={(e) => setSpecialWoodcutPreview(e.target.checked)} title={helpTexts.adjustment.woodcutPreview}  />
     </div>
 
     <div className="divider"></div>
@@ -3875,7 +3886,7 @@ const renderSection = (section: SectionConfig) => (
          onDragEnd={handleDragEnd}
          onDrop={(e)=>handleDrop(e, section.id)}
          onClick={()=>toggleSectionCollapse(section.id)}
-         title={section.id === 'brushHotkey' ? helpTexts.hotkey.header : undefined}
+         title={SECTION_HEADER_HELP[section.id]}
     >
       <div className={section.isCollapsed ? 'collapse-icon' : 'collapse-icon-expanded'}>
         <ExpandIcon expanded={!section.isCollapsed} />
@@ -3959,17 +3970,18 @@ return (
     <div className="float-overlay" onClick={() => setShowVisibilityPanel(false)}>
       <div className="float-window" onClick={(e) => e.stopPropagation()}>
         <div className="row-between">
-          <span className="subpanel-title-1">隐藏/显示分区</span>
-          <div role="button" tabIndex={0} className="close-button" onClick={() => setShowVisibilityPanel(false)}>×</div>
+          <span className="subpanel-title-1" title={helpTexts.adjustment.visibilityPanelTitle}>隐藏/显示分区</span>
+          <div role="button" tabIndex={0} className="close-button" onClick={() => setShowVisibilityPanel(false)} title={helpTexts.adjustment.visibilityClose}>×</div>
         </div>
         <div className="panel-section">
           {sections.sort((a,b)=>a.order-b.order).map(sec => (
             <div key={sec.id} className="row-between">
               <span
                 className="label-4"
+                title={helpTexts.adjustment.visibilitySection}
                 onClick={() => toggleSectionVisibility(sec.id)}
               >{sec.title}</span>
-              <ToggleSwitch checked={sec.isVisible} onChange={() => toggleSectionVisibility(sec.id)}  />
+              <ToggleSwitch checked={sec.isVisible} onChange={() => toggleSectionVisibility(sec.id)} title={helpTexts.adjustment.visibilitySection}  />
             </div>
           ))}
         </div>

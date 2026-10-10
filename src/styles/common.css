@@ -480,8 +480,15 @@ html, body {
 .row-grid + .row-grid {
   margin-top: 10px;
 }
+/* 零外边距档：纵向外边距清零（单个控件的呼吸改由内层行的 5px 承担）。
+   ⚠️ 右外边距 -10px（2026-10-10 用户要求）：本类只服务于「两列复选框组」
+      （渐变 / 图案面板的 .border-panel-section 内、填充设置浮窗的 .float-window 内）。
+      这两处的父容器都带 10px 内边距 ⇒ 右列内容（align-items: flex-end 右对齐）
+      距面板外缘约 20px，明显比同行左侧的 10px 宽。把行容器向右探出 10px 后，
+      右列复选框右缘收到约 10px，左右对称、也与其上方的分割线两端对齐。
+      ⚠️ 负外边距探入的正是父容器的 10px 内边距，不会越过边框 / 溢出面板。 */
 .row-between.row-grid.row-grid-flush {
-  margin: 0 auto;
+  margin: 0 -10px 0 0;
 }
 /* 零外边距档：同列上下相邻两行仍是 10px（每行 5px）。 */
 .row-grid-flush .row-start,
@@ -1120,6 +1127,35 @@ html, body {
    加上 label 的 flex:1 把剩余空间吃掉，齿轮自然落到右缘）。 */
 .radio-vertical .radio-option-label {
   flex: 1 1 auto;
+}
+
+/* ===== 公式提示条（清除设置 / 纯色设置：所选模式的计算公式）=====
+   紧跟对应 radio 选项组下方，随所选模式实时切换文本；单一样式来源（两个面板共用）。
+   参数名全用中文（原值 / 输入灰度 / 强度 / 不透明度），主行 12px、系数行 11px。
+   ⚠️ 颜色一律走 --text-color / --entry-bg / --border-color，四套主题对比度均 ≥ 4.5:1；
+      不用 opacity 压暗（会拉低对比度）。
+   ⚠️ margin-top 由本处给 10px 基准；清除面板的选项组自带 10px 下内边距，
+      在 clear.css 里把本处 margin 归零，避免变成 20px。 */
+.formula-hint {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 10px 0 0 0;
+  padding: 6px 8px;
+  background: var(--entry-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  color: var(--text-color);
+  white-space: normal;
+  word-break: break-word;
+}
+.formula-hint-main {
+  font-size: 12px;
+  line-height: 1.5;
+}
+.formula-hint-sub {
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 

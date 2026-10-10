@@ -1388,8 +1388,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     return (
             <div className="panel subpanel-gradient">
                 <div className="subpanel-title-1">
-                    <div>渐变设置</div>
-                <div className="close-button" role="button" tabIndex={0} onClick={onClose}>×</div>
+                    <div title={helpTexts.gradient.panelTitle}>渐变设置</div>
+                <div className="close-button" role="button" tabIndex={0} title={helpTexts.selectionFill.floatClose} onClick={onClose}>×</div>
             </div>
 
             {/* 预设区域 */}
@@ -1406,6 +1406,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                     + (dragPresetVisual === index ? ' dragging' : '')
                                     + (dragPresetVisual !== null && dragOverPresetVisual === index && dragPresetVisual !== index ? ' drop-target' : '')
                                     + (selectedPresets.has(index) ? ' thumb-multi-selected' : (selectedPreset === index ? ' thumb-selected' : ''))}
+                                title={helpTexts.gradient.preset}
                                 draggable={true}
                                 onDragStart={(e) => handlePresetDragStart(e, index)}
                                 onDragOver={(e) => handlePresetDragOver(e, index)}
@@ -1463,6 +1464,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     <div className="row-between">
                         <label 
                             className="label-drag label-4"
+                            title={helpTexts.gradient.stopOpacity}
                             onMouseDown={(e) => {
                                 e.preventDefault();
                                 const startX = e.clientX;
@@ -1497,6 +1499,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                 min="0"
                                 max="100"
                                 value={Math.round(parseFloat(stops[selectedStopIndex].color.match(/,\s*([\d.]+)\s*\)$/)?.[1] || '1') * 100)}
+                                title={helpTexts.gradient.stopOpacityInput}
                                 onChange={(e) => {
                                     const opacityValue = Math.max(0, Math.min(100, Number(e.target.value)));
                                     handleStopChange(selectedStopIndex, undefined, undefined, opacityValue);
@@ -1543,6 +1546,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                         cursor: 'grabbing'
                                     } : {})
                                 }}
+                                title={helpTexts.gradient.stopOpacity}
                                 onMouseDown={(e) => handleOpacityStopMouseDown(e, index)}
                                 onClick={(e) => {
                                     e.stopPropagation();
@@ -1570,6 +1574,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                 return (
                                     <div
                                         className="midpoint-slider"
+                                        title={helpTexts.gradient.midpoint}
                                         style={{
                                             left: `${leftStop.opacityPosition + (stops[selectedStopIndex].opacityPosition - leftStop.opacityPosition) * (leftStop.opacityMidpoint || 50) / 100}%`
                                         }}
@@ -1587,6 +1592,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                 return (
                                     <div
                                         className="midpoint-slider"
+                                        title={helpTexts.gradient.midpoint}
                                         style={{
                                             left: `${stops[selectedStopIndex].opacityPosition + (rightStops[0].opacityPosition - stops[selectedStopIndex].opacityPosition) * (stops[selectedStopIndex].opacityMidpoint || 50) / 100}%`
                                         }}
@@ -1607,6 +1613,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         className="gradient-fill-layer"
                         style={{ background: getPreviewGradientStyle() }}
                         onClick={handleAddStop}
+                        title={helpTexts.gradient.previewAddStop}
                     />
                 </div>
 
@@ -1627,6 +1634,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                     cursor: 'grabbing'
                                 } : {})
                             }}
+                            title={helpTexts.gradient.colorLabel}
                             onMouseDown={(e) => handleColorStopMouseDown(e, index)}
                             onClick={(e) => {
                                 e.stopPropagation();
@@ -1660,6 +1668,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                 return (
                                     <div
                                         className="midpoint-slider"
+                                        title={helpTexts.gradient.midpoint}
                                         style={{
                                             left: `${leftStop.colorPosition + (stops[selectedStopIndex].colorPosition - leftStop.colorPosition) * (leftStop.midpoint || 50) / 100}%`
                                         }}
@@ -1688,6 +1697,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                 return (
                                     <div
                                         className="midpoint-slider"
+                                        title={helpTexts.gradient.midpoint}
                                         style={{
                                             left: `${stops[selectedStopIndex].colorPosition + (rightStop.colorPosition - stops[selectedStopIndex].colorPosition) * (stops[selectedStopIndex].midpoint || 50) / 100}%`
                                         }}
@@ -1702,7 +1712,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 {/* 颜色控制 */}
                 {selectedStopIndex !== null && selectedStopType === 'color' && (
                     <div className="row-between">
-                        <label className="label-2">颜色</label>
+                        <label className="label-2" title={helpTexts.gradient.colorLabel}>颜色</label>
                     <div className="row-start">
                         <span className="num-unit num-unit-hash">#</span>
                         {/* ⚠️ num-input-row-wide：.num-input-row 已固定 34px（对齐单位符号），
@@ -1714,11 +1724,13 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                 value={getRGBColor(stops[selectedStopIndex].color).slice(1)}
                                 onChange={handleColorInputChange}
                                 maxLength={6}
+                                title={helpTexts.gradient.colorInput}
                             />
                         </div>
                         <div
                             className="color-preview"
                             style={{ backgroundColor: getDisplayColorHex(stops[selectedStopIndex].color, grayDisplay) }}
+                            title={helpTexts.gradient.colorPreview}
                             onClick={async () => {
                                 // ⚠️ 初始色必须传「色标当前颜色」：showColorPicker 无参、只认当前前景色，
                                 //    不先把前景色设成它，色板显示 A 而拾色器打开 PS 前景色 B（旧缺陷）。
@@ -1753,11 +1765,12 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
 
             {/* 渐变类型设置 */}
             <div className="border-panel-section">
-                <div className="row-between">
-                    <label className="label-2">样式</label>
+                <div className="row-between" title={helpTexts.gradient.typeLabel}>
+                    <label className="label-2" title={helpTexts.gradient.typeLabel}>样式</label>
                     <Select
                         value={gradientType}
                         options={GRADIENT_TYPE_OPTIONS}
+                        title={helpTexts.gradient.typeLabel}
                         onChange={(v) => setGradientType(v as typeof gradientType)}
                     />
                 </div>
@@ -1772,6 +1785,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         not-allowed 由 .row-between disabled label 覆盖（特异性更高） */}
                     <label
                         className="label-drag label-2"
+                        title={helpTexts.gradient.adjustAngle}
                         onMouseDown={gradientType === 'radial' ? undefined : handleAngleMouseDown}
                     >角度</label>
                     <RangeSlider
@@ -1792,6 +1806,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                 max="360"
                                 value={angle}
                                 disabled={gradientType === 'radial'}
+                                title={helpTexts.gradient.adjustAngle}
                                 onChange={(e) => setAngle(Number(e.target.value))}
                             />
                         </div>
@@ -1807,6 +1822,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         <label
                             className="label-2"
                             htmlFor="reverseCheckbox"
+                            title={helpTexts.gradient.reverse}
                             onClick={() => setReverse(!reverse)}
                         >
                             反向
@@ -1816,6 +1832,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             id="reverseCheckbox"
                             className="checkbox-input"
                             checked={reverse}
+                            title={helpTexts.gradient.reverse}
                             onChange={(e) => setReverse(e.target.checked)}
                         />
                     </div>
@@ -1826,6 +1843,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                          <label
                             className="label-6"
                             htmlFor="transparencyCheckbox"
+                            title={helpTexts.gradient.preserveTransparency}
                             onClick={() => setPreserveTransparency(!preserveTransparency)}
                         >
                             保留不透明度
@@ -1835,6 +1853,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             id="transparencyCheckbox"
                             className="checkbox-input"
                             checked={preserveTransparency}
+                            title={helpTexts.gradient.preserveTransparency}
                             onChange={(e) => setPreserveTransparency(e.target.checked)}
                         />
                     </div>

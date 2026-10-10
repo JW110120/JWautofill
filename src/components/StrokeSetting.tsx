@@ -5,12 +5,13 @@ import RangeSlider from './RangeSlider';
 import Select from './Select';
 import RadioGroup, { RadioOption } from './RadioGroup';
 import { calcDragValue } from '../utils/dragSensitivity';
+import { helpTexts } from '../constants/helpTexts';
 
 /** 描边位置三列选项：模块级常量，保持引用稳定（RadioGroup 已 React.memo）。 */
 const STROKE_POSITION_OPTIONS: RadioOption[] = [
-  { value: 'inside', label: '内部' },
-  { value: 'center', label: '居中' },
-  { value: 'outside', label: '外部' },
+  { value: 'inside', label: '内部', title: helpTexts.stroke.posInside },
+  { value: 'center', label: '居中', title: helpTexts.stroke.posCenter },
+  { value: 'outside', label: '外部', title: helpTexts.stroke.posOutside },
 ];
 
 interface StrokeSettingProps {
@@ -97,8 +98,8 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
   return (
     <div className="panel subpanel-stroke">
         <div className="subpanel-title-1">
-          <div>描边设置</div>
-          <div className="close-button" role="button" tabIndex={0} onClick={() => {
+          <div title={helpTexts.stroke.panelTitle}>描边设置</div>
+          <div className="close-button" role="button" tabIndex={0} title={helpTexts.selectionFill.floatClose} onClick={() => {
                     // 触发所有回调以确保状态更新
                     onWidthChange(width);
                     onPositionChange(position);
@@ -110,10 +111,11 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         </div>
         
         <div className="panel-section">
-          <div className="row-between">
+          <div className="row-between" title={helpTexts.stroke.width}>
           <label
             className="label-drag label-2"
             onMouseDown={(e) => handleLabelMouseDown(e, 'width')}
+            title={helpTexts.stroke.width}
           >
             宽度
           </label>
@@ -123,6 +125,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
             step={0.5}
             value={width}
             className="slider-track"
+            title={helpTexts.stroke.widthSlider}
             onChange={(v) => onWidthChange(v)}
           />
           <div className="row-start">
@@ -133,6 +136,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
               max="20"
               step="0.5"
               value={width}
+              title={helpTexts.stroke.widthInput}
               onChange={(e) => onWidthChange(Number(e.target.value))}
             />
             </div>
@@ -172,11 +176,12 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
             与主面板 `.app-blendmode-container` 的处理方式一致。 */}
         <div className="panel-section">
           <div className="row-between">
-          <label className={clearMode ? 'label-4 label-disabled' : 'label-4'}>混合模式</label>
+          <label className={clearMode ? 'label-4 label-disabled' : 'label-4'} title={helpTexts.stroke.blendMode}>混合模式</label>
           <Select
             value={blendMode}
             groups={BLEND_MODE_OPTIONS}
             disabled={clearMode}
+            title={helpTexts.stroke.blendModeSelect}
             onChange={(v) => onBlendModeChange(v as BlendMode)}
           />
           </div>
@@ -185,10 +190,11 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
         <div className="divider"></div>
         
         <div className="panel-section">
-          <div className="row-between">
+          <div className="row-between" title={helpTexts.stroke.opacity}>
           <label
             className="label-drag label-4"
             onMouseDown={(e) => handleLabelMouseDown(e, 'opacity')}
+            title={helpTexts.stroke.opacity}
           >
             不透明度
           </label>
@@ -198,6 +204,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
             step={1}
             value={opacity}
             className="slider-track"
+            title={helpTexts.stroke.opacitySlider}
             onChange={(v) => onOpacityChange(v)}
           />
           <div className="row-start">
@@ -207,6 +214,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
               min="0"
               max="100"
               value={opacity}
+              title={helpTexts.stroke.opacityInput}
               onChange={(e) => onOpacityChange(Number(e.target.value))}
             />
             </div>

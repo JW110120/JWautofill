@@ -2933,17 +2933,17 @@ title={helpTexts.selectionFill.clearMode}>
                 <div className="float-overlay" onClick={() => this.closeVisibilityPanel()}>
                     <div className="float-window" onClick={(e) => e.stopPropagation()}>
                         <div className="row-between">
-                            <span className="subpanel-title-1">隐藏/显示分区</span>
-                            <div role="button" tabIndex={0} className="close-button" onClick={() => this.closeVisibilityPanel()}>×</div>
+                            <span className="subpanel-title-1" title={helpTexts.selectionFill.visibilityPanelTitle}>隐藏/显示分区</span>
+                            <div role="button" tabIndex={0} className="close-button" title={helpTexts.selectionFill.floatClose} onClick={() => this.closeVisibilityPanel()}>×</div>
                         </div>
                         <div className="panel-section">
                             <div className="row-between">
-                                <span className="label-4" onClick={() => this.toggleSectionVisibility('selectionOptions')}>选区改造</span>
-                                <ToggleSwitch checked={this.state.selectionOptionsVisible} onChange={() => this.toggleSectionVisibility('selectionOptions')}  />
+                                <span className="label-4" title={helpTexts.selectionFill.visibilitySection} onClick={() => this.toggleSectionVisibility('selectionOptions')}>选区改造</span>
+                                <ToggleSwitch checked={this.state.selectionOptionsVisible} onChange={() => this.toggleSectionVisibility('selectionOptions')} title={helpTexts.selectionFill.visibilitySection}  />
                             </div>
                             <div className="row-between">
-                                <span className="label-4" onClick={() => this.toggleSectionVisibility('fillOptions')}>填充选项</span>
-                                <ToggleSwitch checked={this.state.fillOptionsVisible} onChange={() => this.toggleSectionVisibility('fillOptions')}  />
+                                <span className="label-4" title={helpTexts.selectionFill.visibilitySection} onClick={() => this.toggleSectionVisibility('fillOptions')}>填充选项</span>
+                                <ToggleSwitch checked={this.state.fillOptionsVisible} onChange={() => this.toggleSectionVisibility('fillOptions')} title={helpTexts.selectionFill.visibilitySection}  />
                             </div>
                         </div>
                     </div>
@@ -2956,8 +2956,8 @@ title={helpTexts.selectionFill.clearMode}>
                 <div className="float-overlay" onClick={() => this.closeFillSettingsPanel()}>
                     <div className="float-window" onClick={(e) => e.stopPropagation()}>
                         <div className="row-between">
-                            <span className="subpanel-title-1">填充设置</span>
-                            <div role="button" tabIndex={0} className="close-button" onClick={() => this.closeFillSettingsPanel()}>×</div>
+                            <span className="subpanel-title-1" title={helpTexts.selectionFill.fillSettingsTitle}>填充设置</span>
+                            <div role="button" tabIndex={0} className="close-button" title={helpTexts.selectionFill.floatClose} onClick={() => this.closeFillSettingsPanel()}>×</div>
                         </div>
                         <div className="panel-section">
                             <div className="row-between row-grid row-grid-flush">

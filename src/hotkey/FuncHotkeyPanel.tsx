@@ -257,7 +257,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
         <div className="func-hotkey-head">
           <div className="row-between">
             <span className="subpanel-title-1">功能快捷键</span>
-            <div role="button" tabIndex={0} className="close-button" onClick={onClose}>×</div>
+            <div role="button" tabIndex={0} className="close-button" title={helpTexts.funcHotkey.close} onClick={onClose}>×</div>
           </div>
 
           {!daemonConnected && (

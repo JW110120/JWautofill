@@ -16,8 +16,8 @@ import { helpTexts } from '../constants/helpTexts';
 
 /** 图案「填充方式」两列选项：模块级常量，保持引用稳定（RadioGroup 已 React.memo）。 */
 const PATTERN_FILL_MODE_OPTIONS: RadioOption[] = [
-    { value: 'stamp', label: '单次' },
-    { value: 'tile', label: '平铺' },
+    { value: 'stamp', label: '单次', title: helpTexts.pattern.fillStamp },
+    { value: 'tile', label: '平铺', title: helpTexts.pattern.fillTile },
 ];
 
 interface PatternPickerProps {
@@ -1768,13 +1768,13 @@ const rotatePatternPreview = (
     return (
         <div className="panel subpanel-pattern">
             <div className="subpanel-title-1">
-                <div>选择图案</div>
-                <div className="close-button" role="button" tabIndex={0} onClick={() => {
+                <div title={helpTexts.pattern.panelTitle}>选择图案</div>
+                <div className="close-button" role="button" tabIndex={0} title={helpTexts.selectionFill.floatClose} onClick={() => {
                     onClose();
                 }}>×</div>
             </div>
             <div className="preset-area">
-                 <div className="pattern-preset" onClick={handleContainerClick}>
+                 <div className="pattern-preset" onClick={handleContainerClick} title={helpTexts.pattern.preset}>
                     {patterns.map((pattern, index) => {
                         const baseCls = selectedPatterns.has(pattern.id) ? 'thumb-box thumb-multi-selected' : (selectedPattern === pattern.id ? 'thumb-box thumb-selected' : 'thumb-box');
                         const dragCls = dragIndex == null ? '' : (dragIndex === index ? ' dragging' : (dropIndex === index && dragIndex !== index ? ' drop-target' : ''));
@@ -1783,6 +1783,7 @@ const rotatePatternPreview = (
                             key={pattern.id}
                             ref={(el) => { thumbRefsRef.current[index] = el; }}
                             className={baseCls + dragCls}
+                            title={helpTexts.pattern.preset}
                             onMouseDown={(e) => startThumbPress(e, index)}
                             onMouseMove={onThumbMove}
                             onMouseUp={endThumbPress}
@@ -1861,14 +1862,15 @@ const rotatePatternPreview = (
             
 
             <div className="border-panel-section">
-                <div className="row-between">
-                    <label className="label-drag label-2" onMouseDown={(e) => handleMouseDown(e, 'angle')}>角度</label>
+                <div className="row-between" title={helpTexts.pattern.angle}>
+                    <label className="label-drag label-2" onMouseDown={(e) => handleMouseDown(e, 'angle')} title={helpTexts.pattern.angle}>角度</label>
                     <RangeSlider
                         min={0}
                         max={360}
                         step={1}
                         value={angle}
                         className="slider-track"
+                        title={helpTexts.pattern.angleSlider}
                         onChange={(v) => setAngle(v)}
                         onDragEnd={() => { if (selectedPattern) updatePatternTransform(selectedPattern, scale, angle); }}
                     />
@@ -1879,6 +1881,7 @@ const rotatePatternPreview = (
                                 min="0"
                                 max="360"
                                 value={angle}
+                                title={helpTexts.pattern.angleInput}
                                 onChange={handleAngleChange}
                             />
                         </div>
@@ -1886,14 +1889,15 @@ const rotatePatternPreview = (
                     </div>
                 </div>
 
-                <div className="row-between">
-                    <label className="label-drag label-2" onMouseDown={(e) => handleMouseDown(e, 'scale')}>缩放</label>
+                <div className="row-between" title={helpTexts.pattern.scale}>
+                    <label className="label-drag label-2" onMouseDown={(e) => handleMouseDown(e, 'scale')} title={helpTexts.pattern.scale}>缩放</label>
                     <RangeSlider
                         min={20}
                         max={300}
                         step={1}
                         value={scale}
                         className="slider-track"
+                        title={helpTexts.pattern.scaleSlider}
                         onChange={(v) => setScale(v)}
                         onDragEnd={() => { if (selectedPattern) updatePatternTransform(selectedPattern, scale, angle); }}
                     />
@@ -1904,6 +1908,7 @@ const rotatePatternPreview = (
                                 min="20"
                                 max="300"
                                 value={scale}
+                                title={helpTexts.pattern.scaleInput}
                                 onChange={handleScaleChange}
                             />
                         </div>
@@ -1933,6 +1938,7 @@ const rotatePatternPreview = (
                         <label
                             htmlFor="transparencyCheckbox"
                             className="label-4"
+                            title={helpTexts.pattern.clipMask}
                             onClick={() => setPreserveTransparency(!preserveTransparency)}
                         >
                             剪贴蒙版
@@ -1943,6 +1949,7 @@ const rotatePatternPreview = (
                             checked={preserveTransparency}
                             onChange={(e) => setPreserveTransparency(e.target.checked)}
                             className="checkbox-input"
+                            title={helpTexts.pattern.clipMask}
                         />
                     </div>
                     </div>
@@ -1952,6 +1959,7 @@ const rotatePatternPreview = (
                             <label
                                 htmlFor="rotateAllCheckbox"
                                 className="label-4"
+                                title={helpTexts.pattern.rotateAll}
                                 onClick={() => setRotateAll(!rotateAll)}
                             >
                                 旋转阵列
@@ -1962,6 +1970,7 @@ const rotatePatternPreview = (
                                 checked={rotateAll}
                                 onChange={(e) => setRotateAll(e.target.checked)}
                                 className="checkbox-input"
+                                title={helpTexts.pattern.rotateAll}
                             />
                         </div>
                         </div>
@@ -1977,6 +1986,7 @@ const rotatePatternPreview = (
                             options={ZOOM_LEVEL_OPTIONS}
                             onChange={(v) => handlePreviewZoomChange({ target: { value: v } })}
                             className="zoom-picker"
+                            title={helpTexts.pattern.previewZoom}
                         />
                     )}
                 </div>
@@ -1984,6 +1994,7 @@ const rotatePatternPreview = (
                 <div
                     className="preview-wrapper"
                     ref={previewWrapperRef}
+                    title={helpTexts.pattern.previewArea}
                     onWheel={selectedPattern ? handlePreviewWheel : undefined}
                     onMouseDown={selectedPattern ? handlePreviewMouseDown : undefined}
                     onMouseMove={selectedPattern ? handlePreviewMouseMove : undefined}

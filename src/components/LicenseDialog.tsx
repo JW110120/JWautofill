@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { shell } from 'uxp';
 import { LicenseManager } from '../utils/LicenseManager';
+import { helpTexts } from '../constants/helpTexts';
 // 弹窗样式已抽到 src/styles/license.css，由 index.tsx 在 common.css / app.css 之后引入，
 // 保持「弹窗样式排在面板样式之后」的层叠顺序；遮罩背景色仍由 theme.ts 统一给出。
 
@@ -162,6 +163,7 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
                         onBlur={() => setInputFocused(false)}
                         placeholder="请输入激活码"
                         disabled={isVerifying}
+                        title={helpTexts.license.input}
                     />
                 </div>
             </div>
@@ -170,6 +172,7 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
                 role="button"
                 tabIndex={isVerifying ? -1 : 0}
                 aria-disabled={isVerifying}
+                title={helpTexts.license.activate}
                 onClick={() => { if (!isVerifying) void handleVerifyLicense(); }}
                 onKeyDown={(e) => {
                     if (!isVerifying && (e.key === 'Enter' || e.key === ' ')) {
@@ -195,6 +198,7 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
                 className="license-link"
                 role="button"
                 tabIndex={0}
+                title={helpTexts.license.link}
                 onClick={handleOpenAuthorPage}
             >联系作者</span><span className="license-contact-dim">{'\u00A0'}购买</span>
         </div>
@@ -205,13 +209,14 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
             return (
                 <div className="license-content">
                     <div className="license-head">
-                        <span className="license-title">已授权</span>
+                        <span className="license-title" title={helpTexts.license.panelTitle}>已授权</span>
                         <span className="license-sub">感谢购买选区填充插件！</span>
                     </div>
                     <div
                         className="license-btn"
                         role="button"
                         tabIndex={0}
+                        title={helpTexts.license.close}
                         onClick={() => onClose()}
                         onKeyDown={(e) => {
                             if (e.key === 'Enter' || e.key === ' ') {
@@ -230,7 +235,7 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
             return (
                 <div className="license-content">
                     <div className="license-head">
-                        <span className="license-title">试用版</span>
+                        <span className="license-title" title={helpTexts.license.panelTitle}>试用版</span>
                         <span className="license-sub">
                             剩余 {trialDaysRemaining} 天 · 试用结束后请购买激活码
                         </span>
@@ -246,7 +251,7 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
         return (
             <div className="license-content">
                 <div className="license-head">
-                    <span className="license-title">欢迎使用悦绘</span>
+                    <span className="license-title" title={helpTexts.license.panelTitle}>欢迎使用悦绘</span>
                 </div>
 
                 {/* 激活区：输入在上、按钮在下 */}
@@ -261,6 +266,7 @@ const LicenseDialog: React.FC<LicenseDialogProps> = ({
                         className="license-btn"
                         role="button"
                         tabIndex={0}
+                        title={helpTexts.license.startTrial}
                         onClick={() => void handleStartTrial()}
                         onKeyDown={(e) => {
                             if (e.key === 'Enter' || e.key === ' ') {

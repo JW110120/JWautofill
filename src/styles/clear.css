@@ -46,3 +46,14 @@
 .subpanel-clear > .panel-section:last-child {
   margin-bottom: 0;
 }
+
+/* 公式提示条（清除设置的三组算法）：紧随选项组下方。
+   ⚠️ 顶部外边距归零 —— 选项组自带 10px 下内边距（见上方 .radio-*-group 规则），
+      公式条与选项之间已是 10px；若再叠 common.css 的 10px 会变成 20px、与纵向节奏不符。
+   ⚠️ 底部补 10px：公式条现在是分区内容盒的最后一个元素（选项组的下内边距落在它上方），
+      补这 10px 后，「公式条 ↔ 分割线」= 10(本节) + max(10 分区下边距, 10 分割线上边距)
+      = 20px，「公式条 ↔ 面板底」= 10 + 10(.panel 内边距) = 20px，与全面板 20px 档一致。 */
+.subpanel-clear .formula-hint {
+  margin-top: 0;
+  margin-bottom: 10px;
+}
