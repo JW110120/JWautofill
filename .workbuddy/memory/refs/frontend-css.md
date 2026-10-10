@@ -64,6 +64,35 @@
   缩进走容器 `padding:0 10px`（**不用 transform**，不参与布局会被推出右缘）；两处 DOM 同构 `.panel-section > .radio-trio > sp-radio-group`；
   紧凑填充用 `.radio-trio-flush{margin:0 auto}` 归零纵向外边距（⚠️ 不能用 `body.compact-app … .radio-trio{margin:0}`，会连带命中描边子面板同名容器）。
 - 滑块行统一 DOM：行容器 `calc(100% - 20px)`、`ew-resize`，70px 文案标签 + 数字输入框 + `.num-unit` 单位符号。
+- ⚠️ **UXP 原生 `input[type="checkbox"]` 的布局盒远宽于可见方块（≈28px vs 15px，方块画在盒左侧）**
+  ⇒ 右列贴边时墨迹右侧天然留 **9–10px 空盒**（渐变 / 图案面板靠这条 `+10px` 补偿后墨迹才量到 10px）。
+  浮窗「右列 checkbox 与红 × 不对齐」的真因即此，**不是布局没贴齐**（2026-10-10 定性）。
+  修法 = 照抄渐变面板同款、作用域限定到浮窗：
+  `.float-window > .panel-section > .row-between.row-grid.row-grid-flush { width: calc(100% + 10px); margin: 0 -10px 0 0; }`
+  ⚠️ 必须连 `width` 一起放大：`.row-between` 自带 `width:100%`，作 flex 子项时交叉轴被钉死，
+  **只写 `margin-right:-10px` 无任何视觉位移**（上一轮已确认的根因）。
+  实测（headless 复刻真实祖先链，1×）：窗口外缘 234 / 红 × 盒右缘 224 / 右列墨迹 215（距外缘 20px）；
+  after 行右缘 735→745，× 仍 735、左列左缘 21 不变（只动右列、不扰左列与标题行）。
+- ⛔ **自包含状态类：一个元素只挂一个类，基态盒模型写进共享选择器列表**。
+  `.icon-button` / `.icon-button-disabled` / `.icon-button-latched` 共享盒模型块，各自只加差异声明；
+  常亮态不得靠「同时挂基态 + 修饰类」实现（会引入顺序依赖）。
+- ⛔ **常亮态配色只定义一次（`--latched-bg` / `--latched-icon`，基础 `:root`）**，各 `@media` 不重定义即继承。
+  `--latched-bg: rgb(38,128,235)` + `--latched-icon: rgb(255,255,255)`（对比度 3.9:1 ≥ 非文本 3:1）。
+  ⚠️ **不可复用 `--hover-icon`**（lightest 主题仅 2.9:1，不达标）。
+- ⛔ **描边型图标的 `fill` 与 `stroke` 必须分两条状态规则**：
+  `.icon-button:active .icon-fill{fill:…}` 与 `.icon-button:active .icon-stroke{stroke:…}` 分开写。
+  合并成一条 `… .icon-fill, … .icon-stroke { fill:… }` 会让 (0,2,0) 的 `fill` 压过 `.icon-stroke{fill:none}`(0,1,0)，
+  把开放路径 fill 成实心。
+- ⛔ **浮窗遮挡一律复用 `src/utils/popOverlay.ts` 的 `createOcclusionSession()`，且全局只允许一个会话**。
+  语义 = 「量出弹层矩形 → 只隐藏与其相交的文本控件」，与展开下拉菜单同一逻辑（用户明确要求）。
+  ⚠️ UXP 对原生控件常返回 0 尺寸 ⇒ 必须 `robustRect()` 兜底、并挂 CSS 兜底类 `app-float-occlusion-fallback`
+  （兜底类里才允许「无条件全隐藏」，正常路径绝不全隐藏）。
+  ⚠️ 只在 `restore()` 时还原；**不要每帧新建会话** ⇒ 会泄漏内联样式。
+  ⚠️ 隐藏用**内联 `visibility:hidden !important`** 才能压过普通样式表规则；反之「确保可见」的规则**绝不可带 `!important`**
+  （UXP 下样式表 `!important` 反而压过内联 `!important`）。
+  ⚠️ 反复量不到尺寸时用「callback ref + 立即 + rAF + 60ms 三拍」重算，解决 UXP 提交帧 0 尺寸。
+  实测（真实 `popOverlay.ts` 转译产物跑台架）：浮窗矩形 top10/bottom130，
+  相交 3 个文本控件 → hidden、不相交 2 个 → 无内联、`restore()` 全部回基线。
 
 ## 用户文案（src/constants/helpTexts.ts）
 - **读者 = 精通 PS 的画师**：羽化、不透明度、通道、蒙版、中间值、混合模式、alpha 一律不解释；

@@ -30,6 +30,43 @@ export const FileIcon = ({ className, style }: IconSvgProps) => (
   </svg>
 );
 
+/**
+ * 「显示公式」开关的斜体 fx 图标（2026-10-10）。
+ *
+ * 为什么手绘而不是内联官方 path：Adobe 的 `@spectrum-web-components/icons-workflow`
+ * 未在本仓安装（仅装了 color-* 等 8 个包，见 node_modules/@spectrum-web-components），
+ * 而该包会连带拖入 icons-workflow + icon + base 三个包（约 11MB / 10000+ 文件），
+ * 且导出的是 LitElement Web Component（sp-icon-function），UXP 对第三方自定义元素
+ * 支持很差。故此处按 18 网格手绘一个斜体「fx」。
+ *
+ * ⚠️ 本图标是**描边型**（`fill:none` + stroke），与其它填充型图标的机制不同：
+ *    几何（stroke-width / linecap / linejoin）写死在 svg 上（UXP 对用 CSS 覆盖
+ *    SVG 呈现属性的支持不稳定），只有**颜色**交给 `.icon-stroke` 类，从而复用
+ *    「常态 --text-color → hover --hover-icon → 按下 --active-icon」这一套三态约定；
+ *    与 .icon-button-latched 组合时改由 --latched-icon 接管（见 common.css）。
+ */
+export const FxIcon = ({ className, style }: IconSvgProps) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    height="18"
+    viewBox="0 0 18 18"
+    width="18"
+    className={className}
+    style={style}
+    fill="none"
+    strokeWidth="1.5"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    {/* 斜体 f：上钩 + 下沉的斜竖笔 + 贯穿横笔 */}
+    <path className="icon-stroke" d="M8.4,3.5 C7.3,3.0 6.3,3.5 6.1,4.8 L4.9,12.2 C4.7,13.4 4.1,14.2 3.2,14.6" />
+    <path className="icon-stroke" d="M2.9,7.7 L7.4,7.7" />
+    {/* 斜体 x：两条对角笔按同一倾斜量错位，保持交叉点居中 */}
+    <path className="icon-stroke" d="M9.6,7.6 L12.6,13.0" />
+    <path className="icon-stroke" d="M13.8,7.6 L8.4,13.0" />
+  </svg>
+);
+
 export const AddIcon = ({ className, style }: IconSvgProps) => (
   <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 18 18" width="18" className={className} style={style}>
     <path className="icon-fill" d="M14.5,8H10V3.5A.5.5,0,0,0,9.5,3h-1a.5.5,0,0,0-.5.5V8H3.5a.5.5,0,0,0-.5.5v1a.5.5,0,0,0,.5.5H8v4.5a.5.5,0,0,0,.5.5h1a.5.5,0,0,0,.5-.5V10h4.5a.5.5,0,0,0,.5-.5v-1A.5.5,0,0,0,14.5,8Z" />

@@ -36,3 +36,30 @@
 .subpanel-color .divider + .panel-section {
   margin-top: 25px;
 }
+
+/* 「计算方法」标题行（2026-10-10）：为容纳右侧新增的「显示公式」自绘开关，
+   标题由 .panel-section 的直接子项收进一层 `.row-between.color-calc-head`。
+   --------------------------------------------------------------------------
+   ⚠️ 必须用 `.row-between.color-calc-head`（两级）：`.row-between` 是 (0,1,0) 的通用类，
+      `.color-calc-head` 若单写 (0,1,0) 只能靠源码顺序决胜负（common.css 是静态 link、
+      本文件由 style-loader 运行时后注入，顺序脆弱）⇒ 按本仓铁律用两级类稳压。
+   ⚠️ 行内标题的 margin-bottom 归零：`.subpanel-title-2` 的 15px 原本是「标题 → 两列 radio」
+      间距的提供者；收进行容器后它只会把行撑高（15 文字 + 15 外边距 = 30），并让开关
+      相对标题竖向错位 7.5px。归零后：行高 = 标题自身 15px（开关 24px 的占位盒决定行高为 24px），
+      两者由 .row-between 的 align-items:center 严格居中对齐，间距改由行的下外边距承担。
+   ⚠️ 行上外边距必须归零：`.row-between` 自带 `margin: 10px auto`，而它现在是
+      `.panel-section`（flex 列）的 flex 子项、外边距**不折叠** ⇒ 不清零会在
+      `.divider + .panel-section` 已经给的 25px 之上再叠 10px（变 35px），
+      与上方「不透明度抖动 → 分割线」的 25px 不再相等（当年用户实测 25.07/14.91 才定下的节奏）。
+   ⚠️ 行下外边距取 15px：与归零的标题下边距等量互换 ⇒
+      「标题 → 两列 radio」= 15(行) + 10(radio 的 padding-top) = **25px**，与改造前一致。
+   ⚠️ 净效果：分割线→标题、标题→选项各 +4.5px（标题在 24px 高的行里居中，比原来的 15px 文字盒
+      下沉半个高度差）。这是「标题行里放进 24px 开关」的固有代价，左右两侧仍严格对称。 */
+.row-between.color-calc-head {
+  margin: 0 0 15px 0;
+}
+/* ⚠️ 用 (0,3,0) 的 `.row-between.color-calc-head .subpanel-title-2` 压过本文件上方
+   `.subpanel-color .subpanel-title-2`(0,2,0) 的 15px —— 不依赖同文件内的源码顺序。 */
+.row-between.color-calc-head .subpanel-title-2 {
+  margin-bottom: 0;
+}

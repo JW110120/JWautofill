@@ -6,6 +6,7 @@ import { debouncePsProbe, markPsBusyForEvent, runWhenIdle } from '../utils/psPro
 import { addPsNotificationListeners, removePsNotificationListeners } from '../utils/psAccess';
 import { calcDragValue } from '../utils/dragSensitivity';
 import RadioGroup, { RadioOption } from './RadioGroup';
+import FormulaToggle from './FormulaToggle';
 import { helpTexts } from '../constants/helpTexts';
 
 /** 「计算方法」两列选项：模块级常量，保持引用稳定（RadioGroup 已 React.memo）。 */
@@ -33,6 +34,12 @@ interface ColorSettingsProps {
      * 首次挂载为 0，用 prevTokenRef 跳过第一次，避免打开面板就被清空。
      */
     resetToken?: number;
+    /**
+     * 「显示公式」：纯色「计算方法」自己的开关，与清除设置三组**互相独立**
+     * （types/state.ts 的 FormulaVisibility.color）。
+     */
+    formulaVisible?: boolean;
+    onFormulaVisibleChange?: (visible: boolean) => void;
 }
 
 /** 复位目标值：与 types/state.ts 的 initialState.colorSettings 保持一致。 */
@@ -58,7 +65,9 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
     },
     isQuickMaskMode: propIsQuickMaskMode = false,
     isClearMode = false,
-    resetToken = 0
+    resetToken = 0,
+    formulaVisible = false,
+    onFormulaVisibleChange,
 }) => {
     const [internalQuickMaskMode, setInternalQuickMaskMode] = useState(propIsQuickMaskMode);
     const [isInLayerMask, setIsInLayerMask] = useState(false);
@@ -307,16 +316,29 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
 
             {/* 计算模式选择器（原 colorsettings-calculation-mode 分区容器作废，统一收口为子面板分区容器） */}
             <div className="panel-section">
-                <label className="subpanel-title-2" title={helpTexts.color.calcModeLabel}>计算方法</label>
+                {/* ⚠️ 专属类 color-calc-head 不能省：本面板的分区里还有若干滑块行同样是
+                    `.row-between`（且同为 .panel-section 的直接子项），只用通用类会把它们一起选中、
+                    连带改掉滑块的纵向节奏。专属类同时把标题与开关的对齐、上下 25px 节奏钉死。 */}
+                <div className="row-between color-calc-head">
+                    <label className="subpanel-title-2" title={helpTexts.color.calcModeLabel}>计算方法</label>
+                    {/* 「显示公式」开关：本面板自己的 fx 图标按钮，与清除设置三组互不影响 */}
+                    <FormulaToggle
+                        visible={formulaVisible}
+                        onToggle={() => onFormulaVisibleChange && onFormulaVisibleChange(!formulaVisible)}
+                        title={helpTexts.color.showFormula}
+                    />
+                </div>
                 <RadioGroup
                     value={settings.calculationMode || 'absolute'}
                     onChange={(e) => setSettings(prev => ({ ...prev, calculationMode: e.target.value as 'absolute' | 'relative' }))}
                     options={CALCULATION_MODE_OPTIONS}
                     className="radio-pair-group"
                 />
-                <div className="formula-hint" title={helpTexts.color.calcFormulaNote}>
-                    <div className="formula-hint-main">{CALCULATION_FORMULA[settings.calculationMode || 'absolute']}</div>
-                </div>
+                {formulaVisible && (
+                    <div className="formula-hint" title={helpTexts.color.calcFormulaNote}>
+                        <div className="formula-hint-main">{CALCULATION_FORMULA[settings.calculationMode || 'absolute']}</div>
+                    </div>
+                )}
             </div>
 
 

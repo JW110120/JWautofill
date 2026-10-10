@@ -94,6 +94,30 @@ export const initialCompactModes: CompactModes = {
 };
 
 /**
+ * 「显示公式」的四个独立开关作用域（2026-10-10 拆分）。
+ *
+ * 为什么必须拆开：这四处按钮分属**不同的面板与不同的目标类型**——
+ *   background —— 清除设置 · 背景图层
+ *   channel    —— 清除设置 · 蒙版&通道
+ *   layer      —— 清除设置 · 像素图层
+ *   color      —— 纯色设置 · 计算方法
+ * 用户往往只想核对当前正在调的那一处；旧版四处共用一个布尔时，在清除模式里开一个，
+ * 清除面板另外两个（乃至纯色面板的）也会一起亮起来，属于明确的错误行为
+ * （用户 2026-10-10 反馈）。
+ * ⚠️ 与 CompactModes 同款：嵌套对象、按作用域逐项持久化，避免「整体覆盖」把
+ *    用户已开启的其它作用域冲掉。
+ */
+export type FormulaScope = 'background' | 'channel' | 'layer' | 'color';
+export type FormulaVisibility = Record<FormulaScope, boolean>;
+
+export const initialFormulaVisibility: FormulaVisibility = {
+    background: false,
+    channel: false,
+    layer: false,
+    color: false,
+};
+
+/**
  * 清除算法的三类目标（与 utils/ClearAlgorithms.ts 的 ClearTargetKind 对应）。
  *
  * 为什么分成三组而不是一个总开关：三类目标的**物理载体不同**，
@@ -135,6 +159,13 @@ export interface AppState {
     clearChannelAlgorithm: ClearBinaryAlgorithm;
     clearLayerAlgorithm: ClearBinaryAlgorithm;
     isClearSettingOpen: boolean;  // 清除设置子面板开关
+    /**
+     * 「显示公式」开关（四处各自独立，默认全关，随面板状态持久化）。
+     * 清除设置的三组算法（背景图层 / 蒙版&通道 / 像素图层）与纯色面板的「计算方法」
+     * 各自下方有一条公式说明条；本字段按作用域分别控制它们的显示/隐藏。
+     * ⚠️ 必须进 state：四处 fx 开关与公式条都靠它触发重渲染。
+     */
+    formulaVisible: FormulaVisibility;
     compactModes: CompactModes;  // 紧凑模式：按面板作用域分别记录（app=选区填充父面板，其余=5 个子面板）
     isInQuickMask: boolean;  // 添加快速蒙版状态
     // 图层蒙版编辑状态。
@@ -206,6 +237,7 @@ export const initialState: AppState = {
     clearChannelAlgorithm: 'subtract',
     clearLayerAlgorithm: 'multiply',
     isClearSettingOpen: false,
+    formulaVisible: { ...initialFormulaVisibility },    // 「显示公式」四处独立开关，默认全关
     compactModes: { ...initialCompactModes },    // 紧凑模式默认全部关闭
     isInQuickMask: false,    // 添加快速蒙版初始值
     isInLayerMask: false,    // 图层蒙版编辑默认关闭（由 checkMaskModes / 选区事件探测回写）

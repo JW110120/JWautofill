@@ -1,8 +1,11 @@
 import React from 'react';
 import RadioGroup, { RadioOption } from './RadioGroup';
+import FormulaToggle from './FormulaToggle';
 import {
     ClearBackgroundAlgorithm,
     ClearBinaryAlgorithm,
+    FormulaScope,
+    FormulaVisibility,
 } from '../types/state';
 import { helpTexts } from '../constants/helpTexts';
 
@@ -23,6 +26,10 @@ import { helpTexts } from '../constants/helpTexts';
  *
  * 公式文案：与 utils/ClearAlgorithms.ts 的 clearBackgroundColor / clearScalarValue 严格对应，
  * 参数一律用中文（原值 / 输入灰度 / 强度 / 不透明度），随所选模式实时切换。
+ *
+ * 「显示公式」开关（2026-10-10 改造）：三组标题行右侧各一个**斜体 fx 图标按钮**
+ * （components/FormulaToggle.tsx，常亮态 = .icon-button-latched 实心主色胶囊），
+ * 三组状态**互相独立**（types/state.ts 的 FormulaVisibility），互不联动。
  */
 
 /** 第一类 · 背景图层（无透明度目标）：趋白 / 减法变黑 / 乘法变黑 */
@@ -65,12 +72,15 @@ const LAYER_FORMULA: Record<ClearBinaryAlgorithm, string> = {
 
 /**
  * 公式提示条：紧贴对应选项组下方，实时显示所选模式的计算公式。
- * 「强度」是三条公式共用的系数，参数名同样用中文（不透明度 / 内容不透明度 / 羽化系数）。
+ * 三行结构：模式公式（12px）→ 强度系数（11px）→ 羽化系数释义（11px）。
+ * ⚠️ 「羽化系数」是生僻词，必须有**可见**的一行释义（2026-10-10 用户要求），
+ *    不能只放在 tooltip 里；tooltip 保留 formulaNote（输入灰度 / 内容不透明度）。
  */
 const FormulaHint: React.FC<{ formula: string }> = ({ formula }) => (
     <div className="formula-hint" title={helpTexts.clear.formulaNote}>
         <div className="formula-hint-main">{formula}</div>
         <div className="formula-hint-sub">{helpTexts.clear.formulaStrength}</div>
+        <div className="formula-hint-gloss">{helpTexts.clear.formulaGloss}</div>
     </div>
 );
 
@@ -82,6 +92,9 @@ interface ClearSettingProps {
     onBackgroundAlgorithmChange: (algorithm: ClearBackgroundAlgorithm) => void;
     onChannelAlgorithmChange: (algorithm: ClearBinaryAlgorithm) => void;
     onLayerAlgorithmChange: (algorithm: ClearBinaryAlgorithm) => void;
+    /** 「显示公式」：三组各自的显隐状态（默认全关，逐项持久化） */
+    formulaVisible: FormulaVisibility;
+    onFormulaVisibleChange: (scope: FormulaScope, visible: boolean) => void;
     onClose: () => void;
 }
 
@@ -93,6 +106,8 @@ const ClearSetting: React.FC<ClearSettingProps> = ({
     onBackgroundAlgorithmChange,
     onChannelAlgorithmChange,
     onLayerAlgorithmChange,
+    formulaVisible,
+    onFormulaVisibleChange,
     onClose,
 }) => {
     if (!isOpen) return null;
@@ -105,40 +120,61 @@ const ClearSetting: React.FC<ClearSettingProps> = ({
             </div>
 
             <div className="panel-section">
-                <span className="label-4" title={helpTexts.clear.backgroundAlgorithm}>背景图层</span>
+                <div className="row-between">
+                    <span className="label-4" title={helpTexts.clear.backgroundAlgorithm}>背景图层</span>
+                    <FormulaToggle
+                        visible={formulaVisible.background}
+                        onToggle={() => onFormulaVisibleChange('background', !formulaVisible.background)}
+                        title={helpTexts.clear.showFormulaBackground}
+                    />
+                </div>
                 <RadioGroup
                     value={backgroundAlgorithm}
                     onChange={(e) => onBackgroundAlgorithmChange(e.target.value as ClearBackgroundAlgorithm)}
                     options={BACKGROUND_OPTIONS}
                     className="radio-trio-group"
                 />
-                <FormulaHint formula={BACKGROUND_FORMULA[backgroundAlgorithm]} />
+                {formulaVisible.background && <FormulaHint formula={BACKGROUND_FORMULA[backgroundAlgorithm]} />}
             </div>
 
             <div className="divider"></div>
 
             <div className="panel-section">
-                <span className="label-4 clear-group-label" title={helpTexts.clear.channelAlgorithm}>蒙版&通道</span>
+                <div className="row-between">
+                    <span className="label-4 clear-group-label" title={helpTexts.clear.channelAlgorithm}>蒙版&通道</span>
+                    <FormulaToggle
+                        visible={formulaVisible.channel}
+                        onToggle={() => onFormulaVisibleChange('channel', !formulaVisible.channel)}
+                        title={helpTexts.clear.showFormulaChannel}
+                    />
+                </div>
                 <RadioGroup
                     value={channelAlgorithm}
                     onChange={(e) => onChannelAlgorithmChange(e.target.value as ClearBinaryAlgorithm)}
                     options={CHANNEL_OPTIONS}
                     className="radio-pair-group"
                 />
-                <FormulaHint formula={CHANNEL_FORMULA[channelAlgorithm]} />
+                {formulaVisible.channel && <FormulaHint formula={CHANNEL_FORMULA[channelAlgorithm]} />}
             </div>
 
             <div className="divider"></div>
 
             <div className="panel-section">
-                <span className="label-4" title={helpTexts.clear.layerAlgorithm}>像素图层</span>
+                <div className="row-between">
+                    <span className="label-4" title={helpTexts.clear.layerAlgorithm}>像素图层</span>
+                    <FormulaToggle
+                        visible={formulaVisible.layer}
+                        onToggle={() => onFormulaVisibleChange('layer', !formulaVisible.layer)}
+                        title={helpTexts.clear.showFormulaLayer}
+                    />
+                </div>
                 <RadioGroup
                     value={layerAlgorithm}
                     onChange={(e) => onLayerAlgorithmChange(e.target.value as ClearBinaryAlgorithm)}
                     options={LAYER_OPTIONS}
                     className="radio-pair-group"
                 />
-                <FormulaHint formula={LAYER_FORMULA[layerAlgorithm]} />
+                {formulaVisible.layer && <FormulaHint formula={LAYER_FORMULA[layerAlgorithm]} />}
             </div>
         </div>
     );

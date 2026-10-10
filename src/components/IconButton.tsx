@@ -4,6 +4,12 @@ export interface IconButtonProps {
   onClick?: (e: React.MouseEvent) => void;
   title?: string;
   disabled?: boolean;
+  /**
+   * 「保持开启」态（如「显示公式」的 fx 开关已打开）。
+   * 传 boolean 时会同时落到 `aria-pressed`（无障碍读作「已按下」）；
+   * 不传则完全不渲染该属性（普通的一次性图标按钮不是 toggle）。
+   */
+  latched?: boolean;
   children: React.ReactNode;
   style?: React.CSSProperties;
 }
@@ -12,7 +18,8 @@ export interface IconButtonProps {
  * 24px 无边框自定义图标按钮（替代原生 sp-action-button）。
  *
  * 通用类：.icon-button（所有仅含一个图标的按钮，无外边框）；禁用态为自包含单类
- * .icon-button-disabled（一个元素只挂一个类，与 common.css 单一来源保持一致）。
+ * .icon-button-disabled、保持开启态为自包含单类 .icon-button-latched
+ * （一个元素只挂一个类，与 common.css 单一来源保持一致）。
  *
  * 为什么不用原生 sp-action-button：
  *  1. UXP / PS 升级后原生 Spectrum 组件在部分 PS 版本下渲染异常（兼容性）；
@@ -24,13 +31,14 @@ export interface IconButtonProps {
  *     <AddIcon className="icon-14" />
  *   </IconButton>
  */
-export default function IconButton({ onClick, title, disabled, children, style }: IconButtonProps) {
+export default function IconButton({ onClick, title, disabled, latched, children, style }: IconButtonProps) {
   return (
     <div
       role="button"
       tabIndex={disabled ? -1 : 0}
       aria-disabled={disabled}
-      className={disabled ? 'icon-button-disabled' : 'icon-button'}
+      aria-pressed={latched}
+      className={disabled ? 'icon-button-disabled' : (latched ? 'icon-button-latched' : 'icon-button')}
       title={title}
       style={style}
       onClick={(e) => { if (!disabled) onClick?.(e); }}

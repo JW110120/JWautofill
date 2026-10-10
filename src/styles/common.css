@@ -481,13 +481,56 @@ html, body {
   margin-top: 10px;
 }
 /* 零外边距档：纵向外边距清零（单个控件的呼吸改由内层行的 5px 承担）。
-   ⚠️ 右外边距 -10px（2026-10-10 用户要求）：本类只服务于「两列复选框组」
-      （渐变 / 图案面板的 .border-panel-section 内、填充设置浮窗的 .float-window 内）。
-      这两处的父容器都带 10px 内边距 ⇒ 右列内容（align-items: flex-end 右对齐）
-      距面板外缘约 20px，明显比同行左侧的 10px 宽。把行容器向右探出 10px 后，
-      右列复选框右缘收到约 10px，左右对称、也与其上方的分割线两端对齐。
-      ⚠️ 负外边距探入的正是父容器的 10px 内边距，不会越过边框 / 溢出面板。 */
+   ⚠️ 横向归零用 `auto`：本行自带 width:100%，横向 auto 解析为 0，等价于 0。
+   （基底 .row-between.row-grid 是 `margin: 10px auto`，这里只把纵向压平。） */
 .row-between.row-grid.row-grid-flush {
+  margin: 0 auto;
+}
+
+/* 右列右缘对齐「同容器内分割线的右端」（2026-10-10 第二次修正）。
+   【上一次为什么完全没生效 —— 根因】
+     .row-between 自带 `width: 100%`，而本行是 .border-panel-section
+     （flex 列容器，align-items: stretch）的 flex 子项 ⇒ 交叉轴尺寸被 `width` 钉死在
+     容器内容盒宽；只给 `margin-right: -10px` 时，负外边距只影响行尾的剩余空间分配，
+     **不会把盒子右移** ⇒ 视觉零变化（实测：右缘仍在原处）。
+   【实测（headless 探针，内容盒 230px）】
+     右列 checkbox 右缘距面板外缘 **21px**；而同一 .border-panel-section 内的
+     .divider（自带 width: calc(100% + 20px) + 左右 -10px）右端在 **11px**
+     ⇒ 分割线比复选框多伸出 10px，这正是用户看到的「右边距约 20px 没变小」。
+   【修法】必须连 width 一起放大：+10px 恰好补进 .border-panel-section 的 10px 内边距，
+     右列右缘与分割线右端严格重合（实测 484.5 = 484.5，距面板外缘 11px ≈ 10px 档）。
+     左侧不动（保持与上方 radio / 滑块的左缘对齐）。
+   ⚠️ 作用域限定 .border-panel-section：填充/图案底部的复选框组、渐变「样式」行都在
+      描边容器里，需要与容器内的分割线右端对齐。 */
+.border-panel-section > .row-between.row-grid.row-grid-flush {
+  width: calc(100% + 10px);
+  margin: 0 -10px 0 0;
+}
+
+/* 「填充设置」浮窗内两列复选框组：右列再向外推 10px，与标题行红 × 右缘齐平（2026-10-10）。
+   【为什么上面那条不够用 —— 根因】
+     浮窗的两列组挂在 `.float-window > .panel-section` 下，**不在 .border-panel-section 内**
+     ⇒ 上面那条作用域规则自然不命中，右列一直差 10px 到位（用户报「到现在还没改掉」）。
+   【用户截图逐像素实测（量的都是墨迹）】
+     · 窗口外缘右 = x234；红 × 的盒子右缘 = x224（= 内容盒右缘，距窗口外缘 10px + 1px 边框）
+     · 右列复选框墨迹右缘 = x215 ⇒ 距窗口外缘 **20px**，比红 × 多缩进 10px
+     · 对照：渐变面板同口径量得 10px —— 那正是靠下面这条同款规则达成的（用户已确认）。
+   【10px 差在哪 —— 不是布局，是原生控件自身的墨迹内缩】
+     右列 `.row-start`（标签 + 复选框）**已经贴齐内容盒右缘**，问题出在 UXP 的
+     `input[type=checkbox]`：它的布局盒比可见方块宽得多（按截图标定 ≈28px，而方块仅 15px），
+     方块画在盒子左侧 ⇒ 墨迹右侧留下约 9–10px 空盒。该内缩在渐变/图案面板
+     （同样由 `.border-panel-section > …` 那条 +10px 补偿）上量值完全一致。
+   【修法】与渐变面板**逐字同款**：宽度 +10px 伸进 .float-window 的 10px 内边距，
+     右缘落到窗口内边框处 ⇒ 复选框墨迹右缘 ≈225，与红 × 的 224 重合（≤1px 误差）。
+     左列不动，仍距窗口外缘 10px，左右对称。
+   【Chromium 实测（outputs/_float_window_measure.cjs，两变体对照）】
+     before：`.row-between.row-grid` 右缘 = 内容盒右缘 = × 右缘（735）；左列左缘 21
+     after ：同一行右缘 745（+10px，正好落在窗口内边框处）；× 右缘仍 735；左列左缘仍 21
+     ⇒ 规则只外推右列 10px；行右缘未越出窗口内边框（不产生横向滚动条）。
+   ⚠️ 只命中浮窗里的网格行：`.panel-section` 是 `.float-window` 的直接子项，
+      标题行是 `.row-between` 而非 `.row-grid` ⇒ 红 × 位置不受影响。 */
+.float-window > .panel-section > .row-between.row-grid.row-grid-flush {
+  width: calc(100% + 10px);
   margin: 0 -10px 0 0;
 }
 /* 零外边距档：同列上下相邻两行仍是 10px（每行 5px）。 */
@@ -599,9 +642,10 @@ html, body {
   min-width: 50px;
 }
 
-/* 通用图标按钮容器（含禁用态：禁用仅变色不丢盒模型） */
+/* 通用图标按钮容器（含禁用态与「保持开启」态：均只变色不丢盒模型） */
 .icon-button,
-.icon-button-disabled {
+.icon-button-disabled,
+.icon-button-latched {
   display: inline-flex;
   vertical-align: middle;
   align-items: center;
@@ -622,9 +666,26 @@ html, body {
 
 /* 图标按钮样式原则：以下所有图标按钮的状态，改变的之后内部的icon，后面的容器不发生变化，不符合的需要收口 */
 
+/* 「保持开启」态的图标按钮（fx「显示公式」等）：与 .icon-button-disabled 同为
+   **自包含单类**（一个元素只挂一个类），基态盒模型来自上方共享块，本块只补语义。
+   ⚠️ 实心主色胶囊 + --latched-icon 上的图标：图标压在胶囊而非主题底色上，
+      故配色对与主题无关（四个主题共用，见 theme.ts 的 :root 说明）。
+      ✅ rgb(255,255,255) 对 rgb(38,128,235) = 3.9:1（≥ 非文本 3:1 阈值）。
+   ⚠️ 只改 background，**不加 border**：胶囊由背景色提供，加描边会让 24×24 盒内
+      可用尺寸从 24 掉到 22，图标视觉上变小、与普通图标按钮不一致。 */
+.icon-button-latched {
+  background: var(--latched-bg);
+}
+
 /* 通用图标填充颜色 */
 .icon-fill {
   fill: var(--text-color);
+}
+
+/* 描边型图标的颜色（斜体 fx 等，几何在 SVG 内联属性上）：与 .icon-fill 同一套三态约定 */
+.icon-stroke {
+  fill: none;
+  stroke: var(--text-color);
 }
 
 /* 通用文字按钮（.text-button）：字面即按钮，无盒背景、无边框、无内边距。
@@ -672,6 +733,14 @@ html, body {
   display: block;
   width: 14px;
   height: 14px;
+}
+
+/* 略大一档的图标尺寸：给「斜体 fx」这种双字母字形留出辨识空间
+   （24px 按钮内 16px，四周留白 4px，仍与 14px 档同属「图标按钮」视觉）。 */
+.icon-16 {
+  display: block;
+  width: 16px;
+  height: 16px;
 }
 
 /* 通用预览区下方图标按钮区 */
@@ -1157,6 +1226,13 @@ html, body {
   font-size: 11px;
   line-height: 1.5;
 }
+/* 「羽化系数」释义行：生僻词的可见解释（2026-10-10）。
+   与 sub 同字号、同色（不用 opacity 压暗——会拉低对比度，见文件头注释）。 */
+.formula-hint-gloss {
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.5;
+}
 
 
 
@@ -1500,18 +1576,52 @@ html, body {
    --------------------------------------------------------------------------
    UXP 下 position: fixed 的包含块 = 面板全宽（**不扣**右侧 10px 滚动条槽），
    窗口右缘正好落在滚动条槽上，看起来像被滚动条挡住/裁掉。
-   遮罩常驻时本来就不该滚背景，直接让滚动条消失即可；同时补 10px 右内边距，
-   把内容盒宽度补回「有滚动条」时的 W-30，背景零重排（重排也藏在 0.80 遮罩后）。
+   遮罩常驻时本来就不该滚背景，直接让滚动条消失即可。
    ⚠️ 两块面板共用同一个 document.body，所以**类名必须按面板分开**
       （主面板 app-visibility-panel-open / app-fill-settings-open / 工具箱 visibility-panel-open）：
       只靠 #app / #pixeladjustment 限定还不够 —— 同名类会让一块开浮窗时
       另一块的滚动条也被收起、内容盒被多塞 10px 内边距。
-   ⚠️ 遮罩本身是 position: fixed，不受本条的 overflow/内边距影响。 */
+   ⚠️ 遮罩本身是 position: fixed，不受本条的 overflow/内边距影响。
+   ⚠️ 激活弹窗（license-dialog-open）的补偿内边距保留在下方独立规则里（见下一条注释）。 */
 body.license-dialog-open #app .app-root > .panel,
 body.app-visibility-panel-open #app .app-root > .panel,
 body.app-fill-settings-open #app .app-root > .panel,
 body.visibility-panel-open #pixeladjustment .pixeladjustment-root > .panel {
   overflow-y: hidden;
+}
+
+/* 收起滚动条后把内容盒宽度补回「有滚动条」时的 W-30（= 250 − 10 − 10 − 10），
+   背景零重排。补偿量固定 10px（面板基础 padding-right 10px → 20px）。
+   ⛔ **不能无条件补**（2026-10-10 用户报「打开浮窗后下方面板多出滚动条」的根因）：
+      面板在打开浮窗前**没有**滚动条时，内容盒本来就是 230px；无条件补这 10px 反而把它
+      收窄成 220px ⇒ 内容重排、变高 ⇒ 溢出多出一根滚动条。
+      （变高后不会就地裁掉：UXP 纵向 flex 的收缩 / min-height 行为不可靠，撑高的内容会把
+        根容器一起顶高 ⇒ 滚动条出在面板外层，`overflow-y: hidden` 拦不住。）
+      而面板**本来有**滚动条时，内容盒已经是 220px，补这 10px 正好让重排前后完全一致。
+      所以补偿必须按需：由 app.tsx 在打开浮窗前实测 `panel.scrollHeight > panel.clientHeight`
+      （内容确实溢出 = 确实有滚动条），据此挂 body.app-panel-gutter。
+   ⚠️ 两个 body 类同时命中才补：`app-panel-gutter` 单独出现时不得改变内边距
+      （浮窗关闭后必须立刻恢复 10px，否则滚动条回来时会少 10px 内容盒）。 */
+body.app-panel-gutter.app-visibility-panel-open #app .app-root > .panel,
+body.app-panel-gutter.app-fill-settings-open #app .app-root > .panel {
+  padding-right: 20px;
+}
+
+/* 激活弹窗：启动期面板内容通常已溢出（确有滚动条）⇒ 保持无条件补偿。
+   ⚠️ 它的 body 类在 render() 里按 state 派生（syncLicenseDialogClass），
+      不便在中途做实测，故不改造成按需；若将来面板在紧凑模式下短到不出滚动条，
+      这里会多出 10px 内边距（不会产生多余滚动条，只是内容盒略窄）。 */
+body.license-dialog-open #app .app-root > .panel {
+  padding-right: 20px;
+}
+
+/* 工具箱面板（#pixeladjustment）浮窗的补偿：**保持无条件**（与 #app 的按需方案有意不同）。
+   原因：该面板内容恒长（调整项 + 笔刷热键分区叠在一起），浮窗打开时几乎必然有滚动条，
+   无条件补偿 10px 就是准确值；且它的 body 类由 AdjustmentPanel 的 useEffect 在
+   state 变化后挂载，那里同样不便于在挂类前做一次实测 ⇒ 不做按需改造。
+   （若将来工具箱在紧凑模式下短到不出滚动条，这里会与 #app 修复前同型地多出 10px 内边距，
+     需要时再照 app.tsx 的 syncPanelGutter 加一个 pixeladjustment 版本。） */
+body.visibility-panel-open #pixeladjustment .pixeladjustment-root > .panel {
   padding-right: 20px;
 }
 
@@ -1768,6 +1878,30 @@ body.visibility-panel-open #pixeladjustment .pixeladjustment-root > .panel {
 }
 
 .icon-button:active {
+  transform: scale(0.94);
+}
+
+/* 描边型图标（斜体 fx）与填充型同一套三态：只换 stroke，容器不动 */
+.icon-button:hover .icon-stroke {
+  stroke: var(--hover-icon);
+}
+.icon-button:active .icon-stroke {
+  stroke: var(--active-icon);
+}
+
+/* 「保持开启」态：图标常亮为胶囊上的 --latched-icon。
+   ⚠️ hover / 按下**都不再换色** —— 胶囊本身已经是「已开启」的信号，
+      再换色会被读成「又切了一次」；按压反馈只由下面的 scale 提供。
+   ⚠️ fill 与 stroke 必须分成两条规则：若把 .icon-stroke 也写进「设 fill」的那条，
+      它的 (0,2,0) 会压过 .icon-stroke 的 `fill:none`(0,1,0)，把描边型图标的
+      开放路径一并填成实心（fx 会变成两团白块）。 */
+.icon-button-latched .icon-fill {
+  fill: var(--latched-icon);
+}
+.icon-button-latched .icon-stroke {
+  stroke: var(--latched-icon);
+}
+.icon-button-latched:active {
   transform: scale(0.94);
 }
 

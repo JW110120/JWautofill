@@ -3,7 +3,7 @@ import { storage } from 'uxp';
 import { app, action, core } from 'photoshop';
 import { BLEND_MODES } from './constants/blendModes';
 import { BLEND_MODE_OPTIONS } from './constants/blendModeOptions';
-import { AppState, initialState, Gradient, CompactModes, CompactScope, initialCompactModes } from './types/state';
+import { AppState, initialState, Gradient, CompactModes, CompactScope, initialCompactModes, FormulaScope, initialFormulaVisibility } from './types/state';
 import { DragHandler } from './utils/DragHandler';
 import { FillHandler } from './utils/FillHandler';
 import { LayerInfoHandler, invalidateLayerInfoCache, shouldInvalidateLayerInfo } from './utils/LayerInfoHandler';
@@ -31,6 +31,8 @@ import { ColorSettings, Pattern } from './types/state';
 import { MenuManager } from './utils/MenuManager';
 import { PresetManager } from './utils/PresetManager';
 import { PanelStateManager } from './utils/PanelStateManager';
+// 浮窗遮挡数字输入：与「展开下拉菜单」复用同一套「按矩形相交精确隐藏」的实现。
+import { createOcclusionSession } from './utils/popOverlay';
 import {
   connectHotkeyDaemon,
   isDaemonConnected, getMainToggleCombo, setMainToggleCombo, requestHotkeyRecording,
@@ -189,6 +191,17 @@ class App extends React.Component<AppProps, AppState> {
     private panelStateLoaded = false;
     // 主面板滚动容器（挂 .panel 类）引用，用于折叠/展开后逼 UXP 重排原生控件坐标
     private panelRef = React.createRef<HTMLDivElement>();
+    // ===== 浮窗数字输入遮挡（与「展开下拉菜单」同一套逻辑，2026-10-10）=====
+    // 为什么不再是「浮窗一开就隐藏全部 number」：用户要求「浮窗范围之外（上下留白、
+    // 被折叠区挡住的区域）的数字保持可见」，与下拉菜单一致 —— 只隐藏真正被浮窗压住的。
+    // 实现走 utils/popOverlay.ts：量出浮窗矩形，逐控件判相交，只隐藏相交者；关闭时还原。
+    // ⚠️ 只允许**一个**会话：两块浮窗（隐藏/显示分区、填充设置）互斥打开，
+    //    若各用一个会话，后开的会把「已被前者写成 hidden 的内联值」当原值记下来，
+    //    先开的 restore 后元素又被后开的会话写回 hidden ⇒ 数字永久消失（泄漏）。
+    private floatOcclusion = createOcclusionSession();
+    private visibilityFloatWindowEl: HTMLElement | null = null;
+    private fillFloatWindowEl: HTMLElement | null = null;
+    private floatOcclusionTimer: any = null;
     // ===== 工具巡检（「自动关」的兜底通道，详见 pollToolChange 注释）=====
     private toolWatchTimer: any = null;
     private toolWatchBusy = false;
@@ -402,6 +415,10 @@ class App extends React.Component<AppProps, AppState> {
         this.toggleStrokeSetting = this.toggleStrokeSetting.bind(this);
         this.closeClearSetting = this.closeClearSetting.bind(this);
         this.toggleClearSetting = this.toggleClearSetting.bind(this);
+        // 「显示公式」开关：以引用形式传给 ClearSetting / ColorSettingsPanel 的 props，
+        // 必须以绑定后的方法传递（类方法裸引用会丢 this ⇒ 点击后 setState 抛错）。
+        this.setFormulaVisible = this.setFormulaVisible.bind(this);
+        this.setColorFormulaVisible = this.setColorFormulaVisible.bind(this);
         // 新增绑定
         this.toggleSelectionOptions = this.toggleSelectionOptions.bind(this);
         this.handleSelectionSmoothChange = this.handleSelectionSmoothChange.bind(this);
@@ -508,6 +525,8 @@ class App extends React.Component<AppProps, AppState> {
                     trialDaysRemaining: this.state.trialDaysRemaining,
                     // 紧凑模式是界面开关（5 个作用域各自独立），不属于「参数」，复位时保持用户当前选择
                     compactModes: this.state.compactModes,
+                    // 「显示公式」同属界面偏好（四处独立），复位时保持当前选择
+                    formulaVisible: this.state.formulaVisible,
                 });
             },
             onToggleCompactMode: () => { this.toggleCompactMode(); },
@@ -574,6 +593,7 @@ class App extends React.Component<AppProps, AppState> {
                     strokeEnabled: this.state.strokeEnabled,
                     createNewLayer: this.state.createNewLayer,
                     clearMode: this.state.clearMode,
+                    formulaVisible: this.state.formulaVisible,
                     clearBackgroundAlgorithm: this.state.clearBackgroundAlgorithm,
                     clearChannelAlgorithm: this.state.clearChannelAlgorithm,
                     clearLayerAlgorithm: this.state.clearLayerAlgorithm,
@@ -598,6 +618,14 @@ class App extends React.Component<AppProps, AppState> {
                     strokeEnabled: loaded.appPanel.strokeEnabled ?? this.state.strokeEnabled,
                     createNewLayer: loaded.appPanel.createNewLayer ?? this.state.createNewLayer,
                     clearMode: loaded.appPanel.clearMode ?? this.state.clearMode,
+                    // 「显示公式」四处独立开关：旧存档无此字段 ⇒ 逐项回落到默认（全关），
+                    // 按作用域逐项合并，避免「整体覆盖」把用户已开启的其它处冲掉。
+                    formulaVisible: {
+                        background: loaded.appPanel.formulaVisible?.background ?? initialFormulaVisibility.background,
+                        channel: loaded.appPanel.formulaVisible?.channel ?? initialFormulaVisibility.channel,
+                        layer: loaded.appPanel.formulaVisible?.layer ?? initialFormulaVisibility.layer,
+                        color: loaded.appPanel.formulaVisible?.color ?? initialFormulaVisibility.color,
+                    },
                     // 清除算法：旧存档没有这三个字段 ⇒ 回落到 initialState 的默认
                     // （趋白 / 减法 / 乘法），与重构前的既有行为一致。
                     clearBackgroundAlgorithm: loaded.appPanel.clearBackgroundAlgorithm ?? this.state.clearBackgroundAlgorithm,
@@ -716,6 +744,7 @@ class App extends React.Component<AppProps, AppState> {
             'strokeEnabled',
             'createNewLayer',
             'clearMode',
+            'formulaVisible',
             'clearBackgroundAlgorithm',
             'clearChannelAlgorithm',
             'clearLayerAlgorithm',
@@ -736,6 +765,7 @@ class App extends React.Component<AppProps, AppState> {
                     strokeEnabled: this.state.strokeEnabled,
                     createNewLayer: this.state.createNewLayer,
                     clearMode: this.state.clearMode,
+                    formulaVisible: this.state.formulaVisible,
                     clearBackgroundAlgorithm: this.state.clearBackgroundAlgorithm,
                     clearChannelAlgorithm: this.state.clearChannelAlgorithm,
                     clearLayerAlgorithm: this.state.clearLayerAlgorithm,
@@ -798,6 +828,14 @@ class App extends React.Component<AppProps, AppState> {
         document.body.classList.remove('license-dialog-open');
         document.body.classList.remove('app-visibility-panel-open');
         document.body.classList.remove('app-fill-settings-open');
+        document.body.classList.remove('app-float-occlusion-fallback');
+        document.body.classList.remove('app-panel-gutter');
+        // 浮窗遮挡会话：还原所有被临时隐藏的数字输入 + 取消待重算的定时器
+        if (this.floatOcclusionTimer) {
+            clearTimeout(this.floatOcclusionTimer);
+            this.floatOcclusionTimer = null;
+        }
+        try { this.floatOcclusion.restore(); } catch { /* ignore */ }
     }
 
     handleButtonClick() {
@@ -898,6 +936,88 @@ class App extends React.Component<AppProps, AppState> {
         resyncNativeWidgets(root);
     }
 
+    /**
+     * 浮窗打开后的「滚动条槽补偿」按需开关。
+     *
+     * 背景：浮窗打开时会给 `.panel` 加 `overflow-y: hidden` 收起滚动条
+     * （避免滚动条压住浮窗右缘）；收起后内容盒会宽出 10px，导致背景重排。
+     * 旧做法是无条件 `padding-right: 20px` 把这 10px 补回来。
+     *
+     * ⛔ 无条件补的缺陷（用户报「打开浮窗后下方面板多出滚动条」）：
+     *    面板**本来没有**滚动条时，内容盒本来就是 230px，这 10px 反而把它收窄成
+     *    220px ⇒ 内容重排、变高 ⇒ 溢出多出一根滚动条。
+     *    ⇒ 只在「面板确实有滚动条」时才补（那 10px 才真正是补偿）。
+     *
+     * 判据 = `scrollHeight > clientHeight`（内容高于滚动区 ⇒ 现在就有滚动条）。
+     * ⚠️ 必须在加 `overflow-y: hidden` **之前**测：加了以后滚动条没了，
+     *    两个值都可能变化（UXP 的滚动槽压在内容盒内部，行为不完全等同桌面浏览器）。
+     * ⚠️ 面板无内容 / 未挂载时按「不补」处理（宁可少 10px 内边距，也不要凭空多出滚动条）。
+     */
+    private syncPanelGutter() {
+        const el = this.panelRef.current;
+        let needs = false;
+        try {
+            if (el) needs = el.scrollHeight > el.clientHeight + 1;
+        } catch (_) {
+            needs = false;
+        }
+        if (needs) document.body.classList.add('app-panel-gutter');
+        else document.body.classList.remove('app-panel-gutter');
+    }
+
+    /** 浮窗元素引用（callback ref）：挂上/卸载时各重算一次遮挡 */
+    private bindVisibilityFloatWindow = (el: HTMLElement | null) => {
+        this.visibilityFloatWindowEl = el;
+        this.scheduleFloatOcclusion();
+    };
+
+    private bindFillFloatWindow = (el: HTMLElement | null) => {
+        this.fillFloatWindowEl = el;
+        this.scheduleFloatOcclusion();
+    };
+
+    /**
+     * 重算浮窗遮挡：量出浮窗矩形，只隐藏与它相交的数字输入（「展开下拉菜单」同一逻辑）。
+     *
+     * ⚠️ 为什么必须延后多拍再量：UXP 在「提交后那一帧」对刚插入的节点常返回 0 尺寸矩形，
+     *    此时会话会判为「无相交」而整体放行 ⇒ 数字浮在浮窗之上（旧的「全量隐藏」正是
+     *    为了绕开这一点）。这里用 立即 + rAF + 60ms 三拍取覆盖，任何一拍量到真矩形即生效。
+     * ⚠️ 一个矩形都量不到时退回 body.app-float-occlusion-fallback（CSS 全量隐藏兜底）：
+     *    宁可多藏几个，也绝不让原生 number 穿到遮罩之上。
+     */
+    private scheduleFloatOcclusion() {
+        if (this.floatOcclusionTimer) {
+            clearTimeout(this.floatOcclusionTimer);
+            this.floatOcclusionTimer = null;
+        }
+        const run = () => { this.applyFloatOcclusion(); };
+        run();
+        if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+        this.floatOcclusionTimer = setTimeout(run, 60);
+    }
+
+    private applyFloatOcclusion() {
+        const win = this.fillFloatWindowEl || this.visibilityFloatWindowEl;
+        const root = document.getElementById('app');
+
+        if (!win || !root) {
+            this.floatOcclusion.restore();
+            document.body.classList.remove('app-float-occlusion-fallback');
+            return;
+        }
+
+        const r = win.getBoundingClientRect();
+        if (!r || r.width <= 0 || r.height <= 0) {
+            // 量不到 ⇒ 会话无法判定，退回全量隐藏兜底
+            this.floatOcclusion.restore();
+            document.body.classList.add('app-float-occlusion-fallback');
+            return;
+        }
+
+        document.body.classList.remove('app-float-occlusion-fallback');
+        this.floatOcclusion.update(win, root);
+    }
+
     /** 打开「隐藏/显示分区」浮窗（与像素调整面板同一套交互） */
     openVisibilityPanel() {
         // 与绘画工具箱同机制：浮窗打开时收起本面板滚动条 + 隐藏背后 number 输入，
@@ -906,12 +1026,15 @@ class App extends React.Component<AppProps, AppState> {
         //    document.body，同名类会让「一块面板开浮窗」连带把另一块面板的滚动条
         //    收起、数字隐藏；且任何一块关闭时无条件移除，还会把另一块仍在开的浮窗
         //    打回原状（数字浮到浮窗上方）。
+        // ⚠️ 先测滚动条状态（此时 overflow-y 还是 auto），再挂类。
+        this.syncPanelGutter();
         document.body.classList.add('app-visibility-panel-open');
         this.setState({ showVisibilityPanel: true });
     }
 
     closeVisibilityPanel() {
         document.body.classList.remove('app-visibility-panel-open');
+        document.body.classList.remove('app-panel-gutter');
         this.setState({ showVisibilityPanel: false });
     }
 
@@ -923,13 +1046,27 @@ class App extends React.Component<AppProps, AppState> {
      *    两块面板共用同一个 document.body，同名类会互相串扰（见 common.css 浮窗区）。
      */
     openFillSettingsPanel() {
+        this.syncPanelGutter();
         document.body.classList.add('app-fill-settings-open');
         this.setState({ isFillSettingsOpen: true });
     }
 
     closeFillSettingsPanel() {
         document.body.classList.remove('app-fill-settings-open');
+        document.body.classList.remove('app-panel-gutter');
         this.setState({ isFillSettingsOpen: false });
+    }
+
+    /** 「显示公式」开关（四处各自独立；随面板状态持久化） */
+    setFormulaVisible(scope: FormulaScope, visible: boolean) {
+        this.setState(prev => ({
+            formulaVisible: { ...prev.formulaVisible, [scope]: visible },
+        }));
+    }
+
+    /** 纯色面板「计算方法」的公式条显隐（= setFormulaVisible('color', …)，独立引用便于传给子面板） */
+    setColorFormulaVisible(visible: boolean) {
+        this.setFormulaVisible('color', visible);
     }
 
     /** 切换某个分区的可见性（选区改造 / 填充选项） */
@@ -2860,6 +2997,8 @@ title={helpTexts.selectionFill.clearMode}>
                 isClearMode={this.state.clearMode}
                 isQuickMaskMode={false}
                 resetToken={this.state.resetToken}
+                formulaVisible={this.state.formulaVisible.color}
+                onFormulaVisibleChange={this.setColorFormulaVisible}
             />
 
             {/* 图案选择器 */}
@@ -2904,6 +3043,8 @@ title={helpTexts.selectionFill.clearMode}>
               onBackgroundAlgorithmChange={(v) => this.setState({ clearBackgroundAlgorithm: v })}
               onChannelAlgorithmChange={(v) => this.setState({ clearChannelAlgorithm: v })}
               onLayerAlgorithmChange={(v) => this.setState({ clearLayerAlgorithm: v })}
+              formulaVisible={this.state.formulaVisible}
+              onFormulaVisibleChange={this.setFormulaVisible}
               onClose={this.closeClearSetting}
             />
             </div>
@@ -2931,7 +3072,7 @@ title={helpTexts.selectionFill.clearMode}>
             />
             {this.state.showVisibilityPanel && (
                 <div className="float-overlay" onClick={() => this.closeVisibilityPanel()}>
-                    <div className="float-window" onClick={(e) => e.stopPropagation()}>
+                    <div className="float-window" ref={this.bindVisibilityFloatWindow} onClick={(e) => e.stopPropagation()}>
                         <div className="row-between">
                             <span className="subpanel-title-1" title={helpTexts.selectionFill.visibilityPanelTitle}>隐藏/显示分区</span>
                             <div role="button" tabIndex={0} className="close-button" title={helpTexts.selectionFill.floatClose} onClick={() => this.closeVisibilityPanel()}>×</div>
@@ -2954,7 +3095,7 @@ title={helpTexts.selectionFill.clearMode}>
                 内容沿用原两列网格（.row-between.row-grid.row-grid-flush）以保持视觉连续。 */}
             {this.state.isFillSettingsOpen && (
                 <div className="float-overlay" onClick={() => this.closeFillSettingsPanel()}>
-                    <div className="float-window" onClick={(e) => e.stopPropagation()}>
+                    <div className="float-window" ref={this.bindFillFloatWindow} onClick={(e) => e.stopPropagation()}>
                         <div className="row-between">
                             <span className="subpanel-title-1" title={helpTexts.selectionFill.fillSettingsTitle}>填充设置</span>
                             <div role="button" tabIndex={0} className="close-button" title={helpTexts.selectionFill.floatClose} onClick={() => this.closeFillSettingsPanel()}>×</div>

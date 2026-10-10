@@ -1,4 +1,4 @@
-import type { CompactModes, Gradient } from '../types/state';
+import type { CompactModes, FormulaVisibility, Gradient } from '../types/state';
 import { } from 'react';
 
 /**
@@ -19,6 +19,8 @@ export type AppPanelState = {
   strokeEnabled?: boolean;
   createNewLayer?: boolean;
   clearMode?: boolean;
+  /** 「显示公式」四处独立开关（清除设置三组 + 纯色「计算方法」的公式条显隐） */
+  formulaVisible?: FormulaVisibility;
   compactModes?: CompactModes;
   fillMode?: 'foreground' | 'pattern' | 'gradient';
   selectedGradient?: Gradient | null;
