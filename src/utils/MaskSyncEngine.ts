@@ -1,9 +1,9 @@
-import { app, action, core, imaging } from 'photoshop';
+import { app, action, imaging } from 'photoshop';
 import { isPsBusy, markPsBusyForEvent, runWhenIdle } from './psProbe';
 import {
   refreshLayerSnapshot, invalidateLayerSnapshot, LayerSnapshotEntry
 } from './layerTreeSnapshot';
-import { psRead, psTryRead, markPsAccess, runAsModal } from './psAccess';
+import { psRead, psTryRead, runAsModal } from './psAccess';
 import { invalidateLayerInfoCache, shouldInvalidateLayerInfo } from './LayerInfoHandler';
 
 /**

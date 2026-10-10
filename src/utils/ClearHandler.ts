@@ -1768,9 +1768,6 @@ export class ClearHandler {
         const cos = Math.cos(angleRad);
         const sin = Math.sin(angleRad);
         
-        // 图案中心
-        const patternCenterX = scaledPatternWidth / 2;
-        const patternCenterY = scaledPatternHeight / 2;
         
         // 获取图案像素的函数 - 修复透明区域处理
         const getPatternPixel = (x: number, y: number) => {

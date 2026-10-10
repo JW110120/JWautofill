@@ -15,9 +15,6 @@ import './styles/app.css';
 // 让弹窗规则排在面板规则之后（原先是组件内 <style>，注入时机最晚）。
 import './styles/license.css';
 import { defaultTheme, Provider } from '@adobe/react-spectrum';
-import ColorSettingsPanel from './components/ColorSettingsPanel';
-import PatternPicker from './components/PatternPicker';
-import GradientPicker from './components/GradientPicker';
 import AdjustmentPanel from './adjustments/AdjustmentPanel';
 import { MenuManager } from './utils/MenuManager';
 

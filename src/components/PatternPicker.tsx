@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Pattern } from '../types/state';
 import { FileIcon, DeleteIcon } from '../styles/Icons';
 import IconButton from '../components/IconButton';
-import { action, core, imaging, app } from 'photoshop';
+import { action, imaging, app } from 'photoshop';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
 import { debouncePsProbe, markPsBusyForEvent, runWhenIdle } from '../utils/psProbe';
 import { addPsNotificationListeners, removePsNotificationListeners, runAsModal } from '../utils/psAccess';
@@ -69,7 +69,6 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
     // 新增预览拖拽状态
     const [isPreviewDragging, setIsPreviewDragging] = useState<boolean>(false);
     const [dragStart, setDragStart] = useState<{x: number, y: number}>({x: 0, y: 0});
-    const previewRef = useRef<HTMLDivElement>(null);
     
     // 新增预览相关状态
     const [loadedImages, setLoadedImages] = useState<Record<string, boolean>>({});
@@ -795,7 +794,6 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
             const {localFileSystem: fs} = require("uxp").storage;
             
             // 获取文件的会话令牌
-            const filePath = selectedPatternData.file.nativePath;
             const fileToken = await fs.createSessionToken(selectedPatternData.file);
             
             let patternGrayData: Uint8Array | null = null;
@@ -900,8 +898,6 @@ const ZOOM_LEVEL_OPTIONS = ZOOM_LEVELS.map(level => ({
                     const activeDoc = app.activeDocument;
 
                     // 根据文件类型决定是否应用alpha通道
-                    const fileName = selectedPatternData.file.name.toLowerCase();
-                    const isJpg = fileName.endsWith('.jpg') || fileName.endsWith('.jpeg');
 
                     // 按照官方API格式获取文档的像素数据
                     let options = {

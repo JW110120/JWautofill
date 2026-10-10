@@ -1,10 +1,8 @@
-import { app, action, core, imaging } from 'photoshop';
+import { app, action, imaging } from 'photoshop';
 import { BLEND_MODES } from '../constants/blendModes';
 import { Gradient, GradientStop } from '../types/state';
 import { BLEND_MODE_CALCULATIONS } from './BlendModeCalculations';
 
-// 内部类型定义
-type Bounds = [number, number, number, number];
 
 
 interface GradientFillOptions {

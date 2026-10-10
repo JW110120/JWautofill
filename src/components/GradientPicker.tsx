@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Gradient, GradientStop } from '../types/state';
 import { AddIcon, DeleteIcon } from '../styles/Icons';
 import IconButton from '../components/IconButton';
-import { app, action, core } from 'photoshop';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
 import { debouncePsProbe, markPsBusyForEvent, runWhenIdle } from '../utils/psProbe';
 import { addPsNotificationListeners, removePsNotificationListeners } from '../utils/psAccess';

@@ -1,4 +1,4 @@
-import { app, action, imaging } from 'photoshop';
+import { app, action } from 'photoshop';
 import { runAsModal } from './psAccess';
 import { BLEND_MODES } from '../constants/blendModes';
 import { AppState } from '../types/state';

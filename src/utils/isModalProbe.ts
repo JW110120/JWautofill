@@ -65,11 +65,6 @@ function clockOf(base: number, offset: number): string {
         + '.' + String(d.getMilliseconds() + 1000).slice(1);
 }
 
-function padR(n: number, w: number): string {
-    let s = String(n);
-    while (s.length < w) s = ' ' + s;
-    return s;
-}
 
 /**
  * 启动探针。模块级 started 保证两个面板共用同一 bundle 时也只启动一次。

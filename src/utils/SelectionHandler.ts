@@ -184,7 +184,7 @@ export class SelectionHandler {
 
     private static applyDiffusionEffect(data: any, expandValue: number): Uint8Array {
         const { selectionData, bounds, docWidth, docHeight } = data;
-        const { left, top, width, height } = bounds;
+        const { left, top, width } = bounds;
         
         // 创建文档大小的数组
         const fullDocumentData = new Uint8Array(docWidth * docHeight);

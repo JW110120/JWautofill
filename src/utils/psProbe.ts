@@ -188,14 +188,12 @@ export function isSelectionDescriptor(descriptor?: any): boolean {
 // 短路 ⇒ 在时间戳恰为 0 的场景（测试台/时钟回拨）下保护失效。
 let lastEventAt = -1;          // 最近一次「任何事件」的时刻
 let lastHeavyEventAt = -1;     // 最近一次「非选区事件」的时刻
-let lastSelectionEventAt = -1; // 最近一次「选区事件」的时刻
 let docGeneration = 0;         // 文档世代号（文档级事件即 ++）
 
 /** 仅供测试/诊断：重置事件记忆与世代号。 */
 export function resetLongEventMemory(): void {
     lastEventAt = -1;
     lastHeavyEventAt = -1;
-    lastSelectionEventAt = -1;
     docGeneration = 0;
     psBusyUntil = 0;
     docLatchActive = false;
@@ -377,7 +375,6 @@ export function markPsBusyForEvent(eventName?: string, descriptor?: any): void {
     lastEventAt = now;
 
     if (isSelectionDescriptor(descriptor)) {
-        lastSelectionEventAt = now;
         // ⚠️ 纯选区变更**不**作废宿主租约：它不代表「宿主刚执行过重命令」，
         //    而且填充要紧接着读 PS（`fillReadyRemain` 的短冷却就建立在这条上）。
         psBusyUntil = Math.max(psBusyUntil, now + QUIET_AFTER_EVENT_MS);

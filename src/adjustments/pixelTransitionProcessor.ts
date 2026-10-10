@@ -118,7 +118,6 @@ export async function processPixelTransition(layerPixelData: ArrayBuffer, select
     for (let x = 0; x < width; x++) {
       const centerIdx = (y * width + x) * 4;
       const centerAlpha = temp[centerIdx + 3];
-      const originalAlpha = pixels[centerIdx + 3];
       
       // 根据图层类型判断是否需要处理该像素
       let shouldProcess = false;
@@ -207,8 +206,6 @@ export async function processPixelTransition(layerPixelData: ArrayBuffer, select
         let alphaGradientSum = 0;
         let maxAlphaDiff = 0;
         let neighborCount = 0;
-        let lowAlphaNeighbors = 0;
-        let highAlphaNeighbors = 0;
         
         for (let dy = -1; dy <= 1; dy++) {
           for (let dx = -1; dx <= 1; dx++) {
@@ -223,14 +220,6 @@ export async function processPixelTransition(layerPixelData: ArrayBuffer, select
             alphaGradientSum += alphaDiff;
             neighborCount++;
             
-            // 统计低alpha邻居（包括完全透明）
-            if (neighborAlpha < originalAlpha * 0.5) {
-              lowAlphaNeighbors++;
-            }
-            // 统计高alpha邻居
-            if (neighborAlpha > originalAlpha * 1.5 && neighborAlpha > 100) {
-              highAlphaNeighbors++;
-            }
           }
         }
         

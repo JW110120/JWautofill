@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { app, action } from 'photoshop';
 import { ColorSettings } from '../types/state';
 import RangeSlider from './RangeSlider';
 import { LayerInfoHandler } from '../utils/LayerInfoHandler';
@@ -66,15 +65,6 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
     const [dragStartX, setDragStartX] = useState(0);
     const [dragStartValue, setDragStartValue] = useState(0);
 
-    const handleSliderChange = (key: keyof ColorSettings) => (event: React.ChangeEvent<HTMLInputElement>) => {
-        const value = Number(event.target.value);
-        if (!isNaN(value)) {
-            setSettings(prev => ({
-                ...prev,
-                [key]: value
-            }));
-        }
-    };
 
     // 实时更新功能：使用防抖机制避免频繁调用
     useEffect(() => {
@@ -238,7 +228,6 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
         unit: string,
         widthClass: string
     ) => {
-        const isDraggingActive = isDragging && dragTarget === settingKey;
         const handleRangeChange = (v: number) => {
             handleNumberInputChange(settingKey, v);
         };

@@ -18,7 +18,6 @@ export interface LicenseState {
 }
 
 export class LicenseManager {
-    private static readonly STORAGE_KEY = 'jwautofill_license';
     // 采用完全离线的本地白名单验证：不再使用任何在线验证地址
     // 为防君子不防小人，做轻度混淆：normalize -> reverse -> 插入盐
     private static readonly OFFLINE_SALT = 'JWAF_SALT_v1';

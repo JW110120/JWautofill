@@ -87,13 +87,11 @@ export async function processBlockAverage(layerPixelData: ArrayBuffer, selection
   };
   
   // 查找所有独立的连通区域（优化版本）
-  let regionCount = 0;
   for (let index = 0; index < pixelCount; index++) {
     if (!isVisited(index) && selectionCoefficients[index] > 0) {
       const compSize = floodFill(index);
       
       if (compSize > 0) {
-        regionCount++;
         
         if (useContrastReduction) {
           // 对比减弱：按像素与所在连通块均值的偏离量自适应压缩。

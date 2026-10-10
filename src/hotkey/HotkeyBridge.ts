@@ -410,7 +410,6 @@ export function getConfig(): HotkeyEntry[] {
 export function pushConfig(list: HotkeyEntry[]): boolean {
   cachedConfig = list.slice();
   emitConfig();
-  const WS = resolveWs();
   try {
     if (currentWs && currentWs.readyState === (currentWs.OPEN ?? 1)) {
       currentWs.send(JSON.stringify({ type: 'config', payload: list }));
@@ -590,7 +589,6 @@ export async function enumerateBrushes(): Promise<string[]> {
 // 返回 Promise：{combo} 或 null(取消/失败)。
 export function requestHotkeyRecording(brush: string): Promise<{ combo: string } | null> {
   return new Promise((resolve) => {
-    const WS = resolveWs();
     if (!currentWs || currentWs.readyState !== (currentWs.OPEN ?? 1)) { resolve(null); return; }
     pendingRecord = resolve;
     try {
@@ -604,7 +602,6 @@ export function requestHotkeyRecording(brush: string): Promise<{ combo: string }
 
 // 主动取消录制（UXP 端用户点「取消」时调用）
 export function cancelHotkeyRecording(): boolean {
-  const WS = resolveWs();
   if (currentWs && currentWs.readyState === (currentWs.OPEN ?? 1)) {
     try { currentWs.send(JSON.stringify({ type: 'recordCancel' })); return true; } catch { /* ignore */ }
   }

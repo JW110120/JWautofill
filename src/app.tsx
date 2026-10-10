@@ -1,5 +1,5 @@
 import React from 'react';
-import { interaction, storage } from 'uxp';
+import { storage } from 'uxp';
 import { app, action, core } from 'photoshop';
 import { BLEND_MODES } from './constants/blendModes';
 import { BLEND_MODE_OPTIONS } from './constants/blendModeOptions';
@@ -40,7 +40,7 @@ import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/Main
 import { FillPanelId, subscribeFillPanelToggle } from './utils/FillPanelToggleBus';
 import { setFocusMode } from './utils/FocusModeBus';
 import {
-  debouncePsProbe, isPsBusy, markPsBusyForEvent, psBusyRemain, runWhenIdle,
+  debouncePsProbe, isPsBusy, markPsBusyForEvent, runWhenIdle,
   markPsBusy, fillReadyRemain,
   // 文档级变化（打开/关闭/切文档）的显式登记入口：供「活动文档 id 巡检」兜底通路使用。
   noteDocLevelEvent,
@@ -66,8 +66,6 @@ import { invalidateLayerSnapshot } from './utils/layerTreeSnapshot';
 import ToggleSwitch from './components/ToggleSwitch';
 import RadioGroup, { RadioOption } from './components/RadioGroup';
 import { helpTexts } from './constants/helpTexts';
-
-const { batchPlay } = action;
 
 /**
  * 填充失败后的降级重试冷却（毫秒）。
@@ -159,7 +157,6 @@ class App extends React.Component<AppProps, AppState> {
     private selectionChangeListener: any = null;
     // 选区填充的忙碌顺延（见 handleSelectionChange 顶部的闸门说明）
     private selectionRetryTimer: any = null;
-    private selectionBusyDeferrals = 0;
     // 「撞上宿主忙碌期 → 长窗口重试」的闸门，防止缩短忙碌窗口后偶发丢填充。
     // ⚠️ 上限 1 次：必须是**有界**重试，否则宿主持续忙碌时会变成无限重试循环
     // （每次失败都再排一个 timer，永远停不下来）。
@@ -1099,7 +1096,6 @@ class App extends React.Component<AppProps, AppState> {
         // 忙碌窗口是时间驱动的有限值，不会出现「永远等不到」。
         const fillWait = fillReadyRemain();
         if (fillWait > 0) {
-            this.selectionBusyDeferrals++;
             if (this.selectionRetryTimer) clearTimeout(this.selectionRetryTimer);
             // ⚠️ 事件对象要一并带过去：否则 feather 事件的「跳过」语义会丢失，
             // 可能对无意义的羽化事件也跑一次填充。
@@ -1109,7 +1105,6 @@ class App extends React.Component<AppProps, AppState> {
             }, fillWait);
             return;
         }
-        this.selectionBusyDeferrals = 0;
 
         // 【同步锁】检查是否正在处理；必须在任何 await 之前完成，避免竞态
         if (this.isFilling) {
@@ -1573,8 +1568,6 @@ class App extends React.Component<AppProps, AppState> {
                     color: finalColor
                 };
 
-                // 更新填充命令以使用随机颜色
-                const command = FillHandler.createColorFillCommand(fillOptions);
     
                 if (isBackground) {
                     await FillHandler.fillBackground(fillOptions, withDeselect);

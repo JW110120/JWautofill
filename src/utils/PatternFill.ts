@@ -1,4 +1,4 @@
-import { app, action, core, imaging } from 'photoshop';
+import { app, action, imaging } from 'photoshop';
 import { BLEND_MODES } from '../constants/blendModes';
 import { Pattern } from '../types/state';
 import { BLEND_MODE_CALCULATIONS, BlendModeFunction } from './BlendModeCalculations';
@@ -205,9 +205,6 @@ async function createStampPatternData(
     const cos = Math.cos(angleRad);
     const sin = Math.sin(angleRad);
     
-    // 图案中心在目标区域中的位置
-    const patternCenterX = offsetX + scaledPatternWidth / 2;
-    const patternCenterY = offsetY + scaledPatternHeight / 2;
     // 选区中心
     const selectionCenterX = targetWidth / 2;
     const selectionCenterY = targetHeight / 2;
@@ -2526,8 +2523,6 @@ export class PatternFill {
         // 计算选区内的混合结果
         const finalData = new Uint8Array(fillData.length);
         
-        // 预先计算选区索引数组，避免在循环中重复转换
-        const selectionIndices = bounds.selectionDocIndices ? Array.from(bounds.selectionDocIndices) : null;
         
         // 检查是否有透明度信息需要处理
         const hasAlpha = pattern && pattern.hasAlpha && pattern.patternRgbData && pattern.patternComponents === 4;
