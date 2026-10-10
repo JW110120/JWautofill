@@ -93,30 +93,38 @@ PS 27.9.1 起 UXP 换 Drover 后端，原生 range 只能在 min/max 间跳变�
 
 ---
 
-## 11. `sp-radio` 影子布局把 slot 排到右侧
+## 11. 原生 `sp-radio` / `sp-switch` 的影子布局不可控 → 已全量自绘，勿再用
 
-radio 行内自绘元素走文档流，**不要绝对定位去 pin 边缘**（`.radio-pair-*` 是唯一例外，它把最后一个 `sp-radio` 绝对定位贴右缘，且必须靠父级 `.panel-section` 提权才能压过 `.panel-section sp-radio-group{justify-content:space-around}`）。
+**现象**：`sp-radio-group` 的内部排版由宿主实现，`justify-content` / `flex-wrap` 写了也拦不住它折行、
+或把 slot 内容排到右侧；`sp-radio` 自带 15px 水平内边距；`sp-switch` 盒高 32px 而可见胶囊仅 14px
+（上下各 ~9px 透明留白）。
+
+**解法**：radio 一律用 `src/components/RadioGroup.tsx`（`.radio-trio-group` / `.radio-pair-group` / `.radio-vertical`），
+开关一律用 `src/components/ToggleSwitch.tsx`（`.toggle-switch`，占位盒高 24px）。
+自绘后布局完全由 CSS 说了算 —— 旧的 `.radio-trio` 中转层 / `.radio-pair-230` / `.radio-pair-210` /
+`.radio-group-vertical`，以及「对称负外边距抵消盒高」这类补偿**全部作废，勿再写**。
 
 ---
 
 ## 12. 特异性必须靠「父级 / 双类」提权，不能靠源码顺序
 
-单类选择器 `(0,1,0)` 压不过 `.panel-section sp-radio-group` `(0,1,1)`。
-→ 覆盖链要写成 `.panel-section sp-radio-group.radio-pair-230` 或 `.row-between.row-grid` 这种**双类**形式。
+单类选择器 `(0,1,0)` 压不过 `.panel-section .radio-pair-group` `(0,2,0)`。
+→ 覆盖链要写成 `.subpanel-color .divider + .panel-section` 或 `.row-between.row-grid` 这种**父级限定 / 双类**形式。
 
 ---
 
-## 13. 原生控件的「默认外边距 / 透明盒高」会悄悄改变行距
+## 13. 原生控件的「默认外边距 / 墨迹空档」会悄悄改变行距（自绘控件无此问题）
 
 - **原生 checkbox 自带默认外边距**：不显式写 `margin` 会被撑开（行距莫名变大）。
   → 统一挂 `.checkbox-input`（`margin:10px 0`），网格内由 `.row-grid .checkbox-input { margin-top:0; margin-bottom:0 }` 清零（行距改由行规则提供）。
-- **`sp-switch` 原生盒高 32px，可见胶囊只有 14px**（上下各 ~9px 是**透明留白**）。
-  后果一：含开关的状态条比纯文字状态条高 15px（40px vs 25px）→ 等高用 `.notify-bar{min-height:40px}`。
-  后果二：紧凑网格行被撑到 37px（复选框行只有 21px）→ 两行的视觉间距比复选框组大一截，
-  看起来像「外边距翻倍」，其实外边距早已折叠成 10px。
-  → 收紧的办法是**对称负外边距**：`.row-grid sp-switch{margin-top:-6px;margin-bottom:-6px}`。
-  它只让开关**盒**纵向溢出 6px，胶囊本体（盒内居中、距盒边 9px）仍落在行内 → 不会被裁切，
-  行盒收缩到 21px 与复选框行同档。⚠️ 先确认行盒高度差是主因，再去改外边距（否则是 no-op）。
+- **原生 checkbox 的墨迹空档**：布局盒比可见方块宽、方块**居中**画在盒内 ⇒ 墨迹左右各留 **≈4px**（不是 10px）。
+  贴右缘的两列复选框组补偿（`.border-panel-section` 作用域，渐变/图案共用）：
+  ```css
+  .border-panel-section > .row-between.row-grid.row-grid-flush { width: calc(100% + 4px); margin: 0 -4px 0 0; }
+  ```
+  ⚠️ **必须连 `width` 一起放大**：`.row-between` 自带 `width:100%`，作 flex 子项时交叉轴被钉死，只写 `margin-right` 毫无位移。
+- ⚠️ 旧的「`sp-switch` 透明盒高 32px ⇒ 用对称负外边距抵消」已随自绘开关作废：
+  自绘 `.toggle-switch` 占位盒 24px、行内垂直居中由 `inline-block` 自动完成，**再加负外边距会把开关拉出行外**。
 
 ---
 
@@ -131,7 +139,7 @@ radio 行内自绘元素走文档流，**不要绝对定位去 pin 边缘**（`.
 ## 15. 千万别给滚动容器加 `scrollbar-gutter: stable`
 
 **现象**：面板高度压在某阈值（APP 面板 ≈823px）时出现「有滚动条 / 无滚动条的中间态」，
-右对齐的**原生控件**（`sp-switch`、`sp-radio` 的 slot 内容）右半截被裁掉；
+右对齐的**原生控件**（原生 checkbox 的 slot 内容等）右半截被裁掉；
 换到内容永远溢出、或外层带 10px 内边距的面板（绘画工具箱的 `.border-panel-section`）却完全正常。
 
 **根因（2026-09-10 用截图像素定位）**：UXP 的 CSS 侧**会**照 `scrollbar-gutter: stable` 预留 10px 槽位
@@ -174,7 +182,7 @@ body.compact-app #app .app-root > .panel > .panel-section .row-grid + .row-grid 
 **定位方法（可复用）**：Pillow 打开截图 → 逐行统计与背景的色差得到「内容带」（ink band），
 再用窄 x 窗口做**纵向 ink profile**，直接得到每行/每个控件的中心与 pitch；
 两行 pitch 减去已知盒高即得真实间距。比读 CSS 猜更快、也更可信
-（本例据此才发现真凶是 sp-switch 的透明盒高，而不是外边距）。
+（本例据此才发现真凶是控件自身的盒高，而不是外边距）。
 
 **⚠️ 不要试图用 `padding-right` 预留槽位**：Chromium 的 scrollport = padding box − scrollbar，
 加 padding 只会让内容盒再窄 10px（220 → 210），位移照旧。
@@ -339,7 +347,7 @@ webpack 里当作 external 声明也不会报错）。
 ⚠️ **不要用对称负外边距**（`margin-top/bottom:-2px`）：它只做到「让盒溢出」，
 实测行高仍随内容出现与否在 22↔24 之间变，本行下方（三列 radio 行、复选框首行）照旧抖。
 其他候选：给左列定高（要写死 22px 魔数，主题换字号即失效）。绝对定位改动小且无魔数。
-非紧凑模式没有这个问题：那里 `sp-switch` 是原生 32px 盒，行高恒 32。
+（这一条与开关是自绘还是原生无关：关键是让该槽**彻底不参与行高**。）
 
 ---
 
@@ -353,8 +361,9 @@ webpack 里当作 external 声明也不会报错）。
 → 一直溢出到盒外的 `margin-right:10px` 里（所以日常行的视觉间隙其实只有 ~4px，不易察觉）。
 一旦「盒右缘」被对齐到容器右缘，这 6px 就露到滚动条上了。
 
-**解法**：需要贴右缘的场景先把标签放宽（`.radio-trio sp-radio .label-2{width:26px}`），
+**解法**：需要贴右缘的场景先把标签放宽到汉字实际宽度（13px/字，两字给 26px），
 或改用 `space-around` 让两端各留半个间隙。
+自绘单选组（`.radio-trio-group` / `.radio-pair-group`）**不受影响**：项按内容宽 `flex:0 0 auto`、文字用自然宽度。
 
 **实测口径**：截图中「纯色 / 图案 / 渐变」的文字墨迹均为 26px 宽（13px 字宽 × 2），
 而盒子按 20px 排版 → 溢出 6px。
@@ -363,9 +372,13 @@ webpack 里当作 external 声明也不会报错）。
 
 ## 24. 一排 N 列「恒折行」（与滚动条无关）
 
-**现象**：三列 / 多列 radio 或控件组，不管外层怎么调 `flex-wrap` / `justify-content` 都折行。
-**根因**：折行由**单项宽度 × 项数**决定，宿主内部排版拦不住。本项目三列 radio 单项外框 ≈**76px**（内边距 15 + 圆点 14 + 圆点↔标签 11 + 标签盒 26 + 标签自带 10px 右外边距），3×76 = 228 > 内容盒 210/200 ⇒ 第三列必折行。
-**解法**：**从内容侧砍窄**，别在 `flex-wrap` 上使劲 —— `sp-radio .label-2{width:22px; margin-right:0}` ⇒ 单项 ≈62px、三项 ≈186px，两档都留余量（窄档余 14px）。
+**现象**：三列 / 多列控件组，不管外层怎么调 `flex-wrap` / `justify-content` 都折行。
+**根因**：折行由**单项宽度 × 项数**决定。原生 `sp-radio-group` 的内部排版由宿主实现，外层拦不住
+（当时三列单项外框 ≈76px：内边距 15 + 圆点 14 + 圆点↔标签 11 + 标签盒 26 + 标签自带 10px 右外边距；
+3×76 = 228 > 内容盒 210/200 ⇒ 第三列必折行，只能从内容侧砍标签宽度）。
+**现解法**：radio 已全量自绘 ⇒ 项 `flex: 0 0 auto`（按内容宽不收缩）+ 容器 `justify-content: space-between`
++ `flex-wrap: nowrap` 即可稳定单行，首末项天然贴边。
+⚠️ 若仍折行，先检查容器是否显式写了 `flex-direction: row` 与 `width: 100%`（见 ㉚），再量单项实际宽度。
 
 ---
 
@@ -421,25 +434,93 @@ webpack 里当作 external 声明也不会报错）。
 
 ---
 
+## 30. `background: transparent` 在 UXP 下渲染成**纯黑**
+
+**现象**：想让某元素「透明、只留描边」，结果得到一块黑底。
+**根因**：UXP 不把 `transparent` 当透明色解析，落到绘制层是黑色。
+**解法**：用「具体色 + `opacity`」表达透明感 —— 如
+`background-color: var(--border-color); opacity: 0.80`（`.toggle-switch` 关闭态即此写法）。
+⚠️ 不要用 `transparent`，也不要指望 `rgba(...,0)`。
+
+---
+
+## 31. `border-radius: 999px` 未按「高度一半」解析
+
+**现象**：想画胶囊，两端却渲染成尖角纺锤；伪元素若在容器外还会左右各鼓出一个小凸起（用户称「音频波」）。
+**根因**：UXP 不把 `999px` 这类超大值 clamp 到「高度一半」。
+**解法**：写**显式数值** = 高的一半，并同时给 `-webkit-` 前缀（UXP 的 WebKit 后端更认它）：
+胶囊 16px 高 → `border-radius: 8px`；圆点 12px → `6px`。
+
+---
+
+## 32. `text-decoration: underline` 不保证渲染
+
+**现象**：链接下划线在某些主题 / 元素下不出现。
+**解法**：一律用 `border-bottom: 1px solid <同色>` 画下划线（`license.css` 的 `.license-link` 即此写法）。
+配套坑：原生 `<a>` 的**文字色由 UXP 强制接管**（作者 `color` 被忽略、深主题下回退暗蓝、比下划线深一截）
+⇒ 可点链接改用 `<span>` + `onClick`（UXP 内 `<a href>` 本也不唤起浏览器，走 `shell.openExternal`）。
+
+---
+
+## 33. 滚动槽画在滚动容器的**内容盒内部**右侧
+
+**现象**：滚动条离面板右缘总差一截；给滚动层加了横向 padding 后滚动条跟着一起内缩，永远贴不到边缘。
+**根因**：UXP 把滚动槽（≈16px）画在滚动容器的**内容盒内部右侧**，不像桌面浏览器那样贴在 padding 外侧。
+**解法**：**滚动层不能有横向 `padding` / `border`** —— 宽度取面板全宽，文字缩进交给内层容器
+（工具箱「功能快捷键」的 `.func-hotkey-body` 即此写法）。
+同理「滚动槽要贯通整高」⇒ 标题段也要放进滚动层；放在外面会缺顶部一段槽。
+⚠️ 别用 `padding-right` 给滚动条留位：只会让内容盒再窄一截，位移照旧（同 ⑯）。
+
+---
+
+## 34. `:nth-of-type` 按**标签名**计数，不是「第几个 class」
+
+**现象**：`.subpanel-color > .panel-section:nth-of-type(2)` 想命中「计算方法」区，规则却完全没生效
+（界面零变化）⇒ 被误判成「已改但偏小」继续加码。
+**根因**：`:nth-of-type` 统计的是**同标签名元素**在父节点里的序号。子节点依次是
+`.subpanel-title-1`(div#1) → `.panel-section`(div#2) → `.divider` → `.panel-section`(div#4)
+⇒ 第 2 个 div 是**滑块区**，不是目标区。
+**解法**：混合标签容器里**绝不用** `:nth-of-type` 数「第几个特定 class」。改用**相邻兄弟**
+（`.divider + .panel-section`）或 class 组合。
+（`:nth-child` 按「第几个子元素」计数，同样要小心；锁网格列用它是安全的，因为容器内只有一种子元素。）
+
+---
+
+## 35. flex / 尺寸的三条隐式行为（一律靠显式声明消除歧义）
+
+| 坑 | 现象 | 解法 |
+| --- | --- | --- |
+| flex 容器交叉轴隐式 `center` | 盒宽大于内容宽时内容被居中，看起来像被加了左右 padding | 显式写 `justify-content` / `align-items` |
+| 未显式 `flex-direction` | 宽度塌缩场景下退化成 `column`（三列变三行） | 一律显式写 `flex-direction: row` |
+| 块级元素不被隐式拉伸 | 只写 `space-between` 不写 `width`，列全挤在左侧一小块 | 显式 `width: 100%` + `box-sizing: border-box` |
+| flex 子项百分比 `max-height` | 解析不可靠、约束失效 ⇒ 按内容撑开，与内层滚动叠成「双滚动条」 | 改走确定高度 `height: 100%` |
+| flex 列容器子项外边距**不折叠** | 相邻子项各 10px 会叠成 20px（块容器则取 max） | 同 ⑯：先判容器类型，再决定「减 N px 要同时归零一侧」 |
+
+---
+
 ## 排查顺序（遇到问题按这个走）
 
 0. 面板**根本不出来**？→ 查 ⑱ 控制台有没有「Can't add menu item … already exists」，再看 ⑥ 高度链
 1. 是不是原生控件穿透？→ 查 ①②⑦，确认隐藏规则的选择器**只命中目标面板**、`!important` 用法正确
 2. 是不是高度链断？→ 查 ⑥，逐层确认 height / overflow
 3. 是不是 `var()` 没解析？→ 查 ⑤，改字面色
-4. 是不是间距/位置诡异？→ 查 ③⑪⑫⑬，确认没用 gap、没被通用后代规则反压
+4. 是不是间距/位置诡异？→ 查 ③⑪⑫⑬⑯㉟，确认没用 gap、没被通用后代规则反压、容器类型（块 / flex）没搞错
 5. 是不是「某些高度下才出问题」的右侧裁切/抖动？→ 查 ⑮，确认滚动容器**没有** `scrollbar-gutter`、**没有**用 `overflow-y: scroll` 兜底
 6. 浮窗被滚动条压住 / 右缘缺一截？→ 查 ⑲，确认浮窗挂载点在滚动容器之外、打开时收起了滚动条
 7. 落盘失败 / 控制台报 `node_modules\fs.json doesn't exist`？→ 查 ⑳，确认没有 `require('fs')`/`('os')`、`file:` URL 是 `file:/C:/…`
 8. 整条规则**完全没生效**（不是「被反压」而是压根没反应）？→ 查 ㉑，先看选择器里有没有 `:has()`
-9. 行高/间距**时大时小**（组件一开一关就跳）？→ 查 ㉒（条件渲染的图标/色板槽必须**摘出文档流**，负外边距不够）+ ⑬（原生控件透明盒高）
+9. 行高/间距**时大时小**（组件一开一关就跳）？→ 查 ㉒（条件渲染的图标/色板槽必须**摘出文档流**，负外边距不够）+ ⑬（原生控件默认外边距 / 墨迹空档）
 10. 末项贴右缘后文字压到滚动条？→ 查 ㉓，先把 `.label-N` 放宽到汉字实际宽度
-11. 一排 N 列**恒折行**（与滚动条无关）？→ 查 ㉔，量出单项宽度，从内容侧砍窄，别在 `flex-wrap` 上使劲
+11. 一排 N 列**恒折行**（与滚动条无关）？→ 查 ㉔，确认容器显式 `flex-direction:row` + `width:100%`、项 `flex:0 0 auto`，再量单项宽度
 12. PS 里状态变了（如按 Q 进出快速蒙版）但面板**要等下一次操作才刷新**？→ 查 ㉕（先查有没有通知，再查检测写的是 state 还是实例字段）
 13. 关掉浮窗后**父面板数字冒到子面板上方**？→ 查 ㉖，确认共用 body 类只有一个派生点、且是「按 state 派生」
 14. **多浮窗遮罩变暗 / 后开的盖住先开的**？→ 查 ㉗，确认是单遮罩 + 一个纵向容器
 15. 标签**没跟控件一起置灰**？→ 查 ㉘，跨文件必须两级类
 16. **整条规则怎么改都没反应**？→ 先查 ㉙（注释外游离文本）+ ㉑（`:has()`）
-17. 四套主题各看一遍 —— 主题漏写变量是最常见的「某主题下样式丢失」
+17. **想透明却变黑** / 胶囊渲染成纺锤 / 下划线不出现？→ 查 ㉚ ㉛ ㉜，分别改「具体色 + opacity」/ 显式圆角数值 / `border-bottom`
+18. **滚动条贴不到面板右缘** / 顶部缺一段滚动槽？→ 查 ㉝，滚动层去掉横向 padding、标题段放进滚动层
+19. 用 `:nth-of-type` 选「第几个 class」完全没生效？→ 查 ㉞，改相邻兄弟选择器
+20. flex 列聚在中间 / 三列变三行 / 出现「双滚动条」？→ 查 ㉟，显式写 `flex-direction` / `justify-content` / `width:100%`
+21. 四套主题各看一遍 —— 主题漏写变量是最常见的「某主题下样式丢失」
 
 ---

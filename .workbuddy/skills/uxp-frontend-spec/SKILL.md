@@ -134,7 +134,7 @@ agent_created: true
 5. **接骨架**：套面板高度链，确认滚动容器只有一层 `.panel`。
 6. **原生控件**：出现 `input`/`textarea`/`sp-textfield` → 对照 `references/uxp-pitfalls.md` 的穿透规则加隐藏/恢复规则。
 7. **状态**：hover/disabled/selected/drop-target 收口到 common.css 底部集中管理区。
-8. **改完必做**：`node scripts/_css_comment_guard.cjs`；UDT Reload 实测，四套主题各看一遍。
+8. **改完必做**：`node scripts/_css_comment_guard.cjs`（⚠️ 只扫 `src/styles/*.css`，`src/adjustments/*.css` 需手工核对注释/括号配对）；UDT Reload 实测，四套主题各看一遍。
 
 ## 反模式（看到就改）
 
@@ -149,6 +149,9 @@ agent_created: true
 - ❌ 用 JS `getBoundingClientRect` 结果去算铺满背景的尺寸 → 整数 px 格子过量渲染 + `overflow:hidden`
 - ❌ 给每个浮窗各挂一层 `.float-overlay`；用 imperative `classList.add/remove` 管理 body 遮挡类
 - ❌ CSS 里写 `:has()`（静默失效）；注释块外留游离文本（会吃掉紧随其后的整条规则）
+- ❌ `background: transparent`（渲染成**纯黑**，改用「具体色 + `opacity`」）；`border-radius: 999px`（未按半高解析 ⇒ 变尖角纺锤，写显式数值 + `-webkit-` 前缀）；`text-decoration: underline`（不保证渲染，改 `border-bottom`）
+- ❌ 用 `:nth-of-type` 数「第几个 class」（它按**标签名**计数）；给滚动层加横向 `padding` / `border`（滚动槽画在内容盒内，会跟着内缩）
+- ❌ flex 容器不显式写 `flex-direction` / `justify-content`；容器不写 `width:100%` 就想占满一行；给 flex 子项用百分比 `max-height`
 
 ## 参考文件
 

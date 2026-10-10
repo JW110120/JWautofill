@@ -88,7 +88,7 @@ body.secondary-panel-open #app .app-root > .panel {
    ⚠️ 必须写成「两级类」选择器：`.label-disabled`（common.css）与 `.app-blendmode-label`（app.css）
       特异性同为 (0,1,0)，而 common.css 是 index.html 里的静态 <link>、app.css 由 style-loader
       在运行时**后**注入 ⇒ 上面那条 `color: var(--text-color)` 会盖掉 `.label-disabled`
-      的 `--disabled-color`，标签看着根本没禁用（2026-10-08 用户实测缺陷）。
+      的 `--disabled-color`，标签看着根本没禁用。
       写法与本仓既有的 `.select-wrap .select-value` 同源（同为「两级类提特异性」）。
       ⚠️ 不要改用 `.app-blendmode-container.disabled` 之类的新结构：那要改 TSX 且与既有惯例不符。 */
 .app-blendmode-label.label-disabled {
@@ -107,8 +107,8 @@ body.secondary-panel-open #app .app-root > .panel {
 }
 
 /* 填充模式纵向 radio 行的齿轮间距
-   ⚠️ 2026-10-07 原选择器是 `sp-radio .row-end .icon-button`，随普通模式改用自绘
-      RadioGroup（.radio-vertical）后已失效 —— 齿轮现在是 .radio-option 的直接子节点。
+   ⚠️ 齿轮现在是 .radio-option 的直接子节点（自绘 RadioGroup 后旧选择器
+      `sp-radio .row-end .icon-button` 已失效）。
    UXP 无 flex gap，齿轮与文字之间单独给 8px 间距。 */
 .radio-vertical .radio-option .icon-button {
   margin-left: 8px;
@@ -125,23 +125,19 @@ body.secondary-panel-open #app .app-root > .panel {
    UXP 无 flex gap，齿轮与开关之间单独给 8px 间距。
    ⚠️ 两个类共用同一条规则（单一来源）：新增加「齿轮 + 开关」行时只需把类名并进来，
       不要各写一条 —— 否则间距会漂移。
-   ⚠️ 只作用于**普通模式**那两行；紧凑模式没有齿轮（清除模式的入口在 label 上，
-      描边模式那一行的齿轮已在 2026-10-08 删除，功能交给 label）。 */
+   ⚠️ 只作用于**普通模式**那两行；紧凑模式没有齿轮（入口都在 label 上）。 */
 .stroke-mode-controls .icon-button,
 .clear-mode-controls .icon-button {
   margin-right: 8px;
 }
 
 /* 紧凑模式描边模式行右侧的「色框槽」。
-   ⚠️ 2026-10-08 删除「描边设置」文字按钮后（用户要求，功能交给「描边模式」label），
-      右列只剩色框一个控件，槽内右对齐 ⇒ **色框右缘与上一行「清除模式」开关的右缘对齐**
-      这一条依然成立（右列是 .row-grid-fit 的 flex:1 撑满列，.row-end 把它推到内容盒右缘）。
-      原注释里那套「47(.label-4) + 10 + 4 + 33 = 94px，与上一行同宽才能左右缘双对齐」的
-      换算随文字按钮一起失效 —— 现在右列不再需要凑宽度，**只有右缘一条约束**。
-   ⚠️ 槽宽是字面量而非 `calc`：`.toggle-switch` 的宽也是字面量，UXP 下没有可靠的
-      「引用另一元素宽度」手段，改开关宽度时**必须同步改这里**（两处都写了 33px）。
-   ⚠️ `margin-left: 4px` 保留：让色框与左列的开关之间保持与全插件一致的那档呼吸间距
-      （通用规则 `.row-between .toggle-switch {margin-left:4px}` 的同一档 4px）。 */
+   ⚠️ 右列只剩色框一个控件（原「描边设置」文字按钮已删、功能交给「描边模式」label），
+      槽内右对齐 ⇒ **色框右缘与上一行「清除模式」开关右缘对齐**是现在唯一剩下的约束，
+      不再需要凑某一行总宽（旧的 94px 换算已随文字按钮失效）。
+   ⚠️ 槽宽是字面量而非 `calc`：UXP 下没有可靠的「引用另一元素宽度」手段 ⇒ 改 `.toggle-switch`
+      宽度（33px）时**必须同步改这里**。
+   ⚠️ `margin-left: 4px` = 全插件「标签 ↔ 控件」那档呼吸间距（同 common.css 的通用规则）。 */
 .stroke-color-slot {
   width: 33px;
   margin-left: 4px;
@@ -184,60 +180,28 @@ body.compact-clear #app .subpanel-clear .divider {
   display: none;
 }
 
-/* 「填充模式」分区已提到「填充选项」内容区首位（2026-10-07）：它是主决策项，
-   应先于三个执行期开关出现。它下方紧跟紧凑模式的两行网格（新建图层/清除模式、
-   描边模式），原来的「网格之后才是 panel-section」相邻关系已反转，
-   下面两条针对 .row-grid + .panel-section 的规则随之失效，改为「panel-section 之后是网格」。
-   ⚠️ 2026-10-07 用户实测反馈「radio 这行与新建图层这行间距偏小」：
-      原先这里给 7px（是旧结构里「网格之后才是 panel-section」时的压缩值，
-      因为上方还要叠一行 10px 的网格下外边距）。移位后 radio 行成了分区首元素，
-      上方不再有网格，7px 在视觉上明显偏紧 ⇒ 提到 10px，与 .row-between 同档。
+/* 「填充模式」分区位于「填充选项」内容区首位（它是主决策项，先于三个执行期开关出现），
+   下方紧跟紧凑模式的两行网格 ⇒ 相邻关系是「panel-section 之后是网格」（旧结构相反）。
+   紧凑模式下本区装三列一行（.radio-trio-group），行距由下面几条 body.compact-app 规则单独管：
+     ① radio 行 → 网格第 1 行：`.fill-mode-section + .row-grid` 的 margin-top（13px）
+     ② 网格第 1 行 → 网格第 2 行：网格第 1 行的 margin-bottom（13px；
+        第 2 行的 margin-top 已被 `.row-grid + .row-grid` 归零）
+   ⚠️ 13px 是紧凑模式「填充选项」的专档（比通用档 +3），**不要动 common.css 的通用 10px**：
+      图案 / 渐变 / 颜色面板的网格节奏各自校准过，不能连坐。 */
 
-   ⚠️⚠️ 2026-10-07 第二轮：用户反馈「填充选项里每行的间距都偏小」，要求整体 +3px。
-      本区行距原为**统一 10px**（截图量算：行盒 24 + 行距 10 = pitch 34px，与代码一致），
-      本轮把行距一律提到 **13px**。现在只剩两处网格行距需要管（原「网格 → 复选框组」
-      与其内部行距两处随复选框组迁到「填充设置」浮窗而删除）：
-        ① radio 行 → 网格第 1 行     ：`.fill-mode-section + .row-grid` 的 margin-top（13px）
-        ② 网格第 1 行 → 网格第 2 行   ：网格第 1 行的 margin-bottom（13px；
-                                       第 2 行的 margin-top 已被 `.row-grid + .row-grid` 归零）
-      ⚠️ 整组只用 `body.compact-app` + 主面板滚动区链限定，**不动 common.css 的通用 10px 档**：
-        图案 / 渐变 / 颜色面板的网格节奏是各自校准过的，不能连坐。 */
-
-/* .fill-mode-section 在**普通模式**下的上下外边距：两侧都取 10px（对称）。
-   ---------------------------------------------------------------------------
-   ① 下边距（2026-10-07 第一轮，用户反馈「上下不对称」）：
-      「渐变」这行到下方 divider 的距离，必须等于 divider 到「新建图层」行的距离。
-      推导：`.collapse-content-expanded` 是**块容器** ⇒ 相邻兄弟外边距**折叠取 max**：
-        下方 = max(divider 下边距 10, .row-between 上边距 10) = **10px**；
-        上方 = max(.fill-mode-section 下边距 **15**, divider 上边距 10) = **15px** ← 偏大 5px。
-      ⇒ 把 .fill-mode-section 的下边距从 .panel-section 默认的 15px 收到 10px，
-         折叠后上下两侧同为 10px。
-
-   ② 上边距（2026-10-07 第二轮，用户反馈「radio 里纯色这行与『填充选项』的间距，
-      要改成『平滑』滑块与『选区改造』的间距」）：
-      **根因是两端内容首元素不同类**：
-        · 「选区改造」首元素是 `.row-between` → 自带 `margin-top: 10px`；
-        · 「填充选项」首元素是本 `.panel-section` → 只定义了 `margin-bottom`，
-          **没有 margin-top**（= 0）。
-      ⇒ 两区的「标题 → 内容首行」盒间距 = 标题 padding-bottom(10) + 首元素 margin-top：
-          选区改造 = 10 + 10 = **20px**；填充选项 = 10 + 0 = **10px** ← 少整整 10px。
-      ⇒ 补 `margin-top: 10px`，两区统一为 **20px**（与 `.row-between` 行同档，
-        也与本区下边距同值，整块节奏自洽）。
-      实测（headless + 真实 dist/common.css，复刻真实 DOM）：
-        改前 选区改造 20px / 填充选项 10px；改后两者皆 20px。
-      ⚠️ 为什么不用「墨迹对齐」的 7.5px：这一行顶部最靠上的墨迹是齿轮图标，
-         `.radio-vertical .radio-option` 盒高 23px、`.icon-button` 盒 24px（溢出 0.5px）、
-         其内 svg 18px ⇒ 齿轮墨迹比选项盒顶低 **2.5px**；
-         而滑块行顶部就是 32px 数字框的边框（= 盒顶，偏移 0）。
-         若按墨迹对齐需写 `margin-top: 7.5px` —— 那个值把「齿轮图标 18px」耦合进了间距令牌，
-         图标尺寸一改就静默失配。**取盒对齐（10px）**，残留 2.5px 墨迹内缩由控件自身高度决定，
-         不写进间距。
-
-   ⚠️ 只作用于普通模式：紧凑模式下本分区装的是三列一行（.radio-trio-group），
-      那条节奏由下面几条 `body.compact-app` 规则单独管（那里已把 margin-bottom 归零，
-      且上边距由 `.collapse-content-expanded > :first-child` 统一给 5px ⇒ 两区本来就是 15/15）。
-      `body.compact-app #app .app-root > .panel > .panel-section .fill-mode-section`
-      的特异性（1 id + 7 class + 1 element）远高于本条（1 id + 1 class），不会互相干扰。 */
+/* .fill-mode-section（**普通模式**）上下外边距：两侧都取 10px（对称）。
+   ① 下边距 10px（.panel-section 默认 15px）：
+      `.collapse-content-expanded` 是块容器 ⇒ 相邻兄弟外边距**折叠取 max** ⇒
+        下方 = max(divider 10, .row-between 10) = 10px；
+        上方 = max(.fill-mode-section 15, divider 10) = 15px  ← 不对称
+      ⇒ 收到 10px，折叠后上下同为 10px。
+   ② 上边距 10px（补「标题 → 内容首行」的差）：
+      盒间距 = 标题 padding-bottom(10) + 首元素 margin-top。
+      「选区改造」首元素 .row-between 自带 10 ⇒ 20px；本区首元素是 .panel-section
+      （只定义了 margin-bottom，margin-top = 0）⇒ 只有 10px，整整少 10px ⇒ 补 10px 统一到 20px。
+      ⚠️ 取**盒对齐**不取墨迹对齐：本行最上墨迹是齿轮图标（比选项盒顶低 2.5px），
+         按墨迹对齐需写 7.5px —— 那会把「图标 18px」耦合进间距令牌，图标尺寸一改就静默失配。
+   ⚠️ 只作用于普通模式：紧凑模式那条特异性（1 id + 7 class）远高于本条，互不干扰。 */
 #app .fill-mode-section {
   margin-top: 10px;
   margin-bottom: 10px;
@@ -261,14 +225,9 @@ body.compact-app #app .app-root > .panel > .panel-section .row-grid + .row-grid 
   margin-top: 0;
 }
 
-/* 网格行内的开关（紧凑填充选项）。
-   ⚠️ 2026-10-06：此处原有针对原生 `sp-switch` 的 `margin: -10px` 对称负外边距，
-      用于抵消它 32px 的原生盒高（可见胶囊仅 14px，上下都是透明留白）。
-      现已全量替换为自绘 `.toggle-switch`（占位盒高 24px、胶囊绝对定位居中），
-      该补偿**不再需要**，故移除。保留会误导：自绘开关不需要负边距，
-      且若真加上去会把开关拉出行外。
-      新的对齐基准：.toggle-switch 占位盒高 24px，与滑块(12px)、数字输入(24px) 同基线，
-      行内垂直居中由 `display:inline-block` + 占位盒自动完成，无需额外补偿。 */
+/* 网格行内的开关（紧凑填充选项）：**不要加负外边距**。
+   旧的 `margin: -10px` 是抵消原生 sp-switch 32px 盒高的补偿；自绘 .toggle-switch 占位盒高 24px，
+   行内垂直居中由 inline-block 自动完成 —— 再加负边距会把开关拉出行外。 */
 
 /* 描边模式行右侧的「色板 + 齿轮」槽彻底不参与行高。
    ⚠️ 齿轮按钮盒 24px，比左侧「标签 + 开关」决定的 22px 行高多出 2px ——

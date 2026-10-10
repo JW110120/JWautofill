@@ -17,7 +17,7 @@
 | 面板可用宽 | 250（manifest）− padding 10×2 = **230**；带滚动条时 220 |
 | 文字标签 `.label-N` | `20 + (n−2)×13.3` → 2/3/4/5/6 字 = 20/33/47/60/73px，13px，右 margin 10 |
 | 动作按钮 `.action-button-N` | `13×字数 + 20`，高 30；>8 字用 `.action-button-auto` |
-| 数字输入 | `.num-input-row` 32×24 + 描边；`input` 撑满；单位 `.num-unit` 在容器外、**定宽 16px**、`margin-left:4px` |
+| 数字输入 | `.num-input-row` **定宽 34px**（= border 1 + input 32 + 1）× 32px；`input` `width:100%`、`height:20px`（见 §十一）；单位 `.num-unit` 在容器外、**定宽 16px、`margin-left:0`、右对齐** |
 | 缩略图 | `.thumb-box` 52×52（内图 46×46） |
 | 预设网格 | 内宽 228：4 列 = 4×52 + 3×4（B=52、M=4），`:nth-child(4n){margin-right:0}` 锁列 |
 | 圆角 / 描边 | 一律 `border-radius:3px` + `1px solid var(--border-color)` |
@@ -34,16 +34,22 @@
 - 修饰档 `.row-grid-flush`（紧贴 divider 的复选框组）、`.row-grid.row-grid-fit`（**必须双类**，紧凑描边行）。
 - ⚠️ **条件渲染的图标/色板槽会把行高顶起来**（开关一开一关就抖动）⇒ 把该槽**摘出文档流**（`.grid-cell + .grid-cell{position:relative}` + 内部 `.row-end{position:absolute;right:0;top:50%;transform:translateY(-50%)}`）。**不要用对称负外边距**——行高仍会 22↔24 变。
 
-### 三列 radio（`.radio-trio`）
+### 自绘单选组（`.radio-trio-group` / `.radio-pair-group` / `.radio-vertical`）
 
-- 结构必须同构：`.panel-section > .radio-trio > sp-radio-group`。
-- ⚠️ **防折行的关键不在 `flex-wrap`，在单项宽度**（宿主内部分配怎么都拦不住）：单项外框 ≈76px，3×76 > 内容盒 ⇒ 必折行。现口径是**从内容侧砍窄**：`sp-radio .label-2{width:22px; margin-right:0}` ⇒ 单项 ≈62px。
-- 缩进走容器 `padding:0 10px`（**不用 `transform`**，它不参与布局、会算错可用宽）；紧凑填充那个是分区首元素，用 `.radio-trio-flush{margin:0 auto}` 归零纵向外边距（不要写 `body.compact-app … .radio-trio{margin:0}`，会连带命中描边子面板同名容器）。
+- 定稿版式：**项按内容宽 `flex: 0 0 auto`（不收缩） + 容器 `justify-content: space-between`**
+  ⇒ 首项左缘贴容器左缘、末项右缘贴右缘（内缩天然 0）、项间空白自动均分、等宽时中项严格居中
+  —— **不需要任何逐项对齐覆盖**。
+- ⚠️ 容器必须显式 `width: 100%` + `box-sizing: border-box`：块级元素在 UXP 下**不被隐式拉伸**到父内容盒。
+- ⚠️ **项不写 margin、不用 `flex: 1 1 0` 等分**：前者破坏贴边，后者让项盒宽于内容、内容靠格左缘 ⇒ 首末项反而内缩。
+- ⚠️ 纵向版式 `.radio-vertical`：行盒 23px + 行距 10px（pitch 33）。行距用**相邻兄弟 `+`**（flex 列不折叠，末项带 margin 会撑大末段）；行盒下限 = 齿轮墨迹 16.67px。
+  - 🔴 **再调只准一条路：量用户认可的目标截图的 pitch → 1:1 复刻**。从「白缝 / pitch 公式 / 行盒=内容高」反推的前几轮全被否。
+- 旧原生 `sp-radio-group`、`.radio-trio` 中转包裹层、`.radio-pair-230` / `.radio-pair-210` 已全废，勿复用。
 
 ### 定宽标签的汉字溢出
 
 - ⚠️ `.label-N` 比汉字实际宽度**窄约 6.6px**（`20+(n-2)×13.3`），文字靠 `margin-right:10px` 遮溢出（日常视觉间隙其实只有 ~4px）。
-- 凡「标签盒右缘要对齐容器右缘」的新布局（如三列 radio 末项贴右）**必须先补这 6px**（`.radio-trio sp-radio .label-2{width:26px}`），否则文字溢出压到滚动条上。
+- 凡「标签文字右缘要贴容器右缘」的布局（定宽 `.label-N` + 右对齐）**必须先补这 6px**，否则文字溢出压到滚动条上。
+- 自绘单选组不受影响：项按内容宽 `flex:0 0 auto`、文字用自然宽度，没有定宽字盒。
 
 ### 原生 checkbox 的墨迹空档
 
@@ -62,7 +68,7 @@
 ## 四、专注模式
 
 - 条件：「自动关开关」+「自动切套索」同勾即成立（推导值，不存 state；共享 `utils/FocusModeBus.ts`）。
-- 行为：主开关热键只开不关；圆点换星形 `FocusStarIcon(13×13)`；工具箱置顶记录文案「选区填充」。
+- 行为：主开关热键只开不关；圆点换 Spectrum「Target」靶心 `FocusTargetIcon(13×13)`（图标含 `<path>` 外环 + `<circle>` 内点**两个元素，都必须挂 `.icon-fill`**，否则内圈缺色）；工具箱置顶记录文案「选区填充」。
 
 ## 五、浮窗体系（APP + 工具箱共用 `.float-overlay` / `.float-window`）
 
@@ -138,7 +144,7 @@
 ## 十三、两处已校准的间距 / 配色共识
 
 - **通知状态条语义**：开 = `notify-bar-ok`（绿）、关 = `notify-bar-disabled`（`--disabled-color` 描边 + 面板底色，**不用 warn 橙**，橙在插件语义里专指异常/待处理）。
-- **紧凑描边行右列控件组** 总宽必须与上一行「清除模式 + 开关」**严格相等 = 94px**（= `.label-4`(47) + `margin-right`(10) + **4** + 尾控件(33)）。那 4px 来自**后代选择器** `.row-between .toggle-switch{margin-left:4px}`（`.row-start` 里的开关也命中）—— 槽内拿不到它，**必须手动补**，否则左缘错开。另：槽内 `.color-preview` 必须 `margin:0`（通用类自带 `margin:0 10px` 会撑宽）。
+- **紧凑描边行右列「色框槽」** `.stroke-color-slot`（宽 33px、`margin-left:4px`）：右列由 `.row-grid-fit` 的 `flex:1` 撑满、`.row-end` 把色框推到内容盒右缘 ⇒ **只剩「色框右缘与上一行开关右缘对齐」一条约束**。旧的「总宽 94px 与上一行严格相等」换算随「描边设置」文字按钮一起失效，**勿再采用**。槽宽是字面量（与 `.toggle-switch` 的 33px 成对），改开关宽度必须同步改；槽内 `.color-preview` 必须 `margin:0`（通用类自带 `margin:0 10px` 会撑宽）。
 - **测量手法**：改版式前用像素脚本量用户截图（本仓截图恒 **1.5×**、内容盒 230px），不要目测估；用 headless 搭测量台**必须复刻完整祖先链**，少一层会让 `body.compact-*` scoped 规则静默失效（两模式测出同一组数据）。
 - 浮窗内**已无 row-grid**（填充设置浮窗改成逐行 `.row-between` + 自绘 `ToggleSwitch`，开关无原生墨迹空档）⇒ 旧的 `.float-window > .panel-section > …row-grid` 那条补偿已删，勿再加回。
 
@@ -147,3 +153,23 @@
 - ⛔⛔⛔ **注释块外的「游离文本」会被当成选择器，静默吃掉紧随其后的整条规则**。写中文注释时多打/挪动一个注释结束符 ⇒ 注释提前闭合 ⇒ 后面的文案跑到注释外 ⇒ 解析器把它当选择器 ⇒ `{ …声明… }` 成了那个垃圾选择器的声明块 ⇒ 规则永不命中。
   - 三条纪律：① 编辑中文注释**不要移动/重复注释结束符**，注释正文里禁止出现该结束符的字面两字符形式；② **改完机器校验** `node scripts/_css_comment_guard.cjs`（注释开/闭配对 + 注释外不得出现结束符）；③ **「反复改却毫无效果」立即停止调声明**，先验证**规则是否命中元素**（postcss 解析选择器 / headless 打印 `getComputedStyle`+`getBoundingClientRect`）。
   - ④ 修完**复查同区域注释里是否残留与新结论冲突的旧处方**——错误处方比没有注释更危险。
+
+## 十五、UXP 渲染 / 布局坑清单（CSS 注释精简时补录）
+
+| 写法 / 现象 | 结论与替代 |
+| --- | --- |
+| `background: transparent` | ⛔ 渲染成**纯黑**。要透明感用「具体色 + `opacity`」（`background-color: var(--border-color); opacity:.80`）。 |
+| `border-radius: 999px` | ⛔ 未按「高度一半」解析 ⇒ 两端尖角纺锤、伪元素溢出鼓包。写**显式数值**（胶囊 16 高→8px；圆点 12→6px），并同时给 `-webkit-border-radius`。 |
+| `text-decoration: underline` | ⛔ 不保证渲染 ⇒ 下划线一律用 `border-bottom` 画。 |
+| 滚动条（槽 ≈16px） | ⚠️ 画在滚动容器的**内容盒内部**右侧（不像桌面浏览器贴在 padding 外侧）⇒ **滚动层不能有横向 padding / border**，否则槽永远到不了面板最右缘；同理滚动层要贯通整高，把标题段放外面就会缺顶部一段槽。 |
+| `:nth-of-type` | ⛔ 统计的是**同标签名元素**在父节点里的序号，不是「第几个特定 class」⇒ 混合标签容器里绝不能用它数 class。改用相邻兄弟 / class 组合。 |
+| flex 容器默认值 | ⚠️ 交叉轴隐式 `center`（不是 web 的 `stretch`）；方向未显式声明时可能退化成 `column` ⇒ `flex-direction` / `justify-content` / `align-items` **一律显式写**。 |
+| 块级元素宽度 | ⚠️ **不被隐式拉伸**到父内容盒 ⇒ 凡要占满一行的容器显式 `width:100%` + `box-sizing:border-box`。 |
+| flex 子项百分比 `max-height` | ⚠️ 解析不可靠（约束失效、按内容撑开 ⇒ 与内层滚动叠成「双滚动条」）⇒ 改走确定高度 `height:100%`。 |
+| 运行时注入的 `var()` | ⚠️ style-loader **运行时**注入的规则里 `var()` 解析不稳定（曾「遮罩能拦点击但背景完全不绘制」）⇒ **底色 / 遮罩配色交给 `theme.ts` 与静态 `<link>` 侧**，运行时注入的 CSS 不写背景色。 |
+| 外边距折叠 | ⚠️ **块容器（`.panel`）折叠取 max；flex 列容器（`.panel-section` / `.radio-vertical`）的子项不折叠**，会叠在容器自身外边距之外 ⇒ 算「行 ↔ divider」距离前先判容器类型。本仓多数算错的间距都栽在这一条。 |
+| 原生 `<a>` | ⛔ 文字色由 UXP 强制接管（作者 `color` 被忽略、深主题下回退暗蓝）⇒ 可点链接改用 `<span>` + `onClick`（UXP 内 `<a href>` 本也不唤起浏览器，走 `shell.openExternal`）。 |
+
+- ⚠️ **守卫脚本只扫 `src/styles/*.css`**：`src/adjustments/*.css`（绘画工具箱）**不在覆盖范围**，改完要手工核对注释开闭 / 括号配对（可用 `node -e` 数 `/*` 与 `*/`、`{` 与 `}`）。
+- 自绘开关 `.toggle-switch`：可见胶囊 33×16、圆点 12px、占位盒高 24px（`:before` 撑起，**不用 margin/padding** 免得挤压同行）。**不要**再加负外边距（那是抵原生 `sp-switch` 32px 盒高的旧补偿）。
+- 状态条 `.notify-bar` `min-height: 32px` = 自绘开关占位盒 24 + padding 6 + 边框 2（旧的 40px 按原生 sp-switch 32 算，会让含开关的条高一截）。

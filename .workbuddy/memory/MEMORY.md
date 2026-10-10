@@ -16,7 +16,7 @@
 | 构建 / 菜单 / 文件 IO / 守护进程 | `refs/toolchain-and-env.md` |
 | 「当初为什么这么设计」 | `HISTORY.md` |
 
-**改完必备校验**：`node scripts/_css_comment_guard.cjs`（改过 CSS）、`node scripts/_modal_contract_guard.cjs`、`node scripts/_color_picker_contract_guard.cjs`；类型校验 `npx tsc --noEmit`（只看 `src/` 有无**新增**报错）。
+**改完必备校验**：`node scripts/_css_comment_guard.cjs`（改过 CSS；⚠️ 它**只扫 `src/styles/*.css`**，`src/adjustments/*.css` 要手工核对注释/括号配对）、`node scripts/_modal_contract_guard.cjs`、`node scripts/_color_picker_contract_guard.cjs`；类型校验 `npx tsc --noEmit`（只看 `src/` 有无**新增**报错）。
 
 ## 仓库地图
 
@@ -57,7 +57,11 @@
 ### UXP CSS / 布局 → `refs/frontend-css.md` + 技能 **uxp-frontend-spec**
 - ⛔⛔⛔ CSS 注释块外的**游离文本**会被当成选择器、静默吃掉紧随其后的整条规则 ⇒ 改完必须机器校验 `node scripts/_css_comment_guard.cjs`。**「反复改却毫无效果」立即停手，先验证规则是否命中元素**。
 - ⛔ 「标签随控件同步置灰」跨文件必须用**两级类**：`common.css` 静态 `<link>` 先加载、`app.css` 由 style-loader 后注入 ⇒ 同为 (0,1,0) 时 app.css 的 `color` 会盖掉 `.label-disabled`（写成 `.app-xxx.label-disabled`）；同文件内靠后置规则即可。
-- ⚠️ UXP 不支持 `:has()`（静默失效）、不支持 `rotate()`（transform 只有 scale/translate）；flex 容器隐式 `center`；间距统一用 margin+padding（`gap` 不可靠）。
+- ⛔ UXP 渲染雷区：`background: transparent` 渲染成**纯黑**（要透明感用「具体色 + opacity」）；`border-radius: 999px` 不按半高解析（写**显式数值** + `-webkit-` 前缀）；`text-decoration: underline` 不可靠（改 `border-bottom`）；原生 `<a>` 文字色被宿主接管（改 `<span>` + onClick）。
+- ⛔ **滚动槽画在滚动容器的内容盒内部** ⇒ 滚动层**不能有横向 padding / border**，否则槽永远到不了面板最右缘（标题段放滚动层外还会缺顶部一段槽）。
+- ⛔ `:nth-of-type` 按**标签名**计数而非「第几个 class」⇒ 混合标签容器里禁用，改相邻兄弟选择器。
+- ⚠️ UXP 不支持 `:has()`（静默失效）、不支持 `rotate()`（transform 只有 scale/translate）；flex 容器隐式 `center`、**方向不显式写会退化成 column**；块级元素不被隐式拉伸（占满一行要显式 `width:100%` + border-box）；间距统一用 margin+padding（`gap` 不可靠）。
+- ⚠️ 外边距折叠：块容器**取 max**、flex 列容器**子项不折叠**（算「行 ↔ divider」前先判容器类型）；flex 子项的百分比 `max-height` 解析不可靠 ⇒ 用 `height:100%`。
 - ⚠️ 原生不可控控件一律自绘：`RadioGroup.tsx`（替 `sp-radio-group`）、`ToggleSwitch`（替 `sp-switch`）、`Select.tsx`（替 `sp-picker`）、`RangeSlider.tsx`（替 `input[type=range]`）；替换时必须核对调用方从**事件对象的哪个属性**取值。
 - ⚠️「元素没占满容器」查**整条祖先链每层的 padding/border/margin（尤其两层叠加）**；「两组控件双向对齐」的唯一可靠做法 = 让两组**总宽相等**。
 - ⚠️ 间距令牌取「**盒对齐**」不取「墨迹对齐」；折叠分区「标题→首行」间距 = 标题 `padding-bottom` + 首元素 `margin-top`。

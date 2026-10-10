@@ -65,7 +65,7 @@
   再由基础的 `align-items:flex-end` 把右列内容（色板 + 齿轮，TSX 用 `.row-end`）推到**内容盒右缘**
   —— 与上一行「清除模式」开关的右缘对齐，行尾不留空档（紧凑模式描边模式行）；
   纵向节奏仍走 `.row-grid` 那套，所以**保留 `.row-grid` 类名**不可替换
-- `sp-switch` / `input[type=checkbox]` 在 `.row-between/.row-center/.row-end` 内自动 `margin-left:4px`
+- `.toggle-switch` / `input[type=checkbox]` 在 `.row-between/.row-center/.row-end` 内自动 `margin-left:4px`（**不要**加到 `label-N` 的右侧兄弟上，会误伤行内滑块的标签）
 - ⚠️ **外边距折叠分两种容器**（2026-09-10 截图像素实测）：
   **块容器**内相邻外边距会折叠（`.collapse-content-expanded` 里 divider 10 + `.panel-section` 15 → 取 15）；
   **flex 列容器**（`.panel-section` / `.border-panel-section`）内**不折叠**，相邻子项各 10px 会叠成 20px。
@@ -75,12 +75,11 @@
   → 20px 收到 10px，与主面板 `.slider-container`（块容器、折叠后 10px）一致。
   ⚠️ **`.slider-row` 是显式类名**（AdjustmentPanel.tsx 13 处行内滑块行；批量加类用脚本按结构特征匹配）。
   不要图省事写成 `:has(.slider-track)` —— **UXP 不支持 `:has()`，整条规则会被静默丢弃**（坑清单 ㉑）。
-- ⚠️ **`sp-switch` 原生盒高 32px，可见胶囊只有 14px**（上下各 ~9px 透明留白），会把所在容器撑高：
-  含开关的 notify-bar 是 40px（32+padding6+边框2）、纯文字条只有 25px；紧凑网格行 37px vs 复选框行 21px。
-  · 需要收紧时：对称负外边距把这份留白让给间距（`.row-grid sp-switch{margin-top:-6px;margin-bottom:-6px}`，
-    实测按观感调到 `-10px` 更好）——只让**盒**溢出，胶囊本体（盒内居中）仍落在行内、不会裁切，
-    行盒收缩到与复选框行同档；
-  · 需要**等高**时：`.notify-bar{min-height:40px}`（锁到含开关那一档，不用 height 以便正文换行时增高）。
+- ⚠️ **自绘开关 `.toggle-switch` 占位盒高 24px**（可见胶囊仅 33×16、圆点 12px，胶囊绝对定位居中），
+  与滑块(12px)、数字输入(24px) 同基线 ⇒ 行内垂直居中由 `inline-block` 自动完成，**不需要任何补偿**。
+  ⚠️ **不要再加负外边距**：旧 `margin:-10px` 是抵消原生 `sp-switch` 32px 盒高的补偿（原生可见胶囊仅 14px、
+  上下各 ~9px 透明留白），自绘后加了会把开关拉出行外。
+  `.notify-bar` 的 `min-height:32px` = 占位盒 24 + padding 6 + 边框 2（旧的 40px 按原生 32px 算，已废）。
 - ⚠️ **条件渲染的行内控件会让行高跳变**：紧凑 `.row-grid-fit` 行关闭时右列 `.row-end` 为空（0 高），
   开启时才渲染「色板 20px + 齿轮按钮 24px」→ 行高从 22px（左列标签决定）跳到 24px。
   做法是让这一槽**彻底不参与行高**——把内容摘出文档流：
@@ -93,7 +92,7 @@
   右列没有在流子项 → 高度恒 0 → 行高完全由左列决定，开关前后一模一样（㉒）。
   ⚠️ **不要用对称负外边距**（`margin-top/bottom:-2px`）：它只让盒溢出，行高仍会 22↔24 变，
   本行下方（三列 radio 行、复选框首行）照旧跟着抖 —— 上一版就是踩在这里。
-  非紧凑模式无此问题：那里 sp-switch 是原生 32px 盒，行高恒 32。
+  （这一条与开关是自绘还是原生无关：关键是让该槽**彻底不参与行高**。）
 - **`.row-between.disabled` / `.row-start.disabled`**：整行置灰（标签 `--disabled-color` + `not-allowed`，
   内含 slider/input `opacity .5`）。**由 TSX 按状态挂 `.disabled`**，不要用 `:has()`（UXP 不支持，㉑）；
   现有 4 处：app.tsx 紧凑/非紧凑 × 新建图层/清除模式。
@@ -112,8 +111,10 @@
 
 ⚠️ **定宽公式 `20 + (n-2)×13.3` 整体比汉字实际字宽窄约 6px**（汉字 13px = 13px/字，n=2 实际 26px 却只给 20px），
 文字一直靠 `.label-*` 的 `margin-right:10px` 遮着溢出（视觉间隙实际只有 ~4px）。日常行不受影响，但
-**凡是要把「标签盒右缘」对齐到容器右缘的新布局（如三列 radio 末项贴右），必须先把标签放宽**
-（`.radio-trio sp-radio .label-2{width:26px}`），否则文字会溢出 6px 压到滚动条上。
+**凡是要把「标签文字右缘」对齐到容器右缘的新布局（定宽 `.label-N` + 右对齐），必须先把标签放宽**，
+否则文字会溢出 6px 压到滚动条上。
+自绘单选组（`.radio-trio-group` / `.radio-pair-group`）**不受影响**：项按内容宽 `flex:0 0 auto`、
+文字用自然宽度，没有定宽字盒（旧的 `.radio-trio sp-radio .label-2{width:26px}` 补丁已随原生控件废弃）。
 
 ---
 
@@ -175,43 +176,47 @@ import RangeSlider from '../components/RangeSlider';
 - 类名：`.select-wrap` > `.select-head` / `-head-open` / `-head-disabled`；弹层 `.select-pop`（`position:fixed` + JS 按 head 矩形定位，逃出 overflow 裁剪）；选项 `.select-opt` / `-opt-sel` / `-opt-dis`；`.select-divider`、`.select-value`、`.select-caret`、`.select-check`、`.select-opt-main`、`.select-opt-tag`
 - 禁止 `sp-picker` / `sp-menu`
 
-### radio
+### radio（唯一实现：`src/components/RadioGroup.tsx`；原生 `sp-radio-group` 已全量废弃）
+
 ```tsx
-<sp-radio-group className="radio-pair-230" value={v} onchange={...}>
-  <sp-radio value="a">选项 A</sp-radio>
-  <sp-radio value="b">选项 B</sp-radio>
-</sp-radio-group>
+import RadioGroup from '../components/RadioGroup';
+<RadioGroup value={v} className="radio-pair-group" title={helpTexts.x.radio}
+            options={[{ value: 'a', label: '选项 A' }, { value: 'b', label: '选项 B' }]}
+            onChange={setV} />
 ```
-- 通用：`.panel-section sp-radio-group` 为横向 `space-around`，`sp-radio` 高 32；
-  实测 `sp-radio` 实际按**内容宽**摆放（`.panel-section sp-radio{flex:1}` 未生效），间距由父级 `space-around` 分配
-- `.radio-pair-230` / `.radio-pair-210`：两列精确贴边（左选项贴左缘 10px，右选项绝对定位贴右缘；230/210 为可用宽档）
-- `.radio-trio`：三列（描边「位置」/ 紧凑「填充模式」共用）。
-  ⚠️ **防折行的关键不在 `flex-wrap`，在单项宽度**（㉔）：`sp-radio-group` 内部的均分/换行由宿主实现，
-  外层怎么写都拦不住。实测**单项外框 76px**（内边距 15 + 圆点 14 + 圆点↔标签 11 + 标签盒 26 + 标签
-  自带 10px 右外边距），3 × 76 = 228 > 内容盒 210（无滚动条）/ 200（有滚动条）→ 第三列必折行。
-  所以现口径是**从内容侧砍窄**：`sp-radio .label-2{width:22px; margin-right:0}` → 单项 ≈62px、
-  三项 ≈186px，两档都留有余量（窄档余 14px）。
-  - 结构必须同构：`.panel-section > .radio-trio > sp-radio-group`（两处一致）。
-    ⚠️ 描边子面板早期写成 `class="panel-section radio-trio"`（两类同元素），后代选择器不命中。
-  - 缩进走容器 `padding:0 10px`（`box-sizing:border-box`），**不要用 `transform: translateX(10px)`**
-    —— transform 不参与布局，会算错可用宽。
-  - 纵向 10px 由 `.radio-trio{margin:10px auto}` 给（替代原来的 `.row-between` 包裹层）；
-    紧凑填充模式那个是分区首元素，用修饰档 `.radio-trio.radio-trio-flush{margin:0 auto}`。
-    ⚠️ 不要在 `body.compact-app` 下写 `.radio-trio{margin:0}` 收口：`.radio-trio` 现在也在子面板里，
-    而 `#app .app-root > .panel > .panel-section …` 会连带命中描边子面板。
-  - `sp-radio-group{justify-content:space-between; flex-wrap:nowrap}` + `sp-radio{flex:0 0 auto}`
-    仍然保留（有剩余宽度时均匀分配 / 单项按内容宽不伸缩），但**它们不是防折行的保证**，别依赖。
-  ⚠️ `.panel-section/.border-panel-section .radio-trio sp-radio{flex:0 0 auto}`（双类压过 `.panel-section sp-radio`）。
-- `.radio-group-vertical`：纵向（每个 `sp-radio` 占满宽）
-- ⚠️ radio 内部元素走文档流，**不要绝对定位去 pin 边缘**（sp-radio 影子布局会把 slot 排到右侧）
-- ⚠️ 两列/三列 radio 的**文字标签与圆点中心对齐**由
-  `sp-radio-group:not(.radio-group-vertical) > sp-radio > span{margin-top:2px}` 统一微调
-  （含 `> .row-end > span` 的齿轮行；实测 trio 标签中心比圆点低 1px，2px 的 margin 即 1:1 上移量）
+- **三种版式**（类名挂在容器上）：`.radio-trio-group`（三列）/ `.radio-pair-group`（两列）/
+  `.radio-vertical`（纵向，每行一项、右侧可挂齿轮 `suffix`）。
+- 定稿版式：**项按内容宽 `flex: 0 0 auto`（不收缩） + 容器 `justify-content: space-between`**
+  ⇒ 首项左缘贴容器左缘、末项右缘贴右缘（内缩天然 **0**）、项间空白自动均分、等宽时中项严格居中
+  —— **不需要任何逐项对齐覆盖**。
+- ⚠️ 容器必须**显式**写三件事：① `width:100%` + `box-sizing:border-box`（块级元素在 UXP 下**不被隐式拉伸**
+  到父内容盒，只写 space-between 会让列全挤在左侧）；② `flex-direction:row`（不写会退化成 column）；
+  ③ `justify-content`（UXP 的 flex 容器隐式默认 `center`，不是 web 的 flex-start）。
+- ⚠️ **项不写 margin、不用 `flex:1 1 0` 等分**：前者破坏贴边，后者让项盒宽于内容、内容靠格左缘
+  ⇒ 首末项反而内缩，还得再补逐项对齐（绕远路）。
+- ⚠️ 纵向版式：行盒 23px + 行距 10px（pitch 33）。行距用**相邻兄弟**
+  `.radio-vertical .radio-option + .radio-option{margin-top:10px}`（flex 列**不折叠**，末项带 margin 会撑大末段）。
+  行盒下限 = 齿轮墨迹 16.67px。🔴 **再调只准「量用户认可的目标截图 pitch → 1:1 复刻」**，
+  从「白缝 / pitch 公式 / 行盒=内容高」反推的前几轮全被否。
+- 尺寸：圆点 12px（与滑块同基线）、圆角**显式 6px**（`999px` 在 UXP 下不按半高解析，会渲染成尖角纺锤）；
+  圆点↔文字 6px（无 flex gap，用 margin）；文字 13px。选中态只填 `--radio-checked-color`、
+  **不加描边**（与滑块手柄 / 开关圆点统一）。
+- ⚠️ **onChange 回传「原生形状」的事件对象 `{ target: { value, selected } }`** —— 调用方按
+  `e.target.selected` 取值（原生 `sp-radio-group` 的路径）。改这里会连带点不动。
+- 已废弃、**勿复用**：`sp-radio-group` / `sp-radio` / `.radio-trio` 中转包裹层 /
+  `.radio-trio-flush` / `.radio-pair-230` / `.radio-pair-210` / `.radio-group-vertical`。
+
+### 开关（唯一实现：`src/components/ToggleSwitch.tsx`；原生 `sp-switch` 已全量废弃）
+
+- 自绘 `.toggle-switch`：可见胶囊 **33×16**、圆点 12px、**占位盒高 24px**（`:before` 撑起，
+  不用 margin/padding 免得挤压同行）。开启态 `--primary-color`、关闭态 `--border-color` + `opacity:.80`。
+- ⚠️ 圆角**显式 8px** + `-webkit-border-radius`（`999px` 会变尖角纺锤）。
+- ⚠️ **不要再加负外边距**：旧 `margin:-10px` 是抵消原生 `sp-switch` 32px 盒高的补偿，自绘后加了会把开关拉出行外。
+- ⚠️ **onChange 回传 `{ target: { checked } }`**（与 RadioGroup 同一套「兼容原生事件形状」设计）。
 
 ### 其它
 - `.checkbox-input`：原生 checkbox，**必须显式给上下 margin**（默认 margin 会撑开行距），网格内被清零
-- `sp-switch`：放行内右侧，自动 4px 左间距
-- `.color-preview`：20×20 颜色预览，左右 margin 10
+- `.color-preview`：20×20 颜色预览，左右 margin 10（放进定宽槽时**必须 `margin:0`**，否则撑宽 + 右缘缩进）
 
 ---
 
@@ -240,9 +245,9 @@ import RangeSlider from '../components/RangeSlider';
 | 类 | 用途 |
 | --- | --- |
 | `.notify` + `.notify-ok` / `.notify-warn` / `.notify-fail` | 块状通知（内放 `.notify-text`） |
-| `.notify-bar` + `.notify-bar-ok/-warn/-fail/-disabled` | 单行状态条（状态点 + 正文 + 右侧信息/开关），`min-height:40px; padding:3px 6px; margin-bottom:8px`。`-disabled`（`--disabled-color` 灰描边 + 面板底色）用于「未启用」；**橙 `-warn` 在插件语义里专指异常/待处理，不要拿它表示关闭**。⚠️ `min-height:40px` 是把高度锁到「含 `sp-switch`（32px）」那一档，让含开关的条与纯文字的条**等高**（后者原本只有 25px）；用 min-height 而非 height，正文换行时仍可增高 |
+| `.notify-bar` + `.notify-bar-ok/-warn/-fail/-disabled` | 单行状态条（状态点 + 正文 + 右侧信息/开关），`min-height:32px; padding:3px 6px; margin-bottom:8px`。`-disabled`（`--disabled-color` 灰描边 + 面板底色）用于「未启用」；**橙 `-warn` 在插件语义里专指异常/待处理，不要拿它表示关闭**。⚠️ `min-height:32px` = 自绘开关占位盒 24 + padding 6 + 边框 2，让含开关的条与纯文字的条**等高**（旧的 40px 按原生 `sp-switch` 32px 算，已废）；用 min-height 而非 height，正文换行时仍可增高 |
 | `.mask-sync-status-spacer` | 状态条内的弹性占位（`flex:1 1 auto`），把右侧操作/开关推到最右。common.css 与 adjustment.css 各有一份定义 |
-| 状态条右侧控件 | 优先放 `sp-switch`（`.notify-bar sp-switch{flex:none;margin-left:4px}`）而非文字按钮，跨面板保持一致 |
+| 状态条右侧控件 | 优先放自绘 `.toggle-switch`（`.notify-bar .toggle-switch{flex:none;margin-left:4px}`）而非文字按钮，跨面板保持一致 |
 | `.status-banner` + `.status-banner-ok/-warn/-fail` | 通用横幅（`min-height:30px`，换行时自动增高；顶部激活卡片、底部通知、任务内通知共用） |
 | `.notify-text` | 正文（唯一定义） |
 | `.indicator` + `.indicator-lg`(13) / `-md`(8) | 状态点基础/尺寸 |

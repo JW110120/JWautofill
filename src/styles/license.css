@@ -1,6 +1,6 @@
 /*
  * 激活弹窗（LicenseDialog）样式。
- * 2026-09-01：从 LicenseDialog.tsx 的组件内 <style> 块整体搬到这里。
+ * 从 LicenseDialog.tsx 的组件内 <style> 块整体搬到这里。
  * 之所以能搬到静态 CSS：本文件由 index.tsx 在 common.css / app.css 之后引入，
  * 随 bundle 在启动时注入，
  * 注入时机早于 theme.ts（theme.ts 在 index.tsx 模块体内调用），
@@ -238,7 +238,7 @@
 
 /*
  * 「联系作者」样式。
- * 根因（2026-08-31 实测）：UXP 会强制用自带链接色渲染 <a> 文字，
+ * 根因：UXP 会强制用自带链接色渲染 <a> 文字，
  * 作者 color 被忽略、深色主题下文字回退成默认暗蓝、比下划线深一截。
  * 故链接用可点击 <span>（UXP 内 <a href> 本也不唤起浏览器，走 shell.openExternal），
  * 文字颜色完全由 CSS 控制、与下划线同色稳定渲染。

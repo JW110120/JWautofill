@@ -92,24 +92,15 @@
   margin-bottom: 10px;
 }
 
-/* 「填充方式」两列 radio 与上下分割线的距离，对齐「剪贴蒙版」行与分割线的距离
-   （2026-10-07 用户反馈：两者不一致，要求目测对齐到 20px）。
-   ⚠️ 先分清两种外边距行为（本仓最容易算错的地方）：
-      `.border-panel-section` 是 **flex 列容器** ⇒ 直接子项的上下外边距**不折叠**；
-      而 .divider 自身 `margin: 10px 0`。
-      于是原值分别是：
-        radio  ↔ divider = divider 的 10px + radio 的 **0**  = 10px   ← 偏紧
-        divider ↔ 剪贴蒙版 = divider 的 10px + row-grid-flush 的 0
-                          + .row-grid-flush .row-start 的 5px  = 15px
-      ⇒ 差 5px，视觉上 radio 那行明显比剪贴蒙版那行更贴分割线。
-   ⚠️ 修法：给 radio 补 `margin: 5px 0`，两侧同时 +5 ⇒ 两段都是 15px（+ 分割线自身 10px
-      计入后为 20px 视觉距离），与剪贴蒙版行完全同档。
-      取 5px 而非 10px：要与下方 .row-grid-flush .row-start 的 5px 严格对齐（不能只对齐一半）。
-   ⚠️ 选择器写成 `.border-panel-section > .radio-pair-group`：
-      用直接子项（`>`）而非后代 —— 渐变/描边子面板里的 .radio-pair-group 嵌在 .panel-section 内，
-      不受本条影响；反之若写成裸 `.radio-pair-group` 会把颜色面板的「计算方法」也一起改掉。
-   ⚠️ 特异性 (0,2,0) 与 common.css 的 `.border-panel-section .radio-pair-group`（0,2,0）相同，
-      本文件靠后加载（app.css 内 @import 顺序在 common.css 之后）⇒ 稳定取胜。 */
+/* 「填充方式」两列 radio 与上下分割线的距离（对齐「剪贴蒙版」行的 20px）。
+   ⚠️ 先分清外边距行为（本仓最容易算错的地方）：`.border-panel-section` 是 **flex 列容器**
+      ⇒ 直接子项上下外边距**不折叠**；而 .divider 自身 `margin: 10px 0`。于是原值：
+        radio ↔ divider = 10 + radio 的 0 = **10px**  ← 偏紧
+        divider ↔ 剪贴蒙版 = 10 + 0 + .row-grid-flush .row-start 的 5px = **15px**
+   ⚠️ 修法：给 radio 补 `margin: 5px 0` ⇒ 两段都是 15px（+ 分割线自身 10px = 20px 视觉距离）。
+      取 5px 而非 10px：要与 .row-grid-flush .row-start 的 5px 严格对齐（不能只对齐一半）。
+   ⚠️ 选择器用直接子项 `>` 限定本面板：裸 `.radio-pair-group` 会把颜色面板「计算方法」一起改掉。
+   ⚠️ 特异性 (0,2,0) 与 common.css 同名规则相同，本文件在 app.css 内后加载 ⇒ 稳定取胜。 */
 .border-panel-section > .radio-pair-group {
   margin: 5px 0;
 }

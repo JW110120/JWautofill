@@ -1,44 +1,36 @@
 /* 描边（stroke）子面板样式
    ⚠️ 通用组件已统一收口到 common.css（滑块文字标签 / 可拖拽标签光标 / 单行·行内滑块 /
    数字输入 / 单位符号 / 子面板分区容器 .panel-section / 二级标题 .subpanel-title-2 /
-   双列 radio 布局 / 三列 radio 布局 .radio-trio / 关闭按钮 / 拖拽光标锁）。本文件只保留描边面板「独有」的特殊规则。
-   分区容器样式（原 stroke-wide-container / stroke-blende-mode / stroke-opacity-control /
-   position-radio-group）与行内滑块（原 .range-slider / .stroke-opacity-range 覆盖）已全部
-   收口到 common.css，改通用组件请去 common.css。 */
+   自绘单选组 .radio-trio-group / 关闭按钮 / 拖拽光标锁）。本文件只保留描边面板「独有」的特殊规则；
+   分区容器与行内滑块等（原 stroke-wide-container / stroke-blende-mode / stroke-opacity-control /
+   position-radio-group / .range-slider / .stroke-opacity-range）已全部收口到 common.css，
+   改通用组件请去 common.css。 */
 
-/* 「内容行容器 ↔ 分割线」距离统一为 20px（2026-10-07 用户反馈「参差不齐」）。
-   ⚠️ 动手前必须先分清两种外边距行为，否则必然算错（本条已踩过一次算错的坑）：
-      ① `.panel` 是**块容器**（无 display:flex）⇒ **相邻兄弟外边距折叠、取 max**；
-      ② `.panel-section` 是 **flex 列容器** ⇒ 它的子项（.row-between / .radio-trio，
-         各自 `margin: 10px auto`）的上下外边距**不折叠**，会叠加在 section 自身下边距之外。
-   于是每一段「距离」实际由**两项**相加，按 (2) 分段核算原值：
-        内容行   ↔ divider = 行内 margin-bottom 10 + max(section 15, divider 10) = **25px**
-        divider  ↔ 内容行 = max(divider 10, section 0)  + 行内 margin-top 10   = **20px**
-      四段依次 25 / 20 / 25 / 20 / 25 / 20 交替 ⇒ 视觉上正是「参差不齐」。
-   ⚠️ 解法只需一条：把 section 的下边距 15px 收到 **10px**。
-      「内容行 → divider」= 10 + max(10, 10) = **20px**；
-      「divider → 内容行」本来就是 20px，不受影响 ⇒ 六段一律 20px。
-      ⚠️ **不要**再去归零行容器的上下外边距 —— 那是 section 内部必需的呼吸空间，
-         归零后两段都只剩 10px，反而整体变紧、且末行会贴住分割线。
-   ⚠️ 必须带 .subpanel-stroke 前缀限定作用域：.panel-section 是全插件通用类，
-      裸写会波及父面板与另外三个子面板的分区节奏。
-      特异性 (0,2,0) > 通用类的 (0,1,0)，稳定压过，不依赖源码顺序。
-   ⚠️ 末行（不透明度）下方没有分割线：改后是 10px + .panel 的 10px 内边距 = 20px 收尾，
-      与上面的 20px 节奏同档，**不再需要** :last-child 归零特例。
-   ⚠️ 紧凑模式（body.compact-stroke）把 divider 设为 display:none、不占空间，
-      分区间距因此从 15px 收到 10px —— 这与紧凑模式「整体更紧」的定位一致，属预期行为。 */
+/* 「内容行容器 ↔ 分割线」距离统一为 20px。
+   ⚠️ 动手前先分清两种外边距行为，否则必然算错（本条已踩过一次）：
+      ① `.panel` 是**块容器** ⇒ 相邻兄弟外边距**折叠取 max**；
+      ② `.panel-section` 是 **flex 列容器** ⇒ 子项（各 `margin:10px auto`）上下外边距**不折叠**，
+         会叠在 section 自身下边距之外。
+      原值：内容行↔divider = 10 + max(section 15, divider 10) = **25px**；
+            divider↔内容行 = max(divider 10, section 0) + 10 = **20px**
+            ⇒ 25 / 20 交替 = 视觉上的「参差不齐」。
+   ⚠️ 解法只需一条：section 下边距 15px → **10px** ⇒ 「内容行→divider」= 10 + max(10,10) = 20px，
+      「divider→内容行」本就是 20px ⇒ 六段一律 20px。
+      ⚠️ **不要**归零行容器的上下外边距 —— 那是 section 内部必需的呼吸空间，
+         归零后两段都只剩 10px，末行会贴住分割线。
+   ⚠️ 必须带 .subpanel-stroke 前缀：.panel-section 是全插件通用类，裸写会波及父面板与另三个子面板。
+      （特异性 (0,2,0) > 通用 (0,1,0)，不依赖源码顺序。）
+   ⚠️ 末行（不透明度）下方没有分割线：10px + .panel 内边距 10px = 20px 收尾 ⇒ 无需 :last-child 特例。
+   ⚠️ 紧凑模式把 divider 设为 display:none ⇒ 分区间距 15→10px，与「整体更紧」定位一致，属预期。 */
 .subpanel-stroke > .panel-section {
   margin-bottom: 10px;
 }
-/* 「内部/居中/外部」三列：纵向行距由 **padding** 承担（原靠已删除的 .radio-trio 包裹层 margin）。
-   ⚠️ 为什么用 padding 而不是 margin：包裹层删除后，三列的父元素直接是 .panel-section；
-      而 .panel-section 是 flex 列容器，子项 margin 会干扰 stretch、导致容器宽度算错、
-      三列被 UXP 竖排（见 common.css .radio-trio-group 处的完整记录）。
-      padding 是**容器内部**的间距，不参与父级宽度计算，天然安全。
-   ⚠️ 与相邻各段的 20px 统一：
-        divider ↔ 三列 = padding 10 + max(.panel-section mb 10, divider 10) = **20px** ✓
-        其余段（宽度行 / 混合模式 / 不透明度）同样 20px ⇒ 六段一致。
-   ⚠️ 横向 padding 必须为 0 —— 任何横向内缩都会破坏「首末项贴边（内缩 0）」。 */
+/* 「内部/居中/外部」三列：纵向行距由 **padding** 承担，横向 padding 必须为 0。
+   ⚠️ 为什么用 padding 而不是 margin：三列的父元素直接是 .panel-section（flex 列容器），
+      子项 margin 会干扰 stretch、容器宽度算错 ⇒ 三列被 UXP 竖排；
+      padding 是容器**内部**间距，不参与父级宽度计算，天然安全。
+   ⚠️ 与相邻各段统一 20px：divider ↔ 三列 = padding 10 + max(section mb 10, divider 10) = 20px。
+   ⚠️ 横向内缩会破坏「首末项贴边（内缩 0）」。 */
 .subpanel-stroke > .panel-section > .radio-trio-group {
   padding: 10px 0;
 }

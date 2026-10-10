@@ -1,19 +1,18 @@
 /* ==========================================================================
    common.css — 全插件「整体」样式入口
    --------------------------------------------------------------------------
-   由 #app / #pixeladjustment 两个面板共享（均从 index.tsx 引入）。本文件承担两层职责：
-   1. 全局基础：@font-face 字体 + html/body 根元素样式（原先散落在主面板样式里，
-      2026-09-03 收口至此，两个面板文档共用同一套根样式）；
-   2. 通用组件样式：如滑块/按钮/开关/radio/checkbox/图标按钮/拖拽光标锁。
-   本文件必须最先加载（见 index.tsx 顶部 import），其后各面板 CSS（app.css /adjustment.css 等）只保留该面板独有的样式，
-   通用组件的视觉修改只改这里即可全局生效，不会再出现「某面板漏改一处导致样式漂移」的问题。
-   本文件同时是静态入口：index.html 的 <link>、manifest cssResources、 webpack 拷贝均指向本文件。
+   由 #app / #pixeladjustment 两个面板共享（均从 index.tsx 引入），承担两层职责：
+   1. 全局基础：@font-face + html/body 根元素样式；
+   2. 通用组件样式：滑块 / 按钮 / 开关 / radio / checkbox / 图标按钮 / 拖拽光标锁。
+   必须最先加载（index.tsx 顶部 import）；其后各面板 CSS 只留该面板独有样式，
+   通用组件的视觉只改这里即全局生效。
+   本文件同时是静态入口：index.html 的 <link>、manifest cssResources、webpack 拷贝都指向它。
 
    约定：
-   1.每个通用组件只保留一个，让common中不存在多余的类名，从别的文件收口过来的新样式，需要改为通用的类名。
-   2.UXP 不支持 gap
-   3.通常一个组件只挂一个类名，竟可能把类名下的样式合并，除非它可能会有禁用等状态变化。
-   4.类名的命名不用--这种两个连在一起的双破折号，只用单破折号。
+   1. 每个通用组件只保留一个，common 里不留多余类名；从别处收口来的样式要改成通用类名。
+   2. UXP 不支持 flex gap。
+   3. 一个组件通常只挂一个类名，尽量合并到该类名下；只有存在禁用等状态变化时才拆修饰类。
+   4. 类名只用单破折号，不用双破折号。
    ========================================================================== */
 
 /* 全局基础：字体 + 根元素 */
@@ -53,14 +52,9 @@ html, body {
   box-sizing: border-box;
   overflow-y: auto;
   overflow-x: hidden;
-  /* ⚠️ 这里**不能**加 scrollbar-gutter: stable（2026-09-10 定位，代价是右缘被裁）：
-     UXP 的 CSS 侧确实会照它预留 10px 滚动条槽位，但 PS 宿主给原生控件
-     （sp-switch / sp-radio 的 slot 内容）排版时不扣这份槽位 —— 控件按「内容盒 230px」
-     摆位，右缘正好探出内容盒 10px，被面板右缘裁掉右半截。
-     面板高度 ≈823px、内容刚好压在滚动条出现阈值上（即「有/无滚动条的中间态」）时
-     最明显：槽位被预留（内容盒 220px）却看不到滚动条，控件仍按 230px 摆位。
-     槽位只按需占位才是与宿主一致的行为：无滚动条内容盒 230px、有滚动条 220px，
-     正好是设计要的两档，且控件与宿主始终对齐。
+  /* ⚠️ 不能加 scrollbar-gutter: stable：UXP 会预留 10px 槽位，但 PS 宿主给原生控件
+     排版时不扣这份槽位 ⇒ 右对齐控件的右半截被面板右缘裁掉（详见技能 uxp-pitfalls ⑮）。
+     槽位按需占位才是与宿主一致的两档：无滚动条内容盒 230px、有滚动条 220px。
      ::-webkit-scrollbar 在 UXP 下同样不生效（下方规则仅为将来引擎支持时生效）。 */
 }
 
@@ -200,9 +194,8 @@ html, body {
 }
 
 /* 通用自定义滑块色标
-   ⚠️ 2026-10-07：颜色由硬编码 rgb(255,255,255) 改为 var(--control-handle-color) ——
-      亮色主题（light / lightest）下白圆点压在浅灰轨道上几乎看不见（用户反馈可读性差）。
-      令牌规则：深主题白、亮主题近黑（定义见 theme.ts）。 */
+   ⚠️ 颜色走 var(--control-handle-color)（深主题白 / 亮主题近黑，见 theme.ts）：
+      硬编码白色在亮色主题下压在浅灰轨道上几乎看不见。 */
 .range-slider-thumb {
   position: absolute;
   top: 50%;
@@ -218,20 +211,13 @@ html, body {
 }
 
 /* —— 自绘开关（.toggle-switch，替代原生 sp-switch）——
-   为什么自绘：sp-switch 的胶囊颜色由 PS Spectrum 主题接管、UXP 下无法用 CSS 覆盖，
-   在 darkest / lightest 下关闭态胶囊色≈面板底色，看起来只是个圆点（2026-10-06 实测）。
-   自绘后开启态=--primary-color、关闭态与背景有明确反差，且与滑块同一套设计语言
-   （轨道色 --border-color、圆点白色、圆角 999）。
-
-   尺寸：可见胶囊 33×16、圆点 12px；占位盒高 24px（:before 撑起），
-   与滑块(12px 轨道)、数字输入(24px) 同一基线，行内垂直居中无需额外调整。
-   ⚠️ 占位用 :before 而非 margin/padding，避免挤压同行元素。
-
-   ⚠️ 圆角**不能写 border-radius:999px**：UXP 下该值未按「高度一半」正确解析成胶囊，
-   实测两端渲染为尖角、整体像纺锤，且伪元素溢出容器后左右各鼓出一个小凸起
-   （用户 2026-10-06 反馈，见「音频波」现象）。
-   ⇒ 改用**显式数值** 8px（= 16px 高的一半，等价于完美半圆端），
-     并同时给 -webkit- 前缀，UXP 的 WebKit 后端更认它。 */
+   为什么自绘：sp-switch 的胶囊色由 PS Spectrum 主题接管、CSS 覆盖不了，且关闭态
+   在 darkest / lightest 下≈面板底色，看起来只是个圆点。自绘后开启态=--primary-color、
+   与滑块同一套语言（轨道 --border-color、圆点 --control-handle-color）。
+   尺寸：可见胶囊 33×16、圆点 12px；占位盒高 24px（:before 撑起，不用 margin/padding，
+   免得挤压同行元素），与滑块(12px)、数字输入(24px) 同基线。
+   ⚠️ 圆角不能写 999px：UXP 未按「高度一半」解析，两端会渲染成尖角纺锤、伪元素溢出鼓包
+      ⇒ 用显式 8px（=16px 的一半），并同时给 -webkit- 前缀。 */
 .toggle-switch {
   position: relative;
   display: inline-block;
@@ -256,15 +242,14 @@ html, body {
   /* 8px = 16px 高的一半 ⇒ 端部为完美半圆（与图2 目标一致） */
   border-radius: 8px;
   -webkit-border-radius: 8px;
-  /* 关闭态：与背景有足够反差 —— 用 --border-color（比 --bg-color 明显一档），
-     不透明度0.80 字面写。UXP 下 background:transparent 会渲染成纯黑，不能用。 */
+  /* 关闭态：--border-color 比底色明显一档；0.80 字面写。
+     ⚠️ 不能用 background:transparent —— UXP 下会渲染成纯黑。 */
   background-color: var(--border-color);
   opacity: 0.80;
   box-sizing: border-box;
   transition: background-color 0.2s ease, opacity 0.2s ease;
 }
-/* 圆点：12px 实心点。⚠️ 2026-10-07 由硬编码 rgb(255,255,255) 改为 var(--control-handle-color)
-   —— 亮色主题下白手柄压在浅色胶囊上几乎不可见（用户反馈可读性差）。
+/* 圆点：12px 实心点，颜色走 var(--control-handle-color)（硬编码白色在亮色主题不可见）。
    开启时移到右端：left = 胶囊宽 33 − 圆点 12 − 内边距 2 = 19 */
 .toggle-switch-knob {
   position: absolute;
@@ -303,14 +288,9 @@ html, body {
 }
 
 /* 通用数字输入框容器
-   🔴 2026-10-07 必须给**固定宽度**（用户反馈「单位符号的容器宽度没统一」）：
-      本元素只声明了 height、**没声明 width** ⇒ 宽度由内容（数字位数）撑开：
-      `0` 时窄、`100` 时宽 ⇒ 同一列里每行的输入框宽度都不同，
-      后面的 `.num-unit`（%）自然跟着左右漂移，视觉上「单位符号没对齐」。
-      UXP 的 input[type=number] 还自带 spinner 占位，位数不同占位也不同 ⇒ 漂移更明显。
-   ⚠️ 宽度必须与内部 input 的 width（32px）+ 容器左右 border（1px×2）严格对齐：
-      34px = 1 + 32 + 1，input 正好填满裁剪区，不会出现内侧空隙。
-   ⚠️ 统一改这里即可覆盖全插件 29 处调用点（grep 确认无修饰类变体）。 */
+   ⚠️ 必须固定宽 34px（= 左右 border 1px + input 32px）：不写 width 会被数字位数撑开，
+      同一列每行宽度不同 ⇒ 后面的 .num-unit 跟着漂移，「单位符号对不齐」。
+      改这一处即覆盖全插件全部调用点。 */
 .num-input-row {
   display: flex;
   align-items: center;
@@ -327,21 +307,12 @@ html, body {
 }
 
 /* 通用数字输入框本体：始终在 .num-input-row 裁剪容器内（去边框避免「框里框」）。
-   ⚠️ 2026-10-07 宽度改 100%（填满 .num-input-row 的固定 34px）：
-      原 `width: 32px` 是配合「容器宽度由内容撑开」的旧写法；
-      容器固定宽后必须让 input 填满，否则数字会在 34px 盒里偏左、右侧留白。
-   🔴 2026-10-10 垂直定位修正（用户反馈「数字位于输入框偏上，不在垂直中央」）：
-      UXP 的原生输入框**不按 CSS line-height 做行盒居中**，而是从「原生绘制区上缘」
-      往下画字体自身的行盒（ascent+descent）⇒ 视觉上文字整体偏上。
-      像素实测（1× 截图，尺寸标注均 1:1）：外框 y6..37（32px，中心 21.5），
-      「100」墨迹仅 y15..23（中心 19）⇒ 偏上 2.5px；按思源黑体度量反推，
-      墨迹顶 = 绘制区上缘 + 5.1px，即绘制区上缘必须落在容器 21.5−9.5 = 12px 处。
-      ⚠️ 第一版用 `padding-top: 2px` 把内容盒下移——实测基本无效（原生控件的
-         绘制区不随内容盒走，padding 只改内部排版、不改绘制区起点）。
-      正确做法是**移动 input 这个盒子本身**：height 24px→20px 后，行容器
-      （32px、align-items:center）给它的上下留白从 4px 变 6px ⇒ 盒顶 10→12px，
-      墨迹随之落回容器几何中心。
-      ⚠️ 不能用 line-height 调（原生控件忽略它）；别再改回 padding 方案。 */
+   ⚠️ 宽度填满容器的固定 34px（写 32px 会让数字偏左、右侧留白）。
+   ⚠️ 垂直居中只能靠**改 input 盒高**：UXP 原生输入框的文字不从 line-height 居中，
+      而是锚在「原生绘制区上缘」往下画 ⇒ 视觉偏上。height 24→20px 后行容器(32px,
+      align-items:center)给它上下各 6px，盒顶落到 12px，墨迹才回几何中心。
+      **统一规律：盒高每减 2px，文字下移 1px**（同步改 line-height）。
+      不要用 padding-top（原生控件绘制区不随内容盒走，实测无效），不要用 line-height。 */
 .num-input-row input {
   display: flex;
   align-items: center;
@@ -364,7 +335,7 @@ html, body {
 }
 
 /* text 型变体（渐变面板的 #RRGGBB 六位色值，LicenseDialog 走自己的 .license-input-wrap 不在此列）。
-   ⚠️ 2026-10-07：.num-input-row 已固定 34px，此处必须**同步固定 62px**（1+60+1），
+   ⚠️ .num-input-row 已固定 34px，此处必须**同步固定 62px**（1+60+1），
       否则 60px 的 input 会被 34px 容器裁掉右侧 2/3（overflow:hidden）。
    ⚠️ 用显式修饰类 `.num-input-row-wide`，**不要写 `:has(input[type=text])`** ——
       UXP 不支持 :has()、静默失效（项目铁律），必须由 TSX 挂类名。 */
@@ -376,26 +347,12 @@ html, body {
 }
 
 /* 通用单位符号
-   ⚠️ 2026-10-07 加**定宽槽位**（用户反馈「单位符号的容器宽度没统一」）：
-      `%` / `px` / `°` 字符宽度不同 ⇒ 单位符号自身宽度不一致，
-      即使输入框已定宽，单位符号的**右缘**仍会随字符左右漂移。
-      给固定宽度 + 右对齐 ⇒ 所有行的单位符号占据同一个槽位、纵向成一条直线。
-
-   ⚠️ 2026-10-07 第二次调整（用户反馈「容器太宽，整个滑块的重心看起来偏左」）：
-      本元素是行内最右侧的兄弟（.row-between 是 space-between，它被推到内容盒右缘），
-      槽位每宽 1px 就从中间的滑块轨道 (.slider-track, flex:1) 抠掉 1px ⇒
-      槽位过宽 = 轨道被压短 + 右侧留一截空白 = 整行视觉重心左移。两处一起改才有效：
-        ① margin-left 4px → 0（与 .num-input-row 紧贴，不再额外左推输入框）；
-        ② 宽度 20px → 16px（16px 是三种单位里最宽的 "px" 的完整字身宽上限：
-           Source Han Sans 13px 下 p≈0.573em + x≈0.513em ≈ 14.1px，
-           留 ~2px 余量；再窄 "px" 就会溢出槽位、压回输入框上。比原 20px 让出 4px 给滑块轨道）。
-      配合 justify-content: flex-end（文字紧贴槽位右缘）——
-      原居中写法会在符号右侧留 (20−8)/2 = 6px 死白，那正是「重心偏左」的另一半来源。
-   ⚠️ `align-items: right`（原写法）不是合法值、会被忽略 ⇒ 视觉上文字未真正垂直居中，
-      这里改用 center（配合行容器的 align-items:center 保持一致）。
-   ⚠️ 宽度必须按「最宽单位符号 px」算，不能按 `%` 单独算窄（% 的墨迹只有 8px）——
-      否则不透明度面板的羽化、描边面板的宽度两行会溢出压回输入框。
-   ⚠️ 渐变面板的 `#` 走 .num-unit-hash，必须把这里的三个值全部钉回去（见 gradient.css）。 */
+   ⚠️ 定宽 16px + 右对齐 + margin-left:0：单位符号（%/px/°）字符宽不同，不定宽则右缘随
+      字符漂移；它是行尾右对齐兄弟，槽位每宽 1px 就从中间滑块轨道抠 1px ⇒ 过宽会让整行
+      重心左移。16px = 最宽单位 "px" 的字身宽上限（Source Han Sans 13px ≈14.1px，留 ~2px）。
+      justify-content:flex-end 让文字贴槽右缘（居中会在右侧留死白）。
+   ⚠️ `align-items: right` 不是合法值（会被忽略），用 center。
+   ⚠️ 渐变面板的 `#` 是前缀，走 .num-unit-hash，把这里的值全部钉回（见 gradient.css）。 */
 .num-unit {
   margin-left: 0;
   width: 16px;
@@ -425,21 +382,12 @@ html, body {
   margin-bottom: 2px;
 }
 
-/* ===== 两列网格（.row-grid / .grid-cell）=====
-   一行放两组「标签 + 控件」的通用容器，全插件唯一定义：
-   外层 .row-between.row-grid 把宽度二等分，内层 .grid-cell 承载其中一组，内层放一行
-   （紧凑模式的填充选项）或多行（2×2 复选框组）皆可。两列等宽，左列内容贴内容盒左缘、
-   右列内容贴内容盒右缘（各距面板外缘 10px，与 .row-between 行的「标签靠左 / 控件靠右」
-   一致，见下条 `.grid-cell + .grid-cell` 的 align-items）。
-   UXP 不支持 flex gap：列间距用 .grid-cell + .grid-cell 的 margin-left 提供。
-   ⚠️ 必须写成双类 .row-between.row-grid：单类 .row-grid 与 .row-between 同为 (0,1,0)，
-   只能靠源码顺序险胜，换一处覆盖链不同即失效（同 radio-pair 的坑）。
-   纵向节奏分两档（两档的行内容与邻居不同，不能强行合并）：
-     · 基础 .row-grid：自带 10px 上下外边距（与其它行一致），单元格内的行不再自带外边距，
-       相邻两个网格之间也是 10px（与下方复选框组的行距同档）；
-     · 修饰 .row-grid-flush：紧贴 divider / 描边容器内缘时纵向外边距清零，单个控件的呼吸
-       改由内层行的 5px 承担，避免 divider 的 10px 与网格的 10px 叠成 20px
-       （图案 / 渐变 / 填充选项底部的复选框组）。 */
+/* ===== 两列网格（.row-between.row-grid / .grid-cell）=====
+   一行放两组「标签 + 控件」：左列内容贴内容盒左缘、右列贴右缘（各距面板外缘 10px）。
+   列距用 .grid-cell + .grid-cell 的 margin-left 提供（UXP 无 flex gap）。
+   ⚠️ 必须写双类 .row-between.row-grid：单类与 .row-between 同为 (0,1,0)，只能靠源码顺序险胜。
+   纵向节奏两档：基础 .row-grid 自带 10px 上下外边距（单元格内的行不再自带）；
+   修饰 .row-grid-flush 纵向外边距清零，呼吸改由内层行的 5px 承担（避免与 divider 的 10px 叠成 20px）。 */
 .row-between.row-grid {
   margin: 10px auto;
 }
@@ -449,18 +397,12 @@ html, body {
   display: flex;
   flex-direction: column;
 }
-/* 列距（UXP 无 flex gap）+「右列内容贴内容盒右缘」。
-   两列网格的对称关系：左列默认 stretch（子行 .row-start 自带 justify-content:flex-start，
-   内容天然贴左缘），右列用 align-items:flex-end 让子行收成内容宽后靠右 ——
-   合起来就是 .row-between 行「标签靠左 / 控件靠右」的视觉，左右各距面板外缘 10px。
-   起因：此前两列都按 flex-start 摆放，右列停在二等分中缝上，整行墨迹集中在中缝以左、
-   看起来整体左偏，与其它容器（非紧凑行、radio 分区）不齐。
-   ⚠️ .grid-cell 是 column flex，水平位置靠 align-items（stretch/flex-end 只改水平位置，不改行高）。
-   ⚠️ 必须用「相邻兄弟」而不是 :last-child：只有一个 .grid-cell 的网格
-      （图案面板未勾选「阵列」时只剩一个「剪贴蒙版」）会同时命中 :first-child 与 :last-child，
-      按源码顺序 flex-end 胜出，会把唯一的左列整列推到最右缘。
-   ⚠️ .row-grid-fit（紧凑描边模式行）两列都是 flex:0 0 auto、列宽即内容宽，
-      本条的 flex-end 对它是空操作，不破坏「色板/齿轮紧跟开关」。 */
+/* 列距 +「右列内容贴内容盒右缘」：左列默认 stretch（子行 .row-start 贴左缘），
+   右列 align-items:flex-end 让子行收成内容宽后靠右 —— 与 .row-between「标签靠左/控件靠右」一致。
+   ⚠️ .grid-cell 是 column flex，水平位置靠 align-items（不改行高）。
+   ⚠️ 必须用相邻兄弟而不是 :last-child：只有一个 .grid-cell 的网格会同时命中 first+last，
+      flex-end 胜出会把唯一那列推到最右缘。
+   ⚠️ .row-grid-fit（紧凑描边行）两列都是 flex:0 0 auto，本条的 flex-end 对它为空操作。 */
 .row-grid .grid-cell + .grid-cell {
   margin-left: 10px;
   align-items: flex-end;
@@ -474,40 +416,25 @@ html, body {
   margin-top: 0;
   margin-bottom: 0;
 }
-/* 相邻两个网格的纵向间距：取「下方复选框组两行之间」的行距（5px + 5px = 10px），
-   即紧凑模式填充选项的「新建图层/清除模式」行与「描边模式」行之间。
-   （写入 10px 与基础 .row-grid 的 margin-bottom:10px 折叠后仍是 10px，与复选框组一致。） */
+/* 相邻两个网格的纵向间距：10px，与复选框组行距同档。
+   （与基础 .row-grid 的 margin-bottom:10px 折叠后仍是 10px。） */
 .row-grid + .row-grid {
   margin-top: 10px;
 }
-/* 零外边距档：纵向外边距清零（单个控件的呼吸改由内层行的 5px 承担）。
-   ⚠️ 横向归零用 `auto`：本行自带 width:100%，横向 auto 解析为 0，等价于 0。
-   （基底 .row-between.row-grid 是 `margin: 10px auto`，这里只把纵向压平。） */
+/* 零外边距档：纵向清零（呼吸改由内层行的 5px 承担）。横向用 auto（=0，等价）。 */
 .row-between.row-grid.row-grid-flush {
   margin: 0 auto;
 }
 
-/* 右列内容盒右缘外扩「原生 checkbox 的盒内右侧空档」（2026-10-10 第三次修正）。
-   --------------------------------------------------------------------------
-   目标：右列 checkbox 的**墨迹**右缘距容器（.border-panel-section）内缘 = 10px。
-   【为什么必须靠行宽外扩 —— 不是布局问题，是原生控件的盒内空档】
-     · 右列 `.row-start` 已经贴齐行右缘（.grid-cell + .grid-cell 的 align-items:flex-end）；
-     · 但 UXP 的 `input[type=checkbox]` 布局盒比可见方块宽，方块**居中**画在盒内
-       ⇒ 墨迹与盒子边缘之间留有左右各 ≈4px 空档（不是旧注释假设的 10px）。
-   【真机实测（渐变面板「反向 / 保留不透明度」行，用户截图 1.5× 逐像素量）】
-     · 容器内缘右 = 行右缘 = x345.5；右列 checkbox 墨迹右缘 = x339
-       ⇒ 盒内右侧空档 6.5px@1.5× ≈ **4.3px**；墨迹距容器内缘只剩 4.3px（用户报「偏小」）
-     · 左列：内容盒左缘距容器内缘 15px@1.5× = 10px ✓（「反向」墨迹 10.3px，差的是字形左边距）
-     · 旧值 +10px 正是按「空档 = 10px」假设定的 ⇒ 实机上把复选框**多推出 6px**。
-   【修法】补偿 = 实测空档 4px（而不是 10px）：右列盒子右缘落在内容盒右缘外 4px
-     ⇒ 墨迹右缘距容器内缘 ≈10px（实测 10.3px，与左侧 10.3px 对称）。
-     ⚠️ 必须连 width 一起放大：`.row-between` 自带 width:100%，本行是
-       .border-panel-section（flex 列，align-items:stretch）的子项 ⇒ 只给负 margin
-       **不会把盒子右移**（负 margin 只影响行尾剩余空间分配）。
-   ⚠️ 作用域限定 .border-panel-section：渐变「反向 / 保留不透明度」行、图案底部
-      「剪贴蒙版 / 旋转阵列」行都是本结构，一条修复对两者同时生效。
-   ⚠️ 不需要为 `.float-window` 再写一条：浮窗内已无 row-grid（填充设置浮窗已改为
-      逐行 `.row-between` + 自绘 ToggleSwitch，开关无原生墨迹空档）。 */
+/* 右列内容盒右缘外扩「原生 checkbox 盒内右侧空档」。
+   目标：右列 checkbox 墨迹右缘距 .border-panel-section 内缘 = 10px。
+   根因：右列已贴行右缘，但 UXP 的 input[type=checkbox] 布局盒比可见方块宽、方块居中
+   ⇒ 墨迹与盒边缘左右各留 ≈4px 空档（不是 10px）。补偿按实测 **4px**：
+     width: calc(100% + 4px) + margin-right: -4px ⇒ 墨迹右缘回到 ≈10px（与左侧对称）。
+   ⚠️ 必须连 width 一起放大：.row-between 自带 width:100%、本行是 flex 列子项，
+      只给负 margin 不会把盒子右移。
+   ⚠️ 作用域限定 .border-panel-section（渐变「反向/保留不透明度」、图案底部复选框行同结构）。
+   ⚠️ 不需为 .float-window 再写：浮窗内已无 row-grid。 */
 .border-panel-section > .row-between.row-grid.row-grid-flush {
   width: calc(100% + 4px);
   margin: 0 -4px 0 0;
@@ -518,14 +445,11 @@ html, body {
   margin: 5px 0;
 }
 
-/* 按内容宽度摆放的两列网格（修饰 .row-grid-fit，紧凑模式描边模式行）：
-   左列按内容宽（标签 + 开关）起点对齐；右列撑满剩余宽度，由 `.grid-cell + .grid-cell`
-   的 align-items: flex-end 把「色板 + 齿轮」推到内容盒右缘 —— 与上方「清除模式」
-   开关的右缘对齐，行尾不再空一段（原两列都 flex: 0 0 auto，控件挤在左侧）。
-   列距 5px 由右列的 margin-left 提供（UXP 无 flex gap）。
-   ⚠️ 一律写成 .row-grid.row-grid-fit 双类：基础规则与修饰规则的关键选择器特异性相同，
-      只有靠更高一档的特异性才不会依赖源码顺序。
-   ⚠️ 必须保留 .row-grid 类名：纵向节奏规则 `.row-grid + .panel-section` 靠它命中。 */
+/* 按内容宽摆放的两列网格（.row-grid.row-grid-fit，紧凑模式描边模式行）：
+   左列按内容宽（标签 + 开关）靠左；右列撑满剩余宽，由 align-items:flex-end 把
+   「色板 + 齿轮」推到内容盒右缘，与上一行开关右缘对齐。列距 5px 走右列 margin-left。
+   ⚠️ 一律写 .row-grid.row-grid-fit 双类（基础与修饰规则特异性相同，靠高特异性避免顺序依赖）。
+   ⚠️ 必须保留 .row-grid 类名：纵向节奏规则靠它命中。 */
 .row-grid.row-grid-fit {
   justify-content: flex-start;
 }
@@ -953,19 +877,13 @@ html, body {
 }
 
 
-/* ===== 自绘单选组（RadioGroup.tsx）=====
-   2026-10-07 起替代原生 sp-radio-group。三处使用：父面板紧凑模式的「填充模式」、
-   描边子面板「位置」，以及两列场景（颜色面板「计算方法」）另行加 .radio-pair 类即可复用。
-
-   为什么弃用原生（详见 RadioGroup.tsx 头注）：
-     ① 内部排版由宿主实现，flex-wrap:nowrap / space-between 全都拦不住它折行；
-     ② 自带 15px 水平内边距，三项 45px 被吞进盒内，想不局促就只能砍标签宽度。
-
-   尺寸（对齐项目内既有度量）：
-     - 圆点 12px（与滑块同基线），圆角写显式 6px（= 高的一半），
-       **不写 999px**——UXP 下未按高度一半解析，实测渲染成尖角纺锤。
-     - 圆点↔文字间距 6px（UXP 无 flex gap，用 margin）。
-     - 文字 font-size 13px，与 .label-2..6 同档；宽度不写死（交给 flex）。 */
+/* ===== 自绘单选组（RadioGroup.tsx，替代原生 sp-radio-group）=====
+   用于：父面板紧凑模式「填充模式」、描边面板「位置」、颜色面板「计算方法」（两列）等。
+   弃用原生的原因：① 内部排版由宿主实现，flex-wrap / space-between 拦不住它折行；
+                   ② 自带 15px 水平内边距，想不局促只能砍标签宽度。
+   尺寸：圆点 12px（与滑块同基线）、圆角**显式 6px**（= 高的一半，不写 999px —— UXP 未按
+      高度一半解析，会渲染成尖角纺锤）；圆点↔文字 6px（无 flex gap，用 margin）；
+      文字 13px，宽度交 flex 不写死。 */
 .radio-group {
   display: flex;
   align-items: center;
@@ -994,9 +912,8 @@ html, body {
   flex-shrink: 0;
 }
 /* 选中：圆心填 --radio-checked-color，**不加任何描边**。
-   ⚠️ 2026-10-07 用户要求「与滑块手柄统一」⇒ 去掉原先的 `border-color: var(--primary-color)`。
-      滑块圆点/开关手柄都没有描边，radio 若留一圈蓝环就会与它们不像一家人；
-      且亮色主题下蓝环 + 近黑圆心会显得脏。选中与否靠「实心 vs 空心」区分即可。
+   ⚠️ 不加描边是为了与滑块手柄/开关圆点统一（它们都没有描边）：radio 若留一圈主色环就不像一家人，
+      且亮色主题下主色环 + 近黑圆心会显脏。选中与否靠「实心 vs 空心」区分即可。
    ⚠️ inset 留白用 --bg-color（随主题深浅反转），不用 --entry-bg。 */
 .radio-option-checked .radio-option-dot {
   background-color: var(--radio-checked-color);
@@ -1026,70 +943,37 @@ html, body {
   opacity: 0.5;
 }
 
-/* ===== 三种版式容器 =====
-   ⚠️ 2026-10-07 用户实测反馈「三列没占满整行容器」：原先只写了
-   `justify-content: space-between` 而**没写 width**，作为块级元素在 UXP 下未被拉伸到
-   父内容盒 ⇒ 三列挤在左侧一小块。
-   ⇒ 三种版式一律显式 `width: 100%` + `box-sizing: border-box`，不再依赖隐式拉伸。
-   （注：当时的 `.radio-trio` 中转包裹层已删除，三列容器现在直接是 `.panel-section` 的子项。）
-
-  ⚠️⚠️ 2026-10-07 用户曾反馈「三列/两列的首末项与容器左右边缘有 15~30px 内缩，要改为 0」。
-      ⚠️ **那次反馈本身是伪影**：本规则当时已被下方的「游离文本」缺陷整体吃掉（见下「真根因」段），
-      根本没挂到元素上 ⇒ 用户量到的是「未生效版式」的几何，据此推出的
-      「保留等分 + 逐项覆盖格内对齐」处方**也是错的**（第 5 轮已推翻，勿再采用）。
-
-      ✅ 第 5 轮定稿（浏览器实测复核）：
-         **项按内容宽 `flex: 0 0 auto`（不收缩） + 容器 `justify-content: space-between`**
-         · 首项左缘 = 容器左缘、末项右缘 = 容器右缘 ⇒ 内缩天然为 0，**不需要任何逐项对齐覆盖**；
-         · 项间两段空白自动均分，三项等宽时中项**严格**落在容器中心。
-         · 实测（`dist/common.css`，容器 230px @ x=20）：
-             内部 @x=20 w=44 ｜ 居中 @x=113 w=44 ｜ 外部 @x=206 w=44。
-      ⚠️ 三列/两列的项都**不写 margin**：任何左右 margin 都会破坏「贴边」。
-      ⚠️ **不要引入 `flex: 1 1 0` 等分**：那会让项盒宽于内容、内容默认靠格左缘，
-        首末项反而内缩，还得再补逐项对齐绕远路（理由详见下方「项」规则）。
-
-   🔴🔴🔴 2026-10-07 第 5 轮定位的**真根因**（本条是整件事的关键，改这里之前务必读完）：
-      上面这几段文案在第 2 轮补写「去掉等分」时**多写了一个注释结束符**，
-      导致紧跟着的「三列（.radio-trio-group）……」两行跑出了注释块**外面**，
-      而它们后面紧跟的正是本规则的 `{`。
-      ⇒ 解析器把这两行中文当成**选择器**，于是 `{ display:flex; flex-direction:row; … }`
-        整块成了那个垃圾选择器的声明块 ⇒ **本规则被整体丢弃，选择器从未命中过元素**。
-      ⇒ 现象：`.radio-trio-group` 退化为普通块级 div，三个 `.radio-option` 各占一行，
-        即「三列变三行」；而**紧邻的 `.radio-pair-group` 规则结构完好 ⇒ 两列正常** ——
-        「三列坏 / 两列好」这个诡异差异来自这里，**与项数无关、也不是 UXP 的锅**。
-      ⇒ 也解释了第 1~4 轮所有 CSS 修复为什么「明明改了却一点效果都没有」：
-        规则压根没挂上去，怎么调声明都是空转。
-      ⚠️ 纪律：编辑中文注释时**不要误写注释结束符**（本文里连它的字面两字符形式
-        都不能出现，否则注释会在这里提前结束）；每次改完必须核对「注释块外是否
-        残留游离文本」—— 游离文本会被当成选择器，静默吃掉紧随其后的整条规则。
-
-   三列（.radio-trio-group）：项按内容宽（`flex: 0 0 auto`）+ 容器 `space-between`
-   ⇒ 首项左缘、末项右缘各贴容器边缘（内缩 0），中项精确居中，项间空白自动均分。 */
+/* ===== 版式容器（三列 .radio-trio-group / 两列 .radio-pair-group）=====
+   定稿版式：**项按内容宽 `flex: 0 0 auto`（不收缩） + 容器 `justify-content: space-between`**
+   ⇒ 首项左缘贴容器左缘、末项右缘贴右缘（内缩天然为 0）、项间空白自动均分，
+     三项等宽时中项严格居中 —— **不需要任何逐项对齐覆盖**。
+   ⚠️ 容器一律显式 `width: 100%` + `box-sizing: border-box`：块级元素在 UXP 下**不被隐式拉伸**
+      到父内容盒，只写 space-between 会让列全挤在左侧一小块。
+   ⚠️ 项**不写 margin**、**不用 `flex: 1 1 0` 等分**：前者破坏贴边，后者让项盒宽于内容、
+      内容靠格左缘 ⇒ 首末项反而内缩，还得再补逐项对齐绕远路。
+   ⚠️ 编辑中文注释勿误写注释结束符：跑出注释块的游离文本会被当成选择器、
+      静默吃掉紧随其后的整条规则（曾致「三列变三行 / 改动零效果」，见 HISTORY.md）
+      ⇒ 改完必须跑 `node scripts/_css_comment_guard.cjs`。 */
 .panel-section .radio-trio-group,
 .border-panel-section .radio-trio-group {
   display: flex;
-  /* ⚠️ flex-direction 必须显式写 row：UXP 对「未指定方向的 flex 容器 + 宽度塌缩场景」
-     的默认行为不可靠，实测会退化成 column（即三列竖排）。显式声明消除歧义。 */
+  /* ⚠️ 必须显式写 row：未指定方向的 flex 容器在 UXP 下会退化成 column（三列变三行）。 */
   flex-direction: row;
   align-items: center;
-  /* ⚠️ 必须显式写：UXP 的 flex 容器**隐式默认是 `center`**（不是 web 的 flex-start），
-     不写会把三列整体挤到容器中间。本属性负责「首末项贴边 + 中项居中」的全部工作
-     （项按内容宽摆放 ⇒ 三段空白均分后，首项左缘=容器左缘、末项右缘=容器右缘、
-       三项等宽时中项严格落在容器中心）。 */
+  /* ⚠️ 必须显式写：UXP 的 flex 容器隐式默认 `center`（不是 web 的 flex-start），
+     不写列会挤到容器中间。贴边 + 居中全靠本属性。 */
   justify-content: space-between;
   flex-wrap: nowrap;
   width: 100%;
-  /* ⚠️ align-self: stretch —— 父容器 .panel-section 的 align-items 是 stretch，
-     但一旦任何一层出现 margin/auto，stretch 在 UXP 下会失效。
-     显式声明保证本容器始终撑满父内容盒宽度（这是三列能排在一行的前提）。 */
+  /* ⚠️ 显式 stretch：任一层出现 margin/auto 时 stretch 在 UXP 下会失效，
+     本容器撑满父内容盒是「多列排在一行」的前提。 */
   align-self: stretch;
   box-sizing: border-box;
 }
 
-/* 两列（.radio-pair-group）：同样按内容宽 + space-between，首末项贴容器两端。
-   用于颜色面板「计算方法」（原 .radio-pair-230）、图案面板「填充方式」
-   （原 .radio-pair-210）—— 原来两档宽度各写一套类名、靠绝对定位硬贴边，
-   自绘后统一成同一套写法，**不再需要按面板宽度分别手调**。 */
+/* 两列（.radio-pair-group）：同三列版式，首末项贴容器两端。
+   用于颜色面板「计算方法」、图案面板「填充方式」 —— 自绘后统一成同一套写法，
+   **不再需要按面板宽度分别手调**（原 .radio-pair-230 / .radio-pair-210 两档已废弃）。 */
 .panel-section .radio-pair-group,
 .border-panel-section .radio-pair-group {
   display: flex;
@@ -1101,14 +985,8 @@ html, body {
   align-self: stretch;
   box-sizing: border-box;
 }
-/* 三列/两列的项：**按内容宽、不收缩**（`flex: 0 0 auto`）。
-   ⚠️ 「首末贴边 + 中项居中」是**容器 `space-between` + 内容宽项**共同完成的：
-      项盒宽 = 内容宽 ⇒ 首项左缘即容器左缘、末项右缘即容器右缘（内缩 0）；
-      两段空白均分后，三项等宽（内部/居中/外部、纯色/图案/渐变都是两字）时
-      中项**严格**落在容器中心。
-   ⚠️ 不要改成 `flex: 1 1 0` 等分：项盒会宽于内容，内容默认靠格子左缘
-      ⇒ 首末项反而内缩，还得再补 per-item 对齐把首末项拉回边缘（绕远路）。
-   ⚠️ 项上不写 margin：任何左右 margin 都会让「贴边」失效。 */
+/* 三列/两列的项：**按内容宽、不收缩**（`flex: 0 0 auto`） —— 与容器 space-between 配合完成贴边与居中。
+   ⚠️ 勿改 `flex: 1 1 0` 等分、勿加 margin（理由见上方「版式容器」注释）。 */
 .panel-section .radio-trio-group > .radio-option,
 .border-panel-section .radio-trio-group > .radio-option,
 .panel-section .radio-pair-group > .radio-option,
@@ -1118,38 +996,15 @@ html, body {
 
 /* 纵向（.radio-vertical）：父面板普通模式的填充模式 —— 每行一个选项，
    右侧可挂齿轮按钮（原 sp-radio + .row-end 的替代）。
-   ⚠️⚠️⚠️ **本条已改错四次**（用户四次反馈：偏大→更小→没变→偏大→仍偏大）。
-      完整教训链见下方，**改这里前务必读完再动手**。
-
-      【核心教训】用户参照的量既不是「视觉白缝」也不是「行步进 pitch」，
-      而是**肉眼看到的三行整体疏密**。前三次我分别按白缝、pitch、行盒=内容高推导，
-      全部被否。**现在改用「先量出用户认可的目标截图的 pitch，再 1:1 复刻」的做法**，
-      不再从公式反推。
-
-      🔴 2026-10-07 第 5 轮修复：本行原本在此处多写了一个注释结束符，使下面「【基准实测】…」
-         整段跑到注释外，并吃掉紧随其后的 `.panel-section .radio-vertical` 规则（同一 bug，见
-         `.radio-trio-group` 处的完整记录）。现合并为一整段注释，规则恢复生效。
-
-      【基准实测】父面板「选区改造」滑块行（截图量算，缩放 1.5）：
-        行盒 32.67px（.num-input-row 满高）+ 行距 9.33px ⇒ pitch 42.00px
-      【实测演进】用户反馈          行盒  行距  pitch
-        第一轮「太宽，要收窄」      32     0    32     （原状）
-        第二轮「反而变小了」        24     0    24
-        第三轮「原封不动」          27     0    27.55  ← 24→27 只差 3px，肉眼无感
-        第四轮「偏大」              33    10    43
-        第五轮「仍偏大，减 5px」    28    10    38
-        本轮  「继续减 5px」        23    10    33     ← 行盒再降 5px
-      ⚠️ 本轮按用户字面要求**再减 5px**：行盒 28 → 23，pitch 38 → 33px。
-         行距 10px **保持不变**（它是与滑块行 9.33px 对齐的那一档，不动）。
-      ⚠️ 若下次反馈仍偏大/偏小，**直接量当前截图的 pitch 与目标差值**，
-         只修行盒高（行距恒 10px），不要再重推整条公式。
-      ⚠️ 行盒必须 ≥ 齿轮墨迹 16.67px（否则齿轮会溢出或挤压），当前 23px 仍有余量，
-         但已接近下限 —— 再减就需改齿轮图标尺寸，或把 10px 行距让出来。
-      ⚠️ **行距必须用 `margin-top` 且排除末项**：
-         .radio-vertical 是 flex 列容器 ⇒ 子项外边距**不折叠**，末项若带 margin 会额外
-         撑大「渐变行 → divider」的距离，破坏已校准好的对称关系。
-         用相邻兄弟 `.radio-option + .radio-option` 天然只命中第 2 项起、末项自动排除
-         （UXP 对 `:has()` 静默失效、`:not()` 支持性未验证，`+` 是本仓已验证的可靠写法）。 */
+   ⚠️ 纵向疏密反复调过多轮、且曾因注释结束符误写导致本规则整体失效（见 HISTORY.md）。
+      **再调只准走一条路：量出用户认可的目标截图的 pitch，再 1:1 复刻。**
+      不要从「白缝 / pitch 公式 / 行盒=内容高」反推 —— 那几种推法前几轮全被否。
+   ⚠️ 当前值：行盒 23px + 行距 10px ⇒ pitch 33px。**行距恒 10px 不动**（与滑块行 9.33px 同档），
+      再收到反馈只调行盒高。
+   ⚠️ 行盒下限 = 齿轮墨迹 16.67px（再小要先改齿轮图标尺寸，或让出 10px 行距）。
+   ⚠️ 行距必须用 `margin-top` + 相邻兄弟 `.radio-option + .radio-option`（天然排除末项）：
+      本容器是 flex 列 ⇒ 子项外边距**不折叠**，末项带 margin 会撑大「渐变行 → divider」距离。
+      （UXP 对 `:has()` 静默失效、`+` 是本仓已验证的可靠写法。） */
 .panel-section .radio-vertical,
 .border-panel-section .radio-vertical {
   display: flex;
@@ -1179,19 +1034,12 @@ html, body {
 
 /* ===== 公式提示条（清除设置 / 纯色设置：所选模式的计算公式）=====
    紧跟对应 radio 选项组下方，随所选模式实时切换文本；单一样式来源（两个面板共用）。
-   --------------------------------------------------------------------------
-   排版设计（2026-10-10 优化，按 CRAP 四大原则，呈 markdown 式层次）：
-     · 结构：主公式（重点）→ 分隔线 → 辅助说明（强度系数 / 术语释义），
-       对应 Markdown 的「引用块 → 水平分割线 → 定义列表」。
-     · Contrast（对比）：主公式加粗 12px；辅助说明 11px 常规 —— 拉开视觉权重，
-       「重点」一眼可辨。
-     · Repetition（重复）：所有公式条共用同一套「主行 + 说明区」结构，术语一律加粗。
-     · Alignment（对齐）：内容统一左对齐；左侧 3px 主色条标出「这是一个公式块」。
-     · Proximity（亲密）：术语与其释义紧贴，辅助说明与主公式之间用分隔线 + 空白隔开。
+   排版：主公式加粗 12px（重点）→ 分隔线 → 辅助说明 11px 常规（强度系数 / 术语释义，
+   术语一律加粗）；统一左对齐，左侧 3px 主色条标出「这是一个公式块」。
    ⚠️ 颜色一律走 --text-color / --entry-bg / --border-color / --primary-color，
       四套主题对比度均 ≥ 4.5:1；**不用 opacity 压暗**（会拉低对比度）。
-   ⚠️ margin-top 由本处给 10px 基准；清除面板的选项组自带 10px 下内边距，
-      在 clear.css 里把本处 margin 归零，避免变成 20px。 */
+   ⚠️ margin-top 本处给 10px 基准；清除面板选项组自带 10px 下内边距，
+      已在 clear.css 里把本处 margin 归零，免得叠成 20px。 */
 .formula-hint {
   width: 100%;
   box-sizing: border-box;
@@ -1233,7 +1081,6 @@ html, body {
 
 
 /* 行内右侧控件间距：row-between / row-center / row-end 内，开关与 checkbox 左侧留 4px。
-   ⚠️ 2026-10-06：选择器由 sp-switch 改为 .toggle-switch（自绘开关全量替换原生控件）。
    ⚠️ 不加在 label-N 的右侧兄弟上——那样会误伤行内滑块（RangeSlider）的标签，产生不需要的间距。
    只针对具体控件类型（开关/勾选框）。 */
 .row-between .toggle-switch,
@@ -1290,9 +1137,8 @@ html, body {
 /* 通用状态条通知（引擎状态条等单行状态行）：状态点 + 正文（+ 右侧信息/操作）。
    外描边随状态变化：ok=绿描边 / warn=橙描边 / fail=红描边（由 TSX 按状态挂修饰类）。
    ⚠️ min-height 用于「含开关的条」与「纯文字的条」等高：
-      2026-10-06 开关由原生 sp-switch（盒高 32px）换成自绘 .toggle-switch（占位盒高 24px），
-      原 40px = 32+上下 padding 6+边框 2 ⇒ 现按 24px 重算为 **32px**。
-      若沿用 40 会让含开关的状态条比纯文字条明显高一截。
+      **32px = 自绘开关占位盒高 24 + 上下 padding 6 + 边框 2**。
+      沿用旧 40px（按原生 sp-switch 盒高 32 算）会让含开关的条比纯文字条高一截。
    ⚠️ 用 min-height 而非 height：正文换行时状态条仍可增高，不会被裁切。 */
 .notify-bar {
   display: flex;
@@ -1313,8 +1159,7 @@ html, body {
 /* 未启用态（与 warn 橙区分：橙在插件语义里是「异常/待处理」，关闭只是没开）：
    描边走中性灰 --disabled-color、底色回到面板底色，与同条内灰掉的星形图标同源。 */
 .notify-bar.notify-bar-disabled { border-color: var(--disabled-color); background: var(--bg-color); }
-/* 状态条内的开关不参与伸缩：右侧定位由 .mask-sync-status-spacer 负责，开关宽度恒定。
-   2026-10-06：选择器随原生 sp-switch → 自绘 .toggle-switch 同步更新。 */
+/* 状态条内的开关不参与伸缩：右侧定位由 .mask-sync-status-spacer 负责，开关宽度恒定。 */
 .notify-bar .toggle-switch { flex: none; margin-left: 4px; }
 
 /* 通用通知横幅（唯一收口名，勿再起 notify-banner 之类近似名与 .notify-bar 混淆）：
@@ -1397,12 +1242,10 @@ html, body {
 }
 
 /* 通用积极状态点（带同色微光，与文字通知的积极色一致）
-   ⚠️ 2026-10-07 辉光色由固定的 `rgba(46,204,113,0.6)`（亮绿）改为 `currentColor` 驱动：
-     那层外圈辉光是**半透明浅绿**，在 light / lightest 的浅灰底上会把状态灯整体「冲淡」成灰绿色
-     （用户反馈"绿色有点灰暗"，截图里那颗点看着发灰不跳）。
-     改为用**加深后的 --notify-ok-fg**（currentColor 即 fill 色，亮色主题已调深为 rgb(15,109,52)）
-     配更实的不透明度 ⇒ 亮色主题下形成真正的深绿点 + 深绿光晕，反差明显提升。
-     ⚠️ 深色主题下 currentColor = rgb(74,222,128)，比原色更亮 ⇒ 光晕反而更明显，无副作用。 */
+   ⚠️ 辉光用 `currentColor`（= 加深后的 --notify-ok-fg）而非固定亮绿 rgba(46,204,113,.6)：
+     半透明浅绿在 light / lightest 的浅灰底上会把状态灯整体「冲淡」成灰绿色；
+     改 currentColor 配更实的不透明度 ⇒ 亮色主题下是真正的深绿点 + 深绿光晕，反差明显提升。
+     ⚠️ 深色主题下 currentColor 比原色更亮 ⇒ 光晕更明显，无副作用。 */
 .indicator-ok {
   background-color: var(--notify-ok-fg);
   box-shadow: 0 0 4px currentColor;
@@ -1422,7 +1265,7 @@ html, body {
 
 /* 专注模式主开关图标：顶替 .indicator-lg那颗圆点，尺寸/右间距与它完全一致，
    填色与 .indicator-disabled（灰）/ .indicator-ok（绿）同源，保证两态视觉一致。
-   ⚠️ 2026-10-06 图形由五角星换成 Spectrum「Target」靶心（FocusTargetIcon 内联官方 path）。
+   ⚠️ 图形用 Spectrum「Target」靶心（FocusTargetIcon 内联官方 path）。
       靶心图标含 <path>（外圆环）+ <circle>（内点）两个元素，**两者都必须挂 .icon-fill**，
       否则内圈缺色；下面的选择器对两者同时生效，无需额外规则。 */
 .indicator-icon-lg {
@@ -1568,17 +1411,10 @@ html, body {
   position: relative;
 }
 
-/* 浮窗底部呼吸恒为 10px（= 本窗口自己的 padding-bottom）。
-   --------------------------------------------------------------------------
-   【问题】浮窗是「内容包裹型」容器，高度由内容决定；可它内部沿用了普通面板的
-   **版面节奏外边距**：`.panel-section` 自带 margin-bottom:15px、末行 `.row-between`
-   自带 margin-bottom:10px。两者叠在 10px 内边距之下，把「窗口下边缘 → 最后一行」
-   的距离顶到约 40px（用户截图实测：末行 switch 墨迹底 y348、窗口下边框 y408，
-   60px @1.5× = 40px），看起来像内容没填满。
-   【修法】浮窗内**取消纵向版面节奏**，让 10px 内边距独任其职：
-     · `.panel-section` 的下外边距归零（它上面还有标题行，上方节奏不受影响）；
-     · 末个子元素的下外边距归零（末行是 .row-between ⇒ 10px；其余行之间的 20px 不动）。
-   实测（同一张截图口径）：末行墨迹底 → 窗口下边缘 ≈ 11px。
+/* 浮窗底部呼吸恒为 10px（= 本窗口自己的 padding-bottom）：
+   浮窗是「内容包裹型」容器，但内部沿用普通面板的版面节奏（.panel-section 15px + 末行 10px），
+   叠在 10px 内边距下会把「窗口下缘 → 末行」顶到 ~40px，看起来像没填满。
+   ⇒ 浮窗内取消纵向版面节奏：.panel-section 与末个子元素的下外边距归零（行间距不动）。
    ⚠️ 只作用 `.float-window` 直接子级：普通面板里的 `.panel-section` 仍需 15px 节奏。 */
 
 /* 浮窗内末行下方的版面节奏归零 */
@@ -1589,20 +1425,15 @@ html, body {
   margin-bottom: 0;
 }
 
-/* ── 浮窗堆叠（同一父面板可同时开多个浮窗，2026-10-10）────────────────────────
-   规则（用户明确要求）：
-     · 多个浮窗**共用一个 .float-overlay 遮罩** ⇒ 暗度恒定，不会「越开越黑」；
-       （旧写法每个浮窗各挂一个遮罩，层数越多越暗，且后开的会盖住先开的。）
-     · 纵向依次排列，**后开的排在下面** —— 顺序由 state.floatOrder 写进 DOM，
-       本文件只负责视觉：相邻窗口之间 10px（= 与遮罩四周内边距同一档）；
-     · 关闭上方窗口后，下方窗口自然上移补齐（流式布局，无需任何 JS）。
-   ⚠️ 用「相邻兄弟 margin-top」而非 flex `gap`：UXP 的 flex gap 不可靠（见项目铁律），
-      margin+padding 是本仓唯一可靠的间距表达方式。
-   ⚠️ 宽度 100% 是相对 .float-stack 的内容盒；.float-stack 又在 .float-overlay
-      （padding 10px、box-sizing border-box、align-items flex-start）内拉满 ⇒
-      窗口左右缘与遮罩内边距维持 10px，与单窗口时完全一致。
-   ⚠️ max-height + overflow-y 只在「窗口总高超出面板」时兜底（内容很短，正常用不到）：
-      宁可整列滚动，也不让窗口被裁掉一半。 */
+/* ── 浮窗堆叠（同一父面板可同时开多个浮窗）──
+   · 多浮窗**共用同一个 .float-overlay 遮罩** ⇒ 暗度恒定，不会「越开越黑」；
+   · 纵向依次排列、**后开的排在下面** —— 顺序由 state.floatOrder 写进 DOM，
+     本文件只负责视觉：相邻窗口间距 10px（与遮罩内边距同档）；
+   · 关掉上方窗口后下方自然上移补齐（流式布局，无需 JS）。
+   ⚠️ 间距用「相邻兄弟 margin-top」而非 flex gap（UXP 的 gap 不可靠，项目铁律）。
+   ⚠️ 窗口宽度 100% 相对 .float-stack 内容盒，而 .float-stack 在 .float-overlay
+      （padding 10px、border-box）内拉满 ⇒ 左右缘维持 10px，与单窗口时一致。
+   ⚠️ max-height + overflow-y 只在「窗口总高超出面板」时兜底：宁可整列滚动，也不让窗口被裁一半。 */
 .float-stack {
   width: 100%;
   max-height: 100%;
@@ -1615,25 +1446,23 @@ html, body {
   margin-top: 10px;
 }
 
-/* ── 浮窗「始终置顶」 ────────────────────────────────────────────────────────
+/* ── 浮窗「始终置顶」 ──
    两个父面板里，浮窗（隐藏/显示分区 / 填充设置）都必须压在其「子面板」之上：
-     · 主面板 #app 的 5 个子面板（纯色/图案/渐变/描边/清除）—— z-index 9999，
-       来自 input-fix.css 的 `#app .panel-section ~ .panel`；
-     · 工具箱 #pixeladjustment 的「功能快捷键」子面板 —— z-index 9999，
-       来自 adjustment.css 的 `.float-overlay.func-hotkey-overlay`（已显式降到这一档）。
-   .float-overlay 本身是 99999，数值上已高出一档；这里再按面板作用域显式抬到 100000，
-   把「浮窗永远在最上」写成确定的规则，不依赖数值比较，也不依赖 DOM 顺序。
-   ⚠️ 必须按面板加 body 类限定：#app 与 #pixeladjustment 共用同一个 document.body。
-   ⚠️ 工具箱**不能**照抄这一条：它的 body 类（visibility-panel-open）同时服务于
-      「隐藏/显示分区」浮窗与「功能快捷键」子面板 ⇒ 用它抬层级会把子面板也抬到 100000，
-      两者同档后又退回 DOM 顺序决胜（子面板写在后面 ⇒ 反而压住浮窗）。
-      工具箱靠「子面板降到 9999」那条区分，浮窗保持 99999 即天然在上。 */
+     · #app 的 5 个子面板 —— 9999，来自 input-fix.css 的 `#app .panel-section ~ .panel`；
+     · 工具箱「功能快捷键」子面板 —— 9999，来自 adjustment.css 的
+       `.float-overlay.func-hotkey-overlay`（已显式降到这档）。
+   .float-overlay 本身 99999 已高出一档；这里按面板作用域显式抬到 100000，把「浮窗永远在最上」
+   写成确定规则，不依赖数值比较与 DOM 顺序。
+   ⚠️ 必须按面板限定 body 类：#app 与 #pixeladjustment 共用同一个 document.body。
+   ⚠️ 工具箱**不能**照抄：它的 visibility-panel-open 同时服务浮窗与「功能快捷键」子面板
+     ⇒ 用它抬层级会把子面板一起抬到 100000，同档后退回 DOM 顺序决胜（子面板写在后面 ⇒ 反被压）。
+     工具箱靠「子面板降到 9999」区分，浮窗 99999 天然在上。 */
 body.app-visibility-panel-open #app .float-overlay,
 body.app-fill-settings-open #app .float-overlay {
   z-index: 100000 !important;
 }
 
-/* 激活弹窗永远在最上（2026-10-10 补）：
+/* 激活弹窗永远在最上：
    `.license-dialog-overlay` 是 LicenseDialog 遮罩的专属类（仅此一处使用）。
    上面把浮窗抬到 100000 后，若浮窗还开着、又从宿主菜单打开激活弹窗，
    激活弹窗（通用 .float-overlay = 99999）就会被浮窗压住。
@@ -1644,17 +1473,15 @@ body.license-dialog-open #app .float-overlay.license-dialog-overlay {
   z-index: 100001 !important;
 }
 
-/* 浮窗打开时收起所在面板的滚动条。
-   --------------------------------------------------------------------------
+/* 浮窗打开时收起所在面板的滚动条：
    UXP 下 position: fixed 的包含块 = 面板全宽（**不扣**右侧 10px 滚动条槽），
-   窗口右缘正好落在滚动条槽上，看起来像被滚动条挡住/裁掉。
-   遮罩常驻时本来就不该滚背景，直接让滚动条消失即可。
-   ⚠️ 两块面板共用同一个 document.body，所以**类名必须按面板分开**
-      （主面板 app-visibility-panel-open / app-fill-settings-open / 工具箱 visibility-panel-open）：
-      只靠 #app / #pixeladjustment 限定还不够 —— 同名类会让一块开浮窗时
-      另一块的滚动条也被收起、内容盒被多塞 10px 内边距。
-   ⚠️ 遮罩本身是 position: fixed，不受本条的 overflow/内边距影响。
-   ⚠️ 激活弹窗（license-dialog-open）的补偿内边距保留在下方独立规则里（见下一条注释）。 */
+   窗口右缘正好落在槽上，看起来像被滚动条挡住/裁掉；遮罩常驻时本来就不该滚背景。
+   ⚠️ 两块面板共用同一个 document.body ⇒ **类名必须按面板分开**
+      （主面板 app-visibility-panel-open / app-fill-settings-open、工具箱 visibility-panel-open）：
+      只靠 #app / #pixeladjustment 限定不够 —— 同名类会让一块开浮窗时另一块的滚动条也被收起、
+      内容盒被多塞 10px 内边距。
+   ⚠️ 遮罩本身 position: fixed，不受本条 overflow/内边距影响。
+   ⚠️ 激活弹窗（license-dialog-open）的补偿内边距在下方独立规则里。 */
 body.license-dialog-open #app .app-root > .panel,
 body.app-visibility-panel-open #app .app-root > .panel,
 body.app-fill-settings-open #app .app-root > .panel,
@@ -1662,18 +1489,14 @@ body.visibility-panel-open #pixeladjustment .pixeladjustment-root > .panel {
   overflow-y: hidden;
 }
 
-/* 收起滚动条后把内容盒宽度补回「有滚动条」时的 W-30（= 250 − 10 − 10 − 10），
-   背景零重排。补偿量固定 10px（面板基础 padding-right 10px → 20px）。
-   ⛔ **不能无条件补**（2026-10-10 用户报「打开浮窗后下方面板多出滚动条」的根因）：
-      面板在打开浮窗前**没有**滚动条时，内容盒本来就是 230px；无条件补这 10px 反而把它
-      收窄成 220px ⇒ 内容重排、变高 ⇒ 溢出多出一根滚动条。
-      （变高后不会就地裁掉：UXP 纵向 flex 的收缩 / min-height 行为不可靠，撑高的内容会把
-        根容器一起顶高 ⇒ 滚动条出在面板外层，`overflow-y: hidden` 拦不住。）
-      而面板**本来有**滚动条时，内容盒已经是 220px，补这 10px 正好让重排前后完全一致。
-      所以补偿必须按需：由 app.tsx 在打开浮窗前实测 `panel.scrollHeight > panel.clientHeight`
-      （内容确实溢出 = 确实有滚动条），据此挂 body.app-panel-gutter。
-   ⚠️ 两个 body 类同时命中才补：`app-panel-gutter` 单独出现时不得改变内边距
-      （浮窗关闭后必须立刻恢复 10px，否则滚动条回来时会少 10px 内容盒）。 */
+/* 收起滚动条后把内容盒宽度补回「有滚动条」时的 220px（= 250 − 10 − 10 − 10），背景零重排。
+   ⛔ **必须按需补，不能无条件**（无条件 = 「打开浮窗后下方面板多出一根滚动条」）：
+      面板本无滚动条时内容盒已是 230px，补这 10px 反把它收窄成 220px ⇒ 内容重排变高 ⇒ 溢出。
+      （变高后裁不掉：UXP 纵向 flex 的收缩 / min-height 不可靠，撑高的内容把根容器一起顶高，
+        滚动条出在面板外层，`overflow-y: hidden` 拦不住。）
+      本有滚动条时内容盒已是 220px，补 10px 正好重排前后一致。
+      ⇒ 由 app.tsx 在开窗前实测 `panel.scrollHeight > panel.clientHeight` 挂 body.app-panel-gutter。
+   ⚠️ 两个 body 类同时命中才补：app-panel-gutter 单独出现时不得改内边距（关窗必须立刻恢复 10px）。 */
 body.app-panel-gutter.app-visibility-panel-open #app .app-root > .panel,
 body.app-panel-gutter.app-fill-settings-open #app .app-root > .panel {
   padding-right: 20px;
@@ -2136,11 +1959,9 @@ sp-radio[disabled] {
   opacity: 0.5;
 }
 
-/* 行内含禁用控件时行标签同步置灰：**不要用 `:has()`** —— UXP 的 CSS 引擎不支持它，
-   整条规则会被静默丢弃（构建与 DevTools 都不报错，2026-09-10 实测）。
-   改为由 TSX 在禁用态给行显式挂 `.disabled`，统一走下面那一组「通用禁用行」规则。 */
-
-/* 通用禁用行：含禁用控件时整行置灰、禁操作（由 TSX 按状态挂 .disabled）。 */
+/* 通用禁用行：含禁用控件时整行置灰、禁操作。
+   ⚠️ 「行内含禁用控件 ⇒ 标签置灰」**不能用 `:has()`** —— UXP 的 CSS 引擎不支持它，
+   整条规则会被静默丢弃（构建与 DevTools 都不报错）⇒ 改由 TSX 在禁用态给行显式挂 `.disabled`。 */
 .row-between.disabled,
 .row-start.disabled {
   cursor: not-allowed;

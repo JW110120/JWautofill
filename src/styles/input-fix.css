@@ -52,7 +52,7 @@ body.license-dialog-open #app .app-root > .panel sp-textfield {
    ⚠️ 必须用 #app .app-root > .panel > .panel-section 限定「主面板内容容器」：
    ① 不能用 #app .slider-container（会漏到次级面板内部若其用同名类）；
    ② 绝不能用 #app .panel-section ~ .panel .X（那反而只命中次级面板、把次级面板
-      自己的数字/输入也藏了——这正是「打开纯色/图案看不到数字」的根因，2026-09-03 修）；
+      自己的数字/输入也藏了——这正是「打开纯色/图案看不到数字」的根因）；
    ③ 子面板内部也挂 .panel-section，故必须靠 .app-root > .panel > .panel-section
       （主内容 .panel-section 是滚动容器 .panel 的直接子项）与子面板（.panel）区分开。 */
 body.secondary-panel-open #app .app-root > .panel > .panel-section .slider-container input,
@@ -76,9 +76,8 @@ body.secondary-panel-open #app .app-root > .panel > .panel-section .row-between 
    --------------------------------------------------------------------------
    原因同上：number 是原生视图，永远绘制在本面板最上层，浮窗（DOM 层）压不住它，
    数字会浮在浮窗之上 —— 只能隐藏。
-   ⚠️ 2026-10-10 回退：曾短暂改为「只隐藏与浮窗矩形相交的 number」（utils/popOverlay
-      的 createOcclusionSession，与展开下拉菜单同一套逻辑），但实测效果不好
-      ⇒ 回退为 ac15165 的**无条件全量隐藏**：浮窗一开就隐藏本面板内所有 number。
+   ⚠️ **无条件全量隐藏**（浮窗一开即隐藏本面板内所有 number）：曾试过「只隐藏与浮窗矩形相交的
+      number」（utils/popOverlay 的 createOcclusionSession），实测效果不好，已回退。
    ⚠️ 类名必须按面板分开（主面板 .app-visibility-panel-open / .app-fill-settings-open /
       工具箱 .visibility-panel-open，见 common.css 浮窗区）。两块面板共用同一个
       document.body：若像旧版那样共用同名类、或在此写工具箱的类名，
