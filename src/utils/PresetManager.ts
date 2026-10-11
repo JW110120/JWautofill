@@ -376,9 +376,9 @@ export class PresetManager {
             console.warn('⚠️ 图案预设数据无效，跳过保存');
             return;
         }
-        // 避免将空数组写入文件导致下次启动回退到默认预设
+        // 避免用空数组覆盖文件，导致已有预设数据丢失
         if (patterns.length === 0) {
-            console.warn('⚠️ 图案预设为空，跳过保存以避免覆盖默认预设');
+            console.warn('⚠️ 图案预设为空，跳过保存以避免覆盖已有预设');
             return;
         }
 
@@ -616,21 +616,6 @@ export class PresetManager {
                 await restoreFrom(`${this.PATTERN_PRESETS_FILE}.backup`, false);
             }
 
-            // 若数据文件夹无有效数据，尝试从bundle读取默认预设
-            if (!serializedPatterns || serializedPatterns.length === 0) {
-                console.log('ℹ️ 图案预设本地文件缺失或空，尝试从bundle/dist读取默认预设');
-                const bundleData = await this.tryReadFromBundle(this.PATTERN_PRESETS_FILE);
-                if (bundleData && bundleData.length > 0) {
-                    serializedPatterns = bundleData;
-                    // 将bundle中的默认预设写回到数据文件夹，便于后续持久化
-                    try {
-                        await this.savePatternPresets(bundleData as any);
-                    } catch (e) {
-                        console.warn('⚠️ 将bundle默认图案预设写回数据文件夹失败:', e);
-                    }
-                }
-            }
-            
             if (!serializedPatterns) {
                 console.log('📁 图案预设文件不存在或无有效数据，返回空数组');
                 return [];
@@ -717,9 +702,9 @@ export class PresetManager {
             console.warn('⚠️ 渐变预设数据无效，跳过保存');
             return;
         }
-        // 避免将空数组写入文件导致下次启动回退到默认预设
+        // 避免用空数组覆盖文件，导致已有预设数据丢失
         if (gradients.length === 0) {
-            console.warn('⚠️ 渐变预设为空，跳过保存以避免覆盖默认预设');
+            console.warn('⚠️ 渐变预设为空，跳过保存以避免覆盖已有预设');
             return;
         }
 
@@ -862,56 +847,6 @@ export class PresetManager {
         }
     }
 
-    // 从插件包读取默认预设所需的辅助方法
-    private static async getPluginFolder() {
-        try {
-            let localFileSystem;
-            try {
-                localFileSystem = require('uxp').storage.localFileSystem;
-            } catch (_) {
-                localFileSystem = (window as any).uxp?.storage?.localFileSystem;
-            }
-            if (!localFileSystem || !localFileSystem.getPluginFolder) {
-                throw new Error('无法获取pluginFolder（localFileSystem.getPluginFolder 不可用）');
-            }
-            const pluginFolder = await localFileSystem.getPluginFolder();
-            console.log('📦 插件包路径:', pluginFolder.nativePath);
-            return pluginFolder;
-        } catch (error) {
-            console.error('❌ 获取插件包文件夹失败:', error);
-            throw error;
-        }
-    }
-
-    private static async tryReadFromBundle(fileName: string): Promise<any[] | null> {
-        try {
-            const pluginFolder = await this.getPluginFolder();
-            const formats = require('uxp').storage.formats;
-            const tryPaths = [fileName, `dist/${fileName}`, `./${fileName}`];
-
-            for (const relPath of tryPaths) {
-                try {
-                    const entry = await pluginFolder.getEntry(relPath);
-                    if (entry) {
-                        const content = await (entry as any).read({ format: formats.utf8 });
-                        const parsed = JSON.parse(content);
-                        if (Array.isArray(parsed) && parsed.length > 0) {
-                            console.log(`✅ 从bundle读取到默认预设: ${relPath} (${parsed.length} 条)`);
-                            return parsed;
-                        }
-                    }
-                } catch (e) {
-                    // 尝试下一个路径
-                }
-            }
-            console.warn(`⚠️ 未在插件包中找到默认预设文件: ${fileName}`);
-            return null;
-        } catch (error) {
-            console.error('❌ 读取插件包默认预设失败:', error);
-            return null;
-        }
-    }
-
     /**
      * 从本地存储加载渐变预设（恢复完整数据）
      */
@@ -992,20 +927,6 @@ export class PresetManager {
             }
             if (!serializedGradients || serializedGradients.length === 0) {
                 await restoreFrom(`${this.GRADIENT_PRESETS_FILE}.backup`, false);
-            }
-
-            // 若数据文件夹无有效数据，尝试从bundle读取默认预设并回写
-            if (!serializedGradients || serializedGradients.length === 0) {
-                console.log('ℹ️ 渐变预设本地文件缺失或空，尝试从bundle/dist读取默认预设');
-                const bundleData = await this.tryReadFromBundle(this.GRADIENT_PRESETS_FILE);
-                if (bundleData && bundleData.length > 0) {
-                    serializedGradients = bundleData;
-                    try {
-                        await this.saveGradientPresets(bundleData as any);
-                    } catch (e) {
-                        console.warn('⚠️ 将bundle默认渐变预设写回数据文件夹失败:', e);
-                    }
-                }
             }
 
             if (!serializedGradients) {
