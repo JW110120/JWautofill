@@ -90,6 +90,10 @@ export default function BrushHotkeySection() {
   const [selectedKey, setSelectedKey] = useState('');
   const [usePicker, setUsePicker] = useState(true);
   const [recording, setRecording] = useState(false);
+  // 正在录制的目标笔刷名（'' = 未录制）+ 已捕获待确认的组合键：
+  // 用于在该笔刷行内显示「按下组合键…」/「XXX · 回车确认」，与「功能快捷键」子面板保持一致。
+  const [recordingBrush, setRecordingBrush] = useState('');
+  const [capturedCombo, setCapturedCombo] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [daemonConnected, setDaemonConnected] = useState(false);
@@ -130,11 +134,13 @@ export default function BrushHotkeySection() {
 
   // 通知：统一走这里，5 秒后自动清空。有新通知时重置计时，
   // 保证用户看到的永远是「最近一条操作」的结果。
+  // sticky=true 时**不自动消失**：用于录制 / 重录 / 已捕获待确认等状态提示——
+  // 它们必须等到录制完成或用户取消才清掉，否则长时间录制时提示会先过期，用户看不出状态。
   const msgTimerRef = useRef<any>(null);
-  const showMessage = useCallback((text: string) => {
+  const showMessage = useCallback((text: string, sticky: boolean = false) => {
     if (msgTimerRef.current) { clearTimeout(msgTimerRef.current); msgTimerRef.current = null; }
     setMessage(text);
-    if (text) msgTimerRef.current = setTimeout(() => { setMessage(''); msgTimerRef.current = null; }, MESSAGE_TTL_MS);
+    if (text && !sticky) msgTimerRef.current = setTimeout(() => { setMessage(''); msgTimerRef.current = null; }, MESSAGE_TTL_MS);
   }, []);
   useEffect(() => () => { if (msgTimerRef.current) clearTimeout(msgTimerRef.current); }, []);
 
@@ -166,11 +172,17 @@ export default function BrushHotkeySection() {
       } else if (info.action === 'runFunc') {
         // 功能快捷键（分块平均等）触发反馈：实现在 AdjustmentPanel 注册的执行器里
         showMessage('热键触发：' + (info.combo ? info.combo + ' → ' : '') + '执行「' + getFuncHotkeyLabel(info.brush || '') + '」' + (info.ok ? '' : '失败'));
+      } else if (info.action === 'focusLasso') {
+        // 专注模式「套索工具」键：关闭主开关并把工具切回套索
+        showMessage('热键触发：' + (info.combo ? info.combo + ' → ' : '') +
+          (info.ok ? '已退出自动填充（切回套索工具）' : '退出自动填充失败'));
       }
     });
     // 两段式录制的实时进度：捕获到组合键、等待回车确认期间给出行内提示
+    // （sticky：录制的状态提示常驻，直到录制完成 / 取消）
     const unsubProgress = onRecordProgress((combo) => {
-      showMessage('已捕获 ' + combo + '：回车确认，Esc 取消');
+      setCapturedCombo(combo);
+      showMessage('已捕获 ' + combo + '：回车确认，Esc 取消', true);
     });
     // ⚠️ 启动首刷必须**推迟到PS 空闲之后**（2026-10-06）。
     //   enumerateBrushes() 内部是`batchPlay get presetManager`，与今天修复的
@@ -428,9 +440,14 @@ export default function BrushHotkeySection() {
     if (!daemonConnected) { showMessage('快捷键服务未连接，无法录制（请先启动快捷键服务）'); return; }
     const mainCombo = getMainToggleCombo();
     setRecording(true);
-    showMessage('正在录制「' + selectedBrush + '」：请按下要绑定的组合键，回车确认，Esc 取消');
+    setRecordingBrush(selectedBrush);
+    setCapturedCombo('');
+    // sticky：录制中的提示常驻，直到录制完成 / 取消（见 showMessage 说明）
+    showMessage('正在录制「' + selectedBrush + '」：请按下要绑定的组合键，回车确认，Esc 取消', true);
     const res = await requestHotkeyRecording(selectedBrush);
     setRecording(false);
+    setRecordingBrush('');
+    setCapturedCombo('');
     if (!res) { showMessage('已取消录制'); return; }
     const combo = res.combo;
     if (mainCombo && combo === mainCombo) {
@@ -478,6 +495,8 @@ export default function BrushHotkeySection() {
   const cancelRecord = () => {
     cancelHotkeyRecording();
     setRecording(false);
+    setRecordingBrush('');
+    setCapturedCombo('');
     showMessage('已取消录制');
   };
 
@@ -510,6 +529,7 @@ export default function BrushHotkeySection() {
   // 条目在冲突提示里的显示名：主开关 / 功能快捷键 / 笔刷统一在这里翻译
   const entryDisplayName = (e: HotkeyEntry): string => {
     if (e.action === 'toggleMain') return '选区填充开关';
+    if (e.action === 'focusLasso') return '套索工具';
     if (e.action === 'runFunc') return getFuncHotkeyLabel(e.brush || '');
     return e.brush || '';
   };
@@ -522,9 +542,14 @@ export default function BrushHotkeySection() {
     if (!daemonConnected) { showMessage('快捷键服务未连接，无法录制（请先启动快捷键服务）'); return; }
     const mainCombo = getMainToggleCombo();
     setRecording(true);
-    showMessage('正在重录「' + target.brush + '」：请按下新的组合键，回车确认，Esc 取消');
+    setRecordingBrush(target.brush);
+    setCapturedCombo('');
+    // sticky：重录中的提示常驻，直到录制完成 / 取消（见 showMessage 说明）
+    showMessage('正在重录「' + target.brush + '」：请按下新的组合键，回车确认，Esc 取消', true);
     const res = await requestHotkeyRecording(target.brush);
     setRecording(false);
+    setRecordingBrush('');
+    setCapturedCombo('');
     if (!res) { showMessage('已取消录制'); return; }
     const combo = res.combo;
     // 冲突检查：新组合键是否被其它条目（主开关/功能快捷键/其它笔刷）占用？占用则提示并放弃本次重录
@@ -835,7 +860,13 @@ export default function BrushHotkeySection() {
               {/* 名称在左、快捷键在右（与「功能快捷键」子面板一致）：分隔线居中，两列各占一半 */}
               <span className="hotkey-entry-name">{e.brush}</span>
               <span className="divider-vertical">丨</span>
-              <span className="hotkey-entry-combo">{e.combo || '未绑定'}</span>
+              {/* 录制/重录该行时，行内实时显示进度（与功能快捷键子面板同款后缀）：
+                  「按下组合键…」→ 捕获后「XXX · 回车确认」 */}
+              <span className="hotkey-entry-combo">
+                {recording && recordingBrush === e.brush
+                  ? (capturedCombo ? capturedCombo + ' · 回车确认' : '按下组合键…')
+                  : (e.combo || '未绑定')}
+              </span>
             </div>
             );
           })}

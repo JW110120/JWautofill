@@ -80,6 +80,10 @@
 - ⛔ 订阅/轮询的去重基线**绝不能用共享缓存播种**（`let last = cached?.focus ?? null`）⇒ 首次回调可能永不触发、订阅方初值成为最终值且永不纠正。必须从 `null`（=未知）起。
 - ⛔ **读不到 ≠ 为 false**：`readRaw()` 返回 null 时本轮不表态（不更新 `last`）。
 - ⛔ `setState` 之后立刻读 `this.state` 拿到的是旧值（React 19 批处理）⇒ 启动期派生结论必须由合并后的局部变量显式传入。
+- ⛔ **专注模式「套索键」**（`HotkeyBridge` 的 `focus_lasso` / action `focusLasso`）：条目 `combo` 仅在专注模式开启时非空（守护进程才注册；关闭时置空 ⇒ PS 原生 L 不受影响），记忆值存 `brush` 字段。
+  - ⛔ 写入 `ensureFocusLassoEntry` 只应由 **APP 面板上下文**触发（`focusLassoKnown` 闸门）——否则两面板实例在 `'L'`/`''` 间互覆盖（同「事件被重复投递」根因）。
+  - ⛔ `setFocusLassoCombo` **不可**加 `focusLassoKnown` 闸门：它由 `FuncHotkeyPanel`（挂**绘画工具箱**上下文）调用，加了就静默失效；装载与否由调用方传入的 `active` 决定。
+  - 守护进程对 `action` 只透传不校验 ⇒ 新增 action **无需重编** daemon。
 
 ### 闸门 / 模态 / 性能 → `refs/busy-gate.md`（先读它）+ `refs/uxp-api-layer.md`
 - ⛔⛔ 交互延迟的主因是**串行同步 IPC 往返**，不是像素计算（每次属性读 = 一次宿主往返；**batchPlay 数组整体只算一次**）。提速只能来自「读一次复用 + 合并无依赖命令」，不能来自缩短等待。

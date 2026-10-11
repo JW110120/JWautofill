@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   HotkeyEntry, onConfig, onDaemonStatus, pushConfig, requestHotkeyRecording,
-  cancelHotkeyRecording, onRecordProgress, setMainToggleCombo,
+  cancelHotkeyRecording, onRecordProgress, setMainToggleCombo, setFocusLassoCombo,
   armBackspaceDelete, disarmBackspaceDelete, onBackspaceDelete,
 } from './HotkeyBridge';
 import { helpTexts } from '../constants/helpTexts';
@@ -56,10 +56,12 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   // 子面板根节点：面板内直捕退格用——只有按键目标落在子面板内（行被点击聚焦后）
   // 才劫持退格，避免污染子面板外的其它输入控件。
   const floatWinRef = useRef<HTMLDivElement | null>(null);
-  const showMessage = useCallback((text: string) => {
+  const showMessage = useCallback((text: string, sticky: boolean = false) => {
     if (msgTimerRef.current) { clearTimeout(msgTimerRef.current); msgTimerRef.current = null; }
     setMessage(text);
-    if (text) msgTimerRef.current = setTimeout(() => { setMessage(''); msgTimerRef.current = null; }, MESSAGE_TTL_MS);
+    // sticky（录制 / 重录 / 已捕获待确认等状态提示）不自动消失：必须等到录制完成或用户取消，
+    // 否则长时间录制时提示会先过期，用户看不出当前处于哪种状态。
+    if (text && !sticky) msgTimerRef.current = setTimeout(() => { setMessage(''); msgTimerRef.current = null; }, MESSAGE_TTL_MS);
   }, []);
   useEffect(() => () => { if (msgTimerRef.current) clearTimeout(msgTimerRef.current); }, []);
 
@@ -137,13 +139,17 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   /** 条目在冲突提示里的显示名。 */
   const entryDisplayName = (e: HotkeyEntry): string => {
     if (e.action === 'toggleMain') return focusMode ? '选区填充' : '选区填充开关';
+    if (e.action === 'focusLasso') return '套索工具';
     if (e.action === 'runFunc') return getFuncHotkeyLabel(e.brush || '');
     return e.brush || '';
   };
 
   /** 编辑目标在提示语里的显示名。 */
-  const targetDisplayName = (target: string): string =>
-    target === 'main' ? (focusMode ? '选区填充' : '选区填充开关') : getFuncHotkeyLabel(target);
+  const targetDisplayName = (target: string): string => {
+    if (target === 'main') return focusMode ? '选区填充' : '选区填充开关';
+    if (target === 'focus_lasso') return '套索工具';
+    return getFuncHotkeyLabel(target);
+  };
 
   // 解绑（退格通路）：主开关 = 解绑（combo 置空并落盘，不会被默认值覆盖）；
   // 功能 = 移除条目（行本身来自功能清单，始终保留，显示回到「未绑定」）
@@ -151,6 +157,11 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
     if (target === 'main') {
       setMainToggleCombo('');
       showMessage('已解绑' + (focusMode ? '选区填充' : '选区填充开关') + '的组合键');
+      return;
+    }
+    if (target === 'focus_lasso') {
+      // 套索工具键随专注模式自动启用/停用，不参与「退格解绑」（重录请双击）。
+      showMessage('套索工具键随专注模式自动启用，无需解绑；如需更换请双击重录');
       return;
     }
     const next = entries.filter(e => !(e.action === 'runFunc' && e.brush === target));
@@ -168,7 +179,8 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
     if (!daemonConnected) { showMessage(helpTexts.funcHotkey.notConnected); return; }
     setEditingTarget(target);
     setCapturedCombo('');
-    showMessage('正在录制「' + targetDisplayName(target) + '」：按下组合键后回车确认，Esc 取消');
+    // sticky：录制过程中的提示常驻，直到录制完成 / 取消（见 showMessage 说明）
+    showMessage('正在录制「' + targetDisplayName(target) + '」：按下组合键后回车确认，Esc 取消', true);
     // 进度订阅必须在发指令前挂好：recordCaptured 可能先于 pendingRecord 兑现到达
     const unsubProgress = onRecordProgress((combo) => setCapturedCombo(combo));
     const res = await requestHotkeyRecording(target === 'main' ? '__MAIN__' : '__FUNC__:' + target);
@@ -177,10 +189,11 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
     setCapturedCombo('');
     if (!res) { showMessage('已取消录制'); return; }
     const combo = res.combo;
-    // 冲突检查：新组合键被其它条目（笔刷/其它功能/主开关）占用则放弃本次修改。
+    // 冲突检查：新组合键被其它条目（笔刷/其它功能/主开关/套索键）占用则放弃本次修改。
     // 排除目标自身：重录为原组合键不算冲突。
     const dup = entries.find(e => {
       if (target === 'main') return e.action !== 'toggleMain' && e.combo === combo;
+      if (target === 'focus_lasso') return e.action !== 'focusLasso' && e.combo === combo;
       const isSelf = e.action === 'runFunc' && e.brush === target;
       return !isSelf && e.combo === combo;
     });
@@ -194,6 +207,13 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
       showMessage('已保存：' + combo + ' → ' + targetDisplayName(target));
       return;
     }
+    if (target === 'focus_lasso') {
+      // 套索工具键由 bridge 统一管理（生效值 combo + 记忆值 brush），不落进 entries。
+      // active 传本面板看到的专注模式状态（本函数运行在绘画工具箱上下文，bridge 拿不到它）。
+      setFocusLassoCombo(combo, focusMode);
+      showMessage('已保存：' + combo + ' → 套索工具');
+      return;
+    }
     const existing = entries.find(e => e.action === 'runFunc' && e.brush === target);
     const next: HotkeyEntry[] = existing
       ? entries.map(e => (e.id === existing.id ? { ...e, combo } : e))
@@ -204,6 +224,8 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   };
 
   const mainEntry = entries.find(e => e.action === 'toggleMain');
+  // 专注模式下的「套索工具」键条目：由 HotkeyBridge 在专注模式开启时装载（默认 L）。
+  const focusLassoEntry = entries.find(e => e.action === 'focusLasso');
   const funcEntryOf = (funcId: string): HotkeyEntry | undefined =>
     entries.find(e => e.action === 'runFunc' && e.brush === funcId);
 
@@ -281,6 +303,9 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
                 ? renderRow(mainEntry.id, mainEntry.combo,
                     focusMode ? '选区填充' : '选区填充开关', 'main', helpTexts.funcHotkey.mainRow)
                 : renderRow('main_placeholder', '', focusMode ? '选区填充' : '选区填充开关', 'main', helpTexts.funcHotkey.mainRow))}
+              {/* 专注模式下：套索工具键（默认 L）——按下即关闭主开关并切回套索，使 H/L 像两个工具 */}
+              {g.title === '选区填充' && focusMode &&
+                renderRow('focus_lasso', focusLassoEntry?.combo || '', '套索工具', 'focus_lasso', helpTexts.funcHotkey.lassoRow)}
               {g.defs.map(def =>
                 renderRow('fk_' + def.id, funcEntryOf(def.id)?.combo || '', def.label, def.id, helpTexts.funcHotkey.rowHint)
               )}

@@ -34,7 +34,7 @@ import { PanelStateManager } from './utils/PanelStateManager';
 import {
   connectHotkeyDaemon,
   isDaemonConnected, getMainToggleCombo, setMainToggleCombo, requestHotkeyRecording,
-  getSelectedBrushToolEnum
+  getSelectedBrushToolEnum, setFocusLassoActive
 } from './hotkey/HotkeyBridge';
 import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/MainToggleBus';
 import { FillPanelId, subscribeFillPanelToggle } from './utils/FillPanelToggleBus';
@@ -291,6 +291,10 @@ class App extends React.Component<AppProps, AppState> {
         if (this.focusModeWritten === on) return;
         this.focusModeWritten = on;
         void setFocusMode(on).catch(e => console.warn('⚠️ 专注模式状态同步失败:', e));
+        // 同步「套索工具键」的装载状态：专注模式开启时注册（默认 L）→ 按下即关闭主开关、
+        // 并把工具切回套索，让 H / L 像两个工具一样切换。由本面板独占写入（其它面板不调用，
+        // 详见 HotkeyBridge 的 focusLassoKnown 说明）。
+        setFocusLassoActive(on);
     }
 
     /**

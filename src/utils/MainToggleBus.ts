@@ -178,6 +178,22 @@ export async function requestMainToggle(token: string): Promise<MainToggleState>
 }
 
 /**
+ * 处理一次「强制关闭」请求（专注模式下按套索工具键）。
+ * 与 requestMainToggle 共用同一条串行链与 token 去重：同一次命中在所有面板上只关一次。
+ * 已经是关闭态则直接返回（幂等）——专注模式下整套逻辑都建立在「只关不反开」之上。
+ */
+export async function requestMainToggleOff(token: string): Promise<MainToggleState> {
+    const run = toggleChain.then(async () => {
+        const cur = (await readRaw()) ?? cached ?? EMPTY;
+        if (cur.token && cur.token === token) return cur; // 同一次命中已被处理过
+        if (!cur.enabled) return cur;                     // 已关闭：什么都不做
+        return setMainToggle(false, token);
+    });
+    toggleChain = run.then(() => {}, () => {});
+    return run;
+}
+
+/**
  * 订阅共享状态变化（默认每 250ms 轮询一次文件）。
  * 这是 App 面板不依赖自身 WebSocket 也能收到其它面板热键的兜底通道。
  */

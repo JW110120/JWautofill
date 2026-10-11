@@ -6,7 +6,7 @@
 
 import { action, app } from 'photoshop';
 import { shell, storage } from 'uxp';
-import { MainToggleState, requestMainToggle } from '../utils/MainToggleBus';
+import { MainToggleState, requestMainToggle, requestMainToggleOff } from '../utils/MainToggleBus';
 import { requestFillPanelToggle } from '../utils/FillPanelToggleBus';
 import { psRead, runAsModal } from '../utils/psAccess';
 import { isPsBusy, psBusyRemain } from '../utils/psProbe';
@@ -14,7 +14,7 @@ import { isPsBusy, psBusyRemain } from '../utils/psProbe';
 export interface HotkeyEntry {
   id: string;
   combo: string;                 // 例如 "Ctrl+Shift+R"、"Alt+F1"
-  action: 'toggleMain' | 'applyBrush' | 'runFunc';
+  action: 'toggleMain' | 'applyBrush' | 'runFunc' | 'focusLasso';
   brush?: string;                // applyBrush 时的笔刷名（PS 预设名，需精确匹配）。
                                   // 注意：不支持同名笔刷——PS 按 _name 只会选中 Brushes 列表最上方那支。
                                   // runFunc 时复用本字段承载功能 id（见 funcHotkeyDefs.ts），
@@ -60,6 +60,18 @@ async function resolveConfigPath(): Promise<string> {
 }
 
 let cachedConfig: HotkeyEntry[] = [];
+// 是否已从守护进程收到过配置文件：避免「配置尚未加载」时对配置做读-改-写
+// （那会把整份配置用空列表覆盖掉）。
+let configLoaded = false;
+// ===== 专注模式「套索工具键」（默认 L）=====
+// 专注模式下主开关热键只开不关；为了让 H / L 像两个工具一样切换，再注册一个
+// 「套索工具」键：按下即关闭主开关并把当前工具切回套索。
+// 该键**只在专注模式开启时装载**（combo 非空）；关闭时把 combo 置空、由守护进程跳过注册，
+// 从而完全不影响 PS 原生的 L 键（套索 → 多边形 → 磁性的循环等）。
+export const FOCUS_LASSO_ID = 'focus_lasso';
+export const DEFAULT_FOCUS_LASSO_COMBO = 'L';
+let focusLassoActive = false;   // 专注模式是否开启（仅 APP 面板会写）
+let focusLassoKnown = false;    // 是否由 APP 面板明确过专注模式状态（用于排除其它面板上下文）
 const configListeners: ConfigListener[] = [];
 let currentWs: any = null;
 let connected = false;
@@ -203,10 +215,11 @@ function normalizeEntry(e: any): HotkeyEntry | null {
   const action = (e.action ?? e.Action ?? '') as HotkeyEntry['action'];
   const brush: string | undefined = e.brush ?? e.Brush ?? undefined;
   const id: string = e.id ?? e.Id ?? ('bk_' + Math.random().toString(36).slice(2));
-  if (action !== 'toggleMain' && action !== 'applyBrush' && action !== 'runFunc') return null;
+  if (action !== 'toggleMain' && action !== 'applyBrush' && action !== 'runFunc' && action !== 'focusLasso') return null;
   // combo 为空的合法条目：主开关（'' = 已解绑）、笔刷（'' = 已解绑但条目保留在列表，
-  // 单击选中后按退格即解绑，与「删除」按钮区分）。runFunc 空组合键无意义，直接丢弃。
-  if (!combo && action !== 'toggleMain' && action !== 'applyBrush') return null;
+  // 单击选中后按退格即解绑，与「删除」按钮区分）、专注模式套索键（'' = 专注模式关闭时不装载）。
+  // runFunc 空组合键无意义，直接丢弃。
+  if (!combo && action !== 'toggleMain' && action !== 'applyBrush' && action !== 'focusLasso') return null;
   // runFunc 必须携带功能 id（复用 brush 字段），缺了就无法执行，丢弃。
   if (action === 'runFunc' && !brush) return null;
   return { id, combo, action, brush };
@@ -285,8 +298,11 @@ export function connectHotkeyDaemon(): () => void {
           else if (msg?.type === 'config') {
             const raw: any[] = Array.isArray(msg.payload) ? msg.payload : [];
             cachedConfig = raw.map(normalizeEntry).filter((x): x is HotkeyEntry => !!x);
+            configLoaded = true;
             // 首次使用时补上主开关的默认快捷键 Ctrl+Q
             ensureMainToggleEntry();
+            // 专注模式开启时补上/更新「套索工具键」（仅 APP 面板上下文会真正写入）
+            ensureFocusLassoEntry();
             emitConfig();
           }
           else if (msg?.type === 'recordCaptured') {
@@ -366,6 +382,23 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
           try { l({ combo, action: 'toggleMain', ok: false }); } catch { /* ignore */ }
         }
       });
+    return;
+  }
+  if (msg.action === 'focusLasso') {
+    // 专注模式下的「套索工具」键：关闭主开关（幂等），并把当前工具切回套索，
+    // 让 H / L 分别对应「自动填充」与「普通套索」两个工具。
+    // 与 toggleMain 同理用 token 去重：守护进程向所有面板广播，只关一次。
+    const combo = msg.combo ?? '';
+    const token = 'focusLasso|' + (combo || FOCUS_LASSO_ID) + '|' + Math.floor(Date.now() / 400);
+    void requestMainToggleOff(token)
+      .then((st: MainToggleState) => {
+        for (const l of hotkeyListeners) { try { l({ combo, action: 'focusLasso', ok: true, enabled: st.enabled }); } catch { /* ignore */ } }
+      })
+      .catch(() => {
+        for (const l of hotkeyListeners) { try { l({ combo, action: 'focusLasso', ok: false }); } catch { /* ignore */ } }
+      });
+    // 无论主开关结果如何都把工具切回套索（模拟 PS 的「点套索工具按钮」）
+    void selectLassoTool();
     return;
   }
   if (msg.action === 'runFunc' && msg.brush?.startsWith('fillPanel:')) {
@@ -449,6 +482,61 @@ export function getMainToggleCombo(): string {
   return mainToggleCombo ?? '';
 }
 
+// ===== 专注模式：套索工具键（默认 L，「按下即退出自动填充」）=====
+
+/**
+ * 确保配置里存在「套索工具」条目，并让它只在专注模式开启时处于装载态。
+ *
+ * ⚠️ 只应由 APP 面板的上下文真正写入（仅它会调用 setFocusLassoActive）——
+ *    其它面板上下文里 focusLassoKnown 恒为 false，若也参与写入，两个面板会在
+ *    'L' / '' 之间来回覆盖（与 MainToggleBus 的多面板「事件被重复投递」问题同源）。
+ *
+ * 记忆值放在 brush 字段：专注模式关闭时 combo 置空（守护进程跳过注册 ⇒ L 完全交给 PS），
+ * 但用户自定义过的键仍被记住，下次开启专注模式时沿用。
+ */
+function ensureFocusLassoEntry(): void {
+  if (!configLoaded || !focusLassoKnown) return;
+  const idx = cachedConfig.findIndex(e => e.action === 'focusLasso');
+  const existing = idx >= 0 ? cachedConfig[idx] : undefined;
+  const remembered = (existing && (existing.brush || existing.combo)) || DEFAULT_FOCUS_LASSO_COMBO;
+  const desiredCombo = focusLassoActive ? remembered : '';
+  if (existing && existing.id === FOCUS_LASSO_ID && existing.combo === desiredCombo && existing.brush === remembered) return;
+  const desired: HotkeyEntry = { id: FOCUS_LASSO_ID, combo: desiredCombo, action: 'focusLasso', brush: remembered };
+  const next = idx >= 0 ? cachedConfig.map((e, i) => (i === idx ? desired : e)) : [...cachedConfig, desired];
+  cachedConfig = next;
+  pushConfig(next);
+}
+
+/** APP 面板在专注模式状态变化时调用，决定套索键是否装载（其它面板绝不调用）。 */
+export function setFocusLassoActive(on: boolean): void {
+  focusLassoKnown = true;
+  focusLassoActive = on;
+  ensureFocusLassoEntry();
+}
+
+/** 当前套索键（用于提示/展示；专注模式关闭时返回记忆值）。 */
+export function getFocusLassoCombo(): string {
+  const e = cachedConfig.find(x => x.action === 'focusLasso');
+  return e?.brush || e?.combo || DEFAULT_FOCUS_LASSO_COMBO;
+}
+
+/**
+ * 重绑套索键（功能快捷键子面板用）：同时更新生效值 combo 与记忆值 brush。
+ *
+ * ⚠️ 该函数会在**绘画工具箱面板**的上下文里被调用（FuncHotkeyPanel 挂在那里），
+ *    那里 focusLassoKnown 恒为 false，所以**不能**用 focusLassoKnown 做闸门——
+ *    否则重绑会静默失效。装载与否改由调用方传入的 active（= 面板自己看到的专注模式状态）决定。
+ */
+export function setFocusLassoCombo(combo: string, active: boolean): void {
+  if (!configLoaded) return;
+  const remembered = combo || DEFAULT_FOCUS_LASSO_COMBO;
+  const idx = cachedConfig.findIndex(e => e.action === 'focusLasso');
+  const desired: HotkeyEntry = { id: FOCUS_LASSO_ID, combo: active ? remembered : '', action: 'focusLasso', brush: remembered };
+  const next = idx >= 0 ? cachedConfig.map((e, i) => (i === idx ? desired : e)) : [...cachedConfig, desired];
+  cachedConfig = next;
+  pushConfig(next);
+}
+
 /** 是否已连上守护进程（菜单里「设置主开关快捷键」需要据此给出提示）。 */
 export function isDaemonConnected(): boolean {
   return connected;
@@ -509,6 +597,29 @@ export async function applyBrush(brushName: string): Promise<boolean> {
   } catch (e) {
     console.error('⚠️ 切换笔刷失败（笔刷名「' + brushName + '」可能不存在，需与 Brushes 面板名称完全一致）:', e);
     return false;
+  }
+}
+
+// 切回套索工具（专注模式「套索工具键」用）：写法与 app.tsx 的自动切套索一致——
+// 首选直连 batchPlay，失败再回退模态作用域。
+async function selectLassoTool(): Promise<void> {
+  const descriptor: any = {
+    _obj: 'select',
+    _target: [{ _ref: 'lassoTool' }],
+    dontRecord: true,
+    forceNotify: true,
+    _isCommand: false
+  };
+  try {
+    await action.batchPlay([descriptor], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
+  } catch {
+    try {
+      await runAsModal(async () => {
+        await action.batchPlay([descriptor], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
+      }, { commandName: '切换套索工具' });
+    } catch (e) {
+      console.warn('⚠️ 套索工具键：切换套索失败:', e);
+    }
   }
 }
 
