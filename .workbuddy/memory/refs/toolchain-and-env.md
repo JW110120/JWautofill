@@ -60,3 +60,4 @@
 
 - 术语：APP 与 AdjustmentPanel 皆「父面板」；纯色/图案/渐变/描边/清除 = 「子面板」（`src/app.tsx` 内 absolute）。
 - C#/.NET8 daemon（`native/HotkeyDaemon/Program.cs`）：`WH_KEYBOARD_LL` 独立线程，钩子线程严禁阻塞 I/O，焦点闸门 `IsPhotoshopForeground` 否则放行。WS `127.0.0.1:18923`。冻结形态与 ps1 修复步骤见技能 `windows-keyboard-device-reset`；改 ps1 后同步 dist/。`shell.openPath` 受 manifest 扩展名白名单管控。
+- 原生可执行物有**两个独立项目**，必须**分别发布**（主 csproj `HotkeyDaemon.csproj` 用 `DefaultItemExcludes` 排除了 `FixKeyboard/**`）：① 守护进程 → `native/HotkeyDaemon/publish/JWautofillHotkeyDaemon.exe`；② 键盘修复器 → `native/HotkeyDaemon/FixKeyboard/publish/FixKeyboard.exe`。webpack 分别拷到 `dist/native/HotkeyDaemon/publish/…` 与 `dist/native/HotkeyDaemon/FixKeyboard.exe`（**扁平**，与 `fix-keyboard.ps1` 同层——exe 按 `AppContext.BaseDirectory` 读同目录脚本，放子目录会找不到）。⛔ **改 exe 后必须「发布 + `yarn build`」两步**，只 publish 不 build 分发包会带旧版。发布命令与 Git Bash 环境变量坑位见技能 `dotnet-publish-windows`。
