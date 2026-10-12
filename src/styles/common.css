@@ -1971,7 +1971,14 @@ sp-radio[disabled] {
   cursor: not-allowed;
   color: var(--disabled-color);
 }
+/* ⚠️ 滑块必须把 `.slider-track` 一并列进来：RangeSlider 的根节点用的是
+   `className={className || 'range-slider'}` —— 调用方一旦传入 `slider-track`
+   （行内滑块的标准写法），根节点上就**没有** `.range-slider` 了，
+   只写 `.range-slider` 会让禁用过程毫无视觉反馈（组件自身的 disabled 只改 tabIndex）。 */
 .row-between.disabled .range-slider,
+.row-between.disabled .slider-track,
+.row-start.disabled .range-slider,
+.row-start.disabled .slider-track,
 .row-between.disabled input,
 .row-start.disabled input {
   opacity: 0.5;

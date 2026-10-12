@@ -1,4 +1,5 @@
 import type { CompactModes, FormulaVisibility, Gradient } from '../types/state';
+import type { LassoSmoothParams } from '../hotkey/LassoSmoothing';
 import { } from 'react';
 
 /**
@@ -24,6 +25,13 @@ export type AppPanelState = {
   compactModes?: CompactModes;
   fillMode?: 'foreground' | 'pattern' | 'gradient';
   selectedGradient?: Gradient | null;
+  /** 套索实时平滑：总开关 + 滤波参数（deepMerge 按字段合并，缺字段回落默认值） */
+  smoothEnabled?: boolean;
+  smoothParams?: LassoSmoothParams;
+  /** 套索实时平滑分区的界面状态（可见性 / 两级折叠），属于界面偏好而非参数 */
+  smoothOptionsVisible?: boolean;
+  isSmoothOptionsExpanded?: boolean;
+  isSmoothAdvancedExpanded?: boolean;
 };
 
 export type AdjustmentPanelState = {

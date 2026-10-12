@@ -10,6 +10,9 @@ import { MainToggleState, requestMainToggle, requestMainToggleOff } from '../uti
 import { requestFillPanelToggle } from '../utils/FillPanelToggleBus';
 import { psRead, runAsModal } from '../utils/psAccess';
 import { isPsBusy, psBusyRemain } from '../utils/psProbe';
+// ⛔ 本模块**不再** import 任何 LassoSmoothing 的东西：套索平滑已拆到独立守护进程
+//    （端口 18924，见 SmoothBridge.ts）。两个钩子要真正做到「停一侧不影响另一侧」，
+//    首先就得让两条 WebSocket 的生命周期互不相干 —— 这里保留任何一句桥接都会把两者重新绑死。
 
 export interface HotkeyEntry {
   id: string;
@@ -325,6 +328,9 @@ export function connectHotkeyDaemon(): () => void {
       };
       ws.onclose = () => {
         connected = false; emitStatus();
+        // ⛔ 这里**刻意不**再去动平滑的连接状态：两者已是两个独立进程 / 两条独立 WebSocket。
+        //    历史教训：这一行曾经同时把平滑标记为「未连接」，导致「停止快捷键服务」
+        //    看上去像是把平滑也一起停掉了。
         // 连接断开时若仍有挂起的录制，直接取消，避免 UI 永远停在「录制中」
         if (pendingRecord) { const r = pendingRecord; pendingRecord = null; r(null); }
         if (!closedByUs) timer = setTimeout(open, 1500);

@@ -36,6 +36,16 @@ import {
   isDaemonConnected, getMainToggleCombo, setMainToggleCombo, requestHotkeyRecording,
   getSelectedBrushToolEnum, setFocusLassoActive
 } from './hotkey/HotkeyBridge';
+import {
+  LassoSmoothMode, LassoSmoothParams, LassoSmoothStatus,
+  armLassoSmoothing, pushLassoSmoothParams, disarmLassoSmoothing, onLassoSmoothStatus,
+  initialLassoSmoothParams,
+} from './hotkey/LassoSmoothing';
+// 套索实时平滑的**独立**守护进程（端口 18924）。与快捷键服务（18923）各有各的
+// 启停 / 卸载入口，互不影响 —— 这是「两个钩子必须在进程级解耦」在 UXP 侧的落点。
+import {
+  connectSmoothDaemon, disconnectSmoothDaemon, launchSmoothDaemon, isSmoothDaemonConnected,
+} from './hotkey/SmoothBridge';
 import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/MainToggleBus';
 import { FillPanelId, subscribeFillPanelToggle } from './utils/FillPanelToggleBus';
 import { setFocusMode } from './utils/FocusModeBus';
@@ -86,6 +96,18 @@ const FILL_MODE_RADIO_OPTIONS: RadioOption[] = [
     { value: 'foreground', label: '纯色', title: helpTexts.selectionFill.fgCompact },
     { value: 'pattern', label: '图案', title: helpTexts.selectionFill.patternCompact },
     { value: 'gradient', label: '渐变', title: helpTexts.selectionFill.gradientCompact },
+];
+
+/**
+ * 套索平滑的三种「滤波族」。模块级常量：保持引用稳定，
+ * 免得每次渲染重建数组让 RadioGroup 的 React.memo 失效。
+ * ⚠️ 必须放模块级：helpTexts 在 import 之后才可用，放组件体内会成为
+ *    渲染期立即执行区的 TDZ 隐患（本项目 target=es5，const 会降级为 var）。
+ */
+const SMOOTH_MODE_RADIO_OPTIONS: RadioOption[] = [
+    { value: 'standard', label: '标准', title: helpTexts.selectionFill.smoothModeStandard },
+    { value: 'rope', label: '拉绳', title: helpTexts.selectionFill.smoothModeRope },
+    { value: 'catchup', label: '追笔', title: helpTexts.selectionFill.smoothModeCatchUp },
 ];
 
 /* --------------------------------------------------------------------------
@@ -194,6 +216,44 @@ class App extends React.Component<AppProps, AppState> {
     private toolWatchBusy = false;
     private toolWatchBusySince = 0;
     private lastKnownTool: string | null = null;
+    // ===== 套索实时平滑（方案 A：输入层滤波）=====
+    // 布防意图的镜像不在这里 —— 它必须参与渲染，因此放在 state.smoothArmed
+    // （真机事故：写成实例字段时布防完成不触发重渲染，状态行永远停在「待命」）。
+    /** 平滑健康状态的订阅退订器（卸载时退订，避免监听器泄漏）。 */
+    private unsubSmoothStatus: (() => void) | null = null;
+    /**
+     * 平滑守护进程连接的退订器（独立于快捷键服务的那条 WebSocket）。
+     * ⚠️ 与 unsubSmoothStatus 分开存：前者退订「守护进程回报的状态流」，
+     *    后者退订「我们与平滑守护进程之间的连接」——两者生命周期不同（连接可能重建多次）。
+     */
+    private unsubSmoothDaemon: (() => void) | null = null;
+    /** 套索工具的内部 ID（`application.tool._enum` 的口径，与 HotkeyBridge 的判定一致）。 */
+    private static readonly LASSO_TOOL_ID = 'lassoTool';
+    /**
+     * 状态行用的「工具 ID → 展示名」映射（只覆盖选区类工具，够用即可）。
+     *
+     * ⛔ 为什么状态行要显示工具名：布防条件是「当前工具 === lassoTool」这一个枚举值，
+     *    而「用户用的是自由套索但界面说不是套索」有两种完全不同的原因 ——
+     *    ① 工具读取链路失败（读到 null）；② 用户其实用的是多边形/磁性套索（枚举不同）。
+     *    把实际读到的值显示出来，一次就能分辨，不必再来回猜。
+     */
+    private static readonly SMOOTH_TOOL_CN: Record<string, string> = {
+        lassoTool: '套索',
+        polySelTool: '多边形套索',
+        magneticLassoTool: '磁性套索',
+        quickSelectTool: '快速选择',
+        magicWandTool: '魔棒',
+        marqueeRectTool: '矩形选框',
+        marqueeEllipTool: '椭圆选框',
+        marqueeSingleRowTool: '单行选框',
+        marqueeSingleColumnTool: '单列选框',
+        moveTool: '移动',
+        cropTool: '裁剪',
+        paintbrushTool: '画笔',
+        eraserTool: '橡皮擦',
+        gradientTool: '渐变',
+        bucketTool: '油漆桶',
+    };
     // ===== 快速蒙版巡检 =====
     // 复合根因（2026-09-10 定位）：
     //   ① checkMaskModes() 原先只写 this.isInQuickMask（实例字段）+ forceUpdate，
@@ -412,9 +472,14 @@ class App extends React.Component<AppProps, AppState> {
         this.setColorFormulaVisible = this.setColorFormulaVisible.bind(this);
         // 新增绑定
         this.toggleSelectionOptions = this.toggleSelectionOptions.bind(this);
-        this.handleSelectionSmoothChange = this.handleSelectionSmoothChange.bind(this);
         this.handleSelectionContrastChange = this.handleSelectionContrastChange.bind(this);
         this.handleSelectionExpandChange = this.handleSelectionExpandChange.bind(this);
+        // 套索实时平滑：「分区折叠 / 高级项折叠 / 总开关 / 模式单选」四个入口
+        // 都要以绑定后的方法传给 JSX（类方法裸引用会丢 this ⇒ 点击后 setState 抛错）。
+        this.toggleSmoothOptions = this.toggleSmoothOptions.bind(this);
+        this.toggleSmoothAdvanced = this.toggleSmoothAdvanced.bind(this);
+        this.toggleSmoothEnabled = this.toggleSmoothEnabled.bind(this);
+        this.handleSmoothModeChange = this.handleSmoothModeChange.bind(this);
         this.handleNotification = this.handleNotification.bind(this);
         // 事件触发的蒙版/通道状态探测改为防抖执行（见 utils/psProbe.ts 根因说明）：
         // 合并图层等 PS 命令中途派发的事件若立刻 get 会撞忙碌窗口，弹出宿主报错框
@@ -454,6 +519,11 @@ class App extends React.Component<AppProps, AppState> {
             this.unsubFillPanelToggle = subscribeFillPanelToggle((panel) => {
                 this.applyFillPanelHotkey(panel);
             });
+            // 套索实时平滑：守护进程回报的钩子/布防健康状态（同步回调，无 await）。
+            this.unsubSmoothStatus = onLassoSmoothStatus((s) => { this.applySmoothStatus(s); });
+            // 平滑**自己的**守护进程连接（18924）。刻意与 connectHotkeyDaemon 分开调用：
+            // 两条 WebSocket 的生命周期必须互不相干，否则「停快捷键服务」又会把平滑带下水。
+            this.unsubSmoothDaemon = connectSmoothDaemon();
         } catch (e) {
             console.error('⚠️ 建立热键链路失败:', e);
         }
@@ -493,6 +563,10 @@ class App extends React.Component<AppProps, AppState> {
                     autoOffOnOtherTool: this.state.autoOffOnOtherTool,
                     strokeEnabled: this.state.strokeEnabled,
                     createNewLayer: this.state.createNewLayer,
+                    // 套索实时平滑的总开关同属「功能开关」而非「数值参数」：复位只应把
+                    // 强度/半径等滑块打回默认，不该顺手把用户开着的平滑关掉（与 strokeEnabled 同理）。
+                    // smoothParams 是参数，仍走 `...initialState` 复位。
+                    smoothEnabled: this.state.smoothEnabled,
                     // 清除算法属于「用户选项」而非「参数」：复位不应把用户选好的
                     // 减法 / 乘法 / 趋白打回默认值（与 deselectAfterFill 等同理）。
                     clearBackgroundAlgorithm: this.state.clearBackgroundAlgorithm,
@@ -515,6 +589,18 @@ class App extends React.Component<AppProps, AppState> {
                     showVisibilityPanel: this.state.showVisibilityPanel,
                     isFillSettingsOpen: this.state.isFillSettingsOpen,
                     floatOrder: this.state.floatOrder,
+                    // ⛔ 平滑健康状态必须保持：它由守护进程回报（钩子是否装上 / 是否在拖拽），
+                    //    不是用户参数。若被 `...initialState` 打回 initialLassoSmoothStatus
+                    //    （connected:false），状态行会一直谎报「平滑服务未启动」，
+                    //    直到下一次状态广播才自愈 —— 而广播只在布防/撤防或连接变化时才发。
+                    smoothStatus: this.state.smoothStatus,
+                    // ⛔ 同理必须保持布防镜像与工具读数：它们是**与守护进程的同步态**，
+                    //    不是用户参数。被 `...initialState` 打回 false/null 后，
+                    //    syncLassoSmoothingArm 会误以为「意图变了」而重发一次布防，
+                    //    并且状态行会在下一轮巡检前显示错误的「待命（未知）」。
+                    smoothArmed: this.state.smoothArmed,
+                    smoothToolId: this.state.smoothToolId,
+                    smoothToolErr: this.state.smoothToolErr,
                     // 授权状态不应被参数复位影响
                     isLicensed: this.state.isLicensed,
                     isTrial: this.state.isTrial,
@@ -524,6 +610,11 @@ class App extends React.Component<AppProps, AppState> {
                     compactModes: this.state.compactModes,
                     // 「显示公式」同属界面偏好（四处独立），复位时保持当前选择
                     formulaVisible: this.state.formulaVisible,
+                }, () => {
+                    // 复位把 smoothParams 打回了默认值（参数类），但平滑总开关被保留。
+                    // 若此刻正处于布防状态，不重新下发的话守护进程会继续用复位前的旧参数滤波，
+                    // 面板显示与实拖效果就会不一致。参数未变化时 LassoSmoothing 内部会去重，不会白发。
+                    try { pushLassoSmoothParams(this.state.smoothParams); } catch { /* ignore */ }
                 });
             },
             onToggleCompactMode: () => { this.toggleCompactMode(); },
@@ -641,6 +732,18 @@ class App extends React.Component<AppProps, AppState> {
                     },
                     selectionOptionsVisible: loaded.appPanel.selectionOptionsVisible ?? this.state.selectionOptionsVisible,
                     fillOptionsVisible: loaded.appPanel.fillOptionsVisible ?? this.state.fillOptionsVisible,
+                    // 套索实时平滑：布尔量按「缺字段回落默认」合并；
+                    // ⚠️ smoothParams 必须**逐字段**合并（不能整体覆盖）——
+                    //    旧存档里没有这个对象，整体覆盖会把默认值冲成 undefined，
+                    //    之后下发的参数里出现 undefined 会让守护进程解析出 NaN 半径。
+                    smoothEnabled: loaded.appPanel.smoothEnabled ?? this.state.smoothEnabled,
+                    smoothParams: {
+                        ...initialLassoSmoothParams,
+                        ...(loaded.appPanel.smoothParams ?? {}),
+                    },
+                    smoothOptionsVisible: loaded.appPanel.smoothOptionsVisible ?? this.state.smoothOptionsVisible,
+                    isSmoothOptionsExpanded: loaded.appPanel.isSmoothOptionsExpanded ?? this.state.isSmoothOptionsExpanded,
+                    isSmoothAdvancedExpanded: loaded.appPanel.isSmoothAdvancedExpanded ?? this.state.isSmoothAdvancedExpanded,
                 });
             }
         } catch (e) {
@@ -676,9 +779,13 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     componentDidUpdate(prevProps, prevState) {
-        // 主开关/自动关选项变化时同步巡检（放在最前：不受下方 panelStateLoaded 早退影响）
+        // 主开关/自动关/平滑总开关变化时同步巡检（放在最前：不受下方 panelStateLoaded 早退影响）
+        // ⚠️ 平滑总开关虽然在自己的 toggle 回调里也调了一次 syncToolWatch，这里仍要带上：
+        //    存档合并与「参数复位」都是一次性整批 setState，会绕过那个 toggle；
+        //    只有按 state 派生，才能保证巡检与布防在任何写入路径上都跟着收回。
         if (prevState.isEnabled !== this.state.isEnabled ||
-            prevState.autoOffOnOtherTool !== this.state.autoOffOnOtherTool) {
+            prevState.autoOffOnOtherTool !== this.state.autoOffOnOtherTool ||
+            prevState.smoothEnabled !== this.state.smoothEnabled) {
             this.syncToolWatch();
         }
         // 「填充选项」展开/可见状态变化时同步快速蒙版巡检（同样放在早退之前）
@@ -755,6 +862,14 @@ class App extends React.Component<AppProps, AppState> {
             'clearLayerAlgorithm',
             'compactModes',
             'fillMode',
+            // 套索实时平滑：参数与界面开关一并纳入持久化
+            // ⚠️ smoothParams 靠**引用比较**判定变更 ⇒ 必须整体替换对象
+            //    （见 updateSmoothParam），就地改字段不会触发落盘。
+            'smoothEnabled',
+            'smoothParams',
+            'smoothOptionsVisible',
+            'isSmoothOptionsExpanded',
+            'isSmoothAdvancedExpanded',
         ];
         const changed = watchedKeys.some(k => prevState[k] !== this.state[k]);
         if (changed) {
@@ -778,6 +893,11 @@ class App extends React.Component<AppProps, AppState> {
                     fillMode: this.state.fillMode,
                     selectionOptionsVisible: this.state.selectionOptionsVisible,
                     fillOptionsVisible: this.state.fillOptionsVisible,
+                    smoothEnabled: this.state.smoothEnabled,
+                    smoothParams: this.state.smoothParams,
+                    smoothOptionsVisible: this.state.smoothOptionsVisible,
+                    isSmoothOptionsExpanded: this.state.isSmoothOptionsExpanded,
+                    isSmoothAdvancedExpanded: this.state.isSmoothAdvancedExpanded,
                 },
             }, { debounceMs: 400 }).catch(e => console.warn('⚠️ 保存面板状态失败:', e));
         }
@@ -800,6 +920,18 @@ class App extends React.Component<AppProps, AppState> {
             try { this.unsubFillPanelToggle(); } catch { /* ignore */ }
             this.unsubFillPanelToggle = null;
         }
+        if (this.unsubSmoothStatus) {
+            try { this.unsubSmoothStatus(); } catch { /* ignore */ }
+            this.unsubSmoothStatus = null;
+        }
+        if (this.unsubSmoothDaemon) {
+            try { this.unsubSmoothDaemon(); } catch { /* ignore */ }
+            this.unsubSmoothDaemon = null;
+        }
+        // 撤防套索平滑：面板关闭后不该继续改写用户的鼠标轨迹。
+        // （守护进程在布防方 WS 断开时也会自动撤防；这里是「面板还活着但组件卸载」的兜底，
+        //  例如此后不再有工具巡检，布防状态会一直悬着。）
+        try { disarmLassoSmoothing(); } catch { /* ignore */ }
         if (this.selectionChangeListener) {
             action.removeNotificationListener(['set'], this.selectionChangeListener);
         }
@@ -896,10 +1028,6 @@ class App extends React.Component<AppProps, AppState> {
         resyncNativeWidgets(root);
     }
 
-    handleSelectionSmoothChange(value: number) {
-        this.setState({ selectionSmooth: value });
-    }
-
     handleSelectionContrastChange(value: number) {
         this.setState({ selectionContrast: value });
     }
@@ -908,10 +1036,226 @@ class App extends React.Component<AppProps, AppState> {
         this.setState({ selectionExpand: value });
     }
 
+    // ===== 套索实时平滑（方案 A：输入层滤波）=====
+    //
+    // 为什么必须走原生守护进程：UXP 没有任何画布指针 API（app.tsx 里那两个
+    // document.addEventListener('mousemove'/'mouseup') 监听的是**插件面板自身的 DOM**，
+    // 与 PS 画布无关）。因此「套索绘制过程中」对 UXP 是盲区，唯一能介入的位置是
+    // **PS 收到鼠标输入之前** —— 由 native/HotkeyDaemon 的低层鼠标钩子吞掉原始位移、
+    // 换成滤波后的位移（SendInput 回注）。本面板只负责「布防 + 参数 + 状态显示」。
+
+    /**
+     * 折叠/展开「平滑选项」分区。
+     * 与 toggleSelectionOptions 同构：折叠前先把分区内的原生控件隐藏掉，再让 React 卸载内容，
+     * 最后补一次重排（UXP 下原生控件的坐标不随重排自动更新，会出现「残留数字」）。
+     */
+    toggleSmoothOptions() {
+        const root = this.panelRef.current;
+        if (this.state.isSmoothOptionsExpanded) hideNativeWidgetsOfSections(root, ['smoothOptions']);
+        this.setState(prevState => ({
+            isSmoothOptionsExpanded: !prevState.isSmoothOptionsExpanded
+        }));
+        resyncNativeWidgets(root);
+    }
+
+    /** 折叠/展开「平滑选项」内的高级项（半径 / 张力 / 追笔 / 拐角 / 速度自适应 / 采样间距）。 */
+    toggleSmoothAdvanced() {
+        const root = this.panelRef.current;
+        if (this.state.isSmoothAdvancedExpanded) hideNativeWidgetsOfSections(root, ['smoothAdvanced']);
+        this.setState(prevState => ({
+            isSmoothAdvancedExpanded: !prevState.isSmoothAdvancedExpanded
+        }));
+        resyncNativeWidgets(root);
+    }
+
+    /**
+     * 平滑总开关（**二合一**：启用平滑 + 平滑服务）。
+     *
+     * ⛔ 为什么合成一条：平滑与热键拆成两个进程后，平滑侧一度同时暴露「启用平滑」与
+     *    「平滑服务」两行开关 —— 服务本是平滑的前提，用户却要先开服务、再开平滑，
+     *    且服务没开时点平滑开关毫无反应，两行谁是谁的前提并不直观。
+     *    现合并为**一条状态条**（与「笔刷热键」的服务条同款：指示点 + 状态文案 + 开关）：
+     *      开 = 拉起平滑服务（JWautofillSmoothDaemon，端口 18924，与快捷键服务互不影响）+ 布防；
+     *      关 = 撤防 + 让平滑服务退出。
+     *    ⚠️ 二合一没有牺牲独立性：停掉的仍然**只有平滑自己那一个进程**，快捷键服务照常。
+     *
+     * ⚠️ 必须用 setState 的**回调**读新值去重算布防：setState 之后立刻读 this.state 拿到的是
+     *    旧值（React 19 批处理），而布防判定依赖新的 smoothEnabled。
+     * ⚠️ 走 syncToolWatch（而不是直接 syncLassoSmoothingArm）：本开关同时决定
+     *    「工具巡检是否需要运行」—— 只同步布防的话，在「主开关 + 自动关」都关着时
+     *    巡检根本没起，布防永远等不到工具读数。syncToolWatch 末尾会补一次布防同步。
+     */
+    toggleSmoothEnabled() {
+        const next = !this.state.smoothEnabled;
+        this.setState({ smoothEnabled: next }, () => { this.syncToolWatch(); });
+        if (next) {
+            // 二合一：打开平滑必须让平滑服务在跑。已连接时 launchSmoothDaemon 幂等跳过。
+            if (!isSmoothDaemonConnected()) void this.startSmoothService();
+        } else if (isSmoothDaemonConnected()) {
+            // 关 = 让平滑服务优雅退出（只停它自己那一份，绝不触碰快捷键服务）。
+            disconnectSmoothDaemon();
+        }
+    }
+
+    /**
+     * 拉起平滑服务。
+     * 结果不在这里提示：真实状态由上方状态条如实反映（连接建立后 smoothStatus.connected 变真）。
+     * 失败时补一条 console，便于区分「没找到 exe」与「唤起被系统拒绝」。
+     */
+    private async startSmoothService() {
+        const r = await launchSmoothDaemon();
+        if (!r.ok) console.warn('[平滑服务] ' + r.message);
+    }
+
+    /** 模式单选：组件回传的是「原生形状」的事件对象，按 e.target.value 取值。 */
+    handleSmoothModeChange(e: any) {
+        const value = e?.target?.value as LassoSmoothMode;
+        if (value !== 'standard' && value !== 'rope' && value !== 'catchup') return;
+        this.updateSmoothParam({ mode: value });
+        // 切换模式会**增删整行**（见 smoothParamApplies）⇒ 必须补一次原生控件重排：
+        // UXP 的原生视图不随 DOM 重排自动更新，被移除那几行的数字输入框会在原位留下
+        // 「残影数字」，比折叠分区里的同类问题更显眼（那里有 hideNativeWidgetsOfSections 兜底）。
+        resyncNativeWidgets(this.panelRef.current);
+    }
+
+    /**
+     * 更新平滑参数。
+     * ⚠️ 必须**整体替换**对象而不是就地改字段：持久化的变更检测用的是引用比较
+     *    （见 componentDidUpdate 的 watchedKeys），就地修改会让引用不变 ⇒ 既不重渲染也不落盘。
+     */
+    updateSmoothParam(patch: Partial<LassoSmoothParams>) {
+        const next: LassoSmoothParams = { ...this.state.smoothParams, ...patch };
+        this.setState({ smoothParams: next });
+        pushLassoSmoothParams(next);
+    }
+
+    /**
+     * 某个平滑参数是否**作用于当前滤波族**（不作用 ⇒ 整行隐藏，而不是置灰）。
+     *
+     * ⛔ 这里刻意采用「隐藏」而非本仓默认的「整行禁用」：
+     *    这几个参数属于**互斥族** —— 选了「拉绳」就同时失去强度 / 拐角 / 速度适应，
+     *    留着它们就是两三行点了没反应的灰控件，既占纵向空间又容易被当成「坏了」。
+     *    本仓「不隐藏只禁用」的铁律是为了防止隐藏后版式大幅塌陷（整列控件错位那种）；
+     *    这里每行等高、上下行距恒定，隐藏只让后续行整体上移，不会破坏版式，
+     *    因此「省空间 + 少困惑」的收益大于「控件位置恒定」的收益。
+     *
+     * ⚠️ 判据只有「是否作用于当前模式」这一条，**不含** `smoothEnabled`：
+     *    总开关关闭时参数依然可见可编辑 —— 它们是预置值，用户完全可以先调好再开总开关。
+     *
+     * 归属（与 Program.cs 的 LassoMouseSmoother 分支一一对应，勿凭感觉改）：
+     *   半径 / 采样间距 → 三种模式都用到（恒显示）
+     *   强度 / 拐角 / 速度适应 → 仅「标准」（拉绳与追笔都不读 Strength）
+     *   张力 → 仅「拉绳」；追笔 → 仅「追笔」
+     */
+    private smoothParamApplies(which: 'strength' | 'tension' | 'catchUp' | 'cornerAngle' | 'speedAdaptive'): boolean {
+        const mode = this.state.smoothParams.mode;
+        if (which === 'tension') return mode === 'rope';
+        if (which === 'catchUp') return mode === 'catchup';
+        return mode === 'standard'; // strength / cornerAngle / speedAdaptive
+    }
+
+    /**
+     * 按「当前工具 + 平滑总开关」重算并下发布防意图（幂等）。
+     *
+     * 布防条件：`smoothEnabled` 为真 **且** 当前工具是套索工具。
+     * 另外两道闸门（PS 前台、左键按下且在 PS 窗口上）由守护进程自己判 —— 那是每一帧都在变的状态，
+     * 放在这里判既不准也多一次 IPC。
+     *
+     * ⚠️ 幂等很重要：本方法由 300ms 工具巡检驱动，若每轮都无条件下发，
+     *    守护进程会每 300ms 收到一次「布防」并触发一次状态广播。参数侧的重发由
+     *    LassoSmoothing 内部的「线格式未变化则不发」兜住。
+     *
+     * ⛔ 布防意图的镜像放在 **state**（smoothArmed）而不是实例字段：
+     *    状态行的文案与配色全靠它，而布防是在巡检里异步完成的 —— 写实例字段不会触发
+     *    重渲染，界面就会一直停在布防前那一帧的过期判定上（真机 bug：套索下显示「待命」）。
+     *    这里只在**跃变时** setState，因此 300ms 巡检不会造成渲染抖动。
+     */
+    syncLassoSmoothingArm(tool?: string | null) {
+        const t = tool !== undefined ? tool : this.lastKnownTool;
+        const shouldArm = !!this.state.smoothEnabled && t === App.LASSO_TOOL_ID;
+        if (shouldArm === this.state.smoothArmed) {
+            // 意图未变：不重发 arm（避免无谓广播），但顺带同步一次参数
+            // （参数可能在别处改过；线格式相同则 LassoSmoothing 也不会真的发）。
+            if (shouldArm) pushLassoSmoothParams(this.state.smoothParams);
+            return;
+        }
+        this.setState({ smoothArmed: shouldArm });
+        armLassoSmoothing(shouldArm, shouldArm ? this.state.smoothParams : undefined);
+    }
+
+    /** 把守护进程回报的平滑健康状态写进 state（渲染要读它，因此不能只写实例字段）。 */
+    private applySmoothStatus(s: LassoSmoothStatus) {
+        this.setState({ smoothStatus: s });
+    }
+
+    /**
+     * 平滑状态行文案（面板里那一行只读提示）。
+     *
+     * 判据优先级刻意如此：连接 → 协议不支持 → 未启用 → 熔断 → 钩子 → 拖拽中 → 已布防 → 待命。
+     * ⛔ 「未连接 / 守护进程版本过旧 / 钩子没装上 / 当前不是套索」是四种完全不同的原因，
+     *    必须分开说 —— 全都显示成「启动失败（被安全软件拦截）」会把排查方向彻底带偏。
+     */
+    private smoothStatusText(): string {
+        const st = this.state.smoothStatus;
+        // ⛔ 这里说的是**平滑服务**（独立进程，18924），不是快捷键服务（18923）。
+        //    历史上两者是同一个进程，文案混用会让用户以为「停快捷键服务把平滑也停了」是正常现象。
+        // 开关已开却没连上 = 正在启动（守护进程要自安装 + 建连，通常 1~3 秒）；
+        // 开关关着才是「未启动」——用户主动停的，如实说。
+        if (!st.connected) return this.state.smoothEnabled ? '平滑服务启动中…' : '平滑服务未启动';
+        if (st.unsupported) return '平滑服务版本过旧，请重启该服务';
+        if (!this.state.smoothEnabled) return '未启用';
+        if (st.safeMode) return '已自动停用（输入保护）';
+        if (this.state.smoothArmed && !st.hookInstalled) return '启动失败（被安全软件拦截）';
+        if (st.dragging) return '生效中';
+        if (this.state.smoothArmed) return '已就绪（可直接绘制）';
+        // 未布防：必须区分「工具读不到」与「读到了但不是套索」——
+        // 前者是我们的读取链路问题，后者是用户工具选择问题，处置方式完全不同。
+        if (this.state.smoothToolErr && this.state.smoothToolId === null) return '待命（无法读取当前工具）';
+        return '待命（当前工具：' + App.smoothToolLabel(this.state.smoothToolId) + '）';
+    }
+
+    /**
+     * 状态条的配色档（返回 .notify-bar 的修饰类）。
+     * 与 smoothStatusText 判据一一对应但分开返回：合并成「返回 {文本, 类名}」的对象
+     * 会在每次渲染新建对象、且两处口径容易漂移。
+     * 四档：未启用 = 灰 / 服务没起来 = 橙（要用户处置）/ 异常 = 红 / 就绪 = 绿。
+     * ⚠️「待命（当前不是套索工具）」返回空串 = 中性态 —— 它不是故障，不该染成警告色
+     *    （染橙会让用户以为「平滑坏了」，实际只是没切到套索工具）。
+     */
+    private smoothBarTone(): string {
+        const st = this.state.smoothStatus;
+        if (!this.state.smoothEnabled) return 'notify-bar-disabled';
+        if (!st.connected || st.unsupported) return 'notify-bar-warn';
+        if (st.safeMode || (this.state.smoothArmed && !st.hookInstalled)) return 'notify-bar-fail';
+        if (st.dragging || this.state.smoothArmed) return 'notify-bar-ok';
+        return '';
+    }
+
+    /**
+     * 配色档 → 指示点类。
+     * ⚠️ 由档位**映射**而不是重判一次：判据写两遍，漂移一次就再也对不上。
+     * 「待命」档（空串）用灰点：它表示「条件未满足、尚未生效」，与未启用的灰同源。
+     */
+    private static smoothDotOfTone(tone: string): string {
+        if (tone === 'notify-bar-ok') return 'indicator-ok';
+        if (tone === 'notify-bar-warn') return 'indicator-warn';
+        if (tone === 'notify-bar-fail') return 'indicator-fail';
+        return 'indicator-disabled';
+    }
+
+    /**
+     * 工具 ID → 状态行展示名。
+     * 未知 ID **原样显示枚举名**（而不是「未知」）：排障时枚举名本身就是最需要的信息 ——
+     * 一眼就能看出是「读到了多边形套索」还是「读到了一个我们不认识的 ID」。
+     */
+    private static smoothToolLabel(id: string | null): string {
+        if (!id) return '未知';
+        return App.SMOOTH_TOOL_CN[id] || id;
+    }
+
     // 应用选区修改
     async applySelectionModification() {
         const options: SelectionOptions = {
-            selectionSmooth: this.state.selectionSmooth,
             selectionContrast: this.state.selectionContrast,
             selectionExpand: this.state.selectionExpand
         };
@@ -1051,6 +1395,10 @@ class App extends React.Component<AppProps, AppState> {
                 </div>
                 <div className="panel-section">
                     <div className="row-between">
+                        <span className="label-4" title={helpTexts.selectionFill.visibilitySection} onClick={() => this.toggleSectionVisibility('smoothOptions')}>平滑选项</span>
+                        <ToggleSwitch checked={this.state.smoothOptionsVisible} onChange={() => this.toggleSectionVisibility('smoothOptions')} title={helpTexts.selectionFill.visibilitySection}  />
+                    </div>
+                    <div className="row-between">
                         <span className="label-4" title={helpTexts.selectionFill.visibilitySection} onClick={() => this.toggleSectionVisibility('selectionOptions')}>选区改造</span>
                         <ToggleSwitch checked={this.state.selectionOptionsVisible} onChange={() => this.toggleSectionVisibility('selectionOptions')} title={helpTexts.selectionFill.visibilitySection}  />
                     </div>
@@ -1110,9 +1458,10 @@ class App extends React.Component<AppProps, AppState> {
         this.setFormulaVisible('color', visible);
     }
 
-    /** 切换某个分区的可见性（选区改造 / 填充选项） */
-    toggleSectionVisibility(id: 'selectionOptions' | 'fillOptions') {
+    /** 切换某个分区的可见性（平滑选项 / 选区改造 / 填充选项）。 */
+    toggleSectionVisibility(id: 'smoothOptions' | 'selectionOptions' | 'fillOptions') {
         this.setState(prev => ({
+            smoothOptionsVisible: id === 'smoothOptions' ? !prev.smoothOptionsVisible : prev.smoothOptionsVisible,
             selectionOptionsVisible: id === 'selectionOptions' ? !prev.selectionOptionsVisible : prev.selectionOptionsVisible,
             fillOptionsVisible: id === 'fillOptions' ? !prev.fillOptionsVisible : prev.fillOptionsVisible,
         }));
@@ -1331,7 +1680,6 @@ class App extends React.Component<AppProps, AppState> {
             const featherAmount = Number(this.state.feather);
             const needsFeather = featherAmount > 0;
             const options: SelectionOptions = {
-                selectionSmooth: this.state.selectionSmooth,
                 selectionContrast: this.state.selectionContrast,
                 selectionExpand: this.state.selectionExpand
             };
@@ -1872,23 +2220,40 @@ class App extends React.Component<AppProps, AppState> {
         this.setState({
             isDragging: true,
             dragStartX: event.clientX,
-            dragStartValue: this.state[target],
+            // 平滑参数嵌在 state.smoothParams 里，取不到 `this.state[target]` ⇒ 按前缀分岔取值。
+            // 前缀口径必须与 DragHandler 的 configs 键名、handleMouseMove 的分岔保持一致。
+            dragStartValue: App.isSmoothDragTarget(target)
+                ? (this.state.smoothParams as any)[target.slice(7)]
+                : this.state[target],
             dragTarget: target
         });
+    }
+
+    /** `smooth:` 前缀 = 「值在 state.smoothParams 内」的拖拽目标（见 DragHandler 的键名注释）。 */
+    private static isSmoothDragTarget(target: string): boolean {
+        return typeof target === 'string' && target.indexOf('smooth:') === 0;
     }
 
     // 处理鼠标移动事件
     handleMouseMove(event: MouseEvent): void {
         if (!this.state || !this.state.isDragging || !this.state.dragTarget) return;
-        
+
+        const target = this.state.dragTarget;
         const newValue = DragHandler.calculateNewValue(
-            this.state.dragTarget,
+            target,
             this.state.dragStartValue,
             this.state.dragStartX,
             event.clientX
         );
-        
-        this.setState({ [this.state.dragTarget]: newValue });
+
+        if (App.isSmoothDragTarget(target)) {
+            // 走 updateSmoothParam：它会整体替换对象、并顺带把新参数下发给守护进程
+            // （直接 setState 会漏掉下发，表现为「拖了标签、数值变了但手感没变」）。
+            this.updateSmoothParam({ [target.slice(7)]: newValue } as Partial<LassoSmoothParams>);
+            return;
+        }
+
+        this.setState({ [target]: newValue });
     }
 
     // 处理鼠标释放事件
@@ -2067,9 +2432,15 @@ class App extends React.Component<AppProps, AppState> {
         }, { label: '读取当前工具', retries: 0 });
     }
 
-    // 按「主开关开启 + 选项开启」启停巡检：不需要时不跑，避免无谓轮询。
+    // 按「需要自动关」或「需要套索平滑布防」启停巡检：两者都不需要时不跑，避免无谓轮询。
+    //
+    // ⚠️ 平滑布防也依赖「当前工具」这一个读数 ⇒ 刻意**复用**同一轮巡检，
+    //    而不是再起一个定时器。`readCurrentToolId()` 每轮都是一次模态作用域内的
+    //    batchPlay get，两条 300ms 轮询 = 双倍的宿主往返（本仓交互延迟的主因）。
     private syncToolWatch() {
-        const need = this.state.isEnabled && this.state.autoOffOnOtherTool;
+        const needAutoOff = this.state.isEnabled && this.state.autoOffOnOtherTool;
+        const needSmooth = this.state.smoothEnabled;
+        const need = needAutoOff || needSmooth;
         if (need && !this.toolWatchTimer) {
             this.lastKnownTool = null; // 新一轮先取基准，不追溯开开关之前的工具
             this.toolWatchTimer = setInterval(() => { void this.pollToolChange(); }, App.TOOL_WATCH_INTERVAL_MS);
@@ -2079,10 +2450,18 @@ class App extends React.Component<AppProps, AppState> {
             this.toolWatchTimer = null;
             this.lastKnownTool = null;
         }
+        // 无论巡检是否在跑，都补一次布防同步：
+        //  · smoothEnabled 刚被打开而工具本就是套索 ⇒ 立即布防（不必等巡检那 300ms）
+        //  · smoothEnabled 被关掉，或巡检刚被停下 ⇒ 立即撤防
+        // 本方法幂等（意图未变不发 WS），重复调用无副作用。
+        this.syncLassoSmoothingArm();
     }
 
     private async pollToolChange() {
-        if (!this.state.isEnabled || !this.state.autoOffOnOtherTool) return;
+        // 「自动关」与「平滑布防」各自需要时才跑；两者都不需要就整轮跳过。
+        const needAutoOff = this.state.isEnabled && this.state.autoOffOnOtherTool;
+        const needSmooth = this.state.smoothEnabled;
+        if (!needAutoOff && !needSmooth) return;
         // 并发守卫；上一次查询若卡在模态状态里迟迟不返回，超过 3s 就放行，避免巡检永久停摆
         if (this.toolWatchBusy && Date.now() - this.toolWatchBusySince < 3000) return;
         // ⚠️ 忙碌闸门：readCurrentToolId 会发 batchPlay get（application.tool）。
@@ -2092,12 +2471,29 @@ class App extends React.Component<AppProps, AppState> {
         this.toolWatchBusySince = Date.now();
         try {
             const tool = await this.readCurrentToolId();
-            if (!tool) return;
+            // ⛔ 读失败时**必须把失败写进 state**，而不是静默 return：
+            //    「读到 null」与「读到了但不是套索」在状态行上必须是两句不同的话，
+            //    否则一个读取链路问题会伪装成「用户没选套索工具」，白跑一轮排查。
+            //    同时 readCurrentToolId 内部已静默吞掉异常，这一层是唯一的知情点。
+            if (!tool) {
+                if (!this.state.smoothToolErr) this.setState({ smoothToolErr: true });
+                return;
+            }
+            // 成功读数：清错误标记并把工具 ID 写进 state（供状态行显示）。
+            // ⚠️ 只在值变化时 setState，避免 300ms 巡检造成持续重渲染。
+            const patch: any = {};
+            if (this.state.smoothToolErr) patch.smoothToolErr = false;
+            if (this.state.smoothToolId !== tool) patch.smoothToolId = tool;
+            if (Object.keys(patch).length) this.setState(patch);
             const prev = this.lastKnownTool;
             this.lastKnownTool = tool;
+            // 平滑布防：每读到一次工具就同步一次（幂等，意图未变不会重发 WS）。
+            // ⚠️ 必须放在下面「首轮只记基准」的 return **之前** —— 否则打开平滑后
+            //    若工具一直没变，首轮那条 return 会让布防永远等不到下一次机会。
+            this.syncLassoSmoothingArm(tool);
             // 首轮只记基准；工具没变也不判，避免「开关一开就被自己关掉」
             if (prev === null || prev === tool) return;
-            if (App.isOtherTool(tool)) await this.autoTurnOffMain(tool);
+            if (needAutoOff && App.isOtherTool(tool)) await this.autoTurnOffMain(tool);
         } catch { /* 单次失败不影响下一轮 */ } finally {
             this.toolWatchBusy = false;
         }
@@ -2703,6 +3099,288 @@ title={helpTexts.selectionFill.blendMode}>
                     </div>
                 </div>
 
+                {/* 平滑选项：套索**绘制过程中**的实时平滑。
+                    ⚠️ 与下面「选区改造」是两条独立路径：本分区作用在**输入轨迹**（PS 收到鼠标
+                       之前，由原生守护进程的鼠标钩子完成），选区改造作用在**已生成的选区掩码**。
+                       因此两者可以同时开启，效果是串联的（先平滑轨迹、再改造掩码）。 */}
+                {this.state.smoothOptionsVisible && (
+                <div className="collapse-section" data-section-id="smoothOptions">
+                    <div className="collapse-header" onClick={this.toggleSmoothOptions} title={helpTexts.selectionFill.smoothOptionsToggle}>
+                        <div className={this.state.isSmoothOptionsExpanded ? 'collapse-icon-expanded' : 'collapse-icon'}>
+                            <ExpandIcon expanded={this.state.isSmoothOptionsExpanded} />
+                        </div>
+                        <span className="label-4">平滑选项</span>
+                    </div>
+                    {this.state.isSmoothOptionsExpanded && (
+                    <div className="collapse-content-expanded">
+                        {/* 平滑总开关（**二合一**：启用平滑 + 平滑服务）。
+                            形态与「笔刷热键」的服务条同款：指示点 + 状态文案 + 右侧开关。
+                            ⛔ 此前是「启用平滑 / 状态 / 平滑服务」三行 —— 服务本是平滑的前提，
+                                却要用户先开服务再开平滑，且服务没开时点平滑开关毫无反应。
+                            ⚠️ 状态文案覆盖五种完全不同的情形（服务没起来 / 版本过旧 / 钩子被拦截 /
+                                熔断 / 待命与生效中），处置方式各不相同，必须分开说，
+                                否则用户只看到「没效果」无从下手。 */}
+                        <div className={'notify-bar ' + this.smoothBarTone()}>
+                            <span className={'indicator indicator-md ' + App.smoothDotOfTone(this.smoothBarTone())} />
+                            <span
+                                className="notify-text"
+                                title={this.state.smoothStatus.unsupported
+                                    ? '当前运行的平滑服务版本过旧，不认识平滑指令。\n\n处置：把右侧开关**先关再开**（或结束 JWautofillSmoothDaemon.exe 进程后重新启动）。'
+                                    : helpTexts.selectionFill.smoothStatusLabel}>
+                                {this.smoothStatusText()}
+                            </span>
+                            <span className="mask-sync-status-spacer" />
+                            <ToggleSwitch
+                                checked={this.state.smoothEnabled}
+                                onChange={this.toggleSmoothEnabled}
+                                title={helpTexts.selectionFill.smoothEnabledSwitch}
+                            />
+                        </div>
+                        {/* 滤波族：三列（与「填充模式」紧凑态的 .radio-trio-group 同款） */}
+                        <RadioGroup
+                            value={this.state.smoothParams.mode}
+                            onChange={this.handleSmoothModeChange}
+                            options={SMOOTH_MODE_RADIO_OPTIONS}
+                            className="radio-trio-group"
+                        />
+                        {/* 强度只被「标准」模式读取（拉绳 / 追笔的算法分支不看 Strength）⇒ 不适用时整行隐藏 */}
+                        {this.smoothParamApplies('strength') && (
+                        <div className="row-between">
+                            <label
+                                className="label-drag label-2"
+                                onMouseDown={(e) => this.handleLabelMouseDown(e, 'smooth:strength')}
+                                title={helpTexts.selectionFill.smoothStrength}>
+                                强度
+                            </label>
+                            <RangeSlider
+                                min={0}
+                                max={100}
+                                step={1}
+                                value={this.state.smoothParams.strength}
+                                onChange={(v) => this.updateSmoothParam({ strength: v })}
+                                className="slider-track"
+                                title={helpTexts.selectionFill.smoothStrengthSlider}
+                            />
+                            <div className="row-start">
+                                <div className="num-input-row">
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        max="100"
+                                        step="1"
+                                        value={this.state.smoothParams.strength}
+                                        onChange={(e) => this.updateSmoothParam({ strength: Number(e.target.value) })}
+                                        title={helpTexts.selectionFill.smoothStrengthInput}
+                                    />
+                                </div>
+                                <span className="num-unit">%</span>
+                            </div>
+                        </div>
+                        )}
+
+                        {/* 高级项：二级折叠。默认收起 —— 只在「平滑强度还不够用」时再动这几个。 */}
+                        <div className="collapse-section" data-section-id="smoothAdvanced">
+                            <div className="collapse-header" onClick={this.toggleSmoothAdvanced} title={helpTexts.selectionFill.smoothAdvancedToggle}>
+                                <div className={this.state.isSmoothAdvancedExpanded ? 'collapse-icon-expanded' : 'collapse-icon'}>
+                                    <ExpandIcon expanded={this.state.isSmoothAdvancedExpanded} />
+                                </div>
+                                <span className="label-4">高级项</span>
+                            </div>
+                            {this.state.isSmoothAdvancedExpanded && (
+                            <div className="collapse-content-expanded">
+                                <div className="row-between">
+                                    <label
+                                        className="label-drag label-2"
+                                        onMouseDown={(e) => this.handleLabelMouseDown(e, 'smooth:radius')}
+                                        title={helpTexts.selectionFill.smoothRadius}>
+                                        半径
+                                    </label>
+                                    <RangeSlider
+                                        min={1}
+                                        max={40}
+                                        step={1}
+                                        value={this.state.smoothParams.radius}
+                                        onChange={(v) => this.updateSmoothParam({ radius: v })}
+                                        className="slider-track"
+                                        title={helpTexts.selectionFill.smoothRadiusSlider}
+                                    />
+                                    <div className="row-start">
+                                        <div className="num-input-row">
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                max="40"
+                                                step="1"
+                                                value={this.state.smoothParams.radius}
+                                                onChange={(e) => this.updateSmoothParam({ radius: Number(e.target.value) })}
+                                                title={helpTexts.selectionFill.smoothRadiusInput}
+                                            />
+                                        </div>
+                                        <span className="num-unit">px</span>
+                                    </div>
+                                </div>
+
+                                {/* 张力仅「拉绳」有效；其余模式整行隐藏（见 smoothParamApplies） */}
+                                {this.smoothParamApplies('tension') && (
+                                <div className="row-between">
+                                    <label
+                                        className="label-drag label-2"
+                                        onMouseDown={(e) => this.handleLabelMouseDown(e, 'smooth:tension')}
+                                        title={helpTexts.selectionFill.smoothTension}>
+                                        张力
+                                    </label>
+                                    <RangeSlider
+                                        min={0}
+                                        max={100}
+                                        step={1}
+                                        value={this.state.smoothParams.tension}
+                                        onChange={(v) => this.updateSmoothParam({ tension: v })}
+                                        className="slider-track"
+                                        title={helpTexts.selectionFill.smoothTensionSlider}
+                                    />
+                                    <div className="row-start">
+                                        <div className="num-input-row">
+                                            <input
+                                                type="number"
+                                                min="0"
+                                                max="100"
+                                                step="1"
+                                                value={this.state.smoothParams.tension}
+                                                onChange={(e) => this.updateSmoothParam({ tension: Number(e.target.value) })}
+                                                title={helpTexts.selectionFill.smoothTensionInput}
+                                            />
+                                        </div>
+                                        <span className="num-unit">%</span>
+                                    </div>
+                                </div>
+                                )}
+
+                                {/* 追笔仅「追笔」模式有效；其余模式整行隐藏 */}
+                                {this.smoothParamApplies('catchUp') && (
+                                <div className="row-between">
+                                    <label
+                                        className="label-drag label-2"
+                                        onMouseDown={(e) => this.handleLabelMouseDown(e, 'smooth:catchUp')}
+                                        title={helpTexts.selectionFill.smoothCatchUp}>
+                                        追笔
+                                    </label>
+                                    <RangeSlider
+                                        min={0}
+                                        max={100}
+                                        step={1}
+                                        value={this.state.smoothParams.catchUp}
+                                        onChange={(v) => this.updateSmoothParam({ catchUp: v })}
+                                        className="slider-track"
+                                        title={helpTexts.selectionFill.smoothCatchUpSlider}
+                                    />
+                                    <div className="row-start">
+                                        <div className="num-input-row">
+                                            <input
+                                                type="number"
+                                                min="0"
+                                                max="100"
+                                                step="1"
+                                                value={this.state.smoothParams.catchUp}
+                                                onChange={(e) => this.updateSmoothParam({ catchUp: Number(e.target.value) })}
+                                                title={helpTexts.selectionFill.smoothCatchUpInput}
+                                            />
+                                        </div>
+                                        <span className="num-unit">%</span>
+                                    </div>
+                                </div>
+                                )}
+
+                                {/* 拐角判定仅「标准」模式有效；其余模式整行隐藏 */}
+                                {this.smoothParamApplies('cornerAngle') && (
+                                <div className="row-between">
+                                    <label
+                                        className="label-drag label-2"
+                                        onMouseDown={(e) => this.handleLabelMouseDown(e, 'smooth:cornerAngle')}
+                                        title={helpTexts.selectionFill.smoothCorner}>
+                                        拐角
+                                    </label>
+                                    <RangeSlider
+                                        min={0}
+                                        max={90}
+                                        step={1}
+                                        value={this.state.smoothParams.cornerAngle}
+                                        onChange={(v) => this.updateSmoothParam({ cornerAngle: v })}
+                                        className="slider-track"
+                                        title={helpTexts.selectionFill.smoothCornerSlider}
+                                    />
+                                    <div className="row-start">
+                                        <div className="num-input-row">
+                                            <input
+                                                type="number"
+                                                min="0"
+                                                max="90"
+                                                step="1"
+                                                value={this.state.smoothParams.cornerAngle}
+                                                onChange={(e) => this.updateSmoothParam({ cornerAngle: Number(e.target.value) })}
+                                                title={helpTexts.selectionFill.smoothCornerInput}
+                                            />
+                                        </div>
+                                        <span className="num-unit">°</span>
+                                    </div>
+                                </div>
+                                )}
+
+                                {/* 速度适应仅「标准」模式有效；其余模式整行隐藏 */}
+                                {this.smoothParamApplies('speedAdaptive') && (
+                                <div className="row-between">
+                                    {/* 「速度适应」是开关而非数值：与其它开关行同构（标签 + 自绘开关）。 */}
+                                    <span
+                                        className="label-4"
+                                        title={helpTexts.selectionFill.smoothSpeedAdaptive}
+                                        onClick={() => this.updateSmoothParam({ speedAdaptive: !this.state.smoothParams.speedAdaptive })}
+                                    >速度适应</span>
+                                    <ToggleSwitch
+                                        checked={this.state.smoothParams.speedAdaptive}
+                                        onChange={() => this.updateSmoothParam({ speedAdaptive: !this.state.smoothParams.speedAdaptive })}
+                                        title={helpTexts.selectionFill.smoothSpeedAdaptiveSwitch}
+                                    />
+                                </div>
+                                )}
+
+                                <div className="row-between">
+                                    <label
+                                        className="label-drag label-2"
+                                        onMouseDown={(e) => this.handleLabelMouseDown(e, 'smooth:minSampleDist')}
+                                        title={helpTexts.selectionFill.smoothSampleDist}>
+                                        间距
+                                    </label>
+                                    <RangeSlider
+                                        min={0.5}
+                                        max={4}
+                                        step={0.5}
+                                        value={this.state.smoothParams.minSampleDist}
+                                        onChange={(v) => this.updateSmoothParam({ minSampleDist: v })}
+                                        className="slider-track"
+                                        title={helpTexts.selectionFill.smoothSampleDistSlider}
+                                    />
+                                    <div className="row-start">
+                                        <div className="num-input-row">
+                                            <input
+                                                type="number"
+                                                min="0.5"
+                                                max="4"
+                                                step="0.5"
+                                                value={this.state.smoothParams.minSampleDist}
+                                                onChange={(e) => this.updateSmoothParam({ minSampleDist: Number(e.target.value) })}
+                                                title={helpTexts.selectionFill.smoothSampleDistInput}
+                                            />
+                                        </div>
+                                        <span className="num-unit">px</span>
+                                    </div>
+                                </div>
+                            </div>
+                            )}
+                        </div>
+                    </div>
+                    )}
+                </div>
+                )}
+
  {/* 新增选区改造区域 */}
                 {this.state.selectionOptionsVisible && (
                 <div className="collapse-section" data-section-id="selectionOptions">
@@ -2715,37 +3393,6 @@ title={helpTexts.selectionFill.blendMode}>
                             </div>
                             {this.state.isSelectionOptionsExpanded && (
                             <div className="collapse-content-expanded">
-                                <div className="row-between">
-                                    <label
-                                        className="label-drag label-2"
-                                        onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionSmooth')}
-title={helpTexts.selectionFill.selectionSmooth}>
-                                        平滑
-                                    </label>
-                                    <RangeSlider
-                                        min={0}
-                                        max={100}
-                                        step={1}
-                                        value={this.state.selectionSmooth}
-                                        onChange={this.handleSelectionSmoothChange}
-                                        className="slider-track"
-                                        title={helpTexts.selectionFill.selectionSmoothSlider}
-                                    />
-                                    <div className="row-start">
-                                        <div className="num-input-row">
-                                        <input
-                                            type="number"
-                                            min="0"
-                                            max="100"
-                                            value={this.state.selectionSmooth}
-                                            onChange={(e) => this.setState({ selectionSmooth: Number(e.target.value) })}
-                                                                title={helpTexts.selectionFill.selectionSmoothInput}
-                                        />
-                                        </div>
-                                        <span className="num-unit">%</span>
-                                    </div>
-                                    </div>
-                            
                                     <div className="row-between">
                                     <label
                                         className="label-drag label-2"

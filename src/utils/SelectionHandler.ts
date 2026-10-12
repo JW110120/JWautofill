@@ -1,8 +1,9 @@
 import { action, app, imaging } from "photoshop";
 
 // 选区改造参数接口
+// ⚠️ 曾经还有 selectionSmooth（「选择并遮住」的平滑边缘）。轨迹平滑现已移到
+//    「平滑选项」分区、在**输入层**由原生鼠标钩子完成，此处的平滑滑块与字段一并移除。
 export interface SelectionOptions {
-    selectionSmooth: number;
     selectionContrast: number;
     selectionExpand: number; // 改名为扩散
 }
@@ -19,7 +20,8 @@ export class SelectionHandler {
                         _value: "presetKindCustom"
                     },
                     smartBrushRadius: 0,
-                    smartBrushSmooth: options.selectionSmooth,
+                    // 固定 0：平滑已改由「平滑选项」（输入层滤波）承担，此处不再平滑边缘。
+                    smartBrushSmooth: 0,
                     smartBrushFeather: {
                         _unit: "pixelsUnit",
                         _value: 0
@@ -88,8 +90,7 @@ export class SelectionHandler {
 
     
     static shouldApplySelectionModification(options: SelectionOptions): boolean {
-        return options.selectionSmooth !== 0 || 
-               options.selectionContrast !== 0 || 
+        return options.selectionContrast !== 0 || 
                options.selectionExpand !== 0;
     }
 
@@ -356,8 +357,8 @@ export class SelectionHandler {
 
     static async applySelectionModification(options: SelectionOptions): Promise<void> {
         try {
-            // 先应用选择并遮住（包含平滑和对比）
-            if (options.selectionSmooth !== 0 || options.selectionContrast !== 0) {
+            // 先应用选择并遮住（锐度）
+            if (options.selectionContrast !== 0) {
                 await this.applySelectAndMask(options);
             }
             

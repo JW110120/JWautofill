@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    套索实时平滑的**独立守护进程**。
+
+    为什么要有第二个工程：热键与平滑必须在**进程级**解耦。此前两者共用一个进程，
+    面板的「停止 / 卸载快捷键服务」一执行两个钩子就一起消失，平滑随即显示「未连接快捷键服务」。
+    现在拆成两份 exe，各自拥有 exe 名 / WS 端口 / 安装目录 / 开机自启项 / 卸载入口。
+
+    ⚠️ 本工程**不复制** Program.cs，而是直接编译 ..\HotkeyDaemon\Program.cs，靠编译期常量
+    ROLE_SMOOTH 选择角色（见该文件顶部的「角色」段）。这样只维护一份源码，
+    不会出现「改了一侧忘了另一侧」的经典分叉。
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>JWautofillSmoothDaemon</AssemblyName>
+    <RootNamespace>JWautofillSmoothDaemon</RootNamespace>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <!--
+      DPI 感知清单（与热键角色共用 ../app.manifest）。平滑侧尤其依赖它：
+      回注坐标、低层钩子收到的 pt、WindowFromPoint 判定三者必须同为物理像素。
+    -->
+    <ApplicationManifest>../app.manifest</ApplicationManifest>
+    <!-- 角色开关：Program.cs 里所有 #if ROLE_SMOOTH 都依赖它 -->
+    <DefineConstants>$(DefineConstants);ROLE_SMOOTH</DefineConstants>
+    <!-- 仅面向 Windows（GUI 子系统 + 注册表自启），平台兼容性告警无意义 -->
+    <!--
+      ⚠️ 共享源码里含有另一角色的成员（热键侧的字段/方法）。在本角色中它们不会被调用，
+      但字段仍会被赋值 ⇒ 触发 CS0414/CS0169「已赋值但从未使用」。
+      这里刻意**只在本工程**抑制这两条，而不是给每个字段套 #if：#if 撒在字段声明上
+      极易与「字段被哪一侧读写」的判断脱节，反而制造新缺陷。方法级的角色分支
+      （Main / WatchPhotoshop / getState）已经用 #if 精确控制，行为不受影响。
+    -->
+    <NoWarn>$(NoWarn);CA1416;CS0414;CS0169;CS0649</NoWarn>
+    <!--
+      排除同目录下 SDK 默认通配可能捞到的其它源码：本工程目录是空的，
+      但要显式排掉父级 HotkeyDaemon 的 obj/bin（含生成的 .cs，会撞 CS0579 重复特性）。
+    -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);../HotkeyDaemon/obj/**;../HotkeyDaemon/bin/**</DefaultItemExcludes>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- 唯一一份源码：与热键角色共用，靠 ROLE_SMOOTH 分岔 -->
+    <Compile Include="../HotkeyDaemon/Program.cs" />
+  </ItemGroup>
+</Project>

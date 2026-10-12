@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  两个守护进程（JWautofillHotkeyDaemon / JWautofillSmoothDaemon）**共用**的一份清单。
+
+  ⛔ 为什么必须有 DPI 感知：套索平滑的「回注」用 SendInput 的
+     MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK，其 dx/dy 是相对**虚拟桌面物理像素**
+     的 0..65535 归一化值，而归一化用的分母来自 GetSystemMetrics(SM_CXVIRTUALSCREEN / …)。
+     对 DPI-unaware 进程，GetSystemMetrics 返回的是**被系统缩放过的逻辑尺寸**（125% 缩放下
+     比物理值小），于是「分母错 + 分子按物理算」⇒ 光标被画到错误位置。
+     本机是 3440x1440 / 100% 缩放，测不出这个错位；换一台 125% 的机器立刻显形。
+     声明 PerMonitorV2 后，本进程内 GetSystemMetrics / GetCursorPos / 低层钩子的 pt /
+     WindowFromPoint / GetWindowRect **全部统一为物理像素**，与 SendInput 的口径一致。
+
+  采用清单（而不是只在 Main 里调 SetProcessDpiAwarenessContext）的原因：
+  清单在**进程加载期**生效，早于任何运行时初始化；Main 里那次调用只作兜底（见 EnsureDpiAwareness）。
+-->
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity type="win32" name="JWautofill.Daemon" version="1.0.0.0" />
+
+  <!-- ⛔ 这一节不能省：缺了 Win10 的 supportedOS，系统会把进程当成「为旧版 Windows 写的程序」，
+       下面的 dpiAwareness 会被**整条忽略**（经典坑，且不会有任何报错）。 -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" /><!-- Windows 10 / 11 -->
+      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}" /><!-- Windows 8.1 -->
+      <supportedOS Id="{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}" /><!-- Windows 8 -->
+      <supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}" /><!-- Windows 7 -->
+    </application>
+  </compatibility>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <!-- Win10 1607+ 首选：PerMonitorV2（支持多屏不同缩放） -->
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <!-- Win8.1 回退项：老系统读不到上面那条时用这个 -->
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+    </windowsSettings>
+  </application>
+
+  <!-- ⛔ 必须显式 asInvoker：注入 Photoshop / 装低层钩子都只需要**与 PS 同等的完整性级别**，
+       一旦声明成 requireAdministrator 就会在每次启动时弹 UAC，而且要管理员才能装钩子这件事本身
+       会让「随插件自动拉起」变得不可用。 -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>

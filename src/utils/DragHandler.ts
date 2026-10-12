@@ -24,17 +24,12 @@ export class DragHandler {
             max: 20,
             step: 0.5
         },
-        selectionSmooth: {
-            min: 0,
-            max: 100,
-            step: 1
-        },
         selectionContrast: {
             min: 0,
             max: 100,
             step: 1
         },
-        // 扩散：0~100，与「平滑 / 锐度」同为选区改造的百分比滑块
+        // 扩散：0~100，与「锐度」同为选区改造的百分比滑块
         selectionExpand: {
             min: 0,
             max: 100,
@@ -44,7 +39,17 @@ export class DragHandler {
             min: -100,
             max: 100,
             step: 1
-        }
+        },
+        // ===== 套索实时平滑 =====
+        // 键名一律带 `smooth:` 前缀：这些值嵌在 state.smoothParams 里，
+        // 无法用 `{ [target]: v }` 的展开式写法直接写回 ⇒ app.tsx 的 handleLabelMouseDown /
+        // handleMouseMove 按前缀分岔。前缀口径两处必须一致。
+        'smooth:strength': { min: 0, max: 100, step: 1 },
+        'smooth:radius': { min: 1, max: 40, step: 1 },
+        'smooth:tension': { min: 0, max: 100, step: 1 },
+        'smooth:catchUp': { min: 0, max: 100, step: 1 },
+        'smooth:cornerAngle': { min: 0, max: 90, step: 1 },
+        'smooth:minSampleDist': { min: 0.5, max: 4, step: 0.5 }
     };
 
     static calculateNewValue(

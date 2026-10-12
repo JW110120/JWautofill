@@ -13,8 +13,20 @@
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <!--
+      DPI 感知清单（两个角色共用一份，见 ../app.manifest 顶部的说明）。
+      ⛔ 绝对注入的坐标归一化依赖 GetSystemMetrics，DPI-unaware 进程在非 100% 缩放的机器上会错位。
+      清单在进程加载期生效；Main 里的 EnsureDpiAwareness() 只是兜底。
+    -->
+    <ApplicationManifest>../app.manifest</ApplicationManifest>
     <!-- 守护进程仅面向 Windows（GUI 子系统 + 注册表自启），平台兼容性告警无意义 -->
-    <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <!--
+      ⚠️ 两个工程共用一份 Program.cs，靠编译期常量分岔角色 ⇒ 必然有「只属于另一角色」的成员在本角色中
+      只被赋值、不被读取（如平滑侧的回注线程与鼠标钩子字段）。这是拆分的**固有代价**，不是缺陷；
+      给每个字段套 #if 反而会让「字段被哪一侧读写」的判断与声明脱节。
+      SmoothDaemon.csproj 里有对称的一份（抑制的是热键侧字段）。
+    -->
+    <NoWarn>$(NoWarn);CA1416;CS0414;CS0169;CS0649</NoWarn>
     <!-- 子项目 FixKeyboard/ 不参与本工程编译：它有独立入口点（独立 exe），
          其 Program.cs 与 obj\**\*.cs 会被 SDK 默认的 **\*.cs 通配捞进来，
          造成 CS0017（多入口点）与 CS0579（TargetFrameworkAttribute 重复）假错。 -->
