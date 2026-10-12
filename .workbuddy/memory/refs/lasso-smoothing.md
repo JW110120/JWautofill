@@ -193,6 +193,37 @@ _ox += distX * k;
 - ⚠️ 判定手法（30 秒，零代码，**仍需真机用手握笔跑一次**）：`node analysis/ws-tablet-probe.cjs`，
   按提示先用鼠标划、再用笔划，看 `callbacks` 增量；笔段增量为 0 ⇒ 确认绕过鼠标通路。
 
+### 6.1 P3 最小可用版：注入 PS 改写 Wintab 包坐标（2026-10-12 落地）
+
+- **架构**：面板 —WS(18924)→ `SmoothDaemon` —命名共享内存→ `JWautofillWintabHook.dll`（**在 PS 进程内**）。
+  平滑**不在守护进程里**：坐标只在 PS 进程内的 `WTPacketsGet` 缓冲区，进程外拿不到 ⇒ 只能注入就地改写。
+- **配置通道** = `Local\JWautofillWintabSmooth`（32 个 32 位槽；C# 侧 `PenHook` 槽位表必须与 C 侧
+  `enum CFG_I_*` **逐项对应**）。detour 里读配置只是**普通内存读** ⇒ 守住「detour 零 I/O」。
+- ⛔⛔ **心跳防呆**：守护进程每秒写 `GetTickCount()`（**必须自开机起的毫秒口径**，两侧同源才能相减），
+  DLL 侧 3 秒无更新即**自动停手**。否则守护进程被强杀后共享内存不消失、`enabled` 永远停在 1，
+  PS 会被一段「没人管」的平滑一直改着坐标。
+- ⛔ **标定必须交叉验证后才允许写**：`WTGetA` 读 `lcPktData` 掩码推算布局（`pkContext` 8/4 两种尺寸
+  都用**真实数据**裁决）＋「序号逐包 +1」验数据；另有**盲扫**独立找同一对 `(stride, offSerial)`，
+  两者必须一致。不一致 ⇒ `state=2`、**只 dump 原始字节绝不改写**（写错偏移会污染 buttons ⇒ 幽灵按键）。
+- ⛔ **线程冻结表溢出 ⇒ 放弃改写**（只冻一部分等于没冻，撕裂会跳野地址）。
+- ⛔ **`try_calibrate` 是从 detour 里调的 ⇒ 绝不能落盘**：`logf` 会 `WriteFile + FlushFileBuffers`
+  跑在 PS 取包线程上，且 `log_write` 还会自旋抢日志锁。改为只拼内存缓冲（`calib_logf`），
+  由 worker 补写（`calib_publish` 统一抬 ready）。
+- **算法（C 版）**：与守护进程 Mode 0 同源，两处刻意差异 —— `k = 1.0 - 0.85·(t/100)`（线性，避免 libm 的
+  `pow`）；**不做 `MinSampleDist` 抽稀**（Wintab 包必须原样写回，抽掉会打乱 PS 时间轴）。
+  保留速度低通 / 拐角守卫 / 速度自适应 / 滞后上限 / 起笔锚定。输出恒为「上一输出」与「本包输入」的
+  凸组合 ⇒ **数学上有界**，不会产生越界坐标。
+- ⛔⛔ **两层能力探测不可合并**：套索平滑的探针（「有没有回 `smoothState`」）对**旧版守护进程是通过的**
+  ——它支持套索平滑、会正常回帧，只是帧里没有 `pen`。只看 `unsupported` ⇒ 笔开关显示成**可点**，
+  点下去指令被静默丢弃、开关弹回 ⇒ 又一个「点了没反应」。判据因此下沉一层：
+  **回帧里有没有出现过 `pen` 字段** ⇒ `LassoSmoothStatus.penUnsupported`。
+- ⛔ **已装副本不会自己更新**：换新版只有「面板平滑开关**先关再开**」（关=发 `shutdown` 杀进程，
+  开=从**插件目录**拉起 → 自安装覆盖 `%LOCALAPPDATA%\JWautofill\smooth\` → 从安装目录重跑）。
+  改 `Program.cs` 后同样是**两步**：先 `dotnet publish` 再 `yarn build`（**顺序不能反**）。
+- **产物**：`native/WintabHook/{wintab_hook.c,build.sh}`（`-Wall -Wextra` 零告警）、
+  `Program.cs` 内 `#if ROLE_SMOOTH` 的 `PenHook`、`src/hotkey/SmoothBridge.ts` 的 `sendPenSmooth`。
+  诊断日志：`%TEMP%\jwwh-<Photoshop 的 pid>.log`（注意是 **PS** 的 pid，不是守护进程的）。
+
 ## 7. 与安全软件的相互干扰
 
 - ⛔ 遇到「钩子装不上 / 输入卡顿 / 进程杀不掉」，**第一步查安全软件**：
@@ -221,6 +252,39 @@ _ox += distX * k;
 | `pointer-accel-probe.py` | 量化指针加速对相对注入的位移整形（读 `SPI_GETMOUSE`）。⚠️ **必须绕过沙箱**：沙箱会直接 SIGTERM 任何调用 `SendInput` 的进程；等效测量改用守护进程的 `pointerTest` |
 | `spike/jwprobe.{c,dll}` | 最小探针 DLL：`DllMain` 只 `CreateThread` 写证据文件 `%TEMP%\jwprobe-<pid>.log`（无 Wintab 逻辑）。构建：`zig cc -target x86_64-windows-gnu -shared -O2`（用短路径的 zig.exe） |
 | `spike/inject.py` | **DLL 注入器／卸载器**：`inject.py <pid> [dll]` 注入；`--eject <pid> <dll_name>` 按名卸载。⛔ **不要用 `GetExitCodeThread` 取远程 `LoadLibraryW` 的返回值**（32 位截断 ⇒ 卸载必失败且无报错）；注入是否成功看证据文件，卸载基址靠 `EnumProcessModulesEx` |
+| `spike/recon_wintab.py` | **改代码段前的零风险侦察**：本进程 `LoadLibrary` 后读导出序言字节 + 与目标进程同 RVA 逐字节对照（判定「出厂代码 vs 已被 hook」），带极简 x64 长度解码 |
+| `spike/recon_thunk.py` | 磁盘节表 RVA→offset + 追 `E9 rel32` 跳转链（钉死「入口桩 → 真实现体」两层） |
+| `spike/wtprobe.{c,dll}` | **P2 探针**：10 个 Wintab 导出入口的 inline hook（计数）+ 改写期线程冻结 + `wtprobe_{selftest,reset,unhook,version}` 导出 |
+| `spike/inject.py` 命令 | `--verify <pid>` 三层复核（入口改写 → 跳向模块外 → 转发桩 `mov rax,imm64;jmp rax`）；`--selftest` 从入口真调一次证明链路；`--reset` 清零基线；`--unhook`／`--eject`（**eject 会自动先 unhook**） |
+
+### ★ 可复用结论：Wintab 系 DLL 的导出入口 = 5 字节 `E9` 桩（2026-10-12 实测）
+
+`WinTab32.dll` / `Wacom_Tablet.dll` 的**每个导出入口本体只有一条 5 字节 `E9 rel32`**，
+磁盘 == 内存（出厂代码，连 Wacom 自带的 `MouseHookPro64.8li` 都没动它），`E9` 的目标是真实现体。
+
+⇒ **想做输入层拦截，这里是近乎零风险的落点**：
+① 一条独立完整的指令被覆盖 ⇒ **不需要长度解码器、不需要搬迁指令**；
+② `impl` 就是跳转终点 ⇒ **直接 call impl 与原语义逐位等价，不需要跳板**；
+③ 入口是所有调用方的必经之路（静态 IAT / `GetProcAddress` / 插件）⇒ **只钩这一处就够**。
+唯一约束是 `E9 rel32` 只有 ±2GB 射程 ⇒ 必须在目标附近扫一块地皮放 `mov rax,imm64;jmp rax` 转发桩。
+
+⛔ 但三条硬约束不能省：
+- 动手前**必须**验 `entry[0]==0xE9` 且 `impl` 在同一映像内，不满足就跳过（别假定将来 PS/驱动不改编译方式）。
+- 改写 5 字节**不是原子操作** ⇒ 必须挂起其它线程（PS **151** 个线程、轮询 50+Hz），
+  否则撕裂读会跳野地址。窗口内**只放不需要 loader lock 的调用**，`LoadLibrary`/`GetProcAddress` 放窗口外。
+- 卸载前**必须先还原字节**再 `FreeLibrary`，否则入口里留着指向已卸载模块的 `jmp`，进程必崩。
+
+⛔ **`Wintab32` 是 `Wacom_Tablet` 的上层包装**（实测：只调 `Wintab32!WTInfoA` 会让
+`Wacom_Tablet!WTInfoA` 计数先变 1）⇒ 同时钩两层会**双计数**，实际处理只能放一层（实测两者 `pkts` **严格相等** 3158=3158）。
+
+★ **PS 的笔通路 = 轮询 `WTPacketsGet`（唯一咽喉）**：注入后用户没碰笔，500ms 内 PS 已调
+`WTPacketsGet` ~29 次（`cMaxPkts=128`）⇒ 是**轮询取包队列**，不是事件推送。
+**2026-10-12 笔测（P2 终验）**：复位后**只有 `WTPacketsGet` 被调用**
+（`WTPacket` / `WTPacketsPeek` / `WTDataGet` / `WTInfoA` 调用数**全 0**）；空转 **5.2 分钟 `pkts=0`**
+→ 用笔划几笔，30.6 秒内 `pkts` **0→3158**（≈204 包/秒，5 段 0.8~8.2s）→ 停笔后 **129 秒 `pkts` 冻结**
+⇒ **钩子确凿落在笔的数据流上且不假阳性**。
+⇒ **P3 只钩 `WTPacketsGet` 一个函数、只钩外层 `Wintab32` 一层**，在 detour `call impl` 之后改写 `lpPkts`。
+卸载复核：`unhook` 还原 **10/10**，两 DLL ×5 入口逐字节 **== 磁盘**。PS 全程存活。
 
 ⚠️ **沙箱限制（本轮踩到）**：本地 agent 沙箱会 **SIGTERM 掉任何尝试注入输入的进程**，
 并**屏蔽 `reg.exe` / `wsl.exe` / 从 bash 调用 PowerShell**。

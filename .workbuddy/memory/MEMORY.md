@@ -131,11 +131,17 @@
 - 一眼要用的四条：① `SendInput` 出回调；② 回注用绝对坐标；③ 参与渲染的判据进 `state`；
   ④ 不适用当前模式的参数**整行隐藏**（`smoothParamApplies()`，切换模式后要 `resyncNativeWidgets()`）
   —— 这是对「不隐藏只禁用」铁律的**局部豁免**。
-- 面板**只有一条状态条**（`notify-bar` + `indicator` + `notify-text` + 开关）：总开关与「平滑服务」开关
-  已二合一（2026-10-12），与「笔刷热键」服务条同款；四档色 + 中性待命，判据只写一处、指示点靠映射。
+- 面板**两条状态条**（`notify-bar` + `indicator` + `notify-text` + 开关）：上=套索平滑（总开关与
+  「平滑服务」开关**已二合一**，2026-10-12），下=**笔平滑**；四档色 + 中性待命，判据只写一处、指示点靠映射。
 - ✅ **②a 注入可行性已实测通过（2026-10-12）**：`CreateRemoteThread`+`LoadLibraryW` 能进 PS 2026，
   `QQPCRTP`+`MsMpEng` 不拦，注入后 PS 存活、可 `FreeLibrary` 卸干净（工具见 `analysis/_tools/spike/`）。
   ⛔ 远程 `LoadLibraryW` 的 HMODULE **不能用 `GetExitCodeThread` 取**（32 位截断，静默失效）。
+- ✅ **②a P3 最小可用版已落地（2026-10-12）**：`native/WintabHook/` 的注入 DLL inline-hook
+  `Wintab32!WTPacketsGet`（**唯一咽喉**，`Wintab32` 包装 `Wacom_Tablet` ⇒ 只能钩外层一层），
+  面板经 `SmoothDaemon` 走**命名共享内存**下发开关/强度。↔ `refs/lasso-smoothing.md` §6.1。
+  ⛔ 四条铁律：① detour 内**零 I/O**（标定日志也只拼内存、由 worker 补写）；② **心跳防呆**（3 秒无更新
+  自动停手）；③ 标定**双证据交叉验证**，不一致只 dump 不改写；④ **两层能力探测不可合并**
+  （`unsupported` 与 `penUnsupported` 分开，否则旧版服务会让笔开关「点了没反应」）。
 - ✅ **DPI 感知已落地**：`native/app.manifest`（两角色共用，`PerMonitorV2` + Win10 `supportedOS`
   + `asInvoker`）+ Main 首行 `EnsureDpiAwareness()` 兜底；`getState` 报 `dpiAwareness` 字段。
   ⛔ 100% 缩放的机器**看不出差别** —— 有人报「光标画偏」先查它。

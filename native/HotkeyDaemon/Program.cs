@@ -214,6 +214,336 @@ namespace JWautofillDaemon
         }
     }
 
+#if ROLE_SMOOTH
+    /// <summary>
+    /// 笔输入层实时平滑（P3）：守护进程侧。
+    ///
+    /// 为什么要有第二条通路：数位板在 PS 上走 **Wintab**（`PSUserConfig.txt` 里
+    /// `UseSystemStylus 0`），笔**根本不产生** `WM_MOUSEMOVE` ⇒ `WH_MOUSE_LL` 全程不被
+    /// 征询（P1/P2 已实测闭环）。那条路改的是**光标**；这条路改的是 **PS 进程内的包坐标**。
+    ///
+    /// 分工（为什么这么切）：
+    ///   - **开关与参数**留在守护进程（面板 → WS → 本类 → 命名共享内存）；
+    ///   - **滤波与改写**必须在 PS 进程内做 —— 50Hz 的取包节奏下，任何跨进程往返都是灾难。
+    ///   - 共享内存是唯一双向通道：读侧只是普通内存读，**不产生任何系统调用**。
+    ///
+    /// ⛔ 心跳防呆：守护进程被强杀时共享内存**不会**消失（hook DLL 还持有句柄），
+    ///    `enabled` 会一直留在 1。所以这里每秒写一次心跳，DLL 侧超过 3 秒没看到就自动停手。
+    /// ⛔ 注入只在**功能开启时**发生：关闭态绝不碰 PS 的代码段（改过就还原）。
+    /// </summary>
+    internal static class PenHook
+    {
+        private const string LogPrefix = "[PenHook] ";
+        private const string MapName = "Local\\JWautofillWintabSmooth";
+        private const int NLONGS = 32;
+        private const int Stride = 4;
+        private const int Magic = 0x57414A57;
+
+        // ⛔ 槽位索引必须与 native/WintabHook/wintab_hook.c 的 enum CFG_I_* 逐项对应。
+        private const int I_MAGIC = 0, I_ENABLED = 1, I_STRENGTH = 2, I_RADIUSPCT = 3,
+                          I_FLAGS = 4, I_SEQ = 5, I_CMDSEQ = 6, I_CMD = 7, I_CMDACK = 8,
+                          I_STATE = 9, I_CALLS = 10, I_PACKETS = 11, I_SMOOTHED = 12,
+                          I_STRIDE = 13, I_OFFX = 14, I_OFFY = 15, I_OFFSER = 16,
+                          I_AXISMAX = 17, I_PID = 18, I_FROZE = 19, I_HEARTBEAT = 20;
+
+        private static System.IO.MemoryMappedFiles.MemoryMappedFile? _mmf;
+        private static System.IO.MemoryMappedFiles.MemoryMappedViewAccessor? _va;
+        private static readonly object _lk = new();
+        private static readonly HashSet<int> _injected = new();
+        private static int _started;
+
+        private static volatile bool _enabled;
+        private static int _strength = 40;
+        private static int _radiusPct = 25;   // 万分之一·X 轴上界 ⇒ 25 ≈ 0.25%
+        private static int _flags = 1;        // bit0 = 速度自适应
+        private static int _cmdSeq;
+        private static int _lastErr;
+        private static string _dllPath = "";
+
+        public static bool Enabled => _enabled;
+        public static int Strength => _strength;
+
+        /// <summary>hook DLL 的绝对路径（定位不到则为空串）。自安装时据此把 DLL 同步到安装目录。</summary>
+        public static string DllPath { get { EnsureDllPath(); return _dllPath; } }
+
+        // ------------------------------------------------------------ 共享内存
+        private static int Rd(int slot)
+        {
+            try { return _va?.ReadInt32(slot * Stride) ?? 0; } catch { return 0; }
+        }
+
+        private static void Wr(int slot, int v)
+        {
+            try { _va?.Write(slot * Stride, v); } catch { /* 访问器已释放：忽略 */ }
+        }
+
+        private static void EnsureInit()
+        {
+            if (_va != null) return;
+            lock (_lk)
+            {
+                if (_va != null) return;
+                try
+                {
+                    // 命令序号从一个「不像 0」的值起步：hook 首次启动会把当前序号当基线，
+                    // 若两个值恰好相等就会漏掉第一条命令（重挂时的经典坑）。
+                    _cmdSeq = (int)(DateTime.UtcNow.Ticks & 0x00FFFFFF);
+                    var mmf = System.IO.MemoryMappedFiles.MemoryMappedFile.CreateOrOpen(
+                        MapName, NLONGS * Stride);
+                    _mmf = mmf;
+                    _va = mmf.CreateViewAccessor(0, NLONGS * Stride);
+                    Wr(I_MAGIC, Magic);
+                    Wr(I_ENABLED, 0);
+                    Wr(I_STRENGTH, _strength);
+                    Wr(I_RADIUSPCT, _radiusPct);
+                    Wr(I_FLAGS, _flags);
+                    Wr(I_HEARTBEAT, unchecked((int)Environment.TickCount64));
+                    Console.WriteLine(LogPrefix + "共享内存已就绪: " + MapName);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(LogPrefix + "共享内存建立失败（笔平滑将不可用）: " + ex.Message);
+                }
+            }
+        }
+
+        /// <summary>由 Main 调用一次：建共享内存 + 起心跳 + 兜底卸载。</summary>
+        public static void Init()
+        {
+            if (Interlocked.Exchange(ref _started, 1) != 0) return;
+            EnsureInit();
+            var hb = new Thread(Heartbeat) { IsBackground = true, Name = "笔平滑心跳" };
+            hb.Start();
+            // 进程退出的兜底：哪怕走的是 Environment.Exit 之外的路径，也先把代码段还原。
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => { try { RequestUnhook(800); } catch { } };
+        }
+
+        private static void Heartbeat()
+        {
+            while (true)
+            {
+                Thread.Sleep(1000);
+                // ⛔ 必须用「自开机起的毫秒」：smooth 侧 wintab_hook.c 读的是 GetTickCount()，
+                //    两者同源才能直接相减；用 DateTime 之类的口径会立刻被判成心跳超时。
+                Wr(I_HEARTBEAT, unchecked((int)Environment.TickCount64));
+            }
+        }
+
+        // -------------------------------------------------------------- 命令
+        private static void SendCommand(int cmd)
+        {
+            if (_va == null) return;
+            // ⛔ 顺序：先写命令体、再抬序号。反过来会出现「序号已新、命令体还是旧」的窗口，
+            //    hook 侧可能把陈旧命令当成新命令执行（例如刚点开启就被卸钩）。
+            Wr(I_CMD, cmd);
+            _cmdSeq++;
+            Wr(I_CMDSEQ, _cmdSeq);
+        }
+
+        // ------------------------------------------------------------ 对外接口
+        /// <summary>面板下发的开关/强度。strength &lt; 0 表示不改强度。</summary>
+        public static void Set(bool on, int strength)
+        {
+            EnsureInit();
+            lock (_lk)
+            {
+                if (strength >= 0 && strength <= 100) _strength = strength;
+                _enabled = on;
+                Wr(I_ENABLED, on ? 1 : 0);
+                Wr(I_STRENGTH, _strength);
+                Wr(I_RADIUSPCT, _radiusPct);
+                Wr(I_FLAGS, _flags);
+                Wr(I_SEQ, Rd(I_SEQ) + 1);
+            }
+            if (on)
+            {
+                SyncInjection();     // 先把 DLL 送进 PS（新进程）
+                SendCommand(1);      // 再把「挂载」命令递给它（已在 PS 里的旧实例也吃得到）
+            }
+            else
+            {
+                SendCommand(2);      // 关闭 ⇒ 立即还原字节；DLL 留在 PS 里（下次开启秒开）
+            }
+            Console.WriteLine(LogPrefix + (on ? "已开启" : "已关闭") + "（强度 " + _strength + "）");
+        }
+
+        /// <summary>周期性巡检：把 DLL 注入到每一个（新出现的）PS 进程。由 WatchPhotoshop 调。</summary>
+        public static void SyncInjection()
+        {
+            if (!_enabled) return;              // ⛔ 关闭态一律不碰 PS
+            EnsureInit();
+            EnsureDllPath();
+            if (string.IsNullOrEmpty(_dllPath)) return;
+
+            var pids = new List<int>();
+            try
+            {
+                foreach (var p in Process.GetProcessesByName("photoshop"))
+                {
+                    try { pids.Add(p.Id); } catch { }
+                    try { p.Dispose(); } catch { }
+                }
+            }
+            catch { return; }
+
+            lock (_lk)
+            {
+                _injected.RemoveWhere(id => !pids.Contains(id));   // PS 换进程 ⇒ 记录作废
+                foreach (int id in pids)
+                {
+                    if (_injected.Contains(id)) continue;
+                    if (Inject(id))
+                    {
+                        _injected.Add(id);
+                        Console.WriteLine(LogPrefix + "已注入 PS pid=" + id + "  dll=" + _dllPath);
+                    }
+                    else
+                    {
+                        Console.WriteLine(LogPrefix + "注入 PS pid=" + id + " 失败（Win32 错误 "
+                                          + _lastErr + "）—— 可能被安全软件拦截");
+                    }
+                }
+            }
+        }
+
+        /// <summary>请求 PS 侧的 hook 还原代码段（幂等）。关闭服务/卸载/退出前调用。</summary>
+        public static void RequestUnhook(int timeoutMs = 1500)
+        {
+            if (_va == null) return;
+            int seq;
+            lock (_lk) { _cmdSeq++; seq = _cmdSeq; Wr(I_CMD, 2); Wr(I_CMDSEQ, _cmdSeq); }
+            var sw = Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < timeoutMs)
+            {
+                if (Rd(I_CMDACK) == seq) return;
+                Thread.Sleep(40);
+            }
+        }
+
+        /// <summary>注入器状态快照（并进 smoothState / getState，排障先看这里）。</summary>
+        public static object Snapshot()
+        {
+            int[] pids;
+            lock (_lk) { pids = new List<int>(_injected).ToArray(); }
+            return new
+            {
+                enabled = _enabled,
+                strength = _strength,
+                radiusPct = _radiusPct,
+                dll = _dllPath,
+                injectedPids = pids,
+                // 0=未挂 1=生效 2=标定失败 3=已卸载
+                state = Rd(I_STATE),
+                calls = Rd(I_CALLS),
+                packets = Rd(I_PACKETS),
+                smoothed = Rd(I_SMOOTHED),
+                stride = Rd(I_STRIDE),
+                offX = Rd(I_OFFX),
+                offY = Rd(I_OFFY),
+                offSerial = Rd(I_OFFSER),
+                axisMax = Rd(I_AXISMAX),
+                hookPid = Rd(I_PID),
+                frozeThreads = Rd(I_FROZE),
+                lastError = _lastErr,
+            };
+        }
+
+        // -------------------------------------------------------- DLL 定位
+        private static void EnsureDllPath()
+        {
+            if (!string.IsNullOrEmpty(_dllPath)) return;
+            try
+            {
+                string bd = AppContext.BaseDirectory;
+                string[] cands =
+                {
+                    Path.Combine(bd, "JWautofillWintabHook.dll"),                       // 安装目录（与 exe 同级）
+                    Path.Combine(bd, "..", "..", "WintabHook", "publish", "JWautofillWintabHook.dll"), // 插件目录布局
+                };
+                foreach (var c in cands)
+                {
+                    string f = Path.GetFullPath(c);
+                    if (File.Exists(f)) { _dllPath = f; return; }
+                }
+            }
+            catch { }
+        }
+
+        // ------------------------------------------------------------ 注入
+        private const uint PROCESS_NEEDED = 0x0002 /*CREATE_THREAD*/ | 0x0008 /*VM_OPERATION*/
+                                          | 0x0010 /*VM_READ*/ | 0x0020 /*VM_WRITE*/
+                                          | 0x0400 /*QUERY_INFORMATION*/;
+        private const uint MEM_COMMIT = 0x1000, MEM_RESERVE = 0x2000, MEM_RELEASE = 0x8000;
+        private const uint PAGE_READWRITE = 0x04;
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr hObject);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr VirtualAllocEx(IntPtr hProcess, IntPtr lpAddress, IntPtr dwSize,
+                                                    uint flAllocationType, uint flProtect);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool VirtualFreeEx(IntPtr hProcess, IntPtr lpAddress, IntPtr dwSize, uint dwFreeType);
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern IntPtr GetModuleHandleW(string lpModuleName);
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Ansi)]
+        private static extern IntPtr GetProcAddress(IntPtr hModule, string lpProcName);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer,
+                                                      IntPtr nSize, out IntPtr lpNumberOfBytesWritten);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr CreateRemoteThread(IntPtr hProcess, IntPtr lpThreadAttributes,
+                                                        IntPtr dwStackSize, IntPtr lpStartAddress,
+                                                        IntPtr lpParameter, uint dwCreationFlags,
+                                                        out uint lpThreadId);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
+
+        /// <summary>
+        /// 教科书四步：OpenProcess → VirtualAllocEx → WriteProcessMemory(路径) → CreateRemoteThread(LoadLibraryW)。
+        ///
+        /// 为什么取 LoadLibraryW 的地址不必远程解析：kernel32.dll 在同一会话内映射到**相同基址**
+        /// （KnownDLL 共享映像）⇒ 本进程 GetProcAddress 得到的地址在目标进程同样有效。
+        /// ⛔ 本进程必须是 x64（csproj 已固定 win-x64），否则地址在 64 位 PS 里无意义。
+        /// </summary>
+        private static bool Inject(int pid)
+        {
+            IntPtr h = IntPtr.Zero, mem = IntPtr.Zero;
+            try
+            {
+                h = OpenProcess(PROCESS_NEEDED, false, pid);
+                if (h == IntPtr.Zero) { _lastErr = Marshal.GetLastWin32Error(); return false; }
+
+                byte[] bytes = System.Text.Encoding.Unicode.GetBytes(_dllPath + "\0");
+                mem = VirtualAllocEx(h, IntPtr.Zero, (IntPtr)bytes.Length, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+                if (mem == IntPtr.Zero) { _lastErr = Marshal.GetLastWin32Error(); return false; }
+                if (!WriteProcessMemory(h, mem, bytes, (IntPtr)bytes.Length, out _))
+                { _lastErr = Marshal.GetLastWin32Error(); return false; }
+
+                IntPtr loadLib = GetProcAddress(GetModuleHandleW("kernel32.dll"), "LoadLibraryW");
+                if (loadLib == IntPtr.Zero) { _lastErr = Marshal.GetLastWin32Error(); return false; }
+
+                IntPtr th = CreateRemoteThread(h, IntPtr.Zero, IntPtr.Zero, loadLib, mem, 0, out _);
+                if (th == IntPtr.Zero) { _lastErr = Marshal.GetLastWin32Error(); return false; }
+                WaitForSingleObject(th, 5000);
+                CloseHandle(th);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(LogPrefix + "注入异常: " + ex.Message);
+                return false;
+            }
+            finally
+            {
+                if (mem != IntPtr.Zero && h != IntPtr.Zero) VirtualFreeEx(h, mem, IntPtr.Zero, MEM_RELEASE);
+                if (h != IntPtr.Zero) CloseHandle(h);
+            }
+        }
+    }
+#endif
+
     internal static class Win32
     {
         public const int WM_HOTKEY = 0x0312;
@@ -452,7 +782,7 @@ namespace JWautofillDaemon
     internal static class Program
     {
         // 构建版本标识：用于区分安装目录里的新旧 daemon（历史上两次因版本错位误判问题）
-        internal const string Version = "2026-10-12.6";
+        internal const string Version = "2026-10-12.7";
 
         // ===== 角色（编译期决定：一份源码 → 两个**互不共享**的独立产物）=====
         // ⛔ 为什么必须走到进程级：热键与平滑此前共用一个进程，于是面板的「停止 / 卸载快捷键服务」
@@ -490,6 +820,7 @@ namespace JWautofillDaemon
 #if ROLE_SMOOTH
             "smooth",           // 套索实时平滑（鼠标低层钩子 + 回注）
             "smoothState",      // 平滑健康状态上报
+            "penSmooth",        // 笔输入层平滑（注入 PS 改 Wintab 包坐标）
             "watchdogs",        // 独立看护线程（线程存活探针 + 熔断自愈）
 #else
             "hotkey",           // 全局键盘钩子（热键 / 录制 / 退格删除）
@@ -925,6 +1256,33 @@ namespace JWautofillDaemon
                                 catch { }
                             }
                             File.Copy(self, InstalledExePath, true);
+#if ROLE_SMOOTH
+                            // 笔平滑 hook DLL 必须与 exe **同目录**（DLL 侧按 BaseDirectory 找共享内存
+                            // 与自身；注入时给的是绝对路径）。装到安装目录后，从安装目录运行也能找到它。
+                            // ⚠️ 若 PS 此刻正加载着旧 DLL，覆盖会失败（文件锁）—— 记一条日志即可，
+                            //    旧副本仍可用，重启 PS 后再次自安装会自动补齐。
+                            try
+                            {
+                                var hookDll = PenHook.DllPath;
+                                if (!string.IsNullOrEmpty(hookDll))
+                                {
+                                    string dst = Path.Combine(InstallDir, "JWautofillWintabHook.dll");
+                                    bool same = false;
+                                    try
+                                    {
+                                        same = File.Exists(dst) && string.Equals(GetFileHash(hookDll),
+                                                GetFileHash(dst), StringComparison.OrdinalIgnoreCase);
+                                    }
+                                    catch { same = false; }
+                                    if (!same)
+                                    {
+                                        File.Copy(hookDll, dst, true);
+                                        Console.WriteLine(LogPrefix + " 已同步笔平滑 hook DLL 到安装目录");
+                                    }
+                                }
+                            }
+                            catch (Exception ex) { Console.WriteLine(LogPrefix + " 笔平滑 DLL 同步失败: " + ex.Message); }
+#endif
                             if (stopped > 0)
                                 Console.WriteLine(LogPrefix + " 已停掉并等待 " + stopped + " 个旧副本退出，随后更新安装目录副本");
                         }
@@ -1036,6 +1394,11 @@ namespace JWautofillDaemon
             try
             {
                 Console.WriteLine(LogPrefix + " 开始卸载…");
+#if ROLE_SMOOTH
+                // 卸载前**先**把 PS 里的 hook 还原：否则卸载完 PS 还留着一截被改过的代码段
+                // （DLL 已被删除，钩子却还在，且共享内存也没了参考）。幂等，关着也安全。
+                try { PenHook.Set(false, -1); PenHook.RequestUnhook(1200); } catch { }
+#endif
                 try
                 {
                     using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
@@ -1208,6 +1571,12 @@ namespace JWautofillDaemon
 
             _ = Task.Run(() => RunWebSocketServer());
             _ = Task.Run(WatchPhotoshop);
+
+#if ROLE_SMOOTH
+            // 笔输入层平滑（Wintab 通路）：建共享内存 + 起心跳线程。
+            // 注入不在这里做 —— 由 WatchPhotoshop 的巡检触发（且只在功能开启时）。
+            PenHook.Init();
+#endif
 
 #if !ROLE_SMOOTH
             // 热键侧需要一个消息窗口承载「钩子 → 主线程」的线程消息（WM_HOTKEY_HIT）。
@@ -1477,6 +1846,10 @@ namespace JWautofillDaemon
                     try { psRunning = Process.GetProcessesByName("photoshop").Length > 0; } catch { }
                     RefreshPsPids(psRunning);
                     if (psRunning) sawPs = true;
+#if ROLE_SMOOTH
+                    // 笔平滑：只在功能开启时注入（PS 换了进程会自动补注入）
+                    if (psRunning) PenHook.SyncInjection();
+#endif
 #if !ROLE_SMOOTH
                     // 热键表只在热键角色里装卸。⛔ 平滑角色绝不能碰 RegisterAll ——
                     //   它会安装全局键盘钩子，两个进程同时抢键盘钩子会互相打架（按键被重复处理）。
@@ -2656,6 +3029,10 @@ namespace JWautofillDaemon
             {
                 type = "smoothState",
                 protocol = ProtocolVersion,
+#if ROLE_SMOOTH
+                // 笔输入层平滑（Wintab 通路）的完整状态：开关 / 注入到哪些 PS / 标定结果 / 计数
+                pen = PenHook.Snapshot(),
+#endif
                 armed = _smoothArm,
                 dragging = _smoothDragging,
                 hookInstalled = _mouseHookId != IntPtr.Zero,
@@ -2949,7 +3326,8 @@ namespace JWautofillDaemon
                                 smoothHookInstalled = _mouseHookId != IntPtr.Zero,
                                 smoothSafeMode = _mouseHookSafeMode,
                                 smoothCallbacks = Interlocked.Read(ref _smoothHookCallbacks),
-                                smoothInjected = Interlocked.Read(ref _smoothInjected)
+                                smoothInjected = Interlocked.Read(ref _smoothInjected),
+                                pen = PenHook.Snapshot()
 #endif
                             }, JsonOpts));
                         }
@@ -3026,6 +3404,20 @@ namespace JWautofillDaemon
                         {
                             SendToClient(client, SmoothStateJson());
                         }
+#if ROLE_SMOOTH
+                        else if (type == "penSmooth")
+                        {
+                            // 笔输入层平滑（Wintab 通路）：开关 + 强度。
+                            // ⚠️ 与 smoothArm（鼠标/套索通路）**完全独立**：那条改光标，这条改
+                            //    PS 进程内的包坐标；两者可同时开，互不干扰。
+                            bool on = ReadBool(doc.RootElement, "on", defaultValue: false);
+                            int st = -1;
+                            if (doc.RootElement.TryGetProperty("strength", out var stEl) &&
+                                stEl.TryGetInt32(out var stV)) st = stV;
+                            PenHook.Set(on, st);
+                            BroadcastSmoothState();
+                        }
+#endif
                         else if (type == "pointerTest")
                         {
                             // 指针注入自检：对拍相对/绝对/SetCursorPos 三种方式的位移守恒率。

@@ -45,6 +45,7 @@ import {
 // 启停 / 卸载入口，互不影响 —— 这是「两个钩子必须在进程级解耦」在 UXP 侧的落点。
 import {
   connectSmoothDaemon, disconnectSmoothDaemon, launchSmoothDaemon, isSmoothDaemonConnected,
+  sendPenSmooth,
 } from './hotkey/SmoothBridge';
 import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/MainToggleBus';
 import { FillPanelId, subscribeFillPanelToggle } from './utils/FillPanelToggleBus';
@@ -479,6 +480,7 @@ class App extends React.Component<AppProps, AppState> {
         this.toggleSmoothOptions = this.toggleSmoothOptions.bind(this);
         this.toggleSmoothAdvanced = this.toggleSmoothAdvanced.bind(this);
         this.toggleSmoothEnabled = this.toggleSmoothEnabled.bind(this);
+        this.togglePenSmooth = this.togglePenSmooth.bind(this);
         this.handleSmoothModeChange = this.handleSmoothModeChange.bind(this);
         this.handleNotification = this.handleNotification.bind(this);
         // 事件触发的蒙版/通道状态探测改为防抖执行（见 utils/psProbe.ts 根因说明）：
@@ -1241,6 +1243,48 @@ class App extends React.Component<AppProps, AppState> {
         if (tone === 'notify-bar-warn') return 'indicator-warn';
         if (tone === 'notify-bar-fail') return 'indicator-fail';
         return 'indicator-disabled';
+    }
+
+    /**
+     * 笔（数位板）平滑的开关。
+     *
+     * ⚠️ 与 toggleSmoothEnabled 是**两条互不相干的通路**：那条管鼠标光标（套索），
+     *    这条管 Photoshop 进程内的笔坐标（Wintab）。不合并，是因为它们的失效模式、
+     *    前置条件、以及「没生效时该怎么办」全都不同。
+     * ⛔ 不做乐观更新：真实状态只认守护进程回帧里的 `pen`（否则会出现「开关亮了但其实没生效」，
+     *    而那正是这个项目里最难查的一类问题）。
+     */
+    togglePenSmooth() {
+        const st = this.state.smoothStatus;
+        if (!st.connected || st.unsupported || st.penUnsupported) return;   // 发不出去：状态条会如实显示原因
+        sendPenSmooth(!st.pen.enabled);
+    }
+
+    /** 笔平滑状态条的文案（与 penBarTone 的判据一一对应）。 */
+    private penSmoothText(): string {
+        const st = this.state.smoothStatus;
+        const pen = st.pen;
+        // ⛔ 顺序不可换：先判「服务在不在 / 认不认识这条通路」，再判它的实际状态。
+        //    `unsupported` 只说明「套索平滑协议」不通；旧版是**通过**那条探针的，
+        //    必须靠 `penUnsupported` 才能如实说出「版本过旧」，否则会误导成「点了没反应」。
+        if (!st.connected) return '笔平滑：服务未连接';
+        if (st.unsupported || st.penUnsupported) return '笔平滑：服务版本过旧（请把上方开关先关再开）';
+        if (!pen.enabled) return '笔平滑：关';
+        if (pen.state === 2) return '笔平滑：标定失败（未生效）';
+        if (pen.injectedCount === 0) return '笔平滑：等待 Photoshop…';
+        if (pen.state === 1) return '笔平滑：生效中（已平滑 ' + pen.smoothed + ' 包）';
+        return '笔平滑：注入中…';
+    }
+
+    /** 笔平滑状态条的配色档（四档，与 smoothBarTone 同款：灰 / 橙 / 红 / 绿）。 */
+    private penBarTone(): string {
+        const st = this.state.smoothStatus;
+        const pen = st.pen;
+        if (!st.connected || st.unsupported || st.penUnsupported) return 'notify-bar-warn';
+        if (!pen.enabled) return 'notify-bar-disabled';
+        if (pen.state === 2) return 'notify-bar-fail';
+        if (pen.state === 1) return 'notify-bar-ok';
+        return 'notify-bar-warn';
     }
 
     /**
@@ -3134,6 +3178,30 @@ title={helpTexts.selectionFill.blendMode}>
                                 checked={this.state.smoothEnabled}
                                 onChange={this.toggleSmoothEnabled}
                                 title={helpTexts.selectionFill.smoothEnabledSwitch}
+                            />
+                        </div>
+                        {/* 笔（数位板）平滑 —— 与上面那条**独立**：上面改的是鼠标光标
+                            （在 PS 收到之前拉顺），这条改的是 PS 进程内解析出的笔坐标
+                            （笔走 Wintab，不产生鼠标消息，所以鼠标钩子够不着）。
+                            形态与上面那条同款：指示点 + 状态文案 + 右侧开关；
+                            间距由 .notify-bar 自带的 margin-bottom: 8px 提供。 */}
+                        <div className={'notify-bar ' + this.penBarTone()}>
+                            <span className={'indicator indicator-md ' + App.smoothDotOfTone(this.penBarTone())} />
+                            <span
+                                className="notify-text"
+                                title={this.state.smoothStatus.penUnsupported
+                                    ? '当前运行的平滑服务版本过旧，不认识笔平滑指令。\n\n处置：把上方「平滑」开关**先关再开**（或结束 JWautofillSmoothDaemon.exe 进程后重新启动）。'
+                                    : helpTexts.selectionFill.penSmoothStatusLabel}>
+                                {this.penSmoothText()}
+                            </span>
+                            <span className="mask-sync-status-spacer" />
+                            <ToggleSwitch
+                                checked={!!this.state.smoothStatus.pen.enabled}
+                                onChange={this.togglePenSmooth}
+                                disabled={!this.state.smoothStatus.connected
+                                    || this.state.smoothStatus.unsupported
+                                    || this.state.smoothStatus.penUnsupported}
+                                title={helpTexts.selectionFill.penSmoothSwitch}
                             />
                         </div>
                         {/* 滤波族：三列（与「填充模式」紧凑态的 .radio-trio-group 同款） */}

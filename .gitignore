@@ -24,6 +24,11 @@ obj/
 # 用户机器无需安装 .NET SDK / 运行时。这是必要的发布物，必须入库。
 !native/HotkeyDaemon/publish/JWautofillHotkeyDaemon.exe
 
+# 笔输入层平滑（P3）：便携 zig 构建的**注入 DLL**，由守护进程注入 Photoshop。
+# ⛔ .dll 必须入库：用户机器没有 zig 工具链，运行期要有现成产物。
+# zig 顺带产出的 .lib 不需要（.pdb 已被上面的 *.pdb 覆盖）。
+native/WintabHook/publish/*.lib
+
 # ============ TypeScript / 构建中间产物 ============
 *.tsbuildinfo
 

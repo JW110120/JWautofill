@@ -75,6 +75,10 @@ module.exports = (env, argv) => {
                 // 面板「平滑选项」里的服务开关经 shell.openPath 唤起它；停掉或卸载任意一侧
                 // 都不会影响另一侧 —— 这正是把它们拆成两个进程的目的。
                 { from: "./native/SmoothDaemon/publish/JWautofillSmoothDaemon.exe", to: "./native/SmoothDaemon/publish" },
+                // 笔输入层平滑（P3）的**注入 DLL**（native/WintabHook 用便携 zig 构建）。
+                // 平滑守护进程运行时会把它注入 Photoshop 进程，注入时给的是**绝对路径**，
+                // 因此这里必须把它带进 dist 的同层布局（daemon 按 BaseDirectory 相对查找）。
+                { from: "./native/WintabHook/publish/JWautofillWintabHook.dll", to: "./native/WintabHook/publish" },
                 // 键盘卡死一键修复启动器（独立子项目 FixKeyboard/ 编译，发布到 FixKeyboard/publish/）。
                 // 面板「键盘卡死一键修复」经 shell.openPath 唤起 native/HotkeyDaemon/FixKeyboard.exe；
                 // 该 exe 运行时会按自身 BaseDirectory 读取同目录的 fix-keyboard.ps1，

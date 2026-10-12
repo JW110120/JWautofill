@@ -954,3 +954,205 @@ PS 立刻切回 Windows Ink（`WM_POINTER`），**inline-hook Wintab 会静默�
 
 **下一步 = P2**：把 DLL 内容换成「只统计 Wintab 包数」的 inline hook（`WTPacket` / `WTPacketsGet`），
 证明真的钩到了笔的数据流；通过后再 P3 接平滑算法 + 面板开关。
+
+---
+
+## 15. 第七轮：P2 落地 —— Wintab 内联钩子实测（v7，2026-10-12）
+
+### 15.1 先侦察，再动手：把「要改的那几个字节」钉死
+
+改代码段一旦写错就是 PS 当场崩，所以不盲写。先用**零风险**手段把事实拿全
+（`analysis/_tools/spike/recon_wintab.py` + `recon_thunk.py`）：
+
+| 要回答的问题 | 手段 | 结果 |
+| --- | --- | --- |
+| `WinTab32` 的导出是转发壳还是实现体？ | 比对 `WinTab32!WTPacket` 与 `Wacom_Tablet!WTPacket` 的地址 | **不同地址**，两份各自有实现体（各 ~3MB `.text`） |
+| 要改的那几个字节长什么样？ | 本进程 `LoadLibrary` 后按导出名取址读 32 字节 | **每个导出入口本体就是一条 5 字节 `E9 rel32`** `WTPacket: E9 D8 39 0E 00` |
+| 是出厂代码还是已被别人 hook？ | 与**磁盘文件同 RVA** 逐字节对照 | 磁盘 == 内存 ⇒ **出厂代码**，无人 hook（Wacom 自带 `MouseHookPro64.8li` 也没动它） |
+| `E9` 跳到哪？目标是什么形态？ | 沿链读一层 | `impl` 是标准 MSVC 序言 `40 53 55 56 57 48 83 EC 28` ⇒ **真实现体** |
+
+### 15.2 ★ 手法定案：入口那 5 字节既是「唯一入口」又是「完整指令」
+
+这两条合在一起，把 inline hook 的复杂度与风险同时降到接近零：
+
+| 事实 | 推论 |
+| --- | --- |
+| 入口 = **一条独立完整的 5 字节 `jmp`** | 原位覆盖**天然指令对齐** ⇒ ①**不需要长度解码器**；②**不需要搬迁任何指令** |
+| `E9` 的目标就是真实现体 | 直接 `call impl` 与原语义**逐位等价** ⇒ **不需要跳板**（省掉最容易出错的一步） |
+| 入口是**所有调用方**的必经之路 | 静态 IAT（`Photoshop.exe`）、插件（`MouseHookPro64.8li`）、`GetProcAddress` 全都经过它 ⇒ 只钩这一处就够 |
+
+剩下的唯一约束是「`E9 rel32` 射程 ±2GB」，而注入的模块离目标可能很远
+（实测 PS 内 `WinTab32` @`0x7FFF767C0000` 与 `Wacom_Tablet` @`0x7FF8065F0000` 相距 ~29GB）
+⇒ 在目标**附近**分配一页放转发桩：
+
+```
+entry:  E9 rel32 ──► relay: 48 B8 <&detour> FF E0   (mov rax,imm64; jmp rax)
+                            │
+                 detour: 计数 → call impl → 透传返回值
+```
+
+### 15.3 实现（`analysis/_tools/spike/wtprobe.c`）
+
+- **两条安全闸门**（不满足就跳过并记录原因，绝不盲改）：
+  ① `entry[0] == 0xE9`；② `impl` 必须落在同一映像内。
+- **改写期间冻结其它线程**：写 5 字节不是原子操作，若有线程正好取指到这条 `jmp`，
+  可能读到「新 `E9` + 旧 rel32」的撕裂组合 ⇒ 跳野地址。PS 有 **151** 个线程、Wintab 轮询 50+Hz，
+  窗口虽小但非零 ⇒ 按最保守做法挂起 → 改 → 恢复（与 MS Detours 同思路）。
+  ⛔ 冻结窗口内**只放不需要 loader lock 的调用**（`VirtualProtect`/`memcpy`/`FlushInstructionCache`）；
+  `LoadLibrary`/`GetProcAddress` 留在窗口外 ⇒ 安装拆成 prepare / commit 两趟。
+- **自检导出** `wtprobe_selftest()`：**从入口地址**调用被钩函数（必然穿过完整链路），
+  用最保守参数（句柄 0 / 出参 NULL）—— 把「钩子装上了」与「调用能正确穿过链路」**分开证明**。
+- **卸载** `wtprobe_unhook()`：先停线程、再还原字节。⛔ 直接 `FreeLibrary` 必崩
+  （入口里留着指向本模块的 `jmp`）。`inject.py --eject` 自动按这个顺序做。
+- 只计数，**不解引用任何出参**（原型记错就是野指针崩溃，P2 不需要它）。
+  强证据 = `WTPacketsGet` 的**返回值就是「取到几包」**，`WTPacket` 的 `wSerial` 是包序号。
+
+### 15.4 实测
+
+**对照组（无害 python 进程）** —— 先把「我们写错了」这条排除：
+
+```
+已安装 10/10 个 hook（改写期间挂起其它线程 5 个）
+selftest ... WTInfoA ret=287 ★链路已打通        ← 两边都返回 287（真实结构体字节数）
+--eject → unhook 还原 10 → FreeLibrary 返回 1 → verify: 全部「未被改动（== 磁盘）」
+```
+
+**真目标 Photoshop 2026（PID 19284）**：
+
+```
+OK  注入成功        已安装 10/10 个 hook（改写期间挂起其它线程 151 个）
+--verify 三层校验：入口已改写 → 跳向模块外(0x7FFF75E80000) → 转发桩 `mov rax,<detour>; jmp rax` ✓
+t=500ms  Wintab32.dll!WTPacketsGet      calls=29  lastArg=128  lastRet=0
+t=500ms  Wacom_Tablet.dll!WTPacketsGet  calls=28  lastArg=128  lastRet=0
+```
+
+先把「PS 在轮询 Wintab」这条钉死：注入后**用户还没碰笔**，PS 就已经在**持续轮询**
+`WTPacketsGet`（~52Hz，`lastArg=128` 是 PS 自己传的 `cMaxPkts`，`lastRet=0` 是队列里没包）
+⇒ **PS 的笔输入通路 = 轮询 Wintab 取包队列**，与 §13.1 的配置级铁证完全吻合。
+
+**★ 笔测判定（终）** —— 清零计数建干净基线后，用户用笔在画布上划了几笔：
+
+| 阶段 | 时长 | `calls` | `pkts` |
+| --- | --- | --- | --- |
+| ① 空转（无笔） | **5.2 分钟** | 14 → 21349 | **0**（全程，虽一直 ~52Hz 轮询） |
+| ② 5 段笔输入 | **30.6 秒** | → 26440 | **0 → 3158**（≈204 包/秒） |
+| ③ 静默（无笔） | **129 秒** | → 35989 | **3158 不再变** |
+
+② 的五段时长：`0.8 / 1.2 / 0.8 / 4.5 / 8.2 秒`（人划几笔、停一下、再划）。
+
+⇒ 这是**同一条日志内的天然对照**：同样一直在轮询取包，**有笔输入 `pkts` 就涨、没有就不涨**
+⇒ **钩子确凿落在笔的数据流上，且不假阳性**（①③ 全为 0）。**P2 通过。**
+
+### 15.5 顺带定案的 P3 做法
+
+1. **复位后只有 `Wintab32!WTPacketsGet` 一个函数被调用**（`WTPacket` / `WTPacketsPeek` /
+   `WTDataGet` / `WTInfoA` 调用数**全为 0**）⇒ **P3 只需钩这一个函数**：在 detour 里
+   `call impl` **之后**改写 `lpPkts`，拿到的正是 PS 最终看到的数据（一个函数就是唯一咽喉）。
+2. **`Wintab32` 是 `Wacom_Tablet` 的上层包装**：两者 `pkts` **严格相等**（3158 = 3158，1:1 内部调用），
+   自检时只调 `Wintab32!WTInfoA` 也让 `Wacom_Tablet!WTInfoA` 计数先变 1，印证同一事实。
+   ⇒ **同时钩两层会双计数 / 双平滑**，实际处理**只能放外层 `Wintab32` 一层**。
+3. `Wintab32` 在 PS 内的转发桩被分配到 **-9.7MB**（附近地址已被 PS 自己的分配占满），
+   仍在 rel32 射程内 ⇒ 「就近分配」必须真的去扫，不能假定紧邻。
+
+### 15.6 卸载复核（终）
+
+```
+--eject → wtprobe_unhook() 返回 10（还原 10/10）→ FreeLibrary 返回 1
+逐字节核验：Wintab32.dll ×5 + Wacom_Tablet.dll ×5 入口，全部「== 磁盘」，0 处不一致
+wtprobe.dll 已不在进程内；Photoshop 存活（2.9 GB）
+```
+
+**杀软观察（初步）**：代码段已改 + DLL 驻留 7.8 分钟，`QQPCRTP`(Session0) + `MsMpEng` 全程在跑、
+**无任何反应**，PS 正常 ⇒ 「长期驻留 + 改代码段」不比一次性注入更敏感（**初步结论**，
+P3 真正长时间驻留还需再观察）。
+
+### 15.7 P2 产物
+
+| 文件 | 作用 |
+| --- | --- |
+| `analysis/_tools/spike/recon_wintab.py` | 零风险侦察：导出序言字节 + 与 PS 内存对照 + 极简 x64 长度解码 |
+| `analysis/_tools/spike/recon_thunk.py` | 磁盘字节对照 + 追跳转链（判定「出厂代码 vs 已被 hook」、真实实现体位置） |
+| `analysis/_tools/spike/wtprobe.c` / `.dll` | P2 探针：10 个 Wintab 导出入口内联钩子 + 线程冻结 + 自检 + 干净卸载 |
+| `analysis/_tools/spike/inject.py` | 扩展出 `--verify` / `--selftest` / `--reset` / `--unhook`，`--eject` 自动先还原 |
+
+---
+
+## 16. 第八轮：P3 最小可用版 —— 笔输入层平滑落地（v8，2026-10-12）
+
+目标：把 P2 的「计数探针」换成**真正改写坐标**，并在面板上给出一个开关。
+判定标准（最小可用）：**开关打开时笔迹变平滑、关闭即恢复**，且标定失败时**只读不写**。
+
+### 16.1 架构：为什么平滑不在守护进程里，而在一段注入 DLL 里
+
+P2 已钉死一件事：笔的坐标**只在 PS 进程内**、且只经过 `Wintab32!WTPacketsGet` 一个咽喉。
+守护进程在进程外，无论怎么做都拿不到那个缓冲区 ⇒ 唯一的着力点是**注入 PS 并就地改写**。
+
+```
+   [面板] --WS(18924)--> [SmoothDaemon] --命名共享内存--> [JWautofillWintabHook.dll @ PS 进程内]
+                                                            └─ inline hook Wintab32!WTPacketsGet
+```
+
+- **配置下发走共享内存**（`Local\JWautofillWintabSmooth`，32 个 32 位槽）：detour 里读配置
+  只是**普通内存读**，零系统调用。用它而不是管道/WS，是为了守住「detour 内零 I/O」。
+- **强度 / 开关**由守护进程写槽位；**状态 / 标定结论 / 计数**由 DLL 回写，守护进程只读。
+- **心跳防呆**：守护进程每秒把 `GetTickCount()` 写进槽位；DLL 侧发现 **3 秒**没更新就自动停手
+  （否则守护进程被强杀后，共享内存不消失、`enabled` 永远停在 1，PS 会被一段「没人管」的平滑一直改着）。
+
+### 16.2 安全设计：三道闸门
+
+| 闸门 | 作用 | 失败时的行为 |
+| --- | --- | --- |
+| **标定**（改动前必须知道 X/Y 偏移） | `WTGetA` 读 `lcPktData` 掩码推算布局，再用「序号逐包 +1」验真实数据；另一条**盲扫**独立找同一对 (stride, offSerial)，两者必须一致 | 不一致 ⇒ `state=2`，**只 dump 原始字节、绝不改写**（写错偏移会污染 buttons，可能造出幽灵按键） |
+| **线程冻结** | 5 字节 `E9` 不是原子写，撕裂会跳野地址；PS 有上百线程 ⇒ 挂起→改→恢复 | 线程数超过冻结表容量 ⇒ **放弃改写**（只冻一部分等于没冻） |
+| **卸载** | 入口里留着指向本模块的 `E9` ⇒ **先还原字节再 `FreeLibrary`**，否则必崩 | 两条路径：共享内存 `CMD=2`（正常）或导出 `jwwh_unhook()`（排障） |
+
+⛔ 本轮自查修掉的两处：
+
+1. `try_calibrate()` 是**从 detour 里**调的，初稿直接走 `logf()` ⇒ `WriteFile + FlushFileBuffers`
+   （全盘刷）跑在 **PS 取包线程**上，且 `log_write` 还会自旋抢日志锁。已改为**只往内存缓冲拼字符串**，
+   由 worker 线程补写（`calib_logf` / `calib_publish`）。
+2. 冻结表溢出标志 `g_overTent` 原来**只置位、无人消费** ⇒ 溢出后仍继续改写。已在 `do_install()` 里拦下。
+
+### 16.3 算法：C 版单包低通（与守护进程 Mode 0 同源，但有两处刻意差异）
+
+- `k = 1.0 - 0.85·(t/100)`（**线性**）——守护进程用 `0.18^(t/100)` 指数映射；此处为 MVP 阶段
+  不引入 libm 的 `pow`。
+- **不做 `MinSampleDist` 抽稀**——Wintab 的包必须**原样写回**，抽掉会打乱 PS 的时间轴。
+- 保留了：速度低通、拐角守卫（夹角 ≥45° 时 `kk = max(kk, 0.75)`）、速度自适应、全局滞后上限、
+  起笔锚定（复位帧输出点严格落回输入点）。
+- 输出恒为「上一输出」与「本包输入」的凸组合，加上滞后上限只会朝输入移动 ⇒ **数学上有界，不会产生越界坐标**。
+
+### 16.4 产物
+
+| 文件 | 作用 |
+| --- | --- |
+| `native/WintabHook/wintab_hook.c` | 注入 DLL 本体（只钩 `WTPacketsGet`，`-Wall -Wextra` 零告警） |
+| `native/WintabHook/build.sh` | 便携 zig 构建（`zig cc -target x86_64-windows-gnu -shared -O2`），产物 `publish/JWautofillWintabHook.dll` |
+| `native/HotkeyDaemon/Program.cs` | `#if ROLE_SMOOTH` 内的 `PenHook`（共享内存属主 + 注入器 + 命令下发） |
+| `src/hotkey/SmoothBridge.ts` | `sendPenSmooth(on, strength?)` |
+| `src/hotkey/LassoSmoothing.ts` | `PenSmoothStatus` + **第二层能力探测** `penUnsupported` |
+| `src/app.tsx` | 平滑选项里**第二条** `.notify-bar`（笔平滑开关 + 状态文案） |
+
+⛔ **两层能力探测不可合并**：套索平滑的探针（「有没有回 `smoothState`」）对**旧版守护进程是通过的**
+——它支持套索平滑、会正常回帧，只是帧里没有 `pen`。若只看 `unsupported`，笔平滑开关会显示成**可点**，
+点下去 `penSmooth` 被静默丢弃、开关弹回 ⇒ 又是一个「点了没反应」。
+判据因此下沉一层：**回帧里有没有出现过 `pen` 字段** ⇒ `penUnsupported`。
+
+### 16.5 真机验收清单（待执行）
+
+前置：**先把平滑服务换成新 exe**（已装副本不会自己更新；面板侧「平滑开关先关再开」是唯一路径）。
+
+1. 面板「平滑选项」里应出现**两条**状态条：上=套索平滑，下=笔平滑。
+2. 点笔平滑开关 → 状态条应依次经过「等待 Photoshop…」→「生效中（已平滑 N 包）」；
+   开关**不弹回**（弹回即表示对端是旧版 ⇒ 应显示「服务版本过旧」）。
+3. 用笔在画布上划几笔：**打开时轨迹变顺、关闭后立刻恢复原状**（同一笔反复对拍）。
+4. 打开 `%TEMP%\jwwh-<pid>.log`（`<pid>` 是 **Photoshop** 的进程号）：
+   - `# 挂载: OK` + `（改写期挂起线程 N 个）`
+   - `# [calib] 结论: ★两条证据一致 ⇒ 启用改写`，并记下 `stride / offX / offY`
+   - `# [status]` 每 10 秒一行，`smoothed` 随笔迹增长
+5. 关闭开关后：日志应出现 `# 卸载: OK`，且原字节写回；PS **不崩、不卡**。
+6. 长时间驻留观察杀软（P2 只观察到 7.8 分钟）。
+
+⛔ 若 `# [calib] 结论: !! 不一致` ⇒ 日志会附一段 `原始包字节` dump，据此修正布局表即可
+（这正是「只 dump 不写」闸门存在的意义：**宁可没有平滑，也绝不写坏数据**）。
+

@@ -144,6 +144,28 @@ export function sendSmoothDaemonCommand(type: string): boolean {
 }
 
 /**
+ * 笔输入层平滑（Wintab 通路）的开关。
+ *
+ * ⚠️ 与「套索平滑」（鼠标钩子 + 回注）是**两条独立通路**：那条由 `armLassoSmoothing`
+ *    经状态机下发（还要带一整份参数），这条只有一个开关 —— 因为它的实现不在守护进程里，
+ *    而在被注入 Photoshop 的 hook DLL 内（参数经命名共享内存传递）。
+ *
+ * 真实生效状态不靠这里乐观更新：守护进程收到后会回一帧 `smoothState`（含 `pen`），
+ * 面板按**它**刷新开关与状态条 —— 避免「点了亮起来其实没生效」。
+ */
+export function sendPenSmooth(on: boolean, strength?: number): boolean {
+  try {
+    if (currentWs && currentWs.readyState === (currentWs.OPEN ?? 1)) {
+      const msg: any = { type: 'penSmooth', on };
+      if (typeof strength === 'number') msg.strength = strength;
+      currentWs.send(JSON.stringify(msg));
+      return true;
+    }
+  } catch { /* ignore */ }
+  return false;
+}
+
+/**
  * 解析插件目录内的相对路径为真实 OS 路径。
  * 与 BrushHotkeySection 里的同名工具逻辑一致（用插件根目录拼接，绕开沙箱下
  * `getEntry('native')` 找不到目录的问题）。
