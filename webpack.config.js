@@ -85,7 +85,11 @@ module.exports = (env, argv) => {
                 // 故必须与上面的 *.ps1 落在同一层（不能放进 publish/ 子目录）。
                 { from: "./native/HotkeyDaemon/FixKeyboard/publish/FixKeyboard.exe", to: "./native/HotkeyDaemon/[name][ext]" },
                 // 用户文档（右上角菜单「功能文档」按钮经 shell.openPath 在默认浏览器中打开）
-                { from: "./docs", to: "./docs" }
+                // ⛔ 项目**实现计划/设计文档**严禁进 dist（用户 2026-10-12 明确要求，已入项目铁律）：
+                //    它们是内部设计与验收记录，不是给最终用户看的文档。
+                //    用 globOptions.ignore 而不是逐个列文件：以后新增用户文档会自动带上，
+                //    而任何 *plan*.md 一律被挡在 dist 之外。
+                { from: "./docs", to: "./docs", globOptions: { ignore: ["**/*plan*.md"] } }
             ]
         }),
     ]);

@@ -48,8 +48,7 @@ export class DragHandler {
         'smooth:radius': { min: 1, max: 40, step: 1 },
         'smooth:tension': { min: 0, max: 100, step: 1 },
         'smooth:catchUp': { min: 0, max: 100, step: 1 },
-        'smooth:cornerAngle': { min: 0, max: 90, step: 1 },
-        'smooth:minSampleDist': { min: 0.5, max: 4, step: 0.5 }
+        'smooth:cornerAngle': { min: 0, max: 90, step: 1 }
     };
 
     static calculateNewValue(

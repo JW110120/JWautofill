@@ -209,51 +209,35 @@ export interface AppState {
      // 分区可见性（隐藏/显示分区浮窗控制，默认皆可见）：选区改造 / 填充选项
      selectionOptionsVisible: boolean;
      fillOptionsVisible: boolean;
-     // ===== 套索实时平滑（方案 A：输入层滤波）=====
-     /**
-      * 「平滑选项」的总开关。默认**关闭**。
-      * ⚠️ 它接管的是套索的光标行为（绘制点会被「拖住」），属于会改变所有存量用户手感的
-      *    接管式功能，必须由用户主动开启；开启后由当前工具是否为套索决定是否真正布防。
-      */
-     smoothEnabled: boolean;
-     /**
-      * 滤波参数快照（mode / strength / radius / tension / catchUp / cornerAngle /
-      * speedAdaptive / minSampleDist）。
-      * ⚠️ 必须进 state：滑杆/单选都要靠它触发重渲染，且它是**跨模块共享字段**
-      *    （下发到原生守护进程），只写实例字段不会触发重渲染（同 isInQuickMask 的历史 bug）。
-      * ⚠️ 整体替换而非就地修改：持久化的变更检测用的是引用比较。
-      */
-     smoothParams: LassoSmoothParams;
-     /** 「平滑选项」分区是否可见（隐藏/显示分区浮窗控制）。 */
-     smoothOptionsVisible: boolean;
-     /** 「平滑选项」折叠分区是否展开。 */
-     isSmoothOptionsExpanded: boolean;
-     /** 「平滑选项」内的高级项（半径/张力/追笔/拐角/自适应/采样间距）是否展开。 */
-     isSmoothAdvancedExpanded: boolean;
-     /**
-      * 原生守护进程回传的平滑健康状态（布防/钩子是否装上/是否熔断/回调计数）。
-      * 只读镜像：仅用于面板显示与排障，不参与任何业务判断，不持久化。
-      */
-     smoothStatus: LassoSmoothStatus;
-     /**
-      * 「平滑已布防」的渲染态镜像 —— **必须进 state**。
-      *
-      * ⛔ 这里踩过一次真机 bug：它原先只是实例字段（lassoArmed），而状态行的文案/配色
-      *    完全依赖它。布防是在 300ms 工具巡检里**异步**完成的，那一刻没有任何 state 变化
-      *    ⇒ 不重渲染 ⇒ 状态行停留在布防前算出的「待命（当前不是套索工具）」，
-      *    用户看到的就是「明明在套索工具上，却一直显示待命」。
-      *    只有当别的原因（daemon 回报下一帧、绘制选区）触发重渲染时才跳到真实文案。
-      *    ⇒ 凡是参与渲染的判据，一律按 state 派生（同 isInQuickMask 的历史教训）。
-      */
-     smoothArmed: boolean;
-     /**
-      * 最近一次**成功读到**的当前工具 ID（`application.tool._enum`）。
-      * null 表示至今没读到过。仅用于状态行的排障文案：显示「待命（当前工具：多边形套索）」，
-      * 让「工具读错」与「工具读不到」这两种完全不同的原因在界面上一眼可分。
-      */
-     smoothToolId: string | null;
-     /** 最近一次工具读取是否失败（失败时状态行改为「无法读取当前工具」）。 */
-     smoothToolErr: boolean;
+    // ===== 套索实时平滑（方案 A：输入层滤波）=====
+    /**
+     * 滤波参数快照（mode / strength / radius / tension / catchUp / cornerAngle /
+     * speedAdaptive）。
+     * ⚠️ 必须进 state：滑杆/单选都要靠它触发重渲染，且它是**跨模块共享字段**
+     *    （下发到原生守护进程），只写实例字段不会触发重渲染（同 isInQuickMask 的历史 bug）。
+     * ⚠️ 整体替换而非就地修改：持久化的变更检测用的是引用比较。
+     * ⚠️ 开关本身**不在这里**：它由守护进程回报的 smoothStatus.pen.enabled 驱动
+     *    （服务语义 —— 开 = 拉起守护进程，关 = 优雅退出，同笔刷热键）。
+     */
+    smoothParams: LassoSmoothParams;
+    /** 「平滑选项」分区是否可见（隐藏/显示分区浮窗控制）。 */
+    smoothOptionsVisible: boolean;
+    /** 「平滑选项」折叠分区是否展开。 */
+    isSmoothOptionsExpanded: boolean;
+    /** 「平滑选项」内的高级项（半径/张力/追笔/拐角/自适应）是否展开。 */
+    isSmoothAdvancedExpanded: boolean;
+    /**
+     * 原生守护进程回传的平滑健康状态（是否生效/标定结果/已平滑包数/当前参数）。
+     * 只读镜像：仅用于面板显示与排障，不参与任何业务判断，不持久化。
+     */
+    smoothStatus: LassoSmoothStatus;
+    /**
+     * 「正在拉起平滑服务」的过渡态（点开关 → 守护进程起来 → WS 建连，约 1~3 秒）。
+     * ⛔ 必须进 state：状态条要据此显示「服务启动中…」而不是仍旧说「服务未启动」
+     *    （否则用户点完看不到任何反馈，只会反复连点）。
+     * ⚠️ 纯 UI 过渡态：不持久化、不参与业务判断，连接建立或 8 秒超时后自愈为 false。
+     */
+    smoothLaunching: boolean;
      showVisibilityPanel: boolean;  // 隐藏/显示分区浮窗是否打开
     isFillSettingsOpen: boolean;  // 填充设置浮窗是否打开（承载原面板底部的四个 checkbox）
     // 浮窗堆叠顺序（= 开启先后）：APP 面板允许同时打开多个浮窗，它们在同一个遮罩里
@@ -334,16 +318,13 @@ export const initialState: AppState = {
     // 分区可见性（默认皆可见）
     selectionOptionsVisible: true,
     fillOptionsVisible: true,
-    // 套索实时平滑：默认关闭（接管式功能，见 AppState.smoothEnabled 的说明）
-    smoothEnabled: false,
+    // 套索实时平滑：参数默认值（开关不在这里 —— 由守护进程回报驱动）
     smoothParams: { ...initialLassoSmoothParams },
     smoothOptionsVisible: true,
     isSmoothOptionsExpanded: true,
     isSmoothAdvancedExpanded: false,
     smoothStatus: { ...initialLassoSmoothStatus },
-    smoothArmed: false,
-    smoothToolId: null,
-    smoothToolErr: false,
+    smoothLaunching: false,
     showVisibilityPanel: false,
     isFillSettingsOpen: false,
     floatOrder: [],

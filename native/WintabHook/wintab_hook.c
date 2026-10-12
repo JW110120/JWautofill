@@ -93,16 +93,22 @@ typedef int (*PFN_WTPacketsGet)(HCTX hCtx, int cMaxPkts, void* lpPkts);
 typedef u32 (*PFN_WTInfoA)(u32 wCategory, u32 nIndex, void* lpOutput);
 typedef int (*PFN_WTGetA)(HCTX hCtx, void* lpLogCtx);
 
-/* LOGCONTEXT 头部（只需到 lcPktData 为止；wintab.h 里 lcName[40] + 5 个 UINT）。 */
-typedef struct {
-    char lcName[40];
-    u32  lcOptions;
-    u32  lcStatus;
-    u32  lcLocks;
-    u32  lcMsgBase;
-    u32  lcPktRate;
-    u32  lcPktData;      /* ← 偏移 60 */
-} LOGCONTEXT_HEAD;
+/* WTGet 回写的是**整个 LOGCONTEXT**（wintab.h 里约 172 字节），远超 lcPktData 的偏移。
+ * 真机根因（2026-10-12）：这里原先只声明到 lcPktData 且**漏了 lcDevice 字段**
+ * （真实顺序 lcName[40]→lcOptions→lcStatus→lcLocks→lcMsgBase→lcDevice→lcPktRate→lcPktData），
+ * 于是「偏移 60」实际读到 lcPktRate（200Hz 报告率 = 0xC8），掩码无 PK_X ⇒ 标定永败
+ * ⇒ 平滑从未生效 + 拉绳 HUD 不显示。且让 WTGet 往 60 字节栈结构写 172 字节 = 栈溢出。
+ * 修法：给 256 字节全尺寸零缓冲让 WTGet 写，按真实偏移 64 取掩码（附 4 字节余量防未来扩展）。 */
+#define WT_LC_BUFSZ      256
+#define WT_LC_PKTDATA_OFF 64
+/* 输入量程（lcInExtX / lcInExtY）：LOGCONTEXT 里的真实偏移，实测确认
+   （cat=3/4 的 WTInfo 回读：偏移 96 = 44800、偏移 100 = 29600，与 wintab.h 的
+    lcInOrgX(84)/lcInOrgY(88)/lcInOrgZ(92)/lcInExtX(96)/lcInExtY(100) 完全吻合）。
+   ⛔ 不再用 WTInfoA(WTI_DEVICES, DVC_X) 取上界：本文件原先写的 WTI_DEVICES=0 是错的
+    （真值 6），而 DVC_X 的索引也无法在本机探测到 ⇒ 那个调用恒失败，32767 其实是
+    「读不到就兜底」的常量，看起来像读到了、实则是假证据。 */
+#define WT_LC_INEXTX_OFF 96
+#define WT_LC_INEXTY_OFF 100
 
 /* AXIS（WTInfo(WTI_DEVICES, DVC_X, &axis) 的返回体）：axMin/axMax/axUnits/axResolution */
 typedef struct { int axMin; int axMax; u32 axUnits; u32 axResolution; } AXIS_T;
@@ -301,12 +307,17 @@ typedef struct {
     int   offX, offY;
     u32   axisMax;       /* 设备坐标上界（X 轴），用于位移门限与滞后上限 */
     int   valid;         /* 1 = 交叉验证通过，允许改写 */
-    int   tried;         /* 1 = 已尝试过（无论成败），避免每包重算 */
+    int   tried;         /* 1 = 已做过一次**证据充分**的裁决（n>=3），避免每包重算 */
+    int   attempts;      /* 裁决次数上限用：连续失败若干次后才认命（state=2） */
 } CALIB;
 
 static CALIB g_calib;
 static volatile LONG g_state = 0;          /* CFG_I_STATE 的镜像（供 worker 上报） */
 static volatile LONG g_calls, g_packets, g_smoothed;
+/* 本 DLL 自身的模块句柄（DllMain 传入）。⛔ HUD 注册窗口类必须用它 ——
+   GetModuleHandleW(NULL) 拿到的是宿主 exe（PS.exe）的句柄，类会注册到错误的
+   模块作用域，二次注入/跨实例时行为不确定。 */
+static HINSTANCE g_hInst;
 
 /* dump 区：标定失败时把原始字节留给 worker 落盘（detour 内绝不写文件）。 */
 static u8  g_dump[512];
@@ -360,10 +371,13 @@ static int    g_wasEnabled;
 static double g_pxPerAxis = 1.0;
 /** 是否已被光标标定过（标定后不再被标称初值覆盖）。 */
 static volatile LONG g_pxCalibrated;
+/** 主屏/虚拟屏宽度（px）：标称「轴→像素比」的分母来源，worker 启动时取一次。 */
+static int g_screenW;
 
 #define JUMP_RESET_FRAC   0.15   /* 输出点与原始点距离 > 15%·axMax ⇒ 判定为抬笔移位 */
 #define TIME_GAP_RESET_MS 120    /* 两次取包间隔 > 120ms ⇒ 判定为新的一笔 */
 #define SPEED_FULL        1.2    /* 屏幕等效像素/ms：达到即「甩笔」 */
+#define CORNER_MIN_PX     3.0    /* 段长小于它的「拐角」一律当抖动，不削弱平滑 */
 #define RANGE_NOMINAL     32767.0
 /* τ(强度) 曲线的两个常数：τ = 8ms·(0.18^(−t/100) − 1)，
    即 ln(1/0.18) = 1.714798，与鼠标通路指数映射反解一致。 */
@@ -413,7 +427,11 @@ static void hud_stop(void);
 
 /* ------------------------------------------------------------- 掩码 → 偏移 */
 /* 按 wintab.h 的固定字段顺序累加尺寸。pkContext 在 x64 上是 8 字节指针，
-   但某些实现把它当 4 字节 —— 两种都算，靠序号扫描的观测值来裁决。 */
+   但某些实现把它当 4 字节 —— 两种都算，靠序号扫描的观测值来裁决。
+   ⛔⛔ PK_ORIENTATION / PK_ROTATION 是 **12 字节**（各 3 个 int：方位/仰角/扭转、
+   俯仰/翻滚/偏航），不是 4 字节。此前一律按 4 算 ⇒ 掩码里带它们的上下文算出的
+   stride 一定偏小 ⇒ 与盲扫结果必然不一致 ⇒ 标定 100% 失败（真机 jwwh-*.log 实证：
+   stride 真实值 52，按 4 算只有 40）。 */
 static void layout_of(u32 mask, int ctxSize, int* stride, int* offSerial,
                       int* offX, int* offY)
 {
@@ -424,7 +442,9 @@ static void layout_of(u32 mask, int ctxSize, int* stride, int* offSerial,
     int off = 0, s = -1, x = -1, y = -1;
     for (int i = 0; i < (int)(sizeof(bits) / sizeof(bits[0])); i++) {
         if (!(mask & bits[i])) continue;
-        int sz = (bits[i] == PK_CONTEXT) ? ctxSize : 4;
+        int sz = 4;
+        if (bits[i] == PK_CONTEXT) sz = ctxSize;
+        else if (bits[i] == PK_ORIENTATION || bits[i] == PK_ROTATION) sz = 12;
         if (bits[i] == PK_SERIAL_NUMBER) s = off;
         if (bits[i] == PK_X) x = off;
         if (bits[i] == PK_Y) y = off;
@@ -433,10 +453,127 @@ static void layout_of(u32 mask, int ctxSize, int* stride, int* offSerial,
     *stride = off; *offSerial = s; *offX = x; *offY = y;
 }
 
+/* ------------------------------------------- 由 (stride, offSerial) 反推 X/Y
+ * ⛔ 为什么需要它：真机上 `WTGetA` 报的 `lcPktData` 是 **0x00C8**（CHANGED|BUTTONS|X，
+ *    连 PK_Y 都没有），而真实包是 52 字节 —— 也就是说驱动上报的「请求掩码」与它实际
+ *    吐出的包布局**不是一回事**（jwwh-1988.log 实证）。于是「掩码推算」这条路在本机
+ *    永远不可能给出 offY ⇒ 标定永远失败 ⇒ 一包都没改写（日志里 calib=否 而
+ *    smoothed == packets，正是旧版「把处理过的包当成改写过的包」的计数在说谎）。
+ *
+ * 修法：不猜驱动语义，**用观测值反推**。字段顺序与尺寸是 wintab.h 定死的，
+ * 因此 (stride, offSerial) 这一对观测值能反解出的 (offX, offY) 是**唯一**的：
+ * 枚举全部 2^14 个掩码 × 2 种 pkContext 尺寸，凡是能同时满足 stride 与 offSerial
+ * 的布局，其 offX/offY 必然一致（不一致 ⇒ 存在歧义，宁可不改写）。
+ * 本机实测：(52, 8) ⇒ offX=20, offY=24，与人工读原始字节的结论一致。 */
+#define LAY_MAX 128
+static int g_layXY[LAY_MAX][LAY_MAX];    /* [stride][offSerial] → (offX<<8)|offY */
+static int g_layBuilt;                   /* -2=无此布局  -1=歧义 */
+
+static void layout_table_build(void)
+{
+    if (g_layBuilt) return;
+    for (int i = 0; i < LAY_MAX; i++)
+        for (int j = 0; j < LAY_MAX; j++) g_layXY[i][j] = -2;
+    for (int c = 0; c < 2; c++) {
+        int ctxSize = c ? 8 : 4;
+        for (u32 m = 0; m <= (u32)PK_ALL; m++) {
+            int st, os_, ox_, oy_;
+            layout_of(m, ctxSize, &st, &os_, &ox_, &oy_);
+            if (ox_ < 0 || oy_ < 0) continue;
+            if (st <= 0 || st >= LAY_MAX || os_ < 0 || os_ >= LAY_MAX) continue;
+            int v = (ox_ << 8) | oy_;
+            int cur = g_layXY[st][os_];
+            if (cur == -2) g_layXY[st][os_] = v;
+            else if (cur != v) g_layXY[st][os_] = -1;      /* 歧义 ⇒ 拒绝 */
+        }
+    }
+    g_layBuilt = 1;
+}
+
+/* 弱判据（O(1)）：这对 (stride, offSerial) **存不存在**合法布局？
+   ⚠️ 只用来给盲扫过滤掉明显荒谬的候选，**不能**用来定解 ——
+      本机 (52,8) 就有三组掩码都能生成，定解必须走 layout_pick_xy。 */
+static int layout_has_geom(int stride, int offSerial)
+{
+    layout_table_build();
+    if (stride <= 0 || stride >= LAY_MAX) return 0;
+    if (offSerial < 0 || offSerial >= LAY_MAX) return 0;
+    return g_layXY[stride][offSerial] != -2;
+}
+
+static int layout_infer_xy(int stride, int offSerial, int* offX, int* offY)
+{
+    layout_table_build();
+    if (stride <= 0 || stride >= LAY_MAX) return 0;
+    if (offSerial < 0 || offSerial >= LAY_MAX) return 0;
+    int v = g_layXY[stride][offSerial];
+    if (v < 0) return 0;                 /* -2 无解 / -1 歧义 */
+    *offX = (v >> 8) & 0xFF;
+    *offY = v & 0xFF;
+    return 1;
+}
+
+/* ------------------------------------- 歧义时用**位移**判据定解
+ * ⛔ 光靠 (stride, offSerial) 不够：本机就有三组掩码都能生成 (52, 8)，分别把 X 放在
+ *    12 / 16 / 20 —— 差的就是「序号之后到底有没有 pkCursor、pkButtons」。
+ *    写错偏移的代价是污染 buttons（幽灵按键），所以这里再加一条**只依赖真实数据**的判据：
+ *       **X 与 Y 必须在本批内都发生位移。**
+ *    对照真实布局（12=CURSOR 常量、16=BUTTONS 恒 0、20=X、24=Y）：
+ *       (12,16) 两个都不动、(16,20) 只有「Y」动、(20,24) X 与 Y 同时动 ⇒ 唯一解。
+ *    这一批分不出来（例如笔正好沿水平/垂直方向走）就交给下一批 —— 宁可多等，绝不猜。 */
+#define LAY_PICK_MAX 32
+static int layout_pick_xy(int stride, int offSerial, const u8* buf, int n,
+                          int* offX, int* offY)
+{
+    layout_table_build();
+    int pairs[LAY_PICK_MAX][2];
+    int np = 0;
+    for (int c = 0; c < 2 && np < LAY_PICK_MAX; c++) {
+        int ctxSize = c ? 8 : 4;
+        for (u32 m = 0; m <= (u32)PK_ALL && np < LAY_PICK_MAX; m++) {
+            int st, os_, ox_, oy_;
+            layout_of(m, ctxSize, &st, &os_, &ox_, &oy_);
+            if (st != stride || os_ != offSerial || ox_ < 0 || oy_ < 0) continue;
+            int dup = 0;
+            for (int i = 0; i < np; i++) if (pairs[i][0] == ox_ && pairs[i][1] == oy_) { dup = 1; break; }
+            if (!dup) { pairs[np][0] = ox_; pairs[np][1] = oy_; np++; }
+        }
+    }
+    int found = 0, fx = -1, fy = -1;
+    for (int i = 0; i < np; i++) {
+        int ox_ = pairs[i][0], oy_ = pairs[i][1];
+        if (ox_ + 4 > stride || oy_ + 4 > stride) continue;
+        u32 bx, by;
+        memcpy(&bx, buf + ox_, 4);
+        memcpy(&by, buf + oy_, 4);
+        int mx = 0, my = 0;
+        for (int k = 1; k < n && k < 8; k++) {
+            u32 vx, vy;
+            memcpy(&vx, buf + (SIZE_T)k * stride + ox_, 4);
+            memcpy(&vy, buf + (SIZE_T)k * stride + oy_, 4);
+            if (vx != bx) mx = 1;
+            if (vy != by) my = 1;
+        }
+        if (mx && my) {
+            if (found) return 0;         /* 仍然歧义 ⇒ 拒猜 */
+            found = 1; fx = ox_; fy = oy_;
+        }
+    }
+    if (!found) return 0;
+    *offX = fx; *offY = fy;
+    return 1;
+}
+
 /* -------------------------------------------- 盲扫：找「逐包恰好 +1」的字段 */
 /* `pkSerialNumber` 的性质：同一上下文内**逐包 +1**。据此可在完全不知道布局的前提下
    反解出 (stride, offSerial) —— 与掩码推算构成两条独立证据，交叉验证。 */
-static int scan_serial(const u8* buf, int n, int* outStride, int* outOff)
+/* ⚠ 附加一道**弱**过滤：候选 (S,o) 至少要能由某个合法的 wintab 字段组合生成。
+   否则 n 很小时（例如恰好两个包里某对 0/1）会撞出假证据，写错偏移的后果是污染
+   buttons 等字段（幽灵按键），宁可多等一批包也不要冒险。
+   ⛔ 只用弱判据：本机 (52,8) 存在三组掩码都能生成，若在这里要求「唯一解」会把正解
+      一起滤掉（实测过）—— 定解统一交给 layout_pick_xy，那里有真实位移做依据。 */
+static int scan_serial(const u8* buf, int n, int* outStride, int* outOff,
+                       int* outX, int* outY)
 {
     if (n < 3) return 0;
     for (int S = 8; S <= 256; S += 4) {
@@ -450,7 +587,13 @@ static int scan_serial(const u8* buf, int n, int* outStride, int* outOff)
                 memcpy(&v, buf + (SIZE_T)k * S + o, 4);
                 if (v != base + (u32)k) { ok = 0; break; }
             }
-            if (ok) { *outStride = S; *outOff = o; return 1; }
+            int ix, iy;
+            if (ok && layout_has_geom(S, o)) {
+                /* 先试几何唯一解；歧义时退回 -1，由调用方用位移判据定解 */
+                if (!layout_infer_xy(S, o, &ix, &iy)) { ix = -1; iy = -1; }
+                *outStride = S; *outOff = o; *outX = ix; *outY = iy;
+                return 1;
+            }
         }
     }
     return 0;
@@ -472,14 +615,18 @@ static int verify_layout(const u8* buf, int n, int stride, int offSerial)
     return 1;
 }
 
-/* --------------------------------------------------------------- 尝试标定 */
-/* ⛔ 只在**第一次**拿到 n>=2 的调用上做一次（有 WTGet + 扫描，不允许每包跑）。 */
+/* --------------------------------------------------------------- 尝试标定
+ * ⛔ 调用方保证 **n>=3**：盲扫「序号逐包 +1」需要至少 3 个包才不是巧合。
+ *    旧版 n>=2 就开跑，而真机第一批往往正好 2 个包 ⇒ 盲扫直接放弃 ⇒ 只剩掩码推算
+ *    ⇒ 掩码又不带 PK_Y ⇒ 判失败，且 tried 被永久置 1（再也等不到第二次机会）
+ *    ⇒ 平滑全程零改写（jwwh-*.log：`calib=否` 且 `smoothed == packets`）。
+ *    现在：证据不足就**什么都不做**，等下一批包（见 smooth_packets）。 */
 static void try_calibrate(HCTX hCtx, void* buf, int n)
 {
-    g_calib.tried = 1;
+    g_calib.attempts++;
     InterlockedIncrement(&g_calibTriedTotal);
 
-    /* ① 掩码推算 */
+    /* ① 掩码推算（驱动上报的「请求掩码」，可能与真实包布局不一致 —— 见下） */
     HMODULE hm = GetModuleHandleA("Wintab32.dll");
     PFN_WTGetA pGet = NULL;
     if (hm) {
@@ -488,52 +635,88 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
     }
     u32 mask = 0;
     int haveMask = 0;
+    LONG inExtX = 0, inExtY = 0;
+    /* 全尺寸零缓冲（见 WT_LC_BUFSZ 处的根因注释）：WTGet 会回写整个
+       LOGCONTEXT（~172 字节），按偏移 64 取 lcPktData —— 这才是真实布局。
+       放在外层：标定失败时要把它整个 hex dump 出来排障。 */
+    u8 lcBuf[WT_LC_BUFSZ];
+    memset(lcBuf, 0, sizeof(lcBuf));
     if (pGet) {
-        LOGCONTEXT_HEAD lc;
-        memset(&lc, 0, sizeof(lc));
-        if (pGet(hCtx, &lc) && lc.lcPktData && (lc.lcPktData & ~(u32)PK_ALL) == 0) {
-            mask = lc.lcPktData;
-            haveMask = 1;
+        if (pGet(hCtx, lcBuf)) {
+            u32 m;
+            memcpy(&m, lcBuf + WT_LC_PKTDATA_OFF, sizeof(m));
+            if (m && (m & ~(u32)PK_ALL) == 0) {
+                mask = m;
+                haveMask = 1;
+            } else {
+                calib_logf("# [calib] WTGet 掩码异常 m=0x%04X ⇒ 按无掩码处理\n", m);
+            }
+            /* 输入量程：位移门限 / 标称轴→像素比都靠它（比 WTInfo 的设备查询可靠） */
+            memcpy(&inExtX, lcBuf + WT_LC_INEXTX_OFF, sizeof(inExtX));
+            memcpy(&inExtY, lcBuf + WT_LC_INEXTY_OFF, sizeof(inExtY));
         }
     }
 
-    /* ② 序号盲扫 */
-    int sStride = 0, sOff = -1;
-    int haveScan = scan_serial((const u8*)buf, n, &sStride, &sOff);
+    /* ② 序号盲扫（与掩码**完全独立**的证据：只看真实字节） */
+    int sStride = 0, sOff = -1, sX = -1, sY = -1;
+    int haveScan = scan_serial((const u8*)buf, n, &sStride, &sOff, &sX, &sY);
 
-    int stride = 0, offS = -1, offX = -1, offY = -1, variant = 0;
-    int ok = 0;
+    /* ③ 掩码推算 + 真实数据校验（pkContext 尺寸两种假设，谁能让序号逐包 +1 谁对） */
+    int mStride = 0, mOffS = -1, mOffX = -1, mOffY = -1, mVariant = 0;
+    int okMask = 0;
     if (haveMask) {
-        /* pkContext 尺寸两种假设都试（x64 指针 8 优先）：谁能让**真实数据**呈现
-           「序号逐包 +1」，谁就是对的 —— 用数据裁决，而不是靠猜。 */
         int cand[2] = { 8, 4 };
-        for (int v = 0; v < 2 && !ok; v++) {
+        for (int v = 0; v < 2 && !okMask; v++) {
             int st, os_, ox_, oy_;
             layout_of(mask, cand[v], &st, &os_, &ox_, &oy_);
             if (ox_ < 0 || oy_ < 0) continue;
             if (!verify_layout((const u8*)buf, n, st, os_)) continue;
-            stride = st; offS = os_; offX = ox_; offY = oy_; variant = cand[v];
-            ok = 1;
+            mStride = st; mOffS = os_; mOffX = ox_; mOffY = oy_; mVariant = cand[v];
+            okMask = 1;
         }
     }
-    /* 若有第三条独立证据（盲扫，n>=3 时才有），必须一致，否则判定失败 */
-    if (ok && haveScan && !(stride == sStride && offS == sOff)) {
-        calib_logf("# [calib] ⚠ 掩码推算 (stride=%d,off=%d) 与盲扫 (stride=%d,off=%d) 不一致 ⇒ 放弃\n",
-                   stride, offS, sStride, sOff);
-        ok = 0;
+
+    /* ④ 裁决：掩码与盲扫**一致**才算双证据；不一致时以盲扫为准 ——
+       ⛔ 不能反过来判失败。真机上驱动报的 lcPktData 是 0x00C8（连 PK_Y 都没有），
+       而包是 52 字节；掩码是「请求」，盲扫是「事实」，事实优先。 */
+    int stride = 0, offS = -1, offX = -1, offY = -1, src = 0, ok = 0;
+    if (okMask && (!haveScan || (mStride == sStride && mOffS == sOff))) {
+        stride = mStride; offS = mOffS; offX = mOffX; offY = mOffY; src = 1; ok = 1;
+    } else if (haveScan) {
+        int px, py;
+        if (layout_infer_xy(sStride, sOff, &px, &py)) {
+            stride = sStride; offS = sOff; offX = px; offY = py; src = 2; ok = 1;
+        } else if (layout_pick_xy(sStride, sOff, (const u8*)buf, n, &px, &py)) {
+            stride = sStride; offS = sOff; offX = px; offY = py; src = 3; ok = 1;
+        } else if (okMask) {
+            calib_logf("# [calib] ⚠ 掩码 (stride=%d,off=%d) 与盲扫 (stride=%d,off=%d) 不一致，"
+                       "且盲扫无法定出 X/Y ⇒ 等下一批\n", mStride, mOffS, sStride, sOff);
+        }
     }
 
     calib_logf("# [calib] hCtx=0x%llX  n=%d\n", (unsigned long long)(UINT_PTR)hCtx, n);
     calib_logf("# [calib] 掩码=%s mask=0x%04X  推算 stride=%d offSerial=%d offX=%d offY=%d (ctx=%d)\n",
-               haveMask ? "有" : "无", mask, stride, offS, offX, offY, variant);
-    calib_logf("# [calib] 盲扫=%s stride=%d offSerial=%d\n",
-               haveScan ? "有" : "无", sStride, sOff);
-    calib_logf("# [calib] 结论: %s\n",
-               ok ? "★两条证据一致 ⇒ 启用改写" : "!! 不一致 ⇒ 只 dump、不改写（安全）");
+               haveMask ? "有" : "无", mask, mStride, mOffS, mOffX, mOffY, mVariant);
+    calib_logf("# [calib] 盲扫=%s stride=%d offSerial=%d offX=%d offY=%d\n",
+               haveScan ? "有" : "无", sStride, sOff, sX, sY);
+    calib_logf("# [calib] 结论: %s（依据=%s）\n",
+               ok ? "★启用改写" : "!! 本批未定出布局（安全，等下一批）",
+               src == 1 ? "掩码+数据" : (src == 2 ? "盲扫+字段几何" : (src == 3 ? "盲扫+位移判据" : "无")));
+    if (!ok) {
+        /* 把 WTGet 回写的结构原样落盘：驱动上报的 lcPktData 与真实包布局不一致时，
+           这是唯一能一眼看出「到底哪个偏移是 lcPktData」的证据（排障用，不在热路径）。 */
+        calib_logf("# [calib] LOGCONTEXT 前 128 字节:\n");
+        for (int i = 0; i < WT_LC_BUFSZ && i < 128; i += 16) {
+            calib_logf("#   +%04X", i);
+            for (int j = 0; j < 16 && i + j < WT_LC_BUFSZ; j++) calib_logf(" %02X", lcBuf[i + j]);
+            calib_logf("\n");
+        }
+    }
 
-    /* 坐标上界：用于位移门限 / 滞后上限 */
+    /* 坐标上界：优先用上下文自己的输入量程 */
     u32 axMax = 0;
-    if (hm) {
+    if (inExtX > 0 || inExtY > 0) axMax = (u32)(inExtX > inExtY ? inExtX : inExtY);
+    if (!axMax && hm) {
         PFN_WTInfoA pInfo = (PFN_WTInfoA)(void*)GetProcAddress(hm, "WTInfoA");
         if (pInfo) {
             AXIS_T ax;
@@ -542,14 +725,22 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
         }
     }
     if (!axMax) axMax = 32767;
-    calib_logf("# [calib] X 轴上界 = %u\n", axMax);
+    calib_logf("# [calib] 轴上界 = %u（lcInExtX=%ld lcInExtY=%ld）\n", axMax,
+               (long)inExtX, (long)inExtY);
 
-    /* 轴→像素比的**标称初值**：等 HUD 线程用真实光标标定出来之前，先用它兜底，
-       否则前几十毫秒的「半径」会按 1.0 算（若包坐标是数位板逻辑单位就会小好几倍）。
+    /* 轴→像素比的**标称初值**：等渲染线程用真实光标标定出来之前先用它兜底。
+       ⛔ 旧版用 32767/axisMax，在 axisMax 恰好也是 32767 时算出 **1.0**（即「包坐标
+       就是像素」），而真实值约 1920/44800 ≈ 0.043 ⇒ 半径 8px 被算成 8 个轴单位
+       ≈ 0.34 屏幕像素 ⇒ 滞后上限把平滑压成 0，「调参无感」的第二层根因。
+       现在按「输入量程覆盖整屏」估算，量级至少是对的。
        ⚠️ 已被光标标定过就绝不覆盖（g_pxCalibrated 由渲染线程置位）。 */
     if (!g_pxCalibrated) {
-        double nominal = RANGE_NOMINAL / (double)axMax;
+        double ext = (double)(inExtX > 0 ? inExtX : (LONG)axMax);
+        double scrW = (double)(g_screenW > 0 ? g_screenW : 1920);
+        double nominal = scrW / (ext > 1.0 ? ext : 1.0);
         if (nominal > 0.0001 && nominal < 1000.0) g_pxPerAxis = nominal;
+        calib_logf("# [calib] 标称 轴→像素 = %.6f（%d px / %ld 轴）\n",
+                   g_pxPerAxis, g_screenW, (long)inExtX);
     }
 
     g_calib.hCtx = hCtx;
@@ -559,6 +750,13 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
     g_calib.offY = ok ? offY : -1;
     g_calib.axisMax = axMax;
     g_calib.valid = ok;
+    /* ⛔ 失败不立刻认命：盲扫要 n>=3，而真机前几批常常只有 2 个包。
+       给 8 次机会，期间 state 保持 0（未标定），面板如实显示「等待标定」。 */
+    if (ok) g_calib.tried = 1;
+    else if (g_calib.attempts >= 8) {
+        g_calib.tried = 1;
+        InterlockedExchange(&g_state, 2);
+    }
 
     if (!ok) {
         /* 把原始字节留给 worker 落盘：手工一看就能定位 X/Y（下一版即可硬编码/修正） */
@@ -567,34 +765,41 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
         if (len > 0) memcpy(g_dump, buf, len);
         g_dumpLen = len;
         InterlockedExchange(&g_dumpWanted, 1);
-        InterlockedExchange(&g_state, 2);
     }
     /* ⛔ detour 内最后一步：把拼好的标定文本交给 worker 落盘（本函数全程零 I/O）。 */
     calib_publish();
 }
 
-/* ================================================================== 单包滤波 */
-static void smooth_packets(HCTX hCtx, void* buf, int n)
+/* ================================================================== 单包滤波
+ * 返回**本批里坐标真正被改写的包数**（复位帧原值写回、无差异帧都不算）。
+ * ⛔ 早期版本把「处理过的包数」直接加进 g_smoothed ⇒ 面板显示「已平滑 17086 包」
+ *    而实际一包都没改过（标定失败早退）—— 计数器必须只说改写，不能说处理。 */
+static int smooth_packets(HCTX hCtx, void* buf, int n)
 {
     /* ——— 标定（每个上下文一次；n>=2 即可做「序号逐包 +1」验证）——— */
     if (g_calib.hCtx != hCtx) {
         if (g_calib.hCtx != 0) InterlockedIncrement(&g_hCtxChanges);
         g_calib.hCtx = hCtx;
         g_calib.tried = 0;
+        g_calib.attempts = 0;
         g_calib.valid = 0;
         g_calib.stride = 0;
         g_calib.offSerial = g_calib.offX = g_calib.offY = -1;
         g_wasEnabled = 0;                       /* 换上下文 ⇒ 轨迹状态作废 */
     }
     if (!g_calib.tried) {
-        if (n >= 2) try_calibrate(hCtx, buf, n);
-        else return;                            /* 等一个包数足够的调用再标定 */
+        /* 盲扫「序号逐包 +1」要 n>=3 才不是巧合 ⇒ 证据不足就整批放过，等下一批。
+           ⛔ 旧版 n>=2 就判一次且立刻置 tried=1：真机第一批往往正好 2 个包，
+              盲扫被跳过、掩码又不可信 ⇒ 一次判死，此后永不重试（日志里整场只有
+              一段 [calib] 就是这个原因）。 */
+        if (n >= 3) try_calibrate(hCtx, buf, n);
+        else return 0;
     }
-    if (!g_calib.valid || g_calib.offX < 0 || g_calib.offY < 0) return;
+    if (!g_calib.valid || g_calib.offX < 0 || g_calib.offY < 0) return 0;
 
     const int S = g_calib.stride;
     const int ox_ = g_calib.offX, oy_ = g_calib.offY;
-    if (S <= 0 || ox_ + 4 > S || oy_ + 4 > S) return;
+    if (S <= 0 || ox_ + 4 > S || oy_ + 4 > S) return 0;
 
     /* ——— 参数（全部从共享内存现读，调用方保证 g_cfg 非空）——— */
     const int    mode   = g_cfg[CFG_I_MODE];
@@ -614,8 +819,8 @@ static void smooth_packets(HCTX hCtx, void* buf, int n)
     const double jumpLimit = (double)g_calib.axisMax * JUMP_RESET_FRAC;
     const double cornerCos = cos_deg_series(cornerDeg);
 
-    DWORD now = GetTickCount();
     const int speedAdaptive = (flags & 1) ? 1 : 0;
+    int changed = 0;
 
     for (int i = 0; i < n; i++) {
         u8* p = (u8*)buf + (SIZE_T)i * S;
@@ -623,6 +828,15 @@ static void smooth_packets(HCTX hCtx, void* buf, int n)
         memcpy(&rawX, p + ox_, 4);
         memcpy(&rawY, p + oy_, 4);
         double x = (double)rawX, y = (double)rawY;
+
+        /* ⛔⛔ `now` 必须**每包**取样，不能整批取一次。
+           旧版写在循环外，而 g_lastMs 在循环内被更新 ⇒ 一批里第 2 个包起
+           dt = now − now = 0，被钳到 1ms ⇒ k = dt/(dt+τ) 退化成 1/(1+τ)
+           （强度 40 时 0.11 而非 0.38）、追笔的 step 也被缩小一个量级
+           ⇒ 参数与真实采样率脱钩，「拖滑杆没反应」的第三层根因。
+           GetTickCount 只是读 KUSER_SHARED_DATA 的一个常量，不是系统调用，
+           detour 里每包调一次完全安全。 */
+        DWORD now = GetTickCount();
 
         /* ——— 复位守卫（起笔锚定 / 抬笔重定位 / 开关刚打开）——— */
         double dx = x - g_ox, dy = y - g_oy;
@@ -654,11 +868,14 @@ static void smooth_packets(HCTX hCtx, void* buf, int n)
 
         /* 拐角守卫：与上一段输入方向的夹角超过阈值 ⇒ 本帧减弱平滑，保住尖角。
            ⚠️ 只对「标准」模式生效 —— 拉绳/追笔的跟随机制本身不磨圆（拉绳甚至会主动
-           把输出点按在绳长处，尖角由绳长决定），加拐角削弱反而破坏它们的手感。 */
+           把输出点按在绳长处，尖角由绳长决定），加拐角削弱反而破坏它们的手感。
+           ⛔ 必须带**位移门限**：抖动的段长通常只有亚像素~2px，而 205Hz 下相邻两帧
+           的夹角极易超过 45° ⇒ 不开门限的话「拐角」几乎每帧都成立 ⇒ k 被抬到 0.75
+           ⇒ 平滑被关掉，只剩下滞后，观感正是「有延迟却不平滑」。 */
         int corner = 0;
         if (mode == 0 && dist > 0.01) {
             double ux = dx / dist, uy = dy / dist;
-            if (g_hasDir) {
+            if (g_hasDir && (dist * pxAxis) > CORNER_MIN_PX) {
                 double dot = ux * g_dirX + uy * g_dirY;
                 if (dot > 1.0) dot = 1.0; else if (dot < -1.0) dot = -1.0;
                 if (dot < cornerCos) corner = 1;
@@ -681,8 +898,11 @@ static void smooth_packets(HCTX hCtx, void* buf, int n)
                 g_ox += dx * 0.25; g_oy += dy * 0.25;
             }
         } else if (mode == 2) {
-            /* ===== 追笔：输出端以受限速度追赶光标，追上即贴合 ===== */
-            double vmax = 0.2 + ((double)catchUp / 100.0) * 12.0;   /* px/ms */
+            /* ===== 追笔：输出端以受限速度追赶光标，追上即贴合 =====
+               ⛔ 量程必须落在**人的运笔速度区间**内：手绘约 0.05~1.5 px/ms
+               （50~1500 px/s）。旧版 0.2~12.2 px/ms（最快 12200 px/s 比任何手都快）
+               ⇒ 除最左端外 step 永远大于 dist ⇒ 恒走「贴合」分支 ⇒ 追笔滑杆整条无效。 */
+            double vmax = 0.02 + ((double)catchUp / 100.0) * 1.5;   /* px/ms */
             double step = vmax * dt * toAxis;
             if (dist > step && dist > 0.0001) {
                 double f = step / dist;
@@ -717,12 +937,14 @@ static void smooth_packets(HCTX hCtx, void* buf, int n)
         u32 wx = (u32)(g_ox + 0.5), wy = (u32)(g_oy + 0.5);
         memcpy(p + ox_, &wx, 4);
         memcpy(p + oy_, &wy, 4);
+        if (wx != rawX || wy != rawY) changed++;
 
         /* HUD 快照（普通内存写，detour 内零系统调用） */
         g_snRawX = (LONG)rawX; g_snRawY = (LONG)rawY;
         g_snOutX = (LONG)wx;   g_snOutY = (LONG)wy;
         g_snMs = (LONG)now;
     }
+    return changed;
 }
 
 /* ================================================================== detour */
@@ -740,7 +962,7 @@ static u64 det_WTPacketsGet(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
     if (r > 0) {
         InterlockedExchangeAdd(&g_packets, (LONG)r);
         if (!g_cfg && ((++s_cfgTick & 0xFF) == 0)) {    /* 共享内存没开时低频重试 */
-            if (cfg_open() && g_cfg) InterlockedExchange(&g_state, 1);
+            cfg_open();                                 /* ⛔ 不再顺手续状态=1：见下方状态机 */
         }
         if (g_cfg) {
             LONG en = g_cfg[CFG_I_ENABLED];
@@ -749,9 +971,17 @@ static u64 det_WTPacketsGet(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
                心跳按 GetTickCount（自开机起的毫秒，跨进程同源）判定，3 秒无更新即停手。 */
             if (en && (DWORD)(GetTickCount() - (DWORD)g_cfg[CFG_I_HEARTBEAT]) > 3000) en = 0;
             if (en) {
-                if (g_state == 0) InterlockedExchange(&g_state, 1);
-                smooth_packets((HCTX)a, (void*)c, r);
-                InterlockedExchangeAdd(&g_smoothed, (LONG)r);
+                /* 状态机（CFG_I_STATE，面板四档文案的唯一依据）：
+                   0=未挂/未标定  1=生效（标定 OK 且真的在改写）  2=标定失败  3=已卸载。
+                   ⛔ 旧版在这里无条件置 1 ⇒ 标定失败也显示「生效中」，再叠加 cmd=1
+                      （每次开开关都发）无条件置 1 ⇒ 「标定失败」被永久洗掉。现在只认标定结果。 */
+                int changed = smooth_packets((HCTX)a, (void*)c, r);
+                if (changed > 0) InterlockedExchangeAdd(&g_smoothed, (LONG)changed);
+                if (g_calib.valid) {
+                    if (g_state != 1) InterlockedExchange(&g_state, 1);
+                } else if (g_calib.tried) {
+                    if (g_state != 2) InterlockedExchange(&g_state, 2);
+                }
             } else {
                 g_wasEnabled = 0;                        /* 关掉 ⇒ 下一帧起笔锚定 */
             }
@@ -765,6 +995,8 @@ static u8* g_entry;
 static u8* g_relay;
 static u8  g_orig[5];
 static volatile LONG g_patched;
+/** 1 = 入口已被（多半是上一版本 DLL 的）转发桩占用 ⇒ 本实例拒绝叠加钩子。 */
+static int g_entryPrehooked;
 static char g_skip[160];
 
 static void* const g_detour = (void*)det_WTPacketsGet;
@@ -793,7 +1025,13 @@ static int prepare_hook(void)
     }
     u8* imgBase = (u8*)mbi.AllocationBase;
     if (g_impl < imgBase || g_impl >= imgBase + mbi.RegionSize) {
-        sprintf(g_skip, "jmp 目标 0x%llX 不在本映像内", (unsigned long long)(UINT_PTR)g_impl);
+        /* ⛔ 这条分支在真机上的真实含义是：**入口已经被别的代码改过**（绝大多数情况
+           是我们自己上一版的 DLL —— 它被 PS 锁住没法覆盖，于是新版换了文件名注入进来，
+           成了同一进程里的第二个副本）。此时绝不能再叠一层 hook（会双重平滑），
+           如实上报 state=4，让面板提示重启 Photoshop。 */
+        g_entryPrehooked = 1;
+        sprintf(g_skip, "入口已被占用（jmp 目标 0x%llX 不在本映像内）⇒ 需重启 Photoshop",
+                (unsigned long long)(UINT_PTR)g_impl);
         return 0;
     }
     memcpy(g_orig, g_entry, 5);
@@ -834,7 +1072,13 @@ static int commit_hook(void)
 
 static void do_install(void)
 {
-    if (!prepare_hook()) { logf("# 挂载失败: %s\n", g_skip); return; }
+    if (!prepare_hook()) {
+        logf("# 挂载失败: %s\n", g_skip);
+        /* state=4：被旧副本占着，本实例不生效。面板据此提示「重启 Photoshop」，
+           否则用户只会看到状态条一直停在「注入中…」，无从下手。 */
+        if (g_entryPrehooked) InterlockedExchange(&g_state, 4);
+        return;
+    }
     freeze_threads();
     /* ⛔ 冻结表溢出 ⇒ **放弃改写**。只冻住一部分线程等于没冻：没被冻住的那个线程
        若正好在取指这条 jmp，就会读到「新 E9 + 旧 rel32」的撕裂组合。宁可不平滑。 */
@@ -900,6 +1144,12 @@ static DWORD WINAPI worker(LPVOID param)
          (unsigned long)GetCurrentProcessId(), st.wYear, st.wMonth, st.wDay,
          st.wHour, st.wMinute, st.wSecond, jwwh_version());
 
+    /* 标称「轴→像素比」的分母（见 try_calibrate）。只在这里取一次，detour 内不碰。
+       ⛔ 必须是**虚拟屏宽**：多屏时笔可以跨屏移动，SM_CXSCREEN 只有主屏。 */
+    g_screenW = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    /* 字段几何查表（32768 种掩码组合）在这里预建，避免第一次标定落在取包线程上。 */
+    layout_table_build();
+
     cfg_open();
     publish_status();
     do_install();
@@ -943,7 +1193,16 @@ static DWORD WINAPI worker(LPVOID param)
                 if (cmd == 2) { do_unhook(); InterlockedExchange(&g_state, 3); }
                 else if (cmd == 1) {
                     if (!g_patched) do_install();
-                    InterlockedExchange(&g_state, 1);
+                    /* 重挂 = 重新给一次标定机会（标定结果只认当期数据）。
+                       ⛔ 旧版写 `valid ? 1 : 2`：从未标定过（valid=0）也被判成
+                       **标定失败**（红色），而其实只是「还没拿到足够证据」。
+                       ⛔ 旧版还无条件置 1 ⇒ 标定失败被洗成「生效中」。
+                       现在如实回到 0（未标定），由 detour 拿到包后自己裁决成 1 或 2。 */
+                    LONG st = g_calib.valid ? 1 : (g_entryPrehooked ? 4 : 0);
+                    g_calib.tried = 0;
+                    g_calib.attempts = 0;
+                    g_calib.valid = 0;
+                    InterlockedExchange(&g_state, st);
                 }
                 g_cfg[CFG_I_CMDACK] = seq;
             }
@@ -1013,7 +1272,8 @@ static LRESULT CALLBACK hud_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 static DWORD WINAPI hud_thread(LPVOID param)
 {
     (void)param;
-    HINSTANCE inst = GetModuleHandleW(NULL);
+    /* ⛔ 用 DLL 自身 HINSTANCE（DllMain 传进来的 g_hInst），不是宿主 exe 的。 */
+    HINSTANCE inst = g_hInst ? g_hInst : GetModuleHandleW(NULL);
     WNDCLASSEXW wc;
     memset(&wc, 0, sizeof(wc));
     wc.cbSize        = sizeof(wc);
@@ -1021,16 +1281,26 @@ static DWORD WINAPI hud_thread(LPVOID param)
     wc.hInstance     = inst;
     wc.lpszClassName = HUD_CLASS;
     ATOM atom = RegisterClassExW(&wc);
+    /* ⛔ ERROR_CLASS_ALREADY_EXISTS 必须放行：同一个 PS 进程里被注入两份本 DLL
+       （守护进程重注入 / 两个实例）时，后到的这份注册必然失败，但类已经在那儿、
+       窗口照样能建。旧版在这里当失败处理 ⇒ 二次注入后 HUD 永久消失。 */
+    if (!atom && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+        logf("# [hud] RegisterClassExW 失败 err=%lu ⇒ 本实例不建 HUD 窗口\n",
+             (unsigned long)GetLastError());
+    }
 
     HWND     wnd = NULL;
     HDC      mem = NULL;
     HBITMAP  dib = NULL;
 
-    if (atom) {
+    if (atom || GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
         wnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT
                               | WS_EX_NOACTIVATE,
                               HUD_CLASS, L"", WS_POPUP,
                               0, 0, HUD_SIZE, HUD_SIZE, NULL, NULL, inst, NULL);
+        if (!wnd) {
+            logf("# [hud] CreateWindowExW 失败 err=%lu\n", (unsigned long)GetLastError());
+        }
     }
     if (wnd) {
         SetLayeredWindowAttributes(wnd, RGB(0, 0, 0), 255, LWA_COLORKEY);
@@ -1063,44 +1333,54 @@ static DWORD WINAPI hud_thread(LPVOID param)
         }
         if (g_hudStop) break;
 
-        int wantVisible = 0;
-        if (wnd && mem && g_cfg && g_patched && g_calib.valid && g_cfg[CFG_I_ENABLED]) {
-            LONG hf = g_cfg[CFG_I_HUD];
-            DWORD now = GetTickCount();
-            if ((hf & 1) && (DWORD)((LONG)now - g_snMs) < HUD_IDLE_MS) wantVisible = 1;
-        }
-
-        if (!wantVisible) {
-            if (wnd && IsWindowVisible(wnd)) ShowWindow(wnd, SW_HIDE);
-            haveLast = 0;
-            Sleep(HUD_FRAME_MS);
-            continue;
+        /* 「有包流」判据：只要还在出包就算活跃（与 HUD 显隐无关）。
+           ⛔ `(LONG)now − g_snMs` 的旧写法在 GetTickCount 超过 2^31（开机 ~24.8 天）
+           时会变成负数 ⇒ (DWORD) 后是个巨大值 ⇒ HUD 永久不显示。一律用 DWORD 相减。 */
+        DWORD now = GetTickCount();
+        int active = 0;
+        if (g_cfg && g_patched && g_calib.valid && g_cfg[CFG_I_ENABLED]) {
+            if ((DWORD)(now - (DWORD)g_snMs) < HUD_IDLE_MS) active = 1;
         }
 
         POINT cur;
         GetCursorPos(&cur);
         double axX = (double)g_snOutX, axY = (double)g_snOutY;
 
-        /* —— 标定：|Δ光标| / |Δ输出轴| —— */
-        if (haveLast) {
-            double dAx  = dsqrt_((axX - lastAxX) * (axX - lastAxX) + (axY - lastAxY) * (axY - lastAxY));
-            double dCur = dsqrt_((double)(cur.x - lastCurX) * (cur.x - lastCurX)
-                               + (double)(cur.y - lastCurY) * (cur.y - lastCurY));
-            if (dAx > 40.0 && dCur > 3.0) {
-                double s = dCur / dAx;
-                if (s > 0.01 && s < 100.0) {
-                    g_pxPerAxis = g_pxPerAxis * 0.85 + s * 0.15;
-                    InterlockedExchange(&g_pxCalibrated, 1);
+        /* —— 标定：|Δ光标| / |Δ输出轴| ——
+           ⛔ 必须独立于 HUD 显隐：旧版这段在 `!wantVisible` 的 continue 之后，
+              于是关掉「拉绳提示」就再也不标定 ⇒ pxPerAxis 停在标称值 ⇒ 半径 / 绳长 /
+              追笔速度全部按错的单位换算 ⇒ 参数怎么调都无感（真机可直接复现）。 */
+        if (active) {
+            if (haveLast) {
+                double dAx  = dsqrt_((axX - lastAxX) * (axX - lastAxX) + (axY - lastAxY) * (axY - lastAxY));
+                double dCur = dsqrt_((double)(cur.x - lastCurX) * (cur.x - lastCurX)
+                                   + (double)(cur.y - lastCurY) * (cur.y - lastCurY));
+                if (dAx > 40.0 && dCur > 3.0) {
+                    double s = dCur / dAx;
+                    if (s > 0.01 && s < 100.0) {
+                        g_pxPerAxis = g_pxPerAxis * 0.85 + s * 0.15;
+                        InterlockedExchange(&g_pxCalibrated, 1);
+                    }
                 }
             }
+            lastCurX = cur.x; lastCurY = cur.y; lastAxX = axX; lastAxY = axY; haveLast = 1;
+        } else {
+            haveLast = 0;
         }
-        lastCurX = cur.x; lastCurY = cur.y; lastAxX = axX; lastAxY = axY; haveLast = 1;
+
+        /* 显隐：窗口存在 + 开了绳位（bit0）+ 有包流 + 标定已通过 */
+        LONG hf = g_cfg ? g_cfg[CFG_I_HUD] : 0;
+        int wantVisible = (wnd && mem && active && (hf & 1)) ? 1 : 0;
+        if (!wantVisible) {
+            if (wnd && IsWindowVisible(wnd)) ShowWindow(wnd, SW_HIDE);
+            Sleep(HUD_FRAME_MS);
+            continue;
+        }
 
         /* —— 绘制（窗口中心 = 光标 = 平滑输出点）—— */
         double pxAxis = g_pxPerAxis;
         int rx = (int)(((double)g_snRawX - axX) * pxAxis);
         int ry = (int)(((double)g_snRawY - axY) * pxAxis);
-        LONG hf = g_cfg[CFG_I_HUD];
         LONG c  = g_cfg[CFG_I_HUDCOLOR];
         COLORREF col = RGB((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
 
@@ -1200,6 +1480,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD reason, LPVOID reserved)
     (void)reserved;
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hinstDLL);
+        g_hInst = hinstDLL;      /* HUD 注册窗口类用（见 g_hInst 声明处） */
         /* ⛔ 重活绝不放在 DllMain（loader lock）⇒ 只起线程立刻返回。 */
         start_worker(hinstDLL);
     } else if (reason == DLL_PROCESS_DETACH) {

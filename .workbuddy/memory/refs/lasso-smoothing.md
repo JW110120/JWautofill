@@ -337,3 +337,42 @@ _ox += distX * k;
 - 依赖从 `KERNEL32+UCRT` 增至 **`+GDI32+USER32`** —— **本轮主要杀软风险增量**。
 - 面板新增「拉绳提示」开关（`showLeash` → hud 位域 bit0|bit1）；
   状态条文案改为显示**此刻真正生效的**模式/强度/半径（防「调了没反应却看不出原因」）。
+
+---
+
+## 9. 真机包布局的**实测结论**（2026-10-12 深夜，排障用，别再猜）
+
+| 项 | 值 | 来源 |
+| --- | --- | --- |
+| 真实包 stride | **52** | 盲扫「序号逐包 +1」+ 人工读 dump |
+| offSerial | **8** | 同上 |
+| offX / offY | **20 / 24** | 位移判据定解（与人工读字节一致） |
+| 真实掩码 | **0x1FFC**（TIME\|CHANGED\|SERIAL\|CURSOR\|BUTTONS\|X\|Y\|Z\|NP\|TP\|ORIENTATION） | 由 (52,8,20,24) 反解 |
+| 驱动 `WTGetA` 报的 lcPktData | **0x00C8**（CHANGED\|BUTTONS\|X，**缺 PK_Y**） | jwwh-1988.log |
+| LOGCONTEXT: lcPktData / lcInExtX / lcInExtY | **64 / 96 / 100** | WTInfoA(cat=3/4) 实测回读，与 wintab.h 吻合 |
+| 默认上下文输入量程 | X=44800, Y=29600 | 同上 |
+
+⛔ **驱动上报的 lcPktData 与它实际吐出的包布局不是一回事**（本机实证）。所以：
+- 掩码只能当**参考**，定解必须以**盲扫 + 数据判据**为准；
+- `WTI_DEVICES` 的真值是 **6**（本文件曾写 0），且本机探测不到 DVC_X ⇒ 别再指望 WTInfo 取量程，
+  **量程一律从 LOGCONTEXT 的 lcInExtX/lcInExtY 取**。
+
+### ⛔ 三个「改了代码却不生效」的坑（都踩过）
+1. **PS 锁住旧 DLL** ⇒ 自安装覆盖失败 ⇒ 安装目录里永远是第一版。
+   修法：DLL 文件名带**内容戳**（`JWautofillWintabHook.<hash8>.dll`），且同步逻辑**不能**放进
+   `if (needCopy)`（exe 未变 / DLL 变 时旧代码根本不同步）。
+   ⇒ 即便如此，PS 里已加载的旧模块仍在生效：**换 DLL 必须重启 Photoshop**（新 DLL 会报 state=4）。
+2. **状态只在收到 penSmooth 时广播一次** ⇒ 面板状态永久冻结（「切模式才变生效中」）。
+   修法：`SmoothStatePump` 周期推送（500ms + payload 变化才发）。
+3. **标定失败后 `tried=1` 永不重试**，且盲扫要求 n>=3 而真机首批常是 n=2 ⇒ 一次判死。
+   修法：证据不足就放过整批，等下一批；最多试 8 次才认命。
+
+### 参数「没感觉」的四层原因（已全部修）
+① 标定失败 ⇒ 零改写；② 标称 pxPerAxis 恒为 1.0 ⇒ 半径 8px 被算成 0.34 屏幕像素，滞后上限把平滑压成 0；
+③ `dt` 整批取一次 ⇒ 第 2 包起 dt=1ms，k 与追笔 step 全部失真；④ 追笔 vmax 上限 12.2px/ms（12200px/s）
+远超人手速度 ⇒ 恒走「贴合」分支。另：拐角守卫加了 3px 位移门限（否则 205Hz 下每帧都判拐角 ⇒ 平滑被关掉）。
+
+### 自检工具
+`analysis/gen_layout_selftest.py`：从 `wintab_hook.c` **原样抽取**标定函数编译成离线 exe，
+用真机 dump 的字节验证 (stride, offSerial, offX, offY)。改标定逻辑后必跑。
+`analysis/wintab_layout_probe.py` / `wintab_axis_probe.py`：WTInfo 只读侦察（不注入、不模拟输入）。

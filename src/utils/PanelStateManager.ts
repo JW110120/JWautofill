@@ -25,8 +25,8 @@ export type AppPanelState = {
   compactModes?: CompactModes;
   fillMode?: 'foreground' | 'pattern' | 'gradient';
   selectedGradient?: Gradient | null;
-  /** 套索实时平滑：总开关 + 滤波参数（deepMerge 按字段合并，缺字段回落默认值） */
-  smoothEnabled?: boolean;
+  /** 套索实时平滑：滤波参数（deepMerge 按字段合并，缺字段回落默认值）。
+   *  ⚠️ 开关**不在这里**：它是服务语义（开 = 拉起守护进程），由 smoothStatus.pen.enabled 驱动。 */
   smoothParams?: LassoSmoothParams;
   /** 套索实时平滑分区的界面状态（可见性 / 两级折叠），属于界面偏好而非参数 */
   smoothOptionsVisible?: boolean;

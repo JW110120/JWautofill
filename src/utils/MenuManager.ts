@@ -68,8 +68,18 @@ const APP_MENU_ITEMS: MenuItemDef[] = [
     label: "设置主开关快捷键"
   },
   {
+    id: "spacerApp4",
+    label: "-" // 分隔符（设置主开关快捷键 与 卸载套索平滑服务 之间）
+  },
+  {
+    // 与工具箱的「卸载快捷键服务」同款低频操作：删除整个插件前用它摘掉平滑服务。
+    // ⚠️ id 必须与绘画工具箱的同类菜单项区分开：UXP 的菜单项 id 插件级唯一。
+    id: "uninstallSmoothDaemon",
+    label: "卸载套索平滑服务"
+  },
+  {
     id: "spacerApp2",
-    label: "-" // 分隔符（设置主开关快捷键 与使用手册 之间）
+    label: "-" // 分隔符（卸载套索平滑服务 与使用手册 之间）
   },
   {
     id: "openDocsFill",
@@ -151,6 +161,7 @@ export class MenuManager {
   private static appSetMainHotkeyCallback: (() => void) | null = null;
   private static appShowVisibilityPanelCallback: (() => void) | null = null;
   private static appFillSettingsCallback: (() => void) | null = null;
+  private static appUninstallSmoothDaemonCallback: (() => void) | null = null;
   // 是否已正式激活（试用不算）：决定「注销激活状态」菜单项能否点击
   private static appLicenseActive: boolean = false;
 
@@ -196,6 +207,7 @@ export class MenuManager {
     onSetMainHotkey?: () => void;
     onShowVisibilityPanel?: () => void;
     onOpenFillSettings?: () => void;
+    onUninstallSmoothDaemon?: () => void;
   }) {
     this.appOpenLicenseCallback = callbacks.onOpenLicenseDialog;
     this.appResetLicenseCallback = callbacks.onResetLicense;
@@ -204,6 +216,7 @@ export class MenuManager {
     this.appSetMainHotkeyCallback = callbacks.onSetMainHotkey ?? null;
     this.appShowVisibilityPanelCallback = callbacks.onShowVisibilityPanel ?? null;
     this.appFillSettingsCallback = callbacks.onOpenFillSettings ?? null;
+    this.appUninstallSmoothDaemonCallback = callbacks.onUninstallSmoothDaemon ?? null;
   }
 
   /**
@@ -375,6 +388,11 @@ export class MenuManager {
       case "appFillSettings":
         if (this.appFillSettingsCallback) {
           this.appFillSettingsCallback();
+        }
+        break;
+      case "uninstallSmoothDaemon":
+        if (this.appUninstallSmoothDaemonCallback) {
+          this.appUninstallSmoothDaemonCallback();
         }
         break;
       case "openDocsFill":

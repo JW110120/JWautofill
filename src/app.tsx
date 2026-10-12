@@ -38,13 +38,14 @@ import {
 } from './hotkey/HotkeyBridge';
 import {
   LassoSmoothMode, LassoSmoothParams, LassoSmoothStatus,
-  armLassoSmoothing, pushLassoSmoothParams, disarmLassoSmoothing, onLassoSmoothStatus,
+  pushLassoSmoothParams, onLassoSmoothStatus,
   initialLassoSmoothParams, setPenSmooth,
 } from './hotkey/LassoSmoothing';
 // 套索实时平滑的**独立**守护进程（端口 18924）。与快捷键服务（18923）各有各的
 // 启停 / 卸载入口，互不影响 —— 这是「两个钩子必须在进程级解耦」在 UXP 侧的落点。
 import {
   connectSmoothDaemon, disconnectSmoothDaemon, launchSmoothDaemon, isSmoothDaemonConnected,
+  sendSmoothDaemonCommand,
 } from './hotkey/SmoothBridge';
 import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/MainToggleBus';
 import { FillPanelId, subscribeFillPanelToggle } from './utils/FillPanelToggleBus';
@@ -217,8 +218,6 @@ class App extends React.Component<AppProps, AppState> {
     private toolWatchBusySince = 0;
     private lastKnownTool: string | null = null;
     // ===== 套索实时平滑（方案 A：输入层滤波）=====
-    // 布防意图的镜像不在这里 —— 它必须参与渲染，因此放在 state.smoothArmed
-    // （真机事故：写成实例字段时布防完成不触发重渲染，状态行永远停在「待命」）。
     /** 平滑健康状态的订阅退订器（卸载时退订，避免监听器泄漏）。 */
     private unsubSmoothStatus: (() => void) | null = null;
     /**
@@ -227,33 +226,15 @@ class App extends React.Component<AppProps, AppState> {
      *    后者退订「我们与平滑守护进程之间的连接」——两者生命周期不同（连接可能重建多次）。
      */
     private unsubSmoothDaemon: (() => void) | null = null;
-    /** 套索工具的内部 ID（`application.tool._enum` 的口径，与 HotkeyBridge 的判定一致）。 */
-    private static readonly LASSO_TOOL_ID = 'lassoTool';
     /**
-     * 状态行用的「工具 ID → 展示名」映射（只覆盖选区类工具，够用即可）。
-     *
-     * ⛔ 为什么状态行要显示工具名：布防条件是「当前工具 === lassoTool」这一个枚举值，
-     *    而「用户用的是自由套索但界面说不是套索」有两种完全不同的原因 ——
-     *    ① 工具读取链路失败（读到 null）；② 用户其实用的是多边形/磁性套索（枚举不同）。
-     *    把实际读到的值显示出来，一次就能分辨，不必再来回猜。
+     * 上次拉起平滑服务的时间戳（连点去抖）。
+     * ⛔ 启动窗口（约 3 秒）内重复拉起会点出第二个守护进程实例：端口绑定失败的那个
+     *    不会退出，反而可能跟着 WatchPhotoshop 往 PS 里再注入一次 hook DLL。
+     *    开关本身保持可点（禁用它就是 2026-10-12 的死锁事故），去抖放在这里。
      */
-    private static readonly SMOOTH_TOOL_CN: Record<string, string> = {
-        lassoTool: '套索',
-        polySelTool: '多边形套索',
-        magneticLassoTool: '磁性套索',
-        quickSelectTool: '快速选择',
-        magicWandTool: '魔棒',
-        marqueeRectTool: '矩形选框',
-        marqueeEllipTool: '椭圆选框',
-        marqueeSingleRowTool: '单行选框',
-        marqueeSingleColumnTool: '单列选框',
-        moveTool: '移动',
-        cropTool: '裁剪',
-        paintbrushTool: '画笔',
-        eraserTool: '橡皮擦',
-        gradientTool: '渐变',
-        bucketTool: '油漆桶',
-    };
+    private lastSmoothLaunchAt = 0;
+    /** 「服务启动中…」的超时自愈定时器（配合 state.smoothLaunching，卸载时清理）。 */
+    private smoothLaunchTimer: any = null;
     // ===== 快速蒙版巡检 =====
     // 复合根因（2026-09-10 定位）：
     //   ① checkMaskModes() 原先只写 this.isInQuickMask（实例字段）+ forceUpdate，
@@ -478,8 +459,7 @@ class App extends React.Component<AppProps, AppState> {
         // 都要以绑定后的方法传给 JSX（类方法裸引用会丢 this ⇒ 点击后 setState 抛错）。
         this.toggleSmoothOptions = this.toggleSmoothOptions.bind(this);
         this.toggleSmoothAdvanced = this.toggleSmoothAdvanced.bind(this);
-        this.toggleSmoothEnabled = this.toggleSmoothEnabled.bind(this);
-        this.togglePenSmooth = this.togglePenSmooth.bind(this);
+        this.toggleLassoSmooth = this.toggleLassoSmooth.bind(this);
         this.handleSmoothModeChange = this.handleSmoothModeChange.bind(this);
         this.handleNotification = this.handleNotification.bind(this);
         // 事件触发的蒙版/通道状态探测改为防抖执行（见 utils/psProbe.ts 根因说明）：
@@ -564,10 +544,6 @@ class App extends React.Component<AppProps, AppState> {
                     autoOffOnOtherTool: this.state.autoOffOnOtherTool,
                     strokeEnabled: this.state.strokeEnabled,
                     createNewLayer: this.state.createNewLayer,
-                    // 套索实时平滑的总开关同属「功能开关」而非「数值参数」：复位只应把
-                    // 强度/半径等滑块打回默认，不该顺手把用户开着的平滑关掉（与 strokeEnabled 同理）。
-                    // smoothParams 是参数，仍走 `...initialState` 复位。
-                    smoothEnabled: this.state.smoothEnabled,
                     // 清除算法属于「用户选项」而非「参数」：复位不应把用户选好的
                     // 减法 / 乘法 / 趋白打回默认值（与 deselectAfterFill 等同理）。
                     clearBackgroundAlgorithm: this.state.clearBackgroundAlgorithm,
@@ -590,18 +566,12 @@ class App extends React.Component<AppProps, AppState> {
                     showVisibilityPanel: this.state.showVisibilityPanel,
                     isFillSettingsOpen: this.state.isFillSettingsOpen,
                     floatOrder: this.state.floatOrder,
-                    // ⛔ 平滑健康状态必须保持：它由守护进程回报（钩子是否装上 / 是否在拖拽），
-                    //    不是用户参数。若被 `...initialState` 打回 initialLassoSmoothStatus
-                    //    （connected:false），状态行会一直谎报「平滑服务未启动」，
-                    //    直到下一次状态广播才自愈 —— 而广播只在布防/撤防或连接变化时才发。
+                    // ⛔ 平滑健康状态必须保持：它由守护进程回报（是否注入 PS / 标定结果 /
+                    //    已平滑包数），不是用户参数。若被 `...initialState` 打回
+                    //    initialLassoSmoothStatus（connected:false），状态行会一直谎报
+                    //    「平滑服务未启动」，直到下一次状态广播才自愈 —— 而广播只在
+                    //    开关变化或连接变化时才发。
                     smoothStatus: this.state.smoothStatus,
-                    // ⛔ 同理必须保持布防镜像与工具读数：它们是**与守护进程的同步态**，
-                    //    不是用户参数。被 `...initialState` 打回 false/null 后，
-                    //    syncLassoSmoothingArm 会误以为「意图变了」而重发一次布防，
-                    //    并且状态行会在下一轮巡检前显示错误的「待命（未知）」。
-                    smoothArmed: this.state.smoothArmed,
-                    smoothToolId: this.state.smoothToolId,
-                    smoothToolErr: this.state.smoothToolErr,
                     // 授权状态不应被参数复位影响
                     isLicensed: this.state.isLicensed,
                     isTrial: this.state.isTrial,
@@ -612,8 +582,8 @@ class App extends React.Component<AppProps, AppState> {
                     // 「显示公式」同属界面偏好（四处独立），复位时保持当前选择
                     formulaVisible: this.state.formulaVisible,
                 }, () => {
-                    // 复位把 smoothParams 打回了默认值（参数类），但平滑总开关被保留。
-                    // 若此刻正处于布防状态，不重新下发的话守护进程会继续用复位前的旧参数滤波，
+                    // 复位把 smoothParams 打回了默认值（参数类），但平滑开关状态被保留。
+                    // 若此刻平滑正在生效，不重新下发的话守护进程会继续用复位前的旧参数滤波，
                     // 面板显示与实拖效果就会不一致。参数未变化时 LassoSmoothing 内部会去重，不会白发。
                     try { pushLassoSmoothParams(this.state.smoothParams); } catch { /* ignore */ }
                 });
@@ -621,7 +591,8 @@ class App extends React.Component<AppProps, AppState> {
             onToggleCompactMode: () => { this.toggleCompactMode(); },
             onSetMainHotkey: () => { void this.setMainHotkey(); },
             onShowVisibilityPanel: () => { this.openVisibilityPanel(); },
-            onOpenFillSettings: () => { this.openFillSettingsPanel(); }
+            onOpenFillSettings: () => { this.openFillSettingsPanel(); },
+            onUninstallSmoothDaemon: () => { void this.uninstallSmoothService(); }
         });
         this.selectionChangeListener = (eventName, descriptor) => {
             // ⚠️ 事件到达瞬间先打忙碌标记（回调内唯一允许做的事，不碰 DOM）：
@@ -737,7 +708,6 @@ class App extends React.Component<AppProps, AppState> {
                     // ⚠️ smoothParams 必须**逐字段**合并（不能整体覆盖）——
                     //    旧存档里没有这个对象，整体覆盖会把默认值冲成 undefined，
                     //    之后下发的参数里出现 undefined 会让守护进程解析出 NaN 半径。
-                    smoothEnabled: loaded.appPanel.smoothEnabled ?? this.state.smoothEnabled,
                     smoothParams: {
                         ...initialLassoSmoothParams,
                         ...(loaded.appPanel.smoothParams ?? {}),
@@ -780,13 +750,9 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     componentDidUpdate(prevProps, prevState) {
-        // 主开关/自动关/平滑总开关变化时同步巡检（放在最前：不受下方 panelStateLoaded 早退影响）
-        // ⚠️ 平滑总开关虽然在自己的 toggle 回调里也调了一次 syncToolWatch，这里仍要带上：
-        //    存档合并与「参数复位」都是一次性整批 setState，会绕过那个 toggle；
-        //    只有按 state 派生，才能保证巡检与布防在任何写入路径上都跟着收回。
+        // 主开关/自动关变化时同步巡检（放在最前：不受下方 panelStateLoaded 早退影响）
         if (prevState.isEnabled !== this.state.isEnabled ||
-            prevState.autoOffOnOtherTool !== this.state.autoOffOnOtherTool ||
-            prevState.smoothEnabled !== this.state.smoothEnabled) {
+            prevState.autoOffOnOtherTool !== this.state.autoOffOnOtherTool) {
             this.syncToolWatch();
         }
         // 「填充选项」展开/可见状态变化时同步快速蒙版巡检（同样放在早退之前）
@@ -866,7 +832,6 @@ class App extends React.Component<AppProps, AppState> {
             // 套索实时平滑：参数与界面开关一并纳入持久化
             // ⚠️ smoothParams 靠**引用比较**判定变更 ⇒ 必须整体替换对象
             //    （见 updateSmoothParam），就地改字段不会触发落盘。
-            'smoothEnabled',
             'smoothParams',
             'smoothOptionsVisible',
             'isSmoothOptionsExpanded',
@@ -894,7 +859,6 @@ class App extends React.Component<AppProps, AppState> {
                     fillMode: this.state.fillMode,
                     selectionOptionsVisible: this.state.selectionOptionsVisible,
                     fillOptionsVisible: this.state.fillOptionsVisible,
-                    smoothEnabled: this.state.smoothEnabled,
                     smoothParams: this.state.smoothParams,
                     smoothOptionsVisible: this.state.smoothOptionsVisible,
                     isSmoothOptionsExpanded: this.state.isSmoothOptionsExpanded,
@@ -929,10 +893,13 @@ class App extends React.Component<AppProps, AppState> {
             try { this.unsubSmoothDaemon(); } catch { /* ignore */ }
             this.unsubSmoothDaemon = null;
         }
-        // 撤防套索平滑：面板关闭后不该继续改写用户的鼠标轨迹。
-        // （守护进程在布防方 WS 断开时也会自动撤防；这里是「面板还活着但组件卸载」的兜底，
-        //  例如此后不再有工具巡检，布防状态会一直悬着。）
-        try { disarmLassoSmoothing(); } catch { /* ignore */ }
+        if (this.smoothLaunchTimer) {
+            clearTimeout(this.smoothLaunchTimer);
+            this.smoothLaunchTimer = null;
+        }
+        // ⚠️ 这里**不**断开平滑守护进程连接、也不关平滑开关：与笔刷热键服务同语义 ——
+        //    开关打开即拉起服务，面板关闭不该把用户正在用的平滑砍掉。
+        //    （unsubSmoothDaemon 只退订状态流；连接本身由引用计数管理。）
         if (this.selectionChangeListener) {
             action.removeNotificationListener(['set'], this.selectionChangeListener);
         }
@@ -1037,13 +1004,13 @@ class App extends React.Component<AppProps, AppState> {
         this.setState({ selectionExpand: value });
     }
 
-    // ===== 套索实时平滑（方案 A：输入层滤波）=====
+    // ===== 套索实时平滑（Wintab 笔输入通路）=====
     //
     // 为什么必须走原生守护进程：UXP 没有任何画布指针 API（app.tsx 里那两个
     // document.addEventListener('mousemove'/'mouseup') 监听的是**插件面板自身的 DOM**，
     // 与 PS 画布无关）。因此「套索绘制过程中」对 UXP 是盲区，唯一能介入的位置是
-    // **PS 收到鼠标输入之前** —— 由 native/HotkeyDaemon 的低层鼠标钩子吞掉原始位移、
-    // 换成滤波后的位移（SendInput 回注）。本面板只负责「布防 + 参数 + 状态显示」。
+    // **PS 收到输入之前** —— 守护进程把 hook DLL 注入 PS，在 Wintab 取包处改写坐标。
+    // （2026-10-12：鼠标钩子通路已按用户要求整体移除，只保留这一条笔通路。）
 
     /**
      * 折叠/展开「平滑选项」分区。
@@ -1059,7 +1026,7 @@ class App extends React.Component<AppProps, AppState> {
         resyncNativeWidgets(root);
     }
 
-    /** 折叠/展开「平滑选项」内的高级项（半径 / 张力 / 追笔 / 拐角 / 速度自适应 / 采样间距）。 */
+    /** 折叠/展开「平滑选项」内的高级项（半径 / 张力 / 追笔 / 拐角 / 速度自适应 / 拉绳提示）。 */
     toggleSmoothAdvanced() {
         const root = this.panelRef.current;
         if (this.state.isSmoothAdvancedExpanded) hideNativeWidgetsOfSections(root, ['smoothAdvanced']);
@@ -1070,42 +1037,137 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     /**
-     * 平滑总开关（**二合一**：启用平滑 + 平滑服务）。
+     * 套索平滑总开关（**二合一**：启用平滑 + 平滑服务）。
      *
      * ⛔ 为什么合成一条：平滑与热键拆成两个进程后，平滑侧一度同时暴露「启用平滑」与
      *    「平滑服务」两行开关 —— 服务本是平滑的前提，用户却要先开服务、再开平滑，
      *    且服务没开时点平滑开关毫无反应，两行谁是谁的前提并不直观。
      *    现合并为**一条状态条**（与「笔刷热键」的服务条同款：指示点 + 状态文案 + 开关）：
-     *      开 = 拉起平滑服务（JWautofillSmoothDaemon，端口 18924，与快捷键服务互不影响）+ 布防；
-     *      关 = 撤防 + 让平滑服务退出。
+     *      开 = 拉起平滑服务（JWautofillSmoothDaemon，端口 18924，与快捷键服务互不影响）
+     *           + 下发 penSmooth(on, 整包参数)；
+     *      关 = 下发 penSmooth(off) + 让平滑服务优雅退出。
      *    ⚠️ 二合一没有牺牲独立性：停掉的仍然**只有平滑自己那一个进程**，快捷键服务照常。
      *
-     * ⚠️ 必须用 setState 的**回调**读新值去重算布防：setState 之后立刻读 this.state 拿到的是
-     *    旧值（React 19 批处理），而布防判定依赖新的 smoothEnabled。
-     * ⚠️ 走 syncToolWatch（而不是直接 syncLassoSmoothingArm）：本开关同时决定
-     *    「工具巡检是否需要运行」—— 只同步布防的话，在「主开关 + 自动关」都关着时
-     *    巡检根本没起，布防永远等不到工具读数。syncToolWatch 末尾会补一次布防同步。
+     * ⚠️ 2026-10-12：鼠标钩子通路（smoothArm 布防 / 工具巡检）移除后，本开关是
+     *    「平滑选项」里唯一的开关，语义即「开启/关闭套索平滑」（原「笔平滑」）。
+     *
+     * ⛔ 2026-10-12 深夜修复（真机事故：删 dist 重编译 + 重载插件后，状态条永远
+     *    「服务未启动」且开关置灰，用户没有任何入口拉起服务）：
+     *      根因 = 本函数与 JSX 各有一道「未连接即 return / 置灰」的旧从属逻辑。
+     *      合并后开关是服务的**唯一启动入口**，未连接恰恰是它最需要被点的时刻。
+     *    因此：开关永不禁用；未连接时点击 = 拉起服务；版本过旧时点击 = 重启服务。
      */
-    toggleSmoothEnabled() {
-        const next = !this.state.smoothEnabled;
-        this.setState({ smoothEnabled: next }, () => { this.syncToolWatch(); });
-        if (next) {
-            // 二合一：打开平滑必须让平滑服务在跑。已连接时 launchSmoothDaemon 幂等跳过。
-            if (!isSmoothDaemonConnected()) void this.startSmoothService();
-        } else if (isSmoothDaemonConnected()) {
-            // 关 = 让平滑服务优雅退出（只停它自己那一份，绝不触碰快捷键服务）。
-            disconnectSmoothDaemon();
+    toggleLassoSmooth() {
+        const st = this.state.smoothStatus;
+        // 「实际开着」必须同时看连接：守护进程崩溃/被杀时 pen.enabled 会残留 true
+        // （setLassoSmoothConnected(false) 刻意不复位它 —— 不能把「没连上」洗成「已关」）。
+        // 若只看 pen.enabled，崩溃后开关会卡在「开」，而点它只会走关闭分支 ⇒ 再也拉不起服务。
+        const effectivelyOn = st.connected && st.pen.enabled;
+        if (effectivelyOn) {
+            // 开着 ⇒ 关：下发 off + 让平滑服务优雅退出（只停它自己那一份，绝不触碰快捷键服务）。
+            setPenSmooth(false, this.state.smoothParams);
+            if (isSmoothDaemonConnected()) disconnectSmoothDaemon();
+            return;
         }
+        // 关着 ⇒ 开。先记意图：未连接时发送必然失败，但 penOn 会被 LassoSmoothing 记住，
+        // WS 建连后 resendLassoSmoothing 会重放 ⇒ 服务起来后平滑自动跟上，无需用户再点一次。
+        setPenSmooth(true, this.state.smoothParams);
+        if (isSmoothDaemonConnected()) {
+            if (st.unsupported || st.penUnsupported) {
+                // 服务在跑但版本过旧 ⇒ 走「重启」恢复路径（状态条文案承诺的「先关再开」）：
+                // 先让旧的退出，再从插件目录拉起新副本（其自安装逻辑会 Kill 旧副本、
+                // 更新安装目录，见 Program.cs EnsureSelfInstalled）。
+                // ⚠️ 不能直接 launch：launchSmoothDaemon 对 connected 早退，
+                //    且旧进程还占着 18924，必须等它退出后再拉。
+                disconnectSmoothDaemon();
+                void this.restartSmoothService();
+            }
+            // 版本正常、只是还没开 ⇒ 上面那行 penSmooth(true) 已足够。
+            return;
+        }
+        // 服务没在跑 ⇒ 拉起（3 秒去抖：启动窗口内连点只拉一次）。
+        if (Date.now() - this.lastSmoothLaunchAt < 3000) return;
+        this.lastSmoothLaunchAt = Date.now();
+        this.beginSmoothLaunching();
+        void this.startSmoothService();
     }
 
     /**
      * 拉起平滑服务。
-     * 结果不在这里提示：真实状态由上方状态条如实反映（连接建立后 smoothStatus.connected 变真）。
+     * 结果不在这里提示：真实状态由状态条如实反映（连接建立后 smoothStatus.connected 变真）。
      * 失败时补一条 console，便于区分「没找到 exe」与「唤起被系统拒绝」。
      */
     private async startSmoothService() {
         const r = await launchSmoothDaemon();
         if (!r.ok) console.warn('[平滑服务] ' + r.message);
+    }
+
+    /**
+     * 「版本过旧」的恢复路径：等旧服务真正退出（WS onclose ⇒ connected=false，
+     * 最多等 3 秒）后，从插件目录拉起新副本。节奏与 uninstallSmoothService 同款轮询。
+     */
+    private async restartSmoothService() {
+        for (let i = 0; i < 10; i++) {
+            if (!isSmoothDaemonConnected()) break;
+            await new Promise(r => setTimeout(r, 300));
+        }
+        this.lastSmoothLaunchAt = Date.now();
+        this.beginSmoothLaunching();
+        await this.startSmoothService();
+    }
+
+    /**
+     * 标记「正在拉起平滑服务」：状态条据此显示「服务启动中…」而非仍旧「服务未启动」
+     * （否则用户点完 1~3 秒内看不到任何反馈，只会反复连点）。
+     * 8 秒超时自愈：守护进程始终没起来时如实回落到「服务未启动」。
+     */
+    private beginSmoothLaunching() {
+        this.setState({ smoothLaunching: true });
+        if (this.smoothLaunchTimer) clearTimeout(this.smoothLaunchTimer);
+        this.smoothLaunchTimer = setTimeout(() => {
+            this.smoothLaunchTimer = null;
+            if (this.state.smoothLaunching) this.setState({ smoothLaunching: false });
+        }, 8000);
+    }
+
+    /**
+     * 卸载套索平滑服务（右上角菜单入口，与工具箱「卸载快捷键服务」同款低频操作）。
+     *
+     * 走静默通道：让守护进程自己移除开机自启 + 删除安装目录（%LOCALAPPDATA%\JWautofill\smooth）
+     * + 退出，全程无窗口。未连接时服务没在跑，没有可卸载的对象 —— 但安装目录可能残留，
+     * 此时把手工路径告诉用户，避免「点了没反应」。
+     * ⚠️ 只动平滑自己那一份：卸载快捷键服务走 HotkeyBridge 那条完全独立的链，互不影响。
+     */
+    private async uninstallSmoothService() {
+        if (!isSmoothDaemonConnected()) {
+            try {
+                await core.showAlert({
+                    message: '平滑服务当前未在运行，无需卸载。\n若曾安装过，可手动删除 %LOCALAPPDATA%\\JWautofill\\smooth 目录。'
+                });
+            } catch { /* ignore */ }
+            return;
+        }
+        if (!sendSmoothDaemonCommand('uninstall')) {
+            try {
+                await core.showAlert({ message: '卸载指令发送失败：与平滑服务的连接已断开，请稍后重试。' });
+            } catch { /* ignore */ }
+            return;
+        }
+        // 与 BrushHotkeySection.stopDaemon 同节奏：轮询等待服务真正退出（最多 10 秒）
+        for (let i = 0; i < 20; i++) {
+            await new Promise(r => setTimeout(r, 500));
+            if (!isSmoothDaemonConnected()) {
+                try {
+                    await core.showAlert({ message: '已卸载套索平滑服务：开机自启已移除，安装目录已删除。' });
+                } catch { /* ignore */ }
+                return;
+            }
+        }
+        try {
+            await core.showAlert({
+                message: '卸载指令已发送但平滑服务未退出，请稍后重试；若仍无法卸载，可手动删除 %LOCALAPPDATA%\\JWautofill\\smooth 目录。'
+            });
+        } catch { /* ignore */ }
     }
 
     /** 模式单选：组件回传的是「原生形状」的事件对象，按 e.target.value 取值。 */
@@ -1140,11 +1202,11 @@ class App extends React.Component<AppProps, AppState> {
      *    这里每行等高、上下行距恒定，隐藏只让后续行整体上移，不会破坏版式，
      *    因此「省空间 + 少困惑」的收益大于「控件位置恒定」的收益。
      *
-     * ⚠️ 判据只有「是否作用于当前模式」这一条，**不含** `smoothEnabled`：
-     *    总开关关闭时参数依然可见可编辑 —— 它们是预置值，用户完全可以先调好再开总开关。
+     * ⚠️ 判据只有「是否作用于当前模式」这一条：开关关闭时参数依然可见可编辑 ——
+     *    它们是预置值，用户完全可以先调好再开开关。
      *
-     * 归属（与 Program.cs 的 LassoMouseSmoother 分支一一对应，勿凭感觉改）：
-     *   半径 / 采样间距 → 三种模式都用到（恒显示）
+     * 归属（与 wintab_hook.c 的 smooth_packets 分支一一对应，勿凭感觉改）：
+     *   半径 → 三种模式都用到（恒显示）
      *   强度 / 拐角 / 速度适应 → 仅「标准」（拉绳与追笔都不读 Strength）
      *   张力 → 仅「拉绳」；追笔 → 仅「追笔」
      */
@@ -1155,138 +1217,66 @@ class App extends React.Component<AppProps, AppState> {
         return mode === 'standard'; // strength / cornerAngle / speedAdaptive
     }
 
-    /**
-     * 按「当前工具 + 平滑总开关」重算并下发布防意图（幂等）。
-     *
-     * 布防条件：`smoothEnabled` 为真 **且** 当前工具是套索工具。
-     * 另外两道闸门（PS 前台、左键按下且在 PS 窗口上）由守护进程自己判 —— 那是每一帧都在变的状态，
-     * 放在这里判既不准也多一次 IPC。
-     *
-     * ⚠️ 幂等很重要：本方法由 300ms 工具巡检驱动，若每轮都无条件下发，
-     *    守护进程会每 300ms 收到一次「布防」并触发一次状态广播。参数侧的重发由
-     *    LassoSmoothing 内部的「线格式未变化则不发」兜住。
-     *
-     * ⛔ 布防意图的镜像放在 **state**（smoothArmed）而不是实例字段：
-     *    状态行的文案与配色全靠它，而布防是在巡检里异步完成的 —— 写实例字段不会触发
-     *    重渲染，界面就会一直停在布防前那一帧的过期判定上（真机 bug：套索下显示「待命」）。
-     *    这里只在**跃变时** setState，因此 300ms 巡检不会造成渲染抖动。
-     */
-    syncLassoSmoothingArm(tool?: string | null) {
-        const t = tool !== undefined ? tool : this.lastKnownTool;
-        const shouldArm = !!this.state.smoothEnabled && t === App.LASSO_TOOL_ID;
-        if (shouldArm === this.state.smoothArmed) {
-            // 意图未变：不重发 arm（避免无谓广播），但顺带同步一次参数
-            // （参数可能在别处改过；线格式相同则 LassoSmoothing 也不会真的发）。
-            if (shouldArm) pushLassoSmoothParams(this.state.smoothParams);
-            return;
-        }
-        this.setState({ smoothArmed: shouldArm });
-        armLassoSmoothing(shouldArm, shouldArm ? this.state.smoothParams : undefined);
-    }
-
-    /** 把守护进程回报的平滑健康状态写进 state（渲染要读它，因此不能只写实例字段）。 */
+    /** 把守护进程回报的平滑状态写进 state（渲染要读它，因此不能只写实例字段）。 */
     private applySmoothStatus(s: LassoSmoothStatus) {
         this.setState({ smoothStatus: s });
+        // 连接建立即宣告「启动中」结束：真实状态从此由 smoothStatus 接管。
+        // （不同时清定时器会泄漏一个到点自愈的 setTimeout，每个启动周期漏一个。）
+        if (s.connected && this.state.smoothLaunching) {
+            if (this.smoothLaunchTimer) { clearTimeout(this.smoothLaunchTimer); this.smoothLaunchTimer = null; }
+            this.setState({ smoothLaunching: false });
+        }
     }
 
     /**
-     * 平滑状态行文案（面板里那一行只读提示）。
+     * 套索平滑状态条文案（面板里唯一一条平滑状态行）。
      *
-     * 判据优先级刻意如此：连接 → 协议不支持 → 未启用 → 熔断 → 钩子 → 拖拽中 → 已布防 → 待命。
-     * ⛔ 「未连接 / 守护进程版本过旧 / 钩子没装上 / 当前不是套索」是四种完全不同的原因，
-     *    必须分开说 —— 全都显示成「启动失败（被安全软件拦截）」会把排查方向彻底带偏。
+     * 判据优先级刻意如此：启动中 → 连接 → 协议不支持 → 开关 → 标定 → 注入 → 生效。
+     * ⛔ 「未连接 / 守护进程版本过旧 / 标定失败 / 还没注入 PS」是四种完全不同的原因，
+     *    必须分开说 —— 全都显示成同一句话会把排查方向彻底带偏。
      */
     private smoothStatusText(): string {
         const st = this.state.smoothStatus;
-        // ⛔ 这里说的是**平滑服务**（独立进程，18924），不是快捷键服务（18923）。
-        //    历史上两者是同一个进程，文案混用会让用户以为「停快捷键服务把平滑也停了」是正常现象。
-        // 开关已开却没连上 = 正在启动（守护进程要自安装 + 建连，通常 1~3 秒）；
-        // 开关关着才是「未启动」——用户主动停的，如实说。
-        if (!st.connected) return this.state.smoothEnabled ? '平滑服务启动中…' : '平滑服务未启动';
-        if (st.unsupported) return '平滑服务版本过旧，请重启该服务';
-        if (!this.state.smoothEnabled) return '未启用';
-        if (st.safeMode) return '已自动停用（输入保护）';
-        if (this.state.smoothArmed && !st.hookInstalled) return '启动失败（被安全软件拦截）';
-        if (st.dragging) return '生效中';
-        if (this.state.smoothArmed) return '已就绪（可直接绘制）';
-        // 未布防：必须区分「工具读不到」与「读到了但不是套索」——
-        // 前者是我们的读取链路问题，后者是用户工具选择问题，处置方式完全不同。
-        if (this.state.smoothToolErr && this.state.smoothToolId === null) return '待命（无法读取当前工具）';
-        return '待命（当前工具：' + App.smoothToolLabel(this.state.smoothToolId) + '）';
+        const pen = st.pen;
+        // ⛔ 顺序不可换：先判「服务在不在 / 认不认识这条通路」，再判它的实际状态。
+        //    `unsupported` 只说明「套索平滑协议」不通；旧版是**通过**那条探针的，
+        //    必须靠 `penUnsupported` 才能如实说出「版本过旧」，否则会误导成「点了没反应」。
+        if (!st.connected) {
+            // 点完开关到守护进程起来有 1~3 秒空窗：如实说「启动中」，别让用户以为点了没反应。
+            return this.state.smoothLaunching ? '套索平滑：服务启动中…' : '套索平滑：服务未启动';
+        }
+        if (st.unsupported || st.penUnsupported) return '套索平滑：服务版本过旧（请先关掉再打开本开关）';
+        if (!pen.enabled) return '套索平滑：关';
+        // state=4：入口已被上一版 DLL 的转发桩占着（旧 DLL 被 PS 锁住没法覆盖，
+        // 新版换了文件名注入进来，成了同一进程里的第二个副本）。本实例拒绝叠加钩子
+        // （否则双重平滑），只能让用户重启 PS —— 必须说出来，否则状态条只会一直停在
+        // 「注入中…」，用户无从下手。
+        if (pen.state === 4) return '套索平滑：旧模块仍在生效（请重启 Photoshop）';
+        if (pen.state === 2) return '套索平滑：标定失败（未生效）';
+        if (pen.injectedCount === 0) return '套索平滑：等待 Photoshop…';
+        if (pen.state === 1) {
+            // 把「此刻真正生效的参数」显示出来。为什么必须显示：早期版本笔通路只接到
+            // 强度一个字段（且面板压根没发强度），其余滑杆调了毫无反应却看不出原因；
+            // 现在这里如实反映，改没改一眼可验。
+            const modeName = pen.mode === 1 ? '拉绳' : (pen.mode === 2 ? '追笔' : '标准');
+            return '套索平滑：生效中 · ' + modeName
+                 + ' · 强度 ' + pen.strength
+                 + ' · 半径 ' + pen.radiusPx + 'px（已平滑 ' + pen.smoothed + ' 包）';
+        }
+        // state=0：已注入但还没标定。标定要等「同一批至少 3 个包」才做（少于 3 个时
+        // 「序号逐包 +1」可能是巧合）。只写「注入中」会让人以为卡住了 —— 如实区分
+        // 「还没收到包」与「包够了但还没标定完」。
+        if (pen.packets === 0) return '套索平滑：待标定（动一下笔）';
+        return '套索平滑：标定中…';
     }
 
     /**
      * 状态条的配色档（返回 .notify-bar 的修饰类）。
      * 与 smoothStatusText 判据一一对应但分开返回：合并成「返回 {文本, 类名}」的对象
      * 会在每次渲染新建对象、且两处口径容易漂移。
-     * 四档：未启用 = 灰 / 服务没起来 = 橙（要用户处置）/ 异常 = 红 / 就绪 = 绿。
-     * ⚠️「待命（当前不是套索工具）」返回空串 = 中性态 —— 它不是故障，不该染成警告色
-     *    （染橙会让用户以为「平滑坏了」，实际只是没切到套索工具）。
+     * 四档：关 = 灰 / 服务没起来 = 橙（要用户处置）/ 标定失败 = 红 / 生效 = 绿。
      */
     private smoothBarTone(): string {
-        const st = this.state.smoothStatus;
-        if (!this.state.smoothEnabled) return 'notify-bar-disabled';
-        if (!st.connected || st.unsupported) return 'notify-bar-warn';
-        if (st.safeMode || (this.state.smoothArmed && !st.hookInstalled)) return 'notify-bar-fail';
-        if (st.dragging || this.state.smoothArmed) return 'notify-bar-ok';
-        return '';
-    }
-
-    /**
-     * 配色档 → 指示点类。
-     * ⚠️ 由档位**映射**而不是重判一次：判据写两遍，漂移一次就再也对不上。
-     * 「待命」档（空串）用灰点：它表示「条件未满足、尚未生效」，与未启用的灰同源。
-     */
-    private static smoothDotOfTone(tone: string): string {
-        if (tone === 'notify-bar-ok') return 'indicator-ok';
-        if (tone === 'notify-bar-warn') return 'indicator-warn';
-        if (tone === 'notify-bar-fail') return 'indicator-fail';
-        return 'indicator-disabled';
-    }
-
-    /**
-     * 笔（数位板）平滑的开关。
-     *
-     * ⚠️ 与 toggleSmoothEnabled 是**两条互不相干的通路**：那条管鼠标光标（套索），
-     *    这条管 Photoshop 进程内的笔坐标（Wintab）。不合并，是因为它们的失效模式、
-     *    前置条件、以及「没生效时该怎么办」全都不同。
-     * ⛔ 不做乐观更新：真实状态只认守护进程回帧里的 `pen`（否则会出现「开关亮了但其实没生效」，
-     *    而那正是这个项目里最难查的一类问题）。
-     */
-    togglePenSmooth() {
-        const st = this.state.smoothStatus;
-        if (!st.connected || st.unsupported || st.penUnsupported) return;   // 发不出去：状态条会如实显示原因
-        // ⛔ 必须整包带参数：只发 {on} 的话守护进程侧强度恒为默认 40、
-        //    半径/模式/张力/追笔/拐角连槽位都没有 ⇒ 面板调参对笔平滑毫无作用。
-        setPenSmooth(!st.pen.enabled, this.state.smoothParams);
-    }
-
-    /** 笔平滑状态条的文案（与 penBarTone 的判据一一对应）。 */
-    private penSmoothText(): string {
-        const st = this.state.smoothStatus;
-        const pen = st.pen;
-        // ⛔ 顺序不可换：先判「服务在不在 / 认不认识这条通路」，再判它的实际状态。
-        //    `unsupported` 只说明「套索平滑协议」不通；旧版是**通过**那条探针的，
-        //    必须靠 `penUnsupported` 才能如实说出「版本过旧」，否则会误导成「点了没反应」。
-        if (!st.connected) return '笔平滑：服务未连接';
-        if (st.unsupported || st.penUnsupported) return '笔平滑：服务版本过旧（请把上方开关先关再开）';
-        if (!pen.enabled) return '笔平滑：关';
-        if (pen.state === 2) return '笔平滑：标定失败（未生效）';
-        if (pen.injectedCount === 0) return '笔平滑：等待 Photoshop…';
-        if (pen.state === 1) {
-            // 把「此刻真正生效的参数」显示出来。为什么必须显示：早期版本笔通路只接到
-            // 强度一个字段（且面板压根没发强度），其余滑杆调了毫无反应却看不出原因；
-            // 现在这里如实反映，改没改一眼可验。
-            const modeName = pen.mode === 1 ? '拉绳' : (pen.mode === 2 ? '追笔' : '标准');
-            return '笔平滑：生效中 · ' + modeName
-                 + ' · 强度 ' + pen.strength
-                 + ' · 半径 ' + pen.radiusPx + 'px（已平滑 ' + pen.smoothed + ' 包）';
-        }
-        return '笔平滑：注入中…';
-    }
-
-    /** 笔平滑状态条的配色档（四档，与 smoothBarTone 同款：灰 / 橙 / 红 / 绿）。 */
-    private penBarTone(): string {
         const st = this.state.smoothStatus;
         const pen = st.pen;
         if (!st.connected || st.unsupported || st.penUnsupported) return 'notify-bar-warn';
@@ -1297,13 +1287,15 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     /**
-     * 工具 ID → 状态行展示名。
-     * 未知 ID **原样显示枚举名**（而不是「未知」）：排障时枚举名本身就是最需要的信息 ——
-     * 一眼就能看出是「读到了多边形套索」还是「读到了一个我们不认识的 ID」。
+     * 配色档 → 指示点类。
+     * ⚠️ 由档位**映射**而不是重判一次：判据写两遍，漂移一次就再也对不上。
+     * 「关」档用灰点：它表示「条件未满足、尚未生效」，与服务没起来的橙区分。
      */
-    private static smoothToolLabel(id: string | null): string {
-        if (!id) return '未知';
-        return App.SMOOTH_TOOL_CN[id] || id;
+    private static smoothDotOfTone(tone: string): string {
+        if (tone === 'notify-bar-ok') return 'indicator-ok';
+        if (tone === 'notify-bar-warn') return 'indicator-warn';
+        if (tone === 'notify-bar-fail') return 'indicator-fail';
+        return 'indicator-disabled';
     }
 
     // 应用选区修改
@@ -2485,36 +2477,28 @@ class App extends React.Component<AppProps, AppState> {
         }, { label: '读取当前工具', retries: 0 });
     }
 
-    // 按「需要自动关」或「需要套索平滑布防」启停巡检：两者都不需要时不跑，避免无谓轮询。
+    // 按「需要自动关」启停巡检：不需要时不跑，避免无谓轮询。
     //
-    // ⚠️ 平滑布防也依赖「当前工具」这一个读数 ⇒ 刻意**复用**同一轮巡检，
-    //    而不是再起一个定时器。`readCurrentToolId()` 每轮都是一次模态作用域内的
-    //    batchPlay get，两条 300ms 轮询 = 双倍的宿主往返（本仓交互延迟的主因）。
+    // ⚠️ 2026-10-12：套索平滑的鼠标钩子通路已移除，「平滑布防」不再依赖工具读数
+    //    （笔通路由守护进程自己判 PS 进程，与当前工具无关）⇒ 巡检现在只服务「自动关」。
     private syncToolWatch() {
         const needAutoOff = this.state.isEnabled && this.state.autoOffOnOtherTool;
-        const needSmooth = this.state.smoothEnabled;
-        const need = needAutoOff || needSmooth;
-        if (need && !this.toolWatchTimer) {
+        if (needAutoOff && !this.toolWatchTimer) {
             this.lastKnownTool = null; // 新一轮先取基准，不追溯开开关之前的工具
             this.toolWatchTimer = setInterval(() => { void this.pollToolChange(); }, App.TOOL_WATCH_INTERVAL_MS);
             void this.pollToolChange();
-        } else if (!need && this.toolWatchTimer) {
+        } else if (!needAutoOff && this.toolWatchTimer) {
             clearInterval(this.toolWatchTimer);
             this.toolWatchTimer = null;
             this.lastKnownTool = null;
         }
-        // 无论巡检是否在跑，都补一次布防同步：
-        //  · smoothEnabled 刚被打开而工具本就是套索 ⇒ 立即布防（不必等巡检那 300ms）
-        //  · smoothEnabled 被关掉，或巡检刚被停下 ⇒ 立即撤防
-        // 本方法幂等（意图未变不发 WS），重复调用无副作用。
-        this.syncLassoSmoothingArm();
     }
 
     private async pollToolChange() {
-        // 「自动关」与「平滑布防」各自需要时才跑；两者都不需要就整轮跳过。
+        // 「自动关」需要时才跑；不需要就整轮跳过。
+        // （2026-10-12 前平滑布防也依赖本轮询，鼠标钩子通路移除后不再需要。）
         const needAutoOff = this.state.isEnabled && this.state.autoOffOnOtherTool;
-        const needSmooth = this.state.smoothEnabled;
-        if (!needAutoOff && !needSmooth) return;
+        if (!needAutoOff) return;
         // 并发守卫；上一次查询若卡在模态状态里迟迟不返回，超过 3s 就放行，避免巡检永久停摆
         if (this.toolWatchBusy && Date.now() - this.toolWatchBusySince < 3000) return;
         // ⚠️ 忙碌闸门：readCurrentToolId 会发 batchPlay get（application.tool）。
@@ -2524,29 +2508,12 @@ class App extends React.Component<AppProps, AppState> {
         this.toolWatchBusySince = Date.now();
         try {
             const tool = await this.readCurrentToolId();
-            // ⛔ 读失败时**必须把失败写进 state**，而不是静默 return：
-            //    「读到 null」与「读到了但不是套索」在状态行上必须是两句不同的话，
-            //    否则一个读取链路问题会伪装成「用户没选套索工具」，白跑一轮排查。
-            //    同时 readCurrentToolId 内部已静默吞掉异常，这一层是唯一的知情点。
-            if (!tool) {
-                if (!this.state.smoothToolErr) this.setState({ smoothToolErr: true });
-                return;
-            }
-            // 成功读数：清错误标记并把工具 ID 写进 state（供状态行显示）。
-            // ⚠️ 只在值变化时 setState，避免 300ms 巡检造成持续重渲染。
-            const patch: any = {};
-            if (this.state.smoothToolErr) patch.smoothToolErr = false;
-            if (this.state.smoothToolId !== tool) patch.smoothToolId = tool;
-            if (Object.keys(patch).length) this.setState(patch);
+            if (!tool) return;
             const prev = this.lastKnownTool;
             this.lastKnownTool = tool;
-            // 平滑布防：每读到一次工具就同步一次（幂等，意图未变不会重发 WS）。
-            // ⚠️ 必须放在下面「首轮只记基准」的 return **之前** —— 否则打开平滑后
-            //    若工具一直没变，首轮那条 return 会让布防永远等不到下一次机会。
-            this.syncLassoSmoothingArm(tool);
             // 首轮只记基准；工具没变也不判，避免「开关一开就被自己关掉」
             if (prev === null || prev === tool) return;
-            if (needAutoOff && App.isOtherTool(tool)) await this.autoTurnOffMain(tool);
+            if (App.isOtherTool(tool)) await this.autoTurnOffMain(tool);
         } catch { /* 单次失败不影响下一轮 */ } finally {
             this.toolWatchBusy = false;
         }
@@ -3153,8 +3120,9 @@ title={helpTexts.selectionFill.blendMode}>
                 </div>
 
                 {/* 平滑选项：套索**绘制过程中**的实时平滑。
-                    ⚠️ 与下面「选区改造」是两条独立路径：本分区作用在**输入轨迹**（PS 收到鼠标
-                       之前，由原生守护进程的鼠标钩子完成），选区改造作用在**已生成的选区掩码**。
+                    ⚠️ 与下面「选区改造」是两条独立路径：本分区作用在**输入轨迹**
+                        （PS 收到笔坐标之前，由注入 PS 的 Wintab 钩子改写），
+                        选区改造作用在**已生成的选区掩码**。
                        因此两者可以同时开启，效果是串联的（先平滑轨迹、再改造掩码）。 */}
                 {this.state.smoothOptionsVisible && (
                 <div className="collapse-section" data-section-id="smoothOptions">
@@ -3166,51 +3134,33 @@ title={helpTexts.selectionFill.blendMode}>
                     </div>
                     {this.state.isSmoothOptionsExpanded && (
                     <div className="collapse-content-expanded">
-                        {/* 平滑总开关（**二合一**：启用平滑 + 平滑服务）。
+                        {/* 套索平滑总开关（**二合一**：启用平滑 + 平滑服务）。
                             形态与「笔刷热键」的服务条同款：指示点 + 状态文案 + 右侧开关。
                             ⛔ 此前是「启用平滑 / 状态 / 平滑服务」三行 —— 服务本是平滑的前提，
                                 却要用户先开服务再开平滑，且服务没开时点平滑开关毫无反应。
-                            ⚠️ 状态文案覆盖五种完全不同的情形（服务没起来 / 版本过旧 / 钩子被拦截 /
-                                熔断 / 待命与生效中），处置方式各不相同，必须分开说，
-                                否则用户只看到「没效果」无从下手。 */}
+                            ⛔ 开关**永不禁用**：服务没启动时这一条是唯一启动入口，置灰 = 死锁
+                                （2026-10-12 真机事故：重编译重载后「服务未启动 + 开关置灰」，
+                                用户没有任何入口拉起服务；toggleLassoSmooth 里那道
+                                「未连接即 return」是同一起事故的另一半根因）。
+                            ⚠️ checked 必须同时看 connected：守护进程崩溃时 pen.enabled 残留
+                                true，只看它会把开关显示成「开」而服务其实已经没了。
+                            ⚠️ 状态文案覆盖七种完全不同的情形（启动中 / 服务没起来 / 版本过旧 /
+                                关 / 标定失败 / 等待注入 PS / 注入中 / 生效中），处置方式各不相同，
+                                必须分开说，否则用户只看到「没效果」无从下手。 */}
                         <div className={'notify-bar ' + this.smoothBarTone()}>
                             <span className={'indicator indicator-md ' + App.smoothDotOfTone(this.smoothBarTone())} />
                             <span
                                 className="notify-text"
-                                title={this.state.smoothStatus.unsupported
-                                    ? '当前运行的平滑服务版本过旧，不认识平滑指令。\n\n处置：把右侧开关**先关再开**（或结束 JWautofillSmoothDaemon.exe 进程后重新启动）。'
+                                title={this.state.smoothStatus.unsupported || this.state.smoothStatus.penUnsupported
+                                    ? '当前运行的平滑服务版本过旧，不认识平滑指令。\n\n处置：点一下右侧开关重启服务（或结束 JWautofillSmoothDaemon.exe 进程后重新启动）。'
                                     : helpTexts.selectionFill.smoothStatusLabel}>
                                 {this.smoothStatusText()}
                             </span>
                             <span className="mask-sync-status-spacer" />
                             <ToggleSwitch
-                                checked={this.state.smoothEnabled}
-                                onChange={this.toggleSmoothEnabled}
+                                checked={this.state.smoothStatus.connected && !!this.state.smoothStatus.pen.enabled}
+                                onChange={this.toggleLassoSmooth}
                                 title={helpTexts.selectionFill.smoothEnabledSwitch}
-                            />
-                        </div>
-                        {/* 笔（数位板）平滑 —— 与上面那条**独立**：上面改的是鼠标光标
-                            （在 PS 收到之前拉顺），这条改的是 PS 进程内解析出的笔坐标
-                            （笔走 Wintab，不产生鼠标消息，所以鼠标钩子够不着）。
-                            形态与上面那条同款：指示点 + 状态文案 + 右侧开关；
-                            间距由 .notify-bar 自带的 margin-bottom: 8px 提供。 */}
-                        <div className={'notify-bar ' + this.penBarTone()}>
-                            <span className={'indicator indicator-md ' + App.smoothDotOfTone(this.penBarTone())} />
-                            <span
-                                className="notify-text"
-                                title={this.state.smoothStatus.penUnsupported
-                                    ? '当前运行的平滑服务版本过旧，不认识笔平滑指令。\n\n处置：把上方「平滑」开关**先关再开**（或结束 JWautofillSmoothDaemon.exe 进程后重新启动）。'
-                                    : helpTexts.selectionFill.penSmoothStatusLabel}>
-                                {this.penSmoothText()}
-                            </span>
-                            <span className="mask-sync-status-spacer" />
-                            <ToggleSwitch
-                                checked={!!this.state.smoothStatus.pen.enabled}
-                                onChange={this.togglePenSmooth}
-                                disabled={!this.state.smoothStatus.connected
-                                    || this.state.smoothStatus.unsupported
-                                    || this.state.smoothStatus.penUnsupported}
-                                title={helpTexts.selectionFill.penSmoothSwitch}
                             />
                         </div>
                         {/* 滤波族：三列（与「填充模式」紧凑态的 .radio-trio-group 同款） */}
@@ -3418,38 +3368,6 @@ title={helpTexts.selectionFill.blendMode}>
                                     />
                                 </div>
                                 )}
-
-                                <div className="row-between">
-                                    <label
-                                        className="label-drag label-2"
-                                        onMouseDown={(e) => this.handleLabelMouseDown(e, 'smooth:minSampleDist')}
-                                        title={helpTexts.selectionFill.smoothSampleDist}>
-                                        间距
-                                    </label>
-                                    <RangeSlider
-                                        min={0.5}
-                                        max={4}
-                                        step={0.5}
-                                        value={this.state.smoothParams.minSampleDist}
-                                        onChange={(v) => this.updateSmoothParam({ minSampleDist: v })}
-                                        className="slider-track"
-                                        title={helpTexts.selectionFill.smoothSampleDistSlider}
-                                    />
-                                    <div className="row-start">
-                                        <div className="num-input-row">
-                                            <input
-                                                type="number"
-                                                min="0.5"
-                                                max="4"
-                                                step="0.5"
-                                                value={this.state.smoothParams.minSampleDist}
-                                                onChange={(e) => this.updateSmoothParam({ minSampleDist: Number(e.target.value) })}
-                                                title={helpTexts.selectionFill.smoothSampleDistInput}
-                                            />
-                                        </div>
-                                        <span className="num-unit">px</span>
-                                    </div>
-                                </div>
 
                                 {/* 拉绳提示（HUD）：只对笔通路有意义 ⇒ 常驻显示，不随模式隐藏。
                                     与「速度适应」同为开关行：标签 + 自绘开关。 */}

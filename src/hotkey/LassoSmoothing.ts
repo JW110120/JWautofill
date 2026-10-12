@@ -1,26 +1,28 @@
 /**
- * 套索实时平滑（方案 A：输入层滤波）的 UXP 侧桥接。
+ * 套索实时平滑（Wintab 笔输入通路）的 UXP 侧桥接。
  *
  * 背景（为什么必须走原生）：UXP 插件没有任何画布指针 API，
  * `document.addEventListener('mousemove')` 监听的是**插件面板自身 DOM**，
  * 与 PS 画布无关。也就是说「套索绘制过程中」这段时间对 UXP 是完全盲区 ——
- * 唯一能介入的位置在 **PS 收到鼠标输入之前**，只能由原生守护进程
- * （native/HotkeyDaemon，低层鼠标钩子 + 回注）承担。
+ * 唯一能介入的位置在 **PS 收到输入之前**。
  *
- * 因此本模块的职责刻意很窄，只做三件事：
- *   ① 把「是否布防 + 参数」下发给守护进程（smoothArm / smoothParams）；
- *   ② 接收守护进程回传的健康状态（smoothState），供面板显示与排障；
- *   ③ 连接（重）建立时把当前意图重放一次，避免「daemon 重启后平滑无声失效」。
+ * ⚠️ 2026-10-12：鼠标钩子通路（WH_MOUSE_LL + SendInput 回注，改光标轨迹）已按用户要求
+ *    **整体移除**，只保留笔/Wintab 通路：守护进程把 hook DLL 注入 PS，DLL 在
+ *    `Wintab32!WTPacketsGet` 的 detour 里就地改写包坐标（数位板在 PS 里走 Wintab，
+ *    笔不产生 WM_MOUSEMOVE，鼠标钩子本来就够不着）。因此本模块的职责收缩为两件事：
+ *   ① 把「开关 + 参数」下发给守护进程（penSmooth）；
+ *   ② 接收守护进程回传的状态（smoothState），供面板显示与排障；
+ *   另有一件隐藏职责：连接（重）建立时把当前意图重放一次，避免「daemon 重启后平滑无声失效」。
  *
  * ⚠️ 本模块**不持有** WebSocket：发送器由 SmoothBridge 注入（它是 **18924** 那条
- *    连接的唯一属主）。2026-10-12 起平滑已拆成独立守护进程，连接不再挂在 HotkeyBridge 上
+ *    连接的唯一属主）。平滑与热键拆成两个独立守护进程后，连接不再挂在 HotkeyBridge 上
  *    —— 否则「停止快捷键服务」会连带把平滑的连接一起断掉。
  *    这样依赖方向仍是单向的（SmoothBridge → LassoSmoothing），不会形成循环 import。
  */
 
 export type LassoSmoothMode = 'standard' | 'rope' | 'catchup';
 
-/** 参数面（与 Program.cs 的 LassoSmoothSettings 一一对应）。 */
+/** 参数面（与 Program.cs 的 PenHook.PenParams 一一对应；鼠标通路字段已移除）。 */
 export interface LassoSmoothParams {
   /** 滤波族：标准（一阶低通）/ 拉绳 / 追笔。 */
   mode: LassoSmoothMode;
@@ -36,8 +38,6 @@ export interface LassoSmoothParams {
   cornerAngle: number;
   /** 甩笔时自动减弱平滑（减少快速拖拽的滞后）。 */
   speedAdaptive: boolean;
-  /** 最小注入间距 px（抽稀）。仅鼠标通路有效 —— 笔通路必须原样写回 Wintab 包。 */
-  minSampleDist: number;
   /**
    * 是否在屏幕上画出「笔尖 ↔ 平滑输出点」的拉绳提示（HUD overlay）。
    * ⚠️ 只对**笔通路**有意义：UXP 无法在 PS 画布上绘制，PS 原生的画笔绳线又只由
@@ -49,7 +49,7 @@ export interface LassoSmoothParams {
 
 /**
  * 默认值。
- * ⚠️ 总开关默认**关闭**：平滑会改变所有存量用户的套索手感，
+ * ⚠️ 开关默认**关闭**：平滑会改变所有存量用户的套索手感，
  *    必须由用户主动开启，不能默认接管。
  */
 export const initialLassoSmoothParams: LassoSmoothParams = {
@@ -60,45 +60,28 @@ export const initialLassoSmoothParams: LassoSmoothParams = {
   catchUp: 50,
   cornerAngle: 45,
   speedAdaptive: true,
-  minSampleDist: 1,
   showLeash: true,
 };
 
-/** 守护进程回传的健康状态（用于面板显示与排障）。 */
+/** 守护进程回传的状态（用于面板显示与排障）。 */
 export interface LassoSmoothStatus {
   /** 与守护进程的连接是否建立。 */
   connected: boolean;
   /**
    * 连上的守护进程**不支持**套索平滑协议（旧版本）。
    *
-   * ⛔ 为什么必须有这个判据：旧版守护进程收到未知的 `smoothArm` 会**静默忽略**，
-   *    本模块因此永远收不到 `smoothState`，`hookInstalled` 恒为 false ⇒ 面板会把
-   *    一个「版本过旧」问题显示成「启动失败（被安全软件拦截）」，
-   *    把用户的排查方向完全带偏（真机已复现：安装目录里跑的是 9 月的旧 exe）。
+   * ⛔ 为什么必须有这个判据：旧版守护进程收到未知的 `smoothStatus` 会**静默忽略**，
+   *    本模块因此永远收不到 `smoothState` ⇒ 面板必须把「版本过旧」与「没连上」区分开，
+   *    否则会把用户的排查方向完全带偏（真机已复现：安装目录里跑的是旧 exe）。
    *    现在的判据是「建连后发起 smoothStatus 询问，超时窗口内一帧都没回来」。
    */
   unsupported: boolean;
-  /** 守护进程侧是否已布防。 */
-  armed: boolean;
-  /** 守护进程是否正处于一次被接管的拖拽中。 */
-  dragging: boolean;
-  /** 低层鼠标钩子是否已安装（armed 为真但此项为假 ⇒ 钩子被安全软件拦截或安装失败）。 */
-  hookInstalled: boolean;
-  /** 回调用时超预算已熔断（此后只放行、不平滑；键盘热键不受影响）。 */
-  safeMode: boolean;
-  /** 累计钩子回调次数（不增长 ⇒ 钩子已被系统静默摘除）。 */
-  callbacks: number;
-  /** 累计注入次数。 */
-  injected: number;
-  /** 最近一次拖拽的原始点数 / 注入点数（「吞了却没注入」这类异常最直接的判据）。 */
-  lastDragRaw: number;
-  lastDragInjected: number;
   /**
    * 连上的守护进程**不认识笔平滑**（旧版本）。
    *
    * ⛔ 与 `unsupported` 是**两层**判据，不能合并：套索平滑的探针（有没有回 `smoothState`）
    *    对旧版守护进程是**通过**的 —— 它支持套索平滑、会正常回帧，只是帧里没有 `pen`。
-   *    若只看 `unsupported`，笔平滑开关会显示成**可点**，点下去 `penSmooth` 被静默丢弃、
+   *    若只看 `unsupported`，套索平滑开关会显示成**可点**，点下去 `penSmooth` 被静默丢弃、
    *    开关弹回 ⇒ 又是一个「点了没反应」。判据因此下沉一层：**回帧里有没有出现过 `pen`**。
    */
   penUnsupported: boolean;
@@ -109,10 +92,8 @@ export interface LassoSmoothStatus {
 /**
  * 笔输入层平滑（Wintab 通路）的状态。
  *
- * ⚠️ 与上面的鼠标通路**完全独立**：那条改的是**光标**（`WH_MOUSE_LL` + 回注），
- *    这条改的是 **PS 进程内的包坐标** —— 守护进程把 hook DLL 注入 PS，DLL 在
- *    `Wintab32!WTPacketsGet` 的 detour 里就地改写 X/Y。
- *    数位板在 PS 里走 Wintab 时笔**不产生** `WM_MOUSEMOVE`，鼠标钩子够不着，所以必须两条路。
+ * 守护进程把 hook DLL 注入 PS，DLL 在 `Wintab32!WTPacketsGet` 的 detour 里
+ * 就地改写 X/Y —— 改的是 **PS 进程内的包坐标**。
  *
  * 旧版守护进程不回 `pen` ⇒ 保持原值（默认 enabled=false），不会把「不认识」显示成「已开」。
  */
@@ -140,7 +121,7 @@ export interface PenSmoothStatus {
   pxPerAxis: number;
   /** 已注入 hook DLL 的 PS 进程数（0 ⇒ 还没注入成功或 PS 未运行）。 */
   injectedCount: number;
-  /** hook 侧状态：0=未挂载 1=生效 2=标定失败 3=已卸载。 */
+  /** hook 侧状态：0=未挂载/未标定 1=生效 2=标定失败 3=已卸载。 */
   state: number;
   /** 累计取到的包数 / 被改写的包数（生效与否最直接的证据）。 */
   packets: number;
@@ -168,14 +149,6 @@ export const initialPenSmoothStatus: PenSmoothStatus = {
 const initialStatus: LassoSmoothStatus = {
   connected: false,
   unsupported: false,
-  armed: false,
-  dragging: false,
-  hookInstalled: false,
-  safeMode: false,
-  callbacks: 0,
-  injected: 0,
-  lastDragRaw: 0,
-  lastDragInjected: 0,
   penUnsupported: false,
   pen: { ...initialPenSmoothStatus },
 };
@@ -196,13 +169,10 @@ const PARAM_THROTTLE_MS = 90;
 const PROBE_TIMEOUT_MS = 2500;
 
 let sender: ((msg: any) => void) | null = null;
-/** 最近一次「布防意图」。重连时据此重放，避免 daemon 重启后静默失效。 */
-let armedIntent = false;
 /**
- * 笔平滑（Wintab 通路）的开关意图。
- * ⛔ 必须有它：两条通路**共用同一份参数面**，笔平滑开着的时候，面板每次调参
- *    都必须同步推给笔通路 —— 否则调参只影响套索，笔平滑永远停在旧值
- *    （真机复现：「已平滑 47417 包但各种参数组合感知不明显」的根因之一）。
+ * 套索平滑（Wintab 笔通路）的开关意图。
+ * ⛔ 必须有它：面板每次调参都要同步推给笔通路 —— 否则调参只改面板自己的 state，
+ *    笔通路永远停在旧值（真机复现：「已平滑 47417 包但各种参数组合感知不明显」的根因之一）。
  */
 let penOn = false;
 let params: LassoSmoothParams = { ...initialLassoSmoothParams };
@@ -217,8 +187,7 @@ let sawPenFrame = false;
 let probeTimer: any = null;
 /**
  * 上一次真正发出去的参数线格式签名。
- * ⚠️ 必须有它：本模块的一个调用方是 **300ms 工具巡检**（幂等地重算布防意图时顺带同步参数），
- *    没有这层去重就会每 300ms 打一条 WS 消息。
+ * ⚠️ 必须有它：调参可能被高频触发（拖滑杆、节流尾随），没有这层去重就会打重复消息。
  */
 let lastSentParamsSig: string | null = null;
 
@@ -226,7 +195,7 @@ const statusListeners: ((s: LassoSmoothStatus) => void)[] = [];
 
 function send(msg: any): void {
   if (!sender) return;
-  try { sender(msg); } catch { /* 发送失败由 HotkeyBridge 的重连机制兜底 */ }
+  try { sender(msg); } catch { /* 发送失败由 SmoothBridge 的重连机制兜底 */ }
 }
 
 function toWire(p: LassoSmoothParams) {
@@ -238,34 +207,31 @@ function toWire(p: LassoSmoothParams) {
     catchUp: p.catchUp,
     cornerAngle: p.cornerAngle,
     speedAdaptive: p.speedAdaptive,
-    minSampleDist: p.minSampleDist,
-    // 笔通路专用：拉绳提示的位域（bit0=绳 bit1=半径圆）。鼠标通路不认识该字段，忽略即可。
+    // 拉绳提示的位域（bit0=绳 bit1=半径圆）
     hud: p.showLeash ? 3 : 0,
   };
 }
 
-/** 发送参数（线格式未变化则跳过）。 */
+/** 发送参数（线格式未变化则跳过；仅在套索平滑开着时才需要推给守护进程）。 */
 function sendParams(p: LassoSmoothParams): void {
+  if (!penOn) return;   // 关着的时候守护进程不需要参数（开启时会整包下发）
   const wire = toWire(p);
   const sig = JSON.stringify(wire);
   if (sig === lastSentParamsSig) return;
   lastSentParamsSig = sig;
-  send({ type: 'smoothParams', params: wire });
-  // ⛔ 笔通路共用同一份参数面：开着就必须跟着同步。少了这一条，
-  //    面板上调强度/半径/模式对笔平滑毫无作用（它那边永远停在旧值）。
-  if (penOn) send({ type: 'penSmooth', on: true, ...wire });
+  send({ type: 'penSmooth', on: true, ...wire });
 }
 
 function emitStatus(): void {
   for (const l of statusListeners) { try { l(status); } catch { /* ignore */ } }
 }
 
-/** 由 HotkeyBridge 在模块初始化时注入（它是 WebSocket 的唯一属主）。 */
+/** 由 SmoothBridge 在模块初始化时注入（它是 WebSocket 的唯一属主）。 */
 export function setLassoSmoothSender(fn: (msg: any) => void): void {
   sender = fn;
 }
 
-/** 连接状态变化（HotkeyBridge 的 onopen / onclose 调用）。 */
+/** 连接状态变化（SmoothBridge 的 onopen / onclose 调用）。 */
 export function setLassoSmoothConnected(connected: boolean): void {
   if (status.connected === connected) return;
   status = { ...status, connected };
@@ -282,7 +248,8 @@ export function setLassoSmoothConnected(connected: boolean): void {
           status = { ...status, unsupported: true };
           emitStatus();
         } else if (status.connected && !sawPenFrame) {
-          // 对端支持套索平滑但不认识笔平滑（版本过旧）⇒ 单独标记，别让笔开关看起来可点。
+          // 对端会回 smoothState、但帧里从来没有 pen 字段（版本过旧）⇒ 单独标记，
+          // 别让开关看起来可点。与上一层（unsupported）分开：旧版是**通过**smoothStatus 探针的。
           status = { ...status, penUnsupported: true };
           emitStatus();
         }
@@ -330,28 +297,11 @@ export function pushLassoSmoothParams(p: LassoSmoothParams): void {
 }
 
 /**
- * 布防 / 撤防。
- * 幂等：意图未变化且无需重发参数时直接返回（避免 300ms 工具巡检每轮都打一次 WS）。
- */
-export function armLassoSmoothing(on: boolean, p?: LassoSmoothParams): void {
-  if (p) pushLassoSmoothParams(p);
-  if (on === armedIntent) return;
-  armedIntent = on;
-  send({ type: 'smoothArm', on });
-}
-
-/** 卸载 / 长时离开时的强制撤防。 */
-export function disarmLassoSmoothing(): void {
-  armedIntent = false;
-  send({ type: 'smoothArm', on: false });
-}
-
-/**
- * 重放当前意图（由 HotkeyBridge 在每次 WebSocket 建连后调用）。
+ * 重放当前意图（由 SmoothBridge 在每次 WebSocket 建连后调用）。
  *
  * 为什么必须重放：守护进程是独立进程，插件重载或 daemon 重启都会让
- * 「面板以为已布防、daemon 其实没有」—— 表现为平滑无声失效。
- * 这里无条件下发一次 arm（含 on=false，顺带清掉上一会话可能残留的布防）+ 一次状态查询。
+ * 「面板以为开着、daemon 其实没有」—— 表现为平滑无声失效。
+ * 这里重放一次 penSmooth（含开关状态）+ 一次状态查询。
  */
 export function resendLassoSmoothing(): void {
   // 新的一轮连接：能力探测重新开始（对端可能刚从旧版更新过）
@@ -360,10 +310,6 @@ export function resendLassoSmoothing(): void {
   // 刚建连：先无条件把参数推一遍（对端可能是刚启动的新进程，它那边的参数缓存是空的），
   // 因此这里刻意清掉签名去重。
   lastSentParamsSig = null;
-  sendParams(params);
-  send({ type: 'smoothArm', on: armedIntent });
-  // 笔平滑同样要重放：守护进程是独立进程，插件重载/重启都会让「面板以为开着、
-  // 实际已关」—— 与 smoothArm 同一个理由。
   if (penOn) send({ type: 'penSmooth', on: true, ...toWire(params) });
   // 主动询问一次状态：这是「对端支不支持本协议」的探针 —— 支持则必回一帧 smoothState，
   // 不支持（旧版守护进程把未知 type 静默丢弃）则什么都不回，由 PROBE_TIMEOUT_MS 判定。
@@ -371,10 +317,10 @@ export function resendLassoSmoothing(): void {
 }
 
 /**
- * 笔平滑（Wintab 通路）开关 + 参数。
+ * 套索平滑（Wintab 通路）开关 + 参数。
  *
  * ⛔ 与 `sendPenSmooth`（SmoothBridge 的原始发送器）的分工：本函数是**参数面的属主**，
- *    负责记住 `penOn` 以便后续每次调参都同步给笔通路；原始发送只认线格式。
+ *    负责记住 `penOn` 以便后续每次调参都同步推给笔通路；原始发送只认线格式。
  * ⛔ 必须整包带参数：早期只发 `{on}`，守护进程侧强度恒为默认 40、半径/模式/张力/
  *    追笔/拐角连槽位都没有 ⇒ 面板调参对笔平滑零作用（真机复现）。
  */
@@ -383,16 +329,16 @@ export function setPenSmooth(on: boolean, p?: LassoSmoothParams): void {
   send({ type: 'penSmooth', on, ...(p ? toWire(p) : {}) });
 }
 
-/** 处理守护进程回传的 smoothState（由 HotkeyBridge 的 onmessage 分发）。 */
+/** 处理守护进程回传的 smoothState（由 SmoothBridge 的 onmessage 分发）。 */
 export function handleLassoSmoothMessage(msg: any): void {
   if (!msg) return;
-  // 收到任何一帧即可判定对端支持本协议（即便此刻字段还是布防前的初始值）。
+  // 收到任何一帧即可判定对端支持本协议（即便此刻字段还是开关前的初始值）。
   sawSmoothState = true;
   if (probeTimer) { clearTimeout(probeTimer); probeTimer = null; }
   const penRaw = msg.pen;
   if (penRaw) {
     sawPenFrame = true;
-    // 记住笔平滑的真实开关：后续每次调参都要同步推给它（sendParams 里的 penOn 判据）。
+    // 记住套索平滑的真实开关：后续每次调参都要同步推给它（sendParams 里的 penOn 判据）。
     // ⚠️ 对端不回 pen（旧版守护进程）时**不动** —— 不能把「不认识」当成「已关闭」，
     //    否则会把一个版本过旧的问题显示成开关关了。
     if (typeof penRaw.enabled === 'boolean') penOn = penRaw.enabled;
@@ -403,14 +349,6 @@ export function handleLassoSmoothMessage(msg: any): void {
     unsupported: false,
     // 只要有一帧带 pen 就说明对端认识笔平滑（无论此刻开没开）。
     penUnsupported: penRaw ? false : status.penUnsupported,
-    armed: !!msg.armed,
-    dragging: !!msg.dragging,
-    hookInstalled: !!msg.hookInstalled,
-    safeMode: !!msg.safeMode,
-    callbacks: Number(msg.callbacks) || 0,
-    injected: Number(msg.injected) || 0,
-    lastDragRaw: Number(msg.lastDragRaw) || 0,
-    lastDragInjected: Number(msg.lastDragInjected) || 0,
     // ⚠️ 对端不回 pen（旧版守护进程）时保持原值 —— 不能把「不认识」当成「已关闭」后
     //    又把开关显示成可点，那会造出「点了没反应」。
     pen: penRaw ? {

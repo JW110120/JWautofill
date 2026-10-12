@@ -45,174 +45,14 @@ namespace JWautofillDaemon
     }
 
     /// <summary>
-    /// 套索实时平滑的参数快照（由 UXP 面板经 smoothParams 下发）。
+    /// 拖拽轨迹滤波器（鼠标通路）—— **已于 2026-10-12 随鼠标钩子平滑一并移除**。
     ///
-    /// ⚠️ 设计成**不可变引用、整体替换**：鼠标钩子线程只做一次 volatile 读就拿走整份
-    ///    参数，绝不在钩子回调里加锁（加锁 = 输入链冻结，与键盘钩子的铁律同源）。
-    ///
-    /// 字段语义见 docs/lasso-realtime-smoothing-plan.md 第 3.3 节：
-    ///   Mode          0 = 标准（一阶低通）/ 1 = 拉绳 / 2 = 追笔
-    ///   Strength      平滑强度 0–100（标准模式的主轴：越大越黏）
-    ///   Radius        最大滞后距离（px）—— 三种模式统一收口的硬上限，同时是拉绳的绳长基准
-    ///   Tension       拉绳松紧 0–100（映射到绳长占 Radius 的比例）
-    ///   CatchUp       追笔速度 0–100（映射到 0.2–12.2 px/ms）
-    ///   CornerAngle   拐角判定 0–90（夹角超过它即减弱平滑，保住尖角）
-    ///   SpeedAdaptive 甩笔时自动减弱平滑
-    ///   MinSampleDist 最小注入间距（px）—— 抽稀，减少无意义的事件注入
+    /// 背景：套索平滑原本有两条输入通路 —— ① 鼠标钩子（WH_MOUSE_LL + SendInput 回注，
+    /// 改的是光标轨迹）；② 笔/Wintab（注入 PS 改包坐标）。用户明确不再需要①
+    /// （鼠标轨迹平滑），只保留②。① 的全部机器（本类、LassoMouseSmoother、钩子线程、
+    /// 回注线程、看护线程、smoothArm/smoothParams/smoothStatus/pointerTest 指令）
+    /// 已整体删除；笔通路不受影响（见下方 #if ROLE_SMOOTH 的 PenHook）。
     /// </summary>
-    internal sealed class LassoSmoothSettings
-    {
-        public int Mode { get; set; } = 0;
-        public double Strength { get; set; } = 40;
-        public double Radius { get; set; } = 8;
-        public double Tension { get; set; } = 50;
-        public double CatchUp { get; set; } = 50;
-        public double CornerAngle { get; set; } = 45;
-        public bool SpeedAdaptive { get; set; } = true;
-        public double MinSampleDist { get; set; } = 1;
-    }
-
-    /// <summary>
-    /// 拖拽轨迹滤波器：三种模式共用同一套骨架与同一份状态。
-    ///
-    /// ⛔ 本类的所有方法都在**鼠标钩子线程**上被调用，必须满足与键盘钩子完全相同的铁律：
-    ///    均摊 O(1)、**零分配**、无锁、无 I/O、不抛异常。任何一帧的超时都会让 Windows
-    ///    静默摘除低层钩子（LowLevelHooksTimeout），届时平滑无声失效、且不会被通知。
-    ///
-    /// 与「选区生成之后再平滑」的本质区别：这里作用的是**输入轨迹**，所以 PS 的套索、
-    /// 历史记录、工具选项（羽化 / 抗锯齿 / 加减选）全部保持原生行为，零兼容成本。
-    /// </summary>
-    internal sealed class LassoMouseSmoother
-    {
-        // 输出位置保留小数：逐帧取整会丢亚像素位移，慢速拖动时会「粘住不动」
-        private double _ox, _oy;
-        private int _lastInX, _lastInY;     // 上一帧原始输入
-        private double _speed;              // 低通后的输入速度（px/ms）
-        private double _dirX, _dirY;        // 上一段输入方向（单位向量）
-        private bool _hasDir;
-        private long _lastTicks;
-        private int _lastInjX, _lastInjY;   // 上一次真正注入的位置（最小采样间距的基准）
-
-        private static double Clamp01(double v) => v < 0 ? 0 : (v > 1 ? 1 : v);
-
-        /// <summary>
-        /// 起笔锚定：输出点严格落在按下位置 —— 起笔不允许有任何跟随滞后，
-        /// 否则套索的第一个点就会偏离用户按下的地方（表现为「选区起点被吃掉一块」）。
-        /// </summary>
-        internal void Reset(int x, int y, long nowMs)
-        {
-            _ox = x; _oy = y;
-            _lastInX = x; _lastInY = y;
-            _speed = 0;
-            _dirX = 0; _dirY = 0; _hasDir = false;
-            _lastTicks = nowMs;
-            _lastInjX = x; _lastInjY = y;
-        }
-
-        /// <summary>
-        /// 推进一帧。<paramref name="tx"/>/<paramref name="ty"/> 恒为该帧应处的输出位置；
-        /// 返回 false 表示「位移不足 minSampleDist，本帧不注入」（调用方仍应吞掉原始事件）。
-        /// </summary>
-        internal bool Step(int x, int y, long nowMs, LassoSmoothSettings s, out int tx, out int ty)
-        {
-            long dt = nowMs - _lastTicks;
-            if (dt < 1) dt = 1;
-            else if (dt > 100) dt = 100;    // 卡顿/暂停之后不按超长时间片推进，避免凭空跳跃
-            _lastTicks = nowMs;
-
-            int idx = x - _lastInX;
-            int idy = y - _lastInY;
-            _lastInX = x; _lastInY = y;
-            double segLen = Math.Sqrt((double)idx * idx + (double)idy * idy);
-
-            // 速度低通：单帧抖动不该让「速度自适应」忽开忽关
-            _speed = _speed * 0.72 + (segLen / dt) * 0.28;
-
-            // 拐角检测：与上一段输入方向的夹角超过阈值 ⇒ 本帧减弱平滑，保住尖角
-            bool corner = false;
-            if (segLen > 0.01)
-            {
-                double ux = idx / segLen, uy = idy / segLen;
-                if (_hasDir)
-                {
-                    double dot = ux * _dirX + uy * _dirY;
-                    if (dot > 1) dot = 1; else if (dot < -1) dot = -1;
-                    if (Math.Acos(dot) * 180.0 / Math.PI >= s.CornerAngle) corner = true;
-                }
-                _dirX = ux; _dirY = uy; _hasDir = true;
-            }
-
-            double distX = x - _ox, distY = y - _oy;
-            double dist = Math.Sqrt(distX * distX + distY * distY);
-
-            if (s.Mode == 1)
-            {
-                // ===== 拉绳：光标与笔尖之间系一根「长度 = 绳长」的绳子 =====
-                // 距离超过绳长 ⇒ 把输出点拖到恰好绳长处；未超过 ⇒ 只做轻微跟随
-                // （纯拉绳在慢速移动时会完全停住，观感像卡死）。
-                double rope = 1.0 + Math.Max(0.0, s.Radius - 1.0) * (0.15 + 0.85 * Clamp01(s.Tension / 100.0));
-                if (dist > rope && dist > 0.0001)
-                {
-                    double f = rope / dist;
-                    _ox += distX * f; _oy += distY * f;
-                }
-                else
-                {
-                    _ox += distX * 0.25; _oy += distY * 0.25;
-                }
-            }
-            else if (s.Mode == 2)
-            {
-                // ===== 追笔：输出端以受限速度追赶光标，追上即贴合 =====
-                double vmax = 0.2 + Clamp01(s.CatchUp / 100.0) * 12.0;   // px/ms
-                double step = vmax * dt;
-                if (dist > step && dist > 0.0001)
-                {
-                    double f = step / dist;
-                    _ox += distX * f; _oy += distY * f;
-                }
-                else
-                {
-                    _ox = x; _oy = y;
-                }
-            }
-            else
-            {
-                // ===== 标准：一阶低通（指数趋近）=====
-                // k 随强度指数下降 ⇒ 滑杆低段细腻、高段仍能到「很黏」；强度 0 时 k = 1（不平滑）。
-                double k = Math.Pow(0.18, Clamp01(s.Strength / 100.0));
-                if (s.SpeedAdaptive)
-                {
-                    // 甩笔时自动减弱平滑：速度越高越贴手，避免「快速拖拽被甩在后面」
-                    double boost = Math.Min(1.0, _speed / 1.2) * 0.5;
-                    k += (1.0 - k) * boost;
-                }
-                if (corner) k = Math.Max(k, 0.75);
-                _ox += distX * k; _oy += distY * k;
-            }
-
-            // ===== 全局「最大滞后」上限（Radius）=====
-            // 三种模式统一收口：无论算法怎么算，输出点与光标的距离都不超过 Radius。
-            // 一石二鸟：① 给强度滑杆一个直观上界；② 防止快速移动时过度甩尾、拐角被削圆。
-            double lagX = x - _ox, lagY = y - _oy;
-            double lag = Math.Sqrt(lagX * lagX + lagY * lagY);
-            double radius = s.Radius < 1 ? 1 : s.Radius;
-            if (lag > radius && lag > 0.0001)
-            {
-                double f = (lag - radius) / lag;
-                _ox += lagX * f; _oy += lagY * f;
-            }
-
-            tx = (int)Math.Round(_ox);
-            ty = (int)Math.Round(_oy);
-
-            int dxi = tx - _lastInjX, dyi = ty - _lastInjY;
-            double moved = Math.Sqrt((double)dxi * dxi + (double)dyi * dyi);
-            if (moved < s.MinSampleDist) return false;   // 抽稀：位移不足 ⇒ 本帧只吞事件、不注入
-            _lastInjX = tx; _lastInjY = ty;
-            return true;
-        }
-    }
 
 #if ROLE_SMOOTH
     /// <summary>
@@ -249,7 +89,7 @@ namespace JWautofillDaemon
                           I_RADIUSPX = 24, I_HUD = 25, I_HUDCOLOR = 26, I_PXPERAXIS = 27;
 
         /// <summary>
-        /// 笔通路的参数面 —— 与面板 <c>smoothParams</c> 同源同语义。
+        /// 笔（套索平滑）通路的参数面 —— 与面板「平滑选项」的参数同源同语义。
         /// ⚠️ 早期版本只透传强度，半径/模式/张力/追笔/拐角**全部没接上**（面板调了没反应），
         ///    P3.1 起整包下发。新增字段必须同步写进共享内存槽（见 Wr 那一段）。
         /// </summary>
@@ -313,6 +153,16 @@ namespace JWautofillDaemon
 
         /// <summary>hook DLL 的绝对路径（定位不到则为空串）。自安装时据此把 DLL 同步到安装目录。</summary>
         public static string DllPath { get { EnsureDllPath(); return _dllPath; } }
+
+        /// <summary>
+        /// 显式指定要注入的 DLL（自安装写入带版本戳的副本后调用）。
+        /// ⛔ 一旦指定就不再走 <see cref="EnsureDllPath"/> 的目录扫描 —— 否则会重新捡回
+        ///    安装目录里那份被 PS 锁住的旧 DLL。
+        /// </summary>
+        public static void SetDllPath(string path)
+        {
+            if (!string.IsNullOrEmpty(path)) _dllPath = path;
+        }
 
         // ------------------------------------------------------------ 共享内存
         private static int Rd(int slot)
@@ -543,6 +393,19 @@ namespace JWautofillDaemon
             try
             {
                 string bd = AppContext.BaseDirectory;
+                // ① 带版本戳的副本优先：它是最近一次自安装写入的最新构建。
+                //    无戳那份常被 PS 锁住覆盖不了 ⇒ 反而可能是旧的（见 EnsureSelfInstalled）。
+                try
+                {
+                    var stamped = Directory.GetFiles(bd, "JWautofillWintabHook.*.dll");
+                    if (stamped.Length > 0)
+                    {
+                        Array.Sort(stamped, (a, b) => File.GetLastWriteTimeUtc(b).CompareTo(File.GetLastWriteTimeUtc(a)));
+                        _dllPath = stamped[0];
+                        return;
+                    }
+                }
+                catch { }
                 string[] cands =
                 {
                     Path.Combine(bd, "JWautofillWintabHook.dll"),                       // 安装目录（与 exe 同级）
@@ -717,58 +580,11 @@ namespace JWautofillDaemon
         [DllImport("user32.dll")]
         public static extern short GetAsyncKeyState(int vKey);
 
-        // ===== 全局鼠标钩子（套索实时平滑：输入层滤波）=====
-        // 与键盘钩子同源，但**独立安装**在各自的线程上：Windows 把低层钩子回调串行派发到
-        // 「安装它的那个线程」，共用线程会让鼠标回调的耗时连带拖慢键盘回调（反之亦然）。
-        // 这里的职责只有一个：把拖拽过程中的原始鼠标位移替换成滤波后的位移（吞原事件 + 回注），
-        // 从而让 Photoshop 的套索工具「天然」画出平滑轨迹 —— PS 侧完全不知情。
-        public const int WH_MOUSE_LL = 14;
-        public const int WM_MOUSEMOVE = 0x0200;
-        public const int WM_LBUTTONDOWN = 0x0201;
-        public const int WM_LBUTTONUP = 0x0202;
-        /** 注入事件标志位：本进程注入的事件必须被识别并直接放行，否则会自激成输入风暴。 */
-        public const uint LLMHF_INJECTED = 0x00000001;
-
-        [StructLayout(LayoutKind.Sequential)]
-        public struct POINT
-        {
-            public int x;
-            public int y;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        public struct MSLLHOOKSTRUCT
-        {
-            public POINT pt;
-            public uint mouseData;
-            public uint flags;
-            public uint time;
-            public IntPtr dwExtraInfo;
-        }
-
-        public delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
-
-        // ⚠️ 必须写 EntryPoint：托管名与导出名不同（导出名仍是 SetWindowsHookEx）。
-        [DllImport("user32.dll", EntryPoint = "SetWindowsHookEx", SetLastError = true)]
-        public static extern IntPtr SetWindowsHookExMouse(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
-
-        [DllImport("user32.dll")]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool GetCursorPos(out POINT lpPoint);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool SetCursorPos(int x, int y);
-
-        [DllImport("user32.dll")]
-        public static extern int GetSystemMetrics(int nIndex);
-
-        // ===== DPI 感知（决定绝对注入的坐标口径）=====
-        // ⛔ 为什么守护进程必须 DPI 感知：回注走 MOUSEEVENTF_ABSOLUTE | VIRTUALDESK，
-        //    其分母来自 GetSystemMetrics(SM_*VIRTUALSCREEN)。DPI-unaware 进程拿到的是**被系统
-        //    缩放后的逻辑尺寸**，而 SendInput 的绝对坐标按物理像素解释 ⇒ 非 100% 缩放的机器上
-        //    光标会画到错误位置（本机 100% 缩放测不出来）。声明 PerMonitorV2 后，
-        //    GetSystemMetrics / GetCursorPos / 低层钩子的 pt / WindowFromPoint 全部统一为物理像素。
+        // ===== DPI 感知（历史：鼠标回注的坐标口径；现仅作状态上报）=====
+        // ⛔ 曾经守护进程必须 DPI 感知，是因为平滑回注走 MOUSEEVENTF_ABSOLUTE | VIRTUALDESK，
+        //    其分母来自 GetSystemMetrics(SM_*VIRTUALSCREEN)，与 SendInput 的物理像素口径必须一致。
+        //    鼠标钩子平滑已于 2026-10-12 整体移除（只保留笔/Wintab 通路，见 PenHook），
+        //    此处 DPI 设置与 getState 的 dpiAwareness 字段保留作兼容与排障参考。
         //    主手段是清单（native/app.manifest，加载期生效）；下面的运行时调用只作兜底。
         public static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = new IntPtr(-4);
         public static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE = new IntPtr(-3);
@@ -788,54 +604,6 @@ namespace JWautofillDaemon
         [DllImport("user32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool AreDpiAwarenessContextsEqual(IntPtr a, IntPtr b);
-
-        /** 读系统设置。SPI_GETMOUSE(0x0003) 取回 [threshold1, threshold2, acceleration]。 */
-        [DllImport("user32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool SystemParametersInfo(uint uiAction, uint uiParam, int[] pvParam, uint fWinIni);
-
-        public const uint SPI_GETMOUSE = 0x0003;
-        public const int SM_CXSCREEN = 0;
-        public const int SM_XVIRTUALSCREEN = 76;
-        public const int SM_YVIRTUALSCREEN = 77;
-        public const int SM_CXVIRTUALSCREEN = 78;
-        public const int SM_CYVIRTUALSCREEN = 79;
-
-        /** 取某点所在窗口。用于把「拖拽是否起始于 Photoshop 窗口」作为布防的第四道闸门。 */
-        [DllImport("user32.dll")]
-        public static extern IntPtr WindowFromPoint(POINT point);
-
-        // ===== 回注（SendInput）=====
-        // 用 SendInput 而非已废弃的 mouse_event：前者在 UIPI / 输入栈层面更可靠，
-        // 且能携带 dwExtraInfo（我们靠它给「自己注入的事件」打签名）。
-        [StructLayout(LayoutKind.Sequential)]
-        public struct MOUSEINPUT
-        {
-            public int dx;
-            public int dy;
-            public uint mouseData;
-            public uint dwFlags;
-            public uint time;
-            public IntPtr dwExtraInfo;
-        }
-
-        // ⚠️ 这是 C 里 INPUT 的 union 的**最小可用投影**（只用到鼠标分支）。
-        //    x64 下自然对齐会补出 4 字节填充 ⇒ 总长 40，与原生 INPUT 一致；
-        //    改结构体布局前请先用 Marshal.SizeOf 复核，长度不符会让 SendInput 静默失败。
-        [StructLayout(LayoutKind.Sequential)]
-        public struct INPUT
-        {
-            public uint type;
-            public MOUSEINPUT mi;
-        }
-
-        [DllImport("user32.dll", SetLastError = true)]
-        public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
-
-        public const uint INPUT_MOUSE = 0;
-        public const uint MOUSEEVENTF_MOVE = 0x0001;
-        public const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
-        public const uint MOUSEEVENTF_VIRTUALDESK = 0x4000;
 
         // 焦点判断（用于「焦点不在 PS 时暂停监听」）：取当前前台窗口所属进程 PID。
         [DllImport("user32.dll")]
@@ -987,17 +755,23 @@ namespace JWautofillDaemon
         private static readonly object _armLock = new();
         // 熔断标志：一旦检测到钩子回调耗时超过预算，立即切换到「只放行、不处理」模式。
         // 宁可快捷键失效，也绝不让本进程的钩子再把系统键盘拖住。
-        // ⚠️ 与 _mouseHookSafeMode **完全独立**：任一侧熔断只影响自己那一侧。
         private static volatile bool _hookSafeMode = false;
         // 熔断时刻（TickCount64；0 = 未熔断）。冷却期满由**本子系统自己的**看护线程复位并重挂。
         // ⛔ 熔断必须是可自愈的：低层钩子回调一次卡顿（GC/页面交换/驱动抖动）就会触发熔断，
-        //    若做成单向闩锁，一次抖动就永久废掉快捷键（或平滑），只能重启进程才能恢复。
+        //    若做成单向闩锁，一次抖动就永久废掉快捷键，只能重启进程才能恢复。
         private static long _hookSafeModeSince = 0;
         // 单次钩子回调的耗时预算（毫秒）。Windows 对低层钩子有超时限制，超时会被系统摘除；
         // 这里设得更保守，超预算即自我熔断，确保不会成为系统输入链的瓶颈。
         private const long HookBudgetMs = 100;
         /** 熔断冷却时长：期满自动复位该子系统的熔断标志并重挂钩子。 */
         private const long SafeModeCooldownMs = 30000;
+        /**
+         * **连续**超预算多少次才真正熔断。
+         * ⛔ 单次超预算不能熔断：托管环境的 GC 停顿、调度抖动都可能让某一帧偶发变慢，
+         *    若「一次即断」，一次转瞬即逝的卡顿就毁掉接下来 30s 的热键。
+         *    ≥3 次连续才说明这条回路真的不健康；恢复正常即清零计数器。
+         */
+        private const int SafeModeStrikes = 3;
         // 录制线程：持有独立消息循环，全局键盘钩子必须装在带消息循环的线程上
         private static int _recThreadId = 0;
         private static readonly ManualResetEventSlim _recThreadReady = new(false);
@@ -1007,154 +781,14 @@ namespace JWautofillDaemon
         // ===== 键盘钩子的运行期启停（与鼠标钩子解耦的关键一环）=====
         // 此前键盘钩子只在进程启动时装一次、只有「全局卸载」才卸，因此「禁用热键」只能靠清空
         // 热键表让钩子空转 —— 钩子本身仍挂在系统输入链上，且没有任何运行期卸载通路。
-        // 现在它与鼠标钩子一样有自己的装卸指令（WM_HOOK_INSTALL / WM_HOOK_UNINSTALL），
-        // 装卸只作用于 _hookId，**绝不触碰 _mouseHookId / _smoothArm**。
+        // 现在它有自己的装卸指令（WM_HOOK_INSTALL / WM_HOOK_UNINSTALL），装卸只作用于 _hookId。
+        // （鼠标钩子平滑通路已于 2026-10-12 移除，此处不再有第二个钩子系统。）
         private static volatile bool _hotkeyArmed = true;
         private const int WM_HOOK_UNINSTALL = 0x8008; // 录制线程：卸载常驻低层键盘钩子
 
-        // ===== 套索实时平滑：鼠标低层钩子的布防状态与健康指标 =====
-        // 🔴 与键盘钩子**完全独立**的一整套状态：独立线程、独立句柄、独立熔断标志。
-        //    理由：两者的失效模式完全不同（键盘失效 = 打不出字；鼠标失效 = 指针卡住），
-        //    共用任何一项都会让「一边出问题导致另一边陪葬」。
-        private const int WM_MOUSE_HOOK_INSTALL = 0x8006;
-        private const int WM_MOUSE_HOOK_UNINSTALL = 0x8007;
-        private static int _mouseThreadId = 0;
-        private static readonly ManualResetEventSlim _mouseThreadReady = new(false);
-        /** 承载鼠标钩子的线程对象：看护线程据此做存活探针（线程意外死亡 ⇒ 重建）。 */
-        private static Thread? _mouseThreadRef;
-        private static IntPtr _mouseHookId = IntPtr.Zero;
-        private static Win32.LowLevelMouseProc? _mouseHookProc;   // 保持引用，避免被 GC 后钩子崩溃
-        private static volatile bool _mouseHookSafeMode = false;
-        /** 熔断时刻（TickCount64；0 = 未熔断）。与 _hookSafeModeSince 各自独立，冷却期满各自自愈。 */
-        private static long _mouseSafeModeSince = 0;
-        /**
-         * 单次鼠标钩子回调的耗时预算（毫秒）。超预算即降级为「纯放行」，宁可平滑失效也不拖累系统输入。
-         *
-         * ⛔ 这个值的历史：原先取 120ms，是因为回调里**必然**含一次同步 `SendInput`，而它偶发会被
-         *    输入栈阻塞到 Windows 的 LowLevelHooksTimeout（默认 300ms，真机实测 304~315ms）。
-         *    那个设计本身是错的 —— 用「放宽预算」去迁就一个不该存在的阻塞，
-         *    结果是熔断形同虚设（每笔只出现一帧超预算，连续计数总被清零），
-         *    而每笔拖拽都在冻结全系统输入数百毫秒。
-         *    现在回注已搬到独立线程（见 InjectThreadProc），回调里只剩「算法 + 3 次 volatile 写」，
-         *    实测应长期稳定在亚毫秒级 ⇒ 预算收紧到 50ms，重新具备「早发现重活回归」的能力。
-         */
-        private const long MouseHookBudgetMs = 50;
-        /**
-         * **连续**超预算多少次才真正熔断。
-         *
-         * ⛔ 单次超预算不能熔断：托管环境的 GC 停顿、调度抖动都可能让某一帧偶发变慢，
-         *    若「一次即断」，一次转瞬即逝的卡顿就毁掉接下来 30s 的平滑。
-         *    ≥3 次连续才说明这条回路真的不健康（对照：曾经那 300ms 的阻塞是**每笔都可能出现**）。
-         *    恢复正常即清零计数器。
-         */
-        private const int SafeModeStrikes = 3;
-        /**
-         * 是否已布防。只有它为真、**且** PS 处于前台、**且**左键按下、**且**按下点落在 PS 窗口上，
-         * 才可能拦截鼠标事件（四道闸门缺一不可，见 SmoothMouseDispatch）。
-         * 由 UXP 面板经 smoothArm 下发：当前工具是套索且平滑选项已启用时布防。
-         */
-        private static volatile bool _smoothArm = false;
-        /** 参数快照：不可变引用整体替换（钩子线程只读一次、不加锁）。 */
-        private static volatile LassoSmoothSettings _smoothParams = new LassoSmoothSettings();
-        /** 是否正处在「本进程接管中的一次拖拽」。只在鼠标钩子线程上读写；看护线程只读一次做判断。 */
-        private static volatile bool _smoothDragging = false;
-        /** 本进程注入事件的签名：回注时写入 dwExtraInfo，钩子据此把自己的事件直接放行（防回环）。 */
-        private static readonly IntPtr SmoothInjectSignature = new IntPtr(0x4A574155); // 'JWAU'
-        private static readonly LassoMouseSmoother _smoother = new LassoMouseSmoother();
-        /** 健康指标（Interlocked 累加，供 getState / smoothState 上报，排障时先看这里）。 */
-        private static long _smoothHookCallbacks = 0;
-        private static long _smoothInjected = 0;
-        private static long _smoothLastCallbackTick = 0;
-        private static long _smoothLastInstallTick = 0;
-        /** 最近一次拖拽的原始点数 / 注入点数 —— 「吞了事件却没注入」这类异常最直接的判据。 */
-        private static int _smoothLastDragRaw = 0;
-        /** 本笔「已发布待回注」的目标点数（钩子线程侧计数）。 */
-        private static int _smoothLastDragInjected = 0;
-        /** 本笔回注线程**实际执行**的 SendInput 次数（合并后通常略少于发布数）。 */
-        private static int _smoothLastDragFlushed = 0;
-        private static int _smoothDragRaw = 0;
-        private static int _smoothDragInjected = 0;
-        private static int _injectDragDone = 0;
-
-        // ===== 回注线程：把 `SendInput` 从钩子回调里彻底搬走 =====
-        //
-        // ⛔⛔ 为什么必须搬走（真机实测，本轮定案）：
-        //    在 `WH_MOUSE_LL` 回调里**同步**调用 `SendInput`，注入事件要等本回调返回才能入队，
-        //    而系统又在等回调返回 —— 直到 Windows 的 `LowLevelHooksTimeout`（默认 **300ms**）
-        //    超时才解开。真机日志的每一次拖拽都长这样：
-        //        「本次拖拽原始 191 点 / 注入 165 点（最差一帧 304ms，其中回注占 304ms）」
-        //    最差帧 304~315ms 全部落在回注上，与 300ms 判据严丝合缝 ⇒ 每笔拖拽都可能把
-        //    **整个系统输入队列冻结数百毫秒**；用户看到的就是「鼠标拖了很长、画布上只画了
-        //    一小段，而且抖」。这也解释了为什么熔断（120ms×2 次）实际上从未触发：
-        //    每笔只出现一帧超预算，连续计数总被清零。
-        //
-        // ✅ 现在的分工：钩子回调只写一个 volatile 目标位置 + 置事件（微秒级返回）；
-        //    本线程独占 `SendInput`，且天然**合并**连续多帧 —— 只补最新位置，等价于抽稀。
-        /** 钩子线程写入的「最新目标位置」；回注线程取走。volatile int 读写天然原子。 */
-        private static volatile int _injectTargetX = 0;
-        private static volatile int _injectTargetY = 0;
-        private static volatile bool _injectRunning = false;
-        private static Thread? _injectThread = null;
-        private static readonly ManualResetEventSlim _injectSignal = new ManualResetEventSlim(false);
-        /** 抬起时置真：等回注线程排空后再交看护线程打印本笔汇总（保证计数是最终值）。 */
-        private static volatile bool _smoothDragLogArmed = false;
-        /** 回注线程自身的耗时统计（不再参与钩子回调的预算判定，只做健康观测）。 */
-        private static long _injectTotalCalls = 0;
-        private static int _injectLastMs = 0;
-        private static int _injectMaxMs = 0;
-        private static long _injectOver100Ms = 0;
-        /**
-         * 回注线程「正在 SendInput」的起始时刻（TickCount64；0 = 空闲）。
-         *
-         * ⛔⛔ 这是本模块最重要的一道**安全网**。`SendInput` 在输入队列被别人占住时会
-         *    **无限期**阻塞（不是超时，是死等）——真机已经复现：一次卡死之后，
-         *    该进程即便收到退出指令也永远停不下来（线程卡在内核态不可中断，
-         *    进程停在「已终止但对象不回收」的状态，端口也一直被占着）。
-         *    而我们的钩子在「接管中」会**吞掉**原始鼠标移动 ⇒ 一旦回注线程卡住，
-         *    光标就彻底不动了，用户会以为鼠标坏了。
-         *    ⇒ 钩子每帧检查这个时间戳，超过 InjectStallGuardMs 未归还就**立即停止接管**
-         *      （放行原始事件 + 熔断），宁可平滑失效也绝不让光标被我们冻住。
-         */
-        private static long _injectBusySince = 0;
-        /** 回注线程单次 SendInput 超过这个时长即判定为「疑似卡死」，钩子停止接管。 */
-        private const long InjectStallGuardMs = 400;
-
-        // ===== 回调耗时拆解（零 I/O 埋点）=====
-        // ⛔ 存在的意义：钩子回调里严禁 I/O，所以「为什么这一帧花了 306ms」不能靠打日志回答。
-        //    这里只把耗时写进内存字段，由 SmoothWatchdog 经 smoothState 上报。
-        //    ⚠️ 搬走回注之后，回调自身应当长期稳定在 **亚毫秒~2ms**；若 maxCbMs 再次飙到几十上百 ms，
-        //       说明又有人在回调里做了重活（I/O / 分配 / 系统调用），直接查这里。
-        private static int _mouseCbLastTotalMs = 0;    // 上一次回调总耗时
-        private static int _mouseCbMaxTotalMs = 0;     // 本次拖拽窗口内的最差一帧（起笔时清零）
-        /**
-         * **历史最差的一次超预算帧**及其回注耗时（**永不重置**）。
-         *
-         * ⛔ 为什么必须有「永不重置」的一份：上面那份 max 随每一笔清零，等你去查的时候往往已经
-         *    被下一次拖拽覆盖了。而真正要回答的问题是「那 306ms 里有多少是 `SendInput`」——
-         *    这决定了修法：全是回注 ⇒ 得把回注挪出钩子回调；不是 ⇒ 得查其它分支。
-         */
-        private static int _mouseCbWorstOverTotalMs = 0;
-        private static int _mouseCbWorstOverInjectMs = 0;
-        private static long _mouseCbOverBudgetTotal = 0;  // 累计超预算次数
-        private static int _mouseCbStrikes = 0;           // 当前连续超预算计数
-
-        // ===== 钩子 → 看护线程的「待打印日志」（钩子内绝不做 I/O）=====
-        // 真机教训：`Console.WriteLine` 放在回调里，即便已重定向为入队，仍会分配字符串、触碰共享队列；
-        // 而实测「慢的那一帧」恰好是唯一带日志的分支（抬起那一下）。现在钩子只置一个 volatile 标志，
-        // 由看护线程在下一轮（≤120ms）取走打印。
-        private static volatile bool _smoothPendingDragLog = false;
-        private static volatile bool _smoothPendingBreakLog = false;
-        private static int _smoothBreakElapsedMs = 0;
-        /** 熔断原因（钩子线程写、看护线程读）——决定日志措辞，也决定能不能自动复位。 */
-        private static volatile int _smoothBreakReason = BreakReasonCallbackBudget;
-        private const int BreakReasonCallbackBudget = 0;
-        private const int BreakReasonInjectStall = 1;
         private static volatile bool _hotkeyPendingBreakLog = false;
         private static int _hotkeyBreakElapsedMs = 0;
         private static int _hookSafeModeStrikes = 0;   // 键盘侧的连续超预算计数（仅钩子线程读写）
-        /** 布防方：该客户端断开时自动撤防（否则钩子会一直挂在系统上）。 */
-        private static readonly object _smoothLock = new();
-        private static TcpClient? _smoothArmClient;
 
         private static Win32.WndProcDelegate? _wndProcDelegate; // 必须保持引用，避免 GC
 
@@ -1312,6 +946,45 @@ namespace JWautofillDaemon
                     try
                     {
                         Directory.CreateDirectory(InstallDir);
+#if ROLE_SMOOTH
+                        // ⛔⛔ 笔平滑 hook DLL 的同步**不能**放进下面的 `if (needCopy)`：
+                        //     exe 没变（needCopy=false）而 DLL 变过是常态，那时 DLL 就再也不会
+                        //     被同步 —— 真机正是因此一直用着旧 DLL。
+                        // ⛔⛔ 而且必须**带内容戳的文件名**：PS 一旦被注入过，旧 DLL 就被进程锁住，
+                        //     File.Copy 覆盖必抛「文件正由另一进程使用」（daemon.log 实证）
+                        //     ⇒ 安装目录里永远是第一次那份 ⇒ 改了 C 代码也不生效。
+                        //     带戳的新文件名每次构建都不同，旧副本被占也挡不住新副本落地。
+                        try
+                        {
+                            var hookDll = PenHook.DllPath;
+                            if (!string.IsNullOrEmpty(hookDll))
+                            {
+                                string stamp = "";
+                                try { stamp = (GetFileHash(hookDll) ?? "").Substring(0, 8); } catch { }
+                                if (stamp.Length == 0) stamp = DateTime.Now.ToString("yyyyMMddHHmmss");
+                                string dst = Path.Combine(InstallDir, "JWautofillWintabHook." + stamp + ".dll");
+                                if (!File.Exists(dst))
+                                {
+                                    File.Copy(hookDll, dst, false);
+                                    Console.WriteLine(LogPrefix + " 已同步笔平滑 hook DLL: " + Path.GetFileName(dst));
+                                }
+                                PenHook.SetDllPath(dst);
+                                // 顺手再试一次无戳那份（PS 没在跑时才可能成功）；失败无所谓。
+                                try { File.Copy(hookDll, Path.Combine(InstallDir, "JWautofillWintabHook.dll"), true); } catch { }
+                                // 清理更早的戳名副本：仍被 PS 加载的删不掉，忽略即可。
+                                try
+                                {
+                                    foreach (var f in Directory.GetFiles(InstallDir, "JWautofillWintabHook.*.dll"))
+                                    {
+                                        if (string.Equals(f, dst, StringComparison.OrdinalIgnoreCase)) continue;
+                                        try { File.Delete(f); } catch { }
+                                    }
+                                }
+                                catch { }
+                            }
+                        }
+                        catch (Exception ex) { Console.WriteLine(LogPrefix + " 笔平滑 DLL 同步失败: " + ex.Message); }
+#endif
                         bool needCopy = true;
                         if (File.Exists(InstalledExePath))
                         {
@@ -1344,33 +1017,6 @@ namespace JWautofillDaemon
                                 catch { }
                             }
                             File.Copy(self, InstalledExePath, true);
-#if ROLE_SMOOTH
-                            // 笔平滑 hook DLL 必须与 exe **同目录**（DLL 侧按 BaseDirectory 找共享内存
-                            // 与自身；注入时给的是绝对路径）。装到安装目录后，从安装目录运行也能找到它。
-                            // ⚠️ 若 PS 此刻正加载着旧 DLL，覆盖会失败（文件锁）—— 记一条日志即可，
-                            //    旧副本仍可用，重启 PS 后再次自安装会自动补齐。
-                            try
-                            {
-                                var hookDll = PenHook.DllPath;
-                                if (!string.IsNullOrEmpty(hookDll))
-                                {
-                                    string dst = Path.Combine(InstallDir, "JWautofillWintabHook.dll");
-                                    bool same = false;
-                                    try
-                                    {
-                                        same = File.Exists(dst) && string.Equals(GetFileHash(hookDll),
-                                                GetFileHash(dst), StringComparison.OrdinalIgnoreCase);
-                                    }
-                                    catch { same = false; }
-                                    if (!same)
-                                    {
-                                        File.Copy(hookDll, dst, true);
-                                        Console.WriteLine(LogPrefix + " 已同步笔平滑 hook DLL 到安装目录");
-                                    }
-                                }
-                            }
-                            catch (Exception ex) { Console.WriteLine(LogPrefix + " 笔平滑 DLL 同步失败: " + ex.Message); }
-#endif
                             if (stopped > 0)
                                 Console.WriteLine(LogPrefix + " 已停掉并等待 " + stopped + " 个旧副本退出，随后更新安装目录副本");
                         }
@@ -1505,10 +1151,9 @@ namespace JWautofillDaemon
             }
             catch (Exception ex) { Console.WriteLine(LogPrefix + " 卸载异常: " + ex.Message); }
             finally {
-                // 显式卸载两个全局钩子：即便 Environment.Exit 略有延迟，也先释放钩子，
-                // 避免进程退出前钩子仍挂在系统输入链上造成键盘/鼠标短暂失灵。
-                try { if (_hookId != IntPtr.Zero) Win32.UnhookWindowsHookEx(_hookId); } catch { }
-                try { if (_mouseHookId != IntPtr.Zero) Win32.UnhookWindowsHookEx(_mouseHookId); } catch { }
+                // 显式卸载全局键盘钩子：即便 Environment.Exit 略有延迟，也先释放钩子，
+                // 避免进程退出前钩子仍挂在系统输入链上造成键盘短暂失灵。
+                // （鼠标钩子平滑通路已于 2026-10-12 移除；笔通路由 PenHook 的共享内存指令还原。）
                 Environment.Exit(0);
             }
         }
@@ -1631,20 +1276,6 @@ namespace JWautofillDaemon
             // 录制指令仍走 PostThreadMessage：此时录制线程已进入消息循环，队列必然存在
             _recThreadReady.Wait(5000);
 #else
-            // 鼠标钩子线程（套索实时平滑）：必须自带消息循环；未布防时不安装钩子，
-            // 因此对系统输入零开销。健康看护线程随后负责「被系统静默摘钩」后的自愈。
-            var mouseThread = new Thread(MouseHookThreadProc) { IsBackground = true, Name = "鼠标钩子" };
-            _mouseThreadRef = mouseThread;
-            mouseThread.Start();
-            _mouseThreadReady.Wait(5000);
-
-            // 回注线程：独占 SendInput。⛔ 绝不能在钩子回调里回注 —— 注入事件要等回调返回
-            // 才能入队，而系统又在等回调返回，直到 LowLevelHooksTimeout(300ms) 才解开
-            // （真机实测最差一帧 304~315ms，且 100% 是回注耗时）。
-            _injectRunning = true;
-            _injectThread = new Thread(InjectThreadProc) { IsBackground = true, Name = "平滑回注" };
-            _injectThread.Priority = ThreadPriority.AboveNormal;   // 回注越即时，光标滞后越小
-            _injectThread.Start();
 #endif
 
             // 只启动**本角色**的看护线程。拆分后每个进程只有一个子系统，
@@ -1653,8 +1284,6 @@ namespace JWautofillDaemon
             var hotkeyWatchdog = new Thread(HotkeyWatchdog) { IsBackground = true, Name = "热键看护" };
             hotkeyWatchdog.Start();
 #else
-            var smoothWatchdog = new Thread(SmoothWatchdog) { IsBackground = true, Name = "平滑看护" };
-            smoothWatchdog.Start();
 #endif
 
             _ = Task.Run(() => RunWebSocketServer());
@@ -1664,6 +1293,10 @@ namespace JWautofillDaemon
             // 笔输入层平滑（Wintab 通路）：建共享内存 + 起心跳线程。
             // 注入不在这里做 —— 由 WatchPhotoshop 的巡检触发（且只在功能开启时）。
             PenHook.Init();
+            // 状态推送：hook 的「挂载 / 标定」是异步完成的，面板点开关那一刻状态必然还是 0，
+            // 必须靠这一路周期性推送把真实状态送上去（详见 SmoothStatePump 的注释）。
+            var smoothPump = new Thread(SmoothStatePump) { IsBackground = true, Name = "平滑状态推送" };
+            smoothPump.Start();
 #endif
 
 #if !ROLE_SMOOTH
@@ -1695,7 +1328,7 @@ namespace JWautofillDaemon
             }
 #else
             // 平滑侧不需要窗口：钩子线程自带消息循环，主线程只需常驻。
-            Console.WriteLine(LogPrefix + " 已就绪，等待面板下发平滑布防...");
+            Console.WriteLine(LogPrefix + " 已就绪，等待面板下发套索平滑指令...");
             Thread.Sleep(Timeout.Infinite);
 #endif
         }
@@ -1924,10 +1557,9 @@ namespace JWautofillDaemon
             while (true)
             {
                 Thread.Sleep(3000);
-                // ⛔ 整轮包在 try/catch 里：本循环产物 _psPids 是**两个钩子共用的前置条件**
-                //    （键盘侧与鼠标侧都靠它判断「焦点是否在 PS」）。此前只有取进程列表那一步
-                //    包了 try，RefreshPsPids / RegisterAll / UnregisterAll 抛异常就会让整条
-                //    探测线程消失 —— 两个钩子随后会同时「莫名失效」，且没有任何日志。
+                // ⛔ 整轮包在 try/catch 里：本循环产物 _psPids 是键盘钩子侧的前置条件
+                //    （RefreshPsPids 抛异常会让整条探测线程消失 ⇒ 热键「莫名失效」且无日志）。
+                //    （鼠标钩子平滑通路已于 2026-10-12 移除，它曾是 _psPids 的另一个消费者。）
                 try
                 {
                     bool psRunning = false;
@@ -1990,8 +1622,7 @@ namespace JWautofillDaemon
         // ===== 常驻低层键盘钩子 =====
         // 进程启动时安装一次，同时服务于「录制组合键」与「触发快捷键」两件事。
         // 它运行在独立的带消息循环的线程上（低层钩子要求安装线程必须泵消息）。
-        // ⚠️ 与鼠标钩子（套索平滑）**完全独立**：独立的线程、独立的句柄、独立的熔断标志、
-        //    独立的看护线程。本方法只碰 _hookId，任何情况下都不会触碰 _mouseHookId。
+        // （鼠标钩子平滑通路已于 2026-10-12 移除，本进程现在只有键盘这一个钩子子系统。）
         private static void InstallPermanentHook()
         {
             lock (_recLock)
@@ -2034,15 +1665,13 @@ namespace JWautofillDaemon
             }
             // 钩子没了就不可能再收到录制按键：清掉录制态，避免面板停在「等待按键」
             _recPendingCombo = null;
-            Console.WriteLine(LogPrefix + " 常驻键盘钩子已卸载（热键禁用；鼠标/平滑不受影响）");
+            Console.WriteLine(LogPrefix + " 常驻键盘钩子已卸载（热键禁用）");
         }
 
         /// <summary>
         /// 热键钩子的布防 / 撤防（运行期独立装卸）。
         ///
-        /// ⛔ 与 SetSmoothArm 严格对称且**互不引用**：这里只投递键盘钩子的装卸指令，
-        ///    不读也不写任何平滑侧状态（_smoothArm / _mouseHookId / _mouseHookSafeMode）。
-        /// ⛔ 与平滑侧一样**不在此处广播**：指令是异步投递给钩子线程执行的，
+        /// ⛔ **不在此处广播**：指令是异步投递给钩子线程执行的，
         ///    此刻句柄尚未变化，广播出去的 hookInstalled 必然过期。
         ///    状态统一由 HotkeyWatchdog 在检测到跃变后补播。
         /// </summary>
@@ -2186,11 +1815,10 @@ namespace JWautofillDaemon
         // 此前这里会 PostThreadMessage(WM_DRAIN_LOG) 让钩子线程自己写文件——写阻塞即卡死钩子。
         //
         // ⚠️ 使用范围已收紧：仅限「录制 / 解绑」这类**低频、一次用户动作一条**的路径。
-        //    高频热路径（每一帧鼠标移动、每一次熔断判定）一律**不得**在此打日志 ——
+        //    高频热路径（每一次熔断判定）一律**不得**在此打日志 ——
         //    真机证据：唯一带日志的那一帧，恰好就是耗时 306ms 的那一帧。
         //    热路径的可观测性改走「零 I/O 内存埋点 + 看护线程代打」：
-        //    埋点见 _mouseCbLastTotalMs / _mouseCbMaxInjectMs，代打见 _smoothPendingDragLog /
-        //    _smoothPendingBreakLog / _hotkeyPendingBreakLog。
+        //    埋点见 _hookSafeModeStrikes / _hotkeyBreakElapsedMs，代打见 _hotkeyPendingBreakLog。
         private static void LogFromHook(string line)
         {
             Console.WriteLine(line);
@@ -2364,102 +1992,6 @@ namespace JWautofillDaemon
             return Win32.CallNextHookEx(_hookId, nCode, wParam, lParam);
         }
 
-        // ===== 套索实时平滑：鼠标钩子线程 =====
-        // 与键盘钩子分线程的理由见字段区注释。钩子的安装/卸载都由本线程自己执行
-        // （PostThreadMessage 只投递指令）：低层钩子必须由「承载它的那个带消息循环的线程」安装。
-        //
-        // ⛔ 异常隔离：与 RecordingThreadProc 同构 —— 本循环里的任何未捕获异常都会让线程消失，
-        //    而缓存钩子正挂在这条线程上，线程一死钩子即被系统摘除且 _mouseThreadId 变成死地址，
-        //    后续装卸指令全部石沉大海（表现为「平滑永久失效、状态一直启动失败」）。
-        private static void MouseHookThreadProc()
-        {
-            _mouseThreadId = Win32.GetCurrentThreadId();
-            _mouseThreadReady.Set();
-            Console.WriteLine(LogPrefix + " 鼠标钩子线程已启动 tid=" + _mouseThreadId + "（未布防时不安装钩子）");
-            // 线程体自行按当前意图装配：首启时未布防 ⇒ 什么都不做；
-            // 被看护线程**重建**时布防可能仍为真 ⇒ 必须自己补装，否则重建后永远没有钩子
-            // （重建路径不会再补发装卸指令，见 EnsureHookThreadAlive）。
-            if (_smoothArm) TryQuiet(() => InstallMouseHook(), "鼠标钩子安装");
-            var msg = new Win32.MSG();
-            while (Win32.GetMessage(out msg, IntPtr.Zero, 0, 0) != 0)
-            {
-                int m = (int)msg.message;   // MSG.message 是 uint（原生类型），转 int 便于与常量比较
-                TryQuiet(() =>
-                {
-                    if (m == WM_MOUSE_HOOK_INSTALL) InstallMouseHook();
-                    else if (m == WM_MOUSE_HOOK_UNINSTALL) UninstallMouseHook();
-                }, "鼠标钩子线程消息 " + m);
-            }
-            Console.WriteLine(LogPrefix + " 鼠标钩子线程已退出");
-        }
-
-        /// <summary>
-        /// 安装（或重挂）鼠标钩子。**幂等**：句柄非空时先卸再挂，
-        /// 因为「句柄非空」并不代表钩子还活着（系统会静默摘钩，见 SmoothWatchdog 注释）。
-        /// </summary>
-        private static void InstallMouseHook()
-        {
-            _smoothDragging = false;   // 重挂期间不做接管，避免半途丢事件
-            if (_mouseHookId != IntPtr.Zero)
-            {
-                try { Win32.UnhookWindowsHookEx(_mouseHookId); } catch { }
-                _mouseHookId = IntPtr.Zero;
-            }
-            try
-            {
-                _mouseHookProc = LowLevelMouseProc;   // 保持委托引用，避免被 GC 后钩子崩溃
-                _mouseHookId = Win32.SetWindowsHookExMouse(Win32.WH_MOUSE_LL, _mouseHookProc, Win32.GetModuleHandle(null), 0);
-            }
-            catch (Exception ex)
-            {
-                _mouseHookId = IntPtr.Zero;
-                _smoothLastInstallTick = Environment.TickCount64;
-                Console.WriteLine(LogPrefix + " ❌ 鼠标钩子安装异常: " + ex.Message);
-                return;
-            }
-            _smoothLastInstallTick = Environment.TickCount64;
-            if (_mouseHookId == IntPtr.Zero)
-                Console.WriteLine(LogPrefix + " ❌ 鼠标钩子安装失败（err=" + Marshal.GetLastWin32Error() +
-                    "），套索实时平滑不会生效。常见原因：安全软件拦截全局鼠标钩子。");
-            else
-                Console.WriteLine(LogPrefix + " 鼠标钩子已安装（套索平滑布防中）");
-        }
-
-        private static void UninstallMouseHook()
-        {
-            _smoothDragging = false;
-            if (_mouseHookId == IntPtr.Zero) return;
-            try { Win32.UnhookWindowsHookEx(_mouseHookId); } catch { }
-            _mouseHookId = IntPtr.Zero;
-            Console.WriteLine(LogPrefix + " 鼠标钩子已卸载（套索平滑撤防）");
-        }
-
-        /// <summary>
-        /// 布防 / 撤防。**只应由 WebSocket 线程调用**：只给鼠标钩子线程投递指令，自己不做 I/O 之外的事。
-        ///
-        /// ⛔ 这里**刻意不广播状态**：本方法返回时钩子还没装上（SetWindowsHookEx 由钩子线程
-        ///    异步执行）⇒ 此刻广播出去的 hookInstalled 必然是 false，面板会先闪一下
-        ///    「启动失败（被安全软件拦截）」。状态统一由 SmoothWatchdog 在检测到
-        ///    armed/hookInstalled 跃变后补播（≤120ms），那一帧才是真实状态。
-        /// </summary>
-        private static void SetSmoothArm(bool on, TcpClient? client)
-        {
-            if (on)
-            {
-                lock (_smoothLock) { _smoothArmClient = client; }
-                _smoothArm = true;
-                if (_mouseThreadId != 0)
-                    Win32.PostThreadMessage(_mouseThreadId, WM_MOUSE_HOOK_INSTALL, IntPtr.Zero, IntPtr.Zero);
-            }
-            else
-            {
-                _smoothArm = false;
-                lock (_smoothLock) { _smoothArmClient = null; }
-                if (_mouseThreadId != 0)
-                    Win32.PostThreadMessage(_mouseThreadId, WM_MOUSE_HOOK_UNINSTALL, IntPtr.Zero, IntPtr.Zero);
-            }
-            Console.WriteLine(LogPrefix + " 套索平滑" + (on ? "已布防" : "已撤防"));
-        }
 
         /// <summary>
         /// 子系统线程存活探针（键盘侧与鼠标侧各调用一次，互不共享任何状态）。
@@ -2478,7 +2010,7 @@ namespace JWautofillDaemon
             var t = new Thread(body) { IsBackground = true, Name = name };
             threadRef = t;
             t.Start();
-            // 线程体第一件事就是按当前意图自行装配（键盘 ⇒ 尊重 _hotkeyArmed；鼠标 ⇒ 尊重 _smoothArm），
+            // 线程体第一件事就是按当前意图自行装配（键盘 ⇒ 尊重 _hotkeyArmed），
             // 因此这里不需要、也不应该再补一条装卸指令（此刻线程队列可能还没建立）。
         }
 
@@ -2490,7 +2022,7 @@ namespace JWautofillDaemon
         ///   ② 熔断自愈：回调超预算后冷却期内只放行，冷却期满复位并重挂；
         ///   ③ 已布防但句柄为空 ⇒ 重挂。
         ///
-        /// ⚠️ 刻意**不做**「定时无条件重挂」（鼠标侧有这一步）：键盘钩子的重挂会在
+        /// ⚠️ 刻意**不做**「定时无条件重挂」：键盘钩子的重挂在
         ///    unhook/hook 之间留下一个窗口，用户此刻的按键会绕过我们的处理；
         ///    而「被系统静默摘钩」在键盘侧无法用无害探针检测（按键事件本身就是探针，
         ///    但我们无法区分「用户没按键」与「钩子被摘了」）。因此只处理**确定已坏**的情形。
@@ -2519,10 +2051,10 @@ namespace JWautofillDaemon
                         Console.WriteLine(LogPrefix + " ⚠️ 键盘钩子**连续 " + SafeModeStrikes + " 次**回调超预算" +
                             "（最近一次 " + _hotkeyBreakElapsedMs + "ms / 预算 " + HookBudgetMs + "ms），" +
                             "已降级为纯放行：此后不再处理按键，避免拖累系统输入。" +
-                            "（" + (SafeModeCooldownMs / 1000) + "s 后自动复位并重挂；鼠标/平滑不受影响）");
+                            "（" + (SafeModeCooldownMs / 1000) + "s 后自动复位并重挂）");
                     }
 
-                    // ② 熔断自愈：只复位键盘侧的标志，绝不触碰 _mouseHookSafeMode
+                    // ② 熔断自愈：冷却期满复位并重挂
                     if (_hookSafeMode)
                     {
                         long since = Interlocked.Read(ref _hookSafeModeSince);
@@ -2530,7 +2062,7 @@ namespace JWautofillDaemon
                         {
                             _hookSafeMode = false;
                             Interlocked.Exchange(ref _hookSafeModeSince, 0);
-                            Console.WriteLine(LogPrefix + " 键盘钩子熔断冷却期满，已复位并重挂（平滑/鼠标全程未受影响）");
+                            Console.WriteLine(LogPrefix + " 键盘钩子熔断冷却期满，已复位并重挂");
                             if (_hotkeyArmed && _recThreadId != 0)
                                 Win32.PostThreadMessage(_recThreadId, WM_HOOK_INSTALL, IntPtr.Zero, IntPtr.Zero);
                         }
@@ -2558,561 +2090,11 @@ namespace JWautofillDaemon
             }
         }
 
-        /// <summary>
-        /// 平滑健康看护 —— 与热键侧**完全独立**的一条看护线程。
-        ///
-        /// ⛔ 为什么必须有它：Windows 对低层钩子有 LowLevelHooksTimeout —— 回调一旦超时，
-        ///    系统会**静默摘除**钩子且不通知任何一方。此时句柄仍非 0、日志毫无异常，
-        ///    表现只是「平滑忽然不生效了」，无从排查。这里做四件事：
-        ///      ① 线程存活探针：钩子线程死了就重建（否则平滑永久失效）；
-        ///      ② 熔断自愈：回调超预算后冷却期满复位并重挂；
-        ///      ③ 已布防但句柄为空 ⇒ 立即重挂；
-        ///      ④ 已布防且长期未重挂（20s）⇒ 在**非拖拽**时刻主动重挂一次。
-        ///         代价是一次毫秒级的 unhook/hook，换来「被静默摘钩后最多 20s 自愈」。
-        ///         （鼠标侧可以做定时重挂：拖拽中不重挂即可，用户无感知；键盘侧不行，见 HotkeyWatchdog。）
-        ///
-        /// ⚠️ 刻意不用「注入一个零位移事件再看有没有回调」的探针：零位移事件可能被系统
-        ///    合并/丢弃，探针本身不可靠，反而会误判成「钩子死了」而反复重挂。
-        /// </summary>
-        private static void SmoothWatchdog()
-        {
-            // 状态上报：本线程负责，钩子线程与 WS 线程都不碰。
-            //
-            // ⛔ 为什么必须由本线程补播（两个都会在真机上直接暴露）：
-            //   ① `SetSmoothArm` 返回时钩子**还没装上** —— 它只 PostThreadMessage 给钩子线程，
-            //      真正的 SetWindowsHookEx 由钩子线程异步执行。若在那里广播，上报的
-            //      hookInstalled 必然是 false，面板每次启用都会先闪一下红色的
-            //      「启动失败（被安全软件拦截）」。
-            //   ② 拖拽开始/结束发生在**钩子线程内**，而钩子线程严禁 I/O（见钩子铁律）
-            //      ⇒ 这两次跃变只能由本线程补播。不补的话面板永远看不到「生效中」，
-            //        用户也就无法区分「钩子装上了但一个事件都没收到」（数位板场景）
-            //        与「正常工作」—— 这正是 A3 验收项唯一的 UI 判据。
-            //
-            // 上报规则 = 「连续两轮读数相同（已稳定）」且「与上次上报不同」。
-            // 单轮就采到 hookInstalled=false 的中间帧不会外泄（钩子安装是毫秒级的）；
-            // 而真的装不上时，约两个周期（240ms）后如实报出。
-            var reported = (armed: false, dragging: false, hook: false, safe: false);
-            var candidate = reported;
-            bool haveCandidate = false;
-            long lastHealthCheck = 0;
-            while (true)
-            {
-                Thread.Sleep(120);
-                try
-                {
-                    long now = Environment.TickCount64;
-
-                    // ① 线程存活（重建后由线程体自己按 _smoothArm 装配）
-                    EnsureHookThreadAlive(ref _mouseThreadRef, MouseHookThreadProc, "鼠标钩子");
-
-                    // ①.5 代打钩子攒下的日志（钩子回调严禁 I/O ⇒ 一律由本线程取走打印）
-                    if (_smoothPendingDragLog)
-                    {
-                        _smoothPendingDragLog = false;
-                        Console.WriteLine(LogPrefix + " 套索平滑：本次拖拽原始 " + _smoothLastDragRaw +
-                            " 点 / 发布 " + _smoothLastDragInjected + " 点 / 实注入 " + _smoothLastDragFlushed +
-                            " 点（回调最差 " + _mouseCbMaxTotalMs + "ms，回注最差 " + _injectMaxMs +
-                            "ms，累计回注超 100ms " + Interlocked.Read(ref _injectOver100Ms) + " 次）");
-                    }
-                    if (_smoothPendingBreakLog)
-                    {
-                        _smoothPendingBreakLog = false;
-                        if (_smoothBreakReason == BreakReasonInjectStall)
-                        {
-                            Console.WriteLine(LogPrefix + " ⚠️ 回注线程已 " + _smoothBreakElapsedMs +
-                                "ms 未从 SendInput 返回（疑似卡死），已**立即停止接管并放行原始鼠标事件**。" +
-                                "套索平滑失效，但光标保持原生行为。此类熔断不会自动复位 —— 需重启平滑服务。");
-                        }
-                        else
-                        {
-                            Console.WriteLine(LogPrefix + " ⚠️ 鼠标钩子**连续 " + SafeModeStrikes + " 次**回调超预算" +
-                                "（最近一次 " + _smoothBreakElapsedMs + "ms / 预算 " + MouseHookBudgetMs + "ms），" +
-                                "已降级为纯放行：套索平滑暂时失效（键盘热键不受影响），避免拖累系统输入。" +
-                                "（" + (SafeModeCooldownMs / 1000) + "s 后自动复位并重挂）");
-                        }
-                    }
-
-                    // ② 熔断自愈：只复位鼠标侧的标志，绝不触碰 _hookSafeMode
-                    if (_mouseHookSafeMode)
-                    {
-                        long since = Interlocked.Read(ref _mouseSafeModeSince);
-                        // ⛔ 但「回注线程卡死」这一种熔断**绝不自动复位**：
-                        //    SendInput 一旦卡住就不会自己回来（真机表现为进程都退不掉），
-                        //    此时自动复位只会让钩子重新开始吞事件 ⇒ 光标再次被冻住。
-                        //    这类熔断必须等到回注线程真正归还（重启服务）才能解除。
-                        long busySince = Volatile.Read(ref _injectBusySince);
-                        bool injectorWedged = busySince != 0 && now - busySince > InjectStallGuardMs;
-                        if (injectorWedged)
-                        {
-                            if (since == 0) Interlocked.Exchange(ref _mouseSafeModeSince, now);
-                        }
-                        else if (since != 0 && now - since >= SafeModeCooldownMs)
-                        {
-                            _mouseHookSafeMode = false;
-                            Interlocked.Exchange(ref _mouseSafeModeSince, 0);
-                            Console.WriteLine(LogPrefix + " 鼠标钩子熔断冷却期满，已复位并重挂（键盘热键全程未受影响）");
-                            if (_smoothArm && _mouseThreadId != 0)
-                                Win32.PostThreadMessage(_mouseThreadId, WM_MOUSE_HOOK_INSTALL, IntPtr.Zero, IntPtr.Zero);
-                        }
-                    }
-
-                    // ③ 跃变上报：采样（只读 4 个 bool / 1 个指针，代价可忽略）。
-                    var cur = (
-                        armed: _smoothArm,
-                        dragging: _smoothDragging,
-                        hook: _mouseHookId != IntPtr.Zero,
-                        safe: _mouseHookSafeMode);
-                    if (haveCandidate && cur == candidate && cur != reported)
-                    {
-                        reported = cur;
-                        BroadcastSmoothState();
-                    }
-                    candidate = cur;
-                    haveCandidate = true;
-
-                    // ④ 钩子健康看护：2s 一次就够（重挂代价是毫秒级 unhook/hook）。
-                    if (now - lastHealthCheck < 2000) continue;
-                    lastHealthCheck = now;
-                    if (!cur.armed) continue;
-                    if (!cur.hook)
-                    {
-                        Console.WriteLine(LogPrefix + " ⚠️ 已布防但鼠标钩子句柄为空，正在重挂…");
-                        Win32.PostThreadMessage(_mouseThreadId, WM_MOUSE_HOOK_INSTALL, IntPtr.Zero, IntPtr.Zero);
-                        continue;
-                    }
-                    if (!cur.dragging && now - _smoothLastInstallTick > 20000)
-                        Win32.PostThreadMessage(_mouseThreadId, WM_MOUSE_HOOK_INSTALL, IntPtr.Zero, IntPtr.Zero);
-                }
-                catch { /* 看护线程绝不因异常退出 */ }
-            }
-        }
-
-        /// <summary>判断屏幕点是否落在 Photoshop 自己的窗口上（画布/面板/菜单同属一个进程）。</summary>
-        private static bool IsPhotoshopWindowAt(Win32.POINT pt)
-        {
-            try
-            {
-                var hwnd = Win32.WindowFromPoint(pt);
-                if (hwnd == IntPtr.Zero) return false;
-                uint pid;
-                Win32.GetWindowThreadProcessId(hwnd, out pid);
-                if (pid == 0) return false;
-                return _psPids.Contains((int)pid);   // volatile 引用整体替换，无锁读
-            }
-            catch { return false; }
-        }
-
-        /// <summary>
-        /// 回注一次位移（**相对移动 + 按实际光标位置自校正**）。
-        ///
-        /// 为什么不用绝对坐标：绝对移动要把屏幕坐标归一化到 0–65535，多显示器 / 缩放 /
-        /// 虚拟桌面的组合下有大量边界坑。相对移动 + 每帧先 GetCursorPos（廉价系统调用，
-        /// 不涉及宿主 IPC）再取差值，天然消除取整误差的累积漂移。
-        /// </summary>
-        private static bool InjectMouseMoveTo(int tx, int ty)
-        {
-            if (!Win32.GetCursorPos(out var cur)) return false;
-            var inputs = new Win32.INPUT[1];
-            inputs[0].type = Win32.INPUT_MOUSE;
-            inputs[0].mi.dx = tx - cur.x;
-            inputs[0].mi.dy = ty - cur.y;
-            inputs[0].mi.mouseData = 0;
-            inputs[0].mi.dwFlags = Win32.MOUSEEVENTF_MOVE;
-            inputs[0].mi.time = 0;
-            inputs[0].mi.dwExtraInfo = SmoothInjectSignature;
-            return Win32.SendInput(1, inputs, Marshal.SizeOf<Win32.INPUT>()) == 1;
-        }
-
-        /// <summary>
-        /// 回注一次**绝对**位置。
-        ///
-        /// ⛔ 为什么必须补这一条：`MOUSEEVENTF_MOVE`（相对）**同样走系统的指针加速曲线**
-        ///    （「提高指针精确度」，本机实测 SPI_GETMOUSE = [6,10,1]，即开启状态）。
-        ///    我们阻塞掉原始移动、改注入「平滑后」的位移，而平滑后的位移更小、更均匀，
-        ///    落在加速曲线的另一段 ⇒ 每帧实际位移 ≠ 请求位移，且是非线性的；
-        ///    更糟的是注入是**闭环**的（每帧先 GetCursorPos 再取差值），
-        ///    一次过冲会在下一帧变成反向修正 ⇒ 光标在目标附近来回抖动，
-        ///    画布上看到的就是「位移被吃掉 + 抖动依旧」。两者同源。
-        ///
-        ///    `MOUSEEVENTF_ABSOLUTE` 不经加速，位置严格等于请求值 ⇒ 位移守恒。
-        ///    代价是要把屏幕坐标归一化到 0–65535（多显示器/缩放需配合 VIRTUALDESK）。
-        /// </summary>
-        private static bool InjectMouseMoveAbsoluteTo(int tx, int ty)
-        {
-            int vx = Win32.GetSystemMetrics(Win32.SM_XVIRTUALSCREEN);
-            int vy = Win32.GetSystemMetrics(Win32.SM_YVIRTUALSCREEN);
-            int vw = Win32.GetSystemMetrics(Win32.SM_CXVIRTUALSCREEN);
-            int vh = Win32.GetSystemMetrics(Win32.SM_CYVIRTUALSCREEN);
-            if (vw < 2) vw = 2;
-            if (vh < 2) vh = 2;
-
-            long nx = (long)(tx - vx) * 65535 / (vw - 1);
-            long ny = (long)(ty - vy) * 65535 / (vh - 1);
-            if (nx < 0) nx = 0; else if (nx > 65535) nx = 65535;
-            if (ny < 0) ny = 0; else if (ny > 65535) ny = 65535;
-
-            var inputs = new Win32.INPUT[1];
-            inputs[0].type = Win32.INPUT_MOUSE;
-            inputs[0].mi.dx = (int)nx;
-            inputs[0].mi.dy = (int)ny;
-            inputs[0].mi.mouseData = 0;
-            inputs[0].mi.dwFlags = Win32.MOUSEEVENTF_MOVE | Win32.MOUSEEVENTF_ABSOLUTE | Win32.MOUSEEVENTF_VIRTUALDESK;
-            inputs[0].mi.time = 0;
-            inputs[0].mi.dwExtraInfo = SmoothInjectSignature;
-            return Win32.SendInput(1, inputs, Marshal.SizeOf<Win32.INPUT>()) == 1;
-        }
-
-        /// <summary>
-        /// 钩子线程发布「最新目标位置」并唤醒回注线程。微秒级：只有 3 次 volatile 写 + 一次
-        /// `SetEvent`，**绝不阻塞** —— 这是把 300ms 停顿从钩子里摘干净的关键。
-        /// </summary>
-        private static void PublishInjectTarget(int x, int y)
-        {
-            // 先写坐标、后置信号：回注线程只在看到信号后才读坐标，
-            // volatile 写序保证它读到的至少是已发布过的一版，不会读到半更新状态。
-            _injectTargetX = x;
-            _injectTargetY = y;
-            if (!_injectSignal.IsSet) _injectSignal.Set();
-        }
-
-        /// <summary>
-        /// 回注线程体：等信号 → 取最新目标 → `SendInput`。
-        ///
-        /// ✅ 天然「合并」：连续多帧发布目标时，若上一帧还没注入完，新目标只是覆盖坐标，
-        ///    回注线程下一次循环取到的就是最新位置 —— 等价于自适应抽稀，不会积压。
-        ///
-        /// ⚠️ 本线程是普通托管线程（不受钩子铁律约束），但**绝不能因异常退出**：
-        ///    原始事件都被钩子吞了，一旦它消失光标就再也补不上位置（指针像被冻住）。
-        /// </summary>
-        private static void InjectThreadProc()
-        {
-            while (_injectRunning)
-            {
-                try
-                {
-                    _injectSignal.Wait(200);
-                    if (!_injectRunning) break;
-
-                    if (_injectSignal.IsSet)
-                    {
-                        _injectSignal.Reset();                 // 先清信号再读坐标（见 PublishInjectTarget 的写序）
-                        int x = _injectTargetX, y = _injectTargetY;
-                        long t0 = Stopwatch.GetTimestamp();
-                        // 置「正在回注」标记：钩子据此判断回注线程是不是卡死了（见 _injectBusySince）
-                        Volatile.Write(ref _injectBusySince, Environment.TickCount64);
-                        bool ok = InjectMouseMoveAbsoluteTo(x, y);
-                        Volatile.Write(ref _injectBusySince, 0);
-                        int ms = (int)Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
-                        _injectLastMs = ms;
-                        if (ms > _injectMaxMs) _injectMaxMs = ms;
-                        if (ms >= 100) Interlocked.Increment(ref _injectOver100Ms);
-                        Interlocked.Increment(ref _injectTotalCalls);
-                        if (ok)
-                        {
-                            Interlocked.Increment(ref _smoothInjected);
-                            _injectDragDone++;
-                        }
-                        continue;
-                    }
-
-                    // ===== 队列已排空 =====
-                    // 把「本笔汇总」的**快照**移交给看护线程打印（钩子内绝不 I/O，回注线程也不适合 I/O：
-                    // 它一慢就直接体现为光标滞后）。等 30ms 再复核一次信号，避免刚排空又有新目标插进来。
-                    if (_smoothDragLogArmed)
-                    {
-                        Thread.Sleep(30);
-                        if (_injectSignal.IsSet) continue;
-                        _smoothDragLogArmed = false;
-                        _smoothLastDragRaw = _smoothDragRaw;
-                        _smoothLastDragInjected = _smoothDragInjected;
-                        _smoothLastDragFlushed = _injectDragDone;
-                        _smoothPendingDragLog = true;
-                    }
-                }
-                catch { /* 绝不让回注线程因异常退出 */ }
-            }
-        }
-
-        /// <summary>
-        /// 指针注入自检（`{"type":"pointerTest"}`）：在同一台机器上对拍
-        /// 「相对注入 / 绝对注入 / SetCursorPos（不经输入栈，作为上界对照）」三种方式的位移守恒率。
-        ///
-        /// 存在意义：这决定了平滑到底该用哪种注入 —— 直接量出 `MOUSEEVENTF_MOVE` 被加速吃掉了多少。
-        /// 本方法会短暂移动光标，结束前**必定**复位（含异常路径）。
-        /// </summary>
-        private static string RunPointerTest()
-        {
-            int a1 = 0, a2 = 0, a3 = 0;
-            try
-            {
-                var arr = new int[3];
-                if (Win32.SystemParametersInfo(Win32.SPI_GETMOUSE, 0u, arr, 0u)) { a1 = arr[0]; a2 = arr[1]; a3 = arr[2]; }
-            }
-            catch { }
-
-            Win32.POINT saved;
-            if (!Win32.GetCursorPos(out saved))
-                return "{\"type\":\"pointerTest\",\"ok\":false,\"error\":\"GetCursorPos 失败\"}";
-
-            // ⚠️ 排障用追踪：本命令不在钩子热路径上，允许 I/O。
-            //    存在的意义：区分「SendInput 被系统卡住」与「自检代码自身卡住」——两种修法完全不同。
-            Console.WriteLine(LogPrefix + " pointerTest 开始 accel=[" + a1 + "," + a2 + "," + a3 +
-                "] 光标起点=" + saved.x + "," + saved.y);
-
-            var sb = new StringBuilder(1024);
-            sb.Append("{\"type\":\"pointerTest\",\"ok\":true,\"accel\":[")
-              .Append(a1).Append(',').Append(a2).Append(',').Append(a3).Append(']')
-              .Append(",\"cases\":[");
-            bool first = true;
-
-            // kind：0 = 相对（走平滑真正用的那条代码路径）；1 = 绝对；2 = SetCursorPos（对照上界）
-            void Case(string name, int steps, int stepPx, int pauseMs, int kind)
-            {
-                int total = steps * stepPx;
-                int screenRight = Win32.GetSystemMetrics(Win32.SM_XVIRTUALSCREEN) + Win32.GetSystemMetrics(Win32.SM_CXVIRTUALSCREEN);
-                int sx = saved.x;
-                if (sx + total + 40 > screenRight) sx = screenRight - total - 40;
-                if (sx < 10) sx = 10;
-
-                Console.WriteLine(LogPrefix + "   case " + name + " steps=" + steps + " step=" + stepPx + " kind=" + kind);
-                Win32.SetCursorPos(sx, saved.y);
-                Thread.Sleep(60);
-                Win32.POINT before;
-                Win32.GetCursorPos(out before);
-                Console.WriteLine(LogPrefix + "     before=" + before.x + "," + before.y);
-
-                long t0 = Stopwatch.GetTimestamp();
-                for (int i = 0; i < steps; i++)
-                {
-                    if (kind == 0)
-                    {
-                        Win32.POINT cur;
-                        Win32.GetCursorPos(out cur);
-                        InjectMouseMoveTo(cur.x + stepPx, cur.y);          // 真实代码路径，不做任何改写
-                    }
-                    else if (kind == 1)
-                    {
-                        InjectMouseMoveAbsoluteTo(before.x + (i + 1) * stepPx, before.y);
-                    }
-                    else
-                    {
-                        Win32.SetCursorPos(before.x + (i + 1) * stepPx, before.y);
-                    }
-                    if (pauseMs > 0) Thread.Sleep(pauseMs);
-                }
-                int ms = (int)Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
-
-                Win32.POINT after;
-                Win32.GetCursorPos(out after);
-                int actual = after.x - before.x;
-                double ratio = total == 0 ? 0.0 : (double)actual / total;
-                Console.WriteLine(LogPrefix + "     after=" + after.x + "," + after.y +
-                    " 请求=" + total + " 实际=" + actual + " 用时=" + ms + "ms");
-
-                if (!first) sb.Append(',');
-                first = false;
-                sb.Append("{\"name\":\"").Append(name).Append("\",\"steps\":").Append(steps)
-                  .Append(",\"step\":").Append(stepPx)
-                  .Append(",\"requested\":").Append(total)
-                  .Append(",\"actual\":").Append(actual)
-                  .Append(",\"ratio\":").Append(ratio.ToString("F3"))
-                  .Append(",\"ms\":").Append(ms).Append('}');
-            }
-
-            try
-            {
-                Case("rel_fast", 20, 12, 0, 0);
-                Case("rel_10ms", 20, 12, 10, 0);
-                Case("abs_fast", 20, 12, 0, 1);
-                Case("setpos_ctl", 20, 12, 0, 2);
-                Case("rel_step1", 20, 1, 0, 0);
-                Case("rel_step2", 20, 2, 0, 0);
-                Case("rel_step4", 20, 4, 0, 0);
-                Case("abs_step1", 20, 1, 0, 1);
-            }
-            finally
-            {
-                Win32.SetCursorPos(saved.x, saved.y);
-            }
-
-            sb.Append("]}");
-            Console.WriteLine(LogPrefix + " pointerTest 结束（光标已复位）");
-            return sb.ToString();
-        }
-
-        /// <summary>
-        /// 低层鼠标钩子入口。铁律与键盘钩子完全一致：均摊 O(1)、无锁、无 I/O、不抛异常。
-        /// 外层只负责计时与熔断；真正的逻辑在 SmoothMouseDispatch。
-        /// </summary>
-        private static IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam)
-        {
-            long t0 = Stopwatch.GetTimestamp();
-            IntPtr result;
-            try
-            {
-                result = SmoothMouseDispatch(nCode, wParam, lParam);
-            }
-            catch
-            {
-                // 绝不把异常抛回系统：会让输入链处于不稳定状态
-                result = Win32.CallNextHookEx(_mouseHookId, nCode, wParam, lParam);
-            }
-            Interlocked.Increment(ref _smoothHookCallbacks);
-            Interlocked.Exchange(ref _smoothLastCallbackTick, Environment.TickCount64);
-
-            // ===== 耗时拆解（零 I/O：只写内存字段，经 smoothState 上报）=====
-            // ⚠️ 这里量的是**回调自身**的耗时：回注已搬到 _injectThread，
-            //    所以它若再飙到几十上百毫秒，就纯粹是钩子线程里又混进了重活（I/O / 分配 / 系统调用）。
-            // 记账放在计时之后、且不写日志 —— 保证「测量」本身不会成为新的开销来源。
-            int totalMs = (int)Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
-            _mouseCbLastTotalMs = totalMs;
-            if (totalMs > _mouseCbMaxTotalMs)
-            {
-                _mouseCbMaxTotalMs = totalMs;
-            }
-
-            if (!_mouseHookSafeMode)
-            {
-                if (totalMs > MouseHookBudgetMs)
-                {
-                    _mouseCbStrikes++;
-                    _mouseCbOverBudgetTotal++;
-                    // 历史最差超预算帧（永不重置）—— 事后排查的唯一线索
-                    if (totalMs > _mouseCbWorstOverTotalMs)
-                    {
-                        _mouseCbWorstOverTotalMs = totalMs;
-                        // 同窗口内回注线程的最差单次耗时（诊断用；回注已不在回调内，故它是独立指标）
-                        _mouseCbWorstOverInjectMs = _injectMaxMs;
-                    }
-                    if (_mouseCbStrikes >= SafeModeStrikes)
-                    {
-                        _mouseHookSafeMode = true;
-                        Interlocked.Exchange(ref _mouseSafeModeSince, Environment.TickCount64);
-                        _smoothDragging = false;
-                        _smoothBreakElapsedMs = totalMs;
-                        _smoothBreakReason = BreakReasonCallbackBudget;
-                        _smoothPendingBreakLog = true;   // 日志由 SmoothWatchdog 代打
-                    }
-                }
-                else
-                {
-                    _mouseCbStrikes = 0;   // 抖动一旦过去就清空连续计数
-                }
-            }
-            return result;
-        }
-
-        /// <summary>
-        /// 鼠标钩子的实际逻辑。四道闸门（布防 / PS 前台 / 左键拖拽 / 按下点落在 PS 窗口）缺一不可，
-        /// 任一不满足即**直通**，保证对其它程序与系统操作零影响。
-        /// </summary>
-        private static IntPtr SmoothMouseDispatch(int nCode, IntPtr wParam, IntPtr lParam)
-        {
-            if (nCode < 0 || !_smoothArm || _mouseHookSafeMode)
-                return Win32.CallNextHookEx(_mouseHookId, nCode, wParam, lParam);
-
-            int msg = wParam.ToInt32();
-            if (msg != Win32.WM_MOUSEMOVE && msg != Win32.WM_LBUTTONDOWN && msg != Win32.WM_LBUTTONUP)
-                return Win32.CallNextHookEx(_mouseHookId, nCode, wParam, lParam);
-
-            var st = Marshal.PtrToStructure<Win32.MSLLHOOKSTRUCT>(lParam);
-
-            // ⛔ 防回环（本模块的第一号风险）：本进程注入的事件必须**直接放行**。
-            //    双判据（LLMHF_INJECTED 标志 + dwExtraInfo 签名）—— 单用标志位会连
-            //    「其它程序注入的事件」一起当成自己的，单用签名则漏掉签名丢失的情况。
-            //    若这里识别失败，注入事件会被自己再吃一次并再次注入 ⇒ 瞬间的输入风暴。
-            if ((st.flags & Win32.LLMHF_INJECTED) != 0 && st.dwExtraInfo == SmoothInjectSignature)
-                return Win32.CallNextHookEx(_mouseHookId, nCode, wParam, lParam);
-
-            // 闸门②：只在 Photoshop 前台时接管（在别的程序里拖拽绝不受影响）
-            if (!IsPhotoshopForeground())
-            {
-                _smoothDragging = false;
-                return Win32.CallNextHookEx(_mouseHookId, nCode, wParam, lParam);
-            }
-
-            long now = Environment.TickCount64;
-
-            // ⛔⛔ 回注线程卡死安全网（必须放在最前面，先于一切「吞事件」的决定）。
-            //    `SendInput` 在输入队列被占住时会无限期阻塞 —— 而我们在接管中会吞掉原始移动，
-            //    一旦回注线程卡住，光标将彻底不动（用户只会以为鼠标/插件坏了）。
-            //    因此：只要发现它超过 InjectStallGuardMs 没归还，立刻熔断 + 本轮起全部放行，
-            //    把控制权交还系统。宁可平滑失效，也绝不让光标被我们冻住。
-            long busySince = Volatile.Read(ref _injectBusySince);
-            if (busySince != 0 && now - busySince > InjectStallGuardMs)
-            {
-                _mouseHookSafeMode = true;
-                Interlocked.Exchange(ref _mouseSafeModeSince, now);
-                _smoothDragging = false;
-                _smoothBreakElapsedMs = (int)(now - busySince);
-                _smoothBreakReason = BreakReasonInjectStall;
-                _smoothPendingBreakLog = true;   // 日志由 SmoothWatchdog 代打
-                return Win32.CallNextHookEx(_mouseHookId, nCode, wParam, lParam);
-            }
-
-            if (msg == Win32.WM_LBUTTONDOWN)
-            {
-                // 闸门④：按下点必须落在 Photoshop 自己的窗口上（画布或它的子窗口）。
-                // 挡掉「PS 处于前台、但用户实际在压着画布的其它浮动窗口上拖拽」的误接管。
-                if (IsPhotoshopWindowAt(st.pt))
-                {
-                    _smoothDragging = true;
-                    _smoothDragRaw = 0;
-                    _smoothDragInjected = 0;
-                    _injectDragDone = 0;
-                    // 耗时拆解的统计窗口随每一笔重置 ⇒ 事后读到的「最差一帧」就是最近一笔的最坏值
-                    _mouseCbMaxTotalMs = 0;
-                    _injectMaxMs = 0;
-                    _smoothDragLogArmed = false;
-                    // 起笔锚定：输出点严格落在按下位置
-                    _smoother.Reset(st.pt.x, st.pt.y, now);
-                }
-                return Win32.CallNextHookEx(_mouseHookId, nCode, wParam, lParam);   // 按下事件一律不吞
-            }
-
-            if (msg == Win32.WM_LBUTTONUP)
-            {
-                if (_smoothDragging)
-                {
-                    _smoothDragging = false;
-                    // 收笔追齐：把光标精确落到真实松手点。
-                    // ⚠️ 闭合端点的「正确性」其实已由 PS 保证 —— 它按 mouse-up 消息自带的 pt 收尾；
-                    //    这里补一次只是让视觉光标与最终端点一致，并给 PS 一个落在真实终点的移动点。
-                    //
-                    // ⛔⛔ 这里**只发布目标**，绝不同步 SendInput：抬起这一帧此前恰好是
-                    //     「唯一既带一次同步回注、又带日志」的帧，真机实测 306ms 就出在这儿。
-                    PublishInjectTarget(st.pt.x, st.pt.y);
-                    // 汇总日志等回注排空后再由看护线程打印（这样计数才是最终值）
-                    _smoothDragLogArmed = true;
-                }
-                return Win32.CallNextHookEx(_mouseHookId, nCode, wParam, lParam);   // 抬起事件一律不吞
-            }
-
-            // ===== WM_MOUSEMOVE =====
-            if (!_smoothDragging)
-                return Win32.CallNextHookEx(_mouseHookId, nCode, wParam, lParam);
-
-            _smoothDragRaw++;
-
-            var s = _smoothParams;   // volatile 一次读，整份快照，钩子里绝不加锁
-            int tx, ty;
-            if (_smoother.Step(st.pt.x, st.pt.y, now, s, out tx, out ty))
-            {
-                // ⛔ 只**发布**目标，不在这里回注 —— 见 PublishInjectTarget / InjectThreadProc。
-                //    之前在这里同步 SendInput，导致每帧可能卡满 LowLevelHooksTimeout(300ms)。
-                PublishInjectTarget(tx, ty);
-                _smoothDragInjected++;
-            }
-
-            // 吞掉原始移动：光标改为「只走我们注入的位置」，PS 因此只看到平滑后的轨迹。
-            return (IntPtr)1;
-        }
-
-        /// <summary>平滑状态与健康指标的 JSON（供 getState / smoothState 上报，排障时先看这里）。</summary>
+        /// <summary>套索（笔输入层）平滑状态 JSON。</summary>
+        /// 鼠标通路（2026-10-12 移除）曾在此携带 armed/dragging/hookInstalled/safeMode 与回注指标，
+        /// 现已全部删除；只剩 pen（Wintab 通路）快照。
         private static string SmoothStateJson()
         {
-            var s = _smoothParams;
-            long lastTick = Interlocked.Read(ref _smoothLastCallbackTick);
             return JsonSerializer.Serialize(new
             {
                 type = "smoothState",
@@ -3121,53 +2103,51 @@ namespace JWautofillDaemon
                 // 笔输入层平滑（Wintab 通路）的完整状态：开关 / 注入到哪些 PS / 标定结果 / 计数
                 pen = PenHook.Snapshot(),
 #endif
-                armed = _smoothArm,
-                dragging = _smoothDragging,
-                hookInstalled = _mouseHookId != IntPtr.Zero,
-                safeMode = _mouseHookSafeMode,
-                callbacks = Interlocked.Read(ref _smoothHookCallbacks),
-                injected = Interlocked.Read(ref _smoothInjected),
-                lastDragRaw = _smoothLastDragRaw,
-                lastDragInjected = _smoothLastDragInjected,
-                lastDragFlushed = _smoothLastDragFlushed,
-                lastCallbackAgoMs = lastTick == 0 ? -1 : Environment.TickCount64 - lastTick,
-                // ===== 回调耗时拆解（排障第一现场）=====
-                // ⚠️ 回注搬走之后，回调侧应当长期稳定在亚毫秒~2ms。
-                //    若 maxCbMs 又飙高 ⇒ 钩子线程里混进了重活（I/O / 分配 / 系统调用）。
-                budgetMs = MouseHookBudgetMs,
-                strikes = _mouseCbStrikes,
-                overBudget = _mouseCbOverBudgetTotal,
-                lastCbMs = _mouseCbLastTotalMs,
-                maxCbMs = _mouseCbMaxTotalMs,
-                worstOverCbMs = _mouseCbWorstOverTotalMs,
-                // ===== 回注线程独立指标 =====
-                injectCalls = Interlocked.Read(ref _injectTotalCalls),
-                injectLastMs = _injectLastMs,
-                injectMaxMs = _injectMaxMs,
-                injectOver100Ms = Interlocked.Read(ref _injectOver100Ms),
-                injectTargetX = _injectTargetX,
-                injectTargetY = _injectTargetY,
-                // 回注线程「正在 SendInput 已持续多久」：> InjectStallGuardMs 即代表它卡住了
-                injectBusyMs = Volatile.Read(ref _injectBusySince) == 0
-                    ? -1
-                    : Environment.TickCount64 - Volatile.Read(ref _injectBusySince),
-                settings = new
-                {
-                    mode = s.Mode,
-                    strength = s.Strength,
-                    radius = s.Radius,
-                    tension = s.Tension,
-                    catchUp = s.CatchUp,
-                    cornerAngle = s.CornerAngle,
-                    speedAdaptive = s.SpeedAdaptive,
-                    minSampleDist = s.MinSampleDist
-                }
             }, JsonOpts);
         }
 
+
+        /// <summary>上一次广播出去的平滑状态原文（供 SmoothStatePump 做去重）。</summary>
+        private static string _lastSmoothJson = "";
+
         private static void BroadcastSmoothState()
         {
-            try { Broadcast(SmoothStateJson()); } catch { /* 广播失败不影响布防本身 */ }
+            try
+            {
+                string json = SmoothStateJson();
+                _lastSmoothJson = json;
+                Broadcast(json);
+            }
+            catch { /* 广播失败不影响平滑开关本身 */ }
+        }
+
+        /// <summary>
+        /// 平滑状态的**周期性推送**（ROLE_SMOOTH 专属）。
+        ///
+        /// ⛔ 为什么必须有它（真机事故「状态条永远停在『注入中…』，切一下模式才变『生效中』」）：
+        ///    面板那四档文案全部读共享内存里的 <c>CFG_I_STATE</c>，而 hook DLL 是**异步**完成
+        ///    「注入 → 挂载 → 标定」的 —— 面板点下开关那一刻它必然还是 0（未标定）。
+        ///    此前只在**收到 penSmooth 指令时**广播一次，于是状态被永久冻结在那个瞬时值；
+        ///    下一次广播只可能由用户再发一条指令触发（切模式恰好就是），这正好解释了
+        ///    「切模式才变生效中」。
+        ///    ⇒ 状态必须由守护进程**主动推**，不能靠面板轮询触发。
+        ///
+        /// 采样 500ms、**payload 变化才发**：笔不动时 packets/state 都不变，不产生任何流量。
+        /// </summary>
+        private static void SmoothStatePump()
+        {
+            while (true)
+            {
+                Thread.Sleep(500);
+                try
+                {
+                    string json = SmoothStateJson();
+                    if (string.Equals(json, _lastSmoothJson, StringComparison.Ordinal)) continue;
+                    _lastSmoothJson = json;
+                    Broadcast(json);
+                }
+                catch { /* 推送失败不影响平滑本身 */ }
+            }
         }
 
         /// <summary>
@@ -3392,9 +2372,8 @@ namespace JWautofillDaemon
                                 // 角色：面板据此确认「这个端口上跑的确实是它要找的那套服务」
                                 // （拆分后热键=18923、平滑=18924，连错端口会立刻显形而不是静默失效）
                                 role = RoleLabel,
-                                // DPI 感知级别：绝对注入的坐标口径。本机是 100% 缩放，
-                                // 这里报什么都看不出差别 —— 但它必须是 permonitor-v2（清单已声明）。
-                                // 若报 unaware ⇒ 清单没生效，换到非 100% 缩放的机器光标就会画偏。
+                                // DPI 感知级别（历史字段：曾是绝对回注的坐标口径，现作排障参考）。
+                                // 本机是 100% 缩放，这里报什么都看不出差别。
                                 dpiAwareness = DpiAwarenessLabel(),
                                 active = _active,
 #if !ROLE_SMOOTH
@@ -3407,14 +2386,7 @@ namespace JWautofillDaemon
                                 // 热键（键盘钩子）子系统：armed=false ⇒ 已被面板独立禁用（钩子已卸载）
                                 hotkeyArmed = _hotkeyArmed,
 #else
-                                // 套索实时平滑的布防与健康指标（排障时先看这几项：
-                                // armed=true 但 hookInstalled=false ⇒ 钩子被拦截/安装失败；
-                                // safeMode=true ⇒ 回调用时超预算已熔断；callbacks 不增长 ⇒ 钩子已被系统摘除）
-                                smoothArmed = _smoothArm,
-                                smoothHookInstalled = _mouseHookId != IntPtr.Zero,
-                                smoothSafeMode = _mouseHookSafeMode,
-                                smoothCallbacks = Interlocked.Read(ref _smoothHookCallbacks),
-                                smoothInjected = Interlocked.Read(ref _smoothInjected),
+                                // 套索（笔输入层）平滑状态：注入到哪些 PS / 标定结果 / 计数
                                 pen = PenHook.Snapshot()
 #endif
                             }, JsonOpts));
@@ -3459,45 +2431,18 @@ namespace JWautofillDaemon
                                 if (_deleteArmClient == client) { _deleteArmClient = null; _deleteArmOwner = null; }
                             }
                         }
-                        else if (type == "smoothArm")
-                        {
-                            // 套索实时平滑：布防/撤防。布防条件由 UXP 侧判定（当前工具 == 套索
-                            // 且平滑选项已启用），此处只忠实执行 + 回报状态。
-                            // ⚠️ 只作用于鼠标钩子，绝不触碰 _hotkeyArmed / _hookId。
-                            SetSmoothArm(ReadBool(doc.RootElement, "on", defaultValue: false), client);
-                        }
-                        else if (type == "smoothParams")
-                        {
-                            // 参数快照：整体替换（钩子线程只做一次 volatile 读，不加锁）。
-                            // 反序列化失败时保留旧参数，绝不把参数清成默认值 —— 否则用户
-                            // 拖一次滑杆遇到一次解析异常就会「平滑忽然变弱」。
-                            if (doc.RootElement.TryGetProperty("params", out var pEl))
-                            {
-                                try
-                                {
-                                    var parsed = JsonSerializer.Deserialize<LassoSmoothSettings>(pEl.GetRawText(), JsonOpts);
-                                    if (parsed != null)
-                                    {
-                                        _smoothParams = parsed;
-                                        BroadcastSmoothState();
-                                    }
-                                }
-                                catch (Exception ex)
-                                {
-                                    Console.WriteLine(LogPrefix + " 平滑参数解析失败（保留原值）: " + ex.Message);
-                                }
-                            }
-                        }
+#if ROLE_SMOOTH
                         else if (type == "smoothStatus")
                         {
+                            // 套索平滑状态查询（也是面板的**能力探针**）：
+                            // 建连后面板会发一条，支持则必回一帧 smoothState；旧版守护进程
+                            // 把未知 type 静默丢弃 ⇒ 什么都不回，面板据此标记「版本过旧」。
                             SendToClient(client, SmoothStateJson());
                         }
-#if ROLE_SMOOTH
                         else if (type == "penSmooth")
                         {
-                            // 笔输入层平滑（Wintab 通路）：开关 + **整包参数**。
-                            // ⚠️ 与 smoothArm（鼠标/套索通路）**完全独立**：那条改光标，这条改
-                            //    PS 进程内的包坐标；两者可同时开，互不干扰。
+                            // 套索平滑（Wintab 笔输入通路）：开关 + **整包参数**。
+                            // 面板上现在只有这一个平滑开关（鼠标钩子通路已于 2026-10-12 移除）。
                             // ⚠️ 早期只读 on/strength，半径/模式/张力/追笔/拐角**全部没接上**，
                             //    面板调了毫无反应（真机已验证）。现在用可空字段逐项合并：
                             //    缺字段 = 保持原值，不会被默认值冲掉。
@@ -3521,12 +2466,6 @@ namespace JWautofillDaemon
                             BroadcastSmoothState();
                         }
 #endif
-                        else if (type == "pointerTest")
-                        {
-                            // 指针注入自检：对拍相对/绝对/SetCursorPos 三种方式的位移守恒率。
-                            // 会短暂移动光标，结束前必定复位 —— 仅用于排障，不参与正常运行路径。
-                            SendToClient(client, RunPointerTest());
-                        }
                     }
                     catch (Exception ex)
                     {
@@ -3537,10 +2476,8 @@ namespace JWautofillDaemon
             catch { }
             finally
             {
-                // ⛔ 三段清理**各自独立 try/catch**：它们是三个互不相干的子系统
-                //    （录制 / 退格删除 / 套索平滑）。此前写在同一段裸代码里，任何一段抛异常
-                //    都会让后面的清理被跳过（例如清理录制失败 ⇒ 平滑永不撤防 ⇒ 鼠标钩子一直挂着）。
-                //    这里保证「一段失败绝不影响另外两段」。
+                // ⛔ 两段清理**各自独立 try/catch**：录制与退格删除是两个互不相干的子系统。
+                //    （原第三段「套索平滑布防清理」随鼠标钩子平滑一并移除，2026-10-12）
 
                 // ① 若断开的是正在录制的一方，取消录制（卸载钩子）
                 TryQuiet(() =>
@@ -3558,16 +2495,6 @@ namespace JWautofillDaemon
                     }
                 }, "断开时撤防退格删除");
 
-                // ③ 若断开的是已布防「套索平滑」的一方，同步撤防（否则鼠标钩子会一直挂着）
-                bool dropSmoothArm = false;
-                TryQuiet(() =>
-                {
-                    lock (_smoothLock)
-                    {
-                        if (_smoothArmClient == client) { _smoothArmClient = null; dropSmoothArm = true; }
-                    }
-                }, "断开时清理平滑布防归属");
-                if (dropSmoothArm) TryQuiet(() => SetSmoothArm(false, null), "断开时撤防套索平滑");
 
                 TryQuiet(() => { lock (_clientsLock) _clients.Remove(client); }, "断开时移除客户端");
                 try { client.Close(); } catch { }
