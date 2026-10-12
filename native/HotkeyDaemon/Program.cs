@@ -240,11 +240,46 @@ namespace JWautofillDaemon
         private const int Magic = 0x57414A57;
 
         // ⛔ 槽位索引必须与 native/WintabHook/wintab_hook.c 的 enum CFG_I_* 逐项对应。
-        private const int I_MAGIC = 0, I_ENABLED = 1, I_STRENGTH = 2, I_RADIUSPCT = 3,
-                          I_FLAGS = 4, I_SEQ = 5, I_CMDSEQ = 6, I_CMD = 7, I_CMDACK = 8,
-                          I_STATE = 9, I_CALLS = 10, I_PACKETS = 11, I_SMOOTHED = 12,
-                          I_STRIDE = 13, I_OFFX = 14, I_OFFY = 15, I_OFFSER = 16,
-                          I_AXISMAX = 17, I_PID = 18, I_FROZE = 19, I_HEARTBEAT = 20;
+        private const int I_MAGIC = 0, I_ENABLED = 1, I_STRENGTH = 2, I_FLAGS = 3,
+                          I_SEQ = 4, I_CMDSEQ = 5, I_CMD = 6, I_CMDACK = 7,
+                          I_STATE = 8, I_CALLS = 9, I_PACKETS = 10, I_SMOOTHED = 11,
+                          I_STRIDE = 12, I_OFFX = 13, I_OFFY = 14, I_OFFSER = 15,
+                          I_AXISMAX = 16, I_PID = 17, I_FROZE = 18, I_HEARTBEAT = 19,
+                          I_MODE = 20, I_TENSION = 21, I_CATCHUP = 22, I_CORNER = 23,
+                          I_RADIUSPX = 24, I_HUD = 25, I_HUDCOLOR = 26, I_PXPERAXIS = 27;
+
+        /// <summary>
+        /// 笔通路的参数面 —— 与面板 <c>smoothParams</c> 同源同语义。
+        /// ⚠️ 早期版本只透传强度，半径/模式/张力/追笔/拐角**全部没接上**（面板调了没反应），
+        ///    P3.1 起整包下发。新增字段必须同步写进共享内存槽（见 Wr 那一段）。
+        /// </summary>
+        internal sealed class PenParams
+        {
+            public int Mode = 0;          // 0=标准 1=拉绳 2=追笔
+            public int Strength = 40;
+            public int RadiusPx = 8;      // 屏幕像素（与面板「最大滞后」同单位）
+            public int Tension = 50;
+            public int CatchUp = 50;
+            public int CornerAngle = 45;
+            public int Flags = 1;         // bit0 = 速度自适应
+            public int Hud = 3;           // bit0=leash 线 bit1=半径圆 bit2=原始笔尖点
+            public int HudColor = 0xFF00FF;   // 品红，与 PS 画笔绳线同色
+        }
+
+        /// <summary>面板 <c>penSmooth</c> 消息的线格式（字段全部可空：缺 = 保持原值）。
+        /// ⚠️ 命名与面板 <c>toWire</c> 一致（radius 而不是 radiusPx）。</summary>
+        internal sealed class PenWire
+        {
+            public int? Mode { get; set; }
+            public int? Strength { get; set; }
+            public int? Radius { get; set; }
+            public int? Tension { get; set; }
+            public int? CatchUp { get; set; }
+            public int? CornerAngle { get; set; }
+            public bool? SpeedAdaptive { get; set; }
+            public int? Hud { get; set; }
+            public int? HudColor { get; set; }
+        }
 
         private static System.IO.MemoryMappedFiles.MemoryMappedFile? _mmf;
         private static System.IO.MemoryMappedFiles.MemoryMappedViewAccessor? _va;
@@ -253,15 +288,28 @@ namespace JWautofillDaemon
         private static int _started;
 
         private static volatile bool _enabled;
-        private static int _strength = 40;
-        private static int _radiusPct = 25;   // 万分之一·X 轴上界 ⇒ 25 ≈ 0.25%
-        private static int _flags = 1;        // bit0 = 速度自适应
+        private static readonly PenParams _pen = new();
         private static int _cmdSeq;
         private static int _lastErr;
         private static string _dllPath = "";
 
         public static bool Enabled => _enabled;
-        public static int Strength => _strength;
+        public static int Strength => _pen.Strength;
+        public static PenParams Params => _pen;
+
+        /// <summary>参数面的副本（避免调用方拿着活对象被并发改）。</summary>
+        public static PenParams SnapshotParams()
+        {
+            lock (_lk)
+            {
+                return new PenParams
+                {
+                    Mode = _pen.Mode, Strength = _pen.Strength, RadiusPx = _pen.RadiusPx,
+                    Tension = _pen.Tension, CatchUp = _pen.CatchUp, CornerAngle = _pen.CornerAngle,
+                    Flags = _pen.Flags, Hud = _pen.Hud, HudColor = _pen.HudColor,
+                };
+            }
+        }
 
         /// <summary>hook DLL 的绝对路径（定位不到则为空串）。自安装时据此把 DLL 同步到安装目录。</summary>
         public static string DllPath { get { EnsureDllPath(); return _dllPath; } }
@@ -285,18 +333,20 @@ namespace JWautofillDaemon
                 if (_va != null) return;
                 try
                 {
-                    // 命令序号从一个「不像 0」的值起步：hook 首次启动会把当前序号当基线，
-                    // 若两个值恰好相等就会漏掉第一条命令（重挂时的经典坑）。
+                    // ⛔ 槽位表与 native/WintabHook/wintab_hook.c 的 enum CFG_I_* 逐项对应。
+                    //    两处手写 ⇒ 错位不报错、只静默失效，所以这里加运行时兜底校验。
+                    if (I_PXPERAXIS >= NLONGS)
+                        throw new InvalidOperationException(
+                            "笔平滑槽位表越界：I_PXPERAXIS=" + I_PXPERAXIS + " >= NLONGS=" + NLONGS
+                            + "（C 与 C# 两侧槽位不同步）");
                     _cmdSeq = (int)(DateTime.UtcNow.Ticks & 0x00FFFFFF);
                     var mmf = System.IO.MemoryMappedFiles.MemoryMappedFile.CreateOrOpen(
                         MapName, NLONGS * Stride);
                     _mmf = mmf;
                     _va = mmf.CreateViewAccessor(0, NLONGS * Stride);
+                    WriteParams();
                     Wr(I_MAGIC, Magic);
                     Wr(I_ENABLED, 0);
-                    Wr(I_STRENGTH, _strength);
-                    Wr(I_RADIUSPCT, _radiusPct);
-                    Wr(I_FLAGS, _flags);
                     Wr(I_HEARTBEAT, unchecked((int)Environment.TickCount64));
                     Console.WriteLine(LogPrefix + "共享内存已就绪: " + MapName);
                 }
@@ -306,6 +356,23 @@ namespace JWautofillDaemon
                 }
             }
         }
+
+        /// <summary>把当前参数面整包写进共享内存。
+        /// ⛔ 新增参数必须在这里补一行 —— 漏写就是「面板调了没反应」的静默故障。</summary>
+        private static void WriteParams()
+        {
+            Wr(I_STRENGTH, _pen.Strength);
+            Wr(I_FLAGS,    _pen.Flags);
+            Wr(I_MODE,     _pen.Mode);
+            Wr(I_TENSION,  _pen.Tension);
+            Wr(I_CATCHUP,  _pen.CatchUp);
+            Wr(I_CORNER,   _pen.CornerAngle);
+            Wr(I_RADIUSPX, _pen.RadiusPx);
+            Wr(I_HUD,      _pen.Hud);
+            Wr(I_HUDCOLOR, _pen.HudColor);
+        }
+
+        private static int Clamp(int v, int lo, int hi) => v < lo ? lo : (v > hi ? hi : v);
 
         /// <summary>由 Main 调用一次：建共享内存 + 起心跳 + 兜底卸载。</summary>
         public static void Init()
@@ -341,18 +408,27 @@ namespace JWautofillDaemon
         }
 
         // ------------------------------------------------------------ 对外接口
-        /// <summary>面板下发的开关/强度。strength &lt; 0 表示不改强度。</summary>
-        public static void Set(bool on, int strength)
+        /// <summary>面板下发的开关 + 整包参数。<paramref name="p"/> 为 null 表示不改参数。</summary>
+        public static void Set(bool on, PenParams? p)
         {
             EnsureInit();
             lock (_lk)
             {
-                if (strength >= 0 && strength <= 100) _strength = strength;
+                if (p != null)
+                {
+                    _pen.Mode        = Clamp(p.Mode, 0, 2);
+                    _pen.Strength    = Clamp(p.Strength, 0, 100);
+                    _pen.RadiusPx    = Clamp(p.RadiusPx, 1, 40);
+                    _pen.Tension     = Clamp(p.Tension, 0, 100);
+                    _pen.CatchUp     = Clamp(p.CatchUp, 0, 100);
+                    _pen.CornerAngle = Clamp(p.CornerAngle, 0, 90);
+                    _pen.Flags       = p.Flags & 1;
+                    _pen.Hud         = p.Hud & 7;
+                    _pen.HudColor    = p.HudColor & 0xFFFFFF;
+                }
                 _enabled = on;
                 Wr(I_ENABLED, on ? 1 : 0);
-                Wr(I_STRENGTH, _strength);
-                Wr(I_RADIUSPCT, _radiusPct);
-                Wr(I_FLAGS, _flags);
+                WriteParams();
                 Wr(I_SEQ, Rd(I_SEQ) + 1);
             }
             if (on)
@@ -364,7 +440,9 @@ namespace JWautofillDaemon
             {
                 SendCommand(2);      // 关闭 ⇒ 立即还原字节；DLL 留在 PS 里（下次开启秒开）
             }
-            Console.WriteLine(LogPrefix + (on ? "已开启" : "已关闭") + "（强度 " + _strength + "）");
+            Console.WriteLine(LogPrefix + (on ? "已开启" : "已关闭")
+                              + "（模式 " + _pen.Mode + " 强度 " + _pen.Strength
+                              + " 半径 " + _pen.RadiusPx + "px）");
         }
 
         /// <summary>周期性巡检：把 DLL 注入到每一个（新出现的）PS 进程。由 WatchPhotoshop 调。</summary>
@@ -428,8 +506,18 @@ namespace JWautofillDaemon
             return new
             {
                 enabled = _enabled,
-                strength = _strength,
-                radiusPct = _radiusPct,
+                strength = _pen.Strength,
+                mode = _pen.Mode,
+                radiusPx = _pen.RadiusPx,
+                tension = _pen.Tension,
+                catchUp = _pen.CatchUp,
+                cornerAngle = _pen.CornerAngle,
+                speedAdaptive = (_pen.Flags & 1) != 0,
+                hud = _pen.Hud,
+                // ×1000 的「轴→像素比」：渲染线程用真实光标标定出来的。
+                // 1.0 ⇒ 包坐标本身就是屏幕像素；0.0586 ⇒ 数位板逻辑单位(1920/32767)。
+                // leash 长度/位置不对时，第一个该看的就是它。
+                pxPerAxis = Rd(I_PXPERAXIS),
                 dll = _dllPath,
                 injectedPids = pids,
                 // 0=未挂 1=生效 2=标定失败 3=已卸载
@@ -1397,7 +1485,7 @@ namespace JWautofillDaemon
 #if ROLE_SMOOTH
                 // 卸载前**先**把 PS 里的 hook 还原：否则卸载完 PS 还留着一截被改过的代码段
                 // （DLL 已被删除，钩子却还在，且共享内存也没了参考）。幂等，关着也安全。
-                try { PenHook.Set(false, -1); PenHook.RequestUnhook(1200); } catch { }
+                try { PenHook.Set(false, null); PenHook.RequestUnhook(1200); } catch { }
 #endif
                 try
                 {
@@ -3407,14 +3495,29 @@ namespace JWautofillDaemon
 #if ROLE_SMOOTH
                         else if (type == "penSmooth")
                         {
-                            // 笔输入层平滑（Wintab 通路）：开关 + 强度。
+                            // 笔输入层平滑（Wintab 通路）：开关 + **整包参数**。
                             // ⚠️ 与 smoothArm（鼠标/套索通路）**完全独立**：那条改光标，这条改
                             //    PS 进程内的包坐标；两者可同时开，互不干扰。
+                            // ⚠️ 早期只读 on/strength，半径/模式/张力/追笔/拐角**全部没接上**，
+                            //    面板调了毫无反应（真机已验证）。现在用可空字段逐项合并：
+                            //    缺字段 = 保持原值，不会被默认值冲掉。
                             bool on = ReadBool(doc.RootElement, "on", defaultValue: false);
-                            int st = -1;
-                            if (doc.RootElement.TryGetProperty("strength", out var stEl) &&
-                                stEl.TryGetInt32(out var stV)) st = stV;
-                            PenHook.Set(on, st);
+                            var wire = JsonSerializer.Deserialize<PenHook.PenWire>(doc.RootElement.GetRawText(), JsonOpts);
+                            var p = PenHook.SnapshotParams();
+                            if (wire != null)
+                            {
+                                if (wire.Mode.HasValue)        p.Mode        = wire.Mode.Value;
+                                if (wire.Strength.HasValue)    p.Strength    = wire.Strength.Value;
+                                if (wire.Radius.HasValue)      p.RadiusPx    = wire.Radius.Value;
+                                if (wire.Tension.HasValue)     p.Tension     = wire.Tension.Value;
+                                if (wire.CatchUp.HasValue)     p.CatchUp     = wire.CatchUp.Value;
+                                if (wire.CornerAngle.HasValue) p.CornerAngle = wire.CornerAngle.Value;
+                                if (wire.Hud.HasValue)         p.Hud         = wire.Hud.Value;
+                                if (wire.HudColor.HasValue)    p.HudColor    = wire.HudColor.Value;
+                                if (wire.SpeedAdaptive.HasValue)
+                                    p.Flags = (p.Flags & ~1) | (wire.SpeedAdaptive.Value ? 1 : 0);
+                            }
+                            PenHook.Set(on, p);
                             BroadcastSmoothState();
                         }
 #endif

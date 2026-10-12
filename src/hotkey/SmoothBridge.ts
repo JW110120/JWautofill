@@ -144,20 +144,37 @@ export function sendSmoothDaemonCommand(type: string): boolean {
 }
 
 /**
- * 笔输入层平滑（Wintab 通路）的开关。
+ * 笔输入层平滑（Wintab 通路）的开关 + 参数。
  *
  * ⚠️ 与「套索平滑」（鼠标钩子 + 回注）是**两条独立通路**：那条由 `armLassoSmoothing`
- *    经状态机下发（还要带一整份参数），这条只有一个开关 —— 因为它的实现不在守护进程里，
- *    而在被注入 Photoshop 的 hook DLL 内（参数经命名共享内存传递）。
+ *     经状态机下发，这条的实现在被注入 Photoshop 的 hook DLL 内（参数经命名共享内存）。
+ *
+ * ⛔ 必须**整包带参数**：早期版本只发 `{on}`，守护进程侧的强度恒为默认 40、
+ *     半径/模式/张力/追笔/拐角连字段都没有 ⇒ 面板调参对笔平滑毫无作用
+ *     （真机复现：「已平滑 47417 包但感知不明显」）。现在两条通路共用同一份参数面。
  *
  * 真实生效状态不靠这里乐观更新：守护进程收到后会回一帧 `smoothState`（含 `pen`），
  * 面板按**它**刷新开关与状态条 —— 避免「点了亮起来其实没生效」。
  */
-export function sendPenSmooth(on: boolean, strength?: number): boolean {
+export function sendPenSmooth(on: boolean, params?: {
+  mode?: number; strength?: number; radius?: number; tension?: number;
+  catchUp?: number; cornerAngle?: number; speedAdaptive?: boolean;
+  hud?: number; hudColor?: number;
+}): boolean {
   try {
     if (currentWs && currentWs.readyState === (currentWs.OPEN ?? 1)) {
       const msg: any = { type: 'penSmooth', on };
-      if (typeof strength === 'number') msg.strength = strength;
+      if (params) {
+        if (typeof params.mode === 'number') msg.mode = params.mode;
+        if (typeof params.strength === 'number') msg.strength = params.strength;
+        if (typeof params.radius === 'number') msg.radius = params.radius;
+        if (typeof params.tension === 'number') msg.tension = params.tension;
+        if (typeof params.catchUp === 'number') msg.catchUp = params.catchUp;
+        if (typeof params.cornerAngle === 'number') msg.cornerAngle = params.cornerAngle;
+        if (typeof params.speedAdaptive === 'boolean') msg.speedAdaptive = params.speedAdaptive;
+        if (typeof params.hud === 'number') msg.hud = params.hud;
+        if (typeof params.hudColor === 'number') msg.hudColor = params.hudColor;
+      }
       currentWs.send(JSON.stringify(msg));
       return true;
     }

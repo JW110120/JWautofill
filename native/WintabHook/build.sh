@@ -7,7 +7,8 @@
 #    路径一深就退化成相对路径，子编译换 cwd 后报 `unable to load 'std.zig': AccessDenied`
 #    （看着像杀软，其实是路径问题）。
 #
-# 产物：publish/JWautofillWintabHook.dll（x64；仅依赖 KERNEL32 + UCRT）
+# 产物：publish/JWautofillWintabHook.dll（x64）
+#       依赖：KERNEL32 + UCRT + GDI32 + USER32（P3.1 起多了 HUD 自绘，必须显式链）
 #       —— 必须入库：守护进程运行时要把它注入 Photoshop，用户机器没有 zig。
 # 用法： bash native/WintabHook/build.sh
 # ============================================================================
@@ -26,7 +27,10 @@ if [ ! -x "$ZIG" ]; then
 fi
 
 mkdir -p publish
+# ⚠️ -lgdi32 -luser32：WIN32_LEAN_AND_MEAN 下 zig 不会自动链 GDI/USER，
+#    HUD 建窗 + 自绘必须要（少了就是一堆 undefined symbol CreateDIBSection）。
 "$ZIG" cc -target x86_64-windows-gnu -shared -O2 \
+    -lgdi32 -luser32 \
     -o publish/JWautofillWintabHook.dll wintab_hook.c
 
 # zig 会顺带产出 .lib/.pdb，均不需要（.pdb 已被 .gitignore 覆盖，.lib 一并清掉）

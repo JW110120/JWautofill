@@ -213,6 +213,13 @@ export const helpTexts = {
       '拖动本标签可调节数值。',
     smoothSampleDistSlider: '拖动调节最小采样间距（0.5–4px）。',
     smoothSampleDistInput: '输入最小采样间距（0.5–4px）。',
+    smoothLeash:
+      '拉绳提示：在屏幕上画出「笔尖 ↔ 平滑输出点」之间的绳，以及「最大滞后」半径圈。\n\n' +
+      '只对笔（数位板）平滑有意义：UXP 无法在 Photoshop 画布上绘制，Photoshop 原生的画笔绳线\n' +
+      '也只由它自己的画笔平滑触发，所以这根绳由注入 Photoshop 的 hook DLL 自己画。\n\n' +
+      '用途：半径 / 张力 / 追笔这几个参数「调了到底改变了什么」很难用语言描述，\n' +
+      '看着这根绳实时变化就一目了然。',
+    smoothLeashSwitch: '切换拉绳提示的显示。',
 
     // 浮窗（隐藏/显示分区、填充设置）：两个浮窗共用同一套外壳
     floatClose: '关闭当前浮窗。',

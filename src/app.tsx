@@ -39,13 +39,12 @@ import {
 import {
   LassoSmoothMode, LassoSmoothParams, LassoSmoothStatus,
   armLassoSmoothing, pushLassoSmoothParams, disarmLassoSmoothing, onLassoSmoothStatus,
-  initialLassoSmoothParams,
+  initialLassoSmoothParams, setPenSmooth,
 } from './hotkey/LassoSmoothing';
 // 套索实时平滑的**独立**守护进程（端口 18924）。与快捷键服务（18923）各有各的
 // 启停 / 卸载入口，互不影响 —— 这是「两个钩子必须在进程级解耦」在 UXP 侧的落点。
 import {
   connectSmoothDaemon, disconnectSmoothDaemon, launchSmoothDaemon, isSmoothDaemonConnected,
-  sendPenSmooth,
 } from './hotkey/SmoothBridge';
 import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/MainToggleBus';
 import { FillPanelId, subscribeFillPanelToggle } from './utils/FillPanelToggleBus';
@@ -1257,7 +1256,9 @@ class App extends React.Component<AppProps, AppState> {
     togglePenSmooth() {
         const st = this.state.smoothStatus;
         if (!st.connected || st.unsupported || st.penUnsupported) return;   // 发不出去：状态条会如实显示原因
-        sendPenSmooth(!st.pen.enabled);
+        // ⛔ 必须整包带参数：只发 {on} 的话守护进程侧强度恒为默认 40、
+        //    半径/模式/张力/追笔/拐角连槽位都没有 ⇒ 面板调参对笔平滑毫无作用。
+        setPenSmooth(!st.pen.enabled, this.state.smoothParams);
     }
 
     /** 笔平滑状态条的文案（与 penBarTone 的判据一一对应）。 */
@@ -1272,7 +1273,15 @@ class App extends React.Component<AppProps, AppState> {
         if (!pen.enabled) return '笔平滑：关';
         if (pen.state === 2) return '笔平滑：标定失败（未生效）';
         if (pen.injectedCount === 0) return '笔平滑：等待 Photoshop…';
-        if (pen.state === 1) return '笔平滑：生效中（已平滑 ' + pen.smoothed + ' 包）';
+        if (pen.state === 1) {
+            // 把「此刻真正生效的参数」显示出来。为什么必须显示：早期版本笔通路只接到
+            // 强度一个字段（且面板压根没发强度），其余滑杆调了毫无反应却看不出原因；
+            // 现在这里如实反映，改没改一眼可验。
+            const modeName = pen.mode === 1 ? '拉绳' : (pen.mode === 2 ? '追笔' : '标准');
+            return '笔平滑：生效中 · ' + modeName
+                 + ' · 强度 ' + pen.strength
+                 + ' · 半径 ' + pen.radiusPx + 'px（已平滑 ' + pen.smoothed + ' 包）';
+        }
         return '笔平滑：注入中…';
     }
 
@@ -3440,6 +3449,21 @@ title={helpTexts.selectionFill.blendMode}>
                                         </div>
                                         <span className="num-unit">px</span>
                                     </div>
+                                </div>
+
+                                {/* 拉绳提示（HUD）：只对笔通路有意义 ⇒ 常驻显示，不随模式隐藏。
+                                    与「速度适应」同为开关行：标签 + 自绘开关。 */}
+                                <div className="row-between">
+                                    <span
+                                        className="label-4"
+                                        title={helpTexts.selectionFill.smoothLeash}
+                                        onClick={() => this.updateSmoothParam({ showLeash: !this.state.smoothParams.showLeash })}
+                                    >拉绳提示</span>
+                                    <ToggleSwitch
+                                        checked={this.state.smoothParams.showLeash}
+                                        onChange={() => this.updateSmoothParam({ showLeash: !this.state.smoothParams.showLeash })}
+                                        title={helpTexts.selectionFill.smoothLeashSwitch}
+                                    />
                                 </div>
                             </div>
                             )}

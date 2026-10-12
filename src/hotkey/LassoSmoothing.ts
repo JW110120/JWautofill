@@ -36,8 +36,15 @@ export interface LassoSmoothParams {
   cornerAngle: number;
   /** 甩笔时自动减弱平滑（减少快速拖拽的滞后）。 */
   speedAdaptive: boolean;
-  /** 最小注入间距 px（抽稀）。 */
+  /** 最小注入间距 px（抽稀）。仅鼠标通路有效 —— 笔通路必须原样写回 Wintab 包。 */
   minSampleDist: number;
+  /**
+   * 是否在屏幕上画出「笔尖 ↔ 平滑输出点」的拉绳提示（HUD overlay）。
+   * ⚠️ 只对**笔通路**有意义：UXP 无法在 PS 画布上绘制，PS 原生的画笔绳线又只由
+   *    它自己的画笔平滑触发，所以这根绳由注入 PS 的 hook DLL 自己画。
+   *    映射到共享内存的 hud 位域：bit0=绳 bit1=半径圆。
+   */
+  showLeash: boolean;
 }
 
 /**
@@ -54,6 +61,7 @@ export const initialLassoSmoothParams: LassoSmoothParams = {
   cornerAngle: 45,
   speedAdaptive: true,
   minSampleDist: 1,
+  showLeash: true,
 };
 
 /** 守护进程回传的健康状态（用于面板显示与排障）。 */
@@ -112,6 +120,24 @@ export interface PenSmoothStatus {
   enabled: boolean;
   /** 平滑强度 0–100。 */
   strength: number;
+  /** 滤波族：0=标准 1=拉绳 2=追笔（与面板模式下拉同序）。 */
+  mode: number;
+  /** 最大滞后（屏幕像素）。 */
+  radiusPx: number;
+  /** 拉绳松紧 0–100。 */
+  tension: number;
+  /** 追笔速度 0–100。 */
+  catchUp: number;
+  /** 拐角判定角度 0–90。 */
+  cornerAngle: number;
+  /** 速度自适应是否开启。 */
+  speedAdaptive: boolean;
+  /** HUD 显隐位：bit0=绳 bit1=半径圆 bit2=原始点。 */
+  hud: number;
+  /** ×1000 的「轴坐标 → 屏幕像素」比，由 hook DLL 用真实光标标定后上报。
+   *  1.0 ⇒ 包坐标本身就是屏幕像素；0.0586 ⇒ 数位板逻辑单位（1920/32767）。
+   *  leash 长度/位置不对时第一个该看的就是它。 */
+  pxPerAxis: number;
   /** 已注入 hook DLL 的 PS 进程数（0 ⇒ 还没注入成功或 PS 未运行）。 */
   injectedCount: number;
   /** hook 侧状态：0=未挂载 1=生效 2=标定失败 3=已卸载。 */
@@ -125,6 +151,14 @@ export interface PenSmoothStatus {
 export const initialPenSmoothStatus: PenSmoothStatus = {
   enabled: false,
   strength: 40,
+  mode: 0,
+  radiusPx: 8,
+  tension: 50,
+  catchUp: 50,
+  cornerAngle: 45,
+  speedAdaptive: true,
+  hud: 3,
+  pxPerAxis: 0,
   injectedCount: 0,
   state: 0,
   packets: 0,
@@ -164,6 +198,13 @@ const PROBE_TIMEOUT_MS = 2500;
 let sender: ((msg: any) => void) | null = null;
 /** 最近一次「布防意图」。重连时据此重放，避免 daemon 重启后静默失效。 */
 let armedIntent = false;
+/**
+ * 笔平滑（Wintab 通路）的开关意图。
+ * ⛔ 必须有它：两条通路**共用同一份参数面**，笔平滑开着的时候，面板每次调参
+ *    都必须同步推给笔通路 —— 否则调参只影响套索，笔平滑永远停在旧值
+ *    （真机复现：「已平滑 47417 包但各种参数组合感知不明显」的根因之一）。
+ */
+let penOn = false;
 let params: LassoSmoothParams = { ...initialLassoSmoothParams };
 let status: LassoSmoothStatus = { ...initialStatus };
 
@@ -198,6 +239,8 @@ function toWire(p: LassoSmoothParams) {
     cornerAngle: p.cornerAngle,
     speedAdaptive: p.speedAdaptive,
     minSampleDist: p.minSampleDist,
+    // 笔通路专用：拉绳提示的位域（bit0=绳 bit1=半径圆）。鼠标通路不认识该字段，忽略即可。
+    hud: p.showLeash ? 3 : 0,
   };
 }
 
@@ -208,6 +251,9 @@ function sendParams(p: LassoSmoothParams): void {
   if (sig === lastSentParamsSig) return;
   lastSentParamsSig = sig;
   send({ type: 'smoothParams', params: wire });
+  // ⛔ 笔通路共用同一份参数面：开着就必须跟着同步。少了这一条，
+  //    面板上调强度/半径/模式对笔平滑毫无作用（它那边永远停在旧值）。
+  if (penOn) send({ type: 'penSmooth', on: true, ...wire });
 }
 
 function emitStatus(): void {
@@ -316,9 +362,25 @@ export function resendLassoSmoothing(): void {
   lastSentParamsSig = null;
   sendParams(params);
   send({ type: 'smoothArm', on: armedIntent });
+  // 笔平滑同样要重放：守护进程是独立进程，插件重载/重启都会让「面板以为开着、
+  // 实际已关」—— 与 smoothArm 同一个理由。
+  if (penOn) send({ type: 'penSmooth', on: true, ...toWire(params) });
   // 主动询问一次状态：这是「对端支不支持本协议」的探针 —— 支持则必回一帧 smoothState，
   // 不支持（旧版守护进程把未知 type 静默丢弃）则什么都不回，由 PROBE_TIMEOUT_MS 判定。
   send({ type: 'smoothStatus' });
+}
+
+/**
+ * 笔平滑（Wintab 通路）开关 + 参数。
+ *
+ * ⛔ 与 `sendPenSmooth`（SmoothBridge 的原始发送器）的分工：本函数是**参数面的属主**，
+ *    负责记住 `penOn` 以便后续每次调参都同步给笔通路；原始发送只认线格式。
+ * ⛔ 必须整包带参数：早期只发 `{on}`，守护进程侧强度恒为默认 40、半径/模式/张力/
+ *    追笔/拐角连槽位都没有 ⇒ 面板调参对笔平滑零作用（真机复现）。
+ */
+export function setPenSmooth(on: boolean, p?: LassoSmoothParams): void {
+  penOn = on;
+  send({ type: 'penSmooth', on, ...(p ? toWire(p) : {}) });
 }
 
 /** 处理守护进程回传的 smoothState（由 HotkeyBridge 的 onmessage 分发）。 */
@@ -328,7 +390,13 @@ export function handleLassoSmoothMessage(msg: any): void {
   sawSmoothState = true;
   if (probeTimer) { clearTimeout(probeTimer); probeTimer = null; }
   const penRaw = msg.pen;
-  if (penRaw) sawPenFrame = true;
+  if (penRaw) {
+    sawPenFrame = true;
+    // 记住笔平滑的真实开关：后续每次调参都要同步推给它（sendParams 里的 penOn 判据）。
+    // ⚠️ 对端不回 pen（旧版守护进程）时**不动** —— 不能把「不认识」当成「已关闭」，
+    //    否则会把一个版本过旧的问题显示成开关关了。
+    if (typeof penRaw.enabled === 'boolean') penOn = penRaw.enabled;
+  }
   status = {
     ...status,
     connected: true,
@@ -348,6 +416,14 @@ export function handleLassoSmoothMessage(msg: any): void {
     pen: penRaw ? {
       enabled: !!penRaw.enabled,
       strength: Number(penRaw.strength) || 0,
+      mode: Number(penRaw.mode) || 0,
+      radiusPx: Number(penRaw.radiusPx) || 0,
+      tension: Number(penRaw.tension) || 0,
+      catchUp: Number(penRaw.catchUp) || 0,
+      cornerAngle: Number(penRaw.cornerAngle) || 0,
+      speedAdaptive: !!penRaw.speedAdaptive,
+      hud: Number(penRaw.hud) || 0,
+      pxPerAxis: Number(penRaw.pxPerAxis) || 0,
       injectedCount: Array.isArray(penRaw.injectedPids) ? penRaw.injectedPids.length : 0,
       state: Number(penRaw.state) || 0,
       packets: Number(penRaw.packets) || 0,

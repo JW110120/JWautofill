@@ -49,6 +49,7 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <wingdi.h>     /* WIN32_LEAN_AND_MEAN 会裁掉 GDI：HUD 自绘需要，显式补回 */
 #include <tlhelp32.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -117,7 +118,6 @@ enum {
     CFG_I_MAGIC = 0,
     CFG_I_ENABLED,        /* 0/1                    面板开关（守护进程写） */
     CFG_I_STRENGTH,       /* 0..100                 平滑强度     */
-    CFG_I_RADIUSPCT,      /* 万分之一·axMax          最大滞后     */
     CFG_I_FLAGS,          /* bit0=速度自适应          */
     CFG_I_SEQ,            /* 配置版本号（排查用）                   */
     CFG_I_CMDSEQ,         /* 命令序号（守护进程每下令 +1）           */
@@ -136,7 +136,21 @@ enum {
     CFG_I_PID,
     CFG_I_FROZE,          /* 改写期挂起的线程数                     */
     CFG_I_HEARTBEAT,      /* 守护进程每秒写入 GetTickCount()        */
+    /* ---- P3.1：整包参数（面板与鼠标通路共用同一份参数面）---- */
+    CFG_I_MODE,           /* 0=标准 1=拉绳 2=追笔                   */
+    CFG_I_TENSION,        /* 0..100   拉绳松紧                     */
+    CFG_I_CATCHUP,        /* 0..100   追笔速度                      */
+    CFG_I_CORNER,         /* 0..90    拐角判定角度                  */
+    CFG_I_RADIUSPX,       /* 1..40    最大滞后（屏幕等效像素）       */
+    CFG_I_HUD,            /* bit0=leash 线 bit1=半径圆 bit2=原始点  */
+    CFG_I_HUDCOLOR,       /* 0xRRGGBB，默认品红（与 PS 画笔绳线同色）*/
+    CFG_I_PXPERAXIS,      /* ×1000：渲染线程用真实光标标定的轴→像素比 */
 };
+
+/* ⛔⛔ 这张槽位表是 C 与 C#（Program.cs 的 PenHook）**两处手写**的，错位不会报错、
+   只会让参数静默失效（实测过的坑）。所以：① 用编译期断言守住「槽数不超映射」；
+   ② 任何一侧增删槽，另一侧必须同步，且 C# 的 EnsureInit 里有运行时兜底校验。 */
+typedef char cfg_slot_fit_check[(CFG_NLONGS >= CFG_I_PXPERAXIS + 1) ? 1 : -1];
 
 static volatile LONG* g_cfg    = NULL;
 static HANDLE         g_cfgMap = NULL;
@@ -328,23 +342,74 @@ static void calib_publish(void)
 }
 
 /* ======================================================== 平滑状态（单条轨迹） */
-/* 与守护进程 LassoMouseSmoother（Mode 0 标准一阶低通）同源；此处为 C 版：
-   - k 用**线性**映射（C# 用 0.18^t 的指数映射）—— MVP 阶段不引入 libm；
-   - 不做 MinSampleDist 抽稀：Wintab 的包必须**原样写回**（抽掉会打乱 PS 的时间轴）。 */
+/* 与守护进程 LassoMouseSmoother 同源同参；此处为 C 版，三种模式全部实现。
+   - 不做 MinSampleDist 抽稀：Wintab 的包必须**原样写回**（抽掉会打乱 PS 的时间轴）。
+   - ⚠️ P3.1 起 k 改按**时间常数**定义（k = dt/(dt+τ)），而不是「每帧跟随系数」。
+     旧实现用 1−0.85·t/100 的线性映射，在 205Hz 的笔通路上等效滞后只有 ~0.9px
+     （亚像素，实测「感知不明显」的根因之一）；τ 的曲线则与鼠标通路
+     k=0.18^(t/100)@125Hz 的滞后严格等价，同一条滑杆在两条通路上手感一致。 */
 static double g_ox, g_oy;        /* 输出位置（保留小数，避免慢速时「粘住不动」） */
-static double g_speed;           /* 低通后的输入速度（归一到「屏幕等效像素/ms」） */
+static double g_speed;           /* 低通后的输入速度（屏幕等效像素/ms） */
 static double g_dirX, g_dirY;
 static int    g_hasDir;
 static DWORD  g_lastMs;
 static int    g_wasEnabled;
 
+/* 轴坐标 → 屏幕像素的比例。初值用标称值（32767 轴 ≈ 一屏宽），
+   由 HUD 渲染线程拿**真实光标位移**持续标定后覆盖（见 hud 段）。 */
+static double g_pxPerAxis = 1.0;
+/** 是否已被光标标定过（标定后不再被标称初值覆盖）。 */
+static volatile LONG g_pxCalibrated;
+
 #define JUMP_RESET_FRAC   0.15   /* 输出点与原始点距离 > 15%·axMax ⇒ 判定为抬笔移位 */
 #define TIME_GAP_RESET_MS 120    /* 两次取包间隔 > 120ms ⇒ 判定为新的一笔 */
-#define CORNER_COS        0.7071 /* 45° 的 cos：夹角超过 45° ⇒ 判为拐角，减弱平滑 */
 #define SPEED_FULL        1.2    /* 屏幕等效像素/ms：达到即「甩笔」 */
 #define RANGE_NOMINAL     32767.0
+/* τ(强度) 曲线的两个常数：τ = 8ms·(0.18^(−t/100) − 1)，
+   即 ln(1/0.18) = 1.714798，与鼠标通路指数映射反解一致。 */
+#define TAU_BASE_MS       8.0
+#define TAU_LN            1.714798
 
 static double dsqrt_(double v) { return __builtin_sqrt(v); }
+
+/* e^x（x∈[0,2]）Maclaurin 12 项：相对误差 < 3e-8。
+   ⛔ 刻意不引 libm 的 exp/pow —— 那会多拉一个 api-ms-win-crt-math 依赖。 */
+static double exp_series(double x)
+{
+    double term = 1.0, sum = 1.0;
+    for (int i = 1; i <= 12; i++) { term *= x / (double)i; sum += term; }
+    return sum;
+}
+
+/* cos(deg)（deg∈[0,90]）Maclaurin 到 x^8：45° 处误差 5e-6，90° 处 2.6e-4
+   （折成角度 < 0.02°，对「夹角是否超过阈值」毫无影响）。同样不引 libm。 */
+static double cos_deg_series(int deg)
+{
+    double x = (double)deg * 0.017453292519943295;   /* π/180 */
+    double x2 = x * x;
+    return 1.0 + x2 * (-0.5 + x2 * (0.041666666666666664
+                   + x2 * (-0.001388888888888889 + x2 * 0.000024801587301587)));
+}
+
+/* 强度 → 时间常数（ms）。与鼠标通路在 125Hz 下的滞后严格等价：
+   鼠标 k=0.18^(t/100)、dt=8ms ⇒ τ = 8·(0.18^(−t/100) − 1)。 */
+static double tau_from_strength(double t)
+{
+    if (t <= 0.0) return 0.0;
+    if (t > 100.0) t = 100.0;
+    return TAU_BASE_MS * (exp_series(TAU_LN * (t / 100.0)) - 1.0);
+}
+
+/* ---------------- HUD 快照（detour 只写这几个普通内存字段）----------------
+ * ⛔ detour 铁律依旧：这里全部是普通内存写，**没有任何系统调用**。
+ *    渲染线程另起（见文件末 hud 段），205Hz 的取包路径不被拖累。 */
+static volatile LONG g_snRawX, g_snRawY;   /* 改写前的原始轴坐标 */
+static volatile LONG g_snOutX, g_snOutY;   /* 改写后的平滑轴坐标 */
+static volatile LONG g_snMs;               /* 最后一次取包的 GetTickCount() */
+
+/* HUD 渲染线程（定义在文件末，worker 与 jwwh_unhook 都要调） */
+static void hud_start(void);
+static void hud_stop(void);
 
 /* ------------------------------------------------------------- 掩码 → 偏移 */
 /* 按 wintab.h 的固定字段顺序累加尺寸。pkContext 在 x64 上是 8 字节指针，
@@ -479,6 +544,14 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
     if (!axMax) axMax = 32767;
     calib_logf("# [calib] X 轴上界 = %u\n", axMax);
 
+    /* 轴→像素比的**标称初值**：等 HUD 线程用真实光标标定出来之前，先用它兜底，
+       否则前几十毫秒的「半径」会按 1.0 算（若包坐标是数位板逻辑单位就会小好几倍）。
+       ⚠️ 已被光标标定过就绝不覆盖（g_pxCalibrated 由渲染线程置位）。 */
+    if (!g_pxCalibrated) {
+        double nominal = RANGE_NOMINAL / (double)axMax;
+        if (nominal > 0.0001 && nominal < 1000.0) g_pxPerAxis = nominal;
+    }
+
     g_calib.hCtx = hCtx;
     g_calib.stride = ok ? stride : (haveScan ? sStride : 0);
     g_calib.offSerial = ok ? offS : sOff;
@@ -501,7 +574,7 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
 }
 
 /* ================================================================== 单包滤波 */
-static void smooth_packets(HCTX hCtx, void* buf, int n, LONG strength, LONG flags, LONG radiusPct)
+static void smooth_packets(HCTX hCtx, void* buf, int n)
 {
     /* ——— 标定（每个上下文一次；n>=2 即可做「序号逐包 +1」验证）——— */
     if (g_calib.hCtx != hCtx) {
@@ -523,13 +596,23 @@ static void smooth_packets(HCTX hCtx, void* buf, int n, LONG strength, LONG flag
     const int ox_ = g_calib.offX, oy_ = g_calib.offY;
     if (S <= 0 || ox_ + 4 > S || oy_ + 4 > S) return;
 
-    /* ——— 参数 ——— */
-    double t = (double)strength; if (t < 0) t = 0; if (t > 100) t = 100;
-    double k = 1.0 - 0.85 * (t / 100.0);        /* 0 ⇒ k=1（不平滑）；100 ⇒ k=0.15 */
-    if (radiusPct < 1) radiusPct = 1;
-    const double radius = (double)g_calib.axisMax * 0.0001 * (double)radiusPct;
+    /* ——— 参数（全部从共享内存现读，调用方保证 g_cfg 非空）——— */
+    const int    mode   = g_cfg[CFG_I_MODE];
+    const int    flags  = g_cfg[CFG_I_FLAGS];
+    const double pxAxis = g_pxPerAxis > 0.0001 ? g_pxPerAxis
+                                             : (RANGE_NOMINAL / (double)g_calib.axisMax);
+    double t = (double)g_cfg[CFG_I_STRENGTH]; if (t < 0) t = 0; if (t > 100) t = 100;
+    int radiusPx = g_cfg[CFG_I_RADIUSPX]; if (radiusPx < 1) radiusPx = 1;
+    int tension  = g_cfg[CFG_I_TENSION];  if (tension  < 0) tension  = 0; if (tension  > 100) tension  = 100;
+    int catchUp  = g_cfg[CFG_I_CATCHUP];  if (catchUp  < 0) catchUp  = 0; if (catchUp  > 100) catchUp  = 100;
+    int cornerDeg = g_cfg[CFG_I_CORNER];  if (cornerDeg < 0) cornerDeg = 0; if (cornerDeg > 90) cornerDeg = 90;
+
+    /* 像素 → 轴：面板上的「半径 / 绳长 / 追笔速度」都是屏幕像素，必须换算进来。
+       pxAxis 由 HUD 线程用真实光标标定；标定前用标称值兜底。 */
+    const double toAxis = 1.0 / pxAxis;
+    const double radius = (double)radiusPx * toAxis;
     const double jumpLimit = (double)g_calib.axisMax * JUMP_RESET_FRAC;
-    const double toScreen = RANGE_NOMINAL / (double)g_calib.axisMax;
+    const double cornerCos = cos_deg_series(cornerDeg);
 
     DWORD now = GetTickCount();
     const int speedAdaptive = (flags & 1) ? 1 : 0;
@@ -557,6 +640,9 @@ static void smooth_packets(HCTX hCtx, void* buf, int n, LONG strength, LONG flag
             /* 复位帧也要把「原样」写回（值相同，统一路径便于核对） */
             u32 nx = (u32)g_ox, ny = (u32)g_oy;
             memcpy(p + ox_, &nx, 4); memcpy(p + oy_, &ny, 4);
+            g_snRawX = (LONG)rawX; g_snRawY = (LONG)rawY;
+            g_snOutX = (LONG)nx;   g_snOutY = (LONG)ny;
+            g_snMs = (LONG)now;
             continue;
         }
 
@@ -564,27 +650,61 @@ static void smooth_packets(HCTX hCtx, void* buf, int n, LONG strength, LONG flag
         g_lastMs = now;
 
         /* 速度低通（归一到「屏幕等效像素/ms」） */
-        g_speed = g_speed * 0.72 + (dist * toScreen / dt) * 0.28;
+        g_speed = g_speed * 0.72 + (dist * pxAxis / dt) * 0.28;
 
-        /* 拐角守卫：与上一段输入方向的夹角超过 45° ⇒ 本帧减弱平滑，保住尖角 */
-        double kk = k;
-        if (dist > 0.01) {
+        /* 拐角守卫：与上一段输入方向的夹角超过阈值 ⇒ 本帧减弱平滑，保住尖角。
+           ⚠️ 只对「标准」模式生效 —— 拉绳/追笔的跟随机制本身不磨圆（拉绳甚至会主动
+           把输出点按在绳长处，尖角由绳长决定），加拐角削弱反而破坏它们的手感。 */
+        int corner = 0;
+        if (mode == 0 && dist > 0.01) {
             double ux = dx / dist, uy = dy / dist;
             if (g_hasDir) {
                 double dot = ux * g_dirX + uy * g_dirY;
                 if (dot > 1.0) dot = 1.0; else if (dot < -1.0) dot = -1.0;
-                if (dot < CORNER_COS) kk = kk > 0.75 ? kk : 0.75;
+                if (dot < cornerCos) corner = 1;
             }
             g_dirX = ux; g_dirY = uy; g_hasDir = 1;
-        }
-        if (speedAdaptive) {
-            double boost = g_speed / SPEED_FULL;
-            if (boost > 1.0) boost = 1.0;
-            kk += (1.0 - kk) * boost * 0.5;
+        } else if (dist > 0.01) {
+            g_dirX = dx / dist; g_dirY = dy / dist; g_hasDir = 1;   /* 只更新方向，不判定 */
         }
 
-        /* 一阶低通 */
-        g_ox += dx * kk; g_oy += dy * kk;
+        if (mode == 1) {
+            /* ===== 拉绳：光标与输出点之间系一根绳，超过绳长就把输出点拖到绳长处 =====
+               绳长 = 1 + (radiusPx−1)·(0.15 + 0.85·张力)，与鼠标通路同式。 */
+            double ropePx = 1.0 + (double)(radiusPx - 1) * (0.15 + 0.85 * ((double)tension / 100.0));
+            double rope = ropePx * toAxis;
+            if (dist > rope && dist > 0.0001) {
+                double f = rope / dist;
+                g_ox += dx * f; g_oy += dy * f;
+            } else {
+                /* 绳未绷紧时仍做轻微跟随（纯拉绳在慢速下会完全停住，观感像卡死） */
+                g_ox += dx * 0.25; g_oy += dy * 0.25;
+            }
+        } else if (mode == 2) {
+            /* ===== 追笔：输出端以受限速度追赶光标，追上即贴合 ===== */
+            double vmax = 0.2 + ((double)catchUp / 100.0) * 12.0;   /* px/ms */
+            double step = vmax * dt * toAxis;
+            if (dist > step && dist > 0.0001) {
+                double f = step / dist;
+                g_ox += dx * f; g_oy += dy * f;
+            } else {
+                g_ox = x; g_oy = y;
+            }
+        } else {
+            /* ===== 标准：一阶低通，k 按**时间常数**推导 =====
+               k = dt/(dt+τ)：同样的强度数字，无论 125Hz 还是 205Hz 采样，
+               稳态滞后都等于 v·τ（与采样率解耦）。 */
+            double tau = tau_from_strength(t);
+            double kk = (dt + tau) > 0.0 ? dt / (dt + tau) : 1.0;
+            if (speedAdaptive) {
+                /* 甩笔时自动减弱平滑：速度越高越贴手 */
+                double boost = g_speed / SPEED_FULL;
+                if (boost > 1.0) boost = 1.0;
+                kk += (1.0 - kk) * boost * 0.5;
+            }
+            if (corner) { double kc = 0.75; if (kk < kc) kk = kc; }
+            g_ox += dx * kk; g_oy += dy * kk;
+        }
 
         /* 全局最大滞后上限：无论算法怎么算，输出与笔尖的距离不超过 radius */
         double lx = x - g_ox, ly = y - g_oy;
@@ -597,6 +717,11 @@ static void smooth_packets(HCTX hCtx, void* buf, int n, LONG strength, LONG flag
         u32 wx = (u32)(g_ox + 0.5), wy = (u32)(g_oy + 0.5);
         memcpy(p + ox_, &wx, 4);
         memcpy(p + oy_, &wy, 4);
+
+        /* HUD 快照（普通内存写，detour 内零系统调用） */
+        g_snRawX = (LONG)rawX; g_snRawY = (LONG)rawY;
+        g_snOutX = (LONG)wx;   g_snOutY = (LONG)wy;
+        g_snMs = (LONG)now;
     }
 }
 
@@ -625,8 +750,7 @@ static u64 det_WTPacketsGet(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
             if (en && (DWORD)(GetTickCount() - (DWORD)g_cfg[CFG_I_HEARTBEAT]) > 3000) en = 0;
             if (en) {
                 if (g_state == 0) InterlockedExchange(&g_state, 1);
-                smooth_packets((HCTX)a, (void*)c, r, g_cfg[CFG_I_STRENGTH],
-                               g_cfg[CFG_I_FLAGS], g_cfg[CFG_I_RADIUSPCT]);
+                smooth_packets((HCTX)a, (void*)c, r);
                 InterlockedExchangeAdd(&g_smoothed, (LONG)r);
             } else {
                 g_wasEnabled = 0;                        /* 关掉 ⇒ 下一帧起笔锚定 */
@@ -753,6 +877,12 @@ static void publish_status(void)
     g_cfg[CFG_I_AXISMAX] = (LONG)g_calib.axisMax;
     g_cfg[CFG_I_PID]     = (LONG)GetCurrentProcessId();
     g_cfg[CFG_I_MAGIC]   = CFG_MAGIC;
+    /* 轴→像素比（×1000）：1.0 表示包坐标本身就是屏幕像素；
+       若远小于 1（如 0.0586 = 1920/32767）说明包坐标是数位板逻辑单位。 */
+    double ppa = g_pxPerAxis;
+    if (ppa < 0.0001) ppa = 0.0001;
+    if (ppa > 1000.0) ppa = 1000.0;
+    g_cfg[CFG_I_PXPERAXIS] = (LONG)(ppa * 1000.0);
 }
 
 static DWORD WINAPI worker(LPVOID param)
@@ -773,6 +903,7 @@ static DWORD WINAPI worker(LPVOID param)
     cfg_open();
     publish_status();
     do_install();
+    hud_start();          /* 建窗/绘制全在渲染线程；窗口默认隐藏，用到才出现 */
 
     LONG lastSeq = -1;
     DWORD lastPublish = 0;
@@ -829,8 +960,214 @@ static DWORD WINAPI worker(LPVOID param)
     }
 
     do_unhook();
+    hud_stop();
     if (g_log != INVALID_HANDLE_VALUE) { CloseHandle(g_log); g_log = INVALID_HANDLE_VALUE; }
     return 0;
+}
+
+/* ==========================================================================
+ * HUD overlay —— 把「笔尖 ↔ 平滑输出点」这根绳画在屏幕上
+ *
+ * ⚠️ 形态说明（2026-10-12 用户明确决定走 overlay）：
+ *    UXB/UXP 没有在 PS 画布上绘制的 API（这正是当初必须注入的原因 —— 连指针都拿不到），
+ *    PS 原生的「画笔绳线」由它**自己**的画笔平滑绘制，而我们在 Wintab 层改写坐标、
+ *    PS 的平滑状态是关的 ⇒ 它不会替我们画。所以只能自己画。
+ *
+ * ⛔ 但 detour 铁律**没有被违背**，这是本实现的关键约束：
+ *    - detour 只多写 5 个普通内存字段（g_snRawX/… 见上），零系统调用，205Hz 路径不变；
+ *    - 建窗 / 标定 / 绘制 / 消息循环全部在**独立的渲染线程**上，与取包线程无交集。
+ *    真正被放松的只有「DLL 不碰 UI」这一条。
+ *
+ * 风险最小化（overlay 形态是安全软件的典型启发式特征，能收的都收）：
+ *    - 窗口只有 192×192 且**跟随光标**，不是全屏顶层窗；
+ *    - 空闲 250ms（抬笔）即隐藏，不长期驻留；
+ *    - WS_EX_NOACTIVATE + WS_EX_TRANSPARENT + WM_NCHITTEST→HTTRANSPARENT：
+ *      不抢焦点、不吃鼠标事件、不进任务栏（WS_EX_TOOLWINDOW）；
+ *    - 颜色/内容全部可关（CFG_I_HUD = 0 时窗口根本不出现）。
+ *
+ * ⛔ 卸载顺序：窗口过程在本模块内 ⇒ 必须先 join 渲染线程再 FreeLibrary，
+ *    否则下一条消息就会跳进已卸载的代码。hud_stop() 由 worker 退出路径与
+ *    jwwh_unhook 双重保障（幂等）。
+ *
+ * 坐标：不猜 Wintab 的输入/输出空间语义，改用**真实光标**标定 ——
+ * 屏幕上看到的光标就是「平滑后的输出点」，于是
+ *      轴→像素比 = |Δ光标| / |Δ输出轴|
+ * 一次除法 + 低通即可，且天然跟随缩放 / 多屏 / 映射变化。
+ * ========================================================================*/
+#define HUD_SIZE     192
+#define HUD_IDLE_MS  250     /* 这么久没有新包 ⇒ 判定抬笔，隐藏 */
+#define HUD_FRAME_MS 16      /* ~60Hz */
+#define HUD_CLASS    L"JWautofillWintabHUD"
+
+static HANDLE        g_hudThread;
+static DWORD        g_hudTid;
+static volatile LONG g_hudStop;
+static volatile LONG g_hudRunning;
+
+static LRESULT CALLBACK hud_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    if (m == WM_NCHITTEST) return HTTRANSPARENT;    /* 穿透：绝不抢任何输入 */
+    return DefWindowProcW(h, m, w, l);
+}
+
+static DWORD WINAPI hud_thread(LPVOID param)
+{
+    (void)param;
+    HINSTANCE inst = GetModuleHandleW(NULL);
+    WNDCLASSEXW wc;
+    memset(&wc, 0, sizeof(wc));
+    wc.cbSize        = sizeof(wc);
+    wc.lpfnWndProc   = hud_wndproc;
+    wc.hInstance     = inst;
+    wc.lpszClassName = HUD_CLASS;
+    ATOM atom = RegisterClassExW(&wc);
+
+    HWND     wnd = NULL;
+    HDC      mem = NULL;
+    HBITMAP  dib = NULL;
+
+    if (atom) {
+        wnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT
+                              | WS_EX_NOACTIVATE,
+                              HUD_CLASS, L"", WS_POPUP,
+                              0, 0, HUD_SIZE, HUD_SIZE, NULL, NULL, inst, NULL);
+    }
+    if (wnd) {
+        SetLayeredWindowAttributes(wnd, RGB(0, 0, 0), 255, LWA_COLORKEY);
+        BITMAPINFO bi;
+        memset(&bi, 0, sizeof(bi));
+        bi.bmiHeader.biSize        = sizeof(bi.bmiHeader);
+        bi.bmiHeader.biWidth       = HUD_SIZE;
+        bi.bmiHeader.biHeight      = -HUD_SIZE;      /* 自上而下 */
+        bi.bmiHeader.biPlanes      = 1;
+        bi.bmiHeader.biBitCount    = 32;
+        bi.bmiHeader.biCompression = BI_RGB;
+        HDC scr = GetDC(NULL);
+        void* bits = NULL;
+        dib = CreateDIBSection(scr, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+        mem = CreateCompatibleDC(scr);
+        if (dib) SelectObject(mem, dib);
+        ReleaseDC(NULL, scr);
+    }
+
+    /* 光标标定的上一次采样 */
+    double lastCurX = 0, lastCurY = 0, lastAxX = 0, lastAxY = 0;
+    int haveLast = 0;
+
+    while (!g_hudStop) {
+        MSG msg;
+        while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
+            if (msg.message == WM_QUIT) break;
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        if (g_hudStop) break;
+
+        int wantVisible = 0;
+        if (wnd && mem && g_cfg && g_patched && g_calib.valid && g_cfg[CFG_I_ENABLED]) {
+            LONG hf = g_cfg[CFG_I_HUD];
+            DWORD now = GetTickCount();
+            if ((hf & 1) && (DWORD)((LONG)now - g_snMs) < HUD_IDLE_MS) wantVisible = 1;
+        }
+
+        if (!wantVisible) {
+            if (wnd && IsWindowVisible(wnd)) ShowWindow(wnd, SW_HIDE);
+            haveLast = 0;
+            Sleep(HUD_FRAME_MS);
+            continue;
+        }
+
+        POINT cur;
+        GetCursorPos(&cur);
+        double axX = (double)g_snOutX, axY = (double)g_snOutY;
+
+        /* —— 标定：|Δ光标| / |Δ输出轴| —— */
+        if (haveLast) {
+            double dAx  = dsqrt_((axX - lastAxX) * (axX - lastAxX) + (axY - lastAxY) * (axY - lastAxY));
+            double dCur = dsqrt_((double)(cur.x - lastCurX) * (cur.x - lastCurX)
+                               + (double)(cur.y - lastCurY) * (cur.y - lastCurY));
+            if (dAx > 40.0 && dCur > 3.0) {
+                double s = dCur / dAx;
+                if (s > 0.01 && s < 100.0) {
+                    g_pxPerAxis = g_pxPerAxis * 0.85 + s * 0.15;
+                    InterlockedExchange(&g_pxCalibrated, 1);
+                }
+            }
+        }
+        lastCurX = cur.x; lastCurY = cur.y; lastAxX = axX; lastAxY = axY; haveLast = 1;
+
+        /* —— 绘制（窗口中心 = 光标 = 平滑输出点）—— */
+        double pxAxis = g_pxPerAxis;
+        int rx = (int)(((double)g_snRawX - axX) * pxAxis);
+        int ry = (int)(((double)g_snRawY - axY) * pxAxis);
+        LONG hf = g_cfg[CFG_I_HUD];
+        LONG c  = g_cfg[CFG_I_HUDCOLOR];
+        COLORREF col = RGB((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
+
+        int half = HUD_SIZE / 2;
+        RECT rc = { 0, 0, HUD_SIZE, HUD_SIZE };
+        FillRect(mem, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
+
+        HPEN pen = CreatePen(PS_SOLID, 1, col);
+        HPEN old = (HPEN)SelectObject(mem, pen);
+        if (hf & 2) {                     /* 半径圆：直观显示「最大滞后」有多大 */
+            int rpx = g_cfg[CFG_I_RADIUSPX]; if (rpx < 1) rpx = 1;
+            HBRUSH nb = (HBRUSH)GetStockObject(NULL_BRUSH);
+            HBRUSH ob = (HBRUSH)SelectObject(mem, nb);
+            Ellipse(mem, half - rpx, half - rpx, half + rpx, half + rpx);
+            SelectObject(mem, ob);
+        }
+        if (hf & 1) {                     /* 绳：光标 ↔ 原始笔尖 */
+            MoveToEx(mem, half, half, NULL);
+            LineTo(mem, half + rx, half + ry);
+        }
+        if (hf & 4) {                     /* 原始笔尖点 */
+            int r = 3;
+            HBRUSH fb = CreateSolidBrush(col);
+            HBRUSH ob = (HBRUSH)SelectObject(mem, fb);
+            Ellipse(mem, half + rx - r, half + ry - r, half + rx + r, half + ry + r);
+            SelectObject(mem, ob);
+            DeleteObject(fb);
+        }
+        SelectObject(mem, old);
+        DeleteObject(pen);
+
+        SetWindowPos(wnd, HWND_TOPMOST, cur.x - half, cur.y - half, 0, 0,
+                     SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        HDC dc = GetDC(wnd);
+        if (dc) { BitBlt(dc, 0, 0, HUD_SIZE, HUD_SIZE, mem, 0, 0, SRCCOPY); ReleaseDC(wnd, dc); }
+
+        Sleep(HUD_FRAME_MS);
+    }
+
+    if (wnd) { DestroyWindow(wnd); wnd = NULL; }
+    if (mem) { DeleteDC(mem); mem = NULL; }
+    if (dib) { DeleteObject(dib); dib = NULL; }
+    UnregisterClassW(HUD_CLASS, inst);
+    InterlockedExchange(&g_hudRunning, 0);
+    return 0;
+}
+
+/** 启动渲染线程（幂等）。只由 worker 调 —— ⛔ 不能从 DllMain 建窗（loader lock）。 */
+static void hud_start(void)
+{
+    if (g_hudThread) return;
+    InterlockedExchange(&g_hudStop, 0);
+    InterlockedExchange(&g_hudRunning, 1);
+    g_hudThread = CreateThread(NULL, 0, hud_thread, NULL, 0, &g_hudTid);
+}
+
+/** 停止并 join 渲染线程（幂等）。⛔ 必须在 FreeLibrary 之前完成。 */
+static void hud_stop(void)
+{
+    if (!g_hudThread) return;
+    InterlockedExchange(&g_hudStop, 1);
+    if (g_hudTid) PostThreadMessageW(g_hudTid, WM_QUIT, 0, 0);   /* 尽力唤醒，失败就等 16ms 轮询 */
+    WaitForSingleObject(g_hudThread, 3000);
+    CloseHandle(g_hudThread);
+    g_hudThread = NULL;
+    g_hudTid = 0;
+    InterlockedExchange(&g_hudStop, 0);
 }
 
 /* ================================================================== 导出 */
@@ -842,6 +1179,10 @@ __declspec(dllexport) int jwwh_unhook(void)
 {
     InterlockedExchange(&g_stop, 1);
     if (g_thread) { WaitForSingleObject(g_thread, 5000); CloseHandle(g_thread); g_thread = NULL; }
+    /* worker 退出路径里已经 hud_stop() 过；这里再兜一次（worker 没起来过的场景）。
+       ⛔ 必须在 do_unhook / 本函数返回之前完成 —— 渲染线程持有窗口过程，
+          它活着的时候绝不能让本模块被卸载。 */
+    hud_stop();
     do_unhook();
     cfg_close();
     if (g_log != INVALID_HANDLE_VALUE) { CloseHandle(g_log); g_log = INVALID_HANDLE_VALUE; }
