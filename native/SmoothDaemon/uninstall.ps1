@@ -9,8 +9,7 @@
 #
 # 重要约定：
 #   - 平滑服务不持有任何用户数据（参数存在 PS 的 PluginData 里，不在此目录），
-#     因此没有任何需要保留的文件；下面的「保留」步骤对它只是走个过场。
-#     本脚本全程不询问、不等待输入，因为键盘卡死时用户根本无法输入任何内容。
+#     因此没有任何需要保留的文件，也无需向用户介绍任何「已保留」信息。
 #   - 全程无交互：不使用 Read-Host，不会卡住等待按键。
 #
 # 安全策略：仅按精确名称 / 已知固定路径操作，任何路径校验失败即中止删除，绝不误删用户文件。
@@ -33,7 +32,6 @@ $desktopKey   = "HKCU:\Control Panel\Desktop"
 $hookTimeoutName = "LowLevelHooksTimeout"
 $log          = Join-Path $env:TEMP "jwautofill_smooth_uninstall.log"
 $publishDir   = Join-Path $env:TEMP "jwauto_publish"
-$configPathStore = Join-Path $jwRoot "configpath.txt"
 
 function Log($msg) {
     $t = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -176,24 +174,7 @@ try {
         Log "警告：重置键盘钩子超时设置失败：$_"
     }
 
-    # 6) 保留用户热键配置（绝不删除）
-    #    自 2026-08-29 起配置存放在 Photoshop 的 PluginData 目录（与授权、图案数据同级），
-    #    守护进程把该路径记录在 configpath.txt 中。这里只做提示，不做删除。
-    $savedPath = $null
-    if (Test-Path $configPathStore) {
-        try { $savedPath = (Get-Content $configPathStore -Raw).Trim() } catch { $savedPath = $null }
-    }
-    $legacy = Join-Path $jwRoot "hotkeys.json"
-    $keptAny = $false
-    foreach ($cfg in @($savedPath, $legacy)) {
-        if ([string]::IsNullOrWhiteSpace($cfg)) { continue }
-        if (-not (Test-Path $cfg)) { continue }
-        Log "已保留热键配置（未删除）：$cfg"
-        $keptAny = $true
-    }
-    if (-not $keptAny) { Log "未发现热键配置文件，无需保留。" }
-
-    # 7) 目录回收（**只回收空目录，绝不删内容**）
+    # 6) 目录回收（**只回收空目录，绝不删内容**）
     #   ⛔⛔ 2026-10-13 修复：这里原来是 Get-ChildItem | Remove-Item -Recurse -Force，
     #      它会把 %LOCALAPPDATA%\JWautofill 下的**所有东西**删掉，包括：
     #        · configpath.txt —— 「用户热键配置存在哪」的唯一指针。删掉它，热键守护进程
@@ -217,7 +198,6 @@ try {
     Log "=================================================="
     Write-Host ""
     Write-Host "卸载完成：服务已停止，开机自启已移除，安装目录已删除。" -ForegroundColor Green
-    Write-Host "你的热键配置已保留，未删除任何个人数据。"
 } catch {
     Log "错误：$_"
     Write-Host "错误：$_"

@@ -62,6 +62,46 @@ async function resolveConfigPath(): Promise<string> {
   return configPathPromise;
 }
 
+/**
+ * 守护进程**离线**时直接读 PluginData 里的配置文件供面板显示。
+ *
+ * ⛔⛔ 修复场景（2026-10-14 用户报）：「卸载笔刷热键服务 → 重载插件 → 面板显示未绑定
+ *    任何笔刷快捷键 → 一开服务开关，之前的笔刷又回来了，像冲突」。
+ *    成因不是数据丢失，而是**显示与服务实际行为脱节**：卸载按铁律刻意保留
+ *    hotkeys.json（绝不删用户数据），但无守护进程就没有配置帧 ⇒ 面板缓存为空 ⇒
+ *    显示「未绑定」；服务一开，守护进程按 configpath.txt 读回同一份文件 ⇒ 旧笔刷
+ *    集体「复活」。面板此时读的必须是**同一份文件**，显示才可能与服务行为一致。
+ *
+ * ⛔ 只做「预种子」，三条边界必须守住：
+ *    1) 守护进程的配置帧是权威来源 —— 它到达后以它为准（读取窗口内到达则丢弃本次结果）；
+ *    2) 绝不在此置 `configLoaded` —— 那会绕过 canPersistConfig 的回写护栏
+ *       （2026-10-13「热键全没了」的防护不能拆）；
+ *    3) 绝不写文件 —— 本函数只读，文件不存在/损坏一律静默保持空列表。
+ */
+export async function loadOfflineConfig(): Promise<void> {
+  if (configLoaded || cachedConfig.length) return;
+  let text = '';
+  try {
+    const folder: any = await storage.localFileSystem.getDataFolder();
+    const entry: any = await folder.getEntry(CONFIG_FILE_NAME);
+    if (!entry || entry.isFolder) return;
+    text = await entry.read({ format: (storage as any).formats?.utf8 ?? 'utf8' });
+  } catch {
+    return; // 文件不存在 / 读失败：保持空列表（与旧行为一致）
+  }
+  if (!text || !text.trim()) return;
+  let arr: any;
+  try { arr = JSON.parse(text); } catch { return; }
+  if (!Array.isArray(arr)) return;
+  // 异步读取窗口里守护进程的配置帧可能刚到：以它为准，丢弃本次预种子
+  if (configLoaded || cachedConfig.length) return;
+  cachedConfig = arr.map(normalizeEntry).filter((x): x is HotkeyEntry => !!x);
+  // 同步主开关显示值（只读，不补条目、不推送 —— 补条目是 ensureMainToggleEntry 的职责）
+  const mt = cachedConfig.find(e => e.action === 'toggleMain');
+  if (mt) mainToggleCombo = mt.combo || '';
+  emitConfig();
+}
+
 let cachedConfig: HotkeyEntry[] = [];
 // 是否已从守护进程收到过配置文件：避免「配置尚未加载」时对配置做读-改-写
 // （那会把整份配置用空列表覆盖掉）。
@@ -298,6 +338,10 @@ let daemonCloseFn: (() => void) | null = null;
 
 export function connectHotkeyDaemon(): () => void {
   daemonConnectCount++;
+  // 守护进程缺席（已卸载 / 尚未启动）时，先把磁盘上的配置预种子进缓存供面板显示，
+  // 消除「面板显示未绑定、服务一开旧笔刷又回来」的观感冲突（详见 loadOfflineConfig 注释）。
+  // 自守卫：已有守护进程配置帧或缓存时立即返回，不产生任何 I/O。
+  void loadOfflineConfig();
   // 已有连接：直接返回带引用计数的退订器，不再重复建连
   if (daemonCloseFn) return makeDaemonUnsub();
 
@@ -341,7 +385,13 @@ export function connectHotkeyDaemon(): () => void {
             // 记下守护进程读写的文件路径：与面板指定的不一致 ⇒ 后面一律不回写
             // （见 canPersistConfig），并顺手把路径重发一次让它对齐。
             daemonConfigPath = typeof msg.path === 'string' ? msg.path : '';
-            if (requestedConfigPath && daemonConfigPath !== requestedConfigPath) {
+            // 路径未对齐（不一致 / 尚未解析出插件数据目录）⇒ 这一帧的 payload 来自**错误的
+            // 配置文件**（默认路径或尚未切换完的旧路径），内容马上就会被 setConfigPath 生效后
+            // 的修正帧替换。此时若跑 ensure*，会把空/旧 payload 误判成「首次使用」补上默认
+            // 条目并尝试回写 —— 回写又被 canPersistConfig 护栏拦截，只留下两条吓人的告警。
+            // 修正帧到达时路径已对齐，ensure* 自然会补该补的条目。
+            const pathAligned = !!requestedConfigPath && daemonConfigPath === requestedConfigPath;
+            if (!pathAligned && requestedConfigPath) {
               console.warn('⚠️ 守护进程的配置路径与面板不一致，已重新下发（本次不回写配置）\n  面板：'
                 + requestedConfigPath + '\n  服务：' + (daemonConfigPath || '(未知)'));
               try { ws.send(JSON.stringify({ type: 'setConfigPath', path: requestedConfigPath })); } catch { /* ignore */ }
@@ -350,9 +400,9 @@ export function connectHotkeyDaemon(): () => void {
                 + '守护进程当前使用：' + (daemonConfigPath || '(未知)'));
             }
             // 首次使用时补上主开关的默认快捷键 Ctrl+Q
-            ensureMainToggleEntry();
+            if (pathAligned) ensureMainToggleEntry();
             // 专注模式开启时补上/更新「套索工具键」（仅 APP 面板上下文会真正写入）
-            ensureFocusLassoEntry();
+            if (pathAligned) ensureFocusLassoEntry();
             emitConfig();
           }
           else if (msg?.type === 'recordCaptured') {

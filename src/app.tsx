@@ -89,6 +89,26 @@ import { helpTexts } from './constants/helpTexts';
 const FILL_RETRY_GUARD_MS = 400;
 
 /**
+ * 选区事件的「沉降」窗口（毫秒）—— 连续到来的选区 set 事件合并成**一次**填充。
+ *
+ * ⛔⛔ 修复场景（2026-10-14 用户报「致命缺点」）：「用拉绳模式画一个不大的选区，
+ *    就产生大量 modal scope」。机理：拉绳模式下输出点以≈光标速度前进（f=1−radius/dist），
+ *    选区**每个笔尖包**都在变 ⇒ PS 以包率级（~10ms 一个）派发 selection set 事件 ⇒
+ *    旧实现「来一个事件填一次」把整场拖动变成 modal scope 风暴（一次填充 = 一个
+ *    executeAsModal 作用域），既卡又污染历史记录。
+ *
+ * 取值依据：必须**大于**笔尖包间隔（~10ms）才可能在拖动期间持续抑制；
+ * 又必须小到孤立事件（Select All / 点选 / 取消选区）感知不到延迟。
+ * 120ms 同时满足两者：对孤立事件只增加一次人类不可察觉的固定延迟，
+ * 对包率级事件流则把整场拖动收敛为「停笔 120ms 后补一次」。
+ *
+ * ⚠️ 两个触发入口（通知监听器、填充结束后的 pendingSelection 补跑）**都必须**
+ *    走本窗口，否则填充结束后立即补跑会把「一次填充 ⇒ 一次事件 ⇒ 再一次填充」
+ *    的自激循环重新变成风暴。
+ */
+const SELECTION_SETTLE_MS = 120;
+
+/**
  * 「填充模式」三列 radio 的选项表：模块级常量（保持引用稳定，
  * 免得每次渲染重建数组让 React.memo 失效）。
  * ⚠️ 必须放模块级：helpTexts 在 import 之后才可用，
@@ -174,6 +194,10 @@ class App extends React.Component<AppProps, AppState> {
     private unsubFillPanelToggle: (() => void) | null = null;
     private isFilling = false;
     private pendingSelection = false;
+    // 选区事件沉降窗（见 SELECTION_SETTLE_MS）：timer 运行期间到来的事件只刷新
+    // lastSelectionEvent 并把窗口整体后移，不另开填充。
+    private selectionSettleTimer: any = null;
+    private lastSelectionEvent: any = undefined;
     private maskProbeDebounced: (...args: any[]) => void = () => { };
     private isInLayerMask = false;
     private isInQuickMask = false;
@@ -252,6 +276,9 @@ class App extends React.Component<AppProps, AppState> {
      *    状态条把它显示出来，一次截图就能判定是「读错了」还是「没读到」。
      */
     private lastToolRead: string | null = null;
+    /** 平滑取包活跃度追踪（notify bar「平滑中断」检测；见 applySmoothStatus 内注释）。 */
+    private lastPenPackets = -1;
+    private lastPenFlowAt = 0;
     // ===== 快速蒙版巡检 =====
     // 复合根因（2026-09-10 定位）：
     //   ① checkMaskModes() 原先只写 this.isInQuickMask（实例字段）+ forceUpdate，
@@ -629,7 +656,9 @@ class App extends React.Component<AppProps, AppState> {
                 );
 
                 if (isSelectionEvent) {
-                    this.handleSelectionChange(descriptor);
+                    // ⚠️ 经沉降窗合并后再填充（见 SELECTION_SETTLE_MS）：拉绳拖动时
+                    // PS 以包率级派发事件，来一个填一次就是 modal scope 风暴。
+                    this.scheduleSelectionFill(descriptor);
                 } else {
                     console.log('🔍 非选区设置事件，跳过处理');
                 }
@@ -691,6 +720,13 @@ class App extends React.Component<AppProps, AppState> {
                 const mergedLasso = loaded.appPanel.switchToLassoOnEnable ?? this.state.switchToLassoOnEnable;
                 const mergedAutoOff = loaded.appPanel.autoOffOnOtherTool ?? this.state.autoOffOnOtherTool;
                 focusAfterMerge = !!(mergedAutoOff && mergedLasso);
+                // 套索平滑参数：与下方 setState 里的合并规则逐字一致（逐字段回落默认）。
+                // 提到局部变量是为了 setState 之后**立即**同步给 LassoSmoothing 模块
+                // （setState 是异步的，那一刻还读不到 this.state.smoothParams）。
+                const mergedSmoothParams: LassoSmoothParams = {
+                    ...initialLassoSmoothParams,
+                    ...(loaded.appPanel.smoothParams ?? {}),
+                };
                 this.setState({
                     isEnabled: loaded.appPanel.isEnabled ?? this.state.isEnabled,
                     isExpanded: loaded.appPanel.isExpanded ?? this.state.isExpanded,
@@ -732,13 +768,21 @@ class App extends React.Component<AppProps, AppState> {
                     // ⚠️ smoothParams 必须**逐字段**合并（不能整体覆盖）——
                     //    旧存档里没有这个对象，整体覆盖会把默认值冲成 undefined，
                     //    之后下发的参数里出现 undefined 会让守护进程解析出 NaN 半径。
-                    smoothParams: {
-                        ...initialLassoSmoothParams,
-                        ...(loaded.appPanel.smoothParams ?? {}),
-                    },
+                    smoothParams: mergedSmoothParams,
                     smoothOptionsVisible: loaded.appPanel.smoothOptionsVisible ?? this.state.smoothOptionsVisible,
                     isSmoothOptionsExpanded: loaded.appPanel.isSmoothOptionsExpanded ?? this.state.isSmoothOptionsExpanded,
                 });
+                // ⛔⛔ 2026-10-14（用户报「刚加载插件时 HUD 不显示、平滑不生效，
+                //    反复切换模式/开关拉绳提示才有机会恢复」的机理之一）：
+                //    LassoSmoothing 的模块级 params 在插件重载后是**默认值**，而工具闸门
+                //    心跳（pollSmoothToolGate → setSmoothToolGate → forceSendParams）会在
+                //    ~1.8s 后用**模块值**整包覆盖守护进程 —— 不先同步，守护进程里的
+                //    模式/强度/半径/绳提示全被冲成默认（模式被冲成 standard ⇒ 拉绳 HUD
+                //    永不显示；用户随后「切换到拉绳模式」才把真值推下去，观感就是
+                //    「要反复切换模式才恢复」）。
+                //    sendParams 内部对 penOn=false 静默跳过（守护进程没开时无需下发）；
+                //    开启开关时 setPenSmooth 会整包带当前 state，同样拿得到恢复值。
+                try { pushLassoSmoothParams(mergedSmoothParams); } catch { /* ignore */ }
             }
         } catch (e) {
             console.warn('⚠️ 面板状态加载失败，使用默认状态:', e);
@@ -928,6 +972,11 @@ class App extends React.Component<AppProps, AppState> {
             clearTimeout(this.selectionRetryTimer);
             this.selectionRetryTimer = null;
         }
+        if (this.selectionSettleTimer) {
+            clearTimeout(this.selectionSettleTimer);
+            this.selectionSettleTimer = null;
+        }
+        this.lastSelectionEvent = undefined;
         this.selectionRetryCount = 0;
         invalidateLayerInfoCache();
         removePsNotificationListeners(this.handleNotification);
@@ -1314,14 +1363,11 @@ class App extends React.Component<AppProps, AppState> {
     /**
      * 把一次工具读数折算成闸门值并上报。
      *
-     * ⛔⛔ 读失败时**绝不能**把闸门改回「未知(2)」—— 这是本轮的第二个根因。
-     *    2 在原生侧的含义是「放行」：一次偶发的读失败（宿主恰好忙、文档世代号刚变、
-     *    刚切完文档）就会把闸门整个打开，而这段窗口里用户用铅笔落笔就会冒出套索的
-     *    HUD，且要等下一轮巡检成功才恢复 —— 用户看到的就是「换了工具它照样出圈」。
-     *    ⇒ 读失败时**沿用上一次的判定**（setSmoothToolGate 收到同值也会在 1.8s 后
-     *      续期时间戳，于是「不是套索」这个 0 会一直保持新鲜有效）。
-     *    ⇒ 只有**从来没读到过**（仍是初值 2）时才维持 2：让冷启动的那一刻不至于
-     *      因为还没来得及读就把平滑整个锁死。
+     * ⛔⛔ 读失败时**绝不能**把闸门改回「未知(2)」—— 那会把平滑整个关死（原生侧
+     *    2026-10-14 起 2=阻断）。读失败时**沿用上一次的判定**（setSmoothToolGate
+     *    收到同值也会在 1.8s 后续期时间戳；独立 WS 心跳兜底续期，见 LassoSmoothing）。
+     *    只有**从来没读到过**（仍是初值 2）时才维持 2：冷启动后第一轮巡检（≤1s）
+     *    之前套索平滑短暂待命，这是「只在套索生效」的必要代价。
      */
     private applyToolGate(tool: string | null) {
         if (tool) {
@@ -1342,6 +1388,16 @@ class App extends React.Component<AppProps, AppState> {
     /** 把守护进程回报的平滑状态写进 state（渲染要读它，因此不能只写实例字段）。 */
     private applySmoothStatus(s: LassoSmoothStatus) {
         this.setState({ smoothStatus: s });
+        // ⛔ 实时活跃度追踪（notify bar「平滑中断」检测的数据源）：
+        //    packets 增长 = PS 还在从钩子取包。配合 snAge（快照年龄）可把三种
+        //    状态分开：取包且快照新鲜 = 正在平滑；快照变老 = 正常停笔；
+        //    「取包在涨 + 快照冻结」= 断流（标定丢失等）—— 用户感知的「平滑失效」，
+        //    状态条必须如实说出来，不能永远挂「生效中」（2026-10-14 用户要求）。
+        const p = s.pen;
+        if (p && p.packets !== this.lastPenPackets) {
+            this.lastPenFlowAt = Date.now();
+            this.lastPenPackets = p.packets;
+        }
         // 连接建立即宣告「启动中」结束：真实状态从此由 smoothStatus 接管。
         // （不同时清定时器会泄漏一个到点自愈的 setTimeout，每个启动周期漏一个。）
         if (s.connected && this.state.smoothLaunching) {
@@ -1391,7 +1447,24 @@ class App extends React.Component<AppProps, AppState> {
         //    各自都有独立分支，仍然逐条说清。
         // ⚠️ 上面提到的那几个诊断量仍在 `pen` / `lastToolRead` 里，需要排查时从
         //    控制台 `__jwPs.dump()` 或 hook 日志取，不再占界面。
-        if (pen.state === 1) return '套索平滑：生效中';
+        if (pen.state === 1) {
+            // ⛔ 2026-10-14：state=1 只说明「标定通过」，不等于「此刻真的在改写」。
+            //    两种「界面挂着生效中、实际没在平滑」的形态必须拆出来如实说：
+            //    ① 平滑中断：笔已落纸、闸门也成立、PS 还在持续取包（packets 在涨），
+            //       但 DLL 快照已冻结 2.2s（snAge 界限含状态泵 500ms 周期 + 裕量）——
+            //       这是标定丢失/改写被跳过的「真断流」，即用户感知的「平滑失效」本体。
+            //       ⛔ 判据刻意不用 smoothed：松弛绳下输出==原样、无改写是**正常**的。
+            //    ② 非拉绳模式：平滑仍在工作，但拉绳 HUD 只在拉绳模式显示，模式被改掉
+            //       （如「复位设置」把参数打回默认 standard）时圆会凭空消失。
+            const t = Date.now();
+            const flowing = (t - this.lastPenFlowAt) < 1500;   // PS 侧还有包进来
+            const snStale = pen.snAge >= 0 && pen.snAge > 2200;
+            if (pen.penDown === 1 && pen.gateOk === 1 && flowing && snStale) {
+                return '套索平滑：平滑中断（笔已落纸但未改写，请截图反馈）';
+            }
+            if (pen.mode !== 1) return '套索平滑：非拉绳模式（拉绳提示已停显，平滑仍在）';
+            return '套索平滑：生效中';
+        }
         // state=0：已注入但还没标定。标定要等「同一批至少 3 个包」才做（少于 3 个时
         // 「序号逐包 +1」可能是巧合）。只写「注入中」会让人以为卡住了 —— 如实区分
         // 「还没收到包」与「包够了但还没标定完」。
@@ -1411,7 +1484,15 @@ class App extends React.Component<AppProps, AppState> {
         if (!st.connected || st.unsupported || st.penUnsupported) return 'notify-bar-warn';
         if (!pen.enabled) return 'notify-bar-disabled';
         if (pen.state === 2) return 'notify-bar-fail';
-        if (pen.state === 1) return 'notify-bar-ok';
+        if (pen.state === 1) {
+            // 与 smoothStatusText 的两档异常分支一一对应：中断 = 红，非拉绳模式 = 橙。
+            const t = Date.now();
+            const flowing = (t - this.lastPenFlowAt) < 1500;
+            const snStale = pen.snAge >= 0 && pen.snAge > 2200;
+            if (pen.penDown === 1 && pen.gateOk === 1 && flowing && snStale) return 'notify-bar-fail';
+            if (pen.mode !== 1) return 'notify-bar-warn';
+            return 'notify-bar-ok';
+        }
         return 'notify-bar-warn';
     }
 
@@ -1798,6 +1879,30 @@ class App extends React.Component<AppProps, AppState> {
         this.setState({ isClearSettingOpen: false });
     }
 
+    /**
+     * 选区变化的**沉降式**调度：把连续到来的选区 set 事件合并成一次填充。
+     *
+     * 语义（尾沿 debounce）：每个新事件都把窗口整体后移 SELECTION_SETTLE_MS；
+     * 只有连续 120ms 没有新事件才真正触发 handleSelectionChange。
+     * 触发时带上**最后一个**事件的 descriptor（feather 跳过语义不丢）。
+     *
+     * ⚠️ 填充结束后的 pendingSelection 补跑也走本方法（见 handleSelectionChange 的
+     *    finally）：若那条路绕过沉降窗立即重入，「填充⇒事件⇒再填充」的自激循环
+     *    会把本修复整体作废。
+     */
+    scheduleSelectionFill(event?: any) {
+        this.lastSelectionEvent = event;
+        if (this.selectionSettleTimer) clearTimeout(this.selectionSettleTimer);
+        this.selectionSettleTimer = setTimeout(() => {
+            this.selectionSettleTimer = null;
+            const ev = this.lastSelectionEvent;
+            this.lastSelectionEvent = undefined;
+            if (this.state.isEnabled) {
+                this.handleSelectionChange(ev);
+            }
+        }, SELECTION_SETTLE_MS);
+    }
+
     async handleSelectionChange(event?: any) {
         if (!this.state.isEnabled) return;
         // 检查事件中是否包含feather项，如果包含则直接返回
@@ -1990,13 +2095,10 @@ class App extends React.Component<AppProps, AppState> {
             // 这样套索连点也不会丢选区
             if (this.pendingSelection) {
                 this.pendingSelection = false;
-                // 用 setTimeout(0) 把递归触发推到下一个事件循环，
-                // 避免在 finally 里直接重入导致栈过深
-                setTimeout(() => {
-                    if (this.state.isEnabled) {
-                        this.handleSelectionChange();
-                    }
-                }, 0);
+                // ⚠️ 同样走沉降窗（2026-10-14）：旧实现这里 setTimeout(0) 立即重入，
+                // 填充一结束就补跑，拉绳拖动时等于「一次填充⇒一次事件⇒再一次填充」
+                // 的自激循环 —— 用户报的「画个小选区产生大量 modal scope」正源之一。
+                this.scheduleSelectionFill();
             }
         }
     }

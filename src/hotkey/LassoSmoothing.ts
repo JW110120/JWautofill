@@ -31,7 +31,7 @@ export type LassoSmoothMode = 'standard' | 'rope' | 'catchup';
  * ⇒ 现在必须由面板 300ms 巡检当前工具，把结果经 penSmooth 搭车下发，
  *    DLL 侧再叠加「笔尖是否接触画布」的判据，两者同时成立才平滑。
  */
-export type SmoothToolGate = 0 | 1 | 2;   // 0=不是套索 1=是套索 2=未知（放行）
+export type SmoothToolGate = 0 | 1 | 2;   // 0=不是套索 1=是套索（唯一放行值） 2=未知（原生侧阻断，等首次读数）
 
 /** 参数面（与 Program.cs 的 PenHook.PenParams 一一对应；鼠标通路字段已移除）。 */
 export interface LassoSmoothParams {
@@ -169,6 +169,13 @@ export interface PenSmoothStatus {
   /** 累计取到的包数 / 被改写的包数（生效与否最直接的证据）。 */
   packets: number;
   smoothed: number;
+  /**
+   * 「快照年龄」(ms)：距 hook DLL 最后一次发布 HUD 快照的时间。
+   * ⛔ 面板「平滑中断」检测的数据源：packets 在涨而它 >2s = 断流
+   * （标定丢失/改写被跳过）；停笔时它与 packets 年龄同步增长（正常）。
+   * -1 = 对端是旧版守护进程（无此字段）。
+   */
+  snAge: number;
 }
 
 /** 笔平滑状态的初值（也是「对端不回该字段」时的兜底值）。 */
@@ -192,6 +199,7 @@ export const initialPenSmoothStatus: PenSmoothStatus = {
   state: 0,
   packets: 0,
   smoothed: 0,
+  snAge: -1,
 };
 
 const initialStatus: LassoSmoothStatus = {
@@ -380,12 +388,10 @@ export function resendLassoSmoothing(): void {
  * ⛔ 两条触发条件缺一不可：
  *   ① 值变了 —— 常规通路；
  *   ② 距上次上报超过 GATE_REFRESH_MS —— **心跳**。
- * 为什么必须有②：原生侧只认「新鲜」的闸门值（超过 3 秒未刷新就按「未知」放行，
- * 见 wintab_hook.c 的 GATE_STALE_MS）。若只在变化时发，那么「切到画笔」这个 0
- * 会一直留在共享内存里 —— 用户随后关掉面板、再用 PS 切回套索时，没有任何人
- * 会把那个 0 改回来 ⇒ 平滑与 HUD 静默失效，而且面板不在场时毫无线索。
- * 每 ~2 秒重刷一次，既让「0」保持有效（正在用画笔时不会被误放行），
- * 又能在面板消失后自然过期（不会把功能永久锁死）。
+ * 为什么必须有②：原生侧只认「新鲜」的闸门值——超过 3 秒未刷新一律**阻断**
+ * （fail-closed，见 wintab_hook.c 的 GATE_STALE_MS；2026-10-14 起过期不再放行）。
+ * 若只在变化时发，「0/1」会一直留在共享内存里无人续期。每 ~1.8s 重刷一次
+ * （另有 syncGateHeartbeat 的 1.5s 纯 WS 心跳兜底，不依赖 batchPlay 读数）。
  */
 export function setSmoothToolGate(g: SmoothToolGate): void {
   const now = Date.now();
@@ -409,6 +415,30 @@ function forceSendParams(): void {
   send({ type: 'penSmooth', on: true, ...wire });
 }
 
+/**
+ * 闸门心跳定时器（⛔⛔ 2026-10-14：与 batchPlay 工具读**彻底解耦**）。
+ *
+ * 为什么必须独立于 pollSmoothToolGate：旧版心跳寄生在工具巡检里，而巡检有三条
+ * 提前 return（isPsBusy / 读挂起 ≤3s / 模态节流）—— 任何一条连续挡住 3 秒，
+ * 原生侧 GATETS 就过期。旧原生侧对过期是 fail-open ⇒「任何工具落笔都出 HUD」；
+ * 新原生侧改为 fail-closed 后，心跳再断就会把套索平滑也误杀。
+ * ⇒ 心跳必须是**纯 WS 发送**（不碰 batchPlay、不查忙碌闸门），面板 JS 活着就在跳。
+ * 间隔 1500ms < GATE_STALE_MS(3000)，留一倍裕量。
+ */
+let gateHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+function syncGateHeartbeat(): void {
+  if (penOn && gateHeartbeatTimer == null) {
+    gateHeartbeatTimer = setInterval(() => {
+      if (!penOn) return;
+      forceSendParams();   // 内容不变也会刷新守护进程侧的 GATETS（心跳本体）
+    }, 1500);
+  } else if (!penOn && gateHeartbeatTimer != null) {
+    clearInterval(gateHeartbeatTimer);
+    gateHeartbeatTimer = null;
+  }
+}
+
 export function getSmoothToolGate(): SmoothToolGate {
   return toolGate;
 }
@@ -423,6 +453,7 @@ export function getSmoothToolGate(): SmoothToolGate {
  */
 export function setPenSmooth(on: boolean, p?: LassoSmoothParams): void {
   penOn = on;
+  syncGateHeartbeat();
   send({ type: 'penSmooth', on, ...(p ? toWire(p) : {}) });
 }
 
@@ -438,7 +469,7 @@ export function handleLassoSmoothMessage(msg: any): void {
     // 记住套索平滑的真实开关：后续每次调参都要同步推给它（sendParams 里的 penOn 判据）。
     // ⚠️ 对端不回 pen（旧版守护进程）时**不动** —— 不能把「不认识」当成「已关闭」，
     //    否则会把一个版本过旧的问题显示成开关关了。
-    if (typeof penRaw.enabled === 'boolean') penOn = penRaw.enabled;
+    if (typeof penRaw.enabled === 'boolean') { penOn = penRaw.enabled; syncGateHeartbeat(); }
   }
   status = {
     ...status,
@@ -476,6 +507,8 @@ export function handleLassoSmoothMessage(msg: any): void {
       state: Number(penRaw.state) || 0,
       packets: Number(penRaw.packets) || 0,
       smoothed: Number(penRaw.smoothed) || 0,
+      // 旧版守护进程不回 snAge ⇒ Number(undefined)=NaN ⇒ 回落 -1（=「对端无此字段」）
+      snAge: penRaw.snAge === undefined ? -1 : (Number(penRaw.snAge) || 0),
     } : status.pen,
   };
   emitStatus();

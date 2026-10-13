@@ -151,7 +151,7 @@ enum {
     CFG_I_CORNER,         /* 0..90    拐角判定角度                  */
     CFG_I_RADIUSPX,       /* 1..100   最大滞后（屏幕等效像素）       */
     CFG_I_HUD,            /* bit0=leash 线 bit1=半径圆 bit2=原始点  */
-    CFG_I_HUDCOLOR,       /* 0xRRGGBB，默认品红（与 PS 画笔绳线同色）*/
+    CFG_I_HUDCOLOR,       /* 0xRRGGBB，默认 #E07F0D（2026-10-14 用户要求，与 PS 原生洋红区分）*/
     CFG_I_PXPERAXIS,      /* ×1000：渲染线程用真实光标标定的轴→像素比 */
     /* ---- P3.2：触发闸门（面板/守护进程写，DLL 读）---- */
     CFG_I_TOOLGATE,       /* 0=非套索 1=套索 2=未知(面板未开) —— 见下 */
@@ -164,12 +164,17 @@ enum {
                              Wintab 包的 Y 向上为正、屏幕 Y 向下为正 ⇒ 两者符号相反。
                              HUD 的圆心偏移必须按分量换算，用不带符号的标量会把圆心
                              渲染成光标的**镜像**（真机实测：向右上运笔时圆心跑到左上方）。*/
+    /* ---- P3.4（2026-10-14）：快照新鲜度 —— 面板「平滑中断」检测的数据源 ---- */
+    CFG_I_SNTS,           /* DLL 回写：最后一次快照发布的 GetTickCount()。
+                             ⛔ 与 packets 的区别：标定丢失等「断流」故障里 packets 照涨
+                             （PS 还在空取原始包），而快照**冻结** —— 面板靠
+                             「packets 在涨 + SNTS 不动」把「真断流」与「正常停笔」分开。 */
 };
 
 /* ⛔⛔ 这张槽位表是 C 与 C#（Program.cs 的 PenHook）**两处手写**的，错位不会报错、
    只会让参数静默失效（实测过的坑）。所以：① 用编译期断言守住「槽数不超映射」；
    ② 任何一侧增删槽，另一侧必须同步，且 C# 的 EnsureInit 里有运行时兜底校验。 */
-typedef char cfg_slot_fit_check[(CFG_NLONGS >= CFG_I_PXPERAXISY + 1) ? 1 : -1];
+typedef char cfg_slot_fit_check[(CFG_NLONGS >= CFG_I_SNTS + 1) ? 1 : -1];
 
 static volatile LONG* g_cfg    = NULL;
 static HANDLE         g_cfgMap = NULL;
@@ -440,25 +445,35 @@ static void contact_update(const u8* buf, int stride, int n)
 }
 
 /* ============================================== 工具闸门（面板 → 守护进程 → 本 DLL） */
-/* 闸门值的**有效期**（ms）。
- * ⛔ 为什么必须有过期判定：闸门只在**值变化时**才由面板下发，而「0 = 不是套索」这条
- *    会一直留在共享内存里。用户关掉面板（或面板崩了）之后切回套索工具时，没有任何人
- *    会把那个 0 改回来 ⇒ 平滑与 HUD 静默失效，且面板不在场时完全看不出原因。
- *    ⇒ 面板侧每 ~2s 无条件重刷一次（见 LassoSmoothing.setSmoothToolGate），
- *      这里超过 3s 没刷新就按「未知」处理（放行），退化到旧行为而不是把功能锁死。 */
+/* 闸门值的**有效期**（ms）。面板侧有独立心跳持续刷新（见 LassoSmoothing），
+ * 超过它还没刷新 ⇒ 面板已经不在正常工作（关掉/挂起/崩了）。
+ * ⛔⛔ 2026-10-14 定案：过期一律**阻断**（fail-closed），0 与 1 同等对待。
+ *    旧版「陈旧按未知放行」是本轮用户报的「任何工具落笔都出 HUD」的直接根因之一：
+ *    心跳被 batchPlay 读挂起/忙碌闸门阻断超过 3s，陈旧的 1 就把所有工具全放行。
+ *    面板关闭本就会撤钩（onclose ⇒ RequestUnhook），不存在「面板关了还要靠放行保命」
+ *    的场景；真正的可用性由面板侧**与读数解耦的纯 WS 心跳**保证（读挂起不再拖垮心跳）。 */
 #define GATE_STALE_MS 3000
-/* 0 = 当前不是套索（禁止平滑）；1 = 是套索；2 = 未知（面板未开/读数失败，放行）。 */
+/* 0 = 当前不是套索（禁止平滑）；1 = 是套索（**唯一放行值**）；
+ * 2 = 未知（面板还没读到过）⇒ **阻断**，等首次成功读数（巡检 1s 一轮，最多盲 1 秒）。
+ * ⛔ 2026-10-14：2 从「放行」改为「阻断」。旧语义下「读数长期失败 + 冻结的旧值」
+ *    会把错误工具一直放行（用户报的问题 1）；而 ts==0（守护进程从未写过）时
+ *    CFG_I_ENABLED 必为 0，钩子并未工作，放行与否无实际效果，保留放行仅为语义清晰。 */
 static int tool_gate_ok(void)
 {
     if (!g_cfg) return 1;
-    LONG g = g_cfg[CFG_I_TOOLGATE];
-    if (g == 0) {
-        /* 只有「刚刷过的新鲜 0」才禁止；陈旧的 0 按未知放行（见上）。 */
-        DWORD ts = (DWORD)g_cfg[CFG_I_GATETS];
-        if (ts != 0 && (DWORD)(GetTickCount() - ts) <= GATE_STALE_MS) return 0;
-    }
-    return 1;                        /* 1=套索，2=未知，陈旧的 0 —— 三者都放行 */
+    DWORD ts = (DWORD)g_cfg[CFG_I_GATETS];
+    if (ts == 0) return 1;   /* 守护进程从未写过（此刻 CFG_I_ENABLED 必为 0，钩子并未工作） */
+    if ((DWORD)(GetTickCount() - ts) > GATE_STALE_MS) return 0;   /* ⛔ 过期 ⇒ 阻断 */
+    return g_cfg[CFG_I_TOOLGATE] == 1 ? 1 : 0;
 }
+
+/* 起笔闩锁：落笔瞬间的工具闸门裁决，**整笔持有**，笔起（接触消失）才释放。
+ * ⛔⛔ 为什么必须有：闸门的心跳在面板侧，批次间可能短暂过期或翻转 —— 若每批都现判，
+ *    一笔之中就会出现「这批判定放行、下一批阻断」的交替 ⇒ PS 收到一半原始坐标、
+ *    一半平滑坐标（选区末端忽而跟光标、忽而钉在圆心），正是用户报的
+ *    「平滑和 HUD 同时紊乱、圆心成了无根的点」的形态之一。
+ *    值域：-1=未闩（悬空/被阻断），0/1=起笔时的裁决。 */
+static volatile LONG g_strokeGate = -1;
 
 /* ================================================================== 标定状态 */
 typedef struct {
@@ -474,6 +489,54 @@ typedef struct {
 } CALIB;
 
 static CALIB g_calib;
+/* —— per-hCtx 标定布局缓存（⛔⛔ 2026-10-14 新增，问题 3 的根因修复）——
+ * 真机日志（jwwh-3376）实证：一场会话里 [calib] 块反复出现 ⇒ hCtx 频繁变更，
+ * 旧版每次变更都 tried=0/valid=0 + g_wasEnabled=0 ⇒
+ *   ① 重标定窗口里整批判定跳过 ⇒ PS 原样收到原始包（选区末端跟光标跑）；
+ *   ② 之后 g_wasEnabled=0 ⇒ 锚定复位（圆心瞬移、折线直连）；
+ *   ③ g_gateOk 残留 1 ⇒ HUD 还显示着旧几何 ⇒ 「平滑和 HUD 同时紊乱」。
+ * 同一设备的布局（stride/偏移/量程）不会因 hCtx 不同而不同 ⇒ 按句柄缓存布局，
+ * 命中即**零窗口**切换：不重标定、不清轨迹、不清接触判据。 */
+#define CTX_CACHE_MAX 4
+static struct {
+    HCTX h;
+    int  stride, offSerial, offX, offY;
+    u32  axisMax, axisMaxY;
+} g_ctxCache[CTX_CACHE_MAX];
+static int g_ctxCacheN;
+static int g_ctxCacheRound;
+/* 最近一次 hCtx 变更的 old→new（worker 在 [status] 行代打；detour 内禁止 I/O）。
+   ⛔ HCTX 是指针宽度 ⇒ 用 LONG_PTR 存，别截成 32 位。 */
+static volatile LONG_PTR g_ctxLastFrom, g_ctxLastTo;
+
+static int ctx_cache_find(HCTX h, CALIB* out)
+{
+    for (int i = 0; i < g_ctxCacheN; i++) {
+        if (g_ctxCache[i].h != h) continue;
+        memset(out, 0, sizeof(*out));
+        out->hCtx = g_ctxCache[i].h;
+        out->stride = g_ctxCache[i].stride; out->offSerial = g_ctxCache[i].offSerial;
+        out->offX = g_ctxCache[i].offX;     out->offY = g_ctxCache[i].offY;
+        out->axisMax = g_ctxCache[i].axisMax; out->axisMaxY = g_ctxCache[i].axisMaxY;
+        out->valid = 1;                      /* 能进缓存的只有验证过的布局 */
+        out->tried = 1;
+        return 1;
+    }
+    return 0;
+}
+
+static void ctx_cache_put(HCTX h, const CALIB* c)
+{
+    for (int i = 0; i < g_ctxCacheN; i++)
+        if (g_ctxCache[i].h == h) return;              /* 已在缓存 */
+    int slot;
+    if (g_ctxCacheN < CTX_CACHE_MAX) slot = g_ctxCacheN++;
+    else slot = g_ctxCacheRound++ % CTX_CACHE_MAX;     /* 环形覆盖最旧 */
+    g_ctxCache[slot].h = h;
+    g_ctxCache[slot].stride = c->stride; g_ctxCache[slot].offSerial = c->offSerial;
+    g_ctxCache[slot].offX = c->offX;     g_ctxCache[slot].offY = c->offY;
+    g_ctxCache[slot].axisMax = c->axisMax; g_ctxCache[slot].axisMaxY = c->axisMaxY;
+}
 static volatile LONG g_state = 0;          /* CFG_I_STATE 的镜像（供 worker 上报） */
 static volatile LONG g_calls, g_packets, g_smoothed;
 /* 本 DLL 自身的模块句柄（DllMain 传入）。⛔ HUD 注册窗口类必须用它 ——
@@ -554,6 +617,7 @@ typedef struct {
     int    done;        /* 是否已被**真实光标**标定过（1）；0 = 仍用标称兜底 */
     int    voteSign;    /* 最近一次投票的符号 */
     int    voteStreak;  /* 连续同号的次数 */
+    int    rejStreak;   /* 连续离群被丢弃的次数（配置真变 ⇒ 计满后整值作废重标） */
 } AXCAL;
 static AXCAL g_axCalX, g_axCalY;
 
@@ -646,9 +710,23 @@ static double px_y(void)
    ⛔ 符号的唯一权威来源就是这里（Δ光标/Δraw 自然带号），兜底一律中性（见 px_x/px_y）。
    ⛔ 符号要连续 SIGN_VOTE 次一致才采用：一次坏样本（复位跳变/批次时间戳抖动）就把
       符号锁反的话，EMA 得穿越 0 才纠正得回来，期间 HUD 一直镜像。 */
-#define AX_SAMPLE_MIN  40.0    /* 本轴原始位移下限（≈2~3 屏幕像素） */
-#define CUR_SAMPLE_MIN  3.0    /* 光标位移下限（像素） */
+/* ⛔⛔ 2026-10-14 第二轮稳健化（用户报「受力点与选区末端有几像素漂移」+
+   「绳在绷直态偶尔闪弯」）：[status] 实测 pxX 在 0.058~0.069 之间**波动 ±10%**。
+   比例波动 ±10% ⇒ HUD 偏移（=绳长像素）差 ±10% ⇒ 100px 绳差 10px（漂移）；
+   绷直边界 vlen=L 随比例抖动 ⇒ 绳身闪弯。根因是小位移样本的光标**量化噪声**：
+   旧 CUR_SAMPLE_MIN=3px 时 ±1px 的光标量化就是 ±33% 的样本噪声，且慢速运笔时
+   这类样本占比最高。三道闸：
+     ① 样本门限抬到 Δ光标≥10px（噪声占比 ≤±20%）；
+     ② EMA 权重按 Δ光标 加权（大位移可信度高，权重上限 0.3、下限 0.05）；
+     ③ 已收敛后相对偏差 >20% 的一律按离群丢弃（时间 skew 突发）；连续 24 个
+        离群才认定「设备/显示器配置真变了」，整值作废走重新投票。 */
+#define AX_SAMPLE_MIN  120.0   /* 本轴原始位移下限（≈8 屏幕像素，与①配套抬高） */
+#define CUR_SAMPLE_MIN 10.0    /* 光标位移下限（像素） */
 #define SIGN_VOTE       4
+#define CAL_EMA_BASE    0.05
+#define CAL_EMA_MAX     0.30
+#define CAL_OUTLIER_REL 0.20
+#define CAL_OUTLIER_N   24
 static void calib_axis(AXCAL* a, double dAx, double dCur)
 {
     if (dAx < AX_SAMPLE_MIN && dAx > -AX_SAMPLE_MIN) return;
@@ -664,11 +742,26 @@ static void calib_axis(AXCAL* a, double dAx, double dCur)
         if (a->voteStreak >= SIGN_VOTE) {
             a->px = r;
             a->done = 1;
+            a->rejStreak = 0;
             InterlockedExchange(&g_pxCalibrated, 1);
         }
         return;
     }
-    a->px = a->px * 0.8 + r * 0.2;
+    /* ③ 离群丢弃：相对已收敛值偏差过大 ⇒ 不采信（防止一次 skew 突发把比例拽歪） */
+    double rel = (r - a->px) / (a->px > 0 ? a->px : -a->px);
+    if (rel > CAL_OUTLIER_REL || rel < -CAL_OUTLIER_REL) {
+        if (++a->rejStreak >= CAL_OUTLIER_N) {
+            a->px = 0; a->done = 0; a->rejStreak = 0;   /* 配置真变了 ⇒ 从头再标 */
+            InterlockedExchange(&g_pxCalibrated, 0);
+        }
+        return;
+    }
+    a->rejStreak = 0;
+    /* ② 权重按光标位移走：10px 样本 w=0.05（基本不动），≥60px 样本 w=0.3 */
+    double w = dCur / 50.0;
+    if (w < CAL_EMA_BASE) w = CAL_EMA_BASE;
+    if (w > CAL_EMA_MAX) w = CAL_EMA_MAX;
+    a->px = a->px * (1.0 - w) + r * w;
     a->done = 1;
     InterlockedExchange(&g_pxCalibrated, 1);
 }
@@ -712,6 +805,20 @@ static double tau_from_strength(double t)
 static volatile LONG g_snRawX, g_snRawY;   /* 改写前的原始轴坐标 */
 static volatile LONG g_snOutX, g_snOutY;   /* 改写后的平滑轴坐标 */
 static volatile LONG g_snMs;               /* 最后一次取包的 GetTickCount() */
+/* 「前一个包」的原始坐标与时刻：渲染线程用它估原始速度，把 raw **外推**到当前帧
+ * 时刻 —— 消除「包时刻 vs GetCursorPos 时刻」的相位差（受力点漂移的根因之一）。 */
+static volatile LONG g_snPrevRawX, g_snPrevRawY;
+static volatile LONG g_snPrevMs;
+
+/** 统一发布快照（三处写点共用；先把旧值滚到 prev，再写新值）。 */
+static void sn_publish(LONG rX, LONG rY, LONG oX, LONG oY, LONG ms)
+{
+    g_snPrevRawX = g_snRawX; g_snPrevRawY = g_snRawY; g_snPrevMs = g_snMs;
+    g_snRawX = rX; g_snRawY = rY;
+    g_snOutX = oX; g_snOutY = oY;
+    g_snMs   = ms;
+    if (g_cfg) g_cfg[CFG_I_SNTS] = ms;   /* 面板「平滑中断」检测的数据源（见槽位注释） */
+}
 
 /* ---- P3.2 触发闸门：只在「工具是套索」且「笔尖接触画布」时才平滑 ----
  * ⛔ 用户的原话：「无论我选择什么工具，无论我是否按下处于绘制状态，只要我用数位笔
@@ -1073,6 +1180,22 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
         InterlockedExchange(&g_state, 2);
     }
 
+    if (ok) {
+        /* ⛔ 布局真的变了（与上一个已验证布局不同）⇒ 轨迹与接触判据作废；
+           同布局（hCtx 缓存未命中的同设备新句柄）⇒ 完全无缝，什么都不清。
+           ⛔ 这里替代了旧版「hCtx 一变就清一切」的行为（见 g_ctxCache 注释）。 */
+        static int s_layoutKnown;
+        static int s_lStride, s_lOffY;
+        if (s_layoutKnown && (s_lStride != g_calib.stride || s_lOffY != g_calib.offY)) {
+            g_wasEnabled = 0;                    /* 换布局 ⇒ 轨迹状态作废 */
+            g_ctN = 0; g_ctCur = -1; g_ctIdx = -1; g_ctUnknown = 0;
+        }
+        s_layoutKnown = 1;
+        s_lStride = g_calib.stride;
+        s_lOffY = g_calib.offY;
+        ctx_cache_put(hCtx, &g_calib);
+    }
+
     if (!ok) {
         /* 把原始字节留给 worker 落盘：手工一看就能定位 X/Y（下一版即可硬编码/修正） */
         int len = n * (haveScan ? sStride : 32);
@@ -1096,9 +1219,7 @@ static void snapshot_only(const u8* buf, int stride, int n, int ox_, int oy_)
     u32 vx, vy;
     memcpy(&vx, p + ox_, 4);
     memcpy(&vy, p + oy_, 4);
-    g_snRawX = (LONG)vx; g_snRawY = (LONG)vy;
-    g_snOutX = (LONG)vx; g_snOutY = (LONG)vy;
-    g_snMs   = (LONG)GetTickCount();
+    sn_publish((LONG)vx, (LONG)vy, (LONG)vx, (LONG)vy, (LONG)GetTickCount());
 }
 
 /* 返回**本批里坐标真正被改写的包数**（复位帧原值写回、无差异帧都不算）。
@@ -1108,16 +1229,30 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
 {
     /* ——— 标定（每个上下文一次；n>=2 即可做「序号逐包 +1」验证）——— */
     if (g_calib.hCtx != hCtx) {
-        if (g_calib.hCtx != 0) InterlockedIncrement(&g_hCtxChanges);
-        g_calib.hCtx = hCtx;
-        g_calib.tried = 0;
-        g_calib.attempts = 0;
-        g_calib.valid = 0;
-        g_calib.stride = 0;
-        g_calib.offSerial = g_calib.offX = g_calib.offY = -1;
-        g_wasEnabled = 0;                       /* 换上下文 ⇒ 轨迹状态作废 */
-        /* 接触判据的候选依赖 (offY, stride) ⇒ 必须等标定成功后才建（见下方 CT_BUILT） */
-        g_ctN = 0; g_ctCur = -1; g_ctIdx = -1; g_ctUnknown = 0;
+        CALIB cached;
+        if (g_calib.hCtx != 0) {
+            InterlockedIncrement(&g_hCtxChanges);
+            /* 64 位对齐宽度写在 x64 上本就原子，且只是诊断镜像（[status] 代打），
+               ⛔ 不用 InterlockedExchange：其 32 位重载会截断句柄（编译告警）。 */
+            g_ctxLastFrom = (LONG_PTR)g_calib.hCtx;
+            g_ctxLastTo = (LONG_PTR)hCtx;
+        }
+        if (ctx_cache_find(hCtx, &cached)) {
+            /* ⛔ 命中缓存：零窗口切换 —— 不重标定（没有原始包漏过去的窗口）、
+               不清轨迹（g_wasEnabled 保留 ⇒ 不触发锚定复位）、不清接触判据。 */
+            g_calib = cached;
+            g_calib.hCtx = hCtx;
+        } else {
+            g_calib.hCtx = hCtx;
+            g_calib.tried = 0;
+            g_calib.attempts = 0;
+            g_calib.valid = 0;
+            g_calib.stride = 0;
+            g_calib.offSerial = g_calib.offX = g_calib.offY = -1;
+            /* ⛔ 旧版在这里清 g_wasEnabled 与接触判据 ⇒ 每次 ctx 切换都锚定复位。
+               现在保留轨迹：布局若真变了，try_calibrate 成功后按「布局差异」清理
+               （见 CALIB_LAYOUT_CHANGED），同布局则完全无缝。 */
+        }
     }
     if (!g_calib.tried) {
         /* 盲扫「序号逐包 +1」要 n>=3 才不是巧合 ⇒ 证据不足就整批放过，等下一批。
@@ -1136,17 +1271,31 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
     /* 接触判据的候选表：依赖标定出的 (offY, stride) ⇒ 只在标定成功之后建一次 */
     if (g_ctN == 0) contact_candidates(oy_, S);
 
-    /* ——— 闸门 ①：工具必须是套索 ———
+    /* ——— 闸门 ①：工具必须是套索（**起笔闩锁**版，2026-10-14）———
      * ⚠️ 顺序要紧：**先判工具、后读接触场**。工具不是套索时整批直接放过，
      *    连压力字段都不去碰 —— 悬空移动时那些字段本来就没数据，
      *    让它们参与「候选证伪」只会把判据推向错误的字段。
+     * ⛔ 裁决时机：**悬空（上一批未接触）时现判并闩住；笔画进行中沿用闩锁**。
+     *    一笔之中闸门心跳的短暂过期/翻转不再把坐标流劈成「一半原始、一半平滑」。
+     *    笔起（接触消失）即解闩，下一笔重新裁决；面板总开关（CFG_I_ENABLED）
+     *    保持**实时**，不受闩锁影响 —— 用户关开关必须立即停。
      * ⚠️ 闸门不成立时**仍然刷新快照**：HUD 线程的「轴→像素比」标定靠
      *    g_snOutX/g_snMs，闸门一关就不再更新的话，标定会永远停在初值
      *    （这正是「关掉提示就再也不标定」那个旧 bug 的同构版本）。
      *    快照刷新是普通内存写，且**不改写缓冲区一个字节** ⇒ 迟滞感为零。 */
-    if (!tool_gate_ok() || !g_cfg[CFG_I_ENABLED]) {
+    LONG contactPrev = g_contact;
+    LONG latched = g_strokeGate;
+    int useGate;
+    if (contactPrev && latched == 1) {
+        useGate = g_cfg[CFG_I_ENABLED] ? 1 : 0;            /* 整笔持有工具裁决 */
+    } else {
+        /* 悬空 / 闩锁缺失（上一批被总开关或复位打断）⇒ 现判一次 */
+        useGate = (tool_gate_ok() && g_cfg[CFG_I_ENABLED]) ? 1 : 0;
+    }
+    if (!useGate) {
         g_wasEnabled = 0;
-        InterlockedExchange(&g_toolOk, 0);
+        InterlockedExchange(&g_strokeGate, -1);
+        InterlockedExchange(&g_toolOk, tool_gate_ok() ? 1 : 0);
         InterlockedExchange(&g_gateOk, 0);
         InterlockedExchange(&g_penDown, 0);
         snapshot_only((u8*)buf, S, n, ox_, oy_);
@@ -1162,10 +1311,12 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
     InterlockedExchange(&g_penDown, down);
     if (!down) {
         g_wasEnabled = 0;            /* 抬笔 ⇒ 下一笔重新起笔锚定 */
+        InterlockedExchange(&g_strokeGate, -1);   /* 笔起 ⇒ 解闩，下一笔重新裁决 */
         InterlockedExchange(&g_gateOk, 0);
         snapshot_only((const u8*)buf, S, n, ox_, oy_);   /* 同上：只刷快照，不改坐标 */
         return 0;
     }
+    InterlockedExchange(&g_strokeGate, 1);    /* 起笔 ⇒ 闩住整笔 */
     InterlockedExchange(&g_gateOk, 1);
 
     /* ——— 参数（全部从共享内存现读，调用方保证 g_cfg 非空）——— */
@@ -1232,9 +1383,7 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
             /* 复位帧也要把「原样」写回（值相同，统一路径便于核对） */
             u32 nx = (u32)g_ox, ny = (u32)g_oy;
             memcpy(p + ox_, &nx, 4); memcpy(p + oy_, &ny, 4);
-            g_snRawX = (LONG)rawX; g_snRawY = (LONG)rawY;
-            g_snOutX = (LONG)nx;   g_snOutY = (LONG)ny;
-            g_snMs = (LONG)now;
+            sn_publish((LONG)rawX, (LONG)rawY, (LONG)nx, (LONG)ny, (LONG)now);
             continue;
         }
 
@@ -1353,9 +1502,7 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
         if (wx != rawX || wy != rawY) changed++;
 
         /* HUD 快照（普通内存写，detour 内零系统调用） */
-        g_snRawX = (LONG)rawX; g_snRawY = (LONG)rawY;
-        g_snOutX = (LONG)wx;   g_snOutY = (LONG)wy;
-        g_snMs = (LONG)now;
+        sn_publish((LONG)rawX, (LONG)rawY, (LONG)wx, (LONG)wy, (LONG)now);
     }
     return changed;
 }
@@ -1618,6 +1765,11 @@ static DWORD WINAPI worker(LPVOID param)
                 if (cmd == 2) { do_unhook(); InterlockedExchange(&g_state, 3); }
                 else if (cmd == 1) {
                     if (!g_patched) do_install();
+                    /* 重挂 = 顺带确保 HUD 渲染线程活着（幂等 + 探活，见 hud_start）。
+                       ⛔ 2026-10-14：旧版只在 worker 启动时 hud_start 一次，线程若在
+                       「已卸载」期间死掉，此后再重挂也不会重建它 —— 用户看到的就是
+                       「平滑恢复了，HUD 就是不显示」。 */
+                    hud_start();
                     /* 重挂 = 重新给一次标定机会（标定结果只认当期数据）。
                        ⛔ 旧版写 `valid ? 1 : 2`：从未标定过（valid=0）也被判成
                        **标定失败**（红色），而其实只是「还没拿到足够证据」。
@@ -1643,12 +1795,14 @@ static DWORD WINAPI worker(LPVOID param)
                      =0 时是兜底（不含方向信息），别当成结论。 */
             logf("# [status] state=%ld calls=%ld packets=%ld smoothed=%ld calib=%s "
                  "stride=%d offX=%d offY=%d axMax=%u pxX=%.4f pxY=%.4f calX=%ld calY=%ld "
-                 "rst=%ld/%ld/%ld lastGap=%ldms\n",
+                 "rst=%ld/%ld/%ld lastGap=%ldms ctxN=%ld last=0x%lX->0x%lX\n",
                  (long)g_state, (long)g_calls, (long)g_packets, (long)g_smoothed,
                  g_calib.valid ? "OK" : "否", g_calib.stride, g_calib.offX, g_calib.offY,
                  g_calib.axisMax, px_x(), px_y(),
                  (long)g_axCalX.done, (long)g_axCalY.done,
-                 (long)g_rstAnchor, (long)g_rstGap, (long)g_rstJump, (long)g_lastGapMs);
+                 (long)g_rstAnchor, (long)g_rstGap, (long)g_rstJump, (long)g_lastGapMs,
+                 (long)g_hCtxChanges,
+                 (unsigned long)(LONG_PTR)g_ctxLastFrom, (unsigned long)(LONG_PTR)g_ctxLastTo);
         }
     }
 
@@ -1705,13 +1859,44 @@ static DWORD WINAPI worker(LPVOID param)
    若只看 HUD_IDLE_MS，用户一停笔圆就消失、一动又在复位后的位置冒出来。
    只要闸门（工具对 + 笔尖接触）还成立，就再撑这么久。 */
 #define HUD_HOLD_MS  3000
-#define HUD_FRAME_MS 16      /* ~60Hz */
+/* ⛔⛔ 2026-10-14：16 → 8ms（~60Hz → ~120Hz）。
+   用户报「拖动稍快，圆心与受力点就分离」。间距的主要来源是**帧间隔**
+   （HUD 是轮询渲染，笔画以包率前进，圆心最多滞后一帧）⇒ 帧间隔减半、
+   滞后距离减半。⚠️ 降帧必须同时改等待方式才有意义：Sleep(N) 的粒度是
+   系统时钟 tick（默认 15.6ms），Sleep(8) 实际仍睡 ~15.6ms ⇒ 必须用
+   waitable timer（100ns due time，见 hud_frame_wait）。 */
+#define HUD_FRAME_MS 8
 #define HUD_CLASS    L"JWautofillWintabHUD"
 
 static HANDLE        g_hudThread;
 static DWORD        g_hudTid;
+/* 绳身「已绷直」的渲染侧状态（滞回死区用；仅渲染线程读写）。
+   g_ropeLowMs = 最近一次跌破「解除绷直阈值」的帧时刻（0 = 未在低位）。 */
+static int          g_ropeTaut;
+static DWORD        g_ropeLowMs;
 static volatile LONG g_hudStop;
 static volatile LONG g_hudRunning;
+
+/**
+ * 帧等待：可等待定时器（kernel32，**不需要**为 timeBeginPeriod 链 winmm）。
+ *
+ * ⛔ 为什么不能直接用 Sleep(HUD_FRAME_MS)：Sleep 的粒度是系统时钟 tick
+ *    （默认 15.6ms）⇒ Sleep(8) 实际睡 ~15.6ms，把 HUD_FRAME_MS 从 16 调到 8
+ *    完全无效。waitable timer 的 due time 是 100ns 单位，等待精度 ~1ms，
+ *    120Hz 帧率才真正成立（见 HUD_FRAME_MS 注释）。
+ *    定时器创建失败时退回 Sleep，功能不中断。
+ */
+static void hud_frame_wait(HANDLE timer)
+{
+    if (!timer) { Sleep(HUD_FRAME_MS); return; }
+    LARGE_INTEGER due;
+    due.QuadPart = -(LONGLONG)HUD_FRAME_MS * 10000;   /* 相对时间，100ns 单位 */
+    if (SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) {
+        WaitForSingleObject(timer, INFINITE);
+    } else {
+        Sleep(HUD_FRAME_MS);
+    }
+}
 
 static LRESULT CALLBACK hud_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
@@ -1775,6 +1960,8 @@ static DWORD WINAPI hud_thread(LPVOID param)
     int haveLast = 0;
     /* 「HUD 为什么没显示」的节流时间戳（见下方诊断日志）。 */
     DWORD lastHudWhy = 0;
+    /* 帧定时器（一次性、自动复位）：见 hud_frame_wait。 */
+    HANDLE frameTimer = CreateWaitableTimerW(NULL, FALSE, NULL);
 
     while (!g_hudStop) {
         MSG msg;
@@ -1800,6 +1987,30 @@ static DWORD WINAPI hud_thread(LPVOID param)
            不重复判一次（判据写两遍，漂移一次就再也对不上）。 */
         int gateOk = (g_toolOk && g_penDown) ? 1 : 0;
 
+        /* —— 一致快照 + 同刻光标（2026-10-14，用户报「拖动稍快，圆心与受力点分离」）——
+           ⛔⛔ 快照的 4 个坐标字段由 detour 在**包线程**逐个写（热路径不加锁），
+              本线程直接读可能拿到「新 rawX + 旧 outX」的撕裂组合；更隐蔽的是
+              GetCursorPos 与快照读取之间隔着整个可见性判断 ⇒ 光标（新）与旧快照
+              配对。两种混搭都会让 rx/ry 偏离真实偏移，圆心（= 光标 − 偏移）
+              于是不再等于这一刻的受力点。
+           ⇒ 策略：① 前后两遍读快照、按值全等才算一致视图（两个包数据完全相同时
+              一致性天然成立）；② GetCursorPos 紧贴一致快照之后读，保证
+              「偏移 ↔ 光标」同刻；③ 重试设上界，绝不自旋。 */
+        LONG snRawX = g_snRawX, snRawY = g_snRawY, snOutX = g_snOutX, snOutY = g_snOutY;
+        LONG snMs = g_snMs, snPrevMs = g_snPrevMs;
+        LONG snPrevRawX = g_snPrevRawX, snPrevRawY = g_snPrevRawY;
+        for (int snapTry = 0; snapTry < 8; snapTry++) {
+            LONG a0 = g_snRawX, a1 = g_snRawY, a2 = g_snOutX, a3 = g_snOutY;
+            LONG a4 = g_snMs, a5 = g_snPrevMs, a6 = g_snPrevRawX, a7 = g_snPrevRawY;
+            LONG b0 = g_snRawX, b1 = g_snRawY, b2 = g_snOutX, b3 = g_snOutY;
+            LONG b4 = g_snMs, b5 = g_snPrevMs, b6 = g_snPrevRawX, b7 = g_snPrevRawY;
+            if (a0 == b0 && a1 == b1 && a2 == b2 && a3 == b3
+             && a4 == b4 && a5 == b5 && a6 == b6 && a7 == b7) {
+                snRawX = a0; snRawY = a1; snOutX = a2; snOutY = a3;
+                snMs = a4; snPrevMs = a5; snPrevRawX = a6; snPrevRawY = a7;
+                break;
+            }
+        }
         POINT cur;
         GetCursorPos(&cur);
         /* ⛔⛔ 标定分母必须用**原始轴**（不是输出轴）：
@@ -1817,7 +2028,22 @@ static DWORD WINAPI hud_thread(LPVOID param)
               只是**现象示意**、并非真实截图 ⇒ 该量化证据作废，不得再引用。
              本段结论的**真正**依据是：[calib] 日志给出 lcInExtX=44800 / lcInExtY=29600，
               两轴量程确实不同；且 CXO_SYSTEM 由驱动侧移动光标是 Wintab 的既定行为。 */
-        double axX = (double)g_snRawX, axY = (double)g_snRawY;
+        /* ⛔⛔ 光标外推（2026-10-14，问题 2「受力点与选区末端有几像素漂移」）：
+           快照里的 raw 是「最后一个包」的时刻，GetCursorPos 是**这一帧**的时刻；
+           高速运笔时两者差出一个包-帧相位差 ⇒ 偏移差 v·Δt（500px/s、半帧 4ms
+           就是 2px）。用前两个包估原始速度，把 raw 外推到当前帧时刻，
+           「偏移 ↔ 光标」两端才真正同刻。限幅 40ms（超过视为停笔，不外推）。 */
+        double axX = (double)snRawX, axY = (double)snRawY;
+        {
+            LONG pktDt = snMs - snPrevMs;
+            DWORD age = (DWORD)(now - (DWORD)snMs);
+            if (pktDt >= 1 && age >= 1 && age <= 40) {
+                double vX = ((double)snRawX - (double)snPrevRawX) / (double)pktDt;
+                double vY = ((double)snRawY - (double)snPrevRawY) / (double)pktDt;
+                axX += vX * (double)age;
+                axY += vY * (double)age;
+            }
+        }
 
         /* —— 标定：**逐轴带符号**的 Δ光标 / Δ原始轴 ——
            ⛔ 必须独立于 HUD 显隐：旧版这段在 `!wantVisible` 的 continue 之后，
@@ -1876,7 +2102,7 @@ static DWORD WINAPI hud_thread(LPVOID param)
                      wnd ? 1 : 0, mem ? 1 : 0, activeNow, (unsigned long)pktAge, gateOk,
                      (long)g_toolOk, (long)g_penDown, ropeMode, (long)hf);
             }
-            Sleep(HUD_FRAME_MS);
+            hud_frame_wait(frameTimer);
             continue;
         }
 
@@ -1894,8 +2120,11 @@ static DWORD WINAPI hud_thread(LPVOID param)
               那些截图只是**现象示意**、并非真实截图 ⇒ 该量化结论作废，不得再引用。
              逐轴换算的**真正**依据是 [calib] 日志的 lcInExtX/lcInExtY（见 px_x/px_y 注释）。
            ⛔ 偏移逐轴换算；**符号不在此处假设**，由 calib_axis() 实测（见 px_y 注释）。 */
-        int rx = (int)(((double)g_snRawX - (double)g_snOutX) * px_x());
-        int ry = (int)(((double)g_snRawY - (double)g_snOutY) * px_y());
+        /* ⛔ 偏移用**外推后**的原始轴（axX/axY，见上）：选区末端（输出点）与光标
+           必须同刻比较，否则高速运笔时受力点看着差几像素。
+           偏移逐轴换算；**符号不在此处假设**，由 calib_axis() 实测（见 px_y 注释）。 */
+        int rx = (int)((axX - (double)snOutX) * px_x());
+        int ry = (int)((axY - (double)snOutY) * px_y());
         LONG c  = g_cfg[CFG_I_HUDCOLOR];
         COLORREF col = RGB((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
 
@@ -1926,15 +2155,33 @@ static DWORD WINAPI hud_thread(LPVOID param)
                     · 光标在圈内 ⇒ 绳是**松弛的曲线**；
                     · 光标到圈上 ⇒ 绳**被拉直** —— 这个「由松到直」的过程正是
                       「描边末端被绳子牵着前进」的手感来源。
-               ⇒ 统一细线（2px）+ 二次贝塞尔。垂度取**小垂度悬链线**：
+               ⇒ 统一细线 + 二次贝塞尔。垂度取**小垂度悬链线**：
                    sag = sqrt(3·(L−d)·d / 8)，L = 绳长(= 圆周半径)、d = 两端距离。
                    d → L 时 sag → 0 ⇒ 自然拉直，不需要写特判分支。
-                   d 很小时 sag 也 → 0（绳没有长度可言），同样无需特判。 */
+                   d 很小时 sag 也 → 0（绳没有长度可言），同样无需特判。
+               ⛔ 2026-10-14：2px → **1px**（用户原话「悬链线不稳定，拖动时会产生
+                  鬼畜的抽动，请把悬链线改成1px」）。除线宽减半外，帧间一致性
+                  改造（一致快照 + 120Hz 帧）同时压掉了 d 的帧间抖动 ——
+                   sag 对 d 的敏感度在绷紧附近极高，d 抖一下绳身就抽一下。 */
             const int NSEG = 24;
             double vx = (double)rx, vy = (double)ry;
             double vlen = dsqrt_(vx * vx + vy * vy);
+            /* ⛔⛔ 绷直判据必须带**滞回死区**（2026-10-14，用户报的「绳在绷直与
+               轻微弯曲之间跳变」；本轮复现为「绷直态偶尔闪弯」）。两道防线：
+               ① 阈值改**相对值**：用户半径已拉到 100px，旧的固定 6px 只有 6%，
+                  比例噪声 ±2% 就能穿越；改为「掉到 85% 绳长以下才解除绷直」。
+               ② 时间滞回：解除绷直需持续低于阈值 90ms —— 单帧的方向反转
+                  （拐角处 raw 朝圆心回摆是物理事实）不再点亮悬链。
+               ⛔ 只改**渲染**，不改平滑语义（平滑侧的定长约束不动）。 */
+            if (vlen >= (double)leashPx - 2.0) { g_ropeTaut = 1; g_ropeLowMs = 0; }
+            else if (vlen < (double)leashPx * 0.85) {
+                if (g_ropeLowMs == 0) g_ropeLowMs = now;
+                else if (now - g_ropeLowMs >= 90) g_ropeTaut = 0;
+            } else {
+                g_ropeLowMs = 0;
+            }
             double sag = 0.0;
-            if (vlen > 0.5 && vlen < (double)leashPx) {
+            if (!g_ropeTaut && vlen > 0.5 && vlen < (double)leashPx) {
                 double slackLen = (double)leashPx - vlen;
                 sag = dsqrt_(3.0 * slackLen * vlen / 8.0);
             }
@@ -1954,7 +2201,7 @@ static DWORD WINAPI hud_thread(LPVOID param)
                     cqy = my + ny * (2.0 * sag);
                 }
             }
-            HPEN sp = CreatePen(PS_SOLID, 2, col);
+            HPEN sp = CreatePen(PS_SOLID, 1, col);
             HPEN so = (HPEN)SelectObject(mem, sp);
             int pvx = half, pvy = half;
             for (int i = 1; i <= NSEG; i++) {
@@ -1969,11 +2216,16 @@ static DWORD WINAPI hud_thread(LPVOID param)
             SelectObject(mem, so);
             DeleteObject(sp);
         }
-        if (hf & 4) {                     /* 笔尖点：恰好落在系统光标（原始笔尖）上 */
+        if (hf & 4) {                     /* 笔尖点：落在**受力点**（= 窗口中心 = 圆心）上 */
+            /* ⛔⛔ 2026-10-14 移位（用户约定术语）：【施力点】= 套索光标所在端点，
+               【受力点】= 选区末端点，且「受力点与圆心必须始终重合」。
+               旧版把洋红点画在 half+rx/ry（= 光标 = 施力点），与上述约定相反；
+               窗口本身钉在「绘制点」上（见下方 SetWindowPos），窗口中心 half
+               正是受力点 ⇒ 点画在 half 即同时满足「在受力点」「与圆心重合」。 */
             int r = 3;
             HBRUSH fb = CreateSolidBrush(col);
             HBRUSH ob = (HBRUSH)SelectObject(mem, fb);
-            Ellipse(mem, half + rx - r, half + ry - r, half + rx + r, half + ry + r);
+            Ellipse(mem, half - r, half - r, half + r, half + r);
             SelectObject(mem, ob);
             DeleteObject(fb);
         }
@@ -1989,9 +2241,10 @@ static DWORD WINAPI hud_thread(LPVOID param)
         HDC dc = GetDC(wnd);
         if (dc) { BitBlt(dc, 0, 0, HUD_SIZE, HUD_SIZE, mem, 0, 0, SRCCOPY); ReleaseDC(wnd, dc); }
 
-        Sleep(HUD_FRAME_MS);
+        hud_frame_wait(frameTimer);
     }
 
+    if (frameTimer) { CloseHandle(frameTimer); frameTimer = NULL; }
     if (wnd) { DestroyWindow(wnd); wnd = NULL; }
     if (mem) { DeleteDC(mem); mem = NULL; }
     if (dib) { DeleteObject(dib); dib = NULL; }
@@ -2000,10 +2253,25 @@ static DWORD WINAPI hud_thread(LPVOID param)
     return 0;
 }
 
-/** 启动渲染线程（幂等）。只由 worker 调 —— ⛔ 不能从 DllMain 建窗（loader lock）。 */
+/**
+ * 启动渲染线程（幂等 + **活性检查**）。只由 worker 调 —— ⛔ 不能从 DllMain 建窗（loader lock）。
+ *
+ * ⛔⛔ 2026-10-14（用户报「有时只能恢复平滑功能，HUD 不能恢复显示」）：
+ *    旧版只判 `g_hudThread` 非空即返回。可线程若已死（建窗异常退出、被外部终止），
+ *    句柄仍然非空 ⇒ hud_start 永远不再重建 ⇒ 平滑恢复了而 HUD 永久消失。
+ *    现在用 GetExitCodeThread 探活：已死的句柄先 CloseHandle 回收再重建。
+ *    ⚠️ STILL_ACTIVE = 259：退出码恰好等于 259 的「正常退出」会被误判成存活 —— 可接受，
+ *       渲染线程只可能返回 0，且误判的后果仅是一次不重建（与旧版相同）。
+ */
 static void hud_start(void)
 {
-    if (g_hudThread) return;
+    if (g_hudThread) {
+        DWORD code = 0;
+        if (GetExitCodeThread(g_hudThread, &code) && code == STILL_ACTIVE) return;
+        CloseHandle(g_hudThread);          /* 已死：回收句柄后再建 */
+        g_hudThread = NULL;
+        g_hudTid = 0;
+    }
     InterlockedExchange(&g_hudStop, 0);
     InterlockedExchange(&g_hudRunning, 1);
     g_hudThread = CreateThread(NULL, 0, hud_thread, NULL, 0, &g_hudTid);

@@ -9,6 +9,15 @@ const dist = path.join(__dirname, 'dist');
 
 function createConfig(mode, entry, output, plugins) {
     return {
+        // ⛔⛔ 2026-10-14（用户终端报 `Watchpack Error (stats): EINVAL: invalid argument,
+        //    lstat 'C:\pagefile.sys'`）：把构建上下文**钉死**在本目录。
+        //    不设时 context = process.cwd()：若 watch 是从 C: 盘上的目录启动的
+        //    （例如 home 目录），enhanced-resolve 的 node_modules 祖先链会从那里
+        //    一路走到**驱动器根 C:\**，Watchpack 随即对根目录 readdir + lstat，
+        //    Administrator 令牌下 lstat pagefile.sys 直接抛 EINVAL（Node 22.17+/24
+        //    仍存在的上游问题；本项目目录 F:\Coding\JWautofill 内实测 15 分钟 0 复现，
+        //    触发点就在启动时的 cwd）。钉死后祖先链只在本仓库所在盘上行走。
+        context: __dirname,
         entry,
         module: {
             rules: [
@@ -39,6 +48,20 @@ function createConfig(mode, entry, output, plugins) {
         path: path.resolve(__dirname, 'dist'),
         filename: 'bundle.js',
         publicPath: './' // 手动设置 publicPath
+        },
+
+        // watch 排除：双保险（即使将来有人从别的 cwd 启动，也不让 watch 范围越过
+        // 项目边界去 stat 驱动器根的特殊文件）。
+        // ⚠️ webpack schema 的 watchOptions.ignored 只接受「单个 RegExp」或「glob 字符串
+        //    数组」（RegExp 数组会被 schema 拒收），而 Watchpack 测试前会把路径里的
+        //    反斜杠统一成正斜杠 ⇒ 用**一个组合 RegExp**、按正斜杠书写。
+        //    覆盖面：① 驱动器根（C:/ F:/ /）—— 根目录 readdir 会列出 pagefile.sys 等
+        //    特殊文件，Administrator 令牌下 lstat 它们直接抛 EINVAL；② 已知会在 lstat
+        //    时抛 EINVAL 的根级特殊文件（按文件名兜底，无论落在哪盘）。
+        watchOptions: {
+            // ⚠️ 第一个分支的 `$` 不能丢：少了它，`^(?:[A-Za-z]:)?\/` 会匹配**每一个**
+            //    Windows 绝对路径（都以 `X:/` 开头）⇒ 整个 watch 被静默关掉。
+            ignored: /^(?:[A-Za-z]:)?\/$|[\/](?:pagefile|hiberfil|swapfile)\.sys$|[\/]DumpStack\.log\.tmp$|[\/]System Volume Information[\/]/i,
         },
 
         plugins,

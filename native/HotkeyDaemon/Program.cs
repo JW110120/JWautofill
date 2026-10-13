@@ -98,7 +98,10 @@ namespace JWautofillDaemon
                           I_CTUNKNOWN = 32,
                           // P3.3：Y 轴分量的「轴→像素」比（**带符号**）。C 侧新增槽位只能
                           // 往后追加 —— 中间插一个就会让后面所有槽整体错位（错位不报错）。
-                          I_PXPERAXISY = 33;
+                          I_PXPERAXISY = 33,
+                          // P3.4（2026-10-14）：DLL 回写的「最后一次快照发布时刻」。
+                          // packets 在涨而它不动 = 断流（标定丢失等），面板据此提示「平滑中断」。
+                          I_SNTS = 34;
 
         /// <summary>
         /// 笔（套索平滑）通路的参数面 —— 与面板「平滑选项」的参数同源同语义。
@@ -116,12 +119,13 @@ namespace JWautofillDaemon
             public int CornerAngle = 45;
             public int Flags = 1;         // bit0 = 速度自适应
             public int Hud = 3;           // bit0=leash 线 bit1=绳长圆 bit2=笔尖点
-            public int HudColor = 0xFF00FF;   // 品红，与 PS 画笔绳线同色
+            public int HudColor = 0xE07F0D;   // 橙（#E07F0D），2026-10-14 用户要求与 PS 原生洋红区分
 
             /// <summary>
-            /// 工具闸门：0 = 当前不是套索（禁止平滑），1 = 是套索，2 = 未知/读数失败（放行）。
-            /// ⚠️ 由面板 300ms 巡检写入。DLL 侧只用 0 与非 0 区分，
-            ///    「读不到工具」绝不能当成「不是套索」—— 那会把平滑整个关掉。
+            /// 工具闸门：0 = 当前不是套索（禁止平滑），1 = 是套索（唯一放行值），
+            /// 2 = 未知/读数失败（2026-10-14 起阻断，等待首次成功读数；面板另有纯 WS 心跳续期）。
+            /// ⚠️ 由面板巡检写入。「读不到工具」绝不能当成「不是套索」由面板改写成 0 ——
+            ///    那会把平滑整个关掉；面板读失败时沿用上次判定。
             /// </summary>
             public int ToolGate = 2;
         }
@@ -382,7 +386,9 @@ namespace JWautofillDaemon
             HealIfUnhooked();
         }
 
-        /// <summary>hook 自愈：功能是开的、也已注入，但 DLL 报「已卸载(3)」⇒ 重新下发挂载命令。</summary>
+        /// <summary>
+        /// hook 自愈：功能是开的、也已注入，但 DLL 停在「没在工作」的状态 ⇒ 重新下发挂载命令。
+        /// </summary>
         /// <remarks>
         /// ⛔ 为什么必须有它（2026-10-13 用户报「平滑时有时无，切换模式后要反复开关才恢复」）：
         ///    `cmd=2`（卸载）除了「用户关开关」之外，还有两条通路会发：
@@ -392,24 +398,57 @@ namespace JWautofillDaemon
         ///    以为一切正常（_enabled 仍为 true），于是表现成「开关是开的、界面也不报错、
         ///    可就是没有平滑」。用户只能靠反复开关去撞那条 cmd=1。
         ///    这里让守护进程每轮巡检（<see cref="WatchPhotoshop"/> 每 3 秒）自己发现并修复。
+        ///
+        /// ⛔⛔ 2026-10-14 扩面（用户报「刚加载插件时平滑/HUD 不生效」）：除 state=3 外，
+        ///    「state=0 且从未取到包」同样是「没在工作」—— 注入时 Wintab32.dll 尚未就绪、
+        ///    install 失败、或面板重载后从未重放过开关，都会停在这个状态且**没有第二条
+        ///    通路能救它**（worker 启动时只 do_install 一次，失败不重试；面板重载后
+        ///    penOn=false 也不会重发 penSmooth）。cmd=1 会重试 do_install 并重新给标定机会。
+        ///
         /// ⚠️ 只在 _enabled 为真时才自愈：正常关闭时 Set(on:false) 会先把 _enabled 置假，
         ///    因此绝不会把用户主动关掉的平滑又拉起来。
+        /// ⚠️ state=0 的自愈**只在 calls==0 时补**：取到过包而后停笔是正常现象，
+        ///    此时发 cmd=1 会重置正在进行的标定（用户连续运笔时甚至可能永远标不完）。
+        /// ⚠️ state=0 的自愈**有限次**（ZERO_HEAL_MAX）：用户 simply 没运笔时
+        ///    不该被无限重试刷屏；取到过包或状态转正即自动恢复预算。
         /// ⚠️ state==4（入口被旧 DLL 的转发桩占着）**不自愈**：那需要重启 Photoshop，
         ///    反复发 cmd=1 只会刷日志。它由面板状态条如实提示。
+        /// ⚠️ state==2（标定失败）也不自愈：面板已明示「标定失败」，重复 cmd=1 只是
+        ///    掩盖真实故障；用户切换一次开关即可重新标定。
         /// </remarks>
         public static void HealIfUnhooked()
         {
             if (!_enabled || _va == null) return;
-            if (Rd(I_STATE) != 3) return;
+            long now = Environment.TickCount64;
             // 冷却 2 秒：penSmooth 会被面板以 ~12 次/秒的节流推来，
             // 若重挂失败（例如 PS 正要退出）不加冷却会把日志与命令通道刷爆。
-            long now = Environment.TickCount64;
             if (now - _lastHealAt < 2000) return;
-            _lastHealAt = now;
-            Console.WriteLine(LogPrefix + "检测到钩子已卸载但功能仍为开启 —— 自动重新挂载");
-            SendCommand(1);
+            int st = Rd(I_STATE);
+            if (st == 3)
+            {
+                _lastHealAt = now;
+                _zeroHealTries = 0;
+                Console.WriteLine(LogPrefix + "检测到钩子已卸载但功能仍为开启 —— 自动重新挂载");
+                SendCommand(1);
+                return;
+            }
+            if (st == 0 && Rd(I_CALLS) == 0)
+            {
+                if (_zeroHealTries >= ZERO_HEAL_MAX) return;
+                _zeroHealTries++;
+                _lastHealAt = now;
+                Console.WriteLine(LogPrefix + "平滑已开启但尚未取到任何笔尖包（state=0）—— 重新挂载（第 "
+                                  + _zeroHealTries + "/" + ZERO_HEAL_MAX + " 次）");
+                SendCommand(1);
+                return;
+            }
+            // 1（生效）/ 2（标定失败）/ 4（入口被占）都不自愈；健康 ⇒ 清零上面的重试预算
+            if (st != 0 || Rd(I_CALLS) > 0) _zeroHealTries = 0;
         }
         private static long _lastHealAt;
+        /// <summary>state=0 且从未取包时的最大重挂次数（防止「用户没运笔」被无限重试）。</summary>
+        private const int ZERO_HEAL_MAX = 5;
+        private static int _zeroHealTries;
 
         /// <summary>请求 PS 侧的 hook 还原代码段（幂等）。关闭服务/卸载/退出前调用。</summary>
         public static void RequestUnhook(int timeoutMs = 1500)
@@ -466,6 +505,13 @@ namespace JWautofillDaemon
                 calls = Rd(I_CALLS),
                 packets = Rd(I_PACKETS),
                 smoothed = Rd(I_SMOOTHED),
+                // 「快照年龄」(ms)：now − DLL 最后一次发布快照的时刻。
+                // ⛔ 判读：正常 ≤几十 ms；停笔时与 packets 年龄同步增长（正常）；
+                //    **packets 在涨而它 >2s** = 断流（标定丢失/改写被跳过）⇒ 面板提示「平滑中断」。
+                //    -1 = DLL 从未发布过（旧版 DLL / 尚未取到包）。
+                snAge = Rd(I_SNTS) == 0
+                    ? -1
+                    : Math.Max(0, unchecked((int)Environment.TickCount) - Rd(I_SNTS)),
                 stride = Rd(I_STRIDE),
                 offX = Rd(I_OFFX),
                 offY = Rd(I_OFFY),
@@ -2449,8 +2495,27 @@ namespace JWautofillDaemon
 
                 lock (_clientsLock) _clients.Add(client);
 
-                // 连接后推送当前配置
-                SendConfigToClient(client);
+                // ⛔ 这里**绝不**主动推送配置（2026-10-14 修复，用户报「配置路径不一致」告警）：
+                //    面板 onopen 里的序列是「await resolveConfigPath() → setConfigPath → getConfig」，
+                //    首条 setConfigPath 是**异步**到达的（getDataFolder() 有延迟）。握手后立刻推送，
+                //    首帧携带的是默认路径（%LOCALAPPDATA%\JWautofill\hotkeys.json）而非面板指定的
+                //    PluginData 路径 ⇒ 面板判出不一致、告警并重发 setConfigPath；更糟的是该帧 payload
+                //    通常是空/旧配置 ⇒ ensureMainToggleEntry 按「首次使用」补 Ctrl+Q ⇒ pushConfig 被
+                //    canPersistConfig 护栏拦截 ⇒ 第二条「已跳过本次落盘」告警，用户在窗口期内的改动
+                //    还会被随后到达的修正帧静默覆盖。
+                //    面板本就会显式发 getConfig 请求配置，删除此推送不丢任何信息；
+                //    setConfigPath 命中路径变化时 SetConfigPath→ReloadConfig→BroadcastConfig 会广播，
+                //    对齐后的配置帧必然到达。
+#if ROLE_SMOOTH
+                // ⛔ 客户端连上 ⇒ 立刻补一次注入巡检（2026-10-14，用户报「刚加载插件时
+                //    平滑不生效、HUD 不显示，要反复操作才有机会恢复」）。
+                //    成因：面板重载后 penOn 初值 false ⇒ resendLassoSmoothing 不重放
+                //    penSmooth；而 WatchPhotoshop 的**第一轮**要先睡满 3 秒才巡检 ⇒ 这 3 秒
+                //    里即便守护进程是开着的也不注入/挂载 —— 正是「加载初期不稳定」的窗口。
+                //    SyncInjection 内部对 !_enabled 早退（关闭态零成本），末尾自带 HealIfUnhooked。
+                //    ⚠️ 必须 Task.Run：注入要做进程枚举 + 远线程注入，直接内联会堵住本客户的读循环。
+                _ = Task.Run(() => { try { PenHook.SyncInjection(); } catch { /* 巡检失败由下 3s 后的轮次兜底 */ } });
+#endif
 
                 // 监听入站帧（客户端→服务端必然 masked）
                 while (true)
