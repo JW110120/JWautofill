@@ -1,0 +1,164 @@
+# 高频 modal scope 来源清单（2026-10-13）
+
+> 现象：UXP 控制台 `[蒙版同步] 收到事件: set` 后紧跟红色 `821 Too many modal scope commands`。
+> 判读：这是 UXP **内部计数器告警**，不是宿主报错框。它统计 `core.executeAsModal`
+> 的调用频次。红色 ⇒ 短时间内模态命令过密。本文档列出全部产生点与量级。
+
+## 量级换算（先立尺子）
+
+| 动作 | 模态作用域数 | 宿主 get 次数 |
+| --- | --- | --- |
+| `psTryRead` / `psRead`（`psAccess.ts`） | 1 | 回调内全部 |
+| `probeHostIdle`（空模态，只拿锁） | 1 | **0** |
+| `refreshLayerSnapshot()` 冷读（N 层树） | 1 | ≈ 5N |
+| `buildLayerTree()` | 1 + 2×ceil(N/40) | 5N + 2N |
+| `syncTask()` 一次完整同步 | 1 | 全文档像素 + 蒙版 |
+| `pollDocIdentity` / `pollQuickMask` / `pollToolChange` 各一轮 | 1 | 1~2 |
+
+`MIN_MODAL_GAP_MS = 300`（`psAccess.ts`）只约束**本模块的读**；写路径与
+`runAsModal` 直调不受约束。
+
+---
+
+## 一、蒙版同步引擎（`MaskSyncEngine.ts`）— 本次主要修复对象
+
+### 修复前的浪费（无任何任务时）
+
+每条 `set` 事件走完 **4 个模态作用域**才走到「没任务」短路：
+
+1. `scheduleSync` → `refreshActiveDoc()` → `psTryRead` = 1
+2. `doTimedSync` → `psRead(app.activeDocument)` = 1
+3. `doTimedSync` → `refreshActiveDoc()` = 1（**与第 1 步读同一件事**）
+4. `doTimedSync` → `checkUndoGate` → `readActiveHistoryId` = 1
+5. → 才执行 `if (list.length === 0) return`
+
+2s 兜底轮询再重复一遍这 4 个。`set` 是最高频事件（画一笔、改一个滑块、
+拖一次选区各一条），于是「一个任务都没有」反而是模态命令最密的状态。
+
+### 已实施的修复
+
+| 位置 | 措施 |
+| --- | --- |
+| `handleNotification` | 全局无任务时，只在**文档级事件**（open/close/save/切文档）唤醒身份刷新；普通事件直接 return |
+| `doTimedSync` ① | 全局无任务 → **0 次读取**短路，排在所有 `psRead` 之前 |
+| `doTimedSync` ② | 当前文档无任务 → 只做身份跟踪，跳过历史指针/结构/像素 |
+| `doTimedSync` ③ | 有任务但无「启用且配置完整」的任务 → 只跑 `reconcileStructureIfNeeded()`，跳过取文档 + 读历史 + 像素比对 |
+| `doTimedSync` 顺序 | 「取活动文档」与 `refreshActiveDoc` **两读合一**（都读 id+name），`d` 延后到真的要跑像素同步时才取 |
+| `startPolling` | 节奏随空闲态切换：有任务 2s / 无任务 6s |
+| `addTask`/`updateTask`/`removeTask` | 调 `syncPollingCadence()`，新建任务立刻拉回 2s、删空立刻放缓 |
+
+**净效果**：无任务稳态下，每条 `set` 的模态作用域 **4 → 0**；轮询 2→6s。
+
+⚠️ 为什么空闲态仍保留身份跟踪（1 次模态作用域）：面板状态条要显示文档名，
+且 `addTask()` 用文档名做持久化键 —— 判错会把任务存到上一个文档名下（功能性 bug）。
+
+---
+
+## 二、线稿参考下拉（`AdjustmentPanel.tsx`）— 本次已修复
+
+### 触发来源
+
+`addPsNotificationListeners` 注册 **全部 20 个**事件名
+（`PS_NOTIF_EVENTS`），回调对**每一条**通知都执行
+`invalidateLayerSnapshot()` + `scheduleRefresh()` → `refreshLineReferenceOptions()`
+→ `refreshLayerSnapshot()`。
+
+### 高频原因（两个缺陷叠加）
+
+1. **打脏无条件**：`invalidateLayerSnapshot()` 对包括纯选区 `set` 在内的所有事件
+   都调用 ⇒ 快照每次都被判脏。
+2. **读取无 maxAge**：`refreshLineReferenceOptions` 里的 `refreshLayerSnapshot()`
+   **没有传 maxAgeMs** ⇒ 不走缓存复用，每次事件都真做一次全树遍历。
+
+⇒ 每条 `set` = **1 个模态作用域 + ≈5N 次宿主往返**（N=300 ⇒ ≈1500 次）。
+`scheduleStructureProbe` 里那句 `if (!isLayerSnapshotDirty()) return` 的守卫，
+因为上一行刚把快照打脏而**永远为真**，形同虚设。
+
+### 已实施的修复
+
+- 打脏/刷新收窄为**仅结构事件**：`make`/`delete`/`move`/`rename`、文档级事件、
+  以及 `shouldInvalidateLayerInfo` 判定为真的 `set`（target 含 layer/document/channel）。
+  纯选区 `set`、`clearEvent`、切图层/通道的 `select` → **不打脏、不刷新**。
+- `Select` 加 `onOpen={refreshLineReferenceOptions}`：**用户展开下拉的那一刻
+  一定拿到最新数据**，时效性由交互保证而非后台轮询。
+
+**净效果**：稳态下 `set` 事件对该下拉的模态作用域 **1 → 0**。
+
+---
+
+## 三、蒙版同步面板侧文件树刷新（`AdjustmentPanel.tsx`）
+
+### 触发来源
+
+独立 effect 注册 `make`/`delete`/`set`/`rename`/`move` **5 个**事件
+（`AdjustmentPanel.tsx:1138`），防抖 300ms 后跑 `refreshMaskSyncAndReconcile()`。
+
+### 高频原因
+
+`refreshMaskSyncOptions()` → `refreshLayerSnapshot()`（1 个模态作用域 + 5N 次 get）
++ `maskSyncEngine.buildLayerTree()`（再 + 2×ceil(N/40) 个模态作用域 /
+`fetchLayerNamesByIds` 与 `fillUserMaskFlags` 各一批 batchPlay）。
+
+零任务时这一切**全部无意义**：面板只渲染「点击 + 新建同步任务」一行，没有任何下拉。
+
+### 已实施的修复
+
+`refreshMaskSyncAndReconcile()` 开头加 `if (!maskSyncEngine.hasAnyTask()) return;`。
+⚠️ 只挡通知驱动这条通路；用户点开下拉的 `onOpen` 仍走 `refreshMaskSyncOptions`，行为不变。
+
+---
+
+## 四、仍存在的高频项（未改动，供后续处置决策）
+
+### A. `set` 事件 → `handleSelectionChange` → 填充（`app.tsx:1672`）
+- **触发**：主开关开启时的每条选区 `set`（`channel`/`selection`）。
+- **成本**：整条填充链路，模态作用域按分支数从 1 到十余个不等，另有全文档像素读写。
+- **判定**：**用户主动功能，不是浪费**。已有 `isFilling` 同步锁 + `pendingSelection`
+  合并连续事件、`fillReadyRemain()` 私有 60ms 冷却。不建议动。
+
+### B. `app.tsx` `pollDocIdentity`（500ms，`DOC_WATCH_INTERVAL_MS`）
+- **触发**：无条件常驻，**每 500ms 一次** `psTryRead` = 1 个模态作用域。
+- **原因**：它是文档级事件的兜底通路 —— 万一某宿主版本不派发 `open`/`close`，
+  只有它能发现文档换了。
+- **判定**：**正确性通路，不宜简单停掉**。若要降频，方向是「文档级事件正常时
+  放宽轮询、事件缺失时才加密」，而不是固定 500ms。
+
+### C. `app.tsx` `pollQuickMask`（300ms）
+- **触发**：`fillOptionsVisible && isExpanded` 时常驻。
+- **成本**：每轮 1 个模态作用域（`doc.id` + `quickMaskMode`）。
+- **判定**：已按可见性启停，属合理轮询。若面板长期展开，300ms 可放宽到 500ms。
+
+### D. `app.tsx` `pollToolChange`（300ms）
+- **触发**：`isEnabled && autoOffOnOtherTool`（「切到其它工具即关」开启时）。
+- **成本**：每轮 1 个模态作用域（`getSelectedBrushToolEnum` + `app.currentTool`）。
+- **判定**：已按开关启停。300ms 偏激进，可考虑 500ms。
+
+### E. 三个子面板的 `checkMaskModes` 监听（`PatternPicker` / `GradientPicker` / `ColorSettingsPanel`）
+- **触发**：各自 `addPsNotificationListeners` 注册全部 20 个事件；
+  effect 依赖 `[isOpen]`，**面板一开就挂**。
+- **成本**：每条通知一次 `debouncePsProbe` → `checkMaskModes()` →
+  `LayerInfoHandler.getActiveLayerInfo()` → `psRead` = 1 个模态作用域。
+  有 300ms TTL 缓存，纯选区 `set` 不打脏 ⇒ 多数命中缓存。
+- **放大机制**：三个面板**同时打开**时，1 条通知 ⇒ 3 次探测调用（缓存共享，
+  但调度点有 3 个）。历史上曾因 `removeNotificationListener` 引用不匹配
+  导致监听器泄漏、回调随开合次数累加（`psAccess.ts:184-226` 已用 WeakMap 修复）。
+- **判定**：可考虑把「mask/通道状态」收敛为**一个共享订阅者**（发布-订阅），
+  而不是每个子面板各挂一份。改动面较大，需评估。
+
+### F. `BrushHotkeySection` / `FuncHotkeyPanel` 的守护进程轮询
+- `MainToggleBus` / `FillPanelToggleBus` / `FocusModeBus` 各有 `setInterval`
+  轮询共享文件。这些是**文件系统** IO，不进 `executeAsModal` ⇒
+  **不计入本告警**，但会占主线程。
+
+---
+
+## 优先级建议
+
+| 优先级 | 项 | 理由 |
+| --- | --- | --- |
+| ✅ 已修 | 蒙版同步引擎（4 → 0） | 零任务时纯浪费，且 `set` 频率最高 |
+| ✅ 已修 | 线稿参考下拉（1 → 0） | 每条 `set` 一次全树遍历，N 越大越痛 |
+| ✅ 已修 | 蒙版同步面板侧刷新 | 零任务时 buildLayerTree 全套无意义 |
+| 🔶 待评估 | E（三子面板各自挂监听） | 结构性收敛，收益随「常开子面板数」放大 |
+| 🔶 待评估 | B / C / D 轮询间隔 | 低风险微调，需权衡「切文档发现延迟」 |
+| ⛔ 不动 | A（选区填充） | 用户主动功能 |

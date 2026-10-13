@@ -1,5 +1,5 @@
 import { app, action, imaging } from 'photoshop';
-import { isPsBusy, markPsBusyForEvent, runWhenIdle } from './psProbe';
+import { isDocLevelDescriptor, isPsBusy, markPsBusyForEvent, runWhenIdle } from './psProbe';
 import {
   refreshLayerSnapshot, invalidateLayerSnapshot, LayerSnapshotEntry
 } from './layerTreeSnapshot';
@@ -167,6 +167,19 @@ const POLL_INTERVAL_MS = 2000; // 兜底轮询（更及时）
 const SYNC_MIN_INTERVAL_MS = 150; // 同一任务两次同步的最小间隔（防止抖动）
 
 /**
+ * 「全局无任务」状态下的兜底轮询间隔（毫秒）。
+ *
+ * ⚠️ 为什么需要两档节奏（2026-10-13）：无任务时引擎无事可做，但**仍必须跟踪
+ * 「当前是哪个文档」**——① 面板状态条要显示文档名；② `addTask()` 用文档名做持久化键，
+ * 判错就会把任务存到上一个文档名下（功能性 bug，不是显示问题）。
+ * 文档身份只能靠 `refreshActiveDoc()` 得知，而它是**一次 psTryRead = 一个模态作用域**。
+ * ⇒ 有任务时 2s 一轮；全局无任务时放宽到 6s 一轮，把稳态的模态命令数降到 1/3。
+ * 真正的时效性由「文档级事件」保证（见 `handleNotification` 的空闲分支），
+ * 所以文档切换仍然即时，轮询只是兜底。
+ */
+const IDLE_POLL_INTERVAL_MS = 6000;
+
+/**
  * PS 忙碌窗口守卫时长（毫秒）。
  *
  * PS 的通知在命令执行【中途】派发，此时读文档（app.activeDocument / doc.layers /
@@ -219,6 +232,56 @@ export class MaskSyncEngine {
   private lastNotifLogAt = 0; // 事件日志节流
 
   private constructor() {}
+
+  // ================= 空闲态（无任何同步任务） =================
+  //
+  // 现象（2026-10-13 用户报障）：一个蒙版同步任务都没有时，引擎仍在每条 PS 通知
+  // （`set` 最密集——画一笔/改一个参数就是一条）上跑完整条链路：
+  //   refreshActiveDoc（1 次 psTryRead = 1 个模态作用域）
+  //   → doTimedSync → psRead(app.activeDocument)（1 个）
+  //   → refreshActiveDoc（1 个）
+  //   → checkUndoGate → readActiveHistoryId（1 个）
+  //   → 之后才走到 `list.length === 0` 的短路返回。
+  // ⇒ 每个 `set` 事件白烧 4 个模态作用域，2s 轮询再白烧 4 个。
+  // UXP 内部计数器（"Too many modal scope commands"）就是这么累加上去的。
+  //
+  // 判据分两级，短路点必须放在**任何受保护读取之前**：
+  //   · hasAnyTask()  —— 全局（任意文档）是否存在任务。false ⇒ 引擎完全停摆：
+  //     不查文档、不查历史、不查结构，只有「文档级事件」才唤醒一次身份刷新
+  //     （因为面板要显示文档名、addTask 要用文档名做键，见 IDLE_POLL_INTERVAL_MS）。
+  //   · 当前文档无任务 ⇒ 保留身份跟踪，但跳过结构签名 / reconcile / syncAll。
+  //
+  // ⚠️ 「零任务」不等于「卸载」：`init()`/`dispose()` 的 refCount 语义、面板订阅、
+  //   `+` 新建任务后的自动恢复都不受影响（`addTask` 会重新拉高轮询频率）。
+
+  /** 全局（任意文档）是否存在至少一个同步任务。零 IPC。 */
+  hasAnyTask(): boolean {
+    if (!this.persistedLoaded) return false;
+    for (const key of Object.keys(this.persisted)) {
+      const list = this.persisted[key];
+      if (list && list.length > 0) return true;
+    }
+    return false;
+  }
+
+  /** 当前文档是否存在「启用且配置完整」的任务（真正需要跑同步的那些）。零 IPC。 */
+  private hasRunnableTask(): boolean {
+    const list = this.persisted[this.currentDocKey] || [];
+    return list.some(t => t.enabled && t.sampleLayerId && t.targetLayerId && t.channel);
+  }
+
+  /**
+   * 按当前空闲/忙碌状态重建兜底轮询的节奏。
+   * 只在「有/无任务」发生翻转时真正重启定时器，平时是零成本调用。
+   */
+  private syncPollingCadence(): void {
+    const wantIdle = !this.hasAnyTask();
+    const wantInterval = wantIdle ? IDLE_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
+    if (this.pollTimer && this.pollInterval === wantInterval) return;
+    this.startPolling();
+  }
+
+  private pollInterval = 0;
 
   // ================= 对外 API =================
 
@@ -321,6 +384,9 @@ export class MaskSyncEngine {
     };
     list.push(task);
     await this.save(list, key);
+    // ⚠️ 2026-10-13：新建任务 ⇒ 全局从「空闲」转为「有任务」，必须立刻把兜底轮询
+    //    拉回 2s 节奏，否则新任务要等最多 6s 才被第一次兜底扫描到。
+    this.syncPollingCadence();
     this.notify();
     return { ...task };
   }
@@ -330,6 +396,7 @@ export class MaskSyncEngine {
     const key = this.currentDocKey;
     const list = (this.persisted[key] || []).map(t => (t.id === task.id ? { ...task } : t));
     await this.save(list, key);
+    this.syncPollingCadence();
     // 任务配置变化：立即尝试同步一次（若启用且引用完整、通道已选）
     if (task.enabled && task.sampleLayerId && task.targetLayerId && task.channel) {
       this.scheduleSync(0);
@@ -342,6 +409,8 @@ export class MaskSyncEngine {
     const key = this.currentDocKey;
     const list = (this.persisted[key] || []).filter(t => t.id !== id);
     await this.save(list, key);
+    // ⚠️ 2026-10-13：删掉最后一个任务 ⇒ 转入空闲态，轮询放宽到 6s、事件驱动停摆。
+    this.syncPollingCadence();
     this.notify();
   }
 
@@ -1213,6 +1282,19 @@ export class MaskSyncEngine {
       if (shouldInvalidateLayerInfo(evt, descriptor)) {
         invalidateLayerInfoCache();
       }
+      // ===== 空闲短路（2026-10-13）=====
+      // 全局一个任务都没有 ⇒ 除「文档身份」外，本引擎没有任何事可做。
+      // 而文档身份只需要在**文档级事件**（open/close/save/切文档）时刷新一次：
+      // ① 面板状态条要显示当前文档名；② addTask() 用文档名做持久化键，
+      //    判错会把任务存到上一个文档名下。普通事件（set/select/make/delete…）
+      //    不改变「当前是哪个文档」，此时跑 refreshActiveDoc 纯属白烧模态作用域。
+      // ⇒ 稳态下（无任务）每条 `set` 的模态命令数：4 → 0。
+      if (!this.hasAnyTask()) {
+        if (isDocLevelDescriptor(evt, descriptor)) {
+          this.scheduleSync(SYNC_DEBOUNCE_MS, true);
+        }
+        return;
+      }
       // make/delete 会改变图层结构，需要重建文件树上下文（重解析引用）
       if (evt === 'make' || evt === 'delete') {
         this.scheduleSync(SYNC_DEBOUNCE_MS, true);
@@ -1271,6 +1353,13 @@ export class MaskSyncEngine {
    * ⚠️ 忙碌闸门：这里读 app.activeDocument / 图层树快照都会向宿主发 get。
    * 事件与轮询都可能在 PS 忙碌窗口内抵达本函数，故统一在此收口：
    * 忙碌则顺延到下一轮（不硬闯），从根上杜绝宿主「命令"获取"当前不可用」弹框。
+   *
+   * ⚠️⚠️ 成本顺序铁律（2026-10-13）：**所有 psRead / refreshLayerSnapshot 之前
+   * 必须先做完两级短路判定**。旧实现把 `list.length === 0` 放在四个受保护读取
+   * 之后（refreshActiveDoc ×2 + 取活动文档 + 读历史 id），于是「一个任务都没有」
+   * 这个最常见状态反而每条 `set` 事件白烧 4 个模态作用域 —— UXP 的
+   * "Too many modal scope commands" 计数器就是这么涨上来的。
+   * 现在：① 全局无任务 → 0 次读取；② 当前文档无任务 → 只做身份跟踪。
    */
   private async doTimedSync(): Promise<void> {
     try {
@@ -1278,6 +1367,14 @@ export class MaskSyncEngine {
         // 顺延下一轮而非硬闯。这里【不能】由调用方先 markPsBusy 再调本函数——
         // 那样本函数的守卫会拦下自己，导致同步永远不执行（自锁）。
         this.scheduleSync(SYNC_DEBOUNCE_MS);
+        return;
+      }
+      // ===== ① 全局空闲短路：任何文档都没有任务 ⇒ 本引擎无事可做 =====
+      // 文档身份由调用方负责（轮询 tick 与 scheduleSync 的 checkDocFirst 分支
+      // 都会先 refreshActiveDoc；空闲态下另有文档级事件唤醒 + 慢轮询兜底），
+      // 因此这里**一个受保护读取都不发**。
+      if (!this.hasAnyTask()) {
+        this.notify();
         return;
       }
       // ⚠️ 2026-10-08：这里原先会 `markPsBusy(POLL_BUSY_GUARD_MS)`（为自己预留
@@ -1289,55 +1386,39 @@ export class MaskSyncEngine {
       // ⚠️ 第三轮：**取文档对象本身也必须受保护**。裸读 `app.activeDocument`
       //    在宿主忙碌期同样是一次原生「命令"获取"当前不可用」弹框 —— 2s 兜底轮询
       //    会无条件走到这里，是「打开大文档期间连环弹框」的又一个来源。
-      const d = await psRead<any>(() => app.activeDocument, { label: '取活动文档', retries: 0 });
-      if (!d) return;
+      // ⚠️ 2026-10-13：身份刷新提到「取活动文档」之前、且只在**全局有任务**时发生。
+      //    旧顺序是「取活动文档 → refreshActiveDoc」两读同一件事（都读 id+name），
+      //    现合并为一次；`d` 留到确实要跑像素同步时再取。
       await this.refreshActiveDoc();
-      // 撤回门控：用户正在 Ctrl+Z 时不要同步，否则会不断产生新的「蒙版同步」
-      // 历史步，把用户永远挡在自己的操作之外。
-      if (await this.checkUndoGate(d) === 'skip') {
-        this.notify();
-        return;
-      }
       const key = this.currentDocKey;
       const list = this.persisted[key] || [];
       // ⚠️ 性能（2026-10-06）：本轮若既没有任务、也没有任务带图层路径，
       // 则下面所有工作（结构签名 + reconcile + syncAll）都是无意义的。
       // 而结构签名在旧实现里是一次全树遍历（≈3N 次同步 IPC），由 2s 轮询
       // 无条件触发 —— 大量图层时它是主线程卡顿的主要来源。
-      // 「当前文档一个蒙版同步任务都没有」是最常见状态，直接短路返回。
+      // ⚠️ 2026-10-13：本短路从「四个受保护读取之后」提前到此，撤回门控
+      //    （readActiveHistoryId，1 次模态作用域）也一并在它后面。
       if (list.length === 0) {
         this.notify();
         return;
       }
-      const hasPaths = list.some(t => (
-        (t.sampleLayerPath && t.sampleLayerPath.length) ||
-        (t.targetLayerPath && t.targetLayerPath.length)
-      ));
-      // 仅当确实存在按路径解析的需求时才取结构签名。
-      // ⚠️ 性能（2026-10-06）：这里原先调用私有的 docSignature()，而它是
-      // 「每次都自己遍历整棵图层树、逐层读 id/kind/name」（≈3N 次同步宿主 IPC），
-      // 由 2 秒兜底轮询无条件触发 —— 大量图层时每 2 秒就有上千次同步 IPC
-      // 阻塞主线程，用户点折叠标题时 click 排在后面，表现为「点击无响应」。
-      // 现在统一读共享快照（layerTreeSnapshot）：
-      //   · 与 AdjustmentPanel 的结构探针、选项构建、buildLayerTree 共用同一次遍历；
-      //   · 传 maxAgeMs=POLL_INTERVAL_MS ⇒ 结构未变时直接吃缓存，稳态零遍历；
-      //   · PS 通知到达时由 invalidateLayerSnapshot() 打脏标记（纯内存、零 IPC），
-      //     故事件驱动的时效性完全不受 maxAge 影响。
-      if (hasPaths) {
-        // ⚠️ 第三轮：改用**受保护**的 refreshLayerSnapshot（遍历在模态作用域内）。
-        // 同步的 getLayerSnapshot 现在只在持有「宿主可读租约」时才遍历，本函数
-        // 走的是 2s 兜底轮询，不能指望租约 —— 用同步版会永远吃到旧签名，
-        // reconcile 再也不会被触发。
-        const snap = await refreshLayerSnapshot(POLL_INTERVAL_MS);
-        const sig = snap ? snap.signature : 'none';
-        if (sig !== this.lastDocSignature) {
-          this.lastDocSignature = sig;
-          // 把刚读到的快照条目传下去：reconcileTasks 内的 buildLayerTree
-          // 直接复用，不再重复走一次取快照的流程。
-          const changed = await this.reconcileTasks(undefined, snap?.entries);
-          if (changed) this.notify();
-        }
+      // ===== ③ 有任务但没有一个「启用且配置完整」⇒ 只维护引用，不跑像素同步 =====
+      // 典型场景：任务建好但还没选完样本/通道/目标。此时读历史指针、跑 syncAll
+      // 的逐任务判定都是白费；而结构签名/reconcile 仍需要（用户正在配置中）。
+      if (!this.hasRunnableTask()) {
+        await this.reconcileStructureIfNeeded();
+        this.notify();
+        return;
       }
+      const d = await psRead<any>(() => app.activeDocument, { label: '取活动文档', retries: 0 });
+      if (!d) return;
+      // 撤回门控：用户正在 Ctrl+Z 时不要同步，否则会不断产生新的「蒙版同步」
+      // 历史步，把用户永远挡在自己的操作之外。
+      if (await this.checkUndoGate(d) === 'skip') {
+        this.notify();
+        return;
+      }
+      await this.reconcileStructureIfNeeded();
       const wrote = await this.syncAll(d);
       if (wrote > 0) {
         // 引擎刚刚产生了一条「蒙版同步」历史：把它记录为已知的活动状态，
@@ -1351,8 +1432,53 @@ export class MaskSyncEngine {
     }
   }
 
+  /**
+   * 结构签名变化时重解析任务里失效的图层引用（文档重开后 layerId 会变）。
+   *
+   * ⚠️ 为什么从 `doTimedSync` 里拆出来（2026-10-13）：「是否需要 reconcile 结构」
+   * 与「是否需要跑像素同步」是**两个独立判据**。用户配置任务期间（任务已建、
+   * 样本/通道/目标还没选完 ⇒ `hasRunnableTask()` 为假），旧实现把两者绑在一起，
+   * 于是「建了任务没启用」也要付「全树遍历 + 2×ceil(N/40) 次 batchPlay」的代价。
+   * 拆开后：没启用 ⇒ 只付 reconcile 的必要成本，跳过取文档 + 读历史 + 像素比对。
+   */
+  private async reconcileStructureIfNeeded(): Promise<void> {
+    const list = this.persisted[this.currentDocKey] || [];
+    // 仅当确实存在按路径解析的需求时才取结构签名。
+    // ⚠️ 性能（2026-10-06）：这里原先调用私有的 docSignature()，而它是
+    // 「每次都自己遍历整棵图层树、逐层读 id/kind/name」（≈3N 次同步宿主 IPC），
+    // 由 2 秒兜底轮询无条件触发 —— 大量图层时每 2 秒就有上千次同步 IPC
+    // 阻塞主线程，用户点折叠标题时 click 排在后面，表现为「点击无响应」。
+    // 现在统一读共享快照（layerTreeSnapshot）：
+    //   · 与 AdjustmentPanel 的结构探针、选项构建、buildLayerTree 共用同一次遍历；
+    //   · 传 maxAgeMs=POLL_INTERVAL_MS ⇒ 结构未变时直接吃缓存，稳态零遍历；
+    //   · PS 通知到达时由 invalidateLayerSnapshot() 打脏标记（纯内存、零 IPC），
+    //     故事件驱动的时效性完全不受 maxAge 影响。
+    const hasPaths = list.some(t => (
+      (t.sampleLayerPath && t.sampleLayerPath.length) ||
+      (t.targetLayerPath && t.targetLayerPath.length)
+    ));
+    if (!hasPaths) return;
+    // ⚠️ 第三轮：改用**受保护**的 refreshLayerSnapshot（遍历在 executeAsModal 内）。
+    // 同步的 getLayerSnapshot 现在只在持有「宿主可读租约」时才遍历，本函数
+    // 走的是 2s 兜底轮询，不能指望租约 —— 用同步版会永远吃到旧签名，
+    // reconcile 再也不会被触发。
+    const snap = await refreshLayerSnapshot(POLL_INTERVAL_MS);
+    const sig = snap ? snap.signature : 'none';
+    if (sig === this.lastDocSignature) return;
+    this.lastDocSignature = sig;
+    // 把刚读到的快照条目传下去：reconcileTasks 内的 buildLayerTree
+    // 直接复用，不再重复走一次取快照的流程。
+    const changed = await this.reconcileTasks(undefined, snap?.entries);
+    if (changed) this.notify();
+  }
+
   private startPolling(): void {
     if (this.pollTimer) clearInterval(this.pollTimer);
+    // ⚠️ 2026-10-13：空闲态（有任务? 2s : 6s）。全局无任务时唯一还需要轮询的
+    //    理由是「跟踪当前文档身份」（面板状态条显示文档名、addTask 用它做键）。
+    //    文档切换的时效性由文档级事件保证，轮询只是兜底 ⇒ 可以放心放宽。
+    const interval = this.hasAnyTask() ? POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS;
+    this.pollInterval = interval;
     this.pollTimer = setInterval(() => {
       // ⚠️ 忙碌闸门：轮询 tick 与用户的删除/新建操作**完全异步**，无论事件防抖
       // 做得多好，只要 tick 落在 PS 的忙碌窗口内，refreshActiveDoc/doTimedSync
@@ -1380,7 +1506,7 @@ export class MaskSyncEngine {
           this.doTimedSync();
         } catch {}
       })();
-    }, POLL_INTERVAL_MS);
+    }, interval);
   }
 
   private notify(): void {

@@ -31,8 +31,9 @@ import Select from '../components/Select';
 import ToggleSwitch from '../components/ToggleSwitch';
 import { helpTexts } from '../constants/helpTexts';
 import { useLabelDrag } from '../utils/useLabelDrag';
-import { debouncePsProbe, markPsBusyForEvent, isPsBusy, psBusyRemain, runWhenIdle } from '../utils/psProbe';
+import { debouncePsProbe, isDocLevelDescriptor, markPsBusyForEvent, isPsBusy, psBusyRemain, runWhenIdle } from '../utils/psProbe';
 import { addPsNotificationListeners, removePsNotificationListeners, runAsModal } from '../utils/psAccess';
+import { shouldInvalidateLayerInfo } from '../utils/LayerInfoHandler';
 import {
   getLayerSnapshot,
   refreshLayerSnapshot,
@@ -669,18 +670,38 @@ useEffect(() => {
             scheduleRefresh();
         }
     }, PROBE_IDLE_MS);
+    // ⚠️ 2026-10-13：**只有「图层结构/名称可能变了」的事件才允许重建文件树**。
+    //    旧实现对**每一条**通知（含最高频的选区 `set` —— 画一笔、改一个滑块就是一条）
+    //    都调 `invalidateLayerSnapshot()` + `scheduleRefresh()`，而
+    //    `refreshLineReferenceOptions` 里的 `refreshLayerSnapshot()` **没有传 maxAge**
+    //    ⇒ 快照每次都被判脏 ⇒ 每次事件都真做一次全树遍历
+    //    （`traverseNow` 在模态作用域内逐层读 5 个属性，N=300 ⇒ ≈1500 次 get）。
+    //    ⇒「每条 set 事件 = 1 个模态作用域 + 1500 次宿主往返」，
+    //    UXP 的 "Too many modal scope commands" 计数器由此累加。
+    //
+    //    判据用「会不会改变图层树/图层名」而不是「事件名」：
+    //      · make/delete/move/rename 等结构事件          ⇒ 必须刷新
+    //      · set 且 target 里有 layer/document/channel  ⇒ 改名/属性改可能走这条路
+    //        （复用 `shouldInvalidateLayerInfo` 的同一口径，它已排除纯选区 set）
+    //      · 文档级（open/close/save/切文档）            ⇒ 必须刷新
+    //      · 纯选区 set / clearEvent / 切图层通道 select ⇒ 结构未变，**不刷新**
+    //    时效性由 `Select` 的 `onOpen` 兜底：用户真正展开下拉的那一刻一定拿到最新数据。
     const handleNotification = (eventName?: any, descriptor?: any) => {
         const evt = typeof eventName === 'string' ? eventName : '';
-        // make/delete 必然改变图层结构，直接排一次刷新；
-        // 其余事件（set/select/clearEvent）才需要读签名对比，且同样推迟到空闲后。
         // ⚠️ 切文档（select + _ref:'document'）用更长的忙碌窗口，见 psProbe。
         markPsBusyForEvent(evt, descriptor);
+        const structural =
+            evt === 'make' || evt === 'delete' || evt === 'move' || evt === 'rename' ||
+            isDocLevelDescriptor(evt, descriptor) ||
+            shouldInvalidateLayerInfo(evt, descriptor);
+        if (!structural) return;
         // 纯内存标记（零 IPC），可在通知回调里安全调用。
         invalidateLayerSnapshot();
         scheduleRefresh();
-        if (evt === 'set' || evt === 'select' || evt === 'clearEvent') {
-            scheduleStructureProbe();
-        }
+        // 结构类事件无需再等签名对比：已经确定变了，直接排刷新即可。
+        // （保留 scheduleStructureProbe 的调用点是安全的 —— 快照刚被打脏，
+        //  它的 isLayerSnapshotDirty() 守卫必然放行，防抖会合并成一次。）
+        scheduleStructureProbe();
     };
     addPsNotificationListeners(handleNotification);
     return () => {
@@ -1060,6 +1081,15 @@ const refreshMaskSyncOptions = async (): Promise<LayerTreeEntry[] | null> => {
  * 否则它会**再遍历一次图层树 + 再跑两轮 batchPlay**（大量图层时这笔开销很大）。
  */
 const refreshMaskSyncAndReconcile = async () => {
+  // ⚠️ 2026-10-13 空闲短路：一个任务都没有时，下拉里没有任何东西要显示
+  //    （`maskSyncTasks.length === 0` ⇒ 面板只渲染「点击 + 新建同步任务」），
+  //    而 refreshMaskSyncOptions 的成本是 **1 次全树遍历（模态作用域内 ≈5N 次 get）
+  //    + buildLayerTree 的 2×ceil(N/40) 次受保护 batchPlay**。
+  //    通知驱动的刷新原本无条件跑它 ⇒ 每条 make/delete/set/rename/move
+  //    都白烧这一整套。这正是「Too many modal scope commands」的主要来源之一。
+  //    ⚠️ 只挡「通知驱动」这一条通路；用户点开下拉的 onOpen 仍走
+  //    refreshMaskSyncOptions（那里需要真实数据），行为不变。
+  if (!maskSyncEngine.hasAnyTask()) return;
   const tree = await refreshMaskSyncOptions();
   maskSyncEngine.reconcileTasks(tree || undefined).then(changed => {
     if (changed) {
@@ -3804,6 +3834,11 @@ const renderQuickActionContent = () => (
         <Select
           value={lineReferenceLayerId ? String(lineReferenceLayerId) : 'auto'}
           onChange={handleLineReferenceSelect}
+          // ⚠️ 2026-10-13：展开时才刷新文件树。通知驱动已收窄为「仅结构事件」
+          //    （见上方 handleNotification 的注释），选中项的**显示名**在两次
+          //    结构变更之间仍可能过期（图层改名会派发 rename，其实已覆盖；
+          //    这里再补一道保险）—— 用户展开的那一刻一定是最新数据。
+          onOpen={refreshLineReferenceOptions}
           placeholder=""
           options={lineReferenceSelectOptions}
           showCheck
