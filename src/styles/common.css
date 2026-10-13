@@ -2058,3 +2058,21 @@ sp-radio[disabled] {
 .collapse-section.drop-target {
   border: 2px dashed var(--primary-color);
 }
+
+/* ---------- 平滑参数盒（.border-panel-section.smooth-params）----------
+   平滑选项的参数区改用全仓统一的「带描边分区盒」= .border-panel-section
+   （原先自带一套 .param-group 的 margin/padding/border，与其它分区的视觉语言分叉）。
+
+   盒与上方自绘 radio（.radio-trio-group）之间**恒 10px**：.radio-trio-group 自身
+   无外边距、.border-panel-section 也只设了 margin-bottom ⇒ 默认间距为 0，
+   这里用 margin-top 补齐（2026-10-13 用户要求）。
+
+   本规则只做两件事：
+   ① 盒与上方 radio 的间距 = 10px（margin-top）；
+   ② 把首行的上外边距、末行的下外边距归零。
+   .row-between 自带 `margin: 10px auto`、.border-panel-section 自带 `padding: 10px`，
+   两者叠加会让描边到第一个参数变成 20px；归零后恰好 10px（用户要求的上下间距）。
+   ⛔ 只在本盒作用域内归零，不动 .border-panel-section 的全局行为。 */
+.smooth-params { margin-top: 10px; }
+.smooth-params > .row-between:first-child { margin-top: 0; }
+.smooth-params > .row-between:last-child  { margin-bottom: 0; }

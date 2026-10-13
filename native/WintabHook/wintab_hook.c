@@ -118,7 +118,7 @@ typedef struct { int axMin; int axMax; u32 axUnits; u32 axResolution; } AXIS_T;
  * 与本 DLL 的 `OpenFileMappingW` 指向同一块。全部按 32 位有符号槽访问。 */
 #define CFG_NAME      L"Local\\JWautofillWintabSmooth"
 #define CFG_MAGIC     0x57414A57L      /* 'JWAW' */
-#define CFG_NLONGS    32
+#define CFG_NLONGS    40
 
 enum {
     CFG_I_MAGIC = 0,
@@ -130,7 +130,7 @@ enum {
     CFG_I_CMD,            /* 0=无 1=挂 2=卸                        */
     CFG_I_CMDACK,         /* 已执行到的 CMDSEQ                     */
     /* ---- 以下为本 DLL 回写（守护进程只读） ---- */
-    CFG_I_STATE,          /* 0=未挂 1=生效 2=标定失败 3=已卸载       */
+    CFG_I_STATE,          /* 0=未挂 1=生效 2=标定失败 3=已卸载 4=入口被旧副本占用 */
     CFG_I_CALLS,
     CFG_I_PACKETS,
     CFG_I_SMOOTHED,
@@ -144,19 +144,32 @@ enum {
     CFG_I_HEARTBEAT,      /* 守护进程每秒写入 GetTickCount()        */
     /* ---- P3.1：整包参数（面板与鼠标通路共用同一份参数面）---- */
     CFG_I_MODE,           /* 0=标准 1=拉绳 2=追笔                   */
-    CFG_I_TENSION,        /* 0..100   拉绳松紧                     */
+    CFG_I_TENSION,        /* ⛔ 已废弃（2026-10-13「张力」并入「半径」）——
+                            槽位**保留占位不重编号**：它与 C# 侧逐项对应，
+                            少一行就会让后面 11 个槽整体错位（错位不报错、只静默出怪事）。*/
     CFG_I_CATCHUP,        /* 0..100   追笔速度                      */
     CFG_I_CORNER,         /* 0..90    拐角判定角度                  */
-    CFG_I_RADIUSPX,       /* 1..40    最大滞后（屏幕等效像素）       */
+    CFG_I_RADIUSPX,       /* 1..100   最大滞后（屏幕等效像素）       */
     CFG_I_HUD,            /* bit0=leash 线 bit1=半径圆 bit2=原始点  */
     CFG_I_HUDCOLOR,       /* 0xRRGGBB，默认品红（与 PS 画笔绳线同色）*/
     CFG_I_PXPERAXIS,      /* ×1000：渲染线程用真实光标标定的轴→像素比 */
+    /* ---- P3.2：触发闸门（面板/守护进程写，DLL 读）---- */
+    CFG_I_TOOLGATE,       /* 0=非套索 1=套索 2=未知(面板未开) —— 见下 */
+    CFG_I_GATETS,         /* 闸门写入时刻（GetTickCount 口径）——超时即降级 */
+    CFG_I_PENDOWN,        /* DLL 回写：当前是否「笔尖接触画布」（1/0）           */
+    CFG_I_GATEOK,         /* DLL 回写：闸门是否成立（1=正在平滑）                 */
+    CFG_I_CTUNKNOWN,      /* DLL 回写：落笔判据不可用（1=已退化为「按落笔」放行）  */
+    /* ---- P3.3：Y 轴分量的「轴→像素」比（**带符号**）---- */
+    CFG_I_PXPERAXISY,     /* ×1000：Y 轴。⛔ 符号**必须**保留：
+                             Wintab 包的 Y 向上为正、屏幕 Y 向下为正 ⇒ 两者符号相反。
+                             HUD 的圆心偏移必须按分量换算，用不带符号的标量会把圆心
+                             渲染成光标的**镜像**（真机实测：向右上运笔时圆心跑到左上方）。*/
 };
 
 /* ⛔⛔ 这张槽位表是 C 与 C#（Program.cs 的 PenHook）**两处手写**的，错位不会报错、
    只会让参数静默失效（实测过的坑）。所以：① 用编译期断言守住「槽数不超映射」；
    ② 任何一侧增删槽，另一侧必须同步，且 C# 的 EnsureInit 里有运行时兜底校验。 */
-typedef char cfg_slot_fit_check[(CFG_NLONGS >= CFG_I_PXPERAXIS + 1) ? 1 : -1];
+typedef char cfg_slot_fit_check[(CFG_NLONGS >= CFG_I_PXPERAXISY + 1) ? 1 : -1];
 
 static volatile LONG* g_cfg    = NULL;
 static HANDLE         g_cfgMap = NULL;
@@ -299,6 +312,154 @@ static int repatch(u8* entry, const u8* bytes)
     return 1;
 }
 
+/* ============================================== 笔尖接触判据（落笔 / 悬空）
+ * ⛔⛔ 为什么必须单独判「落笔」：用户明确要求「只平滑数位笔操作套索工具**绘制中**的
+ *    轨迹」「用户落笔前不希望受到平滑迟滞感」。而悬空移动同样会持续产出 Wintab 包，
+ *    且 X/Y 与落笔时同构 ⇒ 只看位移**无法**区分二者。
+ *
+ * ⛔ 为什么不能直接硬编码偏移：本机 (stride=52, offX=20, offY=24) 对应的合法字段掩码
+ *    有 **30 种**（我逐一枚举过），其中 pkNormalPressure / pkTpStatus 存在与否**无法**
+ *    由几何定解（12 种有、18 种无），只有 pkButtons 恒定落在 16。
+ *    ⇒ 只能**按 wintab.h 的固定字段顺序**从 (offY, stride) 反推候选偏移，
+ *    再在运行时用真实数据**逐个证伪**：不是接触场的那个会全程为 0 或全程非 0。
+ *
+ * 判定规则（保守、可解释）：
+ *   候选 = 「紧跟 Y 之后、且落在剩余字节里的压力/笔尖字段」，按 NP 优先排序；
+ *   采用第一个 → 若累计 3000 包仍**从未非零**，判定它不是接触场，退下一个候选。
+ *   在找到之前（contact 未知）一律**按悬空处理**：宁可第一笔不生效，
+ *   也不能让「没找到」退化成「全程平滑」—— 那正是用户抱怨的那件事。 */
+#define CT_MAX_CAND   6
+#define CT_PROBE_MAX  6000      /* 单个候选的证伪预算（包数，≈30s 笔活动） */
+#define CT_VALIDATE_MAX 5000    /* 接受后的长期校验窗口（包数） */
+static int   g_ctOff[CT_MAX_CAND];   /* 候选偏移（绝对字节） */
+static int   g_ctN;
+static volatile LONG g_ctIdx;        /* 正在**考察**的候选下标（-1 = 未开始） */
+static volatile LONG g_ctCur;        /* 已**接受**的候选下标（-1 = 尚无） */
+static volatile LONG g_ctSeen;       /* 当前阶段的已观测包数   */
+static volatile LONG g_ctNonZero;    /* 当前阶段的非零包数     */
+static volatile LONG g_contact;      /* 最终判定：1=笔尖接触画布 */
+static volatile LONG g_ctUnknown;    /* 1 = 判据不可用（无候选/全部证伪）⇒ 放行 */
+
+/* 从 (offY, stride) 反推「Y 之后」可能的字段切分。
+   wintab.h 固定顺序：Context→Status→Time→Changed→Serial→Cursor→Buttons→
+   X→Y→Z→NormalPressure→TiltPressure→Orientation→Rotation，
+   其中 Z/NP/TP 各 4 字节、Orientation/Rotation 各 12 字节。
+   ⛔ 只收 NP / TP：Z（离板高度）与 ORI/ROT 在**悬空时也非零**，拿它们当接触判据
+      等于「全程都算落笔」——那正是要修的缺陷。 */
+static void contact_candidates(int offY, int stride)
+{
+    g_ctN = 0;
+    if (stride <= offY + 4) { g_ctUnknown = 1; return; }
+    int rest = stride - (offY + 4);        /* Y 之后还剩多少字节 */
+    for (int m = 0; m < 32; m++) {
+        int sz = 0, off = offY + 4, np = -1, tp = -1;
+        if (m & 1) { sz += 4; off += 4; }              /* Z              */
+        if (m & 2) { np = off; sz += 4; off += 4; }    /* NormalPressure */
+        if (m & 4) { tp = off; sz += 4; off += 4; }    /* TiltPressure   */
+        if (m & 8) { sz += 12; off += 12; }            /* Orientation    */
+        if (m & 16) { sz += 12; off += 12; }           /* Rotation       */
+        if (sz != rest) continue;
+        int cand = (np >= 0) ? np : tp;
+        if (cand < 0) continue;                        /* 该切分没有压力/笔尖字段 */
+        int dup = 0;
+        for (int i = 0; i < g_ctN; i++) if (g_ctOff[i] == cand) { dup = 1; break; }
+        if (!dup && g_ctN < CT_MAX_CAND) g_ctOff[g_ctN++] = cand;   /* ⛔ 多个掩码会给出同一偏移，必须去重 */
+    }
+    g_ctIdx = (g_ctN > 0) ? 0 : -1;
+    g_ctCur = -1;
+    g_ctSeen = 0;
+    g_ctNonZero = 0;
+    /* ⛔ 一个候选都推不出来 ⇒ 判据不可用。此时**放行**（按「始终落笔」处理）并
+       把 g_ctUnknown 报给面板 —— 不能默默把平滑关死：那会让功能「看起来坏了」
+       且没有任何线索。宁可退化到旧行为，也要让故障可见。 */
+    g_ctUnknown = (g_ctN > 0) ? 0 : 1;
+    InterlockedExchange(&g_contact, g_ctUnknown ? 1 : 0);
+}
+
+/* 逐包推进接触判据（detour 内调用，只做整数读与计数，零系统调用）。
+   三个阶段：考察候选 → 接受 → 长期校验（拒绝「悬空也非零」的字段）。 */
+static void contact_update(const u8* buf, int stride, int n)
+{
+    if (g_ctUnknown) { InterlockedExchange(&g_contact, 1); return; }
+    if (g_ctN <= 0) { g_ctUnknown = 1; InterlockedExchange(&g_contact, 1); return; }
+
+    LONG cur = g_ctCur;
+    if (cur < 0) {
+        /* —— 阶段一：逐个考察候选 —— */
+        LONG idx = g_ctIdx;
+        if (idx < 0 || idx >= g_ctN) {
+            g_ctUnknown = 1;
+            InterlockedExchange(&g_contact, 1);
+            return;
+        }
+        const int off = g_ctOff[idx];
+        int nz = 0;
+        for (int k = 0; k < n; k++) {
+            u32 v; memcpy(&v, buf + (SIZE_T)k * stride + off, 4);
+            InterlockedIncrement(&g_ctSeen);
+            if (v) { InterlockedIncrement(&g_ctNonZero); nz = 1; }
+        }
+        if (nz) {
+            /* ⛔ 一旦非零就**立刻接受**，不等下一批：否则用户的第一笔会被整批吞掉，
+               表现为「第一笔画了没效果，第二笔才生效」。 */
+            g_ctCur = idx;
+            g_ctSeen = 0;
+            g_ctNonZero = 0;
+            InterlockedExchange(&g_contact, 1);
+            return;
+        }
+        InterlockedExchange(&g_contact, 0);           /* 悬空：字段为 0 */
+        if (g_ctSeen >= CT_PROBE_MAX) {               /* 证伪：全程为 0，换下一个 */
+            g_ctIdx = idx + 1;
+            g_ctSeen = 0;
+            g_ctNonZero = 0;
+            if (g_ctIdx >= g_ctN) { g_ctUnknown = 1; InterlockedExchange(&g_contact, 1); }
+        }
+        return;
+    }
+
+    /* —— 阶段二 / 三：已接受，逐包判定 + 长期校验 —— */
+    const int off = g_ctOff[cur];
+    for (int k = 0; k < n; k++) {
+        u32 v; memcpy(&v, buf + (SIZE_T)k * stride + off, 4);
+        InterlockedIncrement(&g_ctSeen);
+        if (v) { InterlockedIncrement(&g_ctNonZero); InterlockedExchange(&g_contact, 1); }
+        else   { InterlockedExchange(&g_contact, 0); }
+    }
+    /* 校验：接受之后仍「几乎全程非零」⇒ 它不是接触场（方位/旋转这类字段恒非零）。
+       真实笔压只要抬过笔就会掉到 0，所以「>95% 非零」是很宽的判据，不会误伤
+       「长时间连续绘制」。命中即换下一个候选。 */
+    if (g_ctSeen >= CT_VALIDATE_MAX && (g_ctNonZero * 100) > (g_ctSeen * 95)) {
+        g_ctIdx = cur + 1;
+        g_ctCur = -1;
+        g_ctSeen = 0;
+        g_ctNonZero = 0;
+        InterlockedExchange(&g_contact, 0);
+        if (g_ctIdx >= g_ctN) { g_ctUnknown = 1; InterlockedExchange(&g_contact, 1); }
+    }
+}
+
+/* ============================================== 工具闸门（面板 → 守护进程 → 本 DLL） */
+/* 闸门值的**有效期**（ms）。
+ * ⛔ 为什么必须有过期判定：闸门只在**值变化时**才由面板下发，而「0 = 不是套索」这条
+ *    会一直留在共享内存里。用户关掉面板（或面板崩了）之后切回套索工具时，没有任何人
+ *    会把那个 0 改回来 ⇒ 平滑与 HUD 静默失效，且面板不在场时完全看不出原因。
+ *    ⇒ 面板侧每 ~2s 无条件重刷一次（见 LassoSmoothing.setSmoothToolGate），
+ *      这里超过 3s 没刷新就按「未知」处理（放行），退化到旧行为而不是把功能锁死。 */
+#define GATE_STALE_MS 3000
+/* 0 = 当前不是套索（禁止平滑）；1 = 是套索；2 = 未知（面板未开/读数失败，放行）。 */
+static int tool_gate_ok(void)
+{
+    if (!g_cfg) return 1;
+    LONG g = g_cfg[CFG_I_TOOLGATE];
+    if (g == 0) {
+        /* 只有「刚刷过的新鲜 0」才禁止；陈旧的 0 按未知放行（见上）。 */
+        DWORD ts = (DWORD)g_cfg[CFG_I_GATETS];
+        if (ts != 0 && (DWORD)(GetTickCount() - ts) <= GATE_STALE_MS) return 0;
+    }
+    return 1;                        /* 1=套索，2=未知，陈旧的 0 —— 三者都放行 */
+}
+
 /* ================================================================== 标定状态 */
 typedef struct {
     HCTX  hCtx;          /* 0 = 未标定 */
@@ -306,6 +467,7 @@ typedef struct {
     int   offSerial;
     int   offX, offY;
     u32   axisMax;       /* 设备坐标上界（X 轴），用于位移门限与滞后上限 */
+    u32   axisMaxY;      /* 设备坐标上界（Y 轴，lcInExtY）：Y 的标称轴→像素比分母 */
     int   valid;         /* 1 = 交叉验证通过，允许改写 */
     int   tried;         /* 1 = 已做过一次**证据充分**的裁决（n>=3），避免每包重算 */
     int   attempts;      /* 裁决次数上限用：连续失败若干次后才认命（state=2） */
@@ -366,23 +528,150 @@ static int    g_hasDir;
 static DWORD  g_lastMs;
 static int    g_wasEnabled;
 
-/* 轴坐标 → 屏幕像素的比例。初值用标称值（32767 轴 ≈ 一屏宽），
-   由 HUD 渲染线程拿**真实光标位移**持续标定后覆盖（见 hud 段）。 */
-static double g_pxPerAxis = 1.0;
+/* 轴坐标 → 屏幕像素的比例。**逐轴**且**带符号**：
+   ⛔⛔ 2026-10-13 真机定案 —— 数位板到屏幕的映射是**逐轴**的，而且 Y 轴的符号与屏幕
+   相反（Wintab 包 Y 向上为正、屏幕 Y 向下为正），两个轴的**比例也不同**
+   （本机实测 3440/44800 = 0.0768 对 1440/29600 = 0.0486，相差 1.58 倍）。
+   旧版用一个标量同时当两个轴用 ⇒ HUD 的圆心偏移在 Y 上**既镜像、又比例错**，
+   真机表现正是「向右上运笔、圆心却往左上方跑，圆心也不在轨迹末端」。
+   ⛔ 初值必须是 0（=「未标定」）：detour 见 0 会按「屏宽(高)/轴上界」的标称值兜底。
+   旧初值 1.0（「包坐标就是像素」）比真值大 13 倍，在标定跑起来之前那几批包里，
+   绳长/半径全部按错的单位换算。
+   由 HUD 渲染线程拿**真实光标位移**逐轴持续标定后覆盖（见 hud 段）。 */
+static double g_pxAxisX = 0.0;
+static double g_pxAxisY = 0.0;
 /** 是否已被光标标定过（标定后不再被标称初值覆盖）。 */
 static volatile LONG g_pxCalibrated;
-/** 主屏/虚拟屏宽度（px）：标称「轴→像素比」的分母来源，worker 启动时取一次。 */
+/** 主屏/虚拟屏宽度、高度（px）：标称「轴→像素比」的分母来源，worker 启动时取一次。 */
 static int g_screenW;
+static int g_screenH;
+
+/** 逐轴标定器：符号要「连续多次一致」才敢采用，量值用 EMA 收敛。
+    ⛔ 为什么不能只用 EMA：符号一旦被一个坏样本锁反，EMA 要穿越 0 才能纠正回来，
+       期间 HUD 的圆心一直镜像 —— 用户看到的就是「时好时坏的镜像」。 */
+typedef struct {
+    double px;          /* 当前采用值（含符号；0 = 未标定） */
+    int    done;        /* 是否已被**真实光标**标定过（1）；0 = 仍用标称兜底 */
+    int    voteSign;    /* 最近一次投票的符号 */
+    int    voteStreak;  /* 连续同号的次数 */
+} AXCAL;
+static AXCAL g_axCalX, g_axCalY;
+
+/* 复位（起笔锚定）原因计数：排障用。
+   真机现象「圆圈会突然闪现回光标位置、断开的折线瞬间连到光标」= 一次复位，
+   而复位有 3 种来源，必须能分辨（否则只能靠猜）。 */
+#define RST_ANCHOR 1     /* 首包 / 闸门重开（正常的起笔锚定） */
+#define RST_GAP    2     /* 取包间隔超时（**停笔期间的假复位**，见 TIME_GAP_RESET_MS） */
+#define RST_JUMP   3     /* 位置跳变（抬笔移位 / 换屏） */
+static volatile LONG g_rstAnchor, g_rstGap, g_rstJump;
+static volatile LONG g_lastGapMs;    /* 最近一次复位时的取包间隔（ms，排障用） */
 
 #define JUMP_RESET_FRAC   0.15   /* 输出点与原始点距离 > 15%·axMax ⇒ 判定为抬笔移位 */
-#define TIME_GAP_RESET_MS 120    /* 两次取包间隔 > 120ms ⇒ 判定为新的一笔 */
-#define SPEED_FULL        1.2    /* 屏幕等效像素/ms：达到即「甩笔」 */
+/* ⛔⛔ 2026-10-13：120ms → **5000ms**（≈关闭）。
+   真机定案：数位板在**笔不动时不再出包**（jwwh 日志实证：停笔后 packets 长时间冻结、
+   而 PS 仍在空轮询 WTPacketsGet ~660 次/秒）。于是「用户停下来看一眼屏幕再继续」
+   这种正常停顿，取包间隔必然超过 120ms ⇒ 一恢复就被判成「新的一笔」⇒ 输出点被拽回
+   笔尖 ⇒ 后果与用户报的现象**逐条吻合**：
+     · 圆圈的圆心（= PS 真正落笔的位置）瞬间跳到光标上；
+     · **断开的选区折线瞬间连到光标**（PS 的套索是一条折线，从冻结点 P 直连到笔尖）。
+   ⛔ 「抬笔」本来就有**独立且可靠**的判据（闸门 ②：笔尖接触画布 = 压力/按键字段），
+      不需要靠时间间隔；位置突变也有 jumpPx 兜底。这里只留一个「状态明显失效」的
+      兜底值（DLL 被挂起数分钟之类的极端情况）。
+   ⛔ 绝不要再改小：用户的「停笔观察」是正常操作，改小就等于「一停笔就复位」。 */
+#define TIME_GAP_RESET_MS 5000
+#define SPEED_FULL        3.0    /* 屏幕等效像素/ms：达到即「甩笔」（人手常规 ≤1.5，见下） */
 #define CORNER_MIN_PX     3.0    /* 段长小于它的「拐角」一律当抖动，不削弱平滑 */
-#define RANGE_NOMINAL     32767.0
-/* τ(强度) 曲线的两个常数：τ = 8ms·(0.18^(−t/100) − 1)，
-   即 ln(1/0.18) = 1.714798，与鼠标通路指数映射反解一致。 */
+/* τ(强度) 曲线的两个常数：τ = 8ms·(e^(TAU_LN·t/100) − 1)。
+   ⛔ 2026-10-13 第二轮上调：τ(100) 由 100ms 提到 **250ms**（TAU_LN = ln(32.25)）。
+      用户反馈「标准模式强度拉满依然感觉太弱」—— 一阶低通的稳态滞后 = v·τ，
+      100ms 在 500px/s 下只有 50px，而半径默认仅 12px 时还会被整体夹掉。
+      现在 250ms ⇒ 同速度下 ≈125px 的势能（上限仍由半径决定），
+      强度滑杆两端的差别一眼可辨。 */
 #define TAU_BASE_MS       8.0
-#define TAU_LN            1.714798
+#define TAU_LN            3.473500    /* ln(32.25) ⇒ τ(100) = 8·(32.25−1) = 250ms */
+/* 半径 / 绳长上限（屏幕像素）。
+   ⚠️ 40 → 100 是用户 2026-10-13 明确要求：他把 PS 自己的平滑只开到 36，
+      圆环半径就已接近本 HUD 原上限的两倍，且「体感的平滑效果非常弱」。
+      旧上限 40px 在 205Hz 下把 τ 追平后的滞后硬生生截断 ⇒ 强度滑杆怎么拉都不明显。 */
+#define RADIUS_PX_MAX     100
+
+/* ==================================================== 绳长（拉绳 HUD 与滤波同源）
+ * ⛔ 圆周半径**必须等于真实绳长**，否则 HUD 画的圈与实际的约束不是一回事：
+ *    用户会看到「光标明明还在圈里却被拽住」或「早出圈了却还自由」，拉绳感直接失真。
+ *
+ * ⛔ 2026-10-13：「张力」参数**已删除**。用户实测它和「半径」是同一件事的两套旋钮
+ *    （张力只在 15%~100% 之间缩放半径）⇒ 两个滑杆都在改圆周，机制重复且互相打架。
+ *    现在绳长恒等于半径：半径 = 最大滞后 = 圆周半径，一个参数一个语义。 */
+static double leash_px(int radiusPx)
+{
+    if (radiusPx < 1) radiusPx = 1;
+    return (double)radiusPx;
+}
+
+/* ================================================== 逐轴「轴→像素」（含符号）
+ * 量值（比例）：硬事实 —— 两轴量程不同，必须逐轴。
+ *   真机 [calib] 日志：`lcInExtX=44800 lcInExtY=29600`（1.58 倍），
+ *   屏幕 SM_CXVIRTUALSCREEN=3440 ⇒ X 标称 3440/44800 = 0.0768，Y 标称 1440/29600 = 0.0486。
+ *   ⛔ 旧版用一个不带符号的合成标量，把两轴的**比例**混在一起 ⇒ 偏移的模长与方向都偏。
+ *
+ * 符号：**兜底不做任何假设**，只给「同向」（与 X 同号）这个中性默认；真实符号由
+ *   calib_axis() 用**真实光标位移**逐轴测出（s = Δ光标/Δ原始轴，天然带符号）。
+ *   ⛔ 绝不在兜底里硬编码「Y 取负 / Y 取正」：
+ *     · Wintab 的 Y 方向依驱动与 LOGCONTEXT 的 lcOut* 映射而定，规范并未规定死；
+ *     · 我上一轮写死的「Y 取负」源自一张**示意图**（用户后来澄清前两张图只是示意、
+ *       非真实截图），该依据不成立 ⇒ 已撤回。
+ *   ⇒ 兜底只保证「量级合理、符号中性」，方向一律以标定结果为准。
+ *   ⛔ 未标定期极短（AX_SAMPLE_MIN≈3px 位移 + CUR_SAMPLE_MIN=3px + SIGN_VOTE=4 个样本），
+ *      用户一开始运笔就会覆盖；日志 `calX=/calY=` 可一眼区分「是测出来的还是兜底的」。 */
+static double px_x(void)
+{
+    if (g_axCalX.done) return g_axCalX.px;                 /* 真实光标标定值优先 */
+    if (g_pxAxisX > 0.0001 || g_pxAxisX < -0.0001) return g_pxAxisX;
+    double ext = (double)(g_calib.axisMax > 0 ? g_calib.axisMax : 32767);
+    return (double)(g_screenW > 0 ? g_screenW : 1920) / ext;
+}
+
+static double px_y(void)
+{
+    if (g_axCalY.done) return g_axCalY.px;                 /* 真实光标标定值优先 */
+    if (g_pxAxisY > 0.0001 || g_pxAxisY < -0.0001) return g_pxAxisY;
+    double ext = (double)(g_calib.axisMaxY > 0 ? g_calib.axisMaxY : 32767);
+    return (double)(g_screenH > 0 ? g_screenH : 1080) / ext;   /* 中性符号，方向交给标定 */
+}
+
+/* 单轴带符号标定：s = Δ光标 / Δ原始轴（只在本轴位移够大时取样）。
+   ⛔ 必须**逐轴**取 —— 旧版用合成矢量的 |Δ| 比，把两个轴的符号与比例混在一起：
+      既拿不到 Y 自己的符号（方向对不对全凭猜），也算不出两轴不同的比例
+      （真机 lcInExtX=44800 / lcInExtY=29600，差 1.58 倍）。
+   ⛔ 符号的唯一权威来源就是这里（Δ光标/Δraw 自然带号），兜底一律中性（见 px_x/px_y）。
+   ⛔ 符号要连续 SIGN_VOTE 次一致才采用：一次坏样本（复位跳变/批次时间戳抖动）就把
+      符号锁反的话，EMA 得穿越 0 才纠正得回来，期间 HUD 一直镜像。 */
+#define AX_SAMPLE_MIN  40.0    /* 本轴原始位移下限（≈2~3 屏幕像素） */
+#define CUR_SAMPLE_MIN  3.0    /* 光标位移下限（像素） */
+#define SIGN_VOTE       4
+static void calib_axis(AXCAL* a, double dAx, double dCur)
+{
+    if (dAx < AX_SAMPLE_MIN && dAx > -AX_SAMPLE_MIN) return;
+    if (dCur < CUR_SAMPLE_MIN && dCur > -CUR_SAMPLE_MIN) return;
+    double r = dCur / dAx;
+    double ar = r < 0 ? -r : r;
+    if (ar < 0.005 || ar > 3.0) return;              /* 明显不合理 ⇒ 丢弃 */
+    int s = r > 0 ? 1 : -1;
+    if (a->px == 0.0 || ((a->px > 0) ? 1 : -1) != s) {
+        /* 未标定 / 符号与当前相反 ⇒ 走投票，连中 SIGN_VOTE 次直接换值（不做 EMA 穿越） */
+        if (a->voteSign == s) { if (a->voteStreak < 99) a->voteStreak++; }
+        else { a->voteSign = s; a->voteStreak = 1; }
+        if (a->voteStreak >= SIGN_VOTE) {
+            a->px = r;
+            a->done = 1;
+            InterlockedExchange(&g_pxCalibrated, 1);
+        }
+        return;
+    }
+    a->px = a->px * 0.8 + r * 0.2;
+    a->done = 1;
+    InterlockedExchange(&g_pxCalibrated, 1);
+}
 
 static double dsqrt_(double v) { return __builtin_sqrt(v); }
 
@@ -405,8 +694,11 @@ static double cos_deg_series(int deg)
                    + x2 * (-0.001388888888888889 + x2 * 0.000024801587301587)));
 }
 
-/* 强度 → 时间常数（ms）。与鼠标通路在 125Hz 下的滞后严格等价：
-   鼠标 k=0.18^(t/100)、dt=8ms ⇒ τ = 8·(0.18^(−t/100) − 1)。 */
+/* 强度 → 时间常数（ms）：τ = TAU_BASE·(e^(TAU_LN·t/100) − 1)。
+   ⛔ 2026-10-13：上限由 36ms 抬到 100ms，同日再抬到 **250ms**。
+      真机反馈「强度 100 的体感依然几乎为零」—— 一阶低通的稳态滞后就是 v·τ：
+      36ms 在 500px/s 下只有 18px，100ms 也只有 50px，再被半径上限一夹就看不出来了。
+      现在 250ms ⇒ 同速度下 ≈125px 的势能，强度滑杆两端的差别一眼可辨。 */
 static double tau_from_strength(double t)
 {
     if (t <= 0.0) return 0.0;
@@ -420,6 +712,19 @@ static double tau_from_strength(double t)
 static volatile LONG g_snRawX, g_snRawY;   /* 改写前的原始轴坐标 */
 static volatile LONG g_snOutX, g_snOutY;   /* 改写后的平滑轴坐标 */
 static volatile LONG g_snMs;               /* 最后一次取包的 GetTickCount() */
+
+/* ---- P3.2 触发闸门：只在「工具是套索」且「笔尖接触画布」时才平滑 ----
+ * ⛔ 用户的原话：「无论我选择什么工具，无论我是否按下处于绘制状态，只要我用数位笔
+ *    移动光标，已平滑的数字就在涨，拉绳工具的洋红圈也都会显示」——
+ *    那等于把**悬空移动**也当成绘制轨迹，于是每一次移位都有迟滞、每一个工具都有 HUD。
+ *    因此闸门必须同时满足两个条件，缺一不可：
+ *      ① 工具闸门（面板 300ms 巡检当前工具 ⇒ 共享内存 CFG_I_TOOLGATE）；
+ *      ② 笔尖接触（由**包内字段的运行时观测**判定，见下方 contact 段）。
+ * ⚠️ 悬空时我们**一个字节都不改**（提前 return 0），PS 拿到的就是原始坐标，
+ *    所以「落笔前没有迟滞」是结构性的，不是靠调参数绕出来的。 */
+static volatile LONG g_toolOk;      /* 工具闸门是否成立（0/1） */
+static volatile LONG g_penDown;     /* 笔尖是否接触画布（0/1） */
+static volatile LONG g_gateOk;      /* 两者都成立 ⇒ 本批真的在平滑 */
 
 /* HUD 渲染线程（定义在文件末，worker 与 jwwh_unhook 都要调） */
 static void hud_start(void);
@@ -728,19 +1033,29 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
     calib_logf("# [calib] 轴上界 = %u（lcInExtX=%ld lcInExtY=%ld）\n", axMax,
                (long)inExtX, (long)inExtY);
 
-    /* 轴→像素比的**标称初值**：等渲染线程用真实光标标定出来之前先用它兜底。
+    /* 轴→像素比的**标称初值**（逐轴）：等渲染线程用真实光标标定出来之前先用它兜底。
        ⛔ 旧版用 32767/axisMax，在 axisMax 恰好也是 32767 时算出 **1.0**（即「包坐标
        就是像素」），而真实值约 1920/44800 ≈ 0.043 ⇒ 半径 8px 被算成 8 个轴单位
        ≈ 0.34 屏幕像素 ⇒ 滞后上限把平滑压成 0，「调参无感」的第二层根因。
        现在按「输入量程覆盖整屏」估算，量级至少是对的。
+       ⛔ 符号**不在这里猜**：兜底一律取「与 X 同号」的中性正号。Y 的真实方向依驱动与
+          LOGCONTEXT 的 lcOut* 映射而定，规范并未写死 ⇒ 唯一权威来源是 calib_axis()
+          用真实光标测出的符号（px_x/px_y 优先采用它）。
+          〔已撤回〕旧注释写死的「Y 必须取负」其依据是一张**示意图**，用户已澄清那不是
+          真实截图 ⇒ 该假设作废。
        ⚠️ 已被光标标定过就绝不覆盖（g_pxCalibrated 由渲染线程置位）。 */
     if (!g_pxCalibrated) {
-        double ext = (double)(inExtX > 0 ? inExtX : (LONG)axMax);
+        double extX = (double)(inExtX > 0 ? inExtX : (LONG)axMax);
+        double extY = (double)(inExtY > 0 ? inExtY : 32767);
         double scrW = (double)(g_screenW > 0 ? g_screenW : 1920);
-        double nominal = scrW / (ext > 1.0 ? ext : 1.0);
-        if (nominal > 0.0001 && nominal < 1000.0) g_pxPerAxis = nominal;
-        calib_logf("# [calib] 标称 轴→像素 = %.6f（%d px / %ld 轴）\n",
-                   g_pxPerAxis, g_screenW, (long)inExtX);
+        double scrH = (double)(g_screenH > 0 ? g_screenH : 1080);
+        double nomX = scrW / (extX > 1.0 ? extX : 1.0);
+        double nomY = scrH / (extY > 1.0 ? extY : 1.0);   /* 中性符号，不假设方向 */
+        if (nomX > 0.0001 && nomX < 1000.0) g_pxAxisX = nomX;
+        if (nomY > 0.0001 && nomY < 1000.0) g_pxAxisY = nomY;
+        g_calib.axisMaxY = (u32)(inExtY > 0 ? inExtY : 32767);
+        calib_logf("# [calib] 标称 轴→像素 X=%.6f（%d px / %ld 轴） Y=%.6f（%d px / %ld 轴）\n",
+                   g_pxAxisX, g_screenW, (long)inExtX, g_pxAxisY, g_screenH, (long)inExtY);
     }
 
     g_calib.hCtx = hCtx;
@@ -771,7 +1086,22 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
 }
 
 /* ================================================================== 单包滤波
- * 返回**本批里坐标真正被改写的包数**（复位帧原值写回、无差异帧都不算）。
+ * 只刷新 HUD 快照、**不改写缓冲区**。闸门不成立时走这条路：
+ *   既让渲染线程的「轴→像素比」标定持续更新（否则关掉闸门就再也标定不了），
+ *   又保证 PS 拿到的坐标一个字节都没变 ⇒ 悬空移动时完全没有迟滞。 */
+static void snapshot_only(const u8* buf, int stride, int n, int ox_, int oy_)
+{
+    if (n <= 0 || ox_ + 4 > stride || oy_ + 4 > stride) return;
+    const u8* p = buf + (SIZE_T)(n - 1) * stride;
+    u32 vx, vy;
+    memcpy(&vx, p + ox_, 4);
+    memcpy(&vy, p + oy_, 4);
+    g_snRawX = (LONG)vx; g_snRawY = (LONG)vy;
+    g_snOutX = (LONG)vx; g_snOutY = (LONG)vy;
+    g_snMs   = (LONG)GetTickCount();
+}
+
+/* 返回**本批里坐标真正被改写的包数**（复位帧原值写回、无差异帧都不算）。
  * ⛔ 早期版本把「处理过的包数」直接加进 g_smoothed ⇒ 面板显示「已平滑 17086 包」
  *    而实际一包都没改过（标定失败早退）—— 计数器必须只说改写，不能说处理。 */
 static int smooth_packets(HCTX hCtx, void* buf, int n)
@@ -786,6 +1116,8 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
         g_calib.stride = 0;
         g_calib.offSerial = g_calib.offX = g_calib.offY = -1;
         g_wasEnabled = 0;                       /* 换上下文 ⇒ 轨迹状态作废 */
+        /* 接触判据的候选依赖 (offY, stride) ⇒ 必须等标定成功后才建（见下方 CT_BUILT） */
+        g_ctN = 0; g_ctCur = -1; g_ctIdx = -1; g_ctUnknown = 0;
     }
     if (!g_calib.tried) {
         /* 盲扫「序号逐包 +1」要 n>=3 才不是巧合 ⇒ 证据不足就整批放过，等下一批。
@@ -801,22 +1133,61 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
     const int ox_ = g_calib.offX, oy_ = g_calib.offY;
     if (S <= 0 || ox_ + 4 > S || oy_ + 4 > S) return 0;
 
+    /* 接触判据的候选表：依赖标定出的 (offY, stride) ⇒ 只在标定成功之后建一次 */
+    if (g_ctN == 0) contact_candidates(oy_, S);
+
+    /* ——— 闸门 ①：工具必须是套索 ———
+     * ⚠️ 顺序要紧：**先判工具、后读接触场**。工具不是套索时整批直接放过，
+     *    连压力字段都不去碰 —— 悬空移动时那些字段本来就没数据，
+     *    让它们参与「候选证伪」只会把判据推向错误的字段。
+     * ⚠️ 闸门不成立时**仍然刷新快照**：HUD 线程的「轴→像素比」标定靠
+     *    g_snOutX/g_snMs，闸门一关就不再更新的话，标定会永远停在初值
+     *    （这正是「关掉提示就再也不标定」那个旧 bug 的同构版本）。
+     *    快照刷新是普通内存写，且**不改写缓冲区一个字节** ⇒ 迟滞感为零。 */
+    if (!tool_gate_ok() || !g_cfg[CFG_I_ENABLED]) {
+        g_wasEnabled = 0;
+        InterlockedExchange(&g_toolOk, 0);
+        InterlockedExchange(&g_gateOk, 0);
+        InterlockedExchange(&g_penDown, 0);
+        snapshot_only((u8*)buf, S, n, ox_, oy_);
+        return 0;
+    }
+    InterlockedExchange(&g_toolOk, 1);
+
+    /* ——— 闸门 ②：笔尖必须接触画布（落笔）———
+     * ⛔ 判据未知时（g_ctCur<0）一律按「未落笔」处理：宁可在用户第一次落笔时
+     *    少平滑一帧，也不要退化成「悬空也在平滑」—— 那正是要修的缺陷。 */
+    contact_update((const u8*)buf, S, n);
+    LONG down = g_contact;
+    InterlockedExchange(&g_penDown, down);
+    if (!down) {
+        g_wasEnabled = 0;            /* 抬笔 ⇒ 下一笔重新起笔锚定 */
+        InterlockedExchange(&g_gateOk, 0);
+        snapshot_only((const u8*)buf, S, n, ox_, oy_);   /* 同上：只刷快照，不改坐标 */
+        return 0;
+    }
+    InterlockedExchange(&g_gateOk, 1);
+
     /* ——— 参数（全部从共享内存现读，调用方保证 g_cfg 非空）——— */
     const int    mode   = g_cfg[CFG_I_MODE];
     const int    flags  = g_cfg[CFG_I_FLAGS];
-    const double pxAxis = g_pxPerAxis > 0.0001 ? g_pxPerAxis
-                                             : (RANGE_NOMINAL / (double)g_calib.axisMax);
+    /* ⛔⛔ 逐轴换算（含符号），不再用单个标量：
+       面板上的「半径 / 绳长 / 追笔速度」都是**屏幕像素**，换算回轴空间时每个轴
+       的比例不同（本机 X 0.0768 / Y 0.0486），用同一个标量会让「圆」在 Y 方向上
+       比真实约束大/小 1.58 倍 ⇒ 绳长与画的圈对不上（用户的原话：
+       「光标触碰到圆圈时圈就闪」其实是「画的圈」与「真实约束」不是同一条曲线）。
+       ⛔ 只做普通内存读，不违反 detour 零系统调用铁律。 */
+    const double cX = px_x(), cY = px_y();
     double t = (double)g_cfg[CFG_I_STRENGTH]; if (t < 0) t = 0; if (t > 100) t = 100;
     int radiusPx = g_cfg[CFG_I_RADIUSPX]; if (radiusPx < 1) radiusPx = 1;
-    int tension  = g_cfg[CFG_I_TENSION];  if (tension  < 0) tension  = 0; if (tension  > 100) tension  = 100;
+    if (radiusPx > RADIUS_PX_MAX) radiusPx = RADIUS_PX_MAX;
     int catchUp  = g_cfg[CFG_I_CATCHUP];  if (catchUp  < 0) catchUp  = 0; if (catchUp  > 100) catchUp  = 100;
     int cornerDeg = g_cfg[CFG_I_CORNER];  if (cornerDeg < 0) cornerDeg = 0; if (cornerDeg > 90) cornerDeg = 90;
 
-    /* 像素 → 轴：面板上的「半径 / 绳长 / 追笔速度」都是屏幕像素，必须换算进来。
-       pxAxis 由 HUD 线程用真实光标标定；标定前用标称值兜底。 */
-    const double toAxis = 1.0 / pxAxis;
-    const double radius = (double)radiusPx * toAxis;
-    const double jumpLimit = (double)g_calib.axisMax * JUMP_RESET_FRAC;
+    /* 半径 / 绳长 / 追笔距离一律在**屏幕像素**域里比：位移逐轴换算成像素后再取模长，
+       于是「画的圈」= 「真实约束」= 同一条曲线（逐轴对称时轴空间的距离会变成椭圆）。 */
+    const double radiusPxF = (double)radiusPx;
+    const double jumpPx = JUMP_RESET_FRAC * (double)g_calib.axisMax * (cX < 0 ? -cX : cX);
     const double cornerCos = cos_deg_series(cornerDeg);
 
     const int speedAdaptive = (flags & 1) ? 1 : 0;
@@ -838,15 +1209,22 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
            detour 里每包调一次完全安全。 */
         DWORD now = GetTickCount();
 
-        /* ——— 复位守卫（起笔锚定 / 抬笔重定位 / 开关刚打开）——— */
+        /* ——— 复位守卫（起笔锚定 / 抬笔重定位 / 开关刚打开）———
+           ⛔ 三种原因分开计数（g_rstAnchor/Gap/Jump）：用户看到的「圆闪现回光标、
+           折线瞬间连到光标」就是一次复位，不分开计数就只能靠猜是哪一种。 */
         double dx = x - g_ox, dy = y - g_oy;
-        double dist = dsqrt_(dx * dx + dy * dy);
+        double dpx = dx * cX, dpy = dy * cY;                  /* 逐轴换算后的像素位移 */
+        double distPx = dsqrt_(dpx * dpx + dpy * dpy);
         int reset = 0;
-        if (!g_wasEnabled) reset = 1;
-        else if (now - g_lastMs > TIME_GAP_RESET_MS) reset = 1;
-        else if (dist > jumpLimit) reset = 1;
+        if (!g_wasEnabled)                              reset = RST_ANCHOR;
+        else if (now - g_lastMs > TIME_GAP_RESET_MS)     reset = RST_GAP;
+        else if (distPx > jumpPx)                        reset = RST_JUMP;
 
         if (reset) {
+            g_lastGapMs = (LONG)(now - g_lastMs);
+            if (reset == RST_GAP)    InterlockedIncrement(&g_rstGap);
+            else if (reset == RST_JUMP) InterlockedIncrement(&g_rstJump);
+            else                     InterlockedIncrement(&g_rstAnchor);
             g_ox = x; g_oy = y;
             g_speed = 0; g_dirX = g_dirY = 0; g_hasDir = 0;
             g_lastMs = now;
@@ -863,49 +1241,76 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
         double dt = (double)(now - g_lastMs); if (dt < 1.0) dt = 1.0; else if (dt > 100.0) dt = 100.0;
         g_lastMs = now;
 
-        /* 速度低通（归一到「屏幕等效像素/ms」） */
-        g_speed = g_speed * 0.72 + (dist * pxAxis / dt) * 0.28;
+        /* 速度低通（屏幕像素/ms）：直接用**逐轴换算后**的位移，与面板的 px/ms 同单位 */
+        g_speed = g_speed * 0.72 + (distPx / dt) * 0.28;
 
         /* 拐角守卫：与上一段输入方向的夹角超过阈值 ⇒ 本帧减弱平滑，保住尖角。
            ⚠️ 只对「标准」模式生效 —— 拉绳/追笔的跟随机制本身不磨圆（拉绳甚至会主动
            把输出点按在绳长处，尖角由绳长决定），加拐角削弱反而破坏它们的手感。
            ⛔ 必须带**位移门限**：抖动的段长通常只有亚像素~2px，而 205Hz 下相邻两帧
            的夹角极易超过 45° ⇒ 不开门限的话「拐角」几乎每帧都成立 ⇒ k 被抬到 0.75
-           ⇒ 平滑被关掉，只剩下滞后，观感正是「有延迟却不平滑」。 */
+           ⇒ 平滑被关掉，只剩下滞后，观感正是「有延迟却不平滑」。
+           ⚠️ 夹角在**屏幕像素域**判定（逐轴对称后两轴比例仍不同，轴空间里的夹角
+              与用户看到的夹角不是一回事）。 */
         int corner = 0;
-        if (mode == 0 && dist > 0.01) {
-            double ux = dx / dist, uy = dy / dist;
-            if (g_hasDir && (dist * pxAxis) > CORNER_MIN_PX) {
+        if (distPx > 0.01) {
+            double ux = dpx / distPx, uy = dpy / distPx;
+            if (mode == 0 && g_hasDir && distPx > CORNER_MIN_PX) {
                 double dot = ux * g_dirX + uy * g_dirY;
                 if (dot > 1.0) dot = 1.0; else if (dot < -1.0) dot = -1.0;
                 if (dot < cornerCos) corner = 1;
             }
             g_dirX = ux; g_dirY = uy; g_hasDir = 1;
-        } else if (dist > 0.01) {
-            g_dirX = dx / dist; g_dirY = dy / dist; g_hasDir = 1;   /* 只更新方向，不判定 */
         }
 
         if (mode == 1) {
-            /* ===== 拉绳：光标与输出点之间系一根绳，超过绳长就把输出点拖到绳长处 =====
-               绳长 = 1 + (radiusPx−1)·(0.15 + 0.85·张力)，与鼠标通路同式。 */
-            double ropePx = 1.0 + (double)(radiusPx - 1) * (0.15 + 0.85 * ((double)tension / 100.0));
-            double rope = ropePx * toAxis;
-            if (dist > rope && dist > 0.0001) {
-                double f = rope / dist;
+            /* ===== 拉绳：输出点被一根**定长**的绳拉住 =====
+               绳长 = leash_px()（与 HUD 画的圆周半径**同一个函数**）。语义与 PS 原生一致，
+               也正是用户描述的那三条：
+                 · 绳未绷紧（|原始 − 输出| ≤ 绳长）⇒ 输出点**原地不动** —— 光标在圈内
+                   自由移动，绘制点钉在圆心，两者之间只有那根弹力带在动；
+                 · 绳绷紧 ⇒ 输出点被拖到恰好「绳长」处 ⇒ 连续绘制时它随光标连续前进
+                   （滞后恒为绳长），用户试图出圈时「圈被光标拖着走」；
+                 · 因此**光标的偏移永远不会超过圆周** —— 圆周就是那个硬上限本身。
+               ⛔ 距离与绳长都在**屏幕像素域**（distPx / radiusPxF）：逐轴对称映射下，
+                  轴空间的等距圆在屏幕上其实是椭圆，用它当绳长会让「画的圈」与
+                  「真实约束」不是同一条曲线。
+
+               ⛔⛔ 旧版这里是 `g_ox += dx * 0.25`（每个包把剩余距离的 25% 吃掉）。
+                  205Hz 下包间隔只有 ~5ms ⇒ 一阶系统的时间常数 τ = dt·(1−α)/α ≈ 15ms
+                  ⇒ 稳态滞后只有 v·τ（500px/s 时约 7px），再被半径上限一夹就基本归零。
+                  这正是用户报的「洋红点与光标始终重合、完全没有拉绳感」的根因：
+                  **把「绳」实现成了指数跟随**。不是参数没生效，是机制被换掉了。 */
+            if (distPx > radiusPxF && distPx > 0.0001) {
+                /* ⛔⛔ 跟随量必须是「**恰好把绳收回到绳长**」的那一段，即
+                     (distPx − radiusPxF)，而不是半径本身。
+                   旧式 `f = radiusPxF / distPx` ⇒ 每包沿 dx 走 distPx·f = **radiusPxF**，
+                   于是新距离 = distPx − radiusPxF —— 光标刚越过圆周（distPx ≈ radiusPxF）
+                   时新距离 ≈ 0 ⇒ **输出点被直接搬到光标上**，正是用户报的
+                   「光标来到圆周、圆心立刻跃迁到光标位置，选区画成一段段直线」。
+                   正确式 `f = 1 − radiusPxF/distPx` ⇒ 移动量 = distPx − radiusPxF
+                   ⇒ 新距离**恒等于 radiusPxF** ⇒ 光标始终停在圆周上、与圆周
+                   **保持相对静止**，而圆心沿光标方向连续前进（用户要的正是这个）。
+                   ⛔ 两侧都连续：distPx→radiusPxF⁺ 时移动量→0（不跳变）；
+                      distPx 之后每增加 Δ，输出点同步走 Δ（绳不再被拉伸）。 */
+                double f = 1.0 - radiusPxF / distPx;
                 g_ox += dx * f; g_oy += dy * f;
-            } else {
-                /* 绳未绷紧时仍做轻微跟随（纯拉绳在慢速下会完全停住，观感像卡死） */
-                g_ox += dx * 0.25; g_oy += dy * 0.25;
             }
+            /* else：绳没绷紧 ⇒ 输出点一字节都不动（见上，这是「拉绳感」的本体） */
         } else if (mode == 2) {
             /* ===== 追笔：输出端以受限速度追赶光标，追上即贴合 =====
                ⛔ 量程必须落在**人的运笔速度区间**内：手绘约 0.05~1.5 px/ms
                （50~1500 px/s）。旧版 0.2~12.2 px/ms（最快 12200 px/s 比任何手都快）
-               ⇒ 除最左端外 step 永远大于 dist ⇒ 恒走「贴合」分支 ⇒ 追笔滑杆整条无效。 */
-            double vmax = 0.02 + ((double)catchUp / 100.0) * 1.5;   /* px/ms */
-            double step = vmax * dt * toAxis;
-            if (dist > step && dist > 0.0001) {
-                double f = step / dist;
+               ⇒ 除最左端外 step 永远大于 dist ⇒ 恒走「贴合」分支 ⇒ 追笔滑杆整条无效。
+               ⛔ 2026-10-13 第二轮上调：上限 1.5 → **3.0 px/ms**（3000px/s）。
+                  用户反馈「追笔拉满还是觉得不够跟手」。1.5 恰好等于人手速度上限，
+                  拉满时 step 与人类的 dist 同量级 ⇒ 仍会频频落到「追赶」分支、留有可见滞后。
+                  现在 3.0 是人手极限的两倍 ⇒ 拉满即近似 1:1 跟手（等价于不做平滑），
+                  与「数值越大越接近手绘」的文案一致，两端差别也才够明显。 */
+            double vmax = 0.02 + ((double)catchUp / 100.0) * 3.0;   /* px/ms */
+            double step = vmax * dt;                                /* 像素（与 distPx 同域） */
+            if (distPx > step && distPx > 0.0001) {
+                double f = step / distPx;
                 g_ox += dx * f; g_oy += dy * f;
             } else {
                 g_ox = x; g_oy = y;
@@ -917,20 +1322,28 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
             double tau = tau_from_strength(t);
             double kk = (dt + tau) > 0.0 ? dt / (dt + tau) : 1.0;
             if (speedAdaptive) {
-                /* 甩笔时自动减弱平滑：速度越高越贴手 */
+                /* 甩笔时自动减弱平滑：速度越高越贴手。
+                   ⛔⛔ 2026-10-13 量程修正：SPEED_FULL 原为 1.2px/ms（1200px/s），
+                      而**人的常规运笔速度区间是 0.05~1.5px/ms**（见 mode==2 的追笔注释）
+                      ⇒ 这个阈值落在区间内部，等于「正常画线也在被当成甩笔」：500px/s 时
+                      boost=0.42，k 被抬到 τ_eff≈15ms，稳态滞后只剩 8px ——
+                      与「平滑感知几乎为零」的实测完全吻合（强度拉满也只有 ~8px 滞后）。
+                      现在阈值抬到 3.0px/ms（3000px/s，真·甩笔），并把混合系数从 0.5
+                      降到 0.4：常规速度下 τ_eff≈48ms（滞后 ~24px），甩笔时才明显减弱。 */
                 double boost = g_speed / SPEED_FULL;
                 if (boost > 1.0) boost = 1.0;
-                kk += (1.0 - kk) * boost * 0.5;
+                kk += (1.0 - kk) * boost * 0.4;
             }
             if (corner) { double kc = 0.75; if (kk < kc) kk = kc; }
             g_ox += dx * kk; g_oy += dy * kk;
         }
 
-        /* 全局最大滞后上限：无论算法怎么算，输出与笔尖的距离不超过 radius */
+        /* 全局最大滞后上限：无论算法怎么算，输出与笔尖的距离不超过 radius（屏幕像素域） */
         double lx = x - g_ox, ly = y - g_oy;
-        double lag = dsqrt_(lx * lx + ly * ly);
-        if (lag > radius && lag > 0.0001) {
-            double f = (lag - radius) / lag;
+        double lpx = lx * cX, lpy = ly * cY;
+        double lagPx = dsqrt_(lpx * lpx + lpy * lpy);
+        if (lagPx > radiusPxF && lagPx > 0.0001) {
+            double f = (lagPx - radiusPxF) / lagPx;
             g_ox += lx * f; g_oy += ly * f;
         }
 
@@ -1121,12 +1534,22 @@ static void publish_status(void)
     g_cfg[CFG_I_AXISMAX] = (LONG)g_calib.axisMax;
     g_cfg[CFG_I_PID]     = (LONG)GetCurrentProcessId();
     g_cfg[CFG_I_MAGIC]   = CFG_MAGIC;
-    /* 轴→像素比（×1000）：1.0 表示包坐标本身就是屏幕像素；
-       若远小于 1（如 0.0586 = 1920/32767）说明包坐标是数位板逻辑单位。 */
-    double ppa = g_pxPerAxis;
-    if (ppa < 0.0001) ppa = 0.0001;
-    if (ppa > 1000.0) ppa = 1000.0;
-    g_cfg[CFG_I_PXPERAXIS] = (LONG)(ppa * 1000.0);
+    /* P3.2 闸门状态回写：面板用它区分「开着但没在平滑（工具不对/没落笔）」与
+       「开着且正在平滑」。没有它，用户看到计数不涨只能猜是哪一条闸门卡住了。 */
+    g_cfg[CFG_I_PENDOWN] = g_penDown;
+    g_cfg[CFG_I_GATEOK]  = g_gateOk;
+    g_cfg[CFG_I_CTUNKNOWN] = g_ctUnknown;
+    /* 轴→像素比（×1000，**逐轴带符号**）：1.0 表示包坐标本身就是屏幕像素；
+       若远小于 1（如 0.0586 = 1920/32767）说明包坐标是数位板逻辑单位。
+       ⛔ Y 那一份必须带符号（Wintab 的 Y 向上为正、屏幕向下为正）—— 面板/排障
+          脚本读到的量级/符号不对，第一个该怀疑的就是这两个槽位。 */
+    double ppa = px_x(), ppb = px_y();
+    if (ppa > -0.0001 && ppa < 0.0001) ppa = 0.0001;
+    if (ppa > 1000.0) ppa = 1000.0; else if (ppa < -1000.0) ppa = -1000.0;
+    if (ppb > -0.0001 && ppb < 0.0001) ppb = 0.0001;
+    if (ppb > 1000.0) ppb = 1000.0; else if (ppb < -1000.0) ppb = -1000.0;
+    g_cfg[CFG_I_PXPERAXIS]  = (LONG)(ppa * 1000.0);
+    g_cfg[CFG_I_PXPERAXISY] = (LONG)(ppb * 1000.0);
 }
 
 static DWORD WINAPI worker(LPVOID param)
@@ -1145,8 +1568,10 @@ static DWORD WINAPI worker(LPVOID param)
          st.wHour, st.wMinute, st.wSecond, jwwh_version());
 
     /* 标称「轴→像素比」的分母（见 try_calibrate）。只在这里取一次，detour 内不碰。
-       ⛔ 必须是**虚拟屏宽**：多屏时笔可以跨屏移动，SM_CXSCREEN 只有主屏。 */
+       ⛔ 必须是**虚拟屏**：多屏时笔可以跨屏移动，SM_CXSCREEN 只有主屏。
+       ⛔ 宽与高都要（逐轴标称）：X 用屏宽、Y 用屏高。 */
     g_screenW = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    g_screenH = GetSystemMetrics(SM_CYVIRTUALSCREEN);
     /* 字段几何查表（32768 种掩码组合）在这里预建，避免第一次标定落在取包线程上。 */
     layout_table_build();
 
@@ -1210,11 +1635,20 @@ static DWORD WINAPI worker(LPVOID param)
 
         if (GetTickCount() - lastPublish >= 10000) {
             lastPublish = GetTickCount();
+            /* rst=a/g/j = 起笔锚定 / 取包超时(假复位) / 位置跳变 的次数。
+               ⛔ 「圆忽然闪现回光标、折线瞬间连到光标」= 一次复位，只有把三种原因
+                  分开计数才能一眼看出是哪一种（gap 居多 ⇒ 停笔被误判成新的一笔）。
+               calX/calY = 该轴是否已由**真实光标**标定（1）还是仍在用中性兜底（0）。
+                  ⛔ 判符号只能看 calX/calY=1 时的 pxX/pxY：那才是测出来的真符号；
+                     =0 时是兜底（不含方向信息），别当成结论。 */
             logf("# [status] state=%ld calls=%ld packets=%ld smoothed=%ld calib=%s "
-                 "stride=%d offX=%d offY=%d axMax=%u\n",
+                 "stride=%d offX=%d offY=%d axMax=%u pxX=%.4f pxY=%.4f calX=%ld calY=%ld "
+                 "rst=%ld/%ld/%ld lastGap=%ldms\n",
                  (long)g_state, (long)g_calls, (long)g_packets, (long)g_smoothed,
                  g_calib.valid ? "OK" : "否", g_calib.stride, g_calib.offX, g_calib.offY,
-                 g_calib.axisMax);
+                 g_calib.axisMax, px_x(), px_y(),
+                 (long)g_axCalX.done, (long)g_axCalY.done,
+                 (long)g_rstAnchor, (long)g_rstGap, (long)g_rstJump, (long)g_lastGapMs);
         }
     }
 
@@ -1238,8 +1672,8 @@ static DWORD WINAPI worker(LPVOID param)
  *    真正被放松的只有「DLL 不碰 UI」这一条。
  *
  * 风险最小化（overlay 形态是安全软件的典型启发式特征，能收的都收）：
- *    - 窗口只有 192×192 且**跟随光标**，不是全屏顶层窗；
- *    - 空闲 250ms（抬笔）即隐藏，不长期驻留；
+ *    - 窗口只有 256×256 且**跟随光标**，不是全屏顶层窗；
+ *    - 空闲 250ms（抬笔）或闸门不成立即隐藏，不长期驻留；
  *    - WS_EX_NOACTIVATE + WS_EX_TRANSPARENT + WM_NCHITTEST→HTTRANSPARENT：
  *      不抢焦点、不吃鼠标事件、不进任务栏（WS_EX_TOOLWINDOW）；
  *    - 颜色/内容全部可关（CFG_I_HUD = 0 时窗口根本不出现）。
@@ -1252,9 +1686,25 @@ static DWORD WINAPI worker(LPVOID param)
  * 屏幕上看到的光标就是「平滑后的输出点」，于是
  *      轴→像素比 = |Δ光标| / |Δ输出轴|
  * 一次除法 + 低通即可，且天然跟随缩放 / 多屏 / 映射变化。
+ *
+ * ── 形态对齐 PS 原生「拉绳」（用户 2026-10-13 截图对比后的要求）────────────
+ * 旧版把窗口钉在**光标**上、圆心也画在光标处 ⇒ 光标永远在圆心，看着「没有拉绳感觉」。
+ * PS 原生是反过来的：
+ *   ① 圆心 = **绘制点**（平滑输出点，即 PS 真正落笔的位置）；
+ *   ② 光标 = **真实笔尖**，可以在圆内任意位置；
+ *   ③ 两者之间有一根「似有弹力的画笔带」（有粗细、向笔尖收窄）；
+ *   ④ 笔尖永远被约束在圆周内 —— 越界时圆心（绘制点）被拖着走。
+ * ⇒ 现在窗口定位用「圆心」而非光标，圆心取**光标 + 绳偏移**（见 hud 段）。
  * ========================================================================*/
-#define HUD_SIZE     192
+/* 窗口边长：必须容得下「圆心 ↔ 光标」的偏移 + 圆周半径。
+   偏移 ≤ 绳长，圆周半径 ≤ leash_px(...)，两者都在 RADIUS_PX_MAX 之内 ⇒
+   取 2×(RADIUS_PX_MAX + 24) = 248，向上取偶到 256。 */
+#define HUD_SIZE     256
 #define HUD_IDLE_MS  250     /* 这么久没有新包 ⇒ 判定抬笔，隐藏 */
+/* ⛔ 笔尖落纸面期间的**保活窗口**：数位板停笔时不再出包（实测 packets 会冻结很久），
+   若只看 HUD_IDLE_MS，用户一停笔圆就消失、一动又在复位后的位置冒出来。
+   只要闸门（工具对 + 笔尖接触）还成立，就再撑这么久。 */
+#define HUD_HOLD_MS  3000
 #define HUD_FRAME_MS 16      /* ~60Hz */
 #define HUD_CLASS    L"JWautofillWintabHUD"
 
@@ -1323,6 +1773,8 @@ static DWORD WINAPI hud_thread(LPVOID param)
     /* 光标标定的上一次采样 */
     double lastCurX = 0, lastCurY = 0, lastAxX = 0, lastAxY = 0;
     int haveLast = 0;
+    /* 「HUD 为什么没显示」的节流时间戳（见下方诊断日志）。 */
+    DWORD lastHudWhy = 0;
 
     while (!g_hudStop) {
         MSG msg;
@@ -1342,47 +1794,118 @@ static DWORD WINAPI hud_thread(LPVOID param)
             if ((DWORD)(now - (DWORD)g_snMs) < HUD_IDLE_MS) active = 1;
         }
 
+        /* ⛔⛔ 闸门闸门闸门：HUD 只在「工具是套索」且「笔尖确实接触画布」时出现。
+           用户的原话是「使用别的工具，或者用户落笔前，我不希望……错误的 HUD 的干扰」。
+           这两个判据由 detour 写入 g_toolOk / g_penDown —— 渲染线程只读它们，
+           不重复判一次（判据写两遍，漂移一次就再也对不上）。 */
+        int gateOk = (g_toolOk && g_penDown) ? 1 : 0;
+
         POINT cur;
         GetCursorPos(&cur);
-        double axX = (double)g_snOutX, axY = (double)g_snOutY;
+        /* ⛔⛔ 标定分母必须用**原始轴**（不是输出轴）：
+           系统光标由 Wintab 系统上下文（驱动侧）移动，跟随的是**原始笔**——
+           我们改写的只是交给 PS 的那份副本，管不到系统光标。
+           ⇒ Δ光标 = Δraw × pxPerAxis，分母取 Δraw 才能约出真值。
+           ⛔ 旧版取 Δ输出轴：拉绳/低通的输出每包只走 k·Δraw（k 可低到 0.1），
+              s = Δ光标/Δ输出 被**放大 1/k 倍**（≈10 倍）⇒ pxPerAxis 虚胖
+              ⇒ 绳长/半径按错的单位换算，真实绳长只剩 drawn/10 ——
+              正是「圆画得很大、实际拉绳没感觉」的根因之一。
+           （旧版拉绳是「绷紧才动」，绷紧期 Δ输出≈Δ原始，标定侥幸正确；
+             一旦输出滤波变强（追笔/低通），旧分母立刻失真。）
+           ⚠️ 已撤回的**无效依据**：上一轮曾用一张 251×308 截图里「折线末端落后光标
+              27px vs HUD 偏移 34px、其比≈Y 逐轴比」来反推 —— 用户已澄清那些截图
+              只是**现象示意**、并非真实截图 ⇒ 该量化证据作废，不得再引用。
+             本段结论的**真正**依据是：[calib] 日志给出 lcInExtX=44800 / lcInExtY=29600，
+              两轴量程确实不同；且 CXO_SYSTEM 由驱动侧移动光标是 Wintab 的既定行为。 */
+        double axX = (double)g_snRawX, axY = (double)g_snRawY;
 
-        /* —— 标定：|Δ光标| / |Δ输出轴| ——
+        /* —— 标定：**逐轴带符号**的 Δ光标 / Δ原始轴 ——
            ⛔ 必须独立于 HUD 显隐：旧版这段在 `!wantVisible` 的 continue 之后，
               于是关掉「拉绳提示」就再也不标定 ⇒ pxPerAxis 停在标称值 ⇒ 半径 / 绳长 /
-              追笔速度全部按错的单位换算 ⇒ 参数怎么调都无感（真机可直接复现）。 */
+              追笔速度全部按错的单位换算 ⇒ 参数怎么调都无感（真机可直接复现）。
+           ⛔⛔ 必须逐轴（旧版用合成矢量的 |Δ| 比）：合成比把两个轴的符号与比例
+              混成一个数 ⇒ ① **拿不到 Y 自己的符号**（符号只能靠猜，猜错就是圆心镜像）；
+              ② 算不出两轴不同的比例（真机 X 0.0768 / Y 0.0486，差 1.58 倍）
+              ⇒ 圆心位置与"绳长圆"在 Y 方向上都偏 1.58 倍。
+           ✅ 这里的 s = Δ光标/Δraw **天然带符号** —— 这是符号的**唯一权威来源**，
+              兜底（px_x/px_y）一律中性、不假设方向。 */
         if (active) {
             if (haveLast) {
-                double dAx  = dsqrt_((axX - lastAxX) * (axX - lastAxX) + (axY - lastAxY) * (axY - lastAxY));
-                double dCur = dsqrt_((double)(cur.x - lastCurX) * (cur.x - lastCurX)
-                                   + (double)(cur.y - lastCurY) * (cur.y - lastCurY));
-                if (dAx > 40.0 && dCur > 3.0) {
-                    double s = dCur / dAx;
-                    if (s > 0.01 && s < 100.0) {
-                        g_pxPerAxis = g_pxPerAxis * 0.85 + s * 0.15;
-                        InterlockedExchange(&g_pxCalibrated, 1);
-                    }
-                }
+                calib_axis(&g_axCalX, axX - lastAxX, (double)cur.x - lastCurX);
+                calib_axis(&g_axCalY, axY - lastAxY, (double)cur.y - lastCurY);
             }
             lastCurX = cur.x; lastCurY = cur.y; lastAxX = axX; lastAxY = axY; haveLast = 1;
         } else {
             haveLast = 0;
         }
 
-        /* 显隐：窗口存在 + 开了绳位（bit0）+ 有包流 + 标定已通过 */
+        /* 显隐：窗口存在 + 开了绳位（bit0）+ 有包流 + 标定已通过 + **闸门成立**
+           + **当前是拉绳模式**。
+           ⛔ 模式判据必须在这里也有一份（不能只靠面板隐藏那一行）：面板开关是
+              「拉绳提示」的持久值，用户先在拉绳模式打开、再切到标准模式时它仍是 true。
+              若原生侧不再判模式，标准模式下会冒出一个毫无意义的洋红圈 ——
+              正是用户报「错误的 HUD 干扰」的形态之一。
+           ⛔⛔ 笔尖落纸面期间**必须保持可见**：数位板在笔不动时**不再出包**
+              （jwwh 日志实证：停笔后 packets 长时间冻结，而 PS 仍在空轮询），
+              只用「最近的包」判活跃的话，用户一停笔圆就消失、再动一下又在**复位后的
+              位置**冒出来 —— 观感就是「圆忽然闪现到光标上」。
+              「笔还在画」的真正判据是**闸门**（工具对 + 笔尖接触画布）；包的时效
+              只用来兜底「已经很久很久没有任何笔数据」（HUD_HOLD_MS）。
+           ⚠️ 绳长/半径一律取 leash_px()，与滤波分支同一个函数（见其定义处）。 */
         LONG hf = g_cfg ? g_cfg[CFG_I_HUD] : 0;
-        int wantVisible = (wnd && mem && active && (hf & 1)) ? 1 : 0;
+        int ropeMode = (g_cfg && g_cfg[CFG_I_MODE] == 1) ? 1 : 0;
+        DWORD pktAge = (DWORD)(now - (DWORD)g_snMs);
+        int activeNow = (pktAge < HUD_IDLE_MS)
+                     || (gateOk && pktAge < HUD_HOLD_MS);
+        int wantVisible = (wnd && mem && activeNow && gateOk && ropeMode && (hf & 1)) ? 1 : 0;
         if (!wantVisible) {
             if (wnd && IsWindowVisible(wnd)) ShowWindow(wnd, SW_HIDE);
+            /* ⛔ 「HUD 没能显示」必须能一眼定位：把六个条件逐个打出来（节流 2 秒，
+               并且只在功能开着时打，避免关着的时候刷屏）。
+               判读：
+                 wnd/mem=0      ⇒ 建窗或 DIB 失败（本实例根本没窗口）
+                 active=0       ⇒ 钩子没挂（g_patched=0 ⇒ t 会一直涨）或久无包
+                 gate=0         ⇒ toolOk/penDown 有 0：工具不对，或笔没落纸面，
+                                  或落笔判据不可用（另见 contactUnknown）
+                 rope=0         ⇒ 当前不是「拉绳」模式（HUD 只在拉绳模式出现）
+                 hudBits 无 bit0 ⇒ 面板的「拉绳提示」是关的 */
+            if (g_cfg && g_cfg[CFG_I_ENABLED] && (DWORD)(now - lastHudWhy) >= 2000) {
+                lastHudWhy = now;
+                logf("# [hud] 未显示: wnd=%d mem=%d active=%d(t=%lums) gate=%d"
+                     "(toolOk=%ld penDown=%ld) rope=%d hudBits=%ld\n",
+                     wnd ? 1 : 0, mem ? 1 : 0, activeNow, (unsigned long)pktAge, gateOk,
+                     (long)g_toolOk, (long)g_penDown, ropeMode, (long)hf);
+            }
             Sleep(HUD_FRAME_MS);
             continue;
         }
 
-        /* —— 绘制（窗口中心 = 光标 = 平滑输出点）—— */
-        double pxAxis = g_pxPerAxis;
-        int rx = (int)(((double)g_snRawX - axX) * pxAxis);
-        int ry = (int)(((double)g_snRawY - axY) * pxAxis);
+        /* —— 绘制（对齐 PS 原生拉绳：圆心 = 绘制点，光标在圈内自由）——
+           ⛔⛔ 关键几何（2026-10-13 定案）：**圆心必须钉在绘制点（输出点）上**，
+              而不是钉在系统光标上。
+             · 依据 1（硬事实）：Wintab 系统上下文（CXO_SYSTEM）由驱动侧移动光标，
+               detour 只改写交给 PS 的那份副本 ⇒ GetCursorPos() 是**原始笔尖**，
+               ≠ 我们输出的绘制点。若把 HUD 钉在光标上，圆心就不再是轨迹末端。
+             · 依据 2（用户明确的真实需求）：「圆心应该渲染在目前生成的轨迹的末端」。
+             · 绘制点的屏幕位置 = 光标 − Σ每轴[(raw−out)·px]；
+               绳带从圆心指向 +offset —— 恰好落在系统光标（= 原始笔尖）上。
+           ⚠️ 已撤回的**无效依据**：上一轮我曾用一张 251×308 截图里
+              「折线末端落后光标 27px vs HUD 偏移 34px」反推逐轴比 —— 但用户澄清
+              那些截图只是**现象示意**、并非真实截图 ⇒ 该量化结论作废，不得再引用。
+             逐轴换算的**真正**依据是 [calib] 日志的 lcInExtX/lcInExtY（见 px_x/px_y 注释）。
+           ⛔ 偏移逐轴换算；**符号不在此处假设**，由 calib_axis() 实测（见 px_y 注释）。 */
+        int rx = (int)(((double)g_snRawX - (double)g_snOutX) * px_x());
+        int ry = (int)(((double)g_snRawY - (double)g_snOutY) * px_y());
         LONG c  = g_cfg[CFG_I_HUDCOLOR];
         COLORREF col = RGB((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
+
+        int rpx = g_cfg[CFG_I_RADIUSPX]; if (rpx < 1) rpx = 1;
+        if (rpx > RADIUS_PX_MAX) rpx = RADIUS_PX_MAX;
+        /* 圆周半径 = 真实绳长（= 半径，张力已删除）⇒ 圈与约束永远一致。
+           ⚠️ 模式判据在上面 wantVisible 处已经用过一次（ropeMode）；这里不再取一次，
+              取了也只是个未使用变量。 */
+        int leashPx = (int)(leash_px(rpx) + 0.5);
+        if (leashPx < 2) leashPx = 2;
 
         int half = HUD_SIZE / 2;
         RECT rc = { 0, 0, HUD_SIZE, HUD_SIZE };
@@ -1390,18 +1913,63 @@ static DWORD WINAPI hud_thread(LPVOID param)
 
         HPEN pen = CreatePen(PS_SOLID, 1, col);
         HPEN old = (HPEN)SelectObject(mem, pen);
-        if (hf & 2) {                     /* 半径圆：直观显示「最大滞后」有多大 */
-            int rpx = g_cfg[CFG_I_RADIUSPX]; if (rpx < 1) rpx = 1;
+        if (hf & 2) {                     /* 绳长圆：光标（原始笔）的活动范围 */
             HBRUSH nb = (HBRUSH)GetStockObject(NULL_BRUSH);
             HBRUSH ob = (HBRUSH)SelectObject(mem, nb);
-            Ellipse(mem, half - rpx, half - rpx, half + rpx, half + rpx);
+            Ellipse(mem, half - leashPx, half - leashPx, half + leashPx, half + leashPx);
             SelectObject(mem, ob);
         }
-        if (hf & 1) {                     /* 绳：光标 ↔ 原始笔尖 */
-            MoveToEx(mem, half, half, NULL);
-            LineTo(mem, half + rx, half + ry);
+        if (hf & 1) {
+            /* 「绳」：从圆心（绘制点）连到光标（原始笔尖）。
+               ⛔ 旧版画成 4→1px 的**锥形直线**，用户明确否掉：「一头粗一头细，始终是
+                  直线，没有一种绳子的感觉」。PS 的参照行为是：
+                    · 光标在圈内 ⇒ 绳是**松弛的曲线**；
+                    · 光标到圈上 ⇒ 绳**被拉直** —— 这个「由松到直」的过程正是
+                      「描边末端被绳子牵着前进」的手感来源。
+               ⇒ 统一细线（2px）+ 二次贝塞尔。垂度取**小垂度悬链线**：
+                   sag = sqrt(3·(L−d)·d / 8)，L = 绳长(= 圆周半径)、d = 两端距离。
+                   d → L 时 sag → 0 ⇒ 自然拉直，不需要写特判分支。
+                   d 很小时 sag 也 → 0（绳没有长度可言），同样无需特判。 */
+            const int NSEG = 24;
+            double vx = (double)rx, vy = (double)ry;
+            double vlen = dsqrt_(vx * vx + vy * vy);
+            double sag = 0.0;
+            if (vlen > 0.5 && vlen < (double)leashPx) {
+                double slackLen = (double)leashPx - vlen;
+                sag = dsqrt_(3.0 * slackLen * vlen / 8.0);
+            }
+            /* 控制点 = 中点 + 2·sag·n（二次贝塞尔在 t=0.5 处的偏移是控制点偏移的一半）。 */
+            double mx = (double)half + vx * 0.5, my = (double)half + vy * 0.5;
+            double cqx = mx, cqy = my;
+            if (sag > 0.5) {
+                double nx = -vy, ny = vx;                       /* 垂直于「圆心→光标」 */
+                double nl = dsqrt_(nx * nx + ny * ny);
+                if (nl > 0.001) {
+                    nx /= nl; ny /= nl;
+                    /* 一律朝屏幕下方弓（模拟绳的自重）；绳恰好水平时取右侧。
+                       ⚠️ 不按运动方向定弯曲侧：停笔时方向未定义，会导致绳突然翻面。 */
+                    if (ny < 0.0) { nx = -nx; ny = -ny; }
+                    else if (ny < 1e-9 && nx < 0.0) { nx = -nx; ny = -ny; }
+                    cqx = mx + nx * (2.0 * sag);
+                    cqy = my + ny * (2.0 * sag);
+                }
+            }
+            HPEN sp = CreatePen(PS_SOLID, 2, col);
+            HPEN so = (HPEN)SelectObject(mem, sp);
+            int pvx = half, pvy = half;
+            for (int i = 1; i <= NSEG; i++) {
+                double t = (double)i / (double)NSEG, u = 1.0 - t;
+                double bx = u * u * (double)half + 2.0 * u * t * cqx + t * t * ((double)half + vx);
+                double by = u * u * (double)half + 2.0 * u * t * cqy + t * t * ((double)half + vy);
+                int xi = (int)(bx + 0.5), yi = (int)(by + 0.5);
+                MoveToEx(mem, pvx, pvy, NULL);
+                LineTo(mem, xi, yi);
+                pvx = xi; pvy = yi;
+            }
+            SelectObject(mem, so);
+            DeleteObject(sp);
         }
-        if (hf & 4) {                     /* 原始笔尖点 */
+        if (hf & 4) {                     /* 笔尖点：恰好落在系统光标（原始笔尖）上 */
             int r = 3;
             HBRUSH fb = CreateSolidBrush(col);
             HBRUSH ob = (HBRUSH)SelectObject(mem, fb);
@@ -1412,7 +1980,11 @@ static DWORD WINAPI hud_thread(LPVOID param)
         SelectObject(mem, old);
         DeleteObject(pen);
 
-        SetWindowPos(wnd, HWND_TOPMOST, cur.x - half, cur.y - half, 0, 0,
+        /* 窗口钉在**绘制点**（= 光标 − 绳偏移），不是钉在光标上：
+           圆心 = 绘制点（描边画在这里），绳带末端 +offset 恰好压在系统光标上。
+           ⛔ 旧版钉在 GetCursorPos()（= 原始笔尖）等于把两者的角色搞反 ——
+              真机表现「光标钉在圆心、洋红点向外延伸到圆周又弹回圆心」即由此来。 */
+        SetWindowPos(wnd, HWND_TOPMOST, cur.x - rx - half, cur.y - ry - half, 0, 0,
                      SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
         HDC dc = GetDC(wnd);
         if (dc) { BitBlt(dc, 0, 0, HUD_SIZE, HUD_SIZE, mem, 0, 0, SRCCOPY); ReleaseDC(wnd, dc); }

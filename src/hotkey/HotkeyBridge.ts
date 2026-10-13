@@ -66,6 +66,39 @@ let cachedConfig: HotkeyEntry[] = [];
 // 是否已从守护进程收到过配置文件：避免「配置尚未加载」时对配置做读-改-写
 // （那会把整份配置用空列表覆盖掉）。
 let configLoaded = false;
+/**
+ * 守护进程**实际读写**的那个配置文件路径（由配置帧带回）。
+ *
+ * ⛔⛔ 为什么必须有它（2026-10-13 用户报「关掉 PS 重新加载后热键全没了，
+ *    hotkeys.json 已被初始化」）：
+ *    守护进程在「还没收到面板下发的配置路径」时，会回落到默认路径
+ *    （%LOCALAPPDATA%\JWautofill\hotkeys.json）。若那个文件不存在（例如卸载脚本
+ *    把指向真实配置的指针 configpath.txt 一起删了），守护进程就会回一帧**空配置**。
+ *    面板拿到空列表后按「首次使用」补上主开关/套索键两个默认条目并**回写落盘** ——
+ *    用户的笔刷热键就这样被整份冲掉了。
+ *    ⇒ 现在只有**守护进程明确报出了它读写的文件路径**时才允许回写：
+ *      路径为空说明它连自己该读哪份配置都还不知道，此时回写等于拿默认值覆盖真配置。
+ */
+let daemonConfigPath = '';
+/**
+ * 面板**主动下发**的配置路径（`resolveConfigPath()` 的解析结果）。
+ * 与 `daemonConfigPath` 一起构成「回写许可」的判据，见 `canPersistConfig`。
+ */
+let requestedConfigPath = '';
+/**
+ * 是否允许把面板侧的改动回写落盘。
+ *
+ * ⛔⛔ 判据 = 「守护进程正在读写的文件，正是面板指定的那一份」。
+ *    只判「路径非空」不够：守护进程在拿不到面板路径时会回落到**默认路径**
+ *    （%LOCALAPPDATA%\JWautofill\hotkeys.json），那个字符串同样非空 ——
+ *    而它指向的文件往往不存在 ⇒ 守护进程读到空列表 ⇒ 面板按「首次使用」补默认值
+ *    并回写 ⇒ 用户的笔刷热键被整份冲掉（2026-10-13 报的「关掉 PS 重载后热键全没了」）。
+ *    ⇒ 只有两边**逐字相同**时才允许落盘；不一致说明守护进程还在别处，先由面板
+ *      重新下发路径（见 onmessage 里的 config 分支），这一轮一律不写。
+ */
+function canPersistConfig(): boolean {
+  return configLoaded && !!requestedConfigPath && daemonConfigPath === requestedConfigPath;
+}
 // ===== 专注模式「套索工具键」（默认 L）=====
 // 专注模式下主开关热键只开不关；为了让 H / L 像两个工具一样切换，再注册一个
 // 「套索工具」键：按下即关闭主开关并把当前工具切回套索。
@@ -284,7 +317,10 @@ export function connectHotkeyDaemon(): () => void {
         void (async () => {
           try {
             const cp = await resolveConfigPath();
-            if (cp) ws.send(JSON.stringify({ type: 'setConfigPath', path: cp }));
+            if (cp) {
+              requestedConfigPath = cp;
+              ws.send(JSON.stringify({ type: 'setConfigPath', path: cp }));
+            }
           } catch { /* ignore */ }
           try { ws.send(JSON.stringify({ type: 'getConfig' })); } catch { /* ignore */ }
           // 重连后同步布防状态：守护进程在客户端断开时会撤防，
@@ -302,6 +338,17 @@ export function connectHotkeyDaemon(): () => void {
             const raw: any[] = Array.isArray(msg.payload) ? msg.payload : [];
             cachedConfig = raw.map(normalizeEntry).filter((x): x is HotkeyEntry => !!x);
             configLoaded = true;
+            // 记下守护进程读写的文件路径：与面板指定的不一致 ⇒ 后面一律不回写
+            // （见 canPersistConfig），并顺手把路径重发一次让它对齐。
+            daemonConfigPath = typeof msg.path === 'string' ? msg.path : '';
+            if (requestedConfigPath && daemonConfigPath !== requestedConfigPath) {
+              console.warn('⚠️ 守护进程的配置路径与面板不一致，已重新下发（本次不回写配置）\n  面板：'
+                + requestedConfigPath + '\n  服务：' + (daemonConfigPath || '(未知)'));
+              try { ws.send(JSON.stringify({ type: 'setConfigPath', path: requestedConfigPath })); } catch { /* ignore */ }
+            } else if (!requestedConfigPath) {
+              console.warn('⚠️ 尚未解析出插件数据目录，本次不回写配置（避免用默认值覆盖已有热键）；'
+                + '守护进程当前使用：' + (daemonConfigPath || '(未知)'));
+            }
             // 首次使用时补上主开关的默认快捷键 Ctrl+Q
             ensureMainToggleEntry();
             // 专注模式开启时补上/更新「套索工具键」（仅 APP 面板上下文会真正写入）
@@ -450,6 +497,12 @@ export function getConfig(): HotkeyEntry[] {
 export function pushConfig(list: HotkeyEntry[]): boolean {
   cachedConfig = list.slice();
   emitConfig();
+  // ⛔ 路径未就绪时**绝不落盘**：守护进程此刻还不知道该写哪份配置（会落到默认路径），
+  //    写下去就是把用户真配置覆盖成默认值 —— 2026-10-13「热键全没了」的实际成因。
+  if (!canPersistConfig()) {
+    console.warn('⚠️ 配置文件路径尚未就绪，已跳过本次落盘（界面仍会显示你刚做的改动，服务就绪后请再确认一次）');
+    return false;
+  }
   try {
     if (currentWs && currentWs.readyState === (currentWs.OPEN ?? 1)) {
       currentWs.send(JSON.stringify({ type: 'config', payload: list }));
@@ -876,6 +929,26 @@ const TOOL_TYPE_CN: Record<string, string> = {
 };
 
 /**
+ * 把「当前工具」的各种返回形态统一成一个枚举串；认不出返回 null。
+ *
+ * ⛔ 为什么必须容错（2026-10-13 根因）：`{_obj:'get', _target:[{_property:'tool'}]}`
+ *    在不同 PS 版本 / 不同批次里回的是**不同形状** —— 裸串 `"lassoTool"`、
+ *    `{_enum:"lassoTool"}`、`{_obj:"lassoTool"}` 都出现过。旧实现只看 `_enum`/`_value`，
+ *    宿主一回裸串就恒为 null ⇒ 上层把「读不到」判成「未知」而**放行**闸门
+ *    ⇒ 平滑与 HUD 的工具闸门静默失效（真机现象：用铅笔落笔也弹出套索的 HUD）。
+ *    所以这里把 4 种形态一并吃掉，且**导出**出去给面板的兜底通路复用。
+ */
+export function normalizeToolId(v: any): string | null {
+  if (!v) return null;
+  if (typeof v === 'string') return v ? v : null;
+  if (typeof v === 'object') {
+    const s = v._enum ?? v._value ?? v._obj ?? v.tool ?? v.id ?? v.name;
+    return typeof s === 'string' && s ? s : null;
+  }
+  return null;
+}
+
+/**
  * 读取当前工具类型（_enum），例如 paintbrushTool；读不到返回 null。
  *
  * ⚠️ 2026-10-09 收口：此前是**裸 batchPlay get**（记忆里登记的残余缺口）。
@@ -894,8 +967,7 @@ export async function getSelectedBrushToolEnum(): Promise<string | null> {
   );
   if (!r || !isGetOk(r)) return null;
   const d = Array.isArray(r) ? r[0] : r;
-  const tool = d?.tool?._enum || d?.tool?._value || null;
-  return typeof tool === 'string' ? tool : null;
+  return normalizeToolId(d?.tool);
 }
 
 /** 当前笔刷的聚合信息（类型 / 名称 / 直径），用于下拉展示。 */

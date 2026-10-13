@@ -42,16 +42,32 @@ function Log($msg) {
 
 # 删除安装目录时，守护进程的日志句柄可能尚未释放，导致偶发删除失败；
 # 这里重试若干次，避免一次失败就中断整个卸载流程。
-function Remove-DirWithRetry($path, $attempts = 12) {
+# ⚠️ 重试次数 × 等待时长 = 最长阻塞时间，别调太大（原来 12×800ms ≈ 9.6s 的静默等待，
+#    用户会以为脚本卡死了）。4 秒足够覆盖「刚被杀的进程释放句柄」这种瞬时占用。
+function Remove-DirWithRetry($path, $attempts = 8) {
     for ($i = 0; $i -lt $attempts; $i++) {
         if (-not (Test-Path $path)) { return $true }
         try {
             Remove-Item -Path $path -Recurse -Force -ErrorAction Stop
             if (-not (Test-Path $path)) { return $true }
         } catch { }
-        Start-Sleep -Milliseconds 800
+        Start-Sleep -Milliseconds 500
     }
     return $false
+}
+
+# 删除失败时给出**确切原因**（安装目录里只有 exe 与日志，删不掉基本只有一种可能：
+#   某个守护进程实例还活着，占着 exe / daemon.log 的句柄）。
+function Explain-DeleteFailure($path) {
+    $left = @(Get-ChildItem -Path $path -Force -ErrorAction SilentlyContinue)
+    if ($left.Count -gt 0) {
+        Log ("仍残留 " + $left.Count + " 个项目：" + (($left | ForEach-Object { $_.Name }) -join ", "))
+    }
+    $rp = Get-Process -Name $daemonName -ErrorAction SilentlyContinue
+    if ($rp) {
+        Log "检测到服务进程仍在运行：PID " + (($rp | ForEach-Object { $_.Id }) -join ",")
+        Log "处置：先在面板里「停止服务」，或手动结束该进程，再重新卸载。"
+    }
 }
 
 $exitCode = 0
@@ -110,8 +126,11 @@ try {
             if (Remove-DirWithRetry $installDir) {
                 Log "已删除安装目录：$installDir"
             } else {
+                # ⛔ 这里**不 throw**：throw 会跳到 catch，把后面「清理残留 / 重置钩子超时」
+                #    全部跳过 —— 删除失败只是**一项**失败，其余清理该照做。
                 Log "错误：无法删除安装目录（文件仍被占用？）：$installDir"
-                throw "删除安装目录失败：$installDir"
+                Explain-DeleteFailure $installDir
+                $exitCode = 1
             }
         } else {
             Log "错误：路径校验失败，为防误删已中止删除操作：$installDir"
@@ -165,17 +184,22 @@ try {
     }
     if (-not $keptAny) { Log "未发现热键配置文件，无需保留。" }
 
-    # 7) 清理 %LOCALAPPDATA%\JWautofill 下的其余残留
+    # 7) 目录回收（**只回收空目录，绝不删内容**）
+    #   ⛔⛔ 2026-10-13 修复：这里原来是 Get-ChildItem | Remove-Item -Recurse -Force，
+    #      它会把 %LOCALAPPDATA%\JWautofill 下的**所有东西**删掉，包括：
+    #        · configpath.txt —— 「用户热键配置存在哪」的唯一指针。删掉它，本守护进程
+    #          下次启动就会回落到默认路径、读到空配置 ⇒ 面板以为「首次使用」、
+    #          回写默认条目，把用户的笔刷热键整份冲掉（用户报的「关掉 PS 重载后热键全没了」）。
+    #        · 另一个角色的安装目录（smooth\ 与本角色的 daemon\ 互为兄弟），
+    #          与「两个服务必须互不影响」的承诺直接冲突（卸载快捷键服务会顺手删掉平滑服务）。
+    #      ⇒ 自己的安装目录已由上面第 3 步精确删除，这里只做空目录回收。
     if (Test-Path $jwRoot) {
-        Get-ChildItem -Path $jwRoot -Force -ErrorAction SilentlyContinue | ForEach-Object {
-            try { Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue } catch { }
-        }
         $left = @(Get-ChildItem -Path $jwRoot -Force -ErrorAction SilentlyContinue)
         if ($left.Count -eq 0) {
             Remove-Item -Path $jwRoot -Force -ErrorAction SilentlyContinue
             Log "已清理空的残留目录：$jwRoot"
         } else {
-            Log "残留目录仍包含 $($left.Count) 个项目，已保留：$jwRoot"
+            Log "保留 $($left.Count) 个项目（配置指针 / 另一服务的安装目录，均不属于本服务）：$jwRoot"
         }
     }
 
@@ -196,13 +220,16 @@ Write-Host "日志文件：$log"
 Write-Host ""
 
 # 全程无交互：不等待任何按键输入，统一倒计时后自动关闭。
-# 失败时停留更久，便于阅读错误信息。
-$seconds = if ($exitCode -eq 0) { 5 } else { 30 }
+# ⛔ 倒计时是**唯一的**收尾机制（.bat 里的 `pause` 已删除）：卸载失败时
+#    `if errorlevel 1 pause` 会让窗口永远停在「请按任意键继续」——
+#    用户报的「倒计时到 0 了也无法自动关闭」就是它。
+# ⚠️ 成功 5s / 失败 15s，与套索平滑服务卸载脚本**逐字一致**（两边表现必须相同）。
+$seconds = if ($exitCode -eq 0) { 5 } else { 15 }
 for ($i = $seconds; $i -ge 1; $i--) {
     if ($exitCode -eq 0) {
         Write-Host ("`r卸载完成，本窗口将在 " + $i + " 秒后自动关闭…   ") -NoNewline
     } else {
-        Write-Host ("`r卸载未完全成功，本窗口将在 " + $i + " 秒后自动关闭…   ") -NoNewline
+        Write-Host ("`r卸载未完全成功（详见上面的错误与日志），本窗口将在 " + $i + " 秒后自动关闭…   ") -NoNewline
     }
     Start-Sleep -Seconds 1
 }

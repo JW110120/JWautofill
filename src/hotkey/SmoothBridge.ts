@@ -150,14 +150,14 @@ export function sendSmoothDaemonCommand(type: string): boolean {
  *     参数经命名共享内存由守护进程下发 —— 面板与 DLL 之间不直接通信。
  *
  * ⛔ 必须**整包带参数**：早期版本只发 `{on}`，守护进程侧的强度恒为默认 40、
- *     半径/模式/张力/追笔/拐角连字段都没有 ⇒ 面板调参对笔平滑毫无作用
+ *     半径/模式/追笔/拐角连字段都没有 ⇒ 面板调参对笔平滑毫无作用
  *     （真机复现：「已平滑 47417 包但感知不明显」）。
  *
  * 真实生效状态不靠这里乐观更新：守护进程收到后会回一帧 `smoothState`（含 `pen`），
  * 面板按**它**刷新开关与状态条 —— 避免「点了亮起来其实没生效」。
  */
 export function sendPenSmooth(on: boolean, params?: {
-  mode?: number; strength?: number; radius?: number; tension?: number;
+  mode?: number; strength?: number; radius?: number;
   catchUp?: number; cornerAngle?: number; speedAdaptive?: boolean;
   hud?: number; hudColor?: number;
 }): boolean {
@@ -168,7 +168,6 @@ export function sendPenSmooth(on: boolean, params?: {
         if (typeof params.mode === 'number') msg.mode = params.mode;
         if (typeof params.strength === 'number') msg.strength = params.strength;
         if (typeof params.radius === 'number') msg.radius = params.radius;
-        if (typeof params.tension === 'number') msg.tension = params.tension;
         if (typeof params.catchUp === 'number') msg.catchUp = params.catchUp;
         if (typeof params.cornerAngle === 'number') msg.cornerAngle = params.cornerAngle;
         if (typeof params.speedAdaptive === 'boolean') msg.speedAdaptive = params.speedAdaptive;
@@ -224,4 +223,35 @@ export async function launchSmoothDaemon(): Promise<{ ok: boolean; message: stri
 /** 卸载平滑守护进程（移除开机自启 + 删除它自己的安装目录），与热键服务互不影响。 */
 export function uninstallSmoothDaemon(): boolean {
   return sendSmoothDaemonCommand('uninstall');
+}
+
+/**
+ * 唤起平滑服务的**卸载程序**（插件目录里的 native/SmoothDaemon/JWUninstall.exe）。
+ *
+ * ⛔ 为什么需要它（2026-10-13 用户要求「与笔刷热键服务的卸载对齐」）：
+ *    平滑服务**已经卸载掉**的情况下再点一次「卸载」，旧版是弹一个信息框
+ *    「平滑服务当前未在运行，无需卸载」—— 用户看不到任何实际动作，也无法确认
+ *    安装目录到底清没清干净。笔刷热键那边遇到同样情形会**弹出 cmd 窗口**，
+ *    把「未发现运行中的服务进程 / 安装目录不存在，跳过」逐条打出来。
+ *    两边表现必须一致，所以这里照抄那条通路。
+ *
+ * ⛔⛔ 2026-10-13 第二轮：改唤起 **.exe 启动器**，不再直接唤起 .bat。
+ *    用户实测 shell.openPath 对 .bat 表现不一致（热键侧什么都看不到、平滑侧窗口闪退），
+ *    而对 .exe 会稳定地执行并带出可见控制台（FixKeyboard.exe 已走通这条路）。
+ *    JWUninstall.exe 只做一件事：在自带控制台里跑同目录的 uninstall.ps1。
+ */
+export async function runSmoothUninstallScript(): Promise<{ ok: boolean; message: string }> {
+  const full = await resolvePluginPath('native/SmoothDaemon/JWUninstall.exe');
+  if (!full) {
+    return { ok: false, message: '无法定位插件目录，请手动双击插件目录 native/SmoothDaemon/JWUninstall.exe' };
+  }
+  try {
+    const r: any = await shell.openPath(full);
+    if (typeof r === 'string' && r.length > 0) {
+      return { ok: false, message: '唤起失败：' + r + '（可手动双击 native/SmoothDaemon/JWUninstall.exe）' };
+    }
+    return { ok: true, message: '卸载程序已打开，请在弹出的窗口中查看结果。' };
+  } catch (e: any) {
+    return { ok: false, message: '唤起卸载程序失败：' + (e?.message || String(e)) };
+  }
 }

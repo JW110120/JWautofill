@@ -1,4 +1,4 @@
-// JWautofill 全局热键守护进程 (Windows)
+﻿// JWautofill 全局热键守护进程 (Windows)
 // 职责：
 //   1. 持有共享配置文件 hotkeys.json（默认 %LOCALAPPDATA%/JWautofill/hotkeys.json；
 //      由 UXP 面板在连接后指定为 PS 的 PluginData 目录，与密钥/图案等数据统一管理）
@@ -75,7 +75,9 @@ namespace JWautofillDaemon
     {
         private const string LogPrefix = "[PenHook] ";
         private const string MapName = "Local\\JWautofillWintabSmooth";
-        private const int NLONGS = 32;
+        // ⛔ 必须与 native/WintabHook/wintab_hook.c 的 CFG_NLONGS **严格相等**：
+        //    映射文件大小由它决定，两侧不一致会让后半段槽位互相踩（错位不报错）。
+        private const int NLONGS = 40;
         private const int Stride = 4;
         private const int Magic = 0x57414A57;
 
@@ -85,8 +87,18 @@ namespace JWautofillDaemon
                           I_STATE = 8, I_CALLS = 9, I_PACKETS = 10, I_SMOOTHED = 11,
                           I_STRIDE = 12, I_OFFX = 13, I_OFFY = 14, I_OFFSER = 15,
                           I_AXISMAX = 16, I_PID = 17, I_FROZE = 18, I_HEARTBEAT = 19,
-                          I_MODE = 20, I_TENSION = 21, I_CATCHUP = 22, I_CORNER = 23,
-                          I_RADIUSPX = 24, I_HUD = 25, I_HUDCOLOR = 26, I_PXPERAXIS = 27;
+                          I_MODE = 20,
+                          // ⛔ 槽位 21 = 已废弃的「张力」（2026-10-13 并入「半径」）。
+                          //    刻意**保留这个空洞**而不是重编号：它与 wintab_hook.c 的
+                          //    enum 逐项对应，少一项就让后面 11 个槽整体错位，而错位不报错。
+                          I_CATCHUP = 22, I_CORNER = 23,
+                          I_RADIUSPX = 24, I_HUD = 25, I_HUDCOLOR = 26, I_PXPERAXIS = 27,
+                          // P3.2 触发闸门（详见 wintab_hook.c 同名槽位的注释）
+                          I_TOOLGATE = 28, I_GATETS = 29, I_PENDOWN = 30, I_GATEOK = 31,
+                          I_CTUNKNOWN = 32,
+                          // P3.3：Y 轴分量的「轴→像素」比（**带符号**）。C 侧新增槽位只能
+                          // 往后追加 —— 中间插一个就会让后面所有槽整体错位（错位不报错）。
+                          I_PXPERAXISY = 33;
 
         /// <summary>
         /// 笔（套索平滑）通路的参数面 —— 与面板「平滑选项」的参数同源同语义。
@@ -97,13 +109,21 @@ namespace JWautofillDaemon
         {
             public int Mode = 0;          // 0=标准 1=拉绳 2=追笔
             public int Strength = 40;
-            public int RadiusPx = 8;      // 屏幕像素（与面板「最大滞后」同单位）
-            public int Tension = 50;
+            // 屏幕像素（与面板「最大滞后」同单位）。上限 100：与 PS 自家平滑一致，
+            // 旧的 40 会把 τ 追平后的滞后硬截断 ⇒ 用户「强度拉满也没感觉」。
+            public int RadiusPx = 12;
             public int CatchUp = 50;
             public int CornerAngle = 45;
             public int Flags = 1;         // bit0 = 速度自适应
-            public int Hud = 3;           // bit0=leash 线 bit1=半径圆 bit2=原始笔尖点
+            public int Hud = 3;           // bit0=leash 线 bit1=绳长圆 bit2=笔尖点
             public int HudColor = 0xFF00FF;   // 品红，与 PS 画笔绳线同色
+
+            /// <summary>
+            /// 工具闸门：0 = 当前不是套索（禁止平滑），1 = 是套索，2 = 未知/读数失败（放行）。
+            /// ⚠️ 由面板 300ms 巡检写入。DLL 侧只用 0 与非 0 区分，
+            ///    「读不到工具」绝不能当成「不是套索」—— 那会把平滑整个关掉。
+            /// </summary>
+            public int ToolGate = 2;
         }
 
         /// <summary>面板 <c>penSmooth</c> 消息的线格式（字段全部可空：缺 = 保持原值）。
@@ -113,12 +133,13 @@ namespace JWautofillDaemon
             public int? Mode { get; set; }
             public int? Strength { get; set; }
             public int? Radius { get; set; }
-            public int? Tension { get; set; }
             public int? CatchUp { get; set; }
             public int? CornerAngle { get; set; }
             public bool? SpeedAdaptive { get; set; }
             public int? Hud { get; set; }
             public int? HudColor { get; set; }
+            /// <summary>工具闸门（面板 300ms 巡检）。缺字段 = 保持原值。</summary>
+            public int? ToolGate { get; set; }
         }
 
         private static System.IO.MemoryMappedFiles.MemoryMappedFile? _mmf;
@@ -145,8 +166,9 @@ namespace JWautofillDaemon
                 return new PenParams
                 {
                     Mode = _pen.Mode, Strength = _pen.Strength, RadiusPx = _pen.RadiusPx,
-                    Tension = _pen.Tension, CatchUp = _pen.CatchUp, CornerAngle = _pen.CornerAngle,
+                    CatchUp = _pen.CatchUp, CornerAngle = _pen.CornerAngle,
                     Flags = _pen.Flags, Hud = _pen.Hud, HudColor = _pen.HudColor,
+                    ToolGate = _pen.ToolGate,
                 };
             }
         }
@@ -185,9 +207,9 @@ namespace JWautofillDaemon
                 {
                     // ⛔ 槽位表与 native/WintabHook/wintab_hook.c 的 enum CFG_I_* 逐项对应。
                     //    两处手写 ⇒ 错位不报错、只静默失效，所以这里加运行时兜底校验。
-                    if (I_PXPERAXIS >= NLONGS)
+                    if (I_PXPERAXISY >= NLONGS)
                         throw new InvalidOperationException(
-                            "笔平滑槽位表越界：I_PXPERAXIS=" + I_PXPERAXIS + " >= NLONGS=" + NLONGS
+                            "笔平滑槽位表越界：I_PXPERAXISY=" + I_PXPERAXISY + " >= NLONGS=" + NLONGS
                             + "（C 与 C# 两侧槽位不同步）");
                     _cmdSeq = (int)(DateTime.UtcNow.Ticks & 0x00FFFFFF);
                     var mmf = System.IO.MemoryMappedFiles.MemoryMappedFile.CreateOrOpen(
@@ -214,15 +236,31 @@ namespace JWautofillDaemon
             Wr(I_STRENGTH, _pen.Strength);
             Wr(I_FLAGS,    _pen.Flags);
             Wr(I_MODE,     _pen.Mode);
-            Wr(I_TENSION,  _pen.Tension);
             Wr(I_CATCHUP,  _pen.CatchUp);
             Wr(I_CORNER,   _pen.CornerAngle);
             Wr(I_RADIUSPX, _pen.RadiusPx);
             Wr(I_HUD,      _pen.Hud);
             Wr(I_HUDCOLOR, _pen.HudColor);
+            Wr(I_TOOLGATE, _pen.ToolGate);
+            // ⚠️ 闸门时间戳与闸门值**必须同时写**：DLL 用它判「面板是否还在巡检」。
+            //    面板崩溃/关闭时守护进程会停止刷新 ⇒ 超过 3 秒即视为未知并放行，
+            //    否则一次失败的巡检就把平滑永久关死，且面板上再也开不回来。
+            Wr(I_GATETS,   unchecked((int)Environment.TickCount64));
         }
 
         private static int Clamp(int v, int lo, int hi) => v < lo ? lo : (v > hi ? hi : v);
+
+        /// <summary>
+        /// 上一次经 <c>cmd</c> 下发给 DLL 的开关状态（0=未知）。
+        ///
+        /// ⛔⛔ 为什么必须有它：DLL 收到 <c>cmd=1</c> 会**重置标定结果**（重新给标定机会），
+        ///    这是「重新挂载」语义。而面板现在会为了工具闸门**每 300ms 推一次参数**
+        ///    （见 penSmooth 的 ToolGate 字段）。若不加这道去重，每 3 秒就把标定清空一次
+        ///    ⇒ DLL 反复回到「未标定」，平滑与 HUD 时断时续，而且极难归因。
+        /// ⇒ 只在开关**真的发生跃变**时才发挂载/卸载命令；纯参数更新只写共享内存。
+        /// </summary>
+        private static volatile bool _cmdStateKnown;
+        private static volatile bool _cmdStateOn;
 
         /// <summary>由 Main 调用一次：建共享内存 + 起心跳 + 兜底卸载。</summary>
         public static void Init()
@@ -268,27 +306,36 @@ namespace JWautofillDaemon
                 {
                     _pen.Mode        = Clamp(p.Mode, 0, 2);
                     _pen.Strength    = Clamp(p.Strength, 0, 100);
-                    _pen.RadiusPx    = Clamp(p.RadiusPx, 1, 40);
-                    _pen.Tension     = Clamp(p.Tension, 0, 100);
+                    // 上限 100（与 wintab_hook.c 的 RADIUS_PX_MAX 一致，两侧都要改）
+                    _pen.RadiusPx    = Clamp(p.RadiusPx, 1, 100);
                     _pen.CatchUp     = Clamp(p.CatchUp, 0, 100);
                     _pen.CornerAngle = Clamp(p.CornerAngle, 0, 90);
                     _pen.Flags       = p.Flags & 1;
                     _pen.Hud         = p.Hud & 7;
                     _pen.HudColor    = p.HudColor & 0xFFFFFF;
+                    _pen.ToolGate    = Clamp(p.ToolGate, 0, 2);
                 }
                 _enabled = on;
                 Wr(I_ENABLED, on ? 1 : 0);
                 WriteParams();
                 Wr(I_SEQ, Rd(I_SEQ) + 1);
             }
+            // ⛔ 只在开关**真的跃变**时下发挂载/卸载命令（见 _cmdStateKnown 的注释）：
+            //    纯参数更新（含 300ms 一次的工具闸门）只写共享内存，不碰标定。
+            bool stateChanged = !_cmdStateKnown || _cmdStateOn != on;
+            _cmdStateKnown = true;
+            _cmdStateOn = on;
             if (on)
             {
-                SyncInjection();     // 先把 DLL 送进 PS（新进程）
-                SendCommand(1);      // 再把「挂载」命令递给它（已在 PS 里的旧实例也吃得到）
+                if (stateChanged)
+                {
+                    SyncInjection();     // 先把 DLL 送进 PS（新进程）
+                    SendCommand(1);      // 再把「挂载」命令递给它（已在 PS 里的旧实例也吃得到）
+                }
             }
-            else
+            else if (stateChanged)
             {
-                SendCommand(2);      // 关闭 ⇒ 立即还原字节；DLL 留在 PS 里（下次开启秒开）
+                SendCommand(2);          // 关闭 ⇒ 立即还原字节；DLL 留在 PS 里（下次开启秒开）
             }
             Console.WriteLine(LogPrefix + (on ? "已开启" : "已关闭")
                               + "（模式 " + _pen.Mode + " 强度 " + _pen.Strength
@@ -332,7 +379,37 @@ namespace JWautofillDaemon
                     }
                 }
             }
+            HealIfUnhooked();
         }
+
+        /// <summary>hook 自愈：功能是开的、也已注入，但 DLL 报「已卸载(3)」⇒ 重新下发挂载命令。</summary>
+        /// <remarks>
+        /// ⛔ 为什么必须有它（2026-10-13 用户报「平滑时有时无，切换模式后要反复开关才恢复」）：
+        ///    `cmd=2`（卸载）除了「用户关开关」之外，还有两条通路会发：
+        ///      · 本进程退出时的 <see cref="RequestUnhook"/>（服务重启 / 自更新重拉）；
+        ///      · 面板侧偶发的 off（重连重放、两个面板上下文之一先发了 off）。
+        ///    一旦 DLL 因此卸了钩，**只有再来一条 cmd=1 才会重挂** —— 而守护进程自己
+        ///    以为一切正常（_enabled 仍为 true），于是表现成「开关是开的、界面也不报错、
+        ///    可就是没有平滑」。用户只能靠反复开关去撞那条 cmd=1。
+        ///    这里让守护进程每轮巡检（<see cref="WatchPhotoshop"/> 每 3 秒）自己发现并修复。
+        /// ⚠️ 只在 _enabled 为真时才自愈：正常关闭时 Set(on:false) 会先把 _enabled 置假，
+        ///    因此绝不会把用户主动关掉的平滑又拉起来。
+        /// ⚠️ state==4（入口被旧 DLL 的转发桩占着）**不自愈**：那需要重启 Photoshop，
+        ///    反复发 cmd=1 只会刷日志。它由面板状态条如实提示。
+        /// </remarks>
+        public static void HealIfUnhooked()
+        {
+            if (!_enabled || _va == null) return;
+            if (Rd(I_STATE) != 3) return;
+            // 冷却 2 秒：penSmooth 会被面板以 ~12 次/秒的节流推来，
+            // 若重挂失败（例如 PS 正要退出）不加冷却会把日志与命令通道刷爆。
+            long now = Environment.TickCount64;
+            if (now - _lastHealAt < 2000) return;
+            _lastHealAt = now;
+            Console.WriteLine(LogPrefix + "检测到钩子已卸载但功能仍为开启 —— 自动重新挂载");
+            SendCommand(1);
+        }
+        private static long _lastHealAt;
 
         /// <summary>请求 PS 侧的 hook 还原代码段（幂等）。关闭服务/卸载/退出前调用。</summary>
         public static void RequestUnhook(int timeoutMs = 1500)
@@ -359,18 +436,32 @@ namespace JWautofillDaemon
                 strength = _pen.Strength,
                 mode = _pen.Mode,
                 radiusPx = _pen.RadiusPx,
-                tension = _pen.Tension,
                 catchUp = _pen.CatchUp,
                 cornerAngle = _pen.CornerAngle,
                 speedAdaptive = (_pen.Flags & 1) != 0,
                 hud = _pen.Hud,
-                // ×1000 的「轴→像素比」：渲染线程用真实光标标定出来的。
+                // 工具闸门：0=不是套索 1=是套索 2=未知。面板据此说明
+                // 「为什么开着却不平滑」—— 换工具了 / 笔没落纸面。
+                toolGate = _pen.ToolGate,
+                // DLL 回写的两个闸门状态（1/0）。两者的组合就是「此刻到底在不在平滑」：
+                //   toolGate=0 → 工具不对；penDown=0 → 笔悬空；gateOk=1 → 真的在改写。
+                // ⛔ toolOk 由**本进程自己写**的 I_TOOLGATE 推出（不是读 DLL 的回写 ——
+                //    DLL 不写这个槽，读它只会拿到自己刚写的值，判据等于没有）。
+                toolOk = (Rd(I_TOOLGATE) != 0) ? 1 : 0,
+                penDown = Rd(I_PENDOWN),
+                gateOk = Rd(I_GATEOK),
+                // 落笔判据是否可用。1 ⇒ 原生侧推不出「笔尖是否接触画布」，
+                // 已退化为「按落笔处理」（此时悬空移动也会被平滑，与旧版一致）。
+                contactUnknown = Rd(I_CTUNKNOWN),
+                // ×1000 的「轴→像素比」，**逐轴带符号**：渲染线程用真实光标标定出来的。
                 // 1.0 ⇒ 包坐标本身就是屏幕像素；0.0586 ⇒ 数位板逻辑单位(1920/32767)。
-                // leash 长度/位置不对时，第一个该看的就是它。
+                // ⛔ Y 那一份是**负**的（Wintab 包的 Y 向上为正、屏幕 Y 向下为正）——
+                //    leash 长度/位置不对、或洋红圆心被镜像时，第一个该看的就是这两个值。
                 pxPerAxis = Rd(I_PXPERAXIS),
+                pxPerAxisY = Rd(I_PXPERAXISY),
                 dll = _dllPath,
                 injectedPids = pids,
-                // 0=未挂 1=生效 2=标定失败 3=已卸载
+                // 0=未挂 1=生效 2=标定失败 3=已卸载 4=入口被旧副本占用
                 state = Rd(I_STATE),
                 calls = Rd(I_CALLS),
                 packets = Rd(I_PACKETS),
@@ -387,28 +478,69 @@ namespace JWautofillDaemon
         }
 
         // -------------------------------------------------------- DLL 定位
+        /// <summary>
+        /// hook DLL 的**落盘暂存目录**。
+        /// ⛔⛔ 为什么必须放在**安装目录之外**（2026-10-13 真机定案）：
+        ///     PS 一旦加载了这个 DLL，它所在的**目录**就被进程锁住 ⇒
+        ///     「卸载平滑服务」删除安装目录必然失败（真机：日志里连试 12 次全挂，
+        ///     报「无法删除安装目录（文件仍被占用？）」，而当时**守护进程并没有在跑**）。
+        ///     根因不是「删不掉」，而是**把会被注入的 DLL 放进了要删的目录里**。
+        ///     挪到 %TEMP%\JWautofill\hooks\ 之后：安装目录只剩 exe 与日志
+        ///     （守护进程一被杀就释放）⇒ 卸载必然成功；暂存目录交给系统 Temp 机制。
+        /// </summary>
+        internal static string HookStageDir =>
+            Path.Combine(Path.GetTempPath(), "JWautofill", "hooks");
+        /// <summary>插件目录布局里的**最新构建**（自安装同步的源）。</summary>
+        internal static string? LocalSourceDll()
+        {
+            try
+            {
+                string bd = AppContext.BaseDirectory;
+                string[] cands =
+                {
+                    Path.Combine(bd, "JWautofillWintabHook.dll"),
+                    Path.Combine(bd, "..", "..", "WintabHook", "publish", "JWautofillWintabHook.dll"),
+                };
+                foreach (var c in cands)
+                {
+                    string f = Path.GetFullPath(c);
+                    if (File.Exists(f)) return f;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>在目录里挑**最新**的带内容戳副本（没有则返回 false）。</summary>
+        private static bool TryPickStamped(string dir)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return false;
+                var stamped = Directory.GetFiles(dir, "JWautofillWintabHook.*.dll");
+                if (stamped.Length == 0) return false;
+                Array.Sort(stamped, (a, b) => File.GetLastWriteTimeUtc(b).CompareTo(File.GetLastWriteTimeUtc(a)));
+                _dllPath = stamped[0];
+                return true;
+            }
+            catch { return false; }
+        }
+
         private static void EnsureDllPath()
         {
             if (!string.IsNullOrEmpty(_dllPath)) return;
             try
             {
                 string bd = AppContext.BaseDirectory;
-                // ① 带版本戳的副本优先：它是最近一次自安装写入的最新构建。
-                //    无戳那份常被 PS 锁住覆盖不了 ⇒ 反而可能是旧的（见 EnsureSelfInstalled）。
-                try
-                {
-                    var stamped = Directory.GetFiles(bd, "JWautofillWintabHook.*.dll");
-                    if (stamped.Length > 0)
-                    {
-                        Array.Sort(stamped, (a, b) => File.GetLastWriteTimeUtc(b).CompareTo(File.GetLastWriteTimeUtc(a)));
-                        _dllPath = stamped[0];
-                        return;
-                    }
-                }
-                catch { }
+                // ① 暂存目录里带戳的副本优先：注入源**必须**是安装目录之外的地方
+                //    （否则又把安装目录锁住 —— 见 HookStageDir 的注释）。
+                if (TryPickStamped(HookStageDir)) return;
+                // ② 兼容旧布局：安装目录里带戳的副本（就是它曾经把安装目录锁住的）
+                if (TryPickStamped(bd)) return;
                 string[] cands =
                 {
-                    Path.Combine(bd, "JWautofillWintabHook.dll"),                       // 安装目录（与 exe 同级）
+                    Path.Combine(HookStageDir, "JWautofillWintabHook.dll"),             // 暂存目录（无戳）
+                    Path.Combine(bd, "JWautofillWintabHook.dll"),                       // 安装目录（与 exe 同级，旧布局）
                     Path.Combine(bd, "..", "..", "WintabHook", "publish", "JWautofillWintabHook.dll"), // 插件目录布局
                 };
                 foreach (var c in cands)
@@ -950,31 +1082,32 @@ namespace JWautofillDaemon
                         // ⛔⛔ 笔平滑 hook DLL 的同步**不能**放进下面的 `if (needCopy)`：
                         //     exe 没变（needCopy=false）而 DLL 变过是常态，那时 DLL 就再也不会
                         //     被同步 —— 真机正是因此一直用着旧 DLL。
-                        // ⛔⛔ 而且必须**带内容戳的文件名**：PS 一旦被注入过，旧 DLL 就被进程锁住，
-                        //     File.Copy 覆盖必抛「文件正由另一进程使用」（daemon.log 实证）
+                        // ⛔⛔ 而且必须**带内容戳的文件名**：PS 一旦被注入过，旧 DLL 就被进程
+                        //     锁住，File.Copy 覆盖必抛「文件正由另一进程使用」（daemon.log 实证）
                         //     ⇒ 安装目录里永远是第一次那份 ⇒ 改了 C 代码也不生效。
                         //     带戳的新文件名每次构建都不同，旧副本被占也挡不住新副本落地。
+                        // ⛔⛔ 落点必须是**暂存目录**（%TEMP%\JWautofill\hooks\），不能是安装目录：
+                        //     否则 PS 会把安装目录锁住 ⇒ 卸载时删不掉（详见 HookStageDir）。
                         try
                         {
-                            var hookDll = PenHook.DllPath;
+                            var hookDll = PenHook.LocalSourceDll() ?? PenHook.DllPath;
                             if (!string.IsNullOrEmpty(hookDll))
                             {
+                                Directory.CreateDirectory(PenHook.HookStageDir);
                                 string stamp = "";
                                 try { stamp = (GetFileHash(hookDll) ?? "").Substring(0, 8); } catch { }
                                 if (stamp.Length == 0) stamp = DateTime.Now.ToString("yyyyMMddHHmmss");
-                                string dst = Path.Combine(InstallDir, "JWautofillWintabHook." + stamp + ".dll");
+                                string dst = Path.Combine(PenHook.HookStageDir, "JWautofillWintabHook." + stamp + ".dll");
                                 if (!File.Exists(dst))
                                 {
                                     File.Copy(hookDll, dst, false);
-                                    Console.WriteLine(LogPrefix + " 已同步笔平滑 hook DLL: " + Path.GetFileName(dst));
+                                    Console.WriteLine(LogPrefix + " 已同步笔平滑 hook DLL: " + dst);
                                 }
                                 PenHook.SetDllPath(dst);
-                                // 顺手再试一次无戳那份（PS 没在跑时才可能成功）；失败无所谓。
-                                try { File.Copy(hookDll, Path.Combine(InstallDir, "JWautofillWintabHook.dll"), true); } catch { }
                                 // 清理更早的戳名副本：仍被 PS 加载的删不掉，忽略即可。
                                 try
                                 {
-                                    foreach (var f in Directory.GetFiles(InstallDir, "JWautofillWintabHook.*.dll"))
+                                    foreach (var f in Directory.GetFiles(PenHook.HookStageDir, "JWautofillWintabHook.*.dll"))
                                     {
                                         if (string.Equals(f, dst, StringComparison.OrdinalIgnoreCase)) continue;
                                         try { File.Delete(f); } catch { }
@@ -1480,6 +1613,16 @@ namespace JWautofillDaemon
             {
                 var dir = Path.GetDirectoryName(_configPath);
                 if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                // ⛔ 覆盖前先留一份备份（<配置>.bak）。
+                //    热键是用户一条条录出来的，一旦被默认值冲掉**无法重建** ——
+                //    2026-10-13 就发生过一次（面板拿到空配置后回写默认条目）。
+                //    面板侧的自愈判据已修（见 HotkeyBridge.canPersistConfig），
+                //    这里再兜一层：出事后至少有一份可手工还原的副本。
+                try
+                {
+                    if (File.Exists(_configPath)) File.Copy(_configPath, _configPath + ".bak", true);
+                }
+                catch { /* 备份失败不影响主流程 */ }
                 File.WriteAllText(_configPath, JsonSerializer.Serialize(items, JsonOpts));
                 ReloadConfig();
             }
@@ -2454,15 +2597,23 @@ namespace JWautofillDaemon
                                 if (wire.Mode.HasValue)        p.Mode        = wire.Mode.Value;
                                 if (wire.Strength.HasValue)    p.Strength    = wire.Strength.Value;
                                 if (wire.Radius.HasValue)      p.RadiusPx    = wire.Radius.Value;
-                                if (wire.Tension.HasValue)     p.Tension     = wire.Tension.Value;
                                 if (wire.CatchUp.HasValue)     p.CatchUp     = wire.CatchUp.Value;
                                 if (wire.CornerAngle.HasValue) p.CornerAngle = wire.CornerAngle.Value;
                                 if (wire.Hud.HasValue)         p.Hud         = wire.Hud.Value;
                                 if (wire.HudColor.HasValue)    p.HudColor    = wire.HudColor.Value;
                                 if (wire.SpeedAdaptive.HasValue)
                                     p.Flags = (p.Flags & ~1) | (wire.SpeedAdaptive.Value ? 1 : 0);
+                                // 工具闸门（面板 300ms 巡检「当前工具是不是套索」）。
+                                // ⚠️ 单独一条指令也行，但搭车走 penSmooth 更省一条消息 ——
+                                //    闸门与参数同源、同节流，避免两者错位出「界面上是套索、
+                                //    DLL 那边按画笔处理」的窗口。
+                                if (wire.ToolGate.HasValue)   p.ToolGate    = wire.ToolGate.Value;
                             }
                             PenHook.Set(on, p);
+                            // 参数/闸门更新不会触发挂载命令（见 Set 里的去重），
+                            // 因此这里补一次「已卸载就重挂」——面板重连时的重放、
+                            // 工具闸门心跳都会经过这条路径，越快自愈越好。
+                            PenHook.HealIfUnhooked();
                             BroadcastSmoothState();
                         }
 #endif
@@ -2503,14 +2654,12 @@ namespace JWautofillDaemon
 
         private static void SendConfigToClient(TcpClient client)
         {
-            var items = ReadConfigFile();
-            SendToClient(client, JsonSerializer.Serialize(new { type = "config", payload = items }, JsonOpts));
+            SendToClient(client, BuildConfigMessage());
         }
 
         private static void BroadcastConfig()
         {
-            var items = ReadConfigFile();
-            var msg = JsonSerializer.Serialize(new { type = "config", payload = items }, JsonOpts);
+            var msg = BuildConfigMessage();
             lock (_clientsLock)
             {
                 foreach (var c in _clients.ToArray())
@@ -2519,6 +2668,27 @@ namespace JWautofillDaemon
                     catch { try { c.Close(); } catch { } }
                 }
             }
+        }
+
+        /// <summary>
+        /// 配置帧：条目 + **本条配置实际来自哪个文件**。
+        /// </summary>
+        /// <remarks>
+        /// ⛔ 为什么必须带上 path（2026-10-13 用户报「关掉 PS 重载后热键全没了」）：
+        ///    守护进程在某个瞬间可能还没拿到面板下发的配置路径（`_configPath` 仍指向
+        ///    默认位置，而那里没有文件）⇒ 读到空列表 ⇒ 面板收到「空配置」后按
+        ///    「首次使用」补默认条目（主开关 / 套索键）并**回写落盘**，把用户的
+        ///    笔刷热键整份冲掉。面板侧现在用这个字段做判据：**路径不可用就绝不回写**。
+        /// </remarks>
+        private static string BuildConfigMessage()
+        {
+            var items = ReadConfigFile();
+            return JsonSerializer.Serialize(new
+            {
+                type = "config",
+                payload = items,
+                path = _configPath ?? "",
+            }, JsonOpts);
         }
 
         // 服务端→客户端帧（不掩码）

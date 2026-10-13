@@ -236,11 +236,53 @@ function wrapDocLevelLogger(
  *   `__jwPs.dump()`   → 打印最近 60 条读取面包屑（含失败原因）
  *   `__jwPs.state()`  → 打印闸门当前状态（粗筛剩余 / 闩锁年龄 / 租约连击）
  *   `__jwPs.trace(true)` → 之后每次读取都实时打印一行
+ *   `__jwPs.sources()`   → 打印「谁在刷模态」：近窗口内各 label 的模态读取次数（降序）
+ *                          ⛔ 排查「Too many modal scope commands」第一手材料
  */
 const ACCESS_LOG_MAX = 240;
 const accessLog: string[] = [];
 let accessSeq = 0;
 let traceEnabled = false;
+
+/* ------------------------------------------------------------------ *
+ * 模态来源聚合（针对 UXP 告警「Too many modal scope commands」）
+ * ------------------------------------------------------------------ *
+ * ⛔ 告警只说明「模态命令太密 / 排队太长」，**不说明是谁在发**。
+ *    若不做聚合，只能靠猜（本仓已经为此猜过好几轮）。
+ *    这里按 label 统计**真正进过模态**的读取（只有 ok/fail 计入；
+ *    直读分支与 skip 不计 —— 没进模态就不算数），一眼看出谁在刷。
+ * 用法：`__jwPs.trace(true)` 打开后每 5s 自动打印一次；或随时 `__jwPs.sources()`。
+ */
+const modalByLabel = new Map<string, number>();
+let modalWindowAt = Date.now();
+let modalWindowTotal = 0;
+const MODAL_REPORT_MS = 5000;
+
+/** label 归一化：去掉「：原因」后缀，避免失败原因把 key 打散。 */
+function baseLabel(label: string): string {
+    const i = label.indexOf('：');
+    return i > 0 ? label.slice(0, i) : label;
+}
+
+/** 打印当前窗口内各来源的模态读取次数（降序），并复位窗口。 */
+export function dumpModalSources(reset = true): void {
+    const span = Math.max(1, Date.now() - modalWindowAt);
+    const entries = Array.from(modalByLabel.entries()).sort((a, b) => b[1] - a[1]);
+    if (!entries.length) {
+        console.log('[模态来源] 本窗口内没有任何模态读取。');
+    } else {
+        const rate = (modalWindowTotal / (span / 1000)).toFixed(2);
+        console.log(
+            `[模态来源] 近 ${(span / 1000).toFixed(1)}s 共 ${modalWindowTotal} 次（${rate} 次/秒）\n` +
+            entries.slice(0, 10).map(e => `   ${String(e[1]).padStart(5)}×  ${e[0]}`).join('\n')
+        );
+    }
+    if (reset) {
+        modalByLabel.clear();
+        modalWindowTotal = 0;
+        modalWindowAt = Date.now();
+    }
+}
 
 /** 记一条「即将/刚刚发起 PS 读取」的面包屑（同步、零 IPC、开销可忽略）。 */
 export function markPsAccess(label: string, result?: 'ok' | 'fail' | 'skip'): void {
@@ -248,6 +290,14 @@ export function markPsAccess(label: string, result?: 'ok' | 'fail' | 'skip'): vo
     const line = `#${accessSeq} +${Date.now()} ${result ? `[${result}]` : '[→]'} ${label}`;
     accessLog.push(line);
     if (accessLog.length > ACCESS_LOG_MAX) accessLog.splice(0, accessLog.length - ACCESS_LOG_MAX);
+    // 只有真的进了模态（成功 / 失败）才计入聚合 —— 直读与 skip 不占模态作用域。
+    if (result === 'ok' || result === 'fail') {
+        const key = baseLabel(label);
+        modalByLabel.set(key, (modalByLabel.get(key) || 0) + 1);
+        modalWindowTotal++;
+        const t = Date.now();
+        if (traceEnabled && t - modalWindowAt >= MODAL_REPORT_MS) dumpModalSources(true);
+    }
     if (traceEnabled) {
         console.log(`[PS访问] ${line}`);
     } else if (result === 'fail') {
@@ -300,6 +350,7 @@ try {
         dump: dumpPsAccessLog,
         state: dumpPsGateState,
         trace: setPsTrace,
+        sources: dumpModalSources,
     };
 } catch { /* 环境不支持时静默 */ }
 

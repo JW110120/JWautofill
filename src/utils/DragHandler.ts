@@ -45,8 +45,9 @@ export class DragHandler {
         // 无法用 `{ [target]: v }` 的展开式写法直接写回 ⇒ app.tsx 的 handleLabelMouseDown /
         // handleMouseMove 按前缀分岔。前缀口径两处必须一致。
         'smooth:strength': { min: 0, max: 100, step: 1 },
-        'smooth:radius': { min: 1, max: 40, step: 1 },
-        'smooth:tension': { min: 0, max: 100, step: 1 },
+        // ⛔ 上限必须与 SMOOTH_RADIUS_MAX / 原生 RADIUS_PX_MAX 一致：这里曾是 40，
+        //    在半径上限抬到 100 之后被漏改 ⇒ 拖标签最多只能拖到 40（滑杆却能到 100）。
+        'smooth:radius': { min: 1, max: 100, step: 1 },
         'smooth:catchUp': { min: 0, max: 100, step: 1 },
         'smooth:cornerAngle': { min: 0, max: 90, step: 1 }
     };

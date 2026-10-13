@@ -375,13 +375,16 @@ export default function BrushHotkeySection() {
       }
       // 已连接却发指令失败：落到脚本兜底
     }
-    showMessage('未连接到快捷键服务，改用脚本卸载…');
+    showMessage('未连接到快捷键服务，改用卸载程序…');
+    // ⛔ 唤起 **.exe 启动器**而不是 .bat（2026-10-13 用户实测：shell.openPath 对 .bat
+    //    行为不稳定，热键侧「提示已打开但什么都看不到」）。.exe 会稳定带出可见控制台，
+    //    由它去跑同目录的 uninstall.ps1。.bat 仍保留供手动双击使用。
     let ok = false;
-    try { ok = await openBundled('native/HotkeyDaemon/uninstall.bat'); } catch (err: any) {
+    try { ok = await openBundled('native/HotkeyDaemon/JWUninstall.exe'); } catch (err: any) {
       console.error('唤起内置卸载程序失败:', err);
     }
     if (!ok) {
-      const ret = '插件目录内未找到卸载脚本，请手动双击 native/HotkeyDaemon/uninstall.bat';
+      const ret = '插件目录内未找到卸载程序，请手动双击 native/HotkeyDaemon/JWUninstall.exe（或 uninstall.bat）';
       showMessage(ret);
       return ret;
     }
@@ -481,14 +484,14 @@ export default function BrushHotkeySection() {
         showMessage(sameName.length > 1
           ? ('已合并重名「' + selectedBrush + '」并更新为：' + combo)
           : ('已更新「' + selectedBrush + '」的快捷键：' + combo));
-      } else showMessage('推送配置失败（快捷键服务未运行？）');
+      } else showMessage('推送配置失败：快捷键服务未运行，或配置路径尚未就绪（请重新启动快捷键服务后重试）');
       return;
     }
     const entry: HotkeyEntry = { id: 'bk_' + Date.now(), combo, action: 'applyBrush', brush: selectedBrush };
     const next = [...entries, entry];
     setEntries(next);
     if (pushConfig(next)) showMessage('已保存：' + combo + ' → ' + selectedBrush);
-    else showMessage('推送配置失败（快捷键服务未运行？）');
+    else showMessage('推送配置失败：快捷键服务未运行，或配置路径尚未就绪（请重新启动快捷键服务后重试）');
   };
 
   // 用户主动取消当前录制
@@ -568,7 +571,7 @@ export default function BrushHotkeySection() {
       .map(e => (e.id === target.id ? { ...e, combo } : e));
     setEntries(next);
     if (pushConfig(next)) showMessage('已重录：' + combo + ' → ' + target.brush);
-    else showMessage('推送配置失败（快捷键服务未运行？）');
+    else showMessage('推送配置失败：快捷键服务未运行，或配置路径尚未就绪（请重新启动快捷键服务后重试）');
   };
 
   // 重录选中单条（重录图标按钮入口）。仅当恰好选中一条时可用。
@@ -615,7 +618,7 @@ export default function BrushHotkeySection() {
     const next = entriesRef.current.map(e => (e.id === target.id ? { ...e, combo: '' } : e));
     setEntries(next);
     if (pushConfig(next)) showMessage('已解绑「' + target.brush + '」的快捷键（条目已保留）');
-    else showMessage('推送配置失败（快捷键服务未运行？）');
+    else showMessage('推送配置失败：快捷键服务未运行，或配置路径尚未就绪（请重新启动快捷键服务后重试）');
   };
   useEffect(() => onBackspaceDelete((owner) => {
     if (owner !== 'brush') return; // 只认领自己的布防

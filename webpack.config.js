@@ -68,6 +68,14 @@ module.exports = (env, argv) => {
                 // 找不到文件，卸载按钮会静默失败）
                 { from: "./native/HotkeyDaemon/*.bat", to: "./native/HotkeyDaemon/[name][ext]" },
                 { from: "./native/HotkeyDaemon/*.ps1", to: "./native/HotkeyDaemon/[name][ext]" },
+                // 卸载启动器（独立子项目 UninstallLauncher/ 编译）：把 uninstall.ps1 放进
+                // **可见的控制台窗口**里跑。
+                // ⛔ 为什么不再直接唤起 .bat（2026-10-13 用户实测）：shell.openPath 对 .bat
+                //    的行为不稳定 —— 热键卸载什么都不出现，平滑卸载只有一个窗口一闪而过。
+                //    对 .exe 才是稳定的 ShellExecute + 带出控制台（FixKeyboard.exe 已验证）。
+                // ⚠️ 必须落在角色目录**同层**（不能放 publish/ 子目录）：启动器按自身
+                //    BaseDirectory 查找同目录的 uninstall.ps1。同一个 exe 两个角色各放一份。
+                { from: "./native/UninstallLauncher/publish/JWUninstall.exe", to: "./native/HotkeyDaemon/[name][ext]" },
                 { from: "./native/HotkeyDaemon/publish/JWautofillHotkeyDaemon.exe", to: "./native/HotkeyDaemon/publish" },
                 // 套索实时平滑的**独立守护进程**（native/SmoothDaemon 编译，同一份源码 + ROLE_SMOOTH）。
                 // 与热键守护进程是两个完全独立的产物：各自的端口（18924 / 18923）、安装目录
@@ -75,6 +83,15 @@ module.exports = (env, argv) => {
                 // 面板「平滑选项」里的服务开关经 shell.openPath 唤起它；停掉或卸载任意一侧
                 // 都不会影响另一侧 —— 这正是把它们拆成两个进程的目的。
                 { from: "./native/SmoothDaemon/publish/JWautofillSmoothDaemon.exe", to: "./native/SmoothDaemon/publish" },
+                // 平滑服务的**卸载脚本**（与热键侧 uninstall.bat / uninstall.ps1 同款）。
+                // ⛔ 2026-10-13 用户要求「卸载表现与笔刷热键对齐」：
+                //    已卸载后再点一次「卸载套索平滑服务」，不再弹一个信息框，
+                //    而是弹出与笔刷完全同款的 cmd 窗口（把实际动作与结果摆出来）。
+                //    面板经 getPluginFolder 在插件目录里定位它，不打进 dist 就会静默失败。
+                { from: "./native/SmoothDaemon/*.bat", to: "./native/SmoothDaemon/[name][ext]" },
+                { from: "./native/SmoothDaemon/*.ps1", to: "./native/SmoothDaemon/[name][ext]" },
+                // 平滑侧的卸载启动器（与热键侧同一个 exe，各自跑同目录的 uninstall.ps1）。
+                { from: "./native/UninstallLauncher/publish/JWUninstall.exe", to: "./native/SmoothDaemon/[name][ext]" },
                 // 笔输入层平滑（P3）的**注入 DLL**（native/WintabHook 用便携 zig 构建）。
                 // 平滑守护进程运行时会把它注入 Photoshop 进程，注入时给的是**绝对路径**，
                 // 因此这里必须把它带进 dist 的同层布局（daemon 按 BaseDirectory 相对查找）。

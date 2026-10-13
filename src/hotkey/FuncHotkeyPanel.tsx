@@ -168,7 +168,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
     if (next.length === entries.length) { showMessage('该功能尚未绑定快捷键'); return; }
     setEntries(next);
     if (pushConfig(next)) showMessage('已解绑「' + getFuncHotkeyLabel(target) + '」的快捷键');
-    else showMessage('推送配置失败（快捷键服务未运行？）');
+    else showMessage('推送配置失败：快捷键服务未运行，或配置路径尚未就绪（请重新启动快捷键服务后重试）');
   };
 
   // 双击进入编辑：守护进程捕获组合键（recordCaptured 实时回显到行内），
@@ -220,7 +220,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
       : [...entries, { id: 'fk_' + Date.now(), combo, action: 'runFunc', brush: target }];
     setEntries(next);
     if (pushConfig(next)) showMessage('已保存：' + combo + ' → ' + targetDisplayName(target));
-    else showMessage('推送配置失败（快捷键服务未运行？）');
+    else showMessage('推送配置失败：快捷键服务未运行，或配置路径尚未就绪（请重新启动快捷键服务后重试）');
   };
 
   const mainEntry = entries.find(e => e.action === 'toggleMain');

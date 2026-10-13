@@ -211,8 +211,7 @@ export interface AppState {
      fillOptionsVisible: boolean;
     // ===== 套索实时平滑（方案 A：输入层滤波）=====
     /**
-     * 滤波参数快照（mode / strength / radius / tension / catchUp / cornerAngle /
-     * speedAdaptive）。
+     * 滤波参数快照（mode / strength / radius / catchUp / cornerAngle / speedAdaptive）。
      * ⚠️ 必须进 state：滑杆/单选都要靠它触发重渲染，且它是**跨模块共享字段**
      *    （下发到原生守护进程），只写实例字段不会触发重渲染（同 isInQuickMask 的历史 bug）。
      * ⚠️ 整体替换而非就地修改：持久化的变更检测用的是引用比较。

@@ -22,16 +22,31 @@
 
 export type LassoSmoothMode = 'standard' | 'rope' | 'catchup';
 
+/**
+ * 工具闸门（2026-10-13 新增）。
+ *
+ * ⛔ 为什么要它：用户反馈「无论我选择什么工具，只要我用数位笔移动光标，已平滑的数字
+ *    就在涨，拉绳工具的洋红圈也都会显示」。根因是 DLL 之前**只判开关**，
+ *    悬空移动与落笔绘制都会改写坐标。于是工具一换、笔一抬，平滑与 HUD 依然生效。
+ * ⇒ 现在必须由面板 300ms 巡检当前工具，把结果经 penSmooth 搭车下发，
+ *    DLL 侧再叠加「笔尖是否接触画布」的判据，两者同时成立才平滑。
+ */
+export type SmoothToolGate = 0 | 1 | 2;   // 0=不是套索 1=是套索 2=未知（放行）
+
 /** 参数面（与 Program.cs 的 PenHook.PenParams 一一对应；鼠标通路字段已移除）。 */
 export interface LassoSmoothParams {
   /** 滤波族：标准（一阶低通）/ 拉绳 / 追笔。 */
   mode: LassoSmoothMode;
   /** 平滑强度 0–100（标准模式的主轴：越大越黏）。 */
   strength: number;
-  /** 最大滞后距离 px（三种模式统一收口的硬上限，同时是拉绳的绳长基准）。 */
+  /**
+   * 最大滞后距离 px。**三种模式统一的硬上限，同时也是拉绳的绳长**。
+   *  ⛔ 上限 100：与 PS 自家平滑一致，也与原生侧 RADIUS_PX_MAX 一致。
+   *    旧的 40 会把强度调出来的滞后硬截断 ⇒ 「拉满也没感觉」。
+   *  ⛔ 2026-10-13：原先还有一个「张力」滑杆，只在 15%~100% 之间缩放这个半径 ——
+   *    两个参数改的是同一件事（圆周大小），用户实测后要求删除。现在一个参数一个语义。
+   */
   radius: number;
-  /** 拉绳松紧 0–100。 */
-  tension: number;
   /** 追笔速度 0–100。 */
   catchUp: number;
   /** 拐角判定角度 0–90：夹角超过它即减弱平滑，保住尖角。 */
@@ -47,20 +62,23 @@ export interface LassoSmoothParams {
   showLeash: boolean;
 }
 
+/** 参数的取值范围（面板滑杆与原生侧共用同一套上下限，勿各写一份）。 */
+export const SMOOTH_RADIUS_MIN = 1;
+export const SMOOTH_RADIUS_MAX = 100;
+
 /**
  * 默认值。
  * ⚠️ 开关默认**关闭**：平滑会改变所有存量用户的套索手感，
  *    必须由用户主动开启，不能默认接管。
  */
 export const initialLassoSmoothParams: LassoSmoothParams = {
-  mode: 'standard',
-  strength: 40,
-  radius: 8,
-  tension: 50,
-  catchUp: 50,
-  cornerAngle: 45,
-  speedAdaptive: true,
-  showLeash: true,
+    mode: 'standard',
+    strength: 40,
+    radius: 12,
+    catchUp: 50,
+    cornerAngle: 45,
+    speedAdaptive: true,
+    showLeash: true,
 };
 
 /** 守护进程回传的状态（用于面板显示与排障）。 */
@@ -105,8 +123,23 @@ export interface PenSmoothStatus {
   mode: number;
   /** 最大滞后（屏幕像素）。 */
   radiusPx: number;
-  /** 拉绳松紧 0–100。 */
-  tension: number;
+    /** 工具闸门：0=当前不是套索 1=是套索 2=未知/读数失败（放行）。 */
+    toolGate: SmoothToolGate;
+    /** 原生侧回报：工具闸门是否成立（0=当前工具不是套索，正在禁止平滑）。 */
+    toolOk: number;
+    /** 原生侧回报：笔尖是否接触画布（0=悬空，正在禁止平滑）。 */
+    penDown: number;
+    /** 原生侧回报：两个闸门都成立（1=此刻真的在改写坐标）。 */
+    gateOk: number;
+    /**
+     * 原生侧回报：落笔判据是否**不可用**（1=不可用）。
+     *
+     * ⛔ 为什么必须暴露它：落笔判据是从 (offY, stride) 反推候选偏移、再用真实数据
+     *    证伪/校验出来的。若本机驱动的包布局不在预期内，判据会退化为「按落笔处理」
+     *    （= 恢复旧行为：悬空移动也会被平滑）。这种退化**必须看得见** ——
+     *    否则用户只会觉得「这个开关没用」，而排查的人连「判据没生效」都不知道。
+     */
+    contactUnknown: number;
   /** 追笔速度 0–100。 */
   catchUp: number;
   /** 拐角判定角度 0–90。 */
@@ -119,9 +152,19 @@ export interface PenSmoothStatus {
    *  1.0 ⇒ 包坐标本身就是屏幕像素；0.0586 ⇒ 数位板逻辑单位（1920/32767）。
    *  leash 长度/位置不对时第一个该看的就是它。 */
   pxPerAxis: number;
+  /**
+   * ×1000 的 **Y 轴**「轴坐标 → 屏幕像素」比（**带符号**，通常是负的）。
+   *
+   * ⛔ 为什么必须单独上报 Y：数位板到屏幕的映射是**逐轴**的 ——
+   *    两个轴的比例不同（本机 X 0.0768 / Y 0.0486，差 1.58 倍），
+   *    而且 Y 的符号与屏幕相反（Wintab 的 Y 向上为正、屏幕 Y 向下为正）。
+   *    旧版只有一个不带符号的标量，HUD 的圆心因此被渲染成光标的**镜像**
+   *    （向右上运笔、圆心跑到左上方）。排障时这两个值必须一起看。
+   */
+  pxPerAxisY: number;
   /** 已注入 hook DLL 的 PS 进程数（0 ⇒ 还没注入成功或 PS 未运行）。 */
   injectedCount: number;
-  /** hook 侧状态：0=未挂载/未标定 1=生效 2=标定失败 3=已卸载。 */
+  /** hook 侧状态：0=未挂载/未标定 1=生效 2=标定失败 3=已卸载 4=入口被旧副本占用（须重启 Photoshop）。 */
   state: number;
   /** 累计取到的包数 / 被改写的包数（生效与否最直接的证据）。 */
   packets: number;
@@ -133,13 +176,18 @@ export const initialPenSmoothStatus: PenSmoothStatus = {
   enabled: false,
   strength: 40,
   mode: 0,
-  radiusPx: 8,
-  tension: 50,
-  catchUp: 50,
-  cornerAngle: 45,
-  speedAdaptive: true,
-  hud: 3,
+  radiusPx: 12,
+    catchUp: 50,
+    cornerAngle: 45,
+    speedAdaptive: true,
+    hud: 3,
+    toolGate: 2,
+    toolOk: 0,
+    penDown: 0,
+    gateOk: 0,
+    contactUnknown: 0,
   pxPerAxis: 0,
+  pxPerAxisY: 0,
   injectedCount: 0,
   state: 0,
   packets: 0,
@@ -180,6 +228,14 @@ let status: LassoSmoothStatus = { ...initialStatus };
 
 let pendingParams: LassoSmoothParams | null = null;
 let paramTimer: any = null;
+/**
+ * 当前工具闸门（模块级，与 penOn 同生命周期）。
+ * ⚠️ 初值 2（未知）而不是 0：读不到工具时**必须放行** —— 把「读失败」当成
+ *    「不是套索」会把平滑整个关掉，而面板上看不出任何区别（开关还是开着）。
+ */
+let toolGate: SmoothToolGate = 2;
+/** 上一次把闸门（连同整包参数）推给守护进程的时刻 —— 闸门心跳的计时基准。 */
+let lastGateSentAt = 0;
 /** 能力探测：本轮连接是否至少收到过一帧 smoothState。 */
 let sawSmoothState = false;
 /** 能力探测（第二层）：本轮连接是否至少有一帧带 `pen` 字段 ⇒ 对端认识笔平滑。 */
@@ -199,17 +255,19 @@ function send(msg: any): void {
 }
 
 function toWire(p: LassoSmoothParams) {
-  return {
-    mode: MODE_TO_WIRE[p.mode] ?? 0,
-    strength: p.strength,
-    radius: p.radius,
-    tension: p.tension,
-    catchUp: p.catchUp,
-    cornerAngle: p.cornerAngle,
-    speedAdaptive: p.speedAdaptive,
-    // 拉绳提示的位域（bit0=绳 bit1=半径圆）
-    hud: p.showLeash ? 3 : 0,
-  };
+    return {
+        mode: MODE_TO_WIRE[p.mode] ?? 0,
+        strength: p.strength,
+        radius: p.radius,
+        catchUp: p.catchUp,
+        cornerAngle: p.cornerAngle,
+        speedAdaptive: p.speedAdaptive,
+        // 拉绳提示的位域（bit0=弹性画笔带 bit1=绳长圆 bit2=笔尖点）
+        hud: p.showLeash ? 7 : 0,
+        // 工具闸门搭车同一条消息：与参数同源同节流，杜绝「界面显示套索、
+        // 原生侧还按画笔处理」的错位窗口。
+        toolGate,
+    };
 }
 
 /** 发送参数（线格式未变化则跳过；仅在套索平滑开着时才需要推给守护进程）。 */
@@ -317,6 +375,45 @@ export function resendLassoSmoothing(): void {
 }
 
 /**
+ * 上报当前工具闸门（面板 300ms 巡检调用）。
+ *
+ * ⛔ 两条触发条件缺一不可：
+ *   ① 值变了 —— 常规通路；
+ *   ② 距上次上报超过 GATE_REFRESH_MS —— **心跳**。
+ * 为什么必须有②：原生侧只认「新鲜」的闸门值（超过 3 秒未刷新就按「未知」放行，
+ * 见 wintab_hook.c 的 GATE_STALE_MS）。若只在变化时发，那么「切到画笔」这个 0
+ * 会一直留在共享内存里 —— 用户随后关掉面板、再用 PS 切回套索时，没有任何人
+ * 会把那个 0 改回来 ⇒ 平滑与 HUD 静默失效，而且面板不在场时毫无线索。
+ * 每 ~2 秒重刷一次，既让「0」保持有效（正在用画笔时不会被误放行），
+ * 又能在面板消失后自然过期（不会把功能永久锁死）。
+ */
+export function setSmoothToolGate(g: SmoothToolGate): void {
+  const now = Date.now();
+  const changed = toolGate !== g;
+  if (changed) toolGate = g;
+  if (!penOn) return;              // 关着时不必发；开启时会整包带上
+  if (!changed && (now - lastGateSentAt) < GATE_REFRESH_MS) return;
+  // ⛔ 心跳必须**绕过线格式签名去重**：内容完全一样，签名必然相同，
+  //    走 sendParams 会被它直接吞掉 ⇒ 心跳形同不存在（这正是最容易被写错的一步）。
+  forceSendParams();
+}
+
+/** 闸门心跳间隔（ms）。必须显著小于原生侧的 GATE_STALE_MS(3000)。 */
+const GATE_REFRESH_MS = 1800;
+
+/** 无条件把当前「开关 + 整包参数」推一次（跳过去重）。 */
+function forceSendParams(): void {
+  lastGateSentAt = Date.now();
+  const wire = toWire(params);
+  lastSentParamsSig = JSON.stringify(wire);
+  send({ type: 'penSmooth', on: true, ...wire });
+}
+
+export function getSmoothToolGate(): SmoothToolGate {
+  return toolGate;
+}
+
+/**
  * 套索平滑（Wintab 通路）开关 + 参数。
  *
  * ⛔ 与 `sendPenSmooth`（SmoothBridge 的原始发送器）的分工：本函数是**参数面的属主**，
@@ -356,12 +453,25 @@ export function handleLassoSmoothMessage(msg: any): void {
       strength: Number(penRaw.strength) || 0,
       mode: Number(penRaw.mode) || 0,
       radiusPx: Number(penRaw.radiusPx) || 0,
-      tension: Number(penRaw.tension) || 0,
       catchUp: Number(penRaw.catchUp) || 0,
       cornerAngle: Number(penRaw.cornerAngle) || 0,
       speedAdaptive: !!penRaw.speedAdaptive,
       hud: Number(penRaw.hud) || 0,
+      // 闸门三态：旧版守护进程不回这几个字段 ⇒ Number(undefined)=NaN ⇒ 用 ? 回落初值，
+      // 不能让 NaN 进 state（「开着却不平滑」的排查会先被 NaN 污染）。
+      toolGate: penRaw.toolGate === undefined
+          ? status.pen.toolGate
+          : (Number(penRaw.toolGate) === 0 ? 0 : (Number(penRaw.toolGate) === 1 ? 1 : 2)),
+      toolOk: Number(penRaw.toolOk) || 0,
+      penDown: Number(penRaw.penDown) || 0,
+      gateOk: Number(penRaw.gateOk) || 0,
+      contactUnknown: Number(penRaw.contactUnknown) || 0,
       pxPerAxis: Number(penRaw.pxPerAxis) || 0,
+      // ⛔ Y 那一份**不能**用 `|| 0` 兜 NaN —— 负数是合法值（真机应是负的）。
+      //    旧版守护进程不回该字段 ⇒ 保持原值（初值 0 = 未标定）。
+      pxPerAxisY: (penRaw.pxPerAxisY === undefined || Number.isNaN(Number(penRaw.pxPerAxisY)))
+          ? status.pen.pxPerAxisY
+          : Number(penRaw.pxPerAxisY),
       injectedCount: Array.isArray(penRaw.injectedPids) ? penRaw.injectedPids.length : 0,
       state: Number(penRaw.state) || 0,
       packets: Number(penRaw.packets) || 0,
