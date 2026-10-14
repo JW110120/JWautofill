@@ -13,6 +13,7 @@
 | 像素处理器算法 | `refs/pixel-algorithms.md` |
 | 构建 / 菜单 / 文件 IO / 守护进程 | `refs/toolchain-and-env.md` |
 | 套索实时平滑 | `refs/lasso-smoothing.md`（唯一权威） |
+| .8li 进程内插件（平滑迁移目标） | `docs/lasso-pipl-8li-migration-plan.md`（M1 完成记录=一手消息协议） |
 
 **改完必备校验**：改过 CSS 必跑 `node scripts/_css_comment_guard.cjs`（⚠️ 只扫 `src/styles/*.css`）+ `_modal_contract_guard.cjs` + `_color_picker_contract_guard.cjs`；`npx tsc --noEmit` 只看 `src/` 新增报错（`'uxp'`/`'photoshop'`、`ffi.d.ts` 语法错为基线）。
 
@@ -23,6 +24,9 @@
 ## 铁律（速查；细节在 refs/）
 
 - **dist 红线**：⛔ 实现计划/设计文档（`*plan*.md`）不进 dist（webpack globOptions ignore，2026-10-12 铁律）；webpack 不清旧产物 ⇒ 改规则后手删残留复验。
+- ⛔⛔ **.8li 插件（native/PiSmooth8li/）真机铁律**（2026-10-14 M1/M2）：① PiPL 头部=10 字节；② `'8664'` 入口导出名属性=**C 字符串**（写成 Pascal 串 ⇒ PS 读脏名 ⇒ GetProcAddress 失败 ⇒ attach 后 1ms 静默卸载、入口零调用）；③ 加载消息=`"SP Access"/"Reload"`（文档的 "SP Interface"/"Startup" 不出现），卸载=`"SP Access"/"Unload"`。④ M2 合并镜像：引擎（smooth_engine.c=wintab_hook.c 整体）+ WS 层（plugin_main.c=Program.cs ROLE_SMOOTH 的 C 移植），**无守护进程无注入**；⑤ 自写 SHA1/密码学原语必须用已知向量实测（RFC6455 App.A），JSON 内 Windows 路径必须转义反斜杠。PS 运行时锁 Plug-ins 里的 .8li ⇒ 部署必须先关 PS；Plug-ins **只能有一个** JWautofillSmooth 的 .8li（两份=双引擎+第二实例 bind 18924 失败）。
+- ⛔ **GATETS（工具心跳）由 pump 接管**（第八轮 2026-10-14）：有 WS 客户端连接即每 500ms 刷 GATETS——面板侧 penOn 门控的 1500ms 心跳实测不可靠（penOn 状态机/UXP 定时器任一环抖动 ⇒ reason=4「工具上报已超时」fail-closed ⇒ 平滑高频失效）；客户端全断 ⇒ 停刷 ⇒ 3s 过期语义保留。⛔ 独立实测污染：PS 运行时其旧 .8li 占 18924，测试副本 SO_REUSEADDR 会**双绑定**，测试连接可能被 PS 旧副本接走（[srv] 日志行无 pid 无法区分）⇒ 独立实测必须关 PS。面板 WS 每 ~30-55s 被错误断连一次（SmoothBridge onerror→1.5s 重连），原因待新日志「断开 reason=」定责。
+- ⛔⛔ **包流断供 = 「易失效」的深层根因**（2026-10-14 第七轮真机）：PS 空轮询 WTPacketsGet（calls 涨）但同一 hCtx 恒返 0 包数分钟、penDown 卡 1、ctxN=0 ⇒ 驱动侧断流、PS 走非 Wintab 回退输入继续画（笔迹在、平滑死）。嫌疑=队列溢出后驱动不恢复（与「大选区 PS 忙」同源）。判别「停笔正常冻结」=光标是否还在动。诊断：jwwh 日志全行毫秒时间戳 + [dead]/[gate]/[rst] 事件 + 三只读钩 WTPacket/WTOpenA/WTClose（ver≥0x0101）；断流时 HUD 立即隐藏（g_streamDead）。恢复方案待 [dead] 现场定。**恢复方案已实施（第九轮）**：[dead] 持续 >4s ⇒ WTEnable(hCtx,0/1) 翻转自愈（每 5s ≤12 次）。⛔ **Y 符号投票翻转**（真机 18:00:04 pxY 瞬间 +0.0486 ⇒ HUD 垂直镜像）：AXCAL.signLocked **首达即锁**（轴方向=物理常量，错票=噪声；仅换屏重标定解锁）。⛔ **换显示器**（公司 3440×1440 ↔ 家 4K）：worker 比对 SM_CX/VIRTUALSCREEN 变化 ⇒ 清 px 权威+标定自动重跑（符号锁保留）。⛔ **shutdown 消息** = 面板「服务」开关 OFF ⇒ commit(0)，绝不能退出宿主进程；旧版静默忽略 ⇒ 拨开关无反应。HUD 显隐必须判 CFG_I_ENABLED（否则拿冻结快照画圈）。
 - ⛔ `putPixels` 的 `replace` 默认 true ⇒ 局部写清空整层；写回 = 全尺寸缓冲 + 不传 targetBounds。背景层解锁→清除→finally 还原；类型转换后一次 DOM 都不能读。
 - ⛔ `clearEnum` 在背景/锁透明层不可用 ⇒ 分支 9 `blendSubtraction`；单通道描边走 7/8；静默化只认 batchPlay **options 层**；`needsStroke` 时填充传 `deselectAfterFill:false`。
 - ⛔ CSS 注释块外游离文本被当选择器、静默吃掉紧随整条规则 ⇒ 改完必跑 guard；「反复改没效果」立即停手验证命中。

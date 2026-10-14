@@ -42,6 +42,7 @@ import {
   initialLassoSmoothParams, setPenSmooth, setSmoothToolGate, getSmoothToolGate,
   SMOOTH_RADIUS_MIN, SMOOTH_RADIUS_MAX,
   SMOOTH_CATCHUP_MIN, SMOOTH_CATCHUP_MAX,
+  MODE_TO_WIRE,
   // 诊断原因码 → 人话（唯一文案表，见 LassoSmoothing.smoothReasonText）。
   // ⛔ 诊断条**只能**用原生侧报的 reason 说原因，禁止自己从 toolOk/penDown/gateOk 拼。
   smoothReasonText,
@@ -1658,7 +1659,18 @@ class App extends React.Component<AppProps, AppState> {
      *     同一个回报里就涨了多次 = 闸门抖动（选区一段段停住的根因）。
      */
     private smoothDiagTail(pen: PenSmoothStatus): string {
-        return this.smoothCtText(pen)
+        /* ⛔ 模式不一致必须在这里报（2026-10-14 真机案例）：引擎在非拉绳模式下照常
+           改写（reason=0）、面板显示一切正常，唯独 HUD 因为 ropeMode 判据不出现 ——
+           用户看到的就是「开了开关、画了笔、什么都没有」。不改诊断条的话，这个
+           状态只能靠翻原生日志定位。engine 模式来自 smoothState 的 pen.mode。 */
+        const modeNames = ['标准', '拉绳', '追笔'];
+        const uiWire = MODE_TO_WIRE[this.state.smoothParams.mode] ?? 0;
+        const modeNote = pen.mode !== uiWire
+            ? '⚠️ 引擎模式=' + (modeNames[pen.mode] ?? pen.mode)
+              + '（面板=' + (modeNames[uiWire] ?? uiWire)
+              + '，重开一次平滑开关即可同步），'
+            : '';
+        return modeNote + this.smoothCtText(pen)
             + '，标定 ' + pen.pxNx + '/' + pen.pxNy
             + '，闸门 Δ开/Δ关 ' + this.lastGateDeltaOpen + '/' + this.lastGateDeltaClose
             + '，取包 ' + pen.packets + ' / 改写 ' + pen.smoothed;

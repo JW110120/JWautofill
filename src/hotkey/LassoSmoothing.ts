@@ -385,7 +385,8 @@ const initialStatus: LassoSmoothStatus = {
 /** 供面板 state 初始化用（AppState.smoothStatus 的初值）。 */
 export const initialLassoSmoothStatus: LassoSmoothStatus = { ...initialStatus };
 
-const MODE_TO_WIRE: Record<LassoSmoothMode, number> = { standard: 0, rope: 1, catchup: 2 };
+/** 面板 UI 模式 → 线格式数值。⛔ 导出给诊断条：比对「面板模式 vs 引擎模式」用。 */
+export const MODE_TO_WIRE: Record<LassoSmoothMode, number> = { standard: 0, rope: 1, catchup: 2 };
 
 /** 参数下发的节流窗口（毫秒）：拖动滑杆时合并中间值，松手后必然落到最终值。 */
 const PARAM_THROTTLE_MS = 90;
