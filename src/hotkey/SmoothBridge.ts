@@ -1,29 +1,30 @@
 /**
- * 套索实时平滑的**独立**守护进程桥接。
+ * 套索实时平滑的 WebSocket 桥接（端口 18924）。
  *
- * 为什么要有这个文件（而不是继续挂在 HotkeyBridge 上）：
- * 平滑与热键过去共用同一个守护进程，于是「停止 / 卸载快捷键服务」一执行，
- * 平滑的 WebSocket 也随之断开 —— 面板立刻显示「未连接快捷键服务」。
- * 拆成两个进程后，这里独占 **18924** 端口那条连接，生命周期与热键完全无关：
- * 停掉/卸载热键服务不会碰到它，反之亦然。
+ * ⚠️ 2026-10-14 架构变更（.8li 迁移，M2 已完成）：平滑的对端不再是外置守护进程
+ *    （JWautofillSmoothDaemon.exe + 注入 WintabHook.dll 的旧链路已整体退役），
+ *    而是 **Photoshop 进程内的合法插件** JWautofillSmooth.8li（装在 PS 的
+ *    Plug-ins 目录，随 PS 启动自动加载）。它自带同一套 18924 WS 协议
+ *    （plugin_main.c 是旧 Program.cs ROLE_SMOOTH 的逐字移植，协议零变化），
+ *    因此本文件的连接/发送逻辑原样保留，面板无感。
+ *
+ *    旧链路残留（daemon exe、卸载脚本、拉起入口）已全部删除：
+ *      · native/SmoothDaemon/（整个工程）、native/WintabHook/（注入 DLL）
+ *      · launchSmoothDaemon / runSmoothUninstallScript / sendSmoothDaemonCommand
+ *      · app.tsx 的 uninstallSmoothService 与菜单项「卸载套索平滑服务」
+ *    平滑的启停现在只有一条语义：开关 = penSmooth(on/off)；.8li 常驻 PS 进程，
+ *    没有"拉起服务"这一步，也没有可卸载的东西（更新 .8li = 关 PS 后覆盖文件）。
  *
  * ⚠️ 依赖方向：SmoothBridge（WebSocket 属主） → LassoSmoothing（纯状态机）。
  *    LassoSmoothing 依旧不持有 socket，发送器由本模块注入。不要反向 import。
  */
 
-import { storage, shell } from 'uxp';
 import {
   setLassoSmoothSender, setLassoSmoothConnected, resendLassoSmoothing, handleLassoSmoothMessage,
 } from './LassoSmoothing';
 
-/** 平滑守护进程的端口（与 Program.cs 的 ROLE_SMOOTH 角色常量一一对应）。 */
+/** 平滑 WS 端口（与 .8li 内 plugin_main.c 的监听端口一一对应）。 */
 const SMOOTH_WS_URL = 'ws://127.0.0.1:18924';
-
-/**
- * 插件包内平滑守护进程的相对路径。
- * ⚠️ 与热键守护进程**不同目录**：两者是独立产物（同源码 + 编译期角色开关）。
- */
-const SMOOTH_EXE_REL = 'native/SmoothDaemon/publish/JWautofillSmoothDaemon.exe';
 
 let currentWs: any = null;
 let connected = false;
@@ -42,7 +43,7 @@ function resolveWs(): any {
   return W || null;
 }
 
-// 把「往平滑守护进程发消息」的能力注入状态机。每次调用时读 currentWs，
+// 把「往平滑模块发消息」的能力注入状态机。每次调用时读 currentWs，
 // 因此连接重建后无需重新注入。
 setLassoSmoothSender((msg: any) => {
   try {
@@ -50,7 +51,7 @@ setLassoSmoothSender((msg: any) => {
   } catch { /* 连接已断：由 onclose 的重连与重放兜底 */ }
 });
 
-/** 订阅平滑守护进程的连接状态（首次立即回放当前值）。 */
+/** 订阅平滑模块的连接状态（首次立即回放当前值）。 */
 export function onSmoothDaemonStatus(fn: (c: boolean) => void): () => void {
   statusListeners.push(fn);
   fn(connected);
@@ -60,9 +61,11 @@ export function onSmoothDaemonStatus(fn: (c: boolean) => void): () => void {
 export function isSmoothDaemonConnected(): boolean { return connected; }
 
 /**
- * 连接平滑守护进程（幂等 + 引用计数）。
+ * 连接平滑模块（幂等 + 引用计数）。
  * 由 APP 面板在挂载时调用一次；`#pixeladjustment` 面板若将来也需要，
  * 直接再调一次即可，不会建出第二条连接。
+ * ⚠️ .8li 随 PS 启动即监听 18924；PS 刚启动的短暂窗口内会连不上，
+ *    由下面的 1.5s 重试兜底，无需用户干预。
  */
 export function connectSmoothDaemon(): () => void {
   connectCount++;
@@ -121,7 +124,13 @@ export function connectSmoothDaemon(): () => void {
   }
 }
 
-/** 让平滑守护进程优雅退出（面板「服务」开关关闭时用）。 */
+/**
+ * 关闭平滑（面板「服务」开关拨到关时发 `shutdown`）。
+ *
+ * ⚠️ .8li 收到 shutdown 只做一件事：commit(0) 关掉平滑改写，**服务常驻不解散**
+ *    （它不能退出 Photoshop 宿主进程，见 plugin_main.c 的 shutdown 分支）。
+ *    因此 WS 连接仍然保持，开关再拨开时 penSmooth(true) 直接生效。
+ */
 export function disconnectSmoothDaemon(): boolean {
   try {
     if (currentWs && currentWs.readyState === (currentWs.OPEN ?? 1)) {
@@ -132,28 +141,17 @@ export function disconnectSmoothDaemon(): boolean {
   return false;
 }
 
-/** 发一条需要守护进程自己完成清理的指令（如 `uninstall`）。 */
-export function sendSmoothDaemonCommand(type: string): boolean {
-  try {
-    if (currentWs && currentWs.readyState === (currentWs.OPEN ?? 1)) {
-      currentWs.send(JSON.stringify({ type }));
-      return true;
-    }
-  } catch { /* ignore */ }
-  return false;
-}
-
 /**
  * 套索平滑（Wintab 笔输入层）的开关 + 参数。
  *
- * ⚠️ 实现在被注入 Photoshop 的 hook DLL 内（`WTPacketsGet` detour 改写包坐标），
- *     参数经命名共享内存由守护进程下发 —— 面板与 DLL 之间不直接通信。
+ * ⚠️ 实现在 .8li 进程内插件里（smooth_engine.c 在 `WTPacketsGet` 上改写包坐标，
+ *    即旧 wintab_hook.c 的合并镜像），参数经命名共享内存由 WS 层下发。
  *
- * ⛔ 必须**整包带参数**：早期版本只发 `{on}`，守护进程侧的强度恒为默认 40、
- *     半径/模式/追笔/拐角连字段都没有 ⇒ 面板调参对笔平滑毫无作用
- *     （真机复现：「已平滑 47417 包但感知不明显」）。
+ * ⛔ 必须**整包带参数**：早期版本只发 `{on}`，强度恒为默认 40、
+ *    半径/模式/追笔/拐角连字段都没有 ⇒ 面板调参对笔平滑毫无作用
+ *    （真机复现：「已平滑 47417 包但感知不明显」）。
  *
- * 真实生效状态不靠这里乐观更新：守护进程收到后会回一帧 `smoothState`（含 `pen`），
+ * 真实生效状态不靠这里乐观更新：.8li 收到后会回一帧 `smoothState`（含 `pen`），
  * 面板按**它**刷新开关与状态条 —— 避免「点了亮起来其实没生效」。
  */
 export function sendPenSmooth(on: boolean, params?: {
@@ -179,79 +177,4 @@ export function sendPenSmooth(on: boolean, params?: {
     }
   } catch { /* ignore */ }
   return false;
-}
-
-/**
- * 解析插件目录内的相对路径为真实 OS 路径。
- * 与 BrushHotkeySection 里的同名工具逻辑一致（用插件根目录拼接，绕开沙箱下
- * `getEntry('native')` 找不到目录的问题）。
- */
-async function resolvePluginPath(relPath: string): Promise<string | null> {
-  try {
-    const folder: any = await storage.localFileSystem.getPluginFolder();
-    const root: string = folder?.nativePath;
-    if (!root) return null;
-    const sep = root.includes('\\') ? '\\' : '/';
-    const parts = relPath.split('/').filter(Boolean);
-    return [root, ...parts].join(sep);
-  } catch { return null; }
-}
-
-/**
- * 拉起平滑守护进程。
- *
- * 守护进程自身会「拷贝到安装目录 + 注册开机自启 + 从安装目录重新拉起」，
- * 因此这里只需把插件目录里的副本点一下即可（已编译为 GUI 子系统，全程无窗口）。
- */
-export async function launchSmoothDaemon(): Promise<{ ok: boolean; message: string }> {
-  if (connected) return { ok: true, message: '平滑服务已在运行' };
-  const full = await resolvePluginPath(SMOOTH_EXE_REL);
-  if (!full) {
-    return { ok: false, message: '无法定位插件目录，请手动双击插件目录 ' + SMOOTH_EXE_REL };
-  }
-  try {
-    const r: any = await shell.openPath(full);
-    if (typeof r === 'string' && r.length > 0) {
-      return { ok: false, message: '唤起失败：' + r + '（可手动双击 ' + SMOOTH_EXE_REL + '）' };
-    }
-    return { ok: true, message: '正在启动平滑服务…' };
-  } catch (e: any) {
-    return { ok: false, message: '启动平滑服务失败：' + (e?.message || String(e)) };
-  }
-}
-
-/** 卸载平滑守护进程（移除开机自启 + 删除它自己的安装目录），与热键服务互不影响。 */
-export function uninstallSmoothDaemon(): boolean {
-  return sendSmoothDaemonCommand('uninstall');
-}
-
-/**
- * 唤起平滑服务的**卸载程序**（插件目录里的 native/SmoothDaemon/JWUninstall.exe）。
- *
- * ⛔ 为什么需要它（2026-10-13 用户要求「与笔刷热键服务的卸载对齐」）：
- *    平滑服务**已经卸载掉**的情况下再点一次「卸载」，旧版是弹一个信息框
- *    「平滑服务当前未在运行，无需卸载」—— 用户看不到任何实际动作，也无法确认
- *    安装目录到底清没清干净。笔刷热键那边遇到同样情形会**弹出 cmd 窗口**，
- *    把「未发现运行中的服务进程 / 安装目录不存在，跳过」逐条打出来。
- *    两边表现必须一致，所以这里照抄那条通路。
- *
- * ⛔⛔ 2026-10-13 第二轮：改唤起 **.exe 启动器**，不再直接唤起 .bat。
- *    用户实测 shell.openPath 对 .bat 表现不一致（热键侧什么都看不到、平滑侧窗口闪退），
- *    而对 .exe 会稳定地执行并带出可见控制台（FixKeyboard.exe 已走通这条路）。
- *    JWUninstall.exe 只做一件事：在自带控制台里跑同目录的 uninstall.ps1。
- */
-export async function runSmoothUninstallScript(): Promise<{ ok: boolean; message: string }> {
-  const full = await resolvePluginPath('native/SmoothDaemon/JWUninstall.exe');
-  if (!full) {
-    return { ok: false, message: '无法定位插件目录，请手动双击插件目录 native/SmoothDaemon/JWUninstall.exe' };
-  }
-  try {
-    const r: any = await shell.openPath(full);
-    if (typeof r === 'string' && r.length > 0) {
-      return { ok: false, message: '唤起失败：' + r + '（可手动双击 native/SmoothDaemon/JWUninstall.exe）' };
-    }
-    return { ok: true, message: '卸载程序已打开，请在弹出的窗口中查看结果。' };
-  } catch (e: any) {
-    return { ok: false, message: '唤起卸载程序失败：' + (e?.message || String(e)) };
-  }
 }

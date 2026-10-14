@@ -375,21 +375,22 @@ export default function BrushHotkeySection() {
       }
       // 已连接却发指令失败：落到脚本兜底
     }
-    showMessage('未连接到快捷键服务，改用卸载程序…');
-    // ⛔ 唤起 **.exe 启动器**而不是 .bat（2026-10-13 用户实测：shell.openPath 对 .bat
-    //    行为不稳定，热键侧「提示已打开但什么都看不到」）。.exe 会稳定带出可见控制台，
-    //    由它去跑同目录的 uninstall.ps1。.bat 仍保留供手动双击使用。
+    showMessage('未连接到快捷键服务，改用脚本卸载…');
+    // 直接唤起同目录 uninstall.bat（由它跑 uninstall.ps1）。
+    // ⚠️ 2026-10-14 用户决定回退 .exe 启动器方案（98cc3e9 引入的 UninstallLauncher，
+    //    dist +76M）：.bat 收尾由 ps1 的倒计时负责（成功 5s / 失败 15s），窗口有足够
+    //    可见时间；唤起方式与启动器引入前完全一致。若实测唤起不稳定再评估别的通路。
     let ok = false;
-    try { ok = await openBundled('native/HotkeyDaemon/JWUninstall.exe'); } catch (err: any) {
-      console.error('唤起内置卸载程序失败:', err);
+    try { ok = await openBundled('native/HotkeyDaemon/uninstall.bat'); } catch (err: any) {
+      console.error('唤起内置卸载脚本失败:', err);
     }
     if (!ok) {
-      const ret = '插件目录内未找到卸载程序，请手动双击 native/HotkeyDaemon/JWUninstall.exe（或 uninstall.bat）';
+      const ret = '插件目录内未找到卸载脚本，请手动双击 native/HotkeyDaemon/uninstall.bat';
       showMessage(ret);
       return ret;
     }
-    showMessage('卸载程序已打开，请在弹出的窗口中查看结果。');
-    return '卸载程序已打开，请在弹出的窗口中查看结果。';
+    showMessage('卸载脚本已打开，请在弹出的窗口中查看结果。');
+    return '卸载脚本已打开，请在弹出的窗口中查看结果。';
   };
 
   // 「键盘卡死一键修复」：当系统键盘被某个全局钩子拖住（打不出字）时的自救入口。

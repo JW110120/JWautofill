@@ -39,7 +39,7 @@ export type SmoothToolGate = 0 | 1 | 2;   // 0=不是套索 1=是套索（唯一
  * ⛔⛔ 2026-10-14 第三轮定案（用户原话：「现在诊断不具备可用性……我落笔的时候，
  *    已经画了一段选区了，面板仍然显示已就绪，等笔尖落纸，我早就已经落了！」）：
  *    面板**不允许**自己从 toolGate / penDown / gateOk 拼原因 —— DLL 在闸门不成立时
- *    会主动把 penDown 写成 0（见 wintab_hook.c 的阻断分支），于是
+ *    会主动把 penDown 写成 0（见 smooth_engine.c 的阻断分支），于是
  *    「闸门心跳过期」与「笔尖真的悬空」在面板上长得一模一样，诊断永远吐
  *    「等笔尖落纸」。唯一可行的做法是**原生侧报原因码**，面板只做展示。
  *
@@ -133,7 +133,7 @@ export const SMOOTH_RADIUS_MAX = 100;
 /** 追笔「平滑力度」的显示量程（1–100，越大越黏）。原生有效区间见下。 */
 export const SMOOTH_CATCHUP_MIN = 1;
 export const SMOOTH_CATCHUP_MAX = 100;
-/** 原生追笔速度的有效区间（与 wintab_hook.c 的 `vmax = 0.02 + t/100·3.0` 一致）。 */
+/** 原生追笔速度的有效区间（与 smooth_engine.c 的 `vmax = 0.02 + t/100·3.0` 一致）。 */
 const CATCHUP_NATIVE_MIN = 1;
 const CATCHUP_NATIVE_MAX = 50;
 
@@ -572,7 +572,7 @@ export function resendLassoSmoothing(): void {
  *   ① 值变了 —— 常规通路；
  *   ② 距上次上报超过 GATE_REFRESH_MS —— **心跳**。
  * 为什么必须有②：原生侧只认「新鲜」的闸门值——超过 3 秒未刷新一律**阻断**
- * （fail-closed，见 wintab_hook.c 的 GATE_STALE_MS；2026-10-14 起过期不再放行）。
+ * （fail-closed，见 smooth_engine.c 的 GATE_STALE_MS；2026-10-14 起过期不再放行）。
  * 若只在变化时发，「0/1」会一直留在共享内存里无人续期。每 ~1.8s 重刷一次
  * （另有 syncGateHeartbeat 的 1.5s 纯 WS 心跳兜底，不依赖 batchPlay 读数）。
  */

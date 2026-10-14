@@ -1,6 +1,9 @@
 # JWautofill 项目记忆（主索引）
 
-> 细节全在 `refs/`。⛔ 违反必炸｜⚠️ 易复发｜✅ 有机 guard。流水账见 `HISTORY.md` 与 `memory/YYYY-MM-DD.md`。
+> 细节全在 `refs/`。⛔ 违反必炸｜⚠️ 易复发｜✅ 有 guard。流水账见 `memory/YYYY-MM-DD.md`。
+> ⛔⛔ **2026-10-14 架构**：套索平滑 = **PS 进程内 .8li 插件**（`native/PiSmooth8li/`）；
+> 旧 SmoothDaemon / 注入式 WintabHook.dll 已整体删除（M3）。平滑引擎算法细节仍见
+> `refs/lasso-smoothing.md`（已加变更横幅），当前架构一手记录 = `docs/lasso-pipl-8li-migration-plan.md`。
 
 ## 我要改什么 → 读哪里
 
@@ -12,59 +15,46 @@
 | UXP 接口 / 性能 / React | `refs/uxp-api-layer.md` |
 | 像素处理器算法 | `refs/pixel-algorithms.md` |
 | 构建 / 菜单 / 文件 IO / 守护进程 | `refs/toolchain-and-env.md` |
-| 套索实时平滑 | `refs/lasso-smoothing.md`（唯一权威） |
-| .8li 进程内插件（平滑迁移目标） | `docs/lasso-pipl-8li-migration-plan.md`（M1 完成记录=一手消息协议） |
+| 套索平滑（引擎算法仍有效） | `refs/lasso-smoothing.md` + .8li 迁移计划 |
 
-**改完必备校验**：改过 CSS 必跑 `node scripts/_css_comment_guard.cjs`（⚠️ 只扫 `src/styles/*.css`）+ `_modal_contract_guard.cjs` + `_color_picker_contract_guard.cjs`；`npx tsc --noEmit` 只看 `src/` 新增报错（`'uxp'`/`'photoshop'`、`ffi.d.ts` 语法错为基线）。
+**改完必备校验**：改过 CSS 必跑 `node scripts/_css_comment_guard.cjs`（⚠️ 只扫 `src/styles/*.css`，不扫 `theme.ts`）+ `_modal_contract_guard.cjs` + `_color_picker_contract_guard.cjs`；`npx tsc --noEmit` 只看 `src/` 新增报错（`'uxp'`/`'photoshop'`、`ffi.d.ts` 语法错为基线）。
 
 ## 仓库地图（要点）
 
-`src/app.tsx` 选区填充父面板 · `AdjustmentPanel.tsx` 工具箱父面板 · `psProbe.ts`+`psAccess.ts` 闸门与模态 · `ClearAlgorithms.ts` 清除算法唯一来源 · `adjustments/*Processor.ts` 像素处理器（零 import）· `common.css`+`theme.ts` 样式主题唯一来源 · `helpTexts.ts` hover 文案 · `src/hotkey/` = `HotkeyBridge.ts`(18923)+`SmoothBridge.ts`(18924)+`LassoSmoothing.ts`（无 WS）· `native/HotkeyDaemon/Program.cs` 两守护进程唯一源码（`#if ROLE_SMOOTH`）· `native/UninstallLauncher/` 卸载启动器 · `analysis/`、`outputs/` gitignore 不跨机。
+`src/app.tsx` 选区填充父面板 · `AdjustmentPanel.tsx` 工具箱父面板 · `psProbe.ts`+`psAccess.ts` 闸门与模态 · `ClearAlgorithms.ts` 清除算法唯一来源 · `adjustments/*Processor.ts` 像素处理器（零 import）· `common.css`+`theme.ts` 样式主题唯一来源 · `helpTexts.ts` hover 文案 · `src/hotkey/` = `HotkeyBridge.ts`(18923 笔刷热键 daemon)+`SmoothBridge.ts`(18924 对端=.8li)+`LassoSmoothing.ts`（纯状态机无 WS）· `native/` 现存：`HotkeyDaemon/`（唯一 daemon，Program.cs 仅热键角色）+ `PiSmooth8li/`（平滑插件，`build.sh` 用 zig）+ `app.manifest` + `get-zig.sh` · `analysis/`、`outputs/` gitignore 不跨机。
 
 ## 铁律（速查；细节在 refs/）
 
-- **dist 红线**：⛔ 实现计划/设计文档（`*plan*.md`）不进 dist（webpack globOptions ignore，2026-10-12 铁律）；webpack 不清旧产物 ⇒ 改规则后手删残留复验。
-- ⛔⛔ **.8li 插件（native/PiSmooth8li/）真机铁律**（2026-10-14 M1/M2）：① PiPL 头部=10 字节；② `'8664'` 入口导出名属性=**C 字符串**（写成 Pascal 串 ⇒ PS 读脏名 ⇒ GetProcAddress 失败 ⇒ attach 后 1ms 静默卸载、入口零调用）；③ 加载消息=`"SP Access"/"Reload"`（文档的 "SP Interface"/"Startup" 不出现），卸载=`"SP Access"/"Unload"`。④ M2 合并镜像：引擎（smooth_engine.c=wintab_hook.c 整体）+ WS 层（plugin_main.c=Program.cs ROLE_SMOOTH 的 C 移植），**无守护进程无注入**；⑤ 自写 SHA1/密码学原语必须用已知向量实测（RFC6455 App.A），JSON 内 Windows 路径必须转义反斜杠。PS 运行时锁 Plug-ins 里的 .8li ⇒ 部署必须先关 PS；Plug-ins **只能有一个** JWautofillSmooth 的 .8li（两份=双引擎+第二实例 bind 18924 失败）。
-- ⛔ **GATETS（工具心跳）由 pump 接管**（第八轮 2026-10-14）：有 WS 客户端连接即每 500ms 刷 GATETS——面板侧 penOn 门控的 1500ms 心跳实测不可靠（penOn 状态机/UXP 定时器任一环抖动 ⇒ reason=4「工具上报已超时」fail-closed ⇒ 平滑高频失效）；客户端全断 ⇒ 停刷 ⇒ 3s 过期语义保留。⛔ 独立实测污染：PS 运行时其旧 .8li 占 18924，测试副本 SO_REUSEADDR 会**双绑定**，测试连接可能被 PS 旧副本接走（[srv] 日志行无 pid 无法区分）⇒ 独立实测必须关 PS。面板 WS 每 ~30-55s 被错误断连一次（SmoothBridge onerror→1.5s 重连），原因待新日志「断开 reason=」定责。
-- ⛔⛔ **包流断供 = 「易失效」的深层根因**（2026-10-14 第七轮真机）：PS 空轮询 WTPacketsGet（calls 涨）但同一 hCtx 恒返 0 包数分钟、penDown 卡 1、ctxN=0 ⇒ 驱动侧断流、PS 走非 Wintab 回退输入继续画（笔迹在、平滑死）。嫌疑=队列溢出后驱动不恢复（与「大选区 PS 忙」同源）。判别「停笔正常冻结」=光标是否还在动。诊断：jwwh 日志全行毫秒时间戳 + [dead]/[gate]/[rst] 事件 + 三只读钩 WTPacket/WTOpenA/WTClose（ver≥0x0101）；断流时 HUD 立即隐藏（g_streamDead）。恢复方案待 [dead] 现场定。**恢复方案已实施（第九轮）**：[dead] 持续 >4s ⇒ WTEnable(hCtx,0/1) 翻转自愈（每 5s ≤12 次）。⛔ **Y 符号投票翻转**（真机 18:00:04 pxY 瞬间 +0.0486 ⇒ HUD 垂直镜像）：AXCAL.signLocked **首达即锁**（轴方向=物理常量，错票=噪声；仅换屏重标定解锁）。⛔ **换显示器**（公司 3440×1440 ↔ 家 4K）：worker 比对 SM_CX/VIRTUALSCREEN 变化 ⇒ 清 px 权威+标定自动重跑（符号锁保留）。⛔ **shutdown 消息** = 面板「服务」开关 OFF ⇒ commit(0)，绝不能退出宿主进程；旧版静默忽略 ⇒ 拨开关无反应。HUD 显隐必须判 CFG_I_ENABLED（否则拿冻结快照画圈）。
+- **dist 红线**：⛔ docs 进 dist 走**白名单**（仅 fill-guide.html + toolbox-guide.html + img/，webpack 逐个列；计划书/分析报告一概不进）。历史教训：黑名单 ignore `*plan*.md` 漏放了 modal-scope-audit.md（2026-10-15 用户发现）⇒ 追不上新文件。webpack 不清旧产物 ⇒ 改规则后手删残留复验。当前 dist≈148M：native 只剩 HotkeyDaemon（daemon+publish+卸载 bat/ps1+FixKeyboard）。
+- ⛔⛔ **.8li 真机铁律**：① PiPL 头部=10 字节；② `'8664'` 入口导出名属性=**C 字符串**（Pascal 串 ⇒ GetProcAddress 失败 ⇒ attach 后 1ms 静默卸载）；③ 加载消息=`"SP Access"/"Reload"`，卸载=`"SP Access"/"Unload"`；④ 引擎+WS 层合并镜像，**无 daemon 无注入**；⑤ 自写 SHA1 必须用已知向量实测（RFC6455 App.A），JSON 内 Windows 路径转义反斜杠。⛔ PS 运行时锁 Plug-ins 里的 .8li ⇒ 覆盖部署必须先关 PS；Plug-ins **只能有一个** JWautofillSmooth.8li。⛔ 旧 SmoothDaemon 若在跑会占 18924 ⇒ .8li bind 失败（本机已于 M3 卸载）。
+- ⛔ **GATETS 由 pump 接管**：有 WS 客户端连接即每 500ms 刷（面板 1500ms 心跳实测不可靠 ⇒ reason=4 fail-closed）；全断 ⇒ 停刷 ⇒ 3s 过期语义保留。⛔ 独立实测必须关 PS（旧副本占 18924，SO_REUSEADDR 双绑定会接走测试连接）。
+- ⛔⛔ **包流断供 = 「易失效」深层根因**：PS 空轮询 WTPacketsGet 但同 hCtx 恒返 0 包数分钟、penDown 卡 1 ⇒ 驱动侧断流、PS 走非 Wintab 回退（笔迹在、平滑死）。已实施自愈：[dead]>4s ⇒ WTEnable 翻转（每 5s ≤12 次）。⛔ Y 符号投票翻转 ⇒ AXCAL.signLocked **首达即锁**。⛔ 换显示器（公司 3440×1440 ↔ 家 4K）⇒ 比对 SM_CX/VIRTUALSCREEN，变化自动重标定（符号锁保留）。⛔ shutdown 消息 = 开关 OFF ⇒ commit(0)，**绝不退出宿主进程**。HUD 显隐必须判 CFG_I_ENABLED。
 - ⛔ `putPixels` 的 `replace` 默认 true ⇒ 局部写清空整层；写回 = 全尺寸缓冲 + 不传 targetBounds。背景层解锁→清除→finally 还原；类型转换后一次 DOM 都不能读。
 - ⛔ `clearEnum` 在背景/锁透明层不可用 ⇒ 分支 9 `blendSubtraction`；单通道描边走 7/8；静默化只认 batchPlay **options 层**；`needsStroke` 时填充传 `deselectAfterFill:false`。
-- ⛔ CSS 注释块外游离文本被当选择器、静默吃掉紧随整条规则 ⇒ 改完必跑 guard；「反复改没效果」立即停手验证命中。
-- ⛔⛔ **`theme.ts` 的 CSS 注释一律写在 `{ }` 外**：它用 `style.textContent` 运行时注入，UXP devtools 把**声明块内注释当一条声明**解析 ⇒ 后台刷 `CssSyntaxError: Unknown word / Missed semicolon`（`source` = 注释原文）。⚠️ `_css_comment_guard.cjs` **只扫 `src/styles/*.css`，不扫 `theme.ts`** ⇒ 这里要靠人工对照（refs/lasso-smoothing.md §N6）。
-- ⛔ **flex 容器相邻子元素外边距不合并**：`.smooth-params`（`flex-direction:column`）两行间隔 = 10+10=20px，而块级 `.slider-container` 合并成 10px ⇒ 对齐「不透明度/羽化」必须显式 `> .row-between{margin:0}` + `+ .row-between{margin-top:10px}`。
-- ⛔ 跨文件置灰必须两级类选择器（style-loader 注入序）；`gap`/`:has()`/`rotate()` 不可靠；`transparent` 渲染成纯黑。
-- ⛔ 多浮窗 = 单遮罩 + 一个 `.float-stack`；子面板互斥唯一入口 `setSecondaryPanel(id,open)` 一次写全 5 个 boolean；遮挡类按 state 派生。
-- ⛔ 闸门三件套 `isPsBusy()`+文档级闩锁+`psAccess.psRead()`；禁采信 `core.isModal()`（判据 `getOwnModalDepth()>0`）；`runAsModal` 绝不直接传第二实参。
-- ⛔ **参与渲染的判据一律按 state 派生**（异步写入不重渲染 ⇒ 界面停旧判定）。
-- ⛔ 无原生编译器 ⇒ 注入 DLL 靠便携 zig（`native/get-zig.sh`→`%USERPROFILE%\zig-toolchain`）；编译须沙箱外跑。
-- ⛔ 改 `Program.cs` 后三步：两角色分别 `dotnet publish -o publish` → `yarn build`；更新已装副本只有「服务开关先关再开」。
-- ⛔⛔ **`penSmooth` 整帧丢失 = 一个字段类型不符**（2026-10-14 真机定案）：`PenWire` 数字字段原先全是 `int?`，面板只要漏出一个浮点（如 `radius:95.5`）就会让 System.Text.Json **抛异常**，外层 catch 把**整条 `penSmooth`**（含 on/mode/toolGate/heal/broadcast）一起丢掉 —— 现象正是用户感知的「切换模式后平滑就断」（`daemon.log` 137 条 `could not be converted to Nullable<int>`）。两层防御：① 面板 `toWire()` 出口对所有数字一律 `Math.round`（唯一咽喉）；② daemon `PenWire` 数字字段用 `double?` + 赋值时 Round。**新增 IPC 数字字段必须同时做这两件事**。
+- ⛔ CSS 注释块外游离文本被当选择器、静默吃掉紧随整条规则 ⇒ 改完必跑 guard。⛔⛔ `theme.ts` 的 CSS 注释一律写在 `{ }` 外（`style.textContent` 运行时注入，声明块内注释被当声明 ⇒ CssSyntaxError；guard 不扫它，靠人工）。
+- ⛔ flex 容器相邻子元素外边距不合并（`.smooth-params` 两行 10+10=20px vs 块级合并 10px）⇒ 需显式 `> .row-between{margin:0}` + `+ .row-between{margin-top:10px}`。⛔ 跨文件置灰必须两级类选择器（style-loader 注入序）；`gap`/`:has()`/`rotate()` 不可靠；`transparent` 渲染成纯黑。
+- ⛔ 多浮窗 = 单遮罩 + 一个 `.float-stack`；子面板互斥唯一入口 `setSecondaryPanel(id,open)` 一次写全 5 个 boolean。
+- ⛔ 闸门三件套 `isPsBusy()`+文档级闩锁+`psAccess.psRead()`；禁采信 `core.isModal()`（判据 `getOwnModalDepth()>0`）；`runAsModal` 绝不直接传第二实参。⛔ modal 告警 = 请求率 > 节流吞吐（`MIN_MODAL_GAP_MS=300` 全局 ⇒ 上限 3.3/s；空闲巡检合计须 <3.3）。⛔ **参与渲染的判据一律按 state 派生**。
+- ⛔ 无原生编译器 ⇒ zig 走便携工具链（`native/get-zig.sh`→`%USERPROFILE%\zig-toolchain`，现用于 .8li 构建）；编译须沙箱外跑。⛔ 改 `Program.cs`（热键 daemon 唯一源码）后：`dotnet publish -o publish` → `yarn build`；更新已装副本只有「服务开关先关再开」。
+- ⛔⛔ **IPC 数字字段双防御**（2026-10-14 真机定案）：面板 `toWire()` 出口对所有数字一律 `Math.round`（唯一咽喉）；原生侧字段用 `double?`+赋值 Round。漏一个浮点 ⇒ 整条消息被丢 ⇒ 「切换模式后平滑就断」。**新增 IPC 数字字段必须同时做这两件事**。
+- ⛔ **卸载脚本只删自己那份安装目录**；绝不 `Remove-Item -Recurse` 整个 `%LOCALAPPDATA%\JWautofill`（会删 `configpath.txt` ⇒ 热键配置被默认值冲掉）。面板卸载兜底唤起 `native/HotkeyDaemon/uninstall.bat`（→ 同目录 uninstall.ps1）。⛔ 2026-10-14 用户决定**回退** 98cc3e9 的 JWUninstall.exe 启动器方案（dist +76M 不划算）⇒ UninstallLauncher 项目已删，勿再引入；若实测 .bat 唤起不稳定（窗口一闪而过）再评估别的通路。`.bat` 用 `if errorlevel 9009 pause`，倒计时成功 5s/失败 15s。
+- ⚠️ **环境坑：genie-trash**：对多文件目录报 "Some operations were aborted" 但**实际已移动**（包装器 fail-closed 误报），且会**延迟回滚重建空目录**。对策：逐文件删容忍报错 + 空壳用 `[System.IO.Directory]::Delete(p,$false)` 收尾 + 删后复验。
 
-## 套索实时平滑（速记）→ `refs/lasso-smoothing.md`（唯一权威）
+## 套索平滑（速记）→ `refs/lasso-smoothing.md` + .8li 迁移计划
 
-- 唯一通路 = Wintab 笔通路（`SmoothDaemon` 经共享内存注入 `JWautofillWintabHook.dll`，inline-hook `WTPacketsGet`）；面板「平滑选项」是一条 notify-bar；装目录 `%LOCALAPPDATA%\JWautofill\smooth`。⛔ **换 DLL 必须重启 PS**（旧 DLL 被锁）；状态必须**周期推送**（`SmoothStatePump`）。
-- 状态机 `CFG_I_STATE`：0 未挂 · 1 生效 · 2 标定失败 · 3 已卸载 · 4 入口被旧副本占（须重启 PS）。「已平滑 N 包」只计真实改写包。
-- ⛔⛔ **坐标口径**：系统光标 = **原始笔** ⇒ HUD 圆钉在「光标−(raw−out)·px」= 绘制点。⛔⛔ **px 的唯一权威 = 驱动 `lcOutExt / lcInExt`**（`g_pxSrc=1`，含符号、无需测量；合理性判据 `|drv| ∈ (0.15·标称, 1.02·标称]`，否则退回屏幕标称）；光标测的 `Δ光标/Δraw` **偏低且漂**（真机 [status] 0.0466~0.0676 vs 屏幕标称 3440/44800=0.076786，最差偏低 40%），已**降级为日志对照**。**逐轴带符号**（lcInExtX=44800 / lcInExtY=29600，比差 1.58 倍，单标量不成立）。⛔ 曾有一条**标定断链真 bug**（`calib_axis` 写 `g_axCal*.px`，`px_x/px_y` 却读 `g_pxAxisX/Y`）⇒ 查「调参无感 / HUD 位置不对」必先查它；日志 `calX/calY=1` 才是实测。
-- ⛔⛔ **HUD 外推必须两端对称**（2026-10-14 第五轮真 bug）：`光标(此刻) − offset(此刻) = 绘制点(此刻)`。只把 raw 外推到当前帧、out 停在**包时刻** ⇒ 圆心离真实绘制点恒差 **15px**（100px 绳）。`sn_publish` 记 `g_snPrevOutX/Y`，HUD 用同一 `age/pktDt` 同时外推 raw 与 out；一致快照校验字段 8 → **10** 个。
-- HUD 老根因（已修）：`LOGCONTEXT` 漏 `lcDevice`；`layout_of` 把 ORIENTATION/ROTATION 当 4B；驱动报的 `lcPktData` ≠ 真实布局 ⇒ 必须**盲扫定解**（本机 stride=52 offX=20 offY=24）。
-- ⛔ **示意图 ≠ 测量数据**（用户纠错）：几何量化只能来自日志/实测，或用户**明确确认为真实**的截图。
-- ⛔⛔ **`TIME_GAP_RESET_MS` 假复位**：数位板停笔**不再出包** ⇒ 旧 120ms 把「停一下再画」误判成新一笔、输出点拽回笔尖；现值 **5000ms** + `HUD_HOLD_MS=3000`；`rst=a/g/j` 正常运笔不增长。
-- ⛔⛔ **拉绳 = 定长绳**：`dist ≤ rope` ⇒ 输出点不动；`> rope` ⇒ 跟随量 `dist − rope`，即 **`f = 1 − rope/dist`**（写成 `rope/dist` 会让输出点**直接跳到光标** ⇒ 选区成一段段直线）。绳长 ≡ 半径（「张力」已删）。绳 = 统一 **2px** + 二次贝塞尔，垂度 `sag=sqrt(3(L−d)d/8)`（d→L 自然拉直）；**绝不画 4→1px 锥形**。
-- ⛔⛔ **平滑「时有时无」** = DLL 被 `cmd=2` 卸钩（`RequestUnhook` 也会发）而守护进程以为还开着 ⇒ 必须自愈：`PenHook.HealIfUnhooked`（`_enabled` 真 且 `I_STATE==3` ⇒ `SendCommand(1)`，冷却 2s；state==4 不自愈）。
-- ⛔⛔ **拉绳「圆心与受力点分离」= 标定器形状，不是参数**（2026-10-14 真机定案）：旧版把**比值的 EMA** 当估计量（等效窗口仅 3~20 样本）⇒ `pxX/pxY` 抖动 19 种、偏 ±25% ⇒ 圆心偏 = 滞后×px ⇒ 100px 绳偏约 25px，肉眼即「分离」。已改**位移加和** `px = s·Σ|Δ光标|/Σ|Δ原始轴|`（窗口 `PX_WIN=256`，噪声按 √N；判据 `PX_TRUST_N=24` 才 `done=1`，之前回标称兜底）。⛔ 别再加「离群丢弃/整值作废」——那本身就是抖动源。⚠️ **第五轮起 px 的主来源改为驱动 `lcOut*`（见上一段），标定器只在驱动不可用时兜底、且仅作日志对照**。
-- ⛔⛔ **落笔判据 = 多信号并联**（2026-10-14 第五轮，**单字段版已废**）：`buttons(&0x07) / pkNormalPressure / pkTangentPressure` **任一非零 = 落笔**；三者全零且持续 `CONTACT_HOLD_MS=250ms` 才算抬笔。旧版只认一个字段（真机 `ctOff=32`=NP），轻触运笔时 NP **成段**读到 0 ⇒ 闸门反复闭合 ⇒ 每次 `g_wasEnabled=0`（重新锚定）+ 同判据驱动 HUD ⇒ **平滑与 HUD 同时失灵**（诊断条 `判据 +32=0`）。⛔⛔ **每个信号必须「同时见过 0 与非 0」才有投票权** ⇒ 恒 0 字段（部分驱动的 pkButtons）/ 恒非 0 字段（pkCursor/Orientation/pkZ）**自动出局**，不需要盲扫猜字段，也消灭「悬空也在平滑」。判据未建立：冷启动宽限 600 包放行，之后**按未落笔阻断**（`RS_CT_UNKNOWN`）。判读用新日志行 `# [ct] 信号=+16* +32* +36 生效=7 本批命中=2 连续全零=37 包`（`*`=有投票权；**连续全零 ×5ms = 闸门被压住多久**，运笔中 >20 包 = 判据成段失效）。
-- ⛔ **HUD 显隐六条件** = `wnd && mem && activeNow && gateOk && ropeMode && (hf&1)`；不显示时先读日志 `[hud] 未显示: …`（2s 节流，逐项打出 `wnd/mem/active/gate/rope/hudBits`）。
-- ⛔⛔ **卸载脚本只删自己那份安装目录**；第 7 步**只能回收空目录** —— 绝不 `Remove-Item -Recurse` 整个 `%LOCALAPPDATA%\JWautofill`：它会删掉 `configpath.txt` ⇒ 守护进程回落默认路径、读到空配置 ⇒ 面板按「首次使用」回写默认值，把用户热键冲掉；还会删掉另一角色的 `smooth\`。热键配置回写护栏 `canPersistConfig`：daemon 回帧的 `path` 与面板下发的必须**逐字相同**（只判「非空」不够 —— 默认路径字符串也非空）；守护进程覆盖前留 `<配置>.bak`。
-- ⛔ **卸载必须唤起 `.exe` 启动器**（`native/UninstallLauncher/JWUninstall.exe` → 同目录 `uninstall.ps1`）：`shell.openPath` 对 `.bat` 不稳定（不出现 / 闪退）。钩子 DLL 落 `%TEMP%\JWautofill\hooks\`（PS 会锁住安装目录 ⇒ 卸载删不掉）。重试 8×500ms、失败**不 throw**、倒计时 **15s**（两边一致）、`.bat` 用 **`if errorlevel 9009 pause`**。
-- ⛔⛔ **modal 告警 = 请求率 > 节流吞吐**：`MIN_MODAL_GAP_MS=300` 是**全局**节流 ⇒ 上限 **3.3/s**，空闲巡检合计必须 < 3.3（工具 1000 + 快速蒙版 1000 + 文档身份 2000 = 2.5/s）。定位用 **`__jwPs.sources()`**。
-- ⛔ **工具闸门 fail-closed**：工具 ID 走 `normalizeToolId()`；面板**读失败沿用上次判定**，绝不退回 `2`（原生侧 2 = 放行）。工具 ID 原文只在读数变化时打 console。
-- ⛔ **状态条**：`state===1` 只有两档 —— 「生效中」(绿) / 「平滑中断」(红，判据 `penDown=1 && gateOk=1 && 有包 && snAge>2.2s`)。**不再按模式分叉**（旧的「非拉绳模式」橙档已于 2026-10-14 删除，用户要求「选中啥模式就是啥模式」）；用户明确要求「生效中」后面不挂任何参数；`state===3` → 「未生效（正在自动恢复…）」。参数与受阻原因全部下沉到**诊断条**（`.border-panel-section.smooth-params` 盒**下方**，`smoothDiagText()/smoothDiagTone()`，复用 `.notify-bar` 零新 CSS）。
-- ⛔ **量程必须落在人的运笔区间（0.05~1.5 px/ms）**：`SPEED_FULL=3.0`、强度 τ(100)=**250ms**（`TAU_LN=3.473500`）、追笔 vmax 上限 **3.0 px/ms**；改上限必须同时搜 `RADIUS_PX_MAX` / `SMOOTH_RADIUS_MAX` / `Program.cs:Clamp`。
-- ⛔ **「拐角」是转折角**（`dot < cos(cornerDeg)` ⟺ `转折角 > cornerDeg`）⇒ 原生 cornerDeg 越小越容易触发保护。⛔⛔ **2026-10-14 回退**：曾有 `cornerToNative(d)=90−d` 的「保护范围」反向映射，用户明确要求回退（「反而更加让人迷惑」）⇒ 现已**恒等**（显示值=原生阈值）。回退理由：面板其它参数全是「越大越强」，唯独拐角反向 ⇒ 比较时误判；**别再重新引入**。
-- ⛔ **追笔**保留重映射：面板显示「力度」1–100，`catchUpToNative(d) = round(50 − (d−1)·49/99)`（d=1→原生 50 跟手，d=100→原生 1 最黏）；原生 `vmax=0.02+t/100·3.0` 不动。映射都在 `toWire()` 出口换算，滑杆量程同步 `app.tsx` + `DragHandler 'smooth:catchUp'`（**下限 1，不是 0**）。
-- ⛔⛔ **诊断条只认原生侧原因码**（`CFG_I_REASON`/`RS_*` ↔ C# `I_REASON` ↔ TS `SmoothReason`/`smoothReasonText()`，**三处逐项对应**）：0 改写 · 1 开关未开 · 2 非套索 · 3 工具未知 · 4 心跳过期 · 5 悬空 · **6 判据尚未建立**（第五轮改义，旧「判据退化」已废）· 7 未标定 · 8 无上下文。⛔ **禁止面板自己拼** `toolOk/penDown/gateOk` —— DLL 在闸门不成立时会主动把 `penDown` 写成 0，「心跳过期」与「真悬空」长得一样（用户原投诉）。非正常原因按 `SMOOTH_REASON_STICKY_MS=8000` **粘住**（治「绿条一闪来不及截图」）。`gateOpen/gateClose` 是**累计值** ⇒ 判抖动只能用**两次回报的增量**。判据尾巴现为 `smoothCtText()`：`判据 +16* +32* +36 生效2/3 命中1 值0`。
-- 共享内存槽位 21 **保留空洞、绝不重编号**（与 C# `I_*` 逐项对应，错位不报错）。**2026-10-14：40 → 48**（35~41 = reason/gateOpen/gateClose/ctOff/ctVal/pxNx/pxNy；**42~44 = ctMask/ctElig/ctOffs**）⇒ 改 NLONGS 必读 refs 的 M5「扩容升级陷阱」（旧 DLL 占着旧尺寸节 ⇒ fail-closed，重启 PS 自愈）。
+- 唯一通路 = Wintab 笔通路，实现 = **PS 进程内 .8li**（smooth_engine.c inline-hook `WTPacketsGet`；plugin_main.c 承载 WS 18924，协议与旧 daemon 逐字兼容）。⛔ 换 .8li 必须重启 PS（PS 锁文件）。状态周期推送（SmoothStatePump 500ms）。
+- 状态机 `CFG_I_STATE`：0 未挂 · 1 生效 · 2 标定失败 · 3 已卸载 · 4 入口被占（须重启 PS）。
+- ⛔⛔ **坐标口径**：系统光标 = 原始笔 ⇒ HUD 圆钉「光标−(raw−out)·px」。⛔⛔ **px 唯一权威 = 驱动 `lcOutExt/lcInExt`**（含符号；合理性判据 `|drv| ∈ (0.15·标称, 1.02·标称]`，否则退回屏幕标称）；光标实测 Δ 比**偏低且漂**（最差 −40%），已降级为日志对照。**逐轴带符号**（lcInExtX=44800 / lcInExtY=29600，单标量不成立）。
+- ⛔⛔ **HUD 外推两端对称**：`光标(此刻) − offset(时刻) = 绘制点(时刻)`；raw 与 out 用同一 `age/pktDt` 同时外推（只外推 raw ⇒ 圆心恒差 15px/100px 绳）。
+- ⛔⛔ **`TIME_GAP_RESET_MS` 假复位**：停笔不再出包 ⇒ 旧 120ms 把「停一下再画」误判新一笔；现值 **5000ms** + `HUD_HOLD_MS=3000`。
+- ⛔⛔ **拉绳 = 定长绳**：`dist ≤ rope` ⇒ 输出点不动；`> rope` ⇒ 跟随量 `dist − rope`（**`f = 1 − rope/dist`**；写成 `rope/dist` ⇒ 输出点直接跳光标）。绳长 ≡ 半径；绳 = 统一 2px + 二次贝塞尔（垂度 `sag=sqrt(3(L−d)d/8)`）；**绝不画 4→1px 锥形**。
+- ⛔⛔ **落笔判据 = 多信号并联**：`buttons(&0x07)/pkNormalPressure/pkTangentPressure` 任一非零 = 落笔；三者全零持续 `CONTACT_HOLD_MS=250ms` 才算抬笔。⛔ 每个信号必须「同时见过 0 与非 0」才有投票权（恒 0/恒非 0 字段自动出局，消灭「悬空也在平滑」）。判据未建立：冷启动宽限 600 包，之后按未落笔阻断。
+- ⛔ **诊断条只认原生侧原因码**（`RS_*` ↔ C `CFG_I_REASON` ↔ TS `SmoothReason`，三处逐项对应）：0 改写 · 1 开关未开 · 2 非套索 · 3 工具未知 · 4 心跳过期 · 5 悬空 · 6 判据未建立 · 7 未标定 · 8 无上下文。⛔ 禁止面板自己拼 `toolOk/penDown/gateOk`（闸门不成立时原生侧主动把 penDown 写 0）。非正常原因粘住 `SMOOTH_REASON_STICKY_MS=8000`；`gateOpen/gateClose` 是累计值 ⇒ 判抖动只能用**增量**。
+- ⛔ **状态条** `state===1` 只有两档：「生效中」(绿)/「平滑中断」(红，判据 `penDown=1 && gateOk=1 && 有包 && snAge>2.2s`)；不按模式分叉；「生效中」后不挂参数；`state===3` → 「未生效（正在自动恢复…）」。
+- ⛔ **量程落在人的运笔区间（0.05~1.5 px/ms）**：`SPEED_FULL=3.0`、强度 τ(100)=250ms、追笔 vmax 上限 3.0 px/ms；改上限同步搜 `RADIUS_PX_MAX`/`SMOOTH_RADIUS_MAX`/C 侧 Clamp。⛔ **拐角=转折角**；`cornerToNative` 反向映射已回退为**恒等**，别再引入。⛔ 追笔映射 `catchUpToNative(d)=round(50−(d−1)·49/99)`（d=1→50 跟手，d=100→1 最黏；下限 1 不是 0）。
+- 共享内存槽位 **保留空洞、绝不重编号**（与 C `I_*` 逐项对应，错位不报错）；改 NLONGS 必读 refs 的「扩容升级陷阱」（旧节占着 ⇒ fail-closed，重启 PS 自愈）。
+- ⛔ **.8li 安装/更新通路尚未面板化**（M3 遗留）：「服务未启动」= .8li 没装进 PS Plug-ins，需手动部署。
 
 ## 记忆维护约定
 
-- `MEMORY.md`=索引+铁律（≤3000 字）；`refs/*.md`=明细；`HISTORY.md`=历程；`YYYY-MM-DD.md`=当日流水（append-only）。技能：`uxp-frontend-spec`、`algo-param-bench`。
+- `MEMORY.md`=索引+铁律（≤3000 字）；`refs/*.md`=明细；`YYYY-MM-DD.md`=当日流水（append-only）。技能：`uxp-frontend-spec`、`algo-param-bench`。

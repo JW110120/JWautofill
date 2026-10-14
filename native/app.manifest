@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  两个守护进程（JWautofillHotkeyDaemon / JWautofillSmoothDaemon）**共用**的一份清单。
+  笔刷热键守护进程（JWautofillHotkeyDaemon）的清单。
+  ⚠️ 2026-10-14：套索平滑已迁到 PS 进程内的 .8li 插件（无清单需求），
+  旧 JWautofillSmoothDaemon 及其卸载链已整体移除，本清单只服务热键守护进程。
 
   ⛔ 为什么必须有 DPI 感知：套索平滑的「回注」用 SendInput 的
      MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK，其 dx/dy 是相对**虚拟桌面物理像素**

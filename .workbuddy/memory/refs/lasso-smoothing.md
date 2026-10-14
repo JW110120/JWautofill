@@ -3,6 +3,15 @@
 > 由 `MEMORY.md` 下沉而来（2026-10-12）。主索引只留导航，这里放全部细节与踩坑。
 > 方案原文 / 实现状态 / 验收清单见 `docs/lasso-realtime-smoothing-plan.md`。
 
+> ⛔⛔ **2026-10-14 架构变更横幅（M3）**：平滑已从「外置 SmoothDaemon(18924) + 注入
+> JWautofillWintabHook.dll」迁到 **PS 进程内 .8li 插件**（native/PiSmooth8li/，
+> smooth_engine.c = 旧 wintab_hook.c 整体编入，plugin_main.c = 旧 Program.cs
+> ROLE_SMOOTH 的 C 移植，WS 协议逐字兼容）。native/SmoothDaemon/ 与 native/WintabHook/
+> 已删除，面板的 daemon 拉起/卸载链路已删。**本文档中引擎/算法层细节（HUD、标定、
+> 拉绳、落笔判据、槽位表、诊断码）依然有效**（代码原样搬入 .8li）；但凡涉及
+> 「两个守护进程 / 注入 DLL / 安装目录 %LOCALAPPDATA%\JWautofill\smooth / 卸载脚本」
+> 的 daemon 专属内容**以 `docs/lasso-pipl-8li-migration-plan.md`（M1/M2/M3 记录）为准**。
+
 ## 1. 定位
 
 - UXP **无画布指针 API** ⇒ 绘制过程对插件是盲区；唯一实时入口是「PS 收到输入之前」
@@ -554,6 +563,7 @@ _ox += distX * k;
 - ⛔ 守护进程 `SaveConfig` 覆盖前复制一份 `<配置>.bak`：用户手工录的热键冲掉就无法重建。
 
 #### I3. ⛔ 唤起 `.bat` 不可靠 ⇒ 卸载走 `.exe` 启动器
+> ⛔⛔ **2026-10-14 已整体回退（用户决定）**：`.exe` 启动器方案（`native/UninstallLauncher/`，JWUninstall.exe）已删除，面板退回了 `.bat` 唤起（`BrushHotkeySection.uninstallDaemon` → `openBundled('native/HotkeyDaemon/uninstall.bat')`）—— 用户不愿为卸载窗口多付 dist 76M。以下为当时（2026-10-13）的决策记录，仅存史；`.bat` 收尾由 ps1 倒计时保证（成功 5s/失败 15s）。SmoothBridge.runSmoothUninstallScript 已随 M3 删除。
 - `shell.openPath` 实测：对 `.bat` 热键侧**什么都不出现**、平滑侧**窗口一闪而过**；
   对 `.exe` 才稳定（FixKeyboard.exe 已走通）。
 - ✅ `native/UninstallLauncher/`（`JWUninstall.exe`，控制台程序）：在自带控制台里跑

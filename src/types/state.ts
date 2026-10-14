@@ -209,14 +209,14 @@ export interface AppState {
      // 分区可见性（隐藏/显示分区浮窗控制，默认皆可见）：选区改造 / 填充选项
      selectionOptionsVisible: boolean;
      fillOptionsVisible: boolean;
-    // ===== 套索实时平滑（方案 A：输入层滤波）=====
+    // ===== 套索实时平滑（.8li 进程内插件，输入层滤波）=====
     /**
      * 滤波参数快照（mode / strength / radius / catchUp / cornerAngle / speedAdaptive）。
      * ⚠️ 必须进 state：滑杆/单选都要靠它触发重渲染，且它是**跨模块共享字段**
-     *    （下发到原生守护进程），只写实例字段不会触发重渲染（同 isInQuickMask 的历史 bug）。
+     *    （经 WS 18924 下发到 .8li 模块），只写实例字段不会触发重渲染（同 isInQuickMask 的历史 bug）。
      * ⚠️ 整体替换而非就地修改：持久化的变更检测用的是引用比较。
-     * ⚠️ 开关本身**不在这里**：它由守护进程回报的 smoothStatus.pen.enabled 驱动
-     *    （服务语义 —— 开 = 拉起守护进程，关 = 优雅退出，同笔刷热键）。
+     * ⚠️ 开关本身**不在这里**：它由模块回报的 smoothStatus.pen.enabled 驱动
+     *    （.8li 常驻 PS 进程，开关即「开/关平滑」，没有可拉起的进程）。
      */
     smoothParams: LassoSmoothParams;
     /** 「平滑选项」分区是否可见（隐藏/显示分区浮窗控制）。 */
@@ -226,17 +226,10 @@ export interface AppState {
     /** 「平滑选项」内的高级项（半径/张力/追笔/拐角/自适应）是否展开。 */
     isSmoothAdvancedExpanded: boolean;
     /**
-     * 原生守护进程回传的平滑健康状态（是否生效/标定结果/已平滑包数/当前参数）。
+     * .8li 模块回传的平滑健康状态（是否生效/标定结果/已平滑包数/当前参数）。
      * 只读镜像：仅用于面板显示与排障，不参与任何业务判断，不持久化。
      */
     smoothStatus: LassoSmoothStatus;
-    /**
-     * 「正在拉起平滑服务」的过渡态（点开关 → 守护进程起来 → WS 建连，约 1~3 秒）。
-     * ⛔ 必须进 state：状态条要据此显示「服务启动中…」而不是仍旧说「服务未启动」
-     *    （否则用户点完看不到任何反馈，只会反复连点）。
-     * ⚠️ 纯 UI 过渡态：不持久化、不参与业务判断，连接建立或 8 秒超时后自愈为 false。
-     */
-    smoothLaunching: boolean;
      showVisibilityPanel: boolean;  // 隐藏/显示分区浮窗是否打开
     isFillSettingsOpen: boolean;  // 填充设置浮窗是否打开（承载原面板底部的四个 checkbox）
     // 浮窗堆叠顺序（= 开启先后）：APP 面板允许同时打开多个浮窗，它们在同一个遮罩里
@@ -317,13 +310,12 @@ export const initialState: AppState = {
     // 分区可见性（默认皆可见）
     selectionOptionsVisible: true,
     fillOptionsVisible: true,
-    // 套索实时平滑：参数默认值（开关不在这里 —— 由守护进程回报驱动）
+    // 套索实时平滑：参数默认值（开关不在这里 —— 由 .8li 模块回报驱动）
     smoothParams: { ...initialLassoSmoothParams },
     smoothOptionsVisible: true,
     isSmoothOptionsExpanded: true,
     isSmoothAdvancedExpanded: false,
     smoothStatus: { ...initialLassoSmoothStatus },
-    smoothLaunching: false,
     showVisibilityPanel: false,
     isFillSettingsOpen: false,
     floatOrder: [],

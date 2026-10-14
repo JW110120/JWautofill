@@ -70,3 +70,18 @@
 - WS 层职责映射：penSmooth→CFG 槽（含 toolGate/GATETS 同写）、smoothState 500ms 差分推送（SmoothStatePump）、心跳 500ms 写 I_HEARTBEAT（引擎 >3000ms 判死）、cmd 去重（只在开关跃变下令，防 toolGate 心跳反复重置标定）、HealIfUnhooked 同款自愈（state==3 或 state==0&&calls==0 → cmd=1，冷却 2s，零调用自愈限 8 次）。
 - ⛔ 部署：PS 运行时锁 Plug-ins 里的 .8li ⇒ 覆盖前必须完全退出 PS。旧 SmoothDaemon 不再需要；若它仍在运行会占 18924 ⇒ .8li bind 失败（日志有明确提示）。
 - 待真机验收：PS 重启后日志出现 Reload + M2 服务已启动 + 面板连接；开启平滑后套索运笔应生效且 HUD 显示（引擎在进程内，免注入免心跳链路）。
+
+---
+
+## M3 完成记录（2026-10-14 用户指令执行）
+
+- **分发面清理（用户三项要求全部落地）**：
+  ① 本机遗留清理：旧 SmoothDaemon 进程（PID 28272）已停、开机自启项已移除、`%LOCALAPPDATA%\JWautofill\smooth\` 已删（先用项目自带 uninstall.ps1，备份在 `%TEMP%\JWautofill-smooth-daemon-backup-20261014\`）；`configpath.txt`（热键配置指针）按设计保留。
+  ② 源码/产物：`native/SmoothDaemon/`（整个工程）、`native/WintabHook/`（注入 DLL）已删；`dist/native/` 只剩 `HotkeyDaemon`；webpack 移除 5 条 Smooth/Wintab copy 规则。
+  ③ 面板：删除「卸载套索平滑服务」菜单项（MenuManager）、`uninstallSmoothService`、`launchSmoothDaemon`/`runSmoothUninstallScript`/`sendSmoothDaemonCommand`、`startSmoothService`/`restartSmoothService`/`beginSmoothLaunching` 与 `smoothLaunching` 状态；`toggleLassoSmooth` 退化为纯开关（开=penSmooth(on)，关=penSmooth(off)+shutdown⇒.8li commit(0) 常驻）。
+- **dist 体积**：362M → **221M**（−141M）。保留：笔刷热键 daemon（publish/JWautofillHotkeyDaemon.exe）+ 其卸载脚本（uninstall.bat/ps1，面板直接唤起 .bat）+ FixKeyboard（面板「键盘卡死一键修复」仍在用，独立功能）。
+- **追加回退（2026-10-14 深夜，用户决定）**：98cc3e9 引入的卸载启动器 `native/UninstallLauncher/`（JWUninstall.exe，dist +76M）已整体回退为 9e8332c 的 .bat 唤起 —— BrushHotkeySection 改回 `openBundled('native/HotkeyDaemon/uninstall.bat')`，webpack 移除 JWUninstall.exe copy 规则，项目与 dist 产物均已删。.bat 收尾由 ps1 倒计时负责（成功 5s / 失败 15s），窗口可见时间有保证。
+- **未做（有意保留）**：`Program.cs` 的 `#if ROLE_SMOOTH` 死代码未剥离 —— 唯一编译它的 SmoothDaemon.csproj 已删 ⇒ 永远不会再参与编译；本机无 .NET SDK 无法验证热键 daemon 重编译，按「不引入无法验证的改动」原则搁置。
+- **校验**：`tsc --noEmit` src/ 零报错（基线外仅 node_modules ffi.d.ts）；三个契约守卫全过；`yarn build` 通过；bundle.js 中旧符号（runSmoothUninstallScript/uninstallSmoothService/JWautofillSmoothDaemon）零残留。
+- ⚠️ 环境坑（复现一次花了 4 次删除尝试）：genie-trash 对**多文件目录**报 "Some operations were aborted" 但**实际已完成移动**，包装器 fail-closed 报错；且会**延迟回滚**重建空目录（两次复现，均在数十秒后）。对策：逐文件删（容忍报错）+ 空目录用 `[System.IO.Directory]::Delete(path,$false)` 收尾；删后等待复验。
+- ⛔ 遗留事项：.8li 的**安装/更新通路**（拷进 PS Plug-ins、关 PS 覆盖、版本探测）尚未面板化 —— 现在「服务未启动」= .8li 没装进 Plug-ins，用户需手动部署。
