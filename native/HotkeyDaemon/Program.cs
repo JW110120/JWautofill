@@ -77,7 +77,7 @@ namespace JWautofillDaemon
         private const string MapName = "Local\\JWautofillWintabSmooth";
         // ⛔ 必须与 native/WintabHook/wintab_hook.c 的 CFG_NLONGS **严格相等**：
         //    映射文件大小由它决定，两侧不一致会让后半段槽位互相踩（错位不报错）。
-        private const int NLONGS = 40;
+        private const int NLONGS = 48;
         private const int Stride = 4;
         private const int Magic = 0x57414A57;
 
@@ -101,7 +101,22 @@ namespace JWautofillDaemon
                           I_PXPERAXISY = 33,
                           // P3.4（2026-10-14）：DLL 回写的「最后一次快照发布时刻」。
                           // packets 在涨而它不动 = 断流（标定丢失等），面板据此提示「平滑中断」。
-                          I_SNTS = 34;
+                          I_SNTS = 34,
+                          // P3.5（2026-10-14 第三轮）：把「此刻为什么没在改写」报出来。
+                          // ⛔⛔ 必须有：DLL 在闸门不成立时**会主动把 penDown 写成 0**，
+                          //    于是「心跳过期」和「笔尖真的悬空」在面板上长得一模一样，
+                          //    诊断永远吐「等笔尖落纸」（用户落着笔看这句只能更迷惑）。
+                          //    原因码由 DLL 在**裁决同一处**写入，面板只做展示（见 RS_*）。
+                          I_REASON = 35, I_GATEOPEN = 36, I_GATECLOSE = 37,
+                          I_CTOFF = 38, I_CTVAL = 39, I_PXNX = 40, I_PXNY = 41,
+                          // P3.6（2026-10-14 第五轮）：落笔判据由**单字段**改**多信号并联**
+                          // （buttons / pkNormalPressure / pkTangentPressure，任一非零 = 落笔）。
+                          // ⛔⛔ 起因见 wintab_hook.c 同名槽位注释：旧版只认一个字段，
+                          //    真机取到 pkNormalPressure=32，而轻触运笔时它会成段读到 0 ⇒
+                          //    闸门反复闭合 + 重新锚定 + HUD 隐藏（用户报「平滑和 HUD 一起失灵」）。
+                          // CTMASK/CTELIG = 本批命中 / 有投票权的信号位掩码；CTOFFS = 偏移打包
+                          // （第 i 个信号占第 i×8 位，便于面板显示「到底在盯哪几个字节」）。
+                          I_CTMASK = 42, I_CTELIG = 43, I_CTOFFS = 44;
 
         /// <summary>
         /// 笔（套索平滑）通路的参数面 —— 与面板「平滑选项」的参数同源同语义。
@@ -131,19 +146,27 @@ namespace JWautofillDaemon
         }
 
         /// <summary>面板 <c>penSmooth</c> 消息的线格式（字段全部可空：缺 = 保持原值）。
-        /// ⚠️ 命名与面板 <c>toWire</c> 一致（radius 而不是 radiusPx）。</summary>
+        /// ⚠️ 命名与面板 <c>toWire</c> 一致（radius 而不是 radiusPx）。
+        ///
+        /// ⛔⛔ 2026-10-14：这几个数字字段刻意声明为 <c>double?</c> 而**不是** <c>int?</c>。
+        ///    起因（真机事故）：面板若漏出一个小数（如 <c>radius=95.5</c>），System.Text.Json
+        ///    在把 JSON number 读进 <c>int?</c> 时会**抛异常** ⇒ 整条 <c>penSmooth</c> 消息
+        ///    （连同 on / mode / toolGate / heal / broadcast）被外层 catch 整包丢掉，
+        ///    用户看到的现象是「切换模式后平滑就断」。用 double? 接收 + 赋值时四舍五入，
+        ///    可以让「一个字段类型不符」最多降级成「该字段被取整」，而**不会整帧失败**。
+        ///    （面板侧 toWire 也已强制取整，这里是第二道防线。）</summary>
         internal sealed class PenWire
         {
-            public int? Mode { get; set; }
-            public int? Strength { get; set; }
-            public int? Radius { get; set; }
-            public int? CatchUp { get; set; }
-            public int? CornerAngle { get; set; }
+            public double? Mode { get; set; }
+            public double? Strength { get; set; }
+            public double? Radius { get; set; }
+            public double? CatchUp { get; set; }
+            public double? CornerAngle { get; set; }
             public bool? SpeedAdaptive { get; set; }
-            public int? Hud { get; set; }
-            public int? HudColor { get; set; }
+            public double? Hud { get; set; }
+            public double? HudColor { get; set; }
             /// <summary>工具闸门（面板 300ms 巡检）。缺字段 = 保持原值。</summary>
-            public int? ToolGate { get; set; }
+            public double? ToolGate { get; set; }
         }
 
         private static System.IO.MemoryMappedFiles.MemoryMappedFile? _mmf;
@@ -211,9 +234,9 @@ namespace JWautofillDaemon
                 {
                     // ⛔ 槽位表与 native/WintabHook/wintab_hook.c 的 enum CFG_I_* 逐项对应。
                     //    两处手写 ⇒ 错位不报错、只静默失效，所以这里加运行时兜底校验。
-                    if (I_PXPERAXISY >= NLONGS)
+                    if (I_PXNY >= NLONGS)
                         throw new InvalidOperationException(
-                            "笔平滑槽位表越界：I_PXPERAXISY=" + I_PXPERAXISY + " >= NLONGS=" + NLONGS
+                            "笔平滑槽位表越界：I_PXNY=" + I_PXNY + " >= NLONGS=" + NLONGS
                             + "（C 与 C# 两侧槽位不同步）");
                     _cmdSeq = (int)(DateTime.UtcNow.Ticks & 0x00FFFFFF);
                     var mmf = System.IO.MemoryMappedFiles.MemoryMappedFile.CreateOrOpen(
@@ -228,7 +251,18 @@ namespace JWautofillDaemon
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine(LogPrefix + "共享内存建立失败（笔平滑将不可用）: " + ex.Message);
+                    // ⛔⛔ 槽位表扩容后的**唯一**升级陷阱（改 NLONGS 必读）：
+                    //    命名映射是 Windows 的**节对象**，只要还有任何进程持有句柄就继续存在，
+                    //    而且**尺寸以最先创建它的那个为准**。PS 里已加载的**旧 DLL** 就持有它 ⇒
+                    //    本进程重启后 CreateOrOpen 拿到的仍是旧的 160 字节节，
+                    //    CreateViewAccessor(0, 192) 于是越界抛异常，走到这里。
+                    //    这一段**不会**造成错误行为：旧 DLL 的 MapViewOfFile 同样按 192 请求尺寸、
+                    //    尺寸不够就失败 ⇒ 它拿不到 g_cfg ⇒ 全程一个字节都不改写（fail-closed）。
+                    //    一旦用户重启 Photoshop（旧节随之释放），下一次 Set/心跳会重新 EnsureInit
+                    //    并建出正确尺寸的节，自动恢复 —— 所以这里只需**把话说清楚**。
+                    Console.WriteLine(LogPrefix + "共享内存建立失败（笔平滑将不可用）: " + ex.Message
+                        + "　⇒ 若刚更新过插件：请重启 Photoshop 后再开关一次本功能"
+                        + "（旧 DLL 仍占着旧尺寸的共享内存，重启 PS 即释放）");
                 }
             }
         }
@@ -489,9 +523,37 @@ namespace JWautofillDaemon
                 toolOk = (Rd(I_TOOLGATE) != 0) ? 1 : 0,
                 penDown = Rd(I_PENDOWN),
                 gateOk = Rd(I_GATEOK),
-                // 落笔判据是否可用。1 ⇒ 原生侧推不出「笔尖是否接触画布」，
-                // 已退化为「按落笔处理」（此时悬空移动也会被平滑，与旧版一致）。
+                // 落笔判据是否**已建立**。1 ⇒ 还没有任何信号取得投票权（同时见过 0 与非 0）：
+                // 冷启动宽限（≈3s）内按「落笔」放行（效果好但不完整），宽限之后按「未落笔」阻断。
+                // ⛔ 面板文案必须把「判据未建立」与「笔尖真的悬空」分开说（见 RS_CT_UNKNOWN）。
                 contactUnknown = Rd(I_CTUNKNOWN),
+                // ---- P3.5 诊断（2026-10-14 第三轮）：把「此刻为什么没在改写」直接问原生侧 ----
+                // ⛔⛔ 面板**不允许**自己从 toolGate/penDown/gateOk 拼原因：DLL 在闸门不
+                //    成立时会主动把 penDown 写成 0，于是「心跳过期」与「笔尖真的悬空」
+                //    长得一模一样（用户落着笔看「等笔尖落纸」只能更迷惑）。原因码是权威。
+                //  0=改写中 1=总开关未开 2=非套索 3=工具未知 4=心跳过期 5=悬空
+                //  6=判据退化(仍在改写) 7=未标定 8=无上下文  —— 与 C 侧 RS_*、TS 侧 RS_* 三处逐项一致。
+                reason = Rd(I_REASON),
+                // 闸门 0→1 / 1→0 累计次数（**累计值**）。⛔ 判抖动要用**两次读数的增量**，
+                // 不能看两个总数的差额 —— 画了一百笔后两者都接近 100，差额恒为 0。
+                // 一次回报内 Δopen 涨了好几次 = 闸门在一笔中反复开合（选区一段段停住）。
+                gateOpen = Rd(I_GATEOPEN),
+                gateClose = Rd(I_GATECLOSE),
+                // 落笔判据的信号表（多信号并联）：ctOff = **首选**信号偏移（-1 = 无信号）、
+                // ctVal = 它最近一包的原始值。ctElig / ctHit = 有投票权 / 本批命中的信号位掩码。
+                // ⛔ 判读（旧版只有 ctOff+ctVal 两项，真机上完全无法区分「笔真的悬空」与
+                //    「判据字段选错了」）：ctElig 的 bit i = 第 i 个信号已取得投票权；
+                //    ctHit 的 bit i = 本批该信号非零（= 它把闸门顶上去了）。ctElig=0
+                //    意味着判据压根没建立（此时宽限后会阻断一切平滑，必须先修这一条）。
+                ctOff = Rd(I_CTOFF),
+                ctVal = Rd(I_CTVAL),
+                ctElig = Rd(I_CTELIG),
+                ctHit = Rd(I_CTMASK),
+                ctOffs = Rd(I_CTOFFS),
+                // 逐轴标定样本数（< PX_TRUST_N=24 时未采信，仍用标称兜底）。
+                // ⛔ pxPerAxis 抖动/圆心与受力点分离时，第一个该看的就是这两个数够不够。
+                pxNx = Rd(I_PXNX),
+                pxNy = Rd(I_PXNY),
                 // ×1000 的「轴→像素比」，**逐轴带符号**：渲染线程用真实光标标定出来的。
                 // 1.0 ⇒ 包坐标本身就是屏幕像素；0.0586 ⇒ 数位板逻辑单位(1920/32767)。
                 // ⛔ Y 那一份是**负**的（Wintab 包的 Y 向上为正、屏幕 Y 向下为正）——
@@ -2659,20 +2721,23 @@ namespace JWautofillDaemon
                             var p = PenHook.SnapshotParams();
                             if (wire != null)
                             {
-                                if (wire.Mode.HasValue)        p.Mode        = wire.Mode.Value;
-                                if (wire.Strength.HasValue)    p.Strength    = wire.Strength.Value;
-                                if (wire.Radius.HasValue)      p.RadiusPx    = wire.Radius.Value;
-                                if (wire.CatchUp.HasValue)     p.CatchUp     = wire.CatchUp.Value;
-                                if (wire.CornerAngle.HasValue) p.CornerAngle = wire.CornerAngle.Value;
-                                if (wire.Hud.HasValue)         p.Hud         = wire.Hud.Value;
-                                if (wire.HudColor.HasValue)    p.HudColor    = wire.HudColor.Value;
+                                // ⛔ 全部经 Round 落到 int（PenWire 用 double? 接收，见其注释）：
+                                //    面板理论上只发整数，但万一漏出小数，这里最多把这一个字段取整，
+                                //    绝不让整条消息反序列化失败。
+                                if (wire.Mode.HasValue)        p.Mode        = (int)Math.Round(wire.Mode.Value);
+                                if (wire.Strength.HasValue)    p.Strength    = (int)Math.Round(wire.Strength.Value);
+                                if (wire.Radius.HasValue)      p.RadiusPx    = (int)Math.Round(wire.Radius.Value);
+                                if (wire.CatchUp.HasValue)     p.CatchUp     = (int)Math.Round(wire.CatchUp.Value);
+                                if (wire.CornerAngle.HasValue) p.CornerAngle = (int)Math.Round(wire.CornerAngle.Value);
+                                if (wire.Hud.HasValue)         p.Hud         = (int)Math.Round(wire.Hud.Value);
+                                if (wire.HudColor.HasValue)    p.HudColor    = (int)Math.Round(wire.HudColor.Value);
                                 if (wire.SpeedAdaptive.HasValue)
                                     p.Flags = (p.Flags & ~1) | (wire.SpeedAdaptive.Value ? 1 : 0);
                                 // 工具闸门（面板 300ms 巡检「当前工具是不是套索」）。
                                 // ⚠️ 单独一条指令也行，但搭车走 penSmooth 更省一条消息 ——
                                 //    闸门与参数同源、同节流，避免两者错位出「界面上是套索、
                                 //    DLL 那边按画笔处理」的窗口。
-                                if (wire.ToolGate.HasValue)   p.ToolGate    = wire.ToolGate.Value;
+                                if (wire.ToolGate.HasValue)    p.ToolGate    = (int)Math.Round(wire.ToolGate.Value);
                             }
                             PenHook.Set(on, p);
                             // 参数/闸门更新不会触发挂载命令（见 Set 里的去重），

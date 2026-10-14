@@ -668,3 +668,258 @@ _ox += distX * k;
   外推到当前帧时刻（限幅 40ms）——「偏移 ↔ GetCursorPos」两端同刻，消除 v·Δt 相位差。
 - ✅ 绳滞回二版：解除绷直改**相对阈值**（<85% 绳长）+ 90ms 时间滞回
   （单帧拐角回摆不再点亮悬链）。只改渲染，平滑语义不动。
+
+---
+
+### L. 第十轮（2026-10-14 上午）：状态条去模式分叉 / 切模式中断真凶 / 诊断条 / 两参数重映射
+
+用户一次提 5 条，全部落地。
+
+#### L1. ⛔⛔ 「切换模式后平滑中断」= 一个浮点字段让**整帧** `penSmooth` 被丢
+- 硬证据：`%LOCALAPPDATA%\JWautofill\smooth\daemon.log` 137 条
+  `处理消息失败: The JSON value could not be converted to System.Nullable\`1[System.Int32].`
+  （115 条 `$.catchUp` + 22 条 `$.radius`）。逐字节复算 `BytePositionInLine`，正好落在
+  小数点后的那一位（如 `95.5` 的 `.5`）。
+- 机理（**必须记住**）：`Program.cs` 的 HandlerClient 里
+  `JsonSerializer.Deserialize<PenHook.PenWire>(...)` 抛异常 ⇒ 被**同一层**的
+  `catch (Exception ex) { 处理消息失败 }` 吞掉 ⇒ 之后那句 `PenHook.Set(on, p)`、
+  `HealIfUnhooked()`、`BroadcastSmoothState()` **一次都没执行**。
+  即：**一个字段类型不符 = 整条消息（on/mode/toolGate/heal/broadcast）全部消失**。
+  用户按「切换模式」，那一帧里恰好带着上一次拖动留下的 `radius` 小数 ⇒ 模式切换
+  彻底没送达 ⇒ 感知为「一切模式，平滑就断」。
+- ✅ 两层防御（缺一不可，新增 IPC 数字字段照此办理）：
+  ① **面板唯一咽喉**：`LassoSmoothing.toWire()` 对 `strength/radius` 一律 `Math.round`，
+     `catchUp/cornerAngle` 经映射函数（内部已 round）；
+  ② **daemon 抗性**：`PenWire` 的数字字段声明为 `double?`（不是 `int?`），
+     赋值时 `(int)Math.Round(...)` ⇒ 最坏只降级成「该字段被取整」，不再整帧失败。
+- ✅ 附带闭环：`setPenSmooth(on, p)` 带参时同步模块 `params = {...p}`。
+  否则 1.5s 一次的**闸门心跳**（`forceSendParams` 用模块值整包覆盖）会把刚改的模式/参数
+  无声冲回（K1 里那条「模式被写入源不明」的另一半）。
+
+#### L2. ✅ 状态条不再按模式分叉（用户要求「选中啥模式就是啥模式」）
+- `smoothStatusText()` / `smoothBarTone()` 里 `pen.mode !== 1` 的两条分支**删除**
+  （旧文案「非拉绳模式（拉绳提示已停显，平滑仍在）」与橙色档一并作废，**取代 K1 的 ②**）。
+- state===1 只剩**两档**：`生效中`(notify-bar-ok 绿) / `平滑中断`(notify-bar-fail 红)。
+  中断判据不变：`penDown===1 && gateOk===1 && (now-lastPenFlowAt)<1500 && snAge>2200`。
+
+#### L3. ✅ 新增「平滑运行诊断条」（调试用）
+- 位置：`.border-panel-section.smooth-params`（用户口中的「笔刷参数」盒 —— 全仓**没有**
+  任何叫「笔刷参数」的分区，唯一 `.border-panel-section` 在平滑上下文里就是它）
+  **下方**，属 `collapse-content-expanded` 的直接子节点。
+- 方法：`smoothDiagText()` / `smoothDiagTone()`（与状态条同样的「文案/配色分开」惯例）。
+  逐项回答「此刻**为什么**没在改写坐标」，顺序与原生判据一致：
+  未连 → 版本过旧 → 开关关 → state 4/2/3 → 未注入 → state 0（等包/标定中）
+  → `toolOk!==1`（工具不是套索）→ `penDown!==1`（等落笔）→ 断流 / 正在改写
+  （尾附 `packets/smoothed/radiusPx/snAge`）。
+- 配色：绿=真的在改写 · 橙=就绪但闸门未成立 · 灰=开关未开 · 红=标定失败/断流。
+- **零新 CSS**：复用 `.notify-bar` + `.indicator` + `.notify-text`（`margin-bottom:8px`，
+  与盒子的 `margin-bottom:10px` 叠加）。
+
+#### L4. ⛔ 追笔 / 拐角 显示值重映射（方向必须与用户直觉一致）
+- **追笔**：面板显示「追笔力度」**1–100，数值越大越黏**。
+  `catchUpToNative(d) = round(50 − (d−1)·49/99)`：
+  d=1 → 原生 50（vmax 1.52 px/ms，跟手）｜d=100 → 原生 1（vmax 0.05 px/ms，最黏）。
+  原生公式 `vmax = 0.02 + (catchUp/100)·3.0` **不动**，clamp 仍 0–100。
+- **拐角**：面板显示「保护范围」**0–90，数值越大保护越广**。
+  `cornerToNative(d) = 90 − d`。
+  依据（**从源码复核，别再凭记忆**）：`dot = 前/当前单位方向内积`，
+  `dot < cos(cornerDeg)` ⟺ `转折角 > cornerDeg` ⇒ **原生 cornerDeg 越小越容易触发保护**。
+  d=0 → 原生 90（只有掉头才保护）｜d=90 → 原生 0（几乎每帧都保护）。原生判据不动。
+- 量程同步点（**改一处必查另几处**）：`SMOOTH_CATCHUP_MIN/MAX`(1/100) 新导出 ·
+  `app.tsx` 追笔 RangeSlider + number input（`min` 由 0 改 1）·
+  `DragHandler.configs['smooth:catchUp'] = {min:1,max:100,step:1}` ·
+  `helpTexts.smoothCatchUp/Slider/Input` 与 `smoothCorner/Slider/Input` 全部重写 ·
+  新增 `helpTexts.selectionFill.smoothDiagLabel`。
+- ⚠️ **存量持久化值不做迁移**（`appPanel.smoothParams` 里 `catchUp:100 / cornerAngle:22`
+  会按新刻度重解释：100→原生 1 最黏、22→原生 68 保护变窄）。已向用户说明并留选项。
+
+#### L5. 构建链（本轮全过）
+- `npx tsc --noEmit`：改动文件零新增错误（`src/hotkey/LassoSmoothing.ts`、
+  `src/constants/helpTexts.ts`、`src/utils/DragHandler.ts` 均 0；`app.tsx` 仅既有基线）。
+- 三护栏全过（本轮**未改任何 CSS**，`dist/common.css` mtime 仍 09:59）。
+- `dotnet publish` 两角色（SmoothDaemon / HotkeyDaemon）→ `yarn build`（dist 拾取新 exe）。
+- ⚠️ 生效条件：daemon 加固要**平滑开关先关再开**；本轮**未改 DLL 源逻辑**（只改注释），
+  故不需要重启 PS。
+
+
+---
+
+## P3.5（2026-10-14 第三轮）：拉绳圆心分离 · 拐角回退 · 诊断重做 · 选区延迟
+
+用户一次报 4 条（附 5 张真机截图）。**5 张图的几何都可量化**（纯 stdlib Kåsa 圆拟合）：
+三张图的圆半径都精确 = **99.4px**（= 半径参数 100px），橙色非圆分量团距圆心
+**37.7 / 39.0 / 39.5px** —— 高度一致 ⇒ 不是「示意」，是可量化的一致偏移。
+
+### M1. ⛔⛔ 拉绳「受力点（选区末端）与圆心分离」= 标定值剧烈抖动（真 bug）
+- 证据：`%TEMP%\jwwh-<pid>.log` 的 `[status]` 里 `pxX/pxY` 组合有 **19 种**
+  （`0.0571/−0.0473` 出现 238 次、`0.0536/−0.0518` 51 次、`0.0556/−0.0638` 41 次、
+  `0.0623/−0.0739` 26 次、`0.0689/−0.0457` …）。同一台机器同一显示器，**真值只能是常数**。
+- 机理：HUD 圆心偏移 = 滞后 × px ⇒ **px 偏 25% 圆心就离选区末端 25% 绳长**
+  （100px 绳 ≈ 25px，肉眼一眼可见）。
+- 病根**不是**单样本噪声，而是**估计器的形状**：旧版把「比值的 EMA」当估计量，
+  等效窗口只有 3~20 个样本 ⇒ 比值本身的逐样本方差不被平均掉。
+  （旧版三道闸 CUR_SAMPLE_MIN=10px / EMA 权重 0.05~0.30 / 离群 ±20% 丢弃
+   治的是单样本噪声，对「估计量选错」无效。）
+- 修法 ⇒ **位移加和**估计器：`px = s · Σ|Δ光标| / Σ|Δ原始轴|`（指数衰减窗口 `PX_WIN=256`）。
+  · 噪声按 √N 收敛（256 样本 ⇒ ±1%）；
+  · **天然按位移加权**：慢速/抖动样本位移小、贡献小；
+  · 即便驱动把系统光标跟着**输出**走（旧分母争议），绳被拉住的样本 Δ输出≈0
+    ⇒ 对分子贡献≈0，估计值仍收敛到真实映射（旧实现会被拽向 0）；
+  · 不再需要「离群丢弃 + 整值作废」（那本身就是抖动源）。
+- 采信门槛 `PX_TRUST_N=24`：**样本数不够时 done=0，一律回落到标称兜底**
+  （量级合理、**符号中性**）。符号仍由 `Δ光标/Δ原始轴` 投票 `SIGN_VOTE=4` 定，
+  首次/符号翻转时清空累积器重来（EMA 穿越 0 会让 HUD 镜像一段时间）。
+- `AX_SAMPLE_MIN=120`（≈7 屏幕像素）、`CUR_SAMPLE_MIN=5`（**别抬到 10**：门限越高样本越稀疏）。
+
+### M2. ⛔⛔ 拐角「保护范围」映射**回退**（用户：「现在反而更加让人迷惑了」）
+- 回退 = `cornerToNative()` 由 `90 − display` 改回**恒等**（保留函数只为显式表达 clamp+取整）。
+- 回退理由（结构性，不是口味）：面板其它参数（强度 / 半径 / 追笔力度）**全是「越大越强」**，
+  唯独拐角被反转成「越大 = 保护越广 = 平滑越少」，方向与全体相反；
+  参数之间比较极易误判，排障还要多做一次心算。
+- 现状：**显示值 = 原生转折角阈值**，一一对应；`0 = 几乎每帧都保护`，
+  `90 = 只有掉头（转折 > 90°）才保护`。原生判据本身不动。
+- 文案 / 注释同步回退：`helpTexts.smoothCorner/Slider/Input`、
+  `app.tsx` 拐角行注释、`DragHandler` 注释（量程数值本来就一致，未变）。
+- ⚠️ **追笔的重映射保留**（用户未要求回退，且它方向与全体一致「越大越黏」）。
+
+### M3. ⛔⛔ 诊断重做：原因码必须由**原生侧报**，面板禁止自己拼
+- 用户三症状：① 落笔很久仍显示「等笔尖落纸」；② 提笔瞬闪绿条 <1s 来不及截图；
+  ③ 绿条只报「取包/改写」等无意义数字。
+- 根因①：`smooth_packets` 在**任一**闸门不成立时都写 `g_penDown = 0`
+  （工具闸门分支 + 悬空分支）⇒「闸门心跳过期」与「笔尖真的悬空」在面板上**长得一模一样**。
+- 修法：DLL 在**裁决的同一处**写下原因码，面板只做展示。
+  C 侧 `CFG_I_REASON` + `RS_*` 枚举，C# `Snapshot().reason`，TS `SmoothReason` +
+  `smoothReasonText()`（**三处逐项对应，改一处必须同步另两处**）。
+  ```
+  0 正在改写 · 1 总开关未开 · 2 非套索 · 3 工具未知 · 4 心跳过期
+  5 悬空 · 6 **判据尚未建立** · 7 未标定 · 8 无上下文
+  ```
+  ⛔ 第 6 档在第五轮**改了语义**：旧义「判据退化（仍在改写）」已废，改为
+  「落笔判据尚未建立」—— 冷启动宽限内仍按落笔放行，宽限后**按未落笔阻断**（见 N2）。
+  这一档必须与 `5 悬空` 分开说：两者过去都显示成「等笔尖落纸」，用户落着笔看那句只能更迷惑。
+- 面板诊断条改为**只按 `reason` 说话**；`smoothDiagTone()` 与文案**同源同判据**：
+  `reason∈{0,6}` = 绿，其余未满足 = 橙。`reason` 是**上次裁决的结论**，
+  空闲时会停在最后一个值 ⇒ 必须结合 `snAge` / `state` 判断新鲜度（断流判定优先）。
+- 根因③ ⇒ 尾巴只留**能直接定位故障的量**（旧版「取包/改写」与故障无关，用户说「莫名其妙」很准）：
+  · `判据 +off=val`（`ctOff/ctVal`）——**「笔压恒读到 0」与「闸门被阻断」的唯一区分依据**；
+  · `标定 Nx/Ny`（`pxNx/pxNy`）——< 24 时仍用标称兜底、方向不可信（M1 的第一判据）；
+  · `闸门 Δ开/Δ关`（`gateOpen/gateClose` 的**每次回报增量**）。
+- 根因② ⇒ **粘滞原因**：`app.tsx` 的 `lastPenReason/lastPenReasonAt`
+  （窗口 `SMOOTH_REASON_STICKY_MS=8000`）。当前已恢复正常但上一次异常在窗口内，
+  就写成「正在改写坐标（前一瞬：<原因>，N 秒前）」⇒ 一次截图就能看到刚才为什么没改写。
+  ⛔ 只在**出现新的非正常原因**时记录时刻（每次回报都刷新会让异常永远粘住）。
+- ⛔⛔ `gateOpen/gateClose` 是**累计值** ⇒ 判抖动**必须用两次回报的增量**，
+  不能看两个总数的差额（画一百笔后两者都接近 100、差额恒为 0）。
+  `app.tsx` 用 `lastGateOpen/lastGateDeltaOpen` 算增量。
+
+### M4. ⛔⛔ 巨大选区生成延迟 = 落笔判据逐包归零 + 反复重新锚定
+- 机理：`contact_update` 原本逐包 `v==0` 即置 `contact=0` ⇒ 本批走「未落笔」分支
+  （坐标原样放过，PS 立刻跟手，观感=选区突然前进）+ 置 `g_wasEnabled=0`
+  ⇒ 下一批**重新锚定**（输出点被拽到笔尖）+ 拉绳 100px 死区被重新灌满 ⇒ 选区又停住。
+  一笔中反复 ⇒ 「画很久不出选区、然后突然出现一大段」。
+- 修法：`CONTACT_HOLD_MS` **滞回**（最近一次非零时刻 `g_contactMs`；
+  只有**持续**为 0 才算抬笔）。抬笔是物理动作、不可能只中断几十毫秒。
+  ⛔ 只影响「何时算抬笔」，**不改判据字段/证伪规则**。
+  ⚠️ 第五轮把窗口 **120 → 250ms**，并把单字段判据换成多信号并联 —— **见 N2（权威）**。
+
+### M5. 槽位表 40 → **48**（新增 7 个诊断槽，只能往后追加）
+```
+35 CFG_I_REASON    36 CFG_I_GATEOPEN  37 CFG_I_GATECLOSE
+38 CFG_I_CTOFF     39 CFG_I_CTVAL     40 CFG_I_PXNX  41 CFG_I_PXNY
+```
+- `publish_status()` **一次性回写**全部新槽（散落写会让同一帧里 reason 与计数自相矛盾）。
+- `ctVal` 只写**全局** `g_ctVal`，由 worker 统一回写共享内存
+  （detour 与 worker 各写一次同一槽会互相覆盖 ⇒ 诊断数字必须单一写入者）。
+- `gate_set(int on)` 成了闸门状态迁移的**唯一入口**（只有真跳变才计数）；
+  例外：`do_unhook` 用裸 `InterlockedExchange` 清 `g_gateOk`（撤钩不是一次「收笔」）。
+- C# `NLONGS=48`、`I_REASON=35…I_PXNY=41`、`Snapshot()` 暴露 7 个字段
+  （`reason/gateOpen/gateClose/ctOff/ctVal/pxNx/pxNy`）；运行时兜底校验改为 `I_PXNY >= NLONGS`。
+- ⛔⛔ **扩容的升级陷阱（改 NLONGS 必读）**：命名映射是 Windows **节对象**，
+  只要还有进程持有句柄就继续存在，**尺寸以最先创建者为准**。PS 里已加载的旧 DLL 持有它 ⇒
+  新 daemon `CreateOrOpen` 拿到的仍是旧 160 字节节，`CreateViewAccessor(0, 192)` 越界抛异常。
+  **不会出错行为**：旧/新 DLL 的 `MapViewOfFile` 都按 `CFG_NLONGS*4` 请求尺寸，
+  尺寸不够即失败 ⇒ `g_cfg=NULL` ⇒ 全程一个字节都不改（fail-closed，PS 拿到原始坐标）。
+  重启 PS 释放旧节后，下一次 `Set/心跳` 的 `EnsureInit` 会建出正确尺寸并自动恢复。
+  ⇒ daemon 的 catch 里已写清处置指引（「重启 Photoshop 后再开关一次」）。
+- 日志新增一行 `# [why] reason=<n>(<名>) gate/open=… close=… penDown=… toolOk=…
+  ctUnknown=… ctOff=… ctVal=… pxN=…/…`（= 面板诊断条的日志版）。
+
+---
+
+## 第五轮（2026-10-14 12:00~12:50）—— 四条反馈的根因与定案
+
+### N1. ⛔⛔ 轴→像素比 `px` 的**唯一权威来源 = 驱动 `lcOutExt / lcInExt`**（别再靠光标测）
+- 数学恒等式：**光标 = 绘制点 + 偏移**，即 `px = (Δ光标)/(Δraw)`；而 raw 侧被「帧外推」放大
+  ⇒ 光标测出来的 px **偏低且漂**。真机对照：
+  `[status] pxX=0.0466~0.0676`（漂） vs `[calib]` 屏幕整屏映射标称 `3440/44800 = 0.076786`
+  ⇒ **最差偏低 40%**。圆心偏移 = 滞后 × px ⇒ px 偏低多少圆心就离真实绘制点差多少
+  （实测深色折线端点与圆心恒差 **15px**，100px 绳）。
+  ⚠️ `lcOutExt/lcInExt` 的实际读数**要等新 DLL 的 `[calib] lcOut*:` 日志**（本轮尚未见）；
+  上面那个 0.076786 是**屏幕标称**（= 驱动整屏映射时的值），不是驱动声明的实测值。
+- 修法：`LOGCONTEXT` 读 `lcOutOrgX/Y(±108/112)`、`lcOutExtX/Y(±120/124)`（`lcInExt*±?` 同处），
+  `drv = outExt / inExt` **含符号**（Y 通常为负），合理性判据 `|drv| ∈ (0.15·标称, 1.02·标称]`
+  ⇒ `g_pxAxisX/Y = drv`、`g_pxSrc = 1`；不满足退回屏幕标称（`g_pxSrc = 0`）。
+- `px_x()/px_y()` 取值优先级：**`g_pxSrc==1` 的驱动值 → 光标标定值（`done`） → 屏幕标称**。
+  光标标定**降级为日志对照**，不再参与几何。
+- ⛔ 别退回「光标测量当权威」：它把两个误差（外推放大 + 光标量化）叠在一起，永不稳定。
+
+### N2. ⛔⛔ 落笔判据 = **多信号并联**（单字段版已废）
+- 旧版只认**一个**候选（真机 = `ctOff=32` = `pkNormalPressure`）。套索是**轻触**运笔，
+  NP 会**成段**读到 0（不是单包抖动）⇒ 闸门反复闭合 ⇒ 每次闭合 `g_wasEnabled=0`
+  （重新锚定、输出点被拽到笔尖）+ 同一判据驱动 HUD 显隐 ⇒ **平滑与 HUD 同时失灵**。
+  现场证据：诊断条 `判据 +32=0`；日志 `reason=5(悬空) gate/open=48 close=47 penDown=0 toolOk=1`。
+- 现判据：**buttons / pkNormalPressure / pkTangentPressure 任一非零 = 落笔**；
+  三者全零且持续 **`CONTACT_HOLD_MS = 250ms`** 才算抬笔。
+- ⛔⛔ **每个信号必须「同时见过 0 与非 0」才有投票权**（`g_ctZeroSeen/g_ctNzSeen → g_ctElig`）。
+  这一条同时解决两件事：① 恒 0 字段（部分驱动的 pkButtons）与恒非 0 字段
+  （`pkCursor` 恒 1 / `Orientation` / `pkZ` 悬空 160）**自动出局**，再不需要「猜哪个字段才是压力」
+  的盲扫；② 「悬空时字段也非零 ⇒ 全程都在平滑」的老缺陷结构性消失。
+- 信号表来源（`contact_signals_build`）：
+  · **src=1（掩码+数据双证据）**：直接取 `offBtn`（掩码里的 `pkButtons`）/`offNP`/`offTP`。
+    buttons **只取低三位**（`& 0x07`）—— 高位是 cursor number，某些驱动填成非 0 常量。
+  · **src≠1（盲扫定解）**：`offBtn = offX − 4`（固定字段顺序里 Buttons 恒紧邻 X 之前）+
+    沿用旧的 `(offY, stride)` 反推枚举。取错由「双状态资格审查」兜住。
+- 判据未建立时：**冷启动宽限 600 包（≈3s）按旧行为放行**，之后**按未落笔阻断**
+  （宁可功能看起来没生效，也不要「悬空也在平滑」）。原因码 `RS_CT_UNKNOWN`。
+- 表的重建走**布局指纹** `ct_sig_needs_rebuild(stride, offX, offY, btn, np, tp)`：
+  `try_calibrate`（新标定）与 `ctx` 缓存命中**两条路共用同一判据**，避免一条重建另一条不重建。
+  指纹含 btn/np/tp ⇒ 换设备必重建、同设备换句柄必不重建（重建会清零已攒的证据）。
+
+### N3. ⛔⛔ `[ct]` 诊断日志行（下一轮排障的**第一现场**）
+```
+# [ct] 信号=+16* +32* +36  生效=7 本批命中=2 连续全零=37 包
+```
+- `+off` 后的 `*` = 该信号**已取得投票权**（同时见过 0 与非 0）。一个 `*` 都没有 ⇒ 判据压根没建立。
+- `生效` = 有投票权的信号位掩码（十进制）；`本批命中` = 本批非零的信号位掩码（0 = 本批全零）。
+- **`连续全零` 包数 × ≈5ms = 闸门被压住多久**：运笔中 >20 包即判据在真实绘制中**成段失效**；
+  只有停笔/换工具时它才该变大。**这一个数就能给本轮问题定性。**
+- 面板诊断条尾巴同步改为 `判据 +16* +32* +36 生效2/3 命中1 值0`
+  （`smoothCtText()`；`ctOffs` 每 8 位一个偏移、`0xFF`=无信号；只展示前 4 个）。
+- `reason=6` 的配色改看 `penDown`（它既可能是「宽限内仍在改写」也可能是「宽限后已阻断」）。
+
+### N4. ⛔⛔ HUD 外推必须**两端对称**：raw 与 out 都要外推
+- 几何恒等式：`光标(此刻) − offset(此刻) = 绘制点(此刻)`。旧版只把 raw 外推到当前帧，
+  out 仍停在**包时刻** ⇒ 圆心落在「out 的包时刻位置」，实测与真实绘制点恒差 **15px**（100px 绳）。
+- 修法：`sn_publish` 增加 `g_snPrevOutX/g_snPrevOutY`（与 prev raw 同构），HUD 用**同一 `age`、同一 `pktDt`**
+  把 `axX/axY`（raw）与 `aoX/aoY`（out）一起外推，`rx/ry` 用外推后的**两端**相减。
+  一致快照的值全等校验从 8 个字段扩到 **10 个**（少检查一个字段就可能拿到撕裂组合）。
+
+### N5. ⛔⛔ 槽位 42~44（`NLONGS` 仍 48，42~47 本就空闲）
+```
+42 CFG_I_CTMASK  本批命中的信号位掩码（0 = 全零）
+43 CFG_I_CTELIG  有投票权的信号位掩码（只覆盖前 4 个信号）
+44 CFG_I_CTOFFS  前 4 个信号的偏移打包（第 i 个占第 i×8 位；0xFF = 该位无信号）
+```
+- C#：`I_CTMASK=42, I_CTELIG=43, I_CTOFFS=44`；`Snapshot()` 暴露 `ctElig / ctHit / ctOffs`。
+- TS：`PenSmoothStatus.ctElig / ctHit / ctOffs`（逐个 `=== undefined ? 旧值 : …` 回落）。
+- ⛔ `CFG_I_CTOFF` 语义也变了：现在是「**首选**信号偏移」（`g_ctOff[0]`；无信号 = -1），
+  不再是「唯一采用的候选」。
+
+### N6. ⛔ `theme.ts` 的 CSS 注释**一律写在块外**
+- 症状：UXP 后台反复 `Error while parsing 'inline' CSS style sheet … Unknown word / Missed semicolon`，
+  `source` 字段是注释原文。
+- 根因：该文件用 `style.textContent = \`…\`` 运行时注入，UXP devtools 的 `parseCSSDeclaration`
+  会把 **`{ }` 内的注释**当成一条声明去解析 ⇒ 每个注释一条 `CssSyntaxError`。
+- 修法：注释全部上提到顶层 / 每个 `@media` 之前，**文字保留、变量声明逐字不动**。
+- ⚠️ `scripts/_css_comment_guard.cjs` **只扫 `src/styles/*.css`，不扫 `theme.ts`** ⇒ 这类错不会被拦。
+  改 `theme.ts` 必须人工确认「注释都在块外」，或手动跑一段括号/注释深度检查。

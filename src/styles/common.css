@@ -2067,12 +2067,21 @@ sp-radio[disabled] {
    无外边距、.border-panel-section 也只设了 margin-bottom ⇒ 默认间距为 0，
    这里用 margin-top 补齐（2026-10-13 用户要求）。
 
-   本规则只做两件事：
+   本规则做三件事：
    ① 盒与上方 radio 的间距 = 10px（margin-top）；
-   ② 把首行的上外边距、末行的下外边距归零。
-   .row-between 自带 `margin: 10px auto`、.border-panel-section 自带 `padding: 10px`，
-   两者叠加会让描边到第一个参数变成 20px；归零后恰好 10px（用户要求的上下间距）。
-   ⛔ 只在本盒作用域内归零，不动 .border-panel-section 的全局行为。 */
+   ② 行与行之间**恰好 10px**；
+   ③ 盒的内边距（.border-panel-section 自带 padding: 10px）单独提供
+      「描边 → 首行」「末行 → 描边」的 10px。
+
+   ⛔⛔ ② 必须显式写，不能靠 .row-between 自带的 `margin: 10px auto`：
+      .border-panel-section 是 **flex column**（见本文件它的定义），而
+      **flex 容器的相邻子元素外边距不合并** ⇒ 两行之间会变成 10+10 = 20px。
+      上面「不透明度 / 羽化」那两行用的是 .slider-container（普通块级容器，
+      外边距会合并）⇒ 那里是 10px。两处必须一致 —— 2026-10-14 用户实测指出
+      「平滑参数滑块之间的间距被改大了，要和上面不透明度/羽化的间距一致」。
+      ⇒ 盒内一律 margin: 0，只有**非首行**给 10px 上边距；首行上方 / 末行下方
+        那 10px 由盒的 padding 提供（这也正是 ①③ 的目的）。
+   ⛔ 只在本盒作用域内归零，不动 .border-panel-section / .row-between 的全局行为。 */
 .smooth-params { margin-top: 10px; }
-.smooth-params > .row-between:first-child { margin-top: 0; }
-.smooth-params > .row-between:last-child  { margin-bottom: 0; }
+.smooth-params > .row-between { margin-top: 0; margin-bottom: 0; }
+.smooth-params > .row-between + .row-between { margin-top: 10px; }

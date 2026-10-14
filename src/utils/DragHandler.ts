@@ -48,7 +48,14 @@ export class DragHandler {
         // ⛔ 上限必须与 SMOOTH_RADIUS_MAX / 原生 RADIUS_PX_MAX 一致：这里曾是 40，
         //    在半径上限抬到 100 之后被漏改 ⇒ 拖标签最多只能拖到 40（滑杆却能到 100）。
         'smooth:radius': { min: 1, max: 100, step: 1 },
-        'smooth:catchUp': { min: 0, max: 100, step: 1 },
+        // 追笔「平滑力度」：显示量程 1–100（数值越大越黏）。
+        // ⛔ 必须与 SMOOTH_CATCHUP_MIN / MAX 一致：2026-10-14 由 0–100 改为 1–100，
+        //    下限漏改会让拖标签能拖出 0（滑杆与输入框都到不了 0）。
+        'smooth:catchUp': { min: 1, max: 100, step: 1 },
+        // 拐角判定角度：量程 0–90（**原生单位**，无映射）。
+        // ⛔ 2026-10-14 回退定案：曾短暂改成「保护范围」（显示 = 90 − 原生阈值），
+        //    用户实测后要求回退（「反而更加让人迷惑」）。量程数值本身前后一致，
+        //    故此处无需改动数值；换回原语义的是 LassoSmoothing 的 cornerToNative。
         'smooth:cornerAngle': { min: 0, max: 90, step: 1 }
     };
 

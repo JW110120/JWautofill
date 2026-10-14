@@ -101,6 +101,7 @@ typedef int (*PFN_WTGetA)(HCTX hCtx, void* lpLogCtx);
  * 修法：给 256 字节全尺寸零缓冲让 WTGet 写，按真实偏移 64 取掩码（附 4 字节余量防未来扩展）。 */
 #define WT_LC_BUFSZ      256
 #define WT_LC_PKTDATA_OFF 64
+
 /* 输入量程（lcInExtX / lcInExtY）：LOGCONTEXT 里的真实偏移，实测确认
    （cat=3/4 的 WTInfo 回读：偏移 96 = 44800、偏移 100 = 29600，与 wintab.h 的
     lcInOrgX(84)/lcInOrgY(88)/lcInOrgZ(92)/lcInExtX(96)/lcInExtY(100) 完全吻合）。
@@ -109,6 +110,14 @@ typedef int (*PFN_WTGetA)(HCTX hCtx, void* lpLogCtx);
     「读不到就兜底」的常量，看起来像读到了、实则是假证据。 */
 #define WT_LC_INEXTX_OFF 96
 #define WT_LC_INEXTY_OFF 100
+/* 输出量程 / 输出原点：紧接 lcInExtZ(104) 之后 —— lcOutOrgX(108)/lcOutOrgY(112)/
+   lcOutOrgZ(116)/lcOutExtX(120)/lcOutExtY(124)。这是**驱动自己声明的
+   轴→屏幕映射**（含 Y 符号：Wintab 惯例 lcOutExtY 常为负 = 屏幕上 Y 向下），
+   比任何测量都权威。见 [calib] 的「驱动映射」行。 */
+#define WT_LC_OUTORGX_OFF 108
+#define WT_LC_OUTORGY_OFF 112
+#define WT_LC_OUTEXTX_OFF 120
+#define WT_LC_OUTEXTY_OFF 124
 
 /* AXIS（WTInfo(WTI_DEVICES, DVC_X, &axis) 的返回体）：axMin/axMax/axUnits/axResolution */
 typedef struct { int axMin; int axMax; u32 axUnits; u32 axResolution; } AXIS_T;
@@ -118,7 +127,7 @@ typedef struct { int axMin; int axMax; u32 axUnits; u32 axResolution; } AXIS_T;
  * 与本 DLL 的 `OpenFileMappingW` 指向同一块。全部按 32 位有符号槽访问。 */
 #define CFG_NAME      L"Local\\JWautofillWintabSmooth"
 #define CFG_MAGIC     0x57414A57L      /* 'JWAW' */
-#define CFG_NLONGS    40
+#define CFG_NLONGS    48
 
 enum {
     CFG_I_MAGIC = 0,
@@ -147,8 +156,11 @@ enum {
     CFG_I_TENSION,        /* ⛔ 已废弃（2026-10-13「张力」并入「半径」）——
                             槽位**保留占位不重编号**：它与 C# 侧逐项对应，
                             少一行就会让后面 11 个槽整体错位（错位不报错、只静默出怪事）。*/
-    CFG_I_CATCHUP,        /* 0..100   追笔速度                      */
-    CFG_I_CORNER,         /* 0..90    拐角判定角度                  */
+    CFG_I_CATCHUP,        /* 0..100   追笔速度。⛔ 面板下发的是**原生**值：面板「追笔力度」
+                            显示 1–100，经 LassoSmoothing.catchUpToNative() 反向映射成
+                            1–50（显示越大 → 本值越小 → vmax 越小 → 越黏）。        */
+    CFG_I_CORNER,         /* 0..90    拐角转折角阈值：转折角 > 本值即判为拐角。
+                            ⛔ 阈值越小越易触发保护 ⇒ 面板「保护范围」= 90 − 本值。   */
     CFG_I_RADIUSPX,       /* 1..100   最大滞后（屏幕等效像素）       */
     CFG_I_HUD,            /* bit0=leash 线 bit1=半径圆 bit2=原始点  */
     CFG_I_HUDCOLOR,       /* 0xRRGGBB，默认 #E07F0D（2026-10-14 用户要求，与 PS 原生洋红区分）*/
@@ -169,12 +181,70 @@ enum {
                              ⛔ 与 packets 的区别：标定丢失等「断流」故障里 packets 照涨
                              （PS 还在空取原始包），而快照**冻结** —— 面板靠
                              「packets 在涨 + SNTS 不动」把「真断流」与「正常停笔」分开。 */
+    /* ---- P3.5（2026-10-14 第三轮）：把「此刻为什么没在改写」直接报出来 ----
+       ⛔⛔ 为什么必须由**原生侧**报，而不是面板自己拼：
+          面板能看到的只有 toolGate / penDown / gateOk 三个布尔，而原生侧在闸门
+          **不成立时会主动把 penDown 写成 0**（见 smooth_packets 的阻断分支）——
+          于是「闸门心跳过期」和「笔尖真的悬空」在面板上长得一模一样，诊断只会
+          说「等笔尖落纸」，用户落着笔看这句话只能更迷惑（真机复现）。
+          ⇒ 唯一可行的做法：DLL 在**裁决的同一处**写下原因码，面板只做展示。 */
+    CFG_I_REASON,         /* 受阻原因码（RS_*，0=正在改写）——面板诊断条的唯一权威 */
+    CFG_I_GATEOPEN,       /* 闸门由关→开累计次数（= 起笔次数，**累计值**） */
+    CFG_I_GATECLOSE,      /* 开→关累计次数（**累计值**）。⛔⛔ 判抖动**必须用两次读数的增量**，
+                             不能直接看两个总数的差额：画了一百笔之后两者都是 100 附近、
+                             差额恒为 0，光看总数永远看不出抖动。正确判据 = 面板两次回报之间
+                             Δopen 涨了好几次（见 app.tsx 的 lastGateDeltaOpen）。 */
+    CFG_I_CTOFF,          /* 落笔判据**首选**信号偏移（字节，-1=无信号） */
+    CFG_I_CTVAL,          /* 首选信号最近一包的原始值（诊断用） */
+    CFG_I_PXNX,           /* X 轴标定样本数（< PX_TRUST_N 时未采信，仍用标称兜底） */
+    CFG_I_PXNY,           /* Y 轴标定样本数 */
+    /* ---- P3.6（2026-10-14 第五轮）：落笔判据由**单字段**改**多信号并联** ----
+       ⛔⛔ 起因（用户报「平滑和 HUD 依旧会失灵」，诊断条停在「判据 +32=0」）：
+          旧版只认**一个**候选字段（真机取到 32 = pkNormalPressure），而轻触运笔时
+          NP 经常读到 0 ⇒ 闸门反复闭合 ⇒ 每次闭合都重新锚定 + HUD 隐藏。
+          现在 buttons / pkNormalPressure / pkTangentPressure 三者**任一非零**即「落笔」。
+          下面三个槽位就是让面板/日志能看出「到底哪几个信号在投票、此刻命中了谁」。*/
+    CFG_I_CTMASK,         /* 本批「非零」信号的位掩码（bit i = 第 i 个信号；0 = 全零） */
+    CFG_I_CTELIG,         /* 有投票权的信号位掩码（**只覆盖前 4 个信号**；同时见过 0 与非 0）*/
+    CFG_I_CTOFFS,         /* 前 4 个信号的偏移打包（第 i 个占第 i×8 位；0xFF = 该位无信号）*/
 };
+
+/* 受阻原因码（CFG_I_REASON 的值域；面板诊断条按它逐条说人话）。 */
+enum {
+    RS_REWRITE = 0,       /* 正在改写坐标（正常） */
+    RS_OFF,               /* 总开关未开 */
+    RS_TOOL_NO,           /* 工具闸门：当前工具不是套索 */
+    RS_TOOL_UNKNOWN,      /* 工具闸门：面板从未上报过（未知 ⇒ fail-closed 阻断） */
+    RS_TOOL_STALE,        /* 工具闸门：心跳过期（面板 >GATE_STALE_MS 未上报） */
+    RS_HOVER,             /* 笔尖未落纸（悬空移动） */
+    RS_CT_UNKNOWN,        /* 落笔判据**尚未建立**（无信号，或还没有任何信号同时见过 0 与非 0）。
+                             冷启动宽限内仍按「落笔」放行（效果好但不完整）；
+                             宽限之后一律按「未落笔」阻断，避免悬空也在平滑。 */
+    RS_NOCAL,             /* 标定未完成 / 失败 */
+    RS_NOCTX,             /* 还没取到包 / 上下文未知 */
+};
+
+/* 原因码 → 短名（只给日志用；面板侧有自己的人话文案表，两者都按上面这行顺序写）。 */
+static const char* rs_name(LONG r)
+{
+    switch (r) {
+        case RS_REWRITE:     return "改写中";
+        case RS_OFF:         return "开关未开";
+        case RS_TOOL_NO:     return "非套索";
+        case RS_TOOL_UNKNOWN:return "工具未知";
+        case RS_TOOL_STALE:  return "心跳过期";
+        case RS_HOVER:       return "悬空";
+        case RS_CT_UNKNOWN:  return "判据未建立";
+        case RS_NOCAL:       return "未标定";
+        case RS_NOCTX:       return "无上下文";
+        default:             return "?";
+    }
+}
 
 /* ⛔⛔ 这张槽位表是 C 与 C#（Program.cs 的 PenHook）**两处手写**的，错位不会报错、
    只会让参数静默失效（实测过的坑）。所以：① 用编译期断言守住「槽数不超映射」；
    ② 任何一侧增删槽，另一侧必须同步，且 C# 的 EnsureInit 里有运行时兜底校验。 */
-typedef char cfg_slot_fit_check[(CFG_NLONGS >= CFG_I_SNTS + 1) ? 1 : -1];
+typedef char cfg_slot_fit_check[(CFG_NLONGS >= CFG_I_CTOFFS + 1) ? 1 : -1];
 
 static volatile LONG* g_cfg    = NULL;
 static HANDLE         g_cfgMap = NULL;
@@ -333,114 +403,216 @@ static int repatch(u8* entry, const u8* bytes)
  *   采用第一个 → 若累计 3000 包仍**从未非零**，判定它不是接触场，退下一个候选。
  *   在找到之前（contact 未知）一律**按悬空处理**：宁可第一笔不生效，
  *   也不能让「没找到」退化成「全程平滑」—— 那正是用户抱怨的那件事。 */
-#define CT_MAX_CAND   6
-#define CT_PROBE_MAX  6000      /* 单个候选的证伪预算（包数，≈30s 笔活动） */
-#define CT_VALIDATE_MAX 5000    /* 接受后的长期校验窗口（包数） */
-static int   g_ctOff[CT_MAX_CAND];   /* 候选偏移（绝对字节） */
-static int   g_ctN;
-static volatile LONG g_ctIdx;        /* 正在**考察**的候选下标（-1 = 未开始） */
-static volatile LONG g_ctCur;        /* 已**接受**的候选下标（-1 = 尚无） */
-static volatile LONG g_ctSeen;       /* 当前阶段的已观测包数   */
-static volatile LONG g_ctNonZero;    /* 当前阶段的非零包数     */
+#define CT_MAX_SIG    6
+#define CT_GRACE_PKT  600       /* 冷启动宽限（包数，≈3s）：尚无信号取得投票权时先按旧行为放行 */
+static int   g_ctOff[CT_MAX_SIG];            /* 信号字段偏移（绝对字节，-1=空位） */
+static int   g_ctMsk[CT_MAX_SIG];            /* 取值掩码（0=整字；0x07=buttons 低三位） */
+static int   g_ctN;                          /* 信号数 */
+/* ⛔⛔ 每个信号必须**同时见过 0 与非 0**才有投票权（g_ctElig）：
+ *    恒为 0 的字段（部分驱动的 pkButtons）与恒非 0 的字段（pkCursor / Orientation /
+ *    离板高度 pkZ）都自动出局 —— 不再需要任何「猜哪个字段才是压力」的盲扫，
+ *    也彻底消灭「悬空时字段也非零 ⇒ 全程都在平滑」的老缺陷。
+ *    ⚠️ 这条资格是**单向**的：一旦取得就永久保留（真接触场在抬笔时必然回到 0）。 */
+static volatile LONG g_ctZeroSeen[CT_MAX_SIG];   /* 该信号「为零」的证据 */
+static volatile LONG g_ctNzSeen[CT_MAX_SIG];     /* 该信号「非零」的证据 */
+static volatile LONG g_ctElig[CT_MAX_SIG];       /* 1 = 取得投票权 */
+static volatile LONG g_ctSeen;       /* 建表以来已观测包数（冷启动宽限计数） */
 static volatile LONG g_contact;      /* 最终判定：1=笔尖接触画布 */
-static volatile LONG g_ctUnknown;    /* 1 = 判据不可用（无候选/全部证伪）⇒ 放行 */
+static volatile LONG g_ctUnknown;    /* 1 = 判据未建立（无信号 / 尚无信号取得投票权）*/
+static volatile LONG g_ctVal;        /* 首选信号最近一包的原始值（诊断用）
+                                        由 publish_status 回写 CFG_I_CTVAL */
+static volatile LONG g_ctMask;       /* 本批非零信号的位掩码（诊断用；回写 CFG_I_CTMASK）*/
+/**
+ * 「连续全零」包数（诊断用）：自上一次「任一投票信号非零」以来，累计经过了多少个包。
+ * ⛔⛔ 这是本轮**唯一的硬证据来源**：真机诊断条停在与「判据 +32=0」，
+ *    但无法区分「那一刻笔真的抬着」与「落着笔但 NP 成段读到 0」。
+ *    连续全零包数 × 包间隔(≈5ms@205Hz) 就是「闸门被压住多久」：
+ *      < 5 包  ⇒ 判据正常（只是采样抖动）
+ *      > 20 包 ⇒ 判据在真实运笔中成段失效（≈100ms 以上的连续零）
+ *    面板/日志只需看这一个数就能定性。 */
+static volatile LONG g_ctZeroRun;
+/**
+ * 接触「保持」（hysteresis）：最近一次**任一投票信号非零**的时刻（GetTickCount 口径）。
+ *
+ * ⛔⛔ 2026-10-14 第三轮（用户报「选区一段段停住、画了很久才开始出现」）：
+ *    判据原本是**逐包**取 `v != 0` 直接定 contact —— 而笔压字段在真实运笔中
+ *    会出现**瞬时 0**（驱动丢样本、快速运笔时压力重采样、笔尖微抬）。每次瞬时 0 都会：
+ *      ① 让本批走「未落笔」分支 ⇒ 坐标原样放过（PS 立刻跟手，观感是选区突然前进）；
+ *      ② 置 g_wasEnabled=0 ⇒ 下一批**重新锚定**（输出点被拽到笔尖）；
+ *      ③ 于是拉绳的 100px 死区被**重新灌满** ⇒ 选区又停住一段。
+ *    一笔之中反复发生，就是「画了很久不出选区、然后突然出现一大段」。
+ *    ⇒ 抬笔是**物理动作**（手离开板面），不可能只中断几十毫秒；给保持窗口，
+ *      瞬时抖动不再打断笔画，真正的抬笔仍然会被识别（延迟无感）。
+ *    ⛔⛔ 2026-10-14 第五轮：窗口由 120ms 抬到 **250ms**。依据是本轮真机日志
+ *       `gate/open=48 close=47`（一笔之中闸门反复开合）+ 诊断条「判据 +32=0」：
+ *       轻触运笔时 pkNormalPressure 会**成段**读到 0（不是单包抖动），120ms 挡不住。
+ *       多信号并联（below）解决主因，窗口加长只是最后一道缓冲。
+ *    ⛔ 只影响「何时算抬笔」，不改判据本身。 */
+static volatile LONG g_contactMs;
+#define CONTACT_HOLD_MS 250
 
-/* 从 (offY, stride) 反推「Y 之后」可能的字段切分。
-   wintab.h 固定顺序：Context→Status→Time→Changed→Serial→Cursor→Buttons→
-   X→Y→Z→NormalPressure→TiltPressure→Orientation→Rotation，
-   其中 Z/NP/TP 各 4 字节、Orientation/Rotation 各 12 字节。
-   ⛔ 只收 NP / TP：Z（离板高度）与 ORI/ROT 在**悬空时也非零**，拿它们当接触判据
-      等于「全程都算落笔」——那正是要修的缺陷。 */
-static void contact_candidates(int offY, int stride)
+/* ---------------------------------------------------- 信号表（多信号并联）---
+ * ⛔⛔ 2026-10-14 第五轮定案（用户报「平滑和 HUD 依旧会失灵」，诊断条原文：
+ *    「笔尖未落纸（悬空移动不改写坐标）—— 判据 +32=0」，日志原文：
+ *    `reason=5(悬空) gate/open=48 close=47 penDown=0 ctOff=32 ctVal=0`）：
+ *    旧版只认**一个**字段（本机盲扫取到 32 = pkNormalPressure）。而套索是**轻触**
+ *    运笔 —— 笔压落在第一级以下时驱动如实报 0，成段为 0 而不是单包抖动。后果是
+ *      ① 闸门反复闭合（open/close 累计值几乎 1:1 交替）；
+ *      ② 每次闭合都置 g_wasEnabled=0 ⇒ 下一包重新锚定（输出点被拽到笔尖）；
+ *      ③ 同一判据驱动 HUD 显隐 ⇒ 圈与平滑**同时**消失。
+ *    ⇒ 判据改**并联**：buttons / pkNormalPressure / pkTangentPressure **任一非零**
+ *      即「落笔」。三者全零且持续 CONTACT_HOLD_MS 才算抬笔。
+ *    ⛔ 为什么不取 Z（离板高度）/ Orientation：悬空时它们也非零 —— 取进来就是
+ *       「全程都算落笔」（老缺陷）。但注意：Z 的**反向**语义（==0 即落纸）本版
+ *       也**不**采用 —— 没有实测证据表明本机驱动把 Z 归零，猜错就等于判据恒真。
+ *       拿到 [ct] 日志的真实数据后再说。
+ *
+ * 坐标/语义来源：`layout_of()` 的 mask 推导（src=1，掩码+数据双证据）与盲扫
+ * (offY, stride) 反推**同出一源**（wintab.h 的固定字段顺序），不再靠「猜剩几个字段」。
+ */
+static void ct_push(int off, int msk)
 {
-    g_ctN = 0;
-    if (stride <= offY + 4) { g_ctUnknown = 1; return; }
-    int rest = stride - (offY + 4);        /* Y 之后还剩多少字节 */
-    for (int m = 0; m < 32; m++) {
-        int sz = 0, off = offY + 4, np = -1, tp = -1;
-        if (m & 1) { sz += 4; off += 4; }              /* Z              */
-        if (m & 2) { np = off; sz += 4; off += 4; }    /* NormalPressure */
-        if (m & 4) { tp = off; sz += 4; off += 4; }    /* TiltPressure   */
-        if (m & 8) { sz += 12; off += 12; }            /* Orientation    */
-        if (m & 16) { sz += 12; off += 12; }           /* Rotation       */
-        if (sz != rest) continue;
-        int cand = (np >= 0) ? np : tp;
-        if (cand < 0) continue;                        /* 该切分没有压力/笔尖字段 */
-        int dup = 0;
-        for (int i = 0; i < g_ctN; i++) if (g_ctOff[i] == cand) { dup = 1; break; }
-        if (!dup && g_ctN < CT_MAX_CAND) g_ctOff[g_ctN++] = cand;   /* ⛔ 多个掩码会给出同一偏移，必须去重 */
+    if (off < 0 || g_ctN >= CT_MAX_SIG) return;
+    for (int i = 0; i < g_ctN; i++) if (g_ctOff[i] == off) return;   /* 多掩码会给出同一偏移 */
+    g_ctOff[g_ctN] = off; g_ctMsk[g_ctN] = msk; g_ctN++;
+}
+
+/* 建（或重建）信号表。offBtn/offNP/offTP < 0 ⇒ 该字段本布局推不出。
+ * ⛔ 只在标定成功 / 布局变更时调用一次；调用即**复位全部证据**（换了布局，旧证据作废）。 */
+static void contact_signals_build(int offX, int offY, int stride,
+                                  int offBtn, int offNP, int offTP)
+{
+    for (int i = 0; i < CT_MAX_SIG; i++) {
+        g_ctOff[i] = -1; g_ctMsk[i] = 0;
+        InterlockedExchange(&g_ctZeroSeen[i], 0);
+        InterlockedExchange(&g_ctNzSeen[i], 0);
+        InterlockedExchange(&g_ctElig[i], 0);
     }
-    g_ctIdx = (g_ctN > 0) ? 0 : -1;
-    g_ctCur = -1;
-    g_ctSeen = 0;
-    g_ctNonZero = 0;
-    /* ⛔ 一个候选都推不出来 ⇒ 判据不可用。此时**放行**（按「始终落笔」处理）并
-       把 g_ctUnknown 报给面板 —— 不能默默把平滑关死：那会让功能「看起来坏了」
-       且没有任何线索。宁可退化到旧行为，也要让故障可见。 */
-    g_ctUnknown = (g_ctN > 0) ? 0 : 1;
-    InterlockedExchange(&g_contact, g_ctUnknown ? 1 : 0);
+    g_ctN = 0;
+    InterlockedExchange(&g_ctSeen, 0);
+    InterlockedExchange(&g_ctMask, 0);
+    InterlockedExchange(&g_ctVal, 0);
+    InterlockedExchange(&g_ctZeroRun, 0);
+
+    if (stride > 0) {
+        /* ① 语义已知（掩码 + 数据双证据 ⇒ src=1）：三个字段直接取用。
+              buttons 只取**低三位**（真按钮/笔尖状态）；高位是 cursor number，
+              某些驱动会填成非 0 常量。 */
+        if (offBtn >= 0 && offBtn + 4 <= stride) ct_push(offBtn, 0x07);
+        if (offNP  >= 0 && offNP  + 4 <= stride) ct_push(offNP, 0);
+        if (offTP  >= 0 && offTP  + 4 <= stride) ct_push(offTP, 0);
+        /* ② 语义未知（盲扫定解）：补两个**顺序可推**的候选。
+              · Buttons 在 wintab.h 的固定顺序里**恒在 X 之前 4 字节**；
+              · Y 之后剩余的字节按固定顺序只能是 Z/NP/TP/ORI/ROT（Z/ORI/ROT 各 4/12/12）。
+              ⛔ 取错也不会长期作恶：每个候选都要先通过「见过 0 又见过非 0」的资格审查，
+                 pkCursor（恒 1）、Orientation/ROTATION（恒非 0）、pkZ（悬空非 0）
+                 都会自动出局。 */
+        if (offBtn < 0 && offX >= 4) ct_push(offX - 4, 0x07);
+        if (offNP < 0 && offY >= 0) {
+            int rest = stride - (offY + 4);        /* Y 之后还剩多少字节 */
+            for (int m = 0; m < 32; m++) {
+                int sz = 0, off = offY + 4, np = -1, tp = -1;
+                if (m & 1)  { sz += 4;  off += 4; }             /* Z              */
+                if (m & 2)  { np = off; sz += 4;  off += 4; }   /* NormalPressure */
+                if (m & 4)  { tp = off; sz += 4;  off += 4; }   /* TiltPressure   */
+                if (m & 8)  { sz += 12; off += 12; }            /* Orientation    */
+                if (m & 16) { sz += 12; off += 12; }            /* Rotation       */
+                if (sz != rest) continue;
+                if (np >= 0) ct_push(np, 0);
+                if (tp >= 0) ct_push(tp, 0);
+            }
+        }
+    }
+    InterlockedExchange(&g_contactMs, (LONG)GetTickCount());
+    /* ⛔ 无信号 ⇒ 判据不可用。此时**放行**（与旧版一致）并把 g_ctUnknown 报给面板 ——
+       不能默默把平滑关死：那会让功能「看起来坏了」且没有任何线索。 */
+    InterlockedExchange(&g_ctUnknown, g_ctN > 0 ? 0 : 1);
+    InterlockedExchange(&g_contact, g_ctN > 0 ? 0 : 1);
 }
 
 /* 逐包推进接触判据（detour 内调用，只做整数读与计数，零系统调用）。
-   三个阶段：考察候选 → 接受 → 长期校验（拒绝「悬空也非零」的字段）。 */
+ *
+ * 每包：① 对每个信号刷新「见过 0 / 见过非 0」证据，两个状态都见过即取得投票权；
+ *       ② 本包「落笔」= **有投票权的信号里有任意一个非零**。
+ * 每批：任一包落笔 ⇒ 刷新保持计时（contact 立刻为 1）。 */
+/* 信号表的「布局指纹」：stride/X/Y + 三个落笔字段偏移。
+ * ⛔ 必须有：hCtx 缓存命中与重新标定走的是两条路径，唯一能让它们**行为一致**的办法
+ *    是把「要不要重建信号表」交给同一份指纹判据（换设备必须重建，换句柄必须不重建）。*/
+static int s_ctSigOK, s_ctSigStride, s_ctSigX, s_ctSigY, s_ctSigB, s_ctSigNP, s_ctSigTP;
+
+static int ct_sig_needs_rebuild(int offX, int offY, int stride, int b, int np, int tp)
+{
+    if (!s_ctSigOK || g_ctN <= 0) return 1;
+    return s_ctSigStride != stride || s_ctSigX != offX || s_ctSigY != offY
+        || s_ctSigB != b || s_ctSigNP != np || s_ctSigTP != tp;
+}
+
+static void ct_sig_remember(int offX, int offY, int stride, int b, int np, int tp)
+{
+    s_ctSigOK = 1; s_ctSigStride = stride; s_ctSigX = offX; s_ctSigY = offY;
+    s_ctSigB = b; s_ctSigNP = np; s_ctSigTP = tp;
+}
+
 static void contact_update(const u8* buf, int stride, int n)
 {
-    if (g_ctUnknown) { InterlockedExchange(&g_contact, 1); return; }
-    if (g_ctN <= 0) { g_ctUnknown = 1; InterlockedExchange(&g_contact, 1); return; }
-
-    LONG cur = g_ctCur;
-    if (cur < 0) {
-        /* —— 阶段一：逐个考察候选 —— */
-        LONG idx = g_ctIdx;
-        if (idx < 0 || idx >= g_ctN) {
-            g_ctUnknown = 1;
-            InterlockedExchange(&g_contact, 1);
-            return;
-        }
-        const int off = g_ctOff[idx];
-        int nz = 0;
-        for (int k = 0; k < n; k++) {
-            u32 v; memcpy(&v, buf + (SIZE_T)k * stride + off, 4);
-            InterlockedIncrement(&g_ctSeen);
-            if (v) { InterlockedIncrement(&g_ctNonZero); nz = 1; }
-        }
-        if (nz) {
-            /* ⛔ 一旦非零就**立刻接受**，不等下一批：否则用户的第一笔会被整批吞掉，
-               表现为「第一笔画了没效果，第二笔才生效」。 */
-            g_ctCur = idx;
-            g_ctSeen = 0;
-            g_ctNonZero = 0;
-            InterlockedExchange(&g_contact, 1);
-            return;
-        }
-        InterlockedExchange(&g_contact, 0);           /* 悬空：字段为 0 */
-        if (g_ctSeen >= CT_PROBE_MAX) {               /* 证伪：全程为 0，换下一个 */
-            g_ctIdx = idx + 1;
-            g_ctSeen = 0;
-            g_ctNonZero = 0;
-            if (g_ctIdx >= g_ctN) { g_ctUnknown = 1; InterlockedExchange(&g_contact, 1); }
-        }
+    if (g_ctN <= 0) {
+        InterlockedExchange(&g_ctUnknown, 1);
+        InterlockedExchange(&g_contact, 1);            /* 判据不可用 ⇒ 放行 */
         return;
     }
 
-    /* —— 阶段二 / 三：已接受，逐包判定 + 长期校验 —— */
-    const int off = g_ctOff[cur];
-    for (int k = 0; k < n; k++) {
-        u32 v; memcpy(&v, buf + (SIZE_T)k * stride + off, 4);
-        InterlockedIncrement(&g_ctSeen);
-        if (v) { InterlockedIncrement(&g_ctNonZero); InterlockedExchange(&g_contact, 1); }
-        else   { InterlockedExchange(&g_contact, 0); }
+    DWORD now = GetTickCount();
+    int anyHit = 0;          /* 本批「有投票权的信号」里出现过非零 */
+    int maskOut = 0;         /* 本批最后命中的信号位掩码 */
+    LONG prim = 0;           /* 首选信号最后读到的值 */
+    int k;
+
+    for (k = 0; k < n; k++) {
+        const u8* p = buf + (SIZE_T)k * stride;
+        int pktHit = 0;      /* 本包是否命中（⛔ 必须逐包，不能用批级的 anyHit：一批里
+                                前几个包命中会让后几个包的「连续全零」计数被错误清零） */
+        for (int i = 0; i < g_ctN; i++) {
+            u32 v; memcpy(&v, p + g_ctOff[i], 4);
+            if (g_ctMsk[i]) v &= (u32)g_ctMsk[i];
+            if (i == 0) prim = (LONG)v;
+            if (v) {
+                g_ctNzSeen[i] = 1;
+                if (g_ctElig[i] == 1 || g_ctZeroSeen[i] == 1) g_ctElig[i] = 1;
+            } else {
+                g_ctZeroSeen[i] = 1;
+                if (g_ctNzSeen[i] == 1) g_ctElig[i] = 1;
+            }
+            /* ⛔ 只有**取得投票权**的信号才允许把「落笔」投成 1。
+               把资格的判定放在命中判定**之前**，是为了让「起笔的那一包」立刻生效：
+               此时该信号刚拿到与 0 相对的那一半证据（悬空阶段已给过另一半），
+               否则用户的每一笔都会丢掉第一个包（表现为「第一笔总是迟一帧」）。*/
+            if (g_ctElig[i] == 1 && v) { pktHit = 1; maskOut |= (1 << i); }
+        }
+        if (pktHit) { anyHit = 1; g_ctZeroRun = 0; }
+        else        InterlockedIncrement(&g_ctZeroRun);
     }
-    /* 校验：接受之后仍「几乎全程非零」⇒ 它不是接触场（方位/旋转这类字段恒非零）。
-       真实笔压只要抬过笔就会掉到 0，所以「>95% 非零」是很宽的判据，不会误伤
-       「长时间连续绘制」。命中即换下一个候选。 */
-    if (g_ctSeen >= CT_VALIDATE_MAX && (g_ctNonZero * 100) > (g_ctSeen * 95)) {
-        g_ctIdx = cur + 1;
-        g_ctCur = -1;
-        g_ctSeen = 0;
-        g_ctNonZero = 0;
+    InterlockedExchangeAdd(&g_ctSeen, (LONG)n);
+    InterlockedExchange(&g_ctVal, prim);
+    InterlockedExchange(&g_ctMask, (LONG)maskOut);
+
+    int haveElig = 0;
+    for (int i = 0; i < g_ctN; i++) if (g_ctElig[i] == 1) { haveElig = 1; break; }
+
+    if (!haveElig) {
+        /* 还没有任何信号取得投票权（开机/换布局后的最初几秒）。
+           ⛔ 冷启动宽限内按**旧行为放行**，避免「一开就是死的」；宽限之后按**悬空**处理。
+              两者都必须让 g_ctUnknown=1，面板据此说明「落笔判据尚未建立」。 */
+        InterlockedExchange(&g_ctUnknown, 1);
+        LONG seen = g_ctSeen;
+        InterlockedExchange(&g_contact, (seen < CT_GRACE_PKT) ? 1 : 0);
+        return;
+    }
+    InterlockedExchange(&g_ctUnknown, 0);
+    if (anyHit) {
+        InterlockedExchange(&g_contactMs, (LONG)now);
+        InterlockedExchange(&g_contact, 1);
+    } else if ((DWORD)(now - (DWORD)g_contactMs) > CONTACT_HOLD_MS) {
         InterlockedExchange(&g_contact, 0);
-        if (g_ctIdx >= g_ctN) { g_ctUnknown = 1; InterlockedExchange(&g_contact, 1); }
     }
 }
 
@@ -467,6 +639,22 @@ static int tool_gate_ok(void)
     return g_cfg[CFG_I_TOOLGATE] == 1 ? 1 : 0;
 }
 
+/** 闸门不成立时，把「为什么」拆成三种可读原因（P3.5）。
+ *
+ *  ⛔ 与 tool_gate_ok() 同源同判据，只是把布尔拆成原因——两处判据必须**逐条对应**，
+ *     否则面板会显示与真实裁决相矛盾的原因（那比没有诊断更坏）。
+ *  返回 RS_REWRITE(0) 表示「工具闸门本身没问题」（此刻被挡一定是别的闸门）。 */
+static int tool_gate_reason(void)
+{
+    if (!g_cfg) return RS_REWRITE;
+    DWORD ts = (DWORD)g_cfg[CFG_I_GATETS];
+    if (ts == 0)                                          return RS_TOOL_UNKNOWN;
+    if ((DWORD)(GetTickCount() - ts) > GATE_STALE_MS)      return RS_TOOL_STALE;
+    int g = g_cfg[CFG_I_TOOLGATE];
+    if (g == 1) return RS_REWRITE;
+    return g == 0 ? RS_TOOL_NO : RS_TOOL_UNKNOWN;
+}
+
 /* 起笔闩锁：落笔瞬间的工具闸门裁决，**整笔持有**，笔起（接触消失）才释放。
  * ⛔⛔ 为什么必须有：闸门的心跳在面板侧，批次间可能短暂过期或翻转 —— 若每批都现判，
  *    一笔之中就会出现「这批判定放行、下一批阻断」的交替 ⇒ PS 收到一半原始坐标、
@@ -481,6 +669,9 @@ typedef struct {
     int   stride;        /* 每包字节数 */
     int   offSerial;
     int   offX, offY;
+    /* 落笔判据用到的字段偏移（**只有 src=1「掩码+数据」双证据才认**；-1 = 不可用）——
+       它们直接进入接触信号表（见 contact_signals_build / contact_update 的多信号并联）。 */
+    int   offBtn, offZ, offNP, offTP;
     u32   axisMax;       /* 设备坐标上界（X 轴），用于位移门限与滞后上限 */
     u32   axisMaxY;      /* 设备坐标上界（Y 轴，lcInExtY）：Y 的标称轴→像素比分母 */
     int   valid;         /* 1 = 交叉验证通过，允许改写 */
@@ -501,6 +692,7 @@ static CALIB g_calib;
 static struct {
     HCTX h;
     int  stride, offSerial, offX, offY;
+    int  offBtn, offZ, offNP, offTP;
     u32  axisMax, axisMaxY;
 } g_ctxCache[CTX_CACHE_MAX];
 static int g_ctxCacheN;
@@ -517,6 +709,8 @@ static int ctx_cache_find(HCTX h, CALIB* out)
         out->hCtx = g_ctxCache[i].h;
         out->stride = g_ctxCache[i].stride; out->offSerial = g_ctxCache[i].offSerial;
         out->offX = g_ctxCache[i].offX;     out->offY = g_ctxCache[i].offY;
+        out->offBtn = g_ctxCache[i].offBtn; out->offZ = g_ctxCache[i].offZ;
+        out->offNP = g_ctxCache[i].offNP;   out->offTP = g_ctxCache[i].offTP;
         out->axisMax = g_ctxCache[i].axisMax; out->axisMaxY = g_ctxCache[i].axisMaxY;
         out->valid = 1;                      /* 能进缓存的只有验证过的布局 */
         out->tried = 1;
@@ -535,6 +729,8 @@ static void ctx_cache_put(HCTX h, const CALIB* c)
     g_ctxCache[slot].h = h;
     g_ctxCache[slot].stride = c->stride; g_ctxCache[slot].offSerial = c->offSerial;
     g_ctxCache[slot].offX = c->offX;     g_ctxCache[slot].offY = c->offY;
+    g_ctxCache[slot].offBtn = c->offBtn; g_ctxCache[slot].offZ = c->offZ;
+    g_ctxCache[slot].offNP = c->offNP;   g_ctxCache[slot].offTP = c->offTP;
     g_ctxCache[slot].axisMax = c->axisMax; g_ctxCache[slot].axisMaxY = c->axisMaxY;
 }
 static volatile LONG g_state = 0;          /* CFG_I_STATE 的镜像（供 worker 上报） */
@@ -603,6 +799,9 @@ static int    g_wasEnabled;
    由 HUD 渲染线程拿**真实光标位移**逐轴持续标定后覆盖（见 hud 段）。 */
 static double g_pxAxisX = 0.0;
 static double g_pxAxisY = 0.0;
+/** 轴→像素比的来源：0=屏幕标称 · 1=驱动 lcOutExt（权威，不再被光标测量覆盖）
+    · 2=光标测量（仅在 0/1 都不可用时才启用）。排障打日志用，也是决策依据。 */
+static volatile LONG g_pxSrc;
 /** 是否已被光标标定过（标定后不再被标称初值覆盖）。 */
 static volatile LONG g_pxCalibrated;
 /** 主屏/虚拟屏宽度、高度（px）：标称「轴→像素比」的分母来源，worker 启动时取一次。 */
@@ -614,10 +813,12 @@ static int g_screenH;
        期间 HUD 的圆心一直镜像 —— 用户看到的就是「时好时坏的镜像」。 */
 typedef struct {
     double px;          /* 当前采用值（含符号；0 = 未标定） */
+    double num;         /* Σ|Δ光标|（指数衰减窗口）—— 「比值」估计的分子 */
+    double den;         /* Σ|Δ原始轴|（同一窗口）—— 分母 */
+    long   n;           /* 已累积样本数（< PX_TRUST_N 时 done=0，仍用标称兜底） */
     int    done;        /* 是否已被**真实光标**标定过（1）；0 = 仍用标称兜底 */
     int    voteSign;    /* 最近一次投票的符号 */
     int    voteStreak;  /* 连续同号的次数 */
-    int    rejStreak;   /* 连续离群被丢弃的次数（配置真变 ⇒ 计满后整值作废重标） */
 } AXCAL;
 static AXCAL g_axCalX, g_axCalY;
 
@@ -689,7 +890,8 @@ static double leash_px(int radiusPx)
  *      用户一开始运笔就会覆盖；日志 `calX=/calY=` 可一眼区分「是测出来的还是兜底的」。 */
 static double px_x(void)
 {
-    if (g_axCalX.done) return g_axCalX.px;                 /* 真实光标标定值优先 */
+    if (g_pxSrc == 1) return g_pxAxisX;                    /* 驱动声明 = 权威（含符号） */
+    if (g_axCalX.done) return g_axCalX.px;                 /* 真实光标标定值 */
     if (g_pxAxisX > 0.0001 || g_pxAxisX < -0.0001) return g_pxAxisX;
     double ext = (double)(g_calib.axisMax > 0 ? g_calib.axisMax : 32767);
     return (double)(g_screenW > 0 ? g_screenW : 1920) / ext;
@@ -697,7 +899,8 @@ static double px_x(void)
 
 static double px_y(void)
 {
-    if (g_axCalY.done) return g_axCalY.px;                 /* 真实光标标定值优先 */
+    if (g_pxSrc == 1) return g_pxAxisY;                    /* 驱动声明 = 权威（含符号） */
+    if (g_axCalY.done) return g_axCalY.px;                 /* 真实光标标定值 */
     if (g_pxAxisY > 0.0001 || g_pxAxisY < -0.0001) return g_pxAxisY;
     double ext = (double)(g_calib.axisMaxY > 0 ? g_calib.axisMaxY : 32767);
     return (double)(g_screenH > 0 ? g_screenH : 1080) / ext;   /* 中性符号，方向交给标定 */
@@ -710,60 +913,55 @@ static double px_y(void)
    ⛔ 符号的唯一权威来源就是这里（Δ光标/Δraw 自然带号），兜底一律中性（见 px_x/px_y）。
    ⛔ 符号要连续 SIGN_VOTE 次一致才采用：一次坏样本（复位跳变/批次时间戳抖动）就把
       符号锁反的话，EMA 得穿越 0 才纠正得回来，期间 HUD 一直镜像。 */
-/* ⛔⛔ 2026-10-14 第二轮稳健化（用户报「受力点与选区末端有几像素漂移」+
-   「绳在绷直态偶尔闪弯」）：[status] 实测 pxX 在 0.058~0.069 之间**波动 ±10%**。
-   比例波动 ±10% ⇒ HUD 偏移（=绳长像素）差 ±10% ⇒ 100px 绳差 10px（漂移）；
-   绷直边界 vlen=L 随比例抖动 ⇒ 绳身闪弯。根因是小位移样本的光标**量化噪声**：
-   旧 CUR_SAMPLE_MIN=3px 时 ±1px 的光标量化就是 ±33% 的样本噪声，且慢速运笔时
-   这类样本占比最高。三道闸：
-     ① 样本门限抬到 Δ光标≥10px（噪声占比 ≤±20%）；
-     ② EMA 权重按 Δ光标 加权（大位移可信度高，权重上限 0.3、下限 0.05）；
-     ③ 已收敛后相对偏差 >20% 的一律按离群丢弃（时间 skew 突发）；连续 24 个
-        离群才认定「设备/显示器配置真变了」，整值作废走重新投票。 */
-#define AX_SAMPLE_MIN  120.0   /* 本轴原始位移下限（≈8 屏幕像素，与①配套抬高） */
-#define CUR_SAMPLE_MIN 10.0    /* 光标位移下限（像素） */
-#define SIGN_VOTE       4
-#define CAL_EMA_BASE    0.05
-#define CAL_EMA_MAX     0.30
-#define CAL_OUTLIER_REL 0.20
-#define CAL_OUTLIER_N   24
+/* ⛔⛔ 2026-10-14 第三轮定案（用户报「拉绳模式的受力点（选区末端）与圆心分离，必须避免」）：
+   [status] 实测标定值在两个轴上都**剧烈抖动**（本次真机 79 分钟会话里 pxX 在
+   0.0536~0.0689、pxY 在 −0.0310~−0.0739 之间跳；同一台机器同一套显示器，真值只可能是
+   一个常数）。而 HUD 的圆心偏移 = 滞后×px ⇒ px 偏 25% 圆心就离选区末端 25% 的绳长
+   （100px 绳 ≈ 25px，肉眼一眼可见 = 用户截图里那条「分离」）。
+   旧实现的三道闸（CUR_SAMPLE_MIN=10px / EMA 权重 0.05~0.30 / 离群 ±20% 丢弃）
+   治的是「单样本噪声」，但**病根是估计器的形状**：把「比值的 EMA」当估计量，
+   等效窗口只有 3~20 个样本，比值本身的逐样本方差不被平均掉。
+   ⇒ 改为**位移加和**估计（Σ|Δ光标| / Σ|Δ原始轴|，指数衰减窗口 ≈ PX_WIN 个样本）：
+     · 噪声按 √N 收敛（256 样本 ⇒ 量级 ±1%），且**天然按位移加权** ——
+       慢速/抖动样本位移小、贡献小，不会被「比值的均值」拉偏；
+     · 即便驱动把系统光标跟着**输出**走（旧分母争议），绳被拉住的样本 Δ输出≈0
+       ⇒ 对分子贡献≈0，估计值仍收敛到真实映射（旧实现会被拽向 0）；
+     · 不再需要「离群丢弃 + 整值作废」这套会把值清零重建的机制（那本身就是抖动源）。
+   符号仍走投票：Δ光标/Δ原始轴 天然带号，是方向的**唯一权威来源**。 */
+#define AX_SAMPLE_MIN  120.0   /* 本轴原始位移下限（≈7 屏幕像素） */
+#define CUR_SAMPLE_MIN 5.0     /* 光标位移下限（像素）。⛔ 别抬到 10px：位移门限越高，
+                                  样本越稀疏、收敛越慢，而噪声已由加和估计吸收 */
+#define SIGN_VOTE      4       /* 符号连续一致多少次才采信 */
+#define PX_WIN         256.0   /* 比值估计的等效样本窗口（指数衰减） */
+#define PX_TRUST_N     24      /* 样本数达到它才算「标定完成」，之前一律用标称兜底 */
 static void calib_axis(AXCAL* a, double dAx, double dCur)
 {
-    if (dAx < AX_SAMPLE_MIN && dAx > -AX_SAMPLE_MIN) return;
-    if (dCur < CUR_SAMPLE_MIN && dCur > -CUR_SAMPLE_MIN) return;
-    double r = dCur / dAx;
-    double ar = r < 0 ? -r : r;
-    if (ar < 0.005 || ar > 3.0) return;              /* 明显不合理 ⇒ 丢弃 */
-    int s = r > 0 ? 1 : -1;
-    if (a->px == 0.0 || ((a->px > 0) ? 1 : -1) != s) {
-        /* 未标定 / 符号与当前相反 ⇒ 走投票，连中 SIGN_VOTE 次直接换值（不做 EMA 穿越） */
-        if (a->voteSign == s) { if (a->voteStreak < 99) a->voteStreak++; }
-        else { a->voteSign = s; a->voteStreak = 1; }
-        if (a->voteStreak >= SIGN_VOTE) {
-            a->px = r;
-            a->done = 1;
-            a->rejStreak = 0;
-            InterlockedExchange(&g_pxCalibrated, 1);
-        }
+    double aax  = dAx  < 0 ? -dAx  : dAx;
+    double acur = dCur < 0 ? -dCur : dCur;
+    if (acur < CUR_SAMPLE_MIN) return;      /* 光标位移太小 ⇒ 整数像素量化主导（±1px 即 ±20%） */
+    if (aax  < AX_SAMPLE_MIN)  return;      /* 本轴原始位移太小 ⇒ 比值不可信 */
+    int s = ((dCur > 0) == (dAx > 0)) ? 1 : -1;
+    if (a->voteSign == s) { if (a->voteStreak < 1000000) a->voteStreak++; }
+    else { a->voteSign = s; a->voteStreak = 1; }
+    if (a->voteStreak < SIGN_VOTE) return;  /* 符号还没稳定 ⇒ 不采信（避免锁反后镜像） */
+    if (a->px == 0.0 || ((a->px > 0) ? 1 : -1) != s || a->den <= 0.0) {
+        /* 首次 / 符号翻转 ⇒ 累积器清空重来（旧实现的 EMA 穿越 0 会让 HUD 镜像一段时间） */
+        a->num = acur; a->den = aax; a->n = 1;
+        a->px  = (double)s * (acur / aax);
+        a->done = 0;
         return;
     }
-    /* ③ 离群丢弃：相对已收敛值偏差过大 ⇒ 不采信（防止一次 skew 突发把比例拽歪） */
-    double rel = (r - a->px) / (a->px > 0 ? a->px : -a->px);
-    if (rel > CAL_OUTLIER_REL || rel < -CAL_OUTLIER_REL) {
-        if (++a->rejStreak >= CAL_OUTLIER_N) {
-            a->px = 0; a->done = 0; a->rejStreak = 0;   /* 配置真变了 ⇒ 从头再标 */
-            InterlockedExchange(&g_pxCalibrated, 0);
-        }
-        return;
+    double keep = 1.0 - 1.0 / PX_WIN;
+    a->num = a->num * keep + acur;
+    a->den = a->den * keep + aax;
+    if (a->den > 1e-9) a->px = (double)s * (a->num / a->den);
+    if (a->n < 1000000) a->n++;
+    if (a->n >= PX_TRUST_N) {
+        a->done = 1;
+        InterlockedExchange(&g_pxCalibrated, 1);
     }
-    a->rejStreak = 0;
-    /* ② 权重按光标位移走：10px 样本 w=0.05（基本不动），≥60px 样本 w=0.3 */
-    double w = dCur / 50.0;
-    if (w < CAL_EMA_BASE) w = CAL_EMA_BASE;
-    if (w > CAL_EMA_MAX) w = CAL_EMA_MAX;
-    a->px = a->px * (1.0 - w) + r * w;
-    a->done = 1;
-    InterlockedExchange(&g_pxCalibrated, 1);
+    /* 诊断：样本数上传（本函数只在 HUD 渲染线程里跑，不受 detour 的零系统调用约束） */
+    if (g_cfg) g_cfg[(a == &g_axCalY) ? CFG_I_PXNY : CFG_I_PXNX] = (LONG)a->n;
 }
 
 static double dsqrt_(double v) { return __builtin_sqrt(v); }
@@ -805,15 +1003,22 @@ static double tau_from_strength(double t)
 static volatile LONG g_snRawX, g_snRawY;   /* 改写前的原始轴坐标 */
 static volatile LONG g_snOutX, g_snOutY;   /* 改写后的平滑轴坐标 */
 static volatile LONG g_snMs;               /* 最后一次取包的 GetTickCount() */
-/* 「前一个包」的原始坐标与时刻：渲染线程用它估原始速度，把 raw **外推**到当前帧
- * 时刻 —— 消除「包时刻 vs GetCursorPos 时刻」的相位差（受力点漂移的根因之一）。 */
+/* 「前一个包」的坐标与时刻：渲染线程用它估速度，把 raw **与 out** 都外推到当前帧
+ * 时刻 —— 消除「包时刻 vs GetCursorPos 时刻」的相位差（受力点漂移的根因之一）。
+ * ⛔⛔ 2026-10-14 第五轮：out 也必须外推。旧版只外推 raw：
+ *    圆心 = 光标 − (raw_now_extrapolated − out_packet_time)·px ⇒ 圆心落在
+ *    **out 的包时刻位置**，而真实绘制点已经又走了一个 v·Δt ——
+ *    真机实测差了 15px（100px 绳）。两端同刻才是几何恒等的前提。 */
 static volatile LONG g_snPrevRawX, g_snPrevRawY;
+static volatile LONG g_snPrevOutX, g_snPrevOutY;
 static volatile LONG g_snPrevMs;
 
 /** 统一发布快照（三处写点共用；先把旧值滚到 prev，再写新值）。 */
 static void sn_publish(LONG rX, LONG rY, LONG oX, LONG oY, LONG ms)
 {
-    g_snPrevRawX = g_snRawX; g_snPrevRawY = g_snRawY; g_snPrevMs = g_snMs;
+    g_snPrevRawX = g_snRawX; g_snPrevRawY = g_snRawY;
+    g_snPrevOutX = g_snOutX; g_snPrevOutY = g_snOutY;
+    g_snPrevMs = g_snMs;
     g_snRawX = rX; g_snRawY = rY;
     g_snOutX = oX; g_snOutY = oY;
     g_snMs   = ms;
@@ -833,6 +1038,32 @@ static volatile LONG g_toolOk;      /* 工具闸门是否成立（0/1） */
 static volatile LONG g_penDown;     /* 笔尖是否接触画布（0/1） */
 static volatile LONG g_gateOk;      /* 两者都成立 ⇒ 本批真的在平滑 */
 
+/* ---- P3.5 诊断三件套（槽位见 CFG_I_REASON/GATEOPEN/GATECLOSE 段）----------
+ * ⛔ 它们**由裁决的同一处写入**，绝不留给面板猜。原因见上面的槽位注释：
+ *    面板只看到 toolGate/penDown/gateOk 三个布尔，而本文件在闸门不成立时
+ *    **会主动把 penDown 写成 0** ⇒ 「心跳过期」与「笔尖真的悬空」在面板上
+ *    长得一模一样，于是诊断永远吐「等笔尖落纸」，用户落着笔看这句只会更迷惑
+ *    （真机复现：用户明确反馈「我早就已经落了」）。 */
+static volatile LONG g_reason;      /* RS_* 原因码（0 = 正在改写） */
+static volatile LONG g_gateOpen;    /* 闸门 0→1 累计次数（= 起笔次数，**累计值**） */
+static volatile LONG g_gateClose;   /* 闸门 1→0 累计次数（**累计值**）。
+                                       ⛔ 面板判「抖动」用的是**两次回报之间的增量**，
+                                          不是这两个总数的差额（累计值画一百笔后就都相等了）。
+                                          增量在一秒内涨了好几次 = 闸门一笔之中反复开合
+                                          （选区一段段停住的根因）。 */
+
+/** 闸门状态迁移（**唯一入口**）。
+ *
+ *  ⛔ 必须走迁移判定，不能各处直接 InterlockedExchange(g_gateOk)：
+ *     开合次数只有「真的发生过跳变」才有意义，直接赋值会把
+ *     「一批里连写 3 次 0」记成 3 次收笔 ⇒ 面板判抖动全是假警报。 */
+static void gate_set(int on)
+{
+    LONG prev = InterlockedExchange(&g_gateOk, on ? 1 : 0);
+    if (on && prev != 1)        InterlockedIncrement(&g_gateOpen);
+    else if (!on && prev == 1)  InterlockedIncrement(&g_gateClose);
+}
+
 /* HUD 渲染线程（定义在文件末，worker 与 jwwh_unhook 都要调） */
 static void hud_start(void);
 static void hud_stop(void);
@@ -844,25 +1075,45 @@ static void hud_stop(void);
    俯仰/翻滚/偏航），不是 4 字节。此前一律按 4 算 ⇒ 掩码里带它们的上下文算出的
    stride 一定偏小 ⇒ 与盲扫结果必然不一致 ⇒ 标定 100% 失败（真机 jwwh-*.log 实证：
    stride 真实值 52，按 4 算只有 40）。 */
-static void layout_of(u32 mask, int ctxSize, int* stride, int* offSerial,
-                      int* offX, int* offY)
+/* 掩码 → 各字段偏移（一次算全，不再只挑 X/Y）。
+   ⛔⛔ 落笔判据（pkButtons / pkNormalPressure / pkTangentPressure）也要靠这里的偏移：
+      它们与 X/Y 出自**同一个确定性推导**（字段顺序由规范定死），所以**不需要**像旧版
+      那样靠「猜 X 之后还剩几个字段」去枚举。参见 CFG_I_CTOFF 的诊断语义。 */
+typedef struct {
+    int stride;
+    int offSerial;
+    int offX, offY;
+    int offBtn;          /* pkButtons         -1 = 掩码里没有 */
+    int offZ;            /* pkZ（离板高度）    -1 = 掩码里没有 */
+    int offNP;           /* pkNormalPressure  -1 */
+    int offTP;           /* pkTangentPressure -1 */
+} LAYOUT;
+
+static void layout_of(u32 mask, int ctxSize, LAYOUT* L)
 {
     static const u32 bits[]  = { PK_CONTEXT, PK_STATUS, PK_TIME, PK_CHANGED,
                                  PK_SERIAL_NUMBER, PK_CURSOR, PK_BUTTONS,
                                  PK_X, PK_Y, PK_Z, PK_NORMAL_PRESSURE,
                                  PK_TANGENT_PRESSURE, PK_ORIENTATION, PK_ROTATION };
-    int off = 0, s = -1, x = -1, y = -1;
+    int off = 0;
+    memset(L, 0, sizeof(*L));
+    L->offSerial = L->offX = L->offY = -1;
+    L->offBtn = L->offZ = L->offNP = L->offTP = -1;
     for (int i = 0; i < (int)(sizeof(bits) / sizeof(bits[0])); i++) {
         if (!(mask & bits[i])) continue;
         int sz = 4;
         if (bits[i] == PK_CONTEXT) sz = ctxSize;
         else if (bits[i] == PK_ORIENTATION || bits[i] == PK_ROTATION) sz = 12;
-        if (bits[i] == PK_SERIAL_NUMBER) s = off;
-        if (bits[i] == PK_X) x = off;
-        if (bits[i] == PK_Y) y = off;
+        if (bits[i] == PK_SERIAL_NUMBER) L->offSerial = off;
+        if (bits[i] == PK_BUTTONS)       L->offBtn = off;
+        if (bits[i] == PK_X)             L->offX = off;
+        if (bits[i] == PK_Y)             L->offY = off;
+        if (bits[i] == PK_Z)             L->offZ = off;
+        if (bits[i] == PK_NORMAL_PRESSURE)  L->offNP = off;
+        if (bits[i] == PK_TANGENT_PRESSURE) L->offTP = off;
         off += sz;
     }
-    *stride = off; *offSerial = s; *offX = x; *offY = y;
+    L->stride = off;
 }
 
 /* ------------------------------------------- 由 (stride, offSerial) 反推 X/Y
@@ -889,14 +1140,14 @@ static void layout_table_build(void)
     for (int c = 0; c < 2; c++) {
         int ctxSize = c ? 8 : 4;
         for (u32 m = 0; m <= (u32)PK_ALL; m++) {
-            int st, os_, ox_, oy_;
-            layout_of(m, ctxSize, &st, &os_, &ox_, &oy_);
-            if (ox_ < 0 || oy_ < 0) continue;
-            if (st <= 0 || st >= LAY_MAX || os_ < 0 || os_ >= LAY_MAX) continue;
-            int v = (ox_ << 8) | oy_;
-            int cur = g_layXY[st][os_];
-            if (cur == -2) g_layXY[st][os_] = v;
-            else if (cur != v) g_layXY[st][os_] = -1;      /* 歧义 ⇒ 拒绝 */
+            LAYOUT L;
+            layout_of(m, ctxSize, &L);
+            if (L.offX < 0 || L.offY < 0) continue;
+            if (L.stride <= 0 || L.stride >= LAY_MAX || L.offSerial < 0 || L.offSerial >= LAY_MAX) continue;
+            int v = (L.offX << 8) | L.offY;
+            int cur = g_layXY[L.stride][L.offSerial];
+            if (cur == -2) g_layXY[L.stride][L.offSerial] = v;
+            else if (cur != v) g_layXY[L.stride][L.offSerial] = -1;      /* 歧义 ⇒ 拒绝 */
         }
     }
     g_layBuilt = 1;
@@ -943,12 +1194,13 @@ static int layout_pick_xy(int stride, int offSerial, const u8* buf, int n,
     for (int c = 0; c < 2 && np < LAY_PICK_MAX; c++) {
         int ctxSize = c ? 8 : 4;
         for (u32 m = 0; m <= (u32)PK_ALL && np < LAY_PICK_MAX; m++) {
-            int st, os_, ox_, oy_;
-            layout_of(m, ctxSize, &st, &os_, &ox_, &oy_);
-            if (st != stride || os_ != offSerial || ox_ < 0 || oy_ < 0) continue;
+            LAYOUT L;
+            layout_of(m, ctxSize, &L);
+            if (L.stride != stride || L.offSerial != offSerial) continue;
+            if (L.offX < 0 || L.offY < 0) continue;
             int dup = 0;
-            for (int i = 0; i < np; i++) if (pairs[i][0] == ox_ && pairs[i][1] == oy_) { dup = 1; break; }
-            if (!dup) { pairs[np][0] = ox_; pairs[np][1] = oy_; np++; }
+            for (int i = 0; i < np; i++) if (pairs[i][0] == L.offX && pairs[i][1] == L.offY) { dup = 1; break; }
+            if (!dup) { pairs[np][0] = L.offX; pairs[np][1] = L.offY; np++; }
         }
     }
     int found = 0, fx = -1, fy = -1;
@@ -1048,6 +1300,7 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
     u32 mask = 0;
     int haveMask = 0;
     LONG inExtX = 0, inExtY = 0;
+    LONG outExtX = 0, outExtY = 0, outOrgX = 0, outOrgY = 0;
     /* 全尺寸零缓冲（见 WT_LC_BUFSZ 处的根因注释）：WTGet 会回写整个
        LOGCONTEXT（~172 字节），按偏移 64 取 lcPktData —— 这才是真实布局。
        放在外层：标定失败时要把它整个 hex dump 出来排障。 */
@@ -1066,6 +1319,19 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
             /* 输入量程：位移门限 / 标称轴→像素比都靠它（比 WTInfo 的设备查询可靠） */
             memcpy(&inExtX, lcBuf + WT_LC_INEXTX_OFF, sizeof(inExtX));
             memcpy(&inExtY, lcBuf + WT_LC_INEXTY_OFF, sizeof(inExtY));
+            /* ⛔⛔ 输出量程 = 驱动的**权威映射**（2026-10-14 第四轮，问题 3「受力点与
+               圆心分离」）：轴→像素比的唯一正确来源是 lcOutExt/lcInExt ——
+               它由驱动按用户的实际映射（整屏 / 强制比例 / 局部区域 / Y 轴翻转）
+               填好，**含符号**，不需要任何测量。旧版只用「屏幕尺寸 / 输入量程」估算
+               （假定整屏拉伸），真机 [calib] 记下的是屏幕标称 X=3440/44800=0.076786、
+               Y=1440/29600=0.048649；而 HUD 实际用的是**光标测量值** [status] pxX 0.0466~0.0676
+               （漂 + 偏低，最差比标称低 40%）—— 测量把「外推放大 Δraw」与「光标量化」
+               两个误差叠在一起。圆心偏移 = 滞后 × px，px 偏低多少圆心就离真实绘制点差多少：
+               实测深色折线端点（真实绘制点）与圆心恒差 **15px**（100px 绳）。 */
+            memcpy(&outOrgX, lcBuf + WT_LC_OUTORGX_OFF, sizeof(outOrgX));
+            memcpy(&outOrgY, lcBuf + WT_LC_OUTORGY_OFF, sizeof(outOrgY));
+            memcpy(&outExtX, lcBuf + WT_LC_OUTEXTX_OFF, sizeof(outExtX));
+            memcpy(&outExtY, lcBuf + WT_LC_OUTEXTY_OFF, sizeof(outExtY));
         }
     }
 
@@ -1074,17 +1340,19 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
     int haveScan = scan_serial((const u8*)buf, n, &sStride, &sOff, &sX, &sY);
 
     /* ③ 掩码推算 + 真实数据校验（pkContext 尺寸两种假设，谁能让序号逐包 +1 谁对） */
-    int mStride = 0, mOffS = -1, mOffX = -1, mOffY = -1, mVariant = 0;
-    int okMask = 0;
+    LAYOUT mL;
+    memset(&mL, 0, sizeof(mL));
+    mL.offX = mL.offY = mL.offSerial = -1;
+    mL.offBtn = mL.offZ = mL.offNP = mL.offTP = -1;
+    int mVariant = 0, okMask = 0;
     if (haveMask) {
         int cand[2] = { 8, 4 };
         for (int v = 0; v < 2 && !okMask; v++) {
-            int st, os_, ox_, oy_;
-            layout_of(mask, cand[v], &st, &os_, &ox_, &oy_);
-            if (ox_ < 0 || oy_ < 0) continue;
-            if (!verify_layout((const u8*)buf, n, st, os_)) continue;
-            mStride = st; mOffS = os_; mOffX = ox_; mOffY = oy_; mVariant = cand[v];
-            okMask = 1;
+            LAYOUT L;
+            layout_of(mask, cand[v], &L);
+            if (L.offX < 0 || L.offY < 0) continue;
+            if (!verify_layout((const u8*)buf, n, L.stride, L.offSerial)) continue;
+            mL = L; mVariant = cand[v]; okMask = 1;
         }
     }
 
@@ -1092,8 +1360,9 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
        ⛔ 不能反过来判失败。真机上驱动报的 lcPktData 是 0x00C8（连 PK_Y 都没有），
        而包是 52 字节；掩码是「请求」，盲扫是「事实」，事实优先。 */
     int stride = 0, offS = -1, offX = -1, offY = -1, src = 0, ok = 0;
-    if (okMask && (!haveScan || (mStride == sStride && mOffS == sOff))) {
-        stride = mStride; offS = mOffS; offX = mOffX; offY = mOffY; src = 1; ok = 1;
+    int cBtn = -1, cZ = -1, cNP = -1, cTP = -1;   /* 落笔判据采纳的字段偏移（下面日志段裁决） */
+    if (okMask && (!haveScan || (mL.stride == sStride && mL.offSerial == sOff))) {
+        stride = mL.stride; offS = mL.offSerial; offX = mL.offX; offY = mL.offY; src = 1; ok = 1;
     } else if (haveScan) {
         int px, py;
         if (layout_infer_xy(sStride, sOff, &px, &py)) {
@@ -1102,13 +1371,24 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
             stride = sStride; offS = sOff; offX = px; offY = py; src = 3; ok = 1;
         } else if (okMask) {
             calib_logf("# [calib] ⚠ 掩码 (stride=%d,off=%d) 与盲扫 (stride=%d,off=%d) 不一致，"
-                       "且盲扫无法定出 X/Y ⇒ 等下一批\n", mStride, mOffS, sStride, sOff);
+                       "且盲扫无法定出 X/Y ⇒ 等下一批\n", mL.stride, mL.offSerial, sStride, sOff);
         }
     }
 
     calib_logf("# [calib] hCtx=0x%llX  n=%d\n", (unsigned long long)(UINT_PTR)hCtx, n);
     calib_logf("# [calib] 掩码=%s mask=0x%04X  推算 stride=%d offSerial=%d offX=%d offY=%d (ctx=%d)\n",
-               haveMask ? "有" : "无", mask, mStride, mOffS, mOffX, mOffY, mVariant);
+               haveMask ? "有" : "无", mask, mL.stride, mL.offSerial, mL.offX, mL.offY, mVariant);
+    /* ⛔ 落笔判据用到的三个字段偏移**只有 src=1（掩码+数据双证据）时才采信** ——
+       掩码错的时候它们会指到别的字段上（包内恒为非 0 的 cursor / orientation），
+       「幽灵落笔」会让闸门永远放行。src≠1 时置 -1，改由「顺序可推」的盲扫候选
+       + 双状态资格审查（见 contact_signals_build）。 */
+    cBtn = (ok && src == 1) ? mL.offBtn : -1;
+    cZ   = (ok && src == 1) ? mL.offZ   : -1;
+    cNP  = (ok && src == 1) ? mL.offNP  : -1;
+    cTP  = (ok && src == 1) ? mL.offTP  : -1;
+    calib_logf("# [calib] 接触字段偏移 采用 btn=%d z=%d np=%d tp=%d（src=%d；"
+               "掩码推算本应是 btn=%d z=%d np=%d tp=%d）\n",
+               cBtn, cZ, cNP, cTP, src, mL.offBtn, mL.offZ, mL.offNP, mL.offTP);
     calib_logf("# [calib] 盲扫=%s stride=%d offSerial=%d offX=%d offY=%d\n",
                haveScan ? "有" : "无", sStride, sOff, sX, sY);
     calib_logf("# [calib] 结论: %s（依据=%s）\n",
@@ -1140,29 +1420,46 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
     calib_logf("# [calib] 轴上界 = %u（lcInExtX=%ld lcInExtY=%ld）\n", axMax,
                (long)inExtX, (long)inExtY);
 
-    /* 轴→像素比的**标称初值**（逐轴）：等渲染线程用真实光标标定出来之前先用它兜底。
-       ⛔ 旧版用 32767/axisMax，在 axisMax 恰好也是 32767 时算出 **1.0**（即「包坐标
-       就是像素」），而真实值约 1920/44800 ≈ 0.043 ⇒ 半径 8px 被算成 8 个轴单位
-       ≈ 0.34 屏幕像素 ⇒ 滞后上限把平滑压成 0，「调参无感」的第二层根因。
-       现在按「输入量程覆盖整屏」估算，量级至少是对的。
-       ⛔ 符号**不在这里猜**：兜底一律取「与 X 同号」的中性正号。Y 的真实方向依驱动与
-          LOGCONTEXT 的 lcOut* 映射而定，规范并未写死 ⇒ 唯一权威来源是 calib_axis()
-          用真实光标测出的符号（px_x/px_y 优先采用它）。
-          〔已撤回〕旧注释写死的「Y 必须取负」其依据是一张**示意图**，用户已澄清那不是
-          真实截图 ⇒ 该假设作废。
-       ⚠️ 已被光标标定过就绝不覆盖（g_pxCalibrated 由渲染线程置位）。 */
-    if (!g_pxCalibrated) {
+    /* 轴→像素比：**驱动 `lcOut*` 优先**，其次光标标定，最后才是屏幕标称。
+       ⛔⛔ 2026-10-14 第五轮定案（用户报「受力点和圆心依然会分离」）：光标测量**不可信** ——
+          它把 `Δ光标/Δraw` 当 px，而 raw 侧被「帧外推」放大（见 hud_thread 的外推段），
+          真机 [status] 实测 pxX 在 0.0466~0.0676 之间漂，而屏幕整屏映射下的标称是
+          3440/44800 = 0.076786 ⇒ 最差偏低 40%。圆心偏移 = 滞后 × px，
+          px 偏低多少圆心就离真实绘制点差多少（100px 绳实测差 15px）。
+          唯一权威来源是 `lcOutExt / lcInExt`（驱动按用户实际映射填好的，**含 Y 符号**）：
+          整屏拉伸、强制比例、局部映射、Y 翻转全都已经在里面了。
+          合理性判据：|px| 不可能超过「整屏/量程」（映射不会超出屏幕），也不应小到荒谬
+          （< 15% 标称）。不满足就退回标称，光标测量只作**日志对照**。
+        ⛔ 符号**不在这里猜**：驱动给了就照用（Y 通常为负 = 屏幕上 Y 向下）；
+          只有退回标称时才取中性正号。 */
+    if (g_pxSrc != 1) {
         double extX = (double)(inExtX > 0 ? inExtX : (LONG)axMax);
         double extY = (double)(inExtY > 0 ? inExtY : 32767);
         double scrW = (double)(g_screenW > 0 ? g_screenW : 1920);
         double scrH = (double)(g_screenH > 0 ? g_screenH : 1080);
         double nomX = scrW / (extX > 1.0 ? extX : 1.0);
         double nomY = scrH / (extY > 1.0 ? extY : 1.0);   /* 中性符号，不假设方向 */
-        if (nomX > 0.0001 && nomX < 1000.0) g_pxAxisX = nomX;
-        if (nomY > 0.0001 && nomY < 1000.0) g_pxAxisY = nomY;
+        double drvX = (extX > 1.0) ? (double)outExtX / extX : 0.0;
+        double drvY = (extY > 1.0) ? (double)outExtY / extY : 0.0;
+        double adx = drvX < 0 ? -drvX : drvX, ady = drvY < 0 ? -drvY : drvY;
+        int useDrv = (adx > nomX * 0.15 && adx <= nomX * 1.02
+                   && ady > nomY * 0.15 && ady <= nomY * 1.02) ? 1 : 0;
+        if (useDrv) {
+            g_pxAxisX = drvX;
+            g_pxAxisY = drvY;
+            g_pxSrc = 1;
+        } else if (!g_pxCalibrated) {
+            if (nomX > 0.0001 && nomX < 1000.0) g_pxAxisX = nomX;
+            if (nomY > 0.0001 && nomY < 1000.0) g_pxAxisY = nomY;
+            g_pxSrc = 0;
+        }
         g_calib.axisMaxY = (u32)(inExtY > 0 ? inExtY : 32767);
+        calib_logf("# [calib] lcOut*: org=(%ld,%ld) ext=(%ld,%ld)  ⇒ 驱动映射 X=%.6f Y=%.6f\n",
+                   (long)outOrgX, (long)outOrgY, (long)outExtX, (long)outExtY, drvX, drvY);
         calib_logf("# [calib] 标称 轴→像素 X=%.6f（%d px / %ld 轴） Y=%.6f（%d px / %ld 轴）\n",
-                   g_pxAxisX, g_screenW, (long)inExtX, g_pxAxisY, g_screenH, (long)inExtY);
+                   nomX, g_screenW, (long)inExtX, nomY, g_screenH, (long)inExtY);
+        calib_logf("# [calib] 采用 %s： X=%.6f Y=%.6f（1=驱动 lcOut*，0=屏幕标称）\n",
+                   useDrv ? "驱动映射" : "屏幕标称", g_pxAxisX, g_pxAxisY);
     }
 
     g_calib.hCtx = hCtx;
@@ -1170,6 +1467,8 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
     g_calib.offSerial = ok ? offS : sOff;
     g_calib.offX = ok ? offX : -1;
     g_calib.offY = ok ? offY : -1;
+    /* ⛔⛔ 落笔判据的字段偏移在上面的日志段就已经裁决好了（cBtn/cZ/cNP/cTP，见那里的注释）。 */
+    g_calib.offBtn = cBtn; g_calib.offZ = cZ; g_calib.offNP = cNP; g_calib.offTP = cTP;
     g_calib.axisMax = axMax;
     g_calib.valid = ok;
     /* ⛔ 失败不立刻认命：盲扫要 n>=3，而真机前几批常常只有 2 个包。
@@ -1181,18 +1480,20 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
     }
 
     if (ok) {
-        /* ⛔ 布局真的变了（与上一个已验证布局不同）⇒ 轨迹与接触判据作废；
-           同布局（hCtx 缓存未命中的同设备新句柄）⇒ 完全无缝，什么都不清。
-           ⛔ 这里替代了旧版「hCtx 一变就清一切」的行为（见 g_ctxCache 注释）。 */
+        /* ⛔ 布局真的变了（含落笔字段偏移）⇒ 轨迹状态作废。
+           ⛔ 接触判据的**信号表**不在这里重建，改由 detour 按「布局指纹」统一裁决
+              （见 ct_sig_needs_rebuild）—— 这样「新标定」与「ctx 缓存命中」两条路
+              走同一段代码，不会出现一条重建、另一条不重建的分叉。 */
         static int s_layoutKnown;
-        static int s_lStride, s_lOffY;
-        if (s_layoutKnown && (s_lStride != g_calib.stride || s_lOffY != g_calib.offY)) {
+        static int s_lStride, s_lOffY, s_lOffX, s_lBtn, s_lNP, s_lTP;
+        if (s_layoutKnown && (s_lStride != g_calib.stride || s_lOffY != g_calib.offY
+                           || s_lOffX != g_calib.offX
+                           || s_lBtn != cBtn || s_lNP != cNP || s_lTP != cTP)) {
             g_wasEnabled = 0;                    /* 换布局 ⇒ 轨迹状态作废 */
-            g_ctN = 0; g_ctCur = -1; g_ctIdx = -1; g_ctUnknown = 0;
         }
         s_layoutKnown = 1;
-        s_lStride = g_calib.stride;
-        s_lOffY = g_calib.offY;
+        s_lStride = g_calib.stride; s_lOffY = g_calib.offY; s_lOffX = g_calib.offX;
+        s_lBtn = cBtn; s_lNP = cNP; s_lTP = cTP;
         ctx_cache_put(hCtx, &g_calib);
     }
 
@@ -1260,16 +1561,28 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
               盲扫被跳过、掩码又不可信 ⇒ 一次判死，此后永不重试（日志里整场只有
               一段 [calib] 就是这个原因）。 */
         if (n >= 3) try_calibrate(hCtx, buf, n);
-        else return 0;
+        else { InterlockedExchange(&g_reason, RS_NOCTX); return 0; }
     }
-    if (!g_calib.valid || g_calib.offX < 0 || g_calib.offY < 0) return 0;
+    if (!g_calib.valid || g_calib.offX < 0 || g_calib.offY < 0) {
+        InterlockedExchange(&g_reason, RS_NOCAL);
+        return 0;
+    }
 
     const int S = g_calib.stride;
     const int ox_ = g_calib.offX, oy_ = g_calib.offY;
-    if (S <= 0 || ox_ + 4 > S || oy_ + 4 > S) return 0;
+    if (S <= 0 || ox_ + 4 > S || oy_ + 4 > S) {
+        InterlockedExchange(&g_reason, RS_NOCAL);
+        return 0;
+    }
 
-    /* 接触判据的候选表：依赖标定出的 (offY, stride) ⇒ 只在标定成功之后建一次 */
-    if (g_ctN == 0) contact_candidates(oy_, S);
+    /* 接触判据的**信号表**：按「布局指纹」统一裁决是否重建。
+       ⛔ 指纹包含落笔字段偏移（btn/np/tp），所以「同设备换 hCtx（缓存命中）」不会重建、
+          「换设备/换布局」一定会重建。重建会把已积累的「见过 0 / 非 0」证据清零，
+          因此只在**真的变了**时做（否则头几百个包判据不可用）。 */
+    if (ct_sig_needs_rebuild(ox_, oy_, S, g_calib.offBtn, g_calib.offNP, g_calib.offTP)) {
+        contact_signals_build(ox_, oy_, S, g_calib.offBtn, g_calib.offNP, g_calib.offTP);
+        ct_sig_remember(ox_, oy_, S, g_calib.offBtn, g_calib.offNP, g_calib.offTP);
+    }
 
     /* ——— 闸门 ①：工具必须是套索（**起笔闩锁**版，2026-10-14）———
      * ⚠️ 顺序要紧：**先判工具、后读接触场**。工具不是套索时整批直接放过，
@@ -1295,29 +1608,45 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
     if (!useGate) {
         g_wasEnabled = 0;
         InterlockedExchange(&g_strokeGate, -1);
-        InterlockedExchange(&g_toolOk, tool_gate_ok() ? 1 : 0);
-        InterlockedExchange(&g_gateOk, 0);
+        int tg = tool_gate_ok();
+        InterlockedExchange(&g_toolOk, tg ? 1 : 0);
+        gate_set(0);
         InterlockedExchange(&g_penDown, 0);
+        /* P3.5：把「为什么被挡」定死（面板只做展示）。⛔ 顺序 = 用户能理解的原因链：
+           先看总开关，再看工具闸门。tool_gate_reason() 与 tool_gate_ok() 同源，
+           所以这里报出的原因与上面的裁决**必然一致**。 */
+        if (!g_cfg[CFG_I_ENABLED]) InterlockedExchange(&g_reason, RS_OFF);
+        else if (!tg)              InterlockedExchange(&g_reason, (LONG)tool_gate_reason());
+        else                       InterlockedExchange(&g_reason, RS_OFF);   /* 防御：理论到不了 */
         snapshot_only((u8*)buf, S, n, ox_, oy_);
         return 0;
     }
     InterlockedExchange(&g_toolOk, 1);
 
     /* ——— 闸门 ②：笔尖必须接触画布（落笔）———
-     * ⛔ 判据未知时（g_ctCur<0）一律按「未落笔」处理：宁可在用户第一次落笔时
-     *    少平滑一帧，也不要退化成「悬空也在平滑」—— 那正是要修的缺陷。 */
+     * ⛔ 判据 = buttons / pkNormalPressure / pkTangentPressure **任一非零**（见 contact_update）。
+     *    判据尚未建立（无信号 / 冷启动宽限之后仍无信号取得投票权）时一律按「未落笔」处理：
+     *    宁可在用户第一次落笔时少平滑一帧，也不要退化成「悬空也在平滑」—— 那正是要修的缺陷。 */
     contact_update((const u8*)buf, S, n);
     LONG down = g_contact;
     InterlockedExchange(&g_penDown, down);
     if (!down) {
         g_wasEnabled = 0;            /* 抬笔 ⇒ 下一笔重新起笔锚定 */
         InterlockedExchange(&g_strokeGate, -1);   /* 笔起 ⇒ 解闩，下一笔重新裁决 */
-        InterlockedExchange(&g_gateOk, 0);
+        gate_set(0);
+        /* ⛔ 原因必须区分「判据未建立」与「真的悬空」：
+           判据未建立时（g_ctUnknown=1）报 RS_CT_UNKNOWN，面板据此说明
+           「落笔判据正在建立 / 未建立」，而不是误导成「笔尖未落纸」——
+           用户明明落着笔却被告知悬空，是上一轮诊断最严重的问题。 */
+        InterlockedExchange(&g_reason, g_ctUnknown ? RS_CT_UNKNOWN : RS_HOVER);
         snapshot_only((const u8*)buf, S, n, ox_, oy_);   /* 同上：只刷快照，不改坐标 */
         return 0;
     }
     InterlockedExchange(&g_strokeGate, 1);    /* 起笔 ⇒ 闩住整笔 */
-    InterlockedExchange(&g_gateOk, 1);
+    gate_set(1);
+    /* 走到这里就是「正在改写」。判据未建立但**仍在冷启动宽限内**（多信号还没攒够证据）
+       也会走到这里 —— 用 RS_CT_UNKNOWN 标注「判据尚未建立，效果可能不完整」。 */
+    InterlockedExchange(&g_reason, g_ctUnknown ? RS_CT_UNKNOWN : RS_REWRITE);
 
     /* ——— 参数（全部从共享内存现读，调用方保证 g_cfg 非空）——— */
     const int    mode   = g_cfg[CFG_I_MODE];
@@ -1407,7 +1736,8 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
             if (mode == 0 && g_hasDir && distPx > CORNER_MIN_PX) {
                 double dot = ux * g_dirX + uy * g_dirY;
                 if (dot > 1.0) dot = 1.0; else if (dot < -1.0) dot = -1.0;
-                if (dot < cornerCos) corner = 1;
+                if (dot < cornerCos) corner = 1;   /* ⟺ 转折角 > cornerDeg。
+                       ⛔ 阈值越小越容易触发保护；面板的「保护范围」已反向映射（90 − 显示） */
             }
             g_dirX = ux; g_dirY = uy; g_hasDir = 1;
         }
@@ -1456,6 +1786,8 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
                   拉满时 step 与人类的 dist 同量级 ⇒ 仍会频频落到「追赶」分支、留有可见滞后。
                   现在 3.0 是人手极限的两倍 ⇒ 拉满即近似 1:1 跟手（等价于不做平滑），
                   与「数值越大越接近手绘」的文案一致，两端差别也才够明显。 */
+            /* ⛔ catchUp 由面板反向映射后落在 1–50（显示「追笔力度」越大 → 本值越小 →
+               vmax 越小 → 追赶越慢 → 越黏）。此处按 0..100 通用公式计算即可，无需改。 */
             double vmax = 0.02 + ((double)catchUp / 100.0) * 3.0;   /* px/ms */
             double step = vmax * dt;                                /* 像素（与 distPx 同域） */
             if (distPx > step && distPx > 0.0001) {
@@ -1659,6 +1991,10 @@ static void do_unhook(void)
     int ok = repatch(g_entry, g_orig);
     thaw_threads();
     if (ok) InterlockedExchange(&g_patched, 0);
+    /* 撤钩后闸门语义不再成立 ⇒ 清掉，否则 HUD 会以为「还在平滑」而永久驻留。
+       ⛔ 这里用裸 InterlockedExchange 而不是 gate_set()：撤钩不是一次「收笔」，
+          记进 g_gateClose 会让面板的「一笔内开合差」统计凭空多一次。 */
+    InterlockedExchange(&g_gateOk, 0);
     logf("# 卸载: %s（原字节 %02X %02X %02X %02X %02X 已写回）\n",
          ok ? "OK" : "失败", g_orig[0], g_orig[1], g_orig[2], g_orig[3], g_orig[4]);
 }
@@ -1686,6 +2022,38 @@ static void publish_status(void)
     g_cfg[CFG_I_PENDOWN] = g_penDown;
     g_cfg[CFG_I_GATEOK]  = g_gateOk;
     g_cfg[CFG_I_CTUNKNOWN] = g_ctUnknown;
+    /* ---- P3.5 诊断回写（面板诊断条的**唯一数据源**）----
+       ⛔⛔ 这七项必须在这里一次性回写，不能各自散落：面板只按 250ms 一轮的节奏读
+          共享内存，散落写入会让同一帧里「reason 还在说悬空、gateOpen 却已经涨了」，
+          诊断文字与它引用的计数自相矛盾（那正是用户抱怨「绿条一闪就没意义」的成因）。
+       ⛔ reason 是**上次裁决的结论**，空闲时会停在最后一个值（例如 RS_HOVER）——
+          面板必须结合 snAge / STATE 判断「这条结论还新不新」，不要只看它。 */
+    g_cfg[CFG_I_REASON]    = g_reason;
+    g_cfg[CFG_I_GATEOPEN]  = g_gateOpen;
+    g_cfg[CFG_I_GATECLOSE] = g_gateClose;
+    /* ---- P3.6 落笔判据（多信号并联）的回写 ----
+       ⛔ 面板/日志靠这四项看出「哪几个信号在投票、此刻命中了谁」——
+          旧版只有 `ctOff + ctVal`（单字段），真机上 NP 恒 0 时完全无从判断
+          「是笔真的悬空」还是「判据字段选错了」。 */
+    g_cfg[CFG_I_CTOFF]     = (g_ctN > 0) ? (LONG)g_ctOff[0] : -1;
+    g_cfg[CFG_I_CTVAL]     = g_ctVal;
+    g_cfg[CFG_I_CTMASK]    = g_ctMask;
+    {
+        /* ⛔ 只打包**前 4 个**信号：一个 LONG 放得下 4 个字节偏移，而权威路径
+           （掩码 + 数据双证据）恰好只有 3 个（buttons/NP/TP）。
+           空位一律填 0xFF（合法偏移最大 51）⇒ 面板/日志据此数出信号个数，
+           不需要额外的「计数」槽位。完整信号表仍在 [ct] 日志行里。 */
+        LONG elig = 0, offs = 0;
+        for (int i = 0; i < 4; i++) {
+            int o = (i < g_ctN) ? (g_ctOff[i] & 0xFF) : 0xFF;
+            if (i < g_ctN && g_ctElig[i] == 1) elig |= (1L << i);
+            offs |= ((LONG)o) << (i * 8);
+        }
+        g_cfg[CFG_I_CTELIG] = elig;
+        g_cfg[CFG_I_CTOFFS] = offs;
+    }
+    g_cfg[CFG_I_PXNX]      = g_axCalX.n;
+    g_cfg[CFG_I_PXNY]      = g_axCalY.n;
     /* 轴→像素比（×1000，**逐轴带符号**）：1.0 表示包坐标本身就是屏幕像素；
        若远小于 1（如 0.0586 = 1920/32767）说明包坐标是数位板逻辑单位。
        ⛔ Y 那一份必须带符号（Wintab 的 Y 向上为正、屏幕向下为正）—— 面板/排障
@@ -1803,6 +2171,36 @@ static DWORD WINAPI worker(LPVOID param)
                  (long)g_rstAnchor, (long)g_rstGap, (long)g_rstJump, (long)g_lastGapMs,
                  (long)g_hCtxChanges,
                  (unsigned long)(LONG_PTR)g_ctxLastFrom, (unsigned long)(LONG_PTR)g_ctxLastTo);
+            /* P3.5：与面板诊断条**同一份数据**的日志版 —— 面板来不及看时看这里。
+               ⛔ reason 名字必须与 C#/TS 的原因码表逐项一致（见 RS_* 枚举）。 */
+            logf("# [why] reason=%d(%s) gate/open=%ld close=%ld penDown=%ld toolOk=%ld "
+                 "ctUnknown=%ld ctN=%d ctVal=%ld pxN=%ld/%ld（闸门为累计值；判抖动看两次读数的增量）\n",
+                 (long)g_reason, rs_name(g_reason),
+                 (long)g_gateOpen, (long)g_gateClose, (long)g_penDown, (long)g_toolOk,
+                 (long)g_ctUnknown, g_ctN, (long)g_ctVal,
+                 (long)g_axCalX.n, (long)g_axCalY.n);
+            /* P3.6 落笔判据的**信号表**（多信号并联）—— 本轮排障的第一现场。
+               ⛔ 判读（缺一不可）：
+                 · 每个 `+off` 后面的 `*` = 该信号已取得投票权（同时见过 0 与非 0）。
+                   一个 `*` 都没有 ⇒ 判据压根没建立，宽限之后会**阻断一切平滑**。
+                 · 生效掩码：bit i = 第 i 个信号有投票权（十进制）。
+                 · 本批命中：bit i = 第 i 个信号把闸门顶上去了（十进制；0 = 本批全零）。
+                 · 连续全零 N 包：≈N×5ms。**这就是「闸门被压住多久」**——
+                   运笔中 N 一大（>20）说明判据在真实绘制中成段失效（本轮要修的就是它）；
+                   只有停笔/换工具时 N 才该变大。 */
+            {
+                char sbuf[192];
+                int sn_ = sprintf(sbuf, "# [ct] 信号=");
+                if (g_ctN <= 0) sn_ += sprintf(sbuf + sn_, "（无）");
+                for (int i = 0; i < g_ctN && sn_ < 130; i++)
+                    sn_ += sprintf(sbuf + sn_, "%s+%d%s", i ? " " : "",
+                                   g_ctOff[i], (g_ctElig[i] == 1) ? "*" : "");
+                long eligMask = 0;
+                for (int i = 0; i < g_ctN; i++) if (g_ctElig[i] == 1) eligMask |= (1L << i);
+                sn_ += sprintf(sbuf + sn_, "  生效=%ld 本批命中=%ld 连续全零=%ld 包\n",
+                               eligMask, (long)g_ctMask, (long)g_ctZeroRun);
+                log_write(sbuf, sn_);
+            }
         }
     }
 
@@ -1999,15 +2397,20 @@ static DWORD WINAPI hud_thread(LPVOID param)
         LONG snRawX = g_snRawX, snRawY = g_snRawY, snOutX = g_snOutX, snOutY = g_snOutY;
         LONG snMs = g_snMs, snPrevMs = g_snPrevMs;
         LONG snPrevRawX = g_snPrevRawX, snPrevRawY = g_snPrevRawY;
+        LONG snPrevOutX = g_snPrevOutX, snPrevOutY = g_snPrevOutY;
         for (int snapTry = 0; snapTry < 8; snapTry++) {
             LONG a0 = g_snRawX, a1 = g_snRawY, a2 = g_snOutX, a3 = g_snOutY;
             LONG a4 = g_snMs, a5 = g_snPrevMs, a6 = g_snPrevRawX, a7 = g_snPrevRawY;
+            LONG a8 = g_snPrevOutX, a9 = g_snPrevOutY;
             LONG b0 = g_snRawX, b1 = g_snRawY, b2 = g_snOutX, b3 = g_snOutY;
             LONG b4 = g_snMs, b5 = g_snPrevMs, b6 = g_snPrevRawX, b7 = g_snPrevRawY;
+            LONG b8 = g_snPrevOutX, b9 = g_snPrevOutY;
             if (a0 == b0 && a1 == b1 && a2 == b2 && a3 == b3
-             && a4 == b4 && a5 == b5 && a6 == b6 && a7 == b7) {
+             && a4 == b4 && a5 == b5 && a6 == b6 && a7 == b7
+             && a8 == b8 && a9 == b9) {
                 snRawX = a0; snRawY = a1; snOutX = a2; snOutY = a3;
                 snMs = a4; snPrevMs = a5; snPrevRawX = a6; snPrevRawY = a7;
+                snPrevOutX = a8; snPrevOutY = a9;
                 break;
             }
         }
@@ -2031,9 +2434,17 @@ static DWORD WINAPI hud_thread(LPVOID param)
         /* ⛔⛔ 光标外推（2026-10-14，问题 2「受力点与选区末端有几像素漂移」）：
            快照里的 raw 是「最后一个包」的时刻，GetCursorPos 是**这一帧**的时刻；
            高速运笔时两者差出一个包-帧相位差 ⇒ 偏移差 v·Δt（500px/s、半帧 4ms
-           就是 2px）。用前两个包估原始速度，把 raw 外推到当前帧时刻，
-           「偏移 ↔ 光标」两端才真正同刻。限幅 40ms（超过视为停笔，不外推）。 */
+           就是 2px）。用前两个包估速度，把 raw **与 out 都**外推到当前帧时刻，
+           「偏移 ↔ 光标」两端才真正同刻。限幅 40ms（超过视为停笔，不外推）。
+           ⛔⛔ 2026-10-14 第五轮（问题 3「受力点和圆心依然会分离」）：**out 也必须外推**。
+              几何恒等式是：光标(此刻) − offset(此刻) = 绘制点(此刻)。
+              只外推 raw 的话，offset 里的 out 仍停在**包时刻**，圆心于是落在
+              「out 的包时刻位置」上 —— 落后真实绘制点 v_out·Δt。
+              真机实测：深色折线端点（真实绘制点）与圆心恒差 **15px**（100px 绳），
+              而 15px 恰好 ≈ 0.0676(pxX) × 220(轴/帧差) —— 正是这个不对称。
+              两端同刻之后圆心与受力点才严格重合。 */
         double axX = (double)snRawX, axY = (double)snRawY;
+        double aoX = (double)snOutX, aoY = (double)snOutY;
         {
             LONG pktDt = snMs - snPrevMs;
             DWORD age = (DWORD)(now - (DWORD)snMs);
@@ -2042,6 +2453,11 @@ static DWORD WINAPI hud_thread(LPVOID param)
                 double vY = ((double)snRawY - (double)snPrevRawY) / (double)pktDt;
                 axX += vX * (double)age;
                 axY += vY * (double)age;
+                /* out 的速度同样用前两个包估（包 pktDt 相同）⇒ 两端推进量一致。 */
+                double uX = ((double)snOutX - (double)snPrevOutX) / (double)pktDt;
+                double uY = ((double)snOutY - (double)snPrevOutY) / (double)pktDt;
+                aoX += uX * (double)age;
+                aoY += uY * (double)age;
             }
         }
 
@@ -2120,11 +2536,13 @@ static DWORD WINAPI hud_thread(LPVOID param)
               那些截图只是**现象示意**、并非真实截图 ⇒ 该量化结论作废，不得再引用。
              逐轴换算的**真正**依据是 [calib] 日志的 lcInExtX/lcInExtY（见 px_x/px_y 注释）。
            ⛔ 偏移逐轴换算；**符号不在此处假设**，由 calib_axis() 实测（见 px_y 注释）。 */
-        /* ⛔ 偏移用**外推后**的原始轴（axX/axY，见上）：选区末端（输出点）与光标
-           必须同刻比较，否则高速运笔时受力点看着差几像素。
-           偏移逐轴换算；**符号不在此处假设**，由 calib_axis() 实测（见 px_y 注释）。 */
-        int rx = (int)((axX - (double)snOutX) * px_x());
-        int ry = (int)((axY - (double)snOutY) * px_y());
+        /* ⛔ 偏移用**两端都外推**后的坐标（axX/axY 与 aoX/aoY，见上）：
+           选区末端（输出点）与光标必须**同刻**比较，否则高速运笔时受力点看着差几像素。
+           ⛔⛔ 只外推 raw 是上一轮的真 bug：圆心会落在 out 的**包时刻**位置，
+              真机实测与真实绘制点恒差 15px（100px 绳）。
+           偏移逐轴换算；**符号不在此处假设**，由驱动 lcOutExt（或 calib_axis 实测）给出。 */
+        int rx = (int)((axX - aoX) * px_x());
+        int ry = (int)((axY - aoY) * px_y());
         LONG c  = g_cfg[CFG_I_HUDCOLOR];
         COLORREF col = RGB((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
 

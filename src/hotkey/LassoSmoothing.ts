@@ -33,6 +33,46 @@ export type LassoSmoothMode = 'standard' | 'rope' | 'catchup';
  */
 export type SmoothToolGate = 0 | 1 | 2;   // 0=不是套索 1=是套索（唯一放行值） 2=未知（原生侧阻断，等首次读数）
 
+/**
+ * 「此刻为什么没在改写坐标」——原生侧（hook DLL）在**裁决的同一处**写下的原因码。
+ *
+ * ⛔⛔ 2026-10-14 第三轮定案（用户原话：「现在诊断不具备可用性……我落笔的时候，
+ *    已经画了一段选区了，面板仍然显示已就绪，等笔尖落纸，我早就已经落了！」）：
+ *    面板**不允许**自己从 toolGate / penDown / gateOk 拼原因 —— DLL 在闸门不成立时
+ *    会主动把 penDown 写成 0（见 wintab_hook.c 的阻断分支），于是
+ *    「闸门心跳过期」与「笔尖真的悬空」在面板上长得一模一样，诊断永远吐
+ *    「等笔尖落纸」。唯一可行的做法是**原生侧报原因码**，面板只做展示。
+ *
+ * ⚠️ 与 C 侧 `RS_*`、C# 侧 `reason` 注释**三处逐项对应**，改一处必须同步另两处。
+ */
+export type SmoothReason =
+    | 0   // 正在改写坐标（正常）
+    | 1   // 总开关未开
+    | 2   // 工具闸门：当前工具不是套索
+    | 3   // 工具闸门：面板从未上报过（未知 ⇒ fail-closed 阻断）
+    | 4   // 工具闸门：心跳过期（面板 >3s 未上报）
+    | 5   // 笔尖未落纸（悬空移动）
+    | 6   // 落笔判据**尚未建立**（无信号，或还没有信号同时见过 0 与非 0）；
+          //   冷启动宽限（≈3s）内仍按「落笔」放行，宽限之后按「未落笔」阻断
+    | 7   // 标定未完成 / 失败
+    | 8;  // 还没取到包 / 上下文未知
+
+/** 原因码 → 面板文案（唯一文案表；诊断条与状态条都从这里取，禁止各写一份）。 */
+export function smoothReasonText(r: number): string {
+    switch (r) {
+        case 0:  return '正在改写坐标';
+        case 1:  return '平滑总开关未开';
+        case 2:  return '当前工具不是套索';
+        case 3:  return '尚未收到面板的工具上报';
+        case 4:  return '工具上报已超时（超过 3 秒没有心跳）';
+        case 5:  return '笔尖未落纸（悬空）';
+        case 6:  return '落笔判据尚未建立（信号还没攒够证据）';
+        case 7:  return '原生侧标定未完成';
+        case 8:  return '尚未取到数位板数据包';
+        default: return '未知状态（' + r + '）';
+    }
+}
+
 /** 参数面（与 Program.cs 的 PenHook.PenParams 一一对应；鼠标通路字段已移除）。 */
 export interface LassoSmoothParams {
   /** 滤波族：标准（一阶低通）/ 拉绳 / 追笔。 */
@@ -47,9 +87,33 @@ export interface LassoSmoothParams {
    *    两个参数改的是同一件事（圆周大小），用户实测后要求删除。现在一个参数一个语义。
    */
   radius: number;
-  /** 追笔速度 0–100。 */
+  /**
+   * 追笔「平滑力度」1–100（**显示值**，数值越大 = 平滑越强）。
+   *
+   * ⛔ 2026-10-14 重映射：原生侧的有效区间本来是 1–50
+   *    （`vmax = 0.02 + t/100·3.0` ⇒ t=1 → 0.05 px/ms、t=50 → 1.52 px/ms，
+   *    正好覆盖人的运笔速度区间 0.05~1.5 px/ms）。用户实测后要求
+   *    「数值越大 = 平滑力度越大」，与其它模式一致 ⇒ 面板显示 1–100 **反向**映射：
+   *      显示 1   → 原生 50（跟手，几乎不平滑）
+   *      显示 100 → 原生 1 （最黏，平滑最强）
+   *    换算见 `catchUpToNative()`；下发前一律取整（见 `toWire` 的 ⛔）。
+   */
   catchUp: number;
-  /** 拐角判定角度 0–90：夹角超过它即减弱平滑，保住尖角。 */
+  /**
+   * 拐角判定角度 0–90（**原生单位，面板不做任何映射**）。
+   *
+   * ⛔⛔ 2026-10-14 回退定案：这里曾短暂改成「保护范围」（显示 = 90 − 原生阈值，
+   *    数值越大保护越广）。用户实测后明确要求回退 —— 「现在反而更加让人迷惑了」。
+   *    回退理由（结构性，不是口味问题）：面板上**其它每一个参数都是「越大越强」**，
+   *    唯独拐角被反转成「越大 = 保护越广 = 平滑越少」，与「强度」「半径」「力度」
+   *    的直觉方向相反；参数之间相互比较时极易误判，而且与原生单位不一致，
+   *    排障时要多做一次心算。现在**显示值 = 原生阈值**，一一对应、无需换算。
+   *
+   * ⚠️ 语义提醒（面板文案已按此写）：这里说的是**转折角**不是夹角 ——
+   *    相邻两段方向的夹角超过该值即判为「拐角」并减弱平滑。
+   *    ⇒ **数值越小越容易触发保护**（0 = 几乎每帧都保护）。
+   *    这是原生判据本身的方向，不改；面板如实呈现，不再反向。
+   */
   cornerAngle: number;
   /** 甩笔时自动减弱平滑（减少快速拖拽的滞后）。 */
   speedAdaptive: boolean;
@@ -65,6 +129,48 @@ export interface LassoSmoothParams {
 /** 参数的取值范围（面板滑杆与原生侧共用同一套上下限，勿各写一份）。 */
 export const SMOOTH_RADIUS_MIN = 1;
 export const SMOOTH_RADIUS_MAX = 100;
+
+/** 追笔「平滑力度」的显示量程（1–100，越大越黏）。原生有效区间见下。 */
+export const SMOOTH_CATCHUP_MIN = 1;
+export const SMOOTH_CATCHUP_MAX = 100;
+/** 原生追笔速度的有效区间（与 wintab_hook.c 的 `vmax = 0.02 + t/100·3.0` 一致）。 */
+const CATCHUP_NATIVE_MIN = 1;
+const CATCHUP_NATIVE_MAX = 50;
+
+/**
+ * 拐角判定角度的量程（0–90，**原生单位**）。
+ * ⛔ 2026-10-14 随「保护范围」回退一并恢复：显示值就是原生阈值，不再有反向映射。
+ */
+export const SMOOTH_CORNER_MIN = 0;
+export const SMOOTH_CORNER_MAX = 90;
+
+function clampNum(v: number, lo: number, hi: number): number {
+    if (!Number.isFinite(v)) return lo;
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+/**
+ * 追笔：显示力度(1–100) → 原生速度(1–50)。**数值越大 = 平滑越强**。
+ * ⛔ 端点严格对齐用户口径：显示 1 → 原生 50（跟手）、显示 100 → 原生 1（最黏）。
+ */
+export function catchUpToNative(display: number): number {
+    const d = clampNum(display, SMOOTH_CATCHUP_MIN, SMOOTH_CATCHUP_MAX);
+    const t = (d - SMOOTH_CATCHUP_MIN) / (SMOOTH_CATCHUP_MAX - SMOOTH_CATCHUP_MIN);   // 0..1
+    const native = CATCHUP_NATIVE_MAX - t * (CATCHUP_NATIVE_MAX - CATCHUP_NATIVE_MIN);
+    return Math.round(clampNum(native, CATCHUP_NATIVE_MIN, CATCHUP_NATIVE_MAX));
+}
+
+/**
+ * 拐角：显示值 = 原生转折角阈值，**恒等**（保留函数只为让 `toWire` 的换算意图显式可见）。
+ * ⛔⛔ 2026-10-14 回退定案：这里曾做过 `90 − display` 的反向映射（显示「保护范围」），
+ *    用户实测后要求回退 —— 「现在反而更加让人迷惑了」。
+ *    回退理由：面板其它参数全是「越大越强」，唯独拐角被反转成「越大 = 平滑越少」，
+ *    方向与全体不一致，比较参数时极易误判。现在**显示值与原生值一一对应**。
+ */
+export function cornerToNative(display: number): number {
+    const d = clampNum(display, SMOOTH_CORNER_MIN, SMOOTH_CORNER_MAX);
+    return Math.round(d);
+}
 
 /**
  * 默认值。
@@ -140,9 +246,66 @@ export interface PenSmoothStatus {
      *    否则用户只会觉得「这个开关没用」，而排查的人连「判据没生效」都不知道。
      */
     contactUnknown: number;
-  /** 追笔速度 0–100。 */
+  /**
+   * 原生侧回报：**此刻为什么没在改写坐标**（见 `SmoothReason`）。
+   *
+   * ⛔ 这是诊断条的唯一权威判据。绝不能退回成「面板自己拼 toolGate/penDown/gateOk」：
+   *    那样必然把「心跳过期」显示成「等笔尖落纸」（真机复现的原始投诉）。
+   * ⚠️ 它是**上一次裁决的结论**，空闲时会停在最后一个值 —— 必须结合 `snAge` / `state`
+   *    判断这条结论是否还新鲜（见面板 smoothDiagText 的处理）。
+   * ⚠️ **-1 = 对端不报该字段**（旧版守护进程）⇒ 面板必须退回旧的
+   *    toolOk/penDown/gateOk 判据，不能把 -1 当成一个真实原因显示。
+   */
+  reason: number;
+  /**
+   * 原生侧回报：闸门「关→开」/「开→关」的累计次数（**累计值**）。
+   *
+   * ⛔ 判抖动必须用**两次回报之间的增量**，不能直接看这两个总数的差额 ——
+   *    画了一百笔之后两者都接近 100、差额恒为 0，光看总数永远看不出抖动。
+   *    正确判据 = 一次回报内 Δopen 就涨了好几次：闸门在一笔之中反复开合，
+   *    选区就被劈成一段一段（见 app.tsx 的 lastGateDeltaOpen）。
+   */
+  gateOpen: number;
+  gateClose: number;
+  /**
+   * 原生侧回报的落笔判据信号表（**多信号并联**，2026-10-14 第五轮）。
+   *
+   * 判据 = buttons / pkNormalPressure / pkTangentPressure **任一非零**即「落笔」；
+   * 三者全零且持续 CONTACT_HOLD_MS(250ms) 才算抬笔。旧版只认**一个**字段
+   * （真机取到 pkNormalPressure=32），而套索是轻触运笔、笔压会成段读到 0 ⇒
+   * 闸门反复闭合 ⇒ 重新锚定 + HUD 隐藏（用户报的「平滑和 HUD 一起失灵」）。
+   *
+   * ⛔ 判读：
+   *   · `ctOff`   = **首选**信号偏移（-1 = 无信号）；
+   *   · `ctVal`   = 首选信号最近一包的原始值；
+   *   · `ctElig`  = **有投票权**的信号位掩码（bit i = 第 i 个信号同时见过 0 与非 0）；
+   *   · `ctHit`   = **本批命中**的信号位掩码（bit i = 第 i 个信号非零，把闸门顶上去了）；
+   *   · `ctOffs`  = 信号偏移打包（第 i 个占第 i×8 位）⇒ 能看出「到底在盯哪几个字节」。
+   *   `ctElig === 0` 意味着判据**压根没建立**（宽限之后会阻断一切平滑）。
+   */
+  ctElig: number;
+  ctHit: number;
+  ctOffs: number;
+  /**
+   * 原生侧回报：落笔判据**首选**信号偏移 + 它最近一包读到的值（`ctOff = -1` ⇒ 无信号）。
+   *
+   * ⛔ 「判据字段一直读到 0」与「闸门被其他条件阻断」的唯一区分依据 ——
+   *    前者 ctOff 有效而 ctVal=0，后者原因码会先报闸门。
+   */
+  ctOff: number;
+  ctVal: number;
+  /**
+   * 原生侧回报：逐轴「轴→像素」标定的**样本数**。
+   *
+   * ⛔ 为什么必须暴露：标定器改成了「位移加和」（等效窗口 256 样本、噪声按 √N 收敛），
+   *    采信门槛是 24 个样本。样本数不够时 pxPerAxis 仍用标称兜底，**方向信息不可信** ——
+   *    「圆心与受力点分离」这类问题的第一判据就是它够不够。
+   */
+  pxNx: number;
+  pxNy: number;
+  /** 原生侧回报：追笔速度（**原生单位 1–50**，面板显示值是它的反向映射）。 */
   catchUp: number;
-  /** 拐角判定角度 0–90。 */
+  /** 原生侧回报：拐角转折角阈值（**原生单位 0–90**，面板显示值是它的反向映射）。 */
   cornerAngle: number;
   /** 速度自适应是否开启。 */
   speedAdaptive: boolean;
@@ -193,6 +356,16 @@ export const initialPenSmoothStatus: PenSmoothStatus = {
     penDown: 0,
     gateOk: 0,
     contactUnknown: 0,
+    reason: -1,         // -1 = 对端（旧版守护进程）不报原因码 ⇒ 面板退回旧判据
+    gateOpen: 0,
+    gateClose: 0,
+    ctOff: -1,
+    ctVal: 0,
+    ctElig: 0,
+    ctHit: 0,
+    ctOffs: 0,
+    pxNx: 0,
+    pxNy: 0,
   pxPerAxis: 0,
   pxPerAxisY: 0,
   injectedCount: 0,
@@ -265,10 +438,19 @@ function send(msg: any): void {
 function toWire(p: LassoSmoothParams) {
     return {
         mode: MODE_TO_WIRE[p.mode] ?? 0,
-        strength: p.strength,
-        radius: p.radius,
-        catchUp: p.catchUp,
-        cornerAngle: p.cornerAngle,
+        // ⛔⛔ 一律取整（**第一道防线，唯一咽喉**）。
+        //   起因（真机事故）：这里曾原样透传面板值，而 RangeSlider / 标签拖拽 / 持久化
+        //   任一条路径都可能漏出小数（如 radius=95.5）。旧版守护进程的 PenWire 字段是
+        //   `int?`，System.Text.Json 把 "95.5" 读进 int? 会**抛异常** ⇒ 外层 catch 把
+        //   **整条 penSmooth**（连同 on / mode / toolGate / heal / broadcast）整包丢弃，
+        //   用户看到的现象就是「切换模式后平滑中断」（真实日志有 137 条
+        //   `The JSON value could not be converted to System.Nullable\`1[System.Int32]`）。
+        //   现在两端都设防：这里取整；守护进程侧 PenWire 也改用 `double?` 接收（第二道
+        //   防线）。但**这道不能撤** —— 旧版 daemon 仍在野生环境里跑。
+        strength: Math.round(p.strength),
+        radius: Math.round(p.radius),
+        catchUp: catchUpToNative(p.catchUp),
+        cornerAngle: cornerToNative(p.cornerAngle),
         speedAdaptive: p.speedAdaptive,
         // 拉绳提示的位域（bit0=弹性画笔带 bit1=绳长圆 bit2=笔尖点）
         hud: p.showLeash ? 7 : 0,
@@ -453,6 +635,11 @@ export function getSmoothToolGate(): SmoothToolGate {
  */
 export function setPenSmooth(on: boolean, p?: LassoSmoothParams): void {
   penOn = on;
+  // ⛔ 带参数调用时必须**同步模块副本**：模块级 `params` 是心跳（forceSendParams）与
+  //    重连重放（resendLassoSmoothing）的数据源，若只发不改，之后 1.5s 一次的心跳会用
+  //    陈旧的模块值整包覆盖守护进程 ⇒ 用户刚改的模式/参数被无声冲回（真机复现过
+  //    「拖完滑杆过一两秒又弹回」）。pushLassoSmoothParams 也写同一份，两处保持一致。
+  if (p) params = { ...p };
   syncGateHeartbeat();
   send({ type: 'penSmooth', on, ...(p ? toWire(p) : {}) });
 }
@@ -497,6 +684,24 @@ export function handleLassoSmoothMessage(msg: any): void {
       penDown: Number(penRaw.penDown) || 0,
       gateOk: Number(penRaw.gateOk) || 0,
       contactUnknown: Number(penRaw.contactUnknown) || 0,
+      // P3.5 诊断字段。⚠️ 旧版守护进程不回它们 ⇒ 用 `=== undefined ? 旧值 : …`
+      //    逐个回落，绝不能让 undefined/NaN 进 state（诊断文字会先被 NaN 污染，
+      //    而那正是「诊断不可用」的复现路径）。
+      //   ⛔ reason 的回落值是 **-1（对端不报原因）**，不是 0：0 的含义是
+      //      「正在改写」，把「不认识」当成「正在改写」会让诊断条说假话。
+      reason: penRaw.reason === undefined ? -1 : (Number(penRaw.reason) || 0),
+      gateOpen: penRaw.gateOpen === undefined ? status.pen.gateOpen : (Number(penRaw.gateOpen) || 0),
+      gateClose: penRaw.gateClose === undefined ? status.pen.gateClose : (Number(penRaw.gateClose) || 0),
+      // ctOff 的 -1 是**合法值**（尚无信号）⇒ 不能用 `|| 0` 兜（会把 -1 洗成 0）。
+      ctOff: penRaw.ctOff === undefined ? status.pen.ctOff : (Number.isFinite(Number(penRaw.ctOff)) ? Number(penRaw.ctOff) : status.pen.ctOff),
+      ctVal: penRaw.ctVal === undefined ? status.pen.ctVal : (Number(penRaw.ctVal) || 0),
+      // P3.6 落笔判据信号表（多信号并联）。同样逐个回落：旧版守护进程不回这三个字段，
+      // 回落成 0 只表示「没有投票信号」，不会污染诊断文字（文案里有专门措辞）。
+      ctElig: penRaw.ctElig === undefined ? status.pen.ctElig : (Number(penRaw.ctElig) || 0),
+      ctHit: penRaw.ctHit === undefined ? status.pen.ctHit : (Number(penRaw.ctHit) || 0),
+      ctOffs: penRaw.ctOffs === undefined ? status.pen.ctOffs : (Number(penRaw.ctOffs) || 0),
+      pxNx: penRaw.pxNx === undefined ? status.pen.pxNx : (Number(penRaw.pxNx) || 0),
+      pxNy: penRaw.pxNy === undefined ? status.pen.pxNy : (Number(penRaw.pxNy) || 0),
       pxPerAxis: Number(penRaw.pxPerAxis) || 0,
       // ⛔ Y 那一份**不能**用 `|| 0` 兜 NaN —— 负数是合法值（真机应是负的）。
       //    旧版守护进程不回该字段 ⇒ 保持原值（初值 0 = 未标定）。
