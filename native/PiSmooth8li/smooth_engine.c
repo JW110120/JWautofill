@@ -820,9 +820,66 @@ static double g_pxAxisY = 0.0;
 static volatile LONG g_pxSrc;
 /** 是否已被光标标定过（标定后不再被标称初值覆盖）。 */
 static volatile LONG g_pxCalibrated;
-/** 主屏/虚拟屏宽度、高度（px）：标称「轴→像素比」的分母来源，worker 启动时取一次。 */
+/** 主屏/虚拟屏宽度、高度（px）：标称「轴→像素比」的分母来源，worker 启动时取一次。
+    ⛔ 进程是 PER_MONITOR_AWARE（真机实测 GetProcessDpiAwareness=2）⇒ 这是**物理**像素。 */
 static int g_screenW;
 static int g_screenH;
+
+/* ================================================ DPI 缩放（分辨率适配的唯一权威）
+ * ⛔⛔ 2026-10-15 定案（用户「多台不同分辨率的测试电脑，套索平滑需要适配不同分辨率」）：
+ *   PS 是 PER_MONITOR_AWARE ⇒ 进程内的一切（SM_CXVIRTUALSCREEN、GetCursorPos、
+ *   驱动 lcOutExt）都是**物理像素**。而面板滑杆 / 用户的心智单位是**逻辑像素**。
+ *   真机：主屏 3840×2160 @150% ⇒ 虚拟屏 6000×3840 物理、驱动 lcOutExt 同样 6000×3840
+ *   —— 坐标口径**没有错**，错的是**尺度**：半径 100 物理 px 在 150% 下只有 66.7 逻辑 px，
+ *   200% 下只剩 50 ⇒ 同一滑杆在不同机器上观感完全不同，平滑强度、追笔速度、
+ *   甩笔阈值、HUD 尺寸、断流看门狗的位移门限全部跟着变。
+ * ⇒ 统一引入「DPI 缩放」= 物理像素 / 逻辑像素，所有**面向用户**的像素量乘以它，
+ *   所有**面向屏幕**的量（HUD 窗口、轴→像素换算）保持物理域。
+ *
+ * ⛔ 用**整数毫倍**（1500 = 1.5×）做唯一真值：detour 是 205Hz 热路径，
+ *   读 LONG 是原子的，读 double 不是。换算只在非热路径做一次。 */
+static volatile LONG g_dpiScaleMilli = 1000;   /* 1000 = 1.0×（96 DPI） */
+static double dpi_scale(void)
+{
+    LONG m = g_dpiScaleMilli;
+    if (m < 250) m = 250; else if (m > 8000) m = 8000;
+    return (double)m / 1000.0;
+}
+
+/* ⛔ shcore.dll 只**动态**取（不进导入表）：本模块刻意保持最小依赖集，
+   Win7/未带 shcore 的环境取不到就退回 1.0×（= 旧行为，不会更差）。 */
+typedef LONG (*PFN_GetDpiForMonitor)(HMONITOR, int, UINT*, UINT*);
+static LONG g_dpiProbeTried;
+static PFN_GetDpiForMonitor g_pGetDpiForMonitor;
+
+/** 以**光标所在显示器**为准更新缩放（笔就在那儿；多屏不同缩放时这才是正确的那个）。
+    ⛔ 只能在 worker / HUD 线程调用（有系统调用）。 */
+static void dpi_update_scale(void)
+{
+    if (!g_dpiProbeTried) {
+        g_dpiProbeTried = 1;
+        HMODULE hs = LoadLibraryA("shcore.dll");
+        if (hs) g_pGetDpiForMonitor =
+            (PFN_GetDpiForMonitor)(void*)GetProcAddress(hs, "GetDpiForMonitor");
+    }
+    if (!g_pGetDpiForMonitor) return;
+    POINT pt;
+    if (!GetCursorPos(&pt)) return;
+    HMONITOR hm = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+    if (!hm) return;
+    UINT dx = 96, dy = 96;
+    if (g_pGetDpiForMonitor(hm, 0 /*MDT_EFFECTIVE_DPI*/, &dx, &dy) != 0) return;
+    if (dx < 96) dx = 96; else if (dx > 768) dx = 768;
+    LONG milli = (LONG)((double)dx * 1000.0 / 96.0 + 0.5);
+    if (milli != g_dpiScaleMilli) InterlockedExchange(&g_dpiScaleMilli, milli);
+}
+
+/* 驱动**输出量程**指纹（lcOutExtX/Y）：用户在驱动面板里改「映射到单个屏幕 / 强制比例」
+   时屏幕尺寸不变、只有它变 ⇒ 必须一并进重标定判据（2026-10-15）。 */
+static volatile LONG g_drvOutX, g_drvOutY;
+/* 上一次的「环境指纹」（屏幕尺寸 / DPI 缩放 / 驱动映射），worker 每 250ms 比对一次。 */
+static LONG g_fprScale;
+static LONG g_fprOutX, g_fprOutY;
 
 /** 逐轴标定器：符号要「连续多次一致」才敢采用，量值用 EMA 收敛。
     ⛔ 为什么不能只用 EMA：符号一旦被一个坏样本锁反，EMA 要穿越 0 才能纠正回来，
@@ -995,7 +1052,9 @@ static void calib_axis(AXCAL* a, double dAx, double dCur)
 {
     double aax  = dAx  < 0 ? -dAx  : dAx;
     double acur = dCur < 0 ? -dCur : dCur;
-    if (acur < CUR_SAMPLE_MIN) return;      /* 光标位移太小 ⇒ 整数像素量化主导（±1px 即 ±20%） */
+    /* ⛔ 门限是**逻辑像素**：150% 屏上 1 逻辑 px = 1.5 物理 px，不归一的话
+       高分屏会在更小的真实位移上取样 ⇒ 量化噪声占比反而变高（2026-10-15）。 */
+    if (acur < CUR_SAMPLE_MIN * dpi_scale()) return;   /* 光标位移太小 ⇒ 整数像素量化主导 */
     if (aax  < AX_SAMPLE_MIN)  return;      /* 本轴原始位移太小 ⇒ 比值不可信 */
     int s = ((dCur > 0) == (dAx > 0)) ? 1 : -1;
     /* ⛔ 符号锁定（见 AXCAL.signLocked 注释）：锁定后本函数的「投票」只剩记录作用，
@@ -1400,6 +1459,9 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
             memcpy(&outOrgY, lcBuf + WT_LC_OUTORGY_OFF, sizeof(outOrgY));
             memcpy(&outExtX, lcBuf + WT_LC_OUTEXTX_OFF, sizeof(outExtX));
             memcpy(&outExtY, lcBuf + WT_LC_OUTEXTY_OFF, sizeof(outExtY));
+            /* ⛔ 驱动映射指纹（2026-10-15）：改「映射到单屏 / 强制比例」时屏幕尺寸不变，
+               只有 lcOutExt 变 ⇒ 靠它才能触发重标定。取**原始值**（未除定标系数）。 */
+            if (outExtX != 0 || outExtY != 0) { g_drvOutX = outExtX; g_drvOutY = outExtY; }
         }
     }
 
@@ -1738,6 +1800,10 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
        「光标触碰到圆圈时圈就闪」其实是「画的圈」与「真实约束」不是同一条曲线）。
        ⛔ 只做普通内存读，不违反 detour 零系统调用铁律。 */
     const double cX = px_x(), cY = px_y();
+    /* ⛔⛔ DPI 缩放（2026-10-15）：面板上的「半径 / 追笔速度 / 甩笔阈值 / 拐角门限」
+       都是**逻辑像素**，而 cX/cY（轴→像素）是**物理**像素 ⇒ 一律乘 dpiS 才进同一域。
+       150% 屏上半径 100 ⇒ 150 物理 px，观感与 100% 屏上的 100px 一致。 */
+    const double dpiS = dpi_scale();
     double t = (double)g_cfg[CFG_I_STRENGTH]; if (t < 0) t = 0; if (t > 100) t = 100;
     int radiusPx = g_cfg[CFG_I_RADIUSPX]; if (radiusPx < 1) radiusPx = 1;
     if (radiusPx > RADIUS_PX_MAX) radiusPx = RADIUS_PX_MAX;
@@ -1746,8 +1812,8 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
 
     /* 半径 / 绳长 / 追笔距离一律在**屏幕像素**域里比：位移逐轴换算成像素后再取模长，
        于是「画的圈」= 「真实约束」= 同一条曲线（逐轴对称时轴空间的距离会变成椭圆）。 */
-    const double radiusPxF = (double)radiusPx;
-    const double jumpPx = JUMP_RESET_FRAC * (double)g_calib.axisMax * (cX < 0 ? -cX : cX);
+    const double radiusPxF = (double)radiusPx * dpiS;          /* 逻辑 px → 物理 px */
+    const double jumpPx = JUMP_RESET_FRAC * (double)g_calib.axisMax * (cX < 0 ? -cX : cX) * dpiS;
     const double cornerCos = cos_deg_series(cornerDeg);
 
     const int speedAdaptive = (flags & 1) ? 1 : 0;
@@ -1813,7 +1879,7 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
         int corner = 0;
         if (distPx > 0.01) {
             double ux = dpx / distPx, uy = dpy / distPx;
-            if (mode == 0 && g_hasDir && distPx > CORNER_MIN_PX) {
+            if (mode == 0 && g_hasDir && distPx > CORNER_MIN_PX * dpiS) {
                 double dot = ux * g_dirX + uy * g_dirY;
                 if (dot > 1.0) dot = 1.0; else if (dot < -1.0) dot = -1.0;
                 if (dot < cornerCos) corner = 1;   /* ⟺ 转折角 > cornerDeg。
@@ -1868,7 +1934,7 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
                   与「数值越大越接近手绘」的文案一致，两端差别也才够明显。 */
             /* ⛔ catchUp 由面板反向映射后落在 1–50（显示「追笔力度」越大 → 本值越小 →
                vmax 越小 → 追赶越慢 → 越黏）。此处按 0..100 通用公式计算即可，无需改。 */
-            double vmax = 0.02 + ((double)catchUp / 100.0) * 3.0;   /* px/ms */
+            double vmax = (0.02 + ((double)catchUp / 100.0) * 3.0) * dpiS;   /* 物理 px/ms */
             double step = vmax * dt;                                /* 像素（与 distPx 同域） */
             if (distPx > step && distPx > 0.0001) {
                 double f = step / distPx;
@@ -1891,7 +1957,7 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
                       与「平滑感知几乎为零」的实测完全吻合（强度拉满也只有 ~8px 滞后）。
                       现在阈值抬到 3.0px/ms（3000px/s，真·甩笔），并把混合系数从 0.5
                       降到 0.4：常规速度下 τ_eff≈48ms（滞后 ~24px），甩笔时才明显减弱。 */
-                double boost = g_speed / SPEED_FULL;
+                double boost = g_speed / (SPEED_FULL * dpiS);   /* g_speed 是物理 px/ms */
                 if (boost > 1.0) boost = 1.0;
                 kk += (1.0 - kk) * boost * 0.4;
             }
@@ -2332,6 +2398,9 @@ static DWORD WINAPI worker(LPVOID param)
        ⛔ 宽与高都要（逐轴标称）：X 用屏宽、Y 用屏高。 */
     g_screenW = GetSystemMetrics(SM_CXVIRTUALSCREEN);
     g_screenH = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    /* DPI 缩放在**这里**取第一次（后续每 250ms 复检，见下方重标定段）。 */
+    dpi_update_scale();
+    g_fprScale = g_dpiScaleMilli;
     /* 字段几何查表（32768 种掩码组合）在这里预建，避免第一次标定落在取包线程上。 */
     layout_table_build();
 
@@ -2356,24 +2425,48 @@ static DWORD WINAPI worker(LPVOID param)
             log_write(g_calibText, g_calibTextLen);
         }
 
-        /* —— 换显示器重标定（2026-10-14：公司 3440×1440 ↔ 家 4K，用户双环境）——
+        /* —— 换显示器 / 换缩放 / 换映射重标定（2026-10-14 起，2026-10-15 扩展）——
            屏幕尺寸变了 ⇒ 驱动映射的标称/合理性带全部失效。清掉 px 权威与标定结果，
            下一批包到达时 detour 自动重跑 try_calibrate（驱动 lcOut* 会反映新映射）。
            ⛔ 符号锁定**保留**：显示方向约定（Y 上下）不随尺寸变化，只有旋转屏才会
-              改变它 —— 那是另一个明确的手动场景。 */
+              改变它 —— 那是另一个明确的手动场景。
+           ⛔⛔ 2026-10-15 补两条判据（只比屏幕尺寸会漏）：
+             ① **DPI 缩放**：同一台机器改「缩放与布局」150%→200%，物理虚拟屏尺寸
+                （SM_CXVIRTUALSCREEN）**不变**，但用户的逻辑像素全变了 ⇒ 必须重推。
+             ② **驱动 lcOut* 指纹**：在驱动面板里改「映射到单个屏幕 / 强制比例」时
+                屏幕尺寸不变、只有 lcOutExt 变 ⇒ 也漏了。 */
         {
             int sw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
             int sh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+            dpi_update_scale();
+            LONG sc = g_dpiScaleMilli;
+            LONG ox = g_drvOutX, oy = g_drvOutY;
+            int changed = 0;
+            const char* why = "";
             if (sw > 0 && sh > 0 && (sw != g_screenW || sh != g_screenH)) {
-                logf("# [calib] ★屏幕尺寸变化 %dx%d → %dx%d ⇒ px 权威/标定全部重推（符号锁定保留）\n",
-                     g_screenW, g_screenH, sw, sh);
-                g_screenW = sw; g_screenH = sh;
+                changed = 1; why = "屏幕尺寸";
+            } else if (sc != g_fprScale) {
+                changed = 1; why = "DPI 缩放";
+            } else if (ox != 0 && g_fprOutX != 0 && (ox != g_fprOutX || oy != g_fprOutY)) {
+                changed = 1; why = "驱动映射";
+            }
+            if (changed) {
+                logf("# [calib] ★%s变化（%dx%d→%dx%d, dpi %ld‰→%ld‰, lcOut %ldx%ld→%ldx%ld）"
+                     " ⇒ px 权威/标定全部重推（符号锁定保留）\n",
+                     why, g_screenW, g_screenH, sw, sh,
+                     (long)g_fprScale, (long)sc,
+                     (long)g_fprOutX, (long)g_fprOutY, (long)ox, (long)oy);
+                if (sw > 0 && sh > 0) { g_screenW = sw; g_screenH = sh; }
                 g_pxSrc = 0;
                 InterlockedExchange(&g_pxCalibrated, 0);
                 g_calib.valid = 0; g_calib.tried = 0; g_calib.attempts = 0;
                 g_axCalX.done = 0; g_axCalX.num = 0; g_axCalX.den = 0; g_axCalX.n = 0; g_axCalX.px = 0;
                 g_axCalY.done = 0; g_axCalY.num = 0; g_axCalY.den = 0; g_axCalY.n = 0; g_axCalY.px = 0;
             }
+            /* ⛔ 指纹**每拍都刷新**（不在 changed 里）：否则第一次标定出的 lcOut*
+               要等下一次别的环境变化才被记住，中途的映射变更就漏判了。 */
+            g_fprScale = sc;
+            if (ox != 0) { g_fprOutX = ox; g_fprOutY = oy; }
         }
 
         /* —— 闸门 / 复位事件日志（2026-10-14：状态转储 10s 一条太稀，事件即时落盘）—— */
@@ -2422,10 +2515,17 @@ static DWORD WINAPI worker(LPVOID param)
                 s_calls = cl;
                 int moved = (c.x > s_cur0.x ? c.x - s_cur0.x : s_cur0.x - c.x)
                           + (c.y > s_cur0.y ? c.y - s_cur0.y : s_cur0.y - c.y);
-                if (moved >= 8) s_cur0 = c;           /* 光标基线跟随（防长程漂移误判） */
+                /* ⛔⛔ 门限是**物理像素**（GetCursorPos 在 PM-aware 进程里给物理值）
+                   ⇒ 150% 屏上 6 物理 px 只等于 4 逻辑 px、200% 上只有 3 ⇒ 高分屏会
+                   把「手抖 / 极缓慢的停顿」误判成断流（2026-10-15：4K 机 HUD 恒不显示
+                   的加重项）。按 DPI 归一，回到「逻辑像素」的门限语义。 */
+                double dS = dpi_scale();
+                int mvFollow = (int)(8.0 * dS + 0.5);
+                int mvDead   = (int)(6.0 * dS + 0.5);
+                if (moved >= mvFollow) s_cur0 = c;    /* 光标基线跟随（防长程漂移误判） */
                 if (!s_dead0) s_dead0 = nowW;
                 if (!g_streamDead) {
-                    if (g_patched && g_penDown == 1 && moved >= 6
+                    if (g_patched && g_penDown == 1 && moved >= mvDead
                         && nowW - s_dead0 > 600) {
                         InterlockedExchange(&g_streamDead, 1);
                         s_deadLog = nowW;
@@ -2469,6 +2569,36 @@ static DWORD WINAPI worker(LPVOID param)
                 }
             } else {                                  /* 连轮询都停了：不能算断流 */
                 s_calls = cl;
+            }
+        }
+
+        /* —— 落笔锁存超时解除（2026-10-15）——
+           ⛔ 真机形态（4K 机 jwwh-14316）：`g_penDown` 只在**来包时**更新
+              （smooth_packets 里写；CONTACT_HOLD_MS 的抬笔衰减也要来包才判一次），
+              包流一断它就永久卡在 1（实测卡 4 分 17 秒，旧会话 1000 秒）⇒
+              ① 断流看门狗的 `penDown==1` 条件永远成立 ⇒ 判定再也不退出；
+              ② 面板一直显示「改写中」，而实际上一个包都没改过。
+           ⇒ 超时窗口取 TIME_GAP_RESET_MS（5000ms）：与「停笔不出包」的容忍窗口
+              **同一个常量** —— 超过它本来就会在下一个包上触发 RST_GAP 起笔锚定，
+              所以在这里解除锁存**不会**引入「圆忽然闪现」的回归。
+           ⛔ 只清锁存与原因码，**不动 g_wasEnabled**：轨迹是否作废仍由 RST_GAP 裁决。 */
+        {
+            static int s_cleared;
+            if (g_penDown && g_snMs) {
+                DWORD ageP = (DWORD)(GetTickCount() - (DWORD)g_snMs);
+                if (ageP > TIME_GAP_RESET_MS) {
+                    InterlockedExchange(&g_penDown, 0);
+                    InterlockedExchange(&g_contact, 0);
+                    InterlockedExchange(&g_strokeGate, -1);
+                    InterlockedExchange(&g_reason, RS_HOVER);
+                    if (!s_cleared) {
+                        s_cleared = 1;
+                        logf("# [pen] ★落笔锁存超时解除：%lums 无任何包 ⇒ penDown 1→0"
+                             "（断流期间不再伪装成「改写中」）\n", (unsigned long)ageP);
+                    }
+                }
+            } else if (!g_penDown) {
+                s_cleared = 0;
             }
         }
 
@@ -2522,12 +2652,13 @@ static DWORD WINAPI worker(LPVOID param)
                calX/calY = 该轴是否已由**真实光标**标定（1）还是仍在用中性兜底（0）。
                   ⛔ 判符号只能看 calX/calY=1 时的 pxX/pxY：那才是测出来的真符号；
                      =0 时是兜底（不含方向信息），别当成结论。 */
-            logf("# [status] state=%ld calls=%ld packets=%ld smoothed=%ld calib=%s "
+            logf("# [status] state=%ld calls=%ld packets=%ld smoothed=%ld calib=%s dpi=%ld‰ "
                  "stride=%d offX=%d offY=%d axMax=%u pxX=%.4f pxY=%.4f calX=%ld calY=%ld "
                  "rst=%ld/%ld/%ld lastGap=%ldms ctxN=%ld last=0x%lX->0x%lX "
                  "dead=%ld pkt1=%ld open=%ld close=%ld\n",
                  (long)g_state, (long)g_calls, (long)g_packets, (long)g_smoothed,
-                 g_calib.valid ? "OK" : "否", g_calib.stride, g_calib.offX, g_calib.offY,
+                 g_calib.valid ? "OK" : "否", (long)g_dpiScaleMilli,
+                 g_calib.stride, g_calib.offX, g_calib.offY,
                  g_calib.axisMax, px_x(), px_y(),
                  (long)g_axCalX.done, (long)g_axCalY.done,
                  (long)g_rstAnchor, (long)g_rstGap, (long)g_rstJump, (long)g_lastGapMs,
@@ -2611,10 +2742,12 @@ static DWORD WINAPI worker(LPVOID param)
  *   ④ 笔尖永远被约束在圆周内 —— 越界时圆心（绘制点）被拖着走。
  * ⇒ 现在窗口定位用「圆心」而非光标，圆心取**光标 + 绳偏移**（见 hud 段）。
  * ========================================================================*/
-/* 窗口边长：必须容得下「圆心 ↔ 光标」的偏移 + 圆周半径。
-   偏移 ≤ 绳长，圆周半径 ≤ leash_px(...)，两者都在 RADIUS_PX_MAX 之内 ⇒
-   取 2×(RADIUS_PX_MAX + 24) = 248，向上取偶到 256。 */
+/* 窗口**初始**边长：必须容得下「圆心 ↔ 光标」的偏移 + 圆周半径。
+   ⛔⛔ 2026-10-15：半径是**逻辑像素**，而窗口是**物理像素** ⇒ 边长必须随 DPI 放大，
+      否则 150%/200% 屏上圆会被窗口裁掉（150% 时圆半径 150 物理 px > 旧 half 128）。
+      运行时按 2×(RADIUS_PX_MAX·dpiScale + 24) 按需重建（见 hud_resize）。 */
 #define HUD_SIZE     256
+#define HUD_SIZE_MAX 1024      /* 兜底上限：200% 屏 + 半径 100 ⇒ 只需 448 */
 #define HUD_IDLE_MS  250     /* 这么久没有新包 ⇒ 判定抬笔，隐藏 */
 /* ⛔ 笔尖落纸面期间的**保活窗口**：数位板停笔时不再出包（实测 packets 会冻结很久），
    若只看 HUD_IDLE_MS，用户一停笔圆就消失、一动又在复位后的位置冒出来。
@@ -2665,6 +2798,35 @@ static LRESULT CALLBACK hud_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
     return DefWindowProcW(h, m, w, l);
 }
 
+/**
+ * 按需重建 DIB 并改窗口边长（DPI 缩放变化 / 半径拉大时）。只**增大**，不缩回
+ * （缩回会在跨屏移动时来回抖）。返回新的边长；失败沿用旧值（功能不中断）。
+ */
+static int hud_resize(HWND wnd, int need, HBITMAP* dib, HDC mem, int cur)
+{
+    if (!wnd || !mem || need <= cur) return cur;
+    if (need > HUD_SIZE_MAX) need = HUD_SIZE_MAX;
+    BITMAPINFO bi;
+    memset(&bi, 0, sizeof(bi));
+    bi.bmiHeader.biSize        = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth       = need;
+    bi.bmiHeader.biHeight      = -need;         /* 自上而下 */
+    bi.bmiHeader.biPlanes      = 1;
+    bi.bmiHeader.biBitCount    = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    HDC scr = GetDC(NULL);
+    void* bits = NULL;
+    HBITMAP nd = CreateDIBSection(scr, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    ReleaseDC(NULL, scr);
+    if (!nd) return cur;
+    SelectObject(mem, nd);                      /* 先换入新的 */
+    if (*dib) DeleteObject(*dib);               /* 再销毁旧的（此时已不在 DC 里） */
+    *dib = nd;
+    SetWindowPos(wnd, NULL, 0, 0, need, need,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    return need;
+}
+
 static DWORD WINAPI hud_thread(LPVOID param)
 {
     (void)param;
@@ -2688,6 +2850,7 @@ static DWORD WINAPI hud_thread(LPVOID param)
     HWND     wnd = NULL;
     HDC      mem = NULL;
     HBITMAP  dib = NULL;
+    int      hudSize = HUD_SIZE;   /* 当前窗口/DIB 边长（随 DPI 按需放大，见 hud_resize） */
 
     if (atom || GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
         wnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT
@@ -2917,14 +3080,21 @@ static DWORD WINAPI hud_thread(LPVOID param)
 
         int rpx = g_cfg[CFG_I_RADIUSPX]; if (rpx < 1) rpx = 1;
         if (rpx > RADIUS_PX_MAX) rpx = RADIUS_PX_MAX;
+        /* ⛔⛔ DPI 归一（2026-10-15）：面板的「半径」是**逻辑像素**，而窗口边长与
+           圆周半径都是**物理像素** ⇒ 两边都要乘 dpiS，否则高分屏上圆被窗口裁掉、
+           且「画的圈」比真实约束小（150% 下小 33%）。 */
+        double dpiS = dpi_scale();
+        hudSize = hud_resize(wnd, 2 * ((int)((double)RADIUS_PX_MAX * dpiS) + 24),
+                             &dib, mem, hudSize);
         /* 圆周半径 = 真实绳长（= 半径，张力已删除）⇒ 圈与约束永远一致。
+           与滤波分支同源：那边 radiusPxF 同样乘了 dpiS。
            ⚠️ 模式判据在上面 wantVisible 处已经用过一次（ropeMode）；这里不再取一次，
               取了也只是个未使用变量。 */
-        int leashPx = (int)(leash_px(rpx) + 0.5);
+        int leashPx = (int)(leash_px(rpx) * dpiS + 0.5);
         if (leashPx < 2) leashPx = 2;
 
-        int half = HUD_SIZE / 2;
-        RECT rc = { 0, 0, HUD_SIZE, HUD_SIZE };
+        int half = hudSize / 2;
+        RECT rc = { 0, 0, hudSize, hudSize };
         FillRect(mem, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
 
         HPEN pen = CreatePen(PS_SOLID, 1, col);
@@ -3026,7 +3196,7 @@ static DWORD WINAPI hud_thread(LPVOID param)
         SetWindowPos(wnd, HWND_TOPMOST, cur.x - rx - half, cur.y - ry - half, 0, 0,
                      SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
         HDC dc = GetDC(wnd);
-        if (dc) { BitBlt(dc, 0, 0, HUD_SIZE, HUD_SIZE, mem, 0, 0, SRCCOPY); ReleaseDC(wnd, dc); }
+        if (dc) { BitBlt(dc, 0, 0, hudSize, hudSize, mem, 0, 0, SRCCOPY); ReleaseDC(wnd, dc); }
 
         hud_frame_wait(frameTimer);
     }
