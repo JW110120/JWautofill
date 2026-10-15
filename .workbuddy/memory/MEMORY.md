@@ -44,7 +44,12 @@
 
 - 唯一通路 = Wintab 笔通路，实现 = **PS 进程内 .8li**（smooth_engine.c inline-hook `WTPacketsGet`；plugin_main.c 承载 WS 18924，协议与旧 daemon 逐字兼容）。⛔ 换 .8li 必须重启 PS（PS 锁文件）。状态周期推送（SmoothStatePump 500ms）。
 - 状态机 `CFG_I_STATE`：0 未挂 · 1 生效 · 2 标定失败 · 3 已卸载 · 4 入口被占（须重启 PS）。
-- ⛔⛔ **坐标口径**：系统光标 = 原始笔 ⇒ HUD 圆钉「光标−(raw−out)·px」。⛔⛔ **px 唯一权威 = 驱动 `lcOutExt/lcInExt`**（含符号；合理性判据 `|drv| ∈ (0.15·标称, 1.02·标称]`，否则退回屏幕标称）；光标实测 Δ 比**偏低且漂**（最差 −40%），已降级为日志对照。**逐轴带符号**（lcInExtX=44800 / lcInExtY=29600，单标量不成立）。
+- ⛔⛔ **坐标口径**：系统光标 = 原始笔 ⇒ HUD 圆钉「光标−(raw−out)·px」。⛔⛔ **px 唯一权威 =
+  屏幕/lcOutExt**（2026-10-15 [gap] 回归定案，rms 3.8/4.2px；本机=1/16 px/轴，包坐标与 lcOutExt
+  同单位；标准驱动下公式自动得 1.0）。**旧权威 屏幕/lcInExt 是错的**（X 高估 22.9%/Y 低估 22.0%
+  = 「横领先/竖落后」残差根因）；「lcOutExt/lcInExt 再搜 2^n 定标」错上加错（1.2286/0.7784 本身
+  就是误差系数）。N1 悬案「光标实测 Δ 偏低且漂 −40%」昭雪：那是真实尺度，不是噪声。axisMax 亦改
+  用 lcOutExt（同源口径）。符号仍由光标投票裁决。
 - ⛔⛔ **HUD 外推两端对称**：`光标(此刻) − offset(时刻) = 绘制点(时刻)`；raw 与 out 用同一 `age/pktDt` 同时外推（只外推 raw ⇒ 圆心恒差 15px/100px 绳）。
 - ⛔⛔ **`TIME_GAP_RESET_MS` 假复位**：停笔不再出包 ⇒ 旧 120ms 把「停一下再画」误判新一笔；现值 **5000ms** + `HUD_HOLD_MS=3000`。
 - ⛔⛔ **拉绳 = 定长绳**：`dist ≤ rope` ⇒ 输出点不动；`> rope` ⇒ 跟随量 `dist − rope`（**`f = 1 − rope/dist`**；写成 `rope/dist` ⇒ 输出点直接跳光标）。绳长 ≡ 半径；绳 = 统一 2px + 二次贝塞尔（垂度 `sag=sqrt(3(L−d)d/8)`）；**绝不画 4→1px 锥形**。
@@ -54,6 +59,11 @@
 - ⛔ **量程落在人的运笔区间（0.05~1.5 px/ms）**：`SPEED_FULL=3.0`、强度 τ(100)=250ms、追笔 vmax 上限 3.0 px/ms；改上限同步搜 `RADIUS_PX_MAX`/`SMOOTH_RADIUS_MAX`/C 侧 Clamp。⛔ **拐角=转折角**；`cornerToNative` 反向映射已回退为**恒等**，别再引入。⛔ 追笔映射 `catchUpToNative(d)=round(50−(d−1)·49/99)`（d=1→50 跟手，d=100→1 最黏；下限 1 不是 0）。
 - 共享内存槽位 **保留空洞、绝不重编号**（与 C `I_*` 逐项对应，错位不报错）；改 NLONGS 必读 refs 的「扩容升级陷阱」（旧节占着 ⇒ fail-closed，重启 PS 自愈）。
 - ⛔ **.8li 安装/更新通路尚未面板化**（M3 遗留）：「服务未启动」= .8li 没装进 PS Plug-ins，需手动部署。
+- ⛔⛔ **部署只认 `build/JWautofillSmooth.8li`**（build.sh 唯一产物，2026-10-15 定案）；`.ready.8li`
+  是历史手工残留（已从 build/ 删除），Plug-ins 里若还有必须删 —— 3440 机就因它测了一下午旧版。
+  核验：日志头 `ver=0x0102`（≥10-15 下午）、`[status]` 含 `dpi=N‰`。
+- ⛔ **断流（g_streamDead）期 HUD = 红圈钉光标 + 不画绳**（deadShow，penDown 清零后收起），不是隐藏；
+  断流根因在**驱动侧**（本机 WTEnable 自愈 0/12 全败），daemon 注入方案同死 —— 非平滑算法缺陷。
 
 ## 记忆维护约定
 

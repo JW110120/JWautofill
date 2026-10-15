@@ -1550,58 +1550,54 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
     calib_logf("# [calib] 轴上界 = %u（lcInExtX=%ld lcInExtY=%ld）\n", axMax,
                (long)inExtX, (long)inExtY);
 
-    /* 轴→像素比：**驱动 `lcOut*` 优先**，其次光标标定，最后才是屏幕标称。
-       ⛔⛔ 2026-10-14 第五轮定案（用户报「受力点和圆心依然会分离」）：光标测量**不可信** ——
-          它把 `Δ光标/Δraw` 当 px，而 raw 侧被「帧外推」放大（见 hud_thread 的外推段），
-          真机 [status] 实测 pxX 在 0.0466~0.0676 之间漂，而屏幕整屏映射下的标称是
-          3440/44800 = 0.076786 ⇒ 最差偏低 40%。圆心偏移 = 滞后 × px，
-          px 偏低多少圆心就离真实绘制点差多少（100px 绳实测差 15px）。
-          唯一权威来源是 `lcOutExt / lcInExt`（驱动按用户实际映射填好的，**含 Y 符号**）：
-          整屏拉伸、强制比例、局部映射、Y 翻转全都已经在里面了。
-          合理性判据：|px| 不可能超过「整屏/量程」（映射不会超出屏幕），也不应小到荒谬
-          （< 15% 标称）。不满足就退回标称，光标测量只作**日志对照**。
-        ⛔ 符号**不在这里猜**：驱动给了就照用（Y 通常为负 = 屏幕上 Y 向下）；
-          只有退回标称时才取中性正号。 */
+    /* 轴→像素比：**唯一权威 = 屏幕 / lcOutExt**（2026-10-15 回归定案，推翻第五轮）。
+       ⛔⛔ 依据（[gap] v2 绝对坐标 122 样本线性回归，rms 3.8/4.2px）：
+          screen_x = 4.9 + 0.06223·raw_x，screen_y = 1438.0 − 0.06232·raw_y
+          —— 两轴真实尺度都是 ~0.0622–0.0625 = 屏幕/lcOutExt（3440/55040），
+          且**严格线性**。旧公式 屏幕/lcInExt（0.0768/0.0486）把 X 高估 22.9%、
+          Y 低估 22.0% —— 「横领先 / 竖落后」逐轴残差的根因；而「lcOutExt/lcInExt
+          再搜 2 的幂定标」用 /16 恰好把 1.2286/0.7784 拉回标称，把真信息抹掉了
+          （1.2286/0.7784 本身就是误差系数！）。
+       ⛔ Wintab 语义：lcOutExt 是上下文**输出量程**，与包坐标**同单位**；
+          标准驱动（lcOutExt=屏幕 px、包=屏幕 px）下本公式自动得 1.0，同样成立 ⇒
+          一条公式覆盖 1/16 单位驱动与标准驱动。N1「光标实测 Δ 偏低 40% 且漂」
+          同案昭雪：那就是真实尺度在抗议，被当噪声废弃了。
+       ⛔ 符号**不在这里猜**：仍由光标标定的符号投票裁决（Y 轴本机实测反向）。 */
     if (g_pxSrc != 1) {
-        double extX = (double)(inExtX > 0 ? inExtX : (LONG)axMax);
-        double extY = (double)(inExtY > 0 ? inExtY : 32767);
         double scrW = (double)(g_screenW > 0 ? g_screenW : 1920);
         double scrH = (double)(g_screenH > 0 ? g_screenH : 1080);
-        double nomX = scrW / (extX > 1.0 ? extX : 1.0);
-        double nomY = scrH / (extY > 1.0 ? extY : 1.0);   /* 中性符号，不假设方向 */
-        double drvX = (extX > 1.0) ? (double)outExtX / extX : 0.0;
-        double drvY = (extY > 1.0) ? (double)outExtY / extY : 0.0;
-        double adx = drvX < 0 ? -drvX : drvX, ady = drvY < 0 ? -drvY : drvY;
-        /* ⛔⛔ 2 的幂定标搜索（2026-10-14 第六轮真机定案）：本机驱动把屏幕像素报成
-           16 倍（lcOutExt=(55040,23040) = (3440,1440)×16 整），除以 16 后与标称
-           **逐位一致** —— 旧判据直接拒绝 ⇒ 权威落空、带偏的光标标定器接管（低 32%）
-           ⇒ 圆心分离。现按 s=1,2,4,…,64 逐个试：取**第一个**（最小 s ⇒ 归一后最大值）
-           使两轴都落回合理性带的 s，量值 = drv/s。 */
-        int useDrv = 0;
-        int drvScale = 1;
-        for (int s = 1; s <= 64; s <<= 1) {
-            double qx = adx / s, qy = ady / s;
-            if (qx > nomX * 0.15 && qx <= nomX * 1.02
-             && qy > nomY * 0.15 && qy <= nomY * 1.02) {
-                useDrv = 1; drvScale = s; break;
-            }
-        }
-        if (useDrv) {
-            g_pxAxisX = drvX / drvScale;
-            g_pxAxisY = drvY / drvScale;
+        long oex = outExtX < 0 ? -outExtX : outExtX;   /* Wintab 惯例 lcOutExtY 可为负 */
+        long oey = outExtY < 0 ? -outExtY : outExtY;
+        int haveOut = (oex > 1 && oey > 1);
+        if (haveOut) {
+            g_pxAxisX = scrW / (double)oex;
+            g_pxAxisY = scrH / (double)oey;
             g_pxSrc = 1;
         } else if (!g_pxCalibrated) {
+            /* lcOutExt 无效才退标称（lcInExt 分母 —— 旧权威，仅在拿不到 lcOutExt 时兜底）。 */
+            double extX = (double)(inExtX > 0 ? inExtX : (LONG)axMax);
+            double extY = (double)(inExtY > 0 ? inExtY : 32767);
+            double nomX = scrW / (extX > 1.0 ? extX : 1.0);
+            double nomY = scrH / (extY > 1.0 ? extY : 1.0);
             if (nomX > 0.0001 && nomX < 1000.0) g_pxAxisX = nomX;
             if (nomY > 0.0001 && nomY < 1000.0) g_pxAxisY = nomY;
             g_pxSrc = 0;
         }
+        /* ⛔ 包坐标真实上界 = lcOutExt（不是 lcInExt）：jumpPx 等位移门限的分母口径
+           必须与 px 同源 —— axisMax×px 才等于屏幕跨度（55040×0.0625=3440 ✓）。 */
+        if (haveOut) {
+            axMax = (u32)oex;
+            inExtY = oey;
+        }
         g_calib.axisMaxY = (u32)(inExtY > 0 ? inExtY : 32767);
-        calib_logf("# [calib] lcOut*: org=(%ld,%ld) ext=(%ld,%ld)  ⇒ 驱动映射 X=%.6f Y=%.6f（采纳定标 1/%d）\n",
-                   (long)outOrgX, (long)outOrgY, (long)outExtX, (long)outExtY, drvX, drvY, drvScale);
-        calib_logf("# [calib] 标称 轴→像素 X=%.6f（%d px / %ld 轴） Y=%.6f（%d px / %ld 轴）\n",
-                   nomX, g_screenW, (long)inExtX, nomY, g_screenH, (long)inExtY);
-        calib_logf("# [calib] 采用 %s： X=%.6f Y=%.6f（1=驱动 lcOut*，0=屏幕标称；符号另由标定投票定）\n",
-                   useDrv ? "驱动映射" : "屏幕标称", g_pxAxisX, g_pxAxisY);
+        calib_logf("# [calib] lcOut*: org=(%ld,%ld) ext=(%ld,%ld)  ⇒ px=屏幕/lcOutExt X=%.6f Y=%.6f%s\n",
+                   (long)outOrgX, (long)outOrgY, (long)outExtX, (long)outExtY,
+                   g_pxAxisX, g_pxAxisY, haveOut ? "" : "（lcOutExt 无效，退屏幕标称）");
+        calib_logf("# [calib] 标称(旧/lcInExt 分母，仅作对照不再采用) X=%.6f Y=%.6f\n",
+                   (double)g_screenW / (double)(inExtX > 0 ? inExtX : 1),
+                   (double)g_screenH / (double)(oey > 0 ? oey : 1));
+        calib_logf("# [calib] 采用 %s： X=%.6f Y=%.6f（符号另由标定投票定）\n",
+                   haveOut ? "屏幕/lcOutExt" : "屏幕标称", g_pxAxisX, g_pxAxisY);
     }
 
     g_calib.hCtx = hCtx;
@@ -2499,6 +2495,7 @@ static DWORD WINAPI worker(LPVOID param)
             static DWORD s_pkts, s_calls, s_dead0, s_deadLog, s_healAt;
             static POINT s_cur0;
             static int   s_have, s_heals;
+            static LONG  s_movedTot;   /* 冻结期累计位移（自冻结起点，不做基线跟随） */
             DWORD nowW = GetTickCount();
             POINT c; GetCursorPos(&c);
             LONG pk = g_packets, cl = g_calls;
@@ -2511,6 +2508,7 @@ static DWORD WINAPI worker(LPVOID param)
                     InterlockedExchange(&g_streamDead, 0);
                 }
                 s_pkts = pk; s_calls = cl; s_cur0 = c; s_dead0 = 0; s_heals = 0;
+                s_movedTot = 0;
             } else if ((DWORD)cl != s_calls) {        /* 无包但 PS 在轮询 ⇒ 冻结期 */
                 s_calls = cl;
                 int moved = (c.x > s_cur0.x ? c.x - s_cur0.x : s_cur0.x - c.x)
@@ -2520,26 +2518,53 @@ static DWORD WINAPI worker(LPVOID param)
                    把「手抖 / 极缓慢的停顿」误判成断流（2026-10-15：4K 机 HUD 恒不显示
                    的加重项）。按 DPI 归一，回到「逻辑像素」的门限语义。 */
                 double dS = dpi_scale();
-                int mvFollow = (int)(8.0 * dS + 0.5);
-                int mvDead   = (int)(6.0 * dS + 0.5);
-                if (moved >= mvFollow) s_cur0 = c;    /* 光标基线跟随（防长程漂移误判） */
-                if (!s_dead0) s_dead0 = nowW;
+                int mvDead = (int)(8.0 * dS + 0.5);
+                /* ⛔⛔ 2026-10-15（3440 机 jwwh-20812）：旧的「基线跟随」让**缓慢运笔**
+                   的断流永远判不出来 —— 每个窗口位移一旦 ≥ 跟随门限就把基线挪走，
+                   逐窗位移永远到不了 mvDead。真机：慢速画一整笔（累计几百 px）期间
+                   一条 [dead] 都不打，HUD 拿着冻结偏移跟光标跑 —— 这就是「圆心与
+                   受力点分离 28px」的直接来源（截图时间 15:42:13 正落在断流集内）。
+                   ⇒ 冻结期改为**自冻结起点累计位移**，不做基线跟随；只有「光标真
+                     静止」（单窗 <2px，= 停笔）才清零。停笔（不出包 + 光标不动）
+                     永远不会误判；冻结期光标动 = PS 正在原始输入 = 平滑已经死了。 */
+                s_movedTot += moved;
+                if (!s_dead0) { s_dead0 = nowW; s_movedTot = 0; }
+                else if (moved < 2) s_movedTot = 0;
                 if (!g_streamDead) {
-                    if (g_patched && g_penDown == 1 && moved >= mvDead
+                    if (g_patched && g_penDown == 1 && s_movedTot >= mvDead
                         && nowW - s_dead0 > 600) {
                         InterlockedExchange(&g_streamDead, 1);
                         s_deadLog = nowW;
-                        logf("# [dead] ★包流断供: penDown=1 包冻结 %lums 而光标仍移动(Δ%dpx) "
+                        logf("# [dead] ★包流断供: penDown=1 包冻结 %lums 而光标仍移动(Δ累计%ldpx) "
                              "hCtx=0x%llX calls=%ld 单包=%ld open=%ld close=%ld "
                              "⇒ PS 已走非 Wintab 输入，平滑实质中断\n",
-                             (unsigned long)(nowW - s_dead0), moved,
+                             (unsigned long)(nowW - s_dead0), (long)s_movedTot,
                              (unsigned long long)(UINT_PTR)g_ctxNow, (long)cl,
                              (long)g_wtPkt1, (long)g_wtOpenN, (long)g_wtCloseN);
                     }
                 } else if (nowW - s_deadLog >= 2000) {
                     s_deadLog = nowW;
-                    logf("# [dead] 持续中: 已冻结 %lums calls=%ld 单包=%ld\n",
-                         (unsigned long)(nowW - s_dead0), (long)cl, (long)g_wtPkt1);
+                    /* ⛔ 诊断探针（2026-10-15）：非消费地探一下驱动队列。
+                       peek=0 ⇒ 驱动根本没往该上下文排队（断流在驱动侧，插件无杠杆）；
+                       peek>0 ⇒ 队列有货而 WTPacketsGet 恒返 0（另一类故障，
+                       需查调用路径/上下文状态）。WTPacketsPeek 按规范不动队列，
+                       且我们只 inline-hook 了 WTPacketsGet，此调用直达驱动。 */
+                    UINT peekN = 0;
+                    {
+                        typedef UINT (*PFN_WTPeek)(HCTX, int, LPVOID);
+                        static PFN_WTPeek s_pPk; static int s_pkTried;
+                        if (!s_pkTried) {
+                            s_pkTried = 1;
+                            HMODULE hm2 = GetModuleHandleA("Wintab32.dll");
+                            if (hm2) s_pPk = (PFN_WTPeek)(void*)GetProcAddress(hm2, "WTPacketsPeek");
+                        }
+                        if (s_pPk && g_ctxNow) {
+                            BYTE peekBuf[64];
+                            peekN = s_pPk(g_ctxNow, 1, peekBuf);
+                        }
+                    }
+                    logf("# [dead] 持续中: 已冻结 %lums calls=%ld 单包=%ld peek=%u\n",
+                         (unsigned long)(nowW - s_dead0), (long)cl, (long)g_wtPkt1, peekN);
                     /* —— 断流自愈（2026-10-14 第八轮）：真机实锤断流可达数分钟不恢复
                        （jwwh-11576 冻结 247s、jwwh-14480 冻结 4 分钟+直到关机）。
                        唯一进程内可用的杠杆 = WTEnable 翻转（禁用→重启该上下文的包投递），
@@ -2987,6 +3012,24 @@ static DWORD WINAPI hud_thread(LPVOID param)
             }
         }
 
+        /* —— 诊断 v2：光标 ↔ 原始包坐标 **绝对值**成对记录（2026-10-15）——
+           v1 只打差值 G：实测 G 随位置大幅游走（X ±400px / Y ±330px，hover 期 age=0
+           也在走）⇒「固定倾斜缺口」理论被否，映射本身疑似**非对齐/非线性**（宽高比
+           letterbox？原点偏移？）。⇒ 直接记录 (cur, raw) 绝对对，离线做逐轴线性回归
+           screen = α + β·raw：β 偏离 lcOutExt 标称值多少、α 是多少、残差是否线性，
+           一次把标定权威（lcOutExt vs 光标实测 −40% 旧悬案）裁决掉。
+           ⛔ 采样条件：包新鲜(<2s) + 非断流（断流期光标走 raw 冻结会污染拟合）。 */
+        {
+            static DWORD s_lastGapLog;
+            DWORD snAgeG = (DWORD)(now - (DWORD)g_snMs);
+            if ((active || g_penDown) && !g_streamDead && snAgeG < 2000
+                && now - s_lastGapLog >= 600) {
+                s_lastGapLog = now;
+                logf("# [gap] cur=(%ld,%ld) raw=(%.0f,%.0f) age=%lums pen=%ld\n",
+                     cur.x, cur.y, axX, axY, (unsigned long)snAgeG, (long)g_penDown);
+            }
+        }
+
         /* —— 标定：**逐轴带符号**的 Δ光标 / Δ原始轴 ——
            ⛔ 必须独立于 HUD 显隐：旧版这段在 `!wantVisible` 的 continue 之后，
               于是关掉「拉绳提示」就再也不标定 ⇒ pxPerAxis 停在标称值 ⇒ 半径 / 绳长 /
@@ -3023,14 +3066,19 @@ static DWORD WINAPI hud_thread(LPVOID param)
         LONG hf = g_cfg ? g_cfg[CFG_I_HUD] : 0;
         int ropeMode = (g_cfg && g_cfg[CFG_I_MODE] == 1) ? 1 : 0;
         DWORD pktAge = (DWORD)(now - (DWORD)g_snMs);
-        /* ⛔ 断流判定成立时强制隐藏：HUD 是「正在平滑」的可视承诺，包流都断了
-           还拿着最后位置画圈 = 第二张截图里「受力点与圆心分离」的误导来源。
-           ⛔ enabled 也必须判（第八轮补）：平滑关着时 out 快照冻结在旧值，
-           HUD 会拿冻结快照画圈 —— 真机实锤「前十笔 HUD 显示但显示错误」。 */
-        int activeNow = !g_streamDead
-                     && (pktAge < HUD_IDLE_MS || (gateOk && pktAge < HUD_HOLD_MS));
-        int wantVisible = (wnd && mem && activeNow && gateOk && ropeMode && (hf & 1)
-                           && g_cfg && g_cfg[CFG_I_ENABLED]) ? 1 : 0;
+        /* ⛔ enabled 也必须判（第八轮补）：平滑关着时 out 快照冻结在旧值，
+           HUD 会拿冻结快照画圈 —— 真机实锤「前十笔 HUD 显示但显示错误」。
+           ⛔⛔ 断流态（2026-10-15，用户报「平滑失效时 HUD 显示的位置是错的」）：
+              一律强制隐藏会走向另一个极端 —— 用户要 HUD 常显来观察状态。
+              现改为**降级呈现**：dead && penDown==1 期间 HUD 保持可见，但圆心钉
+              光标、不画绳、颜色改红（见下方绘制段）—— 断流期 PS 走原始输入，
+              真实「绘制点」就是光标本身，这才是诚实几何。落笔锁存 5s 超时清
+              penDown 后 HUD 收起，不会整段冻结期都挂着。 */
+        int deadShow = (g_streamDead && g_penDown == 1) ? 1 : 0;
+        int activeNow = deadShow
+                     || (pktAge < HUD_IDLE_MS || (gateOk && pktAge < HUD_HOLD_MS));
+        int wantVisible = (wnd && mem && activeNow && (deadShow || gateOk) && ropeMode
+                           && (hf & 1) && g_cfg && g_cfg[CFG_I_ENABLED]) ? 1 : 0;
         if (!wantVisible) {
             if (wnd && IsWindowVisible(wnd)) ShowWindow(wnd, SW_HIDE);
             /* ⛔ 「HUD 没能显示」必须能一眼定位：把六个条件逐个打出来（节流 2 秒，
@@ -3077,6 +3125,11 @@ static DWORD WINAPI hud_thread(LPVOID param)
         int ry = (int)((axY - aoY) * px_y());
         LONG c  = g_cfg[CFG_I_HUDCOLOR];
         COLORREF col = RGB((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
+        /* ⛔⛔ 断流态（2026-10-15）：偏移快照已冻结且与光标脱钩（引擎没在改写，
+           PS 画的就是光标）⇒ 此刻真实「绘制点」= 光标本身：圆心钉光标（rx=ry=0）、
+           绳不画、颜色改红。这不是权宜 —— 是断流期唯一诚实的几何；
+           旧观感「圆心与受力点分离 28px 且跟着光标跑」正是拿冻结偏移画假圆。 */
+        if (deadShow) { rx = 0; ry = 0; col = RGB(0xD8, 0x30, 0x30); }
 
         int rpx = g_cfg[CFG_I_RADIUSPX]; if (rpx < 1) rpx = 1;
         if (rpx > RADIUS_PX_MAX) rpx = RADIUS_PX_MAX;
@@ -3099,14 +3152,16 @@ static DWORD WINAPI hud_thread(LPVOID param)
 
         HPEN pen = CreatePen(PS_SOLID, 1, col);
         HPEN old = (HPEN)SelectObject(mem, pen);
-        if (hf & 2) {                     /* 绳长圆：光标（原始笔）的活动范围 */
+        if ((hf & 2) && !deadShow) {      /* 绳长圆：光标（原始笔）的活动范围 */
             HBRUSH nb = (HBRUSH)GetStockObject(NULL_BRUSH);
             HBRUSH ob = (HBRUSH)SelectObject(mem, nb);
             Ellipse(mem, half - leashPx, half - leashPx, half + leashPx, half + leashPx);
             SelectObject(mem, ob);
         }
-        if (hf & 1) {
+        if ((hf & 1) && !deadShow) {
             /* 「绳」：从圆心（绘制点）连到光标（原始笔尖）。
+               ⛔ 断流态不画绳（2026-10-15）：绳的两端语义是「绘制点↔原始笔」，
+                  断流期绘制点 = 光标 ⇒ 绳长恒 0，画出来只会是一团噪点。
                ⛔ 旧版画成 4→1px 的**锥形直线**，用户明确否掉：「一头粗一头细，始终是
                   直线，没有一种绳子的感觉」。PS 的参照行为是：
                     · 光标在圈内 ⇒ 绳是**松弛的曲线**；
@@ -3248,7 +3303,7 @@ static void hud_stop(void)
 }
 
 /* ================================================================== 导出 */
-__declspec(dllexport) int jwwh_version(void) { return 0x0101; }
+__declspec(dllexport) int jwwh_version(void) { return 0x0105; }
 
 /* 兜底还原入口：守护进程的正常路径是经共享内存下令（worker 执行），
    此导出供外部工具（脚本/排障）在不需要共享内存时直接远程调用。 */
