@@ -1017,7 +1017,8 @@ class App extends React.Component<AppProps, AppState> {
             this.smoothToolTimer = null;
             // 面板卸载后闸门必须回到「未知」：残留的 0（不是套索）会让下次
             // 插件加载后平滑迟迟不生效，而界面上看不出任何原因。
-            setSmoothToolGate(2);
+            // ⛔ 进程内已接管时不放（原生侧接管后忽略面板值；且它自己会持续刷 GATETS）。
+            if (this.state.smoothStatus.pen.toolSrc !== 2) setSmoothToolGate(2);
         }
         if (this.quickMaskTimer) {
             clearInterval(this.quickMaskTimer);
@@ -1233,7 +1234,12 @@ class App extends React.Component<AppProps, AppState> {
     private syncSmoothToolWatch() {
         const smoothActive = this.state.smoothStatus.connected && !!this.state.smoothStatus.pen.enabled;
         const autoOffActive = this.state.isEnabled && this.state.autoOffOnOtherTool;
-        const need = smoothActive && !autoOffActive;
+        // ⛔⛔ 进程内闸门已接管（toolSrc===2）⇒ 这条巡检**整条停掉**。
+        //    它是全工程模态请求的常驻消费者之一（每次都进模态作用域），
+        //    而自动填充 / 快速删除那类操作本身也要占模态预算 —— 两者叠加就是
+        //    用户报的「modal scope 暴涨」；低配机上 PS 忙得久，叠加窗口更长。
+        const inProcGate = this.state.smoothStatus.pen.toolSrc === 2;
+        const need = smoothActive && !autoOffActive && !inProcGate;
         if (need && !this.smoothToolTimer) {
             this.smoothToolTimer = setInterval(() => { void this.pollSmoothToolGate(); }, App.TOOL_WATCH_INTERVAL_MS);
             void this.pollSmoothToolGate();
@@ -1242,7 +1248,8 @@ class App extends React.Component<AppProps, AppState> {
             this.smoothToolTimer = null;
             // 停掉后把闸门放回「未知」：残留的 0（不是套索）会让下次开启时迟迟不生效，
             // 而界面上看不出任何原因。原生侧还有 3 秒过期兜底，这是双保险。
-            setSmoothToolGate(2);
+            // ⛔ 进程内已接管时不放（放了也没用：原生侧接管后忽略面板值，徒增一次 WS 发送）。
+            if (!inProcGate) setSmoothToolGate(2);
         }
     }
 
@@ -1275,6 +1282,20 @@ class App extends React.Component<AppProps, AppState> {
      *    之前套索平滑短暂待命，这是「只在套索生效」的必要代价。
      */
     private applyToolGate(tool: string | null) {
+        // ⛔⛔ 进程内闸门已接管（toolSrc===2）⇒ 本函数立即退出，一个字节都不写。
+        //    接管后闸门值由 .8li 的 'slct' 回调独占写入（它同时刷 GATETS）；
+        //    面板再写就是两边互相覆盖 —— 各自都在刷时间戳，于是「谁都新鲜」，
+        //    现象是工具切了不生效、或换回套索不恢复。
+        //    这里是唯一咽喉：pollSmoothToolGate（平滑闸门轮询）与 pollToolChange
+        //    （「自动关」的顺带喂闸门）都走它，所以只需在这里挡一次。
+        if (this.state.smoothStatus.pen.toolSrc === 2) {
+            const t = this.state.smoothStatus.pen.psTool;
+            if (t && t !== this.lastToolRead) {
+                console.log('[套索平滑闸门] 当前工具 = ' + t + '（进程内 slct 通知）');
+                this.lastToolRead = t;
+            }
+            return;
+        }
         if (tool) {
             // ⛔ 工具 ID 原文仍然保留，只是不再显示在状态条上（用户 2026-10-13 要求
             //    「生效中」后面不挂任何参数）。改为**读数变化时**打一条 console：

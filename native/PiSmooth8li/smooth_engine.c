@@ -1776,6 +1776,14 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
 #define RI_FIT_MAX_RMS 8.0                  /* 重拟合后逐轴 rms 上限（8 单位 = 0.5px） */
 #define RI_FIT_MIN_SPAN 1000                /* 保留集的 raw 跨度下限（防「点全挤在一处」的病态拟合） */
 #define RI_BIG_BURST   25                   /* 单次 ≥ 这么多包 = 冲包 */
+#define RI_ANA_MAX_RMS 48.0                 /* 解析映射的核对残差上限（平板单位；1 单位=1/16px ⇒ 3px） */
+/* —— 陈旧回包合并 v2（2026-10-16 第十八轮）—— */
+#define RI_PKT_FRESH_MS 400                 /* 包在多少 ms 内到达算「新鲜」——
+                                               ⛔ 只用来**正面证明** pkTime 与 GetTickCount 同基，
+                                                  与「判陈旧」无关（旧版正是把两者混成一个量纲才死的） */
+#define RI_RECOV_MS     4000                /* 停摆恢复后多久内仍做陈旧合并（覆盖一拍只吐 1~5 包的分批回吐） */
+#define RI_PKT_STALE_MS 1500                /* 包龄超过它即判陈旧（覆盖「停摆期没补流」的那条路：
+                                               没有补流前沿可比时，包龄是唯一的凭据） */
 
 typedef struct { DWORD t; int x, y, p, tip, inr; } RIPS;
 
@@ -1806,11 +1814,23 @@ static u8              g_tpl[256];
 static volatile LONG   g_tplOk;
 
 /* —— 补流状态 —— */
-static volatile LONG   g_synOn;             /* 门控总闸（由拟合结果驱动） */
+static volatile LONG   g_synOn;             /* 门控总闸（由 syn_set() 统一发布：强拟合 ∨ 解析映射） */
 static volatile LONG   g_synHead;           /* 上次补流消费到的 raw 序号 */
 static volatile LONG   g_synSerial;         /* 合成包序号 */
 static volatile LONG   g_synLastMs;
 static volatile LONG   g_synRuns, g_synPkts, g_dropBurst, g_dropLast;
+/* ⛔⛔ **补流前沿**（2026-10-17 第十七轮）：最后一次喂给 PS 的合成样本时刻。
+   它是「回包该不该丢」的唯一判据 —— 真实包的 pkTime 早于它 ⇒ 这段位移补流已经
+   喂过，再放行就是在已经画到当下的路径后面**追加旧坐标**（选区倒退+猛追 = 过冲）。
+   ⛔ 与包数无关：PS 每拍只取 1~5 包，48 包的恢复冲包被拆成十几拍，任何「单次包数」
+   门限都拦不住（这正是上一版 丢冲包 恒 0 的原因）。 */
+static volatile LONG   g_synFrontT;
+static volatile LONG   g_dropStaleN, g_dropStaleMs, g_dropStaleEvt;
+/* —— 陈旧回包合并 v2 的状态 —— */
+static volatile LONG   g_pkBaseOk;         /* pkTime 与 GetTickCount 同基（**正面证据**，见 detour 注释） */
+static volatile LONG   g_lastRecovMs;      /* 最近一次「停摆后的首批真包」时刻；窗口 RI_RECOV_MS */
+static volatile LONG   g_dropStaleAgeN;    /* 其中由「包龄」判掉的个数（与按前沿判掉的区分开） */
+static volatile LONG   g_baseEvt;          /* 时间基首次证实 ⇒ 交给 worker 落盘（detour 内零 I/O） */
 /* ⛔⛔ 补流门控的**真凭据**：最近一次收到**真实**包的时刻。
    采样源换成系统光标之后，raw 环会被 250Hz 的光标采样一直喂饱 ⇒ 旧判据
    「raw 新鲜」恒真 ⇒ 会在驱动**完全正常**时也每次 r==0 都补流（把 Wintab
@@ -1839,6 +1859,33 @@ typedef struct {
     int    spanX, spanY;
 } RIFIT;
 static RIFIT g_fit;
+
+/* —— 解析映射（第二来源）：屏幕 → 平板 ——
+   ⛔⛔ 为什么需要它（2026-10-16 第十七轮，对照 Lazy Nezumi Pro 的结论）：
+     补流的**唯一**放行凭据原先只有「强拟合」`g_fit`，而强拟合要求
+     `保留集 ≥150 且逐轴 rms ≤8 且两轴跨度 ≥1000`。这三条都建立在**配对**上，
+     而配对只在**真实包**到达时产生（detour 侧）⇒ 一旦「插件刚挂上就断流」，
+     配对永远攒不够 ⇒ 拟合永不成立 ⇒ 补流永不激活 ⇒ 断流无解。这是一个
+     自锁：**最需要补流的时候，恰恰是补流建不起来的时候。**
+   ⛔ 而「屏幕 → 平板」这条映射其实**不需要配对规模**就能拿到：
+     `px_x()/px_y()` 的驱动权威 = `屏幕/lcOutExt`，来自 LOGCONTEXT（首次取包即得），
+     断流不影响它；**只有原点**需要一对配对来定，而 `g_tplOk` 成立本身就意味着
+     至少有过一对（否则连 g_tpl 都没有）。⇒ 解析映射的成立条件比强拟合低两个数量级。
+   ⛔ 与强拟合的关系：**并存、强拟合优先**。拟合有稳健剔除 + 跨度判据，是更可信的
+     来源；解析映射是断流早发时的兜底。二者算的是同一份物理映射。
+   ⛔ 系数经 seqlock（`g_anaVer` 奇=写入中）跨线程交给 detour —— detour 侧
+     `penraw_synth` 会在一次调用内多次读它，必须拿到**自洽**的一份快照。 */
+typedef struct {
+    double ax, bx, ay, by;   /* 平板 = a·屏幕 + b（与 RIFIT 同构，便于互换） */
+    int    nPair;            /* 定原点所用的配对序号（诊断） */
+    int    nCheck;           /* 用多少对配对核对过 rms（0 = 无从核对） */
+    double rmsX, rmsY;       /* 核对残差 */
+} ANAMAP;
+static ANAMAP          g_ana;               /* 诊断用（worker 自用，不进 detour） */
+static volatile double g_anaCoef[4];        /* ax,bx,ay,by —— detour 经 ana_get 读 */
+static volatile LONG   g_anaOk;
+static volatile LONG   g_anaVer;            /* seqlock：奇数 = 正在写入 */
+static int             g_anaLogged;         /* 「解析映射就绪」只落一行日志 */
 
 /* ---- HID 解析（hid.dll 动态加载：不进导入表，缺文件也不影响主功能）---- */
 typedef LONG (WINAPI *PFN_HidP_GetUsageValue)(int, USHORT, USHORT, USHORT,
@@ -2295,6 +2342,89 @@ static int rifit_pass(LONG start, LONG n, const u8* keep,
     return (int)N;
 }
 
+/* —— 门控总闸的**统一**发布点 ——
+   原先 `g_synOn` 散落在 penraw_fit_tick 的 4 个 return 上各写一次；新增解析映射
+   后必须两处（强拟合 / 解析兜底）取或 ⇒ 集中到这里，避免以后加第三条来源漏改。 */
+static void syn_set(void)
+{
+    InterlockedExchange(&g_synOn, (g_fit.valid || g_anaOk) ? 1 : 0);
+}
+
+/** 取解析映射的自洽快照（detour 侧）。1 = 拿到；0 = 不可用 / 正在被改写。 */
+static int ana_get(double* ax, double* bx, double* ay, double* by)
+{
+    if (!g_anaOk) return 0;
+    LONG v1 = g_anaVer;
+    if (v1 & 1) return 0;
+    double a1 = g_anaCoef[0], b1 = g_anaCoef[1];
+    double a2 = g_anaCoef[2], b2 = g_anaCoef[3];
+    LONG v2 = g_anaVer;
+    if (v1 != v2 || (v2 & 1)) return 0;
+    *ax = a1; *bx = b1; *ay = a2; *by = b2;
+    return 1;
+}
+
+/**
+ * 由「解析映射」决定补流是否可放行 —— 强拟合的**兜底**（见 ANAMAP 注释）。
+ * ⛔ 只需四样，**全都不依赖配对规模**：
+ *    ① 标定成立（拿到 stride / offX / offY）；② px 权威来自驱动（`g_pxSrc==1`）；
+ *    ③ 两轴符号**已实测投票**（驱动报的 Y 符号不可信 ⇒ 绝不能直接采信它的符号，
+ *       见 px_x/px_y 注释）；④ 至少一对配对（用来定原点）。
+ * ⛔ 核对（配对 ≥16 时）：用解析系数算最近 64 对的逐轴 rms，超 `RI_ANA_MAX_RMS`
+ *    即判映射错、**不启用**。这拦得住「错轴 / 错比例 / 错符号」；而「点数够但
+ *    跨度不够」（短笔划）恰恰是解析映射**最该**顶上的场景 —— 映射是全局的，
+ *    本来就不需要跨度。
+ * ⛔ 点数太少（<16）时无从核对 ⇒ 不核对直接启用：此时方向与量级来自驱动权威
+ *    （与 g_tpl 同源），符合既有「宁可不平滑，也绝不写坏数据」的取舍 —— 写坏的
+ *    前提是映射错，而这里的映射两个来源都不是凭空的。
+ */
+static void ana_update(void)
+{
+    InterlockedExchange(&g_anaOk, 0);
+    g_ana.nPair = 0; g_ana.nCheck = 0; g_ana.rmsX = g_ana.rmsY = 0.0;
+    if (!g_calib.valid || !g_tplOk) return;
+    if (g_pxSrc != 1) return;
+    if (g_axCalX.voteStreak < SIGN_VOTE || g_axCalY.voteStreak < SIGN_VOTE) return;
+    double px = px_x(), py = px_y();
+    if (!(px > 1e-9 || px < -1e-9)) return;
+    if (!(py > 1e-9 || py < -1e-9)) return;
+    double ax = 1.0 / px, ay = 1.0 / py;         /* 屏幕 → 平板 */
+    LONG h = g_pairHead;
+    if (h <= 0) return;                          /* 一对都没有 ⇒ 无从定原点 */
+    const RIP_pair* q = &g_pair[(u32)(h - 1) & (RIPAIR_N - 1)];
+    double bx = (double)q->wx - ax * (double)q->rx;
+    double by = (double)q->wy - ay * (double)q->ry;
+    g_ana.nPair = (int)h;
+
+    LONG n = h > 64 ? 64 : h;
+    if (n >= 16) {
+        double ex = 0, ey = 0;
+        for (LONG i = 0; i < n; i++) {
+            const RIP_pair* p = &g_pair[(u32)(h - 1 - i) & (RIPAIR_N - 1)];
+            double dx = ax * (double)p->rx + bx - (double)p->wx;
+            double dy = ay * (double)p->ry + by - (double)p->wy;
+            ex += dx * dx; ey += dy * dy;
+        }
+        g_ana.rmsX = dsqrt_(ex / (double)n);
+        g_ana.rmsY = dsqrt_(ey / (double)n);
+        g_ana.nCheck = (int)n;
+        if (g_ana.rmsX > RI_ANA_MAX_RMS || g_ana.rmsY > RI_ANA_MAX_RMS) return;
+    }
+
+    g_ana.ax = ax; g_ana.bx = bx; g_ana.ay = ay; g_ana.by = by;
+    InterlockedIncrement(&g_anaVer);             /* → 奇（写入中） */
+    g_anaCoef[0] = ax; g_anaCoef[1] = bx;
+    g_anaCoef[2] = ay; g_anaCoef[3] = by;
+    InterlockedIncrement(&g_anaVer);             /* → 偶（稳定） */
+    InterlockedExchange(&g_anaOk, 1);
+    if (!g_anaLogged) {
+        g_anaLogged = 1;
+        logf("# [raw] ★解析映射就绪（驱动 px 定比例 + %d 对配对定原点）"
+             " ax=%.6f bx=%.0f ay=%.6f by=%.0f 核对=%d对 rms=%.1f/%.1f\n",
+             (int)h, ax, bx, ay, by, g_ana.nCheck, g_ana.rmsX, g_ana.rmsY);
+    }
+}
+
 /**
  * 由配对环拟合「raw → 平板坐标」的逐轴仿射映射，并裁决是否放行补流。
  *
@@ -2322,13 +2452,13 @@ static void penraw_fit_tick(void)
     if (n > (LONG)RIPAIR_N) n = (LONG)RIPAIR_N;
     g_fit.nAll = (int)(n < 0 ? 0 : n);
     if (n < RI_FIT_MIN_N) {
-        g_fit.valid = 0; g_fit.n = 0; g_synOn = 0; g_fit.spanX = g_fit.spanY = 0;
+        g_fit.valid = 0; g_fit.n = 0; syn_set(); g_fit.spanX = g_fit.spanY = 0;
         return;
     }
 
     double ax, bx, ay, by, rx_, ry_;
     if (!rifit_pass(start, n, NULL, &ax, &bx, &rx_, &ay, &by, &ry_)) {
-        g_fit.valid = 0; g_fit.n = 0; g_synOn = 0; return;
+        g_fit.valid = 0; g_fit.n = 0; syn_set(); return;
     }
 
     /* 第一趟 → 按绝对残差门限做稳健剔除 */
@@ -2343,7 +2473,7 @@ static void penraw_fit_tick(void)
         if (keep[i]) nk++;
     }
     if (nk < RI_FIT_MIN_N) {
-        g_fit.valid = 0; g_fit.n = nk; g_synOn = 0; return;
+        g_fit.valid = 0; g_fit.n = nk; syn_set(); return;
     }
 
     /* 第二趟：只用保留集 */
@@ -2369,20 +2499,26 @@ static void penraw_fit_tick(void)
                    && g_fit.rmsX <= RI_FIT_MAX_RMS && g_fit.rmsY <= RI_FIT_MAX_RMS
                    && g_fit.spanX >= RI_FIT_MIN_SPAN && g_fit.spanY >= RI_FIT_MIN_SPAN
                    && g_calib.valid && g_calib.stride > 0) ? 1 : 0;
-    InterlockedExchange(&g_synOn, g_fit.valid);
+    syn_set();
 }
 
 /* ------------------------------------------------------------- 合成补流（门控）
- * 只有在「拟合有效 + 真实通路空转 + raw 新鲜 + 笔在范围内」时才被 detour 调到。
- * 返回真正写进调用方缓冲的包数（0 = 没写，调用方维持原返回值）。 */
+ * 只有在「映射可用（强拟合 ∨ 解析兜底）+ 真实通路空转 + raw 新鲜 + 笔在范围内」
+ * 时才被 detour 调到。返回真正写进调用方缓冲的包数（0 = 没写，调用方维持原返回值）。 */
 #define RI_FIELD_OK(o) ((o) >= 0 && (o) + 4 <= stride)
 
 static int penraw_synth(void* buf, int maxPkts, DWORD now)
 {
-    if (!g_fit.valid || !g_tplOk || maxPkts <= 0) return 0;
+    if ((!g_fit.valid && !g_anaOk) || !g_tplOk || maxPkts <= 0) return 0;
     int stride = g_calib.stride;
     if (stride <= 0 || stride > (int)sizeof(g_tpl)) return 0;
     if (!RI_FIELD_OK(g_calib.offX) || !RI_FIELD_OK(g_calib.offY)) return 0;
+
+    /* ⛔ 系数来源：强拟合优先，其次解析映射（见 ANAMAP 注释）。
+       ⛔ 必须在循环**外**取一次 —— detour 铁律：循环内每包都走 seqlock 读会白烧 CPU。 */
+    double cax, cbx, cay, cby;
+    if (g_fit.valid) { cax = g_fit.ax; cbx = g_fit.bx; cay = g_fit.ay; cby = g_fit.by; }
+    else if (!ana_get(&cax, &cbx, &cay, &cby)) return 0;
 
     LONG head = g_riHead;
     LONG last = g_synHead;
@@ -2392,11 +2528,12 @@ static int penraw_synth(void* buf, int maxPkts, DWORD now)
 
     LONG pmax = g_riPMax;
     int  k = 0;
+    LONG ft = 0;                                  /* 本次喂出去的最新样本时刻（补流前沿） */
     for (LONG s = last; s < head && k < maxPkts; s++) {
         const RIPS* rp = &g_riRing[(u32)s & (RIPSZ - 1)];
         if ((LONG)(now - rp->t) > RI_RAW_MAXAGE) continue;           /* 太旧：跳过并推进序号 */
-        int wx = (int)(g_fit.ax * (double)rp->x + g_fit.bx + 0.5);
-        int wy = (int)(g_fit.ay * (double)rp->y + g_fit.by + 0.5);
+        int wx = (int)(cax * (double)rp->x + cbx + 0.5);
+        int wy = (int)(cay * (double)rp->y + cby + 0.5);
         if (wx < 0) wx = 0;
         if (wy < 0) wy = 0;
         if (g_calib.axisMax  && (u32)wx > g_calib.axisMax)  wx = (int)g_calib.axisMax;
@@ -2433,8 +2570,10 @@ static int penraw_synth(void* buf, int maxPkts, DWORD now)
         if (RI_FIELD_OK(g_calib.offTP)) {
             u32 v = 0; memcpy(d + g_calib.offTP, &v, 4);
         }
+        ft = (LONG)rp->t;
         k++;
     }
+    if (ft) InterlockedExchange(&g_synFrontT, ft);
     InterlockedExchange(&g_synHead, head);
     return k;
 }
@@ -2447,7 +2586,7 @@ static void penraw_report(int win)
     LONG hid = g_riHidN, abs = g_riAbsN, bad = g_riBadN, cur = g_csN;
     LONG dh = hid - s_hid, da = abs - s_abs, db = bad - s_bad, dc = cur - s_cur;
     s_hid = hid; s_abs = abs; s_bad = bad; s_cur = cur;
-    if (!s_printed || dh || da || db || dc || g_fit.valid) {
+    if (!s_printed || dh || da || db || dc || g_fit.valid || g_anaOk) {
         s_printed = 1;
         LONG age = g_riLastMs ? (LONG)(GetTickCount() - (DWORD)g_riLastMs) : -1;
         int per = win > 0 ? win : 1;
@@ -2455,7 +2594,9 @@ static void penraw_report(int win)
              "解析失败=%ld 全部WM_INPUT=%ld(键盘=%ld) "
              "源=%s 最近=%ldms 采样范围 x=%ld..%ld y=%ld..%ld p=0..%ld 现值=(%ld,%ld,p=%ld,tip=%ld,in=%ld) "
              "| 拟合=%s 配对=%d 保留=%d rms=%.2f/%.2f 跨度=%d/%d a=%.6f/%.6f b=%.0f/%.0f "
-             "| 补流=%ld次/%ld包 丢冲包=%ld(末次%ld)\n",
+             "| 解析=%s(%d对 核对%d 残差%.1f/%.1f) "
+             "| 补流=%ld次/%ld包 丢冲包=%ld(末次%ld) "
+             "陈旧包=%ld(按龄%ld 末次落后前沿%ldms 时间基=%s)\n",
              (long)g_riReg, (long)g_riWndOk,
              (long)hid, (long)(dh * 1000 / per),
              (long)abs, (long)(da * 1000 / per), (long)cur, (long)(dc * 1000 / per),
@@ -2468,7 +2609,11 @@ static void penraw_report(int win)
              g_fit.valid ? "★有效" : "未建立", g_fit.nAll, g_fit.n,
              g_fit.rmsX, g_fit.rmsY, g_fit.spanX, g_fit.spanY,
              g_fit.ax, g_fit.ay, g_fit.bx, g_fit.by,
-             (long)g_synRuns, (long)g_synPkts, (long)g_dropBurst, (long)g_dropLast);
+             g_anaOk ? "★可用" : "未建立", g_ana.nPair, g_ana.nCheck,
+             g_ana.rmsX, g_ana.rmsY,
+             (long)g_synRuns, (long)g_synPkts, (long)g_dropBurst, (long)g_dropLast,
+             (long)g_dropStaleN, (long)g_dropStaleAgeN, (long)g_dropStaleMs,
+             g_pkBaseOk ? "★同基" : "未证实");
     }
 }
 
@@ -2928,8 +3073,13 @@ static u64 det_WTPacketsGet(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
     static DWORD s_synT0;
     PFN_WTPacketsGet impl = (PFN_WTPacketsGet)g_impl;
     int r = impl((HCTX)a, (int)b, (void*)c);            /* 先取包，再加工 */
+    int rRaw = r;                                       /* 驱动**原始**返回（丢包前的「通路活着」凭据） */
     DWORD nowT = GetTickCount();
     int synth = 0;
+
+    /* ⛔ 进这一拍**之前**真实通路静默了多久 —— 「刚经历过停摆」的判据。
+       必须在下面更新 `g_lastRealMs` 之前取，否则永远算成 0。 */
+    LONG prevRealAge = g_lastRealMs ? (LONG)(nowT - (DWORD)g_lastRealMs) : 0x7FFFFFFF;
 
     InterlockedIncrement(&g_calls);
     g_ctxNow = (HCTX)a;                                 /* 断流诊断：看门狗要比对上下文 */
@@ -2940,6 +3090,31 @@ static u64 det_WTPacketsGet(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
         if (r >= RI_BIG_BURST) InterlockedIncrement(&g_pkBig);
     } else {
         InterlockedIncrement(&g_pkZero);
+    }
+
+    /* —— 时间基的**正面证据** + 停摆恢复打点（2026-10-16 第十八轮）——
+       ⛔⛔ 上一版（0x0111）用「陈旧程度」反推「时间基是否相同」：
+              |now − pkTime| ≤ 5000 ⇒ 同基，否则放弃判据。
+           这条看似稳妥，实则把两个量纲混成一个：停摆 13s（真机实测）或 111s 时，
+           恢复冲包的头几个包**天生**就是 13000/111000ms 旧，于是「不同基」被误判、
+           判据整条丢弃 ⇒ 真机日志里 `陈旧包` 恒 0、`陈旧回包合并` 一次都没触发，
+           过冲原样复现。**判陈旧的能力必须与时间基的证明彻底解耦。**
+       ⇒ 现在改用正面证据：只要**见过**一个 age ∈ [0, RI_PKT_FRESH_MS] 的包，
+         就说明两路同基（正常运笔时 age 实测 15~16ms，必然成立），此后
+         前沿比较不再受任何幅度限制 —— 多旧的包都照样判得出。
+       另一条判据（包龄 > RI_PKT_STALE_MS）覆盖「停摆期间没有补流可当前沿」的情形。 */
+    if (rRaw > 0) {
+        int st0 = g_calib.stride;
+        if (!g_pkBaseOk && g_calib.offTime >= 0 && st0 > 0 && g_calib.offTime + 4 <= st0) {
+            u32 pt0 = 0;
+            memcpy(&pt0, (const u8*)c + g_calib.offTime, 4);
+            LONG d0 = (LONG)(nowT - pt0);
+            if (pt0 != 0 && d0 >= 0 && d0 <= RI_PKT_FRESH_MS) {
+                InterlockedExchange(&g_pkBaseOk, 1);
+                InterlockedExchange(&g_baseEvt, 1);     /* 落盘交给 worker */
+            }
+        }
+        if (prevRealAge >= RI_STALL_MS) InterlockedExchange(&g_lastRecovMs, (LONG)nowT);
     }
 
     /* ⛔ 共享内存低频重试：**必须无条件**（2026-10-16 第十六轮）。
@@ -2990,6 +3165,67 @@ static u64 det_WTPacketsGet(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
             }
         }
     }
+
+    /* —— 陈旧回包合并 v2（2026-10-16 第十八轮）：把「判陈旧」与「证时间基」解耦 ——
+       ⛔ 上面那条「单次 ≥ RI_BIG_BURST 包 = 冲包」的判据在真机上是**死代码**：
+          PS 每拍只取 1~5 包（真机日志实测 最大单次 ∈ {0,1,3,4,5}、≥25包次数恒 0），
+          于是 48 包的恢复冲包被拆成十几拍、一拍都到不了 25 ⇒「丢冲包」恒为 0。
+       现象（用户报的「过冲」，真机两次复现）：
+          补流已经把笔尖喂到**当下**，驱动恢复时再把停摆期攒下的旧坐标**追加**在它
+          后面 ⇒ 选区路径先倒退再猛追；随即收笔、选区一次性生成、自动填充。
+          低配机填充更久 ⇒ 队列攒得更多 ⇒ **必现**。
+       ⛔ 判据与包数**无关**，且**不依赖补流是否发生过**（两条并列，任一成立即算陈旧）：
+          ① 早于补流前沿：`pkTime < g_synFrontT` —— 这段位移补流已经喂过；
+          ② 包龄过大：`now − pkTime > RI_PKT_STALE_MS` —— 停摆期没补流可当前沿时的凭据。
+       只丢**队首连续**的一段（包按时间递增），一旦遇到新鲜包立刻停手。
+       ⛔⛔ fail-open 护栏（任一不成立就一个字节都不动）：
+          · `g_pkBaseOk` —— 时间基已被**正面证明**（见上面的取证段落）。
+            旧版在这里用「陈旧幅度」当同基判据 ⇒ 13s/111s 级的真陈旧包被当成
+            「不同基」而整条放弃 ⇒ 判据全死（真机 陈旧包 恒 0）。这是本轮的根因。
+          · `g_lastRecovMs` 恢复窗口 RI_RECOV_MS —— 只在「刚从停摆恢复」的窗口内动手，
+            平时两路本来就同步，也没有陈旧可言。
+          · offTime 必须已标定。 */
+    if (!synth && r > 0 && (g_synFrontT || g_lastRecovMs)) {
+        LONG sinceRecov = g_lastRecovMs ? (LONG)(nowT - (DWORD)g_lastRecovMs) : 0x7FFFFFFF;
+        int stride = g_calib.stride;
+        if (g_pkBaseOk && g_lastRecovMs && sinceRecov >= 0 && sinceRecov <= RI_RECOV_MS
+            && stride > 0 && g_calib.offTime >= 0 && g_calib.offTime + 4 <= stride) {
+            u32  front = (u32)g_synFrontT;
+            int  n = 0, nAge = 0;
+            LONG newest = 0;
+            while (n < r) {
+                const u8* q = (const u8*)c + (SIZE_T)n * stride;
+                u32 pt = 0;
+                memcpy(&pt, q + g_calib.offTime, 4);
+                LONG age = (LONG)(nowT - pt);
+                if (pt == 0 || age < 0) break;                     /* 时间戳不可信 ⇒ 停手 */
+                LONG behind = (LONG)(front - pt);                  /* >0 = 早于补流前沿 */
+                int byFront = (g_synFrontT && behind > 0);
+                int byAge   = (age > RI_PKT_STALE_MS);
+                if (!byFront && !byAge) break;                     /* 新鲜 ⇒ 后面都是新的 */
+                if (byFront && behind > newest) newest = behind;
+                if (!byFront && byAge) nAge++;                     /* 只有按龄判掉的那部分 */
+                n++;
+            }
+            if (n > 0) {
+                if (n < r) {                                       /* 把后面的新鲜包压到队首 */
+                    u8* dst = (u8*)c;
+                    const u8* src = (const u8*)c + (SIZE_T)n * stride;
+                    for (SIZE_T i = 0; i < (SIZE_T)(r - n) * (SIZE_T)stride; i++) dst[i] = src[i];
+                }
+                r -= n;
+                InterlockedExchangeAdd(&g_dropStaleN, (LONG)n);
+                InterlockedExchangeAdd(&g_dropStaleAgeN, (LONG)nAge);
+                InterlockedExchange(&g_dropStaleMs, newest);
+                InterlockedExchange(&g_dropStaleEvt, 1);
+            }
+        }
+    }
+
+    /* ⛔ 真实通路「活着」的凭据必须按**驱动原始返回**记，不能用丢包后的 `r`：
+       否则把一次恢复冲包丢干净的那几拍 r 会变 0 ⇒ `g_lastRealMs` 不更新 ⇒
+       `realAge` 继续增长 ⇒ 补流继续接管 —— 而驱动其实早已恢复（自锁到死）。 */
+    if (rRaw > 0) InterlockedExchange(&g_lastRealMs, (LONG)nowT);
 
     /* 补流进出事件（只置原子，落盘交给 worker） */
     if (synth && !s_synWas) {
@@ -3168,6 +3404,10 @@ static void do_unhook(void)
        ⛔ 这里用裸 InterlockedExchange 而不是 gate_set()：撤钩不是一次「收笔」，
           记进 g_gateClose 会让面板的「一笔内开合差」统计凭空多一次。 */
     InterlockedExchange(&g_gateOk, 0);
+    InterlockedExchange(&g_anaOk, 0);      /* 撤钩 ⇒ 映射与总闸一起作废 */
+    InterlockedExchange(&g_synOn, 0);
+    InterlockedExchange(&g_synFrontT, 0);  /* 撤钩 ⇒ 补流前沿作废（否则下次上电会误丢真包） */
+    InterlockedExchange(&g_lastRecovMs, 0);/* 恢复窗口一并作废（同上，防跨会话误判） */
     logf("# 卸载: %s（原字节 %02X %02X %02X %02X %02X 已写回）\n",
          ok ? "OK" : "失败", g_orig[0], g_orig[1], g_orig[2], g_orig[3], g_orig[4]);
 }
@@ -3516,6 +3756,11 @@ static DWORD WINAPI worker(LPVOID param)
                 if (InterlockedExchange(&g_synExit, 0))
                     logf("# [raw] 补流结束：真实通路已回包，交还给驱动（本次接管 %ldms）\n",
                          (long)g_synSpanMs);
+                if (InterlockedExchange(&g_baseEvt, 0))
+                    logf("# [raw] 时间基已证实：pkTime 与 GetTickCount 同基 ⇒ 陈旧回包判据生效\n");
+                if (InterlockedExchange(&g_dropStaleEvt, 0))
+                    logf("# [raw] 陈旧回包合并：丢弃停摆期攒下的旧坐标（落后补流前沿 %ldms）\n",
+                         (long)g_dropStaleMs);
 
                 DWORD cAll = (DWORD)g_calls, pAll = (DWORD)g_pkReal;
                 DWORD dCall = cAll - s_lastCalls, dPkt = pAll - s_lastPkAll;
@@ -3532,6 +3777,7 @@ static DWORD WINAPI worker(LPVOID param)
                          (double)dPkt * 1000.0 / (double)win,
                          (long)zr, (long)mx, (long)big, s_pkPeakSeen);
                 }
+                ana_update();          /* 解析映射：断流早发（配对攒不够）时的兜底 */
                 penraw_fit_tick();
                 penraw_report(win);
             }
@@ -3576,6 +3822,7 @@ static DWORD WINAPI worker(LPVOID param)
                 if (sw > 0 && sh > 0) { g_screenW = sw; g_screenH = sh; }
                 g_pxSrc = 0;
                 InterlockedExchange(&g_pxCalibrated, 0);
+                g_anaLogged = 0;          /* 重标定 ⇒ 解析映射重建，日志重报一次 */
                 g_calib.valid = 0; g_calib.tried = 0; g_calib.attempts = 0;
                 g_axCalX.done = 0; g_axCalX.num = 0; g_axCalX.den = 0; g_axCalX.n = 0; g_axCalX.px = 0;
                 g_axCalY.done = 0; g_axCalY.num = 0; g_axCalY.den = 0; g_axCalY.n = 0; g_axCalY.px = 0;
@@ -4734,7 +4981,7 @@ static void hud_stop(void)
 }
 
 /* ================================================================== 导出 */
-__declspec(dllexport) int jwwh_version(void) { return 0x010F; }
+__declspec(dllexport) int jwwh_version(void) { return 0x0112; }
 
 /* 兜底还原入口：守护进程的正常路径是经共享内存下令（worker 执行），
    此导出供外部工具（脚本/排障）在不需要共享内存时直接远程调用。 */

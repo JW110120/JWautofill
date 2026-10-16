@@ -35,6 +35,14 @@
 /* 引擎接口（smooth_engine.c） */
 BOOL WINAPI engine_dllmain(HINSTANCE hinst, DWORD reason, LPVOID reserved);
 
+/* 进程内工具闸门（ps_tool.c）：注册 PS 'slct' 通知，在 PS 进程里直接读当前工具。
+   ⛔ 面板的 300ms batchPlay 工具巡检是它不可用时的**退路**，不是主路。 */
+int  pstool_install(void* basic, void* self);
+void pstool_uninstall(void);
+int  pstool_state(void);                    /* 0=不可用 1=已注册未读数 2=已接管 */
+int  pstool_tool_name(char* out, int cap);
+void pstool_diag(char* out, int cap);
+
 /* ================================================================ M1 日志 */
 
 static void log_line(const char* tag, const char* fmt, ...);
@@ -78,6 +86,35 @@ static int cfgmap_open(void)
 }
 
 static LONG Rd(int slot) { return g_cfg ? g_cfg[slot] : 0; }
+
+/* ================================================================ 进程内闸门桥 */
+/* ps_tool.c 不能碰槽位表（编号是跨文件手写对应的铁律区），所以由本文件代写。 */
+
+/* ⛔ 非 static：ps_tool.c 要 extern 它（做成 static 就是链接期隐式失配）。 */
+void pstool_log(const char* fmt, ...)
+{
+    char body[512];
+    va_list ap;
+    va_start(ap, fmt);
+    _vsnprintf(body, sizeof(body) - 1, fmt, ap);
+    va_end(ap);
+    body[sizeof(body) - 1] = 0;
+    log_line("ps_tool", "%s", body);
+}
+
+/* 通知回调（PS 主线程）里调：把闸门值 + 时间戳一起落下。
+   ⛔ 时间戳必须同时刷新 —— 引擎按 GATE_STALE_MS=3000 判过期，只写值不写戳
+      等于把闸门推在「即将过期」的状态上。 */
+void pstool_publish(int gate)
+{
+    if (!g_cfg) return;
+    InterlockedExchange((LONG*)&g_cfg[I_TOOLGATE], gate ? 1 : 0);
+    InterlockedExchange((LONG*)&g_cfg[I_GATETS], (LONG)GetTickCount());
+}
+
+/** 闸门是否已由进程内通知接管（2 档）。接管后：① 面板下发的 toolGate 一律忽略；
+    ② GATETS 由本进程无条件续期（通知只在工具变化时来，不续期会 3s 过期 fail-closed）。 */
+static int pstool_owns(void) { return pstool_state() == 2; }
 static void Wr(int slot, LONG v)
 {
     if (g_cfg) InterlockedExchange((LONG*)&g_cfg[slot], v);
@@ -116,7 +153,11 @@ static void write_params(void)
     Wr(I_RADIUSPX,  g_pen.radiusPx);
     Wr(I_HUD,       g_pen.hud);
     Wr(I_HUDCOLOR,  g_pen.hudColor);
-    Wr(I_TOOLGATE,  g_pen.toolGate);
+    /* ⛔⛔ 进程内通知已接管时**绝不能**再写闸门值：面板的值来自它自己 300ms 前的
+       读数（或它在接管前收到的旧值），两边都写就是互相覆盖 —— 表现为工具切了
+       却不生效、或换回套索不恢复（两侧时间戳各自刷新，谁都「新鲜」）。
+       接管后闸门值只由 ps_tool.c 的通知回调独占写入。 */
+    if (!pstool_owns()) Wr(I_TOOLGATE, g_pen.toolGate);
     /* ⛔ 闸门时间戳与闸门值必须同时写：引擎按 GATE_STALE_MS=3000 判过期。 */
     Wr(I_GATETS,    (LONG)GetTickCount());
 }
@@ -194,6 +235,10 @@ static int build_smooth_state(char* out, int cap)
         snAge = (d > 0x40000000) ? 0 : (int)d;   /* 回绕⇒0，正常≤几十 ms */
     }
 
+    /* 进程内工具名（ps_tool.c 已清洗成 [A-Za-z0-9_-]，JSON 安全）。 */
+    char toolName[64];
+    pstool_tool_name(toolName, (int)sizeof(toolName));
+
     int n = _snprintf(out, (size_t)cap,
         "{\"type\":\"smoothState\",\"protocol\":\"2.0\",\"pen\":{"
         "\"enabled\":%d,\"strength\":%d,\"mode\":%d,\"radiusPx\":%d,\"catchUp\":%d,"
@@ -205,7 +250,8 @@ static int build_smooth_state(char* out, int cap)
         "\"dll\":\"%s\",\"injectedPids\":[%lu],"
         "\"state\":%d,\"calls\":%d,\"packets\":%d,\"smoothed\":%d,"
         "\"snAge\":%d,\"stride\":%d,\"offX\":%d,\"offY\":%d,\"offSerial\":%d,"
-        "\"axisMax\":%d,\"hookPid\":%d,\"frozeThreads\":%d,\"lastError\":0}}",
+        "\"axisMax\":%d,\"hookPid\":%d,\"frozeThreads\":%d,"
+        "\"toolSrc\":%d,\"psTool\":\"%s\",\"lastError\":0}}",
         (int)g_enabled, g_pen.strength, g_pen.mode, g_pen.radiusPx, g_pen.catchUp,
         g_pen.cornerAngle, (g_pen.flags & 1) ? "true" : "false", g_pen.hud, g_pen.toolGate,
         Rd(I_TOOLGATE) != 0 ? 1 : 0, (int)Rd(I_PENDOWN), (int)Rd(I_GATEOK), (int)Rd(I_CTUNKNOWN),
@@ -215,7 +261,8 @@ static int build_smooth_state(char* out, int cap)
         dllEsc, (unsigned long)GetCurrentProcessId(),
         (int)Rd(I_STATE), (int)Rd(I_CALLS), (int)Rd(I_PACKETS), (int)Rd(I_SMOOTHED),
         snAge, (int)Rd(I_STRIDE), (int)Rd(I_OFFX), (int)Rd(I_OFFY), (int)Rd(I_OFFSER),
-        (int)Rd(I_AXISMAX), (int)Rd(I_PID), (int)Rd(I_FROZE));
+        (int)Rd(I_AXISMAX), (int)Rd(I_PID), (int)Rd(I_FROZE),
+        pstool_state(), toolName);
     return n > 0 ? n : 0;
 }
 
@@ -698,7 +745,20 @@ static DWORD WINAPI pump_thread(LPVOID arg)
            「面板活着」由 WS 连接本身背书（与引擎注释的设计意图一致：可用性由
            与读数解耦的纯 WS 心跳保证），工具**值**仍由面板巡检消息更新。
            客户端全断 ⇒ 停刷 ⇒ 3s 后自然过期 ⇒ fail-closed 语义保留。 */
-        if (cli_count() > 0) Wr(I_GATETS, (LONG)GetTickCount());
+        /* ⛔ 进程内闸门接管后，GATETS 的续期不能再依赖「面板连着」：
+           'slct' 通知只在**工具变化**时来，而引擎按 GATE_STALE_MS=3000 判过期 ⇒
+           不主动续期就会过期 ⇒ fail-closed 阻断 ⇒ 平滑要等用户再切一次工具才活。 */
+        if (cli_count() > 0 || pstool_owns()) Wr(I_GATETS, (LONG)GetTickCount());
+        /* 闸门来源状态变化时落一行（只在变化时，避免刷屏）。 */
+        {
+            static char lastDiag[192];
+            char diag[192];
+            pstool_diag(diag, (int)sizeof(diag));
+            if (strcmp(diag, lastDiag) != 0) {
+                memcpy(lastDiag, diag, strlen(diag) + 1);
+                pstool_log("闸门状态 %s", diag);
+            }
+        }
         heal_if_unhooked();              /* 守护进程 3s 巡检自愈职责的进程内版 */
         if (build_smooth_state(cur, (int)sizeof(cur)) > 0 &&
             strcmp(cur, last) != 0) {
@@ -835,12 +895,24 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
              md ? md->self : NULL);
 
     /* ⛔ 真机实测（M1）：加载="SP Access"/"Reload"，退出="SP Access"/"Unload"。 */
-    if (_stricmp(caller, "SP Interface") == 0) {
-        if (_stricmp(selector, "Startup") == 0)  { services_start(); return 0; }
-        if (_stricmp(selector, "Shutdown") == 0) { services_stop();  return 0; }
-    } else if (_stricmp(caller, "SP Access") == 0) {
-        if (_stricmp(selector, "Reload") == 0)   { services_start(); return 0; }
-        if (_stricmp(selector, "Unload") == 0)   { services_stop();  return 0; }
+    if ((_stricmp(caller, "SP Interface") == 0 && _stricmp(selector, "Startup") == 0) ||
+        (_stricmp(caller, "SP Access")    == 0 && _stricmp(selector, "Reload")  == 0)) {
+        /* 进程内工具闸门要在服务起来之前挂上：共享内存节得先存在（pstool 会写槽），
+           而引擎 worker 是 ATTACH 时就起的、250ms 一轮重试 open，所以主动建一次。 */
+        if (md) {
+            cfgmap_open();
+            pstool_install(md->basic, md->self);
+        } else {
+            pstool_log("加载消息里 message=NULL ⇒ 跳过进程内闸门注册");
+        }
+        services_start();
+        return 0;
+    }
+    if ((_stricmp(caller, "SP Interface") == 0 && _stricmp(selector, "Shutdown") == 0) ||
+        (_stricmp(caller, "SP Access")    == 0 && _stricmp(selector, "Unload")   == 0)) {
+        pstool_uninstall();
+        services_stop();
+        return 0;
     }
 
     log_line("entry", "未处理消息（原样放行）");

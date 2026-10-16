@@ -229,6 +229,22 @@ export interface PenSmoothStatus {
   mode: number;
   /** 最大滞后（屏幕像素）。 */
   radiusPx: number;
+    /**
+     * 闸门来源：0=进程内读取不可用（面板必须继续自己轮询工具）
+     *           1=已注册 PS 'slct' 通知但**还没读到过**工具（面板继续轮询）
+     *           2=已读到过 ⇒ **通知已接管**（面板**必须停止**轮询，否则两边互相覆盖）
+     *
+     * ⛔ 为什么必须有它：旧实现由面板每 300ms 用 batchPlay 读一次工具。每次读都要进
+     *    一次模态作用域，而全工程的模态请求共用 `MIN_MODAL_GAP_MS=300` 的节流预算
+     *    （上限 3.3/s）—— 300ms 一轮的巡检**恰好把预算吃满**，于是「自动填充」这类
+     *    本来就要弹模态的操作一叠加，请求率立刻超过吞吐 ⇒ 告警风暴（用户报的
+     *    「modal scope 暴涨」）。.8li 在 PS 进程内注册 'slct' 通知后即可零成本取到
+     *    当前工具，面板这条轮询就整条不需要了。
+     * ⚠️ -1 = 对端是旧版（无此字段）⇒ 保持轮询。
+     */
+    toolSrc: number;
+    /** 进程内读到的工具类名（如 lassoTool）；空串 = 还没读到。仅用于诊断展示。 */
+    psTool: string;
     /** 工具闸门：0=当前不是套索 1=是套索 2=未知/读数失败（放行）。 */
     toolGate: SmoothToolGate;
     /** 原生侧回报：工具闸门是否成立（0=当前工具不是套索，正在禁止平滑）。 */
@@ -351,6 +367,8 @@ export const initialPenSmoothStatus: PenSmoothStatus = {
     cornerAngle: 45,
     speedAdaptive: true,
     hud: 3,
+    toolSrc: -1,        // -1 = 对端不报该字段（旧版）⇒ 面板保持自己轮询
+    psTool: '',
     toolGate: 2,
     toolOk: 0,
     penDown: 0,
@@ -678,6 +696,11 @@ export function handleLassoSmoothMessage(msg: any): void {
       hud: Number(penRaw.hud) || 0,
       // 闸门三态：旧版守护进程不回这几个字段 ⇒ Number(undefined)=NaN ⇒ 用 ? 回落初值，
       // 不能让 NaN 进 state（「开着却不平滑」的排查会先被 NaN 污染）。
+      // 闸门来源（进程内 'slct' 通知）。⚠️ 旧版对端不回 ⇒ 保持 -1（继续自己轮询）。
+      //   ⛔ 这里**不能**用 `|| 0` 兜：0 的含义是「进程内读取不可用，面板必须继续轮询」，
+      //      把「字段不存在」洗成 0 只是恰好同向，但一旦将来语义变化就会静默失效。
+      toolSrc: penRaw.toolSrc === undefined ? status.pen.toolSrc : (Number(penRaw.toolSrc) || 0),
+      psTool: typeof penRaw.psTool === 'string' ? penRaw.psTool : status.pen.psTool,
       toolGate: penRaw.toolGate === undefined
           ? status.pen.toolGate
           : (Number(penRaw.toolGate) === 0 ? 0 : (Number(penRaw.toolGate) === 1 ? 1 : 2)),
