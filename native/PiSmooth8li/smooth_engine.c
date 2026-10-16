@@ -926,16 +926,16 @@ static volatile LONG g_lastGapMs;    /* 最近一次复位时的取包间隔（m
    ⛔ 绝不要再改小：用户的「停笔观察」是正常操作，改小就等于「一停笔就复位」。 */
 #define TIME_GAP_RESET_MS 5000
 
-/* —— 断流（上下文被挤出重叠序）的判定与自愈时序（2026-10-15 第九轮）——
-   ⛔ 根因与杠杆见 worker() 里「断流看门狗」上方 + dead_heal() 上方的长注释：
-      唯一有效杠杆是 `WTOverlap(hCtx, TRUE)`（下一个包即生效 = 毫秒级），
-      `WTEnable` 翻转**治不了本症**（它不碰重叠序）。
+/* —— 断流判定与自愈时序（第九轮 2026-10-15 建立；第十轮 2026-10-16 修正）——
+   ⛔ 第十轮修正：据真机 jwwh-25000，「被挤出重叠序」并非全部真相（WTOverlap
+      120 轮全返 1 却一包未回）。故主动动作一律只保留在**断流态**、且各自只做一次；
+      周期性抢占（保持顶层）与 WTEnable 翻转均已删除 —— 理由见 dead_heal /
+      dead_probe / worker 内的注释。
    ⛔ 旧时序（判定下限 600ms、首轮自愈 dead0+4s、之后每 5s 一轮，且整段被 2s
-      诊断日志闸门夹住）在真机上就是「恢复 9s 左右」的唯一来源；既然杠杆本身
-      是毫秒级，时序完全没有必要保守。 */
+      诊断日志闸门夹住）在真机上就是「恢复 9s 左右」的唯一来源；既然杠杆号称
+      毫秒级，时序没有理由保守 —— 这条结论保留。 */
 #define DEAD_DETECT_MIN_MS 350   /* 包冻结达此值（且光标仍在动）才判「断流」 */
 #define HEAL_ROUND_MS      800   /* 自愈轮次间隔（首轮 = 判定后下一拍立即执行） */
-#define HEAL_KEEPALIVE_MS  500   /* 前台期「保持顶层」节流（预防性，见 worker） */
 
 #define SPEED_FULL        3.0    /* 屏幕等效像素/ms：达到即「甩笔」（人手常规 ≤1.5，见下） */
 #define CORNER_MIN_PX     3.0    /* 段长小于它的「拐角」一律当抖动，不削弱平滑 */
@@ -1162,6 +1162,23 @@ static void sn_publish(LONG rX, LONG rY, LONG oX, LONG oY, LONG ms)
     g_snOutX = oX; g_snOutY = oY;
     g_snMs   = ms;
     if (g_cfg) g_cfg[CFG_I_SNTS] = ms;   /* 面板「平滑中断」检测的数据源（见槽位注释） */
+}
+
+/** 取包快照「距现在多久」（ms，**有符号**）。
+ * ⛔⛔ 必须按有符号解释（2026-10-16 第十轮真机定案）：`g_snMs` 由 PS 线程（detour）
+ *    写、读它的却是 worker / HUD 线程，两者竞争时 `g_snMs` 可能比读到的 `now` 大
+ *    十几 ms ⇒ 旧写法 `(DWORD)(now - g_snMs)` 会**下溢**成 ~4.29e9，把「刚有包」
+ *    误判成「久无包」。真机证据：`[hud] 未显示: active=0(t=4294967280ms)
+ *    gate=1(toolOk=1 penDown=1)` —— 笔正落纸面 HUD 却不显示（13 笔里出现 6+ 次）。
+ * ⛔ 写法要点（两个坑都要躲，缺一不可）：
+ *    ① 先按 **DWORD 相减**（无符号模运算）⇒ 在 2^31 以内得到正确的小差值，规避
+ *       「直接 (LONG)now − (LONG)g_snMs 在 GetTickCount 超过 2^31（开机 ~24.8 天）
+ *       时变负」那个老坑；
+ *    ② 再整体解释为 **LONG** ⇒ 负值 = 快照在未来 = 视作「刚刚」，
+ *       `sn_age_ms(now) < HUD_IDLE_MS` 这类判据天然成立。 */
+static __inline LONG sn_age_ms(DWORD now)
+{
+    return (LONG)(DWORD)(now - (DWORD)g_snMs);
 }
 
 /* ---- P3.2 触发闸门：只在「工具是套索」且「笔尖接触画布」时才平滑 ----
@@ -2386,6 +2403,66 @@ static void publish_status(void)
     g_cfg[CFG_I_PXPERAXISY] = (LONG)(ppb * 1000.0);
 }
 
+/* ================ 决定性诊断：Wintab 输入通路本身是否还活着（2026-10-16 第十轮）
+ * ⛔ 为什么需要它：第九轮的「自愈」在真机上每次调用都返回 1（请求被接受）却一包
+ *    未回（jwwh-25000：120 轮全无效，冻结 385s+）⇒ 必须换一个能**一锤定音**的实验，
+ *    把两种截然不同的根因分开：
+ *      ① Wintab 通路活着 ⇒ 只是 **PS 那个上下文**收不到包（重叠序 / 上下文自身异常）；
+ *      ② Wintab 通路整体没有数据 ⇒ PS 已切到 Windows Ink / 消息驱动等**其它输入源**。
+ *    两者后续的修法完全不同，靠日志猜不出来，必须实测。
+ * 做法：在断流态（PS 本来收不到包，此时抢占**零损失**）自开一个临时 Wintab 上下文，
+ *    推到重叠序顶层，等 30ms，读一次包，然后**立刻关闭**：
+ *      · 读包 >0 ⇒ ①，顺带证明「WTOverlap 真能生效」⇒ 该查 PS 的 hCtx 为何推不回；
+ *      · 读包 =0 ⇒ ②，Wintab 全局无数据 ⇒ 得去查 PS 的输入源切换。
+ * ⛔ 只做一次：由 dead_heal() 的 round==1 触发，绝不在每个断流周期反复开关上下文。
+ * ⛔ 无论成败都必须 WTClose —— 临时上下文若留在顶层，PS 就再也收不到包。
+ * ⛔ LOGCONTEXT 只让驱动用 WTInfo(WTI_DEFCONTEXT) 自己填（我们不解析、不碰字段）：
+ *    该结构含 HANDLE 字段，32/64 位布局我们无法可靠自证；原样传入是最低风险写法。
+ * ⛔ 副作用预警：本探针若读到包，说明它临时抢走了顶层，关闭后 PS 可能**顺带**恢复
+ *    —— 那不是「自愈生效」，判读日志时要分清（本行有独立 ★ 标记）。 */
+static void dead_probe(void)
+{
+    HMODULE hm = GetModuleHandleA("Wintab32.dll");
+    if (!hm) { logf("# [probe] Wintab32.dll 未加载\n"); return; }
+    typedef UINT (*PFN_WTInfoA)(UINT, UINT, LPVOID);
+    typedef HCTX (*PFN_WTOpenA)(HWND, LPVOID, BOOL);
+    typedef BOOL (*PFN_WTClose)(HCTX);
+    typedef BOOL (*PFN_WTOverlapP)(HCTX, BOOL);
+    typedef int  (*PFN_WTPacketsGetP)(HCTX, int, LPVOID);
+    PFN_WTInfoA       pInfo  = (PFN_WTInfoA)(void*)GetProcAddress(hm, "WTInfoA");
+    PFN_WTOpenA       pOpen  = (PFN_WTOpenA)(void*)GetProcAddress(hm, "WTOpenA");
+    PFN_WTClose       pClose = (PFN_WTClose)(void*)GetProcAddress(hm, "WTClose");
+    PFN_WTOverlapP    pOv    = (PFN_WTOverlapP)(void*)GetProcAddress(hm, "WTOverlap");
+    PFN_WTPacketsGetP pGet   = (PFN_WTPacketsGetP)(void*)GetProcAddress(hm, "WTPacketsGet");
+    if (!pInfo || !pOpen || !pClose || !pGet) {
+        logf("# [probe] 探针不可用: WTInfo=%d WTOpen=%d WTClose=%d WTPacketsGet=%d\n",
+             pInfo ? 1 : 0, pOpen ? 1 : 0, pClose ? 1 : 0, pGet ? 1 : 0);
+        return;
+    }
+    char lc[512];
+    ZeroMemory(lc, sizeof(lc));
+    if (pInfo(3 /*WTI_DEFCONTEXT*/, 0, lc) == 0) {
+        logf("# [probe] WTInfo(WTI_DEFCONTEXT) 不支持 ⇒ 无法建临时上下文\n");
+        return;
+    }
+    HCTX hc = pOpen(NULL, lc, TRUE);
+    if (!hc) {
+        logf("# [probe] WTOpen 失败 ⇒ 驱动拒绝新建上下文（上限或驱动异常）\n");
+        return;
+    }
+    BOOL ov = pOv ? pOv(hc, TRUE) : 0;
+    Sleep(30);
+    char buf[512];
+    int n = pGet(hc, 1, buf);
+    BOOL cl = pClose(hc);
+    logf("# [probe] ★临时上下文 hCtx=0x%llX 推顶=%d 读包=%d 关闭=%d ⇒ %s\n",
+         (unsigned long long)(UINT_PTR)hc, (int)ov, n, (int)cl,
+         n > 0 ? "Wintab 通路活着 ⇒ 问题在 PS 的上下文（重叠序/上下文自身异常）"
+               : "Wintab 通路无数据 ⇒ PS 已切到其它输入源，方向完全不同");
+    if (!cl)
+        logf("# [probe] ⚠ WTClose 失败 ⇒ 临时上下文可能仍占顶层，PS 将持续收不到包\n");
+}
+
 /* ======================================== 断流自愈：把上下文推回重叠序顶层
  * ⛔⛔ 根因定案（2026-10-15 第九轮；真机 jwwh-10472 / 1796 / 19544 三方交叉）：
  *   规则来自 Windows Wintab 的**上下文重叠序**：「同一时刻只有一个上下文收包 =
@@ -2412,9 +2489,10 @@ static void publish_status(void)
  *   与「冻结多久」无关 —— 这才是能把恢复压到 2s 以内的杠杆。
  *
  * 轮次策略（判定后下一拍执行 #1，此后每 HEAL_ROUND_MS 一轮）：
- *   #1       → WTOverlap(top)                       ← 正解，通常一击即中
- *   #偶数轮  → WTEnable 翻转（顺带清空陈旧队列 / 重计数）后再 overlap 确认在顶层
- *   #奇数轮  → 只重复 overlap（把又被抢走的顶层拿回来）
+ *   #1       → WTOverlap(top) + ★dead_probe()（决定性探针，只此一次）
+ *   #n > 1   → 只重复 overlap（把又被抢走的顶层拿回来）
+ * ⛔ 第十轮（2026-10-16）删掉了原来的「偶数轮 WTEnable 翻转」：理由见函数内注释
+ *    （真机 120 轮全败 + 两次永久断流都出现在多轮翻转之后 ⇒ 疑累积损伤）。
  * ⛔ 这里**绝不许 Sleep**：worker 每 250ms 一拍，阻塞只会同时拖慢判定与下一轮
  *    重试（旧版每轮白送 40ms）。所有动作都是几十微秒级的驱动调用。
  * 前 8 轮逐轮打日志（含返回值），之后每 4 轮一条 → 恢复日志再回填
@@ -2431,35 +2509,30 @@ static void dead_heal(int round)
         return;
     }
     typedef BOOL (*PFN_WTOverlap)(HCTX, BOOL);
-    typedef BOOL (*PFN_WTEnable)(HCTX, BOOL);
     PFN_WTOverlap pOv = (PFN_WTOverlap)(void*)GetProcAddress(hm, "WTOverlap");
-    PFN_WTEnable  pEn = (PFN_WTEnable )(void*)GetProcAddress(hm, "WTEnable");
-    int flip = (round >= 2 && (round & 1) == 0 && pEn) ? 1 : 0;
-    BOOL ov1 = pOv ? pOv(hc, TRUE) : 0;     /* 主轴：推回重叠序顶层 */
-    BOOL e1 = 0, e2 = 0, ov2 = 0;
-    if (flip) {
-        e1 = pEn(hc, FALSE);
-        e2 = pEn(hc, TRUE);
-        if (pOv) ov2 = pOv(hc, TRUE);       /* enable 之后重叠序可能又变，补推一次 */
-    }
+    /* ⛔ 第十轮**做减法**：不再调用 WTEnable 翻转。依据有二：
+       ① 真机 jwwh-25000：120 轮 WTOverlap 全返 1（请求被接受）却一包未回 ⇒
+          自愈整体对「永久断流」无效，不该再叠加更多动作去扰动上下文；
+       ② WTEnable 按规范不碰重叠序（帮不上忙），而 0x0105 的 678s 与 0x0106 的
+          385s 两次永久断流**都发生在多轮翻转之后** ⇒ 高度怀疑 disable→enable
+          对这个上下文有**累积损伤**。故只保留只读探测（打印可用性，不调用）。 */
+    BOOL ov1 = pOv ? pOv(hc, TRUE) : 0;     /* 唯一动作：推回重叠序顶层 */
     if (round == 1) {
         typedef UINT (*PFN_QSGet)(HCTX);
-        PFN_QSGet pQg = (PFN_QSGet)(void*)GetProcAddress(hm, "WTQueueSizeGet");
+        typedef BOOL (*PFN_WTEnableP)(HCTX, BOOL);
+        PFN_QSGet     pQg = (PFN_QSGet)(void*)GetProcAddress(hm, "WTQueueSizeGet");
+        PFN_WTEnableP pEn = (PFN_WTEnableP)(void*)GetProcAddress(hm, "WTEnable");
         UINT qs = pQg ? pQg(hc) : 0;
-        logf("# [dead] 自愈杠杆探测: WTOverlap=%s WTEnable=%s 队列=%u包\n",
+        logf("# [dead] 自愈杠杆探测: WTOverlap=%s WTEnable=%s(只读不调) 队列=%u包\n",
              pOv ? "有" : "无", pEn ? "有" : "无", qs);
+        dead_probe();      /* ★决定性诊断：自开临时上下文试收包（见其定义处） */
     }
     /* ⛔ 轮次不限，故日志只在**前 8 轮 + 之后每 4 轮**落盘：断流若长到几分钟
-       （真机 678s），逐轮打印会把日志冲成噪声，而恢复行里的「自愈 N 轮、末轮
-       Xms 前」已经把结论带出来了。 */
-    if (round <= 8 || (round % 4) == 0) {
-        if (flip)
-            logf("# [dead] 自愈 #%d: WTOverlap(top)=%d + WTEnable 0/1=%d/%d 补推 overlap=%d\n",
-                 round, (int)ov1, (int)e1, (int)e2, (int)ov2);
-        else
-            logf("# [dead] 自愈 #%d: WTOverlap(hCtx=0x%llX, top)=%d\n",
-                 round, (unsigned long long)(UINT_PTR)hc, (int)ov1);
-    }
+       （真机 678s / 385s），逐轮打印会把日志冲成噪声，而恢复行里的「自愈 N 轮、
+       末轮 Xms 前」已经把结论带出来了。 */
+    if (round <= 8 || (round % 4) == 0)
+        logf("# [dead] 自愈 #%d: WTOverlap(hCtx=0x%llX, top)=%d\n",
+             round, (unsigned long long)(UINT_PTR)hc, (int)ov1);
 }
 
 static DWORD WINAPI worker(LPVOID param)
@@ -2571,50 +2644,14 @@ static DWORD WINAPI worker(LPVOID param)
             s_prevJump = g_rstJump;
         }
 
-        /* —— 保持重叠序顶层（预防段，2026-10-15 第九轮）——
-           见 dead_heal() 上方的根因注释：上下文被挤出重叠序 = 彻底收不到包。
-           ① 前台**切回本进程**的那一拍立刻补推一次（完全对应 Wacom 约定的
-              「应用回到前台 → WTOverlap(hCtx, TRUE)」）；
-           ② 本进程在前台期间每 HEAL_KEEPALIVE_MS 再声明一次顶层，把「被别人
-              悄悄抢走顶层」这件事在**发生前**就按住（否则只能等冻结 350ms+
-              光标位移触发看门狗，用户已经先看到笔迹走样了）。
-           ⛔ 只在面板开关开着（g_cfg[CFG_I_ENABLED]）且**本进程为前台**时做：
-              前台不是我们时绝不 WTOverlap(top)，否则会把笔从别的应用手里抢走。
-           ⛔ WTOverlap 不改变上下文属性（只动重叠序），是幂等的；返回值 0
-              只可能是 hCtx 失效，所以只在「切回前台」或**失败**时落日志。 */
-        {
-            static DWORD s_fgPid, s_ovAt, s_failAt;
-            static LONG  s_ovN;
-            DWORD t = GetTickCount();
-            HWND fg = GetForegroundWindow();
-            DWORD pid = 0;
-            if (fg) GetWindowThreadProcessId(fg, &pid);
-            if (pid) {
-                int becameMine = (pid != s_fgPid && pid == GetCurrentProcessId());
-                s_fgPid = pid;
-                if (g_patched && g_ctxNow && g_cfg && g_cfg[CFG_I_ENABLED]
-                    && pid == GetCurrentProcessId()
-                    && (becameMine || t - s_ovAt >= HEAL_KEEPALIVE_MS)) {
-                    HMODULE hm = GetModuleHandleA("Wintab32.dll");
-                    typedef BOOL (*PFN_WTOverlap2)(HCTX, BOOL);
-                    PFN_WTOverlap2 pOv = hm ? (PFN_WTOverlap2)(void*)GetProcAddress(hm, "WTOverlap") : NULL;
-                    if (pOv) {
-                        s_ovAt = t;
-                        BOOL r = pOv(g_ctxNow, TRUE);
-                        s_ovN++;
-                        /* ⛔ 失败只在 5s 内报第一条：hCtx 一旦失效会每 500ms
-                           失败一次，逐条打会把日志冲掉（真正的上下文失效另有
-                           [ctx] WTClose/WTOpenA 日志与 [status] ctxN 可比对）。 */
-                        int failLog = (!r && t - s_failAt >= 5000);
-                        if (failLog) s_failAt = t;
-                        if (becameMine || failLog)
-                            logf("# [ctx] 保持顶层%s: WTOverlap(hCtx=0x%llX, top)=%d 累计=%ld\n",
-                                 becameMine ? "（前台切回本进程，立即重推）" : "（周期维护，失败）",
-                                 (unsigned long long)(UINT_PTR)g_ctxNow, (int)r, (long)s_ovN);
-                    }
-                }
-            }
-        }
+        /* —— 「保持重叠序顶层」预防段已删除（2026-10-16 第十轮，真机证伪）——
+           ⛔ 第九轮曾在本进程前台期间**每 500ms** 调 WTOverlap(hCtx, TRUE) 抢占顶层。
+              真机判决（jwwh-25000）：跑满 199 次照样每笔断流 ⇒ 该动作既拦不住断流，
+              又很可能在干扰 PS 自身的上下文管理 —— Wacom 规范只建议「应用回到前台
+              时推一次」，把它做成周期性抢占是我们自作加码（out of spec）。
+           ⛔ 本版做减法：**一次都不主动抢**（连「切回前台推一次」也一并去掉，否则
+              事后无法区分是哪一半有害）。主动的 Wintab 动作只剩两处、且都只在断流态：
+              一次性 overlap（dead_heal）+ 一次性探针（dead_probe）。 */
 
         /* —— 断流看门狗（2026-10-14 第七轮）——
            本轮真机形态：penDown 卡 1、packets 冻结数分钟、calls 一直涨、
@@ -2759,7 +2796,7 @@ static DWORD WINAPI worker(LPVOID param)
         {
             static int s_cleared;
             if (g_penDown && g_snMs) {
-                DWORD ageP = (DWORD)(GetTickCount() - (DWORD)g_snMs);
+                LONG ageP = sn_age_ms(GetTickCount());   /* ⛔ 有符号：见 sn_age_ms 注释 */
                 if (ageP > TIME_GAP_RESET_MS) {
                     InterlockedExchange(&g_penDown, 0);
                     InterlockedExchange(&g_contact, 0);
@@ -3071,12 +3108,12 @@ static DWORD WINAPI hud_thread(LPVOID param)
         if (g_hudStop) break;
 
         /* 「有包流」判据：只要还在出包就算活跃（与 HUD 显隐无关）。
-           ⛔ `(LONG)now − g_snMs` 的旧写法在 GetTickCount 超过 2^31（开机 ~24.8 天）
-           时会变成负数 ⇒ (DWORD) 后是个巨大值 ⇒ HUD 永久不显示。一律用 DWORD 相减。 */
+           ⛔ 年龄一律走 sn_age_ms()（有符号）——它同时躲开「2^31 翻转」与「跨线程
+           超前下溢」两个坑，细节见 sn_age_ms 定义处的长注释。 */
         DWORD now = GetTickCount();
         int active = 0;
         if (g_cfg && g_patched && g_calib.valid && g_cfg[CFG_I_ENABLED]) {
-            if ((DWORD)(now - (DWORD)g_snMs) < HUD_IDLE_MS) active = 1;
+            if (sn_age_ms(now) < HUD_IDLE_MS) active = 1;
         }
 
         /* ⛔⛔ 闸门闸门闸门：HUD 只在「工具是套索」且「笔尖确实接触画布」时出现。
@@ -3147,7 +3184,12 @@ static DWORD WINAPI hud_thread(LPVOID param)
         double aoX = (double)snOutX, aoY = (double)snOutY;
         {
             LONG pktDt = snMs - snPrevMs;
-            DWORD age = (DWORD)(now - (DWORD)snMs);
+            /* ⛔⛔ 必须**有符号**（2026-10-16 第十轮）：`snMs` 是 g_snMs 的局部拷贝，
+               PS 线程刚写、HUD 线程紧跟着读时它会比 now 大 ⇒ 无符号相减下溢成 ~4.29e9
+               ⇒ 下面的 `age <= 40` 恒假 ⇒ **整段外推被跳过** ⇒ 圆心退回「out 的包时刻
+               位置」，用户报告过的「圆心与受力点错位 15px」会**偶发回归**。
+               改用 LONG 后：负值（快照在未来）被 `age >= 1` 正常排除，语义不变。 */
+            LONG age = (LONG)(DWORD)(now - (DWORD)snMs);
             if (pktDt >= 1 && age >= 1 && age <= 40) {
                 double vX = ((double)snRawX - (double)snPrevRawX) / (double)pktDt;
                 double vY = ((double)snRawY - (double)snPrevRawY) / (double)pktDt;
@@ -3170,7 +3212,7 @@ static DWORD WINAPI hud_thread(LPVOID param)
            ⛔ 采样条件：包新鲜(<2s) + 非断流（断流期光标走 raw 冻结会污染拟合）。 */
         {
             static DWORD s_lastGapLog;
-            DWORD snAgeG = (DWORD)(now - (DWORD)g_snMs);
+            LONG snAgeG = sn_age_ms(now);   /* ⛔ 有符号：见 sn_age_ms 注释 */
             if ((active || g_penDown) && !g_streamDead && snAgeG < 2000
                 && now - s_lastGapLog >= 600) {
                 s_lastGapLog = now;
@@ -3214,7 +3256,7 @@ static DWORD WINAPI hud_thread(LPVOID param)
            ⚠️ 绳长/半径一律取 leash_px()，与滤波分支同一个函数（见其定义处）。 */
         LONG hf = g_cfg ? g_cfg[CFG_I_HUD] : 0;
         int ropeMode = (g_cfg && g_cfg[CFG_I_MODE] == 1) ? 1 : 0;
-        DWORD pktAge = (DWORD)(now - (DWORD)g_snMs);
+        LONG pktAge = sn_age_ms(now);   /* ⛔ 有符号：见 sn_age_ms 注释；负值=刚有包 */
         /* ⛔ enabled 也必须判（第八轮补）：平滑关着时 out 快照冻结在旧值，
            HUD 会拿冻结快照画圈 —— 真机实锤「前十笔 HUD 显示但显示错误」。
            ⛔⛔ 断流态（2026-10-15，用户报「平滑失效时 HUD 显示的位置是错的」）：
@@ -3241,9 +3283,9 @@ static DWORD WINAPI hud_thread(LPVOID param)
                  hudBits 无 bit0 ⇒ 面板的「拉绳提示」是关的 */
             if (g_cfg && g_cfg[CFG_I_ENABLED] && (DWORD)(now - lastHudWhy) >= 2000) {
                 lastHudWhy = now;
-                logf("# [hud] 未显示: wnd=%d mem=%d active=%d(t=%lums) gate=%d"
+                logf("# [hud] 未显示: wnd=%d mem=%d active=%d(t=%ldms) gate=%d"
                      "(toolOk=%ld penDown=%ld) rope=%d hudBits=%ld dead=%ld\n",
-                     wnd ? 1 : 0, mem ? 1 : 0, activeNow, (unsigned long)pktAge, gateOk,
+                     wnd ? 1 : 0, mem ? 1 : 0, activeNow, (long)pktAge, gateOk,
                      (long)g_toolOk, (long)g_penDown, ropeMode, (long)hf,
                      (long)g_streamDead);
             }
@@ -3452,7 +3494,7 @@ static void hud_stop(void)
 }
 
 /* ================================================================== 导出 */
-__declspec(dllexport) int jwwh_version(void) { return 0x0106; }
+__declspec(dllexport) int jwwh_version(void) { return 0x0107; }
 
 /* 兜底还原入口：守护进程的正常路径是经共享内存下令（worker 执行），
    此导出供外部工具（脚本/排障）在不需要共享内存时直接远程调用。 */
