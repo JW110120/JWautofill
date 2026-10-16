@@ -684,6 +684,8 @@ typedef struct {
     HCTX  hCtx;          /* 0 = 未标定 */
     int   stride;        /* 每包字节数 */
     int   offSerial;
+    int   offTime;       /* pkTime（合成包要盖时间戳） */
+    int   offChanged;    /* pkChanged */
     int   offX, offY;
     /* 落笔判据用到的字段偏移（**只有 src=1「掩码+数据」双证据才认**；-1 = 不可用）——
        它们直接进入接触信号表（见 contact_signals_build / contact_update 的多信号并联）。 */
@@ -707,7 +709,7 @@ static CALIB g_calib;
 #define CTX_CACHE_MAX 4
 static struct {
     HCTX h;
-    int  stride, offSerial, offX, offY;
+    int  stride, offSerial, offTime, offChanged, offX, offY;
     int  offBtn, offZ, offNP, offTP;
     u32  axisMax, axisMaxY;
 } g_ctxCache[CTX_CACHE_MAX];
@@ -724,6 +726,7 @@ static int ctx_cache_find(HCTX h, CALIB* out)
         memset(out, 0, sizeof(*out));
         out->hCtx = g_ctxCache[i].h;
         out->stride = g_ctxCache[i].stride; out->offSerial = g_ctxCache[i].offSerial;
+        out->offTime = g_ctxCache[i].offTime; out->offChanged = g_ctxCache[i].offChanged;
         out->offX = g_ctxCache[i].offX;     out->offY = g_ctxCache[i].offY;
         out->offBtn = g_ctxCache[i].offBtn; out->offZ = g_ctxCache[i].offZ;
         out->offNP = g_ctxCache[i].offNP;   out->offTP = g_ctxCache[i].offTP;
@@ -744,6 +747,7 @@ static void ctx_cache_put(HCTX h, const CALIB* c)
     else slot = g_ctxCacheRound++ % CTX_CACHE_MAX;     /* 环形覆盖最旧 */
     g_ctxCache[slot].h = h;
     g_ctxCache[slot].stride = c->stride; g_ctxCache[slot].offSerial = c->offSerial;
+    g_ctxCache[slot].offTime = c->offTime; g_ctxCache[slot].offChanged = c->offChanged;
     g_ctxCache[slot].offX = c->offX;     g_ctxCache[slot].offY = c->offY;
     g_ctxCache[slot].offBtn = c->offBtn; g_ctxCache[slot].offZ = c->offZ;
     g_ctxCache[slot].offNP = c->offNP;   g_ctxCache[slot].offTP = c->offTP;
@@ -802,6 +806,10 @@ static double g_dirX, g_dirY;
 static int    g_hasDir;
 static DWORD  g_lastMs;
 static int    g_wasEnabled;
+/* 1 = 断流刚刚恢复（worker 置位、smooth_packets 消费）：
+   恢复后的第一批包要**强制锚定**（输出点回到笔尖），否则会拿停摆前的输出点续画，
+   得到一段被拉长的假轨迹（观感：选区线忽然被拽到新位置）。 */
+static volatile LONG g_deadRecovered;
 
 /* 轴坐标 → 屏幕像素的比例。**逐轴**且**带符号**：
    ⛔⛔ 2026-10-13 真机定案 —— 数位板到屏幕的映射是**逐轴**的，而且 Y 轴的符号与屏幕
@@ -926,16 +934,28 @@ static volatile LONG g_lastGapMs;    /* 最近一次复位时的取包间隔（m
    ⛔ 绝不要再改小：用户的「停笔观察」是正常操作，改小就等于「一停笔就复位」。 */
 #define TIME_GAP_RESET_MS 5000
 
-/* —— 断流判定与自愈时序（第九轮 2026-10-15 建立；第十轮 2026-10-16 修正）——
-   ⛔ 第十轮修正：据真机 jwwh-25000，「被挤出重叠序」并非全部真相（WTOverlap
-      120 轮全返 1 却一包未回）。故主动动作一律只保留在**断流态**、且各自只做一次；
-      周期性抢占（保持顶层）与 WTEnable 翻转均已删除 —— 理由见 dead_heal /
-      dead_probe / worker 内的注释。
-   ⛔ 旧时序（判定下限 600ms、首轮自愈 dead0+4s、之后每 5s 一轮，且整段被 2s
-      诊断日志闸门夹住）在真机上就是「恢复 9s 左右」的唯一来源；既然杠杆号称
-      毫秒级，时序没有理由保守 —— 这条结论保留。 */
+/* —— 断流判定时序（第九轮 2026-10-15 建立；第十三轮 2026-10-16 定稿）——
+   ⛔⛔ 此处**只剩判定门槛**：自愈/抢救已全部删除。判决见 dead_relay_probe 上方
+      「不再主动抢救」段与 worker 内注释：WTEnable 翻转（12 轮）、周期性抢顶层
+      （199 次）、WTOverlap（120+30 轮）三者全返成功值却一包未回，且每个动作都会
+      让外来上下文短占重叠序顶层 = 亲手延长 PS 的断流。
+   ⛔ 曾被这条时序解释的「恢复 9s 左右」已随抢救一起作废：本版恢复时长完全由驱动
+      决定（真机实测 0.3s~31s 随机）。 */
 #define DEAD_DETECT_MIN_MS 350   /* 包冻结达此值（且光标仍在动）才判「断流」 */
-#define HEAL_ROUND_MS      800   /* 自愈轮次间隔（首轮 = 判定后下一拍立即执行） */
+/* ⛔⛔ 「最近落笔」窗口（2026-10-16 第十二轮）—— 替代瞬时 `g_penDown == 1`：
+   真机 jwwh-24524 第 12 笔（12:06:13.9）断流，判定门槛 350ms 要等到 12:06:14.25
+   才满足，而 `g_penDown` 在 12:06:14.237 就被清零（断流前最后几包恰好是悬空包，
+   `[ct] 连续全零=13 包`）—— **只差 13ms**，于是整段 3.5 分钟的永久断流
+   一条 `[dead]` 都没打、HUD 一直「显示」着冻结几何。
+   ⇒ 判据从「此刻落笔」放宽为「最近 PEN_RECENT_MS 内落笔过」。这既抓住
+      「笔刚落纸就断」的形态，又不会把「笔早就放下、单纯在用鼠标」当成断流
+      （那种情况下 penDown 早已长期为 0，窗口过期即不判）。 */
+#define PEN_RECENT_MS     2000
+
+/* ⛔ [stall] 无前置条件的停摆记录门限（2026-10-16 第十五轮）。取 400ms：比 [dead] 的
+   350ms 稍宽 ⇒ 先由 [stall] 无条件记下每一次停摆，再看 [dead] 是否给同一段加判定，
+   两者的差集就是「被落笔判据遮蔽掉的停摆」。纯诊断常量，不参与任何行为决策。 */
+#define STALL_LOG_MS       400
 
 #define SPEED_FULL        3.0    /* 屏幕等效像素/ms：达到即「甩笔」（人手常规 ≤1.5，见下） */
 #define CORNER_MIN_PX     3.0    /* 段长小于它的「拐角」一律当抖动，不削弱平滑 */
@@ -1238,6 +1258,8 @@ static void hud_stop(void);
 typedef struct {
     int stride;
     int offSerial;
+    int offTime;         /* pkTime            -1 = 掩码里没有（合成包用） */
+    int offChanged;      /* pkChanged         -1 */
     int offX, offY;
     int offBtn;          /* pkButtons         -1 = 掩码里没有 */
     int offZ;            /* pkZ（离板高度）    -1 = 掩码里没有 */
@@ -1253,13 +1275,15 @@ static void layout_of(u32 mask, int ctxSize, LAYOUT* L)
                                  PK_TANGENT_PRESSURE, PK_ORIENTATION, PK_ROTATION };
     int off = 0;
     memset(L, 0, sizeof(*L));
-    L->offSerial = L->offX = L->offY = -1;
+    L->offSerial = L->offTime = L->offChanged = L->offX = L->offY = -1;
     L->offBtn = L->offZ = L->offNP = L->offTP = -1;
     for (int i = 0; i < (int)(sizeof(bits) / sizeof(bits[0])); i++) {
         if (!(mask & bits[i])) continue;
         int sz = 4;
         if (bits[i] == PK_CONTEXT) sz = ctxSize;
         else if (bits[i] == PK_ORIENTATION || bits[i] == PK_ROTATION) sz = 12;
+        if (bits[i] == PK_TIME)          L->offTime = off;
+        if (bits[i] == PK_CHANGED)       L->offChanged = off;
         if (bits[i] == PK_SERIAL_NUMBER) L->offSerial = off;
         if (bits[i] == PK_BUTTONS)       L->offBtn = off;
         if (bits[i] == PK_X)             L->offX = off;
@@ -1520,6 +1544,7 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
        而包是 52 字节；掩码是「请求」，盲扫是「事实」，事实优先。 */
     int stride = 0, offS = -1, offX = -1, offY = -1, src = 0, ok = 0;
     int cBtn = -1, cZ = -1, cNP = -1, cTP = -1;   /* 落笔判据采纳的字段偏移（下面日志段裁决） */
+    int cTime = -1, cChg = -1;                    /* 合成包用的 pkTime/pkChanged 偏移（仅 src=1） */
     if (okMask && (!haveScan || (mL.stride == sStride && mL.offSerial == sOff))) {
         stride = mL.stride; offS = mL.offSerial; offX = mL.offX; offY = mL.offY; src = 1; ok = 1;
     } else if (haveScan) {
@@ -1545,9 +1570,13 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
     cZ   = (ok && src == 1) ? mL.offZ   : -1;
     cNP  = (ok && src == 1) ? mL.offNP  : -1;
     cTP  = (ok && src == 1) ? mL.offTP  : -1;
-    calib_logf("# [calib] 接触字段偏移 采用 btn=%d z=%d np=%d tp=%d（src=%d；"
+    /* ⛔ 同一条理由：这两个偏移只给「独立笔通路」合成包盖时间戳/变更位用，
+       指错字段会污染别的语义 ⇒ 同样只在 src=1 采信。 */
+    cTime = (ok && src == 1) ? mL.offTime    : -1;
+    cChg  = (ok && src == 1) ? mL.offChanged : -1;
+    calib_logf("# [calib] 接触字段偏移 采用 btn=%d z=%d np=%d tp=%d time=%d chg=%d（src=%d；"
                "掩码推算本应是 btn=%d z=%d np=%d tp=%d）\n",
-               cBtn, cZ, cNP, cTP, src, mL.offBtn, mL.offZ, mL.offNP, mL.offTP);
+               cBtn, cZ, cNP, cTP, cTime, cChg, src, mL.offBtn, mL.offZ, mL.offNP, mL.offTP);
     calib_logf("# [calib] 盲扫=%s stride=%d offSerial=%d offX=%d offY=%d\n",
                haveScan ? "有" : "无", sStride, sOff, sX, sY);
     calib_logf("# [calib] 结论: %s（依据=%s）\n",
@@ -1592,12 +1621,40 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
           一条公式覆盖 1/16 单位驱动与标准驱动。N1「光标实测 Δ 偏低 40% 且漂」
           同案昭雪：那就是真实尺度在抗议，被当噪声废弃了。
        ⛔ 符号**不在这里猜**：仍由光标标定的符号投票裁决（Y 轴本机实测反向）。 */
+    /* —— 轴数量级口径：**每次标定都必须重算**（2026-10-16 第十六轮修）——
+       ⛔⛔ 旧版把这三行关在下面的 `if (g_pxSrc != 1)` 里 ⇒ 首次标定把 g_pxSrc 置 1
+          之后整块被跳过 ⇒ axisMax 永远退回 lcInExt。真机证据（jwwh-9252）：
+          重新挂载后 `[status] axMax` 从 55040 变 44800，而同一次 `[calib]`
+          报的 `lcOut* ext=(55040,23040)` 根本没变 —— 纯守卫造成的，不是驱动变了。
+          影响面：`jumpPx = JUMP_RESET_FRAC × axisMax × px × dpi` 等**位移门限的分母**
+          就是它 ⇒ 门限会随「插件被重载过几次」漂移 19%。 */
+    long oex = outExtX < 0 ? -outExtX : outExtX;   /* Wintab 惯例 lcOutExtY 可为负 */
+    long oey = outExtY < 0 ? -outExtY : outExtY;
+    int haveOut = (oex > 1 && oey > 1);
+    if (haveOut) {
+        /* ⛔ 包坐标真实上界 = lcOutExt（不是 lcInExt）：必须与 px 同源 ——
+           axisMax×px 才等于屏幕跨度（55040×0.0625=3440 ✓）。 */
+        axMax = (u32)oex;
+        inExtY = oey;
+    }
+    g_calib.axisMaxY = (u32)(inExtY > 0 ? inExtY : 32767);
+
+    /* 轴→像素比：**唯一权威 = 屏幕 / lcOutExt**（2026-10-15 回归定案，推翻第五轮）。
+       ⛔⛔ 依据（[gap] v2 绝对坐标 122 样本线性回归，rms 3.8/4.2px）：
+          screen_x = 4.9 + 0.06223·raw_x，screen_y = 1438.0 − 0.06232·raw_y
+          —— 两轴真实尺度都是 ~0.0622–0.0625 = 屏幕/lcOutExt（3440/55040），
+          且**严格线性**。旧公式 屏幕/lcInExt（0.0768/0.0486）把 X 高估 22.9%、
+          Y 低估 22.0% —— 「横领先 / 竖落后」逐轴残差的根因；而「lcOutExt/lcInExt
+          再搜 2 的幂定标」用 /16 恰好把 1.2286/0.7784 拉回标称，把真信息抹掉了
+          （1.2286/0.7784 本身就是误差系数！）。
+       ⛔ Wintab 语义：lcOutExt 是上下文**输出量程**，与包坐标**同单位**；
+          标准驱动（lcOutExt=屏幕 px、包=屏幕 px）下本公式自动得 1.0，同样成立 ⇒
+          一条公式覆盖 1/16 单位驱动与标准驱动。N1「光标实测 Δ 偏低 40% 且漂」
+          同案昭雪：那就是真实尺度在抗议，被当噪声废弃了。
+       ⛔ 符号**不在这里猜**：仍由光标标定的符号投票裁决（Y 轴本机实测反向）。 */
     if (g_pxSrc != 1) {
         double scrW = (double)(g_screenW > 0 ? g_screenW : 1920);
         double scrH = (double)(g_screenH > 0 ? g_screenH : 1080);
-        long oex = outExtX < 0 ? -outExtX : outExtX;   /* Wintab 惯例 lcOutExtY 可为负 */
-        long oey = outExtY < 0 ? -outExtY : outExtY;
-        int haveOut = (oex > 1 && oey > 1);
         if (haveOut) {
             g_pxAxisX = scrW / (double)oex;
             g_pxAxisY = scrH / (double)oey;
@@ -1612,22 +1669,16 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
             if (nomY > 0.0001 && nomY < 1000.0) g_pxAxisY = nomY;
             g_pxSrc = 0;
         }
-        /* ⛔ 包坐标真实上界 = lcOutExt（不是 lcInExt）：jumpPx 等位移门限的分母口径
-           必须与 px 同源 —— axisMax×px 才等于屏幕跨度（55040×0.0625=3440 ✓）。 */
-        if (haveOut) {
-            axMax = (u32)oex;
-            inExtY = oey;
-        }
-        g_calib.axisMaxY = (u32)(inExtY > 0 ? inExtY : 32767);
-        calib_logf("# [calib] lcOut*: org=(%ld,%ld) ext=(%ld,%ld)  ⇒ px=屏幕/lcOutExt X=%.6f Y=%.6f%s\n",
-                   (long)outOrgX, (long)outOrgY, (long)outExtX, (long)outExtY,
-                   g_pxAxisX, g_pxAxisY, haveOut ? "" : "（lcOutExt 无效，退屏幕标称）");
-        calib_logf("# [calib] 标称(旧/lcInExt 分母，仅作对照不再采用) X=%.6f Y=%.6f\n",
-                   (double)g_screenW / (double)(inExtX > 0 ? inExtX : 1),
-                   (double)g_screenH / (double)(oey > 0 ? oey : 1));
-        calib_logf("# [calib] 采用 %s： X=%.6f Y=%.6f（符号另由标定投票定）\n",
-                   haveOut ? "屏幕/lcOutExt" : "屏幕标称", g_pxAxisX, g_pxAxisY);
     }
+    calib_logf("# [calib] lcOut*: org=(%ld,%ld) ext=(%ld,%ld)  ⇒ px=屏幕/lcOutExt X=%.6f Y=%.6f%s\n",
+               (long)outOrgX, (long)outOrgY, (long)outExtX, (long)outExtY,
+               g_pxAxisX, g_pxAxisY, haveOut ? "" : "（lcOutExt 无效，退屏幕标称）");
+    calib_logf("# [calib] 标称(旧/lcInExt 分母，仅作对照不再采用) X=%.6f Y=%.6f\n",
+               (double)g_screenW / (double)(inExtX > 0 ? inExtX : 1),
+               (double)g_screenH / (double)(oey > 0 ? oey : 1));
+    calib_logf("# [calib] 采用 %s： X=%.6f Y=%.6f（符号另由标定投票定）\n",
+               haveOut ? "屏幕/lcOutExt" : "屏幕标称", g_pxAxisX, g_pxAxisY);
+    calib_logf("# [calib] 轴上界最终 = %u（与 px 同源，应 = lcOutExtX）\n", axMax);
 
     g_calib.hCtx = hCtx;
     g_calib.stride = ok ? stride : (haveScan ? sStride : 0);
@@ -1636,6 +1687,7 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
     g_calib.offY = ok ? offY : -1;
     /* ⛔⛔ 落笔判据的字段偏移在上面的日志段就已经裁决好了（cBtn/cZ/cNP/cTP，见那里的注释）。 */
     g_calib.offBtn = cBtn; g_calib.offZ = cZ; g_calib.offNP = cNP; g_calib.offTP = cTP;
+    g_calib.offTime = cTime; g_calib.offChanged = cChg;
     g_calib.axisMax = axMax;
     g_calib.valid = ok;
     /* ⛔ 失败不立刻认命：盲扫要 n>=3，而真机前几批常常只有 2 个包。
@@ -1674,6 +1726,750 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
     }
     /* ⛔ detour 内最后一步：把拼好的标定文本交给 worker 落盘（本函数全程零 I/O）。 */
     calib_publish();
+}
+
+/* ============================================================================
+ * 独立笔通路（Raw Input / HID 自读）—— 2026-10-16 第十四轮
+ *
+ * ── 为什么要它（三轮交叉定案）──────────────────────────────────────────────
+ * 断流 = **驱动侧 WinTab 采样整体停摆**：`calls` 一直涨、`packets` 冻结数分钟，
+ * 而同时
+ *   · `WTOverlap` 全返 1（PS 的上下文一直在重叠序顶层）、
+ *   · 插件**自建**上下文 + 推顶 + 笔在动，`WTPacketsGet` 读包依然为 **0**
+ *     （0x0108 探针 / 0x010C `[relay]`：8×40ms 共读 0 包）。
+ * ⇒ Wintab 这条通路在停摆期**没有任何杠杆**可用（进程内无解）。恢复瞬间驱动把
+ *   攒下的包一次性交出来（冲包量 ≈ 队列容量 128）⇒ PS 在一帧里画完整根弧线，
+ *   用户看到的就是「卡顿 → 整根弧线一次性冒出来」。
+ *
+ * 唯一的出路：**绕开 Wintab**，用 Windows 自己的 Raw Input 通道另读一份笔数据，
+ * 在 Wintab 空转时把合成包喂给 PS。
+ *
+ * ── 三级安全门（本模块的全部风险都在这里）─────────────────────────────────
+ *   ① **镜像有效性**：合成包必须落在 PS 认的坐标空间里。做法不是猜，而是
+ *      与**真实包配对做逐轴最小二乘仿射拟合**（raw → 平板坐标），并统计残差 rms；
+ *      只有 `n ≥ 300 且 rms ≤ 1.5px` 才认（见 RIFIT）。拟合不成立 ⇒ 本模块
+ *      **一个字节都不会写**（与 0x010C 行为逐位相同）。
+ *   ② **只在空转时接管**：真实通路返回 0 包、且 raw 样本新鲜（≤150ms）、且笔在
+ *      范围内 ⇒ 才补流。真实通路一旦有包，永远以真实包为准。
+ *   ③ **丢弃冲包**：刚补流过而真实通路一次吐回 ≥25 包 ⇒ 丢弃。否则补流已经把
+ *      输出点推到光标，冲包又把几十个**旧**坐标重放一遍 ⇒ PS 会把整根弧线倒着
+ *      画回去（比不补流更糟）。
+ *
+ * ── 采样源优先级 ───────────────────────────────────────────────────────────
+ * HID 笔报告（有真实压力/落笔位）优先；若本机根本不派 HID 笔报告，退回
+ * **绝对鼠标**（`MOUSE_MOVE_ABSOLUTE`，只有位置 + 按键当落笔位）。两条源各自
+ * 有独立的拟合，切换时清空配对环（两套 raw 量纲不同，混在一起必然拟合失败）。
+ *
+ * ⛔ 本线程**不在 detour 上**：建窗/注册/解析/落日志都允许系统调用。
+ *    detour 只做三件 O(1) 的事：读几个原子、偶尔记一对配对、需要时填合成包。
+ * ==========================================================================*/
+#define PENRAW_CLASS   L"JWautofillPenRaw"
+#define RIPSZ          512                  /* raw 样本环（2 的幂） */
+#define RIPAIR_N       1024                 /* 配对环（2 的幂） */
+#define RI_RAW_MAXAGE  400                  /* 补流时只采用这么久以内的样本 */
+#define RI_STALL_MS    250                  /* 真实通路静默多久才算「空转」 */
+#define RI_FRESH_MS    150                  /* raw 样本多久算新鲜 */
+#define RI_PAIR_GAP_MS 10                   /* 配对节流 + 「raw 新鲜」窗口（一份 raw 样本只配一次） */
+#define RI_PAIR_MAXPKT 4                    /* 只配「正常轮询」的包（冲包不配） */
+#define RI_FIT_MIN_N   150                  /* 拟合最少样本数（**稳健剔除之后**的） */
+#define RI_FIT_OUT_KEEP 96                  /* 单对残差超过此值即判离群（平板单位；1 单位=1/16px ⇒ 6px） */
+#define RI_FIT_MAX_RMS 8.0                  /* 重拟合后逐轴 rms 上限（8 单位 = 0.5px） */
+#define RI_FIT_MIN_SPAN 1000                /* 保留集的 raw 跨度下限（防「点全挤在一处」的病态拟合） */
+#define RI_BIG_BURST   25                   /* 单次 ≥ 这么多包 = 冲包 */
+
+typedef struct { DWORD t; int x, y, p, tip, inr; } RIPS;
+
+static RIPS            g_riRing[RIPSZ];
+static volatile LONG   g_riHead;            /* 生产端单调递增序号 */
+static volatile LONG   g_riHidN, g_riMouseN, g_riAbsN, g_riBadN;
+/* ⛔ 判决「Raw Input 通道本身通不通」的两个计数：注册返回 TRUE 只说明请求被接受，
+   设备不存在也照样回 TRUE ⇒ 必须看**有没有 WM_INPUT 真的到达窗口过程**。
+   键盘（01/06）只计数、不解析内容。 */
+static volatile LONG   g_riAllN, g_riKbdN;
+static volatile LONG   g_riLastMs;          /* 最近一份 raw 样本时刻 */
+static volatile LONG   g_riX, g_riY, g_riP, g_riTip, g_riIn;
+static volatile LONG   g_riSrc;             /* 0=未定 1=HID 笔 2=绝对鼠标 */
+static volatile LONG   g_riReg, g_riWndOk;  /* 注册结果位 / 建窗成功 */
+static HANDLE          g_riThread;
+static DWORD           g_riTid;
+static volatile LONG   g_riStop;
+
+/* —— 配对（detour 写、worker 读）—— */
+typedef struct { int rx, ry, wx, wy; } RIP_pair;
+static RIP_pair        g_pair[RIPAIR_N];
+static volatile LONG   g_pairHead;
+static volatile LONG   g_pairMs;
+
+/* —— 合成包底本：真包里最后一包原样留一份，合成时先克隆再改字段，
+        这样所有我们不认识的字段（cursor/orientation/...）都保持合法。 —— */
+static u8              g_tpl[256];
+static volatile LONG   g_tplOk;
+
+/* —— 补流状态 —— */
+static volatile LONG   g_synOn;             /* 门控总闸（由拟合结果驱动） */
+static volatile LONG   g_synHead;           /* 上次补流消费到的 raw 序号 */
+static volatile LONG   g_synSerial;         /* 合成包序号 */
+static volatile LONG   g_synLastMs;
+static volatile LONG   g_synRuns, g_synPkts, g_dropBurst, g_dropLast;
+/* ⛔⛔ 补流门控的**真凭据**：最近一次收到**真实**包的时刻。
+   采样源换成系统光标之后，raw 环会被 250Hz 的光标采样一直喂饱 ⇒ 旧判据
+   「raw 新鲜」恒真 ⇒ 会在驱动**完全正常**时也每次 r==0 都补流（把 Wintab
+   通路变成 250Hz 的重复坐标流）。必须以「真实包是否已经空转」为闸：
+   `r == 0 && now - g_lastRealMs >= RI_STALL_MS` 才是「真实通路空转」。 */
+static volatile LONG   g_lastRealMs;
+/* ⛔⛔ 断流期的「笔还按着吗」唯一可信来源（2026-10-16 第十六轮）：
+   `g_penDown` 只在**来包时**更新，断流 >5s 会被 `[pen] 落笔锁存超时` 强制清零。
+   而合成包要有非零压力才不会被闸门判成悬空 ⇒ 一清零就**死锁**（补流给 0 压力 ⇒
+   penDown 仍 0 ⇒ 后续全 0）。这里记住**最后一个真实包**结束时的落笔态：
+   断流越久它越可靠 —— 因为「用户抬没抬笔」这件事只有真实包说了算。
+   ⛔ 它带来的唯一副作用是：真抬笔后驱动仍停摆时会继续补流 —— 但抬笔后
+   **光标不再移动** ⇒ 合成包坐标一成不变 ⇒ PS 画不出任何新东西，无害。 */
+static volatile LONG   g_lastRealTip;
+
+/* —— 观测范围（自标定，不依赖任何 HID 描述符解析）—— */
+static volatile LONG   g_riXMin, g_riXMax, g_riYMin, g_riYMax, g_riPMax;
+
+/* —— 拟合结果 —— */
+typedef struct {
+    int    valid;
+    int    n;          /* 保留集样本数 */
+    int    nAll;       /* 参与拟合的全部配对数 */
+    double ax, bx, ay, by;
+    double rmsX, rmsY;
+    int    spanX, spanY;
+} RIFIT;
+static RIFIT g_fit;
+
+/* ---- HID 解析（hid.dll 动态加载：不进导入表，缺文件也不影响主功能）---- */
+typedef LONG (WINAPI *PFN_HidP_GetUsageValue)(int, USHORT, USHORT, USHORT,
+                                              ULONG*, void*, char*, ULONG);
+typedef LONG (WINAPI *PFN_HidP_GetCaps)(void*, void*);
+
+typedef struct {                             /* HIDP_CAPS（只用到前几个字段） */
+    USHORT UsagePage; USHORT Usage;
+    USHORT InputReportByteLength; USHORT OutputReportByteLength;
+    USHORT FeatureReportByteLength; USHORT Reserved[17];
+    USHORT NumberLinkCollectionNodes;
+    USHORT NumberInputButtonCaps;  USHORT NumberInputValueCaps;  USHORT NumberInputDataIndices;
+    USHORT NumberOutputButtonCaps; USHORT NumberOutputValueCaps; USHORT NumberOutputDataIndices;
+    USHORT NumberFeatureButtonCaps; USHORT NumberFeatureValueCaps; USHORT NumberFeatureDataIndices;
+} RI_CAPS;
+
+#define RI_HIDP_OK      0x00110000L
+#define RI_HIDP_INPUT   0
+
+typedef struct { HANDLE dev; void* ppd; } RI_DEV;
+static RI_DEV   g_riDev[8];
+static int      g_riDevN;
+static HMODULE  g_riHidMod;
+static PFN_HidP_GetUsageValue g_riGetVal;
+static PFN_HidP_GetCaps       g_riCaps;
+
+static void ri_minmax(volatile LONG* lo, volatile LONG* hi, LONG v)
+{
+    if (!*lo && !*hi) { *lo = v; *hi = v; return; }   /* 哨兵：0/0 = 还没样本 */
+    if (v < *lo) *lo = v;
+    if (v > *hi) *hi = v;
+}
+
+/** 取（并缓存）某 HID 设备的 preparsed data；新设备时落一行设备描述。 */
+static void* ri_dev_ppd(HANDLE dev)
+{
+    for (int i = 0; i < g_riDevN; i++)
+        if (g_riDev[i].dev == dev) return g_riDev[i].ppd;
+    if (g_riDevN >= (int)(sizeof(g_riDev) / sizeof(g_riDev[0]))) return NULL;
+
+    if (!g_riHidMod) {
+        g_riHidMod = LoadLibraryA("hid.dll");
+        if (g_riHidMod) {
+            g_riGetVal = (PFN_HidP_GetUsageValue)(void*)GetProcAddress(g_riHidMod, "HidP_GetUsageValue");
+            if (!g_riGetVal)
+                g_riGetVal = (PFN_HidP_GetUsageValue)(void*)GetProcAddress(g_riHidMod, "HidP_GetUsageValue_64");
+            g_riCaps   = (PFN_HidP_GetCaps)(void*)GetProcAddress(g_riHidMod, "HidP_GetCaps");
+        }
+        logf("# [raw] hid.dll=%s HidP_GetUsageValue=%s HidP_GetCaps=%s\n",
+             g_riHidMod ? "载入" : "★载入失败",
+             g_riGetVal ? "有" : "无", g_riCaps ? "有" : "无");
+    }
+    if (!g_riGetVal) return NULL;
+
+    UINT sz = 0;
+    GetRawInputDeviceInfoW(dev, RIDI_PREPARSEDDATA, NULL, &sz);
+    if (sz == 0) { logf("# [raw] ★设备 0x%p 取 preparsed data 失败（sz=0）\n", (void*)dev); return NULL; }
+    void* buf = HeapAlloc(GetProcessHeap(), 0, sz);
+    if (!buf) return NULL;
+    if (GetRawInputDeviceInfoW(dev, RIDI_PREPARSEDDATA, buf, &sz) != sz) {
+        HeapFree(GetProcessHeap(), 0, buf);
+        logf("# [raw] ★设备 0x%p preparsed data 读取失败\n", (void*)dev);
+        return NULL;
+    }
+    g_riDev[g_riDevN].dev = dev;
+    g_riDev[g_riDevN].ppd = buf;
+    g_riDevN++;
+
+    /* 设备描述（一次）：名字 + HID caps（page/usage 能区分「笔」与「触摸」） */
+    WCHAR name[256];
+    UINT  nsz = sizeof(name);
+    if (GetRawInputDeviceInfoW(dev, RIDI_DEVICENAME, name, &nsz) != (UINT)-1) name[255] = 0;
+    else name[0] = 0;
+    RI_CAPS caps;
+    memset(&caps, 0, sizeof(caps));
+    if (g_riCaps) g_riCaps(buf, &caps);
+    logf("# [raw] ★HID 设备 #%d hDev=0x%p caps(page=0x%04X usage=0x%04X "
+         "inLen=%d valCaps=%d btnCaps=%d) name=%ls\n",
+         g_riDevN, (void*)dev, (unsigned)caps.UsagePage, (unsigned)caps.Usage,
+         (int)caps.InputReportByteLength, (int)caps.NumberInputValueCaps,
+         (int)caps.NumberInputButtonCaps, name);
+    return buf;
+}
+
+/** 一份 raw 样本入环。生产者：Raw Input 线程（唯一）。 */
+static void ri_push(DWORD now, int x, int y, int p, int tip, int inr)
+{
+    LONG h = g_riHead;
+    RIPS* s = &g_riRing[(u32)h & (RIPSZ - 1)];
+    s->t = now; s->x = x; s->y = y; s->p = p; s->tip = tip; s->inr = inr;
+    InterlockedIncrement(&g_riHead);
+    /* ⛔ 顺序：先写样本体，最后才抬 g_riLastMs（读者用它当「新鲜」判据）。 */
+    InterlockedExchange(&g_riX, (LONG)x);
+    InterlockedExchange(&g_riY, (LONG)y);
+    InterlockedExchange(&g_riP, (LONG)p);
+    InterlockedExchange(&g_riTip, (LONG)tip);
+    InterlockedExchange(&g_riIn, (LONG)inr);
+    ri_minmax(&g_riXMin, &g_riXMax, (LONG)x);
+    ri_minmax(&g_riYMin, &g_riYMax, (LONG)y);
+    if (p > g_riPMax) InterlockedExchange(&g_riPMax, (LONG)p);
+    InterlockedExchange(&g_riLastMs, (LONG)now);
+}
+
+/** HID 笔报告 → 样本。usage：X/Y 在通用桌面页，压力/落笔位/在范围内在 Digitizer 页。 */
+static void ri_parse_hid(const RAWINPUT* ri, DWORD now)
+{
+    if (!ri->data.hid.dwSizeHid || ri->header.dwSize <= sizeof(RAWINPUTHEADER)) {
+        InterlockedIncrement(&g_riBadN); return;
+    }
+    ULONG len = ri->data.hid.dwSizeHid;
+    if (len > 256) len = 256;
+    char rep[264];
+    memcpy(rep, ri->data.hid.bRawData, len);
+    ULONG vx = 0, vy = 0;
+    void* ppd = ri_dev_ppd(ri->header.hDevice);
+    if (!ppd) { InterlockedIncrement(&g_riBadN); return; }
+    int okx = (g_riGetVal(RI_HIDP_INPUT, 0x01, 0, 0x30, &vx, ppd, rep, len) == RI_HIDP_OK);
+    int oky = (g_riGetVal(RI_HIDP_INPUT, 0x01, 0, 0x31, &vy, ppd, rep, len) == RI_HIDP_OK);
+    if (!okx || !oky) {                       /* 少数设备把 X/Y 也放在 Digitizer 页 */
+        okx = (g_riGetVal(RI_HIDP_INPUT, 0x0D, 0, 0x30, &vx, ppd, rep, len) == RI_HIDP_OK);
+        oky = (g_riGetVal(RI_HIDP_INPUT, 0x0D, 0, 0x31, &vy, ppd, rep, len) == RI_HIDP_OK);
+    }
+    if (!okx || !oky) { InterlockedIncrement(&g_riBadN); return; }
+
+    ULONG tip = 0, inr = 1, pr = 0;
+    if (g_riGetVal(RI_HIDP_INPUT, 0x0D, 0, 0x42, &tip, ppd, rep, len) != RI_HIDP_OK) tip = 0;
+    if (g_riGetVal(RI_HIDP_INPUT, 0x0D, 0, 0x32, &inr, ppd, rep, len) != RI_HIDP_OK) inr = 1;
+    if (g_riGetVal(RI_HIDP_INPUT, 0x0D, 0, 0x30, &pr,  ppd, rep, len) != RI_HIDP_OK) pr = 0;
+
+    if (InterlockedExchange(&g_riSrc, 1) != 1) {
+        /* 从「绝对鼠标」切到 HID 笔：量纲不同，配对环必须清空重来 */
+        InterlockedExchange(&g_pairHead, 0);
+        logf("# [raw] 采样源切到 **HID 笔**，配对环清空重拟合\n");
+    }
+    InterlockedIncrement(&g_riHidN);
+    ri_push(now, (int)vx, (int)vy, (int)pr, tip ? 1 : 0, inr ? 1 : 0);
+}
+
+static void ri_handle_input(HRAWINPUT hri)
+{
+    BYTE buf[512];
+    UINT sz = sizeof(buf);
+    if (GetRawInputData(hri, RID_INPUT, buf, &sz, sizeof(RAWINPUTHEADER)) != sz) return;
+    const RAWINPUT* ri = (const RAWINPUT*)buf;
+    DWORD now = GetTickCount();
+    if (ri->header.dwType == RIM_TYPEHID) {
+        ri_parse_hid(ri, now);
+    } else if (ri->header.dwType == RIM_TYPEMOUSE) {
+        InterlockedIncrement(&g_riMouseN);
+        const RAWMOUSE* rm = &ri->data.mouse;
+        if (rm->usFlags & MOUSE_MOVE_ABSOLUTE) {
+            /* ⛔ 落笔状态必须**保持**：绝对鼠标报告绝大多数只带位置、不带按键位，
+               若「没带按键位」就当成抬起，落笔会被每帧冲成 0 ⇒ 合成包全被判成悬空、
+               闸门关闭、补流白做。只有报告里**确实**带了按键位时才更新状态。 */
+            static int s_mouseTip;
+            if (rm->usButtonFlags & RI_MOUSE_BUTTON_1_DOWN) s_mouseTip = 1;
+            else if (rm->usButtonFlags & RI_MOUSE_BUTTON_1_UP) s_mouseTip = 0;
+            if (InterlockedExchange(&g_riSrc, 2) != 2) {
+                InterlockedExchange(&g_pairHead, 0);
+                logf("# [raw] 采样源切到 **绝对鼠标**（本机未派 HID 笔报告），配对环清空重拟合\n");
+            }
+            InterlockedIncrement(&g_riAbsN);
+            ri_push(now, (int)(LONG)rm->lLastX, (int)(LONG)rm->lLastY, 0, s_mouseTip, 1);
+        }
+    } else if (ri->header.dwType == RIM_TYPEKEYBOARD) {
+        InterlockedIncrement(&g_riKbdN);      /* 只计数：用来判「通道通不通」，不解析内容 */
+    }
+}
+
+static LRESULT CALLBACK penraw_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    if (m == WM_INPUT) {
+        InterlockedIncrement(&g_riAllN);      /* 通道是否真的通：只要 >0，「实现」就没问题 */
+        ri_handle_input((HRAWINPUT)l);
+        return 0;
+    }
+    if (m == WM_NCHITTEST) return HTTRANSPARENT;
+    if (m == WM_ERASEBKGND) return 1;
+    return DefWindowProcW(h, m, w, l);
+}
+
+static DWORD WINAPI penraw_thread(LPVOID param)
+{
+    (void)param;
+    HINSTANCE inst = g_hInst ? g_hInst : GetModuleHandleW(NULL);
+    WNDCLASSEXW wc;
+    memset(&wc, 0, sizeof(wc));
+    wc.cbSize        = sizeof(wc);
+    wc.lpfnWndProc   = penraw_wndproc;
+    wc.hInstance     = inst;
+    wc.lpszClassName = PENRAW_CLASS;
+    if (!RegisterClassExW(&wc)) {
+        logf("# [raw] ★RegisterClassExW 失败 err=%lu\n", (unsigned long)GetLastError());
+        return 0;
+    }
+    /* 0×0 的不可见 WS_POPUP：只用来接收 WM_INPUT，永不显示、永不激活。
+       ⛔ 不能建在 DllMain（loader lock）；本线程由 worker 拉起。 */
+    HWND w = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, PENRAW_CLASS, L"",
+                             WS_POPUP, 0, 0, 0, 0, NULL, NULL, inst, NULL);
+    if (!w) {
+        logf("# [raw] ★CreateWindowExW 失败 err=%lu\n", (unsigned long)GetLastError());
+        return 0;
+    }
+    InterlockedExchange(&g_riWndOk, 1);
+
+    /* 四条 usage 分别注册：哪条成了、哪条没成，日志里要能一眼看出来。
+       ⛔ 第四条**键盘**是**判决用**的对照项（2026-10-16 第十六轮）：它是唯一
+          一定在 Raw Input 队列里的设备 ⇒ 「键盘也没 WM_INPUT」说明通道/窗口有问题，
+          「键盘有、笔没有」才说明是笔设备不在队列（Wacom WinTab 模式）。
+          只计数，不解析、不记录内容。 */
+    RAWINPUTDEVICE rd[4];
+    memset(rd, 0, sizeof(rd));
+    rd[0].usUsagePage = 0x0D; rd[0].usUsage = 0x02;   /* Digitizer / Pen */
+    rd[1].usUsagePage = 0x0D; rd[1].usUsage = 0x01;   /* Digitizer / Digitizer */
+    rd[2].usUsagePage = 0x01; rd[2].usUsage = 0x02;   /* Generic Desktop / Mouse（兜底） */
+    rd[3].usUsagePage = 0x01; rd[3].usUsage = 0x06;   /* Generic Desktop / Keyboard（对照） */
+    LONG reg = 0;
+    const char* tag[4] = { "0D/02 笔", "0D/01 数字化仪", "01/02 鼠标", "01/06 键盘" };
+    for (int i = 0; i < 4; i++) {
+        rd[i].dwFlags = RIDEV_INPUTSINK;
+        rd[i].hwndTarget = w;
+        DWORD e = 0;
+        BOOL ok = RegisterRawInputDevices(&rd[i], 1, sizeof(RAWINPUTDEVICE));
+        if (!ok) e = GetLastError();
+        if (ok) reg |= (1L << i);
+        logf("# [raw] 注册 %s 输入: %s err=%lu\n", tag[i], ok ? "OK" : "★失败",
+             (unsigned long)e);
+    }
+    InterlockedExchange(&g_riReg, reg);
+
+    /* —— 一次性设备枚举（2026-10-16 第十五轮）——
+       ⛔ 注册**成功**不等于**收得到**：真机 jwwh-22288 三条 usage 全 OK（reg=0b111），
+          但整场 HID=0、绝对鼠标=0 —— 一条 WM_INPUT 都没有。必须区分两种可能：
+            ① 本机 Raw Input **根本看不见**笔/数字化仪（Wacom 处于 WinTab 模式时就会这样，
+               笔只走 Wintab 驱动，不进 Raw Input 队列）⇒ 独立笔通路**原理上不可行**；
+            ② 设备在列表里、只是没派输入 ⇒ 那才是我们实现的问题。
+          `GetRawInputDeviceList` + `RIDI_DEVICENAME` 直接给出答案（设备路径里带 VID/PID
+          与集合号）。这一步只做一次，不占热路径。 */
+    {
+        UINT n = 0;
+        if (GetRawInputDeviceList(NULL, &n, sizeof(RAWINPUTDEVICELIST)) == 0 && n) {
+            if (n > 512) n = 512;
+            RAWINPUTDEVICELIST* dl = (RAWINPUTDEVICELIST*)
+                HeapAlloc(GetProcessHeap(), 0, sizeof(RAWINPUTDEVICELIST) * n);
+            if (dl) {
+                UINT got = GetRawInputDeviceList(dl, &n, sizeof(RAWINPUTDEVICELIST));
+                int cHid = 0, cMouse = 0, cKbd = 0, cOther = 0;
+                for (UINT i = 0; i < got; i++) {
+                    if (dl[i].dwType == RIM_TYPEHID)            cHid++;
+                    else if (dl[i].dwType == RIM_TYPEMOUSE)     cMouse++;
+                    else if (dl[i].dwType == RIM_TYPEKEYBOARD)  cKbd++;
+                    else                                        cOther++;
+                }
+                logf("# [raw] 设备枚举：共 %u 个（HID=%d 鼠标=%d 键盘=%d 其他=%d）\n",
+                     (unsigned)got, cHid, cMouse, cKbd, cOther);
+                int shown = 0;
+                for (UINT i = 0; i < got && shown < 12; i++) {
+                    if (dl[i].dwType != RIM_TYPEHID) continue;
+                    UINT sz = 0;
+                    GetRawInputDeviceInfoW(dl[i].hDevice, RIDI_DEVICENAME, NULL, &sz);
+                    if (sz == 0 || sz > 512) continue;
+                    WCHAR nb[512];
+                    UINT got2 = GetRawInputDeviceInfoW(dl[i].hDevice, RIDI_DEVICENAME, nb, &sz);
+                    if (got2 == (UINT)-1) continue;
+                    nb[511] = 0;
+                    logf("# [raw]   HID#%d %ls\n", shown, nb);
+                    shown++;
+                }
+                HeapFree(GetProcessHeap(), 0, dl);
+            }
+        } else {
+            logf("# [raw] ★GetRawInputDeviceList 失败 err=%lu\n",
+                 (unsigned long)GetLastError());
+        }
+    }
+
+    MSG msg;
+    while (!g_riStop && GetMessageW(&msg, NULL, 0, 0) > 0) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    DestroyWindow(w);
+    return 0;
+}
+
+static void penraw_start(void)
+{
+    if (g_riThread) {
+        DWORD code = 0;
+        if (GetExitCodeThread(g_riThread, &code) && code == STILL_ACTIVE) return;
+        CloseHandle(g_riThread);           /* 已死：回收句柄后再建（同 hud_start） */
+        g_riThread = NULL; g_riTid = 0;
+    }
+    InterlockedExchange(&g_riStop, 0);
+    g_riThread = CreateThread(NULL, 0, penraw_thread, NULL, 0, &g_riTid);
+}
+
+static void penraw_stop(void)
+{
+    if (!g_riThread) return;
+    InterlockedExchange(&g_riStop, 1);
+    if (g_riTid) PostThreadMessageW(g_riTid, WM_QUIT, 0, 0);
+    WaitForSingleObject(g_riThread, 3000);
+    CloseHandle(g_riThread);
+    g_riThread = NULL; g_riTid = 0;
+}
+
+/* ========================================================= 采样源：系统光标
+ * ⛔⛔ 为什么换源（2026-10-16 第十六轮，真机 jwwh-9252 定案）：
+ *   Raw Input 两轮真机都是 `HID=0 绝对鼠标=0` —— Wacom 设备
+ *   （VID_056A&PID_0357 三个 collection）**明明在 `GetRawInputDeviceList` 里**，
+ *   三条 usage 注册也全 OK，却一条 WM_INPUT 都没有。这条路已判死。
+ *   而同一份日志里 `[dead] ★包流断供: 包冻结 516ms 而光标仍移动(Δ累计509px)`
+ *   ⇒ **`GetCursorPos` 在停摆期是活的**。要绕开 Wintab 拿到笔的位置，
+ *   最可靠的一手就是直接读系统光标 —— 它与 Wintab 停不停摆无关。
+ *
+ * 采样值照样进 raw 环 ⇒ 下面「配对 → 逐轴仿射拟合 → 补流」**一行都不用改**：
+ * 拟合是自适应的（采样坐标是屏幕像素还是 HID 原始值，它自己会算出 a/b），
+ * 而 `penraw_synth` 本来就按样本序号消费、不重复 ⇒ 天然节流，无需另加。
+ * ⛔ 一旦 HID / 绝对鼠标哪天真有数据，本线程立即让位，绝不混源。 */
+static volatile LONG g_csStop, g_csN;
+static HANDLE g_csThread;
+static DWORD  g_csTid;
+
+#define CS_PERIOD_MS 4          /* 250Hz：喂得满 100Hz 的笔，CPU 开销可忽略 */
+
+static DWORD WINAPI cursamp_thread(LPVOID param)
+{
+    (void)param;
+    while (!g_csStop) {
+        if (g_riHidN > 0 || g_riAbsN > 0) {     /* 真源有数据 ⇒ 让位 */
+            Sleep(50);
+            continue;
+        }
+        POINT c; c.x = 0; c.y = 0;
+        if (GetCursorPos(&c)) {
+            DWORD now = GetTickCount();
+            if (InterlockedExchange(&g_riSrc, 3) != 3)
+                logf("# [raw] 采样源切到 **系统光标**（Raw Input 两轮零输入 ⇒ 弃用），"
+                     "光标坐标直接进配对环\n");
+            InterlockedIncrement(&g_csN);
+            /* —— tip（笔是否按着）：决定合成包的压力与 buttons ——
+               ⛔ 直接用 g_penDown 会在长断流（>5s）后失效 —— 那时它已被
+                  `[pen] 落笔锁存超时` 清零，而补流恰恰只在长断流时才需要。
+                  回退顺序：当前值 → 最后一次真实包的落笔态 → 最近补流过（会话自持）。
+                  见 g_lastRealTip 处的长注释（含「抬笔后继续补流为何无害」的论证）。 */
+            int tip = (int)g_penDown;
+            if (!tip) {
+                if (g_lastRealTip == 1) tip = 1;
+                else {
+                    LONG t = g_synLastMs;
+                    if (t && (LONG)(now - (DWORD)t) <= 3000) tip = 1;
+                }
+            }
+            ri_push(now, (int)c.x, (int)c.y, 0, tip, 1);
+        }
+        Sleep(CS_PERIOD_MS);
+    }
+    return 0;
+}
+
+static void cursamp_start(void)
+{
+    if (g_csThread) {
+        DWORD code = 0;
+        if (GetExitCodeThread(g_csThread, &code) && code == STILL_ACTIVE) return;
+        CloseHandle(g_csThread);
+        g_csThread = NULL; g_csTid = 0;
+    }
+    InterlockedExchange(&g_csStop, 0);
+    g_csThread = CreateThread(NULL, 0, cursamp_thread, NULL, 0, &g_csTid);
+}
+
+static void cursamp_stop(void)
+{
+    if (!g_csThread) return;
+    InterlockedExchange(&g_csStop, 1);
+    WaitForSingleObject(g_csThread, 2000);
+    CloseHandle(g_csThread);
+    g_csThread = NULL; g_csTid = 0;
+}
+
+/* ---------------------------------------------------------------- 配对 / 拟合
+ * detour 侧（penraw_maybe_pair）：真实包来了、且 raw 样本新鲜 ⇒ 记一对。
+ *   ⛔ 三条过滤缺一不可：
+ *     · `RI_PAIR_MAXPKT`：**冲包不配** —— 一次吐回上百个包时它们对应的是同一份
+ *       raw 样本，配进去会把拟合按「时间堆积密度」加权，彻底歪掉；
+ *     · `RI_PAIR_GAP_MS`：一份 raw 样本只配一次（否则 52Hz 轮询会把 100Hz 的
+ *       raw 样本重复计 2 次）；
+ *     · 只用**最新一包**：一批里的旧包在时间上离 raw 样本更远。
+ * worker 侧（penraw_fit_tick）：对环内全部配对做逐轴最小二乘。 */
+static void penraw_maybe_pair(const u8* buf, int r, DWORD now)
+{
+    if (r <= 0 || r > RI_PAIR_MAXPKT) return;
+    if (!g_calib.valid || g_calib.offX < 0 || g_calib.offY < 0 || g_calib.stride <= 0) return;
+    if (g_calib.stride > (int)sizeof(g_tpl)) return;
+    LONG rawMs = g_riLastMs;
+    if (!rawMs) return;
+    LONG age = (LONG)(now - (DWORD)rawMs);
+    if (age < 0 || age > RI_PAIR_GAP_MS) return;
+    if (!g_riIn) return;                          /* 笔离开范围：位置无意义 */
+    LONG ps = g_pairMs;
+    if (ps && (LONG)(now - (DWORD)ps) >= 0 && (LONG)(now - (DWORD)ps) < RI_PAIR_GAP_MS) return;
+    InterlockedExchange(&g_pairMs, (LONG)now);
+
+    const u8* p = buf + (SIZE_T)(r - 1) * g_calib.stride;
+    /* 合成包底本：原样留最后一包（所有不认识的字段都跟着合法） */
+    memcpy(g_tpl, p, g_calib.stride);
+    InterlockedExchange(&g_tplOk, 1);
+
+    int wx = 0, wy = 0;
+    memcpy(&wx, p + g_calib.offX, 4);
+    memcpy(&wy, p + g_calib.offY, 4);
+    LONG h = g_pairHead;
+    RIP_pair* q = &g_pair[(u32)h & (RIPAIR_N - 1)];
+    q->rx = g_riX; q->ry = g_riY; q->wx = wx; q->wy = wy;
+    InterlockedIncrement(&g_pairHead);
+}
+
+/** 单次最小二乘（keep==NULL 时用全部点）。返回参与拟合的点数，0 = 退化。 */
+static int rifit_pass(LONG start, LONG n, const u8* keep,
+                      double* ax, double* bx, double* rmsX,
+                      double* ay, double* by, double* rmsY)
+{
+    double N = 0, srx = 0, srxx = 0, swx = 0, srxwx = 0;
+    double sry = 0, sryy = 0, swy = 0, srywy = 0;
+    for (LONG i = 0; i < n; i++) {
+        if (keep && !keep[i]) continue;
+        const RIP_pair* q = &g_pair[(u32)(start + i) & (RIPAIR_N - 1)];
+        double rx = (double)q->rx, ry = (double)q->ry;
+        double wx = (double)q->wx, wy = (double)q->wy;
+        N += 1.0;
+        srx += rx; srxx += rx * rx; swx += wx; srxwx += rx * wx;
+        sry += ry; sryy += ry * ry; swy += wy; srywy += ry * wy;
+    }
+    if (N < 8.0) return 0;
+    double dX = N * srxx - srx * srx;
+    double dY = N * sryy - sry * sry;
+    if (dX <= 0.0 || dY <= 0.0) return 0;
+    *ax = (N * srxwx - srx * swx) / dX;
+    *bx = (swx - *ax * srx) / N;
+    *ay = (N * srywy - sry * swy) / dY;
+    *by = (swy - *ay * sry) / N;
+    double ex = 0, ey = 0;
+    for (LONG i = 0; i < n; i++) {
+        if (keep && !keep[i]) continue;
+        const RIP_pair* q = &g_pair[(u32)(start + i) & (RIPAIR_N - 1)];
+        double dx = *ax * (double)q->rx + *bx - (double)q->wx;
+        double dy = *ay * (double)q->ry + *by - (double)q->wy;
+        ex += dx * dx; ey += dy * dy;
+    }
+    *rmsX = dsqrt_(ex / N);
+    *rmsY = dsqrt_(ey / N);
+    return (int)N;
+}
+
+/**
+ * 由配对环拟合「raw → 平板坐标」的逐轴仿射映射，并裁决是否放行补流。
+ *
+ * ⛔⛔ 为什么必须是**两趟**（这是本模块最容易做错的一处）：
+ *   配对的 raw 坐标与平板坐标**取自不同时刻**（两份数据各有自己的采样节拍，
+ *   窗口内可差到 `RI_PAIR_GAP_MS`）。运笔越快，这个时间错位折算成的位置差越大
+ *   （1000px/s 下 10ms ≈ 160 个平板单位）。也就是说**残差里天然混着运动噪声**，
+ *   一趟最小二乘的 rms 会被它撑到几百单位 ⇒ 拿一个「绝对很小」的阈值去卡，
+ *   正确的映射也会被误判为失败（本模块就永远不激活）。
+ *   所以：第一趟出粗略映射 → 按**绝对残差门限** `RI_FIT_OUT_KEEP` 剔掉离群
+ *   （远动期间那部分配对）→ 第二趟只用保留集重拟合，并对**保留集**的 rms 下狠手
+ *   （`RI_FIT_MAX_RMS` = 8 单位 = 0.5px）。
+ *
+ * 这个判据为什么仍然决定性：**映射整体错**（错轴、错比例、错符号）时，残差是
+ * 几百到几万个单位 ⇒ 保留集几乎为空 ⇒ 直接判失败。只有「确实对上了」才可能留下
+ * 一批残差 <6px 的点。
+ */
+static void penraw_fit_tick(void)
+{
+    static u8 keep[RIPAIR_N];
+    LONG h = g_pairHead;
+    LONG start = h - (LONG)RIPAIR_N;
+    if (start < 0) start = 0;
+    LONG n = h - start;
+    if (n > (LONG)RIPAIR_N) n = (LONG)RIPAIR_N;
+    g_fit.nAll = (int)(n < 0 ? 0 : n);
+    if (n < RI_FIT_MIN_N) {
+        g_fit.valid = 0; g_fit.n = 0; g_synOn = 0; g_fit.spanX = g_fit.spanY = 0;
+        return;
+    }
+
+    double ax, bx, ay, by, rx_, ry_;
+    if (!rifit_pass(start, n, NULL, &ax, &bx, &rx_, &ay, &by, &ry_)) {
+        g_fit.valid = 0; g_fit.n = 0; g_synOn = 0; return;
+    }
+
+    /* 第一趟 → 按绝对残差门限做稳健剔除 */
+    int nk = 0;
+    for (LONG i = 0; i < n; i++) {
+        const RIP_pair* q = &g_pair[(u32)(start + i) & (RIPAIR_N - 1)];
+        double dx = ax * (double)q->rx + bx - (double)q->wx;
+        double dy = ay * (double)q->ry + by - (double)q->wy;
+        if (dx < 0) dx = -dx;
+        if (dy < 0) dy = -dy;
+        keep[i] = (dx <= RI_FIT_OUT_KEEP && dy <= RI_FIT_OUT_KEEP) ? 1 : 0;
+        if (keep[i]) nk++;
+    }
+    if (nk < RI_FIT_MIN_N) {
+        g_fit.valid = 0; g_fit.n = nk; g_synOn = 0; return;
+    }
+
+    /* 第二趟：只用保留集 */
+    int kn = rifit_pass(start, n, keep, &g_fit.ax, &g_fit.bx, &g_fit.rmsX,
+                        &g_fit.ay, &g_fit.by, &g_fit.rmsY);
+    if (!kn) { g_fit.valid = 0; g_fit.n = 0; g_synOn = 0; return; }
+    g_fit.n = kn;
+
+    /* 保留集的 raw 跨度：点全挤在一处时最小二乘的斜率是病态的 */
+    LONG x0 = 0, x1 = 0, y0 = 0, y1 = 0;
+    for (LONG i = 0; i < n; i++) {
+        if (!keep[i]) continue;
+        const RIP_pair* q = &g_pair[(u32)(start + i) & (RIPAIR_N - 1)];
+        if (!x0 && !x1) { x0 = x1 = q->rx; y0 = y1 = q->ry; }
+        if (q->rx < x0) x0 = q->rx; if (q->rx > x1) x1 = q->rx;
+        if (q->ry < y0) y0 = q->ry; if (q->ry > y1) y1 = q->ry;
+    }
+    g_fit.spanX = (int)(x1 - x0);
+    g_fit.spanY = (int)(y1 - y0);
+
+    /* ⛔ 有效性的**唯一**判据：保留集够多 + 残差够小 + 跨度够宽。 */
+    g_fit.valid = (kn >= RI_FIT_MIN_N
+                   && g_fit.rmsX <= RI_FIT_MAX_RMS && g_fit.rmsY <= RI_FIT_MAX_RMS
+                   && g_fit.spanX >= RI_FIT_MIN_SPAN && g_fit.spanY >= RI_FIT_MIN_SPAN
+                   && g_calib.valid && g_calib.stride > 0) ? 1 : 0;
+    InterlockedExchange(&g_synOn, g_fit.valid);
+}
+
+/* ------------------------------------------------------------- 合成补流（门控）
+ * 只有在「拟合有效 + 真实通路空转 + raw 新鲜 + 笔在范围内」时才被 detour 调到。
+ * 返回真正写进调用方缓冲的包数（0 = 没写，调用方维持原返回值）。 */
+#define RI_FIELD_OK(o) ((o) >= 0 && (o) + 4 <= stride)
+
+static int penraw_synth(void* buf, int maxPkts, DWORD now)
+{
+    if (!g_fit.valid || !g_tplOk || maxPkts <= 0) return 0;
+    int stride = g_calib.stride;
+    if (stride <= 0 || stride > (int)sizeof(g_tpl)) return 0;
+    if (!RI_FIELD_OK(g_calib.offX) || !RI_FIELD_OK(g_calib.offY)) return 0;
+
+    LONG head = g_riHead;
+    LONG last = g_synHead;
+    if (!last) { InterlockedExchange(&g_synHead, head); return 0; }  /* 首次：从当前起，不补历史 */
+    if (head - last <= 0) return 0;
+    if (head - last > (LONG)RIPSZ) last = head - (LONG)RIPSZ;       /* 落后太多：丢掉旧的 */
+
+    LONG pmax = g_riPMax;
+    int  k = 0;
+    for (LONG s = last; s < head && k < maxPkts; s++) {
+        const RIPS* rp = &g_riRing[(u32)s & (RIPSZ - 1)];
+        if ((LONG)(now - rp->t) > RI_RAW_MAXAGE) continue;           /* 太旧：跳过并推进序号 */
+        int wx = (int)(g_fit.ax * (double)rp->x + g_fit.bx + 0.5);
+        int wy = (int)(g_fit.ay * (double)rp->y + g_fit.by + 0.5);
+        if (wx < 0) wx = 0;
+        if (wy < 0) wy = 0;
+        if (g_calib.axisMax  && (u32)wx > g_calib.axisMax)  wx = (int)g_calib.axisMax;
+        if (g_calib.axisMaxY && (u32)wy > g_calib.axisMaxY) wy = (int)g_calib.axisMaxY;
+
+        u8* d = (u8*)buf + (SIZE_T)k * stride;
+        memcpy(d, g_tpl, stride);                   /* 底本：未知字段全部保持合法 */
+        if (RI_FIELD_OK(g_calib.offTime)) {
+            u32 v = (u32)rp->t; memcpy(d + g_calib.offTime, &v, 4);
+        }
+        if (RI_FIELD_OK(g_calib.offChanged)) {
+            u32 v = 0; memcpy(d + g_calib.offChanged, &v, 4);
+        }
+        if (RI_FIELD_OK(g_calib.offSerial)) {
+            u32 v = (u32)InterlockedIncrement(&g_synSerial);
+            memcpy(d + g_calib.offSerial, &v, 4);
+        }
+        if (RI_FIELD_OK(g_calib.offBtn)) {
+            u32 v = rp->tip ? 1u : 0u; memcpy(d + g_calib.offBtn, &v, 4);
+        }
+        { u32 v = (u32)wx; memcpy(d + g_calib.offX, &v, 4); }
+        { u32 v = (u32)wy; memcpy(d + g_calib.offY, &v, 4); }
+        if (RI_FIELD_OK(g_calib.offNP)) {
+            /* ⛔ 落笔判据以「非零」为凭 ⇒ 落笔时必须给非零压力，否则合成包会被
+               当成悬空、闸门关闭、补流白做。 */
+            u32 v = 0;
+            if (rp->tip) {
+                if (pmax > 0 && rp->p > 0) v = (u32)((double)rp->p * 2047.0 / (double)pmax);
+                if (v == 0) v = 1023u;
+            }
+            if (v > 2047u) v = 2047u;
+            memcpy(d + g_calib.offNP, &v, 4);
+        }
+        if (RI_FIELD_OK(g_calib.offTP)) {
+            u32 v = 0; memcpy(d + g_calib.offTP, &v, 4);
+        }
+        k++;
+    }
+    InterlockedExchange(&g_synHead, head);
+    return k;
+}
+
+/** worker 每 2s 落一行：raw 见到什么、拟合成不成、补流做了多少。 */
+static void penraw_report(int win)
+{
+    static LONG s_hid, s_abs, s_bad, s_cur;
+    static int  s_printed;
+    LONG hid = g_riHidN, abs = g_riAbsN, bad = g_riBadN, cur = g_csN;
+    LONG dh = hid - s_hid, da = abs - s_abs, db = bad - s_bad, dc = cur - s_cur;
+    s_hid = hid; s_abs = abs; s_bad = bad; s_cur = cur;
+    if (!s_printed || dh || da || db || dc || g_fit.valid) {
+        s_printed = 1;
+        LONG age = g_riLastMs ? (LONG)(GetTickCount() - (DWORD)g_riLastMs) : -1;
+        int per = win > 0 ? win : 1;
+        logf("# [raw] 注册=0b%ld 窗=%ld HID=%ld(%ld/s) 绝对鼠标=%ld(%ld/s) 光标=%ld(%ld/s) "
+             "解析失败=%ld 全部WM_INPUT=%ld(键盘=%ld) "
+             "源=%s 最近=%ldms 采样范围 x=%ld..%ld y=%ld..%ld p=0..%ld 现值=(%ld,%ld,p=%ld,tip=%ld,in=%ld) "
+             "| 拟合=%s 配对=%d 保留=%d rms=%.2f/%.2f 跨度=%d/%d a=%.6f/%.6f b=%.0f/%.0f "
+             "| 补流=%ld次/%ld包 丢冲包=%ld(末次%ld)\n",
+             (long)g_riReg, (long)g_riWndOk,
+             (long)hid, (long)(dh * 1000 / per),
+             (long)abs, (long)(da * 1000 / per), (long)cur, (long)(dc * 1000 / per),
+             (long)db, (long)g_riAllN, (long)g_riKbdN,
+             g_riSrc == 1 ? "HID笔" : (g_riSrc == 2 ? "绝对鼠标" :
+                                      (g_riSrc == 3 ? "★系统光标" : "未定")),
+             (long)age, (long)g_riXMin, (long)g_riXMax, (long)g_riYMin, (long)g_riYMax,
+             (long)g_riPMax,
+             (long)g_riX, (long)g_riY, (long)g_riP, (long)g_riTip, (long)g_riIn,
+             g_fit.valid ? "★有效" : "未建立", g_fit.nAll, g_fit.n,
+             g_fit.rmsX, g_fit.rmsY, g_fit.spanX, g_fit.spanY,
+             g_fit.ax, g_fit.ay, g_fit.bx, g_fit.by,
+             (long)g_synRuns, (long)g_synPkts, (long)g_dropBurst, (long)g_dropLast);
+    }
 }
 
 /* ================================================================== 单包滤波
@@ -1870,6 +2666,11 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
         if (!g_wasEnabled)                              reset = RST_ANCHOR;
         else if (now - g_lastMs > TIME_GAP_RESET_MS)     reset = RST_GAP;
         else if (distPx > jumpPx)                        reset = RST_JUMP;
+        /* ⛔⛔ 断流恢复 ⇒ 强制锚定（2026-10-16 第十三轮）：断流期笔早已走远，停摆前的
+           输出点已经没有任何意义。这里**覆盖**上面三种判定（哪怕间隔没到 5s）——
+           驱动实测会在恢复瞬间一次性涌进 ~128 个包（见 worker 的「冲包量」），
+           不锚定的话这一批包会被当成「笔尖连续移动」处理，输出点从旧位置被硬拽过来。 */
+        if (InterlockedExchange(&g_deadRecovered, 0)) reset = RST_ANCHOR;
 
         if (reset) {
             g_lastGapMs = (LONG)(now - g_lastMs);
@@ -2027,6 +2828,19 @@ static volatile LONG g_wtCloseN;  /* WTClose 次数 */
 static volatile LONG g_streamDead;/* 1 = 断流判定成立（worker 看门狗写） */
 static HCTX g_ctxNow;             /* 最近一次被轮询的上下文（detour 普通写即可） */
 
+/* —— 取包突发计量（2026-10-16 第十四轮）——
+   真机 jwwh-13772 的教训：10s 窗口的平均包率在 62/s 与 174/s 之间来回摆，而驱动
+   标称 `rate=100`。也就是说「卡顿 → 一口气冲出来」是**常态**而不是例外，可此前
+   没有任何一个探针能量出它（`[dead]` 只抓长于 350ms 且光标在动的那种长断流）。
+   这里补三个原子 —— 单次最大包数 / ≥25 包次数 / 零包次数，worker 每 2s 落一行。 */
+static volatile LONG g_pkMax, g_pkBig, g_pkZero;
+/** 只统计**真实**驱动包（不含独立笔通路合成的那部分）——
+    断流看门狗必须看它：合成补流会把 g_packets 一直抬高，用它判冻结点就等于
+    把断流藏起来了（诊断必须能说真话）。 */
+static volatile LONG g_pkReal;
+/* 补流进出事件（detour 置位、worker 落盘 —— detour 里一个字都不写文件） */
+static volatile LONG g_synEnter, g_synExit, g_synSpanMs;
+
 /* 只读诊断钩的槽位（与主钩同款 E9-thunk 前提；独立于主钩状态，互不影响） */
 typedef struct {
     const char* name;
@@ -2061,18 +2875,29 @@ static u64 det_WTOpenA(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
     HCTX h = impl((HWND)a, (void*)b, (BOOL)c);
     const unsigned char* p = (const unsigned char*)b;
     if (p) {
-        /* LOGCONTEXTA：lcName[40] 后全是 4 字节整型（无对齐缝）。
-           命名字段 + 尾部 hex，防结构体布局猜错。 */
-        logf("# [ctx] WTOpenA hCtx=0x%llX name=\"%s\" opt=%X rate=%ld pktData=%X "
-             "pktMode=%X move=%X inExt=(%ld,%ld) outExt=(%ld,%ld) tail=%08X %08X %08X\n",
+        /* ⛔ LOGCONTEXTA 真实布局 —— 本仓库 [calib] 段已逐项实测确认（4 字节整型、无对齐缝）：
+             lcName[40] 0 · lcOptions 40 · lcStatus 44 · lcLocks 48 · lcMsgBase 52 ·
+             lcDevice 56 · lcPktRate 60 · lcPktData 64 · lcPktMode 68 · lcMoveMask 72 ·
+             lcBtnDnMask 76 · lcBtnUpMask 80 · lcInOrg(84,88,92) · lcInExt(96,100,104) ·
+             lcOutOrg(108,112,116) · lcOutExt(120,124,128)
+           ⛔ 0x0107 那版把「inExt」打在 92/96（实为 lcInOrgZ / lcInExtX）、「outExt」打在
+              108/112（实为 lcOutOrgX / lcOutOrgY）—— 字段整体错位一格，真机日志读出来的
+              `inExt=(-1023,44800)` 其实是 `lcInOrgZ=-1023, lcInExtX=44800`，排查时白绕一圈
+              （当时一度怀疑「结构体布局不对导致 WTOpen 失败」，就是这么被带偏的）。
+              现在 inOrg/inExt/outOrg/outExt 四段全打，不再有歧义。 */
+        logf("# [ctx] WTOpenA hCtx=0x%llX name=\"%s\" opt=%X msgBase=%X device=%X rate=%ld "
+             "pktData=%X pktMode=%X move=%X btnDn=%X btnUp=%X "
+             "inOrg=(%ld,%ld,%ld) inExt=(%ld,%ld,%ld) outOrg=(%ld,%ld,%ld) outExt=(%ld,%ld,%ld)\n",
              (unsigned long long)(UINT_PTR)h, (const char*)p,
-             *(const unsigned int*)(p + 40), *(const long*)(p + 60),
+             *(const unsigned int*)(p + 40), *(const unsigned int*)(p + 52),
+             *(const unsigned int*)(p + 56), (long)*(const int*)(p + 60),
              *(const unsigned int*)(p + 64), *(const unsigned int*)(p + 68),
              *(const unsigned int*)(p + 72),
-             (long)*(const int*)(p + 92), (long)*(const int*)(p + 96),
-             (long)*(const int*)(p + 108), (long)*(const int*)(p + 112),
-             *(const unsigned int*)(p + 116), *(const unsigned int*)(p + 120),
-             *(const unsigned int*)(p + 124));
+             *(const unsigned int*)(p + 76), *(const unsigned int*)(p + 80),
+             (long)*(const int*)(p + 84), (long)*(const int*)(p + 88), (long)*(const int*)(p + 92),
+             (long)*(const int*)(p + 96), (long)*(const int*)(p + 100), (long)*(const int*)(p + 104),
+             (long)*(const int*)(p + 108), (long)*(const int*)(p + 112), (long)*(const int*)(p + 116),
+             (long)*(const int*)(p + 120), (long)*(const int*)(p + 124), (long)*(const int*)(p + 128));
     } else {
         logf("# [ctx] WTOpenA hCtx=0x%llX (logctx=NULL)\n",
              (unsigned long long)(UINT_PTR)h);
@@ -2098,23 +2923,94 @@ static u64 det_WTPacketsGet(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
     /* d/e/f 只为凑齐 ABI 参数位（转发桩是 `jmp`，不搬栈）：
        WTPacketsGet 只用到前三个，多出的声明不会被读取。 */
     (void)d; (void)e; (void)f;
-    static int s_cfgTick;
+    static int  s_cfgTick;
+    static int  s_synWas;
+    static DWORD s_synT0;
     PFN_WTPacketsGet impl = (PFN_WTPacketsGet)g_impl;
     int r = impl((HCTX)a, (int)b, (void*)c);            /* 先取包，再加工 */
+    DWORD nowT = GetTickCount();
+    int synth = 0;
+
     InterlockedIncrement(&g_calls);
     g_ctxNow = (HCTX)a;                                 /* 断流诊断：看门狗要比对上下文 */
 
+    /* —— 突发计量：单次最大包数 / 冲包次数 / 零包次数 —— */
+    if (r > 0) {
+        if (r > (int)g_pkMax) InterlockedExchange(&g_pkMax, (LONG)r);
+        if (r >= RI_BIG_BURST) InterlockedIncrement(&g_pkBig);
+    } else {
+        InterlockedIncrement(&g_pkZero);
+    }
+
+    /* ⛔ 共享内存低频重试：**必须无条件**（2026-10-16 第十六轮）。
+       旧版把它关在下面的 `if (r > 0)` 里 ⇒ 若「插件一上电就断流」，`r` 恒 0、
+       `cfg_open()` 永不重试 ⇒ `g_cfg` 永远 NULL ⇒ 补流与平滑**一起**失效。
+       采样源换成系统光标后这条尤其致命：断流期恰恰是 `r == 0` 占绝对多数。 */
+    if (!g_cfg && ((++s_cfgTick & 0xFF) == 0)) cfg_open();
+
+    /* —— 独立笔通路（2026-10-16 第十四轮）：只补流、只在真实通路空转时 ——
+       ⛔ 门控总闸 g_synOn 由 worker 的拟合结果驱动（见 penraw_fit_tick）；它不成立时
+          本段等价于空语句，行为与 0x010C 逐位相同 —— 这是本版**不会引入回归**的依据。
+       ⛔⛔ `enNow`（面板开关 + 心跳防呆）**必须在补流之前算出来**：
+          补流是「往调用方缓冲里写坐标」，比平滑更"越界" ——
+          用户关掉开关就该一个字节都不动。旧版把它放在 r>0 之后、补流之前没检查 ⇒
+          关掉开关也照补（这是本轮自查出来的漏洞，不是真机报的）。 */
+    LONG enNow = 0;
+    if (g_cfg) {
+        enNow = g_cfg[CFG_I_ENABLED];
+        if (enNow && (DWORD)(nowT - (DWORD)g_cfg[CFG_I_HEARTBEAT]) > 3000) enNow = 0;
+    }
+    if (g_synOn && g_calib.valid && enNow) {
+        LONG rawAge = g_riLastMs ? (LONG)(nowT - (DWORD)g_riLastMs) : 0x7FFFFFFF;
+        /* ⛔ 两层闸门缺一不可：
+           ① `realAge >= RI_STALL_MS` —— **真实通路**已空转（这是"该不该接管"的判据）；
+           ② `rawAge <= RI_FRESH_MS` —— 采样源还活着、样本是新的（"能不能接管"的判据）。
+           只留 ② 会在驱动正常时也一直补流（见 g_lastRealMs 注释）。 */
+        LONG realAge = g_lastRealMs ? (LONG)(nowT - (DWORD)g_lastRealMs) : 0x7FFFFFFF;
+        if (r == 0 && realAge >= RI_STALL_MS
+            && rawAge >= 0 && rawAge <= RI_FRESH_MS && g_riIn) {
+            int k = penraw_synth((void*)c, (int)b, nowT);
+            if (k > 0) {
+                r = k;
+                synth = 1;
+                InterlockedExchange(&g_synLastMs, (LONG)nowT);
+                InterlockedExchangeAdd(&g_synPkts, (LONG)k);
+                InterlockedIncrement(&g_synRuns);
+            }
+        }
+        /* ⛔ 丢冲包：刚补过流、真实通路又一次性吐回一大批 ⇒ 丢掉。
+           不丢的话 PS 会先按补流画到光标、再把几十个**旧**坐标重放一遍 ⇒
+           整根弧线倒着画回去，比不补流更难看（补流的收益全被吃掉）。 */
+        if (!synth && r >= RI_BIG_BURST && g_synLastMs) {
+            LONG dGap = (LONG)(nowT - (DWORD)g_synLastMs);
+            if (dGap >= 0 && dGap <= 2000) {
+                InterlockedExchangeAdd(&g_dropBurst, (LONG)r);
+                InterlockedExchange(&g_dropLast, (LONG)r);
+                r = 0;
+            }
+        }
+    }
+
+    /* 补流进出事件（只置原子，落盘交给 worker） */
+    if (synth && !s_synWas) {
+        s_synWas = 1; s_synT0 = nowT;
+        InterlockedExchange(&g_synEnter, 1);
+    } else if (!synth && s_synWas) {
+        s_synWas = 0;
+        InterlockedExchange(&g_synSpanMs, (LONG)(nowT - s_synT0));
+        InterlockedExchange(&g_synExit, 1);
+    }
+
     if (r > 0) {
         InterlockedExchangeAdd(&g_packets, (LONG)r);
-        if (!g_cfg && ((++s_cfgTick & 0xFF) == 0)) {    /* 共享内存没开时低频重试 */
-            cfg_open();                                 /* ⛔ 不再顺手续状态=1：见下方状态机 */
+        if (!synth) {
+            InterlockedExchangeAdd(&g_pkReal, (LONG)r);
+            InterlockedExchange(&g_lastRealMs, (LONG)nowT);   /* 补流门控凭据：真实包确实来了 */
+            /* 只在**真实包**且非冲包时配对（见 penraw_maybe_pair 的三条过滤） */
+            penraw_maybe_pair((const u8*)c, r, nowT);
         }
         if (g_cfg) {
-            LONG en = g_cfg[CFG_I_ENABLED];
-            /* ⛔ 心跳防呆：守护进程若被强杀，共享内存仍被本 DLL 持有 ⇒ enabled 会一直
-               留在 1。没有这一条，PS 里就会被一段「没人管」的平滑一直改着坐标。
-               心跳按 GetTickCount（自开机起的毫秒，跨进程同源）判定，3 秒无更新即停手。 */
-            if (en && (DWORD)(GetTickCount() - (DWORD)g_cfg[CFG_I_HEARTBEAT]) > 3000) en = 0;
+            LONG en = enNow;    /* 上面已按「面板开关 + 心跳防呆」算好，这里不再重读 */
             if (en) {
                 /* 状态机（CFG_I_STATE，面板四档文案的唯一依据）：
                    0=未挂/未标定  1=生效（标定 OK 且真的在改写）  2=标定失败  3=已卸载。
@@ -2131,6 +3027,9 @@ static u64 det_WTPacketsGet(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
                 g_wasEnabled = 0;                        /* 关掉 ⇒ 下一帧起笔锚定 */
             }
         }
+        /* ⛔ 落笔「记忆」：必须在 smooth_packets 之后读 g_penDown（它在那里面更新）。
+           放在 if(g_cfg) 之外 ⇒ 关掉平滑开关时也照样记，恢复时不会错判。 */
+        if (!synth) InterlockedExchange(&g_lastRealTip, (LONG)g_penDown);
     }
     return (u64)(u32)r;
 }
@@ -2403,27 +3302,59 @@ static void publish_status(void)
     g_cfg[CFG_I_PXPERAXISY] = (LONG)(ppb * 1000.0);
 }
 
-/* ================ 决定性诊断：Wintab 输入通路本身是否还活着（2026-10-16 第十轮）
- * ⛔ 为什么需要它：第九轮的「自愈」在真机上每次调用都返回 1（请求被接受）却一包
- *    未回（jwwh-25000：120 轮全无效，冻结 385s+）⇒ 必须换一个能**一锤定音**的实验，
- *    把两种截然不同的根因分开：
- *      ① Wintab 通路活着 ⇒ 只是 **PS 那个上下文**收不到包（重叠序 / 上下文自身异常）；
- *      ② Wintab 通路整体没有数据 ⇒ PS 已切到 Windows Ink / 消息驱动等**其它输入源**。
- *    两者后续的修法完全不同，靠日志猜不出来，必须实测。
- * 做法：在断流态（PS 本来收不到包，此时抢占**零损失**）自开一个临时 Wintab 上下文，
- *    推到重叠序顶层，等 30ms，读一次包，然后**立刻关闭**：
- *      · 读包 >0 ⇒ ①，顺带证明「WTOverlap 真能生效」⇒ 该查 PS 的 hCtx 为何推不回；
- *      · 读包 =0 ⇒ ②，Wintab 全局无数据 ⇒ 得去查 PS 的输入源切换。
- * ⛔ 只做一次：由 dead_heal() 的 round==1 触发，绝不在每个断流周期反复开关上下文。
+/* ========== 一次性方向判决实验：Wintab 通路是「只对 PS 的上下文死」还是「整体死」
+ * （2026-10-16 第十三轮；前身 = 0x0108/0x010A 的「临时上下文探针」）
+ *
+ * ⛔ 为什么要有它：0x0108/0x010A 的探针在 **30ms** 窗口里读包 = 0。30ms 只有 ~3 个包
+ *    （200Hz），窗口太短，**不足以把两种根因钉死**（上一轮的结论就带着这条不确定）。
+ *    本轮把窗口拉到 8×40ms（≈320ms，约 60 个包），并统计**合计**包数：
+ *      · 合计 >0 ⇒ Wintab 通路**活着**，只是 PS 那个上下文被饿着
+ *                ⇒ 走「**中继**」方案：常驻一个我们自己的上下文收包，在钩子里把包
+ *                  转发给 PS（同域坐标、无需另做映射，工程量小、风险低）——首选。
+ *      · 合计 =0 ⇒ 通路**整体无数据** ⇒ 必须另开独立笔通路（Raw Input / HID 自读），
+ *                  用外部坐标**合成包**再喂给 PS（工程量大，要先做屏幕→轴坐标映射）。
+ *    这条日志就是下一轮路线的分水岭，所以值得那 320ms 的代价。
+ *
+ * ⛔ 只做一次（g_relayProbeDone），且只在断流已持续 ≥2s 时才做：短抖动用不着它，
+ *    也不该拿它去干扰 PS（见 worker 里「不再主动抢救」的说明）。
  * ⛔ 无论成败都必须 WTClose —— 临时上下文若留在顶层，PS 就再也收不到包。
  * ⛔ LOGCONTEXT 只让驱动用 WTInfo(WTI_DEFCONTEXT) 自己填（我们不解析、不碰字段）：
  *    该结构含 HANDLE 字段，32/64 位布局我们无法可靠自证；原样传入是最低风险写法。
- * ⛔ 副作用预警：本探针若读到包，说明它临时抢走了顶层，关闭后 PS 可能**顺带**恢复
- *    —— 那不是「自愈生效」，判读日志时要分清（本行有独立 ★ 标记）。 */
-static void dead_probe(void)
+ *    ✅ 真机已旁证缓冲内容合理（WTInfo 填出 lcInOrgZ=-1023 / lcInExtX=44800，与 [calib]
+ *    独立读到的 lcInExtX=44800 一致）⇒ **不是**结构体布局问题。 */
+static volatile LONG g_relayProbeDone;
+
+
+/* 给 Wintab 找一个属于本进程的顶层窗口。
+   ⛔ 0x0107 真机判决：探针传 hWnd=NULL，驱动直接回 hCtx=0x0，**一锤定音的实验一次都没跑起来**
+   （白等一整轮测试）。规范要求 WTOpen 的 hWnd 是有效窗口 ⇒ 先挑本进程可见的顶层窗，
+   取不到再退 GetForegroundWindow；三种变体都试，日志里写明哪一档成功。 */
+static HWND g_probeWnd;
+static BOOL CALLBACK probe_pick_cb(HWND h, LPARAM lp)
 {
+    DWORD pid = 0;
+    if (!IsWindowVisible(h)) return TRUE;
+    GetWindowThreadProcessId(h, &pid);
+    if (pid != (DWORD)lp) return TRUE;
+    if (GetWindow(h, GW_OWNER)) return TRUE;      /* 只要顶层窗口，不要工具/子窗口 */
+    g_probeWnd = h;
+    return FALSE;                                  /* 找到即停 */
+}
+static HWND probe_pick_hwnd(void)
+{
+    g_probeWnd = NULL;
+    EnumWindows(probe_pick_cb, (LPARAM)GetCurrentProcessId());
+    if (!g_probeWnd) g_probeWnd = GetForegroundWindow();
+    return g_probeWnd;
+}
+
+static void dead_relay_probe(void)
+{
+    /* ⛔ 每进程只做一次（见函数上方注释）：它要抢 ~320ms 的重叠序顶层，
+       这是**有代价**的动作，只用一次来定方向，绝不当自愈手段反复用。 */
+    if (InterlockedExchange(&g_relayProbeDone, 1)) return;
     HMODULE hm = GetModuleHandleA("Wintab32.dll");
-    if (!hm) { logf("# [probe] Wintab32.dll 未加载\n"); return; }
+    if (!hm) { logf("# [relay] Wintab32.dll 未加载\n"); return; }
     typedef UINT (*PFN_WTInfoA)(UINT, UINT, LPVOID);
     typedef HCTX (*PFN_WTOpenA)(HWND, LPVOID, BOOL);
     typedef BOOL (*PFN_WTClose)(HCTX);
@@ -2435,105 +3366,89 @@ static void dead_probe(void)
     PFN_WTOverlapP    pOv    = (PFN_WTOverlapP)(void*)GetProcAddress(hm, "WTOverlap");
     PFN_WTPacketsGetP pGet   = (PFN_WTPacketsGetP)(void*)GetProcAddress(hm, "WTPacketsGet");
     if (!pInfo || !pOpen || !pClose || !pGet) {
-        logf("# [probe] 探针不可用: WTInfo=%d WTOpen=%d WTClose=%d WTPacketsGet=%d\n",
+        logf("# [relay] 实验不可用: WTInfo=%d WTOpen=%d WTClose=%d WTPacketsGet=%d\n",
              pInfo ? 1 : 0, pOpen ? 1 : 0, pClose ? 1 : 0, pGet ? 1 : 0);
         return;
     }
     char lc[512];
     ZeroMemory(lc, sizeof(lc));
-    if (pInfo(3 /*WTI_DEFCONTEXT*/, 0, lc) == 0) {
-        logf("# [probe] WTInfo(WTI_DEFCONTEXT) 不支持 ⇒ 无法建临时上下文\n");
+    UINT sz = pInfo(3 /*WTI_DEFCONTEXT*/, 0, lc);
+    if (sz == 0) {
+        logf("# [relay] WTInfo(WTI_DEFCONTEXT) 不支持 ⇒ 无法建临时上下文\n");
         return;
     }
-    HCTX hc = pOpen(NULL, lc, TRUE);
+    unsigned int optDefault = 0;
+    memcpy(&optDefault, lc + 40, sizeof(optDefault));   /* lcOptions，布局已实测 */
+    /* 开法三变体（沿用 0x0108 的结论：hWnd=NULL 会被驱动拒绝，必须给一个属于本进程的
+       顶层窗口；取不到再退前台窗口，最后才试 NULL）：
+         A 带本进程 hWnd、LOGCONTEXT 原样      ← 规范推荐写法
+         B 带 NULL hWnd、原样                  ← 分辨「hWnd 非法」
+         C 带 NULL hWnd、lcOptions 强制 0x0003 ← 分辨「选项位被拒」 */
+    HWND hw = probe_pick_hwnd();
+    const char* how = "A(hWnd)";
+    HCTX hc = pOpen(hw, lc, TRUE);
+    if (!hc) { how = "B(NULL)";         hc = pOpen(NULL, lc, TRUE); }
     if (!hc) {
-        logf("# [probe] WTOpen 失败 ⇒ 驱动拒绝新建上下文（上限或驱动异常）\n");
+        unsigned int opt3 = 0x0003u;
+        memcpy(lc + 40, &opt3, sizeof(opt3));
+        how = "C(NULL,opt=3)";
+        hc = pOpen(NULL, lc, TRUE);
+    }
+    if (!hc) {
+        logf("# [relay] WTOpen 三变体全失败（WTInfo 返回 %u 字节，默认 opt=%X）"
+             "⇒ 驱动拒绝新建上下文（上限 / 驱动异常）\n", sz, optDefault);
         return;
     }
     BOOL ov = pOv ? pOv(hc, TRUE) : 0;
-    Sleep(30);
-    char buf[512];
-    int n = pGet(hc, 1, buf);
+    /* ⛔ 采样窗口从 30ms 拉到 8×40ms（≈320ms，200Hz 下约 60 个包）：
+       上一轮的结论就是被 30ms（≈3 包）这个太短的窗口卡住的。 */
+    char buf[1024];
+    int tot = 0, reads = 0, firstN = 0;
+    long fx = 0, fy = 0;
+    for (int i = 0; i < 8; i++) {
+        Sleep(40);
+        int n = pGet(hc, 8, buf);
+        reads++;
+        if (n > 0 && tot == 0) {
+            firstN = n;
+            if (g_calib.valid && g_calib.offX >= 0 && g_calib.offY >= 0
+                && g_calib.offX + 4 <= g_calib.stride && g_calib.offY + 4 <= g_calib.stride) {
+                memcpy(&fx, buf + g_calib.offX, 4);   /* 只读一份轴坐标，纯诊断 */
+                memcpy(&fy, buf + g_calib.offY, 4);
+            }
+        }
+        if (n > 0) tot += n;
+    }
     BOOL cl = pClose(hc);
-    logf("# [probe] ★临时上下文 hCtx=0x%llX 推顶=%d 读包=%d 关闭=%d ⇒ %s\n",
-         (unsigned long long)(UINT_PTR)hc, (int)ov, n, (int)cl,
-         n > 0 ? "Wintab 通路活着 ⇒ 问题在 PS 的上下文（重叠序/上下文自身异常）"
-               : "Wintab 通路无数据 ⇒ PS 已切到其它输入源，方向完全不同");
+    logf("# [relay] ★实测 hCtx=0x%llX 开法=%s(hWnd=0x%llX) 推顶=%d → 8×40ms 共读 %d 包"
+         "（%d 次读，首批 %d 包，首包轴坐标 x=%ld y=%ld）关闭=%d ⇒ %s\n",
+         (unsigned long long)(UINT_PTR)hc, how, (unsigned long long)(UINT_PTR)hw,
+         (int)ov, tot, reads, firstN, fx, fy, (int)cl,
+         tot > 0 ? "Wintab 通路**活着**、只是 PS 的上下文被饿着 ⇒ 可做「中继」方案（首选）"
+                 : "Wintab 通路**整体无数据** ⇒ 必须另开独立笔通路（Raw Input）再合成包喂 PS");
     if (!cl)
-        logf("# [probe] ⚠ WTClose 失败 ⇒ 临时上下文可能仍占顶层，PS 将持续收不到包\n");
+        logf("# [relay] ⚠ WTClose 失败 ⇒ 临时上下文可能仍占顶层，PS 将持续收不到包\n");
 }
 
-/* ======================================== 断流自愈：把上下文推回重叠序顶层
- * ⛔⛔ 根因定案（2026-10-15 第九轮；真机 jwwh-10472 / 1796 / 19544 三方交叉）：
- *   规则来自 Windows Wintab 的**上下文重叠序**：「同一时刻只有一个上下文收包 =
- *   重叠序里最顶层的那个；每个包只被放进**一个**上下文的队列」
- *   （Wacom FAQ 3.4 / Wacom Wintab Basics「Each packet is put in only one
- *    context's packet queue」）。PS 的上下文（本机恒 0x802）一旦被挤到下面：
- *     · 挂在该 hCtx 上的 WTPacketsGet 恒返 0 —— 日志 `peek=0` 是**直接实证**：
- *       不是我们这个上下文队列溢出（溢出会让 peek 满而不是 0），而是驱动
- *       压根没往它排包；
- *     · 数位板本身照常出数据（系统光标跟笔尖走、PS 走非 Wintab 回退照常出
- *       笔迹）⇒ 用户看到的就是「笔迹在、平滑死」。
- *   ⛔ 为什么旧的 `WTEnable(0) → Sleep(40) → WTEnable(1)` 12/12 全败
- *      （jwwh-10472 一次断流冻结 **678 秒**，12 轮自愈全程无效，直到用户退出
- *       PS 才收到 WTClose）：WTEnable 只改 enable 计数、并在 disable 时**清空
- *       该上下文队列**，**完全不碰重叠序** ⇒ 上下文还在底下，翻多少次都白翻。
- *      Wintab 规范原文也确认它「enable 已 enable 的上下文…otherwise do nothing」。
- *   ⛔ 为什么「等一会儿自己会好」（实测 3~22s，且 678s 那次根本没等到）：
- *      Wacom 驱动只在**前台应用切换**时自动重排重叠序；抢了顶层的那个进程
- *      一让出前台，PS 才被驱动顺带推回顶层。所谓「9 秒恢复」是等别人让位，
- *      不是自愈 —— 所以恢复时长随机、且长时间保持前台时永不恢复。
- * ⇒ 唯一正解 = `WTOverlap(hCtx, TRUE)`（Wacom FAQ 3.4 原文：应用回到前台时
- *   “should move its context to the top of the overlap order by calling
- *    WTOverlap( hWintabContext, TRUE )”）。生效点是**下一个包**，即毫秒级，
- *   与「冻结多久」无关 —— 这才是能把恢复压到 2s 以内的杠杆。
- *
- * 轮次策略（判定后下一拍执行 #1，此后每 HEAL_ROUND_MS 一轮）：
- *   #1       → WTOverlap(top) + ★dead_probe()（决定性探针，只此一次）
- *   #n > 1   → 只重复 overlap（把又被抢走的顶层拿回来）
- * ⛔ 第十轮（2026-10-16）删掉了原来的「偶数轮 WTEnable 翻转」：理由见函数内注释
- *    （真机 120 轮全败 + 两次永久断流都出现在多轮翻转之后 ⇒ 疑累积损伤）。
- * ⛔ 这里**绝不许 Sleep**：worker 每 250ms 一拍，阻塞只会同时拖慢判定与下一轮
- *    重试（旧版每轮白送 40ms）。所有动作都是几十微秒级的驱动调用。
- * 前 8 轮逐轮打日志（含返回值），之后每 4 轮一条 → 恢复日志再回填
- * 「自愈 N 轮、末轮在 Xms 前」：这条差值就是「WTOverlap 到底有没有用」的
- * 判决性证据，下次真机可一眼复核。 */
-static void dead_heal(int round)
-{
-    HMODULE hm = GetModuleHandleA("Wintab32.dll");
-    HCTX hc = g_ctxNow;
-    if (!hm || !hc) {
-        if (round == 1)
-            logf("# [dead] 自愈不可用: %s\n",
-                 hm ? "缺 hCtx（PS 还没轮询过 WTPacketsGet）" : "Wintab32.dll 未加载");
-        return;
-    }
-    typedef BOOL (*PFN_WTOverlap)(HCTX, BOOL);
-    PFN_WTOverlap pOv = (PFN_WTOverlap)(void*)GetProcAddress(hm, "WTOverlap");
-    /* ⛔ 第十轮**做减法**：不再调用 WTEnable 翻转。依据有二：
-       ① 真机 jwwh-25000：120 轮 WTOverlap 全返 1（请求被接受）却一包未回 ⇒
-          自愈整体对「永久断流」无效，不该再叠加更多动作去扰动上下文；
-       ② WTEnable 按规范不碰重叠序（帮不上忙），而 0x0105 的 678s 与 0x0106 的
-          385s 两次永久断流**都发生在多轮翻转之后** ⇒ 高度怀疑 disable→enable
-          对这个上下文有**累积损伤**。故只保留只读探测（打印可用性，不调用）。 */
-    BOOL ov1 = pOv ? pOv(hc, TRUE) : 0;     /* 唯一动作：推回重叠序顶层 */
-    if (round == 1) {
-        typedef UINT (*PFN_QSGet)(HCTX);
-        typedef BOOL (*PFN_WTEnableP)(HCTX, BOOL);
-        PFN_QSGet     pQg = (PFN_QSGet)(void*)GetProcAddress(hm, "WTQueueSizeGet");
-        PFN_WTEnableP pEn = (PFN_WTEnableP)(void*)GetProcAddress(hm, "WTEnable");
-        UINT qs = pQg ? pQg(hc) : 0;
-        logf("# [dead] 自愈杠杆探测: WTOverlap=%s WTEnable=%s(只读不调) 队列=%u包\n",
-             pOv ? "有" : "无", pEn ? "有" : "无", qs);
-        dead_probe();      /* ★决定性诊断：自开临时上下文试收包（见其定义处） */
-    }
-    /* ⛔ 轮次不限，故日志只在**前 8 轮 + 之后每 4 轮**落盘：断流若长到几分钟
-       （真机 678s / 385s），逐轮打印会把日志冲成噪声，而恢复行里的「自愈 N 轮、
-       末轮 Xms 前」已经把结论带出来了。 */
-    if (round <= 8 || (round % 4) == 0)
-        logf("# [dead] 自愈 #%d: WTOverlap(hCtx=0x%llX, top)=%d\n",
-             round, (unsigned long long)(UINT_PTR)hc, (int)ov1);
-}
+/* ============================ 断流：进程内没有杠杆，故**不再做任何主动抢救**
+ * ⛔⛔ 三轮真机判决（全部否证，结论只剩一个）：
+ *   ① `WTEnable(hCtx,0)→Sleep→(1)`  12 轮 → 全返 1/1，一包未回（jwwh-10472，冻结 678s）；
+ *   ② `WTOverlap(hCtx, TRUE)`      120 轮 → 全返 1，一包未回（jwwh-25000）；
+ *                                  +30 轮 → 全返 1，一包未回（jwwh-9304，冻结 31s）；
+ *   ③ 插件**自建**新上下文并推到重叠序顶层 → 笔在移动，读包 = 0（jwwh-24036 / 9304）。
+ *   ⇒ 唯一自洽的解释：**Wacom 驱动的 WinTab 采样整体停摆**。
+ *     不是「PS 的 hCtx 被挤出重叠序」（否则 ③ 的自建上下文该收到包）；
+ *     不是队列溢出（那是满而不是空，日志 `peek=0` 恒为空）；
+ *     不是我们漏挂了通路（`单包=0`：WTPacket 通路同样没有数据）。
+ *     ⚠️ 顺带反证：`WTOverlap` 恒返 1 ⇒ PS 的上下文**一直在顶层**，驱动照样不排包。
+ *   ⛔ 为什么把动作**全部删掉**（本版起 DLL 对 Wintab 只读不写）：
+ *     · 它们一个都没用（①②③ 全是实证），继续调用只是把「无效」重复成噪声；
+ *     · 它们**有害**：探针会把外来上下文推到顶层并占用 ~320ms，期间 PS 必然收不到包，
+ *       `WTClose` 之后驱动若不自动把 PS 推回顶层，我们就自己把断流**延长**了。
+ *       真机 9304 有两次恢复恰好落在探针动作后 0.5~2.3s，无法排除是我们在添乱；
+ *     · 唯一保留的 Wintab 写动作是**只做一次**的方向判决实验 dead_relay_probe()。
+ * ⇒ 断流恢复时长完全由驱动决定（实测 0.3s ~ 31s 随机，见过 678s 永久）。
+ *   要根治只能**另开一条独立笔通路** —— 先看 [relay] 那一行的判读表。 */
 
 static DWORD WINAPI worker(LPVOID param)
 {
@@ -2565,6 +3480,8 @@ static DWORD WINAPI worker(LPVOID param)
     publish_status();
     do_install();
     hud_start();          /* 建窗/绘制全在渲染线程；窗口默认隐藏，用到才出现 */
+    penraw_start();       /* Raw Input 自读：自带线程与不可见窗口（真机零输入，仅留作设备枚举） */
+    cursamp_start();      /* 采样源：系统光标 250Hz（真正喂配对环的那一路） */
 
     LONG lastSeq = -1;
     DWORD lastPublish = 0;
@@ -2576,6 +3493,49 @@ static DWORD WINAPI worker(LPVOID param)
         if (!g_cfg) cfg_open();
         publish_status();
 
+        /* —— 每 2s：取包突发计量 + 独立笔通路拟合/上报（2026-10-16 第十四轮）——
+           这两条是本轮**唯一**的新观测面：
+             · [pk]  把「卡顿 → 一口气冲出来」量成数字（单次最大包数 / 冲包次数 /
+               零包次数），并顺带定出真实标称采样率 —— 此前只有 10s 均值的 [status]，
+               而冲包恰恰是秒级现象，均值的摆动说不清是冲包还是笔没在动；
+             · [raw] 独立笔通路见到什么、配对拟合成不成（成 ⇒ 补流接管，不成 ⇒ 本版
+               与 0x010C 行为相同）。 */
+        {
+            static DWORD s_meterWin;
+            static DWORD s_lastCalls, s_lastPkAll;
+            static int   s_pkPeakSeen;
+            DWORD tick = GetTickCount();
+            if (tick - s_meterWin >= 2000) {
+                int win = (int)(tick - s_meterWin);
+                if (win < 1) win = 1;
+                s_meterWin = tick;
+
+                /* 补流进出事件（detour 只置原子，文本在这里落） */
+                if (InterlockedExchange(&g_synEnter, 0))
+                    logf("# [raw] ★补流接管：真实通路空转，改由独立笔通路合成包喂 PS\n");
+                if (InterlockedExchange(&g_synExit, 0))
+                    logf("# [raw] 补流结束：真实通路已回包，交还给驱动（本次接管 %ldms）\n",
+                         (long)g_synSpanMs);
+
+                DWORD cAll = (DWORD)g_calls, pAll = (DWORD)g_pkReal;
+                DWORD dCall = cAll - s_lastCalls, dPkt = pAll - s_lastPkAll;
+                s_lastCalls = cAll; s_lastPkAll = pAll;
+                LONG mx = g_pkMax, big = g_pkBig, zr = g_pkZero;
+                InterlockedExchange(&g_pkMax, 0);
+                InterlockedExchange(&g_pkBig, 0);
+                InterlockedExchange(&g_pkZero, 0);
+                if (dCall || dPkt || mx || big) {
+                    if (mx >= RI_BIG_BURST) s_pkPeakSeen = 1;
+                    logf("# [pk] %dms: PS取包次=%lu 真实包=%lu (%.0f/s) 零包次=%ld "
+                         "最大单次=%ld ≥25包次数=%ld 累计冲包峰值=%d\n",
+                         win, (unsigned long)dCall, (unsigned long)dPkt,
+                         (double)dPkt * 1000.0 / (double)win,
+                         (long)zr, (long)mx, (long)big, s_pkPeakSeen);
+                }
+                penraw_fit_tick();
+                penraw_report(win);
+            }
+        }
         /* 标定文本由 detour 拼好（那里不能落盘）⇒ 这里补写一次。 */
         if (g_calibTextReady && g_calibTextLen > 0) {
             InterlockedExchange(&g_calibTextReady, 0);
@@ -2644,59 +3604,107 @@ static DWORD WINAPI worker(LPVOID param)
             s_prevJump = g_rstJump;
         }
 
-        /* —— 「保持重叠序顶层」预防段已删除（2026-10-16 第十轮，真机证伪）——
-           ⛔ 第九轮曾在本进程前台期间**每 500ms** 调 WTOverlap(hCtx, TRUE) 抢占顶层。
-              真机判决（jwwh-25000）：跑满 199 次照样每笔断流 ⇒ 该动作既拦不住断流，
-              又很可能在干扰 PS 自身的上下文管理 —— Wacom 规范只建议「应用回到前台
-              时推一次」，把它做成周期性抢占是我们自作加码（out of spec）。
-           ⛔ 本版做减法：**一次都不主动抢**（连「切回前台推一次」也一并去掉，否则
-              事后无法区分是哪一半有害）。主动的 Wintab 动作只剩两处、且都只在断流态：
-              一次性 overlap（dead_heal）+ 一次性探针（dead_probe）。 */
+        /* —— 本版对 Wintab **只读不写**（2026-10-16 第十三轮）——
+           ⛔ 三个「主动抢救」动作全部删除，且各有真机判决：
+              · 第八轮 `WTEnable` 翻转：jwwh-10472 冻结 678s，12/12 轮全返 1/1 却一包未回；
+              · 第九轮「每 500ms 保持重叠序顶层」：jwwh-25000 跑满 199 次照样每笔断流；
+              · 第十轮 `dead_heal` 的 `WTOverlap`：25000 的 120 轮 + 9304 的 30 轮全返 1、
+                一包未回。
+           而且每个动作都会让**外来上下文短占重叠序顶层** —— 那一瞬间 PS 必然收不到包，
+           关掉之后驱动若不自动把 PS 推回去，就是我们亲手延长断流。杠杆既已全无效，
+           唯一正确的姿势是**不再动它**。 */
 
-        /* —— 断流看门狗（2026-10-14 第七轮）——
+        /* —— 断流看门狗（2026-10-14 第七轮；判定规则此后未变）——
            本轮真机形态：penDown 卡 1、packets 冻结数分钟、calls 一直涨、
-           用户笔还在画（截图有新笔迹）⇒ PS 已切到非 Wintab 回退输入。
+           用户笔还在画 ⇒ 平滑实质中断。
            ⛔ 与「停笔正常冻结」的判别：停笔=笔静止 ⇒ 光标（跟原始笔）也静止；
              penDown=1 + 包冻结 + **光标还在动** ⇒ 包流真断了。
            判定后置 g_streamDead（HUD 立即隐藏，避免拿旧位置误导）；包恢复自动清零并记
-           中断时长。单包通路计数一并打出（本症实测恒 0 ⇒ 排除「PS 改走消息驱动、
-           我们漏挂了通路」这条假设，不必再去补挂 WTPacket）。
-           ⛔⛔ 根因（2026-10-15 第九轮定案，见 dead_heal 上方完整推导）：
-              **PS 的 Wintab 上下文被挤出了重叠序顶层** ⇒ 驱动不再往这个上下文
-              排包（`peek=0` 实证），笔本身照常工作 ⇒「笔迹在、平滑死」。
-              自愈 = 把上下文推回顶层（WTOverlap）；判定下限 350ms、判定后下一拍
-              立即首轮、此后每 HEAL_ROUND_MS 一轮。 */
+           中断时长 + **冲包量**（下一批包一次性涌进来多少 —— 这条直接量出了驱动队列）。
+           单包通路计数一并打出（本症实测恒 0 ⇒ 排除「PS 改走消息驱动、我们漏挂了通路」）。
+           ⛔⛔ 根因（三轮交叉定案，见 dead_relay_probe 上方）：**驱动侧 WinTab 采样
+              整体停摆** —— 插件自建上下文 + 推顶 + 笔在移动，读包依然为 0
+              （jwwh-24036 / 9304）；`WTOverlap` 恒返 1 反证 PS 的上下文一直在顶层。
+              进程内没有杠杆 ⇒ 本节只做**判定 + 诊断**，不做任何补救。 */
         {
-            static DWORD s_pkts, s_calls, s_dead0, s_deadLog, s_healAt;
-            static POINT s_cur0;
-            static int   s_have, s_heals;
-            static LONG  s_movedTot;   /* 冻结期累计位移（自冻结起点，不做基线跟随） */
+            static DWORD s_pkts, s_calls, s_dead0, s_deadLog;
+            static DWORD s_lastPenMs;   /* 最近一次见到 penDown=1 的时刻（见 PEN_RECENT_MS） */
+            static DWORD s_frzLog;      /* [frz] 诊断节流 */
+            static POINT s_lastCur;     /* **上一拍**的光标（逐拍增量用，见下） */
+            static int   s_have;
+            static int   s_still;      /* 连续「基本没动」的拍数 */
+            static LONG  s_movedTot;   /* 冻结期累计位移（逐拍增量求和） */
+            static LONG  s_stallPk;    /* 上次见到新包时的包数（[stall] 用） */
+            static DWORD s_stallT0, s_stallCl;
+            static int   s_stallOn;
             DWORD nowW = GetTickCount();
             POINT c; GetCursorPos(&c);
-            LONG pk = g_packets, cl = g_calls;
-            if (!s_have) { s_pkts = pk; s_calls = cl; s_cur0 = c; s_have = 1; }
+            /* ⛔⛔ 只看**真实**驱动包（g_pkReal，不含独立笔通路的合成包，2026-10-16）：
+               合成补流会把 g_packets 一直抬高 ⇒ 拿它当冻结判据等于把断流**藏起来**，
+               而诊断的第一要求是「能说真话」。 */
+            LONG pk = g_pkReal, cl = g_calls;
+            /* ⛔ 落笔的「记忆」必须比 g_penDown 活得久：断流一发生，contact_update
+               就再也收不到包，g_penDown 冻结/清零，判据随之失效（见 PEN_RECENT_MS）。 */
+            if (g_penDown == 1) s_lastPenMs = nowW;
+            if (!s_have) { s_pkts = pk; s_calls = cl; s_lastCur = c; s_have = 1; }
+
+            /* ⛔⛔ 2026-10-16 第十五轮：**无前置条件的包流停摆记录**。
+               `[dead]` 要求「最近 PEN_RECENT_MS 内落笔过 + 光标累计移动过门限」，于是
+               当接触判据把 penDown 判成 0 时（真机 `[ct] 连续全零=3049 包` 就是这种
+               情形），一段真实的停摆会被**完全遮蔽**：jwwh-22288 里 13:45:56~13:46:47
+               整整 50s 闸门判「悬空」，这段时间包流到底是活着还是断了，从 [dead] 与
+               [status] 都读不出来。这里只按「多久没见到新包」记录，并把手上的闸门状态
+               一并打出 ⇒ 「停摆是否真实」与「当时闸门怎么判」两件事立刻能对上。
+               ⛔ 纯诊断，不改任何行为。 */
+            {
+                static DWORD s_lastPkMs;
+                static int   s_stallInit;
+                if (!s_stallInit) { s_stallInit = 1; s_stallPk = pk; s_lastPkMs = nowW; }
+                else if ((DWORD)pk != (DWORD)s_stallPk) {
+                    if (s_stallOn) {
+                        logf("# [stall] 结束：停摆 %lums（期间 PS 轮询 %ld 次，"
+                             "光标=(%ld,%ld)）\n",
+                             (unsigned long)(nowW - s_stallT0),
+                             (long)((DWORD)cl - s_stallCl), (long)c.x, (long)c.y);
+                        s_stallOn = 0;
+                    }
+                    s_stallPk = pk; s_lastPkMs = nowW;
+                } else if (!s_stallOn && (DWORD)(nowW - s_lastPkMs) >= STALL_LOG_MS) {
+                    s_stallOn = 1; s_stallT0 = s_lastPkMs; s_stallCl = (DWORD)cl;
+                    logf("# [stall] ★包流停摆 ≥%lums：penDown=%ld toolOk=%ld contact=%ld "
+                         "ctZeroRun=%ld ctUnknown=%ld 光标=(%ld,%ld) calls=%ld\n",
+                         (unsigned long)(nowW - s_lastPkMs), (long)g_penDown, (long)g_toolOk,
+                         (long)g_contact, (long)g_ctZeroRun, (long)g_ctUnknown,
+                         (long)c.x, (long)c.y, (long)cl);
+                }
+            }
             if ((DWORD)pk != s_pkts) {                /* 有包：正常或从断流恢复 */
                 if (g_streamDead) {
-                    /* ⛔ 判决性字段：`末轮 Xms 前` —— 自愈杠杆是 WTOverlap（动完
-                       下一个包就回来），所以这个差值应当**极小**（≤ 一拍 250ms +
-                       包间隔）。若又是几百 ms~几秒，说明恢复不是我们推的，
-                       得回头查「谁在抢顶层」。 */
-                    DWORD sinceHeal = s_heals ? (nowW - (s_healAt - HEAL_ROUND_MS)) : 0;
-                    logf("# [dead] 恢复：包流恢复（断流约 %lu ms；自愈 %ld 轮，末轮 %lums 前%s；"
-                         "期间单包通路 WTPacket 收包 %ld）\n",
-                         (unsigned long)(nowW - s_dead0), (long)s_heals,
-                         (unsigned long)sinceHeal,
-                         (s_heals && sinceHeal <= HEAL_ROUND_MS + 300)
-                             ? " ⇒ WTOverlap 生效" : "",
+                    /* ⛔★ 判决性字段：**冲包量** = 恢复这一瞬间一次性涌进来多少包。
+                       真机 jwwh-9304 的五次恢复分别约 +125 / +127 / +117 / …，**全部落在
+                       128 附近**，恰好等于 `WTQueueSizeGet` 报出的队列容量 ⇒ 驱动在停摆
+                       期间把包**攒在队列里**，恢复时一次性交给 PS。
+                       这正是用户报的「画了 800px 圆弧、全程不出线，按住几秒后**整根
+                       圆弧一次性冒出来**」的直接机制：PS 在**一次** WTPacketsGet 调用里
+                       拿到上百个点，当然一帧画完（不是我们的平滑在憋，也不是性能问题）。 */
+                    DWORD flush = (DWORD)(pk - s_pkts);
+                    logf("# [dead] 恢复：包流恢复（断流约 %lu ms；冲包量=%lu 包"
+                         "（≈驱动队列容量 ⇒ 停摆期是「攒着」不是「丢」）；"
+                         "期间单包通路收包 %ld）\n",
+                         (unsigned long)(nowW - s_dead0), (unsigned long)flush,
                          (long)g_wtPkt1);
                     InterlockedExchange(&g_streamDead, 0);
+                    /* ⛔ 让下一批包**锚定复位**（输出点回到笔尖）：断流期笔早已走远，
+                       拿停摆前的输出点续画只会得到一段被拉长的假轨迹。 */
+                    InterlockedExchange(&g_deadRecovered, 1);
                 }
-                s_pkts = pk; s_calls = cl; s_cur0 = c; s_dead0 = 0; s_heals = 0;
-                s_movedTot = 0;
+                s_pkts = pk; s_calls = cl; s_lastCur = c; s_dead0 = 0;
+                s_movedTot = 0; s_still = 0;
             } else if ((DWORD)cl != s_calls) {        /* 无包但 PS 在轮询 ⇒ 冻结期 */
                 s_calls = cl;
-                int moved = (c.x > s_cur0.x ? c.x - s_cur0.x : s_cur0.x - c.x)
-                          + (c.y > s_cur0.y ? c.y - s_cur0.y : s_cur0.y - c.y);
+                int moved = (c.x > s_lastCur.x ? c.x - s_lastCur.x : s_lastCur.x - c.x)
+                          + (c.y > s_lastCur.y ? c.y - s_lastCur.y : s_lastCur.y - c.y);
+                s_lastCur = c;
                 /* ⛔⛔ 门限是**物理像素**（GetCursorPos 在 PM-aware 进程里给物理值）
                    ⇒ 150% 屏上 6 物理 px 只等于 4 逻辑 px、200% 上只有 3 ⇒ 高分屏会
                    把「手抖 / 极缓慢的停顿」误判成断流（2026-10-15：4K 机 HUD 恒不显示
@@ -2711,40 +3719,64 @@ static DWORD WINAPI worker(LPVOID param)
                    ⇒ 冻结期改为**自冻结起点累计位移**，不做基线跟随；只有「光标真
                      静止」（单窗 <2px，= 停笔）才清零。停笔（不出包 + 光标不动）
                      永远不会误判；冻结期光标动 = PS 正在原始输入 = 平滑已经死了。 */
+                if (!s_dead0) { s_dead0 = nowW; s_movedTot = 0; s_still = 0; }
                 s_movedTot += moved;
-                if (!s_dead0) { s_dead0 = nowW; s_movedTot = 0; }
-                else if (moved < 2) s_movedTot = 0;
+                /* ⛔⛔ 2026-10-16 第十四轮：累计量必须是**逐拍增量之和**。
+                   旧版算的是 |cur − s_cur0|（自冻结起点的差）却逐拍累加 ⇒ 同一段
+                   位移被反复计入，只要光标偏离过基线 2px 就不再归零 ⇒ 「停笔」也
+                   被判成「光标在动」。真机 jwwh-13772 正是这个形态：用户报 5 次冲包，
+                   日志只打出 1 条 [dead]，其余全被这条假累计掩盖。
+                   现在：逐拍增量求和；只有**连续 3 拍**位移都 <2px（真停笔）才清零，
+                   慢速运笔（每拍 2~10px）不再被误清零。 */
+                if (moved < 2) { if (++s_still >= 3) s_movedTot = 0; }
+                else s_still = 0;
                 if (!g_streamDead) {
-                    if (g_patched && g_penDown == 1 && s_movedTot >= mvDead
+                    /* ⛔⛔ 落笔判据 = 「最近 PEN_RECENT_MS 内落笔过」（2026-10-16
+                       第十二轮），不再是瞬时 g_penDown。真机 jwwh-24524 第 12 笔：
+                       断流起点 12:06:13.9、判定门槛 350ms 到 12:06:14.25 才满足，
+                       而 penDown 恰在 12:06:14.237 清零 ⇒ 差 13ms 错开，此后
+                       3.5 分钟永久断流一条 [dead] 都不打（HUD 还一直显示冻结几何）。 */
+                    DWORD penAgo = s_lastPenMs ? (nowW - s_lastPenMs) : 0xFFFFFFFFu;
+                    /* ⛔ 「末次 X 前」必须是可读文本：`s_lastPenMs==0` = 本次进程从未
+                       见过 penDown=1，打印那个哨兵值（4294967295）会被误读成下溢。 */
+                    char penTxt[40];
+                    if (s_lastPenMs) sprintf(penTxt, "%lums 前", (unsigned long)penAgo);
+                    else             sprintf(penTxt, "本次尚未见");
+                    if (g_patched && penAgo < PEN_RECENT_MS && s_movedTot >= mvDead
                         && nowW - s_dead0 > DEAD_DETECT_MIN_MS) {
                         InterlockedExchange(&g_streamDead, 1);
                         s_deadLog = nowW;
-                        /* ⛔ 自愈计时从**判定这一刻**重新起算：判定后下一拍就发
-                           #1（WTOverlap 是毫秒级杠杆，没有任何理由再等 4 秒）。 */
-                        s_healAt = 0; s_heals = 0;
-                        logf("# [dead] ★包流断供: penDown=1 包冻结 %lums 而光标仍移动(Δ累计%ldpx) "
-                             "hCtx=0x%llX calls=%ld 单包=%ld open=%ld close=%ld "
-                             "⇒ PS 已走非 Wintab 输入，平滑实质中断\n",
+                        logf("# [dead] ★包流断供: 包冻结 %lums 而光标仍移动(Δ累计%ldpx) "
+                             "落笔=%ld(末次 %s) hCtx=0x%llX calls=%ld 单包=%ld "
+                             "open=%ld close=%ld ⇒ 驱动侧 WinTab 采样停摆"
+                             "（插件自建上下文同样读包=0），平滑实质中断\n",
                              (unsigned long)(nowW - s_dead0), (long)s_movedTot,
+                             (long)g_penDown, penTxt,
                              (unsigned long long)(UINT_PTR)g_ctxNow, (long)cl,
                              (long)g_wtPkt1, (long)g_wtOpenN, (long)g_wtCloseN);
+                    } else if (nowW - s_dead0 > 500 && nowW - s_frzLog >= 2000) {
+                        /* ⛔ 「为什么还没判成断流」必须可读（否则又只能猜）：
+                           把三个判据的实际取值全打出来 ——
+                             penAgo  ≥ PEN_RECENT_MS ⇒ 早就抬笔了（正常冻结，不判）
+                             movedTot < mvDead        ⇒ 光标没在动（停笔，不判）
+                             冻结 < 350ms             ⇒ 还没到判定门槛 */
+                        s_frzLog = nowW;
+                        logf("# [frz] 无包但仍在轮询: 冻结 %lums movedTot=%ld/%d "
+                             "落笔=%ld(末次 %s) cur=(%ld,%ld) 上拍=(%ld,%ld) calls=%ld\n",
+                             (unsigned long)(nowW - s_dead0), (long)s_movedTot, mvDead,
+                             (long)g_penDown, penTxt,
+                             (long)c.x, (long)c.y, (long)s_lastCur.x, (long)s_lastCur.y, (long)cl);
                     }
                 } else {
-                  /* —— 诊断（2s 节流）与自愈（HEAL_ROUND_MS 节流）**各自独立** ——
-                     ⛔ 旧版把自愈整段嵌在这个 2s 诊断闸门里、且每轮固定 5s
-                        ⇒ 首轮要等 dead0+4s、次轮 dead0+9s。真机「恢复 9s 左右」
-                        完全由这条时序解释（而真正有效的杠杆本可立即生效）。
-                        两者解耦后，判定→首轮 = 一拍（≤250ms）。 */
+                  /* —— 断流期诊断（2s 节流）—— */
                   if (nowW - s_deadLog >= 2000) {
                     s_deadLog = nowW;
-                    /* ⛔ 诊断探针（2026-10-15）：非消费地探一下驱动队列。
-                       ⛔⛔ 真机里**恒为 0**，这一条就是根因的第一手证据：不是
-                       我们这侧队列溢出（溢出是「满」不是「空」），而是驱动
-                       **压根没往这个上下文排包** ⇒ 上下文被挤出了重叠序
-                       （Wintab：每个包只进一个上下文的队列，见 dead_heal 注释）。
-                       peek>0 才会是另一类故障（队列有货而 WTPacketsGet 恒返 0）。
-                       WTPacketsPeek 按规范不动队列，且我们只 inline-hook 了
-                       WTPacketsGet，此调用直达驱动。 */
+                    /* ⛔ 队列探针（只读、非消费）：WTPacketsPeek 按规范不动队列，且我们
+                       只 inline-hook 了 WTPacketsGet，此调用直达驱动。
+                       ⛔⛔ 真机里**恒为 0**：不是我们这侧队列溢出（溢出是「满」而不是
+                       「空」），而是驱动**压根没往这个上下文排包**。配合「插件自建上下文
+                       同样读包=0」，根因指向**驱动侧 WinTab 采样整体停摆**。
+                       peek>0 才会是另一类故障（队列有货而 WTPacketsGet 恒返 0）。 */
                     UINT peekN = 0;
                     {
                         typedef UINT (*PFN_WTPeek)(HCTX, int, LPVOID);
@@ -2762,21 +3794,18 @@ static DWORD WINAPI worker(LPVOID param)
                     logf("# [dead] 持续中: 已冻结 %lums calls=%ld 单包=%ld peek=%u\n",
                          (unsigned long)(nowW - s_dead0), (long)cl, (long)g_wtPkt1, peekN);
                   }
-                  /* —— 自愈（2026-10-15 第九轮改版）——
-                     ⛔ 旧版（第八轮）是 `冻结>4s 起、每 5s 一轮、最多 12 轮` 的
-                        **WTEnable 翻转**，并且整段嵌在上面的 2s 诊断闸门里。
-                        真机判决（jwwh-10472）：冻结 678s，12/12 轮全部返回 1/1
-                        成功却**一包未回**，直到用户退出 PS 才收到 WTClose ⇒
-                        该杠杆对着本症根本无效（原理见 dead_heal 上方注释：
-                        WTEnable 不碰上下文重叠序），而 5s 的轮次间隔又把
-                        「本该毫秒级生效」的正确杠杆硬生生拖成「9s 恢复」。
-                       现在：杠杆换成 WTOverlap（dead_heal），轮次压到
-                       HEAL_ROUND_MS，且不设轮次上限（抢顶层的那一方可能反复
-                       抢，钳住次数只会让断流变长；日志按轮次可读，不会失控）。 */
-                  if (nowW >= s_healAt) {
-                    s_healAt = nowW + HEAL_ROUND_MS;
-                    dead_heal(++s_heals);
-                  }
+                  /* —— 不再「主动抢救」（2026-10-16 第十三轮）——
+                     ⛔ 这里曾经按轮次反复做两个动作，双双被真机证伪：
+                        · 第八轮 `WTEnable 翻转`：jwwh-10472 冻结 678s，12/12 轮全返
+                          1/1 却一包未回，直到用户退出 PS；
+                        · 第九/十轮 `WTOverlap(hCtx, TRUE)`：jwwh-25000 的 120 轮、
+                          jwwh-9304 的 30 轮**全部返回 1** 却同样一包未回。
+                     而且它们**可能有害**：把外来上下文推上重叠序顶层会让 PS 收不到包，
+                     关掉之后驱动若不自动把 PS 推回去，就是我们亲手在延长断流。
+                     ⇒ 本版起：断流期**一个 Wintab 写动作都不做**，只保留一次性的
+                        「方向判决实验」dead_relay_probe()（见其定义处）。恢复时长
+                        完全交给驱动（真机实测 0.3s~31s 随机，见过 678s 永不恢复）。 */
+                  if (nowW - s_dead0 > 2000) dead_relay_probe();   /* 幂等：内部只做一次 */
                 }
             } else {                                  /* 连轮询都停了：不能算断流 */
                 s_calls = cl;
@@ -2911,6 +3940,9 @@ static DWORD WINAPI worker(LPVOID param)
 
     do_unhook();
     hud_stop();
+    /* ⛔ 同 hud_stop 的理由：Raw Input 窗口过程在本模块内，必须先 join 再走人。 */
+    penraw_stop();
+    cursamp_stop();
     if (g_log != INVALID_HANDLE_VALUE) { CloseHandle(g_log); g_log = INVALID_HANDLE_VALUE; }
     return 0;
 }
@@ -3006,6 +4038,11 @@ static void hud_frame_wait(HANDLE timer)
 static LRESULT CALLBACK hud_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     if (m == WM_NCHITTEST) return HTTRANSPARENT;    /* 穿透：绝不抢任何输入 */
+    /* ⛔ 内容一律由 UpdateLayeredWindow 提交（见 hud_thread）⇒ 不参与 GDI 重绘路径：
+       擦背景直接吞掉，WM_PAINT 只验证不绘制。否则系统一旦要求重绘，
+       DefWindowProc 会把 layered surface 冲掉（表现 = 窗口忽然变空/变黑）。 */
+    if (m == WM_ERASEBKGND) return 1;
+    if (m == WM_PAINT) { ValidateRect(h, NULL); return 0; }
     return DefWindowProcW(h, m, w, l);
 }
 
@@ -3013,7 +4050,7 @@ static LRESULT CALLBACK hud_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
  * 按需重建 DIB 并改窗口边长（DPI 缩放变化 / 半径拉大时）。只**增大**，不缩回
  * （缩回会在跨屏移动时来回抖）。返回新的边长；失败沿用旧值（功能不中断）。
  */
-static int hud_resize(HWND wnd, int need, HBITMAP* dib, HDC mem, int cur)
+static int hud_resize(HWND wnd, int need, HBITMAP* dib, HDC mem, int cur, void** pbits)
 {
     if (!wnd || !mem || need <= cur) return cur;
     if (need > HUD_SIZE_MAX) need = HUD_SIZE_MAX;
@@ -3033,6 +4070,7 @@ static int hud_resize(HWND wnd, int need, HBITMAP* dib, HDC mem, int cur)
     SelectObject(mem, nd);                      /* 先换入新的 */
     if (*dib) DeleteObject(*dib);               /* 再销毁旧的（此时已不在 DC 里） */
     *dib = nd;
+    if (pbits) *pbits = bits;                   /* 像素基址交给调用方（alpha 化用） */
     SetWindowPos(wnd, NULL, 0, 0, need, need,
                  SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     return need;
@@ -3061,11 +4099,40 @@ static DWORD WINAPI hud_thread(LPVOID param)
     HWND     wnd = NULL;
     HDC      mem = NULL;
     HBITMAP  dib = NULL;
+    void*    dibBits = NULL;       /* DIB 像素基址（alpha 化用；随 hud_resize 更新） */
     int      hudSize = HUD_SIZE;   /* 当前窗口/DIB 边长（随 DPI 按需放大，见 hud_resize） */
 
     if (atom || GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
-        wnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT
-                              | WS_EX_NOACTIVATE,
+        /* ⛔⛔ WS_EX_TRANSPARENT **必须留着**（2026-10-16 第十四轮，代价惨重的回归）。
+           0x010A 曾把它删掉，理由「鼠标穿透已由 WM_NCHITTEST→HTTRANSPARENT 保证」
+           是错的 —— 两条事实：
+             ① `WM_NCHITTEST→HTTRANSPARENT` 只在**同一个线程内**向下传递
+                （MSDN：the message will be sent to underlying windows in the
+                 **same thread**）。HUD 窗口跑在 hud_thread 上，PS 的主窗在另一个
+                线程 ⇒ **跨线程根本传不过去**，这条路等于没有。
+             ② 分层窗口的命中测试是**按像素 alpha** 走的：alpha=0 的像素穿透，
+                **画了东西的像素会把鼠标消息吃掉**。而 HUD 的拉绳曲线终点恰好画在
+                光标上（见绘制段 `(half+vx, half+vy)`，vx/vy 就是光标相对窗口中心的
+                偏移）⇒ **光标下永远压着一个不透明像素** ⇒ HUD 恒抢走笔按下事件
+                ⇒ PS 收不到拖拽 ⇒ 真机形态「平滑生效时什么都画不出来，断流期
+                （HUD 被 SW_HIDE）反而能画出未平滑的选区」。
+           正解就是 WS_EX_TRANSPARENT（MSDN「Layered Windows」原文）：
+             "if the layered window has the WS_EX_TRANSPARENT extended window style,
+              the shape of the layered window will be ignored and the mouse events
+              will be passed to other windows underneath the layered window."
+           ⛔ 它**不影响**我们的显示：ULW 是直接提交给 DWM 的，不走 WM_PAINT
+              （`hud_wndproc` 已把 WM_ERASEBKGND/WM_PAINT 吞掉）；
+              「等兄弟窗口绘制」那条语义只作用于 GDI 重绘路径。
+              ✅ 旁证：0x0106/0x0107 时代带着这个样式，HUD 看得见**且**能正常绘制。 */
+        /* ⛔⛔ 2026-10-16 第十五轮：**建窗即置顶**（`WS_EX_TOPMOST`）。
+           真机判决（jwwh-22288 vs jwwh-13772/21904，各 30~56 条 `[hud] 显示:` 样本）：
+             有 WS_EX_TOPMOST 的会话 → 用户看得到 HUD；
+             没有的会话（ex=0x80800A0）      → 五条自检全绿却一秒看不见。
+           ⇒ 可见性的**唯一**依赖是「窗口真的在 topmost 带里」。既然
+             `SetWindowPos(HWND_TOPMOST)` 返回值不可信（raise=1 却读不到该位），
+             就把它钉在建窗参数上，不再依赖那一次调用。 */
+        wnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TOPMOST
+                              | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
                               HUD_CLASS, L"", WS_POPUP,
                               0, 0, HUD_SIZE, HUD_SIZE, NULL, NULL, inst, NULL);
         if (!wnd) {
@@ -3073,7 +4140,12 @@ static DWORD WINAPI hud_thread(LPVOID param)
         }
     }
     if (wnd) {
-        SetLayeredWindowAttributes(wnd, RGB(0, 0, 0), 255, LWA_COLORKEY);
+        /* ⛔⛔ 2026-10-16 第十二轮：**不再** SetLayeredWindowAttributes(LWA_COLORKEY)。
+           改用 UpdateLayeredWindow + 32bpp 预乘 alpha 提交（见绘制段）：
+             · 两者互斥（先设 color key 会让 ULW 失败）；
+             · color key 的坑是「画笔色一旦为纯黑 = 整窗透明」，ULW 没这个问题；
+             · ULW 是 layered window 的**官方提交路径**，DWM 一定认，
+               不像 GetDC+BitBlt 那样「调用全成功却不上屏」。 */
         BITMAPINFO bi;
         memset(&bi, 0, sizeof(bi));
         bi.bmiHeader.biSize        = sizeof(bi.bmiHeader);
@@ -3087,6 +4159,7 @@ static DWORD WINAPI hud_thread(LPVOID param)
         dib = CreateDIBSection(scr, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
         mem = CreateCompatibleDC(scr);
         if (dib) SelectObject(mem, dib);
+        dibBits = bits;
         ReleaseDC(NULL, scr);
     }
 
@@ -3151,8 +4224,19 @@ static DWORD WINAPI hud_thread(LPVOID param)
                 break;
             }
         }
-        POINT cur;
-        GetCursorPos(&cur);
+        /* ⛔⛔ `cur` 必须**先初始化**再交给 GetCursorPos：该调用在失败时**不写**
+           出参（例如线程未附着到输入桌面），旧版直接用未初始化的栈值做
+           `SetWindowPos(cur.x - rx - half, …)` ⇒ 窗口被钉到任意坐标（很可能在屏外）
+           ⇒ 观感正是「HUD 该显示却完全看不到」。失败时按 (0,0) 兜底并节流报一次。 */
+        POINT cur = { 0, 0 };
+        if (!GetCursorPos(&cur)) {
+            static DWORD s_lastCurFail;
+            if ((DWORD)(now - s_lastCurFail) >= 5000) {
+                s_lastCurFail = now;
+                logf("# [hud] ★GetCursorPos 失败 err=%lu ⇒ 本帧窗口位置不可信（按 0,0 兜底）\n",
+                     (unsigned long)GetLastError());
+            }
+        }
         /* ⛔⛔ 标定分母必须用**原始轴**（不是输出轴）：
            系统光标由 Wintab 系统上下文（驱动侧）移动，跟随的是**原始笔**——
            我们改写的只是交给 PS 的那份副本，管不到系统光标。
@@ -3259,16 +4343,16 @@ static DWORD WINAPI hud_thread(LPVOID param)
         LONG pktAge = sn_age_ms(now);   /* ⛔ 有符号：见 sn_age_ms 注释；负值=刚有包 */
         /* ⛔ enabled 也必须判（第八轮补）：平滑关着时 out 快照冻结在旧值，
            HUD 会拿冻结快照画圈 —— 真机实锤「前十笔 HUD 显示但显示错误」。
-           ⛔⛔ 断流态（2026-10-15，用户报「平滑失效时 HUD 显示的位置是错的」）：
-              一律强制隐藏会走向另一个极端 —— 用户要 HUD 常显来观察状态。
-              现改为**降级呈现**：dead && penDown==1 期间 HUD 保持可见，但圆心钉
-              光标、不画绳、颜色改红（见下方绘制段）—— 断流期 PS 走原始输入，
-              真实「绘制点」就是光标本身，这才是诚实几何。落笔锁存 5s 超时清
-              penDown 后 HUD 收起，不会整段冻结期都挂着。 */
-        int deadShow = (g_streamDead && g_penDown == 1) ? 1 : 0;
-        int activeNow = deadShow
-                     || (pktAge < HUD_IDLE_MS || (gateOk && pktAge < HUD_HOLD_MS));
-        int wantVisible = (wnd && mem && activeNow && (deadShow || gateOk) && ropeMode
+           ⛔⛔ 断流态**不再画 HUD**（2026-10-16 第十一轮，用户实测判决）：
+              上一版让 HUD 在断流期「降级显示」（圆心钉光标、不画绳、改红色）。
+              用户判定这就是错误显示：「断流时 HUD 也会出错，受力点施力点重合」。
+              几何上确实如此 —— 圆心（受力点）本该是选区末端，钉到光标上就与施力点
+              重合，与用户的术语约定完全相反。**画一个错的圆比不画更糟**。
+              ⇒ 断流期一律隐藏；断流状态由面板状态条「平滑中断」告知，HUD 只负责
+                 正常期「选区末端 vs 笔尖」的几何提示。 */
+        int deadNow = (g_streamDead && g_penDown == 1) ? 1 : 0;
+        int activeNow = (pktAge < HUD_IDLE_MS || (gateOk && pktAge < HUD_HOLD_MS));
+        int wantVisible = (wnd && mem && activeNow && gateOk && !deadNow && ropeMode
                            && (hf & 1) && g_cfg && g_cfg[CFG_I_ENABLED]) ? 1 : 0;
         if (!wantVisible) {
             if (wnd && IsWindowVisible(wnd)) ShowWindow(wnd, SW_HIDE);
@@ -3284,10 +4368,10 @@ static DWORD WINAPI hud_thread(LPVOID param)
             if (g_cfg && g_cfg[CFG_I_ENABLED] && (DWORD)(now - lastHudWhy) >= 2000) {
                 lastHudWhy = now;
                 logf("# [hud] 未显示: wnd=%d mem=%d active=%d(t=%ldms) gate=%d"
-                     "(toolOk=%ld penDown=%ld) rope=%d hudBits=%ld dead=%ld\n",
+                     "(toolOk=%ld penDown=%ld) rope=%d hudBits=%ld dead=%ld deadHide=%d\n",
                      wnd ? 1 : 0, mem ? 1 : 0, activeNow, (long)pktAge, gateOk,
                      (long)g_toolOk, (long)g_penDown, ropeMode, (long)hf,
-                     (long)g_streamDead);
+                     (long)g_streamDead, deadNow);
             }
             hud_frame_wait(frameTimer);
             continue;
@@ -3315,12 +4399,14 @@ static DWORD WINAPI hud_thread(LPVOID param)
         int rx = (int)((axX - aoX) * px_x());
         int ry = (int)((axY - aoY) * px_y());
         LONG c  = g_cfg[CFG_I_HUDCOLOR];
+        /* ⛔ 黑色防线：0x010A 起透明走 ULW_ALPHA（真 alpha 通道），纯黑**不再**等于
+           透明，理论上这个兜底已经不需要了（留着是因为它另一个作用仍然成立：面板漏推 /
+           推 0 / 槽位被清零时给一个可见的默认色，否则 HUD 会画成纯黑、在深色画布上
+           等于隐形）。⇒ 遇到黑色一律退回默认橙。 */
+        if ((c & 0xFFFFFF) == 0) c = 0xE07F0D;
         COLORREF col = RGB((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
-        /* ⛔⛔ 断流态（2026-10-15）：偏移快照已冻结且与光标脱钩（引擎没在改写，
-           PS 画的就是光标）⇒ 此刻真实「绘制点」= 光标本身：圆心钉光标（rx=ry=0）、
-           绳不画、颜色改红。这不是权宜 —— 是断流期唯一诚实的几何；
-           旧观感「圆心与受力点分离 28px 且跟着光标跑」正是拿冻结偏移画假圆。 */
-        if (deadShow) { rx = 0; ry = 0; col = RGB(0xD8, 0x30, 0x30); }
+        /* ⛔ 断流态不再在此降级呈现（2026-10-16 第十一轮）：wantVisible 已把
+           `g_streamDead` 挡在外面 ⇒ 走到这里必然不是断流态，无需再改 rx/ry/col。 */
 
         int rpx = g_cfg[CFG_I_RADIUSPX]; if (rpx < 1) rpx = 1;
         if (rpx > RADIUS_PX_MAX) rpx = RADIUS_PX_MAX;
@@ -3329,7 +4415,7 @@ static DWORD WINAPI hud_thread(LPVOID param)
            且「画的圈」比真实约束小（150% 下小 33%）。 */
         double dpiS = dpi_scale();
         hudSize = hud_resize(wnd, 2 * ((int)((double)RADIUS_PX_MAX * dpiS) + 24),
-                             &dib, mem, hudSize);
+                             &dib, mem, hudSize, &dibBits);
         /* 圆周半径 = 真实绳长（= 半径，张力已删除）⇒ 圈与约束永远一致。
            与滤波分支同源：那边 radiusPxF 同样乘了 dpiS。
            ⚠️ 模式判据在上面 wantVisible 处已经用过一次（ropeMode）；这里不再取一次，
@@ -3338,21 +4424,26 @@ static DWORD WINAPI hud_thread(LPVOID param)
         if (leashPx < 2) leashPx = 2;
 
         int half = hudSize / 2;
-        RECT rc = { 0, 0, hudSize, hudSize };
-        FillRect(mem, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
+        /* ⛔⛔ 2026-10-16 第十二轮：背景从「不透明黑 + LWA_COLORKEY 键色」改为
+           「全 0 = 完全透明」（ULW_ALPHA 路径）。
+           两个收益：① 彻底消灭「画笔色 = 纯黑 ⇒ 整窗透明」这个坑；
+                     ② 走 DWM 官方合成路径（旧 GetDC+BitBlt 已被真机证明
+                        「show 成功、BitBlt 成功、屏幕全空」）。
+           ⚠️ GDI 往 32bpp DIB 绘制时**不写 alpha 字节** ⇒ 先清零，
+              绘制完成后统一把「非黑像素」的 alpha 置 255（见下方 alpha 化）。 */
+        if (dibBits) memset(dibBits, 0, (SIZE_T)hudSize * (SIZE_T)hudSize * 4u);
 
         HPEN pen = CreatePen(PS_SOLID, 1, col);
         HPEN old = (HPEN)SelectObject(mem, pen);
-        if ((hf & 2) && !deadShow) {      /* 绳长圆：光标（原始笔）的活动范围 */
+        if (hf & 2) {                     /* 绳长圆：光标（原始笔）的活动范围 */
             HBRUSH nb = (HBRUSH)GetStockObject(NULL_BRUSH);
             HBRUSH ob = (HBRUSH)SelectObject(mem, nb);
             Ellipse(mem, half - leashPx, half - leashPx, half + leashPx, half + leashPx);
             SelectObject(mem, ob);
         }
-        if ((hf & 1) && !deadShow) {
+        if (hf & 1) {
             /* 「绳」：从圆心（绘制点）连到光标（原始笔尖）。
-               ⛔ 断流态不画绳（2026-10-15）：绳的两端语义是「绘制点↔原始笔」，
-                  断流期绘制点 = 光标 ⇒ 绳长恒 0，画出来只会是一团噪点。
+               ⛔ 断流态到不了这里（wantVisible 已挡住 g_streamDead），不再需要分支。
                ⛔ 旧版画成 4→1px 的**锥形直线**，用户明确否掉：「一头粗一头细，始终是
                   直线，没有一种绳子的感觉」。PS 的参照行为是：
                     · 光标在圈内 ⇒ 绳是**松弛的曲线**；
@@ -3435,14 +4526,163 @@ static DWORD WINAPI hud_thread(LPVOID param)
         SelectObject(mem, old);
         DeleteObject(pen);
 
-        /* 窗口钉在**绘制点**（= 光标 − 绳偏移），不是钉在光标上：
-           圆心 = 绘制点（描边画在这里），绳带末端 +offset 恰好压在系统光标上。
-           ⛔ 旧版钉在 GetCursorPos()（= 原始笔尖）等于把两者的角色搞反 ——
-              真机表现「光标钉在圆心、洋红点向外延伸到圆周又弹回圆心」即由此来。 */
-        SetWindowPos(wnd, HWND_TOPMOST, cur.x - rx - half, cur.y - ry - half, 0, 0,
-                     SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        HDC dc = GetDC(wnd);
-        if (dc) { BitBlt(dc, 0, 0, hudSize, hudSize, mem, 0, 0, SRCCOPY); ReleaseDC(wnd, dc); }
+        /* ⛔ 1px 白色边框已删除（2026-10-16 第十四轮，用户明确要求）：
+           它只是 0x010A 排查「窗口到底上没上屏」时的临时判决器，HUD 可见性
+           已定案（真因是 ULW 不碰 z 序 ⇒ 靠每帧 SetWindowPos 置顶解决），
+           判决器完成使命即移除。⛔ 后续任何调试都不要再加可见的临时装饰。 */
+
+        /* —— alpha 化（32bpp 预乘 alpha；alpha=255 ⇒ 不透明，无需再预乘）——
+           GDI 往 32bpp DIB 绘制时**不写 alpha 字节** ⇒ 背景保持 0（全透明），
+           画上去的非黑像素在这里把 alpha 补成 255。画笔色已在上方强制非黑
+           （黑 → 橙），所以「非黑 ⇒ 不透明」是安全判据。 */
+        if (dibBits) {
+            u32* px = (u32*)dibBits;
+            int tot = hudSize * hudSize;
+            for (int i = 0; i < tot; i++) {
+                u32 v = px[i];
+                if (v & 0x00FFFFFFu) px[i] = v | 0xFF000000u;
+            }
+        }
+
+        /* —— 提交：UpdateLayeredWindow（layered window 的官方路径）——
+           位置 + 尺寸 + 内容一次性交给 DWM。旧版是「SetWindowPos 移动 + GetDC/
+           BitBlt 画内容」两步走 —— 真机 120s 里 vis/swp/blt 全 =1 却一秒看不见，
+           正是那套走法在 DWM 下不被合成的典型形态。
+           ⛔ hdcDst 传 NULL = 用屏幕 DC；ULW_ALPHA + AC_SRC_ALPHA = 以 DIB 的
+              alpha 通道做透明（这正是去掉 color key 后要用的模式）。 */
+        POINT ptDst; ptDst.x = cur.x - rx - half; ptDst.y = cur.y - ry - half;
+        SIZE  szLay; szLay.cx = hudSize; szLay.cy = hudSize;
+        POINT ptSrc; ptSrc.x = 0; ptSrc.y = 0;
+        BLENDFUNCTION bf;
+        bf.BlendOp = AC_SRC_OVER; bf.BlendFlags = 0;
+        bf.SourceConstantAlpha = 255; bf.AlphaFormat = AC_SRC_ALPHA;
+        BOOL ulwOk = FALSE;
+        if (wnd && mem && dibBits)
+            ulwOk = UpdateLayeredWindow(wnd, NULL, &ptDst, &szLay, mem, &ptSrc, 0,
+                                        &bf, ULW_ALPHA);
+        DWORD ulwErr = ulwOk ? 0 : (DWORD)GetLastError();
+        /* ⛔⛔ 每帧置顶（2026-10-16 第十三轮）——**HUD 全程不可见的真凶**：
+           0x010A 把「每帧 `SetWindowPos(HWND_TOPMOST, …SWP_SHOWWINDOW)`」整套换成了
+           `UpdateLayeredWindow`。ULW **只提交内容与位置，完全不碰 z 序**，于是窗口
+           落在 Photoshop 主窗**之下**：`vis=1 / ex 含 LAYERED / ulw=1 / rect 在屏内 /
+           像素逐点正确` 五项全绿，屏幕上却一秒都看不见 —— 真机 jwwh-9304 全程如此
+           （那些行里的像素采样证明内容画对了，只是没人看得见）。
+           0x0107（用户明确「还能看到 HUD」的那版，见 git show HEAD^:…）正是靠每帧
+           这一句置顶；本轮把内容继续交给 ULW（DWM 官方合成路径），**置顶每帧重申**。
+           ⛔ SWP_NOACTIVATE：绝不抢焦点；SWP_NOMOVE|SWP_NOSIZE：位置尺寸仍归 ULW。 */
+        /* ⛔⛔ 2026-10-16 第十五轮：改回 **0x0107 那条已知能见的确切形状** ——
+           位置 + z 序在**同一次调用**里给出（不带 SWP_NOMOVE），flags 只留
+           SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW。
+           0x0107 用户明确「能看到 HUD」，用的正是这一条；0x0109 起把位置交给 ULW、
+           这次调用退化成 `SWP_NOMOVE`，之后就再也没稳定见过 HUD。
+           ⛔ 传的坐标就是刚交给 ULW 的 ptDst，两者一致 ⇒ 不会互相打架。 */
+        BOOL raiseOk = FALSE;
+        DWORD exBefore = 0, exAfter = 0;
+        if (wnd) {
+            exBefore = (DWORD)GetWindowLongW(wnd, GWL_EXSTYLE);
+            raiseOk = SetWindowPos(wnd, HWND_TOPMOST, ptDst.x, ptDst.y, 0, 0,
+                                   SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            exAfter = (DWORD)GetWindowLongW(wnd, GWL_EXSTYLE);
+            /* 兜底：调用声称成功、却没拿到 WS_EX_TOPMOST ⇒ 显式钉样式再来一次。
+               真机实证过 raise=1 而该位仍为 0（ex=0x80800A0）的情形。 */
+            if (!(exAfter & WS_EX_TOPMOST)) {
+                SetWindowLongW(wnd, GWL_EXSTYLE, (LONG)(exAfter | WS_EX_TOPMOST));
+                SetWindowPos(wnd, HWND_TOPMOST, ptDst.x, ptDst.y, 0, 0,
+                             SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                exAfter = (DWORD)GetWindowLongW(wnd, GWL_EXSTYLE);
+            }
+        }
+        /* 兜底：要它显示却没显示 ⇒ 补一次显式 ShowWindow（SW_SHOWNA = 不抢焦点）。
+           分层窗口被 SW_HIDE 过之后偶发「SWP_SHOWWINDOW 不生效」。 */
+        BOOL reShow = FALSE;
+        if (!IsWindowVisible(wnd)) { ShowWindow(wnd, SW_SHOWNA); reShow = TRUE; }
+
+        /* —— 显示路径自检（2026-10-16 第十二轮，**只读探测**，2s 节流）——
+           缘起：用户报「HUD 全程不显示，而平滑功能正常」。上一轮日志已排除了
+           位置/颜色/分层/API 失败四种可能 ⇒ 本轮直接换提交路径并把**像素内容**
+           一起落盘，把「窗口没上屏」与「内容没画出来」彻底分开：
+              vis=0            ⇒ 窗口不可见
+              ex 无 0x80000    ⇒ WS_EX_LAYERED 丢了（ULW 用不了）
+              ex 无 0x20       ⇒ WS_EX_TRANSPARENT 丢了 ⇒ **HUD 会吃掉笔按下事件**
+                                 （第十四轮血案，见 CreateWindowExW 处注释）
+              ulw=0            ⇒ 提交失败，err= 给原因
+              raise=0          ⇒ 置顶失败 ⇒ 窗口会落到 PS 主窗之下（不可见）
+              rect 全在屏外    ⇒ 位置算错（rx/ry 或 cur 异常）
+              px ctr≠col       ⇒ 圆心/笔尖点没画进 DIB
+              px ring≠col      ⇒ 绳长圆没画进 DIB（hf bit1 关着时本就该是 0）
+              px far≠0         ⇒ 透明背景被写脏（alpha 化出问题） */
+        {
+            static DWORD s_lastShowLog;
+            static int   s_ulwErrLogged;
+            static int   s_zDumped;
+            if ((DWORD)(now - s_lastShowLog) >= 2000) {
+                s_lastShowLog = now;
+                RECT rr = { 0, 0, 0, 0 };
+                GetWindowRect(wnd, &rr);
+                DWORD lex = (DWORD)GetWindowLongW(wnd, GWL_EXSTYLE);
+                /* ⛔ 像素值一律按 **%08lX** 打（含 alpha 字节）：
+                   ULW_ALPHA 下 alpha=0 的像素就是「完全透明」⇒ 若 ctr 的 alpha 为 0，
+                   则「内容画对了却看不见」，问题在 alpha 化而非 z 序。 */
+                unsigned long pCtr = 0, pFar = 0, pRing = 0;
+                const u32* px = (const u32*)dibBits;
+                if (px) {
+                    int ctr = half * hudSize + half;
+                    int rxs = half - leashPx; if (rxs < 0) rxs = 0;
+                    pCtr  = (unsigned long)px[ctr];
+                    pFar  = (unsigned long)px[(hudSize - 2) * hudSize + (hudSize - 2)];
+                    pRing = (unsigned long)px[half * hudSize + rxs];
+                }
+                logf("# [hud] 显示: vis=%d ex=0x%lX exb=0x%lX top=%ld raise=%d ulw=%d "
+                     "rect=(%ld,%ld,%ld,%ld) cur=(%ld,%ld) off=(%d,%d) size=%d col=%06lX "
+                     "px[ctr=%08lX ring=%08lX far=%08lX] reShow=%d z=%p err=%lu\n",
+                     (int)IsWindowVisible(wnd), (unsigned long)lex, (unsigned long)exBefore,
+                     (long)((exBefore & WS_EX_TOPMOST) ? 1 : 0), (int)raiseOk, (int)ulwOk,
+                     (long)rr.left, (long)rr.top, (long)rr.right, (long)rr.bottom,
+                     (long)cur.x, (long)cur.y, rx, ry, hudSize,
+                     (unsigned long)(col & 0xFFFFFF),
+                     pCtr, pRing, pFar, (int)reShow,
+                     /* z = 在我们**上面**的那个窗口（NULL = 已是最顶）。
+                        目标态：置顶成功后恒为 NULL；若它等于 PS 主窗，说明我们又掉到下面了。 */
+                     (void*)GetWindow(wnd, GW_HWNDPREV),
+                     (unsigned long)ulwErr);
+                /* ⛔ 一次性 z 链取证（每个进程只做一次）：把 HUD 之上最多 8 个窗口的
+                   类名 / 尺寸 / 是否可见 / 是否 topmost 打出来。
+                   判读：若其中某个**覆盖 HUD 中心**的可见窗口出现 ⇒ 找到遮挡者（就是它）。
+                   没有任何窗口覆盖 HUD 中心、且 HUD 自身 topmost ⇒ 遮挡论不成立，
+                   问题在合成路径（那时看 px 的 alpha）。 */
+                if (!s_zDumped && (exBefore & WS_EX_TOPMOST)) {
+                    s_zDumped = 1;
+                    HWND up = GetWindow(wnd, GW_HWNDPREV);
+                    logf("# [hud] ★z 链（HUD 自身 rect=(%ld,%ld,%ld,%ld) top=%ld）：\n",
+                         (long)rr.left, (long)rr.top, (long)rr.right, (long)rr.bottom,
+                         (long)((lex & WS_EX_TOPMOST) ? 1 : 0));
+                    for (int lv = 0; lv < 8 && up; lv++) {
+                        WCHAR cn[128]; cn[0] = 0;
+                        GetClassNameW(up, cn, 128);
+                        RECT ur = { 0, 0, 0, 0 };
+                        GetWindowRect(up, &ur);
+                        DWORD ux = (DWORD)GetWindowLongW(up, GWL_EXSTYLE);
+                        int covers = (ur.left <= cur.x && cur.x < ur.right
+                                   && ur.top  <= cur.y && cur.y < ur.bottom) ? 1 : 0;
+                        DWORD wpid = 0;
+                        GetWindowThreadProcessId(up, &wpid);
+                        logf("# [hud]    #%d hwnd=%p cls=%ls vis=%d top=%ld "
+                             "rect=(%ld,%ld,%ld,%ld) 覆盖光标=%d pid=%lu\n",
+                             lv, (void*)up, cn, (int)IsWindowVisible(up),
+                             (long)((ux & WS_EX_TOPMOST) ? 1 : 0),
+                             (long)ur.left, (long)ur.top, (long)ur.right, (long)ur.bottom,
+                             covers, (unsigned long)wpid);
+                        up = GetWindow(up, GW_HWNDPREV);
+                    }
+                }
+                if (!ulwOk && !s_ulwErrLogged) {
+                    s_ulwErrLogged = 1;
+                    logf("# [hud] ★UpdateLayeredWindow 失败 err=%lu（wnd=%p mem=%p bits=%p）"
+                         " ⇒ HUD 本轮起将不可见，请把这一行发回\n",
+                         (unsigned long)ulwErr, (void*)wnd, (void*)mem, dibBits);
+                }
+            }
+        }
 
         hud_frame_wait(frameTimer);
     }
@@ -3494,7 +4734,7 @@ static void hud_stop(void)
 }
 
 /* ================================================================== 导出 */
-__declspec(dllexport) int jwwh_version(void) { return 0x0107; }
+__declspec(dllexport) int jwwh_version(void) { return 0x010F; }
 
 /* 兜底还原入口：守护进程的正常路径是经共享内存下令（worker 执行），
    此导出供外部工具（脚本/排障）在不需要共享内存时直接远程调用。 */
@@ -3506,6 +4746,8 @@ __declspec(dllexport) int jwwh_unhook(void)
        ⛔ 必须在 do_unhook / 本函数返回之前完成 —— 渲染线程持有窗口过程，
           它活着的时候绝不能让本模块被卸载。 */
     hud_stop();
+    penraw_stop();
+    cursamp_stop();
     do_unhook();
     cfg_close();
     if (g_log != INVALID_HANDLE_VALUE) { CloseHandle(g_log); g_log = INVALID_HANDLE_VALUE; }
