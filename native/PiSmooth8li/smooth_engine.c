@@ -925,6 +925,18 @@ static volatile LONG g_lastGapMs;    /* 最近一次复位时的取包间隔（m
       兜底值（DLL 被挂起数分钟之类的极端情况）。
    ⛔ 绝不要再改小：用户的「停笔观察」是正常操作，改小就等于「一停笔就复位」。 */
 #define TIME_GAP_RESET_MS 5000
+
+/* —— 断流（上下文被挤出重叠序）的判定与自愈时序（2026-10-15 第九轮）——
+   ⛔ 根因与杠杆见 worker() 里「断流看门狗」上方 + dead_heal() 上方的长注释：
+      唯一有效杠杆是 `WTOverlap(hCtx, TRUE)`（下一个包即生效 = 毫秒级），
+      `WTEnable` 翻转**治不了本症**（它不碰重叠序）。
+   ⛔ 旧时序（判定下限 600ms、首轮自愈 dead0+4s、之后每 5s 一轮，且整段被 2s
+      诊断日志闸门夹住）在真机上就是「恢复 9s 左右」的唯一来源；既然杠杆本身
+      是毫秒级，时序完全没有必要保守。 */
+#define DEAD_DETECT_MIN_MS 350   /* 包冻结达此值（且光标仍在动）才判「断流」 */
+#define HEAL_ROUND_MS      800   /* 自愈轮次间隔（首轮 = 判定后下一拍立即执行） */
+#define HEAL_KEEPALIVE_MS  500   /* 前台期「保持顶层」节流（预防性，见 worker） */
+
 #define SPEED_FULL        3.0    /* 屏幕等效像素/ms：达到即「甩笔」（人手常规 ≤1.5，见下） */
 #define CORNER_MIN_PX     3.0    /* 段长小于它的「拐角」一律当抖动，不削弱平滑 */
 /* τ(强度) 曲线的两个常数：τ = 8ms·(e^(TAU_LN·t/100) − 1)。
@@ -2374,6 +2386,82 @@ static void publish_status(void)
     g_cfg[CFG_I_PXPERAXISY] = (LONG)(ppb * 1000.0);
 }
 
+/* ======================================== 断流自愈：把上下文推回重叠序顶层
+ * ⛔⛔ 根因定案（2026-10-15 第九轮；真机 jwwh-10472 / 1796 / 19544 三方交叉）：
+ *   规则来自 Windows Wintab 的**上下文重叠序**：「同一时刻只有一个上下文收包 =
+ *   重叠序里最顶层的那个；每个包只被放进**一个**上下文的队列」
+ *   （Wacom FAQ 3.4 / Wacom Wintab Basics「Each packet is put in only one
+ *    context's packet queue」）。PS 的上下文（本机恒 0x802）一旦被挤到下面：
+ *     · 挂在该 hCtx 上的 WTPacketsGet 恒返 0 —— 日志 `peek=0` 是**直接实证**：
+ *       不是我们这个上下文队列溢出（溢出会让 peek 满而不是 0），而是驱动
+ *       压根没往它排包；
+ *     · 数位板本身照常出数据（系统光标跟笔尖走、PS 走非 Wintab 回退照常出
+ *       笔迹）⇒ 用户看到的就是「笔迹在、平滑死」。
+ *   ⛔ 为什么旧的 `WTEnable(0) → Sleep(40) → WTEnable(1)` 12/12 全败
+ *      （jwwh-10472 一次断流冻结 **678 秒**，12 轮自愈全程无效，直到用户退出
+ *       PS 才收到 WTClose）：WTEnable 只改 enable 计数、并在 disable 时**清空
+ *       该上下文队列**，**完全不碰重叠序** ⇒ 上下文还在底下，翻多少次都白翻。
+ *      Wintab 规范原文也确认它「enable 已 enable 的上下文…otherwise do nothing」。
+ *   ⛔ 为什么「等一会儿自己会好」（实测 3~22s，且 678s 那次根本没等到）：
+ *      Wacom 驱动只在**前台应用切换**时自动重排重叠序；抢了顶层的那个进程
+ *      一让出前台，PS 才被驱动顺带推回顶层。所谓「9 秒恢复」是等别人让位，
+ *      不是自愈 —— 所以恢复时长随机、且长时间保持前台时永不恢复。
+ * ⇒ 唯一正解 = `WTOverlap(hCtx, TRUE)`（Wacom FAQ 3.4 原文：应用回到前台时
+ *   “should move its context to the top of the overlap order by calling
+ *    WTOverlap( hWintabContext, TRUE )”）。生效点是**下一个包**，即毫秒级，
+ *   与「冻结多久」无关 —— 这才是能把恢复压到 2s 以内的杠杆。
+ *
+ * 轮次策略（判定后下一拍执行 #1，此后每 HEAL_ROUND_MS 一轮）：
+ *   #1       → WTOverlap(top)                       ← 正解，通常一击即中
+ *   #偶数轮  → WTEnable 翻转（顺带清空陈旧队列 / 重计数）后再 overlap 确认在顶层
+ *   #奇数轮  → 只重复 overlap（把又被抢走的顶层拿回来）
+ * ⛔ 这里**绝不许 Sleep**：worker 每 250ms 一拍，阻塞只会同时拖慢判定与下一轮
+ *    重试（旧版每轮白送 40ms）。所有动作都是几十微秒级的驱动调用。
+ * 前 8 轮逐轮打日志（含返回值），之后每 4 轮一条 → 恢复日志再回填
+ * 「自愈 N 轮、末轮在 Xms 前」：这条差值就是「WTOverlap 到底有没有用」的
+ * 判决性证据，下次真机可一眼复核。 */
+static void dead_heal(int round)
+{
+    HMODULE hm = GetModuleHandleA("Wintab32.dll");
+    HCTX hc = g_ctxNow;
+    if (!hm || !hc) {
+        if (round == 1)
+            logf("# [dead] 自愈不可用: %s\n",
+                 hm ? "缺 hCtx（PS 还没轮询过 WTPacketsGet）" : "Wintab32.dll 未加载");
+        return;
+    }
+    typedef BOOL (*PFN_WTOverlap)(HCTX, BOOL);
+    typedef BOOL (*PFN_WTEnable)(HCTX, BOOL);
+    PFN_WTOverlap pOv = (PFN_WTOverlap)(void*)GetProcAddress(hm, "WTOverlap");
+    PFN_WTEnable  pEn = (PFN_WTEnable )(void*)GetProcAddress(hm, "WTEnable");
+    int flip = (round >= 2 && (round & 1) == 0 && pEn) ? 1 : 0;
+    BOOL ov1 = pOv ? pOv(hc, TRUE) : 0;     /* 主轴：推回重叠序顶层 */
+    BOOL e1 = 0, e2 = 0, ov2 = 0;
+    if (flip) {
+        e1 = pEn(hc, FALSE);
+        e2 = pEn(hc, TRUE);
+        if (pOv) ov2 = pOv(hc, TRUE);       /* enable 之后重叠序可能又变，补推一次 */
+    }
+    if (round == 1) {
+        typedef UINT (*PFN_QSGet)(HCTX);
+        PFN_QSGet pQg = (PFN_QSGet)(void*)GetProcAddress(hm, "WTQueueSizeGet");
+        UINT qs = pQg ? pQg(hc) : 0;
+        logf("# [dead] 自愈杠杆探测: WTOverlap=%s WTEnable=%s 队列=%u包\n",
+             pOv ? "有" : "无", pEn ? "有" : "无", qs);
+    }
+    /* ⛔ 轮次不限，故日志只在**前 8 轮 + 之后每 4 轮**落盘：断流若长到几分钟
+       （真机 678s），逐轮打印会把日志冲成噪声，而恢复行里的「自愈 N 轮、末轮
+       Xms 前」已经把结论带出来了。 */
+    if (round <= 8 || (round % 4) == 0) {
+        if (flip)
+            logf("# [dead] 自愈 #%d: WTOverlap(top)=%d + WTEnable 0/1=%d/%d 补推 overlap=%d\n",
+                 round, (int)ov1, (int)e1, (int)e2, (int)ov2);
+        else
+            logf("# [dead] 自愈 #%d: WTOverlap(hCtx=0x%llX, top)=%d\n",
+                 round, (unsigned long long)(UINT_PTR)hc, (int)ov1);
+    }
+}
+
 static DWORD WINAPI worker(LPVOID param)
 {
     (void)param;
@@ -2483,14 +2571,64 @@ static DWORD WINAPI worker(LPVOID param)
             s_prevJump = g_rstJump;
         }
 
+        /* —— 保持重叠序顶层（预防段，2026-10-15 第九轮）——
+           见 dead_heal() 上方的根因注释：上下文被挤出重叠序 = 彻底收不到包。
+           ① 前台**切回本进程**的那一拍立刻补推一次（完全对应 Wacom 约定的
+              「应用回到前台 → WTOverlap(hCtx, TRUE)」）；
+           ② 本进程在前台期间每 HEAL_KEEPALIVE_MS 再声明一次顶层，把「被别人
+              悄悄抢走顶层」这件事在**发生前**就按住（否则只能等冻结 350ms+
+              光标位移触发看门狗，用户已经先看到笔迹走样了）。
+           ⛔ 只在面板开关开着（g_cfg[CFG_I_ENABLED]）且**本进程为前台**时做：
+              前台不是我们时绝不 WTOverlap(top)，否则会把笔从别的应用手里抢走。
+           ⛔ WTOverlap 不改变上下文属性（只动重叠序），是幂等的；返回值 0
+              只可能是 hCtx 失效，所以只在「切回前台」或**失败**时落日志。 */
+        {
+            static DWORD s_fgPid, s_ovAt, s_failAt;
+            static LONG  s_ovN;
+            DWORD t = GetTickCount();
+            HWND fg = GetForegroundWindow();
+            DWORD pid = 0;
+            if (fg) GetWindowThreadProcessId(fg, &pid);
+            if (pid) {
+                int becameMine = (pid != s_fgPid && pid == GetCurrentProcessId());
+                s_fgPid = pid;
+                if (g_patched && g_ctxNow && g_cfg && g_cfg[CFG_I_ENABLED]
+                    && pid == GetCurrentProcessId()
+                    && (becameMine || t - s_ovAt >= HEAL_KEEPALIVE_MS)) {
+                    HMODULE hm = GetModuleHandleA("Wintab32.dll");
+                    typedef BOOL (*PFN_WTOverlap2)(HCTX, BOOL);
+                    PFN_WTOverlap2 pOv = hm ? (PFN_WTOverlap2)(void*)GetProcAddress(hm, "WTOverlap") : NULL;
+                    if (pOv) {
+                        s_ovAt = t;
+                        BOOL r = pOv(g_ctxNow, TRUE);
+                        s_ovN++;
+                        /* ⛔ 失败只在 5s 内报第一条：hCtx 一旦失效会每 500ms
+                           失败一次，逐条打会把日志冲掉（真正的上下文失效另有
+                           [ctx] WTClose/WTOpenA 日志与 [status] ctxN 可比对）。 */
+                        int failLog = (!r && t - s_failAt >= 5000);
+                        if (failLog) s_failAt = t;
+                        if (becameMine || failLog)
+                            logf("# [ctx] 保持顶层%s: WTOverlap(hCtx=0x%llX, top)=%d 累计=%ld\n",
+                                 becameMine ? "（前台切回本进程，立即重推）" : "（周期维护，失败）",
+                                 (unsigned long long)(UINT_PTR)g_ctxNow, (int)r, (long)s_ovN);
+                    }
+                }
+            }
+        }
+
         /* —— 断流看门狗（2026-10-14 第七轮）——
            本轮真机形态：penDown 卡 1、packets 冻结数分钟、calls 一直涨、
            用户笔还在画（截图有新笔迹）⇒ PS 已切到非 Wintab 回退输入。
            ⛔ 与「停笔正常冻结」的判别：停笔=笔静止 ⇒ 光标（跟原始笔）也静止；
              penDown=1 + 包冻结 + **光标还在动** ⇒ 包流真断了。
            判定后置 g_streamDead（HUD 立即隐藏，避免拿旧位置误导）；包恢复自动清零并记
-           中断时长。单包通路计数一并打出 —— 若断流期 WTPacket 还在进包，就证明
-           PS 切到了消息驱动（我们只挂了批量通路），下一轮才有依据补挂。 */
+           中断时长。单包通路计数一并打出（本症实测恒 0 ⇒ 排除「PS 改走消息驱动、
+           我们漏挂了通路」这条假设，不必再去补挂 WTPacket）。
+           ⛔⛔ 根因（2026-10-15 第九轮定案，见 dead_heal 上方完整推导）：
+              **PS 的 Wintab 上下文被挤出了重叠序顶层** ⇒ 驱动不再往这个上下文
+              排包（`peek=0` 实证），笔本身照常工作 ⇒「笔迹在、平滑死」。
+              自愈 = 把上下文推回顶层（WTOverlap）；判定下限 350ms、判定后下一拍
+              立即首轮、此后每 HEAL_ROUND_MS 一轮。 */
         {
             static DWORD s_pkts, s_calls, s_dead0, s_deadLog, s_healAt;
             static POINT s_cur0;
@@ -2502,9 +2640,18 @@ static DWORD WINAPI worker(LPVOID param)
             if (!s_have) { s_pkts = pk; s_calls = cl; s_cur0 = c; s_have = 1; }
             if ((DWORD)pk != s_pkts) {                /* 有包：正常或从断流恢复 */
                 if (g_streamDead) {
-                    logf("# [dead] 恢复：包流恢复（断流约 %lu ms；期间单包通路 WTPacket 收包 %ld，"
-                         "若 >0 ⇒ PS 断流期改走了消息驱动）\n",
-                         (unsigned long)(nowW - s_dead0), (long)g_wtPkt1);
+                    /* ⛔ 判决性字段：`末轮 Xms 前` —— 自愈杠杆是 WTOverlap（动完
+                       下一个包就回来），所以这个差值应当**极小**（≤ 一拍 250ms +
+                       包间隔）。若又是几百 ms~几秒，说明恢复不是我们推的，
+                       得回头查「谁在抢顶层」。 */
+                    DWORD sinceHeal = s_heals ? (nowW - (s_healAt - HEAL_ROUND_MS)) : 0;
+                    logf("# [dead] 恢复：包流恢复（断流约 %lu ms；自愈 %ld 轮，末轮 %lums 前%s；"
+                         "期间单包通路 WTPacket 收包 %ld）\n",
+                         (unsigned long)(nowW - s_dead0), (long)s_heals,
+                         (unsigned long)sinceHeal,
+                         (s_heals && sinceHeal <= HEAL_ROUND_MS + 300)
+                             ? " ⇒ WTOverlap 生效" : "",
+                         (long)g_wtPkt1);
                     InterlockedExchange(&g_streamDead, 0);
                 }
                 s_pkts = pk; s_calls = cl; s_cur0 = c; s_dead0 = 0; s_heals = 0;
@@ -2532,9 +2679,12 @@ static DWORD WINAPI worker(LPVOID param)
                 else if (moved < 2) s_movedTot = 0;
                 if (!g_streamDead) {
                     if (g_patched && g_penDown == 1 && s_movedTot >= mvDead
-                        && nowW - s_dead0 > 600) {
+                        && nowW - s_dead0 > DEAD_DETECT_MIN_MS) {
                         InterlockedExchange(&g_streamDead, 1);
                         s_deadLog = nowW;
+                        /* ⛔ 自愈计时从**判定这一刻**重新起算：判定后下一拍就发
+                           #1（WTOverlap 是毫秒级杠杆，没有任何理由再等 4 秒）。 */
+                        s_healAt = 0; s_heals = 0;
                         logf("# [dead] ★包流断供: penDown=1 包冻结 %lums 而光标仍移动(Δ累计%ldpx) "
                              "hCtx=0x%llX calls=%ld 单包=%ld open=%ld close=%ld "
                              "⇒ PS 已走非 Wintab 输入，平滑实质中断\n",
@@ -2542,13 +2692,22 @@ static DWORD WINAPI worker(LPVOID param)
                              (unsigned long long)(UINT_PTR)g_ctxNow, (long)cl,
                              (long)g_wtPkt1, (long)g_wtOpenN, (long)g_wtCloseN);
                     }
-                } else if (nowW - s_deadLog >= 2000) {
+                } else {
+                  /* —— 诊断（2s 节流）与自愈（HEAL_ROUND_MS 节流）**各自独立** ——
+                     ⛔ 旧版把自愈整段嵌在这个 2s 诊断闸门里、且每轮固定 5s
+                        ⇒ 首轮要等 dead0+4s、次轮 dead0+9s。真机「恢复 9s 左右」
+                        完全由这条时序解释（而真正有效的杠杆本可立即生效）。
+                        两者解耦后，判定→首轮 = 一拍（≤250ms）。 */
+                  if (nowW - s_deadLog >= 2000) {
                     s_deadLog = nowW;
                     /* ⛔ 诊断探针（2026-10-15）：非消费地探一下驱动队列。
-                       peek=0 ⇒ 驱动根本没往该上下文排队（断流在驱动侧，插件无杠杆）；
-                       peek>0 ⇒ 队列有货而 WTPacketsGet 恒返 0（另一类故障，
-                       需查调用路径/上下文状态）。WTPacketsPeek 按规范不动队列，
-                       且我们只 inline-hook 了 WTPacketsGet，此调用直达驱动。 */
+                       ⛔⛔ 真机里**恒为 0**，这一条就是根因的第一手证据：不是
+                       我们这侧队列溢出（溢出是「满」不是「空」），而是驱动
+                       **压根没往这个上下文排包** ⇒ 上下文被挤出了重叠序
+                       （Wintab：每个包只进一个上下文的队列，见 dead_heal 注释）。
+                       peek>0 才会是另一类故障（队列有货而 WTPacketsGet 恒返 0）。
+                       WTPacketsPeek 按规范不动队列，且我们只 inline-hook 了
+                       WTPacketsGet，此调用直达驱动。 */
                     UINT peekN = 0;
                     {
                         typedef UINT (*PFN_WTPeek)(HCTX, int, LPVOID);
@@ -2565,32 +2724,22 @@ static DWORD WINAPI worker(LPVOID param)
                     }
                     logf("# [dead] 持续中: 已冻结 %lums calls=%ld 单包=%ld peek=%u\n",
                          (unsigned long)(nowW - s_dead0), (long)cl, (long)g_wtPkt1, peekN);
-                    /* —— 断流自愈（2026-10-14 第八轮）：真机实锤断流可达数分钟不恢复
-                       （jwwh-11576 冻结 247s、jwwh-14480 冻结 4 分钟+直到关机）。
-                       唯一进程内可用的杠杆 = WTEnable 翻转（禁用→重启该上下文的包投递），
-                       期望驱动侧借此复位队列。冻结 >4s 起试，每 5s 一次，最多 12 次；
-                       包恢复由上方 pk != s_pkts 分支自动检测并记中断时长。
-                       ⛔ PS 正在用的上下文被禁用 ~40ms：断流期本来就没有包，无损失。 */
-                    {
-                        if (s_heals == 0) s_healAt = 0;
-                        if (nowW - s_dead0 > 4000 && nowW >= s_healAt && s_heals < 12) {
-                            s_healAt = nowW + 5000;
-                            s_heals++;
-                            HMODULE hm = GetModuleHandleA("Wintab32.dll");
-                            typedef BOOL (*PFN_WTEnable)(HCTX, BOOL);
-                            PFN_WTEnable pEn = hm ? (PFN_WTEnable)(void*)GetProcAddress(hm, "WTEnable") : NULL;
-                            if (pEn && g_ctxNow) {
-                                BOOL r1 = pEn(g_ctxNow, FALSE);
-                                Sleep(40);
-                                BOOL r2 = pEn(g_ctxNow, TRUE);
-                                logf("# [dead] 自愈 #%d: WTEnable(hCtx=0x%llX, 0/1)=%d/%d（包恢复即生效）\n",
-                                     s_heals, (unsigned long long)(UINT_PTR)g_ctxNow, r1, r2);
-                            } else if (s_heals == 1) {
-                                logf("# [dead] 自愈不可用: WTEnable %s\n",
-                                     pEn ? "缺 hCtx" : "导出不存在");
-                            }
-                        }
-                    }
+                  }
+                  /* —— 自愈（2026-10-15 第九轮改版）——
+                     ⛔ 旧版（第八轮）是 `冻结>4s 起、每 5s 一轮、最多 12 轮` 的
+                        **WTEnable 翻转**，并且整段嵌在上面的 2s 诊断闸门里。
+                        真机判决（jwwh-10472）：冻结 678s，12/12 轮全部返回 1/1
+                        成功却**一包未回**，直到用户退出 PS 才收到 WTClose ⇒
+                        该杠杆对着本症根本无效（原理见 dead_heal 上方注释：
+                        WTEnable 不碰上下文重叠序），而 5s 的轮次间隔又把
+                        「本该毫秒级生效」的正确杠杆硬生生拖成「9s 恢复」。
+                       现在：杠杆换成 WTOverlap（dead_heal），轮次压到
+                       HEAL_ROUND_MS，且不设轮次上限（抢顶层的那一方可能反复
+                       抢，钳住次数只会让断流变长；日志按轮次可读，不会失控）。 */
+                  if (nowW >= s_healAt) {
+                    s_healAt = nowW + HEAL_ROUND_MS;
+                    dead_heal(++s_heals);
+                  }
                 }
             } else {                                  /* 连轮询都停了：不能算断流 */
                 s_calls = cl;
@@ -3303,7 +3452,7 @@ static void hud_stop(void)
 }
 
 /* ================================================================== 导出 */
-__declspec(dllexport) int jwwh_version(void) { return 0x0105; }
+__declspec(dllexport) int jwwh_version(void) { return 0x0106; }
 
 /* 兜底还原入口：守护进程的正常路径是经共享内存下令（worker 执行），
    此导出供外部工具（脚本/排障）在不需要共享内存时直接远程调用。 */
