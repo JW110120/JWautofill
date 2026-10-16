@@ -127,7 +127,11 @@ typedef struct { int axMin; int axMax; u32 axUnits; u32 axResolution; } AXIS_T;
  * 与本 DLL 的 `OpenFileMappingW` 指向同一块。全部按 32 位有符号槽访问。 */
 #define CFG_NAME      L"Local\\JWautofillWintabSmooth"
 #define CFG_MAGIC     0x57414A57L      /* 'JWAW' */
-#define CFG_NLONGS    48
+/* ⛔ 2026-10-17：48 → 56（plugin_main.c 新增 I_MODALLVL..I_DOCEPOCH 四个槽）；
+   56 → 58（0x0115 新增 I_NOTIFYAGE / I_GATEOWNED）。
+   两个文件的 CFG_NLONGS **必须同步**：谁先建节谁定尺寸，不一致的一方会
+   MapViewOfFile 到错误的字节数（不报错，只静默截断 —— 既有铁律区）。 */
+#define CFG_NLONGS    58
 
 enum {
     CFG_I_MAGIC = 0,
@@ -207,6 +211,18 @@ enum {
     CFG_I_CTMASK,         /* 本批「非零」信号的位掩码（bit i = 第 i 个信号；0 = 全零） */
     CFG_I_CTELIG,         /* 有投票权的信号位掩码（**只覆盖前 4 个信号**；同时见过 0 与非 0）*/
     CFG_I_CTOFFS,         /* 前 4 个信号的偏移打包（第 i 个占第 i×8 位；0xFF = 该位无信号）*/
+    /* ---- 2026-10-17：进程内观测（plugin_main.c 写、本文件只读）----
+       ⛔ 槽位表与本文件上面的注释同款：两处手写对应，错位不报错只静默失效。 */
+    CFG_I_MODALLVL,       /* PS 模态嵌套层级（-1=未知；面板据此跳过自己的轮询） */
+    CFG_I_MODALTS,        /* 该层级的观测时刻 */
+    CFG_I_TMODAL,         /* 工具模态值（-1=未知） */
+    CFG_I_TMODALK,        /* 工具模态极性是否已证明 */
+    CFG_I_DOCEPOCH,       /* 文档级事件累计（'Opn '/'Cls '） */
+    /* ---- 0x0115：'slct' 活性看门狗（plugin_main.c 写、面板经 smoothState 读）----
+       ⛔ 本文件不消费这两个槽（引擎的闸门过期判据仍是 GATETS/GATE_STALE_MS），
+          列在这里只为槽位表与 plugin_main.c 逐项对齐 —— 错位不报错、只静默失效。 */
+    CFG_I_NOTIFYAGE,      /* 距上次 'slct' 回调的 ms（-1=从未投递） */
+    CFG_I_GATEOWNED,      /* 此刻闸门是否**真的**由进程内供给（1/0）—— 面板唯一判据 */
 };
 
 /* 受阻原因码（CFG_I_REASON 的值域；面板诊断条按它逐条说人话）。 */
@@ -244,7 +260,7 @@ static const char* rs_name(LONG r)
 /* ⛔⛔ 这张槽位表是 C 与 C#（Program.cs 的 PenHook）**两处手写**的，错位不会报错、
    只会让参数静默失效（实测过的坑）。所以：① 用编译期断言守住「槽数不超映射」；
    ② 任何一侧增删槽，另一侧必须同步，且 C# 的 EnsureInit 里有运行时兜底校验。 */
-typedef char cfg_slot_fit_check[(CFG_NLONGS >= CFG_I_CTOFFS + 1) ? 1 : -1];
+typedef char cfg_slot_fit_check[(CFG_NLONGS >= CFG_I_GATEOWNED + 1) ? 1 : -1];
 
 static volatile LONG* g_cfg    = NULL;
 static HANDLE         g_cfgMap = NULL;
@@ -2997,9 +3013,92 @@ typedef struct {
 static LHOOK g_lhPkt1  = { "WTPacket", 0, 0, 0, {0}, 0, 0, {0} };
 static LHOOK g_lhOpen  = { "WTOpenA", 0, 0, 0, {0}, 0, 0, {0} };
 static LHOOK g_lhClose = { "WTClose", 0, 0, 0, {0}, 0, 0, {0} };
+/* ⑤（LNP hookedWTInfoA/W）：只读观测 WTInfo 取回的 LOGCONTEXT，判定 DPI 虚拟化。
+   默认**只落日志不改值** —— 改写会动 PS 的坐标映射，必须先拿真机日志证明
+   「lcSysExt ≠ 真实虚拟屏」确实发生，再开 `fixDpi=1`。 */
+static LHOOK g_lhInfoA = { "WTInfoA", 0, 0, 0, {0}, 0, 0, {0} };
+static LHOOK g_lhInfoW = { "WTInfoW", 0, 0, 0, {0}, 0, 0, {0} };
 static int lhook_prepare(LHOOK* L);
 static int lhook_commit(LHOOK* L);
 static void lhook_restore(LHOOK* L);
+
+/* ============================================================ ④⑤ 外置开关
+   照 ⑨ 白名单外置的同一套路：`%LOCALAPPDATA%\JWautofill\smooth8li\wtctx.ini`。
+   为什么外置而不是编译期宏：这两条都会**改写 PS 传进来的结构**，一旦判错会
+   直接影响笔的坐标；改口径不该以「重编 + 重部署 .8li」为代价。缺文件 = 全 0
+   （只观测、不改写），这是唯一安全默认值。
+     clearLocks=1  ④ 清掉 lcLocks 的 CXL_SYSOUT(0x10) 后再交给真 WTOpenA
+     fixDpi=1      ⑤ 把 lcSysExt 改写成真实虚拟屏尺寸并记 dpiRatio
+     queueSize=N   ⑥ WTOpen 成功后调 WTQueueSizeSet(hCtx, N)（0=不动）
+   ⛔ 只在 do_install 里读一次（低频），不在包路径上碰文件。 */
+#define WTCTX_INI_CLEARLOCKS 0
+#define WTCTX_INI_FIXDPI     1
+#define WTCTX_INI_QUEUESIZE  2
+static int g_wtctxIni[3];                 /* 默认全 0 */
+static int g_wtctxIniRead;                /* 是否已读过（只读一次） */
+extern const char* jw_log_dir(void);      /* plugin_main.c：日志目录（带尾部反斜杠） */
+static void wtctx_read_ini(void)
+{
+    if (g_wtctxIniRead) return;
+    g_wtctxIniRead = 1;
+    char path[MAX_PATH];
+    const char* dir = jw_log_dir();
+    if (!dir || !*dir) return;
+    _snprintf(path, sizeof(path), "%swtctx.ini", dir);
+    path[sizeof(path) - 1] = 0;
+    FILE* f = fopen(path, "rb");
+    if (!f) {
+        logf("# [wtctx] 无外置开关文件（%s）⇒ ④⑤ 只观测不改写、⑥ 不动队列\n", path);
+        return;
+    }
+    char line[256];
+    while (fgets(line, (int)sizeof(line), f)) {
+        if (line[0] == '#' || line[0] == ';') continue;
+        int v = 0;
+        if      (!_strnicmp(line, "clearLocks=", 11)) { v = atoi(line + 11); g_wtctxIni[WTCTX_INI_CLEARLOCKS] = v; }
+        else if (!_strnicmp(line, "fixDpi=",     7))  { v = atoi(line +  7); g_wtctxIni[WTCTX_INI_FIXDPI]     = v; }
+        else if (!_strnicmp(line, "queueSize=", 10))  { v = atoi(line + 10); g_wtctxIni[WTCTX_INI_QUEUESIZE]  = v; }
+        else continue;
+    }
+    fclose(f);
+    logf("# [wtctx] 外置开关 clearLocks=%d fixDpi=%d queueSize=%d（%s）\n",
+         g_wtctxIni[0], g_wtctxIni[1], g_wtctxIni[2], path);
+}
+
+/* ⑤ 观测结果（无论开关与否都记，供真机定案） */
+static volatile LONG g_dpiSeen;           /* 见过几次 DEFCONTEXT/DEFSYSCTX 查询 */
+static volatile LONG g_dpiMismatch;       /* lcSysExt ≠ 真实虚拟屏的次数 */
+static volatile LONG g_dpiRatioX1000;     /* 真实虚拟屏 / lcSysExt ×1000（0=未算出） */
+static volatile LONG g_ctxSysOutLock;     /* ④ WTOpenA 里见到 CXL_SYSOUT 的次数 */
+static volatile LONG g_ctxLockCleared;    /* ④ 实际清掉的次数 */
+
+/* —— ⑧（LNP WTSanityCheck）：wintab32 被重载 ⇒ 重挂 ——
+   LNP 的做法是周期性看 wintab32 的模块是否还是「挂 hook 时那一份」；被重载/被
+   别人重新加载后，我们的 E9 改写就落在了旧映像上 ⇒ **取包通路整体失效**
+   （表象与 O1 断流一模一样：calls 不涨、包不来）。我们以前的自愈是「state=0
+   且 calls=0 就重挂」，**不留痕** —— 真机日志里看到断流无法归因是不是这一类。
+   ⇒ 这里按 LNP 的形态补上：pump 线程每 500ms 比一次模块基址，变了就落
+   `[wt] ★wintab32 已重载` 并让调用方重挂。 */
+static void* volatile g_wtBase;           /* 挂 hook 那一刻 wintab32 的 AllocationBase */
+/** 与当前进程里的 wintab32 基址比对；不同 ⇒ 返回 1（并更新记录）。未加载返回 0。 */
+int se_wt_moved(void)
+{
+    HMODULE hm = GetModuleHandleA("Wintab32.dll");
+    if (!hm) return 0;                    /* 还没加载：不是「被换掉」，不动 */
+    MEMORY_BASIC_INFORMATION mbi;
+    if (VirtualQuery((LPCVOID)hm, &mbi, sizeof(mbi)) != sizeof(mbi)) return 0;
+    void* now = (void*)mbi.AllocationBase;
+    void* was = (void*)g_wtBase;
+    if (!was) { g_wtBase = now; return 0; }   /* 首次记录 */
+    if (now == was) return 0;
+    g_wtBase = now;
+    return 1;
+}
+void* se_wt_base(void) { return (void*)g_wtBase; }
+
+/* Wintab WTInfo 类别常量（wintab.h） */
+#define WTI_DEFCONTEXT  3u
+#define WTI_DEFSYSCTX   4u
 
 static u64 det_WTPacket(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
 {
@@ -3016,9 +3115,55 @@ static u64 det_WTOpenA(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
     (void)d; (void)e; (void)f;
     typedef HCTX (*PFN_WTOpenA)(HWND, void*, BOOL);
     PFN_WTOpenA impl = (PFN_WTOpenA)g_lhOpen.impl;
+    const unsigned char* p = (const unsigned char*)b;
+
+    /* —— ④（LNP hookedWTOpenA/W）：lcLocks(+48) 的 CXL_SYSOUT(0x10) ——
+       LNP 在把 LOGCONTEXT 交给真 WTOpenA 之前，只要见到该位就把**整个 lcLocks
+       清零**。语义是「不让驱动把输出坐标锁进系统（屏幕）坐标」——DPI 虚拟化 /
+       多显示器下这条锁会把坐标按错误的缩放比换算，表现为「取包在但坐标不更新」
+       或「HUD 位置与光标对不上」，正是我们 O1 断流的一种形态。
+       ⛔⛔ 这是**改写 PS 传进来的结构**：判错会直接动到笔坐标。所以默认只计数 +
+       落日志（`wtctx.ini` 里 clearLocks=0），真机日志证明「确实带 0x10 且确实
+       错位」之后再开 1。LNP 的清零是 `lcLocks = 0`；我们保守只清 0x10 这一位，
+       其余锁位（inOrg/inExt/outOrg/outExt）保持 PS 原意。 */
+    if (p) {
+        unsigned int locks = *(const unsigned int*)(p + 48);
+        if (locks & 0x10u) {
+            InterlockedIncrement(&g_ctxSysOutLock);
+            if (g_wtctxIni[WTCTX_INI_CLEARLOCKS]) {
+                *(unsigned int*)((unsigned char*)b + 48) = locks & ~0x10u;
+                InterlockedIncrement(&g_ctxLockCleared);
+                logf("# [ctx] ④ lcLocks=0x%X 带 CXL_SYSOUT ⇒ 已清该位（现 0x%X，clearLocks=1）\n",
+                     locks, locks & ~0x10u);
+            } else {
+                logf("# [ctx] ④ lcLocks=0x%X 带 CXL_SYSOUT（clearLocks=0 ⇒ 仅记录，未改写）\n", locks);
+            }
+        }
+    }
+
     /* 低频调用（开上下文）⇒ 允许落盘；205Hz 包路径的铁律不适用于这里。 */
     HCTX h = impl((HWND)a, (void*)b, (BOOL)c);
-    const unsigned char* p = (const unsigned char*)b;
+
+    /* —— ⑥（LNP WTPktUtil / WTQueueSizeSet）：把驱动侧队列调大 ——
+       冲包的一种根因不是「我们处理慢」，而是**驱动队列溢出后补发**：队列太小、
+       主线程被模态作用域卡住几百毫秒，驱动攒的包一次倾泻出来。WTQueueSizeSet
+       是标准 API，LNP 用它配 WTPacketsPeek / WTQueuePacketsEx 观测深度。
+       ⚠️ 反过来也会加剧延迟（包在队列里排队更久），所以默认 0=不动，只在
+       wtctx.ini 里显式给 queueSize=N 才生效，并且**落日志**便于对照前后效果。 */
+    if (h && g_wtctxIni[WTCTX_INI_QUEUESIZE] > 0) {
+        HMODULE hm = GetModuleHandleA("Wintab32.dll");
+        if (hm) {
+            typedef BOOL (*PFN_QS)(HCTX, int);
+            PFN_QS pQS = (PFN_QS)(void*)GetProcAddress(hm, "WTQueueSizeSet");
+            if (pQS) {
+                int qs = g_wtctxIni[WTCTX_INI_QUEUESIZE];
+                BOOL ok = pQS(h, qs);
+                logf("# [ctx] ⑥ WTQueueSizeSet(hCtx=0x%llX, %d) ⇒ %d\n",
+                     (unsigned long long)(UINT_PTR)h, qs, (int)ok);
+            }
+        }
+    }
+
     if (p) {
         /* ⛔ LOGCONTEXTA 真实布局 —— 本仓库 [calib] 段已逐项实测确认（4 字节整型、无对齐缝）：
              lcName[40] 0 · lcOptions 40 · lcStatus 44 · lcLocks 48 · lcMsgBase 52 ·
@@ -3061,6 +3206,82 @@ static u64 det_WTClose(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
          (unsigned long long)(UINT_PTR)a, r, (long)g_packets);
     InterlockedIncrement(&g_wtCloseN);
     return (u64)(u32)r;
+}
+
+/* —— ⑤（LNP hookedWTInfoW）：DPI 虚拟化检测 ——
+   LNP 的判据：单显示器且 `lcSysExt` == GetClipBox 的尺寸、**但** != SM_CXVIRTUALSCREEN
+   ⇒ 该上下文被 DPI 虚拟化了；它随后把 lcSysExt 改写成真实虚拟屏尺寸并记 dpiRatio。
+
+   ⛔⛔ **偏移已于 2026-10-17 由真机定案（jwwh-3064 的 `[dpi]` 行）** —— 昨天的两套
+   猜测**都错**，正确答案是「A 版 144/148、W 版 184/188」，差值是 lcName：
+
+     LOGCONTEXTA 的 `lcName` 是 `char[40]`（40 字节）⇒ lcSysExt 在 **144/148**；
+     LOGCONTEXTW 的 `lcName` 是 `WCHAR[40]`（**80** 字节）⇒ 全体字段 **+40**
+     ⇒ W 版的 lcSysExt 在 **184/188**。
+
+   证伪过程（拿那行实测值逐个回填，六个字段全部自洽 ⇒ 结论唯一）：
+     虚拟屏=(6000,3840)、显示器=2，本次是 **WTInfoW**（cat=4 = WTI_DEFSYSCTX）：
+       A 偏移 132/136/140 读到 (-1023, 44800, ?) ⇒ 实为 A-layout 92/96 = **lcInOrgZ=-1023**、
+         **lcInExtX=44800**（笔 Z 原点与 X 量程，合理 ✓）
+       A 偏移 144/148     读到 (2047, 0)          ⇒ 实为 A-layout 104/108 = **lcInExtZ=2047**、
+         **lcOutOrgX=0**（Z 量程与输出原点，合理 ✓）
+       A 偏移 160/164     读到 (6000, 3840)       ⇒ 实为 A-layout 120/124 = **lcOutExtX/Y**，
+         只是**恰好等于**虚拟屏 —— 昨天据此误判成「LNP 的 +0xA0 是对的」，实为巧合。
+     ⇒ 真正的 lcSysExt 在 W 版 = 144+40 = **184/188**，本版按 A/W 分别取。
+   默认 fixDpi=0（只观测）。 */
+#define LC_SYSEXT_OFF_A   144       /* LOGCONTEXTA：lcSysExtX / lcSysExtY */
+#define LC_SYSEXT_OFF_W   184       /* LOGCONTEXTW：同上（lcName 宽字符 ⇒ +40） */
+static void wtinfo_observe(const char* which, const unsigned char* p, unsigned int cat, int wide)
+{
+    if (!p || (cat != WTI_DEFCONTEXT && cat != WTI_DEFSYSCTX)) return;
+    InterlockedIncrement(&g_dpiSeen);
+
+    const int off = wide ? LC_SYSEXT_OFF_W : LC_SYSEXT_OFF_A;
+    long sx = (long)*(const int*)(p + off);
+    long sy = (long)*(const int*)(p + off + 4);
+
+    int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    int nMon = GetSystemMetrics(SM_CMONITORS);
+
+    /* ⛔ 只认 X：**Y 不参与判定**（多显示器上下排列时 lcSysExtY 本就可能不等于
+       虚拟屏高度，拿它判会误报）。且只在「读到了正数」时才判 —— 读到 0 说明
+       偏移仍不对，那是**偏移错**，不是「被虚拟化」。 */
+    int mism = (sx > 0 && sx != vw) ? 1 : 0;
+    if (mism) InterlockedIncrement(&g_dpiMismatch);
+    if (sx > 0) InterlockedExchange(&g_dpiRatioX1000, (LONG)((long long)vw * 1000 / sx));
+
+    logf("# [dpi] ⑤ %s cat=%u %s 虚拟屏=(%d,%d) 显示器=%d "
+         "lcSysExt(+%d)=(%ld,%ld)%s dpiRatio=%ld/1000 fixDpi=%d\n",
+         which, cat, wide ? "W版" : "A版", vw, vh, nMon,
+         off, sx, sy, mism ? "★≠虚拟屏X" : "",
+         (long)g_dpiRatioX1000, g_wtctxIni[WTCTX_INI_FIXDPI]);
+
+    if (g_wtctxIni[WTCTX_INI_FIXDPI] && mism) {
+        *(int*)((unsigned char*)p + off)     = vw;
+        *(int*)((unsigned char*)p + off + 4) = vh;
+        logf("# [dpi] ⑤ 已改写 lcSysExt(+%d) = (%d,%d)（fixDpi=1）\n", off, vw, vh);
+    }
+}
+
+static u64 det_WTInfoA(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
+{
+    (void)d; (void)e; (void)f;
+    typedef UINT (*PFN)(UINT, UINT, void*);
+    PFN impl = (PFN)g_lhInfoA.impl;
+    UINT r = impl((UINT)a, (UINT)b, (void*)c);
+    if (r) wtinfo_observe("WTInfoA", (const unsigned char*)c, (unsigned int)a, 0);
+    return (u64)r;
+}
+
+static u64 det_WTInfoW(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
+{
+    (void)d; (void)e; (void)f;
+    typedef UINT (*PFN)(UINT, UINT, void*);
+    PFN impl = (PFN)g_lhInfoW.impl;
+    UINT r = impl((UINT)a, (UINT)b, (void*)c);
+    if (r) wtinfo_observe("WTInfoW", (const unsigned char*)c, (unsigned int)a, 1);
+    return (u64)r;
 }
 
 static u64 det_WTPacketsGet(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
@@ -3304,6 +3525,7 @@ static int prepare_hook(void)
         sprintf(g_skip, "VirtualQuery 失败"); return 0;
     }
     u8* imgBase = (u8*)mbi.AllocationBase;
+    g_wtBase = (void*)imgBase;            /* ⑧ 记录，供 se_wt_moved() 比对 */
     if (g_impl < imgBase || g_impl >= imgBase + mbi.RegionSize) {
         /* ⛔ 这条分支在真机上的真实含义是：**入口已经被别的代码改过**（绝大多数情况
            是我们自己上一版的 DLL —— 它被 PS 锁住没法覆盖，于是新版换了文件名注入进来，
@@ -3372,22 +3594,30 @@ static void do_install(void)
             g_lhPkt1.detour  = (void*)det_WTPacket;
             g_lhOpen.detour  = (void*)det_WTOpenA;
             g_lhClose.detour = (void*)det_WTClose;
-            LHOOK* lhs[3] = { &g_lhPkt1, &g_lhOpen, &g_lhClose };
-            for (int i = 0; i < 3; i++) {
+            g_lhInfoA.detour = (void*)det_WTInfoA;
+            g_lhInfoW.detour = (void*)det_WTInfoW;
+            LHOOK* lhs[5] = { &g_lhPkt1, &g_lhOpen, &g_lhClose, &g_lhInfoA, &g_lhInfoW };
+            for (int i = 0; i < 5; i++) {
                 if (!lhook_prepare(lhs[i])) continue;
                 lhook_commit(lhs[i]);
             }
         }
     }
     thaw_threads();
+    /* ⛔ 必须在 do_install 里读（低频、且要在 det_WTOpenA 可能被调用之前）：
+       ④⑤ 的改写开关与 ⑥ 的队列尺寸都来自这个文件，读到什么值决定上面三个钩
+       是「只观测」还是「真改写」。 */
+    wtctx_read_ini();
     logf("# 挂载: %s  entry=0x%llX impl=0x%llX relay=0x%llX（改写期挂起线程 %d 个）\n",
          ok ? "OK" : g_skip, (unsigned long long)(UINT_PTR)g_entry,
          (unsigned long long)(UINT_PTR)g_impl, (unsigned long long)(UINT_PTR)g_relay, g_frzLast);
     if (g_cfg) g_cfg[CFG_I_FROZE] = g_frzLast;
-    logf("# 诊断钩: WTPacket=%s WTOpenA=%s WTClose=%s\n",
+    logf("# 诊断钩: WTPacket=%s WTOpenA=%s WTClose=%s WTInfoA=%s WTInfoW=%s\n",
          g_lhPkt1.patched ? "挂" : (g_lhPkt1.skip[0] ? g_lhPkt1.skip : "未挂"),
          g_lhOpen.patched ? "挂" : (g_lhOpen.skip[0] ? g_lhOpen.skip : "未挂"),
-         g_lhClose.patched ? "挂" : (g_lhClose.skip[0] ? g_lhClose.skip : "未挂"));
+         g_lhClose.patched ? "挂" : (g_lhClose.skip[0] ? g_lhClose.skip : "未挂"),
+         g_lhInfoA.patched ? "挂" : (g_lhInfoA.skip[0] ? g_lhInfoA.skip : "未挂"),
+         g_lhInfoW.patched ? "挂" : (g_lhInfoW.skip[0] ? g_lhInfoW.skip : "未挂"));
 }
 
 static void do_unhook(void)
@@ -3396,6 +3626,8 @@ static void do_unhook(void)
     lhook_restore(&g_lhPkt1);
     lhook_restore(&g_lhOpen);
     lhook_restore(&g_lhClose);
+    lhook_restore(&g_lhInfoA);
+    lhook_restore(&g_lhInfoW);
     freeze_threads();
     int ok = repatch(g_entry, g_orig);
     thaw_threads();
@@ -4252,6 +4484,23 @@ static DWORD WINAPI worker(LPVOID param)
 #define HUD_FRAME_MS 8
 #define HUD_CLASS    L"JWautofillWintabHUD"
 
+/* ——— 2026-10-17（LNP `overlay.maxMsgLagForRender` / `Very fast fg change` 迁移）———
+   ① 帧滞后阈值：本帧距上一帧超过这么多 ms ⇒ 本帧**不渲染**（几何已经陈旧，
+      画上去只会误导）。LNP 的 `maxMsgLagForRender` 就是这条语义：宁可不画，
+      也不拿过期的圆心糊一帧。⛔ 与 O1 不冲突：这里只是跳过**重画**，
+      窗口保持上一帧内容，不是隐藏。 */
+#define HUD_MAX_LAG_MS     60
+/* ② 前台切换去抖：PS 面板/对话框抢焦点会造成毫秒级的前后台抖动，
+   直接跟随会让 HUD 闪烁（LNP 日志原话：
+   `foregroundWindowChange Very fast fg change (%d ms), ignoring`）。
+   ⇒ 「前台不是本进程」要**连续保持**这么久才真的隐藏。 */
+#define HUD_FG_DEBOUNCE_MS 250
+/* ③ 大跳跃阈值（LNP `overlay.bigJumpSqDist`）：一帧内光标位移超过该距离
+   （物理像素，**平方**比较）⇒ 本帧不画。场景：跨屏 / 面板弹窗把光标瞬移 /
+   驱动回中。旧的「瞬移拉一条长线」正是缺这一条。 */
+#define HUD_BIG_JUMP_PX    400
+#define HUD_BIG_JUMP_SQ    ((double)HUD_BIG_JUMP_PX * (double)HUD_BIG_JUMP_PX)
+
 static HANDLE        g_hudThread;
 static DWORD        g_hudTid;
 /* 绳身「已绷直」的渲染侧状态（滞回死区用；仅渲染线程读写）。
@@ -4260,6 +4509,13 @@ static int          g_ropeTaut;
 static DWORD        g_ropeLowMs;
 static volatile LONG g_hudStop;
 static volatile LONG g_hudRunning;
+/* 2026-10-17：HUD 门控各项的**诊断镜像**（渲染线程写、`[hud] 未显示` 行读）。
+   ⛔ 只为排障：真正门控是局部门控变量，不要反过来读这些字段。 */
+static volatile LONG g_fgOkDbg      = 1;   /* 前台是本进程（已去抖） */
+static volatile LONG g_drawOkDbg    = 1;   /* 工具模态放行 */
+static volatile LONG g_strokeOkDbg  = 0;   /* 真的在一笔之中 */
+static volatile LONG g_lagSkipDbg   = 0;   /* 本帧因滞后被跳过 */
+static volatile LONG g_jumpSkipDbg  = 0;   /* 本帧因大跳跃被跳过 */
 
 /**
  * 帧等待：可等待定时器（kernel32，**不需要**为 timeBeginPeriod 链 winmm）。
@@ -4272,13 +4528,18 @@ static volatile LONG g_hudRunning;
  */
 static void hud_frame_wait(HANDLE timer)
 {
-    if (!timer) { Sleep(HUD_FRAME_MS); return; }
+    /* —— ⑦（LNP `offWhileDrawing` / `renderSleep`）：运笔中把 HUD 帧率减半 ——
+       落笔期间 PS 主线程正在跑笔路径，HUD 每 8ms 抢一次只是加剧主线程抖动
+       （用户感知到的「冲包」有一部分是它喂出来的）；而运笔时 HUD 画的是拉绳，
+       16ms 一帧肉眼无差别。⛔ 只动等待时长、不动门控：HUD 显隐判据不受影响。 */
+    int ms = ((g_penDown && g_gateOk) ? HUD_FRAME_MS * 2 : HUD_FRAME_MS);
+    if (!timer) { Sleep((DWORD)ms); return; }
     LARGE_INTEGER due;
-    due.QuadPart = -(LONGLONG)HUD_FRAME_MS * 10000;   /* 相对时间，100ns 单位 */
+    due.QuadPart = -(LONGLONG)ms * 10000;             /* 相对时间，100ns 单位 */
     if (SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) {
         WaitForSingleObject(timer, INFINITE);
     } else {
-        Sleep(HUD_FRAME_MS);
+        Sleep((DWORD)ms);
     }
 }
 
@@ -4431,6 +4692,16 @@ static DWORD WINAPI hud_thread(LPVOID param)
            ⛔ 年龄一律走 sn_age_ms()（有符号）——它同时躲开「2^31 翻转」与「跨线程
            超前下溢」两个坑，细节见 sn_age_ms 定义处的长注释。 */
         DWORD now = GetTickCount();
+        /* ⛔ 帧滞后（LNP `maxMsgLagForRender`）：本帧距上一帧超过阈值 ⇒ 本帧不渲染。
+           成因是渲染线程被拖慢（PS 主线程卡、DWM 忙），此时圆心几何已经陈旧，
+           硬画一帧只会把「陈旧的圆」糊在屏幕上。窗口保持上一帧内容，**不隐藏**。 */
+        int lagSkip = 0;
+        {
+            static DWORD s_prevFrameMs;
+            lagSkip = (s_prevFrameMs && (DWORD)(now - s_prevFrameMs) > HUD_MAX_LAG_MS) ? 1 : 0;
+            s_prevFrameMs = now;               /* ⛔ 每条路径都只经过这里一次 ⇒ 必然更新 */
+            InterlockedExchange(&g_lagSkipDbg, lagSkip ? 1 : 0);
+        }
         int active = 0;
         if (g_cfg && g_patched && g_calib.valid && g_cfg[CFG_I_ENABLED]) {
             if (sn_age_ms(now) < HUD_IDLE_MS) active = 1;
@@ -4441,6 +4712,59 @@ static DWORD WINAPI hud_thread(LPVOID param)
            这两个判据由 detour 写入 g_toolOk / g_penDown —— 渲染线程只读它们，
            不重复判一次（判据写两遍，漂移一次就再也对不上）。 */
         int gateOk = (g_toolOk && g_penDown) ? 1 : 0;
+
+        /* —— 2026-10-17 第十七轮：HUD 显示门控由「两个布尔」升级为**显式 AND 门** ———
+           ⛔⛔ 起因（用户报的两条）：
+             ① 「程序刚加载时没有落笔就产生 HUD」；
+             ② 「套索工具下调面板参数落笔，也会意外出现 HUD」。
+           旧的 `gateOk = toolOk && penDown` 只有**两个**维度，而这两条抱怨要的是
+           第三、第四个维度：
+             · **strokeOk**（真的在一笔之中）：`g_strokeGate == 1` 只在「工具对 + 笔尖
+               接触 + 已开始改写」时被闩住。加载后没落笔 ⇒ 它必为 -1 ⇒ 绝不出 HUD。
+             · ~~**drawOk**（工具确实在绘制态）：来自 PS 的 `toolModalStateChanged`。~~
+               ⛔⛔ **2026-10-17 真机判决（jwwh-3064）：这一项已被证伪并移除，见下。**
+             · **fgOk**（前台是本进程）：照 LNP 的 `foregroundWindowChange` 判据，
+               并配 `Very fast fg change (%d ms), ignoring` 的同款**去抖**
+               ⇒ 面板/对话框抢焦点造成的毫秒级抖动不会让 HUD 闪。
+             · **!bigJump**：照 LNP 的 `overlay.bigJumpSqDist`，一帧内光标瞬移超过
+               阈值 ⇒ 本帧不画（防「瞬移拉一条长线」）。
+           ⛔ 每多一个维度都要能**单独**在 `[hud] 未显示:` 行里看出来，否则排障靠猜。 */
+        int strokeOk = (g_strokeGate == 1) ? 1 : 0;
+        LONG tmv = g_cfg ? g_cfg[CFG_I_TMODAL] : -1;
+        int  tmK = g_cfg ? (g_cfg[CFG_I_TMODALK] != 0 ? 1 : 0) : 0;
+        /* ⛔⛔ 2026-10-17 真机判决（jwwh-3064 + pi8li.log）：`toolModalStateChanged`
+           **不能用作门控** —— 原实现 `drawOk = 极性已证 ? (值==1) : 放行` 在真机上
+           把 HUD **永久挡死**了。证据链：
+             · 该事件 64 次投递**全部**是「1ms 内 1→0 成对翻转」
+               （06:32:00.072 变 1、.073 变 0；06:33:33 第 64 次亦然）；
+             · 于是「最后一次值」恒为 0，而极性一经那两次翻转就被判「已证明」⇒
+               `drawOk` 从 06:32:02 起恒为 0，`[hud] 未显示` 行里
+               `draw=0(tm=0,k=1)` 一路持续到日志末尾；
+             · 后果 = **即使切回套索，HUD 也再不会显示**（这正是用户报的
+               「切换工具后 HUD 就失效了」里那条本不该有的失效）。
+           ⇒ 它不是「工具是否在绘制态」，而是 PS 每次工具操作的**模态抖动**
+           （`'Lvl '` 与 `modalStateChanged` 是同一个键，只是层级瞬时起落）。
+           ⇒ **门控移除，只保留诊断显示**。①诉求（只在套索绘制时出 HUD）由
+             `gateOk`（工具闸门）∧ `strokeOk`（一笔之中，含 penDown）完全覆盖：
+             真机 06:31:57 之前的正常显示正是这两项在工作。 */
+        int drawOk = 1;   /* ⛔ 恒放行 —— 见上方真机判决；tmv/tmK 仍落日志供继续取证 */
+        {
+            /* 前台判定 + 去抖（只在稳定态翻转时才改 s_fgOk）。 */
+            static int   s_fgOk = 1;        /* 初值取「是」：加载时 PS 必然在前台 */
+            static int   s_fgInst = 1;
+            static DWORD s_fgChgAt = 0;
+            DWORD fgPid = 0;
+            HWND  fg = GetForegroundWindow();
+            if (fg) GetWindowThreadProcessId(fg, &fgPid);
+            int inst = (fgPid != 0 && fgPid == GetCurrentProcessId()) ? 1 : 0;
+            if (inst != s_fgInst) { s_fgInst = inst; s_fgChgAt = now; }
+            if (inst != s_fgOk && s_fgChgAt && (DWORD)(now - s_fgChgAt) >= HUD_FG_DEBOUNCE_MS) {
+                s_fgOk = inst;
+                logf("# [hud] 前台切换（去抖 %dms 后确认）：本进程=%d\n",
+                     HUD_FG_DEBOUNCE_MS, s_fgOk);
+            }
+            g_fgOkDbg = s_fgOk ? 1 : 0;
+        }
 
         /* —— 一致快照 + 同刻光标（2026-10-14，用户报「拖动稍快，圆心与受力点分离」）——
            ⛔⛔ 快照的 4 个坐标字段由 detour 在**包线程**逐个写（热路径不加锁），
@@ -4483,6 +4807,20 @@ static DWORD WINAPI hud_thread(LPVOID param)
                 logf("# [hud] ★GetCursorPos 失败 err=%lu ⇒ 本帧窗口位置不可信（按 0,0 兜底）\n",
                      (unsigned long)GetLastError());
             }
+        }
+        /* ⛔⛔ 大跳跃丢弃（LNP `overlay.bigJumpSqDist`）：一帧内光标瞬移超过阈值 ⇒ 本帧不画。
+           场景：跨显示器 / 面板弹窗把光标顶走 / 驱动回中。少了这一条，就会出现
+           「一次瞬移拉出一条横跨屏幕的长绳」—— 用户眼里就是「HUD 忽然乱画一下」。 */
+        int bigJump = 0;
+        {
+            static double s_pcx = 0, s_pcy = 0;
+            static int    s_havePc = 0;
+            if (s_havePc) {
+                double jx = (double)cur.x - s_pcx, jy = (double)cur.y - s_pcy;
+                if (jx * jx + jy * jy > HUD_BIG_JUMP_SQ) bigJump = 1;
+            }
+            s_pcx = (double)cur.x; s_pcy = (double)cur.y; s_havePc = 1;
+            InterlockedExchange(&g_jumpSkipDbg, bigJump ? 1 : 0);
         }
         /* ⛔⛔ 标定分母必须用**原始轴**（不是输出轴）：
            系统光标由 Wintab 系统上下文（驱动侧）移动，跟随的是**原始笔**——
@@ -4599,7 +4937,18 @@ static DWORD WINAPI hud_thread(LPVOID param)
                  正常期「选区末端 vs 笔尖」的几何提示。 */
         int deadNow = (g_streamDead && g_penDown == 1) ? 1 : 0;
         int activeNow = (pktAge < HUD_IDLE_MS || (gateOk && pktAge < HUD_HOLD_MS));
-        int wantVisible = (wnd && mem && activeNow && gateOk && !deadNow && ropeMode
+        /* ⛔⛔ 显式 AND 门（2026-10-17 第十七轮）—— 每一项都是**必要条件**，少一项就不出 HUD：
+             窗口在 · 有包流 · 工具是套索且笔尖接触 · **真的在一笔之中**
+             · **前台是本进程** · 非断流 · 非大跳跃 · 非帧滞后 · 拉绳模式 · 面板开了 bit0 · 总开关开
+           ⚠️ 「工具在绘制态」（`toolModalStateChanged`）**已于 2026-10-17 真机证伪并移出
+              门控**（见 `drawOk` 定义处），此处保留在诊断行里只为继续取证。
+           ⛔ 初值语义：`strokeOk` 在加载后必然是 0（g_strokeGate 初值 -1，只有真正
+             起笔才被闩成 1）⇒ 「刚加载就出 HUD」从构造上就不可能。 */
+        int fgOk = (g_fgOkDbg != 0) ? 1 : 0;
+        InterlockedExchange(&g_strokeOkDbg, strokeOk ? 1 : 0);
+        InterlockedExchange(&g_drawOkDbg,   drawOk  ? 1 : 0);
+        int wantVisible = (wnd && mem && activeNow && gateOk && strokeOk && drawOk && fgOk
+                           && !deadNow && !bigJump && !lagSkip && ropeMode
                            && (hf & 1) && g_cfg && g_cfg[CFG_I_ENABLED]) ? 1 : 0;
         if (!wantVisible) {
             if (wnd && IsWindowVisible(wnd)) ShowWindow(wnd, SW_HIDE);
@@ -4615,9 +4964,12 @@ static DWORD WINAPI hud_thread(LPVOID param)
             if (g_cfg && g_cfg[CFG_I_ENABLED] && (DWORD)(now - lastHudWhy) >= 2000) {
                 lastHudWhy = now;
                 logf("# [hud] 未显示: wnd=%d mem=%d active=%d(t=%ldms) gate=%d"
-                     "(toolOk=%ld penDown=%ld) rope=%d hudBits=%ld dead=%ld deadHide=%d\n",
+                     "(toolOk=%ld penDown=%ld) stroke=%d draw=%d(tm=%ld,k=%ld) fg=%d "
+                     "jump=%d lag=%d rope=%d hudBits=%ld dead=%ld deadHide=%d\n",
                      wnd ? 1 : 0, mem ? 1 : 0, activeNow, (long)pktAge, gateOk,
-                     (long)g_toolOk, (long)g_penDown, ropeMode, (long)hf,
+                     (long)g_toolOk, (long)g_penDown, strokeOk, drawOk,
+                     (long)tmv, (long)tmK,
+                     fgOk, bigJump, lagSkip, ropeMode, (long)hf,
                      (long)g_streamDead, deadNow);
             }
             hud_frame_wait(frameTimer);
@@ -4981,7 +5333,13 @@ static void hud_stop(void)
 }
 
 /* ================================================================== 导出 */
-__declspec(dllexport) int jwwh_version(void) { return 0x0112; }
+/* ⛔ 版本史（核验方式：引擎日志头 `ver=`，**不要**静态反汇编 —— 编译器序言是
+   `55 48 83 EC 20` 且 `mov eax` 后会插 `xchg`，裸搜 `B8 xx 01 00 00 C3` 必漏）：
+   0x0113 = 9 条 LNP 迁移（slct/modalStateChanged/toolModalStateChanged/Opn/Cls…）
+   0x0114 = drawOk 恒放行（toolModalStateChanged 的 'Lvl ' 1ms 翻转误门控）+ lcSysExt A/W 分偏移
+   0x0115 = 'slct' 活性看门狗：pstool_owns() 加 2s 时效 + I_NOTIFYAGE/I_GATEOWNED 下发
+            + 面板 inProcGateOwned() 统一判据（静默即让位，自愈轮询兜底） */
+__declspec(dllexport) int jwwh_version(void) { return 0x0115; }
 
 /* 兜底还原入口：守护进程的正常路径是经共享内存下令（worker 执行），
    此导出供外部工具（脚本/排障）在不需要共享内存时直接远程调用。 */

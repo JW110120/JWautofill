@@ -245,6 +245,51 @@ export interface PenSmoothStatus {
     toolSrc: number;
     /** 进程内读到的工具类名（如 lassoTool）；空串 = 还没读到。仅用于诊断展示。 */
     psTool: string;
+    /**
+     * 进程内观测：PS **模态嵌套层级**（2026-10-17，来自 PICA `modalStateChanged`
+     * 回调读描述符键 `'Lvl '`）。-1 = 对端不报/从未投递；0 = 宿主空闲；>0 = 宿主
+     * 正握着模态作用域。
+     *
+     * ⛔ 这是 `isPsBusy()` + `MIN_MODAL_GAP_MS` 那整套**猜测式**忙碌闸门的**进程内
+     *    替身**：面板以前只能靠「我上次请求是多久之前」间接猜 PS 忙不忙，现在 PS
+     *    自己把层级报出来了，而且**零 batchPlay**。面板据此在 `>0` 时跳过自己的
+     *    巡检类模态请求 —— 既省预算，也避免与 PS 自己的模态叠加触发告警风暴。
+     * ⚠️ 观测时刻见 `modalTs`（GetTickCount 口径，与 `snAge` 不同源）：
+     *    层级只在**变化**时投递，值本身可能很旧 ≠ 此刻仍忙。判「此刻忙」必须
+     *    结合 modalTs 的新鲜度（面板侧用 MODAL_STALE_MS=3000）。
+     */
+    modalLevel: number;
+    /** 上条层级的观测时刻（GetTickCount 口径，0=从未观测）。 */
+    modalTs: number;
+    /**
+     * 进程内观测：工具模态（`toolModalStateChanged`）。-1 = 从未投递。
+     * ⛔ LNP 自己的这个回调是**空函数**，「工具进入绘制态」能否在 PS 27.11 上真
+     *    的投递**未经证明**。因此这里只取证、不门控：等真机日志证明极性后再接。
+     */
+    toolModal: number;
+    /** 上条的极性是否已证明（见过 0 与 1 两种值）。 */
+    toolModalKnown: number;
+    /** 进程内观测：文档开/关累计（'Opn '/'Cls '）——文档级变化的进程内副本。 */
+    docEpoch: number;
+    /**
+     * 进程内观测：距上次 `'slct'` 回调的毫秒数（**-1 = 从未投递过**）。纯诊断。
+     *
+     * ⛔ **不要**拿它自己算「闸门该不该由进程内供给」—— 阈值在原生侧，用
+     *    `gateOwned` 那个**结论**。两边各存一份阈值迟早不同步，而不同步的表现
+     *    正好是「两边都以为自己该写闸门」（真机 pid 13428 的教训）。
+     */
+    notifyAge: number;
+    /**
+     * 进程内观测：**此刻**闸门是否真的由 `'slct'` 供给（1/0）。-1 = 对端不报（旧版）。
+     *
+     * ⛔ 这是面板「要不要给闸门让位」的**唯一判据**，取代了原来裸用 `toolSrc === 2`。
+     *
+     * 起因（真机 pid 13428）：`'slct'` 连投 5 次后彻底静默 72 秒，而 `state` 仍是 2
+     * ⇒ 闸门被永久冻结在最后一次的值、面板已停轮询、开关平滑也救不回来。
+     * 现在原生侧给「接管」加了 2 秒时效：静默超时即 `gateOwned = 0`，面板据此
+     * **按 2 秒降频兜底轮询**（而不是完全停、也不是回到 300ms 全速）。
+     */
+    gateOwned: number;
     /** 工具闸门：0=当前不是套索 1=是套索 2=未知/读数失败（放行）。 */
     toolGate: SmoothToolGate;
     /** 原生侧回报：工具闸门是否成立（0=当前工具不是套索，正在禁止平滑）。 */
@@ -369,6 +414,14 @@ export const initialPenSmoothStatus: PenSmoothStatus = {
     hud: 3,
     toolSrc: -1,        // -1 = 对端不报该字段（旧版）⇒ 面板保持自己轮询
     psTool: '',
+    // 进程内观测（PICA 通知）。-1 = 对端不报 ⇒ 面板退回自己的猜测式忙碌闸门。
+    modalLevel: -1,
+    modalTs: 0,
+    toolModal: -1,
+    toolModalKnown: 0,
+    docEpoch: 0,
+    notifyAge: -1,
+    gateOwned: -1,      // -1 = 对端（旧版 .8li）不报 ⇒ 面板退回按 toolSrc===2 判
     toolGate: 2,
     toolOk: 0,
     penDown: 0,
@@ -701,6 +754,20 @@ export function handleLassoSmoothMessage(msg: any): void {
       //      把「字段不存在」洗成 0 只是恰好同向，但一旦将来语义变化就会静默失效。
       toolSrc: penRaw.toolSrc === undefined ? status.pen.toolSrc : (Number(penRaw.toolSrc) || 0),
       psTool: typeof penRaw.psTool === 'string' ? penRaw.psTool : status.pen.psTool,
+      // 进程内观测（PICA 通知，2026-10-17）。⛔ 逐个 `=== undefined` 回落、绝不用 `|| 0`：
+      //   modalLevel 的 -1 是**合法值**（对端不报 / 从未投递），洗成 0 会被面板读成
+      //   「宿主空闲」⇒ 恰好在最该省预算的时候把预算放出去。toolModal 同理（-1=未知，
+      //   0 却是「工具不在绘制态」，语义相反）。
+      modalLevel: penRaw.modalLevel === undefined ? status.pen.modalLevel : (Number(penRaw.modalLevel) || 0),
+      modalTs: penRaw.modalTs === undefined ? status.pen.modalTs : (Number(penRaw.modalTs) || 0),
+      toolModal: penRaw.toolModal === undefined ? status.pen.toolModal : (Number(penRaw.toolModal) || 0),
+      toolModalKnown: penRaw.toolModalKnown === undefined ? status.pen.toolModalKnown : (Number(penRaw.toolModalKnown) || 0),
+      docEpoch: penRaw.docEpoch === undefined ? status.pen.docEpoch : (Number(penRaw.docEpoch) || 0),
+      // ⛔ 同样逐个回落到 -1，不能用 `|| 0`：notifyAge 的 -1 是「从未投递」，
+      //    gateOwned 的 -1 是「对端不报」—— 洗成 0 会让面板读成「回调刚发生 /
+      //    进程内未接管」，恰好在两个方向上把判据拧反。
+      notifyAge: penRaw.notifyAge === undefined ? status.pen.notifyAge : (Number(penRaw.notifyAge) || 0),
+      gateOwned: penRaw.gateOwned === undefined ? -1 : (Number(penRaw.gateOwned) || 0),
       toolGate: penRaw.toolGate === undefined
           ? status.pen.toolGate
           : (Number(penRaw.toolGate) === 0 ? 0 : (Number(penRaw.toolGate) === 1 ? 1 : 2)),

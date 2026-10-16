@@ -42,17 +42,36 @@ void pstool_uninstall(void);
 int  pstool_state(void);                    /* 0=不可用 1=已注册未读数 2=已接管 */
 int  pstool_tool_name(char* out, int cap);
 void pstool_diag(char* out, int cap);
+/* 2026-10-17（LNP 迁移）：进程内的 PS 模态层级 / 工具模态 / 文档纪元。
+   ⛔ ps_tool.c 不碰槽位表（既有铁律），由本文件代写。 */
+int  pstool_modal_level(void);              /* -1=未知，0=空闲，>0=宿主握着模态作用域 */
+int  pstool_modal_ts(void);
+int  pstool_tool_modal(void);               /* -1=未知 */
+int  pstool_tool_modal_known(void);         /* 极性是否已证明（见过 0 与 1） */
+int  pstool_doc_epoch(void);
+int  pstool_notify_age(void);             /* -1=从未投递；≥0=距上次 slct 回调的 ms */
+/* 引擎侧（smooth_engine.c）：⑧ wintab32 模块基址自检 */
+int  se_wt_moved(void);
+void* se_wt_base(void);
 
 /* ================================================================ M1 日志 */
 
 static void log_line(const char* tag, const char* fmt, ...);
+
+/* ⛔ 非 static：smooth_engine.c 的 wtctx_read_ini() 要按同一目录找外置开关文件
+   （④⑤⑥ 的 wtctx.ini）。返回静态缓冲、**带尾部反斜杠**；失败返回 ""。 */
+const char* jw_log_dir(void);
 
 /* ================================================================ CFG 槽位 */
 /* ⛔⛔ 与 smooth_engine.c 的 enum CFG_I_*、Program.cs 的 I_* 三处手写逐项对应；
    错位不报错、只静默失效（既有铁律）。 */
 #define CFG_NAME_W   L"Local\\JWautofillWintabSmooth"
 #define CFG_MAGIC    0x57414A57L      /* 'JWAW' */
-#define CFG_NLONGS   48
+/* ⛔ 2026-10-17：48 → 56（新增 4 个进程内观测槽，见下面 I_MODALLVL 起的注释）；
+   56 → 58（0x0115 新增 I_NOTIFYAGE / I_GATEOWNED，见下面注释）。
+   两个文件（plugin_main.c / smooth_engine.c）的 CFG_NLONGS **必须同时改**：
+   谁先建节谁定尺寸，不一致的一方 MapViewOfFile 会拿到错误的字节数。 */
+#define CFG_NLONGS   58
 
 enum {
     I_MAGIC = 0, I_ENABLED, I_STRENGTH, I_FLAGS, I_SEQ, I_CMDSEQ, I_CMD, I_CMDACK,
@@ -61,9 +80,20 @@ enum {
     I_MODE, I_TENSION, I_CATCHUP, I_CORNER, I_RADIUSPX, I_HUD, I_HUDCOLOR, I_PXPERAXIS,
     I_TOOLGATE, I_GATETS, I_PENDOWN, I_GATEOK, I_CTUNKNOWN,
     I_PXPERAXISY, I_SNTS, I_REASON, I_GATEOPEN, I_GATECLOSE,
-    I_CTOFF, I_CTVAL, I_PXNX, I_PXNY, I_CTMASK, I_CTELIG, I_CTOFFS
+    I_CTOFF, I_CTVAL, I_PXNX, I_PXNY, I_CTMASK, I_CTELIG, I_CTOFFS,
+    /* ---- 2026-10-17：PICA 进程内观测（ps_tool.c 写、面板经 smoothState 读）---- */
+    I_MODALLVL,       /* PS 模态嵌套层级：-1=未知 0=空闲 >0=宿主握着模态作用域 */
+    I_MODALTS,        /* 该层级的观测时刻（GetTickCount 口径；0=从未观测） */
+    I_TMODAL,         /* 工具模态：-1=未知 0/1=最近一次值 */
+    I_TMODALK,        /* 工具模态「极性是否已证明」（见过 0 与 1）0/1 */
+    I_DOCEPOCH,       /* 'Opn '/'Cls ' 累计次数 = 文档级变化的进程内副本 */
+    /* ---- 0x0115：'slct' 活性看门狗（面板据此决定「停轮询」还是「降频兜底」）---- */
+    I_NOTIFYAGE,      /* 距上次 'slct' 回调的 ms（-1=从未投递） */
+    I_GATEOWNED,      /* 此刻闸门是否**真的**由进程内供给（1/0）—— 面板唯一判据。
+                         ⛔ 面板绝不自己拿 notifyAge 去比阈值：阈值在原生侧，
+                            两边各算一份迟早不同步 ⇒ 由这里下发**结论**。 */
 };
-typedef char cfg_fit_check[(I_CTOFFS < CFG_NLONGS) ? 1 : -1];
+typedef char cfg_fit_check[(I_GATEOWNED < CFG_NLONGS) ? 1 : -1];
 
 static volatile LONG* g_cfg   = NULL;
 static HANDLE         g_cfgMap = NULL;
@@ -114,7 +144,22 @@ void pstool_publish(int gate)
 
 /** 闸门是否已由进程内通知接管（2 档）。接管后：① 面板下发的 toolGate 一律忽略；
     ② GATETS 由本进程无条件续期（通知只在工具变化时来，不续期会 3s 过期 fail-closed）。 */
-static int pstool_owns(void) { return pstool_state() == 2; }
+/**
+ * 此刻闸门是否真的由进程内 'slct' 通知供给。
+ *
+ * ⛔⛔ 2026-10-17（0x0115）加了**时效**：`state==2` 只代表「曾经读到过工具」，
+ *    而 'slct' 是「只在工具变化时投递」的事件通道、**没有心跳**。真机 pid 13428
+ *    实测它连投 5 次后彻底静默 72 秒 —— 那一刻 state 仍是 2 ⇒ 闸门被永久冻结在
+ *    最后一次的值，面板已停轮询、开关平滑也救不回来。
+ * ⇒ 现在只有「最近真的收到过 slct」才算此刻接管；超时 ⇒ 立刻让位给面板轮询。
+ *    这是**止损**而非根治：它不需要知道 PS 为什么停，静默了就把真相还给面板。
+ */
+static int pstool_owns(void)
+{
+    if (pstool_state() != 2) return 0;
+    int age = pstool_notify_age();
+    return (age >= 0 && age < 2000) ? 1 : 0;   /* 2000 = PS_NOTIFY_FRESH_MS（ps_tool.c） */
+}
 static void Wr(int slot, LONG v)
 {
     if (g_cfg) InterlockedExchange((LONG*)&g_cfg[slot], v);
@@ -251,7 +296,9 @@ static int build_smooth_state(char* out, int cap)
         "\"state\":%d,\"calls\":%d,\"packets\":%d,\"smoothed\":%d,"
         "\"snAge\":%d,\"stride\":%d,\"offX\":%d,\"offY\":%d,\"offSerial\":%d,"
         "\"axisMax\":%d,\"hookPid\":%d,\"frozeThreads\":%d,"
-        "\"toolSrc\":%d,\"psTool\":\"%s\",\"lastError\":0}}",
+        "\"toolSrc\":%d,\"psTool\":\"%s\","
+        "\"modalLvl\":%d,\"modalKnown\":%d,\"toolModal\":%d,\"toolModalKnown\":%d,"
+        "\"docEpoch\":%d,\"notifyAge\":%d,\"gateOwned\":%d,\"lastError\":0}}",
         (int)g_enabled, g_pen.strength, g_pen.mode, g_pen.radiusPx, g_pen.catchUp,
         g_pen.cornerAngle, (g_pen.flags & 1) ? "true" : "false", g_pen.hud, g_pen.toolGate,
         Rd(I_TOOLGATE) != 0 ? 1 : 0, (int)Rd(I_PENDOWN), (int)Rd(I_GATEOK), (int)Rd(I_CTUNKNOWN),
@@ -262,7 +309,18 @@ static int build_smooth_state(char* out, int cap)
         (int)Rd(I_STATE), (int)Rd(I_CALLS), (int)Rd(I_PACKETS), (int)Rd(I_SMOOTHED),
         snAge, (int)Rd(I_STRIDE), (int)Rd(I_OFFX), (int)Rd(I_OFFY), (int)Rd(I_OFFSER),
         (int)Rd(I_AXISMAX), (int)Rd(I_PID), (int)Rd(I_FROZE),
-        pstool_state(), toolName);
+        pstool_state(), toolName,
+        /* ⛔⛔ 进程内观测（2026-10-17）：面板靠这三项**零 batchPlay**地知道
+           「宿主忙不忙 / 工具是否在绘制 / 文档换没换」，从而把自己那几条
+           300~500ms 的模态轮询降下来（见 app.tsx 的 psBusyHint 接线）。
+           modalKnown = 「层级槽是否有意义」（-1 表示 PS 从未投递 modalStateChanged）。 */
+        (int)Rd(I_MODALLVL), (int)Rd(I_MODALLVL) >= 0 ? 1 : 0,
+        (int)Rd(I_TMODAL), pstool_tool_modal_known(),
+        (int)Rd(I_DOCEPOCH),
+        /* ⛔⛔ 0x0115：'slct' 活性看门狗下发。`gateOwned` 是**结论**（原生侧算好），
+           面板必须只信它、不要自己拿 notifyAge 比阈值 —— 阈值在原生侧，
+           两边各存一份迟早不同步，而不同步的表现恰好是「两边都以为自己该写闸门」。 */
+        (int)Rd(I_NOTIFYAGE), (int)Rd(I_GATEOWNED));
     return n > 0 ? n : 0;
 }
 
@@ -749,15 +807,36 @@ static DWORD WINAPI pump_thread(LPVOID arg)
            'slct' 通知只在**工具变化**时来，而引擎按 GATE_STALE_MS=3000 判过期 ⇒
            不主动续期就会过期 ⇒ fail-closed 阻断 ⇒ 平滑要等用户再切一次工具才活。 */
         if (cli_count() > 0 || pstool_owns()) Wr(I_GATETS, (LONG)GetTickCount());
+        /* ⛔ 进程内观测槽（2026-10-17）：模态层级 / 工具模态 / 文档纪元由 ps_tool.c 的
+           PICA 回调写进 statics，这里统一搬到共享内存 —— 面板经 smoothState 读到，
+           **全程零 batchPlay**。⛔ 槽位表归本文件所有，ps_tool.c 只暴露 getter。 */
+        Wr(I_MODALLVL, (LONG)pstool_modal_level());
+        Wr(I_MODALTS,  (LONG)(DWORD)pstool_modal_ts());
+        Wr(I_TMODAL,   (LONG)pstool_tool_modal());
+        Wr(I_TMODALK,  (LONG)(pstool_tool_modal_known() ? 1 : 0));
+        Wr(I_DOCEPOCH, (LONG)pstool_doc_epoch());
+        Wr(I_NOTIFYAGE, (LONG)pstool_notify_age());
+        Wr(I_GATEOWNED, (LONG)(pstool_owns() ? 1 : 0));
         /* 闸门来源状态变化时落一行（只在变化时，避免刷屏）。 */
         {
-            static char lastDiag[192];
-            char diag[192];
+            static char lastDiag[320];
+            char diag[320];
             pstool_diag(diag, (int)sizeof(diag));
             if (strcmp(diag, lastDiag) != 0) {
                 memcpy(lastDiag, diag, strlen(diag) + 1);
                 pstool_log("闸门状态 %s", diag);
             }
+        }
+        /* ⑧（LNP WTSanityCheck）：wintab32 被重载 ⇒ 落痕 + 立刻重挂。
+           ⛔ 为什么不能只靠 heal_if_unhooked()：它看的是 state/calls，而 wintab32
+              被换掉时 state 仍是 1（我们以为自己还挂着），calls 也可能因为 PS 走
+              另一条通路而照样涨 ⇒ 那一类断流永远无法归因。这里按模块基址判，
+              判据与「是否还在取包」无关。 */
+        if (se_wt_moved()) {
+            pstool_log("[wt] ★wintab32 已重载（新基址=0x%llX）⇒ 重新挂载",
+                       (unsigned long long)(UINT_PTR)se_wt_base());
+            send_cmd(2);                  /* 先卸（还原旧映像上的字节） */
+            send_cmd(1);                  /* 再挂（在新映像上重新改写） */
         }
         heal_if_unhooked();              /* 守护进程 3s 巡检自愈职责的进程内版 */
         if (build_smooth_state(cur, (int)sizeof(cur)) > 0 &&
@@ -827,6 +906,20 @@ static void services_stop(void)
 }
 
 /* ================================================================ M1 日志实现 */
+
+const char* jw_log_dir(void)
+{
+    static char dir[MAX_PATH];
+    static int  done;
+    if (done) return dir;
+    done = 1;
+    dir[0] = 0;
+    const char* lad = getenv("LOCALAPPDATA");
+    if (!lad) return dir;
+    _snprintf(dir, sizeof(dir), "%s\\JWautofill\\smooth8li\\", lad);
+    dir[sizeof(dir) - 1] = 0;
+    return dir;
+}
 
 static void log_line(const char* tag, const char* fmt, ...)
 {

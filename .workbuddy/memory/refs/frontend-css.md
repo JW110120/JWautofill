@@ -173,3 +173,12 @@
 - ⚠️ **守卫脚本只扫 `src/styles/*.css`**：`src/adjustments/*.css`（绘画工具箱）**不在覆盖范围**，改完要手工核对注释开闭 / 括号配对（可用 `node -e` 数 `/*` 与 `*/`、`{` 与 `}`）。
 - 自绘开关 `.toggle-switch`：可见胶囊 33×16、圆点 12px、占位盒高 24px（`:before` 撑起，**不用 margin/padding** 免得挤压同行）。**不要**再加负外边距（那是抵原生 `sp-switch` 32px 盒高的旧补偿）。
 - 状态条 `.notify-bar` `min-height: 32px` = 自绘开关占位盒 24 + padding 6 + 边框 2（旧的 40px 按原生 sp-switch 32 算，会让含开关的条高一截）。
+
+## 十六、由 MEMORY.md 下沉（2026-10-16）
+
+- ⛔ flex 容器相邻子元素外边距**不合并** ⇒ 需显式 `> .row-between{margin:0}` + `+ .row-between{margin-top:10px}`。
+- ⛔ **跨文件置灰必须两级类选择器**（style-loader 注入序）；`gap` / `:has()` / `rotate()` 不可靠；
+  `transparent` 渲染成**纯黑**。
+- ⛔ 多浮窗 = 单遮罩 + 一个 `.float-stack`；子面板互斥唯一入口 `setSecondaryPanel(id,open)` 一次写全 5 个 boolean。
+- ⛔⛔ `theme.ts` 的 CSS 注释一律写在 `{ }` **外**（`style.textContent` 运行时注入，声明块内注释被当声明 ⇒ CssSyntaxError；
+  guard 不扫它，靠人工）。

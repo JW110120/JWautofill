@@ -115,3 +115,23 @@
 - ⛔ 改 `native/HotkeyDaemon/Program.cs` 后必须**两步**：先
   `dotnet publish HotkeyDaemon.csproj -c Release -o publish`，再 `yarn build`
   （webpack 只是把 `publish/*.exe` 拷进 `dist/`）。漏掉第一步 = 代码改了、插件包里仍是旧 exe。
+
+## 八、由 MEMORY.md 下沉（2026-10-16）
+
+- ⛔⛔ **提交/推送纪律（2026-10-16 用户定，强制）**：① 用户说「推送到远端」时，
+  **项目代码 + 日志 + 记忆（docs/memory）必须合成一次提交**，绝不许拆成「代码一条、docs/memory 再一条」；
+  ② **代码彻底定稿后才提交** —— 不许「先提交、随后发现 bug 又改两行补一条」；
+  ③ 提交前先自问「这版接下来还会不会再改？」，答案是「会」就先别提交、别推。
+- **dist 红线**：⛔ docs 进 dist 走**白名单**（仅 `fill-guide.html` + `toolbox-guide.html` + `img/`）。
+  历史教训：黑名单 `*plan*.md` 漏放 `modal-scope-audit.md` ⇒ 追不上新文件。
+  webpack 不清旧产物 ⇒ 改规则后手删残留复验。
+- ⛔ 无原生编译器 ⇒ zig 走便携工具链（`native/get-zig.sh` → `%USERPROFILE%\zig-toolchain`）；
+  **编译须沙箱外跑**。⛔ 改 `Program.cs`（热键 daemon 唯一源码）后：`dotnet publish -o publish` → `yarn build`；
+  更新已装副本只有「服务开关先关再开」。
+- ⛔ **卸载脚本只删自己那份安装目录**；绝不 `Remove-Item -Recurse` 整个 `%LOCALAPPDATA%\JWautofill`
+  （会删 `configpath.txt` ⇒ 热键配置被冲掉）。面板卸载兜底唤起 `native/HotkeyDaemon/uninstall.bat`。
+  ⛔ 已**回退** JWUninstall.exe 启动器方案（dist +76M 不划算），UninstallLauncher 已删，**勿再引入**。
+- ⚠️ **环境坑：genie-trash**：对多文件目录报 "Some operations were aborted" 但**实际已移动**（fail-closed 误报），
+  且会**延迟回滚重建空目录**。对策：逐文件删容忍报错 + 空壳用 `[System.IO.Directory]::Delete(p,$false)` 收尾 + 删后复验。
+- ⛔ **.8li 安装/更新通路尚未面板化**（M3 遗留）：「服务未启动」= .8li 没装进 PS Plug-ins，需手动部署
+  （位置见 `refs/lasso-smoothing.md` §O7）。

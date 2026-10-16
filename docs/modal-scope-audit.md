@@ -152,6 +152,68 @@
 
 ---
 
+---
+
+## 五、2026-10-17 复核：清单的遗漏项
+
+复核方式：`src/` 全量扫描 `executeAsModal / runAsModal / psRead( / psTryRead( /
+probeHostIdle / debouncePsProbe / refreshLayerSnapshot( / buildLayerTree( /
+getActiveLayerInfo( / refreshActiveDoc(`，逐文件计数后与上文四节对账。
+
+### G. `app.tsx` 自身的常驻探测（**清单完全没列**）
+
+- **触发**：`app.tsx:710` 注册 `addPsNotificationListeners(this.handleNotification)`
+  —— 与三个子面板同款的全 20 事件订阅；`handleNotification`（:3203）对**每一条**
+  通知都执行 `this.maskProbeDebounced()`（:3214）⇒ `checkMaskModes()` ⇒
+  `LayerInfoHandler.getActiveLayerInfo()` ⇒ 1 个模态作用域。
+- **为什么比 E 更该先管**：E 列的三个子面板是**按需挂载**（面板开了才注册），
+  而 `app.tsx` 是主面板、**从插件加载起就挂着、永不卸载**。即三个子面板全关着，
+  这一条照样对每条 `set` 打一次探测。清单里 E 的「放大机制」只算了子面板数量，
+  漏了基数里还有这个常驻项。
+- **成本**：每条通知 1 个模态作用域（有 300ms TTL 缓存，多数命中缓存 ⇒ 实际
+  IPC 少，但 `debouncePsProbe` 的**调度点**与告警计数仍按次发生）。
+- **本轮处置**：`checkMaskModes` 路径未动（它要跟手），改为在**巡检类**入口
+  加进程内模态层级判据（见下节）。
+
+### H. 两个下拉的 `refreshLayerSnapshot()` 仍无 `maxAgeMs`
+
+- `refreshLineReferenceOptions`（AdjustmentPanel.tsx:1638）与
+  `refreshMaskSyncOptions`（:1063）都调 `refreshLayerSnapshot()` ——
+  **默认 `maxAgeMs = 0` ⇒ 每次都真做全树遍历**（1 模态 + ≈5N 次宿主 get）。
+- 清单二/三的修复只**收窄了触发源**（不打脏、不刷），没有改读取本身的缓存口径。
+  后果：用户反复开合下拉（这是常用动作）⇒ 每次都是一次全量遍历，与「收窄触发源」
+  的收益方向相反。
+- **建议（低风险）**：这两处传 `maxAgeMs`（如 1500ms）。语义与「用户刚点开要最新」
+  不冲突 —— TTL 比一次交互间隔短即可。
+
+### I. 未列入但确认**不是**遗漏的项（已逐个核对）
+
+| 文件 | 判定 |
+| --- | --- |
+| `utils/StrokeSelection.ts`(13) | 描边，用户主动；不常驻 |
+| `utils/ColorPicker.ts`(8) | 拾色器弹窗，用户主动 |
+| `hotkey/HotkeyBridge.ts`(7) | `setTimeout` 是 WS 重连，不进模态；扫描按键走一次性 `runAsModal` |
+| `utils/commandProgress.ts`(5) | `setInterval` 跑在**已有**模态作用域内，不额外计数 |
+| `utils/SingleChannelHandler.ts`(3) / `knockoutBatchProcessor.ts`(3) / `ClearHandler.ts`(1) | 用户主动 |
+| `utils/layerTreeSnapshot.ts`(7) / `utils/psAccess.ts`(39) | 被上面各条**间接**计入，不是独立来源 |
+
+### 本轮新增的降频手段（借 LNP 逆向结果）
+
+PICA `modalStateChanged` 把 PS **自己的模态嵌套层级**报进进程（`'Lvl '` 键，
+零 batchPlay），面板因此有了**肯定式**的忙碌证据，不必再靠常数窗口外推：
+
+- `.8li`：读描述符键 `'Lvl '` → `I_MODALLVL`；`smoothState.pen.modalLevel` 下发。
+  另有 `toolModal`（工具模态，只取证）、`docEpoch`（`'Opn '/'Cls '` 累计）。
+- `psProbe.ts`：新增 `setInProcModalLevel()` / `psBusyInProc()`（**三态**返回：
+  1=确定忙 / 0=确定闲 / -1=不可用）。⛔ 故意**不并进 `isPsBusy()`** —— 那是否定式
+  安全闸，若被层级接管，用户主动的填充/描边也会被挡住（更糟的回归）。
+- `app.tsx`：在 5 个**巡检类**入口加了 `|| psBusyInProc() === 1` ——
+  `pollSmoothToolGate`(300ms) / `pollToolChange`(300ms) / `pollDocIdentity`(500ms) /
+  `pollQuickMask`(300ms) / `maybeAutoTurnOff` 的补读。丢一轮无副作用，下一轮自补。
+- 叠加已有的 `toolSrc===2`（进程内 'slct' 接管 ⇒ 停掉 `pollSmoothToolGate`），
+  B/C/D 三条常驻轮询在「PS 忙」或「平滑已接管」两种情形下都会真正停摆，
+  而不再是「名义上有开关、实际上一直读」。
+
 ## 优先级建议
 
 | 优先级 | 项 | 理由 |
@@ -159,6 +221,8 @@
 | ✅ 已修 | 蒙版同步引擎（4 → 0） | 零任务时纯浪费，且 `set` 频率最高 |
 | ✅ 已修 | 线稿参考下拉（1 → 0） | 每条 `set` 一次全树遍历，N 越大越痛 |
 | ✅ 已修 | 蒙版同步面板侧刷新 | 零任务时 buildLayerTree 全套无意义 |
+| 🔶 待评估 | G（`app.tsx` 常驻探测） | **基数项**：三个子面板全关着它照样跑，优先级应高于 E |
+| 🔶 待评估 | H（两个下拉无 `maxAgeMs`） | 一行改动，收窄触发源的收益才不会被动线抵掉 |
 | 🔶 待评估 | E（三子面板各自挂监听） | 结构性收敛，收益随「常开子面板数」放大 |
 | 🔶 待评估 | B / C / D 轮询间隔 | 低风险微调，需权衡「切文档发现延迟」 |
 | ⛔ 不动 | A（选区填充） | 用户主动功能 |

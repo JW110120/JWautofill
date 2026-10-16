@@ -1068,3 +1068,136 @@ _ox += distX * k;
   真机 `jwwh-9252`：`[calib] lcOut* ext=(55040,23040)` 两次不变，`[status] axMax` 却从
   **55040 退回 44800**（= 退回 lcInExt）⇒ `jumpPx` 等位移门限的分母缩 **19%**。
   ⇒ **上界口径每次标定都重算**（移出守卫），并加 `[calib] 轴上界最终 = N（应 = lcOutExtX）` 一行。
+
+### O5. 0x0110 / 0x0111→0x0112 补流与陈旧判据（2026-10-16 真机定案，由 MEMORY.md 下沉）
+
+- ✅ **补流的自锁已修（0x0110）**：补流（250Hz `GetCursorPos` → 配对 → 两趟拟合 → 合成包）原先只认
+  **强拟合**（保留集≥150 + rms≤8 + 跨度≥1000），而配对**只在真实包到达时产生** ⇒ 「刚挂上就断流」时
+  拟合永远建不起来 = **最需要补流时恰恰建不起来**。新增 `ana_update()` **解析兜底**：
+  `平板 = 屏幕/px + 原点`，只需 ① 标定成立 ② `g_pxSrc==1`（驱动 lcOut 权威，**不依赖配对**）
+  ③ 两轴符号已投票 ④ ≥1 对配对定原点；配对≥16 时用近 64 对核对 rms ≤ `RI_ANA_MAX_RMS`(48 单位=3px)。
+  `g_synOn` 改为 `syn_set()` 统一发布（**强拟合 ∨ 解析**）；`penraw_synth` 系数循环外取一次、强拟合优先。
+  ⛔ 系数跨线程走 **seqlock `g_anaVer`**（detour 与 worker）。
+- ⛔ **真机实测：强拟合判据在本机永远达不到**（rms 9.7~19.4 ≫ 8.0，跨度常卡 572）
+  ⇒ 补流 **100% 靠解析兜底**在扛，`拟合=未建立` 是常态、**不是故障**。
+- ⛔⛔ **过冲根因**：`[dead] 恢复：★冲包量=48 包`（≈驱动队列容量；48÷200Hz ≈ **240ms** 位移一瞬间灌入）。
+  旧守卫「单次 ≥ `RI_BIG_BURST`(25) 包 = 冲包」是**死代码** —— 真机 `最大单次∈{0,1,3,4,5}`、
+  `≥25包次数` 与 `丢冲包` **恒 0**（PS 每拍只取 1~5 包 ⇒ 48 包被拆成十几拍，任何「单次包数」门限都拦不住）。
+  ⇒ 补流已把笔尖喂到**当下**，驱动再把 240ms 前的旧坐标**追加**在它后面 ⇒ 选区**倒退再猛追** = 过冲。
+  ⛔ **判据按时间不按包数**：真实包早于**补流前沿 `g_synFrontT`** 即陈旧，只丢**队首连续**段、追上前沿就停手。
+  ⛔⛔ **连带修复**：`g_lastRealMs` 必须按 **`rRaw`（驱动原始返回）**记 —— 按丢包后的 `r` 记会**自锁**。
+- ⛔⛔ **0x0111→0x0112 陈旧判据重做（第十八轮）**。0x0111 是**死代码**（真机 150/151 采样 `陈旧包=0` 恒成立），
+  根因两条：① **护栏「用陈旧幅度反推时间基」**（`|now−pkTime| ≤ 5000`）—— 停摆 13s/111s 时恢复包**天生**那么旧
+  ⇒ 判「不同基」⇒ **整条放弃**（**量纲混淆：「包有多旧」≠「时间基是否一致」**）；② 窗口以「补流结束」为起点（3s），
+  而真机补流 `18:33:51.077` 结束、恢复 `18:34:01.610` = **10.5s 后** ⇒ 窗口早过。
+  ⇒ 0x0112 三条修法：① `g_pkBaseOk` 改**正面证据**（见过 `age ≤ 400ms` 的包 ⇒ 同基，此后前沿比较**不受幅度限制**）；
+  ② `g_lastRecovMs` 窗口改「**停摆恢复**后 4s」（`prevRealAge >= RI_STALL_MS(250)` 打点，⛔ 必须在更新 `g_lastRealMs` **之前**取）；
+  ③ 新增**按包龄**判据（`age > RI_PKT_STALE_MS(1500)`）覆盖「停摆期没补流」。两条判据**并列**，
+  三道护栏任一不成立**一个字节都不动**。⛔ **铁律：判定能力不能建立在「待证明的前提」上。**
+
+### O6. 进程内工具闸门（`'slct'`，0x0112 新增，`native/PiSmooth8li/ps_tool.c`）
+
+- `SPBasicSuite=md+0x18`、`self=md+0x08`；三 suite `df135117-…ec47`/`bc1e4d70-…f7ee`/`df135115-…ec47`，
+  **version=整数 2**；注册 `ctrl+0x20(refcon,'slct'=0x736c6374,proc)`、注销 `ctrl+0x28(refcon,'All ')`、
+  释放 `basic+0x08(uuid,2)`；偏移 `desc+0x28`GetCount/`+0x18`GetKey/`+0x10`GetType/`+0x100`GetReference/
+  `ref+0x18`GetDesiredClass/`ctrl+0x18`TypeIDToStringID；判据 `GetType()=='obj '(0x6f626a20)` → 类名 `strstr(buf,"Tool")`。
+- ⛔ 方法指针返回类型**一律 `short`**（LNP 只读 `ax`）；引用槽**给足 16 字节**（少给=栈越界写）。
+- ⛔⛔ **三态接管**（宁可不用不可误用）：`0`不可用 / `1`已注册未读数 / `2`已接管 —— **只有 2 才让面板停轮询**，
+  任一步失败退回旧行为（fail-open）。
+- ⛔ **接管后三处必须同步**：① 面板 `syncSmoothToolWatch()` 停表；② `applyToolGate()` 开头 `return`
+  （**唯一咽喉**：`pollSmoothToolGate` 与 `pollToolChange` 都走它）；③ 原生 `write_params()` **不再写 `I_TOOLGATE`**
+  —— 两边都写就是互相覆盖（各自刷戳 ⇒「谁都新鲜」⇒ 切了不生效/换回不恢复）。
+- ⛔ 有效性实测：LNP `log_photoshop.txt` `setPSTool(): PS tool name: lassoTool` 于 **PS 2026/27.8 今天跑通**。
+  ⛔ 新字段 `toolSrc`/`psTool`（`-1`=对端不报 ⇒ 面板保持轮询）。
+- ⛔ **变参日志的 tag 陷阱**：`pstool_log` 是**单 `fmt` 变参**（tag 写死在 `log_line("ps_tool",…)` 内部）
+  ⇒ 调用点多传一个首实参会被当 `fmt`，**真文案与占位符全废**、只打出一行 `ps_tool`，而**编译器不报错**（变参合法）
+  = 静默缺陷。新增变参日志接口时先看清它收不收 tag。
+
+### O7. `.8li` 真机铁律与部署（由 MEMORY.md 下沉）
+
+- ⛔⛔ **.8li 真机铁律**：① PiPL 头部=10 字节；② `'8664'` 入口导出名属性=**C 字符串**
+  （Pascal 串 ⇒ GetProcAddress 失败 ⇒ attach 后 1ms 静默卸载）；③ 加载消息=`"SP Access"/"Reload"`，
+  卸载=`"SP Access"/"Unload"`；④ 引擎+WS 层合并镜像，**无 daemon 无注入**；
+  ⑤ 自写 SHA1 必须用已知向量实测（RFC6455 App.A）。
+- 📌 **PS 插件目录按测试机分叉**：① 双 4K 机 ⇒ `E:\Program Files\Adobe Photoshop 2026\Plug-ins\`；
+  ② **本机（3440×1440 带鱼屏）⇒ `C:\Program Files\Adobe\Adobe Photoshop 2026\Plug-ins\`**。
+  两机都只有**一个** `JWautofillSmooth.8li`。⛔ PS 运行时锁该文件 ⇒ 覆盖前**全部退出** PS（本机常有 3 个进程）。
+- ⛔ **JWA 的 .8li 部署位置**：本机 = `C:\Program Files\Adobe\Adobe Photoshop 2026\Plug-ins\`
+  （`PSUserConfig.txt` 确认 `UseSystemStylus 0` ⇒ 走 WinTab）。**全机只能有一份** —— 两份同名会被 PS 都加载，
+  第二实例检测到「入口已被占用」⇒ state=4（须重启 PS）。⛔ 换 .8li 必须重启 PS。
+- ⛔⛔ 部署只认 `build/JWautofillSmooth.8li`；核验 = 日志头 `ver=0x0XXX` + `[status]` 含 `dpi=N‰`。
+  ⛔ 版本号核验要**走导出表解析**读 `jwwh_version` 函数体前 10 字节（裸搜 `B8 xx 01 00 00 C3` 会漏 —— 函数序言是 `55 48 89 E5`）。
+- ⛔⛔ **IPC 数字字段双防御**：面板 `toWire()` 出口对所有数字一律 `Math.round`（唯一咽喉）；
+  原生侧字段用 `double?`+赋值 Round。漏一个浮点 ⇒ 整条消息被丢 ⇒「切换模式后平滑就断」。
+  **新增字段必须同时做这两件事**。
+- ⛔ **GATETS 由 pump 接管**：`cli_count()>0 || pstool_owns()` 即每 500ms 刷（面板 1500ms 心跳不可靠
+  ⇒ reason=4 fail-closed；⚠️ 进程内闸门接管后**必须**带上后半条 —— `'slct'` 只在工具变化时来，
+  不续期就 3s 过期 fail-closed）；全断且未接管 ⇒ 停刷 ⇒ 3s 过期语义保留。⛔ 独立实测必须关 PS（旧副本占 18924）。
+
+### O8. 进程内模态层级 + Wintab 上下文钩子（0x0113，2026-10-17 LNP 逆向迁移）
+
+- **`modalStateChanged` 读 `'Lvl '`**（`0x4c766c20`，整数）= **PS 模态嵌套层级**。
+  这是 `isPsBusy()` + `MIN_MODAL_GAP_MS` 那套**猜测式**忙碌闸门的**进程内替身**（零 batchPlay）：
+  `-1`不可用 / `0`空闲 / `>0`宿主握着模态作用域。
+  ⛔ `StringIDToTypeID` 在 `sPSActionControl+0x10`（`+0x18` TypeIDToStringID、`+0x20` AddNotify 已在用）。
+  ⛔ 顺序：**先 `StringIDToTypeID` 取 ID，再 `AddNotify`**（LNP `initInstance` → `initCallbacks` 同款）。
+- ⛔⛔ **面板侧三态、禁止并进 `isPsBusy()`**：`psBusyInProc()` 返回 `1`确定忙 / `0`确定闲 / `-1`不可用。
+  `isPsBusy()` 是**否定式**安全闸（宁可多等，漏判=弹框）；层级是**肯定式**事实。
+  若合并，用户主动的填充/描边也会被挡 ⇒ 更糟的回归。⇒ **只给巡检类入口用**（丢一轮无副作用）。
+- ⛔ **`modalTs` 不可与 `Date.now()` 比**（GetTickCount 口径，进程内）。面板侧只用 `modalLevel` 当前值。
+- ⛔ **`CFG_NLONGS` 48 → 56**（2026-10-17）：新增 `I_MODALLVL/MODALTS/TMODAL/TMODALK/DOCEPOCH`。
+  `plugin_main.c` 与 `smooth_engine.c` **必须同步**（谁先建节谁定尺寸，不一致静默截断）。
+- ⛔ **`toolModalStateChanged` 极性未证明 ⇒ 不门控**：LNP 自己的这个回调是**空函数**（`FUN_180007d60`
+  反编译为 `return;`）。本版只取证（`toolModal` / `toolModalKnown`），等真机见过 0 与 1 两种值才接逻辑。
+- **④⑤ 改写类开关一律外置**（`%LOCALAPPDATA%\JWautofill\smooth8li\wtctx.ini`，缺文件=全 0=只观测）：
+  `clearLocks`（清 `lcLocks(+48)` 的 `CXL_SYSOUT=0x10`）/ `fixDpi`（改 `lcSysExt`）/ `queueSize`（`WTQueueSizeSet`）。
+  ⛔ 改口径不该以重编 + 重部署 .8li 为代价（PS 锁文件，覆盖要先完全退出 PS）。
+- ⚠️ **⑤ 的 `lcSysExt` 偏移存疑**：本仓 `[calib]` 实测 = `144/148`；LNP 报告给 `+0xA0/+0xA4`(160/164)。
+  差 16 字节无法静态定案 ⇒ `wtinfo_observe()` **两套都打**，真机日志里谁等于 `SM_CXVIRTUALSCREEN` 谁对。
+- **⑧ `WTSanityCheck`**：`se_wt_moved()` 比对 wintab32 的 `AllocationBase`（`prepare_hook` 时记录），
+  pump 每 500ms 一次，变了落 `[wt] ★wintab32 已重载` 并重挂（`send_cmd(2)` 后 `send_cmd(1)`）。
+  ⛔ 以前看 state/calls 的自愈**不留痕** ⇒ 断流无法归因。
+- **⑨ 工具白名单外置** `%LOCALAPPDATA%\JWautofill\psTools.xml`（照 LNP 的逐工具布尔形态）。
+  ⛔ 缺文件回退 `ci_has(name,"lasso")` —— **逐字等价于**原口径，这是"不引入回归"的依据。
+
+### O9. `'slct'` 活性看门狗 + 面板统一判据（0x0115，2026-10-17 午后 pid 13428 真机定案）
+
+**现象（用户报）**：频繁切换工具后再切回套索，平滑**永久失效**；开关套索平滑开关救不回。
+
+**证据链**（`jwwh-13428.log` + `pi8li.log`，全部可复算）：
+
+- 06:53:13 `.8li` 首读 pencilTool ⇒ `state=2` 接管、面板停轮询（**单点供给形成**）。
+- 06:53:13–06:53:36 `'slct'` 连投 5 次（pencil→gradient→wetBrush→smudge→marqueeEllip）正常。
+- **06:53:36 起 `'slct'` 彻底静默 72 秒**直到进程结束；同期 `toolModalStateChanged`
+  照常投递 40 次（n=52→92）、`modalStateChanged` 也投递 ⇒ **停的只是 `'slct'` 这一路**。
+- 引擎侧 06:53:14 起 `toolOk=0 / reason=2(非套索)` 冻结在 marqueeEllipTool、闸门 `gate=0`。
+- 用户 06:54:10 / 06:54:23 两次开关平滑无效 —— **开关只切 `g_enabled`，不碰 ps_tool 状态**。
+
+**根因（架构层，非偶发）**：⛔⛔ **`'slct'` 是边沿触发、无心跳** —— 只在工具改变时投递，
+而「当前工具」是**持续量**。0x0112 起把它单点押注（`state=2` ⇒ 面板永久停轮询）
+⇒ 通道静默 = 真相永久丢失。**PS 为什么停投未知，但修复不依赖该答案。**
+对比 LNP：同样只注册 `'slct'` 无兜底，但其平滑主链**不依赖工具闸门** ⇒ 故障被掩盖。
+
+**修复（0x0115，已构建核验）**：
+
+- `ps_tool.c`：`s_lastNotifyMs` 记回调时刻（`GetTickCount`，卸载时清零作废心跳）；
+  `pstool_notify_age()` 返回距上次回调 ms（`-1`=从未投递）。
+- ⛔⛔ **`pstool_owns()` = `state==2 ∧ 0 ≤ age < PS_NOTIFY_FRESH_MS(2000)`** ——
+  接管**带时效**，超时即让位面板轮询；`'slct'` 恢复即重新接管。
+- pump 每 500ms 写 `I_NOTIFYAGE` / `I_GATEOWNED`；JSON 字段 **`notifyAge` / `gateOwned`**。
+- ⛔⛔ **单一判据原则**：阈值**只在原生侧算**，面板读 `gateOwned` 这个**结论**，
+  **绝不自己拿 notifyAge 比阈值**（两边各存一份阈值迟早不同步）。
+- 面板 `inProcGateOwned()`（`app.tsx`）：`gateOwned < 0`（旧版 .8li 不报）⇒ 回落
+  `toolSrc === 2`；否则 `gateOwned === 1`。替换 `syncSmoothToolWatch` / `applyToolGate`
+  入口 / 卸载路径三处的裸 `toolSrc` 判据。
+- `LassoSmoothing.ts`：`notifyAge`/`gateOwned` 默认 `-1`，逐个 `=== undefined` 回落，
+  ⛔ 禁 `|| 0`（`notifyAge` 的 -1=从未投递、`gateOwned` 的 -1=对端不报，洗成 0 全读反）。
+- ⛔ **`CFG_NLONGS` 56 → 58**（`CFG_I_NOTIFYAGE` / `CFG_I_GATEOWNED`，两个文件手写同步）。
+- 诊断行 `回调龄=%ds` **按秒取整** + `★陈旧⇒让位面板` 标记：毫秒值每拍都变，会让
+  「diag 变了才打」在静默期每 500ms 一行（实测 72s 静默 = 144 行刷屏）。
+- **2s 阈值理由**：GATETS 续期窗口本就是 ~3s 过期语义；2s 让位后面板轮询接管，
+  与既有节奏同量级，不新造时序假设。
+- **验收判据**：频繁切工具 ≥6 次后切回套索，**HUD 须 ~3s 内恢复**；pi8li.log 应出现
+  `回调龄=…★陈旧⇒让位面板`；日志头 `ver=0x0115`。
+- **遗留（记账）**：P2 冷启动缺口不变（不切工具 ⇒ 永远 `state=1`，功能正常只是没省预算）；
+  P3 根治 = 给 PICA 补同步查询当前工具（`sPSActionControl->Get` 偏移逆向），风险大于收益未做。

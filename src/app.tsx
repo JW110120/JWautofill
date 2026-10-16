@@ -58,6 +58,7 @@ import { FillPanelId, subscribeFillPanelToggle } from './utils/FillPanelToggleBu
 import { setFocusMode } from './utils/FocusModeBus';
 import {
   debouncePsProbe, isPsBusy, markPsBusyForEvent, runWhenIdle,
+  setInProcModalLevel, psBusyInProc,
   markPsBusy, fillReadyRemain,
   // 文档级变化（打开/关闭/切文档）的显式登记入口：供「活动文档 id 巡检」兜底通路使用。
   noteDocLevelEvent,
@@ -1017,8 +1018,12 @@ class App extends React.Component<AppProps, AppState> {
             this.smoothToolTimer = null;
             // 面板卸载后闸门必须回到「未知」：残留的 0（不是套索）会让下次
             // 插件加载后平滑迟迟不生效，而界面上看不出任何原因。
-            // ⛔ 进程内已接管时不放（原生侧接管后忽略面板值；且它自己会持续刷 GATETS）。
-            if (this.state.smoothStatus.pen.toolSrc !== 2) setSmoothToolGate(2);
+            // ⛔ 进程内正供给闸门时不放（原生侧接管后忽略面板值；且它自己会持续刷 GATETS）。
+            // ⛔ 0x0115：判据从 `toolSrc !== 2` 换成带 2 秒时效的 `inProcGateOwned()` ——
+            //    与 syncSmoothToolWatch / applyToolGate / 原生侧 pstool_owns() 同源。
+            //    'slct 静默过 ⇒ 不让位 ⇒ 卸载时放 2（未知）让原生 fail-closed，
+            //    等 .8li 下次收到通知重新接管；比留着一个冻结的错值诚实。
+            if (!this.inProcGateOwned()) setSmoothToolGate(2);
         }
         if (this.quickMaskTimer) {
             clearInterval(this.quickMaskTimer);
@@ -1234,24 +1239,45 @@ class App extends React.Component<AppProps, AppState> {
     private syncSmoothToolWatch() {
         const smoothActive = this.state.smoothStatus.connected && !!this.state.smoothStatus.pen.enabled;
         const autoOffActive = this.state.isEnabled && this.state.autoOffOnOtherTool;
-        // ⛔⛔ 进程内闸门已接管（toolSrc===2）⇒ 这条巡检**整条停掉**。
-        //    它是全工程模态请求的常驻消费者之一（每次都进模态作用域），
-        //    而自动填充 / 快速删除那类操作本身也要占模态预算 —— 两者叠加就是
-        //    用户报的「modal scope 暴涨」；低配机上 PS 忙得久，叠加窗口更长。
-        const inProcGate = this.state.smoothStatus.pen.toolSrc === 2;
-        const need = smoothActive && !autoOffActive && !inProcGate;
+        // ⛔⛔ 0x0115：判据从 `toolSrc === 2` 换成 `inProcGateOwned()`。
+        //    差别只有一处 —— 后者带 **2 秒时效**（原生侧算好、经 gateOwned 下发）：
+        //    'slct' 一旦静默，gateOwned 立刻变 0 ⇒ 本巡检**立即恢复**，闸门真相
+        //    重新由面板供给。真机 pid 13428 就是死在这里：'slct' 连投 5 次后静默
+        //    72 秒，而旧判据 `toolSrc === 2` 一直成立 ⇒ 闸门永久冻结在 gate=0，
+        //    HUD 再不显示，开关平滑也救不回来（开关不改变闸门值）。
+        //    ⇒ 现在「停轮询」从**永久状态**变成**瞬时状态**：静默了就让位，恢复了再停。
+        // ⚠️ 让位时用的是**全速** TOOL_WATCH_INTERVAL_MS(1000ms) 而不降频：
+        //    静默期闸门是错的，纠正速度优先于省预算；省预算的收益只在 'slct'
+        //    真的在投递的那段时间拿到，那已经足够。
+        const gateOwned = this.inProcGateOwned();
+        const need = smoothActive && !autoOffActive && !gateOwned;
         if (need && !this.smoothToolTimer) {
             this.smoothToolTimer = setInterval(() => { void this.pollSmoothToolGate(); }, App.TOOL_WATCH_INTERVAL_MS);
-            void this.pollSmoothToolGate();
+            void this.pollSmoothToolGate();   /* ⛔ 建表时先跑一次：让位瞬间不要空等 1s */
         } else if (!need && this.smoothToolTimer) {
             clearInterval(this.smoothToolTimer);
             this.smoothToolTimer = null;
             // 停掉后把闸门放回「未知」：残留的 0（不是套索）会让下次开启时迟迟不生效，
             // 而界面上看不出任何原因。原生侧还有 3 秒过期兜底，这是双保险。
-            // ⛔ 进程内已接管时不放（放了也没用：原生侧接管后忽略面板值，徒增一次 WS 发送）。
-            if (!inProcGate) setSmoothToolGate(2);
+            // ⛔ 进程内正供给闸门时不放（放了也没用：原生侧接管后忽略面板值，徒增一次 WS 发送）。
+            if (!gateOwned) setSmoothToolGate(2);
         }
     }
+
+    /**
+     * 此刻闸门是否**真的**由进程内 `'slct'` 供给。
+     *
+     * ⛔ 统一咽喉：`syncSmoothToolWatch` 与 `applyToolGate` 都必须走这里 ——
+     *    原生侧 `write_params()` 的让位判据也是同一个结论（它下发的 `gateOwned`），
+     *    两边读的是同一个数，不会出现「面板以为该让位、原生以为不该」的错位。
+     * ⚠️ -1 = 对端是旧版 .8li（不报该字段）⇒ 退回 `toolSrc === 2` 的旧判据。
+     */
+    private inProcGateOwned(): boolean {
+        const p = this.state.smoothStatus.pen;
+        if (p.gateOwned < 0) return p.toolSrc === 2;
+        return p.gateOwned === 1;
+    }
+
 
     /**
      * 巡检一次当前工具并上报闸门。
@@ -1260,7 +1286,9 @@ class App extends React.Component<AppProps, AppState> {
      */
     private async pollSmoothToolGate() {
         if (this.smoothToolBusy && Date.now() - this.smoothToolBusySince < 3000) return;
-        if (isPsBusy()) return;
+        // ⛔ 进程内模态层级 = **确定的事实**（PS 自己报「我正握着模态作用域」），
+        //    比 isPsBusy() 的常数窗口外推可靠 ⇒ 确定忙时直接跳过本轮。
+        if (isPsBusy() || psBusyInProc() === 1) return;
         this.smoothToolBusy = true;
         this.smoothToolBusySince = Date.now();
         try {
@@ -1282,13 +1310,16 @@ class App extends React.Component<AppProps, AppState> {
      *    之前套索平滑短暂待命，这是「只在套索生效」的必要代价。
      */
     private applyToolGate(tool: string | null) {
-        // ⛔⛔ 进程内闸门已接管（toolSrc===2）⇒ 本函数立即退出，一个字节都不写。
-        //    接管后闸门值由 .8li 的 'slct' 回调独占写入（它同时刷 GATETS）；
-        //    面板再写就是两边互相覆盖 —— 各自都在刷时间戳，于是「谁都新鲜」，
+        // ⛔⛔ 此刻闸门由进程内 'slct' 供给（gateOwned===1，带 2 秒时效）⇒ 立即退出，
+        //    一个字节都不写。接管后闸门值由 .8li 的 'slct' 回调独占写入（它同时刷
+        //    GATETS）；面板再写就是两边互相覆盖 —— 各自都在刷时间戳，于是「谁都新鲜」，
         //    现象是工具切了不生效、或换回套索不恢复。
         //    这里是唯一咽喉：pollSmoothToolGate（平滑闸门轮询）与 pollToolChange
         //    （「自动关」的顺带喂闸门）都走它，所以只需在这里挡一次。
-        if (this.state.smoothStatus.pen.toolSrc === 2) {
+        // ⛔ 0x0115：判据换成带时效的 inProcGateOwned() —— 与 syncSmoothToolWatch、
+        //    以及原生侧 write_params() 的让位判据**同源**（都是原生下发的 gateOwned）。
+        //    'slct' 静默 ⇒ gateOwned 变 0 ⇒ 本处放行 ⇒ 面板重新喂闸门 ⇒ 自愈。
+        if (this.inProcGateOwned()) {
             const t = this.state.smoothStatus.pen.psTool;
             if (t && t !== this.lastToolRead) {
                 console.log('[套索平滑闸门] 当前工具 = ' + t + '（进程内 slct 通知）');
@@ -1320,6 +1351,9 @@ class App extends React.Component<AppProps, AppState> {
         //    「取包在涨 + 快照冻结」= 断流（标定丢失等）—— 用户感知的「平滑失效」，
         //    状态条必须如实说出来，不能永远挂「生效中」（2026-10-14 用户要求）。
         const p = s.pen;
+        // 进程内模态层级（PICA modalStateChanged）注入 psProbe：巡检类调用点据此
+        // **确定地**跳过本轮，不再靠常数窗口猜 PS 忙不忙（2026-10-17 LNP 逆向迁移）。
+        if (p) setInProcModalLevel(p.modalLevel);
         if (p && p.packets !== this.lastPenPackets) {
             this.lastPenFlowAt = Date.now();
             this.lastPenPackets = p.packets;
@@ -2881,7 +2915,9 @@ class App extends React.Component<AppProps, AppState> {
         if (this.toolWatchBusy && Date.now() - this.toolWatchBusySince < 3000) return;
         // ⚠️ 忙碌闸门：readCurrentToolId 会发 batchPlay get（application.tool）。
         // 本轮询与用户操作完全异步，切文档期间落进忙碌窗口就会弹宿主原生报错框。
-        if (isPsBusy()) return;
+        // ⛔ 同上：进程内模态层级确定忙 ⇒ 本轮不发 get（丢一轮工具读数无副作用，
+        //    下一轮 300ms 后自会补上）。
+        if (isPsBusy() || psBusyInProc() === 1) return;
         this.toolWatchBusy = true;
         this.toolWatchBusySince = Date.now();
         try {
@@ -2931,7 +2967,8 @@ class App extends React.Component<AppProps, AppState> {
         // ② 常规分支：粗筛 + 一次模态作用域内的身份读。
         // 粗筛：明显还在忙就不去读（本轮跳过，下一轮再看）。文档级事件本身也会
         // 打长窗口，因此忙碌期通常正是「刚发生文档级变化」的时段。
-        if (isPsBusy()) return;
+        // ⛔ 同上：文档身份巡检本身就是 500ms 轮询，确定忙时跳过一轮不影响正确性。
+        if (isPsBusy() || psBusyInProc() === 1) return;
         const r = await psTryRead<number | null>(() => {
             const d = app.activeDocument;
             return d ? (typeof d.id === 'number' ? d.id : null) : null;
@@ -3093,7 +3130,8 @@ class App extends React.Component<AppProps, AppState> {
         if (this.quickMaskBusy) return;
         // ⚠️ 粗筛：本函数是**无条件 300ms 轮询**，与用户操作完全异步，切文档这类
         // 长命令期间必然有机会落进忙碌窗口。忙碌时跳过本轮（快速蒙版状态不要求实时）。
-        if (isPsBusy()) return;
+        // ⛔ 同上：快速蒙版状态不要求实时，确定忙时跳过本轮最划算。
+        if (isPsBusy() || psBusyInProc() === 1) return;
         this.quickMaskBusy = true;
         try {
             const r = await psTryRead<{ id: number | null; isInQuickMask: boolean } | null>(() => {
@@ -3147,7 +3185,8 @@ class App extends React.Component<AppProps, AppState> {
         // 且它的前置条件与本函数完全一致（isEnabled + autoOffOnOtherTool），
         // 因此不存在「放弃就永远不判定」的缺口。
         if (!tool && this.isToolPresetDescriptor(descriptor)) {
-            if (isPsBusy()) return;
+            // ⛔ 同上。
+            if (isPsBusy() || psBusyInProc() === 1) return;
             tool = await this.readCurrentToolId();
         }
         if (!tool) return;

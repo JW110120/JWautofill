@@ -433,6 +433,48 @@ export function isPsBusy(): boolean {
     return Date.now() < psBusyUntil;
 }
 
+/* ------------------------------------------------------------------ *
+ * 进程内模态层级（PICA `modalStateChanged`，2026-10-17）
+ * ------------------------------------------------------------------ *
+ * ⛔ 为什么它比 `isPsBusy()` 强：`isPsBusy()` 是**猜测式**的 —— 它只知道「上次收到
+ * PS 通知是多久之前」，再拿一个常数窗口外推「命令大概跑完了没」。而模态层级是 PS
+ * **自己报的事实**：>0 就是宿主正握着模态作用域，此刻发 get 必撞。
+ *
+ * ⛔ 为什么**不做**成 `isPsBusy()` 的一部分：两者语义不同源 ——
+ *   · `isPsBusy()` 是「否定式」安全闸，宁可多等（漏判 = 弹框，代价高）；
+ *   · 模态层级是「肯定式」事实，只在**巡检类**调用点用作**额外的跳过条件**。
+ *     若把它并进 `isPsBusy()`，那么填充/描边这类**用户主动**路径也会被挡住 ——
+ *     而那些路径本来就有 `psRead` 兜底，用户点了却不动是更糟的回归。
+ * ⇒ 只给轮询用：`psBusyInProc() === 1` 时本轮直接跳过（丢一轮无副作用）。
+ *
+ * ⚠️ 值由 app.tsx 从 .8li 的 smoothState（`pen.modalLevel`）注入，不由本模块自取
+ *    （psProbe 不认识 WS 协议；反过来的依赖方向会造成循环 import）。
+ * ⚠️ -1 = 对端不报 / 从未投递 ⇒ **不可用**，调用方必须退回 `isPsBusy()`，
+ *    绝不能把 -1 当成 0（「宿主空闲」）—— 那恰好会在最该省预算的时候放出去。
+ */
+let inProcModalLevel = -1;
+
+/** 注入 .8li 的进程内模态层级（-1 = 不可用）。 */
+export function setInProcModalLevel(lv: number): void {
+    inProcModalLevel = Number.isFinite(lv) ? lv : -1;
+}
+
+/** 当前进程内模态层级（-1 = 不可用）。 */
+export function inProcModalLevelValue(): number {
+    return inProcModalLevel;
+}
+
+/**
+ * 进程内判据：**确定忙**返回 1、**确定闲**返回 0、**不可用**返回 -1。
+ *
+ * ⚠️ 三态而非布尔：`-1`（不可用）与 `0`（确定闲）的处置**必须不同** ——
+ *    把不可用当闲，等于在最缺信息的时候最激进地发请求。
+ */
+export function psBusyInProc(): number {
+    if (inProcModalLevel < 0) return -1;
+    return inProcModalLevel > 0 ? 1 : 0;
+}
+
 /**
  * 忙碌窗口剩余毫秒数（0 表示已空闲）。
  *
