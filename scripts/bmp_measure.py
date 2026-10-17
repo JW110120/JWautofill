@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Measure the HUD geometry from the screenshots (pure stdlib, no numpy)."""
+"""Measure the HUD/UI geometry from real screenshots (pure stdlib, no numpy).
+
+工具链：img2bmp.ps1（任意图→24bpp BMP）→ 本脚本（测量）→ img_crop_zoom.ps1（局部放大细看）。
+颜色判据（orange/dark 阈值）针对 HUD 橙色取证硬编码，测其他对象时按需改。
+⛔ 仅可用于用户确认为真实的截图；示意图/渲染描述绝不可作测量源。
+"""
 import sys, struct, math
 from collections import deque
 

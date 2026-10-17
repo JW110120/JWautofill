@@ -253,15 +253,21 @@ _ox += distX * k;
   两种解释都成立且不互斥（① 安全软件自保护；② 进程真的卡在内核调用里 ⇒ 停在「已终止但不回收」）。
   **处置结论：重启清干净，别在旧进程上继续试。**
 
-## 8. 诊断工具（本地草稿，不跨机）
+## 8. 诊断工具（scripts/ 沉淀区，git 跟踪）
 
 > ⛔ 2026-10-17 大整理：原 §8 表格列的探针工具（`ws-*-probe.cjs` / `pe-imports.py` /
 > `spike/` / `hookprobe/` 等）全部是 gitignored 的本地一次性脚本，已随清理删除 ⇒
 > **记忆不再按文件名引用它们**（跨机必然悬空）。
 > **目录分工（2026-10-17 定）**：`scripts/` = 沉淀后的诊断工具（git 跟踪、跨机同步，
 > 复核后才从 `analysis/` 晋升）；`analysis/` = 临时分析报告与未复核工具（gitignored）。
-> 已沉淀的两个只读探针：`scripts/wintab_axis_probe.py` / `scripts/wintab_layout_probe.py`
-> （WTInfo 只读侦察，不注入、不模拟输入；低配机复测 Wintab 行为时可直接跑）。
+>
+> **已沉淀工具（scripts/，随仓库同步）**：
+> - `wintab_axis_probe.py` / `wintab_layout_probe.py`：WTInfo 只读侦察（不注入、不模拟
+>   输入）；低配机复测 Wintab 行为时可直接跑。
+> - 截图取证链：`img2bmp.ps1`（任意图→24bpp BMP）→ `bmp_measure.py`（HUD/UI 几何测量：
+>   Kasa 圆拟合 + 连通域 + 端点距离，纯标准库）→ `img_crop_zoom.ps1`（裁剪+最近邻放大）、
+>   `img2ascii.ps1`（ASCII 概览，不看图判断结构）。⛔ 测量源仅限用户确认为真实的截图。
+>
 > 方法论教训保留：① 「从实现**原样抽取**函数编离线自检」——手抄会与实现漂移，
 > 「测试通过」即成假证据（标定函数的 stride/offX/offY 结论见 §9，勿重新猜）；
 > ② 注入类实验在沙箱里会被 SIGTERM（见下方沙箱限制）。
