@@ -13,7 +13,7 @@
 | UXP 接口 / 性能 / React | `refs/uxp-api-layer.md` |
 | 像素处理器算法 | `refs/pixel-algorithms.md` |
 | 构建 / IO / 守护进程 | `refs/toolchain-and-env.md` |
-| 平滑 / HUD / 断流 / 笔通路 | `refs/lasso-smoothing.md`（O1 断流·O2 HUD·O4 axMax·O5 补流·O6 'slct'·O7 .8li·O8 进程内模态层级/Wintab 上下文钩·**O9 'slct' 看门狗让位 0x0115**） |
+| 平滑 / HUD / 断流 / 笔通路 | `refs/lasso-smoothing.md`（O1 断流·O2 HUD·O4 axMax·O5 补流·O6 'slct'·O7 .8li·O8 进程内模态层级/Wintab 上下文钩·**O9 'slct' 看门狗让位 0x0115**·**O10 HUD 焦点门 0x0116**） |
 | modal scope 开销来源 | `docs/modal-scope-audit.md`（第五节 = 2026-10-17 复核出的遗漏 G/H） |
 
 **校验**：改 CSS 跑 `scripts/_css_comment_guard.cjs` + `_modal_contract_guard.cjs` + `_color_picker_contract_guard.cjs`（只扫 `src/styles/*.css`，**不扫 `theme.ts`**）；`npx tsc --noEmit` 只看 `src/` 新增报错；改 `native/PiSmooth8li/*.c` 跑 `build.sh`（零告警）+ 导出表解析核验 `jwwh_version`；改面板 `yarn build`。
@@ -36,6 +36,7 @@
 12. ⛔ **会改写宿主结构的开关一律外置 ini**（`%LOCALAPPDATA%\JWautofill\smooth8li\wtctx.ini`，缺文件=只观测）；改口径不以重编 .8li 为代价（O8）。
 13. ⛔ **`CFG_NLONGS` 现为 58**：动槽位表时 `plugin_main.c` 与 `smooth_engine.c` **同步改**（不同步=静默截断，不报错）。
 14. ⛔ **两本日志分工**：PICA/ps_tool 的一切看 `%LOCALAPPDATA%\JWautofill\smooth8li\pi8li.log`；`%TEMP%\jwwh-<pid>.log` 是引擎日志，**按设计不含 ps_tool 一行**。
+15. ⛔⛔ **HUD 显隐 = 显式 AND 门，每项都是必要条件**（O10）：窗口在·有包流·工具套索∧笔尖接触·一笔之中·前台本进程·**焦点在活动文档画布**（主框 `class="Photoshop"`+`MDIClient` 子树+光标在文档区矩形）·**落笔判据已建立**（`!g_ctUnknown`）·非断流/大跳跃/帧滞后·拉绳模式·面板 bit0·总开关。Wintab 系统上下文与焦点无关 ⇒ 面板上落笔包照常进 ⇒ **必须问 Windows 要焦点**。⛔ `ctOk` 只门 HUD，不改平滑 fail-open。
 
 ## 维护约定
 

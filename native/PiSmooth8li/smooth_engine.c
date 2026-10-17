@@ -4516,6 +4516,136 @@ static volatile LONG g_drawOkDbg    = 1;   /* 工具模态放行 */
 static volatile LONG g_strokeOkDbg  = 0;   /* 真的在一笔之中 */
 static volatile LONG g_lagSkipDbg   = 0;   /* 本帧因滞后被跳过 */
 static volatile LONG g_jumpSkipDbg  = 0;   /* 本帧因大跳跃被跳过 */
+static volatile LONG g_canvasOkDbg  = 1;   /* 焦点在活动文档画布上（0x0116 焦点门） */
+static volatile LONG g_ctOkDbg      = 0;   /* 落笔判据已建立（g_ctUnknown==0） */
+
+/* ============================================== 焦点门（0x0116，2026-10-17 第十八轮）=====
+ * ⛔⛔ 用户铁律（原话）：「焦点不在活动文档的画布上 & 未在画布上落笔时，避免生成 hud」。
+ *    第十七轮的显式 AND 门补了 strokeOk / drawOk / fgOk 三个维度，但用户复测
+ *    **同样两条抱怨依然存在** ⇒ 缺的正是铁律字面的那两个必要条件：
+ *     ⓵ **焦点在活动文档画布上**（canvasOk，本块）—— 实测根因（jwwh-36628）：
+ *        套索工具下在**浮动的 UXP 插件面板**（manifest type=panel，可浮动）上用
+ *        数位笔调参时，Wintab 是**系统上下文**（CXO_SYSTEM，由驱动侧移动光标），
+ *        笔落在面板上包**照常进 detour**（用户截图诊断：取包 18495 / 改写 5966）
+ *        ⇒ 压力/按钮非零 ⇒ 接触判据必然为真 ⇒ 起笔闩锁闩住 ⇒ 旧门控全过。
+ *        **引擎从 Wintab 数据里分辨不了笔在画布还是面板** —— 必须问 Windows 要焦点。
+ *     ⓶ **落笔判据已建立**（!g_ctUnknown，见 wantVisible 处）—— 「程序刚加载
+ *        没落笔就出 HUD」的根因：contact_update 有两条**刻意 fail-open** 的路径
+ *        （判据不可用 g_ctN<=0 / 冷启动宽限 CT_GRACE_PKT=600），加载后信号未取得
+ *        投票权期间 g_contact 恒为 1（jwwh-36628 实测：07:28:45–07:29:46 共 61 秒
+ *        `信号=（无）生效=0`，penDown 随包流置 1）⇒ 只要套索已选 + 面板闸门新鲜，
+ *        没落笔也出 HUD。本场日志因 toolOk=0 侥幸未触发（上了膛没扣扳机），
+ *        用户此前的会话已实见 ⇒ 不是偶发，是**时序依赖**的必然。
+ *    ⚠️ ⓶ 只门 HUD，**不改平滑路径**：fail-open 是防「一开就是死的」的刻意取舍，
+ *       悬空期改写对用户不可见（没落笔 PS 不画），对 HUD 却直接违反铁律。
+ * ========================================================================================= */
+static HWND  s_psFrame;        /* PS 主框（class="Photoshop"、本进程；EnumWindows 实测不猜） */
+static HWND  s_psMdi;          /* 主框内的 MDIClient = 文档区（停靠面板在框内但不在其下） */
+static DWORD s_frameTryAt;     /* 上次解析尝试时刻（未解析出时 2s 退避重试，不每帧 EnumWindows） */
+static int   s_noFrameLogged;  /* 「找不到主框」只打一次（fail-open 降级要留痕但不刷屏） */
+static int   s_cvWhyDbg = -1;  /* 焦点门子原因（边沿触发日志）：0 过 / 1 无框(fail-open) /
+                                  2 前台非主框 / 3 焦点不在文档区 / 4 光标不在文档区矩形 */
+static int   s_frameAttempts;  /* 解析尝试计数（全景转储节流用） */
+static int   s_treeDumped;     /* 解析成功后的全景是否已转储过 */
+
+static BOOL CALLBACK frame_pick_cb(HWND h, LPARAM lp)
+{
+    DWORD pid = 0;
+    GetWindowThreadProcessId(h, &pid);
+    if (pid != (DWORD)lp) return TRUE;
+    char cls[64];
+    cls[0] = 0;
+    GetClassNameA(h, cls, sizeof(cls) - 1);
+    if (strcmp(cls, "Photoshop") != 0) return TRUE;   /* 只要主框：浮出面版/对话框类名不同 */
+    s_psFrame = h;
+    return FALSE;                                     /* 找到即停 */
+}
+
+/* 全景转储：本进程全部顶层窗口的类名/可见性/标题。
+   ⛔ 存在的意义 = 类名假设万一不成立时，日志里有**地面真相**可一次修对，
+      而不是再问用户要一轮窗口截图。只在「首次解析」与「解析成功」两个时机打。 */
+static BOOL CALLBACK frame_dump_cb(HWND h, LPARAM lp)
+{
+    DWORD pid = 0;
+    GetWindowThreadProcessId(h, &pid);
+    if (pid != (DWORD)lp) return TRUE;
+    char cls[64], title[96];
+    cls[0] = 0; title[0] = 0;
+    GetClassNameA(h, cls, sizeof(cls) - 1);
+    GetWindowTextA(h, title, sizeof(title) - 1);
+    logf("# [hud] 焦点门·本进程顶层窗口: hwnd=%p class=%s vis=%d title=%s\n",
+         (void *)h, cls, IsWindowVisible(h) ? 1 : 0, title);
+    return TRUE;
+}
+
+/* 解析（或重解析）主框与文档区。泵线程调用，2s 退避；解析成功后每帧只 IsWindow。 */
+static void frame_resolve(DWORD now)
+{
+    if (s_psFrame && !IsWindow(s_psFrame)) { s_psFrame = NULL; s_psMdi = NULL; }
+    if ((!s_psFrame || !s_psMdi) && (DWORD)(now - s_frameTryAt) >= 2000) {
+        s_frameTryAt = now;
+        s_frameAttempts++;
+        if (!s_psFrame) {
+            s_psFrame = NULL;
+            EnumWindows(frame_pick_cb, (LPARAM)GetCurrentProcessId());
+            if (s_psFrame) {
+                s_noFrameLogged = 0;
+                logf("# [hud] 焦点门：主框=%p（class=Photoshop 实测）\n", (void *)s_psFrame);
+            } else if (!s_noFrameLogged) {
+                s_noFrameLogged = 1;
+                logf("# [hud] 焦点门：未找到 class=Photoshop 主框 ⇒ 本门 fail-open"
+                     "（保持旧行为，HUD 仍受其余门控约束）\n");
+            }
+        }
+        if (s_psFrame) {
+            HWND m = FindWindowExW(s_psFrame, NULL, L"MDIClient", NULL);
+            if (m != s_psMdi) {
+                s_psMdi = m;
+                logf("# [hud] 焦点门：MDIClient=%p%s\n", (void *)s_psMdi,
+                     s_psMdi ? "" : "（缺失 ⇒ 退粗判：焦点根窗口须为框）");
+            }
+            if (!s_treeDumped) {
+                s_treeDumped = 1;
+                EnumWindows(frame_dump_cb, (LPARAM)GetCurrentProcessId());
+            }
+        } else if (s_frameAttempts == 1) {
+            /* 第一次就没找到：立刻转储全景（此刻 PS 可能刚起，框未必已建；
+               若之后才找到，上面的 !s_treeDumped 分支会再转储一次完整画面） */
+            EnumWindows(frame_dump_cb, (LPARAM)GetCurrentProcessId());
+        }
+    }
+}
+
+/* 焦点门求值。返回 1 = 焦点在活动文档画布上（HUD 才准出）。
+ * why 出参：0 过 / 1 主框未解析(fail-open) / 2 前台不是主框（浮出面版·对话框·别的 app）
+ *          / 3 焦点不在文档区（停靠面板·工具条·选项栏） / 4 光标不在文档区矩形
+ *          （不抢焦点的面板：笔落在面板上而焦点没动，最后一网）。
+ * ⛔ cur 必须与快照同刻读（调用方保证）：判的是**原始笔尖**（系统光标）在不在文档区。 */
+static int canvas_focus_ok(POINT cur, int *why)
+{
+    *why = 0;
+    if (!s_psFrame) { *why = 1; return 1; }        /* 解析不出 ⇒ fail-open 保功能 */
+    HWND fg = GetForegroundWindow();
+    if (fg != s_psFrame) { *why = 2; return 0; }
+    DWORD pid = 0;
+    DWORD tid = GetWindowThreadProcessId(fg, &pid);
+    GUITHREADINFO gti;
+    gti.cbSize = sizeof(gti);
+    HWND focus = (tid && GetGUIThreadInfo(tid, &gti)) ? gti.hwndFocus : NULL;
+    if (s_psMdi) {
+        if (!(focus && (focus == s_psMdi || IsChild(s_psMdi, focus)))) { *why = 3; return 0; }
+        RECT mr;
+        if (!GetWindowRect(s_psMdi, &mr)) { *why = 3; return 0; }
+        InflateRect(&mr, 1, 1);   /* PtInRect 排除右/下边界 ⇒ 贴边作画会闪，外扩 1px 兜底 */
+        if (!PtInRect(&mr, cur)) { *why = 4; return 0; }
+        return 1;
+    }
+    /* 无 MDIClient（非 MDI 形态的意外）⇒ 粗判：焦点根窗口必须是主框 */
+    HWND root = focus ? GetAncestor(focus, GA_ROOT) : NULL;
+    if (root == s_psFrame) return 1;
+    *why = 3;
+    return 0;
+}
 
 /**
  * 帧等待：可等待定时器（kernel32，**不需要**为 timeBeginPeriod 链 winmm）。
@@ -4937,18 +5067,58 @@ static DWORD WINAPI hud_thread(LPVOID param)
                  正常期「选区末端 vs 笔尖」的几何提示。 */
         int deadNow = (g_streamDead && g_penDown == 1) ? 1 : 0;
         int activeNow = (pktAge < HUD_IDLE_MS || (gateOk && pktAge < HUD_HOLD_MS));
-        /* ⛔⛔ 显式 AND 门（2026-10-17 第十七轮）—— 每一项都是**必要条件**，少一项就不出 HUD：
+        /* ⛔⛔ 显式 AND 门（第十七轮 + 第十八轮）—— 每一项都是**必要条件**，少一项就不出 HUD：
              窗口在 · 有包流 · 工具是套索且笔尖接触 · **真的在一笔之中**
-             · **前台是本进程** · 非断流 · 非大跳跃 · 非帧滞后 · 拉绳模式 · 面板开了 bit0 · 总开关开
+             · **前台是本进程** · **焦点在活动文档画布上** · **落笔判据已建立**
+             · 非断流 · 非大跳跃 · 非帧滞后 · 拉绳模式 · 面板开了 bit0 · 总开关开
            ⚠️ 「工具在绘制态」（`toolModalStateChanged`）**已于 2026-10-17 真机证伪并移出
               门控**（见 `drawOk` 定义处），此处保留在诊断行里只为继续取证。
            ⛔ 初值语义：`strokeOk` 在加载后必然是 0（g_strokeGate 初值 -1，只有真正
-             起笔才被闩成 1）⇒ 「刚加载就出 HUD」从构造上就不可能。 */
+             起笔才被闩成 1）⇒ 「刚加载就出 HUD」从构造上就不可能。
+           ⛔⛔ 第十八轮（0x0116）补铁律字面的最后两项，用户复测十七条抱怨仍在：
+             · **canvasOk**（焦点在活动文档画布上）：面板上用数位笔调参时 Wintab
+               系统上下文照常进包（接触判据必然为真）⇒ 必须问 Windows 要焦点，
+               见 `canvas_focus_ok` 上方大注释。
+             · **ctOk**（落笔判据已建立）：contact_update 有两条刻意 fail-open
+               （判据不可用 / 冷启动宽限），加载后 61s 实测 penDown 随包流置 1
+               （jwwh-36628：07:28:45–07:29:46 `信号=（无）生效=0`）⇒ 没落笔也出 HUD。 */
         int fgOk = (g_fgOkDbg != 0) ? 1 : 0;
+        frame_resolve(now);
+        int cvWhy = 0;
+        int canvasOk = canvas_focus_ok(cur, &cvWhy);
+        int ctOk = (g_ctUnknown == 0) ? 1 : 0;
+        if (cvWhy != s_cvWhyDbg) {
+            /* 边沿触发：只在焦点门结论翻转时打一行，带窗口类名 ⇒ 用户日志可与操作逐条对齐 */
+            s_cvWhyDbg = cvWhy;
+            if (cvWhy == 0) {
+                logf("# [hud] 焦点门恢复: 焦点回到活动文档画布（frame=%p mdi=%p）\n",
+                     (void *)s_psFrame, (void *)s_psMdi);
+            } else {
+                static const char *whyTxt[] = {
+                    "", "主框未解析⇒本门放行(fail-open)", "前台不是主框",
+                    "焦点不在文档区", "光标不在文档区矩形"
+                };
+                HWND fg2 = GetForegroundWindow();
+                DWORD pid2 = 0, tid2 = fg2 ? GetWindowThreadProcessId(fg2, &pid2) : 0;
+                GUITHREADINFO gti2;
+                gti2.cbSize = sizeof(gti2);
+                HWND foc2 = (tid2 && GetGUIThreadInfo(tid2, &gti2)) ? gti2.hwndFocus : NULL;
+                char fa[64], fb[64];
+                fa[0] = 0; fb[0] = 0;
+                if (fg2)  GetClassNameA(fg2, fa, sizeof(fa) - 1);
+                if (foc2) GetClassNameA(foc2, fb, sizeof(fb) - 1);
+                logf("# [hud] 焦点门: why=%d(%s) fg=%p(%s) focus=%p(%s)"
+                     " frame=%p mdi=%p cur=(%ld,%ld)\n",
+                     cvWhy, whyTxt[cvWhy], (void *)fg2, fa, (void *)foc2, fb,
+                     (void *)s_psFrame, (void *)s_psMdi, (long)cur.x, (long)cur.y);
+            }
+        }
         InterlockedExchange(&g_strokeOkDbg, strokeOk ? 1 : 0);
         InterlockedExchange(&g_drawOkDbg,   drawOk  ? 1 : 0);
+        InterlockedExchange(&g_canvasOkDbg, canvasOk ? 1 : 0);
+        InterlockedExchange(&g_ctOkDbg,     ctOk ? 1 : 0);
         int wantVisible = (wnd && mem && activeNow && gateOk && strokeOk && drawOk && fgOk
-                           && !deadNow && !bigJump && !lagSkip && ropeMode
+                           && canvasOk && ctOk && !deadNow && !bigJump && !lagSkip && ropeMode
                            && (hf & 1) && g_cfg && g_cfg[CFG_I_ENABLED]) ? 1 : 0;
         if (!wantVisible) {
             if (wnd && IsWindowVisible(wnd)) ShowWindow(wnd, SW_HIDE);
@@ -4959,17 +5129,22 @@ static DWORD WINAPI hud_thread(LPVOID param)
                  active=0       ⇒ 钩子没挂（g_patched=0 ⇒ t 会一直涨）或久无包
                  gate=0         ⇒ toolOk/penDown 有 0：工具不对，或笔没落纸面，
                                   或落笔判据不可用（另见 contactUnknown）
+                 cv=0           ⇒ 焦点门挡住：前台是浮出面版/对话框、焦点在停靠面板/
+                                  工具条、或光标（原始笔尖）不在文档区矩形内。
+                                  子原因看上一行「焦点门: why=」（边沿触发）
+                 ctU=1          ⇒ 落笔判据未建立（信号无投票权 / 判据不可用）——
+                                  刻意不出 HUD：此刻的 penDown 可能是 fail-open 假值
                  rope=0         ⇒ 当前不是「拉绳」模式（HUD 只在拉绳模式出现）
                  hudBits 无 bit0 ⇒ 面板的「拉绳提示」是关的 */
             if (g_cfg && g_cfg[CFG_I_ENABLED] && (DWORD)(now - lastHudWhy) >= 2000) {
                 lastHudWhy = now;
                 logf("# [hud] 未显示: wnd=%d mem=%d active=%d(t=%ldms) gate=%d"
-                     "(toolOk=%ld penDown=%ld) stroke=%d draw=%d(tm=%ld,k=%ld) fg=%d "
+                     "(toolOk=%ld penDown=%ld) stroke=%d draw=%d(tm=%ld,k=%ld) fg=%d cv=%d ctU=%ld "
                      "jump=%d lag=%d rope=%d hudBits=%ld dead=%ld deadHide=%d\n",
                      wnd ? 1 : 0, mem ? 1 : 0, activeNow, (long)pktAge, gateOk,
                      (long)g_toolOk, (long)g_penDown, strokeOk, drawOk,
                      (long)tmv, (long)tmK,
-                     fgOk, bigJump, lagSkip, ropeMode, (long)hf,
+                     fgOk, canvasOk, (long)g_ctUnknown, bigJump, lagSkip, ropeMode, (long)hf,
                      (long)g_streamDead, deadNow);
             }
             hud_frame_wait(frameTimer);
@@ -5338,8 +5513,11 @@ static void hud_stop(void)
    0x0113 = 9 条 LNP 迁移（slct/modalStateChanged/toolModalStateChanged/Opn/Cls…）
    0x0114 = drawOk 恒放行（toolModalStateChanged 的 'Lvl ' 1ms 翻转误门控）+ lcSysExt A/W 分偏移
    0x0115 = 'slct' 活性看门狗：pstool_owns() 加 2s 时效 + I_NOTIFYAGE/I_GATEOWNED 下发
-            + 面板 inProcGateOwned() 统一判据（静默即让位，自愈轮询兜底） */
-__declspec(dllexport) int jwwh_version(void) { return 0x0115; }
+            + 面板 inProcGateOwned() 统一判据（静默即让位，自愈轮询兜底）
+   0x0116 = HUD 焦点门（用户铁律「焦点不在活动文档画布上 & 未落笔 ⇒ 不出 HUD」）：
+            canvasOk（主框/MDIClient/焦点/光标四子条件，实测类名不猜）+ ctOk
+            （落笔判据已建立才准出 HUD，堵死 contact 两条 fail-open 对 HUD 的泄漏） */
+__declspec(dllexport) int jwwh_version(void) { return 0x0116; }
 
 /* 兜底还原入口：守护进程的正常路径是经共享内存下令（worker 执行），
    此导出供外部工具（脚本/排障）在不需要共享内存时直接远程调用。 */
