@@ -5,7 +5,7 @@
 // - 守护进程全局捕获按键后广播 hotkey 事件，插件执行「总开关切换 / 直接 select 笔刷」。
 
 import { action, app } from 'photoshop';
-import { shell, storage } from 'uxp';
+import { storage } from 'uxp';
 import { MainToggleState, requestMainToggle, requestMainToggleOff } from '../utils/MainToggleBus';
 import { requestFillPanelToggle } from '../utils/FillPanelToggleBus';
 import { psRead, runAsModal } from '../utils/psAccess';
@@ -157,6 +157,29 @@ let pendingRecord: ((r: { combo: string } | null) => void) | null = null;
 // 面板据此把该行显示为「已捕获 XXX，待确认」。录制的确认/取消仍由 recordResult/recordCancel 兑现。
 const recordProgressListeners: ((combo: string) => void)[] = [];
 const statusListeners: ((c: boolean) => void)[] = [];
+// 热键布防状态监听（.8li 形态新增）：服务就绪（WS 可达）≠ 热键生效，
+// 「布防/撤防」是独立开关（hotkeyArm）。帧来源有二：
+//   ① 看护线程的跃变广播 hotkeyState（状态变化后约 240ms 内）；
+//   ② 面板主动请求 hotkeyStatus 的回帧（连上后要一次，供开关对齐真实状态）。
+export interface HotkeyStateInfo {
+  armed: boolean;          // 是否已布防（钩子是否允许安装/生效）
+  hookInstalled: boolean;  // 钩子句柄当前是否真的装着
+  safeMode: boolean;       // 是否处于熔断降级（连续超预算，纯放行）
+  active: boolean;         // 配置里是否有非空组合键（装载态）
+  comboCount: number;      // 已注册组合键数
+  recording: boolean;      // 是否正在录制
+}
+const hotkeyStateListeners: ((st: HotkeyStateInfo) => void)[] = [];
+export function onHotkeyState(fn: (st: HotkeyStateInfo) => void): () => void {
+  hotkeyStateListeners.push(fn);
+  return () => { const i = hotkeyStateListeners.indexOf(fn); if (i >= 0) hotkeyStateListeners.splice(i, 1); };
+}
+function emitHotkeyState(st: HotkeyStateInfo) {
+  for (const l of hotkeyStateListeners) { try { l(st); } catch { /* ignore */ } }
+}
+// 「键盘卡死一键修复」的待兑现回帧（.8li 完成进程内基础修复 + 提权唤起设备层
+// 脚本后回 repairResult；提权窗口是异步的，回帧只确认「已唤起」）。
+let pendingRepair: ((msg: string) => void) | null = null;
 // 热键触发监听（供面板显示触发反馈，也便于用户确认事件链路是否打通）
 // enabled 仅对 toggleMain 有效，取自共享总线翻转后的真实状态——
 // 提示文字必须说真话：以前无条件显示「已切换」，实际上什么都没切换。
@@ -173,27 +196,11 @@ export function onDaemonStatus(fn: (c: boolean) => void): () => void {
   return () => { const i = statusListeners.indexOf(fn); if (i >= 0) statusListeners.splice(i, 1); };
 }
 
-// 从插件拉起守护进程（UXP shell.openPath 可直接启动本地 exe）。
-// 注意：对 .ps1/.bat 等脚本，openPath 会用编辑器打开而非执行，调用方应先校验扩展名。
-export function launchDaemon(exePath: string): boolean {
-  const p = (exePath || '').trim().toLowerCase();
-  if (!p) return false;
-  if (p.endsWith('.ps1') || p.endsWith('.bat') || p.endsWith('.cmd')) {
-    console.warn('⚠️ 启动路径不是 exe，请改用安装器或手动运行 exe');
-    return false;
-  }
-  try {
-    shell.openPath(exePath);
-    return true;
-  } catch (e) {
-    console.error('⚠️ 启动守护进程失败:', e);
-    return false;
-  }
-}
-
-// 让守护进程优雅退出（面板「断开守护进程」用）。
-// 直接杀死进程在 UXP 里做不到，而卸载脚本又要求进程先停掉才能删安装目录，
-// 所以由守护进程自己退出是最干净的做法。
+// 让快捷键服务「脱钩」（面板「热键开关」关闭时用）。
+// ⚠️ .8li 形态语义变更（2026-10-17 M3 迁移）：守护进程已退役，快捷键钩子改由
+//    Photoshop 扩展「JWautofill Smooth」（.8li）在 PS 进程内承载 ⇒ 服务**不可启停**
+//    （与 PS 共命运）。原 shutdown 语义降级为「撤防 + bye + 断开本连接」：
+//    服务器保持监听，热键暂停生效，重载/重连即恢复。
 export function disconnectDaemon(): boolean {
   try {
     if (currentWs && currentWs.readyState === (currentWs.OPEN ?? 1)) {
@@ -214,6 +221,96 @@ export function sendDaemonCommand(type: string): boolean {
     }
   } catch { /* ignore */ }
   return false;
+}
+
+/**
+ * 布防 / 撤防热键钩子（.8li 形态的「热键总开关」）。
+ *
+ * ⚠️ 与旧版「起停守护进程」的本质区别：服务（.8li 内的 WS 18923）不可启停，
+ *    这个开关只控制**钩子要不要装**。撤防后：
+ *      · 已装的钩子立即卸掉（按键不再被拦截，PS 恢复原生行为）；
+ *      · 配置/连接原样保留，重新打开即恢复，无需重载插件。
+ *    未连接时返回 false（调用方应引导用户确认扩展已启用）。
+ */
+export function setHotkeyArm(on: boolean): boolean {
+  try {
+    if (currentWs && currentWs.readyState === (currentWs.OPEN ?? 1)) {
+      currentWs.send(JSON.stringify({ type: 'hotkeyArm', on }));
+      return true;
+    }
+  } catch { /* ignore */ }
+  return false;
+}
+
+/** 主动询问布防状态（回帧 hotkeyState，见 onHotkeyState）。 */
+export function requestHotkeyStatus(): boolean {
+  try {
+    if (currentWs && currentWs.readyState === (currentWs.OPEN ?? 1)) {
+      currentWs.send(JSON.stringify({ type: 'hotkeyStatus' }));
+      return true;
+    }
+  } catch { /* ignore */ }
+  return false;
+}
+
+/**
+ * 解析内置修复脚本 fix-keyboard.ps1 的全路径。
+ *
+ * ⛔ 为什么必须由面板解析后**传参**给 .8li：.8li 装在 Photoshop 的 Plug-ins
+ *    目录（不是 UXP 面板插件的根目录），无法从自身路径推导插件根 ⇒ 拿不到
+ *    脚本位置。面板经 getPluginFolder() 解析后随 repairKeyboard 消息下发。
+ */
+export async function resolveRepairScriptPath(): Promise<string> {
+  try {
+    const folder: any = await storage.localFileSystem.getPluginFolder();
+    const root: string = folder?.nativePath || '';
+    if (!root) return '';
+    const sep = root.includes('\\') ? '\\' : '/';
+    return root + sep + 'native' + sep + 'HotkeyDaemon' + sep + 'fix-keyboard.ps1';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * 「键盘卡死一键修复」：经 WS 让 .8li 在**进程内**完成基础修复
+ * （卸钩 → 复位 LowLevelHooksTimeout → 释放卡住的修饰键 → 重启 ctfmon），
+ * 再提权唤起设备层脚本（pnputil 软重置键盘设备链 / 关闭 USB 省电策略，
+ * 脚本自含 UAC，鼠标点「是」即可，不依赖键盘输入）。
+ *
+ * 修复后快捷键**保持撤防**：若冻结真是钩子造成的，自动重挂等于再冻一次；
+ * 用户确认键盘恢复后在面板重新打开开关即可。
+ *
+ * @param script fix-keyboard.ps1 全路径（resolveRepairScriptPath 的解析结果）
+ * @returns repairResult.message；未连接/超时返回诊断文案
+ */
+export function requestKeyboardRepair(script: string): Promise<string> {
+  return new Promise((resolve) => {
+    if (!currentWs || currentWs.readyState !== (currentWs.OPEN ?? 1)) {
+      resolve('快捷键服务未连接：请确认 Photoshop 已启用「JWautofill Smooth」扩展'
+        + '（菜单：窗口 → 插件），然后重新加载本面板再试。');
+      return;
+    }
+    let settled = false;
+    const done = (m: string) => {
+      if (settled) return;
+      settled = true;
+      if (pendingRepair === done) pendingRepair = null;
+      resolve(m);
+    };
+    pendingRepair = done;
+    try {
+      currentWs.send(JSON.stringify({ type: 'repairKeyboard', script }));
+    } catch {
+      done('发送修复指令失败：请重新加载插件后重试。');
+      return;
+    }
+    // 回帧兜底：.8li 侧是同步基础步骤 + 异步唤起提权窗口，15s 足够；
+    // 超时按「已发出」提示（旧版服务迁移窗口内指令会被旧 daemon 吞掉，也会落到这里）。
+    setTimeout(() => done(
+      '修复指令已发出，但未收到确认。若刚刚迁移过旧版快捷键服务，请等几秒重试；'
+      + '若键盘仍异常，请重启 Photoshop。'), 15000);
+  });
 }
 
 // ⚠️ 历史坑（2026-08-30）：这里曾经是「注册一个面板内回调，热键到达时直接调用」。
@@ -248,29 +345,21 @@ export function registerRepairKeyboardHandler(fn: () => Promise<string>) {
 export async function requestRepairKeyboard(): Promise<string> {
   // ⚠️ 兜底（2026-09-06）：「笔刷热键」分区折叠时组件未挂载 → 没有任何实现注册进来，
   // 旧版只会返回一句提示然后被吞掉（dialogs.alert 在 PS 里不显示）→ 用户点了毫无反应。
-  // 键盘卡死是自救场景，任何时候都必须可用：这里直接唤起内置修复脚本（会弹出 CMD 窗口显示结果）。
+  // 键盘卡死是自救场景，任何时候都必须可用。
+  //
+  // ⚠️ .8li 形态（2026-10-17）：FixKeyboard.exe 已随守护进程一起退役，兜底改走
+  //    同一条 WS 修复链路（进程内基础修复 + 提权跑 fix-keyboard.ps1）——
+  //    未连接时只能给引导（脚本无法经 shell.openPath 直接执行，见下方说明）。
   if (!repairKeyboardHandler) {
-    try {
-      const folder: any = await storage.localFileSystem.getPluginFolder();
-      const root: string = folder?.nativePath;
-      if (root) {
-        const sep = root.includes('\\') ? '\\' : '/';
-        // ⚠️ 必须唤起 .exe 而非 .bat：UXP 的 shell.openPath 对 .bat/.ps1 只会「用编辑器打开而非执行」，
-        // 对 .exe 才会真正运行并弹出可见控制台窗口（守护进程 JWautofillHotkeyDaemon.exe 即此方式启动）。
-        const full = root + sep + 'native' + sep + 'HotkeyDaemon' + sep + 'FixKeyboard.exe';
-        const r: any = await shell.openPath(full);
-        if (typeof r === 'string' && r.length > 0) {
-          // 兜底：直接唤起失败时打开脚本所在目录（manifest launchProcess.extensions 含 ""），
-          // 用户鼠标双击 FixKeyboard.exe 即可——键盘卡死场景只有鼠标可用，不能让用户自己找路径。
-          try { await shell.openPath(root + sep + 'native' + sep + 'HotkeyDaemon'); } catch { }
-          return '唤起键盘修复工具失败：' + r + '。已打开工具所在目录，请双击 FixKeyboard.exe。';
-        }
-        return '已打开键盘修复窗口（CMD），请按窗口内提示查看结果；修复完成后请立即测试键盘。';
-      }
-    } catch (e: any) {
-      return '键盘修复失败：' + (e?.message || String(e));
+    if (!connected) {
+      return '快捷键服务未连接：请确认 Photoshop 已启用「JWautofill Smooth」扩展'
+        + '（菜单：窗口 → 插件），然后重新加载本面板再试。';
     }
-    return '键盘修复功能尚未就绪（请展开「笔刷热键」分区后重试）';
+    const script = await resolveRepairScriptPath();
+    if (!script) {
+      return '未找到内置修复脚本 fix-keyboard.ps1（应位于插件目录 native/HotkeyDaemon 下），请重新安装插件。';
+    }
+    return requestKeyboardRepair(script);
   }
   try { return await repairKeyboardHandler(); }
   catch (e: any) { return '键盘修复失败：' + (e?.message || String(e)); }
@@ -367,6 +456,9 @@ export function connectHotkeyDaemon(): () => void {
             }
           } catch { /* ignore */ }
           try { ws.send(JSON.stringify({ type: 'getConfig' })); } catch { /* ignore */ }
+          // .8li 形态：拉一次布防状态，让面板开关对齐服务真实状态
+          // （g_khArmed 默认 true，但迁移/修复后可能被改过，不能想当然）。
+          try { ws.send(JSON.stringify({ type: 'hotkeyStatus' })); } catch { /* ignore */ }
           // 重连后同步布防状态：守护进程在客户端断开时会撤防，
           // 若本上下文仍持有布防权（选中未变），这里重发一次 armDelete。
           if (armedDeleteOwner) {
@@ -421,6 +513,26 @@ export function connectHotkeyDaemon(): () => void {
             const owner: string = typeof msg.owner === 'string' ? msg.owner : '';
             for (const l of backspaceDeleteListeners) { try { l(owner); } catch { /* ignore */ } }
           }
+          else if (msg?.type === 'hotkeyState') {
+            // 布防状态（跃变广播 / hotkeyStatus 回帧）：驱动面板的「热键开关」
+            emitHotkeyState({
+              armed: msg.armed === true,
+              hookInstalled: msg.hookInstalled === true,
+              safeMode: msg.safeMode === true,
+              active: msg.active === true,
+              comboCount: typeof msg.comboCount === 'number' ? msg.comboCount : 0,
+              recording: msg.recording === true,
+            });
+          }
+          else if (msg?.type === 'repairResult') {
+            if (pendingRepair) {
+              const r = pendingRepair;
+              pendingRepair = null;
+              r(typeof msg.message === 'string' && msg.message
+                ? msg.message
+                : '修复已完成，请立即测试键盘；快捷键暂保持关闭，确认正常后可在面板重新打开。');
+            }
+          }
         } catch { /* ignore */ }
       };
       ws.onclose = () => {
@@ -430,6 +542,9 @@ export function connectHotkeyDaemon(): () => void {
         //    看上去像是把平滑也一起停掉了。
         // 连接断开时若仍有挂起的录制，直接取消，避免 UI 永远停在「录制中」
         if (pendingRecord) { const r = pendingRecord; pendingRecord = null; r(null); }
+        // 修复回帧同样不能挂起：连接断了就再等不到 repairResult，
+        // 立刻兑现超时文案（避免 UI 卡 15s 才知道失败）。
+        if (pendingRepair) { const r = pendingRepair; pendingRepair = null; r('连接已断开，修复未收到确认；请重新加载插件后重试。'); }
         if (!closedByUs) timer = setTimeout(open, 1500);
       };
       ws.onerror = () => { try { ws.close(); } catch { /* ignore */ } };

@@ -1,0 +1,1989 @@
+/* JWautofill Smooth .8li — 键盘钩子/热键子系统（M3：HotkeyDaemon 进程内化）
+ *
+ * 背景（为什么把独立守护进程搬进 .8li）：
+ *   旧形态 = native/HotkeyDaemon（约 65M 自包含 exe）+ FixKeyboard（约 76M），
+ *   dist/native 合计 138M。WH_KEYBOARD_LL **不要求 DLL 注入**（hMod 被系统忽略），
+ *   可以挂在任意带消息循环的线程上 ⇒ .8li（PS 启动即加载、已有 WS 服务器与
+ *   看护线程）是同构宿主。迁移后 dist 体积降到 10M 内。
+ *
+ * 本文件逐字移植 Program.cs（ROLE=热键）的语义，面板契约不变：
+ *   入站：setConfigPath / shutdown / uninstall / config / getConfig / getState /
+ *         hotkeyArm / hotkeyStatus / recordStart / recordCancel / armDelete /
+ *         disarmDelete
+ *   出站：config（payload+path）/ state / hotkeyState / hotkey / recordCaptured /
+ *         recordResult / recordCancel / backspaceDelete / bye
+ *
+ * ⛔⛔ 钩子回调铁律（LowLevelHooksTimeout 被放大时一次阻塞 = 全系统键盘冻结）：
+ *   kh_proc 路径内每一步必须 O(1)、无锁（除「引用快照」级临界区）、无文件 I/O、
+ *   不抛异常。所有网络写一律入出站队列，由调度线程代发；所有日志一律入内存环，
+ *   由调度线程代打。超预算（100ms）连续 3 次即熔断纯放行，30s 冷却自愈。
+ *
+ * ⛔ 单持有者纪律（多 PS 实例）：只有 bind 18923 成功的实例才装键盘钩子
+ *   （前台 PID ∈ photoshop 进程集合 的焦点闸门复刻 daemon 语义）。
+ *   bind 失败 ⇒ 每 3s 重试；若探测到占用者是**旧版 daemon**（version
+ *   2026-10-12.x），以 WS 客户端发 uninstall 令其自清自启+安装目录后退出，
+ *   下一轮重试即可接管（升级部署的关键路径）。
+ */
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#include <tlhelp32.h>     /* toolhelp 进程枚举：前台 PS PID 集合 */
+#include <shellapi.h>     /* ShellExecuteExW：键盘修复的设备层脚本提权唤起 */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdarg.h>
+
+#include "jw_shared.h"
+#include "ws_core.h"
+
+/* ================================================================ 常量 */
+
+#define KH_PORT          18923
+#define KH_VERSION       "2026-10-17.1"
+#define KH_BUDGET_MS     100      /* 单次钩子回调耗时预算（Program.cs HookBudgetMs） */
+#define KH_STRIKES       3        /* 连续超预算多少次才熔断 */
+#define KH_COOLDOWN_MS   30000    /* 熔断冷却（期满复位重挂） */
+#define KH_MAX_CLI       8
+#define KH_MAX_ITEMS     256
+#define KH_COMBO_MAX     64
+#define KH_HITQ          64
+#define KH_OUTQ          64
+#define KH_OUTMSG        384
+#define KH_HLOG_N        32
+#define KH_HLOG_L        192
+#define KH_PSPID_MAX     256
+
+/* 线程消息（与 daemon 同号；安装/卸载另有 100ms 轮询兜底，消息只降延迟） */
+#define WM_KH_RECSTART   0x8002
+#define WM_KH_RECSTOP    0x8003
+#define WM_KH_INSTALL    0x8005
+#define WM_KH_UNINSTALL  0x8008
+
+/* ================================================================ 数据结构 */
+
+typedef struct {
+    char id[48];
+    char combo[KH_COMBO_MAX];
+    char action[48];
+    char brush[192];
+} KhItem;
+
+typedef struct {
+    SOCKET s;
+    volatile LONG closing;        /* 1 = 已通知关闭（持有线程负责 closesocket） */
+} KhCli;
+
+typedef struct {
+    SOCKET s;
+    char   msg[KH_OUTMSG];
+} KhOut;
+
+/* ================================================================ 全局状态 */
+
+/* --- 客户端 / 锁 --- */
+static KhCli g_khCli[KH_MAX_CLI];
+static CRITICAL_SECTION g_khCliLk;
+static CRITICAL_SECTION g_khSendLk;      /* 所有对客户端 socket 的发送同锁（防半帧交叠） */
+
+/* --- 键盘钩子 --- */
+static HHOOK volatile g_khHook;          /* x64 对齐指针读写即原子；写入用 InterlockedExchangePointer */
+static volatile LONG g_khArmed = 1;      /* 默认布防（daemon _hotkeyArmed 初值 true） */
+static volatile LONG g_khActive = 1;     /* 组合键表是否参与匹配（我们就在 PS 里 ⇒ 恒 1） */
+static volatile LONG g_khSafeMode;       /* 熔断：只放行不处理 */
+static volatile LONG g_khStrikes;        /* 连续超预算计数（仅钩子线程写） */
+static volatile LONG g_khSafeSince;      /* 熔断时刻（0=未熔断） */
+static volatile LONG g_khBreakMs;        /* 触发熔断那一帧的耗时（代打日志用） */
+static volatile LONG g_khPendingBreakLog;
+static volatile LONG g_khReinstall;      /* 看护请求重挂（卸→下轮再装） */
+
+/* --- 钩子线程 --- */
+static DWORD  g_khRecThreadId;
+static HANDLE g_khHookThread;
+static HANDLE g_khThreadReady;
+
+/* --- 其它线程 --- */
+static HANDLE g_khDispatchThread, g_khWatchdogThread, g_khServerThread;
+static HANDLE g_khWake;                   /* 调度线程唤醒（自动复位事件） */
+static SOCKET g_khListen;
+static volatile LONG g_khBound;           /* 是否持有 18923（单持有者纪律的判据） */
+static volatile LONG g_khStop, g_khSrvStop, g_khStarted;
+
+/* --- 录制 --- */
+static CRITICAL_SECTION g_khRecLk;
+static SOCKET g_khRecClient;
+static char   g_khRecBrush[192];
+static volatile LONG g_khRecording;
+static volatile LONG g_khRecReq;          /* 0 无 / 1 开始 / 2 取消（轮询+post 双路） */
+static char   g_khRecPending[KH_COMBO_MAX];  /* 仅钩子线程读写（两段式录制的待确认键） */
+
+/* --- 退格删绑布防 --- */
+static CRITICAL_SECTION g_khArmLk;
+static SOCKET g_khArmClient;
+static char   g_khArmOwner[96];
+static volatile LONG g_khArmOn;           /* 对应 daemon 的 _deleteArmOwner != null */
+
+/* --- 热键表（seqlock 双缓冲：钩子线程无锁读） --- */
+static KhItem g_khMapBuf[2][KH_MAX_ITEMS];
+static KhItem* volatile g_khMap;
+static volatile LONG g_khMapCount;
+static volatile LONG g_khMapSeq;          /* 偶数=稳定，奇数=写中 */
+static CRITICAL_SECTION g_khMapLk;
+static volatile LONG g_khItemCount;       /* 配置总条数（含空 combo，getState 的 items） */
+
+/* --- SPSC 环（单生产者=钩子线程 / 单消费者=调度线程） --- */
+static char g_khHitQ[KH_HITQ][KH_COMBO_MAX];
+static volatile LONG g_khHitHead, g_khHitTail, g_khHitDrops;
+static KhOut g_khOutQ[KH_OUTQ];
+static volatile LONG g_khOutHead, g_khOutTail;
+static char g_khHlog[KH_HLOG_N][KH_HLOG_L];
+static volatile LONG g_khHlogHead, g_khHlogTail;
+
+/* --- 前台 PS PID 集合（双缓冲发布；钩子线程每次按键读） --- */
+static DWORD g_khPidBuf[2][KH_PSPID_MAX];
+static volatile LONG g_khPidIdx, g_khPidCount;
+
+/* --- 配置文件（UTF-8 内存态 + 宽字符落盘态） --- */
+static CRITICAL_SECTION g_khCfgLk;
+static char    g_khCfgPath[512];          /* UTF-8（回帧 path 字段用） */
+static wchar_t g_khCfgPathW[512];
+static FILETIME g_khCfgWt;
+static int     g_khCfgWtOk;
+static DWORD   g_khLastMigrate;
+
+/* 前向声明：以下定义晚于使用点（看护线程 → 刷 PID；服务器线程 → 建客户端线程；
+   钩子线程指令轮询 → 装/卸钩子） */
+static void kh_refresh_ps_pids(void);
+static DWORD WINAPI kh_client_thread(LPVOID param);
+static void kh_install_hook(void);
+static void kh_uninstall_hook(void);
+
+/* ================================================================ 小工具 */
+
+static void kh_log(const char* fmt, ...)
+{
+    char body[768];
+    va_list ap;
+    va_start(ap, fmt);
+    _vsnprintf(body, sizeof(body) - 1, fmt, ap);
+    va_end(ap);
+    body[sizeof(body) - 1] = 0;
+    log_line("kh", "%s", body);
+}
+
+/* 钩子回调路径专用日志：只入内存环，绝不做文件 I/O（调度线程代打）。 */
+static void kh_hlog(const char* fmt, ...)
+{
+    LONG t = g_khHlogTail;
+    if (t - g_khHlogHead >= KH_HLOG_N) return;          /* 环满即丢（保回调 O(1)） */
+    va_list ap;
+    va_start(ap, fmt);
+    _vsnprintf(g_khHlog[t % KH_HLOG_N], KH_HLOG_L, fmt, ap);
+    va_end(ap);
+    g_khHlog[t % KH_HLOG_N][KH_HLOG_L - 1] = 0;
+    InterlockedExchange(&g_khHlogTail, t + 1);          /* 发布 + 全屏障 */
+    SetEvent(g_khWake);
+}
+
+static void kh_w2u8(const wchar_t* w, char* u8, int cap)
+{
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, u8, cap, NULL, NULL);
+    u8[cap - 1] = 0;
+}
+
+static void kh_u8_to_w(const char* u8, wchar_t* w, int capw)
+{
+    MultiByteToWideChar(CP_UTF8, 0, u8, -1, w, capw);
+    w[capw - 1] = 0;
+}
+
+/* JSON 字符串转义（出站） */
+static void kh_esc(const char* in, char* out, int cap)
+{
+    int o = 0;
+    const unsigned char* p = (const unsigned char*)in;
+    out[0] = 0;
+    while (*p) {
+        unsigned char c = *p;
+        if (c == '"' || c == '\\') {
+            if (o + 2 >= cap) break;
+            out[o++] = '\\'; out[o++] = (char)c;
+        } else if (c == '\n') { if (o + 2 >= cap) break; out[o++] = '\\'; out[o++] = 'n'; }
+        else if (c == '\r') { if (o + 2 >= cap) break; out[o++] = '\\'; out[o++] = 'r'; }
+        else if (c == '\t') { if (o + 2 >= cap) break; out[o++] = '\\'; out[o++] = 't'; }
+        else if (c == '\b') { if (o + 2 >= cap) break; out[o++] = '\\'; out[o++] = 'b'; }
+        else if (c == '\f') { if (o + 2 >= cap) break; out[o++] = '\\'; out[o++] = 'f'; }
+        else if (c < 0x20) {
+            if (o + 6 >= cap) break;
+            o += _snprintf(out + o, (size_t)(cap - o), "\\u%04x", (unsigned)c);
+        } else {
+            if (o + 1 >= cap) break;
+            out[o++] = (char)c;
+        }
+        p++;
+    }
+    out[o] = 0;
+}
+
+/* JSON 字符串反转义（入站：路径/brush 可能含反斜杠与引号） */
+static void kh_unesc(char* s)
+{
+    char* d = s;
+    char* p = s;
+    while (*p) {
+        if (*p == '\\' && p[1]) {
+            p++;
+            switch (*p) {
+            case 'n': *d++ = '\n'; break;
+            case 'r': *d++ = '\r'; break;
+            case 't': *d++ = '\t'; break;
+            case 'b': *d++ = '\b'; break;
+            case 'f': *d++ = '\f'; break;
+            case 'u': {
+                unsigned v = 0; int ok = 1;
+                for (int i = 1; i <= 4; i++) {
+                    char h = p[i];
+                    v <<= 4;
+                    if (h >= '0' && h <= '9') v |= (unsigned)(h - '0');
+                    else if (h >= 'a' && h <= 'f') v |= (unsigned)(h - 'a' + 10);
+                    else if (h >= 'A' && h <= 'F') v |= (unsigned)(h - 'A' + 10);
+                    else { ok = 0; break; }
+                }
+                if (ok) {
+                    p += 4;
+                    if (v < 0x80) *d++ = (char)v;
+                    else if (v < 0x800) {
+                        *d++ = (char)(0xC0 | (v >> 6));
+                        *d++ = (char)(0x80 | (v & 0x3F));
+                    } else {
+                        *d++ = (char)(0xE0 | (v >> 12));
+                        *d++ = (char)(0x80 | ((v >> 6) & 0x3F));
+                        *d++ = (char)(0x80 | (v & 0x3F));
+                    }
+                } else *d++ = 'u';
+                break;
+            }
+            default: *d++ = *p; break;    /* \" \\ \/ 及其它原样 */
+            }
+            p++;
+        } else {
+            *d++ = *p++;
+        }
+    }
+    *d = 0;
+}
+
+/* ================================================================ 客户端表 */
+
+static int kh_cli_add(SOCKET s)
+{
+    int ok = 0;
+    EnterCriticalSection(&g_khCliLk);
+    for (int i = 0; i < KH_MAX_CLI; i++) {
+        if (g_khCli[i].s == INVALID_SOCKET && !g_khCli[i].closing) {
+            g_khCli[i].s = s;
+            g_khCli[i].closing = 0;
+            ok = 1;
+            break;
+        }
+    }
+    LeaveCriticalSection(&g_khCliLk);
+    return ok;
+}
+
+static void kh_cli_remove(SOCKET s)
+{
+    EnterCriticalSection(&g_khCliLk);
+    for (int i = 0; i < KH_MAX_CLI; i++)
+        if (g_khCli[i].s == s) { g_khCli[i].s = INVALID_SOCKET; g_khCli[i].closing = 1; break; }
+    LeaveCriticalSection(&g_khCliLk);
+}
+
+/* 广播/代发失败 ⇒ 标记关闭并唤醒阻塞的 recv；句柄归所属客户端线程。 */
+static void kh_cli_mark_close(SOCKET s)
+{
+    EnterCriticalSection(&g_khCliLk);
+    for (int i = 0; i < KH_MAX_CLI; i++) {
+        if (g_khCli[i].s == s && !g_khCli[i].closing) {
+            g_khCli[i].closing = 1;
+            shutdown(s, SD_BOTH);
+            break;
+        }
+    }
+    LeaveCriticalSection(&g_khCliLk);
+}
+
+static void kh_cli_shutdown_all(void)
+{
+    EnterCriticalSection(&g_khCliLk);
+    for (int i = 0; i < KH_MAX_CLI; i++) {
+        if (g_khCli[i].s != INVALID_SOCKET && !g_khCli[i].closing) {
+            g_khCli[i].closing = 1;
+            shutdown(g_khCli[i].s, SD_BOTH);
+        }
+    }
+    LeaveCriticalSection(&g_khCliLk);
+}
+
+/* ================================================================ 发送 / 广播 */
+
+static void kh_send_to(SOCKET s, const char* msg)
+{
+    if (!wc_send_text_lk(s, msg, &g_khSendLk)) kh_cli_mark_close(s);
+}
+
+static void kh_broadcast(const char* msg)
+{
+    EnterCriticalSection(&g_khCliLk);
+    for (int i = 0; i < KH_MAX_CLI; i++) {
+        SOCKET s = g_khCli[i].s;
+        if (s == INVALID_SOCKET || g_khCli[i].closing) continue;
+        if (!wc_send_text_lk(s, msg, &g_khSendLk)) {
+            g_khCli[i].closing = 1;
+            shutdown(s, SD_BOTH);
+        }
+    }
+    LeaveCriticalSection(&g_khCliLk);
+}
+
+/* ================================================================ 热键表（seqlock） */
+
+static void kh_map_publish(const KhItem* items, int n)
+{
+    EnterCriticalSection(&g_khMapLk);
+    KhItem* dst = (g_khMap == g_khMapBuf[0]) ? g_khMapBuf[1] : g_khMapBuf[0];
+    int cnt = (n > KH_MAX_ITEMS) ? KH_MAX_ITEMS : n;
+    if (cnt > 0) memcpy(dst, items, sizeof(KhItem) * (size_t)cnt);
+    InterlockedExchange(&g_khMapSeq, g_khMapSeq + 1);          /* 变奇：写中 */
+    g_khMapCount = cnt;
+    g_khMap = dst;
+    InterlockedExchange(&g_khMapSeq, g_khMapSeq + 1);          /* 变偶：稳定 */
+    LeaveCriticalSection(&g_khMapLk);
+}
+
+/* 钩子线程专用：seqlock 无锁查表。命中返回 1 并拷贝出条目。 */
+static int kh_map_lookup(const char* combo, KhItem* out)
+{
+    for (int tries = 0; tries < 64; tries++) {
+        LONG s1 = g_khMapSeq;
+        if (s1 & 1) continue;                       /* 写中 ⇒ 重试 */
+        KhItem* m = (KhItem*)g_khMap;
+        LONG n = g_khMapCount;
+        if (!m || n <= 0) return 0;
+        int found = 0;
+        for (LONG i = 0; i < n; i++) {
+            if (_stricmp(m[i].combo, combo) == 0) {
+                if (out) *out = m[i];
+                found = 1;
+                break;
+            }
+        }
+        if (s1 == g_khMapSeq) return found;         /* 期间未被改写 ⇒ 结论有效 */
+    }
+    return 0;                                        /* 重试耗尽 ⇒ 本轮不命中 */
+}
+
+/* 非钩子线程（调度/看护）专用：加锁快照。 */
+static int kh_map_lookup_locked(const char* combo, KhItem* out)
+{
+    int found = 0;
+    EnterCriticalSection(&g_khMapLk);
+    KhItem* m = (KhItem*)g_khMap;
+    LONG n = g_khMapCount;
+    for (LONG i = 0; i < n && m; i++) {
+        if (_stricmp(m[i].combo, combo) == 0) {
+            if (out) *out = m[i];
+            found = 1;
+            break;
+        }
+    }
+    LeaveCriticalSection(&g_khMapLk);
+    return found;
+}
+
+static int kh_map_count(void)
+{
+    int n = g_khMapCount;
+    return n < 0 ? 0 : n;
+}
+
+/* ================================================================ 配置解析 / 序列化 */
+
+/* 解析 JSON 对象数组（js 须指向 '['）。返回条数；-1 = 畸形（未闭合）。 */
+static int kh_parse_items(const char* js, KhItem* out, int max)
+{
+    const char* p = js;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    if (*p != '[') return -1;
+    p++;
+    int n = 0;
+    while (*p && n < max) {
+        while (*p && *p != '{' && *p != ']') p++;
+        if (*p != '{') break;
+        const char* objStart = p;
+        const char* q = p + 1;
+        int depth = 1, inStr = 0;
+        while (*q && depth > 0) {
+            char c = *q;
+            if (inStr) {
+                if (c == '\\') { if (q[1]) q++; }
+                else if (c == '"') inStr = 0;
+            } else {
+                if (c == '"') inStr = 1;
+                else if (c == '{') depth++;
+                else if (c == '}') depth--;
+            }
+            q++;
+        }
+        if (depth != 0) return -1;                   /* 数组未闭合 */
+        char obj[1024];
+        int L = (int)(q - objStart);
+        if (L >= (int)sizeof(obj)) L = (int)sizeof(obj) - 1;
+        memcpy(obj, objStart, (size_t)L);
+        obj[L] = 0;
+        KhItem it;
+        memset(&it, 0, sizeof it);
+        json_str(obj, "id",     it.id,     (int)sizeof(it.id));
+        json_str(obj, "combo",  it.combo,  (int)sizeof(it.combo));
+        json_str(obj, "action", it.action, (int)sizeof(it.action));
+        json_str(obj, "brush",  it.brush,  (int)sizeof(it.brush));
+        kh_unesc(it.id); kh_unesc(it.combo); kh_unesc(it.action); kh_unesc(it.brush);
+        out[n++] = it;
+        p = q;
+    }
+    return n;
+}
+
+/* 把条目数组序列化为 payload 文本（字段集 = 面板 normalizeEntry 的四个）。 */
+static int kh_items_to_json(const KhItem* items, int n, char* out, int cap)
+{
+    int o = 0;
+    out[0] = 0;
+    for (int i = 0; i < n; i++) {
+        char idE[96], cbE[128], acE[96], brE[256];
+        kh_esc(items[i].id,     idE,  (int)sizeof(idE));
+        kh_esc(items[i].combo,  cbE,  (int)sizeof(cbE));
+        kh_esc(items[i].action, acE,  (int)sizeof(acE));
+        kh_esc(items[i].brush,  brE,  (int)sizeof(brE));
+        int w = _snprintf(out + o, (size_t)(cap - o), "%s{\"id\":\"%s\",\"combo\":\"%s\",\"action\":\"%s\",\"brush\":\"%s\"}",
+                          i ? "," : "", idE, cbE, acE, brE);
+        if (w < 0 || o + w >= cap - 2) { out[o] = 0; return -1; }
+        o += w;
+    }
+    out[o] = 0;
+    return o;
+}
+
+/* 配置路径快照：所有文件 I/O / 回帧 path 字段先取快照再用。
+   ⛔ 直读全局路径会在 setConfigPath 的 memcpy 中途拿到"半旧半新"路径，
+      表现为：误判文件被删 → 无谓 reload；或回帧 path 与面板请求不一致
+      ⇒ canPersistConfig 拒绝持久化（2026-10-17 自查修复）。 */
+static void kh_cfg_snapshot(wchar_t* w, int wcap)
+{
+    EnterCriticalSection(&g_khCfgLk);
+    _snwprintf(w, (size_t)wcap, L"%s", g_khCfgPathW);
+    w[wcap - 1] = 0;
+    LeaveCriticalSection(&g_khCfgLk);
+}
+
+static void kh_cfg_snapshot_u8(char* u, int ucap)
+{
+    EnterCriticalSection(&g_khCfgLk);
+    _snprintf(u, (size_t)ucap, "%s", g_khCfgPath);
+    u[ucap - 1] = 0;
+    LeaveCriticalSection(&g_khCfgLk);
+}
+
+/* 读配置文件 → 条目数组。0 = 空/不存在；-1 = 读失败或畸形。 */
+static int kh_read_config_file(KhItem* out, int max)
+{
+    wchar_t path[512];
+    kh_cfg_snapshot(path, 512);
+    HANDLE f = CreateFileW(path, GENERIC_READ,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) return 0;
+    DWORD sz = GetFileSize(f, NULL);
+    if (sz == INVALID_FILE_SIZE || sz > 4u * 1024u * 1024u) { CloseHandle(f); return -1; }
+    char* buf = (char*)malloc((size_t)sz + 1);
+    if (!buf) { CloseHandle(f); return -1; }
+    DWORD n = 0;
+    if (!ReadFile(f, buf, sz, &n, NULL)) { CloseHandle(f); free(buf); return -1; }
+    CloseHandle(f);
+    buf[n] = 0;
+    char* p = buf;
+    if (n >= 3 && (unsigned char)p[0] == 0xEF && (unsigned char)p[1] == 0xBB &&
+        (unsigned char)p[2] == 0xBF) p += 3;                     /* 跳 BOM */
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    if (*p != '[') { free(buf); return -1; }
+    int cnt = kh_parse_items(p, out, max);
+    free(buf);
+    return cnt;
+}
+
+static void kh_write_cfg_store(void)
+{
+    wchar_t lad[MAX_PATH] = L"";
+    GetEnvironmentVariableW(L"LOCALAPPDATA", lad, MAX_PATH);
+    if (!lad[0]) return;
+    char u8[512];
+    kh_cfg_snapshot_u8(u8, 512);
+    if (!u8[0]) return;
+    wchar_t dir[MAX_PATH], store[MAX_PATH];
+    _snwprintf(dir,   MAX_PATH, L"%s\\JWautofill", lad);
+    _snwprintf(store, MAX_PATH, L"%s\\JWautofill\\configpath.txt", lad);
+    CreateDirectoryW(dir, NULL);
+    HANDLE f = CreateFileW(store, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) return;
+    DWORD w;
+    WriteFile(f, u8, (DWORD)strlen(u8), &w, NULL);
+    CloseHandle(f);
+}
+
+static void kh_default_cfg_path(void)
+{
+    wchar_t lad[MAX_PATH] = L"";
+    GetEnvironmentVariableW(L"LOCALAPPDATA", lad, MAX_PATH);
+    if (!lad[0]) _snwprintf(g_khCfgPathW, 512, L"hotkeys.json");
+    else _snwprintf(g_khCfgPathW, 512, L"%s\\JWautofill\\hotkeys.json", lad);
+    g_khCfgPathW[511] = 0;
+    kh_w2u8(g_khCfgPathW, g_khCfgPath, (int)sizeof(g_khCfgPath));
+}
+
+/* 启动时沿用上一次面板指定的路径（daemon ConfigPathStore 同款）。 */
+static void kh_load_cfg_store(void)
+{
+    wchar_t lad[MAX_PATH] = L"";
+    GetEnvironmentVariableW(L"LOCALAPPDATA", lad, MAX_PATH);
+    if (lad[0]) {
+        wchar_t store[MAX_PATH];
+        _snwprintf(store, MAX_PATH, L"%s\\JWautofill\\configpath.txt", lad);
+        HANDLE f = CreateFileW(store, GENERIC_READ, FILE_SHARE_READ, NULL,
+                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (f != INVALID_HANDLE_VALUE) {
+            char buf[512];
+            DWORD n = 0;
+            if (ReadFile(f, buf, sizeof(buf) - 1, &n, NULL) && n > 0) {
+                buf[n] = 0;
+                char* s = buf;
+                while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') s++;
+                char* e = s + strlen(s);
+                while (e > s && (e[-1] == '\r' || e[-1] == '\n' || e[-1] == ' ')) e--;
+                *e = 0;
+                if (*s) {
+                    _snprintf(g_khCfgPath, sizeof(g_khCfgPath), "%s", s);
+                    kh_u8_to_w(g_khCfgPath, g_khCfgPathW, 512);
+                    CloseHandle(f);
+                    kh_log("沿用已记录的配置路径: %s", g_khCfgPath);
+                    return;
+                }
+            }
+            CloseHandle(f);
+        }
+    }
+    kh_default_cfg_path();
+    kh_log("未找到配置路径记录，使用默认: %s", g_khCfgPath);
+}
+
+/* 重载热键表并广播 config 帧（daemon ReloadConfig 同款：两路都广播）。 */
+static void kh_reload(void)
+{
+    KhItem items[KH_MAX_ITEMS];
+    int n = kh_read_config_file(items, KH_MAX_ITEMS);
+    if (n < 0) {
+        /* ⛔ 解析失败**不清空**热键表：半写文件/AV 占用会读出残缺 JSON，
+           按 daemon 语义广播空配置可以，但把表也清了会让热键静默全失效。
+           保留旧表 + 留痕，等下一轮 mtime 变化自愈。 */
+        kh_log("⚠️ 配置读取/解析失败（保留原热键表）: %s", g_khCfgPath);
+    } else {
+        KhItem map[KH_MAX_ITEMS];
+        int mn = 0;
+        for (int i = 0; i < n; i++) {
+            if (!items[i].combo[0]) continue;                 /* 空 combo = 已解绑，仅留存 */
+            int dup = 0;
+            for (int j = 0; j < mn; j++)
+                if (_stricmp(map[j].combo, items[i].combo) == 0) { dup = 1; break; }
+            if (dup) { kh_log("跳过重复组合键: %s", items[i].combo); continue; }
+            map[mn++] = items[i];
+        }
+        kh_map_publish(map, mn);
+        InterlockedExchange(&g_khItemCount, n);
+        kh_log("热键表已装载：配置 %d 条 / 可匹配 %d 条（%s）", n, mn, g_khCfgPath);
+    }
+    /* 广播 config（读文件原样序列化，带 path —— 面板 canPersistConfig 的判据） */
+    KhItem fresh[KH_MAX_ITEMS];
+    int fn = kh_read_config_file(fresh, KH_MAX_ITEMS);
+    if (fn < 0) fn = 0;
+    char* payload = (char*)malloc(160 * 1024);
+    if (payload) {
+        char pathNow[512], pathEsc[1024];
+        kh_cfg_snapshot_u8(pathNow, 512);
+        kh_items_to_json(fresh, fn, payload, 160 * 1024);
+        kh_esc(pathNow, pathEsc, (int)sizeof(pathEsc));
+        char* msg = (char*)malloc(170 * 1024);
+        if (msg) {
+            _snprintf(msg, 170 * 1024,
+                      "{\"type\":\"config\",\"payload\":[%s],\"path\":\"%s\"}",
+                      payload, pathEsc);
+            kh_broadcast(msg);
+            free(msg);
+        }
+        free(payload);
+    }
+}
+
+/* 面板 config 帧 → 落盘（.bak 备份）→ 热更新（daemon SaveConfig 同款）。 */
+static void kh_save_config(const char* payload)
+{
+    KhItem items[KH_MAX_ITEMS];
+    int n = kh_parse_items(payload, items, KH_MAX_ITEMS);
+    if (n < 0) { kh_log("保存配置：payload 解析失败，已忽略"); return; }
+    if (n >= KH_MAX_ITEMS) kh_log("⚠️ 条目数达到上限 %d，超出部分被丢弃", KH_MAX_ITEMS);
+
+    char* txt = (char*)malloc(160 * 1024);
+    if (!txt) return;
+    if (kh_items_to_json(items, n, txt, 160 * 1024) < 0) {
+        kh_log("保存配置：序列化超长，已忽略");
+        free(txt);
+        return;
+    }
+    /* ⛔ 覆盖前先留 .bak：热键是用户一条条录出来的，被默认值冲掉无法重建
+       （2026-10-13 事故；面板侧 canPersistConfig 是主护栏，这里再兜一层）。 */
+    wchar_t path[512];
+    kh_cfg_snapshot(path, 512);
+    wchar_t bak[600];
+    _snwprintf(bak, 600, L"%s.bak", path);
+    if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES)
+        CopyFileW(path, bak, FALSE);
+    HANDLE f = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) {
+        kh_log("保存配置失败：无法写入 %s", g_khCfgPath);
+        free(txt);
+        return;
+    }
+    DWORD w;
+    WriteFile(f, txt, (DWORD)strlen(txt), &w, NULL);
+    CloseHandle(f);
+    kh_log("配置已写入 %s（%d 条）", g_khCfgPath, n);
+    free(txt);
+    kh_reload();     /* SaveConfig → ReloadConfig（Program.cs 同款：落盘即热更新） */
+}
+
+static void kh_poll_config_file(void)
+{
+    wchar_t path[512];
+    kh_cfg_snapshot(path, 512);
+    WIN32_FILE_ATTRIBUTE_DATA fd;
+    if (!GetFileAttributesExW(path, GetFileExInfoStandard, &fd)) {
+        if (g_khCfgWtOk) { g_khCfgWtOk = 0; kh_reload(); }   /* 文件被删 */
+        return;
+    }
+    if (!g_khCfgWtOk || CompareFileTime(&fd.ftLastWriteTime, &g_khCfgWt) > 0) {
+        g_khCfgWt = fd.ftLastWriteTime;
+        g_khCfgWtOk = 1;
+        kh_reload();
+    }
+}
+
+static void kh_set_config_path(const char* p)
+{
+    if (!p || !*p) return;
+    char np[512];
+    _snprintf(np, sizeof(np), "%s", p);
+    char* s = np;
+    while (*s == ' ' || *s == '\t') s++;
+    if (!*s) return;
+
+    /* 比较+替换必须同锁原子：否则两个客户端线程并发 set 可能互相覆盖。 */
+    char old[512];
+    int changed = 0;
+    EnterCriticalSection(&g_khCfgLk);
+    if (_stricmp(np, g_khCfgPath) != 0) {
+        memcpy(old, g_khCfgPath, sizeof(old));
+        memcpy(g_khCfgPath, np, sizeof(g_khCfgPath));
+        kh_u8_to_w(np, g_khCfgPathW, 512);
+        changed = 1;
+    }
+    LeaveCriticalSection(&g_khCfgLk);
+    if (!changed) return;
+    int oldHad = old[0] != 0;
+    kh_log("配置路径已切换: %s", g_khCfgPath);
+
+    /* 建目录；新路径无文件而旧路径有时，搬迁旧配置（避免用户重新录制）。 */
+    wchar_t dir[MAX_PATH];
+    memcpy(dir, g_khCfgPathW, sizeof(dir));
+    wchar_t* slash = wcsrchr(dir, L'\\');
+    if (slash) { *slash = 0; CreateDirectoryW(dir, NULL); }
+    if (GetFileAttributesW(g_khCfgPathW) == INVALID_FILE_ATTRIBUTES && oldHad) {
+        wchar_t oldW[512];
+        kh_u8_to_w(old, oldW, 512);
+        if (GetFileAttributesW(oldW) != INVALID_FILE_ATTRIBUTES) {
+            if (CopyFileW(oldW, g_khCfgPathW, FALSE))
+                kh_log("已迁移旧配置到新路径");
+        }
+    }
+    kh_write_cfg_store();
+    g_khCfgWtOk = 0;
+    kh_reload();
+}
+
+/* ================================================================ 状态帧 */
+
+static int kh_read_ll_timeout(void)
+{
+    HKEY k;
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, "Control Panel\\Desktop", 0, KEY_READ, &k) != ERROR_SUCCESS)
+        return 0;
+    int out = 0;
+    /* ⛔ 必须先 NULL 缓冲问 type+size：REG_SZ 值用小 DWORD 缓冲首查会返回
+       ERROR_MORE_DATA 而非 SUCCESS，按类型分流根本到不了 SZ 分支。 */
+    DWORD type = 0, sz = 0;
+    if (RegQueryValueExA(k, "LowLevelHooksTimeout", NULL, &type, NULL, &sz) == ERROR_SUCCESS) {
+        if (type == REG_DWORD && sz == sizeof(DWORD)) {
+            DWORD v = 0;
+            if (RegQueryValueExA(k, "LowLevelHooksTimeout", NULL, &type, (LPBYTE)&v, &sz) == ERROR_SUCCESS)
+                out = (int)v;
+        } else if (type == REG_SZ && sz > 0 && sz < 64) {
+            char s[64] = "";
+            if (RegQueryValueExA(k, "LowLevelHooksTimeout", NULL, &type, (LPBYTE)s, &sz) == ERROR_SUCCESS)
+                out = atoi(s);
+        }
+    }
+    RegCloseKey(k);
+    return out;
+}
+
+/* DPI 感知标签（诊断字段；API 经 GetProcAddress 取，兼容无导出的老系统） */
+typedef HANDLE (WINAPI *FnGetThreadDpi)(void);
+typedef BOOL   (WINAPI *FnDpiEqual)(HANDLE, HANDLE);
+typedef int    (WINAPI *FnDpiAwareness)(HANDLE);
+
+static const char* kh_dpi_label(void)
+{
+    HMODULE u = GetModuleHandleW(L"user32.dll");
+    if (!u) return "n/a";
+    FnGetThreadDpi gt = (FnGetThreadDpi)GetProcAddress(u, "GetThreadDpiAwarenessContext");
+    if (!gt) return "n/a";
+    FnDpiEqual    eq = (FnDpiEqual)GetProcAddress(u, "AreDpiAwarenessContextsEqual");
+    FnDpiAwareness ga = (FnDpiAwareness)GetProcAddress(u, "GetAwarenessFromDpiAwarenessContext");
+    HANDLE ctx = gt();
+    if (eq && eq(ctx, (HANDLE)-4)) return "permonitor-v2";   /* PER_MONITOR_AWARE_V2 */
+    if (eq && eq(ctx, (HANDLE)-3)) return "permonitor";      /* PER_MONITOR_AWARE */
+    if (ga) {
+        switch (ga(ctx)) {
+        case 0: return "unaware";
+        case 1: return "system";
+        case 2: return "permonitor";
+        default: return "invalid";
+        }
+    }
+    return "n/a";
+}
+
+static void kh_build_hotkey_state(char* out, int cap)
+{
+    _snprintf(out, (size_t)cap,
+        "{\"type\":\"hotkeyState\",\"protocol\":\"2.0\",\"armed\":%s,"
+        "\"hookInstalled\":%s,\"safeMode\":%s,\"active\":%s,\"comboCount\":%d,"
+        "\"recording\":%s,\"timeoutMs\":%d,\"budgetMs\":%d,\"strikes\":%d}",
+        g_khArmed    ? "true" : "false",
+        g_khHook     ? "true" : "false",
+        g_khSafeMode ? "true" : "false",
+        g_khActive   ? "true" : "false",
+        kh_map_count(),
+        g_khRecording ? "true" : "false",
+        kh_read_ll_timeout(), KH_BUDGET_MS, (int)g_khStrikes);
+}
+
+static void kh_build_state(char* out, int cap)
+{
+    char combos[6144];
+    int co = 0;
+    combos[0] = 0;
+    EnterCriticalSection(&g_khMapLk);
+    {
+        KhItem* m = (KhItem*)g_khMap;
+        LONG n = g_khMapCount;
+        for (LONG i = 0; i < n && m && co < (int)sizeof(combos) - 80; i++) {
+            char esc[128];
+            kh_esc(m[i].combo, esc, (int)sizeof(esc));
+            co += _snprintf(combos + co, (size_t)(sizeof(combos) - co), "%s\"%s\"",
+                            i ? "," : "", esc);
+            if (co < 0) { co = 0; break; }
+        }
+    }
+    LeaveCriticalSection(&g_khMapLk);
+    _snprintf(out, (size_t)cap,
+        "{\"type\":\"state\",\"version\":\"%s\",\"protocol\":\"2.0\","
+        "\"features\":[\"hotkey\",\"hotkeyArm\",\"hotkeyState\",\"watchdogs\"],"
+        "\"role\":\"\xE7\x83\xBD\xE9\x94\xAE\",\"dpiAwareness\":\"%s\",\"active\":%s,"
+        "\"hookInstalled\":%s,\"hookSafeMode\":%s,\"hookTimeoutMs\":%d,"
+        "\"comboCount\":%d,\"combos\":[%s],\"items\":%d,\"hotkeyArmed\":%s}",
+        KH_VERSION, kh_dpi_label(),
+        g_khActive   ? "true" : "false",
+        g_khHook     ? "true" : "false",
+        g_khSafeMode ? "true" : "false",
+        kh_read_ll_timeout(),
+        kh_map_count(), combos, (int)g_khItemCount,
+        g_khArmed ? "true" : "false");
+}
+
+/* ================================================================ 键盘钩子 */
+
+/* vk → token（Program.cs KeyToToken 逐字对应；与 ParseCombo 严格互逆）。 */
+static const char* kh_key_to_token(int vk)
+{
+    if (vk >= 0x41 && vk <= 0x5A) {
+        static char one[2];
+        one[0] = (char)vk; one[1] = 0;
+        return one;
+    }
+    if (vk >= 0x30 && vk <= 0x39) {
+        static char one[2];
+        one[0] = (char)vk; one[1] = 0;
+        return one;
+    }
+    if (vk >= 0x70 && vk <= 0x87) {
+        static char f[8];
+        _snprintf(f, sizeof(f), "F%d", vk - 0x70 + 1);
+        return f;
+    }
+    if (vk >= 0x60 && vk <= 0x69) {
+        static char nm[8];
+        _snprintf(nm, sizeof(nm), "Num%d", vk - 0x60);
+        return nm;
+    }
+    switch (vk) {
+    case 0x08: return "Backspace";
+    case 0x09: return "Tab";
+    case 0x0D: return "Enter";
+    case 0x1B: return "Escape";
+    case 0x20: return "Space";
+    case 0x2D: return "Insert";
+    case 0x23: return "End";
+    case 0x24: return "Home";
+    case 0x21: return "PageUp";
+    case 0x22: return "PageDown";
+    case 0x26: return "Up";
+    case 0x28: return "Down";
+    case 0x25: return "Left";
+    case 0x27: return "Right";
+    case 0x2E: return "Delete";
+    case 0x14: return "CapsLock";
+    case 0x90: return "NumLock";
+    case 0x91: return "ScrollLock";
+    case 0x13: return "Pause";
+    case 0x2C: return "PrintScreen";
+    case 0x5D: return "Apps";
+    case 0xBA: return ";";
+    case 0xBB: return "=";
+    case 0xBC: return ",";
+    case 0xBD: return "-";
+    case 0xBE: return ".";
+    case 0xBF: return "/";
+    case 0xC0: return "`";
+    case 0xDB: return "[";
+    case 0xDC: return "\\";
+    case 0xDD: return "]";
+    case 0xDE: return "'";
+    case 0x6A: return "NumMul";
+    case 0x6B: return "NumPlus";
+    case 0x6D: return "NumMinus";
+    case 0x6E: return "NumDot";
+    case 0x6F: return "NumDiv";
+    default:   return NULL;
+    }
+}
+
+static int kh_build_combo(int vk, char* out, int cap)
+{
+    const char* mods[4];
+    int nm = 0;
+    if (GetAsyncKeyState(0x11) & 0x8000) mods[nm++] = "Ctrl";
+    if (GetAsyncKeyState(0x12) & 0x8000) mods[nm++] = "Alt";
+    if (GetAsyncKeyState(0x10) & 0x8000) mods[nm++] = "Shift";
+    if ((GetAsyncKeyState(0x5B) & 0x8000) || (GetAsyncKeyState(0x5C) & 0x8000)) mods[nm++] = "Win";
+    const char* key = kh_key_to_token(vk);
+    if (!key) return 0;
+    int o = 0;
+    out[0] = 0;
+    for (int i = 0; i < nm; i++) {
+        int w = _snprintf(out + o, (size_t)(cap - o), "%s%s", i ? "+" : "", mods[i]);
+        if (w < 0 || o + w >= cap - 2) { out[0] = 0; return 0; }
+        o += w;
+    }
+    int w = _snprintf(out + o, (size_t)(cap - o), "%s%s", nm ? "+" : "", key);
+    if (w < 0 || o + w >= cap - 2) { out[0] = 0; return 0; }
+    return 1;
+}
+
+/* 前台是否落在某个 Photoshop 进程（daemon IsPhotoshopForeground 同款）。 */
+static int kh_ps_foreground(void)
+{
+    HWND fg = GetForegroundWindow();
+    if (!fg) return 0;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(fg, &pid);
+    if (!pid) return 0;
+    int idx = g_khPidIdx;
+    int n = g_khPidCount;
+    if (n <= 0) return 0;
+    const DWORD* p = g_khPidBuf[idx];
+    for (int i = 0; i < n; i++)
+        if (p[i] == pid) return 1;
+    return 0;
+}
+
+/* 录制/退格回帧：钩子线程只入队，调度线程代发（零 I/O 纪律）。 */
+static void kh_out_push(SOCKET s, const char* msg)
+{
+    LONG t = g_khOutTail;
+    if (t - g_khOutHead >= KH_OUTQ) return;               /* 环满即丢（低频路径，理论不可达） */
+    g_khOutQ[t % KH_OUTQ].s = s;
+    _snprintf(g_khOutQ[t % KH_OUTQ].msg, KH_OUTMSG, "%s", msg);
+    InterlockedExchange(&g_khOutTail, t + 1);
+    SetEvent(g_khWake);
+}
+
+static void kh_hit_push(const char* combo)
+{
+    LONG t = g_khHitTail;
+    if (t - g_khHitHead >= KH_HITQ) {
+        InterlockedIncrement(&g_khHitDrops);
+        return;
+    }
+    _snprintf(g_khHitQ[t % KH_HITQ], KH_COMBO_MAX, "%s", combo);
+    InterlockedExchange(&g_khHitTail, t + 1);
+    SetEvent(g_khWake);
+}
+
+static void kh_send_recording_progress(const char* combo)
+{
+    SOCKET c;
+    char brush[192];
+    EnterCriticalSection(&g_khRecLk);
+    c = g_khRecClient;
+    memcpy(brush, g_khRecBrush, sizeof(brush));
+    LeaveCriticalSection(&g_khRecLk);
+    if (c == INVALID_SOCKET) return;
+    char msg[384], b[256], cb[128];
+    kh_esc(brush, b, (int)sizeof(b));
+    kh_esc(combo, cb, (int)sizeof(cb));
+    _snprintf(msg, sizeof(msg),
+              "{\"type\":\"recordCaptured\",\"brush\":\"%s\",\"combo\":\"%s\"}", b, cb);
+    kh_out_push(c, msg);
+}
+
+/* combo = NULL 表示取消。仅在钩子线程调用。 */
+static void kh_finish_recording(const char* combo)
+{
+    InterlockedExchange(&g_khRecording, 0);
+    g_khRecPending[0] = 0;
+    SOCKET c;
+    char brush[192];
+    EnterCriticalSection(&g_khRecLk);
+    c = g_khRecClient;
+    g_khRecClient = INVALID_SOCKET;
+    memcpy(brush, g_khRecBrush, sizeof(brush));
+    g_khRecBrush[0] = 0;
+    LeaveCriticalSection(&g_khRecLk);
+    if (c == INVALID_SOCKET) return;
+    char msg[384], b[256], cb[128];
+    kh_esc(brush, b, (int)sizeof(b));
+    if (combo) {
+        kh_esc(combo, cb, (int)sizeof(cb));
+        _snprintf(msg, sizeof(msg),
+                  "{\"type\":\"recordResult\",\"brush\":\"%s\",\"combo\":\"%s\"}", b, cb);
+    } else {
+        _snprintf(msg, sizeof(msg), "{\"type\":\"recordCancel\",\"brush\":\"%s\"}", b);
+    }
+    kh_out_push(c, msg);
+}
+
+static void kh_start_recording(void)
+{
+    if (!g_khArmed) {
+        kh_hlog("热键钩子已禁用，拒绝本次录制");
+        kh_finish_recording(NULL);
+        return;
+    }
+    if (!g_khHook) kh_install_hook();
+    if (!g_khHook) { kh_finish_recording(NULL); return; }
+    g_khRecPending[0] = 0;
+    InterlockedExchange(&g_khRecording, 1);
+    kh_hlog("录制已开始，等待组合键…");
+}
+
+/* 钩子实际逻辑（外层 kh_proc 只负责计时熔断）。⛔ 全程零 I/O、零异常。 */
+static LRESULT kh_dispatch(int nCode, WPARAM wParam, LPARAM lParam)
+{
+    HHOOK h = (HHOOK)g_khHook;
+    if (g_khSafeMode) return CallNextHookEx(h, nCode, wParam, lParam);
+    if (nCode < 0) return CallNextHookEx(h, nCode, wParam, lParam);
+
+    int msg = (int)wParam;
+    if (msg != WM_KEYDOWN && msg != WM_SYSKEYDOWN)
+        return CallNextHookEx(h, nCode, wParam, lParam);
+
+    /* 焦点不在 Photoshop ⇒ 放行（用户在别的程序里打字不受影响）。 */
+    if (!kh_ps_foreground()) return CallNextHookEx(h, nCode, wParam, lParam);
+
+    KBDLLHOOKSTRUCT* k = (KBDLLHOOKSTRUCT*)lParam;
+    int vk = (int)k->vkCode;
+    DWORD flags = k->flags;
+    if (flags & (1u << 30))                            /* 系统自动重复 ⇒ 忽略 */
+        return CallNextHookEx(h, nCode, wParam, lParam);
+
+    /* ===== 录制状态机（两段式）===== */
+    if (g_khRecording) {
+        if (vk == 0x1B) {                              /* Esc 取消（两阶段通用） */
+            kh_hlog("录制取消 (Esc)");
+            kh_finish_recording(NULL);
+            return CallNextHookEx(h, nCode, wParam, lParam);
+        }
+        int isMod = (vk == 0x11 || vk == 0x12 || vk == 0x10 || vk == 0x5B || vk == 0x5C);
+        if (!isMod) {
+            if (vk == 0x08)                            /* 退格录制期不参与任何逻辑 */
+                return CallNextHookEx(h, nCode, wParam, lParam);
+            if (g_khRecPending[0]) {
+                if (vk == 0x0D) {                      /* Enter 确认 */
+                    char confirmed[KH_COMBO_MAX];
+                    memcpy(confirmed, g_khRecPending, sizeof(confirmed));
+                    kh_hlog("录制确认 (Enter): %s", confirmed);
+                    kh_finish_recording(confirmed);
+                    return 1;                          /* 吞掉确认键，不穿透给 PS */
+                }
+                char recap[KH_COMBO_MAX];
+                if (kh_build_combo(vk, recap, (int)sizeof(recap))) {
+                    memcpy(g_khRecPending, recap, sizeof(g_khRecPending));
+                    kh_hlog("重新捕获组合键（待确认）: %s", recap);
+                    kh_send_recording_progress(recap);
+                }
+                return CallNextHookEx(h, nCode, wParam, lParam);
+            }
+            char combo[KH_COMBO_MAX];
+            if (kh_build_combo(vk, combo, (int)sizeof(combo))) {
+                memcpy(g_khRecPending, combo, sizeof(g_khRecPending));
+                kh_hlog("已捕获组合键（待确认）: %s", combo);
+                kh_send_recording_progress(combo);
+            }
+            return CallNextHookEx(h, nCode, wParam, lParam);
+        }
+        return CallNextHookEx(h, nCode, wParam, lParam);
+    }
+
+    /* ===== 退格删绑（面板布防后，PS 前台按退格 = 请求解绑；必须吞键）===== */
+    if (vk == 0x08 && g_khArmOn) {
+        SOCKET c = INVALID_SOCKET;
+        char owner[96];
+        EnterCriticalSection(&g_khArmLk);
+        c = g_khArmClient;
+        memcpy(owner, g_khArmOwner, sizeof(owner));
+        LeaveCriticalSection(&g_khArmLk);
+        if (c != INVALID_SOCKET) {
+            char m[160], ow[192];
+            kh_esc(owner, ow, (int)sizeof(ow));
+            _snprintf(m, sizeof(m), "{\"type\":\"backspaceDelete\",\"owner\":\"%s\"}", ow);
+            kh_hlog("退格解绑请求 -> %s", owner);
+            kh_out_push(c, m);
+        }
+        return 1;
+    }
+
+    /* ===== 热键匹配（命中入队 + 吞键，广播交给调度线程）===== */
+    if (g_khActive) {
+        char combo[KH_COMBO_MAX];
+        if (kh_build_combo(vk, combo, (int)sizeof(combo))) {
+            KhItem hit;
+            if (kh_map_lookup(combo, &hit)) {
+                kh_hit_push(hit.combo);
+                return 1;                              /* 吞掉：PS 不再收到该组合键 */
+            }
+        }
+    }
+    return CallNextHookEx(h, nCode, wParam, lParam);
+}
+
+static LRESULT CALLBACK kh_proc(int nCode, WPARAM wParam, LPARAM lParam)
+{
+    LARGE_INTEGER t0;
+    QueryPerformanceCounter(&t0);
+    LRESULT result = kh_dispatch(nCode, wParam, lParam);
+    if (!g_khSafeMode) {
+        static LARGE_INTEGER freq;
+        if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+        LARGE_INTEGER t1;
+        QueryPerformanceCounter(&t1);
+        LONGLONG ms = freq.QuadPart ? (t1.QuadPart - t0.QuadPart) * 1000 / freq.QuadPart : 0;
+        if (ms > KH_BUDGET_MS) {
+            LONG s = g_khStrikes + 1;                  /* 仅钩子线程写 */
+            g_khStrikes = s;
+            if (s >= KH_STRIKES) {
+                InterlockedExchange(&g_khSafeMode, 1);
+                InterlockedExchange(&g_khSafeSince, (LONG)GetTickCount());
+                g_khBreakMs = (int)ms;
+                InterlockedExchange(&g_khPendingBreakLog, 1);
+            }
+        } else {
+            g_khStrikes = 0;                           /* 恢复即清零连续计数 */
+        }
+    }
+    return result;
+}
+
+static void kh_install_hook(void)
+{
+    if (g_khHook) return;
+    if (!g_khBound) {
+        /* 单持有者纪律：没拿到 18923 的实例不装钩子（多 PS 实例下只有
+           端口持有者响应热键，与 daemon「一个进程一套钩子」等价）。 */
+        kh_hlog("未持有 18923，不装键盘钩子");
+        return;
+    }
+    HHOOK h = (HHOOK)(UINT_PTR)SetWindowsHookExW(WH_KEYBOARD_LL, kh_proc, g_hSelf, 0);
+    if (!h) {
+        kh_log("❌ 键盘钩子安装失败 err=%lu", GetLastError());
+        return;
+    }
+    InterlockedExchangePointer((PVOID*)&g_khHook, h);
+    kh_log("键盘钩子已安装（WH_KEYBOARD_LL，hMod=自身 DLL）");
+}
+
+static void kh_uninstall_hook(void)
+{
+    HHOOK h = (HHOOK)g_khHook;
+    if (!h) return;
+    InterlockedExchangePointer((PVOID*)&g_khHook, NULL);
+    UnhookWindowsHookEx(h);
+    kh_log("键盘钩子已卸载");
+    /* 钩子没了就不可能再收到录制按键：清掉录制态，避免面板停在「等待按键」。 */
+    if (g_khRecording) kh_finish_recording(NULL);
+    else g_khRecPending[0] = 0;
+}
+
+/* ================================================================ 线程 */
+
+/* 钩子线程：独立消息循环，承载 WH_KEYBOARD_LL。
+   ⛔ 每轮包 try 的等价物：C 无 SEH，所有调用点自身防御（句柄检查+零除防护）；
+      线程死 = 钩子被系统摘除且指令石沉大海 ⇒ 看护线程负责重建。 */
+static DWORD WINAPI kh_hook_thread(LPVOID param)
+{
+    (void)param;
+    g_khRecThreadId = GetCurrentThreadId();
+    MSG msg;
+    PeekMessage(&msg, NULL, WM_USER, WM_USER, PM_NOREMOVE);   /* 建线程消息队列 */
+    SetEvent(g_khThreadReady);
+    kh_log("钩子线程已启动 tid=%lu", g_khRecThreadId);
+
+    for (;;) {
+        /* 安装/卸载意图（轮询兜底：posts 只降延迟，丢消息也不死人） */
+        if (InterlockedExchange(&g_khReinstall, 0)) {
+            HHOOK cur = (HHOOK)g_khHook;
+            if (cur) kh_uninstall_hook();
+        }
+        int want = (g_khBound && g_khArmed && !g_khSrvStop) ? 1 : 0;
+        HHOOK cur = (HHOOK)g_khHook;
+        if (want && !cur) kh_install_hook();
+        else if (!want && cur) kh_uninstall_hook();
+
+        /* 录制请求 */
+        LONG rr = InterlockedExchange(&g_khRecReq, 0);
+        if (rr == 1) kh_start_recording();
+        else if (rr == 2) kh_finish_recording(NULL);
+
+        if (g_khStop) break;
+
+        while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+            if (msg.message == WM_QUIT) {
+                InterlockedExchange(&g_khStop, 1);
+                goto quit;
+            }
+            if (msg.message == WM_KH_RECSTART) InterlockedExchange(&g_khRecReq, 1);
+            else if (msg.message == WM_KH_RECSTOP) InterlockedExchange(&g_khRecReq, 2);
+            /* WM_KH_INSTALL/UNINSTALL 仅作唤醒；安装意图由上面的轮询覆盖 */
+        }
+        MsgWaitForMultipleObjects(0, NULL, FALSE, 100, QS_ALLINPUT);
+    }
+quit:
+    kh_uninstall_hook();
+    kh_log("钩子线程已退出");
+    return 0;
+}
+
+/* 调度线程：热键命中广播 + 出站队列代发 + 钩子日志代打（≤20ms 延迟）。 */
+static DWORD WINAPI kh_dispatch_thread(LPVOID param)
+{
+    (void)param;
+    kh_log("调度线程已启动（热键广播/出站代发/日志代打）");
+    LONG lastDrops = 0;
+    while (!g_khStop) {
+        WaitForSingleObject(g_khWake, 20);
+
+        /* ① 钩子日志代打 */
+        for (;;) {
+            LONG t = g_khHlogTail, h = g_khHlogHead;
+            if (h == t) break;
+            char line[KH_HLOG_L];
+            memcpy(line, g_khHlog[h % KH_HLOG_N], KH_HLOG_L);
+            line[KH_HLOG_L - 1] = 0;
+            g_khHlogHead = h + 1;
+            kh_log("%s", line);
+        }
+
+        /* ② 出站队列（recordCaptured/Result/Cancel、backspaceDelete） */
+        for (;;) {
+            LONG t = g_khOutTail, h = g_khOutHead;
+            if (h == t) break;
+            KhOut e;
+            memcpy(&e, &g_khOutQ[h % KH_OUTQ], sizeof(e));
+            g_khOutHead = h + 1;
+            if (!wc_send_text_lk(e.s, e.msg, &g_khSendLk)) kh_cli_mark_close(e.s);
+        }
+
+        /* ③ 热键命中广播 */
+        for (;;) {
+            LONG t = g_khHitTail, h = g_khHitHead;
+            if (h == t) break;
+            char combo[KH_COMBO_MAX];
+            memcpy(combo, g_khHitQ[h % KH_HITQ], KH_COMBO_MAX);
+            combo[KH_COMBO_MAX - 1] = 0;
+            g_khHitHead = h + 1;
+            KhItem it;
+            if (kh_map_lookup_locked(combo, &it)) {
+                char m[512], idE[96], cbE[128], acE[96], brE[256];
+                kh_esc(it.id,     idE, (int)sizeof(idE));
+                kh_esc(it.combo,  cbE, (int)sizeof(cbE));
+                kh_esc(it.action, acE, (int)sizeof(acE));
+                kh_esc(it.brush,  brE, (int)sizeof(brE));
+                _snprintf(m, sizeof(m),
+                          "{\"type\":\"hotkey\",\"id\":\"%s\",\"combo\":\"%s\","
+                          "\"action\":\"%s\",\"brush\":\"%s\"}",
+                          idE, cbE, acE, brE);
+                kh_log("热键命中: %s -> %s%s%s", it.combo, it.action,
+                       it.brush[0] ? " / " : "", it.brush);
+                kh_broadcast(m);
+            }
+        }
+
+        /* 命中环溢出留痕（静默丢 = 热键莫名不触发，必须可见） */
+        {
+            LONG d = g_khHitDrops;
+            if (d != lastDrops) {
+                kh_log("⚠️ 热键命中环溢出，丢弃 %ld 次（广播跟不上触发）", (long)(d - lastDrops));
+                lastDrops = d;
+            }
+        }
+    }
+    kh_log("调度线程已退出");
+    return 0;
+}
+
+/* 看护线程（Program.cs HotkeyWatchdog 逐字移植）。 */
+static DWORD WINAPI kh_watchdog_thread(LPVOID param)
+{
+    (void)param;
+    int repArmed = 1, repHook = 0, repSafe = 0;
+    int candArmed = 1, candHook = 0, candSafe = 0, haveCand = 0;
+    DWORD lastHealth = 0, lastPs = 0, lastCfg = 0;
+    for (;;) {
+        if (g_khStop) break;
+        Sleep(120);
+        DWORD now = GetTickCount();
+
+        /* ① 线程存活探针（线程死 ⇒ 钩子被摘 + 指令石沉大海 ⇒ 重建） */
+        if (g_khHookThread && WaitForSingleObject(g_khHookThread, 0) == WAIT_OBJECT_0) {
+            kh_log("⚠️ 钩子线程已不存活，正在重建…");
+            CloseHandle(g_khHookThread);
+            g_khHookThread = NULL;
+            g_khHookThread = CreateThread(NULL, 0, kh_hook_thread, NULL, 0, NULL);
+            /* 新线程按当前 bound/armed 自行装配；指令队列就绪前 posts 失败无害 */
+        }
+
+        /* ①.5 代打熔断日志（钩子回调严禁 I/O ⇒ 由本线程取走打印） */
+        if (InterlockedExchange(&g_khPendingBreakLog, 0)) {
+            kh_log("⚠️ 键盘钩子连续 %d 次回调超预算（最近 %dms / 预算 %dms），"
+                   "已降级为纯放行：此后不再处理按键，避免拖累系统输入。（%ds 后自动复位并重挂）",
+                   KH_STRIKES, (int)g_khBreakMs, KH_BUDGET_MS, KH_COOLDOWN_MS / 1000);
+        }
+
+        /* ② 熔断自愈：冷却期满复位 + 请求重挂 */
+        if (g_khSafeMode) {
+            LONG since = g_khSafeSince;
+            if (since && now - (DWORD)since >= (DWORD)KH_COOLDOWN_MS) {
+                InterlockedExchange(&g_khSafeMode, 0);
+                InterlockedExchange(&g_khSafeSince, 0);
+                InterlockedExchange(&g_khStrikes, 0);
+                if (g_khBound && g_khArmed) InterlockedExchange(&g_khReinstall, 1);
+                kh_log("键盘钩子熔断冷却期满，已复位（下轮重挂）");
+            }
+        }
+
+        /* ③ 跃变广播（连续两轮一致且与上次上报不同才播，消除安装中间帧） */
+        {
+            int ca = g_khArmed ? 1 : 0, ch = g_khHook ? 1 : 0, cs = g_khSafeMode ? 1 : 0;
+            if (haveCand && ca == candArmed && ch == candHook && cs == candSafe &&
+                (ca != repArmed || ch != repHook || cs != repSafe)) {
+                repArmed = ca; repHook = ch; repSafe = cs;
+                char st[512];
+                kh_build_hotkey_state(st, (int)sizeof(st));
+                kh_broadcast(st);
+            }
+            candArmed = ca; candHook = ch; candSafe = cs; haveCand = 1;
+        }
+
+        /* ④ 2s 句柄看护（刻意不做定时无条件重挂：重挂窗口会漏键） */
+        if (now - lastHealth >= 2000) {
+            lastHealth = now;
+            if (g_khBound && g_khArmed && !g_khHook)
+                kh_log("⚠️ 热键已布防但键盘钩子句柄为空（轮询兜底将重挂）");
+        }
+
+        /* ⑤ 3s 刷 PS PID 集合 */
+        if (now - lastPs >= 3000) { lastPs = now; kh_refresh_ps_pids(); }
+
+        /* ⑥ 1s 配置 mtime 轮询（FileSystemWatcher 的进程内等价物） */
+        if (now - lastCfg >= 1000) { lastCfg = now; kh_poll_config_file(); }
+    }
+    kh_log("看护线程已退出");
+    return 0;
+}
+
+static void kh_refresh_ps_pids(void)
+{
+    DWORD buf[KH_PSPID_MAX];
+    int n = 0;
+    HANDLE h = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (h != INVALID_HANDLE_VALUE) {
+        PROCESSENTRY32W pe;
+        pe.dwSize = sizeof(pe);
+        if (Process32FirstW(h, &pe)) {
+            do {
+                if (n < KH_PSPID_MAX && _wcsicmp(pe.szExeFile, L"photoshop.exe") == 0)
+                    buf[n++] = pe.th32ProcessID;
+            } while (Process32NextW(h, &pe));
+        }
+        CloseHandle(h);
+    }
+    int idx = (g_khPidIdx == 0) ? 1 : 0;
+    if (n > 0) memcpy(g_khPidBuf[idx], buf, sizeof(DWORD) * (size_t)n);
+    g_khPidCount = n;
+    InterlockedExchange(&g_khPidIdx, idx);
+}
+
+/* ================================================================ 旧版 daemon 迁移 */
+
+/* bind 18923 失败时探测占用者：确认是旧版 HotkeyDaemon（version 2026-10-12.x）
+   就以 WS 客户端发 uninstall，令其自清自启+安装目录后退出；下一轮重试即可接管。
+   ⛔ 绝不误伤：握手失败 / 非旧版版本号 ⇒ 什么都不做，只保持重试。 */
+static void kh_try_migrate(void)
+{
+    DWORD now = GetTickCount();
+    if (now - g_khLastMigrate < 10000) return;          /* 10s 内不重复探测 */
+    g_khLastMigrate = now;
+
+    SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == INVALID_SOCKET) return;
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(KH_PORT);
+    if (connect(s, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+        closesocket(s);
+        return;                                          /* 没人在听 ⇒ 无需迁移 */
+    }
+    DWORD to = 1500;
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&to, sizeof(to));
+    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&to, sizeof(to));
+    if (wc_client_handshake(s, KH_PORT, "/") != 0) {
+        closesocket(s);
+        kh_log("迁移探测：18923 有占用但握手失败（非 WS 服务？），不处理");
+        return;
+    }
+    wc_send_masked(s, "{\"type\":\"getState\"}");
+    /* ⛔ 32KB：getState 内嵌全部 combos（daemon 上限 256 条约 6.5KB），
+       2048 会把旧版应答截成 -3（异常大帧）⇒ 误判"非旧版"而永不迁移。 */
+    static char mbuf[32768];
+    int op = 0, fin = 0;
+    int n = wc_read_frame(s, mbuf, (int)sizeof(mbuf), &op, &fin);
+    if (n > 0 && strstr(mbuf, "\"version\":\"2026-10-12")) {
+        kh_log("检测到旧版 HotkeyDaemon（2026-10-12.x）⇒ 发卸载指令令其自清自启+目录后退出");
+        wc_send_masked(s, "{\"type\":\"uninstall\"}");
+        Sleep(800);                                      /* 等它退出（DoUninstall→Exit） */
+    } else {
+        kh_log("18923 占用者不是旧版守护进程（无 getState 应答），仅保持重试");
+    }
+    closesocket(s);
+}
+
+/* ================================================================ WS 18923 服务器 */
+
+static DWORD WINAPI kh_server_thread(LPVOID param)
+{
+    (void)param;
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+        kh_log("WSAStartup 失败");
+        return 1;
+    }
+    SOCKET ls = INVALID_SOCKET;
+    while (!g_khStop && !g_khSrvStop) {
+        ls = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (ls == INVALID_SOCKET) { kh_log("socket 失败 %d", WSAGetLastError()); return 1; }
+        BOOL reuse = TRUE;
+        setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse));
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = htons(KH_PORT);
+        if (bind(ls, (struct sockaddr*)&addr, sizeof(addr)) == 0) break;
+        kh_log("bind 18923 失败 %d（旧版 HotkeyDaemon 或其它 PS 实例占用）", WSAGetLastError());
+        closesocket(ls);
+        ls = INVALID_SOCKET;
+        kh_try_migrate();
+        Sleep(3000);
+    }
+    if (ls == INVALID_SOCKET) {
+        kh_log("WS 18923 服务器线程退出（未监听）");
+        return 0;
+    }
+    if (listen(ls, 4) != 0) {
+        kh_log("listen 失败 %d", WSAGetLastError());
+        closesocket(ls);
+        return 1;
+    }
+    g_khListen = ls;
+    InterlockedExchange(&g_khBound, 1);
+    kh_log("监听 127.0.0.1:18923 就绪（.8li 进程内热键服务；持有端口者才装键盘钩子）");
+
+    while (!g_khStop && !g_khSrvStop) {
+        fd_set rs;
+        FD_ZERO(&rs);
+        FD_SET(ls, &rs);
+        struct timeval tv = { 0, 300 * 1000 };
+        int r = select(0, &rs, NULL, NULL, &tv);
+        if (g_khStop || g_khSrvStop) break;
+        if (r <= 0) continue;
+        SOCKET c = accept(ls, NULL, NULL);
+        if (c == INVALID_SOCKET) continue;
+        if (!kh_cli_add(c)) { closesocket(c); continue; }   /* 登记满 ⇒ 拒收 */
+        HANDLE t = CreateThread(NULL, 0, kh_client_thread, (LPVOID)(UINT_PTR)c, 0, NULL);
+        if (t) CloseHandle(t);                              /* 句柄不持有：线程自清理 */
+        else { kh_cli_remove(c); closesocket(c); }
+    }
+    if (g_khListen == ls) { closesocket(ls); g_khListen = INVALID_SOCKET; }
+    InterlockedExchange(&g_khBound, 0);
+    kh_cli_shutdown_all();
+    kh_log("WS 18923 服务器线程退出");
+    return 0;
+}
+
+/* ================================================================ 协议分发 */
+
+static void kh_set_arm(int on)
+{
+    InterlockedExchange(&g_khArmed, on ? 1 : 0);
+    kh_log("热键钩子%s", on ? "已布防" : "已撤防");
+    /* 低延迟通道；队列未就绪时失败也无妨（100ms 轮询兜底）。 */
+    if (g_khRecThreadId)
+        PostThreadMessage(g_khRecThreadId, on ? WM_KH_INSTALL : WM_KH_UNINSTALL, 0, 0);
+}
+
+/* .8li 形态的「卸载」：清旧 daemon 遗留 + 撤防 + 释放 18923。
+   ⛔ 不能退出宿主进程（.8li 与 PS 共命运）⇒ 停服务器+卸钩子后常驻，
+      用户重启 PS 即恢复（面板 UI 会相应改写，见 BrushHotkeySection）。 */
+static void kh_do_uninstall(SOCKET s)
+{
+    kh_log("收到卸载指令（.8li 形态：清旧 daemon 遗留 + 撤防 + 释放 18923）");
+    kh_send_to(s, "{\"type\":\"bye\"}");
+
+    /* ① 撤防（防看护重挂） */
+    InterlockedExchange(&g_khArmed, 0);
+
+    /* ② 清开机自启（旧版 HotkeyDaemon 的项） */
+    HKEY k;
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                      0, KEY_SET_VALUE, &k) == ERROR_SUCCESS) {
+        LONG r = RegDeleteValueA(k, "JWautofillHotkeyDaemon");
+        RegCloseKey(k);
+        kh_log("开机自启项 JWautofillHotkeyDaemon：%s",
+               r == ERROR_SUCCESS ? "已移除" : "不存在或移除失败");
+    }
+
+    /* ③ 删旧安装目录（隐藏 cmd 延迟 1s，避开占用） */
+    wchar_t lad[MAX_PATH] = L"";
+    GetEnvironmentVariableW(L"LOCALAPPDATA", lad, MAX_PATH);
+    if (lad[0]) {
+        wchar_t dir[MAX_PATH], cmd[MAX_PATH * 2];
+        _snwprintf(dir, MAX_PATH, L"%s\\JWautofill\\daemon", lad);
+        _snwprintf(cmd, MAX_PATH * 2,
+                   L"cmd.exe /c timeout /t 1 /nobreak > nul & rmdir /s /q \"%s\"", dir);
+        STARTUPINFOW si;
+        PROCESS_INFORMATION pi;
+        ZeroMemory(&si, sizeof(si)); si.cb = sizeof(si);
+        ZeroMemory(&pi, sizeof(pi));
+        si.dwFlags = STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_HIDE;
+        if (CreateProcessW(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+            char u8[MAX_PATH];
+            kh_w2u8(dir, u8, (int)sizeof(u8));
+            kh_log("已安排删除旧安装目录 %s", u8);
+        }
+    }
+
+    /* ④ 停 WS 服务器（释放端口）；本连接由所属线程收尾关闭 */
+    InterlockedExchange(&g_khSrvStop, 1);
+    if (g_khListen != INVALID_SOCKET) shutdown(g_khListen, SD_BOTH);
+    shutdown(s, SD_BOTH);
+}
+
+/* ================================================================ 键盘一键修复 */
+/* 面板「键盘卡死一键修复」的 .8li 形态实现（原 fix-keyboard.ps1 的进程内等价物）。
+ *
+ * 分工（与 ps1 的 7 步逐项对应，避免行为回退）：
+ *   ① 卸掉我们自己的键盘钩子 —— 键盘冻结的头号嫌疑人就是它，⛔ 必须**先做**，
+ *     不能等用户点完 UAC 才卸（冻结期间只有鼠标可点，UAC 可能要等很久）；
+ *   ② 重置 LowLevelHooksTimeout（>5000ms 即危险值，删除恢复系统默认）；
+ *   ③ 为 Ctrl/Alt/Shift/Win 补发抬起事件（解卡住的修饰键）；
+ *   ④ 重启 ctfmon（输入法假死）；
+ *   ⑤⑥⑦ 设备层两步（pnputil 软重置键盘设备链 / 关闭 USB 省电策略）需要管理员，
+ *     由面板传入的内置 fix-keyboard.ps1 以 runas 提权完成 —— 它自含 UAC 逻辑，
+ *     且步骤 1-5 是幂等的（无 daemon 进程/无自启项/超时已重置，重做皆无副作用）。
+ *
+ * ⛔ 修复后**不自动重挂**：若冻结真是我们的钩子造成的，自动重挂等于再冻一次。
+ *     保持撤防，用户确认键盘恢复后可在面板重新打开开关（或重启 PS）。
+ */
+
+/* LowLevelHooksTimeout 危险值复位（HKCU，无需管理员）。 */
+static void kh_repair_reset_hook_timeout(void)
+{
+    HKEY k;
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, "Control Panel\\Desktop", 0,
+                      KEY_READ | KEY_WRITE, &k) != ERROR_SUCCESS) {
+        kh_log("键盘修复：打不开 Desktop 键，跳过超时复位");
+        return;
+    }
+    /* ⛔ 与 kh_read_ll_timeout 同款：先 NULL 缓冲问 type+size 再分流。 */
+    DWORD type = 0, sz = 0;
+    if (RegQueryValueExA(k, "LowLevelHooksTimeout", NULL, &type, NULL, &sz) == ERROR_SUCCESS) {
+        DWORD v = 0;
+        int have = 0;
+        if (type == REG_DWORD && sz == sizeof(DWORD)) {
+            sz = sizeof(v);
+            if (RegQueryValueExA(k, "LowLevelHooksTimeout", NULL, &type, (LPBYTE)&v, &sz) == ERROR_SUCCESS)
+                have = 1;
+        } else if (type == REG_SZ && sz > 0 && sz < 64) {
+            char s[64] = "";
+            if (RegQueryValueExA(k, "LowLevelHooksTimeout", NULL, &type, (LPBYTE)s, &sz) == ERROR_SUCCESS) {
+                v = (DWORD)atoi(s); have = 1;
+            }
+        }
+        if (have && v > 5000) {
+            if (RegDeleteValueA(k, "LowLevelHooksTimeout") == ERROR_SUCCESS)
+                kh_log("键盘修复：LowLevelHooksTimeout=%lu 已删除（恢复系统默认）", v);
+            else
+                kh_log("键盘修复：LowLevelHooksTimeout=%lu 删除失败 err=%lu", v, GetLastError());
+        } else if (have) {
+            kh_log("键盘修复：LowLevelHooksTimeout=%lu 在安全范围，保持不变", v);
+        } else {
+            kh_log("键盘修复：LowLevelHooksTimeout 已是系统默认");
+        }
+    } else {
+        kh_log("键盘修复：LowLevelHooksTimeout 已是系统默认");
+    }
+    RegCloseKey(k);
+}
+
+/* 为 8 个修饰键补发 KEYUP（解「钩子吞键导致系统以为键还按着」的卡死）。 */
+static void kh_repair_release_modifiers(void)
+{
+    static const BYTE vks[8] = { 0xA2, 0xA3, 0xA4, 0xA5, 0xA0, 0xA1, 0x5B, 0x5C };
+    for (int i = 0; i < 8; i++) keybd_event(vks[i], 0, KEYEVENTF_KEYUP, 0);
+    kh_log("键盘修复：已为 Ctrl/Alt/Shift/Win 补发抬起事件");
+}
+
+/* 重启 ctfmon（输入法假死；失败不影响整体修复）。 */
+static void kh_repair_restart_ctfmon(void)
+{
+    int killed = 0;
+    HANDLE h = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (h != INVALID_HANDLE_VALUE) {
+        PROCESSENTRY32W pe;
+        pe.dwSize = sizeof(pe);
+        if (Process32FirstW(h, &pe)) {
+            do {
+                if (_wcsicmp(pe.szExeFile, L"ctfmon.exe") == 0) {
+                    HANDLE p = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
+                    if (p) {
+                        if (TerminateProcess(p, 0)) killed++;
+                        CloseHandle(p);
+                    }
+                }
+            } while (Process32NextW(h, &pe));
+        }
+        CloseHandle(h);
+    }
+    wchar_t sys[MAX_PATH], exe[MAX_PATH + 24];
+    GetSystemDirectoryW(sys, MAX_PATH);
+    _snwprintf(exe, MAX_PATH + 24, L"%s\\ctfmon.exe", sys);
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si)); si.cb = sizeof(si);
+    ZeroMemory(&pi, sizeof(pi));
+    if (CreateProcessW(exe, NULL, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        kh_log("键盘修复：ctfmon 已重启（结束 %d 个旧实例）", killed);
+    } else {
+        kh_log("键盘修复：ctfmon 重启失败 err=%lu（已结束 %d 个）", GetLastError(), killed);
+    }
+}
+
+/* 提权唤起内置 fix-keyboard.ps1（设备层两步：软重置键盘 + USB 省电策略）。
+   script 为空/不存在 ⇒ 跳过（基础 4 步已做完，设备层留给用户手动重插键盘）。 */
+static int kh_repair_launch_script(const char* script)
+{
+    if (!script || !*script) { kh_log("键盘修复：未提供脚本路径，跳过设备层两步"); return 0; }
+    wchar_t w[1024];
+    kh_u8_to_w(script, w, 1024);
+    if (GetFileAttributesW(w) == INVALID_FILE_ATTRIBUTES) {
+        kh_log("键盘修复：脚本不存在，跳过设备层两步：%s", script);
+        return 0;
+    }
+    /* runas ⇒ UAC 提权（ps1 顶部检测到已管理员会跳过自提权，只弹一次）。
+       控制台可见：修复进度与结果要能让用户看见（键盘卡死时唯一可用的就是眼睛+鼠标）。 */
+    wchar_t params[1200];
+    _snwprintf(params, 1200,
+               L"-ExecutionPolicy Bypass -NoProfile -File \"%s\" -JwElevated", w);
+    SHELLEXECUTEINFOW sei;
+    ZeroMemory(&sei, sizeof(sei));
+    sei.cbSize = sizeof(sei);
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
+    sei.lpVerb = L"runas";
+    sei.lpFile = L"powershell.exe";
+    sei.lpParameters = params;
+    sei.nShow = SW_SHOWNORMAL;
+    if (ShellExecuteExW(&sei)) {
+        if (sei.hProcess) CloseHandle(sei.hProcess);
+        kh_log("键盘修复：已提权唤起设备层修复脚本（UAC 弹窗请点「是」）");
+        return 1;
+    }
+    kh_log("键盘修复：提权唤起脚本失败 err=%lu（用户可能取消了 UAC）", GetLastError());
+    return 0;
+}
+
+/* 修复主流程：回一帧 repairResult（ok=基础步骤是否走完，launched=设备层是否已唤起）。 */
+static void kh_do_repair(SOCKET s, const char* script)
+{
+    kh_log("收到键盘修复指令（.8li 进程内形态）");
+
+    /* ① 立即卸钩（bypass 100ms 轮询：冻结期每一毫秒都珍贵）。
+           ⛔ 客户端线程直卸：UnhookWindowsHookEx 本身线程安全（钩子线程即便
+              正处在回调中，系统也会让其跑完再摘链）；但录制态取消帧不能在此发——
+              g_khRecPending 注释约定仅钩子线程可写，出站环是 SPSC（单生产者=
+              钩子线程）⇒ 取消走 g_khRecReq=2 + WM_KH_RECSTOP 回钩子线程发。 */
+    InterlockedExchange(&g_khArmed, 0);
+    HHOOK hh = (HHOOK)InterlockedExchangePointer((PVOID*)&g_khHook, NULL);
+    if (hh) {
+        UnhookWindowsHookEx(hh);
+        kh_log("键盘钩子已卸载（修复流程，客户端线程直卸）");
+    }
+    if (g_khRecording) {
+        InterlockedExchange(&g_khRecReq, 2);
+        if (g_khRecThreadId) PostThreadMessage(g_khRecThreadId, WM_KH_RECSTOP, 0, 0);
+    }
+
+    /* ②③④ 无需权限的基础步骤 */
+    kh_repair_reset_hook_timeout();
+    kh_repair_release_modifiers();
+    kh_repair_restart_ctfmon();
+
+    /* ⑤ 设备层：提权跑内置 ps1 */
+    int launched = kh_repair_launch_script(script);
+
+    char msg[512];
+    _snprintf(msg, sizeof(msg),
+              "{\"type\":\"repairResult\",\"ok\":true,\"launched\":%s,"
+              "\"message\":\"%s\"}",
+              launched ? "true" : "false",
+              launched
+                ? "基础修复已完成（钩子已卸、超时已复位、修饰键已释放、输入法已重启），"
+                  "设备层修复脚本已提权打开——请在授权窗口点「是」，按窗口提示查看结果。"
+                  "快捷键暂保持关闭，确认键盘正常后可在面板重新打开。"
+                : "基础修复已完成（钩子已卸、超时已复位、修饰键已释放、输入法已重启）；"
+                  "设备层脚本未找到或未提权，若键盘仍异常请手动重新插拔键盘。"
+                  "快捷键暂保持关闭，确认键盘正常后可在面板重新打开。");
+    kh_send_to(s, msg);
+}
+
+static int kh_handle_message(SOCKET s, const char* js)
+{
+    char type[32] = "";
+    json_str(js, "type", type, (int)sizeof(type));
+
+    if (_stricmp(type, "setConfigPath") == 0) {
+        char p[512] = "";
+        if (json_str(js, "path", p, (int)sizeof(p))) kh_set_config_path(p);
+        return 0;
+    }
+    if (_stricmp(type, "shutdown") == 0) {
+        /* 面板「断开服务」：旧 daemon 会退出进程；.8li 与 PS 共命运不能退，
+           退化为「撤防 + bye + 断开本连接」，服务器保持监听。 */
+        kh_log("收到断开指令（.8li 常驻：撤防+断开，不退出宿主）");
+        kh_send_to(s, "{\"type\":\"bye\"}");
+        kh_set_arm(0);
+        shutdown(s, SD_BOTH);
+        return 0;
+    }
+    if (_stricmp(type, "uninstall") == 0) {
+        kh_do_uninstall(s);
+        return 0;
+    }
+    if (_stricmp(type, "config") == 0) {
+        const char* pl = json_find(js, "payload");
+        if (pl && *pl == '[') kh_save_config(pl);
+        return 0;
+    }
+    if (_stricmp(type, "getConfig") == 0) {
+        KhItem items[KH_MAX_ITEMS];
+        int n = kh_read_config_file(items, KH_MAX_ITEMS);
+        if (n < 0) n = 0;
+        char* payload = (char*)malloc(160 * 1024);
+        char* msg = payload ? (char*)malloc(170 * 1024) : NULL;
+        if (payload && msg) {
+            char pathNow[512], pathEsc[1024];
+            kh_items_to_json(items, n, payload, 160 * 1024);
+            kh_cfg_snapshot_u8(pathNow, 512);
+            kh_esc(pathNow, pathEsc, (int)sizeof(pathEsc));
+            _snprintf(msg, 170 * 1024,
+                      "{\"type\":\"config\",\"payload\":[%s],\"path\":\"%s\"}",
+                      payload, pathEsc);
+            kh_send_to(s, msg);
+        }
+        free(payload);
+        free(msg);
+        return 0;
+    }
+    if (_stricmp(type, "getState") == 0) {
+        char st[8192];
+        kh_build_state(st, (int)sizeof(st));
+        kh_send_to(s, st);
+        return 0;
+    }
+    if (_stricmp(type, "hotkeyArm") == 0) {
+        int on = 1;
+        json_bool(js, "on", &on);                        /* 缺省 true（ReadBool 同款） */
+        kh_set_arm(on);
+        return 0;
+    }
+    if (_stricmp(type, "hotkeyStatus") == 0) {
+        char st[512];
+        kh_build_hotkey_state(st, (int)sizeof(st));
+        kh_send_to(s, st);
+        return 0;
+    }
+    if (_stricmp(type, "repairKeyboard") == 0) {
+        /* 面板「键盘卡死一键修复」：script = 面板解析出的 fix-keyboard.ps1 全路径
+           （.8li 装在 PS Plug-ins 目录，无法从自身路径推导插件根 ⇒ 必须由面板传入）。 */
+        char script[1024] = "";
+        json_str(js, "script", script, (int)sizeof(script));
+        kh_do_repair(s, script);
+        return 0;
+    }
+    if (_stricmp(type, "recordStart") == 0) {
+        char brush[192] = "";
+        json_str(js, "brush", brush, (int)sizeof(brush));
+        EnterCriticalSection(&g_khRecLk);
+        g_khRecClient = s;
+        memcpy(g_khRecBrush, brush, sizeof(g_khRecBrush));
+        LeaveCriticalSection(&g_khRecLk);
+        InterlockedExchange(&g_khRecReq, 1);
+        if (g_khRecThreadId) PostThreadMessage(g_khRecThreadId, WM_KH_RECSTART, 0, 0);
+        return 0;
+    }
+    if (_stricmp(type, "recordCancel") == 0) {
+        InterlockedExchange(&g_khRecReq, 2);
+        if (g_khRecThreadId) PostThreadMessage(g_khRecThreadId, WM_KH_RECSTOP, 0, 0);
+        return 0;
+    }
+    if (_stricmp(type, "armDelete") == 0) {
+        char owner[96] = "";
+        json_str(js, "owner", owner, (int)sizeof(owner));
+        EnterCriticalSection(&g_khArmLk);
+        g_khArmClient = s;
+        memcpy(g_khArmOwner, owner, sizeof(g_khArmOwner));
+        InterlockedExchange(&g_khArmOn, 1);
+        LeaveCriticalSection(&g_khArmLk);
+        return 0;
+    }
+    if (_stricmp(type, "disarmDelete") == 0) {
+        EnterCriticalSection(&g_khArmLk);
+        if (g_khArmClient == s) {
+            g_khArmClient = INVALID_SOCKET;
+            g_khArmOwner[0] = 0;
+            InterlockedExchange(&g_khArmOn, 0);
+        }
+        LeaveCriticalSection(&g_khArmLk);
+        return 0;
+    }
+
+    /* 未知消息节流 2s 留痕（静默吞 = 排障无从下手） */
+    {
+        static volatile LONG s_lastMs;
+        DWORD nowM = GetTickCount();
+        if ((DWORD)(nowM - (DWORD)s_lastMs) >= 2000) {
+            s_lastMs = (LONG)nowM;
+            char head[64] = "";
+            _snprintf(head, sizeof(head), "%s", js);
+            kh_log("未知消息(节流): type=\"%s\" 原文=%.60s", type, head);
+        }
+    }
+    return 0;
+}
+
+static void kh_on_text(void* ctx, const char* text)
+{
+    SOCKET s = (SOCKET)(UINT_PTR)ctx;
+    kh_handle_message(s, text);
+}
+
+static DWORD WINAPI kh_client_thread(LPVOID param)
+{
+    SOCKET s = (SOCKET)(UINT_PTR)param;
+    int closedBy = 0;
+    if (wc_handshake(s) != 0) { closesocket(s); kh_cli_remove(s); return 0; }
+    kh_log("面板已连接 ws(18923)");
+    /* ⛔ 建连**不主动推配置**（同 daemon 2026-10-14 修复）：
+       面板 onopen 序列 = setConfigPath → getConfig；握手后立刻推会带着
+       尚未对齐的路径与空/旧配置，触发面板告警与回写护栏。 */
+    wc_client_loop(s, &g_khSendLk, kh_on_text, (void*)(UINT_PTR)s, &closedBy);
+
+    /* 断开清理两段，各自独立：录制取消 + 退格布防撤防 */
+    EnterCriticalSection(&g_khRecLk);
+    if (g_khRecClient == s) {
+        g_khRecClient = INVALID_SOCKET;
+        g_khRecBrush[0] = 0;
+        InterlockedExchange(&g_khRecReq, 2);             /* 取消进行中的录制 */
+    }
+    LeaveCriticalSection(&g_khRecLk);
+    EnterCriticalSection(&g_khArmLk);
+    if (g_khArmClient == s) {
+        g_khArmClient = INVALID_SOCKET;
+        g_khArmOwner[0] = 0;
+        InterlockedExchange(&g_khArmOn, 0);
+    }
+    LeaveCriticalSection(&g_khArmLk);
+
+    kh_cli_remove(s);
+    shutdown(s, SD_BOTH);
+    closesocket(s);
+    kh_log("面板已断开 reason=%s err=%d",
+           closedBy == 1 ? "对端close" : closedBy == 2 ? "异常大帧" : "recv错误",
+           closedBy == 0 ? WSAGetLastError() : 0);
+    return 0;
+}
+
+/* ================================================================ 启停 */
+
+int keyhook_started(void)
+{
+    return (int)g_khStarted;
+}
+
+void keyhook_start(void)
+{
+    if (InterlockedCompareExchange(&g_khStarted, 1, 0) != 0) return;
+    wc_lk_init();
+    InitializeCriticalSection(&g_khCliLk);
+    InitializeCriticalSection(&g_khSendLk);
+    InitializeCriticalSection(&g_khRecLk);
+    InitializeCriticalSection(&g_khArmLk);
+    InitializeCriticalSection(&g_khMapLk);
+    InitializeCriticalSection(&g_khCfgLk);
+    for (int i = 0; i < KH_MAX_CLI; i++) {
+        g_khCli[i].s = INVALID_SOCKET;
+        g_khCli[i].closing = 0;
+    }
+    g_khRecClient = INVALID_SOCKET;
+    g_khArmClient = INVALID_SOCKET;
+    g_khListen = INVALID_SOCKET;
+    g_khHook = NULL;
+    g_khRecThreadId = 0;
+    InterlockedExchange(&g_khStop, 0);
+    InterlockedExchange(&g_khSrvStop, 0);
+    InterlockedExchange(&g_khArmed, 1);          /* 默认布防（daemon 初值 true） */
+    InterlockedExchange(&g_khActive, 1);         /* 我们就在 PS 里 ⇒ PS 必然在运行 */
+    InterlockedExchange(&g_khSafeMode, 0);
+    InterlockedExchange(&g_khStrikes, 0);
+    InterlockedExchange(&g_khSafeSince, 0);
+    InterlockedExchange(&g_khPendingBreakLog, 0);
+    InterlockedExchange(&g_khReinstall, 0);
+    InterlockedExchange(&g_khRecReq, 0);
+    InterlockedExchange(&g_khRecording, 0);
+    InterlockedExchange(&g_khArmOn, 0);
+    InterlockedExchange(&g_khMapSeq, 0);
+    InterlockedExchange(&g_khMapCount, 0);
+    InterlockedExchange(&g_khItemCount, 0);
+    g_khMap = g_khMapBuf[0];
+    g_khHitHead = g_khHitTail = g_khHitDrops = 0;
+    g_khOutHead = g_khOutTail = 0;
+    g_khHlogHead = g_khHlogTail = 0;
+    g_khPidIdx = 0;
+    g_khPidCount = 0;
+    g_khCfgWtOk = 0;
+    g_khLastMigrate = 0;
+    g_khRecPending[0] = 0;
+
+    g_khWake = CreateEventW(NULL, FALSE, FALSE, NULL);       /* 自动复位 */
+    g_khThreadReady = CreateEventW(NULL, FALSE, FALSE, NULL);
+
+    kh_load_cfg_store();
+    kh_refresh_ps_pids();
+
+    /* 钩子线程先就绪（它的消息队列是 install/record 指令的落点）。 */
+    ResetEvent(g_khThreadReady);
+    g_khHookThread = CreateThread(NULL, 0, kh_hook_thread, NULL, 0, NULL);
+    if (g_khHookThread) WaitForSingleObject(g_khThreadReady, 2000);
+    g_khWatchdogThread = CreateThread(NULL, 0, kh_watchdog_thread, NULL, 0, NULL);
+    g_khDispatchThread = CreateThread(NULL, 0, kh_dispatch_thread, NULL, 0, NULL);
+    g_khServerThread   = CreateThread(NULL, 0, kh_server_thread, NULL, 0, NULL);
+    kh_reload();       /* 启动即装载（不等面板；旧 daemon 开机自启的等价物） */
+    kh_log("热键子系统已启动（.8li 进程内形态，端口 18923，默认布防）");
+}
+
+void keyhook_stop(void)
+{
+    if (InterlockedCompareExchange(&g_khStarted, 0, 1) == 0) return;
+    InterlockedExchange(&g_khStop, 1);
+    InterlockedExchange(&g_khSrvStop, 1);
+    SetEvent(g_khWake);
+    if (g_khListen != INVALID_SOCKET) shutdown(g_khListen, SD_BOTH);
+    if (g_khRecThreadId) PostThreadMessage(g_khRecThreadId, WM_QUIT, 0, 0);
+
+    if (g_khDispatchThread) {
+        WaitForSingleObject(g_khDispatchThread, 1000);
+        CloseHandle(g_khDispatchThread); g_khDispatchThread = NULL;
+    }
+    if (g_khHookThread) {
+        WaitForSingleObject(g_khHookThread, 2000);
+        CloseHandle(g_khHookThread); g_khHookThread = NULL;
+    }
+    if (g_khServerThread) {
+        WaitForSingleObject(g_khServerThread, 5000);   /* 覆盖 bind 重试的 3s 睡眠 */
+        CloseHandle(g_khServerThread); g_khServerThread = NULL;
+    }
+    if (g_khWatchdogThread) {
+        WaitForSingleObject(g_khWatchdogThread, 1000);
+        CloseHandle(g_khWatchdogThread); g_khWatchdogThread = NULL;
+    }
+    kh_cli_shutdown_all();     /* 仍未退的客户端线程：只 shutdown，句柄归它们 */
+    if (g_khWake) { CloseHandle(g_khWake); g_khWake = NULL; }
+    if (g_khThreadReady) { CloseHandle(g_khThreadReady); g_khThreadReady = NULL; }
+    g_khRecThreadId = 0;
+    kh_log("热键子系统已停止（键盘钩子已卸，18923 已释放；.8li 常驻不退出宿主）");
+}

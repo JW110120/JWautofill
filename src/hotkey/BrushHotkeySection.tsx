@@ -3,11 +3,12 @@ import { storage, shell } from 'uxp';
 import {
   HotkeyEntry, connectHotkeyDaemon, onConfig, enumerateBrushes,
   onDaemonStatus, pushConfig, requestHotkeyRecording, cancelHotkeyRecording,
-  onHotkeyTriggered, onRecordProgress, disconnectDaemon, sendDaemonCommand, registerUninstallHandler,
+  onHotkeyTriggered, onRecordProgress, sendDaemonCommand, registerUninstallHandler,
   registerRepairKeyboardHandler,
   getMainToggleCombo,
   armBackspaceDelete, disarmBackspaceDelete, onBackspaceDelete,
-  detectAllBrushTypes
+  detectAllBrushTypes,
+  setHotkeyArm, onHotkeyState, requestKeyboardRepair, resolveRepairScriptPath
 } from './HotkeyBridge';
 import { DeleteIcon, RefreshIcon, DataRefreshIcon, RecordCircleIcon, StopSquareIcon, BrushToolIcon, SmudgeToolIcon, MixerToolIcon, CloneStampIcon } from '../styles/Icons';
 import BrushSelect, { BrushSelectOption } from './BrushSelect';
@@ -97,6 +98,10 @@ export default function BrushHotkeySection() {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [daemonConnected, setDaemonConnected] = useState(false);
+  // 热键布防状态（.8li 形态）：服务就绪 ≠ 热键生效。WS 连上仅代表
+  // 「JWautofill Smooth」扩展在进程内跑着；钩子装不装由布防开关决定
+  // （onHotkeyState 跃变广播 / hotkeyStatus 回帧驱动）。
+  const [hotkeyArmed, setHotkeyArmed] = useState(false);
   // 已录快捷键的选中集合：单击单选，Ctrl/Shift + 单击加选或减选，用于单个/批量删除
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   // 多选锚点（shift 延伸的基准）：普通单击或 Ctrl 单击后更新为该条索引
@@ -127,6 +132,8 @@ export default function BrushHotkeySection() {
   // refs：供轮询读取最新值，避免闭包拿到旧值
   const daemonConnectedRef = useRef(daemonConnected);
   useEffect(() => { daemonConnectedRef.current = daemonConnected; }, [daemonConnected]);
+  const hotkeyArmedRef = useRef(hotkeyArmed);
+  useEffect(() => { hotkeyArmedRef.current = hotkeyArmed; }, [hotkeyArmed]);
   // 笔刷列表镜像：启动首刷的重试循环要判断「这次枚举是否拿到了笔刷」，
   // 而 setBrushes 是异步的、闭包里的 brushes 仍是旧值，故用 ref 读最新结果。
   const brushesRef = useRef<string[]>(brushes);
@@ -154,6 +161,9 @@ export default function BrushHotkeySection() {
       if (changed) pushConfig(normalized);
     });
     const unsubStatus = onDaemonStatus(setDaemonConnected);
+    // 布防状态：跃变广播（布防/撤防/熔断自愈）与 hotkeyStatus 回帧都走这里。
+    // 开关是「乐观更新 + 广播校准」：本地先翻，服务确认帧到达后以它为准。
+    const unsubArmed = onHotkeyState((st) => setHotkeyArmed(st.armed));
     // 热键触发即时反馈：用户按快捷键后面板直接显示是否命中、切换是否成功
     // （这是诊断「按了快捷键没反应」的关键观测点：无任何显示 = 事件根本没到达面板）
     const unsubHotkey = onHotkeyTriggered((info) => {
@@ -197,7 +207,7 @@ export default function BrushHotkeySection() {
     //   属改动文档状态的操作，只在用户手动刷新时才做。
     void initialLoadRef.current?.();
     return () => {
-      unsub(); unsubConfig(); unsubStatus(); unsubHotkey(); unsubProgress();
+      unsub(); unsubConfig(); unsubStatus(); unsubArmed(); unsubHotkey(); unsubProgress();
       // 卸载时取消待执行的首刷：避免面板已卸载仍发 get（会撞上 PS 忙碌窗口）
       initialLoadRef.current?.cancel();
     };
@@ -308,68 +318,72 @@ export default function BrushHotkeySection() {
     return true;
   };
 
-  // 「加载守护进程」：直接静默拉起守护进程 exe（已编译为 Windows GUI 子系统，无控制台窗口）。
-  // 守护进程自身完成「拷贝到安装目录 + 注册开机自启」，全程无窗口；
-  // 加载进度与结果一律走面板文字通知（下方 showMessage），不再弹任何 cmd/PowerShell 窗口。
-  const loadDaemon = async () => {
+  // 「开启热键」（.8li 形态）：⛔ 不再是「拉起 exe」——快捷键服务由 Photoshop
+  // 扩展「JWautofill Smooth」（.8li）在 PS 进程内承载，随 PS 启停，面板无法
+  // 启动/停止它。这里只做一件事：服务在位 ⇒ 发 hotkeyArm(true) 布防。
+  // 服务不在位（WS 18923 连不上）⇒ 引导用户去启用扩展，而不是静默失败。
+  const armHotkeys = async () => {
     if (busy) return;
-    if (daemonConnectedRef.current) { showMessage('快捷键服务已在运行'); return; }
+    if (!daemonConnectedRef.current) {
+      showMessage('快捷键服务未连接：请确认 Photoshop 已启用「JWautofill Smooth」扩展'
+        + '（菜单：窗口 → 插件），然后重新加载本面板。');
+      return;
+    }
     setBusy(true);
     try {
-      const ok = await openBundled('native/HotkeyDaemon/publish/JWautofillHotkeyDaemon.exe');
-      if (!ok) {
-        showMessage('启动失败：未找到快捷键服务，请手动双击插件目录 native/HotkeyDaemon/publish/JWautofillHotkeyDaemon.exe');
-        return;
+      if (setHotkeyArm(true)) {
+        setHotkeyArmed(true);
+        showMessage('热键已开启');
+      } else {
+        showMessage('指令发送失败，请重新加载插件后重试');
       }
-      showMessage('正在启动快捷键服务…');
-      for (let i = 0; i < 30; i++) {
-        await new Promise(r => setTimeout(r, 1000));
-        if (daemonConnectedRef.current) { showMessage('快捷键服务已就绪'); return; }
-      }
-      showMessage('未检测到快捷键服务：请稍后重试，或手动双击插件目录 native/HotkeyDaemon/publish/JWautofillHotkeyDaemon.exe');
-    } catch (e: any) {
-      const msg = e && e.message ? String(e.message) : (typeof e === 'string' ? e : JSON.stringify(e));
-      showMessage('启动快捷键服务失败：' + msg + '（可手动双击插件目录 native/HotkeyDaemon/publish/JWautofillHotkeyDaemon.exe）');
     } finally {
       setBusy(false);
     }
   };
 
-  // 「断开守护进程」：让守护进程自己优雅退出。
-  // 这是卸载前必须的准备动作——卸载脚本要删安装目录，而运行中的 exe 会锁住目录里的日志文件。
-  const stopDaemon = async () => {
+  // 「暂停热键」：撤防 = 立即卸钩（按键恢复 PS 原生行为），连接与配置原样保留。
+  // 不再调 disconnectDaemon（shutdown）——那会把 WS 也断掉，与服务形态不符。
+  const disarmHotkeys = async () => {
     if (busy) return;
-    if (!disconnectDaemon()) { showMessage('当前未连接到快捷键服务，无需停止'); return; }
+    if (!daemonConnectedRef.current) { showMessage('当前未连接到快捷键服务'); return; }
     setBusy(true);
-    showMessage('正在停止快捷键服务…');
     try {
-      for (let i = 0; i < 20; i++) {
-        await new Promise(r => setTimeout(r, 500));
-        if (!daemonConnectedRef.current) { showMessage('快捷键服务已停止（快捷键已停止生效，此时可安全卸载）'); return; }
+      if (setHotkeyArm(false)) {
+        setHotkeyArmed(false);
+        showMessage('热键已暂停（服务保持就绪，随时可以重新打开）');
+      } else {
+        showMessage('指令发送失败，请重新加载插件后重试');
       }
-      showMessage('快捷键服务无响应，请稍后重试；若仍无法停止，请重启电脑后再卸载。');
     } finally {
       setBusy(false);
     }
   };
 
-  // 卸载：低频操作，入口在面板右上角菜单里（见 MenuManager / AdjustmentMenu）。
-  // 优先走静默通道：直接让守护进程自删（移除开机自启 + 删除安装目录 + 退出），无窗口；
-  // 仅在未连接守护进程（无法发指令）时，才退回到会弹窗的脚本方式。
+  // 卸载（.8li 形态）：入口在面板右上角菜单里（见 MenuManager / AdjustmentMenu）。
+  // 语义已随 M3 迁移改写——守护进程退役，「卸载」现在做三件事：
+  //   ① 若还连着**旧版 daemon**（迁移窗口内会偶现），uninstall 指令正是旧 daemon
+  //      的自清信号（删自启 + 删安装目录 + 退出），.8li 随后自动接管 18923；
+  //   ② 若连着 .8li：清旧 daemon 遗留（自启项 / 安装目录）+ 撤防 + 释放 18923
+  //      （.8li 不能退出宿主 ⇒ WS 服务器停止，重启 PS 后恢复就绪）；
+  //   ③ 未连接时回落脚本（旧 daemon 可能正在跑但面板没连上）。
+  // ⚠️ 热键配置（hotkeys.json）按铁律**绝不删**，两种形态下重新启用即原样恢复。
   const uninstallDaemon = async (): Promise<string> => {
     if (daemonConnectedRef.current) {
-      showMessage('正在卸载快捷键服务…');
+      showMessage('正在卸载旧版快捷键服务…');
       const sent = sendDaemonCommand('uninstall');
       if (sent) {
         for (let i = 0; i < 20; i++) {
           await new Promise(r => setTimeout(r, 500));
           if (!daemonConnectedRef.current) {
-            const ret = '已卸载快捷键服务：开机自启已移除，安装目录已删除。';
+            const ret = '已卸载：开机自启与旧版安装目录已清理，键盘钩子已撤防。'
+              + '快捷键功能现由 Photoshop 扩展「JWautofill Smooth」在进程内提供，'
+              + '重启 Photoshop 后恢复就绪（保持关闭状态，可在面板重新开启）。';
             showMessage(ret);
             return ret;
           }
         }
-        const ret = '卸载指令已发送但快捷键服务未退出，请稍后重试，或手动删除安装目录。';
+        const ret = '卸载指令已发送但服务未退出，请稍后重试；若仍无法卸载，请重启电脑后再试。';
         showMessage(ret);
         return ret;
       }
@@ -394,37 +408,24 @@ export default function BrushHotkeySection() {
   };
 
   // 「键盘卡死一键修复」：当系统键盘被某个全局钩子拖住（打不出字）时的自救入口。
+  // .8li 形态（2026-10-17 M3 迁移）：FixKeyboard.exe 随守护进程退役，修复改由
+  // .8li 在**进程内**完成——卸钩（冻结期头号嫌疑人，必须最先做）→ 复位
+  // LowLevelHooksTimeout → 释放卡住的修饰键 → 重启 ctfmon；设备层两步
+  // （pnputil 软重置 / USB 省电）由内置 fix-keyboard.ps1 提权完成（自含 UAC）。
   // 设计要点：
-  //   1) 修复脚本全程无交互——键盘卡死时用户根本无法输入，所以绝不等待按键；
-  //   2) 除了「停止服务 + 复位系统键盘钩子超时设置 + 释放卡住的修饰键」，还会对键盘设备
-  //      做软重置（程序化重新插拔，覆盖 HID/USB 设备层冻结）并关闭 USB 省电策略；
-  //      设备重置需要管理员权限，脚本会自动弹 UAC（UAC 用鼠标点击即可，不依赖键盘）；
-  //      不删除热键配置与程序文件，修复后可随时重新启动快捷键服务；
-  //   3) 这里也不弹确认框，因为键盘失效时确认框同样难以操作。
+  //   1) 全程无键盘交互——键盘卡死时用户根本无法输入，脚本与 UAC 都只靠鼠标；
+  //   2) 不删热键配置与程序文件，修复后可随时重新打开开关；
+  //   3) 修复后快捷键**保持撤防**（自动重挂等于再冻一次），由用户确认后手动开启。
   const repairKeyboard = async (): Promise<string> => {
-    // 先让守护进程优雅退出（若还连着），确保它的全局键盘钩子被正常卸载
-    if (daemonConnectedRef.current) {
-      try { disconnectDaemon(); } catch { /* 优雅退出失败也无妨，脚本会强制结束进程 */ }
-      await new Promise(r => setTimeout(r, 600));
-    }
     showMessage('正在修复键盘…若弹出管理员授权窗口，请点击「是」');
-    let ok = false;
-    // ⚠️ 唤起 .exe 而非 .bat：UXP 的 shell.openPath 对 .bat/.ps1 只会「用编辑器打开而非执行」，
-    // 对 .exe 才会真正运行并弹出可见控制台窗口。FixKeyboard.exe 内部再调用 fix-keyboard.ps1。
-    try { ok = await openBundled('native/HotkeyDaemon/FixKeyboard.exe'); } catch (err: any) {
-      console.error('唤起键盘修复工具失败:', err);
-    }
-    if (!ok) {
-      // 兜底：唤起失败时打开工具所在目录，鼠标双击 FixKeyboard.exe 即可（键盘卡死时只有鼠标可用）
-      try {
-        const dir = await getBundledNativePath('native/HotkeyDaemon');
-        if (dir) await shell.openPath(dir);
-      } catch { /* 目录打不开就只能提示手动操作 */ }
-      const ret = '未找到/无法唤起键盘修复工具，已为你打开工具所在目录；若未弹出请手动双击 native/HotkeyDaemon/FixKeyboard.exe';
+    // .8li 装在 PS Plug-ins 目录，推导不出插件根 ⇒ 脚本路径必须由面板解析后传参
+    const script = await resolveRepairScriptPath();
+    if (!script) {
+      const ret = '未找到内置修复脚本 fix-keyboard.ps1（应位于插件目录 native/HotkeyDaemon 下），请重新安装插件后重试。';
       showMessage(ret);
       return ret;
     }
-    const ret = '键盘修复已执行：快捷键服务已停止，键盘设备已软重置（程序化重新插拔），USB 省电策略已关闭。请立即测试键盘；热键配置已保留。';
+    const ret = await requestKeyboardRepair(script);
     showMessage(ret);
     return ret;
   };
@@ -441,7 +442,10 @@ export default function BrushHotkeySection() {
   // 功能快捷键）占用时只提示、不覆盖——两边唯一关联就是占用提示，配置互不侵扰。
   const startRecord = async () => {
     if (!selectedBrush) { showMessage('请先在左侧选择一支笔刷'); return; }
-    if (!daemonConnected) { showMessage('快捷键服务未连接，无法录制（请先启动快捷键服务）'); return; }
+    if (!daemonConnected) { showMessage('快捷键服务未连接，无法录制（请确认已启用「JWautofill Smooth」扩展并重新加载面板）'); return; }
+    // .8li 形态：撤防态下 C 侧会直接回 recordCancel（与旧 daemon 一致）⇒ 提前拦一下，
+    // 给一句能指导行动的提示，而不是让用户面对一次「莫名取消的录制」。
+    if (!hotkeyArmedRef.current) { showMessage('热键开关当前是暂停的，请先在上方打开「热键」开关再录制'); return; }
     const mainCombo = getMainToggleCombo();
     setRecording(true);
     setRecordingBrush(selectedBrush);
@@ -485,14 +489,14 @@ export default function BrushHotkeySection() {
         showMessage(sameName.length > 1
           ? ('已合并重名「' + selectedBrush + '」并更新为：' + combo)
           : ('已更新「' + selectedBrush + '」的快捷键：' + combo));
-      } else showMessage('推送配置失败：快捷键服务未运行，或配置路径尚未就绪（请重新启动快捷键服务后重试）');
+      } else showMessage('推送配置失败：快捷键服务未连接，或配置路径尚未就绪（请重新加载插件后重试）');
       return;
     }
     const entry: HotkeyEntry = { id: 'bk_' + Date.now(), combo, action: 'applyBrush', brush: selectedBrush };
     const next = [...entries, entry];
     setEntries(next);
     if (pushConfig(next)) showMessage('已保存：' + combo + ' → ' + selectedBrush);
-    else showMessage('推送配置失败：快捷键服务未运行，或配置路径尚未就绪（请重新启动快捷键服务后重试）');
+    else showMessage('推送配置失败：快捷键服务未连接，或配置路径尚未就绪（请重新加载插件后重试）');
   };
 
   // 用户主动取消当前录制
@@ -543,7 +547,10 @@ export default function BrushHotkeySection() {
   // 解绑走「单击选中 + 退格」的布防通路（见下方 onBackspaceDelete）。
   const reRecordEntryById = async (target: HotkeyEntry) => {
     if (recording) return;
-    if (!daemonConnected) { showMessage('快捷键服务未连接，无法录制（请先启动快捷键服务）'); return; }
+    if (!daemonConnected) { showMessage('快捷键服务未连接，无法录制（请确认已启用「JWautofill Smooth」扩展并重新加载面板）'); return; }
+    // .8li 形态：撤防态下 C 侧会直接回 recordCancel（与旧 daemon 一致）⇒ 提前拦一下，
+    // 给一句能指导行动的提示，而不是让用户面对一次「莫名取消的录制」。
+    if (!hotkeyArmedRef.current) { showMessage('热键开关当前是暂停的，请先在上方打开「热键」开关再录制'); return; }
     const mainCombo = getMainToggleCombo();
     setRecording(true);
     setRecordingBrush(target.brush);
@@ -572,7 +579,7 @@ export default function BrushHotkeySection() {
       .map(e => (e.id === target.id ? { ...e, combo } : e));
     setEntries(next);
     if (pushConfig(next)) showMessage('已重录：' + combo + ' → ' + target.brush);
-    else showMessage('推送配置失败：快捷键服务未运行，或配置路径尚未就绪（请重新启动快捷键服务后重试）');
+    else showMessage('推送配置失败：快捷键服务未连接，或配置路径尚未就绪（请重新加载插件后重试）');
   };
 
   // 重录选中单条（重录图标按钮入口）。仅当恰好选中一条时可用。
@@ -619,7 +626,7 @@ export default function BrushHotkeySection() {
     const next = entriesRef.current.map(e => (e.id === target.id ? { ...e, combo: '' } : e));
     setEntries(next);
     if (pushConfig(next)) showMessage('已解绑「' + target.brush + '」的快捷键（条目已保留）');
-    else showMessage('推送配置失败：快捷键服务未运行，或配置路径尚未就绪（请重新启动快捷键服务后重试）');
+    else showMessage('推送配置失败：快捷键服务未连接，或配置路径尚未就绪（请重新加载插件后重试）');
   };
   useEffect(() => onBackspaceDelete((owner) => {
     if (owner !== 'brush') return; // 只认领自己的布防
@@ -756,17 +763,34 @@ export default function BrushHotkeySection() {
 
   return (
     <>
-      {/* 守护进程状态条：与「蒙版同步」的引擎状态条同一套视觉，左侧状态点+文字，右侧操作按钮。
-          外描边随状态变化：ok=绿 / warn=橙（common.css 的 .notify-bar-ok/warn） */}
-      <div className={daemonConnected ? 'notify-bar notify-bar-ok' : 'notify-bar notify-bar-warn'}>
-        <span className={daemonConnected ? 'indicator indicator-md indicator-ok' : 'indicator indicator-md indicator-warn'} />
+      {/* 服务状态条：与「蒙版同步」的引擎状态条同一套视觉，左侧状态点+文字，右侧操作按钮。
+          外描边随状态变化：ok=绿（热键生效）/ warn=橙（未连接或已暂停）。
+          .8li 形态三态：未连接（服务缺席）→ 已就绪但暂停（布防关）→ 热键生效（布防开）。 */}
+      <div className={(daemonConnected && hotkeyArmed) ? 'notify-bar notify-bar-ok' : 'notify-bar notify-bar-warn'}>
+        <span className={(daemonConnected && hotkeyArmed) ? 'indicator indicator-md indicator-ok' : 'indicator indicator-md indicator-warn'} />
         <span className="notify-text">
-          {daemonConnected ? '服务已就绪' : (busy ? '服务处理中…' : '服务未启动')}
+          {daemonConnected
+            ? (hotkeyArmed ? '热键已开启' : '服务已就绪 · 热键已暂停')
+            : (busy ? '服务处理中…' : '服务未启动')}
         </span>
         <span className="mask-sync-status-spacer" />
-        {/* 与 APP 面板「紧凑 + 专注」状态条统一：右侧改用 sp-switch 代替「启动/停止服务」文字按钮。
-            开关状态即服务连接状态；服务处理中（busy）时禁用，避免重复触发。 */}
-        <ToggleSwitch checked={daemonConnected} disabled={busy} onChange={() => { if (!busy) { if (daemonConnected) void stopDaemon(); else void loadDaemon(); } }} title={daemonConnected ? helpTexts.hotkey.daemonStop : helpTexts.hotkey.daemonStart}  />
+        {/* 与 APP 面板「紧凑 + 专注」状态条统一：右侧用开关代替「启动/停止服务」文字按钮。
+            ⚠️ .8li 形态（2026-10-17）：服务由扩展在 PS 进程内承载、不可启停 ⇒ 开关语义
+            从「起停服务」改为「布防/撤防热键」；未连接时点它给出启用扩展的引导。 */}
+        <ToggleSwitch
+          checked={daemonConnected && hotkeyArmed}
+          disabled={busy}
+          onChange={() => {
+            if (busy) return;
+            if (!daemonConnected) {
+              showMessage('快捷键服务未连接：请确认 Photoshop 已启用「JWautofill Smooth」扩展'
+                + '（菜单：窗口 → 插件），然后重新加载本面板。');
+              return;
+            }
+            if (hotkeyArmed) void disarmHotkeys(); else void armHotkeys();
+          }}
+          title={(daemonConnected && hotkeyArmed) ? helpTexts.hotkey.daemonStop : helpTexts.hotkey.daemonStart}
+        />
       </div>
 
       <div className="row-between">

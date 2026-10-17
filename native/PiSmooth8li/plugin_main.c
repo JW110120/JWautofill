@@ -1,4 +1,4 @@
-/* JWautofill Smooth — .8li 进程内插件（M2：WS 协议层 + 引擎宿主）
+/* JWautofill Smooth — .8li 进程内插件（M3：平滑 WS 18924 + 热键 WS 18923 合体）
  *
  * 架构（M2 起）：本模块 = 旧「SmoothDaemon(WS 18924) + 注入 DLL」的**合体**——
  *   · 平滑引擎（smooth_engine.c，源自 native/WintabHook/wintab_hook.c）直接编进
@@ -8,6 +8,14 @@
  *   · 本文件承担旧 Program.cs（ROLE_SMOOTH）的职责：WS 18924 服务器、penSmooth
  *     解析 → CFG 槽写入、smoothState 周期推送（500ms 差分广播）、心跳、
  *     cmd 去重（只在开关跃变时下令）与「已卸载自愈」（HealIfUnhooked 同款）。
+ *
+ * M3（2026-10-17）：旧 HotkeyDaemon(WS 18923, ~70M) + FixKeyboard(~70M) 一并退役 ——
+ *   键盘钩子/热键协议整体搬进本镜像（keyhook.c），随 .8li 加载而常驻：
+ *     · keyhook.c：WH_KEYBOARD_LL（单持有者纪律：bind 18923 成功者才装钩）、
+ *       熔断看护、两段式录制、配置落盘、旧版 daemon 迁移（getState → uninstall）。
+ *     · ws_core.c：RFC6455 原语 + wc_client_loop（两个 WS 服务器逐字共用）。
+ *     · jw_shared.h：log_line / json_* / g_hSelf 的去 static 面。
+ *   ⇒ dist 不再需要 daemon 与 FixKeyboard（合计省 >140M）。
  *
  * 面板契约（SmoothBridge.ts / Program.cs，逐字对齐勿改）：
  *   入站：{type:"penSmooth", on, mode?, strength?, radius?, catchUp?, cornerAngle?,
@@ -26,6 +34,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "jw_shared.h"      /* 去 static 面：log_line / json_* / g_hSelf */
+#include "ws_core.h"        /* M3：RFC6455 原语与客户端会话循环（keyhook.c 共用） */
+#include "keyhook.h"        /* M3：WS 18923 键盘钩子/热键子系统 */
 
 #define SMOOTH_PORT      18924
 #define LOG_MAX          (1024 * 1024)
@@ -55,8 +67,6 @@ int  se_wt_moved(void);
 void* se_wt_base(void);
 
 /* ================================================================ M1 日志 */
-
-static void log_line(const char* tag, const char* fmt, ...);
 
 /* ⛔ 非 static：smooth_engine.c 的 wtctx_read_ini() 要按同一目录找外置开关文件
    （④⑤⑥ 的 wtctx.ini）。返回静态缓冲、**带尾部反斜杠**；失败返回 ""。 */
@@ -182,7 +192,7 @@ static volatile LONG g_cmdStateOn;
 static volatile LONG g_lastHealAt;
 static volatile LONG g_zeroHeal;
 
-static HINSTANCE g_hSelf;
+HINSTANCE g_hSelf;
 
 static int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 static int roundi(double v) { return (int)(v + (v >= 0 ? 0.5 : -0.5)); }
@@ -326,8 +336,9 @@ static int build_smooth_state(char* out, int cap)
 
 /* ================================================================ 极简 JSON */
 /* 面板消息是扁平对象（值 = 布尔/数字/短字符串），手写定位足够；
-   缺字段 = 保持原值（Program.cs 可空字段合并的同款语义）。 */
-static const char* json_find(const char* js, const char* key)
+   缺字段 = 保持原值（Program.cs 可空字段合并的同款语义）。
+   ⛔ 非 static：keyhook.c 的热键协议分发共用（jw_shared.h 声明）。 */
+const char* json_find(const char* js, const char* key)
 {
     char pat[48];
     _snprintf(pat, sizeof(pat), "\"%s\"", key);
@@ -344,7 +355,7 @@ static const char* json_find(const char* js, const char* key)
     return NULL;
 }
 
-static int json_num(const char* js, const char* key, double* out)
+int json_num(const char* js, const char* key, double* out)
 {
     const char* p = json_find(js, key);
     if (!p) return 0;
@@ -355,7 +366,7 @@ static int json_num(const char* js, const char* key, double* out)
     return 1;
 }
 
-static int json_bool(const char* js, const char* key, int* out)
+int json_bool(const char* js, const char* key, int* out)
 {
     const char* p = json_find(js, key);
     if (!p) return 0;
@@ -364,7 +375,7 @@ static int json_bool(const char* js, const char* key, int* out)
     return 0;
 }
 
-static int json_str(const char* js, const char* key, char* out, int cap)
+int json_str(const char* js, const char* key, char* out, int cap)
 {
     const char* p = json_find(js, key);
     if (!p || *p != '"') return 0;
@@ -376,162 +387,14 @@ static int json_str(const char* js, const char* key, char* out, int cap)
 }
 
 /* ================================================================ WS（RFC6455） */
+/* ⛔ M3：sha1/b64/握手/收发/ws_send_text 原语已搬 ws_core.c（keyhook.c 的 18923
+   服务器共用）。本文件只保留平滑服务器自己的锁与客户端表；发送一律
+   wc_send_text_lk(s, msg, &g_sendLk) —— 广播（持 g_cliLk）与单发必须同锁，
+   锁序 CliLk → SendLk 不变。 */
 
 static CRITICAL_SECTION g_sendLk;
 static CRITICAL_SECTION g_cliLk;
 static SOCKET g_cliS[MAX_CLI];
-
-static int send_all(SOCKET s, const char* p, int n)
-{
-    int got = 0;
-    while (got < n) {
-        int r = send(s, p + got, n - got, 0);
-        if (r <= 0) return -1;
-        got += r;
-    }
-    return 0;
-}
-
-static int recv_all(SOCKET s, char* p, int n)
-{
-    int got = 0;
-    while (got < n) {
-        int r = recv(s, p + got, n - got, 0);
-        if (r <= 0) return -1;
-        got += r;
-    }
-    return got;
-}
-
-/* --- SHA1 + base64（握手 challenge 应答用；输入 ≤ 几百字节） --- */
-static void sha1(const unsigned char* msg, int len, unsigned char out[20])
-{
-    unsigned int h0 = 0x67452301u, h1 = 0xEFCDAB89u, h2 = 0x98BADCFEu;
-    unsigned int h3 = 0x10325476u, h4 = 0xC3D2E1F0u;
-    int total = ((len + 8) / 64 + 1) * 64;
-    unsigned char* buf = (unsigned char*)malloc((size_t)total);
-    if (!buf) return;
-    memset(buf, 0, (size_t)total);
-    memcpy(buf, msg, (size_t)len);
-    buf[len] = 0x80;
-    unsigned long long bits = (unsigned long long)len * 8;
-    for (int i = 0; i < 8; i++) buf[total - 1 - i] = (unsigned char)(bits >> (8 * i));
-
-    for (int off = 0; off < total; off += 64) {
-        unsigned int w[80];
-        for (int i = 0; i < 16; i++)
-            w[i] = ((unsigned int)buf[off + 4 * i] << 24) | ((unsigned int)buf[off + 4 * i + 1] << 16) |
-                   ((unsigned int)buf[off + 4 * i + 2] << 8) | (unsigned int)buf[off + 4 * i + 3];
-        for (int i = 16; i < 80; i++) {
-            unsigned int x = w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16];
-            w[i] = (x << 1) | (x >> 31);
-        }
-        unsigned int a = h0, b = h1, c = h2, d = h3, e = h4;
-        for (int i = 0; i < 80; i++) {
-            unsigned int f, k;
-            if (i < 20)     { f = (b & c) | ((~b) & d);            k = 0x5A827999u; }
-            else if (i < 40){ f = b ^ c ^ d;                       k = 0x6ED9EBA1u; }
-            else if (i < 60){ f = (b & c) | (b & d) | (c & d);     k = 0x8F1BBCDCu; }
-            else            { f = b ^ c ^ d;                       k = 0xCA62C1D6u; }
-            unsigned int t = ((a << 5) | (a >> 27)) + f + e + k + w[i];
-            /* ⛔ 状态轮换顺序（SHA1 标准）：e←d, d←c, c←rotl30(b), b←a, a←t。
-               写成 c=b / b=rotl30(b) 会产出看似合理却错误的摘要 —— 真机教训：
-               只有用 RFC6455 附录 A 的已知向量实测过才能信。 */
-            e = d; d = c; c = (b << 30) | (b >> 2); b = a; a = t;
-        }
-        h0 += a; h1 += b; h2 += c; h3 += d; h4 += e;
-    }
-    free(buf);
-    unsigned int hs[5] = { h0, h1, h2, h3, h4 };
-    for (int i = 0; i < 5; i++) {
-        out[4 * i]     = (unsigned char)(hs[i] >> 24);
-        out[4 * i + 1] = (unsigned char)(hs[i] >> 16);
-        out[4 * i + 2] = (unsigned char)(hs[i] >> 8);
-        out[4 * i + 3] = (unsigned char)(hs[i]);
-    }
-}
-
-static void b64_encode(const unsigned char* in, int n, char* out)
-{
-    static const char* T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    int i = 0, o = 0;
-    while (i + 3 <= n) {
-        unsigned int v = ((unsigned int)in[i] << 16) | ((unsigned int)in[i + 1] << 8) | in[i + 2];
-        out[o++] = T[(v >> 18) & 63]; out[o++] = T[(v >> 12) & 63];
-        out[o++] = T[(v >> 6) & 63];  out[o++] = T[v & 63];
-        i += 3;
-    }
-    if (n - i == 1) {
-        unsigned int v = (unsigned int)in[i] << 16;
-        out[o++] = T[(v >> 18) & 63]; out[o++] = T[(v >> 12) & 63];
-        out[o++] = '='; out[o++] = '=';
-    } else if (n - i == 2) {
-        unsigned int v = ((unsigned int)in[i] << 16) | ((unsigned int)in[i + 1] << 8);
-        out[o++] = T[(v >> 18) & 63]; out[o++] = T[(v >> 12) & 63];
-        out[o++] = T[(v >> 6) & 63];  out[o++] = '=';
-    }
-    out[o] = 0;
-}
-
-/* HTTP Upgrade 握手：读请求头 → Sec-WebSocket-Key + 固定 GUID → SHA1/b64 → 101。 */
-static int ws_handshake(SOCKET s)
-{
-    char req[4096];
-    int n = 0;
-    while (n < (int)sizeof(req) - 1) {
-        int r = recv(s, req + n, (int)sizeof(req) - 1 - n, 0);
-        if (r <= 0) return -1;
-        n += r;
-        req[n] = 0;
-        if (strstr(req, "\r\n\r\n")) break;
-    }
-    req[n] = 0;
-    const char* k = strstr(req, "Sec-WebSocket-Key:");
-    if (!k) k = strstr(req, "sec-websocket-key:");
-    if (!k) return -1;
-    k += strlen("Sec-WebSocket-Key:");
-    while (*k == ' ') k++;
-    int kl = 0;
-    while (k[kl] && k[kl] != '\r' && k[kl] != '\n' && kl < 64) kl++;
-
-    static const char* GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-    char cat[128];
-    if (kl <= 0 || kl + strlen(GUID) >= (int)sizeof(cat)) return -1;
-    memcpy(cat, k, (size_t)kl);
-    memcpy(cat + kl, GUID, strlen(GUID) + 1);
-
-    unsigned char dg[20];
-    sha1((const unsigned char*)cat, (int)(kl + strlen(GUID)), dg);
-    char acc[40];
-    b64_encode(dg, 20, acc);
-
-    char rsp[256];
-    int rn = _snprintf(rsp, sizeof(rsp),
-        "HTTP/1.1 101 Switching Protocols\r\n"
-        "Upgrade: websocket\r\nConnection: Upgrade\r\n"
-        "Sec-WebSocket-Accept: %s\r\n\r\n", acc);
-    return send_all(s, rsp, rn);
-}
-
-static int ws_send_text(SOCKET s, const char* msg)
-{
-    int len = (int)strlen(msg);
-    unsigned char hdr[10];
-    int hl = 0;
-    hdr[hl++] = 0x81;                                  /* FIN + text */
-    if (len < 126) hdr[hl++] = (unsigned char)len;
-    else if (len < 65536) {
-        hdr[hl++] = 126;
-        hdr[hl++] = (unsigned char)(len >> 8); hdr[hl++] = (unsigned char)len;
-    } else {
-        hdr[hl++] = 127;
-        for (int i = 7; i >= 0; i--) hdr[hl++] = (unsigned char)(((unsigned long long)len) >> (8 * i));
-    }
-    EnterCriticalSection(&g_sendLk);
-    int ok = (send_all(s, (const char*)hdr, hl) == 0) && (send_all(s, msg, len) == 0);
-    LeaveCriticalSection(&g_sendLk);
-    return ok;
-}
 
 static void cli_remove(SOCKET s)
 {
@@ -557,7 +420,7 @@ static void broadcast(const char* msg)
     for (int i = 0; i < MAX_CLI; i++) {
         SOCKET s = g_cliS[i];
         if (s == INVALID_SOCKET) continue;
-        if (!ws_send_text(s, msg)) {          /* 发送失败 ⇒ 强制断开，recv 线程负责回收 */
+        if (!wc_send_text_lk(s, msg, &g_sendLk)) {   /* 发送失败 ⇒ 强制断开，recv 线程负责回收 */
             closesocket(s);
             g_cliS[i] = INVALID_SOCKET;
         }
@@ -624,97 +487,35 @@ static void handle_message(const char* js)
 
 /* ================================================================ 客户端线程 */
 
-static void acc_append(char** acc, size_t* n, size_t* cap, const char* p, int len)
+static void on_text(void* ctx, const char* text)
 {
-    if (*n + (size_t)len + 1 > *cap) {
-        size_t nc = (*cap ? *cap * 2 : 512) + (size_t)len + 1;
-        char* np = (char*)realloc(*acc, nc);
-        if (!np) return;
-        *acc = np; *cap = nc;
-    }
-    memcpy(*acc + *n, p, (size_t)len);
-    *n += (size_t)len;
+    (void)ctx;
+    handle_message(text);
 }
 
 static DWORD WINAPI client_thread(LPVOID param)
 {
     SOCKET s = (SOCKET)(UINT_PTR)param;
-    BOOL nd = TRUE;
-    setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (const char*)&nd, sizeof(nd));
 
-    if (ws_handshake(s) != 0) { closesocket(s); cli_remove(s); return 0; }
+    if (wc_handshake(s) != 0) { closesocket(s); cli_remove(s); return 0; }
     log_line("srv", "面板已连接 ws");
     broadcast_smooth_state();     /* 建连即推一帧（Program.cs 建连推送同款） */
 
-    char* acc = NULL; size_t accn = 0, accCap = 0;
-    int closedByPeer = 0;                             /* 0=recv 错误 1=对端正常关 2=异常大帧 */
-    for (;;) {
-        unsigned char h2[2];
-        if (recv_all(s, (char*)h2, 2) < 0) break;
-        int fin = h2[0] & 0x80, op = h2[0] & 0x0F, masked = h2[1] & 0x80;
-        unsigned long long len = h2[1] & 0x7F;
-        if (len == 126) {
-            unsigned char e[2];
-            if (recv_all(s, (char*)e, 2) < 0) break;
-            len = ((unsigned long long)e[0] << 8) | e[1];
-        } else if (len == 127) {
-            unsigned char e[8];
-            if (recv_all(s, (char*)e, 8) < 0) break;
-            len = 0;
-            for (int i = 0; i < 8; i++) len = (len << 8) | e[i];
-        }
-        if (len > 1024 * 1024) { closedByPeer = 2; break; }   /* 异常大帧 ⇒ 断开 */
-        unsigned char mk[4] = { 0, 0, 0, 0 };
-        if (masked && recv_all(s, (char*)mk, 4) < 0) break;
-        char* pl = (char*)malloc((size_t)len + 1);
-        if (!pl) break;
-        if (len > 0 && recv_all(s, pl, (int)len) < 0) { free(pl); break; }
-        if (masked)
-            for (unsigned long long i = 0; i < len; i++) pl[i] ^= mk[i % 4];
-        pl[len] = 0;
+    /* M3：会话循环搬 ws_core.c（与 18923 热键服务器逐字一致）：
+       TCP_NODELAY + 收发超时、ping→pong、close→回 2 字节关帧、分片累积。
+       发送一律经 &g_sendLk（与 broadcast 同锁）。 */
+    int closedBy = 0;
+    wc_client_loop(s, &g_sendLk, on_text, NULL, &closedBy);
 
-        if (op == 0x8) {                                  /* close */
-            const char cl[2] = { (char)0x88, 0x00 };
-            send_all(s, cl, 2);                           /* ⛔ 帧头必须 2 字节（旧版只发 1 字节=残帧） */
-            closedByPeer = 1;
-            free(pl);
-            break;
-        }
-        if (op == 0x9) {                                  /* ping → pong */
-            unsigned char hdr[10];
-            int hl = 0;
-            hdr[hl++] = 0x8A;
-            if (len < 126) hdr[hl++] = (unsigned char)len;
-            else { hdr[hl++] = 126; hdr[hl++] = (unsigned char)(len >> 8); hdr[hl++] = (unsigned char)len; }
-            EnterCriticalSection(&g_sendLk);
-            send_all(s, (const char*)hdr, hl);
-            if (len > 0) send_all(s, pl, (int)len);
-            LeaveCriticalSection(&g_sendLk);
-            free(pl);
-            continue;
-        }
-        if (op == 0xA) { free(pl); continue; }            /* pong */
-        if (op == 0x1) acc_append(&acc, &accn, &accCap, pl, (int)len);
-        else if (op == 0x0) acc_append(&acc, &accn, &accCap, pl, (int)len);
-        free(pl);
-
-        if (fin && acc && accn > 0 && (op == 0x1 || op == 0x0)) {
-            if (accCap > accn) acc[accn] = 0;
-            handle_message(acc);
-            accn = 0;
-        }
-    }
-    free(acc);
     closesocket(s);
     cli_remove(s);
     /* ⛔ 断连原因必须可见（2026-10-14 第七轮）：面板每 ~30-55s 被断一次，
        GATETS 断供 ⇒ 闸门 fail-closed ⇒ 「平滑时好时坏」。先落证据再定责：
        0 = recv 异常（err=10054 对端 RST / 10060 超时 / 10038 …），
        1 = 对端正常 close，2 = 异常大帧。 */
-    log_line("srv", "面板已断开 reason=%s err=%d 本帧累计=%lu 字节",
-             closedByPeer == 1 ? "对端close" : closedByPeer == 2 ? "异常大帧" : "recv错误",
-             closedByPeer == 0 ? WSAGetLastError() : 0,
-             (unsigned long)accn);
+    log_line("srv", "面板已断开 reason=%s err=%d",
+             closedBy == 1 ? "对端close" : closedBy == 2 ? "异常大帧" : "recv错误",
+             closedBy == 0 ? WSAGetLastError() : 0);
     return 0;
 }
 
@@ -858,6 +659,7 @@ static void services_start(void)
     InitializeCriticalSection(&g_sendLk);
     InitializeCriticalSection(&g_cliLk);
     for (int i = 0; i < MAX_CLI; i++) g_cliS[i] = INVALID_SOCKET;
+    wc_lk_init();               /* ws_core 内置默认锁（懒初始化兜底，这里主动就绪） */
 
     /* 先把配置节建好（引擎 worker 在 ATTACH 时已起，250ms 一轮重试 open；
        这里主动建可让首帧参数立刻就位）。 */
@@ -874,8 +676,12 @@ static void services_start(void)
     g_stopAll = 0;
     g_srvThread  = CreateThread(NULL, 0, server_thread, NULL, 0, NULL);
     g_pumpThread = CreateThread(NULL, 0, pump_thread, NULL, 0, NULL);
-    log_line("main", "M2 服务已启动 srv=%s pump=%s（引擎 worker 由 ATTACH 启动）",
-             g_srvThread ? "ok" : "FAIL", g_pumpThread ? "ok" : "FAIL");
+    /* M3：热键子系统（WS 18923 + WH_KEYBOARD_LL）。⛔ 放在最后起：
+       它自带看护/调度/钩子/服务器四个线程，启动即默认布防。 */
+    keyhook_start();
+    log_line("main", "M2 服务已启动 srv=%s pump=%s kh=%s（引擎 worker 由 ATTACH 启动）",
+             g_srvThread ? "ok" : "FAIL", g_pumpThread ? "ok" : "FAIL",
+             keyhook_started() ? "ok" : "FAIL");
 }
 
 static void services_stop(void)
@@ -893,6 +699,8 @@ static void services_stop(void)
         WaitForSingleObject(g_pumpThread, THREAD_WAIT_MS);
         CloseHandle(g_pumpThread); g_pumpThread = NULL;
     }
+    /* M3：热键子系统先于 WS 客户端表清理（它自己的 kh_cli_shutdown_all 会代劳）。 */
+    keyhook_stop();
     /* 关掉所有客户端连接 */
     EnterCriticalSection(&g_cliLk);
     for (int i = 0; i < MAX_CLI; i++) {
@@ -921,7 +729,8 @@ const char* jw_log_dir(void)
     return dir;
 }
 
-static void log_line(const char* tag, const char* fmt, ...)
+/* ⛔ 非 static：keyhook.c 的 kh_log 走同一实现（jw_shared.h 声明）。 */
+void log_line(const char* tag, const char* fmt, ...)
 {
     char path[MAX_PATH];
     const char* lad = getenv("LOCALAPPDATA");

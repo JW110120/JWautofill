@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# JWautofill Smooth .8li 构建脚本（M2：引擎 + WS 协议层合并镜像）
+# JWautofill Smooth .8li 构建脚本（M3：引擎 + 平滑 WS 18924 + 热键 WS 18923 合体）
 #
-# 链路: zig cc 编译(plugin_main.c + ps_tool.c + smooth_engine.c) → gen_pipl.py 生成 PiPL
-#       → embed_res.py 注入 'PIPL' 资源
+# 链路: zig cc 编译(plugin_main.c + ps_tool.c + smooth_engine.c + ws_core.c + keyhook.c)
+#       → gen_pipl.py 生成 PiPL → embed_res.py 注入 'PIPL' 资源
 # 产物: build/JWautofillSmooth.8li（拷入 PS 的 Plug-ins 目录即生效，需重启 PS；
 #       ⛔ PS 运行时锁文件 ⇒ 覆盖部署前必须先完全退出 PS）
 #
@@ -15,8 +15,9 @@ PY=python
 
 "$ZIG" cc -target x86_64-windows-gnu -shared -O2 \
     -Wall -Wextra \
-    -lws2_32 -lgdi32 -luser32 \
-    -o build/JWautofillSmooth.dll plugin_main.c ps_tool.c smooth_engine.c
+    -lws2_32 -lgdi32 -luser32 -ladvapi32 \
+    -o build/JWautofillSmooth.dll \
+       plugin_main.c ps_tool.c smooth_engine.c ws_core.c keyhook.c
 
 $PY tools/gen_pipl.py build/pipl.bin "JWautofill Smooth" "AutoPluginMain"
 $PY tools/embed_res.py build/JWautofillSmooth.dll build/pipl.bin build/JWautofillSmooth.8li

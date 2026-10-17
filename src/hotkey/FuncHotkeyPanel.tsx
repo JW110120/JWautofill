@@ -3,6 +3,7 @@ import {
   HotkeyEntry, onConfig, onDaemonStatus, pushConfig, requestHotkeyRecording,
   cancelHotkeyRecording, onRecordProgress, setMainToggleCombo, setFocusLassoCombo,
   armBackspaceDelete, disarmBackspaceDelete, onBackspaceDelete,
+  onHotkeyState,
 } from './HotkeyBridge';
 import { helpTexts } from '../constants/helpTexts';
 import { subscribeFocusMode, peekFocusMode } from '../utils/FocusModeBus';
@@ -40,6 +41,10 @@ type EditTarget = string | null;
 export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   const [entries, setEntries] = useState<HotkeyEntry[]>([]);
   const [daemonConnected, setDaemonConnected] = useState(false);
+  // 热键布防态（.8li 形态）：撤防时录制会被 C 侧直接取消，见 startEdit 门禁
+  const [hotkeyArmed, setHotkeyArmed] = useState(false);
+  const hotkeyArmedRef = useRef(hotkeyArmed);
+  useEffect(() => { hotkeyArmedRef.current = hotkeyArmed; }, [hotkeyArmed]);
   // 专注模式：来自共享总线（APP 面板写入），只影响主开关行的显示名。
   // ⚠️ 初值取 peekFocusMode() 的内存真值（null 才是「未知」→ 退回 false）：
   //    只靠 subscribeFocusMode 的首次回调，首帧会先渲染成「选区填充开关」
@@ -132,8 +137,11 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     const unsubConfig = onConfig((list) => setEntries(list));
     const unsubStatus = onDaemonStatus(setDaemonConnected);
+    // .8li 形态：布防态也要跟（撤防时 C 侧会直接回 recordCancel，
+    // 这里提前拦，给出可操作的提示而不是「莫名取消的录制」）
+    const unsubArmed = onHotkeyState((st) => setHotkeyArmed(st.armed));
     const unsubFocus = subscribeFocusMode(setFocusMode);
-    return () => { unsubConfig(); unsubStatus(); unsubFocus(); };
+    return () => { unsubConfig(); unsubStatus(); unsubArmed(); unsubFocus(); };
   }, []);
 
   /** 条目在冲突提示里的显示名。 */
@@ -168,7 +176,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
     if (next.length === entries.length) { showMessage('该功能尚未绑定快捷键'); return; }
     setEntries(next);
     if (pushConfig(next)) showMessage('已解绑「' + getFuncHotkeyLabel(target) + '」的快捷键');
-    else showMessage('推送配置失败：快捷键服务未运行，或配置路径尚未就绪（请重新启动快捷键服务后重试）');
+    else showMessage('推送配置失败：快捷键服务未连接，或配置路径尚未就绪（请重新加载插件后重试）');
   };
 
   // 双击进入编辑：守护进程捕获组合键（recordCaptured 实时回显到行内），
@@ -177,6 +185,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   const startEdit = async (target: string) => {
     if (editingTarget) return; // 已有编辑中的行
     if (!daemonConnected) { showMessage(helpTexts.funcHotkey.notConnected); return; }
+    if (!hotkeyArmedRef.current) { showMessage('热键开关当前是暂停的，请先到「笔刷热键」分区打开「热键」开关再录制'); return; }
     setEditingTarget(target);
     setCapturedCombo('');
     // sticky：录制过程中的提示常驻，直到录制完成 / 取消（见 showMessage 说明）
@@ -220,7 +229,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
       : [...entries, { id: 'fk_' + Date.now(), combo, action: 'runFunc', brush: target }];
     setEntries(next);
     if (pushConfig(next)) showMessage('已保存：' + combo + ' → ' + targetDisplayName(target));
-    else showMessage('推送配置失败：快捷键服务未运行，或配置路径尚未就绪（请重新启动快捷键服务后重试）');
+    else showMessage('推送配置失败：快捷键服务未连接，或配置路径尚未就绪（请重新加载插件后重试）');
   };
 
   const mainEntry = entries.find(e => e.action === 'toggleMain');
@@ -289,6 +298,9 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
 
           {!daemonConnected && (
             <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>{helpTexts.funcHotkey.notConnected}</div>
+          )}
+          {daemonConnected && !hotkeyArmed && (
+            <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>热键已暂停：快捷键暂不生效（录制前请先到「笔刷热键」分区打开「热键」开关）</div>
           )}
         </div>
 

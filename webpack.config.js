@@ -86,17 +86,16 @@ module.exports = (env, argv) => {
                 { from: "./src/assets/SourceHanSansCN-Normal.otf", to: "." },
                 { from: "./src/styles/common.css", to: "." },
                 { from: "./README.md", to: "." },
-                // 守护进程安装/卸载脚本 + 预编译 exe（面板通过 getPluginFolder 在插件目录
-                // 内定位 native/HotkeyDaemon/uninstall.bat 等；不拷贝的话从 dist 加载时
-                // 找不到文件，卸载按钮会静默失败）
+                // 旧版快捷键守护进程的安装/卸载脚本（面板经 getPluginFolder 在插件目录内
+                // 定位 native/HotkeyDaemon/uninstall.bat 等；不拷贝的话从 dist 加载时
+                // 找不到文件，卸载按钮会静默失败）。
+                // ⚠️ M3 迁移（2026-10-17）：HotkeyDaemon/FixKeyboard 两个 exe 已退役
+                //    （键盘钩子改由 .8li 在 PS 进程内承载，见 native/PiSmooth8li/keyhook.c）⇒
+                //    不再拷贝 publish/JWautofillHotkeyDaemon.exe 与 FixKeyboard.exe，
+                //    dist 体积立省约 140M；修复脚本 fix-keyboard.ps1 仍随包分发
+                //    （.8li 以 runas 提权唤起它完成设备层两步修复，路径由面板解析后传参）。
                 { from: "./native/HotkeyDaemon/*.bat", to: "./native/HotkeyDaemon/[name][ext]" },
                 { from: "./native/HotkeyDaemon/*.ps1", to: "./native/HotkeyDaemon/[name][ext]" },
-                { from: "./native/HotkeyDaemon/publish/JWautofillHotkeyDaemon.exe", to: "./native/HotkeyDaemon/publish" },
-                // 键盘卡死一键修复启动器（独立子项目 FixKeyboard/ 编译，发布到 FixKeyboard/publish/）。
-                // 面板「键盘卡死一键修复」经 shell.openPath 唤起 native/HotkeyDaemon/FixKeyboard.exe；
-                // 该 exe 运行时会按自身 BaseDirectory 读取同目录的 fix-keyboard.ps1，
-                // 故必须与上面的 *.ps1 落在同一层（不能放进 publish/ 子目录）。
-                { from: "./native/HotkeyDaemon/FixKeyboard/publish/FixKeyboard.exe", to: "./native/HotkeyDaemon/[name][ext]" },
                 // 用户文档（右上角菜单「功能文档」按钮经 shell.openPath 在默认浏览器中打开）。
                 // ⛔⛔ **白名单拷贝**（用户 2026-10-15 明确要求，此前已入铁律）：只带两份使用手册
                 //    及其 img/；计划书 / 分析报告（*plan*.md、modal-scope-audit.md 等内部设计
