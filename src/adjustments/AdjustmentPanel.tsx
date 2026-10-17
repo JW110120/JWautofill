@@ -947,13 +947,6 @@ useEffect(() => {
           .catch((e) => { try { core.showAlert({ message: '键盘一键修复失败：' + (e && (e as any).message ? (e as any).message : String(e)) }); } catch { console.error('键盘一键修复失败:', e); } });
       }).catch((e) => console.error('键盘一键修复失败:', e));
     },
-    onUninstallHotkeyDaemon: () => {
-      // 卸载守护进程是低频操作（通常在删除整个插件前），入口放在右上角菜单里。
-      // 具体实现注册在 BrushHotkeySection（它持有状态提示），这里只做转发。
-      import('../hotkey/HotkeyBridge').then((m) => {
-        m.requestUninstall().then((msg) => { console.log('[卸载守护进程] ' + msg); });
-      }).catch((e) => console.error('卸载守护进程失败:', e));
-    },
     onShowFuncHotkeyPanel: () => {
       setShowFuncHotkeyPanel(true);
     }

@@ -4,7 +4,7 @@
 > 方案原文 / 实现状态 / 验收清单见 `docs/lasso-realtime-smoothing-plan.md`。
 
 > ⛔⛔ **2026-10-14 架构变更横幅（M3）**：平滑已从「外置 SmoothDaemon(18924) + 注入
-> JWautofillWintabHook.dll」迁到 **PS 进程内 .8li 插件**（native/PiSmooth8li/，
+> JWautofillWintabHook.dll」迁到 **PS 进程内 .8li 插件**（native/JWautofillHost/，
 > smooth_engine.c = 旧 wintab_hook.c 整体编入，plugin_main.c = 旧 Program.cs
 > ROLE_SMOOTH 的 C 移植，WS 协议逐字兼容）。native/SmoothDaemon/ 与 native/WintabHook/
 > 已删除，面板的 daemon 拉起/卸载链路已删。**本文档中引擎/算法层细节（HUD、标定、
@@ -15,14 +15,16 @@
 ## 1. 定位
 
 - UXP **无画布指针 API** ⇒ 绘制过程对插件是盲区；唯一实时入口是「PS 收到输入之前」
-  = 原生钩子 + 回注。**两个独立产物**（2026-10-12 起）：
+  = 原生钩子 + 回注。**两个独立产物**（2026-10-12 起，⛔ M4 起下表左列全部作废——
+  `native/HotkeyDaemon/` 与 `native/SmoothDaemon/` 两个工程项目已删除，两端点
+  合入 `native/JWautofillHost/` 一个 .8li：`plugin_main.c`（平滑）+ `keyhook.c`（热键））：
   | | 热键 | 平滑 |
   | --- | --- | --- |
   | 源码 | `native/HotkeyDaemon/Program.cs`（**同一份**，靠编译期 `ROLE_SMOOTH` 分岔） |
   | 工程 | `native/HotkeyDaemon/*.csproj` | `native/SmoothDaemon/*.csproj`（`<Compile Include="../HotkeyDaemon/Program.cs" />`） |
   | 端口 | 18923 | 18924 |
   | 安装目录 | `%LOCALAPPDATA%\JWautofill\daemon\` | `%LOCALAPPDATA%\JWautofill\smooth\` |
-  | UXP 桥接 | `src/hotkey/HotkeyBridge.ts` | `src/hotkey/SmoothBridge.ts` |
+  | UXP 桥接 | `src/hotkey/HotkeyBridge.ts` | `src/lasso/SmoothBridge.ts` |
   ⛔ 面板「停止 / 卸载服务」是**进程级**；此前共用一个进程 ⇒ 停热键把平滑一起带走
   （用户报的「卸载快捷键服务后平滑显示未连接」）。拆成两个 exe 后才真正解耦，
   已用 `ws-send.cjs` 双向对拍实证。
@@ -30,7 +32,7 @@
   可同时开启（效果串联）。⚠️ 2026-10-12 起「选区改造」里的**平滑滑块已删除**
   （`state.selectionSmooth` / `SelectionOptions.selectionSmooth` / `DragHandler` 配置 / 文案全清），
   该分区只剩「锐度 / 扩散」两个作用在掩码上的参数。
-- UXP 侧桥接：`src/hotkey/LassoSmoothing.ts`（**不持有 WebSocket**，发送器与连接状态由
+- UXP 侧桥接：`src/lasso/LassoSmoothing.ts`（**不持有 WebSocket**，发送器与连接状态由
   **`SmoothBridge`** 注入 —— 它是 18924 那条连接的唯一属主）。
 
 ## 2. 拦截层与闸门
@@ -230,7 +232,7 @@ _ox += distX * k;
   开=从**插件目录**拉起 → 自安装覆盖 `%LOCALAPPDATA%\JWautofill\smooth\` → 从安装目录重跑）。
   改 `Program.cs` 后同样是**两步**：先 `dotnet publish` 再 `yarn build`（**顺序不能反**）。
 - **产物**：`native/WintabHook/{wintab_hook.c,build.sh}`（`-Wall -Wextra` 零告警）、
-  `Program.cs` 内 `#if ROLE_SMOOTH` 的 `PenHook`、`src/hotkey/SmoothBridge.ts` 的 `sendPenSmooth`。
+  `Program.cs` 内 `#if ROLE_SMOOTH` 的 `PenHook`、`src/lasso/SmoothBridge.ts` 的 `sendPenSmooth`。
   诊断日志：`%TEMP%\jwwh-<Photoshop 的 pid>.log`（注意是 **PS** 的 pid，不是守护进程的）。
 
 ## 7. 与安全软件的相互干扰
@@ -564,6 +566,7 @@ _ox += distX * k;
 
 #### I3. ⛔ 唤起 `.bat` 不可靠 ⇒ 卸载走 `.exe` 启动器
 > ⛔⛔ **2026-10-14 已整体回退（用户决定）**：`.exe` 启动器方案（`native/UninstallLauncher/`，JWUninstall.exe）已删除，面板退回了 `.bat` 唤起（`BrushHotkeySection.uninstallDaemon` → `openBundled('native/HotkeyDaemon/uninstall.bat')`）—— 用户不愿为卸载窗口多付 dist 76M。以下为当时（2026-10-13）的决策记录，仅存史；`.bat` 收尾由 ps1 倒计时保证（成功 5s/失败 15s）。SmoothBridge.runSmoothUninstallScript 已随 M3 删除。
+> ⛔⛔ **2026-10-17 M4 再进一步**：`uninstall.bat/ps1` 与整个 `native/HotkeyDaemon/` 已删除，面板「卸载快捷键服务」菜单项移除（.8li 无常驻可卸之物）——本节的 `.bat`/`.exe` 唤起链路**两端都已不存在**，纯存史。
 - `shell.openPath` 实测：对 `.bat` 热键侧**什么都不出现**、平滑侧**窗口一闪而过**；
   对 `.exe` 才稳定（FixKeyboard.exe 已走通）。
 - ✅ `native/UninstallLauncher/`（`JWUninstall.exe`，控制台程序）：在自带控制台里跑
@@ -744,7 +747,7 @@ _ox += distX * k;
   会按新刻度重解释：100→原生 1 最黏、22→原生 68 保护变窄）。已向用户说明并留选项。
 
 #### L5. 构建链（本轮全过）
-- `npx tsc --noEmit`：改动文件零新增错误（`src/hotkey/LassoSmoothing.ts`、
+- `npx tsc --noEmit`：改动文件零新增错误（`src/lasso/LassoSmoothing.ts`、
   `src/constants/helpTexts.ts`、`src/utils/DragHandler.ts` 均 0；`app.tsx` 仅既有基线）。
 - 三护栏全过（本轮**未改任何 CSS**，`dist/common.css` mtime 仍 09:59）。
 - `dotnet publish` 两角色（SmoothDaemon / HotkeyDaemon）→ `yarn build`（dist 拾取新 exe）。
@@ -1095,7 +1098,7 @@ _ox += distX * k;
   ③ 新增**按包龄**判据（`age > RI_PKT_STALE_MS(1500)`）覆盖「停摆期没补流」。两条判据**并列**，
   三道护栏任一不成立**一个字节都不动**。⛔ **铁律：判定能力不能建立在「待证明的前提」上。**
 
-### O6. 进程内工具闸门（`'slct'`，0x0112 新增，`native/PiSmooth8li/ps_tool.c`）
+### O6. 进程内工具闸门（`'slct'`，0x0112 新增，`native/JWautofillHost/ps_tool.c`）
 
 - `SPBasicSuite=md+0x18`、`self=md+0x08`；三 suite `df135117-…ec47`/`bc1e4d70-…f7ee`/`df135115-…ec47`，
   **version=整数 2**；注册 `ctrl+0x20(refcon,'slct'=0x736c6374,proc)`、注销 `ctrl+0x28(refcon,'All ')`、
@@ -1121,11 +1124,11 @@ _ox += distX * k;
   ⑤ 自写 SHA1 必须用已知向量实测（RFC6455 App.A）。
 - 📌 **PS 插件目录按测试机分叉**：① 双 4K 机 ⇒ `E:\Program Files\Adobe Photoshop 2026\Plug-ins\`；
   ② **本机（3440×1440 带鱼屏）⇒ `C:\Program Files\Adobe\Adobe Photoshop 2026\Plug-ins\`**。
-  两机都只有**一个** `JWautofillSmooth.8li`。⛔ PS 运行时锁该文件 ⇒ 覆盖前**全部退出** PS（本机常有 3 个进程）。
+  两机都只有**一个** `JWautofillHost.8li`。⛔ PS 运行时锁该文件 ⇒ 覆盖前**全部退出** PS（本机常有 3 个进程）。
 - ⛔ **JWA 的 .8li 部署位置**：本机 = `C:\Program Files\Adobe\Adobe Photoshop 2026\Plug-ins\`
   （`PSUserConfig.txt` 确认 `UseSystemStylus 0` ⇒ 走 WinTab）。**全机只能有一份** —— 两份同名会被 PS 都加载，
   第二实例检测到「入口已被占用」⇒ state=4（须重启 PS）。⛔ 换 .8li 必须重启 PS。
-- ⛔⛔ 部署只认 `build/JWautofillSmooth.8li`；核验 = 日志头 `ver=0x0XXX` + `[status]` 含 `dpi=N‰`。
+- ⛔⛔ 部署只认 `build/JWautofillHost.8li`；核验 = 日志头 `ver=0x0XXX` + `[status]` 含 `dpi=N‰`。
   ⛔ 版本号核验要**走导出表解析**读 `jwwh_version` 函数体前 10 字节（裸搜 `B8 xx 01 00 00 C3` 会漏 —— 函数序言是 `55 48 89 E5`）。
 - ⛔⛔ **IPC 数字字段双防御**：面板 `toWire()` 出口对所有数字一律 `Math.round`（唯一咽喉）；
   原生侧字段用 `double?`+赋值 Round。漏一个浮点 ⇒ 整条消息被丢 ⇒「切换模式后平滑就断」。

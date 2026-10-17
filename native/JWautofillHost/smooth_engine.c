@@ -5543,7 +5543,7 @@ static void start_worker(HINSTANCE h)
     g_thread = CreateThread(NULL, 0, worker, (LPVOID)h, 0, NULL);
 }
 
-/* M2（.8li 进程内形态）：本文件被直接编进 JWautofillSmooth.8li，与 plugin_main.c
+/* M2（.8li 进程内形态）：本文件被直接编进 JWautofillHost.8li，与 plugin_main.c
    同镜。DllMain 归 plugin_main.c 所有 ⇒ 这里改名为 engine_dllmain，由它在
    DLL_PROCESS_ATTACH / DETACH 时原样转发（attach = start_worker，detach = 兜底
    repatch —— 语义与旧注入版逐字节一致）。 */

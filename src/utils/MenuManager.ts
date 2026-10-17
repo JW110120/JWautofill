@@ -122,19 +122,15 @@ const ADJUSTMENT_MENU_ITEMS: MenuItemDef[] = [
   },
   {
     id: "spacer5",
-    label: "-" // 分隔符（功能快捷键 与 「键盘卡死一键修复 + 卸载快捷键服务」分组 之间）
+    label: "-" // 分隔符（功能快捷键 与 键盘卡死一键修复 之间）
   },
   {
     id: "repairKeyboard",
     label: "键盘卡死一键修复"
   },
   {
-    id: "uninstallHotkeyDaemon",
-    label: "卸载快捷键服务"
-  },
-  {
     id: "spacer4",
-    label: "-" // 分隔符（卸载快捷键服务 与使用手册 之间）
+    label: "-" // 分隔符（键盘卡死一键修复 与使用手册 之间）
   },
   {
     id: "openDocsToolbox",

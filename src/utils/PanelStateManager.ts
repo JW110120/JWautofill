@@ -1,5 +1,5 @@
 import type { CompactModes, FormulaVisibility, Gradient } from '../types/state';
-import type { LassoSmoothParams } from '../hotkey/LassoSmoothing';
+import type { LassoSmoothParams } from '../lasso/LassoSmoothing';
 import { } from 'react';
 
 /**

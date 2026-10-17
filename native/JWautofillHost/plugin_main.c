@@ -1,4 +1,4 @@
-/* JWautofill Smooth — .8li 进程内插件（M3：平滑 WS 18924 + 热键 WS 18923 合体）
+/* JWautofill Host — .8li 进程内插件（M3：平滑 WS 18924 + 热键 WS 18923 合体）
  *
  * 架构（M2 起）：本模块 = 旧「SmoothDaemon(WS 18924) + 注入 DLL」的**合体**——
  *   · 平滑引擎（smooth_engine.c，源自 native/WintabHook/wintab_hook.c）直接编进

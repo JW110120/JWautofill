@@ -1,8 +1,8 @@
-// 热键桥接：UXP 侧与本地守护进程通信 + 直接切笔刷
+// 热键桥接：UXP 侧与 .8li（PS 进程内扩展）通信 + 直接切笔刷
 // 设计要点（关键）：
-// - UXP 沙箱没有 Node 的 fs/os/process，配置“不由插件读写文件”，统一由守护进程持有。
-// - 插件只通过 WebSocket 向守护进程拉取/推送配置（getConfig / config），避免跨进程文件系统耦合。
-// - 守护进程全局捕获按键后广播 hotkey 事件，插件执行「总开关切换 / 直接 select 笔刷」。
+// - UXP 沙箱没有 Node 的 fs/os/process，配置“不由插件读写文件”，统一由 .8li 持有。
+// - 插件只通过 WebSocket 向 .8li 拉取/推送配置（getConfig / config），避免跨进程文件系统耦合。
+// - .8li 全局捕获按键后广播 hotkey 事件，插件执行「总开关切换 / 直接 select 笔刷」。
 
 import { action, app } from 'photoshop';
 import { storage } from 'uxp';
@@ -10,9 +10,9 @@ import { MainToggleState, requestMainToggle, requestMainToggleOff } from '../uti
 import { requestFillPanelToggle } from '../utils/FillPanelToggleBus';
 import { psRead, runAsModal } from '../utils/psAccess';
 import { isPsBusy, psBusyRemain } from '../utils/psProbe';
-// ⛔ 本模块**不再** import 任何 LassoSmoothing 的东西：套索平滑已拆到独立守护进程
-//    （端口 18924，见 SmoothBridge.ts）。两个钩子要真正做到「停一侧不影响另一侧」，
-//    首先就得让两条 WebSocket 的生命周期互不相干 —— 这里保留任何一句桥接都会把两者重新绑死。
+// ⛔ 本模块**不再** import 任何 LassoSmoothing 的东西：套索平滑与热键虽同处一个 .8li，
+//    但是两条独立的 WebSocket（平滑 18924 / 热键 18923）——停一侧不影响另一侧，
+//    首先就得让两条连接的生命周期互不相干 —— 这里保留任何一句桥接都会把两者重新绑死。
 
 export interface HotkeyEntry {
   id: string;
@@ -21,7 +21,7 @@ export interface HotkeyEntry {
   brush?: string;                // applyBrush 时的笔刷名（PS 预设名，需精确匹配）。
                                   // 注意：不支持同名笔刷——PS 按 _name 只会选中 Brushes 列表最上方那支。
                                   // runFunc 时复用本字段承载功能 id（见 funcHotkeyDefs.ts），
-                                  // 守护进程对该字段不解释、只透传，因此无需改守护进程。
+                                  // .8li 对该字段不解释、只透传，因此无需改 .8li。
 }
 
 const WS_URL = 'ws://127.0.0.1:18923';
@@ -38,7 +38,7 @@ let mainToggleCombo: string | null = null; // null = 尚未从配置里读到过
 type ConfigListener = (entries: HotkeyEntry[]) => void;
 
 // 配置文件统一放在 PS 的 PluginData 目录（与密钥、图案等持久化数据同一个位置），
-// 路径由本模块解析后告知守护进程，用户不再需要去 %LOCALAPPDATA% 里翻找。
+// 路径由本模块解析后告知 .8li，用户不再需要去 %LOCALAPPDATA% 里翻找。
 const CONFIG_FILE_NAME = 'hotkeys.json';
 let resolvedConfigPath = '';
 let configPathPromise: Promise<string> | null = null;
@@ -55,7 +55,7 @@ async function resolveConfigPath(): Promise<string> {
         resolvedConfigPath = p + sep + CONFIG_FILE_NAME;
       }
     } catch (e) {
-      console.warn('⚠️ 解析插件数据目录失败，守护进程将回落到默认配置路径:', e);
+      console.warn('⚠️ 解析插件数据目录失败，.8li 将回落到默认配置路径:', e);
     }
     return resolvedConfigPath;
   })();
@@ -196,33 +196,6 @@ export function onDaemonStatus(fn: (c: boolean) => void): () => void {
   return () => { const i = statusListeners.indexOf(fn); if (i >= 0) statusListeners.splice(i, 1); };
 }
 
-// 让快捷键服务「脱钩」（面板「热键开关」关闭时用）。
-// ⚠️ .8li 形态语义变更（2026-10-17 M3 迁移）：守护进程已退役，快捷键钩子改由
-//    Photoshop 扩展「JWautofill Smooth」（.8li）在 PS 进程内承载 ⇒ 服务**不可启停**
-//    （与 PS 共命运）。原 shutdown 语义降级为「撤防 + bye + 断开本连接」：
-//    服务器保持监听，热键暂停生效，重载/重连即恢复。
-export function disconnectDaemon(): boolean {
-  try {
-    if (currentWs && currentWs.readyState === (currentWs.OPEN ?? 1)) {
-      currentWs.send(JSON.stringify({ type: 'shutdown' }));
-      return true;
-    }
-  } catch { /* ignore */ }
-  return false;
-}
-
-// 通过 WebSocket 向守护进程发送一条指令（如 "uninstall"）。
-// 用于「卸载」等需要进程自身完成清理并退出的动作，全程无窗口。
-export function sendDaemonCommand(type: string): boolean {
-  try {
-    if (currentWs && currentWs.readyState === (currentWs.OPEN ?? 1)) {
-      currentWs.send(JSON.stringify({ type }));
-      return true;
-    }
-  } catch { /* ignore */ }
-  return false;
-}
-
 /**
  * 布防 / 撤防热键钩子（.8li 形态的「热键总开关」）。
  *
@@ -266,7 +239,7 @@ export async function resolveRepairScriptPath(): Promise<string> {
     const root: string = folder?.nativePath || '';
     if (!root) return '';
     const sep = root.includes('\\') ? '\\' : '/';
-    return root + sep + 'native' + sep + 'HotkeyDaemon' + sep + 'fix-keyboard.ps1';
+    return root + sep + 'native' + sep + 'JWautofillHost' + sep + 'fix-keyboard.ps1';
   } catch {
     return '';
   }
@@ -287,7 +260,7 @@ export async function resolveRepairScriptPath(): Promise<string> {
 export function requestKeyboardRepair(script: string): Promise<string> {
   return new Promise((resolve) => {
     if (!currentWs || currentWs.readyState !== (currentWs.OPEN ?? 1)) {
-      resolve('快捷键服务未连接：请确认 Photoshop 已启用「JWautofill Smooth」扩展'
+      resolve('快捷键服务未连接：请确认 Photoshop 已启用「JWautofill Host」扩展'
         + '（菜单：窗口 → 插件），然后重新加载本面板再试。');
       return;
     }
@@ -323,18 +296,6 @@ export function registerMainToggleHandler(_fn: () => void) {
   console.warn('⚠️ registerMainToggleHandler 已废弃：主开关现由 MainToggleBus 跨面板同步');
 }
 
-// 卸载动作由面板右上角的菜单触发，但真正的实现（含状态提示）在 BrushHotkeySection 里，
-// 这里做一个简单的注册/转发，避免把面板内部状态暴露给菜单层。
-let uninstallHandler: (() => Promise<string>) | null = null;
-export function registerUninstallHandler(fn: () => Promise<string>) {
-  uninstallHandler = fn;
-}
-export async function requestUninstall(): Promise<string> {
-  if (!uninstallHandler) return '卸载功能尚未就绪（请展开「笔刷热键」分区后重试）';
-  try { return await uninstallHandler(); }
-  catch (e: any) { return '卸载失败：' + (e?.message || String(e)); }
-}
-
 // 「键盘卡死一键修复」：同样由面板右上角菜单触发，实现留在 BrushHotkeySection。
 // 存在的意义：一旦系统的全局键盘钩子把输入拖死，用户连字都打不出来，
 // 唯一还能操作的就是鼠标——此时从菜单点一下即可自救，且脚本全程不需要任何键盘输入。
@@ -352,12 +313,12 @@ export async function requestRepairKeyboard(): Promise<string> {
   //    未连接时只能给引导（脚本无法经 shell.openPath 直接执行，见下方说明）。
   if (!repairKeyboardHandler) {
     if (!connected) {
-      return '快捷键服务未连接：请确认 Photoshop 已启用「JWautofill Smooth」扩展'
+      return '快捷键服务未连接：请确认 Photoshop 已启用「JWautofill Host」扩展'
         + '（菜单：窗口 → 插件），然后重新加载本面板再试。';
     }
     const script = await resolveRepairScriptPath();
     if (!script) {
-      return '未找到内置修复脚本 fix-keyboard.ps1（应位于插件目录 native/HotkeyDaemon 下），请重新安装插件。';
+      return '未找到内置修复脚本 fix-keyboard.ps1（应位于插件目录 native/JWautofillHost 下），请重新安装插件。';
     }
     return requestKeyboardRepair(script);
   }

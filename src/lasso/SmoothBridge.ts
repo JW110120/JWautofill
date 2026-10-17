@@ -3,7 +3,7 @@
  *
  * ⚠️ 2026-10-14 架构变更（.8li 迁移，M2 已完成）：平滑的对端不再是外置守护进程
  *    （JWautofillSmoothDaemon.exe + 注入 WintabHook.dll 的旧链路已整体退役），
- *    而是 **Photoshop 进程内的合法插件** JWautofillSmooth.8li（装在 PS 的
+ *    而是 **Photoshop 进程内的合法插件** JWautofillHost.8li（装在 PS 的
  *    Plug-ins 目录，随 PS 启动自动加载）。它自带同一套 18924 WS 协议
  *    （plugin_main.c 是旧 Program.cs ROLE_SMOOTH 的逐字移植，协议零变化），
  *    因此本文件的连接/发送逻辑原样保留，面板无感。

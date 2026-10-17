@@ -46,13 +46,13 @@ import {
   // 诊断原因码 → 人话（唯一文案表，见 LassoSmoothing.smoothReasonText）。
   // ⛔ 诊断条**只能**用原生侧报的 reason 说原因，禁止自己从 toolOk/penDown/gateOk 拼。
   smoothReasonText,
-} from './hotkey/LassoSmoothing';
+} from './lasso/LassoSmoothing';
 // 套索实时平滑的 WebSocket 桥接（端口 18924）。对端是 **PS 进程内的 .8li 插件**
-// （JWautofillSmooth.8li，随 PS 启动自动加载）—— 2026-10-14 起外置 SmoothDaemon
-// 与注入式 WintabHook.dll 已整体退役，见 SmoothBridge.ts 头部说明。
+// （JWautofillHost.8li，随 PS 启动自动加载）—— 2026-10-14 起外置 SmoothDaemon
+// 与注入式 WintabHook.dll 已整体退役，见 lasso/SmoothBridge.ts 头部说明。
 import {
   connectSmoothDaemon, disconnectSmoothDaemon, isSmoothDaemonConnected,
-} from './hotkey/SmoothBridge';
+} from './lasso/SmoothBridge';
 import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/MainToggleBus';
 import { FillPanelId, subscribeFillPanelToggle } from './utils/FillPanelToggleBus';
 import { setFocusMode } from './utils/FocusModeBus';
@@ -1054,13 +1054,13 @@ class App extends React.Component<AppProps, AppState> {
 
     /**
      * 重新指定「选区填充」主开关的全局快捷键（默认 Ctrl+Q）。
-     * 录制由 .8li（「JWautofill Smooth」扩展）内的全局键盘钩子完成：UXP 面板拿不到
+     * 录制由 .8li（「JWautofill Host」扩展）内的全局键盘钩子完成：UXP 面板拿不到
      * 全局按键，这里只负责弹提示、发指令、把结果写回共享配置。
      */
     async setMainHotkey() {
         try {
             if (!isDaemonConnected()) {
-                await core.showAlert({ message: '快捷键服务未连接，无法录制快捷键。\n请确认 Photoshop 已启用「JWautofill Smooth」扩展（窗口 → 插件），然后重新加载本面板。' });
+                await core.showAlert({ message: '快捷键服务未连接，无法录制快捷键。\n请确认 Photoshop 已启用「JWautofill Host」扩展（窗口 → 插件），然后重新加载本面板。' });
                 return;
             }
             const current = getMainToggleCombo();
@@ -3571,7 +3571,7 @@ title={helpTexts.selectionFill.blendMode}>
                             <span
                                 className="notify-text"
                                 title={this.state.smoothStatus.unsupported || this.state.smoothStatus.penUnsupported
-                                    ? '当前运行的套索平滑模块（.8li）版本过旧，不认识平滑指令。\n\n处置：关闭 Photoshop，用新版 JWautofillSmooth.8li 覆盖 PS Plug-ins 目录里的旧文件，再重启 Photoshop。'
+                                    ? '当前运行的套索平滑模块（.8li）版本过旧，不认识平滑指令。\n\n处置：关闭 Photoshop，用新版 JWautofillHost.8li 覆盖 PS Plug-ins 目录里的旧文件，再重启 Photoshop。'
                                     : helpTexts.selectionFill.smoothStatusLabel}>
                                 {this.smoothStatusText()}
                             </span>

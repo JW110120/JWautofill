@@ -1,9 +1,9 @@
 # JWautofill 项目记忆（主索引）
 
 > 本文件 = 索引 + 铁律速查（保持精简）；明细在 `refs/`，流水在 `memory/YYYY-MM-DD.md`。
-> ⛔ 违反必炸｜⚠️ 易复发。架构：套索平滑 = **PS 进程内 .8li**（`native/PiSmooth8li/`）。
-> **M3（2026-10-17）**：键盘钩子（WH_KEYBOARD_LL）也并入同一 .8li（`keyhook.c`，WS 18923），
-> HotkeyDaemon + FixKeyboard 两个 exe 已退役，dist 148M→11M；面板开关语义 = 布防/撤防（服务不可启停）。
+> ⛔ 违反必炸｜⚠️ 易复发。架构：套索平滑 + 键盘钩子 = **PS 进程内 .8li**（`native/JWautofillHost/`，产物 JWautofillHost.8li）。
+> **M3（2026-10-17）**：键盘钩子（WH_KEYBOARD_LL）并入同一 .8li（`keyhook.c`，WS 18923），面板开关语义 = 布防/撤防（服务不可启停）。
+> **M4（2026-10-17 晚）**：.8li 改名 JWautofillHost（多功能合体）；**整个 native/HotkeyDaemon/ 项目删除**（两个 70M 级 exe + 安装/卸载脚本，仅 fix-keyboard.ps1 随迁 JWautofillHost/）；面板「卸载快捷键服务」菜单移除；`uninstall` 指令不再停服务器（可反复布防）；套索平滑文件迁 `src/hotkey/` → `src/lasso/`。
 
 ## 索引
 
@@ -14,14 +14,14 @@
 | 忙碌闸门 / 模态 / 世代号 | `refs/busy-gate.md` |
 | UXP 接口 / 性能 / React | `refs/uxp-api-layer.md` |
 | 像素处理器算法 | `refs/pixel-algorithms.md` |
-| 构建 / IO / 守护进程 | `refs/toolchain-and-env.md` |
+| 构建 / IO / 部署 | `refs/toolchain-and-env.md`（M4 起原生侧只有 .8li 一个产物） |
 | 平滑 / HUD / 断流 / 笔通路 | `refs/lasso-smoothing.md`（O1 断流·O2 HUD·O4 axMax·O5 补流·O6 'slct'·O7 .8li·O8 进程内模态层级/Wintab 上下文钩·**O9 'slct' 看门狗让位 0x0115**·**O10 HUD 焦点门 0x0116**） |
-| 键盘热键钩子 / WS 18923 / 一键修复 | `refs/keyhook-8li.md`（M3：钩子线程模型·熔断三件套·单持有者·旧 daemon 迁移·repairKeyboard 分工·面板布防开关） |
+| 键盘热键钩子 / WS 18923 / 一键修复 | `refs/keyhook-8li.md`（M3 钩子线程模型·熔断三件套·单持有者·旧 daemon 迁移·repairKeyboard 分工·面板布防开关；**M4 uninstall 不停服务器+菜单入口已删+daemon 项目删除**） |
 | modal scope 开销来源 | `docs/modal-scope-audit.md`（第五节 = 2026-10-17 复核出的遗漏 G/H） |
 
-**校验**：改 CSS 跑 `scripts/_css_comment_guard.cjs` + `_modal_contract_guard.cjs` + `_color_picker_contract_guard.cjs`（只扫 `src/styles/*.css`，**不扫 `theme.ts`**）；`npx tsc --noEmit` 只看 `src/` 新增报错；改 `native/PiSmooth8li/*.c` 跑 `build.sh`（零告警）+ 导出表解析核验 `jwwh_version`；改面板 `yarn build`。
+**校验**：改 CSS 跑 `scripts/_css_comment_guard.cjs` + `_modal_contract_guard.cjs` + `_color_picker_contract_guard.cjs`（只扫 `src/styles/*.css`，**不扫 `theme.ts`**）；`npx tsc --noEmit` 只看 `src/` 新增报错；改 `native/JWautofillHost/*.c` 跑 `build.sh`（零告警）+ 导出表解析核验 `jwwh_version`；改面板 `yarn build`。
 
-**地图**：`app.tsx` 填充面板 · `AdjustmentPanel.tsx` 工具箱 · `psProbe.ts`+`psAccess.ts` 闸门 · `ClearAlgorithms.ts` 清除 · `adjustments/*Processor.ts` 像素算法 · `common.css`+`theme.ts` 样式 · `src/hotkey/`（WS 18923 热键 + 18924 平滑，**两端点都在 .8li 内**） · `native/PiSmooth8li/`（`smooth_engine.c`·`plugin_main.c`·`ps_tool.c`·`ws_core.c`·`keyhook.c`）。
+**地图**：`app.tsx` 填充面板 · `AdjustmentPanel.tsx` 工具箱 · `psProbe.ts`+`psAccess.ts` 闸门 · `ClearAlgorithms.ts` 清除 · `adjustments/*Processor.ts` 像素算法 · `common.css`+`theme.ts` 样式 · `src/hotkey/`（WS 18923 热键） + `src/lasso/`（`LassoSmoothing.ts` 状态机 + `SmoothBridge.ts` WS 18924，**两端点都在 .8li 内**） · `native/JWautofillHost/`（`smooth_engine.c`·`plugin_main.c`·`ps_tool.c`·`ws_core.c`·`keyhook.c`·`fix-keyboard.ps1`）。
 
 ## 铁律速查
 

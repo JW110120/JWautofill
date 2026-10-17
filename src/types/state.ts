@@ -1,5 +1,5 @@
-import type { LassoSmoothParams, LassoSmoothStatus } from '../hotkey/LassoSmoothing';
-import { initialLassoSmoothParams, initialLassoSmoothStatus } from '../hotkey/LassoSmoothing';
+import type { LassoSmoothParams, LassoSmoothStatus } from '../lasso/LassoSmoothing';
+import { initialLassoSmoothParams, initialLassoSmoothStatus } from '../lasso/LassoSmoothing';
 
 export interface ColorSettings {
     hueVariation: number;

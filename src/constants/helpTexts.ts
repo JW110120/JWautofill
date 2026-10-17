@@ -154,9 +154,9 @@ export const helpTexts = {
     smoothStatusLabel:
       '● 套索平滑的当前状态。\n\n' +
       '●「服务未启动」：平滑模块（Photoshop 进程内的 .8li 插件）还没就绪 —— 刚启动 Photoshop 时稍等即可；' +
-      '若持续如此，说明 JWautofillSmooth.8li 没有装进 Photoshop 的 Plug-ins 目录。\n\n' +
+      '若持续如此，说明 JWautofillHost.8li 没有装进 Photoshop 的 Plug-ins 目录。\n\n' +
       '●「服务版本过旧」：面板与已加载模块的协议不一致 —— 关闭 Photoshop，' +
-      '用新版 JWautofillSmooth.8li 覆盖 PS Plug-ins 目录里的旧文件，再重启 Photoshop。\n\n' +
+      '用新版 JWautofillHost.8li 覆盖 PS Plug-ins 目录里的旧文件，再重启 Photoshop。\n\n' +
       '●「关」：功能未开启 —— Photoshop 进程不会被做任何修改。\n\n' +
       '●「等待 Photoshop…」：已开启，但模块还没完成对 Photoshop 笔输入通路的接入。\n\n' +
       '●「生效中」：模块已接入并正在改写笔坐标。\n\n' +
@@ -454,7 +454,7 @@ export const helpTexts = {
   /* ============ 快捷键区 ============ */
   hotkey: {
     header: '通过本地快捷键服务实现全局快捷键，直接在画布上按快捷键切换笔刷（无需录制动作）。',
-    daemonStop: '暂停热键：立即卸掉键盘钩子（按键恢复 PS 原生行为），配置原样保留，重新打开即恢复。快捷键服务由 Photoshop 扩展「JWautofill Smooth」在进程内提供，随 PS 一同启停',
+    daemonStop: '暂停热键：立即卸掉键盘钩子（按键恢复 PS 原生行为），配置原样保留，重新打开即恢复。快捷键服务由 Photoshop 扩展「JWautofill Host」在进程内提供，随 PS 一同启停',
     daemonStart: '开启热键：装上键盘钩子，快捷键恢复生效（默认的选区填充开关 Ctrl+Q 也由它驱动）',
     brushSelect: '选择要绑定快捷键的笔刷预设（名称需与 Brushes 面板一致）',
     refreshBrushes: '刷新笔刷列表',
@@ -477,7 +477,7 @@ export const helpTexts = {
     rowHint: '单击选中；选中后按退格键解绑（恢复为未绑定）；双击录制/重录：按下组合键后回车确认，录制中按 Esc 取消',
     mainRow: '选区填充开关的快捷键（专注模式下只负责开启选区填充）。单击选中后按退格解绑；双击录制/重录，回车确认，Esc 取消',
     lassoRow: '专注模式下的「套索工具」键（默认 L）：按下即关闭选区填充主开关，并把当前工具切回套索，使主开关键与套索键如同两个工具。双击可重录，回车确认，Esc 取消。',
-    notConnected: '快捷键服务未连接，无法录制；请确认已启用 Photoshop 扩展「JWautofill Smooth」（窗口 → 插件）并重新加载面板',
+    notConnected: '快捷键服务未连接，无法录制；请确认已启用 Photoshop 扩展「JWautofill Host」（窗口 → 插件）并重新加载面板',
   },
 
   /* ============ 渐变子面板 ============ */

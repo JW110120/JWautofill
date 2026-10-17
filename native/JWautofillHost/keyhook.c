@@ -1,4 +1,4 @@
-/* JWautofill Smooth .8li — 键盘钩子/热键子系统（M3：HotkeyDaemon 进程内化）
+/* JWautofill Host .8li — 键盘钩子/热键子系统（M3：HotkeyDaemon 进程内化）
  *
  * 背景（为什么把独立守护进程搬进 .8li）：
  *   旧形态 = native/HotkeyDaemon（约 65M 自包含 exe）+ FixKeyboard（约 76M），
@@ -1497,7 +1497,7 @@ static void kh_set_arm(int on)
       用户重启 PS 即恢复（面板 UI 会相应改写，见 BrushHotkeySection）。 */
 static void kh_do_uninstall(SOCKET s)
 {
-    kh_log("收到卸载指令（.8li 形态：清旧 daemon 遗留 + 撤防 + 释放 18923）");
+    kh_log("收到卸载指令（.8li 形态：清旧 daemon 遗留 + 撤防；服务器保持监听）");
     kh_send_to(s, "{\"type\":\"bye\"}");
 
     /* ① 撤防（防看护重挂） */
@@ -1536,9 +1536,11 @@ static void kh_do_uninstall(SOCKET s)
         }
     }
 
-    /* ④ 停 WS 服务器（释放端口）；本连接由所属线程收尾关闭 */
-    InterlockedExchange(&g_khSrvStop, 1);
-    if (g_khListen != INVALID_SOCKET) shutdown(g_khListen, SD_BOTH);
+    /* ④ ⛔ M4（2026-10-17）：不再停 WS 服务器。.8li 不能退出宿主 ⇒ 停服务器
+     *    要重启 PS 才恢复，而用户要的是「随时能反复启用」。旧 daemon 清理 +
+     *    撤防已经够用；本连接关闭后重连逻辑 1.5s 内自动恢复，布防态由面板重发。
+     *    （旧版 daemon 的自清不走这里——迁移时 .8li 作为客户端直连旧 daemon
+     *     发 uninstall，见 kh_try_migrate。） */
     shutdown(s, SD_BOTH);
 }
 

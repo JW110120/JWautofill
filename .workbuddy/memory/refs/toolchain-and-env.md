@@ -74,12 +74,23 @@
 ## 七、术语与守护进程
 
 - 术语：APP 与 AdjustmentPanel 皆「父面板」；纯色/图案/渐变/描边/清除 = 「子面板」（`src/app.tsx` 内 absolute）。
-- C#/.NET8 daemon（`native/HotkeyDaemon/Program.cs`）：`WH_KEYBOARD_LL` 独立线程，钩子线程严禁阻塞 I/O，焦点闸门 `IsPhotoshopForeground` 否则放行。WS `127.0.0.1:18923`。冻结形态与 ps1 修复步骤见技能 `windows-keyboard-device-reset`；改 ps1 后同步 dist/。`shell.openPath` 受 manifest 扩展名白名单管控。
-- 原生可执行物有**两个独立项目**，必须**分别发布**（主 csproj `HotkeyDaemon.csproj` 用 `DefaultItemExcludes` 排除了 `FixKeyboard/**`）：① 守护进程 → `native/HotkeyDaemon/publish/JWautofillHotkeyDaemon.exe`；② 键盘修复器 → `native/HotkeyDaemon/FixKeyboard/publish/FixKeyboard.exe`。webpack 分别拷到 `dist/native/HotkeyDaemon/publish/…` 与 `dist/native/HotkeyDaemon/FixKeyboard.exe`（**扁平**，与 `fix-keyboard.ps1` 同层——exe 按 `AppContext.BaseDirectory` 读同目录脚本，放子目录会找不到）。⛔ **改 exe 后必须「发布 + `yarn build`」两步**，只 publish 不 build 分发包会带旧版。发布命令与 Git Bash 环境变量坑位见技能 `dotnet-publish-windows`。
+- ⛔ **C#/.NET8 daemon（`native/HotkeyDaemon/Program.cs`）已不存在**（M4 删除）：键盘钩子
+  （`WH_KEYBOARD_LL`）与平滑钩子合入 `native/JWautofillHost/keyhook.c` 与 `plugin_main.c`，
+  在 PS 进程内运行；WS `127.0.0.1:18923`（热键）/ `18924`（平滑）由 .8li 自己监听。
+  冻结形态与修复步骤见技能 `windows-keyboard-device-reset`；`fix-keyboard.ps1` 随迁至
+  `native/JWautofillHost/`（.8li 以 ShellExecuteExW runas 提权唤起）。
+- ⛔ **原生侧只剩一个产物**：`native/JWautofillHost/build/JWautofillHost.8li`（zig cc 5 个 .c）。
+  旧「两个独立项目分别发布」（守护进程 + FixKeyboard）与 dotnet publish 链路**已整套退役**，
+  技能 `dotnet-publish-windows` 对本项目不再适用；改 .c 后 `bash build.sh`（须沙箱外）
+  + 关 PS 手动部署（安装通路未面板化，M3/M4 遗留）。
 
 ---
 
 ## 守护进程双钩子（键盘热键 / 鼠标套索平滑）— 由 MEMORY.md 下沉（2026-10-12）
+
+> ⛔⛔ **M4（2026-10-17）起本节整体作废**：两个守护进程项目已删除，双钩子合入
+> `native/JWautofillHost/` 一个 .8li（`keyhook.c` 键盘 / `plugin_main.c` 平滑服务器）。
+> 下文保留仅存史；现行架构以 `refs/keyhook-8li.md` 与 `refs/lasso-smoothing.md` 为准。
 
 - ⛔ **两个钩子结构对称、状态零共享**：键盘钩子（`WH_KEYBOARD_LL` / `_hookId` / `_hotkeyArmed` /
   `_hookSafeMode` / `HotkeyWatchdog`）与鼠标钩子（`WH_MOUSE_LL` / `_mouseHookId` / `_smoothArm` /
@@ -112,9 +123,10 @@
   `UnobservedTaskException` 一律走**绕过队列的同步落盘**（`DirectLog`）。以前是 `FileMode.Create`
   ⇒ 每次重启抹掉上一轮 ⇒「守护进程忽然没了」事后永远查不到（真机踩过）。
   活体查询见 `refs/lasso-smoothing.md` §8 的诊断脚本表。
-- ⛔ 改 `native/HotkeyDaemon/Program.cs` 后必须**两步**：先
-  `dotnet publish HotkeyDaemon.csproj -c Release -o publish`，再 `yarn build`
-  （webpack 只是把 `publish/*.exe` 拷进 `dist/`）。漏掉第一步 = 代码改了、插件包里仍是旧 exe。
+- ⛔ 改 `.8li` 源码（`native/JWautofillHost/*.c`）后：`bash build.sh`（zig，**须沙箱外**，
+  零告警 + PiPL 往返）→ 关 PS 手动拷 `build/JWautofillHost.8li` 进 Plug-ins → 重启 PS。
+  ⚠️ M4 改名后必须先删旧名 `JWautofillSmooth.8li` 再拷新的（防双 .8li 抢端口）。
+  dotnet publish 链路随 daemon 项目删除已废弃。
 
 ## 八、由 MEMORY.md 下沉（2026-10-16）
 
@@ -126,10 +138,12 @@
   历史教训：黑名单 `*plan*.md` 漏放 `modal-scope-audit.md` ⇒ 追不上新文件。
   webpack 不清旧产物 ⇒ 改规则后手删残留复验。
 - ⛔ 无原生编译器 ⇒ zig 走便携工具链（`native/get-zig.sh` → `%USERPROFILE%\zig-toolchain`）；
-  **编译须沙箱外跑**。⛔ 改 `Program.cs`（热键 daemon 唯一源码）后：`dotnet publish -o publish` → `yarn build`；
-  更新已装副本只有「服务开关先关再开」。
+  **编译须沙箱外跑**。⛔ 改 `native/JWautofillHost/*.c` 后跑 `bash build.sh`（零告警 + PiPL 往返）；
+  .8li 随 PS 常驻，更新已装副本 = 关 PS 覆盖文件 + 重启（无「服务开关」可用）。
 - ⛔ **卸载脚本只删自己那份安装目录**；绝不 `Remove-Item -Recurse` 整个 `%LOCALAPPDATA%\JWautofill`
-  （会删 `configpath.txt` ⇒ 热键配置被冲掉）。面板卸载兜底唤起 `native/HotkeyDaemon/uninstall.bat`。
+  （会删 `configpath.txt` ⇒ 热键配置被冲掉）。⛔ M4 起面板**没有卸载入口**，旧 daemon 的
+  自启项 + 安装目录（`%LOCALAPPDATA%\JWautofill\daemon`）清理由 .8li 启动时的 bind 失败
+  迁移自动完成（见 `refs/keyhook-8li.md`）；`uninstall.bat/ps1` 已随项目删除，勿再引入。
   ⛔ 已**回退** JWUninstall.exe 启动器方案（dist +76M 不划算），UninstallLauncher 已删，**勿再引入**。
 - ⚠️ **环境坑：genie-trash**：对多文件目录报 "Some operations were aborted" 但**实际已移动**（fail-closed 误报），
   且会**延迟回滚重建空目录**。对策：逐文件删容忍报错 + 空壳用 `[System.IO.Directory]::Delete(p,$false)` 收尾 + 删后复验。

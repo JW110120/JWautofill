@@ -86,16 +86,15 @@ module.exports = (env, argv) => {
                 { from: "./src/assets/SourceHanSansCN-Normal.otf", to: "." },
                 { from: "./src/styles/common.css", to: "." },
                 { from: "./README.md", to: "." },
-                // 旧版快捷键守护进程的安装/卸载脚本（面板经 getPluginFolder 在插件目录内
-                // 定位 native/HotkeyDaemon/uninstall.bat 等；不拷贝的话从 dist 加载时
-                // 找不到文件，卸载按钮会静默失败）。
-                // ⚠️ M3 迁移（2026-10-17）：HotkeyDaemon/FixKeyboard 两个 exe 已退役
-                //    （键盘钩子改由 .8li 在 PS 进程内承载，见 native/PiSmooth8li/keyhook.c）⇒
-                //    不再拷贝 publish/JWautofillHotkeyDaemon.exe 与 FixKeyboard.exe，
-                //    dist 体积立省约 140M；修复脚本 fix-keyboard.ps1 仍随包分发
-                //    （.8li 以 runas 提权唤起它完成设备层两步修复，路径由面板解析后传参）。
-                { from: "./native/HotkeyDaemon/*.bat", to: "./native/HotkeyDaemon/[name][ext]" },
-                { from: "./native/HotkeyDaemon/*.ps1", to: "./native/HotkeyDaemon/[name][ext]" },
+                // 键盘卡死一键修复的设备层脚本（.8li 以 runas 提权唤起它完成设备层两步
+                // 修复，见 native/JWautofillHost/keyhook.c 的 kh_repair_launch_script；
+                // .8li 装在 PS Plug-ins 目录推导不出插件根 ⇒ 路径由面板解析后随
+                // repairKeyboard 消息传参，故必须随包分发到插件目录内）。
+                // ⚠️ M3/M4 迁移（2026-10-17）：HotkeyDaemon/FixKeyboard 两个 exe 及其
+                //    安装/卸载脚本已随 daemon 项目整体退役删除（键盘钩子改由 .8li 在 PS
+                //    进程内承载，dist 立省约 140M）——整个 native/HotkeyDaemon/ 目录
+                //    已不存在，只剩这个仍被引用的修复脚本（随 .8li 项目同放）。
+                { from: "./native/JWautofillHost/fix-keyboard.ps1", to: "./native/JWautofillHost/[name][ext]" },
                 // 用户文档（右上角菜单「功能文档」按钮经 shell.openPath 在默认浏览器中打开）。
                 // ⛔⛔ **白名单拷贝**（用户 2026-10-15 明确要求，此前已入铁律）：只带两份使用手册
                 //    及其 img/；计划书 / 分析报告（*plan*.md、modal-scope-audit.md 等内部设计

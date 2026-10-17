@@ -10,7 +10,6 @@ export class AdjustmentMenu {
   private static resetCallback: (() => void) | null = null;
   private static resetParametersCallback: (() => void) | null = null;
   private static alphaSampleCallback: (() => void) | null = null;
-  private static uninstallHotkeyDaemonCallback: (() => void) | null = null;
   private static repairKeyboardCallback: (() => void) | null = null;
   private static showFuncHotkeyPanelCallback: (() => void) | null = null;
 
@@ -27,7 +26,6 @@ export class AdjustmentMenu {
     onResetOrder: () => void;
     onResetParameters: () => void;
     onAlphaSample: () => void;
-    onUninstallHotkeyDaemon: () => void;
     onRepairKeyboard: () => void;
     onShowFuncHotkeyPanel?: () => void;
   }) {
@@ -36,7 +34,6 @@ export class AdjustmentMenu {
     this.resetCallback = callbacks.onResetOrder;
     this.resetParametersCallback = callbacks.onResetParameters;
     this.alphaSampleCallback = callbacks.onAlphaSample;
-    this.uninstallHotkeyDaemonCallback = callbacks.onUninstallHotkeyDaemon;
     this.repairKeyboardCallback = callbacks.onRepairKeyboard;
     this.showFuncHotkeyPanelCallback = callbacks.onShowFuncHotkeyPanel ?? null;
   }
@@ -80,11 +77,6 @@ export class AdjustmentMenu {
       case "repairKeyboard":
         if (this.repairKeyboardCallback) {
           this.repairKeyboardCallback();
-        }
-        break;
-      case "uninstallHotkeyDaemon":
-        if (this.uninstallHotkeyDaemonCallback) {
-          this.uninstallHotkeyDaemonCallback();
         }
         break;
       case "openDocsToolbox":

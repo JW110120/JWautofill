@@ -1,9 +1,15 @@
-# keyhook-8li：键盘钩子并入 .8li（M3，2026-10-17）
+# keyhook-8li：键盘钩子并入 .8li（M3，2026-10-17；M4 收尾同日）
 
 > HotkeyDaemon(65M) + FixKeyboard(76.5M) 已退役；WH_KEYBOARD_LL 改由
-> `native/PiSmooth8li/keyhook.c` 在 PS 进程内承载。面板协议零改（WS 18923 原样连）。
+> `native/JWautofillHost/keyhook.c` 在 PS 进程内承载。面板协议零改（WS 18923 原样连）。
 > 常量：`KH_PORT 18923` / `KH_VERSION "2026-10-17.1"` / `KH_BUDGET_MS 100` /
 > `KH_STRIKES 3` / `KH_COOLDOWN_MS 30000` / `KH_MAX_ITEMS 256`。
+>
+> ⛔ **M4（2026-10-17 晚）**：① .8li 改名 **JWautofillHost.8li**（PiPL 名 "JWautofill Host"，
+> 多功能合体后原名 Smooth 不再贴切）；② **整个 `native/HotkeyDaemon/` 项目已删除**
+> （含两个 exe 与安装/卸载脚本，仅 `fix-keyboard.ps1` 随迁至 `native/JWautofillHost/`）；
+> ③ **面板「卸载快捷键服务」菜单项已删**（.8li 无常驻可卸之物，旧 daemon 清理由
+> .8li 启动时自动迁移完成）；④ `uninstall` 指令**不再停 WS 服务器**（见下）。
 
 ## 线程模型（keyhook.c 内四线程 + plugin_main 的服务器线程）
 
@@ -40,15 +46,18 @@
 
 面板发：`setConfigPath` / `getConfig` / `config` / `getState` / `hotkeyArm{on}` /
 `hotkeyStatus` / `recordStart{brush}` / `recordCancel` / `armDelete{owner}` /
-`disarmDelete` / `uninstall` / `shutdown` / `repairKeyboard{script}`。
+`disarmDelete` / `repairKeyboard{script}`。
+（`uninstall` / `shutdown` 为旧版面板遗留指令：M4 起新面板不再发送，服务端保留处理。）
 服务端帧：`config` / `state`(getState) / `hotkeyState`(跃变广播+status回帧：
 armed/hookInstalled/safeMode/active/comboCount/recording/timeoutMs/budgetMs/strikes) /
 `hotkey`(命中) / `recordCaptured` / `recordResult` / `recordCancel` /
 `backspaceDelete` / `bye` / `repairResult{ok,launched,message}`。
 
 ⛔ **shutdown 语义已降级**：撤防 + bye + 断连，**不退出宿主**（.8li 与 PS 共命运）。
-⛔ **uninstall**：清旧 daemon 遗留（自启项+安装目录）+ 撤防 + 停 WS 服务器；
-重启 PS 后 .8li 自行恢复监听且 `g_khArmed` 复位为 1。
+⛔ **uninstall（M4 改）**：清旧 daemon 遗留（自启项+安装目录）+ 撤防 + bye + 关本连接；
+**不再停 WS 服务器**（M3 旧行为：`g_khSrvStop=1` + shutdown listen ⇒ 要重启 PS 才恢复，
+用户报「卸载后服务再也开不了」。根因 = .8li 不能退出宿主。现在 1.5s 内重连即恢复，
+布防态由面板重发；面板入口已删，此指令只剩旧版兼容价值）。
 
 ## 一键修复（repairKeyboard）分工
 
@@ -61,22 +70,31 @@ armed/hookInstalled/safeMode/active/comboCount/recording/timeoutMs/budgetMs/stri
 | ⑤⑥ pnputil 软重置键盘设备链 / 关 USB 省电 | `fix-keyboard.ps1`（ShellExecuteExW **runas**，`-JwElevated` 防循环） | 提权 |
 
 ⛔ .8li 装在 PS `Plug-ins\`，**推导不出插件根** ⇒ ps1 全路径必须由面板
-（`resolveRepairScriptPath`：getPluginFolder + `native/HotkeyDaemon/fix-keyboard.ps1`）
+（`resolveRepairScriptPath`：getPluginFolder + `native/JWautofillHost/fix-keyboard.ps1`）
 随消息传参。修复后**不自动重挂**（防再冻），面板开关保持关。
 
 ## 面板侧（.8li 形态的新语义）
 
 - 服务就绪 = WS 18923 可连；**不可启停**（.8li 常驻）。
 - ToggleSwitch = 布防/撤防（`setHotkeyArm`）；checked = `connected && armed`；
-  未连接时点击 ⇒ 引导「窗口 → 插件启用 JWautofill Smooth」。
+  未连接时点击 ⇒ 引导「窗口 → 插件启用 JWautofill Host」。
 - 状态条三态：未连接（橙）/ 服务已就绪·热键已暂停（橙）/ 热键已开启（绿）。
 - 录制门禁：connected ∧ armed（撤防态 C 侧直接回 recordCancel，面板提前拦）。
 - 安装/更新通路**未面板化**（M3 遗留）：.8li 需关 PS 后手动拷入 Plug-ins。
+  ⚠️ M4 改名后部署 = **先删旧名 JWautofillSmooth.8li**，再拷 JWautofillHost.8li
+  （两个同名不同名的 .8li 同时在场会抢 18923/18924 端口，必须二选一）。
+- ⛔ M4 起面板**没有**「卸载快捷键服务」入口（MenuManager / AdjustmentMenu /
+  AdjustmentPanel / HotkeyBridge / BrushHotkeySection 五处已清）；旧 daemon 的
+  自启项+安装目录清理改由 .8li 启动时的 bind 失败迁移自动完成。
 
 ## 构建/部署
 
-- `bash native/PiSmooth8li/build.sh`（zig，须沙箱外）：5 个 .c 零告警；
-  PiPL 166 字节往返一致；版本仍 **0x0116**（keyhook 不动 PiPL/导出表）。
-- 部署：关 PS → 拷 `build/JWautofillSmooth.8li` 进 PS `Plug-ins\` → 重启 PS。
-- dist 瘦身：`webpack.config.js` 已删两个 exe 拷贝；⛔ copyWebpackPlugin 不清 stale
-  ⇒ 改规则后**手删 dist 残留**并复验（本次 148M→11M）。
+- `bash native/JWautofillHost/build.sh`（zig，须沙箱外）：5 个 .c 零告警；
+  PiPL **162** 字节往返一致（M4 改名 "JWautofill Host" 后比旧名少 4 字节）；
+  版本仍 **0x0116**（keyhook 不动 PiPL/导出表）。
+- 部署：关 PS → 拷 `build/JWautofillHost.8li` 进 PS `Plug-ins\` → 重启 PS。
+  ⚠️ 旧名 `JWautofillSmooth.8li` 必须同时删掉（见上一节）。
+- dist 瘦身：M3 删两个 exe 拷贝、M4 删整个 daemon 项目 ⇒ dist 11M，
+  `native/` 下只剩 `JWautofillHost/fix-keyboard.ps1` 一个随包脚本；
+  ⛔ copyWebpackPlugin 不清 stale ⇒ 改规则后**手删 dist 残留**并复验
+  （M3 148M→11M；M4 清 `dist/native/HotkeyDaemon/` 6 个旧脚本）。
