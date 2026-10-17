@@ -1,8 +1,12 @@
-# 高频 modal scope 来源清单（2026-10-13）
+# 高频 modal scope 来源清单（2026-10-13 建，2026-10-17 复核）
 
 > 现象：UXP 控制台 `[蒙版同步] 收到事件: set` 后紧跟红色 `821 Too many modal scope commands`。
 > 判读：这是 UXP **内部计数器告警**，不是宿主报错框。它统计 `core.executeAsModal`
 > 的调用频次。红色 ⇒ 短时间内模态命令过密。本文档列出全部产生点与量级。
+>
+> **复核记录**：2026-10-17 全量复扫（第五节 G/H/I）——彼时起原生守护进程已退役
+> （M3/M4，热键与平滑合入 PS 进程内 `JWautofillHost.8li`），面板侧行号与轮询归属
+> 已按当时代码校正；H 项复扫确认仍未处置。后续改动代码后，行号类引用以 grep 实地为准。
 
 ## 量级换算（先立尺子）
 
@@ -110,7 +114,7 @@
 
 ## 四、仍存在的高频项（未改动，供后续处置决策）
 
-### A. `set` 事件 → `handleSelectionChange` → 填充（`app.tsx:1672`）
+### A. `set` 事件 → `handleSelectionChange` → 填充（`app.tsx:1829`）
 - **触发**：主开关开启时的每条选区 `set`（`channel`/`selection`）。
 - **成本**：整条填充链路，模态作用域按分支数从 1 到十余个不等，另有全文档像素读写。
 - **判定**：**用户主动功能，不是浪费**。已有 `isFilling` 同步锁 + `pendingSelection`
@@ -145,10 +149,14 @@
 - **判定**：可考虑把「mask/通道状态」收敛为**一个共享订阅者**（发布-订阅），
   而不是每个子面板各挂一份。改动面较大，需评估。
 
-### F. `BrushHotkeySection` / `FuncHotkeyPanel` 的守护进程轮询
-- `MainToggleBus` / `FillPanelToggleBus` / `FocusModeBus` 各有 `setInterval`
-  轮询共享文件。这些是**文件系统** IO，不进 `executeAsModal` ⇒
-  **不计入本告警**，但会占主线程。
+### F. 跨面板共享状态的轮询（原「守护进程轮询」，M4 起改属 `utils/` 总线）
+- `MainToggleBus` / `FillPanelToggleBus` / `FocusModeBus`（`src/utils/`）用共享文件
+  分发状态，各订阅方 `setInterval` 轮询（`MainToggleBus.ts:229`）。这些是**文件系统**
+  IO，不进 `executeAsModal` ⇒ **不计入本告警**，但会占主线程。
+- ⚠️ 2026-10-13 原文写的是 `BrushHotkeySection` / `FuncHotkeyPanel` 各自轮询
+  「守护进程广播的共享文件」。守护进程已随 M4 退役，轮询逻辑收敛进总线模块，
+  热键命中改由进程内 `.8li` 经 WS 18923 送达 `HotkeyBridge` 再进总线 —— 机制
+  （文件 IO、非模态）不变，属位变了不是消除。
 
 ---
 
@@ -162,9 +170,9 @@ getActiveLayerInfo( / refreshActiveDoc(`，逐文件计数后与上文四节对�
 
 ### G. `app.tsx` 自身的常驻探测（**清单完全没列**）
 
-- **触发**：`app.tsx:710` 注册 `addPsNotificationListeners(this.handleNotification)`
-  —— 与三个子面板同款的全 20 事件订阅；`handleNotification`（:3203）对**每一条**
-  通知都执行 `this.maskProbeDebounced()`（:3214）⇒ `checkMaskModes()` ⇒
+- **触发**：`app.tsx:679` 注册 `addPsNotificationListeners(this.handleNotification)`
+  —— 与三个子面板同款的全 20 事件订阅；`handleNotification`（:2989）对**每一条**
+  通知都执行 `this.maskProbeDebounced()`（:3000）⇒ `checkMaskModes()` ⇒
   `LayerInfoHandler.getActiveLayerInfo()` ⇒ 1 个模态作用域。
 - **为什么比 E 更该先管**：E 列的三个子面板是**按需挂载**（面板开了才注册），
   而 `app.tsx` 是主面板、**从插件加载起就挂着、永不卸载**。即三个子面板全关着，
@@ -172,19 +180,20 @@ getActiveLayerInfo( / refreshActiveDoc(`，逐文件计数后与上文四节对�
   漏了基数里还有这个常驻项。
 - **成本**：每条通知 1 个模态作用域（有 300ms TTL 缓存，多数命中缓存 ⇒ 实际
   IPC 少，但 `debouncePsProbe` 的**调度点**与告警计数仍按次发生）。
-- **本轮处置**：`checkMaskModes` 路径未动（它要跟手），改为在**巡检类**入口
-  加进程内模态层级判据（见下节）。
+- **本轮处置（已实施）**：`checkMaskModes` 路径未动（它要跟手），改为在**巡检类**入口
+  加进程内模态层级判据（见下节，已入 MEMORY.md 铁律 11）。
 
 ### H. 两个下拉的 `refreshLayerSnapshot()` 仍无 `maxAgeMs`
 
-- `refreshLineReferenceOptions`（AdjustmentPanel.tsx:1638）与
-  `refreshMaskSyncOptions`（:1063）都调 `refreshLayerSnapshot()` ——
+- `refreshLineReferenceOptions`（AdjustmentPanel.tsx:1631）与
+  `refreshMaskSyncOptions`（:1056）都调 `refreshLayerSnapshot()` ——
   **默认 `maxAgeMs = 0` ⇒ 每次都真做全树遍历**（1 模态 + ≈5N 次宿主 get）。
 - 清单二/三的修复只**收窄了触发源**（不打脏、不刷），没有改读取本身的缓存口径。
   后果：用户反复开合下拉（这是常用动作）⇒ 每次都是一次全量遍历，与「收窄触发源」
   的收益方向相反。
 - **建议（低风险）**：这两处传 `maxAgeMs`（如 1500ms）。语义与「用户刚点开要最新」
   不冲突 —— TTL 比一次交互间隔短即可。
+- ⚠️ 2026-10-17 复扫确认：**仍未处置**（两处 `refreshLayerSnapshot()` 依旧无参）。
 
 ### I. 未列入但确认**不是**遗漏的项（已逐个核对）
 
@@ -221,8 +230,8 @@ PICA `modalStateChanged` 把 PS **自己的模态嵌套层级**报进进程（`'
 | ✅ 已修 | 蒙版同步引擎（4 → 0） | 零任务时纯浪费，且 `set` 频率最高 |
 | ✅ 已修 | 线稿参考下拉（1 → 0） | 每条 `set` 一次全树遍历，N 越大越痛 |
 | ✅ 已修 | 蒙版同步面板侧刷新 | 零任务时 buildLayerTree 全套无意义 |
-| 🔶 待评估 | G（`app.tsx` 常驻探测） | **基数项**：三个子面板全关着它照样跑，优先级应高于 E |
-| 🔶 待评估 | H（两个下拉无 `maxAgeMs`） | 一行改动，收窄触发源的收益才不会被动线抵掉 |
+| ✅ 已处置 | G（`app.tsx` 常驻探测） | 巡检类入口已加进程内模态层级判据（0x0113，铁律 11）；`checkMaskModes` 保留跟手 |
+| 🔶 待评估 | H（两个下拉无 `maxAgeMs`） | 一行改动，收窄触发源的收益才不会被动线抵掉；10-17 复扫仍开放 |
 | 🔶 待评估 | E（三子面板各自挂监听） | 结构性收敛，收益随「常开子面板数」放大 |
 | 🔶 待评估 | B / C / D 轮询间隔 | 低风险微调，需权衡「切文档发现延迟」 |
 | ⛔ 不动 | A（选区填充） | 用户主动功能 |

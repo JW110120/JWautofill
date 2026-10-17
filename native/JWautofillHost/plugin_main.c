@@ -832,6 +832,13 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
         if (reason == DLL_PROCESS_ATTACH) {
             DisableThreadLibraryCalls(hinst);
             g_hSelf = hinst;
+        } else {
+            /* ⛔⛔ 0x0117：DETACH = 本模块即将被卸载映射。正常路径上 AutoPluginMain
+               的 "Unload" 已经跑过 services_stop()（幂等，这里直接返回）；但若 PS
+               没发 Unload 就 FreeLibrary（异常路径），WS 服务器 / pump / 热键四个
+               线程会活过卸载 ⇒ 与引擎四线程同一族崩溃（WER: .8li_unloaded
+               0xC0000005）。这里补一次停干净（幂等：g_started 已为 0 时立即返回）。 */
+            services_stop();
         }
         log_line("dll", "%s pid=%lu tid=%lu self=%s",
                  reason == DLL_PROCESS_ATTACH ? "DLL_PROCESS_ATTACH" : "DLL_PROCESS_DETACH",

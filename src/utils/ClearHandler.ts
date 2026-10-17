@@ -18,7 +18,7 @@ import {
 /**
  * 一个文档坐标下的矩形（左/上/右/下，右/下不含）。
  * 用于「读区域」与「图层像素边界」两处 —— 抽成具名类型是为了让
- * 回归台架能干净地切出这些方法执行（见 outputs/clear_pixel_geometry_verify.cjs）。
+ * 回归台架能干净地切出这些方法执行（台架脚本已于 2026-10-17 大清理移除）。
  */
 type PixelRect = { left: number; top: number; right: number; bottom: number };
 

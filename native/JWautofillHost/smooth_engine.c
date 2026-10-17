@@ -2989,6 +2989,17 @@ static volatile LONG g_wtCloseN;  /* WTClose 次数 */
 static volatile LONG g_streamDead;/* 1 = 断流判定成立（worker 看门狗写） */
 static HCTX g_ctxNow;             /* 最近一次被轮询的上下文（detour 普通写即可） */
 
+/* HUD 门控各项的**诊断镜像**（渲染线程写、`[hud] 未显示` 与 `[stall]` 行读）。
+   ⛔ 只为排障：真正门控是局部门控变量，不要反过来读这些字段。
+   ⛔ 声明必须早于 worker 的 [stall] 记录点（0x0117 起该行要打 fg=）。 */
+static volatile LONG g_fgOkDbg      = 1;   /* 前台是本进程（已去抖） */
+static volatile LONG g_drawOkDbg    = 1;   /* 工具模态放行 */
+static volatile LONG g_strokeOkDbg  = 0;   /* 真的在一笔之中 */
+static volatile LONG g_lagSkipDbg   = 0;   /* 本帧因滞后被跳过 */
+static volatile LONG g_jumpSkipDbg  = 0;   /* 本帧因大跳跃被跳过 */
+static volatile LONG g_canvasOkDbg  = 1;   /* 焦点在活动文档画布上（0x0116 焦点门） */
+static volatile LONG g_ctOkDbg      = 0;   /* 落笔判据已建立（g_ctUnknown==0） */
+
 /* —— 取包突发计量（2026-10-16 第十四轮）——
    真机 jwwh-13772 的教训：10s 窗口的平均包率在 62/s 与 174/s 之间来回摆，而驱动
    标称 `rate=100`。也就是说「卡顿 → 一口气冲出来」是**常态**而不是例外，可此前
@@ -3368,11 +3379,18 @@ static u64 det_WTPacketsGet(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
             int k = penraw_synth((void*)c, (int)b, nowT);
             if (k > 0) {
                 r = k;
-                synth = 1;
                 InterlockedExchange(&g_synLastMs, (LONG)nowT);
                 InterlockedExchangeAdd(&g_synPkts, (LONG)k);
                 InterlockedIncrement(&g_synRuns);
             }
+            /* ⛔⛔ 0x0117：`k == 0` = **本轮没有新样本可喂**（光标采样 64Hz 与 PS
+               轮询 ~64Hz 相位错开时的正常空转拍），**不是**「驱动恢复了」。
+               旧代码把 k>0 当接管、k==0 当交还 ⇒ 真机 jwwh-32984 的 25s 断流里
+               「接管/交还」翻了 6 次，每一次都是假交还，日志把空转报成
+               「真实通路已回包，交还给驱动」—— 排障时完全被带偏。
+               ⇒ 接管条件成立即置 synth=1（状态机只看条件，不看得包数），
+               交还只发生在条件真正不成立时（真包回来了 / 采样源死了 / 开关撤了）。 */
+            synth = 1;
         }
         /* ⛔ 丢冲包：刚补过流、真实通路又一次性吐回一大批 ⇒ 丢掉。
            不丢的话 PS 会先按补流画到光标、再把几十个**旧**坐标重放一遍 ⇒
@@ -4150,11 +4168,17 @@ static DWORD WINAPI worker(LPVOID param)
                     s_stallPk = pk; s_lastPkMs = nowW;
                 } else if (!s_stallOn && (DWORD)(nowW - s_lastPkMs) >= STALL_LOG_MS) {
                     s_stallOn = 1; s_stallT0 = s_lastPkMs; s_stallCl = (DWORD)cl;
+                    /* ⛔ 0x0117 加 `fg=`（前台是否本进程，HUD 焦点门的诊断镜像）：
+                       真机 jwwh-32984 三场停摆**全部**与「PS 失前台」同时发生
+                       （点一键修复 → UAC + 15s 倒计时窗口抢前台；点插件面板；
+                       点任务栏）⇒ Wintab 驱动只给前台上下文派包、其余攒在队列
+                       （冲包量 40~47 ≈ 队列容量）。这是判「驱动随机停摆」还是
+                       「焦点门控派包」的唯一现场字段，下一场日志直接可查。 */
                     logf("# [stall] ★包流停摆 ≥%lums：penDown=%ld toolOk=%ld contact=%ld "
-                         "ctZeroRun=%ld ctUnknown=%ld 光标=(%ld,%ld) calls=%ld\n",
+                         "ctZeroRun=%ld ctUnknown=%ld fg=%ld 光标=(%ld,%ld) calls=%ld\n",
                          (unsigned long)(nowW - s_lastPkMs), (long)g_penDown, (long)g_toolOk,
                          (long)g_contact, (long)g_ctZeroRun, (long)g_ctUnknown,
-                         (long)c.x, (long)c.y, (long)cl);
+                         (long)g_fgOkDbg, (long)c.x, (long)c.y, (long)cl);
                 }
             }
             if ((DWORD)pk != s_pkts) {                /* 有包：正常或从断流恢复 */
@@ -4510,14 +4534,8 @@ static DWORD        g_ropeLowMs;
 static volatile LONG g_hudStop;
 static volatile LONG g_hudRunning;
 /* 2026-10-17：HUD 门控各项的**诊断镜像**（渲染线程写、`[hud] 未显示` 行读）。
-   ⛔ 只为排障：真正门控是局部门控变量，不要反过来读这些字段。 */
-static volatile LONG g_fgOkDbg      = 1;   /* 前台是本进程（已去抖） */
-static volatile LONG g_drawOkDbg    = 1;   /* 工具模态放行 */
-static volatile LONG g_strokeOkDbg  = 0;   /* 真的在一笔之中 */
-static volatile LONG g_lagSkipDbg   = 0;   /* 本帧因滞后被跳过 */
-static volatile LONG g_jumpSkipDbg  = 0;   /* 本帧因大跳跃被跳过 */
-static volatile LONG g_canvasOkDbg  = 1;   /* 焦点在活动文档画布上（0x0116 焦点门） */
-static volatile LONG g_ctOkDbg      = 0;   /* 落笔判据已建立（g_ctUnknown==0） */
+   ⛔ 只为排障：真正门控是局部门控变量，不要反过来读这些字段。
+   （声明已随 0x0117 上移至取包诊断区，[stall] 行也要读 g_fgOkDbg。） */
 
 /* ============================================== 焦点门（0x0116，2026-10-17 第十八轮）=====
  * ⛔⛔ 用户铁律（原话）：「焦点不在活动文档的画布上 & 未在画布上落笔时，避免生成 hud」。
@@ -5516,8 +5534,12 @@ static void hud_stop(void)
             + 面板 inProcGateOwned() 统一判据（静默即让位，自愈轮询兜底）
    0x0116 = HUD 焦点门（用户铁律「焦点不在活动文档画布上 & 未落笔 ⇒ 不出 HUD」）：
             canvasOk（主框/MDIClient/焦点/光标四子条件，实测类名不猜）+ ctOk
-            （落笔判据已建立才准出 HUD，堵死 contact 两条 fail-open 对 HUD 的泄漏） */
-__declspec(dllexport) int jwwh_version(void) { return 0x0116; }
+            （落笔判据已建立才准出 HUD，堵死 contact 两条 fail-open 对 HUD 的泄漏）
+   0x0117 = ① PS 关闭崩溃修复：DETACH 调 jwwh_unhook() 全停引擎四线程
+            （WER: .8li_unloaded 0xC0000005，卸载后线程在已卸载代码上跑）；
+            ② 补流假交还修复：接管条件成立即 synth=1，penraw_synth 返 0（无新
+            光标样本）不再被误判成「真实通路已回包」；③ [stall] 行加 fg= 字段 */
+__declspec(dllexport) int jwwh_version(void) { return 0x0117; }
 
 /* 兜底还原入口：守护进程的正常路径是经共享内存下令（worker 执行），
    此导出供外部工具（脚本/排障）在不需要共享内存时直接远程调用。 */
@@ -5546,7 +5568,18 @@ static void start_worker(HINSTANCE h)
 /* M2（.8li 进程内形态）：本文件被直接编进 JWautofillHost.8li，与 plugin_main.c
    同镜。DllMain 归 plugin_main.c 所有 ⇒ 这里改名为 engine_dllmain，由它在
    DLL_PROCESS_ATTACH / DETACH 时原样转发（attach = start_worker，detach = 兜底
-   repatch —— 语义与旧注入版逐字节一致）。 */
+   repatch —— 语义与旧注入版逐字节一致）。
+
+   ⛔⛔ 0x0117：DETACH 必须把引擎**整体停干净**再返回（2026-10-17 崩溃四连修）。
+   旧代码在 DETACH 里只 repatch，worker / hud / cursamp / penraw 四个线程全部
+   存活 ⇒ FreeLibrary 一返回，它们就在**已卸载的代码**上继续跑 ⇒ 0xC0000005。
+   WER 实证（今日四场，旧名新名都崩）：
+     Photoshop.exe 27.11 · 出错模块 JWautofillHost.8li_unloaded ·
+     异常代码 0xc0000005 · 错误偏移 0x10eb8（崩溃时刻 = pi8li.log 的 DETACH 行）。
+   cursamp 4ms / hud 16ms 两个循环在卸载后**几毫秒内**必然踩空 ⇒ 稳定复现。
+   jwwh_unhook 全序列幂等（线程 join + 各自销毁窗口 + 还原钩子 + 关日志），
+   且 ExitProcess 路径（reserved != NULL）上其它线程已被系统终结、各 wait 立即
+   返回 ⇒ 两条卸载路径都安全。 */
 BOOL WINAPI engine_dllmain(HINSTANCE hinstDLL, DWORD reason, LPVOID reserved)
 {
     (void)reserved;
@@ -5556,7 +5589,10 @@ BOOL WINAPI engine_dllmain(HINSTANCE hinstDLL, DWORD reason, LPVOID reserved)
         /* ⛔ 重活绝不放在 DllMain（loader lock）⇒ 只起线程立刻返回。 */
         start_worker(hinstDLL);
     } else if (reason == DLL_PROCESS_DETACH) {
-        /* 兜底（幂等）：不冻结线程（进程正在退出，挂起别人可能卡死退出流程）。 */
+        /* 模块即将被卸载映射 ⇒ 先停全部引擎线程（见上方 0x0117 说明）。 */
+        jwwh_unhook();
+        /* 兜底（幂等）：jwwh_unhook 内部已还原过；worker 没起来过时它early-return，
+           这里保证「挂过钩」的路径字节一定写回。 */
         if (g_patched && g_entry) repatch(g_entry, g_orig);
     }
     return TRUE;

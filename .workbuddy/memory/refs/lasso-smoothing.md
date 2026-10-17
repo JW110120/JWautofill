@@ -1,7 +1,9 @@
 # 套索实时平滑（方案 A：输入层滤波）— 明细
 
 > 由 `MEMORY.md` 下沉而来（2026-10-12）。主索引只留导航，这里放全部细节与踩坑。
-> 方案原文 / 实现状态 / 验收清单见 `docs/lasso-realtime-smoothing-plan.md`。
+> ⛔ 2026-10-17 大整理：方案原文与迁移计划（`docs/lasso-realtime-smoothing-plan.md` /
+> `lasso-pipl-8li-migration-plan.md`）已随本地清理删除 —— 二者均属「执行期计划」，
+> 结论全部沉淀在本文件与 `HISTORY.md`；本文件即唯一现存权威。
 
 > ⛔⛔ **2026-10-14 架构变更横幅（M3）**：平滑已从「外置 SmoothDaemon(18924) + 注入
 > JWautofillWintabHook.dll」迁到 **PS 进程内 .8li 插件**（native/JWautofillHost/，
@@ -10,7 +12,7 @@
 > 已删除，面板的 daemon 拉起/卸载链路已删。**本文档中引擎/算法层细节（HUD、标定、
 > 拉绳、落笔判据、槽位表、诊断码）依然有效**（代码原样搬入 .8li）；但凡涉及
 > 「两个守护进程 / 注入 DLL / 安装目录 %LOCALAPPDATA%\JWautofill\smooth / 卸载脚本」
-> 的 daemon 专属内容**以 `docs/lasso-pipl-8li-migration-plan.md`（M1/M2/M3 记录）为准**。
+> 的 daemon 专属内容已作废（迁移记录见 `HISTORY.md`「套索实时平滑：从鼠标钩子到 .8li」）。
 
 ## 1. 定位
 
@@ -26,8 +28,8 @@
   | 安装目录 | `%LOCALAPPDATA%\JWautofill\daemon\` | `%LOCALAPPDATA%\JWautofill\smooth\` |
   | UXP 桥接 | `src/hotkey/HotkeyBridge.ts` | `src/lasso/SmoothBridge.ts` |
   ⛔ 面板「停止 / 卸载服务」是**进程级**；此前共用一个进程 ⇒ 停热键把平滑一起带走
-  （用户报的「卸载快捷键服务后平滑显示未连接」）。拆成两个 exe 后才真正解耦，
-  已用 `ws-send.cjs` 双向对拍实证。
+  （用户报的「卸载快捷键服务后平滑显示未连接」）。拆成两个 exe 后才真正解耦
+  （当时用本地 WS 探针双向对拍实证，脚本已随 2026-10-17 清理删除）。
 - 与「选区改造」是**两条独立路径**：本功能作用在**输入轨迹**，后者作用在**已生成的选区掩码**；
   可同时开启（效果串联）。⚠️ 2026-10-12 起「选区改造」里的**平滑滑块已删除**
   （`state.selectionSmooth` / `SelectionOptions.selectionSmooth` / `DragHandler` 配置 / 文案全清），
@@ -195,14 +197,17 @@ _ox += distX * k;
   **静默截断高位**，拿截断值 `FreeLibrary` 必返回 FALSE 且无任何报错 ⇒ 判定成功改用证据文件、
   卸载改用 `EnumProcessModulesEx` 按名字查真实基址；② 十六进制地址**不要手算**；
   ③ `kernel32.dll` 是共享映像 ⇒ 本进程 `GetProcAddress` 的地址在目标进程同样有效，无需远程解析。
-  产物：`analysis/_tools/spike/{jwprobe.c, jwprobe.dll, inject.py}`。
+  产物：本地一次性探针（最小证据 DLL + 注入/卸载器，gitignored，2026-10-17 已清理；
+  复用结论 = 成功判定看证据文件、卸载按名查真实基址）。
   ⇒ ②a 的重心从「能不能进」转为「inline hook 稳定性 + 杀软对**长期驻留/改代码段**是否更敏感」。
 - ✅ **DPI 感知已落地**（绝对注入的坐标口径）：`native/app.manifest`（两角色共用，`PerMonitorV2`
   + Win10 `supportedOS`——缺它整条 `dpiAwareness` 被静默忽略 + 显式 `asInvoker`）+ Main 第一行
   `EnsureDpiAwareness()` 兜底。`getState` 暴露 `dpiAwareness`，真机两角色均报 `permonitor-v2`。
   ⛔ 这个差别在 100% 缩放的机器上**看不出来** ⇒ 有人报「光标画偏」先查这个字段。
-- ⚠️ 判定手法（30 秒，零代码，**仍需真机用手握笔跑一次**）：`node analysis/ws-tablet-probe.cjs`，
-  按提示先用鼠标划、再用笔划，看 `callbacks` 增量；笔段增量为 0 ⇒ 确认绕过鼠标通路。
+- ⚠️ 判定手法（30 秒，零代码，**仍需真机用手握笔跑一次**）：当时用
+  `analysis/ws-tablet-probe.cjs`（已随本地清理删除，需要时按同协议重写：向平滑服务
+  问一次状态即可）—— 按提示先用鼠标划、再用笔划，看 `callbacks` 增量；
+  笔段增量为 0 ⇒ 确认绕过鼠标通路。
 
 ### 6.1 P3 最小可用版：注入 PS 改写 Wintab 包坐标（2026-10-12 落地）
 
@@ -248,25 +253,18 @@ _ox += distX * k;
   两种解释都成立且不互斥（① 安全软件自保护；② 进程真的卡在内核调用里 ⇒ 停在「已终止但不回收」）。
   **处置结论：重启清干净，别在旧进程上继续试。**
 
-## 8. 诊断工具（`analysis/` 已 gitignore、不跨机）
+## 8. 诊断工具（本地草稿，不跨机）
 
-| 脚本 | 用途 |
-| --- | --- |
-| `ws-raw-probe.cjs` / `ws-arm-test.cjs` / `ws-tablet-probe.cjs` / `ws-send.cjs` | 都接受**端口作为第 1 个参数**（默认 18923）——拆分后热键 18923 / 平滑 18924 |
-| `ws-send.cjs <port> '<json>'` | 向指定端口发任意原始指令。**验证「两个服务互不影响」的唯一手段**（面板上做不到：停掉一个就断连接）。等待时长用 `WS_WAIT_MS` 调（默认 1500ms，自检类要调大） |
-| `ws-raw-probe.cjs` | 活体查询 `getState` / `smoothStatus`（**必须手写 WS 帧**：`HandleClient` 用大小写敏感正则匹配 `Sec-WebSocket-Key:`，Node undici 的小写首部会被拒） |
-| `ws-arm-test.cjs` | 端到端布防验证（观测 `armed/hookInstalled/callbacks` 跃变） |
-| `ws-tablet-probe.cjs` | 数位板通路探针（对比鼠标 / 笔的 `callbacks` 增量） |
-| `hookprobe/` | 独立 P/Invoke 探针：用与守护进程**完全相同**的写法安装两种低层钩子（16 种组合） |
-| `pe-imports.py` | 零依赖 PE 导入表解析（判定静态导入 IAT vs `GetProcAddress`） |
-| `find-wintab-importer.py` | 在「PS 已加载模块」列表里找 Wintab 的引用者（配合 `_ps-modules.txt`） |
-| `pointer-accel-probe.py` | 量化指针加速对相对注入的位移整形（读 `SPI_GETMOUSE`）。⚠️ **必须绕过沙箱**：沙箱会直接 SIGTERM 任何调用 `SendInput` 的进程；等效测量改用守护进程的 `pointerTest` |
-| `spike/jwprobe.{c,dll}` | 最小探针 DLL：`DllMain` 只 `CreateThread` 写证据文件 `%TEMP%\jwprobe-<pid>.log`（无 Wintab 逻辑）。构建：`zig cc -target x86_64-windows-gnu -shared -O2`（用短路径的 zig.exe） |
-| `spike/inject.py` | **DLL 注入器／卸载器**：`inject.py <pid> [dll]` 注入；`--eject <pid> <dll_name>` 按名卸载。⛔ **不要用 `GetExitCodeThread` 取远程 `LoadLibraryW` 的返回值**（32 位截断 ⇒ 卸载必失败且无报错）；注入是否成功看证据文件，卸载基址靠 `EnumProcessModulesEx` |
-| `spike/recon_wintab.py` | **改代码段前的零风险侦察**：本进程 `LoadLibrary` 后读导出序言字节 + 与目标进程同 RVA 逐字节对照（判定「出厂代码 vs 已被 hook」），带极简 x64 长度解码 |
-| `spike/recon_thunk.py` | 磁盘节表 RVA→offset + 追 `E9 rel32` 跳转链（钉死「入口桩 → 真实现体」两层） |
-| `spike/wtprobe.{c,dll}` | **P2 探针**：10 个 Wintab 导出入口的 inline hook（计数）+ 改写期线程冻结 + `wtprobe_{selftest,reset,unhook,version}` 导出 |
-| `spike/inject.py` 命令 | `--verify <pid>` 三层复核（入口改写 → 跳向模块外 → 转发桩 `mov rax,imm64;jmp rax`）；`--selftest` 从入口真调一次证明链路；`--reset` 清零基线；`--unhook`／`--eject`（**eject 会自动先 unhook**） |
+> ⛔ 2026-10-17 大整理：原 §8 表格列的探针工具（`ws-*-probe.cjs` / `pe-imports.py` /
+> `spike/` / `hookprobe/` 等）全部是 gitignored 的本地一次性脚本，已随清理删除 ⇒
+> **记忆不再按文件名引用它们**（跨机必然悬空）。
+> **目录分工（2026-10-17 定）**：`scripts/` = 沉淀后的诊断工具（git 跟踪、跨机同步，
+> 复核后才从 `analysis/` 晋升）；`analysis/` = 临时分析报告与未复核工具（gitignored）。
+> 已沉淀的两个只读探针：`scripts/wintab_axis_probe.py` / `scripts/wintab_layout_probe.py`
+> （WTInfo 只读侦察，不注入、不模拟输入；低配机复测 Wintab 行为时可直接跑）。
+> 方法论教训保留：① 「从实现**原样抽取**函数编离线自检」——手抄会与实现漂移，
+> 「测试通过」即成假证据（标定函数的 stride/offX/offY 结论见 §9，勿重新猜）；
+> ② 注入类实验在沙箱里会被 SIGTERM（见下方沙箱限制）。
 
 ### ★ 可复用结论：Wintab 系 DLL 的导出入口 = 5 字节 `E9` 桩（2026-10-12 实测）
 
@@ -383,10 +381,13 @@ _ox += distX * k;
 ③ `dt` 整批取一次 ⇒ 第 2 包起 dt=1ms，k 与追笔 step 全部失真；④ 追笔 vmax 上限 12.2px/ms（12200px/s）
 远超人手速度 ⇒ 恒走「贴合」分支。另：拐角守卫加了 3px 位移门限（否则 205Hz 下每帧都判拐角 ⇒ 平滑被关掉）。
 
-### 自检工具
-`analysis/gen_layout_selftest.py`：从 `wintab_hook.c` **原样抽取**标定函数编译成离线 exe，
-用真机 dump 的字节验证 (stride, offSerial, offX, offY)。改标定逻辑后必跑。
-`analysis/wintab_layout_probe.py` / `wintab_axis_probe.py`：WTInfo 只读侦察（不注入、不模拟输入）。
+### 自检工具（结论沉淀，脚本已随本地清理删除）
+
+- **包布局结论（勿重新猜）**：`stride=52  offSerial=8  offX=20  offY=24` —— 当初用
+  「从 `wintab_hook.c` 原样抽取标定函数编译成离线 exe + 真机 dump 字节喂入」验证，
+  该方法论（原样抽取而非手抄）保留；脚本本身已删。
+- `scripts/wintab_layout_probe.py` / `scripts/wintab_axis_probe.py`：WTInfo 只读侦察
+  （不注入、不模拟输入），已沉淀（git 跟踪），低配机复测可直接跑。
 
 ---
 
@@ -493,7 +494,8 @@ _ox += distX * k;
 - 卸载脚本铁律：删除重试 **8×500ms**（最长 4s）；失败处**不 throw**（throw 会跳过残留清理
   与钩子超时重置）；倒计时 **15s**（两边逐字一致）；`uninstall.bat` 用
   **`if errorlevel 9009 pause`**，绝不 `if errorlevel 1 pause`（否则失败永远停在「按任意键」）。
-- 像素取证工具：`analysis/_tools/png_measure.py`（包围盒/距离测量）、`png_ascii.py`（结构图）。
+- 像素取证手法：对用户截图做**包围盒/距离测量**与** ASCII 结构图**（本地小工具，
+  2026-10-17 已随清理删除，需要时按同功能重写：PIL 裁剪统计 + 阈值转字符画）。
   ⛔ **仅可用于用户确认为真实的截图**；示意图绝不可作测量源。
 
 ### H. 第六轮：拉绳公式 / 绳的形态 / modal 节流吞吐（⛔⛔ 三条都别再写错）

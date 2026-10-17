@@ -42,10 +42,6 @@ import {
   initialLassoSmoothParams, setPenSmooth, setSmoothToolGate, getSmoothToolGate,
   SMOOTH_RADIUS_MIN, SMOOTH_RADIUS_MAX,
   SMOOTH_CATCHUP_MIN, SMOOTH_CATCHUP_MAX,
-  MODE_TO_WIRE,
-  // 诊断原因码 → 人话（唯一文案表，见 LassoSmoothing.smoothReasonText）。
-  // ⛔ 诊断条**只能**用原生侧报的 reason 说原因，禁止自己从 toolOk/penDown/gateOk 拼。
-  smoothReasonText,
 } from './lasso/LassoSmoothing';
 // 套索实时平滑的 WebSocket 桥接（端口 18924）。对端是 **PS 进程内的 .8li 插件**
 // （JWautofillHost.8li，随 PS 启动自动加载）—— 2026-10-14 起外置 SmoothDaemon
@@ -273,36 +269,9 @@ class App extends React.Component<AppProps, AppState> {
      *    状态条把它显示出来，一次截图就能判定是「读错了」还是「没读到」。
      */
     private lastToolRead: string | null = null;
-    /** 平滑取包活跃度追踪（notify bar「平滑中断」检测；见 applySmoothStatus 内注释）。 */
+    /** 平滑取包活跃度追踪（主状态条「平滑中断」检测；见 applySmoothStatus 内注释）。 */
     private lastPenPackets = -1;
     private lastPenFlowAt = 0;
-    /**
-     * 诊断条「粘滞原因」（2026-10-14 第三轮）。
-     *
-     * ⛔⛔ 为什么必须有：用户报「提笔瞬间绿条只闪了不到 1 秒就退回『等笔尖落纸』，
-     *    我甚至来不及截图」。根因是诊断条只显示**当下**的原因，而原因会随
-     *    「落笔/抬笔/闸门开合」在一秒内翻好几次 —— 用户看到的永远是最后那个
-     *    与被解释的现象无关的值。
-     * ⇒ 把「本段内最后出现过的非正常原因」按时间粘住：当前已恢复正常但
-     *    上一次异常在 STICKY_MS 之内，就把它一并写出来。这样**一次截图**就能
-     *    看到「刚才为什么没在改写」，不用去抢那个一闪而过的绿条。
-     */
-    private lastPenReason = -1;
-    private lastPenReasonAt = 0;
-    /** 粘滞窗口（ms）。取值理由：覆盖「抬笔 → 看面板 → 截图」的整个动作链。 */
-    private static readonly SMOOTH_REASON_STICKY_MS = 8000;
-    /**
-     * 上一次回报里的闸门开合计次（用来算**每次回报的增量**）。
-     *
-     * ⛔⛔ 为什么必须算增量而不是直接看总数：GATEOPEN/GATECLOSE 是**累计值** ——
-     *    画了一百笔之后两者都是 100 附近，差额恒为 0，光看总数永远看不出抖动。
-     *    「抖动」的正确判据是**一次回报内 Δopen 就涨了好几次**：闸门在一秒内
-     *    反复开合，选区就被劈成一段一段（这正是用户报的「画了很久才突然出现一大段」）。
-     */
-    private lastGateOpen = -1;
-    private lastGateClose = -1;
-    private lastGateDeltaOpen = 0;
-    private lastGateDeltaClose = 0;
     // ===== 快速蒙版巡检 =====
     // 复合根因（2026-09-10 定位）：
     //   ① checkMaskModes() 原先只写 this.isInQuickMask（实例字段）+ forceUpdate，
@@ -1358,28 +1327,6 @@ class App extends React.Component<AppProps, AppState> {
             this.lastPenFlowAt = Date.now();
             this.lastPenPackets = p.packets;
         }
-        // 诊断条「粘滞原因」：只在**出现新的非正常原因**时记录时刻。
-        // ⛔ 不能每次回报都刷新时间戳 —— 那样一个持续存在的异常会永远粘住，
-        //    而「恢复正常」后反而看不到它本来想保留的上下文。
-        // ⛔ 条件是 `> 0`（不是 `!== 0`）：-1 = 对端不报原因码，不是一个真实原因。
-        if (p && p.reason > 0 && p.reason !== this.lastPenReason) {
-            this.lastPenReason = p.reason;
-            this.lastPenReasonAt = Date.now();
-        } else if (p && p.reason === 0 && this.lastPenReason > 0
-                   && (Date.now() - this.lastPenReasonAt) > App.SMOOTH_REASON_STICKY_MS) {
-            // 已恢复正常且超出粘滞窗口 ⇒ 清掉，避免陈旧的旧原因长期占位。
-            this.lastPenReason = -1;
-        }
-        // 闸门开合的**每次回报增量**（抖动判据；见 lastGateOpen 的注释）。
-        // ⚠️ 首次回报（-1）不产出增量：否则会把「从 0 开始」误算成一次跳变。
-        if (p) {
-            if (this.lastGateOpen >= 0) {
-                this.lastGateDeltaOpen = Math.max(0, p.gateOpen - this.lastGateOpen);
-                this.lastGateDeltaClose = Math.max(0, p.gateClose - this.lastGateClose);
-            }
-            this.lastGateOpen = p.gateOpen;
-            this.lastGateClose = p.gateClose;
-        }
         // 闸门巡检的启停挂在**状态回报**上，而不是开关点击上：
         // 开关状态会因模块重启/重连而变化，挂在回报里才不会漏。
         this.syncSmoothToolWatch();
@@ -1468,195 +1415,6 @@ class App extends React.Component<AppProps, AppState> {
             const snStale = pen.snAge >= 0 && pen.snAge > 2200;
             if (pen.penDown === 1 && pen.gateOk === 1 && flowing && snStale) return 'notify-bar-fail';
             return 'notify-bar-ok';
-        }
-        return 'notify-bar-warn';
-    }
-
-    /**
-     * 平滑运行诊断条文案（调试用，2026-10-14 第三轮重做）。
-     *
-     * ⛔ 与 smoothStatusText 的分工**不同**，不要合并：那条回答「平滑服务处于哪一档」
-     *    （按 2026-10-13 的要求不挂任何数字）；本条回答「此刻**为什么**没在改写坐标」。
-     *
-     * ⛔⛔ 2026-10-14 第三轮重做的理由（用户原话：「现在诊断不具备可用性……我落笔的时候，
-     *    已经画了很长一段选区了，面板仍然显示已就绪，等笔尖落纸，我早就已经落了！」
-     *    以及「绿条只出现不到 1 秒……发现它竟然没有任何意义——它只是写了一些取包、
-     *    改写的莫名其妙的数字」）：
-     *    ① 旧版由**面板自己**从 toolOk/penDown/gateOk 拼原因。而原生侧在闸门不成立时
-     *       **会主动把 penDown 写成 0**（见 smooth_engine.c 的阻断分支）⇒「心跳过期」
-     *       与「笔尖真的悬空」在面板上长得一模一样，永远吐「等笔尖落纸」。用户落着笔
-     *       看这句话只能更迷惑。现在原因**完全以原生侧的 reason 码为准**（唯一权威）。
-     *    ② 旧版的数字尾巴是「取包 N / 改写 M」—— 它与「为什么没在改写」无关，
-     *       用户说「莫名其妙」是准确的。现在尾巴只保留**能直接定位故障的量**：
-     *       落笔判据用的字段偏移与它最近一包的读数（笔压读到 0？）、
-     *       逐轴标定样本数（够不够采信）、闸门本轮回合数（抖不抖动）。
-     *    ③ 原因会在一秒内翻好几次 ⇒ 绿条一闪而过、来不及看。现在非正常原因会
-     *       按时间**粘住**（见 lastPenReason），当前正常也会附带「前一瞬：…」。
-     */
-    private smoothDiagText(): string {
-        const st = this.state.smoothStatus;
-        const pen = st.pen;
-        if (!st.connected) {
-            return '诊断：平滑服务未启动';
-        }
-        if (st.unsupported || st.penUnsupported) return '诊断：平滑服务版本过旧（缺笔平滑通路）';
-        if (!pen.enabled) return '诊断：平滑总开关未开启';
-        if (pen.state === 4) return '诊断：旧模块占用钩子入口（需重启 Photoshop）';
-        if (pen.state === 2) return '诊断：标定失败（未生效）';
-        if (pen.state === 3) return '诊断：钩子已卸载（正在自动恢复…）';
-        if (pen.injectedCount === 0) return '诊断：尚未注入 Photoshop';
-        if (pen.state === 0) {
-            return pen.packets === 0 ? '诊断：已注入，等待笔包（动一下笔）' : '诊断：已注入，正在标定…';
-        }
-
-        const t = Date.now();
-        const flowing = (t - this.lastPenFlowAt) < 1500;
-        const snStale = pen.snAge >= 0 && pen.snAge > 2200;
-
-        /* state === 1：标定通过。
-           ⛔ 判据顺序（不可换）：
-              ① 断流（包在涨、快照冻结）= 真「平滑失效」本体，必须先报；
-              ② 原生侧 reason 码——它才是「此刻为什么没在改写」的唯一权威；
-              ③ 兜底。 */
-        if (flowing && snStale) {
-            return '诊断：⚠️ 断流（包在涨但快照已冻结）—— ' + this.smoothDiagTail(pen);
-        }
-
-        const reason = pen.reason;
-        if (reason < 0) {
-            /* -1 = 对端（旧版模块）**不报**原因码 ⇒ 退回旧的「三个布尔」判据。
-               ⛔ 这条分支只在升级过渡期走到：不能把 -1 当成一个真实原因显示，
-                  也不能因为拿不到原因就什么都不说。 */
-            const tail = this.smoothDiagTail(pen);
-            if (pen.toolOk !== 1) return '诊断：已就绪，但当前工具不是套索（切到套索即生效）—— ' + tail;
-            if (pen.penDown !== 1) return '诊断：已就绪，等笔尖落纸（悬空移动不改写坐标）—— ' + tail;
-            if (pen.gateOk !== 1) return '诊断：已就绪，等待原生侧放行（闸门尚未成立）—— ' + tail;
-            return '诊断：正在改写坐标（对端版本较旧，无原因码）—— ' + tail;
-        }
-        if (reason === 0) {
-            // 正在改写。若刚出现过异常，把那条按时间粘住一并说出（用户要的就是这个：
-            // 「提笔时绿条一闪而过、来不及截图」）。
-            const sticky = (this.lastPenReason > 0
-                            && (t - this.lastPenReasonAt) <= App.SMOOTH_REASON_STICKY_MS)
-                ? this.lastPenReason : -1;
-            if (sticky !== -1) {
-                return '诊断：正在改写坐标（前一瞬：'
-                    + smoothReasonText(sticky) + '，'
-                    + Math.round((t - this.lastPenReasonAt) / 1000) + ' 秒前）—— '
-                    + this.smoothDiagTail(pen);
-            }
-            return '诊断：正在改写坐标 —— ' + this.smoothDiagTail(pen);
-        }
-        if (reason === 6) {
-            // 判据尚未建立：多信号（buttons / 笔压 / 侧压）还没有任何一个同时见过
-            // 0 与非 0。宽限期内仍按「落笔」放行（效果可能不完整），宽限后按未落笔阻断。
-            // ⛔ 必须与 reason=5 分开说：这两者过去都显示成「等笔尖落纸」，
-            //    用户落着笔看那句只能更迷惑（本轮诊断不可用的根因）。
-            return '诊断：落笔判据尚未建立（原生侧信号还在攒证据）—— '
-                + this.smoothDiagTail(pen);
-        }
-        if (reason === 5) {
-            // 悬空。⛔ 这里必须把判据字段的偏移与读数一并给出：用户几乎总是
-            //    「笔明明落着纸」才来看这一条 —— 判据读到的 ctVal 恒为 0 就能
-            //    立刻区分「你确实抬着笔」与「判据字段选错了 / 笔压恒为 0」。
-            return '诊断：笔尖未落纸（悬空移动不改写坐标）—— ' + this.smoothDiagTail(pen);
-        }
-        if (reason === 7) return '诊断：原生侧标定未完成（等笔包）—— ' + this.smoothDiagTail(pen);
-        if (reason === 8) return '诊断：尚未取到数位板数据包 —— ' + this.smoothDiagTail(pen);
-        // 1 / 2 / 3 / 4：闸门类原因，直接引用原生侧的判定。
-        return '诊断：' + smoothReasonText(reason) + ' —— ' + this.smoothDiagTail(pen);
-    }
-
-    /**
-     * 诊断条的数字尾巴（只放**能直接定位故障**的量）。
-     *
-     * ⛔ 逐项存在的理由（缺一个就要用户多截一张图）：
-     *   · 判据（多信号并联）：`+off` 后面带 `*` = 该信号**有投票权**（同时见过 0 与非 0）；
-     *     `生效 a/b` = 有投票权 / 信号总数（`0/3` ⇒ 判据压根没建立）；`命中 n` = 本批
-     *     非零的信号个数（0 = 本批全零）。**「判据字段一直读到 0」与「闸门被其他条件
-     *     阻断」的唯一区分依据。**
-     *   · 标定 `Nx/Ny`：逐轴样本数。< 24 时 pxPerAxis 仍是标称兜底、方向不可信
-     *     （「圆心与受力点分离」这类问题的第一判据）。
-     *   · 闸门 `Δ开/Δ关`：本轮回合内闸门开合的**增量**。正常一笔为 0/0；
-     *     同一个回报里就涨了多次 = 闸门抖动（选区一段段停住的根因）。
-     */
-    private smoothDiagTail(pen: PenSmoothStatus): string {
-        /* ⛔ 模式不一致必须在这里报（2026-10-14 真机案例）：引擎在非拉绳模式下照常
-           改写（reason=0）、面板显示一切正常，唯独 HUD 因为 ropeMode 判据不出现 ——
-           用户看到的就是「开了开关、画了笔、什么都没有」。不改诊断条的话，这个
-           状态只能靠翻原生日志定位。engine 模式来自 smoothState 的 pen.mode。 */
-        const modeNames = ['标准', '拉绳', '追笔'];
-        const uiWire = MODE_TO_WIRE[this.state.smoothParams.mode] ?? 0;
-        const modeNote = pen.mode !== uiWire
-            ? '⚠️ 引擎模式=' + (modeNames[pen.mode] ?? pen.mode)
-              + '（面板=' + (modeNames[uiWire] ?? uiWire)
-              + '，重开一次平滑开关即可同步），'
-            : '';
-        return modeNote + this.smoothCtText(pen)
-            + '，标定 ' + pen.pxNx + '/' + pen.pxNy
-            + '，闸门 Δ开/Δ关 ' + this.lastGateDeltaOpen + '/' + this.lastGateDeltaClose
-            + '，取包 ' + pen.packets + ' / 改写 ' + pen.smoothed;
-    }
-
-    /**
-     * 落笔判据（多信号并联）的可读描述 —— 形如 `判据 +16* +32* +36 生效2/3 命中1 值0`。
-     *
-     * ⛔ 为什么必须把整张信号表都打出来：真机上「笔明明落着纸却被判成悬空」的唯一
-     *    分辨手段就是看**哪个字节**在投票、它有没有取得投票权。旧版只有 `+32=0`，
-     *    既看不出信号是否建立，也看不出是不是字段选错了。
-     *   · `ctOffs` 每 8 位一个偏移，`0xFF` = 无信号（合法偏移最大 51）；
-     *   · `ctElig` 的 bit i = 第 i 个信号有投票权；
-     *   · `ctHit` 的 bit i = 第 i 个信号本批非零。
-     */
-    private smoothCtText(pen: PenSmoothStatus): string {
-        const offs: number[] = [];
-        for (let i = 0; i < 4; i++) {
-            const o = (pen.ctOffs >> (i * 8)) & 0xff;
-            if (o === 0xff) break;
-            offs.push(o);
-        }
-        if (offs.length === 0) return '判据 —（无信号）';
-        let sig = '';
-        let eligN = 0;
-        for (let i = 0; i < offs.length; i++) {
-            const elig = (pen.ctElig >> i) & 1;
-            if (elig) eligN++;
-            sig += (i ? ' ' : '') + '+' + offs[i] + (elig ? '*' : '');
-        }
-        let hitN = 0;
-        for (let i = 0; i < offs.length; i++) if ((pen.ctHit >> i) & 1) hitN++;
-        return '判据 ' + sig
-            + ' 生效' + eligN + '/' + offs.length
-            + ' 命中' + hitN
-            + ' 值' + pen.ctVal;
-    }
-
-    /**
-     * 诊断条配色档（与 smoothDiagText 的分支一一对应）。
-     * 绿=此刻真的在改写；橙=就绪但条件未满足（等套索 / 等落笔 / 服务未起来）；
-     * 灰=开关未开；红=标定失败或断流。
-     *
-     * ⛔ 与 smoothDiagText **同源同判据**：这里只看「此刻是否真的在改写」，
-     *    不看粘滞原因 —— 粘滞只影响文案，不影响配色（否则一个已恢复的状态
-     *    会一直挂着红条，比不显示更误导）。
-     */
-    private smoothDiagTone(): string {
-        const st = this.state.smoothStatus;
-        const pen = st.pen;
-        if (!st.connected || st.unsupported || st.penUnsupported) return 'notify-bar-warn';
-        if (!pen.enabled) return 'notify-bar-disabled';
-        if (pen.state === 2) return 'notify-bar-fail';
-        if (pen.state === 1) {
-            const t = Date.now();
-            const flowing = (t - this.lastPenFlowAt) < 1500;
-            const snStale = pen.snAge >= 0 && pen.snAge > 2200;
-            if (flowing && snStale) return 'notify-bar-fail';
-            // 判据尚未建立（reason=6）：可能仍在改写（冷启动宽限内），也可能已被阻断
-            // （宽限后无信号取得投票权）⇒ 颜色必须看 penDown，不能一律判绿。
-            if (pen.reason < 0) return pen.gateOk === 1 ? 'notify-bar-ok' : 'notify-bar-warn';
-            if (pen.reason === 0) return 'notify-bar-ok';
-            if (pen.reason === 6) return pen.penDown === 1 ? 'notify-bar-ok' : 'notify-bar-warn';
-            return 'notify-bar-warn';
         }
         return 'notify-bar-warn';
     }
@@ -3792,21 +3550,8 @@ title={helpTexts.selectionFill.blendMode}>
                         </div>
                         )}
                         </div>
-
-                        {/* 平滑运行诊断条（2026-10-14 新增）。
-                            位置：紧贴平滑参数盒（.border-panel-section）**下方**，属于
-                            「平滑选项」分区的直接内容 —— 用户要求「border-panel-section 下面」。
-                            ⛔ 与上方的状态条分工**不同**，不要合并：
-                               上方状态条回答「平滑服务处于哪一档」（且按 2026-10-13 要求不挂任何数字）；
-                               本诊断条回答「此刻**为什么**没在改写坐标」，把两个闸门与
-                               标定链逐项摊开、并允许显示包数/快照年龄等调试量。
-                            复用既有 .notify-bar / .indicator / .notify-text，不新增 CSS。 */}
-                        <div className={'notify-bar ' + this.smoothDiagTone()}>
-                            <span className={'indicator indicator-md ' + App.smoothDotOfTone(this.smoothDiagTone())} />
-                            <span className="notify-text" title={helpTexts.selectionFill.smoothDiagLabel}>
-                                {this.smoothDiagText()}
-                            </span>
-                        </div>
+                        {/* ⛔ 2026-10-17：平滑运行诊断条（notify bar）已删除 —— 排障改看
+                           %TEMP%\jwwh-<pid>.log（引擎日志）与 pi8li.log，面板不再常驻诊断条。 */}
                     </div>
                     )}
                 </div>
