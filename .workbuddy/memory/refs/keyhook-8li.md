@@ -1,4 +1,4 @@
-# keyhook-8li：键盘钩子并入 .8li（M3，2026-10-17；M4 收尾同日）
+# keyhook-8li：键盘钩子并入 .8li（M3，2026-10-17；M4/M6 收尾同日）
 
 > HotkeyDaemon(65M) + FixKeyboard(76.5M) 已退役；WH_KEYBOARD_LL 改由
 > `native/JWautofillHost/keyhook.c` 在 PS 进程内承载。面板协议零改（WS 18923 原样连）。
@@ -10,6 +10,20 @@
 > （含两个 exe 与安装/卸载脚本，仅 `fix-keyboard.ps1` 随迁至 `native/JWautofillHost/`）；
 > ③ **面板「卸载快捷键服务」菜单项已删**（.8li 无常驻可卸之物，旧 daemon 清理由
 > .8li 启动时自动迁移完成）；④ `uninstall` 指令**不再停 WS 服务器**（见下）。
+>
+> ⛔ **M6（2026-10-17 深夜，用户三项要求）**：① **布防开关本地持久化**——
+> `g_khArmed` 仍无磁盘态（.8li 侧零改），改由面板落盘
+> `PluginData/settings/hotkey-arm.json`（`HotkeyBridge.ts` 的
+> `loadPersistedArm/peekPersistedArm/persistArm`，串行写链）；hotkeyState 帧到达
+> 即落盘（只写变化）；WS onopen 时若持久值为 **false** 补发一次 `hotkeyArm(false)`
+> 恢复用户上次的关闭（.8li 重启后默认布防=true，不补发就自动重开）；持久值为
+> true 但服务实际撤防（键盘修复后）时**不自动重挂**（修复流程约定"保持撤防"），
+> 以 hotkeyStatus 回帧为准并顺势落盘。② 开关处文案去"服务"字样（状态条
+> 「热键已开启 / 热键已暂停 / 未连接」；未连接引导改「JWautofill Host 未连接」）；
+> ③ **暂停态去黄色**：`notify-bar-disabled`（中性灰+面板底色，与"关"档同款），
+> 仅"未连接"保留 warn 橙；④ 开关 on/off **不再弹底部通知**（颜色变化即提示），
+> 只保留未连接引导与发送失败错误。**开关持久化不依赖 .8li 改动**——`hotkeyArm`
+> 消息 .8li 侧早已支持（keyhook.c:1780 kh_set_arm）。
 
 ## 线程模型（keyhook.c 内四线程 + plugin_main 的服务器线程）
 
@@ -78,7 +92,10 @@ armed/hookInstalled/safeMode/active/comboCount/recording/timeoutMs/budgetMs/stri
 - 服务就绪 = WS 18923 可连；**不可启停**（.8li 常驻）。
 - ToggleSwitch = 布防/撤防（`setHotkeyArm`）；checked = `connected && armed`；
   未连接时点击 ⇒ 引导「窗口 → 插件启用 JWautofill Host」。
-- 状态条三态：未连接（橙）/ 服务已就绪·热键已暂停（橙）/ 热键已开启（绿）。
+- 状态条三态配色（M6 改）：未连接（橙 warn）/ **已连接·开关关闭（中性灰
+  `notify-bar-disabled`+`indicator-disabled`，暂停态不呈现任何颜色）** / 热键已开启（绿）。
+- 开关初值 = `peekPersistedArm() ?? true`（无落盘值时按 .8li 默认布防），
+  挂载时再 `loadPersistedArm()` 兜底补读；真实状态以 hotkeyState 回帧为准。
 - 录制门禁：connected ∧ armed（撤防态 C 侧直接回 recordCancel，面板提前拦）。
 - 安装/更新通路**未面板化**（M3 遗留）：.8li 需关 PS 后手动拷入 Plug-ins。
   ⚠️ M4 改名后部署 = **先删旧名 JWautofillSmooth.8li**，再拷 JWautofillHost.8li
@@ -98,3 +115,22 @@ armed/hookInstalled/safeMode/active/comboCount/recording/timeoutMs/budgetMs/stri
   `native/` 下只剩 `JWautofillHost/fix-keyboard.ps1` 一个随包脚本；
   ⛔ copyWebpackPlugin 不清 stale ⇒ 改规则后**手删 dist 残留**并复验
   （M3 148M→11M；M4 清 `dist/native/HotkeyDaemon/` 6 个旧脚本）。
+
+## N7. 0x0123（2026-10-17 晚）：**首次加载热键全失效**（用户报「开关持久化为开、按旧快捷键无效、重录一条才恢复」）
+
+**根因**：热键表（`g_khMap`）此前**只有两条路会重建** —— `kh_save_config()`（面板保存）
+与 `kh_set_config_path()`（路径真的变了）。而 `keyhook_init()` 里那次 `kh_reload()` 若
+撞上配置暂时不可读 / 路径尚未对齐（失败分支按设计**保留旧表**=保留空表），
+之后面板建连的 `setConfigPath` 因路径相同直接 `if (!changed) return;` 早退、
+`getConfig` 分支**只读文件回帧、根本不碰热键表** ⇒ 空表一直留到用户重录一条
+（重录 → kh_save_config → kh_reload 才填上）。这解释了「重录一个，全部恢复」。
+
+**三处修（0x0123）**：
+1. 抽出 `kh_map_apply(items, n)`（过滤空 combo / 重复键 → `kh_map_publish`），
+   `kh_reload` 与 `getConfig` 共用；
+2. `getConfig` 分支读文件后补 `kh_map_apply`（解析失败仍保留旧表，与 kh_reload 同语义）；
+3. `kh_set_config_path` **路径未变也 `kh_reload()`**（握手时一次文件读，成本可忽略）；
+4. watchdog 新增 ⑦：启动 1.5s 后「`kh_map_count()==0` 且配置文件存在」强制补载一次。
+
+⛔ 排查口径：以后遇到「热键静默全失效」，先看 keyhook 日志有无
+`热键表已装载：配置 N 条 / 可匹配 M 条`（N>0 但 M=0 ⇒ 键名规范化问题，不是本 bug）。

@@ -20,6 +20,8 @@
  *    这样依赖方向仍是单向的（SmoothBridge → LassoSmoothing），不会形成循环 import。
  */
 
+import { loadPersistedSmoothOn, persistSmoothOn } from './SmoothPersist';
+
 export type LassoSmoothMode = 'standard' | 'rope' | 'catchup';
 
 /**
@@ -706,6 +708,7 @@ export function getSmoothToolGate(): SmoothToolGate {
  *    追笔/拐角连槽位都没有 ⇒ 面板调参对笔平滑零作用（真机复现）。
  */
 export function setPenSmooth(on: boolean, p?: LassoSmoothParams): void {
+  const intentChanged = penOn !== on;
   penOn = on;
   // ⛔ 带参数调用时必须**同步模块副本**：模块级 `params` 是心跳（forceSendParams）与
   //    重连重放（resendLassoSmoothing）的数据源，若只发不改，之后 1.5s 一次的心跳会用
@@ -714,6 +717,24 @@ export function setPenSmooth(on: boolean, p?: LassoSmoothParams): void {
   if (p) params = { ...p };
   syncGateHeartbeat();
   send({ type: 'penSmooth', on, ...(p ? toWire(p) : {}) });
+  /* 用户意图落盘（0x0123）：只在**开关真的变了**时写，避免心跳/调参把同一状态
+     反复刷盘。回帧恢复走的是 penOn 直接赋值（见 handleLassoSmoothMessage），
+     不会走这里，因此「原生说的状态」不会污染「用户意图」。 */
+  if (intentChanged) void persistSmoothOn(on);
+}
+
+/**
+ * 恢复上次会话的平滑开关意图（0x0123，面板在 state 恢复完成后调用）。
+ *
+ * ⛔ 时机要求：必须在 smoothParams 已从 panel-state.json 恢复之后调用，
+ *    否则重放出去的参数是默认值（半径 40 / 标准模式），用户上次调好的参数会被
+ *    心跳整包覆盖。见 App 的 panelStateLoaded 分支。
+ * ⛔ 未连接也安全：penOn 会被记住，WS 建连后 resendLassoSmoothing 自动重放。
+ * 文件缺失（用户从未表过态）⇒ 什么都不做，保持原有「默认关」。
+ */
+export async function restorePersistedPenSmooth(p?: LassoSmoothParams): Promise<void> {
+  const want = await loadPersistedSmoothOn();
+  if (want === true && !penOn) setPenSmooth(true, p ?? params);
 }
 
 /** 处理守护进程回传的 smoothState（由 SmoothBridge 的 onmessage 分发）。 */

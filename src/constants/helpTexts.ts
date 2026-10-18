@@ -439,7 +439,7 @@ export const helpTexts = {
   /* ============ 快捷键区 ============ */
   hotkey: {
     header: '通过本地快捷键服务实现全局快捷键，直接在画布上按快捷键切换笔刷（无需录制动作）。',
-    daemonStop: '暂停热键：立即卸掉键盘钩子（按键恢复 PS 原生行为），配置原样保留，重新打开即恢复。快捷键服务由 Photoshop 扩展「JWautofill Host」在进程内提供，随 PS 一同启停',
+    daemonStop: '暂停热键：立即卸掉键盘钩子（按键恢复 PS 原生行为），配置原样保留，重新打开即恢复。快捷键由 Photoshop 扩展「JWautofill Host」在进程内提供，随 PS 一同启停',
     daemonStart: '开启热键：装上键盘钩子，快捷键恢复生效（默认的选区填充开关 Ctrl+Q 也由它驱动）',
     brushSelect: '选择要绑定快捷键的笔刷预设（名称需与 Brushes 面板一致）',
     refreshBrushes: '刷新笔刷列表',

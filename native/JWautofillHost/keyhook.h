@@ -20,4 +20,14 @@ void keyhook_stop(void);
 /* 启动是否成功（1/0）。⛔ 供 services_start 的日志自检 —— 不许写"假成功"。 */
 int keyhook_started(void);
 
+/* —— 0x012D：笔尖 → 鼠标左键 的**事件**镜像 ——
+   平滑引擎在「驱动停投递」的窗口里拿不到任何真包，连「笔按没按着」都不知道；
+   而笔尖在 Windows 层面就是一对 LBUTTON 消息 ⇒ 用 WH_MOUSE_LL 抓**事件**
+   （⛔ 不是 GetAsyncKeyState 的**电平**：0x012B/6468 已证电平会漂、会漏短按）。
+   返回值：1 = 本会话内确实见过 LBUTTON 事件（通路可用）；0 = 该通路完全无数据
+   （调用方必须退回旧行为，**不得**把 0 当成「笔抬着」）。
+   出参：*down=最近一次消息的按下态；*x 与 *y=该消息的屏幕坐标；
+        *t=该消息时刻(GetTickCount)；*dn 与 *up=累计按下/抬起次数。 */
+int keyhook_mouse_state(int* down, int* x, int* y, unsigned long* t, int* dn, int* up);
+
 #endif /* KEYHOOK_H */

@@ -40,15 +40,16 @@ import {
   LassoSmoothMode, LassoSmoothParams, LassoSmoothStatus, PenSmoothStatus,
   pushLassoSmoothParams, onLassoSmoothStatus,
   initialLassoSmoothParams, setPenSmooth, setSmoothToolGate, getSmoothToolGate,
+  restorePersistedPenSmooth,
   SMOOTH_RADIUS_MIN, SMOOTH_RADIUS_MAX,
   SMOOTH_CATCHUP_MIN, SMOOTH_CATCHUP_MAX,
 } from './lasso/LassoSmoothing';
 // 套索实时平滑的 WebSocket 桥接（端口 18924）。对端是 **PS 进程内的 .8li 插件**
 // （JWautofillHost.8li，随 PS 启动自动加载）—— 2026-10-14 起外置 SmoothDaemon
 // 与注入式 WintabHook.dll 已整体退役，见 lasso/SmoothBridge.ts 头部说明。
-import {
-  connectSmoothDaemon, disconnectSmoothDaemon, isSmoothDaemonConnected,
-} from './lasso/SmoothBridge';
+// ⛔ 0x0118：disconnectSmoothDaemon / isSmoothDaemonConnected 已从本文件退役
+//    （toggle-off 不再双发 shutdown，见 toggleLassoSmooth），此处只留连接入口。
+import { connectSmoothDaemon } from './lasso/SmoothBridge';
 import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/MainToggleBus';
 import { FillPanelId, subscribeFillPanelToggle } from './utils/FillPanelToggleBus';
 import { setFocusMode } from './utils/FocusModeBus';
@@ -775,6 +776,11 @@ class App extends React.Component<AppProps, AppState> {
                 //    sendParams 内部对 penOn=false 静默跳过（平滑没开时无需下发）；
                 //    开启开关时 setPenSmooth 会整包带当前 state，同样拿得到恢复值。
                 try { pushLassoSmoothParams(mergedSmoothParams); } catch { /* ignore */ }
+                /* ⛔ 0x0123：恢复上次会话的「平滑总开关」意图（settings/smooth-enabled.json）。
+                   必须在这一行之后 —— 之前 params 是默认值，重放出去会把用户上次调好的
+                   半径/模式用默认值整包盖掉（与上面那条注释同一个坑）。
+                   传显式 mergedSmoothParams：此刻 setState 尚未生效，读 this.state 会拿到默认值。 */
+                void restorePersistedPenSmooth(mergedSmoothParams).catch(() => { /* ignore */ });
             }
         } catch (e) {
             console.warn('⚠️ 面板状态加载失败，使用默认状态:', e);
@@ -1104,7 +1110,10 @@ class App extends React.Component<AppProps, AppState> {
      * ⚠️ 2026-10-14 .8li 迁移后：平滑承载在 **PS 进程内的 .8li 插件**里（随 PS 启动
      *    自动加载、常驻不解散），没有外置进程可拉起 —— 本开关就是纯粹的「开/关平滑」：
      *      开 = 下发 penSmooth(on, 整包参数)；
-     *      关 = 下发 penSmooth(off) + shutdown（.8li commit(0)，服务本身常驻）。
+     *      关 = 下发 penSmooth(off)（.8li commit(0) 撤钩，服务本身常驻）。
+     *    ⛔ 0x0118 起关不再双发 shutdown：penSmooth(off) 已内含 send_cmd(2)，
+     *       第二条消息只会被 changed 护栏挡掉，而它走过的 cmd=2 撤钩路径
+     *       正是「停摆中拨开关杀补流」的现场，少发一次是一次。
      *    旧「拉起 / 重启 / 卸载 SmoothDaemon」整条链路已随 daemon 一并删除。
      *
      * ⛔ 开关**永不禁用**（2026-10-12 真机事故：置灰 = 用户没有任何入口）：
@@ -1117,9 +1126,12 @@ class App extends React.Component<AppProps, AppState> {
         // （setLassoSmoothConnected(false) 刻意不复位它 —— 不能把「没连上」洗成「已关」）。
         const effectivelyOn = st.connected && st.pen.enabled;
         if (effectivelyOn) {
-            // 开着 ⇒ 关：下发 off + shutdown（只关平滑自己，绝不触碰快捷键服务）。
+            // 开着 ⇒ 关：只下发 off。⛔ 0x0118 不再双发 shutdown：
+            // penSmooth(false) 内部就是 commit(0) → send_cmd(2) 撤钩，
+            // 再发一次 disconnectSmoothDaemon()（shutdown）会被 changed
+            // 护栏挡掉、纯属冗余；而它经过的那条 cmd=2 路径正是 0x0118
+            // 修复的「停摆中拨开关即杀补流」现场 —— 少发一次是一次。
             setPenSmooth(false, this.state.smoothParams);
-            if (isSmoothDaemonConnected()) disconnectSmoothDaemon();
             return;
         }
         // 关着 ⇒ 开。未连接时发送必然失败，但意图会被记住并在建连后重放（见上）。
@@ -1388,18 +1400,23 @@ class App extends React.Component<AppProps, AppState> {
             }
             return '套索平滑：生效中';
         }
-        // state=0：已注入但还没标定。标定要等「同一批至少 3 个包」才做（少于 3 个时
-        // 「序号逐包 +1」可能是巧合）。只写「注入中」会让人以为卡住了 —— 如实区分
-        // 「还没收到包」与「包够了但还没标定完」。
-        if (pen.packets === 0) return '套索平滑：待标定（动一下笔）';
-        return '套索平滑：标定中…';
+        // state=0：已注入但标定还没通过。标定要等「同一批至少 3 个包」才做
+        // （少于 3 个时「序号逐包 +1」可能是巧合）。
+        // ⛔ 2026-10-18 用户明确要求：**隐藏标定过程**——后台静默处理，不向用户
+        //    展示「待标定 / 标定中」这类中间态（它们对使用者没有信息价值，反而
+        //    像卡住）。两个分支统一为中性文案，配色走 notify-bar-disabled（灰、
+        //    无颜色），与「关」档同款；标定成功后自然翻到「生效中」（绿）。
+        //    真正需要解释的情况（未连接 / 版本过旧 / 标定失败 / 未注入 / 未生效）
+        //    仍各自单列，不受本条影响。
+        return '套索平滑：准备中';
     }
 
     /**
      * 状态条的配色档（返回 .notify-bar 的修饰类）。
      * 与 smoothStatusText 判据一一对应但分开返回：合并成「返回 {文本, 类名}」的对象
      * 会在每次渲染新建对象、且两处口径容易漂移。
-     * 四档：关 = 灰 / 服务没起来 = 橙（要用户处置）/ 标定失败 = 红 / 生效 = 绿。
+     * 档位：关 = 灰 / 标定中（后台静默）= 灰 / 服务没起来 = 橙（要用户处置）/
+     *      标定失败 = 红 / 生效 = 绿 / 平滑中断 = 红。
      */
     private smoothBarTone(): string {
         const st = this.state.smoothStatus;
@@ -1416,7 +1433,9 @@ class App extends React.Component<AppProps, AppState> {
             if (pen.penDown === 1 && pen.gateOk === 1 && flowing && snStale) return 'notify-bar-fail';
             return 'notify-bar-ok';
         }
-        return 'notify-bar-warn';
+        // state=0（标定中）及其它未列举态：⛔ 2026-10-18 用户要求隐藏黄色标定态
+        // ⇒ 落 notify-bar-disabled（中性灰、无颜色），与「关」档一致。
+        return 'notify-bar-disabled';
     }
 
     /**

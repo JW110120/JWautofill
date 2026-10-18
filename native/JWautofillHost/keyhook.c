@@ -361,6 +361,29 @@ static void kh_map_publish(const KhItem* items, int n)
     LeaveCriticalSection(&g_khMapLk);
 }
 
+/* 由已解析条目发布热键表：过滤「空 combo（已解绑）」与重复组合键。
+ * ⛔⛔ 0x0123：这段逻辑原先只内联在 kh_reload() 里，导致**只有「配置路径切换」和
+ *    「面板保存配置」两条路会重建表**；而「面板建连后 getConfig 拉配置」这条路
+ *    只读文件回帧、不碰热键表 ⇒ 首帧读到的表如果是空的（启动时那次 kh_reload
+ *    撞上文件暂时不可读/路径尚未对齐），热键就**一直全失效**，直到用户重录一条
+ *    触发 kh_save_config → kh_reload 才恢复（用户实测的「重录一个快捷键后恢复」）。
+ *    抽成独立函数后，三条路（启动装载 / 路径下发 / 拉配置）共用同一段语义。 */
+static int kh_map_apply(const KhItem* items, int n)
+{
+    KhItem map[KH_MAX_ITEMS];
+    int mn = 0;
+    for (int i = 0; i < n; i++) {
+        if (!items[i].combo[0]) continue;                 /* 空 combo = 已解绑，仅留存 */
+        int dup = 0;
+        for (int j = 0; j < mn; j++)
+            if (_stricmp(map[j].combo, items[i].combo) == 0) { dup = 1; break; }
+        if (dup) { kh_log("跳过重复组合键: %s", items[i].combo); continue; }
+        map[mn++] = items[i];
+    }
+    kh_map_publish(map, mn);
+    return mn;
+}
+
 /* 钩子线程专用：seqlock 无锁查表。命中返回 1 并拷贝出条目。 */
 static int kh_map_lookup(const char* combo, KhItem* out)
 {
@@ -597,17 +620,7 @@ static void kh_reload(void)
            保留旧表 + 留痕，等下一轮 mtime 变化自愈。 */
         kh_log("⚠️ 配置读取/解析失败（保留原热键表）: %s", g_khCfgPath);
     } else {
-        KhItem map[KH_MAX_ITEMS];
-        int mn = 0;
-        for (int i = 0; i < n; i++) {
-            if (!items[i].combo[0]) continue;                 /* 空 combo = 已解绑，仅留存 */
-            int dup = 0;
-            for (int j = 0; j < mn; j++)
-                if (_stricmp(map[j].combo, items[i].combo) == 0) { dup = 1; break; }
-            if (dup) { kh_log("跳过重复组合键: %s", items[i].combo); continue; }
-            map[mn++] = items[i];
-        }
-        kh_map_publish(map, mn);
+        int mn = kh_map_apply(items, n);
         InterlockedExchange(&g_khItemCount, n);
         kh_log("热键表已装载：配置 %d 条 / 可匹配 %d 条（%s）", n, mn, g_khCfgPath);
     }
@@ -698,6 +711,7 @@ static void kh_set_config_path(const char* p)
 
     /* 比较+替换必须同锁原子：否则两个客户端线程并发 set 可能互相覆盖。 */
     char old[512];
+    old[0] = 0;
     int changed = 0;
     EnterCriticalSection(&g_khCfgLk);
     if (_stricmp(np, g_khCfgPath) != 0) {
@@ -707,7 +721,16 @@ static void kh_set_config_path(const char* p)
         changed = 1;
     }
     LeaveCriticalSection(&g_khCfgLk);
-    if (!changed) return;
+    /* ⛔⛔ 0x0123：路径**没变也必须重载**（早退已删）。
+       面板每次建连都会先发 setConfigPath 再发 getConfig，这是它唯一一次「宣告自己
+       在线」的机会；若这里因路径相同直接 return，启动时那次 kh_reload 若失败
+       （文件正被写 / 路径尚未真实就绪），空表就会一直留到用户手动重录。
+       重载成本 = 一次文件读 + 一次表拷贝，且只在握手时发生，完全可接受。 */
+    if (!changed) {
+        g_khCfgWtOk = 0;          /* 强制让下一次 mtime 轮询也认为「该重读」 */
+        kh_reload();
+        return;
+    }
     int oldHad = old[0] != 0;
     kh_log("配置路径已切换: %s", g_khCfgPath);
 
@@ -1163,9 +1186,85 @@ static void kh_uninstall_hook(void)
     else g_khRecPending[0] = 0;
 }
 
+/* ================================================================ 鼠标左键事件镜像（0x012D）
+ *
+ * 为什么平滑引擎需要它：
+ *   驱动一旦停投递（本项目的常态故障），进程内拿不到**任何**真包 ⇒ 连「笔现在按没按着」
+ *   都不知道。合成包必须知道这件事：buttons=0 的包 PS 只会挪光标、绝不落笔；buttons=1
+ *   才会继续延长套索路径。真机 jwwh-21032 铁证：13.1s 空档里补流喂了 695 包，可当时
+ *   `tip=0`（空档开始时笔正好抬着）⇒ 用户连画 4 笔一笔都没出来，也永不自愈。
+ *
+ * 为什么是**事件**而不是 `GetAsyncKeyState` 的**电平**：
+ *   0x012B 试过电平（第三道守卫），jwwh-6468 全场 `补发=0` 就是被它判死的。
+ *   电平会漂（Wintab 独占时笔尖走自己的按钮通路，鼠标模拟不保证一直保持按下态），
+ *   而且 250Hz 轮询还会漏掉短按。`WH_MOUSE_LL` 收到的是系统派发的**消息本身**：
+ *   按下/抬起各一次，带坐标与时刻，不漏、不漂。
+ *
+ * ⛔ 回调铁律同键盘钩子：O(1)、无锁、无文件 I/O、恒 CallNextHookEx（绝不吞事件）。
+ * ⛔ 本镜像只**记状态**，不做任何决策、不注入、不改写 —— 判定全在平滑引擎侧，
+ *    且只在「真实通路已死」的窗口里使用（见 smooth_engine.c 的 0x012D 段）。 */
+static volatile LONG  g_mseDown;      /* 最近一次左键消息的按下态（1=按下） */
+static volatile LONG  g_mseX, g_mseY; /* 该消息发生时的屏幕坐标 */
+static volatile LONG  g_mseT;         /* 该消息的时刻（GetTickCount） */
+static volatile LONG  g_mseDn, g_mseUp;   /* 累计按下 / 抬起次数 */
+static HHOOK volatile g_mseHook;
+
+static LRESULT CALLBACK kh_mse_proc(int code, WPARAM w, LPARAM l)
+{
+    if (code == HC_ACTION && (w == WM_LBUTTONDOWN || w == WM_LBUTTONUP)) {
+        const MSLLHOOKSTRUCT* m = (const MSLLHOOKSTRUCT*)l;
+        if (m) { g_mseX = m->pt.x; g_mseY = m->pt.y; }
+        g_mseT = (LONG)GetTickCount();
+        if (w == WM_LBUTTONDOWN) { g_mseDown = 1; g_mseDn++; }
+        else                     { g_mseDown = 0; g_mseUp++; }
+    }
+    return CallNextHookEx(NULL, code, w, l);
+}
+
+static void kh_install_mouse_hook(void)
+{
+    if (g_mseHook) return;
+    HHOOK h = (HHOOK)(UINT_PTR)SetWindowsHookExW(WH_MOUSE_LL, kh_mse_proc, g_hSelf, 0);
+    if (!h) {
+        /* 失败只报一次（看护每 5s 重试，别把日志刷成噪音）。 */
+        static int s_errLogged;
+        if (!s_errLogged) {
+            s_errLogged = 1;
+            kh_log("❌ 鼠标钩子安装失败 err=%lu（补流将无法推断落笔，退回旧行为）",
+                   GetLastError());
+        }
+        return;
+    }
+    InterlockedExchangePointer((PVOID*)&g_mseHook, h);
+    kh_log("鼠标左键镜像已安装（WH_MOUSE_LL：断流期落笔推断用，只记状态）");
+}
+
+static void kh_uninstall_mouse_hook(void)
+{
+    HHOOK h = (HHOOK)g_mseHook;
+    if (!h) return;
+    InterlockedExchangePointer((PVOID*)&g_mseHook, NULL);
+    UnhookWindowsHookEx(h);
+    g_mseDown = 0;
+}
+
+int keyhook_mouse_state(int* down, int* x, int* y, unsigned long* t, int* dn, int* up)
+{
+    LONG tt = g_mseT;
+    if (down) *down = (int)g_mseDown;
+    if (x)    *x    = (int)g_mseX;
+    if (y)    *y    = (int)g_mseY;
+    if (t)    *t    = (unsigned long)tt;
+    if (dn)   *dn   = (int)g_mseDn;
+    if (up)   *up   = (int)g_mseUp;
+    /* 返回「这条通路到底有没有数据」。恒 0 ⇒ 该驱动/笔根本不产生鼠标消息，
+       调用方必须退回旧行为（绝不能把 0 当成「笔抬着」）。 */
+    return (g_mseDn || g_mseUp) ? 1 : 0;
+}
+
 /* ================================================================ 线程 */
 
-/* 钩子线程：独立消息循环，承载 WH_KEYBOARD_LL。
+/* 钩子线程：独立消息循环，承载 WH_KEYBOARD_LL 与 WH_MOUSE_LL。
    ⛔ 每轮包 try 的等价物：C 无 SEH，所有调用点自身防御（句柄检查+零除防护）；
       线程死 = 钩子被系统摘除且指令石沉大海 ⇒ 看护线程负责重建。 */
 static DWORD WINAPI kh_hook_thread(LPVOID param)
@@ -1176,6 +1275,10 @@ static DWORD WINAPI kh_hook_thread(LPVOID param)
     PeekMessage(&msg, NULL, WM_USER, WM_USER, PM_NOREMOVE);   /* 建线程消息队列 */
     SetEvent(g_khThreadReady);
     kh_log("钩子线程已启动 tid=%lu", g_khRecThreadId);
+    /* ⛔ 0x012D：鼠标左键镜像**与布防无关**（平滑不是热键功能，撤防也得有落笔证据）。
+       装在本线程是唯一选择：LL 钩子的回调由「装它的那个线程」的消息循环驱动，
+       而本线程是进程内唯一常驻消息泵。 */
+    kh_install_mouse_hook();
 
     for (;;) {
         /* 安装/卸载意图（轮询兜底：posts 只降延迟，丢消息也不死人） */
@@ -1187,6 +1290,17 @@ static DWORD WINAPI kh_hook_thread(LPVOID param)
         HHOOK cur = (HHOOK)g_khHook;
         if (want && !cur) kh_install_hook();
         else if (!want && cur) kh_uninstall_hook();
+
+        /* 0x012D：鼠标左键镜像的看护。⛔ 它**与布防无关**（平滑不是热键功能），
+           但同样会被系统在回调超预算时静默摘掉 ⇒ 每 5s 检查一次、缺了重挂。 */
+        if (!(HHOOK)g_mseHook && !g_khSrvStop) {
+            static DWORD s_mseTry;
+            DWORD nowT = GetTickCount();
+            if (!s_mseTry || (DWORD)(nowT - s_mseTry) > 5000) {
+                s_mseTry = nowT;
+                kh_install_mouse_hook();
+            }
+        }
 
         /* 录制请求 */
         LONG rr = InterlockedExchange(&g_khRecReq, 0);
@@ -1208,6 +1322,7 @@ static DWORD WINAPI kh_hook_thread(LPVOID param)
     }
 quit:
     kh_uninstall_hook();
+    kh_uninstall_mouse_hook();
     kh_log("钩子线程已退出");
     return 0;
 }
@@ -1345,6 +1460,27 @@ static DWORD WINAPI kh_watchdog_thread(LPVOID param)
 
         /* ⑥ 1s 配置 mtime 轮询（FileSystemWatcher 的进程内等价物） */
         if (now - lastCfg >= 1000) { lastCfg = now; kh_poll_config_file(); }
+
+        /* ⑦ 启动兜底（0x0123，只做一次）：init 里那次 kh_reload 可能撞上配置文件
+           暂时不可读（PS 启动瞬间 PluginData 正在被面板写 / AV 在扫），失败分支会
+           **保留旧表**（= 空），而 ⑥ 的 mtime 轮询只在文件变化时才重载 ⇒ 没有面板
+           保存动作就永远空表。启动 1.5s 后若「表为空 + 文件确实存在」，强制补一次。 */
+        {
+            static DWORD s_bootMs;
+            static int   s_bootTried;
+            if (!s_bootMs) s_bootMs = now;
+            if (!s_bootTried && (DWORD)(now - s_bootMs) >= 1500) {
+                s_bootTried = 1;
+                if (kh_map_count() == 0) {
+                    wchar_t bp[512];
+                    kh_cfg_snapshot(bp, 512);
+                    if (GetFileAttributesW(bp) != INVALID_FILE_ATTRIBUTES) {
+                        kh_log("启动兜底：热键表为空但配置文件存在 ⇒ 强制重载一次");
+                        kh_reload();
+                    }
+                }
+            }
+        }
     }
     kh_log("看护线程已退出");
     return 0;
@@ -1754,7 +1890,17 @@ static int kh_handle_message(SOCKET s, const char* js)
     if (_stricmp(type, "getConfig") == 0) {
         KhItem items[KH_MAX_ITEMS];
         int n = kh_read_config_file(items, KH_MAX_ITEMS);
-        if (n < 0) n = 0;
+        /* ⛔⛔ 0x0123：面板「拉配置」必须顺带**重建热键表**。
+           旧版这里只读文件回帧、不碰表 ⇒ 若启动装载那一次失败（空表），
+           面板每次建连拉到的都是空表，热键永远不响（用户实测：重录一条才恢复）。
+           解析失败（n<0）时保持 kh_reload 的同款语义：**不清空**旧表。 */
+        if (n < 0) {
+            kh_log("⚠️ getConfig 解析失败（保留原热键表）: %s", g_khCfgPath);
+            n = 0;
+        } else {
+            InterlockedExchange(&g_khItemCount, n);
+            kh_map_apply(items, n);
+        }
         char* payload = (char*)malloc(160 * 1024);
         char* msg = payload ? (char*)malloc(170 * 1024) : NULL;
         if (payload && msg) {

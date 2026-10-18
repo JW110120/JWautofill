@@ -139,6 +139,80 @@ let requestedConfigPath = '';
 function canPersistConfig(): boolean {
   return configLoaded && !!requestedConfigPath && daemonConfigPath === requestedConfigPath;
 }
+// ===== 布防开关（hotkeyArm）的本地持久化 =====
+// 背景（2026-10-18 用户要求「笔刷热键开关状态本地持久化」）：布防状态此前只活在
+// .8li 内存里（keyhook.c 的 g_khArmed，PS 启动时默认 true，无任何磁盘持久化）
+// ⇒ PS 重启后面板上次「关闭」的选择丢失，开关自己弹回开启态。
+// 现在由面板把开关状态落盘到 PluginData（settings/hotkey-arm.json，与主开关 /
+// 专注模式的共享状态同目录、同套路）：
+//   · hotkeyState 帧到达即落盘（权威来源 = .8li 的跃变广播 / hotkeyStatus 回帧，
+//     看护线程 120ms 轮询保证撤防/重挂/熔断都会在 ~240ms 内播出来）；
+//   · WS 建连后若持久值为 false，补发一次 hotkeyArm(false) —— .8li 重启后默认
+//     布防，不补发就会「自动重开」，正是用户抱怨的场景；
+//   · 持久值为 null（从未落盘）= 用户没表过态，默认布防即真相，不干预；
+//   · 持久值为 true 但服务实际已撤防（如键盘修复后刻意保持关闭）时**不自动重挂**
+//     —— 真实状态以 hotkeyStatus 回帧为准并顺势落盘，修复的「保持撤防」意图
+//     不会被一次重连推翻（kh_do_repair 的注释同样要求「自动重挂等于再冻一次」）。
+const ARM_FILE_NAME = 'hotkey-arm.json';
+// 内存镜像：null = 尚未落过盘（此时 .8li 默认布防 true 是唯一真相）
+let armPersisted: boolean | null = null;
+// 串行写链：跃变广播与面板点击可能并发落盘，避免 read-modify-write 交错覆盖
+let armWriteChain: Promise<unknown> = Promise.resolve();
+
+function armFormats(): string {
+  return (storage as any).formats?.utf8 ?? 'utf8';
+}
+
+async function getArmFolder(): Promise<any> {
+  const dataFolder: any = await storage.localFileSystem.getDataFolder();
+  try {
+    return await dataFolder.getEntry('settings');
+  } catch {
+    return await dataFolder.createFolder('settings');
+  }
+}
+
+/**
+ * 读一次布防开关的持久值（模块级缓存，重复调用无 I/O）。
+ * 文件缺失 / 损坏 / 内容不含布尔 armed 一律返回 null —— 调用方按「默认布防」处理。
+ */
+export async function loadPersistedArm(): Promise<boolean | null> {
+  if (armPersisted !== null) return armPersisted;
+  try {
+    const folder = await getArmFolder();
+    const entry: any = await folder.getEntry(ARM_FILE_NAME);
+    if (!entry || entry.isFolder) return null;
+    const text = await entry.read({ format: armFormats() });
+    if (!text || !text.trim()) return null;
+    const j = JSON.parse(text);
+    if (j && typeof j.armed === 'boolean') {
+      armPersisted = j.armed;
+      return armPersisted;
+    }
+  } catch { /* 不存在 / 损坏：当作无持久值 */ }
+  return null;
+}
+
+/** 同步 peek（供 useState 初值，避免「先渲染一帧再纠正」的闪烁）；未读过返回 null。 */
+export function peekPersistedArm(): boolean | null {
+  return armPersisted;
+}
+
+/** 把布防开关状态落盘（异步串行；写失败只告警——内存值仍驱动本次会话的 UI）。 */
+export function persistArm(on: boolean): Promise<void> {
+  const run = armWriteChain.then(async () => {
+    armPersisted = on;
+    try {
+      const folder = await getArmFolder();
+      const file = await folder.createFile(ARM_FILE_NAME, { overwrite: true });
+      await file.write(JSON.stringify({ armed: on, ts: Date.now() }), { format: armFormats() });
+    } catch (e) {
+      console.warn('⚠️ 布防状态落盘失败（本次会话仍按新状态生效）:', e);
+    }
+  });
+  armWriteChain = run.then(() => {}, () => {});
+  return run;
+}
 // ===== 专注模式「套索工具键」（默认 L）=====
 // 专注模式下主开关热键只开不关；为了让 H / L 像两个工具一样切换，再注册一个
 // 「套索工具」键：按下即关闭主开关并把当前工具切回套索。
@@ -420,6 +494,15 @@ export function connectHotkeyDaemon(): () => void {
           // .8li 形态：拉一次布防状态，让面板开关对齐服务真实状态
           // （g_khArmed 默认 true，但迁移/修复后可能被改过，不能想当然）。
           try { ws.send(JSON.stringify({ type: 'hotkeyStatus' })); } catch { /* ignore */ }
+          // 本地持久化对齐：PS 重启后 .8li 默认布防（keyhook.c g_khArmed 初值 1），
+          // 用户上次的「关闭」只活在面板落盘值里 ⇒ 补发一次撤防把它恢复出来。
+          // persisted 为 null（从未落盘）说明用户没表过态，默认布防即真相，不动；
+          // persisted 为 true 时同样不发——若服务此刻实际已撤防（修复后保持关闭），
+          // 自动重挂会违背修复流程「保持撤防」的约定，交给 hotkeyStatus 回帧定夺。
+          const persistedArm = await loadPersistedArm();
+          if (persistedArm === false) {
+            try { ws.send(JSON.stringify({ type: 'hotkeyArm', on: false })); } catch { /* ignore */ }
+          }
           // 重连后同步布防状态：守护进程在客户端断开时会撤防，
           // 若本上下文仍持有布防权（选中未变），这里重发一次 armDelete。
           if (armedDeleteOwner) {
@@ -476,14 +559,20 @@ export function connectHotkeyDaemon(): () => void {
           }
           else if (msg?.type === 'hotkeyState') {
             // 布防状态（跃变广播 / hotkeyStatus 回帧）：驱动面板的「热键开关」
+            const armed = msg.armed === true;
             emitHotkeyState({
-              armed: msg.armed === true,
+              armed,
               hookInstalled: msg.hookInstalled === true,
               safeMode: msg.safeMode === true,
               active: msg.active === true,
               comboCount: typeof msg.comboCount === 'number' ? msg.comboCount : 0,
               recording: msg.recording === true,
             });
+            // 本地持久化：值真的变了才写盘（同值回帧/重复广播不产生 I/O）。
+            // ⛔ 必须落在 emit 之后由 bridge 统一写，不能指望 UI 组件——
+            //    「笔刷热键」分区折叠时组件未挂载，但 WS 由 App 面板保活，
+            //    那时到来的状态跃变（如键盘修复后的撤防）同样要落盘。
+            if (armPersisted !== armed) void persistArm(armed);
           }
           else if (msg?.type === 'repairResult') {
             if (pendingRepair) {

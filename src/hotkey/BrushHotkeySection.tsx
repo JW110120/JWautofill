@@ -8,7 +8,8 @@ import {
   getMainToggleCombo,
   armBackspaceDelete, disarmBackspaceDelete, onBackspaceDelete,
   detectAllBrushTypes,
-  setHotkeyArm, onHotkeyState, requestKeyboardRepair, resolveRepairScriptPath
+  setHotkeyArm, onHotkeyState, requestKeyboardRepair, resolveRepairScriptPath,
+  loadPersistedArm, peekPersistedArm
 } from './HotkeyBridge';
 import { DeleteIcon, RefreshIcon, DataRefreshIcon, RecordCircleIcon, StopSquareIcon, BrushToolIcon, SmudgeToolIcon, MixerToolIcon, CloneStampIcon } from '../styles/Icons';
 import BrushSelect, { BrushSelectOption } from './BrushSelect';
@@ -101,7 +102,9 @@ export default function BrushHotkeySection() {
   // 热键布防状态（.8li 形态）：服务就绪 ≠ 热键生效。WS 连上仅代表
   // 「JWautofill Host」扩展在进程内跑着；钩子装不装由布防开关决定
   // （onHotkeyState 跃变广播 / hotkeyStatus 回帧驱动）。
-  const [hotkeyArmed, setHotkeyArmed] = useState(false);
+  // 初值取落盘值（peek 不到时按 .8li 默认布防 true），避免「先渲染一帧
+  // 默认态、回帧后再纠正」的闪烁；真实状态仍以回帧为准（见下方 useEffect）。
+  const [hotkeyArmed, setHotkeyArmed] = useState<boolean>(() => peekPersistedArm() ?? true);
   // 已录快捷键的选中集合：单击单选，Ctrl/Shift + 单击加选或减选，用于单个/批量删除
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   // 多选锚点（shift 延伸的基准）：普通单击或 Ctrl 单击后更新为该条索引
@@ -164,6 +167,9 @@ export default function BrushHotkeySection() {
     // 布防状态：跃变广播（布防/撤防/熔断自愈）与 hotkeyStatus 回帧都走这里。
     // 开关是「乐观更新 + 广播校准」：本地先翻，服务确认帧到达后以它为准。
     const unsubArmed = onHotkeyState((st) => setHotkeyArmed(st.armed));
+    // 本地持久化对齐：挂载即读盘。App 面板已先行连过 WS（缓存多半已热），
+    // 这里兜底补读一次；读到 null（从未落盘）= 用户没表过态，维持默认布防态。
+    void loadPersistedArm().then((v) => { if (v !== null) setHotkeyArmed(v); });
     // 热键触发即时反馈：用户按快捷键后面板直接显示是否命中、切换是否成功
     // （这是诊断「按了快捷键没反应」的关键观测点：无任何显示 = 事件根本没到达面板）
     const unsubHotkey = onHotkeyTriggered((info) => {
@@ -292,22 +298,22 @@ export default function BrushHotkeySection() {
     }, BRUSH_LOAD_IDLE_MS, BRUSH_LOAD_MAX_DEFERRALS);
   }
 
-  // 「开启热键」（.8li 形态）：⛔ 不再是「拉起 exe」——快捷键服务由 Photoshop
+  // 「开启热键」（.8li 形态）：⛔ 不再是「拉起 exe」——快捷键由 Photoshop
   // 扩展「JWautofill Host」（.8li）在 PS 进程内承载，随 PS 启停，面板无法
-  // 启动/停止它。这里只做一件事：服务在位 ⇒ 发 hotkeyArm(true) 布防。
-  // 服务不在位（WS 18923 连不上）⇒ 引导用户去启用扩展，而不是静默失败。
+  // 启动/停止它。这里只做一件事：扩展在位 ⇒ 发 hotkeyArm(true) 布防。
+  // 扩展不在位（WS 18923 连不上）⇒ 引导用户去启用扩展，而不是静默失败。
+  // ⛔ 2026-10-18 用户要求：开关操作**不再**弹底部通知——状态条颜色变化
+  //    （绿=生效 / 无颜色=暂停）已承担提示职责，重复打扰。
   const armHotkeys = async () => {
     if (busy) return;
     if (!daemonConnectedRef.current) {
-      showMessage('快捷键服务未连接：请确认 Photoshop 已启用「JWautofill Host」扩展'
-        + '（菜单：窗口 → 插件），然后重新加载本面板。');
+      showMessage('「JWautofill Host」未连接：请在 Photoshop 菜单「窗口 → 插件」中启用该扩展，然后重新加载本面板。');
       return;
     }
     setBusy(true);
     try {
       if (setHotkeyArm(true)) {
         setHotkeyArmed(true);
-        showMessage('热键已开启');
       } else {
         showMessage('指令发送失败，请重新加载插件后重试');
       }
@@ -317,16 +323,15 @@ export default function BrushHotkeySection() {
   };
 
   // 「暂停热键」：撤防 = 立即卸钩（按键恢复 PS 原生行为），连接与配置原样保留。
-  // ⛔ 不发 shutdown——.8li 形态服务不可启停，撤防只需要 hotkeyArm(false)；
+  // ⛔ 不发 shutdown——.8li 形态不可启停，撤防只需要 hotkeyArm(false)；
   //    旧版的 disconnectDaemon（shutdown）已随桥接层一并删除。
   const disarmHotkeys = async () => {
     if (busy) return;
-    if (!daemonConnectedRef.current) { showMessage('当前未连接到快捷键服务'); return; }
+    if (!daemonConnectedRef.current) { showMessage('「JWautofill Host」未连接'); return; }
     setBusy(true);
     try {
       if (setHotkeyArm(false)) {
         setHotkeyArmed(false);
-        showMessage('热键已暂停（服务保持就绪，随时可以重新打开）');
       } else {
         showMessage('指令发送失败，请重新加载插件后重试');
       }
@@ -690,28 +695,38 @@ export default function BrushHotkeySection() {
 
   return (
     <>
-      {/* 服务状态条：与「蒙版同步」的引擎状态条同一套视觉，左侧状态点+文字，右侧操作按钮。
-          外描边随状态变化：ok=绿（热键生效）/ warn=橙（未连接或已暂停）。
-          .8li 形态三态：未连接（服务缺席）→ 已就绪但暂停（布防关）→ 热键生效（布防开）。 */}
-      <div className={(daemonConnected && hotkeyArmed) ? 'notify-bar notify-bar-ok' : 'notify-bar notify-bar-warn'}>
-        <span className={(daemonConnected && hotkeyArmed) ? 'indicator indicator-md indicator-ok' : 'indicator indicator-md indicator-warn'} />
+      {/* 状态条：与「蒙版同步」的引擎状态条同一套视觉，左侧状态点+文字，右侧操作开关。
+          外描边随状态变化（.8li 形态三态）：
+            · notify-bar-ok   = 绿：已连接且热键生效（布防开）；
+            · notify-bar-disabled = 无颜色（中性灰 + 面板底色）：已连接但开关关闭
+              （⛔ 2026-10-18 用户要求：暂停态不呈现任何颜色——橙在插件语义里是
+               「异常/待处理」，关闭只是没开，与 common.css 该档注释同口径）；
+            · notify-bar-warn = 橙：未连接（要用户去启用扩展）。
+          底部通知同理不再为开关操作发声，颜色变化即状态提示。 */}
+      <div className={
+        (daemonConnected && hotkeyArmed) ? 'notify-bar notify-bar-ok'
+          : (daemonConnected ? 'notify-bar notify-bar-disabled' : 'notify-bar notify-bar-warn')
+      }>
+        <span className={
+          (daemonConnected && hotkeyArmed) ? 'indicator indicator-md indicator-ok'
+            : (daemonConnected ? 'indicator indicator-md indicator-disabled' : 'indicator indicator-md indicator-warn')
+        } />
         <span className="notify-text">
           {daemonConnected
-            ? (hotkeyArmed ? '热键已开启' : '服务已就绪 · 热键已暂停')
-            : (busy ? '服务处理中…' : '服务未启动')}
+            ? (hotkeyArmed ? '热键已开启' : '热键已暂停')
+            : (busy ? '处理中…' : '未连接')}
         </span>
         <span className="mask-sync-status-spacer" />
-        {/* 与 APP 面板「紧凑 + 专注」状态条统一：右侧用开关代替「启动/停止服务」文字按钮。
-            ⚠️ .8li 形态（2026-10-17）：服务由扩展在 PS 进程内承载、不可启停 ⇒ 开关语义
-            从「起停服务」改为「布防/撤防热键」；未连接时点它给出启用扩展的引导。 */}
+        {/* 与 APP 面板「紧凑 + 专注」状态条统一：右侧用开关代替「启动/停止」文字按钮。
+            ⚠️ .8li 形态（2026-10-17）：扩展在 PS 进程内承载、不可启停 ⇒ 开关语义
+            从「起停」改为「布防/撤防热键」；未连接时点它给出启用扩展的引导。 */}
         <ToggleSwitch
           checked={daemonConnected && hotkeyArmed}
           disabled={busy}
           onChange={() => {
             if (busy) return;
             if (!daemonConnected) {
-              showMessage('快捷键服务未连接：请确认 Photoshop 已启用「JWautofill Host」扩展'
-                + '（菜单：窗口 → 插件），然后重新加载本面板。');
+              showMessage('「JWautofill Host」未连接：请在 Photoshop 菜单「窗口 → 插件」中启用该扩展，然后重新加载本面板。');
               return;
             }
             if (hotkeyArmed) void disarmHotkeys(); else void armHotkeys();

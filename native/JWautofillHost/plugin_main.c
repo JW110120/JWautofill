@@ -459,6 +459,38 @@ static void handle_message(const char* js)
         if (json_bool(js, "speedAdaptive", &b)) g_pen.flags = b ? 1 : 0;
         int on = 0;
         json_bool(js, "on", &on);            /* 缺省 = false（Program.cs ReadBool 同款） */
+        /* 0x0121：penSmooth 到达留痕（变化门 + 250ms 节流）。
+           ⛔ 为什么补：整条「面板 → WS 18924 → g_pen → 槽位 → HUD」链路此前**零留痕**，
+              「调参没生效」类故障（真机 2026-10-17 用户报「减小半径 HUD 圆不变」）
+              排了两轮仍只能靠截图反推。现在每次内容变化落一行：
+               · 没有行            ⇒ 面板根本没发（sendParams 的 !penOn 早退 / WS 断）
+               · 有行但值不对      ⇒ 面板侧状态被覆盖或线格式映射错
+               · 行值正确仍不改    ⇒ 槽位→HUD 段（那时再看 [hud] 显示行的 leash=）
+           ⚠️ 节流不能没有：拖滑杆时 90ms 一推，不节流就是每秒十几行刷屏。 */
+        {
+            static volatile LONG s_lastMs;
+            static int s_lastOn = -1, s_lastMode = -1, s_lastStr = -1, s_lastRad = -1,
+                         s_lastCatch = -1, s_lastCorner = -1, s_lastHud = -1,
+                         s_lastCol = -1, s_lastGate = -1, s_lastSpd = -1;
+            DWORD nowM = GetTickCount();
+            int changed = on != s_lastOn || g_pen.mode != s_lastMode
+                       || g_pen.strength != s_lastStr || g_pen.radiusPx != s_lastRad
+                       || g_pen.catchUp != s_lastCatch || g_pen.cornerAngle != s_lastCorner
+                       || g_pen.hud != s_lastHud || g_pen.hudColor != s_lastCol
+                       || g_pen.toolGate != s_lastGate || g_pen.flags != s_lastSpd;
+            if (changed && (DWORD)(nowM - (DWORD)s_lastMs) >= 250) {
+                s_lastMs = (LONG)nowM;
+                s_lastOn = on; s_lastMode = g_pen.mode; s_lastStr = g_pen.strength;
+                s_lastRad = g_pen.radiusPx; s_lastCatch = g_pen.catchUp;
+                s_lastCorner = g_pen.cornerAngle; s_lastHud = g_pen.hud;
+                s_lastCol = g_pen.hudColor; s_lastGate = g_pen.toolGate; s_lastSpd = g_pen.flags;
+                log_line("srv", "penSmooth: on=%d mode=%d strength=%d radius=%d catchUp=%d"
+                         " corner=%d hud=%d color=%06X toolGate=%d spd=%d",
+                         on, g_pen.mode, g_pen.strength, g_pen.radiusPx, g_pen.catchUp,
+                         g_pen.cornerAngle, g_pen.hud, (unsigned)g_pen.hudColor,
+                         g_pen.toolGate, g_pen.flags);
+            }
+        }
         commit(on);
         return;
     }
