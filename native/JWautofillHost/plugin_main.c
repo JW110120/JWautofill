@@ -179,9 +179,12 @@ static void Wr(int slot, LONG v)
 /* Program.cs PenParams/PenHook.Set 的移植。默认值对齐 C# 字段初始化。 */
 typedef struct {
     int mode, strength, radiusPx, catchUp, cornerAngle, flags, hud, hudColor, toolGate;
+    /* 0x0133：闸门值有多旧（ms，面板最后一次**真读到工具**到现在）。
+       ⛔ 没有它就无法表达「这个值是旧的」—— 见 write_params 里的根因注释。 */
+    int gateAge;
 } PenP;
 
-static PenP g_pen = { 1, 40, 40, 50, 45, 0, 0, 0xE07F0D, 2 };
+static PenP g_pen = { 1, 40, 40, 50, 45, 0, 0, 0xE07F0D, 2, 0 };   /* 末位 gateAge=0：缺省=旧行为 */
 
 static volatile LONG g_enabled;
 static volatile LONG g_cmdSeq;
@@ -212,9 +215,23 @@ static void write_params(void)
        读数（或它在接管前收到的旧值），两边都写就是互相覆盖 —— 表现为工具切了
        却不生效、或换回套索不恢复（两侧时间戳各自刷新，谁都「新鲜」）。
        接管后闸门值只由 ps_tool.c 的通知回调独占写入。 */
-    if (!pstool_owns()) Wr(I_TOOLGATE, g_pen.toolGate);
-    /* ⛔ 闸门时间戳与闸门值必须同时写：引擎按 GATE_STALE_MS=3000 判过期。 */
-    Wr(I_GATETS,    (LONG)GetTickCount());
+    /* ⛔⛔ 0x0133：闸门时间戳**不能写 now**。
+       根因（jwwh-36236，用户报「用铅笔时套索 HUD 意外出现」）：面板的心跳每 1.5s
+       整包重发一次 penSmooth，旧代码每次都用 now 刷新 I_GATETS ⇒ 一个**过期的
+       「是套索」**被心跳反复续命，永远「新鲜」⇒ 引擎永远放行 ⇒ 画笔类工具落笔也出
+       HUD；反过来若冻结在 0，就成了用户说的「断流、开关怎么拨都不恢复」。
+       ⇒ 时间戳改成「面板最后一次**真读到工具**的时刻」：gateAge = 读数年龄(ms)，
+          由面板给出。面板读工具被忙碌闸门挡住 / 读失败时不更新该年龄 ⇒ 年龄自然增长
+          ⇒ 超过 GATE_STALE_MS 就被引擎 fail-closed 挡掉。心跳只续「参数」，不再续「真相」。
+       ⛔ 缺省 gateAge=0（老面板不发该字段）⇒ 完全保持旧行为，避免把老面板打死。 */
+    if (!pstool_owns()) {
+        Wr(I_TOOLGATE, g_pen.toolGate);
+        LONG age = (LONG)g_pen.gateAge;
+        if (age < 0) age = 0;
+        if (age > 60000) age = 60000;
+        Wr(I_GATETS, (LONG)GetTickCount() - age);
+    }
+    /* 进程内 'slct' 接管时：值与戳都由 ps_tool.c 的 publish 独占写，这里一个字节都不碰。 */
 }
 
 /* Program.cs SendCommand：先写命令体、再抬序号（顺序反了会执行陈旧命令）。 */
@@ -456,6 +473,8 @@ static void handle_message(const char* js)
         if (json_num(js, "hud", &v))          g_pen.hud         = roundi(v) & 7;
         if (json_num(js, "hudColor", &v))     g_pen.hudColor    = roundi(v) & 0xFFFFFF;
         if (json_num(js, "toolGate", &v))     g_pen.toolGate    = clampi(roundi(v), 0, 2);
+        /* 0x0133：闸门读数的年龄（ms）。缺省保持 0 = 旧行为（老面板不发）。 */
+        if (json_num(js, "gateAge", &v))      g_pen.gateAge     = clampi(roundi(v), 0, 60000);
         if (json_bool(js, "speedAdaptive", &b)) g_pen.flags = b ? 1 : 0;
         int on = 0;
         json_bool(js, "on", &on);            /* 缺省 = false（Program.cs ReadBool 同款） */

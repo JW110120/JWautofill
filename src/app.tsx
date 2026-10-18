@@ -39,7 +39,7 @@ import {
 import {
   LassoSmoothMode, LassoSmoothParams, LassoSmoothStatus, PenSmoothStatus,
   pushLassoSmoothParams, onLassoSmoothStatus,
-  initialLassoSmoothParams, setPenSmooth, setSmoothToolGate, getSmoothToolGate,
+  initialLassoSmoothParams, setPenSmooth, setSmoothToolGate, getSmoothToolGate, noteToolReadOk,
   restorePersistedPenSmooth,
   SMOOTH_RADIUS_MIN, SMOOTH_RADIUS_MAX,
   SMOOTH_CATCHUP_MIN, SMOOTH_CATCHUP_MAX,
@@ -1317,10 +1317,16 @@ class App extends React.Component<AppProps, AppState> {
                 console.log('[套索平滑闸门] 当前工具 = ' + tool);
                 this.lastToolRead = tool;
             }
+            // 0x0133：**真读到了**才刷新闸门的「读数时刻」——原生侧拿它当时间戳，
+            //    不再用 now。读失败时不刷新 ⇒ 年龄自然增长 ⇒ 3s 后 fail-closed，
+            //    这样「过期的『是套索』被心跳永久续命」这条通路被彻底切断
+            //    （用户实测：用铅笔时套索 HUD 意外出现）。
+            noteToolReadOk();
             setSmoothToolGate(App.isLassoTool(tool) ? 1 : 0);
             return;
         }
-        setSmoothToolGate(getSmoothToolGate());   // 读失败：沿用上次判定，仅续期时间戳
+        // 读失败：沿用上次判定（值不变，但**读数时刻也不动** ⇒ 3s 后原生侧自动阻断）。
+        setSmoothToolGate(getSmoothToolGate());
     }
 
     /** 把平滑模块（.8li）回报的平滑状态写进 state（渲染要读它，因此不能只写实例字段）。 */

@@ -489,6 +489,13 @@ let paramTimer: any = null;
  *    「不是套索」会把平滑整个关掉，而面板上看不出任何区别（开关还是开着）。
  */
 let toolGate: SmoothToolGate = 2;
+/** 0x0133：最后一次**成功读到工具**的时刻（0 = 从未读到）。
+ *  ⛔ 只在真读到工具时更新：读失败/被忙碌闸门挡住时**不更新** ⇒ 年龄自然增长 ⇒
+ *     原生侧 3s 后 fail-closed。这是「闸门值可以过期」的唯一实现点。 */
+let lastToolReadAt = 0;
+
+/** 0x0133：面板**真的读到**了当前工具（不论是不是套索）时调用。 */
+export function noteToolReadOk(): void { lastToolReadAt = Date.now(); }
 /** 上一次把闸门（连同整包参数）推给守护进程的时刻 —— 闸门心跳的计时基准。 */
 let lastGateSentAt = 0;
 /** 能力探测：本轮连接是否至少收到过一帧 smoothState。 */
@@ -531,6 +538,11 @@ function toWire(p: LassoSmoothParams) {
         // 工具闸门搭车同一条消息：与参数同源同节流，杜绝「界面显示套索、
         // 原生侧还按画笔处理」的错位窗口。
         toolGate,
+        // 0x0133：闸门读数**有多旧**（ms）。原生侧用它当 I_GATETS 的写入值，
+        //    不再写 now —— 否则 1.5s 心跳会把一个过期的「是套索」永久续命
+        //    （用户实测：用铅笔时套索 HUD 意外出现）。
+        // ⛔ 0 = 「还没有读数」⇒ 原生侧按旧行为处理（不把老面板打死）。
+        gateAge: lastToolReadAt > 0 ? Math.round(Math.max(0, Math.min(60000, Date.now() - lastToolReadAt))) : 0,
     };
 }
 
