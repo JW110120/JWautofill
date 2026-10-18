@@ -561,6 +561,10 @@ static volatile LONG g_lgEvt;
 static volatile LONG g_lgDur, g_lgPk, g_lgChg, g_lgRst, g_lgGrace, g_lgRad, g_lgMode, g_lgZero;
 static volatile LONG g_lgRA, g_lgRG, g_lgRJ, g_lgLag, g_lgPin, g_lgSlack;
 static volatile LONG g_lgRP;    /* 0x012A：本笔 buttons 落笔边沿锚定次数（每笔正常=1） */
+/* 0x0132：`落` 的次数还不够判性质 —— 必须看**每次落之前笔悬空了多久**。
+   ⛔ 判据：`落间最小全零` >> BTN_EDGE_MIN_ZERO(8) ⇒ 笔是真抬起过（多笔合并成一段台账，正常）；
+      贴着 8 的阈值 ⇒ buttons 在笔中抖动，每次都会把输出点钉回笔尖（会看见折角）。 */
+static volatile LONG g_lgEmin = -1, g_lgEn;
 
 /* ---------------------------------------------------- 信号表（多信号并联）---
  * ⛔⛔ 2026-10-14 第五轮定案（用户报「平滑和 HUD 依旧会失灵」，诊断条原文：
@@ -1687,6 +1691,23 @@ static void try_calibrate(HCTX hCtx, void* buf, int n)
             calib_logf("# [calib] ⚠ 掩码 (stride=%d,off=%d) 与盲扫 (stride=%d,off=%d) 不一致，"
                        "且盲扫无法定出 X/Y ⇒ 等下一批\n", mL.stride, mL.offSerial, sStride, sOff);
         }
+    }
+
+    /* ⓸′ 0x0131：**小批次的取证标准必须更严**。
+       ⛔ 背景（jwwh-39120 全场卡死在「准备中」的根因）：真机上 PS 绝大多数时候
+          一次只取 1 个包（`最大单次=2` 是整场上限），而旧版把「n>=3 才敢标定」
+          当硬门槛 ⇒ 一个 `[calib]` 都没有 ⇒ `state` 永远是 0 ⇒ 面板永远「准备中」、
+          HUD 与平滑全死。**这比断流严重得多，且完全不依赖驱动状态。**
+       ⇒ 现在允许 n==2 定案，但**只接受「掩码 + 数据」互相印证（src=1）**：
+          2 个包能凑出大量假的「序号逐包 +1」组合，盲扫单独定案在 n=2 上不可信；
+          而掩码（WTGet 回的 lcPktData）与盲扫指向同一个 stride/offSerial 时，
+          两路独立证据互证，概率上等同 n=3 的强度。n>=3 时规则不变（盲扫可独走）。 */
+    if (ok && n < 3 && src != 1) {
+        calib_logf("# [calib] n=%d 且掩码未印证（src=%d）⇒ 证据不足，等下一批\n", n, src);
+        ok = 0;
+        /* ⛔ 这**不算**一次「裁决失败」：否则真机上一次只给 2 个包时会连烧 8 次预算，
+           直接锁进 `tried=1 / state=2（标定失败）`，把后面真正够证据的批次挡在门外。 */
+        if (g_calib.attempts > 0) g_calib.attempts--;
     }
 
     calib_logf("# [calib] hCtx=0x%llX  n=%d\n", (unsigned long long)(UINT_PTR)hCtx, n);
@@ -3126,6 +3147,38 @@ static void snapshot_only(const u8* buf, int stride, int n, int ox_, int oy_)
     sn_publish((LONG)vx, (LONG)vy, (LONG)vx, (LONG)vy, (LONG)GetTickCount());
 }
 
+/* 0x0131：单次最大包数 / 冲包次数 / 零包次数（声明前移：标定心跳要读 g_pkMax）。 */
+static volatile LONG g_pkMax, g_pkBig, g_pkZero;
+
+/* ================================================= 标定取证：队列只读快照（0x0131）
+ * ⛔ 为什么需要它（jwwh-39120 根因）：真机上 PS 几乎**一次只取 1 个包**
+ *    （`[pk] 最大单次=1/2`，整场上限 2），而标定要「序号逐包 +1」的证据
+ *    ——1 个包什么也证不了。旧版因此一个 `[calib]` 都打不出来 ⇒ `state` 恒 0
+ *    ⇒ 面板永远「准备中」、HUD 与平滑一起死。**这是构造性死锁，与驱动状态无关。**
+ * ⇒ 补一条**只读**取证通道：`WTPacketsPeek` 按规范**不消费**队列，把此刻积压的
+ *    包整块复制出来做证据。取到 >=2 个包就够「掩码+盲扫互证」。
+ * ⛔ 绝不改用 WTPacketsGet（会真的把包从 PS 手里吃掉 ⇒ PS 少画点）。
+ * ⛔ 节流：一包一拍的热路径上不能每次 8KB 拷贝，只在「还没标定」时每 32 拍探一次。
+ * ⛔ 缓冲按 8 包 × 1024 字节静态开（真机 stride=52，留 20 倍余量）。 */
+#define CALIB_PEEK_N   8
+#define CALIB_PEEK_SZ  1024
+static u8  s_calPeekBuf[CALIB_PEEK_N * CALIB_PEEK_SZ];
+static int calib_peek_batch(HCTX hCtx)
+{
+    typedef UINT (*PFN_PEEK)(HCTX, int, LPVOID);
+    static PFN_PEEK s_pk;
+    static int s_tried;
+    if (!s_tried) {
+        s_tried = 1;
+        HMODULE hm = GetModuleHandleA("Wintab32.dll");
+        if (hm) s_pk = (PFN_PEEK)(void*)GetProcAddress(hm, "WTPacketsPeek");
+    }
+    if (!s_pk || !hCtx) return 0;
+    UINT n = s_pk(hCtx, CALIB_PEEK_N, s_calPeekBuf);
+    if (n < 2 || n > CALIB_PEEK_N) return 0;
+    return (int)n;
+}
+
 /* 返回**本批里坐标真正被改写的包数**（复位帧原值写回、无差异帧都不算）。
  * ⛔ 早期版本把「处理过的包数」直接加进 g_smoothed ⇒ 面板显示「已平滑 17086 包」
  *    而实际一包都没改过（标定失败早退）—— 计数器必须只说改写，不能说处理。 */
@@ -3159,12 +3212,32 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
         }
     }
     if (!g_calib.tried) {
-        /* 盲扫「序号逐包 +1」要 n>=3 才不是巧合 ⇒ 证据不足就整批放过，等下一批。
-           ⛔ 旧版 n>=2 就判一次且立刻置 tried=1：真机第一批往往正好 2 个包，
-              盲扫被跳过、掩码又不可信 ⇒ 一次判死，此后永不重试（日志里整场只有
-              一段 [calib] 就是这个原因）。 */
-        if (n >= 3) try_calibrate(hCtx, buf, n);
-        else { InterlockedExchange(&g_reason, RS_NOCTX); return 0; }
+        /* 0x0131 分层取证（⛔ 不要再退回「n>=3 一刀切」，那是 39120 死锁的根因）：
+             n>=3 → 老规矩，双证据优先、盲扫可独走；
+             n==2 → 也判，但 try_calibrate 内部只认「掩码+盲扫互证」（见 ④′）；
+             n<2  → 走**只读**队列快照（WTPacketsPeek，不消费）凑一批证据。
+           ⛔ 旧版注释说的「n>=2 一次判死、此后永不重试」风险仍然存在 ⇒
+              `tried` 只在 ok 或 attempts>=8 时才置位（那段逻辑没变），
+              所以 n==2 判失败只是「这一批不算数」，不会把机会用光。 */
+        static DWORD s_calHbMs;
+        static LONG  s_calHbN;
+        if (n >= 2) {
+            try_calibrate(hCtx, buf, n);
+        } else {
+            int pn = ((++s_calHbN & 31) == 0) ? calib_peek_batch(hCtx) : 0;
+            if (pn >= 2) try_calibrate(hCtx, s_calPeekBuf, pn);
+            InterlockedExchange(&g_reason, RS_NOCTX);
+            /* 取证心跳（2s）：把「等什么样的证据、等到了多少」落盘 ——
+               ⛔ 没有这条，标定不成立时日志里**一行 calib 都没有**，
+                  只能靠推断（39120 就是这么查了半天的）。 */
+            DWORD nowH = GetTickCount();
+            if (nowH - s_calHbMs >= 2000) {
+                s_calHbMs = nowH;
+                calib_logf("# [calib] 等证据 2s: 本批 n=%d peek=%d 最大单次=%ld 累计包=%ld 尝试=%d\n",
+                           n, pn, (long)g_pkMax, (long)g_packets, g_calib.attempts);
+            }
+            return 0;
+        }
     }
     if (!g_calib.valid || g_calib.offX < 0 || g_calib.offY < 0) {
         InterlockedExchange(&g_reason, RS_NOCAL);
@@ -3250,6 +3323,7 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
        该值 > 0 即证明「轻压成段全零」真的存在，且新闩确实接住了。 */
     static int  s_in;
     static LONG s_t0, s_pk, s_chg, s_rst, s_grace, s_rA, s_rG, s_rJ, s_rP, s_zmax;
+    static LONG s_eMin, s_eN;      /* 0x0132：本笔每次「落」之前的悬空包数最小值 / 次数 */
     static int  s_zfrz;   /* 1 = 本笔还处在「第一批」状态（不计全零） */
     /* ⛔ 0x0127：路的**客观形态**（不再靠体感描述推断） */
     static LONG s_lagSum;  /* 滞后累加（0.1px 单位） */
@@ -3260,6 +3334,7 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
         s_in = 1; s_t0 = (LONG)GetTickCount();
         s_pk = n; s_chg = 0; s_rst = 0; s_grace = down ? 0 : 1;
         s_rA = s_rG = s_rJ = s_rP = 0; s_zmax = 0; s_zfrz = 1;
+        s_eMin = -1; s_eN = 0;
         s_lagSum = s_pin = s_slack = s_np = 0;
     } else if (s_in && downS) {
         s_pk += n;
@@ -3279,6 +3354,7 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
                自定义的定性指标：>20 包即「真实运笔中成段失效」）。 */
             g_lgZero  = s_zmax;
             g_lgRA = s_rA; g_lgRG = s_rG; g_lgRJ = s_rJ; g_lgRP = s_rP;
+            g_lgEmin = s_eMin; g_lgEn = s_eN;
             g_lgLag = s_np ? (LONG)(s_lagSum / s_np) : 0;                 /* 0.1px 均值 */
             g_lgPin = s_np ? (LONG)((s_pin * 100) / s_np) : 0;            /* 贴笔 % */
             g_lgSlack = s_np ? (LONG)((s_slack * 100) / s_np) : 0;        /* 死区 % */
@@ -3365,7 +3441,13 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
             u32 bv; memcpy(&bv, p + g_ctOff[s_ctBtnIdx], 4);
             if (g_ctMsk[s_ctBtnIdx]) bv &= (u32)g_ctMsk[s_ctBtnIdx];
             if (bv) {
-                if (!s_prevBtn && s_btnZero >= BTN_EDGE_MIN_ZERO) penDownEdge = 1;
+                if (!s_prevBtn && s_btnZero >= BTN_EDGE_MIN_ZERO) {
+                    penDownEdge = 1;
+                    /* 0x0132：记下这次「落」之前笔悬空了多久（包数）。这是区分
+                       「真抬笔后再落」与「buttons 笔中抖动」的唯一直接证据。 */
+                    if (s_eMin < 0 || s_btnZero < s_eMin) s_eMin = s_btnZero;
+                    s_eN++;
+                }
                 s_btnZero = 0;
             } else {
                 s_btnZero++;   /* 悬空/掉零：累计抬升包数（真悬空可积累到很大） */
@@ -3596,7 +3678,6 @@ static volatile LONG g_ctOkDbg      = 0;   /* 落笔判据已建立（g_ctUnknow
    标称 `rate=100`。也就是说「卡顿 → 一口气冲出来」是**常态**而不是例外，可此前
    没有任何一个探针能量出它（`[dead]` 只抓长于 350ms 且光标在动的那种长断流）。
    这里补三个原子 —— 单次最大包数 / ≥25 包次数 / 零包次数，worker 每 2s 落一行。 */
-static volatile LONG g_pkMax, g_pkBig, g_pkZero;
 /** 只统计**真实**驱动包（不含独立笔通路合成的那部分）——
     断流看门狗必须看它：合成补流会把 g_packets 一直抬高，用它判冻结点就等于
     把断流藏起来了（诊断必须能说真话）。 */
@@ -3662,7 +3743,7 @@ static LHOOK g_lhInfoW = { "WTInfoW", 0, 0, 0, {0}, 0, 0, {0}, "Wintab32.dll" };
       改写会变成双重滞后。两者互斥 = 天然的分工。
    ⛔ 内部调用（补流输入、dead 判据、HUD）必须走 `se_real_GetCursorPos()` 直调真函数，
       否则会「自己吃自己的输出」：补流输入变成滞后值 ⇒ 输出再滞后 ⇒ 发散。
-   ⛔ 开关外置 `wtctx.ini` 的 `cursorInject=1`（缺省 0 = 只观测），改口径不重编。 */
+   ⛔ 开关外置 `wtctx.ini` 的 `cursorInject`（**缺省 1**；写 0 才只观测），改口径不重编。 */
 static LHOOK g_lhGcp = { "GetCursorPos",   0, 0, 0, {0}, 0, 0, {0}, "user32.dll" };
 static LHOOK g_lhGmp = { "GetMessagePos",  0, 0, 0, {0}, 0, 0, {0}, "user32.dll" };
 static int lhook_prepare(LHOOK* L);
@@ -3694,14 +3775,14 @@ static void wtctx_read_ini(void)
     if (!dir || !*dir) return;
     _snprintf(path, sizeof(path), "%swtctx.ini", dir);
     path[sizeof(path) - 1] = 0;
+    /* ⛔⛔ 0x0131 修正：`cursorInject` 的**缺省值必须在这里给**，不能只写在
+       「文件不存在」分支里 —— jwwh-39120 的 ini 只有 `queueSize=128` 一行，
+       走的是「文件存在」分支，于是数组第 4 位保持 0 ⇒ 日志打 `cursorInject=0`
+       ⇒ GetCursorPos 接管从头到尾没生效（用户以为开了，其实关着）。
+       ⇒ 先置 1，再让文件里的 `cursorInject=0` 覆盖它。 */
+    g_wtctxIni[WTCTX_INI_CURSORINJECT] = 1;
     FILE* f = fopen(path, "rb");
     if (!f) {
-        /* ⛔ 0x012F 的例外：`cursorInject` **缺文件时默认 1**（与 ④⑤⑥ 相反）。
-           理由：它只改「PS 读到的那份坐标副本」—— 不搬动系统光标、不改 PS 的任何
-           结构体、不写驱动，与原 ④⑤⑥「改写宿主传入结构」的风险不同；且已有
-           三重保险（只在 realAge>=250ms 的断流窗口 / 快照必须新鲜 / ±3000px 幅度上限）。
-           想退回纯观测：ini 里写 `cursorInject=0`。 */
-        g_wtctxIni[WTCTX_INI_CURSORINJECT] = 1;
         logf("# [wtctx] 无外置开关文件（%s）⇒ ④⑤ 只观测不改写、⑥ 不动队列、"
              "GetCursorPos **改写开启**（缺省 cursorInject=1，可建 ini 写 0 关闭）\n", path);
         return;
@@ -4090,6 +4171,104 @@ static u64 det_GetCursorPos(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
     return (u64)ok;
 }
 
+/* ===================== user32!GetCursorPos 的**导入表（IAT）**接管（0x0131）
+   ⛔⛔ 为什么不能像 Wintab32 那样直接打入口 5 字节 —— jwwh-39120 的实测证据：
+      `user32!GetCursorPos` 入口首字节 = **BA**（不是 E9 转发桩），说明那是一段**真代码**。
+      我们的 LHOOK 机制是「顺着 E9 找到真函数，detour 里直调它」；打真代码入口必须
+      先造 trampoline（把被覆盖的那几条指令搬出来再跳回），而 `BA` 到底是
+      「mov edx,imm32（5 字节一条指令）」还是「BT/BTS/BTR/BTC 组（后跟 ModRM，只有 3 字节）」，
+      **在没有反汇编器的情况下不能猜** —— 猜错就是把 PS 的代码从中间劈开 = 当场崩。
+   ⇒ 换一条零风险的等价路：**只改 PS 自己导入表里的那根指针**。
+      PS 每次调 GetCursorPos 都要走它自己 IAT 里的槽，我们把这个槽指向我们的 detour：
+        · user32 的代码一个字节都没动（无指令长度问题，也不碰只读共享页）；
+        · 写时复制，只影响本进程；
+        · 我们自己的模块**不参与**扫描 ⇒ `se_real_GetCursorPos()` 里那句
+          `GetCursorPos(p)` 拿到的仍是系统真函数，不会自己吃自己。
+   ⛔ 覆盖不到的只有「用 GetProcAddress 现取地址」的调用方（PS 一般是静态导入）；
+      真机上 `gcp=` 恒 0 就说明它走的是现取，那时再考虑入口 trampoline。 */
+static int g_gcpIatSlots;      /* 已改写的 IAT 槽数（累计） */
+static int g_gcpIatTried;
+static int g_gcpIatSweeps;
+
+static int iat_patch_one(HMODULE hMod, const char* wantDll, const char* wantFn, void* repl)
+{
+    u8* base = (u8*)hMod;
+    IMAGE_DOS_HEADER* dos = (IMAGE_DOS_HEADER*)base;
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return 0;
+    IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) return 0;
+    DWORD impRva = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+    if (!impRva) return 0;
+    IMAGE_IMPORT_DESCRIPTOR* d = (IMAGE_IMPORT_DESCRIPTOR*)(base + impRva);
+    int n = 0;
+    for (; d->Name; d++) {
+        const char* mod = (const char*)(base + d->Name);
+        if (_stricmp(mod, wantDll) != 0) continue;
+        IMAGE_THUNK_DATA* oft = (IMAGE_THUNK_DATA*)(base + (d->OriginalFirstThunk ? d->OriginalFirstThunk
+                                                                                : d->FirstThunk));
+        IMAGE_THUNK_DATA* ft = (IMAGE_THUNK_DATA*)(base + d->FirstThunk);
+        for (int i = 0; ft[i].u1.Function; i++) {
+            if (oft[i].u1.Ordinal & IMAGE_ORDINAL_FLAG) continue;   /* 按序号导入，无名字 */
+            IMAGE_IMPORT_BY_NAME* ibn = (IMAGE_IMPORT_BY_NAME*)(base + oft[i].u1.AddressOfData);
+            if (!ibn || strcmp((const char*)ibn->Name, wantFn) != 0) continue;
+            void** slot = (void**)&ft[i].u1.Function;
+            if (*slot == repl) continue;                            /* 已经是我们，别重复 */
+            DWORD old = 0;
+            if (!VirtualProtect(slot, sizeof(void*), PAGE_READWRITE, &old)) continue;
+            *slot = repl;
+            VirtualProtect(slot, sizeof(void*), old, &old);
+            n++;
+        }
+    }
+    return n;
+}
+
+/* 扫一遍本进程所有已加载模块的导入表。可重复调用（模块是陆续加载的）。 */
+static void gcp_iat_sweep(int verbose)
+{
+    typedef BOOL (WINAPI *PFN_EPM)(HANDLE, HMODULE*, DWORD, LPDWORD);
+    static PFN_EPM s_epm;
+    if (!s_epm) {
+        HMODULE k32 = GetModuleHandleA("kernel32.dll");
+        if (k32) {
+            s_epm = (PFN_EPM)(void*)GetProcAddress(k32, "K32EnumProcessModules");
+            if (!s_epm) s_epm = (PFN_EPM)(void*)GetProcAddress(k32, "EnumProcessModules");
+        }
+    }
+    if (!s_epm) {
+        if (verbose) logf("# [gcp] 拿不到 EnumProcessModules ⇒ 导入表接管不可用\n");
+        return;
+    }
+    g_gcpIatTried = 1;
+    g_gcpIatSweeps++;
+    HMODULE mods[256];
+    DWORD need = 0;
+    if (!s_epm(GetCurrentProcess(), mods, (DWORD)sizeof(mods), &need)) return;
+    DWORD cnt = need / (DWORD)sizeof(HMODULE);
+    if (cnt > 256) cnt = 256;
+    HMODULE self = NULL;
+    GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCSTR)(void*)&gcp_iat_sweep, &self);
+    int added = 0;
+    for (DWORD i = 0; i < cnt; i++) {
+        if (!mods[i] || mods[i] == self) continue;      /* ⛔ 绝不改自己（否则真函数调用自激） */
+        int k = iat_patch_one(mods[i], "USER32.dll", "GetCursorPos", (void*)det_GetCursorPos);
+        if (k <= 0) continue;
+        added += k;
+        if (verbose) {
+            char nm[MAX_PATH];
+            if (GetModuleFileNameA(mods[i], nm, (DWORD)sizeof(nm))) {
+                const char* p = strrchr(nm, '\\');
+                logf("# [gcp] 导入表接管 GetCursorPos: %s（%d 槽）\n", p ? p + 1 : nm, k);
+            }
+        }
+    }
+    g_gcpIatSlots += added;
+    if (verbose || added > 0)
+        logf("# [gcp] 导入表扫第 %d 轮：模块 %lu 个，本次改写 %d 槽，累计 %d 槽\n",
+             g_gcpIatSweeps, (unsigned long)cnt, added, g_gcpIatSlots);
+}
+
 /* GetMessagePos：LNP 同样挂钩（返 DWORD 打包的屏幕坐标）。本版**只计数**，
    用来判定「PS 到底从哪条路取坐标」，下一版再决定要不要一起改写。 */
 static u64 det_GetMessagePos(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
@@ -4454,6 +4633,11 @@ static void do_install(void)
        ④⑤ 的改写开关与 ⑥ 的队列尺寸都来自这个文件，读到什么值决定上面三个钩
        是「只观测」还是「真改写」。 */
     wtctx_read_ini();
+    /* 0x0131：user32!GetCursorPos 的入口是真代码（首字节 BA），LHOOK 的「顺 E9 找真函数」
+       模型挂不上 ⇒ 改走**导入表**（见 gcp_iat_sweep 上方的取舍说明）。
+       只在开关打开时动手；缺省 cursorInject=1（见 wtctx_read_ini 里的 0x0131 注释）。 */
+    if (g_wtctxIni[WTCTX_INI_CURSORINJECT]) gcp_iat_sweep(1);
+    else logf("# [gcp] cursorInject=0 ⇒ 不接管 GetCursorPos（只观测，gcp 计数照旧）\n");
     logf("# 挂载: %s  entry=0x%llX impl=0x%llX relay=0x%llX（改写期挂起线程 %d 个）\n",
          ok ? "OK" : g_skip, (unsigned long long)(UINT_PTR)g_entry,
          (unsigned long long)(UINT_PTR)g_impl, (unsigned long long)(UINT_PTR)g_relay, g_frzLast);
@@ -4745,11 +4929,12 @@ static DWORD WINAPI worker(LPVOID param)
                用户报的「落笔偏移」会原样复现；> 1 ⇒ buttons 在笔中抖动（边沿去抖失灵）。 */
         if (InterlockedExchange(&g_lgEvt, 0)) {
             logf("# [stroke] 笔收尾: 时长=%ldms 包=%ld 改写=%ld 复位=%ld(锚%ld/gap%ld/jump%ld/落%ld) "
-                 "悬空批=%ld 最长全零=%ld包 半径=%ldpx 模式=%ld "
+                 "悬空批=%ld 最长全零=%ld包 落间最小全零=%ld包(共%ld次) 半径=%ldpx 模式=%ld "
                  "平均滞后=%ld.%ldpx 贴笔=%ld%% 死区=%ld%%\n",
                  (long)g_lgDur, (long)g_lgPk, (long)g_lgChg, (long)g_lgRst,
                  (long)g_lgRA, (long)g_lgRG, (long)g_lgRJ, (long)g_lgRP,
-                 (long)g_lgGrace, (long)g_lgZero, (long)g_lgRad, (long)g_lgMode,
+                 (long)g_lgGrace, (long)g_lgZero, (long)g_lgEmin, (long)g_lgEn,
+                 (long)g_lgRad, (long)g_lgMode,
                  (long)(g_lgLag / 10), (long)(g_lgLag % 10),
                  (long)g_lgPin, (long)g_lgSlack);
         }
@@ -5212,6 +5397,13 @@ static DWORD WINAPI worker(LPVOID param)
 
         if (GetTickCount() - lastPublish >= 10000) {
             lastPublish = GetTickCount();
+            /* 0x0131：导入表是可增长的（PS 的面板/延迟加载 DLL 会在运行中才载入），
+               每 30s 静默重扫一遍；新槽数为 0 时不打日志（只有真改了才出声）。 */
+            {
+                static int s_iatTick;
+                if (g_wtctxIni[WTCTX_INI_CURSORINJECT] && (++s_iatTick % 3) == 0)
+                    gcp_iat_sweep(0);
+            }
             /* rst=a/g/j/p = 起笔锚定 / 取包超时(假复位) / 位置跳变 / buttons 落笔边沿
                的次数（0x012A 起 p = 真落笔锚定，每笔正常 1 次）。
                ⛔ 「圆忽然闪现回光标、折线瞬间连到光标」= 一次复位，只有把四种原因
@@ -6808,7 +7000,7 @@ static void hud_stop(void)
                   一个固定位移上（比不平滑更糟）⇒ 宁可透传。
             ② `GetMessagePos` 同挂但**只计数**（LNP 也钩它），用来判定 PS 到底从哪条路
                取坐标；`[raw]` 加 `gcp=调用/rw=改写/a=接管态 gmp=调用`。
-            ③ 开关外置 `wtctx.ini`：`cursorInject=1` 才改写（缺省 0 = 只观测）。
+            ③ 开关外置 `wtctx.ini`：`cursorInject` 缺省 1（0x0131 修正，旧版把缺省放错了分支）。
                下一轮判据：① `诊断钩 ... GetCursorPos=挂`；② 断流期 `gcp` 是否在涨
                （涨 ⇒ PS 确实在问光标）；③ `rw` 是否随之一同涨（= 真改写了）；
                ④ **断流期线是否恢复平滑**（这是本版全部目的）；⑤ 正常运笔时 `a` 必须
@@ -6826,8 +7018,49 @@ static void hud_stop(void)
             ③ 复核 `g_canvasOkDbg`：它在 `wantVisible` 判定**之前**无条件每帧更新
                （第 6063 行）⇒ 断流期不会冻结，可安全作为接管条件。
             下一轮判据：断流期线**跟手连续、无台阶感**（0x012F 的目的），
-            且 `[raw] gcp=/rw=` 同步增长。 */
-__declspec(dllexport) int jwwh_version(void) { return 0x0130; }
+            且 `[raw] gcp=/rw=` 同步增长。
+   0x0131 = ① ⛔⛔【**标定死锁：整场「准备中」、HUD 与平滑全死**】（jwwh-39120 实测）。
+               旧版把「n>=3 个包才敢标定」当硬门槛（防盲扫巧合），而真机上 PS
+               **几乎一次只取 1 个包**（整场 `[pk] 最大单次=2`）⇒ 一个 `[calib]` 都
+               打不出来 ⇒ `g_calib.tried` 永远 0 ⇒ `state` 恒 0 ⇒ 面板永远「准备中」、
+               HUD 全部门闩失守、平滑零改写。**这是在补流之外的一条独立死路。**
+               修法（分层取证，`tried` 的预算逻辑不变）：
+                 · n>=3 → 老规矩（掩码+数据双证据优先，盲扫可独走）；
+                 · n==2 → 也判，但**只认「掩码 + 盲扫」互证**（2 个包能凑出大量假的
+                   「序号逐包 +1」，盲扫单独定案不可信；两路独立证据互证 ≈ n=3 强度）；
+                 · n<2  → 走 `WTPacketsPeek` **只读**快照（按规范不消费队列）凑一批，
+                   每 32 拍探一次；⛔ 绝不用 WTPacketsGet（会真把包从 PS 手里吃掉）。
+               并新增 `[calib] 等证据 2s: 本批 n=… peek=… 最大单次=… 累计包=… 尝试=…`
+               心跳 —— 没有它，标定不成立时日志里**一行 calib 都没有**（39120 就是
+               只能靠推断查了半天）。
+            ② `cursorInject` 缺省值给错了位置：旧版只在「ini 文件不存在」分支里置 1，
+               而真实 ini（`queueSize=128`）存在 ⇒ 数组第 4 位保持 0 ⇒ 日志打
+               `cursorInject=0`，GetCursorPos 接管**从头到尾没开过**。
+               修法 = 进 `fopen` 之前无条件置 1，再由文件里的 `cursorInject=0` 覆盖。
+            ③ `user32!GetCursorPos` 根本挂不上：入口首字节 = **BA**（真代码，非 E9 转发桩），
+               LHOOK 的「顺 E9 找真函数再直调」模型不适用；硬打 5 字节又必须造
+               trampoline，而 `BA` 是「mov edx,imm32（5 字节）」还是「BT 组（3 字节）」
+               **没反汇编器就不能猜**（猜错 = 把 PS 代码从中间劈开）。
+               修法 = 改走**导入表（IAT）**：扫本进程所有已加载模块，把 USER32!GetCursorPos
+               的槽指向 detour。user32 代码一个字节不动、无指令长度问题、写时复制只影响
+               本进程；⛔ 自己的模块不参与扫描 ⇒ `se_real_GetCursorPos()` 里那句
+               `GetCursorPos(p)` 仍是系统真函数（不会自己吃自己）。模块是陆续加载的
+               ⇒ 每 30s 静默重扫一遍（只有真的新增了槽才出声）。
+               下一轮判据：① `[gcp] 导入表接管 GetCursorPos: …（N 槽）` 出现且 N>0；
+               ② 断流期 `[raw] gcp=` 在涨（涨 ⇒ PS 确实在问光标）；③ `rw=` 随之涨；
+               ④ `[calib]` 第一段出现且 `结论: ★启用改写`，面板离开「准备中」。
+               仍为 0 ⇒ PS 是用 GetProcAddress 现取地址，再考虑入口 trampoline。
+   0x0132 = 纯诊断（**零行为变化**）：0x0131 实测 14 笔全绿（jwwh-9020），但台账里
+               `落` 在一段「笔」中出现 9/6/3 次 —— 铁律 19 说「>1 ⇒ buttons 笔中抖动」，
+               可是这次用户完全没看到折角，怀疑真相是「1500ms 接触闩把多次真落笔合并成
+               一段台账」。数据里无法区分这两者 ⇒ 补一条直接证据：
+               台账加 `落间最小全零=N包(共M次)` = 本笔每次「落」之前笔连续悬空的包数最小值。
+               `N` 远大于 BTN_EDGE_MIN_ZERO(8) ⇒ 笔真的抬起过（多笔合并，正常）；
+               `N` 贴着 8 ⇒ 抖动，每次都会把输出点钉回笔尖（会看见折角）。
+               ⛔ 铁律 19 的判据据此改写为：**每段台账的 `落` 可以 >1，但 `落间最小全零`
+                  必须显著大于去抖阈值**；只有后者贴着 8 才是真抖动。
+            下一轮判据：`[stroke] … 落间最小全零=` 这串数字是否 >= 20 包。 */
+__declspec(dllexport) int jwwh_version(void) { return 0x0132; }
 
 /* 兜底还原入口：守护进程的正常路径是经共享内存下令（worker 执行），
    此导出供外部工具（脚本/排障）在不需要共享内存时直接远程调用。 */
