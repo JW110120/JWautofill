@@ -590,6 +590,14 @@ int pstool_install(void* basic, void* self)
     if (s_state == PS_OWNED || s_state == PS_REGISTERED) return 1;
     if (!basic) { pstool_log("安装失败：SPBasicSuite 为空（md->basic=NULL）"); return 0; }
 
+    /* ⛔⛔ 2026-10-19：这一行以前**漏了**（s_basic 全文件只有声明、没有赋值）⇒
+       pstool_uninstall() 的第一道判空 `!s_basic` 恒真，**永远直接 return**：
+       ① 5 个 PS 通知回调从来没被注销；② 3 个 suite 从来没 release。
+       PS 侧于是长期持有指向本 DLL 的函数指针，一旦模块被 FreeLibrary / 重载，
+       下一次 'slct'/'Cls '/'Opn ' 投递就跳进已卸载内存（WER：*.8li_unloaded + c0000005）。
+       必须在这里存下来，卸载路径才有办法真正注销。 */
+    s_basic = basic;
+
     fn_acquire acquire = (fn_acquire) meth(basic, 0);      /* SPBasicSuite + 0x00 */
     if (!acquire) { pstool_log("安装失败：SPBasicSuite->AcquireSuite 为空"); return 0; }
 
@@ -662,10 +670,14 @@ int pstool_install(void* basic, void* self)
 
 void pstool_uninstall(void)
 {
-    if (!s_ctrlSuite || !s_basic) return;
+    /* ⛔ 判据只看 ctrlSuite：s_basic 在 install 中途失败时可能是 NULL，
+       但「注册过通知」只取决于 ctrlSuite 是否拿到 —— 用 s_basic 做前置条件
+       会把「已注册、未注销」这条最危险的状态漏掉（见 install 里的说明）。 */
+    if (!s_ctrlSuite) { s_refSuite = s_descSuite = NULL; s_self = NULL;
+                        InterlockedExchange(&s_state, PS_UNAVAIL); return; }
     fn_ctrl_unregister unreg = (fn_ctrl_unregister) meth(s_ctrlSuite, OFF_CTRL_UNREGISTER);
     if (unreg) unreg(s_self, EV_ALL);
-    fn_release release = (fn_release) meth(s_basic, 8);        /* SPBasicSuite + 0x08 */
+    fn_release release = s_basic ? (fn_release) meth(s_basic, 8) : NULL; /* SPBasicSuite + 0x08 */
     if (release) {
         release(SUITE_REFERENCE,  SUITE_VERSION);
         release(SUITE_CONTROL,    SUITE_VERSION);
@@ -681,6 +693,7 @@ void pstool_uninstall(void)
     s_refSuite = s_ctrlSuite = s_descSuite = NULL;
     s_evModal = s_evTModal = 0;
     s_self = NULL;
+    s_basic = NULL;                            /* 幂等：下次 install 重新记 basic */
     InterlockedExchange(&s_state, PS_UNAVAIL);
     InterlockedExchange(&s_toolNameOk, 0);
     InterlockedExchange(&s_lastNotifyMs, 0);   /* 看门狗：卸载 ⇒ 心跳作废 */

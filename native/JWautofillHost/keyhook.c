@@ -2608,6 +2608,25 @@ void keyhook_start(void)
     kh_log("热键子系统已启动（.8li 进程内形态，端口 18923，默认布防）");
 }
 
+/* ⛔⛔ 0x013E：停服时必须由**调用者线程**同步卸掉两条 LL 钩子。
+ *
+ * 旧实现只把 g_khStop/g_khSrvStop 置位、再 post WM_QUIT，由钩子线程在自己的退出
+ * 路径里 kh_uninstall_hook()。问题在于那是一次**有超时的 join**（键盘 2s / 鼠标无 join
+ * 只靠线程自退），超时后我们照样 CloseHandle 返回，接着 DllMain 让 PS 把本模块卸载 ——
+ * 而 WH_KEYBOARD_LL / WH_MOUSE_LL 的回调地址就是本模块里的 kh_proc / kh_mse_proc。
+ * 模块一旦不在，下一次按键或鼠标事件就是跳进已卸载地址：
+ *   WER 现场 = Photoshop.exe BEX64 · 故障模块 JWautofillHost.8li_unloaded ·
+ *             c0000005 · 异常数据 8（DEP 执行违规）。2026-10-16/17 一共六起同族。
+ * 所以这里不等线程，先原子摘掉两条钩子（ExchangePointer 置空 ⇒ 线程退出路径不会二次
+ * Unhook），再去做 join —— join 即使超时，也**不会**再有事件被投递进来。 */
+static void kh_unhook_both_now(void)
+{
+    HHOOK k = (HHOOK)InterlockedExchangePointer((PVOID*)&g_khHook, NULL);
+    if (k) { UnhookWindowsHookEx(k); kh_log("键盘钩子已卸载（停服同步路径）"); }
+    HHOOK m = (HHOOK)InterlockedExchangePointer((PVOID*)&g_mseHook, NULL);
+    if (m) { UnhookWindowsHookEx(m); kh_log("鼠标钩子已卸载（停服同步路径）"); }
+}
+
 void keyhook_stop(void)
 {
     if (InterlockedCompareExchange(&g_khStarted, 0, 1) == 0) return;
@@ -2617,22 +2636,34 @@ void keyhook_stop(void)
     if (g_khListen != INVALID_SOCKET) shutdown(g_khListen, SD_BOTH);
     if (g_khRecThreadId) PostThreadMessage(g_khRecThreadId, WM_QUIT, 0, 0);
 
+    /* ⚠️ 必须在任何 join 之前：join 超时不能让钩子活着走出本函数。 */
+    kh_unhook_both_now();
+
     if (g_khDispatchThread) {
-        WaitForSingleObject(g_khDispatchThread, 1000);
+        if (WaitForSingleObject(g_khDispatchThread, 1000) != WAIT_OBJECT_0)
+            kh_log("⚠ 调度线程 1s 内未退出（仍 CloseHandle，钩子已卸 ⇒ 不会再有回调）");
         CloseHandle(g_khDispatchThread); g_khDispatchThread = NULL;
     }
     if (g_khHookThread) {
-        WaitForSingleObject(g_khHookThread, 2000);
+        if (WaitForSingleObject(g_khHookThread, 2000) != WAIT_OBJECT_0)
+            kh_log("⚠ 钩子线程 2s 内未退出（仍 CloseHandle，钩子已卸 ⇒ 不会再有回调）");
         CloseHandle(g_khHookThread); g_khHookThread = NULL;
     }
     if (g_khServerThread) {
-        WaitForSingleObject(g_khServerThread, 5000);   /* 覆盖 bind 重试的 3s 睡眠 */
+        if (WaitForSingleObject(g_khServerThread, 5000) != WAIT_OBJECT_0)   /* 覆盖 bind 重试的 3s 睡眠 */
+            kh_log("⚠ 服务器线程 5s 内未退出（仍 CloseHandle）");
         CloseHandle(g_khServerThread); g_khServerThread = NULL;
     }
     if (g_khWatchdogThread) {
-        WaitForSingleObject(g_khWatchdogThread, 1000);
+        if (WaitForSingleObject(g_khWatchdogThread, 1000) != WAIT_OBJECT_0)
+            kh_log("⚠ 看护线程 1s 内未退出（仍 CloseHandle）");
         CloseHandle(g_khWatchdogThread); g_khWatchdogThread = NULL;
     }
+    /* ⛔ 二次摘钩：钩子线程若在「检查 g_khHook 为空」之后、SetWindowsHookEx 返回之前
+       被我们抢先摘掉，会在停服之后再挂回来（窗口极小但存在）。join 之后再过一遍，
+       保证本函数返回时两条钩子一定不在链上。 */
+    kh_unhook_both_now();
+
     kh_cli_shutdown_all();     /* 仍未退的客户端线程：只 shutdown，句柄归它们 */
     if (g_khWake) { CloseHandle(g_khWake); g_khWake = NULL; }
     if (g_khThreadReady) { CloseHandle(g_khThreadReady); g_khThreadReady = NULL; }

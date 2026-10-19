@@ -197,9 +197,18 @@ const rotatePatternPreview = (
 
     // 长按拖拽排序（替代 HTML5 draggable：UXP 下 draggable 会把轻微手抖识别为
     // 拖拽、吞掉 click，导致点击选中不跟手）。方案与 BrushHotkeySection 一致：
-    // 按下 300ms 无大幅移动才进入拖拽；期间 document 级 mousemove/mouseup 计算
-    // 落点并重排；didDragRef 抑制拖拽结束后的那次 click 误选中。
-    const didDragRef = useRef(false);
+    // 按下 300ms 无大幅移动才进入拖拽；期间 document 级 mousemove/mouseup 计算落点并重排。
+    //
+    // ⛔⛔ 拖拽只改「顺序」，绝不改「选中」（2026-10-19 用户报：多选后拖拽，选中框全丢）。
+    //   旧实现靠一个布尔 didDragRef 抑制拖拽尾随的那次 click —— 它有两个坑：
+    //   ① 谁先跑到谁把它清零（thumb 的 onClick 与容器的 onClick 都会读），第二个
+    //      读到的已是 false，于是那次 click 正常走 handlePatternSelect /
+    //      handleContainerClick，把「多选」塌成「单选」，甚至 onSelect(null) 清空；
+    //   ② 若 UXP 因 DOM 重排一次 click 都没发，标志就永久挂住，下一次正常点击被吞。
+    //   ⇒ 改成两件事：进入拖拽时快照选中态、落点后按 id 还原；抑制 click 用**时间窗**
+    //      （只读不清零，天然可重入，也不会影响窗口外的正常点击）。
+    const dragSelRef = useRef<{ single: string | null; multi: Set<string>; last: string | null } | null>(null);
+    const suppressClickUntilRef = useRef(0);
     const pressStartRef = useRef<{ x: number; y: number } | null>(null);
     const pressTimerRef = useRef<number | null>(null);
     const [dragIndex, setDragIndex] = useState<number | null>(null);
@@ -387,7 +396,12 @@ const rotatePatternPreview = (
 
     // ---------------- 长按拖拽排序（图案预设） 开始 ----------------
     const startThumbPress = (e: React.MouseEvent, index: number) => {
-        didDragRef.current = false;
+        // 快照选中态：拖拽是「排序」动作，不是「选择」动作 —— 松手后按快照还原。
+        dragSelRef.current = {
+            single: selectedPattern,
+            multi: new Set(selectedPatterns),
+            last: lastClickedPattern,
+        };
         pressStartRef.current = { x: e.clientX, y: e.clientY };
         if (pressTimerRef.current != null) { clearTimeout(pressTimerRef.current); pressTimerRef.current = null; }
         pressTimerRef.current = window.setTimeout(() => {
@@ -395,7 +409,7 @@ const rotatePatternPreview = (
             setDropIndex(index);
             dragIndexRef.current = index;
             dropIndexRef.current = index;
-            didDragRef.current = true; // 进入拖拽：松开后不再触发单击选中
+            suppressClickUntilRef.current = Date.now() + 250; // 拖拽期间/落点的 click 一律忽略
         }, 300);
     };
 
@@ -444,7 +458,18 @@ const rotatePatternPreview = (
             setDropIndex(null);
             dragIndexRef.current = null;
             dropIndexRef.current = null;
-            if (from == null || to == null || from === to) { didDragRef.current = true; return; }
+            // 落点后紧跟的那次 click 落到容器/别的缩略图上都不许改选中。
+            suppressClickUntilRef.current = Date.now() + 250;
+            /* ⛔ 按「进入拖拽前的快照」还原选中态（含多选与 shift 起点）：
+               拖拽前选中的是哪些 id，落点后还是哪些 id —— 顺序变了、选中不变。 */
+            const snap = dragSelRef.current;
+            dragSelRef.current = null;
+            if (snap) {
+                setSelectedPattern(snap.single);
+                setSelectedPatterns(new Set(snap.multi));
+                setLastClickedPattern(snap.last);
+            }
+            if (from == null || to == null || from === to) return;
             // 基于当前 patterns 计算新的顺序，避免 setState 异步导致的顺序不一致
             const next = [...patterns];
             const [moved] = next.splice(from, 1);
@@ -453,7 +478,6 @@ const rotatePatternPreview = (
             PresetManager.savePatternPresets(next).catch(err => {
                 console.error('保存拖拽后的图案预设顺序失败:', err);
             });
-            didDragRef.current = true; // 抑制随后的单击选中
         };
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
@@ -1728,11 +1752,9 @@ const rotatePatternPreview = (
 
     // 处理点击空白区域取消选中
     const handleContainerClick = (event: React.MouseEvent) => {
-        // 拖拽排序结束后的 click 会落在容器上（mousedown/mouseup 的公共祖先），不得当作"点空白"
-        if (didDragRef.current) {
-            didDragRef.current = false;
-            return;
-        }
+        // 拖拽排序结束后的 click 会落在容器上（mousedown/mouseup 的公共祖先），不得当作"点空白"。
+        // ⛔ 只读时间窗、不清零：thumb 的 onClick 也读同一个窗，先到者不会把后到者的豁免吃掉。
+        if (Date.now() < suppressClickUntilRef.current) return;
         // 检查点击的是否是预设区域的空白部分
         if (event.target === event.currentTarget) {
             setSelectedPattern(null);
@@ -1794,8 +1816,8 @@ const rotatePatternPreview = (
                             onMouseMove={onThumbMove}
                             onMouseUp={endThumbPress}
                             onClick={(e) => {
-                                if (didDragRef.current) {
-                                    didDragRef.current = false;
+                                // 拖拽尾随的 click：只读时间窗（不清零），拦下但不改选中。
+                                if (Date.now() < suppressClickUntilRef.current) {
                                     e.stopPropagation();
                                     return;
                                 }

@@ -716,6 +716,79 @@ static DWORD WINAPI pump_thread(LPVOID arg)
     return 0;
 }
 
+/* ================================================================ 崩溃取证（0x013E） */
+/* 为什么必须加：2026-10-19 21:39 那场「关闭 PS 弹 Release 崩溃框」既没有 WER 的
+   Application Error（事件日志一条都没有），也没有 Adobe crashreporter 的
+   crwincrashlog（%LocalLow%\com.adobe.crashreporter\...\5fb7f128-* 里只剩一个
+   0 字节的 .session_38280.marker），pi8li.log 停在 21:39:12 的 HUD 行 ⇒
+   故障偏移无从得知，只能靠推断。
+
+   这里挂一层**最上层**未处理异常过滤器：写一份 minidump 到
+   %LOCALAPPDATA%\JWautofill\dumps\，然后**原样转交给前一个过滤器**
+   （PS/Adobe 自己的崩溃上报与「生成报告」对话框完全不受影响）。
+   dbghelp 在服务启动时（PS 主线程）加载 —— 绝不在异常上下文里 LoadLibrary。 */
+typedef struct JW_MEDIC {
+    DWORD              ThreadId;
+    EXCEPTION_POINTERS* ExceptionPointers;
+    BOOL               ClientPointers;
+} JW_MEDIC;
+typedef BOOL (WINAPI *fn_write_dump)(HANDLE, DWORD, HANDLE, int,
+                                     const void*, const void*, const void*);
+
+static fn_write_dump g_writeDump;
+static LPTOP_LEVEL_EXCEPTION_FILTER g_prevFilter;
+static volatile LONG g_crashGuard;
+static int g_crashInited;
+
+static LONG WINAPI jw_crash_filter(EXCEPTION_POINTERS* ep)
+{
+    /* ⛔ 只做一次：过滤器内部再抛异常时不重入，避免转储里套转储。 */
+    if (InterlockedCompareExchange(&g_crashGuard, 1, 0) == 0) {
+        const char* lad = getenv("LOCALAPPDATA");
+        if (lad && g_writeDump) {
+            char dir[MAX_PATH], path[MAX_PATH];
+            _snprintf(dir, sizeof(dir), "%s\\JWautofill\\dumps", lad);
+            dir[sizeof(dir) - 1] = 0;
+            CreateDirectoryA(dir, NULL);
+            _snprintf(path, sizeof(path), "%s\\crash-%lu-%lu.dmp", dir,
+                      (unsigned long)GetCurrentProcessId(),
+                      (unsigned long)GetTickCount());
+            path[sizeof(path) - 1] = 0;
+            HANDLE h = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                                   FILE_ATTRIBUTE_NORMAL, NULL);
+            if (h != INVALID_HANDLE_VALUE) {
+                JW_MEDIC mi;
+                mi.ThreadId = GetCurrentThreadId();
+                mi.ExceptionPointers = ep;
+                mi.ClientPointers = FALSE;
+                BOOL ok = g_writeDump(GetCurrentProcess(), GetCurrentProcessId(), h,
+                                      0 /* MiniDumpNormal：含全部线程栈 + 模块表 */,
+                                      &mi, NULL, NULL);
+                CloseHandle(h);
+                log_line("crash", "★未处理异常 code=0x%08X addr=%p ⇒ 转储 %s（%s）",
+                         ep && ep->ExceptionRecord ? (unsigned)ep->ExceptionRecord->ExceptionCode : 0u,
+                         ep && ep->ExceptionRecord ? ep->ExceptionRecord->ExceptionAddress : NULL,
+                         path, ok ? "ok" : "MiniDumpWriteDump 失败");
+            } else {
+                log_line("crash", "★未处理异常 ⇒ 转储创建失败 %s", path);
+            }
+        }
+    }
+    return g_prevFilter ? g_prevFilter(ep) : EXCEPTION_CONTINUE_SEARCH;
+}
+
+/* ⛔ 只能装一次：Reload 时 SetUnhandledExceptionFilter 会把「上一次的我们」当成
+   前一个过滤器，链成环 ⇒ 崩溃时自己调自己。 */
+static void crash_capture_install(void)
+{
+    if (g_crashInited) return;
+    g_crashInited = 1;
+    HMODULE m = LoadLibraryA("dbghelp.dll");
+    if (m) g_writeDump = (fn_write_dump)(UINT_PTR)GetProcAddress(m, "MiniDumpWriteDump");
+    g_prevFilter = SetUnhandledExceptionFilter(jw_crash_filter);
+    log_line("crash", "崩溃取证已就绪（dbghelp=%s）", g_writeDump ? "ok" : "缺失");
+}
+
 /* ================================================================ 服务启停 */
 
 static volatile LONG g_started = 0;
@@ -743,6 +816,7 @@ static void services_start(void)
     }
 
     g_stopAll = 0;
+    crash_capture_install();    /* 0x013E：崩溃取证（幂等，Reload 不会重复挂链） */
     g_srvThread  = CreateThread(NULL, 0, server_thread, NULL, 0, NULL);
     g_pumpThread = CreateThread(NULL, 0, pump_thread, NULL, 0, NULL);
     /* M3：热键子系统（WS 18923 + WH_KEYBOARD_LL）。⛔ 放在最后起：
@@ -761,11 +835,16 @@ static void services_stop(void)
         shutdown(g_listen, SD_BOTH);
     }
     if (g_srvThread) {
-        WaitForSingleObject(g_srvThread, THREAD_WAIT_MS);
+        if (WaitForSingleObject(g_srvThread, THREAD_WAIT_MS) != WAIT_OBJECT_0) {
+            log_line("main", "⚠ 服务器线程 %dms 未退出（仍 CloseHandle ⇒ 停止标志已置，返回值不再使用）",
+                     THREAD_WAIT_MS);
+        }
         CloseHandle(g_srvThread); g_srvThread = NULL;
     }
     if (g_pumpThread) {
-        WaitForSingleObject(g_pumpThread, THREAD_WAIT_MS);
+        if (WaitForSingleObject(g_pumpThread, THREAD_WAIT_MS) != WAIT_OBJECT_0) {
+            log_line("main", "⚠ 泵线程 %dms 未退出（仍 CloseHandle）", THREAD_WAIT_MS);
+        }
         CloseHandle(g_pumpThread); g_pumpThread = NULL;
     }
     /* M3：热键子系统先于 WS 客户端表清理（它自己的 kh_cli_shutdown_all 会代劳）。 */
@@ -909,7 +988,31 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
         if (reason == DLL_PROCESS_ATTACH) {
             DisableThreadLibraryCalls(hinst);
             g_hSelf = hinst;
-        } else {
+        }
+        /* ⛔⛔ 0x013E：日志**先落**，再干活。
+           旧顺序是「services_stop() → log_line(DETACH)」⇒ 停服里任何一个 join 卡住
+           （或走 ADO 的异常卸载路径）时，日志里既没有 Unload 也没有 DETACH，
+           2026-10-19 21:39 那场崩溃现场就只剩一行 HUD 前台切换 —— 无法归因。
+           现在即使后续卡死/崩溃，也能证明「DETACH 到底有没有被调用」。 */
+        log_line("dll", "%s pid=%lu tid=%lu reserved=%p self=%s",
+                 reason == DLL_PROCESS_ATTACH ? "DLL_PROCESS_ATTACH" : "DLL_PROCESS_DETACH",
+                 (unsigned long)GetCurrentProcessId(),
+                 (unsigned long)GetCurrentThreadId(),
+                 reserved, self);
+
+        if (reason == DLL_PROCESS_DETACH) {
+            /* ⛔⛔ 0x013E：PS 侧的通知回调必须在这里注销。
+               旧实现只在 AutoPluginMain 的 "Unload" 分支调 pstool_uninstall()，
+               而 PS 存在「不发 Unload 直接 FreeLibrary」的路径（见下方 0x0117）；
+               更糟的是 pstool_uninstall() 自身因 s_basic 未赋值而恒 return（已修），
+               于是 PS 长期持有指向本模块的函数指针 ⇒ 卸载后一投递就跳进已释放内存。
+               reserved==NULL ⇒ FreeLibrary（PS 还活着）⇒ 注销是安全的、必须做；
+               reserved!=NULL ⇒ 进程正在退出，PS 的 suite 可能已经拆掉 ⇒ 只停线程。 */
+            if (!reserved) {
+                pstool_uninstall();
+            } else {
+                log_line("dll", "进程退出路径（reserved!=NULL）⇒ 跳过 PS suite 注销，只停线程");
+            }
             /* ⛔⛔ 0x0117：DETACH = 本模块即将被卸载映射。正常路径上 AutoPluginMain
                的 "Unload" 已经跑过 services_stop()（幂等，这里直接返回）；但若 PS
                没发 Unload 就 FreeLibrary（异常路径），WS 服务器 / pump / 热键四个
@@ -917,11 +1020,6 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
                0xC0000005）。这里补一次停干净（幂等：g_started 已为 0 时立即返回）。 */
             services_stop();
         }
-        log_line("dll", "%s pid=%lu tid=%lu self=%s",
-                 reason == DLL_PROCESS_ATTACH ? "DLL_PROCESS_ATTACH" : "DLL_PROCESS_DETACH",
-                 (unsigned long)GetCurrentProcessId(),
-                 (unsigned long)GetCurrentThreadId(),
-                 self);
         engine_dllmain(hinst, reason, reserved);
     }
     return TRUE;

@@ -63,6 +63,9 @@
 39 ⛔⛔ **键盘热键必须双路**（0x013C）：LL 钩子在 PS 前台时会整段收不到键（14:02 录制 17s 零回调零日志，非闸门拦）⇒ 加 `GetAsyncKeyState` 10ms 轮询兜底，与钩子共用录制状态机与热键表；钩子可吞键、轮询不能。判读日志 `按键通路：钩子 +N / 轮询 +M`，**只有轮询涨=键没进钩子链**。
 40 ⛔⛔ 钩子活性看**阳性证据**（0x013D）：`!g_khHook` 判不出「被摘/被压链尾」（句柄仍非空）⇒ 判据=`轮询有增量 ∧ 钩子零增量` ⇒ `g_khReinstall` 卸装重抢链头（3/10/30s 退避，**录制中不重装**）。`kh_dual_mark` **只由钩子路径写**，轮询自记账会吞掉 400ms 内第二次同键（连按 Shift+E 第二下失效）。
 41 ⛔⛔ unload 必须让引擎**哑火**（0x013D）：`services_stop` → `jwwh_set_engine_off(1)`（两个 detour 首行透传 + HUD 藏），`services_start` 清零复机；⛔ 不用 `jwwh_unhook()`（`g_stop=1` 不可逆，Reload 就没平滑）。⛔ 光标路径 `armed` 必须含 `tool_gate_ok()` —— 0x0138 撤的是断流门闩，不是工具闸门。
+42 ⛔⛔ **PS 侧回调必须真注销**（0x013F）：`pstool.c` 的 `s_basic` 曾只声明不赋值 ⇒ `pstool_uninstall()` 首行恒 return，5 个通知回调与 3 个 suite 从未释放，PS 长期持有指向本 DLL 的指针（`_unloaded` 同族崩溃）。判据：改动 pstool 后 grep `s_basic =` 必有赋值；uninstall 判据只看 `s_ctrlSuite`。
+43 ⛔⛔ **LL 钩子先摘再 join**（0x013F）：`keyhook_stop()` 必须在任何 join 之前 `kh_unhook_both_now()`（ExchangePointer 置空+Unhook），join 之后再补一次；绝不能靠钩子线程自己的退出路径去卸 —— 超时就把「回调地址在本模块」的活线程留给卸载后的系统。
+44 ⛔⛔ **DETACH 日志先落再停服**（0x013F）：停服里任何 join 卡住都会让日志既无 Unload 也无 DETACH（2026-10-19 21:39 现场）。排查关闭崩溃三步：`pi8li.log` 有无 `[dll] DLL_PROCESS_DETACH ... reserved=` → `%LOCALAPPDATA%\JWautofill\dumps\crash-*.dmp`（0x013F 起内置取证）→ WER `AppCrash_Photoshop*` 的 `故障模块`。
 
 ## 维护约定
 
