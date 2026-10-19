@@ -158,10 +158,14 @@ static DWORD WINAPI kh_client_thread(LPVOID param);
 static void kh_install_hook(void);
 static void kh_uninstall_hook(void);
 static void kh_poll_rebuild_watch(void);
+static void kh_hk_reset_for_record(void);
 
 /* --- 0x013C 双路按键：LL 钩子（主，可吞键）+ 键态轮询（兜底，不可吞键） ---
  * 轮询计数只用于日志取证：一次测试就能看出「钩子到底有没有被系统调用」。 */
 static volatile LONG g_khHookKeys, g_khPollKeys;
+/* 关注位表需要重建（由配置线程置位，钩子线程消费 ⇒ 所有 kh_key_to_token
+ * 调用都留在钩子线程内，避免其 static 返回缓冲被跨线程写花）。 */
+static volatile LONG g_khWatchDirty = 1;
 
 /* ================================================================ 小工具 */
 
@@ -449,7 +453,7 @@ static int kh_map_apply(const KhItem* items, int n)
         kh_log("混合模式热键已装载：内置 %d 条（Alt+Shift+<key> → 面板混合模式）", added);
     }
     kh_map_publish(map, mn);
-    kh_poll_rebuild_watch();
+    InterlockedExchange(&g_khWatchDirty, 1);      /* 表变了 ⇒ 钩子线程重建关注位 */
     return mn;
 }
 
@@ -1131,6 +1135,9 @@ static void kh_start_recording(void)
     if (!g_khHook) { kh_finish_recording(NULL); return; }
     g_khRecPending[0] = 0;
     InterlockedExchange(&g_khRecording, 1);
+    /* ⛔ 0x013D：录制期间必须撤掉 RegisterHotKey 抢占，否则按下的组合键
+       会被系统从输入队列摘走，钩子与轮询都看不见 ⇒ 永远录不到。 */
+    kh_hk_reset_for_record();
     kh_hlog("录制已开始，等待组合键…");
 }
 
@@ -1382,7 +1389,6 @@ static void kh_poll_edge(int vk)
             }
             if (haveCombo) {
                 memcpy(g_khRecPending, combo, sizeof(g_khRecPending));
-                kh_dual_mark(combo);
                 kh_hlog("重新捕获组合键（待确认·轮询）: %s", combo);
                 kh_send_recording_progress(combo);
             }
@@ -1390,7 +1396,6 @@ static void kh_poll_edge(int vk)
         }
         if (haveCombo) {
             memcpy(g_khRecPending, combo, sizeof(g_khRecPending));
-            kh_dual_mark(combo);
             kh_hlog("已捕获组合键（待确认·轮询）: %s", combo);
             kh_send_recording_progress(combo);
         }
@@ -1419,16 +1424,143 @@ static void kh_poll_edge(int vk)
     if (g_khActive && haveCombo) {
         KhItem hit;
         if (kh_map_lookup(combo, &hit)) {
-            kh_dual_mark(combo);
+            /* ⛔ 轮询**不**记账：kh_dual_mark 是给「钩子已消费这一击」留的指纹，
+               轮询若自己也写，400ms 内的第二次同键会被自己误判成影子而吞掉
+               （用户连按 Shift+E 切清除模式，第二下就没反应）。 */
             kh_hit_push(hit.combo);
         }
     }
+}
+
+/* ===== 0x013D RegisterHotKey 抢占通路（唯一能真正吞掉按键的一路）=====
+ *
+ * 为什么需要它：
+ *   0x013C 的轮询兜底让热键「能触发」了，但轮询**吞不了键** —— 用户实测：
+ *   套索模式按 Shift+E 切清除模式时，PS 同时把自己的橡皮擦循环触发了；
+ *   按 Alt+Shift+<key> 改面板混合模式时，活动图层的混合模式也跟着变。
+ *   根因是 LL 钩子在这些场景收不到键（0x013C 已证），而键态轮询只能"旁观"。
+ *
+ *   RegisterHotKey 是系统级独占：注册成功后该组合键**从输入队列里被摘走**，
+ *   任何窗口（包括 PS 自己）都收不到，只有本线程收到 WM_HOTKEY。这才叫真吞键。
+ *
+ * 约束与取舍：
+ *   1) RegisterHotKey 必须有修饰键（Ctrl/Alt/Shift/Win）⇒ 裸键（L、Num1…）
+ *      注册不了，仍由钩子/轮询承载（这两种本来就该让 PS 收到，语义一致）。
+ *   2) 注册是**全局独占**，所以只在 PS 前台时挂、失焦立刻全撤 —— 否则用户在
+ *      别的程序里按 Ctrl+Q / Shift+E 也会被吞掉。
+ *   3) 录制期间必须全撤，否则按下的组合键会被系统摘走，钩子与轮询都看不见。
+ *   4) 注册失败（已被别的程序占用）只留痕一次，自动退回钩子/轮询（不吞键）。
+ *
+ * ⛔ 全部状态只在钩子线程读写（kh_hk_sync / WM_HOTKEY 处理都在该线程）。 */
+#define KH_HK_MAX 64
+static int  g_khHkUsed[KH_HK_MAX];
+static char g_khHkCombo[KH_HK_MAX][KH_COMBO_MAX];
+static LONG g_khHkStamp = -1;
+static int  g_khHkFailLogged;
+
+/* "Ctrl+Alt+Shift+K" → (MOD_*, vk)。裸键返回 0（RegisterHotKey 不接受）。 */
+static int kh_combo_to_hotkey(const char* combo, int* mods, int* vk)
+{
+    int m = 0, v = 0;
+    const char* p = combo;
+    while (*p) {
+        char tok[32];
+        int n = 0;
+        while (*p && *p != '+' && n < (int)sizeof(tok) - 1) tok[n++] = *p++;
+        tok[n] = 0;
+        if (*p == '+') p++;
+        if (!tok[0]) continue;
+        if (_stricmp(tok, "Ctrl") == 0)       m |= MOD_CONTROL;
+        else if (_stricmp(tok, "Alt") == 0)   m |= MOD_ALT;
+        else if (_stricmp(tok, "Shift") == 0) m |= MOD_SHIFT;
+        else if (_stricmp(tok, "Win") == 0)   m |= MOD_WIN;
+        else {
+            for (int k = 8; k < 256; k++) {
+                const char* t = kh_key_to_token(k);
+                if (t && _stricmp(t, tok) == 0) { v = k; break; }
+            }
+        }
+    }
+    if (!v || !m) return 0;
+    *mods = m;
+    *vk = v;
+    return 1;
+}
+
+static void kh_hk_clear(void)
+{
+    for (int i = 0; i < KH_HK_MAX; i++) {
+        if (g_khHkUsed[i]) { UnregisterHotKey(NULL, i + 1); g_khHkUsed[i] = 0; }
+    }
+}
+
+/* 录制开始前调用（钩子线程）：先全撤，否则按下的组合键会被系统摘走。 */
+static void kh_hk_reset_for_record(void)
+{
+    kh_hk_clear();
+    g_khHkStamp = 0;
+}
+
+/* 同步注册集合：want = 布防 ∧ 非录制 ∧ 非熔断 ∧ PS 前台。 */
+static void kh_hk_sync(void)
+{
+    int want = (g_khArmed && !g_khRecording && !g_khSafeMode && !g_khSrvStop &&
+                kh_ps_foreground()) ? 1 : 0;
+    LONG stamp = want ? (LONG)(1000000 + g_khMapSeq) : 0;
+    if (stamp == g_khHkStamp) return;
+    g_khHkStamp = stamp;
+    kh_hk_clear();
+    if (!want) return;
+
+    KhItem snap[KH_MAX_ITEMS];
+    int n = 0;
+    EnterCriticalSection(&g_khMapLk);
+    KhItem* m = (KhItem*)g_khMap;
+    LONG cnt = g_khMapCount;
+    for (LONG i = 0; i < cnt && m && n < KH_MAX_ITEMS; i++) snap[n++] = m[i];
+    LeaveCriticalSection(&g_khMapLk);
+
+    int ok = 0, bad = 0, bare = 0;
+    for (int i = 0; i < n && ok < KH_HK_MAX; i++) {
+        int mods = 0, vk = 0;
+        if (!kh_combo_to_hotkey(snap[i].combo, &mods, &vk)) { bare++; continue; }
+        int id = ok + 1;
+        if (!RegisterHotKey(NULL, id, (UINT)(mods | MOD_NOREPEAT), (UINT)vk)) { bad++; continue; }
+        g_khHkUsed[id - 1] = 1;
+        _snprintf(g_khHkCombo[id - 1], KH_COMBO_MAX, "%s", snap[i].combo);
+        ok++;
+    }
+    kh_log("RegisterHotKey 接管 %d 条（裸键交给钩子/轮询 %d 条，被占用 %d 条）", ok, bare, bad);
+    if (bad && !g_khHkFailLogged) {
+        g_khHkFailLogged = 1;   /* 只提示一次，避免前台来回切换刷屏 */
+        kh_log("⚠️ 部分组合键已被其它程序注册为全局热键 ⇒ 这些键只能退回「不吞键」模式");
+    }
+}
+
+/* WM_HOTKEY 兑现（由钩子线程消息泵调用）。 */
+static void kh_hk_fire(int id)
+{
+    if (id < 1 || id > KH_HK_MAX || !g_khHkUsed[id - 1]) return;
+    const char* combo = g_khHkCombo[id - 1];
+    KhItem hit;
+    if (!kh_map_lookup(combo, &hit)) return;
+    kh_dual_mark(combo);          /* 轮询仍能读到键况 ⇒ 必须记账，防重复触发 */
+    kh_hit_push(hit.combo);
 }
 
 /* 一拍轮询。prev 表**无条件**刷新（包括撤防期），这样撤防→布防的切换
  * 不会凭旧状态造出假按下沿。 */
 static void kh_poll_step(void)
 {
+    /* 关注位表在钩子线程内重建（kh_key_to_token 的返回缓冲是 static）。 */
+    if (InterlockedExchange(&g_khWatchDirty, 0)) kh_poll_rebuild_watch();
+
+    /* 100ms 一次：按「布防 ∧ 非录制 ∧ 非熔断 ∧ PS 前台」同步注册集合。
+       注册/注销必须跟住前台切换，否则会在别的程序里吞掉用户按键。 */
+    static DWORD s_hkTick;
+    DWORD nowT = GetTickCount();
+    if ((DWORD)(nowT - s_hkTick) >= 100) { s_hkTick = nowT; kh_hk_sync(); }
+
     BYTE cur[256];
     for (int vk = 0; vk < 256; vk++)
         cur[vk] = (BYTE)((GetAsyncKeyState(vk) & 0x8000) ? 1 : 0);
@@ -1573,7 +1705,11 @@ static DWORD WINAPI kh_hook_thread(LPVOID param)
         /* 安装/卸载意图（轮询兜底：posts 只降延迟，丢消息也不死人） */
         if (InterlockedExchange(&g_khReinstall, 0)) {
             HHOOK cur = (HHOOK)g_khHook;
-            if (cur) kh_uninstall_hook();
+            /* 0x013D：录制中不重装 —— kh_uninstall_hook 会顺手取消录制，
+               而录制正是「钩子失活」时用户最需要轮询兜底撑住的场景。
+               挂回去的意图保留到录制结束后的下一轮。 */
+            if (cur && g_khRecording) InterlockedExchange(&g_khReinstall, 1);
+            else if (cur) kh_uninstall_hook();
         }
         int want = (g_khBound && g_khArmed && !g_khSrvStop) ? 1 : 0;
         HHOOK cur = (HHOOK)g_khHook;
@@ -1605,6 +1741,7 @@ static DWORD WINAPI kh_hook_thread(LPVOID param)
             }
             if (msg.message == WM_KH_RECSTART) InterlockedExchange(&g_khRecReq, 1);
             else if (msg.message == WM_KH_RECSTOP) InterlockedExchange(&g_khRecReq, 2);
+            else if (msg.message == WM_HOTKEY) kh_hk_fire((int)msg.wParam);
             /* WM_KH_INSTALL/UNINSTALL 仅作唤醒；安装意图由上面的轮询覆盖 */
         }
         /* 0x013C：键态轮询兜底（10ms 一拍）。钩子可能整段收不到键，
@@ -1615,6 +1752,7 @@ static DWORD WINAPI kh_hook_thread(LPVOID param)
 quit:
     kh_uninstall_hook();
     kh_uninstall_mouse_hook();
+    kh_hk_clear();
     kh_log("钩子线程已退出");
     return 0;
 }
@@ -1639,6 +1777,26 @@ static DWORD WINAPI kh_dispatch_thread(LPVOID param)
             if (hk != lastHK || pk != lastPK) {
                 kh_log("按键通路：钩子 +%ld / 轮询 +%ld（累计 钩子=%ld 轮询=%ld）",
                        hk - lastHK, pk - lastPK, hk, pk);
+                /* 0x013D：钩子失活自愈。
+                   ⛔ 现象（2026-10-19 实测）：累计 钩子 停在同一数值后再不动，而轮询
+                      每秒都有增量 —— 键明明在系统里，LL 钩子却一条都收不到。
+                      原因不是回调太慢（那样会留熔断日志），而是钩子被**静默摘除**
+                      或被更上层的钩子压在链尾（PS 自己的全局键盘管理器就会后装）。
+                      原看护判据是 `!g_khHook` —— 句柄非空就认为活着，于是永不重装。
+                   ⇒ 判据改成「轮询有货、钩子零货」这个**阳性证据**，卸载重装一次
+                      抢回链头（LL 钩子链是后装先调）。带指数退避，避免抖动。 */
+                if (hk == lastHK && pk > lastPK) {
+                    static DWORD s_forceAt;
+                    static int   s_forceN;
+                    DWORD cool = s_forceN <= 0 ? 3000 : (s_forceN == 1 ? 10000 : 30000);
+                    if (!s_forceAt || (DWORD)(nowS - s_forceAt) >= cool) {
+                        s_forceAt = nowS;
+                        s_forceN++;
+                        InterlockedExchange(&g_khReinstall, 1);
+                        kh_log("钩子失活（轮询 +%ld / 钩子 +0）⇒ 第 %d 次强制重装",
+                               pk - lastPK, s_forceN);
+                    }
+                }
                 lastHK = hk; lastPK = pk;
             }
             lastStat = nowS;

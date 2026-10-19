@@ -9,7 +9,7 @@ import {
   armBackspaceDelete, disarmBackspaceDelete, onBackspaceDelete,
   detectAllBrushTypes,
   setHotkeyArm, onHotkeyState, requestHotkeyStatus, requestKeyboardRepair, resolveRepairScriptPath,
-  loadPersistedArm, peekPersistedArm
+  loadPersistedArm, peekPersistedArm, isDaemonConnected
 } from './HotkeyBridge';
 import { DeleteIcon, RefreshIcon, DataRefreshIcon, RecordCircleIcon, StopSquareIcon, BrushToolIcon, SmudgeToolIcon, MixerToolIcon, CloneStampIcon } from '../styles/Icons';
 import BrushSelect, { BrushSelectOption } from './BrushSelect';
@@ -98,7 +98,10 @@ export default function BrushHotkeySection() {
   const [capturedCombo, setCapturedCombo] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
-  const [daemonConnected, setDaemonConnected] = useState(false);
+  // ⛔ 初值取 bridge 的同步连接态：`useState(false)` 会让每次挂载（含折叠后展开）
+  // 先渲染成「未连接」，等 onDaemonStatus 回放才翻转 —— 用户看到的就是
+  // 「开关从关闭快速变为打开」的穿帮。
+  const [daemonConnected, setDaemonConnected] = useState<boolean>(() => isDaemonConnected());
   // 热键布防状态（.8li 形态）：服务就绪 ≠ 热键生效。WS 连上仅代表
   // 「JWautofill Host」扩展在进程内跑着；钩子装不装由布防开关决定
   // （onHotkeyState 跃变广播 / hotkeyStatus 回帧驱动）。
@@ -737,7 +740,13 @@ export default function BrushHotkeySection() {
             ⚠️ .8li 形态（2026-10-17）：扩展在 PS 进程内承载、不可启停 ⇒ 开关语义
             从「起停」改为「布防/撤防热键」；未连接时点它给出启用扩展的引导。 */}
         <ToggleSwitch
-          checked={daemonConnected && hotkeyArmed}
+          /* ⛔ 0x013D：开关只表达「用户把热键打开/关掉了」，**不跟着连接态跳**。
+             旧写法 checked={daemonConnected && hotkeyArmed} 有两个后果：
+               ① WS 抖动重连 ⇒ 开关自己短暂关闭再打开（用户实测「运行中会短时间关闭」）；
+               ② 折叠后再展开，组件重挂载时 daemonConnected 仍是 false ⇒
+                  先渲染成关闭、连上才打开（用户实测「有种穿帮的感觉」）。
+             未连接的信息由上方状态条（warn 色 + 「未连接」）表达，不再由开关承担。 */
+          checked={hotkeyArmed}
           disabled={busy}
           onChange={() => {
             if (busy) return;

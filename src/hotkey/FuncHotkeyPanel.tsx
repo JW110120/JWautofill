@@ -4,7 +4,7 @@ import {
   cancelHotkeyRecording, onRecordProgress, setMainToggleCombo, setFocusLassoCombo,
   setFocusClearCombo, armBackspaceDelete, disarmBackspaceDelete, onBackspaceDelete,
   onHotkeyState, requestHotkeyStatus,
-  peekPersistedArm, getBlendHotkeyOn, setBlendHotkeyActive,
+  peekPersistedArm, getBlendHotkeyOn, setBlendHotkeyActive, isDaemonConnected,
 } from './HotkeyBridge';
 import { helpTexts } from '../constants/helpTexts';
 import { subscribeFocusMode, peekFocusMode } from '../utils/FocusModeBus';
@@ -42,7 +42,9 @@ type EditTarget = string | null;
 
 export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   const [entries, setEntries] = useState<HotkeyEntry[]>([]);
-  const [daemonConnected, setDaemonConnected] = useState(false);
+  // ⛔ 初值取 bridge 的同步连接态：`useState(false)` 会让每次挂载（含折叠后展开）
+  // 先渲染成「未连接」，等 onDaemonStatus 回放才翻转（同 BrushHotkeySection 的穿帮）。
+  const [daemonConnected, setDaemonConnected] = useState<boolean>(() => isDaemonConnected());
   // 热键布防态（.8li 形态）：撤防时录制会被 C 侧直接取消，见 startEdit 门禁。
   // ⛔⛔ 初值必须与笔刷热键分区对齐（peekPersistedArm() ?? true，2026-10-19 修）：
   //    本子面板是用户后来才打开的（右上角菜单），而 .8li 的 hotkeyState 只在**跃变**时

@@ -39,6 +39,9 @@
 #include "ws_core.h"        /* M3：RFC6455 原语与客户端会话循环（keyhook.c 共用） */
 #include "keyhook.h"        /* M3：WS 18923 键盘钩子/热键子系统 */
 
+/* 0x013D：引擎软闸（smooth_engine.c 导出）。Unload 哑火、Reload 复机。 */
+extern int jwwh_set_engine_off(int on);
+
 #define SMOOTH_PORT      18924
 #define LOG_MAX          (1024 * 1024)
 #define THREAD_WAIT_MS   3000
@@ -720,6 +723,8 @@ static volatile LONG g_started = 0;
 static void services_start(void)
 {
     if (InterlockedCompareExchange(&g_started, 1, 0) != 0) return;
+    /* 0x013D：Reload ⇒ 引擎复机（与 services_stop 的软停配对）。 */
+    jwwh_set_engine_off(0);
     InitializeCriticalSection(&g_sendLk);
     InitializeCriticalSection(&g_cliLk);
     for (int i = 0; i < MAX_CLI; i++) g_cliS[i] = INVALID_SOCKET;
@@ -773,7 +778,15 @@ static void services_stop(void)
     LeaveCriticalSection(&g_cliLk);
     /* ⛔ 引擎不在这里卸载：cmd 通道已不可用；PS 退出时 DETACH 有 repatch 兜底，
        「Unload 后继续驻留」正是 .8li 形态的意义（面板重连即恢复）。 */
-    log_line("main", "M2 服务已停止（引擎保持驻留，enabled=0 不改写）");
+    /* ⛔⛔ 0x013D：引擎必须**真的哑火**。
+       「保持驻留」的本意是线程与 Wintab 补丁不拆（Reload 零成本复机），
+       不是「继续平滑」。用户实测：UXP unload 之后铅笔/橡皮仍在被拉绳推着走 ——
+       因为两个 detour 还挂在原地址上，软停之前它们只认 enabled，
+       而 enabled 与「面板还在不在」并不是一回事。
+       ⇒ 置软闸：WTPacketsGet / GetCursorPos 原样透传，HUD 强制隐藏；
+         services_start() 里清零复机。 */
+    jwwh_set_engine_off(1);
+    log_line("main", "M2 服务已停止（引擎软停：detour 透传、线程保留待 Reload 复机）");
     if (g_cfg) Wr(I_ENABLED, 0);
 }
 

@@ -715,6 +715,13 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
       });
     void requestClearModeToggle('clear|' + token)
       .catch((e) => console.error('⚠️ 清除模式切换命令写入失败:', e));
+    // ⛔⛔ 0x013D 兜底：把工具钉回套索。
+    //   成因：Shift+E 一旦漏给 PS（钩子失活、走轮询兜底时**吞不了键**），PS 会按
+    //   自己的快捷键把工具循环到橡皮擦组；专注模式检到「工具不是套索」就关主开关，
+    //   于是用户看到「按 Shift+E 反而退出专注模式」。
+    //   吞键是主修复；这里是防御纵深 —— 命中即把工具切回套索，与 focusLasso 同款。
+    //   ⛔ 不在这里改主开关：用户要求「反复按 Shift+E 只在清除模式间来回切换」。
+    void selectLassoTool();
     return;
   }
   if (msg.action === 'blendMode') {

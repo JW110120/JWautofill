@@ -893,6 +893,18 @@ static void ctx_cache_put(HCTX h, const CALIB* c)
     g_ctxCache[slot].axisMax = c->axisMax; g_ctxCache[slot].axisMaxY = c->axisMaxY;
 }
 static volatile LONG g_state = 0;          /* CFG_I_STATE 的镜像（供 worker 上报） */
+/* ⛔⛔ 0x013D 引擎总闸（面板 unload ⇒ 立刻哑火）。
+ *
+ * 用户实测（2026-10-19）：「在 UXP 里 unload 之后，它还会平滑我的其他工具」。
+ * 原因是 Unload 路径只做了 `services_stop()`，而它按设计**不停引擎**
+ * （plugin_main.c 原注释：「引擎不在这里卸载…Unload 后继续驻留正是 .8li 形态的意义」），
+ * 于是 Wintab detour 与 GetCursorPos detour 还在原地址上，笔一按照旧推光标。
+ *
+ * 为什么不用 jwwh_unhook()：它会 join 四个线程、还原补丁、关日志，**不可逆**
+ * （g_stop 置 1，worker 不会自己回来），而面板关掉再打开（Reload）必须能恢复。
+ * ⇒ 用一个纯内存闸：detour 入口第一行判断，为 1 时原样转发、一个字节都不加工。
+ *   Reload 时清零即无缝复机，线程与补丁全部保留。 */
+static volatile LONG g_engineOff;
 static volatile LONG g_calls, g_packets, g_smoothed;
 /* 本 DLL 自身的模块句柄（DllMain 传入）。⛔ HUD 注册窗口类必须用它 ——
    GetModuleHandleW(NULL) 拿到的是宿主 exe（PS.exe）的句柄，类会注册到错误的
@@ -4289,6 +4301,8 @@ static void gp_step(int rx, int ry, DWORD now, int edge)
 static u64 det_GetCursorPos(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
 {
     (void)b; (void)c; (void)d; (void)e; (void)f;
+    /* 0x013D：面板 unload ⇒ 一个字节都不加工，原样转发。 */
+    if (g_engineOff) return (u64)se_real_GetCursorPos((LPPOINT)a);
     LPPOINT p = (LPPOINT)a;
     BOOL ok = se_real_GetCursorPos(p);
     InterlockedIncrement(&g_gcpCalls);
@@ -4311,7 +4325,13 @@ static u64 det_GetCursorPos(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
     }
     int stroke = btn || (g_penDown != 0) || ((LONG)g_mseTip != 0);
     int armed = 0;
-    if (g_wtctxIni[WTCTX_INI_CURSORINJECT] && g_cfg && g_cfg[CFG_I_ENABLED] && stroke)
+    /* ⛔⛔ 0x013D：**工具闸门必须参与光标路径**。
+       0x0138 撤掉的是「断流才接管」那道门闩（包流健康 ≠ PS 在用包画），
+       **不是**工具闸门 —— 本路径当时只判 enabled+按笔，于是铅笔/橡皮/画笔下
+       系统光标仍在被拉绳推着走，用户感知就是「平滑作用到了别的工具」。
+       判据与包路径同源：tool_gate_ok()（工具必须是套索 且 闸门心跳未过期）。 */
+    if (g_wtctxIni[WTCTX_INI_CURSORINJECT] && g_cfg && g_cfg[CFG_I_ENABLED] &&
+        stroke && tool_gate_ok())
         armed = 1;
     InterlockedExchange(&g_gcpArmed, armed);
     if (!armed) { s_gpOn = 0; s_gpBtn = 0; return (u64)ok; }
@@ -4535,6 +4555,8 @@ static u64 det_WTPacketsGet(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
     (void)d; (void)e; (void)f;
     static int  s_cfgTick;
     PFN_WTPacketsGet impl = (PFN_WTPacketsGet)g_impl;
+    /* 0x013D：面板 unload ⇒ 原样交还驱动数据，不改写一个字节、不留一个快照。 */
+    if (g_engineOff) return (u64)impl((HCTX)a, (int)b, (void*)c);
     int r = impl((HCTX)a, (int)b, (void*)c);            /* 先取包，再加工 */
     int rRaw = r;                                       /* 驱动**原始**返回（丢包前的「通路活着」凭据） */
     DWORD nowT = GetTickCount();
@@ -6611,7 +6633,7 @@ static DWORD WINAPI hud_thread(LPVOID param)
         int wantVisible = (wnd && mem && activeNow && gateOk && strokeOk && drawOk && fgOk
                            && canvasOk && ctOk && !deadNow && !bigJump && !lagSkip && ropeMode
                            && realOk
-                           && (hf & 1) && g_cfg && g_cfg[CFG_I_ENABLED]) ? 1 : 0;
+                           && (hf & 1) && g_cfg && g_cfg[CFG_I_ENABLED] && !g_engineOff) ? 1 : 0;
         if (!wantVisible) {
             if (wnd && IsWindowVisible(wnd)) ShowWindow(wnd, SW_HIDE);
             /* ⛔ 「HUD 没能显示」必须能一眼定位：把六个条件逐个打出来（节流 2 秒，
@@ -7535,6 +7557,25 @@ static void hud_stop(void)
                ③ 用户主观：在画布外浮窗上按一下再回画布，平滑**不再丢**；
                ④ 笔抬着时 `a=0`（不许把系统光标永久顶偏，否则点菜单会点歪）。 */
 __declspec(dllexport) int jwwh_version(void) { return 0x0138; }
+
+/* ⛔⛔ 0x013D：引擎软闸（面板 unload / reload 专用）。
+ *
+ * on=1 ⇒ WTPacketsGet 与 GetCursorPos 两个 detour **立刻原样透传**，HUD 强制隐藏；
+ *         线程、补丁、标定全部原样保留 ⇒ 再 on=0 时无需重新标定即可复机。
+ * ⛔ 绝不能用 jwwh_unhook() 代劳：它会 join 四个线程、还原 Wintab 字节、关日志，
+ *    且 `g_stop` 置 1 后 worker 不会自己回来 —— 面板关掉再打开（Reload）就彻底没平滑了。
+ *    这正是旧实现「Unload 后引擎继续驻留」与「停干净」之间缺的那一档。
+ */
+__declspec(dllexport) int jwwh_set_engine_off(int on)
+{
+    InterlockedExchange(&g_engineOff, on ? 1 : 0);
+    if (on) {
+        /* 立刻解掉光标路径的「按着」状态：否则复机时第一笔会被当成续笔，
+           输出点从上一笔的残留位置被绳拽过来（LNP 那个斜线开头）。 */
+        g_penDown = 0;
+    }
+    return (int)g_engineOff;
+}
 
 /* 兜底还原入口：守护进程的正常路径是经共享内存下令（worker 执行），
    此导出供外部工具（脚本/排障）在不需要共享内存时直接远程调用。 */
