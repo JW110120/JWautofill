@@ -134,3 +134,17 @@ armed/hookInstalled/safeMode/active/comboCount/recording/timeoutMs/budgetMs/stri
 
 ⛔ 排查口径：以后遇到「热键静默全失效」，先看 keyhook 日志有无
 `热键表已装载：配置 N 条 / 可匹配 M 条`（N>0 但 M=0 ⇒ 键名规范化问题，不是本 bug）。
+
+## N8. 0x013A（2026-10-19 下午）：**配置读写格式不闭环——保存即损坏**（用户实测三连：快捷键全失灵 / 已录条目加载后消失 / 混合模式开关秒弹回）
+
+**根因**：`kh_items_to_json` 自 M3 移植（aead9c0）起**漏写 JSON 数组括号**，输出是裸对象逗号拼接；而 `kh_parse_items` / `kh_read_config_file` 双双严格要求 `'['` 开头 ⇒ 每次 `kh_save_config` 落盘后紧跟的 `kh_reload` 必判「解析失败」保留旧表（**面板推的新条目永远进不了热键表**），broadcast 还带空 payload 把面板已录条目清空。用户磁盘上的 hotkeys.json 即 `{"id":...},{"id":...}` 无括号实况。三个症状一个根因：A 全失灵=表从未更新+启动读坏文件；B 条目消失=空 payload 广播；C 开关秒弹=回帧无 blendHotkey 条目。
+
+**修（0x013A，keyhook.c 五处 + plugin_main.c 一处）**：
+1. `kh_items_to_json` 输出标准 `[...]`（循环内为 `]`+NUL 预留 2 字节，`cap<4` 拒绝）；
+2. `kh_reload` 广播点与 `getConfig` 回帧点的**手工 `[ %s ]` 包裹同步拆除**（否则面板收到 `[[...]]` 被 `Array.isArray` 拒之门外＝另一个"条目全空"）；
+3. `kh_parse_items` + `kh_read_config_file` 放行旧版无括号格式（迁移桥：救回用户已录条目，否则面板会用空视图覆盖保存重演 2026-10-13「热键全没了」）；下次保存自动转标准格式，检测到旧格式时留痕日志；
+4. 附属（逻辑测试 T8 抓出的潜伏缺陷）：`json_str` 旧写法见 `"` 即停，把 `\"` 误判串尾截断字段 —— 改为成对拷贝转义序列由 `kh_unesc` 还原；对不含转义的现存输入零行为变化。
+
+**验证**：`analysis/_t_013a.c`（逐字拷贝五函数）18/18 过：标准/旧格式解析、往返一致（含 blendHotkey 标志条目）、空数组、垃圾截断拒绝、转义往返；`_t_013a_check.py` 用 python json 严证广播帧 `Array.isArray(payload)=true`；build.sh 零告警 + PiPL 往返一致。
+
+⛔ 排查口径：见到 `配置读取/解析失败` 与 `配置已写入` 交替振荡 = 本 bug 家族；先 `cat` 配置文件看有没有 `[`。**写文件的序列化器与读文件的解析器必须成对验收**（单测序列化产物必须能被自己的解析器读回——这次就是缺了这一条）。

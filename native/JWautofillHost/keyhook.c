@@ -157,6 +157,11 @@ static void kh_refresh_ps_pids(void);
 static DWORD WINAPI kh_client_thread(LPVOID param);
 static void kh_install_hook(void);
 static void kh_uninstall_hook(void);
+static void kh_poll_rebuild_watch(void);
+
+/* --- 0x013C 双路按键：LL 钩子（主，可吞键）+ 键态轮询（兜底，不可吞键） ---
+ * 轮询计数只用于日志取证：一次测试就能看出「钩子到底有没有被系统调用」。 */
+static volatile LONG g_khHookKeys, g_khPollKeys;
 
 /* ================================================================ 小工具 */
 
@@ -183,6 +188,17 @@ static void kh_hlog(const char* fmt, ...)
     g_khHlog[t % KH_HLOG_N][KH_HLOG_L - 1] = 0;
     InterlockedExchange(&g_khHlogTail, t + 1);          /* 发布 + 全屏障 */
     SetEvent(g_khWake);
+}
+
+/* 0x013C：钩子已消费的键留痕（轮询兜底据此去重，避免同一击触发两次）。
+ * 钩子在系统层面先于轮询看到按键，所以「先写后读」的顺序天然成立。 */
+static char g_khLastCombo[KH_COMBO_MAX];
+static volatile LONG g_khLastTick;
+static void kh_dual_mark(const char* combo)
+{
+    if (!combo || !combo[0]) return;
+    _snprintf(g_khLastCombo, KH_COMBO_MAX, "%s", combo);
+    InterlockedExchange(&g_khLastTick, (LONG)GetTickCount());
 }
 
 static void kh_w2u8(const wchar_t* w, char* u8, int cap)
@@ -433,6 +449,7 @@ static int kh_map_apply(const KhItem* items, int n)
         kh_log("混合模式热键已装载：内置 %d 条（Alt+Shift+<key> → 面板混合模式）", added);
     }
     kh_map_publish(map, mn);
+    kh_poll_rebuild_watch();
     return mn;
 }
 
@@ -489,8 +506,12 @@ static int kh_parse_items(const char* js, KhItem* out, int max)
 {
     const char* p = js;
     while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
-    if (*p != '[') return -1;
-    p++;
+    if (*p == '[') p++;
+    /* ⛔ 0x013A 迁移兼容（2026-10-19）：旧版 .8li 的 kh_items_to_json 漏写数组括号，
+       落盘文件是裸对象逗号拼接、首字符即 '{'。若严格拒之，用户已录热键将永久读不到
+       （面板随后还会用空视图覆盖保存，2026-10-13「热键全没了」同款事故）。
+       这里按隐式数组放行；下次保存（kh_save_config）即转为标准数组格式。 */
+    else if (*p != '{') return -1;
     int n = 0;
     while (*p && n < max) {
         while (*p && *p != '{' && *p != ']') p++;
@@ -529,11 +550,21 @@ static int kh_parse_items(const char* js, KhItem* out, int max)
     return n;
 }
 
-/* 把条目数组序列化为 payload 文本（字段集 = 面板 normalizeEntry 的四个）。 */
+/* 把条目数组序列化为**标准 JSON 数组**文本（字段集 = 面板 normalizeEntry 的四个）。
+ * ⛔⛔ 0x013A（2026-10-19）：本函数自 M3 移植（aead9c0）起漏写数组括号 ——
+ *   输出是裸对象逗号拼接，不是合法 JSON；而 kh_parse_items / kh_read_config_file
+ *   双双严格要求 '[' 开头 ⇒ 每次 kh_save_config 落盘后，紧跟的 kh_reload 必判
+ *   「解析失败」保留旧表（新条目永远进不了热键表），broadcast 还带着空 payload
+ *   把面板已录条目清空。用户实测三连：快捷键全失灵 / 已录条目加载后消失 /
+ *   混合模式开关开启后秒弹回。修法 = 输出标准数组；两个广播点（kh_reload 与
+ *   getConfig 回帧）原先手工包的 [ %s ] 同步拆除，否则面板会收到 [[...]]
+ *   被 Array.isArray 拒之门外（同样表现为条目全空）。 */
 static int kh_items_to_json(const KhItem* items, int n, char* out, int cap)
 {
     int o = 0;
     out[0] = 0;
+    if (cap < 4) return -1;                      /* 至少容得下 "[]\0" */
+    out[o++] = '[';
     for (int i = 0; i < n; i++) {
         char idE[96], cbE[128], acE[96], brE[256];
         kh_esc(items[i].id,     idE,  (int)sizeof(idE));
@@ -542,9 +573,11 @@ static int kh_items_to_json(const KhItem* items, int n, char* out, int cap)
         kh_esc(items[i].brush,  brE,  (int)sizeof(brE));
         int w = _snprintf(out + o, (size_t)(cap - o), "%s{\"id\":\"%s\",\"combo\":\"%s\",\"action\":\"%s\",\"brush\":\"%s\"}",
                           i ? "," : "", idE, cbE, acE, brE);
-        if (w < 0 || o + w >= cap - 2) { out[o] = 0; return -1; }
+        /* 循环内为收尾的 ']' + NUL 预留 2 字节 */
+        if (w < 0 || o + w + 2 > cap) { out[0] = 0; return -1; }
         o += w;
     }
+    out[o++] = ']';
     out[o] = 0;
     return o;
 }
@@ -590,7 +623,10 @@ static int kh_read_config_file(KhItem* out, int max)
     if (n >= 3 && (unsigned char)p[0] == 0xEF && (unsigned char)p[1] == 0xBB &&
         (unsigned char)p[2] == 0xBF) p += 3;                     /* 跳 BOM */
     while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
-    if (*p != '[') { free(buf); return -1; }
+    /* ⛔ 0x013A 迁移兼容：放行旧版无括号格式（首字符 '{'），详见 kh_parse_items 同款注释。
+       检测到旧格式时留痕 —— 下次保存会自动转成标准数组，该提示随之消失。 */
+    if (*p == '{') kh_log("⚠️ 配置为旧版无括号格式（0x013A 兼容读取，下次保存转标准数组）: %s", g_khCfgPath);
+    if (*p != '[' && *p != '{') { free(buf); return -1; }
     int cnt = kh_parse_items(p, out, max);
     free(buf);
     return cnt;
@@ -676,7 +712,9 @@ static void kh_reload(void)
         InterlockedExchange(&g_khItemCount, n);
         kh_log("热键表已装载：配置 %d 条 / 可匹配 %d 条（%s）", n, mn, g_khCfgPath);
     }
-    /* 广播 config（读文件原样序列化，带 path —— 面板 canPersistConfig 的判据） */
+    /* 广播 config（读文件原样序列化，带 path —— 面板 canPersistConfig 的判据）。
+       ⛔ 0x013A：kh_items_to_json 现已自带数组括号，这里**不能再包** [ %s ]，
+          否则面板收到 [[...]] 被 Array.isArray 拒之门外（条目全空）。 */
     KhItem fresh[KH_MAX_ITEMS];
     int fn = kh_read_config_file(fresh, KH_MAX_ITEMS);
     if (fn < 0) fn = 0;
@@ -689,7 +727,7 @@ static void kh_reload(void)
         char* msg = (char*)malloc(170 * 1024);
         if (msg) {
             _snprintf(msg, 170 * 1024,
-                      "{\"type\":\"config\",\"payload\":[%s],\"path\":\"%s\"}",
+                      "{\"type\":\"config\",\"payload\":%s,\"path\":\"%s\"}",
                       payload, pathEsc);
             kh_broadcast(msg);
             free(msg);
@@ -1002,6 +1040,11 @@ static int kh_ps_foreground(void)
     DWORD pid = 0;
     GetWindowThreadProcessId(fg, &pid);
     if (!pid) return 0;
+    /* ⛔ 0x013B：本进程必然就是 Photoshop —— 前台属于自己直接放行。
+       这一条**不依赖** g_khPidBuf（toolhelp 枚举）与看护线程刷新，消除了
+       「pid 表为空 / 尚未刷新 ⇒ 整机按键被静默放行」这个单点故障。
+       .8li 就活在 PS 进程内，"查不到自己"本来就不该发生。 */
+    if (pid == GetCurrentProcessId()) return 1;
     int idx = g_khPidIdx;
     int n = g_khPidCount;
     if (n <= 0) return 0;
@@ -1091,27 +1134,61 @@ static void kh_start_recording(void)
     kh_hlog("录制已开始，等待组合键…");
 }
 
+/* ===== 0x013B 键盘回调诊断（一次性/节流留痕，零 I/O）=====
+ *
+ * 症状（2026-10-19 用户报，三连）：热键始终失效 / 录制中按键录不到 / 已录条目加载后消失。
+ * 实证：整份 pi8li.log 里「热键命中」出现 0 次、「已捕获组合键」0 次，而
+ * 「录制已开始」出现多次 ⇒ 面板→C 侧指令通路正常、钩子也装着（日志有"键盘钩子已安装"），
+ * 唯独**按键从来没有被处理过**。同线程、同 hMod、同安装方式的鼠标 LL 钩子工作正常
+ * （`[mse]` 计数与断流期落笔推断都在跑）⇒ 回调机制本身没问题，问题必然在
+ * kh_dispatch 的前置闸门里。这里给每道闸门加"首次命中"留痕，
+ * 让用户按一次键就能定性，不再靠猜。
+ *
+ * 纪律同回调：只入队（kh_hlog），不打文件、不加锁。 */
+static volatile LONG g_khDiagIn, g_khDiagFg, g_khDiagSafe, g_khDiagHiBit;
+
 /* 钩子实际逻辑（外层 kh_proc 只负责计时熔断）。⛔ 全程零 I/O、零异常。 */
 static LRESULT kh_dispatch(int nCode, WPARAM wParam, LPARAM lParam)
 {
     HHOOK h = (HHOOK)g_khHook;
-    if (g_khSafeMode) return CallNextHookEx(h, nCode, wParam, lParam);
+    /* ① 回调是否真的被系统调用（首达即留痕；完全没有这一行 = 钩子没生效） */
+    if (InterlockedExchange(&g_khDiagIn, 1) == 0)
+        kh_hlog("★诊断：键盘回调首次进入（nCode=%d wParam=%u）", nCode, (unsigned)wParam);
+
+    if (g_khSafeMode) {
+        if (InterlockedExchange(&g_khDiagSafe, 1) == 0)
+            kh_hlog("★诊断：按键被熔断闸门整体放行（safeMode=1；见上方熔断日志）");
+        return CallNextHookEx(h, nCode, wParam, lParam);
+    }
     if (nCode < 0) return CallNextHookEx(h, nCode, wParam, lParam);
 
     int msg = (int)wParam;
     if (msg != WM_KEYDOWN && msg != WM_SYSKEYDOWN)
         return CallNextHookEx(h, nCode, wParam, lParam);
 
-    /* 焦点不在 Photoshop ⇒ 放行（用户在别的程序里打字不受影响）。 */
-    if (!kh_ps_foreground()) return CallNextHookEx(h, nCode, wParam, lParam);
+    /* 0x013C：钩子通路计数（诊断用，调度线程按秒打差分）。 */
+    InterlockedIncrement(&g_khHookKeys);
 
     KBDLLHOOKSTRUCT* k = (KBDLLHOOKSTRUCT*)lParam;
     int vk = (int)k->vkCode;
     DWORD flags = k->flags;
-    if (flags & (1u << 30))                            /* 系统自动重复 ⇒ 忽略 */
-        return CallNextHookEx(h, nCode, wParam, lParam);
+    /* ⛔⛔ 0x013B：旧的 `flags & (1u<<30) ⇒ 放行` **没有任何依据** ——
+       KBDLLHOOKSTRUCT.flags（LLKHF_*）只定义低字节（0x01/0x02/0x10/0x20/0x80），
+       bit30 是未定义位；某些键盘驱动 / 远程输入栈 / KVM 会置高位，
+       一旦置位就等于**整机所有按键被静默放行**（录制与热键同时全失灵且零日志，
+       与用户实测完全一致）。LL 钩子本来就收不到自身产生的自动重复事件，
+       这条过滤纯属多余。现改为只观测不拦（首次留痕）。 */
+    if (flags & (1u << 30)) {
+        if (InterlockedExchange(&g_khDiagHiBit, 1) == 0)
+            kh_hlog("★诊断：按键带 flags 高位 0x%08lX（旧版会整体放行，现已忽略）",
+                    (unsigned long)flags);
+    }
 
-    /* ===== 录制状态机（两段式）===== */
+    /* ===== 录制状态机（两段式）=====
+       ⛔⛔ 0x013B：录制分支**前移到前台判定之前**。录制是面板显式发起的短会话
+       （Esc 取消 / 关面板即取消 / 面板侧有超时），把它挂在「前台必须是 PS」上
+       等于给主链路埋了单点故障：前台判定一旦算错，用户连录都录不了，
+       而面板只会显示"按下组合键…"，完全无从排查。 */
     if (g_khRecording) {
         if (vk == 0x1B) {                              /* Esc 取消（两阶段通用） */
             kh_hlog("录制取消 (Esc)");
@@ -1133,6 +1210,7 @@ static LRESULT kh_dispatch(int nCode, WPARAM wParam, LPARAM lParam)
                 char recap[KH_COMBO_MAX];
                 if (kh_build_combo(vk, recap, (int)sizeof(recap))) {
                     memcpy(g_khRecPending, recap, sizeof(g_khRecPending));
+                    kh_dual_mark(recap);
                     kh_hlog("重新捕获组合键（待确认）: %s", recap);
                     kh_send_recording_progress(recap);
                 }
@@ -1141,10 +1219,29 @@ static LRESULT kh_dispatch(int nCode, WPARAM wParam, LPARAM lParam)
             char combo[KH_COMBO_MAX];
             if (kh_build_combo(vk, combo, (int)sizeof(combo))) {
                 memcpy(g_khRecPending, combo, sizeof(g_khRecPending));
+                kh_dual_mark(combo);
                 kh_hlog("已捕获组合键（待确认）: %s", combo);
                 kh_send_recording_progress(combo);
             }
             return CallNextHookEx(h, nCode, wParam, lParam);
+        }
+        return CallNextHookEx(h, nCode, wParam, lParam);
+    }
+
+    /* 焦点不在 Photoshop ⇒ 放行（用户在别的程序里打字不受影响）。
+       0x013B：判定失败**必须留痕** —— 这是「按下没任何反应」的头号嫌疑点：
+       若前台窗口的 pid 不在 g_khPidBuf（例如 UXP 面板浮成独立进程窗口、
+       或 pid 表为空），整机按键都会被静默放行，录制与热键同时全失灵。 */
+    if (!kh_ps_foreground()) {
+        static DWORD s_lastFgLog;
+        DWORD nowT = GetTickCount();
+        if (InterlockedExchange(&g_khDiagFg, 1) == 0 || (DWORD)(nowT - s_lastFgLog) >= 2000) {
+            s_lastFgLog = nowT;
+            HWND fg = GetForegroundWindow();
+            DWORD fp = 0;
+            if (fg) GetWindowThreadProcessId(fg, &fp);
+            kh_hlog("★诊断：前台判定失败 ⇒ 放行 vk=0x%02X（fgPid=%lu 本pid=%lu 表内=%d）",
+                    vk, (unsigned long)fp, (unsigned long)GetCurrentProcessId(), (int)g_khPidCount);
         }
         return CallNextHookEx(h, nCode, wParam, lParam);
     }
@@ -1173,6 +1270,7 @@ static LRESULT kh_dispatch(int nCode, WPARAM wParam, LPARAM lParam)
         if (kh_build_combo(vk, combo, (int)sizeof(combo))) {
             KhItem hit;
             if (kh_map_lookup(combo, &hit)) {
+                kh_dual_mark(combo);
                 kh_hit_push(hit.combo);
                 return 1;                              /* 吞掉：PS 不再收到该组合键 */
             }
@@ -1208,6 +1306,145 @@ static LRESULT CALLBACK kh_proc(int nCode, WPARAM wParam, LPARAM lParam)
     return result;
 }
 
+/* ===== 0x013C 键态轮询兜底 =====
+ *
+ * 为什么需要第二条路：
+ *   2026-10-19 实测日志（pi8li.log）铁证：13:59 段钩子回调正常打印
+ *   「★诊断：键盘回调首次进入」并逐键留痕，但 14:00:26 / 14:02:21 两次
+ *   「录制已开始」之后的按键**一条回调都没有** —— 键根本没进 LL 钩子链
+ *   （不是被闸门拦：拦了会留痕）。LL 钩子可能被更上层的钩子吞、被
+ *   LowLevelHooksTimeout 跳过、或被输入栈绕过；而 GetAsyncKeyState 读的是
+ *   窗口站键态，**不经过任何钩子链**，所以再给一条与钩子完全解耦的通路。
+ *
+ * 分工：
+ *   - LL 钩子 = 主通路，命中即吞键（不穿透给 PS）。
+ *   - 轮询   = 兜底通路，只触发不吞键；两者都活时由 kh_dual_mark 去重。
+ *   - 轮询跑在钩子线程内 ⇒ 与钩子共享 g_khRecording/g_khRecPending 状态机，
+ *     同一线程访问，无需任何锁。
+ * ⛔ 纪律同回调：O(1)、无锁、无文件 I/O。
+ */
+static BYTE g_khPollWatch[256];
+static volatile LONG g_khPollWatchAll;
+static BYTE g_khPollPrev[256];
+
+/* 关注位表：只轮询「热键表里真正出现过的键 + 修饰键/Enter/Esc/退格」。
+ * 认不出的键名 ⇒ 置 all 退回全量轮询（宁多不漏）。 */
+static void kh_poll_rebuild_watch(void)
+{
+    BYTE w[256];
+    memset(w, 0, sizeof(w));
+    w[0x11] = w[0x12] = w[0x10] = w[0x5B] = w[0x5C] = 1;   /* Ctrl/Alt/Shift/Win */
+    w[0x0D] = w[0x1B] = w[0x08] = 1;                       /* Enter / Esc / 退格 */
+    int all = 0;
+    EnterCriticalSection(&g_khMapLk);
+    KhItem* m = (KhItem*)g_khMap;
+    LONG n = g_khMapCount;
+    for (LONG i = 0; i < n && m; i++) {
+        const char* c = m[i].combo;
+        if (!c[0]) continue;
+        const char* plus = strrchr(c, '+');
+        const char* tok = plus ? plus + 1 : c;
+        int hit = 0;
+        for (int vk = 8; vk < 256 && !hit; vk++) {
+            const char* t = kh_key_to_token(vk);
+            if (t && _stricmp(t, tok) == 0) { w[vk] = 1; hit = 1; }
+        }
+        if (!hit) all = 1;
+    }
+    LeaveCriticalSection(&g_khMapLk);
+    memcpy((void*)g_khPollWatch, w, sizeof(w));
+    InterlockedExchange(&g_khPollWatchAll, all);
+}
+
+/* 单键按下沿（轮询专用）：与钩子共用同一套状态机、同一张热键表。 */
+static void kh_poll_edge(int vk)
+{
+    char combo[KH_COMBO_MAX];
+    int haveCombo = kh_build_combo(vk, combo, (int)sizeof(combo));
+
+    /* 去重：钩子已消费同一组合键（≤400ms）⇒ 本次是同一击的影子。 */
+    if (haveCombo &&
+        (DWORD)(GetTickCount() - (DWORD)g_khLastTick) <= 400 &&
+        _stricmp(g_khLastCombo, combo) == 0)
+        return;
+
+    if (g_khRecording) {
+        if (vk == 0x1B) { kh_hlog("录制取消 (Esc·轮询)"); kh_finish_recording(NULL); return; }
+        if (vk == 0x11 || vk == 0x12 || vk == 0x10 || vk == 0x5B || vk == 0x5C) return;
+        if (vk == 0x08) return;
+        if (g_khRecPending[0]) {
+            if (vk == 0x0D) {
+                char c[KH_COMBO_MAX];
+                memcpy(c, g_khRecPending, sizeof(c));
+                kh_hlog("录制确认 (Enter·轮询): %s", c);
+                kh_finish_recording(c);
+                return;
+            }
+            if (haveCombo) {
+                memcpy(g_khRecPending, combo, sizeof(g_khRecPending));
+                kh_dual_mark(combo);
+                kh_hlog("重新捕获组合键（待确认·轮询）: %s", combo);
+                kh_send_recording_progress(combo);
+            }
+            return;
+        }
+        if (haveCombo) {
+            memcpy(g_khRecPending, combo, sizeof(g_khRecPending));
+            kh_dual_mark(combo);
+            kh_hlog("已捕获组合键（待确认·轮询）: %s", combo);
+            kh_send_recording_progress(combo);
+        }
+        return;
+    }
+
+    if (!kh_ps_foreground()) return;       /* 与钩子同语义：不在 PS 里就不响应 */
+
+    if (vk == 0x08 && g_khArmOn) {
+        SOCKET c = INVALID_SOCKET;
+        char owner[96];
+        EnterCriticalSection(&g_khArmLk);
+        c = g_khArmClient;
+        memcpy(owner, g_khArmOwner, sizeof(owner));
+        LeaveCriticalSection(&g_khArmLk);
+        if (c != INVALID_SOCKET) {
+            char m[160], ow[192];
+            kh_esc(owner, ow, (int)sizeof(ow));
+            _snprintf(m, sizeof(m), "{\"type\":\"backspaceDelete\",\"owner\":\"%s\"}", ow);
+            kh_hlog("退格解绑请求（轮询） -> %s", owner);
+            kh_out_push(c, m);
+        }
+        return;
+    }
+
+    if (g_khActive && haveCombo) {
+        KhItem hit;
+        if (kh_map_lookup(combo, &hit)) {
+            kh_dual_mark(combo);
+            kh_hit_push(hit.combo);
+        }
+    }
+}
+
+/* 一拍轮询。prev 表**无条件**刷新（包括撤防期），这样撤防→布防的切换
+ * 不会凭旧状态造出假按下沿。 */
+static void kh_poll_step(void)
+{
+    BYTE cur[256];
+    for (int vk = 0; vk < 256; vk++)
+        cur[vk] = (BYTE)((GetAsyncKeyState(vk) & 0x8000) ? 1 : 0);
+
+    int armed = (g_khArmed && !g_khSafeMode && !g_khSrvStop) ? 1 : 0;
+    int all = (g_khRecording || g_khPollWatchAll) ? 1 : 0;
+    for (int vk = 7; vk < 256; vk++) {
+        BYTE p = g_khPollPrev[vk];
+        g_khPollPrev[vk] = cur[vk];
+        if (!armed || !cur[vk] || p) continue;
+        if (!all && !g_khPollWatch[vk]) continue;
+        InterlockedIncrement(&g_khPollKeys);
+        kh_poll_edge(vk);
+    }
+}
+
 static void kh_install_hook(void)
 {
     if (g_khHook) return;
@@ -1223,7 +1460,7 @@ static void kh_install_hook(void)
         return;
     }
     InterlockedExchangePointer((PVOID*)&g_khHook, h);
-    kh_log("键盘钩子已安装（WH_KEYBOARD_LL，hMod=自身 DLL）");
+    kh_log("键盘钩子已安装（WH_KEYBOARD_LL，hMod=0x%p）", (void*)(UINT_PTR)g_hSelf);
 }
 
 static void kh_uninstall_hook(void)
@@ -1370,7 +1607,10 @@ static DWORD WINAPI kh_hook_thread(LPVOID param)
             else if (msg.message == WM_KH_RECSTOP) InterlockedExchange(&g_khRecReq, 2);
             /* WM_KH_INSTALL/UNINSTALL 仅作唤醒；安装意图由上面的轮询覆盖 */
         }
-        MsgWaitForMultipleObjects(0, NULL, FALSE, 100, QS_ALLINPUT);
+        /* 0x013C：键态轮询兜底（10ms 一拍）。钩子可能整段收不到键，
+           这条通路不经过任何钩子链，是热键与录制的最低保障。 */
+        kh_poll_step();
+        MsgWaitForMultipleObjects(0, NULL, FALSE, 10, QS_ALLINPUT);
     }
 quit:
     kh_uninstall_hook();
@@ -1385,8 +1625,24 @@ static DWORD WINAPI kh_dispatch_thread(LPVOID param)
     (void)param;
     kh_log("调度线程已启动（热键广播/出站代发/日志代打）");
     LONG lastDrops = 0;
+    LONG lastHK = 0, lastPK = 0;
+    DWORD lastStat = GetTickCount();
     while (!g_khStop) {
         WaitForSingleObject(g_khWake, 20);
+
+        /* 0x013C：双路按键差分（每秒最多一条，仅有增量时打）。
+           判读口径：只有「轮询 +N」而「钩子 +0」= 键没进 LL 钩子链；
+           两条都涨 = 钩子正常。 */
+        DWORD nowS = GetTickCount();
+        if ((DWORD)(nowS - lastStat) >= 1000) {
+            LONG hk = g_khHookKeys, pk = g_khPollKeys;
+            if (hk != lastHK || pk != lastPK) {
+                kh_log("按键通路：钩子 +%ld / 轮询 +%ld（累计 钩子=%ld 轮询=%ld）",
+                       hk - lastHK, pk - lastPK, hk, pk);
+                lastHK = hk; lastPK = pk;
+            }
+            lastStat = nowS;
+        }
 
         /* ① 钩子日志代打 */
         for (;;) {
@@ -1977,8 +2233,10 @@ static int kh_handle_message(SOCKET s, const char* js)
             kh_items_to_json(items, n, payload, 160 * 1024);
             kh_cfg_snapshot_u8(pathNow, 512);
             kh_esc(pathNow, pathEsc, (int)sizeof(pathEsc));
+            /* ⛔ 0x013A：括号已由 kh_items_to_json 产出，同 kh_reload 广播点，
+               这里再包一层就是 [[...]]，面板直接判空。 */
             _snprintf(msg, 170 * 1024,
-                      "{\"type\":\"config\",\"payload\":[%s],\"path\":\"%s\"}",
+                      "{\"type\":\"config\",\"payload\":%s,\"path\":\"%s\"}",
                       payload, pathEsc);
             kh_send_to(s, msg);
         }
@@ -2167,6 +2425,19 @@ void keyhook_start(void)
 
     kh_load_cfg_store();
     kh_refresh_ps_pids();
+    /* 0x013B：启动即留痕 —— 前台判定依赖的 pid 表是否可用，一眼可见。
+       （若这里 n=0，旧实现的 kh_ps_foreground 会恒 0 ⇒ 整机按键全部放行。） */
+    {
+        HWND fg = GetForegroundWindow();
+        DWORD fp = 0;
+        if (fg) GetWindowThreadProcessId(fg, &fp);
+        kh_log("psPid 表：%d 个 photoshop.exe（本进程=%lu；此刻前台 fgPid=%lu）",
+               (int)g_khPidCount, (unsigned long)GetCurrentProcessId(), (unsigned long)fp);
+    }
+    InterlockedExchange(&g_khDiagIn, 0);
+    InterlockedExchange(&g_khDiagFg, 0);
+    InterlockedExchange(&g_khDiagSafe, 0);
+    InterlockedExchange(&g_khDiagHiBit, 0);
 
     /* 钩子线程先就绪（它的消息队列是 install/record 指令的落点）。 */
     ResetEvent(g_khThreadReady);

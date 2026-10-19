@@ -398,7 +398,20 @@ int json_str(const char* js, const char* key, char* out, int cap)
     if (!p || *p != '"') return 0;
     p++;
     int i = 0;
-    while (*p && *p != '"' && i < cap - 1) out[i++] = *p++;
+    /* ⛔ 0x013A 附属修复（2026-10-19 逻辑测试 T8 抓出）：旧写法见到 '"' 就停，
+       把 \"（转义引号）误判为串尾 ⇒ 含引号/反斜杠的字段被截断（kh_unesc 随后
+       还会在半个转义对上产出乱码）。配置读取路径（kh_parse_items 每字段都走这里）
+       对用户录的异常 combo/笔刷名即是静默数据损坏。改为成对拷贝转义序列，
+       由调用方的 kh_unesc 统一还原；对不含转义的所有现存输入行为不变。 */
+    while (*p && *p != '"' && i < cap - 1) {
+        if (*p == '\\' && p[1]) {
+            if (i + 1 >= cap - 1) break;      /* 容量容不下整个转义对 ⇒ 截断 */
+            out[i++] = *p++;
+            out[i++] = *p++;
+        } else {
+            out[i++] = *p++;
+        }
+    }
     out[i] = 0;
     return 1;
 }

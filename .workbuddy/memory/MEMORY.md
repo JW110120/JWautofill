@@ -13,7 +13,7 @@
 ## 铁律速查
 
 **产物/构建**
-1 ⛔⛔ 提交=代码+日志+记忆一次提交，定稿才提交。
+1 ⛔⛔ **除非用户明确要求，禁止 `git add`/`commit`**（2026-10-19 用户重申：未测试前不提交，上次违规已上传远端）。改动+日志留在工作区，测试通过并经用户发话才提交；提交时=代码+日志+记忆一次提交。
 2 ⛔⛔ IPC 双防御：`toWire()` 一律 Math.round，原生 `double?`+Round（漏=整条消息被丢）。
 3 ⛔⛔ .8li：PiPL 头 10 字节；`'8664'` 导出名=C 字符串；版本走导出表；版本史多段共用一个 `/* */`，段间禁写 `*/`。
 4 ⛔ `CFG_NLONGS=58`：动槽位表 `plugin_main.c` 与 `smooth_engine.c` 同步改（不同步=静默截断）。
@@ -59,8 +59,10 @@
 36 ⛔⛔ 超 6s 用包外按钮电平+画布内+1.5s 内动过⇒tip=1（三条缺一不可，只加不减）。
 37 ⛔⛔ 补流交还驱动必须 `g_btnResync`（0x0137）：否则假落笔钉回原始坐标。
 38 ⛔⛔⛔ 「包流健康」≠「PS 在用包画」（0x0138 最大教训，jwwh-22732：包流 202/s 但 `rw` 卡 5938）。判据=`armed=笔按着`：cursorInject∧cfg[ENABLED]∧(mseDown∨VK_LBUTTON∨g_penDown∨g_mseTip)；画布宽判只定「坐标能不能喂」不定「要不要推」；笔抬着完全透传。验证=`[raw] gp=贴合/步数` 正常运笔也一直涨。
+39 ⛔⛔ **键盘热键必须双路**（0x013C）：LL 钩子在 PS 前台时会整段收不到键（14:02 录制 17s 零回调零日志，非闸门拦）⇒ 加 `GetAsyncKeyState` 10ms 轮询兜底，与钩子共用录制状态机与热键表，`kh_dual_mark` 同 combo ≤400ms 去重；钩子可吞键、轮询不能。判读日志 `按键通路：钩子 +N / 轮询 +M`，**只有轮询涨=键没进钩子链**。
 
 ## 维护约定
 
 超限先下沉 refs 再精简本文件。`scripts/`=沉淀工具（git 跟踪）；`analysis/`=草稿（gitignored）；`outputs/` 废止。
 2026-10-19 清收尾：Run 键 `JWautofillHotkeyDaemon`+`%LOCALAPPDATA%\JWautofill\daemon\` 已删（保留 smooth8li/configpath.txt）；native/ 四旧项目+analysis/+outputs/ 已删；备份 `../JWautofill-backup-20261019-pre-cleanup/`（715MB 核验）+回收站双保险。
+2026-10-19 用户口径：`PluginsStorage/PHSP/27/External/`=用户安装版数据、`.../Developer/`=测试数据，两者独立**不许合并**；Plug-ins 里的旧 .8li 直接覆盖、**不留备份**。
