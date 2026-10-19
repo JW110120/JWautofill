@@ -82,15 +82,19 @@ export interface LassoSmoothParams {
   /** 平滑强度 0–100（标准模式的主轴：越大越黏）。 */
   strength: number;
   /**
-   * 最大滞后距离 px。**三种模式统一的硬上限，同时也是拉绳的绳长**。
+   * 最大滞后距离 px。**拉绳模式的绳长**（2026-10-19 起标准/追笔模式的面板不再暴露此参数）。
    *  ⛔ 上限 100：与 PS 自家平滑一致，也与原生侧 RADIUS_PX_MAX 一致。
    *    旧的 40 会把强度调出来的滞后硬截断 ⇒ 「拉满也没感觉」。
    *  ⛔ 2026-10-13：原先还有一个「张力」滑杆，只在 15%~100% 之间缩放这个半径 ——
    *    两个参数改的是同一件事（圆周大小），用户实测后要求删除。现在一个参数一个语义。
+   *  ⛔⛔ 2026-10-19：标准/追笔模式下 toWire 固定下发 SMOOTH_RADIUS_MAX（见 toWire），
+   *    强度/追笔速度因此满量程生效；本字段在那些模式下只是「切到拉绳时恢复的绳长记忆」。
    */
   radius: number;
   /**
-   * 追笔「平滑力度」1–100（**显示值**，数值越大 = 平滑越强）。
+   * 追笔速度「平滑力度」1–100（**显示值**，数值越大 = 平滑越强）。
+   * ⚠️ 2026-10-19 标签「追笔」→「追笔速度」（用户要求，与模式名区分）；
+   *    数值方向不变（越大越强），帮助文案已同步解释「追赶越慢 = 越黏」。
    *
    * ⛔ 2026-10-14 重映射：原生侧的有效区间本来是 1–50
    *    （`vmax = 0.02 + t/100·3.0` ⇒ t=1 → 0.05 px/ms、t=50 → 1.52 px/ms，
@@ -102,7 +106,9 @@ export interface LassoSmoothParams {
    */
   catchUp: number;
   /**
-   * 拐角判定角度 0–90（**原生单位，面板不做任何映射**）。
+   * 保角下限（原「拐角」）判定角度 0–90（**原生单位，面板不做任何映射**）。
+   * ⚠️ 2026-10-19 标签改为「保角下限」（用户要求）：轨迹相邻两段的**转折角**超过
+   *    该值即判定为拐角、自动减弱平滑以保住尖角；数值越小 = 越容易触发保护。
    *
    * ⛔⛔ 2026-10-14 回退定案：这里曾短暂改成「保护范围」（显示 = 90 − 原生阈值，
    *    数值越大保护越广）。用户实测后明确要求回退 —— 「现在反而更加让人迷惑了」。
@@ -529,7 +535,12 @@ function toWire(p: LassoSmoothParams) {
         //   现在两端都设防：这里取整；守护进程侧 PenWire 也改用 `double?` 接收（第二道
         //   防线）。但**这道不能撤** —— 旧版 daemon 仍在野生环境里跑。
         strength: Math.round(p.strength),
-        radius: Math.round(p.radius),
+        // ⛔⛔ 2026-10-19：半径 = **拉绳模式的绳长**；标准/追笔模式面板已去掉该参数
+        //   （用户要求「一个模式一个参数」），这两个模式下固定下发 SMOOTH_RADIUS_MAX
+        //   当原生侧的硬上限 —— 否则隐藏的默认值（12px）会把强度/追笔速度的满量程
+        //   截断（τ(100)=250ms 在 500px/s 下势能 ≈125px，被 12px 一夹就「强度拉满没感觉」）。
+        //   ⚠️ 拉绳模式仍下发用户设定值（绳长 = 半径，语义不变）。
+        radius: p.mode === 'rope' ? Math.round(p.radius) : SMOOTH_RADIUS_MAX,
         catchUp: catchUpToNative(p.catchUp),
         cornerAngle: cornerToNative(p.cornerAngle),
         speedAdaptive: p.speedAdaptive,
@@ -718,6 +729,17 @@ export function getSmoothToolGate(): SmoothToolGate {
  *    负责记住 `penOn` 以便后续每次调参都同步推给笔通路；原始发送只认线格式。
  * ⛔ 必须整包带参数：早期只发 `{on}`，守护进程侧强度恒为默认 40、半径/模式/张力/
  *    追笔/拐角连槽位都没有 ⇒ 面板调参对笔平滑零作用（真机复现）。
+ *
+ * ⛔⛔ 2026-10-19：开关位置 = **用户意图**（penOn），不再由 WS 连接状态驱动。
+ *    起因（用户报）：WS 瞬断（.8li 忙碌/重连窗口，onclose → 1.5s 后重连）时
+ *    `connected` 翻 false，旧版开关判据 `connected && pen.enabled` 把开关
+ *    显示成「服务未启动」并翻到关位，几秒后重连又翻回来 —— 用户什么都没做，
+ *    开关自己跳了两下。现在：
+ *      · 开关显示 penOn（用户意图）：连接瞬断**不翻开关**，只影响状态条文案；
+ *      · 点击立即乐观更新 status.pen.enabled 并 emitStatus（不等回帧），
+ *        .8li 的 commit() 收到 penSmooth 会立刻广播一帧 smoothState 确认；
+ *      · 回帧**不再覆写 penOn**（见 handleLassoSmoothMessage）：.8li 的 enabled
+ *        唯一写入源就是本函数的指令流，两边同源不会失真。
  */
 export function setPenSmooth(on: boolean, p?: LassoSmoothParams): void {
   const intentChanged = penOn !== on;
@@ -730,9 +752,22 @@ export function setPenSmooth(on: boolean, p?: LassoSmoothParams): void {
   syncGateHeartbeat();
   send({ type: 'penSmooth', on, ...(p ? toWire(p) : {}) });
   /* 用户意图落盘（0x0123）：只在**开关真的变了**时写，避免心跳/调参把同一状态
-     反复刷盘。回帧恢复走的是 penOn 直接赋值（见 handleLassoSmoothMessage），
-     不会走这里，因此「原生说的状态」不会污染「用户意图」。 */
-  if (intentChanged) void persistSmoothOn(on);
+     反复刷盘。⛔ 2026-10-19 起回帧不再赋值 penOn（见 handleLassoSmoothMessage），
+     「用户意图」与「原生状态」因此彻底分离：前者只在这里写，后者只进 status.pen。 */
+  if (intentChanged) {
+    void persistSmoothOn(on);
+    // 乐观更新：点击即刻反馈（含未连接时的意图记录），回帧只做确认/纠正。
+    // ⚠️ 只动 pen.enabled 一个字段：其余诊断字段保持最后一帧的值，
+    //    状态条在断连宽限内正是靠它们继续显示上一状态（见 app.tsx 的宽限逻辑）。
+    status = { ...status, pen: { ...status.pen, enabled: on } };
+    emitStatus();
+  }
+}
+
+/** 开关的显示位置 = 用户意图（penOn）。⛔ 不要用 connected && pen.enabled 判「开没开」：
+ *  连接瞬断时那个判据会把开关翻到关位（2026-10-19 用户报的自动跳变）。 */
+export function isPenSmoothOn(): boolean {
+  return penOn;
 }
 
 /**
@@ -758,10 +793,16 @@ export function handleLassoSmoothMessage(msg: any): void {
   const penRaw = msg.pen;
   if (penRaw) {
     sawPenFrame = true;
-    // 记住套索平滑的真实开关：后续每次调参都要同步推给它（sendParams 里的 penOn 判据）。
-    // ⚠️ 对端不回 pen（旧版守护进程）时**不动** —— 不能把「不认识」当成「已关闭」，
-    //    否则会把一个版本过旧的问题显示成开关关了。
-    if (typeof penRaw.enabled === 'boolean') { penOn = penRaw.enabled; syncGateHeartbeat(); }
+    // ⛔⛔ 2026-10-19：**不再**用回帧的 enabled 覆写 penOn。
+    //    旧版在这里 `penOn = penRaw.enabled`，本意是「与原生真实状态对齐」，
+    //    实际制造了开关自动跳变：.8li 重启/重连后accept线程会先推一帧**重启前的
+    //    旧值**（enabled=false），面板收到就把开关翻到关位，随后 resend 重放
+    //    penOn=true、commit 再推一帧又翻回来 —— 用户什么都没做，开关跳了两下。
+    //    现在 penOn 只由**用户意图**驱动（setPenSmooth / restorePersistedPenSmooth）：
+    //    .8li 的 enabled 唯一写入源就是面板的 penSmooth 指令流（shutdown 入口已退役），
+    //    两边同源 ⇒ 不会失真；重连时 resendLassoSmoothing 负责把意图重放给新进程。
+    //    回帧仍然更新 status.pen（状态条文案/配色的数据源），只是不碰开关位置。
+    syncGateHeartbeat();
   }
   status = {
     ...status,

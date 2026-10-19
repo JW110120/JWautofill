@@ -2036,13 +2036,31 @@ sp-radio[disabled] {
 
 /* ---------- 拖拽 / 交换（dragging / drop-target） ---------- */
 
-/* 拖起态：半透明 + 抓取光标 */
+/* 拖起态：半透明 + 抓取光标 + **主色蓝边框**（2026-10-19 用户要求）。
+   ⛔ 为什么加蓝框：用户常常**直接长按**某个目标开始拖拽，而没有先单击选中它 ——
+   旧版拖起的行只有 50% 透明度，在深色主题上几乎看不出「哪个在被拖」，
+   而落点行却有蓝色虚线高亮，一冷一热对比失衡。
+   现在拖起的目标与「单选选中」同款主色蓝框（.selected / .thumb-selected 的
+   border-color），长按瞬间就能看清「我拖的是这一行」。
+   ⚠️ 只改 border-color，不动 opacity / cursor：半透明仍是「被拿起」的既有的
+   拖拽语义，蓝框负责「我是谁」，两者互补不冲突。
+   ⚠️ 描边宽度与各自的选中态一致（行容器 1px、方块 2px），box-sizing:
+      border-box 保证零位移；落点行的 2px 虚线不受影响（互斥类，不会同现）。 */
 .thumb-box.dragging,
 .preset-item.dragging,
 .hotkey-entry-row.dragging,
 .collapse-section.dragging {
   opacity: 0.5;
   cursor: grabbing;
+}
+.thumb-box.dragging,
+.preset-item.dragging {
+  border-color: var(--primary-color);
+  border-width: 2px;
+}
+.hotkey-entry-row.dragging,
+.collapse-section.dragging {
+  border-color: var(--primary-color);
 }
 
 /* 落点指示（border 虚线族）：缩略图/渐变预设等自带 1px border 的方块 */
@@ -2060,7 +2078,7 @@ sp-radio[disabled] {
 }
 
 /* ---------- 平滑参数盒（.border-panel-section.smooth-params）----------
-   平滑选项的参数区改用全仓统一的「带描边分区盒」= .border-panel-section
+   选区平滑的参数区改用全仓统一的「带描边分区盒」= .border-panel-section
    （原先自带一套 .param-group 的 margin/padding/border，与其它分区的视觉语言分叉）。
 
    盒与上方自绘 radio（.radio-trio-group）之间**恒 10px**：.radio-trio-group 自身

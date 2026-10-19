@@ -26,7 +26,8 @@ export type AppPanelState = {
   fillMode?: 'foreground' | 'pattern' | 'gradient';
   selectedGradient?: Gradient | null;
   /** 套索实时平滑：滤波参数（deepMerge 按字段合并，缺字段回落默认值）。
-   *  ⚠️ 开关**不在这里**：它是服务语义（开 = 拉起守护进程），由 smoothStatus.pen.enabled 驱动。 */
+   *  ⚠️ 开关**不在这里**：它是用户意图（LassoSmoothing 的 penOn，落盘在
+   *    settings/smooth-enabled.json），面板经 isPenSmoothOn() 读取。 */
   smoothParams?: LassoSmoothParams;
   /** 套索实时平滑分区的界面状态（可见性 / 两级折叠），属于界面偏好而非参数 */
   smoothOptionsVisible?: boolean;

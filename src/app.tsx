@@ -40,7 +40,7 @@ import {
   LassoSmoothMode, LassoSmoothParams, LassoSmoothStatus, PenSmoothStatus,
   pushLassoSmoothParams, onLassoSmoothStatus,
   initialLassoSmoothParams, setPenSmooth, setSmoothToolGate, getSmoothToolGate, noteToolReadOk,
-  restorePersistedPenSmooth,
+  restorePersistedPenSmooth, isPenSmoothOn,
   SMOOTH_RADIUS_MIN, SMOOTH_RADIUS_MAX,
   SMOOTH_CATCHUP_MIN, SMOOTH_CATCHUP_MAX,
 } from './lasso/LassoSmoothing';
@@ -279,6 +279,16 @@ class App extends React.Component<AppProps, AppState> {
     /** 平滑取包活跃度追踪（主状态条「平滑中断」检测；见 applySmoothStatus 内注释）。 */
     private lastPenPackets = -1;
     private lastPenFlowAt = 0;
+    /**
+     * 平滑连接**瞬断宽限**的计时（2026-10-19，见 SMOOTH_DISCONNECT_GRACE_MS）：
+     *  · smoothWasConnected —— 是否曾经连上过（冷启动不走宽限，直接报「服务未启动」）；
+     *  · smoothDisconnectedAt —— 本次断连的起始时刻（0 = 未断连/已恢复）；
+     *  · smoothDisconnectTimer —— 宽限到期的强制重渲染定时器（断连期间没有回帧，
+     *    不补这一脚，文案会永远停在宽限内的旧状态）。
+     */
+    private smoothWasConnected = false;
+    private smoothDisconnectedAt = 0;
+    private smoothDisconnectTimer: any = null;
     // ===== 快速蒙版巡检 =====
     // 复合根因（2026-09-10 定位）：
     //   ① checkMaskModes() 原先只写 this.isInQuickMask（实例字段）+ forceUpdate，
@@ -1027,6 +1037,10 @@ class App extends React.Component<AppProps, AppState> {
             //    等 .8li 下次收到通知重新接管；比留着一个冻结的错值诚实。
             if (!this.inProcGateOwned()) setSmoothToolGate(2);
         }
+        if (this.smoothDisconnectTimer) {
+            clearTimeout(this.smoothDisconnectTimer);
+            this.smoothDisconnectTimer = null;
+        }
         if (this.quickMaskTimer) {
             clearInterval(this.quickMaskTimer);
             this.quickMaskTimer = null;
@@ -1118,7 +1132,7 @@ class App extends React.Component<AppProps, AppState> {
     // （2026-10-14：外置守护进程 + 注入 DLL 的旧链路退役，改为 .8li 进程内插件。）
 
     /**
-     * 折叠/展开「平滑选项」分区。
+     * 折叠/展开「选区平滑」分区（section id 仍为 smoothOptions，持久化键不变）。
      * 与 toggleSelectionOptions 同构：折叠前先把分区内的原生控件隐藏掉，再让 React 卸载内容，
      * 最后补一次重排（UXP 下原生控件的坐标不随重排自动更新，会出现「残留数字」）。
      */
@@ -1146,13 +1160,18 @@ class App extends React.Component<AppProps, AppState> {
      * ⛔ 开关**永不禁用**（2026-10-12 真机事故：置灰 = 用户没有任何入口）：
      *    未连接（.8li 未加载）时点击 = 记下意图，penOn 会被 LassoSmoothing 记住，
      *    WS 建连后 resendLassoSmoothing 自动重放 ⇒ .8li 就绪后平滑自动跟上。
+     *
+     * ⛔⛔ 2026-10-19：开关位置 = **用户意图**（isPenSmoothOn），不再看 connected。
+     *    旧判据 `connected && pen.enabled` 在 WS 瞬断（.8li 忙碌/重连窗口）时会把
+     *    开关翻到关位并显示「服务未启动」，几秒后重连又翻回来 —— 用户报「开关偶尔
+     *    自动变成服务未启动状态」。现在连接状态只影响**状态条文案**（带 2.5s 宽限，
+     *    见 smoothStatusText），开关本身除非用户点击否则永不动。
      */
     toggleLassoSmooth() {
-        const st = this.state.smoothStatus;
-        // 「实际开着」必须同时看连接：模块崩溃/被卸时 pen.enabled 会残留 true
-        // （setLassoSmoothConnected(false) 刻意不复位它 —— 不能把「没连上」洗成「已关」）。
-        const effectivelyOn = st.connected && st.pen.enabled;
-        if (effectivelyOn) {
+        // 「实际开着」= 用户意图（penOn）。⛔ 不要用 st.connected && st.pen.enabled：
+        // 那正是 2026-10-19 修复的「瞬断时开关自己跳」根因；未连接时点击同样有效
+        // （意图被记住，WS 建连后 resendLassoSmoothing 自动重放）。
+        if (isPenSmoothOn()) {
             // 开着 ⇒ 关：只下发 off。⛔ 0x0118 不再双发 shutdown：
             // penSmooth(false) 内部就是 commit(0) → send_cmd(2) 撤钩，
             // 再发一次 disconnectSmoothDaemon()（shutdown）会被 changed
@@ -1201,15 +1220,18 @@ class App extends React.Component<AppProps, AppState> {
      *    它们是预置值，用户完全可以先调好再开开关。
      *
      * 归属（与 smooth_engine.c（.8li 内，原 wintab_hook.c）的 smooth_packets 分支一一对应，勿凭感觉改）：
-     *   半径 → 三种模式都用到（恒显示）
-     *   强度 / 拐角 / 速度适应 → 仅「标准」（拉绳与追笔都不读 Strength）
-     *   拉绳提示 → 仅「拉绳」；追笔 → 仅「追笔」
+     *   半径 → **仅「拉绳」**（2026-10-19 用户要求：标准/追笔去掉半径，一个模式一个参数；
+     *           标准/追笔模式下 toWire 固定下发 SMOOTH_RADIUS_MAX 当上限，不截断强度/追笔速度）
+     *   强度 / 保角下限 / 速度适应 → 仅「标准」（拉绳与追笔都不读 Strength）
+     *   追笔速度 → 仅「追笔」
+     *   拉绳提示 → 仅「拉绳」
      *
      * ⚠️ 拉绳提示（HUD）为什么也归到「拉绳」：它画的就是那根绳。标准/追笔模式下
      *    显示它等于给用户看一个「此刻根本不存在」的圈（2026-10-13 用户明确指出）。
      */
-    private smoothParamApplies(which: 'strength' | 'catchUp' | 'cornerAngle' | 'speedAdaptive' | 'leash'): boolean {
+    private smoothParamApplies(which: 'strength' | 'catchUp' | 'cornerAngle' | 'speedAdaptive' | 'leash' | 'radius'): boolean {
         const mode = this.state.smoothParams.mode;
+        if (which === 'radius') return mode === 'rope';
         if (which === 'leash') return mode === 'rope';
         if (which === 'catchUp') return mode === 'catchup';
         return mode === 'standard'; // strength / cornerAngle / speedAdaptive
@@ -1359,6 +1381,30 @@ class App extends React.Component<AppProps, AppState> {
     /** 把平滑模块（.8li）回报的平滑状态写进 state（渲染要读它，因此不能只写实例字段）。 */
     private applySmoothStatus(s: LassoSmoothStatus) {
         this.setState({ smoothStatus: s });
+        // ⛔⛔ 2026-10-19：连接瞬断宽限的计时（见 SMOOTH_DISCONNECT_GRACE_MS）。
+        //    WS 瞬断（.8li 忙碌/重连窗口，1.5s 后自动重连）时**不立刻**把状态条
+        //    翻成「服务未启动」——那正是用户报的「开关/状态条偶尔自动变成服务未启动」
+        //    的另一半（开关已改为意图语义，这里是文案侧）。宽限内用最后一帧的 pen
+        //    数据继续显示上一状态；超时仍断着才如实报告。
+        //    ⚠️ 冷启动（从未连上过）不走宽限：smoothWasConnected=false 时直接放行
+        //    「服务未启动」——那是「.8li 没装/没就绪」的真实提示，不该延迟。
+        if (s.connected) {
+            this.smoothWasConnected = true;
+            this.smoothDisconnectedAt = 0;
+            if (this.smoothDisconnectTimer) {
+                clearTimeout(this.smoothDisconnectTimer);
+                this.smoothDisconnectTimer = null;
+            }
+        } else if (this.smoothWasConnected && this.smoothDisconnectedAt === 0) {
+            this.smoothDisconnectedAt = Date.now();
+            // 宽限到期强制重渲染一次：断连期间没有回帧可达，
+            // 不补这一脚，文案会永远停在宽限内的旧状态（用户报「几秒后复原」
+            // 的反面——永不显示「服务未启动」，同样失真）。
+            this.smoothDisconnectTimer = setTimeout(() => {
+                this.smoothDisconnectTimer = null;
+                this.forceUpdate();
+            }, App.SMOOTH_DISCONNECT_GRACE_MS);
+        }
         // ⛔ 实时活跃度追踪（notify bar「平滑中断」检测的数据源）：
         //    packets 增长 = PS 还在从钩子取包。配合 snAge（快照年龄）可把三种
         //    状态分开：取包且快照新鲜 = 正在平滑；快照变老 = 正常停笔；
@@ -1378,6 +1424,15 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     /**
+     * 平滑连接是否处于**瞬断宽限**内（已连上过、刚断、未超时）。
+     * 宽限内状态条保持上一状态文案，避免 WS 重连窗口里的闪烁。
+     */
+    private smoothInDisconnectGrace(): boolean {
+        return this.smoothDisconnectedAt > 0 &&
+            Date.now() - this.smoothDisconnectedAt < App.SMOOTH_DISCONNECT_GRACE_MS;
+    }
+
+    /**
      * 套索平滑状态条文案（面板里唯一一条平滑状态行）。
      *
      * 判据优先级刻意如此：启动中 → 连接 → 协议不支持 → 开关 → 标定 → 注入 → 生效。
@@ -1391,8 +1446,15 @@ class App extends React.Component<AppProps, AppState> {
         //    `unsupported` 只说明「套索平滑协议」不通；旧版是**通过**那条探针的，
         //    必须靠 `penUnsupported` 才能如实说出「版本过旧」，否则会误导成「点了没反应」。
         if (!st.connected) {
-            // .8li 未加载/未监听 18924（PS 刚启动的窗口期，或模块没装进 Plug-ins）。
-            return '套索平滑：服务未启动';
+            // ⛔⛔ 2026-10-19：瞬断宽限（见 SMOOTH_DISCONNECT_GRACE_MS）。
+            //    已建立的连接刚断（.8li 忙碌/重连窗口，1.5s 内自动恢复）时，
+            //    用最后一帧的 pen 数据继续显示上一状态，不闪「服务未启动」；
+            //    超过宽限仍断着（或从未连上过）才如实报告。
+            if (!this.smoothInDisconnectGrace()) {
+                // .8li 未加载/未监听 18924（PS 刚启动的窗口期，或模块没装进 Plug-ins）。
+                return '套索平滑：服务未启动';
+            }
+            // 宽限内：落到下面的 pen 判定（数据是断连前最后一帧的真相）。
         }
         if (st.unsupported || st.penUnsupported) return '套索平滑：版本过旧（请更新 .8li 后重启 Photoshop）';
         if (!pen.enabled) return '套索平滑：关';
@@ -1456,7 +1518,10 @@ class App extends React.Component<AppProps, AppState> {
     private smoothBarTone(): string {
         const st = this.state.smoothStatus;
         const pen = st.pen;
-        if (!st.connected || st.unsupported || st.penUnsupported) return 'notify-bar-warn';
+        // 与 smoothStatusText 同款宽限：瞬断期间保持上一档配色，不闪橙
+        // （「服务没起来」的橙色是「要用户处置」的信号，不该在自动重连窗口里误报）。
+        const down = !st.connected && !this.smoothInDisconnectGrace();
+        if (down || st.unsupported || st.penUnsupported) return 'notify-bar-warn';
         if (!pen.enabled) return 'notify-bar-disabled';
         if (pen.state === 2) return 'notify-bar-fail';
         if (pen.state === 1) {
@@ -1627,7 +1692,7 @@ class App extends React.Component<AppProps, AppState> {
                 </div>
                 <div className="panel-section">
                     <div className="row-between">
-                        <span className="label-4" title={helpTexts.selectionFill.visibilitySection} onClick={() => this.toggleSectionVisibility('smoothOptions')}>平滑选项</span>
+                        <span className="label-4" title={helpTexts.selectionFill.visibilitySection} onClick={() => this.toggleSectionVisibility('smoothOptions')}>选区平滑</span>
                         <ToggleSwitch checked={this.state.smoothOptionsVisible} onChange={() => this.toggleSectionVisibility('smoothOptions')} title={helpTexts.selectionFill.visibilitySection}  />
                     </div>
                     <div className="row-between">
@@ -1690,7 +1755,7 @@ class App extends React.Component<AppProps, AppState> {
         this.setFormulaVisible('color', visible);
     }
 
-    /** 切换某个分区的可见性（平滑选项 / 选区改造 / 填充选项）。 */
+    /** 切换某个分区的可见性（选区平滑 / 选区改造 / 填充选项）。 */
     toggleSectionVisibility(id: 'smoothOptions' | 'selectionOptions' | 'fillOptions') {
         this.setState(prev => ({
             smoothOptionsVisible: id === 'smoothOptions' ? !prev.smoothOptionsVisible : prev.smoothOptionsVisible,
@@ -2681,6 +2746,21 @@ class App extends React.Component<AppProps, AppState> {
     //      读条阻塞填充是常态痛点，而 1s 的闸门滞后只在「刚切走套索就又落笔」时可见。
     private static readonly TOOL_WATCH_INTERVAL_MS = 1000;
 
+    /**
+     * 平滑模块（.8li）连接**瞬断宽限**（毫秒）。
+     *
+     * ⛔⛔ 2026-10-19（用户报「套索平滑开关偶尔自动变成服务未启动状态，几秒后复原」）：
+     *    WS 对端是 PS 进程内的 .8li，宿主忙碌/重连窗口内 onclose → 1.5s 后重连是
+     *    **正常现象**。旧实现 connected 一翻 false，状态条立刻闪「服务未启动」、
+     *    开关（旧判据含 connected）也跟着翻到关位 —— 用户什么都没做，界面自己跳。
+     *    现在：开关位置与意图脱钩（永不动）；状态条文案在本宽限内**保持上一状态**
+     *    （用最后一帧的 pen 数据继续判定），超过宽限仍断着才如实说「服务未启动」。
+     *    取值 2500ms > SmoothBridge 的 1500ms 重试间隔 ⇒ 单次重连周期内不闪。
+     *    ⚠️ 冷启动（从未连上过）不走宽限：第一时间就说「服务未启动」，
+     *    那是「.8li 没装/没就绪」的真实提示，不该延迟。
+     */
+    private static readonly SMOOTH_DISCONNECT_GRACE_MS = 2500;
+
     // 判定某个工具是否属于「其它工具」（主开关开启时切到它就自动关）。
     // 名单之外再按关键词兜底：绘制类工具的内部 ID 在不同 PS 版本下会变（混合器画笔就有
     // mixerBrushTool / wetBrushTool 两种），穷举名单必然漏，带 brush/eraser/stamp/smudge
@@ -3281,7 +3361,7 @@ class App extends React.Component<AppProps, AppState> {
                         <span className={!this.state.isEnabled
                             ? 'label-disabled main-button-label'
                             : 'main-button-text main-button-label'}>
-                            {this.state.isEnabled ? '功能开启' : '功能关闭'}
+                            {this.state.isEnabled ? '自动填充' : '填充关闭'}
                         </span>
                     </div>
                 </div>
@@ -3371,7 +3451,7 @@ title={helpTexts.selectionFill.blendMode}>
                     </div>
                 </div>
 
-                {/* 平滑选项：套索**绘制过程中**的实时平滑。
+                {/* 选区平滑：套索**绘制过程中**的实时平滑。
                     ⚠️ 与下面「选区改造」是两条独立路径：本分区作用在**输入轨迹**
                         （PS 收到笔坐标之前，由 PS 进程内的 .8li 平滑插件改写包坐标），
                         选区改造作用在**已生成的选区掩码**。
@@ -3382,15 +3462,17 @@ title={helpTexts.selectionFill.blendMode}>
                         <div className={this.state.isSmoothOptionsExpanded ? 'collapse-icon-expanded' : 'collapse-icon'}>
                             <ExpandIcon expanded={this.state.isSmoothOptionsExpanded} />
                         </div>
-                        <span className="label-4">平滑选项</span>
+                        <span className="label-4">选区平滑</span>
                     </div>
                     {this.state.isSmoothOptionsExpanded && (
                     <div className="collapse-content-expanded">
                         {/* 套索平滑总开关（形态与「笔刷热键」的服务条同款：指示点 + 状态文案 + 右侧开关）。
                             ⛔ 开关**永不禁用**（2026-10-12 真机事故：置灰 = 用户没有任何入口）：
                                 未连接时点击会记下意图，.8li 就绪后自动重放（见 toggleLassoSmooth）。
-                            ⚠️ checked 必须同时看 connected：模块崩溃/被卸时 pen.enabled 残留
-                                true，只看它会把开关显示成「开」而模块其实已经没了。
+                            ⛔⛔ 2026-10-19：checked = 用户意图（isPenSmoothOn），**不看 connected** ——
+                                WS 瞬断时旧判据会把开关翻到关位、状态条闪「服务未启动」，
+                                用户什么都没做开关自己跳（用户报「偶尔自动变成服务未启动状态」）。
+                                现在：开关除非用户点击永不动；连接状态只进状态条文案（带宽限）。
                             ⚠️ 状态文案覆盖多种完全不同的情形（服务没起来 / 版本过旧 /
                                 关 / 标定失败 / 等待 PS / 生效中），处置方式各不相同，
                                 必须分开说，否则用户只看到「没效果」无从下手。 */}
@@ -3405,7 +3487,7 @@ title={helpTexts.selectionFill.blendMode}>
                             </span>
                             <span className="mask-sync-status-spacer" />
                             <ToggleSwitch
-                                checked={this.state.smoothStatus.connected && !!this.state.smoothStatus.pen.enabled}
+                                checked={isPenSmoothOn()}
                                 onChange={this.toggleLassoSmooth}
                                 title={helpTexts.selectionFill.smoothEnabledSwitch}
                             />
@@ -3422,9 +3504,12 @@ title={helpTexts.selectionFill.blendMode}>
                             ⚠️ 2026-10-13 起**删除「高级项」二级折叠**：同屏里套两层折叠
                             会让「哪些参数此刻有效」完全看不出来（用户原话：「请确保没有多余的参数」）。
                             盒子里的行集合 = 该模式实际会被原生侧读取的行，一一对应 smooth_engine.c（.8li 内，原 wintab_hook.c）：
-                              标准 = 强度 / 半径 / 拐角 / 速度适应
+                              标准 = 强度 / 保角下限 / 速度适应
                               拉绳 = 半径 / 拉绳提示
-                              追笔 = 半径 / 追笔
+                              追笔 = 追笔速度
+                            ⛔⛔ 2026-10-19 用户要求：标准/追笔**去掉半径**（一个模式一个参数）。
+                              半径仍是原生侧的硬上限，但这两个模式下由 toWire 固定下发
+                              SMOOTH_RADIUS_MAX（不截断强度/追笔速度的满量程），面板不再暴露。
                             判据统一走 smoothParamApplies()，不在 JSX 里各写 if。
                             ⚠️ 容器用全仓统一的 .border-panel-section（带描边分区盒）；
                               额外的 .smooth-params 只负责把首/末行自带的外边距归零，
@@ -3464,7 +3549,11 @@ title={helpTexts.selectionFill.blendMode}>
                         </div>
                         )}
 
-                        {/* 半径：三种模式都要（既是最大滞后上限，也是拉绳的绳长基准）⇒ 恒显示 */}
+                        {/* 半径：**仅「拉绳」模式**显示（2026-10-19 用户要求标准/追笔去掉半径）。
+                            它既是拉绳的绳长，也是原生侧三种模式共用的最大滞后硬上限 ——
+                            标准/追笔模式下由 toWire 固定下发 SMOOTH_RADIUS_MAX，
+                            强度/追笔速度因此可以满量程发挥，不会被隐藏的上限截断。 */}
+                        {this.smoothParamApplies('radius') && (
                         <div className="row-between">
                             <label
                                 className="label-drag label-2"
@@ -3496,22 +3585,25 @@ title={helpTexts.selectionFill.blendMode}>
                                 <span className="num-unit">px</span>
                             </div>
                         </div>
+                        )}
 
                         {/* ⛔ 张力行已于 2026-10-13 删除：它和「半径」改的是同一件事
                             （只在 15%~100% 之间缩放圆周半径），两个滑杆互相打架，
                             用户明确要求「去掉张力这个参数」。绳长现在恒等于半径。 */}
 
-                        {/* 追笔仅「追笔」模式有效；其余模式整行隐藏。
+                        {/* 追笔速度：仅「追笔」模式有效；其余模式整行隐藏。
                             ⛔ 2026-10-14 重映射：显示量程 1–100，**数值越大 = 平滑力度越大**
                                （与其它模式一致）。下发时由 LassoSmoothing 的
-                               `catchUpToNative()` 反向映射到原生 1–50（1→50、100→1）。 */}
+                               `catchUpToNative()` 反向映射到原生 1–50（1→50、100→1）。
+                            ⚠️ 2026-10-19 标签「追笔」→「追笔速度」（用户要求）：与模式名区分，
+                               数值方向不变（越大越强），语义见 helpTexts.selectionFill.smoothCatchUp。 */}
                         {this.smoothParamApplies('catchUp') && (
                         <div className="row-between">
                             <label
                                 className="label-drag label-2"
                                 onMouseDown={(e) => this.handleLabelMouseDown(e, 'smooth:catchUp')}
                                 title={helpTexts.selectionFill.smoothCatchUp}>
-                                追笔
+                                追笔速度
                             </label>
                             <RangeSlider
                                 min={SMOOTH_CATCHUP_MIN}
@@ -3539,11 +3631,14 @@ title={helpTexts.selectionFill.blendMode}>
                         </div>
                         )}
 
-                        {/* 拐角判定仅「标准」模式有效。
+                        {/* 保角下限（原「拐角」）仅「标准」模式有效。
+                            ⚠️ 2026-10-19 标签「拐角」→「保角下限」（用户要求）：它说的是
+                               **转折角阈值** —— 轨迹相邻两段的转折超过该值即判定为拐角、
+                               自动减弱平滑以保住尖角；数值越小 = 越容易触发保护。
                             ⛔⛔ 2026-10-14 回退定案：这里曾短暂改成「保护范围」（显示 =
                                90 − 原生阈值，数值越大保护越广）。用户实测后明确要求回退 ——
                                「现在反而更加让人迷惑了」。
-                               理由：面板其它参数（强度 / 半径 / 追笔力度）**全是「越大越强」**，
+                               理由：面板其它参数（强度 / 追笔速度）**全是「越大越强」**，
                                唯独拐角被反转成「越大 = 保护越广 = 平滑越少」，方向与全体相反，
                                参数之间比较时极易误判，排障还要多做一次心算。
                             ⇒ 现在**显示值 = 原生转折角阈值**，一一对应、无换算（见
@@ -3556,7 +3651,7 @@ title={helpTexts.selectionFill.blendMode}>
                                 className="label-drag label-2"
                                 onMouseDown={(e) => this.handleLabelMouseDown(e, 'smooth:cornerAngle')}
                                 title={helpTexts.selectionFill.smoothCorner}>
-                                拐角
+                                保角下限
                             </label>
                             <RangeSlider
                                 min={0}

@@ -201,7 +201,7 @@ export interface AppState {
         blue: number;
     };
      // 新增选区改造状态
-     // ⚠️ 平滑滑块已移除：轨迹平滑改由「平滑选项」分区在**输入层**完成（native 鼠标钩子），
+     // ⚠️ 平滑滑块已移除：轨迹平滑改由「选区平滑」分区在**输入层**完成（.8li 进程内滤波），
      //    选区改造这里只剩「锐度 / 扩散」两个作用在**已生成掩码**上的参数。
      isSelectionOptionsExpanded: boolean;
      selectionContrast: number;
@@ -215,15 +215,16 @@ export interface AppState {
      * ⚠️ 必须进 state：滑杆/单选都要靠它触发重渲染，且它是**跨模块共享字段**
      *    （经 WS 18924 下发到 .8li 模块），只写实例字段不会触发重渲染（同 isInQuickMask 的历史 bug）。
      * ⚠️ 整体替换而非就地修改：持久化的变更检测用的是引用比较。
-     * ⚠️ 开关本身**不在这里**：它由模块回报的 smoothStatus.pen.enabled 驱动
-     *    （.8li 常驻 PS 进程，开关即「开/关平滑」，没有可拉起的进程）。
+     * ⚠️ 开关本身**不在这里**：它是用户意图（LassoSmoothing 的 penOn，
+     *    经 isPenSmoothOn() 读取）—— 2026-10-19 起与 WS 连接状态脱钩，
+     *    瞬断不再翻开关（旧版由 smoothStatus.pen.enabled 驱动，会随重连闪烁）。
      */
     smoothParams: LassoSmoothParams;
-    /** 「平滑选项」分区是否可见（隐藏/显示分区浮窗控制）。 */
+    /** 「选区平滑」分区是否可见（隐藏/显示分区浮窗控制）。 */
     smoothOptionsVisible: boolean;
-    /** 「平滑选项」折叠分区是否展开。 */
+    /** 「选区平滑」折叠分区是否展开。 */
     isSmoothOptionsExpanded: boolean;
-    /** 「平滑选项」内的高级项（半径/张力/追笔/拐角/自适应）是否展开。 */
+    /** 「选区平滑」内的高级项（半径/张力/追笔/拐角/自适应）是否展开。 */
     isSmoothAdvancedExpanded: boolean;
     /**
      * .8li 模块回传的平滑健康状态（是否生效/标定结果/已平滑包数/当前参数）。

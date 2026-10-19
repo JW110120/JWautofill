@@ -2,7 +2,7 @@ import { action, app, imaging } from "photoshop";
 
 // 选区改造参数接口
 // ⚠️ 曾经还有 selectionSmooth（「选择并遮住」的平滑边缘）。轨迹平滑现已移到
-//    「平滑选项」分区、在**输入层**由原生鼠标钩子完成，此处的平滑滑块与字段一并移除。
+//    「选区平滑」分区、在**输入层**由 .8li 进程内滤波完成，此处的平滑滑块与字段一并移除。
 export interface SelectionOptions {
     selectionContrast: number;
     selectionExpand: number; // 改名为扩散
@@ -20,7 +20,7 @@ export class SelectionHandler {
                         _value: "presetKindCustom"
                     },
                     smartBrushRadius: 0,
-                    // 固定 0：平滑已改由「平滑选项」（输入层滤波）承担，此处不再平滑边缘。
+                    // 固定 0：平滑已改由「选区平滑」（输入层滤波）承担，此处不再平滑边缘。
                     smartBrushSmooth: 0,
                     smartBrushFeather: {
                         _unit: "pixelsUnit",

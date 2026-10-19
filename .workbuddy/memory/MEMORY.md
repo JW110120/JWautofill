@@ -3,6 +3,7 @@
 > 索引+铁律速查；明细在 `refs/`，里程碑史在 `HISTORY.md`。⛔ 违反必炸。
 > 架构：套索平滑+键盘钩子 = **PS 进程内 .8li**（`native/JWautofillHost/`）。M3 键盘钩子并入（WS 18923）；M4 改名 JWautofillHost、HotkeyDaemon 源码删除、`src/hotkey/`→`src/lasso/`。
 > 版本线 2026-10-18（0x0128→0x0138）：补流桥十次翻车 → 三路输入/标定死锁/闸门时效/重力悬链/冷启动口径/Ink 判死 → 撤掉「断流才接管」门闩。逐版根因见 `refs/lasso-smoothing.md` O22–O40。
+> 2026-10-19 面板线（0x013E）：平滑开关改**意图语义**（`isPenSmoothOn`，回帧不覆写 penOn）+ 断连宽限 2.5s；标准/追笔**去半径**（toWire 非 rope 固定下发 100）；标签 保角下限/追笔速度；`.dragging` 加主色蓝框。明细见当日日志。
 
 ## 索引
 

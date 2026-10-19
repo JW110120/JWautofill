@@ -732,8 +732,8 @@ export default function BrushHotkeySection() {
         } />
         <span className="notify-text">
           {daemonConnected
-            ? (hotkeyArmed ? '热键已开启' : '热键已暂停')
-            : (busy ? '处理中…' : '未连接')}
+            ? (hotkeyArmed ? '功能开启' : '功能关闭')
+            : (busy ? '处理中' : '未连接')}
         </span>
         <span className="mask-sync-status-spacer" />
         {/* 与 APP 面板「紧凑 + 专注」状态条统一：右侧用开关代替「启动/停止」文字按钮。
