@@ -8,6 +8,8 @@ import { action, app } from 'photoshop';
 import { storage } from 'uxp';
 import { MainToggleState, requestMainToggle, requestMainToggleOff } from '../utils/MainToggleBus';
 import { requestFillPanelToggle } from '../utils/FillPanelToggleBus';
+import { requestClearModeToggle } from '../utils/ClearModeBus';
+import { requestBlendMode } from '../utils/BlendModeBus';
 import { psRead, runAsModal } from '../utils/psAccess';
 import { isPsBusy, psBusyRemain } from '../utils/psProbe';
 // ⛔ 本模块**不再** import 任何 LassoSmoothing 的东西：套索平滑与热键虽同处一个 .8li，
@@ -17,11 +19,20 @@ import { isPsBusy, psBusyRemain } from '../utils/psProbe';
 export interface HotkeyEntry {
   id: string;
   combo: string;                 // 例如 "Ctrl+Shift+R"、"Alt+F1"
-  action: 'toggleMain' | 'applyBrush' | 'runFunc' | 'focusLasso';
+  // action 语义（.8li 对除 toggleMain 外的 action 均不解释、只透传，新增动作无需改 C）：
+  //   toggleMain  主开关（共享总线翻转）
+  //   applyBrush  按笔刷名选中预设
+  //   runFunc     功能按钮（brush 承载功能 id，见 funcHotkeyDefs.ts）
+  //   focusLasso  专注模式「套索工具」键（关主开关 + 切套索）
+  //   focusClear  专注模式「清除模式」键（确保主开关开 + 切换清除模式，2026-10-19 新增）
+  //   blendHotkey 混合模式热键总开关（combo 非空=开；.8li 见之装载内置 Alt+Shift 表）
+  action: 'toggleMain' | 'applyBrush' | 'runFunc' | 'focusLasso' | 'focusClear' | 'blendHotkey';
   brush?: string;                // applyBrush 时的笔刷名（PS 预设名，需精确匹配）。
                                   // 注意：不支持同名笔刷——PS 按 _name 只会选中 Brushes 列表最上方那支。
                                   // runFunc 时复用本字段承载功能 id（见 funcHotkeyDefs.ts），
                                   // .8li 对该字段不解释、只透传，因此无需改 .8li。
+                                  // focusLasso/focusClear 时复用本字段承载「记忆值」（用户自定义过的键，
+                                  // 专注模式关闭时 combo 置空但记忆不丢）。
 }
 
 const WS_URL = 'ws://127.0.0.1:18923';
@@ -125,6 +136,8 @@ let daemonConfigPath = '';
  * 与 `daemonConfigPath` 一起构成「回写许可」的判据，见 `canPersistConfig`。
  */
 let requestedConfigPath = '';
+/** 上一次重发 setConfigPath 的时刻（路径未对齐时的节流闸，见 onmessage config 分支）。 */
+let lastPathResendMs = 0;
 /**
  * 是否允许把面板侧的改动回写落盘。
  *
@@ -415,11 +428,14 @@ function normalizeEntry(e: any): HotkeyEntry | null {
   const action = (e.action ?? e.Action ?? '') as HotkeyEntry['action'];
   const brush: string | undefined = e.brush ?? e.Brush ?? undefined;
   const id: string = e.id ?? e.Id ?? ('bk_' + Math.random().toString(36).slice(2));
-  if (action !== 'toggleMain' && action !== 'applyBrush' && action !== 'runFunc' && action !== 'focusLasso') return null;
+  if (action !== 'toggleMain' && action !== 'applyBrush' && action !== 'runFunc'
+      && action !== 'focusLasso' && action !== 'focusClear' && action !== 'blendHotkey') return null;
   // combo 为空的合法条目：主开关（'' = 已解绑）、笔刷（'' = 已解绑但条目保留在列表，
-  // 单击选中后按退格即解绑，与「删除」按钮区分）、专注模式套索键（'' = 专注模式关闭时不装载）。
+  // 单击选中后按退格即解绑，与「删除」按钮区分）、专注模式套索键（'' = 专注模式关闭时不装载）、
+  // 混合模式热键开关（'' = 关闭，条目保留供开关回显）。
   // runFunc 空组合键无意义，直接丢弃。
-  if (!combo && action !== 'toggleMain' && action !== 'applyBrush' && action !== 'focusLasso') return null;
+  if (!combo && action !== 'toggleMain' && action !== 'applyBrush' && action !== 'focusLasso'
+      && action !== 'focusClear' && action !== 'blendHotkey') return null;
   // runFunc 必须携带功能 id（复用 brush 字段），缺了就无法执行，丢弃。
   if (action === 'runFunc' && !brush) return null;
   return { id, combo, action, brush };
@@ -528,9 +544,19 @@ export function connectHotkeyDaemon(): () => void {
             // 修正帧到达时路径已对齐，ensure* 自然会补该补的条目。
             const pathAligned = !!requestedConfigPath && daemonConfigPath === requestedConfigPath;
             if (!pathAligned && requestedConfigPath) {
-              console.warn('⚠️ 守护进程的配置路径与面板不一致，已重新下发（本次不回写配置）\n  面板：'
-                + requestedConfigPath + '\n  服务：' + (daemonConfigPath || '(未知)'));
-              try { ws.send(JSON.stringify({ type: 'setConfigPath', path: requestedConfigPath })); } catch { /* ignore */ }
+              // ⛔⛔ 0x0139 防御（2026-10-19）：重发必须**节流**。
+              //   根因事故里这里每帧都重发 ⇒ C 侧「路径没变也重载」⇒ 再广播 ⇒
+              //   无线速回路把面板 JS 线程淹死（热键集体失灵的直接死因）。
+              //   C 侧已修 json_str 反转义（根因），正常情况下根本走不到这里；
+              //   保留 1s 最小间隔是第二道闸：即便将来别的原因导致路径再次不一致，
+              //   最坏也是 1 次/秒的重发，绝不再是无线速风暴。
+              const nowMs = Date.now();
+              if (nowMs - lastPathResendMs >= 1000) {
+                lastPathResendMs = nowMs;
+                console.warn('⚠️ 守护进程的配置路径与面板不一致，已重新下发（本次不回写配置）\n  面板：'
+                  + requestedConfigPath + '\n  服务：' + (daemonConfigPath || '(未知)'));
+                try { ws.send(JSON.stringify({ type: 'setConfigPath', path: requestedConfigPath })); } catch { /* ignore */ }
+              }
             } else if (!requestedConfigPath) {
               console.warn('⚠️ 尚未解析出插件数据目录，本次不回写配置（避免用默认值覆盖已有热键）；'
                 + '守护进程当前使用：' + (daemonConfigPath || '(未知)'));
@@ -539,6 +565,8 @@ export function connectHotkeyDaemon(): () => void {
             if (pathAligned) ensureMainToggleEntry();
             // 专注模式开启时补上/更新「套索工具键」（仅 APP 面板上下文会真正写入）
             if (pathAligned) ensureFocusLassoEntry();
+            // 专注模式开启时补上/更新「清除模式」键（默认 Shift+E，同上仅 APP 面板写）
+            if (pathAligned) ensureFocusClearEntry();
             emitConfig();
           }
           else if (msg?.type === 'recordCaptured') {
@@ -667,6 +695,43 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
       });
     // 无论主开关结果如何都把工具切回套索（模拟 PS 的「点套索工具按钮」）
     void selectLassoTool();
+    return;
+  }
+  if (msg.action === 'focusClear') {
+    // 专注模式下的「清除模式」键（默认 Shift+E）：两件事，互不干扰——
+    //   ① 确保主开关开启：MainToggleBus.doToggle 在专注模式下本就是「只开不关」
+    //      （已开着则什么都不做）⇒ 无论此前开关是开是关，按下即保证开启；
+    //   ② 切换清除模式：写 ClearModeBus，APP 面板订阅后翻自己的 state。
+    // ⚠️ 绝不在这一步关主开关 —— 用户明确要求「按 Shift+E 开/关清除模式都不会关主开关」。
+    // token 去重同上：同一次命中在所有面板上只各执行一次。
+    const combo = msg.combo ?? '';
+    const token = 'focusClear|' + (combo || FOCUS_CLEAR_ID) + '|' + Math.floor(Date.now() / 400);
+    void requestMainToggle(token)
+      .then((st: MainToggleState) => {
+        for (const l of hotkeyListeners) { try { l({ combo, action: 'focusClear', ok: true, enabled: st.enabled }); } catch { /* ignore */ } }
+      })
+      .catch(() => {
+        for (const l of hotkeyListeners) { try { l({ combo, action: 'focusClear', ok: false }); } catch { /* ignore */ } }
+      });
+    void requestClearModeToggle('clear|' + token)
+      .catch((e) => console.error('⚠️ 清除模式切换命令写入失败:', e));
+    return;
+  }
+  if (msg.action === 'blendMode') {
+    // 混合模式热键命中（.8li 装载内置 Alt+Shift 表后广播）：把目标模式写进
+    // BlendModeBus，APP 面板据此改「选区填充」的混合模式。PS 原生的改图层/
+    // 改工具混合模式已被 C 侧吞键替换，不会同时发生。
+    const mode = msg.brush || '';
+    if (!mode) return;
+    const token = 'blendMode|' + mode + '|' + Math.floor(Date.now() / 400);
+    const combo = msg.combo ?? '';
+    void requestBlendMode(mode, token)
+      .then(() => {
+        for (const l of hotkeyListeners) { try { l({ combo, action: 'blendMode', brush: mode, ok: true }); } catch { /* ignore */ } }
+      })
+      .catch(() => {
+        for (const l of hotkeyListeners) { try { l({ combo, action: 'blendMode', brush: mode, ok: false }); } catch { /* ignore */ } }
+      });
     return;
   }
   if (msg.action === 'runFunc' && msg.brush?.startsWith('fillPanel:')) {
@@ -814,6 +879,97 @@ export function setFocusLassoCombo(combo: string, active: boolean): void {
 /** 是否已连上守护进程（菜单里「设置主开关快捷键」需要据此给出提示）。 */
 export function isDaemonConnected(): boolean {
   return connected;
+}
+
+// ===== 专注模式：「清除模式」键（默认 Shift+E，2026-10-19 新增）=====
+// 语义（用户原话）：无论主开关是关闭或开启，按下 Shift+E 都会开启主开关；
+// 主开关开启时按 Shift+E 只切换清除模式，绝不关闭主开关。
+// 实现走两条既有总线：
+//   ① requestMainToggle —— MainToggleBus.doToggle 在专注模式下本就是「只开不关」
+//      （见该文件 focus 分支），已开着则什么都不做，完美匹配「确保开启」；
+//   ② requestClearModeToggle —— 清除模式切换命令（APP 面板订阅后翻自己的 state）。
+// 该键与套索工具键同规矩：**只在专注模式开启时装载**（combo 非空），关闭时置空、
+// 由守护进程跳过注册，从而完全不影响 PS 原生的 Shift+E（正常是「反选」的变体键位，
+// 专注模式外绝不拦截）。用户自定义过的键记忆在 brush 字段。
+export const FOCUS_CLEAR_ID = 'focus_clear';
+export const DEFAULT_FOCUS_CLEAR_COMBO = 'Shift+E';
+let focusClearActive = false;   // 专注模式是否开启（仅 APP 面板会写）
+let focusClearKnown = false;    // 是否由 APP 面板明确过专注模式状态
+
+/**
+ * 确保配置里存在「清除模式」条目，并让它只在专注模式开启时处于装载态。
+ * 只应由 APP 面板的上下文真正写入（仅它会调用 setFocusClearActive）——
+ * 与套索工具键同款的多面板写护栏（focusClearKnown 门禁）。
+ */
+function ensureFocusClearEntry(): void {
+  if (!configLoaded || !focusClearKnown) return;
+  const idx = cachedConfig.findIndex(e => e.action === 'focusClear');
+  const existing = idx >= 0 ? cachedConfig[idx] : undefined;
+  const remembered = (existing && (existing.brush || existing.combo)) || DEFAULT_FOCUS_CLEAR_COMBO;
+  const desiredCombo = focusClearActive ? remembered : '';
+  if (existing && existing.id === FOCUS_CLEAR_ID && existing.combo === desiredCombo && existing.brush === remembered) return;
+  const desired: HotkeyEntry = { id: FOCUS_CLEAR_ID, combo: desiredCombo, action: 'focusClear', brush: remembered };
+  const next = idx >= 0 ? cachedConfig.map((e, i) => (i === idx ? desired : e)) : [...cachedConfig, desired];
+  cachedConfig = next;
+  pushConfig(next);
+}
+
+/** APP 面板在专注模式状态变化时调用，决定清除模式键是否装载（其它面板绝不调用）。 */
+export function setFocusClearActive(on: boolean): void {
+  focusClearKnown = true;
+  focusClearActive = on;
+  ensureFocusClearEntry();
+}
+
+/** 当前清除模式键（用于提示/展示；专注模式关闭时返回记忆值）。 */
+export function getFocusClearCombo(): string {
+  const e = cachedConfig.find(x => x.action === 'focusClear');
+  return e?.brush || e?.combo || DEFAULT_FOCUS_CLEAR_COMBO;
+}
+
+/**
+ * 重绑清除模式键（功能快捷键子面板用）：同时更新生效值 combo 与记忆值 brush。
+ * ⚠️ 该函数会在**绘画工具箱面板**的上下文里被调用（FuncHotkeyPanel 挂在那里），
+ *    那里 focusClearKnown 恒为 false，所以**不能**用 focusClearKnown 做闸门；
+ *    装载与否由调用方传入的 active（= 面板自己看到的专注模式状态）决定。
+ */
+export function setFocusClearCombo(combo: string, active: boolean): void {
+  if (!configLoaded) return;
+  const remembered = combo || DEFAULT_FOCUS_CLEAR_COMBO;
+  const idx = cachedConfig.findIndex(e => e.action === 'focusClear');
+  const desired: HotkeyEntry = { id: FOCUS_CLEAR_ID, combo: active ? remembered : '', action: 'focusClear', brush: remembered };
+  const next = idx >= 0 ? cachedConfig.map((e, i) => (i === idx ? desired : e)) : [...cachedConfig, desired];
+  cachedConfig = next;
+  pushConfig(next);
+}
+
+// ===== 混合模式热键总开关（2026-10-19 新增）=====
+// 开启后 .8li 把内置的 PS 原生混合模式快捷键（Alt+Shift+N/K/M/… 共 25 条，
+// 见 keyhook.c KH_BLEND_DEFS）装进热键匹配表：命中即吞键 + 广播
+// action='blendMode'，由本桥接写 BlendModeBus，APP 面板据此改「选区填充」
+// 的混合模式 —— PS 原生的「改图层/工具混合模式」被静默替换。
+// 开关状态即配置里 blendHotkey 条目的存在性与 combo（'1'=开 / ''=关）：
+// 不另设录制（快捷键固定为 PS 原生表），UI 上是一个自绘 switch。
+// ⛔ 生效还需「笔刷热键」分区处于布防态（钩子装着才拦得到键）——两者是与关
+//    系，任缺一都不会改任何混合模式（UI 提示里会写明）。
+export const BLEND_HOTKEY_ID = 'blend_hotkey';
+
+/** 读取混合模式热键开关当前状态（配置帧驱动；未连接时以本地缓存为准）。 */
+export function getBlendHotkeyOn(): boolean {
+  const e = cachedConfig.find(x => x.action === 'blendHotkey');
+  return !!e && !!e.combo;
+}
+
+/** 设置混合模式热键开关（写入共享配置，.8li 收 config 帧即热更新热键表）。 */
+export function setBlendHotkeyActive(on: boolean): boolean {
+  if (!configLoaded) return false;
+  const idx = cachedConfig.findIndex(e => e.action === 'blendHotkey');
+  const desired: HotkeyEntry = { id: BLEND_HOTKEY_ID, combo: on ? '1' : '', action: 'blendHotkey', brush: '' };
+  if (idx >= 0 && cachedConfig[idx].id === BLEND_HOTKEY_ID && cachedConfig[idx].combo === desired.combo) return true;
+  const next = idx >= 0 ? cachedConfig.map((e, i) => (i === idx ? desired : e)) : [...cachedConfig, desired];
+  cachedConfig = next;
+  emitConfig();
+  return pushConfig(next);
 }
 
 /**

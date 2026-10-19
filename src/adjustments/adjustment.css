@@ -133,6 +133,23 @@
   white-space: nowrap;
 }
 
+/* 「混合模式热键」行的右半列：录制的组合键换成自绘 switch（2026-10-19 用户要求）。
+   与 .hotkey-entry-combo 同基准 flex:1 1 0%，开关自身靠右对齐，分隔线仍严格居中。 */
+.hotkey-entry-switch {
+  flex: 1 1 0%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* 纯开关行（混合模式热键）：没有组合键可录/可解，取消指针手型与选中观感，
+   避免用户误以为可双击重录。⚠️ 只改 cursor——不碰 .hotkey-entry-row 的
+   背景/边框/布局，选中态（.selected）仍由 common.css 底部状态区统一接管。 */
+.hotkey-entry-row-static {
+  cursor: default;
+}
+
 /* 「功能快捷键」子面板的分组标题：每组（.border-panel-section 容器）上方的小标题。
    用继承色 + opacity 压暗，不硬编码颜色，三档主题下自动适配。 */
 .func-group-title {

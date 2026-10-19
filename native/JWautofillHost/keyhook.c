@@ -348,6 +348,30 @@ static void kh_broadcast(const char* msg)
 
 /* ================================================================ 热键表（seqlock） */
 
+/* 混合模式热键内置表（PS 原生 Alt+Shift+<key>，Adobe 官方快捷键表）。
+ * 由配置里的 blendHotkey 标志条目控制装载（2026-10-19 用户要求：
+ * 套索/笔刷工具下按这些键不再改图层混合模式，而是改 APP 面板「选区填充」
+ * 的混合模式）。命中后广播 action='blendMode'，brush = PS 枚举值，
+ * 由 UXP 侧映射回中文名写进面板状态。
+ * ⚠️ combo 格式必须与 kh_build_combo 的输出逐字一致（Ctrl→Alt→Shift→Win 序），
+ *    匹配用 _stricmp 大小写不敏感，但分隔符与顺序必须相同。 */
+typedef struct { const char* combo; const char* mode; } KhBlendDef;
+static const KhBlendDef KH_BLEND_DEFS[] = {
+    { "Alt+Shift+N", "normal" },      { "Alt+Shift+I", "dissolve" },
+    { "Alt+Shift+Q", "behind" },      { "Alt+Shift+K", "darken" },
+    { "Alt+Shift+M", "multiply" },    { "Alt+Shift+B", "colorBurn" },
+    { "Alt+Shift+A", "linearBurn" },  { "Alt+Shift+G", "lighten" },
+    { "Alt+Shift+S", "screen" },      { "Alt+Shift+D", "colorDodge" },
+    { "Alt+Shift+W", "linearDodge" }, { "Alt+Shift+O", "overlay" },
+    { "Alt+Shift+F", "softLight" },   { "Alt+Shift+H", "hardLight" },
+    { "Alt+Shift+V", "vividLight" },  { "Alt+Shift+J", "linearLight" },
+    { "Alt+Shift+Z", "pinLight" },    { "Alt+Shift+L", "hardMix" },
+    { "Alt+Shift+E", "difference" },  { "Alt+Shift+X", "exclusion" },
+    { "Alt+Shift+U", "hue" },         { "Alt+Shift+T", "saturation" },
+    { "Alt+Shift+C", "color" },       { "Alt+Shift+Y", "luminosity" },
+};
+#define KH_BLEND_N ((int)(sizeof(KH_BLEND_DEFS) / sizeof(KH_BLEND_DEFS[0])))
+
 static void kh_map_publish(const KhItem* items, int n)
 {
     EnterCriticalSection(&g_khMapLk);
@@ -372,13 +396,41 @@ static int kh_map_apply(const KhItem* items, int n)
 {
     KhItem map[KH_MAX_ITEMS];
     int mn = 0;
+    int blendOn = 0;
     for (int i = 0; i < n; i++) {
+        /* 混合模式热键标志条目：combo 非空 = 开关打开。⛔ 它本身**不参与匹配**
+           （ combo='1' 是个普通按键，混进表里会把用户的数字键吞掉），
+           只作为「是否装载内置混合模式表」的开关。 */
+        if (_stricmp(items[i].action, "blendHotkey") == 0) {
+            if (items[i].combo[0]) blendOn = 1;
+            continue;
+        }
         if (!items[i].combo[0]) continue;                 /* 空 combo = 已解绑，仅留存 */
         int dup = 0;
         for (int j = 0; j < mn; j++)
             if (_stricmp(map[j].combo, items[i].combo) == 0) { dup = 1; break; }
         if (dup) { kh_log("跳过重复组合键: %s", items[i].combo); continue; }
         map[mn++] = items[i];
+    }
+    /* 装载内置混合模式表：用户显式录制的同名组合键优先（上面已先入表，这里去重跳过）。
+       钩子命中即吞键 ⇒ PS 收不到 Alt+Shift+<key>，原生「改图层/工具混合模式」
+       被静默替换成「改 APP 面板混合模式」（广播 action='blendMode'）。 */
+    if (blendOn) {
+        int added = 0;
+        for (int b = 0; b < KH_BLEND_N && mn < KH_MAX_ITEMS; b++) {
+            int dup = 0;
+            for (int j = 0; j < mn; j++)
+                if (_stricmp(map[j].combo, KH_BLEND_DEFS[b].combo) == 0) { dup = 1; break; }
+            if (dup) continue;
+            KhItem* it = &map[mn++];
+            memset(it, 0, sizeof(*it));
+            _snprintf(it->id,     sizeof(it->id),     "blend_hotkey");
+            _snprintf(it->combo,  sizeof(it->combo),  "%s", KH_BLEND_DEFS[b].combo);
+            _snprintf(it->action, sizeof(it->action), "blendMode");
+            _snprintf(it->brush,  sizeof(it->brush),  "%s", KH_BLEND_DEFS[b].mode);
+            added++;
+        }
+        kh_log("混合模式热键已装载：内置 %d 条（Alt+Shift+<key> → 面板混合模式）", added);
     }
     kh_map_publish(map, mn);
     return mn;
@@ -1866,7 +1918,24 @@ static int kh_handle_message(SOCKET s, const char* js)
 
     if (_stricmp(type, "setConfigPath") == 0) {
         char p[512] = "";
-        if (json_str(js, "path", p, (int)sizeof(p))) kh_set_config_path(p);
+        if (json_str(js, "path", p, (int)sizeof(p))) {
+            /* ⛔⛔ 0x0139（2026-10-19 用户报「快捷键全失灵 + 面板显示热键已暂停」）：
+               json_str 是**逐字拷贝**（见 plugin_main.c 实现，与 kh_parse_items 里
+               显式补调 kh_unesc 的做法不同）⇒ 面板 JSON.stringify 产生的
+               "C:\\Users\\..." 在引号内是**两个字面反斜杠**，原样落库后：
+                 · 文件读写碰巧不受影响（Win32 路径规范化容忍冗余分隔符）；
+                 · 但回帧 path 经 kh_esc 再转义成四倍反斜杠，面板 parse 回双反斜杠，
+                   与 requestedConfigPath（单反斜杠）逐字比对**永远不相等** ⇒
+                   pathAligned 恒 false ⇒ 面板每收到一帧 config 就重发
+                   setConfigPath ⇒ 本函数「路径没变也重载」分支 ⇒ 再广播 ⇒
+                   无线速回路（实测 ~1400 次/秒，Pi8li.log 被「热键表已装载」刷屏）。
+               面板 JS 线程被 config 帧洪水淹没：热键事件排队直至用户观感「按了没反应」；
+               晚挂载的功能快捷键子面板又收不到（无跃变就不播的）hotkeyState 帧 ⇒
+               初始 false 常驻，显示「热键已暂停」并拦住录制入口。
+               修法 = 与 kh_parse_items 对齐：入库前先反转义成逻辑路径。 */
+            kh_unesc(p);
+            kh_set_config_path(p);
+        }
         return 0;
     }
     if (_stricmp(type, "shutdown") == 0) {
@@ -1937,15 +2006,20 @@ static int kh_handle_message(SOCKET s, const char* js)
     }
     if (_stricmp(type, "repairKeyboard") == 0) {
         /* 面板「键盘卡死一键修复」：script = 面板解析出的 fix-keyboard.ps1 全路径
-           （.8li 装在 PS Plug-ins 目录，无法从自身路径推导插件根 ⇒ 必须由面板传入）。 */
+           （.8li 装在 PS Plug-ins 目录，无法从自身路径推导插件根 ⇒ 必须由面板传入）。
+           ⛔ 同样要 kh_unesc：Windows 路径里的反斜杠经 JSON.stringify 后是两个字面
+              反斜杠，原样传给 GetFileAttributesW/ShellExecuteExW 会「脚本不存在」，
+              设备层修复（pnputil 软重置/USB 省电）被静默跳过（2026-10-19 同批修复）。 */
         char script[1024] = "";
         json_str(js, "script", script, (int)sizeof(script));
+        kh_unesc(script);
         kh_do_repair(s, script);
         return 0;
     }
     if (_stricmp(type, "recordStart") == 0) {
         char brush[192] = "";
         json_str(js, "brush", brush, (int)sizeof(brush));
+        kh_unesc(brush);   /* 同 setConfigPath：json_str 不反转义，笔刷名可能含 \" 或 \\ */
         EnterCriticalSection(&g_khRecLk);
         g_khRecClient = s;
         memcpy(g_khRecBrush, brush, sizeof(g_khRecBrush));
@@ -1962,6 +2036,7 @@ static int kh_handle_message(SOCKET s, const char* js)
     if (_stricmp(type, "armDelete") == 0) {
         char owner[96] = "";
         json_str(js, "owner", owner, (int)sizeof(owner));
+        kh_unesc(owner);
         EnterCriticalSection(&g_khArmLk);
         g_khArmClient = s;
         memcpy(g_khArmOwner, owner, sizeof(g_khArmOwner));

@@ -2,12 +2,14 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   HotkeyEntry, onConfig, onDaemonStatus, pushConfig, requestHotkeyRecording,
   cancelHotkeyRecording, onRecordProgress, setMainToggleCombo, setFocusLassoCombo,
-  armBackspaceDelete, disarmBackspaceDelete, onBackspaceDelete,
-  onHotkeyState,
+  setFocusClearCombo, armBackspaceDelete, disarmBackspaceDelete, onBackspaceDelete,
+  onHotkeyState, requestHotkeyStatus,
+  peekPersistedArm, getBlendHotkeyOn, setBlendHotkeyActive,
 } from './HotkeyBridge';
 import { helpTexts } from '../constants/helpTexts';
 import { subscribeFocusMode, peekFocusMode } from '../utils/FocusModeBus';
 import { FUNC_HOTKEY_DEFS, FUNC_HOTKEY_SECTION_ORDER, getFuncHotkeyLabel } from './funcHotkeyDefs';
+import ToggleSwitch from '../components/ToggleSwitch';
 
 // 「功能快捷键」子面板：由右上角菜单打开，专门管理**非笔刷功能**的全局快捷键。
 // 形态：**占满整个面板的子面板**（不是居中卡片），纵向两段：
@@ -41,8 +43,14 @@ type EditTarget = string | null;
 export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   const [entries, setEntries] = useState<HotkeyEntry[]>([]);
   const [daemonConnected, setDaemonConnected] = useState(false);
-  // 热键布防态（.8li 形态）：撤防时录制会被 C 侧直接取消，见 startEdit 门禁
-  const [hotkeyArmed, setHotkeyArmed] = useState(false);
+  // 热键布防态（.8li 形态）：撤防时录制会被 C 侧直接取消，见 startEdit 门禁。
+  // ⛔⛔ 初值必须与笔刷热键分区对齐（peekPersistedArm() ?? true，2026-10-19 修）：
+  //    本子面板是用户后来才打开的（右上角菜单），而 .8li 的 hotkeyState 只在**跃变**时
+  //    广播 —— armed 恒为 true 时除了建连那次 hotkeyStatus 回帧外再无状态帧，晚挂载的
+  //    本面板若用 false 起头就会永远停在 false：标题下显示「热键已暂停」（与笔刷分区
+  //    的「已开启」自相矛盾），startEdit 的门禁还会把录制入口一并拦住。
+  //    落盘值兜底 + 连通后主动 requestHotkeyStatus 对齐 .8li 真值（见下方 effect）。
+  const [hotkeyArmed, setHotkeyArmed] = useState<boolean>(() => peekPersistedArm() ?? true);
   const hotkeyArmedRef = useRef(hotkeyArmed);
   useEffect(() => { hotkeyArmedRef.current = hotkeyArmed; }, [hotkeyArmed]);
   // 专注模式：来自共享总线（APP 面板写入），只影响主开关行的显示名。
@@ -136,7 +144,13 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     const unsubConfig = onConfig((list) => setEntries(list));
-    const unsubStatus = onDaemonStatus(setDaemonConnected);
+    const unsubStatus = onDaemonStatus((c) => {
+      setDaemonConnected(c);
+      // .8li 的布防态只在跃变时广播 ⇒ 晚挂载的面板必须**主动问一次**，
+      // 否则 hotkeyArmed 只能靠落盘值猜测（修复 2026-10-19「显示热键已暂停」）。
+      // onDaemonStatus 订阅即回放当前值：已连通会立刻走到这里，未连通则等连通。
+      if (c) requestHotkeyStatus();
+    });
     // .8li 形态：布防态也要跟（撤防时 C 侧会直接回 recordCancel，
     // 这里提前拦，给出可操作的提示而不是「莫名取消的录制」）
     const unsubArmed = onHotkeyState((st) => setHotkeyArmed(st.armed));
@@ -148,6 +162,8 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   const entryDisplayName = (e: HotkeyEntry): string => {
     if (e.action === 'toggleMain') return focusMode ? '选区填充' : '选区填充开关';
     if (e.action === 'focusLasso') return '套索工具';
+    if (e.action === 'focusClear') return '清除模式';
+    if (e.action === 'blendHotkey') return '混合模式热键';
     if (e.action === 'runFunc') return getFuncHotkeyLabel(e.brush || '');
     return e.brush || '';
   };
@@ -156,6 +172,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   const targetDisplayName = (target: string): string => {
     if (target === 'main') return focusMode ? '选区填充' : '选区填充开关';
     if (target === 'focus_lasso') return '套索工具';
+    if (target === 'focus_clear') return '清除模式';
     return getFuncHotkeyLabel(target);
   };
 
@@ -170,6 +187,11 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
     if (target === 'focus_lasso') {
       // 套索工具键随专注模式自动启用/停用，不参与「退格解绑」（重录请双击）。
       showMessage('套索工具键随专注模式自动启用，无需解绑；如需更换请双击重录');
+      return;
+    }
+    if (target === 'focus_clear') {
+      // 清除模式键同样随专注模式自动启用/停用，不参与「退格解绑」（重录请双击）。
+      showMessage('清除模式键随专注模式自动启用，无需解绑；如需更换请双击重录');
       return;
     }
     const next = entries.filter(e => !(e.action === 'runFunc' && e.brush === target));
@@ -203,6 +225,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
     const dup = entries.find(e => {
       if (target === 'main') return e.action !== 'toggleMain' && e.combo === combo;
       if (target === 'focus_lasso') return e.action !== 'focusLasso' && e.combo === combo;
+      if (target === 'focus_clear') return e.action !== 'focusClear' && e.combo === combo;
       const isSelf = e.action === 'runFunc' && e.brush === target;
       return !isSelf && e.combo === combo;
     });
@@ -223,6 +246,13 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
       showMessage('已保存：' + combo + ' → 套索工具');
       return;
     }
+    if (target === 'focus_clear') {
+      // 清除模式键（默认 Shift+E）同样由 bridge 统一管理，语义与套索工具键一致：
+      // 按下即确保主开关开启并切换清除模式（主开关不会被关闭）。
+      setFocusClearCombo(combo, focusMode);
+      showMessage('已保存：' + combo + ' → 清除模式');
+      return;
+    }
     const existing = entries.find(e => e.action === 'runFunc' && e.brush === target);
     const next: HotkeyEntry[] = existing
       ? entries.map(e => (e.id === existing.id ? { ...e, combo } : e))
@@ -235,6 +265,11 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   const mainEntry = entries.find(e => e.action === 'toggleMain');
   // 专注模式下的「套索工具」键条目：由 HotkeyBridge 在专注模式开启时装载（默认 L）。
   const focusLassoEntry = entries.find(e => e.action === 'focusLasso');
+  // 专注模式下的「清除模式」键条目：同样只在专注模式开启时装载（默认 Shift+E）。
+  const focusClearEntry = entries.find(e => e.action === 'focusClear');
+  // 混合模式热键开关：配置里 blendHotkey 条目的 combo 非空 = 开（.8li 见之装载
+  // 内置 Alt+Shift 表）。与专注模式无关，任何时刻都显示这一行。
+  const blendHotkeyOn = !!entries.find(e => e.action === 'blendHotkey')?.combo;
   const funcEntryOf = (funcId: string): HotkeyEntry | undefined =>
     entries.find(e => e.action === 'runFunc' && e.brush === funcId);
 
@@ -265,6 +300,43 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
         <span className="hotkey-entry-name">{name}</span>
         <span className="divider-vertical">丨</span>
         <span className="hotkey-entry-combo">{comboText}</span>
+      </div>
+    );
+  };
+
+  // 混合模式热键行（2026-10-19 用户要求）：右半列**不是录制的组合键**而是自绘 switch。
+  // 行本身不挂选中/录制/退格任何 handler（没有组合键可录可解），只有 switch 可点；
+  // 开关状态经共享配置直达 .8li（combo='1'/''），C 侧据此装载/卸载内置 Alt+Shift 表。
+  const renderBlendSwitchRow = (key: string, on: boolean) => {
+    const toggle = () => {
+      if (!daemonConnected) { showMessage(helpTexts.funcHotkey.notConnected); return; }
+      const nextOn = !on;
+      if (setBlendHotkeyActive(nextOn)) {
+        showMessage(nextOn
+          ? (hotkeyArmedRef.current
+            ? '混合模式热键已开启：按 Alt+Shift+字母（如 K=变暗、M=正片叠底）将改面板的选区填充混合模式'
+            : '混合模式热键已开启，但热键当前暂停：请先到「笔刷热键」分区打开热键开关才会生效')
+          : '混合模式热键已关闭：Alt+Shift+字母恢复 PS 原生行为（改图层/工具混合模式）');
+      } else {
+        showMessage('推送配置失败：快捷键服务未连接，或配置路径尚未就绪（请重新加载插件后重试）');
+      }
+    };
+    return (
+      <div
+        key={key}
+        className="hotkey-entry-row hotkey-entry-row-static"
+        title={helpTexts.funcHotkey.blendRow}
+      >
+        <span className="hotkey-entry-name">混合模式热键</span>
+        <span className="divider-vertical">丨</span>
+        <span className="hotkey-entry-switch">
+          <ToggleSwitch
+            checked={on}
+            onChange={toggle}
+            title={on ? '关闭混合模式热键' : '开启混合模式热键'}
+            aria-label="混合模式热键"
+          />
+        </span>
       </div>
     );
   };
@@ -318,6 +390,11 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
               {/* 专注模式下：套索工具键（默认 L）——按下即关闭主开关并切回套索，使 H/L 像两个工具 */}
               {g.title === '选区填充' && focusMode &&
                 renderRow('focus_lasso', focusLassoEntry?.combo || '', '套索工具', 'focus_lasso', helpTexts.funcHotkey.lassoRow)}
+              {/* 专注模式下：清除模式键（默认 Shift+E）——按下即确保主开关开启并切换清除模式 */}
+              {g.title === '选区填充' && focusMode &&
+                renderRow('focus_clear', focusClearEntry?.combo || '', '清除模式', 'focus_clear', helpTexts.funcHotkey.clearRow)}
+              {/* 混合模式热键（自绘开关行，与专注模式无关）：开启后 Alt+Shift+字母改面板混合模式 */}
+              {g.title === '选区填充' && renderBlendSwitchRow('blend_hotkey', blendHotkeyOn)}
               {g.defs.map(def =>
                 renderRow('fk_' + def.id, funcEntryOf(def.id)?.combo || '', def.label, def.id, helpTexts.funcHotkey.rowHint)
               )}

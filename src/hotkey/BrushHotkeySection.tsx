@@ -8,7 +8,7 @@ import {
   getMainToggleCombo,
   armBackspaceDelete, disarmBackspaceDelete, onBackspaceDelete,
   detectAllBrushTypes,
-  setHotkeyArm, onHotkeyState, requestKeyboardRepair, resolveRepairScriptPath,
+  setHotkeyArm, onHotkeyState, requestHotkeyStatus, requestKeyboardRepair, resolveRepairScriptPath,
   loadPersistedArm, peekPersistedArm
 } from './HotkeyBridge';
 import { DeleteIcon, RefreshIcon, DataRefreshIcon, RecordCircleIcon, StopSquareIcon, BrushToolIcon, SmudgeToolIcon, MixerToolIcon, CloneStampIcon } from '../styles/Icons';
@@ -163,7 +163,15 @@ export default function BrushHotkeySection() {
       setEntries(normalized);
       if (changed) pushConfig(normalized);
     });
-    const unsubStatus = onDaemonStatus(setDaemonConnected);
+    const unsubStatus = onDaemonStatus((c) => {
+      setDaemonConnected(c);
+      // .8li 的布防态只在跃变时广播（armed 无跃变就不播 hotkeyState）⇒ 本面板
+      // 无论是晚挂载还是切回前台，都必须**主动问一次**真实布防态，否则
+      // hotkeyArmed 只能靠落盘值猜测——正是 2026-10-19「初次加载显示
+      // 热键已暂停」根因链的一环（与 FuncHotkeyPanel 同款修复）。
+      // onDaemonStatus 订阅即回放当前值：已连通会立刻走到这里，未连通则等连通。
+      if (c) requestHotkeyStatus();
+    });
     // 布防状态：跃变广播（布防/撤防/熔断自愈）与 hotkeyStatus 回帧都走这里。
     // 开关是「乐观更新 + 广播校准」：本地先翻，服务确认帧到达后以它为准。
     const unsubArmed = onHotkeyState((st) => setHotkeyArmed(st.armed));
@@ -192,6 +200,14 @@ export default function BrushHotkeySection() {
         // 专注模式「套索工具」键：关闭主开关并把工具切回套索
         showMessage('热键触发：' + (info.combo ? info.combo + ' → ' : '') +
           (info.ok ? '已退出自动填充（切回套索工具）' : '退出自动填充失败'));
+      } else if (info.action === 'focusClear') {
+        // 专注模式「清除模式」键（Shift+E）：确保主开关开启 + 切换清除模式
+        showMessage('热键触发：' + (info.combo ? info.combo + ' → ' : '') +
+          (info.ok ? '清除模式已切换（主开关保持开启）' : '清除模式切换失败'));
+      } else if (info.action === 'blendMode') {
+        // 混合模式热键（Alt+Shift+字母）：.8li 吞键后把目标模式经总线送到 APP 面板
+        showMessage('热键触发：' + (info.combo ? info.combo + ' → ' : '') +
+          '选区填充混合模式 → ' + (info.brush || '未知模式') + (info.ok ? '' : '（失败）'));
       }
     });
     // 两段式录制的实时进度：捕获到组合键、等待回车确认期间给出行内提示

@@ -34,7 +34,7 @@ import { PanelStateManager } from './utils/PanelStateManager';
 import {
   connectHotkeyDaemon,
   isDaemonConnected, getMainToggleCombo, setMainToggleCombo, requestHotkeyRecording,
-  getSelectedBrushToolEnum, setFocusLassoActive, normalizeToolId
+  getSelectedBrushToolEnum, setFocusLassoActive, setFocusClearActive, normalizeToolId
 } from './hotkey/HotkeyBridge';
 import {
   LassoSmoothMode, LassoSmoothParams, LassoSmoothStatus, PenSmoothStatus,
@@ -52,6 +52,8 @@ import {
 import { connectSmoothDaemon } from './lasso/SmoothBridge';
 import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/MainToggleBus';
 import { FillPanelId, subscribeFillPanelToggle } from './utils/FillPanelToggleBus';
+import { subscribeClearModeToggle } from './utils/ClearModeBus';
+import { subscribeBlendMode } from './utils/BlendModeBus';
 import { setFocusMode } from './utils/FocusModeBus';
 import {
   debouncePsProbe, isPsBusy, markPsBusyForEvent, runWhenIdle,
@@ -195,6 +197,10 @@ class App extends React.Component<AppProps, AppState> {
     private unsubMainToggle: (() => void) | null = null;
     // 功能快捷键：纯色/图案/渐变子面板开关注订器（FillPanelToggleBus 轮询分发，卸载时退订）
     private unsubFillPanelToggle: (() => void) | null = null;
+    // 专注模式「清除模式」键（Shift+E）与混合模式热键的订阅器（ClearModeBus / BlendModeBus，
+    // 热键命中方写在绘画工具箱面板的 JS 上下文，经共享文件到达这里，卸载时退订）
+    private unsubClearModeToggle: (() => void) | null = null;
+    private unsubBlendMode: (() => void) | null = null;
     private isFilling = false;
     private pendingSelection = false;
     // 选区事件沉降窗（见 SELECTION_SETTLE_MS）：timer 运行期间到来的事件只刷新
@@ -382,6 +388,9 @@ class App extends React.Component<AppProps, AppState> {
         // 并把工具切回套索，让 H / L 像两个工具一样切换。由本面板独占写入（其它面板不调用，
         // 详见 HotkeyBridge 的 focusLassoKnown 说明）。
         setFocusLassoActive(on);
+        // 同步「清除模式」键（默认 Shift+E）：专注模式开启时注册 → 按下即确保主开关开启
+        // 并切换清除模式（主开关不会被关掉）。同样由本面板独占写入。
+        setFocusClearActive(on);
     }
 
     /**
@@ -544,6 +553,16 @@ class App extends React.Component<AppProps, AppState> {
             // 命令经共享文件 + token 去重后到达这里，翻的本来就是本面板自己的 state。
             this.unsubFillPanelToggle = subscribeFillPanelToggle((panel) => {
                 this.applyFillPanelHotkey(panel);
+            });
+            // 专注模式「清除模式」键（默认 Shift+E）：命令经 ClearModeBus 到达这里，
+            // 翻本面板的 clearMode（与面板上的勾选走同一个 toggleClearMode，语义一致）。
+            this.unsubClearModeToggle = subscribeClearModeToggle(() => {
+                this.toggleClearMode();
+            });
+            // 混合模式热键（Alt+Shift+<key>）：.8li 吞掉 PS 原生按键后经 BlendModeBus
+            // 把目标模式送到这里，改「选区填充」的混合模式（不再改图层/工具的混合模式）。
+            this.unsubBlendMode = subscribeBlendMode((mode) => {
+                this.applyBlendModeHotkey(mode);
             });
             // 套索实时平滑：.8li 模块回报的钩子/布防健康状态（同步回调，无 await）。
             this.unsubSmoothStatus = onLassoSmoothStatus((s) => { this.applySmoothStatus(s); });
@@ -947,6 +966,14 @@ class App extends React.Component<AppProps, AppState> {
         if (this.unsubFillPanelToggle) {
             try { this.unsubFillPanelToggle(); } catch { /* ignore */ }
             this.unsubFillPanelToggle = null;
+        }
+        if (this.unsubClearModeToggle) {
+            try { this.unsubClearModeToggle(); } catch { /* ignore */ }
+            this.unsubClearModeToggle = null;
+        }
+        if (this.unsubBlendMode) {
+            try { this.unsubBlendMode(); } catch { /* ignore */ }
+            this.unsubBlendMode = null;
         }
         if (this.unsubSmoothStatus) {
             try { this.unsubSmoothStatus(); } catch { /* ignore */ }
@@ -1700,6 +1727,22 @@ class App extends React.Component<AppProps, AppState> {
             clearMode: !prevState.clearMode,
             createNewLayer: prevState.clearMode ? prevState.createNewLayer : false // 如果开启清除模式，关闭新建图层模式
         }));
+    }
+
+    /**
+     * 混合模式热键命中（BlendModeBus 送达）：把 APP 面板「选区填充」的混合模式
+     * 改成目标模式。载荷是 PS 枚举值（normal/darken/…），面板内部一律用中文名
+     * （constants/blendModes.ts），因此先反查；反查不到（表外模式）时忽略本次命中，
+     * 绝不把 undefined 写进 state（那会让下拉显示空白、填充描述符拿到 "normal" 兜底）。
+     */
+    applyBlendModeHotkey(mode: string) {
+        const cn = (Object.keys(BLEND_MODES) as Array<keyof typeof BLEND_MODES>)
+            .find(k => BLEND_MODES[k] === mode);
+        if (!cn) {
+            console.warn('⚠️ 混合模式热键：未知模式 ' + mode + '，已忽略');
+            return;
+        }
+        if (this.state.blendMode !== cn) this.setState({ blendMode: cn });
     }
 
     handleFillModeChange(event: CustomEvent) {
