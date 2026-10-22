@@ -303,6 +303,23 @@ FILE_IDS = {
 
 # ---------------------------------------------------------------- 像素处理
 
+def rgba_to_luma(w, h, rgba):
+    """RGB 亮度图（0~255），供 PS 画笔的「纹理」通道使用（P3 方案 A）。
+
+    ⛔ 与笔尖遮罩**分开**：笔尖走 alpha（反相后黑=不透明），纹理走亮度（不反相）。
+       混在一起的后果是「凹槽」和「半透明」被表达成同一件事 —— 这正是 P3 要解决的问题：
+       Krita 里 alpha 管透明、R 通道管亮度，两个通道分工，PS 只有一条通道。
+
+    ⚠️ 用途尚未真机验证：PS 的纹理 Depth 按官方文档是「低点不上墨」（作用于透明度），
+       它是否同时影响**颜色**，决定了这套方案在白底白前景下能否出灰。验证前不要写进主链。
+    """
+    out = bytearray(w * h)
+    for i in range(w * h):
+        r, g, b = rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2]
+        out[i] = (r * 299 + g * 587 + b * 114) // 1000
+    return out
+
+
 def rgba_to_mask(w, h, rgba):
     """RGBA → 8bit 灰度遮罩，返回 **alpha 语义**（255 = 实心，0 = 完全透明）。
 
@@ -379,6 +396,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bundle", default=r"E:\Program Files\Krita (x64)\share\krita\bundles\RGBA_brushes.bundle")
     ap.add_argument("--out", default=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src", "brushes"))
+    ap.add_argument("--force", action="store_true",
+                    help="连已存在的笔尖图一起重生成。默认**跳过已有文件**，"
+                         "因为 impasto 系的图案是用户手工对位修正过的，重跑会冲掉。")
     args = ap.parse_args()
 
     z = zipfile.ZipFile(args.bundle)
@@ -422,16 +442,46 @@ def main():
         # 而文档名 = 打开的文件名。全叫 tip.png 时，6 支笔只会得到 6 个同名 tip.png，
         # 既无法按名选中，也无法用「前后清单差集」判断这次到底新建了哪一支。
         tip_out = "BRS-%s.png" % fid
+        pat_out = "PAT-%s.png" % fid
+
+        # ⛔ 默认不覆盖已有笔尖：2026-10-22 曾因重跑导出，把用户手工对位修正的
+        #    impasto / impasto-detail 两张图冲掉（靠 dist 里的副本才救回来）。
+        #    需要重生成时显式加 --force。
+        shd_out = "SHD-%s.png" % fid
+        exist_tip = os.path.exists(os.path.join(outdir, tip_out))
+        exist_pat = os.path.exists(os.path.join(outdir, pat_out))
+        exist_shd = os.path.exists(os.path.join(outdir, shd_out))
+        if exist_tip and exist_pat and exist_shd and not args.force:
+            print("skip %-26s (已存在，--force 可覆盖)" % fid)
+            brush = build_brush(pname, params, tip_file, tw, th, tip_out, "preview.png", idx)
+            brush["id"] = fid
+            brush["pattern"] = pat_out
+            brush["shade"] = shd_out
+            with open(os.path.join(outdir, "brush.json"), "w", encoding="utf-8") as f:
+                json.dump(brush, f, ensure_ascii=False, indent=2)
+            library["brushes"].append({"id": fid, "name": brush["name"], "category": brush["category"]})
+            continue
         # ⛔⛔ 极性在这里翻转：mask 是 alpha 语义（255=实心），
         #    PS 画笔遮罩是**反的**（0=黑=不透明，255=白=透明）⇒ 写文件时 255-v。
         #    只翻写文件这一处；preview 继续用 mask 原值，视觉不会被带歪。
         tip_gray = bytes(255 - v for v in mask)
         with open(os.path.join(outdir, tip_out), "wb") as f:
             f.write(png_encode_gray(tw, th, tip_gray))
+        # P3 方案 A 的纹理图案（用户真机验证：纹理只影响 alpha ⇒ 方案 A 否掉，留作对照）
+        with open(os.path.join(outdir, pat_out), "wb") as f:
+            f.write(png_encode_gray(tw, th, bytes(rgba_to_luma(tw, th, rgba))))
+        # P3 方案 B：浮雕双笔尖。
+        #   BRS-<id> = 凸起不透明（现有，用户已确认形状正确）
+        #   SHD-<id> = 凹槽不透明（= BRS 反相）
+        # 两支互为补集：阴影笔把凹槽压深、高光笔把凸起提亮，叠起来才有立体。
+        with open(os.path.join(outdir, shd_out), "wb") as f:
+            f.write(png_encode_gray(tw, th, bytes(255 - v for v in tip_gray)))
         with open(os.path.join(outdir, "preview.png"), "wb") as f:
             f.write(png_encode_rgba(250, 55, render_preview(mask, tw, th)))
 
         brush = build_brush(pname, params, tip_file, tw, th, tip_out, "preview.png", idx)
+        brush["pattern"] = pat_out
+        brush["shade"] = shd_out
         brush["id"] = fid
         with open(os.path.join(outdir, "brush.json"), "w", encoding="utf-8") as f:
             json.dump(brush, f, ensure_ascii=False, indent=2)

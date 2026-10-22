@@ -2137,7 +2137,9 @@ sp-radio[disabled] {
   overflow-y: hidden;
 }
 
-/* 分类胶囊（33×16 的 .toggle-switch 是另一套，勿混用尺寸口径） */
+/* 分类标签（33×16 的 .toggle-switch 是另一套，勿混用尺寸口径）
+   ⚠️ 圆角 3px：与 .action-button-N 同语言（用户 2026-10-22 口径）。
+      原来 11px 是纯胶囊形，和面板里所有矩圆角控件都不是一个语族。 */
 .bs-tab {
   flex-shrink: 0;
   height: 22px;
@@ -2148,7 +2150,7 @@ sp-radio[disabled] {
   color: var(--text-color);
   background-color: var(--bg-color);
   border: 1px solid var(--border-color);
-  border-radius: 11px;
+  border-radius: 3px;
   cursor: pointer;
 }
 

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { app } from 'photoshop';
 import { clipboard } from 'uxp';
 import { loadLibrary, previewSrc } from './library';
-import { applyBrush, ensureTip, readCurrentBrush, resetTipsFlag, TIP_PREFIX } from './psBrush';
+import { applyBrush, readCurrentBrush, rebuildState, TIP_PREFIX } from './psBrush';
 import type { ApplyStep, BrushDef } from './types';
 import '../styles/brush.css';
 
@@ -10,13 +10,15 @@ import '../styles/brush.css';
  * 第三入口「特制笔刷」面板。
  *
  * 第一版只做「看 → 选 → 用」这条主链：
- *   列表（分类 + 预览） → 点击 → 选中笔尖 + 下发参数 → 底部状态条逐步结果。
- * 参数滑杆、收藏、用户自存笔刷属于 P2，这里刻意不做，先把链路跑通。
+ *   列表（分类 + 预览） → 点击 → 装笔尖 → 选中 → 下发参数 → 删预设 → 底部状态条逐步结果。
  *
  * 视觉一律复用 common.css 的通用件（2026-10-20 收口）：
  *   标题 .main-title / 子标题 .group-title / 按钮 .action-button-N /
  *   状态条 .notify-bar + .indicator + .notify-text / 陈列 .bs-item 系列。
  * 本面板的 brush.css 只留骨架（根容器 / 底部区 / 校准区）。
+ *
+ * ⛔ 2026-10-22 撤掉「浮雕」开关与图层方案：用户否了 —— 给用户一个浮雕图层，
+ *    他们在图层蒙版上就画不出同样效果。浮雕要回到「笔刷本身」，另行处理。
  */
 
 /** 状态条语气：idle=中性灰、ok=绿、warn=橙、fail=红（与项目通知条语义一致） */
@@ -63,6 +65,18 @@ export default function BrushStudio() {
         };
     }, []);
 
+    /**
+     * 写状态条的**唯一入口**。
+     *
+     * ⛔⛔ 2026-10-22 12:08 用户录屏：状态条里出现铺满整屏的中文报错，看着像插件炸了。
+     *    状态条是一行提示，不是日志窗口 —— 超长的原文一律截断，全文在
+     *    `brushstate/_last-run.json` 的 `applyErr` 里。判据：任何一条提示 ≤ 120 字。
+     */
+    const say = useCallback((m: string) => {
+        const s = String(m ?? '');
+        say(s.length > 120 ? `${s.slice(0, 120)}…（全文见 brushstate/_last-run.json）` : s);
+    }, []);
+
     const shown = useMemo(
         () => brushes.filter((b) => !activeCat || b.category === activeCat),
         [brushes, activeCat]
@@ -77,29 +91,40 @@ export default function BrushStudio() {
             if (busy) return;
             if (!app.documents.length) {
                 setTone('warn');
-                setLog('请先打开一个文档');
+                say('请先打开一个文档');
                 return;
             }
             setBusy(true);
             setSteps([]);
             setActiveId(b.id);
             setTone('warn');
-            setLog(`应用「${b.name}」…`);
+            say(`应用「${b.name}」…`);
             try {
-                const r = await applyBrush(b, brushes, pushStep, (m) => setLog(m));
+                const r = await applyBrush(b, brushes, pushStep, (m) => say(m));
                 const junkNote = r.junk ? `（另有 ${r.junk} 个误建的 tip.png 请在画笔面板删除）` : '';
-                const toolPending = r.steps.some((x) => x.warn);
+                const pending = r.steps.filter((x) => x.warn).map((x) => x.name);
                 if (r.ok) {
-                    setTone(toolPending ? 'warn' : 'ok');
-                    setLog(`「${b.name}」已就绪${toolPending ? '（工具不透明度待校准，画笔本体已生效）' : ''}${junkNote}`);
+                    setTone(pending.length ? 'warn' : 'ok');
+                    // 三种路径分开说，别让用户对着一句话猜我们到底干了什么。
+                    // ⚠️ 不再写死"用完已删掉"：删没删取决于缓存/笔尖两道守门，
+                    //    真删了会有「清理预设」步骤，没删会以黄点列在 pending 里。
+                    const how =
+                        r.source === 'cache'
+                            ? '直接复用缓存，未创建任何预设'
+                            : r.source === 'preset'
+                              ? '复用了面板里已有的预设'
+                              : '安装了一次（之后会走缓存）';
+                    say(
+                        `「${b.name}」已就位 —— ${how}${pending.length ? `（${pending.join('、')}待校准）` : ''}${junkNote}`
+                    );
                 } else {
                     setTone('fail');
-                    const first = r.steps.find((s) => !s.ok && s.name !== '下发工具不透明度');
-                    setLog(`「${b.name}」未完全生效：${first?.msg || '见下方步骤'}${junkNote}`);
+                    const first = r.steps.find((s) => !s.ok && !s.warn);
+                    say(`「${b.name}」未完全生效：${first?.msg || '见下方步骤'}${junkNote}`);
                 }
             } catch (e: any) {
                 setTone('fail');
-                setLog(`失败：${cleanErr(e)}`);
+                say(`失败：${cleanErr(e)}`);
             } finally {
                 setBusy(false);
             }
@@ -107,38 +132,30 @@ export default function BrushStudio() {
         [busy, brushes, pushStep]
     );
 
+    /**
+     * 「修复当前笔尖」= **丢掉这支笔的状态缓存**，然后完整重装一遍。
+     *
+     * 正常点击现在走的是「复用缓存」快路径（零弹框、零预设）。只有这几种情况需要这个按钮：
+     *   · 笔尖图换过了 / 笔尖尺寸改了（缓存里的笔尖已经过时）；
+     *   · 上次装到一半失败；
+     *   · 画笔参数被手动改乱。
+     * 代价：会弹一次「新建画笔」框（PS 定义笔尖的固有行为，绕不过）。
+     */
     const onRepair = useCallback(async () => {
         if (busy) return;
-        setBusy(true);
-        setSteps([]);
-        setTone('warn');
-        setLog('检查笔尖…');
-        try {
-            // 按需单支之后，这里只修「当前选中/第一支」——不再一次灌 6 支
-            const target = brushes.find((b) => b.id === activeId) ?? brushes[0];
-            if (!target) {
-                setTone('warn');
-                setLog('笔刷库为空');
-                return;
-            }
-            resetTipsFlag();
-            const r = await ensureTip(target, (m) => setLog(m));
-            if (r.failed.length) {
-                setTone('fail');
-                setLog(`笔尖补齐失败 ${r.failed.length} 支：${r.failed[0].msg}`);
-                r.failed.forEach((f) => pushStep({ name: `安装笔尖 ${f.name}`, ok: false, msg: f.msg }));
-            } else {
-                setTone('ok');
-                const junkNote = r.junk ? `；另有 ${r.junk} 个误建的 tip.png 请在画笔面板删除` : '';
-                setLog((r.installed.length ? `已安装 ${r.installed.length} 支笔尖` : '笔尖齐备，无需重装') + junkNote);
-            }
-        } catch (e: any) {
-            setTone('fail');
-            setLog(`安装失败：${cleanErr(e)}`);
-        } finally {
-            setBusy(false);
+        const target = brushes.find((b) => b.id === activeId) ?? brushes[0];
+        if (!target) {
+            setTone('warn');
+            say('笔刷库为空');
+            return;
         }
-    }, [busy, brushes, activeId, pushStep]);
+        try {
+            await rebuildState(target.id);
+        } catch {
+            /* 没有缓存也不用管 */
+        }
+        await onPick(target);
+    }, [busy, brushes, activeId, onPick]);
 
     const onCalib = useCallback(async () => {
         try {
@@ -146,10 +163,10 @@ export default function BrushStudio() {
             setCalib(json);
             setShowCalib(true);
             setTone('ok');
-            setLog('已读取当前画笔描述符');
+            say('已读取当前画笔描述符');
         } catch (e: any) {
             setTone('fail');
-            setLog(`读取失败：${cleanErr(e)}`);
+            say(`读取失败：${cleanErr(e)}`);
         }
     }, []);
 
@@ -159,10 +176,10 @@ export default function BrushStudio() {
         try {
             await (clipboard as any).copy(calib);
             setTone('ok');
-            setLog('已复制到剪贴板');
+            say('已复制到剪贴板');
         } catch {
             setTone('warn');
-            setLog('复制失败，请手动选中');
+            say('复制失败，请手动选中');
         }
     }, [calib]);
 
@@ -231,11 +248,14 @@ export default function BrushStudio() {
                     </div>
                 ) : null}
 
-                <div className="bs-actions">
+                {/* 按钮行照前端规范用通用 .row-between（左「修复当前笔尖」右「读当前画笔」）。
+                    ⚠️ 按钮宽度由字数决定：修复当前笔尖=6 字 ⇒ action-button-6(98px)；
+                       读当前画笔=5 字 ⇒ action-button-5(85px)。写成小一号会把文字挤掉。 */}
+                <div className="row-between">
                     <div
                         role="button"
                         tabIndex={0}
-                        className={btnCls('action-button-4')}
+                        className={btnCls('action-button-6')}
                         onClick={busy ? undefined : onRepair}
                     >
                         修复当前笔尖

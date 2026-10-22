@@ -43,5 +43,7 @@
     "preset": "m)_RGBA_05_Impasto-details",
     "tipFile": "RGBA anim 01.gih"
   },
-  "engineVersion": 1
+  "engineVersion": 1,
+  "pattern": "PAT-impasto-detail.png",
+  "shade": "SHD-impasto-detail.png"
 }

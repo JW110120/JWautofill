@@ -159,3 +159,193 @@ allowed from inside a modal scope. See https://www.adobe.com/go/ps_executeasmoda
   `currentToolOptions`（首选）/ `tool(targetEnum)`（兜底）。失败**只标黄**（`ApplyStep.warn`），
   不影响「笔刷已就绪」的结论。
 - 校准方式：点面板「读当前画笔」拿 `currentToolOptions` 描述符，按里面的真名补映射表。
+
+## 图层样式只能用 batchPlay：`set` + `layer` + `layerEffects`（2026-10-22）
+
+UXP **没有**暴露图层样式 API（`Layer` 上没有 effects 相关成员），斜面/浮雕/投影/描边
+一律只能走 batchPlay。已录制过的形态只有一条，两条候选：
+
+```
+{ _obj:'set',
+  _target:[{_ref:'layer',_enum:'ordinal',_value:'targetEnum'}],
+  to:{ _obj:'layer',
+       layerEffects:{ _obj:'layerEffects',
+         scale:{_unit:'percentUnit',_value:100},
+         bevelEmboss:{ _obj:'bevelEmboss',
+           bevelStyle:{_enum:'bevelEmbossStyle',_value:'innerBevel'},
+           bevelTechnique:{_enum:'bevelTechnique',_value:'softRound'},
+           strength:{_unit:'percentUnit',_value:75},
+           bevelSize:{_unit:'pixelsUnit',_value:2},
+           blur:{_unit:'pixelsUnit',_value:3},
+           soften:{_unit:'pixelsUnit',_value:1},
+           localLightingAngle:{_unit:'angleUnit',_value:120},
+           localLightingAltitude:{_unit:'angleUnit',_value:30},
+           useGlobalAngle:false,
+           highlightMode:{_enum:'blendMode',_value:'screen'},
+           highlightColor:{_obj:'RGBColor',red:255,grain:255,blue:255},
+           highlightOpacity:{_unit:'percentUnit',_value:55},
+           shadowMode:{_enum:'blendMode',_value:'multiply'},
+           shadowColor:{_obj:'RGBColor',red:0,grain:0,blue:0},
+           shadowOpacity:{_unit:'percentUnit',_value:60} } } } }
+```
+
+charID 兜底键：`ebbl` / `Styl`(BESl=InrB) / `bvlT`(SfBL) / `Dpth` / `Angl` / `lagl` / `uglg` /
+`hglM`(BlnM=Scrn) / `hglC`(RGBC) / `hglO` / `sdwM`(BlnM=Mltp) / `sdwC` / `sdwO` / `Sftn`。
+⛔ 不写 `bevelDirection`（默认就是「上」）—— 少一个可能拼错的键，少一次排查。
+
+验证：PS 对不认识的键**静默忽略**、命令照样返回成功 ⇒ 必须读回
+`{_obj:'get',_target:[{_ref:'layer',targetEnum}]}` 看 `layerEffects.bevelEmboss`（或 `ebbl`）
+是否真的存在。读不回来（老版本拒 get）才退化为「按命令成功算，日志标注未校验」。
+
+## 图层级操作走 DOM，不猜 batchPlay（2026-10-22）
+
+以下都是 UXP 文档化的 `Layer` / `Document` 方法，**不需要任何键名校准**，
+凡是"建层/复制/位移/调亮度/改混合模式"优先用它们：
+`doc.createLayer({name})` · `layer.duplicate()` · `layer.translate(dx,dy)` ·
+`layer.adjustBrightnessContrast(b,d)` · `layer.blendMode = 'multiply'|'screen'` ·
+`layer.opacity` · `layer.name` · `layer.delete()` · `doc.activeLayers = [layer]`。
+`activeLayers` 赋值失败时退 `layer.selected = true`，再退
+`{_obj:'select',_target:[{_ref:'layer',_id}]}`。
+
+⚠️ 顺序陷阱：`adjustBrightnessContrast` 作用于**活动层** ⇒ 复制后必须先选中复制层再调；
+位移要放在调色**之后**，否则扩散到新区域的边缘还是原色，会露白边。
+
+## ⛔⛔ `dialogOptions` 三档语义：`dontDisplay` 是**允许弹框**的那一档（2026-10-22）
+
+Adobe 文档（batchPlay → Command execution options）原文：
+
+| 取值 | 行为 |
+|---|---|
+| `silent`（**默认**） | 不出 UI；命令需要额外参数 / 出错 ⇒ **返回脚本错误** |
+| `dontDisplay` | 不出 UI，**但出错或命令需要额外参数时仍会显示 UI** |
+| `display` | 出 UI |
+
+后果链（本项目三次返工都是它）：
+- `defineBrush` 需要"画笔名称"这个参数 ⇒ `dontDisplay` 照章弹「新建画笔」框；
+- `select` 目标不存在时 `dontDisplay` 弹**宿主原生错误框**、且不进 JS catch；
+- 改 `silent` 后两者都变成**普通可捕获异常** ⇒ 于是「按名 select 能不能成功」
+  可以直接当**存在性探针**用（PS 没有按名查预设是否存在的可靠 API）。
+
+⚠️ 位置：`dialogOptions` **只认描述符自己的 `_options`**。
+batchPlay 第二参数只认 `synchronousExecution` / `continueOnError` /
+`immediateRedraw` / `modalBehavior`；写 `dialogOptions` 进去无效
+（历史误判："全局 options 会盖掉描述符里的设置"，其实那一处从来没生效）。
+
+## 画笔预设三条实用接口（2026-10-22 真机/论坛交叉验证）
+
+- **定名**：`defineBrush` 用**文档名**当预设名 ⇒ 笔尖文件名直接取 `BRS-<id>.png`，
+  名字就确定了，**不要**用"定义前后差集"去反射真名（缓存不新鲜，差集恒空）。
+- **选中**：`{_obj:'select', _target:[{_ref:'brush', _name:'<完整名>'}], _isCommand:false}`。
+- **读当前画笔名**：`get property:'currentToolOptions'` → `result[0].currentToolOptions.brush.name`。
+- **设工具选项**（选项栏的不透明度/流量）：先 `get currentToolOptions`，改字段，
+  再 `set` 到 `{_ref:'paintbrushTool'}`、`to` 整份 cto —— 比只 set 两个键稳，
+  因为交回去的是 PS 自己刚吐出来的结构。
+- **删除预设**：只有「删当前选中」这一条
+  （`{_obj:'delete',_target:[{_ref:'brush',_enum:'ordinal',_value:'targetEnum'}],_isCommand:false}`），
+  ⇒ 删之前**必须确认选中的是自己那支**，否则删的是用户的笔。
+
+## ⛔⛔ 笔尖数据活在「工具运行时状态」里，不靠预设续命（2026-10-22）
+
+用户真机：**删掉当前画笔预设后，画笔工具仍停在那支笔上、仍能画。**
+⇒ `sampledBrush` 的采样笔尖存在于工具状态（`currentToolOptions`），预设只是它的一个"入口"。
+
+推论（本项目的核心手法）：
+- `get currentToolOptions` → 整份描述符（含 `brush.sampledBrush.sampledData`）
+- `set` 回 `{_ref:'paintbrushTool'}`（`to` 用**展开的 cto**，已被 setToolOpacity 验证）
+⇒ **可以完全不建预设地"复活"一支笔**，只要那份 cto 还在。
+
+⚠️ `sampledData` 是 **UUID 字符串**，不是像素本体 ⇒ 跨会话是否有效无保证。
+   必须三层校验：`set` 不抛 / `brush.name` 对 / `sampledData` 与缓存一致。
+   第三层缺了就会出现"名字对、笔尖却是空心圆"。实现在 `src/brushstudio/psState.ts`。
+
+## 样本（CEP）的静默装笔链：工具预设 ≠ 画笔预设（2026-10-22）
+
+被逆向样本的做法（ExtendScript，**UXP 无等价 API**）：
+```jsx
+ref.putName(charIDToTypeID("toolPreset"), "<n>-<m>");
+executeAction(stringIDToTypeID("select"), desc, DialogModes.NO);   // 清上次残留
+executeAction(stringIDToTypeID("delete"), desc, DialogModes.NO);
+app.load(new File("...<n>-<m>.tpl"));                              // 静默载入
+```
+- 载入的是 **tool preset**，所以「从不弹新建画笔框」「画笔预设里一个不多」。
+- `.tpl` = `8BTP` + `8BIM/tppa` + `8BIM/tpbd` + PS descriptor；
+  descriptor 里 `sampledData` 是 UUID，像素在 `8BIM/tpbd` 私有资源里。
+- PS 2026 自带 `Legacy Brushes.abr` 与样本 `.abr` 都是新块结构 `00 0a 00 02` + `8BIM`/`samp`，
+  **不是**公开文档里的 `8BAM` v6 ⇒ 自造 abr 需另做格式逆向。
+- UXP 侧若要复刻，只剩 `batchPlay` 发载入命令这一条，命令形态无公开文档（未验证）。
+
+## JSXBIN 解码规律（2026-10-22，读样本 .jsx 用）
+
+`@JSXBIN@ES@2.0@` 之后：**每两个字符一组，取第二个字符 + 0x1F 即原文字节**。
+第一字符是类别标记（`j`/`i`/`h`/`E`/`F`/`X`/`z`…），不影响解码。
+所以 `jTjFjMjFjDjU` → `select`、`jEjFjMjFjUjF` → `delete`、`jQjVjUiOjBjNjF` → `putName`。
+⚠️ 只对 ASCII 有效；带参数的字符串（`Fe...`）会把长度前缀一起编进去，需按段切分。
+
+## ⛔⛔ 画笔预设 `select` 有两种引用形态，只试一种会「恒判不存在」（2026-10-22）
+
+```js
+{_obj:'select', _target:[{_ref:'brushPreset', _name:'<完整名>'}], _isCommand:false}   // ①
+{_obj:'select', _target:[{_ref:'brush',       _name:'<完整名>'}], _isCommand:false}   // ②
+```
+只试 ② 时，真机上恒失败 ⇒ 所有以「能不能选中」为存在性判据的逻辑全部误判"不存在"，
+后果链：**每次都重新 define（弹框）→ 每次都留一个新预设 → 下次还是认不出**。
+一个 bug 解释三种现象。⇒ 两种都试，把成功的那条记在会话里。
+
+配套的**存在性正解**：先 `get` 出真实预设清单，用真名去选；
+猜名字（`BRS-<id>.png` / `BRS-<id>`）只能当兜底。
+PS 给重复定义会自动追加「 拷贝」后缀 ⇒ 匹配要允许后缀，但**不许用宽前缀**
+（`BRS-impasto` 会吃掉 `BRS-impasto-detail`）。
+
+## ⛔ PS 错误码速查（本项目已踩到）
+
+| 码 | 含义 | 典型现场 |
+|---|---|---|
+| `-128` | **用户取消**（弹框上点了取消） | `defineBrush` 弹「新建画笔」框 → 用户取消 |
+| `-32005` | 程序错误 | `{_obj:'make',_target:[{_ref:'brush'}]}` 非法 |
+| `-25920` | 命令不存在/当前不可用 | `_obj` 猜错（如 `selectAll`） |
+| `8007` | 找不到元素 | 按名引用不存在的对象 |
+
+## ⛔ `defineBrush` 在 PS 27 无法静默；`DflB` 是下一步候选（2026-10-22）
+
+`dialogOptions` 的 `silent` / `dontDisplay` 都挡不住「新建画笔」名称框（真机三次复现）。
+- 兜底写法：`{_obj:'DflB', 'Nm  ':'<名>', _target:[{_ref:'document',_enum:'ordinal',_value:'targetEnum'}]}`
+  —— 菜单「定义画笔预设」的 4 字符 OSType，ExtendScript 时代脚本用它静默建笔。
+  ⚠️ 与 stringID `defineBrush` **不保证同一条处理器**，需真机验证。
+- 若 `DflB` 成功，PS 可能用**自己取的名字**（不一定是文档名）⇒ 成功判据改成
+  「定义后 `cto.brush.name` 与定义前不同」+ 清单里出现 `sampledBrush`，别死磕 `BRS-*`。
+
+## ⛔ 删预设的二次删除会误删用户的笔（2026-10-22）
+
+`delete` 只能删「当前选中」。第一次删成功后 PS 会把当前画笔挪到邻居上，
+若为了"确认删干净"再删一次，删掉的是邻居 = 用户自己的笔。
+⇒ 清单仍列着该名时，只有**当前画笔名仍是它**才允许换形态重试，否则抛错停手。
+
+## ⛔⛔ `select` 画笔预设 = 高亮格子；换笔尖必须 `set`（2026-10-22）
+
+```js
+// ✗ 只是把画笔预设面板里的那一格高亮，当前工具画出来的一点没变
+{_obj:'select', _target:[{_ref:'brush'|'brushPreset', _name:'<名>'}], _isCommand:false}
+
+// ✓ 真正把预设装到当前画笔工具上（= ExtendScript 的 setd + Brsh）
+{_obj:'set', _target:[{_ref:'brush', _name:'<名>'}]}
+{_obj:'set', _target:[{_ref:'brushPreset', _name:'<名>'}]}
+```
+
+症状链（一个 bug 三个症状）：select 不报错 ⇒ 以为笔已就位 ⇒ 回读 `cto.brush.name`
+仍是旧笔 ⇒ 缓存抓到旧笔（黄）⇒ 删除安全阀判定不符（黄）⇒ 用户看到的还是旧笔。
+
+⚠️ `set + brush` 装的是**当前工具**。当前若是移动工具，笔尖就装歪了 ⇒
+切工具用 `{_obj:'select', _target:[{_ref:'tool',_enum:'ordinal',_value:'paintbrushTool'}]}`。
+
+⚠️ `delete` 删的是**面板高亮项**，不是"当前工具的笔"。set 不一定同步高亮 ⇒
+删前先按名 `select` 一次把目标对准。
+
+## ⛔ 总纲：PS 里"改状态"的动作，判据只能是「回读状态变了」
+
+本项目已因此返工五次（dialogOptions 档位、defineBrush、差集定名、select 形态、select vs set）。
+统一写法：**先调真函数 → 再回读权威字段 → 对不上就当失败**。
+- 换笔尖：回读 `currentToolOptions.brush.name`
+- 换笔尖数据：回读 `currentToolOptions.brush.sampledBrush.sampledData`
+- 写参数：回读 `currentToolOptions` 对应字段
+- 删预设：回读画笔清单（`presetManager` / `app.brushes`）
+**"命令没报错"在 PS 里等于什么都没说。**

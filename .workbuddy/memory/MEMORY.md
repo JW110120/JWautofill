@@ -68,8 +68,31 @@
 44 ⛔⛔ **DETACH 日志先落再停服**（0x013F）：停服里任何 join 卡住都会让日志既无 Unload 也无 DETACH（2026-10-19 21:39 现场）。排查关闭崩溃三步：`pi8li.log` 有无 `[dll] DLL_PROCESS_DETACH ... reserved=` → `%LOCALAPPDATA%\JWautofill\dumps\crash-*.dmp`（0x013F 起内置取证）→ WER `AppCrash_Photoshop*` 的 `故障模块`。
 45 ⛔⛔ **batchPlay 的 `_obj` 只能来自「录到过/跑通过」的样本**（2026-10-20 -25920）：报 `命令"<未知的>"当前不可用` = 命令名 PS 不认识，不是缺参数也不是缺模态。全选=`set`+`channel.selection`→`allEnum`（**没有 `selectAll` 这个命令**）；选画笔=`select`+`{_ref:'brush',_name}`；定义笔尖=`defineBrush`（3 条候选）。改完必须**复查真实状态**（`defineBrush` 会「成功但没建成」）；关临时文档按 `_id` 不按 `targetEnum`。详见 `refs/uxp-api-layer.md`。
 
+46 ⛔⛔ **`dialogOptions` 写 `silent`，不写 `dontDisplay`**（2026-10-22）：`dontDisplay` 的条款是「出错或命令需要额外参数时**仍显示 UI**」⇒ `defineBrush` 照章弹「新建画笔」框、`select` 目标不存在时弹宿主错误框且不进 catch。`silent` 下两者都是普通可捕获异常，于是「按名 select 能否成功」可直接当存在性探针。⛔ 该键只认**描述符自己的 `_options`**（batchPlay 第二参数不认）。画笔预设链：名字=笔尖文件名（PS 用文档名，不用差集）；顺序=定义→选中→下发→**删除（放 finally）**；`cto.brush.name` 可校验选中、删前必验（不符宁可不删）。详见 `refs/uxp-api-layer.md`。
+
+47 ⛔⛔⛔ **`select` 画笔预设只是高亮面板格子，换笔尖必须 `set`**（2026-10-22，第五次返工）：`{_obj:'select',_ref:'brush'|'brushPreset',_name}` **不改当前工具的笔尖**，所以「select 没报错」被当成「笔已就位」；真凶一个 bug 撑起三个症状（笔尖仍是上一支 / 缓存黄 / 清理预设黄）。正解 `{_obj:'set',_target:[{_ref:'brush',_name}]}`（ExtendScript 的 `setd`+`Brsh`）。⛔ `set+brush` 装到**当前工具** ⇒ 先切工具（`select`+`tool`/`ordinal`/`paintbrushTool`）；`delete` 删的是**高亮项** ⇒ 删前按名 `select` 对准。⛔ **总纲：改状态的动作判据只能是「回读权威字段变了」，"命令没报错"等于什么都没说。**
+
+48 ⛔⛔ **装笔 = 缓存整份 `currentToolOptions`，不是每次点都 defineBrush**（2026-10-22）。依据两句真机事实：删掉预设后画笔仍停在上面可用（⇒ 笔尖活在工具状态里）、整份 cto set 回 `paintbrushTool` 不黄。快路径 `set cto`（零弹框零预设），慢路径 define→参数→抓 cto 存盘→删预设。缓存 `getDataFolder()/brushstate/<id>.json` 只存 brush/opacity/flow，**参数每次重发**；三层校验（set 不抛 / `brush.name` 对 / `sampledData` 一致），不过就 `dropState` 退回 define。实现在 `src/brushstudio/psState.ts`。⛔ 残留弹框只可能来自 defineBrush，别在别处找。
+
+49 ⛔⛔⛔ **`set` brush 的 `to` 必须带笔尖身份**（2026-10-22 铁证 `_last-run.json`）：只给几何 6 键（diameter/spacing/angle/roundness/flow/opacity）⇒ PS 把当前笔刷**整体换成 `computedBrush`**（无 `name`、无 `sampledBrush.sampledData`）＝ 软边喷枪；而且偏偏发生在「下发画笔参数=成功」那次（失败反而什么都不写、笔尖不丢），所以"上一轮对了这轮又坏"不是回归。修法：`tipPayload()` 抄出 `_obj/name/sampledBrush/sampledData` 合进 `to`，写完**回读 `sampledData` 是否还是原 UUID**，丢了立刻用预设名重装（笔尖优先于参数）。`cto.brush` 两形态：`sampledBrush`（真毛刷）vs `computedBrush`（纯几何）⇒ `readToolOptions` 按信息量排序（tip > name > 像工具选项），**缓存/删除一律以 `sampledData` 为准，不以 `name` 为准**（`computedBrush` 恒无 name，拿 name 当门槛 = 永远失败）。⛔ 工具上没有采样笔尖时**禁止下发几何**。**几何下发走 `set paintbrushTool to 整份 cto`（只换 brush 里的几何键），`set brush targetEnum` 只当回退**；回读判据=`sampledData` 没变 **且** 直径真改了。
+
+50 ⛔⛔⛔ **PS 27 换笔尖 = `select + brush _name + makeVisible:false`**（2026-10-22 11:41 实证）：`MkVs`（AM 键名 `makeVisible:false`）是"应用"与"只高亮面板"的唯一分界，缺它就是假成功。`set+brush` 在 27 上报 **-1715**、`set+brushPreset` 报 **-25920** ⇒ `set` 这条换笔路在 PS 27 上已死，别再当首选。⛔⛔ **`brushes`/`presetManager` 属性是惰性快照**：删掉的预设照样列着 ⇒ 禁止用它当"删除成功"或"预设还在"的判据（11:41 因此误报黄点）。可靠探针=**按名 `select`**：名字不存在必报错 ⇒ 删完仍能选中=真没删，选不中=删掉了。
+
+51 ⛔⛔⛔ **每一条失败的 batchPlay 都被 PS 画成一条黄色通知**（2026-10-22 12:00「长黄条」根因）：前缀是插件名 `悦绘: 命令"选择"当前不可用（-25920）`，失败多少条就刷多少条、连成一片。⇒ 铁律：**正常路径的失败命令数必须为 0**；判据看 `_last-run.json` 新增的 `failCount`。推论：**能用「读状态」判的，绝不用「试一下会不会报错」判** —— 旧版拿按名 `select` 当预设存在性探针（天生靠报错给答案），走缓存时也先探 2 名字×2 形态 + 试 2 名字×6 装法 ⇒ 一次点击 13 条失败。⇒ 主链顺序定为 **① 缓存（零失败）→ ② 只读清单拿真名 → ③ 装笔 → ④ define**，探测整段挪到缓存之后；`ensureBrushTool`/`listBrushNames`/`readToolOptions` 全部加**会话级形态记忆**（`toolForm`/`listForm`/`readForm`），只发能用的那条。⛔ 27 上切工具用裸引用 `{_ref:'paintbrushTool'}`，`{_ref:'tool',_enum:'ordinal'}` 必失败。
+
+52 ⛔⛔ **分清淡黄色条是谁画的**（2026-10-22 12:10）：PS 自己的黄条=**一句话**「悦绘: 命令"选择"当前不可用。（-25920）」，一条失败一条；而**面板 `.notify-bar`** 也是黄的，会把整段中文铺满屏（`.notify-text` 允许换行）⇒ 用户说"很长一段黄色 notify"时先看文案特征：带 `#1 … / #2 …` 拼接 = 我们自己打印的，不是 PS。判据：`_last-run.json` 的 `at` 时间戳与截图时间对不上，说明那一帧是旧构建/旧点击。⇒ 状态条只能写一句话：`applyFailureBrief()` + `BrushStudio.say()`（>120 字截断）+ `.bs-foot .notify-text` 两行 clamp（跨文件覆盖用两级选择器）。完整原文一律进 `_last-run.json` 的 `applyErr`。
+
 ## 维护约定
 
 超限先下沉 refs 再精简本文件。`scripts/`=沉淀工具（git 跟踪）；`analysis/`=草稿（gitignored）；`outputs/` 废止。
 2026-10-19 清收尾：Run 键 `JWautofillHotkeyDaemon`+`%LOCALAPPDATA%\JWautofill\daemon\` 已删（保留 smooth8li/configpath.txt）；native/ 四旧项目+analysis/+outputs/ 已删；备份 `../JWautofill-backup-20261019-pre-cleanup/`（715MB 核验）+回收站双保险。
 2026-10-19 用户口径：`PluginsStorage/PHSP/27/External/`=用户安装版数据、`.../Developer/`=测试数据，两者独立**不许合并**；Plug-ins 里的旧 .8li 直接覆盖、**不留备份**。
+
+## P3 浮雕：方向已定（2026-10-22）
+
+⛔⛔ **不许用图层/图层样式做浮雕**（用户原话：那样在图层蒙版上画不出同样效果）。
+⛔ 纹理通道也不行（只影响 alpha，用户实测）。
+✅ 方向 = **插件回放第二遍**：录笔迹 → 抬笔后用「SHD 反相笔尖 + 暗色」在同一目标上重放一遍。
+计划书 `docs/brush-replay-plan-2026-10-22.md`（含代码侦察行号 + P1–P4 分阶段 + 红线）。
+现状：执行端（伪造包喂 PS）已有且验证过（`smooth_engine.c:4551/3050`）；
+录制账本、回放源、真实压感、时序、协议四块全空 ⇒ 是"输入端全新写"，不是接线。

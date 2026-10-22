@@ -89,21 +89,18 @@
     word-break: break-all;
 }
 
-/* 动作按钮行：按钮本身是通用 .action-button-N，这里只给行内间距 */
-.bs-actions {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-}
-
-.bs-actions .action-button-4 {
-    margin-right: 10px;
+/* 按钮行：容器用通用 .row-between（前端规范），本文件只做两处微调。
+   ⚠️ 上下边距归零：.notify-bar / .bs-steps 各自带 8px 下边距，下方 .bs-sign 带 8px
+      上边距；再叠 .row-between 默认的 10px 会变成 18px 的空洞。 */
+.bs-foot > .row-between {
+    margin: 0 auto;
 }
 
 /* 忙碌时两个按钮都是禁用态外观。
    ⛔ common.css 的「禁用态不响应 hover」只覆盖了 .action-button-auto，
-      这里补一条本行的同义规则，否则处理中鼠标划过仍会缩放变色（看起来像没禁用）。 */
-.bs-actions .action-button-disabled:hover {
+      这里补一条同义规则，否则处理中鼠标划过仍会缩放变色（看起来像没禁用）。
+   ⚠️ 作用域挂在 .bs-foot 上而不是原来的 .bs-actions —— 那个类已经换成 .row-between。 */
+.bs-foot .action-button-disabled:hover {
     background-color: var(--button-bg);
     border-color: var(--border-color);
     transform: none;
@@ -154,4 +151,15 @@
     margin-top: 8px;
     font-size: 10px;
     color: var(--disabled-color);
+}
+
+/* 状态条正文：**最多两行**，超出省略。
+   ⛔ 2026-10-22 12:08 用户录屏：状态条被一条 6 段拼接的报错铺满整屏，看着像插件炸了。
+   文案侧已在 BrushStudio 的 say() 里截到 120 字，这里再加一道视觉上限（跨文件覆盖用两级选择器）。
+   ⚠️ -webkit-line-clamp 需要 display:-webkit-box + overflow:hidden 同时在场才生效。 */
+.bs-foot .notify-text {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
 }
