@@ -2214,7 +2214,10 @@ sp-radio[disabled] {
 
 .bs-meta {
   font-size: 10px;
-  color: var(--disabled-color);
+  /* ⛔ 与 brush.css 的次要文字同一条规矩：不用 --disabled-color（那是禁用控件的颜色，
+     darkest 主题下 rgb(80,80,80) 贴着 rgb(50,50,50) 的底色，根本看不清）。 */
+  color: var(--text-color);
+  opacity: 0.7;
 }
 
 /* 预览条：244×55 的 PNG 原比例缩到卡片宽度 */
@@ -2229,5 +2232,6 @@ sp-radio[disabled] {
 .bs-empty {
   padding: 12px 2px;
   font-size: 11px;
-  color: var(--disabled-color);
+  color: var(--text-color);
+  opacity: 0.72;
 }

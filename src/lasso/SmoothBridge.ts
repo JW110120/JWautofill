@@ -61,6 +61,66 @@ export function onSmoothDaemonStatus(fn: (c: boolean) => void): () => void {
 export function isSmoothDaemonConnected(): boolean { return connected; }
 
 /**
+ * 往 .8li 发一条**任意**原生消息（0x0201 起用：合成点击 `canvasClick`）。
+ *
+ * ⛔ 只用它发「.8li 已经认识」的 type：宿主对未知消息只打一行节流日志就丢掉，
+ *   面板侧会表现为「点了没反应」而且没有任何报错。新增 type 必须两边同时上。
+ */
+export function sendHostMessage(msg: any): boolean {
+  try {
+    if (currentWs && currentWs.readyState === (currentWs.OPEN ?? 1)) {
+      currentWs.send(JSON.stringify(msg));
+      return true;
+    }
+  } catch { /* ignore */ }
+  return false;
+}
+
+/* ---------------------------------------------------------------- 原生回执（一次性）
+
+ * 为什么要这个东西：`canvasClick` 是**发出去就回不来**的（WS 单向），
+ * 于是「点了没效果」只能在事后翻 C 侧日志猜。2026-10-22 那次 alt 被吞成 0，
+ * 面板侧完全无从得知，一路把「两发普通点击」当成「装储层成功」报出去。
+ * ⇒ 原生每发完一枪都会 broadcast 一条 `canvasClickResult`，这里把它接成 Promise，
+ *    `alt` / `ok` / `why` 全都能在 JS 里当场核对。
+ */
+interface HostWaiter {
+  type: string;
+  done: boolean;
+  timer: any;
+  resolve: (m: any) => void;
+}
+const hostWaiters: HostWaiter[] = [];
+
+/** 等一条指定 `type` 的原生下行消息；超时返回 null。 */
+export function waitHostMessage(type: string, ms: number): Promise<any | null> {
+  return new Promise((resolve) => {
+    const w: HostWaiter = {
+      type,
+      done: false,
+      timer: null,
+      resolve: (m: any) => {
+        if (w.done) return;
+        w.done = true;
+        if (w.timer) clearTimeout(w.timer);
+        const i = hostWaiters.indexOf(w);
+        if (i >= 0) hostWaiters.splice(i, 1);
+        resolve(m);
+      }
+    };
+    w.timer = setTimeout(() => w.resolve(null), ms);
+    hostWaiters.push(w);
+  });
+}
+
+function dispatchHostMessage(msg: any) {
+  if (!msg?.type) return;
+  for (const w of hostWaiters.slice()) {
+    if (w.type === msg.type) w.resolve(msg);
+  }
+}
+
+/**
  * 连接平滑模块（幂等 + 引用计数）。
  * 由 APP 面板在挂载时调用一次；`#pixeladjustment` 面板若将来也需要，
  * 直接再调一次即可，不会建出第二条连接。
@@ -91,6 +151,7 @@ export function connectSmoothDaemon(): () => void {
         try {
           const msg = JSON.parse(ev.data);
           if (msg?.type === 'smoothState') handleLassoSmoothMessage(msg);
+          else dispatchHostMessage(msg);   /* canvasClickResult 等一次性回执 */
         } catch { /* ignore */ }
       };
       ws.onclose = () => {

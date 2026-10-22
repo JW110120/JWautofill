@@ -349,3 +349,99 @@ PS 给重复定义会自动追加「 拷贝」后缀 ⇒ 匹配要允许后缀�
 - 写参数：回读 `currentToolOptions` 对应字段
 - 删预设：回读画笔清单（`presetManager` / `app.brushes`）
 **"命令没报错"在 PS 里等于什么都没说。**
+
+---
+
+## ⛔⛔ `set brush` 的 `to` 必须带笔尖身份（2026-10-22 铁证 `_last-run.json`）
+
+只给几何 6 键（`diameter/spacing/angle/roundness/flow/opacity`）⇒ PS 把当前笔刷
+**整体替换成 `computedBrush`**（无 `name`、无 `sampledBrush.sampledData`）＝ 一支软边喷枪。
+
+```json
+"brush": { "_obj": "computedBrush", "diameter": {"_value": 820},
+           "hardness": {"_value": 0}, "roundness": {"_value": 68}, "spacing": {"_value": 10} }
+```
+
+⛔ 最反直觉的一点：**只有"下发参数成功"的那次才丢笔尖**。失败时什么都没写进去，笔尖反而完好
+⇒ "上一轮看着对了、这轮又坏了"不是回归，是当时参数没下发成功。
+
+`cto.brush` 两形态：
+
+| `_obj` | 含义 | 有 `name` | 有 `sampledData` |
+|---|---|---|---|
+| `sampledBrush` | 真毛刷 / 采样笔尖 | 有 | 有 |
+| `computedBrush` | 纯几何计算笔刷（喷枪） | **无** | **无** |
+
+⇒ 判据/缓存**一律以 `sampledData` 为准，不以 `name` 为准**（`computedBrush` 恒无 name，
+拿 name 当门槛 = 永远失败）。`readToolOptions` 必须按**信息量排序**取结果：
+带 `sampledData` > 带 `name` > "只是像工具选项"（旧实现 `if (cto.brush) return` 会把
+computedBrush 当成功）。
+
+⛔ 工具上没有采样笔尖时**禁止下发几何**（裸发几何 = 现场制造喷枪）。
+几何下发走 `set paintbrushTool to 整份 cto`（只换 brush 里的几何键），
+`set brush targetEnum` 只当回退；回读判据 = `sampledData` 没变 **且** 直径真改了。
+
+---
+
+## ⛔⛔ PS 27 换笔尖 = `select + brush _name + makeVisible:false`（2026-10-22 11:41 实证）
+
+```js
+{ _obj: 'select', _target: [{ _ref: 'brush', _name: 'BRS-xxx.png' }], makeVisible: false }
+```
+
+`makeVisible:false`（ExtendScript 的 `MkVs`）是「**应用**」与「**只高亮面板**」的唯一分界，
+缺它就是假成功。同动作在 27 上的其他形态全部报错：
+
+| 形态 | PS 27 结果 |
+|---|---|
+| `set + brush _name` | **-1715** |
+| `set + brushPreset _name` | **-25920** |
+| `select + brush _name`（无 MkVs） | 命令成功，**但只高亮** |
+| `select + brush _name + makeVisible:false` | ✅ 真换笔尖 |
+
+⛔⛔ **`brushes` / `presetManager` 属性是惰性快照**：删掉的预设照样列着
+⇒ **禁止**用它当"删除成功"或"预设还在"的判据（11:41 因此误报黄点）。
+可靠探针 = **按名 `select`**：名字不存在 PS 必报错 ⇒ 删完仍能选中 = 真没删，选不中 = 删掉了。
+⚠️ 但这条探针天生靠"报错"给答案，**只能用在一次性/异常路径**，不许进日常主链（见下条）。
+
+---
+
+## ⛔⛔ 每一条失败的 batchPlay 都被 PS 画成一条黄色通知（2026-10-22 12:00）
+
+前缀是插件名：`悦绘: 命令"选择"当前不可用。（-25920）`。失败多少条就刷多少条，连成一片
+⇒ 用户看到"很长一段黄色 notify"。
+
+⇒ **铁律：正常路径的失败命令数必须为 0。** 判据看 `brushstate/_last-run.json` 的 `failCount`。
+⇒ **能用「读状态」判的，绝不用「试一下会不会报错」判。**
+
+主链顺序因此定为：**① 缓存（零失败）→ ② 只读清单拿真名 → ③ 装笔 → ④ define**。
+探测整段挪到缓存之后。`ensureBrushTool` / `listBrushNames` / `readToolOptions` 全部加
+**会话级形态记忆**（`toolForm` / `listForm` / `readForm`），只发能用的那条。
+
+⛔ 27 上切工具用**裸引用** `{_ref:'paintbrushTool'}`；`{_ref:'tool',_enum:'ordinal'}` 必失败。
+
+### 分清「淡黄色条」是谁画的（12:10 补充）
+
+| 特征 | 谁画的 |
+|---|---|
+| **一句话**「悦绘: 命令"选择"当前不可用。（-25920）」 | PS 自己，一条失败一条 |
+| 整段中文、带 `#1 … / #2 …` 拼接 | **我们面板的 `.notify-bar`**，`.notify-text` 允许换行会铺满屏 |
+
+判据：`_last-run.json` 的 `at` 与截图时间对不上 ⇒ 那一帧是旧构建/旧点击。
+⇒ 状态条只写一句话：`applyFailureBrief()` + `BrushStudio.say()`（>120 字截断）
++ `.bs-foot .notify-text` 两行 clamp（跨文件覆盖用两级选择器）。完整原文一律进 `_last-run.json` 的 `applyErr`。
+
+---
+
+## ⛔ 缓存整份 `currentToolOptions` 是"装笔"的正路（2026-10-22）
+
+依据两句真机事实：① 删掉预设后画笔仍停在上面且可用（⇒ 笔尖活在工具状态里，不靠预设续命）；
+② 整份 cto `set` 回 `paintbrushTool` 不黄（`setToolOpacity` 早就在这么干）。
+
+- 快路径：`set cto` —— 零弹框、零预设、零命令失败
+- 慢路径：`define` → 参数 → 抓 cto 存盘 → 删预设
+- 缓存文件 `getDataFolder()/brushstate/<id>.json` 只存 `brush/opacity/flow`，**参数每次重发**
+- 三层校验：`set` 不抛 / 实际取决于 `sampledData` 一致 —— 不过就 `dropState` 退回 define
+- `loadState` **拒收没有 `sampledData` 的缓存**（空壳缓存灌回去 = 换喷枪）
+- 实现：`src/brushstudio/psState.ts`
+⛔ 残留弹框只可能来自 `defineBrush`，别在别处找。

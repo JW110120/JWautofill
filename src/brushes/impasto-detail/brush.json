@@ -45,5 +45,8 @@
   },
   "engineVersion": 1,
   "pattern": "PAT-impasto-detail.png",
-  "shade": "SHD-impasto-detail.png"
+  "shade": "SHD-impasto-detail.png",
+  "mixer": {
+    "pattern": "PAT-impasto-detail.png"
+  }
 }

@@ -47,7 +47,8 @@
     right: 10px;
     top: 15px;
     font-size: 11px;
-    color: var(--disabled-color);
+    color: var(--text-color);
+    opacity: 0.7;
 }
 
 /* 底部状态区：常驻不滚动 */
@@ -85,7 +86,11 @@
     min-width: 0;
     font-size: 11px;
     line-height: 14px;
-    color: var(--disabled-color);
+    /* ⛔ 2026-10-22 用户反馈：灰色文字与面板底色反差太小，看不清。
+       `--disabled-color` 是给**禁用控件**用的（darkest 主题下是 rgb(80,80,80)，底色 rgb(50,50,50)，
+       几乎贴在一起）。次要文字改成「主文字色 + 透明度」，这样在任何主题下都自动有足够反差。 */
+    color: var(--text-color);
+    opacity: 0.78;
     word-break: break-all;
 }
 
@@ -143,14 +148,29 @@
     margin-top: 3px;
     font-size: 10px;
     line-height: 13px;
-    color: var(--disabled-color);
+    color: var(--text-color);
+    opacity: 0.7;
 }
 
 /* 素材署名：常驻最底一行（ATTRIBUTION 说明） */
 .bs-sign {
     margin-top: 8px;
     font-size: 10px;
-    color: var(--disabled-color);
+    color: var(--text-color);
+    opacity: 0.66;
+    /* 署名靠左占满（右侧临时入口已于 2026-10-22 删除，gap 留给将来） */
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* 署名文字可压缩：面板窄的时候省略，不撑破布局 */
+.bs-sign > span:first-child {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* 状态条正文：**最多两行**，超出省略。

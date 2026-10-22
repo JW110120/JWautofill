@@ -467,6 +467,279 @@ static void broadcast_smooth_state(void)
     if (build_smooth_state(buf, (int)sizeof(buf)) > 0) broadcast(buf);
 }
 
+/* ================================================================ 合成点击（0x0201）
+
+ * ── 为什么要合成点击 ────────────────────────────────────────────────
+ * 混合器的**储层（reservoir）**是 PS 内部位图：元数据可读
+ * （`reservoirState/Cols/Rows/ChannelNumber`），但像素两边都被封死 ——
+ * 2026-10-22 实测 `reservoirChannels` = `{}`、单独 `get` 报 -25920（命令不存在）。
+ * 而 PS 把**每一条失败的 batchPlay 都画成一条黄色通知** ⇒ 盲试描述符写入这条路
+ * 既没有依据、成本又高（一次点击刷十几条黄条，12:05 已踩过）。
+ *
+ * PS 自己只认一种装填方式：**Alt+左键点画布 = 用画布上的颜色载入画笔**
+ * （Photoshop.exe 里的原话：`$$$/WBrushTool/Help/Alt=Click to load brush with colors from canvas.`，
+ *  见 2026-10-22 反查）。这是**工具输入层**的手势，AM 事件表里没有对应 command id：
+ * 同一份反查里 `wetness`/`reservoir*`/`autoFill`/`loadSolidColorOnly` 全都在，
+ * `loadBrush` / `cleanBrush` / `mixerBrushTool` 一个都没有；15:05 的
+ * `_mixer-listen.json` 也证实**这个手势不派发任何带储层字段的通知**
+ * （30 条全是 modalJavaScriptScopeEnter/Exit、toolModalStateChanged、historyStateChanged）。
+ * ⇒ 结论：唯一可行路径是本模块在 PS 进程内**合成一次 Alt+左键**。
+ *
+ * ── 坐标从哪来（面板不知道文档↔屏幕映射，也不需要知道）────────────────
+ * 面板会把彩色图案铺满一张**临时文档**再调这里，所以画布上任何一点都落在图案上。
+ * 本模块只需挑一个「确实在 PS 画布上」的点：从主框客户区中心向外试探，接受
+ * 第一个「命中窗口在主框子树内 且 面积够大」的点。
+ * ⛔ 面积判据不能省：停靠坞 / 工具条 / 选项栏也是主框子树里的窗口，
+ *    点在它们上面储层什么也吸不到，而日志里只会显示「失败」。
+ */
+/**
+ * 0x0204：**单击，不拖**。
+ *
+ * 0x0203 加的 `drag` 已删除 —— 用户口径（16:59）：
+ *   「拖动逻辑完全是没必要的，只要正确点到画布中央，吸一下就行；
+ *     画布像素少是因为你吸歪了。」
+ * 事实核对：16:33 那次 `opaque=340` 的画布是 250×250，而点击点 (1920,1038)
+ * 离文档区中心 (1633,1101) 差 287px ⇒ 点已经在画布外，当然"像素少"。
+ * 修的是点，不是笔。
+ */
+typedef struct ClickReq { int alt; int dx; int dy; } ClickReq;
+typedef struct ClickFind { DWORD pid; HWND found; } ClickFind;
+
+static volatile LONG g_clkBusy = 0;
+static HANDLE g_clkThread = NULL;
+/** 挑点结果留痕（0x0202）：命中窗口的类名与尺寸。
+ *  判读 `alt` 日志行时，只靠 `pt=(x,y)` 无法区分「点在画布上」还是「点在主框空白处」——
+ *  后者点击什么也不会发生，但日志照样 ok=1。 */
+static char s_clkHitCls[64] = "";
+static int s_clkHitW = 0;
+static int s_clkHitH = 0;
+/** 命中窗口的左上角（屏幕坐标）。配合 `pt` 就能看出「点在这个窗口内的哪个位置」——
+ *  窗口 400×400 而 pt 落在它的右上角 ⇒ 那一枪吸到的是边角料。 */
+static int s_clkHitX = 0;
+static int s_clkHitY = 0;
+
+static BOOL CALLBACK click_frame_cb(HWND h, LPARAM lp)
+{
+    ClickFind* f = (ClickFind*)lp;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(h, &pid);
+    if (pid != f->pid) return TRUE;
+    char cls[64];
+    cls[0] = 0;
+    GetClassNameA(h, cls, (int)sizeof(cls) - 1);
+    if (strcmp(cls, "Photoshop") != 0) return TRUE;   /* 与 smooth_engine.c 的 frame_pick_cb 同判据 */
+    f->found = h;
+    return FALSE;
+}
+
+/* 自己解析一遍主框：WS 消息可能比引擎线程先到，不能依赖 s_psFrame 已经就绪。 */
+static HWND click_find_frame(void)
+{
+    ClickFind f;
+    f.pid = GetCurrentProcessId();
+    f.found = NULL;
+    EnumWindows(click_frame_cb, (LPARAM)&f);
+    return f.found;
+}
+
+static int click_pick_point(HWND frame, int dx, int dy, POINT* out)
+{
+    RECT cr;
+    if (!GetClientRect(frame, &cr)) return 0;
+    POINT c;
+    c.x = cr.right / 2;
+    c.y = cr.bottom / 2;
+    if (!ClientToScreen(frame, &c)) return 0;
+    static const int offs[][2] = {
+        {0,0},{0,-40},{0,40},{-60,0},{60,0},{0,-80},{0,80},{-120,0},{120,0},
+        {0,-160},{0,160},{-200,0},{200,0},{0,-260},{0,260},{-320,0},{320,0}
+    };
+    HWND hit = NULL;
+    RECT wr;
+    for (unsigned i = 0; i < sizeof(offs) / sizeof(offs[0]); i++) {
+        POINT p;
+        p.x = c.x + offs[i][0] + dx;
+        p.y = c.y + offs[i][1] + dy;
+        HWND h = WindowFromPoint(p);
+        if (!h) continue;
+        if (h != frame && !IsChild(frame, h)) continue;
+        RECT r;
+        if (!GetWindowRect(h, &r)) continue;
+        if (r.right - r.left < 240 || r.bottom - r.top < 240) continue;  /* 排掉 dock/工具条/选项栏 */
+        hit = h; wr = r;
+        break;
+    }
+    if (!hit) return 0;
+
+    /* ⛔⛔ 0x0204：**点必须落在文档区的正中，不是主窗口客户区的正中。**
+     *
+     * 现场（16:53 那三次点击）：
+     *   pt=(1920,1038)                          ← 旧代码点的是"主框客户区中心"
+     *   hit=Static 3140x1924@(63,139)           ← 命中的文档区矩形
+     * 该矩形中心 = (1633,1101) ⇒ 旧点偏右 287px、偏上 63px。
+     * 右侧 637px 是浮动面板、顶部 139px 是选项栏，客户区中心天生不在画布上。
+     * 400 的画布还勉强压住边，250 的画布就整个点飞了（用户：「位于画布的外侧」）。
+     *
+     * 解法：从命中窗口继续**往里钻**（取当前窗口中心 → 再命中一次），
+     * 直到不再变成更内层的窗口为止。PS 的画布是自绘的 Static，
+     * 钻到底就是文档区，它的中心 = 图像中心（JS 侧已 fitOnScreen 居中）。
+     */
+    for (int i = 0; i < 5; i++) {
+        POINT mid;
+        mid.x = (wr.left + wr.right) / 2;
+        mid.y = (wr.top + wr.bottom) / 2;
+        HWND inner = WindowFromPoint(mid);
+        if (!inner || inner == hit) break;
+        if (inner != frame && !IsChild(frame, inner)) break;
+        RECT ir;
+        if (!GetWindowRect(inner, &ir)) break;
+        if (ir.right - ir.left < 240 || ir.bottom - ir.top < 240) break;
+        hit = inner; wr = ir;
+    }
+
+    POINT mid;
+    mid.x = (wr.left + wr.right) / 2;
+    mid.y = (wr.top + wr.bottom) / 2;
+    /* dx/dy 是给"图像中心不在窗口中心"的特殊布局留的微调（默认 0）。 */
+    mid.x += dx;
+    mid.y += dy;
+    /* 落点必须仍在这个窗口里，否则宁可不点（点错地方比不点更糟：会画花用户画布）。 */
+    if (mid.x < wr.left || mid.x >= wr.right || mid.y < wr.top || mid.y >= wr.bottom) return 0;
+
+    s_clkHitCls[0] = 0;
+    GetClassNameA(hit, s_clkHitCls, (int)sizeof(s_clkHitCls) - 1);
+    s_clkHitW = (int)(wr.right - wr.left);
+    s_clkHitH = (int)(wr.bottom - wr.top);
+    s_clkHitX = (int)wr.left;
+    s_clkHitY = (int)wr.top;
+    *out = mid;
+    return 1;
+}
+
+/* 绝对坐标移动用虚拟桌面归一化（多屏/负坐标都正确）。 */
+static void click_move_abs(POINT pt)
+{
+    long vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    long vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    INPUT in;
+    ZeroMemory(&in, sizeof(in));
+    in.type = INPUT_MOUSE;
+    if (vw > 1 && vh > 1) {
+        in.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+        in.mi.dx = (LONG)(((LONGLONG)(pt.x - GetSystemMetrics(SM_XVIRTUALSCREEN)) * 65535) / (vw - 1));
+        in.mi.dy = (LONG)(((LONGLONG)(pt.y - GetSystemMetrics(SM_YVIRTUALSCREEN)) * 65535) / (vh - 1));
+    } else {
+        in.mi.dwFlags = MOUSEEVENTF_MOVE;
+        in.mi.dx = pt.x;
+        in.mi.dy = pt.y;
+    }
+    SendInput(1, &in, sizeof(INPUT));
+}
+
+static void click_key_alt(int down)
+{
+    INPUT k;
+    ZeroMemory(&k, sizeof(k));
+    k.type = INPUT_KEYBOARD;
+    k.ki.wVk = VK_MENU;
+    if (!down) k.ki.dwFlags = KEYEVENTF_KEYUP;
+    SendInput(1, &k, sizeof(INPUT));
+}
+
+static void click_mouse_button(int down)
+{
+    INPUT m;
+    ZeroMemory(&m, sizeof(m));
+    m.type = INPUT_MOUSE;
+    m.mi.dwFlags = down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
+    SendInput(1, &m, sizeof(INPUT));
+}
+
+static DWORD WINAPI click_thread(LPVOID param)
+{
+    ClickReq req = *(ClickReq*)param;
+    free(param);
+
+    int ok = 0, why = 0;
+    POINT pt;
+    pt.x = pt.y = -1;
+    HWND frame = click_find_frame();
+    if (!frame) {
+        why = 1;
+    } else if (!click_pick_point(frame, req.dx, req.dy, &pt)) {
+        why = 2;
+    } else {
+        /* PS 不在前台时，第一次点击只用于激活窗口（并被吞掉）⇒ 先自己激活再点。 */
+        if (GetForegroundWindow() != frame) {
+            SetForegroundWindow(frame);
+            Sleep(180);
+        }
+        POINT prev;
+        GetCursorPos(&prev);
+        click_move_abs(pt);
+        Sleep(40);
+        /* ⛔ 顺序不能变：Alt 必须先按住，PS 是在**左键按下那一刻**读键态决定
+           「载入画笔」还是「画一笔」。 */
+        if (req.alt) { click_key_alt(1); Sleep(40); }
+        click_mouse_button(1);
+        Sleep(60);
+        click_mouse_button(0);
+        Sleep(40);
+        if (req.alt) { click_key_alt(0); Sleep(30); }
+        SetCursorPos(prev.x, prev.y);          /* 光标还给用户（笔尖那边的系统光标会跳一下） */
+        ok = 1;
+    }
+
+    log_line("alt", "合成点击 alt=%d dx=%d dy=%d ok=%d why=%d pt=(%ld,%ld) hit=%s %dx%d@(%ld,%ld) ptInHit=%ld,%ld frame=%p fg=%p fgIsFrame=%d",
+             req.alt, req.dx, req.dy, ok, why,
+             (long)pt.x, (long)pt.y, s_clkHitCls[0] ? s_clkHitCls : "?", s_clkHitW, s_clkHitH,
+             (long)s_clkHitX, (long)s_clkHitY,
+             (long)(pt.x - s_clkHitX), (long)(pt.y - s_clkHitY),
+             (void*)frame,
+             (void*)GetForegroundWindow(), (frame && GetForegroundWindow() == frame) ? 1 : 0);
+
+    char buf[192];
+    _snprintf(buf, sizeof(buf),
+              "{\"type\":\"canvasClickResult\",\"ok\":%d,\"why\":%d,\"alt\":%d,\"x\":%ld,\"y\":%ld}",
+              ok, why, req.alt, (long)pt.x, (long)pt.y);
+    buf[sizeof(buf) - 1] = 0;
+    broadcast(buf);
+
+    InterlockedExchange(&g_clkBusy, 0);
+    return 0;
+}
+
+/* 起一枪（异步：WS 客户端线程不能被 Sleep 链占住）。同一时刻只允许一发。 */
+static void click_start(int alt, int dx, int dy)
+{
+    if (InterlockedCompareExchange(&g_clkBusy, 1, 0) != 0) {
+        log_line("alt", "合成点击被拒：上一发还没结束（alt=%d dx=%d dy=%d）", alt, dx, dy);
+        return;
+    }
+    if (g_clkThread) { CloseHandle(g_clkThread); g_clkThread = NULL; }
+    ClickReq* r = (ClickReq*)malloc(sizeof(ClickReq));
+    if (!r) { InterlockedExchange(&g_clkBusy, 0); return; }
+    r->alt = alt; r->dx = dx; r->dy = dy;
+    g_clkThread = CreateThread(NULL, 0, click_thread, r, 0, NULL);
+    if (!g_clkThread) {
+        free(r);
+        InterlockedExchange(&g_clkBusy, 0);
+        log_line("alt", "合成点击线程创建失败");
+    }
+}
+
+/* 卸载路径必须等它跑完：合成点击线程里的 SendInput 会在本模块被卸载之后继续
+   向系统投递事件（与 0x013F 记的「活线程留给系统」同一族风险）。 */
+static void click_join(DWORD ms)
+{
+    if (!g_clkThread) return;
+    if (WaitForSingleObject(g_clkThread, ms) != WAIT_OBJECT_0)
+        log_line("alt", "⚠ 合成点击线程 %lums 未退出（仍 CloseHandle）", (unsigned long)ms);
+    CloseHandle(g_clkThread);
+    g_clkThread = NULL;
+    InterlockedExchange(&g_clkBusy, 0);
+}
+
 /* ================================================================ 消息分发 */
 
 static void handle_message(const char* js)
@@ -536,6 +809,24 @@ static void handle_message(const char* js)
     if (_stricmp(type, "shutdown") == 0) {
         commit(0);
         log_line("main", "shutdown ⇒ 平滑已关（服务常驻）");
+        return;
+    }
+    /* 0x0201：合成一次画布点击（alt=1 就是混合器「用画布颜色载入画笔」）。
+       面板在**不可脚本化**的储层上唯一能走的路，详见上面 click_thread 的注释。 */
+    if (_stricmp(type, "canvasClick") == 0) {
+        int alt = 0, dx = 0, dy = 0;
+        double v;
+        /* ⛔⛔ 0x0202：`json_bool` **只认 true/false 两个字面量**（见它的实现），
+           面板发的是数字 `"alt":1` ⇒ 旧写法把它整条吞成 0。
+           真实现场（2026-10-22 16:16）：两次点击的日志全是 `alt=0`，
+           第一枪本该「用画布颜色载入画笔」，结果变成普通落笔 ——
+           储层指纹 1→1 没动、dab 是纯前景色、用户看到的也是纯色。
+           所以这里必须按**数字**解析，bool 只作兜底。 */
+        if (json_num(js, "alt", &v)) alt = (v != 0.0) ? 1 : 0;
+        else json_bool(js, "alt", &alt);
+        if (json_num(js, "dx", &v)) dx = roundi(v);
+        if (json_num(js, "dy", &v)) dy = roundi(v);
+        click_start(alt, dx, dy);
         return;
     }
     /* 其余未知消息**必须留痕**（节流 2s）：面板侧协议一变，这里静默吞掉的表现就是
@@ -849,6 +1140,9 @@ static void services_stop(void)
     }
     /* M3：热键子系统先于 WS 客户端表清理（它自己的 kh_cli_shutdown_all 会代劳）。 */
     keyhook_stop();
+    /* 0x0201：合成点击线程必须在关 socket 之前收干净（它跑完会 broadcast 一次结果）。
+       ⛔ 与 0x013F 同纪律：不能把「回调/投递仍在跑」的线程留给卸载后的系统。 */
+    click_join(1500);
     /* 关掉所有客户端连接 */
     EnterCriticalSection(&g_cliLk);
     for (int i = 0; i < MAX_CLI; i++) {
@@ -977,7 +1271,20 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
     return 0;
 }
 
-__declspec(dllexport) long jw8li_version(void) { return 0x0200; }
+/* 导出表版本（面板不看它，但排障时用来确认「装的是哪一版」）。
+   0x0201（2026-10-22）：新增 canvasClick 合成点击（混合器储层重装，见 click_thread）。
+   0x0202（2026-10-22）：canvasClick 的 `alt` 改按**数字**解析（json_bool 只认 true/false，
+                        数字 1 被吞成 0 ⇒ 两枪都变成普通落笔，储层纹丝不动）；挑点命中
+                        窗口的类名/尺寸写进 `[alt]` 日志行。
+   0x0203（2026-10-22）：canvasClick 新增 `drag`（按下后水平拖 N 像素再抬笔）。混合器是
+                        "湿笔"，**单击几乎落不下颜料**（16:33 那轮 dab 只有 340px，
+                        面板误判成"纯色"）⇒ 验货必须拖一段才是真实笔迹；`[alt]` 日志
+                        再补命中窗口左上角，好判断点落在窗口的哪个角。
+   0x0204（2026-10-22 17:00）：**删掉 drag**（用户裁定：拖动没必要，像素少是吸歪造成的）；
+                        挑点改为「命中窗口中心 + 往里钻」——旧的"主框客户区中心"
+                        在 3840 屏上比文档区中心偏右 287px，250 的画布因此整个点飞
+                        （pt=(1920,1038) vs 文档区中心 (1633,1101)）。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x0204; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {

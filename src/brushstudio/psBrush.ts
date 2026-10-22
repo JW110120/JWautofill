@@ -61,6 +61,7 @@
 import { action, app, core } from 'photoshop';
 import { storage } from 'uxp';
 import { runAsModal } from '../utils/psAccess';
+import { reloadReservoir } from './psMixer';
 import {
     currentBrushName,
     dropState,
@@ -903,7 +904,7 @@ async function applyParams(
 
 // ------------------------------------------------------------------ 主入口
 
-export type ApplySource = 'cache' | 'preset' | 'define';
+export type ApplySource = 'cache' | 'preset' | 'define' | 'mixer';
 
 export interface ApplyResult {
     steps: ApplyStep[];
@@ -920,6 +921,8 @@ export interface ApplyResult {
     restored?: boolean;
     /** 本次实际走的路径，详见 applyBrush 里的注释 */
     source?: ApplySource;
+    /** 非空 = 这一次是**降级**完成的（混合器笔刷直径改不动，图案被等比缩到笔刷尺寸） */
+    degraded?: string;
 }
 
 /**
@@ -957,6 +960,93 @@ export async function applyBrush(
 
     /** capture 失败时的 PS 原始响应，最后统一落盘（排障用，不影响主链） */
     let debugRaw: any = null;
+
+    /* ── ⓿ 混合器路线（2026-10-22 用户定案：「装储层」并入这一下点击）────────
+     *
+     * 带 `mixer` 字段的笔**不走** defineBrush + cto 缓存那条链。原因不是那条链不好，
+     * 而是它造出来的是「一支带采样笔尖的普通画笔」—— 普通画笔一笔只有一个亮度，
+     * 而厚涂要的是**一笔多亮度**，PS 里只有混合器的储层能做到（储层是位图，落笔按位置取色）。
+     *
+     * ⛔ 三条不能动的：
+     *   ① **整段不能包在一个 runAsModal 里**。装储层靠原生合成 Alt+左键，
+     *      模态作用域里 PS 会挡住工具输入 —— 点被吞掉，日志却全绿。
+     *      `reloadReservoir` 自己按需开小而短的模态作用域（开文档/读像素/写像素）。
+     *   ② 笔刷直径必须等于图案长边（178×400 ⇒ 400），否则吸的区域与图案尺寸不一致，
+     *      图案会被裁掉或缩放 —— 用户说的"严丝合缝"就是这个。
+     *   ③ 换前景色后储层会变成纯前景色（PS 内部行为），所以**每次点击都要重装一次**，
+     *      这正是"点一次堆叠细描就装一次储层"的原因。
+     */
+    if (brush.mixer?.pattern) {
+        const rel = `brushes/${brush.id}/${brush.mixer.pattern}`;
+        onLog?.(`「${brush.name}」走混合器储层路线（图案 ${brush.mixer.pattern}）…`);
+        /** 降级说明（笔刷直径改不动、图案被缩放）—— step 里写，step 外要用 */
+        let degraded = '';
+        const st = await step(
+            '安装并应用笔刷',
+            async () => {
+                const rr = await reloadReservoir((m) => onLog?.(m), {
+                    pattern: rel,
+                    side: brush.mixer!.side
+                });
+                if (rr.stage === 'not-mixer') throw new Error('切不到混合器画笔（候选 wetBrushTool / mixerBrushTool 都被拒）');
+                if (rr.stage === 'no-ws') throw new Error('原生宿主没连上（WS 18924）—— 请重载插件');
+                if (rr.err) throw new Error(rr.err);
+                /* ⛔ 两层判据分开说，别混成一句（16:16 那句「储层装上了但没验上」就是把
+                   两层揉在一起，结果两个都没说清，用户只能看到一条红条）：
+                     · `!rr.loaded`  ⇒ 储层里根本没位图，Alt+点击没生效
+                     · `!rr.ok`      ⇒ 位图装进去了，但那一笔画出来不是多亮度
+                 */
+                if (!rr.loaded) {
+                    throw new Error(
+                        `储层没装上（${rr.after ?? '读不到储层'}）—— Alt+点击没有把图案装进去，` +
+                            `现在还是纯色。详见 brushstate/_mixer-reload.json`
+                    );
+                }
+                if (!rr.ok && rr.dab) {
+                    /* ⛔ 别再把三种完全不同的失败写成一句「画出来是纯色」：
+                       16:33 那次 `opaque` 只有 340px（混合器单击本来就几乎不出颜料），
+                       却被报成"纯色"，用户只能一头雾水。三类分开说：
+                         · 颜料太少 ⇒ Alt 那一枪吸到了空白（视图没居中）
+                         · 颜料够但没层次 ⇒ 储层里确实是纯色
+                         · 有层次但色相不对 ⇒ 图案没跟着前景色走 */
+                    const d = rr.dab;
+                    const why =
+                        d.opaque <= rr.side * 6
+                            ? '这一笔几乎没落下颜料（Alt 那枪多半吸到了空白）'
+                            : d.lumaStd < 6
+                              ? '画出来是一片纯色（储层里装的不是图案）'
+                              : '颜色没跟着前景色走';
+                    throw new Error(
+                        `储层装上了（${rr.after}），但${why}（拖笔 ${d.opaque}px、亮度 ±${d.lumaStd}、` +
+                            `色相 cos=${d.tintCos}） —— 详见 brushstate/_mixer-reload.json`
+                    );
+                }
+                if (!rr.ok) throw new Error('储层没装成功 —— 详见 brushstate/_mixer-reload.json');
+                degraded = rr.degraded;
+                push({
+                    name: rr.degraded ? '装储层（降级）' : '装储层',
+                    ok: true,
+                    warn: !!rr.degraded,
+                    msg:
+                        `${rr.patSize} 图案 → ${rr.side}×${rr.side} 方块，笔刷直径 ${rr.diaBefore}→${rr.diaAfter}；` +
+                        `储层 ${rr.after ?? '—'}；dab 亮度 ±${rr.dab?.lumaStd ?? 0}、色相 cos=${rr.dab?.tintCos ?? 0}` +
+                        (rr.degraded ? `；⚠️ ${rr.degraded}` : '')
+                });
+            },
+            push
+        );
+        // 换过的工具/直径对用户是"看不见的状态"，成功也要留一行说明；失败由 step 自己标红
+        if (st.ok) onLog?.(`「${brush.name}」储层已就位${degraded ? `（降级：${degraded}）` : ''}`);
+        return {
+            steps,
+            ok: steps.every((s) => s.ok || s.warn),
+            junk: 0,
+            preset: '',
+            source: 'mixer',
+            restored: false,
+            degraded: degraded || undefined
+        };
+    }
 
     /**
      * 抓当前工具状态存成缓存。

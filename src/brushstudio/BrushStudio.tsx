@@ -3,6 +3,7 @@ import { app } from 'photoshop';
 import { clipboard } from 'uxp';
 import { loadLibrary, previewSrc } from './library';
 import { applyBrush, readCurrentBrush, rebuildState, TIP_PREFIX } from './psBrush';
+import { connectSmoothDaemon } from '../lasso/SmoothBridge';
 import type { ApplyStep, BrushDef } from './types';
 import '../styles/brush.css';
 
@@ -24,9 +25,25 @@ import '../styles/brush.css';
 /** 状态条语气：idle=中性灰、ok=绿、warn=橙、fail=红（与项目通知条语义一致） */
 type Tone = 'idle' | 'ok' | 'warn' | 'fail';
 
-/** 去掉 Error 前缀，面板里只显示人话部分 */
+/** 去重 Error 前缀，面板里只显示人话部分 */
 function cleanErr(e: any): string {
     return String(e?.message ?? e).replace(/^Error:\s*/, '');
+}
+
+/**
+ * 卡片上那个尺寸怎么显示。
+ *
+ * ⛔ 2026-10-22 用户定案：`params.diameter.base`（820）对混合器笔**作废** ——
+ *    真实直径每次装储层都会被改成图案长边（178×400 ⇒ 400）。
+ *    面板显示一个自己都不用的数字，只会让人怀疑笔刷没装对。
+ *    混合器笔只认 `mixerSize`（`library.ts` 装载时读 PNG 头部算出来的长边）。
+ */
+function sizeLabel(b: BrushDef): string {
+    if (b.mixer?.pattern) {
+        const side = b.mixerSize ?? b.mixer.side ?? 0;
+        return side ? `${side}px` : '—';
+    }
+    return `${Math.round(b.params.diameter.base)}px`;
 }
 
 export default function BrushStudio() {
@@ -41,6 +58,16 @@ export default function BrushStudio() {
     const [showCalib, setShowCalib] = useState(false);
     const [calib, setCalib] = useState('');
     const [loadErr, setLoadErr] = useState('');
+
+    /**
+     * 本面板也要一条 WS 18924 连接。
+     *
+     * ⛔ 为什么非加不可：合成点击（`canvasClick`）走的是这条 WS，而它原本只由
+     *    `#app` 面板发起（`connectSmoothDaemon()`）。用户只开着「特制笔刷」面板时
+     *    连接根本不存在 ⇒ 装储层会以「原生宿主没连上」失败，而且看起来像坏掉了。
+     *    该函数是**幂等 + 引用计数**的（同一 JS 世界共用一条 socket），多调无害。
+     */
+    useEffect(() => connectSmoothDaemon(), []);
 
     useEffect(() => {
         let alive = true;
@@ -74,7 +101,10 @@ export default function BrushStudio() {
      */
     const say = useCallback((m: string) => {
         const s = String(m ?? '');
-        say(s.length > 120 ? `${s.slice(0, 120)}…（全文见 brushstate/_last-run.json）` : s);
+        // ⛔ 这里必须写 setLog：上一版批量替换时写成了 say，成了**无条件自递归**
+        //    （每写一次状态条就再调自己一次）。tsc 不报错、构建也通过，
+        //    但一点击就是栈溢出。凡"包一层的入口函数"，改完必须肉眼核一遍函数体。
+        setLog(s.length > 120 ? `${s.slice(0, 120)}…（全文见 brushstate/_last-run.json）` : s);
     }, []);
 
     const shown = useMemo(
@@ -102,20 +132,26 @@ export default function BrushStudio() {
             try {
                 const r = await applyBrush(b, brushes, pushStep, (m) => say(m));
                 const junkNote = r.junk ? `（另有 ${r.junk} 个误建的 tip.png 请在画笔面板删除）` : '';
-                const pending = r.steps.filter((x) => x.warn).map((x) => x.name);
+                /* 降级那条 warn 步骤不列进 pending：它的原因已经在 `r.degraded` 里说清楚了，
+                   否则状态条会变成「（装储层（降级）待校准）」这种看不懂的复读。 */
+                const pending = r.steps.filter((x) => x.warn && !/降级/.test(x.name)).map((x) => x.name);
                 if (r.ok) {
-                    setTone(pending.length ? 'warn' : 'ok');
+                    setTone(pending.length || r.degraded ? 'warn' : 'ok');
                     // 三种路径分开说，别让用户对着一句话猜我们到底干了什么。
                     // ⚠️ 不再写死"用完已删掉"：删没删取决于缓存/笔尖两道守门，
                     //    真删了会有「清理预设」步骤，没删会以黄点列在 pending 里。
                     const how =
-                        r.source === 'cache'
-                            ? '直接复用缓存，未创建任何预设'
-                            : r.source === 'preset'
-                              ? '复用了面板里已有的预设'
-                              : '安装了一次（之后会走缓存）';
+                        r.source === 'mixer'
+                            ? '混合器储层已按当前前景色重装（每次点击都会重装一次）'
+                            : r.source === 'cache'
+                              ? '直接复用缓存，未创建任何预设'
+                              : r.source === 'preset'
+                                ? '复用了面板里已有的预设'
+                                : '安装了一次（之后会走缓存）';
                     say(
-                        `「${b.name}」已就位 —— ${how}${pending.length ? `（${pending.join('、')}待校准）` : ''}${junkNote}`
+                        `「${b.name}」已就位 —— ${how}` +
+                            (r.degraded ? `。⚠️ ${r.degraded}` : '') +
+                            `${pending.length ? `（${pending.join('、')}待校准）` : ''}${junkNote}`
                     );
                 } else {
                     setTone('fail');
@@ -133,13 +169,14 @@ export default function BrushStudio() {
     );
 
     /**
-     * 「修复当前笔尖」= **丢掉这支笔的状态缓存**，然后完整重装一遍。
+     * 「修复当前笔尖」/「重装储层」= **丢掉这支笔的状态缓存**，然后完整重装一遍。
      *
-     * 正常点击现在走的是「复用缓存」快路径（零弹框、零预设）。只有这几种情况需要这个按钮：
-     *   · 笔尖图换过了 / 笔尖尺寸改了（缓存里的笔尖已经过时）；
-     *   · 上次装到一半失败；
-     *   · 画笔参数被手动改乱。
-     * 代价：会弹一次「新建画笔」框（PS 定义笔尖的固有行为，绕不过）。
+     * 两种路线下它干的不是同一件事，所以按钮名按当前笔的路线走（见 render 里的
+     * `repairLabel`）：
+     *   · 普通笔：清缓存 → 下次点击走完整安装（会弹一次「新建画笔」框）。
+     *     只有在「换过笔尖图 / 笔尖尺寸改过 / 上次装到一半失败」时才需要它。
+     *   · 混合器笔：**没有缓存可清**（它根本不走 cto 缓存，一次都不写），
+     *     这一下就是「重新装一次储层」—— 等于再点一次卡片，只是明确告诉你"重来"。
      */
     const onRepair = useCallback(async () => {
         if (busy) return;
@@ -149,10 +186,13 @@ export default function BrushStudio() {
             say('笔刷库为空');
             return;
         }
-        try {
-            await rebuildState(target.id);
-        } catch {
-            /* 没有缓存也不用管 */
+        // 混合器路线不写 cto 缓存 ⇒ 清缓存是空动作，直接跳过（少一次无意义的 IO）
+        if (!target.mixer?.pattern) {
+            try {
+                await rebuildState(target.id);
+            } catch {
+                /* 没有缓存也不用管 */
+            }
         }
         await onPick(target);
     }, [busy, brushes, activeId, onPick]);
@@ -186,6 +226,8 @@ export default function BrushStudio() {
     // 状态条语气：忙 = 橙（进行中），空闲 = 上一次结果
     const toneCls = busy ? 'warn' : tone === 'idle' ? 'disabled' : tone;
     const btnCls = (base: string) => (busy ? `${base} action-button-disabled` : base);
+    /** 左下按钮按**当前这支笔的路线**决定叫法和宽度（混合器笔没有"笔尖"可修） */
+    const repairIsMixer = !!((brushes.find((b) => b.id === activeId) ?? brushes[0])?.mixer?.pattern);
 
     return (
         <div className="bs-root">
@@ -218,11 +260,15 @@ export default function BrushStudio() {
                         key={b.id}
                         className={`bs-item${b.id === activeId ? ' bs-item-on' : ''}${busy ? ' bs-item-busy' : ''}`}
                         onClick={() => onPick(b)}
-                        title={`${b.name} · ${Math.round(b.params.diameter.base)}px`}
+                        title={
+                            b.mixer?.pattern
+                                ? `${b.name} · 方形笔尖，边长 = 图案长边 ${sizeLabel(b)}`
+                                : `${b.name} · ${sizeLabel(b)}`
+                        }
                     >
                         <div className="bs-item-head">
                             <span className="bs-name">{b.name}</span>
-                            <span className="bs-meta">{Math.round(b.params.diameter.base)}px</span>
+                            <span className="bs-meta">{sizeLabel(b)}</span>
                         </div>
                         <img className="bs-prev" src={previewSrc(b.id)} alt={b.name} />
                     </div>
@@ -248,17 +294,19 @@ export default function BrushStudio() {
                     </div>
                 ) : null}
 
-                {/* 按钮行照前端规范用通用 .row-between（左「修复当前笔尖」右「读当前画笔」）。
-                    ⚠️ 按钮宽度由字数决定：修复当前笔尖=6 字 ⇒ action-button-6(98px)；
+                {/* 按钮行照前端规范用通用 .row-between。
+                    ⚠️ 按钮宽度由**字数**决定，而且随笔的路线变：
+                       混合器笔 ⇒ 重装储层=4 字 ⇒ action-button-4(72px)；
+                       普通笔   ⇒ 修复当前笔尖=6 字 ⇒ action-button-6(98px)；
                        读当前画笔=5 字 ⇒ action-button-5(85px)。写成小一号会把文字挤掉。 */}
                 <div className="row-between">
                     <div
                         role="button"
                         tabIndex={0}
-                        className={btnCls('action-button-6')}
+                        className={btnCls(repairIsMixer ? 'action-button-4' : 'action-button-6')}
                         onClick={busy ? undefined : onRepair}
                     >
-                        修复当前笔尖
+                        {repairIsMixer ? '重装储层' : '修复当前笔尖'}
                     </div>
                     <div
                         role="button"
@@ -290,7 +338,16 @@ export default function BrushStudio() {
                     </div>
                 ) : null}
 
-                <div className="bs-sign">{TIP_PREFIX}* · 笔尖素材见 brushes/ATTRIBUTION.md</div>
+                {/* 署名行顺带挂一个探针入口：字号 10px、与署名同色，几乎不占视觉重量。
+                    ⚠️ 它**不是常规功能**，是"混合器储层能否脚本化"这个技术问题的探测器
+                   （见 psMixer.ts）。技术问题定案后整块删掉。 */}
+                {/* 署名行。⛔ 2026-10-22：这里的「装储层」「混合器探针」两个临时入口已删 ——
+                    装储层并进了点击主链（见 psBrush.ts 的 mixer 分支），探针的技术问题也定案了。 */}
+                <div className="bs-sign">
+                    <span>
+                        {TIP_PREFIX}* · 笔尖素材见 brushes/ATTRIBUTION.md
+                    </span>
+                </div>
             </div>
         </div>
     );
