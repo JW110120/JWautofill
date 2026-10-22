@@ -66,6 +66,7 @@
 42 ⛔⛔ **PS 侧回调必须真注销**（0x013F）：`pstool.c` 的 `s_basic` 曾只声明不赋值 ⇒ `pstool_uninstall()` 首行恒 return，5 个通知回调与 3 个 suite 从未释放，PS 长期持有指向本 DLL 的指针（`_unloaded` 同族崩溃）。判据：改动 pstool 后 grep `s_basic =` 必有赋值；uninstall 判据只看 `s_ctrlSuite`。
 43 ⛔⛔ **LL 钩子先摘再 join**（0x013F）：`keyhook_stop()` 必须在任何 join 之前 `kh_unhook_both_now()`（ExchangePointer 置空+Unhook），join 之后再补一次；绝不能靠钩子线程自己的退出路径去卸 —— 超时就把「回调地址在本模块」的活线程留给卸载后的系统。
 44 ⛔⛔ **DETACH 日志先落再停服**（0x013F）：停服里任何 join 卡住都会让日志既无 Unload 也无 DETACH（2026-10-19 21:39 现场）。排查关闭崩溃三步：`pi8li.log` 有无 `[dll] DLL_PROCESS_DETACH ... reserved=` → `%LOCALAPPDATA%\JWautofill\dumps\crash-*.dmp`（0x013F 起内置取证）→ WER `AppCrash_Photoshop*` 的 `故障模块`。
+45 ⛔⛔ **batchPlay 的 `_obj` 只能来自「录到过/跑通过」的样本**（2026-10-20 -25920）：报 `命令"<未知的>"当前不可用` = 命令名 PS 不认识，不是缺参数也不是缺模态。全选=`set`+`channel.selection`→`allEnum`（**没有 `selectAll` 这个命令**）；选画笔=`select`+`{_ref:'brush',_name}`；定义笔尖=`defineBrush`（3 条候选）。改完必须**复查真实状态**（`defineBrush` 会「成功但没建成」）；关临时文档按 `_id` 不按 `targetEnum`。详见 `refs/uxp-api-layer.md`。
 
 ## 维护约定
 

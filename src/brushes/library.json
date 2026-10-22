@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "categories": [
+    "厚涂"
+  ],
+  "brushes": [
+    {
+      "id": "thick-dry",
+      "name": "干厚涂",
+      "category": "厚涂"
+    },
+    {
+      "id": "thick-paint",
+      "name": "湿厚涂",
+      "category": "厚涂"
+    },
+    {
+      "id": "rake",
+      "name": "耙笔",
+      "category": "厚涂"
+    },
+    {
+      "id": "impasto",
+      "name": "堆叠",
+      "category": "厚涂"
+    },
+    {
+      "id": "impasto-detail",
+      "name": "堆叠细描",
+      "category": "厚涂"
+    },
+    {
+      "id": "rock",
+      "name": "石纹",
+      "category": "厚涂"
+    }
+  ]
+}

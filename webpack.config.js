@@ -84,6 +84,9 @@ module.exports = (env, argv) => {
                 { from: "./manifest.json", to: "." },
                 { from: "./src/assets/icons", to: "./icons" },
                 { from: "./src/assets/SourceHanSansCN-Normal.otf", to: "." },
+                // 第三入口「特制笔刷」的笔刷库：brush.json + tip.png + preview.png，
+                // 运行时用 getPluginFolder() 读，所以必须原样落进 dist/brushes。
+                { from: "./src/brushes", to: "./brushes" },
                 { from: "./src/styles/common.css", to: "." },
                 { from: "./README.md", to: "." },
                 // 键盘卡死一键修复的设备层脚本（.8li 以 runas 提权唤起它完成设备层两步

@@ -1,0 +1,47 @@
+{
+  "id": "impasto",
+  "index": 4,
+  "name": "堆叠",
+  "category": "厚涂",
+  "tip": "BRS-impasto.png",
+  "tipSize": 510,
+  "params": {
+    "diameter": {
+      "base": 510,
+      "pressure": true,
+      "min": 0.4363
+    },
+    "spacing": 0.1,
+    "angle": 90.0,
+    "roundness": 0.68,
+    "angleFollowsDirection": true,
+    "opacity": {
+      "base": 1.0,
+      "pressure": true,
+      "min": 0.0
+    },
+    "flow": {
+      "base": 1.0,
+      "pressure": false,
+      "min": 0.0
+    },
+    "scatter": {
+      "on": true,
+      "amount": 0.0051,
+      "bothAxes": true,
+      "pressure": true
+    },
+    "texture": {
+      "apply": false,
+      "src": "pattern.png",
+      "patternName": "02_rough-canvas.png",
+      "brightness": -0.38,
+      "contrast": 1.0
+    }
+  },
+  "source": {
+    "preset": "m)_RGBA_04_Impasto",
+    "tipFile": "RGBA anim 01.gih"
+  },
+  "engineVersion": 1
+}

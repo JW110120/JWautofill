@@ -1,7 +1,7 @@
 {
     "manifestVersion": 4,
     "name": "悦绘",
-    "version": "2.0.0",
+    "version": "2.1.0",
     "host": {
         "app": "PS",
         "minVersion": "23.0.0"
@@ -83,6 +83,47 @@
                 },
                 {
                     "path": "icons/AdjustmentPanel/dark-panel.png",
+                    "width": 23,
+                    "height": 23,
+                    "scale": [1,2],
+                    "theme": ["lightest", "light"],
+                    "species": ["chrome"]
+                } 
+            ]
+        },
+        {
+            "id": "com.listen2me.brushstudio",
+            "label": {
+                "default": "特制笔刷"
+            },
+            "type": "panel",
+            "minimumSize": {
+                "width": 250,
+                "height": 320 
+            },
+            "maximumSize": {
+                "width": 250,
+                "height": 3840
+            },
+            "preferredDockedSize": {
+                "width": 250,
+                "height": 1000
+            },
+            "preferredFloatingSize": {
+                "width": 250,
+                "height": 760
+            },
+            "icons": [
+                {
+                    "path": "icons/BrushStudio/light-panel.png",
+                    "width": 23,
+                    "height": 23,
+                    "scale": [1,2],
+                    "theme": ["darkest", "dark", "medium"],
+                    "species": ["chrome"]
+                },
+                {
+                    "path": "icons/BrushStudio/dark-panel.png",
                     "width": 23,
                     "height": 23,
                     "scale": [1,2],

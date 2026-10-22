@@ -1,0 +1,47 @@
+{
+  "id": "impasto-detail",
+  "index": 5,
+  "name": "堆叠细描",
+  "category": "厚涂",
+  "tip": "BRS-impasto-detail.png",
+  "tipSize": 820,
+  "params": {
+    "diameter": {
+      "base": 820,
+      "pressure": true,
+      "min": 0.279
+    },
+    "spacing": 0.1,
+    "angle": 90.0,
+    "roundness": 0.68,
+    "angleFollowsDirection": true,
+    "opacity": {
+      "base": 1.0,
+      "pressure": false,
+      "min": 0.0
+    },
+    "flow": {
+      "base": 1.0,
+      "pressure": false,
+      "min": 0.0
+    },
+    "scatter": {
+      "on": true,
+      "amount": 0.0051,
+      "bothAxes": true,
+      "pressure": true
+    },
+    "texture": {
+      "apply": false,
+      "src": "",
+      "patternName": "",
+      "brightness": 0.0,
+      "contrast": 1.0
+    }
+  },
+  "source": {
+    "preset": "m)_RGBA_05_Impasto-details",
+    "tipFile": "RGBA anim 01.gih"
+  },
+  "engineVersion": 1
+}

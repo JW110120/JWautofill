@@ -1,0 +1,47 @@
+{
+  "id": "thick-dry",
+  "index": 1,
+  "name": "干厚涂",
+  "category": "厚涂",
+  "tip": "BRS-thick-dry.png",
+  "tipSize": 116,
+  "params": {
+    "diameter": {
+      "base": 116,
+      "pressure": false,
+      "min": 0.279
+    },
+    "spacing": 0.1,
+    "angle": 0.0,
+    "roundness": 1.0,
+    "angleFollowsDirection": true,
+    "opacity": {
+      "base": 1.0,
+      "pressure": true,
+      "min": 0.0
+    },
+    "flow": {
+      "base": 1.0,
+      "pressure": false,
+      "min": 0.0
+    },
+    "scatter": {
+      "on": true,
+      "amount": 0.05,
+      "bothAxes": true,
+      "pressure": false
+    },
+    "texture": {
+      "apply": false,
+      "src": "pattern.png",
+      "patternName": "02_rough-canvas.png",
+      "brightness": 0.1,
+      "contrast": 1.0
+    }
+  },
+  "source": {
+    "preset": "m)_RGBA_01_Thick-dry",
+    "tipFile": "DA_RGBA bluegreen_small.png"
+  },
+  "engineVersion": 1
+}

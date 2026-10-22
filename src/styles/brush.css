@@ -1,0 +1,157 @@
+/* ==========================================================================
+   brush.css — 第三入口「特制笔刷」(#brushstudio) 独有样式
+   --------------------------------------------------------------------------
+   只写**本面板骨架**：根容器 / 头部 / 底部状态区 / 校准区。
+   通用件一律复用 common.css（2026-10-20 收口）：
+     标题 .main-title · 子标题 .group-title · 按钮 .action-button-N ·
+     状态条 .notify-bar + .indicator + .notify-text ·
+     陈列 .bs-tabs / .bs-tab / .bs-list / .bs-item / .bs-prev / .bs-empty
+   ⛔ 本文件**不要**再写上面那些类的规则：跨文件同特指度由注入顺序决胜
+      （common.css 是静态 <link> 先加载、本文件由 style-loader 运行时后注入），
+      后写的会静默盖掉 common.css，排查成本极高。
+   ⚠️ UXP 不支持 flex 的 gap，间距一律用 margin。
+   ⚠️ 注释必须写在规则块之外（写在 { } 里会被当声明解析并报错）。
+   ========================================================================== */
+
+/* 根容器：纵向 flex —— 头部/分类固定，列表吃掉剩余高度并自身滚动，底部状态区常驻 */
+.bs-root {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    overflow: hidden;
+}
+
+/* 头部：主标题用通用 .main-title（20px 粗体居中）。
+   ⚠️ 标题与数量**不能**做成 space-between 两列：.main-title 是 flex 居中，
+     右侧出现实体子项会把标题整体推左。数量改绝对定位（.main-title 自带
+     position:relative 无关，这里由 .bs-head 当定位容器）。 */
+.bs-head {
+    position: relative;
+    flex-shrink: 0;
+    padding: 10px 10px 6px 10px;
+    box-sizing: border-box;
+    width: 100%;
+}
+
+.bs-head .main-title {
+    width: 100%;
+}
+
+/* 数量：右上角小字，不参与布局 */
+.bs-count {
+    position: absolute;
+    right: 10px;
+    top: 15px;
+    font-size: 11px;
+    color: var(--disabled-color);
+}
+
+/* 底部状态区：常驻不滚动 */
+.bs-foot {
+    flex-shrink: 0;
+    padding: 6px 10px 8px 10px;
+    border-top: 1px solid var(--border-color);
+    box-sizing: border-box;
+}
+
+/* 应用结果：一行一步，状态点 + 步骤名（细节在 title 里，不挤版面） */
+.bs-steps {
+    margin-bottom: 8px;
+    max-height: 66px;
+    overflow-y: auto;
+}
+
+.bs-step {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+}
+
+.bs-step + .bs-step {
+    margin-top: 3px;
+}
+
+/* 8px 状态点在 14px 行高里下移 3px 对齐首行文字的视觉中线 */
+.bs-step .indicator {
+    margin: 3px 6px 0 0;
+}
+
+.bs-step-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 11px;
+    line-height: 14px;
+    color: var(--disabled-color);
+    word-break: break-all;
+}
+
+/* 动作按钮行：按钮本身是通用 .action-button-N，这里只给行内间距 */
+.bs-actions {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+}
+
+.bs-actions .action-button-4 {
+    margin-right: 10px;
+}
+
+/* 忙碌时两个按钮都是禁用态外观。
+   ⛔ common.css 的「禁用态不响应 hover」只覆盖了 .action-button-auto，
+      这里补一条本行的同义规则，否则处理中鼠标划过仍会缩放变色（看起来像没禁用）。 */
+.bs-actions .action-button-disabled:hover {
+    background-color: var(--button-bg);
+    border-color: var(--border-color);
+    transform: none;
+}
+
+/* 校准区：把当前画笔描述符贴出来，方便把键名补成确定值 */
+.bs-calib {
+    margin-top: 10px;
+}
+
+.bs-calib-head {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+}
+
+/* 复制按钮：跟 .group-title 同排，禁止被 flex 压缩 */
+.bs-calib-copy {
+    flex: none;
+}
+
+/* 描述符文本框：等宽字体 + 面板底色，长 JSON 靠自身滚动 */
+.bs-calib-box {
+    width: 100%;
+    height: 90px;
+    box-sizing: border-box;
+    padding: 4px;
+    font-size: 9px;
+    font-family: Consolas, monospace;
+    color: var(--text-color);
+    background-color: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    resize: none;
+}
+
+.bs-calib-tip {
+    margin-top: 3px;
+    font-size: 10px;
+    line-height: 13px;
+    color: var(--disabled-color);
+}
+
+/* 素材署名：常驻最底一行（ATTRIBUTION 说明） */
+.bs-sign {
+    margin-top: 8px;
+    font-size: 10px;
+    color: var(--disabled-color);
+}

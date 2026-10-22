@@ -75,3 +75,87 @@
 
 - 凡把「环境/主题/尺寸/DOM 实测值」烘进输出的派生结果，**要么进键、要么从输出里去掉**。本仓旋转图缓存曾因把预览区底色烘进输出而换主题不失效 ⇒ 现改为输出真透明（比加键更根本）。
 - 同理 `previewNaturalRef` 在灰度模式下会被降采样缩略图覆盖、污染建图案尺寸与预览显示尺寸（详见 `refs/frontend-css.md` 第九节）。排查「预览/图案尺寸不对」先看这里。
+
+## batchPlay 命令名：只能来自「录到过 / 跑通过」的样本（2026-10-20）
+
+⛔⛔ 症状：面板操作弹 `{我们的步骤名}: 悦绘: 命令"<未知的>"当前不可用。(-25920)`。
+含义 = **PS 解析不到这个 action 命令名**（所以连本地化命令名都是"未知的"），不是缺参数、不是缺模态。
+
+| 需求 | ❌ 凭语义猜 | ✅ 项目已验证写法 |
+| --- | --- | --- |
+| 全选 | `{_obj:'selectAll', _target:[document targetEnum]}` | `{_obj:'set', _target:[{_ref:'channel',_property:'selection'}], to:{_enum:'ordinal',_value:'allEnum'}}`（`AdjustmentPanel.tsx::selectAllDocument`） |
+| 选中画笔预设 | `{_obj:'slct', null:{_ref:'Brsh',_name}}` | `{_obj:'select', _target:[{_ref:'brush', _name:'名字'}]}`（`HotkeyBridge.ts::selectBrushCommands`） |
+| 定义笔尖 | 不带 `dialogOptions`（会弹「画笔名称」框） | `{_obj:'defineBrush', name, _target:[document targetEnum], _options:{dialogOptions:'dontDisplay'}}`（`brushstudio/psBrush.ts`） |
+
+补充纪律：
+- 需要「有没有真的生效」的判断时，**改完复查一次真实状态**（读预设清单 / 读描述符）。`defineBrush` 存在
+  「返回成功但笔尖没出现」的静默失败，只信回报不信现场就会给用户一个绿勾 + 空画笔面板。
+- ⚠️ `_options:{dialogOptions:'dontDisplay'}` **不是通用开关，按命令区分**（2026-10-20 修正旧口径）：
+  · `defineBrush` **必须带** —— 不带就弹「画笔名称」对话框，等于每装一支笔要用户点一次确定，
+    且同一批 N 支会留下 N 个同名垃圾笔刷；
+  · `select`（选中画笔预设）**不要带** —— HotkeyBridge 实测它会反向弹宿主错误框且异常不进 catch。
+- ⛔⛔ **一条命令只留一条写法**。多写法"逐个试成功即停"在会弹对话框的命令上是灾难：
+  三种写法 × 6 支笔 = 用户要点 18 次确定，还留下 18 个垃圾笔刷。写法不确定就只跑一条，
+  把真实报错回给用户，别用重试掩盖。
+- ⛔⛔ `defineBrush` 的预设名**不要靠 name 参数认定**：交互路径下 PS 忽略 name、用**文档名**当默认名。
+  可靠做法 = 定义前后各读一次画笔清单，**差集新增的那一项**就是真实名（`psBrush.ts::ensureTips`）；
+  同时笔尖文件命名成 `BRS-<id>.png`，让文档名天然唯一，差集才判得出来。
+- 关闭临时文档一律按 `{_ref:'document', _id:doc.id}` 定位；用 `targetEnum` 会在「文档没开起来」时
+  关掉用户正在画的稿子。
+
+## 「改状态」类命令必须在模态作用域内（2026-10-20 真机）
+
+⛔⛔ 症状：`两种写法都被拒：Event: set may modify the state of Photoshop. Such events are only
+allowed from inside a modal scope. See https://www.adobe.com/go/ps_executeasmodal`
+含义 = **命令本身没错、参数也没错，缺的是 `executeAsModal` 包裹**。
+
+| 命令 | 裸调用 | 说明 |
+| --- | --- | --- |
+| `set` brush / tool（改画笔参数） | ❌ 被拒 | 必须 `runAsModal(...)`，`psBrush.ts::applyBrush` 已包 |
+| `select` paintbrushTool / brush（选工具、选预设） | ✅ 可过 | PS 允许非模态，本项目实测成功 |
+| `get`（读描述符） | ✅ 可过 | 只读 |
+| `defineBrush` | — | 已在 ensureTips 的模态内 |
+| `delete` | ❌ | 同 set |
+
+⚠️ 报错文案里带 `Event: xxx may modify the state` 的，一律先查模态，不要去改描述符。
+
+## 删除画笔预设：只有「删当前选中画笔」这一条路（2026-10-20 用户监听实录）
+
+```json
+{"_obj":"delete","_target":[{"_ref":"brush","_enum":"ordinal","_value":"targetEnum"}],"_isCommand":false}
+```
+- 这是**删当前选中的那支画笔**。想删指定预设只能「先按名 select 再 delete 当前」。
+- ⛔ 不要写 `{_ref:'brushPreset', _name:'x'} + {_ref:'presetManager'}`（或加 `_index`）：PS 直接弹宿主
+  错误框「删除不可用」，且异常不进 catch —— 用户看到的是一个弹窗，不是面板上的一行红字。
+- ⛔ 因此「批量自动清垃圾预设」不划算：select 若静默失败，被删的是用户正在用的笔刷。
+  正确姿势 = 只检测 + 提示用户去画笔面板手动删。
+
+## 读「当前画笔」不能用 `get brush targetEnum`（2026-10-20 真机）
+
+⛔ 症状：`{"_obj":"error","message":"悦绘: 命令"获取"当前不可用。","result":-25920}`。
+`get` 是合法命令，被拒的是**这个引用** —— `_ref:'brush'` 不能当 get 的 target。
+✅ 正确读法（优先序）：
+1. `{_obj:'get', _target:[{_ref:'property',_property:'currentToolOptions'},{_ref:'application',targetEnum}]}`
+   —— 工具选项描述符，含 opacity / flow / 画笔设置；
+2. `{_ref:'brush', targetEnum}`（老版本兜底）；
+3. `{_ref:'property', _property:'brush'} + application`。
+`psBrush.ts::readCurrentBrush` 已按这三条依次试，全败才抛错。
+
+⛔⛔ **batchPlay 返回值必须判 `_obj === 'error'`**。原 `readCurrentBrush` 直接
+`JSON.stringify(res)` 回面板 ⇒ 面板显示「已读取」、框里却是一段错误 JSON，白跑一轮。
+凡是没有走 `bp()` 封装的裸 batchPlay，都要自己判。
+
+## UXP 没有 `navigator.clipboard`（2026-10-20）
+
+⛔ 症状：复制按钮恒提示「复制失败，请手动选中」。
+✅ `import { clipboard } from 'uxp'` → `await clipboard.copy(text)`（webpack externals 已含 uxp）。
+
+## set 画笔参数：`set brush` 已生效，工具选项栏那两格待校准（2026-10-20）
+
+- `{_obj:'set',_target:[{_ref:'brush',targetEnum}],to:{_obj:'brush',diameter/spacing/angle/roundness/...}}`
+  在模态内**成功**（真机绿点），几何参数已生效。
+- 但 `to.brush.opacity/flow` 写进去后，选项栏显示仍停在旧值（真机 30/30）⇒ 这两个键在本版
+  可能不落到工具选项上。`setToolOpacity` 现有两条候选：
+  `currentToolOptions`（首选）/ `tool(targetEnum)`（兜底）。失败**只标黄**（`ApplyStep.warn`），
+  不影响「笔刷已就绪」的结论。
+- 校准方式：点面板「读当前画笔」拿 `currentToolOptions` 描述符，按里面的真名补映射表。

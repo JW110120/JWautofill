@@ -16,6 +16,7 @@ import './styles/app.css';
 import './styles/license.css';
 import { defaultTheme, Provider } from '@adobe/react-spectrum';
 import AdjustmentPanel from './adjustments/AdjustmentPanel';
+import BrushStudio from './brushstudio/BrushStudio';
 import { MenuManager } from './utils/MenuManager';
 
 // 初始化主题
@@ -70,4 +71,23 @@ if (pixelAdjustmentContainer) {
   };
 
   pixelAdjustmentRoot.render(<PixelAdjustmentRoot />);
+}
+
+// 渲染特制笔刷应用（第三个入口）。与上面两个面板同源同栈，只是挂在另一个
+// <uxp-panel panelid="com.listen2me.brushstudio"> 里 —— UXP 只显示当前入口的 DOM，
+// 所以三个面板可以共用一份 bundle，不必拆多份 html。
+// ⚠️ Provider 的 height="100%" 不能省：理由同上（百分比高度链断掉会让列表不滚动）。
+const brushStudioContainer = document.getElementById('brushstudio');
+if (brushStudioContainer) {
+  const brushStudioRoot = createRoot(brushStudioContainer);
+
+  const BrushStudioRoot = () => {
+    return (
+      <Provider theme={defaultTheme} colorScheme="dark" height="100%">
+        <BrushStudio />
+      </Provider>
+    );
+  };
+
+  brushStudioRoot.render(<BrushStudioRoot />);
 }

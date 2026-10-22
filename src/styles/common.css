@@ -35,9 +35,10 @@ html, body {
   color: var(--text-color);
 }
 
-/* 根面板容器：#app/#pixeladjustment 若删除，整条百分比高度链就断了,导致滑块条不显示。*/
+/* 根面板容器：#app/#pixeladjustment/#brushstudio 若删除，整条百分比高度链就断了,导致滑块条不显示。*/
 #app,
-#pixeladjustment {
+#pixeladjustment,
+#brushstudio {
   height: 100%;
 }
 
@@ -2103,3 +2104,128 @@ sp-radio[disabled] {
 .smooth-params { margin-top: 10px; }
 .smooth-params > .row-between { margin-top: 0; margin-bottom: 0; }
 .smooth-params > .row-between + .row-between { margin-top: 10px; }
+
+/* ---------- 通用分组小标题（面板内二级标题）----------
+   层级 = .main-title（20px 面板标题） > .group-title（12px 分组标题） > 正文（13px 标签 / 12px 通知）。
+   视觉与绘画工具箱的历史类 .func-group-title 完全一致（12px / 500 / 75% 不透明度）：
+   用继承色 + opacity 压暗，三档主题下自动适配，不硬编码颜色。
+   ⚠️ 新代码一律用本类；.func-group-title 是既有名，勿再新增第三个近似名。 */
+.group-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-color);
+  opacity: 0.75;
+}
+
+/* ---------- 特制笔刷陈列（第三入口 #brushstudio，2026-10-20 收口）----------
+   为什么放 common.css：这套「分类胶囊 + 卡片列表 + 预览条」是用户认可的版式，
+   与面板骨架解耦 —— 后续在别处做「我的笔刷 / 预设库」陈列可直接复用。
+   ⚠️ 陈列相关的一切（含 hover / 选中 / 忙碌态）都在本区块：
+      brush.css 里**不要再写** .bs-tab / .bs-item / .bs-list 的同类规则
+      —— 跨文件同特指度靠注入顺序决胜（common 静态 <link> 先、brush.css 运行时后），
+      后写的会把这里的视觉静默盖掉，排查成本极高。
+   ⛔ 不用 `background: transparent`：UXP 会把它渲染成**纯黑**，
+      未选中分类胶囊会变成一块黑底；这里写具体色（面板底色）表达「无底」。 */
+
+/* 分类条：横向滚动，分类再多也不换行挤压列表高度 */
+.bs-tabs {
+  display: flex;
+  flex-direction: row;
+  flex-shrink: 0;
+  padding: 0 10px 6px 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* 分类胶囊（33×16 的 .toggle-switch 是另一套，勿混用尺寸口径） */
+.bs-tab {
+  flex-shrink: 0;
+  height: 22px;
+  padding: 0 8px;
+  margin-right: 6px;
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--text-color);
+  background-color: var(--bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 11px;
+  cursor: pointer;
+}
+
+.bs-tab:hover {
+  background-color: var(--hover-bg);
+}
+
+/* 选中态：实心主色（与 icon-button 常亮态同语言：主色底 + 反色字） */
+.bs-tab-on {
+  color: var(--enabled-text-color);
+  background-color: var(--primary-color);
+  border-color: var(--primary-color);
+}
+
+/* 笔刷列表：面板里唯一的滚动区 —— 贯通整高，滚动条槽才能贴到面板最右缘 */
+.bs-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0 10px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* 一支笔一张卡：名字 + 尺寸 + 预览条
+   ⚠️ 描边基态用卡片底色（不是 transparent）：保留 1px 盒模型，选中时只换颜色
+      ⇒ 卡片零位移，列表不会因点选抖一下。 */
+.bs-item {
+  margin-bottom: 6px;
+  padding: 5px 6px 6px 6px;
+  background-color: var(--entry-bg);
+  border: 1px solid var(--entry-bg);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.bs-item:hover {
+  background-color: var(--hover-bg);
+  border-color: var(--hover-bg);
+}
+
+/* 当前正在应用的笔：主色描边（选中一律 border 变色，禁 outline） */
+.bs-item-on {
+  border-color: var(--primary-color);
+}
+
+.bs-item-busy {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.bs-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 3px;
+}
+
+.bs-name {
+  font-size: 11px;
+}
+
+.bs-meta {
+  font-size: 10px;
+  color: var(--disabled-color);
+}
+
+/* 预览条：244×55 的 PNG 原比例缩到卡片宽度 */
+.bs-prev {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 2px;
+  background-color: var(--dark-bg-color);
+}
+
+.bs-empty {
+  padding: 12px 2px;
+  font-size: 11px;
+  color: var(--disabled-color);
+}
