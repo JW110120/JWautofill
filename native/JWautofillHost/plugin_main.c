@@ -1283,8 +1283,14 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
    0x0204（2026-10-22 17:00）：**删掉 drag**（用户裁定：拖动没必要，像素少是吸歪造成的）；
                         挑点改为「命中窗口中心 + 往里钻」——旧的"主框客户区中心"
                         在 3840 屏上比文档区中心偏右 287px，250 的画布因此整个点飞
-                        （pt=(1920,1038) vs 文档区中心 (1633,1101)）。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x0204; }
+                        （pt=(1920,1038) vs 文档区中心 (1633,1101)）。
+   0x0205（2026-10-23）：**键盘钩子加「插件本体在位」闸**（keyhook.c g_khPlug）——
+                        用户报：开发期没装 UXP 本体，但 .8li 随 PS 装上后默认布防，
+                        把 L / NUM1 等键吞掉且无人消费广播。现在 LL 钩子安装意图 /
+                        键态轮询兜底 / RegisterHotKey 同步三路统一要求 18923 有客户端
+                        （面板进程活着）；最后一个客户端断开即卸钩放行，重连自动装挂。
+                        ⚠️ 刻意不做「连过一次就粘住」：面板卸载/崩溃后钩子必须熄火。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x0205; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {

@@ -107,7 +107,9 @@ void wc_b64_encode(const unsigned char* in, int n, char* out)
 
 /* ================================================================ 握手 */
 
-int wc_handshake(SOCKET s)
+/* 握手实现体。path/pathSz 非空时顺手抽出请求行里的 path（0x0205 迁移探测身份识别用）。
+   ⚠️ path 只作**身份识别**，不做路由——两个服务器都只认"/"为面板客户端。 */
+static int wc_handshake_ex(SOCKET s, char* path, int pathSz)
 {
     char req[4096];
     int n = 0;
@@ -119,6 +121,19 @@ int wc_handshake(SOCKET s)
         if (strstr(req, "\r\n\r\n")) break;
     }
     req[n] = 0;
+    if (path && pathSz > 0) {
+        path[0] = 0;
+        const char* rl = strstr(req, "GET ");
+        if (rl) {
+            rl += 4;
+            int i = 0;
+            while (rl[i] && rl[i] != ' ' && rl[i] != '\r' && rl[i] != '\n' && i < pathSz - 1) {
+                path[i] = rl[i];
+                i++;
+            }
+            path[i] = 0;
+        }
+    }
     const char* k = strstr(req, "Sec-WebSocket-Key:");
     if (!k) k = strstr(req, "sec-websocket-key:");
     if (!k) return -1;
@@ -144,6 +159,19 @@ int wc_handshake(SOCKET s)
         "Upgrade: websocket\r\nConnection: Upgrade\r\n"
         "Sec-WebSocket-Accept: %s\r\n\r\n", acc);
     return wc_send_all(s, rsp, rn);
+}
+
+int wc_handshake(SOCKET s)
+{
+    return wc_handshake_ex(s, NULL, 0);
+}
+
+/* 0x0205：带 path 输出的服务端握手。热键服务器用它区分
+   面板客户端（"/"）与迁移探测（"/jw-migrate"）——后者不是插件本体，
+   不能算「插件在位」（否则多开 PS 时探测连接会给持有端伪造在位）。 */
+int wc_handshake_path(SOCKET s, char* path, int pathSz)
+{
+    return wc_handshake_ex(s, path, pathSz);
 }
 
 /* 客户端侧随机 key：不追求密码学强度（服务端只回显 SHA1），只求每次不同。

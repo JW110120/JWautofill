@@ -148,3 +148,38 @@ armed/hookInstalled/safeMode/active/comboCount/recording/timeoutMs/budgetMs/stri
 **验证**：`analysis/_t_013a.c`（逐字拷贝五函数）18/18 过：标准/旧格式解析、往返一致（含 blendHotkey 标志条目）、空数组、垃圾截断拒绝、转义往返；`_t_013a_check.py` 用 python json 严证广播帧 `Array.isArray(payload)=true`；build.sh 零告警 + PiPL 往返一致。
 
 ⛔ 排查口径：见到 `配置读取/解析失败` 与 `配置已写入` 交替振荡 = 本 bug 家族；先 `cat` 配置文件看有没有 `[`。**写文件的序列化器与读文件的解析器必须成对验收**（单测序列化产物必须能被自己的解析器读回——这次就是缺了这一条）。
+
+## N9. 0x0205（2026-10-23）：**插件本体不在位也吞键**（用户报「没加载 UXP，但 L/NUM1 按不了」）
+
+**根因**：`.8li` 随 PS 启动即装载、`keyhook_start` 默认布防（`g_khArmed=1`），
+而 UXP 插件本体可能根本没加载（开发期没装/没启用）⇒ 钩子照装、RegisterHotKey
+照注册，按键被吞后广播无处可送（零客户端）——用户画图时套索 L、NUM1 全失灵。
+
+**修（keyhook.c + ws_core.c + plugin_main.c，jw8li_version 0x0204→0x0205）**：
+1. 新全局 `g_khPlug`（0x0205）：18923 有活客户端 = 插件本体在位。与 `g_khArmed`
+   正交——布防是用户开关偏好，在位是插件本体生死，两者同时为真才装钩。
+2. **三条键路统一加闸**（漏一路 = 热键照样触发或键照样被吞）：
+   - 钩子线程安装意图 `want = g_khBound && g_khArmed && !g_khSrvStop && g_khPlug`；
+   - `kh_poll_step` 的 `armed`（轮询吞不了键，但触发无人执行 = 噪声，一并闸）；
+   - `kh_hk_sync` 的 `want`（RegisterHotKey 是**真·系统级吞键**，NUM1 类裸组合键走它）。
+   - `kh_install_hook` 内部也查 `g_khPlug`（双保险，防将来新增调用点漏闸）。
+3. `kh_plug_recompute()`：扫客户端表（s 有效 ∧ !closing ∧ !notPlugin）重算在位；
+   建连（握手后）与断连（`kh_cli_remove` 后）都调。多面板/多 JS 上下文各一条连接，
+   全部消失才算不在位 ⇒ 卸钩 ≤10ms（钩子线程轮询）+ 撤注册 ≤100ms（kh_hk_sync）。
+4. ⛔ **不做「连过一次就粘住」**：面板卸载/崩溃后钩子必须熄火（0x013E unload 哑火
+   同族纪律）。断开即放行，重连自动装挂（面板 1.5s 重连循环天然覆盖抖动）。
+
+**多开 PS 坑（自查发现，同批修）**：bind 18923 失败的实例每 10s 执行
+`kh_try_migrate`（迁移探测）——它本身就是一条 WS 客户端连接，会被持有端计成
+「插件在位」⇒ 持有端周期性假布挂。修：探测走 `path=/jw-migrate`；`wc_handshake`
+  重构为 `wc_handshake_ex` + 新增 `wc_handshake_path`（抽请求行 path，仅作身份识别）；
+  `KhCli` 加 `notPlugin` 标记，非 `/` 不计在位。旧版 daemon 不校验 path ⇒ 迁移链路无损。
+
+**验收口径**：不加载插件 ⇒ pi8li.log 见「插件本体不在位…不装键盘钩子」，L/NUM1 透传；
+加载插件开面板 ⇒ 「插件本体在位…按布防态装挂」+ 热键正常；关面板/卸载 ⇒ 「卸键盘钩子…
+全部放行」。
+
+**已知边界（正解留待后续，非本次范围）**：「在位」= 有面板连着。插件加载但面板全关时，
+新版放行按键（旧版吞键且无人执行——严格不劣）。若要「面板关着热键也能用」，应把 WS 连接
+从面板生命周期挪到**插件容器生命周期**（UXP `entrypoints.setup` 的 `plugin.create/destroy`，
+Adobe 文档确认容器与面板是两套独立生命周期），C 侧闸无需再动。

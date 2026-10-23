@@ -34,6 +34,9 @@ void wc_b64_encode(const unsigned char* in, int n, char* out);
 
 /* 服务端：读 HTTP Upgrade 请求 → Sec-WebSocket-Key + GUID → SHA1/b64 → 101 */
 int  wc_handshake(SOCKET s);
+/* 0x0205：同上，但顺手输出请求行里的 path（身份识别用，见 wc_handshake_ex 注）。
+   热键服务器据此区分面板客户端（"/"）与迁移探测（"/jw-migrate"）。 */
+int  wc_handshake_path(SOCKET s, char* path, int pathSz);
 /* 客户端：发 Upgrade 请求（带随机 Sec-WebSocket-Key）→ 等 101 */
 int  wc_client_handshake(SOCKET s, int port, const char* path);
 

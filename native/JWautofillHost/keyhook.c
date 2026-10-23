@@ -23,6 +23,16 @@
  *   bind 失败 ⇒ 每 3s 重试；若探测到占用者是**旧版 daemon**（version
  *   2026-10-12.x），以 WS 客户端发 uninstall 令其自清自启+安装目录后退出，
  *   下一轮重试即可接管（升级部署的关键路径）。
+ *
+ * ⛔⛔ 0x0205 插件本体在位闸：.8li 随 PS 启动即装载，但 UXP 插件本体可能
+ *   根本没加载（开发期没装/没启用是常态）⇒ 旧行为「启动即默认布防」会在
+ *   无人消费广播的情况下吞掉用户按键（L、NUM1…全失灵）。现在三条键路
+ *   （LL 钩子安装意图 / 键态轮询兜底 / RegisterHotKey 同步）统一要求
+ *   g_khPlug：18923 上有客户端（面板进程活着）才装钩；最后一个客户端
+ *   断开 ⇒ 卸钩 + 撤注册，按键全部放行（PS 原生快捷键恢复）。
+ *   ⚠️ 不采用「连过一次就粘住」：面板卸载/崩溃后钩子必须熄火（0x013E 同族纪律）。
+ *   ⚠️ 迁移探测连接（path=/jw-migrate）标记 notPlugin、不计入在位 —— 多开 PS 时
+ *     非持有实例每 10s 探一次，误计入就会给持有端周期性地伪造在位。
  */
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -40,7 +50,7 @@
 /* ================================================================ 常量 */
 
 #define KH_PORT          18923
-#define KH_VERSION       "2026-10-17.1"
+#define KH_VERSION       "2026-10-23.1"   /* 0x0205：插件本体在位闸（getState 的 version 字段） */
 #define KH_BUDGET_MS     100      /* 单次钩子回调耗时预算（Program.cs HookBudgetMs） */
 #define KH_STRIKES       3        /* 连续超预算多少次才熔断 */
 #define KH_COOLDOWN_MS   30000    /* 熔断冷却（期满复位重挂） */
@@ -72,6 +82,7 @@ typedef struct {
 typedef struct {
     SOCKET s;
     volatile LONG closing;        /* 1 = 已通知关闭（持有线程负责 closesocket） */
+    volatile LONG notPlugin;      /* 0x0205：1 = 迁移探测等非面板连接（不计入插件在位） */
 } KhCli;
 
 typedef struct {
@@ -89,6 +100,9 @@ static CRITICAL_SECTION g_khSendLk;      /* 所有对客户端 socket 的发送�
 /* --- 键盘钩子 --- */
 static HHOOK volatile g_khHook;          /* x64 对齐指针读写即原子；写入用 InterlockedExchangePointer */
 static volatile LONG g_khArmed = 1;      /* 默认布防（daemon _hotkeyArmed 初值 true） */
+static volatile LONG g_khPlug = 0;       /* 0x0205：插件本体在位 = 18923 有已握手客户端。
+                                            ⛔ 与 g_khArmed 正交：布防是用户的开关偏好，
+                                            在位是插件本体的生死；两者同时为真才装钩。 */
 static volatile LONG g_khActive = 1;     /* 组合键表是否参与匹配（我们就在 PS 里 ⇒ 恒 1） */
 static volatile LONG g_khSafeMode;       /* 熔断：只放行不处理 */
 static volatile LONG g_khStrikes;        /* 连续超预算计数（仅钩子线程写） */
@@ -303,6 +317,7 @@ static int kh_cli_add(SOCKET s)
         if (g_khCli[i].s == INVALID_SOCKET && !g_khCli[i].closing) {
             g_khCli[i].s = s;
             g_khCli[i].closing = 0;
+            g_khCli[i].notPlugin = 0;
             ok = 1;
             break;
         }
@@ -316,6 +331,30 @@ static void kh_cli_remove(SOCKET s)
     EnterCriticalSection(&g_khCliLk);
     for (int i = 0; i < KH_MAX_CLI; i++)
         if (g_khCli[i].s == s) { g_khCli[i].s = INVALID_SOCKET; g_khCli[i].closing = 1; break; }
+    LeaveCriticalSection(&g_khCliLk);
+}
+
+/* 0x0205：插件本体在位判据 = 客户端表里还有活着的连接（面板进程的化身）。
+ * 建连（握手成功后）与断连（kh_cli_remove 之后）都会重算；
+ * 多面板/多 JS 上下文各自一条连接，全部消失才算不在位。
+ * ⛔ notPlugin（迁移探测，path=/jw-migrate）不计 —— 多开 PS 时非持有实例
+ *    每 10s 探一次，若计入就会给持有端伪造「插件在位」。 */
+static void kh_plug_recompute(void)
+{
+    int live = 0;
+    EnterCriticalSection(&g_khCliLk);
+    for (int i = 0; i < KH_MAX_CLI; i++)
+        if (g_khCli[i].s != INVALID_SOCKET && !g_khCli[i].closing && !g_khCli[i].notPlugin) live++;
+    LeaveCriticalSection(&g_khCliLk);
+    InterlockedExchange(&g_khPlug, live > 0 ? 1 : 0);
+}
+
+/* 0x0205：把一条已登记连接标记为「非面板」（握手 path ≠ "/" 时由客户端线程调用）。 */
+static void kh_cli_tag_not_plugin(SOCKET s)
+{
+    EnterCriticalSection(&g_khCliLk);
+    for (int i = 0; i < KH_MAX_CLI; i++)
+        if (g_khCli[i].s == s) { g_khCli[i].notPlugin = 1; break; }
     LeaveCriticalSection(&g_khCliLk);
 }
 
@@ -1501,10 +1540,10 @@ static void kh_hk_reset_for_record(void)
     g_khHkStamp = 0;
 }
 
-/* 同步注册集合：want = 布防 ∧ 非录制 ∧ 非熔断 ∧ PS 前台。 */
+/* 同步注册集合：want = 插件在位 ∧ 布防 ∧ 非录制 ∧ 非熔断 ∧ PS 前台。 */
 static void kh_hk_sync(void)
 {
-    int want = (g_khArmed && !g_khRecording && !g_khSafeMode && !g_khSrvStop &&
+    int want = (g_khPlug && g_khArmed && !g_khRecording && !g_khSafeMode && !g_khSrvStop &&
                 kh_ps_foreground()) ? 1 : 0;
     LONG stamp = want ? (LONG)(1000000 + g_khMapSeq) : 0;
     if (stamp == g_khHkStamp) return;
@@ -1555,7 +1594,7 @@ static void kh_poll_step(void)
     /* 关注位表在钩子线程内重建（kh_key_to_token 的返回缓冲是 static）。 */
     if (InterlockedExchange(&g_khWatchDirty, 0)) kh_poll_rebuild_watch();
 
-    /* 100ms 一次：按「布防 ∧ 非录制 ∧ 非熔断 ∧ PS 前台」同步注册集合。
+    /* 100ms 一次：按「插件在位 ∧ 布防 ∧ 非录制 ∧ 非熔断 ∧ PS 前台」同步注册集合。
        注册/注销必须跟住前台切换，否则会在别的程序里吞掉用户按键。 */
     static DWORD s_hkTick;
     DWORD nowT = GetTickCount();
@@ -1565,7 +1604,9 @@ static void kh_poll_step(void)
     for (int vk = 0; vk < 256; vk++)
         cur[vk] = (BYTE)((GetAsyncKeyState(vk) & 0x8000) ? 1 : 0);
 
-    int armed = (g_khArmed && !g_khSafeMode && !g_khSrvStop) ? 1 : 0;
+    /* 0x0205：轮询兜底同样要求在位 —— 插件不在位时轮询只刷新 prev 表（消假沿），
+       绝不触发热键（这一路虽然吞不了键，但触发了照样没人执行，纯噪声）。 */
+    int armed = (g_khPlug && g_khArmed && !g_khSafeMode && !g_khSrvStop) ? 1 : 0;
     int all = (g_khRecording || g_khPollWatchAll) ? 1 : 0;
     for (int vk = 7; vk < 256; vk++) {
         BYTE p = g_khPollPrev[vk];
@@ -1580,6 +1621,12 @@ static void kh_poll_step(void)
 static void kh_install_hook(void)
 {
     if (g_khHook) return;
+    if (!g_khPlug) {
+        /* 0x0205：插件本体不在位（UXP 未加载/面板未开）⇒ 绝不装钩子。
+           用户画图时 PS 原生快捷键（L、NUM1…）必须原样透传。 */
+        kh_hlog("插件本体不在位（18923 无客户端），不装键盘钩子");
+        return;
+    }
     if (!g_khBound) {
         /* 单持有者纪律：没拿到 18923 的实例不装钩子（多 PS 实例下只有
            端口持有者响应热键，与 daemon「一个进程一套钩子」等价）。 */
@@ -1711,7 +1758,9 @@ static DWORD WINAPI kh_hook_thread(LPVOID param)
             if (cur && g_khRecording) InterlockedExchange(&g_khReinstall, 1);
             else if (cur) kh_uninstall_hook();
         }
-        int want = (g_khBound && g_khArmed && !g_khSrvStop) ? 1 : 0;
+        /* 安装意图三判据 + 0x0205 第四判据（插件本体在位）。
+           ⚠️ kh_install_hook 内部也查 g_khPlug（双保险，防将来新增调用点漏闸）。 */
+        int want = (g_khBound && g_khArmed && !g_khSrvStop && g_khPlug) ? 1 : 0;
         HHOOK cur = (HHOOK)g_khHook;
         if (want && !cur) kh_install_hook();
         else if (!want && cur) kh_uninstall_hook();
@@ -1914,10 +1963,11 @@ static DWORD WINAPI kh_watchdog_thread(LPVOID param)
             candArmed = ca; candHook = ch; candSafe = cs; haveCand = 1;
         }
 
-        /* ④ 2s 句柄看护（刻意不做定时无条件重挂：重挂窗口会漏键） */
+        /* ④ 2s 句柄看护（刻意不做定时无条件重挂：重挂窗口会漏键）。
+           0x0205：g_khPlug 不在位时钩子为空是正常态，别报假警。 */
         if (now - lastHealth >= 2000) {
             lastHealth = now;
-            if (g_khBound && g_khArmed && !g_khHook)
+            if (g_khBound && g_khArmed && g_khPlug && !g_khHook)
                 kh_log("⚠️ 热键已布防但键盘钩子句柄为空（轮询兜底将重挂）");
         }
 
@@ -1978,7 +2028,9 @@ static void kh_refresh_ps_pids(void)
 
 /* bind 18923 失败时探测占用者：确认是旧版 HotkeyDaemon（version 2026-10-12.x）
    就以 WS 客户端发 uninstall，令其自清自启+安装目录后退出；下一轮重试即可接管。
-   ⛔ 绝不误伤：握手失败 / 非旧版版本号 ⇒ 什么都不做，只保持重试。 */
+   ⛔ 绝不误伤：握手失败 / 非旧版版本号 ⇒ 什么都不做，只保持重试。
+   ⛔ 0x0205：path 必须用 "/jw-migrate" 自报身份 —— 占用者若是新版 .8li，
+   这条连接会被标记 notPlugin，**不会**给对方伪造「插件本体在位」。 */
 static void kh_try_migrate(void)
 {
     DWORD now = GetTickCount();
@@ -1999,7 +2051,7 @@ static void kh_try_migrate(void)
     DWORD to = 1500;
     setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&to, sizeof(to));
     setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&to, sizeof(to));
-    if (wc_client_handshake(s, KH_PORT, "/") != 0) {
+    if (wc_client_handshake(s, KH_PORT, "/jw-migrate") != 0) {
         closesocket(s);
         kh_log("迁移探测：18923 有占用但握手失败（非 WS 服务？），不处理");
         return;
@@ -2495,8 +2547,19 @@ static DWORD WINAPI kh_client_thread(LPVOID param)
 {
     SOCKET s = (SOCKET)(UINT_PTR)param;
     int closedBy = 0;
-    if (wc_handshake(s) != 0) { closesocket(s); kh_cli_remove(s); return 0; }
-    kh_log("面板已连接 ws(18923)");
+    /* 0x0205：握手抽 path —— 面板（UXP 插件本体）走 "/"；迁移探测走 "/jw-migrate"，
+       后者只是来问「你是不是旧版 daemon」的，**不是插件本体**，不能算在位。 */
+    char cpath[128] = "";
+    if (wc_handshake_path(s, cpath, (int)sizeof(cpath)) != 0) {
+        closesocket(s); kh_cli_remove(s); kh_plug_recompute(); return 0;
+    }
+    int isPlugin = (_stricmp(cpath, "/") == 0);
+    if (!isPlugin) kh_cli_tag_not_plugin(s);
+    if (isPlugin) kh_log("面板已连接 ws(18923)");
+    else kh_log("WS 客户端已连接（path=%s，非面板 ⇒ 不计入插件在位）", cpath);
+    kh_plug_recompute();     /* 0x0205：插件本体在位 ⇒ 钩子线程下轮自动装挂 */
+    if (g_khPlug)
+        kh_log("插件本体在位（18923 客户端在线）⇒ 键盘钩子按当前布防态装挂；断开即全部放行");
     /* ⛔ 建连**不主动推配置**（同 daemon 2026-10-14 修复）：
        面板 onopen 序列 = setConfigPath → getConfig；握手后立刻推会带着
        尚未对齐的路径与空/旧配置，触发面板告警与回写护栏。 */
@@ -2519,11 +2582,14 @@ static DWORD WINAPI kh_client_thread(LPVOID param)
     LeaveCriticalSection(&g_khArmLk);
 
     kh_cli_remove(s);
+    kh_plug_recompute();     /* 0x0205：最后一个客户端也走了 ⇒ 插件本体不在位 */
     shutdown(s, SD_BOTH);
     closesocket(s);
     kh_log("面板已断开 reason=%s err=%d",
            closedBy == 1 ? "对端close" : closedBy == 2 ? "异常大帧" : "recv错误",
            closedBy == 0 ? WSAGetLastError() : 0);
+    if (!g_khPlug)
+        kh_log("插件本体不在位 ⇒ 卸键盘钩子 + 撤热键注册，按键全部放行（PS 原生快捷键恢复）");
     return 0;
 }
 
@@ -2555,6 +2621,7 @@ void keyhook_start(void)
     g_khRecThreadId = 0;
     InterlockedExchange(&g_khStop, 0);
     InterlockedExchange(&g_khSrvStop, 0);
+    InterlockedExchange(&g_khPlug, 0);          /* 0x0205：插件本体不在位（等面板连接） */
     InterlockedExchange(&g_khArmed, 1);          /* 默认布防（daemon 初值 true） */
     InterlockedExchange(&g_khActive, 1);         /* 我们就在 PS 里 ⇒ PS 必然在运行 */
     InterlockedExchange(&g_khSafeMode, 0);
@@ -2605,7 +2672,7 @@ void keyhook_start(void)
     g_khDispatchThread = CreateThread(NULL, 0, kh_dispatch_thread, NULL, 0, NULL);
     g_khServerThread   = CreateThread(NULL, 0, kh_server_thread, NULL, 0, NULL);
     kh_reload();       /* 启动即装载（不等面板；旧 daemon 开机自启的等价物） */
-    kh_log("热键子系统已启动（.8li 进程内形态，端口 18923，默认布防）");
+    kh_log("热键子系统已启动（.8li 进程内形态，端口 18923；0x0205：插件本体不在位时不装钩子，面板连上才装挂）");
 }
 
 /* ⛔⛔ 0x013E：停服时必须由**调用者线程**同步卸掉两条 LL 钩子。
