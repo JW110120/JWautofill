@@ -183,3 +183,32 @@ armed/hookInstalled/safeMode/active/comboCount/recording/timeoutMs/budgetMs/stri
 新版放行按键（旧版吞键且无人执行——严格不劣）。若要「面板关着热键也能用」，应把 WS 连接
 从面板生命周期挪到**插件容器生命周期**（UXP `entrypoints.setup` 的 `plugin.create/destroy`，
 Adobe 文档确认容器与面板是两套独立生命周期），C 侧闸无需再动。
+
+---
+
+## N10. 0x0206（2026-10-23）：**热键跑一阵子就「未连接」且无法自愈**（用户报「必须重启 PS 再 load 才恢复」）
+
+两个独立缺陷叠在一起，才能解释「跑一阵子突然断 + reload 也没用」：
+
+1. **空闲 60s 被自己踹掉**（`ws_core.c`）
+   `wc_client_loop` 设了 `SO_RCVTIMEO=60s`，而 `wc_recv_all` 把「超时」和「对端关闭」一起返回 -1
+   ⇒ 会话循环按断开处理。面板闲着时根本不发消息 ⇒ **每 60s 必断一次**，面板 1.5s 后重连，
+   再 60s 又断，循环往复。
+   修：`wc_recv_all` 首次 `recv` 就超时（`got==0 ∧ WSAETIMEDOUT`）返回 **-2 = 空闲**；
+   `wc_read_frame` 原样上交；会话循环 `continue` 并**顺手发一次 ping**（0x9，对端按 RFC 回 pong
+   被 0xA 忽略；对端 TCP 半开时 send 失败 ⇒ 照样回收，不留僵尸）。读到半帧才超时仍按错误断开。
+   ⛔ 别把 -2 并进 -1，也别在 -2 时清 `acc`（续帧可能正等着后续帧）。
+
+2. **客户端表槽位泄漏**（`keyhook.c`，真正的「reload 也救不了」）
+   `kh_cli_remove` 把槽位标 `closing=1` 就返回，而 `kh_cli_add` 准入是
+   `s==INVALID_SOCKET ∧ !closing` ⇒ 每次断开**永久废掉一格**。表只有 `KH_MAX_CLI=8` 格
+   ⇒ 第 9 次连接起，accept 上来的新连接全被拒收 + closesocket ⇒ 面板永远「未连接」。
+   表在 PS 进程里，UXP reload 只换 JS 上下文 ⇒ 只有重启 PS 才清零（与用户描述完全吻合）。
+   修：归还槽位时 `s=INVALID_SOCKET; closing=0; notPlugin=0`；准入只看 `s == INVALID_SOCKET`。
+   另：握手失败路径改「**先还槽位再 closesocket**」——反过来时系统可能立刻把同一 SOCKET 值
+   发给下一条 accept，随后的 `remove(s)` 会按值**误删新连接**。
+
+**诊断口径**（下次再报「未连接」先看这两行）：
+- `pi8li.log` 里 `客户端表已满（8 条仍在位）⇒ 拒收新连接` → 槽位泄漏复现；
+- 断连日志每 ~60s 一条 `reason=recv错误` → 空闲超时被当断开。
+**验收**：挂机 >10 分钟不断；反复 reload 面板 10 次以上仍能连上。

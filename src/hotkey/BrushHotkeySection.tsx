@@ -2,21 +2,21 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { storage, shell } from 'uxp';
 import {
   HotkeyEntry, connectHotkeyDaemon, onConfig, enumerateBrushes,
-  onDaemonStatus, pushConfig, requestHotkeyRecording, cancelHotkeyRecording,
+  pushConfig, requestHotkeyRecording, cancelHotkeyRecording,
   onHotkeyTriggered, onRecordProgress,
   registerRepairKeyboardHandler,
   getMainToggleCombo,
   armBackspaceDelete, disarmBackspaceDelete, onBackspaceDelete,
   detectAllBrushTypes,
-  setHotkeyArm, onHotkeyState, requestHotkeyStatus, requestKeyboardRepair, resolveRepairScriptPath,
-  loadPersistedArm, peekPersistedArm, isDaemonConnected
+  requestKeyboardRepair, resolveRepairScriptPath,
 } from './HotkeyBridge';
+import { useHotkeyArm } from './hotkeyArmStore';
+import { HotkeyArmAlert } from './HotkeyArmSwitch';
 import { DeleteIcon, RefreshIcon, DataRefreshIcon, RecordCircleIcon, StopSquareIcon, BrushToolIcon, SmudgeToolIcon, MixerToolIcon, CloneStampIcon } from '../styles/Icons';
 import BrushSelect, { BrushSelectOption } from './BrushSelect';
 import { helpTexts } from '../constants/helpTexts';
 import { getFuncHotkeyLabel } from './funcHotkeyDefs';
 import { runWhenIdle, isPsBusy, psBusyRemain } from '../utils/psProbe';
-import ToggleSwitch from '../components/ToggleSwitch';
 
 // 笔刷热键分区：在调整面板内录制「笔刷 + 快捷键」，持久化到共享配置，
 // 由本地守护进程在全局捕获按键后直接切换笔刷，不录制动作。
@@ -97,17 +97,15 @@ export default function BrushHotkeySection() {
   const [recordingBrush, setRecordingBrush] = useState('');
   const [capturedCombo, setCapturedCombo] = useState('');
   const [message, setMessage] = useState('');
-  const [busy, setBusy] = useState(false);
-  // ⛔ 初值取 bridge 的同步连接态：`useState(false)` 会让每次挂载（含折叠后展开）
-  // 先渲染成「未连接」，等 onDaemonStatus 回放才翻转 —— 用户看到的就是
-  // 「开关从关闭快速变为打开」的穿帮。
-  const [daemonConnected, setDaemonConnected] = useState<boolean>(() => isDaemonConnected());
-  // 热键布防状态（.8li 形态）：服务就绪 ≠ 热键生效。WS 连上仅代表
-  // 「JWautofill Host」扩展在进程内跑着；钩子装不装由布防开关决定
-  // （onHotkeyState 跃变广播 / hotkeyStatus 回帧驱动）。
-  // 初值取落盘值（peek 不到时按 .8li 默认布防 true），避免「先渲染一帧
-  // 默认态、回帧后再纠正」的闪烁；真实状态仍以回帧为准（见下方 useEffect）。
-  const [hotkeyArmed, setHotkeyArmed] = useState<boolean>(() => peekPersistedArm() ?? true);
+  // 连接态 / 布防态 / 忙碌态 / 失败文案统一来自 hotkeyArmStore（2026-10-23）：
+  // 那颗开关已经搬到折叠标题右侧，标题常驻而本组件在折叠时不挂载 ⇒ 状态必须有
+  // 一个不随组件生死的外部宿主，否则折叠期间开关读到的永远是初值。
+  // ⛔ 初值不再本地猜：store 里已经用 bridge 的同步缓存 + 落盘值做过初值（见该文件注释），
+  //    这里直接读，顺带消掉「先渲染成未连接/已暂停，回帧后再纠正」的闪烁。
+  // ⚠️ 2026-10-23：原「功能开启/未连接」状态条退役（见下方 return 顶部注释），
+  // 故 busy / error 不再在这里解构 —— 提示统一由 <HotkeyArmAlert /> 说话，
+  // 它自己订阅 store，本组件只关心「能不能录」与文案配色（daemonConnected）。
+  const { connected: daemonConnected, armed: hotkeyArmed } = useHotkeyArm();
   // 已录快捷键的选中集合：单击单选，Ctrl/Shift + 单击加选或减选，用于单个/批量删除
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   // 多选锚点（shift 延伸的基准）：普通单击或 Ctrl 单击后更新为该条索引
@@ -135,9 +133,7 @@ export default function BrushHotkeySection() {
   const setDrag = (id: string | null) => { dragIdRef.current = id; setDragId(id); };
   const setDrop = (id: string | null) => { dropIdRef.current = id; setDropId(id); };
 
-  // refs：供轮询读取最新值，避免闭包拿到旧值
-  const daemonConnectedRef = useRef(daemonConnected);
-  useEffect(() => { daemonConnectedRef.current = daemonConnected; }, [daemonConnected]);
+  // refs：供回调读取最新值，避免闭包拿到旧值
   const hotkeyArmedRef = useRef(hotkeyArmed);
   useEffect(() => { hotkeyArmedRef.current = hotkeyArmed; }, [hotkeyArmed]);
   // 笔刷列表镜像：启动首刷的重试循环要判断「这次枚举是否拿到了笔刷」，
@@ -166,21 +162,10 @@ export default function BrushHotkeySection() {
       setEntries(normalized);
       if (changed) pushConfig(normalized);
     });
-    const unsubStatus = onDaemonStatus((c) => {
-      setDaemonConnected(c);
-      // .8li 的布防态只在跃变时广播（armed 无跃变就不播 hotkeyState）⇒ 本面板
-      // 无论是晚挂载还是切回前台，都必须**主动问一次**真实布防态，否则
-      // hotkeyArmed 只能靠落盘值猜测——正是 2026-10-19「初次加载显示
-      // 热键已暂停」根因链的一环（与 FuncHotkeyPanel 同款修复）。
-      // onDaemonStatus 订阅即回放当前值：已连通会立刻走到这里，未连通则等连通。
-      if (c) requestHotkeyStatus();
-    });
-    // 布防状态：跃变广播（布防/撤防/熔断自愈）与 hotkeyStatus 回帧都走这里。
-    // 开关是「乐观更新 + 广播校准」：本地先翻，服务确认帧到达后以它为准。
-    const unsubArmed = onHotkeyState((st) => setHotkeyArmed(st.armed));
-    // 本地持久化对齐：挂载即读盘。App 面板已先行连过 WS（缓存多半已热），
-    // 这里兜底补读一次；读到 null（从未落盘）= 用户没表过态，维持默认布防态。
-    void loadPersistedArm().then((v) => { if (v !== null) setHotkeyArmed(v); });
+    // ⛔ 2026-10-23：原先这里还订阅 onDaemonStatus / onHotkeyState 并自己 setState 保存
+    //    连接态与布防态。开关搬到折叠标题后，这两份状态必须与标题里的开关共用同一个宿主
+    //    （否则分区一折叠、本组件卸载，标题那颗就读不到真实状态）⇒ 统一交给 hotkeyArmStore，
+    //    这里不再重复订阅，也就没有「两处各存一份、谁先回帧听谁的」的不同步问题。
     // 热键触发即时反馈：用户按快捷键后面板直接显示是否命中、切换是否成功
     // （这是诊断「按了快捷键没反应」的关键观测点：无任何显示 = 事件根本没到达面板）
     const unsubHotkey = onHotkeyTriggered((info) => {
@@ -232,7 +217,7 @@ export default function BrushHotkeySection() {
     //   属改动文档状态的操作，只在用户手动刷新时才做。
     void initialLoadRef.current?.();
     return () => {
-      unsub(); unsubConfig(); unsubStatus(); unsubArmed(); unsubHotkey(); unsubProgress();
+      unsub(); unsubConfig(); unsubHotkey(); unsubProgress();
       // 卸载时取消待执行的首刷：避免面板已卸载仍发 get（会撞上 PS 忙碌窗口）
       initialLoadRef.current?.cancel();
     };
@@ -317,47 +302,11 @@ export default function BrushHotkeySection() {
     }, BRUSH_LOAD_IDLE_MS, BRUSH_LOAD_MAX_DEFERRALS);
   }
 
-  // 「开启热键」（.8li 形态）：⛔ 不再是「拉起 exe」——快捷键由 Photoshop
-  // 扩展「JWautofill Host」（.8li）在 PS 进程内承载，随 PS 启停，面板无法
-  // 启动/停止它。这里只做一件事：扩展在位 ⇒ 发 hotkeyArm(true) 布防。
-  // 扩展不在位（WS 18923 连不上）⇒ 引导用户去启用扩展，而不是静默失败。
-  // ⛔ 2026-10-18 用户要求：开关操作**不再**弹底部通知——状态条颜色变化
-  //    （主色蓝=生效 / 无颜色=暂停）已承担提示职责，重复打扰。
-  const armHotkeys = async () => {
-    if (busy) return;
-    if (!daemonConnectedRef.current) {
-      showMessage('「JWautofill Host」未连接：请在 Photoshop 菜单「窗口 → 插件」中启用该扩展，然后重新加载本面板。');
-      return;
-    }
-    setBusy(true);
-    try {
-      if (setHotkeyArm(true)) {
-        setHotkeyArmed(true);
-      } else {
-        showMessage('指令发送失败，请重新加载插件后重试');
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // 「暂停热键」：撤防 = 立即卸钩（按键恢复 PS 原生行为），连接与配置原样保留。
-  // ⛔ 不发 shutdown——.8li 形态不可启停，撤防只需要 hotkeyArm(false)；
-  //    旧版的 disconnectDaemon（shutdown）已随桥接层一并删除。
-  const disarmHotkeys = async () => {
-    if (busy) return;
-    if (!daemonConnectedRef.current) { showMessage('「JWautofill Host」未连接'); return; }
-    setBusy(true);
-    try {
-      if (setHotkeyArm(false)) {
-        setHotkeyArmed(false);
-      } else {
-        showMessage('指令发送失败，请重新加载插件后重试');
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
+  // 开关本身（布防/撤防）已迁到折叠标题右侧（HotkeyArmSwitch + hotkeyArmStore）。
+  // 那里是**常驻**的：分区折叠时它照样能拨、照样显示真实状态 —— 这正是搬家的目的
+  // （折叠态下本组件不挂载，开关若留在这里就会跟着消失）。
+  // 这里保留一条「撤销防」的入口：录制完成后 / 需要确保热键不生效时用（下方 reRecord 等）。
+  // ⛔ 不要在本地再存一份 armed：唯一真相在 store，重复存储必然与标题里的开关不同步。
 
   // 「键盘卡死一键修复」：当系统键盘被某个全局钩子拖住（打不出字）时的自救入口。
   // .8li 形态（2026-10-17 M3 迁移）：FixKeyboard.exe 随守护进程退役，修复改由
@@ -393,10 +342,10 @@ export default function BrushHotkeySection() {
   // 功能快捷键）占用时只提示、不覆盖——两边唯一关联就是占用提示，配置互不侵扰。
   const startRecord = async () => {
     if (!selectedBrush) { showMessage('请先在左侧选择一支笔刷'); return; }
-    if (!daemonConnected) { showMessage('快捷键服务未连接，无法录制（请确认已启用「JWautofill Host」扩展并重新加载面板）'); return; }
+    if (!daemonConnected) { showMessage('快捷键服务未连接，无法录制（请确认已启用「JWautofill Host」扩展并重新加载面板）', true); return; }
     // .8li 形态：撤防态下 C 侧会直接回 recordCancel（与旧 daemon 一致）⇒ 提前拦一下，
     // 给一句能指导行动的提示，而不是让用户面对一次「莫名取消的录制」。
-    if (!hotkeyArmedRef.current) { showMessage('热键开关当前是暂停的，请先在上方打开「热键」开关再录制'); return; }
+    if (!hotkeyArmedRef.current) { showMessage('热键开关当前是暂停的，请先在折叠标题右侧打开「热键」开关再录制', true); return; }
     const mainCombo = getMainToggleCombo();
     setRecording(true);
     setRecordingBrush(selectedBrush);
@@ -498,10 +447,10 @@ export default function BrushHotkeySection() {
   // 解绑走「单击选中 + 退格」的布防通路（见下方 onBackspaceDelete）。
   const reRecordEntryById = async (target: HotkeyEntry) => {
     if (recording) return;
-    if (!daemonConnected) { showMessage('快捷键服务未连接，无法录制（请确认已启用「JWautofill Host」扩展并重新加载面板）'); return; }
+    if (!daemonConnected) { showMessage('快捷键服务未连接，无法录制（请确认已启用「JWautofill Host」扩展并重新加载面板）', true); return; }
     // .8li 形态：撤防态下 C 侧会直接回 recordCancel（与旧 daemon 一致）⇒ 提前拦一下，
     // 给一句能指导行动的提示，而不是让用户面对一次「莫名取消的录制」。
-    if (!hotkeyArmedRef.current) { showMessage('热键开关当前是暂停的，请先在上方打开「热键」开关再录制'); return; }
+    if (!hotkeyArmedRef.current) { showMessage('热键开关当前是暂停的，请先在折叠标题右侧打开「热键」开关再录制', true); return; }
     const mainCombo = getMainToggleCombo();
     setRecording(true);
     setRecordingBrush(target.brush);
@@ -714,51 +663,10 @@ export default function BrushHotkeySection() {
 
   return (
     <>
-      {/* 状态条：与「蒙版同步」的引擎状态条同一套视觉，左侧状态点+文字，右侧操作开关。
-          外描边随状态变化（.8li 形态三态）：
-            · notify-bar-ok   = 主色蓝：已连接且热键生效（布防开）；
-            · notify-bar-disabled = 无颜色（中性灰 + 面板底色）：已连接但开关关闭
-              （⛔ 2026-10-18 用户要求：暂停态不呈现任何颜色——橙在插件语义里是
-               「异常/待处理」，关闭只是没开，与 common.css 该档注释同口径）；
-            · notify-bar-warn = 橙：未连接（要用户去启用扩展）。
-          底部通知同理不再为开关操作发声，颜色变化即状态提示。 */}
-      <div className={
-        (daemonConnected && hotkeyArmed) ? 'notify-bar notify-bar-ok'
-          : (daemonConnected ? 'notify-bar notify-bar-disabled' : 'notify-bar notify-bar-warn')
-      }>
-        <span className={
-          (daemonConnected && hotkeyArmed) ? 'indicator indicator-md indicator-ok'
-            : (daemonConnected ? 'indicator indicator-md indicator-disabled' : 'indicator indicator-md indicator-warn')
-        } />
-        <span className="notify-text">
-          {daemonConnected
-            ? (hotkeyArmed ? '功能开启' : '功能关闭')
-            : (busy ? '处理中' : '未连接')}
-        </span>
-        <span className="mask-sync-status-spacer" />
-        {/* 与 APP 面板「紧凑 + 专注」状态条统一：右侧用开关代替「启动/停止」文字按钮。
-            ⚠️ .8li 形态（2026-10-17）：扩展在 PS 进程内承载、不可启停 ⇒ 开关语义
-            从「起停」改为「布防/撤防热键」；未连接时点它给出启用扩展的引导。 */}
-        <ToggleSwitch
-          /* ⛔ 0x013D：开关只表达「用户把热键打开/关掉了」，**不跟着连接态跳**。
-             旧写法 checked={daemonConnected && hotkeyArmed} 有两个后果：
-               ① WS 抖动重连 ⇒ 开关自己短暂关闭再打开（用户实测「运行中会短时间关闭」）；
-               ② 折叠后再展开，组件重挂载时 daemonConnected 仍是 false ⇒
-                  先渲染成关闭、连上才打开（用户实测「有种穿帮的感觉」）。
-             未连接的信息由上方状态条（warn 色 + 「未连接」）表达，不再由开关承担。 */
-          checked={hotkeyArmed}
-          disabled={busy}
-          onChange={() => {
-            if (busy) return;
-            if (!daemonConnected) {
-              showMessage('「JWautofill Host」未连接：请在 Photoshop 菜单「窗口 → 插件」中启用该扩展，然后重新加载本面板。');
-              return;
-            }
-            if (hotkeyArmed) void disarmHotkeys(); else void armHotkeys();
-          }}
-          title={(daemonConnected && hotkeyArmed) ? helpTexts.hotkey.daemonStop : helpTexts.hotkey.daemonStart}
-        />
-      </div>
+      {/* ⛔ 2026-10-23 用户要求：原有的「功能开启 / 功能关闭 / 未连接」状态条**退役**——
+          它的提示职责已全部由最下方那条常驻 notify bar（HotkeyArmAlert）承担，
+          同时开关也在折叠标题右侧常显，这里再放一条等于同一件事说两遍。
+          删除后本分区首元素就是「选择笔刷」那一行（省下一整条状态条的高度）。 */}
 
       <div className="row-between">
         {usePicker ? (
@@ -895,6 +803,16 @@ export default function BrushHotkeySection() {
           </div>
         </div>
       </div>
+
+      {/* 「热键无法运转」的常驻提示（2026-10-23 用户要求：这条 notify bar **不自然消失**）。
+          来源是 hotkeyArmStore —— 它没有计时器，只有「连接恢复」或「用户成功布防/撤防」
+          才会清空；不像下面那条 message（5 秒后自动消失，瞬时反馈用）。
+          ⚠️ 2026-10-23 二次修正（用户报「展开后这条就没了」）：原来这里只在 armError
+             有值时才渲染，而「WS 断开但用户没点过开关」时 error 是空的 ⇒ 展开态什么都不显示，
+             折叠态（AdjustmentPanel 渲染的那条）却有。现在两处共用同一个组件
+             ⇒ 判据一致（未连接 / 有 error 才显示），折叠与展开都看得见。
+          ⚠️ 位置按用户要求放在「已选中 N 条」那一行的**下一行**。 */}
+      <HotkeyArmAlert />
 
       {/* 底部文字通知：与面板顶部「激活提示」同款横幅（common.css 的 .status-banner），
           容器 + 状态点 + 12px 正文一致；ok=主色蓝点（服务就绪时）、warn=橙点（未启动/处理中）。 */}

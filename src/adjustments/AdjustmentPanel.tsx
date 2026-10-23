@@ -25,6 +25,7 @@ import { ExpandIcon, AddIcon, DeleteIcon, SyncIcon } from '../styles/Icons';
 import { PanelStateManager } from '../utils/PanelStateManager';
 import { maskSyncEngine, MASK_SYNC_CHANNEL_LABELS, LayerTreeEntry, MaskSyncTask, MaskSyncChannel, SyncState } from '../utils/MaskSyncEngine';
 import BrushHotkeySection from '../hotkey/BrushHotkeySection';
+import HotkeyArmSwitch, { HotkeyArmAlert } from '../hotkey/HotkeyArmSwitch';
 import FuncHotkeyPanel from '../hotkey/FuncHotkeyPanel';
 import RangeSlider from '../components/RangeSlider';
 import Select from '../components/Select';
@@ -3907,6 +3908,23 @@ const renderQuickActionContent = () => (
 );
 
 // 渲染整个分区
+/**
+ * 折叠态的「热键无法运转」告警条（外面这层只为**重同步原生控件**存在）。
+ *
+ * 为什么需要这层：告警条出现在折叠标题下方，会把下面所有分区整体推移约 40px；
+ * 而工具箱里散布着 UXP 原生控件（sp-number-field 等，独立合成层、无视 z-index/overflow），
+ * 行位置变了却不 repaint ⇒ 数字框会停在旧位置的残影上。项目里所有「高度会变」的
+ * 结构改动（折叠/显示/隐藏分区）都跟着调一次 resyncNativeWidgets，这条同样。
+ * 挂载（告警出现）与卸载（告警消失）各调一次，覆盖进场与退场两个方向。
+ */
+const BrushHotkeyArmAlert = () => {
+  useEffect(() => {
+    resyncNativeWidgets();
+    return () => { resyncNativeWidgets(); };
+  }, []);
+  return <HotkeyArmAlert />;
+};
+
 const renderSectionContent = (sectionId: string) => {
   if (sectionId === 'quickAction') return renderQuickActionContent();
   if (sectionId === 'detailAdjust') return renderDetailAdjustContent();
@@ -3939,7 +3957,31 @@ const renderSection = (section: SectionConfig) => (
         <ExpandIcon expanded={!section.isCollapsed} />
       </div>
       <div className="label-4">{section.title}</div>
+      {/* 笔刷热键的「热键开关」：从分区内容的状态条搬到**折叠标题右侧**（2026-10-23 用户要求，
+          省常态空间，与套索平滑开关同款做法）。
+          ⚠️ 包一层 span 并 stopPropagation：标题行整体是折叠/展开热区，不拦事件的话
+             拨开关会连带折叠分区（CSS 拦不了事件，必须首层拦）。
+          ⚠️ 状态来自 hotkeyArmStore 而不是 BrushHotkeySection：工具箱的折叠是**条件渲染**
+             （见下方注释），内容组件折叠时不挂载 —— 开关若寄生在它里面，一折叠就消失、
+             点了也没人响应。store 是常驻的，所以折叠态下这颗开关照样能拨、照样显示真状态。 */}
+      {section.id === 'brushHotkey' && (
+        <>
+          <span className="mask-sync-status-spacer" />
+          <span className="collapse-header-control" onClick={(e) => e.stopPropagation()}>
+            <HotkeyArmSwitch />
+          </span>
+        </>
+      )}
     </div>
+    {/* 「热键无法运转」的常驻告警条（2026-10-23 用户要求：这条 notify bar 不会自然消失）。
+        这里渲染的是**折叠态**那一条：内容区折叠是条件渲染（不进 DOM），所以必须在标题下方
+        单独给一份 —— 折叠着也要看得见。
+        ⚠️ 展开态由 BrushHotkeySection 在「已选中 N 条」下一行渲染同一个组件
+           （用户报过「展开后这条就没了」，此前展开态只在 error 有值时显示）。
+           两处共用判据，因条件渲染 ⇒ 同一时刻只有一处存在，不会重复。
+        ⚠️ 放这里还有一个原因：它由 store 驱动、与内容组件是否挂载无关，
+           否则「折叠 → 点开关失败 → 提示藏在折叠内容里」等于没提示。 */}
+    {section.id === 'brushHotkey' && section.isCollapsed && <BrushHotkeyArmAlert />}
     {/* 工具箱分区：折叠态内容「条件渲染、不进 DOM」。
         ⚠️ 不能像 APP 那样常驻 + max-height:0 裁剪——UXP 官方 Known Issue：
         input 是原生视图，永远绘制在同面板最上层，z-index/overflow/max-height

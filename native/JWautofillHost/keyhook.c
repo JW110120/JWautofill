@@ -50,7 +50,7 @@
 /* ================================================================ 常量 */
 
 #define KH_PORT          18923
-#define KH_VERSION       "2026-10-23.1"   /* 0x0205：插件本体在位闸（getState 的 version 字段） */
+#define KH_VERSION       "2026-10-23.2"   /* 0x0206：空闲超时不再断连 + 客户端表槽位归还（getState 的 version 字段） */
 #define KH_BUDGET_MS     100      /* 单次钩子回调耗时预算（Program.cs HookBudgetMs） */
 #define KH_STRIKES       3        /* 连续超预算多少次才熔断 */
 #define KH_COOLDOWN_MS   30000    /* 熔断冷却（期满复位重挂） */
@@ -314,7 +314,10 @@ static int kh_cli_add(SOCKET s)
     int ok = 0;
     EnterCriticalSection(&g_khCliLk);
     for (int i = 0; i < KH_MAX_CLI; i++) {
-        if (g_khCli[i].s == INVALID_SOCKET && !g_khCli[i].closing) {
+        /* ⛔ 准入只看 `s == INVALID_SOCKET`（槽位已归还），**不再看 closing**：
+           closing 只对「s 仍有效、正等持有线程收尾」的槽位有意义；s 已归还时它是脏值，
+           旧代码用它当准入条件 ⇒ 每个断开过的槽位永久报废（见 kh_cli_remove 注释）。 */
+        if (g_khCli[i].s == INVALID_SOCKET) {
             g_khCli[i].s = s;
             g_khCli[i].closing = 0;
             g_khCli[i].notPlugin = 0;
@@ -323,14 +326,29 @@ static int kh_cli_add(SOCKET s)
         }
     }
     LeaveCriticalSection(&g_khCliLk);
+    if (!ok) kh_log("客户端表已满（%d 条仍在位）⇒ 拒收新连接（18923 可能残留僵尸连接）", KH_MAX_CLI);
     return ok;
 }
 
+/* ⛔⛔ 2026-10-23 修的严重缺陷（「PS 运行一阵子后热键突然未连接、reload 也不恢复、
+   必须重启 PS」的根因）：
+   旧实现把 `closing` 置 **1** 就返回，而 kh_cli_add 的准入条件是
+   `s == INVALID_SOCKET && !closing` ⇒ 这一格**永久报废**（add 成功后才会把 closing 写回 0，
+   但正因为 closing=1 而永远进不来）。表只有 KH_MAX_CLI=8 格 ⇒ 断 8 次连接之后，
+   accept 上来的新连接全部被 `kh_cli_add` 拒收 + closesocket ⇒ 面板永远「未连接」，
+   连 UXP reload 都救不了（表在 PS 进程里，只有重启 PS 才清零）。
+   槽位归还时必须把 closing 一起清 0：此时 s 已是 INVALID_SOCKET，广播/shutdown 都以
+   s 为准跳过它，所以 closing=0 不会让任何人拿到「正在关闭」的旧连接。 */
 static void kh_cli_remove(SOCKET s)
 {
     EnterCriticalSection(&g_khCliLk);
     for (int i = 0; i < KH_MAX_CLI; i++)
-        if (g_khCli[i].s == s) { g_khCli[i].s = INVALID_SOCKET; g_khCli[i].closing = 1; break; }
+        if (g_khCli[i].s == s) {
+            g_khCli[i].s = INVALID_SOCKET;
+            g_khCli[i].closing = 0;
+            g_khCli[i].notPlugin = 0;
+            break;
+        }
     LeaveCriticalSection(&g_khCliLk);
 }
 
@@ -2551,7 +2569,9 @@ static DWORD WINAPI kh_client_thread(LPVOID param)
        后者只是来问「你是不是旧版 daemon」的，**不是插件本体**，不能算在位。 */
     char cpath[128] = "";
     if (wc_handshake_path(s, cpath, (int)sizeof(cpath)) != 0) {
-        closesocket(s); kh_cli_remove(s); kh_plug_recompute(); return 0;
+        /* ⚠️ 顺序：先归还槽位再 closesocket。反过来的话，系统可能立刻把同一个 SOCKET
+           值发给下一条 accept，而本线程随后的 remove(s) 会按值命中并**误删新连接**。 */
+        kh_cli_remove(s); closesocket(s); kh_plug_recompute(); return 0;
     }
     int isPlugin = (_stricmp(cpath, "/") == 0);
     if (!isPlugin) kh_cli_tag_not_plugin(s);

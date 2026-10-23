@@ -280,3 +280,81 @@
 - 保留：四主题 `--control-handle-off-color` 的 ≈2:1 收敛（那是上一轮的另一半需求）。
 - ⛔ 记住：**UXP 下给开关加 box-shadow 不渲染**，别再试；`.toggle-switch:focus-visible` 的焦点环
   仍是唯一一条 box-shadow（那条能画 — 至少在键盘焦点态，未单独复核）。
+
+---
+
+## §20 笔刷热键开关上移到折叠标题（2026-10-23 第七轮）
+
+**需求**：热键开关从分区内容的状态条挪到「笔刷热键」折叠标题右侧（省常态空间，与套索平滑同款），
+热键无法运转时改由下方 notify bar 通知，且**这条提示不自动消失**。
+
+**关键约束（决定实现方式）**：工具箱分区的折叠是**条件渲染**（折叠时内容不进 DOM，
+见 AdjustmentPanel renderSection 注释：UXP 原生 input 无视 z-index，不能用 max-height 裁剪）
+⇒ 开关若留在 BrushHotkeySection 里，一折叠就消失、点了也没人响应。而套索平滑在 APP 面板是
+CSS 常驻折叠，所以那边可以直接搬。**结论：状态必须离开内容组件。**
+
+**落地**：
+- 新增 `src/hotkey/hotkeyArmStore.ts`：模块单例 store（connected / armed / busy / error）
+  + `useHotkeyArm()`（`useSyncExternalStore`）+ `toggleHotkeyArm()`。连接保活、`onDaemonStatus`
+  回放后主动 `requestHotkeyStatus`、落盘值兜底补读，全部集中在这里；BrushHotkeySection 不再
+  自己订阅 onDaemonStatus/onHotkeyState（两处各存一份必然不同步）。
+- 新增 `src/hotkey/HotkeyArmSwitch.tsx`：`HotkeyArmSwitch`（标题里那颗，checked 只吃 armed，
+  ⛔ 不吃 connected —— 0x013D 老纪律）+ `HotkeyArmAlert`（warn 档告警条）。
+- `AdjustmentPanel.renderSection`：标题行加 `.mask-sync-status-spacer` + `.collapse-header-control`
+  包一层 span 并 stopPropagation（标题行整体是折叠热区，不拦会连带折叠）；
+  **折叠态**在标题下方渲染 `BrushHotkeyArmAlert`（外面再包一层只做 `resyncNativeWidgets`，
+  因为告警条出现/消失会推移下面所有分区，原生输入框不重绘会留残影）。
+- `BrushHotkeySection`：删掉本地 busy/daemonConnected/hotkeyArmed 与 armHotkeys/disarmHotkeys，
+  改读 store；状态条只剩「说话」，开关已被搬走；底部加「armError 常驻横幅」。
+- **sticky 语义**：store.error 无计时器，只有「连接恢复」或「用户成功布防/撤防」才清；
+  录制前的拦截提示（未连接 / 热键暂停）也改成 `showMessage(..., true)`。
+- 文案同步：FuncHotkeyPanel 三处「请先到笔刷热键分区打开开关」改为「折叠标题右侧」。
+
+⚠️ 已知小边界：`.collapse-header` 是 `draggable`（分区拖拽排序），从开关上按住拖也会起拖。
+  没在开关上加 `preventDefault`（UXP 下可能吞掉 click，风险大于收益）。
+
+---
+
+## §21 笔刷热键标题行高 + 展开态告警条 + 旧状态条退役（2026-10-23 第八轮）
+
+**1. 标题行里那颗开关仍把行高顶到 24px（`common.css`）**
+- 上一轮只写了 `.collapse-header-control .toggle-switch { height:16px }`，实测工具箱「笔刷热键」
+  标题仍比其它分区厚 ⇒ **行高由行内最高的 flex item 决定**，只要开关在某一处仍按 24px 出盒就白搭。
+- 现在双保险：① `.collapse-header-control` 自身钉 `height:16px`（包裹盒不参与行高竞争，
+  开关视觉本体 16px 不会溢出）；② `.toggle-switch` 加 `flex:0 0 auto`；
+  ③ `HotkeyArmSwitch` 给 ToggleSwitch 传**内联** `style={{height:16}}`（内联是唯一不可能被抢先的一层）。
+- ⛔ 别用调小 `.collapse-header` padding 的办法：label 行盒随字号变，字号一动就重新失配。
+
+**2. 「热键无法运转」告警条折叠/展开都要显示（`BrushHotkeySection.tsx`）**
+- 病根：展开态原来只在 `store.error` 有值时渲染，而「WS 断开但用户没点过开关」时 error 为空
+  ⇒ 展开后什么都不显示；折叠态却按 `connected` 判，照样显示。
+- 现在两处都用 `<HotkeyArmAlert />`（判据唯一：`!connected || error`），展开态放在
+  **「已选中 N 条」那行的下一行**（用户指定）。工具箱折叠是条件渲染 ⇒ 同一时刻只有一处存在。
+
+**3. 「功能开启 / 功能关闭 / 未连接」状态条退役**
+- 位置：折叠标题下方、`选择笔刷` 下拉上方那条 `.notify-bar`。用户要求删除 —— 提示职责已由
+  最下方常驻 notify bar 承担，开关也在标题右侧常显，重复。
+- 连带：`busy` / `armError` 不再在 BrushHotkeySection 解构（避免未使用变量）；
+  `daemonConnected` 仍留（录制按钮禁用态 + 底部 message 配色），`hotkeyArmed` 仍留（录制前拦截）。
+
+---
+
+## §22 间距四处 + 按钮文字垂直居中规范（2026-10-23 第九轮）
+
+**1. 所有 `.notify-bar` 上方 +5px**（common.css 基类直接加 `margin-top:5px`）。
+   影响面：笔刷热键展开态告警条、蒙版同步引擎条、特制笔刷状态条 —— 三处都是「上文 → 条」的关系，统一加没问题。
+
+**2. 蒙版同步「引擎条 → 卡片容器」再 +5px**
+   `.notify-bar + .border-panel-section { margin-top:5px }`（相邻兄弟选择器）。
+   ⛔ 没加新类：相邻兄弟能精确只命中「紧挨着」的那处，中间夹了别的元素时自动失效。
+
+**3. 特制笔刷面板（brush.css + common.css）**
+- `.bs-tab` 文字偏上的根因：定了 `height:22px` 但**没有任何居中机制**（div 的文字从 content box 顶部排）。
+  修：`display:flex + align-items:center + justify-content:center`。
+  ⛔⛔ **规范：本仓所有按钮/胶囊类（`.action-button-N` / `.icon-button` / `.record-button` / `.bs-tab` …）
+  必须 flex 居中，不许靠 line-height 或 padding 凑。新增按钮照此办理。**
+- `.bs-tabs` 加 `border-bottom:1px solid var(--border-color)` = 分类行与画笔预设的分割线；
+  `.bs-list` 上内边距 0 → 6px，否则首张卡片贴线。
+- `.bs-foot > .notify-bar { margin-bottom:10px }`（原 8px）= 状态条下边缘 → 按钮行上边缘 10px。
+  写在 brush.css 里作用域化，**不动 common.css 的 8px**（那是其它面板的既有节奏）。
+  ⚠️ 中间若出现 `.bs-steps`，10px 落在状态条与步骤列表之间。

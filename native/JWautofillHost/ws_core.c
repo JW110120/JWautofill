@@ -23,12 +23,24 @@ int wc_send_all(SOCKET s, const char* p, int n)
     return 0;
 }
 
+/* 收满 n 字节。
+ * 返回值：got(n) = 成功；-1 = 对端关闭/错误/半帧超时；-2 = **连接空闲超时**（一字节都没读到时）。
+ *
+ * ⛔⛔ 必须区分 -1 与 -2（2026-10-23 修「运行一阵子后热键突然未连接且无法自愈」的根因之一）：
+ *   SO_RCVTIMEO 是 60s，而面板在闲着的时候根本不发消息 ⇒ 每 60s 就 recv 超时一次。
+ *   旧写法把超时并进 -1（= 断开），于是服务端每 60s 主动踹掉一条好连接：面板那边看到
+ *   「突然未连接」、1.5s 后重连、60s 后再被踹……循环往复。配合 keyhook.c 的客户端表
+ *   槽位泄漏（每次断开永久废掉一格，共 8 格）⇒ 数分钟后新连接全被拒收，只能重启 PS。
+ *   ⇒ 首次 recv 就超时 = 空闲，让上层 continue；读到一半才超时（got>0）= 真异常，照旧断开。 */
 int wc_recv_all(SOCKET s, char* p, int n)
 {
     int got = 0;
     while (got < n) {
         int r = recv(s, p + got, n - got, 0);
-        if (r <= 0) return -1;
+        if (r <= 0) {
+            if (r < 0 && got == 0 && WSAGetLastError() == WSAETIMEDOUT) return -2;
+            return -1;
+        }
         got += r;
     }
     return got;
@@ -315,7 +327,11 @@ int wc_send_masked(SOCKET s, const char* msg)
 int wc_read_frame(SOCKET s, char* buf, int cap, int* op, int* fin)
 {
     unsigned char h2[2];
-    if (wc_recv_all(s, (char*)h2, 2) < 0) return -1;
+    /* -2 = 帧头都没读到就超时（连接空闲）⇒ 原样上交，由会话循环 continue。
+       帧头之后的任何超时都是半帧，按错误处理（下面各分支 <0 ⇒ -1）。 */
+    int hr = wc_recv_all(s, (char*)h2, 2);
+    if (hr == -2) return -2;
+    if (hr < 0) return -1;
     *fin = (h2[0] & 0x80) ? 1 : 0;
     *op  = h2[0] & 0x0F;
     int masked = h2[1] & 0x80;
@@ -379,6 +395,15 @@ int wc_client_loop(SOCKET s, CRITICAL_SECTION* lk, wc_on_text on_text, void* ctx
     for (;;) {
         int op = 0, fin = 0;
         int n = wc_read_frame(s, buf, cap, &op, &fin);
+        /* -2 = 空闲超时（60s 没收到任何字节）：连接还活着，继续等。
+           ⛔ 绝不能当断开处理（见 wc_recv_all 注释），也不能清 acc —— 这一拍没读到帧头，
+           acc 里若有未完成的续帧（op=0x0）仍应保留。
+           顺手发一个 ping 探活：对端（UXP WebSocket）按 RFC 自动回 pong（下一拍被 0xA 忽略）；
+           对端真死了（TCP 半开）时 send 会失败 ⇒ 断开回收，不会留下永远挂着的僵尸连接。 */
+        if (n == -2) {
+            if (!wc_send_frame_lk(s, 0x9, "", 0, lk)) { if (closedBy) *closedBy = 0; break; }
+            continue;
+        }
         if (n == -3) { if (closedBy) *closedBy = 2; break; }   /* 异常大帧 ⇒ 断开 */
         if (n < 0)   { if (closedBy) *closedBy = 0; break; }   /* recv 错误 */
 

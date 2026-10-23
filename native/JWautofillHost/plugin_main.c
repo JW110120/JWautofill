@@ -1289,8 +1289,20 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
                         把 L / NUM1 等键吞掉且无人消费广播。现在 LL 钩子安装意图 /
                         键态轮询兜底 / RegisterHotKey 同步三路统一要求 18923 有客户端
                         （面板进程活着）；最后一个客户端断开即卸钩放行，重连自动装挂。
-                        ⚠️ 刻意不做「连过一次就粘住」：面板卸载/崩溃后钩子必须熄火。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x0205; }
+                        ⚠️ 刻意不做「连过一次就粘住」：面板卸载/崩溃后钩子必须熄火。
+   0x0206（2026-10-23，热键「跑一阵子就未连接且无法自愈」）：
+                        ① ws_core.c：`SO_RCVTIMEO`(60s) 超时被当成断开 ⇒ 空闲连接每 60s
+                           被服务端自己踹掉一次。改为 recv_all 返回 -2 =「一字节都没读到的空闲
+                           超时」，会话循环 continue 并顺手发 ping 探活（对端已死则 send 失败，
+                           照样回收，不留僵尸）；读到半帧才超时仍按错误断开。
+                        ② keyhook.c：`kh_cli_remove` 把槽位标成 closing=1 就返回，而
+                           `kh_cli_add` 的准入是 `s==INVALID_SOCKET && !closing` ⇒ **每断一次
+                           永久废掉一格**，表只有 8 格 ⇒ 断 8 次后所有新连接被拒收（面板永远
+                           「未连接」，reload 也没用 —— 表在 PS 进程里，只有重启 PS 才清零）。
+                           现在归还槽位时把 closing/notPlugin 一起清 0；准入只看「s 已归还」。
+                           另：握手失败路径改成「先还槽位再 closesocket」，防止即时的 SOCKET
+                           值复用被随后的 remove(s) 按值误删新连接。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x0206; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {

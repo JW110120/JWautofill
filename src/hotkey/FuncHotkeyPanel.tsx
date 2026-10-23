@@ -209,7 +209,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   const startEdit = async (target: string) => {
     if (editingTarget) return; // 已有编辑中的行
     if (!daemonConnected) { showMessage(helpTexts.funcHotkey.notConnected); return; }
-    if (!hotkeyArmedRef.current) { showMessage('热键开关当前是暂停的，请先到「笔刷热键」分区打开「热键」开关再录制'); return; }
+    if (!hotkeyArmedRef.current) { showMessage('热键开关当前是暂停的，请先到「笔刷热键」分区的折叠标题右侧打开「热键」开关再录制'); return; }
     setEditingTarget(target);
     setCapturedCombo('');
     // sticky：录制过程中的提示常驻，直到录制完成 / 取消（见 showMessage 说明）
@@ -317,7 +317,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
         showMessage(nextOn
           ? (hotkeyArmedRef.current
             ? '混合模式热键已开启：按 Alt+Shift+字母（如 K=变暗、M=正片叠底）将改面板的选区填充混合模式'
-            : '混合模式热键已开启，但热键当前暂停：请先到「笔刷热键」分区打开热键开关才会生效')
+            : '混合模式热键已开启，但热键当前暂停：请先到「笔刷热键」分区的折叠标题右侧打开热键开关才会生效')
           : '混合模式热键已关闭：Alt+Shift+字母恢复 PS 原生行为（改图层/工具混合模式）');
       } else {
         showMessage('推送配置失败：快捷键服务未连接，或配置路径尚未就绪（请重新加载插件后重试）');
@@ -374,7 +374,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
             <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>{helpTexts.funcHotkey.notConnected}</div>
           )}
           {daemonConnected && !hotkeyArmed && (
-            <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>热键已暂停：快捷键暂不生效（录制前请先到「笔刷热键」分区打开「热键」开关）</div>
+            <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>热键已暂停：快捷键暂不生效（录制前请先到「笔刷热键」分区的折叠标题右侧打开「热键」开关）</div>
           )}
         </div>
 

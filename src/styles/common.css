@@ -899,6 +899,12 @@ html, body {
   display: flex;
   align-items: center;
   flex: 0 0 auto;
+  /* ⛔ 2026-10-23 二次修正（工具箱「笔刷热键」标题仍偏高）：把包裹盒自身钉成 16px。
+     上一版只压了里面那颗开关的 height（见下条规则），但**标题行高度由行内最高的
+     flex item 决定**，只要开关在某一处仍按 24px 出盒（后代选择器被主题/内联样式
+     抢先时就会），整行还是被顶高。直接锁死包裹盒高度 ⇒ 无论里面控件多高都不参与
+     行高竞争（开关视觉本体只有 16px，不会真的溢出）。 */
+  height: 16px;
 }
 /* 标题行里的开关**不参与行高竞争**（2026-10-23 用户要求：选区平滑标题容器的高度
    必须与「选区改造」「填充选项」一致）。
@@ -912,6 +918,7 @@ html, body {
       而这一行本来就只需要跟 label 对齐。 */
 .collapse-header-control .toggle-switch {
   height: 16px;
+  flex: 0 0 auto;
 }
 
 /* 通用折叠图标变化状态 */
@@ -1195,6 +1202,8 @@ html, body {
   width: 100%;
   min-height: 32px;
   padding: 3px 6px;
+  /* 2026-10-23 用户要求：所有 notify-bar 上方留 5px，与上文（标题/列表/上一个控件）拉开一档。 */
+  margin-top: 5px;
   margin-bottom: 8px;
   border-radius: 3px;
   background: var(--bg-color);
@@ -1208,6 +1217,13 @@ html, body {
 /* 未启用态（与 warn 橙区分：橙在插件语义里是「异常/待处理」，关闭只是没开）：
    描边走中性灰 --disabled-color、底色回到面板底色，与同条内灰掉的星形图标同源。 */
 .notify-bar.notify-bar-disabled { border-color: var(--disabled-color); background: var(--bg-color); }
+/* 状态条正下方紧跟边框大容器时，再补 5px（2026-10-23 用户要求，蒙版同步）：
+   容器本身就是「一块内容」的起点，8px 的下边距读起来仍偏挤。
+   用相邻兄弟选择器而不是加新类：能精确只影响「紧挨着」的那一处，
+   中间夹了别的元素时自动不生效（那时间距由那个元素自己负责）。 */
+.notify-bar + .border-panel-section {
+  margin-top: 5px;
+}
 /* 状态条内的开关不参与伸缩：右侧定位由 .mask-sync-status-spacer 负责，开关宽度恒定。 */
 .notify-bar .toggle-switch { flex: none; margin-left: 4px; }
 
@@ -2192,21 +2208,33 @@ sp-radio[disabled] {
    ⛔ 不用 `background: transparent`：UXP 会把它渲染成**纯黑**，
       未选中分类胶囊会变成一块黑底；这里写具体色（面板底色）表达「无底」。 */
 
-/* 分类条：横向滚动，分类再多也不换行挤压列表高度 */
+/* 分类条：横向滚动，分类再多也不换行挤压列表高度
+   ⚠️ padding-bottom = 10px：这是**分割线上方那 10px**（2026-10-23 用户点名要求
+      「厚涂按钮下边缘 → 分割线 = 10px」）。分割线由 border-bottom 画在本盒底边，
+      所以盒内底部留白就是「按钮 → 线」的距离，别改成给 border 加 margin。 */
 .bs-tabs {
   display: flex;
   flex-direction: row;
   flex-shrink: 0;
-  padding: 0 10px 6px 10px;
+  padding: 0 10px 10px 10px;
+  /* 分类行与下方画笔预设之间的分割线（2026-10-23 用户要求）。 */
+  border-bottom: 1px solid var(--border-color);
   overflow-x: auto;
   overflow-y: hidden;
 }
 
 /* 分类标签（33×16 的 .toggle-switch 是另一套，勿混用尺寸口径）
    ⚠️ 圆角 3px：与 .action-button-N 同语言（用户 2026-10-22 口径）。
-      原来 11px 是纯胶囊形，和面板里所有矩圆角控件都不是一个语族。 */
+      原来 11px 是纯胶囊形，和面板里所有矩圆角控件都不是一个语族。
+   ⛔ 2026-10-23 用户报「厚涂按钮里的字偏上」：本类定了 height:22px 却**没有**任何
+      居中机制 —— div 的文字从 content box 顶部开始排 ⇒ 下方空出一截。
+      按钮/胶囊类一律 display:flex + align/justify:center（本仓 .action-button-N、
+      .icon-button、.record-button 都是这个写法），新增按钮照此办理。 */
 .bs-tab {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   height: 22px;
   padding: 0 8px;
   margin-right: 6px;
@@ -2230,11 +2258,13 @@ sp-radio[disabled] {
   border-color: var(--primary-color);
 }
 
-/* 笔刷列表：面板里唯一的滚动区 —— 贯通整高，滚动条槽才能贴到面板最右缘 */
+/* 笔刷列表：面板里唯一的滚动区 —— 贯通整高，滚动条槽才能贴到面板最右缘
+   ⚠️ 上内边距 = 10px：这是**分割线下方那 10px**（2026-10-23 用户点名要求
+      「分割线 → 笔刷预设上边缘 = 10px」，与上方 .bs-tabs 的 padding-bottom 成对）。 */
 .bs-list {
   flex: 1 1 auto;
   min-height: 0;
-  padding: 0 10px;
+  padding: 10px 10px 0 10px;
   overflow-y: auto;
   overflow-x: hidden;
 }
