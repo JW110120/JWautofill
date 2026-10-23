@@ -322,7 +322,7 @@ export default function BrushHotkeySection() {
   // 启动/停止它。这里只做一件事：扩展在位 ⇒ 发 hotkeyArm(true) 布防。
   // 扩展不在位（WS 18923 连不上）⇒ 引导用户去启用扩展，而不是静默失败。
   // ⛔ 2026-10-18 用户要求：开关操作**不再**弹底部通知——状态条颜色变化
-  //    （绿=生效 / 无颜色=暂停）已承担提示职责，重复打扰。
+  //    （主色蓝=生效 / 无颜色=暂停）已承担提示职责，重复打扰。
   const armHotkeys = async () => {
     if (busy) return;
     if (!daemonConnectedRef.current) {
@@ -716,7 +716,7 @@ export default function BrushHotkeySection() {
     <>
       {/* 状态条：与「蒙版同步」的引擎状态条同一套视觉，左侧状态点+文字，右侧操作开关。
           外描边随状态变化（.8li 形态三态）：
-            · notify-bar-ok   = 绿：已连接且热键生效（布防开）；
+            · notify-bar-ok   = 主色蓝：已连接且热键生效（布防开）；
             · notify-bar-disabled = 无颜色（中性灰 + 面板底色）：已连接但开关关闭
               （⛔ 2026-10-18 用户要求：暂停态不呈现任何颜色——橙在插件语义里是
                「异常/待处理」，关闭只是没开，与 common.css 该档注释同口径）；
@@ -897,7 +897,7 @@ export default function BrushHotkeySection() {
       </div>
 
       {/* 底部文字通知：与面板顶部「激活提示」同款横幅（common.css 的 .status-banner），
-          容器 + 状态点 + 12px 正文一致；ok=绿点（服务就绪时）、warn=橙点（未启动/处理中）。 */}
+          容器 + 状态点 + 12px 正文一致；ok=主色蓝点（服务就绪时）、warn=橙点（未启动/处理中）。 */}
       {message && (
         <div className={daemonConnected ? 'status-banner status-banner-ok' : 'status-banner status-banner-warn'}>
           <span className={daemonConnected ? 'indicator indicator-md indicator-ok' : 'indicator indicator-md indicator-warn'} />

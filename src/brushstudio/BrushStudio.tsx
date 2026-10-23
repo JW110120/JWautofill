@@ -22,7 +22,7 @@ import '../styles/brush.css';
  *    他们在图层蒙版上就画不出同样效果。浮雕要回到「笔刷本身」，另行处理。
  */
 
-/** 状态条语气：idle=中性灰、ok=绿、warn=橙、fail=红（与项目通知条语义一致） */
+/** 状态条语气：idle=中性灰、ok=主色蓝、warn=橙、fail=红（与项目通知条语义一致） */
 type Tone = 'idle' | 'ok' | 'warn' | 'fail';
 
 /** 去重 Error 前缀，面板里只显示人话部分 */

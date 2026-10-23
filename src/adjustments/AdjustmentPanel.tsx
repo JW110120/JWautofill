@@ -3493,8 +3493,8 @@ const formatSyncState = (task: MaskSyncTask): { text: string; ok: boolean } | nu
 
 const renderMaskSyncContent = () => (
   <div className="panel-section">
-    {/* 引擎状态条：确认插件已加载最新代码。绿点+引擎就绪 左对齐，文档名右对齐。
-        外描边随状态变化：ok=绿 / warn=橙（common.css 的 .notify-bar-ok/warn）。
+    {/* 引擎状态条：确认插件已加载最新代码。主色点点+引擎就绪 左对齐，文档名右对齐。
+        外描边随状态变化：ok=主色蓝 / warn=橙（common.css 的 .notify-bar-ok/warn）。
         已挪到「卡片大容器」外部（上方），不再包裹在任务卡片列表里 */}
     <div className={maskSyncEngineReady ? 'notify-bar notify-bar-ok' : 'notify-bar notify-bar-warn'}>
       <span className={maskSyncEngineReady ? 'indicator indicator-md indicator-ok' : 'indicator indicator-md indicator-warn'} />

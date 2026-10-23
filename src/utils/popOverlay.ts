@@ -288,27 +288,41 @@ export function createOcclusionSession(): OcclusionSession {
   return { update, restore };
 }
 
-/**
- * 兜底矩形：UXP 偶发在刚插入 DOM 时 getBoundingClientRect 返回 0 尺寸，
- * 此时用「已知定位 + 估算高度」代替，保证遮挡判断不至于整体失效。
+/* ---------- 下拉弹层的确定性高度模型（2026-10-23，与 common.css 严格同步） ----------
+ * ⛔⛔ 为什么需要它：UXP 下 `.select-pop` 的 `height:auto` 会按**未取整的行盒**算出来
+ *   （12px 字 + 8px 纵向 padding ≈ 21.4px/行），而实际绘制按整像素落行 ⇒ 内容比盒高
+ *   多出几像素 ⇒ 出现原生滚动条 + 首行被裁掉半截（用户 2026-10-23 截图：「菜单样式崩溃」
+ *   —— 首项「变暗」只剩下半截、右侧一条 16px 滚动条、菜单整体浮在离下拉框 45px 的空中）。
+ *   ⇒ 行高改为**显式整数 22px**（见 common.css 的 .select-opt），弹层高度由本模型算出，
+ *     两者都用同一组整数 ⇒ 恰好相等，不产生 overflow，也不需要任何「量一次再校正」。
  *
- * ⚠️ 高度公式（2026-10-06 二次修正）：
- *   · **不按 200px 封顶**。实测（用户截图反推）7 层 / 8 选项时菜单真实高度约 218px，
- *     已超 CSS max-height:200px —— UXP 下该上限并未把菜单裁到 200。
- *     旧兜底再套一层 min(200,…) 会让判定带短于真实菜单 ⇒ 边缘强度的数字框
- *     落在带外判为不相交 ⇒ 明明被挡住却不隐藏（用户实测）。
- *   · **行高按 28 而非 24**：`.select-opt` 是 font-size:12 + padding 4×2，但 UXP
- *     下 12px 文字的实际行盒高于 12（实测 ≈27~28px/行）。沿用 24 会整体低估，
- *     菜单越长低估越多（8 项就差 ≈32px），同样导致末端输入框漏判。
- *   · 保留一点余量（CHROME）覆盖 padding 与描边，宁可略高不可略低：
- *     判定带略高只是多藏一个刚出界的输入框（下一帧即还原），略低则直接穿帮。
+ * ⚠️ 改 common.css 里 .select-opt 的 height / .select-pop 的 padding 或 max-height 时，
+ *    **必须同步改这里的常量**（否则弹层高度与实际内容不符，回到上面那个 bug）。 */
+export const POP_ROW_H = 22;      // = .select-opt 的 height
+export const POP_DIVIDER_H = 5;   // = .select-divider 的 1px + 上下 margin 2px
+export const POP_CHROME_H = 6;    // = .select-pop 的 padding 2px×2 + border 1px×2
+export const POP_MAX_H = 200;     // = .select-pop 的 max-height
+
+/** 弹层「内容自然高度」（不含滚动）：选项行 + 分组分隔线 + 上下 padding/描边 */
+export function popContentHeight(rows: number, dividers = 0): number {
+  return Math.max(rows, 1) * POP_ROW_H + Math.max(dividers, 0) * POP_DIVIDER_H + POP_CHROME_H;
+}
+
+/**
+ * 兜底矩形 = pos 原点的矩形 + 确定性内容高度（见上方 POP_ROW_H 说明）。
+ *
+ * ⚠️ 高度公式（2026-10-23 三次修正）：行高由「估算 28」改为**确定性 22**
+ *   —— 行高已在 common.css 里钉成整数（.select-opt height:22px），不再是「UXP 实测值」，
+ *      所以这里不需要再按实测反推，直接用同一组常量即可，弹层高度与判定带**恒等**。
+ *   · 仍然不按 200px 封顶：弹层本身 `overflow-y:auto`，滚动裁剪由浏览器负责，
+ *     判定带要覆盖「屏幕上真实存在的那块矩形」，而它永远 ≤ max-height。
+ *     调用方（Select 定位）负责把上翻弹层的实际高度算准并传进来。
  */
 export function estimatePopRect(
     pos: { left: number; top: number; width: number },
-    optionCount: number
+    optionCount: number,
+    dividers = 0
 ): Rect {
-    const ROW_H = 28;   // 实测每选项行高（含 padding 4×2）
-    const CHROME = 8;   // .select-pop 上下 padding 2×2 + 描边 1×2 + 余量
-    const h = optionCount * ROW_H + CHROME;
+    const h = popContentHeight(optionCount, dividers);
     return { left: pos.left, top: pos.top, right: pos.left + pos.width, bottom: pos.top + h };
 }

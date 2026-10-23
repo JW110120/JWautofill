@@ -245,8 +245,39 @@ body.compact-app #app .app-root > .panel > .panel-section .row-grid-fit .grid-ce
   transform: translateY(-50%);
 }
 
-/* 紧凑模式下折叠分区的纵向节奏（折叠态 / 展开态都比默认更紧凑）。
+/* 折叠分区「标题 → 内容首元素」间距：紧凑/非紧凑统一（2026-10-23 用户报「不一致」）。
    --------------------------------------------------------------------------
+   · 紧凑模式：下面那条 `> :first-child { margin-top:5px }` ⇒ 标题 padding-bottom(10) + 5 = 15px。
+   · 非紧凑模式：内容首元素若自身没有上外边距就是 10px（例如平滑分区的三列 radio，
+     `.radio-trio-group` 不带 margin）⇒ 比紧凑模式少 5px。
+   ⇒ 给需要对齐的两处首元素挂专属类、显式补 5px，两模式同口径。
+   ⚠️ 用专属类而不是 `:first-child`：`:first-child` 在紧凑/非紧凑两侧命中不同元素，
+      且 `#app` 前缀已足够高（避免动到 .border-panel-section 内的 radio）。 */
+
+/* 选区平滑：三列 radio（标准/拉绳/追笔）↔「选区平滑」标题。
+   紧凑模式本来就吃到 15px（见上方 :first-child 规则），这里让非紧凑模式跟上；
+   两模式都写 5px，值相同故不存在「谁盖谁」的问题。 */
+#app .smooth-mode-trio {
+  margin-top: 5px;
+}
+
+/* 选区改造：首行「锐度」↔「选区改造」标题。
+   目标 = 「填充选项 → 纯色」那条视觉间距。
+   ⚠️ 为什么是「减小」而不是「补齐」：两区的**盒间距**其实都是 20px
+      （.row-between 自带 margin-top:10 + 标题 padding-bottom:10；
+        .fill-mode-section 显式 margin-top:10 + 标题 padding-bottom:10），
+      但两者的**行盒高度**不同 ⇒ 墨迹位置差 5px：
+        · 填充选项首行 = .radio-vertical > .radio-option，行盒 23px，圆点 12px 居中
+          ⇒ 墨迹顶 ≈ 盒顶 + 5.5px；
+        · 选区改造首行 = .row-between，行盒 32px（右列 .num-input-row 撑起），
+          13px 文字在 32px 里居中 ⇒ 墨迹顶 ≈ 盒顶 + 10.5px。
+      ⇒ 锐度那一行看起来比「纯色」低 5px，用户 2026-10-23 要求两者一致。
+      故把本行上外边距 10px → 5px（20px → 15px 盒间距），墨迹对齐。 */
+#app .selection-sharp-row {
+  margin-top: 5px;
+}
+
+/* 紧凑模式下折叠分区的纵向节奏（折叠态 / 展开态都比默认更紧凑）。
    ① 折叠态：折叠分区与上方 .slider-container 之间 —— 归零 slider-container 的下外边距；
    ② 展开态：分区标题（.collapse-header，自带 10px 上下 padding）与内容区首元素之间 ——
       内容首元素保留 5px 上外边距（+5px，与「折叠态 -5px」配合形成同一节奏）。

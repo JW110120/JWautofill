@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom';
 import { getPopRoot } from '../utils/popRoot';
 import {
   createOcclusionSession,
-  estimatePopRect,
+  popContentHeight,
+  POP_MAX_H,
 } from '../utils/popOverlay';
 
 // 通用自绘下拉：与各面板里的自绘下拉（BrushSelect 等）共用同一套
@@ -47,6 +48,29 @@ interface Props {
   showCheck?: boolean;
   /** 展开前钩子：蒙版同步用它刷新图层树；刷新期间（及完成后 600ms 缓冲）抑制一切自动关闭。 */
   onOpen?: () => void;
+  /**
+   * 向上展开（弹层底边贴在头部上沿上方 2px）。默认向下。
+   *
+   * ⛔⛔⛔ 2026-10-23 末次结论：**本 prop 目前没有任何调用点，实测也不可用，别再用**。
+   *    曾给 app 面板的混合模式下拉打开过（目的：不遮下方不透明度/羽化滑块），用户回报
+   *    「展开位置偏上，反而盖住主标题和主开关」。实测数据：该下拉头部上沿 ≈210px，
+   *    而 27 项菜单的可见高度 200px ⇒ 头部上方根本装不下 ⇒ 定位被底部的
+   *    `Math.max(top, 2)` 兜底夹到面板顶边，菜单于是顶到天花板、底边反而越过了下拉框
+   *    —— 所谓「偏上」不是算错，是**装不下被夹**。
+   *    ⇒ 结论：上翻只在「头部上方空间 ≥ 菜单高度」时才正确，而这类面板下半区一定是
+   *      控件密集区，两头都不合算。保留代码仅为记录，不要再传 true。
+   *
+   * 以下为当初引入时的理由（已作废）：
+   *   头部下方是不透明度/羽化滑块与模式参数行，向下展开会盖住它们，且遮挡逻辑会把被盖住的
+   *   数字输入临时隐藏。现在改回向下展开 —— 遮挡隐藏是 UXP 硬限制下的正确行为
+   *   （否则数字会浮在菜单之上），菜单关闭即还原。
+   *
+   * ⛔ 弹层高度/位置**只由 popOverlay 的整数常量算出**，绝不来自 getBoundingClientRect：
+   *   UXP 的 height:auto 按未取整行盒算（12px 字 ≈21.4px/行），绘制按整像素落行 ⇒
+   *   内容比盒高 ⇒ 原生滚动条 + 首行被裁；而 gBCR 又常返回上一帧高度 ⇒ 「量一次再校正」
+   *   会收敛到错误的固定点（菜单浮空 45px）。行高已在 common.css 钉成整数 22px。
+   */
+  openUp?: boolean;
 }
 
 function Select({
@@ -60,8 +84,17 @@ function Select({
   style,
   showCheck = true,
   onOpen,
+  openUp = false,
 }: Props) {  const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
+  /**
+   * pos：弹层的定位与尺寸。`h` 只在上翻时有意义 = 弹层**显式**高度（内容自然高度，
+   * 超过 POP_MAX_H 时封顶并退回滚动），`contentH` = 内容自然高度（判断是否需要滚动）。
+   * ⛔ 这两个值全部由常量算出，**绝不来自 getBoundingClientRect**（理由见 openUp 注释）。
+   */
+  const [pos, setPos] = useState<{
+    left: number; top: number; width: number;
+    up: boolean; headTop: number; h: number; contentH: number;
+  } | null>(null);
   const headRef = useRef<HTMLDivElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
   const openAtRef = useRef(0);
@@ -102,18 +135,36 @@ function Select({
     [allOptions]
   );
 
+  // 分组下拉的分隔线条数（参与弹层高度计算：每条 1px + 上下 margin 2px）
+  const dividerCount = useMemo(
+    () => (groups ? Math.max(groups.length - 1, 0) : 0),
+    [groups]
+  );
+
   const reposition = useCallback(() => {
     const r = headRef.current?.getBoundingClientRect();
     if (!r) return;
+    // 内容自然高度：行高与 padding/描边全部来自 popOverlay 的整数常量（与 CSS 同步）。
+    // **可见高度** = min(内容高, max-height)：超长列表（如混合模式 27 项）会被 CSS 的
+    // max-height 裁到 200 后滚动，超出部分不在屏幕上 ⇒ 判定带与定位都必须按可见高度算，
+    // 否则会多圈住下方一整个输入框（误藏）。
+    const contentH = popContentHeight(allOptions.length, dividerCount);
+    const h = Math.min(contentH, POP_MAX_H);
+    // 上翻：弹层底边贴头部上沿上方 2px。底部贴近面板顶边时（极窄窗口）兜个底，不让它跑出可视区。
+    const top = openUp ? Math.max(r.top - 2 - h, 2) : r.bottom + 2;
     setPos(prev =>
       prev &&
       Math.abs(prev.left - r.left) < 1 &&
-      Math.abs(prev.top - (r.bottom + 2)) < 1 &&
-      Math.abs(prev.width - r.width) < 1
+      Math.abs(prev.top - top) < 1 &&
+      Math.abs(prev.width - r.width) < 1 &&
+      prev.up === !!openUp &&
+      Math.abs(prev.headTop - r.top) < 1 &&
+      prev.h === h &&
+      prev.contentH === contentH
         ? prev
-        : { left: r.left, top: r.bottom + 2, width: r.width }
+        : { left: r.left, top, width: r.width, up: !!openUp, headTop: r.top, h, contentH }
     );
-  }, []);
+  }, [openUp, allOptions.length, dividerCount]);
 
   useEffect(() => {
     if (!open) return;
@@ -166,6 +217,13 @@ function Select({
     if (open) reposition();
   }, [open, reposition, value, options, groups]);
 
+  // ⛔ 这里**曾经**有一段「量实测高度再校正 top」的 useLayoutEffect（2026-10-23 上午版）。
+  //    已删除，原因是它在 UXP 下会收敛到错误的固定点：getBoundingClientRect 返回的是
+  //    上一帧（行盒未取整）的高度，两次迭代都读到同一个旧值就判定「稳定」⇒ 菜单浮空 45px；
+  //    而 auto 高度按小数行盒算出来又比实际内容矮几像素 ⇒ 原生滚动条 + 首行被裁。
+  //    现在 top 与 height 全部由 popOverlay 的整数常量算出（见 reposition），
+  //    前后两帧必然一致，不需要也没法「校正」。
+
   // UXP 限制：可编辑控件（滑块旁的 number 输入等）无视 z-index 永远画在最上层。
   // 弹层渲染出来后按实际矩形，只把与弹层相交的那些临时隐藏，关闭时还原。
   // 用「会话」管理：定位变化（滚动/重排）时 update 重算，不再相交的立即还原。
@@ -183,7 +241,16 @@ function Select({
     const run = () => {
       const pop = popRef.current;
       if (!pop) return;
-      session.update(pop, root, estimatePopRect(pos, Math.max(allOptions.length, 1)));
+      // 判定矩形完全由 pos 推出（pos.top 是算出来的整数，pos.h = min(内容高, max-height)
+      // = 屏幕上真实可见的那块），**不再读弹层实测矩形**：UXP 的 fixed 弹层在首帧经常
+      // 返回 0 尺寸或错乱坐标，读它是历史上多起「数字浮在菜单上」/「菜单浮空」的根源。
+      const rect = {
+        left: pos.left,
+        top: pos.top,
+        right: pos.left + pos.width,
+        bottom: pos.top + pos.h,
+      };
+      session.update(pop, root, rect);
     };
     run();
     // 暴露给滚动回调：菜单自身滚动时也要能即时重算遮挡（见 onScroll 注释）
@@ -201,7 +268,7 @@ function Select({
       session.restore();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, pos, optionsSignature]);
+  }, [open, pos, optionsSignature, dividerCount]);
 
   const handleHeadClick = () => {
     if (disabled) return;
@@ -275,7 +342,17 @@ function Select({
         <div
           ref={popRef}
           className="select-pop"
-          style={{ left: pos.left, top: pos.top, width: pos.width }}
+          style={{
+            left: pos.left,
+            top: pos.top,
+            width: pos.width,
+            // 高度/滚动：**一律**写死成算出来的整数（= min(内容高, max-height)）——
+            // ① UXP 的 height:auto 按小数行盒算（21.4px/行），比内容矮几像素 ⇒ 滚动条+首行被裁；
+            // ② 交给 overflow-y:auto 时 UXP 还会画出 16px 原生滚动条，短菜单上非常显眼。
+            // 装得下就 hidden（高度=内容高，滚动容器纯属多余），只有超长列表才 auto。
+            height: pos.h,
+            overflowY: pos.h < pos.contentH ? 'auto' : 'hidden',
+          }}
         >
           {groups ? (
             groups.map((g, gi) => (

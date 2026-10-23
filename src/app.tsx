@@ -191,6 +191,12 @@ const resyncNativeWidgets = (root: HTMLElement | null) => {
     });
 };
 
+/** 套索平滑状态档是否是「错误档」（2026-10-23：决定标题下方的异常通知条是否现身）。
+ *  warn = 服务没起来 / 版本过旧（要用户处置）；fail = 标定失败 / 平滑中断（要用户反馈）。
+ *  「关 / 准备中 / 生效中」不是错误 —— 不占位，常态省空间。 */
+const smoothToneIsError = (tone: string): boolean =>
+    tone === 'notify-bar-warn' || tone === 'notify-bar-fail';
+
 interface AppProps {}
 
 class App extends React.Component<AppProps, AppState> {
@@ -201,6 +207,9 @@ class App extends React.Component<AppProps, AppState> {
     // 热键命中方写在绘画工具箱面板的 JS 上下文，经共享文件到达这里，卸载时退订）
     private unsubClearModeToggle: (() => void) | null = null;
     private unsubBlendMode: (() => void) | null = null;
+    // 套索平滑「异常通知条」上一帧是否可见（2026-10-23，componentDidUpdate 比对用）。
+    // null = 尚未记录过首帧（装载时不触发重排兜底）。
+    private smoothErrBarVisible: boolean | null = null;
     private isFilling = false;
     private pendingSelection = false;
     // 选区事件沉降窗（见 SELECTION_SETTLE_MS）：timer 运行期间到来的事件只刷新
@@ -859,6 +868,14 @@ class App extends React.Component<AppProps, AppState> {
             prevState.switchToLassoOnEnable !== this.state.switchToLassoOnEnable) {
             this.syncFocusMode();
         }
+        // 套索平滑「异常通知条」显隐（2026-10-23）：条的现身/退场会推动下方平滑参数行，
+        // 补一次原生控件重排，防 UXP 数字输入留残影（与模式切换 resync 同款纪律）。
+        // 首次不补（smoothErrBarVisible 初值 null）：装载时的既有布局无需抖动。
+        const smoothErrBar = smoothToneIsError(this.smoothBarTone());
+        if (this.smoothErrBarVisible !== null && smoothErrBar !== this.smoothErrBarVisible) {
+            resyncNativeWidgets(this.panelRef.current);
+        }
+        this.smoothErrBarVisible = smoothErrBar;
 
         // 检查次级面板状态变化，添加或移除CSS类
         const isAnySecondaryPanelOpen = this.state.isColorSettingsOpen || 
@@ -1502,7 +1519,7 @@ class App extends React.Component<AppProps, AppState> {
         // ⛔ 2026-10-18 用户明确要求：**隐藏标定过程**——后台静默处理，不向用户
         //    展示「待标定 / 标定中」这类中间态（它们对使用者没有信息价值，反而
         //    像卡住）。两个分支统一为中性文案，配色走 notify-bar-disabled（灰、
-        //    无颜色），与「关」档同款；标定成功后自然翻到「生效中」（绿）。
+        //    无颜色），与「关」档同款；标定成功后自然翻到「生效中」（主色蓝）。
         //    真正需要解释的情况（未连接 / 版本过旧 / 标定失败 / 未注入 / 未生效）
         //    仍各自单列，不受本条影响。
         return '套索平滑：准备中';
@@ -1513,7 +1530,7 @@ class App extends React.Component<AppProps, AppState> {
      * 与 smoothStatusText 判据一一对应但分开返回：合并成「返回 {文本, 类名}」的对象
      * 会在每次渲染新建对象、且两处口径容易漂移。
      * 档位：关 = 灰 / 标定中（后台静默）= 灰 / 服务没起来 = 橙（要用户处置）/
-     *      标定失败 = 红 / 生效 = 绿 / 平滑中断 = 红。
+     *      标定失败 = 红 / 生效 = 主色蓝 / 平滑中断 = 红。
      */
     private smoothBarTone(): string {
         const st = this.state.smoothStatus;
@@ -1525,7 +1542,7 @@ class App extends React.Component<AppProps, AppState> {
         if (!pen.enabled) return 'notify-bar-disabled';
         if (pen.state === 2) return 'notify-bar-fail';
         if (pen.state === 1) {
-            // 与 smoothStatusText 的异常分支一一对应：中断 = 红，其余 = 绿。
+            // 与 smoothStatusText 的异常分支一一对应：中断 = 红，其余 = 主色蓝。
             // ⛔ 2026-10-14：不再有「非拉绳模式 = 橙」这一档（用户要求）。
             const t = Date.now();
             const flowing = (t - this.lastPenFlowAt) < 1500;
@@ -3251,7 +3268,7 @@ class App extends React.Component<AppProps, AppState> {
         // 试用7天
         this.setState({ isLicensed: false, isTrial: true, isLicenseDialogOpen: false, trialDaysRemaining: 7 });
         // body 类同上，由 render() 派生
-        // 同上：弹窗关闭同刻广播，工具箱同步切换到试用态（横幅变绿、不锁定）
+        // 同上：弹窗关闭同刻广播，工具箱同步切换到试用态（横幅变主色蓝、不锁定）
         document.dispatchEvent(new Event('license-updated'));
         // 试用状态不允许注销
         MenuManager.setLicenseLogoutEnabled(false);
@@ -3316,6 +3333,9 @@ class App extends React.Component<AppProps, AppState> {
         const focusMode = this.isFocusMode();
         // 紧凑模式（仅父面板作用域）：三行 radio 改三列、去掉齿轮，标签兼作子面板入口
         const compactApp = !!this.state.compactModes?.app;
+        // 套索平滑状态档（2026-10-23）：标题右侧开关的 hover 提示与「异常通知条」共用，
+        // 渲染期一次算清，避免 JSX 里多处调用漂移（判据本体在 smoothBarTone）。
+        const smoothTone = this.smoothBarTone();
         return (
             <>
             <div className="panel" ref={this.panelRef}>
@@ -3332,7 +3352,7 @@ class App extends React.Component<AppProps, AppState> {
                 {compactApp && focusMode ? (
                     /* 紧凑 + 专注模式：主按钮收成单行 notify-bar——左星形 indicator、中「专注模式」、
                        右 sp-switch（开关即控制），省纵向高度。开关放右侧单独控制，点星/文案不触发切换。
-                       两态配色与主按钮一致：开=ok 绿描边绿星，关=disabled 灰描边灰星（不用 warn 橙，
+                       两态配色与主按钮一致：开=ok 主色描边主色星，关=disabled 灰描边灰星（不用 warn 橙，
                        橙在本插件语义里是「异常/待处理」，关闭只是未启用）。文案沿用主按钮的
                        「功能开启/功能关闭」，并标注当前处于专注模式。 */
                     <div className={this.state.isEnabled ? 'notify-bar notify-bar-ok' : 'notify-bar notify-bar-disabled'}>
@@ -3379,6 +3399,14 @@ title={helpTexts.selectionFill.blendMode}>
                         disabled={this.state.clearMode}
                         onChange={(v) => this.handleBlendModeChange({ target: { value: v } } as React.ChangeEvent<HTMLSelectElement>)}
                         title={helpTexts.selectionFill.blendModeSelect}
+                        /* ⛔⛔ 2026-10-23 三次结论：**不要上翻**（曾用 openUp，已被用户否掉）。
+                           实测数据：截图中该下拉头部上沿 ≈210px，27 项菜单可见高度 200px
+                           ⇒ 头部上方根本装不下 ⇒ 上翻定位被 `Math.max(top,2)` 夹到面板顶部，
+                           菜单于是「顶到天花板、底边反而压过下拉框」——用户看到的就是
+                           「展开位置偏上，盖住主标题和主开关」。
+                           上翻唯一的好处（不遮下方不透明度/羽化滑块）远小于位置错乱的代价，
+                           故回到标准的下展开：遮住的那几行由 popOverlay 的遮挡逻辑临时隐藏，
+                           菜单关闭即还原（UXP 硬限制：可编辑控件永远画在最上层）。 */
                     />
                 </div>
 
@@ -3463,21 +3491,38 @@ title={helpTexts.selectionFill.blendMode}>
                             <ExpandIcon expanded={this.state.isSmoothOptionsExpanded} />
                         </div>
                         <span className="label-4">选区平滑</span>
-                    </div>
-                    {this.state.isSmoothOptionsExpanded && (
-                    <div className="collapse-content-expanded">
-                        {/* 套索平滑总开关（形态与「笔刷热键」的服务条同款：指示点 + 状态文案 + 右侧开关）。
+                        {/* ⛔⛔ 2026-10-23 用户要求：套索平滑总开关从内容区状态条**挪到分区标题右侧**
+                            —— 常态不再占「状态条 32px + 间距 8px」的一整行，省纵向空间。
+                            开关语义与原状态条里那颗完全一致（下方注释整体搬迁）：
                             ⛔ 开关**永不禁用**（2026-10-12 真机事故：置灰 = 用户没有任何入口）：
                                 未连接时点击会记下意图，.8li 就绪后自动重放（见 toggleLassoSmooth）。
                             ⛔⛔ 2026-10-19：checked = 用户意图（isPenSmoothOn），**不看 connected** ——
                                 WS 瞬断时旧判据会把开关翻到关位、状态条闪「服务未启动」，
                                 用户什么都没做开关自己跳（用户报「偶尔自动变成服务未启动状态」）。
-                                现在：开关除非用户点击永不动；连接状态只进状态条文案（带宽限）。
-                            ⚠️ 状态文案覆盖多种完全不同的情形（服务没起来 / 版本过旧 /
-                                关 / 标定失败 / 等待 PS / 生效中），处置方式各不相同，
-                                必须分开说，否则用户只看到「没效果」无从下手。 */}
-                        <div className={'notify-bar ' + this.smoothBarTone()}>
-                            <span className={'indicator indicator-md ' + App.smoothDotOfTone(this.smoothBarTone())} />
+                                现在：开关除非用户点击永不动；连接状态只在**异常时**进 notify-bar（见下）。
+                            ⚠️ 包一层 span 拦截点击冒泡：标题行整体是折叠/展开热区，不拦的话
+                                拨开关会连带折叠分区（CSS 拦不了事件，必须 stopPropagation）。
+                            ⚠️ 状态文案退进 hover 提示（title）：常态不占位，鼠标悬停仍看得到
+                                「生效中 / 关 / 服务未启动…」等全部情形（口径同 smoothStatusText）。 */}
+                        <span className="mask-sync-status-spacer" />
+                        <span className="collapse-header-control" onClick={(e) => e.stopPropagation()}>
+                            <ToggleSwitch
+                                checked={isPenSmoothOn()}
+                                onChange={this.toggleLassoSmooth}
+                                title={helpTexts.selectionFill.smoothEnabledSwitch + '\n当前状态：' + this.smoothStatusText()}
+                            />
+                        </span>
+                    </div>
+                    {/* 异常态通知条（2026-10-23 用户要求「当有错误发生，通过notify-bar通知用户」）：
+                        只 warn / fail 两档现身 —— 服务没起来 / 版本过旧（橙，要用户去装新 .8li）、
+                        标定失败 / 平滑中断（红，要用户截图反馈）；「关 / 准备中 / 生效中」不占位
+                        （生效与否看标题右侧开关 + 其 hover 提示）。
+                        ⚠️ 渲染在标题下方、折叠内容**之外**：分区折叠着时错误也看得见，不被藏住。
+                        ⚠️ 显隐会推动下方平滑参数行 ⇒ componentDidUpdate 对「错误条可见性」
+                            做了 resyncNativeWidgets 兜底（防 UXP 原生数字输入留残影）。 */}
+                    {smoothToneIsError(smoothTone) && (
+                        <div className={'notify-bar ' + smoothTone}>
+                            <span className={'indicator indicator-md ' + App.smoothDotOfTone(smoothTone)} />
                             <span
                                 className="notify-text"
                                 title={this.state.smoothStatus.unsupported || this.state.smoothStatus.penUnsupported
@@ -3485,19 +3530,21 @@ title={helpTexts.selectionFill.blendMode}>
                                     : helpTexts.selectionFill.smoothStatusLabel}>
                                 {this.smoothStatusText()}
                             </span>
-                            <span className="mask-sync-status-spacer" />
-                            <ToggleSwitch
-                                checked={isPenSmoothOn()}
-                                onChange={this.toggleLassoSmooth}
-                                title={helpTexts.selectionFill.smoothEnabledSwitch}
-                            />
                         </div>
-                        {/* 滤波族：三列（与「填充模式」紧凑态的 .radio-trio-group 同款） */}
+                    )}
+                    {this.state.isSmoothOptionsExpanded && (
+                    <div className="collapse-content-expanded">
+                        {/* 滤波族：三列（与「填充模式」紧凑态的 .radio-trio-group 同款）。
+                            ⚠️ `.smooth-mode-trio` 专属类只用于间距定位（见 app.css）：
+                                紧凑模式靠「内容区首元素 margin-top:5px」得到 15px，
+                                非紧凑模式没有那条规则 ⇒ 旧版只有 10px，
+                                与紧凑模式差 5px（用户 2026-10-23 报「间距比紧凑模式小」）。
+                                现在两模式都由这条专属类的 5px 给出，同一口径。 */}
                         <RadioGroup
                             value={this.state.smoothParams.mode}
                             onChange={this.handleSmoothModeChange}
                             options={SMOOTH_MODE_RADIO_OPTIONS}
-                            className="radio-trio-group"
+                            className="radio-trio-group smooth-mode-trio"
                         />
                         {/* 强度只被「标准」模式读取（拉绳 / 追笔的算法分支不看 Strength）⇒ 不适用时整行隐藏 */}
                         {/* 参数区：选哪个模式就在下面这个盒子里统一显示该模式的全部参数。
@@ -3596,11 +3643,14 @@ title={helpTexts.selectionFill.blendMode}>
                                （与其它模式一致）。下发时由 LassoSmoothing 的
                                `catchUpToNative()` 反向映射到原生 1–50（1→50、100→1）。
                             ⚠️ 2026-10-19 标签「追笔」→「追笔速度」（用户要求）：与模式名区分，
-                               数值方向不变（越大越强），语义见 helpTexts.selectionFill.smoothCatchUp。 */}
+                               数值方向不变（越大越强），语义见 helpTexts.selectionFill.smoothCatchUp。
+                           ⚠️ 2026-10-23 标签 4 个字 ⇒ 字盒按前端规范走 .label-4
+                              （W(n)=20+(n-2)×13.3，4 字=47px，与「速度适应」「拉绳提示」同档）；
+                              滑块 .slider-track 是 flex:1 1 auto，标签变宽后自动相应缩短，无需额外 CSS。 */}
                         {this.smoothParamApplies('catchUp') && (
                         <div className="row-between">
                             <label
-                                className="label-drag label-2"
+                                className="label-drag label-4"
                                 onMouseDown={(e) => this.handleLabelMouseDown(e, 'smooth:catchUp')}
                                 title={helpTexts.selectionFill.smoothCatchUp}>
                                 追笔速度
@@ -3644,11 +3694,15 @@ title={helpTexts.selectionFill.blendMode}>
                             ⇒ 现在**显示值 = 原生转折角阈值**，一一对应、无换算（见
                                LassoSmoothing 的 cornerToNative，已还原为恒等）。
                             ⚠️ 语义如实呈现：数值**越小**越容易触发拐角保护（0 = 几乎每帧都保护，
-                               90 = 只有掉头才保护）。 */}
+                               90 = 只有掉头才保护）。
+                           ⚠️ 2026-10-23 标签 4 个字 ⇒ 字盒按前端规范走 .label-4
+                              （W(n)=20+(n-2)×13.3，4 字=47px；旧值 .label-2 只有 20px，
+                              四字溢出字盒压在滑块上）；滑块 .slider-track 是 flex:1 1 auto，
+                              标签变宽后自动相应缩短，无需额外 CSS。 */}
                         {this.smoothParamApplies('cornerAngle') && (
                         <div className="row-between">
                             <label
-                                className="label-drag label-2"
+                                className="label-drag label-4"
                                 onMouseDown={(e) => this.handleLabelMouseDown(e, 'smooth:cornerAngle')}
                                 title={helpTexts.selectionFill.smoothCorner}>
                                 保角下限
@@ -3734,7 +3788,12 @@ title={helpTexts.selectionFill.blendMode}>
                             </div>
                             {this.state.isSelectionOptionsExpanded && (
                             <div className="collapse-content-expanded">
-                                    <div className="row-between">
+                                    {/* ⚠️ `.selection-sharp-row` 专属类只用于间距定位（见 app.css）：
+                                        本行盒高 32px（右列数字输入撑起），文字在盒内垂直居中 ⇒
+                                        墨迹比「填充选项」首行的 radio 球（行盒 23px）低约 5px。
+                                        缺省 10px 上边距会让「选区改造 → 锐度」看起来比
+                                        「填充选项 → 纯色」松 5px（用户 2026-10-23 要求两者一致）。 */}
+                                    <div className="row-between selection-sharp-row">
                                     <label
                                         className="label-drag label-2"
                                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionContrast')}

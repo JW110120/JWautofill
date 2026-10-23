@@ -135,7 +135,7 @@ export const StopSquareIcon = ({ className, style }: IconSvgProps) => (
  * 内联后视觉与官方完全一致，且继续复用本文件既有的 .icon-fill 填色机制。
  *
  * 只替换 .indicator-lg那颗圆点：尺寸与它一致（13×13），填色交给 CSS 的
- * .indicator-icon-lg / .indicator-icon-ok（与圆点的启用绿 / 禁用灰同一套色）。
+ * .indicator-icon-lg / .indicator-icon-ok（与圆点的启用主色蓝 / 禁用灰同一套色）。
  * ⚠️ 官方原 svg 是 fill="currentColor"，这里改用 class="icon-fill" 以便跟随状态色；
  *    <circle> 同样挂 .icon-fill，否则内圈会缺色。
  * ⚠️ viewBox 保持官方的 0 0 36 36（path 坐标按 36 网格绘制，不可缩放到 18）。

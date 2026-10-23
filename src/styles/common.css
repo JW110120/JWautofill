@@ -195,8 +195,10 @@ html, body {
 }
 
 /* 通用自定义滑块色标
-   ⚠️ 颜色走 var(--control-handle-color)（深主题白 / 亮主题近黑，见 theme.ts）：
-      硬编码白色在亮色主题下压在浅灰轨道上几乎看不见。 */
+   ⚠️ 2026-10-23 用户要求：手柄统一 var(--primary-color)（取代原先随主题深浅反转的
+      var(--control-handle-color)——该令牌已随本次改造退役，见 theme.ts），与滑块填充、
+      开关开启态手柄同一视觉语言；**不加描边**，轮廓靠「实心圆 + 投影」勾出。
+      投影的另一个用处：满量程时手柄压在蓝色填充上（同色），没有投影会糊成一团。 */
 .range-slider-thumb {
   position: absolute;
   top: 50%;
@@ -206,23 +208,36 @@ html, body {
   margin-left: -6px;
   border-radius: 50%;
   -webkit-border-radius: 50%;
-  background-color: var(--control-handle-color);
+  background-color: var(--primary-color);
+  /* 手柄投影（2026-10-23 用户要求「增加投影」）：小偏移深色半透明。
+     ⚠️ UXP 下 box-shadow 可用（.select-pop 的浮起投影、开关焦点环同款手段）。 */
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   box-sizing: border-box;
   pointer-events: none;
 }
 
 /* —— 自绘开关（.toggle-switch，替代原生 sp-switch）——
    为什么自绘：sp-switch 的胶囊色由 PS Spectrum 主题接管、CSS 覆盖不了，且关闭态
-   在 darkest / lightest 下≈面板底色，看起来只是个圆点。自绘后开启态=--primary-color、
-   与滑块同一套语言（轨道 --border-color、圆点 --control-handle-color）。
-   尺寸：可见胶囊 33×16、圆点 12px；占位盒高 24px（:before 撑起，不用 margin/padding，
+   在 darkest / lightest 下≈面板底色，看起来只是个圆点。
+   ⚠️ 2026-10-23 用户要求改两态配色（替代原「开启态=主色、圆点=--control-handle-color」）：
+     · 关闭态手柄 = var(--control-handle-off-color)：**随主题变灰**且与轨道灰有反差 ——
+       轨道是 --border-color@0.8（深主题偏暗灰、亮主题偏浅灰），故手柄取「深主题亮灰 /
+       亮主题深灰」的反向档（theme.ts 逐主题定义）。不再用白/近黑（用户明确要求）。
+     · 开启态手柄 = var(--primary-color)（实心蓝点）；轨道 = var(--switch-track-on-color)
+       （半透明蓝，效果类似 notify-bar-ok：通透的蓝底 + 实心蓝点）。
+   ⛔ 2026-10-23 二次调档：用户反馈关闭态「手柄与背景反差偏大」⇒ 四主题手柄灰统一收敛到
+      ≈2:1（暗主题压暗、亮主题提亮，逐主题值见 theme.ts 的 --control-handle-off-color）。
+      ⛔⛔ 同一个 patch 里试过的「胶囊 + 圆点各加一层投影」**已整体回退**：UXP 下这条
+      box-shadow 不渲染（用户回报"投影代码不生效"），当时连带把胶囊改成真实子元素
+      `.toggle-switch-track` 也一并还原为 `:before`。不要重新引入。
+   尺寸：可见胶囊 33×16、圆点 12px；占位盒高 24px（胶囊绝对定位居中，不占行高，
    免得挤压同行元素），与滑块(12px)、数字输入(24px) 同基线。
-   ⚠️ 圆角不能写 999px：UXP 未按「高度一半」解析，两端会渲染成尖角纺锤、伪元素溢出鼓包
-      ⇒ 用显式 8px（=16px 的一半），并同时给 -webkit- 前缀。 */
+   ⛔ 圆角不能写 999px：UXP 未按「高度一半」解析，两端会渲染成尖角纺锤、胶囊溢出鼓包
+     ⇒ 用显式 8px（=16px 的一半），并同时给 -webkit- 前缀。 */
 .toggle-switch {
   position: relative;
   display: inline-block;
-  width: 33px;      /* ⚠️ 必须与下方伪元素胶囊同宽，否则伪元素溢出 → 两端鼓包 */
+  width: 33px;      /* ⚠️ 必须与胶囊同宽，否则胶囊溢出 → 两端鼓包 */
   height: 24px;      /* 占位盒高：只用于垂直居中，视觉本体仅 16px */
   vertical-align: middle;
   cursor: pointer;
@@ -231,7 +246,12 @@ html, body {
   box-sizing: border-box;
   outline: none;
 }
-/* 胶囊本体：绝对定位居中，与占位盒分离 ⇒ 不影响同行布局 */
+/* 胶囊本体：绝对定位居中，与占位盒分离 ⇒ 不影响同行布局。
+   ⚠️ 2026-10-23 回退记录：曾为「胶囊 + 手柄各加投影」而改成真实子元素
+      `.toggle-switch-track`（怕伪元素上的 box-shadow 在 UXP 下不生效）。实际结果是
+      投影**根本不显示**（用户回报"投影代码不生效"）⇒ 用户要求回退，连子元素一起还原：
+      DOM 里不再有 track 节点，胶囊回到 `:before` 伪元素。投影代码已全部删除，
+      **不要再给开关加 box-shadow**（UXP 下不渲染，只是白写一行）。 */
 .toggle-switch:before {
   content: '';
   position: absolute;
@@ -248,9 +268,12 @@ html, body {
   background-color: var(--border-color);
   opacity: 0.80;
   box-sizing: border-box;
+  pointer-events: none;
+  z-index: 0;
   transition: background-color 0.2s ease, opacity 0.2s ease;
 }
-/* 圆点：12px 实心点，颜色走 var(--control-handle-color)（硬编码白色在亮色主题不可见）。
+/* 圆点：12px 实心点。关闭态走 var(--control-handle-off-color)（随主题变灰、与轨道灰
+   有反差，见上方注释）；开启态翻成 var(--primary-color)（见 .toggle-switch-on）。
    开启时移到右端：left = 胶囊宽 33 − 圆点 12 − 内边距 2 = 19 */
 .toggle-switch-knob {
   position: absolute;
@@ -261,21 +284,23 @@ html, body {
   margin-top: -6px;
   border-radius: 50%;
   -webkit-border-radius: 50%;
-  background-color: var(--control-handle-color);
+  background-color: var(--control-handle-off-color);
   box-sizing: border-box;
   pointer-events: none;
   z-index: 1;
-  transition: left 0.2s ease;
+  transition: left 0.2s ease, background-color 0.2s ease;
 }
-/* 开启态：胶囊 = 主色蓝（与滑块填充色一致），圆点移到右侧 */
+/* 开启态：胶囊 = 半透明蓝（notify-bar-ok 同款观感），圆点 = 实心主色蓝并移到右侧 */
 .toggle-switch-on:before {
-  background-color: var(--primary-color);
+  background-color: var(--switch-track-on-color);
   opacity: 1;
 }
 .toggle-switch-on .toggle-switch-knob {
   left: 19px;
+  background-color: var(--primary-color);
 }
-/* 焦点态：UXP 禁 outline，用圆点外扩的一层浅色环表达键盘焦点 */
+/* 焦点态：UXP 禁 outline，用圆点外扩的一层浅色环表达键盘焦点
+   （圆点自身没有投影了 —— 见 .toggle-switch-knob 注释，此处单值即可） */
 .toggle-switch:focus-visible .toggle-switch-knob {
   box-shadow: 0 0 0 2px rgba(38, 128, 235, 0.35);
 }
@@ -866,6 +891,29 @@ html, body {
   align-items: center;
 }
 
+/* 折叠标题行**右侧控件**（2026-10-23：套索平滑总开关从内容区挪到标题右侧，省常态空间）。
+   只负责「不压缩 + 垂直居中」；把控件包在 span 里是为了在 TSX 侧 stopPropagation ——
+   标题行整体是折叠/展开热区，不拦事件的话拨开关会连带折叠分区（CSS 拦不了事件）。
+   右侧定位靠同行的 .mask-sync-status-spacer（flex:1 1 auto）把控件推到最右。 */
+.collapse-header-control {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+/* 标题行里的开关**不参与行高竞争**（2026-10-23 用户要求：选区平滑标题容器的高度
+   必须与「选区改造」「填充选项」一致）。
+   机理：开关的占位盒是 24px（为与滑块、数字输入的 24px 同基线，见 .toggle-switch），
+   而纯标题行只有 icon + 13px 的 label（行盒 ≈16~20px）⇒ 把 24px 的开关塞进来，整个
+   .collapse-header 就被顶高 4~8px，比另外两个分区明显厚一截。
+   这里把占位盒压到 16px = 胶囊本身的高度：胶囊靠 `top:50%` + `margin-top:-8px` 居中，
+   相对 16px 盒仍然严丝合缝落在 0~16（视觉零变化，只是不再撑高行）。
+   ⚠️ 不要改成给 header 调小 padding —— label 的实际行盒高度随字号变化，
+      按 padding 硬凑只会在字号改动后重新失配；压占位盒是「跟 label 对齐」而非「跟数字对齐」，
+      而这一行本来就只需要跟 label 对齐。 */
+.collapse-header-control .toggle-switch {
+  height: 16px;
+}
+
 /* 通用折叠图标变化状态 */
 .collapse-icon svg,
 .collapse-icon-expanded svg {
@@ -912,13 +960,13 @@ html, body {
   box-sizing: border-box;
   flex-shrink: 0;
 }
-/* 选中：圆心填 --radio-checked-color，**不加任何描边**。
-   ⚠️ 不加描边是为了与滑块手柄/开关圆点统一（它们都没有描边）：radio 若留一圈主色环就不像一家人，
-      且亮色主题下主色环 + 近黑圆心会显脏。选中与否靠「实心 vs 空心」区分即可。
-   ⚠️ inset 留白用 --bg-color（随主题深浅反转），不用 --entry-bg。 */
+/* 选中：圆心填 var(--primary-color)（实心点），**不加任何描边/隔离环**。
+   ⚠️ 2026-10-23 用户要求：选中态手柄**不再有描边**、颜色统一 primary-color ——
+      旧版用 `box-shadow: inset 0 0 0 2px var(--bg-color)` 在圆心外留一圈底色「隔离环」，
+      视觉上就是描边；且填色走 --radio-checked-color（深主题白 / 亮主题近黑，该令牌已退役）。
+      现在与滑块手柄 / 开关开启态同一视觉语言，选中与否靠「实心 vs 空心」区分即可。 */
 .radio-option-checked .radio-option-dot {
-  background-color: var(--radio-checked-color);
-  box-shadow: inset 0 0 0 2px var(--bg-color);
+  background-color: var(--primary-color);
 }
 .radio-option-label {
   font-size: 13px;
@@ -1136,7 +1184,7 @@ html, body {
 }
 
 /* 通用状态条通知（引擎状态条等单行状态行）：状态点 + 正文（+ 右侧信息/操作）。
-   外描边随状态变化：ok=绿描边 / warn=橙描边 / fail=红描边（由 TSX 按状态挂修饰类）。
+   外描边随状态变化：ok=主色描边 / warn=橙描边 / fail=红描边（由 TSX 按状态挂修饰类）。
    ⚠️ min-height 用于「含开关的条」与「纯文字的条」等高：
       **32px = 自绘开关占位盒高 24 + 上下 padding 6 + 边框 2**。
       沿用旧 40px（按原生 sp-switch 盒高 32 算）会让含开关的条比纯文字条高一截。
@@ -1232,9 +1280,11 @@ html, body {
   margin-right: 5px;
 }
 
-/* 启用状态点 */
+/* 无状态修饰类时的默认点色（启用态）。
+   ⚠️ 2026-10-23 由硬编码亮绿 rgb(46,204,113) 改为 var(--primary-color)：成功/启用
+      语义全站统一主色蓝（.indicator-ok 经 --notify-ok-fg 也已同色，两路不再分叉）。 */
 .indicator-md {
-  background-color: rgb(46, 204, 113);
+  background-color: var(--primary-color);
 }
 
 /* 禁用状态点 */  
@@ -1243,10 +1293,11 @@ html, body {
 }
 
 /* 通用积极状态点（带同色微光，与文字通知的积极色一致）
-   ⚠️ 辉光用 `currentColor`（= 加深后的 --notify-ok-fg）而非固定亮绿 rgba(46,204,113,.6)：
-     半透明浅绿在 light / lightest 的浅灰底上会把状态灯整体「冲淡」成灰绿色；
-     改 currentColor 配更实的不透明度 ⇒ 亮色主题下是真正的深绿点 + 深绿光晕，反差明显提升。
-     ⚠️ 深色主题下 currentColor 比原色更亮 ⇒ 光晕更明显，无副作用。 */
+   ⚠️ 2026-10-23：--notify-ok-fg 由各档绿色统一为 --primary-color（主色蓝），
+      状态灯与滑块填充 / 开关胶囊同一视觉语言；warn/fail 仍为橙/红。
+   ⚠️ 辉光用 `currentColor`（= --notify-ok-fg = 主色蓝）而非固定半透明色：
+     半透明辉光在 light / lightest 的浅灰底上会把状态灯整体「冲淡」；
+     currentColor 配更实的不透明度 ⇒ 亮色主题下是同色实点 + 同色光晕，反差明显提升。 */
 .indicator-ok {
   background-color: var(--notify-ok-fg);
   box-shadow: 0 0 4px currentColor;
@@ -1265,7 +1316,7 @@ html, body {
 }
 
 /* 专注模式主开关图标：顶替 .indicator-lg那颗圆点，尺寸/右间距与它完全一致，
-   填色与 .indicator-disabled（灰）/ .indicator-ok（绿）同源，保证两态视觉一致。
+   填色与 .indicator-disabled（灰）/ .indicator-ok（主色蓝）同源，保证两态视觉一致。
    ⚠️ 图形用 Spectrum「Target」靶心（FocusTargetIcon 内联官方 path）。
       靶心图标含 <path>（外圆环）+ <circle>（内点）两个元素，**两者都必须挂 .icon-fill**，
       否则内圈缺色；下面的选择器对两者同时生效，无需额外规则。 */
@@ -1283,7 +1334,7 @@ html, body {
   fill: rgba(128, 128, 128, 0.5);
 }
 
-/* 专注模式图标：启用态绿 + 同色微光（与 .indicator-ok 同色同辉光） */
+/* 专注模式图标：启用态主色蓝 + 同色微光（与 .indicator-ok 同色同辉光） */
 .indicator-icon-lg.indicator-icon-ok .icon-fill {
   fill: var(--notify-ok-fg);
 }
@@ -1701,14 +1752,24 @@ body.visibility-panel-open #pixeladjustment .pixeladjustment-root > .panel {
   will-change: transform;
 }
 
-/* 选项行三态共用同一套 flex 行布局/字号/内边距 */
+/* 选项行三态共用同一套 flex 行布局/字号/内边距。
+   ⛔⛔ 2026-10-23：**行高必须显式钉成整数 22px**（height + box-sizing:border-box，
+      纵向 padding 由 height 取代）。原因：UXP 的 `height:auto` 按**未取整的行盒**
+      （12px 字 ≈ 13.4px 行 + 上下 padding 8 ≈ 21.4px）算出弹层总高，而绘制按整像素落行
+      ⇒ 内容比盒高出几像素 ⇒ 弹出 16px 原生滚动条、且首行被裁掉半截
+      （用户截图：「混合模式」菜单第一项「变暗」只剩半截 + 右侧一条滚动条）。
+      钉成整数后，Select.tsx 的 popContentHeight() 能算得**恰好等于**真实内容高，
+      上翻定位不再需要任何实测校正。
+      ⚠️ 改这个数字必须同步改 src/utils/popOverlay.ts 的 POP_ROW_H。 */
 .select-opt,
 .select-opt-sel,
 .select-opt-dis {
   display: flex;
   align-items: center;
-  padding: 4px 8px;
+  height: 22px;
+  padding: 0 8px;
   font-size: 12px;
+  box-sizing: border-box;
   user-select: none;
   white-space: nowrap;
 }
@@ -2087,7 +2148,8 @@ sp-radio[disabled] {
    这里用 margin-top 补齐（2026-10-13 用户要求）。
 
    本规则做三件事：
-   ① 盒与上方 radio 的间距 = 10px（margin-top）；
+   ① 盒与上方 radio 的间距 = **15px**（margin-top；2026-10-23 用户要求「再加 5px」，
+      原 10px 让盒顶离 radio 太近，参数盒像是贴在三列选项下面）；
    ② 行与行之间**恰好 10px**；
    ③ 盒的内边距（.border-panel-section 自带 padding: 10px）单独提供
       「描边 → 首行」「末行 → 描边」的 10px。
@@ -2101,7 +2163,10 @@ sp-radio[disabled] {
       ⇒ 盒内一律 margin: 0，只有**非首行**给 10px 上边距；首行上方 / 末行下方
         那 10px 由盒的 padding 提供（这也正是 ①③ 的目的）。
    ⛔ 只在本盒作用域内归零，不动 .border-panel-section / .row-between 的全局行为。 */
-.smooth-params { margin-top: 10px; }
+/* ⛔ 15px（= 原 10px + 用户 2026-10-23 要求的 5px）。紧凑/非紧凑同值：
+   紧凑模式那条 `.collapse-content-expanded > :first-child` 只作用于**首元素**（radio），
+   碰不到本盒，所以这里一份值即两模式一致。 */
+.smooth-params { margin-top: 15px; }
 .smooth-params > .row-between { margin-top: 0; margin-bottom: 0; }
 .smooth-params > .row-between + .row-between { margin-top: 10px; }
 

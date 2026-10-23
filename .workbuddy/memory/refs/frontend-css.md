@@ -182,3 +182,101 @@
 - ⛔ 多浮窗 = 单遮罩 + 一个 `.float-stack`；子面板互斥唯一入口 `setSecondaryPanel(id,open)` 一次写全 5 个 boolean。
 - ⛔⛔ `theme.ts` 的 CSS 注释一律写在 `{ }` **外**（`style.textContent` 运行时注入，声明块内注释被当声明 ⇒ CssSyntaxError；
   guard 不扫它，靠人工）。
+
+## 十七、自绘控件三件套改主色 + 平滑开关迁标题 + 混合模式下拉上翻（2026-10-23 用户五连要求）
+
+**1. 滑块手柄 / radio 选中点 → `--primary-color`；手柄加投影、免描边（common.css）**
+- `.range-slider-thumb`：`--control-handle-color` → `var(--primary-color)`，加 `box-shadow: 0 1px 3px rgba(0,0,0,.35)`
+  （满量程时手柄压在蓝色填充上同色，没投影糊成一团）；本无 border，保持免描边。
+- `.radio-option-checked .radio-option-dot`：删 `inset 0 0 0 2px var(--bg-color)`（视觉上的描边/隔离环），
+  填色 `--radio-checked-color` → `var(--primary-color)`。
+- ⛔ `--control-handle-color` / `--radio-checked-color` **令牌退役**（theme.ts 三处定义全删，注释留档）。
+
+**2. 自绘开关两态配色（common.css + theme.ts 新令牌）**
+- 关：手柄 `var(--control-handle-off-color)`（随主题变灰、与轨道灰 `--border-color@0.8` 反向档：
+  darkest/dark `rgb(198)`、light `rgb(98)`、lightest `rgb(118)`）——用户明确要求**不再是白/黑**。
+- 开：手柄 `var(--primary-color)`；轨道 `var(--switch-track-on-color)` = `rgba(38,128,235,.28)`
+  （半透明蓝，notify-bar-ok 同款观感；:root 定义一次，四主题同值）。
+- 禁用态仍是 `--disabled-color`；焦点环 `box-shadow` 不变。
+
+**3. 套索平滑开关挪到折叠标题右侧 + 异常走 notify-bar（app.tsx）**
+- 开关进 `.collapse-header`，右侧定位用 `.mask-sync-status-spacer` + `.collapse-header-control`（新增，只写 flex 不压缩）；
+  **必须包 span `onClick stopPropagation`**——标题行整体是折叠热区，不拦拨开关会连带折叠分区（CSS 拦不了事件）。
+- 内容区常驻状态条**删除**；改「仅 warn/fail 现身」的异常通知条，渲染在标题下方、折叠内容**之外**（折叠着也看得见）。
+  判据收口 `smoothToneIsError(tone)`（模块级助手，JSX 与 componentDidUpdate 共用，勿写两遍）。
+- 状态文案退进开关 `title`（`smoothEnabledSwitch + '\n当前状态：' + smoothStatusText()`）。
+- ⚠️ 异常条显隐推动下方参数行 ⇒ componentDidUpdate 比对 `smoothErrBarVisible`（首帧 null 不补）触发
+  `resyncNativeWidgets` 防原生数字残影。
+
+**4. 混合模式下拉 `openUp` 上翻（Select.tsx 新 prop + app.tsx 启用）**
+- 根因：该下拉下方就是不透明度/羽化 + 选区平滑参数行，向下展开连片盖住，且 popOverlay 遮挡逻辑
+  会把被盖数字临时隐藏（用户实测「数字整排消失」）。
+- ⛔⛔ **下面「实测高度校正」的做法已被同日晚间推翻（UXP 量到的是上一帧高度，会收敛到错误固定点），
+  现行做法见文末「§18 下拉弹层确定性高度」。**
+- ~~定位不靠估算高度：首帧估算占位，`useLayoutEffect` 按**实测高度**把底边校正到头部上沿 −2px~~
+- ~~遮挡判定带同步改为「头部上沿往上实测高」的一条带~~
+- ⚠️ 只给混合模式传 `openUp`（显式 prop，不做全局自动翻转——窗口空间判据在「面板 tall + 平滑区可见」场景不触发）。
+
+---
+
+## §18 下拉弹层「确定性高度」+ 开关投影 + 折叠分区首元素间距（2026-10-23 第四轮）
+
+**1. `.select-pop` 上翻样式崩溃（用户截图：首项被裁半截 / 右侧 16px 滚动条 / 菜单离下拉框浮空 45px）**
+- 机理（三个症状同一根因）：UXP 的 `height:auto` 按**未取整行盒**（12px 字 + 8px padding ≈ 21.4px/行）
+  算总高，绘制按整像素落行 ⇒ 内容比盒高几像素 ⇒ `overflow-y:auto` 出原生滚动条 + 首行被裁；
+  而「量实测高度再校正 top」拿到的 `getBoundingClientRect()` 是**上一帧**的值（151px，真实 116px），
+  两次迭代读到同一个旧值就判「已稳定」⇒ top 停在按 151 算的位置 = 浮空 45px。
+- 解法：**把不确定性从源头掐掉**，两侧都用同一组整数常量：
+  - CSS：`.select-opt/-sel/-dis` 改 `height:22px` + `padding:0 8px` + `box-sizing:border-box`；
+  - TS：`src/utils/popOverlay.ts` 新增 `POP_ROW_H=22 / POP_DIVIDER_H=5 / POP_CHROME_H=6 / POP_MAX_H=200`
+    与 `popContentHeight(rows, dividers)`；`estimatePopRect` 改用它（原写死 28/8）。
+  - `Select.tsx`：`reposition()` 直接用 `popContentHeight` 算 `top`；上翻时把高度**显式写进 inline style**
+    （`height: pos.h`），内容装得下再写 `overflowY:hidden`；**删掉整段实测校正 useLayoutEffect**
+    （含遮挡 run 里读弹层矩形的分支，判定带完全由 pos 推出）。
+- ⚠️ 改 `.select-opt` 行高 / `.select-pop` padding / max-height ⇒ 必须同步改 popOverlay 常量。
+- ⛔⛔ **同日第五轮：上翻本身被用户否掉，已改回向下展开（详见 §19）。** 下面 §18-1 的高度模型仍成立，
+  但「上翻 + 夹底」的定位不再使用。
+
+**2. 自绘开关：关闭态反差收敛 + 胶囊与手柄各加投影**
+- `--control-handle-off-color` 四主题统一到 ≈2:1（原 darkest 4.30 / dark 2.62 / light 2.03 / lightest 3.83）：
+  darkest 136、dark 176（**新增，原继承 :root 会掉到 1.2**）、light 112、lightest 138。
+- ~~胶囊从 `:before` 伪元素改为**真实子元素** `.toggle-switch-track`……投影：胶囊 `0 1px 2px /0.35`、
+  手柄 `0 1px 2px /0.45`~~
+  ⛔⛔ **投影根本没渲染（用户回报"代码不生效"），同日已整体回退：删 box-shadow、胶囊还原 `:before`。
+  颜色收敛（上一行）保留。详见 §19。**
+
+**3. 折叠分区「标题 → 首元素」间距对齐（app.css，两个专属类）**
+- `#app .smooth-mode-trio { margin-top:5px }`：非紧凑模式原为 10px（`.radio-trio-group` 无 margin），
+  紧凑模式靠 `> :first-child{5px}` 是 15px ⇒ 补 5px 后两模式一致。
+- `#app .selection-sharp-row { margin-top:5px }`：目标是「填充选项 → 纯色」的视觉间距。
+  两区**盒间距都是 20px**，但行盒高不同（radio 行 23px vs `.row-between` 32px）⇒ 墨迹差 5px，
+  故把锐度行 10px→5px 让墨迹对齐（**是「减小」，别按「盒间距算得一样」判成 no-op**）。
+  ⚠️ 这是对「间距令牌取盒对齐、不取墨迹对齐」那条**一次性的破例**：用户点名要视觉一致，
+  且用专属类隔离在单行上（没有把墨迹偏移写进 `.row-between` 通用值），图标/输入框尺寸改动
+  只会影响这一行、不会静默漂移到别处。将来若 `.row-between` 行盒高度变了，这条要重算。
+- `.smooth-params { margin-top:10px → 15px }`：radio ↔ 参数盒 +5px（紧凑/非紧凑同值）。
+
+---
+
+## §19 混合模式下拉开到天花板 + 开关投影回退（2026-10-23 第五轮）
+
+**1. 上翻（`openUp`）被彻底否掉 —— 位置错乱的真因是「夹底」，不是算错**
+- 用户截图现象：菜单顶到面板最上面、盖住主标题与主开关，底边反而越过了混合模式下拉框。
+- 实测数据（252×444 截图逐像素扫）：下拉头部上沿 ≈210px；27 项菜单可见高度 = `POP_MAX_H` 200px
+  ⇒ **头部上方根本装不下**。`top = max(r.top - 2 - h, 2)` 的兜底把 top 夹到 2 ⇒ 菜单顶到天花板，
+  底边 = 2 + 200 = 202 反而向下溢出到头部所在行。
+- 结论：上翻只在「头部上方空间 ≥ 菜单高度」时才成立；面板下半区一律控件密集，两头都不合算。
+  ⇒ app.tsx 去掉 `openUp`，回到标准下展开。**`openUp` prop 保留但无调用点，注释里写明"别再用"。**
+- 代价（用户已知并接受）：向下展开会盖住不透明度/羽化两行，popOverlay 遮挡逻辑照旧把它们临时隐藏
+  （UXP 硬限制：可编辑控件无视 z-index 永远最上层，不隐藏就是数字浮在菜单上）。菜单关闭即还原。
+- 顺带修正：`pos.h` 改为**始终** `min(contentH, POP_MAX_H)`（原来下翻用未封顶的 contentH ⇒ 判定带比
+  真实菜单长，会多藏下方一个输入框）；渲染时 `height` 也**始终**写死（不再只在上翻写），否则
+  UXP 会按小数行盒算 auto 高度、再画 16px 滚动条。遮挡矩形统一 `{top, top+h}`，`estimatePopRect`
+  在 Select 里不再被调用（保留 export 作兜底工具）。
+
+**2. 自绘开关投影：整块回退（用户："投影代码不生效，我不要了"）**
+- 删 `box-shadow`（胶囊 0.35 / 手柄 0.45）**并从 DOM 撤掉 `.toggle-switch-track` 子元素**，
+  胶囊选择器还原 `.toggle-switch:before` / `.toggle-switch-on:before`（真·整体回退，不留半套）。
+- 保留：四主题 `--control-handle-off-color` 的 ≈2:1 收敛（那是上一轮的另一半需求）。
+- ⛔ 记住：**UXP 下给开关加 box-shadow 不渲染**，别再试；`.toggle-switch:focus-visible` 的焦点环
+  仍是唯一一条 box-shadow（那条能画 — 至少在键盘焦点态，未单独复核）。

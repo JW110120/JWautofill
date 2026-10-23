@@ -24,23 +24,33 @@
  *                           主题的 240 灰底上仅 2.9:1，达不到 WCAG 非文本 3:1（用户既定阈值）。
  *                           ✅ 实测对比度：rgb(255,255,255) 对 rgb(38,128,235) = 3.9:1。
  *   --enabled-text-color    主按钮「功能开启」态文字色：深主题为白，浅主题在下方 override 为黑。
- *   --control-handle-color  自绘控件「可拖动部件」的通用手柄色（2026-10-07）：
- *                           自绘滑块的圆点(12px) 与自绘开关的手柄(12px) 都用它。
- *                           ⚠️ 之前两者硬编码 rgb(255,255,255)，在 light / lightest 两个亮色主题下
- *                           白手柄压在浅灰轨道/胶囊上几乎看不见（用户 2026-10-07 反馈可读性差）。
- *                           ⇒ 规则：**深主题用白**（深底上白最跳）、**亮主题用近黑**（浅底上黑最跳），
- *                           与 .main-button-label / --text-color 的深浅反转逻辑同源。
- *                           禁用态另由 --disabled-color 覆盖（见 common.css 的 .toggle-switch-disabled）。
- *   --radio-checked-color   自绘 radio 选中项的填色（2026-10-07）：与手柄同一套深浅反转逻辑 ——
- *                           深主题白点、亮主题近黑点。⚠️ 不复用 --primary-color：那会让「选中」在视觉上
- *                           与「开启态胶囊/滑块填充」同色，弱化 radio 与 switch 的区分。
+ *   --control-handle-off-color  自绘开关**关闭态手柄**的灰色（2026-10-23，取代已退役的
+ *                           --control-handle-color）：随主题变灰且与轨道灰有反差 ——
+ *                           轨道是 --border-color@0.8（深主题暗灰 / 亮主题浅灰），
+ *                           故手柄取反向档：**深主题亮灰、亮主题深灰**。
+ *                           ⚠️ 用户明确要求关闭态不再是白/黑；滑块手柄与 radio 选中点
+ *                           已一并改为 --primary-color，故旧手柄令牌全线退役。
+ *                           ⛔ 2026-10-23 二次调档（用户：「手柄与背景反差偏大，暗主题压暗一点、
+ *                           亮主题提亮一点」）：四档统一收敛到**约 2:1**（手柄 vs 轨道合成色），
+ *                           此前 darkest 4.30 / dark 2.62 / light 2.03 / lightest 3.83 —— 严重不齐。
+ *                           现在 darkest 136(≈2.06) / dark 176(≈2.05) / light 112(≈1.66) /
+ *                           lightest 138(≈2.16)。亮主题刻意再松一档：浅底上的深色点天生更「跳」。
+ *                           改值前先算对比度：(L_knob+0.05)/(L_track+0.05)，轨道 L 由
+ *                           border@0.8 压在 bg 上合成（darkest 86 / dark 119 / light 149 / lightest 205）。
+ *   --switch-track-on-color     自绘开关**开启态轨道**的半透明蓝（2026-10-23）：
+ *                           四主题同值（--primary-color 本就在四主题恒定），效果类似
+ *                           notify-bar-ok（通透蓝底 + 实心蓝点）。只在 :root 定义一次。
  *   --dropdown-bg-color     下拉菜单背景（统一设计语言，仅用 RGB 表示）：
  *                           darkest rgb(32,32,32) / dark rgb(57,57,57) / light rgb(218,218,218) / lightest rgb(255,255,255)
  *   --link-color            超链接文字专用色（「联系作者」等，含下划线）。
  *                           ⚠️ 不要复用 --primary-color：主色 rgb(38,128,235) 是中蓝，
  *                           在 darkest/dark 深底上明度不足、看着发暗；这里按主题分别取
  *                           「深底用亮蓝 / 浅底用深蓝」，保证四主题都清晰可辨。
- *   --notify-*              状态/文字通知配色：深主题用亮色、浅主题用深色，保证与背景反差（可读性）。
+ *   --notify-*              状态/文字通知配色：warn/fail 深主题用亮色、浅主题用深色，保证与背景反差（可读性）。
+ *                           ⚠️ 2026-10-23 起 ok 档（--notify-ok-fg/bg/border）**四主题统一主色蓝**
+ *                           （= --primary-color 恒值 rgb(38,128,235)，不再有各档深浅绿）：用户要求
+ *                           「成功态与状态灯统一为 primary-color」，与滑块填充 / 开关胶囊同一视觉语言；
+ *                           bg/border 仍按主题保留不同透明度（底色深浅不同，同一透明度观感不同）。
  *   --overlay-scrim         模态/锁定遮罩：不透明度恒定 0.80（必须能挡住下方内容），按主题调「颜色深浅」而非透明度，
  *                           使遮罩在各主题下都和谐、且始终可见。
  *                           darkest 纯黑 → dark/light/lightest 逐级改用中性灰，避免浅色主题下骤降为近黑的刺眼感。
@@ -70,13 +80,16 @@ const createThemeStyles = () => {
       --scrollbar-thumb: rgb(192, 192, 192);
       --scrollbar-track: rgba(255, 255, 255, 0.1);
       --enabled-text-color: rgb(255, 255, 255);
-      --control-handle-color: rgb(255, 255, 255);
-      --radio-checked-color: rgb(255, 255, 255);
+      /* 2026-10-23：--control-handle-color / --radio-checked-color 退役（滑块手柄、
+         radio 选中点改 --primary-color，开关关闭态手柄改 --control-handle-off-color）。 */
+      /* 关闭态手柄：darkest 专用档（轨道合成色 ≈86，对比 ≈2.06:1）。 */
+      --control-handle-off-color: rgb(136, 136, 136);
+      --switch-track-on-color: rgba(38, 128, 235, 0.28);
       --dropdown-bg-color: rgb(57, 57, 57);
       --link-color: rgb(122, 190, 255);
-      --notify-ok-fg: rgb(74, 222, 128);
-      --notify-ok-bg: rgba(46, 204, 113, 0.14);
-      --notify-ok-border: rgba(74, 222, 128, 0.30);
+      --notify-ok-fg: rgb(38, 128, 235);
+      --notify-ok-bg: rgba(38, 128, 235, 0.14);
+      --notify-ok-border: rgba(38, 128, 235, 0.30);
       --notify-fail-fg: rgb(255, 107, 107);
       --notify-fail-bg: rgba(231, 76, 60, 0.16);
       --notify-fail-border: rgba(255, 107, 107, 0.30);
@@ -107,9 +120,9 @@ const createThemeStyles = () => {
         --scrollbar-track: rgba(255, 255, 255, 0.12);
         --dropdown-bg-color: rgb(32, 32, 32);
         --link-color: rgb(122, 190, 255);
-        --notify-ok-fg: rgb(74, 222, 128);
-        --notify-ok-bg: rgba(46, 204, 113, 0.15);
-        --notify-ok-border: rgba(74, 222, 128, 0.30);
+        --notify-ok-fg: rgb(38, 128, 235);
+        --notify-ok-bg: rgba(38, 128, 235, 0.15);
+        --notify-ok-border: rgba(38, 128, 235, 0.30);
         --notify-fail-fg: rgb(255, 107, 107);
         --notify-fail-bg: rgba(231, 76, 60, 0.16);
         --notify-fail-border: rgba(255, 107, 107, 0.30);
@@ -141,9 +154,13 @@ const createThemeStyles = () => {
         --scrollbar-track: rgba(255, 255, 255, 0.08);
         --dropdown-bg-color: rgb(57, 57, 57);
         --link-color: rgb(140, 200, 255);
-        --notify-ok-fg: rgb(74, 222, 128);
-        --notify-ok-bg: rgba(46, 204, 113, 0.14);
-        --notify-ok-border: rgba(74, 222, 128, 0.28);
+        /* 关闭态手柄：dark 专用档（轨道合成色 ≈119，对比 ≈2.05:1）。
+           ⚠️ 必须在本块显式写：不写会继承基础 :root 的 darkest 档 136，
+           在更亮的 119 轨道上反差会掉到 1.2 左右（几乎看不见）。 */
+        --control-handle-off-color: rgb(176, 176, 176);
+        --notify-ok-fg: rgb(38, 128, 235);
+        --notify-ok-bg: rgba(38, 128, 235, 0.14);
+        --notify-ok-border: rgba(38, 128, 235, 0.28);
         --notify-fail-fg: rgb(255, 107, 107);
         --notify-fail-bg: rgba(231, 76, 60, 0.15);
         --notify-fail-border: rgba(255, 107, 107, 0.28);
@@ -156,8 +173,10 @@ const createThemeStyles = () => {
 
     /* light（浅灰档）。本块内说明：
        · --scrollbar-track：light 主题默认 rgb(255,255,255) 偏亮，统一改为 rgba(0,0,0,0.1)。
-       · 2026-10-07：亮色主题下手柄/选中点改用近黑（浅底上黑最跳），
-         并把 notify-ok-fg 调深以提高在浅灰底上的反差（原 rgb(21,128,61) 偏灰暗）。 */
+       · 2026-10-23：notify-ok 档统一主色蓝（见文件头 --notify-* 说明），
+         亮主题不再需要「加深绿」特例；bg/border 透明度沿用既有档位。
+       · 2026-10-23：--control-handle-off-color 取中深灰（浅灰轨道 ≈149 上的反差档，
+         对比 ≈1.66:1 —— 用户要求「亮主题下提亮一点」，比旧的 98 更松一档）。 */
     @media (prefers-color-scheme: light) {
       :root {
         --primary-color: rgb(38, 128, 235);
@@ -179,11 +198,10 @@ const createThemeStyles = () => {
       --enabled-text-color: rgb(10, 10, 10);
       --dropdown-bg-color: rgb(218, 218, 218);
       --link-color: rgb(0, 90, 200);
-      --control-handle-color: rgb(10, 10, 10);
-      --radio-checked-color: rgb(10, 10, 10);
-      --notify-ok-fg: rgb(15, 109, 52);
-      --notify-ok-bg: rgba(21, 128, 61, 0.14);
-      --notify-ok-border: rgba(21, 128, 61, 0.30);
+      --control-handle-off-color: rgb(112, 112, 112);
+      --notify-ok-fg: rgb(38, 128, 235);
+      --notify-ok-bg: rgba(38, 128, 235, 0.14);
+      --notify-ok-border: rgba(38, 128, 235, 0.30);
       --notify-fail-fg: rgb(198, 40, 40);
       --notify-fail-bg: rgba(198, 40, 40, 0.12);
       --notify-fail-border: rgba(198, 40, 40, 0.30);
@@ -194,8 +212,11 @@ const createThemeStyles = () => {
     }
     }
 
-    /* lightest（近白档）。本块内说明（2026-10-07）：与 light 主题同款深色手柄 + 加深后的绿色
-       （原 rgb(21,128,61) 在近白底上偏灰暗、状态灯看着发灰，见 light 主题注释）。 */
+    /* lightest（近白档）。本块内说明：notify-ok 档 2026-10-23 起统一主色蓝（四主题同值，
+       见文件头 --notify-* 说明），bg/border 透明度按既有档位（0.12 / 0.28）。
+       2026-10-23：滑块手柄/radio 选中点统一 --primary-color（纯黑手柄档退役），本块只需给
+       开关关闭态手柄一个中灰（--control-handle-off-color 138）—— 近白底上的浅灰轨道
+       （--border-color rgb(196)@0.8，合成 ≈205）用 138 得 ≈2.16:1，与其它三档对齐。 */
     @media (prefers-color-scheme: lightest) {
       :root {
         --primary-color: rgb(38, 128, 235);
@@ -217,11 +238,10 @@ const createThemeStyles = () => {
       --enabled-text-color: rgb(10, 10, 10);
       --dropdown-bg-color: rgb(255, 255, 255);
       --link-color: rgb(0, 82, 190);
-      --control-handle-color: rgb(10, 10, 10);
-      --radio-checked-color: rgb(10, 10, 10);
-      --notify-ok-fg: rgb(15, 109, 52);
-      --notify-ok-bg: rgba(21, 128, 61, 0.12);
-      --notify-ok-border: rgba(21, 128, 61, 0.28);
+      --control-handle-off-color: rgb(138, 138, 138);
+      --notify-ok-fg: rgb(38, 128, 235);
+      --notify-ok-bg: rgba(38, 128, 235, 0.12);
+      --notify-ok-border: rgba(38, 128, 235, 0.28);
       --notify-fail-fg: rgb(198, 40, 40);
       --notify-fail-bg: rgba(198, 40, 40, 0.10);
       --notify-fail-border: rgba(198, 40, 40, 0.28);

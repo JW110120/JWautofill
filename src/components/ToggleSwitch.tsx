@@ -14,9 +14,9 @@ import React, { useCallback } from 'react';
  * 尺寸（对齐原生视觉，套用 common.css 既有度量）：
  *  - 胶囊轨道 33×16，圆点 12px，开启时圆点移到 right（left 19px），圆角均为 8px（=高的一半，
  *    端部为完美半圆）；圆角**不写999px**——UXP 下未按高度一半解析，实测会渲染成尖角纺锤。
- *  - 视觉盒 16px，但**占位盒高 24px**（靠绝对定位的伪元素居中），保证行内垂直居中
- *    与滑块、数字输入（24px）同基线 —— 原生 sp-switch 靠 32px 透明留白实现，
- *    自绘不需要那圈留白。占位盒宽必须= 胶囊宽，否则伪元素溢出会让两端鼓包。
+ *  - 视觉盒 16px，但**占位盒高 24px**（胶囊由绝对定位的 :before 伪元素居中），
+ *    保证行内垂直居中与滑块、数字输入（24px）同基线 —— 原生 sp-switch 靠 32px
+ *    透明留白实现，自绘不需要那圈留白。占位盒宽必须= 胶囊宽，否则溢出会让两端鼓包。
  *
  * 无障碍：role="switch" + aria-checked + tabIndex + Enter/Space 触发，
  * 与项目内 IconButton 的键盘处理方式一致。
@@ -80,6 +80,9 @@ export default function ToggleSwitch({
             onClick={handleToggle}
             onKeyDown={handleKeyDown}
         >
+            {/* 只渲染圆点：胶囊由 .toggle-switch:before 伪元素画（2026-10-23 回退，
+                曾为加投影改成真实子元素 .toggle-switch-track —— UXP 下 box-shadow
+                不渲染，用户回报"不生效" ⇒ 投影与子元素一并还原）。 */}
             <span className="toggle-switch-knob" />
         </div>
     );
