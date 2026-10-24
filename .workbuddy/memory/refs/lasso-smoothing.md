@@ -2853,3 +2853,52 @@ int armed  = cursorInject && g_cfg && g_cfg[I_ENABLED] && stroke;
 
 ### 产物
 0x0138：`build.sh` 0 告警 + PiPL 往返一致 + `mov eax,0x138 PASS`；已部署 22:22（PS 未运行）。
+
+## O41｜0x0207：平滑补上「插件本体位闸」—— 没装 UXP 面板也在平滑（用户 2026-10-24 报）
+
+### 现象与判据
+用户报：**没有通过 UXP 加载插件，套索平滑仍然生效**。这不是"平滑开关没关"，
+而是**两处判据各自都成立**（`smooth_engine.c:3387` 的 `useGate = tool_gate_ok() && I_ENABLED`）：
+
+| 条件 | 旧行为 | 为什么面板不在位时仍成立 |
+|---|---|---|
+| `I_ENABLED` | 残留 1 | 只有三处写 0：面板 `penSmooth(on:false)`/`shutdown`、`services_start` 的 **MAGIC 不匹配**分支、`services_stop`（.8li 卸载）。⇒ 面板开过平滑再关闭/崩溃/**.8li Reload**（同进程、MAGIC 仍匹配）就停在 1 |
+| `I_GATETS` | 永久新鲜 | `pump_thread` 每 500ms 续期，条件是 `cli_count()>0 \|\| pstool_owns()`；而 `pstool_owns()` = **PS 进程内 `'slct'` 通知**在 2s 内到过，**与 UXP 面板是否加载毫无关系** |
+
+⇒ 面板从未加载的机器上，只要用户切过一次工具，平滑 + `GetCursorPos` 接管 + HUD 全起来。
+排查口径：`pi8li.log` 里**没有**「面板已连接 ws」却有 `[hud]`/`[gcp]` 行 ⇒ 就是本 bug。
+
+### 改法（`plugin_main.c`，0x0206 → 0x0207）
+1. `g_cliReady`（**握手成功**才 `InterlockedIncrement`）是唯一在位判据。
+   ⛔ 不能用 `cli_count()`（槽位非空数）：accept 就占槽，握手可能失败、也可能是一条连上就不说话的 socket。
+2. `PLUG_GRACE_MS=1500` 宽限：UXP 面板 reload 会让客户端表归零，没有宽限就会在运笔中途
+   把平滑掐断（一笔硬线）。抖动 300ms 断/连 ×10 实测一次都不撤销。
+3. `plug_revoke()`：`g_enabled=0` + `Wr(I_ENABLED,0)` + `Wr(I_TOOLGATE,2)`；
+   **不**下发 `cmd=2` —— 保 detour 与 `CALIB`（面板重连重放 `on=true` 即秒恢复，不重标定）。
+   gate 置 **2（未知）** 而非 0：在位期间用户切过什么工具没人记账，旧值（可能是 1=套索）已不代表此刻。
+   留着它，面板一回来就是「enabled=1 + 新鲜的旧 gate」⇒ 画笔也被平滑。
+4. 三路同过闸：GATETS 续期 → `plug_present() && (haveCli || pstool_owns())`；
+   `pstool_publish()` 位闸为假时**一个字节都不写**（通知回调只证明 PS 在投递事件）；
+   `services_start` **无条件** `Wr(I_ENABLED,0)`（Reload 不再继承上一轮的 1）。
+5. 抢跑保护：撤销前再查 `g_cliReady>0` —— 握手 increment 已完成、`plug_tick(1)` 还没到的微秒窗口，
+   否则白清一次 enabled，面板要等下一个 1.5s 心跳才恢复。
+6. 握手改 `wc_handshake_path`，**只拒精确等于 `/jw-migrate`** 的迁移探测。
+   ⛔⛔ 绝不能「非 `/` 就拒」：有些 WebSocket 实现的请求行是 `GET ws://host/` 或带 query，
+   path 抽出来不是 "/" ⇒ 真面板被锁在门外（面板永远「未连接」）。
+
+### 面板侧为什么零改动
+`LassoSmoothing.ts` 已不用回帧的 `enabled` 覆写 `penOn`（用户意图），
+`resendLassoSmoothing()` 在 `onopen` 时按 `penOn` 重放 `penSmooth on:true`
+⇒ revoke 后重连自动恢复，开关不会被拉回关位。
+
+### 产物 / 校验
+`build.sh` 零告警 + 导出表 5 项 + PiPL 往返一致；离线单测 `analysis/_t_0207_plug.c`
+（逐字拷贝状态机 + 假时钟）**22/22**：冷启动 / 宽限内断连 / 超宽限撤销一次 / 不重复 /
+抖动 10 次不撤销 / 可重入 / 抢跑保护 / 续期判据真值表 7 组。
+已部署 `E:/Program Files\Adobe Photoshop 2026\Plug-ins\JWautofillHost.8li`（PS 未运行，MD5 `7bd96d38…`）。
+
+### 真机验收（待用户）
+1. 退出 PS → 启动 → **不加载 UXP 面板** → 画笔/套索：无平滑、无 HUD、笔不滞。
+2. 日志只有「监听 18924 就绪」，**没有**「位闸：面板本体已就位」。
+3. 加载面板 ⇒ 出现「已就位 ⇒ 平滑开关交还面板」，平滑恢复。
+4. 面板 reload ⇒ **不应**出现「收回平滑开关」；彻底关掉面板 ⇒ 约 2s 后出现一次。

@@ -130,6 +130,12 @@ static int cfgmap_open(void)
 
 static LONG Rd(int slot) { return g_cfg ? g_cfg[slot] : 0; }
 
+/* 0x0207：插件本体在位闸（定义见下面 WS 客户端表之后，这里只是前向声明）。
+   ⛔ 为什么 pstool_publish 需要它：进程内 'slct' 通知只能证明「PS 还在投递事件」，
+      完全不能证明「UXP 面板加载了」。没有这道闸，只要 .8li 在 PS 里，
+      一个孤零零的通知回调就能把闸门心跳无限续命。 */
+static int plug_present(void);
+
 /* ================================================================ 进程内闸门桥 */
 /* ps_tool.c 不能碰槽位表（编号是跨文件手写对应的铁律区），所以由本文件代写。 */
 
@@ -147,10 +153,15 @@ void pstool_log(const char* fmt, ...)
 
 /* 通知回调（PS 主线程）里调：把闸门值 + 时间戳一起落下。
    ⛔ 时间戳必须同时刷新 —— 引擎按 GATE_STALE_MS=3000 判过期，只写值不写戳
-      等于把闸门推在「即将过期」的状态上。 */
+      等于把闸门推在「即将过期」的状态上。
+   ⛔⛔ 0x0207：**面板本体不在位时一个字节都不写**。
+      通知回调活着（pstool_owns() 为真）只说明 PS 还在投递 'slct'，与「UXP 插件
+      加载了没有」毫无关系 —— 旧版把它当成闸门心跳的合法来源，于是「.8li 装了、
+      面板没装」的机器上闸门永远新鲜，引擎一直以为用户在用套索。 */
 void pstool_publish(int gate)
 {
     if (!g_cfg) return;
+    if (!plug_present()) return;          /* 0x0207：面板不在位 ⇒ 不续命、不写值 */
     InterlockedExchange((LONG*)&g_cfg[I_TOOLGATE], gate ? 1 : 0);
     InterlockedExchange((LONG*)&g_cfg[I_GATETS], (LONG)GetTickCount());
 }
@@ -428,6 +439,10 @@ int json_str(const char* js, const char* key, char* out, int cap)
 static CRITICAL_SECTION g_sendLk;
 static CRITICAL_SECTION g_cliLk;
 static SOCKET g_cliS[MAX_CLI];
+/* 0x0207：**已握手**的面板连接数（位闸判据）。
+   ⛔ 不能拿 g_cliS 的非空槽数（cli_count）当在位判据：accept 就占槽，
+      握手可能失败、也可能是一条连上就不说话的第三方 socket。 */
+static volatile LONG g_cliReady;
 
 static void cli_remove(SOCKET s)
 {
@@ -437,14 +452,77 @@ static void cli_remove(SOCKET s)
     LeaveCriticalSection(&g_cliLk);
 }
 
-static int cli_count(void)
+/* 0x0207：原先的 cli_count()（扫槽位非空数）已废弃 —— 位闸改用 g_cliReady。
+   ⛔ 不要再拿「槽位非空数」当在位判据：accept 就占槽，握手可能失败、
+      也可能是一条连上就不说话的第三方 socket。 */
+
+/* ============================================================ 插件本体在位闸（0x0207） */
+/* ⛔⛔ 起因（用户报）：**没通过 UXP 加载插件时，套索平滑照样生效**。
+ *
+ *   平滑的启用是两道判据相乘：`tool_gate_ok()`（闸门新鲜 + 值是套索）× `I_ENABLED`。
+ *   面板不在位时这两道**各自都能独立成立**：
+ *     ① `I_ENABLED` 只在「面板发 penSmooth(on=false) / shutdown」「.8li 首次建节」
+ *        「.8li 卸载」三处被写 0 ⇒ 面板开过平滑再关闭/崩溃/Reload，它就停在 1；
+ *     ② `I_GATETS` 由 pump 每 500ms 续期，条件里写了 `pstool_owns()` ——
+ *        而那是**PS 进程内 'slct' 通知**的活性，与 UXP 面板是否加载毫无关系。
+ *   两者相乘 ⇒ 面板从未加载的机器上，只要 PS 投递过一个工具切换通知，
+ *   平滑（连同 GetCursorPos 接管与 HUD）就永久生效。
+ *
+ *   修法与 0x0205 的键盘位闸（keyhook.c `g_khPlug`）**同源同语义**：
+ *   判据 = 18924 上有已握手的面板客户端。在位 = 放行；不在位 = 收回开关 + 停续心跳。
+ *
+ *   ⚠️ 宽限期 `PLUG_GRACE_MS`：UXP 面板 reload / 短暂断连会让客户端表归零，
+ *      没有宽限就会在用户运笔中途把平滑掐断（表现为一笔硬线）。
+ *      宽限内「视同还在位」⇒ 连接回来即无缝续上，不再有 1.5s 的抖动窗口。
+ *   ⚠️ 面板侧不需要配合：`penOn`（用户意图）不会被回帧的 enabled 覆写，
+ *      重连时 `resendLassoSmoothing()` 会重放 on=true ⇒ 自动恢复。 */
+#define PLUG_GRACE_MS 1500
+
+static volatile LONG g_plugOn;          /* 1 = 面板本体在位（含宽限期） */
+static volatile LONG g_plugSeenMs;      /* 最近一次真的见到活客户端的 GetTickCount */
+
+static int plug_present(void) { return g_plugOn ? 1 : 0; }
+
+/* 0x0207：面板不在位 ⇒ 收回「平滑开关」这一个权利。
+   ⛔ 刻意**不**下发 cmd=2（不卸 detour、不还原字节）：
+      与 0x013E 的软停同族 —— 面板重连后 enabled 一变即秒恢复，
+      拆挂载反而要重新标定（`CALIB` 会退回未验证态，用户要重切工具才恢复）。
+   ⛔ 把 I_TOOLGATE 置 **2（未知）**，不是置 0：
+      位闸拦住了 pstool_publish，所以「面板不在位这段时间里用户切过工具」这个事实
+      **没有任何人记录** —— 槽里的旧值（比如 1=套索）已经不代表此刻的工具。
+      留着它，面板一回来就是「enabled=1 + 新鲜的旧 gate」⇒ 画笔也被平滑。
+      置 2 是 fail-closed（引擎阻断），等 ps_tool 的下一次通知或面板轮询给出真值。
+      ⛔ 不置 0：那是「我确认当前不是套索」的断言，我们并没有这个证据。 */
+static void plug_revoke(void)
 {
-    int n = 0;
-    EnterCriticalSection(&g_cliLk);
-    for (int i = 0; i < MAX_CLI; i++)
-        if (g_cliS[i] != INVALID_SOCKET) n++;
-    LeaveCriticalSection(&g_cliLk);
-    return n;
+    log_line("main", "位闸：面板本体不在位 ⇒ 收回平滑开关（enabled 0，detour 保留待复机）");
+    InterlockedExchange(&g_enabled, 0);
+    Wr(I_ENABLED, 0);
+    Wr(I_TOOLGATE, 2);          /* 未知：在位期间的工具变化没人记过账 */
+}
+
+/* 每拍调用（pump 500ms + 建连时）。haveCli = 此刻客户端表非空。 */
+static void plug_tick(int haveCli)
+{
+    DWORD now = (DWORD)GetTickCount();
+    if (haveCli) {
+        InterlockedExchange(&g_plugSeenMs, (LONG)now);
+        /* 只在 0→1 翻转时落日志；CAS 保证多线程下也只打一行。 */
+        if (InterlockedCompareExchange(&g_plugOn, 1, 0) == 0)
+            log_line("main", "位闸：面板本体已就位（ws）⇒ 平滑开关交还面板");
+        return;
+    }
+    if (!g_plugOn) return;
+    DWORD seen = (DWORD)g_plugSeenMs;
+    if (seen && (DWORD)(now - seen) < PLUG_GRACE_MS) return;   /* 宽限内：视同还在位 */
+    if (InterlockedCompareExchange(&g_plugOn, 0, 1) == 1) {
+        /* 抢跑保护：撤销前一瞬面板可能刚握手回来（client_thread 已 increment 了
+           g_cliReady，但它自己的 plug_tick(1) 还排在后面）。此时撤销会白清一次
+           enabled —— 面板要等下一个 1.5s 心跳才恢复，用户看到「平滑偶尔迟一拍」。
+           判据用**已握手计数**而不是 plugOn：后者正是本拍要推翻的那一个。 */
+        if (g_cliReady > 0) { InterlockedExchange(&g_plugOn, 1); return; }
+        plug_revoke();
+    }
 }
 
 static void broadcast(const char* msg)
@@ -855,8 +933,30 @@ static DWORD WINAPI client_thread(LPVOID param)
 {
     SOCKET s = (SOCKET)(UINT_PTR)param;
 
-    if (wc_handshake(s) != 0) { closesocket(s); cli_remove(s); return 0; }
+    /* 0x0207：18924 只服务 UXP 面板本体。
+       ⛔ 为什么必须按 path 收口：位闸的判据是「有已握手客户端」，
+          迁移探测（keyhook.c 的 kh_try_migrate）这类**非面板**连接一旦被算进来，
+          多开 PS 时就能给持有端伪造「插件在位」⇒ 平滑在面板没加载的机器上照样生效。
+       ⛔⛔ 只拒**已知的探测路径**（精确等于 "/jw-migrate"），其余一律放行。
+          绝不能写成「非 "/" 就拒」：不同 WebSocket 实现（含 UXP 的 Chromium）请求行
+          可能是 `GET ws://host/` 或带 query 的形式，path 抽出来就不是 "/" 了 ——
+          那会把真面板锁在门外（表现：面板永远「未连接」，平滑彻底失效）。
+          将来若要收口新的探测器，往下面这个判据里加名字即可。 */
+    char wpath[64] = "";
+    int ready = 0;
+    if (wc_handshake_path(s, wpath, (int)sizeof(wpath)) == 0) {
+        if (wpath[0] && _stricmp(wpath, "/jw-migrate") == 0)
+            log_line("srv", "拒收迁移探测连接 path=%s（不计入插件在位）", wpath);
+        else
+            ready = 1;
+    }
+    if (!ready) { closesocket(s); cli_remove(s); return 0; }
+
+    InterlockedIncrement(&g_cliReady);   /* ⛔ 位闸判据只认「已握手」的连接：
+                                            accept 占槽发生在握手前，拿 cli_count 判在位
+                                            会让一条连上就不说话的 socket 伪造在位。 */
     log_line("srv", "面板已连接 ws");
+    plug_tick(1);                 /* 0x0207：不等到下一拍 pump，建连即交还在位 */
     broadcast_smooth_state();     /* 建连即推一帧（Program.cs 建连推送同款） */
 
     /* M3：会话循环搬 ws_core.c（与 18923 热键服务器逐字一致）：
@@ -867,6 +967,8 @@ static DWORD WINAPI client_thread(LPVOID param)
 
     closesocket(s);
     cli_remove(s);
+    InterlockedDecrement(&g_cliReady);
+    if (g_cliReady < 0) InterlockedExchange(&g_cliReady, 0);   /* services_start 复位后的僵尸线程兜底 */
     /* ⛔ 断连原因必须可见（2026-10-14 第七轮）：面板每 ~30-55s 被断一次，
        GATETS 断供 ⇒ 闸门 fail-closed ⇒ 「平滑时好时坏」。先落证据再定责：
        0 = recv 异常（err=10054 对端 RST / 10060 超时 / 10038 …），
@@ -952,6 +1054,10 @@ static DWORD WINAPI pump_thread(LPVOID arg)
     last[0] = 0;
     while (!g_stopAll) {
         Sleep(500);
+        /* 0x0207：位闸先行（**必须在 cfgmap 早退之前**）——无面板时也要能收回开关。
+           haveCli 一并缓存给下面的 GATETS 判据用。 */
+        int haveCli = (g_cliReady > 0) ? 1 : 0;
+        plug_tick(haveCli);
         if (!g_cfg && !cfgmap_open()) continue;
         Wr(I_HEARTBEAT, (LONG)GetTickCount());
         /* ⛔ GATETS（工具心跳）接管（2026-10-14 第七轮真机）：面板侧的 1500ms 心跳
@@ -965,7 +1071,11 @@ static DWORD WINAPI pump_thread(LPVOID arg)
         /* ⛔ 进程内闸门接管后，GATETS 的续期不能再依赖「面板连着」：
            'slct' 通知只在**工具变化**时来，而引擎按 GATE_STALE_MS=3000 判过期 ⇒
            不主动续期就会过期 ⇒ fail-closed 阻断 ⇒ 平滑要等用户再切一次工具才活。 */
-        if (cli_count() > 0 || pstool_owns()) Wr(I_GATETS, (LONG)GetTickCount());
+        /* ⛔⛔ 0x0207：两个来源**都必须先过位闸**。
+           `pstool_owns()` 是「PS 进程内的 'slct' 通知还活着」，与「UXP 面板加载了没有」
+           毫无关系 —— 旧版把它直接当续期理由，于是「.8li 装了、面板没装」的机器上
+           闸门时间戳永远新鲜，引擎一直以为用户在画套索。 */
+        if (plug_present() && (haveCli || pstool_owns())) Wr(I_GATETS, (LONG)GetTickCount());
         /* ⛔ 进程内观测槽（2026-10-17）：模态层级 / 工具模态 / 文档纪元由 ps_tool.c 的
            PICA 回调写进 statics，这里统一搬到共享内存 —— 面板经 smoothState 读到，
            **全程零 batchPlay**。⛔ 槽位表归本文件所有，ps_tool.c 只暴露 getter。 */
@@ -1096,12 +1206,20 @@ static void services_start(void)
 
     /* 先把配置节建好（引擎 worker 在 ATTACH 时已起，250ms 一轮重试 open；
        这里主动建可让首帧参数立刻就位）。 */
+    /* 0x0207：位闸复位到「面板不在位」——新服务会话一律从「无面板」起步。
+       ⛔ 旧版只在 MAGIC 不匹配时清 I_ENABLED，于是 **.8li Reload**（同一 PS 进程，
+          节里的 MAGIC 仍然匹配）会把上一轮的 enabled=1 原样继承下来：
+          面板还没重连的那段时间里，平滑照样生效。 */
+    InterlockedExchange(&g_plugOn, 0);
+    InterlockedExchange(&g_plugSeenMs, 0);
+    InterlockedExchange(&g_cliReady, 0);
+    InterlockedExchange(&g_enabled, 0);
     if (cfgmap_open()) {
         if (Rd(I_MAGIC) != CFG_MAGIC) {
             Wr(I_MAGIC, CFG_MAGIC);
-            Wr(I_ENABLED, 0);
             Wr(I_TOOLGATE, g_pen.toolGate);
         }
+        Wr(I_ENABLED, 0);                       /* 0x0207：无条件清（Reload 也要清） */
         Wr(I_HEARTBEAT, (LONG)GetTickCount());
         Wr(I_GATETS, (LONG)GetTickCount());
     }
@@ -1301,8 +1419,20 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
                            「未连接」，reload 也没用 —— 表在 PS 进程里，只有重启 PS 才清零）。
                            现在归还槽位时把 closing/notPlugin 一起清 0；准入只看「s 已归还」。
                            另：握手失败路径改成「先还槽位再 closesocket」，防止即时的 SOCKET
-                           值复用被随后的 remove(s) 按值误删新连接。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x0206; }
+                           值复用被随后的 remove(s) 按值误删新连接。
+   0x0207（2026-10-24，**没通过 UXP 加载插件时套索平滑仍生效**）：
+                        平滑的启用 = `tool_gate_ok()` × `I_ENABLED`，面板不在位时这两道
+                        各自都能独立成立：① I_ENABLED 只在「面板命令 / 首次建节 / 卸载」
+                        三处写 0 ⇒ 面板开过平滑再关/崩溃/Reload 就停在 1；② pump 每 500ms
+                        续期 GATETS 的条件里写了 `pstool_owns()`（PS 进程内 'slct' 通知的
+                        活性，**与 UXP 面板是否加载毫无关系**）⇒ 闸门时间戳永远新鲜。
+                        现在与 0x0205 的键盘位闸同源：判据 = 18924 上有**已握手**的面板
+                        客户端（`g_cliReady`，按 path "/" 收口，拒收迁移探测/第三方脚本）。
+                        不在位（宽限 1500ms，盖住面板 reload 抖动）⇒ `plug_revoke()` 收回
+                        enabled + 停续 GATETS + `pstool_publish()` 一个字节都不写；
+                        detour 与标定保留（面板重连重放 on=true 即秒恢复，无需重标定）。
+                        services_start 无条件清 I_ENABLED（Reload 不再继承上一轮的 1）。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x0207; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {
