@@ -818,6 +818,30 @@ static int tool_gate_reason(void)
  *    值域：-1=未闩（悬空/被阻断），0/1=起笔时的裁决。 */
 static volatile LONG g_strokeGate = -1;
 
+/* ==================================== 0x0208：视图导航否决（缩放/抓手）
+ *
+ * 为什么需要（用户报：Ctrl+空格 + 左键左右拖拽缩放「抽搐」）：
+ *   Ctrl+空格期间 PS **不会切工具** —— `app.currentTool` 仍是套索 ⇒ 工具闸门
+ *   `tool_gate_ok()` 依然为 1、左键按着 ⇒ 本模块把这段操作当成「一笔」，
+ *   开始改写坐标（包路径 useGate / 光标路径 det_GetCursorPos 都改写）。
+ *   但此刻用户要的是**视图缩放**，它的输入就是光标位移（scrubby zoom 的缩放级别
+ *   = 拖拽位移的函数）。我们喂给 PS 的是拉绳**滞后**坐标（半径默认 40 逻辑 px，
+ *   换向时输出点还继续往旧方向走）⇒ PS 算出的缩放级别来回跳 ⇒ 用户看到的
+ *   「抽搐」。
+ *   ⇒ 视图导航修饰键按着时，坐标**一个字节都不改**（原样透传），HUD 也不出
+ *     （它画的是轨迹末端，此刻根本没有轨迹）。
+ *
+ * 判据只取空格（最保守的取舍）
+ *   · 空格 = PS 的抓手工具 & Ctrl+空格 缩放，**正常绘画时绝不会按着**；
+ *   · Ctrl / Alt 不参与：它们与大量正常操作重叠（Alt 取色、Ctrl 约束…），
+ *     拿它们当否决会误杀真实的套索平滑。
+ * ⛔ 代价：一次 GetAsyncKeyState（与 det_GetCursorPos 里已有的 VK_LBUTTON 同族），
+ *    仍是零 I/O、O(1)，不违反 detour 纪律。 */
+static int view_nav_down(void)
+{
+    return (GetAsyncKeyState(VK_SPACE) & 0x8000) ? 1 : 0;
+}
+
 /* ================================================================== 标定状态 */
 typedef struct {
     HCTX  hCtx;          /* 0 = 未标定 */
@@ -3393,6 +3417,10 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
         /* 悬空 / 闩锁缺失（上一批被总开关或复位打断）⇒ 现判一次 */
         useGate = (tool_gate_ok() && g_cfg[CFG_I_ENABLED]) ? 1 : 0;
     }
+    /* 0x0208：视图导航（空格/抓手/Ctrl+空格缩放）期间整批原样透传。
+       ⛔ 判据放在 useGate 之后、改写之前：不改写、但仍刷新快照与接触判据
+          （HUD 与标定都靠它们，且都是普通内存写，迟滞为零）。*/
+    if (useGate && view_nav_down()) useGate = 0;
     if (!useGate) {
         g_wasEnabled = 0;
         /* 0x012A：闸门关着（工具不是套索/面板关闭）⇒ 没有「一笔」在进行，
@@ -4340,6 +4368,13 @@ static u64 det_GetCursorPos(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
     if (g_wtctxIni[WTCTX_INI_CURSORINJECT] && g_cfg && g_cfg[CFG_I_ENABLED] &&
         stroke && tool_gate_ok())
         armed = 1;
+    /* 0x0208：视图导航（空格 = 抓手，Ctrl+空格 = 缩放）期间绝不改写返回值。
+       ⛔ 这条比工具闸门更靠前地被触发：缩放期间 PS 不切工具（仍是套索 ⇒ 闸门绿），
+          而 scrubby zoom 的缩放级别**就是光标位移的函数** —— 喂滞后坐标 = 抽搐。
+       ⛔ 不推绳、不贴笔：下面的 `!armed` 分支会把 s_gpOn/s_gpBtn 复位，
+          导航结束后的第一拍按「0→1 边沿」处理 ⇒ 输出点重新贴合笔尖，不会把
+          导航前的残留点连成一条斜线。 */
+    if (armed && view_nav_down()) armed = 0;
     InterlockedExchange(&g_gcpArmed, armed);
     if (!armed) { s_gpOn = 0; s_gpBtn = 0; return (u64)ok; }
 
@@ -6182,6 +6217,40 @@ static void hud_frame_wait(HANDLE timer)
     }
 }
 
+/* 0x0208：**隐藏态**的帧等待（见下方 hud_frame_wait_idle 的根因说明）。
+   32ms ≈ 31Hz：笔一接触画布，最迟 32ms 后就能判定「该显示了」，肉眼无感
+   （HUD 出现本来就带着一帧的建立延迟），而空闲期对窗口管理器的打扰降到 ~1/4。
+   ⛔ 必须明显小于 HUD_MAX_LAG_MS(60)：否则空闲态自己就会把下几帧判成「帧滞后」
+      （lagSkip），HUD 该显示时反而要多等一轮。 */
+#define HUD_IDLE_FRAME_MS 32
+
+/**
+ * 隐藏态帧等待：把「什么都没发生」时的唤醒频率从 120Hz 降到 25Hz。
+ *
+ * ⛔ 为什么（用户报：加载插件后 PS 缩放动画卡顿、抽搐）：
+ *    本线程是一个**永久循环**，隐藏时也每 8ms 醒一次，而每一轮都会做一串
+ *    **跨线程窗口查询**：`frame_resolve` 的 IsWindow、`canvas_focus_ok` 的
+ *    GetForegroundWindow → GetWindowThreadProcessId → **GetGUIThreadInfo（查 PS 的
+ *    UI 线程）** → GetAncestor → **WindowFromPoint**（命中测试）→ 可能再 GetWindowRect。
+ *    也就是 120 次/秒 × 5~6 个 win32k 调用 ≈ 600~700 次/秒，全部与 PS 自己的
+ *    窗口/合成路径争同一把窗口管理锁 —— 而缩放的 Animated Zoom 恰恰是 PS 主线程
+ *    最依赖这把锁的一段。⇒ 空闲期（窗口不可见）没必要按渲染帧率跑：
+ *    这些查询只用来判断「要不要显示」，40ms 的判定延迟用户不可能察觉。
+ * ⛔ 只改**隐藏态**的等待时长；可见态（真正在画拉绳圈）仍是 HUD_FRAME_MS，
+ *    手感与之前逐字一致。 */
+static void hud_frame_wait_idle(HANDLE timer)
+{
+    const int ms = HUD_IDLE_FRAME_MS;
+    if (!timer) { Sleep((DWORD)ms); return; }
+    LARGE_INTEGER due;
+    due.QuadPart = -(LONGLONG)ms * 10000;
+    if (SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) {
+        WaitForSingleObject(timer, INFINITE);
+    } else {
+        Sleep((DWORD)ms);
+    }
+}
+
 static LRESULT CALLBACK hud_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     if (m == WM_NCHITTEST) return HTTRANSPARENT;    /* 穿透：绝不抢任何输入 */
@@ -6600,12 +6669,32 @@ static DWORD WINAPI hud_thread(LPVOID param)
                （判据不可用 / 冷启动宽限），加载后 61s 实测 penDown 随包流置 1
                （jwwh-36628：07:28:45–07:29:46 `信号=（无）生效=0`）⇒ 没落笔也出 HUD。 */
         int fgOk = (g_fgOkDbg != 0) ? 1 : 0;
-        frame_resolve(now);
-        int cvWhy = 0;
-        int canvasOk = canvas_focus_ok(cur, &cvWhy);
-        /* 0x0134：宽判（不看前台）—— 只给平滑/补流/光标接管用，HUD 仍用严格判据。 */
-        int canvasHit = (canvasOk ? 1 : canvas_hit_ok(cur));
         int ctOk = (g_ctUnknown == 0) ? 1 : 0;
+        /* 0x0208：**先过便宜闸门，再问窗口管理器**。
+           ⛔ 为什么（用户报缩放动画卡顿）：`canvas_focus_ok` 每帧要做
+              GetForegroundWindow → GetWindowThreadProcessId → **GetGUIThreadInfo
+              （查 PS 的 UI 线程）** → GetAncestor → **WindowFromPoint**（命中测试），
+              必要时再 GetWindowRect —— 4~6 次跨线程 win32k 调用。
+              而在此之前的一串判据（笔抬着 / 工具不对 / 不在一笔之中 / 非拉绳 /
+              功能关着）全都是**普通内存读**，它们不成立时 HUD 本来就不可能显示。
+              ⇒ 把这些免费判据提到前面，不成立就一个窗口调用都不发。
+           ⛔ 跳过时保留上一次的焦点门结论（供诊断行显示），否则 cvWhy 会在 0↔x
+              之间翻转，把「焦点门: why=」的边沿日志刷成噪音。 */
+        int cheapOk = (wnd && mem && activeNow && gateOk && strokeOk && drawOk && fgOk
+                       && ctOk && !deadNow && !bigJump && !lagSkip && ropeMode && realOk
+                       && (hf & 1) && g_cfg && g_cfg[CFG_I_ENABLED] && !g_engineOff) ? 1 : 0;
+        frame_resolve(now);
+        static int s_cvOkLast, s_cvHitLast;   /* 跳帧时沿用的上一次结论（仅诊断用） */
+        int cvWhy = s_cvWhyDbg;               /* 默认不翻转 ⇒ 不误报「焦点门恢复」 */
+        int canvasOk, canvasHit;
+        if (cheapOk) {
+            cvWhy = 0;
+            canvasOk = canvas_focus_ok(cur, &cvWhy);
+            canvasHit = (canvasOk ? 1 : canvas_hit_ok(cur));
+            s_cvOkLast = canvasOk; s_cvHitLast = canvasHit;
+        } else {
+            canvasOk = s_cvOkLast; canvasHit = s_cvHitLast;
+        }
         if (cvWhy != s_cvWhyDbg) {
             /* 边沿触发：只在焦点门结论翻转时打一行，带窗口类名 ⇒ 用户日志可与操作逐条对齐 */
             s_cvWhyDbg = cvWhy;
@@ -6637,10 +6726,11 @@ static DWORD WINAPI hud_thread(LPVOID param)
         InterlockedExchange(&g_canvasOkDbg, canvasOk ? 1 : 0);
         InterlockedExchange(&g_canvasHitDbg, canvasHit ? 1 : 0);
         InterlockedExchange(&g_ctOkDbg,     ctOk ? 1 : 0);
-        int wantVisible = (wnd && mem && activeNow && gateOk && strokeOk && drawOk && fgOk
-                           && canvasOk && ctOk && !deadNow && !bigJump && !lagSkip && ropeMode
-                           && realOk
-                           && (hf & 1) && g_cfg && g_cfg[CFG_I_ENABLED] && !g_engineOff) ? 1 : 0;
+        /* ⛔ 0x0208：判据收成「便宜闸门 ∧ 焦点门」。便宜闸门里已含全部
+           wnd/mem/active/gate/stroke/draw/fg/ct/dead/jump/lag/rope/实包/hudBits/开关
+           十二项，逐字等价于原来的整条 AND；这样跳帧时 canvasOk 的**沿用值**
+           不会再冒充「焦点在画布上」。 */
+        int wantVisible = (cheapOk && canvasOk) ? 1 : 0;
         if (!wantVisible) {
             if (wnd && IsWindowVisible(wnd)) ShowWindow(wnd, SW_HIDE);
             /* ⛔ 「HUD 没能显示」必须能一眼定位：把六个条件逐个打出来（节流 2 秒，
@@ -6656,19 +6746,22 @@ static DWORD WINAPI hud_thread(LPVOID param)
                  ctU=1          ⇒ 落笔判据未建立（信号无投票权 / 判据不可用）——
                                   刻意不出 HUD：此刻的 penDown 可能是 fail-open 假值
                  rope=0         ⇒ 当前不是「拉绳」模式（HUD 只在拉绳模式出现）
-                 hudBits 无 bit0 ⇒ 面板的「拉绳提示」是关的 */
+                 hudBits 无 bit0 ⇒ 面板的「拉绳提示」是关的
+                 ck=0           ⇒ 0x0208：便宜闸门已否 ⇒ 本轮**没有**问窗口管理器，
+                                  cv 是上一次评估的沿用值（看它没有意义） */
             if (g_cfg && g_cfg[CFG_I_ENABLED] && (DWORD)(now - lastHudWhy) >= 2000) {
                 lastHudWhy = now;
                 logf("# [hud] 未显示: wnd=%d mem=%d active=%d(t=%ldms) gate=%d"
                      "(toolOk=%ld penDown=%ld) stroke=%d draw=%d(tm=%ld,k=%ld) fg=%d cv=%d ctU=%ld "
-                     "jump=%d lag=%d rope=%d hudBits=%ld dead=%ld deadHide=%d real=%ldms\n",
+                     "jump=%d lag=%d rope=%d hudBits=%ld dead=%ld deadHide=%d real=%ldms ck=%d\n",
                      wnd ? 1 : 0, mem ? 1 : 0, activeNow, (long)pktAge, gateOk,
                      (long)g_toolOk, (long)g_penDown, strokeOk, drawOk,
                      (long)tmv, (long)tmK,
                      fgOk, canvasOk, (long)g_ctUnknown, bigJump, lagSkip, ropeMode, (long)hf,
-                     (long)g_streamDead, deadNow, (long)realAgeHud);
+                     (long)g_streamDead, deadNow, (long)realAgeHud, cheapOk);
             }
-            hud_frame_wait(frameTimer);
+            /* 0x0208：隐藏态走 25Hz 的低频等待（根因见 hud_frame_wait_idle）。 */
+            hud_frame_wait_idle(frameTimer);
             continue;
         }
 

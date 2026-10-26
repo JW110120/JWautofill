@@ -1432,7 +1432,10 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
                         enabled + 停续 GATETS + `pstool_publish()` 一个字节都不写；
                         detour 与标定保留（面板重连重放 on=true 即秒恢复，无需重标定）。
                         services_start 无条件清 I_ENABLED（Reload 不再继承上一轮的 1）。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x0207; }
+/* 0x0208：宿主交互态（左键/空格）边沿推送 + 视图导航否决 + HUD 空闲退避。
+   面板据 hostBusy 在拖拽/缩放期间让巡检让路；引擎在空格按着时绝不改写坐标。
+   见 keyhook.c 调度线程的「0x0208」段、smooth_engine.c 的 view_nav_down()。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x0208; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {

@@ -5,6 +5,7 @@ import {
 } from './layerTreeSnapshot';
 import { psRead, psTryRead, runAsModal } from './psAccess';
 import { invalidateLayerInfoCache, shouldInvalidateLayerInfo } from './LayerInfoHandler';
+import { hostYield } from './hostInteraction';
 
 /**
  * 蒙版同步引擎（MaskSyncEngine）
@@ -1485,6 +1486,9 @@ export class MaskSyncEngine {
       // 里的 get 就会触发宿主原生报错框（本弹框「有一定概率」出现的关键来源）。
       // 忙碌时顺延到下一轮而非硬闯 —— 兜底同步晚一轮无副作用（内容一致时本就不写入）。
       if (isPsBusy()) return;
+      // ⛔ 0x0208：用户正在宿主画布上拖拽/缩放 ⇒ 本轮让路（同 app.tsx 的三条巡检）。
+      //    本 tick 会读活动文档身份（1 个模态作用域），落进缩放动画里就是一次抢占。
+      if (hostYield('蒙版同步兜底轮询')) return;
       // ⚠️ refreshActiveDoc 已改为**受保护读取**（异步）⇒ tick 内需要 await。
       //    改前这里是无条件同步裸读（3 次宿主 get），是文档级忙碌期的固定弹框源。
       void (async () => {

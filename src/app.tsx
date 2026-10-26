@@ -50,6 +50,8 @@ import {
 // ⛔ 0x0118：disconnectSmoothDaemon / isSmoothDaemonConnected 已从本文件退役
 //    （toggle-off 不再双发 shutdown，见 toggleLassoSmooth），此处只留连接入口。
 import { connectSmoothDaemon } from './lasso/SmoothBridge';
+// 0x0208：宿主交互期（左键拖拽/空格导航）让巡检让路，根因见模块头部注释。
+import { hostYield } from './utils/hostInteraction';
 import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/MainToggleBus';
 import { FillPanelId, subscribeFillPanelToggle } from './utils/FillPanelToggleBus';
 import { subscribeClearModeToggle } from './utils/ClearModeBus';
@@ -1333,6 +1335,11 @@ class App extends React.Component<AppProps, AppState> {
      */
     private async pollSmoothToolGate() {
         if (this.smoothToolBusy && Date.now() - this.smoothToolBusySince < 3000) return;
+        // ⛔ 0x0208：用户正在宿主画布上拖拽/缩放 ⇒ 本轮让路。
+        //    缩放动画是宿主主线程上的交互，本轮的 batchPlay get 会把模态作用域从它手里
+        //    抢走一次 ⇒ 动画被劈成两段（用户报的「卡顿、抽搐」）。丢一轮工具读数无副作用：
+        //    下一拍（≤1s）自会补上，且 'slct' 事件通路不经过这里。
+        if (hostYield('平滑工具闸门巡检')) return;
         // ⛔ 进程内模态层级 = **确定的事实**（PS 自己报「我正握着模态作用域」），
         //    比 isPsBusy() 的常数窗口外推可靠 ⇒ 确定忙时直接跳过本轮。
         if (isPsBusy() || psBusyInProc() === 1) return;
@@ -2838,6 +2845,11 @@ class App extends React.Component<AppProps, AppState> {
         if (!needAutoOff) return;
         // 并发守卫；上一次查询若卡在模态状态里迟迟不返回，超过 3s 就放行，避免巡检永久停摆
         if (this.toolWatchBusy && Date.now() - this.toolWatchBusySince < 3000) return;
+        // ⛔ 0x0208：交互期让路（同 pollSmoothToolGate）。此处额外说明为什么「自动关」
+        //    可以接受这一拍的空缺：工具切换的主通路是 PS 的 select 通知（见
+        //    maybeAutoTurnOff），本巡检只是**动作回放/预设带工具**这类不派发 select 的
+        //    兜底通道 ⇒ 最坏延后一拍（1s）判定，不影响「切到画笔就关」的可用性。
+        if (hostYield('工具巡检')) return;
         // ⚠️ 忙碌闸门：readCurrentToolId 会发 batchPlay get（application.tool）。
         // 本轮询与用户操作完全异步，切文档期间落进忙碌窗口就会弹宿主原生报错框。
         // ⛔ 同上：进程内模态层级确定忙 ⇒ 本轮不发 get（丢一轮工具读数无副作用，
@@ -2893,6 +2905,10 @@ class App extends React.Component<AppProps, AppState> {
         // 粗筛：明显还在忙就不去读（本轮跳过，下一轮再看）。文档级事件本身也会
         // 打长窗口，因此忙碌期通常正是「刚发生文档级变化」的时段。
         // ⛔ 同上：文档身份巡检本身就是 500ms 轮询，确定忙时跳过一轮不影响正确性。
+        // ⛔⛔ 0x0208：让路判据**必须放在闩锁分支之后**。闩锁生效期本巡检是唯一被允许
+        //    运行的通道，它负责推进并释放闩锁 —— 在闩锁前面就 return 会让闩锁永不释放
+        //    （自锁）。这里的让路只作用于「常规身份兜底」这一句。
+        if (hostYield('文档身份巡检')) return;
         if (isPsBusy() || psBusyInProc() === 1) return;
         const r = await psTryRead<number | null>(() => {
             const d = app.activeDocument;
@@ -3056,6 +3072,9 @@ class App extends React.Component<AppProps, AppState> {
         // ⚠️ 粗筛：本函数是**无条件 300ms 轮询**，与用户操作完全异步，切文档这类
         // 长命令期间必然有机会落进忙碌窗口。忙碌时跳过本轮（快速蒙版状态不要求实时）。
         // ⛔ 同上：快速蒙版状态不要求实时，确定忙时跳过本轮最划算。
+        // ⛔ 0x0208：交互期让路。快速蒙版只能轮询（PS 不派发通知），但它在拖拽/缩放期间
+        //    本来也不会变 —— 这一拍纯粹是白付一个模态作用域。
+        if (hostYield('快速蒙版巡检')) return;
         if (isPsBusy() || psBusyInProc() === 1) return;
         this.quickMaskBusy = true;
         try {

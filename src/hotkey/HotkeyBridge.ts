@@ -12,6 +12,7 @@ import { requestClearModeToggle } from '../utils/ClearModeBus';
 import { requestBlendMode } from '../utils/BlendModeBus';
 import { psRead, runAsModal } from '../utils/psAccess';
 import { isPsBusy, psBusyRemain } from '../utils/psProbe';
+import { noteHostBusy } from '../utils/hostInteraction';
 // ⛔ 本模块**不再** import 任何 LassoSmoothing 的东西：套索平滑与热键虽同处一个 .8li，
 //    但是两条独立的 WebSocket（平滑 18924 / 热键 18923）——停一侧不影响另一侧，
 //    首先就得让两条连接的生命周期互不相干 —— 这里保留任何一句桥接都会把两者重新绑死。
@@ -530,7 +531,11 @@ export function connectHotkeyDaemon(): () => void {
         try {
           const msg = JSON.parse(ev.data);
           if (msg?.type === 'hotkey') handleHotkey(msg);
-          else if (msg?.type === 'config') {
+          // 0x0208：宿主交互态边沿（左键/空格）。只喂给「巡检让路」判据，
+          // 不参与热键逻辑；详见 utils/hostInteraction.ts 的根因说明。
+          else if (msg?.type === 'hostBusy') {
+            noteHostBusy(msg.v === true || msg.v === 1);
+          } else if (msg?.type === 'config') {
             const raw: any[] = Array.isArray(msg.payload) ? msg.payload : [];
             cachedConfig = raw.map(normalizeEntry).filter((x): x is HotkeyEntry => !!x);
             configLoaded = true;

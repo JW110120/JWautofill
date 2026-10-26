@@ -1835,6 +1835,47 @@ static DWORD WINAPI kh_dispatch_thread(LPVOID param)
     while (!g_khStop) {
         WaitForSingleObject(g_khWake, 20);
 
+        /* ================================ 0x0208：宿主交互态边沿（左键 / 空格）
+         *
+         * 为什么要这条消息（用户报：加载插件后 PS 自带缩放工具 / Ctrl+空格拖拽缩放
+         * 变卡顿、抽搐）：
+         *   缩放（含 scrubby zoom 与 Animated Zoom）是**宿主主线程上的交互式动画**，
+         *   它不派发本插件注册过的任何 PS 通知事件（见 psAccess.PS_NOTIF_EVENTS）
+         *   ⇒ 面板侧 isPsBusy() 全程为假、三条常驻巡检照常在动画期间发 psRead()。
+         *   而 psRead 的本质是 executeAsModal —— **独占宿主主线程**的模态作用域，
+         *   稳态按 MIN_MODAL_GAP_MS=300 排队 ⇒ 每 333ms 抢一次。一次缩放动画只有
+         *   300~500ms ⇒ 每次都被劈成两段，正对应用户看到的「卡顿、抽搐」。
+         *   ⇒ 由进程内这一侧（唯一能看见全局键/鼠标状态的地方）按**边沿**把
+         *     「宿主正在被拖拽/缩放」推给面板，面板据此让路（utils/hostInteraction.ts）。
+         *
+         * ⛔ 帧率：边沿 + 忙态 2s 保活（约 30 字节/帧）。只发边沿的风险是丢帧或
+         *    面板中途重连会让忙态粘住；保活把这种情况收敛到 2s 内，面板侧另有
+         *    「忙态最长 30s」兜底自愈。
+         * ⛔ 判据刻意窄（左键 ∨ 空格）：
+         *    · 左键 = 所有鼠标拖拽（缩放工具、Ctrl+空格拖拽、滑块拖动…）；
+         *    · 空格 = PS 的抓手/缩放导航修饰键；
+         *    · **笔尖落笔不算**（Wintab 通路里笔尖不是鼠标左键）⇒ 正常绘画不受影响，
+         *      绘画期的宿主忙碌仍由 isPsBusy() + 通知事件负责，此处不重复。
+         * ⛔ 本线程不在钩子回调里（20ms 调度线程）⇒ GetAsyncKeyState/发送都允许。 */
+        {
+            static int   s_hbPrev = -1;
+            static DWORD s_hbLast;
+            int hb = 0;
+            if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) hb = 1;
+            else if (GetAsyncKeyState(VK_SPACE) & 0x8000) hb = 1;
+            DWORD nowHb = GetTickCount();
+            /* ⛔ 边沿 + 「忙态」2s 保活：只有边沿的话，一旦丢帧或面板中途重连，
+               面板会把忙态粘住（虽然它自己有 30s 兜底，但 30s 的巡检停摆不可接受）。
+               保活只在**按着的时候**发（拖拽期），松手后靠那一条 0 边沿收尾。 */
+            if (hb != s_hbPrev || (hb && (DWORD)(nowHb - s_hbLast) >= 2000)) {
+                s_hbPrev = hb;
+                s_hbLast = nowHb;
+                char j[48];
+                _snprintf(j, sizeof(j), "{\"type\":\"hostBusy\",\"v\":%d}", hb);
+                kh_broadcast(j);
+            }
+        }
+
         /* 0x013C：双路按键差分（每秒最多一条，仅有增量时打）。
            判读口径：只有「轮询 +N」而「钩子 +0」= 键没进 LL 钩子链；
            两条都涨 = 钩子正常。 */
