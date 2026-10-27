@@ -34,12 +34,14 @@ import { PanelStateManager } from './utils/PanelStateManager';
 import {
   connectHotkeyDaemon,
   isDaemonConnected, getMainToggleCombo, setMainToggleCombo, requestHotkeyRecording,
-  getSelectedBrushToolEnum, setFocusLassoActive, setFocusClearActive, normalizeToolId
+  getSelectedBrushToolEnum, setFocusLassoActive, setFocusClearActive, normalizeToolId,
+  onAltHold, selectToolByRef
 } from './hotkey/HotkeyBridge';
 import {
   LassoSmoothMode, LassoSmoothParams, LassoSmoothStatus, PenSmoothStatus,
   pushLassoSmoothParams, onLassoSmoothStatus,
   initialLassoSmoothParams, setPenSmooth, setSmoothToolGate, getSmoothToolGate, noteToolReadOk,
+  setAltToolOverride,
   restorePersistedPenSmooth, isPenSmoothOn,
   SMOOTH_RADIUS_MIN, SMOOTH_RADIUS_MAX,
   SMOOTH_CATCHUP_MIN, SMOOTH_CATCHUP_MAX,
@@ -51,7 +53,7 @@ import {
 //    （toggle-off 不再双发 shutdown，见 toggleLassoSmooth），此处只留连接入口。
 import { connectSmoothDaemon } from './lasso/SmoothBridge';
 // 0x0208：宿主交互期（左键拖拽/空格导航）让巡检让路，根因见模块头部注释。
-import { hostYield } from './utils/hostInteraction';
+import { hostYield, onHostRelease } from './utils/hostInteraction';
 import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/MainToggleBus';
 import { FillPanelId, subscribeFillPanelToggle } from './utils/FillPanelToggleBus';
 import { subscribeClearModeToggle } from './utils/ClearModeBus';
@@ -203,6 +205,27 @@ interface AppProps {}
 
 class App extends React.Component<AppProps, AppState> {
     private unsubMainToggle: (() => void) | null = null;
+    // 0x0209：Alt 边沿（专注模式「临时吸管」）的订阅器
+    private unsubAltHold: (() => void) | null = null;
+    /**
+     * 0x0209：此刻是否正处在「Alt 临时吸管」期间。
+     *
+     * 两个作用：
+     *  ① 抑制「切到其它工具自动关」—— 吸管虽然不在 AUTO_OFF_TOOLS 名单里，
+     *     但 `maybeAutoTurnOff` / `pollToolChange` 的判据是 `isOtherTool()` 的补集，
+     *     一旦名单或判据将来变化就会误关；这个标志把它钉死。
+     *  ② 让「Alt 松开」只处理一次（原生侧按住时每 2s 有保活帧，电平已去重，
+     *     这里再挡一次重复进入）。
+     */
+    private altToolHold = false;
+    /** 0x020A：进「Alt 临时吸管」之前的背景色快照（见 syncAltPickColor）。 */
+    private altPickBg: { r: number; g: number; b: number; solid: any } | null = null;
+    /** 0x020A：松开 Alt 之后**仍允许**完成最后一次取色的截止时刻（0 = 吸管期内不限）。 */
+    private altPickUntil = 0;
+    /** 0x020A：背景色快照的延时清理句柄。 */
+    private altPickClearTimer: any = null;
+    /** 0x020A：松开边沿订阅（一次吸色结束的触发点）。 */
+    private unsubHostRelease: (() => void) | null = null;
     // 功能快捷键：纯色/图案/渐变子面板开关注订器（FillPanelToggleBus 轮询分发，卸载时退订）
     private unsubFillPanelToggle: (() => void) | null = null;
     // 专注模式「清除模式」键（Shift+E）与混合模式热键的订阅器（ClearModeBus / BlendModeBus，
@@ -587,6 +610,14 @@ class App extends React.Component<AppProps, AppState> {
             });
             // 套索实时平滑：.8li 模块回报的钩子/布防健康状态（同步回调，无 await）。
             this.unsubSmoothStatus = onLassoSmoothStatus((s) => { this.applySmoothStatus(s); });
+            // 0x0209：Alt 边沿 → 专注模式下的「临时吸管」。
+            // ⛔ 走 .8li 的键态轮询（UXP 面板拿不到宿主前台的全局键态），
+            //    三个条件（专注模式 / 套索 / 总开关开）的判定在 handleAltHoldEdge 里。
+            this.unsubAltHold = onAltHold((on) => { void this.handleAltHoldEdge(on); });
+            // 0x020A：宿主「松开」边沿 = 一次吸色点击结束。用于把 PS 写进背景色的
+            // 取样结果搬到前景色（根因与取舍见 syncAltPickColor 的长注释）。
+            // ⛔ 判据来自 hostBusy（左键∨空格），所以回调里必须再用 altToolHold 收口。
+            this.unsubHostRelease = onHostRelease(() => { void this.syncAltPickColor(); });
             // 平滑模块（.8li）自己的连接（18924）。刻意与 connectHotkeyDaemon 分开调用：
             // 两条 WebSocket 的生命周期必须互不相干，否则「停快捷键服务」又会把平滑带下水。
             this.unsubSmoothDaemon = connectSmoothDaemon();
@@ -992,6 +1023,26 @@ class App extends React.Component<AppProps, AppState> {
             try { this.unsubMainToggle(); } catch { /* ignore */ }
             this.unsubMainToggle = null;
         }
+        if (this.unsubAltHold) {
+            // 0x0209：只退订监听，**不**在这里切回套索 —— 面板卸载时用户可能正按着 Alt，
+            // 强行切工具会打断他手上的操作；工具归属由 PS 自己的下一次选择决定。
+            try { this.unsubAltHold(); } catch { /* ignore */ }
+            this.unsubAltHold = null;
+        }
+        if (this.unsubHostRelease) {
+            try { this.unsubHostRelease(); } catch { /* ignore */ }
+            this.unsubHostRelease = null;
+        }
+        /* 0x020A：卸载时必须**主动撤销**临时吸管的硬否决位 ——
+           面板一走，原生那三处兜底（Alt 物理松开 / plug_revoke / 服务重启）都还没轮到，
+           而这一位残留 = 套索平滑整段失效，界面上看不出原因。 */
+        try { setAltToolOverride(false); } catch { /* ignore */ }
+        this.altPickBg = null;
+        this.altPickUntil = 0;
+        if (this.altPickClearTimer) {
+            clearTimeout(this.altPickClearTimer);
+            this.altPickClearTimer = null;
+        }
         if (this.unsubFillPanelToggle) {
             try { this.unsubFillPanelToggle(); } catch { /* ignore */ }
             this.unsubFillPanelToggle = null;
@@ -1339,7 +1390,10 @@ class App extends React.Component<AppProps, AppState> {
         //    缩放动画是宿主主线程上的交互，本轮的 batchPlay get 会把模态作用域从它手里
         //    抢走一次 ⇒ 动画被劈成两段（用户报的「卡顿、抽搐」）。丢一轮工具读数无副作用：
         //    下一拍（≤1s）自会补上，且 'slct' 事件通路不经过这里。
-        if (hostYield('平滑工具闸门巡检')) return;
+        // ⛔ 0x0209：**必须给上限**（900ms）—— 见 hostInteraction.hostYield 的长注释。
+        //    笔尖落笔会模拟左键 ⇒ 绘画期间 hostBusy 恒为真 ⇒ 无限让路会把工具闸门
+        //    冻在切走前的值上，切到涂抹/HUD 照旧、平滑照跑（用户报的 BUG1）。
+        if (hostYield('平滑工具闸门巡检', 900)) return;
         // ⛔ 进程内模态层级 = **确定的事实**（PS 自己报「我正握着模态作用域」），
         //    比 isPsBusy() 的常数窗口外推可靠 ⇒ 确定忙时直接跳过本轮。
         if (isPsBusy() || psBusyInProc() === 1) return;
@@ -1363,7 +1417,7 @@ class App extends React.Component<AppProps, AppState> {
      *    只有**从来没读到过**（仍是初值 2）时才维持 2：冷启动后第一轮巡检（≤1s）
      *    之前套索平滑短暂待命，这是「只在套索生效」的必要代价。
      */
-    private applyToolGate(tool: string | null) {
+    private applyToolGate(tool: string | null, force = false) {
         // ⛔⛔ 此刻闸门由进程内 'slct' 供给（gateOwned===1，带 2 秒时效）⇒ 立即退出，
         //    一个字节都不写。接管后闸门值由 .8li 的 'slct' 回调独占写入（它同时刷
         //    GATETS）；面板再写就是两边互相覆盖 —— 各自都在刷时间戳，于是「谁都新鲜」，
@@ -1373,7 +1427,10 @@ class App extends React.Component<AppProps, AppState> {
         // ⛔ 0x0115：判据换成带时效的 inProcGateOwned() —— 与 syncSmoothToolWatch、
         //    以及原生侧 write_params() 的让位判据**同源**（都是原生下发的 gateOwned）。
         //    'slct' 静默 ⇒ gateOwned 变 0 ⇒ 本处放行 ⇒ 面板重新喂闸门 ⇒ 自愈。
-        if (this.inProcGateOwned()) {
+        // ⛔ 0x020A：`force` = 面板刚亲手切过工具（临时吸管进出）。此时面板的判定
+        //    比进程内 'slct' 回调**更新**（回调要等 PS 派发通知），而让位规则只会
+        //    让它更慢一拍 ⇒ 明确要求覆盖时跳过让位。只在临时吸管的两帧使用。
+        if (!force && this.inProcGateOwned()) {
             const t = this.state.smoothStatus.pen.psTool;
             if (t && t !== this.lastToolRead) {
                 console.log('[套索平滑闸门] 当前工具 = ' + t + '（进程内 slct 通知）');
@@ -2699,6 +2756,164 @@ class App extends React.Component<AppProps, AppState> {
         }
     }
 
+    /**
+     * 0x0209：Alt 边沿 → 专注模式下的「临时吸管」。
+     *
+     * 需求（用户原话）：「仅当我处于专注模式下，当前工具是套索，且总开关是开时，
+     * 按 alt 键能够临时切换为吸管工具……松开 alt 后会自动变回套索工具，总开关是开的状态。」
+     *
+     * 三个前置条件缺一不可（按顺序判，最便宜的先判）：
+     *   ① `isFocusMode()` —— 「自动关开关」+「自动切套索」同时勾选；
+     *   ② `state.isEnabled` —— 总开关开；
+     *   ③ 当前工具是套索 —— 用 `lastKnownTool`（「自动关」巡检维护的基准），
+     *      退而用进程内 `'slct'` 报来的 `psTool`。两者都没有 ⇒ **不响应**（保守：
+     *      不知道就不要动用户的工具）。
+     *
+     * ⛔ 为什么切吸管期间要把 `altToolHold` 立起来：它挡掉「切到其它工具自动关」的
+     *    两条通路（select 通知 + 1s 巡检）。吸管本来不在 AUTO_OFF_TOOLS 名单里，
+     *    但这里不能依赖名单 —— 名单是产品决策、随时可能变，而本需求的契约是
+     *    「松开 Alt 后总开关必须是开的」。
+     * ⛔ 松开后还做一次「总开关兜底」：万一期间被别处关掉（旧版 .8li 的通知、
+     *    别的面板写共享状态），这里把它拨回开 —— 这是需求字面要求的最终状态。
+     * ⛔ 切回套索后**乐观喂一次闸门**：正常路径下工具闸门要等下一次巡检（≤1s）才回绿，
+     *    用户「松开 Alt 立刻接着画」会感觉平滑失效 1 秒。刚执行过 select lassoTool，
+     *    事实成立，直接喂 1 是安全的（`applyToolGate` 内部在 slct 接管时会自动让位）。
+     */
+    private async handleAltHoldEdge(on: boolean) {
+        if (on) {
+            if (this.altToolHold) return;
+            if (!this.isFocusMode()) return;
+            if (!this.state.isEnabled) return;
+            const tool = this.lastKnownTool || this.state.smoothStatus?.pen?.psTool || null;
+            if (!tool || !App.isLassoTool(tool)) return;
+            this.altToolHold = true;
+            console.log('[临时吸管] Alt 按下 ⇒ 切吸管（专注模式 · 套索 · 总开关开）');
+            /* —— 0x020A ①②：先竖否决位、再切工具 ——
+               ⛔ 顺序不能反：切工具要过一次 batchPlay（几十~几百 ms），这段时间里
+                  工具还是套索、工具闸门还是 1（'slct' 回调还没来），用户若立刻按笔
+                  吸色 ⇒ 引擎照常改写坐标并显示 HUD（用户报的两条）。
+                  否决位是一帧 WS（毫秒级），引擎读到就立刻停改写/停 HUD。 */
+            setAltToolOverride(true);
+            this.applyToolGate('eyedropperTool', true);
+            /* 记下「进吸管之前」的背景色（同步属性读，不需要模态）。用途见
+               syncAltPickColor：PS 把 Alt+点击 解释为取背景色，我们事后搬到前景。 */
+            this.altPickBg = App.snapshotBackgroundColor();
+            this.altPickUntil = 0;                 // 吸管期内不限时
+            if (this.altPickClearTimer) {
+                clearTimeout(this.altPickClearTimer);
+                this.altPickClearTimer = null;
+            }
+            await selectToolByRef('eyedropperTool');
+            return;
+        }
+        if (!this.altToolHold) return;
+        this.altToolHold = false;
+        console.log('[临时吸管] Alt 松开 ⇒ 切回套索');
+        await selectToolByRef('lassoTool');
+        this.lastKnownTool = 'lassoTool';
+        /* 乐观回绿：**必须 force** —— 平时 `applyToolGate` 在 'slct' 接管时直接 return，
+           而回调要等 PS 派发通知；不 force 的话用户松开 Alt 立刻画会卡 ~1 秒。 */
+        this.applyToolGate('lassoTool', true);
+        /* ⛔ 否决位放在最后清：上面两步跑完之前，工具可能还是吸管，
+           提前解否决就等于允许引擎改写「吸管上的笔」的坐标。 */
+        setAltToolOverride(false);
+        /* ⛔⛔ 松开 Alt **不能**立刻丢掉背景色快照：最常见的操作是「吸色 → 顺手松开
+           Alt」——`hostBusy` 的 release 边沿可能比 altHold 的 release 晚到几十毫秒，
+           立刻清快照就等于把这一次取色丢掉（用户看到「背景色被改了、前景色没变」，
+           正是本轮要修的现象）。⇒ 给 800ms 宽限，最后一次取色仍能完成。 */
+        this.armAltPickExpiry();
+        if (!this.state.isEnabled) {
+            try {
+                await setMainToggle(true);
+            } catch (e) {
+                console.warn('⚠️ 临时吸管：恢复主开关失败:', e);
+            }
+        }
+    }
+
+    /** 0x020A：松开 Alt 后给最后一次取色留一段宽限，到点清空快照。
+     *  ⛔ 取 400ms 而不是更长：这段窗口内若又触发一次「取色收尾」，会插一次模态。
+     *     窗口越长，「用户已经回到套索开始画」被插一次模态的概率越大
+     *     （那正是 0x0208 修的「模态抢占打断绘制」）。主流程里 `hostBusy` 的松开
+     *     边沿**早于** `altHold` 的松开边沿（抬笔必然在松 Alt 之前），所以正常路径
+     *     根本不依赖这段宽限，它只兜「先松 Alt 后抬笔」这种少数情况。 */
+    private armAltPickExpiry() {
+        this.altPickUntil = Date.now() + 400;
+        if (this.altPickClearTimer) clearTimeout(this.altPickClearTimer);
+        this.altPickClearTimer = setTimeout(() => {
+            this.altPickClearTimer = null;
+            if (this.altToolHold) return;          // 期间又按下了 Alt ⇒ 保留
+            this.altPickBg = null;
+            this.altPickUntil = 0;
+        }, 400);
+    }
+
+    /** 读背景色的快照（rgba 三元组 + 原对象）。失败返回 null（功能静默降级）。 */
+    private static snapshotBackgroundColor(): { r: number; g: number; b: number; solid: any } | null {
+        try {
+            const c: any = (app as any).backgroundColor;
+            const rgb = c && c.rgb;
+            if (!rgb) return null;
+            return { r: rgb.red, g: rgb.green, b: rgb.blue, solid: c };
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * 0x020A：把「Alt+点击 吸到的背景色」搬到前景色，并把背景色复原。
+     *
+     * ⛔⛔ 为什么不按用户的设想「让 Alt 绕过 PS」（**已评估，技术上不可行**）：
+     *   PS 判定「Alt+点击 = 取背景色」读的是**它自己线程的键盘状态**。要让它读不到
+     *   Alt，只有两条路，两条都被否决：
+     *     ① 在 Alt 按下那一刻**吞掉**按键（LL 键盘钩子返回 1）——
+     *        铁律 40 已实测：PS 前台时我们装的低层键盘钩子**整段收不到键**
+     *        （PS 自己的键盘钩子压在链前，而钩子链顺序不可控）⇒ 会出现
+     *        「有时吞、有时不吞」，同一操作两种结果，比不吞更糟；
+     *     ② 事后伪造 `WM_SYSKEYUP` 改 PS 线程键态 —— 跨进程伪造键盘状态，
+     *        一旦 PS 的处理逻辑与预期不符，后果是**全局快捷键错乱**，
+     *        与需求里「不影响正常吸管工具和其他快捷键逻辑」直接冲突。
+     *   ⇒ 改用**确定性的事后纠正**：PS 按它自己的规则改背景色，我们在「一次取色
+     *     结束」（左键/笔松开边沿）后读回那个颜色写入前景，再把背景复原。
+     *     代价是一次模态（~50ms）+ 吸色期间背景色会短暂变化；
+     *     收益是**零键盘风险**，且失败可见（不动就什么都不改）。
+     *
+     * ⛔ 只在 `altToolHold` 期间生效 ⇒ 正常吸管工具（不按 Alt）完全不受影响。
+     */
+    private async syncAltPickColor() {
+        const bgOld = this.altPickBg;
+        if (!bgOld) return;
+        /* 只允许两种情况响应：① 此刻仍在临时吸管态；② 刚松开 Alt 的 800ms 宽限内
+           （「吸色 → 顺手松 Alt」是主流程，release 边沿的两个来源先后不定）。
+           ⛔ 没有这一层，用户回到套索后的任意一次点击都会走到下面，
+              把「当时的背景色」误搬成前景色。 */
+        const inWindow = this.altToolHold
+            || (this.altPickUntil > 0 && Date.now() <= this.altPickUntil);
+        if (!inWindow) return;
+        /* 让 PS 把「取色」处理完：它在 mouse down 时取色，但笔的 up 与 PS 的
+           内部收尾之间有几十毫秒。80ms 是实测手感与准确性的折中（不阻塞主线程）。 */
+        await new Promise<void>((r) => setTimeout(r, 80));
+        const bgNow = App.snapshotBackgroundColor();
+        if (!bgNow) return;
+        if (bgNow.r === bgOld.r && bgNow.g === bgOld.g && bgNow.b === bgOld.b) {
+            // 没有变化 = 这一次没真的取色（只点了一下 / 吸到的颜色恰好相同）⇒ 什么都不改
+            return;
+        }
+        try {
+            await runAsModal(async () => {
+                /* 前景 = 刚吸到的那个颜色（= 此刻的背景色对象）；
+                   背景 = 进吸管之前记下的原色。⛔ 两次都赋 SolidColor **对象**，
+                   不走 batchPlay —— 颜色对象是值对象，赋值不会失败，
+                   也就不存在「失败的 batchPlay 在 PS 里画一条黄条」的风险。 */
+                (app as any).foregroundColor = bgNow.solid;
+                (app as any).backgroundColor = bgOld.solid;
+            }, { commandName: '临时吸管·取前景色' });
+            console.log('[临时吸管] 取色 → 前景色已更新，背景色已复原');
+        } catch (e) {
+            console.warn('⚠️ 临时吸管：搬运取色结果失败:', e);
+        }
+    }
+
     // 自动切换为套索工具（主开关关闭→开启时）
     // 复用 HotkeyBridge.applyBrush 已验证的切工具写法：先直连 batchPlay，
     // 失败（某些 PS 版本/状态下要求模态作用域）再回退 executeAsModal。
@@ -2843,13 +3058,17 @@ class App extends React.Component<AppProps, AppState> {
         // （2026-10-12 前平滑布防也依赖本轮询，鼠标钩子通路移除后不再需要。）
         const needAutoOff = this.state.isEnabled && this.state.autoOffOnOtherTool;
         if (!needAutoOff) return;
+        // 0x0209：Alt 临时吸管期间不许「自动关」（同 maybeAutoTurnOff）。
+        // ⛔ 放在 needAutoOff 之后：不改变原本的早退顺序，只多一层闸。
+        if (this.altToolHold) return;
         // 并发守卫；上一次查询若卡在模态状态里迟迟不返回，超过 3s 就放行，避免巡检永久停摆
         if (this.toolWatchBusy && Date.now() - this.toolWatchBusySince < 3000) return;
         // ⛔ 0x0208：交互期让路（同 pollSmoothToolGate）。此处额外说明为什么「自动关」
         //    可以接受这一拍的空缺：工具切换的主通路是 PS 的 select 通知（见
         //    maybeAutoTurnOff），本巡检只是**动作回放/预设带工具**这类不派发 select 的
         //    兜底通道 ⇒ 最坏延后一拍（1s）判定，不影响「切到画笔就关」的可用性。
-        if (hostYield('工具巡检')) return;
+        // ⛔ 0x0209：同上给 900ms 上限（无限让路会让「切到涂抹就自动关」在长按期间失效）。
+        if (hostYield('工具巡检', 900)) return;
         // ⚠️ 忙碌闸门：readCurrentToolId 会发 batchPlay get（application.tool）。
         // 本轮询与用户操作完全异步，切文档期间落进忙碌窗口就会弹宿主原生报错框。
         // ⛔ 同上：进程内模态层级确定忙 ⇒ 本轮不发 get（丢一轮工具读数无副作用，
@@ -3120,6 +3339,8 @@ class App extends React.Component<AppProps, AppState> {
     // 笔刷/工具预设，就回查当前工具再判。
     private async maybeAutoTurnOff(eventName?: string, descriptor?: any) {
         if (!this.state.isEnabled || !this.state.autoOffOnOtherTool) return;
+        // 0x0209：Alt 临时吸管期间不许自动关（松开后总开关必须是「开」）。
+        if (this.altToolHold) return;
         if (eventName !== 'select' && eventName !== 'set') return;
         let tool = eventName === 'select' ? this.resolveSelectedTool(descriptor) : null;
         // ⚠️ 忙碌闸门：本函数由通知回调直接调用，而 descriptor 里带工具/笔刷预设引用时
@@ -3184,6 +3405,22 @@ class App extends React.Component<AppProps, AppState> {
         }
         // 状态探测走防抖（不能立刻 get：PS 命令执行中途派发的事件会撞忙碌窗口）
         this.maskProbeDebounced();
+
+        // ===== 0x0209：工具变化事件 ⇒ **立刻**喂平滑闸门（快通路，修 BUG1）=====
+        // ⛔ 为什么置在自动关之前：这是「切走套索后引擎还继续平滑/HUD 还在」的最短修复路径。
+        //    轮询最坏要 1s 才纠正，而 PS 切工具会派发 select 通知 —— 事件驱动能把窗口
+        //    压到一个通知周期（毫秒级）。只喂「能解析出工具名」的事件：
+        //    笔刷预设这类解析不出工具的（工具是被预设间接带过去的）一律交回 1s 巡检，
+        //    绝不猜（喂错值等于把闸门钉在错的工具上）。
+        try {
+            if (eventName === 'select' && this.state.smoothStatus.connected && this.state.smoothStatus.pen.enabled) {
+                const t = this.resolveSelectedTool(descriptor);
+                if (t) {
+                    this.lastKnownTool = t;      // 与巡检共享基准，避免同一件事被判两次
+                    this.applyToolGate(t);
+                }
+            }
+        } catch { /* 单次解析失败不影响主流程，轮询兜底 */ }
 
         // 主开关处于开启状态，且开启了「切到其它工具即关」选项时，
         // 若本次事件确实把工具切到了画笔/铅笔/橡皮等其它工具，则自动关闭主开关。

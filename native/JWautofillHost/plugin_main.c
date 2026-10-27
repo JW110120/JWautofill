@@ -81,10 +81,11 @@ const char* jw_log_dir(void);
 #define CFG_NAME_W   L"Local\\JWautofillWintabSmooth"
 #define CFG_MAGIC    0x57414A57L      /* 'JWAW' */
 /* ⛔ 2026-10-17：48 → 56（新增 4 个进程内观测槽，见下面 I_MODALLVL 起的注释）；
-   56 → 58（0x0115 新增 I_NOTIFYAGE / I_GATEOWNED，见下面注释）。
+   56 → 58（0x0115 新增 I_NOTIFYAGE / I_GATEOWNED，见下面注释）；
+   58 → 59（0x020A 新增 I_ALTTOOL：Alt 临时吸管的硬否决位）。
    两个文件（plugin_main.c / smooth_engine.c）的 CFG_NLONGS **必须同时改**：
    谁先建节谁定尺寸，不一致的一方 MapViewOfFile 会拿到错误的字节数。 */
-#define CFG_NLONGS   58
+#define CFG_NLONGS   59
 
 enum {
     I_MAGIC = 0, I_ENABLED, I_STRENGTH, I_FLAGS, I_SEQ, I_CMDSEQ, I_CMD, I_CMDACK,
@@ -105,8 +106,16 @@ enum {
     I_GATEOWNED,      /* 此刻闸门是否**真的**由进程内供给（1/0）—— 面板唯一判据。
                          ⛔ 面板绝不自己拿 notifyAge 去比阈值：阈值在原生侧，
                             两边各算一份迟早不同步 ⇒ 由这里下发**结论**。 */
+    /* ---- 0x020A：Alt 临时吸管的硬否决位 ---- */
+    I_ALTTOOL,        /* 1 = 面板明示「此刻是 Alt 临时吸管」⇒ 引擎不改写、不出 HUD。
+                         ⛔ 为什么不能复用 I_TOOLGATE：`write_params()` 在
+                            `pstool_owns()` 为真时**不写** TOOLGATE（由 'slct' 独占），
+                            面板的 0 会被静默丢弃 ⇒ 吸管态仍按套索放行
+                            （用户报：吸管按笔吸色时冒出 HUD、取色点被拉绳偏移）。
+                         ⛔ 三处兜底清 0：Alt 物理松开（keyhook）、面板不在位
+                            （plug_revoke）、服务停止（services_stop）。 */
 };
-typedef char cfg_fit_check[(I_GATEOWNED < CFG_NLONGS) ? 1 : -1];
+typedef char cfg_fit_check[(I_ALTTOOL < CFG_NLONGS) ? 1 : -1];
 
 static volatile LONG* g_cfg   = NULL;
 static HANDLE         g_cfgMap = NULL;
@@ -493,12 +502,36 @@ static int plug_present(void) { return g_plugOn ? 1 : 0; }
       留着它，面板一回来就是「enabled=1 + 新鲜的旧 gate」⇒ 画笔也被平滑。
       置 2 是 fail-closed（引擎阻断），等 ps_tool 的下一次通知或面板轮询给出真值。
       ⛔ 不置 0：那是「我确认当前不是套索」的断言，我们并没有这个证据。 */
+/* ============================================================ 0x020A：临时吸管否决位
+ *
+ * 需求（用户）：专注模式下、当前工具是套索、总开关开着时按住 Alt ⇒ 临时切吸管取样，
+ *   松开回套索。自测报出两条：
+ *     ① 「Alt 临时切换为吸管后，按下吸色时会错误地触发 HUD 显示」；
+ *     ② 「按 Alt 临时切换为吸管后按左键吸色，PS 把它识别成 Alt+左键 ⇒ 改的是背景色」。
+ *   ① 的原因是「面板写的 toolGate=0 被 write_params 丢掉」（pstool_owns 时闸门由
+ *   'slct' 独占），所以这里开一个**独立槽**，不受任何让位规则影响。
+ *   ② 的结论：**无法**让 Alt 绕过 PS（详见 app.tsx `syncAltPickColor` 的根因段），
+ *   改用「事后把背景色搬到前景色」。
+ *
+ * ⛔ 三处清 0 是硬要求：这个位是引擎的**硬否决**（不看心跳、不看闩锁）——
+ *   一旦残留 1，套索平滑会整段失效，而界面上看不出任何原因。 */
+void srv_alt_tool_clear(const char* why)
+{
+    if (!g_cfg) return;
+    if (Rd(I_ALTTOOL) == 0) return;
+    Wr(I_ALTTOOL, 0);
+    log_line("alt", "临时吸管：清否决位（%s）", why ? why : "?");
+}
+
 static void plug_revoke(void)
 {
     log_line("main", "位闸：面板本体不在位 ⇒ 收回平滑开关（enabled 0，detour 保留待复机）");
     InterlockedExchange(&g_enabled, 0);
     Wr(I_ENABLED, 0);
     Wr(I_TOOLGATE, 2);          /* 未知：在位期间的工具变化没人记过账 */
+    /* 0x020A：面板不在位 ⇒ 它再也发不出「退出吸管」这一帧了，必须在这里收掉。
+       否则用户在一次 Alt 取样中 reload 面板 ⇒ 否决位永远留着 ⇒ 套索平滑整段失效。 */
+    srv_alt_tool_clear("面板不在位");
 }
 
 /* 每拍调用（pump 500ms + 建连时）。haveCli = 此刻客户端表非空。 */
@@ -830,9 +863,23 @@ static void handle_message(const char* js)
         broadcast_smooth_state();
         return;
     }
+    /* 0x020A：Alt 临时吸管开关（面板 → 引擎的**硬否决位**）。
+       ⛔ 用 json_num 判非零，不用 json_bool —— 后者只认 true/false，
+          数字 1 会**静默失败**（既有铁律：严格类型助手）。
+       ⛔ 不走 g_pen / write_params：这一位与 penSmooth 整包无耦合，
+          面板也不该在每秒 1.5 次的心跳里反复携带它。 */
+    if (_stricmp(type, "altTool") == 0) {
+        double v = 0;
+        int on = 0;
+        if (json_num(js, "on", &v)) on = (v != 0.0) ? 1 : 0;
+        LONG prev = Rd(I_ALTTOOL);
+        Wr(I_ALTTOOL, on);
+        if (prev != on)
+            log_line("alt", "临时吸管：否决位 %ld → %d（引擎停改写/停 HUD）", (long)prev, on);
+        return;
+    }
     if (_stricmp(type, "penSmooth") == 0) {
-        double v; int b;
-        if (json_num(js, "mode", &v))         g_pen.mode        = clampi(roundi(v), 0, 2);
+        double v; int b;        if (json_num(js, "mode", &v))         g_pen.mode        = clampi(roundi(v), 0, 2);
         if (json_num(js, "strength", &v))     g_pen.strength    = clampi(roundi(v), 0, 100);
         if (json_num(js, "radius", &v))       g_pen.radiusPx    = clampi(roundi(v), 1, 100);
         if (json_num(js, "catchUp", &v))      g_pen.catchUp     = clampi(roundi(v), 0, 100);
@@ -1220,6 +1267,9 @@ static void services_start(void)
             Wr(I_TOOLGATE, g_pen.toolGate);
         }
         Wr(I_ENABLED, 0);                       /* 0x0207：无条件清（Reload 也要清） */
+        /* 0x020A：同理，临时吸管的硬否决位必须从「无」起步。
+           ⛔ 漏了它，.8li Reload 会把上一轮的 1 继承下来 ⇒ 面板还没连上就整段不平滑。 */
+        Wr(I_ALTTOOL, 0);
         Wr(I_HEARTBEAT, (LONG)GetTickCount());
         Wr(I_GATETS, (LONG)GetTickCount());
     }
@@ -1435,7 +1485,17 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
 /* 0x0208：宿主交互态（左键/空格）边沿推送 + 视图导航否决 + HUD 空闲退避。
    面板据 hostBusy 在拖拽/缩放期间让巡检让路；引擎在空格按着时绝不改写坐标。
    见 keyhook.c 调度线程的「0x0208」段、smooth_engine.c 的 view_nav_down()。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x0208; }
+/* 0x0209：① 工具闸门拆「事实 / 没来得及报」（切工具立刻停，心跳抖动不打断一笔）；
+   ② 光标路径抖动不透传（停笔不再画直线）；
+   ③ 新增 Alt 边沿推送 `altHold`（专注模式下的临时吸管：按住吸管、松开回套索）。
+   见 smooth_engine.c 的 tool_gate_sure_not_lasso / GP_HOLD_MS、keyhook.c 的 0x0209 段。 */
+/* 0x020A：① 新增 `I_ALTTOOL`（Alt 临时吸管的**硬否决位**，独立槽、不受 gateOwned 让位）：
+   面板按下 Alt 时置 1 ⇒ 引擎立刻停改写/停 HUD；Alt 物理松开 / 面板不在位 /
+   服务重启 三处清 0。根因：面板写 toolGate=0 会被 `write_params` 丢弃
+   （pstool_owns 时由 'slct' 独占），于是吸管按笔吸色时 HUD 冒出来、取色点被拉绳偏移。
+   ② 入站新增 `{"type":"altTool","on":0|1}`。
+   见 keyhook.c 的 Alt 边沿块、smooth_engine.c 的 tool_edit_allowed / gateOk。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x020A; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {

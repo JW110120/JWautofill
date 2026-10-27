@@ -415,6 +415,69 @@ export async function requestRepairKeyboard(): Promise<string> {
 }
 
 // 订阅热键触发事件（无论成败都会回调，ok=false 表示执行 batchPlay 失败）
+// ===================== 0x0209：Alt 边沿总线（专注模式下的「临时吸管」） =====================
+//
+// 需求（用户）：**仅当** ①专注模式 ②当前工具是套索 ③总开关开着 时，按住 Alt 临时切到
+// 吸管工具取样；松开自动切回套索，且总开关必须保持「开」。
+//
+// 分工：
+//   · .8li（`keyhook.c`）只负责把「Alt 的键态电平」按**边沿**推上来（它才看得见全局键态，
+//     UXP 面板在停靠面板里完全拿不到宿主前台的键盘状态）；
+//   · 三个条件的判定、以及切工具/保总开关，全部在 `app.tsx` 的订阅方做 ——
+//     那里才有 `isFocusMode()` / `state.isEnabled` / `lastKnownTool`。
+//
+// ⛔ 为什么电平要去重（`altHeld === on` 直接返回）：原生侧按住 Alt 时每 2s 会发一帧保活
+//    （防丢帧/重连），若不去重，用户按住 3 秒就会反复触发两次「切吸管」。
+const altHoldListeners: ((on: boolean) => void)[] = [];
+let altHeld = false;
+
+/** 订阅 Alt 按下/松开边沿（去重后的真正边沿）。返回取消订阅函数。 */
+export function onAltHold(fn: (on: boolean) => void): () => void {
+  altHoldListeners.push(fn);
+  return () => { const i = altHoldListeners.indexOf(fn); if (i >= 0) altHoldListeners.splice(i, 1); };
+}
+
+/** 当前 Alt 是否按着（诊断/调试用）。 */
+export function isAltHeld(): boolean { return altHeld; }
+
+function emitAltHold(on: boolean) {
+  if (altHeld === on) return;          // 边沿去重（原生有 2s 保活帧）
+  altHeld = on;
+  for (const l of altHoldListeners) { try { l(on); } catch { /* ignore */ } }
+}
+
+/**
+ * 切到指定工具（0x0209 从 app.tsx 的同名实现泛化而来，`_ref` 换成目标工具）。
+ *
+ * 写法与 `selectLassoTool` 逐字一致：先直连 batchPlay，失败（某些 PS 版本/状态下
+ * 要求模态作用域）再回退 `runAsModal`。
+ * ⛔ 不抛错：临时吸管是「按下就做」的交互，失败最多是工具没切过去，
+ *    绝不能因为一次 batchPlay 报错在控制台刷屏或打断用户。
+ */
+export async function selectToolByRef(ref: 'lassoTool' | 'eyedropperTool'): Promise<boolean> {
+  const descriptor: any = {
+    _obj: 'select',
+    _target: [{ _ref: ref }],
+    dontRecord: true,
+    forceNotify: true,
+    _isCommand: false
+  };
+  try {
+    await action.batchPlay([descriptor], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
+    return true;
+  } catch {
+    try {
+      await runAsModal(async () => {
+        await action.batchPlay([descriptor], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
+      }, { commandName: '切换工具' });
+      return true;
+    } catch (e) {
+      console.warn('⚠️ 切换工具失败（' + ref + '）:', e);
+      return false;
+    }
+  }
+}
+
 export function onHotkeyTriggered(fn: (info: { combo: string; action: string; brush?: string; ok: boolean; enabled?: boolean }) => void): () => void {
   hotkeyListeners.push(fn);
   return () => { const i = hotkeyListeners.indexOf(fn); if (i >= 0) hotkeyListeners.splice(i, 1); };
@@ -535,6 +598,11 @@ export function connectHotkeyDaemon(): () => void {
           // 不参与热键逻辑；详见 utils/hostInteraction.ts 的根因说明。
           else if (msg?.type === 'hostBusy') {
             noteHostBusy(msg.v === true || msg.v === 1);
+          }
+          // 0x0209：Alt 边沿（专注模式下的临时吸管）。同样只做「电平转事件」，
+          // 判定（专注模式 + 套索 + 总开关开）由 app.tsx 的订阅方负责。
+          else if (msg?.type === 'altHold') {
+            emitAltHold(msg.v === true || msg.v === 1);
           } else if (msg?.type === 'config') {
             const raw: any[] = Array.isArray(msg.payload) ? msg.payload : [];
             cachedConfig = raw.map(normalizeEntry).filter((x): x is HotkeyEntry => !!x);

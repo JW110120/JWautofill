@@ -132,10 +132,11 @@ typedef struct { int axMin; int axMax; u32 axUnits; u32 axResolution; } AXIS_T;
 #define CFG_NAME      L"Local\\JWautofillWintabSmooth"
 #define CFG_MAGIC     0x57414A57L      /* 'JWAW' */
 /* ⛔ 2026-10-17：48 → 56（plugin_main.c 新增 I_MODALLVL..I_DOCEPOCH 四个槽）；
-   56 → 58（0x0115 新增 I_NOTIFYAGE / I_GATEOWNED）。
+   56 → 58（0x0115 新增 I_NOTIFYAGE / I_GATEOWNED）；
+   58 → 59（0x020A 新增 I_ALTTOOL：临时吸管的硬否决位）。
    两个文件的 CFG_NLONGS **必须同步**：谁先建节谁定尺寸，不一致的一方会
    MapViewOfFile 到错误的字节数（不报错，只静默截断 —— 既有铁律区）。 */
-#define CFG_NLONGS    58
+#define CFG_NLONGS    59
 
 enum {
     CFG_I_MAGIC = 0,
@@ -227,6 +228,17 @@ enum {
           列在这里只为槽位表与 plugin_main.c 逐项对齐 —— 错位不报错、只静默失效。 */
     CFG_I_NOTIFYAGE,      /* 距上次 'slct' 回调的 ms（-1=从未投递） */
     CFG_I_GATEOWNED,      /* 此刻闸门是否**真的**由进程内供给（1/0）—— 面板唯一判据 */
+    /* ---- 0x020A：临时吸管（Alt）硬否决位 ----
+       ⛔ 为什么必须是一个**独立槽**、而不是借用 CFG_I_TOOLGATE：
+          `write_params()` 在 `pstool_owns()` 为真时**一个字节都不写** TOOLGATE
+          （由 ps_tool.c 的 'slct' 回调独占写），所以面板在吸管态下发 toolGate=0
+          会被静默丢弃 ⇒ 引擎仍按套索放行 ⇒ HUD 显示、坐标被拉绳改写
+          （用户报的两条：吸管态冒出 HUD、取色点被偏移）。
+       ⛔ 语义刻意单一：1 = **立即否决一切改写与 HUD**，不看闩锁、不看心跳、
+          不看 gateOwned。只由「面板进入临时吸管」置 1；由「Alt 物理松开 /
+          面板退出吸管 / 服务停止」置 0（三处收口，见 plugin_main.c 的
+          srv_alt_tool_clear）。 */
+    CFG_I_ALTTOOL,        /* 1 = 正处于「Alt 临时吸管」态（硬否决） */
 };
 
 /* 受阻原因码（CFG_I_REASON 的值域；面板诊断条按它逐条说人话）。 */
@@ -245,6 +257,9 @@ enum {
     RS_CTXGONE,           /* 0x0133：PS **关掉了自己的 Wintab 上下文**且没有重开
                             （jwwh-36236 19:39:22 WTClose 之后 0 包到结束）。
                             此时我们没有任何包可改写，唯一出路是让 PS 重建上下文。 */
+    RS_ALTTOOL,           /* 0x020A：Alt 临时吸管态 —— 面板明示「此刻是吸管」，
+                            引擎硬否决（不改写、不出 HUD）。⚠️ 这不是故障：
+                            用户在取样，本来就不该有套索平滑的任何表现。 */
 };
 
 /* 原因码 → 短名（只给日志用；面板侧有自己的人话文案表，两者都按上面这行顺序写）。 */
@@ -261,6 +276,7 @@ static const char* rs_name(LONG r)
         case RS_NOCAL:       return "未标定";
         case RS_NOCTX:       return "无上下文";
         case RS_CTXGONE:     return "PS上下文已关闭";
+        case RS_ALTTOOL:     return "临时吸管";
         default:             return "?";
     }
 }
@@ -268,7 +284,7 @@ static const char* rs_name(LONG r)
 /* ⛔⛔ 这张槽位表是 C 与 C#（Program.cs 的 PenHook）**两处手写**的，错位不会报错、
    只会让参数静默失效（实测过的坑）。所以：① 用编译期断言守住「槽数不超映射」；
    ② 任何一侧增删槽，另一侧必须同步，且 C# 的 EnsureInit 里有运行时兜底校验。 */
-typedef char cfg_slot_fit_check[(CFG_NLONGS >= CFG_I_GATEOWNED + 1) ? 1 : -1];
+typedef char cfg_slot_fit_check[(CFG_NLONGS >= CFG_I_ALTTOOL + 1) ? 1 : -1];
 
 static volatile LONG* g_cfg    = NULL;
 static HANDLE         g_cfgMap = NULL;
@@ -840,6 +856,64 @@ static volatile LONG g_strokeGate = -1;
 static int view_nav_down(void)
 {
     return (GetAsyncKeyState(VK_SPACE) & 0x8000) ? 1 : 0;
+}
+
+/* ============================== 0x0209：工具闸门的「事实」与「没来得及报」 ======
+ *
+ * 为什么要把这两件事分开（用户报的两个连锁 BUG，根因同一条）：
+ *   BUG1「切到涂抹工具、长按涂抹，HUD 仍错误显示」
+ *   BUG2「切回套索画选区，前半段正常、中途失效；停笔时 PS 自己画一条
+ *         从选区末端到笔尖的直线，圆心与受力点不再重合」
+ *
+ * 现场链条（代码级，不是体感推断）：
+ *   ① `pollSmoothToolGate` 在 0x0208 被加了 `hostYield()` 让路，而让路判据是
+ *      「左键 ∨ 空格」。用户**长按笔涂抹**时左键电平一直为真（Wintab 落笔会模拟
+ *      左键）⇒ 工具巡检被无限期跳过 ⇒ `CFG_I_TOOLGATE` 永远停在切走前的 1。
+ *   ② 引擎的起笔闩锁写的是 `if (contactPrev && latched == 1) useGate = ENABLED;`
+ *      —— **整笔持有上一笔的工具裁决**，一笔之中根本不看工具。于是涂抹被当成
+ *      套索：坐标继续被拉绳改写、`g_toolOk=1` ⇒ HUD 继续显示（BUG1 成立）。
+ *   ③ 同一段时间里 `GATETS` 也在变老。面板一停报，`tool_gate_ok()` 在 3s 后返回 0。
+ *      而短闩 `g_contact` 只要抖一次（轻压运笔中成段全零是已知现象），条件
+ *      `contactPrev && latched==1` 就整体失效 ⇒ 走 else ⇒ `tool_gate_ok()=0`
+ *      ⇒ **整批原样透传** ⇒ PS 收到真实笔尖坐标 ⇒ 从圆心拉一条直线到笔尖
+ *      ⇒ 之后锚定复位、平滑从头再来（BUG2 成立）。
+ *
+ * ⇒ 判据必须拆成两类：
+ *   · `TOOLGATE == 0` 且心跳**新鲜** = 面板刚读过 `application.tool`，这是**事实**
+ *     ⇒ 立即否决（无论闩锁、无论是不是一笔之中）。切工具必须立刻停。
+ *   · 心跳**过期** = 只说明面板这一拍没来得及报，**不能当工具变了**
+ *     ⇒ 不否决（沿用手头结论），否则一笔之中会规律性地被劈成两半、每 3s 画一根直线。
+ *
+ * ⛔ 代价：一次共享内存读 + 一次 GetTickCount（KUSER_SHARED_DATA）——
+ *    与 `tool_gate_ok()` 同族，detour 里安全。 */
+static int tool_gate_sure_not_lasso(void)
+{
+    if (!g_cfg) return 0;
+    DWORD ts = (DWORD)g_cfg[CFG_I_GATETS];
+    if (ts == 0) return 0;                                        /* 从未上报 ⇒ 不知道 */
+    if ((DWORD)(GetTickCount() - ts) > GATE_STALE_MS) return 0;    /* 只是没来得及报 */
+    return g_cfg[CFG_I_TOOLGATE] == 0 ? 1 : 0;                     /* 事实：不是套索 */
+}
+
+/* 现在该不该改写坐标（只回答「工具维度」）。
+ *   顺序：总开关 → 「事实」否决 → 一笔之中的闩锁 → 现判心跳。
+ * ⛔ 包路径与光标路径**必须**共用这一个函数：两条路各判一次 = 漂移一次就分叉，
+ *    现象正是「HUD 圆心还在画、PS 的选区末端已经跑到笔尖去了」。 */
+static int tool_edit_allowed(void)
+{
+    if (!g_cfg || !g_cfg[CFG_I_ENABLED]) return 0;
+    /* ⛔⛔ 0x020A：Alt 临时吸管 = **硬否决**，放在所有推理之前。
+       用户报的两条都由这一个位收口：
+         ① 吸管态下按笔吸色时 HUD 冒出来 —— 因为切到吸管后 TOOLGATE 由 'slct'
+            回调独占写、面板写的 0 被 `write_params` 丢弃，引擎仍按套索放行；
+         ② 吸管取色点被拉绳偏移 —— 同一条放行，坐标还在被改写。
+       ⛔ 刻意**不**并入 `tool_gate_sure_not_lasso()`：那一个的语义是「面板刚读到
+          工具、事实是非套索」，而这里是「面板明示此刻在取样」——两者来源不同，
+          混在一起会让『心跳过期』的分支逻辑被误伤。 */
+    if (g_cfg[CFG_I_ALTTOOL]) return 0;
+    if (tool_gate_sure_not_lasso()) return 0;
+    if (g_strokeGate == 1) return 1;      /* 一笔之中：心跳抖动不打断（见上方长注释） */
+    return tool_gate_ok();
 }
 
 /* ================================================================== 标定状态 */
@@ -2494,7 +2568,7 @@ static int canvas_hit_ok(POINT cur);
 static volatile LONG g_gcpCalls, g_gcpRw, g_gmpCalls;
 /* 0x0137/0x0138：光标路径推进器计数（[raw] 行要用，故前置）。
    arms = 贴合（起笔重锚）次数；steps = 被绳拖动的次数 —— 断流期与正常期都该涨。 */
-static volatile LONG g_gpArms, g_gpSteps;
+static volatile LONG g_gpArms, g_gpSteps, g_gpRej;
 /* 0x0136：Windows Ink 探针计数（[raw]/[ink] 行要用，故同样前置；实现在 LHOOK 段）。
    hits=命中笔设备的轮次 contact=其中笔尖接触 contactNow=当前是否接触 (x,y)=Ink 屏幕坐标 */
 static volatile LONG g_inkHits, g_inkContact, g_inkContactNow, g_inkX, g_inkY;
@@ -3194,7 +3268,7 @@ static void penraw_report(int win)
              "解析失败=%ld 全部WM_INPUT=%ld(键盘=%ld) "
              "源=%s 最近=%ldms 采样范围 x=%ld..%ld y=%ld..%ld p=0..%ld 现值=(%ld,%ld,p=%ld,tip=%ld,in=%ld) "
              "btn=%ld/on=%ld mse=%ld/arm=%ld/rel=%ld 补发=%ld/frz=%ld "
-             "gcp=%ld/rw=%ld/a=%ld gp=%ld/%ld gmp=%ld ink=%ld/ct=%ld/now=%ld=(%ld,%ld) "
+             "gcp=%ld/rw=%ld/a=%ld gp=%ld/%ld/rej=%ld gmp=%ld ink=%ld/ct=%ld/now=%ld=(%ld,%ld) "
              "| 拟合=%s 配对=%d 保留=%d rms=%.2f/%.2f 跨度=%d/%d a=%.6f/%.6f b=%.0f/%.0f "
              "| 解析=%s(%d对 核对%d 残差%.1f/%.1f) "
              "| 补流=%ld次/%ld包 丢冲包=%ld(末次%ld) "
@@ -3221,7 +3295,7 @@ static void penraw_report(int win)
              (long)g_gcpCalls, (long)g_gcpRw, (long)g_gcpArmed,
              /* 0x0138：gp = 光标路径的 贴合次数 / 拖动步数。判据 ——
                 **画线时这几项必须一直在涨**；只在断流期涨 = 还在走 0x0137 的老门闩。 */
-             (long)g_gpArms, (long)g_gpSteps, (long)g_gmpCalls,
+             (long)g_gpArms, (long)g_gpSteps, (long)g_gpRej, (long)g_gmpCalls,
              /* 0x0136：ink = 本拍之前 Windows Ink 探针命中笔的轮次；ct = 其中接触；
                 now = 当前是否接触；后面是 Ink 报的屏幕坐标（⚠️ 与 Wintab 包无关，独立源）。 */
              (long)g_inkHits, (long)g_inkContact, (long)g_inkContactNow,
@@ -3370,6 +3444,17 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
     }
     if (!g_calib.valid || g_calib.offX < 0 || g_calib.offY < 0) {
         InterlockedExchange(&g_reason, RS_NOCAL);
+        /* ⛔⛔ 0x020A：**不裁决就必须显式归零门变量**（旧版只写 reason 就 return）。
+           根因：HUD 读的是 g_penDown / g_toolOk / g_strokeGate，它们会**冻结**在
+           失效前的 1 上；而 HUD 的 activeNow 只看「包新不新鲜」（pktAge<250）——
+           于是包流一恢复的头几帧，HUD 就拿**陈旧几何**画一圈。
+           用户报的「填充完选区后挪动光标，HUD 意外短暂闪现」有一条通路正落在这里：
+           自动填充/换文档会让 PS 重建 Wintab 上下文 ⇒ 触发重标定窗口 ⇒ 冻结。
+           归零的语义也正确：此刻我们根本没在改写，HUD 本来就不该显示。 */
+        InterlockedExchange(&g_strokeGate, -1);
+        InterlockedExchange(&g_penDown, 0);
+        InterlockedExchange(&g_toolOk, 0);
+        gate_set(0);
         return 0;
     }
 
@@ -3408,15 +3493,18 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
      *    g_snOutX/g_snMs，闸门一关就不再更新的话，标定会永远停在初值
      *    （这正是「关掉提示就再也不标定」那个旧 bug 的同构版本）。
      *    快照刷新是普通内存写，且**不改写缓冲区一个字节** ⇒ 迟滞感为零。 */
+    /* 0x0209：判据收口到 `tool_edit_allowed()`（工具维度的唯一答案）。
+       ⛔ 旧写法是 `if (contactPrev && latched == 1) useGate = ENABLED;`
+          —— **整笔持有上一笔的工具裁决**，一笔之中完全不看工具。用户长按笔涂抹时
+          左键电平一直为真、面板巡检又被让路挡住 ⇒ 闸门停在切走前的 1 ⇒ 涂抹被当成
+          套索一直平滑、HUD 一直显示（BUG1）。现在：
+            · 面板**明确报 0**（心跳新鲜）⇒ 立即否决，闩锁也压不住；
+            · 心跳**过期** ⇒ 沿用手头结论，不在笔中劈开（否则每 3s 从圆心拉一根直线，BUG2）。
+       ⛔ `contactPrev` / `latched` 仍留着只为落盘诊断，不再参与裁决。 */
     LONG contactPrev = g_contact;
     LONG latched = g_strokeGate;
-    int useGate;
-    if (contactPrev && latched == 1) {
-        useGate = g_cfg[CFG_I_ENABLED] ? 1 : 0;            /* 整笔持有工具裁决 */
-    } else {
-        /* 悬空 / 闩锁缺失（上一批被总开关或复位打断）⇒ 现判一次 */
-        useGate = (tool_gate_ok() && g_cfg[CFG_I_ENABLED]) ? 1 : 0;
-    }
+    (void)contactPrev; (void)latched;
+    int useGate = tool_edit_allowed() ? 1 : 0;
     /* 0x0208：视图导航（空格/抓手/Ctrl+空格缩放）期间整批原样透传。
        ⛔ 判据放在 useGate 之后、改写之前：不改写、但仍刷新快照与接触判据
           （HUD 与标定都靠它们，且都是普通内存写，迟滞为零）。*/
@@ -3435,6 +3523,7 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
            先看总开关，再看工具闸门。tool_gate_reason() 与 tool_gate_ok() 同源，
            所以这里报出的原因与上面的裁决**必然一致**。 */
         if (!g_cfg[CFG_I_ENABLED]) InterlockedExchange(&g_reason, RS_OFF);
+        else if (g_cfg[CFG_I_ALTTOOL]) InterlockedExchange(&g_reason, RS_ALTTOOL);
         else if (!tg)              InterlockedExchange(&g_reason, (LONG)tool_gate_reason());
         else                       InterlockedExchange(&g_reason, RS_OFF);   /* 防御：理论到不了 */
         snapshot_only((u8*)buf, S, n, ox_, oy_);
@@ -4297,6 +4386,18 @@ static int   s_gpOn;                    /* 1 = 推进中 */
 static int   s_gpBtn;                   /* 上一拍看到的「笔按着」态（0→1 边沿 = 新的一笔） */
 static double s_gpX, s_gpY;             /* 平滑点（物理屏幕像素） */
 static DWORD s_gpLast;
+static DWORD s_gpSeen;                  /* 0x0209：最后一次**确实收到「手按着」证据**的时刻 */
+
+/* 0x0209：手松开后继续「钉住」输出点的时长。
+ * ⛔ 为什么必须有（用户报的 BUG2）：本函数的 armed 判据由三路证据并集而成
+ *    （按钮镜像 / VK_LBUTTON / 包证据），而这三路**都会抖**：轻压运笔中包证据
+ *    成段全零是已知现象（0x0124 就是为它加的 1500ms 长闩），按钮边沿也可能漏采。
+ *    旧写法 `if (!armed) return ok;` 在抖动的**那一拍**把真实坐标透传给 PS ⇒
+ *    PS 立刻从平滑输出点（用户说的「圆心」）拉一条直线到真实笔尖（「施力点」），
+ *    选区末端就此跑到笔尖上，平滑看起来「中途失效」。
+ *    ⇒ 抖动窗口内继续返回平滑点（PS 认为笔停住了），只有连续 700ms 没有任何
+ *      「按着」的证据才认定真的抬笔、恢复透传。700ms 覆盖实测 400~600ms 的零段。 */
+#define GP_HOLD_MS 700
 
 static void gp_step(int rx, int ry, DWORD now, int edge)
 {
@@ -4324,8 +4425,13 @@ static void gp_step(int rx, int ry, DWORD now, int edge)
     double d  = dsqrt_(dx * dx + dy * dy);
     /* 拉绳语义与包路径逐字相同：绳没绷紧（d ≤ 绳长）输出点一像素都不动；
        绷紧则被拖到恰好「绳长」处（f = 1 − 绳长/d，位移 = d − 绳长）。
-       ⛔ 大跳跃（>4 倍绳长）判为「另起一处」：直接贴合，别让绳把两点连成一条直线。 */
-    if (d > rope * 4.0) { s_gpX = (double)rx; s_gpY = (double)ry; return; }
+       ⛔⛔ 0x0209：大跳跃**不再「直接贴合」**。旧写法把输出点一步搬到笔尖，
+          那一拍的返回值就是一个 200px 的瞬移 —— 包路径那边 PS 会把它画成一条直线，
+          光标路径这边则让 scrubby/选区末端瞬间跳到「施力点」。
+          正确做法照 LNP 的 `bigJumpSqDist`：**本拍不推进**（PS 认为笔停住），
+          下一拍继续按绳长追 ⇒ 用户看到的是一条追上去的曲线。
+          真「抬笔在别处落下」不会走到这里 —— 那条路由 `edge` 直接贴合。 */
+    if (d > rope * 4.0) { InterlockedIncrement(&g_gpRej); return; }
     if (d > rope && d > 0.0001) {
         double f = 1.0 - rope / d;
         s_gpX += dx * f; s_gpY += dy * f;
@@ -4359,14 +4465,19 @@ static u64 det_GetCursorPos(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
         if (!btn && (GetAsyncKeyState(VK_LBUTTON) & 0x8000)) btn = 1;
     }
     int stroke = btn || (g_penDown != 0) || ((LONG)g_mseTip != 0);
+    /* 0x0209：手松开后先「钉住」输出点，不立刻透传（根因见 GP_HOLD_MS 处长注释）。 */
+    int hold = (s_gpOn && (DWORD)(nowT - s_gpSeen) <= GP_HOLD_MS) ? 1 : 0;
     int armed = 0;
     /* ⛔⛔ 0x013D：**工具闸门必须参与光标路径**。
        0x0138 撤掉的是「断流才接管」那道门闩（包流健康 ≠ PS 在用包画），
        **不是**工具闸门 —— 本路径当时只判 enabled+按笔，于是铅笔/橡皮/画笔下
        系统光标仍在被拉绳推着走，用户感知就是「平滑作用到了别的工具」。
-       判据与包路径同源：tool_gate_ok()（工具必须是套索 且 闸门心跳未过期）。 */
-    if (g_wtctxIni[WTCTX_INI_CURSORINJECT] && g_cfg && g_cfg[CFG_I_ENABLED] &&
-        stroke && tool_gate_ok())
+       ⛔ 0x0209：判据换成与包路径**同一个** `tool_edit_allowed()`。
+          旧写法这里调 `tool_gate_ok()`，于是面板心跳一过期（3s）光标路径就停止改写，
+          而包路径还靠闩锁继续 —— 两条路各判一次，漂移一次就分叉：
+          HUD（包路径快照）还在圆心，PS 的选区末端（光标路径）已经跳到笔尖。
+          「圆心与受力点不再重合」就是这么来的。 */
+    if (g_wtctxIni[WTCTX_INI_CURSORINJECT] && (stroke || hold) && tool_edit_allowed())
         armed = 1;
     /* 0x0208：视图导航（空格 = 抓手，Ctrl+空格 = 缩放）期间绝不改写返回值。
        ⛔ 这条比工具闸门更靠前地被触发：缩放期间 PS 不切工具（仍是套索 ⇒ 闸门绿），
@@ -4377,6 +4488,22 @@ static u64 det_GetCursorPos(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
     if (armed && view_nav_down()) armed = 0;
     InterlockedExchange(&g_gcpArmed, armed);
     if (!armed) { s_gpOn = 0; s_gpBtn = 0; return (u64)ok; }
+
+    /* 0x0209：已武装但这一拍**没有**「手按着」的证据 ⇒ 钉住输出点。
+       ⛔ 既不推进（不跟着已经抬起的手跑），也不透传（不让 PS 看到真实坐标）。
+          这一分支就是「停笔后 PS 自己画一条从圆心到笔尖的直线」的封堵点。
+       ⛔ `s_gpBtn` 归零：手已松开 ⇒ 下一次按着的瞬间必须算新一笔的边沿。 */
+    if (!stroke) {
+        s_gpBtn = 0;
+        if (!s_gpOn) return (u64)ok;                 /* 还没真正起过笔 ⇒ 透传 */
+        LONG nx0 = (LONG)(s_gpX >= 0 ? s_gpX + 0.5 : s_gpX - 0.5);
+        LONG ny0 = (LONG)(s_gpY >= 0 ? s_gpY + 0.5 : s_gpY - 0.5);
+        if (nx0 == p->x && ny0 == p->y) return (u64)ok;
+        p->x = nx0; p->y = ny0;
+        InterlockedIncrement(&g_gcpRw);
+        return (u64)ok;
+    }
+    s_gpSeen = nowT;                                  /* 只有「按着」的证据才能续期 */
 
     /* 0→1 边沿 = 新的一笔 ⇒ 输出点贴合笔尖（LNP 分支 A 的「初始化笔画」）。 */
     int edge = !s_gpBtn;
@@ -5803,9 +5930,14 @@ static DWORD WINAPI worker(LPVOID param)
             /* P3.5：与面板诊断条**同一份数据**的日志版 —— 面板来不及看时看这里。
                ⛔ reason 名字必须与 C#/TS 的原因码表逐项一致（见 RS_* 枚举）。 */
             logf("# [why] reason=%d(%s) gate/open=%ld close=%ld penDown=%ld toolOk=%ld "
+                 "sureNo=%d edit=%d "
                  "ctUnknown=%ld ctN=%d ctVal=%ld pxN=%ld/%ld（闸门为累计值；判抖动看两次读数的增量）\n",
                  (long)g_reason, rs_name(g_reason),
                  (long)g_gateOpen, (long)g_gateClose, (long)g_penDown, (long)g_toolOk,
+                 /* 0x0209：sureNo = 面板**明确**报「不是套索」（心跳新鲜 ∧ TOOLGATE==0）；
+                    edit = 此刻「该不该改写坐标」的最终答案。两者与引擎裁决同源，
+                    判读：切到涂抹后 1s 内 sureNo 必须变 1 且 edit 变 0。 */
+                 (int)tool_gate_sure_not_lasso(), (int)tool_edit_allowed(),
                  (long)g_ctUnknown, g_ctN, (long)g_ctVal,
                  (long)g_axCalX.n, (long)g_axCalY.n);
             /* P3.6 落笔判据的**信号表**（多信号并联）—— 本轮排障的第一现场。
@@ -5896,6 +6028,21 @@ static DWORD WINAPI worker(LPVOID param)
    若只看 HUD_IDLE_MS，用户一停笔圆就消失、一动又在复位后的位置冒出来。
    只要闸门（工具对 + 笔尖接触）还成立，就再撑这么久。 */
 #define HUD_HOLD_MS  3000
+/* ⛔⛔ 0x020A：HUD「刚隐藏过 ⇒ 重新出现要连续满足这么久」的去抖窗口。
+   根因（用户报）：「开启套索平滑自动填充好一个选区后，挪动光标找下一笔落点
+   （还未落笔）时，HUD 会意外短暂闪现，随后消失」。
+   机制：`g_penDown` 带 CONTACT_HOLD_MS(250ms) 的保持窗口（那是为「轻压运笔中
+   三信号成段全零 400~600ms」留的，删了就会在运笔中闪灭，不能动）。抬笔后
+   正好在这 250ms 内移动笔（笔还在感应区 ⇒ 持续有包 ⇒ pktAge 很小）
+   ⇒ HUD 的**全部**条件在这段窗口里都是真的 ⇒ 亮一下再灭。
+   ⛔ 没有任何信号能在这 250ms 内区分「真抬笔」与「轻压零段」——两者在
+      buttons / pressure 上完全同形（这正是 BTN_EDGE_MIN_ZERO=16 包的由来）。
+   ⇒ 只能从**显示时机**上消除：250 − 180 = 70ms 残留（4~5 帧），肉眼不可辨；
+      而首次显示 / 隔久了再显示走立即路径，起笔零延迟。 */
+#define HUD_RESURF_DEBOUNCE_MS 180
+/* 去抖的**有效期**：距上次隐藏超过这么久就认为「这是新的一笔」，立即显示。
+   取 1.5s = 平滑长闩 CONTACT_HOLD_SMOOTH_MS，跨过它就不再是「同一笔的尾巴」。 */
+#define HUD_RESURF_WINDOW_MS   1500
 /* ⛔⛔ 2026-10-14：16 → 8ms（~60Hz → ~120Hz）。
    用户报「拖动稍快，圆心与受力点就分离」。间距的主要来源是**帧间隔**
    （HUD 是轮询渲染，笔画以包率前进，圆心最多滞后一帧）⇒ 帧间隔减半、
@@ -6419,7 +6566,19 @@ static DWORD WINAPI hud_thread(LPVOID param)
            用户的原话是「使用别的工具，或者用户落笔前，我不希望……错误的 HUD 的干扰」。
            这两个判据由 detour 写入 g_toolOk / g_penDown —— 渲染线程只读它们，
            不重复判一次（判据写两遍，漂移一次就再也对不上）。 */
-        int gateOk = (g_toolOk && g_penDown) ? 1 : 0;
+        int gateOk = ((g_toolOk && g_penDown) && !tool_gate_sure_not_lasso()) ? 1 : 0;
+        /* 0x020A：Alt 临时吸管态 ⇒ HUD **一定**不显示。
+           用户原话：「Alt 键临时切换为吸管后，按下吸色时会错误地触发 HUD 显示；
+           吸管工具不应带有类似套索平滑的 HUD」。
+           ⛔ 为什么这一项必须独立于 gateOk：g_toolOk 由包路径写，而吸管点击那一批
+              可能正好落在 useGate 由 1→0 的边界上（旧值还是 1）；只靠 g_toolOk
+              会让 HUD 在吸管的第一笔闪一下。这里是纯内存读，零成本。 */
+        if (g_cfg && g_cfg[CFG_I_ALTTOOL]) gateOk = 0;
+        /* 0x0209：`!tool_gate_sure_not_lasso()` 这一项是**独立兜底**，不是重复判断。
+           `g_toolOk` 由包路径写，而包路径在标定失效时会**提前 return**（永不更新）
+           ⇒ 那个值会一直冻结在上一次成功改写时的 1。用户报的「切到涂抹、HUD 还在」，
+           除了闩锁冻结之外，这一条冻结是第二条通路。面板一旦明确报了非套索，
+           无论包路径有没有在跑，HUD 都必须立刻收起来（纯内存读，零成本）。 */
 
         /* —— 2026-10-17 第十七轮：HUD 显示门控由「两个布尔」升级为**显式 AND 门** ———
            ⛔⛔ 起因（用户报的两条）：
@@ -6731,7 +6890,29 @@ static DWORD WINAPI hud_thread(LPVOID param)
            十二项，逐字等价于原来的整条 AND；这样跳帧时 canvasOk 的**沿用值**
            不会再冒充「焦点在画布上」。 */
         int wantVisible = (cheapOk && canvasOk) ? 1 : 0;
+        /* —— 0x020A：显示去抖（根因见 HUD_RESURF_DEBOUNCE_MS 处）——
+           ⛔ 只在「刚隐藏过」时启用：正常起笔（首次 / 隔了 >1.5s）必须立即出现，
+              否则每一笔的圆都会迟到 180ms，手感立刻变钝。 */
+        static int   s_hudVisible;
+        static DWORD s_hudHideAt;
+        static DWORD s_hudWantSince;
+        if (wantVisible) {
+            if (!s_hudWantSince) s_hudWantSince = now;
+            if (s_hudHideAt && (DWORD)(now - s_hudHideAt) < HUD_RESURF_WINDOW_MS
+                && (DWORD)(now - s_hudWantSince) < HUD_RESURF_DEBOUNCE_MS)
+                wantVisible = 0;
+        } else {
+            s_hudWantSince = 0;
+        }
         if (!wantVisible) {
+            if (s_hudVisible) {
+                s_hudVisible = 0;
+                s_hudHideAt = now;
+                logf("# [hud] 隐藏: 门槛断了 ck=%d cv=%d gate=%d stroke=%d penDown=%ld "
+                     "altTool=%ld\n",
+                     cheapOk, canvasOk, gateOk, strokeOk, (long)g_penDown,
+                     (long)(g_cfg ? g_cfg[CFG_I_ALTTOOL] : -1));
+            }
             if (wnd && IsWindowVisible(wnd)) ShowWindow(wnd, SW_HIDE);
             /* ⛔ 「HUD 没能显示」必须能一眼定位：把六个条件逐个打出来（节流 2 秒，
                并且只在功能开着时打，避免关着的时候刷屏）。
@@ -6763,6 +6944,18 @@ static DWORD WINAPI hud_thread(LPVOID param)
             /* 0x0208：隐藏态走 25Hz 的低频等待（根因见 hud_frame_wait_idle）。 */
             hud_frame_wait_idle(frameTimer);
             continue;
+        }
+        /* 0x020A：显示边沿留痕（与上面的「隐藏」成对）。
+           ⛔ 这两行是「HUD 意外闪现」类问题的**唯一**直接证据 —— 此前显示动作
+              完全不留痕，只能靠「未显示」行的 2s 节流缺口反推，4 帧的闪现根本看不见。 */
+        if (!s_hudVisible) {
+            s_hudVisible = 1;
+            logf("# [hud] 显示: stroke=%d penDown=%ld toolOk=%ld roi=(%ld,%ld) "
+                 "altTool=%ld t=%ldms real=%ldms\n",
+                 strokeOk, (long)g_penDown, (long)g_toolOk,
+                 (long)g_snOutX, (long)g_snOutY,
+                 (long)(g_cfg ? g_cfg[CFG_I_ALTTOOL] : -1),
+                 (long)pktAge, (long)realAgeHud);
         }
 
         /* —— 绘制（对齐 PS 原生拉绳：圆心 = 绘制点，光标在圈内自由）——
@@ -7656,7 +7849,44 @@ static void hud_stop(void)
                ② `gcp/rw` 比例在画线时明显上升（旧版 112s 里只改了 8029 次 / 11 万次调用）；
                ③ 用户主观：在画布外浮窗上按一下再回画布，平滑**不再丢**；
                ④ 笔抬着时 `a=0`（不许把系统光标永久顶偏，否则点菜单会点歪）。 */
-__declspec(dllexport) int jwwh_version(void) { return 0x0138; }
+/* 0x0139 = ⛔⛔ **工具闸门拆成「事实」与「没来得及报」；光标路径不许抖动透传**
+               （用户报的两个连锁 BUG：①切到涂抹长按涂抹，HUD 仍错误显示；
+                 ②切回套索画选区，前半段正常、中途失效，停笔时 PS 自己从选区末端
+                   画一条直线到笔尖，圆心与受力点不再重合）。
+               代码级真凶（两条，都不是参数问题）：
+               ① `if (contactPrev && latched == 1) useGate = ENABLED;` —— **整笔冻结工具裁决**。
+                  用户长按笔时左键电平恒真 ⇒ 面板巡检被 `hostYield` 无限期让路 ⇒
+                  `CFG_I_TOOLGATE` 停在切走前的 1 ⇒ 涂抹被当成套索一直改写、HUD 一直显示。
+               ② 同一条链的后半段：短闩 `g_contact` 抖一次（轻压运笔成段全零是已知现象）
+                  就掉进 else 现判 `tool_gate_ok()`；而此刻心跳已过期 3s ⇒ 判 0
+                  ⇒ **整批原样透传** ⇒ PS 收到真实笔尖 ⇒ 从圆心拉一根直线到笔尖。
+               本版做法：
+                 · 新增 `tool_gate_sure_not_lasso()`：只有「GATETS 新鲜 ∧ TOOLGATE==0」
+                   才算**事实**（面板刚读过 application.tool）⇒ 立即否决，闩锁也压不住；
+                   心跳过期一律只当「面板没来得及报」，**不**否决。
+                 · 新增 `tool_edit_allowed()`：包路径与光标路径**共用**它（旧版各判一次，
+                   漂移一次就分叉 = HUD 在圆心、选区末端在笔尖）。
+                 · HUD 的 gateOk 追加 `!tool_gate_sure_not_lasso()`：兜住「包路径因标定
+                   失效提前 return、`g_toolOk` 冻结在 1」这第二条通路。
+                 · 光标路径：手松开后 `GP_HOLD_MS=700` 内**钉住**输出点（既不推进也不透传），
+                   覆盖实测 400~600ms 的零段；大跳跃不再「瞬间贴合」而是本拍不推进
+                   （LNP `bigJumpSqDist` 同义），主笔那一帧的 200px 瞬移就是「凭空直线」。
+            下一轮判据：① 切到涂抹后 `[why] gate/close` 在 1s 内增长、HUD 立刻收起；
+               ② 套索运笔中不再出现「一笔之内 close 增长又 open 增长」；
+               ③ 停笔不动时 `[raw] rw` 不再跳一次（跳 = 透传了一拍）。 */
+
+/*   0x013A = 0x020A 配套：Alt 临时吸管硬否决位 + HUD 显示去抖 + 不裁决即归零
+            ① `tool_edit_allowed()` 与 HUD 的 `gateOk` 都先看 `CFG_I_ALTTOOL`
+               —— 吸管态下**一个字节都不改写、一圈都不画**（用户报：「Alt 切吸管后
+               按笔吸色会错误触发 HUD」；同一放行还会让取色点被拉绳偏移）。
+            ② HUD 新增显示去抖：刚隐藏过的 1.5s 内必须连续满足 180ms 才重新出现
+               ⇒ 吃掉「抬笔后 CONTACT_HOLD_MS(250ms) 保持窗口 + 立刻挪笔」造成的
+               短暂闪现（用户报：「填充完选区后挪动光标找落笔点，HUD 意外闪一下」）。
+            ③ 包路径在「标定失效」提前 return 时把 g_penDown/g_toolOk/g_strokeGate
+               显式归零 —— 旧版冻在 1，包流一恢复就用陈旧几何画一圈。
+            ④ 新增 `[hud] 显示` / `[hud] 隐藏` 边沿日志（此前显示动作零留痕，
+               4 帧的闪现只能靠「未显示」行的 2s 节流缺口反推，根本看不见）。 */
+__declspec(dllexport) int jwwh_version(void) { return 0x013A; }
 
 /* ⛔⛔ 0x013D：引擎软闸（面板 unload / reload 专用）。
  *

@@ -2902,3 +2902,166 @@ int armed  = cursorInject && g_cfg && g_cfg[I_ENABLED] && stroke;
 2. 日志只有「监听 18924 就绪」，**没有**「位闸：面板本体已就位」。
 3. 加载面板 ⇒ 出现「已就位 ⇒ 平滑开关交还面板」，平滑恢复。
 4. 面板 reload ⇒ **不应**出现「收回平滑开关」；彻底关掉面板 ⇒ 约 2s 后出现一次。
+
+## O41｜0x0209 BUG1：工具闸门被「整笔冻结」+ 巡检被无限期让路
+
+**用户原话**：「当我从套索工具切换为其他工具，比如涂抹工具，我长按笔不停涂抹，
+HUD 也会错误的显示。当出现该情况后会连锁导致 BUG2 的出现。」
+
+### 一、代码级链条（三环，缺一不成立）
+
+```
+① 0x0208 给 pollSmoothToolGate 加了 hostYield()，判据 = 左键 ∨ 空格
+   ⇒ 笔尖落笔会模拟左键（日志 [raw] btn=1），只要用户在用笔，让路就**永不结束**
+   ⇒ CFG_I_TOOLGATE 停在切走前的 1（面板这一拍根本没读 application.tool）
+② 引擎闩锁：if (contactPrev && latched == 1) useGate = ENABLED;
+   —— 「整笔持有工具裁决」，一笔之中**完全不看工具**
+   ⇒ 涂抹被当成套索：坐标继续被拉绳改写、g_toolOk=1 ⇒ HUD 继续显示
+③ 第二条通路：包路径在 !g_calib.valid 时**提前 return**，g_toolOk 从不更新
+   ⇒ 冻结在上一次成功改写时的 1（HUD 只看 g_toolOk && g_penDown）
+```
+
+### 二、修法
+
+| 位置 | 改动 |
+| --- | --- |
+| `smooth_engine.c` | `tool_gate_sure_not_lasso()`：`GATETS 新鲜 ∧ TOOLGATE==0` 才算**事实** |
+| 同上 | `tool_edit_allowed()`：总开关 → 事实否决 → 闩锁（一笔之中）→ 现判心跳；包/光标**共用** |
+| 同上 | 包路径 `useGate = tool_edit_allowed()`（删掉 contactPrev/latched 分支） |
+| 同上 | HUD `gateOk = (g_toolOk && g_penDown) && !tool_gate_sure_not_lasso()` |
+| `hostInteraction.ts` | `hostYield(label, maxHoldMs)`：连续让路超上限强制放行一轮 |
+| `app.tsx` | 两处工具巡检传 900ms（缩放动画 300~500ms 仍一次都不被打断） |
+
+**判据**：切到涂抹后 1s 内 `[why]` 的 `sureNo=1 edit=0`，`gate/close` 增长，HUD 消失。
+
+## O42｜0x0209 BUG2：心跳过期被当成「工具变了」⇒ 整批透传 ⇒ 停笔画直线
+
+**用户原话**：「选区的末端应该和圆心重合，当我停笔不动，所有内容 hud 应该不变，
+选区也不会被绘制。但是 bug 是当我停笔，插件会自动绘制一段选区线，这段选区线就是
+选区的末端到施力点的直线。此时圆心与受力点（选区末端）不再重合，且平滑失效。」
+
+### 一、三根「透传」钉子
+
+1. **包路径**：短闩 `g_contact` 抖一次（轻压运笔成段全零是已知现象，0x0124 的长闩就是为它）
+   ⇒ `contactPrev=0` ⇒ 掉进 else 现判 `tool_gate_ok()` ⇒ 心跳已过期 3s ⇒ 判 0
+   ⇒ **整批原样透传** ⇒ PS 拿到真实笔尖 ⇒ 从圆心拉一根直线到笔尖；随后 `g_wasEnabled=0` + 锚定复位。
+2. **光标路径**：旧代码用 `tool_gate_ok()`（与包路径各判一次）⇒ 心跳一过期就停推
+   ⇒ 光标瞬间回到真实位置 ⇒ 同一条直线；且与包路径分叉 ⇒「HUD 在圆心、选区末端在笔尖」。
+3. **armed 抖动**：三路证据（按钮镜像 / VK_LBUTTON / 包证据）任一拍判"没按着"
+   ⇒ `if (!armed) return ok;` 把**真实坐标**返回 ⇒ 那一拍就是直线。
+   外加 `gp_step` 的 `d > rope*4 ⇒ 直接贴合`（一帧 200px 瞬移）是第二根。
+
+### 二、修法
+
+- 判据：`tool_edit_allowed()` 统一两端；**心跳过期不否决**，只有事实否决。
+- 光标：`GP_HOLD_MS=700`（覆盖实测 400~600ms 零段）内**钉住**输出点 —— 不推进、不透传；
+  `s_gpBtn` 跟**真实的手**（`stroke`）而不是「armed 过没有」，否则抬笔再落笔永远没有边沿、
+  新一笔从残留输出点起步被绳拽出斜线；大跳跃改「本拍不推进」（LNP `bigJumpSqDist` 同义），
+  计数 `g_gpRej` 落在 `[raw] gp=a/s/rej=`。
+
+**判据**：停笔不动时 `[raw] rw` 不再跳一次；一笔之中 `gate/close` 与 `open` 不许同涨。
+
+## O43｜0x0209 新功能：Alt 临时吸管（专注模式）
+
+**用户原话**：「仅当我处于专注模式下，当前工具是套索，且总开关是开时，按 alt 键能够
+临时切换为吸管工具……松开 alt 后会自动变回套索工具，总开关是开的状态。」
+
+- 原生（`keyhook.c` 20ms 线程）：`VK_MENU` 边沿 → `{"type":"altHold","v":0|1}`。
+  ⛔ 只在**前台是本进程**时才发（Alt+Tab 切走那一瞬不能把吸管按下去）；按住 2s 保活。
+  ⛔ 走键态轮询而非 LL 钩子（铁律 40：PS 前台时钩子整段收不到键）。
+- 面板：`HotkeyBridge.onAltHold`（边沿去重，盖住 2s 保活帧）→ `app.tsx` `handleAltHoldEdge`：
+  条件 = `isFocusMode()` ∧ `state.isEnabled` ∧ `(lastKnownTool || smoothStatus.pen.psTool)` 是套索。
+  按下 `selectToolByRef('eyedropperTool')`；松开 `selectToolByRef('lassoTool')` +
+  `applyToolGate('lassoTool')` 乐观回绿（否则松开后要等 ≤1s 巡检才恢复平滑）+
+  `setMainToggle(true)` 兜底（需求字面要求终态是「开」）。
+- `altToolHold` 同时挡 `maybeAutoTurnOff` 与 `pollToolChange`（吸管本来不在 AUTO_OFF_TOOLS 名单，
+  但不许依赖名单 —— 名单是产品决策）。
+- 降级：旧 .8li 不推 `altHold` ⇒ 功能静默不生效（与 hostBusy 同款），不影响既有功能。
+
+## O44｜0x020A HUD「填充完选区后挪动光标（未落笔）短暂闪现」
+
+**用户原话**：「当我开启套索平滑自动填充好了一个选区后，我挪动了光标以寻找下一笔落在哪的时候
+（还未落笔），hud 会意外短暂闪现，随后消失。」
+
+### 两条通路（都让 HUD 拿到陈旧门值）
+
+**① `CONTACT_HOLD_MS`(250ms) 保持窗口**（主因）
+
+`g_penDown = g_contact`，而 `g_contact` 在「本批任何有投票权的信号非零」后还要真 250ms 才归 0。
+这个保持是**不能删的** —— 它是为「轻压运笔中三信号成段全零 400~600ms」留的（0x0124）。
+抬笔后立刻挪笔（笔仍在感应区 ⇒ 悬停包持续 ⇒ `pktAge<250` ⇒ `activeNow=1`）时，
+HUD 的**全部**条件在这 250ms 里都是真的 ⇒ 亮一下再灭。
+
+⛔ **没有任何信号能在这 250ms 内区分「真抬笔」与「轻压零段」**：两者在
+`buttons` / `pkNormalPressure` / `pkTangentPressure` 上完全同形
+（`BTN_EDGE_MIN_ZERO=16 包` 正是这个同形性的产物，它只能防「假落笔」，不能判抬笔）。
+
+**② 标定失效时包路径提前 return**
+
+`if (!g_calib.valid …) { reason = RS_NOCAL; return 0; }` —— 旧版**只写 reason**，
+`g_penDown / g_toolOk / g_strokeGate` 全部**冻结**在失效前的 1。
+而 HUD 的 `activeNow` 只看包新鲜度 ⇒ 包流一恢复就用陈旧几何画一圈。
+自动填充 / 换文档会让 PS 重建 Wintab 上下文 ⇒ 正好制造这个重标定窗口。
+
+### 修法
+
+| 位置 | 改动 |
+| --- | --- |
+| `smooth_packets` 的 `!g_calib.valid` 分支 | 显式归零三个门变量 + `gate_set(0)`（不裁决 = 没在改写 = HUD 不该显示） |
+| hud_thread | `HUD_RESURF_DEBOUNCE_MS=180`：**刚隐藏过的 1.5s 内**必须连续满足 180ms 才重新 show；`s_hudHideAt=0`（从未显示）与「距上次隐藏 >1.5s」走立即显示，起笔零延迟 |
+| hud_thread | 新增 `[hud] 显示` / `[hud] 隐藏` 边沿日志（此前显示动作零留痕） |
+
+**残留**：250 − 180 = 70ms（4~5 帧）。想更彻底就把 `HUD_RESURF_DEBOUNCE_MS` 调到 200~220，
+代价是「快速连画」时圆的出现晚同样毫秒数。
+
+**判读**：`[hud] 显示` 行不应出现在「未落笔」时段；若仍出现，看该行的
+`gate/stroke/penDown/altTool` 哪一项没被挡住。
+
+## O45｜0x020A Alt 临时吸管：吸色时冒出 HUD
+
+**用户原话**：「Alt 键临时切换为吸管后，按下吸色时会错误地触发 HUD 显示；吸管工具不应带有
+类似套索平滑的 HUD。」
+
+**根因**：0x0209 的面板实现只 `selectToolByRef('eyedropperTool')`，**没动工具闸门**；
+而即使想动也动不了 —— `applyToolGate` 在 `inProcGateOwned()` 时直接 return，
+更底层 `write_params()` 在 `pstool_owns()` 时**一个字节都不写** `I_TOOLGATE`
+（`'slct'` 独占）⇒ 引擎仍按套索放行 ⇒ **HUD 显示 + 取色点被拉绳偏移**（第二条更隐蔽）。
+
+**修法**：独立槽 `I_ALTTOOL`（`CFG_NLONGS 58→59`，`plugin_main.c` / `smooth_engine.c` 同步）
+- `tool_edit_allowed()` 首行否决（包路径与光标路径共用 ⇒ 两条一起停）
+- HUD `gateOk` 独立再判一次（`g_toolOk` 可能在由 1→0 的边界上还是 1）
+- 新原因码 `RS_ALTTOOL(10)`「临时吸管」
+- 入站 `{"type":"altTool","on":0|1}`，用 `json_num` 判非零（`json_bool` 只认 true/false）
+- **三处清 0**：keyhook 的 Alt 物理松开边沿 / `plug_revoke` / `services_start`
+
+**面板顺序**（⛔ 不可颠倒）：`setAltToolOverride(true)` → `applyToolGate('eyedropperTool', true)`
+→ 记背景色 → `await selectToolByRef(...)`。切工具要过一次 batchPlay（几十~几百 ms），
+这段时间里工具还是套索、闸门还是 1，用户若立刻按笔就会中招。
+
+## O46｜0x020A Alt+左键吸色改的是背景色
+
+**用户原话**：「我希望此时只修改前景色，请判断是否需要让临时吸管状态下的 Alt 绕过 PS。」
+
+### 结论：**不能绕过**，两条路都被否决（这是判据，不是偷懒）
+
+1. **按下时吞掉 Alt**（LL 键盘钩子返回 1）—— 铁律 40 实测：PS 前台时我们装的低层键盘钩子
+   **整段收不到键**（PS 自己的键盘钩子压在链前，链序不可控）⇒ 会「有时吞、有时不吞」，
+   同一操作两种结果，比不吞更糟。
+2. **伪造 `WM_SYSKEYUP` 改 PS 线程键态** —— 跨进程伪造键盘状态；一旦 PS 的处理逻辑与预期
+   不符，后果是**全局快捷键错乱**，与「不影响正常吸管工具和其他快捷键逻辑」直接冲突。
+
+### 采用：事后纠正（PS 照改背景色，我们搬成前景色并复原背景）
+
+- `hostInteraction.ts`：新增 `onHostRelease(fn)` —— `noteHostBusy(false)` 且有 `busy` 时触发，
+  **只触发一次**（一次按下-松开 = 一次取色）。判据含空格 ⇒ 订阅方自己用 `altToolHold` 收口。
+- `app.tsx`：
+  - `snapshotBackgroundColor()`：同步属性读（`app.backgroundColor.rgb`），无模态
+  - `syncAltPickColor()`：delay 80ms（等 PS 收尾）→ 比对 RGB（没变就什么都不改）→
+    一次 `runAsModal` 里赋**两个 SolidColor 对象**（`foregroundColor = 背景现值`、
+    `backgroundColor = 进吸管时的快照`）。⛔ 不走 batchPlay ⇒ 不存在「失败的 batchPlay 画黄条」
+  - `armAltPickExpiry()`：松开 Alt 后给 **800ms** 宽限（`altPickUntil`）。⛔ 必须给：
+    主流程是「吸色 → 顺手松 Alt」，`hostBusy` 的 release 与 `altHold` 的 release 先后不定，
+    立刻清快照就会把这一次取色丢掉（现象正是「背景色改了、前景色没变」）。
+  - 响应条件 = `altToolHold` ∨ 800ms 宽限内 ⇒ **正常吸管工具零影响**。
+
+**已知代价**：吸色期间背景色会短暂变化（PS 的规则），松手后约 100~150ms 前景色才更新。

@@ -695,6 +695,25 @@ function forceSendParams(): void {
 }
 
 /**
+ * 0x020A：Alt 临时吸管的**硬否决位**（发往 18924，与 `penSmooth` 同一条通道）。
+ *
+ * 置 1 ⇒ 引擎立刻停止坐标改写、停止显示 HUD，**不看**闩锁、不看心跳、不看 gateOwned。
+ *
+ * ⛔⛔ 为什么不能拿 `setSmoothToolGate(0)` 顶替：
+ *    原生 `write_params()` 在 `pstool_owns()`（进程内 'slct' 回调已接管）时
+ *    **一个字节都不写** `I_TOOLGATE` —— 面板下发的 0 会被静默丢弃。
+ *    于是切到吸管后引擎仍按「套索」放行：吸管按笔吸色时冒出 HUD，
+ *    而且取色点被拉绳偏移（用户报的两条正是这个）。
+ *    ⇒ 必须是一条**独立槽位**，且不受任何让位规则影响。
+ *
+ * ⛔ 不受 `penOn` 限制：这是「撤销」通路，关着也必须能发出去
+ *    （残留 1 会让套索平滑整段失效，而界面上看不出原因）。
+ */
+export function setAltToolOverride(on: boolean): void {
+  send({ type: 'altTool', on: on ? 1 : 0 });
+}
+
+/**
  * 闸门心跳定时器（⛔⛔ 2026-10-14：与 batchPlay 工具读**彻底解耦**）。
  *
  * 为什么必须独立于 pollSmoothToolGate：旧版心跳寄生在工具巡检里，而巡检有三条

@@ -55,6 +55,9 @@ const HOLD_AFTER_RELEASE_MS = 700;
 let yieldCount = 0;
 let lastYieldLogAt = 0;
 
+/** 0x0209：本轮「连续让路」的起点（0 = 当前没有在让路）。 */
+let yieldChainStart = 0;
+
 let busy = false;
 let busyAt = 0;
 let holdUntil = 0;
@@ -76,7 +79,33 @@ export function noteHostBusy(on: boolean): void {
     if (busy) {
         busy = false;
         holdUntil = now + HOLD_AFTER_RELEASE_MS;
+        /* 0x020A：**松开边沿**（只在此刻触发，且只触发一次）。
+           用途：Alt 临时吸管下「一次吸色点击结束」= 左键（笔模拟的 down/up）走完一轮。
+           判据与 busy 同源，不额外引入按键语义。 */
+        for (const f of releaseHandlers) {
+            try { f(); } catch { /* ignore */ }
+        }
     }
+}
+
+/* ------------------------------------------------------------------ 0x020A：松开边沿订阅 */
+type ReleaseHandler = () => void;
+const releaseHandlers: ReleaseHandler[] = [];
+
+/**
+ * 订阅「宿主交互结束（左键/空格松开）」边沿。
+ *
+ * ⛔ 这是**边沿**，不是电平：一次按下-松开只回调一次。用户按住 Alt 拖动吸色时
+ *    只在最后松手那一刻回调一次 —— 正是「一次取色结束」的语义。
+ * ⚠️ 判据含空格（见模块头），订阅方必须自己确认「此刻我要不要响应」
+ *    （临时吸管用 `altToolHold` 收口），不要把这里当精确的左键事件。
+ */
+export function onHostRelease(fn: ReleaseHandler): () => void {
+    releaseHandlers.push(fn);
+    return () => {
+        const i = releaseHandlers.indexOf(fn);
+        if (i >= 0) releaseHandlers.splice(i, 1);
+    };
 }
 
 /** 此刻是否应当把巡检让给宿主（用户正在拖拽/缩放）。 */
@@ -98,15 +127,40 @@ export function isHostInteracting(): boolean {
  * 巡检入口的统一让路判据。
  *
  * @param label 巡检名（只用于节流日志，便于现场确认「到底是这条被让掉了」）
+ * @param maxHoldMs 0 = 只让一次就够（默认，纯展示类巡检）；
+ *                  >0 = **连续让路的上限**：超过它强制放行一轮。
  * @returns true = 本轮跳过（调用方直接 return）
  *
  * ⚠️ 跳过 ≠ 停摆：定时器照常，下一拍（≤1s）会重新判断；任何事件驱动通路
  *    （PS 通知 / 进程内 'slct' / 文档级事件）都不经过这里，时效性不受影响。
+ *
+ * ⛔⛔ 0x0209：`maxHoldMs` 是**修 BUG 用的**，不是调参空间。
+ *    起因（用户报）：「切到涂抹工具后长按笔涂抹，HUD 仍错误显示；随后切回套索，
+ *    平滑前半段正常、中途失效，停笔时 PS 自己从选区末端画一条直线到笔尖」。
+ *    链条：笔尖落笔会模拟左键（`hostBusy` 判据含 VK_LBUTTON）⇒ 只要用户在画，
+ *    让路就**永不结束** ⇒ 工具巡检整段停摆 ⇒ `CFG_I_TOOLGATE` 冻在切走前的 1
+ *    ⇒ 引擎一直以为还在套索。而工具闸门是**正确性判据**（它决定要不要改写坐标），
+ *    不能像「快速蒙版状态」那样无限期不更新。
+ *    ⇒ 工具类巡检传 900ms：缩放动画只有 300~500ms，仍然一次都不会被打断；
+ *      而长时间按着（涂抹/长笔）每 900ms 一定会读一次工具，1s 内纠正闸门。
  */
-export function hostYield(label: string): boolean {
-    if (!isHostInteracting()) return false;
-    yieldCount += 1;
+export function hostYield(label: string, maxHoldMs = 0): boolean {
+    if (!isHostInteracting()) {
+        yieldChainStart = 0;
+        return false;
+    }
     const now = Date.now();
+    if (!yieldChainStart) yieldChainStart = now;
+    if (maxHoldMs > 0 && now - yieldChainStart >= maxHoldMs) {
+        // 连续让路已达上限 ⇒ 强行放行一轮，并把链起点推到现在（下一次再等这么久）
+        yieldChainStart = now;
+        if (now - lastYieldLogAt >= 5000) {
+            lastYieldLogAt = now;
+            console.log(`[交互让路] 连续让路超过 ${maxHoldMs}ms ⇒ 强制放行一轮（${label}）`);
+        }
+        return false;
+    }
+    yieldCount += 1;
     if (now - lastYieldLogAt >= 5000) {      // 节流：一次拖拽只留一行证据
         lastYieldLogAt = now;
         console.log(`[交互让路] 宿主正在拖拽/缩放 ⇒ 跳过巡检（${label}，累计 ${yieldCount} 次）`);

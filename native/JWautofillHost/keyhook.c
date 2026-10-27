@@ -47,6 +47,9 @@
 #include "jw_shared.h"
 #include "ws_core.h"
 
+/* 0x020A：plugin_main.c 提供的「清临时吸管否决位」。见本文件 Alt 边沿块。 */
+void srv_alt_tool_clear(const char* why);
+
 /* ================================================================ 常量 */
 
 #define KH_PORT          18923
@@ -1874,6 +1877,50 @@ static DWORD WINAPI kh_dispatch_thread(LPVOID param)
                 _snprintf(j, sizeof(j), "{\"type\":\"hostBusy\",\"v\":%d}", hb);
                 kh_broadcast(j);
             }
+        }
+
+        /* ============================ 0x0209：Alt 边沿（专注模式下的临时吸管）
+         *
+         * 需求（用户）：专注模式下、当前工具是套索、总开关开着时，按住 Alt 临时切到
+         *   吸管工具取样，松开自动切回套索，且总开关必须保持「开」。
+         *
+         * 为什么由这一侧发（而不是面板自己监听按键）：
+         *   UXP 面板在 PS 停靠面板里拿不到宿主前台的全局键盘状态；而 .8li 在 PS
+         *   进程内、本来就在 20ms 轮询全局键态（`hostBusy` 用的同一条路）。
+         *   ⛔ 不走 LL 钩子：铁律 40 已证 PS 前台时钩子整段收不到键，轮询才是主证据。
+         *
+         * ⛔ 只发边沿 + 按住时 2s 保活（一次按住约 2~3 帧），面板侧另有「重复 1 不重切」。
+         * ⛔ 必须判「前台是本进程」：Alt+Tab 切走时 Alt 仍按着，不判前台就会在切走那一瞬
+         *    把吸管按下去（用户回到 PS 时工具莫名其妙变了）。
+         * ⛔ 只报电平，不做任何决策：是不是「专注模式 + 套索 + 总开关开」只有面板知道，
+         *    判定放在 utils/altHoldBus 的消费方（app.tsx）。这一侧保持哑管道。 */
+        {
+            static int   s_altPrev = -1;
+            static DWORD s_altLast;
+            int alt = 0;
+            if (GetAsyncKeyState(VK_MENU) & 0x8000) {
+                HWND fg = GetForegroundWindow();
+                DWORD pid = 0;
+                if (fg) GetWindowThreadProcessId(fg, &pid);
+                if (pid == GetCurrentProcessId()) alt = 1;
+            }
+            DWORD nowAl = GetTickCount();
+            int wasAlt = (s_altPrev == 1) ? 1 : 0;
+            if (alt != s_altPrev || (alt && (DWORD)(nowAl - s_altLast) >= 2000)) {
+                s_altPrev = alt;
+                s_altLast = nowAl;
+                char ja[48];
+                _snprintf(ja, sizeof(ja), "{\"type\":\"altHold\",\"v\":%d}", alt);
+                kh_broadcast(ja);
+            }
+            /* 0x020A：Alt **物理松开** ⇒ 无条件清「临时吸管」硬否决位。
+               三处兜底的第二处（另两处：plug_revoke 面板不在位、services_start 服务重启）。
+               ⛔ 为什么必须由这一侧兜：那一位是引擎的**硬否决**（不看心跳、不看闩锁），
+                  而面板可能正卡在 await / 已经崩掉 / 被 reload ⇒ 发不出退出帧
+                  ⇒ 残留 1 就是「套索平滑整段失效，界面上看不出原因」。
+               ⛔ 只在**松开**时清：置 1 必须由面板判定（专注模式 ∧ 套索 ∧ 总开关），
+                  原生不知道这三条，抢着置 1 会把「套索下按 Alt 减选」的平滑也掐掉。 */
+            if (!alt && wasAlt) srv_alt_tool_clear("Alt 物理松开");
         }
 
         /* 0x013C：双路按键差分（每秒最多一条，仅有增量时打）。
