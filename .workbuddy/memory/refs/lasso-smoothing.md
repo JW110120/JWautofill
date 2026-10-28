@@ -3221,3 +3221,66 @@ HUD 里有三套坐标：**屏幕**（`cur`、`putXc/putYc`）、**窗内**（`h
 `jw8li_version 0x020D → 0x020E`，`CFG_NLONGS` 仍 59；`bash build.sh` 零告警 + PiPL 往返一致
 （353,280 字节）。**真机验收（待用户）**：拉绳模式光标在圈内 ⇒ 绳弯曲、圆心与圆环不动；
 光标顶到圈上 ⇒ 绳由弯变直、端点始终贴在光标上。
+
+## O50｜0x020F 拉绳模式正常绘制中，HUD 偶尔消失一下又回来
+
+**现象（用户 2026-10-28 报）**：拉绳模式正常画选区的过程中，HUD 有时短暂消失，随后重新出现。
+
+### 一、取证（这次是日志先给出答案）
+
+`jwwh-24800.log` 16:53:12–16:55:31：**18 次「隐藏 → 显示」**，其中 **10 次是笔一直按着**
+（隐藏行 `gate=1 stroke=1 penDown=1`），消失时长 **224 / 283 / 265 / 420 / 234 / 224 /
+270 / 407 / 232 / 229 ms** —— 全部落在肉眼可见区间（>150ms）。
+
+隐藏行只有 `ck=0 cv=1 gate=1 stroke=1 penDown=1 altTool=0`：便宜闸门里其它项都真。
+配上「未显示」行（2s 节流）就能定位唯一为假的那一项：
+
+```
+[hud] 未显示: wnd=1 mem=1 active=1(t=16ms) gate=1(toolOk=1 penDown=1) stroke=1 draw=1
+  fg=1 cv=1 ctU=0 jump=0 lag=0 rope=1 hudBits=7 dead=0 deadHide=0 real=422ms ck=0
+```
+
+`real=422ms`，而 `HUD_REAL_MS` = **400** —— 只超 22ms。同一份日志里还有 1672 / 2406 / 4437ms
+（那几次是真的包流停摆，`[stall] ★包流停摆` 与 `★补流接管` 成对出现）。
+
+### 二、三条根因
+
+1. **`realOk` 太紧（主因）**：`g_lastRealMs` 是**最后一批真实包**的时刻（`rRaw > 0` 才更新）。
+   驱动短暂空转到 400ms 就判死，可此时快照仍冻结在最后一批真实包上、`g_synWas == 0`
+   —— 几何完全可信，只是不动。隐藏它没有任何收益。
+2. **`lagSkip` / `bigJump` 进了 `cheapOk`**：这两项的注释明写「只是跳过重画，窗口保持上一帧
+   内容，不是隐藏」（见 `HUD_MAX_LAG_MS` 处），但并进 AND 门后走的是
+   `if (!wantVisible) → ShowWindow(wnd, SW_HIDE)`。语义与实现相反。
+3. **重现去抖是放大器**：`HUD_RESURF_DEBOUNCE_MS`(180ms) 让「隐藏后重新出现」必须连续满足
+   180ms ⇒ 任何 1~2 帧的判据抖动会被放大成 **180ms 以上的可见消失**。所以隐藏必须先去抖。
+
+### 三、改法
+
+| 改动 | 参数 | 语义 |
+|---|---|---|
+| `realOk` 分档 | `HUD_REAL_SLACK_MS` = 1500 | ≤400ms 正常；否则「`g_synWas==0` ∧ `g_strokeGate==1`」放宽到 1.5s；已接管合成包仍隐藏（0x0126 不变） |
+| `lagSkip`/`bigJump` 移出 `cheapOk` | `HUD_SKIP_MAX_MS` = 200 | 改为 `staleFrame`：只 `continue` 跳过重绘（窗口保持上一帧内容与位置）；窗口不可见、或连续跳过超 200ms ⇒ 强行画一帧 |
+| 隐藏去抖 | `HUD_HIDE_DEBOUNCE_MS` = 90 | 门槛**连续**为假满 90ms 才 `ShowWindow(SW_HIDE)`；中间任一拍为真即重新计时。只对「本来正在显示」的 HUD 生效 |
+
+⛔ 顺序很关键：**隐藏去抖必须排在重现去抖之前**（时间上先发生）。否则「小抖动 → 隐藏 →
+180ms 去抖」这条放大链仍然存在。
+
+### 四、日志增强（这次真正的经验）
+
+隐藏行原来只有 `ck/cv/gate/stroke/penDown`，`ck=0` 时看不出是**哪一项**断的，只能靠 2s 节流的
+「未显示」行反推 —— 而短抖动根本等不到节流窗口。现在隐藏行自带全部子项：
+
+```
+[hud] 隐藏: 门槛断满 %ldms（其间抑制抖动 %d 帧） ck= cv= gate=(toolOk= penDown=)
+  stroke= draw= fg= ctU= dead= rope= real=%ldms active=(t=%ldms) altTool=
+```
+
+另外新增两行留痕：`[hud] 跳过重绘（不隐藏）: lag= jump= 连续=%ldms`、
+`[hud] 真实包过期宽限: real=%ldms`（各节流 2s）。
+
+### 五、产物 / 校验
+
+`jw8li_version 0x020E → 0x020F`，`CFG_NLONGS` 仍 59；`bash build.sh` 零告警 + PiPL 往返一致
+（354,304 字节）。**真机验收（待用户）**：拉绳模式连续画 10~20 笔，日志里
+「隐藏 → 显示」应只剩真抬笔（`penDown=0`）与真停摆（`[stall]`）成对出现；
+若仍出现「笔按着却隐藏」，隐藏行现在会直接指出是哪个子项。

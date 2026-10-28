@@ -6098,6 +6098,15 @@ static DWORD WINAPI worker(LPVOID param)
    那几秒正是断流期合成包的 sticky tip 把我方判据喂成落笔。
    ⛔ HUD 是视觉承诺：合成包负责维持 PS 的笔迹，不负责点亮 HUD。 */
 #define HUD_REAL_MS  400
+/* ⛔⛔ 0x020F：「一笔进行中、快照仍来自真实包」时的**真实包过期宽限**。
+   日志实证（jwwh-24800，16:55:21.535）：HUD 隐藏时
+   `ck=0` 而 `active=1(t=16ms) gate=1 stroke=1 penDown=1 dead=0` —— 唯一为假的是
+   `real=422ms`（只超阈值 22ms）。驱动短暂空转（该次 343ms 后就恢复）足以让 HUD
+   消失，而消失后还要再吃 180ms 重现去抖 ⇒ 用户看到「闪一下又回来」。
+   ⛔ 判据只放宽到「快照仍来自真实包」：`g_synWas == 0`。一旦合成包接管，
+      `g_lastRealMs` 不再更新、快照也由合成包推进 ⇒ 几何不再可信 ⇒ 仍按 0x0126 隐藏。
+   取 1.5s = CONTACT_HOLD_SMOOTH_MS：跨过它就不再是「同一笔的尾巴」。 */
+#define HUD_REAL_SLACK_MS 1500
 /* ⛔ 笔尖落纸面期间的**保活窗口**：数位板停笔时不再出包（实测 packets 会冻结很久），
    若只看 HUD_IDLE_MS，用户一停笔圆就消失、一动又在复位后的位置冒出来。
    只要闸门（工具对 + 笔尖接触）还成立，就再撑这么久。 */
@@ -6142,6 +6151,20 @@ static DWORD WINAPI worker(LPVOID param)
    驱动回中。旧的「瞬移拉一条长线」正是缺这一条。 */
 #define HUD_BIG_JUMP_PX    400
 #define HUD_BIG_JUMP_SQ    ((double)HUD_BIG_JUMP_PX * (double)HUD_BIG_JUMP_PX)
+/* ⛔⛔ 0x020F：**隐藏去抖** —— 门槛短暂断裂不许提交隐藏。
+   用户报（2026-10-28）：「拉绳模式正常绘制选区的过程中，HUD 有时会短暂消失一下，
+   随后重新出现」。一次「隐藏 → 重现」的观感成本远高于「多显示 90ms」：
+     · 隐藏后重现要过 `HUD_RESURF_DEBOUNCE_MS`(180ms) 的去抖 ⇒ 一次 1~2 帧的门槛
+       抖动会被**放大成 180ms 以上的消失**，肉眼必见；
+     · 而任何单帧判据（包龄、笔态、焦点门）都会偶发抖动。
+   ⇒ 判据连续为假满这么久才真的隐藏。抬笔本来就有 CONTACT_HOLD_MS(250ms) 的保持
+     窗口，再加的 90ms 落在「已经看不见圆之后」的尾巴上，手感无差别。 */
+#define HUD_HIDE_DEBOUNCE_MS 90
+/* ⛔ 0x020F：`lagSkip`/`bigJump` 的**连续跳帧上限**。
+   这两项的语义是「本帧几何已陈旧，别糊上去」，**不是**隐藏窗口（见上）。
+   但若线程被持续抢占（PS 在算选区、DWM 忙），会连续跳很久 ⇒ 圆静止不动。
+   超过这个时长就强行画一帧陈旧的几何 —— 静止的圆也比消失的圆好。 */
+#define HUD_SKIP_MAX_MS    200
 
 static HANDLE        g_hudThread;
 static DWORD        g_hudTid;
@@ -6912,15 +6935,31 @@ static DWORD WINAPI hud_thread(LPVOID param)
            合成包的 sticky tip 把我方判据喂成落笔 ⇒ **悬空时 HUD 冒出几秒再消失**
            （用户 0x0125 验收第 3 条新 BUG，复现频率很高）。
            ⇒ HUD 是「视觉承诺」，只能建立在真实证据上：最后一批真实包必须在
-             HUD_REAL_MS 内。合成包负责维持 PS 的笔迹（那是另一件事），不负责点亮 HUD。 */
+             HUD_REAL_MS 内。合成包负责维持 PS 的笔迹（那是另一件事），不负责点亮 HUD。
+           ⛔ 0x020F 补一档（用户报「正常绘制中 HUD 偶尔闪一下」）：这条规则原本连
+             「一笔进行中、快照仍冻结在最后一批真实包上」也一起否掉 —— 那种几何是可信的，
+             隐藏它只有闪烁没有收益。见下面 realOk 的分档。 */
         LONG realAgeHud = g_lastRealMs ? (LONG)(now - (DWORD)g_lastRealMs) : 0x7FFFFFFF;
         int deadNow = (g_streamDead && g_penDown == 1 && !g_synWas) ? 1 : 0;
-        int realOk  = (realAgeHud >= 0 && realAgeHud <= HUD_REAL_MS) ? 1 : 0;
+        int realOk  = 0;
+        if (realAgeHud >= 0 && realAgeHud <= HUD_REAL_MS) realOk = 1;
+        else if (g_synWas == 0 && g_strokeGate == 1 && realAgeHud <= HUD_REAL_SLACK_MS) {
+            /* 0x020F：一笔进行中且快照仍来自真实包 ⇒ 冻结的几何仍可信，不许隐藏。
+               留痕（节流 2s）以便真机核对「这次没闪」是宽限挡住的还是根本没过期。 */
+            static DWORD s_slackLogAt;
+            realOk = 1;
+            if ((DWORD)(now - s_slackLogAt) >= 2000) {
+                s_slackLogAt = now;
+                logf("# [hud] 真实包过期宽限: real=%ldms（一笔进行中，几何取最后一批真实包）\n",
+                     (long)realAgeHud);
+            }
+        }
         int activeNow = (pktAge < HUD_IDLE_MS || (gateOk && pktAge < HUD_HOLD_MS));
         /* ⛔⛔ 显式 AND 门（第十七轮 + 第十八轮）—— 每一项都是**必要条件**，少一项就不出 HUD：
              窗口在 · 有包流 · 工具是套索且笔尖接触 · **真的在一笔之中**
              · **前台是本进程** · **焦点在活动文档画布上** · **落笔判据已建立**
-             · 非断流 · 非大跳跃 · 非帧滞后 · 拉绳模式 · 面板开了 bit0 · 总开关开
+             · 非断流 · 拉绳模式 · 面板开了 bit0 · 总开关开
+             （0x020F 起「大跳跃」「帧滞后」不在此门内：它们只决定要不要重绘）
            ⚠️ 「工具在绘制态」（`toolModalStateChanged`）**已于 2026-10-17 真机证伪并移出
               门控**（见 `drawOk` 定义处），此处保留在诊断行里只为继续取证。
            ⛔ 初值语义：`strokeOk` 在加载后必然是 0（g_strokeGate 初值 -1，只有真正
@@ -6945,8 +6984,14 @@ static DWORD WINAPI hud_thread(LPVOID param)
            ⛔ 跳过时保留上一次的焦点门结论（供诊断行显示），否则 cvWhy 会在 0↔x
               之间翻转，把「焦点门: why=」的边沿日志刷成噪音。 */
         int cheapOk = (wnd && mem && activeNow && gateOk && strokeOk && drawOk && fgOk
-                       && ctOk && !deadNow && !bigJump && !lagSkip && ropeMode && realOk
+                       && ctOk && !deadNow && ropeMode && realOk
                        && (hf & 1) && g_cfg && g_cfg[CFG_I_ENABLED] && !g_engineOff) ? 1 : 0;
+        /* ⛔⛔ 0x020F：`bigJump` / `lagSkip` 已从本闸门**移出**。
+           它们描述的是「这一帧不适合**重画**」，不是「HUD 不该存在」——
+           放进 AND 门就会走 `!wantVisible` 分支调 ShowWindow(SW_HIDE)，
+           与 `HUD_MAX_LAG_MS` 注释写的「只是跳过重画，窗口保持上一帧内容」
+           直接矛盾，也正是用户报的「绘制过程中 HUD 偶尔闪一下又回来」。
+           ⇒ 现在它们在 wantVisible 之后再判，只跳过重绘（见 `staleFrame`）。 */
         frame_resolve(now);
         static int s_cvOkLast, s_cvHitLast;   /* 跳帧时沿用的上一次结论（仅诊断用） */
         int cvWhy = s_cvWhyDbg;               /* 默认不翻转 ⇒ 不误报「焦点门恢复」 */
@@ -6991,9 +7036,9 @@ static DWORD WINAPI hud_thread(LPVOID param)
         InterlockedExchange(&g_canvasHitDbg, canvasHit ? 1 : 0);
         InterlockedExchange(&g_ctOkDbg,     ctOk ? 1 : 0);
         /* ⛔ 0x0208：判据收成「便宜闸门 ∧ 焦点门」。便宜闸门里已含全部
-           wnd/mem/active/gate/stroke/draw/fg/ct/dead/jump/lag/rope/实包/hudBits/开关
-           十二项，逐字等价于原来的整条 AND；这样跳帧时 canvasOk 的**沿用值**
-           不会再冒充「焦点在画布上」。 */
+           wnd/mem/active/gate/stroke/draw/fg/ct/dead/rope/实包/hudBits/开关
+           各项（0x020F 起不含 jump/lag，它们只影响是否重绘），逐字等价于原来的
+           整条 AND；这样跳帧时 canvasOk 的**沿用值**不会再冒充「焦点在画布上」。 */
         int wantVisible = (cheapOk && canvasOk) ? 1 : 0;
         /* —— 0x020A：显示去抖（根因见 HUD_RESURF_DEBOUNCE_MS 处）——
            ⛔ 只在「刚隐藏过」时启用：正常起笔（首次 / 隔了 >1.5s）必须立即出现，
@@ -7001,6 +7046,8 @@ static DWORD WINAPI hud_thread(LPVOID param)
         static int   s_hudVisible;
         static DWORD s_hudHideAt;
         static DWORD s_hudWantSince;
+        static DWORD s_hudMissSince;      /* 0x020F：门槛连续为假的起点（0 = 现在为真） */
+        static int   s_hudMissHold;       /* 0x020F：本段抖动里被「维持显示」吃掉的帧数 */
         if (wantVisible) {
             if (!s_hudWantSince) s_hudWantSince = now;
             if (s_hudHideAt && (DWORD)(now - s_hudHideAt) < HUD_RESURF_WINDOW_MS
@@ -7009,15 +7056,39 @@ static DWORD WINAPI hud_thread(LPVOID param)
         } else {
             s_hudWantSince = 0;
         }
+        /* —— 0x020F：隐藏去抖（根因见 HUD_HIDE_DEBOUNCE_MS 处）——
+           ⛔ 只对「本来正在显示」的 HUD 生效：该不显示的时候多撑几十毫秒没有意义，
+              而正在显示时闪一下的代价要大得多（它还会被 180ms 重现去抖放大）。
+           判据是「连续为假」的时长，中间只要有一帧为真就重新计时。 */
+        if (wantVisible) {
+            s_hudMissSince = 0;
+        } else if (s_hudVisible) {
+            if (!s_hudMissSince) s_hudMissSince = now;
+            if ((DWORD)(now - s_hudMissSince) < HUD_HIDE_DEBOUNCE_MS) {
+                wantVisible = 1;          /* 瞬时抖动：维持显示，不提交隐藏 */
+                s_hudMissHold++;
+            }
+        }
         if (!wantVisible) {
             if (s_hudVisible) {
                 s_hudVisible = 0;
                 s_hudHideAt = now;
-                logf("# [hud] 隐藏: 门槛断了 ck=%d cv=%d gate=%d stroke=%d penDown=%ld "
-                     "altTool=%ld\n",
-                     cheapOk, canvasOk, gateOk, strokeOk, (long)g_penDown,
+                /* ⛔ 0x020F：这一行是「HUD 为什么消失」的**唯一**直接证据，必须自带
+                   全部子项 —— 旧版只打 ck/cv/gate/stroke，ck=0 时看不出是谁断的，
+                   排障只能靠 2s 节流的「未显示」行反推。 */
+                logf("# [hud] 隐藏: 门槛断满 %ldms（其间抑制抖动 %d 帧）"
+                     " ck=%d cv=%d gate=%d(toolOk=%ld penDown=%ld) stroke=%d draw=%d"
+                     " fg=%d ctU=%ld dead=%ld rope=%d real=%ldms active=%d(t=%ldms)"
+                     " altTool=%ld\n",
+                     (long)(s_hudMissSince ? (DWORD)(now - s_hudMissSince) : 0),
+                     s_hudMissHold, cheapOk, canvasOk, gateOk,
+                     (long)g_toolOk, (long)g_penDown, strokeOk, drawOk,
+                     fgOk, (long)g_ctUnknown, (long)deadNow, ropeMode,
+                     (long)realAgeHud, activeNow, (long)pktAge,
                      (long)(g_cfg ? g_cfg[CFG_I_ALTTOOL] : -1));
+                s_hudMissHold = 0;
             }
+            s_hudMissSince = 0;
             if (wnd && IsWindowVisible(wnd)) ShowWindow(wnd, SW_HIDE);
             /* 0x020D：隐藏期间不维护位置 ⇒ 下次出现必须重新定位（否则会先复用
                上一笔的旧位置，视觉上等于「冒出来时先错一帧再跳回来」）。 */
@@ -7053,6 +7124,33 @@ static DWORD WINAPI hud_thread(LPVOID param)
             hud_frame_wait_idle(frameTimer);
             continue;
         }
+        /* —— 0x020F：陈旧帧只「跳过重绘」，绝不隐藏 ——
+           ⛔⛔ 这是 `HUD_MAX_LAG_MS` / `HUD_BIG_JUMP_PX` 注释里写明的语义（「窗口保持
+              上一帧内容，不是隐藏」），但旧版把它们并进了 `cheapOk` ⇒ 走的是
+              `ShowWindow(SW_HIDE)` ⇒ 用户看到的就是「绘制过程中 HUD 闪一下又回来」。
+              一帧（8ms）的陈旧圆心，代价远小于一次消失—重现（那还要再吃 180ms 去抖）。
+           ⛔ 两种例外必须照常重绘：
+              · 窗口当前不可见 ⇒ 没有「上一帧内容」可保持，画一帧才有东西看；
+              · 连续跳帧超过 HUD_SKIP_MAX_MS ⇒ 线程被长时间抢占，此时圆会静止不动，
+                宁可糊一帧陈旧几何也不能让窗口僵在那里。 */
+        static DWORD s_skipSince;
+        int staleFrame = (lagSkip || bigJump) ? 1 : 0;
+        if (staleFrame) {
+            if (!s_skipSince) s_skipSince = now;
+            if (!IsWindowVisible(wnd) || (DWORD)(now - s_skipSince) >= HUD_SKIP_MAX_MS)
+                staleFrame = 0;
+        }
+        if (staleFrame) {
+            static DWORD s_skipLogAt;
+            if ((DWORD)(now - s_skipLogAt) >= 2000) {
+                s_skipLogAt = now;
+                logf("# [hud] 跳过重绘（不隐藏）: lag=%d jump=%d 连续=%ldms\n",
+                     lagSkip, bigJump, (long)(DWORD)(now - s_skipSince));
+            }
+            hud_frame_wait(frameTimer);
+            continue;
+        }
+        s_skipSince = 0;
         /* 0x020A：显示边沿留痕（与上面的「隐藏」成对）。
            ⛔ 这两行是「HUD 意外闪现」类问题的**唯一**直接证据 —— 此前显示动作
               完全不留痕，只能靠「未显示」行的 2s 节流缺口反推，4 帧的闪现根本看不见。 */

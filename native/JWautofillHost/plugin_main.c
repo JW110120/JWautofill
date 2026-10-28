@@ -1527,7 +1527,20 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
    （绳变直棍）；端点画在 `half + vx = 2·half + rx`（圆周外）；方向被常量 (half,half)
    主导 ⇒ 只在右下 45° 附近随笔向轻摆。现在减去 half，恢复「光标相对圆心」的语义。
    见 smooth_engine.c 的 rope 段与 rope=%d 日志字段。协议无变化。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x020E; }
+/* 0x020F（2026-10-28，**拉绳模式正常绘制中 HUD 偶尔消失一下又回来**）：
+   日志实证（jwwh-24800，16:53:12–16:55:31 共 18 次「隐藏→显示」，其中 10 次是
+   `gate=1 stroke=1 penDown=1`——笔一直按着，消失 224~420ms，肉眼必见）。
+   三条根因，逐条收口：
+   ① `realOk`（最后一批**真实包** ≤ 400ms）是主因：驱动短暂空转就过期，而快照
+      仍来自真实包、几何完全可信。现在「一笔进行中 + 未进合成接管」放到 1500ms
+      （`HUD_REAL_SLACK_MS`）；已接管仍按 0x0126 隐藏（合成包喂出的 tip 不可信）。
+   ② `lagSkip` / `bigJump` 被并进了 `cheapOk` ⇒ 走 `ShowWindow(SW_HIDE)`，
+      而它们的注释明写「窗口保持上一帧内容，不是隐藏」。现在只跳重绘
+      （连续超过 `HUD_SKIP_MAX_MS` 则强行画一帧，免得圆僵住）。
+   ③ 新增隐藏去抖 `HUD_HIDE_DEBOUNCE_MS`(90ms)：任何单帧判据抖动都不许提交隐藏，
+      否则一次 1~2 帧的抖动会被 180ms 重现去抖放大成可见的消失。
+   见 smooth_engine.c 的 realOk / staleFrame / s_hudMissSince。协议无变化。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x020F; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {
