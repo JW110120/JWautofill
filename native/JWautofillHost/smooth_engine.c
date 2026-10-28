@@ -6513,6 +6513,30 @@ static int hud_resize(HWND wnd, int need, HBITMAP* dib, HDC mem, int cur, void**
     return need;
 }
 
+/* 四舍五入到整像素（负坐标按「远离 0」取整 —— `(int)` 是截断，会在 0 附近
+   产生 1px 的系统性偏移，多屏左侧/上侧坐标就是负的）。 */
+static int hud_round_px(double v)
+{
+    return (int)(v >= 0.0 ? (v + 0.5) : (v - 0.5));
+}
+
+/* ⛔⛔ 0x020D：整像素**迟滞**提交（Schmitt 触发）。
+   窗口只能摆整数坐标，而候选位置是「光标(整数) − 偏移(浮点)」⇒ 天生带亚像素噪声；
+   噪声在 .5 边界左右穿，窗口就会在相邻两格之间**反复跳 1px** —— 这正是用户报的
+   「圆环与圆心一直非常小幅地抖」的最后一环（前面的噪声源见绘制段的长注释）。
+   规则：已提交 = N 时，候选要偏出 N ± (0.5 + HUD_PX_HYST) 才换格；换格之后要回到
+   原格，必须反向偏出 (0.5 − HUD_PX_HYST)。
+   ⇒ 边界处死区宽 2·HYST(=0.3px)，代价是最大 0.5+HYST(=0.65px) 的静态偏移 ——
+     肉眼不可见，换来的是「停在边界上也不再翻格」。 */
+#define HUD_PX_HYST 0.15
+static int hud_sticky_px(double cand, double* committed)
+{
+    double d = cand - *committed;
+    if (d >= 0.5 + HUD_PX_HYST || d <= -(0.5 + HUD_PX_HYST))
+        *committed = (double)hud_round_px(cand);
+    return (int)*committed;
+}
+
 static DWORD WINAPI hud_thread(LPVOID param)
 {
     (void)param;
@@ -6538,6 +6562,13 @@ static DWORD WINAPI hud_thread(LPVOID param)
     HBITMAP  dib = NULL;
     void*    dibBits = NULL;       /* DIB 像素基址（alpha 化用；随 hud_resize 更新） */
     int      hudSize = HUD_SIZE;   /* 当前窗口/DIB 边长（随 DPI 按需放大，见 hud_resize） */
+    /* —— 0x020D：位置稳定化的三件状态（根因与判据见绘制段注释）——
+       putX/putY = 已提交的窗口左上角（整像素，用 double 存是为了做迟滞比较）；
+       putOutX/Y = 提交这个位置时快照里的**绘制点**（轴坐标）。两者相等 ⇒ 绘制点
+                   这几帧一个字节都没动 ⇒ 圆心不许动，位置直接复用。 */
+    double   putX = 0.0, putY = 0.0;
+    int      putValid = 0;                 /* 0 = 没有可复用的位置（首次 / 刚隐藏过 / 换过尺寸） */
+    LONG     putOutX = 0, putOutY = 0;
 
     if (atom || GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
         /* ⛔⛔ WS_EX_TRANSPARENT **必须留着**（2026-10-16 第十四轮，代价惨重的回归）。
@@ -6988,6 +7019,9 @@ static DWORD WINAPI hud_thread(LPVOID param)
                      (long)(g_cfg ? g_cfg[CFG_I_ALTTOOL] : -1));
             }
             if (wnd && IsWindowVisible(wnd)) ShowWindow(wnd, SW_HIDE);
+            /* 0x020D：隐藏期间不维护位置 ⇒ 下次出现必须重新定位（否则会先复用
+               上一笔的旧位置，视觉上等于「冒出来时先错一帧再跳回来」）。 */
+            putValid = 0;
             /* ⛔ 「HUD 没能显示」必须能一眼定位：把六个条件逐个打出来（节流 2 秒，
                并且只在功能开着时打，避免关着的时候刷屏）。
                判读：
@@ -7069,8 +7103,13 @@ static DWORD WINAPI hud_thread(LPVOID param)
            圆周半径都是**物理像素** ⇒ 两边都要乘 dpiS，否则高分屏上圆被窗口裁掉、
            且「画的圈」比真实约束小（150% 下小 33%）。 */
         double dpiS = dpi_scale();
-        hudSize = hud_resize(wnd, 2 * ((int)((double)RADIUS_PX_MAX * dpiS) + 24),
-                             &dib, mem, hudSize, &dibBits);
+        {
+            int newSize = hud_resize(wnd, 2 * ((int)((double)RADIUS_PX_MAX * dpiS) + 24),
+                                     &dib, mem, hudSize, &dibBits);
+            /* 0x020D：边长变了 ⇒ half 变了 ⇒ 已提交位置的基准作废，重新定位。 */
+            if (newSize != hudSize) putValid = 0;
+            hudSize = newSize;
+        }
         /* 圆周半径 = 真实绳长（= 半径，张力已删除）⇒ 圈与约束永远一致。
            与滤波分支同源：那边 radiusPxF 同样乘了 dpiS。
            ⚠️ 模式判据在上面 wantVisible 处已经用过一次（ropeMode）；这里不再取一次，
@@ -7079,6 +7118,39 @@ static DWORD WINAPI hud_thread(LPVOID param)
         if (leashPx < 2) leashPx = 2;
 
         int half = hudSize / 2;
+        /* 0x020E：本帧画的绳长（= 光标相对圆心的真实屏幕距离），只用于日志取证。
+           判读：正常必须 ≤ leashPx（0x020D 的坐标系错误会让它恒 ≈ |(half,half)|）。 */
+        int ropeLenDbg = -1;
+        /* ⛔⛔ 0x020D：绘制点没动 ⇒ 窗口位置**一个像素都不许动**（圆心抖动的根因）。
+           圆心屏幕位置 = 光标 − 偏移，而偏移里的 raw 每帧都要按速度**外推**到当前
+           时刻（否则圆心会随光标漂，见上方 axX/aoX 的长注释）。问题出在速度本身：
+           raw 是整数轴坐标，量化 ±1 屏幕像素 ÷ 包间隔(≈5ms) ⇒ 速度噪声 ≈0.2px/ms，
+           再乘 age（每帧 0~8ms 逐帧变） ⇒ 圆心每帧被推来推去 1~2px。
+           数值模拟（20px 小圆、60px/s、5ms 包、8ms 帧、px=0.0768）：圆心峰峰 **2px**。
+           而拉绳模式**绳没绷紧时绘制点是被冻住的**（包路径 `distPx ≤ radius` 时
+           一个字节都不改 g_ox）⇒ 圆心此刻的正确位置就是上一帧那个位置：
+           外推在这里提供的信息量是**零**，带来的噪声却是全部。
+           ⇒ 判据：快照里的绘制点（snOutX/Y）与上次提交位置时相同 ⇒ 直接复用。
+           ⛔ 判据必须用**绘制点**，不是光标 —— 光标在圈里自由移动是正常行为，
+              圆心跟着它动才是 bug。
+           ⛔ 不能用「光标没动」当判据：那时圆心反而该被外推/低通带着走。
+           ⛔ putValid 的失效点必须齐三处：隐藏过 / 换过窗口边长（half 变） / 首次。
+             漏一处就会出现「复用一笔之前的旧位置」。 */
+        int putXc, putYc, putFrozen = 0;
+        if (putValid && snOutX == putOutX && snOutY == putOutY) {
+            putXc = (int)putX; putYc = (int)putY;
+            putFrozen = 1;
+        } else {
+            double cx = (double)cur.x - (axX - aoX) * px_x() - (double)half;
+            double cy = (double)cur.y - (axY - aoY) * px_y() - (double)half;
+            if (!putValid) {                       /* 首帧直接吸住，不做迟滞 */
+                putX = (double)hud_round_px(cx);
+                putY = (double)hud_round_px(cy);
+            }
+            putXc = hud_sticky_px(cx, &putX);
+            putYc = hud_sticky_px(cy, &putY);
+            putOutX = snOutX; putOutY = snOutY; putValid = 1;
+        }
         /* ⛔⛔ 2026-10-16 第十二轮：背景从「不透明黑 + LWA_COLORKEY 键色」改为
            「全 0 = 完全透明」（ULW_ALPHA 路径）。
            两个收益：① 彻底消灭「画笔色 = 纯黑 ⇒ 整窗透明」这个坑；
@@ -7113,8 +7185,26 @@ static DWORD WINAPI hud_thread(LPVOID param)
                   改造（一致快照 + 120Hz 帧）同时压掉了 d 的帧间抖动 ——
                    sag 对 d 的敏感度在绷紧附近极高，d 抖一下绳身就抽一下。 */
             const int NSEG = 24;
-            double vx = (double)rx, vy = (double)ry;
+            /* ⛔⛔ 0x020D：绳的末端必须**由几何反算**，不能再用 rx/ry。
+               rx/ry 是「光标 − 偏移」的估算值（含外推噪声，亚像素级抖动 ±1px），
+               而窗口位置现在可能是**复用的上一帧**（putFrozen）⇒ 两者不再一致：
+               窗口不动、rx 却在抖 ⇒ 绳末端在窗内自己抖，还会与真实光标脱开 1~2px。
+               正解：用几何反算（整数相减，恒精确）。顺带把 vlen 变成「绘制点↔笔尖」
+               的**真实屏幕距离**（此前含 ±1~2px 噪声）：sag 与绷直判据都吃它
+               ⇒ 「绳身在绷紧附近一抽一抽」的残余噪声一并消失。
+               ⛔⛔⛔ 坐标系（0x020E 修正）：`putXc/putYc` 是窗口**左上角**，圆心在
+               窗内 (half, half) ⇒ 光标相对圆心的向量 = `cur − (put + half)`。
+               0x020D 初版漏了减 half（等价于 vx = rx + half），症状正是用户实测的：
+                 · vlen = |(rx,ry) + (half,half)| ≈ 115~235 > leashPx(100)
+                   ⇒ 绷直判据每帧成立 ⇒ sag 恒 0 ⇒ 绳永远是一条**直棍**；
+                 · 端点画在 `half + vx = 2·half + rx`（248~318），落到**圆周外**；
+                 · 方向被常量 (half, half) 主导 ⇒ 只在右下 **25°~65°** 扇形内随笔向轻摆。
+               ⚠️ half 与 leashPx 同量级（都 ≈ RADIUS_PX_MAX·dpiS），所以这个错误
+                  在观感上不像「错位」，而像「绳变硬了」——正是它躲过了自检。 */
+            double vx = (double)cur.x - (double)putXc - (double)half;
+            double vy = (double)cur.y - (double)putYc - (double)half;
             double vlen = dsqrt_(vx * vx + vy * vy);
+            ropeLenDbg = (int)(vlen + 0.5);
             /* ⛔⛔ 绷直判据必须带**滞回死区**（2026-10-14，用户报的「绳在绷直与
                轻微弯曲之间跳变」；本轮复现为「绷直态偶尔闪弯」）。两道防线：
                ① 阈值改**相对值**：用户半径已拉到 100px，旧的固定 6px 只有 6%，
@@ -7204,7 +7294,7 @@ static DWORD WINAPI hud_thread(LPVOID param)
            正是那套走法在 DWM 下不被合成的典型形态。
            ⛔ hdcDst 传 NULL = 用屏幕 DC；ULW_ALPHA + AC_SRC_ALPHA = 以 DIB 的
               alpha 通道做透明（这正是去掉 color key 后要用的模式）。 */
-        POINT ptDst; ptDst.x = cur.x - rx - half; ptDst.y = cur.y - ry - half;
+        POINT ptDst; ptDst.x = putXc; ptDst.y = putYc;
         SIZE  szLay; szLay.cx = hudSize; szLay.cy = hudSize;
         POINT ptSrc; ptSrc.x = 0; ptSrc.y = 0;
         BLENDFUNCTION bf;
@@ -7287,12 +7377,14 @@ static DWORD WINAPI hud_thread(LPVOID param)
                     pRing = (unsigned long)px[half * hudSize + rxs];
                 }
                 logf("# [hud] 显示: vis=%d ex=0x%lX exb=0x%lX top=%ld raise=%d ulw=%d "
-                     "rect=(%ld,%ld,%ld,%ld) cur=(%ld,%ld) off=(%d,%d) size=%d col=%06lX "
+                     "rect=(%ld,%ld,%ld,%ld) cur=(%ld,%ld) off=(%d,%d) put=(%d,%d) frz=%d "
+                     "rope=%d size=%d col=%06lX "
                      "leash=%d(物理px) px[ctr=%08lX ring=%08lX far=%08lX] reShow=%d z=%p err=%lu\n",
                      (int)IsWindowVisible(wnd), (unsigned long)lex, (unsigned long)exBefore,
                      (long)((exBefore & WS_EX_TOPMOST) ? 1 : 0), (int)raiseOk, (int)ulwOk,
                      (long)rr.left, (long)rr.top, (long)rr.right, (long)rr.bottom,
-                     (long)cur.x, (long)cur.y, rx, ry, hudSize,
+                     (long)cur.x, (long)cur.y, rx, ry, putXc, putYc, putFrozen,
+                     ropeLenDbg, hudSize,
                      (unsigned long)(col & 0xFFFFFF), leashPx,
                      pCtr, pRing, pFar, (int)reShow,
                      /* z = 在我们**上面**的那个窗口（NULL = 已是最顶）。

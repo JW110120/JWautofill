@@ -1511,7 +1511,23 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
       ⇒ 慢速画线时该参数整段不触发。现在参考方向由 ≥3px 线段推进、当前方向由 ≥2px
       累积位移给出。见 smooth_engine.c 的 s_spRef* / s_cRef* 与 SPEED_WIN_PX。
    协议无字段变化 ⇒ CFG_NLONGS 仍是 59。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x020C; }
+/* 0x020D（2026-10-28，**拉绳模式：光标在圈内移动时圆环与圆心一直小幅抖动**）：
+   圆心屏幕位置 = 光标 − 偏移，而偏移每帧要用「上一包速度 × age」把 raw 外推到当前
+   时刻（否则圆心随光标漂）。raw 是整数轴坐标，量化 ±1 屏幕像素 ÷ 包间隔(≈5ms) ⇒
+   速度噪声 ≈0.2px/ms，乘 age（0~8ms 逐帧变）⇒ 圆心每帧被推 1~2px（模拟峰峰 2px）。
+   而绳没绷紧时**绘制点本来就被冻住**（包路径 distPx ≤ radius 时不改 g_ox）⇒ 此刻
+   圆心就该一动不动，外推提供的信息量是零、噪声却是全部。
+   现在：`snOutX/Y` 与上次提交位置时相同 ⇒ 复用上一帧位置（判据用绘制点，不用光标）；
+   位置另加整像素迟滞（HUD_PX_HYST，边界死区 0.3px）防「停在 .5 边界上翻格」。
+   见 smooth_engine.c 的 hud_sticky_px / hud_thread 绘制段。协议无变化。 */
+/* 0x020E（2026-10-28，**拉绳模式的绳变成一根直棍、端点跑到圆周外**）：
+   0x020D 修抖动时把绳向量从 `rx/ry` 改成「光标 − 已提交的窗口左上角」，但漏了
+   `putXc/putYc` 是**左上角**、圆心在窗内 (half, half) ⇒ 实际拿到的是 `(rx+half, ry+half)`。
+   后果：vlen ≈ |(124,124)| ≈ 175 > leashPx(100) ⇒ 绷直判据每帧成立 ⇒ sag 恒 0
+   （绳变直棍）；端点画在 `half + vx = 2·half + rx`（圆周外）；方向被常量 (half,half)
+   主导 ⇒ 只在右下 45° 附近随笔向轻摆。现在减去 half，恢复「光标相对圆心」的语义。
+   见 smooth_engine.c 的 rope 段与 rope=%d 日志字段。协议无变化。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x020E; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {
