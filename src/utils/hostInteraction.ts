@@ -63,33 +63,53 @@ let busyAt = 0;
 let holdUntil = 0;
 
 /**
+ * 0x020B：本次「按下周期」内**是否真的按过左键**（而不是只按了空格）。
+ *
+ * ⛔ 为什么要这一位：`busy` 的判据是「左键 ∨ 空格」，两者混在一个电平里，
+ *    松开边沿自然也就分不清「用户在画布上点了一下」和「用户按空格平移了一下」。
+ *    0x020A 用「背景色变了没有」当代理判据 —— 于是「背景色本来就是白、吸的也是白」
+ *    这条路径被短路掉（用户报的 bug）。现在多这一位，就能用**输入事实**而不是
+ *    **颜色差异**来判定「这一次到底有没有发生取色点击」。
+ */
+let busyHadLeft = false;
+
+/**
  * 记录一帧宿主交互态（由 `HotkeyBridge` 的 `hostBusy` 消息驱动）。
  *
  * ⚠️ 若 .8li 是旧版（不推这条消息），本模块永远保持「不忙」⇒ 行为与改动前完全一致，
  *    不会因为缺消息而停掉任何巡检。这是刻意设计的降级路径。
  */
-export function noteHostBusy(on: boolean): void {
+export function noteHostBusy(on: boolean, leftBtn?: boolean): void {
     const now = Date.now();
     if (on) {
         busy = true;
         busyAt = now;
         holdUntil = 0;
+        /* ⛔ 缺省（`leftBtn === undefined`）= 旧版 .8li 不推 `btn` 字段 ⇒ 按「有左键」
+           处理，行为与 0x020A 完全一致（绝不让旧模块因为缺字段而失效）。 */
+        if (leftBtn !== false) busyHadLeft = true;
         return;
     }
     if (busy) {
         busy = false;
         holdUntil = now + HOLD_AFTER_RELEASE_MS;
+        const hadLeft = busyHadLeft;
+        busyHadLeft = false;
         /* 0x020A：**松开边沿**（只在此刻触发，且只触发一次）。
            用途：Alt 临时吸管下「一次吸色点击结束」= 左键（笔模拟的 down/up）走完一轮。
-           判据与 busy 同源，不额外引入按键语义。 */
+           判据与 busy 同源，不额外引入按键语义。
+           0x020B：把「这一轮里有没有左键」一并交出去 —— 订阅方靠它区分
+           「画布上点了一下」与「只按了空格平移」。 */
         for (const f of releaseHandlers) {
-            try { f(); } catch { /* ignore */ }
+            try { f(hadLeft); } catch { /* ignore */ }
         }
+        return;
     }
+    busyHadLeft = false;      /* 重复的 0 帧 ⇒ 周期已结束，标记归零（自愈） */
 }
 
 /* ------------------------------------------------------------------ 0x020A：松开边沿订阅 */
-type ReleaseHandler = () => void;
+type ReleaseHandler = (hadLeftBtn: boolean) => void;
 const releaseHandlers: ReleaseHandler[] = [];
 
 /**
@@ -99,6 +119,9 @@ const releaseHandlers: ReleaseHandler[] = [];
  *    只在最后松手那一刻回调一次 —— 正是「一次取色结束」的语义。
  * ⚠️ 判据含空格（见模块头），订阅方必须自己确认「此刻我要不要响应」
  *    （临时吸管用 `altToolHold` 收口），不要把这里当精确的左键事件。
+ * ⚠️ 0x020B：参数 `hadLeftBtn === false` 表示这一轮按下里**只有空格**、没有左键
+ *    （PS 的抓手/缩放导航），订阅方必须跳过 —— 否则「按 Alt 顺便平移一下画面」
+ *    会被当成一次取色。
  */
 export function onHostRelease(fn: ReleaseHandler): () => void {
     releaseHandlers.push(fn);

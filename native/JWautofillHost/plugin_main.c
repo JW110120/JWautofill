@@ -1495,7 +1495,14 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
    （pstool_owns 时由 'slct' 独占），于是吸管按笔吸色时 HUD 冒出来、取色点被拉绳偏移。
    ② 入站新增 `{"type":"altTool","on":0|1}`。
    见 keyhook.c 的 Alt 边沿块、smooth_engine.c 的 tool_edit_allowed / gateOk。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x020A; }
+/* 0x020B（2026-10-28，**白背景吸白色时前景色不动**）：
+   `hostBusy` 增加 `btn` 字段（1 = 这一帧左键按着），把「左键」与「空格」拆开。
+   面板侧 `syncAltPickColor` 原来用「背景色变了没有」判「有没有取色」——
+   背景色为白、吸的也是白 ⇒ 两值相等 ⇒ 被判成「没取色」⇒ 前景永不更新。
+   颜色相等与压根没吸在**值上不可区分**，只能用输入事实判 ⇒ 见
+   utils/hostInteraction.ts 的 busyHadLeft、app.tsx 的 syncAltPickColor。
+   ⛔ 只加字段不动 `v` 语义；`btn` 变化单独触发一帧（拖拽中 v 恒 1，没有边沿）。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x020B; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {

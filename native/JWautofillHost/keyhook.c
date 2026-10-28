@@ -1859,22 +1859,33 @@ static DWORD WINAPI kh_dispatch_thread(LPVOID param)
          *    · 空格 = PS 的抓手/缩放导航修饰键；
          *    · **笔尖落笔不算**（Wintab 通路里笔尖不是鼠标左键）⇒ 正常绘画不受影响，
          *      绘画期的宿主忙碌仍由 isPsBusy() + 通知事件负责，此处不重复。
-         * ⛔ 本线程不在钩子回调里（20ms 调度线程）⇒ GetAsyncKeyState/发送都允许。 */
+         * ⛔ 本线程不在钩子回调里（20ms 调度线程）⇒ GetAsyncKeyState/发送都允许。
+         *
+         * ============================ 0x020B：`btn` 字段（左键 / 空格分家）
+         * 为什么加：面板侧「Alt 临时吸管」要在松开边沿上判「这一次到底有没有取色」。
+         *   0x020A 只能用「背景色变了没有」当代理 —— 于是「背景本来就是白、吸的也是白」
+         *   被判成「没取色」（用户报的 bug）。颜色相同与压根没吸在**值上不可区分**，
+         *   只能靠**输入事实**：这一轮按下里有没有真的按过左键。
+         *   而 `v` 把左键与空格混在一个电平里（空格 = PS 抓手/缩放导航）⇒ 必须多一位。
+         * ⛔ 只加字段、不改 `v` 的语义：老面板读不到 `btn` 也不会受影响。
+         * ⛔ `btn` 变化也单独触发一帧（拖拽中按下/松开左键时 `v` 恒为 1，没有边沿）。 */
         {
             static int   s_hbPrev = -1;
+            static int   s_hbBtn = -1;
             static DWORD s_hbLast;
-            int hb = 0;
-            if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) hb = 1;
+            int hb = 0, btn = 0;
+            if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) { hb = 1; btn = 1; }
             else if (GetAsyncKeyState(VK_SPACE) & 0x8000) hb = 1;
             DWORD nowHb = GetTickCount();
             /* ⛔ 边沿 + 「忙态」2s 保活：只有边沿的话，一旦丢帧或面板中途重连，
                面板会把忙态粘住（虽然它自己有 30s 兜底，但 30s 的巡检停摆不可接受）。
                保活只在**按着的时候**发（拖拽期），松手后靠那一条 0 边沿收尾。 */
-            if (hb != s_hbPrev || (hb && (DWORD)(nowHb - s_hbLast) >= 2000)) {
+            if (hb != s_hbPrev || btn != s_hbBtn || (hb && (DWORD)(nowHb - s_hbLast) >= 2000)) {
                 s_hbPrev = hb;
+                s_hbBtn = btn;
                 s_hbLast = nowHb;
-                char j[48];
-                _snprintf(j, sizeof(j), "{\"type\":\"hostBusy\",\"v\":%d}", hb);
+                char j[64];
+                _snprintf(j, sizeof(j), "{\"type\":\"hostBusy\",\"v\":%d,\"btn\":%d}", hb, btn);
                 kh_broadcast(j);
             }
         }

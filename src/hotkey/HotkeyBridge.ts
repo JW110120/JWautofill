@@ -597,7 +597,10 @@ export function connectHotkeyDaemon(): () => void {
           // 0x0208：宿主交互态边沿（左键/空格）。只喂给「巡检让路」判据，
           // 不参与热键逻辑；详见 utils/hostInteraction.ts 的根因说明。
           else if (msg?.type === 'hostBusy') {
-            noteHostBusy(msg.v === true || msg.v === 1);
+            /* 0x020B：`btn` = 这一帧里左键是否按着（1/0）。缺字段 ⇒ undefined，
+               hostInteraction 按「有左键」兜底（旧版 .8li 兼容）。 */
+            noteHostBusy(msg.v === true || msg.v === 1,
+                         msg.btn === undefined ? undefined : (msg.btn === true || msg.btn === 1));
           }
           // 0x0209：Alt 边沿（专注模式下的临时吸管）。同样只做「电平转事件」，
           // 判定（专注模式 + 套索 + 总开关开）由 app.tsx 的订阅方负责。

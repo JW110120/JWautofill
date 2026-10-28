@@ -134,6 +134,7 @@ typedef struct { int axMin; int axMax; u32 axUnits; u32 axResolution; } AXIS_T;
 /* ⛔ 2026-10-17：48 → 56（plugin_main.c 新增 I_MODALLVL..I_DOCEPOCH 四个槽）；
    56 → 58（0x0115 新增 I_NOTIFYAGE / I_GATEOWNED）；
    58 → 59（0x020A 新增 I_ALTTOOL：临时吸管的硬否决位）。
+   0x020B **无槽位变化**（只给 hostBusy 消息加了 `btn` 字段，见 keyhook.c）⇒ 仍是 59。
    两个文件的 CFG_NLONGS **必须同步**：谁先建节谁定尺寸，不一致的一方会
    MapViewOfFile 到错误的字节数（不报错，只静默截断 —— 既有铁律区）。 */
 #define CFG_NLONGS    59

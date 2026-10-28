@@ -617,7 +617,9 @@ class App extends React.Component<AppProps, AppState> {
             // 0x020A：宿主「松开」边沿 = 一次吸色点击结束。用于把 PS 写进背景色的
             // 取样结果搬到前景色（根因与取舍见 syncAltPickColor 的长注释）。
             // ⛔ 判据来自 hostBusy（左键∨空格），所以回调里必须再用 altToolHold 收口。
-            this.unsubHostRelease = onHostRelease(() => { void this.syncAltPickColor(); });
+            // ⛔ 0x020B：`hadLeft` 区分「左键点了一下」与「只按了空格平移」——
+            //    后者绝不能当成一次取色（详见 hostInteraction.ts 的 busyHadLeft）。
+            this.unsubHostRelease = onHostRelease((hadLeft) => { void this.syncAltPickColor(hadLeft); });
             // 平滑模块（.8li）自己的连接（18924）。刻意与 connectHotkeyDaemon 分开调用：
             // 两条 WebSocket 的生命周期必须互不相干，否则「停快捷键服务」又会把平滑带下水。
             this.unsubSmoothDaemon = connectSmoothDaemon();
@@ -2879,10 +2881,30 @@ class App extends React.Component<AppProps, AppState> {
      *     收益是**零键盘风险**，且失败可见（不动就什么都不改）。
      *
      * ⛔ 只在 `altToolHold` 期间生效 ⇒ 正常吸管工具（不按 Alt）完全不受影响。
+     *
+     * ⛔⛔ 0x020B：**不能再拿「背景色变了没有」当「有没有取色」的判据**（用户报的 bug：
+     *   前景色任意非白 + 背景色为白 + 吸白色 ⇒ 前景色毫无变化）。
+     *   链条：`bgOld`（进吸管前的背景色）与 `bgNow`（点完之后读回）都是白 ⇒ 旧代码
+     *   认为「颜色没变 = 这一次没真的取色」⇒ 直接 return ⇒ 前景永远不动。
+     *   而「吸到的颜色恰好等于原背景色」与「压根没吸」这两种事实，**在颜色上是
+     *   完全无法区分的**（PS 把同样的值再写一遍，等于没写）。
+     *   ⇒ 判据换成**输入事实**：这一次按下-松开里有没有真按过左键
+     *     （`hadLeftBtn`，来自原生 hostBusy 的 `btn` 字段）。
+     *     有左键 ⇒ 用户在画布上点了一下，按 Alt 的语义就是取色 ⇒ 一律搬运，
+     *     颜色相同也搬运（同色时搬运是幂等的：前景 ← 当前背景色）。
+     *     只有空格 ⇒ 那是 PS 的抓手/缩放导航，绝不当取色。
+     *   ⚠️ 代价（刻意接受）：点在画布外（工具栏/面板）时 PS 不会取色，我们仍会把
+     *     当前背景色搬成前景色。这比「吸了色却没反应」轻得多 —— 后者是主流程被破坏。
      */
-    private async syncAltPickColor() {
+    private async syncAltPickColor(hadLeftBtn: boolean = true) {
         const bgOld = this.altPickBg;
         if (!bgOld) return;
+        /* 0x020B：这一轮只有空格（没有左键）⇒ 不是取色点击，直接放行。
+           ⛔ 缺省 true：旧版 .8li 不推 btn 字段时保持 0x020A 的行为。 */
+        if (!hadLeftBtn) {
+            console.log('[临时吸管] 松开边沿无左键（空格导航）⇒ 不当作取色');
+            return;
+        }
         /* 只允许两种情况响应：① 此刻仍在临时吸管态；② 刚松开 Alt 的 800ms 宽限内
            （「吸色 → 顺手松 Alt」是主流程，release 边沿的两个来源先后不定）。
            ⛔ 没有这一层，用户回到套索后的任意一次点击都会走到下面，
@@ -2895,20 +2917,22 @@ class App extends React.Component<AppProps, AppState> {
         await new Promise<void>((r) => setTimeout(r, 80));
         const bgNow = App.snapshotBackgroundColor();
         if (!bgNow) return;
-        if (bgNow.r === bgOld.r && bgNow.g === bgOld.g && bgNow.b === bgOld.b) {
-            // 没有变化 = 这一次没真的取色（只点了一下 / 吸到的颜色恰好相同）⇒ 什么都不改
-            return;
-        }
+        /* 观察用：颜色是否变化（只写日志，**不再**决定要不要搬运）。 */
+        const same = bgNow.r === bgOld.r && bgNow.g === bgOld.g && bgNow.b === bgOld.b;
         try {
             await runAsModal(async () => {
-                /* 前景 = 刚吸到的那个颜色（= 此刻的背景色对象）；
-                   背景 = 进吸管之前记下的原色。⛔ 两次都赋 SolidColor **对象**，
-                   不走 batchPlay —— 颜色对象是值对象，赋值不会失败，
-                   也就不存在「失败的 batchPlay 在 PS 里画一条黄条」的风险。 */
+                /* 前景 = 此刻的背景色（= PS 刚吸到的那个颜色）；
+                   背景 = 进吸管之前记下的原色（复原）。
+                   ⛔ 两次都赋 SolidColor **对象**，不走 batchPlay —— 颜色对象是值对象，
+                   赋值不会失败，也就不存在「失败的 batchPlay 在 PS 里画一条黄条」的风险。
+                   ⛔ 顺序不能反：`bgNow.solid` 与 `bgOld.solid` 是两个不同快照，但先写
+                   前景再复原背景，即使将来某个 PS 版本让它们共享引用，前景也已落盘。 */
                 (app as any).foregroundColor = bgNow.solid;
-                (app as any).backgroundColor = bgOld.solid;
+                if (!same) (app as any).backgroundColor = bgOld.solid;
             }, { commandName: '临时吸管·取前景色' });
-            console.log('[临时吸管] 取色 → 前景色已更新，背景色已复原');
+            console.log(same
+                ? '[临时吸管] 取色 → 前景色已更新（吸到的颜色与原背景色相同，背景无需复原）'
+                : '[临时吸管] 取色 → 前景色已更新，背景色已复原');
         } catch (e) {
             console.warn('⚠️ 临时吸管：搬运取色结果失败:', e);
         }
