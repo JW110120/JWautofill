@@ -205,7 +205,7 @@ interface AppProps {}
 
 class App extends React.Component<AppProps, AppState> {
     private unsubMainToggle: (() => void) | null = null;
-    // 0x0209：Alt 边沿（专注模式「临时吸管」）的订阅器
+    // 0x0209：Alt 边沿（工具模式「临时吸管」）的订阅器
     private unsubAltHold: (() => void) | null = null;
     /**
      * 0x0209：此刻是否正处在「Alt 临时吸管」期间。
@@ -228,7 +228,7 @@ class App extends React.Component<AppProps, AppState> {
     private unsubHostRelease: (() => void) | null = null;
     // 功能快捷键：纯色/图案/渐变子面板开关注订器（FillPanelToggleBus 轮询分发，卸载时退订）
     private unsubFillPanelToggle: (() => void) | null = null;
-    // 专注模式「清除模式」键（Shift+E）与混合模式热键的订阅器（ClearModeBus / BlendModeBus，
+    // 工具模式「清除模式」键（Shift+E）与混合模式热键的订阅器（ClearModeBus / BlendModeBus，
     // 热键命中方写在绘画工具箱面板的 JS 上下文，经共享文件到达这里，卸载时退订）
     private unsubClearModeToggle: (() => void) | null = null;
     private unsubBlendMode: (() => void) | null = null;
@@ -400,7 +400,7 @@ class App extends React.Component<AppProps, AppState> {
     private static readonly DOC_LATCH_MIN_HOLD_MS = 1500;
 
     /**
-     * 专注模式：APP 父面板里「自动关开关」+「自动切套索」同时勾选即自动成立，任一取消即退出。
+     * 工具模式：APP 父面板里「自动关开关」+「自动切套索」同时勾选即自动成立，任一取消即退出。
      * 它不是用户直接勾选的选项，而是一个推导结论：
      *   1. 主开关的圆点换成星形图标；
      *   2. 主开关热键变成「只开不关」（MainToggleBus 里读共享状态决定）；
@@ -414,25 +414,25 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     /**
-     * 把专注模式结论同步到共享总线（值没变就不写，避免无谓的文件 I/O）。
+     * 把工具模式结论同步到共享总线（值没变就不写，避免无谓的文件 I/O）。
      *
      * @param explicit 已知结论时直接传入，**跳过读 this.state**。
      *   ⛔ 启动期必须用它：componentDidMount 里 setState 之后紧跟着调用本方法时，
      *   React 的自动批处理让 this.state 仍是**旧值**（默认 false/false）——
      *   直接读会把 false 写进共享文件（把上次会话留下的 true 覆盖掉），
      *   随后 componentDidUpdate 才纠回 true。中间窗口里 MainToggleBus 读到的
-     *   是 false ⇒ 主开关热键短暂失去「只开不关」语义（专注模式下的关键行为）。
+     *   是 false ⇒ 主开关热键短暂失去「只开不关」语义（工具模式下的关键行为）。
      */
     private syncFocusMode(explicit?: boolean) {
         const on = explicit !== undefined ? explicit : this.isFocusMode();
         if (this.focusModeWritten === on) return;
         this.focusModeWritten = on;
-        void setFocusMode(on).catch(e => console.warn('⚠️ 专注模式状态同步失败:', e));
-        // 同步「套索工具键」的装载状态：专注模式开启时注册（默认 L）→ 按下即关闭主开关、
+        void setFocusMode(on).catch(e => console.warn('⚠️ 工具模式状态同步失败:', e));
+        // 同步「套索工具键」的装载状态：工具模式开启时注册（默认 L）→ 按下即关闭主开关、
         // 并把工具切回套索，让 H / L 像两个工具一样切换。由本面板独占写入（其它面板不调用，
         // 详见 HotkeyBridge 的 focusLassoKnown 说明）。
         setFocusLassoActive(on);
-        // 同步「清除模式」键（默认 Shift+E）：专注模式开启时注册 → 按下即确保主开关开启
+        // 同步「清除模式」键（默认 Shift+E）：工具模式开启时注册 → 按下即确保主开关开启
         // 并切换清除模式（主开关不会被关掉）。同样由本面板独占写入。
         setFocusClearActive(on);
     }
@@ -598,7 +598,7 @@ class App extends React.Component<AppProps, AppState> {
             this.unsubFillPanelToggle = subscribeFillPanelToggle((panel) => {
                 this.applyFillPanelHotkey(panel);
             });
-            // 专注模式「清除模式」键（默认 Shift+E）：命令经 ClearModeBus 到达这里，
+            // 工具模式「清除模式」键（默认 Shift+E）：命令经 ClearModeBus 到达这里，
             // 翻本面板的 clearMode（与面板上的勾选走同一个 toggleClearMode，语义一致）。
             this.unsubClearModeToggle = subscribeClearModeToggle(() => {
                 this.toggleClearMode();
@@ -610,9 +610,9 @@ class App extends React.Component<AppProps, AppState> {
             });
             // 套索实时平滑：.8li 模块回报的钩子/布防健康状态（同步回调，无 await）。
             this.unsubSmoothStatus = onLassoSmoothStatus((s) => { this.applySmoothStatus(s); });
-            // 0x0209：Alt 边沿 → 专注模式下的「临时吸管」。
+            // 0x0209：Alt 边沿 → 工具模式下的「临时吸管」。
             // ⛔ 走 .8li 的键态轮询（UXP 面板拿不到宿主前台的全局键态），
-            //    三个条件（专注模式 / 套索 / 总开关开）的判定在 handleAltHoldEdge 里。
+            //    三个条件（工具模式 / 套索 / 总开关开）的判定在 handleAltHoldEdge 里。
             this.unsubAltHold = onAltHold((on) => { void this.handleAltHoldEdge(on); });
             // 0x020A：宿主「松开」边沿 = 一次吸色点击结束。用于把 PS 写进背景色的
             // 取样结果搬到前景色（根因与取舍见 syncAltPickColor 的长注释）。
@@ -756,7 +756,7 @@ class App extends React.Component<AppProps, AppState> {
         await this.checkLicenseStatus();
 
         // ========= 面板状态：加载并合并 =========
-        // 专注模式的结论直接由「合并后的两个前置选项」算出（不读 this.state）：
+        // 工具模式的结论直接由「合并后的两个前置选项」算出（不读 this.state）：
         // 下面的 setState 是异步的，此刻 this.state 仍是默认值 false/false。
         let focusAfterMerge = this.isFocusMode();
         try {
@@ -861,11 +861,11 @@ class App extends React.Component<AppProps, AppState> {
             // 加载完成（无论成败）才允许后续的持久化保存，避免启动期默认值覆盖已存状态
             this.panelStateLoaded = true;
         }
-        // 选项已从磁盘合并进来，此刻把专注模式结论推给共享总线（下次会话未打开面板也有效）。
+        // 选项已从磁盘合并进来，此刻把工具模式结论推给共享总线（下次会话未打开面板也有效）。
         // ⚠️ 必须传显式值 focusAfterMerge，不能让 syncFocusMode 去读 this.state：
         //    上面那个 setState 尚未生效（自动批处理），读到的仍是默认 false/false，
         //    会把 false 写进共享文件、覆盖上次会话留下的 true，之后虽被 componentDidUpdate
-        //    纠回，但那个窗口里主开关热键会失去「只开不关」的专注模式语义。
+        //    纠回，但那个窗口里主开关热键会失去「只开不关」的工具模式语义。
         this.syncFocusMode(focusAfterMerge);
         // 紧凑模式持久化状态恢复：把加载到的 5 个作用域逐一落到 body 类上，并同步菜单文案
         this.syncCompactModeClasses();
@@ -898,7 +898,7 @@ class App extends React.Component<AppProps, AppState> {
             prevState.fillOptionsVisible !== this.state.fillOptionsVisible) {
             this.syncQuickMaskWatch();
         }
-        // 专注模式的两个前置选项变化时同步到共享总线（同样不受下方早退影响）
+        // 工具模式的两个前置选项变化时同步到共享总线（同样不受下方早退影响）
         if (prevState.autoOffOnOtherTool !== this.state.autoOffOnOtherTool ||
             prevState.switchToLassoOnEnable !== this.state.switchToLassoOnEnable) {
             this.syncFocusMode();
@@ -1294,7 +1294,7 @@ class App extends React.Component<AppProps, AppState> {
      * 归属（与 smooth_engine.c（.8li 内，原 wintab_hook.c）的 smooth_packets 分支一一对应，勿凭感觉改）：
      *   半径 → **仅「拉绳」**（2026-10-19 用户要求：标准/追笔去掉半径，一个模式一个参数；
      *           标准/追笔模式下 toWire 固定下发 SMOOTH_RADIUS_MAX 当上限，不截断强度/追笔速度）
-     *   强度 / 保角下限 / 速度适应 → 仅「标准」（拉绳与追笔都不读 Strength）
+     *   强度 / 尖角保护 / 速度适应 → 仅「标准」（拉绳与追笔都不读 Strength）
      *   追笔速度 → 仅「追笔」
      *   拉绳提示 → 仅「拉绳」
      *
@@ -2759,9 +2759,9 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     /**
-     * 0x0209：Alt 边沿 → 专注模式下的「临时吸管」。
+     * 0x0209：Alt 边沿 → 工具模式下的「临时吸管」。
      *
-     * 需求（用户原话）：「仅当我处于专注模式下，当前工具是套索，且总开关是开时，
+     * 需求（用户原话）：「仅当我处于工具模式下，当前工具是套索，且总开关是开时，
      * 按 alt 键能够临时切换为吸管工具……松开 alt 后会自动变回套索工具，总开关是开的状态。」
      *
      * 三个前置条件缺一不可（按顺序判，最便宜的先判）：
@@ -2789,7 +2789,7 @@ class App extends React.Component<AppProps, AppState> {
             const tool = this.lastKnownTool || this.state.smoothStatus?.pen?.psTool || null;
             if (!tool || !App.isLassoTool(tool)) return;
             this.altToolHold = true;
-            console.log('[临时吸管] Alt 按下 ⇒ 切吸管（专注模式 · 套索 · 总开关开）');
+            console.log('[临时吸管] Alt 按下 ⇒ 切吸管（工具模式 · 套索 · 总开关开）');
             /* —— 0x020A ①②：先竖否决位、再切工具 ——
                ⛔ 顺序不能反：切工具要过一次 batchPlay（几十~几百 ms），这段时间里
                   工具还是套索、工具闸门还是 1（'slct' 回调还没来），用户若立刻按笔
@@ -3609,7 +3609,7 @@ class App extends React.Component<AppProps, AppState> {
         //      （原 componentDidUpdate 里那段 add/remove、以及各处的 remove 调用均已删除，
         //        避免多写点互相打架；本行是唯一写点。）
         this.syncLicenseDialogClass();
-        // 专注模式：两个前置选项同时勾选即成立（推导值，不额外存 state）
+        // 工具模式：两个前置选项同时勾选即成立（推导值，不额外存 state）
         const focusMode = this.isFocusMode();
         // 紧凑模式（仅父面板作用域）：三行 radio 改三列、去掉齿轮，标签兼作子面板入口
         const compactApp = !!this.state.compactModes?.app;
@@ -3630,16 +3630,16 @@ class App extends React.Component<AppProps, AppState> {
                 </h3>
                 <div className="divider"></div>
                 {compactApp && focusMode ? (
-                    /* 紧凑 + 专注模式：主按钮收成单行 notify-bar——左星形 indicator、中「专注模式」、
+                    /* 紧凑 + 工具模式：主按钮收成单行 notify-bar——左星形 indicator、中「工具模式」、
                        右 sp-switch（开关即控制），省纵向高度。开关放右侧单独控制，点星/文案不触发切换。
                        两态配色与主按钮一致：开=ok 主色描边主色星，关=disabled 灰描边灰星（不用 warn 橙，
                        橙在本插件语义里是「异常/待处理」，关闭只是未启用）。文案沿用主按钮的
-                       「功能开启/功能关闭」，并标注当前处于专注模式。 */
+                       「功能开启/功能关闭」，并标注当前处于工具模式。 */
                     <div className={this.state.isEnabled ? 'notify-bar notify-bar-ok' : 'notify-bar notify-bar-disabled'}>
                         <FocusTargetIcon className={this.state.isEnabled ? 'indicator-icon-lg indicator-icon-ok' : 'indicator-icon-lg'} />
-                        <span className="notify-text">{this.state.isEnabled ? '功能开启（专注）' : '功能关闭'}</span>
+                        <span className="notify-text">{this.state.isEnabled ? '功能开启（工具）' : '功能关闭'}</span>
                         <span className="mask-sync-status-spacer" />
-                        <ToggleSwitch checked={this.state.isEnabled} onChange={this.handleButtonClick} title={helpTexts.selectionFill.mainButtonFocus}  />
+                        <ToggleSwitch checked={this.state.isEnabled} onChange={this.handleButtonClick} title={helpTexts.selectionFill.mainButtonTool}  />
                     </div>
                 ) : (
                 <div
@@ -3647,9 +3647,9 @@ class App extends React.Component<AppProps, AppState> {
                     tabIndex={0}
                     className="main-button"
                     onClick={this.handleButtonClick}
-                    title={focusMode ? helpTexts.selectionFill.mainButtonFocus : helpTexts.selectionFill.mainButton}>
+                    title={focusMode ? helpTexts.selectionFill.mainButtonTool : helpTexts.selectionFill.mainButton}>
                     <div className="main-button-content">
-                        {/* 专注模式下圆点换成同尺寸、同双色的靶心图标（Spectrum Target）；非专注模式仍是原来的圆点 */}
+                        {/* 工具模式下圆点换成同尺寸、同双色的靶心图标（Spectrum Target）；非工具模式仍是原来的圆点 */}
                         {focusMode ? (
                             <FocusTargetIcon
                                 className={this.state.isEnabled ? 'indicator-icon-lg indicator-icon-ok' : 'indicator-icon-lg'}
@@ -3831,7 +3831,7 @@ title={helpTexts.selectionFill.blendMode}>
                             ⚠️ 2026-10-13 起**删除「高级项」二级折叠**：同屏里套两层折叠
                             会让「哪些参数此刻有效」完全看不出来（用户原话：「请确保没有多余的参数」）。
                             盒子里的行集合 = 该模式实际会被原生侧读取的行，一一对应 smooth_engine.c（.8li 内，原 wintab_hook.c）：
-                              标准 = 强度 / 保角下限 / 速度适应
+                              标准 = 强度 / 尖角保护 / 速度适应
                               拉绳 = 半径 / 拉绳提示
                               追笔 = 追笔速度
                             ⛔⛔ 2026-10-19 用户要求：标准/追笔**去掉半径**（一个模式一个参数）。
@@ -3961,8 +3961,8 @@ title={helpTexts.selectionFill.blendMode}>
                         </div>
                         )}
 
-                        {/* 保角下限（原「拐角」）仅「标准」模式有效。
-                            ⚠️ 2026-10-19 标签「拐角」→「保角下限」（用户要求）：它说的是
+                        {/* 尖角保护（原「拐角」）仅「标准」模式有效。
+                            ⚠️ 2026-10-19 标签「拐角」→「尖角保护」（用户要求）：它说的是
                                **转折角阈值** —— 轨迹相邻两段的转折超过该值即判定为拐角、
                                自动减弱平滑以保住尖角；数值越小 = 越容易触发保护。
                             ⛔⛔ 2026-10-14 回退定案：这里曾短暂改成「保护范围」（显示 =
@@ -3985,7 +3985,7 @@ title={helpTexts.selectionFill.blendMode}>
                                 className="label-drag label-4"
                                 onMouseDown={(e) => this.handleLabelMouseDown(e, 'smooth:cornerAngle')}
                                 title={helpTexts.selectionFill.smoothCorner}>
-                                保角下限
+                                尖角保护
                             </label>
                             <RangeSlider
                                 min={0}

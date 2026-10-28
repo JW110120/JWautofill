@@ -125,7 +125,7 @@ export const StopSquareIcon = ({ className, style }: IconSvgProps) => (
 );
 
 /**
- * 专注模式主开关图标（Spectrum Workflow「Target」靶心图标，2026-10-06 替换原五角星）。
+ * 工具模式主开关图标（Spectrum Workflow「Target」靶心图标，2026-10-06 替换原五角星）。
  *
  * 数据来源：@spectrum-web-components/icons-workflow@1.12.4 `src/icons/Target.js`
  * 的 `TargetIcon`，此处**内联其原始 path/circle**，未引入该npm 包——

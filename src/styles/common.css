@@ -1263,7 +1263,7 @@ html, body {
   min-width: 0;
 }
 
-/* 状态条弹性占位：把右侧操作（专注模式开关 / 启动快捷键服务等）推到最右。
+/* 状态条弹性占位：把右侧操作（工具模式开关 / 启动快捷键服务等）推到最右。
    绘画工具箱(adjustment.css)已定义一份，APP 面板(只加载 common.css)需在此收口。 */
 .mask-sync-status-spacer { flex: 1 1 auto; }
 
@@ -1331,7 +1331,7 @@ html, body {
   box-shadow: 0 0 4px rgba(231, 76, 60, 0.6);
 }
 
-/* 专注模式主开关图标：顶替 .indicator-lg那颗圆点，尺寸/右间距与它完全一致，
+/* 工具模式主开关图标：顶替 .indicator-lg那颗圆点，尺寸/右间距与它完全一致，
    填色与 .indicator-disabled（灰）/ .indicator-ok（主色蓝）同源，保证两态视觉一致。
    ⚠️ 图形用 Spectrum「Target」靶心（FocusTargetIcon 内联官方 path）。
       靶心图标含 <path>（外圆环）+ <circle>（内点）两个元素，**两者都必须挂 .icon-fill**，
@@ -1345,12 +1345,12 @@ html, body {
   vertical-align: middle;
 }
 
-/* 专注模式图标：禁用态灰（与 .indicator-disabled 同色） */
+/* 工具模式图标：禁用态灰（与 .indicator-disabled 同色） */
 .indicator-icon-lg .icon-fill {
   fill: rgba(128, 128, 128, 0.5);
 }
 
-/* 专注模式图标：启用态主色蓝 + 同色微光（与 .indicator-ok 同色同辉光） */
+/* 工具模式图标：启用态主色蓝 + 同色微光（与 .indicator-ok 同色同辉光） */
 .indicator-icon-lg.indicator-icon-ok .icon-fill {
   fill: var(--notify-ok-fg);
 }

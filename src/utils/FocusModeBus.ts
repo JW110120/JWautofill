@@ -1,8 +1,8 @@
 /**
- * FocusModeBus —— 「专注模式」的跨面板共享开关
+ * FocusModeBus —— 「工具模式」的跨面板共享开关
  *
- * 专注模式不是用户直接勾选的选项，而是由 APP 父面板的两个选项推导出来的：
- *   「自动关开关」(autoOffOnOtherTool) 与「自动切套索」(switchToLassoOnEnable) 同时勾选 → 专注模式开启。
+ * 工具模式不是用户直接勾选的选项，而是由 APP 父面板的两个选项推导出来的：
+ *   「自动关开关」(autoOffOnOtherTool) 与「自动切套索」(switchToLassoOnEnable) 同时勾选 → 工具模式开启。
  * 它的消费者却在另外两个地方：
  *   1) MainToggleBus.doToggle：决定主开关热键是「翻转」还是「只开不关」；
  *   2) 绘画工具箱的笔刷热键分区：决定置顶那条记录显示「选区填充开关」还是「选区填充」。
@@ -69,7 +69,7 @@ async function readRaw(): Promise<FocusModeState | null> {
     }
 }
 
-/** 读取当前专注模式状态（文件不存在时视为关闭） */
+/** 读取当前工具模式状态（文件不存在时视为关闭） */
 export async function readFocusMode(): Promise<boolean> {
     const st = await readRaw();
     if (st) cached = st;
@@ -77,7 +77,7 @@ export async function readFocusMode(): Promise<boolean> {
 }
 
 /**
- * 同步读取内存里已知的专注模式状态；**从未读到过则返回 null**（区别于「确定为 false」）。
+ * 同步读取内存里已知的工具模式状态；**从未读到过则返回 null**（区别于「确定为 false」）。
  *
  * 用途：让订阅方把 useState 初值设成真值，避免「先渲染成选区填充开关、
  * 读到文件后才闪一下纠正」的中间帧。两个面板共享本模块实例（同一 HTML 文档），
@@ -90,7 +90,7 @@ export function peekFocusMode(): boolean | null {
 let writeChain: Promise<unknown> = Promise.resolve();
 
 /**
- * 写入专注模式状态（仅 APP 父面板调用：它是两个前置选项的唯一持有者）。
+ * 写入工具模式状态（仅 APP 父面板调用：它是两个前置选项的唯一持有者）。
  * 串行化写入，避免勾选变化与热键翻转同时发生时的交错覆盖。
  */
 export function setFocusMode(on: boolean): Promise<boolean> {
@@ -121,7 +121,7 @@ const memListeners = new Set<() => void>();
 function emitMem() { for (const l of memListeners) { try { l(); } catch { /* ignore */ } } }
 
 /**
- * 订阅专注模式变化（默认每 400ms 轮询一次文件）
+ * 订阅工具模式变化（默认每 400ms 轮询一次文件）
  *
  * ⛔⛔ `last` 必须从 `null` 起，**绝不能用 `cached` 播种**。
  * 背景：两个面板（#app 主面板与 #pixeladjustment 工具箱）在**同一个 HTML 文档、
@@ -131,11 +131,11 @@ function emitMem() { for (const l of memListeners) { try { l(); } catch { /* ign
  *   → 播种得 last=true → 首次 tick() 读文件同样是 true → 「值没变」⇒ 回调永不触发
  *   → 订阅方的 useState 初值（false）就是最终值 ⇒ 面板**永久**显示「选区填充开关」，
  *     且轮询也不会纠正（值一直相同）。
- * 这正是「首次加载且已处于专注模式时显示不对、切一次专注模式后就对了」的成因：
+ * 这正是「首次加载且已处于工具模式时显示不对、切一次工具模式后就对了」的成因：
  * 后者之所以对，是因为值真的变了，回调被触发。
  *
  * ⛔ 读不到文件（尚未生成 / 瞬时失败）时**本轮不表态**（直接 return，不更新 last）：
- * 文件不存在不等于「专注模式关闭」，此时若硬推 false 会把订阅方从 true 拽回 false。
+ * 文件不存在不等于「工具模式关闭」，此时若硬推 false 会把订阅方从 true 拽回 false。
  * 保持 last=null，下一轮读到真值时必然触发回调 ⇒ 新订阅者**保证**拿到一次当前值。
  */
 export function subscribeFocusMode(

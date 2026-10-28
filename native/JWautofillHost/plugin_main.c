@@ -504,7 +504,7 @@ static int plug_present(void) { return g_plugOn ? 1 : 0; }
       ⛔ 不置 0：那是「我确认当前不是套索」的断言，我们并没有这个证据。 */
 /* ============================================================ 0x020A：临时吸管否决位
  *
- * 需求（用户）：专注模式下、当前工具是套索、总开关开着时按住 Alt ⇒ 临时切吸管取样，
+ * 需求（用户）：工具模式下、当前工具是套索、总开关开着时按住 Alt ⇒ 临时切吸管取样，
  *   松开回套索。自测报出两条：
  *     ① 「Alt 临时切换为吸管后，按下吸色时会错误地触发 HUD 显示」；
  *     ② 「按 Alt 临时切换为吸管后按左键吸色，PS 把它识别成 Alt+左键 ⇒ 改的是背景色」。
@@ -1487,7 +1487,7 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
    见 keyhook.c 调度线程的「0x0208」段、smooth_engine.c 的 view_nav_down()。 */
 /* 0x0209：① 工具闸门拆「事实 / 没来得及报」（切工具立刻停，心跳抖动不打断一笔）；
    ② 光标路径抖动不透传（停笔不再画直线）；
-   ③ 新增 Alt 边沿推送 `altHold`（专注模式下的临时吸管：按住吸管、松开回套索）。
+   ③ 新增 Alt 边沿推送 `altHold`（工具模式下的临时吸管：按住吸管、松开回套索）。
    见 smooth_engine.c 的 tool_gate_sure_not_lasso / GP_HOLD_MS、keyhook.c 的 0x0209 段。 */
 /* 0x020A：① 新增 `I_ALTTOOL`（Alt 临时吸管的**硬否决位**，独立槽、不受 gateOwned 让位）：
    面板按下 Alt 时置 1 ⇒ 引擎立刻停改写/停 HUD；Alt 物理松开 / 面板不在位 /
@@ -1502,7 +1502,16 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
    颜色相等与压根没吸在**值上不可区分**，只能用输入事实判 ⇒ 见
    utils/hostInteraction.ts 的 busyHadLeft、app.tsx 的 syncAltPickColor。
    ⛔ 只加字段不动 `v` 语义；`btn` 变化单独触发一帧（拖拽中 v 恒 1，没有边沿）。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x020B; }
+/* 0x020C（2026-10-28，**标准模式的强度滑杆几乎无效**）：
+   ① `g_speed` 原来用 `|raw − out| / dt`（滞后）当笔速 —— 强度越大 ⇒ 滞后越大 ⇒
+      被判成「甩笔」⇒ 速度适应把平滑削弱 ⇒ 滞后又被压回小值。这条负反馈把稳态滞后
+      锁在 4~6px，强度 0→100 的差别只剩 3.7→5.7px（模拟值）。
+      现在笔速改由「≥6px 距离窗的真实位移 / 真实时长」结算。
+   ② 尖角保护原来要求**单包**位移 > 3px 才判拐角，而 205Hz 下正常运笔每包只有 1~2px
+      ⇒ 慢速画线时该参数整段不触发。现在参考方向由 ≥3px 线段推进、当前方向由 ≥2px
+      累积位移给出。见 smooth_engine.c 的 s_spRef* / s_cRef* 与 SPEED_WIN_PX。
+   协议无字段变化 ⇒ CFG_NLONGS 仍是 59。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x020C; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {

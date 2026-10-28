@@ -65,7 +65,7 @@
 - 菜单项只作用**当前面板**，文案 `紧凑模式：{面板名} - 开/关`。
 - 已校准的间距（内容盒 230px）：藏 divider 后「清除模式→填充模式」补 `margin-top:15px`；紧凑填充不渲染「填充模式」标签 ⇒ 分区首元素即三列 radio。紧凑模式由 `… .collapse-content-expanded > :first-child{margin-top:5px}` 把各类首元素**一起拉平到 15px** ⇒ 普通模式改完要在紧凑模式复测，但别重复补偿。
 
-## 四、专注模式
+## 四、工具模式
 
 - 条件：「自动关开关」+「自动切套索」同勾即成立（推导值，不存 state；共享 `utils/FocusModeBus.ts`）。
 - 行为：主开关热键只开不关；圆点换 Spectrum「Target」靶心 `FocusTargetIcon(13×13)`（图标含 `<path>` 外环 + `<circle>` 内点**两个元素，都必须挂 `.icon-fill`**，否则内圈缺色）；工具箱置顶记录文案「选区填充」。

@@ -185,11 +185,11 @@ export default function BrushHotkeySection() {
         // 功能快捷键（分块平均等）触发反馈：实现在 AdjustmentPanel 注册的执行器里
         showMessage('热键触发：' + (info.combo ? info.combo + ' → ' : '') + '执行「' + getFuncHotkeyLabel(info.brush || '') + '」' + (info.ok ? '' : '失败'));
       } else if (info.action === 'focusLasso') {
-        // 专注模式「套索工具」键：关闭主开关并把工具切回套索
+        // 工具模式「套索工具」键：关闭主开关并把工具切回套索
         showMessage('热键触发：' + (info.combo ? info.combo + ' → ' : '') +
           (info.ok ? '已退出自动填充（切回套索工具）' : '退出自动填充失败'));
       } else if (info.action === 'focusClear') {
-        // 专注模式「清除模式」键（Shift+E）：确保主开关开启 + 切换清除模式
+        // 工具模式「清除模式」键（Shift+E）：确保主开关开启 + 切换清除模式
         showMessage('热键触发：' + (info.combo ? info.combo + ' → ' : '') +
           (info.ok ? '清除模式已切换（主开关保持开启）' : '清除模式切换失败'));
       } else if (info.action === 'blendMode') {

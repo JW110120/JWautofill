@@ -5,7 +5,7 @@
  * 清除模式（clearMode）是 APP 面板（#app）的 React state（types/state.ts），
  * 而触发它的入口在另外两处：
  *   1) APP 面板自己的「清除模式」勾选（本上下文内，直接 setState）；
- *   2) 专注模式下的 Shift+E 热键（HotkeyBridge 活在绘画工具箱面板的 JS 上下文，
+ *   2) 工具模式下的 Shift+E 热键（HotkeyBridge 活在绘画工具箱面板的 JS 上下文，
  *      够不到 APP 面板的 state —— 见 MainToggleBus 头部说明）。
  *
  * 解法：共享「事件」而不是共享「状态」。热键命中方把 { token } 写进共享文件，

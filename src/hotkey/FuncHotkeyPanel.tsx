@@ -21,7 +21,7 @@ import ToggleSwitch from '../components/ToggleSwitch';
 //   容器带任何内缩/边框都会把槽一起带偏 ⇒ 滚动容器本身零内缩，内缩全交给内层）。
 // 内容分组（自上而下）：
 //   1. 「选区填充」组：置顶的选区填充开关录制行（从笔刷热键分区迁移而来）；
-//      专注模式下名称只显示「选区填充」（热键只开不关的既有语义不变）；
+//      工具模式下名称只显示「选区填充」（热键只开不关的既有语义不变）；
 //   2. 功能分组：按功能按钮实际所在的面板分区分组展示（同区分集中、异区分容器）。
 // 行内布局：功能名在左、录好的快捷键在右（与笔刷热键分区一致）。
 // 交互（去掉独立的录制/删除按钮，容器窄、把宽度还给功能名）：
@@ -55,7 +55,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   const [hotkeyArmed, setHotkeyArmed] = useState<boolean>(() => peekPersistedArm() ?? true);
   const hotkeyArmedRef = useRef(hotkeyArmed);
   useEffect(() => { hotkeyArmedRef.current = hotkeyArmed; }, [hotkeyArmed]);
-  // 专注模式：来自共享总线（APP 面板写入），只影响主开关行的显示名。
+  // 工具模式：来自共享总线（APP 面板写入），只影响主开关行的显示名。
   // ⚠️ 初值取 peekFocusMode() 的内存真值（null 才是「未知」→ 退回 false）：
   //    只靠 subscribeFocusMode 的首次回调，首帧会先渲染成「选区填充开关」
   //    再闪一下纠正。两个面板共享同一模块实例，主面板启动时写入的值这里能同步读到。
@@ -187,13 +187,13 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
       return;
     }
     if (target === 'focus_lasso') {
-      // 套索工具键随专注模式自动启用/停用，不参与「退格解绑」（重录请双击）。
-      showMessage('套索工具键随专注模式自动启用，无需解绑；如需更换请双击重录');
+      // 套索工具键随工具模式自动启用/停用，不参与「退格解绑」（重录请双击）。
+      showMessage('套索工具键随工具模式自动启用，无需解绑；如需更换请双击重录');
       return;
     }
     if (target === 'focus_clear') {
-      // 清除模式键同样随专注模式自动启用/停用，不参与「退格解绑」（重录请双击）。
-      showMessage('清除模式键随专注模式自动启用，无需解绑；如需更换请双击重录');
+      // 清除模式键同样随工具模式自动启用/停用，不参与「退格解绑」（重录请双击）。
+      showMessage('清除模式键随工具模式自动启用，无需解绑；如需更换请双击重录');
       return;
     }
     const next = entries.filter(e => !(e.action === 'runFunc' && e.brush === target));
@@ -243,7 +243,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
     }
     if (target === 'focus_lasso') {
       // 套索工具键由 bridge 统一管理（生效值 combo + 记忆值 brush），不落进 entries。
-      // active 传本面板看到的专注模式状态（本函数运行在绘画工具箱上下文，bridge 拿不到它）。
+      // active 传本面板看到的工具模式状态（本函数运行在绘画工具箱上下文，bridge 拿不到它）。
       setFocusLassoCombo(combo, focusMode);
       showMessage('已保存：' + combo + ' → 套索工具');
       return;
@@ -265,12 +265,12 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   };
 
   const mainEntry = entries.find(e => e.action === 'toggleMain');
-  // 专注模式下的「套索工具」键条目：由 HotkeyBridge 在专注模式开启时装载（默认 L）。
+  // 工具模式下的「套索工具」键条目：由 HotkeyBridge 在工具模式开启时装载（默认 L）。
   const focusLassoEntry = entries.find(e => e.action === 'focusLasso');
-  // 专注模式下的「清除模式」键条目：同样只在专注模式开启时装载（默认 Shift+E）。
+  // 工具模式下的「清除模式」键条目：同样只在工具模式开启时装载（默认 Shift+E）。
   const focusClearEntry = entries.find(e => e.action === 'focusClear');
   // 混合模式热键开关：配置里 blendHotkey 条目的 combo 非空 = 开（.8li 见之装载
-  // 内置 Alt+Shift 表）。与专注模式无关，任何时刻都显示这一行。
+  // 内置 Alt+Shift 表）。与工具模式无关，任何时刻都显示这一行。
   const blendHotkeyOn = !!entries.find(e => e.action === 'blendHotkey')?.combo;
   const funcEntryOf = (funcId: string): HotkeyEntry | undefined =>
     entries.find(e => e.action === 'runFunc' && e.brush === funcId);
@@ -379,7 +379,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="func-hotkey-list">
-        {/* 分组：按功能所在分区展示；「选区填充」组的容器内置顶主开关行（专注模式下显示「选区填充」），
+        {/* 分组：按功能所在分区展示；「选区填充」组的容器内置顶主开关行（工具模式下显示「选区填充」），
             其下紧跟纯色/图案/渐变三个子面板开关行。 */}
         {sectionGroups.map(g => (
           <React.Fragment key={'grp_' + g.title}>
@@ -389,13 +389,13 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
                 ? renderRow(mainEntry.id, mainEntry.combo,
                     focusMode ? '选区填充' : '选区填充开关', 'main', helpTexts.funcHotkey.mainRow)
                 : renderRow('main_placeholder', '', focusMode ? '选区填充' : '选区填充开关', 'main', helpTexts.funcHotkey.mainRow))}
-              {/* 专注模式下：套索工具键（默认 L）——按下即关闭主开关并切回套索，使 H/L 像两个工具 */}
+              {/* 工具模式下：套索工具键（默认 L）——按下即关闭主开关并切回套索，使 H/L 像两个工具 */}
               {g.title === '选区填充' && focusMode &&
                 renderRow('focus_lasso', focusLassoEntry?.combo || '', '套索工具', 'focus_lasso', helpTexts.funcHotkey.lassoRow)}
-              {/* 专注模式下：清除模式键（默认 Shift+E）——按下即确保主开关开启并切换清除模式 */}
+              {/* 工具模式下：清除模式键（默认 Shift+E）——按下即确保主开关开启并切换清除模式 */}
               {g.title === '选区填充' && focusMode &&
                 renderRow('focus_clear', focusClearEntry?.combo || '', '清除模式', 'focus_clear', helpTexts.funcHotkey.clearRow)}
-              {/* 混合模式热键（自绘开关行，与专注模式无关）：开启后 Alt+Shift+字母改面板混合模式 */}
+              {/* 混合模式热键（自绘开关行，与工具模式无关）：开启后 Alt+Shift+字母改面板混合模式 */}
               {g.title === '选区填充' && renderBlendSwitchRow('blend_hotkey', blendHotkeyOn)}
               {g.defs.map(def =>
                 renderRow('fk_' + def.id, funcEntryOf(def.id)?.combo || '', def.label, def.id, helpTexts.funcHotkey.rowHint)

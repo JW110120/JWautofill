@@ -106,7 +106,7 @@ let toggleChain: Promise<unknown> = Promise.resolve();
 async function doToggle(token: string): Promise<MainToggleState> {
     const cur = (await readRaw()) ?? cached ?? EMPTY;
     if (cur.token && cur.token === token) return cur; // 同一次命中已被处理过
-    // 专注模式（APP 父面板同时勾选「自动关开关」+「自动切套索」）：
+    // 工具模式（APP 父面板同时勾选「自动关开关」+「自动切套索」）：
     // 热键只负责开启主开关，连按也不会关——关闭只能靠切到别的工具由「自动关」完成。
     if (await readFocusMode()) {
         if (cur.enabled) return cur; // 已经开着：什么都不做，绝不翻成关
@@ -178,9 +178,9 @@ export async function requestMainToggle(token: string): Promise<MainToggleState>
 }
 
 /**
- * 处理一次「强制关闭」请求（专注模式下按套索工具键）。
+ * 处理一次「强制关闭」请求（工具模式下按套索工具键）。
  * 与 requestMainToggle 共用同一条串行链与 token 去重：同一次命中在所有面板上只关一次。
- * 已经是关闭态则直接返回（幂等）——专注模式下整套逻辑都建立在「只关不反开」之上。
+ * 已经是关闭态则直接返回（幂等）——工具模式下整套逻辑都建立在「只关不反开」之上。
  */
 export async function requestMainToggleOff(token: string): Promise<MainToggleState> {
     const run = toggleChain.then(async () => {

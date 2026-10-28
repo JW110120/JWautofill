@@ -24,8 +24,8 @@ export interface HotkeyEntry {
   //   toggleMain  主开关（共享总线翻转）
   //   applyBrush  按笔刷名选中预设
   //   runFunc     功能按钮（brush 承载功能 id，见 funcHotkeyDefs.ts）
-  //   focusLasso  专注模式「套索工具」键（关主开关 + 切套索）
-  //   focusClear  专注模式「清除模式」键（确保主开关开 + 切换清除模式，2026-10-19 新增）
+  //   focusLasso  工具模式「套索工具」键（关主开关 + 切套索）
+  //   focusClear  工具模式「清除模式」键（确保主开关开 + 切换清除模式，2026-10-19 新增）
   //   blendHotkey 混合模式热键总开关（combo 非空=开；.8li 见之装载内置 Alt+Shift 表）
   action: 'toggleMain' | 'applyBrush' | 'runFunc' | 'focusLasso' | 'focusClear' | 'blendHotkey';
   brush?: string;                // applyBrush 时的笔刷名（PS 预设名，需精确匹配）。
@@ -33,7 +33,7 @@ export interface HotkeyEntry {
                                   // runFunc 时复用本字段承载功能 id（见 funcHotkeyDefs.ts），
                                   // .8li 对该字段不解释、只透传，因此无需改 .8li。
                                   // focusLasso/focusClear 时复用本字段承载「记忆值」（用户自定义过的键，
-                                  // 专注模式关闭时 combo 置空但记忆不丢）。
+                                  // 工具模式关闭时 combo 置空但记忆不丢）。
 }
 
 const WS_URL = 'ws://127.0.0.1:18923';
@@ -158,7 +158,7 @@ function canPersistConfig(): boolean {
 // .8li 内存里（keyhook.c 的 g_khArmed，PS 启动时默认 true，无任何磁盘持久化）
 // ⇒ PS 重启后面板上次「关闭」的选择丢失，开关自己弹回开启态。
 // 现在由面板把开关状态落盘到 PluginData（settings/hotkey-arm.json，与主开关 /
-// 专注模式的共享状态同目录、同套路）：
+// 工具模式的共享状态同目录、同套路）：
 //   · hotkeyState 帧到达即落盘（权威来源 = .8li 的跃变广播 / hotkeyStatus 回帧，
 //     看护线程 120ms 轮询保证撤防/重挂/熔断都会在 ~240ms 内播出来）；
 //   · WS 建连后若持久值为 false，补发一次 hotkeyArm(false) —— .8li 重启后默认
@@ -227,15 +227,15 @@ export function persistArm(on: boolean): Promise<void> {
   armWriteChain = run.then(() => {}, () => {});
   return run;
 }
-// ===== 专注模式「套索工具键」（默认 L）=====
-// 专注模式下主开关热键只开不关；为了让 H / L 像两个工具一样切换，再注册一个
+// ===== 工具模式「套索工具键」（默认 L）=====
+// 工具模式下主开关热键只开不关；为了让 H / L 像两个工具一样切换，再注册一个
 // 「套索工具」键：按下即关闭主开关并把当前工具切回套索。
-// 该键**只在专注模式开启时装载**（combo 非空）；关闭时把 combo 置空、由守护进程跳过注册，
+// 该键**只在工具模式开启时装载**（combo 非空）；关闭时把 combo 置空、由守护进程跳过注册，
 // 从而完全不影响 PS 原生的 L 键（套索 → 多边形 → 磁性的循环等）。
 export const FOCUS_LASSO_ID = 'focus_lasso';
 export const DEFAULT_FOCUS_LASSO_COMBO = 'L';
-let focusLassoActive = false;   // 专注模式是否开启（仅 APP 面板会写）
-let focusLassoKnown = false;    // 是否由 APP 面板明确过专注模式状态（用于排除其它面板上下文）
+let focusLassoActive = false;   // 工具模式是否开启（仅 APP 面板会写）
+let focusLassoKnown = false;    // 是否由 APP 面板明确过工具模式状态（用于排除其它面板上下文）
 const configListeners: ConfigListener[] = [];
 let currentWs: any = null;
 let connected = false;
@@ -415,9 +415,9 @@ export async function requestRepairKeyboard(): Promise<string> {
 }
 
 // 订阅热键触发事件（无论成败都会回调，ok=false 表示执行 batchPlay 失败）
-// ===================== 0x0209：Alt 边沿总线（专注模式下的「临时吸管」） =====================
+// ===================== 0x0209：Alt 边沿总线（工具模式下的「临时吸管」） =====================
 //
-// 需求（用户）：**仅当** ①专注模式 ②当前工具是套索 ③总开关开着 时，按住 Alt 临时切到
+// 需求（用户）：**仅当** ①工具模式 ②当前工具是套索 ③总开关开着 时，按住 Alt 临时切到
 // 吸管工具取样；松开自动切回套索，且总开关必须保持「开」。
 //
 // 分工：
@@ -495,7 +495,7 @@ function normalizeEntry(e: any): HotkeyEntry | null {
   if (action !== 'toggleMain' && action !== 'applyBrush' && action !== 'runFunc'
       && action !== 'focusLasso' && action !== 'focusClear' && action !== 'blendHotkey') return null;
   // combo 为空的合法条目：主开关（'' = 已解绑）、笔刷（'' = 已解绑但条目保留在列表，
-  // 单击选中后按退格即解绑，与「删除」按钮区分）、专注模式套索键（'' = 专注模式关闭时不装载）、
+  // 单击选中后按退格即解绑，与「删除」按钮区分）、工具模式套索键（'' = 工具模式关闭时不装载）、
   // 混合模式热键开关（'' = 关闭，条目保留供开关回显）。
   // runFunc 空组合键无意义，直接丢弃。
   if (!combo && action !== 'toggleMain' && action !== 'applyBrush' && action !== 'focusLasso'
@@ -602,8 +602,8 @@ export function connectHotkeyDaemon(): () => void {
             noteHostBusy(msg.v === true || msg.v === 1,
                          msg.btn === undefined ? undefined : (msg.btn === true || msg.btn === 1));
           }
-          // 0x0209：Alt 边沿（专注模式下的临时吸管）。同样只做「电平转事件」，
-          // 判定（专注模式 + 套索 + 总开关开）由 app.tsx 的订阅方负责。
+          // 0x0209：Alt 边沿（工具模式下的临时吸管）。同样只做「电平转事件」，
+          // 判定（工具模式 + 套索 + 总开关开）由 app.tsx 的订阅方负责。
           else if (msg?.type === 'altHold') {
             emitAltHold(msg.v === true || msg.v === 1);
           } else if (msg?.type === 'config') {
@@ -639,9 +639,9 @@ export function connectHotkeyDaemon(): () => void {
             }
             // 首次使用时补上主开关的默认快捷键 Ctrl+Q
             if (pathAligned) ensureMainToggleEntry();
-            // 专注模式开启时补上/更新「套索工具键」（仅 APP 面板上下文会真正写入）
+            // 工具模式开启时补上/更新「套索工具键」（仅 APP 面板上下文会真正写入）
             if (pathAligned) ensureFocusLassoEntry();
-            // 专注模式开启时补上/更新「清除模式」键（默认 Shift+E，同上仅 APP 面板写）
+            // 工具模式开启时补上/更新「清除模式」键（默认 Shift+E，同上仅 APP 面板写）
             if (pathAligned) ensureFocusClearEntry();
             emitConfig();
           }
@@ -757,7 +757,7 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
     return;
   }
   if (msg.action === 'focusLasso') {
-    // 专注模式下的「套索工具」键：关闭主开关（幂等），并把当前工具切回套索，
+    // 工具模式下的「套索工具」键：关闭主开关（幂等），并把当前工具切回套索，
     // 让 H / L 分别对应「自动填充」与「普通套索」两个工具。
     // 与 toggleMain 同理用 token 去重：守护进程向所有面板广播，只关一次。
     const combo = msg.combo ?? '';
@@ -774,8 +774,8 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
     return;
   }
   if (msg.action === 'focusClear') {
-    // 专注模式下的「清除模式」键（默认 Shift+E）：两件事，互不干扰——
-    //   ① 确保主开关开启：MainToggleBus.doToggle 在专注模式下本就是「只开不关」
+    // 工具模式下的「清除模式」键（默认 Shift+E）：两件事，互不干扰——
+    //   ① 确保主开关开启：MainToggleBus.doToggle 在工具模式下本就是「只开不关」
     //      （已开着则什么都不做）⇒ 无论此前开关是开是关，按下即保证开启；
     //   ② 切换清除模式：写 ClearModeBus，APP 面板订阅后翻自己的 state。
     // ⚠️ 绝不在这一步关主开关 —— 用户明确要求「按 Shift+E 开/关清除模式都不会关主开关」。
@@ -793,8 +793,8 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
       .catch((e) => console.error('⚠️ 清除模式切换命令写入失败:', e));
     // ⛔⛔ 0x013D 兜底：把工具钉回套索。
     //   成因：Shift+E 一旦漏给 PS（钩子失活、走轮询兜底时**吞不了键**），PS 会按
-    //   自己的快捷键把工具循环到橡皮擦组；专注模式检到「工具不是套索」就关主开关，
-    //   于是用户看到「按 Shift+E 反而退出专注模式」。
+    //   自己的快捷键把工具循环到橡皮擦组；工具模式检到「工具不是套索」就关主开关，
+    //   于是用户看到「按 Shift+E 反而退出工具模式」。
     //   吞键是主修复；这里是防御纵深 —— 命中即把工具切回套索，与 focusLasso 同款。
     //   ⛔ 不在这里改主开关：用户要求「反复按 Shift+E 只在清除模式间来回切换」。
     void selectLassoTool();
@@ -904,17 +904,17 @@ export function getMainToggleCombo(): string {
   return mainToggleCombo ?? '';
 }
 
-// ===== 专注模式：套索工具键（默认 L，「按下即退出自动填充」）=====
+// ===== 工具模式：套索工具键（默认 L，「按下即退出自动填充」）=====
 
 /**
- * 确保配置里存在「套索工具」条目，并让它只在专注模式开启时处于装载态。
+ * 确保配置里存在「套索工具」条目，并让它只在工具模式开启时处于装载态。
  *
  * ⚠️ 只应由 APP 面板的上下文真正写入（仅它会调用 setFocusLassoActive）——
  *    其它面板上下文里 focusLassoKnown 恒为 false，若也参与写入，两个面板会在
  *    'L' / '' 之间来回覆盖（与 MainToggleBus 的多面板「事件被重复投递」问题同源）。
  *
- * 记忆值放在 brush 字段：专注模式关闭时 combo 置空（守护进程跳过注册 ⇒ L 完全交给 PS），
- * 但用户自定义过的键仍被记住，下次开启专注模式时沿用。
+ * 记忆值放在 brush 字段：工具模式关闭时 combo 置空（守护进程跳过注册 ⇒ L 完全交给 PS），
+ * 但用户自定义过的键仍被记住，下次开启工具模式时沿用。
  */
 function ensureFocusLassoEntry(): void {
   if (!configLoaded || !focusLassoKnown) return;
@@ -929,14 +929,14 @@ function ensureFocusLassoEntry(): void {
   pushConfig(next);
 }
 
-/** APP 面板在专注模式状态变化时调用，决定套索键是否装载（其它面板绝不调用）。 */
+/** APP 面板在工具模式状态变化时调用，决定套索键是否装载（其它面板绝不调用）。 */
 export function setFocusLassoActive(on: boolean): void {
   focusLassoKnown = true;
   focusLassoActive = on;
   ensureFocusLassoEntry();
 }
 
-/** 当前套索键（用于提示/展示；专注模式关闭时返回记忆值）。 */
+/** 当前套索键（用于提示/展示；工具模式关闭时返回记忆值）。 */
 export function getFocusLassoCombo(): string {
   const e = cachedConfig.find(x => x.action === 'focusLasso');
   return e?.brush || e?.combo || DEFAULT_FOCUS_LASSO_COMBO;
@@ -947,7 +947,7 @@ export function getFocusLassoCombo(): string {
  *
  * ⚠️ 该函数会在**绘画工具箱面板**的上下文里被调用（FuncHotkeyPanel 挂在那里），
  *    那里 focusLassoKnown 恒为 false，所以**不能**用 focusLassoKnown 做闸门——
- *    否则重绑会静默失效。装载与否改由调用方传入的 active（= 面板自己看到的专注模式状态）决定。
+ *    否则重绑会静默失效。装载与否改由调用方传入的 active（= 面板自己看到的工具模式状态）决定。
  */
 export function setFocusLassoCombo(combo: string, active: boolean): void {
   if (!configLoaded) return;
@@ -964,23 +964,23 @@ export function isDaemonConnected(): boolean {
   return connected;
 }
 
-// ===== 专注模式：「清除模式」键（默认 Shift+E，2026-10-19 新增）=====
+// ===== 工具模式：「清除模式」键（默认 Shift+E，2026-10-19 新增）=====
 // 语义（用户原话）：无论主开关是关闭或开启，按下 Shift+E 都会开启主开关；
 // 主开关开启时按 Shift+E 只切换清除模式，绝不关闭主开关。
 // 实现走两条既有总线：
-//   ① requestMainToggle —— MainToggleBus.doToggle 在专注模式下本就是「只开不关」
+//   ① requestMainToggle —— MainToggleBus.doToggle 在工具模式下本就是「只开不关」
 //      （见该文件 focus 分支），已开着则什么都不做，完美匹配「确保开启」；
 //   ② requestClearModeToggle —— 清除模式切换命令（APP 面板订阅后翻自己的 state）。
-// 该键与套索工具键同规矩：**只在专注模式开启时装载**（combo 非空），关闭时置空、
+// 该键与套索工具键同规矩：**只在工具模式开启时装载**（combo 非空），关闭时置空、
 // 由守护进程跳过注册，从而完全不影响 PS 原生的 Shift+E（正常是「反选」的变体键位，
-// 专注模式外绝不拦截）。用户自定义过的键记忆在 brush 字段。
+// 工具模式外绝不拦截）。用户自定义过的键记忆在 brush 字段。
 export const FOCUS_CLEAR_ID = 'focus_clear';
 export const DEFAULT_FOCUS_CLEAR_COMBO = 'Shift+E';
-let focusClearActive = false;   // 专注模式是否开启（仅 APP 面板会写）
-let focusClearKnown = false;    // 是否由 APP 面板明确过专注模式状态
+let focusClearActive = false;   // 工具模式是否开启（仅 APP 面板会写）
+let focusClearKnown = false;    // 是否由 APP 面板明确过工具模式状态
 
 /**
- * 确保配置里存在「清除模式」条目，并让它只在专注模式开启时处于装载态。
+ * 确保配置里存在「清除模式」条目，并让它只在工具模式开启时处于装载态。
  * 只应由 APP 面板的上下文真正写入（仅它会调用 setFocusClearActive）——
  * 与套索工具键同款的多面板写护栏（focusClearKnown 门禁）。
  */
@@ -997,14 +997,14 @@ function ensureFocusClearEntry(): void {
   pushConfig(next);
 }
 
-/** APP 面板在专注模式状态变化时调用，决定清除模式键是否装载（其它面板绝不调用）。 */
+/** APP 面板在工具模式状态变化时调用，决定清除模式键是否装载（其它面板绝不调用）。 */
 export function setFocusClearActive(on: boolean): void {
   focusClearKnown = true;
   focusClearActive = on;
   ensureFocusClearEntry();
 }
 
-/** 当前清除模式键（用于提示/展示；专注模式关闭时返回记忆值）。 */
+/** 当前清除模式键（用于提示/展示；工具模式关闭时返回记忆值）。 */
 export function getFocusClearCombo(): string {
   const e = cachedConfig.find(x => x.action === 'focusClear');
   return e?.brush || e?.combo || DEFAULT_FOCUS_CLEAR_COMBO;
@@ -1014,7 +1014,7 @@ export function getFocusClearCombo(): string {
  * 重绑清除模式键（功能快捷键子面板用）：同时更新生效值 combo 与记忆值 brush。
  * ⚠️ 该函数会在**绘画工具箱面板**的上下文里被调用（FuncHotkeyPanel 挂在那里），
  *    那里 focusClearKnown 恒为 false，所以**不能**用 focusClearKnown 做闸门；
- *    装载与否由调用方传入的 active（= 面板自己看到的专注模式状态）决定。
+ *    装载与否由调用方传入的 active（= 面板自己看到的工具模式状态）决定。
  */
 export function setFocusClearCombo(combo: string, active: boolean): void {
   if (!configLoaded) return;
@@ -1113,7 +1113,7 @@ export async function applyBrush(brushName: string): Promise<boolean> {
   }
 }
 
-// 切回套索工具（专注模式「套索工具键」用）：写法与 app.tsx 的自动切套索一致——
+// 切回套索工具（工具模式「套索工具键」用）：写法与 app.tsx 的自动切套索一致——
 // 首选直连 batchPlay，失败再回退模态作用域。
 async function selectLassoTool(): Promise<void> {
   const descriptor: any = {

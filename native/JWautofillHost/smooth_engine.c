@@ -169,8 +169,9 @@ enum {
     CFG_I_CATCHUP,        /* 0..100   追笔速度。⛔ 面板下发的是**原生**值：面板「追笔力度」
                             显示 1–100，经 LassoSmoothing.catchUpToNative() 反向映射成
                             1–50（显示越大 → 本值越小 → vmax 越小 → 越黏）。        */
-    CFG_I_CORNER,         /* 0..90    拐角转折角阈值：转折角 > 本值即判为拐角。
-                            ⛔ 阈值越小越易触发保护 ⇒ 面板「保护范围」= 90 − 本值。   */
+    CFG_I_CORNER,         /* 0..90    尖角保护：轨迹相邻两段的**转折角** > 本值即判为拐角、
+                            本帧减弱平滑。⛔ 阈值越小越易触发保护；**本值就是面板显示值，
+                            没有任何反向映射**（2026-10-14「保护范围」回退定案）。        */
     CFG_I_RADIUSPX,       /* 1..100   最大滞后（屏幕等效像素）       */
     CFG_I_HUD,            /* bit0=leash 线 bit1=半径圆 bit2=原始点  */
     CFG_I_HUDCOLOR,       /* 0xRRGGBB，默认 #E07F0D（2026-10-14 用户要求，与 PS 原生洋红区分）*/
@@ -1054,6 +1055,24 @@ static double g_ox, g_oy;        /* 输出位置（保留小数，避免慢速�
 static double g_speed;           /* 低通后的输入速度（屏幕等效像素/ms） */
 static double g_dirX, g_dirY;
 static int    g_hasDir;
+/* —— 2026-10-28：`g_speed` 与「拐角参考方向」都必须来自**笔尖的真实位移** ——
+   ⛔⛔ 旧版 `g_speed = 0.72·g_speed + 0.28·(|raw − out| / dt)` 里 `|raw − out|`
+      **是滞后，不是位移**：强度越大 → 滞后越大 → 被判成「甩笔」→ 速度适应把平滑
+      自动削弱 → 滞后又被压回小值。这条负反馈把稳态滞后锁死在 4~6px，
+      滑杆从 0 拉到 100 几乎分不出差别（用户报的正是「不管数值多少都一样」）。
+      数值模拟（0.3px/ms、5ms/包）：强度 40 → 3.7px，强度 100 → 5.7px；
+      把速度换成真实位移后是 5.8 → 24.0px；关掉速度适应则是 7.2 → 75.0px。
+   ⇒ 现在按「累计位移 ≥ SPEED_WIN_PX 的真实时长」结算笔速（见 SPEED_WIN_MS）。 */
+static double s_spRefX, s_spRefY;   /* 速度窗起点（原始轴坐标） */
+static DWORD  s_spRefMs;            /* 速度窗起点时刻 */
+static int    s_hasSpRef;
+/* 拐角判据的两级基准（0x020C）：
+     · 参考方向 g_dirX/g_dirY —— 只由**≥ CORNER_MIN_PX** 的线段推进，亚像素抖动改不动它；
+     · 当前方向 —— 由「自参考点起 ≥ CORNER_PROBE_PX」的累积位移给出。
+   ⛔ 二者缺一不可：只有前者 ⇒ 慢速（每包 1~2px）永远攒不够 3px，保护失效；
+      只有后者 ⇒ 抖动（每包 0.2px 的噪声方向）每帧都被判成拐角，平滑被关掉。 */
+static double s_cRefX, s_cRefY;
+static int    s_hasCRef;
 static DWORD  g_lastMs;
 static int    g_wasEnabled;
 /* ⛔ 0x0125：删掉 0x0124 的 `g_wasHover`（它是个**倒退**）。
@@ -1222,7 +1241,19 @@ static volatile LONG g_lastGapMs;    /* 最近一次复位时的取包间隔（m
 #define STALL_LOG_MS       400
 
 #define SPEED_FULL        3.0    /* 屏幕等效像素/ms：达到即「甩笔」（人手常规 ≤1.5，见下） */
-#define CORNER_MIN_PX     3.0    /* 段长小于它的「拐角」一律当抖动，不削弱平滑 */
+/* —— 笔速估计（2026-10-28）：按**距离窗**结算，而不是逐包除 dt ————————
+   ⛔ 必须给最小窗时：GetTickCount 只有 1ms 精度，而一个冲包批次里十几个包的
+      `now` 可能完全相同 ⇒ 逐包算会得到「0.x ms 走 2px」= 6px/ms 的假甩笔。
+      要求 wms ≥ 4ms 才结算，冲包期自然只累距离、不结算。 */
+#define SPEED_WIN_PX      6.0    /* 距离窗（逻辑像素）：累计位移到它就结算一次笔速 */
+#define SPEED_WIN_MS      4.0    /* 窗时下限（ms）：不足就不结算（抗时间戳量化） */
+#define SPEED_MAX         6.0    /* 笔速上限（物理 px/ms）：只用于挡住量化造成的假尖峰 */
+#define CORNER_MIN_PX     3.0    /* 参考方向的最小基线：段长小于它的「拐角」一律当抖动 */
+#define CORNER_PROBE_PX   2.0    /* 探测方向的最小位移：205Hz 下正常运笔每包仅 1~2px，
+                                    ⛔ 旧写法要求**单包** > 3px 才算拐角 ⇒ 慢速画线时
+                                    尖角保护整段不触发（参数与文案说的完全不是一回事）。
+                                    取 2.0 而非 1.5：模拟里 1.5px 的方向只剩 ~5° 噪声余量，
+                                    阈值调到 10° 时误判明显增多；2.0px 兼顾灵敏与抗噪。 */
 /* τ(强度) 曲线的两个常数：τ = 8ms·(e^(TAU_LN·t/100) − 1)。
    ⛔ 2026-10-13 第二轮上调：τ(100) 由 100ms 提到 **250ms**（TAU_LN = ln(32.25)）。
       用户反馈「标准模式强度拉满依然感觉太弱」—— 一阶低通的稳态滞后 = v·τ，
@@ -3735,6 +3766,11 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
             else                     InterlockedIncrement(&g_rstAnchor);
             g_ox = x; g_oy = y;
             g_speed = 0; g_dirX = g_dirY = 0; g_hasDir = 0;
+            /* ⛔ 两个估计量的基准点在锚定时必须一起作废：锚定意味着笔尖与输出
+               重合、「上一段」的历史已无意义，沿用旧基准会把跨越复位的那一段
+               当成一条长线段，算出一个假方向 / 假笔速。 */
+            s_hasSpRef = 0;
+            s_hasCRef = 0;
             g_lastMs = now;
             g_wasEnabled = 1;
             /* 复位帧也要把「原样」写回（值相同，统一路径便于核对） */
@@ -3747,27 +3783,64 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
         double dt = (double)(now - g_lastMs); if (dt < 1.0) dt = 1.0; else if (dt > 100.0) dt = 100.0;
         g_lastMs = now;
 
-        /* 速度低通（屏幕像素/ms）：直接用**逐轴换算后**的位移，与面板的 px/ms 同单位 */
-        g_speed = g_speed * 0.72 + (distPx / dt) * 0.28;
+        /* 笔速（物理 px/ms）：距离窗结算，与面板的 px/ms 同域。
+           ⛔ 绝不能再写回 `distPx / dt` —— distPx 是**滞后**，不是位移：用它当速度
+              会形成一个把滞后锁死的负反馈（推导见 g_speed 声明处），
+              结果就是「强度滑杆怎么拉，选区落后光标的距离都差不多」。 */
+        if (!s_hasSpRef) {
+            s_spRefX = x; s_spRefY = y; s_spRefMs = now; s_hasSpRef = 1;
+        } else {
+            double mx = (x - s_spRefX) * cX, my = (y - s_spRefY) * cY;
+            double mPx = dsqrt_(mx * mx + my * my);
+            DWORD  wms = now - s_spRefMs;
+            if (mPx >= SPEED_WIN_PX * dpiS && (double)wms >= SPEED_WIN_MS) {
+                double sp = mPx / (double)wms;
+                if (sp > SPEED_MAX * dpiS) sp = SPEED_MAX * dpiS;
+                g_speed = g_speed * 0.5 + sp * 0.5;
+                s_spRefX = x; s_spRefY = y; s_spRefMs = now;
+            }
+        }
 
-        /* 拐角守卫：与上一段输入方向的夹角超过阈值 ⇒ 本帧减弱平滑，保住尖角。
+        /* 拐角守卫：相邻两段方向的**转折角**超过阈值 ⇒ 本帧减弱平滑，保住尖角。
            ⚠️ 只对「标准」模式生效 —— 拉绳/追笔的跟随机制本身不磨圆（拉绳甚至会主动
            把输出点按在绳长处，尖角由绳长决定），加拐角削弱反而破坏它们的手感。
-           ⛔ 必须带**位移门限**：抖动的段长通常只有亚像素~2px，而 205Hz 下相邻两帧
-           的夹角极易超过 45° ⇒ 不开门限的话「拐角」几乎每帧都成立 ⇒ k 被抬到 0.75
-           ⇒ 平滑被关掉，只剩下滞后，观感正是「有延迟却不平滑」。
+           ⛔ 双基准（0x020C）：参考方向只由 ≥3px 的线段推进（抗亚像素抖动 ——
+              抖动的段长通常只有亚像素~2px，而 205Hz 下相邻两帧的夹角极易超过 45°，
+              不开门限的话「拐角」几乎每帧都成立 ⇒ k 被抬到 0.75 ⇒ 平滑被关掉，
+              只剩下滞后，观感正是「有延迟却不平滑」）；
+              当前方向由「自参考点起 ≥2px」的累积位移给出 —— 旧版要求**单包** >3px，
+              而正常运笔每包只有 1~2px ⇒ 慢速画线时这个参数整段不触发，
+              与「偏折超过设定角就减少平滑」的说明完全对不上。
            ⚠️ 夹角在**屏幕像素域**判定（逐轴对称后两轴比例仍不同，轴空间里的夹角
               与用户看到的夹角不是一回事）。 */
         int corner = 0;
-        if (distPx > 0.01) {
-            double ux = dpx / distPx, uy = dpy / distPx;
-            if (mode == 0 && g_hasDir && distPx > CORNER_MIN_PX * dpiS) {
-                double dot = ux * g_dirX + uy * g_dirY;
-                if (dot > 1.0) dot = 1.0; else if (dot < -1.0) dot = -1.0;
-                if (dot < cornerCos) corner = 1;   /* ⟺ 转折角 > cornerDeg。
-                       ⛔ 阈值越小越容易触发保护；面板的「保护范围」已反向映射（90 − 显示） */
+        if (mode == 0) {
+            if (!s_hasCRef) { s_cRefX = x; s_cRefY = y; s_hasCRef = 1; }
+            else {
+                double rx = (x - s_cRefX) * cX, ry = (y - s_cRefY) * cY;
+                double rlen = dsqrt_(rx * rx + ry * ry);
+                if (rlen >= CORNER_PROBE_PX * dpiS) {
+                    double ux = rx / rlen, uy = ry / rlen;
+                    int fired = 0;
+                    if (g_hasDir) {
+                        double dot = ux * g_dirX + uy * g_dirY;
+                        if (dot > 1.0) dot = 1.0; else if (dot < -1.0) dot = -1.0;
+                        if (dot < cornerCos) { corner = 1; fired = 1; }
+                        /* ⟺ 转折角 > cornerDeg。⛔ 阈值越小越容易触发保护；
+                           面板显示值就是本阈值，**没有任何反向映射**（2026-10-14 回退定案）。 */
+                    }
+                    /* 触发即重设基准（否则整个转弯过程会每拍都判成拐角、把平滑一直关着）；
+                       否则只有累积到 CORNER_MIN_PX 才推进基准 ⇒ 基准方向始终来自真实线段。 */
+                    if (fired || rlen >= CORNER_MIN_PX * dpiS) {
+                        g_dirX = ux; g_dirY = uy; g_hasDir = 1;
+                        s_cRefX = x; s_cRefY = y;
+                    }
+                }
             }
-            g_dirX = ux; g_dirY = uy; g_hasDir = 1;
+        } else {
+            /* 拉绳/追笔不判拐角，顺手把基准作废：切回标准模式时不能拿旧方向当「上一段」。 */
+            g_hasDir = 0;
+            s_hasCRef = 0;
         }
 
         if (mode == 1) {
