@@ -1791,7 +1791,30 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
      ③ `poly_hold_finish` 一并清 `g_polyHoldX/Y`，不留陈旧值。
    诊断：退出行新增「拒绝冻结 N 次」。
    无共享内存槽位变化（CFG_NLONGS 仍 60）。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x021E; }
+/* 0x021F：**轴 ↔ 屏幕只许用差值，px 是比例不是坐标**。
+   现象（0x021E 之后）：上一版的「圆心→正上方远处」没了，但按住 Alt 一直落笔时选区
+     **往下方远端**飞；同时光标处的圆与交点处的青色参考线**快速交替闪烁**。
+   日志（jwwh-8284）：
+     · `[status] pxX=0.0625 **pxY=-0.0625**` —— Y 比例是**负的**（Wintab Y 向上正、
+       屏幕 Y 向下），而 px 只是比例，轴→屏幕还差**原点偏移**；
+     · `吸附样本：锚点(1406,**-807**) 原始Δ(0,1438)` —— 锚点落到屏幕上方外面；
+     · `（包路径）锚点 (22496,**-2147483648**)` —— 轴锚点被写成 INT_MIN；
+     · `接触包改写 424 次` 而 `消息层 见 0 条` —— 这轮消息层没挂上，全由包路径扛，
+       而 `poly_pkt_click` 正拿屏幕点 `/px` 反算轴（同样缺偏移）⇒ 包被写成垃圾。
+   改法（三条，全部消掉跨域换算）：
+     ① `poly_anchor_push()`：搬锚点直接取 `se_real_GetCursorPos()`（解冻补线的末端**就是**
+        此刻光标），拿不到就放弃这次搬锚，绝不写猜出来的坐标；
+     ② 冻结钉住点 `g_polyHoldX/Y` = `光标基准 + (圆心轴 − 进场raw轴) × px`（差值换算，
+        常量偏移自动抵消）；
+     ③ `poly_pkt_click` 改为**轴域**：用 `poly_proj` 在包坐标上直接算吸附点，整个接触
+        期间每包写同一个轴点（`s_pkPinAx/Ay`）；`poly_snap_run` 在 `g_pkPinOn` 时让位。
+   顺带：`poly_snap_run` 在消息层活着时从「整段让位」改为「只不改包、仍推进锚点」
+     （否则 `poly_pkt_click` 拿到的是永不前进的旧锚点）。
+   HUD「两个界面交替闪」的直接成因是 `fits` 每帧翻转（窗口中心在「线段中点」与「吸附点」
+   之间二选一）⇒ 加 96/8px 滞回；`poly_hint_live` 的保持时间单独放宽到 350ms
+   （`POLY_HINT_KEEP_MS`），并拒绝画「两端相差 > 4000px」的参考线。
+   无共享内存槽位变化（CFG_NLONGS 仍 60）。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x021F; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {

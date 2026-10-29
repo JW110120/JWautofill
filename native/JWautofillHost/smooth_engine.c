@@ -3556,15 +3556,21 @@ static int pkt_btn_level(const u8* p)
     return bv ? 1 : 0;
 }
 
-/* 把一个**轴空间**的笔尖位置发布成吸附侧的新锚点（屏幕像素域）。
- * ⛔ 吸附锚点全程在屏幕像素域（`poly_proj` 用 cX=cY=1），这里必须换算；
- *    直接塞轴坐标会让锚点偏到画布外，参考线整段消失。 */
+/* 发布一次「搬锚」：折线的起点被 PS 搬到了**解冻那一刻的光标**上。
+ *
+ * ⛔⛔ 0x021F：这里**只能用真实光标当屏幕基准**，绝不能 `轴 × px`（见文件头那段长注释）——
+ *   px 只是比例（本机 pxY = −0.0625），轴 → 屏幕还差原点偏移。旧写法把 raw 12256 乘成
+ *   −807，锚点直接落到屏幕上方外面：参考线从屏幕外拉进来（用户看到的 `-|` 竖线），
+ *   而吸附投影以这个点为基准 ⇒ 选区被拉到远端。
+ *   语义上也正好：解冻补线的末端**就是此刻的光标**，PS 把折线起点放在那里。
+ * ⛔ 拿不到光标就**放弃这次搬锚**（保留旧锚点），不要写一个猜出来的坐标。 */
 static void poly_anchor_push(u32 ax, u32 ay)
 {
-    double sx = (double)ax * px_x();
-    double sy = (double)ay * px_y();
-    InterlockedExchange(&g_polyAnchorX, (LONG)(sx + 0.5));
-    InterlockedExchange(&g_polyAnchorY, (LONG)(sy + 0.5));
+    (void)ax; (void)ay;                    /* 只留签名：屏幕点由光标给出，不需要轴值 */
+    POINT c;
+    if (!se_real_GetCursorPos(&c)) return;
+    InterlockedExchange(&g_polyAnchorX, c.x);
+    InterlockedExchange(&g_polyAnchorY, c.y);
     InterlockedExchange(&g_polyAnchorReset, 1);
     InterlockedIncrement(&g_polyAnchorMv);
 }
@@ -3651,8 +3657,20 @@ static int poly_hold_run(u8* buf, int S, int n, int ox_, int oy_)
             s_polyHold = 1; s_polyUsed = 1; s_polyFrz = 0; s_polyT0 = GetTickCount();
             s_polyX = g_ox; s_polyY = g_oy;    /* 冻结点 = 此刻的输出点（= 圆心） */
             s_polyRx = (double)rx; s_polyRy = (double)ry;
-            /* 0x021D：把冻结点发布到屏幕像素域，供 `poly_snap_gcp` 把光标/消息也钉住。 */
-            double hx = s_polyX * fX, hy = s_polyY * fY;
+            /* 0x021D：把冻结点发布到**屏幕像素**域，供 `poly_snap_gcp` 把光标/消息也钉住。
+               ⛔⛔ 0x021F：必须「真实光标 + 轴差值」，不能 `轴 × px`（px_y 为负、还缺原点）。
+                  这里 `s_poly − raw0` 是「圆心相对真实笔尖」的轴差，乘 px 就是屏幕差；
+                  基准取进场这一刻的光标 ⇒ 得到的就是圆心的屏幕位置。 */
+            POINT c0;
+            if (!se_real_GetCursorPos(&c0)) {
+                s_polyHold = 0; s_polyUsed = 1;
+                InterlockedExchange(&g_polyHoldX, 0);
+                InterlockedExchange(&g_polyHoldY, 0);
+                InterlockedIncrement(&g_polyHoldRej);
+                return -1;                     /* 拿不到基准 ⇒ 不钉，别写猜出来的坐标 */
+            }
+            double hx = (double)c0.x + (s_polyX - s_polyRx) * fX;
+            double hy = (double)c0.y + (s_polyY - s_polyRy) * fY;
             InterlockedExchange(&g_polyHoldX, (LONG)(hx >= 0 ? hx + 0.5 : hx - 0.5));
             InterlockedExchange(&g_polyHoldY, (LONG)(hy >= 0 ? hy + 0.5 : hy - 0.5));
             InterlockedExchange(&g_polyHoldT0, (LONG)s_polyT0);
@@ -3703,6 +3721,30 @@ static int poly_hold_run(u8* buf, int S, int n, int ox_, int oy_)
     }
     return changed;
 }
+
+/* ============ 0x021F：轴 ↔ 屏幕**只许用差值**，绝不再乘比例来“定位” ============
+ *
+ * 现象（0x021E 之后）：A→B 短线与「正上方远处」都没了，但按住 Alt 一直落笔时选区
+ *   **往下方远端**飞；同时光标处的圆与交点处的参考线快速交替闪。
+ *
+ * 日志硬数据（`jwwh-8284.log`）：
+ *   · `[status] pxX=0.0625 **pxY=-0.0625**` —— Y 的比例是**负的**（Wintab Y 向上正、
+ *     屏幕 Y 向下），而 `px` 只是**比例**，轴 → 屏幕还差一个**原点偏移**；
+ *   · `吸附样本：锚点(1406,**-807**) 原始Δ(0,1438)` —— 锚点跑到屏幕上方外面；
+ *   · `角度吸附起用（包路径）：锚点 (22496,**-2147483648**)` —— 轴锚点被写成了 INT_MIN；
+ *   · `接触包改写 424 次` 而 `消息层 见 0 条` —— 这轮消息路径没挂上，包路径独挑，
+ *     而 `poly_pkt_click` 正是拿**屏幕点**除以 px 反算轴（同样漏偏移）⇒ 包被写成垃圾。
+ *
+ * ⇒ 规矩（本文件内所有跨域换算都必须遵守）：
+ *   ① 轴 → 屏幕：`屏幕 = 屏幕基准 + (轴 − 轴基准) × px`，两个基准取**同一时刻的一对真值**
+ *      （本机取「`se_real_GetCursorPos` 的光标」当屏幕基准、「本包 raw」当轴基准）；
+ *   ② 屏幕 → 轴：**一律不做**。包路径要写的落点本来就在轴域，直接算完就写
+ *      （见 `poly_pkt_click` 的轴域钉住）；
+ *   ③ ⛔ 永远不要写 `轴 × px` 或 `屏幕 / px` —— px_y 会是负数，也没有原点。
+ */
+/* 0x021F：包路径「接触钉住」是否正在生效（轴域）。`poly_snap_run` 要据此整批让位，
+   而它的定义在前 ⇒ 用原子槽前置声明（静态变量做不到跨函数前置可见）。 */
+static volatile LONG g_pkPinOn;
 
 /* ============ 0x0215：临时多边形套索（物理 Alt）的 8 方向角度吸附 ============
  *
@@ -3794,22 +3836,22 @@ static int poly_snap_run(u8* buf, int S, int n, int ox_, int oy_)
         s_snapOn = 0; s_snapBtn = 0;
         return -1;
     }
-    /* ⛔⛔ 0x0219：包路径**在消息路径活着时必须让位**。
-       0x0218 真机确认 PS 画折线读的是鼠标消息坐标（消息路径一改就看见吸附），
-       包路径的改写对折线**没有作用**，却会：① 拿另一套锚点算，与消息路径的方向不一致；
-       ② 把 PS 收到的包坐标也掰歪，抬起 Alt 后平滑从被掰过的坐标起步 ⇒ 边缘跳一段。
-       ⇒ 只当消息路径 2s 内一次都没响过（导入表里没有 DispatchMessageW 等）才由包路径兜底。
-       判据与 `poly_owner_may_advance` 同源，避免两处各写一套时间窗。 */
+    /* ⛔⛔ 0x0219：包路径**在消息路径活着时不许改包**。
+       0x0218 真机确认 PS 画折线读的是鼠标消息坐标，而包改写会把 PS 收到的包坐标
+       掰歪 —— 抬起 Alt 后平滑从被掰过的坐标起步 ⇒ 边缘跳一段。
+       ⛔ 0x021F：但**锚点仍要照常推进**（`writePkt=0` 只跳过写包）。否则
+          `poly_pkt_click`（接触钉住）拿的是一个永远不动的旧锚点，第二段起就全错。
+       ⛔ 也不许在这里清 `s_snapOn` —— 清了 `poly_pkt_click` 就没锚点可用。 */
+    int writePkt = 1;
     {
         LONG last = g_msgLastMs;
-        if (last && (DWORD)(GetTickCount() - (DWORD)last) <= 2000) {
-            s_snapOn = 0; s_snapBtn = 0;
-            return -1;
-        }
+        if (last && (DWORD)(GetTickCount() - (DWORD)last) <= 2000) writePkt = 0;
     }
-    /* ⛔⛔ 0x021D：接触锁（`g_pgHoldOn`）活着时包路径整批让位 —— 那一批的坐标由
-       `poly_pkt_click()` 统一钉在同一个点上。两个写者对打 = 节点又跑到 B（正是本轮故障）。 */
-    if (g_pgHoldOn) { s_snapOn = 0; s_snapBtn = 0; return -1; }
+    /* ⛔⛔ 0x021F：接触钉住（`poly_pkt_click`，**轴域**）活着时包路径整批让位。
+       两个写者对打 = 节点又跑到 B（0x021D）或者干脆写成两套坐标（0x021E 之前）。
+       ⛔ 让位时**不许清 `s_snapOn` / `s_snapAx`**：下一批 `poly_pkt_click` 还要用它们
+          做投影；清了就等于每接触一次都重建锚点，落点会跳回圆心。 */
+    if (g_pkPinOn) return -1;
     const double cX = px_x(), cY = px_y();
     if ((cX > -1e-9 && cX < 1e-9) || (cY > -1e-9 && cY < 1e-9)) {
         s_snapOn = 0;
@@ -3842,8 +3884,10 @@ static int poly_snap_run(u8* buf, int S, int n, int ox_, int oy_)
         int snapped = poly_proj(s_snapAx, s_snapAy, (double)rawX, (double)rawY,
                                 cX, cY, minPx, &nx, &ny);
         u32 wx = (u32)(nx + 0.5), wy = (u32)(ny + 0.5);
-        if (wx != rawX || wy != rawY) changed++;
-        memcpy(p + ox_, &wx, 4); memcpy(p + oy_, &wy, 4);
+        if (writePkt) {                        /* 0x021F：消息路径活着时只维护锚点，不改包 */
+            if (wx != rawX || wy != rawY) changed++;
+            memcpy(p + ox_, &wx, 4); memcpy(p + oy_, &wy, 4);
+        }
         if (snapped) InterlockedIncrement(&g_snapN);
 
         /* 点击 = 用户确认了一个节点 ⇒ 后续吸附以它为锚点。
@@ -5037,7 +5081,17 @@ static int    s_pgSmpSkip;
  *   HUD 线程绝不做投影/吸附判定（那是热路径，且不能与 detour 的锚点抢语义）。
  * ⛔ 时间戳只在**吸附成立**时刷新 ⇒ 未吸附靠 `POLY_HINT_HOLD_MS` 自然衰减，
  *   避免「手抖出容差」把参考线闪成呼吸灯。 */
-#define POLY_HINT_HOLD_MS 150       /* 吸附消失后参考线再多留这么久（去抖） */
+#define POLY_HINT_HOLD_MS 150       /* 吸附消失后参考线再多留这么久（去抖，接触锁用） */
+/* 0x021F：HUD 侧的保持时间单独放宽到 350ms。
+ *   用户报「光标处的圆与交点处的参考线**快速交替闪烁**」——两者的可见性共用
+ *   `poly_hint_live()`，而窗口中心在「线段中点」与「吸附点」之间切换（见 HUD 段）。
+ *   150ms 在「吸附断续（方向在 ±10° 容差边缘抖）」时会让状态逐帧翻，翻一次窗口就跳一次。
+ *   ⛔ 只放宽**消失**，出现仍是立即的（吸附成立就刷新时间戳）。 */
+#define POLY_HINT_KEEP_MS 350
+/* 锚点离吸附点超过这么多 ⇒ 锚点不可信，宁可不画线。
+ *   0x021F 之前锚点曾落到屏幕外（y=−807），线从屏幕外拉进来，窗口尺寸还顶到
+ *   `HUD_SIZE_MAX` 上限来回跳 —— 那正是「交替换位」的视觉来源。 */
+#define POLY_HINT_MAX_SPAN 4000.0
 static volatile LONG g_polyHintX, g_polyHintY;    /* 吸附后的屏幕点（= 线**终点**） */
 static volatile LONG g_polyHintAx, g_polyHintAy;  /* 锚点（= 线**起点** = 当前折线的起点） */
 static volatile LONG g_polyHintUx, g_polyHintUy;  /* 单位方向 ×1000（免浮点原子写） */
@@ -5078,18 +5132,26 @@ static volatile LONG g_pgHoldN;       /* 累计锁定次数（诊断） */
 static volatile LONG g_pgHoldOff;     /* 累计解锁次数（诊断） */
 static volatile LONG g_pktTchMs;      /* 最近一个「接触中」包的时刻（光标路径判接触用） */
 static int    s_pkBtnPrev = -1;       /* 包路径：上一包的 buttons 电平（-1 = 未知） */
-static int    s_pkPin;                /* 1 = 本笔接触正在把包钉在 (s_pkPinX, s_pkPinY) */
-static LONG   s_pkPinX, s_pkPinY;     /* 包路径的钉住点（屏幕像素）= 吸附点 A */
+static int    s_pkPin;                /* 1 = 本笔接触正在把包钉在 (s_pkPinAx, s_pkPinAy) */
+static u32    s_pkPinAx, s_pkPinAy;   /* 包路径的钉住点（**轴空间**，与包同域 ⇒ 免换算） */
 static double s_pkPinRx, s_pkPinRy;   /* 钉住那一包的**真实**坐标（轴空间，解钉基准） */
 static volatile LONG g_pkClickWr;     /* 累计改写的「接触包」数（诊断） */
 
-/* HUD 侧唯一的判据：主开关 ∧ Alt 临时多边形 ∧ 时间戳新鲜。 */
+/* HUD 侧唯一的判据：主开关 ∧ Alt 临时多边形 ∧ 时间戳新鲜 ∧ 两端几何合理。 */
 static int poly_hint_live(DWORD now)
 {
     if (!g_cfg || !g_cfg[CFG_I_ENABLED] || !g_cfg[CFG_I_POLYALT]) return 0;
     LONG ms = g_polyHintMs;
     if (!ms) return 0;
-    return ((DWORD)(now - (DWORD)ms) <= POLY_HINT_HOLD_MS) ? 1 : 0;
+    if ((DWORD)(now - (DWORD)ms) > POLY_HINT_KEEP_MS) return 0;
+    /* 0x021F：锚点与吸附点差得太远 ⇒ 锚点不可信（曾经是屏幕外的 −807），
+       画出来只是从屏幕外拉一条长线，还会让窗口尺寸在上限处反复跳。 */
+    double sx = (double)(LONG)g_polyHintX - (double)(LONG)g_polyHintAx;
+    double sy = (double)(LONG)g_polyHintY - (double)(LONG)g_polyHintAy;
+    if (sx < 0) sx = -sx;
+    if (sy < 0) sy = -sy;
+    if (sx > POLY_HINT_MAX_SPAN || sy > POLY_HINT_MAX_SPAN) return 0;
+    return 1;
 }
 
 static int    s_pgOn;                         /* 1 = 有锚点 */
@@ -5162,17 +5224,16 @@ static void poly_snap_gcp_exit(int why)
     s_pkBtnPrev = -1; s_pkPin = 0;
 }
 
-/* 把一个**屏幕像素**点写进包坐标（轴空间）。返回 1 = 真的改动了这一包。
- * ⛔ 屏幕 → 轴 用 `/ cX`（与 `poly_anchor_push` 的 `* cX` 互逆，px_y 可能是负数）。 */
-static int pk_put(u8* p, int ox_, int oy_, LONG sx_, LONG sy_, double cX, double cY)
+/* 把一个**轴空间**的点写进包坐标。返回 1 = 真的改动了这一包。
+ * ⛔⛔ 0x021F：只接受轴坐标，**不做任何屏幕换算**。旧版收的是屏幕点再 `/ px` 反算，
+ *   而 px_y = −0.0625 且缺原点偏移 ⇒ 写进包的就是垃圾（日志里包锚点成了 INT_MIN，
+ *   选区被拉到下方远端）。落点本来就是轴域的事，算完直接写。 */
+static int pk_put(u8* p, int ox_, int oy_, u32 ax, u32 ay)
 {
-    double ax = (double)sx_ / cX, ay = (double)sy_ / cY;
-    u32 wx = (u32)(ax >= 0 ? ax + 0.5 : ax - 0.5);
-    u32 wy = (u32)(ay >= 0 ? ay + 0.5 : ay - 0.5);
     u32 rx = 0, ry = 0;
     memcpy(&rx, p + ox_, 4); memcpy(&ry, p + oy_, 4);
-    if (wx == rx && wy == ry) return 0;
-    memcpy(p + ox_, &wx, 4); memcpy(p + oy_, &wy, 4);
+    if (ax == rx && ay == ry) return 0;
+    memcpy(p + ox_, &ax, 4); memcpy(p + oy_, &ay, 4);
     return 1;
 }
 
@@ -5182,24 +5243,30 @@ static int pk_put(u8* p, int ox_, int oy_, LONG sx_, LONG sy_, double cX, double
  * 可节点仍落在 B ⇒ PS 确认节点时读到的是**更晚的那一包**（它自己的取包线程有滞后），
  * 或者是抬笔那一包。所以这里改成：整个接触期间每包都写同一个点，包括抬笔包。
  *
- * 钉住点来源（按优先级）：
- *   ① 光标/消息路径已经建立的锁 `g_pgHoldOn` —— 三路必须用同一个点，否则又是两张皮；
- *   ② 否则取「最近一次吸附点」`g_polyHint*`（要求 `POLY_CLICK_PKT_MS` 内）。
- *   ⛔ 都没有 ⇒ 一个字节不动（自由绘制必须原样透传）。
+ * ⛔⛔ 0x021F：钉住点改成**轴空间**（由 `poly_proj` 直接在同一批的包坐标上算投影）。
+ *   旧版拿「屏幕吸附点」再 `/ px` 反算轴 —— 那个换算缺原点偏移、且 px_y 为负
+ *   ⇒ 日志里包锚点成了 INT_MIN(-2147483648)，选区被拉到下方远端、参考线起点跑到屏幕外。
+ *   现在的算法与 `poly_snap_run`（包路径吸附）**完全同域同源**：同一个锚点、同一个
+ *   `poly_proj`，所以预览与落点天然一致，不需要任何跨域换算。
  *
- * 解除：抬笔 / 包坐标离钉住点超过 `POLY_CLICK_HOLD_PX`（笔一直按着往下画 = 补线场景）。
+ * 解除：抬笔 / 包坐标离钉住那一包的真实坐标超过 `POLY_CLICK_HOLD_PX`（补线场景要能跟随）。
  * 返回改写的包数（0 = 没改）。 */
 static int poly_pkt_click(u8* buf, int S, int n, int ox_, int oy_)
 {
     if (!g_cfg || !g_cfg[CFG_I_POLYALT] || !g_cfg[CFG_I_ENABLED]) {
-        s_pkBtnPrev = -1; s_pkPin = 0;
+        s_pkBtnPrev = -1; s_pkPin = 0; InterlockedExchange(&g_pkPinOn, 0);
         return 0;
     }
-    if (!s_pgOn) { s_pkBtnPrev = -1; s_pkPin = 0; return 0; }  /* 没开会话 ⇒ 无锚点可依 */
+    /* 没开会话 / 包路径没起用 ⇒ 没有可依的锚点，一个包都不碰（自由绘制必须原样） */
+    if (!s_pgOn || !s_snapOn) {
+        s_pkBtnPrev = -1; s_pkPin = 0; InterlockedExchange(&g_pkPinOn, 0);
+        return 0;
+    }
     const double cX = px_x(), cY = px_y();
     if ((cX > -1e-9 && cX < 1e-9) || (cY > -1e-9 && cY < 1e-9)) return 0;
 
     const double maxPx = POLY_CLICK_HOLD_PX * dpi_scale();
+    const double minPx = POLY_SNAP_MIN_PX * dpi_scale();
     int changed = 0;
     for (int i = 0; i < n; i++) {
         u8* p = buf + (SIZE_T)i * S;
@@ -5212,29 +5279,27 @@ static int poly_pkt_click(u8* buf, int S, int n, int ox_, int oy_)
             u32 rx = 0, ry = 0;
             memcpy(&rx, p + ox_, 4); memcpy(&ry, p + oy_, 4);
             if (!s_pkPin && s_pkBtnPrev != 1) {        /* 接触边沿（-1 当 0 用） */
-                LONG hx = 0, hy = 0; int have = 0;
-                if (g_pgHoldOn) {
-                    hx = (LONG)g_pgHoldX; hy = (LONG)g_pgHoldY; have = 1;
-                } else {
-                    LONG hms = g_polyHintMs;
-                    if (hms && (DWORD)(GetTickCount() - (DWORD)hms) <= POLY_CLICK_PKT_MS) {
-                        hx = (LONG)g_polyHintX; hy = (LONG)g_polyHintY; have = 1;
-                    }
-                }
-                if (have) {
-                    s_pkPinX = hx; s_pkPinY = hy;
+                /* 就在这一包的坐标上做投影：得到的就是 PS 此刻应该落下的那个轴点。
+                   ⛔ 没吸附上（返回 0）就不钉 —— 自由绘制必须原样透传。 */
+                double nx = (double)rx, ny = (double)ry;
+                if (poly_proj(s_snapAx, s_snapAy, (double)rx, (double)ry,
+                              cX, cY, minPx, &nx, &ny)) {
+                    s_pkPinAx = (u32)(nx + 0.5);
+                    s_pkPinAy = (u32)(ny + 0.5);
                     s_pkPinRx = (double)rx; s_pkPinRy = (double)ry;
                     s_pkPin = 1;
+                    InterlockedExchange(&g_pkPinOn, 1);
                 }
             }
             if (s_pkPin) {
-                /* ⛔ 解钉基准 = 钉住那一包的**真实**坐标（同上：吸附点天生偏一段距离，
+                /* ⛔ 解钉基准 = 钉住那一包的**真实**坐标（吸附点天生偏一段距离，
                    拿它当基准就等于落笔即解钉）。 */
                 double ddx = ((double)rx - s_pkPinRx) * cX;
                 double ddy = ((double)ry - s_pkPinRy) * cY;
                 if (dsqrt_(ddx * ddx + ddy * ddy) > maxPx) {
                     s_pkPin = 0;                       /* 真的在往下画 ⇒ 放行（补线场景） */
-                } else if (pk_put(p, ox_, oy_, s_pkPinX, s_pkPinY, cX, cY)) {
+                    InterlockedExchange(&g_pkPinOn, 0);
+                } else if (pk_put(p, ox_, oy_, s_pkPinAx, s_pkPinAy)) {
                     changed++;
                     InterlockedIncrement(&g_pkClickWr);
                 }
@@ -5242,11 +5307,12 @@ static int poly_pkt_click(u8* buf, int S, int n, int ox_, int oy_)
         } else {
             /* 抬笔包：**也写** —— PS 很可能就是拿这一包确认节点，写完立刻放开。 */
             if (s_pkPin) {
-                if (pk_put(p, ox_, oy_, s_pkPinX, s_pkPinY, cX, cY)) {
+                if (pk_put(p, ox_, oy_, s_pkPinAx, s_pkPinAy)) {
                     changed++;
                     InterlockedIncrement(&g_pkClickWr);
                 }
                 s_pkPin = 0;
+                InterlockedExchange(&g_pkPinOn, 0);
             }
             InterlockedExchange(&g_pgTouch, 0);
         }
@@ -8489,7 +8555,16 @@ static DWORD WINAPI hud_thread(LPVOID param)
             LONG hax = hdx < 0 ? -hdx : hdx;
             LONG hay = hdy < 0 ? -hdy : hdy;
             int  hspan = (int)(hax > hay ? hax : hay);
-            int  fits = (hspan + 24 <= hudSize) ? 1 : 0;
+            /* 0x021F：`fits` 必须带**滞回**。
+               用户报「两个 HUD 快速交替闪烁」：`fits` 决定窗口中心在「线段中点」与
+               「吸附点」之间二选一，而 hspan 恰好在上限附近抖动时，这个布尔值逐帧翻转
+               ⇒ 窗口在两个位置之间来回跳（看起来就是两个 HUD 交替）。
+               ⇒ 进入要留 96px 余量、退出要贴到 8px 才放手，中间是保持区。
+               ⛔ 状态必须是 static（HUD 线程的持久量），不能每帧从零算。 */
+            static int s_hintFits;
+            int fits = s_hintFits ? ((hspan + 8  <= hudSize) ? 1 : 0)
+                                  : ((hspan + 96 <= hudSize) ? 1 : 0);
+            s_hintFits = fits;
             int  mcx = fits ? (int)((hx0 + hx1) / 2) : (int)hx1;
             int  mcy = fits ? (int)((hy0 + hy1) / 2) : (int)hy1;
             putXc = hud_round_px((double)mcx - (double)half);
