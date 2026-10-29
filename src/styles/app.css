@@ -254,11 +254,83 @@ body.compact-app #app .app-root > .panel > .panel-section .row-grid-fit .grid-ce
    ⚠️ 用专属类而不是 `:first-child`：`:first-child` 在紧凑/非紧凑两侧命中不同元素，
       且 `#app` 前缀已足够高（避免动到 .border-panel-section 内的 radio）。 */
 
-/* 选区平滑：三列 radio（标准/拉绳/追笔）↔「选区平滑」标题。
-   紧凑模式本来就吃到 15px（见上方 :first-child 规则），这里让非紧凑模式跟上；
-   两模式都写 5px，值相同故不存在「谁盖谁」的问题。 */
+/* ---------- 选区平滑：三列 radio → 选项卡（2026-10-29 定稿）----------
+
+   外观口径（用户示意图）：选中项与下方参数盒**打通成一个轮廓**，轮廓上只有一个
+   **直角**（选中项根部那个凹角），其余全是圆角。选中项＝抬升底色 --entry-bg
+   （darkest = #404040，与笔刷热键条目同色）+ 三边 1px 描边 + **无底边**。
+   无圆点、无主色胶囊、无顶部主色线（三条都被用户否掉了）。
+
+   ⛔⛔ 结构一行没改：三列仍是同一个 RadioGroup 的三个 .radio-option，下方仍是原
+      .border-panel-section（见 app.tsx 的 smooth-mode-trio / smooth-params）。
+      理由：① 全仓 12 个 CSS 文件里 `::before/::after` 出现 **0 次**，UXP 下不可依赖；
+            ② 结构一动，radio 的键盘可达性（role=radio + Enter/Space）与
+               handleSmoothModeChange 的取值路径都要重验，收益不抵风险。
+
+   ⛔⛔⛔ **UXP 里 border 的「宽度/样式」是逐边的，「颜色」是整条共享的一个值。**
+      真机三次对照，这条是唯一能同时解释全部现象的说法：
+        · `border-top: 0` → 上边宽度确实归零、另三边仍 1px ✓（宽度逐边成立），
+          但那条声明缺 color ⇒ 整条共享色被刷成默认 currentColor = rgb(0,0,0)（三边黑）；
+        · 四条单边简写（各带 color）→ 整条共享色被反复覆盖，四边变成同一个色 ⇒ 看起来「边框没了」；
+        · `border-bottom-color`（长属性）→ 静默无效，改不动那个共享值。
+      ⇒ **正确姿势：先用 `border-<side>: 0` 把不要的边宽度归零，最后补一条
+        `border-color: var(--border-color)` 把被刷黑的共享色救回来。顺序不能反。**
+        （`border-color` 只写颜色、不碰逐边宽度，所以不会把归零的边又撑回来。）
+
+   ⛔⛔ 构图口径（用户 2026-10-29 图，选中「拉绳」为例）：组合体轮廓 =
+        **拉绳的上/左/右** + **标准的下边缘** + **追笔的下边缘** + **参数盒的左/下/右**。
+      ⇒ 选中格「无底边」，未选中格「只有底边」，参数盒「无顶边」。三者刚好拼成一个
+        凸字形闭合轮廓，唯一的直角就是选中格根部那个凹角。
+      ⚠️ 因为底边宽度归零，选中格的内容区比邻居高 1px（文字约上移 0.5px）；
+         三格等分、上下边界一致，肉眼看不出，不值得为此加 padding 补偿。
+
+   ⛔⛔ **「打通」不能靠层叠**：首版用「行 `margin-bottom:-1px` + `z-index:2` 盖住盒顶边」，
+      真机证明 UXP 里兄弟的 z-index 提不过后一个兄弟 ⇒ 盒顶边照样横穿选中项下方。
+      也别指望 box-shadow：多值 inset 阴影在 UXP 下整体不渲染（试过，四条线一条都没画出来）。
+   ⚠️ 等分用 `flex: 1 1 0`：common.css 的版式容器注释写着「勿改 flex:1 1 0」，但那条约束
+      的前提是 `justify-content: space-between` + 内容 `flex-start`（贴边版式）；
+      选项卡要的是「等分 + 内容居中」，两者必须**成对改**，只改一头会得到「盒很宽、内容靠左」。
+      选择器带 `#app`（1 id + 2 class）才压得过 `.panel-section .radio-trio-group > .radio-option`。
+   ⚠️ 与标题的 5px 仍是原来那条口径（紧凑/非紧凑同值），不要并进上面这组里改。 */
 #app .smooth-mode-trio {
   margin-top: 5px;
+}
+
+#app .smooth-mode-trio > .radio-option {
+  flex: 1 1 0;
+  height: 26px;
+  box-sizing: border-box;
+  justify-content: center;
+  background-color: var(--bg-color);
+  /* 未选中：只要一条底边（＝参数盒的「顶边」），上/左/右宽度归零。
+     ⛔ 顺序是硬约束：先定整条 border → 再把三条边宽度压 0（这一步会把共享色刷黑）
+        → 最后 `border-color` 把颜色救回来。见文件头 ⛔⛔⛔。 */
+  border: 1px solid var(--border-color);
+  border-top: 0;
+  border-left: 0;
+  border-right: 0;
+  border-color: var(--border-color);
+}
+
+/* 未选中：圆点节点不现身（选中项也不再复用它 —— 胶囊已被用户否掉） */
+#app .smooth-mode-trio .radio-option-dot {
+  display: none;
+}
+
+/* 文字：撤掉基础规则里给圆点留的 6px 左间距，改为独占居中 */
+#app .smooth-mode-trio .radio-option-label {
+  margin-left: 0;
+  font-size: 13px;
+}
+
+/* 选中：抬升底色 + 上/左/右三边描边，**底边宽度归零** —— 缺口就是这么来的。
+   ⛔ 同样先 `border` 后 `border-bottom: 0` 再补 `border-color`；漏了最后那行就是三条黑边。 */
+#app .smooth-mode-trio > .radio-option-checked {
+  background-color: var(--entry-bg);
+  border: 1px solid var(--border-color);
+  border-bottom: 0;
+  border-color: var(--border-color);
+  border-radius: 3px 3px 0 0;
 }
 
 /* 选区改造：首行「锐度」↔「选区改造」标题。

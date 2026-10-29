@@ -2164,8 +2164,13 @@ sp-radio[disabled] {
    这里用 margin-top 补齐（2026-10-13 用户要求）。
 
    本规则做三件事：
-   ① 盒与上方 radio 的间距 = **15px**（margin-top；2026-10-23 用户要求「再加 5px」，
-      原 10px 让盒顶离 radio 太近，参数盒像是贴在三列选项下面）；
+   ① 盒与上方 radio 的间距 = **0**（2026-10-29 起）：三列已改成选项卡，选中项与
+      本盒共用一块抬升表面（--entry-bg），中间不能再有缝 —— 原来那 15px
+      （2026-10-23 用户要求「再加 5px」）在这版里会把 tab 和盒体撕开，故归零。
+      两行之间**不做任何重叠**：本盒放弃 `border-top`（见下方规则），那条顶边改由
+      三格的底边逐格绘制 —— 选中格画成 --entry-bg = 缺口，于是与本盒连通。
+      ⛔ 不要改回「负 margin + z-index 盖住盒顶边」：真机证明 UXP 里兄弟的 z-index
+        提不过后一个兄弟，盒顶边照样横穿。
    ② 行与行之间**恰好 10px**；
    ③ 盒的内边距（.border-panel-section 自带 padding: 10px）单独提供
       「描边 → 首行」「末行 → 描边」的 10px。
@@ -2179,10 +2184,32 @@ sp-radio[disabled] {
       ⇒ 盒内一律 margin: 0，只有**非首行**给 10px 上边距；首行上方 / 末行下方
         那 10px 由盒的 padding 提供（这也正是 ①③ 的目的）。
    ⛔ 只在本盒作用域内归零，不动 .border-panel-section / .row-between 的全局行为。 */
-/* ⛔ 15px（= 原 10px + 用户 2026-10-23 要求的 5px）。紧凑/非紧凑同值：
-   紧凑模式那条 `.collapse-content-expanded > :first-child` 只作用于**首元素**（radio），
-   碰不到本盒，所以这里一份值即两模式一致。 */
-.smooth-params { margin-top: 15px; }
+/* ⛔ 2026-10-29 改版：margin-top 15px → **0**（原因见上方 ①）。
+   同时把底色从 .border-panel-section 默认的 --bg-color 抬到 --entry-bg ——
+   这就是用户要的「选中 tab + 下方参数共用一块稍微提亮的底色」：
+   --entry-bg 在四套主题里恒为「比 --bg-color 高一步」（darkest 64 / dark 97 /
+   light 184→168 略深 / lightest 240→222 略深），所以深色主题是提亮、浅色主题是压深，
+   方向天然正确，不需要按主题写分支。
+   ⛔⛔ 「打通」的另一半在本盒：**要「左/下/右三边有线、顶边没有」。**
+      UXP 里 border 的宽度是逐边的、颜色是整条共享的 ⇒ 可以只归零顶边宽度，
+      再用一条 `border-color` 把颜色救回来：
+        `border: 1px solid …` → `border-top: 0`（宽度归零，但共享色被刷成默认黑）
+        → `border-color: var(--border-color)`（把黑刷回灰）。
+      ⛔ 三行缺一不可，顺序也不能换：漏了 `border-top: 0` 顶边会横穿选中项下方；
+        漏了 `border-color` 就是上一版那三条黑边。
+      ⚠️ 别指望 box-shadow 兜底：多值 inset 阴影在 UXP 下整体不渲染（2026-10-29 试过，四条线一条没出）。
+      ⚠️ 圆角 `0 0 3px 3px`：顶边没有线，上角方圆看不出差别；但选中首/末格时
+         盒子的左（右）竖线要接上格子的竖线，圆角会内弯 3px 留缺口。
+   ⚠️ 必须带 #app：`.border-panel-section` 也设了 border / background-color（同为一类选择器），
+      靠源码先后顺序取胜太脆，加 id 一步到位。 */
+#app .smooth-params {
+  margin-top: 0;
+  background-color: var(--entry-bg);
+  border: 1px solid var(--border-color);
+  border-top: 0;
+  border-color: var(--border-color);
+  border-radius: 0 0 3px 3px;
+}
 .smooth-params > .row-between { margin-top: 0; margin-bottom: 0; }
 .smooth-params > .row-between + .row-between { margin-top: 10px; }
 

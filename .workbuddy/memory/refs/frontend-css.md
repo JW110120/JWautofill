@@ -161,6 +161,8 @@
 | `background: transparent` | ⛔ 渲染成**纯黑**。要透明感用「具体色 + `opacity`」（`background-color: var(--border-color); opacity:.80`）。 |
 | `border-radius: 999px` | ⛔ 未按「高度一半」解析 ⇒ 两端尖角纺锤、伪元素溢出鼓包。写**显式数值**（胶囊 16 高→8px；圆点 12→6px），并同时给 `-webkit-border-radius`。 |
 | `text-decoration: underline` | ⛔ 不保证渲染 ⇒ 下划线一律用 `border-bottom` 画。 |
+| 单边 border | ⛔⛔⛔ **宽度/样式是逐边的，颜色是整条共享的一个值。** 实证：`border-top: 0` 能让上边归零、另三边仍 1px ✓（宽度逐边成立），但那条声明缺 color ⇒ 共享色被刷成 currentColor=`rgb(0,0,0)`（三边变黑，2026-10-29 的 bug 就是它）。`border-<side>-color` 长属性静默无效；四条单边简写各带 color ⇒ 共享色被反复覆盖、四边同色。**「只画三条边」的正确姿势：先 `border: 1px solid var(--x)`，再 `border-<side>: 0` 归零不要的那条，最后补 `border-color: var(--x)` 把颜色刷回来**（顺序不能换；`border-color` 只写颜色、不撑回宽度）。 |
+| `box-shadow` 多值 | ⛔ 整体不渲染：四条 `inset` 阴影写在一起，真机一条线都没画出来（单值可用）。 |
 | 滚动条（槽 ≈16px） | ⚠️ 画在滚动容器的**内容盒内部**右侧（不像桌面浏览器贴在 padding 外侧）⇒ **滚动层不能有横向 padding / border**，否则槽永远到不了面板最右缘；同理滚动层要贯通整高，把标题段放外面就会缺顶部一段槽。 |
 | `:nth-of-type` | ⛔ 统计的是**同标签名元素**在父节点里的序号，不是「第几个特定 class」⇒ 混合标签容器里绝不能用它数 class。改用相邻兄弟 / class 组合。 |
 | flex 容器默认值 | ⚠️ 交叉轴隐式 `center`（不是 web 的 `stretch`）；方向未显式声明时可能退化成 `column` ⇒ `flex-direction` / `justify-content` / `align-items` **一律显式写**。 |
@@ -358,3 +360,27 @@ CSS 常驻折叠，所以那边可以直接搬。**结论：状态必须离开�
 - `.bs-foot > .notify-bar { margin-bottom:10px }`（原 8px）= 状态条下边缘 → 按钮行上边缘 10px。
   写在 brush.css 里作用域化，**不动 common.css 的 8px**（那是其它面板的既有节奏）。
   ⚠️ 中间若出现 `.bs-steps`，10px 落在状态条与步骤列表之间。
+
+**4. 选项卡（2026-10-29，选区平滑三列）**
+- 三列自绘 radio → 浏览器式选项卡：`app.css` 的 `#app .smooth-mode-trio` 段。
+  未选中＝纯文字（无底无边）；选中＝`--entry-bg` 抬升 + 三边 1px 描边 + **无底边**，
+  与下方参数盒（同底色）连通成一个轮廓，轮廓上唯一的直角＝选中项根部的凹角。
+  无圆点、无主色胶囊、无顶部主色线（三条都被用户否掉）。
+- ⛔⛔⛔ **构图口径（用户图）：组合体轮廓 = 选中格的上/左/右 + 相邻两格的下边缘 + 参数盒的左/下/右。**
+  实现＝「宽度归零 + 补色」三连（见上表）：
+  未选中格 `border:1px solid` → `border-top/left/right:0` → `border-color`（只剩底边＝盒顶边）；
+  选中格 `border:1px solid` → `border-bottom:0` → `border-color`（上左右，**无底边**）；
+  参数盒 `border:1px solid` → `border-top:0` → `border-color`（左下右，**无顶边**）。
+  ⇒ 选中格底色直接接上盒身，凸字形缺口才是真的闭合。
+  ⚠️ 底边归零 ⇒ 选中格内容区比邻居高 1px（文字约上移 0.5px），三格等分看不出，别加 padding 补偿。
+- ⛔⛔ **「打通」不能靠层叠**：首版用「行 `margin-bottom:-1px` + `z-index:2` 盖住盒顶边」，
+  真机证明 **UXP 里兄弟的 z-index 提不过后一个兄弟** ⇒ 盒顶边照样横穿选中项下方。
+- ⛔⛔ **未选中格的三条边写 `--bg-color` 而不是 `border:none`**：为了盒模型对齐
+  （否则选中项比邻居多 1px，文字基线错位）。隐形依赖底色恰为 `--bg-color`
+  （`.collapse-section` 已是）。⛔ 不能写 `transparent`，UXP 渲染成黑。
+- 高 26px（含 1px 边框）；等分用 `flex: 1 1 0`（与 common.css「勿改 flex:1 1 0」不冲突：
+  那条针对 `space-between` + `flex-start` 的贴边版式，选项卡是「等分 + 居中」，成对改）。
+- 参数盒圆角已改 `0 0 3px 3px`：顶边不可见，上角方圆看不出差别；但选中首/末格时
+  盒子的左（右）描边要接上格子的竖边，圆角会内弯 3px 留缺口。
+- ⚠️ **与 `.bs-tab`（笔刷分类：22px 胶囊、选中实心主色 `--primary-color`）是两套语言**。
+  新做 tab 前先想清楚要哪套，别在同一面板里混。
