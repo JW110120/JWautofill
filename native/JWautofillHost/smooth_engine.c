@@ -135,10 +135,11 @@ typedef struct { int axMin; int axMax; u32 axUnits; u32 axResolution; } AXIS_T;
    56 → 58（0x0115 新增 I_NOTIFYAGE / I_GATEOWNED）；
    58 → 59（0x020A 新增 I_ALTTOOL：临时吸管的硬否决位）。
    0x020B **无槽位变化**（只给 hostBusy 消息加了 `btn` 字段，见 keyhook.c）⇒ 仍是 59。
-   59 → 60（0x0211 新增 I_POLYALT：物理 Alt「临时多边形套索」的硬否决位）。
+   59 → 60（0x0211 新增 I_POLYALT：物理 Alt「临时多边形套索」的硬否决位）；
+   60 → 61（0x0220 新增 I_POLYSNAP：多边形吸附总开关，面板经 WS 18924 下发）。
    两个文件的 CFG_NLONGS **必须同步**：谁先建节谁定尺寸，不一致的一方会
    MapViewOfFile 到错误的字节数（不报错，只静默截断 —— 既有铁律区）。 */
-#define CFG_NLONGS    60
+#define CFG_NLONGS    61
 
 enum {
     CFG_I_MAGIC = 0,
@@ -253,6 +254,13 @@ enum {
           ⇒ PS 拿滞后的光标画折线预览（逐帧 1~2px = 抖），点击那一批又被量成
           「一次落笔」⇒ HUD 亮一帧。这一位由 keyhook 每 20ms 镜像物理电平。 */
     CFG_I_POLYALT,        /* 1 = 物理 Alt 按着（PS 临时模式）⇒ 不改写、不出 HUD */
+    /* ---- 0x0220：多边形吸附总开关 ----
+       1 = 允许在 POLYALT 期间做 8 向吸附（含落笔冻结与青色参考线）；0 = 一律不吸。
+       ⛔ 与 CFG_I_POLYALT 的关系是「且」而不是「替换」：那个位说「现在是不是折线」，
+          这位说「用户允不允许吸」。POLYALT 的硬否决**不因本开关关闭而解除** ——
+          折线期间平滑一律停（PS 那时在画直线段，改写坐标只会把预览拖花）。
+       ⛔ 默认 0：共享槽初值即「关」。面板不在位 = 没人要求吸附 ⇒ 一个字节都不改。 */
+    CFG_I_POLYSNAP,
 };
 
 /* 受阻原因码（CFG_I_REASON 的值域；面板诊断条按它逐条说人话）。 */
@@ -302,7 +310,7 @@ static const char* rs_name(LONG r)
 /* ⛔⛔ 这张槽位表是 C 与 C#（Program.cs 的 PenHook）**两处手写**的，错位不会报错、
    只会让参数静默失效（实测过的坑）。所以：① 用编译期断言守住「槽数不超映射」；
    ② 任何一侧增删槽，另一侧必须同步，且 C# 的 EnsureInit 里有运行时兜底校验。 */
-typedef char cfg_slot_fit_check[(CFG_NLONGS >= CFG_I_POLYALT + 1) ? 1 : -1];
+typedef char cfg_slot_fit_check[(CFG_NLONGS >= CFG_I_POLYSNAP + 1) ? 1 : -1];
 
 static volatile LONG* g_cfg    = NULL;
 static HANDLE         g_cfgMap = NULL;
@@ -3498,7 +3506,7 @@ static int calib_peek_batch(HCTX hCtx)
 static volatile LONG g_polyHoldOn;    /* 1 = 冻结中（诊断镜像） */
 static volatile LONG g_polyHoldT0;    /* 冻结进场时刻（陈旧兜底） */
 static volatile LONG g_polyHoldRej;   /* 累计「被健全性检查拒掉」的冻结次数（诊断） */
-static volatile LONG g_polyHoldWhy;   /* 结束原因：1 抬笔 / 2 光标移开 / 3 按住超时 / 4 Alt 松开 */
+static volatile LONG g_polyHoldWhy;   /* 结束原因：1 抬笔 / 2 光标移开 / 3 按住超时 / 4 Alt 松开 / 5 平滑被关（0x0221） */
 static volatile LONG g_polyHoldMs;    /* 本次冻结持续时长 */
 static volatile LONG g_polyHoldFrz;   /* 本次冻结写住了多少包 */
 static volatile LONG g_polyHoldEvt;   /* 1 = 有一条台账待 worker 落盘 */
@@ -3611,10 +3619,31 @@ static void poly_hold_finish(int why)
     InterlockedExchange(&g_polyHoldEvt, 1);
 }
 
+/* 0x0220：多边形吸附总开关（面板经 WS 18924 的 polySnap 写进 CFG_I_POLYSNAP；缺省 0 = 关）。
+   ⛔ 五个入口（落笔冻结 / 包吸附 / 接触钉住 / 光标吸附 / 参考线）**都必须**问它 ——
+      少问一处就是「开关关着，坐标却还在被改」，而这种失手在界面上完全看不出来：
+      用户只会觉得「关了怎么还吸」或者「关了怎么画歪了」。
+   ⛔ 它管的是**吸附链路**，不管 `CFG_I_POLYALT` 的硬否决：Alt 期间平滑一律停，
+      与这里无关（那位说的是「现在是折线」，这位说的是「允不允许吸」）。 */
+static int poly_snap_enabled(void)
+{
+    return (g_cfg && g_cfg[CFG_I_POLYSNAP]) ? 1 : 0;
+}
+
 /* 返回 >=0 = 本批已被接管（值 = 实际改写的包数）；-1 = 不接管，走正常路径。 */
 static int poly_hold_run(u8* buf, int S, int n, int ox_, int oy_)
 {
     if (!g_cfg) return -1;
+
+    /* 0x0220：总开关关着 ⇒ 走正常路径（不冻结、不钉圆心）。
+       ⛔ 必须先收尾再返回：开关可能在「正冻着」的那一拍被关掉，直接 return 会让
+          `s_polyHold` 停在 1、共享槽里留着钉住点，下一次按住 Alt 就继承旧状态。 */
+    if (!poly_snap_enabled()) {
+        if (s_polyHold) poly_hold_finish(4);
+        s_polyNeedAnchor = 0;
+        s_polyUsed = 0;
+        return -1;
+    }
 
     /* 0x021B：上一批把解冻判在批末 ⇒ 折线起点落在**这一批的第一包**上，先补交锚点。
        ⛔ 必须放在「POLYALT 已归零」分支之前：用户解冻后立刻松开 Alt 时也要能交出去。 */
@@ -3628,6 +3657,24 @@ static int poly_hold_run(u8* buf, int S, int n, int ox_, int oy_)
     if (!g_cfg[CFG_I_POLYALT]) {
         if (s_polyHold) poly_hold_finish(4);   /* Alt 已松开：先收尾再交还平滑 */
         s_polyUsed = 0;                        /* 下一轮按住重新允许冻结 */
+        return -1;
+    }
+    /* ================== 0x0221：平滑关着时**不冻结** ==================
+     *
+     * 冻结（0x0214）是为平滑服务的：它的原始成因是「平滑让输出点滞后于笔尖，
+     *   按 Alt 那一刻 PS 从圆心拉一条线」。**平滑关着时输出点就是笔尖本身**，
+     *   没有任何滞后 ⇒ 冻结点 = 本批真实笔尖 ⇒ 钉住 ≡ 每包写自己的坐标（零改写）。
+     *
+     * ⛔ 更要紧的是它会**算错**：`g_ox/g_oy` 此刻不再更新（平滑路径没跑），
+     *    拿它当圆心必然被下面 `POLY_HOLD_ENTER_MAX_PX` 那道「验真身」拒掉 ——
+     *    白白累加 `g_polyHoldRej`，排障时看到的是一堆「冻结被拒」，真因却在这里。
+     * ⇒ 直接跳过冻结，让角度吸附（`poly_snap_run`）独干。锚点此时取自真实笔尖，
+     *    见 `poly_snap_run` 里 `g_strokeGate == 1 && CFG_I_ENABLED` 那条。
+     * ⛔ 收尾要照做：用户可能在「正冻着」的那一拍把平滑开关关掉。
+     *    why=5（新增）专指这一种，别复用 4（那是「Alt 松开」）—— 日志一错，
+     *    排障方向就全歪了（本项目的老教训）。 */
+    if (!g_cfg[CFG_I_ENABLED]) {
+        if (s_polyHold) poly_hold_finish(5);
         return -1;
     }
     if (!s_polyHold) {
@@ -3832,7 +3879,10 @@ static int poly_pkt_click(u8* buf, int S, int n, int ox_, int oy_);
 
 static int poly_snap_run(u8* buf, int S, int n, int ox_, int oy_)
 {
-    if (!g_cfg || !g_cfg[CFG_I_POLYALT] || !g_cfg[CFG_I_ENABLED] || !tool_gate_ok()) {
+    /* 0x0221：包路径吸附与平滑总开关解耦（根因见 det_WTPacketsGet 的 `en || polyOn`）。
+       ⛔ `tool_gate_ok()` 保留：吸附是「在套索的折线上对齐方向」，工具不是套索时
+          按 Alt 是 PS 的临时吸管，改坐标会直接毁掉取色。 */
+    if (!g_cfg || !g_cfg[CFG_I_POLYALT] || !tool_gate_ok() || !poly_snap_enabled()) {
         s_snapOn = 0; s_snapBtn = 0;
         return -1;
     }
@@ -3858,9 +3908,16 @@ static int poly_snap_run(u8* buf, int S, int n, int ox_, int oy_)
         return -1;                                  /* 轴→像素比还没标定出来 */
     }
     if (!s_snapOn) {
-        if (g_strokeGate == 1) {                    /* 一笔之中：折线起点就在圆心 */
+        /* 0x0221：⛔ 「一笔之中 ⇒ 起点 = 圆心」只在**平滑真的在改写**时成立。
+           `g_ox/g_oy` 是平滑的输出点；平滑关着时它停止更新（陈旧值可能是上一场会话的），
+           拿它当锚点会让参考线起点与折线起点分离、吸附方向也跟着算错。
+           那种情况下 PS 直接拿包里的 raw 画线，起点就是 raw。
+           ⛔ 判据必须带 `CFG_I_ENABLED`，不能只看 `g_strokeGate`：后者在平滑关闭时
+              也由 `smooth_packets` 的 poly 分支维护着（见那里的 0x0221 长注释），
+              它回答的是「在不在画」，不回答「输出点是不是圆心」。 */
+        if (g_strokeGate == 1 && g_cfg[CFG_I_ENABLED]) {   /* 一笔之中：折线起点就在圆心 */
             s_snapAx = g_ox; s_snapAy = g_oy;
-        } else {                                    /* 悬空按 Alt：PS 以当下光标起笔 */
+        } else {                                    /* 悬空按 Alt / 平滑关：PS 以当下光标起笔 */
             u32 rx = 0, ry = 0;
             memcpy(&rx, buf + ox_, 4); memcpy(&ry, buf + oy_, 4);
             s_snapAx = (double)rx; s_snapAy = (double)ry;
@@ -4026,6 +4083,37 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
             · 面板**明确报 0**（心跳新鲜）⇒ 立即否决，闩锁也压不住；
             · 心跳**过期** ⇒ 沿用手头结论，不在笔中劈开（否则每 3s 从圆心拉一根直线，BUG2）。
        ⛔ `contactPrev` / `latched` 仍留着只为落盘诊断，不再参与裁决。 */
+    /* ================= 0x0221：多边形吸附的「一笔之中」自备证据 =================
+     *
+     * 用户实测：「多边形吸附现在必须开启选区平滑才生效」。
+     *
+     * 根因链（三环，缺一不成立）：
+     *   ① 整条吸附链住在 `smooth_packets` 里，而它过去只在 `enNow`（平滑总开关）
+     *      为真时被调用 ⇒ 平滑一关，吸附连一次都跑不到（见 det_WTPacketsGet）；
+     *   ② 就算被调用，`useGate = tool_edit_allowed()` 在 ENABLED=0 时恒 0 ⇒ 走下面
+     *      的 `!useGate` 分支，那里**每批**把 `g_strokeGate` 清成 -1；
+     *   ③ 而 `poly_hold_run` 的进场判据正是 `g_strokeGate == 1`（铁律 93）⇒ 永远不进场。
+     *
+     * ⇒ `g_strokeGate` 的语义是「此刻 PS 在画一笔」，这个**事实**与「用户是否想平滑」
+     *   无关；它只是一直由平滑路径代为维护而已。这里给吸附补一份自己的维护：
+     *   平滑关着、吸附开着时，用同一个 `contact_update()`（同一套信号表，不另建判据）
+     *   算出接触，再写回同一个 `g_strokeGate`。
+     *
+     * ⛔ 只在「平滑关 ∧ 吸附开」补：平滑开着时本函数的正常路径维护得更细（每笔台账、
+     *    长闩救回统计、RST_ANCHOR），这里再插一次就是两个写者对打。
+     * ⛔ 判据不可用时 `contact_update` 是 fail-open（`g_contactSmooth = 1`）⇒ 这里会
+     *    得到 `strokeGate = 1`。这不构成「悬空也钉点」，因为 `poly_hold_run` 还有
+     *    第二道硬判据 `pkt_btn_level(buf) == 1`（逐包 buttons 电平），判据不可用时它返回 -1。
+     * ⛔ 不碰 `g_penDown`：HUD 用它，而平滑关着时 HUD 本来就不该出（`cheapOk` 含 ENABLED，
+     *    参考线走的是独立旁路 `polyHint`）—— 在这里写它只会让 `g_lastRealTip` 记错。
+     * ⚠️ 位置必须在 `poly_hold_run` **之前**：那三位用的是「上一批」的 strokeGate，
+     *    在这里写等于给下一批用，与平滑路径的时序完全一致（也早一批于 `!useGate` 的清零）。
+     */
+    if (!g_cfg[CFG_I_ENABLED] && g_cfg[CFG_I_POLYSNAP]) {
+        contact_update((const u8*)buf, S, n);
+        InterlockedExchange(&g_strokeGate, g_contactSmooth ? 1 : -1);
+    }
+
     /* 0x0214：临时多边形套索的「落笔冻结」（长注释见 poly_hold_run）。
        ⛔ 必须放在 `tool_edit_allowed()` **之前**：POLYALT 一旦为 1，正常路径会立刻
           清 `g_strokeGate` / `g_wasEnabled`，冻结的进场判据（一笔之中）就再也看不到了
@@ -5140,7 +5228,12 @@ static volatile LONG g_pkClickWr;     /* 累计改写的「接触包」数（诊
 /* HUD 侧唯一的判据：主开关 ∧ Alt 临时多边形 ∧ 时间戳新鲜 ∧ 两端几何合理。 */
 static int poly_hint_live(DWORD now)
 {
-    if (!g_cfg || !g_cfg[CFG_I_ENABLED] || !g_cfg[CFG_I_POLYALT]) return 0;
+    /* 0x0221：⛔ **不再要求 `CFG_I_ENABLED`（选区平滑总开关）**。
+       多边形吸附是独立功能：平滑关着时用户照样会按住 Alt 画多边形，那时更需要参考线。
+       ⛔ 剩下的两道门足够：`I_POLYSNAP`（用户意图）+ `I_POLYALT`（物理 Alt 事实）。
+       ⛔ 也别把「工具闸门」并进来：参考线只在**吸住过**（时间戳新鲜）时才活，
+          而写时间戳的那条路（包/光标吸附）已经各自把工具闸门判过了。 */
+    if (!g_cfg || !g_cfg[CFG_I_POLYALT] || !poly_snap_enabled()) return 0;
     LONG ms = g_polyHintMs;
     if (!ms) return 0;
     if ((DWORD)(now - (DWORD)ms) > POLY_HINT_KEEP_MS) return 0;
@@ -5253,7 +5346,9 @@ static int pk_put(u8* p, int ox_, int oy_, u32 ax, u32 ay)
  * 返回改写的包数（0 = 没改）。 */
 static int poly_pkt_click(u8* buf, int S, int n, int ox_, int oy_)
 {
-    if (!g_cfg || !g_cfg[CFG_I_POLYALT] || !g_cfg[CFG_I_ENABLED]) {
+    /* 0x0221：接触钉住同样只认「吸附开关 + 物理 Alt」，与平滑总开关无关
+       （根因见 det_WTPacketsGet 里那段 `en || polyOn` 的说明）。 */
+    if (!g_cfg || !g_cfg[CFG_I_POLYALT] || !poly_snap_enabled()) {
         s_pkBtnPrev = -1; s_pkPin = 0; InterlockedExchange(&g_pkPinOn, 0);
         return 0;
     }
@@ -5340,7 +5435,12 @@ static int poly_owner_may_advance(int owner)
  *      消息路径若在 2s 内一次都没出现 ⇒ 认定它没接上，锚点交回光标路径。 */
 static int poly_snap_gcp(LPPOINT p, int btn, int owner)
 {
-    if (!g_cfg || !g_cfg[CFG_I_ENABLED]) { poly_snap_gcp_exit(2); return 0; }
+    /* 0x0221：光标 / 消息两条通道也不再看平滑总开关（根因见 det_WTPacketsGet 的
+       `en || polyOn`）。⛔ 会话级的把关一点没松：下面仍要 `I_POLYALT` 电平、
+          工具闸门「值优先」、`canvas_hit_ok`，少一道就会在画笔的临时吸管上改坐标。 */
+    if (!g_cfg || !poly_snap_enabled()) {
+        poly_snap_gcp_exit(2); return 0;
+    }
 
     /* ⛔⛔ 0x021A：进出会话的判据见 `s_pgToolSeen` 处的长注释。两条都只许**收窄本拍改写**，
        绝不许在这里销毁锚点 —— 那正是「第一遍能吸、之后再也不吸」的根因。 */
@@ -5633,7 +5733,12 @@ static void poly_msg_apply(MSG* m)
     int isUp   = (m->message == WM_LBUTTONUP);
     if (isDown) InterlockedExchange(&g_pgTouch, 1);
 
-    if (g_cfg && g_cfg[CFG_I_POLYALT] && g_cfg[CFG_I_ENABLED]) {
+    /* 0x0221：消息层也不再看平滑总开关（根因见 det_WTPacketsGet 的 `en || polyOn`）。
+       ⛔ `g_msgLastMs` **必须照常写**：包路径靠它在 2s 内的新鲜度决定「让位给消息层」
+          （见 poly_snap_run 的 `writePkt`）。平滑关着时不写 ⇒ 包路径以为消息层不在，
+          两条通道各写一份坐标 ⇒ 预览与落点分开（0x021D 修过的老毛病又回来）。
+       ⇒ 判据取「物理 Alt ∧ 吸附开关」，与 `poly_snap_gcp` 入口保持一致。 */
+    if (g_cfg && g_cfg[CFG_I_POLYALT] && poly_snap_enabled()) {
         InterlockedIncrement(&g_msgSeen);
         InterlockedExchange(&g_msgLastMs, (LONG)GetTickCount());
 
@@ -6218,17 +6323,29 @@ static u64 det_WTPacketsGet(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
         }
         if (g_cfg) {
             LONG en = enNow;    /* 上面已按「面板开关 + 心跳防呆」算好，这里不再重读 */
-            if (en) {
+            /* ⛔⛔ 0x0221：多边形吸附**不再依赖**平滑总开关（用户实测「必须先开平滑才吸」）。
+               根因：整条吸附链（落笔冻结 / 包吸附 / 接触钉住）都住在 `smooth_packets`
+               里，而本函数旧版只在 `en` 为真时调它 ⇒ 平滑一关，吸附的所有判据连一次
+               都跑不到。现在触发条件放宽成 `en ∨ 吸附开`。
+               ⚠️ 吸附侧**也要**心跳防呆：面板崩了 `I_POLYSNAP` 会停在 1，只看它等于
+                  「没有面板也在改坐标」；这里与上面的 `enNow` 用同一个 3s 窗口。
+               ⛔ 但状态机（`g_state`）与改写计数（`g_smoothed`）**只在 en 时更新**：
+                  面板的四档文案与「已平滑包数」讲的是平滑，被纯吸附的改写污染就撒谎了。 */
+            LONG polyOn = g_cfg[CFG_I_POLYSNAP];
+            if (polyOn && (DWORD)(nowT - (DWORD)g_cfg[CFG_I_HEARTBEAT]) > 3000) polyOn = 0;
+            if (en || polyOn) {
                 /* 状态机（CFG_I_STATE，面板四档文案的唯一依据）：
                    0=未挂/未标定  1=生效（标定 OK 且真的在改写）  2=标定失败  3=已卸载。
                    ⛔ 旧版在这里无条件置 1 ⇒ 标定失败也显示「生效中」，再叠加 cmd=1
                       （每次开开关都发）无条件置 1 ⇒ 「标定失败」被永久洗掉。现在只认标定结果。 */
                 int changed = smooth_packets((HCTX)a, (void*)c, r);
-                if (changed > 0) InterlockedExchangeAdd(&g_smoothed, (LONG)changed);
-                if (g_calib.valid) {
-                    if (g_state != 1) InterlockedExchange(&g_state, 1);
-                } else if (g_calib.tried) {
-                    if (g_state != 2) InterlockedExchange(&g_state, 2);
+                if (en) {
+                    if (changed > 0) InterlockedExchangeAdd(&g_smoothed, (LONG)changed);
+                    if (g_calib.valid) {
+                        if (g_state != 1) InterlockedExchange(&g_state, 1);
+                    } else if (g_calib.tried) {
+                        if (g_state != 2) InterlockedExchange(&g_state, 2);
+                    }
                 }
             } else {
                 g_wasEnabled = 0;                        /* 关掉 ⇒ 下一帧起笔锚定 */
@@ -6739,10 +6856,11 @@ static DWORD WINAPI worker(LPVOID param)
                     static const char* const kPoly[] = {
                         "原因未知", "抬笔（不补线）", "光标移开（补线）",
                         "按住超时（补线）", "Alt 松开",
+                        "平滑已关（0x0221，不再需要冻结）",
                     };
                     LONG w = g_polyHoldWhy;
                     logf("# [alt] 落笔冻结结束：%s（钉住 %ldms / %ld 包；累计 %ld 次）\n",
-                         (w >= 0 && w < 5) ? kPoly[w] : "原因未知",
+                         (w >= 0 && w < 6) ? kPoly[w] : "原因未知",
                          (long)g_polyHoldMs, (long)g_polyHoldFrz, (long)g_polyHoldN);
                 }
                 /* 0x0215：角度吸附的锚点建立（每次进入临时多边形套索一条）。 */
@@ -8321,7 +8439,24 @@ static DWORD WINAPI hud_thread(LPVOID param)
            判据（`poly_hint_live`）= 主开关 ∧ POLYALT ∧ 时间戳在 150ms 内，
            再加窗口/DIB 就绪。几何中心用**吸附后的点**，见 g_polyHintX 处注释。 */
         int polyHint = (poly_hint_live(now) && wnd && mem && !g_engineOff) ? 1 : 0;
-        int wantVisible = ((cheapOk && canvasOk) || polyHint) ? 1 : 0;
+        /* ⛔⛔ 0x0222：**Alt 按住期间，HUD 只许是参考线，圆一个像素都不许画。**
+           用户报的现象：开启吸附后（平滑开不开都一样）按住 Alt 切多边形套索，
+           在落笔前把光标从一个吸附方向移到另一个方向的中途，平滑 HUD 会**短暂闪现后消失**。
+           两根因叠加，缺一不成立：
+             ① 参考线靠 `g_polyHintMs` 自然衰减（`POLY_HINT_KEEP_MS`=350ms），一超出就
+                `polyHint`=0；而 `wantVisible` 是「主门槛 ∨ 参考线」，主门槛在 Alt 期间
+                已被 `gateOk` 强制归零 ⇒ 此时本该为 0 —— 但它管不住**已经可见的窗口**；
+             ② 下面那条 90ms 隐藏去抖会把窗口**维持显示**，而绘制分支的判据只有
+                `!polyHint` ⇒ 立刻转去画圆/绳 ⇒ 闪出一个圆，再随去抖到点隐藏。
+           即「去抖本来是为**圆**的帧间抖动设计的，对『参考线掉线』毫无意义」。
+           ⇒ Alt 按住时：`wantVisible` **只认** `polyHint`，且跳过隐藏去抖（立即隐藏）。
+           ⛔ 判据用物理 Alt（`CFG_I_POLYALT`）而不是吸附开关：吸附关掉时 Alt 期间同样
+              不该出圆（0x0211 的硬否决），这条只是把「不画圆」落到显隐层，
+              与开关无关，也就不会出现「关了吸附反而闪得更多」。
+           ⛔ 别改成「保留窗口但什么都不画」：那样窗口虽透明，`s_hudVisible`/去抖状态
+              仍按「显示中」累积，下一轮真实起笔时首次显示会被误判成`刚隐藏过`。 */
+        int polyAltHold = (g_cfg && g_cfg[CFG_I_POLYALT]) ? 1 : 0;
+        int wantVisible = polyAltHold ? polyHint : (((cheapOk && canvasOk) || polyHint) ? 1 : 0);
         /* —— 0x020A：显示去抖（根因见 HUD_RESURF_DEBOUNCE_MS 处）——
            ⛔ 只在「刚隐藏过」时启用：正常起笔（首次 / 隔了 >1.5s）必须立即出现，
               否则每一笔的圆都会迟到 180ms，手感立刻变钝。 */
@@ -8346,7 +8481,11 @@ static DWORD WINAPI hud_thread(LPVOID param)
            判据是「连续为假」的时长，中间只要有一帧为真就重新计时。 */
         if (wantVisible) {
             s_hudMissSince = 0;
-        } else if (s_hudVisible) {
+        } else if (s_hudVisible && !polyAltHold) {
+            /* ⛔ 0x0222：`&& !polyAltHold` 是「Alt 期间闪圆」的那一半根因 ——
+               参考线掉线后多撑 90ms，画的就是圆（见上面的长注释）。
+               ⛔ 别去掉这条去抖本身：它治的是**圆**在门槛边界上的 1~2 帧抖动，
+                  Alt 之外仍然有效。 */
             if (!s_hudMissSince) s_hudMissSince = now;
             if ((DWORD)(now - s_hudMissSince) < HUD_HIDE_DEBOUNCE_MS) {
                 wantVisible = 1;          /* 瞬时抖动：维持显示，不提交隐藏 */
@@ -8356,7 +8495,11 @@ static DWORD WINAPI hud_thread(LPVOID param)
         if (!wantVisible) {
             if (s_hudVisible) {
                 s_hudVisible = 0;
-                s_hudHideAt = now;
+                /* ⛔ 0x0222：Alt 期间的隐藏是**参考线掉线的正常节拍**（每次脱离吸附都会
+                   发生），不该记进 `s_hudHideAt` —— 那个时间戳的用途是「刚隐藏过 ⇒
+                   重现要等 180ms」。记进去就会让「松开 Alt 立刻起笔」的第一笔圆
+                   白等 180ms（手感变钝），而它压根不是抖动。 */
+                if (!polyAltHold) s_hudHideAt = now;
                 /* ⛔ 0x020F：这一行是「HUD 为什么消失」的**唯一**直接证据，必须自带
                    全部子项 —— 旧版只打 ck/cv/gate/stroke，ck=0 时看不出是谁断的，
                    排障只能靠 2s 节流的「未显示」行反推。 */

@@ -41,3 +41,116 @@
 104 ⛔⛔⛔ 冻结钉的「圆心」必须**先验真身**（0x021E）。冻结点取自 `g_ox/g_oy`＝平滑**上一批**输出，而本机包流**高频断供**（`[dead] ★包流断供 … 已冻结 2625ms`；`[frz] 无包但仍在轮询 movedTot` 一路涨）——断供期间没有包 ⇒ `g_ox/g_oy` 一动不动，PS 却靠补流跟着光标走 ⇒ 按 Alt 钉住的是**很久以前那个输出点**，症状＝「圆心向正上方远处拉一条线，按住不抬再从远处补回光标」。⇒ 两道**只放弃不猜值**的闸：① 进场验 `|g_ox−批首raw|` 的屏幕距离 > `POLY_HOLD_ENTER_MAX_PX`(120 逻辑 px) ⇒ 本轮不冻结（`s_polyUsed=1` 透传，交主循环 `RST_ANCHOR` 把锚点搬到真实笔尖）；② 生效验（`poly_snap_gcp` 冻结分支）钉住点离真实光标 > `POLY_HOLD_SANE_PX`(260) 或超 `POLY_HOLD_STALE_MS`(820) ⇒ 停钉（同时兜住「没包就没人调 `poly_hold_finish` ⇒ 光标被永久钉死」）；③ `poly_hold_finish` 一并清 `g_polyHoldX/Y`，不留陈旧值。判据：退出行「冻结打回 N 次 / 拒绝 N 次」——拒绝数大即圆心陈旧；拒绝为 0 而现象照旧 ⇒ 另有源头。⚠️ `|g_ox−raw|` 只含平滑滞后（换算常量偏移在差值里抵消），所以这道闸能区分「陈旧」与「换算错」。
 
 105 ⛔⛔⛔ **`px_x/px_y` 是「比例」，不是「坐标」**（0x021F 实证：`pxY=-0.0625`）。轴→屏幕还差**原点偏移**，直接 `轴 × px` 会让点落到屏幕外（日志：锚点 (1406,**-807**)、包锚点 (22496,**INT_MIN**)，症状＝选区往远端飞 + 参考线从屏外拉进来）。⇒ 跨域换算只许**差值 + 同一时刻的一对真值基准**：`屏幕 = 光标(se_real_GetCursorPos) + (轴 − 同包raw) × px`；屏幕→轴**一律不做**（留在轴域用 `poly_proj(cX,cY)` 算）。落地：`poly_anchor_push` 直接取真实光标；冻结钉住点用「光标 + (圆心轴 − 进场raw轴) × px」；`poly_pkt_click` 改**轴域**（接触边沿 `poly_proj` 出轴吸附点 `s_pkPinAx/Ay`，每包写同一个轴点，`pk_put` 只收轴坐标）。附：`poly_snap_run` 在消息层活着时只**不改包**（`writePkt=0`）但**仍推进锚点**；`g_pkPinOn` 让位时**不许清 `s_snapOn/锚点`**。HUD 交替闪＝`fits` 每帧翻转（中心在「线段中点」与「吸附点」二选一）⇒ 96/8px 滞回 + `POLY_HINT_KEEP_MS=350` + `POLY_HINT_MAX_SPAN=4000`。
+
+---
+
+## 0x0220：多边形吸附总开关（铁律 106）
+
+> 用户原话：「增加一个自绘 switch，标签是多边形吸附，当开启后，套索按 alt 临时切为多边形套索的
+> 8 向吸附功能才能生效」。此前 0x0211–0x021F 的整条吸附链路**没有开关** —— .8li 一在，按 Alt 就改。
+
+**槽位**：`I_POLYSNAP`（plugin_main.c 与 smooth_engine.c 的 `CFG_NLONGS` **60 → 61**，两边同时改）。
+入站消息 `{"type":"polySnap","on":0|1}`（`json_num` 判非零，⛔ 不用 `json_bool`，铁律 59）。
+
+**为什么不能复用 `I_POLYALT`**：那位是「Alt 物理按着」的**事实镜像**，keyhook 每 20ms 覆写一次
+⇒ 拿它当开关会在松开 Alt 的一瞬间被镜像抹掉；两者写者/语义都不同（事实 vs 意图）。
+`I_POLYALT` 的硬否决**保留**：不论开关状态，Alt 期间平滑一律停（PS 那时在画直线段）。
+
+**五个入口统一问 `poly_snap_enabled()`**（少问一处＝「关了还在改坐标」，界面上完全看不出来）：
+| 函数 | 关掉时的行为 |
+|---|---|
+| `poly_hold_run` | 先 `poly_hold_finish(4)` 收尾再 return -1（否则 `s_polyHold` 停在 1、钉住点留在槽里） |
+| `poly_snap_run` | 清 `s_snapOn/s_snapBtn` 后 return -1（包路径一个字节不改） |
+| `poly_pkt_click` | 清 `s_pkPin`/`g_pkPinOn` 后 return 0 |
+| `poly_snap_gcp` | `poly_snap_gcp_exit(2)` 后 return 0（光标/消息两条通道都从这里过） |
+| `poly_hint_live` | return 0（参考线不画） |
+
+**清零策略**：瞬时兜底（Alt 松开 / `plug_revoke` / `services_stop`）**不清** —— 它是用户**设置**，
+清了等于抖一下就偷偷关用户的开关；只有 `services_start` 清（每个服务会话都要面板重新声明），
+面板建连后 `resendLassoSmoothing` 重放 `polySnap`。
+
+**契约**：面板 `LassoSmoothing.ts` 的 `polySnapOn`（默认 true）+ `setPolySnapEnabled()`；
+app 侧 `state.polySnapEnabled` 持久化在 `panel-state.json` 的 `appPanel`，
+启动合并状态后**主动下发一次**（与 `pushLassoSmoothParams` 同族的启动期失配坑）。
+
+---
+
+## 0x0221：多边形吸附与选区平滑**解耦**（铁律 108）
+
+> 用户原话：「多边形吸附现在是必须要开启选区平滑才生效，这与我设想不符。
+> 它们应该分开的，可以同时生效，也能各自独立生效（所以我才没把多边形吸附放进选区平滑里）。」
+
+### 根因链（三环，缺一不成立）
+
+| 环 | 事实 | 后果 |
+|---|---|---|
+| ① | `det_WTPacketsGet` 里 `if (en) { smooth_packets(...) }`，`en = CFG_I_ENABLED ∧ 心跳新鲜` | 平滑一关，**整条吸附链一次都跑不到**（它全长在 `smooth_packets` 内部） |
+| ② | `smooth_packets` 的 `!useGate` 分支每批 `g_strokeGate = -1`（`tool_edit_allowed()` 在 ENABLED=0 时恒 0） | 就算跑到了，冻结的进场判据 `g_strokeGate == 1` 永远不成立 |
+| ③ | 五处入口各写了 `!g_cfg[CFG_I_ENABLED]` | 包吸附 / 接触钉住 / 光标吸附 / 参考线 / 消息层 全部早退 |
+
+### 改法
+
+| 位置 | 改动 |
+|---|---|
+| `det_WTPacketsGet` | 触发条件 `en ∨ polyOn`，其中 `polyOn = I_POLYSNAP ∧ 心跳 ≤3s`（面板崩了槽位会停在 1）。⛔ `g_state` 与 `g_smoothed` **仍只认 en**，否则面板「生效中 / 已平滑包数」被纯吸附污染 |
+| `smooth_packets` | 新增「poly 自备证据」块（在 `poly_hold_run` **之前**）：`!ENABLED ∧ POLYSNAP` ⇒ `contact_update()` + 写回同一个 `g_strokeGate`。⛔ 不碰 `g_penDown` |
+| `poly_snap_run` | 删 ENABLED；锚点判据改 `g_strokeGate == 1 && g_cfg[CFG_I_ENABLED]` —— 平滑关时 `g_ox` 已停更，是**陈旧圆心**，必须用 raw |
+| `poly_pkt_click` / `poly_snap_gcp` / `poly_hint_live` | 删 ENABLED，其余把关不动 |
+| `poly_msg_apply` | 条件改 `I_POLYALT ∧ poly_snap_enabled()`。⛔ `g_msgLastMs` **必须照常写**，否则包路径以为消息层不在 ⇒ `writePkt=1` ⇒ 两条通道各写一份坐标（0x021D 的老毛病） |
+| `poly_hold_run` | 新增早退：`!CFG_I_ENABLED` ⇒ 收尾（why=**5**，新码）后 return -1 |
+
+### 为什么「平滑关着就不该冻结」
+
+冻结（0x0214）是为平滑服务的：原始成因是「平滑让输出点滞后于笔尖，按 Alt 那一刻 PS 从圆心拉线」。
+平滑关着时输出点 = 笔尖本身，没有滞后 ⇒ 冻结点 = 本批真实笔尖 ⇒ 钉住 ≡ 零改写。
+更要紧的是它会**算错**：`g_ox/g_oy` 此刻不再更新，拿它当圆心必然被 `POLY_HOLD_ENTER_MAX_PX`
+拒掉，白刷 `g_polyHoldRej`，排障时看到一堆「冻结被拒」而真因在别处。
+
+### 前端（同版）
+
+开关行从「容器外、紧贴选区平滑」移进 `.slider-container`（混合模式盒）**羽化之下**：
+行间距靠 `.row-between` 自带的 10px（块级容器内相邻外边距折叠），与「不透明度↔羽化」一致，
+**不需要任何自定义 CSS**。`.slider-container` 有 `border` ⇒ 末行 `margin-bottom` 不穿透。
+
+---
+
+## 0x0222：Alt 期间 HUD 只许是参考线（铁律 109）
+
+> 用户原话：「开启吸附，不论平滑是否打开，我按 alt 将套索临时切为多边形套索，在我落笔前，
+> 我移动光标从一个吸附方向前往另一个吸附方向的过程中，发现平滑的 hud 会短暂出现，随后消失。」
+
+### 根因（两根因叠加，缺一不成立，全在 HUD 线程显隐层）
+
+| # | 事实 | 后果 |
+|---|---|---|
+| ① | `wantVisible = (cheapOk && canvasOk) \|\| polyHint` | Alt 期间 `gateOk` 已被强制归零 ⇒ 主门槛必假 —— 但它**管不住已经可见的窗口** |
+| ② | 参考线靠 `g_polyHintMs` 衰减（`POLY_HINT_KEEP_MS`=**350ms**），一超出 `polyHint`=0；而 90ms **隐藏去抖**会把窗口「维持显示」 | 绘制分支判据只有 `!polyHint` ⇒ 立刻转去画**圆/绳**，且 `putValid=0` ⇒ 圆心取当下光标 ⇒ 光标处闪出一个圆，90ms 后隐藏 |
+
+⇒ 一句话：「隐藏去抖是为**圆**的帧间抖动设计的，对『参考线掉线』毫无意义」——
+   而它维持的这段时间里，绘制路径已经换成圆了。
+
+### 改法（三行，全在 HUD 线程）
+
+```c
+int polyAltHold = (g_cfg && g_cfg[CFG_I_POLYALT]) ? 1 : 0;
+int wantVisible = polyAltHold ? polyHint : (((cheapOk && canvasOk) || polyHint) ? 1 : 0);
+...
+} else if (s_hudVisible && !polyAltHold) {   /* 隐藏去抖 */
+...
+if (!polyAltHold) s_hudHideAt = now;        /* 隐藏边沿 */
+```
+
+- 第三条的用途：`s_hudHideAt` 只服务「刚隐藏过 ⇒ 重现要等 180ms」。Alt 期间的隐藏是
+  **参考线掉线的正常节拍**（每次脱离吸附都会发生），记进去会让「松开 Alt 立刻起笔」的
+  第一笔圆白等 180ms（手感变钝），而它压根不是抖动。
+- ⛔ 判据用**物理 Alt** 而不是吸附开关：吸附关掉时 Alt 期间同样不该出圆（0x0211 的硬否决），
+  这条只是把「不画圆」落到显隐层 ⇒ 不会出现「关了吸附反而闪得更多」。
+- ⛔ 别改成「保留窗口但什么都不画」：窗口虽透明，`s_hudVisible`/去抖状态仍按「显示中」累积，
+  下一轮真实起笔的首次显示会被误判成「刚隐藏过」。
+- ⛔ 别为了修这个去掉 90ms 去抖本身：它治的是圆在门槛边界上的 1~2 帧抖动，Alt 之外仍有效。
+
+### 排障判读
+
+`# [hud] 显示:` 行末的 `hint=%d` 是唯一证据：
+- `hint=1 poly=1` ⇒ 正常（参考线）；
+- `hint=0 poly=1` ⇒ **不该出现**（本版起不可能；出现即回归）。

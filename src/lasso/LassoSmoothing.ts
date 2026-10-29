@@ -495,6 +495,13 @@ let paramTimer: any = null;
  *    「不是套索」会把平滑整个关掉，而面板上看不出任何区别（开关还是开着）。
  */
 let toolGate: SmoothToolGate = 2;
+/**
+ * 多边形吸附的当前意图（默认开）。
+ * ⚠️ 与 `penOn` 正交：平滑关着时用户照样可能按住 Alt 画多边形折线。
+ * ⚠️ 声明必须在 `resendLassoSmoothing` 之前能读到它的位置 —— 放在这里与其他
+ *    模块级状态同处，避免 `let` 的 TDZ 依赖「谁先被调用」。
+ */
+let polySnapOn = true;
 /** 0x0133：最后一次**成功读到工具**的时刻（0 = 从未读到）。
  *  ⛔ 只在真读到工具时更新：读失败/被忙碌闸门挡住时**不更新** ⇒ 年龄自然增长 ⇒
  *     原生侧 3s 后 fail-closed。这是「闸门值可以过期」的唯一实现点。 */
@@ -656,6 +663,10 @@ export function resendLassoSmoothing(): void {
   // 因此这里刻意清掉签名去重。
   lastSentParamsSig = null;
   if (penOn) send({ type: 'penSmooth', on: true, ...toWire(params) });
+  /* 多边形吸附的开关必须**每轮建连都重放一次**：原生槽位初值是 0（= 关闭），
+     而 .8li 随 PS 启动就是一个新进程。不发 ⇒ 用户面板上开关明明开着、
+     按住 Alt 却一点不吸（且没有任何报错可查）。 */
+  send({ type: 'polySnap', on: polySnapOn ? 1 : 0 });
   // 主动询问一次状态：这是「对端支不支持本协议」的探针 —— 支持则必回一帧 smoothState，
   // 不支持（旧版守护进程把未知 type 静默丢弃）则什么都不回，由 PROBE_TIMEOUT_MS 判定。
   send({ type: 'smoothStatus' });
@@ -711,6 +722,31 @@ function forceSendParams(): void {
  */
 export function setAltToolOverride(on: boolean): void {
   send({ type: 'altTool', on: on ? 1 : 0 });
+}
+
+/**
+ * 多边形吸附开关（发往 18924 的 `polySnap`，落到原生共享槽 `I_POLYSNAP`）。
+ *
+ * 语义：套索工具按住 Alt 时，PS 自己会临时切到多边形套索（面板侧完全观测不到 ——
+ * 工具仍是 lassoTool，也没有任何通知）。我们在这段期间做的三件事全部由这一位把关：
+ *   ① 折线方向吸附到上下左右 + 4 个 45°（共 8 向）；
+ *   ② 落笔冻结（按住期间把输出钉在圆心）；
+ *   ③ 青色吸附参考线。
+ * 关掉之后 PS 的多边形套索照旧（那是 PS 自己的临时模式，不归我们管），
+ * 只是以上三件事一律不发生 —— 折线完全按用户手点。
+ *
+ * ⛔ 不受 `penOn` 限制：吸附与平滑是两条独立的管线。平滑关着时用户照样可能
+ *    按住 Alt 画多边形，那时更应该能吸。
+ * ⛔ 默认值在原生侧是 0（共享槽初值）⇒ 面板必须在建连后主动下发一次，
+ *    否则「开关显示开着、实际不吸」，界面上看不出原因（见 resendLassoSmoothing）。
+ */
+export function setPolySnapEnabled(on: boolean): void {
+  polySnapOn = !!on;
+  send({ type: 'polySnap', on: polySnapOn ? 1 : 0 });
+}
+
+export function isPolySnapEnabled(): boolean {
+  return polySnapOn;
 }
 
 /**

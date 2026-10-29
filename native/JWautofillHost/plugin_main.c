@@ -20,7 +20,9 @@
  * 面板契约（SmoothBridge.ts / Program.cs，逐字对齐勿改）：
  *   入站：{type:"penSmooth", on, mode?, strength?, radius?, catchUp?, cornerAngle?,
  *          speedAdaptive?, hud?, hudColor?, toolGate?}；{type:"smoothStatus"}（能力探针，
- *          必回一帧 smoothState）；{type:"shutdown"} 仅断连用（本模块不能退出 PS，忽略）。
+ *          必回一帧 smoothState）；{type:"shutdown"} 仅断连用（本模块不能退出 PS，忽略）；
+ *          {type:"altTool", on:0|1}（0x020A：Alt 临时吸管的硬否决位）；
+ *          {type:"polySnap", on:0|1}（0x0220：多边形吸附总开关 → I_POLYSNAP）。
  *   出站：{"type":"smoothState","protocol":"2.0","pen":{...}}，pen 字段集 =
  *          Program.cs PenHook.Snapshot() 逐项（含 snAge/ctOff/ctElig/pxPerAxis…）。
  *
@@ -83,10 +85,11 @@ const char* jw_log_dir(void);
 /* ⛔ 2026-10-17：48 → 56（新增 4 个进程内观测槽，见下面 I_MODALLVL 起的注释）；
    56 → 58（0x0115 新增 I_NOTIFYAGE / I_GATEOWNED，见下面注释）；
    58 → 59（0x020A 新增 I_ALTTOOL：Alt 临时吸管的硬否决位）；
-   59 → 60（0x0211 新增 I_POLYALT：物理 Alt「临时多边形套索」的硬否决位）。
+   59 → 60（0x0211 新增 I_POLYALT：物理 Alt「临时多边形套索」的硬否决位）；
+   60 → 61（0x0220 新增 I_POLYSNAP：多边形吸附总开关，由面板下发）。
    两个文件（plugin_main.c / smooth_engine.c）的 CFG_NLONGS **必须同时改**：
    谁先建节谁定尺寸，不一致的一方 MapViewOfFile 会拿到错误的字节数。 */
-#define CFG_NLONGS   60
+#define CFG_NLONGS   61
 
 enum {
     I_MAGIC = 0, I_ENABLED, I_STRENGTH, I_FLAGS, I_SEQ, I_CMDSEQ, I_CMD, I_CMDACK,
@@ -131,8 +134,20 @@ enum {
                             application.tool（用户看到左上角仍是普通套索）⇒ 面板手上
                             没有任何信号能判出「此刻在折线里」。而按键电平是原生独有
                             的事实。它的效果也只是「不改写、不画 HUD」，与面板意图正交。 */
+    /* ---- 0x0220：多边形吸附总开关（面板 → 引擎）---- */
+    I_POLYSNAP,       /* 1 = 允许在 POLYALT 期间做 8 向吸附（含落笔冻结与青色参考线）；
+                         0 = 一律不吸（PS 自己的多边形套索照旧 —— 那是它的临时模式）。
+                         ⛔ 为什么不复用 I_POLYALT：那个是「Alt 物理按着」的**事实镜像**，
+                            keyhook 每 20ms 覆写一次 ⇒ 拿它当开关会在松开 Alt 的一瞬间
+                            被镜像抹掉；两者的写者与语义也完全不同（事实 vs 意图）。
+                         ⛔ 面板不在位时为 0（共享槽初值）⇒ 不吸。这是刻意的：
+                            「只有开了才生效」是用户明确要求的行为 —— 宁可静默关，
+                            也不要在没人看管的时候去改写光标与鼠标消息。
+                         ⛔ 瞬时兜底（Alt 松开 / plug_revoke / services_stop）**不清**这一位 ——
+                            它是用户**设置**而非瞬时状态，清了等于每次抖一下都偷偷关用户的开关。
+                            只有 `services_start` 会清（每个服务会话都要面板重新声明一次）。 */
 };
-typedef char cfg_fit_check[(I_POLYALT < CFG_NLONGS) ? 1 : -1];
+typedef char cfg_fit_check[(I_POLYSNAP < CFG_NLONGS) ? 1 : -1];
 
 static volatile LONG* g_cfg   = NULL;
 static HANDLE         g_cfgMap = NULL;
@@ -930,6 +945,24 @@ static void handle_message(const char* js)
             log_line("alt", "临时吸管：否决位 %ld → %d（引擎停改写/停 HUD）", (long)prev, on);
         return;
     }
+    if (_stricmp(type, "polySnap") == 0) {
+        /* 0x0220：多边形吸附总开关（面板 → 引擎；落独立槽 I_POLYSNAP）。
+           ⛔ 与 altTool 同款：用 json_num 判非零 —— json_bool 只认 true / false，
+              数字 1 会**静默失败**（严格类型助手，既有铁律 59）。
+           ⛔ 不走 g_pen / write_params：它与 penSmooth 整包无耦合，也不该搭 1.5s 心跳的
+              便车（槽位是**电平**，写一次就一直有效；心跳重复写只是白做功）。
+           ⚠️ 变化门 + 留痕：这个开关没有任何回读通道（引擎不回传该值），
+              若面板发了但没落盘，现象就是「开关开着、按住 Alt 不吸」，无从排查。 */
+        double v = 0;
+        int on = 0;
+        if (json_num(js, "on", &v)) on = (v != 0.0) ? 1 : 0;
+        LONG prev = Rd(I_POLYSNAP);
+        Wr(I_POLYSNAP, on);
+        if (prev != on)
+            log_line("poly", "多边形吸附：总开关 %ld → %d（%s）", (long)prev, on,
+                     on ? "吸附/冻结/参考线可用" : "全部停用");
+        return;
+    }
     if (_stricmp(type, "penSmooth") == 0) {
         double v; int b;        if (json_num(js, "mode", &v))         g_pen.mode        = clampi(roundi(v), 0, 2);
         if (json_num(js, "strength", &v))     g_pen.strength    = clampi(roundi(v), 0, 100);
@@ -1326,6 +1359,12 @@ static void services_start(void)
            （镜像式），但「Reload 那一刻用户正按着 Alt 且 keyhook 线程还没起来」
            这段空窗没有人写它 ⇒ 必须在这里无条件清 0。 */
         Wr(I_POLYALT, 0);
+        /* 0x0220：多边形吸附开关从「关」起步，由面板建连后（resendLassoSmoothing）
+           重新声明。⛔ 不清的后果：上一轮会话开的 1 会被 Reload 直接继承 ——
+           面板根本没连上的那段时间里，按住 Alt 也开始改鼠标消息，而用户看不到任何开关。
+           ⛔ 语义上是「每个服务会话都要重新得到用户授权」，不是「偷偷关掉用户的设置」：
+              面板 1~2 秒内就会把它重放回来。 */
+        Wr(I_POLYSNAP, 0);
         Wr(I_HEARTBEAT, (LONG)GetTickCount());
         Wr(I_GATETS, (LONG)GetTickCount());
     }
@@ -1814,7 +1853,45 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
    之间二选一）⇒ 加 96/8px 滞回；`poly_hint_live` 的保持时间单独放宽到 350ms
    （`POLY_HINT_KEEP_MS`），并拒绝画「两端相差 > 4000px」的参考线。
    无共享内存槽位变化（CFG_NLONGS 仍 60）。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x021F; }
+/* 0x0220：**多边形吸附加总开关**（用户要求「开了才生效」）。
+   背景：0x0211–0x021F 让「套索按住 Alt」变成一条完整的辅助链路（8 向角度吸附 +
+   落笔冻结 + 青色参考线 + 接触钉住），但它**没有开关** —— 只要 .8li 在 PS 里、Alt 一按
+   就开始改写，用户无法关掉它。
+   改法：
+     ① 新增共享槽 `I_POLYSNAP`（60 → 61），入站消息 `{"type":"polySnap","on":0|1}` 写入；
+     ② 引擎侧五处入口统一加判据（`poly_hold_run` / `poly_snap_run` / `poly_pkt_click` /
+        `poly_snap_gcp` / `poly_hint_live`）⇒ 关掉时**一个字节都不改**、参考线不画；
+     ③ `I_POLYALT` 的硬否决**保留**：不论吸附开关是什么状态，Alt 期间平滑都必须停
+        （PS 那时在画折线，平滑改写会把折线预览拖花）。
+   ⛔ 关掉不等于「退回 0x0210 之前」：Alt 仍由 keyhook 镜像成 POLYALT，平滑照旧让位。
+   ⛔ 默认 0（面板不在位就不吸）：共享槽初值即「关」，「开了才生效」是用户的原话。
+   ⛔ 三处兜底（Alt 松开 / plug_revoke / services_stop）**不清**这一位 ——
+      它是用户设置而非瞬时状态，清了就等于每次重连都把用户的开关偷偷关掉。 */
+
+/* 0x0221：**多边形吸附与选区平滑解耦**（用户实测「必须先开平滑才吸」）。
+   根因三环，全在引擎侧，本文件只改版本：
+     ① `det_WTPacketsGet` 旧版只在平滑总开关 `CFG_I_ENABLED` 为真时调 `smooth_packets`，
+        而整条吸附链都住在那里面 ⇒ 平滑一关，吸附连一次都跑不到；
+     ② `smooth_packets` 的 `!useGate` 分支每批把 `g_strokeGate` 清成 -1
+        （`tool_edit_allowed()` 在 ENABLED=0 时恒 0）⇒ 冻结的进场判据永远不成立；
+     ③ 四处入口（包吸附 / 接触钉住 / 光标吸附 / 参考线）各自还写着 `CFG_I_ENABLED`。
+   改法：
+     · 调用条件放宽成 `en ∨ (I_POLYSNAP ∧ 心跳新鲜)`；状态机与 `g_smoothed` 仍只认 `en`；
+     · `smooth_packets` 在平滑关、吸附开时自备接触判据（同一个 `contact_update`），
+       写回同一个 `g_strokeGate`；
+     · 四处入口删掉 `CFG_I_ENABLED`，其余把关（`I_POLYALT` / `tool_gate_ok` / 会话态）不动。
+   无共享槽位变化（`CFG_NLONGS` 仍 61）。 */
+
+/* 0x0222：**Alt 期间 HUD 只许是参考线**（用户实测「落笔前在两吸附方向之间移动，
+   平滑 HUD 短暂闪现后消失」）。全在 HUD 线程的显隐层，本文件只改版本：
+     ① `wantVisible` 在 `I_POLYALT` 为真时**只认** `polyHint`（圆的门槛本来就该为假，
+        但它管不住「已经可见的窗口」）；
+     ② 隐藏去抖（90ms）在 Alt 期间**跳过** —— 它治的是圆的帧间抖动，对「参考线掉线」
+        毫无意义，正是它让窗口多撑 90ms，而绘制分支的判据只有 `!polyHint` ⇒ 画成圆；
+     ③ Alt 期间的隐藏**不写** `s_hudHideAt`（那不是抖动），否则「松开 Alt 立刻起笔」
+        的第一笔圆会白等 180ms 重现去抖。
+   无共享槽位变化（`CFG_NLONGS` 仍 61）。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x0222; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {

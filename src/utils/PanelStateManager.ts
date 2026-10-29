@@ -29,6 +29,8 @@ export type AppPanelState = {
    *  ⚠️ 开关**不在这里**：它是用户意图（LassoSmoothing 的 penOn，落盘在
    *    settings/smooth-enabled.json），面板经 isPenSmoothOn() 读取。 */
   smoothParams?: LassoSmoothParams;
+  /** 多边形吸附：套索按住 Alt 时的 8 向角度吸附（原生侧唯一判据是共享槽 I_POLYSNAP） */
+  polySnapEnabled?: boolean;
   /** 套索实时平滑分区的界面状态（可见性 / 两级折叠），属于界面偏好而非参数 */
   smoothOptionsVisible?: boolean;
   isSmoothOptionsExpanded?: boolean;

@@ -220,6 +220,13 @@ export interface AppState {
      *    瞬断不再翻开关（旧版由 smoothStatus.pen.enabled 驱动，会随重连闪烁）。
      */
     smoothParams: LassoSmoothParams;
+    /**
+     * 多边形吸附：套索按住 Alt 临时切多边形套索时，折线方向的 8 向角度吸附。
+     * ⚠️ 只是一个**意图位**（经 WS 18924 的 `polySnap` 下发到 .8li 的共享槽
+     *    `I_POLYSNAP`）；吸附、落笔冻结、青色参考线全部在原生侧执行，
+     *    面板这侧没有可回读的权威状态。
+     */
+    polySnapEnabled: boolean;
     /** 「选区平滑」分区是否可见（隐藏/显示分区浮窗控制）。 */
     smoothOptionsVisible: boolean;
     /** 「选区平滑」折叠分区是否展开。 */
@@ -313,6 +320,9 @@ export const initialState: AppState = {
     fillOptionsVisible: true,
     // 套索实时平滑：参数默认值（开关不在这里 —— 由 .8li 模块回报驱动）
     smoothParams: { ...initialLassoSmoothParams },
+    // 多边形吸附默认开：它随「按住 Alt」这个原生临时模式一起被触发，
+    // 关掉等于把已有能力藏起来；用户想静音时再手动关。
+    polySnapEnabled: true,
     smoothOptionsVisible: true,
     isSmoothOptionsExpanded: true,
     isSmoothAdvancedExpanded: false,

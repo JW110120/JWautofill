@@ -42,7 +42,7 @@ import {
   LassoSmoothMode, LassoSmoothParams, LassoSmoothStatus, PenSmoothStatus,
   pushLassoSmoothParams, onLassoSmoothStatus,
   initialLassoSmoothParams, setPenSmooth, setSmoothToolGate, getSmoothToolGate, noteToolReadOk,
-  setAltToolOverride,
+  setAltToolOverride, setPolySnapEnabled,
   restorePersistedPenSmooth, isPenSmoothOn,
   SMOOTH_RADIUS_MIN, SMOOTH_RADIUS_MAX,
   SMOOTH_CATCHUP_MIN, SMOOTH_CATCHUP_MAX,
@@ -840,6 +840,7 @@ class App extends React.Component<AppProps, AppState> {
                     //    旧存档里没有这个对象，整体覆盖会把默认值冲成 undefined，
                     //    之后下发的参数里出现 undefined 会让平滑模块解析出 NaN 半径。
                     smoothParams: mergedSmoothParams,
+                    polySnapEnabled: loaded.appPanel.polySnapEnabled ?? this.state.polySnapEnabled,
                     smoothOptionsVisible: loaded.appPanel.smoothOptionsVisible ?? this.state.smoothOptionsVisible,
                     isSmoothOptionsExpanded: loaded.appPanel.isSmoothOptionsExpanded ?? this.state.isSmoothOptionsExpanded,
                 });
@@ -854,6 +855,11 @@ class App extends React.Component<AppProps, AppState> {
                 //    sendParams 内部对 penOn=false 静默跳过（平滑没开时无需下发）；
                 //    开启开关时 setPenSmooth 会整包带当前 state，同样拿得到恢复值。
                 try { pushLassoSmoothParams(mergedSmoothParams); } catch { /* ignore */ }
+                /* 多边形吸附的开关同理：原生槽位初值 0（关），必须在状态合并后
+                   主动下发一次 —— 否则面板上开关是开的、按住 Alt 却完全不吸，
+                   而且没有任何报错可查（与上面平滑参数同族的启动期失配）。
+                   ⚠️ 此刻 setState 尚未生效，必须用合并后的显式值读。 */
+                try { setPolySnapEnabled(loaded.appPanel.polySnapEnabled ?? this.state.polySnapEnabled); } catch { /* ignore */ }
                 /* ⛔ 0x0123：恢复上次会话的「平滑总开关」意图（settings/smooth-enabled.json）。
                    必须在这一行之后 —— 之前 params 是默认值，重放出去会把用户上次调好的
                    半径/模式用默认值整包盖掉（与上面那条注释同一个坑）。
@@ -984,6 +990,7 @@ class App extends React.Component<AppProps, AppState> {
             // ⚠️ smoothParams 靠**引用比较**判定变更 ⇒ 必须整体替换对象
             //    （见 updateSmoothParam），就地改字段不会触发落盘。
             'smoothParams',
+            'polySnapEnabled',
             'smoothOptionsVisible',
             'isSmoothOptionsExpanded',
         ];
@@ -1010,6 +1017,7 @@ class App extends React.Component<AppProps, AppState> {
                     selectionOptionsVisible: this.state.selectionOptionsVisible,
                     fillOptionsVisible: this.state.fillOptionsVisible,
                     smoothParams: this.state.smoothParams,
+                    polySnapEnabled: this.state.polySnapEnabled,
                     smoothOptionsVisible: this.state.smoothOptionsVisible,
                     isSmoothOptionsExpanded: this.state.isSmoothOptionsExpanded,
                 },
@@ -1854,6 +1862,19 @@ class App extends React.Component<AppProps, AppState> {
 
     toggleStrokeEnabled() {
         this.setState({ strokeEnabled: !this.state.strokeEnabled });
+    }
+
+    /**
+     * 多边形吸附开关。
+     * ⚠️ setState 与下发**必须同拍**：这个开关没有回读通道（原生侧不回传该值），
+     *    所以界面上的勾选态就是唯一真相；只要漏发一次，界面开着、实际不吸。
+     * ⚠️ 未连接也照发：SmoothBridge 的 `send()` 在没连上时会静默丢弃，
+     *    建连后 resendLassoSmoothing 会重放模块里的 polySnapOn（见 LassoSmoothing）。
+     */
+    togglePolySnap() {
+        const next = !this.state.polySnapEnabled;
+        this.setState({ polySnapEnabled: next });
+        try { setPolySnapEnabled(next); } catch { /* ignore */ }
     }
 
     /** 描边色板：打开 PS 颜色选择器，选完写回 strokeColor（前景色的保存/还原由 pickColorWithInitial 负责） */
@@ -3772,6 +3793,27 @@ title={helpTexts.selectionFill.blendMode}>
                             <span className="num-unit">px</span>
                         </div>
                     </div>
+
+                    {/* 多边形吸附：套索按住 Alt 临时切到多边形套索时的 8 向角度吸附。
+                        ⚠️ 开关只下发**意图**（WS 18924 的 `polySnap` → 原生共享槽 I_POLYSNAP），
+                           吸附、落笔冻结、青色参考线全在 .8li 里执行 —— 面板没有任何可回读的
+                           状态（PS 的临时模式本身也不派发工具变更），所以这里不做「未连接置灰」：
+                           未连接时记下意图，建连后 resendLassoSmoothing 自动重放。
+                        ⚠️ 与「选区平滑」**完全正交**（0x0221 起才真正成立）：平滑关着时
+                           按住 Alt 照样吸、照样有青色参考线。此前 .8li 只在平滑总开关为真时
+                           才调包处理，吸附整条链跟着一起死 —— 现在原生侧独立驱动。
+                        ⚠️ 放在本盒末尾（羽化之下）而不是外置：它描述的是「填充/选区这条
+                           工作流里的一步辅助」，与上两行同属一组；行间距靠 `.row-between`
+                           自带的 10px（块级容器内相邻外边距折叠），与「不透明度↔羽化」一致，
+                           不再需要任何自定义 CSS。 */}
+                    <div className="row-between poly-snap-row" title={helpTexts.selectionFill.polySnapRow}>
+                        <span className="label-5">多边形吸附</span>
+                        <ToggleSwitch
+                            checked={this.state.polySnapEnabled}
+                            onChange={() => this.togglePolySnap()}
+                            title={helpTexts.selectionFill.polySnapSwitch}
+                        />
+                    </div>
                 </div>
 
                 {/* 选区平滑：套索**绘制过程中**的实时平滑。
@@ -4122,7 +4164,7 @@ title={helpTexts.selectionFill.selectionContrast}>
 
                                     <div className="row-between">
                                     <label
-                                        className="label-drag"
+                                        className="label-drag label-2"
                                         onMouseDown={(e) => this.handleLabelMouseDown(e, 'selectionExpand')}
 title={helpTexts.selectionFill.selectionExpand}>
                                         扩散
