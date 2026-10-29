@@ -3439,6 +3439,142 @@ static int calib_peek_batch(HCTX hCtx)
     return (int)n;
 }
 
+/* ============== 0x0214：临时多边形套索（物理 Alt）的「落笔冻结」==============
+ *
+ * 现象（用户原话）：套索落着笔画，中途按下 Alt 临时切多边形套索 —— 哪怕立刻抬笔，
+ *   插件也会把选区**从圆心笔直画到施力点（光标）**，再以光标位置当折线的起点。
+ *
+ * 根因（0x0211 的硬否决只解决了一半）：`I_POLYALT` 一置 1 就**立刻**停止改写 ⇒
+ *   PS 下一包拿到的是**真实光标**，而它刚画到的位置是我们钉住的圆心，两者差出
+ *   一段（≤ 半径）⇒ PS 把这段差当成笔迹画成一条直线，并在按下 Alt 的那一点上
+ *   落了折线的第一个锚点。**停止改写的时机**错了，不是「该不该停」错了。
+ *
+ * 用户要求的语义（两条，缺一条都不行）：
+ *   ① 按下 Alt 后**立刻抬笔** ⇒ 折线起点就是圆心，**不补**那段；
+ *   ② 笔一直按着（真要继续画）⇒ 才补「圆心 → 光标」那段。
+ *
+ * 做法 = 按下那一拍不立刻放手，而是把输出点「冻」在圆心（继续改写坐标，但每包写的
+ *   都是同一个点），直到下面三件事之一发生：
+ *     · buttons 归零（真抬笔）⇒ **这一包仍写圆心**，然后放手 ⇒ PS 认为这一笔在圆心
+ *       收笔，折线自然从圆心起（= ①）；
+ *     · 笔仍按着，而真实光标离「按下 Alt 时的位置」超过 `POLY_HOLD_MOVE_PX` ⇒ 解冻，
+ *       从下一包起原样透传 ⇒ PS 自己把「圆心 → 光标」补成直线（= ②）；
+ *     · 按住超过 `POLY_HOLD_MAX_MS`（兜底：用户按着发呆时不能把点无限期钉住）⇒ 同 ②。
+ *
+ * ⛔ 冻结 ≠ 平滑：每包写同一个点，不产生滞后/追赶；HUD 与工具闸门照旧被
+ *    `CFG_I_POLYALT` 硬否决（这里**只写坐标**，绝不碰 g_penDown / gate / reason）。
+ * ⛔ 只在「一笔之中」进场（`g_strokeGate == 1`）：悬空时按 Alt 不许钉任何东西，
+ *    否则会把上一笔的圆心写到悬空位置，鼠标在别的窗口按 Alt 也会被钉住。
+ * ⛔ 一轮按住只冻结一次（`s_polyUsed`）：解冻后用户还要在多边形模式下继续点击加点，
+ *    那些点击必须原样透传；`s_polyUsed` 由 POLYALT 的 1→0 复位。
+ * ⛔ 解冻后必须 `g_wasEnabled = 0`（除「Alt 松开时还在一笔之中」这一种）：让引擎在
+ *    下一包走「起笔锚定」把锚点搬到真实笔尖 —— 否则松开 Alt 回到套索时，平滑会从
+ *    旧圆心开始追赶 ⇒ PS 里又画一根**反向**直线，和用户报的现象同构。
+ */
+#define POLY_HOLD_MOVE_PX   14.0   /* 逻辑 px：按下 Alt 后光标离原位多远算「要接着画」 */
+#define POLY_HOLD_MAX_MS    420    /* 兜底：按着不动最多钉这么久 */
+
+static volatile LONG g_polyHoldOn;    /* 1 = 冻结中（诊断镜像） */
+static volatile LONG g_polyHoldWhy;   /* 结束原因：1 抬笔 / 2 光标移开 / 3 按住超时 / 4 Alt 松开 */
+static volatile LONG g_polyHoldMs;    /* 本次冻结持续时长 */
+static volatile LONG g_polyHoldFrz;   /* 本次冻结写住了多少包 */
+static volatile LONG g_polyHoldEvt;   /* 1 = 有一条台账待 worker 落盘 */
+static volatile LONG g_polyHoldN;     /* 累计冻结次数 */
+
+static int    s_polyHold;             /* 1 = 正在冻结 */
+static int    s_polyUsed;             /* 1 = 这一轮 Alt 已经冻结过 */
+static double s_polyX, s_polyY;       /* 冻结点（输出坐标，轴空间） */
+static double s_polyRx, s_polyRy;     /* 进场时的真实笔尖（轴空间，位移基准） */
+static DWORD  s_polyT0;
+static LONG   s_polyFrz;
+
+/* 逐包读 buttons 电平：-1 = 判据不可用，0 = 抬着，1 = 按着。
+ * ⛔ 与主循环里那段边沿记账读的是同一组全局量（`s_ctBtnIdx` / `g_ctElig`），
+ *    不另建判据 —— 两套判据一定会漂移。 */
+static int pkt_btn_level(const u8* p)
+{
+    if (s_ctBtnIdx < 0 || s_ctBtnIdx >= g_ctN) return -1;
+    if (g_ctOff[s_ctBtnIdx] < 0) return -1;
+    if (g_ctElig[s_ctBtnIdx] != 1) return -1;
+    u32 bv;
+    memcpy(&bv, p + g_ctOff[s_ctBtnIdx], 4);
+    if (g_ctMsk[s_ctBtnIdx]) bv &= (u32)g_ctMsk[s_ctBtnIdx];
+    return bv ? 1 : 0;
+}
+
+static void poly_hold_finish(int why)
+{
+    if (!s_polyHold) return;
+    s_polyHold = 0;
+    /* 「Alt 松开」且仍在一笔之中 ⇒ 把手感交还给平滑（不清锚点）：这段时间用户没动
+       笔，回到套索后输出点从圆心**平滑地**追上笔尖，不会突然跳一段。
+       其余原因（抬笔 / 已透传真实坐标 / 超时）⇒ 下一包必须重新锚定到真实笔尖。 */
+    int backToSmooth = (why == 4) && (g_contactSmooth == 1);
+    if (!backToSmooth) {
+        g_wasEnabled = 0;
+        /* ⛔ 边沿状态必须复位成「已抬升」：冻结期间主循环一次都没走过，`s_prevBtn`
+           会停在冻结前那一拍。不复位就可能（a）把冻结后第一次落笔吞掉，
+           （b）反过来凭空造出一次 penDownEdge 把锚点钉到真实笔尖 —— 后者其实是我们
+           想要的，但不能靠"残留值恰好成立"来拿到它。 */
+        s_prevBtn = 0; s_btnZero = BTN_EDGE_MIN_ZERO;
+    }
+    InterlockedExchange(&g_polyHoldOn, 0);
+    InterlockedExchange(&g_polyHoldWhy, (LONG)why);
+    InterlockedExchange(&g_polyHoldMs, (LONG)(GetTickCount() - s_polyT0));
+    InterlockedExchange(&g_polyHoldFrz, s_polyFrz);
+    InterlockedExchange(&g_polyHoldEvt, 1);
+}
+
+/* 返回 >=0 = 本批已被接管（值 = 实际改写的包数）；-1 = 不接管，走正常路径。 */
+static int poly_hold_run(u8* buf, int S, int n, int ox_, int oy_)
+{
+    if (!g_cfg) return -1;
+    if (!g_cfg[CFG_I_POLYALT]) {
+        if (s_polyHold) poly_hold_finish(4);   /* Alt 已松开：先收尾再交还平滑 */
+        s_polyUsed = 0;                        /* 下一轮按住重新允许冻结 */
+        return -1;
+    }
+    if (!s_polyHold) {
+        if (s_polyUsed) return -1;             /* 这轮已经冻过一次 ⇒ 后续点击一律透传 */
+        if (g_strokeGate != 1) return -1;      /* 悬空按 Alt ⇒ 不钉（见长注释） */
+        if (pkt_btn_level(buf) != 1) return -1;
+        s_polyHold = 1; s_polyUsed = 1; s_polyFrz = 0; s_polyT0 = GetTickCount();
+        s_polyX = g_ox; s_polyY = g_oy;        /* 冻结点 = 此刻的输出点（= 圆心） */
+        u32 rx = 0, ry = 0;
+        memcpy(&rx, buf + ox_, 4); memcpy(&ry, buf + oy_, 4);
+        s_polyRx = (double)rx; s_polyRy = (double)ry;
+        InterlockedExchange(&g_polyHoldOn, 1);
+        InterlockedIncrement(&g_polyHoldN);
+    }
+
+    const double cX = px_x(), cY = px_y();
+    const double movePx = POLY_HOLD_MOVE_PX * dpi_scale();
+    DWORD now = GetTickCount();
+    int changed = 0;
+    for (int i = 0; i < n && s_polyHold; i++) {
+        u8* p = buf + (SIZE_T)i * S;
+        u32 rawX = 0, rawY = 0;
+        memcpy(&rawX, p + ox_, 4); memcpy(&rawY, p + oy_, 4);
+        int lv = pkt_btn_level(p);
+        int why = 0;
+        if (lv == 0)                                  why = 1;   /* 真抬笔：写完这一包再放 */
+        else if ((DWORD)(now - s_polyT0) > POLY_HOLD_MAX_MS) why = 3;
+        else if (lv == 1) {
+            double dx = ((double)rawX - s_polyRx) * cX;
+            double dy = ((double)rawY - s_polyRy) * cY;
+            if (dsqrt_(dx * dx + dy * dy) > movePx)   why = 2;   /* 要接着画 ⇒ 解冻补线 */
+        }
+        /* 写冻结点 —— 抬笔那一包也照样写：PS 必须看到「在圆心收笔」，
+           否则它拿真实光标当落点，那段直线又回来了。 */
+        u32 wx = (u32)(s_polyX + 0.5), wy = (u32)(s_polyY + 0.5);
+        if (wx != rawX || wy != rawY) changed++;
+        memcpy(p + ox_, &wx, 4); memcpy(p + oy_, &wy, 4);
+        s_polyFrz++;
+        if (why) poly_hold_finish(why);
+    }
+    return changed;
+}
+
 /* 返回**本批里坐标真正被改写的包数**（复位帧原值写回、无差异帧都不算）。
  * ⛔ 早期版本把「处理过的包数」直接加进 g_smoothed ⇒ 面板显示「已平滑 17086 包」
  *    而实际一包都没改过（标定失败早退）—— 计数器必须只说改写，不能说处理。 */
@@ -3558,6 +3694,15 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
             · 面板**明确报 0**（心跳新鲜）⇒ 立即否决，闩锁也压不住；
             · 心跳**过期** ⇒ 沿用手头结论，不在笔中劈开（否则每 3s 从圆心拉一根直线，BUG2）。
        ⛔ `contactPrev` / `latched` 仍留着只为落盘诊断，不再参与裁决。 */
+    /* 0x0214：临时多边形套索的「落笔冻结」（长注释见 poly_hold_run）。
+       ⛔ 必须放在 `tool_edit_allowed()` **之前**：POLYALT 一旦为 1，正常路径会立刻
+          清 `g_strokeGate` / `g_wasEnabled`，冻结的进场判据（一笔之中）就再也看不到了
+          —— 那正是「按下 Alt 时点跳过去」的原始成因。 */
+    {
+        int ph = poly_hold_run((u8*)buf, S, n, ox_, oy_);
+        if (ph >= 0) return ph;
+    }
+
     LONG contactPrev = g_contact;
     LONG latched = g_strokeGate;
     (void)contactPrev; (void)latched;
@@ -5542,6 +5687,17 @@ static DWORD WINAPI worker(LPVOID param)
                 }
                 if (InterlockedExchange(&g_baseEvt, 0))
                     logf("# [raw] 时间基已证实：pkTime 与 GetTickCount 同基 ⇒ 陈旧回包判据生效\n");
+                /* 0x0214：临时多边形套索的落笔冻结台账（detour 只置位，文本在这里落）。 */
+                if (InterlockedExchange(&g_polyHoldEvt, 0)) {
+                    static const char* const kPoly[] = {
+                        "原因未知", "抬笔（不补线）", "光标移开（补线）",
+                        "按住超时（补线）", "Alt 松开",
+                    };
+                    LONG w = g_polyHoldWhy;
+                    logf("# [alt] 落笔冻结结束：%s（钉住 %ldms / %ld 包；累计 %ld 次）\n",
+                         (w >= 0 && w < 5) ? kPoly[w] : "原因未知",
+                         (long)g_polyHoldMs, (long)g_polyHoldFrz, (long)g_polyHoldN);
+                }
                 if (InterlockedExchange(&g_dropStaleEvt, 0))
                     logf("# [raw] 陈旧回包合并：丢弃停摆期攒下的旧坐标（落后补流前沿 %ldms）\n",
                          (long)g_dropStaleMs);

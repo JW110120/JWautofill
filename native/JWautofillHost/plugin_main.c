@@ -1637,7 +1637,20 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
    ⇒ keyhook.c 的按住块首补 `if (holdVk && !g_khArmed)`：清起按准入与确认计数、alt 保持 0
      （若正在按着时撤防，边沿仍广播一帧 v=0 并清 I_ALTTOOL，状态不悬空）。
    无共享内存槽位变化（CFG_NLONGS 仍 60）。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x0213; }
+/* 0x0214（2026-10-29，**按 Alt 切多边形套索时被补出一段直线**）：
+   用户报：套索落笔中按下物理 Alt 临时切多边形套索，即使**立刻抬笔**，选区仍会从圆心
+   笔直画到光标、并以光标为折线起点。期望：立刻抬笔 ⇒ 起点就是圆心（不补那段）；
+   笔一直按着 ⇒ 才补「圆心 → 光标」。
+   根因：0x0211 的硬否决**立刻**停改写 ⇒ PS 下一包拿到真实光标，与它刚画到的圆心
+   差出一段 ⇒ 这段差被 PS 当成笔迹画成直线并落了第一个锚点。停的时机错了，不是该不该停。
+   ⇒ smooth_engine.c 新增「落笔冻结」（`poly_hold_run`）：POLYALT 置 1 的那一拍**继续改写**
+     但每包都写同一个点（= 圆心），直到 ①buttons 归零（真抬笔，最后一包仍写圆心 ⇒
+     PS 认为这一笔在圆心收笔）；② 光标离按下点 > 14 逻辑 px；③ 按住超过 420ms。
+     ②③ 解冻后原样透传 ⇒ PS 自己补出那段直线。一轮按住只冻结一次。
+   ⛔ 「Alt 期间不改写」从此精确化为「Alt 期间不**平滑**，但可能把点钉住」——
+      管线仍由 `CFG_I_POLYALT` 挡在 `tool_edit_allowed()` 之外，HUD 照旧不显示。
+   无共享内存槽位变化（CFG_NLONGS 仍 60）。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x0214; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {
