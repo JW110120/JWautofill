@@ -2,20 +2,21 @@
 
 > 索引+铁律速查；**明细一律在 `refs/`，里程碑史在 `HISTORY.md`**。⛔ 违反必炸。
 > 架构：平滑+键盘钩子 = **PS 进程内 .8li**（`native/JWautofillHost/`，WS 18924 平滑 / 18923 热键）。
-> 现役 **0x0211**（阶段史查 HISTORY.md；01–0F 为合成点击/在位闸/掉线/位闸/让路/工具闸门/硬否决/`btn`/笔速/圆心防抖/绳向量/隐藏去抖）。
-> 0x0210 = 临时吸管键源可重录（默认 `/`），见 87–89；0x0211 = 物理 Alt（PS 临时多边形套索）硬否决，见 90。
+> 现役 **0x0213**（阶段史查 HISTORY.md；01–0F 为合成点击/在位闸/掉线/位闸/让路/工具闸门/硬否决/`btn`/笔速/圆心防抖/绳向量/隐藏去抖）。
+> 0x0210 = 临时吸管键源可重录（默认 `/`），见 87–89；0x0211 = 物理 Alt（PS 临时多边形套索）硬否决，见 90；
+> 0x0212 = 前景色拾色器（默认 `Shift+/`）+ 按住键的修饰键完全匹配，见 91；0x0213 = 按住键补布防门，见 92。
 
 ## 索引
 
-填充/描边/清除 `refs/fill-and-stroke.md`｜CSS/面板/主题 `refs/frontend-css.md`｜闸门/模态 `refs/busy-gate.md`｜UXP/API/性能 `refs/uxp-api-layer.md`｜像素算法 `refs/pixel-algorithms.md`｜构建/部署 `refs/toolchain-and-env.md`｜平滑/HUD/断流/工具闸门/吸管 `refs/lasso-smoothing.md`（O22–O47 全档）｜键盘钩子 `refs/keyhook-8li.md`｜混合器储层 `refs/brush-mixer-reservoir.md`
+填充/描边/清除 `refs/fill-and-stroke.md`｜CSS/面板/主题 `refs/frontend-css.md`｜闸门/模态 `refs/busy-gate.md`｜UXP/API/性能 `refs/uxp-api-layer.md`｜像素算法 `refs/pixel-algorithms.md`｜构建/部署 `refs/toolchain-and-env.md`｜平滑/HUD/断流/工具闸门/吸管 `refs/lasso-smoothing.md`（O22–O53 全档）｜键盘钩子 `refs/keyhook-8li.md`｜混合器储层 `refs/brush-mixer-reservoir.md`
 
 **校验**：改 CSS 跑 3 个 guard（只扫 `src/styles/*.css`）；类型检查用 `npx tsc -p tsconfig.check.json`（⛔ 别用 `tsc --noEmit`：@types/node 的 TS5 语法让语义检查被静默跳过，"零错"是假象）；改 .c 跑 `build.sh` 零告警 + 导出表 5 项；改面板 `yarn build`。全仓 ~168 条历史错误在 `app.tsx`/`adjustments`/`components`，只看自己碰过的行范围。
 
-## 现役焦点（0x0211 · 2026-10-28）
+## 现役焦点（0x0212 · 2026-10-29）
 
-按住 Alt 临时切多边形套索时，HUD 抖 / 落点闪 / 平滑不该生效 —— 由原生 `I_POLYALT` 硬否决（见 **90**）。
-上一条 0x0210：临时吸管键源从「物理 Alt」换成配置条目 `action == "altTool"`（默认 `/`，可重录），
-三条硬约束见 **87–89**（不进热键表 / `kh_combo_to_key` 允许裸键 / 只有键含 Alt 才搬色）。
+「前景色拾色器」= 功能快捷键子面板「选区填充」区新条目（默认 `Shift+/`，`action == "pickColor"`），
+**普通热键**（进表、RegisterHotKey 吞键、与工具模式无关、始终装载）；按下走 `utils/ColorPicker.pickForegroundColor()`。
+它与按住键 `/` 的共存全靠原生 **91**。上一条 0x0211 见 **90**（物理 Alt 硬否决 `I_POLYALT`）。
 
 ## 铁律速查
 
@@ -117,6 +118,12 @@
 
 **PS 临时模式（0x0211）** —— 明细 `refs/lasso-smoothing.md` O51
 90 ⛔⛔⛔ **「PS 临时模式」不派发任何可观测的变更**：套索下按 Alt 切多边形套索时 `application.tool` 仍是 `lassoTool`（图标不变）、无通知、无 `'slct'` ⇒ 面板闸门 / 巡检全看不出 ⇒ 引擎照常改写 ⇒ 折线预览抖、点击处 HUD 闪。真相只有原生有：`GetAsyncKeyState(VK_MENU) ∧ 前台是本进程` ⇒ 独立槽 `I_POLYALT`，keyhook 每 20ms **镜像**电平（⛔ 不是边沿：被别处清 0 会永久停）。⛔ 不许与 `I_ALTTOOL` 合槽（面板意图 vs 原生事实，会互清）；HUD `gateOk` 必须单独再压一次（`g_toolOk` 标定失效时会冻在 1）。
+
+**按住键 vs 同键位热键（0x0212）** —— 明细 `refs/lasso-smoothing.md` O52
+91 ⛔⛔⛔ 「按住」判定必须**修饰键完全匹配 + 一次性起按准入**：旧写法只查 combo 里**列出的**修饰键按着没 ⇒ 裸键 `/` 等于什么都没查 ⇒ 按 `Shift+/` 开拾色器时同时触发临时吸管。① 没列出的修饰键必须抬着；② 只加完全匹配还不够（Shift 比 `/` 先松/后按会剩一拍「键按着 ∧ 无修饰键」）⇒ 出现过一拍不匹配就作废，必须等键真的抬起再按；③ 起按再**连两拍确认**（≈40ms），杀掉两键几乎同时按下时先落地那个键的单拍误判。⛔ 同键位、修饰键不同是**故意允许**的共存（`Shift+/` 与裸 `/`），只有**完全相同**的组合键才算冲突（面板录制时拦住、工具模式关着时用记忆值 `getAltToolCombo()` 兜底）。⛔ 拾色器是宿主模态框：`pickerBusy` 期间**丢弃 altHold 的按下边沿**（松开照常放行），否则对话框背后会切工具。⛔ 「按一下」的键要**进表并吞键**（漏给 PS 会触发它自己的绑定），与按住键的「不进表」正相反。
+
+**热键生效前提（0x0213）** —— 明细 `refs/lasso-smoothing.md` O53
+92 ⛔⛔⛔ 快捷键必备前提只有两条：**插件在位**（`g_khPlug`）+ **布防**（`g_khArmed`）。表内热键两道门都过：`kh_hk_sync`（RegisterHotKey）与 `kh_poll_step`（轮询兜底）；钩子安装 = `bound ∧ plug ∧ armed`。⛔ **不进表的通路必须自己补布防门**：临时吸管的按住键走调度线程电平轮询，绕过前两处 ⇒ 总开关关着照样切吸管（0x0213 修）。新增任何「不走 map」的输入通路（按住键/手势/轮询特例）先问「过没过 `g_khArmed`」。⛔ `I_POLYALT` **故意不受布防约束**（PS 原生 Alt 的事实，与热键开关无关）。附加（非用户开关）：`g_khSafeMode` 熔断期间热键全静默。
 
 ## 维护约定
 

@@ -440,6 +440,7 @@ export default function BrushHotkeySection() {
     if (e.action === 'focusLasso') return '套索工具';
     if (e.action === 'focusClear') return '清除模式';
     if (e.action === 'altTool') return '临时吸管';
+    if (e.action === 'pickColor') return '前景色拾色器';
     if (e.action === 'runFunc') return getFuncHotkeyLabel(e.brush || '');
     return e.brush || '';
   };

@@ -87,6 +87,59 @@ function normalizeRgb(source: any): RGBColor | null {
 }
 
 /**
+ * 呼出 PS 原生拾色器，并把结果写进**前景色**（0x0212）。
+ *
+ * 与 `pickColorWithInitial` 的分工：
+ *   · 那个是「给面板里的某个色块挑一个颜色」，挑完必须**还原**用户的前景色；
+ *   · 这个是「改前景色本身」（功能快捷键子面板的「前景色拾色器」条目），
+ *     初始值天然就是当前前景色（`showColorPicker` 无参、只认前景色），
+ *     所以**不需要**注入初始色，也**不还原**。
+ *
+ * ⛔ 取回值要显式写一次前景色：`showColorPicker` 的返回值是权威结果，
+ *    但不保证宿主已把它落到色板上（不同 PS 版本行为不一致）。写了再回读，
+ *    「命令没报错」不等于「颜色变了」（铁律 47）。
+ *
+ * @returns 选中的颜色；用户取消或异常时返回 null（此时前景色保持原样）。
+ */
+export async function pickForegroundColor(commandName = '前景色拾色器'): Promise<RGBColor | null> {
+    try {
+        const result = await executeAsModal(async () => {
+            return await batchPlay(
+                [{
+                    _obj: 'showColorPicker',
+                    _target: [{
+                        _ref: 'application'
+                    }]
+                }],
+                { dialogOptions: 'dontDisplayDialogs' }
+            );
+        }, { commandName });
+
+        const picked = normalizeRgb(result && result[0] && result[0].RGBFloatColor);
+        if (!picked) {
+            return null;      // 取消 / 宿主没回颜色：前景色一动不动
+        }
+        await applyForegroundColor(toForegroundDescriptor(picked));
+
+        // 回读权威字段（不抛错：写失败最多是颜色没变，界面如实显示即可）
+        try {
+            const now = app.foregroundColor.rgb;
+            if (now && (Math.abs(now.red - picked.red) > 1
+                || Math.abs(now.green - picked.green) > 1
+                || Math.abs(now.blue - picked.blue) > 1)) {
+                console.warn('前景色回读不一致（期望 vs 实际）:',
+                    picked, { red: now.red, green: now.green, blue: now.blue });
+            }
+        } catch { /* 回读失败不影响结果 */ }
+        return picked;
+    } catch (error) {
+        // 用户取消走的就是异常路径（PS 侧报「用户已取消」），不是故障，不刷 error。
+        console.warn('前景色拾色器未完成:', error);
+        return null;
+    }
+}
+
+/**
  * 打开 PS 原生拾色器，**并以 `initial` 作为初始色**。
  *
  * 根因（2026-10-08 修复）：`showColorPicker` 是**以「当前前景色」为初始值**的无参命令，

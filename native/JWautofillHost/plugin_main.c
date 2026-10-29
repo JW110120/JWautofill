@@ -1617,7 +1617,27 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
    合槽会互相清掉对方。置位由 keyhook 每 20ms 镜像电平（写前比对），不经面板往返
    —— 面板 `await batchPlay` 期间回不了帧，那段空窗正是「按下去第一帧还在抖」。
    ⛔ CFG_NLONGS 59 → 60（两个 C 文件同步改）；理由码新增 `RS_POLYALT`。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x0211; }
+/* 0x0212（2026-10-29，**`/` 与 `Shift+/` 的冲突**）：
+   用户报：临时吸管按住键是 `/`，新增的「前景色拾色器」默认 `Shift+/` —— 按 Shift+/
+   开拾色器时，原生侧仍把「斜杠按着」当成临时吸管按住（组合键是裸键时旧写法只检查
+   「列出的修饰键按着没」，等于什么都没检查）⇒ 两个功能同时触发。
+   ⇒ keyhook.c 的按住判定改成「修饰键完全匹配 + 一次性起按准入」：
+     未列出的修饰键必须抬着；只要出现过一拍不匹配，本次按住作废，必须等键真的抬起
+     再按（否则 Shift 比 `/` 先松会剩一拍「斜杠按着 ∧ 无修饰键」，照样误触发）。
+   ⛔ 仍不注册热键、不吞键、`altHold` 协议与消息名不变；面板侧只是新增一条普通热键条目
+   （action == "pickColor"，默认 `Shift+/`，走 RegisterHotKey 正常接管）。
+   无共享内存槽位变化（CFG_NLONGS 仍 60）。 */
+/* 0x0213（2026-10-29，**按住键补上布防门**）：
+   用户要求确认「所有快捷键都必须在插件加载后、且快捷键总开关打开时才生效」，并核对反例。
+   核对结果：表内热键（主开关 / 笔刷 / 功能快捷键 / 套索 / 清除 / 前景色拾色器 / 混合模式内置表）
+   全部经 kh_hk_sync（RegisterHotKey）与 kh_poll_step（轮询兜底）两道 `g_khArmed` 门，
+   钩子安装另有 `g_khPlug ∧ g_khArmed` —— 均合格。
+   ⛔ **唯一反例是临时吸管的按住键**：它不进热键表、另走调度线程自己的电平轮询，
+      上面两处布防门一次都管不到它 ⇒ 总开关关着按 `/` 照样切吸管。
+   ⇒ keyhook.c 的按住块首补 `if (holdVk && !g_khArmed)`：清起按准入与确认计数、alt 保持 0
+     （若正在按着时撤防，边沿仍广播一帧 v=0 并清 I_ALTTOOL，状态不悬空）。
+   无共享内存槽位变化（CFG_NLONGS 仍 60）。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x0213; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {

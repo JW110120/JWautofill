@@ -11,6 +11,7 @@ import { requestFillPanelToggle } from '../utils/FillPanelToggleBus';
 import { requestClearModeToggle } from '../utils/ClearModeBus';
 import { requestBlendMode } from '../utils/BlendModeBus';
 import { psRead, runAsModal } from '../utils/psAccess';
+import { pickForegroundColor } from '../utils/ColorPicker';
 import { isPsBusy, psBusyRemain } from '../utils/psProbe';
 import { noteHostBusy } from '../utils/hostInteraction';
 // ⛔ 本模块**不再** import 任何 LassoSmoothing 的东西：套索平滑与热键虽同处一个 .8li，
@@ -27,8 +28,9 @@ export interface HotkeyEntry {
   //   focusLasso  工具模式「套索工具」键（关主开关 + 切套索）
   //   focusClear  工具模式「清除模式」键（确保主开关开 + 切换清除模式，2026-10-19 新增）
   //   altTool     工具模式「临时吸管」按住键（切吸管 / 松手切回套索，2026-10-28 新增）
+  //   pickColor   前景色拾色器（呼出 PS 原生拾色器并写回前景色，2026-10-29 新增）
   //   blendHotkey 混合模式热键总开关（combo 非空=开；.8li 见之装载内置 Alt+Shift 表）
-  action: 'toggleMain' | 'applyBrush' | 'runFunc' | 'focusLasso' | 'focusClear' | 'altTool' | 'blendHotkey';
+  action: 'toggleMain' | 'applyBrush' | 'runFunc' | 'focusLasso' | 'focusClear' | 'altTool' | 'pickColor' | 'blendHotkey';
   brush?: string;                // applyBrush 时的笔刷名（PS 预设名，需精确匹配）。
                                   // 注意：不支持同名笔刷——PS 按 _name 只会选中 Brushes 列表最上方那支。
                                   // runFunc 时复用本字段承载功能 id（见 funcHotkeyDefs.ts），
@@ -447,7 +449,17 @@ export function onAltHold(fn: (on: boolean) => void): () => void {
 /** 临时吸管键当前是否按着（诊断/调试用）。 */
 export function isAltHeld(): boolean { return altHeld; }
 
+// 0x0212：拾色器正在开着（含关闭后 300ms 宽限）。
+// ⛔ 为什么需要：拾色器是宿主模态框，开着的这段时间里用户几乎必然要按 Esc/回车，
+//    手指也可能顺手带过 `/`；那一拍若被当成「临时吸管按住」，会在对话框背后切工具
+//    （切过去失败又会留下一条「切换工具失败」告警），关掉对话框后还可能剩一次
+//    「切回套索」——用户看到的是一次莫名其妙的工具抖动。
+// ⇒ 拾色器期间**丢弃「按下」边沿**；「松开」边沿照常放行，保证任何残留状态都能解掉。
+let pickerBusy = false;
+let pickerBusyTimer: any = null;
+
 function emitAltHold(on: boolean) {
+  if (on && pickerBusy) return;        // 拾色器期间不认「按下」
   if (altHeld === on) return;          // 边沿去重（原生有 2s 保活帧）
   altHeld = on;
   for (const l of altHoldListeners) { try { l(on); } catch { /* ignore */ } }
@@ -501,7 +513,7 @@ function normalizeEntry(e: any): HotkeyEntry | null {
   const id: string = e.id ?? e.Id ?? ('bk_' + Math.random().toString(36).slice(2));
   if (action !== 'toggleMain' && action !== 'applyBrush' && action !== 'runFunc'
       && action !== 'focusLasso' && action !== 'focusClear' && action !== 'altTool'
-      && action !== 'blendHotkey') return null;
+      && action !== 'pickColor' && action !== 'blendHotkey') return null;
   // combo 为空的合法条目：主开关（'' = 已解绑）、笔刷（'' = 已解绑但条目保留在列表，
   // 单击选中后按退格即解绑，与「删除」按钮区分）、工具模式套索键（'' = 工具模式关闭时不装载）、
   // 临时吸管键（'' = 工具模式关闭时不装载）、
@@ -654,6 +666,8 @@ export function connectHotkeyDaemon(): () => void {
             if (pathAligned) ensureFocusClearEntry();
             // 工具模式开启时补上/更新「临时吸管」按住键（默认 /，同上仅 APP 面板写）
             if (pathAligned) ensureAltToolEntry();
+            // 「前景色拾色器」键（默认 Shift+/）：与工具模式无关，始终装载
+            if (pathAligned) ensurePickColorEntry();
             emitConfig();
           }
           else if (msg?.type === 'recordCaptured') {
@@ -809,6 +823,27 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
     //   吞键是主修复；这里是防御纵深 —— 命中即把工具切回套索，与 focusLasso 同款。
     //   ⛔ 不在这里改主开关：用户要求「反复按 Shift+E 只在清除模式间来回切换」。
     void selectLassoTool();
+    return;
+  }
+  if (msg.action === 'pickColor') {
+    // 0x0212：前景色拾色器（功能快捷键子面板的「前景色拾色器」条目，默认 Shift+/）。
+    // 直接呼出宿主原生拾色器：初始值就是当前前景色，确认后写回前景色，取消则一动不动。
+    // ⛔ 不做 token 去重：这里没有「读-改-写」共享状态（对比 toggleMain），
+    //    各面板共用一份订阅表 ⇒ 一次广播只会走到这里一次；重复触发只会开第二个对话框。
+    // ⛔ 拾色器是宿主模态框：期间把「临时吸管按住」的按下边沿挡掉（见 pickerBusy）。
+    const combo = msg.combo ?? '';
+    if (pickerBusy) return;
+    pickerBusy = true;
+    const broadcast = (ok: boolean) => {
+      for (const l of hotkeyListeners) { try { l({ combo, action: 'pickColor', ok }); } catch { /* ignore */ } }
+    };
+    void pickForegroundColor()
+      .then((picked) => broadcast(!!picked))
+      .catch(() => broadcast(false))
+      .finally(() => {
+        if (pickerBusyTimer) clearTimeout(pickerBusyTimer);
+        pickerBusyTimer = setTimeout(() => { pickerBusy = false; pickerBusyTimer = null; }, 300);
+      });
     return;
   }
   if (msg.action === 'blendMode') {
@@ -1110,6 +1145,54 @@ export function setAltToolCombo(combo: string, active: boolean): void {
  */
 export function altToolComboHasAlt(): boolean {
   return /(^|\+)alt(\+|$)/i.test(getAltToolCombo());
+}
+
+// ===== 前景色拾色器键（默认 Shift+/，2026-10-29 新增）=====
+// 语义（用户原话）：按下即呼出前景色拾色器。**与工具模式无关** —— 它是通用工具，
+// 任何时候都该能用（对照：套索 / 清除 / 临时吸管三者只在工具模式下装载）。
+//
+// ⛔ 它是**普通热键**（「按一下」），照常进热键匹配表、由 RegisterHotKey 接管并吞键 ——
+//    与 altTool 那条「按住键不进表」恰好相反：按住键要自己读电平，按一下的键越早吞越好，
+//    否则 Shift+/ 漏给 PS 会顺带触发 PS 自己的绑定。
+// ⛔ 与按住键 `/` 的共存由**原生侧**保证（0x0212：修饰键完全匹配 + 一次性起按准入），
+//    面板这里只额外拦一种真冲突：把它录成与临时吸管**完全相同**的组合键。
+export const PICK_COLOR_ID = 'pick_color';
+export const DEFAULT_PICK_COLOR_COMBO = 'Shift+/';
+
+/**
+ * 确保配置里存在「前景色拾色器」条目，且**始终**处于装载态（combo 恒为记忆值）。
+ *
+ * ⚠️ 这是本文件里唯一不按工具模式启停的 ensure*：各面板的配置帧都会走到它，
+ *    但内容完全由缓存帧算出、写回的也是同一份 ⇒ 多个面板同帧写入等价
+ *    （不涉及「读-改-写」竞态，与 toggleMain 那类翻转型热键不同）。
+ */
+function ensurePickColorEntry(): void {
+  if (!configLoaded) return;
+  const idx = cachedConfig.findIndex(e => e.action === 'pickColor');
+  const existing = idx >= 0 ? cachedConfig[idx] : undefined;
+  const remembered = (existing && (existing.brush || existing.combo)) || DEFAULT_PICK_COLOR_COMBO;
+  if (existing && existing.id === PICK_COLOR_ID && existing.combo === remembered && existing.brush === remembered) return;
+  const desired: HotkeyEntry = { id: PICK_COLOR_ID, combo: remembered, action: 'pickColor', brush: remembered };
+  const next = idx >= 0 ? cachedConfig.map((e, i) => (i === idx ? desired : e)) : [...cachedConfig, desired];
+  cachedConfig = next;
+  pushConfig(next);
+}
+
+/** 当前前景色拾色器键（用于提示/展示）。 */
+export function getPickColorCombo(): string {
+  const e = cachedConfig.find(x => x.action === 'pickColor');
+  return e?.brush || e?.combo || DEFAULT_PICK_COLOR_COMBO;
+}
+
+/** 重绑前景色拾色器键（功能快捷键子面板用）：同时更新生效值 combo 与记忆值 brush。 */
+export function setPickColorCombo(combo: string): void {
+  if (!configLoaded) return;
+  const remembered = combo || DEFAULT_PICK_COLOR_COMBO;
+  const idx = cachedConfig.findIndex(e => e.action === 'pickColor');
+  const desired: HotkeyEntry = { id: PICK_COLOR_ID, combo: remembered, action: 'pickColor', brush: remembered };
+  const next = idx >= 0 ? cachedConfig.map((e, i) => (i === idx ? desired : e)) : [...cachedConfig, desired];
+  cachedConfig = next;
+  pushConfig(next);
 }
 
 // ===== 混合模式热键总开关（2026-10-19 新增）=====

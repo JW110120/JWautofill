@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   HotkeyEntry, onConfig, onDaemonStatus, pushConfig, requestHotkeyRecording,
   cancelHotkeyRecording, onRecordProgress, setMainToggleCombo, setFocusLassoCombo,
-  setFocusClearCombo, setAltToolCombo, armBackspaceDelete, disarmBackspaceDelete, onBackspaceDelete,
+  setFocusClearCombo, setAltToolCombo, setPickColorCombo, getAltToolCombo, getPickColorCombo,
+  armBackspaceDelete, disarmBackspaceDelete, onBackspaceDelete,
   onHotkeyState, requestHotkeyStatus,
   peekPersistedArm, getBlendHotkeyOn, setBlendHotkeyActive, isDaemonConnected,
 } from './HotkeyBridge';
@@ -166,6 +167,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
     if (e.action === 'focusLasso') return '套索工具';
     if (e.action === 'focusClear') return '清除模式';
     if (e.action === 'altTool') return '临时吸管';
+    if (e.action === 'pickColor') return '前景色拾色器';
     if (e.action === 'blendHotkey') return '混合模式热键';
     if (e.action === 'runFunc') return getFuncHotkeyLabel(e.brush || '');
     return e.brush || '';
@@ -177,6 +179,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
     if (target === 'focus_lasso') return '套索工具';
     if (target === 'focus_clear') return '清除模式';
     if (target === 'alt_tool') return '临时吸管';
+    if (target === 'pick_color') return '前景色拾色器';
     return getFuncHotkeyLabel(target);
   };
 
@@ -201,6 +204,11 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
     if (target === 'alt_tool') {
       // 临时吸管键同样随工具模式自动启用/停用，不参与「退格解绑」（重录请双击）。
       showMessage('临时吸管键随工具模式自动启用，无需解绑；如需更换请双击重录');
+      return;
+    }
+    if (target === 'pick_color') {
+      // 拾色器键始终装载（与工具模式无关），同样不参与「退格解绑」（重录请双击）。
+      showMessage('前景色拾色器键始终启用，无需解绑；如需更换请双击重录');
       return;
     }
     const next = entries.filter(e => !(e.action === 'runFunc' && e.brush === target));
@@ -236,12 +244,31 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
       if (target === 'focus_lasso') return e.action !== 'focusLasso' && e.combo === combo;
       if (target === 'focus_clear') return e.action !== 'focusClear' && e.combo === combo;
       if (target === 'alt_tool') return e.action !== 'altTool' && e.combo === combo;
+      if (target === 'pick_color') return e.action !== 'pickColor' && e.combo === combo;
       const isSelf = e.action === 'runFunc' && e.brush === target;
       return !isSelf && e.combo === combo;
     });
     if (dup) {
       showMessage('该组合键已被「' + entryDisplayName(dup) + '」占用，请换一个');
       return;
+    }
+    // 0x0212：与「临时吸管」按住键**完全相同**的组合键必须拦住 —— 同一键位 + 同一修饰键
+    // ⇒ 按一下两个功能同时触发。⛔ 只拦「完全相同」：不同修饰键（`Shift+/` 与裸 `/`）
+    // 是**故意允许**的共存，原生侧按「修饰键完全匹配 + 一次性起按准入」已经分开
+    // （见 keyhook.c 的 0x0212 段）。
+    // ⚠️ 这条额外检查是为了「工具模式关着」的情况：那时 altTool 条目的 combo 为空、
+    //    只是被 `entries` 里的空值藏起来了，记忆值仍在 getAltToolCombo() 里。
+    {
+      const holdCombo = getAltToolCombo();
+      const pickerCombo = getPickColorCombo();
+      if (target === 'pick_color' && combo === holdCombo) {
+        showMessage('该组合键已是「临时吸管」的按住键，请换一个');
+        return;
+      }
+      if (target === 'alt_tool' && combo === pickerCombo) {
+        showMessage('该组合键已被「前景色拾色器」占用，请换一个');
+        return;
+      }
     }
     if (target === 'main') {
       // 主开关不新增条目，只更新共享配置里的 combo（'' 即解绑，由 bridge 落盘）
@@ -270,6 +297,12 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
       showMessage('已保存：' + combo + ' → 临时吸管');
       return;
     }
+    if (target === 'pick_color') {
+      // 前景色拾色器键（默认 Shift+/）：普通热键（按一下），与工具模式无关、始终装载。
+      setPickColorCombo(combo);
+      showMessage('已保存：' + combo + ' → 前景色拾色器');
+      return;
+    }
     const existing = entries.find(e => e.action === 'runFunc' && e.brush === target);
     const next: HotkeyEntry[] = existing
       ? entries.map(e => (e.id === existing.id ? { ...e, combo } : e))
@@ -286,6 +319,8 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   const focusClearEntry = entries.find(e => e.action === 'focusClear');
   // 工具模式下的「临时吸管」按住键条目：同样只在工具模式开启时装载（默认 /）。
   const altToolEntry = entries.find(e => e.action === 'altTool');
+  // 「前景色拾色器」键（默认 Shift+/）：与工具模式无关，始终装载。
+  const pickColorEntry = entries.find(e => e.action === 'pickColor');
   // 混合模式热键开关：配置里 blendHotkey 条目的 combo 非空 = 开（.8li 见之装载
   // 内置 Alt+Shift 表）。与工具模式无关，任何时刻都显示这一行。
   const blendHotkeyOn = !!entries.find(e => e.action === 'blendHotkey')?.combo;
@@ -412,6 +447,9 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
               {/* 工具模式下：清除模式键（默认 Shift+E）——按下即确保主开关开启并切换清除模式 */}
               {g.title === '选区填充' && focusMode &&
                 renderRow('focus_clear', focusClearEntry?.combo || '', '清除模式', 'focus_clear', helpTexts.funcHotkey.clearRow)}
+              {/* 前景色拾色器（默认 Shift+/，与工具模式无关）：按一下呼出 PS 原生拾色器 */}
+              {g.title === '选区填充' &&
+                renderRow('pick_color', pickColorEntry?.combo || '', '前景色拾色器', 'pick_color', helpTexts.funcHotkey.pickerRow)}
               {/* 工具模式下：临时吸管按住键（默认 /）——按住切吸管、松手切回套索 */}
               {g.title === '选区填充' && focusMode &&
                 renderRow('alt_tool', altToolEntry?.combo || '', '临时吸管', 'alt_tool', helpTexts.funcHotkey.pickRow)}

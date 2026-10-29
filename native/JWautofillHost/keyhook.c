@@ -1968,6 +1968,8 @@ static DWORD WINAPI kh_dispatch_thread(LPVOID param)
         {
             static int   s_altPrev = -1;
             static int   s_altPrevVk;
+            static int   s_altArm = 1;      /* 允许「起按」（0x0212，见下方说明） */
+            static int   s_altTicks;        /* 本次起按已连续满足几拍 */
             static DWORD s_altLast;
             int holdVk   = (int)g_khAltToolVk;
             int holdMods = (int)g_khAltToolMods;
@@ -1977,21 +1979,75 @@ static DWORD WINAPI kh_dispatch_thread(LPVOID param)
                够不到。铁律 76 的第四处：漏了就是平滑整段失效且界面看不出原因。 */
             if (holdVk != s_altPrevVk) {
                 s_altPrevVk = holdVk;
+                s_altArm = 1;                 /* 改绑 / 重新装载 ⇒ 重新给一次起按准入 */
                 if (!holdVk) srv_alt_tool_clear("按住键已卸载");
             }
-            if (holdVk) {
-                int ok = 1;
-                if ((holdMods & MOD_CONTROL) && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) ok = 0;
-                if (ok && (holdMods & MOD_ALT) && !(GetAsyncKeyState(VK_MENU) & 0x8000))  ok = 0;
-                if (ok && (holdMods & MOD_SHIFT) && !(GetAsyncKeyState(VK_SHIFT) & 0x8000)) ok = 0;
-                if (ok && (holdMods & MOD_WIN) &&
-                    !((GetAsyncKeyState(VK_LWIN) & 0x8000) || (GetAsyncKeyState(VK_RWIN) & 0x8000))) ok = 0;
-                if (ok && (GetAsyncKeyState(holdVk) & 0x8000)) {
-                    HWND fg = GetForegroundWindow();
-                    DWORD pid = 0;
-                    if (fg) GetWindowThreadProcessId(fg, &pid);
-                    if (pid == GetCurrentProcessId()) alt = 1;
+            if (holdVk && !g_khArmed) {
+                /* ================= 0x0213：布防门（热键总开关）
+                 *
+                 * 需求（用户 2026-10-29）：「所有快捷键都必须在插件加载后、且快捷键总开关
+                 *   打开时才生效」。核对下来**只有这一条漏了**：
+                 *   表内热键由 kh_hk_sync（RegisterHotKey）与 kh_poll_step（轮询兜底）
+                 *   两道布防门挡着，而按住键**不进热键表**、另走这段电平轮询
+                 *   ⇒ 前面两处的 `g_khArmed` 一次都管不到它
+                 *   ⇒ 总开关关着按 `/` 照样切吸管、照样广播 altHold。
+                 *
+                 * ⛔ 起按准入（`s_altArm`）也要一起清：重新布防的那一刻键若还按着，
+                 *    arm 还是 1 ⇒ 会凭空触发一次「切吸管」。清掉后必须等键真的抬起
+                 *    （下面的 `!(GetAsyncKeyState(holdVk))` 分支会重新给准入）再按。
+                 * ⛔ alt 保持 0：若正好在按着的时候撤防，下面按边沿仍会广播一帧 v=0
+                 *    并清 I_ALTTOOL 硬否决位（等价于「当成松开」），不会把状态悬在半空。 */
+                s_altArm = 0;
+                s_altTicks = 0;
+            } else if (holdVk) {
+                /* ================= 0x0212：修饰键「完全匹配」+ 一次性起按准入
+                 *
+                 * 用户报的冲突：前景色拾色器默认是 `Shift+/`，而按住键是裸键 `/`。
+                 *   旧写法只检查「combo 里**列出的**修饰键按着没」⇒ 组合键是裸键时
+                 *   等于什么都没检查，斜杠一按下就算「临时吸管按下了」
+                 *   ⇒ 按 Shift+/ 开拾色器时会同时切吸管工具。
+                 *
+                 * ① 完全匹配：该按着的按着，**没列出的也必须抬着**。
+                 *    `/`（mods=0）⇒ 只要 Ctrl/Alt/Shift/Win 任一按着就不算按住。
+                 * ② 只加完全匹配还不够：Shift 比 `/` 先松（或后按）时，会剩一拍
+                 *    「斜杠按着 ∧ 无修饰键」⇒ 照样误触发一次。⇒ 加「起按」准入：
+                 *    只要出现过一拍修饰键不匹配，本次按住作废，必须等斜杠真的抬起
+                 *    再按才算 —— 组合键的意义就是「这一整套一起按」。
+                 * ③ 起按还要**连两拍确认**：两个键几乎同时按下时，先落地的那一个
+                 *    可能被单独采到一拍 ⇒ 单拍判定会在拾色器弹出的同一瞬间闪一下吸管。
+                 *
+                 * ⛔ 只影响「按住」判定；不注册热键、不吞键、不改 altHold 协议。 */
+                int ctrlDn  = (GetAsyncKeyState(VK_CONTROL) & 0x8000) ? 1 : 0;
+                int altDn   = (GetAsyncKeyState(VK_MENU)    & 0x8000) ? 1 : 0;
+                int shiftDn = (GetAsyncKeyState(VK_SHIFT)   & 0x8000) ? 1 : 0;
+                int winDn   = ((GetAsyncKeyState(VK_LWIN) & 0x8000) ||
+                               (GetAsyncKeyState(VK_RWIN) & 0x8000)) ? 1 : 0;
+                int exact = (ctrlDn  == ((holdMods & MOD_CONTROL) ? 1 : 0)) &&
+                            (altDn   == ((holdMods & MOD_ALT)     ? 1 : 0)) &&
+                            (shiftDn == ((holdMods & MOD_SHIFT)   ? 1 : 0)) &&
+                            (winDn   == ((holdMods & MOD_WIN)     ? 1 : 0));
+                if (!(GetAsyncKeyState(holdVk) & 0x8000)) {
+                    s_altArm = 1;              /* 键抬着 ⇒ 下一次按下可以起按 */
+                    s_altTicks = 0;
+                } else if (!exact) {
+                    s_altArm = 0;              /* 按着键却多按/漏按修饰键 ⇒ 本次按住作废 */
+                    s_altTicks = 0;
+                } else if (s_altArm) {
+                    /* ⛔ 连两拍确认（≈40ms）：`Shift+/` 两个键几乎同时按下时，
+                       按得早的那个键可能先被单独采到一拍（`/` 已按下、Shift 还没进
+                       键态）⇒ 单拍判定就会在拾色器弹出的同一瞬间闪一下吸管。
+                       按住语义本来就以百毫秒计，40ms 的确认窗用户感觉不到。 */
+                    if (s_altTicks < 2) s_altTicks++;
+                    if (s_altTicks >= 2) {
+                        HWND fg = GetForegroundWindow();
+                        DWORD pid = 0;
+                        if (fg) GetWindowThreadProcessId(fg, &pid);
+                        if (pid == GetCurrentProcessId()) alt = 1;
+                    }
                 }
+            } else {
+                s_altArm = 1;                  /* 键源卸载 ⇒ 复位准入，重新装载立刻可用 */
+                s_altTicks = 0;
             }
             DWORD nowAl = GetTickCount();
             int wasAlt = (s_altPrev == 1) ? 1 : 0;
