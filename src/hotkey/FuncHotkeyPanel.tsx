@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   HotkeyEntry, onConfig, onDaemonStatus, pushConfig, requestHotkeyRecording,
   cancelHotkeyRecording, onRecordProgress, setMainToggleCombo, setFocusLassoCombo,
-  setFocusClearCombo, armBackspaceDelete, disarmBackspaceDelete, onBackspaceDelete,
+  setFocusClearCombo, setAltToolCombo, armBackspaceDelete, disarmBackspaceDelete, onBackspaceDelete,
   onHotkeyState, requestHotkeyStatus,
   peekPersistedArm, getBlendHotkeyOn, setBlendHotkeyActive, isDaemonConnected,
 } from './HotkeyBridge';
@@ -165,6 +165,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
     if (e.action === 'toggleMain') return focusMode ? '选区填充' : '选区填充开关';
     if (e.action === 'focusLasso') return '套索工具';
     if (e.action === 'focusClear') return '清除模式';
+    if (e.action === 'altTool') return '临时吸管';
     if (e.action === 'blendHotkey') return '混合模式热键';
     if (e.action === 'runFunc') return getFuncHotkeyLabel(e.brush || '');
     return e.brush || '';
@@ -175,6 +176,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
     if (target === 'main') return focusMode ? '选区填充' : '选区填充开关';
     if (target === 'focus_lasso') return '套索工具';
     if (target === 'focus_clear') return '清除模式';
+    if (target === 'alt_tool') return '临时吸管';
     return getFuncHotkeyLabel(target);
   };
 
@@ -194,6 +196,11 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
     if (target === 'focus_clear') {
       // 清除模式键同样随工具模式自动启用/停用，不参与「退格解绑」（重录请双击）。
       showMessage('清除模式键随工具模式自动启用，无需解绑；如需更换请双击重录');
+      return;
+    }
+    if (target === 'alt_tool') {
+      // 临时吸管键同样随工具模式自动启用/停用，不参与「退格解绑」（重录请双击）。
+      showMessage('临时吸管键随工具模式自动启用，无需解绑；如需更换请双击重录');
       return;
     }
     const next = entries.filter(e => !(e.action === 'runFunc' && e.brush === target));
@@ -228,6 +235,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
       if (target === 'main') return e.action !== 'toggleMain' && e.combo === combo;
       if (target === 'focus_lasso') return e.action !== 'focusLasso' && e.combo === combo;
       if (target === 'focus_clear') return e.action !== 'focusClear' && e.combo === combo;
+      if (target === 'alt_tool') return e.action !== 'altTool' && e.combo === combo;
       const isSelf = e.action === 'runFunc' && e.brush === target;
       return !isSelf && e.combo === combo;
     });
@@ -255,6 +263,13 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
       showMessage('已保存：' + combo + ' → 清除模式');
       return;
     }
+    if (target === 'alt_tool') {
+      // 临时吸管键（默认 /）同理由 bridge 统一管理：按住切吸管、松手切回套索。
+      // ⛔ 与另外两个键的区别是「按住」语义 ⇒ .8li 只轮询它的电平，不进热键表、不吞键。
+      setAltToolCombo(combo, focusMode);
+      showMessage('已保存：' + combo + ' → 临时吸管');
+      return;
+    }
     const existing = entries.find(e => e.action === 'runFunc' && e.brush === target);
     const next: HotkeyEntry[] = existing
       ? entries.map(e => (e.id === existing.id ? { ...e, combo } : e))
@@ -269,6 +284,8 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   const focusLassoEntry = entries.find(e => e.action === 'focusLasso');
   // 工具模式下的「清除模式」键条目：同样只在工具模式开启时装载（默认 Shift+E）。
   const focusClearEntry = entries.find(e => e.action === 'focusClear');
+  // 工具模式下的「临时吸管」按住键条目：同样只在工具模式开启时装载（默认 /）。
+  const altToolEntry = entries.find(e => e.action === 'altTool');
   // 混合模式热键开关：配置里 blendHotkey 条目的 combo 非空 = 开（.8li 见之装载
   // 内置 Alt+Shift 表）。与工具模式无关，任何时刻都显示这一行。
   const blendHotkeyOn = !!entries.find(e => e.action === 'blendHotkey')?.combo;
@@ -395,6 +412,9 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
               {/* 工具模式下：清除模式键（默认 Shift+E）——按下即确保主开关开启并切换清除模式 */}
               {g.title === '选区填充' && focusMode &&
                 renderRow('focus_clear', focusClearEntry?.combo || '', '清除模式', 'focus_clear', helpTexts.funcHotkey.clearRow)}
+              {/* 工具模式下：临时吸管按住键（默认 /）——按住切吸管、松手切回套索 */}
+              {g.title === '选区填充' && focusMode &&
+                renderRow('alt_tool', altToolEntry?.combo || '', '临时吸管', 'alt_tool', helpTexts.funcHotkey.pickRow)}
               {/* 混合模式热键（自绘开关行，与工具模式无关）：开启后 Alt+Shift+字母改面板混合模式 */}
               {g.title === '选区填充' && renderBlendSwitchRow('blend_hotkey', blendHotkeyOn)}
               {g.defs.map(def =>

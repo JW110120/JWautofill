@@ -26,8 +26,9 @@ export interface HotkeyEntry {
   //   runFunc     功能按钮（brush 承载功能 id，见 funcHotkeyDefs.ts）
   //   focusLasso  工具模式「套索工具」键（关主开关 + 切套索）
   //   focusClear  工具模式「清除模式」键（确保主开关开 + 切换清除模式，2026-10-19 新增）
+  //   altTool     工具模式「临时吸管」按住键（切吸管 / 松手切回套索，2026-10-28 新增）
   //   blendHotkey 混合模式热键总开关（combo 非空=开；.8li 见之装载内置 Alt+Shift 表）
-  action: 'toggleMain' | 'applyBrush' | 'runFunc' | 'focusLasso' | 'focusClear' | 'blendHotkey';
+  action: 'toggleMain' | 'applyBrush' | 'runFunc' | 'focusLasso' | 'focusClear' | 'altTool' | 'blendHotkey';
   brush?: string;                // applyBrush 时的笔刷名（PS 预设名，需精确匹配）。
                                   // 注意：不支持同名笔刷——PS 按 _name 只会选中 Brushes 列表最上方那支。
                                   // runFunc 时复用本字段承载功能 id（见 funcHotkeyDefs.ts），
@@ -415,29 +416,35 @@ export async function requestRepairKeyboard(): Promise<string> {
 }
 
 // 订阅热键触发事件（无论成败都会回调，ok=false 表示执行 batchPlay 失败）
-// ===================== 0x0209：Alt 边沿总线（工具模式下的「临时吸管」） =====================
+// ============ 0x0209：按住键边沿总线（工具模式下的「临时吸管」） ============
 //
-// 需求（用户）：**仅当** ①工具模式 ②当前工具是套索 ③总开关开着 时，按住 Alt 临时切到
-// 吸管工具取样；松开自动切回套索，且总开关必须保持「开」。
+// 需求（用户）：**仅当** ①工具模式 ②当前工具是套索 ③总开关开着 时，按住临时吸管键
+// 切到吸管工具取样；松开自动切回套索，且总开关必须保持「开」。
+//
+// 键源（0x0210）：配置里 action === 'altTool' 的那条 combo，默认 `/`。
+// ⛔ 原来是物理 Alt，但套索工具下 Alt 是 PS 原生的「切多边形套索」⇒ 同一个键被两个
+//    功能抢，按下时两个都触发。换成独立键后互不干扰（用户在功能快捷键子面板可重录）。
 //
 // 分工：
-//   · .8li（`keyhook.c`）只负责把「Alt 的键态电平」按**边沿**推上来（它才看得见全局键态，
+//   · .8li（`keyhook.c`）只负责把「该键的键态电平」按**边沿**推上来（它才看得见全局键态，
 //     UXP 面板在停靠面板里完全拿不到宿主前台的键盘状态）；
 //   · 三个条件的判定、以及切工具/保总开关，全部在 `app.tsx` 的订阅方做 ——
 //     那里才有 `isFocusMode()` / `state.isEnabled` / `lastKnownTool`。
 //
-// ⛔ 为什么电平要去重（`altHeld === on` 直接返回）：原生侧按住 Alt 时每 2s 会发一帧保活
+// ⛔ 消息名仍是 `altHold`（历史名，只表示「临时吸管按住键的电平」）：
+//    改名要同时动 .8li 与面板两侧，收益只是好看，风险是漏改一处就整段失灵。
+// ⛔ 为什么电平要去重（`altHeld === on` 直接返回）：原生侧按住时每 2s 会发一帧保活
 //    （防丢帧/重连），若不去重，用户按住 3 秒就会反复触发两次「切吸管」。
 const altHoldListeners: ((on: boolean) => void)[] = [];
 let altHeld = false;
 
-/** 订阅 Alt 按下/松开边沿（去重后的真正边沿）。返回取消订阅函数。 */
+/** 订阅临时吸管键的按下/松开边沿（去重后的真正边沿）。返回取消订阅函数。 */
 export function onAltHold(fn: (on: boolean) => void): () => void {
   altHoldListeners.push(fn);
   return () => { const i = altHoldListeners.indexOf(fn); if (i >= 0) altHoldListeners.splice(i, 1); };
 }
 
-/** 当前 Alt 是否按着（诊断/调试用）。 */
+/** 临时吸管键当前是否按着（诊断/调试用）。 */
 export function isAltHeld(): boolean { return altHeld; }
 
 function emitAltHold(on: boolean) {
@@ -493,13 +500,15 @@ function normalizeEntry(e: any): HotkeyEntry | null {
   const brush: string | undefined = e.brush ?? e.Brush ?? undefined;
   const id: string = e.id ?? e.Id ?? ('bk_' + Math.random().toString(36).slice(2));
   if (action !== 'toggleMain' && action !== 'applyBrush' && action !== 'runFunc'
-      && action !== 'focusLasso' && action !== 'focusClear' && action !== 'blendHotkey') return null;
+      && action !== 'focusLasso' && action !== 'focusClear' && action !== 'altTool'
+      && action !== 'blendHotkey') return null;
   // combo 为空的合法条目：主开关（'' = 已解绑）、笔刷（'' = 已解绑但条目保留在列表，
   // 单击选中后按退格即解绑，与「删除」按钮区分）、工具模式套索键（'' = 工具模式关闭时不装载）、
+  // 临时吸管键（'' = 工具模式关闭时不装载）、
   // 混合模式热键开关（'' = 关闭，条目保留供开关回显）。
   // runFunc 空组合键无意义，直接丢弃。
   if (!combo && action !== 'toggleMain' && action !== 'applyBrush' && action !== 'focusLasso'
-      && action !== 'focusClear' && action !== 'blendHotkey') return null;
+      && action !== 'focusClear' && action !== 'altTool' && action !== 'blendHotkey') return null;
   // runFunc 必须携带功能 id（复用 brush 字段），缺了就无法执行，丢弃。
   if (action === 'runFunc' && !brush) return null;
   return { id, combo, action, brush };
@@ -602,8 +611,8 @@ export function connectHotkeyDaemon(): () => void {
             noteHostBusy(msg.v === true || msg.v === 1,
                          msg.btn === undefined ? undefined : (msg.btn === true || msg.btn === 1));
           }
-          // 0x0209：Alt 边沿（工具模式下的临时吸管）。同样只做「电平转事件」，
-          // 判定（工具模式 + 套索 + 总开关开）由 app.tsx 的订阅方负责。
+          // 0x0209 / 0x0210：临时吸管按住键的电平边沿（键源见配置的 altTool 条目）。
+          // 同样只做「电平转事件」，判定（工具模式 + 套索 + 总开关开）由 app.tsx 订阅方负责。
           else if (msg?.type === 'altHold') {
             emitAltHold(msg.v === true || msg.v === 1);
           } else if (msg?.type === 'config') {
@@ -643,6 +652,8 @@ export function connectHotkeyDaemon(): () => void {
             if (pathAligned) ensureFocusLassoEntry();
             // 工具模式开启时补上/更新「清除模式」键（默认 Shift+E，同上仅 APP 面板写）
             if (pathAligned) ensureFocusClearEntry();
+            // 工具模式开启时补上/更新「临时吸管」按住键（默认 /，同上仅 APP 面板写）
+            if (pathAligned) ensureAltToolEntry();
             emitConfig();
           }
           else if (msg?.type === 'recordCaptured') {
@@ -1024,6 +1035,81 @@ export function setFocusClearCombo(combo: string, active: boolean): void {
   const next = idx >= 0 ? cachedConfig.map((e, i) => (i === idx ? desired : e)) : [...cachedConfig, desired];
   cachedConfig = next;
   pushConfig(next);
+}
+
+// ===== 工具模式：「临时吸管」按住键（默认 /，2026-10-28 新增）=====
+// 语义（用户原话）：工具模式下、当前工具是套索、总开关开着时，**按住**该键临时切到
+// 吸管取样，松开自动切回套索，总开关保持「开」。
+//
+// ⛔ 为什么从 Alt 换成 `/`：套索工具下按 Alt 是 PS 原生的「临时切多边形套索」，
+//    和临时吸管抢同一个键 —— 按下 Alt 时两个功能同时生效，谁都不对。
+//
+// 与套索 / 清除键同规矩：只在工具模式开启时装载（combo 非空），关闭时置空，
+// 用户自定义过的键记忆在 brush 字段。**语义差别**：那两个键是「按一下」，
+// 这个是「按住」⇒ .8li 侧不把它放进热键匹配表（不吞键、不注册 RegisterHotKey），
+// 只按电平轮询后推 `altHold` 边沿（见 keyhook.c 的 0x0210）。
+export const ALT_TOOL_ID = 'alt_tool';
+export const DEFAULT_ALT_TOOL_COMBO = '/';
+let altToolActive = false;      // 工具模式是否开启（仅 APP 面板会写）
+let altToolKnown = false;       // 是否由 APP 面板明确过工具模式状态
+
+/**
+ * 确保配置里存在「临时吸管」条目，并让它只在工具模式开启时处于装载态。
+ * 只应由 APP 面板的上下文真正写入（仅它会调用 setAltToolActive）。
+ */
+function ensureAltToolEntry(): void {
+  if (!configLoaded || !altToolKnown) return;
+  const idx = cachedConfig.findIndex(e => e.action === 'altTool');
+  const existing = idx >= 0 ? cachedConfig[idx] : undefined;
+  const remembered = (existing && (existing.brush || existing.combo)) || DEFAULT_ALT_TOOL_COMBO;
+  const desiredCombo = altToolActive ? remembered : '';
+  if (existing && existing.id === ALT_TOOL_ID && existing.combo === desiredCombo && existing.brush === remembered) return;
+  const desired: HotkeyEntry = { id: ALT_TOOL_ID, combo: desiredCombo, action: 'altTool', brush: remembered };
+  const next = idx >= 0 ? cachedConfig.map((e, i) => (i === idx ? desired : e)) : [...cachedConfig, desired];
+  cachedConfig = next;
+  pushConfig(next);
+}
+
+/** APP 面板在工具模式状态变化时调用，决定临时吸管键是否装载（其它面板绝不调用）。 */
+export function setAltToolActive(on: boolean): void {
+  altToolKnown = true;
+  altToolActive = on;
+  ensureAltToolEntry();
+}
+
+/** 当前临时吸管键（用于提示/展示；工具模式关闭时返回记忆值）。 */
+export function getAltToolCombo(): string {
+  const e = cachedConfig.find(x => x.action === 'altTool');
+  return e?.brush || e?.combo || DEFAULT_ALT_TOOL_COMBO;
+}
+
+/**
+ * 重绑临时吸管键（功能快捷键子面板用）：同时更新生效值 combo 与记忆值 brush。
+ * ⚠️ 该函数会在**绘画工具箱面板**的上下文里被调用（FuncHotkeyPanel 挂在那里），
+ *    那里 altToolKnown 恒为 false，所以**不能**用 altToolKnown 做闸门；
+ *    装载与否由调用方传入的 active（= 面板自己看到的工具模式状态）决定。
+ */
+export function setAltToolCombo(combo: string, active: boolean): void {
+  if (!configLoaded) return;
+  const remembered = combo || DEFAULT_ALT_TOOL_COMBO;
+  const idx = cachedConfig.findIndex(e => e.action === 'altTool');
+  const desired: HotkeyEntry = { id: ALT_TOOL_ID, combo: active ? remembered : '', action: 'altTool', brush: remembered };
+  const next = idx >= 0 ? cachedConfig.map((e, i) => (i === idx ? desired : e)) : [...cachedConfig, desired];
+  cachedConfig = next;
+  pushConfig(next);
+}
+
+/**
+ * 触发键里是否含 Alt —— 决定「取色结果要不要事后搬色」。
+ *
+ * 临时吸管原来按的是物理 Alt，PS 会把「Alt + 点击」解释成**取背景色**，
+ * 所以要读回背景色写进前景、再把背景复原（见 app.tsx 的 syncAltPickColor）。
+ * 默认键 `/` 不含 Alt ⇒ PS 的吸管单击本来就取前景色，一次搬运都不需要
+ * （多一次模态只会在用户已经开始画的时候抢宿主主线程）。
+ * 只有用户把键重录成含 Alt 的组合时，才恢复那条搬运通路。
+ */
+export function altToolComboHasAlt(): boolean {
+  return /(^|\+)alt(\+|$)/i.test(getAltToolCombo());
 }
 
 // ===== 混合模式热键总开关（2026-10-19 新增）=====

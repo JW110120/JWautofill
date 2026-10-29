@@ -49,6 +49,8 @@
 
 /* 0x020A：plugin_main.c 提供的「清临时吸管否决位」。见本文件 Alt 边沿块。 */
 void srv_alt_tool_clear(const char* why);
+/* 0x0211：plugin_main.c 提供的「物理 Alt 否决位」镜像写（写前比对，只在变化时落盘）。 */
+void srv_poly_alt_set(int on);
 
 /* ================================================================ 常量 */
 
@@ -148,6 +150,14 @@ static volatile LONG g_khMapSeq;          /* 偶数=稳定，奇数=写中 */
 static CRITICAL_SECTION g_khMapLk;
 static volatile LONG g_khItemCount;       /* 配置总条数（含空 combo，getState 的 items） */
 
+/* --- 0x0210：临时吸管的「按住键」（配置里 action == "altTool" 的条目）---
+ * ⛔ 刻意**不放进 g_khMap**（见 kh_map_apply）：它要的是「按住/松开」电平，
+ *    而 map 的语义是「命中即吞键 + 广播一次 hit」。放进 map 就会被 RegisterHotKey
+ *    注册成独占热键（带修饰键的组合），键被从输入队列摘走 ⇒ 电平轮询失去意义。
+ * vk 为 0 = 未装载（工具模式关闭 / 未绑定）。解析放在配置线程，只发布两个整数。 */
+static volatile LONG g_khAltToolVk;
+static volatile LONG g_khAltToolMods;
+
 /* --- SPSC 环（单生产者=钩子线程 / 单消费者=调度线程） --- */
 static char g_khHitQ[KH_HITQ][KH_COMBO_MAX];
 static volatile LONG g_khHitHead, g_khHitTail, g_khHitDrops;
@@ -176,6 +186,9 @@ static void kh_install_hook(void);
 static void kh_uninstall_hook(void);
 static void kh_poll_rebuild_watch(void);
 static void kh_hk_reset_for_record(void);
+/* 0x0210：组合键解析（允许裸键），定义在 kh_combo_to_hotkey 之前，
+   但 kh_map_apply 更早使用 ⇒ 先声明。 */
+static int kh_combo_to_key(const char* combo, int* mods, int* vk);
 
 /* --- 0x013C 双路按键：LL 钩子（主，可吞键）+ 键态轮询（兜底，不可吞键） ---
  * 轮询计数只用于日志取证：一次测试就能看出「钩子到底有没有被系统调用」。 */
@@ -477,12 +490,24 @@ static int kh_map_apply(const KhItem* items, int n)
     KhItem map[KH_MAX_ITEMS];
     int mn = 0;
     int blendOn = 0;
+    char altCombo[KH_COMBO_MAX];
+    altCombo[0] = 0;
     for (int i = 0; i < n; i++) {
         /* 混合模式热键标志条目：combo 非空 = 开关打开。⛔ 它本身**不参与匹配**
            （ combo='1' 是个普通按键，混进表里会把用户的数字键吞掉），
            只作为「是否装载内置混合模式表」的开关。 */
         if (_stricmp(items[i].action, "blendHotkey") == 0) {
             if (items[i].combo[0]) blendOn = 1;
+            continue;
+        }
+        /* 0x0210：临时吸管按住键 —— 同样**不参与匹配**，只把 combo 取出来交给
+           调度线程做电平轮询。
+           ⛔ 为什么不能留在表里：① 表里的条目会被 RegisterHotKey 注册成系统级
+              独占热键（只要带修饰键）⇒ 键被从输入队列摘走，PS 收不到、我们的
+              电平也读不到「按住」；② 命中会广播一次 hit，面板会当成一次
+              「功能热键触发」，与「按住才生效」的语义打架。 */
+        if (_stricmp(items[i].action, "altTool") == 0) {
+            _snprintf(altCombo, sizeof(altCombo), "%s", items[i].combo);
             continue;
         }
         if (!items[i].combo[0]) continue;                 /* 空 combo = 已解绑，仅留存 */
@@ -514,6 +539,20 @@ static int kh_map_apply(const KhItem* items, int n)
     }
     kh_map_publish(map, mn);
     InterlockedExchange(&g_khWatchDirty, 1);      /* 表变了 ⇒ 钩子线程重建关注位 */
+
+    /* 0x0210：发布临时吸管按住键（未装载 ⇒ vk=0，调度线程自然判「没按着」）。
+       ⛔ 解析只在这里做一次：kh_key_to_token 返回的是 static 缓冲，
+          放进 20ms 调度循环里解析会与钩子线程的 kh_build_combo 抢同一块内存。 */
+    {
+        int hv = 0, hm = 0;
+        if (altCombo[0] && !kh_combo_to_key(altCombo, &hm, &hv)) hv = 0;
+        LONG prev = InterlockedExchange(&g_khAltToolVk, hv);
+        InterlockedExchange(&g_khAltToolMods, hv ? hm : 0);
+        if (hv != prev) {
+            if (hv) kh_log("临时吸管按住键已装载：%s（vk=0x%02X mods=0x%X）", altCombo, hv, hm);
+            else    kh_log("临时吸管按住键已卸载（工具模式关闭 / 未绑定）");
+        }
+    }
     return mn;
 }
 
@@ -1518,8 +1557,9 @@ static char g_khHkCombo[KH_HK_MAX][KH_COMBO_MAX];
 static LONG g_khHkStamp = -1;
 static int  g_khHkFailLogged;
 
-/* "Ctrl+Alt+Shift+K" → (MOD_*, vk)。裸键返回 0（RegisterHotKey 不接受）。 */
-static int kh_combo_to_hotkey(const char* combo, int* mods, int* vk)
+/* "Ctrl+Alt+Shift+K" → (MOD_*, vk)。**允许裸键**（mods 可能为 0）。
+ * 0x0210：临时吸管的按住键默认就是裸键 `/`，所以解析必须放行无修饰键。 */
+static int kh_combo_to_key(const char* combo, int* mods, int* vk)
 {
     int m = 0, v = 0;
     const char* p = combo;
@@ -1541,7 +1581,18 @@ static int kh_combo_to_hotkey(const char* combo, int* mods, int* vk)
             }
         }
     }
-    if (!v || !m) return 0;
+    if (!v) return 0;
+    *mods = m;
+    *vk = v;
+    return 1;
+}
+
+/* "Ctrl+Alt+Shift+K" → (MOD_*, vk)。裸键返回 0（RegisterHotKey 不接受）。 */
+static int kh_combo_to_hotkey(const char* combo, int* mods, int* vk)
+{
+    int m = 0, v = 0;
+    if (!kh_combo_to_key(combo, &m, &v)) return 0;
+    if (!m) return 0;
     *mods = m;
     *vk = v;
     return 1;
@@ -1901,19 +1952,46 @@ static DWORD WINAPI kh_dispatch_thread(LPVOID param)
          *   ⛔ 不走 LL 钩子：铁律 40 已证 PS 前台时钩子整段收不到键，轮询才是主证据。
          *
          * ⛔ 只发边沿 + 按住时 2s 保活（一次按住约 2~3 帧），面板侧另有「重复 1 不重切」。
-         * ⛔ 必须判「前台是本进程」：Alt+Tab 切走时 Alt 仍按着，不判前台就会在切走那一瞬
+         * ⛔ 必须判「前台是本进程」：Alt+Tab 切走时键仍按着，不判前台就会在切走那一瞬
          *    把吸管按下去（用户回到 PS 时工具莫名其妙变了）。
          * ⛔ 只报电平，不做任何决策：是不是「工具模式 + 套索 + 总开关开」只有面板知道，
-         *    判定放在 utils/altHoldBus 的消费方（app.tsx）。这一侧保持哑管道。 */
+         *    判定放在 utils/altHoldBus 的消费方（app.tsx）。这一侧保持哑管道。
+         *
+         * ============================ 0x0210：键源从「物理 Alt」换成配置里的按住键
+         * 为什么换（用户报的冲突）：套索工具下按 Alt 是 PS 原生的「切多边形套索」，
+         *   和临时吸管抢同一个键，两者同时生效。⇒ 换成独立键，默认 `/`。
+         * ⛔ 键源**只认配置**（action == "altTool" 的 combo，由面板按工具模式装载/卸载）：
+         *    · 面板没装载 ⇒ vk=0 ⇒ 恒不按着，旧版行为在工具模式外完全不受影响；
+         *    · 用户可重录成任意组合键；含修饰键时要求修饰键一起按着才算按住。
+         * ⛔ 这条通路**永不吞键**（不进热键表、不注册 RegisterHotKey）：
+         *    临时吸管要的是「按住期间 PS 仍是吸管工具」，吞键只会让 PS 收不到点击。 */
         {
             static int   s_altPrev = -1;
+            static int   s_altPrevVk;
             static DWORD s_altLast;
+            int holdVk   = (int)g_khAltToolVk;
+            int holdMods = (int)g_khAltToolMods;
             int alt = 0;
-            if (GetAsyncKeyState(VK_MENU) & 0x8000) {
-                HWND fg = GetForegroundWindow();
-                DWORD pid = 0;
-                if (fg) GetWindowThreadProcessId(fg, &pid);
-                if (pid == GetCurrentProcessId()) alt = 1;
+            /* ⛔ 键源被卸载（工具模式关闭 / 改绑）时多清一次硬否决位：
+               那一刻 `alt` 必然回到 0，但 `wasAlt` 也已经是 0 ⇒ 下面的松开兜底
+               够不到。铁律 76 的第四处：漏了就是平滑整段失效且界面看不出原因。 */
+            if (holdVk != s_altPrevVk) {
+                s_altPrevVk = holdVk;
+                if (!holdVk) srv_alt_tool_clear("按住键已卸载");
+            }
+            if (holdVk) {
+                int ok = 1;
+                if ((holdMods & MOD_CONTROL) && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) ok = 0;
+                if (ok && (holdMods & MOD_ALT) && !(GetAsyncKeyState(VK_MENU) & 0x8000))  ok = 0;
+                if (ok && (holdMods & MOD_SHIFT) && !(GetAsyncKeyState(VK_SHIFT) & 0x8000)) ok = 0;
+                if (ok && (holdMods & MOD_WIN) &&
+                    !((GetAsyncKeyState(VK_LWIN) & 0x8000) || (GetAsyncKeyState(VK_RWIN) & 0x8000))) ok = 0;
+                if (ok && (GetAsyncKeyState(holdVk) & 0x8000)) {
+                    HWND fg = GetForegroundWindow();
+                    DWORD pid = 0;
+                    if (fg) GetWindowThreadProcessId(fg, &pid);
+                    if (pid == GetCurrentProcessId()) alt = 1;
+                }
             }
             DWORD nowAl = GetTickCount();
             int wasAlt = (s_altPrev == 1) ? 1 : 0;
@@ -1924,14 +2002,48 @@ static DWORD WINAPI kh_dispatch_thread(LPVOID param)
                 _snprintf(ja, sizeof(ja), "{\"type\":\"altHold\",\"v\":%d}", alt);
                 kh_broadcast(ja);
             }
-            /* 0x020A：Alt **物理松开** ⇒ 无条件清「临时吸管」硬否决位。
+            /* 0x020A：按住键**物理松开** ⇒ 无条件清「临时吸管」硬否决位。
                三处兜底的第二处（另两处：plug_revoke 面板不在位、services_start 服务重启）。
                ⛔ 为什么必须由这一侧兜：那一位是引擎的**硬否决**（不看心跳、不看闩锁），
                   而面板可能正卡在 await / 已经崩掉 / 被 reload ⇒ 发不出退出帧
                   ⇒ 残留 1 就是「套索平滑整段失效，界面上看不出原因」。
                ⛔ 只在**松开**时清：置 1 必须由面板判定（工具模式 ∧ 套索 ∧ 总开关），
-                  原生不知道这三条，抢着置 1 会把「套索下按 Alt 减选」的平滑也掐掉。 */
-            if (!alt && wasAlt) srv_alt_tool_clear("Alt 物理松开");
+                  原生不知道这三条，抢着置 1 会把「套索下按修饰键减选」的平滑也掐掉。 */
+            if (!alt && wasAlt) srv_alt_tool_clear("临时吸管键物理松开");
+        }
+
+        /* ================== 0x0211：物理 Alt = PS 原生「临时多边形套索」的否决位
+         *
+         * 用户报（三条，都是按住 Alt 画折线时）：
+         *   ① 折线落笔前移动光标确认落点时，预览原地闪烁 / 在几个临近位置来回抖；
+         *   ② 每次落笔后，落点上的 HUD 闪一下再消失；
+         *   ③ 按住 Alt 期间本来就不该有套索平滑的任何表现。
+         *
+         * 根因：多边形套索是 PS 的**临时模式** —— 工具还是 `lassoTool`（用户看到左上角
+         *   仍是普通套索图标），PS 既不派发工具变更通知、也不改 application.tool。
+         *   于是面板的工具闸门、1s 巡检、进程内 'slct' 回调**全都看不出任何变化**
+         *   ⇒ 引擎照常改写坐标 ⇒ PS 拿滞后的光标画折线预览（逐帧推 1~2px = 抖）；
+         *   每次点击那一批又被量成「一次落笔」⇒ HUD 亮一帧，无包后 250ms 到期才灭。
+         *
+         * ⛔ 为什么由这一侧置位、**不**经面板往返：面板要在 `await batchPlay` 里切工具/
+         *    读状态，那几十~几百毫秒它回不了帧 —— 正好就是「按下去第一帧还在抖」。
+         *    而「Alt 按着 ∧ 前台是本进程」是原生独有的**事实**，不依赖任何面板状态。
+         * ⛔ 为什么是**镜像电平**而不是边沿：边沿式一旦被别处清 0（服务重启 / 面板
+         *    不在位）就永远停在 0（铁律 76 第四条的反面教材）；镜像每拍自愈。
+         *    `srv_poly_alt_set` 内部先比对再写，稳态下零写入。
+         * ⛔ 只报电平、不做策略：不管当前是什么工具。Alt 在 PS 里就是「临时模式键」
+         *    （套索→折线、画笔→吸管），按住期间不会有正常的绘制笔迹，压住平滑与 HUD
+         *    在任何工具下都正确。
+         * ⛔ 不吞键、不注册热键、不改 `altHold`：Alt 的 PS 原生行为必须原封不动。 */
+        {
+            int altPhys = 0;
+            if (GetAsyncKeyState(VK_MENU) & 0x8000) {
+                HWND fg = GetForegroundWindow();
+                DWORD pid = 0;
+                if (fg) GetWindowThreadProcessId(fg, &pid);
+                if (pid == GetCurrentProcessId()) altPhys = 1;
+            }
+            srv_poly_alt_set(altPhys);
         }
 
         /* 0x013C：双路按键差分（每秒最多一条，仅有增量时打）。

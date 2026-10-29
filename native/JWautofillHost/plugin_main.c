@@ -82,10 +82,11 @@ const char* jw_log_dir(void);
 #define CFG_MAGIC    0x57414A57L      /* 'JWAW' */
 /* ⛔ 2026-10-17：48 → 56（新增 4 个进程内观测槽，见下面 I_MODALLVL 起的注释）；
    56 → 58（0x0115 新增 I_NOTIFYAGE / I_GATEOWNED，见下面注释）；
-   58 → 59（0x020A 新增 I_ALTTOOL：Alt 临时吸管的硬否决位）。
+   58 → 59（0x020A 新增 I_ALTTOOL：Alt 临时吸管的硬否决位）；
+   59 → 60（0x0211 新增 I_POLYALT：物理 Alt「临时多边形套索」的硬否决位）。
    两个文件（plugin_main.c / smooth_engine.c）的 CFG_NLONGS **必须同时改**：
    谁先建节谁定尺寸，不一致的一方 MapViewOfFile 会拿到错误的字节数。 */
-#define CFG_NLONGS   59
+#define CFG_NLONGS   60
 
 enum {
     I_MAGIC = 0, I_ENABLED, I_STRENGTH, I_FLAGS, I_SEQ, I_CMDSEQ, I_CMD, I_CMDACK,
@@ -114,8 +115,24 @@ enum {
                             （用户报：吸管按笔吸色时冒出 HUD、取色点被拉绳偏移）。
                          ⛔ 三处兜底清 0：Alt 物理松开（keyhook）、面板不在位
                             （plug_revoke）、服务停止（services_stop）。 */
+    /* ---- 0x0211：物理 Alt = PS 原生「临时多边形套索」的硬否决位 ---- */
+    I_POLYALT,        /* 1 = Alt 此刻**物理按着**且前台是本进程 ⇒ 引擎不改写、不出 HUD。
+                         ⛔ 为什么与 I_ALTTOOL 分成**两个槽**、而不是合成一个：
+                            那个位的语义是「面板的**意图**」（按住临时吸管键在取样），
+                            这个位的语义是「原生的**事实**」（Alt 真的按着）。
+                            写进同一个槽就是两个写者对打：Alt 松开时原生清 0，会顺手
+                            抹掉「面板还在吸管里」这一条；反之面板退出吸管清 0，会把
+                            「Alt 还按着」也抹掉 ⇒ 用户按住 Alt 画多边形时平滑又冒出来。
+                         ⛔ 由 keyhook 每 20ms **镜像电平**（不是边沿）：写之前先比对，
+                            只有变化才落盘。镜像式的好处是「谁在别处清过 0」都能在一拍
+                            内自愈（边沿式一旦被清掉就永远停在 0，见铁律 76 第四条）。
+                         ⛔ 为什么必须由原生置位、而不是照旧让面板判定：多边形套索是
+                            **PS 自己的临时模式**，它既不派发工具变更通知、也不改
+                            application.tool（用户看到左上角仍是普通套索）⇒ 面板手上
+                            没有任何信号能判出「此刻在折线里」。而按键电平是原生独有
+                            的事实。它的效果也只是「不改写、不画 HUD」，与面板意图正交。 */
 };
-typedef char cfg_fit_check[(I_ALTTOOL < CFG_NLONGS) ? 1 : -1];
+typedef char cfg_fit_check[(I_POLYALT < CFG_NLONGS) ? 1 : -1];
 
 static volatile LONG* g_cfg   = NULL;
 static HANDLE         g_cfgMap = NULL;
@@ -521,6 +538,41 @@ void srv_alt_tool_clear(const char* why)
     if (Rd(I_ALTTOOL) == 0) return;
     Wr(I_ALTTOOL, 0);
     log_line("alt", "临时吸管：清否决位（%s）", why ? why : "?");
+}
+
+/* ==================================================== 0x0211：物理 Alt 否决位
+ *
+ * 需求（用户）：套索工具下按住 Alt 会临时切到**多边形套索**（PS 原生行为）。此时
+ *   ① 光标预览会原地闪烁 / 在几个临近位置来回抖；
+ *   ② 每次点击落点后 HUD 会在落点上闪一下再消失；
+ *   ③ 平滑本身也不该生效。
+ *   要求：**按住 Alt 期间始终不出 HUD、不启用平滑**，松开后两者恢复。
+ *
+ * 根因：多边形套索是 PS 的**临时模式**，工具仍是 `lassoTool`（用户看到左上角还是
+ *   普通套索图标），所以面板的工具闸门、1s 巡检、'slct' 回调**全都看不出变化**
+ *   ⇒ 引擎照常改写坐标 ⇒ ① PS 按改写后的（滞后的）光标画折线预览，逐帧推 1~2px
+ *   就是抖动；② 点击那一批被当成「一次落笔」，接触判据成立 ⇒ HUD 亮一帧，
+ *   拍点无包后 250ms 保持窗到期又灭。
+ *
+ * ⛔ 判据只能是**按键电平 + 前台是本进程**：这是原生独有的、且是唯一的事实。
+ * ⛔ 因此这一位由原生**自己**置位（keyhook 每拍镜像），不经面板往返 —— 面板在
+ *    `await batchPlay` 时回不了帧，那种几十~几百毫秒的空档正好是「按下去第一帧还抖」。
+ * ⛔ 只镜像电平、不做任何策略：不管当前是什么工具。Alt 在 PS 里就是「临时模式键」
+ *    （套索→折线、画笔→吸管、抓手→…），按住期间本来就不会有正常的绘制笔迹。
+ * ⛔ 写之前先比对：`Wr` 是共享内存普通写，没必要每 20ms 都落一次。 */
+void srv_poly_alt_set(int on)
+{
+    if (!g_cfg) return;
+    LONG v = on ? 1 : 0;
+    LONG prev = Rd(I_POLYALT);
+    if (prev == v) return;
+    Wr(I_POLYALT, v);
+    /* ⛔ 只在「平滑开着」时留痕：Alt 在 PS 里被按下的频率很高（Alt+滚轮、Alt+拖拽
+       复制、Alt+点蒙版…），每次都写两行会把日志刷成噪音。位本身照写（关着也写），
+       只有日志受闸 —— 否则用户重开开关的第一笔就会继承一个陈旧值。 */
+    if (Rd(I_ENABLED))
+        log_line("alt", "临时多边形套索：物理 Alt %ld → %ld（引擎%s）",
+                 (long)prev, (long)v, v ? "停改写 / 停 HUD" : "恢复改写 / 恢复 HUD");
 }
 
 static void plug_revoke(void)
@@ -1270,6 +1322,10 @@ static void services_start(void)
         /* 0x020A：同理，临时吸管的硬否决位必须从「无」起步。
            ⛔ 漏了它，.8li Reload 会把上一轮的 1 继承下来 ⇒ 面板还没连上就整段不平滑。 */
         Wr(I_ALTTOOL, 0);
+        /* 0x0211：物理 Alt 的镜像位同理。⛔ 它在正常运行时由 keyhook 每拍自愈
+           （镜像式），但「Reload 那一刻用户正按着 Alt 且 keyhook 线程还没起来」
+           这段空窗没有人写它 ⇒ 必须在这里无条件清 0。 */
+        Wr(I_POLYALT, 0);
         Wr(I_HEARTBEAT, (LONG)GetTickCount());
         Wr(I_GATETS, (LONG)GetTickCount());
     }
@@ -1540,7 +1596,28 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
    ③ 新增隐藏去抖 `HUD_HIDE_DEBOUNCE_MS`(90ms)：任何单帧判据抖动都不许提交隐藏，
       否则一次 1~2 帧的抖动会被 180ms 重现去抖放大成可见的消失。
    见 smooth_engine.c 的 realOk / staleFrame / s_hudMissSince。协议无变化。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x020F; }
+/* 0x0210（2026-10-28，**临时吸管键与套索的 Alt 冲突**）：
+   用户报：工具模式下按 Alt 临时吸管，但套索工具下 Alt 本身就是 PS 原生的
+   「临时切多边形套索」⇒ 同一个键被两个功能抢。
+   ⇒ 临时吸管的键源从「物理 Alt」换成配置里的独立条目（action == "altTool"，
+   默认 `/`，可在功能快捷键子面板重录）。
+   实现要点（keyhook.c）：该条目**不进热键匹配表**（不吞键、不参与 RegisterHotKey，
+   否则键被摘走就测不到「按住」），只解析成 (vk, mods) 后由调度线程按电平轮询，
+   仍按边沿推 `altHold`（协议、消息名都不变）。未装载（工具模式关闭）= vk 0 ⇒ 恒不按着。
+   面板侧（HotkeyBridge）：新增 altTool 条目与装载/重录通路，随工具模式启停。
+   协议无变化（消息体与字段逐字不变，仅含义从「Alt 电平」变成「按住键电平」）。 */
+/* 0x0211（2026-10-28，**按住 Alt 画多边形套索时 HUD 抖 / 闪 / 平滑不该生效**）：
+   用户报（三条）：① 折线落笔前移动光标确认落点时，预览原地闪烁或在几个临近位置
+   来回抖；② 每次落笔后落点上 HUD 闪一下再消失；③ 按住 Alt 期间本就该没有平滑。
+   根因：多边形套索是 PS 的**临时模式**，工具仍是 lassoTool（左上角图标不变），
+   面板的工具闸门 / 巡检 / 'slct' 回调全都看不出变化 ⇒ 引擎照常改写坐标
+   ⇒ 滞后的光标被 PS 当折线预览逐帧画（抖），点击那一批又被当成一次落笔（HUD 闪）。
+   ⇒ 新增独立槽 `I_POLYALT`：物理 Alt 按着且前台是本进程 ⇒ 硬否决（不改写、不出 HUD）。
+   与 `I_ALTTOOL` **分槽**：那个是面板意图（按住取样键），这个是原生事实（Alt 真的按着），
+   合槽会互相清掉对方。置位由 keyhook 每 20ms 镜像电平（写前比对），不经面板往返
+   —— 面板 `await batchPlay` 期间回不了帧，那段空窗正是「按下去第一帧还在抖」。
+   ⛔ CFG_NLONGS 59 → 60（两个 C 文件同步改）；理由码新增 `RS_POLYALT`。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x0211; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {

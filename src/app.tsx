@@ -34,7 +34,8 @@ import { PanelStateManager } from './utils/PanelStateManager';
 import {
   connectHotkeyDaemon,
   isDaemonConnected, getMainToggleCombo, setMainToggleCombo, requestHotkeyRecording,
-  getSelectedBrushToolEnum, setFocusLassoActive, setFocusClearActive, normalizeToolId,
+  getSelectedBrushToolEnum, setFocusLassoActive, setFocusClearActive, setAltToolActive,
+  altToolComboHasAlt, normalizeToolId,
   onAltHold, selectToolByRef
 } from './hotkey/HotkeyBridge';
 import {
@@ -435,6 +436,10 @@ class App extends React.Component<AppProps, AppState> {
         // 同步「清除模式」键（默认 Shift+E）：工具模式开启时注册 → 按下即确保主开关开启
         // 并切换清除模式（主开关不会被关掉）。同样由本面板独占写入。
         setFocusClearActive(on);
+        // 同步「临时吸管」按住键（默认 /）：工具模式开启时装载 → 按住切吸管、松手切回套索。
+        // ⛔ 它必须跟着工具模式启停：键位在工具模式外没有意义，且裸键 ` / ` 在别的场景
+        //    （输入框、其它程序）被按住时不该让 .8li 做任何事。
+        setAltToolActive(on);
     }
 
     /**
@@ -2759,10 +2764,14 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     /**
-     * 0x0209：Alt 边沿 → 工具模式下的「临时吸管」。
+     * 0x0209 / 0x0210：临时吸管按住键的边沿 → 工具模式下的「临时吸管」。
      *
      * 需求（用户原话）：「仅当我处于工具模式下，当前工具是套索，且总开关是开时，
-     * 按 alt 键能够临时切换为吸管工具……松开 alt 后会自动变回套索工具，总开关是开的状态。」
+     * 按临时吸管键能够临时切换为吸管工具……松开后会自动变回套索工具，总开关是开的状态。」
+     *
+     * ⛔ 0x0210：键源从物理 Alt 换成配置里的独立键（默认 `/`）。
+     *    原因是套索工具下按 Alt 是 PS 原生的「临时切多边形套索」——同一个键被两个功能
+     *    抢，按下去两个都动。用户可在「功能快捷键」子面板重录该键（见 HotkeyBridge 的 altTool）。
      *
      * 三个前置条件缺一不可（按顺序判，最便宜的先判）：
      *   ① `isFocusMode()` —— 「自动关开关」+「自动切套索」同时勾选；
@@ -2774,11 +2783,11 @@ class App extends React.Component<AppProps, AppState> {
      * ⛔ 为什么切吸管期间要把 `altToolHold` 立起来：它挡掉「切到其它工具自动关」的
      *    两条通路（select 通知 + 1s 巡检）。吸管本来不在 AUTO_OFF_TOOLS 名单里，
      *    但这里不能依赖名单 —— 名单是产品决策、随时可能变，而本需求的契约是
-     *    「松开 Alt 后总开关必须是开的」。
+     *    「松开后总开关必须是开的」。
      * ⛔ 松开后还做一次「总开关兜底」：万一期间被别处关掉（旧版 .8li 的通知、
      *    别的面板写共享状态），这里把它拨回开 —— 这是需求字面要求的最终状态。
      * ⛔ 切回套索后**乐观喂一次闸门**：正常路径下工具闸门要等下一次巡检（≤1s）才回绿，
-     *    用户「松开 Alt 立刻接着画」会感觉平滑失效 1 秒。刚执行过 select lassoTool，
+     *    用户「松开后立刻接着画」会感觉平滑失效 1 秒。刚执行过 select lassoTool，
      *    事实成立，直接喂 1 是安全的（`applyToolGate` 内部在 slct 接管时会自动让位）。
      */
     private async handleAltHoldEdge(on: boolean) {
@@ -2789,7 +2798,7 @@ class App extends React.Component<AppProps, AppState> {
             const tool = this.lastKnownTool || this.state.smoothStatus?.pen?.psTool || null;
             if (!tool || !App.isLassoTool(tool)) return;
             this.altToolHold = true;
-            console.log('[临时吸管] Alt 按下 ⇒ 切吸管（工具模式 · 套索 · 总开关开）');
+            console.log('[临时吸管] 按住键按下 ⇒ 切吸管（工具模式 · 套索 · 总开关开）');
             /* —— 0x020A ①②：先竖否决位、再切工具 ——
                ⛔ 顺序不能反：切工具要过一次 batchPlay（几十~几百 ms），这段时间里
                   工具还是套索、工具闸门还是 1（'slct' 回调还没来），用户若立刻按笔
@@ -2798,8 +2807,11 @@ class App extends React.Component<AppProps, AppState> {
             setAltToolOverride(true);
             this.applyToolGate('eyedropperTool', true);
             /* 记下「进吸管之前」的背景色（同步属性读，不需要模态）。用途见
-               syncAltPickColor：PS 把 Alt+点击 解释为取背景色，我们事后搬到前景。 */
-            this.altPickBg = App.snapshotBackgroundColor();
+               syncAltPickColor：PS 把 Alt+点击 解释为取背景色，我们事后搬到前景。
+               ⛔ 0x0210：只有**触发键里含 Alt** 时才需要这一手。默认键 `/` 不含 Alt
+                  ⇒ PS 的吸管单击本来就取前景色，搬色纯属多余（还会插一次模态抢宿主
+                  主线程）。判据来自配置，不是猜的。 */
+            this.altPickBg = altToolComboHasAlt() ? App.snapshotBackgroundColor() : null;
             this.altPickUntil = 0;                 // 吸管期内不限时
             if (this.altPickClearTimer) {
                 clearTimeout(this.altPickClearTimer);
@@ -2810,19 +2822,20 @@ class App extends React.Component<AppProps, AppState> {
         }
         if (!this.altToolHold) return;
         this.altToolHold = false;
-        console.log('[临时吸管] Alt 松开 ⇒ 切回套索');
+        console.log('[临时吸管] 按住键松开 ⇒ 切回套索');
         await selectToolByRef('lassoTool');
         this.lastKnownTool = 'lassoTool';
         /* 乐观回绿：**必须 force** —— 平时 `applyToolGate` 在 'slct' 接管时直接 return，
-           而回调要等 PS 派发通知；不 force 的话用户松开 Alt 立刻画会卡 ~1 秒。 */
+           而回调要等 PS 派发通知；不 force 的话用户松开后立刻画会卡 ~1 秒。 */
         this.applyToolGate('lassoTool', true);
         /* ⛔ 否决位放在最后清：上面两步跑完之前，工具可能还是吸管，
            提前解否决就等于允许引擎改写「吸管上的笔」的坐标。 */
         setAltToolOverride(false);
-        /* ⛔⛔ 松开 Alt **不能**立刻丢掉背景色快照：最常见的操作是「吸色 → 顺手松开
-           Alt」——`hostBusy` 的 release 边沿可能比 altHold 的 release 晚到几十毫秒，
+        /* ⛔⛔ 松开**不能**立刻丢掉背景色快照：最常见的操作是「吸色 → 顺手松开」——
+           `hostBusy` 的 release 边沿可能比按住键的 release 边沿晚到几十毫秒，
            立刻清快照就等于把这一次取色丢掉（用户看到「背景色被改了、前景色没变」，
-           正是本轮要修的现象）。⇒ 给 800ms 宽限，最后一次取色仍能完成。 */
+           正是本轮要修的现象）。⇒ 给 800ms 宽限，最后一次取色仍能完成。
+           （键不含 Alt 时 altPickBg 恒为 null ⇒ syncAltPickColor 首行就返回。） */
         this.armAltPickExpiry();
         if (!this.state.isEnabled) {
             try {
@@ -2833,18 +2846,19 @@ class App extends React.Component<AppProps, AppState> {
         }
     }
 
-    /** 0x020A：松开 Alt 后给最后一次取色留一段宽限，到点清空快照。
+    /** 0x020A：松开临时吸管键后给最后一次取色留一段宽限，到点清空快照。
      *  ⛔ 取 400ms 而不是更长：这段窗口内若又触发一次「取色收尾」，会插一次模态。
      *     窗口越长，「用户已经回到套索开始画」被插一次模态的概率越大
      *     （那正是 0x0208 修的「模态抢占打断绘制」）。主流程里 `hostBusy` 的松开
-     *     边沿**早于** `altHold` 的松开边沿（抬笔必然在松 Alt 之前），所以正常路径
-     *     根本不依赖这段宽限，它只兜「先松 Alt 后抬笔」这种少数情况。 */
+     *     边沿**早于**按住键的松开边沿（抬笔必然在松键之前），所以正常路径
+     *     根本不依赖这段宽限，它只兜「先松键后抬笔」这种少数情况。
+     *  ⛔ 0x0210：键不含 Alt 时 `altPickBg` 从未被赋值 ⇒ 这段宽限空转，无害。 */
     private armAltPickExpiry() {
         this.altPickUntil = Date.now() + 400;
         if (this.altPickClearTimer) clearTimeout(this.altPickClearTimer);
         this.altPickClearTimer = setTimeout(() => {
             this.altPickClearTimer = null;
-            if (this.altToolHold) return;          // 期间又按下了 Alt ⇒ 保留
+            if (this.altToolHold) return;          // 期间又按住了 ⇒ 保留
             this.altPickBg = null;
             this.altPickUntil = 0;
         }, 400);
@@ -2880,7 +2894,8 @@ class App extends React.Component<AppProps, AppState> {
      *     代价是一次模态（~50ms）+ 吸色期间背景色会短暂变化；
      *     收益是**零键盘风险**，且失败可见（不动就什么都不改）。
      *
-     * ⛔ 只在 `altToolHold` 期间生效 ⇒ 正常吸管工具（不按 Alt）完全不受影响。
+     * ⛔ 只在 `altToolHold` 期间生效（**且**触发键含 Alt 才会拍过快照）⇒
+     *    正常吸管工具（不按临时吸管键）完全不受影响。
      *
      * ⛔⛔ 0x020B：**不能再拿「背景色变了没有」当「有没有取色」的判据**（用户报的 bug：
      *   前景色任意非白 + 背景色为白 + 吸白色 ⇒ 前景色毫无变化）。

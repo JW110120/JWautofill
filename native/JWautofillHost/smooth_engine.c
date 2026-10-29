@@ -135,9 +135,10 @@ typedef struct { int axMin; int axMax; u32 axUnits; u32 axResolution; } AXIS_T;
    56 → 58（0x0115 新增 I_NOTIFYAGE / I_GATEOWNED）；
    58 → 59（0x020A 新增 I_ALTTOOL：临时吸管的硬否决位）。
    0x020B **无槽位变化**（只给 hostBusy 消息加了 `btn` 字段，见 keyhook.c）⇒ 仍是 59。
+   59 → 60（0x0211 新增 I_POLYALT：物理 Alt「临时多边形套索」的硬否决位）。
    两个文件的 CFG_NLONGS **必须同步**：谁先建节谁定尺寸，不一致的一方会
    MapViewOfFile 到错误的字节数（不报错，只静默截断 —— 既有铁律区）。 */
-#define CFG_NLONGS    59
+#define CFG_NLONGS    60
 
 enum {
     CFG_I_MAGIC = 0,
@@ -241,6 +242,17 @@ enum {
           面板退出吸管 / 服务停止」置 0（三处收口，见 plugin_main.c 的
           srv_alt_tool_clear）。 */
     CFG_I_ALTTOOL,        /* 1 = 正处于「Alt 临时吸管」态（硬否决） */
+    /* ---- 0x0211：物理 Alt「临时多边形套索」的硬否决位 ----
+       ⛔ 与 CFG_I_ALTTOOL 是**两个位、语义不同**：
+          ALTTOOL = 面板的**意图**（用户按住临时吸管键在取样，面板判定的）；
+          POLYALT = 原生看到的**事实**（Alt 真的按着，且前台是本进程）。
+          合成一个位会互相清掉对方（见 plugin_main.c 的 I_POLYALT 注释）。
+       ⛔ 为什么必须有它（用户报：按住 Alt 画折线时预览抖/闪、HUD 在落点上闪现）：
+          多边形套索是 PS 的**临时模式**，工具仍是 lassoTool（左上角图标不变），
+          面板的工具闸门、巡检、'slct' 回调全都看不出变化 ⇒ 引擎照常改写坐标
+          ⇒ PS 拿滞后的光标画折线预览（逐帧 1~2px = 抖），点击那一批又被量成
+          「一次落笔」⇒ HUD 亮一帧。这一位由 keyhook 每 20ms 镜像物理电平。 */
+    CFG_I_POLYALT,        /* 1 = 物理 Alt 按着（PS 临时模式）⇒ 不改写、不出 HUD */
 };
 
 /* 受阻原因码（CFG_I_REASON 的值域；面板诊断条按它逐条说人话）。 */
@@ -262,6 +274,9 @@ enum {
     RS_ALTTOOL,           /* 0x020A：Alt 临时吸管态 —— 面板明示「此刻是吸管」，
                             引擎硬否决（不改写、不出 HUD）。⚠️ 这不是故障：
                             用户在取样，本来就不该有套索平滑的任何表现。 */
+    RS_POLYALT,           /* 0x0211：按住 Alt（PS 临时多边形套索）—— 原生看到的**事实**，
+                            引擎硬否决（不改写、不出 HUD）。同样是「本来就不该有」，
+                            不是故障：用户在折线模式里逐点确认落点。 */
 };
 
 /* 原因码 → 短名（只给日志用；面板侧有自己的人话文案表，两者都按上面这行顺序写）。 */
@@ -279,6 +294,7 @@ static const char* rs_name(LONG r)
         case RS_NOCTX:       return "无上下文";
         case RS_CTXGONE:     return "PS上下文已关闭";
         case RS_ALTTOOL:     return "临时吸管";
+        case RS_POLYALT:     return "临时多边形";
         default:             return "?";
     }
 }
@@ -286,7 +302,7 @@ static const char* rs_name(LONG r)
 /* ⛔⛔ 这张槽位表是 C 与 C#（Program.cs 的 PenHook）**两处手写**的，错位不会报错、
    只会让参数静默失效（实测过的坑）。所以：① 用编译期断言守住「槽数不超映射」；
    ② 任何一侧增删槽，另一侧必须同步，且 C# 的 EnsureInit 里有运行时兜底校验。 */
-typedef char cfg_slot_fit_check[(CFG_NLONGS >= CFG_I_ALTTOOL + 1) ? 1 : -1];
+typedef char cfg_slot_fit_check[(CFG_NLONGS >= CFG_I_POLYALT + 1) ? 1 : -1];
 
 static volatile LONG* g_cfg    = NULL;
 static HANDLE         g_cfgMap = NULL;
@@ -913,6 +929,15 @@ static int tool_edit_allowed(void)
           工具、事实是非套索」，而这里是「面板明示此刻在取样」——两者来源不同，
           混在一起会让『心跳过期』的分支逻辑被误伤。 */
     if (g_cfg[CFG_I_ALTTOOL]) return 0;
+    /* ⛔⛔ 0x0211：物理 Alt 按着 = PS 的**临时模式**（套索→多边形套索、画笔→吸管），
+       同样放在所有推理之前硬否决。用户报的三条都由这一个位收口：
+         ① 折线落笔前移动光标时预览原地抖 —— 因为引擎还在把光标改写成滞后的平滑点，
+            PS 拿它当折线预览逐帧画；
+         ② 每次点击落点后 HUD 在落点上闪一帧 —— 点击那一批被量成「一次落笔」；
+         ③ 按住期间本来就不该有平滑。
+       ⛔ 与上一行的 ALTTOOL 分开判、不合并成一个 `||`：两条来源不同（面板意图 /
+          原生事实），合并后日志与原因码就分不清是谁压住的；分开判的开销是零。 */
+    if (g_cfg[CFG_I_POLYALT]) return 0;
     if (tool_gate_sure_not_lasso()) return 0;
     if (g_strokeGate == 1) return 1;      /* 一笔之中：心跳抖动不打断（见上方长注释） */
     return tool_gate_ok();
@@ -3556,6 +3581,7 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
            所以这里报出的原因与上面的裁决**必然一致**。 */
         if (!g_cfg[CFG_I_ENABLED]) InterlockedExchange(&g_reason, RS_OFF);
         else if (g_cfg[CFG_I_ALTTOOL]) InterlockedExchange(&g_reason, RS_ALTTOOL);
+        else if (g_cfg[CFG_I_POLYALT]) InterlockedExchange(&g_reason, RS_POLYALT);
         else if (!tg)              InterlockedExchange(&g_reason, (LONG)tool_gate_reason());
         else                       InterlockedExchange(&g_reason, RS_OFF);   /* 防御：理论到不了 */
         snapshot_only((u8*)buf, S, n, ox_, oy_);
@@ -6701,7 +6727,11 @@ static DWORD WINAPI hud_thread(LPVOID param)
            ⛔ 为什么这一项必须独立于 gateOk：g_toolOk 由包路径写，而吸管点击那一批
               可能正好落在 useGate 由 1→0 的边界上（旧值还是 1）；只靠 g_toolOk
               会让 HUD 在吸管的第一笔闪一下。这里是纯内存读，零成本。 */
-        if (g_cfg && g_cfg[CFG_I_ALTTOOL]) gateOk = 0;
+        if (g_cfg && (g_cfg[CFG_I_ALTTOOL] || g_cfg[CFG_I_POLYALT])) gateOk = 0;
+        /* 0x0211：`CFG_I_POLYALT` 也必须在这里单独压一次（而不是只靠 tool_edit_allowed）：
+           渲染线程用的是 `g_toolOk && g_penDown` 这两个由**包路径**写的值，而包路径在
+           标定失效时会提前 return（永不更新）—— 那两位可能冻在 1。物理 Alt 是纯内存
+           事实，与 `g_toolOk` 的链路完全无关 ⇒ 在这里直接压。 */
         /* 0x0209：`!tool_gate_sure_not_lasso()` 这一项是**独立兜底**，不是重复判断。
            `g_toolOk` 由包路径写，而包路径在标定失效时会**提前 return**（永不更新）
            ⇒ 那个值会一直冻结在上一次成功改写时的 1。用户报的「切到涂抹、HUD 还在」，
@@ -7079,13 +7109,14 @@ static DWORD WINAPI hud_thread(LPVOID param)
                 logf("# [hud] 隐藏: 门槛断满 %ldms（其间抑制抖动 %d 帧）"
                      " ck=%d cv=%d gate=%d(toolOk=%ld penDown=%ld) stroke=%d draw=%d"
                      " fg=%d ctU=%ld dead=%ld rope=%d real=%ldms active=%d(t=%ldms)"
-                     " altTool=%ld\n",
+                     " altTool=%ld poly=%ld\n",
                      (long)(s_hudMissSince ? (DWORD)(now - s_hudMissSince) : 0),
                      s_hudMissHold, cheapOk, canvasOk, gateOk,
                      (long)g_toolOk, (long)g_penDown, strokeOk, drawOk,
                      fgOk, (long)g_ctUnknown, (long)deadNow, ropeMode,
                      (long)realAgeHud, activeNow, (long)pktAge,
-                     (long)(g_cfg ? g_cfg[CFG_I_ALTTOOL] : -1));
+                     (long)(g_cfg ? g_cfg[CFG_I_ALTTOOL] : -1),
+                     (long)(g_cfg ? g_cfg[CFG_I_POLYALT] : -1));
                 s_hudMissHold = 0;
             }
             s_hudMissSince = 0;
@@ -7157,10 +7188,11 @@ static DWORD WINAPI hud_thread(LPVOID param)
         if (!s_hudVisible) {
             s_hudVisible = 1;
             logf("# [hud] 显示: stroke=%d penDown=%ld toolOk=%ld roi=(%ld,%ld) "
-                 "altTool=%ld t=%ldms real=%ldms\n",
+                 "altTool=%ld poly=%ld t=%ldms real=%ldms\n",
                  strokeOk, (long)g_penDown, (long)g_toolOk,
                  (long)g_snOutX, (long)g_snOutY,
                  (long)(g_cfg ? g_cfg[CFG_I_ALTTOOL] : -1),
+                 (long)(g_cfg ? g_cfg[CFG_I_POLYALT] : -1),
                  (long)pktAge, (long)realAgeHud);
         }
 

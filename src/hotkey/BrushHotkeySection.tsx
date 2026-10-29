@@ -434,10 +434,12 @@ export default function BrushHotkeySection() {
     anchorIndexRef.current = idx;
   };
 
-  // 条目在冲突提示里的显示名：主开关 / 功能快捷键 / 笔刷统一在这里翻译
+  // 条目在冲突提示里的显示名：主开关 / 工具模式键 / 功能快捷键 / 笔刷统一在这里翻译
   const entryDisplayName = (e: HotkeyEntry): string => {
     if (e.action === 'toggleMain') return '选区填充开关';
     if (e.action === 'focusLasso') return '套索工具';
+    if (e.action === 'focusClear') return '清除模式';
+    if (e.action === 'altTool') return '临时吸管';
     if (e.action === 'runFunc') return getFuncHotkeyLabel(e.brush || '');
     return e.brush || '';
   };
