@@ -3630,6 +3630,31 @@ static int poly_snap_enabled(void)
     return (g_cfg && g_cfg[CFG_I_POLYSNAP]) ? 1 : 0;
 }
 
+/** 吸附链专用的工具闸门：**值优先**，心跳新鲜度只作兜底。
+ *
+ *  ⛔⛔ 0x0223 的根因（用户实测「只开吸附经常长时间失效，两者都开才稳」）：
+ *     吸附链原先把 `tool_gate_ok()`（**要求 GATETS 新鲜**）当成工具判据，而闸门的
+ *     新鲜度靠两件事维持 ——
+ *       ① 面板 `pollSmoothToolGate` 的 1s 巡检（`syncSmoothToolWatch` 只在
+ *          **平滑开着**时才建这条定时器）；
+ *       ② 面板 `setSmoothToolGate` 的 1.8s 心跳（开头 `if (!penOn) return;`）。
+ *     ⇒ 平滑一关，两条全停：`I_GATETS` 停在最后一次读数上，3s 后过期 ⇒
+ *       `tool_gate_ok()` 恒 0 ⇒ **包路径整段死掉**（`poly_snap_run` 第一个判据就是它）。
+ *       包路径死了，`s_snapOn` 就建不起来，`poly_pkt_click`（接触钉住）跟着一起死 ⇒
+ *       用户看到的就是「吸附长时间不触发」。
+ *     而 `poly_snap_gcp` 早就用的是「值优先」（0x021A 为会话锁写的），所以那时
+ *       光标/消息两条路还勉强在跑 —— 这正好解释了「有时能吸、大部分时间不吸」的断续。
+ *  ⛔ 语义依据是铁律 71：**心跳过期只说明面板这一阵没刷新，不是「工具换走了」的证据**。
+ *     过期只该否决「本拍改写」，不该把整条链判死。
+ *  ⛔ 两者仍是「或」而不是只看值：`GATETS==0`（面板从未写过）时 `tool_gate_ok()`
+ *     直接放行，这条兜底必须保留，否则「.8li 刚装、面板还没连上」时吸附一次都不生效。 */
+static int poly_tool_ok(void)
+{
+    if (!g_cfg) return 0;
+    if (g_cfg[CFG_I_TOOLGATE] == 1) return 1;   /* 值优先：最后一次读到的是套索 */
+    return tool_gate_ok();                      /* 未写过(ts==0) ⇒ 放行；写过且非套索 ⇒ 拒 */
+}
+
 /* 返回 >=0 = 本批已被接管（值 = 实际改写的包数）；-1 = 不接管，走正常路径。 */
 static int poly_hold_run(u8* buf, int S, int n, int ox_, int oy_)
 {
@@ -3819,8 +3844,13 @@ static volatile LONG g_pkPinOn;
  *    松开 Alt 后的平滑从吸附位置起步 ⇒ 选区边缘突然跳一段。
  * ⛔ 与 0x0214 的冻结分工：冻结优先（冻结期间整批写圆心），解冻后本函数接管。
  */
-#define POLY_SNAP_TOL_DEG  10.0     /* 与最近方向的偏差小于它才吸附 */
-#define POLY_SNAP_TAN      0.1763   /* tan(10°) */
+/* 0x0223：容差 10° → **5°**（用户原话「目前吸附范围比较大，我希望只有 ±5° 的范围才吸附」）。
+   ⛔ 两个常量必须**同时**改：`POLY_SNAP_TAN` 是实际判据，`POLY_SNAP_TOL_DEG` 只进日志
+      与注释文字。只改前者 ⇒ 日志写着 10° 而实际吸 5°，排障时会被误导。
+   ⚠️ tan(5°)=0.087489。这个值比原来小一半多，容差边缘的命中率明显下降 ——
+      这是用户要的观感（0x0215 的 10° 在这台机器上被评价为「范围比较大」）。 */
+#define POLY_SNAP_TOL_DEG  5.0      /* 与最近方向的偏差小于它才吸附 */
+#define POLY_SNAP_TAN      0.087489 /* tan(5°) */
 #define POLY_SNAP_MIN_PX   6.0      /* 离锚点太近不吸附（防锚点附近抖动乱跳） */
 #define POLY_SNAP_INV_SQRT2 0.70710678118654752
 #define POLY_PROBE_PX      180      /* 0x0217 通道探针：把返回值整体推走这么多屏幕像素 */
@@ -3882,7 +3912,9 @@ static int poly_snap_run(u8* buf, int S, int n, int ox_, int oy_)
     /* 0x0221：包路径吸附与平滑总开关解耦（根因见 det_WTPacketsGet 的 `en || polyOn`）。
        ⛔ `tool_gate_ok()` 保留：吸附是「在套索的折线上对齐方向」，工具不是套索时
           按 Alt 是 PS 的临时吸管，改坐标会直接毁掉取色。 */
-    if (!g_cfg || !g_cfg[CFG_I_POLYALT] || !tool_gate_ok() || !poly_snap_enabled()) {
+    /* 0x0223：工具闸门换成 `poly_tool_ok()`（值优先）—— 平滑关着时闸门心跳会停，
+       `tool_gate_ok()` 3s 后就恒 0，包路径整段死掉（根因见 poly_tool_ok 的注释）。 */
+    if (!g_cfg || !g_cfg[CFG_I_POLYALT] || !poly_tool_ok() || !poly_snap_enabled()) {
         s_snapOn = 0; s_snapBtn = 0;
         return -1;
     }
@@ -5462,7 +5494,8 @@ static int poly_snap_gcp(LPPOINT p, int btn, int owner)
        不说明工具换走了。⛔ 铁律 71/72：过期不许当换工具的证据。
        仍然只在「会话内确认过套索」之后才信任陈旧值 —— 会话一开始就不是套索（画笔下
        按 Alt 是 PS 的临时吸管）⇒ 永不吸附，改坐标会直接毁掉取色。 */
-    if (g_cfg[CFG_I_TOOLGATE] == 1 || tool_gate_ok()) s_pgToolSeen = 1;
+    /* 0x0223：与包路径共用同一个判据（`poly_tool_ok()`），两条路的闸门结论永远同源。 */
+    if (poly_tool_ok()) s_pgToolSeen = 1;
     else s_pgToolSeen = 0;
     if (!s_pgToolSeen) return 0;
     if (view_nav_down()) return 0;                /* 视图导航：本拍不改写，锚点保留 */

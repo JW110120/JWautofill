@@ -22,7 +22,9 @@
  *          speedAdaptive?, hud?, hudColor?, toolGate?}；{type:"smoothStatus"}（能力探针，
  *          必回一帧 smoothState）；{type:"shutdown"} 仅断连用（本模块不能退出 PS，忽略）；
  *          {type:"altTool", on:0|1}（0x020A：Alt 临时吸管的硬否决位）；
- *          {type:"polySnap", on:0|1}（0x0220：多边形吸附总开关 → I_POLYSNAP）。
+ *          {type:"polySnap", on:0|1}（0x0220：多边形吸附总开关 → I_POLYSNAP）；
+ *          {type:"toolGate", gate:0|1|2, gateAge?}（0x0223：**只推工具闸门**，
+ *          平滑关着时由多边形吸附单独驱动，落 I_TOOLGATE + I_GATETS）。
  *   出站：{"type":"smoothState","protocol":"2.0","pen":{...}}，pen 字段集 =
  *          Program.cs PenHook.Snapshot() 逐项（含 snAge/ctOff/ctElig/pxPerAxis…）。
  *
@@ -963,6 +965,37 @@ static void handle_message(const char* js)
                      on ? "吸附/冻结/参考线可用" : "全部停用");
         return;
     }
+    if (_stricmp(type, "toolGate") == 0) {
+        /* 0x0223：**只推工具闸门**（面板 → 引擎；落 I_TOOLGATE + I_GATETS）。
+           ⛔⛔ 为什么必须有一条独立消息（用户实测「只开吸附时吸附长时间失效」）：
+              面板侧两条闸门来源都绑在「平滑开着」上 ——
+                · `pollSmoothToolGate` 的 1s 巡检（`syncSmoothToolWatch` 只在平滑开时建表）；
+                · `setSmoothToolGate` 的 1.8s 心跳（开头 `if (!penOn) return;`）。
+              平滑一关，`I_GATETS` 就停在最后一次读数上，3s 后过期 ⇒ 引擎的
+              `tool_gate_ok()` 恒 0 ⇒ **包路径吸附整段死掉**（`poly_snap_run` 首判据）。
+              而多边形吸附**不依赖**平滑总开关，它同样要知道「此刻工具是套索」。
+           ⛔ 不能拿 `penSmooth` 顶替：那条消息的 `on` 就是平滑总开关，用它在平滑关闭时
+              发心跳会把 `I_ENABLED` 反复写 0/1（`commit()` 还会发 cmd=2 卸钩）。
+           ⛔ 让位规则与 `write_params()` 完全一致：`pstool_owns()` 时值与戳都由
+              ps_tool.c 独占写，这里一个字节都不碰（否则两侧互相覆盖）。
+           ⚠️ 用 json_num 判值（铁律 59：json_bool 只认 true/false，数字会静默失败）。 */
+        double v = 0;
+        if (json_num(js, "gate", &v)) g_pen.toolGate = clampi(roundi(v), 0, 2);
+        if (json_num(js, "gateAge", &v)) g_pen.gateAge = clampi(roundi(v), 0, 60000);
+        if (g_cfg && !pstool_owns()) {
+            LONG prev = Rd(I_TOOLGATE);
+            Wr(I_TOOLGATE, g_pen.toolGate);
+            LONG age = (LONG)g_pen.gateAge;
+            if (age < 0) age = 0;
+            if (age > 60000) age = 60000;
+            Wr(I_GATETS, (LONG)GetTickCount() - age);
+            /* 变化门留痕：吸附「关着平滑就不吸」这类故障，判据全在这里。 */
+            if (prev != (LONG)g_pen.toolGate)
+                log_line("poly", "工具闸门（仅闸门通道）：%ld → %ld（age=%ldms）",
+                         (long)prev, (long)g_pen.toolGate, (long)age);
+        }
+        return;
+    }
     if (_stricmp(type, "penSmooth") == 0) {
         double v; int b;        if (json_num(js, "mode", &v))         g_pen.mode        = clampi(roundi(v), 0, 2);
         if (json_num(js, "strength", &v))     g_pen.strength    = clampi(roundi(v), 0, 100);
@@ -1891,7 +1924,16 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
      ③ Alt 期间的隐藏**不写** `s_hudHideAt`（那不是抖动），否则「松开 Alt 立刻起笔」
         的第一笔圆会白等 180ms 重现去抖。
    无共享槽位变化（`CFG_NLONGS` 仍 61）。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x0222; }
+
+/* 0x0223：多边形吸附**不再借用平滑的工具闸门供给**（用户实测「只开吸附时长时间失效，
+   两者都开才稳」）。三处改动：
+     ① 新增入站消息 `{"type":"toolGate","gate":0|1|2,"gateAge"?}` —— 平滑关着时面板
+        用它单独推闸门（`pstool_owns()` 时让位，与 write_params 同规则）；
+     ② 引擎 `poly_tool_ok()`：值优先（`I_TOOLGATE==1` 即放行），心跳过期只作兜底；
+        包路径 `poly_snap_run` 与光标路径 `poly_snap_gcp` 共用这一个判据；
+     ③ 吸附容差 10° → **5°**（用户要求「只有 ±5° 才吸附」），两个常量同时改。
+   无共享槽位变化（`CFG_NLONGS` 仍 61）。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x0223; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {

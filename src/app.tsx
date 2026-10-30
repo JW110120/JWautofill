@@ -1365,7 +1365,16 @@ class App extends React.Component<AppProps, AppState> {
         //    静默期闸门是错的，纠正速度优先于省预算；省预算的收益只在 'slct'
         //    真的在投递的那段时间拿到，那已经足够。
         const gateOwned = this.inProcGateOwned();
-        const need = smoothActive && !autoOffActive && !gateOwned;
+        /* ⛔⛔ 0x0223：**多边形吸附也吃工具闸门，而它不依赖平滑总开关**。
+           旧版 `need` 只看 `smoothActive` ⇒ 平滑关着时这条 1s 巡检不建表，
+           而 `setSmoothToolGate` 的心跳也绑在 penOn 上 ⇒ 两条来源同时停 ⇒
+           原生 `I_GATETS` 3s 后过期 ⇒ `poly_snap_run` 的 `tool_gate_ok()` 恒 0 ⇒
+           **包路径吸附整段死掉**（连 `poly_pkt_click` 的接触钉住一起），
+           用户实测就是「只开吸附时经常长时间不吸、两者都开才稳」。
+           ⚠️ 代价：吸附开着而平滑关着时多一条 1s 的 batchPlay 工具读 —— 与平滑
+              自己开着时完全同构的一条读，不新增第二条定时器（互斥复用同一条）。 */
+        const snapActive = this.state.smoothStatus.connected && this.state.polySnapEnabled;
+        const need = (smoothActive || snapActive) && !autoOffActive && !gateOwned;
         if (need && !this.smoothToolTimer) {
             this.smoothToolTimer = setInterval(() => { void this.pollSmoothToolGate(); }, App.TOOL_WATCH_INTERVAL_MS);
             void this.pollSmoothToolGate();   /* ⛔ 建表时先跑一次：让位瞬间不要空等 1s */
@@ -1875,6 +1884,9 @@ class App extends React.Component<AppProps, AppState> {
         const next = !this.state.polySnapEnabled;
         this.setState({ polySnapEnabled: next });
         try { setPolySnapEnabled(next); } catch { /* ignore */ }
+        /* 0x0223：吸附开关决定「工具闸门巡检要不要自建」—— 平滑关着时它是闸门的
+           **唯一**来源，所以必须在这里立刻启停，不能等下一帧状态回报。 */
+        this.syncSmoothToolWatch();
     }
 
     /** 描边色板：打开 PS 颜色选择器，选完写回 strokeColor（前景色的保存/还原由 pickColorWithInitial 负责） */

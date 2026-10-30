@@ -154,3 +154,49 @@ if (!polyAltHold) s_hudHideAt = now;        /* 隐藏边沿 */
 `# [hud] 显示:` 行末的 `hint=%d` 是唯一证据：
 - `hint=1 poly=1` ⇒ 正常（参考线）；
 - `hint=0 poly=1` ⇒ **不该出现**（本版起不可能；出现即回归）。
+
+---
+
+## 0x0223：吸附链自备工具闸门 + 容差 10°→5°（铁律 110）
+
+> 用户原话：「① 仅开启吸附容易长时间失效，只有吸附和平滑同时开启后才比较稳定触发吸附。
+> ② 目前吸附范围比较大，我希望只有 ±5° 的范围才吸附。」
+
+### ① 为什么「只开吸附就不吸」
+
+**吸附链仍借了平滑的三样东西，前两样就是这次的主犯：**
+
+| 借的东西 | 平滑关着时的实际状态 | 后果 |
+|---|---|---|
+| `poly_snap_run` 用 `tool_gate_ok()`（**要求 GATETS 新鲜**） | 面板两条闸门来源都绑 `penOn`：`syncSmoothToolWatch` 的 1s 巡检只在平滑开着时建表；`setSmoothToolGate` 开头 `if (!penOn) return` | 闸门值**冻结**在最后一次读数（常是 0 或 2=未知），包路径**整段死** |
+| 包路径一死 ⇒ `s_snapOn` 建不起来 | `poly_pkt_click` 的进门判据是 `s_pgOn && s_snapOn` | **接触钉住**一起死 ⇒ 预览吸了、落点没吸（用户说「不吸了」） |
+| 面板巡检 | 平滑关闭 ⇒ 0 次工具读 | 闸门值再也没有纠正机会 ⇒ **长时间**不恢复 |
+
+`poly_snap_gcp` 早就用「值优先」，所以在闸门值为 1 时它还能跑 —— 正是「有时能吸、
+大部分时间不吸」的断续来源。
+
+### 改法（三处，跨端）
+
+1. **原生新消息** `{"type":"toolGate","gate":0|1|2,"gateAge"?}`：
+   只写 `I_TOOLGATE` + `I_GATETS`，不碰 `I_ENABLED`；`pstool_owns()` 时整段让位
+   （与 `write_params()` 同规则）。
+   ⛔ **不能拿 `penSmooth` 顶替**：那条消息的 `on` 就是平滑总开关，
+   平滑关着时发心跳会把 `I_ENABLED` 反复写 0（`commit()` 还会发 cmd=2 卸钩）。
+2. **引擎** `poly_tool_ok()`：`I_TOOLGATE==1` 即放行，否则退回 `tool_gate_ok()`
+   （`GATETS==0` 时它放行，保住「.8li 刚装、面板没连」的场景）。包/光标两条路共用。
+   ⛔ 依据铁律 71：心跳过期只说明面板没刷新，**不是换工具的证据**。
+3. **面板** `syncSmoothToolWatch` 的 `need` 加 `snapActive`
+   （`connected && state.polySnapEnabled`）⇒ 吸附开着就跑 1s 巡检（与平滑开着时同一条，
+   不新增第二条定时器）；`togglePolySnap()` 里立刻调一次，不等状态回报。
+
+### ② 容差 5°
+
+```c
+#define POLY_SNAP_TOL_DEG  5.0
+#define POLY_SNAP_TAN      0.087489   /* tan(5°) */
+```
+
+⛔ 两个常量**必须同时改**：判据用的是 `POLY_SNAP_TAN`，`POLY_SNAP_TOL_DEG` 只进日志 ——
+只改前者会让日志写 10° 而实际吸 5°，排障被误导。
+`poly_proj` 的三个比值（水平 `|dy|/|dx|`、垂直 `|dx|/|dy|`、45° `||dy|−|dx||/(|dx|+|dy|)`）
+都是 tan 形式，所以只换阈值即可，算法零改动。面板文案 `polySnapRow` 同步改成 5 度。

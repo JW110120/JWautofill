@@ -687,7 +687,28 @@ export function setSmoothToolGate(g: SmoothToolGate): void {
   const now = Date.now();
   const changed = toolGate !== g;
   if (changed) toolGate = g;
-  if (!penOn) return;              // 关着时不必发；开启时会整包带上
+  /* ⛔⛔ 0x0223：**平滑关着时也必须把闸门推给原生**（旧版这里直接 `return`）。
+     起因（用户实测）：「只开多边形吸附时，吸附经常长时间失效；只有吸附和平滑同时开着才稳」。
+     根因链：吸附链要「此刻工具是套索」，而原生 `poly_snap_run` 的判据是
+     `tool_gate_ok()`（**要求 GATETS 新鲜**），GATETS 的新鲜度只有两条来源 ——
+       · 本函数（旧版 `if (!penOn) return;` ⇒ 平滑一关就停）；
+       · app.tsx 的 `pollSmoothToolGate`（`syncSmoothToolWatch` 只在平滑开时建定时器）。
+     两条都停 ⇒ 3s 后 GATETS 过期 ⇒ 包路径吸附整段死 ⇒ 接触钉住（落点吸到 A）
+     也跟着死 ⇒ 用户看到「不吸了」，而且一直不恢复。
+     ⇒ 平滑关着时改发**只带闸门**的消息（`toolGate`），它不碰 `I_ENABLED`；
+       绝不能拿 `penSmooth` 顶替 —— 那条消息的 `on` 就是平滑总开关。 */
+  if (!penOn) {
+    if (!changed && (now - lastGateSentAt) < GATE_REFRESH_MS) return;
+    lastGateSentAt = now;
+    send({
+      type: 'toolGate',
+      gate: toolGate,
+      gateAge: lastToolReadAt > 0
+        ? Math.round(Math.max(0, Math.min(60000, Date.now() - lastToolReadAt)))
+        : 0,
+    });
+    return;
+  }
   if (!changed && (now - lastGateSentAt) < GATE_REFRESH_MS) return;
   // ⛔ 心跳必须**绕过线格式签名去重**：内容完全一样，签名必然相同，
   //    走 sendParams 会被它直接吞掉 ⇒ 心跳形同不存在（这正是最容易被写错的一步）。
