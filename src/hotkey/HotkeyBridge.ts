@@ -595,6 +595,10 @@ export function connectHotkeyDaemon(): () => void {
           // .8li 形态：拉一次布防状态，让面板开关对齐服务真实状态
           // （g_khArmed 默认 true，但迁移/修复后可能被改过，不能想当然）。
           try { ws.send(JSON.stringify({ type: 'hotkeyStatus' })); } catch { /* ignore */ }
+          /* 0x0224：重放「混合模式热键按工具让位」位。原生侧在**新客户端接手**时
+             会把这一位归零（keyhook.c 的 kh_cli_add），而面板的结论往往没变
+             ⇒ 不重放就会在「面板重载后仍站在画笔上」时被吞键（用户报的正是这个）。 */
+          sendBlendYieldFrame();
           // 本地持久化对齐：PS 重启后 .8li 默认布防（keyhook.c g_khArmed 初值 1），
           // 用户上次的「关闭」只活在面板落盘值里 ⇒ 补发一次撤防把它恢复出来。
           // persisted 为 null（从未落盘）说明用户没表过态，默认布防即真相，不动；
@@ -1224,6 +1228,39 @@ export function setBlendHotkeyActive(on: boolean): boolean {
   return pushConfig(next);
 }
 
+// ===== 混合模式热键「按工具让位」（0x0224，2026-10-30 新增）=====
+// 与上面的开关**完全分离**：开关是用户意图（落盘、进配置），让位位是瞬时事实
+// （只在原生内存里，进程重启即消失、面板建连后由 blendGuard 重放）。
+// ⛔⛔ 别用 setBlendHotkeyActive(false) 冒充「临时关」：配置会落盘（用户在画笔工具下
+//    关掉面板就永久变关）、每次切工具都要整表重建、且配置路径未对齐时 pushConfig
+//    根本不会发送 —— 那条路拦不住键。详见 keyhook.c 的 g_khBlendYield 注释。
+let blendYieldWanted = false;
+
+/** 下发「按工具让位」位（`on=true` ⇒ 原生不吞混合模式键，交回 PS）。 */
+export function setBlendHotkeyYield(on: boolean): void {
+  blendYieldWanted = !!on;
+  sendBlendYieldFrame();
+}
+
+/** 当前已下发的让位位（排障/重放用）。 */
+export function getBlendHotkeyYield(): boolean {
+  return blendYieldWanted;
+}
+
+/** 强制重发当前让位位：原生侧在新客户端接手/卸载时会把这一位归零。 */
+export function replayBlendHotkeyYield(): void {
+  sendBlendYieldFrame();
+}
+
+function sendBlendYieldFrame(): void {
+  try {
+    if (currentWs && currentWs.readyState === (currentWs.OPEN ?? 1)) {
+      // ⛔ 必须发 JSON 布尔：原生 json_bool 只认 true/false（发 1/0 会被当成 false）。
+      currentWs.send(JSON.stringify({ type: 'blendYield', on: blendYieldWanted }));
+    }
+  } catch { /* 未连接：连上时 onopen 会重放 */ }
+}
+
 /**
  * 重新指定主开关快捷键。combo 传 '' 表示解绑。
  * 若该组合键已被某个笔刷热键占用，会覆盖掉那条笔刷映射（主开关优先级更高）。
@@ -1544,11 +1581,12 @@ const TOOL_TYPE_CN: Record<string, string> = {
   patchTool: '修补',
   redEyeTool: '红眼工具',
   historyBrushTool: '历史记录画笔',
-  artHistoryBrushTool: '历史记录艺术画笔',
+  // ⛔ 历史记录艺术画笔的真实 ID 是 artBrushTool（2026-10-30 Alchemist 现场核对）；
+  //    旧表里写的 artHistoryBrushTool 是凭字面猜的，PS 从不返回它 ⇒ 那条分支永远走不到。
+  artBrushTool: '历史记录艺术画笔',
   colorReplacementBrushTool: '颜色替换',
   blurTool: '模糊',
   sharpenTool: '锐化',
-  artBrushTool: '艺术画笔',
 };
 
 /**

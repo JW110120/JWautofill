@@ -1933,7 +1933,20 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
         包路径 `poly_snap_run` 与光标路径 `poly_snap_gcp` 共用这一个判据；
      ③ 吸附容差 10° → **5°**（用户要求「只有 ±5° 才吸附」），两个常量同时改。
    无共享槽位变化（`CFG_NLONGS` 仍 61）。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x0223; }
+
+/* 0x0224：混合模式热键**按当前工具临时让位**（用户 2026-10-30 要求：
+   「画笔工具下按 Alt+Shift+J 应该改画笔的混合模式，而不是 APP 面板的混合模式」）。
+   全部改动在 `keyhook.c`，本文件只改版本：
+     ① 新增入站消息 `{"type":"blendYield","on":true|false}` —— 面板判定当前工具
+        自带混合模式（画笔/铅笔/渐变/油漆桶/涂抹/模糊/锐化/仿制图章/图案图章/
+        历史画笔/历史记录艺术画笔）时置 true，切回套索置 false；
+     ② 钩子命中 `action=="blendMode"` 且让位位为 1 ⇒ **不吞键、不广播**，
+        Alt+Shift+字母原样流进 PS（改工具自身的混合模式）；
+     ③ `hotkeyState` 增字段 `blendYield`（0/1），供面板/排障核对；
+     ④ 让位位不落盘、不进共享槽：`kh_cli_add` 与卸载时归零（方向安全 —— 归零只
+        恢复「由本模块接管」，不会吞键丢操作），面板建连后立即重放。
+   无共享槽位变化（`CFG_NLONGS` 仍 61）。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x0224; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {

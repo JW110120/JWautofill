@@ -8,6 +8,7 @@ import {
   peekPersistedArm, getBlendHotkeyOn, setBlendHotkeyActive, isDaemonConnected,
 } from './HotkeyBridge';
 import { helpTexts } from '../constants/helpTexts';
+import { useBlendGuard, blendYieldHint } from './blendGuard';
 import { subscribeFocusMode, peekFocusMode } from '../utils/FocusModeBus';
 import { FUNC_HOTKEY_DEFS, FUNC_HOTKEY_SECTION_ORDER, getFuncHotkeyLabel } from './funcHotkeyDefs';
 import ToggleSwitch from '../components/ToggleSwitch';
@@ -324,6 +325,11 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   // 混合模式热键开关：配置里 blendHotkey 条目的 combo 非空 = 开（.8li 见之装载
   // 内置 Alt+Shift 表）。与工具模式无关，任何时刻都显示这一行。
   const blendHotkeyOn = !!entries.find(e => e.action === 'blendHotkey')?.combo;
+  /* 0x0224：「按工具临时让位」——当前工具自带混合模式（画笔/渐变/涂抹…）时原生会让位，
+     开关**显示成关位**并把副标题换成让位说明，但用户的开关值一个字节都没动
+     （配置仍是开的；切回套索立刻显示回开位）。 */
+  const blendGuard = useBlendGuard();
+  const blendShownOn = blendHotkeyOn && !blendGuard.yielded;
   const funcEntryOf = (funcId: string): HotkeyEntry | undefined =>
     entries.find(e => e.action === 'runFunc' && e.brush === funcId);
 
@@ -361,8 +367,12 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   // 混合模式热键行（2026-10-19 用户要求）：右半列**不是录制的组合键**而是自绘 switch。
   // 行本身不挂选中/录制/退格任何 handler（没有组合键可录可解），只有 switch 可点；
   // 开关状态经共享配置直达 .8li（combo='1'/''），C 侧据此装载/卸载内置 Alt+Shift 表。
-  const renderBlendSwitchRow = (key: string, on: boolean) => {
+  // 0x0224：`yielded` = 当前工具自带混合模式 ⇒ 原生让位、开关显示成关位并置灰。
+  //   ⛔ 置灰而不是「假装关掉再点一下」：此刻显示的值不来自配置（配置仍是开的），
+  //      让用户在这里点一下会写出「半真半假」的配置，切回套索后开关还会自己跳回来。
+  const renderBlendSwitchRow = (key: string, on: boolean, yielded: boolean, toolCn: string | null) => {
     const toggle = () => {
+      if (yielded) return;                       /* 置灰已拦一层，这里兜底 */
       if (!daemonConnected) { showMessage(helpTexts.funcHotkey.notConnected); return; }
       const nextOn = !on;
       if (setBlendHotkeyActive(nextOn)) {
@@ -375,23 +385,34 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
         showMessage('推送配置失败：快捷键服务未连接，或配置路径尚未就绪（请重新加载插件后重试）');
       }
     };
+    const rowTitle = yielded
+      ? blendYieldHint(toolCn) + ' ' + helpTexts.funcHotkey.blendRow
+      : helpTexts.funcHotkey.blendRow;
     return (
-      <div
-        key={key}
-        className="hotkey-entry-row hotkey-entry-row-static"
-        title={helpTexts.funcHotkey.blendRow}
-      >
-        <span className="hotkey-entry-name">混合模式热键</span>
-        <span className="divider-vertical">丨</span>
-        <span className="hotkey-entry-switch">
-          <ToggleSwitch
-            checked={on}
-            onChange={toggle}
-            title={on ? '关闭混合模式热键' : '开启混合模式热键'}
-            aria-label="混合模式热键"
-          />
-        </span>
-      </div>
+      <React.Fragment key={key}>
+        <div
+          className="hotkey-entry-row hotkey-entry-row-static"
+          title={rowTitle}
+        >
+          <span className="hotkey-entry-name">混合模式热键</span>
+          <span className="divider-vertical">丨</span>
+          <span className="hotkey-entry-switch">
+            <ToggleSwitch
+              checked={on}
+              onChange={toggle}
+              disabled={yielded}
+              title={yielded ? blendYieldHint(toolCn) : (on ? '关闭混合模式热键' : '开启混合模式热键')}
+              aria-label="混合模式热键"
+            />
+          </span>
+        </div>
+        {/* 让位说明：只在真的让位时出现一行（11px 弱化字，与标题下的「未连接」提示同款）。
+            ⛔ 用内联样式而不是新 CSS 类：本子面板的两处同类提示都是这个写法，
+               新加类要在 adjustment.css 里配，反而更容易与既有行距打架。 */}
+        {yielded && (
+          <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>{blendYieldHint(toolCn)}</div>
+        )}
+      </React.Fragment>
     );
   };
 
@@ -454,7 +475,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
               {g.title === '选区填充' && focusMode &&
                 renderRow('alt_tool', altToolEntry?.combo || '', '临时吸管', 'alt_tool', helpTexts.funcHotkey.pickRow)}
               {/* 混合模式热键（自绘开关行，与工具模式无关）：开启后 Alt+Shift+字母改面板混合模式 */}
-              {g.title === '选区填充' && renderBlendSwitchRow('blend_hotkey', blendHotkeyOn)}
+              {g.title === '选区填充' && renderBlendSwitchRow('blend_hotkey', blendShownOn, blendGuard.yielded, blendGuard.toolCn)}
               {g.defs.map(def =>
                 renderRow('fk_' + def.id, funcEntryOf(def.id)?.combo || '', def.label, def.id, helpTexts.funcHotkey.rowHint)
               )}

@@ -36,8 +36,10 @@ import {
   isDaemonConnected, getMainToggleCombo, setMainToggleCombo, requestHotkeyRecording,
   getSelectedBrushToolEnum, setFocusLassoActive, setFocusClearActive, setAltToolActive,
   altToolComboHasAlt, normalizeToolId,
-  onAltHold, selectToolByRef
+  onAltHold, selectToolByRef, onConfig as onHotkeyConfig
 } from './hotkey/HotkeyBridge';
+// 0x0224：混合模式热键「按当前工具临时让位」（画笔/渐变/涂抹…自带混合模式时把键还给 PS）
+import { noteToolForBlendYield, blendGuardWatchNeeded } from './hotkey/blendGuard';
 import {
   LassoSmoothMode, LassoSmoothParams, LassoSmoothStatus, PenSmoothStatus,
   pushLassoSmoothParams, onLassoSmoothStatus,
@@ -233,6 +235,12 @@ class App extends React.Component<AppProps, AppState> {
     // 热键命中方写在绘画工具箱面板的 JS 上下文，经共享文件到达这里，卸载时退订）
     private unsubClearModeToggle: (() => void) | null = null;
     private unsubBlendMode: (() => void) | null = null;
+    /* 0x0224：热键配置订阅器（只关心「混合模式热键开关」开关位的翻转）——
+       开关一开/一关就要重新决定「要不要跑工具巡检 + 此刻要不要让位」，
+       而这件事的入口不在本组件（开关住在绘画工具箱的功能快捷键子面板里）。 */
+    private unsubHotkeyCfg: (() => void) | null = null;
+    /** 上一轮配置帧里「混合模式热键开关」的状态（只在翻转时重算巡检）。 */
+    private blendWatchOn = false;
     // 套索平滑「异常通知条」上一帧是否可见（2026-10-23，componentDidUpdate 比对用）。
     // null = 尚未记录过首帧（装载时不触发重排兜底）。
     private smoothErrBarVisible: boolean | null = null;
@@ -612,6 +620,15 @@ class App extends React.Component<AppProps, AppState> {
             // 把目标模式送到这里，改「选区填充」的混合模式（不再改图层/工具的混合模式）。
             this.unsubBlendMode = subscribeBlendMode((mode) => {
                 this.applyBlendModeHotkey(mode);
+            });
+            /* 0x0224：混合模式热键开关翻面 ⇒ 重算「谁读工具」并立刻判一次让位。
+               （开关住在绘画工具箱的功能快捷键子面板，本面板只能靠配置帧知道它变了） */
+            this.blendWatchOn = blendGuardWatchNeeded();
+            this.unsubHotkeyCfg = onHotkeyConfig(() => {
+                const on = blendGuardWatchNeeded();
+                if (on === this.blendWatchOn) return;
+                this.blendWatchOn = on;
+                this.syncToolWatch();   /* 开⇒建表并立即读一次工具；关⇒拆表，让位位随之归零 */
             });
             // 套索实时平滑：.8li 模块回报的钩子/布防健康状态（同步回调，无 await）。
             this.unsubSmoothStatus = onLassoSmoothStatus((s) => { this.applySmoothStatus(s); });
@@ -1070,6 +1087,13 @@ class App extends React.Component<AppProps, AppState> {
             try { this.unsubBlendMode(); } catch { /* ignore */ }
             this.unsubBlendMode = null;
         }
+        /* 0x0224：只退订配置流，**不**主动清让位位 —— 让位位活在原生内存里，
+           面板一走 WS 就断，下一个客户端接手时原生会自己归零（keyhook.c kh_cli_add）。
+           在这里再发一帧反而会与「另一个面板上下文仍在用」打架。 */
+        if (this.unsubHotkeyCfg) {
+            try { this.unsubHotkeyCfg(); } catch { /* ignore */ }
+            this.unsubHotkeyCfg = null;
+        }
         if (this.unsubSmoothStatus) {
             try { this.unsubSmoothStatus(); } catch { /* ignore */ }
             this.unsubSmoothStatus = null;
@@ -1374,7 +1398,14 @@ class App extends React.Component<AppProps, AppState> {
            ⚠️ 代价：吸附开着而平滑关着时多一条 1s 的 batchPlay 工具读 —— 与平滑
               自己开着时完全同构的一条读，不新增第二条定时器（互斥复用同一条）。 */
         const snapActive = this.state.smoothStatus.connected && this.state.polySnapEnabled;
-        const need = (smoothActive || snapActive) && !autoOffActive && !gateOwned;
+        /* ⛔⛔ 0x0224：混合模式热键开着时，工具读数由 `syncToolWatch` 那条巡检承担
+           （它同时喂闸门，见 pollToolChange）。这里必须让位，否则两条 1s 巡检
+           同时读同一个工具 ⇒ 总模态读取 2.5 → 3.5 次/秒，超过 psAccess 的
+           3.3 次/秒吞吐上限，队列开始积压（即用户看到的「读条卡住」）。
+           ⚠️ 让位是安全的：pollToolChange 的闸门供给条件已与这里对齐
+              （`pen.enabled || polySnapEnabled`），不会漏喂。 */
+        const blendActive = blendGuardWatchNeeded();
+        const need = (smoothActive || snapActive) && !autoOffActive && !blendActive && !gateOwned;
         if (need && !this.smoothToolTimer) {
             this.smoothToolTimer = setInterval(() => { void this.pollSmoothToolGate(); }, App.TOOL_WATCH_INTERVAL_MS);
             void this.pollSmoothToolGate();   /* ⛔ 建表时先跑一次：让位瞬间不要空等 1s */
@@ -1424,7 +1455,11 @@ class App extends React.Component<AppProps, AppState> {
         this.smoothToolBusy = true;
         this.smoothToolBusySince = Date.now();
         try {
-            this.applyToolGate(await this.readCurrentToolId());
+            const tool = await this.readCurrentToolId();
+            /* 0x0224：同一份读数顺带喂「混合模式热键按工具让位」的判据。
+               （本巡检在 autoOff 关闭时才会跑，是那条路之外唯一会读工具的通路。） */
+            noteToolForBlendYield(tool);
+            this.applyToolGate(tool);
         } catch {
             this.applyToolGate(null);
         } finally {
@@ -2748,7 +2783,9 @@ class App extends React.Component<AppProps, AppState> {
         'backgroundEraserTool',     // 背景橡皮
         'magicEraserTool',          // 魔术橡皮
         'wetBrushTool',             // 混合器画笔
-        'artBrushTool',             // 艺术画笔
+        // ⛔ 历史记录艺术画笔的真实工具 ID 是 artBrushTool（2026-10-30 Alchemist 现场核对），
+        //    不是 artHistoryBrushTool —— 后者 PS 从不返回，列在这里等于一条死条目。
+        'artBrushTool',             // 历史记录艺术画笔
         'bucketTool',               // 油漆桶
         'gradientTool',             // 渐变
         'moveTool',                 // 移动
@@ -2768,7 +2805,6 @@ class App extends React.Component<AppProps, AppState> {
         'redEyeTool',               // 红眼
         'contentAwareMoveTool',     // 内容感知移动
         'colorReplacementBrushTool',// 颜色替换
-        'artHistoryBrushTool',      // 历史记录艺术画笔
         'sharpenTool',              // 锐化
         'dodgeTool',                // 减淡
         'burnTool',                 // 加深
@@ -3106,17 +3142,22 @@ class App extends React.Component<AppProps, AppState> {
         }, { label: '读取当前工具', retries: 0 });
     }
 
-    // 按「需要自动关」启停巡检：不需要时不跑，避免无谓轮询。
+    // 按「需要自动关 / 需要混合模式热键让位」启停巡检：都不需要时不跑，避免无谓轮询。
     //
     // ⚠️ 2026-10-12：套索平滑的鼠标钩子通路已移除，「平滑布防」不再依赖工具读数
-    //    （笔通路由 .8li 模块自己判 PS 进程，与当前工具无关）⇒ 巡检现在只服务「自动关」。
+    //    （笔通路由 .8li 模块自己判 PS 进程，与当前工具无关）⇒ 本巡检只服务「自动关」。
+    // 0x0224：混合模式热键开关开着时它还要服务「按工具让位」——两个需求共用同一条
+    //    1s 巡检（`syncSmoothToolWatch` 会让位给本巡检，见那里的说明）。
     private syncToolWatch() {
         const needAutoOff = this.state.isEnabled && this.state.autoOffOnOtherTool;
-        if (needAutoOff && !this.toolWatchTimer) {
-            this.lastKnownTool = null; // 新一轮先取基准，不追溯开开关之前的工具
+        // ⛔ 只在**开关开着**时才需要（关着时原生根本不装混合模式表，读工具毫无意义）。
+        const needBlend = blendGuardWatchNeeded();
+        const need = needAutoOff || needBlend;
+        if (need && !this.toolWatchTimer) {
+            if (needAutoOff) this.lastKnownTool = null; // 新一轮先取基准，不追溯开开关之前的工具
             this.toolWatchTimer = setInterval(() => { void this.pollToolChange(); }, App.TOOL_WATCH_INTERVAL_MS);
             void this.pollToolChange();
-        } else if (!needAutoOff && this.toolWatchTimer) {
+        } else if (!need && this.toolWatchTimer) {
             clearInterval(this.toolWatchTimer);
             this.toolWatchTimer = null;
             this.lastKnownTool = null;
@@ -3126,10 +3167,11 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     private async pollToolChange() {
-        // 「自动关」需要时才跑；不需要就整轮跳过。
+        // 「自动关」或「混合模式热键按工具让位」需要时才跑；都不需要就整轮跳过。
         // （2026-10-12 前平滑布防也依赖本轮询，鼠标钩子通路移除后不再需要。）
         const needAutoOff = this.state.isEnabled && this.state.autoOffOnOtherTool;
-        if (!needAutoOff) return;
+        const needBlend = blendGuardWatchNeeded();
+        if (!needAutoOff && !needBlend) return;
         // 0x0209：Alt 临时吸管期间不许「自动关」（同 maybeAutoTurnOff）。
         // ⛔ 放在 needAutoOff 之后：不改变原本的早退顺序，只多一层闸。
         if (this.altToolHold) return;
@@ -3150,14 +3192,21 @@ class App extends React.Component<AppProps, AppState> {
         this.toolWatchBusySince = Date.now();
         try {
             const tool = await this.readCurrentToolId();
+            /* 0x0224：先喂「混合模式热键按工具让位」——它只关心「现在站哪个工具上」，
+               读失败（null）时 note 会原样忽略，不会把让位位闪回接管。 */
+            noteToolForBlendYield(tool);
             // 顺带喂「平滑的工具闸门」：**同一份读数**，不为它再发一次 batchPlay get。
-            // ⛔ 平滑开着时才喂（关着时原生侧根本不参与判定）。
+            // ⛔ 0x0224：条件从「平滑开着」放宽到「平滑或吸附开着」—— 本巡检现在可能
+            //    因为混合模式让位而独跑（syncSmoothToolWatch 已让位），若仍只认 pen.enabled，
+            //    「平滑关 + 吸附开 + 混合模式热键开」这个组合下闸门会整段断供（0x0223 的老病）。
             // ⛔ 走 applyToolGate（而不是直接下发）：读失败必须**沿用上次判定**，
             //    不能退回「未知/放行」—— 那会让闸门在偶发读失败时整段失守。
-            if (this.state.smoothStatus.connected && this.state.smoothStatus.pen.enabled) {
+            if (this.state.smoothStatus.connected &&
+                (this.state.smoothStatus.pen.enabled || this.state.polySnapEnabled)) {
                 this.applyToolGate(tool);
             }
             if (!tool) return;
+            if (!needAutoOff) return;          /* 只服务让位时到这里就结束（不碰 lastKnownTool） */
             const prev = this.lastKnownTool;
             this.lastKnownTool = tool;
             // 首轮只记基准；工具没变也不判，避免「开关一开就被自己关掉」
@@ -3485,11 +3534,18 @@ class App extends React.Component<AppProps, AppState> {
         //    笔刷预设这类解析不出工具的（工具是被预设间接带过去的）一律交回 1s 巡检，
         //    绝不猜（喂错值等于把闸门钉在错的工具上）。
         try {
-            if (eventName === 'select' && this.state.smoothStatus.connected && this.state.smoothStatus.pen.enabled) {
+            if (eventName === 'select') {
                 const t = this.resolveSelectedTool(descriptor);
                 if (t) {
-                    this.lastKnownTool = t;      // 与巡检共享基准，避免同一件事被判两次
-                    this.applyToolGate(t);
+                    /* 0x0224：混合模式热键「按工具让位」的快通路（**无前置条件**）：
+                       纯解析 descriptor、不发任何命令，所以无论平滑/自动关开不开都能走。
+                       切到画笔/渐变/涂抹等自带混合模式的工具 ⇒ 立刻让位（毫秒级），
+                       不必等 1s 巡检；切回套索 ⇒ 立刻恢复接管。 */
+                    noteToolForBlendYield(t);
+                    if (this.state.smoothStatus.connected && this.state.smoothStatus.pen.enabled) {
+                        this.lastKnownTool = t;      // 与巡检共享基准，避免同一件事被判两次
+                        this.applyToolGate(t);
+                    }
                 }
             }
         } catch { /* 单次解析失败不影响主流程，轮询兜底 */ }

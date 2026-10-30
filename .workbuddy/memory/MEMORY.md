@@ -1,118 +1,16 @@
 # JWautofill 项目记忆（主索引）
 
-> 索引 + 铁律速查；**明细一律在 `refs/`，里程碑史在 `HISTORY.md`**。⛔ 违反必炸。
-> 架构：平滑 + 键盘钩子 = **PS 进程内 .8li**（`native/JWautofillHost/`，WS 18924 平滑 / 18923 热键）。
-> 现役 **0x0223**。近十版：0x0213 按住键补布防门（92）｜0x0214 Alt 落笔冻结（93）｜0x0215–1E 多边形吸附（94–104：15 改包=看不见、16 搬光标不可见、17 上探针、18 消息层生效、19 修边沿被吃+参考线、1A 修会话被抖动销毁、1B 解冻补线要搬锚、1C 预览/落点是两条通道、1D 三条通道一起钉、1E 冻结圆心验真身）｜0x021F 轴↔屏幕只许用差值（105）｜0x0220 多边形吸附加总开关 I_POLYSNAP（106）｜0x0221 吸附与平滑解耦（108）｜0x0222 Alt 期间 HUD 只许参考线（109）｜**0x0223 吸附链自备闸门 + 容差 5°（110）**。
+> 只留「编号 + 一句话 + refs 指针」；**明细一律在 `refs/`**，里程碑史在 `HISTORY.md`。⛔ 违反必炸。
+> 架构：平滑 + 键盘钩子 = **PS 进程内 .8li**（`native/JWautofillHost/`，WS 18924 平滑 / 18923 热键）。现役 **0x0224**（混合模式热键按工具让位，111）。
 
-## 索引
+## 索引（`refs/` 下）
 
-填充/描边/清除 `fill-and-stroke.md`｜CSS/面板/主题 `frontend-css.md`｜闸门/模态 `busy-gate.md`｜UXP/API/性能 `uxp-api-layer.md`｜像素 `pixel-algorithms.md`｜构建/部署 `toolchain-and-env.md`｜平滑/HUD/断流/闸门/吸管 `lasso-smoothing.md`（O22–O62）｜键盘钩子 `keyhook-8li.md`｜混合器 `brush-mixer-reservoir.md`｜临时模式/冻结/多边形吸附（90–105 全档）`poly-snap-0x0211-0x021F.md`（均在 `refs/`）
+`fill-and-stroke`（填充/描边/清除）｜`frontend-css`（CSS/面板/主题）｜`busy-gate`（闸门/模态）｜`uxp-api-layer`（UXP/API/性能）｜`pixel-algorithms`（像素）｜`toolchain-and-env`（构建/部署）｜`lasso-smoothing`（平滑/HUD/断流/闸门/吸管，O22–O62）｜`keyhook-8li`（键盘钩子）｜`brush-mixer-reservoir`（混合器）｜`poly-snap-0x0211-0x021F`（临时模式/冻结/吸附）｜`blend-hotkey-yield-0x0224`（混合模式让位）｜`ironrules-1-89`（旧铁律全文）
 
-**校验**：改 CSS 跑 3 个 guard（只扫 `src/styles/*.css`）；类型检查 `npx tsc -p tsconfig.check.json`（⛔ 别用 `tsc --noEmit`，语义检查会被静默跳过）；改 .c 跑 `build.sh`（须沙箱外）零告警 + 导出表 5 项；改面板 `yarn build`。全仓 ~168 条历史错误在 `app.tsx`/`adjustments`/`components`，只看自己碰过的行。
+**校验**：改 CSS 跑 3 个 guard（只扫 `src/styles/*.css`）；类型检查 `npx tsc -p tsconfig.check.json`（⛔ 别用 `tsc --noEmit`）；改 .c 跑 `build.sh`（须沙箱外）零告警 + 导出表 5 项；改面板 `yarn build`。全仓 ~168 条历史错误在 `app.tsx`/`adjustments`/`components`，只看自己碰过的行。
 
-## 现役焦点（0x021D · 2026-10-29）
+## 最新铁律（0x0211–0x0224，要改先看这一段）
 
-Alt 临时多边形套索 = **冻结**（93）+ **8 方向吸附**（94/97）+ **青色参考线**（99/100）。吸附换三次通道才对，最终落在**鼠标消息**（97）；19 修边沿被吃，1A 修会话被抖动销毁，1B 解冻补线要搬锚，1C 修「橡皮筋读消息、落点读包」的错位（102），**1D 改「别猜 PS 读哪条通道，光标/消息/包三条一起钉」（103）**。
-
-## 铁律速查
-
-**产物/构建**
-1 ⛔⛔ 除非用户明确要求，禁止 `git add`/`commit`；测试通过且用户发话才提交（代码+日志+记忆一次提交）。
-2 ⛔⛔ IPC 双防御：`toWire()` 一律 Math.round，原生 `double?`+Round（漏=整条消息被丢）。
-3 ⛔⛔ .8li：PiPL 头 10 字节；`'8664'` 导出名=C 字符串；版本走 `jw8li_version`（改 .c 必升）。
-4 ⛔ `CFG_NLONGS=60`（0x0211 起）：两个 .c 同步改，新增槽后 fit-check 指到最后一个槽。
-5 ⛔ 日志：`.8li`→`%LOCALAPPDATA%\JWautofill\smooth8li\pi8li.log`；引擎→`%TEMP%\jwwh-<pid>.log`。
-6 ⛔⛔ 卸载先全停引擎线程再返回：`jwwh_unhook()` 幂等+兜底 repatch；DETACH 只能 join。
-
-**闸门/面板**
-7 ⛔⛔ `'slct'` 三态只有 `2` 停轮询，同步三处；边沿无心跳⇒接管带 2s 时效；面板判据=原生 `gateOwned`。
-8 ⛔ 闸门=`isPsBusy()`+文档闩锁+`psRead()`；禁采信 `core.isModal()`；空闲巡检 <3.3/s。
-9 ⛔⛔ `psBusyInProc()` 三态禁并进 `isPsBusy()`；`-1` 绝不当 `0`。
-10 ⛔⛔ 真相不靠心跳续命：面板发 `gateAge`，原生写 `I_GATETS=now−gateAge`。
-11 ⛔⛔ HUD=显式 AND 门：窗口·包流·套索∧接触·一笔之中·前台·画布焦点·落笔判据·非断流·拉绳·面板 bit0·总开关。
-12 ⛔⛔ HUD 门槛不门救援：救援用宽判 `canvas_hit_ok`（不看前台），HUD 用严判。
-13 ⛔ 宿主开关外置 `wtctx.ini`（缺=只观测）；`cursorInject` 缺省 1。
-
-**HUD/画布**
-14 ⛔⛔ 拉绳定长 `f=1−rope/dist`，1px+二次贝塞尔；HUD 留 `WS_EX_TRANSPARENT`，`WS_EX_TOPMOST` 写进 CreateWindowExW。
-15 ⛔⛔ 悬链垂度只加重力方向：`cqy=my+2·sag·hor`，`hor=|dx|/d`。
-16 ⛔ px 权威=屏幕/lcOutExt 非 lcInExt；像素常量×`dpiS`；`putPixels` 默认 replace=true。
-
-**断流/补流（17–38，论证查 `refs/lasso-smoothing.md` O22–O46）**
-17–21 对 Wintab 只读不写；「没开始画」≠断流；停摆⇔PS 失前台（`fg=`）；`k==0`≠驱动恢复；LNP 在环≠方案。
-22–26 `SYNTH_TIP_MAX_MS=6000` ≠ `CONTACT_HOLD_SMOOTH_MS=1500`；⛔ 不用 VK_LBUTTON 电平当抬笔证据；空档期落笔只由包外证据定且只加不减。
-27–32 三路输入只钩一条等于没有（Wintab+光标+Ink）；节拍=PS 查询同拍（外推限幅 40ms）；标定分层 n≥3/n==2/n<2；起笔锚定只看 buttons 逐包 0→1；`BTN_EDGE_MIN_ZERO=16`。
-33–38 系统光标与 Wintab 同源；Ink 判死 `[ink]=0`；输出不绑包（`gp_step()` 每查询推一步）；超 6s 靠「包外按钮电平+画布内+1.5s 内动过」；交还必须 `g_btnResync`；⛔⛔ 「包流健康」≠「PS 在用包画」：判据 `armed`，验证 `[raw] gp=` 一直涨。
-
-39 ⛔⛔ 键盘热键必须双路：LL 钩子在 PS 前台整段收不到键 ⇒ `GetAsyncKeyState` 10ms 轮询兜底。
-40 ⛔⛔ 钩子活性看阳性证据：轮询有增量 ∧ 钩子零增量 ⇒ `g_khReinstall`（3/10/30s 退避，录制中不重装）。
-41 ⛔⛔ unload 必须让引擎哑火：`services_stop`→`jwwh_set_engine_off(1)`；⛔ 不用 `jwwh_unhook()`；光标 `armed` 必须含 `tool_gate_ok()`。
-42 ⛔⛔ `pstool.c` 的 `s_basic` 只声明不赋值 ⇒ `pstool_uninstall()` 恒 return（判据 grep `s_basic =`）。
-43 ⛔⛔ `keyhook_stop()` 在 join 前 `kh_unhook_both_now()`，join 后补一次。
-44 ⛔⛔ DETACH 日志先落再停服：`pipl.log` 的 `DLL_PROCESS_DETACH` → `dumps\crash-*.dmp` → WER 故障模块。
-
-**UXP / 画笔预设** —— 全档 `refs/uxp-api-layer.md`
-45 ⛔⛔ `_obj` 只能来自跑通过的样本；-25920 = 命令名 PS 不认识。
-46 ⛔⛔ `dialogOptions` 一律 `silent`（`dontDisplay` 反义）；只认描述符自己的 `_options`。
-47 ⛔⛔ 改状态的动作，判据只能是「回读权威字段变了」；"没报错"等于没说。
-48 ⛔⛔ 装笔=缓存整份 `currentToolOptions`（快路径 `set cto`，慢路径 define→参数→抓 cto→删预设）。
-49 ⛔⛔⛔ `set` brush 的 `to` 必须带笔尖身份（否则变 `computedBrush`）；几何走 `set paintbrushTool to 整份 cto`。
-50 ⛔⛔⛔ PS 27 换笔尖=`select + brush _name + makeVisible:false`；`set+brush`=-1715、`set+brushPreset`=-25920。
-51 ⛔⛔⛔ 失败的 batchPlay 每条画一条黄条 ⇒ 正常路径 `failCount`=0；能读状态判的绝不试错。
-52 ⛔⛔ 黄条归属：PS=一句话（「悦绘:」前缀）；`#1 … / #2 …`=面板 `.notify-bar`；`say()` 截 120 字两行。
-53 ⛔⛔⛔ 判当前工具不能用 `get currentTool`（-25920）⇒ 指纹字段 `wetness`/`dryness`/`reservoirState`/`autoFill` ≥2。
-
-**混合器浮雕笔（P3）** —— 全档 `refs/brush-mixer-reservoir.md`
-54 ⛔⛔⛔ 储层只能靠重新采样装填（像素 `{}`、get 报 -25920）；改前景色会灌成纯色；上色 JS 一步乘法，alpha 用覆盖度。
-55 ⛔⛔⛔ 不存在「派发 AM 事件触发工具手势」（`loadBrush`/`cleanBrush`/`mixerBrushTool` 在 exe ID 表 0 命中）。
-56 ⛔⛔ `canvasClick`：`alt:1` 装储层 / `alt:0` 验货（只单击无 drag）；Alt 先按住再按左键；卸载必须 `click_join`。
-57 ⛔⛔⛔ 厚涂笔走储层：`mixer.pattern` ⇒ `applyBrush` 首部 return；⛔ 不能整段 `runAsModal`；吸前直径=图案长边；验货底不透明中灰。
-58 ⛔⛔ 面板尺寸只认图案长边；`set` 的 `_target` 必须裸引用；直径回读被 PS 换算（400→407）。
-59 ⛔⛔⛔ 原生 JSON 严格类型：`json_bool` 只认 `true`/`false`，数字一律 `json_num`；「发了就忘」必须 `xxxResult` + `waitHostMessage()`。
-60 ⛔⛔⛔ 直径不靠 `set`（会抹掉 `sampledData`）⇒ `defineBrush(side² 白方块)`，直径=边长。
-61 ⛔⛔⛔ 有位图 ≠ 装了图案（吸空白也 `state=2`）⇒ 点一笔看层次；储层尺寸=直径×1.4325。
-62 ⛔⛔ 吸得准：`fitOnScreen` 把图像摆到视口正中；原生点「命中窗口中心」。
-63 ⛔⛔ 笔尖落地顺序：现成方笔且直径对=零命令 → 按名选 → 整份 cto 改 `diameter` → `defineBrush`；改直径必须 `runAsModal` + `jsonSafe()`。
-64 ⛔⛔ 笔尖尺寸不许降级：≠ 图案长边就抛错。
-
-**键盘钩子·插件在位闸** —— 明细 `refs/keyhook-8li.md`
-65 ⛔⛔⛔ 三路统一过 `g_khPlug`：18923 无面板客户端 = 本体不在位 ⇒ 不装钩、不注册、轮询只消沿。⛔ 不做「连过一次就粘住」。
-66 ⛔⛔ 迁移探测自报身份：`kh_try_migrate` 走 `path=/jw-migrate`，非 `/` 不计在位。
-67 ⛔⛔⛔ WS 槽位必须真归还：`kh_cli_remove` 同时清 `closing`/`notPlugin`，`kh_cli_add` 准入只看 `s==INVALID_SOCKET`。
-68 ⛔⛔ `SO_RCVTIMEO` 超时 ≠ 断开：首帧超时（`got==0 ∧ WSAETIMEDOUT`）返 `-2=空闲` ⇒ continue+ping。
-69 ⛔⛔ 笔刷热键开关状态只在 `hotkeyArmStore.ts`（单例+`useSyncExternalStore`）；工具箱折叠是条件渲染；`store.error` 无 TTL。
-70 ⛔⛔⛔ 平滑也要过位闸，判据是「已握手」不是「占槽」：`g_cliReady` 唯一在位判据；`plug_revoke()` 只清 enabled、不下 cmd=2、gate 置 2；宽限 1500ms；握手只拒精确 `/jw-migrate`。
-
-**工具闸门 / 光标路径** —— 明细 O41–O43
-71 ⛔⛔⛔ 只有 `GATETS 新鲜 ∧ TOOLGATE==0` 是事实 ⇒ 立即否决；心跳过期不许当换工具；收口 `tool_edit_allowed()`，包路径与光标路径共用。
-72 ⛔⛔ `hostYield` 必须传 `maxHoldMs`（工具类 900ms 强制放行）。
-73 ⛔⛔ 光标推进器抖动时钉住：松手后 `GP_HOLD_MS=700` 内返回平滑点；`s_gpBtn` 跟真实的手；大跳跃改「本拍不推进」。
-
-**HUD 门控 / 临时吸管取色** —— 明细 O44–O47
-74 ⛔ 临时吸管判定全在面板（工具模式 ∧ 总开关 ∧ 套索）；`altToolHold` 挡自动关，松开回套索后 `applyToolGate('lassoTool')` + `setMainToggle(true)` 兜底。
-75 ⛔⛔⛔ `write_params()` 在 `pstool_owns()` 时一个字节都不写 `I_TOOLGATE` ⇒ 必须独立槽 `I_ALTTOOL`（反面判据：切吸管后 HUD 还在 = 借了闸门槽）。
-76 ⛔⛔⛔ `I_ALTTOOL` 必须四处清 0：吸管键释放 / 键源卸载 / `plug_revoke` / `services_start`。
-77 ⛔⛔ HUD 闪现只能从显示时机治：`CONTACT_HOLD_MS`(250) 不能删；「刚隐藏过的 1.5s 内须连续满足 180ms 才重现」；首次仍立即。
-78 ⛔⛔ `!g_calib.valid` 提前 return 必须显式归零 `g_penDown`/`g_toolOk`/`g_strokeGate`。
-79 ⛔⛔ 别想让 Alt 绕过 PS（吞键/伪造 `WM_SYSKEYUP` 都不行）⇒ 只能事后搬色。
-80 ⛔⛔⛔ 「颜色没变」≠「没取色」：判据只能是「这一轮有没有左键」（`busyHadLeft`）；只有空格 ⇒ 不当取色。
-
-**标准滤波 / 面板文案** —— 明细 O47
-81 ⛔⛔⛔ 笔速必须用真实位移：`|raw − out|` 是滞后不是速度（会负反馈锁死在 4~6px）；按 ≥6px 距离窗 / ≥4ms 窗时结算（`SPEED_WIN_PX/MS`）。
-82 ⛔⛔ 尖角判据两级基准：参考方向由 ≥3px 线段推进、当前方向由 ≥2px 累积位移给出。
-83 ⛔⛔⛔ 用户可见文案（`helpTexts.ts`）：汉字与字母/数字间半角空格；数字与 px/%/°/ms 不空、与「像素/度/级」空；区间「 – 」、减号「−」；⛔ 禁箭头/`**`/勾叉图标（`title` 纯文本）。全文规则在文件头。
-
-**HUD 坐标系 / 消失** —— 明细 0x020D–0x020F
-84 ⛔⛔⛔ HUD 圆心不许绘在会漂的量上：拉绳未绷紧时复用上一帧窗口位置（用绘制点判）+ 整像素迟滞 `HUD_PX_HYST`；复用后绳末端不能由 `rx/ry` 反算。
-85 ⛔⛔⛔ 两套坐标系混用不报错只变形：`putXc/putYc`=窗口左上角，圆心在 `(half,half)` ⇒ 光标相对圆心向量 = `cur − put − half`；判据 `rope=%d ≤ leashPx`。
-86 ⛔⛔⛔ HUD 短暂消失只有三个源头（0x020F 已修）：① `realOk` 过期（宽限 1500ms，仅「一笔进行中且未接管合成包」）；② `lagSkip`/`bigJump` 不许并进 `cheapOk`（并进去就是 `SW_HIDE`）；③ 先 `HUD_HIDE_DEBOUNCE_MS`(90) 再 `HUD_RESURF_DEBOUNCE_MS`(180)，顺序错就是「小抖→大消失」。
-
-**临时吸管键源（0x0210）** —— 明细 O44 / `refs/keyhook-8li.md`
-87 ⛔⛔⛔ 吸管键绝不能进热键匹配表（会被 RegisterHotKey 独占，键被摘走）⇒ `action=="altTool"` 只取 combo 发布 (vk,mods)，调度线程轮询、仍推 `altHold`。
-88 ⛔⛔⛔ 键源默认 `/`（裸键）：`kh_combo_to_key` 必须允许无修饰键；解析只在配置线程做一次（`kh_key_to_token` 返回 static）。
-89 ⛔⛔ 事后搬色只在触发键含 Alt 时才需要（`altToolComboHasAlt()`）。
-
-**PS 临时模式 → Alt 冻结 → 多边形吸附（0x0211–0x0223）** —— 全档 `refs/poly-snap-0x0211-0x021F.md`
 90 ⛔⛔⛔ 「PS 临时模式」不派发任何可观测变更（`application.tool` 仍 `lassoTool`）⇒ 真相只在原生：独立槽 `I_POLYALT` 每 20ms **镜像电平**；⛔ 不与 `I_ALTTOOL` 合槽。
 91 ⛔⛔⛔ 「按住」= 修饰键完全匹配 + 一次性起按准入 + 连两拍确认（≈40ms）；同键位不同修饰键故意共存。
 92 ⛔⛔⛔ 热键前提只两条：插件在位（`g_khPlug`）+ 布防（`g_khArmed`）；⛔ `I_POLYALT` 不受布防约束。
@@ -127,12 +25,16 @@ Alt 临时多边形套索 = **冻结**（93）+ **8 方向吸附**（94/97）+ *
 103 ⛔⛔⛔ 别猜 PS 读哪条通道：**光标/消息/包三条一起钉**；锁定基准=落笔那一刻的真实光标；接触是独立共享电平 `g_pgTouch`。
 104 ⛔⛔⛔ 冻结钉的圆心先验真身：进场 `POLY_HOLD_ENTER_MAX_PX`(120)、生效 `POLY_HOLD_SANE_PX`(260) ∧ `POLY_HOLD_STALE_MS`(820)，只放弃不猜值。
 105 ⛔⛔⛔ `px_x/px_y` 是**比例**不是坐标 ⇒ 跨域只许「差值 + 同一时刻一对真值基准」，屏幕→轴一律不做。
-106 ⛔⛔⛔ 吸附必须有**独立总开关槽** `I_POLYSNAP`（0x0220，60→61 槽）：六个入口 `poly_hold_run`/`poly_snap_run`/`poly_pkt_click`/`poly_snap_gcp`/`poly_hint_live`/`poly_msg_apply` 全要问 `poly_snap_enabled()`；⛔ 拿 `I_POLYALT` 当开关（它是 20ms 镜像的事实位）；⛔ 瞬时兜底（Alt 松开/`plug_revoke`/`services_stop`）不许清它，只有 `services_start` 清（面板建连后重放）。
-107 ⛔⛔ 面板标签宽度**按字数选档**（`label-2..6` = 20/33/47/60/73px）：同组滑块的标签宽度不等 ⇒ `.slider-track { flex:1 1 auto }` 吃掉差值 ⇒ 滑块长短不一（0x0220：扩散漏了 `label-2`，比锐度长 13px）。
-108 ⛔⛔⛔ 多边形吸附**不依赖**平滑总开关（0x0221：「必须先开平滑才吸」的根治）：包路径触发条件 = `en ∨ (I_POLYSNAP ∧ 心跳新鲜)`，状态机与 `g_smoothed` 仍只认 `en`；平滑关时「一笔之中」由 `smooth_packets` 的 poly 分支自备 `contact_update` 写回 `g_strokeGate`；⛔ 平滑关时**不冻结**（`poly_hold_run` 早退，why=5）、锚点取 raw 不取 `g_ox`（它已停更，是陈旧圆心）。
-109 ⛔⛔⛔ Alt 按住期间 HUD **只许画参考线**（0x0222 修「落笔前两吸附方向之间移光标，平滑 HUD 闪现又消失」）：`wantVisible` 在 `I_POLYALT` 为真时只认 `polyHint`，**跳过 90ms 隐藏去抖**（它治的是圆的帧间抖动，对参考线掉线无意义，正是它让窗口多撑 90ms 而绘制分支只判 `!polyHint` ⇒ 画成圆），且此时隐藏**不写** `s_hudHideAt`（否则松开 Alt 起笔第一笔圆白等 180ms）。⛔ 判据用物理 `I_POLYALT` 而非吸附开关。
-110 ⛔⛔⛔ 吸附链**不许借用平滑的工具闸门供给**（0x0223 修「只开吸附时长时间不吸、两者都开才稳」）：`poly_snap_run` 旧用的是 `tool_gate_ok()`（要求 GATETS 新鲜），而 GATETS/闸门值的两条来源（面板 `pollSmoothToolGate` 1s 巡检、`setSmoothToolGate` 1.8s 心跳）**都绑在 `penOn`** 上 ⇒ 平滑一关全停 ⇒ 闸门值冻结（常是 0/2）⇒ 包路径整段死、`s_snapOn` 建不起来 ⇒ 接触钉住跟着死。⇒ ① 新增入站 `{"type":"toolGate","gate":0|1|2,"gateAge"?}`（平滑关着时单独推闸门，`pstool_owns()` 时让位，⛔ 不能拿 penSmooth 顶替，它的 `on` 就是平滑总开关）；② 引擎 `poly_tool_ok()`=值优先，包/光标两条路共用；③ 面板 `syncSmoothToolWatch` 的 `need` 加 `snapActive`（吸附开着也要巡检）。同版吸附容差 10°→**5°**（`POLY_SNAP_TOL_DEG` 与 `POLY_SNAP_TAN` 必须同时改，后者才是判据）。
+106 ⛔⛔⛔ 吸附必须有**独立总开关槽** `I_POLYSNAP`（0x0220，60→61 槽）：六个入口 `poly_hold_run`/`poly_snap_run`/`poly_pkt_click`/`poly_snap_gcp`/`poly_hint_live`/`poly_msg_apply` 全问 `poly_snap_enabled()`；⛔ 拿 `I_POLYALT` 当开关；⛔ 瞬时兜底（Alt 松开/`plug_revoke`/`services_stop`）不许清它，只有 `services_start` 清（面板建连后重放）。
+107 ⛔⛔ 面板标签宽度**按字数选档**（`label-2..6` = 20/33/47/60/73px），否则 `.slider-track { flex:1 1 auto }` 让同组滑块长短不一（0x0220：漏 `label-2`，比锐度长 13px）。
+108 ⛔⛔⛔ 多边形吸附**不依赖**平滑总开关（0x0221）：包路径触发 = `en ∨ (I_POLYSNAP ∧ 心跳新鲜)`，状态机与 `g_smoothed` 仍只认 `en`；「一笔之中」由 `smooth_packets` 的 poly 分支自备 `contact_update` 写 `g_strokeGate`；⛔ 平滑关时不冻结（why=5）、锚点取 raw 不取 `g_ox`（已停更）。
+109 ⛔⛔⛔ Alt 按住期间 HUD **只许画参考线**（0x0222）：`wantVisible` 在 `I_POLYALT` 为真时只认 `polyHint`，**跳过 90ms 隐藏去抖**（正是它让窗口多撑 90ms 而绘制分支只判 `!polyHint` ⇒ 画成圆），且此时隐藏**不写** `s_hudHideAt`（否则松 Alt 起笔首笔圆白等 180ms）；⛔ 判据用物理 `I_POLYALT` 而非吸附开关。
+110 ⛔⛔⛔ 吸附链**不许借用平滑的工具闸门供给**（0x0223）：GATETS 与闸门值的两条来源（`pollSmoothToolGate` 1s 巡检、`setSmoothToolGate` 1.8s 心跳）都绑在 `penOn` ⇒ 平滑一关全停 ⇒ 包路径整段死。⇒ ① 新增入站 `{"type":"toolGate","gate":0|1|2,"gateAge"?}`（`pstool_owns()` 时让位，⛔ 不能拿 penSmooth 顶替）；② 引擎 `poly_tool_ok()`=值优先，包/光标共用；③ `syncSmoothToolWatch` 的 `need` 加 `snapActive`。容差 10°→**5°**（`POLY_SNAP_TOL_DEG` 与 `POLY_SNAP_TAN` 必须同时改）。
+111 ⛔⛔⛔ 混合模式热键「按工具让位」必须**三处同时改**（0x0224）：LL 钩子命中放行、**RegisterHotKey 注册集跳过 blendMode 条目**（注册即独占摘键，钩子放行没用）、轮询兜底与 `kh_hk_fire` 不许再广播；让位位=原生原子位（入站 `blendYield`，不落盘、不进共享槽）；面板唯一喂点 `noteToolForBlendYield`（null 不喂）、巡检归 `syncToolWatch`（`syncSmoothToolWatch` 必须让位）。⛔ 工具 ID 一律驼峰：历史记录艺术画笔=`artBrushTool`，不存在 `artHistoryBrushTool`。
 
+## 其余铁律（1–89）—— 全文见 `refs/ironrules-1-89.md`（编号不变，按场景查）
+
+1–6 产物/构建（禁自动 commit、IPC round、.8li 版本、CFG_NLONGS 61、日志路径、卸载顺序）｜7–13 闸门/面板（`'slct'` 三态、isPsBusy、gateAge、HUD AND 门）｜14–16 HUD/画布（拉绳定长、悬链垂度、px 权威=屏幕）｜17–38 断流补流（三路输入、SYNTH_TIP_MAX_MS、btns 边沿、`armed` 判据）｜39–44 键盘钩子/卸载（双路热键、阳性证据重装、DETACH 日志先落）｜45–53 UXP/画笔预设（`_obj` 只取样本、`silent`、回读判据、装笔缓存 cto、换笔尖、黄条、工具指纹）｜54–64 混合器储层（重新采样装填、canvasClick、defineBrush 定直径）｜65–70 键盘钩子·在位闸（`g_khPlug`/`g_cliReady`、槽位归还、超时≠断开）｜71–73 工具闸门/光标（GATETS 新鲜、hostYield maxHoldMs、GP_HOLD_MS）｜74–80 HUD 门控/临时吸管（`I_ALTTOOL` 独立槽、闪现看显示时机、事后搬色）｜81–83 标准滤波/文案（真实位移算笔速、两级尖角基准、helpTexts 文案规则）｜84–86 HUD 坐标系/消失（圆心不绘在会漂的量、putXc 语义、三个消失源头）｜87–89 吸管键源（不进热键表、裸键 `/`、含 Alt 才搬色）
 
 ## 维护约定
 

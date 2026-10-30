@@ -8,8 +8,8 @@
  *
  * 本文件逐字移植 Program.cs（ROLE=热键）的语义，面板契约不变：
  *   入站：setConfigPath / shutdown / uninstall / config / getConfig / getState /
- *         hotkeyArm / hotkeyStatus / recordStart / recordCancel / armDelete /
- *         disarmDelete
+ *         hotkeyArm / hotkeyStatus / blendYield（0x0224）/ recordStart / recordCancel /
+ *         armDelete / disarmDelete
  *   出站：config（payload+path）/ state / hotkeyState / hotkey / recordCaptured /
  *         recordResult / recordCancel / backspaceDelete / bye
  *
@@ -55,7 +55,7 @@ void srv_poly_alt_set(int on);
 /* ================================================================ 常量 */
 
 #define KH_PORT          18923
-#define KH_VERSION       "2026-10-23.2"   /* 0x0206：空闲超时不再断连 + 客户端表槽位归还（getState 的 version 字段） */
+#define KH_VERSION       "2026-10-30.1"   /* 0x0224：混合模式热键按工具让位（blendYield 入站消息 + hotkeyState.blendYield） */
 #define KH_BUDGET_MS     100      /* 单次钩子回调耗时预算（Program.cs HookBudgetMs） */
 #define KH_STRIKES       3        /* 连续超预算多少次才熔断 */
 #define KH_COOLDOWN_MS   30000    /* 熔断冷却（期满复位重挂） */
@@ -224,6 +224,35 @@ static void kh_hlog(const char* fmt, ...)
     SetEvent(g_khWake);
 }
 
+/* ===== 0x0224：混合模式热键「按工具临时让出」=====
+ *
+ * 用户 2026-10-30 要求：混合模式热键开关开着时，只要当前工具是**自带混合模式**的
+ * 动笔类工具（画笔/铅笔/渐变/油漆桶/涂抹/模糊/锐化/仿制图章/图案图章/历史画笔/
+ * 历史记录艺术画笔），Alt+Shift+<字母> 必须交回 PS（改**工具自身**的混合模式），
+ * 而不是被本模块吞掉去改 APP 面板的选区填充混合模式；切回套索即恢复接管。
+ *
+ * ⛔⛔ 为什么让位位放在**原生**而不是「面板把配置里的 blendHotkey 改成空」：
+ *   ① 配置是落盘的。按工具来回写 ⇒ 用户在画笔工具下关掉面板，混合模式热键就
+ *      永久变成关（下次开 PS 也不恢复）—— 用户的真实意图被工具状态污染。
+ *   ② 配置一变就整表重建（RegisterHotKey 同步 + 热键表重建），每秒切几次工具
+ *      就是几次整表重建，代价与风险都远大于一个原子位。
+ *   ③ pushConfig 在「配置路径未对齐」时会**静默不发送**，那条路根本拦不住键。
+ *   ⇒ 这里只要一个原子位，由面板按工具读写（WS 消息 `blendYield`），不落盘、不进共享槽。
+ * ⛔ 语义是「**这一条**让位」，不是「关掉功能」：只对 action=="blendMode" 的命中生效，
+ *    其它热键（主开关/笔刷/功能键）在动笔类工具下照旧被接管。
+ * ⛔ 断电即安全：本位置 1 只会让按键**回到 PS 原生行为**，不会吞键、不会误触发面板动作；
+ *    面板断开/重连/重装 .8li 时由 kh_cli_add 归零，面板连上后会立刻重放（见 HotkeyBridge）。 */
+static volatile LONG g_khBlendYield;
+
+/* 0x0224：写让位位（仅变化时落日志，避免切工具刷屏）。客户端线程调用。 */
+static void kh_set_blend_yield(int on)
+{
+    LONG prev = InterlockedExchange(&g_khBlendYield, on ? 1 : 0);
+    if ((prev ? 1 : 0) == (on ? 1 : 0)) return;
+    if (on) kh_log("混合模式热键临时让出：当前工具自带混合模式 ⇒ Alt+Shift+字母交回 PS（改工具混合模式）");
+    else    kh_log("混合模式热键恢复接管：Alt+Shift+字母改 APP 面板的选区填充混合模式");
+}
+
 /* 0x013C：钩子已消费的键留痕（轮询兜底据此去重，避免同一击触发两次）。
  * 钩子在系统层面先于轮询看到按键，所以「先写后读」的顺序天然成立。 */
 static char g_khLastCombo[KH_COMBO_MAX];
@@ -328,6 +357,7 @@ static void kh_unesc(char* s)
 static int kh_cli_add(SOCKET s)
 {
     int ok = 0;
+    LONG blendYieldWas = g_khBlendYield;
     EnterCriticalSection(&g_khCliLk);
     for (int i = 0; i < KH_MAX_CLI; i++) {
         /* ⛔ 准入只看 `s == INVALID_SOCKET`（槽位已归还），**不再看 closing**：
@@ -338,10 +368,17 @@ static int kh_cli_add(SOCKET s)
             g_khCli[i].closing = 0;
             g_khCli[i].notPlugin = 0;
             ok = 1;
+            /* 0x0224：新客户端接手 ⇒「混合模式热键让位位」归零（这里只写原子位，
+               日志留到临界区外打，钩子/连接线程里不做文件 I/O）。
+               ⛔ 方向是**安全**的：归零 = 恢复由本模块接管（吞键改面板混合模式）；
+                  残留的 1 才是坏方向（面板已走、没人再改 ⇒ 功能静默失效）。
+                  面板连上后会立刻按自己的工具判定重放一次（HotkeyBridge onopen）。 */
+            InterlockedExchange(&g_khBlendYield, 0);
             break;
         }
     }
     LeaveCriticalSection(&g_khCliLk);
+    if (ok && blendYieldWas) kh_log("新面板客户端接手 ⇒ 混合模式热键让位位归零（等面板重放）");
     if (!ok) kh_log("客户端表已满（%d 条仍在位）⇒ 拒收新连接（18923 可能残留僵尸连接）", KH_MAX_CLI);
     return ok;
 }
@@ -1003,14 +1040,16 @@ static void kh_build_hotkey_state(char* out, int cap)
     _snprintf(out, (size_t)cap,
         "{\"type\":\"hotkeyState\",\"protocol\":\"2.0\",\"armed\":%s,"
         "\"hookInstalled\":%s,\"safeMode\":%s,\"active\":%s,\"comboCount\":%d,"
-        "\"recording\":%s,\"timeoutMs\":%d,\"budgetMs\":%d,\"strikes\":%d}",
+        "\"recording\":%s,\"timeoutMs\":%d,\"budgetMs\":%d,\"strikes\":%d,"
+        "\"blendYield\":%d}",
         g_khArmed    ? "true" : "false",
         g_khHook     ? "true" : "false",
         g_khSafeMode ? "true" : "false",
         g_khActive   ? "true" : "false",
         kh_map_count(),
         g_khRecording ? "true" : "false",
-        kh_read_ll_timeout(), KH_BUDGET_MS, (int)g_khStrikes);
+        kh_read_ll_timeout(), KH_BUDGET_MS, (int)g_khStrikes,
+        (int)(g_khBlendYield ? 1 : 0));
 }
 
 static void kh_build_state(char* out, int cap)
@@ -1252,6 +1291,8 @@ static void kh_start_recording(void)
  *
  * 纪律同回调：只入队（kh_hlog），不打文件、不加锁。 */
 static volatile LONG g_khDiagIn, g_khDiagFg, g_khDiagSafe, g_khDiagHiBit;
+/* 0x0224：混合模式热键「让位」首次留痕（切到动笔类工具后按一次 Alt+Shift+字母即可验证）。 */
+static volatile LONG g_khDiagBlendYield;
 
 /* 钩子实际逻辑（外层 kh_proc 只负责计时熔断）。⛔ 全程零 I/O、零异常。 */
 static LRESULT kh_dispatch(int nCode, WPARAM wParam, LPARAM lParam)
@@ -1376,6 +1417,17 @@ static LRESULT kh_dispatch(int nCode, WPARAM wParam, LPARAM lParam)
         if (kh_build_combo(vk, combo, (int)sizeof(combo))) {
             KhItem hit;
             if (kh_map_lookup(combo, &hit)) {
+                /* 0x0224：面板判定当前工具自带混合模式（画笔/渐变/涂抹…）⇒ 混合模式
+                   热键**让位**：不吞键、不入命中环、不广播，Alt+Shift+字母原样流进 PS，
+                   改的是**工具自身**的混合模式。
+                   ⛔ 判据只看 action，不看 brush：内置混合模式表全部是 action=="blendMode"，
+                      用户手动录制的同名组合键（action 为别的）不受影响。
+                   ⛔ 只读一个 volatile LONG：O(1)、无锁、无 I/O，符合钩子回调纪律。 */
+                if (g_khBlendYield && _stricmp(hit.action, "blendMode") == 0) {
+                    if (InterlockedExchange(&g_khDiagBlendYield, 1) == 0)
+                        kh_hlog("★诊断：混合模式热键让位（当前工具自带混合模式）⇒ 放行 %s", combo);
+                    return CallNextHookEx(h, nCode, wParam, lParam);
+                }
                 kh_dual_mark(combo);
                 kh_hit_push(hit.combo);
                 return 1;                              /* 吞掉：PS 不再收到该组合键 */
@@ -1523,6 +1575,10 @@ static void kh_poll_edge(int vk)
     if (g_khActive && haveCombo) {
         KhItem hit;
         if (kh_map_lookup(combo, &hit)) {
+            /* 0x0224：让位期间轮询也**不许广播** blendMode —— 轮询吞不了键，PS 那边
+               已经按原生语义改了工具的混合模式，这里再广播一次就是同一击改两处
+               （面板的选区填充混合模式会跟着一起变）。 */
+            if (g_khBlendYield && _stricmp(hit.action, "blendMode") == 0) return;
             /* ⛔ 轮询**不**记账：kh_dual_mark 是给「钩子已消费这一击」留的指纹，
                轮询若自己也写，400ms 内的第二次同键会被自己误判成影子而吞掉
                （用户连按 Shift+E 切清除模式，第二下就没反应）。 */
@@ -1555,6 +1611,10 @@ static void kh_poll_edge(int vk)
 static int  g_khHkUsed[KH_HK_MAX];
 static char g_khHkCombo[KH_HK_MAX][KH_COMBO_MAX];
 static LONG g_khHkStamp = -1;
+/* 0x0224：上一轮同步时的「混合模式热键让位位」。它翻面必须**立刻**重同步 ——
+   让位靠的不是「钩子放过」，而是**根本不注册**：RegisterHotKey 会把组合键从
+   输入队列里摘走，一旦注册了，键就到不了 PS，钩子那层再放过也没用。 */
+static LONG g_khHkYield = -1;
 static int  g_khHkFailLogged;
 
 /* "Ctrl+Alt+Shift+K" → (MOD_*, vk)。**允许裸键**（mods 可能为 0）。
@@ -1618,8 +1678,11 @@ static void kh_hk_sync(void)
     int want = (g_khPlug && g_khArmed && !g_khRecording && !g_khSafeMode && !g_khSrvStop &&
                 kh_ps_foreground()) ? 1 : 0;
     LONG stamp = want ? (LONG)(1000000 + g_khMapSeq) : 0;
-    if (stamp == g_khHkStamp) return;
+    LONG yld = g_khBlendYield ? 1 : 0;
+    /* 0x0224：让位位翻面也要重同步（不注册 ⇒ 键直接落到 PS）。 */
+    if (stamp == g_khHkStamp && yld == g_khHkYield) return;
     g_khHkStamp = stamp;
+    g_khHkYield = yld;
     kh_hk_clear();
     if (!want) return;
 
@@ -1631,8 +1694,11 @@ static void kh_hk_sync(void)
     for (LONG i = 0; i < cnt && m && n < KH_MAX_ITEMS; i++) snap[n++] = m[i];
     LeaveCriticalSection(&g_khMapLk);
 
-    int ok = 0, bad = 0, bare = 0;
+    int ok = 0, bad = 0, bare = 0, yielded = 0;
     for (int i = 0; i < n && ok < KH_HK_MAX; i++) {
+        /* 0x0224：让位期间**不许注册**混合模式键 —— 注册即独占摘键，
+           键就到不了 PS，用户按 Alt+Shift+J 想改画笔混合模式会彻底没反应。 */
+        if (yld && _stricmp(snap[i].action, "blendMode") == 0) { yielded++; continue; }
         int mods = 0, vk = 0;
         if (!kh_combo_to_hotkey(snap[i].combo, &mods, &vk)) { bare++; continue; }
         int id = ok + 1;
@@ -1642,6 +1708,7 @@ static void kh_hk_sync(void)
         ok++;
     }
     kh_log("RegisterHotKey 接管 %d 条（裸键交给钩子/轮询 %d 条，被占用 %d 条）", ok, bare, bad);
+    if (yielded) kh_log("混合模式热键让位中：%d 条 Alt+Shift 键不注册，交回 PS", yielded);
     if (bad && !g_khHkFailLogged) {
         g_khHkFailLogged = 1;   /* 只提示一次，避免前台来回切换刷屏 */
         kh_log("⚠️ 部分组合键已被其它程序注册为全局热键 ⇒ 这些键只能退回「不吞键」模式");
@@ -1655,6 +1722,9 @@ static void kh_hk_fire(int id)
     const char* combo = g_khHkCombo[id - 1];
     KhItem hit;
     if (!kh_map_lookup(combo, &hit)) return;
+    /* 0x0224：让位期间这些键**已经不再注册**（见 kh_hk_sync），正常不会走到这里；
+       万一赶在「让位刚置位、注册还没重同步」的 100ms 窗口里，也不再广播。 */
+    if (g_khBlendYield && _stricmp(hit.action, "blendMode") == 0) return;
     kh_dual_mark(combo);          /* 轮询仍能读到键况 ⇒ 必须记账，防重复触发 */
     kh_hit_push(hit.combo);
 }
@@ -2442,6 +2512,9 @@ static void kh_do_uninstall(SOCKET s)
     /* ① 撤防（防看护重挂） */
     InterlockedExchange(&g_khArmed, 0);
 
+    /* ①b 0x0224：让位位一并归零（卸载/修复后用户会重新点开面板，届时按工具重放）。 */
+    if (g_khBlendYield) kh_set_blend_yield(0);
+
     /* ② 清开机自启（旧版 HotkeyDaemon 的项） */
     HKEY k;
     if (RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
@@ -2755,6 +2828,20 @@ static int kh_handle_message(SOCKET s, const char* js)
         char st[512];
         kh_build_hotkey_state(st, (int)sizeof(st));
         kh_send_to(s, st);
+        return 0;
+    }
+    /* 0x0224：混合模式热键「按工具让位」（面板 → 本模块，仅内存态、不落盘）。
+       on=true  ⇒ 当前工具自带混合模式，Alt+Shift+字母交回 PS；
+       on=false ⇒ 恢复由本模块接管（改 APP 面板的选区填充混合模式）。
+       ⛔ 严格布尔：json_bool 只认 true/false（面板必须发 JSON 布尔，不能发 1/0）。 */
+    if (_stricmp(type, "blendYield") == 0) {
+        int on = 0;
+        json_bool(js, "on", &on);
+        kh_set_blend_yield(on);
+        /* ⛔ 刻意**不回帧**：这不是状态查询，只是一个瞬时位；回 hotkeyState 会让
+           面板的「状态帧对账」再发一帧，多一条无意义的往返（且 hotkeyState 帧带
+           布防态跃变语义，滥用会干扰「热键已暂停」的提示时机）。
+           真相仍可由 hotkeyStatus 的 blendYield 字段读到（见 kh_build_hotkey_state）。 */
         return 0;
     }
     if (_stricmp(type, "repairKeyboard") == 0) {
