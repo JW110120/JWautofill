@@ -1946,7 +1946,16 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
      ④ 让位位不落盘、不进共享槽：`kh_cli_add` 与卸载时归零（方向安全 —— 归零只
         恢复「由本模块接管」，不会吞键丢操作），面板建连后立即重放。
    无共享槽位变化（`CFG_NLONGS` 仍 61）。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x0224; }
+
+/* 0x0225：停笔「描边自动补齐」在标准/追笔模式下时好时坏（用户 2026-11-09 报：
+   「刚加载一段时间不生效，跑一会才恢复；最小化 PS 再切回能恢复，但原本生效时
+   最小化反而失效」）。全部改动在 `smooth_engine.c`，本文件只改版本：
+     ① HUD 帧里的「宽判」`g_canvasHitDbg` 不再借用 `cheapOk`（内含 ropeMode/fgOk）
+        的沿用值，改为每帧无条件 `canvas_hit_ok(cur)` 现算；
+     ② 新增 `[hit] 宽判 x→y` 边沿日志，便于核对这一位的翻转。
+   HUD 显隐用的严格焦点门 `canvasOk` 逻辑逐字未动。
+   无共享槽位变化（`CFG_NLONGS` 仍 61）。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x0225; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {

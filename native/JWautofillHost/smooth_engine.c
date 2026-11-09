@@ -8221,7 +8221,8 @@ static DWORD WINAPI hud_thread(LPVOID param)
            `SetWindowPos(cur.x - rx - half, …)` ⇒ 窗口被钉到任意坐标（很可能在屏外）
            ⇒ 观感正是「HUD 该显示却完全看不到」。失败时按 (0,0) 兜底并节流报一次。 */
         POINT cur = { 0, 0 };
-        if (!se_real_GetCursorPos(&cur)) {
+        int curOk = se_real_GetCursorPos(&cur) ? 1 : 0;   /* 0x0225：读失败别拿 (0,0) 去做宽判 */
+        if (!curOk) {
             static DWORD s_lastCurFail;
             if ((DWORD)(now - s_lastCurFail) >= 5000) {
                 s_lastCurFail = now;
@@ -8419,17 +8420,32 @@ static DWORD WINAPI hud_thread(LPVOID param)
            直接矛盾，也正是用户报的「绘制过程中 HUD 偶尔闪一下又回来」。
            ⇒ 现在它们在 wantVisible 之后再判，只跳过重绘（见 `staleFrame`）。 */
         frame_resolve(now);
-        static int s_cvOkLast, s_cvHitLast;   /* 跳帧时沿用的上一次结论（仅诊断用） */
+        static int s_cvOkLast;                /* 跳帧时沿用的上一次结论（**仅 HUD 显隐/诊断用**） */
         int cvWhy = s_cvWhyDbg;               /* 默认不翻转 ⇒ 不误报「焦点门恢复」 */
         int canvasOk, canvasHit;
         if (cheapOk) {
             cvWhy = 0;
             canvasOk = canvas_focus_ok(cur, &cvWhy);
-            canvasHit = (canvasOk ? 1 : canvas_hit_ok(cur));
-            s_cvOkLast = canvasOk; s_cvHitLast = canvasHit;
+            s_cvOkLast = canvasOk;
         } else {
-            canvasOk = s_cvOkLast; canvasHit = s_cvHitLast;
+            canvasOk = s_cvOkLast;
         }
+        /* ⛔⛔ 0x0225：**宽判「笔在不在 PS 窗口子树里」必须与 HUD 显隐闸门解耦**。
+           旧写法把 canvasHit 塞在 cheapOk 分支里、跳帧时沿用 s_cvHitLast(初值 0)：
+             · cheapOk 里硬含 `ropeMode`（只有拉绳模式）与 `fgOk`（前台是本进程）
+               ⇒ 标准/追笔模式下 cheapOk 恒 0 ⇒ `g_canvasHitDbg` 被冻在 0；
+               而断流期的「喂入位置 / MSE 落笔推断 / 长停摆续命 / 代投 WT_PACKET」
+               共用这一位（见 cursamp_thread）⇒ 一停笔就把喂入钉死、PS 不被唤醒
+               ⇒ 用户看到的正是「停住光标后描边不自动补齐」。
+             · 前台切换（最小化 PS → 切回）恰恰是它偶尔被重算的时机：那一帧
+               光标在画布内就翻成 1（功能恢复）、在任务栏/桌面就翻成 0
+               （原本生效反而失效）—— 同一个动作结果相反的根因就在这里。
+           ⛔ 只拆「宽判」：canvasOk（严格焦点门）仍沿用旧值，wantVisible 与全部
+              HUD 显隐逻辑逐字不变；0x0134「宽判不看前台」的语义也不变。
+           canvas_hit_ok 只有 WindowFromPoint + IsChild 两次调用，det_GetCursorPos
+           本来就在每次查询里调它 ⇒ 这里每帧多一次不会重演 0x0208 的跨线程开销。 */
+        /* 读光标失败时沿用上一帧的宽判结论，(0,0) 不是真实落笔点。 */
+        canvasHit = curOk ? canvas_hit_ok(cur) : (int)g_canvasHitDbg;
         if (cvWhy != s_cvWhyDbg) {
             /* 边沿触发：只在焦点门结论翻转时打一行，带窗口类名 ⇒ 用户日志可与操作逐条对齐 */
             s_cvWhyDbg = cvWhy;
@@ -8461,6 +8477,23 @@ static DWORD WINAPI hud_thread(LPVOID param)
         InterlockedExchange(&g_canvasOkDbg, canvasOk ? 1 : 0);
         InterlockedExchange(&g_canvasHitDbg, canvasHit ? 1 : 0);
         InterlockedExchange(&g_ctOkDbg,     ctOk ? 1 : 0);
+        /* 0x0225：这一位以前被 HUD 显隐门冻住，翻面在日志里完全看不见 ⇒ 补一条边沿。
+           500ms 节流：最小化/恢复那一瞬窗口命中测试会连翻几拍，别刷屏。 */
+        {
+            static int   s_hitPrev = -1;
+            static DWORD s_hitLogAt;
+            if (canvasHit != s_hitPrev) {
+                int prev = s_hitPrev;
+                s_hitPrev = canvasHit;
+                if ((DWORD)(now - s_hitLogAt) >= 500) {
+                    s_hitLogAt = now;
+                    logf("# [hit] 宽判 %d→%d: mode=%d fg=%d cur=(%ld,%ld) frame=%p"
+                         "（补流/代投/落笔推断共用这一位）\n",
+                         prev, canvasHit, (int)(g_cfg ? g_cfg[CFG_I_MODE] : -1), fgOk,
+                         (long)cur.x, (long)cur.y, (void *)s_psFrame);
+                }
+            }
+        }
         /* ⛔ 0x0208：判据收成「便宜闸门 ∧ 焦点门」。便宜闸门里已含全部
            wnd/mem/active/gate/stroke/draw/fg/ct/dead/rope/实包/hudBits/开关
            各项（0x020F 起不含 jump/lag，它们只影响是否重绘），逐字等价于原来的
@@ -9685,6 +9718,32 @@ static void hud_stop(void)
                显式归零 —— 旧版冻在 1，包流一恢复就用陈旧几何画一圈。
             ④ 新增 `[hud] 显示` / `[hud] 隐藏` 边沿日志（此前显示动作零留痕，
                4 帧的闪现只能靠「未显示」行的 2s 节流缺口反推，根本看不见）。 */
+
+/*   0x0225 = ⛔⛔ 【**宽判被 HUD 显隐闸门冻住 ⇒ 标准/追笔模式停笔不补齐，且随
+             最小化/切回翻面**】（用户 2026-11-09 报：「选区平滑标准/追笔模式下停住
+             光标，描边自动补齐刚加载一段时间不生效，跑一会才恢复；最小化 PS 再
+             切回能恢复，但原本生效时最小化反而失效」）。
+           真机日志 jwwh-16152（10:56 起）实证：
+             · 每一条 `[hud] 未显示` 都是 `cv=0 rope=0 ck=0` ⇒ cheapOk 恒 0；
+             · 却反复出现 `[post] 喂入冻结：光标离开活动文档画布` 而光标明明在
+               画布内 ⇒ `g_canvasHitDbg` 是**冻住的旧值**，不是实测结果。
+           根因（构造性）：`canvasHit` 与 HUD 的 `canvasOk` 一起写在
+           `if (cheapOk)` 分支里、跳帧时沿用 `s_cvHitLast`。cheapOk 硬含
+           `ropeMode=(MODE==1)` 与 `fgOk` ⇒ 标准/追笔模式下它恒 0，于是
+           `g_canvasHitDbg` 从加载起就钉在初值 0；而 cursamp_thread 的
+           ①MSE 落笔推断武装 ②长停摆续命 ③喂入冻结/解冻 ④代投 WT_PACKET
+           全都读这一位 ⇒ 笔一停，喂入被钉死、PS 不被唤醒、描边追不上光标。
+           前台切换（最小化/恢复）恰是它偶尔被重算的一帧：那一拍光标在画布内
+           就翻 1（功能恢复），落在任务栏/桌面就翻 0（原本生效反而失效）
+           ⇒ 同一个动作结果相反，正是「翻转」观感的来源。
+           修法：**只把宽判拆出来**，HUD 帧里每帧无条件 `canvas_hit_ok(cur)`；
+           严格焦点门 canvasOk / wantVisible / 0x0134「宽判不看前台」逐字不动。
+           ⛔ 不许把补流/代投的判据再挂回任何「显示用」闸门（与铁律 12、110
+              「不许借用别的链路的供给」同源）。
+           验收：① 加载后第一笔停住光标即补齐，不必等；
+                 ② 最小化→切回不再改变补齐是否生效；
+                 ③ 新日志出现 `[hit] 宽判 x→y` 边沿，`[post] 喂入冻结` 只在
+                    光标真的离开画布时出现。 */
 __declspec(dllexport) int jwwh_version(void) { return 0x013A; }
 
 /* ⛔⛔ 0x013D：引擎软闸（面板 unload / reload 专用）。

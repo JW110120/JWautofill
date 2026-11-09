@@ -1,7 +1,7 @@
 # JWautofill 项目记忆（主索引）
 
 > 只留「编号 + 一句话 + refs 指针」；**明细一律在 `refs/`**，里程碑史在 `HISTORY.md`。⛔ 违反必炸。
-> 架构：平滑 + 键盘钩子 = **PS 进程内 .8li**（`native/JWautofillHost/`，WS 18924 平滑 / 18923 热键）。现役 **0x0224**（混合模式热键按工具让位，111）。
+> 架构：平滑 + 键盘钩子 = **PS 进程内 .8li**（`native/JWautofillHost/`，WS 18924 平滑 / 18923 热键）。现役 **0x0225**（停笔补齐宽判解耦，112）。
 
 ## 索引（`refs/` 下）
 
@@ -31,6 +31,7 @@
 109 ⛔⛔⛔ Alt 按住期间 HUD **只许画参考线**（0x0222）：`wantVisible` 在 `I_POLYALT` 为真时只认 `polyHint`，**跳过 90ms 隐藏去抖**（正是它让窗口多撑 90ms 而绘制分支只判 `!polyHint` ⇒ 画成圆），且此时隐藏**不写** `s_hudHideAt`（否则松 Alt 起笔首笔圆白等 180ms）；⛔ 判据用物理 `I_POLYALT` 而非吸附开关。
 110 ⛔⛔⛔ 吸附链**不许借用平滑的工具闸门供给**（0x0223）：GATETS 与闸门值的两条来源（`pollSmoothToolGate` 1s 巡检、`setSmoothToolGate` 1.8s 心跳）都绑在 `penOn` ⇒ 平滑一关全停 ⇒ 包路径整段死。⇒ ① 新增入站 `{"type":"toolGate","gate":0|1|2,"gateAge"?}`（`pstool_owns()` 时让位，⛔ 不能拿 penSmooth 顶替）；② 引擎 `poly_tool_ok()`=值优先，包/光标共用；③ `syncSmoothToolWatch` 的 `need` 加 `snapActive`。容差 10°→**5°**（`POLY_SNAP_TOL_DEG` 与 `POLY_SNAP_TAN` 必须同时改）。
 111 ⛔⛔⛔ 混合模式热键「按工具让位」必须**三处同时改**（0x0224）：LL 钩子命中放行、**RegisterHotKey 注册集跳过 blendMode 条目**（注册即独占摘键，钩子放行没用）、轮询兜底与 `kh_hk_fire` 不许再广播；让位位=原生原子位（入站 `blendYield`，不落盘、不进共享槽）；面板唯一喂点 `noteToolForBlendYield`（null 不喂）、巡检归 `syncToolWatch`（`syncSmoothToolWatch` 必须让位）。⛔ 工具 ID 一律驼峰：历史记录艺术画笔=`artBrushTool`，不存在 `artHistoryBrushTool`。
+112 ⛔⛔⛔ 救援链路的「宽判」不许借 HUD 显隐闸门（0x0225）：`g_canvasHitDbg` 原与 `canvasOk` 一起写在 `cheapOk` 分支、跳帧沿用旧值，而 `cheapOk` 含 `ropeMode`(仅拉绳)+`fgOk` ⇒ 标准/追笔下恒冻初值 0 ⇒ 停笔喂入被钉死、代投停 ⇒「描边不补齐」，最小化/切回恰好是它偶尔重算的一帧 ⇒ 同动作结果相反。⇒ 每帧无条件 `canvas_hit_ok(cur)` 现算（不看前台/模式），`canvasOk`/`wantVisible` 逐字不动。详见 `2026-11-09.md`。
 
 ## 其余铁律（1–89）—— 全文见 `refs/ironrules-1-89.md`（编号不变，按场景查）
 
