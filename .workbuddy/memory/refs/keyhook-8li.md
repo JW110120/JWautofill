@@ -262,3 +262,42 @@ Adobe 文档确认容器与面板是两套独立生命周期），C 侧闸无需
 **验收**：重启 PS 后看 `pi8li.log` 出现 `RegisterHotKey 接管 9 条（其中裸数字键 7 条；
 其它裸键交钩子/轮询 2 条，被占用 0 条）`；按 Num5 只切「绸光涂抹」，画笔
 不透明度保持原值；切到别的程序按 Num5 仍正常输入。
+
+---
+
+## N12 · 0x0228 文本输入闸门（H/L 在另存为对话框被摘键）
+
+**现象**：图层名内联编辑里 H、L 能打出来；另存为图片弹出的窗口里输入 H、L
+却被摘键。⚠️ 上一节（N11）写的「字母/符号裸键不注册 ⇒ 文本框安全」只对了一半。
+
+**真因**：H/L 确实**没注册**（日志「其它裸键交钩子/轮询 2 条」= H 与 L），
+但 LL 钩子在**原生对话框**里能收到键。PS 主窗口按键进不了钩子链
+（`按键通路：钩子 +0 / 轮询 +1`），图层名编辑框因此只被「不吞键」的轮询碰过；
+对话框里钩子一命中 H/L 就 `return 1` ⇒ 字符进不了输入框。
+同一键两处结果相反 ⇒ ⛔ 别再从「注册了哪些键」推文本框行为，要看
+「这一击有没有进 LL 钩子链」。
+
+**新增 `g_khTextGuard`（`kh_text_input_probe` / `kh_text_input_update`）**
+- 每 10ms 在 `kh_poll_step` 里只读探测：① 前台类 `#32770`；② `WS_EX_DLGMODALFRAME`；
+  ③ `GW_OWNER` 存在且宿主 `!IsWindowEnabled`（模态）；④ 焦点控件类
+  Edit/RichEdit/ComboBox/TextBox/AtlEdit/WindowsForms10.Edit；⑤ `hwndCaret` ∧
+  `GUI_CARETBLINKING`（缺一不可，只认句柄会读到残留值把闸门永久钉死）。
+- 400ms 黏滞盖住光标暗相；**LL 回调只读一个 volatile LONG**，零 Win32 查询。
+- 诊断串 `文本输入闸门 0⇒1（fgCls=... focusCls=... why=N caret=...）` 只在翻面打；
+  对话框没被识别时（`why=0`）拿这两个类名补规则即可。
+
+**四条键路的接入点（缺一就漏）**
+| 路 | 位置 |
+|---|---|
+| LL 钩子 | `kh_dispatch` 前台判定之后、退格删绑之前：整击 `CallNextHookEx`，⛔ 不记 `kh_dual_mark` |
+| 轮询 | `kh_poll_edge` 在 `kh_ps_foreground()` 之后 `if (g_khTextGuard) return;` |
+| RegisterHotKey | `kh_hk_sync` 的 `want` 加 `!text` + 新状态位 `g_khHkText`；同步 100ms→10ms；`kh_hk_fire` 压迟到 WM_HOTKEY |
+| 按住键电平 | `altHold` 块加 `holdVk && g_khTextGuard` 分支，`s_altArm=0` 作废起按准入 |
+
+**⛔ 纪律**：录制分支必须留在闸门之前；`kh_is_digit_vk`、混合模式让位、在位/布防/
+失焦/熔断门逐字不动；⛔ **不要手写 `WINVER`/`_WIN32_WINNT`** —— 默认档已同时声明
+`GUITHREADINFO` 与 `MOD_NOREPEAT`，显式写 0x0600 会把后者藏掉导致编译失败。
+
+**验收**：另存为文件名框能敲 H、L、数字、退格且不触发热键；日志出现
+`★诊断：文本输入闸门生效 ⇒ 整击放行 vk=0x48/0x4C`；关掉对话框回画布，
+H/L / Num1–7 照常（离开输入框 ≤400ms 黏滞属预期）。详见 `2026-11-11.md`。

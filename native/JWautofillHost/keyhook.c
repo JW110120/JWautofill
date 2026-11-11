@@ -38,7 +38,15 @@
  *   而裸键此前一律不进 RegisterHotKey ⇒ 只能由「不吞键」的轮询兜底触发，
  *   Num5 在切笔刷的同时被 PS 当成「不透明度 50%」。修法：`kh_hk_sync` 把表内
  *   数字类裸键（0–9 / Num0–9）也注册成系统级热键，其余裸键不变。详见 0x013D 段。
+ *
+ * ⛔⛔ 0x0228 文本输入闸门：H/L 这些「没注册」的裸键在**原生对话框**里仍会被
+ *   LL 钩子吞掉 —— PS 主窗口的按键进不了钩子链，但保存/另存为对话框的按键能进。
+ *   焦点在文本输入上下文时四条键路一起熄火（钩子放行、轮询不触发、撤注册、
+ *   按住键电平不算按住）。详见 `kh_text_input_probe` 段。
  */
+/* ⛔ 不要在这里手写 WINVER / _WIN32_WINNT：工具链默认档（≥0x0A00）已经同时
+   声明了 GUITHREADINFO 与 MOD_NOREPEAT；显式写 0x0600 会把默认档**调低**，
+   RegisterHotKey 用到的 MOD_NOREPEAT（0x4000，需 ≥0x0601）反而消失。 */
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
@@ -1201,6 +1209,117 @@ static int kh_ps_foreground(void)
     return 0;
 }
 
+/* ===== 0x0228：文本输入闸门（打字时整条热键链熄火）=====
+ *
+ * 用户 2026-11-11 报：「H、L 在图层名称里能打出来，但另存为图片弹出的窗口里
+ * 被摘键，输入不了」。
+ * ⛔ 根因**不是** RegisterHotKey —— H/L 属于「其它裸键」，压根没注册（日志
+ *   `其中裸数字键 7 条；其它裸键交钩子/轮询 2 条` 就是 H 与 L）。真正吞键的是
+ *   LL 钩子：PS 主窗口的按键进不了钩子链（`钩子 +0 / 轮询 +1`），但**原生
+ *   对话框**的按键能进；一旦 `kh_ps_foreground()` 成立，`kh_dispatch` 命中
+ *   H/L 就 `return 1` ⇒ 字符进不了输入框，热键却照样触发。同一个键在两处
+ *   结果相反，差别只在「钩子收不收得到这一击」。
+ *
+ * 修法：焦点落在「可输入文本」的上下文时，四条键路一起熄火：
+ *   ① LL 钩子：整击 `CallNextHookEx` 放行（不吞键、不广播、不记账）；
+ *   ② 轮询兜底：不触发热键（否则打字时 H 会顺手把主开关翻掉、L 会抢工具焦点）；
+ *   ③ RegisterHotKey：同步撤注册（Num1–7 / Shift+E 等系统级独占**不看焦点**，
+ *      不撤的话在保存对话框里连数字和文件名都敲不进去）；
+ *   ④ 按住键电平轮询（临时吸管 `/`）：不把打字时的 `/` 当成「按住切吸管」。
+ *
+ * ⛔ 探测只在 `kh_poll_step`（10ms 一拍、钩子线程）做；LL 回调**只读一个
+ *    volatile LONG**，维持「回调 O(1)、零 Win32 查询、零 I/O」纪律。
+ * ⛔ 判定口径 = 标准/模态对话框 + 焦点控件类 + 插入光标；⛔ 不用「有无 owner」
+ *    这种会把浮动 UXP 面板误判成对话框的粗口径。
+ * ⛔ 插入光标会闪烁 ⇒ 闸门加 400ms 黏滞（盖住≈265ms 暗相），避免每半秒翻面。
+ */
+static volatile LONG g_khTextGuard;
+static char s_khTextDiag[192];
+
+/* ASCII 大小写无关前缀比较（只用 wchar_t 的 ASCII 区，避开 CRT 宽字符函数差异）。 */
+static int kh_cls_prefix(const wchar_t* cls, const char* pat)
+{
+    for (int i = 0; pat[i]; i++) {
+        wchar_t c = cls[i];
+        char p = pat[i];
+        if (c >= L'A' && c <= L'Z') c = (wchar_t)(c - L'A' + L'a');
+        if (p >= 'A' && p <= 'Z') p = (char)(p - 'A' + 'a');
+        if (!c || c > 0x7f || (char)c != p) return 0;
+    }
+    return 1;
+}
+
+static void kh_cls_ascii(const wchar_t* w, char* a, int cap)
+{
+    int i = 0;
+    for (; w && i < cap - 1 && w[i]; i++)
+        a[i] = (w[i] >= 0x20 && w[i] < 0x7f) ? (char)w[i] : '?';
+    a[i] = 0;
+}
+
+/* 只读探测：1 = 正在文本输入。s_khTextDiag 留诊断串（只在闸门翻面时打）。 */
+static int kh_text_input_probe(void)
+{
+    HWND fg = GetForegroundWindow();
+    if (!fg) { _snprintf(s_khTextDiag, sizeof(s_khTextDiag), "fg=none"); return 0; }
+
+    wchar_t fgc[64], foc[64];
+    fgc[0] = foc[0] = 0;
+    GetClassNameW(fg, fgc, 64);
+
+    DWORD tid = GetWindowThreadProcessId(fg, NULL);
+    GUITHREADINFO gti;
+    memset(&gti, 0, sizeof(gti));
+    gti.cbSize = sizeof(gti);
+    int have = tid ? GetGUIThreadInfo(tid, &gti) : 0;
+    HWND focus = have ? (gti.hwndFocus ? gti.hwndFocus : gti.hwndActive) : NULL;
+    if (focus) GetClassNameW(focus, foc, 64);
+
+    int why = 0;
+    /* ① 标准 Win32 文件/保存对话框（PS 的另存为就在 #32770 上扩自己的选项页） */
+    if (kh_cls_prefix(fgc, "#32770")) why = 1;
+    /* ② 带模态框外框的自定义对话框 */
+    else if (GetWindowLongW(fg, GWL_EXSTYLE) & WS_EX_DLGMODALFRAME) why = 2;
+    else {
+        /* ③ 宿主窗口被禁用 = 典型模态对话框（不误伤可同时使用的浮动面板） */
+        HWND owner = GetWindow(fg, GW_OWNER);
+        if (owner && !IsWindowEnabled(owner)) why = 3;
+    }
+    /* ④ 焦点控件本身就是编辑器（图层名内联编辑、文件名框、数值框…） */
+    if (!why && (kh_cls_prefix(foc, "Edit")     || kh_cls_prefix(foc, "RichEdit") ||
+                 kh_cls_prefix(foc, "ComboBox") || kh_cls_prefix(foc, "TextBox") ||
+                 kh_cls_prefix(foc, "AtlEdit")  || kh_cls_prefix(foc, "WindowsForms10.Edit")))
+        why = 4;
+    /* ⑤ 该前台线程有可见插入光标（文字工具在画布上打字、自绘编辑控件）。
+       ⛔ 必须同时要 hwndCaret 与 GUI_CARETBLINKING：只认句柄可能读到残留值，
+       那样会把闸门永久钉在 1 ⇒ 所有热键静默失效。 */
+    if (!why && have && gti.hwndCaret && (gti.flags & GUI_CARETBLINKING)) why = 5;
+
+    char aFg[64], aFo[64];
+    kh_cls_ascii(fgc, aFg, (int)sizeof(aFg));
+    kh_cls_ascii(foc, aFo, (int)sizeof(aFo));
+    _snprintf(s_khTextDiag, sizeof(s_khTextDiag),
+              "fgCls=%s focusCls=%s why=%d caret=%s",
+              aFg[0] ? aFg : "-", aFo[0] ? aFo : "-", why,
+              (have && gti.hwndCaret && (gti.flags & GUI_CARETBLINKING)) ? "1" : "0");
+    s_khTextDiag[sizeof(s_khTextDiag) - 1] = 0;
+    return why ? 1 : 0;
+}
+
+/* 10ms 一拍刷新（只从 kh_poll_step 调用）。⛔ 不在 LL 回调里做 Win32 查询。 */
+static void kh_text_input_update(void)
+{
+    int raw = kh_text_input_probe();
+    DWORD now = GetTickCount();
+    static DWORD s_hold;
+    if (raw) s_hold = now;
+    /* 400ms > 插入光标一整个暗相（≈265ms），保证连续打字期间闸门不翻面。 */
+    int v = raw || (s_hold && (DWORD)(now - s_hold) < 400);
+    LONG old = InterlockedExchange(&g_khTextGuard, v);
+    if (old != v)
+        kh_log("文本输入闸门 %ld⇒%d（%s）", (long)old, v, s_khTextDiag);
+}
+
 /* 录制/退格回帧：钩子线程只入队，调度线程代发（零 I/O 纪律）。 */
 static void kh_out_push(SOCKET s, const char* msg)
 {
@@ -1298,6 +1417,8 @@ static void kh_start_recording(void)
 static volatile LONG g_khDiagIn, g_khDiagFg, g_khDiagSafe, g_khDiagHiBit;
 /* 0x0224：混合模式热键「让位」首次留痕（切到动笔类工具后按一次 Alt+Shift+字母即可验证）。 */
 static volatile LONG g_khDiagBlendYield;
+/* 0x0228：文本输入闸门首次生效留痕。 */
+static volatile LONG g_khDiagText;
 
 /* 钩子实际逻辑（外层 kh_proc 只负责计时熔断）。⛔ 全程零 I/O、零异常。 */
 static LRESULT kh_dispatch(int nCode, WPARAM wParam, LPARAM lParam)
@@ -1394,6 +1515,24 @@ static LRESULT kh_dispatch(int nCode, WPARAM wParam, LPARAM lParam)
             if (fg) GetWindowThreadProcessId(fg, &fp);
             kh_hlog("★诊断：前台判定失败 ⇒ 放行 vk=0x%02X（fgPid=%lu 本pid=%lu 表内=%d）",
                     vk, (unsigned long)fp, (unsigned long)GetCurrentProcessId(), (int)g_khPidCount);
+        }
+        return CallNextHookEx(h, nCode, wParam, lParam);
+    }
+
+    /* ===== 0x0228 文本输入闸门 =====
+       焦点在保存/另存为对话框、图层名内联编辑框、文字工具插入光标等上下文时，
+       整击原样放行：⛔ 不吞键、⛔ 不广播、⛔ 不记 kh_dual_mark（轮询那侧同样熄火，
+       否则打字时 H/L 会被轮询再触发一次）。退格删绑也在闸门之后，避免打字时
+       按 Backspace 被当成「请求解绑」而吞掉。
+       ⛔ 只读一个 volatile LONG，Win32 焦点查询全在 kh_poll_step 的 10ms 拍里做。 */
+    if (g_khTextGuard) {
+        static DWORD s_lastTextLog;
+        DWORD nowT = GetTickCount();
+        if (InterlockedExchange(&g_khDiagText, 1) == 0 ||
+            (DWORD)(nowT - s_lastTextLog) >= 2000) {
+            s_lastTextLog = nowT;
+            kh_hlog("★诊断：文本输入闸门生效 ⇒ 整击放行 vk=0x%02X（%s）",
+                    vk, s_khTextDiag);
         }
         return CallNextHookEx(h, nCode, wParam, lParam);
     }
@@ -1559,6 +1698,9 @@ static void kh_poll_edge(int vk)
     }
 
     if (!kh_ps_foreground()) return;       /* 与钩子同语义：不在 PS 里就不响应 */
+    /* 0x0228：打字时不触发热键 —— 轮询虽吞不了键，但 H 会把主开关翻掉、
+       L 会抢工具焦点，在文件名框里同样属于「按键被插件截走」。 */
+    if (g_khTextGuard) return;
 
     if (vk == 0x08 && g_khArmOn) {
         SOCKET c = INVALID_SOCKET;
@@ -1614,6 +1756,8 @@ static void kh_poll_edge(int vk)
  *      纳入本通路（见 kh_is_digit_vk），其余字母/符号裸键维持旧语义。
  *   2) 注册是**全局独占**，所以只在 PS 前台时挂、失焦立刻全撤 —— 否则用户在
  *      别的程序里按 Ctrl+Q / Shift+E / Num5 也会被吞掉。
+ *      0x0228 追加：**文本输入上下文同样全撤**（保存/另存为对话框、图层名内联
+ *      编辑框…）。全局独占不看焦点，在文件名框里照样摘键。
  *   3) 录制期间必须全撤，否则按下的组合键会被系统摘走，钩子与轮询都看不见。
  *   4) 注册失败（已被别的程序占用）只留痕一次，自动退回钩子/轮询（不吞键）。
  *
@@ -1626,6 +1770,9 @@ static LONG g_khHkStamp = -1;
    让位靠的不是「钩子放过」，而是**根本不注册**：RegisterHotKey 会把组合键从
    输入队列里摘走，一旦注册了，键就到不了 PS，钩子那层再放过也没用。 */
 static LONG g_khHkYield = -1;
+/* 0x0228：上一轮同步时的「文本输入闸门」。它翻面必须**立刻**撤/重注册 ——
+   RegisterHotKey 是全局独占、完全不看焦点，保存对话框一弹出还在册就会摘走数字键。 */
+static LONG g_khHkText = -1;
 static int  g_khHkFailLogged;
 
 /* "Ctrl+Alt+Shift+K" → (MOD_*, vk)。**允许裸键**（mods 可能为 0）。
@@ -1661,8 +1808,9 @@ static int kh_combo_to_key(const char* combo, int* mods, int* vk)
 /* 0x0226：主键盘 0–9（0x30–0x39）/ 小键盘 Num0–9（0x60–0x69）。
  * PS 在画笔类工具下把这些**裸数字键**当作「画笔不透明度 10%…100%」的
  * 快捷键（Num5 ⇒ 50%、0 ⇒ 100%），与表里的裸键笔刷热键撞车。
- * ⛔ 只圈数字类：H / L / `/` 等字母符号裸键仍交给钩子+轮询，避免在 PS
- *    文本框打字时被系统级独占摘键；也保证「临时吸管」等按住语义不受影响。 */
+ * ⛔ 只圈数字类：H / L / `/` 等字母符号裸键仍交给钩子+轮询，保证「临时吸管」
+ *    等按住语义不受影响；打字场景由 0x0228 文本输入闸门统一兜住（四条键路一起
+ *    熄火），⛔ 别把「文本框安全」归功于这里 —— LL 钩子在原生对话框里照样吞 H/L。 */
 static int kh_is_digit_vk(int vk)
 {
     return (vk >= 0x30 && vk <= 0x39) || (vk >= 0x60 && vk <= 0x69);
@@ -1682,17 +1830,22 @@ static void kh_hk_reset_for_record(void)
     g_khHkStamp = 0;
 }
 
-/* 同步注册集合：want = 插件在位 ∧ 布防 ∧ 非录制 ∧ 非熔断 ∧ PS 前台。 */
+/* 同步注册集合：want = 插件在位 ∧ 布防 ∧ 非录制 ∧ 非熔断 ∧ PS 前台 ∧ 非文本输入。
+ * 0x0228：新增最后一条 —— 文本输入上下文里必须**全撤**，否则 Num1–7 / Shift+E
+ * 这些系统级独占仍会把文件名里的字符摘走（与 LL 钩子是否收得到键无关）。 */
 static void kh_hk_sync(void)
 {
+    LONG text = (LONG)g_khTextGuard;
     int want = (g_khPlug && g_khArmed && !g_khRecording && !g_khSafeMode && !g_khSrvStop &&
-                kh_ps_foreground()) ? 1 : 0;
+                kh_ps_foreground() && !text) ? 1 : 0;
     LONG stamp = want ? (LONG)(1000000 + g_khMapSeq) : 0;
     LONG yld = g_khBlendYield ? 1 : 0;
-    /* 0x0224：让位位翻面也要重同步（不注册 ⇒ 键直接落到 PS）。 */
-    if (stamp == g_khHkStamp && yld == g_khHkYield) return;
+    /* 0x0224：让位位翻面也要重同步（不注册 ⇒ 键直接落到 PS）。
+       0x0228：文本闸门翻面同理，且必须在 10ms 拍内完成。 */
+    if (stamp == g_khHkStamp && yld == g_khHkYield && text == g_khHkText) return;
     g_khHkStamp = stamp;
     g_khHkYield = yld;
+    g_khHkText = text;
     kh_hk_clear();
     if (!want) return;
 
@@ -1734,6 +1887,9 @@ static void kh_hk_sync(void)
 static void kh_hk_fire(int id)
 {
     if (id < 1 || id > KH_HK_MAX || !g_khHkUsed[id - 1]) return;
+    /* 0x0228：闸门刚翻面、撤注册还没赶上的那一拍里到达的迟到 WM_HOTKEY，
+       不许再兑现热键动作（此时用户已经在输入框里打字了）。 */
+    if (g_khTextGuard) return;
     const char* combo = g_khHkCombo[id - 1];
     KhItem hit;
     if (!kh_map_lookup(combo, &hit)) return;
@@ -1751,11 +1907,13 @@ static void kh_poll_step(void)
     /* 关注位表在钩子线程内重建（kh_key_to_token 的返回缓冲是 static）。 */
     if (InterlockedExchange(&g_khWatchDirty, 0)) kh_poll_rebuild_watch();
 
-    /* 100ms 一次：按「插件在位 ∧ 布防 ∧ 非录制 ∧ 非熔断 ∧ PS 前台」同步注册集合。
-       注册/注销必须跟住前台切换，否则会在别的程序里吞掉用户按键。 */
-    static DWORD s_hkTick;
-    DWORD nowT = GetTickCount();
-    if ((DWORD)(nowT - s_hkTick) >= 100) { s_hkTick = nowT; kh_hk_sync(); }
+    /* 0x0228：每拍（10ms）刷新「文本输入闸门」并同步系统级注册集合。
+       ⛔ 旧版 100ms 一同步不够：保存/另存为对话框一弹出就得立刻撤注册，
+          RegisterHotKey 是全局独占、不看焦点，晚一拍就摘走一个字符。
+       ⛔ kh_hk_sync 内部按「状态戳 + 让位位 + 文本闸门」早退，稳态零开销；
+          Win32 焦点查询只在这一拍做，LL 回调只读一个原子位。 */
+    kh_text_input_update();
+    kh_hk_sync();
 
     BYTE cur[256];
     for (int vk = 0; vk < 256; vk++)
@@ -2082,6 +2240,13 @@ static DWORD WINAPI kh_dispatch_thread(LPVOID param)
                  *    （下面的 `!(GetAsyncKeyState(holdVk))` 分支会重新给准入）再按。
                  * ⛔ alt 保持 0：若正好在按着的时候撤防，下面按边沿仍会广播一帧 v=0
                  *    并清 I_ALTTOOL 硬否决位（等价于「当成松开」），不会把状态悬在半空。 */
+                s_altArm = 0;
+                s_altTicks = 0;
+            } else if (holdVk && g_khTextGuard) {
+                /* 0x0228：第四条键路（按住键电平轮询）同样熄火 —— 在文件名框里
+                   敲 `/` 不该切临时吸管。⛔ 作废起按准入：等键真的抬起再由上面的
+                   `!(GetAsyncKeyState(holdVk))` 分支重新给准入，避免闸门一撤就
+                   凭「键还按着」补一次假按住。 */
                 s_altArm = 0;
                 s_altTicks = 0;
             } else if (holdVk) {

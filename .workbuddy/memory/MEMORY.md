@@ -1,7 +1,7 @@
 # JWautofill 项目记忆（主索引）
 
 > 只留「编号 + 一句话 + refs 指针」；**明细一律在 `refs/`**，里程碑史在 `HISTORY.md`。⛔ 违反必炸。
-> 架构：平滑 + 键盘钩子 = **PS 进程内 .8li**（`native/JWautofillHost/`，WS 18924 平滑 / 18923 热键）。现役 **0x0226**（裸数字键热键穿透修复，113）。
+> 架构：平滑 + 键盘钩子 = **PS 进程内 .8li**（`native/JWautofillHost/`，WS 18924 平滑 / 18923 热键）。现役 **0x0228**（文本输入闸门，115；0x0227 是面板侧纯白清除，`.8li` 未动）。
 
 ## 索引（`refs/` 下）
 
@@ -9,7 +9,7 @@
 
 **校验**：改 CSS 跑 3 个 guard（只扫 `src/styles/*.css`）；类型检查 `npx tsc -p tsconfig.check.json`（⛔ 别用 `tsc --noEmit`）；改 .c 跑 `build.sh`（须沙箱外）零告警 + 导出表 5 项；改面板 `yarn build`。全仓 ~168 条历史错误在 `app.tsx`/`adjustments`/`components`，只看自己碰过的行。
 
-## 最新铁律（0x0211–0x0227，要改先看这一段）
+## 最新铁律（0x0211–0x0228，要改先看这一段）
 
 90 ⛔⛔⛔ 「PS 临时模式」不派发任何可观测变更（`application.tool` 仍 `lassoTool`）⇒ 真相只在原生：独立槽 `I_POLYALT` 每 20ms **镜像电平**；⛔ 不与 `I_ALTTOOL` 合槽。
 91 ⛔⛔⛔ 「按住」= 修饰键完全匹配 + 一次性起按准入 + 连两拍确认（≈40ms）；同键位不同修饰键故意共存。
@@ -35,6 +35,8 @@
 113 ⛔⛔⛔ 裸数字键热键**必须走 RegisterHotKey 系统级独占**（0x0226）：PS 前台时 LL 钩子实际收不到键（pi8li.log `钩子 +0 / 轮询 +1`），而旧 `kh_combo_to_hotkey` 主动 `if(!m) return 0` 把**所有裸键**排除注册 ⇒ 全靠「不吞键」轮询触发 ⇒ Num1–9 原样落进 PS 改画笔不透明度（按 5=50%）。⛔「RegisterHotKey 不接受裸键」是错的：实测 `mods=0` / `MOD_NOREPEAT` 对 `VK_NUMPAD5`、主键盘 `5` 均 TRUE。⇒ `kh_hk_sync` 改用 `kh_combo_to_key` + `kh_is_digit_vk`（0x30–39 / 0x60–69）只圈**表内实际绑定的数字类裸键**；字母符号裸键（H/L/`/`）维持旧语义防文本框被摘键；`kh_hk_fire` 的 `kh_dual_mark` 压轮询影子，录制/失焦/不在位/让位撤注册门逐字不动。详见 `refs/keyhook-8li.md` N11、`2026-11-11.md`。
 
 114 ⛔⛔⛔ 纯色填充 + 清除模式的公式输入**恒为纯白 F≡255**（0x0227 面板侧变更；`.8li` 仍 0x0226）：旧 `ClearHandler.getSolidFillGrayData` 拿 `app.foregroundColor` 经抖动算灰度，红色 F≈76 ⇒ `A'=179` 只降不透明度、与套索 Delete 不符。⇒ ① `buildSolidClearWhite` 与 `SingleChannelHandler.clearSingleChannel` 纯色分支都给全 255，**不读不写 PS 前景色、不跑颜色抖动**；② 清除强度只剩面板不透明度（`clearStrength`），想半透明自己调；③ 图案/渐变清除、非清除纯色填充、描边清除、`fillSingleChannel` 逐字不动；④ 快速蒙版纯色清除补「进入保存前景色 → finally 还原」（`getQuickMaskPixels` 会临时 set 前景色），图案/渐变不加这层。详见 `2026-11-11.md`。
+
+115 ⛔⛔⛔ 「H/L 在另存为对话框被摘键」**不是** RegisterHotKey 干的（0x0228）：H/L 属「其它裸键」根本没注册，真凶是 **LL 钩子**——PS 主窗口按键进不了钩子链（`钩子 +0 / 轮询 +1`），原生对话框按键却能进 ⇒ `kh_dispatch` 命中即 `return 1`。⇒ 新增 `g_khTextGuard` 文本输入闸门（`#32770` / `DLGMODALFRAME` / 宿主被禁用 / 焦点编辑控件类 / 可见插入光标 + 400ms 黏滞），**四条键路一起熄火**：钩子整击放行（含退格删绑）、轮询不触发、`kh_hk_sync` 全撤注册（全局独占不看焦点，否则 Num1–7 在文件名框照样摘键）、按住键电平不算按住；同步 100ms→10ms。⛔ 探测只在 `kh_poll_step` 做，LL 回调只读一个 volatile LONG；⛔ 别手写 `WINVER`（写 0x0600 会把 `MOD_NOREPEAT` 藏掉）；⛔ 录制分支必须在闸门之前。版本 0x0227 被面板侧占用，`.8li` 顺延 0x0228。详见 `2026-11-11.md`、`refs/keyhook-8li.md` N12。
 
 ## 其余铁律（1–89）—— 全文见 `refs/ironrules-1-89.md`（编号不变，按场景查）
 

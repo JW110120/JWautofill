@@ -1972,7 +1972,29 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
      ④ 字母/符号类裸键（H、L、`/`…）维持旧语义，避免在 PS 文本框打字时被摘键；
         录制期、失焦、插件不在位、混合模式让位等既有撤注册门逐字未动。
    无共享槽位变化（`CFG_NLONGS` 仍 61）。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x0226; }
+
+/* 0x0227：面板侧变更（纯色填充 + 清除模式恒用纯白 F≡255），只动
+   `src/utils/ClearHandler.ts` / `SingleChannelHandler.ts`，`.8li` 仍 0x0226。
+   版本号按全仓变更序号顺延，故本轮 `.8li` 直接用 0x0228。 */
+
+/* 0x0228：H/L 在另存为等原生对话框里被摘键（用户 2026-11-11 报：「修改图层
+   名称时 H、L 还能打出来，另存为图片弹出的窗口里却输入不了」）。
+   全部改动在 `keyhook.c`，本文件只改版本：
+     ① 根因澄清：H/L **没有**注册 RegisterHotKey（日志「其它裸键交钩子/轮询
+        2 条」即 H 与 L）；吞键的是 LL 钩子 —— PS 主窗口的按键进不了钩子链，
+        但原生对话框的按键能进，`kh_dispatch` 命中即 `return 1`。
+     ② 新增 `g_khTextGuard` 文本输入闸门：每 10ms 在 `kh_poll_step` 里只读探测
+        （#32770 / DLGMODALFRAME / 宿主被禁用 / 焦点编辑控件类 / 插入光标），
+        LL 回调只读一个 volatile LONG，维持回调 O(1) 零 Win32 查询纪律；
+        插入光标闪烁用 400ms 黏滞压住翻面抖动。
+     ③ 四条键路一起熄火：钩子整击 `CallNextHookEx` 放行（含退格删绑）、
+        轮询不触发热键、`kh_hk_sync` 全撤 RegisterHotKey（全局独占不看焦点，
+        否则 Num1–7 / Shift+E 在文件名框里照样摘键）、按住键电平不算按住；
+        `kh_hk_fire` 压住迟到的 WM_HOTKEY，同步节奏由 100ms 收紧到 10ms 一拍。
+     ④ 录制分支仍在闸门之前（录制不受影响）；0x0226 数字键注册规则、
+        混合模式让位、在位/布防/失焦等既有门逐字未动。
+   无共享槽位变化（`CFG_NLONGS` 仍 61）。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x0228; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {
