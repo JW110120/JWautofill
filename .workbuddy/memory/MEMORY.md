@@ -1,7 +1,7 @@
 # JWautofill 项目记忆（主索引）
 
 > 只留「编号 + 一句话 + refs 指针」；**明细一律在 `refs/`**，里程碑史在 `HISTORY.md`。⛔ 违反必炸。
-> 架构：平滑 + 键盘钩子 = **PS 进程内 .8li**（`native/JWautofillHost/`，WS 18924 平滑 / 18923 热键）。现役 **0x0225**（停笔补齐宽判解耦，112）。
+> 架构：平滑 + 键盘钩子 = **PS 进程内 .8li**（`native/JWautofillHost/`，WS 18924 平滑 / 18923 热键）。现役 **0x0226**（裸数字键热键穿透修复，113）。
 
 ## 索引（`refs/` 下）
 
@@ -9,7 +9,7 @@
 
 **校验**：改 CSS 跑 3 个 guard（只扫 `src/styles/*.css`）；类型检查 `npx tsc -p tsconfig.check.json`（⛔ 别用 `tsc --noEmit`）；改 .c 跑 `build.sh`（须沙箱外）零告警 + 导出表 5 项；改面板 `yarn build`。全仓 ~168 条历史错误在 `app.tsx`/`adjustments`/`components`，只看自己碰过的行。
 
-## 最新铁律（0x0211–0x0224，要改先看这一段）
+## 最新铁律（0x0211–0x0227，要改先看这一段）
 
 90 ⛔⛔⛔ 「PS 临时模式」不派发任何可观测变更（`application.tool` 仍 `lassoTool`）⇒ 真相只在原生：独立槽 `I_POLYALT` 每 20ms **镜像电平**；⛔ 不与 `I_ALTTOOL` 合槽。
 91 ⛔⛔⛔ 「按住」= 修饰键完全匹配 + 一次性起按准入 + 连两拍确认（≈40ms）；同键位不同修饰键故意共存。
@@ -32,6 +32,9 @@
 110 ⛔⛔⛔ 吸附链**不许借用平滑的工具闸门供给**（0x0223）：GATETS 与闸门值的两条来源（`pollSmoothToolGate` 1s 巡检、`setSmoothToolGate` 1.8s 心跳）都绑在 `penOn` ⇒ 平滑一关全停 ⇒ 包路径整段死。⇒ ① 新增入站 `{"type":"toolGate","gate":0|1|2,"gateAge"?}`（`pstool_owns()` 时让位，⛔ 不能拿 penSmooth 顶替）；② 引擎 `poly_tool_ok()`=值优先，包/光标共用；③ `syncSmoothToolWatch` 的 `need` 加 `snapActive`。容差 10°→**5°**（`POLY_SNAP_TOL_DEG` 与 `POLY_SNAP_TAN` 必须同时改）。
 111 ⛔⛔⛔ 混合模式热键「按工具让位」必须**三处同时改**（0x0224）：LL 钩子命中放行、**RegisterHotKey 注册集跳过 blendMode 条目**（注册即独占摘键，钩子放行没用）、轮询兜底与 `kh_hk_fire` 不许再广播；让位位=原生原子位（入站 `blendYield`，不落盘、不进共享槽）；面板唯一喂点 `noteToolForBlendYield`（null 不喂）、巡检归 `syncToolWatch`（`syncSmoothToolWatch` 必须让位）。⛔ 工具 ID 一律驼峰：历史记录艺术画笔=`artBrushTool`，不存在 `artHistoryBrushTool`。
 112 ⛔⛔⛔ 救援链路的「宽判」不许借 HUD 显隐闸门（0x0225）：`g_canvasHitDbg` 原与 `canvasOk` 一起写在 `cheapOk` 分支、跳帧沿用旧值，而 `cheapOk` 含 `ropeMode`(仅拉绳)+`fgOk` ⇒ 标准/追笔下恒冻初值 0 ⇒ 停笔喂入被钉死、代投停 ⇒「描边不补齐」，最小化/切回恰好是它偶尔重算的一帧 ⇒ 同动作结果相反。⇒ 每帧无条件 `canvas_hit_ok(cur)` 现算（不看前台/模式），`canvasOk`/`wantVisible` 逐字不动。详见 `2026-11-09.md`。
+113 ⛔⛔⛔ 裸数字键热键**必须走 RegisterHotKey 系统级独占**（0x0226）：PS 前台时 LL 钩子实际收不到键（pi8li.log `钩子 +0 / 轮询 +1`），而旧 `kh_combo_to_hotkey` 主动 `if(!m) return 0` 把**所有裸键**排除注册 ⇒ 全靠「不吞键」轮询触发 ⇒ Num1–9 原样落进 PS 改画笔不透明度（按 5=50%）。⛔「RegisterHotKey 不接受裸键」是错的：实测 `mods=0` / `MOD_NOREPEAT` 对 `VK_NUMPAD5`、主键盘 `5` 均 TRUE。⇒ `kh_hk_sync` 改用 `kh_combo_to_key` + `kh_is_digit_vk`（0x30–39 / 0x60–69）只圈**表内实际绑定的数字类裸键**；字母符号裸键（H/L/`/`）维持旧语义防文本框被摘键；`kh_hk_fire` 的 `kh_dual_mark` 压轮询影子，录制/失焦/不在位/让位撤注册门逐字不动。详见 `refs/keyhook-8li.md` N11、`2026-11-11.md`。
+
+114 ⛔⛔⛔ 纯色填充 + 清除模式的公式输入**恒为纯白 F≡255**（0x0227 面板侧变更；`.8li` 仍 0x0226）：旧 `ClearHandler.getSolidFillGrayData` 拿 `app.foregroundColor` 经抖动算灰度，红色 F≈76 ⇒ `A'=179` 只降不透明度、与套索 Delete 不符。⇒ ① `buildSolidClearWhite` 与 `SingleChannelHandler.clearSingleChannel` 纯色分支都给全 255，**不读不写 PS 前景色、不跑颜色抖动**；② 清除强度只剩面板不透明度（`clearStrength`），想半透明自己调；③ 图案/渐变清除、非清除纯色填充、描边清除、`fillSingleChannel` 逐字不动；④ 快速蒙版纯色清除补「进入保存前景色 → finally 还原」（`getQuickMaskPixels` 会临时 set 前景色），图案/渐变不加这层。详见 `2026-11-11.md`。
 
 ## 其余铁律（1–89）—— 全文见 `refs/ironrules-1-89.md`（编号不变，按场景查）
 

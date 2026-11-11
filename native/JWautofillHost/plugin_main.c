@@ -1955,7 +1955,24 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
      ② 新增 `[hit] 宽判 x→y` 边沿日志，便于核对这一位的翻转。
    HUD 显隐用的严格焦点门 `canvasOk` 逻辑逐字未动。
    无共享槽位变化（`CFG_NLONGS` 仍 61）。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x0225; }
+
+/* 0x0226：裸数字键笔刷热键会顺带改 PS 画笔不透明度（用户 2026-11-11 报：
+   「笔刷热键绑 Num1–9，按 Num5 调笔刷时不透明度被改成 50%」）。
+   全部改动在 `keyhook.c`，本文件只改版本：
+     ① 实证修正：RegisterHotKey **接受无修饰键的裸键**（本机实测 VK_NUMPAD5 /
+        主键盘 '5' 配 mods=0 与 MOD_NOREPEAT 均返回 TRUE），旧注释「裸键注册不了」
+        是错的；真正原因是 `kh_combo_to_hotkey` 主动 `if(!m) return 0` 跳过了裸键。
+     ② 真机日志 pi8li.log 实证：`按键通路：钩子 +0 / 轮询 +1` 且
+        `RegisterHotKey 接管 2 条（裸键交给钩子/轮询 9 条）` ⇒ PS 前台时 LL 钩子
+        整段收不到键，9 条裸键全部由「不吞键」的轮询兜底触发，数字键原样落进 PS。
+     ③ `kh_hk_sync` 改用 `kh_combo_to_key`，只把**表内实际绑定的数字类裸键**
+        （主键盘 0–9 / 小键盘 Num0–9，见 `kh_is_digit_vk`）纳入系统级独占：
+        按键从输入队列摘走 ⇒ PS 不再收到 ⇒ 不改不透明度；插件仍由 WM_HOTKEY
+        兑现热键（`kh_hk_fire` 原有 `kh_dual_mark` 压住轮询影子）。
+     ④ 字母/符号类裸键（H、L、`/`…）维持旧语义，避免在 PS 文本框打字时被摘键；
+        录制期、失焦、插件不在位、混合模式让位等既有撤注册门逐字未动。
+   无共享槽位变化（`CFG_NLONGS` 仍 61）。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x0226; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {

@@ -206,18 +206,10 @@ export class SingleChannelHandler {
     static async clearSingleChannel(options: SingleChannelFillOptions, fillMode: 'foreground' | 'pattern' | 'gradient', state?: any): Promise<boolean> {
         try {
             console.log('🧹 开始单通道清除操作，模式:', fillMode);
-            
-            // 预先保存前景色，防止后续操作影响前景色获取
-            let savedForegroundColor = null;
-            if (fillMode === 'foreground') {
-                savedForegroundColor = {
-                    hue: app.foregroundColor.hsb.hue,
-                    saturation: app.foregroundColor.hsb.saturation,
-                    brightness: app.foregroundColor.hsb.brightness
-                };
-                console.log('🔒 预先保存前景色:', savedForegroundColor);
-            }
-            
+
+            // 0x0227：纯色 + 清除的公式输入恒为纯白，不再读取 / 不修改 PS 前景色，
+            //   因此这里不再需要「预先保存前景色」。
+            //   ⛔ 填充路径 fillSingleChannel 仍按原样保存并使用前景色，未受影响。
             // 检查是否在单通道模式
             const channelInfo = await this.getCurrentChannelInfo();
             if (!channelInfo || !channelInfo.isInSingleColorChannel) {
@@ -269,11 +261,20 @@ export class SingleChannelHandler {
             
             // 根据清除模式生成清除数据
             switch (fillMode) {
-                case 'foreground':
-                    const solidColorResult = await this.generateSolidColorData(bounds, state, savedForegroundColor);
-                    clearData = solidColorResult.colorData;
-                    alphaData = solidColorResult.alphaData;
+                case 'foreground': {
+                    /* 0x0227 纯色 + 清除：输入公式按纯白处理 ⇒ F ≡ 255。
+                       与 ClearHandler.buildSolidClearWhite 同一口径：不读前景色、
+                       不跑颜色抖动，清除强度只由 options.opacity 经 clearStrength 控制。
+                       ⛔ 图案 / 渐变两条分支逐字不动。
+                       ⛔ 填充（fillSingleChannel）仍走 generateSolidColorData，未受影响。 */
+                    const white = new Uint8Array(bounds.selectionDocIndices.size);
+                    white.fill(255);
+                    const whiteAlpha = new Uint8Array(bounds.selectionDocIndices.size);
+                    whiteAlpha.fill(255);
+                    clearData = white;
+                    alphaData = whiteAlpha;
                     break;
+                }
                 case 'pattern':
                     if (!options.pattern) {
                         await core.showAlert({ message: '请先选择一个图案预设' });

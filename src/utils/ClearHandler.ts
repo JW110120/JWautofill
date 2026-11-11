@@ -1,5 +1,5 @@
 import { action, app, core, imaging } from "photoshop";
-import { calculateRandomColor, hsbToRgb, rgbToGray } from './ColorUtils';
+/* 0x0227：纯色清除的输入恒为纯白，不再经过颜色抖动公式 ⇒ 不再依赖 ColorUtils。 */
 import { Pattern } from '../types/state';
 import {
     clearStrength,
@@ -305,14 +305,18 @@ export class ClearHandler {
      * 把当前「内容」归约成选区内的灰度 F 与可选透明度 α。
      * 三种内容共用一个出口，缺预设时弹原生提示并返回 null（调用方据此放弃本轮）。
      *
-     * @param foregroundColor 快速蒙版必须在**退出快速蒙版之前**抓取前景色后传入
-     * @param quickMask       快速蒙版的纯色抖动走灰度通道口径（与像素图层不同）
+     * ⛔⛔ 0x0227（用户 2026-11-11）：**纯色填充模式的清除，F 恒为纯白 255**。
+     *   旧实现用 `app.foregroundColor` 经抖动公式算灰度：前景色是红色时
+     *   F ≈ 76 ⇒ `A' = A − F×t` / `A×(1−F/255×t)` 只把不透明度降了约三成，
+     *   与「套索圈选 → Delete」的完全删除完全不同，非常反直觉。
+     *   现在纯色分支既不读、也不设置 PS 前景色，更不跑颜色抖动公式；
+     *   清除强度只剩 `clearStrength` 里的**面板不透明度**一个来源
+     *   （t = 面板不透明度 × 内容 α × 羽化系数），100% 时 F=255 ⇒ 完全删除。
+     *   ⛔ 图案 / 渐变两条分支逐字不动（用户明确要求维持原样）。
      */
     static async buildClearFillData(
         state: any,
-        bounds: any,
-        foregroundColor?: any,
-        quickMask: boolean = false
+        bounds: any
     ): Promise<ClearFillData | null> {
         if (state.fillMode === 'pattern') {
             if (!state.selectedPattern) {
@@ -339,8 +343,29 @@ export class ClearHandler {
             return { gray, alpha: alpha || undefined };
         }
 
-        const gray = await this.getSolidFillGrayData(state, bounds, foregroundColor, quickMask);
-        return { gray };
+        return { gray: this.buildSolidClearWhite(bounds) };
+    }
+
+    /**
+     * 0x0227 纯色清除的公式输入：纯白 F ≡ 255。
+     *
+     * 「输入越白，删除越多」是 ClearAlgorithms 对用户的唯一承诺；纯白是这条
+     * 标尺的满量程端。把它固定住之后：
+     *   · 背景图层 whiten   C' = C + (255−C)×t ⇒ t=1 时整块变白（= 白色背景上的擦除）；
+     *   · 通道 / 蒙版 subtract X' = X − 255t、multiply X' = X×(1−t) ⇒ t=1 时归零；
+     *   · 普通像素图层     A' = A − 255t、A' = A×(1−t) ⇒ t=1 时完全透明（= 套索 Delete）。
+     * 想只降低不透明度而不是删干净，把面板不透明度调到 100 以下即可 —— 这正是
+     * 用户要求的「清除强度只由面板参数控制」，颜色设置与前景色都不再参与。
+     *
+     * ⛔ 数组长度口径必须与原 getSolidFillGrayData 一致：下标是第 i 个**选区像素**。
+     */
+    private static buildSolidClearWhite(bounds: any): Uint8Array {
+        const pixelCount = bounds.selectionDocIndices
+            ? bounds.selectionDocIndices.size
+            : bounds.width * bounds.height;
+        const gray = new Uint8Array(pixelCount);
+        gray.fill(255);
+        return gray;
     }
 
     /**
@@ -864,11 +889,28 @@ export class ClearHandler {
     //   且另一处描边路径还按 colorIndicates 做了方向反转 ⇒ 同一操作两种结果。
     //   现在与图层蒙版共用 computeChannelClear，方向统一为「减少蒙版覆盖」。
     static async clearInQuickMask(state: any) {
-        try {
-            // ⚠️ 纯色模式的前景色必须在 getQuickMaskPixels **之前**抓取 —— 该方法会退出快速蒙版，
-            //    退出后 app.foregroundColor 读到的已不是用户操作时的前景色。
-            const quickMaskForegroundColor = state.fillMode === 'foreground' ? app.foregroundColor : null;
+        /* 0x0227：纯色清除的公式输入恒为纯白（见 buildSolidClearWhite），
+           不再需要「退出快速蒙版之前抓前景色」参与计算。
+           但 getQuickMaskPixels() 为把蒙版转成选区会临时 set 前景色为黑/白，
+           退出快速蒙版本身也会扰动前景/背景色 ⇒ 纯色模式在这里做一次
+           「进入时保存 → 无论成败 finally 还原」，保证用户前景色不被改动。
+           ⛔ 图案 / 渐变不加这层包装（用户明确要求这两条维持原样）。 */
+        const isSolid = state.fillMode !== 'pattern' && state.fillMode !== 'gradient';
+        let savedFg: { hue: any; saturation: number; brightness: number } | null = null;
+        if (isSolid) {
+            try {
+                const fg = app.foregroundColor;
+                savedFg = {
+                    hue: { _unit: 'angleUnit', _value: fg.hsb.hue },
+                    saturation: fg.hsb.saturation,
+                    brightness: fg.hsb.brightness,
+                };
+            } catch (e) {
+                console.warn('⚠️ 读取当前前景色失败，跳过还原:', e);
+            }
+        }
 
+        try {
             const bounds = await this.getSelectionData();
             if (!bounds) {
                 console.warn('❌ 没有选区，无法执行快速蒙版清除操作');
@@ -881,7 +923,7 @@ export class ClearHandler {
                 return;
             }
 
-            const fill = await this.buildClearFillData(state, bounds, quickMaskForegroundColor, true);
+            const fill = await this.buildClearFillData(state, bounds);
             if (!fill) return;
 
             const newMask = this.computeChannelClear(
@@ -895,6 +937,25 @@ export class ClearHandler {
         } catch (error) {
             console.error('❌ 快速蒙版清除失败:', error);
             throw error;
+        } finally {
+            if (savedFg) {
+                try {
+                    await action.batchPlay([{
+                        _obj: 'set',
+                        _target: [{ _ref: 'color', _property: 'foregroundColor' }],
+                        to: {
+                            _obj: 'HSBColorClass',
+                            hue: savedFg.hue,
+                            saturation: savedFg.saturation,
+                            brightness: savedFg.brightness,
+                        },
+                        source: 'photoshopPicker',
+                        _options: { dialogOptions: 'dontDisplay' },
+                    }], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
+                } catch (e) {
+                    console.warn('⚠️ 还原前景色失败（不影响本次清除结果）:', e);
+                }
+            }
         }
     }
 
@@ -1565,37 +1626,12 @@ export class ClearHandler {
     }
 
     //-------------------------------------------------------------------------------------------------
-    // 获取纯色填充的灰度数据（第一/二/三类目标共用）
-    //
-    // ⚠️ 本函数此前**恒按快速蒙版口径**取抖动（isQuickMaskMode = true），
-    //    而像素图层的纯色清除走的是另一条「设前景色 + fill clearEnum」的宿主路径。
-    //    统一到本函数后必须把口径参数化：快速蒙版用灰度抖动，其它目标用 HSB 抖动再转灰度。
-    // ⚠️ 数组长度改用「选区内像素数」：旧实现用外接矩形面积（width×height），
-    //    与 computeChannelClear 的下标语义不一致（下标是第 i 个**选区像素**）。
-    static async getSolidFillGrayData(
-        state: any,
-        bounds: any,
-        foregroundColor?: any,
-        quickMask: boolean = false
-    ) {
-        const currentForegroundColor = foregroundColor || app.foregroundColor;
-        const pixelCount = bounds.selectionDocIndices
-            ? bounds.selectionDocIndices.size
-            : bounds.width * bounds.height;
-        const grayData = new Uint8Array(pixelCount);
-
-        const panelColor = calculateRandomColor(
-            state.colorSettings,
-            state.opacity,
-            currentForegroundColor,
-            quickMask
-        );
-
-        const rgb = hsbToRgb(panelColor.hsb.hue, panelColor.hsb.saturation, panelColor.hsb.brightness);
-        grayData.fill(rgbToGray(rgb.red, rgb.green, rgb.blue));
-        return grayData;
-    }
-    
+    // 0x0227：原 `getSolidFillGrayData()` 已删除。
+    //   它读 app.foregroundColor → calculateRandomColor 抖动 → hsbToRgb → rgbToGray
+    //   算出清除公式的输入灰度 F，导致「前景色是红色 ⇒ 只降低约三成不透明度」。
+    //   纯色清除的输入现由 `buildSolidClearWhite()` 直接给 F ≡ 255，
+    //   且全链路不再读写 PS 前景色。**非清除模式的纯色填充**仍走
+    //   app.tsx 的 calculateRandomColor，颜色 / 抖动功能完全不受影响。
     //-------------------------------------------------------------------------------------------------
     // 获取图案填充的灰度数据（支持羽化选区和PNG透明度）
     static async getPatternFillGrayData(state: any, bounds: any): Promise<Uint8Array> {

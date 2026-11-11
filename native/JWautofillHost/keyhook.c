@@ -33,6 +33,11 @@
  *   ⚠️ 不采用「连过一次就粘住」：面板卸载/崩溃后钩子必须熄火（0x013E 同族纪律）。
  *   ⚠️ 迁移探测连接（path=/jw-migrate）标记 notPlugin、不计入在位 —— 多开 PS 时
  *     非持有实例每 10s 探一次，误计入就会给持有端周期性地伪造在位。
+ *
+ * ⛔⛔ 0x0226 裸数字键穿透：PS 前台时 LL 钩子收不到键（日志 `钩子 +0 / 轮询 +1`），
+ *   而裸键此前一律不进 RegisterHotKey ⇒ 只能由「不吞键」的轮询兜底触发，
+ *   Num5 在切笔刷的同时被 PS 当成「不透明度 50%」。修法：`kh_hk_sync` 把表内
+ *   数字类裸键（0–9 / Num0–9）也注册成系统级热键，其余裸键不变。详见 0x013D 段。
  */
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -186,8 +191,8 @@ static void kh_install_hook(void);
 static void kh_uninstall_hook(void);
 static void kh_poll_rebuild_watch(void);
 static void kh_hk_reset_for_record(void);
-/* 0x0210：组合键解析（允许裸键），定义在 kh_combo_to_hotkey 之前，
-   但 kh_map_apply 更早使用 ⇒ 先声明。 */
+/* 0x0210：组合键解析（允许裸键），定义在 0x013D 段，
+   但 kh_map_apply 更早使用 ⇒ 先声明。0x0226 起它同时供 kh_hk_sync 使用。 */
 static int kh_combo_to_key(const char* combo, int* mods, int* vk);
 
 /* --- 0x013C 双路按键：LL 钩子（主，可吞键）+ 键态轮询（兜底，不可吞键） ---
@@ -1599,10 +1604,16 @@ static void kh_poll_edge(int vk)
  *   任何窗口（包括 PS 自己）都收不到，只有本线程收到 WM_HOTKEY。这才叫真吞键。
  *
  * 约束与取舍：
- *   1) RegisterHotKey 必须有修饰键（Ctrl/Alt/Shift/Win）⇒ 裸键（L、Num1…）
- *      注册不了，仍由钩子/轮询承载（这两种本来就该让 PS 收到，语义一致）。
+ *   1) ⛔⛔ 0x0226 修正旧注释里的事实错误：「RegisterHotKey 必须有修饰键、
+ *      裸键注册不了」**不成立** —— 本机实测 `RegisterHotKey(NULL,id,0,vk)`
+ *      与 `MOD_NOREPEAT|0` 对 VK_NUMPAD5 / 主键盘 '5' 均返回 TRUE。
+ *      旧代码是**主动**在 kh_combo_to_hotkey 里 `if(!m) return 0` 跳过裸键，
+ *      等于把所有裸键都留给「钩子（能吞但 PS 前台时收不到）+ 轮询（不吞）」
+ *      ⇒ 裸数字键必然原样落进 PS：按 Num5 切笔刷的同时，PS 把画笔不透明度
+ *      改成 50%（用户 2026-11-11 报）。现在只把**表内实际绑定的数字类裸键**
+ *      纳入本通路（见 kh_is_digit_vk），其余字母/符号裸键维持旧语义。
  *   2) 注册是**全局独占**，所以只在 PS 前台时挂、失焦立刻全撤 —— 否则用户在
- *      别的程序里按 Ctrl+Q / Shift+E 也会被吞掉。
+ *      别的程序里按 Ctrl+Q / Shift+E / Num5 也会被吞掉。
  *   3) 录制期间必须全撤，否则按下的组合键会被系统摘走，钩子与轮询都看不见。
  *   4) 注册失败（已被别的程序占用）只留痕一次，自动退回钩子/轮询（不吞键）。
  *
@@ -1647,15 +1658,14 @@ static int kh_combo_to_key(const char* combo, int* mods, int* vk)
     return 1;
 }
 
-/* "Ctrl+Alt+Shift+K" → (MOD_*, vk)。裸键返回 0（RegisterHotKey 不接受）。 */
-static int kh_combo_to_hotkey(const char* combo, int* mods, int* vk)
+/* 0x0226：主键盘 0–9（0x30–0x39）/ 小键盘 Num0–9（0x60–0x69）。
+ * PS 在画笔类工具下把这些**裸数字键**当作「画笔不透明度 10%…100%」的
+ * 快捷键（Num5 ⇒ 50%、0 ⇒ 100%），与表里的裸键笔刷热键撞车。
+ * ⛔ 只圈数字类：H / L / `/` 等字母符号裸键仍交给钩子+轮询，避免在 PS
+ *    文本框打字时被系统级独占摘键；也保证「临时吸管」等按住语义不受影响。 */
+static int kh_is_digit_vk(int vk)
 {
-    int m = 0, v = 0;
-    if (!kh_combo_to_key(combo, &m, &v)) return 0;
-    if (!m) return 0;
-    *mods = m;
-    *vk = v;
-    return 1;
+    return (vk >= 0x30 && vk <= 0x39) || (vk >= 0x60 && vk <= 0x69);
 }
 
 static void kh_hk_clear(void)
@@ -1694,20 +1704,25 @@ static void kh_hk_sync(void)
     for (LONG i = 0; i < cnt && m && n < KH_MAX_ITEMS; i++) snap[n++] = m[i];
     LeaveCriticalSection(&g_khMapLk);
 
-    int ok = 0, bad = 0, bare = 0, yielded = 0;
+    int ok = 0, bad = 0, bare = 0, yielded = 0, digits = 0;
     for (int i = 0; i < n && ok < KH_HK_MAX; i++) {
         /* 0x0224：让位期间**不许注册**混合模式键 —— 注册即独占摘键，
            键就到不了 PS，用户按 Alt+Shift+J 想改画笔混合模式会彻底没反应。 */
         if (yld && _stricmp(snap[i].action, "blendMode") == 0) { yielded++; continue; }
         int mods = 0, vk = 0;
-        if (!kh_combo_to_hotkey(snap[i].combo, &mods, &vk)) { bare++; continue; }
+        if (!kh_combo_to_key(snap[i].combo, &mods, &vk)) { bare++; continue; }
+        /* 0x0226：裸键只放行「数字类」进系统级独占。其余裸键维持旧语义
+           （钩子/轮询，不吞键）——一次只修用户报的那一类冲突。 */
+        if (!mods && !kh_is_digit_vk(vk)) { bare++; continue; }
         int id = ok + 1;
         if (!RegisterHotKey(NULL, id, (UINT)(mods | MOD_NOREPEAT), (UINT)vk)) { bad++; continue; }
         g_khHkUsed[id - 1] = 1;
         _snprintf(g_khHkCombo[id - 1], KH_COMBO_MAX, "%s", snap[i].combo);
+        if (!mods) digits++;
         ok++;
     }
-    kh_log("RegisterHotKey 接管 %d 条（裸键交给钩子/轮询 %d 条，被占用 %d 条）", ok, bare, bad);
+    kh_log("RegisterHotKey 接管 %d 条（其中裸数字键 %d 条；其它裸键交钩子/轮询 %d 条，被占用 %d 条）",
+           ok, digits, bare, bad);
     if (yielded) kh_log("混合模式热键让位中：%d 条 Alt+Shift 键不注册，交回 PS", yielded);
     if (bad && !g_khHkFailLogged) {
         g_khHkFailLogged = 1;   /* 只提示一次，避免前台来回切换刷屏 */
