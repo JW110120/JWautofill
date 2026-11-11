@@ -315,7 +315,13 @@ typedef char cfg_slot_fit_check[(CFG_NLONGS >= CFG_I_POLYSNAP + 1) ? 1 : -1];
 static volatile LONG* g_cfg    = NULL;
 static HANDLE         g_cfgMap = NULL;
 
-__declspec(dllexport) int jwwh_version(void);
+__declspec(dllexport) int  jwwh_version(void);
+/* 0x022B：日志首行必须**同屏打出两个版本号**。
+   `jwwh_version` 是本文件末尾的引擎内部版本（长期 0x013A），`.8li` 的发布版本
+   是 plugin_main.c 的 `jw8li_version`。只打前者会让用户误判「插件没更新」：
+   jwwh-1676 实测用户看到 `ver=0x013A` 以为旧版，实际 0x022A 已加载
+   （证据是日志里 0x022A 独有的 `[hit] 覆盖窗旁路`）。 */
+extern long jw8li_version(void);
 
 /* hook 现场（detour 要用 g_impl，故必须在本文件靠前处声明）。 */
 static u8* g_impl;
@@ -364,8 +370,26 @@ static void log_write(const char* s, int n)
     int pn = _snprintf(pre, sizeof(pre), "[%02u:%02u:%02u.%03u] ",
                        ts.wHour, ts.wMinute, ts.wSecond, ts.wMilliseconds);
     if (pn > 0) { DWORD pw = 0; WriteFile(g_log, pre, (DWORD)pn, &pw, NULL); }
+    /* ⛔⛔ 0x022B：**Windows 记事本按 CRLF 换行**。`CreateFileA` + `WriteFile` 是
+       二进制写，格式串里的 '\n' 不会被自动转换 ⇒ `jwwh-<pid>.log` 自 4441505
+       首版起就一直是**纯 LF**（git -L :log_write 实证该函数从未被改过），
+       老版记事本打开就成一整行 / 乱码。而 plugin_main.c 的 pi8li 日志一直
+       显式写 "\r\n"，两边不一致，用户才会觉得「不知从哪个版本开始变了」。
+       ⇒ 在这里统一展开：'\n' → "\r\n"，并吞掉格式串里可能已有的 '\r'
+       （避免 \r\r\n）。分块写，不假设日志长度上限；detour 热路径零 I/O 不变。 */
+    char out[4096];
     DWORD w = 0;
-    WriteFile(g_log, s, (DWORD)n, &w, NULL);
+    int i = 0;
+    while (i < n) {
+        int m = 0;
+        while (i < n && m < (int)sizeof(out) - 2) {
+            char c = s[i++];
+            if (c == '\r') continue;
+            if (c == '\n') out[m++] = '\r';
+            out[m++] = c;
+        }
+        if (m) WriteFile(g_log, out, (DWORD)m, &w, NULL);
+    }
     FlushFileBuffers(g_log);
     InterlockedExchange(&g_logLock, 0);
 }
@@ -378,6 +402,26 @@ static void logf(const char* fmt, ...)
     int n = vsnprintf(buf, (int)sizeof(buf), fmt, ap);
     va_end(ap);
     if (n > 0) log_write(buf, n);
+}
+
+/* ⛔⛔ 0x022C：**日志必须是纯 UTF-8**，否则记事本按 ANSI(GBK) 打开全是乱码。
+   源码里的中文是 UTF-8，但 `GetWindowTextA` / `GetClassNameA` 返回的是系统 ANSI
+   字节（jwwh-22040 实测：日志里混进 `title=\xBD\xF8\xB3\xCC`（GBK「进程」）4 个
+   非法字节，整份文件既不能按 UTF-8 解码、也不能按 GBK 解码）。
+   ⇒ 所有往日志里写窗口标题的地方，先经这里 CP_ACP → CP_UTF8 转一道。
+   ⛔ 只在枚举顶层窗 / 焦点门诊断这类低频路径调用；detour 热路径零 Win32 转换。 */
+static void log_ansi_to_utf8(const char* src, char* dst, int cap)
+{
+    dst[0] = 0;
+    if (!src || !src[0] || cap <= 1) return;
+    int sl = (int)strlen(src);
+    int wl = MultiByteToWideChar(CP_ACP, 0, src, sl, NULL, 0);
+    if (wl <= 0 || wl > 255) return;
+    wchar_t w[256];
+    if (!MultiByteToWideChar(CP_ACP, 0, src, sl, w, wl)) return;
+    int n = WideCharToMultiByte(CP_UTF8, 0, w, wl, dst, cap - 1, NULL, NULL);
+    if (n > 0) dst[n] = 0;
+    else dst[0] = 0;
 }
 
 /* ====================================================== 就近分配（±2GB 射程内） */
@@ -2688,6 +2732,30 @@ static volatile LONG g_mseTip;                 /* 1 = 当前处于「推断落�
 static volatile LONG g_mseArms, g_mseRels;     /* 武装 / 解除累计（诊断） */
 static volatile LONG g_mseRelWhy;              /* 末次解除原因 1..5（见解除处 whyTxt） */
 
+/* ⛔⛔ 0x022D：**「停笔等线追上来」的定案诊断快照**（纯观测，不参与任何判据）。
+   为什么必须有：jwwh-22668 里 `补发=723` 三分钟不涨、smoothed 冻在 15633，
+   而 [raw] 行只有累计计数，看不出「此刻 tip 是被哪一条守卫打掉的」。
+   cursamp_thread 每拍写、penraw_report 每 2s 读一次 ⇒ 不进 detour 热路径。
+   ⛔ g_gpOutX/Y 是**光标路径输出点**（屏幕物理像素），与真实光标相减就是
+      「线还落后多少」；g_snOutX/Y − g_snRawX/Y 是**包路径**的轴空间滞后。 */
+static volatile LONG g_catTip, g_catHold, g_catBtn, g_catIdle, g_catAge, g_catKeep;
+static volatile LONG g_catLag, g_catGrace;
+static volatile LONG g_gpOutX, g_gpOutY;
+/* 0x022E：光标路径的「模式 / 剩余滞后 / 是否收尾中」快照（[catchup] 用）。
+   ⛔ 上一轮只看得到「落后多少 px」，看不出这条通道**按哪个公式**在推 ——
+   恰恰就是这一格缺失让「标准和追笔被当成拉绳」多拖了一整轮。 */
+static volatile LONG g_gpModeDbg, g_gpLagDbg, g_gpStillDbg;
+
+/* ⛔⛔ 0x022D：**「补齐宽限」= 输出点还没追上笔尖的那一段时间**。
+   包路径是一阶低通（`g_ox += dx*kk`）+ 最大滞后钳位 ⇒ 光标静止时
+   `|g_snOut − g_snRaw|` 会指数收敛到 0，这就是用户说的「线追上光标直到重合」。
+   ⇒ 只要这个差值还没收敛，就必须继续让 PS 取包/代投，不能按「光标静止 = 停手」
+   掐断 tip。⛔ 只比较**同一域内的差值**（轴空间），不做屏幕↔轴换算（铁律 105）。
+   CATCHUP_MAX_MS 是硬上限：静止超过 4s 一律不再宽限，防卡死电平画幽灵线；
+   一阶低通 τ ≤ 250ms ⇒ 3τ ≈ 750ms 足够收敛，4s 留足余量。 */
+#define CATCHUP_LAG_AX   8       /* 轴单位：小于它视为已重合 */
+#define CATCHUP_MAX_MS   4000    /* 静止后最长补齐宽限 */
+
 #define CS_PERIOD_MS 4          /* 250Hz：喂得满 100Hz 的笔，CPU 开销可忽略 */
 
 static DWORD WINAPI cursamp_thread(LPVOID param)
@@ -2741,6 +2809,11 @@ static DWORD WINAPI cursamp_thread(LPVOID param)
                 int mOk = keyhook_mouse_state(&mDown, &mx, &my, NULL, &mDn, &mUp);
                 int newDown = (mOk && mDown && mDn != s_dnPrev);
                 int newUp   = (mOk && !mDown && mUp != s_upPrev);
+                /* ⛔⛔ 0x022D：**阳性「手还按着」证据**。0x012C 说过电平不可靠
+                   （Wintab 独占时它可能读 0），所以这里只用来**阻止**「静止 ⇒ 停手」
+                   的提前解除，绝不用来否决别的证据（只加不减，铁律 27）。
+                   电平读 0 ⇒ 行为与旧版逐字相同；读 1 ⇒ 静止也不掐断补流。 */
+                int btnHeld = (mDown || (GetAsyncKeyState(VK_LBUTTON) & 0x8000)) ? 1 : 0;
                 int moved = 1;
                 if (s_haveC) {
                     int dx = c.x > s_prevC.x ? c.x - s_prevC.x : s_prevC.x - c.x;
@@ -2751,6 +2824,16 @@ static DWORD WINAPI cursamp_thread(LPVOID param)
                 if (moved) s_liveMs = now;
                 s_dnPrev = mDn; s_upPrev = mUp;
                 if (newDown) s_lastDownMs = now;   /* 任何一次按下都记账 */
+
+                /* 0x022D：静止多久 + 线还差多少没追上（纯内存读，零系统调用）。
+                   ⛔ 取「差值」而非绝对值：g_snOut/g_snRaw 同为轴空间、同一发布点
+                   （sn_publish），可直接相减；读数跨线程竞争最多差一个包，
+                   不影响「是否已经收敛」的定性判断。 */
+                DWORD idleMs = (DWORD)(now - (DWORD)s_liveMs);
+                LONG lagAx = (LONG)g_snOutX - (LONG)g_snRawX;
+                LONG lagAy = (LONG)g_snOutY - (LONG)g_snRawY;
+                LONG lagAbs = (lagAx < 0 ? -lagAx : lagAx) + (lagAy < 0 ? -lagAy : lagAy);
+                int grace = (lagAbs > CATCHUP_LAG_AX && idleMs <= CATCHUP_MAX_MS) ? 1 : 0;
 
                 if (realAge > RI_STALL_MS) {
                     /* ⛔ 为什么要「回看 600ms」：按下的时刻可能只比空档判据早一点点
@@ -2772,7 +2855,21 @@ static DWORD WINAPI cursamp_thread(LPVOID param)
                         LONG why = 0;
                         if (newUp && (DWORD)(now - s_downMs) >= MSE_MIN_DOWN_MS) why = 1;
                         else if (!g_canvasHitDbg)                         why = 2;
-                        else if ((DWORD)(now - s_liveMs) > MSE_IDLE_MS)    why = 3;
+                        /* ⛔⛔ 0x022D：**「光标静止」不再是「停手」的充分条件**。
+                           0x012E 当年把 `moved` 从**代投节流**里删掉了（注释原文：
+                           「用户见线不动就停住笔等它…静止时恰恰最需要 PS 继续取包
+                           才能追上」），却把它留在 tip 断言链里 —— 于是断流期用户一
+                           停笔等线追上来，2s 后 s_hold 被解除、tip=0、代投停摆，
+                           线反而永远追不上（jwwh-22668：补发=723 冻结 184s）。
+                           ⇒ 有阳性按钮证据、或**输出点还没收敛到笔尖**（grace）时，
+                           **不**因静止解除；抬起事件 / 离开画布 /
+                           MSE_HOLD_MAX_MS 硬上限三道兜底逐字保留。
+                           ⛔ grace 只给静止后 CATCHUP_MAX_MS(4s) 且滞后仍 >8 轴的窗口，
+                             静止时喂的是同一个点，画不出幽灵线。
+                           ⛔ 双证据是必要的：jwwh-22668 断流期 `[dead] pre=...btn0`
+                             证明 VK_LBUTTON 电平常读 0（0x012C 已定案「电平不可靠」），
+                             只靠 btnHeld 会漏；收敛滞后是引擎自己的真值，不依赖驱动。 */
+                        else if (!btnHeld && !grace && idleMs > MSE_IDLE_MS) why = 3;
                         else if ((DWORD)(now - s_downMs) > MSE_HOLD_MAX_MS) why = 4;
                         if (why) {
                             static const char* whyTxt[] = { "",
@@ -2781,8 +2878,12 @@ static DWORD WINAPI cursamp_thread(LPVOID param)
                             InterlockedExchange(&g_mseTip, 0);
                             InterlockedExchange(&g_mseRelWhy, why);
                             InterlockedIncrement(&g_mseRels);
-                            logf("# [mse] 断流期落笔推断·解除：%s（本次按下 %lums）\n",
-                                 whyTxt[why], (unsigned long)(now - s_downMs));
+                            logf("# [mse] 断流期落笔推断·解除：%s（本次按下 %lums）"
+                                 " [btnHeld=%d idle=%lums realAge=%ldms tip=%d"
+                                 " grace=%d lagAx=%ld]\n",
+                                 whyTxt[why], (unsigned long)(now - s_downMs),
+                                 btnHeld, idleMs, (long)realAge, tip,
+                                 grace, (long)lagAbs);
                         }
                     }
                     if (s_hold) tip = 1;
@@ -2796,18 +2897,25 @@ static DWORD WINAPI cursamp_thread(LPVOID param)
                        判据只用**包外证据**（与 0x012D 同源、同样「只加不减」）：
                          · 左键电平为按下（我方 WH_MOUSE_LL 镜像的累积电平，或系统电平）；
                          · 光标仍在活动文档画布内；
-                         · 光标 1.5s 内动过（静止 = 停手，不许悬空描边）。
-                       ⛔ 三条同时成立才抬 tip；任一条不成立立刻回落到旧行为。 */
+                         · ~~光标 1.5s 内动过~~（0x022D 已删，见下）。
+                       ⛔⛔ 0x022D：**第三条「光标 1.5s 内动过」已删除** —— 它正是
+                          0x012E 从代投那里删掉、却漏在这里的同一条 `moved` 守卫。
+                          用户「停笔等线追上来」时光标必然静止；只要「左键仍按下」
+                          或「输出点还没收敛到笔尖」，就必须继续让 PS 取包。
+                          ⛔ 宽判仍必须成立；`idleMs <= MSE_HOLD_MAX_MS(15s)` 是新的
+                            硬上限（旧版是 1.5s）⇒ 既放行补齐，又不让卡死电平无限喂；
+                            静止期喂的是同一个点，不会凭空画出幽灵线。 */
                     if (!tip && realAge > SYNTH_TIP_MAX_MS && g_canvasHitDbg
-                        && (mDown || (GetAsyncKeyState(VK_LBUTTON) & 0x8000))
-                        && (DWORD)(now - s_liveMs) <= 1500) {
+                        && (btnHeld || grace) && idleMs <= MSE_HOLD_MAX_MS) {
                         static DWORD s_keepMs;
                         tip = 1;
+                        InterlockedIncrement(&g_catKeep);
                         if ((DWORD)(now - s_keepMs) >= 5000) {
                             s_keepMs = now;
                             logf("# [mse] ★长停摆续命：真实通路已静默 %ldms，"
-                                 "左键电平仍按下且光标在画布内移动 ⇒ tip=1（否则 PS 只挪光标不落笔）\n",
-                                 (long)realAge);
+                                 "光标在画布内且 [btn=%d 或 未收敛宽限=%d(lagAx=%ld)]"
+                                 " ⇒ tip=1（静止也不断流，否则 PS 只挪光标不落笔）\n",
+                                 (long)realAge, btnHeld, grace, (long)lagAbs);
                         }
                     }
                 } else if (s_hold) {
@@ -2816,6 +2924,15 @@ static DWORD WINAPI cursamp_thread(LPVOID param)
                     InterlockedExchange(&g_mseRelWhy, 5);
                     logf("# [mse] 断流期落笔推断·解除：真实包已回来，判据交还包流\n");
                 }
+                /* 0x022D：把「这一拍 tip 到底是怎么来的」写成快照，供 [catchup] 每 2s
+                   落一行。⛔ 纯观测：不参与 tip / 代投 / 喂入的任何判据。 */
+                InterlockedExchange(&g_catTip,  tip ? 1 : 0);
+                InterlockedExchange(&g_catHold, s_hold ? 1 : 0);
+                InterlockedExchange(&g_catBtn,  btnHeld ? 1 : 0);
+                InterlockedExchange(&g_catIdle, (LONG)(now - s_liveMs));
+                InterlockedExchange(&g_catAge,  realAge > 0x7FFFFFFEL ? 0x7FFFFFFEL : (LONG)realAge);
+                InterlockedExchange(&g_catLag,  lagAbs);
+                InterlockedExchange(&g_catGrace, grace ? 1 : 0);
             }
             /* ⛔⛔ 0x012E：断流期改成「**喂入冻结**」，而不是「停止唤醒」。
                0x012B/0x012C 把「光标离开画布」接成了**停发**（cv 守卫）。jwwh-2200
@@ -2837,11 +2954,20 @@ static DWORD WINAPI cursamp_thread(LPVOID param)
                 }
                 if (frozen != (int)g_csFrozen) {
                     InterlockedExchange(&g_csFrozen, (LONG)frozen);
-                    if (frozen)
-                        logf("# [post] 喂入冻结：光标离开活动文档画布 ⇒ 位置钉在(%d,%d)"
-                             "（唤醒照旧，等笔回到画布）\n", s_csGoodX, s_csGoodY);
-                    else
-                        logf("# [post] 喂入解冻：恢复跟随真实光标\n");
+                /* 0x0229：用户报「停笔后描边不补齐」，这一行是它的直接证据。
+                   旧文案只给「钉住点」，看不出冻结那一刻的**当前光标**与宽判电平
+                   ⇒ 补上 cur / hit / tip / realAge，下一轮即可把「宽判误判」与
+                     「真的离开画布」分开。⛔ 纯日志，判据不变。 */
+                if (frozen)
+                    logf("# [post] 喂入冻结：光标离开活动文档画布 ⇒ 位置钉在(%d,%d)"
+                         " [cur=(%ld,%ld) hit=%ld tip=%d realAge=%ldms]"
+                         "（唤醒照旧，等笔回到画布）\n",
+                         s_csGoodX, s_csGoodY, (long)c.x, (long)c.y,
+                         (long)g_canvasHitDbg, tip, (long)realAge);
+                else
+                    logf("# [post] 喂入解冻：恢复跟随真实光标"
+                         " [cur=(%ld,%ld) hit=%ld tip=%d]\n",
+                         (long)c.x, (long)c.y, (long)g_canvasHitDbg, tip);
                 }
             }
 
@@ -3397,6 +3523,55 @@ static void penraw_report(int win)
                                  ? "★断流期 Ink 仍在报笔 ⇒ 这就是缺的那一路"
                                  : "Ink 有笔数据（常态）")));
             }
+        }
+    }
+
+    /* ⛔⛔ 0x022D：**「停笔后线慢慢追上光标」的一次定案诊断**（纯观测，2s 一行）。
+       判读口径（下一轮日志只要看这一行就能分案，不必再猜）：
+         · `落后` = 光标路径输出点与真实光标的屏幕距离：静止后应**一路缩到 0**；
+           长期钉在 ≈绳长不动 ⇒ PS 没在取包/没在推进（查 post / gcp / gp 三个增量）。
+         · `包路径滞后` = g_snOut − g_snRaw（轴空间），同理应收敛到 0。
+         · `tip=0` + `post` 不涨 ⇒ 补流被落笔断言掐断（本轮主修的那一条）；
+           `tip=1` + `post` 不涨 ⇒ 代投目标/宽判；`post` 涨但 `落后` 不缩 ⇒ 引擎滤波本身。
+         · `idle` = 光标已静止多久；`idle>2000` 且 `tip` 仍为 1 ⇒ 0x022D 生效。
+         · `grace=1 lagAx>8` ⇒ 输出点还没收敛、正在补齐；两者归 0 即「线已追上光标」。
+           `btn=0` 但 `grace=1` 仍放行 ⇒ 双证据里「收敛滞后」这一路在兜底（电平不可靠）。
+         · 0x022E 追加 `gpm/gpLag/still`：光标路径此刻用的模式、它自己还差多少 px、
+           是否处于「收尾加速」窗口。⛔ 判分案：`gpm=0/2` 但 `gpLag` 长期钉在
+           ≈半径×0.6 / ×0.25 ⇒ 光标路径还在按旧绳公式走（本版已不该出现）；
+           `gpLag` 一路缩到 0 而屏幕上仍有固定间距 ⇒ 病灶不在本引擎（PS 没读这条通道）。
+       ⛔ 只在「平滑开着 且 有笔画/断流/接管」时打，空闲不刷屏；
+          全部读快照，detour 热路径没有新增日志。 */
+    {
+        static DWORD s_catAt;
+        DWORD nowC = GetTickCount();
+        int interested = (g_cfg && g_cfg[CFG_I_ENABLED]
+                          && ((LONG)g_catAge > RI_STALL_MS || g_strokeGate == 1
+                              || g_gcpArmed || g_catTip || g_synWas)) ? 1 : 0;
+        if (interested && (DWORD)(nowC - s_catAt) >= 2000) {
+            s_catAt = nowC;
+            POINT cp; cp.x = 0; cp.y = 0;
+            se_real_GetCursorPos(&cp);
+            double ddx = (double)cp.x - (double)g_gpOutX;
+            double ddy = (double)cp.y - (double)g_gpOutY;
+            long lagPx = (long)(dsqrt_(ddx * ddx + ddy * ddy) + 0.5);
+            logf("# [catchup] 断流=%ldms tip=%ld hold=%ld btn=%ld idle=%ldms keep=%ld "
+                 "grace=%ld lagAx=%ld "
+                 "penDown=%ld hit=%ld stroke=%ld syn=%ld post=%ld frz=%ld edit=%d "
+                 "| 光标=(%ld,%ld) 输出=(%ld,%ld) 落后=%ldpx 包路径滞后=(%ld,%ld)轴 "
+                 "| gpm=%ld gpLag=%ldpx still=%ld gcp=%ld/rw=%ld/a=%ld gp=%ld/%ld/rej=%ld\n",
+                 (long)g_catAge, (long)g_catTip, (long)g_catHold, (long)g_catBtn,
+                 (long)g_catIdle, (long)g_catKeep,
+                 (long)g_catGrace, (long)g_catLag,
+                 (long)g_penDown, (long)g_canvasHitDbg, (long)g_strokeGate,
+                 (long)g_synWas, (long)g_ctxPostN, (long)g_csFrozen,
+                 (int)tool_edit_allowed(),
+                 (long)cp.x, (long)cp.y, (long)g_gpOutX, (long)g_gpOutY, lagPx,
+                 (long)((long)g_snOutX - (long)g_snRawX),
+                 (long)((long)g_snOutY - (long)g_snRawY),
+                 (long)g_gpModeDbg, (long)g_gpLagDbg, (long)g_gpStillDbg,
+                 (long)g_gcpCalls, (long)g_gcpRw, (long)g_gcpArmed,
+                 (long)g_gpArms, (long)g_gpSteps, (long)g_gpRej);
         }
     }
 }
@@ -4624,6 +4799,10 @@ static volatile LONG g_canvasOkDbg  = 1;   /* 焦点在活动文档画布上（0
          断流救援立刻被禁（`pre=(…cv0…)`、`补发` 冻结）⇒ 用户感知「断流且不自愈」。
    ⇒ 救援路径一律改用本标志；HUD 仍用严格判据（浮在别的程序上会碍事）。 */
 static volatile LONG g_canvasHitDbg = 1;
+/* 0x022B：宽判「按主框矩形放行」的累计次数（纯诊断，只在 HUD 线程 +1）。
+   每 2s 读增量落一行，证明新版判据确实在放行、且 detour 侧零新增原子操作。
+   ⛔ 0x022A 的「覆盖窗旁路计数」随判据一起废止（旁路已被 jwwh-1676 证伪）。 */
+static volatile LONG g_hitRectPass = 0;
 static volatile LONG g_ctOkDbg      = 0;   /* 落笔判据已建立（g_ctUnknown==0） */
 
 /* —— 取包突发计量（2026-10-16 第十四轮）——
@@ -5100,6 +5279,11 @@ static int   s_gpBtn;                   /* 上一拍看到的「笔按着」态�
 static double s_gpX, s_gpY;             /* 平滑点（物理屏幕像素） */
 static DWORD s_gpLast;
 static DWORD s_gpSeen;                  /* 0x0209：最后一次**确实收到「手按着」证据**的时刻 */
+/* 0x022E：收尾判定用的「输入是否还在变」三个量。
+   ⛔ 不能用 s_gpX/s_gpY 自己判静止（输出点本来就在动），必须记**输入**（光标）的
+      最后一次变化时刻；否则「输出在追、输入早停了」会被当成还在运笔，收尾加速失效。 */
+static int   s_gpInX = -1, s_gpInY = -1;
+static DWORD s_gpMoveMs;
 
 /* 0x0209：手松开后继续「钉住」输出点的时长。
  * ⛔ 为什么必须有（用户报的 BUG2）：本函数的 armed 判据由三路证据并集而成
@@ -5112,43 +5296,140 @@ static DWORD s_gpSeen;                  /* 0x0209：最后一次**确实收到�
  *      「按着」的证据才认定真的抬笔、恢复透传。700ms 覆盖实测 400~600ms 的零段。 */
 #define GP_HOLD_MS 700
 
+/* ⛔⛔ 0x022E：**光标路径必须跟着「模式」走**（jwwh-18096 定案）。
+   旧实现（0x0209 起）根本不看 `mode`，**一律是定长绳**：
+       rope = 半径·dpiS·(标准 0.6 / 追笔 0.25 / 拉绳 1.0)
+   平时看不出毛病 —— 正常运笔时 PS 读的是 Wintab 包路径，光标路径只负责橡皮筋/预览。
+   可**真实包流一断**（驱动停摆；jwwh-18096 里断流从 0.5s 一路涨到 25s 不恢复），
+   PS 就退化成鼠标通路、每帧来查 GetCursorPos ⇒ 画出来的就是这条「绳」：
+     · 间距**恒等于绳长**（半径 100 ⇒ 标准模式 60px），停笔也一动不动
+       （绳没绷紧 = 输出点一字节都不动）；
+     · 观感正是用户报的「平滑力度异常增大 / 在标准和追笔下像没有 HUD 的拉绳模式 /
+       线尾永远与光标隔一段距离不变」。
+   铁证 = jwwh-18096 的 [catchup]：`idle=1546/1922/2391ms` 三条样本 `落后=60px`，
+   而**同一时刻** `包路径滞后=(0,0)轴`（包路径早就收敛到笔尖了）⇒ 屏幕上那条线
+   不是包路径画的；60 = 半径 100 × 0.6 一个像素都不差。同一份日志里还有
+   `输出=(442,1279)` 在光标已跑到 (3389,51) 之后仍冻了 6s、落后 3193px ——
+   那是旧绳模式的「大跳跃本拍不推进」把自己永久卡死。
+   ⇒ 现在两条通道共用**同一套公式**（与包路径的滤波分支逐字对应）：
+       mode 0 标准：一阶低通 k = dt/(dt+τ)，τ = tau_from_strength(强度)；
+       mode 2 追笔：限速追赶 step = vmax·dt，vmax = (0.02 + 追笔/100·3)·dpiS；
+       mode 1 拉绳：定长绳，**原样不动**（含大跳跃不推进的守卫，那是绳的本体）。
+   ⛔ 三种模式之后统一加**全局最大滞后钳位 radiusPxF**（包路径一直有这条，光标路径
+      从来没有）：标准/追笔若无钳位，一次大跳跃要追好几秒。
+   ⛔ 静止收尾加速（`GP_STILL_MS`）：笔按着、光标已静止 ≥120ms、输出还没贴上
+      ⇒ 标准把 k 抬到 ≥0.5、追笔把 step ×3。语义与 0x022D 的 `grace` 同源
+      （「线还没追上来的时候，不许把它当成停手」）。PS 空闲时仍在 ~40Hz 查
+      GetCursorPos（jwwh-18096：idle 期 `gcp` 每 4s 涨 160 次）⇒ 尾巴能真的收干净，
+      不依赖 PS 重绘。
+   ⛔ 大跳跃（d > 4×半径）：标准/追笔**跟随包路径 RST_JUMP 的语义直接重锚**
+      （贴合笔尖）；旧的「本拍不推进」会永久卡住（见上面的 3193px 实证）。
+   ⛔ 不读包路径的任何静态量（g_speed / g_ox / 复位台账）：两条通道相互独立，
+      共享状态会让「一边抖动、两边都抖」（见 0x0209 关于两条路分叉的教训）。
+   ⛔ 也别再用 0.6 / 0.25 这类手调系数 —— 它们让「同一条曲线」在两个通道上
+      永远差一截，正是这次故障的形态。 */
+#define GP_STILL_MS  120     /* 光标静止多久算「收尾阶段」 */
+
 static void gp_step(int rx, int ry, DWORD now, int edge)
 {
     if (!g_cfg) return;
     int rp = g_cfg[CFG_I_RADIUSPX];
     if (rp < 1) rp = 1;
     if (rp > RADIUS_PX_MAX) rp = RADIUS_PX_MAX;
-    const int mode = g_cfg[CFG_I_MODE];
-    double rope = (double)rp * dpi_scale();          /* 逻辑 px → 物理 px（与滤波同源） */
-    if (mode == 0)      rope *= 0.60;                /* 标准：略紧一些，避免标准模式过度拖尾 */
-    else if (mode == 2) rope *= 0.25;                /* 追笔：本就要求跟手 */
-    if (rope < 1.5) rope = 1.5;
+    const int    mode = g_cfg[CFG_I_MODE];
+    const double dpiS = dpi_scale();
+    const double radiusPxF = (double)rp * dpiS;      /* 逻辑 px → 物理 px（与滤波同源） */
+    const double jumpPxF = radiusPxF * 4.0;          /* 大跳跃门限（与绳模式旧守卫同量级） */
 
     /* ⛔ 起笔必须贴合：`edge` = 这一拍之前笔是抬着的（0→1 边沿）⇒ 输出点直接落到笔尖。
-       少了它，上一笔的残留输出点会被当成起点，新一笔开头就被绳拽着走一条斜线
+       少了它，上一笔的残留输出点会被当成起点，新一笔开头就被拖着走一条斜线
        （LNP 分支 A 的「初始化笔画」干的正是这件事）。 */
     if (edge || !s_gpOn || (LONG)(now - s_gpLast) > 3000) {
         s_gpOn = 1; s_gpX = (double)rx; s_gpY = (double)ry; s_gpLast = now;
+        s_gpInX = rx; s_gpInY = ry; s_gpMoveMs = now;
         InterlockedIncrement(&g_gpArms);
+        InterlockedExchange(&g_gpModeDbg, (LONG)mode);
+        InterlockedExchange(&g_gpLagDbg, 0);
+        InterlockedExchange(&g_gpStillDbg, 0);
         return;
     }
+    /* ⛔ dt 必须**逐拍算**（与包路径「now 每包取样」同一个道理）：PS 的查询节奏
+       随帧率变，固定步长会让「强度滑杆」与真实时间脱钩。 */
+    double dt = (double)((LONG)(now - s_gpLast));
+    if (dt < 1.0) dt = 1.0; else if (dt > 100.0) dt = 100.0;
     s_gpLast = now;
+    if (rx != s_gpInX || ry != s_gpInY) { s_gpInX = rx; s_gpInY = ry; s_gpMoveMs = now; }
 
     double dx = (double)rx - s_gpX, dy = (double)ry - s_gpY;
     double d  = dsqrt_(dx * dx + dy * dy);
-    /* 拉绳语义与包路径逐字相同：绳没绷紧（d ≤ 绳长）输出点一像素都不动；
-       绷紧则被拖到恰好「绳长」处（f = 1 − 绳长/d，位移 = d − 绳长）。
-       ⛔⛔ 0x0209：大跳跃**不再「直接贴合」**。旧写法把输出点一步搬到笔尖，
-          那一拍的返回值就是一个 200px 的瞬移 —— 包路径那边 PS 会把它画成一条直线，
-          光标路径这边则让 scrubby/选区末端瞬间跳到「施力点」。
-          正确做法照 LNP 的 `bigJumpSqDist`：**本拍不推进**（PS 认为笔停住），
-          下一拍继续按绳长追 ⇒ 用户看到的是一条追上去的曲线。
-          真「抬笔在别处落下」不会走到这里 —— 那条路由 `edge` 直接贴合。 */
-    if (d > rope * 4.0) { InterlockedIncrement(&g_gpRej); return; }
-    if (d > rope && d > 0.0001) {
-        double f = 1.0 - rope / d;
-        s_gpX += dx * f; s_gpY += dy * f;
-        InterlockedIncrement(&g_gpSteps);
+    int still = ((DWORD)(now - s_gpMoveMs) >= GP_STILL_MS && d > 1.0) ? 1 : 0;
+
+    if (mode == 2) {
+        /* ===== 追笔：与包路径 mode==2 同一个 vmax / step 公式 ===== */
+        int cu = g_cfg[CFG_I_CATCHUP]; if (cu < 0) cu = 0; if (cu > 100) cu = 100;
+        if (d > jumpPxF) {
+            s_gpX = (double)rx; s_gpY = (double)ry;      /* 大跳跃 ⇒ 重锚（包路径 RST_JUMP） */
+            InterlockedIncrement(&g_gpArms);
+        } else {
+            double vmax = (0.02 + ((double)cu / 100.0) * 3.0) * dpiS;   /* 物理 px/ms */
+            double step = vmax * dt;
+            if (still) step *= 3.0;
+            if (d > step && d > 0.0001) {
+                double f = step / d;
+                s_gpX += dx * f; s_gpY += dy * f;
+                InterlockedIncrement(&g_gpSteps);
+            } else {
+                s_gpX = (double)rx; s_gpY = (double)ry;   /* 追上即贴合（与包路径一致） */
+            }
+        }
+    } else if (mode == 1) {
+        /* ===== 拉绳：定长绳，语义与包路径 mode==1 逐字相同 =====
+           绳没绷紧（d ≤ 绳长）输出点一像素都不动；绷紧则被拖到恰好「绳长」处
+           （f = 1 − 绳长/d ⇒ 新距离恒等于绳长）。
+           ⛔⛔ 0x0209：大跳跃**不「直接贴合」**。旧写法把输出点一步搬到笔尖，那一拍的
+              返回值就是一个 200px 的瞬移（scrubby/选区末端瞬间跳到「施力点」）。
+              照 LNP 的 `bigJumpSqDist`：**本拍不推进**，下一拍继续按绳长追。
+              真「抬笔在别处落下」不会走到这里 —— 那条路由 `edge` 直接贴合。
+           ⛔ 本分支是唯一保留「本拍不推进」的地方：绳的本体就是「不绷紧不动」，而
+              标准/追笔没有这个语义，用它会永久卡死（见函数头 3193px 实证）。 */
+        double rope = radiusPxF;
+        if (rope < 1.5) rope = 1.5;
+        if (d > rope * 4.0) { InterlockedIncrement(&g_gpRej); }
+        else if (d > rope && d > 0.0001) {
+            double f = 1.0 - rope / d;
+            s_gpX += dx * f; s_gpY += dy * f;
+            InterlockedIncrement(&g_gpSteps);
+        }
+    } else {
+        /* ===== 标准：与包路径 mode==0 同一个时间常数低通 ===== */
+        double t = (double)g_cfg[CFG_I_STRENGTH];
+        if (t < 0) t = 0; if (t > 100) t = 100;
+        if (d > jumpPxF) {
+            s_gpX = (double)rx; s_gpY = (double)ry;      /* 大跳跃 ⇒ 重锚 */
+            InterlockedIncrement(&g_gpArms);
+        } else {
+            double tau = tau_from_strength(t);
+            double k   = (dt + tau) > 0.0 ? dt / (dt + tau) : 1.0;
+            if (still && k < 0.5) k = 0.5;               /* 收尾加速：静止就把尾巴吃掉一半/拍 */
+            s_gpX += dx * k; s_gpY += dy * k;
+            InterlockedIncrement(&g_gpSteps);
+        }
+    }
+
+    /* 全局最大滞后钳位（与包路径末段那条同义）：无论算法怎么算，
+       输出与笔尖的距离不超过半径。⛔ 只影响标准/追笔的大滞后；
+       绳模式本来就恒等于半径，这里是空操作。 */
+    {
+        double lx = (double)rx - s_gpX, ly = (double)ry - s_gpY;
+        double lp = dsqrt_(lx * lx + ly * ly);
+        if (lp > radiusPxF && lp > 0.0001) {
+            double f = (lp - radiusPxF) / lp;
+            s_gpX += lx * f; s_gpY += ly * f;
+            lp = radiusPxF;                             /* 钳位后就是屏幕上真实的剩余间距 */
+        }
+        InterlockedExchange(&g_gpModeDbg, (LONG)mode);
+        InterlockedExchange(&g_gpLagDbg, (LONG)(lp + 0.5));
+        InterlockedExchange(&g_gpStillDbg, still ? 1 : 0);
     }
 }
 
@@ -5916,7 +6197,8 @@ static u64 det_GetCursorPos(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
         if (!s_gpOn && (DWORD)(nowT - s_logMs) >= 2000) {
             s_logMs = nowT;
             logf("# [gcp] ★光标路径接管（LNP 分支 A/C）：每次查询推进一步，"
-                 "判据=笔按着(btn=%d mse=%d pen=%d) 光标=(%ld,%ld) 绳=%.0fpx 模式=%d\n",
+                 "判据=笔按着(btn=%d mse=%d pen=%d) 光标=(%ld,%ld) 半径=%.0fpx 模式=%d"
+                 "（0x022E：标准=一阶低通 / 追笔=限速追赶 / 拉绳=定长绳）\n",
                  btn, (int)(g_penDown != 0), (int)g_mseTip,
                  (long)p->x, (long)p->y,
                  (double)g_cfg[CFG_I_RADIUSPX] * dpi_scale(), (int)g_cfg[CFG_I_MODE]);
@@ -5938,6 +6220,10 @@ static u64 det_GetCursorPos(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
         }
         LONG nx = (LONG)(s_gpX >= 0 ? s_gpX + 0.5 : s_gpX - 0.5);
         LONG ny = (LONG)(s_gpY >= 0 ? s_gpY + 0.5 : s_gpY - 0.5);
+        /* 0x022D：光标路径输出点快照（[catchup] 用它算「线还落后光标多少」）。
+           ⛔ 两个普通原子写，无 Win32 调用、无日志；不在 !armed 的透传路径上。 */
+        InterlockedExchange(&g_gpOutX, nx);
+        InterlockedExchange(&g_gpOutY, ny);
         if (nx == rx && ny == ry) return (u64)ok;        /* 没差异 ⇒ 一个字节都不动 */
         p->x = nx; p->y = ny;
         InterlockedIncrement(&g_gcpRw);
@@ -6770,10 +7056,26 @@ static DWORD WINAPI worker(LPVOID param)
     g_log = CreateFileA(g_logPath, GENERIC_WRITE, FILE_SHARE_READ, NULL,
                         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 
+    /* ⛔⛔ 0x022C：**UTF-8 BOM**。CRLF 只解决「记事本挤成一行」，不解决编码：
+       无 BOM 的 UTF-8 文件，Windows 记事本按系统 ANSI(GBK) 解读 ⇒ 中文全部乱码
+       （用户 16:10 复测：CRLF 已生效但中文仍乱码）。CREATE_ALWAYS 每次新日志
+       在文件最开头写一次 EF BB BF，记事本就会按 UTF-8 打开。
+       ⛔ 必须写在任何 logf 之前；pi8li 日志是另一套写入器，不受影响。 */
+    if (g_log != INVALID_HANDLE_VALUE) {
+        static const unsigned char kBom[3] = { 0xEF, 0xBB, 0xBF };
+        DWORD bw = 0;
+        WriteFile(g_log, kBom, 3, &bw, NULL);
+        FlushFileBuffers(g_log);
+    }
+
     SYSTEMTIME st; GetLocalTime(&st);
-    logf("# JWautofill 笔平滑 hook  pid=%lu  %04d-%02d-%02d %02d:%02d:%02d  ver=0x%04X\n",
+    /* 0x022B：旧首行只打 `ver=jwwh_version()`（引擎 0x013A），用户据此判断
+       「复制了新 .8li 却还是旧版」。现在把发布版本与引擎版本同屏、带中文标签。 */
+    logf("# JWautofill 笔平滑 hook  pid=%lu  %04d-%02d-%02d %02d:%02d:%02d"
+         "  插件版本(.8li)=0x%04X  引擎版本=0x%04X\n",
          (unsigned long)GetCurrentProcessId(), st.wYear, st.wMonth, st.wDay,
-         st.wHour, st.wMinute, st.wSecond, jwwh_version());
+         st.wHour, st.wMinute, st.wSecond,
+         (unsigned)jw8li_version(), (unsigned)jwwh_version());
 
     /* 标称「轴→像素比」的分母（见 try_calibrate）。只在这里取一次，detour 内不碰。
        ⛔ 必须是**虚拟屏**：多屏时笔可以跨屏移动，SM_CXSCREEN 只有主屏。
@@ -7563,6 +7865,12 @@ static DWORD WINAPI worker(LPVOID param)
    `foregroundWindowChange Very fast fg change (%d ms), ignoring`）。
    ⇒ 「前台不是本进程」要**连续保持**这么久才真的隐藏。 */
 #define HUD_FG_DEBOUNCE_MS 250
+/* ⛔⛔ 0x022A：宽判 1→0 的去抖窗口。浮层命中会在 1/0 之间连翻几拍
+   （jwwh-2788 的 `[hit] 宽判 0→0 (窗口内翻转 2 次)`），旧实现一拍就冻结喂入
+   ⇒ 停笔补齐随机熄火。规则：0 连续 ≥150ms 才认「离开画布」，见到 1 立刻解冻
+   （宁可早恢复 150ms，也不能让一笔之中被钉住）。⛔ 只过滤 g_canvasHitDbg
+   这一个功能位，HUD 显隐的 canvasOk / wantVisible 逐字不动。 */
+#define CANVAS_HIT_HYST_MS 150
 /* ③ 大跳跃阈值（LNP `overlay.bigJumpSqDist`）：一帧内光标位移超过该距离
    （物理像素，**平方**比较）⇒ 本帧不画。场景：跨屏 / 面板弹窗把光标瞬移 /
    驱动回中。旧的「瞬移拉一条长线」正是缺这一条。 */
@@ -7633,6 +7941,17 @@ static int   s_dlStateLogged = -1; /* 已登录的解析态：-1=从未登录 0=
                                    （Document Layer 未创建），用户随后打开文档要能看见
                                    「已解析」行 —— 那是本判据是否武装的唯一验收信号。 */
 static DWORD s_frameTryAt;     /* 上次解析尝试时刻（未解析出时 2s 退避重试，不每帧 EnumWindows） */
+/* 0x022A：主框矩形 —— 宽判的「稳定事实源」。
+   ⛔ 为什么必须有：`WindowFromPoint()` 回答的是「这一刻哪个窗口在最上面」，
+      不是「笔还在不在 PS 画布上」。PS 的 OWL.Dock / PSDialogBox / PSToolTip
+      以及浮动的 UXP 面板（Chrome_RenderWidgetHostHWND，外进程）都是**独立顶层
+      窗口**，一旦盖在画布上就把 `IsChild(s_psFrame, hit)` 打成 0 ⇒ 四条救援
+      链路（落笔推断/长停摆续命/喂入冻结/代投）整段熄火 ⇒ 停笔不补齐。
+      矩形是窗口几何，不受浮层影响；每 200ms 由 HUD 线程刷新一次，
+      detour 里只读缓存 + PtInRect（纯算术），不新增 Win32 查询。 */
+static RECT  s_frameRect;
+static volatile LONG s_frameRectOk = 0;
+static DWORD s_frameRectAt;
 static int   s_noFrameLogged;  /* 「找不到主框」只打一次（fail-open 降级要留痕但不刷屏） */
 static int   s_cvWhyDbg = -1;  /* 焦点门子原因（边沿触发日志）：0 过 / 1 无框(fail-open) /
                                   2 前台非主框 / 3 焦点不在文档区 / 4 光标不在文档区矩形 */
@@ -7660,10 +7979,12 @@ static BOOL CALLBACK frame_dump_cb(HWND h, LPARAM lp)
     DWORD pid = 0;
     GetWindowThreadProcessId(h, &pid);
     if (pid != (DWORD)lp) return TRUE;
-    char cls[64], title[96];
-    cls[0] = 0; title[0] = 0;
+    char cls[64], title[96], titleA[96];
+    cls[0] = 0; title[0] = 0; titleA[0] = 0;
     GetClassNameA(h, cls, sizeof(cls) - 1);
-    GetWindowTextA(h, title, sizeof(title) - 1);
+    /* 0x022C：A 版标题是 GBK，直接 logf 会把非法字节混进 UTF-8 日志。 */
+    GetWindowTextA(h, titleA, sizeof(titleA) - 1);
+    log_ansi_to_utf8(titleA, title, (int)sizeof(title));
     logf("# [hud] 焦点门·本进程顶层窗口: hwnd=%p class=%s vis=%d title=%s\n",
          (void *)h, cls, IsWindowVisible(h) ? 1 : 0, title);
     return TRUE;
@@ -7694,6 +8015,20 @@ static void frame_resolve(DWORD now)
     if (s_psFrame && !IsWindow(s_psFrame)) {
         s_psFrame = NULL; s_psMdi = NULL;
         s_docLayerN = 0; s_dlStateLogged = -1;   /* 0x0121：连文档区判据一起失效 */
+    }
+    /* 0x022A：主框矩形每 200ms 现刷一次（最大化/还原/拖到副屏都会变）。
+       ⛔ 放在解析分支**之外**：`s_psFrame && s_psMdi` 都齐时旧代码会整段跳过，
+          矩形就永远停在首次解析那一帧。detour 侧只读缓存，不调 Win32。 */
+    if (s_psFrame && (DWORD)(now - s_frameRectAt) >= 200) {
+        RECT r;
+        if (GetWindowRect(s_psFrame, &r)) {
+            InflateRect(&r, 2, 2);           /* 贴边作画：PtInRect 排除右/下边界 */
+            s_frameRect = r;
+            s_frameRectAt = now;
+            InterlockedExchange(&s_frameRectOk, 1);
+        }
+    } else if (!s_psFrame) {
+        InterlockedExchange(&s_frameRectOk, 0);
     }
     if ((!s_psFrame || !s_psMdi) && (DWORD)(now - s_frameTryAt) >= 2000) {
         s_frameTryAt = now;
@@ -7772,15 +8107,77 @@ static void frame_resolve(DWORD now)
       而 Wintab 是**系统上下文**，PS 在后台时包照进、也照常绘制（jwwh-40408 实测 fg=0
       的一整段里 `[gate] penDown 0→1` 与 packets 增长照旧）。把那根 HUD 门槛用到救援路径上，
       等于「用户切到聊天窗（哪怕在另一块屏、根本不挡画布）⇒ 断流救援立刻被禁」。
-   ⛔ 仍然拒绝「笔落在 PS 自己的对话框/浮动面板上」：那些是独立顶层窗口（root=自身），
-      不在主框子树里 ⇒ 与 0x0116/0x0122 的既有语义一致。 */
+   ⛔ 0x0134 原注「仍然拒绝笔落在 PS 自己的对话框/浮动面板上」已于 **0x022A 推翻**
+      （独立顶层窗只是盖在画布上的玻璃），并于 **0x022B 彻底收口**：连 0x022A 的
+      「主框矩形 + 前台进程归属」也不再用 —— UXP 面板是独立渲染进程，点清除模式
+      开关就让它成为前台 ⇒ 那道 pid 判据必判 0 且不自愈。现在宽判**只认主框矩形**
+      这一个物理事实，见函数体内 0x022B 长注释。
+      ⛔ 严格焦点门 canvas_focus_ok（HUD 显隐用）仍逐字保留 0x0122 的拒绝语义，
+        两条判据互不借用。 */
 static int canvas_hit_ok(POINT cur)
 {
-    if (!s_psFrame) return 1;                      /* 解析不出 ⇒ fail-open 保功能 */
+    /* ⛔⛔⛔ 0x022B：**宽判只认「主框矩形」这一个物理事实**。
+       jwwh-1676（用户拿 0x022A 复测）把 0x022A 的「覆盖窗旁路」证伪了：
+         15:46:29.408 `[hit] 宽判 1→0` cur=(1722,515)
+                       hitCls=Chrome_RenderWidgetHostHWND rootCls=Chrome_WidgetWin_1
+                       child=0 sameProc=0
+         15:46:29.419 `[post] 喂入冻结 ... hit=0`（此后 hit 再没回到 1）
+         15:46:29.497 `[hud] 前台切换（去抖 250ms 后确认）：本进程=0`
+         15:46:29.544 旁路日志 `fg=0`
+       UXP 面板（**清除模式开关就在它上面**）是 Chromium 独立渲染进程：点开关 ⇒
+       `GetForegroundWindow()` 返回它 ⇒ `fpid != GetCurrentProcessId()` ⇒
+       0x022A 旁路的第二个条件不成立 ⇒ 判 0；关掉开关后焦点仍在面板上 ⇒ **不自愈**。
+       这就是「开清除模式必失效、关掉也不恢复」的完整因果链；空白文档那次不以
+       面板为前台，所以正常（2788 / 1420 的两面性到这里才解释完整）。
+
+       根因不是浮层，是**拿窗口 Z 序 / 前台进程去推断笔的物理位置**——两者本就
+       无关：笔在数位板上的位置由板子坐标决定，玻璃盖在上面不改变它。继续
+       「补一类窗口 / 放宽一次 pid」只是换个靶子猜。
+       ⇒ 宽判 = 主框矩形（HUD 线程每 200ms 刷缓存，detour 只读缓存 + PtInRect）：
+         · 主框内一律 1：OWL.Dock / PSDialogBox / UXP 面板 / IME 候选窗 /
+           置顶小窗都不再能掐断「落笔推断 / 长停摆续命 / 喂入冻结 / 代投」；
+         · 真移出主框才 0（最小化时 GetWindowRect 落在 -32000 区，天然覆盖）；
+         · 主框 / 矩形尚未解析 ⇒ fail-open 恒 1，保功能。
+       ⛔ 「用户切到别的程序」不再由这一位负责：救援链路另有 tip / btn / dead /
+          MSE 落笔推断 / SYNTH_TIP_MAX_MS / CONTACT_HOLD 等守卫，笔抬着就喂不出去；
+          HUD 显隐的严格焦点门 canvas_focus_ok 与 fgOk 逐字不动。
+       ⛔ 附带收益：0x022A 在 detour 路径（GetCursorPos / gp_step / 多边形吸附）
+          里塞进了 WindowFromPoint + GetWindowThreadProcessId + GetForegroundWindow
+          三次跨线程 win32k 查询，违反 0x0208「detour 零窗口查询」约束；
+          本版全部移除，热路径只剩一次 PtInRect。 */
+    if (!s_psFrame || !s_frameRectOk) return 1;   /* 解析不出 ⇒ fail-open 保功能 */
+    return PtInRect(&s_frameRect, cur) ? 1 : 0;
+}
+
+/* ⛔⛔ 0x0229：宽判翻转时的「命中窗口」取证 —— **纯诊断，判据一行未改**。
+   背景：jwwh-11348 里 `[hit] 宽判 1→0` 反复发生在画布正中央
+   (1344,444)/(2517,748)/(2599,1056)/(1520,455)，而 `0→1` 也在中央
+   (1696,514)/(1698,519) ⇒ 光看 0/1 根本判不出 canvas_hit_ok() 把哪个窗口
+   当成了「不在主框子树」。这一层证据缺失时改判据 = 第二次猜靶子。
+   ⛔ 只能在 hud_thread 调用：canvas_hit_ok 本身还被 det_GetCursorPos
+      （detour 内）调用，那里禁止任何 Win32 查询与 logf；
+   ⛔ 只在 `[hit]` 那一行落盘前调一次（≥500ms 一次）⇒ 不重演 0x0208 的开销。
+   ⛔ 这里是**另一次** WindowFromPoint 查询，窗口可能已变；只回答「这一拍
+      光标底下是谁」，不参与任何决策。child=-2 表示主框未解析（此时宽判
+      fail-open 恒 1），child=-1 表示 WindowFromPoint 没命中任何窗口。 */
+static void canvas_hit_probe(POINT cur, int *child, int *rootIsFrame, int *sameProc,
+                             char *cls, int clsCap, char *rootCls, int rootClsCap)
+{
+    *child = -1; *rootIsFrame = -1; *sameProc = -1;
+    if (clsCap > 0) cls[0] = 0;
+    if (rootClsCap > 0) rootCls[0] = 0;
     HWND hit = WindowFromPoint(cur);
-    if (!hit) return 1;                            /* 恰在所有窗口外（多屏缝隙）⇒ 放过 */
-    if (hit == s_psFrame || IsChild(s_psFrame, hit)) return 1;
-    return 0;
+    if (!hit) return;
+    if (clsCap > 0) GetClassNameA(hit, cls, clsCap);
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hit, &pid);
+    *sameProc = (pid == GetCurrentProcessId()) ? 1 : 0;
+    if (!s_psFrame) { *child = -2; return; }
+    *child = (hit == s_psFrame || IsChild(s_psFrame, hit)) ? 1 : 0;
+    HWND root = GetAncestor(hit, GA_ROOT);
+    if (!root) return;
+    if (rootClsCap > 0) GetClassNameA(root, rootCls, rootClsCap);
+    *rootIsFrame = (root == s_psFrame) ? 1 : 0;
 }
 
 static int canvas_focus_ok(POINT cur, int *why)
@@ -7838,10 +8235,12 @@ static int canvas_focus_ok(POINT cur, int *why)
             DWORD nowH = GetTickCount();
             if ((DWORD)(nowH - s_hitLogAt) >= 2000) {
                 s_hitLogAt = nowH;
-                char hc[64], ht[96];
-                hc[0] = 0; ht[0] = 0;
+                char hc[64], ht[96], htA[96];
+                hc[0] = 0; ht[0] = 0; htA[0] = 0;
                 GetClassNameA(hit, hc, sizeof(hc) - 1);
-                GetWindowTextA(hit, ht, sizeof(ht) - 1);
+                /* 0x022C：同上，窗口标题统一按 CP_ACP → UTF-8 转换后再落盘。 */
+                GetWindowTextA(hit, htA, sizeof(htA) - 1);
+                log_ansi_to_utf8(htA, ht, (int)sizeof(ht));
                 logf("# [hud] 焦点门·挡: hit=%p class=%s title=%s cur=(%ld,%ld) frame=%p\n",
                      (void *)hit, hc, ht[0] ? ht : "(无)",
                      (long)cur.x, (long)cur.y, (void *)s_psFrame);
@@ -8446,6 +8845,46 @@ static DWORD WINAPI hud_thread(LPVOID param)
            本来就在每次查询里调它 ⇒ 这里每帧多一次不会重演 0x0208 的跨线程开销。 */
         /* 读光标失败时沿用上一帧的宽判结论，(0,0) 不是真实落笔点。 */
         canvasHit = curOk ? canvas_hit_ok(cur) : (int)g_canvasHitDbg;
+        /* 0x022A：宽判去抖（见 CANVAS_HIT_HYST_MS）。⛔ 只作用于功能位
+           g_canvasHitDbg：1 立即恢复，0 要连续 150ms 才认。这样一次浮层闪现
+           不会把「喂入位置 / 落笔推断 / 长停摆续命 / 代投」四条链路钉死一拍。 */
+        {
+            static int   s_hitFilt = 1;
+            static DWORD s_hitZeroAt = 0;
+            if (canvasHit) {
+                s_hitZeroAt = 0;
+                s_hitFilt = 1;
+            } else {
+                if (!s_hitZeroAt) s_hitZeroAt = now;
+                if (s_hitFilt && (DWORD)(now - s_hitZeroAt) >= CANVAS_HIT_HYST_MS)
+                    s_hitFilt = 0;
+            }
+            canvasHit = s_hitFilt;
+        }
+        /* 0x022B 诊断：证明「宽判按主框矩形放行」确实在跑（2s 一条，带命中窗口
+           类名，方便比对旧版日志）。⛔ 计数 / Win32 查询 / logf 全在 HUD 线程，
+           detour 侧零新增原子操作、零窗口查询。 */
+        if (canvasHit) InterlockedIncrement(&g_hitRectPass);
+        {
+            static LONG  s_ovLast;
+            static DWORD s_ovLogAt;
+            LONG ov = g_hitRectPass;
+            if (ov != s_ovLast && (DWORD)(now - s_ovLogAt) >= 2000) {
+                s_ovLogAt = now;
+                s_ovLast = ov;
+                int ch = 0, rf = 0, sp = 0;
+                char cls[64], rcls[64];
+                canvas_hit_probe(cur, &ch, &rf, &sp,
+                                 cls, (int)sizeof(cls), rcls, (int)sizeof(rcls));
+                logf("# [hit] 宽判按主框矩形放行：本轮累计 %ld 次 cur=(%ld,%ld)"
+                     " hitCls=%s rootCls=%s child=%d sameProc=%d fg=%d rectOk=%d frame=%p"
+                     "（浮层/UXP面板/前台进程一律不再掐断救援链路）\n",
+                     (long)ov, (long)cur.x, (long)cur.y,
+                     cls[0] ? cls : "(无)", rcls[0] ? rcls : "(无)",
+                     ch, sp, (int)g_fgOkDbg, (int)s_frameRectOk, (void *)s_psFrame);
+                (void)rf;
+            }
+        }
         if (cvWhy != s_cvWhyDbg) {
             /* 边沿触发：只在焦点门结论翻转时打一行，带窗口类名 ⇒ 用户日志可与操作逐条对齐 */
             s_cvWhyDbg = cvWhy;
@@ -8480,18 +8919,36 @@ static DWORD WINAPI hud_thread(LPVOID param)
         /* 0x0225：这一位以前被 HUD 显隐门冻住，翻面在日志里完全看不见 ⇒ 补一条边沿。
            500ms 节流：最小化/恢复那一瞬窗口命中测试会连翻几拍，别刷屏。 */
         {
-            static int   s_hitPrev = -1;
+            /* ⛔⛔ 0x0229：**旧节流把翻转吞了**（jwwh-11348 实证：14:48:37.197 与
+               14:48:41.489 连续两条 `1→0`，中间必有一次 `0→1` 却没落盘）——
+               `s_hitPrev` 写在 500ms 节流**之外**被无条件推进，于是打印出来的
+               prev 根本不是上一条已落盘的值 ⇒ 日志看起来像宽判长时间钉在 0，
+               真实抖动序列完全看不见，根本无法定案。
+               ⇒ 拆成两个量：s_hitNow 逐帧跟踪真实值并累计 s_hitFlips；
+                 s_hitPrev 只在落盘时推进。节流窗口到期只要本窗口有过翻转
+                 就打一行（净变化 + 翻转次数 + 命中窗口类名/root/进程归属），
+                 净变化为 0 的纯抖动也留痕。⛔ 功能判据逐字不动。 */
+            static int   s_hitPrev = -1;   /* 上一条**已落盘**的宽判值 */
+            static int   s_hitNow  = -1;   /* 逐帧真实值 */
+            static int   s_hitFlips;       /* 本节流窗口内累计翻转次数 */
             static DWORD s_hitLogAt;
-            if (canvasHit != s_hitPrev) {
-                int prev = s_hitPrev;
-                s_hitPrev = canvasHit;
-                if ((DWORD)(now - s_hitLogAt) >= 500) {
-                    s_hitLogAt = now;
-                    logf("# [hit] 宽判 %d→%d: mode=%d fg=%d cur=(%ld,%ld) frame=%p"
-                         "（补流/代投/落笔推断共用这一位）\n",
-                         prev, canvasHit, (int)(g_cfg ? g_cfg[CFG_I_MODE] : -1), fgOk,
-                         (long)cur.x, (long)cur.y, (void *)s_psFrame);
-                }
+            if (canvasHit != s_hitNow) { s_hitNow = canvasHit; s_hitFlips++; }
+            if (s_hitFlips && (DWORD)(now - s_hitLogAt) >= 500) {
+                s_hitLogAt = now;
+                char hitCls[64] = { 0 }, rootCls[64] = { 0 };
+                int child = -1, rootIsFrame = -1, sameProc = -1;
+                canvas_hit_probe(cur, &child, &rootIsFrame, &sameProc,
+                                 hitCls, (int)sizeof(hitCls),
+                                 rootCls, (int)sizeof(rootCls));
+                logf("# [hit] 宽判 %d→%d (窗口内翻转 %d 次): mode=%d fg=%d cur=(%ld,%ld) "
+                     "hitCls=%s child=%d rootCls=%s rootIsFrame=%d sameProc=%d frame=%p"
+                     "（补流/代投/落笔推断共用这一位）\n",
+                     s_hitPrev, s_hitNow, s_hitFlips,
+                     (int)(g_cfg ? g_cfg[CFG_I_MODE] : -1), fgOk,
+                     (long)cur.x, (long)cur.y,
+                     hitCls, child, rootCls, rootIsFrame, sameProc, (void *)s_psFrame);
+                s_hitPrev = s_hitNow;
+                s_hitFlips = 0;
             }
         }
         /* ⛔ 0x0208：判据收成「便宜闸门 ∧ 焦点门」。便宜闸门里已含全部
@@ -9744,6 +10201,47 @@ static void hud_stop(void)
                  ② 最小化→切回不再改变补齐是否生效；
                  ③ 新日志出现 `[hit] 宽判 x→y` 边沿，`[post] 喂入冻结` 只在
                     光标真的离开画布时出现。 */
+
+/*   0x022A = ⛔⛔ 【宽判把「浮层盖在画布上」误判成「笔离开画布」⇒ 开清除模式后
+             标准/追笔描边补齐彻底失效且关掉也不恢复】（用户 2026-11-11 报：pid=2788
+             空白文档正常；pid=1420 重开 PS、多图层大文档，功能正常直到开启清除模式）。
+           0x0229 的 `hitCls` 诊断给出的地面真相（jwwh-1420 15:15:58 起，画布正中央）：
+             (2681,368) OWL.Dock       rootIsFrame=0 sameProc=1
+             (1722,498) PSDialogBox    rootIsFrame=0 sameProc=1
+             (1740,515) Chrome_RenderWidgetHostHWND rootCls=Chrome_WidgetWin_1
+                        sameProc=0 fg=1
+           全是**独立顶层窗口**（PS 的浮出面板/对话框/UXP 浮窗都不在主框子树里）
+           ⇒ `IsChild(s_psFrame, hit)==0` ⇒ 宽判 1→0 且不再回来 ⇒ 喂入钉死在
+           最后一个画布内点、tip 续不上、代投降到 15Hz、线追不上光标。浮层不随
+           清除模式开关消失 ⇒ 「关掉也没恢复」。jwwh-2788 以 PSViewC(child=1)
+           为主 ⇒ 正常，正是同一判据的两面。
+           ⛔ 两份日志全程 `toolOk=1 gate=1 reason=0(改写中) calib=OK`
+             ⇒ 不是工具闸门、不是面板供给、不是标定，别再往那三处找。
+           修法：① `canvas_hit_ok()` 增加覆盖窗旁路，改认「主框矩形 + 前台进程归属」
+              （矩形缓存由 HUD 线程每 200ms 刷新，detour 只读缓存 + PtInRect）；
+             ② `g_canvasHitDbg` 加 150ms 去抖（0 连续才冻结、见 1 立即解冻）；
+             ③ `[hit] 覆盖窗旁路` 2s 节流日志留证。
+           ⛔ 严格焦点门 / HUD 显隐 / wantVisible / 0x0134 宽判不看前台的语义不变；
+             `CFG_NLONGS` 仍 61。详见 plugin_main.c 的 0x022A 版本说明。 */
+
+/*   0x022B = ⛔⛔⛔ 【0x022A 的覆盖窗旁路被 UXP 面板证伪 ⇒ 宽判彻底改为只认主框矩形】
+             （jwwh-1676：用户拿 0x022A 复测「开清除模式后描边补齐失效、关掉不恢复」）。
+           15:46:29.408 `宽判 1→0` cur=(1722,515) hitCls=Chrome_RenderWidgetHostHWND
+             rootCls=Chrome_WidgetWin_1 child=0 sameProc=0；15:46:29.497
+             `前台切换：本进程=0`；.544 旁路日志 `fg=0`；.419 `喂入冻结`
+             之后 hit 再没回到 1 直到卸载。
+           UXP 面板（清除模式开关就在它上面）是 Chromium **独立渲染进程** ⇒ 点开关
+           即成为前台窗口 ⇒ `fpid != GetCurrentProcessId()` ⇒ 0x022A 旁路的第二个
+           条件不成立 ⇒ 判 0，且关掉开关后焦点仍在面板上 ⇒ 不自愈。
+           ⇒ 宽判不再碰 WindowFromPoint / GetForegroundWindow / 进程归属，
+             只认「光标是否在 PS 主框矩形内」这一个物理事实；detour 热路径同时
+             去掉 0x022A 引入的 3 次跨线程 win32k 查询（0x0208 约束）。
+           另两处：① 日志首行同屏打印「插件版本(.8li) + 引擎版本」——旧版只打
+             0x013A，用户据此误判「复制了新 .8li 却还是旧版」（实际 `[hit]
+             覆盖窗旁路` 证明 0x022A 已加载）；② `jwwh-*.log` 换行统一展开成
+             CRLF（`log_write` 自 4441505 首版起就只写 '\n'，不是某版回归）。
+           ⛔ 引擎版本 `jwwh_version` 仍 0x013A、`CFG_NLONGS` 仍 61；
+             HUD 严格焦点门 / fgOk / wantVisible / 四条救援链路判据逐字未动。 */
 __declspec(dllexport) int jwwh_version(void) { return 0x013A; }
 
 /* ⛔⛔ 0x013D：引擎软闸（面板 unload / reload 专用）。
