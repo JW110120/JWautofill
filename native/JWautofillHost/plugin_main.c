@@ -2186,8 +2186,58 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
       链、长停摆续命、喂入冻结、代投节流、`canvas_hit_ok`、HUD、面板。
    诊断：`[catchup]` 追加 `tipDrop=`（本场僵持清零点数）；清零时另打一行
      `[raw] ★僵持 tip 清零：真实通路静默 … 光标已静止 … 左键电平=0 …`。
+   无共享槽位变化（`CFG_NLONGS` 仍 61）；引擎版本 `jwwh_version` 仍 0x013A。
+
+   0x0231 = 【多边形吸附的两条边缘条件：Alt 期间「笔有没有抬起过」】
+   用户原话：「① 当用户按住 Alt，但 TA 并没有将画笔抬起过，此时套索工具仍然是套索
+   而不会临时切换为多边形套索工具，所以在这种情况下，吸附不要生效，并且不要产生 HUD；
+   ② 按住 Alt，但笔尖没有立刻抬起，而是继续画了一段曲线才抬起，这时 HUD 的起点在
+   按下 Alt 的时候，而不是在按住 Alt 且抬起笔的位置。」
+   ⇒ 两条是**同一个事实**的两面：PS 的临时多边形套索只在**笔悬空**之后才成立。
+     Alt 按下时笔还压着 ⇒ 整个「按住 Alt 继续画」的过程仍是套索：
+       · 不该吸附、不该出参考线（需求①）；
+       · 折线起点落在**抬笔那一刻**，而不是按 Alt 的位置（需求②）。
+   根因：吸附锚点在「Alt 第一拍」就建立（`g_strokeGate==1 && s_gpOn` ⇒ 取圆心），
+     而整条链**从不知道笔抬没抬**。0x021B 只为「解冻补线」搬过锚，抬笔本身从未
+     被当成搬锚时机 —— 可对 PS 来说，抬笔才是套索→多边形的切换点。
+   ⇒ 新增跨三线程状态位 `g_polyLift`（1 = 本轮 Alt 已见抬笔）：
+     · `poly_snap_gcp` 开头（工具闸门之前）跑状态机：Alt 按下时笔还压着 ⇒ 0 并收摊；
+       之后每拍判接触电平，笔抬起的那一刻置 1 **并搬锚**（`poly_anchor_push` 取真实
+       光标 = 抬笔位置）。会话建立新增 `moved` 支，以该点为锚点。
+     · `poly_snap_run`（包）/ `poly_pkt_click`（接触钉住）/ `poly_hint_live`（参考线）
+       三个入口都加 `g_polyLift` 门 ⇒ 未抬笔时一个字节不改、HUD 不画。
+     · 接触电平（`g_pgTouch`）的维护**前移**到会话建立之前：否则「会话不建 ⇒ 电平不更新
+       ⇒ 判不出抬笔 ⇒ 会话永远不建」形成循环依赖。
+     · 包路径新增 `poly_touch_track()`：无条件记录「最近 buttons=1 的包」，
+       供 `poly_pen_pressing()` 判「笔还压着」。
+   ⛔ 判「笔压着」不看 `g_penDown` / tip（断流期会僵住，铁律 123 同源）。
+   ⛔ `POLYALT` 抖成 0 一拍不清 `g_polyLift`（铁律 100），只在真收摊
+      （`poly_snap_gcp_exit`，新增 why=4「笔还没抬起」）里复位。
+   ⛔ 不动：冻结（0x0214）、角度吸附算法/容差、三通道钉点、锚点推进的 owner 规则、
+      `canvas_hit_ok`、HUD 显隐闸门、面板。
+   诊断：`[alt] 本轮吸附结束` 追加 `｜抬笔定锚 N 次` 与收摊原因第 5 项「笔还没抬起」；
+        抬笔定锚时另打 `[alt] ★抬笔定锚`。
+   无共享槽位变化（`CFG_NLONGS` 仍 61）；引擎版本 `jwwh_version` 仍 0x013A。
+
+   0x0232 = 【同一条边缘条件的两个收尾：抬笔点错位 + 按住笔不放】
+    根因一（HUD 起点 = 手滑走之后的位置）：判「抬笔」原先靠 `POLY_TOUCH_FRESH_MS`
+      （120ms）超时 —— 抬笔到判出来之间手已经移开几十 px，`poly_anchor_push()`
+      读的是**那一刻**的光标 ⇒ 锚点落在手滑走的路径上（实测抬笔点 (450,385)，
+      锚点 (436,454)）。⇒ 光标路径在「仍压着」的每一拍记录 `s_lift*`（= 抬笔点），
+      搬锚改用它（`poly_anchor_push_at()`），⛔ 不再现读光标。
+    根因二（抬笔判定本身要 120ms）：包层只记「最近有按钮包」，没有「明说抬着」的
+      证据。⇒ `poly_touch_track()` 另记最新一包的 buttons 电平（`g_pktLvl`），
+      判据收口到 `poly_touch_step()`：最新一包 buttons=0 且 `POLY_TOUCH_UP_QUIET_MS`
+      （40ms）内没有按钮包 ⇒ **立刻**判抬笔（正常包间隔只有 4~8ms）。
+    需求②（画了两段折线后一直按住笔 ⇒ PS 变回普通套索）：多边形模式下「按下 + 拖动
+      > `POLY_CLICK_HOLD_PX`」⇒ 整条吸附链歇业（`exit(5)`），抬笔后自动恢复。
+   ⛔ 冻结（`poly_hold_run`）**不加** `g_polyLift` 门（试过，已撤回）：冻结不是吸附，
+      它是平滑的交接 —— 关掉它会让「画到一半按 Alt」的笔画里多出一条 20~60px 长直线。
+   ⛔ 不动：角度吸附算法/容差、三通道钉点规则、锚点推进 owner 规则、`canvas_hit_ok`、
+      HUD 显隐闸门、面板。
+   诊断：`[alt] 本轮吸附结束` 收摊原因新增第 6 项「按下拖动→套索」。
    无共享槽位变化（`CFG_NLONGS` 仍 61）；引擎版本 `jwwh_version` 仍 0x013A。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x0230; }
+__declspec(dllexport) long jw8li_version(void) { return 0x0232; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {

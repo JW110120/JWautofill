@@ -3776,6 +3776,10 @@ static volatile LONG g_polyAnchorReset;               /* 1 = 有一个待消费�
 static volatile LONG g_polyAnchorX, g_polyAnchorY;    /* 新锚点（**屏幕像素**） */
 static volatile LONG g_polyAnchorMv;                  /* 累计搬锚次数（诊断，一直累加） */
 static int    s_polyNeedAnchor;       /* 1 = 解冻发生在批末，等下一批第一包去取 */
+/* 0x0231/0x0232：本轮 Alt 里「笔抬起过没有」（长注释在 `poly_touch_track` 上面那一节）。
+   ⛔ 定义必须早于 `poly_hold_run()`：冻结/钉圆心同样是「多边形才有的动作」，
+      笔还压着时一个字节都不许动它（0x0232）。 */
+static volatile LONG g_polyLift;      /* 1 = 本轮 Alt 已见抬笔（= PS 已进多边形套索） */
 
 /* 逐包读 buttons 电平：-1 = 判据不可用，0 = 抬着，1 = 按着。
  * ⛔ 与主循环里那段边沿记账读的是同一组全局量（`s_ctBtnIdx` / `g_ctElig`），
@@ -3799,15 +3803,24 @@ static int pkt_btn_level(const u8* p)
  *   而吸附投影以这个点为基准 ⇒ 选区被拉到远端。
  *   语义上也正好：解冻补线的末端**就是此刻的光标**，PS 把折线起点放在那里。
  * ⛔ 拿不到光标就**放弃这次搬锚**（保留旧锚点），不要写一个猜出来的坐标。 */
+/* 用一个**已知的屏幕点**发布一次搬锚。
+ * 0x0232：抬笔点由光标路径逐拍记录（`s_lift*`），比「事后再去读光标准」可靠 ——
+ *   抬笔到判出抬笔之间有几十毫秒，用户的手早已滑走（用户截图：错开 69px）。
+ * ⛔ 只做「发布」，不做任何换算；调用者保证这个点确实是**屏幕像素**。 */
+static void poly_anchor_push_at(LONG sx, LONG sy)
+{
+    InterlockedExchange(&g_polyAnchorX, sx);
+    InterlockedExchange(&g_polyAnchorY, sy);
+    InterlockedExchange(&g_polyAnchorReset, 1);
+    InterlockedIncrement(&g_polyAnchorMv);
+}
+
 static void poly_anchor_push(u32 ax, u32 ay)
 {
     (void)ax; (void)ay;                    /* 只留签名：屏幕点由光标给出，不需要轴值 */
     POINT c;
     if (!se_real_GetCursorPos(&c)) return;
-    InterlockedExchange(&g_polyAnchorX, c.x);
-    InterlockedExchange(&g_polyAnchorY, c.y);
-    InterlockedExchange(&g_polyAnchorReset, 1);
-    InterlockedIncrement(&g_polyAnchorMv);
+    poly_anchor_push_at(c.x, c.y);
 }
 
 /* 取走一次新锚点（有则返回 1 并清零）。返回 0 = 没有待办。 */
@@ -3896,6 +3909,14 @@ static int poly_hold_run(u8* buf, int S, int n, int ox_, int oy_)
         s_polyUsed = 0;
         return -1;
     }
+
+    /* ⛔⛔ 0x0232 试过把「冻结」也按 `g_polyLift` 关掉，**已撤回**：
+       冻结不是吸附，它是**平滑的交接**（0x0214/0x0221）—— 平滑让输出点滞后于笔尖，
+       按 Alt 那一刻平滑被 POLYALT 硬否决、改回原样透传，PS 就会从滞后点补一条线到笔尖。
+       冻结把这段滞后「钉住再解冻补线」，把一次大跳（20~60px）换成一次小跳（14px）。
+       笔还压着时关掉它 ⇒ 用户画到一半按 Alt，笔画里多出一条长直线 —— 那是新瑕疵。
+       ⇒ 只关吸附侧（`poly_snap_run`/`poly_pkt_click`/`poly_hint_live` 的 `g_polyLift` 门），
+          冻结/解冻照旧。 */
 
     /* 0x021B：上一批把解冻判在批末 ⇒ 折线起点落在**这一批的第一包**上，先补交锚点。
        ⛔ 必须放在「POLYALT 已归零」分支之前：用户解冻后立刻松开 Alt 时也要能交出去。 */
@@ -4092,6 +4113,73 @@ static volatile LONG g_msgLastMs;    /* 最近一条鼠标消息的时刻（0 = 
    要先看它决定让位。只此一份。 */
 static volatile LONG g_pgHoldOn;     /* 1 = 接触期间把输出钉在 (g_pgHoldX, g_pgHoldY) */
 
+/* ================= 0x0231：Alt 期间「笔到底抬起过没有」=================
+ *
+ * 用户本轮报的两条现象是**同一个事实**的两面：
+ *   ① 按住 Alt，但笔**没有抬起过** —— PS 此刻仍然是套索（Alt 的临时多边形套索只在
+ *      笔悬空之后才成立）⇒ 既不该吸附，也不该冒出参考线；
+ *   ② 按住 Alt 后笔尖没立刻抬，而是**继续画了一段曲线才抬** —— 折线起点在**抬笔处**，
+ *      而吸附锚点还停在「按 Alt 那一刻」⇒ HUD 起点整整错开一段曲线（用户截图：
+ *      红圈=按 Alt 处、蓝圈=抬笔处，青色线却从红圈拉出来）。
+ *
+ * 事实来源：`poly_anchor_push()` 早在 0x021B 就为「解冻补线」搬过锚，搬的正是
+ *   「PS 真正的折线起点」。而**抬笔本身**从未被当成搬锚时机 —— 可对 PS 来说，
+ *   「笔抬起」才是套索→多边形的切换点，折线起点就落在抬笔的那一点上。
+ *
+ * ⇒ 一个跨三线程的状态位（原子槽）：
+ *      g_polyLift = 1：本轮 Alt 会话里笔**已经抬起过** ⇒ 可以吸附
+ *      g_polyLift = 0：Alt 按下时笔还压着，至今没抬 ⇒ 整条吸附链歇业（需求①）
+ *   抬笔发生的那一刻搬锚（锚点 = 真实光标 = 抬笔位置），下一拍会话以它为起点（需求②）。
+ * ⛔ `POLYALT` 抖成 0 一拍**不许**清它（铁律 100）：只在真收摊
+ *    （`poly_snap_gcp_exit`）里复位。
+ * ⛔ 判「笔还压着」绝不许用 `g_penDown`：断流期它可能被旧值冻住（铁律 123 同源）⇒
+ *    「抬笔」永远检测不到、吸附永不生效。只用接触电平 + 接触包新鲜度。
+ */
+#define POLY_TOUCH_FRESH_MS 120     /* 最后一个「接触中」包多新算「笔还按着」 */
+/* 0x0232：判定「这一包就是抬笔包」还要求「`POLY_TOUCH_UP_QUIET_MS` 内没有按钮包」——
+   单拍 buttons=0 可能是断流补包 / 合成包的抖动；而真抬笔之后按钮包必然停供
+   （包率 130~270/s ⇒ 正常间隔只有 4~8ms）。 */
+#define POLY_TOUCH_UP_QUIET_MS 40
+/* ⛔ `g_polyLift` 的定义已前移到 `poly_hold_run()` 之前（冻结也要问它），别在这里重复定义。 */
+static volatile LONG g_polyLiftEvt;  /* 1 = 有「抬笔定锚」台账待 worker 落盘 */
+static volatile LONG g_polyLiftN;    /* 累计抬笔定锚次数（诊断） */
+/* 「最近一个 buttons=1 的包」的时刻 —— 0x0231 前移到此处：`poly_touch_track()`
+   要在**任何吸附会话之外**维护它（会话没建立时也必须知道笔压没压着）。 */
+static volatile LONG g_pktTchMs;
+/* 0x0232：**最新一包**的 buttons 电平与它的到达时刻（-1 = 判据不可用）。
+   ⛔ 为什么还要这一个：`g_pktTchMs` 只回答「最近有没有按钮包」，而「笔到底抬没抬」
+     需要一条**明说抬着**的证据 —— 没有它，抬笔只能靠 `POLY_TOUCH_FRESH_MS` 超时
+     推断出来，而那正是本轮 HUD 起点错位的根：判出抬笔时手已经滑走 69px。 */
+static volatile LONG g_pktLvl = -1;
+static volatile LONG g_pktLvlMs;
+
+/* 0x0231：包路径**无条件**维护「最近接触时刻」（吸附会话建不建立、Alt 按没按都要跑）。
+   ⛔ 为什么不能只在本轮 Alt 会话里记：Alt 按下的**第一拍**就要判「笔是不是还压着」，
+      而那一拍还没有任何会话 ⇒ 若这里挑条件跑，`g_pktTchMs` 会是上一轮的陈旧值，
+      判据只剩「接触电平残留」，误判成「笔已悬空」就会整轮跳过歇业（需求①失效）。
+   ⛔ 只看逐包 buttons 电平：抬笔那一包就是 0，这正是要的事实，不做任何推断
+      （⛔ 不许借 tip / `g_penDown`：断流期它们会僵持，见铁律 123）。 */
+static void poly_touch_track(const u8* buf, int S, int n)
+{
+    if (n <= 0) return;
+    DWORD now = GetTickCount();
+    /* 批内最后一包的可用电平 = 「PS 此刻看到的按钮状态」的最新值。 */
+    for (int i = n - 1; i >= 0; i--) {
+        int lv = pkt_btn_level(buf + (SIZE_T)i * S);
+        if (lv < 0) continue;
+        InterlockedExchange(&g_pktLvl, (LONG)lv);
+        InterlockedExchange(&g_pktLvlMs, (LONG)now);
+        break;
+    }
+    /* 批内任意一包说「按着」⇒ 续期（与 0x0231 逐字一致：从后往前，命中即走）。 */
+    for (int i = n - 1; i >= 0; i--) {
+        if (pkt_btn_level(buf + (SIZE_T)i * S) == 1) {
+            InterlockedExchange(&g_pktTchMs, (LONG)now);
+            return;
+        }
+    }
+}
+
 static int    s_snapOn;           /* 1 = 有锚点 */
 static int    s_snapBtn;          /* 上一包的 buttons 电平（0/1，-1 当 0 用） */
 static double s_snapAx, s_snapAy; /* 锚点（轴空间） */
@@ -4141,7 +4229,8 @@ static int poly_snap_run(u8* buf, int S, int n, int ox_, int oy_)
           按 Alt 是 PS 的临时吸管，改坐标会直接毁掉取色。 */
     /* 0x0223：工具闸门换成 `poly_tool_ok()`（值优先）—— 平滑关着时闸门心跳会停，
        `tool_gate_ok()` 3s 后就恒 0，包路径整段死掉（根因见 poly_tool_ok 的注释）。 */
-    if (!g_cfg || !g_cfg[CFG_I_POLYALT] || !poly_tool_ok() || !poly_snap_enabled()) {
+    if (!g_cfg || !g_cfg[CFG_I_POLYALT] || !poly_tool_ok() || !poly_snap_enabled()
+        || !g_polyLift) {                      /* 0x0231：笔没抬起过 ⇒ 还是套索，不吸 */
         s_snapOn = 0; s_snapBtn = 0;
         return -1;
     }
@@ -4378,6 +4467,9 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
           清 `g_strokeGate` / `g_wasEnabled`，冻结的进场判据（一笔之中）就再也看不到了
           —— 那正是「按下 Alt 时点跳过去」的原始成因。 */
     {
+        /* 0x0231：先记「笔还压着」这个事实 —— ⛔ 必须无条件跑（吸附会话建没建立都要跑），
+           并且要在 `poly_hold_run` 之前：光标路径靠它判「抬没抬笔」。 */
+        poly_touch_track((const u8*)buf, S, n);
         int ph = poly_hold_run((u8*)buf, S, n, ox_, oy_);
         if (ph >= 0) return ph;
         /* 0x021C：接触（落笔）那一包的坐标也要掰 —— PS 确认节点读的是**包**，
@@ -5576,6 +5668,73 @@ static volatile LONG g_polyHintN;                 /* 累计吸附事件（诊断
    0x021C 的 `s_pgClickHold` 是普通变量，本来就会被三条线程各改一份。 */
 static volatile LONG g_pgTouch;       /* 1 = 笔在接触（消息层 / 包层共同维护的**唯一**判据） */
 static volatile LONG g_pgTouchPrev;   /* 上一拍接触电平（边沿检测，三路共用一个原子） */
+
+/* 0x0231：「笔此刻还压着吗」—— 只由接触电平 + 包证据 + 硬件镜像回答（长注释见 `g_polyLift`）。
+   ⛔ 不看 `g_penDown` / tip：断流期它们会僵住（铁律 123），拿来判「抬没抬笔」会
+      永远抬不了笔 ⇒ 吸附永不生效。
+   ⛔ `g_pgTouch` 由**三条通道**共同维护，且维护点必须早于任何「会话是否建立」的判断；
+      见 `poly_snap_gcp` 开头那段前移的更新块。
+
+   ===== 0x0232：这就是「笔压着吗」的**唯一**判据，返回 1 = 接触 =====
+   顺序即优先级，每一条都只用「本拍能拿到的事实」：
+     ① 调用者给的硬件按键（消息路径的 LBUTTONDOWN / 光标路径的 keyhook∪Async 并集）；
+     ② 包层**明说抬着**：最新一包 buttons=0 且 `POLY_TOUCH_UP_QUIET_MS` 内没有按钮包；
+     ③ 包层近期有过按钮包（`POLY_TOUCH_FRESH_MS`）⇒ 压着（Wintab 独占时硬件电平读
+        成 0 是常态，铁律 26，所以这条是主证据源）；
+     ④ 硬件镜像（keyhook 事件电平 ∪ `GetAsyncKeyState`）⇒ 压着，**只做阳性证据**；
+     ⑤ 三路都没证据 ⇒ 抬着（保留旧语义：不许因为「没有证据」就僵在 1）。
+   ⛔ ② 必须排在 ③ 之前：只有先能「立刻确认为抬着」，抬笔时刻才不会被
+      `POLY_TOUCH_FRESH_MS` 的 120ms 超时拖后 —— 那 120ms 就是本轮 HUD 起点错位 69px 的来源。 */
+static int poly_hw_btn_down(void)
+{
+    int mDown = 0;
+    if (keyhook_mouse_state(&mDown, NULL, NULL, NULL, NULL, NULL) && mDown) return 1;
+    if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) return 1;
+    return 0;
+}
+
+/* 包层是否**明说抬着**（最新一包 buttons=0 且新鲜）。
+   ⛔ 单独抽出来是因为它有两个用处：一是 `poly_touch_step()` 的 ②，
+      二是**抬笔点采样必须立刻刹车**（见 `s_liftX` 处注释）—— 两处必须同源。 */
+static int poly_pkt_says_up(void)
+{
+    LONG lms = g_pktLvlMs;
+    if (!lms) return 0;
+    if ((DWORD)(GetTickCount() - (DWORD)lms) > POLY_TOUCH_FRESH_MS) return 0;
+    return (g_pktLvl == 0) ? 1 : 0;
+}
+
+static int poly_touch_step(int btnHw)
+{
+    DWORD now = GetTickCount();
+    if (btnHw) { InterlockedExchange(&g_pgTouch, 1); return 1; }
+    LONG lvl  = g_pktLvl, tms = g_pktTchMs;
+    int lvlFresh = (g_pktLvlMs && (DWORD)(now - (DWORD)g_pktLvlMs) <= POLY_TOUCH_FRESH_MS) ? 1 : 0;
+    int tchFresh = (tms && (DWORD)(now - (DWORD)tms) <= POLY_TOUCH_FRESH_MS) ? 1 : 0;
+    if (lvlFresh && lvl == 0
+        && !(tchFresh && (DWORD)(now - (DWORD)tms) <= POLY_TOUCH_UP_QUIET_MS)) {
+        InterlockedExchange(&g_pgTouch, 0);
+        return 0;
+    }
+    if (tchFresh || (lvlFresh && lvl == 1) || poly_hw_btn_down()) {
+        InterlockedExchange(&g_pgTouch, 1);
+        return 1;
+    }
+    InterlockedExchange(&g_pgTouch, 0);
+    return 0;
+}
+
+/* ===== 0x0232：抬笔点与「按下并拖动」两个状态 =====
+ * `s_liftX/Y`：**仍压着**的最后一个屏幕位置。抬笔那一刻 PS 把折线起点放在这里，
+ *   所以搬锚要搬它，而不是「判出抬笔时再读一次光标准」—— 抬笔到判出抬笔之间
+ *   手已经滑走（用户截图：抬笔点 (450,385)，锚点却落在 (436,454)，正好在手滑走的路径上）。
+ * `s_dragX/Y`：本次接触的起点。多边形模式下「按下并拖动」= PS 切回普通套索（用户实测：
+ *   画了两根折线后一直按住笔，PS 又变回套索，此时吸附与参考线都必须停）。 */
+static double s_liftX, s_liftY;
+static int    s_liftSeen;
+static double s_dragX, s_dragY;
+static int    s_dragOn;
+
 /* `g_pgHoldOn` 的声明在 `poly_snap_run` 之前（包路径要据此让位）。 */
 static volatile LONG g_pgHoldX, g_pgHoldY;   /* 锁定点（**屏幕像素**）= 吸附点 A */
 static volatile LONG g_pgHoldRx, g_pgHoldRy; /* 落笔那一刻的**真实**光标（解锁定长基准） */
@@ -5583,7 +5742,8 @@ static volatile LONG g_pgHoldT0;      /* 锁定起始时刻（超时兜底） */
 static volatile LONG g_pgTchOffAt;    /* 接触掉到 0 的时刻（0 = 当前为 1），见下面的宽限 */
 static volatile LONG g_pgHoldN;       /* 累计锁定次数（诊断） */
 static volatile LONG g_pgHoldOff;     /* 累计解锁次数（诊断） */
-static volatile LONG g_pktTchMs;      /* 最近一个「接触中」包的时刻（光标路径判接触用） */
+/* `g_pktTchMs` 的定义已前移到 0x0231 那一段（`poly_snap_run` 与 `poly_touch_track`
+   都要用），⛔ 别在这里再定义一份。 */
 static int    s_pkBtnPrev = -1;       /* 包路径：上一包的 buttons 电平（-1 = 未知） */
 static int    s_pkPin;                /* 1 = 本笔接触正在把包钉在 (s_pkPinAx, s_pkPinAy) */
 static u32    s_pkPinAx, s_pkPinAy;   /* 包路径的钉住点（**轴空间**，与包同域 ⇒ 免换算） */
@@ -5599,6 +5759,10 @@ static int poly_hint_live(DWORD now)
        ⛔ 也别把「工具闸门」并进来：参考线只在**吸住过**（时间戳新鲜）时才活，
           而写时间戳的那条路（包/光标吸附）已经各自把工具闸门判过了。 */
     if (!g_cfg || !g_cfg[CFG_I_POLYALT] || !poly_snap_enabled()) return 0;
+    /* 0x0231：Alt 按着、笔**从没抬起过** ⇒ PS 还是套索（不是多边形）⇒ 不出参考线。
+       ⛔ 判据是「抬过笔」而不是「现在没压着」：抬过之后用户悬空移动、点击加点都要画线，
+          而那些时刻接触电平会短暂为 1（点击）。 */
+    if (!g_polyLift) return 0;
     LONG ms = g_polyHintMs;
     if (!ms) return 0;
     if ((DWORD)(now - (DWORD)ms) > POLY_HINT_KEEP_MS) return 0;
@@ -5655,10 +5819,16 @@ static volatile LONG g_pgExitWhy;             /* 0=未退出 1=Alt 松开 2=主�
 
 /* ⛔ 退出 Alt 的收尾必须**只做一次**：多条来源（POLYALT 归零 / 主开关关 / 工具换走）
  *    都会把 `s_pgOn` 从 1 拉回 0，汇总行放在这里就不会重复刷。
- * `why`：1=Alt 松开 2=主开关关 3=工具换走（0x021A 起写进日志，用于区分「真收摊」与
- *        「被瞬时抖动误伤」——这一栏是「只吸一次」那类故障最快的判据）。 */
+ * `why`：1=Alt 松开 2=主开关关 3=工具换走 4=笔还没抬起（0x0231，Alt 期间仍在套索里画）
+ *        5=按下并拖动（0x0232，多边形模式下按住笔 ⇒ PS 切回普通套索）。
+ *        0x021A 起写进日志，用于区分「真收摊」与「被瞬时抖动误伤」——这一栏是
+ *        「只吸一次」那类故障最快的判据。 */
 static void poly_snap_gcp_exit(int why)
 {
+    /* 0x0231：会话收摊 ⇒ 「本轮已抬笔」一并复位（下一轮 Alt 重新判定）。
+       ⛔ 必须放在 `!s_pgOn` 早退**之前**：本函数有两类调用者 —— 会话已建立时的正常收摊，
+          以及「开关被关 / Alt 已松开」的兜底，后者往往 `s_pgOn` 本来就已是 0。 */
+    InterlockedExchange(&g_polyLift, 0);
     if (!s_pgOn) return;
     s_pgOn = 0; s_pgBtnCur = 0; s_pgBtnMsg = 0;
     s_pgToolSeen = 0; s_pgAltPrev = 0; s_pgAltOffAt = 0;
@@ -5713,7 +5883,7 @@ static int poly_pkt_click(u8* buf, int S, int n, int ox_, int oy_)
 {
     /* 0x0221：接触钉住同样只认「吸附开关 + 物理 Alt」，与平滑总开关无关
        （根因见 det_WTPacketsGet 里那段 `en || polyOn` 的说明）。 */
-    if (!g_cfg || !g_cfg[CFG_I_POLYALT] || !poly_snap_enabled()) {
+    if (!g_cfg || !g_cfg[CFG_I_POLYALT] || !poly_snap_enabled() || !g_polyLift) {
         s_pkBtnPrev = -1; s_pkPin = 0; InterlockedExchange(&g_pkPinOn, 0);
         return 0;
     }
@@ -5815,13 +5985,106 @@ static int poly_snap_gcp(LPPOINT p, int btn, int owner)
         /* 归零期间一律正常透传（真实松开后用户要马上继续画套索，钉住 250ms 更糟），
            但会话与锚点先留着：`POLYALT` 是 20ms 镜像电平，抖成 0 一拍是常态。 */
         if (!s_pgAltOffAt) s_pgAltOffAt = nowA;
-        if ((DWORD)(nowA - s_pgAltOffAt) >= POLY_SNAP_ALT_OFF_MS)
+        if ((DWORD)(nowA - s_pgAltOffAt) >= POLY_SNAP_ALT_OFF_MS) {
             poly_snap_gcp_exit(1);
+            /* 0x0231：**真收摊**才复位「抬过笔」——`exit` 里有 `!s_pgOn` 早退，
+               它不保证清到，所以这里显式来一遍。抖动那 250ms 走不到这一支。 */
+            InterlockedExchange(&g_polyLift, 0);
+            s_pgAltPrev = 0;
+        }
         return 0;
     }
     s_pgAltOffAt = 0;
-    if (!s_pgAltPrev) s_pgToolSeen = 0;            /* 新一轮按住 Alt ⇒ 工具确认要重来 */
-    s_pgAltPrev = 1;
+
+    /* ===== 0x0231：接触电平的维护**必须前移到会话建立之前** =====
+       原位置在 `if (!s_pgOn)` 之后，于是形成循环依赖：会话不建 ⇒ 电平不更新 ⇒
+       判不出抬笔 ⇒ 会话永远不建。而「笔压没压着」正是「要不要建会话」的判据。
+       ⛔ 只搬「电平更新」这两句；接触锁（`g_pgHoldOn`）仍留在会话建立之后 ——
+          它要读 `g_polyHintMs`（吸附点）与会话状态，提前跑会拿上一轮的吸附点建锁。
+       ⛔ 0x0232：三路证据的裁决收口到 `poly_touch_step()` 一处（原来这里手写一份
+          「pktFresh 150ms」、下面 `poly_pen_pressing()` 再手写一份 —— 两份判据必然漂移）。 */
+    int pressing;
+    if (owner == 0) {
+        pressing = poly_touch_step(btn);           /* 光标路径 = 电平的**唯一**写者 */
+    } else {
+        /* 消息路径只做「按下即置位」：它每来一条 `WM_MOUSEMOVE` 都带 btn=0，
+           若也让它按包判据去清电平，一次「按下消息刚到、按钮包还没到」的空档就会
+           把 `g_pgTouch` 打成 0（接触锁/拖动底盘的 0→1 边沿会多出来一次）。
+           ⛔ 与 0x0219 同一条规矩：**不被授权的通道不许替别人写共享状态**。 */
+        if (btn) InterlockedExchange(&g_pgTouch, 1);
+        pressing = (g_pgTouch != 0);
+    }
+
+    /* ===== 0x0231：本轮 Alt 的「笔抬没抬起」状态机（长注释见 `g_polyLift`）=====
+       ⛔ 位置在工具闸门之前：这一段只回答「PS 现在是不是多边形套索」，
+          与「当前工具是不是套索」是两件事（后者由下面的闸门回答）。 */
+    if (!s_pgAltPrev) {
+        s_pgToolSeen = 0;                          /* 新一轮按住 Alt ⇒ 工具确认要重来 */
+        s_liftSeen = 0; s_dragOn = 0;               /* 新一轮 ⇒ 上一轮的抬笔点/拖动底作废 */
+        if (pressing) {
+            /* Alt 按下时笔还压着 ⇒ 这是套索的一笔，PS 不会切多边形 ⇒ 整段歇业。 */
+            InterlockedExchange(&g_polyLift, 0);
+            poly_snap_gcp_exit(4);                 /* 作废上一轮可能残留的会话 */
+        } else {
+            /* Alt 按下时笔已悬空 ⇒ 本来就是多边形套索；锚点等第一次点击（既有逻辑）。 */
+            InterlockedExchange(&g_polyLift, 1);
+        }
+        s_pgAltPrev = 1;                           /* exit 内部会清它 ⇒ 必须补回 */
+    }
+    if (!g_polyLift) {
+        if (pressing) {
+            /* 还在画：不吸、不建会话、不出 HUD。
+               0x0232：但这正是**唯一**能拿到「抬笔点」的机会 —— 逐拍记下最后位置。
+               ⛔ 别等到判出抬笔时再读光标：那时手已经滑到别处（用户截图差 69px）。
+               ⛔ 采样要在**包层一说明抬着就刹车**：`pressing` 还要再等
+                  `POLY_TOUCH_UP_QUIET_MS`(40ms) 才变 0，那 40ms 里手能再滑 30~40px；
+                  而「最后一包 buttons=1」到「第一包 buttons=0」只差一个包间隔（4~8ms）。 */
+            if (!poly_pkt_says_up()) {
+                s_liftX = (double)p->x; s_liftY = (double)p->y; s_liftSeen = 1;
+            }
+            s_dragOn = 0;
+            return 0;
+        }
+        /* 抬笔 ⇒ PS 从这一刻才切进多边形套索，**折线起点 = 抬笔位置**（需求②）。
+           ⛔ 置位与搬锚必须**同一处**完成：位置一旦置 1 就不会再进本支，
+              分开写就会漏搬一次而永久停在旧锚点上。 */
+        InterlockedExchange(&g_polyLift, 1);
+        /* ⛔ 先作废冻结期留下的待搬锚点：那段 Alt 期间「解冻补线」会推一个中途锚点，
+           它比抬笔点更旧且更错；不清掉就可能被下面 `moved` 支当成折线起点。 */
+        InterlockedExchange(&g_polyAnchorReset, 0);
+        POINT cL; cL.x = p->x; cL.y = p->y;
+        if (s_liftSeen) {                          /* 抬笔点已知 ⇒ 搬它（⛔ 不读当前光标） */
+            poly_anchor_push_at((LONG)(s_liftX >= 0 ? s_liftX + 0.5 : s_liftX - 0.5),
+                                (LONG)(s_liftY >= 0 ? s_liftY + 0.5 : s_liftY - 0.5));
+            InterlockedIncrement(&g_polyLiftN);
+            InterlockedExchange(&g_polyLiftEvt, 1);
+        } else if (canvas_hit_ok(cL)) {            /* 兜底：没记录过（画布外起笔）⇒ 旧行为 */
+            poly_anchor_push(0, 0);
+            InterlockedIncrement(&g_polyLiftN);
+            InterlockedExchange(&g_polyLiftEvt, 1);
+        }
+        s_dragOn = 0;
+    } else if (pressing) {
+        /* ===== 0x0232：多边形模式下「按下 + 拖动」= PS 已切回普通套索 =====
+         * 用户实测：画了两段折线后改为一直按住笔不放 ⇒ PS 又变回普通套索，此时
+         *   吸附与参考线都不该出现。判据只能是「接触中移动了多远」——
+         *   PS 自己也是这么分的：原地按下（含手抖几 px）= 加点；按下并拖动 = 自由套索。
+         * ⛔ 阈值复用 `POLY_CLICK_HOLD_PX`（接触钉住的「真要继续画」同一条线）：
+         *   同一个语义只留一个常量，否则两处判据迟早各说各话。
+         * ⛔ 量的是**原始光标**（本支在冻结/钉住改写之前），不是被钉住的输出点。 */
+        if (!s_dragOn) { s_dragOn = 1; s_dragX = (double)p->x; s_dragY = (double)p->y; }
+        else {
+            double ddx = (double)p->x - s_dragX, ddy = (double)p->y - s_dragY;
+            if (dsqrt_(ddx * ddx + ddy * ddy) > POLY_CLICK_HOLD_PX * dpi_scale()) {
+                poly_snap_gcp_exit(5);             /* 5 = 按下并拖动（PS 回到套索） */
+                s_pgAltPrev = 1;                   /* exit 会清它 ⇒ Alt 还按着，补回 */
+                s_dragOn = 0;
+                return 0;
+            }
+        }
+    } else {
+        s_dragOn = 0;
+    }
 
     /* 工具闸门：**值**优先（面板最后一次读到的工具），心跳过期只说明面板这一阵没刷新，
        不说明工具换走了。⛔ 铁律 71/72：过期不许当换工具的证据。
@@ -5860,6 +6123,24 @@ static int poly_snap_gcp(LPPOINT p, int btn, int owner)
             InterlockedExchange(&g_pgAy, p->y);
             InterlockedExchange(&g_pgEvt, 1);
             return 1;                             /* 起点原样放行 */
+        } else if (moved) {
+            /* 0x0231：**刚抬笔** ⇒ PS 从这一刻才切进多边形套索，折线起点 = 抬笔位置。
+               `poly_anchor_push` 写进来的就是那一刻的真实光标。
+               ⛔ 放在 `btn` 之后：抬笔后紧接的一次点击比「历史起点」更权威。
+               ⛔ 本拍不改写（返回 1 原样放行）：锚点与光标此刻重合，`poly_proj`
+                  必然因 `POLY_SNAP_MIN_PX` 拒吸，写不改写结果一样，但少一次抖动。 */
+            s_pgAx = (double)(LONG)g_polyAnchorX;
+            s_pgAy = (double)(LONG)g_polyAnchorY;
+            poly_anchor_take(NULL, NULL);         /* 会话已建立 ⇒ 消费掉这次搬锚 */
+            s_pgOn = 1;
+            s_pgBtnCur = btn ? 1 : 0;
+            s_pgBtnMsg = btn ? 1 : 0;
+            s_gpOn = 0; s_gpBtn = 0;
+            s_pgN0 = 0; s_pgRw0 = 0; s_pgPk0 = 0; s_pgAdv0 = 0;
+            InterlockedExchange(&g_pgAx, (LONG)(s_pgAx + 0.5));
+            InterlockedExchange(&g_pgAy, (LONG)(s_pgAy + 0.5));
+            InterlockedExchange(&g_pgEvt, 1);
+            return 1;
         } else {
             return 1;                             /* 还没开始画：一个字节都不改（标志留着） */
         }
@@ -5935,15 +6216,8 @@ static int poly_snap_gcp(LPPOINT p, int btn, int owner)
         DWORD nowL = GetTickCount();
         LONG  hms2 = g_polyHintMs;
         int hintFresh = (hms2 && (DWORD)(nowL - (DWORD)hms2) <= POLY_HINT_HOLD_MS);
-        /* 接触电平：消息层按下/抬起各写一次；包层（`poly_pkt_click`）按包写。
-           光标路径只能用「物理按键 ∨ 包还新鲜」判 —— ⛔ 单看 VK_LBUTTON 会被 Wintab
-           独占时读成 0（铁律 26），所以「包新鲜」也算证据。 */
-        if (btn) InterlockedExchange(&g_pgTouch, 1);
-        if (owner == 0) {
-            LONG tms = g_pktTchMs;
-            int pktFresh = (tms && (DWORD)(nowL - (DWORD)tms) <= 150);
-            if (!btn && !pktFresh) InterlockedExchange(&g_pgTouch, 0);
-        }
+        /* 0x0231：电平更新已**前移**到本函数开头（`poly_touch_step()` 的唯一写者，
+           状态机也读它的返回值）—— ⛔ 这里别再写一遍：两个写者会让时序漂移。 */
         int touch = g_pgTouch ? 1 : 0;
         if (!touch) { if (!g_pgTchOffAt) InterlockedExchange(&g_pgTchOffAt, (LONG)nowL); }
         else InterlockedExchange(&g_pgTchOffAt, 0);
@@ -6110,6 +6384,12 @@ static void poly_msg_apply(MSG* m)
 
         POINT sp = m->pt;
         if (!(sp.x == 0 && sp.y == 0)) {
+            /* 0x0232：抬笔消息自带的坐标**就是**抬笔点（PS 用它确认折线起点）⇒ 先记下来，
+               再交给 `poly_snap_gcp` —— 这一拍很可能正是「判出抬笔」的那一拍，
+               晚一步就只剩光标路径那个 4~8ms 前的采样（快手上差几 px）。
+               ⛔ 与光标路径写同一对槽：两条路的取值天然相差不到一个包间隔，
+                  谁后写谁生效，不需要仲裁。 */
+            if (isUp) { s_liftX = (double)sp.x; s_liftY = (double)sp.y; s_liftSeen = 1; }
             POINT np = sp;
             int btn = isDown ? 1 : 0;
             if (poly_snap_gcp(&np, btn, 1) && (np.x != sp.x || np.y != sp.y)) {
@@ -7271,20 +7551,27 @@ static DWORD WINAPI worker(LPVOID param)
                          (long)(ox - ax), (long)(oy - ay));
                 }
                 if (InterlockedExchange(&g_pgExit, 0)) {
-                    static const char* kWhy[] = { "未标注", "Alt 松开", "主开关关", "工具换走" };
+                    static const char* kWhy[] = { "未标注", "Alt 松开", "主开关关", "工具换走",
+                                                 "笔还没抬起", "按下拖动→套索" };
                     LONG w = g_pgExitWhy;
                     logf("# [alt] 本轮吸附结束：吸附 %ld 次 / 最大偏移 %ldpx / 改写 %ld 次"
                          " / 锚点推进 %ld 次（累计 %ld）｜消息层 见 %ld 条 / 改 %ld 条"
                          "｜搬锚 %ld 次｜接触包改写 %ld 次｜接触锁定 %ld 次 / 解锁 %ld 次"
-                         "｜冻结打回 %ld 次 / 拒绝 %ld 次｜收摊原因 %s\n",
+                         "｜冻结打回 %ld 次 / 拒绝 %ld 次｜抬笔定锚 %ld 次｜收摊原因 %s\n",
                          (long)g_pgExitN, (long)g_pgExitPk, (long)g_pgExitRw,
                          (long)g_pgExitAdv, (long)g_pgN,
                          (long)g_msgSeen, (long)g_msgRw,
                          (long)g_polyAnchorMv, (long)g_pkClickWr,
                          (long)g_pgHoldN, (long)g_pgHoldOff, (long)g_polyHoldCk,
-                         (long)g_polyHoldRej,
-                         (w >= 0 && w < 4) ? kWhy[w] : "未标注");
+                         (long)g_polyHoldRej, (long)g_polyLiftN,
+                         (w >= 0 && w < 6) ? kWhy[w] : "未标注");
                 }
+                /* 0x0231：抬笔定锚 —— 「按住 Alt 继续画了一段才抬笔」那条路径的唯一证据。
+                   判读：定锚 N 次 ≈ Alt 会话数；为 0 而用户确实抬过笔 ⇒ 抬笔没被识别
+                   （看 `[alt]` 行的收摊原因是不是「笔还没抬起」一直没走出来）。 */
+                if (InterlockedExchange(&g_polyLiftEvt, 0))
+                    logf("# [alt] ★抬笔定锚：折线起点改挂到抬笔位置（累计 %ld 次）\n",
+                         (long)g_polyLiftN);
                 if (InterlockedExchange(&g_dropStaleEvt, 0))
                     logf("# [raw] 陈旧回包合并：丢弃停摆期攒下的旧坐标（落后补流前沿 %ldms）\n",
                          (long)g_dropStaleMs);
