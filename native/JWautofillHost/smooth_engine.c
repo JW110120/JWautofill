@@ -2816,6 +2816,28 @@ static volatile LONG g_catTipDrop;   /* 本场「僵持 tip 被清零」的次�
 static volatile LONG g_fgInstNow  = 1;  /* HUD 线程每帧写：前台窗口是否属于本进程（无去抖） */
 static volatile LONG g_fgSilenceN;      /* 本场前台切回静默次数（诊断） */
 
+/* ⛔⛔⛔ 0x0234：HUD「只有套索在画布上绘制才准出」的**直接事实**，不靠猜窗口身份。
+   复盘：0x0233 赌了两条「面板窗口」特征，被 jwwh-24392 全数证伪 ——
+     · 「UXP 面板由外进程渲染」错：现场窗口树实测，停靠面板的 OWL.Dock /
+       OWL.TabPane / Static / PSViewC **全是 PS 本进程**（sameProc=1）；
+       日志点面板那一拍 `hitCls=Static sameProc=1` ⇒ foreign 判据永不成立。
+     · 「类名黑名单只看 hit 自身」不够：`Static` 在画布和面板里同名，
+       而 OWL.Dock 是覆盖**整个客户区**的总容器（0,24,3440,1400），
+       所有 UI（含画布）都在它下面 ⇒ 沿祖先链拉黑 OWL.* 会误伤 100% 画布。
+   ⇒ 改两条互不依赖的事实：
+     ① 面板自己上报「笔/鼠标在我身上」（UXP DOM 事件 → WS 18924 → 本位）。
+        这是**唯一**与用户动作一一对应的信号，不依赖任何 Win32 窗口分类。
+        ⛔ 只发心跳不发 off：笔一离开面板，消息自然停止，HOLD_MS 后自动放行
+          ⇒ fail-open 保功能，绝不出现「状态卡在 1 ⇒ 画布永远不出 HUD」。
+     ② 命中窗口的**直接父**（只上一层，不越到 OWL.Dock 总容器）：
+        面板内 Static 的父是 OWL.Palette / OWL.TabGroup / Chrome_* 等 UI 容器，
+        画布命中的 PSViewC 父是文档视图 ⇒ 用父类名区分，不再用 hit 自身类名。
+   ⛔ 只门 HUD 显隐：宽判 canvas_hit_ok / 补流 / 代投 / 吸附 / 平滑逐字不动
+     （铁律 117 / 0x0225 / 0x022A / 0x022B 三次教训）。 */
+#define PANEL_HOVER_HOLD_MS 500  /* 面板最后一次心跳后仍视为「笔在面板上」的时长 */
+volatile LONG g_panelHoverMs;    /* plugin_main.c 的 panelHover 分支写（GetTickCount 戳） */
+volatile LONG_PTR g_mouseMsgHwnd;/* poly_msg_apply 写：最近一条鼠标消息的 MSG.hwnd（纯诊断） */
+
 #define CS_PERIOD_MS 4          /* 250Hz：喂得满 100Hz 的笔，CPU 开销可忽略 */
 
 static DWORD WINAPI cursamp_thread(LPVOID param)
@@ -6433,6 +6455,12 @@ static void poly_msg_apply(MSG* m)
     if (m->message != WM_MOUSEMOVE && m->message != WM_LBUTTONDOWN
         && m->message != WM_LBUTTONUP) return;
 
+    /* 0x0234：把「PS 把鼠标消息派发给谁」留给 HUD 线程做现场取证。
+       ⛔ detour 热路径只做一次对齐 64 位写，⛔ 不查类名、不调 logf、不碰窗口管理器；
+          句柄可能随后销毁 ⇒ 读侧必须先 IsWindow 再用。目前**只诊断，不参与判据**：
+          现场尚未证明 MSG.hwnd 不是恒为主框（那样会误伤全部画布绘制）。 */
+    g_mouseMsgHwnd = (LONG_PTR)m->hwnd;
+
     /* 0x021D：接触电平由消息层维护（按下 / 抬起各一次）。
        ⛔ 按下要在**判断 Alt 之前**置位：本拍就要能建立锁定；
        ⛔ 抬起要在**处理完之后**清：那一拍还得用锁定点（PS 可能在抬笔时才确认节点）。
@@ -8597,11 +8625,18 @@ static void canvas_hit_probe(POINT cur, int *child, int *rootIsFrame, int *sameP
       Qt624QWindowToolSaveBits），OWL 是一族（OWL.Dock / OWL.WindowGroup /
       OWL.ShadowView / OWL.ApplicationBar）。jwwh-6072 实证：正常画布绘制命中
       PSViewC / Static / Photoshop；下列前缀只出现在面板、浮层与边缘 UI 上。 */
-static int hud_ui_class(const char *c)
+static int hud_ui_class(const char *c, int isParent)
 {
+    /* ⛔ 0x0234：把 0x0233 的 `"OWL."` 一刀切拆开 —— 现场窗口树证明
+       `OWL.Dock` 是覆盖**整个客户区**的总容器（欢迎屏下所有点都命中它的
+       子树 PSViewC），把它当「面板」拉黑会连画布一起挡掉。
+       ⇒ 只认明确属于「面板/工具条/选项卡/UXP 渲染」的类名前缀。 */
     static const char *const pre[] = {
-        "OWL.", "Chrome_", "Qt", "PSFloatC", "PSToolTip", "ComboLBox",
-        "TXMiniSkin", "PSPanel", "PSDock"
+        "OWL.Tab", "OWL.Palette", "OWL.ControlBar", "OWL.Toolbar",
+        "OWL.ApplicationBar", "OWL.MenuBar", "OWL.ShadowView",
+        "Chrome_", "Qt", "PSPanel", "PSDock", "PSFloatC", "PSToolTip",
+        "ComboLBox", "ComboBox", "Button", "Edit", "PSScrollableEdit",
+        "PSCtlStorage", "Intermediate D3D", "DroverLord", "TXMiniSkin"
     };
     unsigned i;
     if (!c || !c[0]) return 0;
@@ -8609,12 +8644,37 @@ static int hud_ui_class(const char *c)
         size_t n = strlen(pre[i]);
         if (strncmp(c, pre[i], n) == 0) return 1;
     }
+    /* hit 自身就是停靠坞 / 层窗 ⇒ 那里没有任何画布视图覆盖，判非画布。
+       ⛔ 但作为**父窗口**时这两类是全客户区/层容器，画布也在其下 ⇒ 一律不认。 */
+    if (!isParent && (strncmp(c, "OWL.Dock", 8) == 0
+                      || strncmp(c, "OWL.WindowGroup", 15) == 0)) return 1;
     return 0;
 }
 
 static int canvas_focus_ok(POINT cur, int *why)
 {
     *why = 0;
+    /* ⛔⛔⛔ 0x0234 **最高优先级**：插件面板自己报告「笔/鼠标在我身上」。
+       这是唯一与用户动作一一对应的事实：UXP 面板能点动选项，就必然收到
+       pointer 事件；面板发心跳，笔一离开面板消息自然停止 ⇒ HOLD_MS 后放行。
+       ⛔ fail-open：WS 没连 / 老面板不发 ⇒ 戳为 0 ⇒ 整条判据完全不生效，
+         绝不出现「画布永远不出 HUD」。⛔ 只门 HUD 显隐，不碰任何功能判据。 */
+    {
+        LONG ph = g_panelHoverMs;
+        if (ph && (DWORD)(GetTickCount() - (DWORD)ph) < PANEL_HOVER_HOLD_MS) {
+            *why = 6;
+            static DWORD s_pvLogAt;
+            DWORD nowV = GetTickCount();
+            if ((DWORD)(nowV - s_pvLogAt) >= 2000) {
+                s_pvLogAt = nowV;
+                logf("# [hud] 焦点门·挡(面板心跳): cur=(%ld,%ld) 距上次=%lums "
+                     "（笔在插件面板上，非画布绘制）\n",
+                     (long)cur.x, (long)cur.y,
+                     (unsigned long)(DWORD)(nowV - (DWORD)ph));
+            }
+            return 0;
+        }
+    }
     if (!s_psFrame) { *why = 1; return 1; }        /* 解析不出 ⇒ fail-open 保功能 */
     HWND fg = GetForegroundWindow();
     if (fg != s_psFrame) { *why = 2; return 0; }
@@ -8694,29 +8754,61 @@ static int canvas_focus_ok(POINT cur, int *why)
              ② 类名属于 PS 的 UI / 面板 / 浮层家族 ⇒ 一律不是画布。
            ⛔ 画布命中（PSViewC / Static / 主框自身）两条都不成立 ⇒ 正常绘制零影响。
            ⛔ 只挡 HUD 显隐：宽判、补流、代投、吸附、平滑逐字不动。 */
+        /* ⛔⛔⛔ 0x0234：**看命中窗口的直接父，不再只看 hit 自身类名**。
+           jwwh-24392 实证：点停靠面板那一拍 `hitCls=Static sameProc=1`
+           —— `Static` 在画布与面板里同名，0x0233 的 hit 黑名单与 foreign 判据
+           双双落空（整场日志 `焦点门·挡` 0 次、`why=5` 0 次）。
+           现场窗口树：面板内 Static 的直接父是 OWL.Palette / OWL.TabGroup /
+           Chrome_* 等 UI 容器；画布命中的 PSViewC 父是文档视图或全屏
+           WelcomeScreenView ⇒ 父类名能分开，hit 自身类名分不开。
+           ⛔ 只上**一层**，绝不沿链走到 OWL.Dock：它是覆盖整个客户区的总容器，
+              画布也在它下面（0x0233 若照此实现会误伤 100% 正常绘制）。 */
+        char  dbgHit[64], dbgPar[64];
+        DWORD hitPid = 0;
+        HWND  par = NULL;
+        dbgHit[0] = 0; dbgPar[0] = 0;
         if (hit && hit != s_psFrame) {
-            char pc[64]; pc[0] = 0;
-            DWORD hitPid = 0;
-            GetClassNameA(hit, pc, sizeof(pc) - 1);
+            GetClassNameA(hit, dbgHit, sizeof(dbgHit) - 1);
+            par = GetParent(hit);
+            if (par && par != s_psFrame)
+                GetClassNameA(par, dbgPar, sizeof(dbgPar) - 1);
             GetWindowThreadProcessId(hit, &hitPid);
-            int foreign = (hitPid != 0 && hitPid != GetCurrentProcessId());
-            int uiCls   = hud_ui_class(pc);
-            if (foreign || uiCls) {
-                *why = 5;
-                static DWORD s_panelLogAt;
-                DWORD nowP = GetTickCount();
-                if ((DWORD)(nowP - s_panelLogAt) >= 2000) {
-                    s_panelLogAt = nowP;
-                    char ptA[96], pt[96];
-                    ptA[0] = 0; pt[0] = 0;
-                    GetWindowTextA(hit, ptA, sizeof(ptA) - 1);
-                    log_ansi_to_utf8(ptA, pt, (int)sizeof(pt));
-                    logf("# [hud] 焦点门·挡(非画布): hit=%p class=%s title=%s "
-                         "外进程=%d 面板类=%d cur=(%ld,%ld) frame=%p\n",
-                         (void *)hit, pc, pt[0] ? pt : "(无)", foreign, uiCls,
-                         (long)cur.x, (long)cur.y, (void *)s_psFrame);
-                }
-                return 0;
+        }
+        int foreign = (hitPid != 0 && hitPid != GetCurrentProcessId());
+        int uiSelf  = hud_ui_class(dbgHit, 0);
+        int uiPar   = hud_ui_class(dbgPar, 1);
+        if (foreign || uiSelf || uiPar) {
+            *why = 5;
+            static DWORD s_panelLogAt;
+            DWORD nowP = GetTickCount();
+            if ((DWORD)(nowP - s_panelLogAt) >= 2000) {
+                s_panelLogAt = nowP;
+                logf("# [hud] 焦点门·挡(非画布): hit=%p class=%s parent=%p(%s) "
+                     "外进程=%d 自身UI=%d 父UI=%d cur=(%ld,%ld) frame=%p\n",
+                     (void *)hit, dbgHit, (void *)par, dbgPar,
+                     foreign, uiSelf, uiPar,
+                     (long)cur.x, (long)cur.y, (void *)s_psFrame);
+            }
+            return 0;
+        }
+        /* 0x0234 通过现场（2s 限流）：HUD 真出圆时把「Windows 眼里光标下是谁」
+           完整落盘 —— 前两轮都栽在缺这一层证据。mouseMsg 目前**只诊断不判据**：
+           尚未证明 MSG.hwnd 不是恒为主框，贸然否决会连画布一起挡掉。 */
+        {
+            static DWORD s_passLogAt;
+            DWORD nowL = GetTickCount();
+            if ((DWORD)(nowL - s_passLogAt) >= 2000) {
+                s_passLogAt = nowL;
+                char mc[64]; mc[0] = 0;
+                HWND mh = (HWND)(LONG_PTR)g_mouseMsgHwnd;
+                if (mh && IsWindow(mh)) GetClassNameA(mh, mc, sizeof(mc) - 1);
+                logf("# [hud] 焦点门·过: cur=(%ld,%ld) hit=%p(%s) par=%p(%s) "
+                     "mouseMsg=%p(%s) hover=%lums frame=%p\n",
+                     (long)cur.x, (long)cur.y, (void *)hit, dbgHit,
+                     (void *)par, dbgPar, (void *)mh, mc[0] ? mc : "(无)",
+                     (unsigned long)(g_panelHoverMs
+                         ? (DWORD)(nowL - (DWORD)g_panelHoverMs) : 0),
+                     (void *)s_psFrame);
             }
         }
     }
@@ -9371,7 +9463,8 @@ static DWORD WINAPI hud_thread(LPVOID param)
                 static const char *whyTxt[] = {
                     "", "主框未解析⇒本门放行(fail-open)", "前台不是主框",
                     "焦点不在文档区", "光标不在文档区矩形",
-                    "命中窗口是停靠面板/浮层(非画布)"   /* 0x0233 why=5 */
+                    "命中窗口/其父是停靠面板或UI控件(非画布)", /* 0x0234 why=5 */
+                    "插件面板心跳：笔在面板上(非画布)"        /* 0x0234 why=6 */
                 };
                 HWND fg2 = GetForegroundWindow();
                 DWORD pid2 = 0, tid2 = fg2 ? GetWindowThreadProcessId(fg2, &pid2) : 0;

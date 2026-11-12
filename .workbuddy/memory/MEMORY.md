@@ -1,7 +1,7 @@
 # JWautofill 项目记忆（主索引）
 
 > 只留「编号 + 一句话 + refs 指针」；明细在 `refs/`，里程碑在 `HISTORY.md`，逐条实证在 `2026-11-*.md`。
-> 架构：平滑 + 键盘钩子 = **PS 进程内 .8li**（`native/JWautofillHost/`，WS 18924 平滑 / 18923 热键）。PS 现加载 **0x0232**（已部署到 `Adobe Photoshop 2026\Plug-ins\`，382464 B / 11:16）；面板侧纯白清除 = 面板 0x0227；0x0228 文本闸门、0x022B 宽判收口、0x022C 日志编码、0x022D 停笔补齐（包路径）、0x022E 光标路径按模式推进、0x022F 面板侧删掉无条件切套索、0x0230 吞笔真根因＝僵持 tip=1、0x0231 吸附两条边缘条件＝Alt 期间「笔抬没抬起」、0x0232 抬笔点逐拍记录 + 按住拖动＝回套索、**0x0233 切回吞第一笔＝前台切回 tip 静默 + 停靠面板误显 HUD＝焦点门认命中窗口归属（已构建 383488 B，⚠️ 待部署）**。
+> 架构：平滑 + 键盘钩子 = **PS 进程内 .8li**（`native/JWautofillHost/`，WS 18924 平滑 / 18923 热键）。PS 现加载 **0x0234**（已部署到 `Adobe Photoshop 2026\Plug-ins\`，385024 B / 13:11；面板 `Plug-ins\dist` 同步为 **development** 构建 5211683 B）；面板侧纯白清除 = 面板 0x0227；0x0228 文本闸门、0x022B 宽判收口、0x022C 日志编码、0x022D 停笔补齐（包路径）、0x022E 光标路径按模式推进、0x022F 面板侧删掉无条件切套索、0x0230 吞笔真根因＝僵持 tip=1、0x0231 吸附两条边缘条件＝Alt 期间「笔抬没抬起」、0x0232 抬笔点逐拍记录 + 按住拖动＝回套索、0x0233 切回吞第一笔＝前台切回 tip 静默（✅ 用户复测通过）＋停靠面板误显 HUD 首修（❌ 复测证伪）、**0x0234 停靠面板误显 HUD 二修＝面板 pointer 心跳 + 命中窗口「直接父」（已部署，⚠️ 待复测）**。
 
 ## 索引（`refs/` 下）
 
@@ -9,7 +9,7 @@
 
 **校验**：改 CSS 跑 3 个 guard（只扫 `src/styles/*.css`）；类型检查 `npx tsc -p tsconfig.check.json`（⛔ 别用 `tsc --noEmit`）；改 .c 跑 `build.sh`（须沙箱外）零告警 + 导出表 5 项；改面板 `yarn build`。全仓 ~168 条历史错误在 `app.tsx`/`adjustments`/`components`，只看自己碰过的行。
 
-## 铁律 90–127（要改先看这一段；实证细节见 `2026-11-11.md` / `2026-11-12.md`）
+## 铁律 90–128（要改先看这一段；实证细节见 `2026-11-11.md` / `2026-11-12.md`）
 
 90 ⛔⛔⛔ PS「临时模式」不派发任何可观测变更 ⇒ 真相只在原生：独立槽 `I_POLYALT` 每 20ms 镜像电平；⛔ 不与 `I_ALTTOOL` 合槽。
 91 ⛔⛔⛔ 「按住」= 修饰键完全匹配 + 一次性起按准入 + 连两拍确认（≈40ms）；同键位不同修饰键故意共存。
@@ -54,6 +54,9 @@
 126 ⛔⛔⛔ **「最小化 PS → 切回第一笔被吞」＝前台切回时合成包仍宣称 tip=1**（0x0233，jwwh-6072 定案）：0x0230 守卫要 `idle>400ms`，而切回必然移动光标 ⇒ idle≈0；日志 `grace=1` 与 `hold=1` 还各自护住 tip；深层是合成包 buttons 回喂 `g_penDown` 形成 `tip=g_penDown` 自锁（断流 15s 仍 penDown=1）⇒ PS 切回取到的首批包没有 0→1 边沿。⇒ HUD 线程写**未去抖** `g_fgInstNow`，`cursamp_thread` 在 0→1 边沿起（放所有 tip 来源**之后**）强制 `tip=0` + 作废 `s_hold`，直到「新左键 down 边沿 / 电平按着满 100ms / 硬上限 1500ms」。⛔ 只作用合成包通路；⛔ 别用 250ms 去抖后的 `s_fgOk`（第一笔早画完了）。诊断 `[fg]`。
 
 127 ⛔⛔⛔ **停靠态 UXP 面板误显 HUD：0x0122「hit 在主框子树」对子窗口无效**（0x0233）：停靠面板 `IsChild=1` 全过 + Wintab 系统上下文照进包 ⇒ cheapOk 全绿。⇒ `canvas_focus_ok()` 补两条**命中窗口的直接事实**：创建者必须是本进程（UXP 独立渲染进程，SetParent 停靠后 pid 仍不同）∧ 类名不得是 `OWL./Chrome_/Qt/PSFloatC/...`；why=5。画布命中 `PSViewC/Static/Photoshop` 全放行（日志实证）。⛔ 只门 HUD 显隐，宽判 `canvas_hit_ok` 仍只认主框矩形（117/0x022B）；⛔ 判「光标底下那个窗口归谁」≠「前台进程是谁」。
+   ⚠️ **本条的两条判据已被 0x0234 复测全数证伪**（jwwh-24392：`焦点门·挡` 0 次 / `why=5` 0 次；点面板那拍 `hitCls=Static sameProc=1`），⛔ 勿再复用「UXP 独立渲染进程 ⇒ 外进程」假设，改按 128 执行。
+
+128 ⛔⛔⛔ **HUD「是不是画布」不许靠猜窗口身份**（0x0234，jwwh-24392 + 现场窗口树定案）：`OWL.Dock` 是覆盖**整个客户区 (0,24,3440,1400)** 的总容器，画布也在其下 ⇒ 沿祖先链拉黑 `OWL.*` 会误伤 100% 正常绘制；`PSViewC` 也不是画布专属（欢迎屏 / 面板内视图都用它）；`Static` 在画布与面板里同名且**都是 PS 本进程创建**。⇒ ① **面板自报**（唯一与用户动作一一对应的事实）：`SmoothBridge` 在 UXP `document` 上监听 `pointerover/pointermove/pointerdown` + `mouse*`，限流 80ms 发 `panelHover` 心跳；原生 `g_panelHoverMs` 时间戳在 500ms 内否决 HUD（why=6）。⛔ 只发心跳**不发 off**、fail-open：笔离开面板消息自然停止 ⇒ 自动放行，绝不卡死。② 命中窗口只看**直接父**（一层，不越 OWL.Dock）：父为 `OWL.Tab*/Palette/ControlBar*/Chrome_*/ComboBox/Button/Edit` ⇒ 非画布（why=5）；`Static` 自身永不单独拉黑。③ `MSG.hwnd` 只进日志**不判据**（未证明不是恒为主框）。⛔ 只门 HUD 显隐，宽判 / 补流 / 代投 / 吸附 / 平滑 / 0x0233 吞笔修复逐字不动。⚠️ 本轮**首次改面板侧**：部署须同时更新 `.8li` 与 `Plug-ins\dist`；运行版是 `yarn watch` 的 **development** 构建（eval devtool / 5.2MB），⛔ 别拿 `yarn build` 的 production（1.47MB）去覆盖换掉构建模式。
 
 ## 其余铁律（1–89）—— 全文见 `refs/ironrules-1-89.md`
 

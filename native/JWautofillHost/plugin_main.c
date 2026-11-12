@@ -46,6 +46,11 @@
 /* 0x013D：引擎软闸（smooth_engine.c 导出）。Unload 哑火、Reload 复机。 */
 extern int jwwh_set_engine_off(int on);
 
+/* 0x0234：UXP 面板「笔/鼠标在我身上」的心跳戳（引擎侧唯一读者是 HUD 严格焦点门）。
+   ⛔ 用 GetTickCount 戳而不是电平：面板只发心跳不发 off，笔离开面板后由引擎
+      PANEL_HOVER_HOLD_MS 自动放行 ⇒ 状态位不会卡死、永远 fail-open。 */
+extern volatile LONG g_panelHoverMs;
+
 #define SMOOTH_PORT      18924
 #define LOG_MAX          (1024 * 1024)
 #define THREAD_WAIT_MS   3000
@@ -930,6 +935,22 @@ static void handle_message(const char* js)
     if (_stricmp(type, "smoothStatus") == 0) {
         /* 能力探针：必回一帧，否则面板标记「版本过旧」（Program.cs 同款语义）。 */
         broadcast_smooth_state();
+        return;
+    }
+    if (_stricmp(type, "panelHover") == 0) {
+        /* 0x0234：UXP 面板的 pointer 事件心跳 ⇒ 「笔/鼠标此刻在插件面板上」。
+           拉绳模式下 Wintab 是系统上下文，笔点停靠面板照样进包 ⇒
+           penDown/toolOk/strokeGate 全绿 ⇒ 圆会错误冒出来；窗口命中判据在
+           PS 2026 停靠布局下又分不开（Static 同名、OWL.Dock 覆盖全客户区）。
+           ⇒ 最可靠的事实就是「面板自己被点/被悬停了」。
+           ⛔ 只写时间戳：面板不发 off，引擎 500ms 后自动放行；
+           ⛔ 只服务 HUD 显隐，不改任何槽位、不碰宽判/补流/平滑。
+           ⛔ 用 json_num 判非零（铁律 59：json_bool 只认 true/false，数字会静默失败）。 */
+        double v = 0;
+        int on = 0;
+        if (json_num(js, "on", &v)) on = (v != 0.0) ? 1 : 0;
+        if (on) InterlockedExchange(&g_panelHoverMs, (LONG)GetTickCount());
+        else    InterlockedExchange(&g_panelHoverMs, 0);
         return;
     }
     /* 0x020A：Alt 临时吸管开关（面板 → 引擎的**硬否决位**）。
@@ -2259,8 +2280,37 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
        （UXP 面板由独立渲染进程创建，停靠后 pid 仍不同）+ 类名不得属于 OWL./Chrome_/
        Qt/PSFloatC 等 UI 家族。why 新增 5。⛔ 只门 HUD 显隐，宽判 `canvas_hit_ok`
        仍只认主框矩形（铁律 117 / 0x022B），两条判据互不借用。
-    ⛔ 面板一行未改；无共享槽位变化（`CFG_NLONGS` 仍 61）；`jwwh_version` 仍 0x013A。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x0233; }
+       ⚠️ **② 被 2026-11-12 12:49 复测（jwwh-24392）证伪**：整场日志
+       `焦点门·挡` 0 次、`why=5` 0 次；`[hit] cur=(1754,835) hitCls=Static
+       sameProc=1` ⇒ 停靠面板的子控件**就是 PS 本进程创建的普通 Static**，
+       两条前提全错。详细复盘见 0x0234，⚠️ 勿再复用「外进程」假设。
+    ⛔ 面板一行未改；无共享槽位变化（`CFG_NLONGS` 仍 61）；`jwwh_version` 仍 0x013A。
+
+   0x0234 = 【停靠面板误显 HUD：第二轮，改用「面板自报 + 直接父」两条直接事实】
+     现场取证（启动 PS 后按 pid 枚举主框全部后代窗口，DPI aware）：
+       · `OWL.Dock` 是覆盖**整个客户区 (0,24,3440,1400)** 的总容器，画布也在其下
+         ⇒ 任何「祖先链含 OWL.* 就算面板」的判据会误伤 100% 正常绘制；
+       · 面板容器类：OWL.TabPane / OWL.TabGroup / OWL.Palette / Chrome_*；
+         画布命中 PSViewC（欢迎屏下父为 OWL.WelcomeScreenView，覆盖全屏）；
+       · 面板内控件类 Static / ComboBox / Button / Edit 与画布上的 Static 同名
+         ⇒ 只看 hit 自身类名必然分不开，0x0233 就死在这里。
+     修法（两条独立事实，任一成立即 why=6 / why=5 挡 HUD）：
+       ① **面板自己上报**：`SmoothBridge` 在 UXP document 上监听 pointerover /
+          pointermove / pointerdown / mouseover / mousemove，限流 80ms 发
+          `{"type":"panelHover","on":1}`；本文件写 `g_panelHoverMs` 时间戳。
+          引擎 HUD 焦点门检查 500ms 内有无心跳 ⇒ 挡。⛔ 只发心跳不发 off：
+          笔离开面板消息自然停止 ⇒ 自动放行，fail-open 保功能，永不卡死。
+       ② **命中窗口的直接父**（只上一层，不越到 OWL.Dock）：父为 OWL.Tab* /
+          OWL.Palette / OWL.ControlBar* / Chrome_* / ComboBox / Button / Edit 等
+          ⇒ 非画布。hit 自身为 OWL.Dock / Chrome_* 亦挡。类名黑名单由 0x0233 的
+          `"OWL."` 一刀切拆成精确前缀，避免误伤画布。
+       ③ 诊断：`poly_msg_apply` 记录最近鼠标消息 `MSG.hwnd`（**只诊断不判据**，
+          尚未证明它不是恒为主框）；`[hud] 焦点门·过/挡` 打印 hit、直接父、
+          mouseMsg 类名、心跳年龄 ⇒ 下一轮可直接定案，不必再猜。
+     ⛔ 只门 HUD 显隐：宽判 / 补流 / 代投 / 吸附 / 平滑 / 吞笔修复逐字不动；
+     ⚠️ 本轮**面板侧有改动**，部署须同时更新 UXP 面板与 .8li；
+     无共享槽位变化（`CFG_NLONGS` 仍 61）；`jwwh_version` 仍 0x013A。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x0234; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {

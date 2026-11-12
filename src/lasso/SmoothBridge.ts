@@ -120,6 +120,52 @@ function dispatchHostMessage(msg: any) {
   }
 }
 
+/* ---------------------------------------------------------------- 面板 hover 心跳（0x0234）
+
+ * 背景：拉绳模式下 Wintab 是系统上下文，笔点**停靠成选项卡**的插件面板时包照常进
+ * detour ⇒ penDown / toolOk / strokeGate 全绿 ⇒ 拉绳圆错误地冒出来。
+ * 原生侧两轮窗口判据都没修好：现场窗口树证明 `OWL.Dock` 是覆盖整个客户区的总容器，
+ * 而面板里的 `Static` 与画布上的 `Static` 同名、且都是 PS 本进程创建的窗口。
+ * ⇒ 最可靠的事实就是「面板自己被悬停 / 被点中了」——只有面板自己知道。
+ *
+ * ⛔ 只发心跳、不发 off：笔一离开面板，事件自然停止，原生侧 500ms 后自动放行。
+ *    这样既不会因为漏掉 leave 事件把状态卡在「一直在面板上」（画布永远不出 HUD），
+ *    也不会因为 WebSocket 断开导致功能失效（fail-open 保功能）。
+ * ⛔ 只供 HUD 显隐门使用；不改任何平滑参数、不碰槽位、不请求回执。
+ * ⛔ 限流 80ms：pointermove 高频，但 pointerover / pointerdown 强制立即发一帧。
+ */
+let panelHoverCleanup: (() => void) | null = null;
+
+function installPanelHoverWatch(): void {
+  if (panelHoverCleanup) return;
+  const doc: any = (globalThis as any).document;
+  if (!doc || typeof doc.addEventListener !== 'function') return;
+  let lastBeat = 0;
+  const beat = (force: boolean) => {
+    const t = Date.now();
+    if (!force && t - lastBeat < 80) return;
+    lastBeat = t;
+    sendHostMessage({ type: 'panelHover', on: 1 });
+  };
+  const onEnter = () => beat(true);
+  const onDown = () => beat(true);
+  const onMove = () => beat(false);
+  const bound: Array<[string, () => void]> = [
+    ['pointerover', onEnter], ['mouseover', onEnter],
+    ['pointerdown', onDown], ['mousedown', onDown],
+    ['pointermove', onMove], ['mousemove', onMove],
+  ];
+  for (const [name, fn] of bound) {
+    try { doc.addEventListener(name, fn, true); } catch { /* UXP 可能不支持某类事件 */ }
+  }
+  panelHoverCleanup = () => {
+    for (const [name, fn] of bound) {
+      try { doc.removeEventListener(name, fn, true); } catch { /* ignore */ }
+    }
+    panelHoverCleanup = null;
+  };
+}
+
 /**
  * 连接平滑模块（幂等 + 引用计数）。
  * 由 APP 面板在挂载时调用一次；`#pixeladjustment` 面板若将来也需要，
@@ -165,10 +211,14 @@ export function connectSmoothDaemon(): () => void {
     }
   };
   open();
+  /* 0x0234：与 WebSocket 同生命周期；建连即装，真正卸载时才摘。
+     重连（onclose → open）不重装，避免同一 document 上叠多份监听。 */
+  installPanelHoverWatch();
 
   closeFn = () => {
     closedByUs = true;
     if (timer) clearTimeout(timer);
+    try { panelHoverCleanup?.(); } catch { /* ignore */ }
     try { currentWs?.close(); } catch { /* ignore */ }
   };
   return makeUnsub();
