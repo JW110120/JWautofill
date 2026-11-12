@@ -2756,6 +2756,36 @@ static volatile LONG g_gpModeDbg, g_gpLagDbg, g_gpStillDbg;
 #define CATCHUP_LAG_AX   8       /* 轴单位：小于它视为已重合 */
 #define CATCHUP_MAX_MS   4000    /* 静止后最长补齐宽限 */
 
+/* ⛔⛔ 0x0230：**「僵持 tip」的阳性证据守卫** —— 「Shift+E 之后第一笔被吞」的定案。
+ *
+ * 病灶：`tip` 链里有一句 `if (!tip && g_lastRealTip == 1) tip = 1;`（0x0126 为
+ * 「断流期补流要有非零压力」而写），它**没有任何阳性证据**，只是一个「最后一批
+ * 真实包的落笔态」记忆，最长保持 `SYNTH_TIP_MAX_MS`(6s)。作者当时的结论是
+ * 「抬笔后光标不再移动 ⇒ 合成包坐标一成不变 ⇒ PS 画不出新东西，无害」。
+ * ⛔ 真机 jwwh-27164 证伪：**「没画出东西」不等于「无害」** ——
+ *    合成包一直宣称 buttons 按下（tip=1），PS 就始终认为**这一笔还没结束**；
+ *    用户把笔移开再回来落第一笔时，真实包的 tip 从 1 开始（中间没有 0 的包），
+ *    PS **收不到 pen-down 边沿** ⇒ 新的一笔根本不开始 ⇒ 整笔吞掉
+ *    （套索表现就是「画了个圈，PS 里毫无现象，好像没画过」），抬笔再落才恢复。
+ * 证据（jwwh-27164 `[catchup]` 原文，笔已离开板面）：
+ *    `10:07:34.944 断流=2750ms tip=1 hold=0 btn=0 idle=2750ms keep=0 grace=0`
+ *    `10:07:39.160 断流=1344ms tip=1 hold=0 btn=0 idle=1344ms keep=0 grace=0`
+ *    —— hold=0（无 MSE 推断）、btn=0（左键电平没按下）、idle=2.7s（光标早已静止）、
+ *    grace=0（输出点已收敛）四条都在说「笔已经离开了」，只有 tip 还在硬撑。
+ * 修法：僵持超过 SYNTH_TIP_HOLD_MS 且**同时满足**四条「笔已离开」的证据 ⇒ tip 归 0。
+ *   ⛔ 四条缺一不可，尤其 `!grace`：用户「停笔等线追上来」（0x022D/0x012B 的核心
+ *      场景）时输出点还没收敛，必须继续喂 tip=1，否则线又冻住。
+ *   ⛔ `btnHeld` 沿用 0x022D 的阳性读法（`WH_MOUSE_LL` 镜像 ∨ 系统电平）：
+ *      它「读 0 不可靠」（0x012C），但作为**否决条件**用在这里是正确的方向 ——
+ *      读 1 就说明手还在按，一律不放弃。
+ *   ⛔ 只降「僵持」那一条链；MSE 推断（s_hold）是包外证据（真实按下事件），不动它。 */
+#define SYNTH_TIP_HOLD_MS 400    /* 真实包停这么久之后才允许怀疑「僵持」 */
+#define SYNTH_TIP_STILL_MS 400   /* 光标静止这么久 = 笔不在板面上活动 */
+#define SYNTH_TIP_HARD_MS 2000   /* ⛔ 僵持硬上限：超过它连「未收敛宽限」也不再兜底 ——
+                                    一阶低通 τ≤250ms，3τ≈750ms 早该收敛；断流期 g_snOut/g_snRaw
+                                    双双冻结，grace 可能被冻在 1 永不下来（那样守卫就永远不触发） */
+static volatile LONG g_catTipDrop;   /* 本场「僵持 tip 被清零」的次数（诊断） */
+
 #define CS_PERIOD_MS 4          /* 250Hz：喂得满 100Hz 的笔，CPU 开销可忽略 */
 
 static DWORD WINAPI cursamp_thread(LPVOID param)
@@ -2923,6 +2953,26 @@ static DWORD WINAPI cursamp_thread(LPVOID param)
                     InterlockedExchange(&g_mseTip, 0);
                     InterlockedExchange(&g_mseRelWhy, 5);
                     logf("# [mse] 断流期落笔推断·解除：真实包已回来，判据交还包流\n");
+                }
+                /* ⛔⛔ 0x0230：僵持 tip 的阳性证据守卫（完整论证见常量段）。
+                   四条同时成立才放弃：真实包已静默够久 ∨ 光标早已静止 ∨ 左键电平没按下
+                   ∨ 输出点已收敛。任何一条不成立 ⇒ 保持原 tip，一字不改。
+                   ⛔ 放在所有 tip 来源（g_penDown / g_lastRealTip / MSE 推断 / 长停摆续命）
+                      之后，是这条链的**最后一道**；⛔ 不要上移到它们中间。 */
+                if (tip && realAge > SYNTH_TIP_HOLD_MS
+                    && !btnHeld && (realAge > SYNTH_TIP_HARD_MS || !grace)
+                    && idleMs > SYNTH_TIP_STILL_MS) {
+                    static DWORD s_tipDropLog;
+                    tip = 0;
+                    if (s_hold) { s_hold = 0; InterlockedExchange(&g_mseTip, 0); }
+                    InterlockedIncrement(&g_catTipDrop);
+                    if ((DWORD)(now - s_tipDropLog) >= 5000) {
+                        s_tipDropLog = now;
+                        logf("# [raw] ★僵持 tip 清零：真实通路静默 %ldms、光标已静止 %lums、"
+                             "左键电平=0、输出已收敛(grace=0) ⇒ 判定笔已离开板面；"
+                             "不再合成 tip=1（否则 PS 收不到新的 pen-down 边沿，下一整笔会被吞）\n",
+                             (long)realAge, (unsigned long)idleMs);
+                    }
                 }
                 /* 0x022D：把「这一拍 tip 到底是怎么来的」写成快照，供 [catchup] 每 2s
                    落一行。⛔ 纯观测：不参与 tip / 代投 / 喂入的任何判据。 */
@@ -3559,7 +3609,8 @@ static void penraw_report(int win)
                  "grace=%ld lagAx=%ld "
                  "penDown=%ld hit=%ld stroke=%ld syn=%ld post=%ld frz=%ld edit=%d "
                  "| 光标=(%ld,%ld) 输出=(%ld,%ld) 落后=%ldpx 包路径滞后=(%ld,%ld)轴 "
-                 "| gpm=%ld gpLag=%ldpx still=%ld gcp=%ld/rw=%ld/a=%ld gp=%ld/%ld/rej=%ld\n",
+                 "| gpm=%ld gpLag=%ldpx still=%ld gcp=%ld/rw=%ld/a=%ld gp=%ld/%ld/rej=%ld"
+                 " tipDrop=%ld\n",
                  (long)g_catAge, (long)g_catTip, (long)g_catHold, (long)g_catBtn,
                  (long)g_catIdle, (long)g_catKeep,
                  (long)g_catGrace, (long)g_catLag,
@@ -3571,7 +3622,8 @@ static void penraw_report(int win)
                  (long)((long)g_snOutY - (long)g_snRawY),
                  (long)g_gpModeDbg, (long)g_gpLagDbg, (long)g_gpStillDbg,
                  (long)g_gcpCalls, (long)g_gcpRw, (long)g_gcpArmed,
-                 (long)g_gpArms, (long)g_gpSteps, (long)g_gpRej);
+                 (long)g_gpArms, (long)g_gpSteps, (long)g_gpRej,
+                 (long)g_catTipDrop);
         }
     }
 }

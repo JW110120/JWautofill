@@ -2155,8 +2155,39 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
    ⛔ 「吞笔」本轮**未改**（判为 PS 侧输入通路切换的伴随现象，见下），先看本条修完
       后它是否还带出永久失灵。
    诊断：`[catchup]` 追加 `gpm/gpLag/still`；`[gcp] ★光标路径接管` 的「绳=」改「半径=」。
+   无共享槽位变化（`CFG_NLONGS` 仍 61）；引擎版本 `jwwh_version` 仍 0x013A。
+
+   0x0230 = 【「Shift+E 之后第一笔被吞」的真凶：**僵持 tip=1**】
+   0x022F（面板侧）删掉了 focusClear 末尾的无条件 `selectLassoTool()`，用户复测
+   （jwwh-27164）**仍吞**，并给出关键规律：「按 Shift+E 进清除模式时我特意让笔
+   远离数位板，第一笔照样被吞；再按一次退出清除模式、笔拿回来画的第一笔反而不吞」。
+   ⛔ 这条规律恰好否定「工具切换」与「笔没抬起」，指向 **断流期合成包的 tip**：
+     · jwwh-27164 `[catchup]` 铁证（笔已离开板面）：
+       `10:07:34.944 断流=2750ms tip=1 hold=0 btn=0 idle=2750ms keep=0 grace=0`
+       `10:07:39.160 断流=1344ms tip=1 hold=0 btn=0 idle=1344ms keep=0 grace=0`
+       —— hold=0（无 MSE 推断）、btn=0（左键电平没按下）、idle=2.7s（光标早停）、
+       grace=0（输出已收敛）四条全在说「笔走了」，**只有 tip 还在硬撑**。
+     · 病灶在 `cursamp_thread` 的 tip 链：`if (!tip && g_lastRealTip == 1) tip = 1;`
+       —— 0x0126 为「断流期补流要有非零压力」而写，**无任何阳性证据**，最长撑
+       `SYNTH_TIP_MAX_MS`(6s)。作者当时判「抬笔后光标不动 ⇒ 合成包坐标不变 ⇒
+       PS 画不出新东西，无害」。⛔ 真机证伪：**「没画出东西」≠「无害」** ——
+       合成包持续宣称 buttons 按下，PS 就始终认为这一笔没结束；用户回来落第一笔时
+       真实包 tip 从 1 开始（中间没有 0 的包）⇒ **收不到 pen-down 边沿** ⇒
+       新的一笔根本不开始 ⇒ 整笔吞掉（套索表现＝「画了个圈，PS 里毫无现象」），
+       抬笔再落才恢复。
+   ⇒ `cursamp_thread` 在所有 tip 来源之后加**最后一道守卫**（`SYNTH_TIP_HOLD_MS 400`
+     / `SYNTH_TIP_STILL_MS 400` / `SYNTH_TIP_HARD_MS 2000`）：僵持超过 400ms 且
+     `!btnHeld`（左键电平没按下）∧（真实静默 > 2s ∨ `!grace` 已收敛）∧ 光标静止
+     > 400ms ⇒ **tip 归 0**，并同步清掉 MSE 的 `s_hold`。
+   ⛔ 四条缺一不可：`!grace` 保「停笔等线追上来」不停喂（0x022D/0x012B 的核心场景）；
+      `btnHeld` 读 1 即手还按着，一律不放弃；`HARD_MS` 防 `grace` 在断流期被冻在 1
+      导致守卫永不触发（断流期 `g_snOut/g_snRaw` 双双冻结）。
+   ⛔ 不动：`g_lastRealTip` 本身（它是「最后一批真实包」的事实记录）、MSE 的包外证据
+      链、长停摆续命、喂入冻结、代投节流、`canvas_hit_ok`、HUD、面板。
+   诊断：`[catchup]` 追加 `tipDrop=`（本场僵持清零点数）；清零时另打一行
+     `[raw] ★僵持 tip 清零：真实通路静默 … 光标已静止 … 左键电平=0 …`。
    无共享槽位变化（`CFG_NLONGS` 仍 61）；引擎版本 `jwwh_version` 仍 0x013A。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x022E; }
+__declspec(dllexport) long jw8li_version(void) { return 0x0230; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {

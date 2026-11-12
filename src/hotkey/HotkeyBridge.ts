@@ -820,13 +820,22 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
       });
     void requestClearModeToggle('clear|' + token)
       .catch((e) => console.error('⚠️ 清除模式切换命令写入失败:', e));
-    // ⛔⛔ 0x013D 兜底：把工具钉回套索。
-    //   成因：Shift+E 一旦漏给 PS（钩子失活、走轮询兜底时**吞不了键**），PS 会按
-    //   自己的快捷键把工具循环到橡皮擦组；工具模式检到「工具不是套索」就关主开关，
-    //   于是用户看到「按 Shift+E 反而退出工具模式」。
-    //   吞键是主修复；这里是防御纵深 —— 命中即把工具切回套索，与 focusLasso 同款。
+    // ⛔⛔ 0x022F：**不再无条件切套索** —— 那正是「Shift+E 之后第一笔被吞」的元凶。
+    //   0x013D 写这段时（钩子时代）Shift+E 会漏给 PS，PS 自己把工具循环成橡皮擦，
+    //   所以「命中即切回套索」是必要补救。现在 Shift+E 带 MOD_SHIFT ⇒
+    //   `kh_hk_sync` 走 RegisterHotKey **系统级独占**（pi8li.log 实测「接管 9 条」，
+    //   且整场「钩子 +0 / 轮询 +N」= 钩子从未收到过键 ⇒ PS 根本收不到这个键）
+    //   ⇒ 漏键前提已不存在，这条 batchPlay 退化成**纯副作用**：
+    //     ① 每个面板各发一次：`handleHotkey` 由 N 个面板各自执行，这行没有 token 去重；
+    //     ② 直连 batchPlay 被宿主拒时回退 `runAsModal` —— 排队等宿主空闲，
+    //        常常在用户抬笔/落笔那一拍才拿到模态锁；
+    //     ③ 用户按 Shift+E 时笔经常还搭在板上（jwwh-24148 五次命中全是
+    //        `penDown=1 contact=1` + 光标静止），而切工具会**终止正在进行的笔画**，
+    //        笔又没抬起 ⇒ 没有新的 pen-down 边沿 ⇒ 接下来那一笔 PS 完全不响应
+    //        （套索画圈「毫无现象」），抬笔再落才恢复 = 用户报的「吞笔」。
+    //   ⇒ 改成「只在读到的工具确实不是套索时才补救，且延后一拍」，见该函数说明。
     //   ⛔ 不在这里改主开关：用户要求「反复按 Shift+E 只在清除模式间来回切换」。
-    void selectLassoTool();
+    reselectLassoIfStrayed();
     return;
   }
   if (msg.action === 'pickColor') {
@@ -1340,6 +1349,48 @@ async function selectLassoTool(): Promise<void> {
       console.warn('⚠️ 套索工具键：切换套索失败:', e);
     }
   }
+}
+
+/* ⛔⛔ 0x022F：按 Shift+E 之后的「工具兜底」——只在确实跑偏时才动手。
+ *
+ * 为什么还要兜底：万一 Shift+E 没能被 RegisterHotKey 独占（被别的程序抢占 /
+ * 注册失败 / 文本闸门撤注册的那一拍），PS 会按自己的快捷键把工具循环到橡皮擦组，
+ * 而工具模式检到「工具不是套索」会关主开关 ⇒ 用户看到「按 Shift+E 反而退出工具模式」。
+ *
+ * 为什么不能像 0x013D 那样**无条件**切：切工具会终止正在进行的笔画，而用户按
+ * Shift+E 时笔往往还搭在板上（没有新的 down 边沿）⇒ 接下来那一笔被整笔吞掉。
+ * 详细因果链与证据见 `handleHotkey` 的 focusClear 分支注释。
+ *
+ * 三步走，任何一步「不知道」都不动手（保守：不知道就别碰用户的工具）：
+ *   ① 同步读 `app.currentTool`（属性直读，**零宿主往返**、不产生任何模态）；
+ *      读不到、或认不出是 PS 工具枚举（本地化名称「套索工具」之类）⇒ 直接返回；
+ *   ② 已经是套索族（lassoTool / polygonalLassoTool / magneticLassoTool）⇒ 返回，
+ *      正常场景因此**一条命令都不发**；
+ *   ③ 否则延后 `LASSO_RECHECK_MS` 再核一次，仍不是套索才切 —— 给用户留出抬笔的时间，
+ *      避免在「笔还按着」的窗口里把笔画打断。
+ * ⛔ 工具 ID 一律驼峰（历史记录艺术画笔=artBrushTool 那套教训），别照字面猜。 */
+const LASSO_RECHECK_MS = 700;
+function readToolIdSync(): string | null {
+  try { return normalizeToolId((app as any)?.currentTool); } catch { return null; }
+}
+function isLassoToolId(id: string | null): boolean {
+  return !!id && /lassoTool$/i.test(id);
+}
+/* PS 工具内部 ID 一律以 `Tool` 结尾（lassoTool / paintbrushTool / eraserTool…）。
+   ⛔ 不满足这个形状的串（本地化名称「套索工具」、空串、乱码）一律当作**读不到**：
+      错切一次就会吞掉用户下一笔，比不纠正严重得多。 */
+function isToolEnumLike(id: string | null): boolean {
+  return !!id && /Tool$/.test(id);
+}
+function reselectLassoIfStrayed(): void {
+  const cur = readToolIdSync();
+  if (!isToolEnumLike(cur) || isLassoToolId(cur)) return;
+  setTimeout(() => {
+    const again = readToolIdSync();
+    if (!isToolEnumLike(again) || isLassoToolId(again)) return;
+    console.log('[清除模式键] 工具不是套索（' + again + '）⇒ 兜底切回套索');
+    void selectLassoTool();
+  }, LASSO_RECHECK_MS);
 }
 
 // ===== 枚举当前可用笔刷预设（供面板下拉使用；失败返回空，不影响核心功能）=====
