@@ -2236,8 +2236,31 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
    ⛔ 不动：角度吸附算法/容差、三通道钉点规则、锚点推进 owner 规则、`canvas_hit_ok`、
       HUD 显隐闸门、面板。
    诊断：`[alt] 本轮吸附结束` 收摊原因新增第 6 项「按下拖动→套索」。
-   无共享槽位变化（`CFG_NLONGS` 仍 61）；引擎版本 `jwwh_version` 仍 0x013A。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x0232; }
+   无共享槽位变化（`CFG_NLONGS` 仍 61）；引擎版本 `jwwh_version` 仍 0x013A。
+
+   0x0233 = 【拉绳模式两条：最小化切回吞第一笔 + 停靠面板误显 HUD】
+    ① 吞笔（用户 2026-11-12，jwwh-6072 定案）：最小化 PS 后切回，第一笔 HUD 正常
+       显示、笔画了一整圈却毫无选区，第二笔才恢复。与 0x0230 同族不同触发 ——
+       切回时用户必然把光标移回画布 ⇒ `idleMs≈0`，0x0230 守卫的「静止 400ms」
+       不成立；且日志两条正当理由同时护住 tip=1：
+         11:49:29.936 `断流=984ms tip=1 grace=1 penDown=1 syn=1`
+         11:50:07.424（前台刚切回）`断流=17625ms tip=1 hold=1 idle=0ms syn=1`
+       深层自锁：合成包 buttons 又喂回 `g_penDown`（15s 断流仍是 1）⇒ `tip=g_penDown`
+       自己养活自己。⇒ PS 切回后取到的第一批包仍宣称「笔按着」，没有 0→1 边沿。
+       修法：把「PS 重新成为前台」当状态机重启点，HUD 线程写未去抖的即时前台归属
+       `g_fgInstNow`；`cursamp_thread` 在 0→1 边沿起强制合成包 tip=0（并作废
+       `s_hold`），直到「新的左键按下边沿 / 左键电平按着且满 100ms / 硬上限 1500ms」
+       才交还常规判据。⛔ 只作用合成包通路；0x0230 守卫、grace、长停摆续命、
+       喂入冻结、宽判逐字不动。诊断 `[fg] ★前台切回` / `[fg] 静默解除`。
+    ② HUD 误显（同一轮）：插件作为**选项卡停靠**在 PS 界面，用笔点面板选项会冒出
+       拉绳圆。0x0122 的「hit 在主框子树」只对独立顶层浮窗有效，停靠态 `IsChild=1`
+       ⇒ 全过；Wintab 系统上下文让笔点面板照样进包 ⇒ cheapOk 成立。
+       ⇒ `canvas_focus_ok()` 补两条命中窗口的直接事实：窗口创建者必须是本进程
+       （UXP 面板由独立渲染进程创建，停靠后 pid 仍不同）+ 类名不得属于 OWL./Chrome_/
+       Qt/PSFloatC 等 UI 家族。why 新增 5。⛔ 只门 HUD 显隐，宽判 `canvas_hit_ok`
+       仍只认主框矩形（铁律 117 / 0x022B），两条判据互不借用。
+    ⛔ 面板一行未改；无共享槽位变化（`CFG_NLONGS` 仍 61）；`jwwh_version` 仍 0x013A。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x0233; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {

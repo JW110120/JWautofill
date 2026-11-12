@@ -2786,6 +2786,36 @@ static volatile LONG g_gpModeDbg, g_gpLagDbg, g_gpStillDbg;
                                     双双冻结，grace 可能被冻在 1 永不下来（那样守卫就永远不触发） */
 static volatile LONG g_catTipDrop;   /* 本场「僵持 tip 被清零」的次数（诊断） */
 
+/* ⛔⛔⛔ 0x0233：**「最小化 PS → 切回，第一笔被吞」** 的定案与修法。
+ *
+ * 现象（用户 2026-11-12）：最小化 PS 后切回，第一笔 HUD 正常显示、笔在数位板上
+ * 画了一整圈，PS 里却什么选区都没有；抬笔再落第二笔才恢复正常。
+ *
+ * 与 0x0230 是**同一族、不同触发**：0x0230 是「笔离开板面」造成断流，靠
+ * `idleMs > SYNTH_TIP_STILL_MS`（光标静止）把僵持 tip 清零；而「切回」时用户
+ * 必然要把光标移回画布 ⇒ `idleMs≈0`，且日志实证这两条「正当理由」同时挡住守卫：
+ *   jwwh-6072  11:49:29.936 `[catchup] 断流=984ms tip=1 hold=0 btn=0 idle=531ms
+ *                            keep=10 grace=1 lagAx=826 penDown=1 syn=1`（grace 保护）
+ *              11:50:07.424（前台刚切回）`断流=17625ms tip=1 hold=1 btn=0 idle=0ms
+ *                            grace=0 penDown=1 syn=1`（MSE 落笔推断又抬回 1）
+ * ⇒ PS 在最小化期间不取包；切回后一次性取走队列，读到的第一批包仍旧宣称
+ *   「笔按着」⇒ **没有 0→1 的 pen-down 边沿** ⇒ 新一笔根本不开始 ⇒ 整笔吞掉。
+ *   深层自锁：合成包的 buttons 又喂回 `g_penDown`（15s 断流仍是 1），
+ *   于是 `tip=g_penDown` 自己养活自己，0x0230 的守卫只在静止时能打破。
+ *
+ * 修法：把「PS 从后台切回前台」当作**确定的状态机重启点**（与笔按没按无关）。
+ *   切回边沿起，合成包先强制 tip=0，让 PS 读到「笔已抬起」；直到出现
+ *   ① 新的左键按下边沿 / ② 左键电平仍按着（且已满最短静默）/ ③ 硬上限，
+ *   才把 tip 交还常规判据。⇒ 用户落笔时队列里必有一串 0，0→1 边沿成立。
+ *   ⛔ 不动 0x0230 守卫、不动 grace / 长停摆续命 / 喂入冻结 / 宽判 / HUD 显隐；
+ *   ⛔ 只作用于**合成包通路**，真实包通路（PS 自己读驱动）一个字节都不碰。
+ *   ⛔ 别用「前台进程」去推断笔的物理位置（铁律 117）：这里用的是
+ *      「PS 这个进程重新成为前台」这一**事件**，做一次性的笔状态重同步。 */
+#define FG_SILENCE_MIN_MS 100    /* 即使笔按着，也先吐够这么多毫秒的 tip=0 */
+#define FG_SILENCE_MAX_MS 1500   /* 硬上限：始终没有新按下证据就交还常规判据 */
+static volatile LONG g_fgInstNow  = 1;  /* HUD 线程每帧写：前台窗口是否属于本进程（无去抖） */
+static volatile LONG g_fgSilenceN;      /* 本场前台切回静默次数（诊断） */
+
 #define CS_PERIOD_MS 4          /* 250Hz：喂得满 100Hz 的笔，CPU 开销可忽略 */
 
 static DWORD WINAPI cursamp_thread(LPVOID param)
@@ -2972,6 +3002,45 @@ static DWORD WINAPI cursamp_thread(LPVOID param)
                              "左键电平=0、输出已收敛(grace=0) ⇒ 判定笔已离开板面；"
                              "不再合成 tip=1（否则 PS 收不到新的 pen-down 边沿，下一整笔会被吞）\n",
                              (long)realAge, (unsigned long)idleMs);
+                    }
+                }
+                /* ⛔⛔⛔ 0x0233：前台切回静默（完整论证见常量段）。
+                   ⛔ 位置：必须在**所有 tip 来源之后**（含 0x0230 守卫），是这条链的
+                      最后一道；放前面会被 g_lastRealTip / s_hold / 长停摆续命重新抬回 1。
+                   ⛔ 静默期间连 `s_hold`（断流期落笔推断）一起作废：它记的是切回之前
+                      那次按下，拿它当「这一笔还在」的证据正是日志里 tip=1 的来源。 */
+                {
+                    static int   s_fgPrev = 1;
+                    static DWORD s_fgBackAt;
+                    static int   s_fgSilent;
+                    int fgNow = (int)g_fgInstNow;
+                    if (fgNow && !s_fgPrev) {
+                        s_fgSilent = 1;
+                        s_fgBackAt = now;
+                        InterlockedIncrement(&g_fgSilenceN);
+                        logf("# [fg] ★前台切回：合成包 tip 静默（先让 PS 看到笔已抬起，"
+                             "否则新一笔收不到 pen-down 边沿 ⇒ 整笔被吞）"
+                             " [断流=%ldms tip=%d hold=%d btn=%d grace=%d]\n",
+                             (long)realAge, tip, (int)s_hold, btnHeld, grace);
+                    }
+                    s_fgPrev = fgNow;
+                    if (s_fgSilent) {
+                        DWORD el = (DWORD)(now - s_fgBackAt);
+                        int resume = 0;
+                        const char *how = "";
+                        if (newDown) { resume = 1; how = "新的左键按下边沿"; }
+                        else if (btnHeld && el >= FG_SILENCE_MIN_MS) {
+                            resume = 1; how = "左键电平仍按着";
+                        }
+                        else if (el >= FG_SILENCE_MAX_MS) { resume = 1; how = "硬上限"; }
+                        if (resume) {
+                            s_fgSilent = 0;
+                            logf("# [fg] 静默解除：%s（持续 %lums）⇒ tip 交还常规判据\n",
+                                 how, (unsigned long)el);
+                        } else {
+                            if (s_hold) { s_hold = 0; InterlockedExchange(&g_mseTip, 0); }
+                            tip = 0;
+                        }
                     }
                 }
                 /* 0x022D：把「这一拍 tip 到底是怎么来的」写成快照，供 [catchup] 每 2s
@@ -8293,7 +8362,8 @@ static volatile LONG s_frameRectOk = 0;
 static DWORD s_frameRectAt;
 static int   s_noFrameLogged;  /* 「找不到主框」只打一次（fail-open 降级要留痕但不刷屏） */
 static int   s_cvWhyDbg = -1;  /* 焦点门子原因（边沿触发日志）：0 过 / 1 无框(fail-open) /
-                                  2 前台非主框 / 3 焦点不在文档区 / 4 光标不在文档区矩形 */
+                                  2 前台非主框 / 3 焦点不在文档区 / 4 光标不在文档区矩形 /
+                                  5 命中窗口是停靠面板/浮层·非画布（0x0233） */
 static int   s_frameAttempts;  /* 解析尝试计数（全景转储节流用） */
 static int   s_treeDumped;     /* 解析成功后的全景是否已转储过 */
 
@@ -8519,6 +8589,29 @@ static void canvas_hit_probe(POINT cur, int *child, int *rootIsFrame, int *sameP
     *rootIsFrame = (root == s_psFrame) ? 1 : 0;
 }
 
+/* ⛔⛔ 0x0233：命中窗口是不是 PS 的「非画布」UI 窗口（停靠坞 / UXP 面板 / 浮层 / 工具条）。
+   ⛔ 只服务 **HUD 显隐**的严格焦点门；⛔ 绝不许挪进 `canvas_hit_ok()`（宽判）——
+      那条链路只认主框矩形（铁律 117 / 0x022B），一沾窗口身份就重演
+      「开清除模式必失效、关掉也不自愈」。两条判据互不借用。
+   ⛔ 前缀匹配而非全等：Chromium / Qt 类名带版本号（Chrome_RenderWidgetHostHWND、
+      Qt624QWindowToolSaveBits），OWL 是一族（OWL.Dock / OWL.WindowGroup /
+      OWL.ShadowView / OWL.ApplicationBar）。jwwh-6072 实证：正常画布绘制命中
+      PSViewC / Static / Photoshop；下列前缀只出现在面板、浮层与边缘 UI 上。 */
+static int hud_ui_class(const char *c)
+{
+    static const char *const pre[] = {
+        "OWL.", "Chrome_", "Qt", "PSFloatC", "PSToolTip", "ComboLBox",
+        "TXMiniSkin", "PSPanel", "PSDock"
+    };
+    unsigned i;
+    if (!c || !c[0]) return 0;
+    for (i = 0; i < sizeof(pre) / sizeof(pre[0]); ++i) {
+        size_t n = strlen(pre[i]);
+        if (strncmp(c, pre[i], n) == 0) return 1;
+    }
+    return 0;
+}
+
 static int canvas_focus_ok(POINT cur, int *why)
 {
     *why = 0;
@@ -8585,6 +8678,46 @@ static int canvas_focus_ok(POINT cur, int *why)
                      (long)cur.x, (long)cur.y, (void *)s_psFrame);
             }
             return 0;
+        }
+        /* ⛔⛔⛔ 0x0233：**停靠态 UXP 面板是主框的子窗口** ⇒ 上面 `IsChild` 判据
+           放它过门。用户报：「插件作为选项卡停靠在 PS 界面（类似图层/笔刷面板），
+           拉绳模式下用笔点面板上的选项，会错误显示拉绳 HUD」。
+           0x0122 的「hit 在主框子树」只对**独立顶层浮窗**有效（root=自身），
+           停靠态 child=1 ⇒ 全绿；而 Wintab 是系统上下文，笔点面板照样进包 ⇒
+           penDown=1 / toolOk=1 / strokeGate=1 ⇒ cheapOk 成立 ⇒ 圆就冒出来了。
+           ⇒ 补两条「这个窗口到底是不是画布」的**直接事实**：
+             ① 窗口创建者必须是本进程。UXP 面板由独立渲染进程创建，即使
+                SetParent 停靠进主框，命中窗口的 pid 仍是渲染进程（jwwh-1676 实测
+                `Chrome_RenderWidgetHostHWND sameProc=0`）。⛔ 与 0x022B 推翻的
+                「前台进程 pid」不是一回事：这里问的是**光标底下那个窗口**归谁，
+                是命中测试的结果，不拿 Z 序 / 前台去推断笔的物理位置（铁律 117）。
+             ② 类名属于 PS 的 UI / 面板 / 浮层家族 ⇒ 一律不是画布。
+           ⛔ 画布命中（PSViewC / Static / 主框自身）两条都不成立 ⇒ 正常绘制零影响。
+           ⛔ 只挡 HUD 显隐：宽判、补流、代投、吸附、平滑逐字不动。 */
+        if (hit && hit != s_psFrame) {
+            char pc[64]; pc[0] = 0;
+            DWORD hitPid = 0;
+            GetClassNameA(hit, pc, sizeof(pc) - 1);
+            GetWindowThreadProcessId(hit, &hitPid);
+            int foreign = (hitPid != 0 && hitPid != GetCurrentProcessId());
+            int uiCls   = hud_ui_class(pc);
+            if (foreign || uiCls) {
+                *why = 5;
+                static DWORD s_panelLogAt;
+                DWORD nowP = GetTickCount();
+                if ((DWORD)(nowP - s_panelLogAt) >= 2000) {
+                    s_panelLogAt = nowP;
+                    char ptA[96], pt[96];
+                    ptA[0] = 0; pt[0] = 0;
+                    GetWindowTextA(hit, ptA, sizeof(ptA) - 1);
+                    log_ansi_to_utf8(ptA, pt, (int)sizeof(pt));
+                    logf("# [hud] 焦点门·挡(非画布): hit=%p class=%s title=%s "
+                         "外进程=%d 面板类=%d cur=(%ld,%ld) frame=%p\n",
+                         (void *)hit, pc, pt[0] ? pt : "(无)", foreign, uiCls,
+                         (long)cur.x, (long)cur.y, (void *)s_psFrame);
+                }
+                return 0;
+            }
         }
     }
     return 1;
@@ -8916,6 +9049,10 @@ static DWORD WINAPI hud_thread(LPVOID param)
             HWND  fg = GetForegroundWindow();
             if (fg) GetWindowThreadProcessId(fg, &fgPid);
             int inst = (fgPid != 0 && fgPid == GetCurrentProcessId()) ? 1 : 0;
+            /* 0x0233：把**未去抖**的前台归属交给 cursamp_thread 做「切回」边沿检测。
+               ⛔ 不能用下面 250ms 去抖后的 s_fgOk：用户切回后往往立刻落笔，
+                  等去抖到期第一笔已经画完了。⛔ 纯原子写，零新增窗口查询。 */
+            InterlockedExchange(&g_fgInstNow, (LONG)inst);
             if (inst != s_fgInst) { s_fgInst = inst; s_fgChgAt = now; }
             if (inst != s_fgOk && s_fgChgAt && (DWORD)(now - s_fgChgAt) >= HUD_FG_DEBOUNCE_MS) {
                 s_fgOk = inst;
@@ -9233,7 +9370,8 @@ static DWORD WINAPI hud_thread(LPVOID param)
             } else {
                 static const char *whyTxt[] = {
                     "", "主框未解析⇒本门放行(fail-open)", "前台不是主框",
-                    "焦点不在文档区", "光标不在文档区矩形"
+                    "焦点不在文档区", "光标不在文档区矩形",
+                    "命中窗口是停靠面板/浮层(非画布)"   /* 0x0233 why=5 */
                 };
                 HWND fg2 = GetForegroundWindow();
                 DWORD pid2 = 0, tid2 = fg2 ? GetWindowThreadProcessId(fg2, &pid2) : 0;
