@@ -8,6 +8,7 @@ const { entrypoints } = require("uxp");
 import { AdjustmentMenu } from './AdjustmentMenu';
 import { LicenseManager } from './LicenseManager';
 import { openPluginDoc } from './openDocs';
+import { updatePanelMenuItem } from './panelMenu';
 
 /** 菜单项定义（与 UXP entrypoints.setup 的 menuItems 元素同形） */
 type MenuItemDef = { id: string; label: string; enabled?: boolean };
@@ -42,11 +43,21 @@ const APP_MENU_ITEMS: MenuItemDef[] = [
   {
     id: "toggleCompactMode",
     // 初始文案；面板起来后由 MenuManager.setCompactModeLabel 按「当前面板 + 该面板状态」实时改写
-    label: "紧凑模式：选区填充 - 关"
+    label: "紧凑模式 - 关"
+  },
+  {
+    /* 「显示热键通知」总开关（2026-11-16 用户要求）：
+       关掉后不再显示热键触发的通知（降低干扰），默认开启。
+       状态住在 HotkeyNotifyBus 的共享文件里（两个面板共用同一个偏好），
+       文案由 setHotkeyNotifyLabel 实时改写 → 「显示热键通知 - 开 / 关」。
+       ⚠️ id 与绘画工具箱的同名项（toolboxHotkeyNotify）必须不同：
+          UXP 菜单项 id 全局唯一，重名会让 entrypoints.setup 直接抛错、整个面板起不来。 */
+    id: "appHotkeyNotify",
+    label: "显示热键通知 - 开"
   },
   {
     id: "spacerApp1",
-    label: "-" // 分隔符（紧凑模式 与「参数复位」之间）
+    label: "-" // 分隔符（紧凑模式 / 显示热键通知 与「参数复位」之间）
   },
   {
     // 「参数复位」自成一组（2026-11-16 用户要求「参数复位和填充设置需要分开」）：
@@ -100,6 +111,14 @@ const ADJUSTMENT_MENU_ITEMS: MenuItemDef[] = [
     label: "复位分区顺序"
   },
   {
+    /* 「显示热键通知」总开关（2026-11-16 用户要求）：与 APP 面板 MenuManager 的
+       appHotkeyNotify 是**同一个偏好**（HotkeyNotifyBus 共享文件），只是入口位置不同
+       —— 用户要求「工具箱这边放在复位分区顺序下方」。
+       ⚠️ id 必须与 APP 面板那条不同（UXP 菜单项 id 全局唯一）。 */
+    id: "toolboxHotkeyNotify",
+    label: "显示热键通知 - 开"
+  },
+  {
     id: "spacer1",
     label: "-" // 分隔符（「布局类」折叠/显示/排序 与 后续功能项 之间）
   },
@@ -150,6 +169,7 @@ export class MenuManager {
   private static appResetLicenseCallback: (() => void) | null = null;
   private static appResetParametersCallback: (() => void) | null = null;
   private static appToggleCompactModeCallback: (() => void) | null = null;
+  private static appToggleHotkeyNotifyCallback: (() => void) | null = null;
   private static appHotkeysCallback: (() => void) | null = null;
   private static appShowVisibilityPanelCallback: (() => void) | null = null;
   private static appFillSettingsCallback: (() => void) | null = null;
@@ -195,6 +215,7 @@ export class MenuManager {
     onResetLicense: () => void;
     onResetParameters: () => void;
     onToggleCompactMode?: () => void;
+    onToggleHotkeyNotify?: () => void;
     onShowAppHotkeys?: () => void;
     onShowVisibilityPanel?: () => void;
     onOpenFillSettings?: () => void;
@@ -203,6 +224,7 @@ export class MenuManager {
     this.appResetLicenseCallback = callbacks.onResetLicense;
     this.appResetParametersCallback = callbacks.onResetParameters;
     this.appToggleCompactModeCallback = callbacks.onToggleCompactMode ?? null;
+    this.appToggleHotkeyNotifyCallback = callbacks.onToggleHotkeyNotify ?? null;
     this.appHotkeysCallback = callbacks.onShowAppHotkeys ?? null;
     this.appShowVisibilityPanelCallback = callbacks.onShowVisibilityPanel ?? null;
     this.appFillSettingsCallback = callbacks.onOpenFillSettings ?? null;
@@ -210,44 +232,15 @@ export class MenuManager {
 
   /**
    * 底层：按面板 id + 菜单项 id 更新指定菜单项属性（enabled / label）。
-   * UXP 动态更新菜单项走 getPanel(id).menuItems.getItem(id) 后直接改属性；
-   * 不同版本 API 名称不统一，故依次尝试 getItem → updateItem → 直接改数组项，
-   * 全部失败也只是菜单项保持旧状态（handler 里还有一层拦截）。
+   * 兼容实现已抽到 `panelMenu.ts`（与绘画工具箱的 AdjustmentMenu 共用一份，
+   * 避免「改了一处兼容逻辑、另一处忘记」的漂移）。这里只是本类内部的转发门面。
    */
   private static updateMenuItem(
     panelId: string,
     id: string,
     patch: { enabled?: boolean; label?: string }
   ): void {
-    try {
-      const ep: any = (require("uxp") as any).entrypoints;
-      const panel: any = ep && typeof ep.getPanel === "function"
-        ? ep.getPanel(panelId)
-        : null;
-      const menuItems: any = panel && (panel as any).menuItems;
-      if (!menuItems) return;
-
-      const applyTo = (item: any): boolean => {
-        if (!item) return false;
-        if (patch.enabled !== undefined) item.enabled = patch.enabled;
-        if (patch.label !== undefined) item.label = patch.label;
-        return true;
-      };
-
-      // 官方动态更新方式：getItem(id) 取到菜单项后直接改属性
-      if (typeof (menuItems as any).getItem === "function") {
-        if (applyTo((menuItems as any).getItem(id))) return;
-      }
-      if (typeof (menuItems as any).updateItem === "function") {
-        (menuItems as any).updateItem(id, patch);
-        return;
-      }
-      const list: any[] = Array.isArray(menuItems) ? menuItems : ((menuItems as any).items || []);
-      const item = list.find((it: any) => it && it.id === id);
-      applyTo(item);
-    } catch (err) {
-      console.warn(`更新菜单项 ${id} 状态失败:`, err);
-    }
+    updatePanelMenuItem(panelId, id, patch);
   }
 
   /**
@@ -298,13 +291,23 @@ export class MenuManager {
   }
 
   /**
-   * 同步「紧凑模式」菜单项文案（随当前面板与它自身开关状态变化）。
-   * 文案形如「紧凑模式：图案·关」/「紧凑模式：选区填充·开」：
-   * 5 个作用域（选区填充父面板 + 纯色/图案/渐变/描边 4 个子面板）各自独立开关，
-   * 菜单项只作用于「当前面板」，所以文案里必须写明是哪个面板、以及它此刻是开还是关。
+   * 同步「紧凑模式」菜单项文案。
+   *
+   * ⚠️ 2026-11-16 用户要求：文案里**不再写面板名**，统一成「紧凑模式 - 开/关」。
+   *    原本文案是「紧凑模式：图案·关」那种带作用域名字的写法（因为菜单项只作用于
+   *    「当前面板」，5 个作用域各自独立）。用户明确要求去掉 —— 菜单项本身就在
+   *    当前面板的菜单里，读到「开/关」即可判断这一层此刻的状态，面板名属于噪音。
+   *    实际作用域判定逻辑（compactScopeOf）不变，只是不再显示出来。
    */
   public static setCompactModeLabel(label: string): void {
     this.updateMenuItem(this.APP_PANEL_ID, "toggleCompactMode", { label });
+  }
+
+  /** 同步「显示热键通知」菜单项文案（on → 「显示热键通知 - 开」）。 */
+  public static setHotkeyNotifyLabel(on: boolean): void {
+    this.updateMenuItem(this.APP_PANEL_ID, "appHotkeyNotify", {
+      label: `显示热键通知 - ${on ? "开" : "关"}`
+    });
   }
 
   /**
@@ -362,6 +365,11 @@ export class MenuManager {
       case "toggleCompactMode":
         if (this.appToggleCompactModeCallback) {
           this.appToggleCompactModeCallback();
+        }
+        break;
+      case "appHotkeyNotify":
+        if (this.appToggleHotkeyNotifyCallback) {
+          this.appToggleHotkeyNotifyCallback();
         }
         break;
       case "appHotkeys":

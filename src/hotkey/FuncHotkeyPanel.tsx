@@ -4,6 +4,7 @@ import {
   cancelHotkeyRecording, onRecordProgress, setMainToggleCombo, setFocusLassoCombo,
   setFocusClearCombo, setAltToolCombo, setPickColorCombo, getAltToolCombo, getPickColorCombo,
   setLassoCycleCombo,
+  setFillToolCycleCombo, setFocusMarqueeCombo, setMarqueeCycleCombo,
   armBackspaceDelete, disarmBackspaceDelete, onBackspaceDelete,
   onHotkeyState, requestHotkeyStatus,
   peekPersistedArm, getBlendHotkeyOn, setBlendHotkeyActive, isDaemonConnected,
@@ -17,8 +18,7 @@ import ToggleSwitch from '../components/ToggleSwitch';
 
 // 快捷键子面板（**一个组件，两个面板共用**，2026-11-16 扩展）：
 //   scope='toolbox' → 绘画工具箱「功能快捷键」（快捷操作 / 细节调整 / 边缘处理）
-//   scope='app'     → 选区填充「自定义快捷键」（选区填充整组：主开关 / 套索 / 清除 /
-//                     拾色器 / 临时吸管 / 混合模式热键 / 切换填充模式）
+//   scope='app'     → 选区填充「自定义快捷键」（五块内容，见下方 appBlocks）
 //   ⛔ 两处必须是**同一个组件**：用户要求「完全一样的样式、相同的通知逻辑、相同的
 //     隐藏数字输入框设计、相同的滚动条设计」。复制一份实现必然漂移（历史上
 //     notify-banner / notify-bar 并存就是先例）⇒ 差异只允许来自 scope 的**内容**过滤
@@ -33,12 +33,15 @@ import ToggleSwitch from '../components/ToggleSwitch';
 // 内容分组（按 scope 分工，同一台机器上两块面板各管一段、互不重复）：
 //   scope='toolbox'：功能分组 —— 按功能按钮实际所在的面板分区分组
 //                    （快捷操作 / 细节调整 / 边缘处理；同区分集中、异区分容器）。
-//   scope='app'    ：只显示「选区填充」一组，自上而下为
-//                    主开关（工具模式下名称只显示「选区填充」，热键只开不关的语义不变）
-//                    → 套索工具 / 切换套索工具 / 清除模式 / 临时吸管（仅工具模式）
-//                    → 前景色拾色器（始终）
-//                    → 混合模式热键（自绘开关行，无组合键）
-//                    → 切换填充模式（默认 Ctrl+滚轮，可重录成别的滚轮组合）。
+//   scope='app'    ：五块，块间用通用 `.divider` 隔开、**不出现分组标题**，
+//                    自上而下为
+//                    ① 选区填充（工具模式下名称只显示「选区填充」）/ 切换选区填充（Shift+H）
+//                    ② 套索工具 / 切换套索工具（仅工具模式）
+//                    ③ 矩形选框工具 / 切换选框工具（仅工具模式）
+//                    ④ 混合模式热键（自绘开关行，无组合键）/ 前景色拾色器 / 临时吸管
+//                    ⑤ 切换填充模式（默认 Ctrl+滚轮）/ 清除模式（仅工具模式）。
+//                    ⛔ 原来首块上的「选区填充」分组标题已删除：它与首行同名，属于
+//                      用户指出的「多余的选区填充」（2026-11-16）。
 // 行内布局：功能名在左、录好的快捷键在右（与笔刷热键分区一致）。
 // 交互（去掉独立的录制/删除按钮，容器窄、把宽度还给功能名）：
 //   单击行 → 选中（布防）：选中后按退格键解绑该条（条目保留，显示「未绑定」）；
@@ -205,6 +208,9 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
     if (e.action === 'toggleMain') return focusMode ? '选区填充' : '选区填充开关';
     if (e.action === 'focusLasso') return '套索工具';
     if (e.action === 'lassoCycle') return '切换套索工具';
+    if (e.action === 'fillToolCycle') return '切换选区填充';
+    if (e.action === 'focusMarquee') return '矩形选框工具';
+    if (e.action === 'marqueeCycle') return '切换选框工具';
     if (e.action === 'focusClear') return '清除模式';
     if (e.action === 'altTool') return '临时吸管';
     if (e.action === 'pickColor') return '前景色拾色器';
@@ -218,6 +224,9 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
     if (target === 'main') return focusMode ? '选区填充' : '选区填充开关';
     if (target === 'focus_lasso') return '套索工具';
     if (target === 'lasso_cycle') return '切换套索工具';
+    if (target === 'fill_tool_cycle') return '切换选区填充';
+    if (target === 'marquee_tool') return '矩形选框工具';
+    if (target === 'marquee_cycle') return '切换选框工具';
     if (target === 'focus_clear') return '清除模式';
     if (target === 'alt_tool') return '临时吸管';
     if (target === 'pick_color') return '前景色拾色器';
@@ -240,6 +249,19 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
     if (target === 'lasso_cycle') {
       // 「切换套索工具」键同样随工具模式自动启用/停用，不参与「退格解绑」（重录请双击）。
       showMessage('切换套索工具键随工具模式自动启用，无需解绑；如需更换请双击重录');
+      return;
+    }
+    if (target === 'fill_tool_cycle') {
+      // 2026-11-16 新增的三条工具键同规矩：条目删了也会按默认值补回来 ⇒ 只能重录。
+      showMessage('切换选区填充键随工具模式自动启用，无需解绑；如需更换请双击重录');
+      return;
+    }
+    if (target === 'marquee_tool') {
+      showMessage('矩形选框工具键随工具模式自动启用，无需解绑；如需更换请双击重录');
+      return;
+    }
+    if (target === 'marquee_cycle') {
+      showMessage('切换选框工具键随工具模式自动启用，无需解绑；如需更换请双击重录');
       return;
     }
     if (target === 'focus_clear') {
@@ -295,6 +317,9 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
       if (target === 'main') return e.action !== 'toggleMain' && e.combo === combo;
       if (target === 'focus_lasso') return e.action !== 'focusLasso' && e.combo === combo;
       if (target === 'lasso_cycle') return e.action !== 'lassoCycle' && e.combo === combo;
+      if (target === 'fill_tool_cycle') return e.action !== 'fillToolCycle' && e.combo === combo;
+      if (target === 'marquee_tool') return e.action !== 'focusMarquee' && e.combo === combo;
+      if (target === 'marquee_cycle') return e.action !== 'marqueeCycle' && e.combo === combo;
       if (target === 'focus_clear') return e.action !== 'focusClear' && e.combo === combo;
       if (target === 'alt_tool') return e.action !== 'altTool' && e.combo === combo;
       if (target === 'pick_color') return e.action !== 'pickColor' && e.combo === combo;
@@ -342,6 +367,25 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
       showMessage('已保存：' + combo + ' → 切换套索工具');
       return;
     }
+    if (target === 'fill_tool_cycle') {
+      // 2026-11-16：五工具循环键（默认 Shift+H），与套索键同款由 bridge 统一管理。
+      // active 传本面板看到的工具模式状态（bridge 在绘画工具箱上下文里拿不到它）。
+      setFillToolCycleCombo(combo, focusMode);
+      showMessage('已保存：' + combo + ' → 切换选区填充');
+      return;
+    }
+    if (target === 'marquee_tool') {
+      // 矩形选框工具键（默认 M）：bridge 统一管理，工具模式关闭时只记记忆值。
+      setFocusMarqueeCombo(combo, focusMode);
+      showMessage('已保存：' + combo + ' → 矩形选框工具');
+      return;
+    }
+    if (target === 'marquee_cycle') {
+      // 选框组循环键（默认 Shift+M）：同上。
+      setMarqueeCycleCombo(combo, focusMode);
+      showMessage('已保存：' + combo + ' → 切换选框工具');
+      return;
+    }
     if (target === 'focus_clear') {
       // 清除模式键（默认 Shift+E）同样由 bridge 统一管理，语义与套索工具键一致：
       // 按下即确保主开关开启并切换清除模式（主开关不会被关闭）。
@@ -375,6 +419,10 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
   // 工具模式下的「套索工具」键条目：由 HotkeyBridge 在工具模式开启时装载（默认 L）。
   const focusLassoEntry = entries.find(e => e.action === 'focusLasso');
   const lassoCycleEntry = entries.find(e => e.action === 'lassoCycle');
+  // 2026-11-16 新增：五工具循环键（默认 Shift+H）/ 矩形选框键（默认 M）/ 选框组循环键（默认 Shift+M）
+  const fillToolCycleEntry = entries.find(e => e.action === 'fillToolCycle');
+  const focusMarqueeEntry = entries.find(e => e.action === 'focusMarquee');
+  const marqueeCycleEntry = entries.find(e => e.action === 'marqueeCycle');
   // 工具模式下的「清除模式」键条目：同样只在工具模式开启时装载（默认 Shift+E）。
   const focusClearEntry = entries.find(e => e.action === 'focusClear');
   // 工具模式下的「临时吸管」按住键条目：同样只在工具模式开启时装载（默认 /）。
@@ -475,17 +523,71 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
     );
   };
 
-  // 分组：主开关「选区填充」固定最上方单独成组，其后按功能按钮实际所在分区分组。
-  // 同一分区的行集中在一个边框容器里，不同分区用标题 + 容器分开。
+  // 工具箱（scope='toolbox'）：按功能按钮实际所在的面板分区分组，标题 + 边框容器分开。
   // ⛔ 2026-11-16：按 scope 分工 ——「选区填充」整组归 APP 面板的「自定义快捷键」，
   //    其余分组留在绘画工具箱的「功能快捷键」。两边的行互不重复出现（移植而非复制）。
   const sectionGroups = FUNC_HOTKEY_SECTION_ORDER
     .map(sec => ({ title: sec, defs: FUNC_HOTKEY_DEFS.filter(d => d.section === sec) }))
     .filter(g => g.defs.length > 0)
-    .filter(g => (forApp ? g.title === '选区填充' : g.title !== '选区填充'));
-  const unordered = forApp
-    ? []
-    : FUNC_HOTKEY_DEFS.filter(d => !FUNC_HOTKEY_SECTION_ORDER.includes(d.section));
+    .filter(g => g.title !== '选区填充');
+  const unordered = FUNC_HOTKEY_DEFS.filter(d => !FUNC_HOTKEY_SECTION_ORDER.includes(d.section));
+
+  /* ===== APP 面板（scope='app'）：显式分块 =====
+     用户 2026-11-16 指定的顺序（每块内部保持从上到下的语义顺序）：
+       ① 选区填充两行（选区填充 H / 切换选区填充 Shift+H）
+       ② 套索工具两行（套索工具 L / 切换套索工具 Shift+L）
+       ③ 框选工具两行（矩形选框工具 M / 切换选框工具 Shift+M）
+       ④ 混合模式热键 / 前景色拾色器 / 临时吸管
+       ⑤ 切换填充模式 / 清除模式
+     ⛔ 不再渲染 .func-group-title：面板标题已经是「自定义快捷键」，而首块标题「选区填充」
+        与首行**同名**（用户截图圈出的「多余的选区填充」就是它）⇒ 块与块之间改用一条
+        通用 `.divider`（与工具箱折叠分区内那条实线一致），信息量不减、纵向高度更省。
+     ⚠️ 空块直接丢弃（②③⑤ 里的几行只在工具模式下存在）：不能留下孤立的分隔线。 */
+  const renderFuncDefRow = (id: string, title: string) => {
+    const def = FUNC_HOTKEY_DEFS.find(d => d.id === id);
+    if (!def) return null;
+    return renderRow('fk_' + def.id, funcEntryOf(def.id)?.combo || '', def.label, def.id, title);
+  };
+  const appBlocks: Array<{ key: string; rows: React.ReactElement[] }> = [];
+  const pushBlock = (key: string, rows: Array<React.ReactElement | null | false>) => {
+    const list = rows.filter((r): r is React.ReactElement => !!r);
+    if (list.length) appBlocks.push({ key, rows: list });
+  };
+  // ① 选区填充：主开关行固定在最上，其后是五工具循环键（保持主开关开启）
+  pushBlock('fill', [
+    mainEntry
+      ? renderRow(mainEntry.id, mainEntry.combo,
+          focusMode ? '选区填充' : '选区填充开关', 'main', helpTexts.funcHotkey.mainRow)
+      : renderRow('main_placeholder', '', focusMode ? '选区填充' : '选区填充开关', 'main', helpTexts.funcHotkey.mainRow),
+    focusMode && renderRow('fill_tool_cycle', fillToolCycleEntry?.combo || '', '切换选区填充', 'fill_tool_cycle',
+      helpTexts.funcHotkey.fillToolCycleRow),
+  ]);
+  // ② 套索工具：按下即关主开关并切回套索（使 H / L 像两个工具）；Shift+L 在套索组内循环
+  pushBlock('lasso', [
+    focusMode && renderRow('focus_lasso', focusLassoEntry?.combo || '', '套索工具', 'focus_lasso',
+      helpTexts.funcHotkey.lassoRow),
+    focusMode && renderRow('lasso_cycle', lassoCycleEntry?.combo || '', '切换套索工具', 'lasso_cycle',
+      helpTexts.funcHotkey.lassoCycleRow),
+  ]);
+  // ③ 框选工具：矩形选框键（强制矩形）/ 选框组循环（矩形 ↔ 椭圆），两者都关主开关
+  pushBlock('marquee', [
+    focusMode && renderRow('marquee_tool', focusMarqueeEntry?.combo || '', '矩形选框工具', 'marquee_tool',
+      helpTexts.funcHotkey.marqueeRow),
+    focusMode && renderRow('marquee_cycle', marqueeCycleEntry?.combo || '', '切换选框工具', 'marquee_cycle',
+      helpTexts.funcHotkey.marqueeCycleRow),
+  ]);
+  // ④ 混合模式热键（自绘开关行）/ 前景色拾色器 / 临时吸管
+  pushBlock('picking', [
+    renderBlendSwitchRow('blend_hotkey', blendShownOn, blendGuard.yielded, blendGuard.toolCn),
+    renderRow('pick_color', pickColorEntry?.combo || '', '前景色拾色器', 'pick_color', helpTexts.funcHotkey.pickerRow),
+    focusMode && renderRow('alt_tool', altToolEntry?.combo || '', '临时吸管', 'alt_tool', helpTexts.funcHotkey.pickRow),
+  ]);
+  // ⑤ 填充模式轮换（默认 Ctrl+滚轮）/ 清除模式（默认 Shift+E，确保主开关开启）
+  pushBlock('mode', [
+    renderFuncDefRow('fillModeCycle', helpTexts.funcHotkey.fillModeRow),
+    focusMode && renderRow('focus_clear', focusClearEntry?.combo || '', '清除模式', 'focus_clear',
+      helpTexts.funcHotkey.clearRow),
+  ]);
 
   return (
     <div className="float-overlay func-hotkey-overlay" onClick={onClose}>
@@ -516,36 +618,38 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
         </div>
 
         <div className="func-hotkey-list">
-        {/* 分组：按功能所在分区展示；「选区填充」组的容器内置顶主开关行（工具模式下显示「选区填充」）。
+        {/* 两块面板两种排法（同一个组件，差异只来自 scope）：
+            · APP「自定义快捷键」：显式分块 + 分隔线（顺序由用户指定，见 appBlocks 说明）；
+            · 工具箱「功能快捷键」：按功能所在分区分组，保留分组标题。
             ⛔ 2026-11-16：原来紧随其后的「纯色 / 图案 / 渐变面板开关」三行已删除，
-               改为清单里的单行「切换填充模式」（默认 Ctrl+滚轮）——单独开关某个子面板没有意义。 */}
-        {sectionGroups.map(g => (
+               改为单行「切换填充模式」（默认 Ctrl+滚轮）——单独开关某个子面板没有意义。 */}
+        {forApp && (
+          /* 单张卡片 + 卡内分隔线（不是五张带边框的卡片）：
+             用户要的是「同一个列表按顺序排好、块与块之间有条线」，五张卡各带边框会变成
+             「框-线-框-线」的双重装饰，纵向也更挤。
+             行距沿用 .hotkey-entry-row + .hotkey-entry-row 的 6px；跨块处由分隔线自身的
+             上下外边距（10px）接管 —— 相邻选择器被分隔元素隔断，不会叠加成 16px。 */
+          <div className="border-panel-section">
+            {appBlocks.map((b, i) => (
+              <React.Fragment key={'blk_' + b.key}>
+                {/* 块间分隔线：直接用通用 `.divider`（2026-11-16 用户要求改成与绘画工具箱
+                    折叠分区内那条实线完全一致的外观）。
+                    ⛔ 为什么不再自绘 `.func-group-sep`：那条用的是 currentColor + opacity，
+                       半透明叠在卡片底色上，既不是边框色、也到不了卡片左右边框；
+                       `.divider` 是 1px `background-color: var(--border-color)`，
+                       而 `.border-panel-section .divider` 会把宽度补成 calc(100% + 20px)
+                       并向左右各拉 -10px ⇒ **两端正好压在卡片左右边框上**，颜色随主题
+                       与边框完全同色。一份样式两处复用，不必再维护第二套。 */}
+                {i > 0 && <div className="divider" />}
+                {b.rows}
+              </React.Fragment>
+            ))}
+          </div>
+        )}
+        {!forApp && sectionGroups.map(g => (
           <React.Fragment key={'grp_' + g.title}>
             <div className="func-group-title">{g.title}</div>
             <div className="border-panel-section">
-              {g.title === '选区填充' && (mainEntry
-                ? renderRow(mainEntry.id, mainEntry.combo,
-                    focusMode ? '选区填充' : '选区填充开关', 'main', helpTexts.funcHotkey.mainRow)
-                : renderRow('main_placeholder', '', focusMode ? '选区填充' : '选区填充开关', 'main', helpTexts.funcHotkey.mainRow))}
-              {/* 工具模式下：套索工具键（默认 L）——按下即关闭主开关并切回套索，使 H/L 像两个工具 */}
-              {g.title === '选区填充' && focusMode &&
-                renderRow('focus_lasso', focusLassoEntry?.combo || '', '套索工具', 'focus_lasso', helpTexts.funcHotkey.lassoRow)}
-              {/* 工具模式下：切换套索工具（默认 Shift+L）——在套索组内循环
-                  （普通 → 多边形 → 磁性 → 普通）。PS 原生的 Shift+L 循环在 L 被接管后
-                  不再触发（用户真机确认），由这条键补上。 */}
-              {g.title === '选区填充' && focusMode &&
-                renderRow('lasso_cycle', lassoCycleEntry?.combo || '', '切换套索工具', 'lasso_cycle', helpTexts.funcHotkey.lassoCycleRow)}
-              {/* 工具模式下：清除模式键（默认 Shift+E）——按下即确保主开关开启并切换清除模式 */}
-              {g.title === '选区填充' && focusMode &&
-                renderRow('focus_clear', focusClearEntry?.combo || '', '清除模式', 'focus_clear', helpTexts.funcHotkey.clearRow)}
-              {/* 前景色拾色器（默认 Shift+/，与工具模式无关）：按一下呼出 PS 原生拾色器 */}
-              {g.title === '选区填充' &&
-                renderRow('pick_color', pickColorEntry?.combo || '', '前景色拾色器', 'pick_color', helpTexts.funcHotkey.pickerRow)}
-              {/* 工具模式下：临时吸管按住键（默认 /）——按住切吸管、松手切回套索 */}
-              {g.title === '选区填充' && focusMode &&
-                renderRow('alt_tool', altToolEntry?.combo || '', '临时吸管', 'alt_tool', helpTexts.funcHotkey.pickRow)}
-              {/* 混合模式热键（自绘开关行，与工具模式无关）：开启后 Alt+Shift+字母改面板混合模式 */}
-              {g.title === '选区填充' && renderBlendSwitchRow('blend_hotkey', blendShownOn, blendGuard.yielded, blendGuard.toolCn)}
               {g.defs.map(def =>
                 renderRow('fk_' + def.id, funcEntryOf(def.id)?.combo || '', def.label, def.id,
                   def.id === 'fillModeCycle' ? helpTexts.funcHotkey.fillModeRow : helpTexts.funcHotkey.rowHint)
@@ -553,7 +657,7 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
             </div>
           </React.Fragment>
         ))}
-        {unordered.length > 0 && (
+        {!forApp && unordered.length > 0 && (
           <>
             <div className="func-group-title">其它</div>
             <div className="border-panel-section">

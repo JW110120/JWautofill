@@ -21,6 +21,9 @@ import type { Gradient } from '../types/state';
 import './adjustment.css';
 import './adjustment-input.css';
 import { AdjustmentMenu } from '../utils/AdjustmentMenu';
+// 2026-11-16：「显示热键通知」总开关 —— 与 APP 面板菜单里那一项是**同一个偏好**
+// （状态住在 HotkeyNotifyBus 的共享文件里），这里只负责本面板菜单文案的同步。
+import { subscribeHotkeyNotify, toggleHotkeyNotify } from '../utils/HotkeyNotifyBus';
 import { ExpandIcon, AddIcon, DeleteIcon, SyncIcon } from '../styles/Icons';
 import { PanelStateManager } from '../utils/PanelStateManager';
 import { maskSyncEngine, MASK_SYNC_CHANNEL_LABELS, LayerTreeEntry, MaskSyncTask, MaskSyncChannel, SyncState } from '../utils/MaskSyncEngine';
@@ -951,9 +954,24 @@ useEffect(() => {
     },
     onShowFuncHotkeyPanel: () => {
       setShowFuncHotkeyPanel(true);
+    },
+    /* 「显示热键通知 - 开/关」（2026-11-16 用户要求，位置在「复位分区顺序」下方）：
+       只翻共享偏好 —— 通知本身要不要显示由各显示点同步读 HotkeyNotifyBus 判断，
+       菜单文案由下面那个订阅 effect 统一改写。 */
+    onToggleHotkeyNotify: () => {
+      void toggleHotkeyNotify();
     }
   });
 }, [sections]);
+
+/* 「显示热键通知」偏好 → 本面板菜单文案（用户要求两侧文案都是「显示热键通知 - 开/关」）。
+   ⛔ 与 APP 面板各订阅一份：两个面板的 JS 上下文互不可见（见 MainToggleBus 头部说明），
+      靠共享文件 + 轮询对齐，谁点的菜单两边最终都一致。
+   ⛔ 订阅器首次 tick 必回调一次 ⇒ 面板打开时文案立刻是真值，不会停在上一次的旧文案上。 */
+useEffect(() => {
+  const unsub = subscribeHotkeyNotify((on) => { AdjustmentMenu.setHotkeyNotifyLabel(on); });
+  return () => { unsub(); };
+}, []);
 
 /**
  * 工具箱遮罩态 body 类（隐藏本面板全部 number + 收起滚动条），**单一派生来源**。

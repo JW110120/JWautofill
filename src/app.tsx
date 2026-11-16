@@ -34,7 +34,9 @@ import { PanelStateManager } from './utils/PanelStateManager';
 import {
   connectHotkeyDaemon,
   getSelectedBrushToolEnum, setFocusLassoActive, setFocusClearActive, setAltToolActive, setLassoCycleActive,
-  altToolComboHasAlt, normalizeToolId, syncLassoCycleCursor,
+  // 2026-11-16 新增三组工具键：「切换选区填充」(Shift+H) / 「矩形选框工具」(M) / 「切换选框工具」(Shift+M)
+  setFillToolCycleActive, setFocusMarqueeActive, setMarqueeCycleActive,
+  altToolComboHasAlt, normalizeToolId, syncToolCursors, hotkeyToolSwitchRecent,
   onAltHold, selectToolByRef, onConfig as onHotkeyConfig,
   // 热键命中反馈：**所有 APP 侧按键**的 notify 都归本面板（见 showAppHotkeyNotify）
   onHotkeyTriggered
@@ -66,6 +68,8 @@ import { FillModeDir, subscribeFillModeCycle } from './utils/FillModeCycleBus';
 import { subscribeClearModeToggle } from './utils/ClearModeBus';
 import { subscribeBlendMode } from './utils/BlendModeBus';
 import { setFocusMode } from './utils/FocusModeBus';
+// 2026-11-16：「显示热键通知」总开关（两个面板菜单各有一个入口，偏好共享一份）
+import { subscribeHotkeyNotify, hotkeyNotifyOnSync, toggleHotkeyNotify } from './utils/HotkeyNotifyBus';
 import {
   debouncePsProbe, isPsBusy, markPsBusyForEvent, runWhenIdle,
   setInProcModalLevel, psBusyInProc,
@@ -256,6 +260,12 @@ class App extends React.Component<AppProps, AppState> {
     private unsubHotkeyTrigger: (() => void) | null = null;
     /** APP 侧热键 notify 的自动消失句柄（与其它瞬时提示一致：5s）。 */
     private appNotifyTimer: any = null;
+    /**
+     * 「显示热键通知」开关的订阅器（2026-11-16）：只用于**同步菜单文案**。
+     * 通知本身要不要显示由 `hotkeyNotifyOnSync()` 同步判断（通知函数是同步调用的，
+     * 等不了 await），这里不必把值搬进 state（搬了反而多一次无意义的重渲染）。
+     */
+    private unsubHotkeyNotify: (() => void) | null = null;
     /* 0x0224：热键配置订阅器（只关心「混合模式热键开关」开关位的翻转）——
        开关一开/一关就要重新决定「要不要跑工具巡检 + 此刻要不要让位」，
        而这件事的入口不在本组件（开关住在绘画工具箱的功能快捷键子面板里）。 */
@@ -466,6 +476,13 @@ class App extends React.Component<AppProps, AppState> {
         // 循环（普通 → 多边形 → 磁性 → 普通）。PS 原生的 Shift+L 循环在 L 被本插件接管后
         // 就不再触发（用户真机确认），由这条键补上。同样由本面板独占写入。
         setLassoCycleActive(on);
+        /* 2026-11-16 新增的三组工具键（全部只在工具模式开启时装载）：
+           · 切换选区填充（默认 Shift+H）：五个选区工具循环 + 保证主开关开启；
+           · 矩形选框工具（默认 M）：切矩形选框 + 关主开关；
+           · 切换选框工具（默认 Shift+M）：矩形 ↔ 椭圆 + 关主开关。 */
+        setFillToolCycleActive(on);
+        setFocusMarqueeActive(on);
+        setMarqueeCycleActive(on);
         // 同步「清除模式」键（默认 Shift+E）：工具模式开启时注册 → 按下即确保主开关开启
         // 并切换清除模式（主开关不会被关掉）。同样由本面板独占写入。
         setFocusClearActive(on);
@@ -480,7 +497,7 @@ class App extends React.Component<AppProps, AppState> {
      * 5 个作用域各自独立开关、互不干扰——选区填充父面板 + 纯色/图案/渐变/描边 4 个子面板，
      * 哪一层的开关就只影响哪一层（父面板的 divider 与子面板的 divider 互不相干）。
      * 菜单项只作用于「当前面板」：有子面板打开时是那个子面板，否则是父面板，
-     * 因此菜单文案必须写明是「哪个面板」以及它「此刻开还是关」。
+     * 因此菜单文案只写「开还是关」（2026-11-16 用户要求去掉面板名，见 syncCompactMenuLabel）。
      * 实现走 body 上的 compact-{scope} 类（与本文件既有的 secondary-panel-open /
      * license-dialog-open 同一套做法），具体隐藏规则见 app.css。
      */
@@ -491,16 +508,6 @@ class App extends React.Component<AppProps, AppState> {
         gradient: 'compact-gradient',
         stroke: 'compact-stroke',
         clear: 'compact-clear',
-    };
-
-    /** 各作用域在菜单文案里的面板名 */
-    private static readonly COMPACT_NAME: Record<CompactScope, string> = {
-        app: '选区填充',
-        color: '纯色',
-        pattern: '图案',
-        gradient: '渐变',
-        stroke: '描边',
-        clear: '清除',
     };
 
     /** 给定状态下菜单项应作用的作用域：任一子面板打开时是它，否则是父面板 */
@@ -540,13 +547,17 @@ class App extends React.Component<AppProps, AppState> {
         }
     }
 
-    /** 菜单文案：`紧凑模式：{面板名}·{开/关}`（如「紧凑模式：图案·开」） */
+    /**
+     * 菜单文案：`紧凑模式 - 开/关`。
+     *
+     * ⚠️ 2026-11-16 用户要求去掉面板名（原为「紧凑模式：选区填充 - 关」这种带作用域的写法）。
+     *    5 个作用域仍各自独立开关、菜单项仍只作用于「当前面板」，只是文案里不再写名字 ——
+     *    这一项就在当前面板自己的菜单里，读到开/关即可判断这一层此刻的状态。
+     */
     private syncCompactMenuLabel() {
         const scope = this.currentCompactScope();
         const on = !!(this.state.compactModes && this.state.compactModes[scope]);
-        MenuManager.setCompactModeLabel(
-            `紧凑模式：${App.COMPACT_NAME[scope]} - ${on ? '开' : '关'}`
-        );
+        MenuManager.setCompactModeLabel(`紧凑模式 - ${on ? '开' : '关'}`);
     }
 
     constructor(props: AppProps) {
@@ -684,11 +695,27 @@ class App extends React.Component<AppProps, AppState> {
                           （那里才有 prev→next 的时序），这里只按**同一个判据**把结果
                           写进文案，避免用户看到「已关闭」却仍停在一个用不了的子工具上。 */
                     const backToLasso = info.enabled === false && App.isSubLassoTool(this.currentToolGuess());
+                    /* ⭐ 2026-11-16 第三轮（用户报的 bug）：**开关保持开启**这一拍也要回到套索。
+                       现象：工具模式（自动关 + 自动切套索）下，当前工具是多边形 / 磁性套索 /
+                       矩形选框 / 椭圆选框，且总开关已经开着时，按 H 完全没有反应 ——
+                       因为 MainToggleBus.doToggle 在工具模式下是「只开不关」，已开着就
+                       `return cur`（什么都不做），于是连一次状态翻转都没有，
+                       onMainToggleChanged 也就不会触发 ⇒ 没有任何工具动作。
+                       用户要求：按 H 保持开启并**恢复为套索工具**。
+                       ⛔ 只在当前工具确实是那四个之一时才发命令（铁律 132「按需切换」）：
+                          已经在套索上不必再发；在画笔等工具上时「自动关」早把开关关掉了，
+                          走的是上面那条关→开路径，与这里无关。
+                       ⛔ 判据用 `switchToLassoOnEnable`（用户勾了「自动切套索」才替用户切工具），
+                          与 onMainToggleChanged 同一条开关，避免两处语义分叉。 */
+                    const keepOnToLasso = info.enabled === true
+                        && this.state.switchToLassoOnEnable
+                        && App.LASSO_RETURN_TOOLS.indexOf(this.currentToolGuess() || '') !== -1;
+                    if (keepOnToLasso) void this.selectLassoTool();
                     const base = info.enabled === undefined
                         ? '选区填充开关切换失败'
                         : ('选区填充开关已' + (info.enabled ? '开启' : '关闭'));
                     this.showAppHotkeyNotify(
-                        prefix + base + (backToLasso ? '（切回套索工具）' : ''),
+                        prefix + base + (backToLasso || keepOnToLasso ? '（切回套索工具）' : ''),
                         info.enabled !== undefined
                     );
                     return;
@@ -709,6 +736,37 @@ class App extends React.Component<AppProps, AppState> {
                         prefix + (info.ok
                             ? '已切换到「' + App.toolRefLabel(target) + '」' + (autoOffed ? '（自动关已开 ⇒ 关闭选区填充）' : '')
                             : '切换套索工具失败'),
+                        info.ok
+                    );
+                    return;
+                }
+
+                if (info.action === 'fillToolCycle') {
+                    /* 「切换选区填充」（默认 Shift+H，2026-11-16）：五个选区工具循环，
+                       并且**保持主开关开启**（开关的开启由 bridge 的 requestMainToggle 完成，
+                       工具模式下它只开不关）。
+                       ⛔ 这里绝不能调 autoTurnOffMain：用户要求「按这个键切工具不触发自动关」。
+                       ⛔ 也绝不能等着「自动关」来兜底 —— 选框/套索都在白名单之外。 */
+                    const target = info.brush || '';
+                    if (target) this.noteRealTool(target);
+                    this.showAppHotkeyNotify(
+                        prefix + '选区填充已开启 → ' + App.toolRefLabel(target),
+                        true
+                    );
+                    return;
+                }
+
+                if (info.action === 'focusMarquee' || info.action === 'marqueeCycle') {
+                    /* 「矩形选框工具」(M) / 「切换选框工具」(Shift+M)：切到原本的选框 +
+                       关闭主开关（关闭动作由 bridge 的 requestMainToggleOff 完成）。
+                       ⛔ 这里同样不调 autoTurnOffMain：bridge 已经关了开关，再调一次只会
+                          重复写共享状态（多面板各自执行一次 ⇒ 多余的文件 I/O）。 */
+                    const target = info.brush || '';
+                    if (target) this.noteRealTool(target);
+                    this.showAppHotkeyNotify(
+                        prefix + (info.ok
+                            ? '已切到「' + App.toolRefLabel(target) + '」（选区填充已关闭）'
+                            : '切换选框工具失败'),
                         info.ok
                     );
                     return;
@@ -843,9 +901,20 @@ class App extends React.Component<AppProps, AppState> {
                 });
             },
             onToggleCompactMode: () => { this.toggleCompactMode(); },
+            /* 「显示热键通知 - 开/关」（2026-11-16）：只翻共享偏好，文案由下面的订阅器
+               统一改写（本面板与绘画工具箱各订阅一份，谁点的都一样）。
+               ⛔ 不复用 toggleCompactMode 那种「改本面板 state」的路子：这个偏好是
+                  **两个面板共用**的（热键通知在两处都有显示点），存 state 就会各说各话。 */
+            onToggleHotkeyNotify: () => { void toggleHotkeyNotify(); },
             onShowAppHotkeys: () => { this.openAppHotkeyPanel(); },
             onShowVisibilityPanel: () => { this.openVisibilityPanel(); },
             onOpenFillSettings: () => { this.openFillSettingsPanel(); }
+        });
+        /* 「显示热键通知」偏好：订阅共享文件 ⇒ 同步本面板菜单文案。
+           ⛔ 订阅器首次 tick 必定回调一次（内部 last 从 null 起），所以插件重启/热更新后
+              菜单文案不会停在上一次的旧文案上；两个面板互不依赖对方的渲染时机。 */
+        this.unsubHotkeyNotify = subscribeHotkeyNotify((on) => {
+            MenuManager.setHotkeyNotifyLabel(on);
         });
         this.selectionChangeListener = (eventName, descriptor) => {
             // ⚠️ 事件到达瞬间先打忙碌标记（回调内唯一允许做的事，不碰 DOM）：
@@ -1212,6 +1281,10 @@ class App extends React.Component<AppProps, AppState> {
             try { this.unsubHotkeyTrigger(); } catch { /* ignore */ }
             this.unsubHotkeyTrigger = null;
         }
+        if (this.unsubHotkeyNotify) {
+            try { this.unsubHotkeyNotify(); } catch { /* ignore */ }
+            this.unsubHotkeyNotify = null;
+        }
         if (this.appNotifyTimer) {
             clearTimeout(this.appNotifyTimer);
             this.appNotifyTimer = null;
@@ -1339,6 +1412,10 @@ class App extends React.Component<AppProps, AppState> {
      *    一条消息只在**用户眼睛当时所在的那块面板**出现，不在两处重复。
      */
     private showAppHotkeyNotify(text: string, ok: boolean) {
+        /* 「显示热键通知」关掉后**一条都不显示**（2026-11-16 用户要求：降低干扰）。
+           ⛔ 判据同步读缓存（hotkeyNotifyOnSync），不 await —— 通知是同步函数，
+              等文件读回来消息早就该过期了；缓存由订阅器在挂载时与每次变化后刷新。 */
+        if (!hotkeyNotifyOnSync()) return;
         if (this.appNotifyTimer) { clearTimeout(this.appNotifyTimer); this.appNotifyTimer = null; }
         this.setState({ appHotkeyNotify: { text, ok } });
         this.appNotifyTimer = setTimeout(() => {
@@ -1532,6 +1609,8 @@ class App extends React.Component<AppProps, AppState> {
             case 'lassoTool': return '套索工具';
             case 'polySelTool': return '多边形套索';
             case 'magneticLassoTool': return '磁性套索';
+            case 'marqueeRectTool': return '矩形选框';
+            case 'marqueeEllipTool': return '椭圆选框';
             case 'eyedropperTool': return '吸管工具';
             default: return ref || '未知工具';
         }
@@ -1560,7 +1639,7 @@ class App extends React.Component<AppProps, AppState> {
      */
     private noteRealTool(tool: string | null) {
         this.lastKnownTool = tool;
-        syncLassoCycleCursor(tool);
+        syncToolCursors(tool);
     }
 
     /**
@@ -2038,7 +2117,7 @@ class App extends React.Component<AppProps, AppState> {
                 </div>
                 <div className="panel-section">
                     <div className="row-between">
-                        <span className="label-4" title={helpTexts.selectionFill.visibilitySection} onClick={() => this.toggleSectionVisibility('smoothOptions')}>选区平滑</span>
+                        <span className="label-6" title={helpTexts.selectionFill.visibilitySection} onClick={() => this.toggleSectionVisibility('smoothOptions')}>套索选区平滑</span>
                         <ToggleSwitch checked={this.state.smoothOptionsVisible} onChange={() => this.toggleSectionVisibility('smoothOptions')} title={helpTexts.selectionFill.visibilitySection}  />
                     </div>
                     <div className="row-between">
@@ -3044,7 +3123,18 @@ class App extends React.Component<AppProps, AppState> {
      * 但开关已经是新值（已 setState），所以不会因为重复触发而重复切工具。
      */
     private async onMainToggleChanged(prevEnabled: boolean, nextEnabled: boolean) {
+        /* ⛔⛔ 2026-11-16：本模块自己刚切过工具（Shift+H / M / Shift+M）时，
+           这里的两条「顺手切工具」一律跳过 —— 否则它们会把用户刚按出来的工具拽走：
+             · 关→开 + 自动切套索 ⇒ 切回套索（会抢走 Shift+H 刚切到的选框）；
+             · 开→关 + 停在多边/磁性套索 ⇒ 切回套索（会抢走 M / Shift+M 刚切到的选框）。
+           两者服务的是 H 键与「用鼠标换工具」的原生场景，不该覆盖显式工具键。
+           抑制位是 1.5s 时窗（不是布尔位：布尔位漏清就永久失效）。 */
+        const selfSwitched = hotkeyToolSwitchRecent();
         if (nextEnabled && !prevEnabled && this.state.switchToLassoOnEnable) {
+            if (selfSwitched) {
+                console.log('[主开关] 开启：本次由工具键发起（已自行切工具）⇒ 不抢切套索');
+                return;
+            }
             await this.selectLassoTool();
             return;
         }
@@ -3057,6 +3147,10 @@ class App extends React.Component<AppProps, AppState> {
            ⛔ 判据用 `currentToolGuess()`（巡检基准 / 'slct' 上报），读不到就**不动**：
               不知道当前工具时乱切一次会吞掉用户下一笔（见 reselectLassoIfStrayed 的说明）。 */
         if (!nextEnabled && prevEnabled && App.isSubLassoTool(this.currentToolGuess())) {
+            if (selfSwitched) {
+                console.log('[主开关] 关闭：本次由工具键发起（已自行切工具）⇒ 不抢切套索');
+                return;
+            }
             console.log('[主开关] 关闭时当前是「' + App.toolRefLabel(this.currentToolGuess()) + '」⇒ 切回套索工具');
             await this.selectLassoTool();
         }
@@ -3345,6 +3439,23 @@ class App extends React.Component<AppProps, AppState> {
      *    那是「.8li 没装/没就绪」的真实提示，不该延迟。
      */
     private static readonly SMOOTH_DISCONNECT_GRACE_MS = 2500;
+
+    /**
+     * 按 H（主开关热键）时仍需「回到普通套索」的四个选区工具（2026-11-16 用户要求）：
+     * 多边形套索 / 磁性套索 / 矩形选框 / 椭圆选框。
+     *
+     * 用途只有一处 —— 工具模式下 H 是「只开不关」，开着时按 H 不产生状态翻转，
+     * 因此要靠这张名单判断「现在停在一个不是普通套索的选区工具上，要不要拉回来」。
+     * ⛔ 名单必须与 HotkeyBridge 的 `FILL_TOOL_GROUP` 保持一致（同一组五个工具，
+     *    去掉第一个 lassoTool）。⛔ 只收这四个：画笔等「其它工具」在名单外，
+     *    因为那时「自动关」早已把总开关关掉，走的是另一条（关→开）路径。
+     */
+    private static readonly LASSO_RETURN_TOOLS = [
+        'polySelTool',          // 多边形套索
+        'magneticLassoTool',    // 磁性套索
+        'marqueeRectTool',      // 矩形选框
+        'marqueeEllipTool',     // 椭圆选框
+    ];
 
     // 判定某个工具是否属于「其它工具」（主开关开启时切到它就自动关）。
     // 名单之外再按关键词兜底：绘制类工具的内部 ID 在不同 PS 版本下会变（混合器画笔就有
@@ -4155,7 +4266,12 @@ title={helpTexts.selectionFill.blendMode}>
                         <div className={this.state.isSmoothOptionsExpanded ? 'collapse-icon-expanded' : 'collapse-icon'}>
                             <ExpandIcon expanded={this.state.isSmoothOptionsExpanded} />
                         </div>
-                        <span className="label-4">选区平滑</span>
+                        <span className="label-6">套索选区平滑</span>
+                        {/* ⛔ 2026-11-16 用户要求：标题从「选区平滑」改为「套索选区平滑」——
+                            这条平滑只作用在**套索类**工具的绘制轨迹上（下方「选区改造」才作用
+                            在已生成的掩码上），旧标题容易被理解成「对任何选区都平滑」。
+                            ⚠️ 字数从 4 变 6 ⇒ 宽度档必须同步从 label-4(47px) 换到
+                               label-6(73px)（铁律 107：按字数选档，否则文字溢出压到右侧开关）。 */}
                         {/* ⛔⛔ 2026-10-23 用户要求：套索平滑总开关从内容区状态条**挪到分区标题右侧**
                             —— 常态不再占「状态条 32px + 间距 8px」的一整行，省纵向空间。
                             开关语义与原状态条里那颗完全一致（下方注释整体搬迁）：

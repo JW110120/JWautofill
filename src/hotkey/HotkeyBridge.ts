@@ -30,8 +30,14 @@ export interface HotkeyEntry {
   //   altTool     工具模式「临时吸管」按住键（切吸管 / 松手切回套索，2026-10-28 新增）
   //   pickColor   前景色拾色器（呼出 PS 原生拾色器并写回前景色，2026-10-29 新增）
   //   blendHotkey 混合模式热键总开关（combo 非空=开；.8li 见之装载内置 Alt+Shift 表）
+  //   fillToolCycle 五个选区工具循环（默认 Shift+H，保证主开关开启，2026-11-16 新增）
+  //   focusMarquee 工具模式「矩形选框工具」键（默认 M，关主开关 + 切矩形选框）
+  //   marqueeCycle 选框组循环（默认 Shift+M，矩形 ↔ 椭圆，关主开关）
   action: 'toggleMain' | 'applyBrush' | 'runFunc' | 'focusLasso' | 'focusClear' | 'altTool' | 'pickColor' | 'blendHotkey'
-        | 'lassoCycle';   // 套索组循环（默认 Shift+L，2026-11-16 新增）
+        | 'lassoCycle'       // 套索组循环（默认 Shift+L，2026-11-16 新增）
+        | 'fillToolCycle'    // 五工具循环（默认 Shift+H，2026-11-16 新增）
+        | 'focusMarquee'     // 矩形选框工具键（默认 M，2026-11-16 新增）
+        | 'marqueeCycle';    // 选框组循环（默认 Shift+M，2026-11-16 新增）
   brush?: string;                // applyBrush 时的笔刷名（PS 预设名，需精确匹配）。
                                   // 注意：不支持同名笔刷——PS 按 _name 只会选中 Brushes 列表最上方那支。
                                   // runFunc 时复用本字段承载功能 id（见 funcHotkeyDefs.ts），
@@ -481,7 +487,11 @@ function emitAltHold(on: boolean) {
    证据：`docs/lnp-ps64-reverse-2026-10-16.md` 记录的 PS 二进制硬编码工具表
    `paintbrushTool / pencilTool / cloneStampTool / eraserTool / magneticLassoTool /
     lassoTool / polySelTool / eyedropperTool …`。 */
-export type ToolRef = 'lassoTool' | 'polySelTool' | 'magneticLassoTool' | 'eyedropperTool';
+export type ToolRef = 'lassoTool' | 'polySelTool' | 'magneticLassoTool' | 'eyedropperTool'
+  // 2026-11-16 新增（选框组）：椭圆选框 `marqueeEllipTool` 已由真机 `'slct'` 日志实证
+  // （docs/lnp-ps64-reverse-2026-10-16.md 第 515 行）；矩形选框中位名同族 ⇒ `marqueeRectTool`。
+  // ⚠️ 名字错时 `select` 是**静默无效**（不抛错），所以切换函数一律留 warn 日志。
+  | 'marqueeRectTool' | 'marqueeEllipTool';
 export async function selectToolByRef(ref: ToolRef): Promise<boolean> {
   const descriptor: any = {
     _obj: 'select',
@@ -523,7 +533,8 @@ function normalizeEntry(e: any): HotkeyEntry | null {
   if (action !== 'toggleMain' && action !== 'applyBrush' && action !== 'runFunc'
       && action !== 'focusLasso' && action !== 'focusClear' && action !== 'altTool'
       && action !== 'pickColor' && action !== 'blendHotkey'
-      && action !== 'lassoCycle') return null;
+      && action !== 'lassoCycle' && action !== 'fillToolCycle'
+      && action !== 'focusMarquee' && action !== 'marqueeCycle') return null;
   // combo 为空的合法条目：主开关（'' = 已解绑）、笔刷（'' = 已解绑但条目保留在列表，
   // 单击选中后按退格即解绑，与「删除」按钮区分）、工具模式套索键（'' = 工具模式关闭时不装载）、
   // 临时吸管键（'' = 工具模式关闭时不装载）、
@@ -531,7 +542,8 @@ function normalizeEntry(e: any): HotkeyEntry | null {
   // runFunc 空组合键无意义，直接丢弃。
   if (!combo && action !== 'toggleMain' && action !== 'applyBrush' && action !== 'focusLasso'
       && action !== 'focusClear' && action !== 'altTool' && action !== 'blendHotkey'
-      && action !== 'lassoCycle') return null;
+      && action !== 'lassoCycle' && action !== 'fillToolCycle'
+      && action !== 'focusMarquee' && action !== 'marqueeCycle') return null;
   // runFunc 必须携带功能 id（复用 brush 字段），缺了就无法执行，丢弃。
   if (action === 'runFunc' && !brush) return null;
   return { id, combo, action, brush };
@@ -830,6 +842,53 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
     const combo = msg.combo ?? '';
     const target = cycleLassoTool();
     for (const l of hotkeyListeners) { try { l({ combo, action: 'lassoCycle', brush: target, ok: true }); } catch { /* ignore */ } }
+    return;
+  }
+  if (msg.action === 'fillToolCycle') {
+    /* 「切换选区填充」键（默认 Shift+H，2026-11-16）：五个选区工具循环一格，
+       **并且保证主开关开启**（工具模式下 requestMainToggle 只开不关，与清除模式键同一套）。
+       ⛔ 与 Shift+L 的关键差异：这里绝不走「自动关」——
+          用户要求「按切换选区填充切换工具时不触发自动关，总开关始终保证开启」。
+          所以就算工具切到了选框，面板侧也不会关开关（选框不在 AUTO_OFF_TOOLS 里，
+          见 App.isOtherTool；本键更不会主动调 autoTurnOffMain）。
+       ⛔ 顺序：**先切工具，再开开关**。反过来的话，面板的 onMainToggleChanged
+          「关→开且勾了自动切套索」会在工具还没落地时抢着切回套索（那条逻辑服务 H 键，
+          不该覆盖用户刚按下的工具键）。切工具前已在 cycleFillTool 里打了抑制位。 */
+    const combo = msg.combo ?? '';
+    const target = cycleFillTool();
+    const token = 'fillToolCycle|' + (combo || FILL_TOOL_CYCLE_ID) + '|' + Math.floor(Date.now() / 400);
+    void requestMainToggle(token)
+      .then((st: MainToggleState) => {
+        for (const l of hotkeyListeners) { try { l({ combo, action: 'fillToolCycle', brush: target, ok: true, enabled: st.enabled }); } catch { /* ignore */ } }
+      })
+      .catch(() => {
+        /* 开关写失败也要把「已切到哪个工具」告诉面板：工具是真切了，提示不能吞掉。 */
+        for (const l of hotkeyListeners) { try { l({ combo, action: 'fillToolCycle', brush: target, ok: true }); } catch { /* ignore */ } }
+      });
+    return;
+  }
+  if (msg.action === 'focusMarquee' || msg.action === 'marqueeCycle') {
+    /* 「矩形选框工具」(默认 M) / 「切换选框工具」(默认 Shift+M)，2026-11-16。
+       两者语义相同、只有目标工具不同：**切到「原本的选框」并关闭主开关**
+       （用户原话「确保它们都是原本的选框，不会触发自动填充」）。
+       ⛔ 必须**主动关**开关（requestMainToggleOff 幂等），不能指望「自动关」：
+          选框工具既不在 AUTO_OFF_TOOLS 里、也不匹配 brush|eraser|stamp|smudge，
+          自动关这条路对它们完全不会触发。
+       ⛔ 抑制位（noteSelfToolSwitch，在 focusRectMarquee/cycleMarqueeTool 里打）不能少：
+          关开关这一拍面板会执行「当前停在多边/磁性套索 ⇒ 切回普通套索」，
+          那条逻辑会把刚切到的选框拽回套索。 */
+    const combo = msg.combo ?? '';
+    const isRectKey = msg.action === 'focusMarquee';
+    const target = isRectKey ? focusRectMarquee() : cycleMarqueeTool();
+    const token = msg.action + '|' + (combo || (isRectKey ? FOCUS_MARQUEE_ID : MARQUEE_CYCLE_ID))
+      + '|' + Math.floor(Date.now() / 400);
+    void requestMainToggleOff(token)
+      .then((st: MainToggleState) => {
+        for (const l of hotkeyListeners) { try { l({ combo, action: msg.action, brush: target, ok: true, enabled: st.enabled }); } catch { /* ignore */ } }
+      })
+      .catch(() => {
+        for (const l of hotkeyListeners) { try { l({ combo, action: msg.action, brush: target, ok: true }); } catch { /* ignore */ } }
+      });
     return;
   }
   if (msg.action === 'focusClear') {
@@ -1202,10 +1261,239 @@ function cycleLassoTool(): ToolRef {
  *    （`App.selectLassoTool`）、按 L 切回套索、临时吸管松开切回、用户用鼠标点工具栏。
  *    这些都不经过 `cycleLassoTool`，游标就会停在旧的一格上，下一次 Shift+L 直接跳过一格。
  * ⚠️ 传 null（当前工具未知）⇒ 游标置 -1，下一次按键按当时的真实工具重新校准。
+ *
+ * 2026-11-16：本函数升格为**三条工具循环**的统一校准点（套索组 / 五工具组 / 选框组）。
+ * 三组游标各自独立，但都由同一次「面板确认到的真实工具」对齐 —— 面板只调这一个入口
+ * （`App.noteRealTool`），免得哪天多加一组忘了同步而出现「偶发跳一格」。
+ * ⚠️ 某组不含当前工具时该组游标置 -1（下次按键按真实工具重新校准），不是停在旧值。
  */
+export function syncToolCursors(tool: string | null): void {
+  const low = tool ? tool.toLowerCase() : '';
+  const idxOf = (group: ToolRef[]): number =>
+    low ? group.findIndex(r => r.toLowerCase() === low) : -1;
+  const li = idxOf(LASSO_GROUP);       lassoCycleIdx = li >= 0 ? li : -1;
+  const fi = idxOf(FILL_TOOL_GROUP);   fillToolCycleIdx = fi >= 0 ? fi : -1;
+  const mi = idxOf(MARQUEE_GROUP);     marqueeCycleIdx = mi >= 0 ? mi : -1;
+}
+
+/** 旧名保留：套索组循环游标的单独同步（新代码一律用 `syncToolCursors`）。 */
 export function syncLassoCycleCursor(tool: string | null): void {
-  const i = tool ? LASSO_GROUP.indexOf(tool as ToolRef) : -1;
-  lassoCycleIdx = i >= 0 ? i : -1;
+  syncToolCursors(tool);
+}
+
+/* ⛔⛔ 2026-11-16：本模块**自己**切工具时的「抑制位」。
+ *
+ * 场景：新加的两组工具键（Shift+H / M / Shift+M）会在切工具的同时改主开关。
+ * 而 APP 面板的 `onMainToggleChanged` 里有两处「顺手切工具」的既有逻辑：
+ *   ① 关→开且勾了「自动切套索」⇒ 切回套索（这会把 Shift+H 刚切到的工具拽走）；
+ *   ② 开→关且当前停在多边/磁性套索 ⇒ 切回套索（这会把 M / Shift+M 刚切到的选框拽走）。
+ * 两条逻辑本身都对（它们服务的是 H 键与鼠标换工具），但**不该覆盖用户刚按下的工具键**。
+ *
+ * ⇒ 凡本模块主动切工具，先在这里打一记时间戳；面板在 1.5s 内跳过上面两条。
+ * ⚠️ 用时窗而不是布尔位：布尔位一旦漏清就会永久失效（本项目吃过的亏），
+ *    时窗最坏是多一次「没顺手切回套索」，用户下一条命令就会自愈。
+ */
+let selfToolSwitchAt = 0;
+function noteSelfToolSwitch(): void { selfToolSwitchAt = Date.now(); }
+/** 最近 1.5s 内本模块是否自己切过工具（面板据此跳过「顺手切工具」）。 */
+export function hotkeyToolSwitchRecent(ms: number = 1500): boolean {
+  return selfToolSwitchAt > 0 && (Date.now() - selfToolSwitchAt) < ms;
+}
+
+/* ==========================================================================
+   工具模式：新增三组「工具键」（2026-11-16，用户要求）
+   --------------------------------------------------------------------------
+   ① fillToolCycle（默认 Shift+H）「切换选区填充」：五个选区工具按顺序循环 ——
+      套索 → 多边形套索 → 磁性套索 → 椭圆选框 → 矩形选框 → 套索…
+      并按一次就**确保选区填充主开关开启**（工具模式下 requestMainToggle 只开不关）。
+      ⛔ 绝不走「自动关」：用户原话「按切换选区填充这个快捷键切换工具，不会触发
+         自动关开关，自动填充总开关始终保证开启」。
+   ② focusMarquee（默认 M）「矩形选框工具」：切到矩形选框 + **关闭**主开关
+      （确保停在「原本的选框」上，不会触发自动填充）。
+   ③ marqueeCycle（默认 Shift+M）「切换选框工具」：矩形 ↔ 椭圆之间来回，同样关主开关。
+   --------------------------------------------------------------------------
+   三者的共同约定（与 L / Shift+L 完全一致）：
+   · **只在工具模式开启时装载**（combo 非空）；关闭时 combo 置空 ⇒ 不注册、不摘键，
+     PS 原生 M / Shift+M 原样保留；
+   · 用户自定义过的键记忆在 `brush` 字段（工具模式关闭时 combo 为空、记忆不丢）；
+   · 条目必须真实存在于配置里，才会被 `.8li` 的 RegisterHotKey 系统级独占
+     （否则 PS 会同时处理 Shift+M，出现双跳）。
+   ⛔ 三个键的「条目装载」逻辑完全同构 ⇒ 抽成 ToolKeySpec + 一组公共函数，
+      不再复制第三、第四份 ensure/get/set（复制必然漂移）。
+   ========================================================================== */
+export const FILL_TOOL_CYCLE_ID = 'fill_tool_cycle';
+export const DEFAULT_FILL_TOOL_CYCLE_COMBO = 'Shift+H';
+export const FOCUS_MARQUEE_ID = 'marquee_tool';
+export const DEFAULT_FOCUS_MARQUEE_COMBO = 'M';
+export const MARQUEE_CYCLE_ID = 'marquee_cycle';
+export const DEFAULT_MARQUEE_CYCLE_COMBO = 'Shift+M';
+
+/** 五个选区工具的循环顺序（用户指定：套索 → 多边形 → 磁性 → 椭圆选框 → 矩形选框）。 */
+const FILL_TOOL_GROUP: ToolRef[] = [
+  'lassoTool', 'polySelTool', 'magneticLassoTool', 'marqueeEllipTool', 'marqueeRectTool',
+];
+/** 选框组（矩形 ↔ 椭圆，M / Shift+M 的组内循环只有这两格）。 */
+const MARQUEE_GROUP: ToolRef[] = ['marqueeRectTool', 'marqueeEllipTool'];
+
+let fillToolCycleIdx = -1;   // -1 = 未初始化（下一次按键按当前工具校准）
+let marqueeCycleIdx = -1;
+
+interface ToolKeySpec {
+  id: string;
+  action: HotkeyEntry['action'];
+  def: string;
+  /** 记录「哪个面板明确过工具模式状态」⇒ 只有 APP 面板会真正写配置（多面板写护栏）。 */
+  known: boolean;
+  active: boolean;
+  /** 面板上那一行的显示名（提示文案用，与 FuncHotkeyPanel 保持一致）。 */
+  label: string;
+}
+
+const TOOL_KEY_FILL_CYCLE: ToolKeySpec = {
+  id: FILL_TOOL_CYCLE_ID, action: 'fillToolCycle', def: DEFAULT_FILL_TOOL_CYCLE_COMBO,
+  known: false, active: false, label: '切换选区填充',
+};
+const TOOL_KEY_MARQUEE: ToolKeySpec = {
+  id: FOCUS_MARQUEE_ID, action: 'focusMarquee', def: DEFAULT_FOCUS_MARQUEE_COMBO,
+  known: false, active: false, label: '矩形选框工具',
+};
+const TOOL_KEY_MARQUEE_CYCLE: ToolKeySpec = {
+  id: MARQUEE_CYCLE_ID, action: 'marqueeCycle', def: DEFAULT_MARQUEE_CYCLE_COMBO,
+  known: false, active: false, label: '切换选框工具',
+};
+
+/** 确保某条工具键条目存在，并让它只在工具模式开启时处于装载态。 */
+function ensureToolKeyEntry(spec: ToolKeySpec): void {
+  if (!configLoaded || !spec.known) return;
+  const idx = cachedConfig.findIndex(e => e.action === spec.action);
+  const existing = idx >= 0 ? cachedConfig[idx] : undefined;
+  const remembered = (existing && (existing.brush || existing.combo)) || spec.def;
+  const desiredCombo = spec.active ? remembered : '';
+  if (existing && existing.id === spec.id && existing.combo === desiredCombo && existing.brush === remembered) return;
+  const desired: HotkeyEntry = { id: spec.id, combo: desiredCombo, action: spec.action, brush: remembered };
+  const next = idx >= 0 ? cachedConfig.map((e, i) => (i === idx ? desired : e)) : [...cachedConfig, desired];
+  cachedConfig = next;
+  pushConfig(next);
+}
+
+function setToolKeyActive(spec: ToolKeySpec, on: boolean): void {
+  spec.known = true;
+  spec.active = on;
+  ensureToolKeyEntry(spec);
+}
+
+/** 当前生效键（工具模式关闭时返回记忆值，供面板显示）。 */
+function readToolKeyCombo(spec: ToolKeySpec): string {
+  const e = cachedConfig.find(x => x.action === spec.action);
+  return e?.brush || e?.combo || spec.def;
+}
+
+/** 重绑（自定义快捷键子面板用）：同时更新生效值 combo 与记忆值 brush。 */
+function writeToolKeyCombo(spec: ToolKeySpec, combo: string, active: boolean): void {
+  if (!configLoaded) return;
+  const remembered = combo || spec.def;
+  const idx = cachedConfig.findIndex(e => e.action === spec.action);
+  const desired: HotkeyEntry = { id: spec.id, combo: active ? remembered : '', action: spec.action, brush: remembered };
+  const next = idx >= 0 ? cachedConfig.map((e, i) => (i === idx ? desired : e)) : [...cachedConfig, desired];
+  cachedConfig = next;
+  pushConfig(next);
+}
+
+// ——「切换选区填充」键 ——
+export function setFillToolCycleActive(on: boolean): void {
+  setToolKeyActive(TOOL_KEY_FILL_CYCLE, on);
+  fillToolCycleIdx = -1;   // 工具模式翻面就重新校准（用户可能已用鼠标换了工具）
+}
+export function getFillToolCycleCombo(): string { return readToolKeyCombo(TOOL_KEY_FILL_CYCLE); }
+export function setFillToolCycleCombo(combo: string, active: boolean): void {
+  writeToolKeyCombo(TOOL_KEY_FILL_CYCLE, combo, active);
+}
+
+// ——「矩形选框工具」键 ——
+export function setFocusMarqueeActive(on: boolean): void {
+  setToolKeyActive(TOOL_KEY_MARQUEE, on);
+}
+export function getFocusMarqueeCombo(): string { return readToolKeyCombo(TOOL_KEY_MARQUEE); }
+export function setFocusMarqueeCombo(combo: string, active: boolean): void {
+  writeToolKeyCombo(TOOL_KEY_MARQUEE, combo, active);
+}
+
+// ——「切换选框工具」键 ——
+export function setMarqueeCycleActive(on: boolean): void {
+  setToolKeyActive(TOOL_KEY_MARQUEE_CYCLE, on);
+  marqueeCycleIdx = -1;
+}
+export function getMarqueeCycleCombo(): string { return readToolKeyCombo(TOOL_KEY_MARQUEE_CYCLE); }
+export function setMarqueeCycleCombo(combo: string, active: boolean): void {
+  writeToolKeyCombo(TOOL_KEY_MARQUEE_CYCLE, combo, active);
+}
+
+/**
+ * 切到指定工具（**无条件发一条 `select`**，只做失败留痕）。
+ *
+ * ⛔⛔ 为什么不像 `selectLassoIfStrayed()` 那样「已经是目标工具就跳过」（0x0235 的反面）：
+ *    这里的键与 PS **原生键同组**：
+ *      · 裸键 `M` 不被我们吞（裸字母走钩子/轮询，PS 前台时钩子收不到）⇒ PS 会**同步**
+ *        把选框组循环一格（矩形 → 椭圆），而我们的 `select` 是**排队**的 ⇒ 永远落在
+ *        PS 之后，于是「无条件发 rect」的结果是确定的「矩形」；
+ *      · 而「已在矩形就跳过」会在 `Shift+M → M` 这种连击里出错：Shift+M 的 select(椭圆)
+ *        还在队列里，PS 已把工具循环回矩形，此刻读到的正是矩形 ⇒ 跳过 ⇒ 队列里的椭圆
+ *        最后落地 ⇒ 用户按了 M 却停在椭圆上。
+ *    ⇒ 结论：本键必须在**每次按键**都发一条明确的目标命令（命令 FIFO 保证最后一格是
+ *      用户最后按下的那个键），这也是「确保它们都是原本的选框」的字面要求。
+ *    ⚠️ 代价只有一条幂等命令，不会吞笔（切工具本身仍会终止笔画，这是 PS 的行为，
+ *      与本函数的写法无关）。
+ */
+function switchToolTo(target: ToolRef, tag: string): void {
+  void selectToolByRef(target).then(ok => {
+    if (!ok) console.warn('[' + tag + '] 切换失败（' + target + '）：引用名可能不被当前 PS 版本接受');
+  });
+}
+
+/**
+ * 五工具循环一格（Shift+H 命中时调用）。
+ * ⛔ 循环顺序固定为 FILL_TOOL_GROUP（用户指定），不读工具栏图标顺序 —— 选框与套索
+ *    在工具栏里分属两个组，没有「自然顺序」可言，只能按需求写死一份。
+ */
+function cycleFillTool(): ToolRef {
+  if (fillToolCycleIdx < 0) {
+    const cur = readToolIdSync();
+    const i = cur ? FILL_TOOL_GROUP.findIndex(r => r.toLowerCase() === cur.toLowerCase()) : -1;
+    fillToolCycleIdx = i >= 0 ? i : 0;
+  }
+  fillToolCycleIdx = (fillToolCycleIdx + 1) % FILL_TOOL_GROUP.length;
+  const target = FILL_TOOL_GROUP[fillToolCycleIdx];
+  console.log('[选区填充工具循环] ⇒ ' + target);
+  noteSelfToolSwitch();
+  switchToolTo(target, '选区填充工具循环');
+  return target;
+}
+
+/**
+ * 选框组循环一格（Shift+M 命中时调用）：矩形 ↔ 椭圆。
+ * ⚠️ 当前工具不在选框组里时（未知 / 停在套索上）从**椭圆**起步：
+ *    用户按 M 已经落到矩形（矩形选框工具键），紧接着按 Shift+M 的意图就是「换另一个」。
+ */
+function cycleMarqueeTool(): ToolRef {
+  if (marqueeCycleIdx < 0) {
+    const cur = readToolIdSync();
+    marqueeCycleIdx = (cur && cur.toLowerCase() === 'marqueeellipTool') ? 1 : 0;
+  }
+  marqueeCycleIdx = (marqueeCycleIdx + 1) % MARQUEE_GROUP.length;
+  const target = MARQUEE_GROUP[marqueeCycleIdx];
+  console.log('[选框组循环] ⇒ ' + target);
+  noteSelfToolSwitch();
+  switchToolTo(target, '选框组循环');
+  return target;
+}
+
+/** 工具模式「矩形选框工具」键：强制落到矩形选框（不循环 —— 用户要的就是「原本的矩形选框」）。 */
+function focusRectMarquee(): ToolRef {
+  const target: ToolRef = 'marqueeRectTool';
+  marqueeCycleIdx = 0;      // 已落到矩形 ⇒ 组内游标同步（下一次 Shift+M 去椭圆）
+  noteSelfToolSwitch();
+  switchToolTo(target, '矩形选框工具键');
+  return target;
 }
 
 /** 是否已连上守护进程（菜单里「设置主开关快捷键」需要据此给出提示）。 */

@@ -253,7 +253,8 @@ export interface AppState {
      * 「自定义快捷键」里**与 APP 面板相关**的按键即时反馈（null = 没有反馈可显示）。
      * 2026-11-16 用户要求：这类提示 **统一显示在 APP 面板「选区平滑」分区上方**，
      * 不再混在绘画工具箱「笔刷热键」分区底部那条通用 notify 里。
-     * 覆盖的动作：toggleMain / focusLasso / lassoCycle / focusClear /
+     * 覆盖的动作：toggleMain / focusLasso / lassoCycle / fillToolCycle（切换选区填充）/
+     * focusMarquee（矩形选框工具）/ marqueeCycle（切换选框工具）/ focusClear /
      * 切换填充模式 / 混合模式热键（见 app.tsx 的 unsubHotkeyTrigger）。
      * ⚠️ 不进持久化 watchedKeys（瞬时提示，重载后无意义）。
      */

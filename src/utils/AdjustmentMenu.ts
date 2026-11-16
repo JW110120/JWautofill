@@ -3,6 +3,7 @@
  */
 
 import { openPluginDoc } from './openDocs';
+import { updatePanelMenuItem } from './panelMenu';
 
 export class AdjustmentMenu {
   private static visibilityPanelCallback: ((visible: boolean) => void) | null = null;
@@ -12,6 +13,10 @@ export class AdjustmentMenu {
   private static alphaSampleCallback: (() => void) | null = null;
   private static repairKeyboardCallback: (() => void) | null = null;
   private static showFuncHotkeyPanelCallback: (() => void) | null = null;
+  private static toggleHotkeyNotifyCallback: (() => void) | null = null;
+
+  /** 本面板的 UXP 面板 id（动态改菜单文案要用；与 MenuManager.setup 里的一致）。 */
+  private static readonly PANEL_ID = "com.listen2me.pixeladjustment";
 
   constructor() {
     // Constructor
@@ -28,6 +33,7 @@ export class AdjustmentMenu {
     onAlphaSample: () => void;
     onRepairKeyboard: () => void;
     onShowFuncHotkeyPanel?: () => void;
+    onToggleHotkeyNotify?: () => void;
   }) {
     this.visibilityPanelCallback = callbacks.onToggleVisibilityPanel;
     this.collapseCallback = callbacks.onToggleAllCollapse;
@@ -36,6 +42,18 @@ export class AdjustmentMenu {
     this.alphaSampleCallback = callbacks.onAlphaSample;
     this.repairKeyboardCallback = callbacks.onRepairKeyboard;
     this.showFuncHotkeyPanelCallback = callbacks.onShowFuncHotkeyPanel ?? null;
+    this.toggleHotkeyNotifyCallback = callbacks.onToggleHotkeyNotify ?? null;
+  }
+
+  /**
+   * 同步「显示热键通知」菜单项文案（「显示热键通知 - 开 / 关」）。
+   * 与 APP 面板同名项共用 HotkeyNotifyBus 里的同一个偏好，但**各写各自的菜单项**
+   * （UXP 菜单项 id 全局唯一，两个面板不能共用一个 id）。
+   */
+  public static setHotkeyNotifyLabel(on: boolean): void {
+    updatePanelMenuItem(this.PANEL_ID, "toolboxHotkeyNotify", {
+      label: `显示热键通知 - ${on ? "开" : "关"}`
+    });
   }
 
   /**
@@ -52,6 +70,11 @@ export class AdjustmentMenu {
       case "resetOrder":
         if (this.resetCallback) {
           this.resetCallback();
+        }
+        break;
+      case "toolboxHotkeyNotify":
+        if (this.toggleHotkeyNotifyCallback) {
+          this.toggleHotkeyNotifyCallback();
         }
         break;
       case "showVisibilityPanel":

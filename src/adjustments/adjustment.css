@@ -169,6 +169,15 @@
   margin: 10px 2px 6px;
 }
 
+/* 「自定义快捷键」的分块分隔线（2026-11-16 第二轮）：
+   ⛔ 这里**故意不再有** .func-group-sep —— 上一版用 `border-top + currentColor + opacity .16`
+      自绘，用户对比后要求「改成绘画工具箱折叠分区内那条实线分割线的样式：两端与容器
+      左右边框重合、颜色与边框一致、随主题变化」。
+   ⇒ 现在直接复用通用 `.divider`（common.css：1px `background-color: var(--border-color)`）
+      搭配 `.border-panel-section .divider`（宽度补成 calc(100% + 20px)、左右各 -10px）
+      ⇒ 两端正好压住卡片左右边框，颜色与边框同源，三档主题自动适配。
+      一份样式两处复用，不必再维护第二套，也不会出现「半透明线压在卡片底色上」的色差。 */
+
 /* 「功能快捷键」遮罩：去掉通用 .float-overlay 的 10px 内边距，让子面板铺满整个面板。
    ⚠️ 两级类：遮罩底色/几何来自 .float-overlay（common.css 静态 <link>）与 theme.ts
       **运行时**注入的 .float-overlay 规则（adjustment.css 也走 style-loader 运行时注入，
