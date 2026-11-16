@@ -46,13 +46,14 @@ export class AdjustmentMenu {
   }
 
   /**
-   * 同步「显示热键通知」菜单项文案（「显示热键通知 - 开 / 关」）。
-   * 与 APP 面板同名项共用 HotkeyNotifyBus 里的同一个偏好，但**各写各自的菜单项**
-   * （UXP 菜单项 id 全局唯一，两个面板不能共用一个 id）。
+   * 同步「热键通知」菜单项文案（「热键通知 - 开 / 关」）。
+   * ⛔ 2026-11-16 第二轮：本面板与 APP 面板**各自一份偏好**（HotkeyNotifyBus 的
+   *    scope='toolbox' / 'app'），互不共享；这里只写本面板自己的菜单项。
+   *    （UXP 菜单项 id 全局唯一，两个面板也不能共用一个 id。）
    */
   public static setHotkeyNotifyLabel(on: boolean): void {
     updatePanelMenuItem(this.PANEL_ID, "toolboxHotkeyNotify", {
-      label: `显示热键通知 - ${on ? "开" : "关"}`
+      label: `热键通知 - ${on ? "开" : "关"}`
     });
   }
 

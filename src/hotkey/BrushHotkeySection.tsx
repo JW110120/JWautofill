@@ -17,7 +17,7 @@ import BrushSelect, { BrushSelectOption } from './BrushSelect';
 import { helpTexts } from '../constants/helpTexts';
 import { getFuncHotkeyLabel } from './funcHotkeyDefs';
 import { runWhenIdle, isPsBusy, psBusyRemain } from '../utils/psProbe';
-// 2026-11-16：「显示热键通知」总开关（关闭后热键触发的反馈一条都不显示，降低干扰）。
+// 2026-11-16：「热键通知」开关（**绘画工具箱独占一份**，scope='toolbox'）。
 // ⛔ 只挡**热键触发**这一类消息；录制进度、刷新结果等操作反馈不受影响。
 import { hotkeyNotifyOnSync } from '../utils/HotkeyNotifyBus';
 
@@ -172,10 +172,11 @@ export default function BrushHotkeySection() {
     // 热键触发即时反馈：用户按快捷键后面板直接显示是否命中、切换是否成功
     // （这是诊断「按了快捷键没反应」的关键观测点：无任何显示 = 事件根本没到达面板）
     const unsubHotkey = onHotkeyTriggered((info) => {
-      /* ⛔ 2026-11-16 用户要求：「显示热键通知」关掉后不再显示热键触发的通知。
-         判据同步读共享缓存（菜单在另一个面板里点，值经 HotkeyNotifyBus 轮询同步过来）。
-         ⚠️ 位置在**最外层**：切笔刷与跑功能按钮两路一起挡，不要只挡其中一路。 */
-      if (!hotkeyNotifyOnSync()) return;
+      /* ⛔ 2026-11-16 用户要求：「热键通知」关掉后不再显示热键触发的通知。
+         判据同步读**本面板**（scope='toolbox'）的缓存（菜单就在本面板的右上角菜单里点）。
+         ⚠️ 位置在**最外层**：切笔刷与跑功能按钮两路一起挡，不要只挡其中一路。
+         ⛔ 与选区填充面板那份互不影响：那边静默不代表这边也静默。 */
+      if (!hotkeyNotifyOnSync('toolbox')) return;
       if (info.action === 'applyBrush') {
         showMessage(info.ok
           ? ('热键触发：' + (info.combo ? info.combo + ' → ' : '') + '已切换笔刷「' + info.brush + '」')

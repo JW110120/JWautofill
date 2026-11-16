@@ -1978,6 +1978,25 @@ body.visibility-panel-open #pixeladjustment .pixeladjustment-root > .panel {
   background-color: var(--hover-bg);
 }
 
+/* 通用折叠分区标题 **按下态**（2026-11-16 用户要求：按下要有比 hover 更明显的反馈）。
+   取值完全对齐总开关 `.main-button:active` —— `--button-down` 底色 + `scale(0.98)`，
+   四档主题里 `--button-down` 都比 `--bg-color` 深一档，所以不需要额外分主题适配。
+   ⚠️ 为什么在 :active 里重写 transition：基础规则的 `transition: background-color 0.3s`
+      是给 hover 用的慢淡入淡出；按下要的是「立刻变深」，300ms 的淡入在快速点击里根本
+      看不见（手指按下-抬起往往 <150ms）。这里把**进入**方向压到 60ms，松手后仍按基础
+      规则的 0.3s 淡出，观感是「按下很脆、回弹很柔」。
+   ⚠️ 缩放沿用 0.98（与 .main-button 一致，别调更狠）：本行是整条全宽（高 ≈36px），
+      0.98 纵向只缩 0.4px、横向约 5px，露出的是分区自身的 `--bg-color` ⇒ 没有空隙感；
+      ⛔ 压到 0.95 以下会让标题文字和折叠箭头明显位移，看起来像抖了一下。
+   ⚠️ 标题右侧的开关（.collapse-header-control）自带 stopPropagation，只挡点击、挡不了
+      :active ⇒ 拨开关时整条标题也会一起按下。这是刻意保留的：它同样是「点了这一行」
+      的反馈，且 60ms 一闪而过，不会与开关自身的拨动动画打架。 */
+.collapse-header:active {
+  background-color: var(--button-down);
+  transform: scale(0.98);
+  transition: background-color 0.06s ease-out, transform 0.06s ease-out;
+}
+
 /* 通用圆形图标按钮 hover */
 .circle-button:hover {
   background: var(--hover-bg);

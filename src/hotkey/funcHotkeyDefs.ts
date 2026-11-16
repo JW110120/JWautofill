@@ -49,6 +49,40 @@ export const FUNC_HOTKEY_DEFS: FuncHotkeyDef[] = [
 /** 分组展示顺序（未列出的分区按 defs 出现顺序排在后面；主开关「选区填充」行固定在该组最上方）。 */
 export const FUNC_HOTKEY_SECTION_ORDER = ['选区填充', '快捷操作', '细节调整', '边缘处理'];
 
+/**
+ * 「功能快捷键」子面板里的**分隔线位置**（2026-11-16 用户要求）：
+ * 位置与折叠分区内功能按钮之间的分割线**一一对应**，样式也相同
+ * （该实线的地方实线，该虚线的地方虚线）。
+ *
+ * key = 功能 id，value = 该行**下方**那条线的样式；未列出的行下方不画线。
+ * ⚠️ 判据来自 AdjustmentPanel 里各分区内容函数的真实结构，改那边布局就要同步这里：
+ *    · 快捷操作（renderQuickActionContent）：分块平均 ─实线─ 分块渐变 ─实线─
+ *      浅线/深线同层补色（同一行）─**虚线**─ 分层补色 ─实线─ 特殊木刻 ─实线─
+ *      扣除纯白/纯黑（同一行）─实线─ alpha 三联（下/上同一行、众单独一行，三联内部无线）。
+ *    · 细节调整（renderDetailAdjustContent）：像素过渡 / 梯度修改 / 特殊锐化 / 高频增强
+ *      两两之间各一条实线。
+ *    · 边缘处理（renderEdgeProcessingContent）：边缘平滑 ─实线─ 消除锯齿+线条加黑（同一行）
+ *      ─实线─ 极值微调（提升下极值/削弱上极值 同一行）。
+ * ⛔ 同一行里的两颗按钮在子面板里是两行快捷键，**两者之间不画线** —— 否则会把
+ *    「一个操作组」切碎，与真实面板的视觉分组对不上。
+ */
+export const FUNC_HOTKEY_DIVIDERS: Record<string, 'solid' | 'dashed'> = {
+  // 快捷操作
+  blockAverage: 'solid',
+  blockGradient: 'solid',
+  patchDarkLine: 'dashed',
+  patchLayered: 'solid',
+  woodcut: 'solid',
+  knockoutBlack: 'solid',
+  // 细节调整
+  pixelTransition: 'solid',
+  gradientModify: 'solid',
+  specialSharpen: 'solid',
+  // 边缘处理
+  edgeSmooth: 'solid',
+  lineEnhance: 'solid',
+};
+
 /** 功能 id → 显示名（未知 id 原样返回，避免提示里出现 undefined）。 */
 export function getFuncHotkeyLabel(id: string): string {
   return FUNC_HOTKEY_DEFS.find(d => d.id === id)?.label || id;

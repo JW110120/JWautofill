@@ -298,7 +298,15 @@ body.compact-app #app .app-root > .panel > .panel-section .row-grid-fit .grid-ce
 
 #app .smooth-mode-trio > .radio-option {
   flex: 1 1 0;
-  height: 26px;
+  /* ⚠️ 26px → 28px（2026-11-16 用户要求：「标准/拉绳/追笔」文字下边缘到容器下边缘的距离
+     要等于上边缘到上边缘的距离，也就是下面太挤、要加大）。
+     成因：文字是 align-items:center 居中的，但汉字墨迹在 13px 行盒里天然偏下约 1px，
+     26px 时实测上缝 6px / 下缝 5px ⇒ 看起来贴着下边缘。
+     ⛔ 为什么只改高度、不加 padding：这个盒子**上下不对称**（选中格底边宽度为 0、
+        未选中的只有底边），加 padding 会把三种状态各自推歪；而高度 +2 ⇒ 居中后
+        文字自动下移 1px、盒体再向下长 2px ⇒ 上下缝各 +1px 且正好相等（7/7）。
+     想再松一点就继续按 **2px 一档**加，两边的缝会同步变大、始终相等。 */
+  height: 28px;
   box-sizing: border-box;
   justify-content: center;
   background-color: var(--bg-color);

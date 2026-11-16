@@ -21,8 +21,8 @@ import type { Gradient } from '../types/state';
 import './adjustment.css';
 import './adjustment-input.css';
 import { AdjustmentMenu } from '../utils/AdjustmentMenu';
-// 2026-11-16：「显示热键通知」总开关 —— 与 APP 面板菜单里那一项是**同一个偏好**
-// （状态住在 HotkeyNotifyBus 的共享文件里），这里只负责本面板菜单文案的同步。
+// 2026-11-16：「热键通知」开关 —— **本面板（绘画工具箱）独占一份**（scope='toolbox'）。
+// 与 APP 面板菜单里那一项**互不相干**（两块面板各一个文件、各管各的显示点）。
 import { subscribeHotkeyNotify, toggleHotkeyNotify } from '../utils/HotkeyNotifyBus';
 import { ExpandIcon, AddIcon, DeleteIcon, SyncIcon } from '../styles/Icons';
 import { PanelStateManager } from '../utils/PanelStateManager';
@@ -31,6 +31,7 @@ import BrushHotkeySection from '../hotkey/BrushHotkeySection';
 import HotkeyArmSwitch, { HotkeyArmAlert } from '../hotkey/HotkeyArmSwitch';
 import FuncHotkeyPanel from '../hotkey/FuncHotkeyPanel';
 import RangeSlider from '../components/RangeSlider';
+import DashedDivider from '../components/DashedDivider';
 import Select from '../components/Select';
 import ToggleSwitch from '../components/ToggleSwitch';
 import { helpTexts } from '../constants/helpTexts';
@@ -955,21 +956,21 @@ useEffect(() => {
     onShowFuncHotkeyPanel: () => {
       setShowFuncHotkeyPanel(true);
     },
-    /* 「显示热键通知 - 开/关」（2026-11-16 用户要求，位置在「复位分区顺序」下方）：
-       只翻共享偏好 —— 通知本身要不要显示由各显示点同步读 HotkeyNotifyBus 判断，
-       菜单文案由下面那个订阅 effect 统一改写。 */
+    /* 「热键通知 - 开/关」（2026-11-16 用户要求，位置在「复位分区顺序」下方）：
+       只翻**本面板**那份偏好（scope='toolbox'）—— 通知本身要不要显示由各显示点同步读
+       HotkeyNotifyBus 判断，菜单文案由下面那个订阅 effect 统一改写。 */
     onToggleHotkeyNotify: () => {
-      void toggleHotkeyNotify();
+      void toggleHotkeyNotify('toolbox');
     }
   });
 }, [sections]);
 
-/* 「显示热键通知」偏好 → 本面板菜单文案（用户要求两侧文案都是「显示热键通知 - 开/关」）。
-   ⛔ 与 APP 面板各订阅一份：两个面板的 JS 上下文互不可见（见 MainToggleBus 头部说明），
-      靠共享文件 + 轮询对齐，谁点的菜单两边最终都一致。
+/* 「热键通知」偏好（scope='toolbox'）→ 本面板菜单文案（「热键通知 - 开/关」）。
+   ⛔ 与 APP 面板各订阅各的文件：两块面板的 JS 上下文互不可见（见 MainToggleBus 头部说明），
+      且用户 2026-11-16 明确要求**独立管理、不要跨面板共享**。
    ⛔ 订阅器首次 tick 必回调一次 ⇒ 面板打开时文案立刻是真值，不会停在上一次的旧文案上。 */
 useEffect(() => {
-  const unsub = subscribeHotkeyNotify((on) => { AdjustmentMenu.setHotkeyNotifyLabel(on); });
+  const unsub = subscribeHotkeyNotify('toolbox', (on) => { AdjustmentMenu.setHotkeyNotifyLabel(on); });
   return () => { unsub(); };
 }, []);
 
@@ -3709,30 +3710,9 @@ const renderMaskSyncContent = () => (
 );
 
 /** 虚线分割线（同层补色 与 分层补色 之间）。
- *  UXP 对 CSS 背景/边框高级特性支持不可靠（linear-gradient+var() 整条不渲染、
- *  background-repeat: repeat-x 只渲染一次），因此改用纯 DOM 方案：
- *  一段 6px 短线 + 6px 空（12px 周期）的 span 序列 + flex 排列 + overflow 裁剪，
- *  短线颜色读取主题 --border-color。 */
-const DashedDivider: React.FC = () => {
-  const [borderColor, setBorderColor] = useState('rgb(128, 128, 128)');
-  useEffect(() => {
-    try {
-      const bc =
-        (getComputedStyle(document.documentElement).getPropertyValue('--border-color') || '').trim();
-      if (bc) setBorderColor(bc);
-    } catch {
-      // 读取失败：保持默认灰
-    }
-  }, []);
-  // 60 段 × 12px = 720px，足以覆盖任意面板宽度（多余部分被 overflow 裁掉）
-  return (
-    <div className="divider-dashed">
-      {Array.from({ length: 60 }, (_, i) => (
-        <span key={i} className="divider-dashed-dash" style={{ backgroundColor: borderColor }} />
-      ))}
-    </div>
-  );
-};
+ *  2026-11-16：实现抽到 components/DashedDivider.tsx —— 「功能快捷键」子面板要按
+ *  「与折叠分区内相同的样式」画分隔线（该实线的实线、该虚线的虚线），两处共用一份，
+ *  免得虚线周期/颜色/不透明度各写一套、以后改一处漏一处。 */
 
 // 扣除纯白 / 扣除纯黑（batchPlay 版，替代原像素级算法）：
 // 复刻手动验证的方案 —— 载入 RGB 复合通道亮度选区（Ctrl+点击）→ Delete 清除亮部

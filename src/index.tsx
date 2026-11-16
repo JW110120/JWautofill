@@ -76,6 +76,11 @@ if (pixelAdjustmentContainer) {
 // 渲染特制笔刷应用（第三个入口）。与上面两个面板同源同栈，只是挂在另一个
 // <uxp-panel panelid="com.listen2me.brushstudio"> 里 —— UXP 只显示当前入口的 DOM，
 // 所以三个面板可以共用一份 bundle，不必拆多份 html。
+// ⛔⛔ 2026-11-16 用户要求：**「特制笔刷」入口暂时关闭（暂停开发）**。
+//    做法是删掉 manifest.json 里 com.listen2me.brushstudio 那个 entrypoint ——
+//    PS 不再在「增效工具」里列出这块面板，本文件与 brushstudio/ 的代码全部保留。
+//    要重新开放：把那条 entrypoint（panel id + 标签 + 尺寸 + 两个图标）加回
+//    manifest.json 的 entrypoints 数组尾部即可，本段渲染逻辑无需改动。
 // ⚠️ Provider 的 height="100%" 不能省：理由同上（百分比高度链断掉会让列表不滚动）。
 const brushStudioContainer = document.getElementById('brushstudio');
 if (brushStudioContainer) {

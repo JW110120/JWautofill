@@ -46,18 +46,19 @@ const APP_MENU_ITEMS: MenuItemDef[] = [
     label: "紧凑模式 - 关"
   },
   {
-    /* 「显示热键通知」总开关（2026-11-16 用户要求）：
-       关掉后不再显示热键触发的通知（降低干扰），默认开启。
-       状态住在 HotkeyNotifyBus 的共享文件里（两个面板共用同一个偏好），
-       文案由 setHotkeyNotifyLabel 实时改写 → 「显示热键通知 - 开 / 关」。
+    /* 「热键通知」开关（2026-11-16 用户要求）：
+       关掉后本面板不再显示热键触发的通知（降低干扰），默认开启。
+       状态住在 HotkeyNotifyBus 的 **scope='app'** 那一份文件里（2026-11-16 第二轮：
+       两块面板独立管理，不再共享 —— 工具箱是 toolbox 那份，互不影响）。
+       文案由 setHotkeyNotifyLabel 实时改写 → 「热键通知 - 开 / 关」。
        ⚠️ id 与绘画工具箱的同名项（toolboxHotkeyNotify）必须不同：
           UXP 菜单项 id 全局唯一，重名会让 entrypoints.setup 直接抛错、整个面板起不来。 */
     id: "appHotkeyNotify",
-    label: "显示热键通知 - 开"
+    label: "热键通知 - 开"
   },
   {
     id: "spacerApp1",
-    label: "-" // 分隔符（紧凑模式 / 显示热键通知 与「参数复位」之间）
+    label: "-" // 分隔符（紧凑模式 / 热键通知 与「参数复位」之间）
   },
   {
     // 「参数复位」自成一组（2026-11-16 用户要求「参数复位和填充设置需要分开」）：
@@ -111,25 +112,22 @@ const ADJUSTMENT_MENU_ITEMS: MenuItemDef[] = [
     label: "复位分区顺序"
   },
   {
-    /* 「显示热键通知」总开关（2026-11-16 用户要求）：与 APP 面板 MenuManager 的
-       appHotkeyNotify 是**同一个偏好**（HotkeyNotifyBus 共享文件），只是入口位置不同
-       —— 用户要求「工具箱这边放在复位分区顺序下方」。
+    /* 「热键通知」开关（2026-11-16 用户要求）：位置在「复位分区顺序」下方。
+       ⛔ 2026-11-16 第二轮：**本面板独占一份偏好**（HotkeyNotifyBus 的 scope='toolbox'），
+          与 APP 面板那条 appHotkeyNotify 互不影响 —— 用户明确要求「独立管理，不跨面板共享」。
        ⚠️ id 必须与 APP 面板那条不同（UXP 菜单项 id 全局唯一）。 */
     id: "toolboxHotkeyNotify",
-    label: "显示热键通知 - 开"
+    label: "热键通知 - 开"
   },
   {
     id: "spacer1",
-    label: "-" // 分隔符（「布局类」折叠/显示/排序 与 后续功能项 之间）
+    label: "-" // 分隔符（「布局类」折叠/显示/排序/通知 与 后续功能项 之间）
   },
-  {
-    id: "alphaSample",
-    label: "图层像素alpha采样"
-  },
-  {
-    id: "spacer2",
-    label: "-" // 分隔符（图层像素alpha采样 与 参数复位 之间）
-  },
+  /* ⛔ 2026-11-16 用户要求：以下两项**暂时从菜单隐藏**，代码全部保留
+     （回调注册、AdjustmentMenu 的分派分支、以及各自实现都还在，改回菜单只是加回数组）：
+       · alphaSample     「图层像素alpha采样」
+       · repairKeyboard  「键盘卡死一键修复」
+     它们是一次性的调试/自救动作，日常用不到，留在菜单里反而容易被误点。 */
   {
     // 「参数复位」自成一组（2026-10-10 用户要求）：它是一次性重写全部参数的
     // 动作，与上面的「折叠 / 隐藏显示 / 复位分区顺序」这类布局操作不同类，
@@ -146,16 +144,8 @@ const ADJUSTMENT_MENU_ITEMS: MenuItemDef[] = [
     label: "功能快捷键"
   },
   {
-    id: "spacer5",
-    label: "-" // 分隔符（功能快捷键 与 键盘卡死一键修复 之间）
-  },
-  {
-    id: "repairKeyboard",
-    label: "键盘卡死一键修复"
-  },
-  {
     id: "spacer4",
-    label: "-" // 分隔符（键盘卡死一键修复 与使用手册 之间）
+    label: "-" // 分隔符（功能快捷键 与使用手册 之间）
   },
   {
     id: "openDocsToolbox",
@@ -303,10 +293,10 @@ export class MenuManager {
     this.updateMenuItem(this.APP_PANEL_ID, "toggleCompactMode", { label });
   }
 
-  /** 同步「显示热键通知」菜单项文案（on → 「显示热键通知 - 开」）。 */
+  /** 同步「热键通知」菜单项文案（on → 「热键通知 - 开」；2026-11-16 去掉了「显示」两字）。 */
   public static setHotkeyNotifyLabel(on: boolean): void {
     this.updateMenuItem(this.APP_PANEL_ID, "appHotkeyNotify", {
-      label: `显示热键通知 - ${on ? "开" : "关"}`
+      label: `热键通知 - ${on ? "开" : "关"}`
     });
   }
 

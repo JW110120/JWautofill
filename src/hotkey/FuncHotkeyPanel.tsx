@@ -13,8 +13,9 @@ import {
 import { helpTexts } from '../constants/helpTexts';
 import { useBlendGuard, blendYieldHint } from './blendGuard';
 import { subscribeFocusMode, peekFocusMode } from '../utils/FocusModeBus';
-import { FUNC_HOTKEY_DEFS, FUNC_HOTKEY_SECTION_ORDER, getFuncHotkeyLabel } from './funcHotkeyDefs';
+import { FUNC_HOTKEY_DEFS, FUNC_HOTKEY_SECTION_ORDER, FUNC_HOTKEY_DIVIDERS, getFuncHotkeyLabel } from './funcHotkeyDefs';
 import ToggleSwitch from '../components/ToggleSwitch';
+import DashedDivider from '../components/DashedDivider';
 
 // 快捷键子面板（**一个组件，两个面板共用**，2026-11-16 扩展）：
 //   scope='toolbox' → 绘画工具箱「功能快捷键」（快捷操作 / 细节调整 / 边缘处理）
@@ -650,10 +651,24 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
           <React.Fragment key={'grp_' + g.title}>
             <div className="func-group-title">{g.title}</div>
             <div className="border-panel-section">
-              {g.defs.map(def =>
-                renderRow('fk_' + def.id, funcEntryOf(def.id)?.combo || '', def.label, def.id,
-                  def.id === 'fillModeCycle' ? helpTexts.funcHotkey.fillModeRow : helpTexts.funcHotkey.rowHint)
-              )}
+              {/* 行 + 行的分隔线（2026-11-16 用户要求）：
+                  位置与折叠分区内功能按钮之间的分割线一一对应、样式也一样
+                  （实线用通用 `.divider`，虚线用 DashedDivider）—— 对照表是
+                  funcHotkeyDefs.ts 的 FUNC_HOTKEY_DIVIDERS，改那边布局就要同步那张表。
+                  ⚠️ 分隔线**跟着行走**放在同一张卡片里：卡片外的线会被卡片边框截断，
+                     两端压不到容器左右边框上（上一轮 APP 侧踩过这个）。 */}
+              {g.defs.map(def => {
+                const row = renderRow('fk_' + def.id, funcEntryOf(def.id)?.combo || '', def.label, def.id,
+                  def.id === 'fillModeCycle' ? helpTexts.funcHotkey.fillModeRow : helpTexts.funcHotkey.rowHint);
+                const sep = FUNC_HOTKEY_DIVIDERS[def.id];
+                if (!sep) return row;
+                return (
+                  <React.Fragment key={'fk_sep_' + def.id}>
+                    {row}
+                    {sep === 'dashed' ? <DashedDivider /> : <div className="divider" />}
+                  </React.Fragment>
+                );
+              })}
             </div>
           </React.Fragment>
         ))}

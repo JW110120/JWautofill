@@ -68,7 +68,7 @@ import { FillModeDir, subscribeFillModeCycle } from './utils/FillModeCycleBus';
 import { subscribeClearModeToggle } from './utils/ClearModeBus';
 import { subscribeBlendMode } from './utils/BlendModeBus';
 import { setFocusMode } from './utils/FocusModeBus';
-// 2026-11-16：「显示热键通知」总开关（两个面板菜单各有一个入口，偏好共享一份）
+// 2026-11-16：「热键通知」开关（**两块面板各管一份**，本面板用 scope='app'）
 import { subscribeHotkeyNotify, hotkeyNotifyOnSync, toggleHotkeyNotify } from './utils/HotkeyNotifyBus';
 import {
   debouncePsProbe, isPsBusy, markPsBusyForEvent, runWhenIdle,
@@ -261,8 +261,8 @@ class App extends React.Component<AppProps, AppState> {
     /** APP 侧热键 notify 的自动消失句柄（与其它瞬时提示一致：5s）。 */
     private appNotifyTimer: any = null;
     /**
-     * 「显示热键通知」开关的订阅器（2026-11-16）：只用于**同步菜单文案**。
-     * 通知本身要不要显示由 `hotkeyNotifyOnSync()` 同步判断（通知函数是同步调用的，
+     * 「热键通知」开关的订阅器（2026-11-16，本面板 scope='app'）：只用于**同步菜单文案**。
+     * 通知本身要不要显示由 `hotkeyNotifyOnSync('app')` 同步判断（通知函数是同步调用的，
      * 等不了 await），这里不必把值搬进 state（搬了反而多一次无意义的重渲染）。
      */
     private unsubHotkeyNotify: (() => void) | null = null;
@@ -901,19 +901,20 @@ class App extends React.Component<AppProps, AppState> {
                 });
             },
             onToggleCompactMode: () => { this.toggleCompactMode(); },
-            /* 「显示热键通知 - 开/关」（2026-11-16）：只翻共享偏好，文案由下面的订阅器
-               统一改写（本面板与绘画工具箱各订阅一份，谁点的都一样）。
-               ⛔ 不复用 toggleCompactMode 那种「改本面板 state」的路子：这个偏好是
-                  **两个面板共用**的（热键通知在两处都有显示点），存 state 就会各说各话。 */
-            onToggleHotkeyNotify: () => { void toggleHotkeyNotify(); },
+            /* 「热键通知 - 开/关」（2026-11-16，第二轮改为**本面板独占**）：只翻 scope='app'
+               这一份偏好，文案由下面的订阅器统一改写。
+               ⛔ 不复用 toggleCompactMode 那种「改本面板 state」的路子：开关值要落盘跨会话，
+                  而且显示点（showAppHotkeyNotify）是同步函数，读不了 React state。
+               ⛔ 也不再与绘画工具箱共享：用户明确要求两个面板独立管理。 */
+            onToggleHotkeyNotify: () => { void toggleHotkeyNotify('app'); },
             onShowAppHotkeys: () => { this.openAppHotkeyPanel(); },
             onShowVisibilityPanel: () => { this.openVisibilityPanel(); },
             onOpenFillSettings: () => { this.openFillSettingsPanel(); }
         });
-        /* 「显示热键通知」偏好：订阅共享文件 ⇒ 同步本面板菜单文案。
+        /* 「热键通知」偏好（scope='app'）：订阅本面板那个文件 ⇒ 同步本面板菜单文案。
            ⛔ 订阅器首次 tick 必定回调一次（内部 last 从 null 起），所以插件重启/热更新后
-              菜单文案不会停在上一次的旧文案上；两个面板互不依赖对方的渲染时机。 */
-        this.unsubHotkeyNotify = subscribeHotkeyNotify((on) => {
+              菜单文案不会停在上一次的旧文案上；与绘画工具箱那一份互不相干。 */
+        this.unsubHotkeyNotify = subscribeHotkeyNotify('app', (on) => {
             MenuManager.setHotkeyNotifyLabel(on);
         });
         this.selectionChangeListener = (eventName, descriptor) => {
@@ -1412,10 +1413,11 @@ class App extends React.Component<AppProps, AppState> {
      *    一条消息只在**用户眼睛当时所在的那块面板**出现，不在两处重复。
      */
     private showAppHotkeyNotify(text: string, ok: boolean) {
-        /* 「显示热键通知」关掉后**一条都不显示**（2026-11-16 用户要求：降低干扰）。
-           ⛔ 判据同步读缓存（hotkeyNotifyOnSync），不 await —— 通知是同步函数，
-              等文件读回来消息早就该过期了；缓存由订阅器在挂载时与每次变化后刷新。 */
-        if (!hotkeyNotifyOnSync()) return;
+        /* 「热键通知」关掉后**本面板一条都不显示**（2026-11-16 用户要求：降低干扰）。
+           ⛔ 判据同步读本面板（scope='app'）的缓存，不 await —— 通知是同步函数，
+              等文件读回来消息早就该过期了；缓存由订阅器在挂载时与每次变化后刷新。
+           ⛔ 与绘画工具箱那一份互不影响：那边静默不代表这边也静默。 */
+        if (!hotkeyNotifyOnSync('app')) return;
         if (this.appNotifyTimer) { clearTimeout(this.appNotifyTimer); this.appNotifyTimer = null; }
         this.setState({ appHotkeyNotify: { text, ok } });
         this.appNotifyTimer = setTimeout(() => {
