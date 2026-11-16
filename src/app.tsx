@@ -1547,9 +1547,9 @@ class App extends React.Component<AppProps, AppState> {
      *
      * 归属（与 smooth_engine.c（.8li 内，原 wintab_hook.c）的 smooth_packets 分支一一对应，勿凭感觉改）：
      *   半径 → **仅「拉绳」**（2026-10-19 用户要求：标准/追笔去掉半径，一个模式一个参数；
-     *           标准/追笔模式下 toWire 固定下发 SMOOTH_RADIUS_MAX 当上限，不截断强度/追笔速度）
+     *           标准/追笔模式下 toWire 固定下发 SMOOTH_RADIUS_MAX 当上限，不截断强度/追笔耗时）
      *   强度 / 尖角保护 / 速度适应 → 仅「标准」（拉绳与追笔都不读 Strength）
-     *   追笔速度 → 仅「追笔」
+     *   追笔耗时 → 仅「追笔」
      *   拉绳提示 → 仅「拉绳」
      *
      * ⚠️ 拉绳提示（HUD）为什么也归到「拉绳」：它画的就是那根绳。标准/追笔模式下
@@ -4336,10 +4336,10 @@ title={helpTexts.selectionFill.blendMode}>
                             盒子里的行集合 = 该模式实际会被原生侧读取的行，一一对应 smooth_engine.c（.8li 内，原 wintab_hook.c）：
                               标准 = 强度 / 尖角保护 / 速度适应
                               拉绳 = 半径 / 拉绳提示
-                              追笔 = 追笔速度
+                              追笔 = 追笔耗时
                             ⛔⛔ 2026-10-19 用户要求：标准/追笔**去掉半径**（一个模式一个参数）。
                               半径仍是原生侧的硬上限，但这两个模式下由 toWire 固定下发
-                              SMOOTH_RADIUS_MAX（不截断强度/追笔速度的满量程），面板不再暴露。
+                              SMOOTH_RADIUS_MAX（不截断强度/追笔耗时的满量程），面板不再暴露。
                             判据统一走 smoothParamApplies()，不在 JSX 里各写 if。
                             ⚠️ 容器用全仓统一的 .border-panel-section（带描边分区盒）；
                               额外的 .smooth-params 只负责把首/末行自带的外边距归零，
@@ -4382,7 +4382,7 @@ title={helpTexts.selectionFill.blendMode}>
                         {/* 半径：**仅「拉绳」模式**显示（2026-10-19 用户要求标准/追笔去掉半径）。
                             它既是拉绳的绳长，也是原生侧三种模式共用的最大滞后硬上限 ——
                             标准/追笔模式下由 toWire 固定下发 SMOOTH_RADIUS_MAX，
-                            强度/追笔速度因此可以满量程发挥，不会被隐藏的上限截断。 */}
+                            强度/追笔耗时因此可以满量程发挥，不会被隐藏的上限截断。 */}
                         {this.smoothParamApplies('radius') && (
                         <div className="row-between">
                             <label
@@ -4421,12 +4421,14 @@ title={helpTexts.selectionFill.blendMode}>
                             （只在 15%~100% 之间缩放圆周半径），两个滑杆互相打架，
                             用户明确要求「去掉张力这个参数」。绳长现在恒等于半径。 */}
 
-                        {/* 追笔速度：仅「追笔」模式有效；其余模式整行隐藏。
+                        {/* 追笔耗时：仅「追笔」模式有效；其余模式整行隐藏。
                             ⛔ 2026-10-14 重映射：显示量程 1–100，**数值越大 = 平滑力度越大**
                                （与其它模式一致）。下发时由 LassoSmoothing 的
                                `catchUpToNative()` 反向映射到原生 1–50（1→50、100→1）。
                             ⚠️ 2026-10-19 标签「追笔」→「追笔速度」（用户要求）：与模式名区分，
                                数值方向不变（越大越强），语义见 helpTexts.selectionFill.smoothCatchUp。
+                           ⚠️ 2026-11-16 标签「追笔速度」→「追笔耗时」+ 单位 %→「值」（用户要求）：
+                               仍是 4 字 ⇒ .label-4 字盒不变；数值方向仍不变（越大越耗时=越黏）。
                            ⚠️ 2026-10-23 标签 4 个字 ⇒ 字盒按前端规范走 .label-4
                               （W(n)=20+(n-2)×13.3，4 字=47px，与「速度适应」「拉绳提示」同档）；
                               滑块 .slider-track 是 flex:1 1 auto，标签变宽后自动相应缩短，无需额外 CSS。 */}
@@ -4436,7 +4438,7 @@ title={helpTexts.selectionFill.blendMode}>
                                 className="label-drag label-4"
                                 onMouseDown={(e) => this.handleLabelMouseDown(e, 'smooth:catchUp')}
                                 title={helpTexts.selectionFill.smoothCatchUp}>
-                                追笔速度
+                                追笔耗时
                             </label>
                             <RangeSlider
                                 min={SMOOTH_CATCHUP_MIN}
@@ -4459,7 +4461,7 @@ title={helpTexts.selectionFill.blendMode}>
                                         title={helpTexts.selectionFill.smoothCatchUpInput}
                                     />
                                 </div>
-                                <span className="num-unit">%</span>
+                                <span className="num-unit">值</span>
                             </div>
                         </div>
                         )}
@@ -4471,7 +4473,7 @@ title={helpTexts.selectionFill.blendMode}>
                             ⛔⛔ 2026-10-14 回退定案：这里曾短暂改成「保护范围」（显示 =
                                90 − 原生阈值，数值越大保护越广）。用户实测后明确要求回退 ——
                                「现在反而更加让人迷惑了」。
-                               理由：面板其它参数（强度 / 追笔速度）**全是「越大越强」**，
+                               理由：面板其它参数（强度 / 追笔耗时）**全是「越大越强」**，
                                唯独拐角被反转成「越大 = 保护越广 = 平滑越少」，方向与全体相反，
                                参数之间比较时极易误判，排障还要多做一次心算。
                             ⇒ 现在**显示值 = 原生转折角阈值**，一一对应、无换算（见

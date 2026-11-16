@@ -88,11 +88,11 @@ export interface LassoSmoothParams {
    *  ⛔ 2026-10-13：原先还有一个「张力」滑杆，只在 15%~100% 之间缩放这个半径 ——
    *    两个参数改的是同一件事（圆周大小），用户实测后要求删除。现在一个参数一个语义。
    *  ⛔⛔ 2026-10-19：标准/追笔模式下 toWire 固定下发 SMOOTH_RADIUS_MAX（见 toWire），
-   *    强度/追笔速度因此满量程生效；本字段在那些模式下只是「切到拉绳时恢复的绳长记忆」。
+   *    强度/追笔耗时因此满量程生效；本字段在那些模式下只是「切到拉绳时恢复的绳长记忆」。
    */
   radius: number;
   /**
-   * 追笔速度「平滑力度」1–100（**显示值**，数值越大 = 平滑越强）。
+   * 追笔耗时「平滑力度」1–100（**显示值**，数值越大 = 平滑越强）。
    * ⚠️ 2026-10-19 标签「追笔」→「追笔速度」（用户要求，与模式名区分）；
    *    数值方向不变（越大越强），帮助文案已同步解释「追赶越慢 = 越黏」。
    *
@@ -141,7 +141,7 @@ export const SMOOTH_RADIUS_MAX = 100;
 /** 追笔「平滑力度」的显示量程（1–100，越大越黏）。原生有效区间见下。 */
 export const SMOOTH_CATCHUP_MIN = 1;
 export const SMOOTH_CATCHUP_MAX = 100;
-/** 原生追笔速度的有效区间（与 smooth_engine.c 的 `vmax = 0.02 + t/100·3.0` 一致）。 */
+/** 原生追笔耗时的有效区间（与 smooth_engine.c 的 `vmax = 0.02 + t/100·3.0` 一致）。 */
 const CATCHUP_NATIVE_MIN = 1;
 const CATCHUP_NATIVE_MAX = 50;
 
@@ -372,7 +372,7 @@ export interface PenSmoothStatus {
    */
   pxNx: number;
   pxNy: number;
-  /** 原生侧回报：追笔速度（**原生单位 1–50**，面板显示值是它的反向映射）。 */
+  /** 原生侧回报：追笔耗时（**原生单位 1–50**，面板显示值是它的反向映射）。 */
   catchUp: number;
   /** 原生侧回报：拐角转折角阈值（**原生单位 0–90**，面板显示值是它的反向映射）。 */
   cornerAngle: number;
@@ -544,7 +544,7 @@ function toWire(p: LassoSmoothParams) {
         strength: Math.round(p.strength),
         // ⛔⛔ 2026-10-19：半径 = **拉绳模式的绳长**；标准/追笔模式面板已去掉该参数
         //   （用户要求「一个模式一个参数」），这两个模式下固定下发 SMOOTH_RADIUS_MAX
-        //   当原生侧的硬上限 —— 否则隐藏的默认值（12px）会把强度/追笔速度的满量程
+        //   当原生侧的硬上限 —— 否则隐藏的默认值（12px）会把强度/追笔耗时的满量程
         //   截断（τ(100)=250ms 在 500px/s 下势能 ≈125px，被 12px 一夹就「强度拉满没感觉」）。
         //   ⚠️ 拉绳模式仍下发用户设定值（绳长 = 半径，语义不变）。
         radius: p.mode === 'rope' ? Math.round(p.radius) : SMOOTH_RADIUS_MAX,

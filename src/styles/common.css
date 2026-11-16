@@ -2391,37 +2391,3 @@ sp-radio[disabled] {
   color: var(--text-color);
   opacity: 0.72;
 }
-
-/* ===== 面板自绘 tooltip（.panel-tip，2026-11-16 · 0x023A）=====================
-   由 src/utils/panelTooltip.ts 运行时创建的单例节点，用来**替代 HTML 原生 `title`
-   提示**（全仓 287 处 title 仍在，只是被 pointerover 捕获阶段摘掉并转到这里显示）。
-   为什么必须替换：PS 2027（28.0）的 UXP 运行时会在「指针从面板移到画布」时
-   漏关宿主自己那块提示窗 —— 它不属于任何面板窗口，会停在屏幕最上层，
-   于是用户画布上凭空挂着一条 helptext。详见该模块头部说明。
-   本层活在面板窗口的 DOM 里 ⇒ 物理上出不了面板，最坏也只是在面板内多留一瞬。
-
-   ⚠️ z-index 必须高于所有面板内浮层：子面板 9999、浮窗 99999 ⇒ 取 100000。
-   ⚠️ pointer-events: none 是硬要求：提示层若吃事件，会把底下控件的 hover / 点击截走
-      （UXP 的命中测试按 Z 序自上而下）。
-   ⚠️ white-space: pre-line 配合文案里的 \n（helpTexts 的分段说明），去掉它就变成一行。 */
-.panel-tip {
-  position: fixed;
-  left: 0;
-  top: 0;
-  display: none;
-  z-index: 100000;
-  max-width: 240px;
-  box-sizing: border-box;
-  padding: 6px 8px;
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-  background-color: var(--bg-color);
-  color: var(--text-color);
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: pre-line;
-  pointer-events: none;
-  user-select: none;
-  opacity: 0.98;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-}

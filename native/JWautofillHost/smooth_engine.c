@@ -1331,14 +1331,16 @@ static volatile LONG g_lastGapMs;    /* 最近一次复位时的取包间隔（m
                                     尖角保护整段不触发（参数与文案说的完全不是一回事）。
                                     取 2.0 而非 1.5：模拟里 1.5px 的方向只剩 ~5° 噪声余量，
                                     阈值调到 10° 时误判明显增多；2.0px 兼顾灵敏与抗噪。 */
-/* τ(强度) 曲线的两个常数：τ = 8ms·(e^(TAU_LN·t/100) − 1)。
-   ⛔ 2026-10-13 第二轮上调：τ(100) 由 100ms 提到 **250ms**（TAU_LN = ln(32.25)）。
-      用户反馈「标准模式强度拉满依然感觉太弱」—— 一阶低通的稳态滞后 = v·τ，
-      100ms 在 500px/s 下只有 50px，而半径默认仅 12px 时还会被整体夹掉。
-      现在 250ms ⇒ 同速度下 ≈125px 的势能（上限仍由半径决定），
-      强度滑杆两端的差别一眼可辨。 */
-#define TAU_BASE_MS       8.0
-#define TAU_LN            3.473500    /* ln(32.25) ⇒ τ(100) = 8·(32.25−1) = 250ms */
+/* τ(强度) = TAU_MAX_MS · t/100 —— **线性**映射（2026-11-16 0x023B 重定）。
+   ⛔ 旧律是指数 τ = 8ms·(e^(3.4735·t/100) − 1)：效果全挤在 75–100 段，
+      低中段几乎是死区 —— 用户实测「强度 1–70 几乎不能感知」。量化：
+      t=30 时 τ 仅 14.7ms（滞后 5.9px）、t=50 仅 37ms（15px）、
+      t=70 才 83ms（33px），而满量程 t=100 是 250ms（100px）。
+      ⇒ 前 70% 的滑杆只贡献了 1/3 的势能，与追笔 0x023A 修前的「中段死区」同类。
+   ⇒ 改成线性：稳态滞后 = v·τ 与强度成正比，t=50 就是半个满量程（125ms≈50px），
+      全程单调可辨。⛔ t=100 仍是 250ms —— 满量程手感逐字不变，只重分布 1–99。
+      与追笔 0x023A 的 τc = 2.2·半径·u 同为线性，两套参数同一设计原则。 */
+#define TAU_MAX_MS        250.0       /* τ(100) = 250ms，与旧律满量程一致 */
 /* 半径 / 绳长上限（屏幕像素）。
    ⚠️ 40 → 100 是用户 2026-10-13 明确要求：他把 PS 自己的平滑只开到 36，
       圆环半径就已接近本 HUD 原上限的两倍，且「体感的平滑效果非常弱」。
@@ -1497,15 +1499,6 @@ static void calib_axis(AXCAL* a, double dAx, double dCur)
 
 static double dsqrt_(double v) { return __builtin_sqrt(v); }
 
-/* e^x（x∈[0,2]）Maclaurin 12 项：相对误差 < 3e-8。
-   ⛔ 刻意不引 libm 的 exp/pow —— 那会多拉一个 api-ms-win-crt-math 依赖。 */
-static double exp_series(double x)
-{
-    double term = 1.0, sum = 1.0;
-    for (int i = 1; i <= 12; i++) { term *= x / (double)i; sum += term; }
-    return sum;
-}
-
 /* cos(deg)（deg∈[0,90]）Maclaurin 到 x^8：45° 处误差 5e-6，90° 处 2.6e-4
    （折成角度 < 0.02°，对「夹角是否超过阈值」毫无影响）。同样不引 libm。 */
 static double cos_deg_series(int deg)
@@ -1516,16 +1509,15 @@ static double cos_deg_series(int deg)
                    + x2 * (-0.001388888888888889 + x2 * 0.000024801587301587)));
 }
 
-/* 强度 → 时间常数（ms）：τ = TAU_BASE·(e^(TAU_LN·t/100) − 1)。
-   ⛔ 2026-10-13：上限由 36ms 抬到 100ms，同日再抬到 **250ms**。
-      真机反馈「强度 100 的体感依然几乎为零」—— 一阶低通的稳态滞后就是 v·τ：
-      36ms 在 500px/s 下只有 18px，100ms 也只有 50px，再被半径上限一夹就看不出来了。
-      现在 250ms ⇒ 同速度下 ≈125px 的势能，强度滑杆两端的差别一眼可辨。 */
+/* 强度 → 时间常数（ms）：τ = TAU_MAX_MS · t/100（**线性**，0x023B）。
+   ⛔ 旧律指数 τ = 8·(e^(3.4735·t/100)−1) 把势能挤在高段（t=50 仅满量程的 15%），
+      低中段无感；改线性后 t 与稳态滞后 v·τ 成正比，全程单调可辨（见 TAU_MAX_MS 注释）。
+      满量程 t=100 仍是 250ms，上端手感不变。 */
 static double tau_from_strength(double t)
 {
     if (t <= 0.0) return 0.0;
     if (t > 100.0) t = 100.0;
-    return TAU_BASE_MS * (exp_series(TAU_LN * (t / 100.0)) - 1.0);
+    return TAU_MAX_MS * (t / 100.0);
 }
 
 /* ---------------- 追笔：力度 → 追赶时间常数 τc（ms，0x023A）----------------
@@ -8923,19 +8915,6 @@ static void hud_frame_wait_idle(HANDLE timer)
 static LRESULT CALLBACK hud_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     if (m == WM_NCHITTEST) return HTTRANSPARENT;    /* 穿透：绝不抢任何输入 */
-    /* 0x023A（PS 2027 / 28.0 兼容）：把本窗口的「悬停语义」显式掐死。
-       HUD 是置顶 + 分层 + 穿透窗口，点击穿透由 WS_EX_TRANSPARENT 与
-       WM_NCHITTEST 保证；但 28.0 起主窗口刷新悬停态/浮层提示时会更积极地
-       枚举指针底下的窗口 ⇒ 这层虽然不该参与，仍可能把悬停态打断或错算
-       （用户报的「画布上异常冒出 helptext」是其中一个面）。
-       这里三条都在**返回值层面**拒绝，不新建窗口、不改已有 ex 样式：
-         · WM_MOUSEACTIVATE → MA_NOACTIVATE：被点到也不激活、不认领；
-         · WM_SETCURSOR     → TRUE         ：不改光标（悬停判定的第一跳在这里）；
-         · 各种 MOUSELEAVE/HOVER           ：不参与悬停跟踪，回 0 吞掉。
-       ⛔ 别顺手在这里画东西：内容一律走 UpdateLayeredWindow（见下条注释）。 */
-    if (m == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
-    if (m == WM_SETCURSOR) return TRUE;
-    if (m == WM_MOUSEHOVER || m == WM_MOUSELEAVE || m == WM_NCMOUSELEAVE) return 0;
     /* ⛔ 内容一律由 UpdateLayeredWindow 提交（见 hud_thread）⇒ 不参与 GDI 重绘路径：
        擦背景直接吞掉，WM_PAINT 只验证不绘制。否则系统一旦要求重绘，
        DefWindowProc 会把 layered surface 冲掉（表现 = 窗口忽然变空/变黑）。 */
