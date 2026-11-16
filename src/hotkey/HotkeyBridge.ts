@@ -934,6 +934,28 @@ export function pushConfig(list: HotkeyEntry[]): boolean {
   return false;
 }
 
+/**
+ * 主动向 .8li 重新拉取一次配置（`getConfig`）。
+ *
+ * ⛔ 为什么需要它（2026-11-16）：热键录制 UI 现在有**两处**（绘画工具箱「功能快捷键」、
+ *    选区填充「自定义快捷键」），而两块面板跑在**各自的 JS 上下文**里，各存一份
+ *    `cachedConfig`；原生侧收到 `config` 只落盘、**不广播**给其它客户端
+ *    （keyhook.c 的 config 分支）。于是「在一块里改了、另一块的缓存还是旧的」——
+ *    若那块接着回写，就等于用旧列表整份覆盖，把刚才的改动抹掉。
+ *    ⇒ 每次打开子面板先拉一次真值，把「陈旧窗口」压到「两块面板同时开着且交替编辑」
+ *      这个本来就自相矛盾的场景（那种场景下最后一笔为准，与旧版行为一致）。
+ * ⚠️ 原生 getConfig 会顺带重建热键表（幂等），代价可忽略；不在定时器里调用。
+ */
+export function requestConfigRefresh(): boolean {
+  try {
+    if (currentWs && currentWs.readyState === (currentWs.OPEN ?? 1)) {
+      currentWs.send(JSON.stringify({ type: 'getConfig' }));
+      return true;
+    }
+  } catch { /* ignore */ }
+  return false;
+}
+
 // ===== 主开关快捷键 =====
 
 /**

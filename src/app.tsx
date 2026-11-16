@@ -1,7 +1,7 @@
 import React from 'react';
 import { storage } from 'uxp';
 import { app, action, core } from 'photoshop';
-import { BLEND_MODES } from './constants/blendModes';
+import { BLEND_MODES, blendModeLabel } from './constants/blendModes';
 import { BLEND_MODE_OPTIONS } from './constants/blendModeOptions';
 import { AppState, initialState, Gradient, CompactModes, CompactScope, initialCompactModes, FormulaScope, initialFormulaVisibility } from './types/state';
 import { DragHandler } from './utils/DragHandler';
@@ -33,11 +33,15 @@ import { PresetManager } from './utils/PresetManager';
 import { PanelStateManager } from './utils/PanelStateManager';
 import {
   connectHotkeyDaemon,
-  isDaemonConnected, getMainToggleCombo, setMainToggleCombo, requestHotkeyRecording,
   getSelectedBrushToolEnum, setFocusLassoActive, setFocusClearActive, setAltToolActive,
   altToolComboHasAlt, normalizeToolId,
-  onAltHold, selectToolByRef, onConfig as onHotkeyConfig
+  onAltHold, selectToolByRef, onConfig as onHotkeyConfig,
+  // 热键命中反馈：混合模式热键的 notify 现在归本面板（见 blendHotkeyNotify）
+  onHotkeyTriggered
 } from './hotkey/HotkeyBridge';
+// 2026-11-16：「自定义快捷键」子面板与绘画工具箱的「功能快捷键」是**同一个组件**，
+// 靠 scope 区分显示哪一组内容（用户要求两处样式/交互完全一致）。
+import FuncHotkeyPanel from './hotkey/FuncHotkeyPanel';
 // 0x0224：混合模式热键「按当前工具临时让位」（画笔/渐变/涂抹…自带混合模式时把键还给 PS）
 import { noteToolForBlendYield, blendGuardWatchNeeded } from './hotkey/blendGuard';
 import {
@@ -99,6 +103,15 @@ import { helpTexts } from './constants/helpTexts';
  * 用这个保守值再等一次再试。
  */
 const FILL_RETRY_GUARD_MS = 400;
+
+/**
+ * 混合模式热键 notify 的存活时间（毫秒）。
+ *
+ * 与绘画工具箱其它热键提示同一口径：这是「瞬时反馈」（按了键、模式换了没有），
+ * 不是常驻说明 ⇒ 5 秒足够读完；不设「常驻」是因为它每次按 Alt+Shift+字母都会刷新，
+ * 常驻只会让状态条一直挂着一句过期的话。
+ */
+const BLEND_NOTIFY_TTL_MS = 5000;
 
 /**
  * 选区事件的「沉降」窗口（毫秒）—— 连续到来的选区 set 事件合并成**一次**填充。
@@ -235,6 +248,13 @@ class App extends React.Component<AppProps, AppState> {
     // 热键命中方写在绘画工具箱面板的 JS 上下文，经共享文件到达这里，卸载时退订）
     private unsubClearModeToggle: (() => void) | null = null;
     private unsubBlendMode: (() => void) | null = null;
+    /**
+     * 热键命中反馈订阅器（`onHotkeyTriggered`）。2026-11-16：混合模式热键的 notify
+     * 改由**本面板**显示（位置在「选区平滑」分区上方），不再走绘画工具箱那条通用 notify。
+     */
+    private unsubHotkeyTrigger: (() => void) | null = null;
+    /** 混合模式热键 notify 的自动消失句柄（与其它瞬时提示一致：5s）。 */
+    private blendNotifyTimer: any = null;
     /* 0x0224：热键配置订阅器（只关心「混合模式热键开关」开关位的翻转）——
        开关一开/一关就要重新决定「要不要跑工具巡检 + 此刻要不要让位」，
        而这件事的入口不在本组件（开关住在绘画工具箱的功能快捷键子面板里）。 */
@@ -621,6 +641,26 @@ class App extends React.Component<AppProps, AppState> {
             this.unsubBlendMode = subscribeBlendMode((mode) => {
                 this.applyBlendModeHotkey(mode);
             });
+            /**
+             * 混合模式热键的**即时反馈**（2026-11-16 用户要求）。
+             *
+             * 位置调整的来龙去脉：这条提示原先由绘画工具箱「笔刷热键」分区底部那条通用
+             * notify 输出 —— 用户在套索里按 Alt+Shift+字母，改动的是**选区填充**的混合模式，
+             * 反馈却出现在另一个面板、还是那一片列表的最下方，视线根本落不到。
+             * 现在它单独显示在**本面板「选区平滑」分区上方**（render 里有固定槽位）。
+             * ⛔ 只认 `blendMode`：其余动作（切笔刷 / 主开关 / 工具模式键）的反馈仍归工具箱，
+             *    两边各管一段，避免同一条消息在两块面板里重复出现。
+             */
+            this.unsubHotkeyTrigger = onHotkeyTriggered((info) => {
+                if (info.action !== 'blendMode') return;
+                // `info.brush` 承载的是 PS 枚举值（keyhook.c 的 KH_BLEND_DEFS），转中文再上屏
+                const modeCn = blendModeLabel(info.brush) || '未知模式';
+                this.showBlendHotkeyNotify(
+                    '热键触发：' + (info.combo ? info.combo + ' → ' : '') +
+                    '选区填充混合模式 → ' + modeCn + (info.ok ? '' : '（失败）'),
+                    info.ok
+                );
+            });
             /* 0x0224：混合模式热键开关翻面 ⇒ 重算「谁读工具」并立刻判一次让位。
                （开关住在绘画工具箱的功能快捷键子面板，本面板只能靠配置帧知道它变了） */
             this.blendWatchOn = blendGuardWatchNeeded();
@@ -705,6 +745,9 @@ class App extends React.Component<AppProps, AppState> {
                     //    由 state 派生（不会留下悬空类），但用户正在用的窗口突然消失同样算打断操作。
                     showVisibilityPanel: this.state.showVisibilityPanel,
                     isFillSettingsOpen: this.state.isFillSettingsOpen,
+                    // 「自定义快捷键」子面板同属「面板开关」：复位时保持开启，
+                    // 否则用户正在里面录快捷键、点一下参数复位就被弹回主面板。
+                    isAppHotkeyOpen: this.state.isAppHotkeyOpen,
                     floatOrder: this.state.floatOrder,
                     // ⛔ 平滑健康状态必须保持：它由 .8li 模块回报（是否注入 PS / 标定结果 /
                     //    已平滑包数），不是用户参数。若被 `...initialState` 打回
@@ -729,7 +772,7 @@ class App extends React.Component<AppProps, AppState> {
                 });
             },
             onToggleCompactMode: () => { this.toggleCompactMode(); },
-            onSetMainHotkey: () => { void this.setMainHotkey(); },
+            onShowAppHotkeys: () => { this.openAppHotkeyPanel(); },
             onShowVisibilityPanel: () => { this.openVisibilityPanel(); },
             onOpenFillSettings: () => { this.openFillSettingsPanel(); }
         });
@@ -934,7 +977,11 @@ class App extends React.Component<AppProps, AppState> {
         // 套索平滑「异常通知条」显隐（2026-10-23）：条的现身/退场会推动下方平滑参数行，
         // 补一次原生控件重排，防 UXP 数字输入留残影（与模式切换 resync 同款纪律）。
         // 首次不补（smoothErrBarVisible 初值 null）：装载时的既有布局无需抖动。
-        const smoothErrBar = smoothToneIsError(this.smoothBarTone());
+        /* 这里追踪的是「本面板是否有一条**会推动下方内容**的状态条」：
+           选区平滑错误条，或 2026-11-16 新增的混合模式热键反馈条。
+           两者出现/消失都会改变上方高度 ⇒ UXP 原生 number 的坐标需要重排，
+           否则会留下残影（数字画在旧位置）。 */
+        const smoothErrBar = smoothToneIsError(this.smoothBarTone()) || !!this.state.blendHotkeyNotify;
         if (this.smoothErrBarVisible !== null && smoothErrBar !== this.smoothErrBarVisible) {
             resyncNativeWidgets(this.panelRef.current);
         }
@@ -969,7 +1016,9 @@ class App extends React.Component<AppProps, AppState> {
         // 浮窗 body 类：与上面「子面板」同款，**由 state 派生**（不是开关时手写）。
         // 只在「浮窗开合状态真的变了」时同步，避免每次 update 都去量一次滚动条。
         if (prevState.showVisibilityPanel !== this.state.showVisibilityPanel ||
-            prevState.isFillSettingsOpen !== this.state.isFillSettingsOpen) {
+            prevState.isFillSettingsOpen !== this.state.isFillSettingsOpen ||
+            // 2026-11-16：子面板开合同样要重算「遮罩态」body 类（隐藏 number + 收滚动条）
+            prevState.isAppHotkeyOpen !== this.state.isAppHotkeyOpen) {
             this.syncFloatPanelClasses();
         }
 
@@ -1087,6 +1136,14 @@ class App extends React.Component<AppProps, AppState> {
             try { this.unsubBlendMode(); } catch { /* ignore */ }
             this.unsubBlendMode = null;
         }
+        if (this.unsubHotkeyTrigger) {
+            try { this.unsubHotkeyTrigger(); } catch { /* ignore */ }
+            this.unsubHotkeyTrigger = null;
+        }
+        if (this.blendNotifyTimer) {
+            clearTimeout(this.blendNotifyTimer);
+            this.blendNotifyTimer = null;
+        }
         /* 0x0224：只退订配置流，**不**主动清让位位 —— 让位位活在原生内存里，
            面板一走 WS 就断，下一个客户端接手时原生会自己归零（keyhook.c kh_cli_add）。
            在这里再发一帧反而会与「另一个面板上下文仍在用」打架。 */
@@ -1178,36 +1235,40 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     /**
-     * 重新指定「选区填充」主开关的全局快捷键（默认 Ctrl+Q）。
-     * 录制由 .8li（「JWautofill Host」扩展）内的全局键盘钩子完成：UXP 面板拿不到
-     * 全局按键，这里只负责弹提示、发指令、把结果写回共享配置。
+     * 打开「自定义快捷键」子面板（右上角菜单 → 自定义快捷键）。
+     *
+     * 2026-11-16：它**取代**了原来的「设置主开关快捷键」菜单项 —— 后者只能录主开关一个
+     * 组合键（还要走一次 core.showAlert 确认，UXP 里那个弹窗只有一句说明），
+     * 用户要求把「选区填充」整组快捷键都搬进面板内统一管理，且外观/交互与绘画工具箱的
+     * 「功能快捷键」子面板**完全一致**（同一个组件 FuncHotkeyPanel，scope='app'）。
+     *
+     * ⚠️ 但「录制」这条通路一个字节都不能改：全局按键只有 .8li 的钩子抓得到，
+     *    面板侧的 requestHotkeyRecording / setMainToggleCombo 语义保持原样。
+     * ⚠️ body 类 `app-hotkey-panel-open`（隐藏本面板 number + 收滚动条）由
+     *    syncFloatPanelClasses() 按 state 派生 —— 单一写点，禁止在这里 classList.add：
+     *    参数复位会用 ...initialState 整体覆盖 state，imperative 加的类会悬空，
+     *    表现为「复位后所有数字永久消失」。
      */
-    async setMainHotkey() {
-        try {
-            if (!isDaemonConnected()) {
-                await core.showAlert({ message: '快捷键服务未连接，无法录制快捷键。\n请确认 Photoshop 已启用「JWautofill Host」扩展（窗口 → 插件），然后重新加载本面板。' });
-                return;
-            }
-            const current = getMainToggleCombo();
-            await core.showAlert({
-                message: `点「确定」后，请直接按下要绑定的组合键（按 Esc 取消）。\n\n` +
-                    `当前主开关快捷键：${current || '未绑定'}`
-            });
-            const res = await requestHotkeyRecording('选区填充主开关');
-            if (!res) {
-                await core.showAlert({ message: '已取消，主开关快捷键保持不变。' });
-                return;
-            }
-            const ok = setMainToggleCombo(res.combo);
-            await core.showAlert({
-                message: ok
-                    ? `主开关快捷键已设为：${res.combo}`
-                    : '设置失败：快捷键服务未响应，请重新加载插件后重试。'
-            });
-        } catch (e) {
-            console.error('❌ 设置主开关快捷键失败:', e);
-            try { await core.showAlert({ message: '设置主开关快捷键时出错，详见控制台日志。' }); } catch { /* ignore */ }
-        }
+    openAppHotkeyPanel() {
+        this.setState({ isAppHotkeyOpen: true });
+    }
+
+    closeAppHotkeyPanel() {
+        this.setState({ isAppHotkeyOpen: false });
+    }
+
+    /**
+     * 混合模式热键的即时反馈：显示在「选区平滑」分区上方那条 notify-bar 里。
+     * 新消息覆盖旧消息并重置计时（用户看到的永远是最近一次按键的结果）。
+     */
+    private showBlendHotkeyNotify(text: string, ok: boolean) {
+        if (this.blendNotifyTimer) { clearTimeout(this.blendNotifyTimer); this.blendNotifyTimer = null; }
+        this.setState({ blendHotkeyNotify: { text, ok } });
+        this.blendNotifyTimer = setTimeout(() => {
+            this.blendNotifyTimer = null;
+            // 面板可能已卸载：卸载时 componentWillUnmount 会清掉定时器，这里只兜底判活
+            if (this.setState) this.setState({ blendHotkeyNotify: null });
+        }, BLEND_NOTIFY_TTL_MS);
     }
 
 
@@ -1809,10 +1870,20 @@ class App extends React.Component<AppProps, AppState> {
     private syncFloatPanelClasses() {
         const vis = !!this.state.showVisibilityPanel;
         const fill = !!this.state.isFillSettingsOpen;
-        if (vis || fill) this.syncPanelGutter();
+        /**
+         * 「自定义快捷键」子面板（2026-11-16）：它与两个浮窗共用同一套「遮罩态」body 类，
+         * 但**类名独立**（app-hotkey-panel-open）—— 原因同「浮窗按面板拆类」那段说明：
+         * 同一个 body 上，浮窗与子面板的开合生命周期不同（子面板由菜单开、
+         * 浮窗由另一条菜单项开），共用一个类会让「关掉其中一个」把另一个的遮挡一起摘掉，
+         * 结果是原生 number 输入重新浮到子面板之上（工具箱历史上正是两个独立 effect
+         * 互相 remove 导致的事故）。
+         */
+        const hk = !!this.state.isAppHotkeyOpen;
+        if (vis || fill || hk) this.syncPanelGutter();
         else document.body.classList.remove('app-panel-gutter');
         document.body.classList.toggle('app-visibility-panel-open', vis);
         document.body.classList.toggle('app-fill-settings-open', fill);
+        document.body.classList.toggle('app-hotkey-panel-open', hk);
     }
 
     /**
@@ -1957,8 +2028,9 @@ class App extends React.Component<AppProps, AppState> {
      * 绝不把 undefined 写进 state（那会让下拉显示空白、填充描述符拿到 "normal" 兜底）。
      */
     applyBlendModeHotkey(mode: string) {
-        const cn = (Object.keys(BLEND_MODES) as Array<keyof typeof BLEND_MODES>)
-            .find(k => BLEND_MODES[k] === mode);
+        // 反查统一走 constants/blendModes 的 blendModeLabel（大小写不敏感、单一映射来源）；
+        // 查不到 = 表外模式 ⇒ 忽略，绝不把 undefined 写进 state。
+        const cn = blendModeLabel(mode);
         if (!cn) {
             console.warn('⚠️ 混合模式热键：未知模式 ' + mode + '，已忽略');
             return;
@@ -3884,6 +3956,25 @@ title={helpTexts.selectionFill.blendMode}>
                     </div>
                 </div>
 
+                {/* 混合模式热键的即时反馈（2026-11-16 用户要求「单独移到选区平滑折叠分区的上方」）。
+                    ⛔ 位置是硬要求：它与下方「选区平滑」**没有任何功能关系**，放在这里纯粹是
+                       视线落点（用户按 Alt+Shift+字母时眼睛在画布/面板中段，原先那条提示
+                       埋在绘画工具箱「笔刷热键」列表最下方，根本看不到）。
+                    ⛔ 只在有反馈时占位：通知条出现/消失会推动下方分区 ⇒ 与「选区平滑错误条」
+                       同一处 resyncNativeWidgets 兜底（componentDidUpdate 里比对可见性），
+                       避免 UXP 原生数字输入留残影。
+                    ⚠️ 配色沿用本面板状态条口径：成功 = 主色蓝（ok），失败 = 红（fail）；
+                       不使用橙色 —— 橙在本插件语义里是「待处理/未就绪」，不是「操作失败」。 */}
+                {this.state.blendHotkeyNotify && (
+                    <div
+                        className={'notify-bar ' + (this.state.blendHotkeyNotify.ok ? 'notify-bar-ok' : 'notify-bar-fail')}
+                        title={helpTexts.selectionFill.blendHotkeyNotify}
+                    >
+                        <span className={'indicator indicator-md ' + (this.state.blendHotkeyNotify.ok ? 'indicator-ok' : 'indicator-fail')} />
+                        <span className="notify-text">{this.state.blendHotkeyNotify.text}</span>
+                    </div>
+                )}
+
                 {/* 选区平滑：套索**绘制过程中**的实时平滑。
                     ⚠️ 与下面「选区改造」是两条独立路径：本分区作用在**输入轨迹**
                         （PS 收到笔坐标之前，由 PS 进程内的 .8li 平滑插件改写包坐标），
@@ -4610,6 +4701,18 @@ title={helpTexts.selectionFill.clearMode}>
                         ))}
                     </div>
                 </div>
+            )}
+            {/* 「自定义快捷键」子面板（右上角菜单 → 自定义快捷键，2026-11-16）。
+                ⛔ 与绘画工具箱的「功能快捷键」是**同一个组件**（scope='app' 只显示
+                   「选区填充」这一组：主开关 / 套索 / 清除 / 拾色器 / 临时吸管 /
+                   混合模式热键 / 纯色·图案·渐变面板开关），样式、通知逻辑、
+                   隐藏原生数字输入框、滚动条设计全部一致 —— 用户明确要求「完全一样」。
+                ⚠️ 必须挂在本层（.app-root），不能放进 `.panel` 滚动容器：
+                   它是 position:fixed 的全面板遮罩，留在滚动容器里会被滚动条压住右缘。
+                ⚠️ 层级：`.func-hotkey-overlay` 显式降到子面板档 9999（见 adjustment.css），
+                   于是「浮窗（99999 / 激活弹窗 100001）恒在上」的既有模型不变。 */}
+            {this.state.isAppHotkeyOpen && (
+                <FuncHotkeyPanel scope="app" onClose={() => this.closeAppHotkeyPanel()} />
             )}
             </>
         );

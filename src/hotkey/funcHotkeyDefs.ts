@@ -5,6 +5,9 @@
 //   - fillPanel:* 前缀 → HotkeyBridge 直接路由到 FillPanelToggleBus（执行权在 APP 面板）。
 // section = 该功能实际所在的面板分区，子面板按它分组展示（同区分集中、异区分容器）。
 // 注意：分区名须与面板分区标题一致（选区填充/快捷操作/细节调整/边缘处理）。
+// ⛔ 2026-11-16：「选区填充」这一组**只在 APP 面板的「自定义快捷键」子面板里显示**
+//    （FuncHotkeyPanel 的 scope='app'）；绘画工具箱的「功能快捷键」子面板只显示
+//    快捷操作 / 细节调整 / 边缘处理三组。id 与执行侧不受影响，只是展示位置各自归位。
 export interface FuncHotkeyDef {
   id: string;
   label: string;

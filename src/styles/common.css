@@ -1530,6 +1530,18 @@ body.app-fill-settings-open #app .float-overlay {
   z-index: 100000 !important;
 }
 
+/* ⛔ 「自定义快捷键」子面板（.func-hotkey-overlay）**不许**被上面那条抬层规则带走。
+   它是全面板子面板（与绘画工具箱「功能快捷键」同一个组件），必须恒定 9999：
+   否则浮窗一开、两者同为 100000，就退回「DOM 顺序决胜」——而子面板写在浮窗之后
+   （app.tsx 里它挂在浮窗图层下面），结果反把浮窗压住，与「浮窗始终置顶」矛盾。
+   工具箱当年踩的是同一个坑，解法同样是把子面板钉回子面板档。
+   特异性 (1,3,1) 带 ID + 三个类，稳过上面的 (1,2,1) 带 ID 两条。 */
+body.app-visibility-panel-open #app .float-overlay.func-hotkey-overlay,
+body.app-fill-settings-open #app .float-overlay.func-hotkey-overlay,
+body.app-hotkey-panel-open #app .float-overlay.func-hotkey-overlay {
+  z-index: 9999 !important;
+}
+
 /* 激活弹窗永远在最上：
    `.license-dialog-overlay` 是 LicenseDialog 遮罩的专属类（仅此一处使用）。
    上面把浮窗抬到 100000 后，若浮窗还开着、又从宿主菜单打开激活弹窗，
@@ -1545,7 +1557,8 @@ body.license-dialog-open #app .float-overlay.license-dialog-overlay {
    UXP 下 position: fixed 的包含块 = 面板全宽（**不扣**右侧 10px 滚动条槽），
    窗口右缘正好落在槽上，看起来像被滚动条挡住/裁掉；遮罩常驻时本来就不该滚背景。
    ⚠️ 两块面板共用同一个 document.body ⇒ **类名必须按面板分开**
-      （主面板 app-visibility-panel-open / app-fill-settings-open、工具箱 visibility-panel-open）：
+      （主面板 app-visibility-panel-open / app-fill-settings-open / app-hotkey-panel-open、
+       工具箱 visibility-panel-open）：
       只靠 #app / #pixeladjustment 限定不够 —— 同名类会让一块开浮窗时另一块的滚动条也被收起、
       内容盒被多塞 10px 内边距。
    ⚠️ 遮罩本身 position: fixed，不受本条 overflow/内边距影响。
@@ -1553,6 +1566,7 @@ body.license-dialog-open #app .float-overlay.license-dialog-overlay {
 body.license-dialog-open #app .app-root > .panel,
 body.app-visibility-panel-open #app .app-root > .panel,
 body.app-fill-settings-open #app .app-root > .panel,
+body.app-hotkey-panel-open #app .app-root > .panel,
 body.visibility-panel-open #pixeladjustment .pixeladjustment-root > .panel {
   overflow-y: hidden;
 }
@@ -1566,7 +1580,8 @@ body.visibility-panel-open #pixeladjustment .pixeladjustment-root > .panel {
       ⇒ 由 app.tsx 在开窗前实测 `panel.scrollHeight > panel.clientHeight` 挂 body.app-panel-gutter。
    ⚠️ 两个 body 类同时命中才补：app-panel-gutter 单独出现时不得改内边距（关窗必须立刻恢复 10px）。 */
 body.app-panel-gutter.app-visibility-panel-open #app .app-root > .panel,
-body.app-panel-gutter.app-fill-settings-open #app .app-root > .panel {
+body.app-panel-gutter.app-fill-settings-open #app .app-root > .panel,
+body.app-panel-gutter.app-hotkey-panel-open #app .app-root > .panel {
   padding-right: 20px;
 }
 

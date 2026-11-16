@@ -240,6 +240,22 @@ export interface AppState {
     smoothStatus: LassoSmoothStatus;
      showVisibilityPanel: boolean;  // 隐藏/显示分区浮窗是否打开
     isFillSettingsOpen: boolean;  // 填充设置浮窗是否打开（承载原面板底部的四个 checkbox）
+    /**
+     * 「自定义快捷键」子面板是否打开（2026-11-16）。
+     * 它是**占满整个面板**的子面板（与绘画工具箱的「功能快捷键」同一个组件，
+     * 见 hotkey/FuncHotkeyPanel.tsx 的 scope='app'），不是浮窗 ⇒ 不参与 floatOrder 堆叠。
+     * ⚠️ 与 5 个参数子面板（isColorSettingsOpen 等）同属「子面板」档，理论上应互斥；
+     *    实际用户要求是「菜单点开即看全部快捷键」，而参数子面板由面板内齿轮进入、
+     *    两者不会在同一操作里同时打开，故不做强制互斥（各自的关闭按钮/Esc 独立生效）。
+     */
+    isAppHotkeyOpen: boolean;
+    /**
+     * 混合模式热键的即时反馈（null = 没有反馈可显示）。
+     * 2026-11-16 用户要求：这条提示 **单独显示在 APP 面板「选区平滑」分区上方**，
+     * 不再混在绘画工具箱「笔刷热键」分区底部那条通用 notify 里。
+     * ⚠️ 不进持久化 watchedKeys（瞬时提示，重载后无意义）。
+     */
+    blendHotkeyNotify: { text: string; ok: boolean } | null;
     // 浮窗堆叠顺序（= 开启先后）：APP 面板允许同时打开多个浮窗，它们在同一个遮罩里
     // 纵向排列、间距 10px，**后开的排在下面**。数组即 DOM 顺序（下标 0 在最上）。
     // ⚠️ 与上面两个布尔量必须同步维护（开 = push 到末尾；关 = 过滤掉），
@@ -329,6 +345,8 @@ export const initialState: AppState = {
     smoothStatus: { ...initialLassoSmoothStatus },
     showVisibilityPanel: false,
     isFillSettingsOpen: false,
+    isAppHotkeyOpen: false,
+    blendHotkeyNotify: null,
     floatOrder: [],
     resetToken: 0,
     // 新增：许可证默认状态

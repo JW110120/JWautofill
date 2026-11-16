@@ -4104,9 +4104,11 @@ return (
   )}
   {/* 功能快捷键子面板：右上角菜单 → 功能快捷键。**占满整个面板**，
       遮罩/面板结构由组件自带（复用 float-overlay/float-window 基类），
-      点遮罩关闭；滚动槽贴面板最右缘、纵向贯通整高，notify 恒钉底部。 */}
+      点遮罩关闭；滚动槽贴面板最右缘、纵向贯通整高，notify 恒钉底部。
+      ⚠️ 2026-11-16：scope='toolbox' 只显示「快捷操作 / 细节调整 / 边缘处理」三组；
+          「选区填充」整组已移植到 APP 面板的「自定义快捷键」子面板（同一个组件）。 */}
   {showFuncHotkeyPanel && (
-    <FuncHotkeyPanel onClose={() => setShowFuncHotkeyPanel(false)} />
+    <FuncHotkeyPanel scope="toolbox" onClose={() => setShowFuncHotkeyPanel(false)} />
   )}
   </>
 );

@@ -6,6 +6,7 @@ import {
   armBackspaceDelete, disarmBackspaceDelete, onBackspaceDelete,
   onHotkeyState, requestHotkeyStatus,
   peekPersistedArm, getBlendHotkeyOn, setBlendHotkeyActive, isDaemonConnected,
+  requestConfigRefresh,
 } from './HotkeyBridge';
 import { helpTexts } from '../constants/helpTexts';
 import { useBlendGuard, blendYieldHint } from './blendGuard';
@@ -13,7 +14,14 @@ import { subscribeFocusMode, peekFocusMode } from '../utils/FocusModeBus';
 import { FUNC_HOTKEY_DEFS, FUNC_HOTKEY_SECTION_ORDER, getFuncHotkeyLabel } from './funcHotkeyDefs';
 import ToggleSwitch from '../components/ToggleSwitch';
 
-// 「功能快捷键」子面板：由右上角菜单打开，专门管理**非笔刷功能**的全局快捷键。
+// 快捷键子面板（**一个组件，两个面板共用**，2026-11-16 扩展）：
+//   scope='toolbox' → 绘画工具箱「功能快捷键」（快捷操作 / 细节调整 / 边缘处理）
+//   scope='app'     → 选区填充「自定义快捷键」（选区填充整组：主开关 / 套索 / 清除 /
+//                     拾色器 / 临时吸管 / 混合模式热键 / 纯色·图案·渐变面板开关）
+//   ⛔ 两处必须是**同一个组件**：用户要求「完全一样的样式、相同的通知逻辑、相同的
+//     隐藏数字输入框设计、相同的滚动条设计」。复制一份实现必然漂移（历史上
+//     notify-banner / notify-bar 并存就是先例）⇒ 差异只允许来自 scope 的**内容**过滤
+//     与标题文案，其余一律共用。
 // 形态：**占满整个面板的子面板**（不是居中卡片），纵向两段：
 //   滚动区（.func-hotkey-body，从面板顶端 y=0 贯通到底部）
 //     ├─ 标题段 .func-hotkey-head（「功能快捷键」+ 关闭按钮 + 未连接提示，**随内容滚走**）
@@ -21,10 +29,15 @@ import ToggleSwitch from '../components/ToggleSwitch';
 //   通知段 .func-hotkey-foot（底部常驻，不参与滚动 ⇒ 任何位置录制都看得见）
 //   滚动槽因此**贯通整高、贴面板最右缘**（UXP 的滚动槽压在滚动容器内容盒内部，
 //   容器带任何内缩/边框都会把槽一起带偏 ⇒ 滚动容器本身零内缩，内缩全交给内层）。
-// 内容分组（自上而下）：
-//   1. 「选区填充」组：置顶的选区填充开关录制行（从笔刷热键分区迁移而来）；
-//      工具模式下名称只显示「选区填充」（热键只开不关的既有语义不变）；
-//   2. 功能分组：按功能按钮实际所在的面板分区分组展示（同区分集中、异区分容器）。
+// 内容分组（按 scope 分工，同一台机器上两块面板各管一段、互不重复）：
+//   scope='toolbox'：功能分组 —— 按功能按钮实际所在的面板分区分组
+//                    （快捷操作 / 细节调整 / 边缘处理；同区分集中、异区分容器）。
+//   scope='app'    ：只显示「选区填充」一组，自上而下为
+//                    主开关（工具模式下名称只显示「选区填充」，热键只开不关的语义不变）
+//                    → 套索工具 / 清除模式 / 临时吸管（仅工具模式）
+//                    → 前景色拾色器（始终）
+//                    → 混合模式热键（自绘开关行，无组合键）
+//                    → 纯色 / 图案 / 渐变面板开关。
 // 行内布局：功能名在左、录好的快捷键在右（与笔刷热键分区一致）。
 // 交互（去掉独立的录制/删除按钮，容器窄、把宽度还给功能名）：
 //   单击行 → 选中（布防）：选中后按退格键解绑该条（条目保留，显示「未绑定」）；
@@ -42,7 +55,26 @@ const MESSAGE_TTL_MS = 5000;
 /** 正在编辑（录制）的行：'main' = 选区填充开关；其余值为功能 id。 */
 type EditTarget = string | null;
 
-export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
+/** 本组件的使用位置：决定标题文案与显示哪一组内容（见文件头说明）。 */
+export type HotkeyPanelScope = 'toolbox' | 'app';
+
+export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClose: () => void; scope?: HotkeyPanelScope }) {
+  const forApp = scope === 'app';
+  /** 子面板标题：工具箱「功能快捷键」/ 选区填充「自定义快捷键」。 */
+  const panelTitle = forApp ? '自定义快捷键' : '功能快捷键';
+  /**
+   * 「热键开关是暂停的」时的行动指引。
+   * ⚠️ 开关本体住在**绘画工具箱**的「笔刷热键」分区标题右侧 —— APP 面板这一侧必须
+   *    说清「去哪开」，否则用户在本面板里找不到开关会以为功能坏了。
+   */
+  const armHint = forApp
+    ? '请先在绘画工具箱「笔刷热键」分区标题右侧打开「热键」开关'
+    : '请先到「笔刷热键」分区的折叠标题右侧打开「热键」开关';
+  /** 关闭按钮的 hover 文案：面板名要跟着 scope 走（否则 APP 面板会自称「功能快捷键面板」）。 */
+  const closeTitle = forApp
+    ? '关闭自定义快捷键面板（录制过程中按 Esc 只取消本次录制，不会关闭面板）。'
+    : helpTexts.funcHotkey.close;
+
   const [entries, setEntries] = useState<HotkeyEntry[]>([]);
   // ⛔ 初值取 bridge 的同步连接态：`useState(false)` 会让每次挂载（含折叠后展开）
   // 先渲染成「未连接」，等 onDaemonStatus 回放才翻转（同 BrushHotkeySection 的穿帮）。
@@ -159,6 +191,11 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
     // 这里提前拦，给出可操作的提示而不是「莫名取消的录制」）
     const unsubArmed = onHotkeyState((st) => setHotkeyArmed(st.armed));
     const unsubFocus = subscribeFocusMode(setFocusMode);
+    /* 订阅就位后再拉一次真值（2026-11-16）：两块面板各有自己的 cachedConfig，
+       而原生侧收到 `config` 只落盘、**不广播**给其它客户端 ⇒ 不主动拉就可能拿着
+       旧列表回写，把另一块面板刚录好的条目整份抹掉（见 requestConfigRefresh 注释）。
+       ⚠️ 顺序不能反：先订阅再发，否则回帧可能早于订阅、UI 永远拿不到新列表。 */
+    requestConfigRefresh();
     return () => { unsubConfig(); unsubStatus(); unsubArmed(); unsubFocus(); };
   }, []);
 
@@ -225,7 +262,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
   const startEdit = async (target: string) => {
     if (editingTarget) return; // 已有编辑中的行
     if (!daemonConnected) { showMessage(helpTexts.funcHotkey.notConnected); return; }
-    if (!hotkeyArmedRef.current) { showMessage('热键开关当前是暂停的，请先到「笔刷热键」分区的折叠标题右侧打开「热键」开关再录制'); return; }
+    if (!hotkeyArmedRef.current) { showMessage('热键开关当前是暂停的，' + armHint + '，再录制'); return; }
     setEditingTarget(target);
     setCapturedCombo('');
     // sticky：录制过程中的提示常驻，直到录制完成 / 取消（见 showMessage 说明）
@@ -379,7 +416,7 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
         showMessage(nextOn
           ? (hotkeyArmedRef.current
             ? '混合模式热键已开启：按 Alt+Shift+字母（如 K=变暗、M=正片叠底）将改面板的选区填充混合模式'
-            : '混合模式热键已开启，但热键当前暂停：请先到「笔刷热键」分区的折叠标题右侧打开热键开关才会生效')
+            : '混合模式热键已开启，但热键当前暂停：' + armHint + '，才会生效')
           : '混合模式热键已关闭：Alt+Shift+字母恢复 PS 原生行为（改图层/工具混合模式）');
       } else {
         showMessage('推送配置失败：快捷键服务未连接，或配置路径尚未就绪（请重新加载插件后重试）');
@@ -418,10 +455,15 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
 
   // 分组：主开关「选区填充」固定最上方单独成组，其后按功能按钮实际所在分区分组。
   // 同一分区的行集中在一个边框容器里，不同分区用标题 + 容器分开。
+  // ⛔ 2026-11-16：按 scope 分工 ——「选区填充」整组归 APP 面板的「自定义快捷键」，
+  //    其余分组留在绘画工具箱的「功能快捷键」。两边的行互不重复出现（移植而非复制）。
   const sectionGroups = FUNC_HOTKEY_SECTION_ORDER
     .map(sec => ({ title: sec, defs: FUNC_HOTKEY_DEFS.filter(d => d.section === sec) }))
-    .filter(g => g.defs.length > 0);
-  const unordered = FUNC_HOTKEY_DEFS.filter(d => !FUNC_HOTKEY_SECTION_ORDER.includes(d.section));
+    .filter(g => g.defs.length > 0)
+    .filter(g => (forApp ? g.title === '选区填充' : g.title !== '选区填充'));
+  const unordered = forApp
+    ? []
+    : FUNC_HOTKEY_DEFS.filter(d => !FUNC_HOTKEY_SECTION_ORDER.includes(d.section));
 
   return (
     <div className="float-overlay func-hotkey-overlay" onClick={onClose}>
@@ -439,15 +481,15 @@ export default function FuncHotkeyPanel({ onClose }: { onClose: () => void }) {
               align-items:center 的外层 flex 里把标题上移 5px（错位根因）；同时 .row-between 的
               10px 下外边距会让「标题 → 选区填充」间距多出一截（见 adjustment.css 的归零规则）。 */}
           <div className="subpanel-title-1">
-            <span>功能快捷键</span>
-            <div role="button" tabIndex={0} className="close-button" title={helpTexts.funcHotkey.close} onClick={onClose}>×</div>
+            <span>{panelTitle}</span>
+            <div role="button" tabIndex={0} className="close-button" title={closeTitle} onClick={onClose}>×</div>
           </div>
 
           {!daemonConnected && (
             <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>{helpTexts.funcHotkey.notConnected}</div>
           )}
           {daemonConnected && !hotkeyArmed && (
-            <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>热键已暂停：快捷键暂不生效（录制前请先到「笔刷热键」分区的折叠标题右侧打开「热键」开关）</div>
+            <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>热键已暂停：快捷键暂不生效（录制前{armHint}）</div>
           )}
         </div>
 

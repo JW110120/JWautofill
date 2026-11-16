@@ -15,7 +15,6 @@ import { HotkeyArmAlert } from './HotkeyArmSwitch';
 import { DeleteIcon, RefreshIcon, DataRefreshIcon, RecordCircleIcon, StopSquareIcon, BrushToolIcon, SmudgeToolIcon, MixerToolIcon, CloneStampIcon } from '../styles/Icons';
 import BrushSelect, { BrushSelectOption } from './BrushSelect';
 import { helpTexts } from '../constants/helpTexts';
-import { blendModeLabel } from '../constants/blendModes';
 import { getFuncHotkeyLabel } from './funcHotkeyDefs';
 import { runWhenIdle, isPsBusy, psBusyRemain } from '../utils/psProbe';
 
@@ -193,16 +192,14 @@ export default function BrushHotkeySection() {
         // 工具模式「清除模式」键（Shift+E）：确保主开关开启 + 切换清除模式
         showMessage('热键触发：' + (info.combo ? info.combo + ' → ' : '') +
           (info.ok ? '清除模式已切换（主开关保持开启）' : '清除模式切换失败'));
-      } else if (info.action === 'blendMode') {
-        // 混合模式热键（Alt+Shift+字母）：.8li 吞键后把目标模式经总线送到 APP 面板
-        // ⛔⛔ 2026-11-16：`info.brush` 承载的是 **PS 枚举值**（`keyhook.c` 的
-        //    KH_BLEND_DEFS，如 `multiply` / `colorBurn`），不是笔刷名。旧实现直接拼进
-        //    提示 ⇒ 用户看到「选区填充混合模式 → multiply」，即「汉化不完整」。
-        //    统一经 `blendModeLabel()` 转中文；表外模式给「未知模式」而不是原文。
-        const modeCn = blendModeLabel(info.brush);
-        showMessage('热键触发：' + (info.combo ? info.combo + ' → ' : '') +
-          '选区填充混合模式 → ' + (modeCn || '未知模式') + (info.ok ? '' : '（失败）'));
       }
+      /* ⛔ 2026-11-16 用户要求：`blendMode`（Alt+Shift+字母切「选区填充」混合模式）
+         的反馈**已迁到 APP 面板** —— 显示在「选区平滑」分区上方那条独立 notify-bar 里
+         （app.tsx 的 showBlendHotkeyNotify）。
+         为什么必须搬：它改的是选区填充的混合模式，提示却出现在本分区的列表最下方，
+         用户按完键视线落在画布与面板中段，根本看不到这条反馈；而且同一件事在两块面板
+         各说一遍，语义也是重复的。
+         ⇒ 本分区只保留笔刷 / 主开关 / 工具模式键 / 功能按钮的反馈，**不再**处理 blendMode。 */
     });
     // 两段式录制的实时进度：捕获到组合键、等待回车确认期间给出行内提示
     // （sticky：录制的状态提示常驻，直到录制完成 / 取消）

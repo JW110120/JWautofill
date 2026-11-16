@@ -46,30 +46,36 @@ const APP_MENU_ITEMS: MenuItemDef[] = [
   },
   {
     id: "spacerApp1",
-    label: "-" // 分隔符（紧凑模式 与「参数复位/填充设置/设置主开关快捷键」分区 之间）
+    label: "-" // 分隔符（紧凑模式 与「参数复位」之间）
   },
   {
+    // 「参数复位」自成一组（2026-11-16 用户要求「参数复位和填充设置需要分开」）：
+    // 它是一次性重写全部参数的动作，与「打开某个子面板」这类入口不同类，
+    // 混在一起容易被误点 ⇒ 前后各一条分隔符，独占一栏。
     id: "resetAppParameters",
     label: "参数复位"
   },
   {
+    id: "spacerApp4",
+    label: "-" // 分隔符（参数复位 与「自定义快捷键 / 填充设置」之间）
+  },
+  {
+    // 「自定义快捷键」子面板（2026-11-16）：**取代**原来的「设置主开关快捷键」菜单项。
+    // 后者只是一个「录制一次组合键」的动作，用户要求在**面板内**管理选区填充的全部
+    // 快捷键（主开关 / 套索 / 清除 / 拾色器 / 临时吸管 / 混合模式 / 三个子面板开关），
+    // 且外观与交互与绘画工具箱的「功能快捷键」子面板完全一致
+    // （同一个组件，靠 scope 区分内容，见 FuncHotkeyPanel）。
+    id: "appHotkeys",
+    label: "自定义快捷键"
+  },
+  {
+    // 「填充设置」与「自定义快捷键」同属「面板内的设置入口」⇒ 同一分区（2026-11-16 用户要求）。
     id: "appFillSettings",
     label: "填充设置"
   },
   {
-    // 「设置主开关快捷键」自成一组（2026-10-10 用户要求「单分一栏」）：
-    // 它是「录制全局快捷键」这一独立动作，与上面的参数复位 / 填充设置不属于同类；
-    // 混在一起容易被误点 ⇒ 前后各一条分隔符，独占一栏。
-    id: "spacerApp3",
-    label: "-" // 分隔符（填充设置 与 设置主开关快捷键 之间）
-  },
-  {
-    id: "setMainHotkey",
-    label: "设置主开关快捷键"
-  },
-  {
     id: "spacerApp2",
-    label: "-" // 分隔符（设置主开关快捷键 与使用手册 之间）
+    label: "-" // 分隔符（填充设置 与使用手册 之间）
   },
   {
     id: "openDocsFill",
@@ -144,7 +150,7 @@ export class MenuManager {
   private static appResetLicenseCallback: (() => void) | null = null;
   private static appResetParametersCallback: (() => void) | null = null;
   private static appToggleCompactModeCallback: (() => void) | null = null;
-  private static appSetMainHotkeyCallback: (() => void) | null = null;
+  private static appHotkeysCallback: (() => void) | null = null;
   private static appShowVisibilityPanelCallback: (() => void) | null = null;
   private static appFillSettingsCallback: (() => void) | null = null;
   // 是否已正式激活（试用不算）：决定「注销激活状态」菜单项能否点击
@@ -189,7 +195,7 @@ export class MenuManager {
     onResetLicense: () => void;
     onResetParameters: () => void;
     onToggleCompactMode?: () => void;
-    onSetMainHotkey?: () => void;
+    onShowAppHotkeys?: () => void;
     onShowVisibilityPanel?: () => void;
     onOpenFillSettings?: () => void;
   }) {
@@ -197,7 +203,7 @@ export class MenuManager {
     this.appResetLicenseCallback = callbacks.onResetLicense;
     this.appResetParametersCallback = callbacks.onResetParameters;
     this.appToggleCompactModeCallback = callbacks.onToggleCompactMode ?? null;
-    this.appSetMainHotkeyCallback = callbacks.onSetMainHotkey ?? null;
+    this.appHotkeysCallback = callbacks.onShowAppHotkeys ?? null;
     this.appShowVisibilityPanelCallback = callbacks.onShowVisibilityPanel ?? null;
     this.appFillSettingsCallback = callbacks.onOpenFillSettings ?? null;
   }
@@ -358,9 +364,9 @@ export class MenuManager {
           this.appToggleCompactModeCallback();
         }
         break;
-      case "setMainHotkey":
-        if (this.appSetMainHotkeyCallback) {
-          this.appSetMainHotkeyCallback();
+      case "appHotkeys":
+        if (this.appHotkeysCallback) {
+          this.appHotkeysCallback();
         }
         break;
       case "appShowVisibilityPanel":
