@@ -3780,7 +3780,7 @@ funcRunnerRef.current = {
   lineEnhance: () => { void handleLineEnhancement(); },
   extremeRaiseLow: () => { void handleExtremeAlign('raiseLow'); },
   extremeWeakenHigh: () => { void handleExtremeAlign('weakenHigh'); },
-  // fillPanel:* 前缀不进这里：HotkeyBridge 直接路由到 FillPanelToggleBus（执行权在 APP 面板）
+  // fillModeCycle 不进这里：HotkeyBridge 直接路由到 FillModeCycleBus（执行权在 APP 面板）
 };
 
 useEffect(() => {

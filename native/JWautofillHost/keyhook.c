@@ -68,7 +68,7 @@ void srv_poly_alt_set(int on);
 /* ================================================================ 常量 */
 
 #define KH_PORT          18923
-#define KH_VERSION       "2026-10-30.1"   /* 0x0224：混合模式热键按工具让位（blendYield 入站消息 + hotkeyState.blendYield） */
+#define KH_VERSION       "2026-11-16.1"   /* 0x0235：滚轮热键（Ctrl+滚轮切填充模式）+ 裸键精确匹配留痕 */
 #define KH_BUDGET_MS     100      /* 单次钩子回调耗时预算（Program.cs HookBudgetMs） */
 #define KH_STRIKES       3        /* 连续超预算多少次才熔断 */
 #define KH_COOLDOWN_MS   30000    /* 熔断冷却（期满复位重挂） */
@@ -81,6 +81,12 @@ void srv_poly_alt_set(int on);
 #define KH_HLOG_N        32
 #define KH_HLOG_L        192
 #define KH_PSPID_MAX     256
+
+/* 0x0235：滚轮的**伪 vk**。真实滚轮没有 vk（只有 WM_MOUSEWHEEL），
+   这里占一个 256 之外的值当作「条目键位」的占位符：
+   - kh_hk_sync / kh_poll_rebuild_watch 见到它一律跳过（注册不了、也轮询不到）；
+   - 真正的匹配在鼠标钩子 kh_mse_proc 里按「修饰键完全匹配 + 滚轮方向」做。 */
+#define KH_VK_WHEEL      0x100
 
 /* 线程消息（与 daemon 同号；安装/卸载另有 100ms 轮询兜底，消息只降延迟） */
 #define WM_KH_RECSTART   0x8002
@@ -171,8 +177,28 @@ static volatile LONG g_khItemCount;       /* 配置总条数（含空 combo，ge
 static volatile LONG g_khAltToolVk;
 static volatile LONG g_khAltToolMods;
 
+/* --- 0x0235：滚轮热键条目（配置里 combo 形如 "Ctrl+Wheel" 的条目）---
+ * 与临时吸管同理：真值只以整数/短串发布，解析在配置线程做一次。
+ *   g_khWheelOn   = 1 表示「有这条滚轮条目」；
+ *   g_khWheelMods = 该条目要求的修饰键，必须**完全匹配**（未列出的必须抬着）；
+ *   g_khWheelCombo= 条目组合键原文，命中时原样推进命中环供调度线程查表广播。
+ * ⛔ 未配置时 g_khWheelOn 恒 0 ⇒ 鼠标钩子的滚轮分支只做「一次整数比较」就放行，
+ *    用户不配这条快捷键时滚轮**零感知**。 */
+static volatile LONG g_khWheelOn;
+static volatile LONG g_khWheelMods;
+static char g_khWheelCombo[KH_COMBO_MAX];
+/* 滚轮增量累加（只在钩子线程读写）。高分辨率滚轮一格会连发多条 WM_MOUSEWHEEL，
+   每条 delta 可能只有 30 ⇒ 攒够 120 才算「一格」，避免一下滚过三档。 */
+static LONG g_khWheelAcc;
+
 /* --- SPSC 环（单生产者=钩子线程 / 单消费者=调度线程） --- */
 static char g_khHitQ[KH_HITQ][KH_COMBO_MAX];
+/* 0x0235：「命中方向」与 combo 平行的一份附带参数。
+   ⛔ 为什么不能把方向编进 combo 字符串：combo 是查表键（kh_map_lookup 逐字比较），
+      编进去就查不到配置条目、广播也发不出去。也不能塞进 brush：
+      面板侧用 brush 匹配「功能快捷键清单里的 id」，改了 brush 行就对不上。
+      ⇒ 单独一列，只在非 0 时写进 JSON 的 "dir" 字段（目前只有滚轮会用到）。 */
+static volatile LONG g_khHitDirQ[KH_HITQ];
 static volatile LONG g_khHitHead, g_khHitTail, g_khHitDrops;
 static KhOut g_khOutQ[KH_OUTQ];
 static volatile LONG g_khOutHead, g_khOutTail;
@@ -542,6 +568,8 @@ static int kh_map_apply(const KhItem* items, int n)
     int blendOn = 0;
     char altCombo[KH_COMBO_MAX];
     altCombo[0] = 0;
+    char wheelCombo[KH_COMBO_MAX];
+    wheelCombo[0] = 0;
     for (int i = 0; i < n; i++) {
         /* 混合模式热键标志条目：combo 非空 = 开关打开。⛔ 它本身**不参与匹配**
            （ combo='1' 是个普通按键，混进表里会把用户的数字键吞掉），
@@ -561,6 +589,16 @@ static int kh_map_apply(const KhItem* items, int n)
             continue;
         }
         if (!items[i].combo[0]) continue;                 /* 空 combo = 已解绑，仅留存 */
+        /* 0x0235：滚轮条目（combo 末段是 "Wheel"）。只记下原文，**仍留在表里** ——
+           命中广播那一步要用 kh_map_lookup_locked(combo) 取 action/brush，
+           抽走条目就广播不出去（与 altTool 的情况不同：那个不产生命中）。 */
+        {
+            const char* wp = strrchr(items[i].combo, '+');
+            const char* wt = wp ? wp + 1 : items[i].combo;
+            if (_stricmp(wt, "Wheel") == 0) {
+                _snprintf(wheelCombo, sizeof(wheelCombo), "%s", items[i].combo);
+            }
+        }
         int dup = 0;
         for (int j = 0; j < mn; j++)
             if (_stricmp(map[j].combo, items[i].combo) == 0) { dup = 1; break; }
@@ -601,6 +639,33 @@ static int kh_map_apply(const KhItem* items, int n)
         if (hv != prev) {
             if (hv) kh_log("临时吸管按住键已装载：%s（vk=0x%02X mods=0x%X）", altCombo, hv, hm);
             else    kh_log("临时吸管按住键已卸载（工具模式关闭 / 未绑定）");
+        }
+    }
+
+    /* 0x0235：发布滚轮热键条目（未配置 ⇒ On=0，鼠标钩子一次整数比较后放行）。
+       ⛔ 只在变化时留痕：配置帧可能因路径对齐/重发而反复到达，否则每帧一行。
+       ⛔ 先写 combo 串、最后置 On：钩子线程以 On 为准，见到 1 时串已经写好。 */
+    {
+        int wm = 0, wv = 0;
+        if (wheelCombo[0] && !kh_combo_to_key(wheelCombo, &wm, &wv)) wv = 0;
+        /* ⛔⛔ 安全闸：**裸滚轮一律不装载**。没有修饰键的滚轮在 PS 里就是缩放画布
+           （偏好设置「用滚轮缩放」）——装上去等于把用户的画布缩放整个吞掉，
+           而这条快捷键的收益远小于这个代价。用户手改配置文件也拦得住。 */
+        int have = (wv == KH_VK_WHEEL && wm != 0) ? 1 : 0;
+        if (wv == KH_VK_WHEEL && wm == 0) {
+            kh_log("⚠️ 滚轮热键「%s」没有修饰键 ⇒ 拒绝装载（裸滚轮必须留给 PS 缩放画布）",
+                   wheelCombo);
+        }
+        LONG prevOn = g_khWheelOn;
+        LONG prevMods = g_khWheelMods;
+        if (have) {
+            _snprintf(g_khWheelCombo, sizeof(g_khWheelCombo), "%s", wheelCombo);
+            InterlockedExchange(&g_khWheelMods, wm);
+        }
+        InterlockedExchange(&g_khWheelOn, have);
+        if (have != (int)prevOn || (have && wm != (int)prevMods)) {
+            if (have) kh_log("滚轮热键已装载：%s（mods=0x%X；仅精确匹配时吞掉滚动）", wheelCombo, wm);
+            else      kh_log("滚轮热键已卸载（未配置 / 已解绑）");
         }
     }
     return mn;
@@ -1103,6 +1168,10 @@ static void kh_build_state(char* out, int cap)
 /* vk → token（Program.cs KeyToToken 逐字对应；与 ParseCombo 严格互逆）。 */
 static const char* kh_key_to_token(int vk)
 {
+    /* 0x0235：滚轮伪 vk ⇒ 组合键里写成 "Wheel"（"Ctrl+Wheel"）。
+       ⛔ kh_combo_to_key 的反向扫描只走 8..255，碰不到这个值；
+          这里返回字面量而不是 static 缓冲，与字母那条分支互不影响。 */
+    if (vk == KH_VK_WHEEL) return "Wheel";
     if (vk >= 0x41 && vk <= 0x5A) {
         static char one[2];
         one[0] = (char)vk; one[1] = 0;
@@ -1339,6 +1408,23 @@ static void kh_hit_push(const char* combo)
         return;
     }
     _snprintf(g_khHitQ[t % KH_HITQ], KH_COMBO_MAX, "%s", combo);
+    g_khHitDirQ[t % KH_HITQ] = 0;
+    InterlockedExchange(&g_khHitTail, t + 1);
+    SetEvent(g_khWake);
+}
+
+/* 0x0235：带方向的命中（滚轮用）。dir: +1 = 向下（下一个），-1 = 向上（上一个）。
+ * ⛔ 与 kh_hit_push 同一条队列、同一套唤醒：方向只是随行的一个整数，
+ *    不另开队列（另开就会出现「combo 到了、方向还没到」的错配窗口）。 */
+static void kh_hit_push_dir(const char* combo, int dir)
+{
+    LONG t = g_khHitTail;
+    if (t - g_khHitHead >= KH_HITQ) {
+        InterlockedIncrement(&g_khHitDrops);
+        return;
+    }
+    _snprintf(g_khHitQ[t % KH_HITQ], KH_COMBO_MAX, "%s", combo);
+    g_khHitDirQ[t % KH_HITQ] = (dir < 0) ? -1 : 1;
     InterlockedExchange(&g_khHitTail, t + 1);
     SetEvent(g_khWake);
 }
@@ -1576,6 +1662,28 @@ static LRESULT kh_dispatch(int nCode, WPARAM wParam, LPARAM lParam)
                 kh_hit_push(hit.combo);
                 return 1;                              /* 吞掉：PS 不再收到该组合键 */
             }
+            /* ===== 0x0235：裸键 + 修饰键的诊断留痕 =====
+               用户 2026-11-16 报「Shift+L 在多边形/磁性套索之间切不动，怀疑被当成裸 L 吞了」。
+               代码上匹配是**精确**的：kh_build_combo 把当前修饰键拼进 combo
+               （Shift+L ≠ L），查表逐字比较 ⇒ 带修饰的键不可能命中裸键条目。
+               但「代码上不可能」不足以让人放心，这里给一条**可验证的证据**：
+               当按下的组合键带修饰、且它的裸键形式在表里时，留一行日志说明「已放行」。
+               ⛔ 2 秒节流：正常输入时 Shift+字母 不算罕见，别把日志刷成噪音。 */
+            {
+                const char* bareTok = kh_key_to_token(vk);
+                if (bareTok && strchr(combo, '+')) {
+                    KhItem bareHit;
+                    if (kh_map_lookup(bareTok, &bareHit)) {
+                        static DWORD s_lastModPassLog;
+                        DWORD nowT = GetTickCount();
+                        if (!s_lastModPassLog || (DWORD)(nowT - s_lastModPassLog) >= 2000) {
+                            s_lastModPassLog = nowT;
+                            kh_hlog("★诊断：按下 %s 带修饰键 ⇒ 不匹配裸键条目「%s」，整击放行给 PS",
+                                    combo, bareTok);
+                        }
+                    }
+                }
+            }
         }
     }
     return CallNextHookEx(h, nCode, wParam, lParam);
@@ -1646,6 +1754,10 @@ static void kh_poll_rebuild_watch(void)
         if (!c[0]) continue;
         const char* plus = strrchr(c, '+');
         const char* tok = plus ? plus + 1 : c;
+        /* 0x0235：滚轮条目没有键态可轮询（WM_MOUSEWHEEL 由鼠标钩子直接处理）。
+           ⛔ 必须显式跳过：下面的扫描找不到 "Wheel" 这个 token 就会把 all 置 1，
+              那会让轮询去处理**每一个**按键，凭空多出一整条无用通路。 */
+        if (_stricmp(tok, "Wheel") == 0) continue;
         int hit = 0;
         for (int vk = 8; vk < 256 && !hit; vk++) {
             const char* t = kh_key_to_token(vk);
@@ -1776,7 +1888,11 @@ static LONG g_khHkText = -1;
 static int  g_khHkFailLogged;
 
 /* "Ctrl+Alt+Shift+K" → (MOD_*, vk)。**允许裸键**（mods 可能为 0）。
- * 0x0210：临时吸管的按住键默认就是裸键 `/`，所以解析必须放行无修饰键。 */
+ * 0x0210：临时吸管的按住键默认就是裸键 `/`，所以解析必须放行无修饰键。
+ * 0x0235："Wheel" 是一个**伪 vk**（KH_VK_WHEEL），真实的滚轮没有 vk：
+ *   Windows 的滚轮只产生 WM_MOUSEWHEEL，RegisterHotKey 注册不了、键态轮询也看不到。
+ *   解析出来只为让条目能通过统一的解析/去重路径进入热键表，
+ *   真正的匹配在鼠标钩子里做（kh_mse_proc 的滚轮分支）。 */
 static int kh_combo_to_key(const char* combo, int* mods, int* vk)
 {
     int m = 0, v = 0;
@@ -1792,6 +1908,7 @@ static int kh_combo_to_key(const char* combo, int* mods, int* vk)
         else if (_stricmp(tok, "Alt") == 0)   m |= MOD_ALT;
         else if (_stricmp(tok, "Shift") == 0) m |= MOD_SHIFT;
         else if (_stricmp(tok, "Win") == 0)   m |= MOD_WIN;
+        else if (_stricmp(tok, "Wheel") == 0) v = KH_VK_WHEEL;
         else {
             for (int k = 8; k < 256; k++) {
                 const char* t = kh_key_to_token(k);
@@ -1857,13 +1974,15 @@ static void kh_hk_sync(void)
     for (LONG i = 0; i < cnt && m && n < KH_MAX_ITEMS; i++) snap[n++] = m[i];
     LeaveCriticalSection(&g_khMapLk);
 
-    int ok = 0, bad = 0, bare = 0, yielded = 0, digits = 0;
+    int ok = 0, bad = 0, bare = 0, yielded = 0, digits = 0, wheels = 0;
     for (int i = 0; i < n && ok < KH_HK_MAX; i++) {
         /* 0x0224：让位期间**不许注册**混合模式键 —— 注册即独占摘键，
            键就到不了 PS，用户按 Alt+Shift+J 想改画笔混合模式会彻底没反应。 */
         if (yld && _stricmp(snap[i].action, "blendMode") == 0) { yielded++; continue; }
         int mods = 0, vk = 0;
         if (!kh_combo_to_key(snap[i].combo, &mods, &vk)) { bare++; continue; }
+        /* 0x0235：滚轮条目交给鼠标钩子，RegisterHotKey 注册不了（没有 vk）。 */
+        if (vk == KH_VK_WHEEL) { wheels++; continue; }
         /* 0x0226：裸键只放行「数字类」进系统级独占。其余裸键维持旧语义
            （钩子/轮询，不吞键）——一次只修用户报的那一类冲突。 */
         if (!mods && !kh_is_digit_vk(vk)) { bare++; continue; }
@@ -1874,8 +1993,9 @@ static void kh_hk_sync(void)
         if (!mods) digits++;
         ok++;
     }
-    kh_log("RegisterHotKey 接管 %d 条（其中裸数字键 %d 条；其它裸键交钩子/轮询 %d 条，被占用 %d 条）",
-           ok, digits, bare, bad);
+    kh_log("RegisterHotKey 接管 %d 条（其中裸数字键 %d 条；其它裸键交钩子/轮询 %d 条，"
+           "滚轮条目交鼠标钩子 %d 条，被占用 %d 条）",
+           ok, digits, bare, wheels, bad);
     if (yielded) kh_log("混合模式热键让位中：%d 条 Alt+Shift 键不注册，交回 PS", yielded);
     if (bad && !g_khHkFailLogged) {
         g_khHkFailLogged = 1;   /* 只提示一次，避免前台来回切换刷屏 */
@@ -1983,9 +2103,13 @@ static void kh_uninstall_hook(void)
  *   而且 250Hz 轮询还会漏掉短按。`WH_MOUSE_LL` 收到的是系统派发的**消息本身**：
  *   按下/抬起各一次，带坐标与时刻，不漏、不漂。
  *
- * ⛔ 回调铁律同键盘钩子：O(1)、无锁、无文件 I/O、恒 CallNextHookEx（绝不吞事件）。
+ * ⛔ 回调铁律同键盘钩子：O(1)、无锁、无文件 I/O。
  * ⛔ 本镜像只**记状态**，不做任何决策、不注入、不改写 —— 判定全在平滑引擎侧，
- *    且只在「真实通路已死」的窗口里使用（见 smooth_engine.c 的 0x012D 段）。 */
+ *    且只在「真实通路已死」的窗口里使用（见 smooth_engine.c 的 0x012D 段）。
+ * ⛔⛔ 0x0235 起这里**不再是「恒放行」**：`WM_MOUSEWHEEL` 多了一个「滚轮热键」分支，
+ *    在「配置里确有该条目 ∧ 修饰键完全匹配 ∧ 布防 ∧ 非文本输入 ∧ 前台是本进程」
+ *    五条同时成立时才 `return 1` 吞掉这次滚动（用于 Ctrl+滚轮切填充模式）。
+ *    任一条件不成立 ⇒ 原样 CallNextHookEx —— 左键镜像、滚轮缩放、平移都不受影响。 */
 static volatile LONG  g_mseDown;      /* 最近一次左键消息的按下态（1=按下） */
 static volatile LONG  g_mseX, g_mseY; /* 该消息发生时的屏幕坐标 */
 static volatile LONG  g_mseT;         /* 该消息的时刻（GetTickCount） */
@@ -2000,6 +2124,73 @@ static LRESULT CALLBACK kh_mse_proc(int code, WPARAM w, LPARAM l)
         g_mseT = (LONG)GetTickCount();
         if (w == WM_LBUTTONDOWN) { g_mseDown = 1; g_mseDn++; }
         else                     { g_mseDown = 0; g_mseUp++; }
+        return CallNextHookEx(NULL, code, w, l);
+    }
+
+    /* ===== 0x0235：滚轮热键（默认 Ctrl+滚轮 = 切换选区填充模式）=====
+     *
+     * 为什么必须在鼠标钩子里做：滚轮没有 vk，`RegisterHotKey` 注册不了，
+     * 键态轮询也读不到（只有 WM_MOUSEWHEEL 这一条通路）。
+     *
+     * ⛔⛔ 用户明确要求「不要让我无法使用滚轮缩放画布」⇒ 吞键条件是**全条件与**：
+     *   ① 配置里确实有这条滚轮条目（g_khWheelOn）—— 没配就一次整数比较后放行；
+     *   ② 修饰键**完全匹配**：条目要求的按着，未列出的必须抬着。
+     *      Ctrl+滚轮 的条目 ⇒ 裸滚轮 / Shift+滚轮 / Alt+滚轮 / Win+滚轮 全部透传；
+     *   ③ 布防中（g_khActive）+ 未熔断 + 非文本输入态 + 前台就是本进程。
+     *   任一条不成立 ⇒ 原样 CallNextHookEx，PS 的滚轮缩放/平移一个字节都不改。
+     *
+     * ⛔ 一格只切一次：高分辨率滚轮一次物理格会连发多条（delta 可能 30），
+     *   这里按 120 的整数倍累加，攒够一格才入队一条命中。
+     * ⛔ 录制期**不吞**滚轮（否则录制时用户就没法滚动画布了），只捕获组合键。 */
+    if (code == HC_ACTION && w == WM_MOUSEWHEEL) {
+        const MSLLHOOKSTRUCT* m = (const MSLLHOOKSTRUCT*)l;
+        int delta = m ? (int)(short)HIWORD(m->mouseData) : 0;
+
+        /* 录制：把「修饰键 + Wheel」当成一个普通组合键捕获（与键盘侧同一套待确认流程）。
+           ⛔ 不吞事件、不记账（滚轮不参与 kh_dual_mark 的去重）。 */
+        if (g_khRecording) {
+            char combo[KH_COMBO_MAX];
+            if (kh_build_combo(KH_VK_WHEEL, combo, (int)sizeof(combo))) {
+                /* ⛔ 只接受带修饰键的滚轮。裸滚轮在 PS 里是缩放画布（偏好设置「用滚轮缩放」），
+                   录成热键等于把缩放整个吞掉 —— 这里直接拒绝并留一行提示，
+                   用户看到「按下组合键…」不变就知道这个组合不被接受。 */
+                if (!strchr(combo, '+')) {
+                    static DWORD s_lastBareWheelLog;
+                    DWORD nowT = GetTickCount();
+                    if (!s_lastBareWheelLog || (DWORD)(nowT - s_lastBareWheelLog) >= 2000) {
+                        s_lastBareWheelLog = nowT;
+                        kh_hlog("⚠️ 滚轮必须带修饰键（如 Ctrl+滚轮）：裸滚轮要留给 Photoshop 缩放画布");
+                    }
+                    return CallNextHookEx(NULL, code, w, l);
+                }
+                memcpy(g_khRecPending, combo, sizeof(g_khRecPending));
+                kh_hlog("已捕获组合键（滚轮·待确认）: %s", combo);
+                kh_send_recording_progress(combo);
+            }
+            g_khWheelAcc = 0;
+            return CallNextHookEx(NULL, code, w, l);
+        }
+
+        if (g_khWheelOn && g_khActive && !g_khSafeMode && !g_khTextGuard && delta) {
+            int reqMods = (int)g_khWheelMods;
+            int ctrl  = (GetAsyncKeyState(VK_CONTROL) & 0x8000) ? 1 : 0;
+            int alt   = (GetAsyncKeyState(VK_MENU)    & 0x8000) ? 1 : 0;
+            int shift = (GetAsyncKeyState(VK_SHIFT)   & 0x8000) ? 1 : 0;
+            int win   = ((GetAsyncKeyState(VK_LWIN) & 0x8000) || (GetAsyncKeyState(VK_RWIN) & 0x8000)) ? 1 : 0;
+            int exact = (ctrl  == ((reqMods & MOD_CONTROL) ? 1 : 0)) &&
+                        (alt   == ((reqMods & MOD_ALT)     ? 1 : 0)) &&
+                        (shift == ((reqMods & MOD_SHIFT)   ? 1 : 0)) &&
+                        (win   == ((reqMods & MOD_WIN)     ? 1 : 0));
+            if (exact && kh_ps_foreground()) {
+                g_khWheelAcc += delta;
+                /* +1 = 向下滚 = 下一个；-1 = 向上滚 = 上一个。 */
+                if (g_khWheelAcc >= 120)       { g_khWheelAcc = 0; kh_hit_push_dir(g_khWheelCombo, +1); }
+                else if (g_khWheelAcc <= -120) { g_khWheelAcc = 0; kh_hit_push_dir(g_khWheelCombo, -1); }
+                return 1;                      /* 吞掉这次滚动：PS 不再缩放/平移 */
+            }
+            /* 修饰键不匹配 ⇒ 多半是用户在缩放画布：清掉累加，按原样透传。 */
+            g_khWheelAcc = 0;
+        }
     }
     return CallNextHookEx(NULL, code, w, l);
 }
@@ -2414,6 +2605,7 @@ static DWORD WINAPI kh_dispatch_thread(LPVOID param)
             char combo[KH_COMBO_MAX];
             memcpy(combo, g_khHitQ[h % KH_HITQ], KH_COMBO_MAX);
             combo[KH_COMBO_MAX - 1] = 0;
+            int dir = (int)g_khHitDirQ[h % KH_HITQ];
             g_khHitHead = h + 1;
             KhItem it;
             if (kh_map_lookup_locked(combo, &it)) {
@@ -2422,12 +2614,27 @@ static DWORD WINAPI kh_dispatch_thread(LPVOID param)
                 kh_esc(it.combo,  cbE, (int)sizeof(cbE));
                 kh_esc(it.action, acE, (int)sizeof(acE));
                 kh_esc(it.brush,  brE, (int)sizeof(brE));
-                _snprintf(m, sizeof(m),
-                          "{\"type\":\"hotkey\",\"id\":\"%s\",\"combo\":\"%s\","
-                          "\"action\":\"%s\",\"brush\":\"%s\"}",
-                          idE, cbE, acE, brE);
-                kh_log("热键命中: %s -> %s%s%s", it.combo, it.action,
-                       it.brush[0] ? " / " : "", it.brush);
+                /* 0x0235：dir 只在非 0 时出现（滚轮命中）。面板侧缺省当 +1（下一个）。
+                   ⛔ 老面板读不带 dir 的消息 = 行为不变；新面板读老 .8li 同理。
+                   seq = 这条命中的**绝对序号**（命中环的头指针，单调递增）。
+                   ⛔ 面板侧要去重「同一次命中被广播给 N 个面板」，而「组合键 + 时间桶」
+                      在连续滚动时不成立（两格落在同一个 400ms 桶里会被误判成重复，
+                      快速滚动就会漏步）⇒ 必须用一次命中独有的序号。 */
+                LONG seq = h;
+                if (dir) {
+                    _snprintf(m, sizeof(m),
+                              "{\"type\":\"hotkey\",\"id\":\"%s\",\"combo\":\"%s\","
+                              "\"action\":\"%s\",\"brush\":\"%s\",\"dir\":%d,\"seq\":%ld}",
+                              idE, cbE, acE, brE, dir, (long)seq);
+                } else {
+                    _snprintf(m, sizeof(m),
+                              "{\"type\":\"hotkey\",\"id\":\"%s\",\"combo\":\"%s\","
+                              "\"action\":\"%s\",\"brush\":\"%s\",\"seq\":%ld}",
+                              idE, cbE, acE, brE, (long)seq);
+                }
+                kh_log("热键命中: %s -> %s%s%s%s", it.combo, it.action,
+                       it.brush[0] ? " / " : "", it.brush,
+                       dir ? (dir > 0 ? " (下一个)" : " (上一个)") : "");
                 kh_broadcast(m);
             }
         }

@@ -1,7 +1,7 @@
 /**
  * BlendModeBus —— 「选区填充混合模式」的跨面板共享**事件**总线
  *
- * 背景（与 ClearModeBus / FillPanelToggleBus 同款）：
+ * 背景（与 ClearModeBus / FillModeCycleBus 同款）：
  * 混合模式（blendMode，中文名，如「变暗」）是 APP 面板（#app）的 React state，
  * 填充时写进 batchPlay 描述符（app.tsx 的 fill/stroke 各处的 blendMode 字段）。
  * 触发它的入口：
@@ -27,7 +27,7 @@ interface BlendModeEvent {
 }
 
 // UXP 的 uxp 模块在 webpack 打包后用静态 import 有时拿不到，统一走 require 兜底，
-// 与 PanelStateManager / MainToggleBus / FillPanelToggleBus 一致。
+// 与 PanelStateManager / MainToggleBus / FillModeCycleBus 一致。
 function getLfs(): any {
     try {
         return require('uxp').storage.localFileSystem;

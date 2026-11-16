@@ -2310,7 +2310,20 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
      ⛔ 只门 HUD 显隐：宽判 / 补流 / 代投 / 吸附 / 平滑 / 吞笔修复逐字不动；
      ⚠️ 本轮**面板侧有改动**，部署须同时更新 UXP 面板与 .8li；
      无共享槽位变化（`CFG_NLONGS` 仍 61）；`jwwh_version` 仍 0x013A。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x0234; }
+/* 0x0235 = 【滚轮热键（Ctrl+滚轮切填充模式）+ 裸键精确匹配留痕】
+   - keyhook.c：新增 `KH_VK_WHEEL` 伪 vk 与 `kh_combo_to_key("Wheel")` 解析；
+     滚轮条目**不进** RegisterHotKey、**不进**键态轮询（没有 vk 可注册/可看），
+     改由既有的 WH_MOUSE_LL 在 `WM_MOUSEWHEEL` 分支处理：
+       · 只有「修饰键完全匹配 ∧ 布防 ∧ 非熔断 ∧ 非文本输入 ∧ 前台是本进程」才吞滚动；
+       · 每攒够 120 的整数倍才入队一条命中（高分辨率滚轮一格连发多条）；
+       · 命中环新增平行的方向列 `g_khHitDirQ`，广播 JSON 多一个 `"dir":±1`
+         （只在非 0 时出现 ⇒ 老面板/老 .8li 互操作行为不变）；
+       · 录制期把「修饰键 + Wheel」当普通组合键捕获（不吞滚动）。
+   - 诊断：按下带修饰的键、而其裸键形式在表里时留一行「整击放行给 PS」——
+     用于答复「Shift+L 是否被当成裸 L 吞掉」（结论：不会，匹配是精确的）。
+   - 面板侧：`fillModeCycle` 条目默认 `Ctrl+Wheel`，经 FillModeCycleBus 分发。
+   无共享槽位变化（`CFG_NLONGS` 仍 61）。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x0235; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {

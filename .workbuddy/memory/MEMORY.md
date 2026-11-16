@@ -1,11 +1,11 @@
 # JWautofill 项目记忆（主索引）
 
 > 只留「编号 + 一句话 + refs 指针」；明细在 `refs/`，里程碑在 `HISTORY.md`，逐条实证在 `2026-11-*.md`。
-> 架构：平滑 + 键盘钩子 = **PS 进程内 .8li**（`native/JWautofillHost/`，WS 18924 平滑 / 18923 热键）。PS 现加载 **0x0234**（已部署到 `Adobe Photoshop 2026\Plug-ins\`，385024 B / 13:11；面板 `Plug-ins\dist` 同步为 **development** 构建 5211683 B）；面板侧纯白清除 = 面板 0x0227；0x0228 文本闸门、0x022B 宽判收口、0x022C 日志编码、0x022D 停笔补齐（包路径）、0x022E 光标路径按模式推进、0x022F 面板侧删掉无条件切套索、0x0230 吞笔真根因＝僵持 tip=1、0x0231 吸附两条边缘条件＝Alt 期间「笔抬没抬起」、0x0232 抬笔点逐拍记录 + 按住拖动＝回套索、0x0233 切回吞第一笔＝前台切回 tip 静默（✅ 用户复测通过）＋停靠面板误显 HUD 首修（❌ 复测证伪）、**0x0234 停靠面板误显 HUD 二修＝面板 pointer 心跳 + 命中窗口「直接父」（已部署，⚠️ 待复测）**。
+> 架构：平滑 + 键盘钩子 = **PS 进程内 .8li**（`native/JWautofillHost/`，WS 18924 平滑 / 18923 热键）。PS 现加载 **0x0235**（已部署到 `Adobe Photoshop 2026\Plug-ins\`，387072 B / 13:24；面板 `Plug-ins\dist` 同步为 **development** 构建 5259119 B）；面板侧纯白清除 = 面板 0x0227；0x0228 文本闸门、0x022B 宽判收口、0x022C 日志编码、0x022D 停笔补齐（包路径）、0x022E 光标路径按模式推进、0x022F 面板侧删掉无条件切套索、0x0230 吞笔真根因＝僵持 tip=1、0x0231 吸附两条边缘条件＝Alt 期间「笔抬没抬起」、0x0232 抬笔点逐拍记录 + 按住拖动＝回套索、0x0233 切回吞第一笔＝前台切回 tip 静默（✅ 用户复测通过）＋停靠面板误显 HUD 首修（❌ 复测证伪）、0x0234 停靠面板误显 HUD 二修＝面板 pointer 心跳 + 命中窗口「直接父」、**0x0235 滚轮热键（Ctrl+滚轮切填充模式）+ 套索工具键改「按需切换」（已部署，⚠️ 待复测）**。
 
 ## 索引（`refs/` 下）
 
-`fill-and-stroke`（填充/描边/清除）｜`frontend-css`（CSS/面板/主题）｜`busy-gate`（闸门/模态）｜`uxp-api-layer`（UXP/API/性能）｜`pixel-algorithms`（像素）｜`toolchain-and-env`（构建/部署）｜`lasso-smoothing`（平滑/HUD/断流/闸门/吸管，O22–O62）｜`keyhook-8li`（键盘钩子）｜`brush-mixer-reservoir`（混合器）｜`poly-snap-0x0211-0x021F`（临时模式/冻结/吸附）｜`blend-hotkey-yield-0x0224`（混合模式让位）｜`ironrules-1-89`（1–89 全文）｜`ironrules-90-129`（90–129 全文）
+`fill-and-stroke`（填充/描边/清除）｜`frontend-css`（CSS/面板/主题）｜`busy-gate`（闸门/模态）｜`uxp-api-layer`（UXP/API/性能）｜`pixel-algorithms`（像素）｜`toolchain-and-env`（构建/部署）｜`lasso-smoothing`（平滑/HUD/断流/闸门/吸管，O22–O62）｜`keyhook-8li`（键盘钩子/滚轮热键 0x0235）｜`brush-mixer-reservoir`（混合器）｜`poly-snap-0x0211-0x021F`（临时模式/冻结/吸附）｜`blend-hotkey-yield-0x0224`（混合模式让位）｜`ironrules-1-89`（1–89 全文）｜`ironrules-90-129`（90–129 全文）
 
 **校验**：改 CSS 跑 3 个 guard（只扫 `src/styles/*.css`）；类型检查 `npx tsc -p tsconfig.check.json`（⛔ 别用 `tsc --noEmit`）；改 .c 跑 `build.sh`（须沙箱外）零告警 + 导出表 5 项；改面板**别跑 `yarn build`**（那会产出 production 覆盖 `yarn watch` 的 dev 构建）—— watch 会自动重编，再把 `dist/bundle.js` 复制到 `Plug-ins\dist\` 即可。全仓 ~168 条历史错误在 `app.tsx`/`adjustments`/`components`，只看自己碰过的行。
 
@@ -50,6 +50,9 @@
 128 HUD「是不是画布」**不许靠猜窗口身份**：面板 pointer 心跳 + 只看**直接父**；`MSG.hwnd` 只进日志。
 129 `-25920` 两个成因：模态碰撞（能挡）+ **get 目标失效**（挡不住）⇒ 只读探测一律 `silent`、命中 `_obj:'error'` 立即 `break`、快照带 `fresh`。
 130 快捷键 UI 分两处但**共用** `FuncHotkeyPanel` 的 `scope`（工具箱=功能快捷键 / APP=自定义快捷键）；两面板各有 `cachedConfig` 且原生 `config` **不广播** ⇒ 子面板打开即 `requestConfigRefresh()`。菜单：参数复位独占一组，「自定义快捷键 + 填充设置」同组；混合模式热键 notify 归 APP（「选区平滑」上方）。
+131 滚轮组合没有 vk ⇒ 只能由 `WH_MOUSE_LL` 的 `WM_MOUSEWHEEL` 处理（伪 vk `KH_VK_WHEEL`）；吞滚动的条件是**五条全与**（有条目 ∧ 修饰键完全匹配 ∧ 布防 ∧ 非文本 ∧ 前台），**裸滚轮永不装载**（那是 PS 的缩放画布）。
+132 「切回某工具」一律**按需**：先同步读 `app.currentTool`，已在目标族就别发 `select` —— 无条件切会迟到落地，把用户随后的 Shift+某键原生循环（如 Shift+L 切多边形/磁性套索）拽回去。
+133 PS 原生「Shift+字母循环同组工具」在 L 上不生效（其它字母都正常，首选项已勾选）⇒ L 被插件接管后这一组的循环只能由插件补：新建配置条目 `lasso_cycle`（默认 Shift+L，仅工具模式装载）→ RegisterHotKey 独占 ⇒ PS 收不到、不会双跳；游标在桥接侧维护（`app.currentTool` 不可靠，见 0x0211）。**多边形套索的引用名是 `polySelTool`**（`polygonalLassoTool` 是猜的、`select` 静默无效 ⇒ 表现为「只在套索与磁性之间跳」）；族判定用 `LASSO_GROUP` 精确比较，⛔ 别用 `/lassoTool$/` 后缀正则（判不出 polySelTool，会把多边形误判成跑偏而踢回普通套索）。`App.isLassoTool`（平滑闸门）**故意**仍只认 `lasso` 关键词，与原生 `ci_has` 逐字一致，两套判据别混用。
 
 ## 其余铁律（1–89）—— 全文见 `refs/ironrules-1-89.md`
 

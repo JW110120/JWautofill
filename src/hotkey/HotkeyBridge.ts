@@ -7,7 +7,7 @@
 import { action, app } from 'photoshop';
 import { storage } from 'uxp';
 import { MainToggleState, requestMainToggle, requestMainToggleOff } from '../utils/MainToggleBus';
-import { requestFillPanelToggle } from '../utils/FillPanelToggleBus';
+import { requestFillModeCycle, FillModeDir } from '../utils/FillModeCycleBus';
 import { requestClearModeToggle } from '../utils/ClearModeBus';
 import { requestBlendMode } from '../utils/BlendModeBus';
 import { psRead, runAsModal } from '../utils/psAccess';
@@ -30,7 +30,8 @@ export interface HotkeyEntry {
   //   altTool     工具模式「临时吸管」按住键（切吸管 / 松手切回套索，2026-10-28 新增）
   //   pickColor   前景色拾色器（呼出 PS 原生拾色器并写回前景色，2026-10-29 新增）
   //   blendHotkey 混合模式热键总开关（combo 非空=开；.8li 见之装载内置 Alt+Shift 表）
-  action: 'toggleMain' | 'applyBrush' | 'runFunc' | 'focusLasso' | 'focusClear' | 'altTool' | 'pickColor' | 'blendHotkey';
+  action: 'toggleMain' | 'applyBrush' | 'runFunc' | 'focusLasso' | 'focusClear' | 'altTool' | 'pickColor' | 'blendHotkey'
+        | 'lassoCycle';   // 套索组循环（默认 Shift+L，2026-11-16 新增）
   brush?: string;                // applyBrush 时的笔刷名（PS 预设名，需精确匹配）。
                                   // 注意：不支持同名笔刷——PS 按 _name 只会选中 Brushes 列表最上方那支。
                                   // runFunc 时复用本字段承载功能 id（见 funcHotkeyDefs.ts），
@@ -473,7 +474,15 @@ function emitAltHold(on: boolean) {
  * ⛔ 不抛错：临时吸管是「按下就做」的交互，失败最多是工具没切过去，
  *    绝不能因为一次 batchPlay 报错在控制台刷屏或打断用户。
  */
-export async function selectToolByRef(ref: 'lassoTool' | 'eyedropperTool'): Promise<boolean> {
+/* ⛔⛔ 工具引用名必须逐字取 PS 内部 ID，**不能按英文意思猜**：
+   多边形套索是 `polySelTool`（polygon **Sel**ection 的缩写），不是 `polygonalLassoTool`。
+   猜错时 `select` **不报错、只是静默无效** —— 2026-11-16 用户实测「Shift+L 只在
+   套索与磁性套索之间跳」，正是因为中间那一格发给了不存在的引用（游标照走、工具不动）。
+   证据：`docs/lnp-ps64-reverse-2026-10-16.md` 记录的 PS 二进制硬编码工具表
+   `paintbrushTool / pencilTool / cloneStampTool / eraserTool / magneticLassoTool /
+    lassoTool / polySelTool / eyedropperTool …`。 */
+export type ToolRef = 'lassoTool' | 'polySelTool' | 'magneticLassoTool' | 'eyedropperTool';
+export async function selectToolByRef(ref: ToolRef): Promise<boolean> {
   const descriptor: any = {
     _obj: 'select',
     _target: [{ _ref: ref }],
@@ -513,14 +522,16 @@ function normalizeEntry(e: any): HotkeyEntry | null {
   const id: string = e.id ?? e.Id ?? ('bk_' + Math.random().toString(36).slice(2));
   if (action !== 'toggleMain' && action !== 'applyBrush' && action !== 'runFunc'
       && action !== 'focusLasso' && action !== 'focusClear' && action !== 'altTool'
-      && action !== 'pickColor' && action !== 'blendHotkey') return null;
+      && action !== 'pickColor' && action !== 'blendHotkey'
+      && action !== 'lassoCycle') return null;
   // combo 为空的合法条目：主开关（'' = 已解绑）、笔刷（'' = 已解绑但条目保留在列表，
   // 单击选中后按退格即解绑，与「删除」按钮区分）、工具模式套索键（'' = 工具模式关闭时不装载）、
   // 临时吸管键（'' = 工具模式关闭时不装载）、
   // 混合模式热键开关（'' = 关闭，条目保留供开关回显）。
   // runFunc 空组合键无意义，直接丢弃。
   if (!combo && action !== 'toggleMain' && action !== 'applyBrush' && action !== 'focusLasso'
-      && action !== 'focusClear' && action !== 'altTool' && action !== 'blendHotkey') return null;
+      && action !== 'focusClear' && action !== 'altTool' && action !== 'blendHotkey'
+      && action !== 'lassoCycle') return null;
   // runFunc 必须携带功能 id（复用 brush 字段），缺了就无法执行，丢弃。
   if (action === 'runFunc' && !brush) return null;
   return { id, combo, action, brush };
@@ -666,12 +677,16 @@ export function connectHotkeyDaemon(): () => void {
             if (pathAligned) ensureMainToggleEntry();
             // 工具模式开启时补上/更新「套索工具键」（仅 APP 面板上下文会真正写入）
             if (pathAligned) ensureFocusLassoEntry();
+            // 工具模式开启时补上/更新「切换套索工具」键（默认 Shift+L，同上仅 APP 面板写）
+            if (pathAligned) ensureLassoCycleEntry();
             // 工具模式开启时补上/更新「清除模式」键（默认 Shift+E，同上仅 APP 面板写）
             if (pathAligned) ensureFocusClearEntry();
             // 工具模式开启时补上/更新「临时吸管」按住键（默认 /，同上仅 APP 面板写）
             if (pathAligned) ensureAltToolEntry();
             // 「前景色拾色器」键（默认 Shift+/）：与工具模式无关，始终装载
             if (pathAligned) ensurePickColorEntry();
+            // 「切换填充模式」键（默认 Ctrl+滚轮）：同上，与工具模式无关，始终装载
+            if (pathAligned) ensureFillModeCycleEntry();
             emitConfig();
           }
           else if (msg?.type === 'recordCaptured') {
@@ -765,7 +780,7 @@ export function registerFuncRunner(fn: (funcId: string) => void) {
   funcRunner = fn;
 }
 
-function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?: string }) {
+function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?: string; dir?: number }) {
   if (msg.action === 'toggleMain') {
     // 主开关：翻转「共享状态」而不是调用本面板内的回调。
     // token 用「组合键 + 400ms 时间桶」生成：同一次命中在所有面板上算出同一个 token，
@@ -798,8 +813,19 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
       .catch(() => {
         for (const l of hotkeyListeners) { try { l({ combo, action: 'focusLasso', ok: false }); } catch { /* ignore */ } }
       });
-    // 无论主开关结果如何都把工具切回套索（模拟 PS 的「点套索工具按钮」）
-    void selectLassoTool();
+    // 工具切回套索 —— 但**只在真的跑偏时**才发命令（0x0235，见 selectLassoIfStrayed 说明）。
+    selectLassoIfStrayed();
+    return;
+  }
+  if (msg.action === 'lassoCycle') {
+    /* 「切换套索工具」键（默认 Shift+L，2026-11-16）：在套索组内循环一格。
+       ⛔ 不做 token 去重：它没有「读-改-写」共享状态（对比 toggleMain），
+          各面板共用一份订阅表 ⇒ 一次广播只走到这里一次。
+       ⛔ 这里**不**顺手关主开关、也不切回普通套索：用户的场景就是「在套索组里换
+          子工具继续画」，任何额外的工具动作都会把刚切到的子工具又拽回去。 */
+    const combo = msg.combo ?? '';
+    cycleLassoTool();
+    for (const l of hotkeyListeners) { try { l({ combo, action: 'lassoCycle', ok: true }); } catch { /* ignore */ } }
     return;
   }
   if (msg.action === 'focusClear') {
@@ -876,17 +902,30 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
       });
     return;
   }
-  if (msg.action === 'runFunc' && msg.brush?.startsWith('fillPanel:')) {
-    // 选区填充子面板开关（纯色/图案/渐变）：实现权在 APP 面板（子面板展开状态是它的 React state），
+  if (msg.action === 'runFunc' && msg.brush === 'fillModeCycle') {
+    // 「切换填充模式」快捷键（默认 Ctrl+滚轮）：执行权在 APP 面板（fillMode 是它的 React state），
     // 与 MainToggleBus 同理经共享文件分发 + token 去重——守护进程向所有面板广播同一次命中，
-    // 只有第一个写文件的请求生效，APP 面板轮询到新修订号后翻一次，绝不翻两次。
-    const panel = msg.brush.slice('fillPanel:'.length) as 'color' | 'pattern' | 'gradient';
-    const token = 'fillPanel|' + panel + '|' + Math.floor(Date.now() / 400);
+    // 只有第一个写文件的请求生效，APP 面板轮询到新修订号后前进一步，绝不按面板数量连跳。
+    // dir：+1 = 滚轮向下（下一个）、-1 = 滚轮向上（上一个），由 .8li 的鼠标钩子判定后下发。
+    // ⛔ 缺省按 +1 处理（键盘重录成普通组合键时没有方向，语义取「下一个」）。
+    const dir: FillModeDir = Number((msg as any).dir) < 0 ? -1 : 1;
+    /* token 必须**一次命中一个**（而不是「组合键 + 时间桶」）：
+       滚轮连续滚动时两格很容易落进同一个 400ms 桶，用时间桶会把第二格误判成
+       重复而丢掉（表现就是「快速滚动漏步」）。`seq` 是 .8li 给这条命中编的绝对
+       序号，同一命中在所有面板上完全一致 ⇒ 既去重又不会吞掉相邻的两次滚动。
+       老 .8li 不带 seq ⇒ 退回时间桶（行为与以前一致，最坏是快速滚动偶有漏步）。 */
+    const seq = Number((msg as any).seq);
+    const token = isFinite(seq) && seq > 0
+      ? 'fillMode|seq|' + seq
+      : 'fillMode|' + dir + '|' + Math.floor(Date.now() / 400);
     const combo = msg.combo ?? '';
-    const broadcast = (ok: boolean) => {
-      for (const l of hotkeyListeners) { try { l({ combo, action: 'runFunc', brush: msg.brush!, ok }); } catch { /* ignore */ } }
-    };
-    void requestFillPanelToggle(panel, token).then(() => broadcast(true)).catch(() => broadcast(false));
+    void requestFillModeCycle(dir, token)
+      .then(() => {
+        for (const l of hotkeyListeners) { try { l({ combo, action: 'runFunc', brush: msg.brush!, ok: true }); } catch { /* ignore */ } }
+      })
+      .catch(() => {
+        for (const l of hotkeyListeners) { try { l({ combo, action: 'runFunc', brush: msg.brush!, ok: false }); } catch { /* ignore */ } }
+      });
     return;
   }
   if (msg.action === 'runFunc' && msg.brush) {
@@ -1038,6 +1077,108 @@ export function setFocusLassoCombo(combo: string, active: boolean): void {
   const next = idx >= 0 ? cachedConfig.map((e, i) => (i === idx ? desired : e)) : [...cachedConfig, desired];
   cachedConfig = next;
   pushConfig(next);
+}
+
+// ===== 工具模式：「切换套索工具」键（默认 Shift+L，2026-11-16 新增）=====
+// 语义（用户要求）：在套索组内循环 —— 普通套索 → 多边形套索 → 磁性套索 → 普通套索。
+//
+// ⛔ 为什么由插件自己做，而不是交给 PS 原生的 Shift+L：
+//    PS 的「按 Shift+字母循环同组工具」在 L 上不生效（用户真机确认：其它工具的
+//    Shift+字母都能循环，只有 L 不动；首选项「使用 Shift 键切换工具」已勾选）。
+//    而 L 恰好是本插件**全程接管**的键（工具模式：按 L 关主开关 + 切回套索）
+//    ⇒ 这一组工具的原生循环在接管之后就不存在了，只能由插件补上。
+//
+// ⛔ 为什么做成**普通配置条目**（而不是原生侧硬编码）：
+//    ① 它和其它工具模式键（L / Shift+E / `/`）同规矩：只在工具模式开启时装载，
+//       关闭时 combo 置空 ⇒ 不注册、不摘键，PS 原生行为原样保留；
+//    ② 有条目才会被 `.8li` 的 RegisterHotKey **系统级独占**（PS 前台时），
+//       于是 PS 收不到这个键 ⇒ 不会出现「PS 循环一次 + 插件再循环一次」的双跳；
+//    ③ 用户能在本子面板里重录（换成别的组合键）。
+//
+// ⛔ 循环游标由本模块维护，**不依赖** `app.currentTool`：
+//    PS 的多边形/磁性套索在某些版本里是「临时模式」——`application.tool` 仍报
+//    `lassoTool`（见 keyhook.c 的 0x0211 段实证），拿它当游标会永远停在第二格。
+//    ⇒ 只在「游标未初始化」时用它校准，之后一律按游标推进。
+export const LASSO_CYCLE_ID = 'lasso_cycle';
+export const DEFAULT_LASSO_CYCLE_COMBO = 'Shift+L';
+/** 组内顺序必须与 PS 工具栏的下拉顺序一致（Shift+L 的语义就是「下一个」）。 */
+const LASSO_GROUP: ToolRef[] = ['lassoTool', 'polySelTool', 'magneticLassoTool'];
+let lassoCycleActive = false;   // 工具模式是否开启（仅 APP 面板会写）
+let lassoCycleKnown = false;    // 是否由 APP 面板明确过工具模式状态
+/** 循环游标：组内下标；-1 = 未初始化（下一次按键时按当前工具校准）。 */
+let lassoCycleIdx = -1;
+
+/**
+ * 确保配置里存在「切换套索工具」条目，并让它只在工具模式开启时处于装载态。
+ * 与 `ensureFocusLassoEntry` 同款的多面板写护栏（`lassoCycleKnown` 门禁）：
+ * 只有 APP 面板的上下文会真正写入，别的面板只读不改。
+ */
+function ensureLassoCycleEntry(): void {
+  if (!configLoaded || !lassoCycleKnown) return;
+  const idx = cachedConfig.findIndex(e => e.action === 'lassoCycle');
+  const existing = idx >= 0 ? cachedConfig[idx] : undefined;
+  const remembered = (existing && (existing.brush || existing.combo)) || DEFAULT_LASSO_CYCLE_COMBO;
+  const desiredCombo = lassoCycleActive ? remembered : '';
+  if (existing && existing.id === LASSO_CYCLE_ID && existing.combo === desiredCombo && existing.brush === remembered) return;
+  const desired: HotkeyEntry = { id: LASSO_CYCLE_ID, combo: desiredCombo, action: 'lassoCycle', brush: remembered };
+  const next = idx >= 0 ? cachedConfig.map((e, i) => (i === idx ? desired : e)) : [...cachedConfig, desired];
+  cachedConfig = next;
+  pushConfig(next);
+}
+
+/** APP 面板在工具模式状态变化时调用，决定「切换套索工具」键是否装载（其它面板绝不调用）。 */
+export function setLassoCycleActive(on: boolean): void {
+  lassoCycleKnown = true;
+  lassoCycleActive = on;
+  // 工具模式一翻面就重新校准游标：用户可能已经用鼠标换了组内工具。
+  lassoCycleIdx = -1;
+  ensureLassoCycleEntry();
+}
+
+/** 当前「切换套索工具」键（用于提示/展示；工具模式关闭时返回记忆值）。 */
+export function getLassoCycleCombo(): string {
+  const e = cachedConfig.find(x => x.action === 'lassoCycle');
+  return e?.brush || e?.combo || DEFAULT_LASSO_CYCLE_COMBO;
+}
+
+/**
+ * 重绑「切换套索工具」键（自定义快捷键子面板用）：同时更新生效值 combo 与记忆值 brush。
+ * ⚠️ 与 `setFocusLassoCombo` 同理：本函数会在**绘画工具箱面板**的上下文里被调用，
+ *    那里 `lassoCycleKnown` 恒为 false ⇒ 装载与否由调用方传入的 active 决定。
+ */
+export function setLassoCycleCombo(combo: string, active: boolean): void {
+  if (!configLoaded) return;
+  const remembered = combo || DEFAULT_LASSO_CYCLE_COMBO;
+  const idx = cachedConfig.findIndex(e => e.action === 'lassoCycle');
+  const desired: HotkeyEntry = { id: LASSO_CYCLE_ID, combo: active ? remembered : '', action: 'lassoCycle', brush: remembered };
+  const next = idx >= 0 ? cachedConfig.map((e, i) => (i === idx ? desired : e)) : [...cachedConfig, desired];
+  cachedConfig = next;
+  pushConfig(next);
+}
+
+/**
+ * 组内循环一格（Shift+L 命中时调用）。
+ *
+ * ⛔ 只发一次 `select`，不做任何「先检查再决定」的兜底：这个键由我们独占，
+ *    PS 收不到 ⇒ 不存在「PS 也切了一次」的可能，多发一次就等于跳一格。
+ * ⛔ 读不到工具时**不放弃**（与「不知道就别碰工具」的其它路径不同）：
+ *    这里的语义就是「用户按了循环键」，什么都不做才是 bug；游标会给出确定的下一格。
+ */
+function cycleLassoTool(): void {
+  if (lassoCycleIdx < 0) {
+    const cur = readToolIdSync();
+    const i = cur ? LASSO_GROUP.indexOf(cur as ToolRef) : -1;
+    lassoCycleIdx = i >= 0 ? i : 0;
+  }
+  lassoCycleIdx = (lassoCycleIdx + 1) % LASSO_GROUP.length;
+  const target = LASSO_GROUP[lassoCycleIdx];
+  console.log('[套索组循环] ⇒ ' + target);
+  /* ⛔ 失败必须留痕：`select` 遇到**不存在的引用名**是静默无效（不抛错、工具不动），
+     「Shift+L 少一格」正是这样藏了一轮没人发现。留一行 warn，下次一眼就能分出
+     是名字错还是命令被宿主拒绝。 */
+  void selectToolByRef(target).then(ok => {
+    if (!ok) console.warn('[套索组循环] 切换失败（' + target + '）：引用名可能不被当前 PS 版本接受');
+  });
 }
 
 /** 是否已连上守护进程（菜单里「设置主开关快捷键」需要据此给出提示）。 */
@@ -1230,6 +1371,45 @@ export function setPickColorCombo(combo: string): void {
   pushConfig(next);
 }
 
+// ===== 切换填充模式（默认 Ctrl+滚轮，2026-11-16 新增）=====
+/**
+ * 「切换填充模式」条目的默认组合键。
+ *
+ * ⛔ 这是一个**滚轮**组合，不是按键组合：`.8li` 的键盘钩子注册不了它
+ *    （RegisterHotKey 只认 vk），必须由 `WH_MOUSE_LL` 的 WM_MOUSEWHEEL 分支处理
+ *    （见 keyhook.c 的 0x0235 段）。界面上照样当普通热键显示/重录。
+ * ⛔ 修饰键必须**完全匹配**：只有「Ctrl 按着 ∧ Alt/Shift/Win 全抬着」的滚轮才会被
+ *    接管并吞掉；裸滚轮、Shift+滚轮、Alt+滚轮一律原样透传给 PS
+ *    —— 用户明确要求「不要让我无法使用滚轮缩放画布」。
+ */
+export const FILL_MODE_CYCLE_ID = 'fill_mode_cycle';
+export const DEFAULT_FILL_MODE_CYCLE_COMBO = 'Ctrl+Wheel';
+
+/**
+ * 确保配置里存在「切换填充模式」条目（默认 Ctrl+滚轮）。
+ * 语义与 ensurePickColorEntry 一致：条目已被用户改过就原样保留，只在**完全没有**该
+ * 条目时补默认值 —— 于是「用户改成 Alt+Wheel」这类选择不会被默认值覆写。
+ */
+function ensureFillModeCycleEntry(): void {
+  if (!configLoaded) return;
+  if (cachedConfig.some(e => e.action === 'runFunc' && e.brush === 'fillModeCycle')) return;
+  const desired: HotkeyEntry = {
+    id: FILL_MODE_CYCLE_ID,
+    combo: DEFAULT_FILL_MODE_CYCLE_COMBO,
+    action: 'runFunc',
+    brush: 'fillModeCycle',
+  };
+  const next = [...cachedConfig, desired];
+  cachedConfig = next;
+  pushConfig(next);
+}
+
+/** 当前「切换填充模式」组合键（用于提示/展示）。 */
+export function getFillModeCycleCombo(): string {
+  const e = cachedConfig.find(x => x.action === 'runFunc' && x.brush === 'fillModeCycle');
+  return e?.combo || DEFAULT_FILL_MODE_CYCLE_COMBO;
+}
+
 // ===== 混合模式热键总开关（2026-10-19 新增）=====
 // 开启后 .8li 把内置的 PS 原生混合模式快捷键（Alt+Shift+N/K/M/… 共 25 条，
 // 见 keyhook.c KH_BLEND_DEFS）装进热键匹配表：命中即吞键 + 广播
@@ -1371,6 +1551,8 @@ async function selectLassoTool(): Promise<void> {
       console.warn('⚠️ 套索工具键：切换套索失败:', e);
     }
   }
+  // 切到的是「普通套索」⇒ 组内循环游标归零（下一次 Shift+L 从多边形开始，与 PS 同序）。
+  lassoCycleIdx = 0;
 }
 
 /* ⛔⛔ 0x022F：按 Shift+E 之后的「工具兜底」——只在确实跑偏时才动手。
@@ -1386,7 +1568,7 @@ async function selectLassoTool(): Promise<void> {
  * 三步走，任何一步「不知道」都不动手（保守：不知道就别碰用户的工具）：
  *   ① 同步读 `app.currentTool`（属性直读，**零宿主往返**、不产生任何模态）；
  *      读不到、或认不出是 PS 工具枚举（本地化名称「套索工具」之类）⇒ 直接返回；
- *   ② 已经是套索族（lassoTool / polygonalLassoTool / magneticLassoTool）⇒ 返回，
+ *   ② 已经是套索族（lassoTool / polySelTool / magneticLassoTool）⇒ 返回，
  *      正常场景因此**一条命令都不发**；
  *   ③ 否则延后 `LASSO_RECHECK_MS` 再核一次，仍不是套索才切 —— 给用户留出抬笔的时间，
  *      避免在「笔还按着」的窗口里把笔画打断。
@@ -1396,7 +1578,13 @@ function readToolIdSync(): string | null {
   try { return normalizeToolId((app as any)?.currentTool); } catch { return null; }
 }
 function isLassoToolId(id: string | null): boolean {
-  return !!id && /lassoTool$/i.test(id);
+  /* ⛔ 必须按**族成员精确比较**，不能用 `/lassoTool$/i`：
+     多边形套索的 ID 是 `polySelTool`，不以 lassoTool 结尾 —— 后缀正则会把它判成
+     「工具跑偏了」，于是 Shift+E 的兜底逻辑又把用户刚切到的多边形套索踢回普通套索。
+     ⚠️ 与 `LASSO_GROUP` 共用同一份名单：名单只有一处，改循环顺序就只改那一行。 */
+  if (!id) return false;
+  const low = id.toLowerCase();
+  return LASSO_GROUP.some(r => r.toLowerCase() === low);
 }
 /* PS 工具内部 ID 一律以 `Tool` 结尾（lassoTool / paintbrushTool / eraserTool…）。
    ⛔ 不满足这个形状的串（本地化名称「套索工具」、空串、乱码）一律当作**读不到**：
@@ -1413,6 +1601,36 @@ function reselectLassoIfStrayed(): void {
     console.log('[清除模式键] 工具不是套索（' + again + '）⇒ 兜底切回套索');
     void selectLassoTool();
   }, LASSO_RECHECK_MS);
+}
+
+/* ⛔⛔ 0x0235：套索工具键的**按需切换** —— 已经是套索族就一条命令都不发。
+ *
+ * 用户 2026-11-16 报：「套索工具由 L 全程接管，Shift+L 在多边形/磁性套索之间的
+ * 循环切不动了」。
+ *
+ * 根因（不是钩子吞键，也不是 PS 的快捷键）：这里原来**无条件** `select lassoTool`。
+ * 每按一次 L 就发一条 `select`，而这条命令是异步的 —— 直连 batchPlay 撞上忙碌窗口时
+ * 会退回 `runAsModal` **排队等宿主空闲**，落地时刻可能晚到几百毫秒。用户按 L 之后
+ * 紧接着按 Shift+L，PS 已经按原生语义把工具循环到多边形套索了，那条**迟到**的
+ * `select lassoTool` 才落地，又把工具拽回普通套索 ⇒ 表现就是「Shift+L 完全没反应」。
+ * （`.8li` 侧已核对：裸键表精确比较 "L" ≠ "Shift+L"，Shift+L 从来不会被吞；
+ *   见 keyhook.c 的 0x0235 段新增的「裸键因修饰键不匹配放行」诊断日志。）
+ *
+ * 修法：先同步读 `app.currentTool`（属性直读，零宿主往返、零模态）
+ *   ① 已经是套索族 ⇒ 直接返回（L 的语义「关主开关」由调用方单独完成，与切工具无关）；
+ *   ② 读不到 / 认不出工具枚举 ⇒ 返回（不知道就别碰用户的工具）;
+ *   ③ 确实跑偏 ⇒ 这才发一次 `select`。
+ * 副带收益：工具模式下反复按 L 不再每次都付一条 batchPlay 的代价。
+ *
+ * ⛔ 与 `reselectLassoIfStrayed()`（Shift+E 之后的兜底）的区别只在**时机**：
+ *    那边必须延后 700ms 给用户抬笔，这边是用户**主动**按 L 要求切套索，立即执行。 */
+function selectLassoIfStrayed(): void {
+  const cur = readToolIdSync();
+  if (!isToolEnumLike(cur)) return;      /* 读不到工具 ⇒ 不动手 */
+  if (isLassoToolId(cur)) return;        /* 已经是套索族 ⇒ 不发命令（这正是本次修复） */
+  console.log('[套索工具键] 当前工具是 ' + cur + ' ⇒ 切回套索');
+  void selectLassoTool();
+  lassoCycleIdx = 0;      /* 已切到普通套索 ⇒ 组内循环游标同步归零 */
 }
 
 // ===== 枚举当前可用笔刷预设（供面板下拉使用；失败返回空，不影响核心功能）=====

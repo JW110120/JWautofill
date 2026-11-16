@@ -3,6 +3,7 @@ import {
   HotkeyEntry, onConfig, onDaemonStatus, pushConfig, requestHotkeyRecording,
   cancelHotkeyRecording, onRecordProgress, setMainToggleCombo, setFocusLassoCombo,
   setFocusClearCombo, setAltToolCombo, setPickColorCombo, getAltToolCombo, getPickColorCombo,
+  setLassoCycleCombo,
   armBackspaceDelete, disarmBackspaceDelete, onBackspaceDelete,
   onHotkeyState, requestHotkeyStatus,
   peekPersistedArm, getBlendHotkeyOn, setBlendHotkeyActive, isDaemonConnected,
@@ -17,7 +18,7 @@ import ToggleSwitch from '../components/ToggleSwitch';
 // 快捷键子面板（**一个组件，两个面板共用**，2026-11-16 扩展）：
 //   scope='toolbox' → 绘画工具箱「功能快捷键」（快捷操作 / 细节调整 / 边缘处理）
 //   scope='app'     → 选区填充「自定义快捷键」（选区填充整组：主开关 / 套索 / 清除 /
-//                     拾色器 / 临时吸管 / 混合模式热键 / 纯色·图案·渐变面板开关）
+//                     拾色器 / 临时吸管 / 混合模式热键 / 切换填充模式）
 //   ⛔ 两处必须是**同一个组件**：用户要求「完全一样的样式、相同的通知逻辑、相同的
 //     隐藏数字输入框设计、相同的滚动条设计」。复制一份实现必然漂移（历史上
 //     notify-banner / notify-bar 并存就是先例）⇒ 差异只允许来自 scope 的**内容**过滤
@@ -34,10 +35,10 @@ import ToggleSwitch from '../components/ToggleSwitch';
 //                    （快捷操作 / 细节调整 / 边缘处理；同区分集中、异区分容器）。
 //   scope='app'    ：只显示「选区填充」一组，自上而下为
 //                    主开关（工具模式下名称只显示「选区填充」，热键只开不关的语义不变）
-//                    → 套索工具 / 清除模式 / 临时吸管（仅工具模式）
+//                    → 套索工具 / 切换套索工具 / 清除模式 / 临时吸管（仅工具模式）
 //                    → 前景色拾色器（始终）
 //                    → 混合模式热键（自绘开关行，无组合键）
-//                    → 纯色 / 图案 / 渐变面板开关。
+//                    → 切换填充模式（默认 Ctrl+滚轮，可重录成别的滚轮组合）。
 // 行内布局：功能名在左、录好的快捷键在右（与笔刷热键分区一致）。
 // 交互（去掉独立的录制/删除按钮，容器窄、把宽度还给功能名）：
 //   单击行 → 选中（布防）：选中后按退格键解绑该条（条目保留，显示「未绑定」）；
@@ -203,6 +204,7 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
   const entryDisplayName = (e: HotkeyEntry): string => {
     if (e.action === 'toggleMain') return focusMode ? '选区填充' : '选区填充开关';
     if (e.action === 'focusLasso') return '套索工具';
+    if (e.action === 'lassoCycle') return '切换套索工具';
     if (e.action === 'focusClear') return '清除模式';
     if (e.action === 'altTool') return '临时吸管';
     if (e.action === 'pickColor') return '前景色拾色器';
@@ -215,6 +217,7 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
   const targetDisplayName = (target: string): string => {
     if (target === 'main') return focusMode ? '选区填充' : '选区填充开关';
     if (target === 'focus_lasso') return '套索工具';
+    if (target === 'lasso_cycle') return '切换套索工具';
     if (target === 'focus_clear') return '清除模式';
     if (target === 'alt_tool') return '临时吸管';
     if (target === 'pick_color') return '前景色拾色器';
@@ -234,6 +237,11 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
       showMessage('套索工具键随工具模式自动启用，无需解绑；如需更换请双击重录');
       return;
     }
+    if (target === 'lasso_cycle') {
+      // 「切换套索工具」键同样随工具模式自动启用/停用，不参与「退格解绑」（重录请双击）。
+      showMessage('切换套索工具键随工具模式自动启用，无需解绑；如需更换请双击重录');
+      return;
+    }
     if (target === 'focus_clear') {
       // 清除模式键同样随工具模式自动启用/停用，不参与「退格解绑」（重录请双击）。
       showMessage('清除模式键随工具模式自动启用，无需解绑；如需更换请双击重录');
@@ -247,6 +255,12 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
     if (target === 'pick_color') {
       // 拾色器键始终装载（与工具模式无关），同样不参与「退格解绑」（重录请双击）。
       showMessage('前景色拾色器键始终启用，无需解绑；如需更换请双击重录');
+      return;
+    }
+    if (target === 'fillModeCycle') {
+      // 切换填充模式键同理：条目一旦被删就会在下一次配置帧里被 ensureFillModeCycleEntry
+      // 按默认值补回来（Ctrl+滚轮），「解绑」留不住 ⇒ 直接说明只能重录。
+      showMessage('切换填充模式键始终启用（默认 Ctrl+滚轮），无需解绑；如需更换请双击重录');
       return;
     }
     const next = entries.filter(e => !(e.action === 'runFunc' && e.brush === target));
@@ -280,6 +294,7 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
     const dup = entries.find(e => {
       if (target === 'main') return e.action !== 'toggleMain' && e.combo === combo;
       if (target === 'focus_lasso') return e.action !== 'focusLasso' && e.combo === combo;
+      if (target === 'lasso_cycle') return e.action !== 'lassoCycle' && e.combo === combo;
       if (target === 'focus_clear') return e.action !== 'focusClear' && e.combo === combo;
       if (target === 'alt_tool') return e.action !== 'altTool' && e.combo === combo;
       if (target === 'pick_color') return e.action !== 'pickColor' && e.combo === combo;
@@ -321,6 +336,12 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
       showMessage('已保存：' + combo + ' → 套索工具');
       return;
     }
+    if (target === 'lasso_cycle') {
+      // 与套索键同款：bridge 统一管理（生效值 combo + 记忆值 brush），不落进 entries。
+      setLassoCycleCombo(combo, focusMode);
+      showMessage('已保存：' + combo + ' → 切换套索工具');
+      return;
+    }
     if (target === 'focus_clear') {
       // 清除模式键（默认 Shift+E）同样由 bridge 统一管理，语义与套索工具键一致：
       // 按下即确保主开关开启并切换清除模式（主开关不会被关闭）。
@@ -353,6 +374,7 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
   const mainEntry = entries.find(e => e.action === 'toggleMain');
   // 工具模式下的「套索工具」键条目：由 HotkeyBridge 在工具模式开启时装载（默认 L）。
   const focusLassoEntry = entries.find(e => e.action === 'focusLasso');
+  const lassoCycleEntry = entries.find(e => e.action === 'lassoCycle');
   // 工具模式下的「清除模式」键条目：同样只在工具模式开启时装载（默认 Shift+E）。
   const focusClearEntry = entries.find(e => e.action === 'focusClear');
   // 工具模式下的「临时吸管」按住键条目：同样只在工具模式开启时装载（默认 /）。
@@ -494,8 +516,9 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
         </div>
 
         <div className="func-hotkey-list">
-        {/* 分组：按功能所在分区展示；「选区填充」组的容器内置顶主开关行（工具模式下显示「选区填充」），
-            其下紧跟纯色/图案/渐变三个子面板开关行。 */}
+        {/* 分组：按功能所在分区展示；「选区填充」组的容器内置顶主开关行（工具模式下显示「选区填充」）。
+            ⛔ 2026-11-16：原来紧随其后的「纯色 / 图案 / 渐变面板开关」三行已删除，
+               改为清单里的单行「切换填充模式」（默认 Ctrl+滚轮）——单独开关某个子面板没有意义。 */}
         {sectionGroups.map(g => (
           <React.Fragment key={'grp_' + g.title}>
             <div className="func-group-title">{g.title}</div>
@@ -507,6 +530,11 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
               {/* 工具模式下：套索工具键（默认 L）——按下即关闭主开关并切回套索，使 H/L 像两个工具 */}
               {g.title === '选区填充' && focusMode &&
                 renderRow('focus_lasso', focusLassoEntry?.combo || '', '套索工具', 'focus_lasso', helpTexts.funcHotkey.lassoRow)}
+              {/* 工具模式下：切换套索工具（默认 Shift+L）——在套索组内循环
+                  （普通 → 多边形 → 磁性 → 普通）。PS 原生的 Shift+L 循环在 L 被接管后
+                  不再触发（用户真机确认），由这条键补上。 */}
+              {g.title === '选区填充' && focusMode &&
+                renderRow('lasso_cycle', lassoCycleEntry?.combo || '', '切换套索工具', 'lasso_cycle', helpTexts.funcHotkey.lassoCycleRow)}
               {/* 工具模式下：清除模式键（默认 Shift+E）——按下即确保主开关开启并切换清除模式 */}
               {g.title === '选区填充' && focusMode &&
                 renderRow('focus_clear', focusClearEntry?.combo || '', '清除模式', 'focus_clear', helpTexts.funcHotkey.clearRow)}
@@ -519,7 +547,8 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
               {/* 混合模式热键（自绘开关行，与工具模式无关）：开启后 Alt+Shift+字母改面板混合模式 */}
               {g.title === '选区填充' && renderBlendSwitchRow('blend_hotkey', blendShownOn, blendGuard.yielded, blendGuard.toolCn)}
               {g.defs.map(def =>
-                renderRow('fk_' + def.id, funcEntryOf(def.id)?.combo || '', def.label, def.id, helpTexts.funcHotkey.rowHint)
+                renderRow('fk_' + def.id, funcEntryOf(def.id)?.combo || '', def.label, def.id,
+                  def.id === 'fillModeCycle' ? helpTexts.funcHotkey.fillModeRow : helpTexts.funcHotkey.rowHint)
               )}
             </div>
           </React.Fragment>

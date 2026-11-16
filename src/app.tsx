@@ -33,7 +33,7 @@ import { PresetManager } from './utils/PresetManager';
 import { PanelStateManager } from './utils/PanelStateManager';
 import {
   connectHotkeyDaemon,
-  getSelectedBrushToolEnum, setFocusLassoActive, setFocusClearActive, setAltToolActive,
+  getSelectedBrushToolEnum, setFocusLassoActive, setFocusClearActive, setAltToolActive, setLassoCycleActive,
   altToolComboHasAlt, normalizeToolId,
   onAltHold, selectToolByRef, onConfig as onHotkeyConfig,
   // 热键命中反馈：混合模式热键的 notify 现在归本面板（见 blendHotkeyNotify）
@@ -62,7 +62,7 @@ import { connectSmoothDaemon } from './lasso/SmoothBridge';
 // 0x0208：宿主交互期（左键拖拽/空格导航）让巡检让路，根因见模块头部注释。
 import { hostYield, onHostRelease } from './utils/hostInteraction';
 import { seedMainToggle, setMainToggle, subscribeMainToggle } from './utils/MainToggleBus';
-import { FillPanelId, subscribeFillPanelToggle } from './utils/FillPanelToggleBus';
+import { FillModeDir, subscribeFillModeCycle } from './utils/FillModeCycleBus';
 import { subscribeClearModeToggle } from './utils/ClearModeBus';
 import { subscribeBlendMode } from './utils/BlendModeBus';
 import { setFocusMode } from './utils/FocusModeBus';
@@ -242,8 +242,8 @@ class App extends React.Component<AppProps, AppState> {
     private altPickClearTimer: any = null;
     /** 0x020A：松开边沿订阅（一次吸色结束的触发点）。 */
     private unsubHostRelease: (() => void) | null = null;
-    // 功能快捷键：纯色/图案/渐变子面板开关注订器（FillPanelToggleBus 轮询分发，卸载时退订）
-    private unsubFillPanelToggle: (() => void) | null = null;
+    // 功能快捷键：「切换填充模式」订阅器（FillModeCycleBus 轮询分发，卸载时退订）
+    private unsubFillModeCycle: (() => void) | null = null;
     // 工具模式「清除模式」键（Shift+E）与混合模式热键的订阅器（ClearModeBus / BlendModeBus，
     // 热键命中方写在绘画工具箱面板的 JS 上下文，经共享文件到达这里，卸载时退订）
     private unsubClearModeToggle: (() => void) | null = null;
@@ -461,6 +461,10 @@ class App extends React.Component<AppProps, AppState> {
         // 并把工具切回套索，让 H / L 像两个工具一样切换。由本面板独占写入（其它面板不调用，
         // 详见 HotkeyBridge 的 focusLassoKnown 说明）。
         setFocusLassoActive(on);
+        // 同步「切换套索工具」键（默认 Shift+L）：工具模式开启时注册 → 在套索组内
+        // 循环（普通 → 多边形 → 磁性 → 普通）。PS 原生的 Shift+L 循环在 L 被本插件接管后
+        // 就不再触发（用户真机确认），由这条键补上。同样由本面板独占写入。
+        setLassoCycleActive(on);
         // 同步「清除模式」键（默认 Shift+E）：工具模式开启时注册 → 按下即确保主开关开启
         // 并切换清除模式（主开关不会被关掉）。同样由本面板独占写入。
         setFocusClearActive(on);
@@ -626,10 +630,12 @@ class App extends React.Component<AppProps, AppState> {
                     void this.onMainToggleChanged(prev, st.enabled);
                 }
             });
-            // 功能快捷键：三个子面板开关（纯色/图案/渐变）的热键通路。
-            // 命令经共享文件 + token 去重后到达这里，翻的本来就是本面板自己的 state。
-            this.unsubFillPanelToggle = subscribeFillPanelToggle((panel) => {
-                this.applyFillPanelHotkey(panel);
+            // 「切换填充模式」热键（默认 Ctrl+滚轮）：命令经共享文件 + token 去重后到达这里，
+            // 改的本来就是本面板自己的 state（fillMode）。
+            // ⛔ 方向不能让各面板自己猜：.8li 的鼠标钩子判定滚轮方向后随消息下发，
+            //    这里只负责「按方向前进一步」。
+            this.unsubFillModeCycle = subscribeFillModeCycle((dir) => {
+                this.cycleFillMode(dir);
             });
             // 工具模式「清除模式」键（默认 Shift+E）：命令经 ClearModeBus 到达这里，
             // 翻本面板的 clearMode（与面板上的勾选走同一个 toggleClearMode，语义一致）。
@@ -1124,9 +1130,9 @@ class App extends React.Component<AppProps, AppState> {
             clearTimeout(this.altPickClearTimer);
             this.altPickClearTimer = null;
         }
-        if (this.unsubFillPanelToggle) {
-            try { this.unsubFillPanelToggle(); } catch { /* ignore */ }
-            this.unsubFillPanelToggle = null;
+        if (this.unsubFillModeCycle) {
+            try { this.unsubFillModeCycle(); } catch { /* ignore */ }
+            this.unsubFillModeCycle = null;
         }
         if (this.unsubClearModeToggle) {
             try { this.unsubClearModeToggle(); } catch { /* ignore */ }
@@ -1421,10 +1427,17 @@ class App extends React.Component<AppProps, AppState> {
     /** 判定某个工具 ID 是否是「套索类」（三个套索工具：套索 / 多边形套索 / 磁性套索）。 */
     private static isLassoTool(tool: string | null): boolean {
         if (!tool) return false;
-        // ⚠️ 只按 lasso 关键词判：PS 的三个套索工具 ID 依次是
-        //    lassoTool / polygonalLassoTool / magneticLassoTool。
-        //    「快速选择 / 对象选择」虽然也是选区工具，但 ID 里没有 lasso，
-        //    它们的绘制路径与套索完全不同（吸附式），不该吃套索的平滑。
+        /* ⚠️ 三个套索工具的真名是 lassoTool / **polySelTool** / magneticLassoTool
+           （多边形套索 = polySelTool，不是 polygonalLassoTool —— 见
+            `docs/lnp-ps64-reverse-2026-10-16.md` 里的二进制工具表）。
+           ⛔ 本函数**故意只认 lasso 关键词**，因此 `polySelTool` 在这里判为 false：
+              ① 平滑改写的是**连续笔迹**的坐标，多边形套索是「点击落点」式工具，
+                 把闸门开给它会去改写顶点位置（点不准），比不平滑更糟；
+              ② 本口径与原生侧 `ps_tool.c` 的 `ci_has(name,"lasso")` **必须逐字一致**
+                 （铁律：两边口径一起改，单改一边就是静默分歧）。
+           ⇒ 「是不是套索族、要不要算同族循环/别踢回去」用的是
+              `HotkeyBridge.isLassoToolId()`（那边按族成员精确比较，含 polySelTool），
+              两个问题、两套判据，别混用。 */
         return /lasso/i.test(tool);
     }
 
@@ -2079,18 +2092,20 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     /**
-     * 功能快捷键通路：切换纯色/图案/渐变子面板的开关。
-     * 与面板里齿轮/标签入口的语义一致——开就关、关就开；
-     * 图案/渐变的既有入口只开不关，热键这里是真正的开关（用户按同键可收起）。
-     * ⚠️ 走的仍是 setSecondaryPanel ⇒ 同样遵守「同时只有一个子面板」的铁律。
+     * 「切换填充模式」热键（默认 Ctrl+滚轮）：按方向在 纯色 → 图案 → 渐变 之间前进/后退一格。
+     *
+     * ⛔ 只改 fillMode（三行 radio 的选中项），**不**顺手打开对应的子面板：
+     *    滚轮是连续动作，每滚一格弹一个子面板 = 面板不停闪；要改参数时点那一行的齿轮即可。
+     * ⛔ 顺序必须与界面上三行的显示顺序一致（纯色 → 图案 → 渐变），
+     *    否则「向下滚 = 下一个」在视觉上会跳反。
      */
-    applyFillPanelHotkey(panel: FillPanelId) {
-        const isOpen = panel === 'color'
-            ? this.state.isColorSettingsOpen
-            : panel === 'pattern'
-                ? this.state.isPatternPickerOpen
-                : this.state.isGradientPickerOpen;
-        this.setSecondaryPanel(panel, !isOpen);
+    cycleFillMode(dir: FillModeDir) {
+        const order: Array<'foreground' | 'pattern' | 'gradient'> = ['foreground', 'pattern', 'gradient'];
+        const cur = this.state.fillMode;
+        const i = order.indexOf(cur);
+        const next = order[((i < 0 ? 0 : i) + (dir < 0 ? order.length - 1 : 1)) % order.length];
+        if (next === cur) return;
+        this.setState({ fillMode: next });
     }
 
     openPatternPicker() {
@@ -4704,8 +4719,8 @@ title={helpTexts.selectionFill.clearMode}>
             )}
             {/* 「自定义快捷键」子面板（右上角菜单 → 自定义快捷键，2026-11-16）。
                 ⛔ 与绘画工具箱的「功能快捷键」是**同一个组件**（scope='app' 只显示
-                   「选区填充」这一组：主开关 / 套索 / 清除 / 拾色器 / 临时吸管 /
-                   混合模式热键 / 纯色·图案·渐变面板开关），样式、通知逻辑、
+                   「选区填充」这一组：主开关 / 套索 / 切换套索工具 / 清除 / 拾色器 /
+                   临时吸管 / 混合模式热键 / 切换填充模式），样式、通知逻辑、
                    隐藏原生数字输入框、滚动条设计全部一致 —— 用户明确要求「完全一样」。
                 ⚠️ 必须挂在本层（.app-root），不能放进 `.panel` 滚动容器：
                    它是 position:fixed 的全面板遮罩，留在滚动容器里会被滚动条压住右缘。

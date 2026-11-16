@@ -1,7 +1,7 @@
 /**
  * ClearModeBus —— 「清除模式」开关的跨面板共享**事件**总线
  *
- * 背景（与 FillPanelToggleBus 同款的面板隔离问题）：
+ * 背景（与 FillModeCycleBus 同款的面板隔离问题）：
  * 清除模式（clearMode）是 APP 面板（#app）的 React state（types/state.ts），
  * 而触发它的入口在另外两处：
  *   1) APP 面板自己的「清除模式」勾选（本上下文内，直接 setState）；
@@ -27,7 +27,7 @@ interface ClearModeToggleEvent {
 }
 
 // UXP 的 uxp 模块在 webpack 打包后用静态 import 有时拿不到，统一走 require 兜底，
-// 与 PanelStateManager / MainToggleBus / FillPanelToggleBus 一致。
+// 与 PanelStateManager / MainToggleBus / FillModeCycleBus 一致。
 function getLfs(): any {
     try {
         return require('uxp').storage.localFileSystem;

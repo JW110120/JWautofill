@@ -1,27 +1,29 @@
 /**
- * FillPanelToggleBus —— 选区填充「纯色 / 图案 / 渐变」三个子面板开关的跨面板切换总线
+ * FillModeCycleBus —— 「切换填充模式」快捷键（默认 Ctrl+滚轮）的跨面板命令总线
  *
- * 背景（与 MainToggleBus 相同的面板隔离问题）：
- * UXP 每个面板都是独立 JS 上下文。子面板的展开状态（isColorSettingsOpen /
- * isPatternPickerOpen / isGradientPickerOpen）是 APP 面板（#app）的 React state，
- * 而功能快捷键子面板挂在绘画工具箱面板（#pixeladjustment）——热键命中后广播到所有面板，
- * 任何面板都不能直接改 APP 面板的 state。
+ * 为什么需要总线（与 MainToggleBus / ClearModeBus 同源的面板隔离问题）：
+ * 热键命中发生在 .8li（PS 进程内）→ 经 WebSocket 广播给**所有** UXP 面板。
+ * 任何面板都能收到 `runFunc / fillModeCycle`，但填充模式（fillMode）是 APP 面板
+ * （#app）的 React state —— 别的面板改不了，也不该改。
  *
- * 解法：共享「事件」而不是共享「状态」。热键命中方把 {panel, token} 写进共享文件，
- * APP 面板轮询到新修订号后执行一次开/关。token 按次命中生成（同一命中在所有面板上相同），
- * 已见过的 token 直接跳过——多面板同时写也只有第一次生效，事件绝不重复执行。
+ * 解法与 ClearModeBus 完全一致：共享「事件」而不是共享「状态」。
+ * 命中方把 {dir, token} 写进共享文件，APP 面板轮询到新修订号后**翻一次**；
+ * 同一次命中在所有面板上算出同一个 token，先写者生效、后写者跳过，
+ * 因此 N 个面板同时收到广播也只会切一格（不会按面板数量连跳）。
  *
- * 与 MainToggleBus（共享状态、幂等翻转）不同：这里翻的是 APP 面板自己的 state，
- * 文件里没有状态只有「命令」，所以必须靠 token 去重而不是靠状态幂等。
+ * ⚠️ 与 ClearModeBus 的区别只在载荷：那边是「开/关某个模式」，
+ *    这边是「按方向前进一步」。⛔ 不复用同一个文件 —— 两个功能的写入频率、
+ *    语义、订阅方都不同，混在一个修订号上会互相顶掉（一次滚轮吃掉一次面板开关）。
  */
 
-export type FillPanelId = 'color' | 'pattern' | 'gradient';
+/** 轮换方向：+1 = 下一个（滚轮向下），-1 = 上一个（滚轮向上）。 */
+export type FillModeDir = 1 | -1;
 
 const SETTINGS_FOLDER = 'settings';
-const STATE_FILE = 'fill-panel-toggle.json';
+const STATE_FILE = 'fill-mode-cycle.json';
 
-interface FillPanelToggleEvent {
-    panel: string;
+interface FillModeCycleEvent {
+    dir: number;
     token: string;
     rev: number;
     ts: number;
@@ -58,15 +60,15 @@ async function getSettingsFolder(): Promise<any> {
     return folder;
 }
 
-async function readRaw(): Promise<FillPanelToggleEvent | null> {
+async function readRaw(): Promise<FillModeCycleEvent | null> {
     try {
         const folder = await getSettingsFolder();
         const file = await folder.getEntry(STATE_FILE);
         const content = await file.read({ format: getFormats().utf8 });
         const j = JSON.parse(content);
-        if (!j || typeof j !== 'object' || !j.panel) return null;
+        if (!j || typeof j !== 'object' || !j.token) return null;
         return {
-            panel: String(j.panel),
+            dir: Number(j.dir) < 0 ? -1 : 1,
             token: typeof j.token === 'string' ? j.token : '',
             rev: Number(j.rev) || 0,
             ts: Number(j.ts) || 0,
@@ -80,15 +82,14 @@ async function readRaw(): Promise<FillPanelToggleEvent | null> {
 let writeChain: Promise<unknown> = Promise.resolve();
 
 /**
- * 处理一次「热键命中」：把子面板切换命令写进共享文件。
- * 同一次命中在所有面板上用同一个 token 调用；文件里已是该 token 则跳过，
- * 保证无论多少个面板收到守护进程的广播，命令都只被写入/执行一次。
+ * 处理一次「热键命中」：把轮换命令写进共享文件。
+ * 同一次命中在所有面板上用同一个 token 调用；文件里已是该 token 则跳过。
  */
-export async function requestFillPanelToggle(panel: FillPanelId, token: string): Promise<void> {
+export async function requestFillModeCycle(dir: FillModeDir, token: string): Promise<void> {
     const run = writeChain.then(async () => {
         const cur = await readRaw();
         if (cur && cur.token === token) return; // 同一次命中已被处理过
-        const next: FillPanelToggleEvent = { panel, token, rev: (cur?.rev || 0) + 1, ts: Date.now() };
+        const next: FillModeCycleEvent = { dir, token, rev: (cur?.rev || 0) + 1, ts: Date.now() };
         const folder = await getSettingsFolder();
         const file = await folder.createFile(STATE_FILE, { overwrite: true });
         await file.write(JSON.stringify(next), { format: getFormats().utf8 });
@@ -101,33 +102,43 @@ export async function requestFillPanelToggle(panel: FillPanelId, token: string):
 }
 
 // 内存缓存 + 同上下文即时通知（写入后立刻唤醒订阅方，不等下一轮文件轮询）
-// 注意：用 forEach 而不是 for...of——tsconfig target 是 es5 且未开 downlevelIteration，
+// 注意：用 forEach 而不是 for...of —— tsconfig target 是 es5 且未开 downlevelIteration，
 // 直接迭代 Set 会报 TS2802（MainToggleBus 同位置已有一个同类预存错误，新文件不再重蹈）。
-let cached: FillPanelToggleEvent | null = null;
+let cached: FillModeCycleEvent | null = null;
 const memListeners = new Set<() => void>();
 function emitMem() { memListeners.forEach((l) => { try { l(); } catch { /* ignore */ } }); }
 
 /**
- * 订阅子面板切换命令（默认每 250ms 轮询一次共享文件；写入后内存即时唤醒）。
- * 只有 APP 面板订阅：收到命令后由它翻自己的 state。
+ * 订阅轮换命令（默认每 250ms 轮询一次共享文件；写入后内存即时唤醒）。
+ * 只有 APP 面板订阅：收到命令后由它前进一步。
  */
-export function subscribeFillPanelToggle(
-    cb: (panel: FillPanelId) => void,
+export function subscribeFillModeCycle(
+    cb: (dir: FillModeDir) => void,
     intervalMs: number = 250
 ): () => void {
     let stopped = false;
     let busy = false;
-    let last: FillPanelToggleEvent | null = cached;
+    let last: FillModeCycleEvent | null = cached;
+    /* ⛔ 首次读取只「对表」不执行：文件里躺着的永远是**上一次会话**留下的最后一条命令，
+       直接执行等于「每开一次面板 / 每重载一次插件，填充模式自己跳一格」。
+       第一拍把 rev/token 记下来当作基线，之后只有**修订号变化**才算新命令。 */
+    let primed = false;
 
     const tick = async () => {
         if (stopped || busy) return;
         busy = true;
         try {
             const ev = await readRaw();
-            if (ev && (!last || ev.rev !== last.rev || ev.token !== last.token)) {
+            if (ev && !primed) {
+                primed = true;
                 last = ev;
                 cached = ev;
-                try { cb(ev.panel as FillPanelId); } catch (_) { /* 订阅方异常不影响轮询 */ }
+            } else if (ev && (!last || ev.rev !== last.rev || ev.token !== last.token)) {
+                last = ev;
+                cached = ev;
+                try { cb(ev.dir < 0 ? -1 : 1); } catch (_) { /* 订阅方异常不影响轮询 */ }
+            } else if (!ev) {
+                primed = true;   /* 文件还不存在：后续第一次出现就是真命令 */
             }
         } catch (_) {
             /* 读失败保持上一状态，下一次再试 */
