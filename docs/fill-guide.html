@@ -199,7 +199,7 @@
         <p>默认组合键为 <span class="kbd">Ctrl</span>+<span class="kbd">Q</span>，由 Photoshop 扩展「JWautofill Host」内的全局键盘钩子捕获，翻转跨面板共享的开关状态——两个面板的显示始终一致。</p>
         <ul>
           <li>该条目在配置中长期保留：组合键为空表示你已<b>解绑</b>（不会自动补回默认）；配置里完全没有该条目才视为首次使用、写入默认 <code>Ctrl+Q</code>。</li>
-          <li>重新设置：右上角 <b>⋮</b> 菜单 → <b>自定义快捷键</b>，在「选区填充」组里双击「选区填充开关」这一行，按组合键后回车确认（<span class="kbd">Esc</span> 取消），由扩展内的键盘钩子录制并写回配置。同一子面板里还能录制套索工具、切换套索工具（默认 <span class="kbd">Shift</span>+<span class="kbd">L</span>：在套索组内循环 普通套索 → 多边形套索 → 磁性套索 → 普通套索）、清除模式、临时吸管、前景色拾色器、混合模式热键，以及「切换填充模式」（默认 <span class="kbd">Ctrl</span>+滚轮：向下滚切到下一个、向上滚切到上一个；只接管「Ctrl 按着、Alt/Shift/Win 都没按」的滚轮，裸滚轮与 Shift/Alt+滚轮仍归 Photoshop 缩放画布）。</li>
+          <li>重新设置：右上角 <b>⋮</b> 菜单 → <b>自定义快捷键</b>，在「选区填充」组里双击「选区填充开关」这一行，按组合键后回车确认（<span class="kbd">Esc</span> 取消），由扩展内的键盘钩子录制并写回配置。同一子面板里还能录制套索工具、切换套索工具（默认 <span class="kbd">Shift</span>+<span class="kbd">L</span>：在套索组内循环 普通套索 → 多边形套索 → 磁性套索 → 普通套索；<b>换到多边形/磁性套索等同于换工具</b> —— 勾了「切到其它工具自动关」时总开关会随之关闭，而关闭总开关时若正停在多边形/磁性套索，会自动切回普通套索）、清除模式、临时吸管、前景色拾色器、混合模式热键，以及「切换填充模式」（默认 <span class="kbd">Ctrl</span>+滚轮：向下滚切到下一个、向上滚切到上一个；只接管「Ctrl 按着、Alt/Shift/Win 都没按」的滚轮，裸滚轮与 Shift/Alt+滚轮仍归 Photoshop 缩放画布）。</li>
           <li>若快捷键服务未连接，会提示先到「绘画工具箱 → 笔刷热键」确认扩展已启用、热键开关已打开。</li>
         </ul>
         <div class="callout note"><b>使用前提：</b>主开关开启后，需把 Photoshop 工具栏的「羽化」参数设为 0，自动填充才能正常触发。临时改羽化：<span class="kbd">Enter</span> → <span class="kbd">1</span> → <span class="kbd">Enter</span> 设为 1（暂停），<span class="kbd">Enter</span> → <span class="kbd">0</span> → <span class="kbd">Enter</span> 恢复。</div>

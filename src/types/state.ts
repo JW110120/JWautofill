@@ -250,12 +250,14 @@ export interface AppState {
      */
     isAppHotkeyOpen: boolean;
     /**
-     * 混合模式热键的即时反馈（null = 没有反馈可显示）。
-     * 2026-11-16 用户要求：这条提示 **单独显示在 APP 面板「选区平滑」分区上方**，
+     * 「自定义快捷键」里**与 APP 面板相关**的按键即时反馈（null = 没有反馈可显示）。
+     * 2026-11-16 用户要求：这类提示 **统一显示在 APP 面板「选区平滑」分区上方**，
      * 不再混在绘画工具箱「笔刷热键」分区底部那条通用 notify 里。
+     * 覆盖的动作：toggleMain / focusLasso / lassoCycle / focusClear /
+     * 切换填充模式 / 混合模式热键（见 app.tsx 的 unsubHotkeyTrigger）。
      * ⚠️ 不进持久化 watchedKeys（瞬时提示，重载后无意义）。
      */
-    blendHotkeyNotify: { text: string; ok: boolean } | null;
+    appHotkeyNotify: { text: string; ok: boolean } | null;
     // 浮窗堆叠顺序（= 开启先后）：APP 面板允许同时打开多个浮窗，它们在同一个遮罩里
     // 纵向排列、间距 10px，**后开的排在下面**。数组即 DOM 顺序（下标 0 在最上）。
     // ⚠️ 与上面两个布尔量必须同步维护（开 = push 到末尾；关 = 过滤掉），
@@ -346,7 +348,7 @@ export const initialState: AppState = {
     showVisibilityPanel: false,
     isFillSettingsOpen: false,
     isAppHotkeyOpen: false,
-    blendHotkeyNotify: null,
+    appHotkeyNotify: null,
     floatOrder: [],
     resetToken: 0,
     // 新增：许可证默认状态

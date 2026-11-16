@@ -34,9 +34,9 @@ import { PanelStateManager } from './utils/PanelStateManager';
 import {
   connectHotkeyDaemon,
   getSelectedBrushToolEnum, setFocusLassoActive, setFocusClearActive, setAltToolActive, setLassoCycleActive,
-  altToolComboHasAlt, normalizeToolId,
+  altToolComboHasAlt, normalizeToolId, syncLassoCycleCursor,
   onAltHold, selectToolByRef, onConfig as onHotkeyConfig,
-  // 热键命中反馈：混合模式热键的 notify 现在归本面板（见 blendHotkeyNotify）
+  // 热键命中反馈：**所有 APP 侧按键**的 notify 都归本面板（见 showAppHotkeyNotify）
   onHotkeyTriggered
 } from './hotkey/HotkeyBridge';
 // 2026-11-16：「自定义快捷键」子面板与绘画工具箱的「功能快捷键」是**同一个组件**，
@@ -105,13 +105,13 @@ import { helpTexts } from './constants/helpTexts';
 const FILL_RETRY_GUARD_MS = 400;
 
 /**
- * 混合模式热键 notify 的存活时间（毫秒）。
+ * APP 侧热键 notify 的存活时间（毫秒）。
  *
- * 与绘画工具箱其它热键提示同一口径：这是「瞬时反馈」（按了键、模式换了没有），
- * 不是常驻说明 ⇒ 5 秒足够读完；不设「常驻」是因为它每次按 Alt+Shift+字母都会刷新，
+ * 与绘画工具箱其它热键提示同一口径：这是「瞬时反馈」（按了键、动作生效了没有），
+ * 不是常驻说明 ⇒ 5 秒足够读完；不设「常驻」是因为它每次按键都会刷新，
  * 常驻只会让状态条一直挂着一句过期的话。
  */
-const BLEND_NOTIFY_TTL_MS = 5000;
+const APP_HOTKEY_NOTIFY_TTL_MS = 5000;
 
 /**
  * 选区事件的「沉降」窗口（毫秒）—— 连续到来的选区 set 事件合并成**一次**填充。
@@ -249,12 +249,13 @@ class App extends React.Component<AppProps, AppState> {
     private unsubClearModeToggle: (() => void) | null = null;
     private unsubBlendMode: (() => void) | null = null;
     /**
-     * 热键命中反馈订阅器（`onHotkeyTriggered`）。2026-11-16：混合模式热键的 notify
-     * 改由**本面板**显示（位置在「选区平滑」分区上方），不再走绘画工具箱那条通用 notify。
+     * 热键命中反馈订阅器（`onHotkeyTriggered`）。2026-11-16：**所有与 APP 面板相关的**
+     * 按键反馈（开关 / 套索 / 切换套索 / 清除模式 / 填充模式 / 混合模式）都由本面板显示，
+     * 位置在「选区平滑」分区上方，不再走绘画工具箱那条通用 notify。
      */
     private unsubHotkeyTrigger: (() => void) | null = null;
-    /** 混合模式热键 notify 的自动消失句柄（与其它瞬时提示一致：5s）。 */
-    private blendNotifyTimer: any = null;
+    /** APP 侧热键 notify 的自动消失句柄（与其它瞬时提示一致：5s）。 */
+    private appNotifyTimer: any = null;
     /* 0x0224：热键配置订阅器（只关心「混合模式热键开关」开关位的翻转）——
        开关一开/一关就要重新决定「要不要跑工具巡检 + 此刻要不要让位」，
        而这件事的入口不在本组件（开关住在绘画工具箱的功能快捷键子面板里）。 */
@@ -648,24 +649,88 @@ class App extends React.Component<AppProps, AppState> {
                 this.applyBlendModeHotkey(mode);
             });
             /**
-             * 混合模式热键的**即时反馈**（2026-11-16 用户要求）。
+             * 热键命中反馈的**归属划分**（2026-11-16 第二轮，用户要求）。
              *
-             * 位置调整的来龙去脉：这条提示原先由绘画工具箱「笔刷热键」分区底部那条通用
-             * notify 输出 —— 用户在套索里按 Alt+Shift+字母，改动的是**选区填充**的混合模式，
-             * 反馈却出现在另一个面板、还是那一片列表的最下方，视线根本落不到。
-             * 现在它单独显示在**本面板「选区平滑」分区上方**（render 里有固定槽位）。
-             * ⛔ 只认 `blendMode`：其余动作（切笔刷 / 主开关 / 工具模式键）的反馈仍归工具箱，
-             *    两边各管一段，避免同一条消息在两块面板里重复出现。
+             * 「自定义快捷键」子面板里的键改的全是本面板的东西（开关 / 套索 / 清除模式 /
+             * 填充模式 / 混合模式），原来的反馈却统统输出在**绘画工具箱**「笔刷热键」分区
+             * 底部那条通用 notify 里 —— 用户按完键，视线在画布与本面板中段，根本看不到。
+             * ⇒ 现在按「这条消息说的是谁」分流：
+             *   · 本面板（APP）：toggleMain / focusLasso / lassoCycle / focusClear /
+             *     blendMode / 切换填充模式 —— 全部走 showAppHotkeyNotify，
+             *     位置固定在「选区平滑」分区上方（render 里有专属槽位）。
+             *   · 绘画工具箱：applyBrush（切笔刷）与 runFunc 里的功能按钮（分块平均等）。
+             * ⛔ 一条消息**只在一块面板出现**，绝不两边都说一遍（历史上两处各说一遍
+             *    导致过「哪一条才是真的」的困惑）。
+             * ⚠️ 切换填充模式的提示不在这里发：它要说出「切到了哪个模式」，而那个信息
+             *    只有 cycleFillMode 里才有（见那里的说明）。
              */
             this.unsubHotkeyTrigger = onHotkeyTriggered((info) => {
-                if (info.action !== 'blendMode') return;
-                // `info.brush` 承载的是 PS 枚举值（keyhook.c 的 KH_BLEND_DEFS），转中文再上屏
-                const modeCn = blendModeLabel(info.brush) || '未知模式';
-                this.showBlendHotkeyNotify(
-                    '热键触发：' + (info.combo ? info.combo + ' → ' : '') +
-                    '选区填充混合模式 → ' + modeCn + (info.ok ? '' : '（失败）'),
-                    info.ok
-                );
+                const prefix = '热键触发：' + (info.combo ? info.combo + ' → ' : '');
+
+                if (info.action === 'blendMode') {
+                    // `info.brush` 承载的是 PS 枚举值（keyhook.c 的 KH_BLEND_DEFS），转中文再上屏
+                    const modeCn = blendModeLabel(info.brush) || '未知模式';
+                    this.showAppHotkeyNotify(
+                        prefix + '选区填充混合模式 → ' + modeCn + (info.ok ? '' : '（失败）'),
+                        info.ok
+                    );
+                    return;
+                }
+
+                if (info.action === 'toggleMain') {
+                    /* 主开关（默认 H）。`info.enabled` = 切换**之后**的状态。
+                       ⭐ 2026-11-16 新逻辑①：关闭总开关时，如果当前正停在多边形/磁性套索，
+                          顺手切回普通套索。真正的切换发生在 onMainToggleChanged
+                          （那里才有 prev→next 的时序），这里只按**同一个判据**把结果
+                          写进文案，避免用户看到「已关闭」却仍停在一个用不了的子工具上。 */
+                    const backToLasso = info.enabled === false && App.isSubLassoTool(this.currentToolGuess());
+                    const base = info.enabled === undefined
+                        ? '选区填充开关切换失败'
+                        : ('选区填充开关已' + (info.enabled ? '开启' : '关闭'));
+                    this.showAppHotkeyNotify(
+                        prefix + base + (backToLasso ? '（切回套索工具）' : ''),
+                        info.enabled !== undefined
+                    );
+                    return;
+                }
+
+                if (info.action === 'lassoCycle') {
+                    const target = info.brush || '';
+                    /* 乐观记下「新的当前工具」：组内循环是本面板发起的，事实明确；
+                       1s 巡检要等下一拍，而紧跟其后的 H / Shift+E 判据马上就要用它。 */
+                    if (target && info.ok) this.noteRealTool(target);
+                    /* ⭐ 2026-11-16 新逻辑②：Shift+L 换的是**真工具** ⇒ 与「用鼠标点工具栏换
+                       工具」同权。自动关开关开着、总开关也开着时，这里就把总开关关掉
+                       （用户原话：「应视为工具切换，在自动关开关开启时应该要自动关闭总开关」）。
+                       ⛔ 切换失败（info.ok=false）不关：工具没动，就不该有副作用。 */
+                    const autoOffed = !!info.ok && !!this.state.autoOffOnOtherTool && this.state.isEnabled;
+                    if (autoOffed) void this.autoTurnOffMain(target);
+                    this.showAppHotkeyNotify(
+                        prefix + (info.ok
+                            ? '已切换到「' + App.toolRefLabel(target) + '」' + (autoOffed ? '（自动关已开 ⇒ 关闭选区填充）' : '')
+                            : '切换套索工具失败'),
+                        info.ok
+                    );
+                    return;
+                }
+
+                if (info.action === 'focusLasso') {
+                    // 工具模式「套索工具」键（默认 L）：关闭主开关并把工具切回套索
+                    this.showAppHotkeyNotify(
+                        prefix + (info.ok ? '已退出自动填充（切回套索工具）' : '退出自动填充失败'),
+                        info.ok
+                    );
+                    return;
+                }
+
+                if (info.action === 'focusClear') {
+                    // 工具模式「清除模式」键（默认 Shift+E）：确保主开关开启 + 切换清除模式
+                    this.showAppHotkeyNotify(
+                        prefix + (info.ok ? '清除模式已切换（主开关保持开启）' : '清除模式切换失败'),
+                        info.ok
+                    );
+                    return;
+                }
             });
             /* 0x0224：混合模式热键开关翻面 ⇒ 重算「谁读工具」并立刻判一次让位。
                （开关住在绘画工具箱的功能快捷键子面板，本面板只能靠配置帧知道它变了） */
@@ -984,10 +1049,11 @@ class App extends React.Component<AppProps, AppState> {
         // 补一次原生控件重排，防 UXP 数字输入留残影（与模式切换 resync 同款纪律）。
         // 首次不补（smoothErrBarVisible 初值 null）：装载时的既有布局无需抖动。
         /* 这里追踪的是「本面板是否有一条**会推动下方内容**的状态条」：
-           选区平滑错误条，或 2026-11-16 新增的混合模式热键反馈条。
+           选区平滑错误条，或 APP 侧热键的反馈条（H / L / Shift+L / Shift+E /
+           Ctrl+滚轮 / Alt+Shift+字母）。
            两者出现/消失都会改变上方高度 ⇒ UXP 原生 number 的坐标需要重排，
            否则会留下残影（数字画在旧位置）。 */
-        const smoothErrBar = smoothToneIsError(this.smoothBarTone()) || !!this.state.blendHotkeyNotify;
+        const smoothErrBar = smoothToneIsError(this.smoothBarTone()) || !!this.state.appHotkeyNotify;
         if (this.smoothErrBarVisible !== null && smoothErrBar !== this.smoothErrBarVisible) {
             resyncNativeWidgets(this.panelRef.current);
         }
@@ -1146,9 +1212,9 @@ class App extends React.Component<AppProps, AppState> {
             try { this.unsubHotkeyTrigger(); } catch { /* ignore */ }
             this.unsubHotkeyTrigger = null;
         }
-        if (this.blendNotifyTimer) {
-            clearTimeout(this.blendNotifyTimer);
-            this.blendNotifyTimer = null;
+        if (this.appNotifyTimer) {
+            clearTimeout(this.appNotifyTimer);
+            this.appNotifyTimer = null;
         }
         /* 0x0224：只退订配置流，**不**主动清让位位 —— 让位位活在原生内存里，
            面板一走 WS 就断，下一个客户端接手时原生会自己归零（keyhook.c kh_cli_add）。
@@ -1264,17 +1330,22 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     /**
-     * 混合模式热键的即时反馈：显示在「选区平滑」分区上方那条 notify-bar 里。
+     * APP 侧热键的即时反馈：显示在「选区平滑」分区上方那条 notify-bar 里。
      * 新消息覆盖旧消息并重置计时（用户看到的永远是最近一次按键的结果）。
+     *
+     * ⛔ 这里只服务**「自定义快捷键」里与 APP 面板相关**的动作（开关 / 套索 /
+     *    切换套索 / 清除模式 / 填充模式 / 混合模式）。绘画工具箱自己的反馈
+     *    （切笔刷、跑功能按钮）仍留在 BrushHotkeySection 的 msg 条里 ——
+     *    一条消息只在**用户眼睛当时所在的那块面板**出现，不在两处重复。
      */
-    private showBlendHotkeyNotify(text: string, ok: boolean) {
-        if (this.blendNotifyTimer) { clearTimeout(this.blendNotifyTimer); this.blendNotifyTimer = null; }
-        this.setState({ blendHotkeyNotify: { text, ok } });
-        this.blendNotifyTimer = setTimeout(() => {
-            this.blendNotifyTimer = null;
+    private showAppHotkeyNotify(text: string, ok: boolean) {
+        if (this.appNotifyTimer) { clearTimeout(this.appNotifyTimer); this.appNotifyTimer = null; }
+        this.setState({ appHotkeyNotify: { text, ok } });
+        this.appNotifyTimer = setTimeout(() => {
+            this.appNotifyTimer = null;
             // 面板可能已卸载：卸载时 componentWillUnmount 会清掉定时器，这里只兜底判活
-            if (this.setState) this.setState({ blendHotkeyNotify: null });
-        }, BLEND_NOTIFY_TTL_MS);
+            if (this.setState) this.setState({ appHotkeyNotify: null });
+        }, APP_HOTKEY_NOTIFY_TTL_MS);
     }
 
 
@@ -1439,6 +1510,57 @@ class App extends React.Component<AppProps, AppState> {
               `HotkeyBridge.isLassoToolId()`（那边按族成员精确比较，含 polySelTool），
               两个问题、两套判据，别混用。 */
         return /lasso/i.test(tool);
+    }
+
+    /**
+     * 是否是**套索组里的「子工具」**（多边形套索 / 磁性套索）。
+     *
+     * ⛔ 与 `isLassoTool()` 是两件事，别合并：
+     *   · `isLassoTool()` = 「吃不吃平滑」的口径（只认 lasso 关键词，polySelTool 判 false）；
+     *   · 本函数 = 「是不是套索组里那两个非普通套索」的口径，用于
+     *     ① 关闭总开关时要不要顺手退回普通套索（用户 2026-11-16 要求）；
+     *     ② 提示文案里点出用户现在停在哪个子工具。
+     *   ⚠️ 名单与 `HotkeyBridge.LASSO_GROUP` 必须一致（三个真名见那边的注释）。
+     */
+    private static isSubLassoTool(tool: string | null): boolean {
+        return tool === 'polySelTool' || tool === 'magneticLassoTool';
+    }
+
+    /** 工具引用名 → 界面文案（提示用；认不出的原样回显，绝不吞掉信息）。 */
+    private static toolRefLabel(ref: string | null): string {
+        switch (ref) {
+            case 'lassoTool': return '套索工具';
+            case 'polySelTool': return '多边形套索';
+            case 'magneticLassoTool': return '磁性套索';
+            case 'eyedropperTool': return '吸管工具';
+            default: return ref || '未知工具';
+        }
+    }
+
+    /**
+     * 「当前工具」的**本地最佳猜测**：优先用「自动关」巡检维护的 `lastKnownTool`，
+     * 退而用 .8li 的 'slct' 回调报来的 `psTool`。
+     *
+     * ⛔ 刻意不在这里读 `application.tool`：热键回调落在用户按键的同一拍，
+     *    此刻插一条 batchPlay get 会抢模态作用域（本仓的高频读取痛点），
+     *    而这两个值已经足够回答「是不是多边/磁性套索」这种粗粒度问题。
+     *    读不到（两者皆空）一律当「不知道」⇒ 调用方不做任何工具动作。
+     */
+    private currentToolGuess(): string | null {
+        return this.lastKnownTool || this.state.smoothStatus?.pen?.psTool || null;
+    }
+
+    /**
+     * 面板**确认到真实工具**时统一走这里：既维护「自动关」的基准，也把
+     * 「Shift+L 组内循环」的游标对齐。
+     *
+     * ⛔ 为什么必须同步游标：游标住在 HotkeyBridge 模块里，面板自己用 batchPlay
+     *    切了工具（H 关开关退回普通套索、L 切回套索、临时吸管松开切回）时它不知道，
+     *    于是下一次 Shift+L 会从**旧的那一格**往后走 —— 表现就是「偶尔跳过一格」。
+     */
+    private noteRealTool(tool: string | null) {
+        this.lastKnownTool = tool;
+        syncLassoCycleCursor(tool);
     }
 
     /**
@@ -2096,8 +2218,10 @@ class App extends React.Component<AppProps, AppState> {
      *
      * ⛔ 只改 fillMode（三行 radio 的选中项），**不**顺手打开对应的子面板：
      *    滚轮是连续动作，每滚一格弹一个子面板 = 面板不停闪；要改参数时点那一行的齿轮即可。
-     * ⛔ 顺序必须与界面上三行的显示顺序一致（纯色 → 图案 → 渐变），
-     *    否则「向下滚 = 下一个」在视觉上会跳反。
+     * ⛔ 顺序必须与界面上三行的显示顺序一致（纯色 → 图案 → 渐变）。
+     *    方向口径（2026-11-16 用户要求反向）：**滚轮往后转（向下）**= 纯色→图案→渐变，
+     *    往上滚 = 往回退一格。符号换算只在 HotkeyBridge 的 fillModeCycle 分支里做一处。
+     * ⚠️ 反馈在这里发而不是在键触发的回调里：只有这里知道「切到了哪一个」。
      */
     cycleFillMode(dir: FillModeDir) {
         const order: Array<'foreground' | 'pattern' | 'gradient'> = ['foreground', 'pattern', 'gradient'];
@@ -2106,6 +2230,12 @@ class App extends React.Component<AppProps, AppState> {
         const next = order[((i < 0 ? 0 : i) + (dir < 0 ? order.length - 1 : 1)) % order.length];
         if (next === cur) return;
         this.setState({ fillMode: next });
+        this.showAppHotkeyNotify('热键触发：填充模式 → ' + App.fillModeLabel(next), true);
+    }
+
+    /** 填充模式 → 界面文案（与三行 radio 的 label 同源口径）。 */
+    private static fillModeLabel(mode: 'foreground' | 'pattern' | 'gradient'): string {
+        return mode === 'pattern' ? '图案' : mode === 'gradient' ? '渐变' : '纯色';
     }
 
     openPatternPicker() {
@@ -2916,6 +3046,19 @@ class App extends React.Component<AppProps, AppState> {
     private async onMainToggleChanged(prevEnabled: boolean, nextEnabled: boolean) {
         if (nextEnabled && !prevEnabled && this.state.switchToLassoOnEnable) {
             await this.selectLassoTool();
+            return;
+        }
+        /* ⭐ 2026-11-16（用户要求）：**关闭**总开关这一拍，如果当前停在多边形/磁性套索，
+           顺手切回普通套索。
+           为什么：这两个子工具是「点击落点」式，自动填充在它们上面没有意义；用户按 H
+           的意图就是「收工」，停在多边形套索里下次要画还得手动切回来。
+           ⛔ 只在「从开→关」这一拍做：开机（关→开）不做任何工具动作，免得把用户特意
+              选好的子工具改掉 —— 开机切套索另有 `switchToLassoOnEnable` 那条既有逻辑。
+           ⛔ 判据用 `currentToolGuess()`（巡检基准 / 'slct' 上报），读不到就**不动**：
+              不知道当前工具时乱切一次会吞掉用户下一笔（见 reselectLassoIfStrayed 的说明）。 */
+        if (!nextEnabled && prevEnabled && App.isSubLassoTool(this.currentToolGuess())) {
+            console.log('[主开关] 关闭时当前是「' + App.toolRefLabel(this.currentToolGuess()) + '」⇒ 切回套索工具');
+            await this.selectLassoTool();
         }
     }
 
@@ -2980,7 +3123,7 @@ class App extends React.Component<AppProps, AppState> {
         this.altToolHold = false;
         console.log('[临时吸管] 按住键松开 ⇒ 切回套索');
         await selectToolByRef('lassoTool');
-        this.lastKnownTool = 'lassoTool';
+        this.noteRealTool('lassoTool');
         /* 乐观回绿：**必须 force** —— 平时 `applyToolGate` 在 'slct' 接管时直接 return，
            而回调要等 PS 派发通知；不 force 的话用户松开后立刻画会卡 ~1 秒。 */
         this.applyToolGate('lassoTool', true);
@@ -3112,7 +3255,7 @@ class App extends React.Component<AppProps, AppState> {
     // 自动切换为套索工具（主开关关闭→开启时）
     // 复用 HotkeyBridge.applyBrush 已验证的切工具写法：先直连 batchPlay，
     // 失败（某些 PS 版本/状态下要求模态作用域）再回退 executeAsModal。
-    private async selectLassoTool() {
+    private async selectLassoTool(): Promise<boolean> {
         const descriptor: any = {
             _obj: 'select',
             _target: [{ _ref: 'lassoTool' }],
@@ -3120,18 +3263,26 @@ class App extends React.Component<AppProps, AppState> {
             forceNotify: true,
             _isCommand: false
         };
+        let switched = false;
         try {
             await action.batchPlay([descriptor], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
+            switched = true;
         } catch (directErr) {
             // 直连失败 → 回退模态作用域（与 applyBrush 一致）
             try {
                 await runAsModal(async () => {
                     await action.batchPlay([descriptor], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
                 }, { commandName: '切换套索工具' });
+                switched = true;
             } catch (e) {
                 console.warn('⚠️ 自动切换套索工具失败（主开关开启时）:', e);
             }
         }
+        /* ⛔ 只有真的切过去才同步基准与 Shift+L 游标：失败时工具仍在原处，
+           若照样把基准写成 lassoTool，后续所有「当前是不是套索」的判据都会对着
+           一个不存在的现实做决定（H 键退回套索这条尤其会被带偏）。 */
+        if (switched) this.noteRealTool('lassoTool');
+        return switched;
     }
 
     // 从 select 通知的 descriptor 解析被选中的工具 key；非工具选择返回 null
@@ -3241,13 +3392,13 @@ class App extends React.Component<AppProps, AppState> {
         const needBlend = blendGuardWatchNeeded();
         const need = needAutoOff || needBlend;
         if (need && !this.toolWatchTimer) {
-            if (needAutoOff) this.lastKnownTool = null; // 新一轮先取基准，不追溯开开关之前的工具
+            if (needAutoOff) this.noteRealTool(null); // 新一轮先取基准，不追溯开开关之前的工具
             this.toolWatchTimer = setInterval(() => { void this.pollToolChange(); }, App.TOOL_WATCH_INTERVAL_MS);
             void this.pollToolChange();
         } else if (!need && this.toolWatchTimer) {
             clearInterval(this.toolWatchTimer);
             this.toolWatchTimer = null;
-            this.lastKnownTool = null;
+            this.noteRealTool(null);
         }
         // 「自动关」的启停会改变「谁在读工具」⇒ 平滑闸门要不要自建巡检随之变化。
         this.syncSmoothToolWatch();
@@ -3295,7 +3446,7 @@ class App extends React.Component<AppProps, AppState> {
             if (!tool) return;
             if (!needAutoOff) return;          /* 只服务让位时到这里就结束（不碰 lastKnownTool） */
             const prev = this.lastKnownTool;
-            this.lastKnownTool = tool;
+            this.noteRealTool(tool);
             // 首轮只记基准；工具没变也不判，避免「开关一开就被自己关掉」
             if (prev === null || prev === tool) return;
             if (App.isOtherTool(tool)) await this.autoTurnOffMain(tool);
@@ -3563,7 +3714,7 @@ class App extends React.Component<AppProps, AppState> {
             tool = await this.readCurrentToolId();
         }
         if (!tool) return;
-        this.lastKnownTool = tool; // 与巡检共享基准，避免同一件事被判两次
+        this.noteRealTool(tool); // 与巡检共享基准，避免同一件事被判两次
         if (App.isOtherTool(tool)) await this.autoTurnOffMain(tool);
     }
 
@@ -3630,7 +3781,7 @@ class App extends React.Component<AppProps, AppState> {
                        不必等 1s 巡检；切回套索 ⇒ 立刻恢复接管。 */
                     noteToolForBlendYield(t);
                     if (this.state.smoothStatus.connected && this.state.smoothStatus.pen.enabled) {
-                        this.lastKnownTool = t;      // 与巡检共享基准，避免同一件事被判两次
+                        this.noteRealTool(t);        // 与巡检共享基准，避免同一件事被判两次
                         this.applyToolGate(t);
                     }
                 }
@@ -3971,22 +4122,25 @@ title={helpTexts.selectionFill.blendMode}>
                     </div>
                 </div>
 
-                {/* 混合模式热键的即时反馈（2026-11-16 用户要求「单独移到选区平滑折叠分区的上方」）。
-                    ⛔ 位置是硬要求：它与下方「选区平滑」**没有任何功能关系**，放在这里纯粹是
-                       视线落点（用户按 Alt+Shift+字母时眼睛在画布/面板中段，原先那条提示
-                       埋在绘画工具箱「笔刷热键」列表最下方，根本看不到）。
+                {/* APP 侧热键的即时反馈（2026-11-16 用户要求：全部放在「选区平滑」折叠分区
+                    **上方**这一条固定槽位里）。
+                    ⛔ 位置是硬要求：它覆盖「自定义快捷键」子面板里与选区填充有关的每一次按键
+                       （开关 H / 套索 L / 切换套索 Shift+L / 清除模式 Shift+E /
+                        切换填充模式 Ctrl+滚轮 / 混合模式热键），原先这些提示统统埋在
+                       绘画工具箱「笔刷热键」列表最下方 —— 用户按完键视线在画布与面板中段，
+                       根本看不到。
                     ⛔ 只在有反馈时占位：通知条出现/消失会推动下方分区 ⇒ 与「选区平滑错误条」
                        同一处 resyncNativeWidgets 兜底（componentDidUpdate 里比对可见性），
                        避免 UXP 原生数字输入留残影。
                     ⚠️ 配色沿用本面板状态条口径：成功 = 主色蓝（ok），失败 = 红（fail）；
                        不使用橙色 —— 橙在本插件语义里是「待处理/未就绪」，不是「操作失败」。 */}
-                {this.state.blendHotkeyNotify && (
+                {this.state.appHotkeyNotify && (
                     <div
-                        className={'notify-bar ' + (this.state.blendHotkeyNotify.ok ? 'notify-bar-ok' : 'notify-bar-fail')}
-                        title={helpTexts.selectionFill.blendHotkeyNotify}
+                        className={'notify-bar ' + (this.state.appHotkeyNotify.ok ? 'notify-bar-ok' : 'notify-bar-fail')}
+                        title={helpTexts.selectionFill.appHotkeyNotify}
                     >
-                        <span className={'indicator indicator-md ' + (this.state.blendHotkeyNotify.ok ? 'indicator-ok' : 'indicator-fail')} />
-                        <span className="notify-text">{this.state.blendHotkeyNotify.text}</span>
+                        <span className={'indicator indicator-md ' + (this.state.appHotkeyNotify.ok ? 'indicator-ok' : 'indicator-fail')} />
+                        <span className="notify-text">{this.state.appHotkeyNotify.text}</span>
                     </div>
                 )}
 

@@ -821,11 +821,15 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
     /* 「切换套索工具」键（默认 Shift+L，2026-11-16）：在套索组内循环一格。
        ⛔ 不做 token 去重：它没有「读-改-写」共享状态（对比 toggleMain），
           各面板共用一份订阅表 ⇒ 一次广播只走到这里一次。
-       ⛔ 这里**不**顺手关主开关、也不切回普通套索：用户的场景就是「在套索组里换
-          子工具继续画」，任何额外的工具动作都会把刚切到的子工具又拽回去。 */
+       ⛔ 这里**不**顺手关主开关、也不切回普通套索 —— 但**面板会关**：
+          「换工具 ⇒ 自动关」是面板的产品决策（要读 autoOffOnOtherTool / isEnabled），
+          本模块拿不到 state。所以广播里必须带上目标工具（`brush`），
+          面板据此更新「当前工具」基准并决定要不要关总开关。
+       ⚠️ 2026-11-16 用户明确要求：Shift+L 换的算**真工具切换**，自动关开关开着时
+          要自动关闭总开关（不再是「只在组里换子工具、主开关不受影响」）。 */
     const combo = msg.combo ?? '';
-    cycleLassoTool();
-    for (const l of hotkeyListeners) { try { l({ combo, action: 'lassoCycle', ok: true }); } catch { /* ignore */ } }
+    const target = cycleLassoTool();
+    for (const l of hotkeyListeners) { try { l({ combo, action: 'lassoCycle', brush: target, ok: true }); } catch { /* ignore */ } }
     return;
   }
   if (msg.action === 'focusClear') {
@@ -906,9 +910,15 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
     // 「切换填充模式」快捷键（默认 Ctrl+滚轮）：执行权在 APP 面板（fillMode 是它的 React state），
     // 与 MainToggleBus 同理经共享文件分发 + token 去重——守护进程向所有面板广播同一次命中，
     // 只有第一个写文件的请求生效，APP 面板轮询到新修订号后前进一步，绝不按面板数量连跳。
-    // dir：+1 = 滚轮向下（下一个）、-1 = 滚轮向上（上一个），由 .8li 的鼠标钩子判定后下发。
-    // ⛔ 缺省按 +1 处理（键盘重录成普通组合键时没有方向，语义取「下一个」）。
-    const dir: FillModeDir = Number((msg as any).dir) < 0 ? -1 : 1;
+    //
+    // ⛔⛔ 方向口径（2026-11-16 用户要求「反向」）：**滚轮往后转（向下）= 纯色→图案→渐变**，
+    //    往上滚 = 往回退一格。
+    //    原生 `dir` 是**物理方向**：+1 = 滚轮向上（WHEEL_DELTA 为正）、-1 = 向下。
+    //    ⇒ 语义方向 = 物理方向取反，换算**只写在这一行**；要再翻一次就改这一处，别去动 .8li
+    //      （那边一旦改，旧面板配新 .8li 就会反过来，A/B 两个版本都不好解释）。
+    // ⚠️ 缺省（键盘重录成普通组合键、没有方向）仍按「下一个」处理。
+    const rawDir = Number((msg as any).dir);
+    const dir: FillModeDir = rawDir > 0 ? -1 : 1;
     /* token 必须**一次命中一个**（而不是「组合键 + 时间桶」）：
        滚轮连续滚动时两格很容易落进同一个 400ms 桶，用时间桶会把第二格误判成
        重复而丢掉（表现就是「快速滚动漏步」）。`seq` 是 .8li 给这条命中编的绝对
@@ -1164,7 +1174,7 @@ export function setLassoCycleCombo(combo: string, active: boolean): void {
  * ⛔ 读不到工具时**不放弃**（与「不知道就别碰工具」的其它路径不同）：
  *    这里的语义就是「用户按了循环键」，什么都不做才是 bug；游标会给出确定的下一格。
  */
-function cycleLassoTool(): void {
+function cycleLassoTool(): ToolRef {
   if (lassoCycleIdx < 0) {
     const cur = readToolIdSync();
     const i = cur ? LASSO_GROUP.indexOf(cur as ToolRef) : -1;
@@ -1179,6 +1189,23 @@ function cycleLassoTool(): void {
   void selectToolByRef(target).then(ok => {
     if (!ok) console.warn('[套索组循环] 切换失败（' + target + '）：引用名可能不被当前 PS 版本接受');
   });
+  /* 返回值 = 这次要切到的工具。面板侧要拿它做两件事：
+     ① 记下「新的当前工具」（H / Shift+E 的判据马上要用，等不到 1s 巡检）；
+     ② 提示文案里说清「切到了哪一个」。 */
+  return target;
+}
+
+/**
+ * 把组内循环游标与「外部已经发生的工具切换」对齐（面板切了工具就调一次）。
+ *
+ * ⛔ 为什么需要：游标住在本模块里，而**面板自己**也会切工具 —— 关总开关时退回普通套索
+ *    （`App.selectLassoTool`）、按 L 切回套索、临时吸管松开切回、用户用鼠标点工具栏。
+ *    这些都不经过 `cycleLassoTool`，游标就会停在旧的一格上，下一次 Shift+L 直接跳过一格。
+ * ⚠️ 传 null（当前工具未知）⇒ 游标置 -1，下一次按键按当时的真实工具重新校准。
+ */
+export function syncLassoCycleCursor(tool: string | null): void {
+  const i = tool ? LASSO_GROUP.indexOf(tool as ToolRef) : -1;
+  lassoCycleIdx = i >= 0 ? i : -1;
 }
 
 /** 是否已连上守护进程（菜单里「设置主开关快捷键」需要据此给出提示）。 */

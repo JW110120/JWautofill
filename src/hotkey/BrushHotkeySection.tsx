@@ -173,33 +173,18 @@ export default function BrushHotkeySection() {
         showMessage(info.ok
           ? ('热键触发：' + (info.combo ? info.combo + ' → ' : '') + '已切换笔刷「' + info.brush + '」')
           : ('热键触发失败：' + (info.combo ? info.combo + ' → ' : '') + '切换笔刷「' + info.brush + '」失败，请检查笔刷名是否与 Brushes 面板完全一致'));
-      } else if (info.action === 'toggleMain') {
-        // 提示必须反映共享总线的真实结果：以前无条件显示「已切换」，
-        // 实际上回调在另一个面板上下文里是 null，什么都没切换，误导性极强。
-        // （选区填充开关的录制已迁往「功能快捷键」子面板，但触发反馈仍保留在这里，
-        //   因为笔刷热键分区是调整面板里唯一常驻挂载的热键 UI。）
-        showMessage('热键触发：' + (info.combo ? info.combo + ' → ' : '') + (info.enabled === undefined
-          ? '选区填充开关切换失败'
-          : ('选区填充开关已' + (info.enabled ? '开启' : '关闭'))));
-      } else if (info.action === 'runFunc') {
+      } else if (info.action === 'runFunc' && info.brush !== 'fillModeCycle') {
         // 功能快捷键（分块平均等）触发反馈：实现在 AdjustmentPanel 注册的执行器里
         showMessage('热键触发：' + (info.combo ? info.combo + ' → ' : '') + '执行「' + getFuncHotkeyLabel(info.brush || '') + '」' + (info.ok ? '' : '失败'));
-      } else if (info.action === 'focusLasso') {
-        // 工具模式「套索工具」键：关闭主开关并把工具切回套索
-        showMessage('热键触发：' + (info.combo ? info.combo + ' → ' : '') +
-          (info.ok ? '已退出自动填充（切回套索工具）' : '退出自动填充失败'));
-      } else if (info.action === 'focusClear') {
-        // 工具模式「清除模式」键（Shift+E）：确保主开关开启 + 切换清除模式
-        showMessage('热键触发：' + (info.combo ? info.combo + ' → ' : '') +
-          (info.ok ? '清除模式已切换（主开关保持开启）' : '清除模式切换失败'));
       }
-      /* ⛔ 2026-11-16 用户要求：`blendMode`（Alt+Shift+字母切「选区填充」混合模式）
-         的反馈**已迁到 APP 面板** —— 显示在「选区平滑」分区上方那条独立 notify-bar 里
-         （app.tsx 的 showBlendHotkeyNotify）。
-         为什么必须搬：它改的是选区填充的混合模式，提示却出现在本分区的列表最下方，
-         用户按完键视线落在画布与面板中段，根本看不到这条反馈；而且同一件事在两块面板
-         各说一遍，语义也是重复的。
-         ⇒ 本分区只保留笔刷 / 主开关 / 工具模式键 / 功能按钮的反馈，**不再**处理 blendMode。 */
+      /* ⛔⛔ 2026-11-16 用户要求（第二轮）：**凡是与选区填充（APP 面板）有关的反馈，
+         一律归 APP 面板**，显示在「选区平滑」分区上方那条固定槽位里。
+         已经搬走、本分区不再处理的：`toggleMain`（主开关）、`focusLasso`（套索工具）、
+         `lassoCycle`（切换套索工具）、`focusClear`（清除模式）、
+         `blendMode`（混合模式）与 `runFunc/fillModeCycle`（切换填充模式，见上面的排除）。
+         为什么必须搬：用户按完键时视线在画布与本面板中段，而这些提示原先埋在本分区的
+         列表最下方，根本看不到；而且同一件事在两块面板各说一遍，语义也是重复的。
+         ⇒ 本分区只保留**自己的**两件事：切笔刷、跑功能按钮。 */
     });
     // 两段式录制的实时进度：捕获到组合键、等待回车确认期间给出行内提示
     // （sticky：录制的状态提示常驻，直到录制完成 / 取消）

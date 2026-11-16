@@ -53,6 +53,9 @@
 131 滚轮组合没有 vk ⇒ 只能由 `WH_MOUSE_LL` 的 `WM_MOUSEWHEEL` 处理（伪 vk `KH_VK_WHEEL`）；吞滚动的条件是**五条全与**（有条目 ∧ 修饰键完全匹配 ∧ 布防 ∧ 非文本 ∧ 前台），**裸滚轮永不装载**（那是 PS 的缩放画布）。
 132 「切回某工具」一律**按需**：先同步读 `app.currentTool`，已在目标族就别发 `select` —— 无条件切会迟到落地，把用户随后的 Shift+某键原生循环（如 Shift+L 切多边形/磁性套索）拽回去。
 133 PS 原生「Shift+字母循环同组工具」在 L 上不生效（其它字母都正常，首选项已勾选）⇒ L 被插件接管后这一组的循环只能由插件补：新建配置条目 `lasso_cycle`（默认 Shift+L，仅工具模式装载）→ RegisterHotKey 独占 ⇒ PS 收不到、不会双跳；游标在桥接侧维护（`app.currentTool` 不可靠，见 0x0211）。**多边形套索的引用名是 `polySelTool`**（`polygonalLassoTool` 是猜的、`select` 静默无效 ⇒ 表现为「只在套索与磁性之间跳」）；族判定用 `LASSO_GROUP` 精确比较，⛔ 别用 `/lassoTool$/` 后缀正则（判不出 polySelTool，会把多边形误判成跑偏而踢回普通套索）。`App.isLassoTool`（平滑闸门）**故意**仍只认 `lasso` 关键词，与原生 `ci_has` 逐字一致，两套判据别混用。
+134 子套索（`polySelTool`/`magneticLassoTool`）与主开关的双向联动（2026-11-16）：**关**总开关那一拍若停在子套索 ⇒ 切回 `lassoTool`（`onMainToggleChanged` 里做，只在开→关这一拍，开机不动工具）；**Shift+L 切到子套索 ＝ 换工具** ⇒ `autoOffOnOtherTool` 开且总开关开时自动关（在 `lassoCycle` 的广播回调里做，桥接拿不到 state）。三者由此闭环。面板侧任何自切工具（H/L/临时吸管/巡检/`slct`）**必须**走 `App.noteRealTool()` 同步 `lastKnownTool` 与 `syncLassoCycleCursor()`，否则 Shift+L 会从旧游标跳过一格。
+135 热键反馈**按归属分流**：APP 侧（toggleMain/focusLasso/lassoCycle/focusClear/blendMode/切换填充模式）全部走 `appHotkeyNotify`，位置固定「选区平滑」分区**上方**；工具箱只留 applyBrush + 功能按钮（`runFunc` 里 `fillModeCycle` 已排除）。一条消息只在一块面板出现。`cycleFillMode` 的通知在**那里**发（才知道切到哪个模式），不在触发回调里发。
+136 滚轮方向的**唯一换算点**是 `HotkeyBridge` 的 `fillModeCycle` 分支：原生 `dir` 是物理方向（+1=向上），语义方向取反 ⇒ **向下滚（往后转）= 纯色→图案→渐变**。⛔ 别去改 .8li 的符号，否则旧面板配新 .8li 会反过来。
 
 ## 其余铁律（1–89）—— 全文见 `refs/ironrules-1-89.md`
 
