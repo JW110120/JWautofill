@@ -2166,11 +2166,12 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
    而 0x0209 起它**根本不看 mode**，一律「定长绳（标准×0.6 / 追笔×0.25 / 拉绳×1）」：
    间距恒等于绳长、停笔也一字节不动 ⇒ 补齐在构造上就不可能发生。
    ⇒ `smooth_engine.c` `gp_step()` 改成**三条公式各归其位**（与包路径滤波分支逐字
-     对应）：mode 0 一阶低通 k=dt/(dt+τ)；mode 2 限速追赶 vmax·dt；mode 1 定长绳
+     对应）：mode 0 一阶低通 k=dt/(dt+τ)；mode 2 一阶滞后驱动 k=dt/(dt+τc)（0x023A
+     起，旧的 vmax·dt 定速追赶已证伪）；mode 1 定长绳
      **原样不动**；末尾统一加全局最大滞后钳位 `radiusPxF`（包路径一直有、光标路径
      从来没有）；大跳跃（>4×半径）在标准/追笔下改为**重锚**（同包路径 RST_JUMP），
-     只有拉绳保留「本拍不推进」；新增 `GP_STILL_MS 120` 收尾加速（静止时标准 k≥0.5、
-     追笔 step×3），语义与 0x022D 的 `grace` 同源。
+     只有拉绳保留「本拍不推进」；新增 `GP_STILL_MS 120` 收尾加速（静止时标准/追笔
+     都是 k≥0.5），语义与 0x022D 的 `grace` 同源。
    ⛔ 不动的东西：`canvas_hit_ok` / `fgOk` / 喂入冻结 / 代投节流 / MSE 双证据 /
       POLYALT 吸附六入口 / HUD 显隐 / 面板 —— 逐字未动。
    ⛔ 「吞笔」本轮**未改**（判为 PS 侧输入通路切换的伴随现象，见下），先看本条修完

@@ -67,6 +67,10 @@
 
 145 折叠分区的按下态**只加在共用的 `.collapse-header:active`** 上（四处标题全用它：工具箱每个分区 + APP 的套索选区平滑/选区改造/填充选项），别逐个组件加。取值对齐总开关 `.main-button:active`：`--button-down` + `scale(0.98)`，四档主题里它都比 `--bg-color` 深一档，无需分主题。⚠️ `:active` 里**必须**重写 `transition`（60ms）——基础规则那条 `background-color 0.3s` 是给 hover 的，80~150ms 的点击里慢了等于看不见反馈；松手仍走 0.3s 淡出 = 按下脆、回弹柔。⛔ 缩放别低于 0.95：整行全宽，缩太狠标题与箭头会明显位移。
 
+146 **「追笔」只能是滞后驱动，不能是定速追赶**（0x023A）：`step = vmax·dt` 只有「贴合 / 退到半径钳位」两个稳态，人速与 vmax 同区间 ⇒ 滑杆中段全是死区（实测「10–70 无感、80 以上才有」）。现在 `k = dt/(dt+τc)`、`τc = 2.2·radiusPxF·u`、`u = (50-原生catchUp)/49`，稳态滞后 = 笔速×τc，力度 100 ≈ 一个半径。⛔ τc 必须**按半径归一**（否则小半径用户在中段撞钳位）；⛔ 包路径 `smooth_packets` 与光标路径 `gp_step` 必须**逐字同源**，光标路径只多一条 `still` 时 k≥0.5。
+
+147 面板提示一律走**自绘 `.panel-tip`**，别再让 `title` 生成宿主提示窗（0x023A / PS 28.0）：`src/utils/panelTooltip.ts` 在 pointerover 捕获阶段摘掉 `title`（文案存 WeakMap）⇒ 宿主提示窗永不创建；显示靠面板内 fixed 层（`pointer-events:none`、z-index 100000、`white-space:pre-line`）⇒ 物理上出不了面板窗口。⛔ pointer* 与 mouse* **两条都绑**（UXP 版本差异）；⛔ 收起判据要给足（out/down/wheel/key/scroll/blur/8s 超时），漏一条就是「提示挂住」。
+
 ## 其余铁律（1–89）—— 全文见 `refs/ironrules-1-89.md`
 
 1–6 产物/构建｜7–13 闸门/面板（`'slct'` 三态、isPsBusy、gateAge、HUD AND 门）｜14–16 HUD/画布｜17–38 断流补流（三路输入、SYNTH_TIP_MAX_MS、`armed` 判据）｜39–44 键盘钩子/卸载｜45–53 UXP/画笔预设｜54–64 混合器储层｜65–70 在位闸｜71–73 工具闸门/光标｜74–80 HUD 门控/临时吸管｜81–83 标准滤波/文案｜84–86 HUD 坐标系/消失｜87–89 吸管键源

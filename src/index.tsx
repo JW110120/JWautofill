@@ -18,9 +18,15 @@ import { defaultTheme, Provider } from '@adobe/react-spectrum';
 import AdjustmentPanel from './adjustments/AdjustmentPanel';
 import BrushStudio from './brushstudio/BrushStudio';
 import { MenuManager } from './utils/MenuManager';
+// PS 2027（28.0）/ UXP 兼容补丁：把原生 title 提示换成面板内自绘的一层
+// （28.0 起宿主那块提示窗会在指针离开面板后漏关，赖在画布最上层 —— 见模块头部说明）
+import { installPanelTooltips } from './utils/panelTooltip';
 
 // 初始化主题
 initializeTheme();
+
+// 装 tooltip 补丁（三个面板同一 document ⇒ 内部幂等，只装一次）
+installPanelTooltips();
 
 // 设置所有面板的菜单
 MenuManager.setup();

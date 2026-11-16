@@ -170,7 +170,7 @@ enum {
                             少一行就会让后面 11 个槽整体错位（错位不报错、只静默出怪事）。*/
     CFG_I_CATCHUP,        /* 0..100   追笔速度。⛔ 面板下发的是**原生**值：面板「追笔力度」
                             显示 1–100，经 LassoSmoothing.catchUpToNative() 反向映射成
-                            1–50（显示越大 → 本值越小 → vmax 越小 → 越黏）。        */
+                            1–50（显示越大 → 本值越小 → τc 越大 → 越黏）。        */
     CFG_I_CORNER,         /* 0..90    尖角保护：轨迹相邻两段的**转折角** > 本值即判为拐角、
                             本帧减弱平滑。⛔ 阈值越小越易触发保护；**本值就是面板显示值，
                             没有任何反向映射**（2026-10-14「保护范围」回退定案）。        */
@@ -1526,6 +1526,41 @@ static double tau_from_strength(double t)
     if (t <= 0.0) return 0.0;
     if (t > 100.0) t = 100.0;
     return TAU_BASE_MS * (exp_series(TAU_LN * (t / 100.0)) - 1.0);
+}
+
+/* ---------------- 追笔：力度 → 追赶时间常数 τc（ms，0x023A）----------------
+ * 输入 `u` 是**归一化力度**（0 = 完全跟手，1 = 最黏），由 `catchup_u()` 从原生值算出；
+ * `radiusPxF` 是当前半径（屏幕物理像素）—— 本引擎的滞后硬上限就是它。
+ *
+ * 为什么 τc 必须按半径归一（而不是像 0x0209 那样给一个固定 vmax）：
+ *   旧律是**定速追赶**（step = vmax·dt），人手速度 v 与 vmax 一比就是全有全无：
+ *     vmax > v ⇒ 每包贴合（平滑 0）；vmax < v ⇒ 滞后一路涨到半径钳位。
+ *   屏幕上因此只有「滞后 0」和「滞后 = 半径」两种状态，滑杆中段整段是死区
+ *   （用户 2026-11-16 实测：「10–70 没反馈，80 以上才有效果」，阈值正好落在
+ *     vmax(70)=0.50 与 vmax(80)=0.35 px/ms 之间，而他的运笔速度约 0.35~0.4）。
+ *   改成「滞后驱动速度」后稳态滞后 = v·τc，于是 τc 直接就是**延时**：
+ *   力度 100 要能推到钳位（≈ 半径），力度 50 大约是半个半径 ⇒ τc 上限取
+ *   CATCHUP_TAU_R·半径，全程线性。⛔ 若把 τc 写成与半径无关的常数，
+ *   半径小的用户在滑杆中段就会撞钳位、上半段又变死区（旧律的翻版）。
+ * ⛔ 不引 libm：只用乘法（u 已经是 0..1，无需 pow/sqrt）。 */
+#define CATCHUP_TAU_R 2.2      /* ms / 屏幕 px：τc(力度100) = 2.2·半径 ⇒ 滞后 v·τc ≈ 1.1·半径 */
+static double tau_from_catchup(double u, double radiusPxF)
+{
+    if (u <= 0.0) return 0.0;
+    if (u > 1.0) u = 1.0;
+    if (radiusPxF < 1.0) radiusPxF = 1.0;
+    return CATCHUP_TAU_R * radiusPxF * u;
+}
+
+/* 原生追笔值（面板反向映射后落在 1..50）→ 归一化力度 u。
+ * ⛔ 方向必须与面板口径一致：原生 50（面板「追笔力度 1」）= 跟手 = 0；
+ *    原生 1（面板 100）= 最黏 = 1。⛔ 别在这里再翻一次符号（面板侧已翻过，
+ *    见 src/lasso/LassoSmoothing.ts 的 catchUpToNative）。 */
+static double catchup_u(int cu)
+{
+    if (cu > 50)  cu = 50;
+    if (cu < 1)   cu = 1;
+    return (50.0 - (double)cu) / 49.0;
 }
 
 /* ---------------- HUD 快照（detour 只写这几个普通内存字段）----------------
@@ -4920,24 +4955,27 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
             }
             /* else：绳没绷紧 ⇒ 输出点一字节都不动（见上，这是「拉绳感」的本体） */
         } else if (mode == 2) {
-            /* ===== 追笔：输出端以受限速度追赶光标，追上即贴合 =====
-               ⛔ 量程必须落在**人的运笔速度区间**内：手绘约 0.05~1.5 px/ms
-               （50~1500 px/s）。旧版 0.2~12.2 px/ms（最快 12200 px/s 比任何手都快）
-               ⇒ 除最左端外 step 永远大于 dist ⇒ 恒走「贴合」分支 ⇒ 追笔滑杆整条无效。
-               ⛔ 2026-10-13 第二轮上调：上限 1.5 → **3.0 px/ms**（3000px/s）。
-                  用户反馈「追笔拉满还是觉得不够跟手」。1.5 恰好等于人手速度上限，
-                  拉满时 step 与人类的 dist 同量级 ⇒ 仍会频频落到「追赶」分支、留有可见滞后。
-                  现在 3.0 是人手极限的两倍 ⇒ 拉满即近似 1:1 跟手（等价于不做平滑），
-                  与「数值越大越接近手绘」的文案一致，两端差别也才够明显。 */
-            /* ⛔ catchUp 由面板反向映射后落在 1–50（显示「追笔力度」越大 → 本值越小 →
-               vmax 越小 → 追赶越慢 → 越黏）。此处按 0..100 通用公式计算即可，无需改。 */
-            double vmax = (0.02 + ((double)catchUp / 100.0) * 3.0) * dpiS;   /* 物理 px/ms */
-            double step = vmax * dt;                                /* 像素（与 distPx 同域） */
-            if (distPx > step && distPx > 0.0001) {
-                double f = step / distPx;
-                g_ox += dx * f; g_oy += dy * f;
-            } else {
+            /* ===== 追笔：滞后驱动的追赶（0x023A 重写，与光标路径同一套公式）=====
+               ⛔⛔ 0x0209–0x0239 是**定速追赶**（step = vmax·dt，dist ≤ step 时硬贴合），
+                  数学上只有两个稳态：贴合（滞后 0）或退到半径钳位（滞后 = 半径）。
+                  因为人手速度是 0.05~1.5 px/ms、而 vmax 也在这个区间里，
+                  参数与笔速一比就是「全有全无」⇒ 滑杆中段整段是死区。
+                  用户 2026-11-16 实测形状与此完全一致：vmax(力度70)=0.50、
+                  vmax(力度80)=0.35 px/ms，他运笔约 0.35~0.4 ⇒ 阈值卡在 70/80 之间，
+                  于是「10–70 没反馈，80 以上才有」。
+               ⇒ 现在 rate = 0.02 + distPx/τc（px/ms）：滞后越大追得越快，
+                  存在唯一平衡点 dist* ≈ v·τc ⇒ **滞后与笔速成正比**（等价于延时 τc，
+                  但每拍现算、不需要环形缓冲），且 τc 随力度线性增长 ⇒ 滑杆连续。
+               ⚠️ 等价写法 k = dt/(dt+τc)（与「标准」同一条一阶式，只是 τ 的来源不同：
+                  标准的 τ 来自「强度」与本模式无关；本模式的 τ 来自「力度 × 半径」）。
+               ⛔ 力度最小值（u=0）必须**完全跟手**：τc=0 ⇒ k=1 ⇒ 每包贴合。 */
+            double u = catchup_u(catchUp);
+            if (u <= 0.0) {
                 g_ox = x; g_oy = y;
+            } else {
+                double tau = tau_from_catchup(u, radiusPxF);
+                double k = (dt + tau) > 0.0 ? dt / (dt + tau) : 1.0;
+                g_ox += dx * k; g_oy += dy * k;
             }
         } else {
             /* ===== 标准：一阶低通，k 按**时间常数**推导 =====
@@ -5548,12 +5586,14 @@ static DWORD s_gpMoveMs;
    那是旧绳模式的「大跳跃本拍不推进」把自己永久卡死。
    ⇒ 现在两条通道共用**同一套公式**（与包路径的滤波分支逐字对应）：
        mode 0 标准：一阶低通 k = dt/(dt+τ)，τ = tau_from_strength(强度)；
-       mode 2 追笔：限速追赶 step = vmax·dt，vmax = (0.02 + 追笔/100·3)·dpiS；
+       mode 2 追笔：一阶「滞后驱动」k = dt/(dt+τc)，τc = tau_from_catchup(力度, 半径)
+                    （0x023A 起；旧的定速追赶 step=vmax·dt 已被证伪，见该函数注释）；
        mode 1 拉绳：定长绳，**原样不动**（含大跳跃不推进的守卫，那是绳的本体）。
    ⛔ 三种模式之后统一加**全局最大滞后钳位 radiusPxF**（包路径一直有这条，光标路径
       从来没有）：标准/追笔若无钳位，一次大跳跃要追好几秒。
    ⛔ 静止收尾加速（`GP_STILL_MS`）：笔按着、光标已静止 ≥120ms、输出还没贴上
-      ⇒ 标准把 k 抬到 ≥0.5、追笔把 step ×3。语义与 0x022D 的 `grace` 同源
+      ⇒ 标准与追笔都把 k 抬到 ≥0.5（追笔 0x023A 起同样走 k，不再是 step×3）。
+      语义与 0x022D 的 `grace` 同源
       （「线还没追上来的时候，不许把它当成停手」）。PS 空闲时仍在 ~40Hz 查
       GetCursorPos（jwwh-18096：idle 期 `gcp` 每 4s 涨 160 次）⇒ 尾巴能真的收干净，
       不依赖 PS 重绘。
@@ -5600,21 +5640,26 @@ static void gp_step(int rx, int ry, DWORD now, int edge)
     int still = ((DWORD)(now - s_gpMoveMs) >= GP_STILL_MS && d > 1.0) ? 1 : 0;
 
     if (mode == 2) {
-        /* ===== 追笔：与包路径 mode==2 同一个 vmax / step 公式 ===== */
+        /* ===== 追笔：与包路径 mode==2 **同一个 τc 公式**（0x023A 重写）=====
+           ⛔ 两条通道必须逐字同源：任何手调系数都会让「同一条曲线」在两条路上差一截，
+              历史上（0x0209 的 0.6 / 0.25）就是这么翻车的。
+           ⛔ 旧写法 `step = vmax·dt`（定速追赶）已被证伪：它只有「贴合」与
+              「退到半径钳位」两个稳态，滑杆中段是死区 —— 详见 tau_from_catchup。 */
         int cu = g_cfg[CFG_I_CATCHUP]; if (cu < 0) cu = 0; if (cu > 100) cu = 100;
         if (d > jumpPxF) {
             s_gpX = (double)rx; s_gpY = (double)ry;      /* 大跳跃 ⇒ 重锚（包路径 RST_JUMP） */
             InterlockedIncrement(&g_gpArms);
         } else {
-            double vmax = (0.02 + ((double)cu / 100.0) * 3.0) * dpiS;   /* 物理 px/ms */
-            double step = vmax * dt;
-            if (still) step *= 3.0;
-            if (d > step && d > 0.0001) {
-                double f = step / d;
-                s_gpX += dx * f; s_gpY += dy * f;
+            double u = catchup_u(cu);
+            if (u <= 0.0) {
+                s_gpX = (double)rx; s_gpY = (double)ry;  /* 力度最小 = 完全跟手 */
                 InterlockedIncrement(&g_gpSteps);
             } else {
-                s_gpX = (double)rx; s_gpY = (double)ry;   /* 追上即贴合（与包路径一致） */
+                double tau = tau_from_catchup(u, radiusPxF);
+                double k = (dt + tau) > 0.0 ? dt / (dt + tau) : 1.0;
+                if (still && k < 0.5) k = 0.5;           /* 收尾加速（与标准同一规矩） */
+                s_gpX += dx * k; s_gpY += dy * k;
+                InterlockedIncrement(&g_gpSteps);
             }
         }
     } else if (mode == 1) {
@@ -6627,7 +6672,7 @@ static u64 det_GetCursorPos(u64 a, u64 b, u64 c, u64 d, u64 e, u64 f)
             s_logMs = nowT;
             logf("# [gcp] ★光标路径接管（LNP 分支 A/C）：每次查询推进一步，"
                  "判据=笔按着(btn=%d mse=%d pen=%d) 光标=(%ld,%ld) 半径=%.0fpx 模式=%d"
-                 "（0x022E：标准=一阶低通 / 追笔=限速追赶 / 拉绳=定长绳）\n",
+                 "（0x023A：标准=一阶低通τ(强度) / 追笔=一阶滞后驱动τc(力度×半径) / 拉绳=定长绳）\n",
                  btn, (int)(g_penDown != 0), (int)g_mseTip,
                  (long)p->x, (long)p->y,
                  (double)g_cfg[CFG_I_RADIUSPX] * dpi_scale(), (int)g_cfg[CFG_I_MODE]);
@@ -8878,6 +8923,19 @@ static void hud_frame_wait_idle(HANDLE timer)
 static LRESULT CALLBACK hud_wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     if (m == WM_NCHITTEST) return HTTRANSPARENT;    /* 穿透：绝不抢任何输入 */
+    /* 0x023A（PS 2027 / 28.0 兼容）：把本窗口的「悬停语义」显式掐死。
+       HUD 是置顶 + 分层 + 穿透窗口，点击穿透由 WS_EX_TRANSPARENT 与
+       WM_NCHITTEST 保证；但 28.0 起主窗口刷新悬停态/浮层提示时会更积极地
+       枚举指针底下的窗口 ⇒ 这层虽然不该参与，仍可能把悬停态打断或错算
+       （用户报的「画布上异常冒出 helptext」是其中一个面）。
+       这里三条都在**返回值层面**拒绝，不新建窗口、不改已有 ex 样式：
+         · WM_MOUSEACTIVATE → MA_NOACTIVATE：被点到也不激活、不认领；
+         · WM_SETCURSOR     → TRUE         ：不改光标（悬停判定的第一跳在这里）；
+         · 各种 MOUSELEAVE/HOVER           ：不参与悬停跟踪，回 0 吞掉。
+       ⛔ 别顺手在这里画东西：内容一律走 UpdateLayeredWindow（见下条注释）。 */
+    if (m == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
+    if (m == WM_SETCURSOR) return TRUE;
+    if (m == WM_MOUSEHOVER || m == WM_MOUSELEAVE || m == WM_NCMOUSELEAVE) return 0;
     /* ⛔ 内容一律由 UpdateLayeredWindow 提交（见 hud_thread）⇒ 不参与 GDI 重绘路径：
        擦背景直接吞掉，WM_PAINT 只验证不绘制。否则系统一旦要求重绘，
        DefWindowProc 会把 layered surface 冲掉（表现 = 窗口忽然变空/变黑）。 */
