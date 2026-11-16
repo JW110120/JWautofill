@@ -15,6 +15,7 @@ import { HotkeyArmAlert } from './HotkeyArmSwitch';
 import { DeleteIcon, RefreshIcon, DataRefreshIcon, RecordCircleIcon, StopSquareIcon, BrushToolIcon, SmudgeToolIcon, MixerToolIcon, CloneStampIcon } from '../styles/Icons';
 import BrushSelect, { BrushSelectOption } from './BrushSelect';
 import { helpTexts } from '../constants/helpTexts';
+import { blendModeLabel } from '../constants/blendModes';
 import { getFuncHotkeyLabel } from './funcHotkeyDefs';
 import { runWhenIdle, isPsBusy, psBusyRemain } from '../utils/psProbe';
 
@@ -194,8 +195,13 @@ export default function BrushHotkeySection() {
           (info.ok ? '清除模式已切换（主开关保持开启）' : '清除模式切换失败'));
       } else if (info.action === 'blendMode') {
         // 混合模式热键（Alt+Shift+字母）：.8li 吞键后把目标模式经总线送到 APP 面板
+        // ⛔⛔ 2026-11-16：`info.brush` 承载的是 **PS 枚举值**（`keyhook.c` 的
+        //    KH_BLEND_DEFS，如 `multiply` / `colorBurn`），不是笔刷名。旧实现直接拼进
+        //    提示 ⇒ 用户看到「选区填充混合模式 → multiply」，即「汉化不完整」。
+        //    统一经 `blendModeLabel()` 转中文；表外模式给「未知模式」而不是原文。
+        const modeCn = blendModeLabel(info.brush);
         showMessage('热键触发：' + (info.combo ? info.combo + ' → ' : '') +
-          '选区填充混合模式 → ' + (info.brush || '未知模式') + (info.ok ? '' : '（失败）'));
+          '选区填充混合模式 → ' + (modeCn || '未知模式') + (info.ok ? '' : '（失败）'));
       }
     });
     // 两段式录制的实时进度：捕获到组合键、等待回车确认期间给出行内提示
@@ -441,6 +447,11 @@ export default function BrushHotkeySection() {
     if (e.action === 'focusClear') return '清除模式';
     if (e.action === 'altTool') return '临时吸管';
     if (e.action === 'pickColor') return '前景色拾色器';
+    // ⛔ 2026-11-16：补上「混合模式热键」这一条。它没有组合键可录（combo 只是开关位），
+    //    但**配置里确实存在这个条目**，而本函数的兜底是 `e.brush` ⇒ 冲突提示会显示成
+    //    「该组合键已被「1」占用」（brush='1' 是开关标记）。与 FuncHotkeyPanel 的
+    //    `entryDisplayName` 保持同一份名单，避免两处文案漂移。
+    if (e.action === 'blendHotkey') return '混合模式热键';
     if (e.action === 'runFunc') return getFuncHotkeyLabel(e.brush || '');
     return e.brush || '';
   };

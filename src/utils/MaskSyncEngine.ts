@@ -1,7 +1,8 @@
 import { app, action, imaging } from 'photoshop';
 import { isDocLevelDescriptor, isPsBusy, markPsBusyForEvent, runWhenIdle } from './psProbe';
 import {
-  refreshLayerSnapshot, invalidateLayerSnapshot, LayerSnapshotEntry
+  refreshLayerSnapshotEx, invalidateLayerSnapshot,
+  isLayerSnapshotDirty, LayerSnapshotEntry
 } from './layerTreeSnapshot';
 import { psRead, psTryRead, runAsModal } from './psAccess';
 import { invalidateLayerInfoCache, shouldInvalidateLayerInfo } from './LayerInfoHandler';
@@ -199,6 +200,21 @@ const IDLE_POLL_INTERVAL_MS = 6000;
  */
 
 type Listener = (info: { docChanged: boolean; results?: Record<string, SyncState> }) => void;
+
+/**
+ * 「本轮跳过逐 id 查询」的节流日志（2026-11-16）。
+ *
+ * ⛔ 为什么要节流：这条分支会在「刚合并/删除、宿主还在收尾」的连续几轮里反复命中
+ *    （事件驱动 + 2s 兜底轮询各来一次），不节流会刷屏。1.5s 一次足够取证：
+ *    用户在真机上看到它 = **保护确实生效了**（本轮没有向宿主发任何按 id 的 get）。
+ */
+let lastTreeSkipLogAt = 0;
+function logTreeSkip(reason: string): void {
+  const now = Date.now();
+  if (now - lastTreeSkipLogAt < 1500) return;
+  lastTreeSkipLogAt = now;
+  console.log(`[蒙版同步] ${reason} ⇒ 本轮跳过逐 id 查询（避免失效图层 id 触发「获取」当前不可用）`);
+}
 
 export class MaskSyncEngine {
   private static _instance: MaskSyncEngine | null = null;
@@ -428,20 +444,48 @@ export class MaskSyncEngine {
    * 旧实现每次都自己走一遍树（5 次属性读/层），而调用点密度很高
    * （面板通知 + 引擎轮询 + Select 的 onOpen），叠加后主线程长期被 IPC 阻塞。
    */
-  async buildLayerTree(doc?: any, snapEntries?: LayerSnapshotEntry[]): Promise<LayerTreeEntry[]> {
+  async buildLayerTree(doc?: any, snapEntries?: LayerSnapshotEntry[]): Promise<LayerTreeEntry[] | null> {
     try {
       // ⚠️ 第三轮：`doc` 未由调用方传入时必须**受保护地**取 —— 裸读 app.activeDocument
       // 在宿主忙碌期是一次宿主原生弹框，而本函数由「面板通知 + 引擎轮询 + 下拉
       // onOpen」三路高频调用，命中概率很高。
       const d = doc || await psRead<any>(() => app.activeDocument,
         { label: '取活动文档（构建图层树）', retries: 0 });
-      if (!d) return [];
+      // ⛔ 2026-11-16：读不到文档 ⇒ `null`（=「这轮没有可信数据，请保持现状」），
+      //    不再返回 `[]`。`[]` 与「文档真的没有图层」不可区分，而下游
+      //    `reconcileTasks` 会把「树里没有这个 id」解读成「图层被删了」⇒ 把任务的
+      //    样本/目标引用全部置空（一次忙碌窗口 = 用户任务配置被清空）。
+      if (!d) return null;
       const entries: LayerTreeEntry[] = [];
       const idPath: number[][] = []; // 与 entries 对应的 id 路径（用于实时名称重建 path）
 
       // 优先用共享快照（零 DOM 遍历）；调用方未提供时走**受保护**的刷新
       // （同步的 getLayerSnapshot() 只在持有租约时才遍历，这里不能用它取新数据）。
-      const src = snapEntries ?? (await refreshLayerSnapshot())?.entries;
+      //
+      // ⛔⛔ 2026-11-16（用户报「合并图层 / 合并图层组 / 删除图层仍弹『获取』当前不可用」）：
+      //    下面两步 batchPlay 是**按快照里的 id 发 `get`**。id 失效时宿主会对**每一条**
+      //    回一次「命令"获取"当前不可用」—— 那条提示绕过 JS try/catch，也绕过
+      //    `_options.dialogOptions`，`executeAsModal` 挡不住（我们本来就握着锁）。
+      //    而「合并图层 / 合并组 / 删除图层」正是**一次性让一批 id 失效**的操作。
+      //    ⇒ 只有「与最后一次结构变化同步」的条目才允许拿去发 get：
+      //      · 调用方直接给条目时，要求快照当前**不是脏的**（脏 = 已有结构事件没重读）；
+      //      · 自己取快照时用 `refreshLayerSnapshotEx()` 的 `fresh` 判定。
+      //    不可信 ⇒ 返回 `null`（保持现状），等下一次事件/轮询把新树读回来。
+      let src: LayerSnapshotEntry[] | null = null;
+      if (snapEntries) {
+        if (!isLayerSnapshotDirty()) src = snapEntries;
+        else {
+          logTreeSkip('图层树快照已过期（结构事件后未重读）');
+          return null;
+        }
+      } else {
+        const ex = await refreshLayerSnapshotEx();
+        if (!ex.fresh) {
+          logTreeSkip('图层树未能重读（宿主忙碌 / 模态被拒）');
+          return null;
+        }
+        src = ex.snap?.entries ?? null;
+      }
       if (src) {
         for (const s of src) {
           const kind = s.kind;
@@ -465,9 +509,11 @@ export class MaskSyncEngine {
         // （每层 5 次宿主 get），而它此前依赖 `canSyncReadHost()` 这一**间接**证据。
         // 真机取证已证实 `isModal()` 会在宿主忙碌时误报、间接证据链存在放行出口，
         // 于是「一次判错」= 一屏原生「命令"获取"当前不可用」弹框。
-        // 现在：没有快照就**放弃本轮**（返回空列表），由下一次事件/轮询经
-        // `refreshLayerSnapshot()`（模态作用域内遍历）把数据补上。
-        return [];
+        // 现在：没有快照就**放弃本轮**（保持现状），由下一次事件/轮询经
+        // `refreshLayerSnapshotEx()`（模态作用域内遍历）把数据补上。
+        // ⛔ 2026-11-16：这里返回 `null` 而不是 `[]` —— 见函数开头关于
+        //    「`[]` 会被 reconcileTasks 当成『图层全被删了』」的说明。
+        return null;
       }
 
       // ① 批量查询每个图层的实时名称（按 id 路径逐级查询，避免 DOM 缓存旧名）
@@ -499,11 +545,22 @@ export class MaskSyncEngine {
       return entries;
     } catch (e) {
       console.warn('⚠️ 构建图层树失败:', e);
-      return [];
+      // ⛔ 同上：异常 ≠ 空树。返回 `null` 让调用方保持现状。
+      return null;
     }
   }
 
-  /** 按 id 路径批量查询每个图层的实时名称（batchPlay，40/批）。 */
+  /**
+   * 按 id 路径批量查询每个图层的实时名称（batchPlay，40/批）。
+   *
+   * ⛔⛔ 2026-11-16 两处硬约束（都为了「不弹『命令"获取"当前不可用』」）：
+   *   ① `_options.dialogOptions` 必须是 **`silent`**，不能是 `dontDisplay`。
+   *      `dontDisplay` 的语义只挡**对话框**；命令**出错**时 PS 仍会在文档顶部刷一条
+   *      黄色通知（`-25920`）。`silent` 才是「静默：不显示任何 UI、不报错」。
+   *      本仓已在 `psBrush.ts` 踩过同一个坑（`dontDisplay` 仍弹「画笔名称」框）。
+   *   ② 一旦某批返回里出现 `_obj: 'error'`（典型：id 已被合并/删除），**立刻停手**，
+   *      不再发后续批次。旧实现会把 N/40 批全部发完 ⇒ 一条失效 id 变成一屏黄条。
+   */
   private async fetchLayerNamesByIds(doc: any, idPaths: number[][]): Promise<Map<number, string>> {
     const map = new Map<number, string>();
     const allIds = Array.from(new Set(idPaths.flat()));
@@ -513,24 +570,36 @@ export class MaskSyncEngine {
       const descriptors: any[] = chunk.map(id => ({
         _obj: 'get',
         _target: [{ _property: 'name' }, { _ref: 'layer', _id: id }, { _ref: 'document', _id: doc.id }],
-        _options: { dialogOptions: 'dontDisplay' },
+        _options: { dialogOptions: 'silent' },
       }));
       try {
         // ⚠️ 第三轮：batchPlay get 一律走 psRead（模态作用域）。本批可能几十条 get，
         // 裸发时每一条被拒都会弹一次原生框 —— 这正是「连点八下」的放大机制。
         const results = await psRead<any[]>(
-          () => action.batchPlay(descriptors, { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }),
+          () => action.batchPlay(descriptors, { synchronousExecution: true, dialogOptions: 'silent' }),
           { label: '查询图层名称', retries: 0 });
         if (Array.isArray(results)) {
+          let errored = false;
           for (let i = 0; i < results.length && i < chunk.length; i++) {
             const r = results[i];
             if (r && typeof r.name === 'string') {
               map.set(chunk[i], r.name);
+            } else if (r && r._obj === 'error') {
+              errored = true;
             }
+          }
+          if (errored) {
+            // id 失效 ⇒ 快照已不可信：打脏让下一轮重遍历，并停掉剩余批次。
+            invalidateLayerSnapshot();
+            console.warn('⚠️ 查询图层名称：命中失效图层 id（很可能刚被合并/删除）⇒ 停止本轮剩余批次');
+            break;
           }
         }
       } catch (e) {
         console.warn('⚠️ 查询图层名称失败:', e);
+        // 抛错同理：说明这批 id 与宿主状态已经对不上，继续发只会继续报错。
+        invalidateLayerSnapshot();
+        break;
       }
     }
     return map;
@@ -834,6 +903,10 @@ export class MaskSyncEngine {
     );
     if (!hasPaths) return false;
     const entries = tree || (await this.buildLayerTree(undefined, snapEntries));
+    // ⛔ 2026-11-16：拿不到**可信**的树就整轮放弃。旧写法把 `[]` 也当成「树是空的」⇒
+    //    下面每个任务都会走到「树里没有这个 id」⇒ 把 sampleLayerId / targetLayerId
+    //    全部置空（用户辛苦配的引用在一次忙碌窗口里被清掉）。
+    if (!entries) return false;
     const byId = new Map<number, LayerTreeEntry>();
     for (const e of entries) byId.set(e.id, e);
     let changed = false;
@@ -1163,7 +1236,12 @@ export class MaskSyncEngine {
     return localFileSystem;
   }
 
-  /** 批量查询每个图层的 hasUserMask（分批执行，避免单批过大）。 */
+  /**
+   * 批量查询每个图层的 hasUserMask（分批执行，避免单批过大）。
+   *
+   * ⛔⛔ 同 `fetchLayerNamesByIds`：只读探测必须 `silent`（`dontDisplay` 挡不住
+   *    命令出错时的黄色通知），且命中 `_obj:'error'` 立即停止剩余批次。
+   */
   private async fillUserMaskFlags(doc: any, entries: LayerTreeEntry[]): Promise<void> {
     if (entries.length === 0) return;
     const BATCH = 40;
@@ -1172,23 +1250,33 @@ export class MaskSyncEngine {
       const descriptors: any[] = chunk.map(e => ({
         _obj: 'get',
         _target: [{ _property: 'hasUserMask' }, { _ref: 'layer', _id: e.id }, { _ref: 'document', _id: doc.id }],
-        _options: { dialogOptions: 'dontDisplay' },
+        _options: { dialogOptions: 'silent' },
       }));
       try {
         // ⚠️ 第三轮：同上，走 psRead（模态作用域）。
         const results = await psRead<any[]>(
-          () => action.batchPlay(descriptors, { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }),
+          () => action.batchPlay(descriptors, { synchronousExecution: true, dialogOptions: 'silent' }),
           { label: '查询图层蒙版状态', retries: 0 });
         if (Array.isArray(results)) {
+          let errored = false;
           for (let i = 0; i < results.length && i < chunk.length; i++) {
             const r = results[i];
             if (r && typeof r.hasUserMask === 'boolean') {
               chunk[i].hasUserMask = r.hasUserMask;
+            } else if (r && r._obj === 'error') {
+              errored = true;
             }
+          }
+          if (errored) {
+            invalidateLayerSnapshot();
+            console.warn('⚠️ 查询图层蒙版状态：命中失效图层 id（很可能刚被合并/删除）⇒ 停止本轮剩余批次');
+            break;
           }
         }
       } catch (e) {
         console.warn('⚠️ 查询图层蒙版状态失败:', e);
+        invalidateLayerSnapshot();
+        break;
       }
     }
   }
@@ -1459,11 +1547,17 @@ export class MaskSyncEngine {
       (t.targetLayerPath && t.targetLayerPath.length)
     ));
     if (!hasPaths) return;
-    // ⚠️ 第三轮：改用**受保护**的 refreshLayerSnapshot（遍历在 executeAsModal 内）。
+    // ⚠️ 第三轮：改用**受保护**的刷新（遍历在 executeAsModal 内）。
     // 同步的 getLayerSnapshot 现在只在持有「宿主可读租约」时才遍历，本函数
     // 走的是 2s 兜底轮询，不能指望租约 —— 用同步版会永远吃到旧签名，
     // reconcile 再也不会被触发。
-    const snap = await refreshLayerSnapshot(POLL_INTERVAL_MS);
+    // ⛔ 2026-11-16：改用 `refreshLayerSnapshotEx()` 并要求 `fresh`。读到旧缓存时
+    //    签名与上一轮相同（不会误触发），但**首轮**（lastDocSignature=''）会误触发，
+    //    而那次 reconcile 拿的是「合并/删除之前」的条目 ⇒ 逐 id get 换一屏黄条，
+    //    还可能把任务的图层引用按旧树判成「已失效」。
+    const ex = await refreshLayerSnapshotEx(POLL_INTERVAL_MS);
+    if (!ex.fresh) return;
+    const snap = ex.snap;
     const sig = snap ? snap.signature : 'none';
     if (sig === this.lastDocSignature) return;
     this.lastDocSignature = sig;

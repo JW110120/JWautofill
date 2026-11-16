@@ -153,22 +153,62 @@ export function getLayerSnapshot(maxAgeMs = 0): LayerSnapshot | null {
  *   · 宿主忙碌（打开/关闭/保存大文档…）⇒ `psRead` 返回失败 ⇒ **保持旧缓存**，
  *     等下一次事件/轮询再来。全程不会向宿主发出一次裸 get。
  *
+ * ⚠️ 返回值在**读取失败**时是**旧缓存**（为了让下拉不清空）。调用方若只是渲染
+ * 标签，这样正好；但若要把里面的 `id` 拿去发 `get`（拿失效 id 换 -25920 黄条），
+ * 必须改用 `refreshLayerSnapshotEx()` 拿到的 `fresh` 一起判断。
+ *
  * @param maxAgeMs 同 `getLayerSnapshot`：缓存足够新则直接复用，零 IPC。
  */
 export async function refreshLayerSnapshot(maxAgeMs = 0): Promise<LayerSnapshot | null> {
+  return (await refreshLayerSnapshotEx(maxAgeMs)).snap;
+}
+
+/** `refreshLayerSnapshotEx` 的返回：快照 + **是否可信**。 */
+export interface LayerSnapshotRefresh {
+  /** 与旧接口同义：可能为旧缓存、也可能为 null（从未读到过）。 */
+  snap: LayerSnapshot | null;
+  /**
+   * 返回的 `snap` 是否**与最后一次已知的结构变化同步**。
+   *
+   * `false` 的两种来源：
+   *   · 快照已被告知「结构变了」（`dirty`），但本次因宿主忙碌 / 模态被拒**没能重遍历**；
+   *   · 本次读取抛错（世代号变化、宿主拒绝）。
+   * ⇒ 此时 `snap.entries` 里的 `id` **可能已经不存在**（合并图层 / 合并组 / 删除图层
+   *   之后最常见的状态）。**只允许**拿它渲染旧列表，⛔ 绝不许拿这些 id 去发 `get`：
+   *   对已删除的 id 发 `get` 会被宿主拒绝，而那条提示**绕过 JS try/catch 与
+   *   `dialogOptions`**，一条失效 id 就是一条「命令"获取"当前不可用」（2026-11-16
+   *   用户报的「合并/删除图层仍弹获取不可用」的直接成因）。
+   *
+   * `true` 的三种来源：缓存本来干净（无结构事件）、`maxAgeMs` 内复用、本次真的
+   * 在模态作用域里重遍历成功。
+   */
+  fresh: boolean;
+}
+
+/**
+ * 带**可信度**的受保护刷新（给「要用 id 发 get」的消费方用）。
+ *
+ * ⛔ 与 `refreshLayerSnapshot()` 的唯一区别是它把「这次到底读到了没有」如实交出来，
+ *    而不是把旧缓存伪装成新数据。语义细节见 `LayerSnapshotRefresh.fresh`。
+ */
+export async function refreshLayerSnapshotEx(maxAgeMs = 0): Promise<LayerSnapshotRefresh> {
   const now = Date.now();
-  if (cached && !dirty) return cached;
+  if (cached && !dirty) return { snap: cached, fresh: true };
   if (cached && maxAgeMs > 0 && now - cached.at < maxAgeMs) {
     dirty = false;
-    return cached;
+    return { snap: cached, fresh: true };
   }
-  if (isPsBusy()) return cached;
+  // 明知结构变了却读不成 ⇒ 交给调用方的是一份**已知过期**的缓存。
+  if (isPsBusy()) return { snap: cached, fresh: false };
 
   const r = await psTryRead<TraverseResult>(() => traverseNow(now, '遍历图层树（受保护）'),
     { label: '读取图层树', retries: 0 });
   // 读取失败（宿主忙碌 / 模态被拒）⇒ 保持旧缓存，绝不把「读不到」当成「树是空的」。
-  if (!r.ok) return cached;
-  return commit(r.value);
+  if (!r.ok) return { snap: cached, fresh: false };
+  const snap = commit(r.value);
+  // `commit` 的 `fail` 分支保持原状 ⇒ 这种情况同样不可信。
+  if (r.value && r.value.kind === 'fail') return { snap, fresh: false };
+  return { snap, fresh: true };
 }
 
 /** 遍历结果：区分「读到」/「没有活动文档」/「读失败」——三者语义完全不同。 */

@@ -38,6 +38,7 @@ import { shouldInvalidateLayerInfo } from '../utils/LayerInfoHandler';
 import {
   getLayerSnapshot,
   refreshLayerSnapshot,
+  refreshLayerSnapshotEx,
   invalidateLayerSnapshot,
   isLayerSnapshotDirty,
   findInSnapshot,
@@ -1054,8 +1055,15 @@ const refreshMaskSyncOptions = async (): Promise<LayerTreeEntry[] | null> => {
   try {
     // ⚠️ 走**受保护**的刷新（遍历在 executeAsModal 内）：同步的 getLayerSnapshot()
     // 现在只在持有「宿主可读租约」时才遍历，直接从它取会拿不到新数据。
-    const snap = await refreshLayerSnapshot();
-    const tree = await maskSyncEngine.buildLayerTree(undefined, snap?.entries);
+    // ⛔⛔ 2026-11-16：必须用 `refreshLayerSnapshotEx()` 并检查 `fresh`。
+    //    合并图层 / 合并图层组 / 删除图层之后，「结构已变但没读到」的旧快照会被
+    //    旧接口**原样返回**（为了不让下拉清空），而 buildLayerTree 会拿里面的 id
+    //    逐条发 `get` —— 失效 id 每条换一条「命令"获取"当前不可用」。
+    //    这里提前判掉：不可信就**保持现状**，等下一次事件/轮询重来。
+    const ex = await refreshLayerSnapshotEx();
+    if (!ex.fresh) return null;
+    const tree = await maskSyncEngine.buildLayerTree(undefined, ex.snap?.entries);
+    if (!tree) return null;
     // 树内容没变就不 setState（比较引用/内容后再决定），切断
     // "刷新 → re-render → 布局重排/输入重放 → 下拉闪关"的链路。
     setMaskSyncSampleOptions(prev => (sameLayerTree(prev, tree) ? prev : tree));
@@ -1085,7 +1093,12 @@ const refreshMaskSyncAndReconcile = async () => {
   //    refreshMaskSyncOptions（那里需要真实数据），行为不变。
   if (!maskSyncEngine.hasAnyTask()) return;
   const tree = await refreshMaskSyncOptions();
-  maskSyncEngine.reconcileTasks(tree || undefined).then(changed => {
+  // ⛔ 2026-11-16：拿不到**可信**的树（宿主忙 / 结构刚变没读到）就整轮跳过。
+  //    旧写法会继续调 `reconcileTasks(undefined)`，由它再建一次树 —— 那一次同样可能
+  //    建出「旧 id 列表」，而 reconcileTasks 会把「树里没有这个 id」当成「图层被删」
+  //    ⇒ 把任务的样本/目标引用清空（且每次合并都要付两遍建树成本）。
+  if (!tree) return;
+  maskSyncEngine.reconcileTasks(tree).then(changed => {
     if (changed) {
       const t2 = maskSyncEngine.getTasks();
       setMaskSyncTasks(prev => (sameMaskSyncTasks(prev, t2) ? prev : t2));
@@ -3484,11 +3497,19 @@ const formatSyncState = (task: MaskSyncTask): { text: string; ok: boolean } | nu
     'unsupported-components': '样本像素通道数异常（非 RGB/RGBA）',
     error: '执行出错（见控制台）',
   };
-  let text = reasons[st.reason] || st.reason;
-  if (st.detail && st.reason !== 'error') text += `：${st.detail}`;
+  // ⛔⛔ 2026-11-16：`reason` 可能是**复合串**（如 `sample-pixels-failed:comps=3`，
+  //    尾段来自宿主原始报错）⇒ 旧写法 `reasons[st.reason] || st.reason` 查不到就把
+  //    整串原文印在状态条上，用户看到的是半截英文。现在按第一段冒号取代码：
+  //    命中就只显示中文标签（细节留在控制台），查不到给一句中文兜底，
+  //    **绝不把内部代码/宿主原文漏到界面**。
+  const code = String(st.reason || '').split(':')[0];
+  const known = reasons[code];
+  let text = known || '同步未完成（详见控制台日志）';
+  // 只有「已有中文标签」且 detail 是本插件自己写的中文时才追加（如反相匹配提示）
+  if (st.detail && known && st.reason === 'unchanged') text += `：${st.detail}`;
   // 「未改动」「节流跳过」属于中性常态（没有写入需求），不标红，避免制造焦虑；
   // 仅当确实出现配置/执行错误时才标红（fail 样式）。
-  const benign = st.reason === 'unchanged' || st.reason === 'throttled';
+  const benign = code === 'unchanged' || code === 'throttled';
   return { text: `${text}（${timeStr}）`, ok: benign };
 };
 

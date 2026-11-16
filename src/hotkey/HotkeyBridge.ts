@@ -1672,7 +1672,11 @@ export function normalizeToolId(v: any): string | null {
 export async function getSelectedBrushToolEnum(): Promise<string | null> {
   const r: any = await psRead<any>(
     () => action.batchPlay(
-      [{ _obj: 'get', _target: [{ _property: 'tool' }, APP_TARGET], _options: { dialogOptions: 'dontDisplay' } }],
+      // ⛔ 2026-11-16：`silent`（不是 `dontDisplay`）。`dontDisplay` 只挡对话框；
+      // 这条 get 一旦被宿主拒绝（删除/合并/拼合期间 `application.tool` 可能短暂不可取），
+      // PS 会在文档顶部刷一条「命令"获取"当前不可用」。本函数由 1s 巡检与
+      // **每条通知**的自动关判定调用 ⇒ 是最高频的只读探测，必须静默。
+      [{ _obj: 'get', _target: [{ _property: 'tool' }, APP_TARGET], _options: { dialogOptions: 'silent' } }],
       { synchronousExecution: true }
     ),
     { label: '读取当前工具', retries: 0 }
@@ -1698,7 +1702,8 @@ export async function getSelectedBrushNameId(): Promise<BrushNameId> {
   const info: BrushNameId = { toolEnum: null, type: null, name: null, diameter: null };
   const r: any = await psRead<any>(
     () => action.batchPlay(
-      [{ _obj: 'get', _target: [{ _property: 'currentToolOptions' }, APP_TARGET], _options: { dialogOptions: 'dontDisplay' } }],
+      // ⛔ 同上：只读探测一律 `silent`，失败不刷黄条。
+      [{ _obj: 'get', _target: [{ _property: 'currentToolOptions' }, APP_TARGET], _options: { dialogOptions: 'silent' } }],
       { synchronousExecution: true }
     ),
     { label: '读取当前笔刷', retries: 0 }

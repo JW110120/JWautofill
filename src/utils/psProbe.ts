@@ -610,8 +610,25 @@ export function debouncePsProbe<A extends any[]>(
 ): ((...args: A) => void) & { cancel: () => void } {
     let timer: any = 0;
     let busyDeferrals = 0;
+    /**
+     * 忙碌判据 = 时间窗（否定式）+ **进程内模态层级（肯定式）**。
+     *
+     * ⛔⛔ 2026-11-16：为什么必须加上后者。
+     *    `isPsBusy()` 只知道「上一条通知是多久以前」，再拿常数外推「命令大概跑完了没」。
+     *    而**合并图层 / 合并图层组 / 拼合 / 删除图层**这些命令，通知是在**命令中途**
+     *    派发的：静默窗口一到期（600ms），PS 可能还在跑，但时间上没有证据 ⇒ 探测
+     *    照常发起。此时读到的是一份「结构已变、内容还是旧的」快照，而下游
+     *    （蒙版同步的逐 id `get`）会拿旧 id 去查 ⇒ 宿主对每条失效 id 回一次
+     *    「命令"获取"当前不可用」。
+     *    进程内模态层级是 PS **自己报的事实**（`'Lvl '`）：>0 = 宿主正握着模态作用域，
+     *    此刻既读不到正确数据，也不该插队。⇒ 与既有 5 条巡检入口同一口径
+     *    （`psBusyInProc() === 1` 才跳过；`-1` = 对端不报 ⇒ **放行**，旧 .8li 行为不变）。
+     * ⚠️ 顺延不是放弃：仍然按 `psBusyRemain()` / `SLOW_RECHECK_MS` 重排，
+     *    忙碌窗口有限 ⇒ 终会执行（与原来的 `isPsBusy()` 分支完全同构）。
+     */
+    const isBusyNow = () => isPsBusy() || psBusyInProc() === 1;
     const run = (args: A) => {
-        if (isPsBusy()) {
+        if (isBusyNow()) {
             busyDeferrals++;
             const slow = busyDeferrals > maxBusyDeferrals;
             timer = setTimeout(() => {

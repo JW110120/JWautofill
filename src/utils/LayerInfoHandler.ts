@@ -180,7 +180,14 @@ async function probeChannelState(): Promise<{ inLayerMask: boolean; inSingleChan
                     {
                         _obj: 'get',
                         _target: [{ _ref: 'channel', _enum: 'ordinal', _value: 'targetEnum' }],
-                        _options: { dialogOptions: 'dontDisplay' }
+                        // ⛔⛔ 2026-11-16：`silent` 而不是 `dontDisplay`。
+                        //    `dontDisplay` 只挡**对话框**；这条 get 在「刚删除/合并图层、
+                        //    通道还没稳定」的窗口里会被宿主拒绝，而**失败的 get 会在文档
+                        //    顶部刷一条「命令"获取"当前不可用」**（绕过 try/catch）。
+                        //    本探针由 4 个监听器在每次 select/delete/make 之后 300ms 触发，
+                        //    正是用户报「合并/删除图层弹获取不可用」的那条路。
+                        //    `silent` = 静默：不显示任何 UI、不报错（psBrush.ts 同一结论）。
+                        _options: { dialogOptions: 'silent' }
                     }
                 ],
                 { synchronousExecution: true }
@@ -199,7 +206,9 @@ async function probeChannelState(): Promise<{ inLayerMask: boolean; inSingleChan
                         {
                             _obj: 'get',
                             _target: [{ _ref: 'channel', _enum: 'channel', _value: 'mask' }],
-                            _options: { dialogOptions: 'dontDisplay' }
+                            // ⛔ 同上：这条是本函数里唯一已知会失败的 get（快速蒙版之外，
+                            //    活动通道不是图层蒙版时也可能被拒），必须静默。
+                            _options: { dialogOptions: 'silent' }
                         }
                     ],
                     { synchronousExecution: true }

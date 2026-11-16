@@ -223,6 +223,74 @@ PICA `modalStateChanged` 把 PS **自己的模态嵌套层级**报进进程（`'
   B/C/D 三条常驻轮询在「PS 忙」或「平滑已接管」两种情形下都会真正停摆，
   而不再是「名义上有开关、实际上一直读」。
 
+---
+
+## 六、2026-11-16 复核：「获取不可用」的另一半 —— 不是模态碰撞，是**失效的 get**
+
+> 现象（用户报）：**合并图层、合并图层组、删除图层**时仍会弹「命令"获取"当前不可用」，
+> 而第一～五节那套「所有读取都进 `executeAsModal`」的防御**已经上线**。
+
+### 关键区分（先说结论）
+
+「命令"获取"当前不可用」（`-25920`）有**两个**完全不同的成因，本清单前五节只解决了第一个：
+
+| 成因 | 触发条件 | 模态作用域能挡吗 | 本轮处置 |
+| --- | --- | --- | --- |
+| ① **模态碰撞** | 宿主正握着自己的模态作用域，此时发**裸 get** | ✅ 能（排队/可捕获失败） | 前五节已修 |
+| ② **目标失效** | get 的**对象**不存在 / 当前状态不允许（已删除的 `layer._id`、`channel mask`…） | ❌ **挡不住**（我们本来就握着锁，PS 只是"查不到"） | **本轮修** |
+
+⇒ 也就是说：`executeAsModal` 保护的是「**能不能问**」，保护不了「**问的东西还在不在**」。
+而「合并 / 合并组 / 删除」正是**一次性让一批 `layer._id` 失效**的操作 —— 这是②的天然靶场。
+
+补充事实（本仓已实证，见 `brushstudio/psBrush.ts` 的 ③ 条与 `brushstudio/psState.ts`）：
+**失败的 batchPlay 会在文档顶部刷一条黄色通知**「悦绘: 命令"获取"当前不可用」，
+而 `_options: { dialogOptions: 'dontDisplay' }` **挡不住它** —— 只有 `'silent'` 才挡。
+
+### 三个具体病灶（都在「结构类事件」的时间路径上）
+
+1. **蒙版同步的逐 id 查询拿的是「可能已过期」的快照**（用户怀疑的就是这里，成立）
+   - `layerTreeSnapshot.refreshLayerSnapshot()` 在**读取失败**时**返回旧缓存**（为了不让
+     下拉清空），但调用方**无法区分**「刚读到的」与「上一轮的」。
+   - `MaskSyncEngine.buildLayerTree()` 于是拿这份旧快照里的 `id` 逐条发
+     `get name`（`fetchLayerNamesByIds`）与 `get hasUserMask`（`fillUserMaskFlags`），
+     `BATCH = 40`，**失效 id 一条换一条黄条**，且旧实现会**把所有批次发完**。
+   - 放大后果：同一条旧树被喂给 `reconcileTasks()`，它把「树里没有这个 id」解读成
+     「图层被删了」⇒ 把任务的 `sampleLayerId` / `targetLayerId` **全部置空**
+     （一次忙碌窗口 = 用户配好的任务引用被清掉）。
+
+2. **通道探测的两条 get 用了 `dontDisplay`**
+   `LayerInfoHandler.probeChannelState()` 由 4 个监听器（`app.tsx` + 三个子面板）
+   在每条 `select` / `delete` / `make` 之后 300ms 触发，而 `get channel mask`
+   是本函数里**唯一已知会失败**的 get。失败即黄条。
+
+3. **工具/笔刷探测的两条 get 用了 `dontDisplay`**
+   `getSelectedBrushToolEnum()` 由 1s 巡检 **加上每条通知**的自动关判定调用，是最高频的
+   只读探测；`application.tool` 在删除/合并收尾期可能取不到。
+
+### 已实施的修复
+
+| 位置 | 措施 |
+| --- | --- |
+| `layerTreeSnapshot.ts` | 新增 `refreshLayerSnapshotEx()` → `{ snap, fresh }`；`fresh=false` 表示「结构变了但这次没读到」 |
+| `MaskSyncEngine.buildLayerTree()` | 只接受**可信**条目（调用方给的条目要求快照不脏；自取时要求 `fresh`）；不可信返回 **`null`**（不再返回 `[]`），并节流打一行 `[蒙版同步] …` |
+| `MaskSyncEngine.reconcileTasks()` | `entries == null` ⇒ 整轮放弃（不再把「没读到」当「图层全没了」去清空任务引用） |
+| `fetchLayerNamesByIds` / `fillUserMaskFlags` | 只读 get 改 `dialogOptions: 'silent'`；命中 `_obj:'error'` **立即停止剩余批次** + `invalidateLayerSnapshot()` |
+| `LayerInfoHandler.probeChannelState` | 两条通道 get 改 `silent` |
+| `HotkeyBridge` 的 `tool` / `currentToolOptions` 探测 | 改 `silent` |
+| `psProbe.debouncePsProbe()` | 忙碌判据加 `psBusyInProc() === 1`（PS 自报模态层级 = 肯定式证据）⇒ 合并/删除**收尾期**的探测自动顺延，不再读出一份「结构已变、内容还是旧的」快照 |
+| `AdjustmentPanel.refreshMaskSyncOptions` / `refreshMaskSyncAndReconcile` | 走 `Ex` 版本并要求 `fresh`，不可信就**保持现状**（连 reconcile 一起跳过） |
+
+### 真机验收要点
+
+1. 打开蒙版同步任务（`hasAnyTask()` 为真），对大图层组按 Ctrl+E、或连删多层；
+   **不应该**再出现黄色「命令"获取"当前不可用」。
+2. 控制台若出现 `[蒙版同步] 图层树快照已过期…` / `…未能重读…`，说明保护**生效了**
+   （本轮一条按 id 的 get 都没发）。
+3. 任务卡片里的样本/目标引用**不应**在合并后变成「请选择」。
+4. 原诊断入口不变：`__jwPs.sources()` 看谁在刷模态，`__jwPs.dump()` 看最后几次读取。
+
+---
+
 ## 优先级建议
 
 | 优先级 | 项 | 理由 |
