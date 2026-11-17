@@ -1546,8 +1546,8 @@ class App extends React.Component<AppProps, AppState> {
      *    它们是预置值，用户完全可以先调好再开开关。
      *
      * 归属（与 smooth_engine.c（.8li 内，原 wintab_hook.c）的 smooth_packets 分支一一对应，勿凭感觉改）：
-     *   半径 → **仅「拉绳」**（2026-10-19 用户要求：标准/追笔去掉半径，一个模式一个参数；
-     *           标准/追笔模式下 toWire 固定下发 SMOOTH_RADIUS_MAX 当上限，不截断强度/追笔耗时）
+     *   半径 → **仅「拉绳」可调**（三模式半径互相独立：标准与追笔各固定 100px，
+     *           由 radiusForMode() 统一下发；拉绳用自己持久化的滑杆值）
      *   强度 / 尖角保护 / 速度适应 → 仅「标准」（拉绳与追笔都不读 Strength）
      *   追笔耗时 → 仅「追笔」
      *   拉绳提示 → 仅「拉绳」
@@ -4337,9 +4337,8 @@ title={helpTexts.selectionFill.blendMode}>
                               标准 = 强度 / 尖角保护 / 速度适应
                               拉绳 = 半径 / 拉绳提示
                               追笔 = 追笔耗时
-                            ⛔⛔ 2026-10-19 用户要求：标准/追笔**去掉半径**（一个模式一个参数）。
-                              半径仍是原生侧的硬上限，但这两个模式下由 toWire 固定下发
-                              SMOOTH_RADIUS_MAX（不截断强度/追笔耗时的满量程），面板不再暴露。
+                            ⛔⛔ 三模式半径互相独立：标准/追笔各固定 100px（原生侧硬上限，
+                              不截断强度/追笔耗时的满量程），只有拉绳这一行可调。
                             判据统一走 smoothParamApplies()，不在 JSX 里各写 if。
                             ⚠️ 容器用全仓统一的 .border-panel-section（带描边分区盒）；
                               额外的 .smooth-params 只负责把首/末行自带的外边距归零，
@@ -4379,10 +4378,9 @@ title={helpTexts.selectionFill.blendMode}>
                         </div>
                         )}
 
-                        {/* 半径：**仅「拉绳」模式**显示（2026-10-19 用户要求标准/追笔去掉半径）。
-                            它既是拉绳的绳长，也是原生侧三种模式共用的最大滞后硬上限 ——
-                            标准/追笔模式下由 toWire 固定下发 SMOOTH_RADIUS_MAX，
-                            强度/追笔耗时因此可以满量程发挥，不会被隐藏的上限截断。 */}
+                        {/* 半径：**仅「拉绳」模式**显示（三模式半径互相独立）。
+                            标准/追笔各固定 100px，由 radiusForMode() 统一下发；
+                            这一行只改拉绳自己的绳长，不会带着那两个模式一起变。 */}
                         {this.smoothParamApplies('radius') && (
                         <div className="row-between">
                             <label

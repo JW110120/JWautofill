@@ -667,6 +667,13 @@ static volatile LONG g_contactMsSmooth; /* 最近一次「任一信号非零」�
 static volatile LONG g_lgEvt;
 static volatile LONG g_lgDur, g_lgPk, g_lgChg, g_lgRst, g_lgGrace, g_lgRad, g_lgMode, g_lgZero;
 static volatile LONG g_lgRA, g_lgRG, g_lgRJ, g_lgLag, g_lgPin, g_lgSlack;
+/* 0x023C：时间基诊断（高低配机「平滑力度不一样」用）。只观测、不改算法：
+   dt均 用 0.1ms 单位；dt≤1/dt≥100 是两个钳位的命中率（%）；τ均 是各包实际
+   参与 k=dt/(dt+τ) 的时间常数均值（0.1ms）。
+   ⚠️ 若高配机 dt≤1 明显偏高，就证明「取包快于时间戳粒度 ⇒ dt 被钳到 1ms
+      ⇒ k 偏大 ⇒ 实际滞后变小」；若两边 dt 分布一样而滞后不同，再去查
+      参数/版本/画布缩放。⛔ 仍只在 detour 里写原子槽，文本由 worker 落盘。 */
+static volatile LONG g_lgDtAvg, g_lgDtLow, g_lgDtHigh, g_lgTau;
 static volatile LONG g_lgRP;    /* 0x012A：本笔 buttons 落笔边沿锚定次数（每笔正常=1） */
 /* 0x0132：`落` 的次数还不够判性质 —— 必须看**每次落之前笔悬空了多久**。
    ⛔ 判据：`落间最小全零` >> BTN_EDGE_MIN_ZERO(8) ⇒ 笔是真抬起过（多笔合并成一段台账，正常）；
@@ -4649,6 +4656,9 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
        「这一笔走了哪条分支」。旧日志只有 10s 一次的 [why] 采样，落点全靠运气：
        jwwh-36348 的 29 笔里只采到 3 次 reason=5，无法说清哪几笔是硬线。
        现在**每笔一行**：包数 / 改写数 / 内部复位 / 宽限救回包数 / 半径 / 模式 / 时长。
+       0x023C 追加时间基五列（dt均 / dt≤1% / dt≥100% / τ均，含义见 g_lgDtAvg 处）：
+       高低配机平滑力度不同时，先看 dt≤1% 是否有显著差异 —— 它直接指向
+       「取包快于 GetTickCount 粒度 ⇒ dt 钳到 1ms ⇒ k 偏大 ⇒ 滞后变小」。
        `救回` = 短闩已判悬空但长闩仍在撑 ⇒ 这一笔靠 0x0124 的新闩救回来了多少批；
        该值 > 0 即证明「轻压成段全零」真的存在，且新闩确实接住了。 */
     static int  s_in;
@@ -4660,6 +4670,12 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
     static LONG s_pin;     /* 贴笔包数：滞后 < 3px ⇒ 这一包就是硬线 */
     static LONG s_slack;   /* 死区包数：绳没绷紧 ⇒ 本包输出点没动 */
     static LONG s_np;      /* 参与统计的包数 */
+    /* 0x023C：时间基（全部只累加，见 g_lgDtAvg 处的说明） */
+    static LONG s_dtSum;   /* dt 累加（0.1ms） */
+    static LONG s_dtN;
+    static LONG s_dtLow;   /* dt 被钳到下限 1ms 的包数 */
+    static LONG s_dtHigh;  /* dt 被钳到上限 100ms 的包数 */
+    static LONG s_tauSum;  /* 有效 τ 累加（0.1ms） */
     static LONG s_rej0;    /* 0x0135：本笔起点处的「被否决边沿」基线（smooth_packets 每次调用都进，
                               不置基线就会把上一笔的累计数算进这一笔） */
     if (!s_in && downS) {
@@ -4669,6 +4685,7 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
         s_eMin = -1; s_eN = 0;
         s_rej0 = s_btnRej;
         s_lagSum = s_pin = s_slack = s_np = 0;
+        s_dtSum = s_dtN = s_dtLow = s_dtHigh = s_tauSum = 0;
     } else if (s_in && downS) {
         s_pk += n;
         if (!down) s_grace++;          /* 短闩已关、长闩仍开 ⇒ 本批由新闩救回 */
@@ -4692,6 +4709,14 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
             g_lgLag = s_np ? (LONG)(s_lagSum / s_np) : 0;                 /* 0.1px 均值 */
             g_lgPin = s_np ? (LONG)((s_pin * 100) / s_np) : 0;            /* 贴笔 % */
             g_lgSlack = s_np ? (LONG)((s_slack * 100) / s_np) : 0;        /* 死区 % */
+            if (s_dtN) {
+                g_lgDtAvg  = (LONG)(s_dtSum / s_dtN);                     /* 0.1ms 均值 */
+                g_lgDtLow  = (LONG)((s_dtLow * 100) / s_dtN);             /* dt≤1ms % */
+                g_lgDtHigh = (LONG)((s_dtHigh * 100) / s_dtN);            /* dt≥100ms % */
+                g_lgTau    = (LONG)(s_tauSum / s_dtN);                    /* 0.1ms 均值 */
+            } else {
+                g_lgDtAvg = g_lgDtLow = g_lgDtHigh = g_lgTau = 0;
+            }
             InterlockedExchange(&g_lgEvt, 1);
         }
         g_wasEnabled = 0;            /* 抬笔 ⇒ 下一笔重新起笔锚定 */
@@ -4851,6 +4876,11 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
 
         double dt = (double)(now - g_lastMs); if (dt < 1.0) dt = 1.0; else if (dt > 100.0) dt = 100.0;
         g_lastMs = now;
+        /* 0x023C：时间基只观测不参与滤波（⛔ 下面那句 dt 计算**保持原样**） */
+        s_dtSum += (LONG)(dt * 10.0);
+        s_dtN++;
+        if (dt <= 1.0) s_dtLow++;
+        if (dt >= 100.0) s_dtHigh++;
 
         /* 笔速（物理 px/ms）：距离窗结算，与面板的 px/ms 同域。
            ⛔ 绝不能再写回 `distPx / dt` —— distPx 是**滞后**，不是位移：用它当速度
@@ -5018,6 +5048,14 @@ static int smooth_packets(HCTX hCtx, void* buf, int n)
             if (lg < 3.0) s_pin++;
             if (distPx <= radiusPxF) s_slack++;
             s_np++;
+            /* 0x023C：记录本包真正喂给 k=dt/(dt+τ) 的 τ（拉绳没有 τ，记 0）。
+               ⛔ 只复用同一组函数，不另写公式，避免诊断值与算法再次分叉。 */
+            {
+                double tauD = 0.0;
+                if (mode == 0)      tauD = tau_from_strength(t);
+                else if (mode == 2) tauD = tau_from_catchup(catchup_u(catchUp), radiusPxF);
+                s_tauSum += (LONG)(tauD * 10.0);
+            }
         }
 
         /* HUD 快照（普通内存写，detour 内零系统调用） */
@@ -7607,13 +7645,17 @@ static DWORD WINAPI worker(LPVOID param)
         if (InterlockedExchange(&g_lgEvt, 0)) {
             logf("# [stroke] 笔收尾: 时长=%ldms 包=%ld 改写=%ld 复位=%ld(锚%ld/gap%ld/jump%ld/落%ld) "
                  "悬空批=%ld 最长全零=%ld包 落间最小全零=%ld包(共%ld次) 滤=%ld 半径=%ldpx 模式=%ld "
-                 "平均滞后=%ld.%ldpx 贴笔=%ld%% 死区=%ld%%\n",
+                 "平均滞后=%ld.%ldpx 贴笔=%ld%% 死区=%ld%% "
+                 "dt均=%ld.%ldms dt≤1=%ld%% dt≥100=%ld%% τ均=%ld.%ldms\n",
                  (long)g_lgDur, (long)g_lgPk, (long)g_lgChg, (long)g_lgRst,
                  (long)g_lgRA, (long)g_lgRG, (long)g_lgRJ, (long)g_lgRP,
                  (long)g_lgGrace, (long)g_lgZero, (long)g_lgEmin, (long)g_lgEn,
                  (long)g_lgRej, (long)g_lgRad, (long)g_lgMode,
                  (long)(g_lgLag / 10), (long)(g_lgLag % 10),
-                 (long)g_lgPin, (long)g_lgSlack);
+                 (long)g_lgPin, (long)g_lgSlack,
+                 (long)(g_lgDtAvg / 10), (long)(g_lgDtAvg % 10),
+                 (long)g_lgDtLow, (long)g_lgDtHigh,
+                 (long)(g_lgTau / 10), (long)(g_lgTau % 10));
         }
 
         /* —— 每 2s：取包突发计量 + 独立笔通路拟合/上报（2026-10-16 第十四轮）——

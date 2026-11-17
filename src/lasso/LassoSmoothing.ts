@@ -82,13 +82,15 @@ export interface LassoSmoothParams {
   /** 平滑强度 0–100（标准模式的主轴：越大越黏）。 */
   strength: number;
   /**
-   * 最大滞后距离 px。**拉绳模式的绳长**（2026-10-19 起标准/追笔模式的面板不再暴露此参数）。
+   * **仅拉绳模式**的绳长 px。三种模式的半径从此互不共享：
+   *   标准 = SMOOTH_RADIUS_FIXED（100px，固定）/ 追笔 = SMOOTH_RADIUS_FIXED（100px，固定）
+   *   拉绳 = 本字段（面板滑杆独立保存、独立持久化）。
    *  ⛔ 上限 100：与 PS 自家平滑一致，也与原生侧 RADIUS_PX_MAX 一致。
    *    旧的 40 会把强度调出来的滞后硬截断 ⇒ 「拉满也没感觉」。
    *  ⛔ 2026-10-13：原先还有一个「张力」滑杆，只在 15%~100% 之间缩放这个半径 ——
    *    两个参数改的是同一件事（圆周大小），用户实测后要求删除。现在一个参数一个语义。
-   *  ⛔⛔ 2026-10-19：标准/追笔模式下 toWire 固定下发 SMOOTH_RADIUS_MAX（见 toWire），
-   *    强度/追笔耗时因此满量程生效；本字段在那些模式下只是「切到拉绳时恢复的绳长记忆」。
+   *  ⛔⛔ 本字段**不参与**标准/追笔：改拉绳半径不会改变那两模式的任何数值，
+   *    反之亦然。下发值统一由 radiusForMode() 决定，别在别处再判一次模式。
    */
   radius: number;
   /**
@@ -155,6 +157,20 @@ export const SMOOTH_CORNER_MAX = 90;
 function clampNum(v: number, lo: number, hi: number): number {
     if (!Number.isFinite(v)) return lo;
     return v < lo ? lo : (v > hi ? hi : v);
+}
+
+/** 标准 / 追笔各自固定的滞后上限（px），与拉绳滑杆完全独立。 */
+export const SMOOTH_RADIUS_FIXED = SMOOTH_RADIUS_MAX;
+
+/**
+ * 按模式取下发半径 —— 三种模式的半径来源只在**这里**决定一处。
+ * 标准 / 追笔固定 100px（不读拉绳滑杆）；拉绳用自己持久化的值。
+ * ⛔ 别在面板 / 守护进程里再按模式算一遍：两处口径一分开，迟早出现
+ *    「改了拉绳半径，追笔力度跟着变」这类跨模式串扰。
+ */
+export function radiusForMode(mode: LassoSmoothMode, ropeRadius: number): number {
+    if (mode !== 'rope') return SMOOTH_RADIUS_FIXED;
+    return clampNum(Math.round(ropeRadius), SMOOTH_RADIUS_MIN, SMOOTH_RADIUS_MAX);
 }
 
 /**
@@ -542,12 +558,11 @@ function toWire(p: LassoSmoothParams) {
         //   现在两端都设防：这里取整；守护进程侧 PenWire 也改用 `double?` 接收（第二道
         //   防线）。但**这道不能撤** —— 旧版 daemon 仍在野生环境里跑。
         strength: Math.round(p.strength),
-        // ⛔⛔ 2026-10-19：半径 = **拉绳模式的绳长**；标准/追笔模式面板已去掉该参数
-        //   （用户要求「一个模式一个参数」），这两个模式下固定下发 SMOOTH_RADIUS_MAX
-        //   当原生侧的硬上限 —— 否则隐藏的默认值（12px）会把强度/追笔耗时的满量程
-        //   截断（τ(100)=250ms 在 500px/s 下势能 ≈125px，被 12px 一夹就「强度拉满没感觉」）。
-        //   ⚠️ 拉绳模式仍下发用户设定值（绳长 = 半径，语义不变）。
-        radius: p.mode === 'rope' ? Math.round(p.radius) : SMOOTH_RADIUS_MAX,
+        // ⛔⛔ 三模式半径互相独立，唯一口径 = radiusForMode()：
+        //   标准 / 追笔 → 固定 100px（原生侧滞后上限，不截断强度/追笔的满量程）；
+        //   拉绳       → 自己持久化的滑杆值（绳长 = 半径）。
+        //   改拉绳滑杆不会影响标准/追笔；反过来也一样。
+        radius: radiusForMode(p.mode, p.radius),
         catchUp: catchUpToNative(p.catchUp),
         cornerAngle: cornerToNative(p.cornerAngle),
         speedAdaptive: p.speedAdaptive,
