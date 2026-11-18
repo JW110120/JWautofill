@@ -30,4 +30,12 @@ int keyhook_started(void);
         *t=该消息时刻(GetTickCount)；*dn 与 *up=累计按下/抬起次数。 */
 int keyhook_mouse_state(int* down, int* x, int* y, unsigned long* t, int* dn, int* up);
 
+/* —— 0x023B：面板数字框（NumField）的滚轮代理 ——
+   面板里的普通 div 收不到 wheel（UXP 只派给最近的滚动容器），所以「指针停在数字框上
+   滚轮改数值」只能由 WH_MOUSE_LL 接管：命中时把滚动转成 `{"type":"nfWheel",…}`
+   投给 18924，并**吞掉**事件（面板滚动条不动）。
+   on=1 只写时间戳（心跳；面板 400ms 刷一次，900ms 过期）；
+   on=0 立即清零（指针离开数字框）。⛔ 过期是硬要求：面板崩溃时滚轮缩放必须能自动恢复。 */
+void kh_note_nf_hover(int on);
+
 #endif /* KEYHOOK_H */

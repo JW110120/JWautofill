@@ -78,6 +78,13 @@ int  pstool_notify_age(void);             /* -1=从未投递；≥0=距上次 sl
 int  se_wt_moved(void);
 void* se_wt_base(void);
 
+/* 0x023A：工具图标呼吸外框（smooth_engine.c 里的独立线程 + 分层窗口）。
+   ⛔ 面板只下发「该不该显示 + 主题色」，几何/绘制全在引擎侧：
+      面板拿不到 PS 选项栏的屏幕坐标，UXP 也没有跨窗口绘制能力。 */
+void ring_set_on(int on);
+void ring_set_color(unsigned long rgb);
+void ring_stop(void);
+
 /* ================================================================ M1 日志 */
 
 /* ⛔ 非 static：smooth_engine.c 的 wtctx_read_ini() 要按同一目录找外置开关文件
@@ -652,6 +659,15 @@ static void broadcast_smooth_state(void)
     if (build_smooth_state(buf, (int)sizeof(buf)) > 0) broadcast(buf);
 }
 
+/* 0x023B：给 keyhook.c 的「数字框滚轮」留一个投递口。
+   ⛔ 为什么不把 g_cliS/g_sendLk 暴露出去：那条通道的状态只能在这一个文件里改，
+      两边各拿一份锁迟早会写出半帧（ws_core.h 的锁纪律）。
+   ⛔ 只允许在调度线程调用（内部可能阻塞到 SNDTIMEO）。 */
+void jw_panel_broadcast(const char* msg)
+{
+    if (msg && msg[0]) broadcast(msg);
+}
+
 /* ================================================================ 合成点击（0x0201）
 
  * ── 为什么要合成点击 ────────────────────────────────────────────────
@@ -953,6 +969,19 @@ static void handle_message(const char* js)
         else    InterlockedExchange(&g_panelHoverMs, 0);
         return;
     }
+    /* 0x023B：数字框悬停（面板 → 原生）。与 panelHover 分开一条消息，语义不同：
+       · panelHover = 「指针在面板窗口上」⇒ 只服务 HUD 显隐门，500ms 过期；
+       · nfHover    = 「指针在某个**数字框**上」⇒ 让鼠标钩子把滚轮改成改数值，
+         900ms 过期（keyhook.c 的 KH_NF_HOLD_MS）。
+       ⛔ 不要在 panelHover 里搭车：面板 hover 心跳只在 pointermove 时刷新，
+          而「悬停在数字框上滚轮」时指针是**静止**的，搭车必然过期失效。 */
+    if (_stricmp(type, "nfHover") == 0) {
+        double v = 0;
+        int on = 0;
+        if (json_num(js, "on", &v)) on = (v != 0.0) ? 1 : 0;
+        kh_note_nf_hover(on);
+        return;
+    }
     /* 0x020A：Alt 临时吸管开关（面板 → 引擎的**硬否决位**）。
        ⛔ 用 json_num 判非零，不用 json_bool —— 后者只认 true/false，
           数字 1 会**静默失败**（既有铁律：严格类型助手）。
@@ -984,6 +1013,20 @@ static void handle_message(const char* js)
         if (prev != on)
             log_line("poly", "多边形吸附：总开关 %ld → %d（%s）", (long)prev, on,
                      on ? "吸附/冻结/参考线可用" : "全部停用");
+        return;
+    }
+    if (_stricmp(type, "toolRing") == 0) {
+        /* 0x023A：工具图标呼吸外框开关（面板 → 引擎）。
+           「H 自动填充」与「L/M 单纯选区」在画布上没有视觉差别，用户切着切着就忘了
+           当前是哪种 ⇒ 自动填充激活时在选项栏的工具图标外侧画一圈主题色呼吸外框。
+           ⛔ 与 altTool / polySnap 同款：**独立消息**，不搭 penSmooth 的 1.5s 心跳，
+              也不受平滑总开关影响（关掉平滑照样要能看见这个标记）。
+           ⛔ 用 json_num 判非零（铁律 59：json_bool 只认 true/false，数字会静默失败）。 */
+        double v = 0;
+        int on = 0;
+        if (json_num(js, "color", &v) && v > 0) ring_set_color((unsigned long)roundi(v));
+        if (json_num(js, "on", &v)) on = (v != 0.0) ? 1 : 0;
+        ring_set_on(on);
         return;
     }
     if (_stricmp(type, "toolGate") == 0) {
@@ -2409,7 +2452,49 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
       浮窗浮在画布上方 ⇒ 恒 1，判不出来。
    ⛔ 只作用于 HUD 的 `canvasOk`；宽判 / 补流 / 代投 / 吸附 / 平滑逐字不动。
    无共享槽位变化（`CFG_NLONGS` 仍 61）。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x0239; }
+/* 0x023A = 【新增：工具图标呼吸外框（区分 H 自动填充 / L·M 单纯选区）】
+   用户需求（2026-11-18 第 8 轮）：「自动填充激活时，在左上角选区工具（工具图标）
+   外部渲染一个 primary-color 的呼吸外框，提醒当前工具与单纯选区的区别」。
+   实现全在 `smooth_engine.c`（`ring_*` 段）：
+     · 独立线程 + 分层窗口（WS_EX_LAYERED|TOPMOST|TRANSPARENT|NOACTIVATE）；
+     · 目标几何**以选项栏为锚**：主框下最宽的 `OWL.ControlBar` → 左边 2.4×边长、
+       边长 = 栏高-2；可用 `smooth8li\ring.ini`（dx/dy/size）外置标定，改完即时生效；
+     · 呼吸 = 平滑三角包络 90..208/255，周期 1.7s，30fps；
+     · PS 不在前台 / 开关关 ⇒ 窗口 SW_HIDE（不留在别人的窗口上）。
+   协议：新消息 `{"type":"toolRing","on":0|1,"color":0xRRGGBB}`（独立消息，
+   不搭 penSmooth 心跳、不受平滑总开关影响）。
+   ⛔ 线程必须在 `jwwh_unhook()` 里 `ring_stop()`（卸 DLL 后线程不能还活着）。
+   无共享槽位变化（`CFG_NLONGS` 仍 61）。 */
+/* 0x023B = 【数字框滚轮改走原生 + 工具外框重定标 / 改顺时针流光】
+   A. 滚轮（用户第 9 次反馈「依然只滚面板、数值不动」）：
+      UXP 里普通 div **收不到 wheel**（只派给最近的滚动容器），document/window 的
+      捕获阶段也不触发 ⇒ 自绘数字框之后 DOM 层已无解。
+      改由 `WH_MOUSE_LL`（keyhook.c）代理：面板每 400ms 报 `nfHover`，
+      命中时钩子把这次滚动转成 `{"type":"nfWheel","dir":±1,"shift":0|1}`
+      投给 18924 并**吞掉**事件（面板不滚）。`nfHover` 900ms 过期 ⇒ 面板崩溃/
+      指针离开时滚轮缩放自动恢复。新增 `kh_note_nf_hover()` 与 `jw_panel_broadcast()`。
+   B. 外框：几何重定标（边长=栏高 2/3、dx=2.3×边长、垂直居中），
+      样式由「整圈同相呼吸」改为**顺时针流光**（头亮尾渐隐 + 极淡底光）。
+   无共享槽位变化（`CFG_NLONGS` 仍 61）。 */
+/* 0x023C = 【工具外框右移 2px】
+   用户实测 0x023B 的外框位置仍偏左 2px ⇒ 默认左侧距 `dx` 加 `RING_DX_NUDGE`（=2），
+   几何其余部分（边长 = 栏高 2/3、垂直居中）与顺时针流光样式均不变。
+   `ring.ini` 的 dx 覆盖优先级仍在其上（写了 ini 就以 ini 为准）。
+   无共享槽位变化（`CFG_NLONGS` 仍 61）。 */
+/* 0x023D = 【工具外框再右移 1px（累计 3px）+ ring.ini 增加相对偏移键】
+   用户 0x023C 实测仍偏左 1px ⇒ `RING_DX_NUDGE` 2 → 3。
+   同时 `ring_read_ini` 新增 `dx_off=` / `dy_off=`（相对默认值的偏移，可负），
+   以后 1px 级微调只改 ini 就即时生效，不必再为对齐重编 .8li。
+   绝对覆盖 `dx=` / `dy=` / `size=` 语义不变，且与偏移可叠加。
+   无共享槽位变化（`CFG_NLONGS` 仍 61）。 */
+/* 0x023E = 【工具外框垂直再下移 1px（位置全部固化进代码）】
+   用户实测 0x023D 的位置再往下 1px 即可 ⇒ 新增 `RING_DY_NUDGE`（=1），
+   `dy = (栏高-边长)/2 + RING_DY_NUDGE`。水平沿用 0x023D 的 `RING_DX_NUDGE=3`。
+   ⛔ 用户明确要求**不要靠 ring.ini 标定**（它只在本机生效，多端会不一致）⇒
+      所有产品级微调一律编译进常量；ring.ini 仅留作临时排查，默认不存在。
+   日志补打 dy，便于以后核对锚点。
+   无共享槽位变化（`CFG_NLONGS` 仍 61）。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x023E; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {

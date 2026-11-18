@@ -22,6 +22,9 @@
 import {
   setLassoSmoothSender, setLassoSmoothConnected, resendLassoSmoothing, handleLassoSmoothMessage,
 } from './LassoSmoothing';
+/* 0x023B：数字框的原生滚轮代理（见下方 startNumFieldHoverBeat 的注释）。
+   ⛔ 依赖方向仍是单向：本模块 → NumField；NumField 不 import 本模块。 */
+import { numFieldHoverActive, numFieldNativeWheel } from '../components/NumField';
 
 /** 平滑 WS 端口（与 .8li 内 plugin_main.c 的监听端口一一对应）。 */
 const SMOOTH_WS_URL = 'ws://127.0.0.1:18924';
@@ -74,6 +77,37 @@ export function sendHostMessage(msg: any): boolean {
     }
   } catch { /* ignore */ }
   return false;
+}
+
+/* ------------------------------------------------------- 数字框悬停心跳（0x023B）
+
+ * 背景：UXP 面板里的普通 div **收不到 wheel**（事件目标是最近的滚动容器），
+ *   自绘数字框删掉原生 <input> 之后，DOM 层就再没有入口了（第 4/5 版实测）。
+ *   ⇒ 滚轮改由 .8li 的 `WH_MOUSE_LL` 接管：命中时把这次滚动吞掉、转成一条
+ *     `nfWheel` 投回本连接，面板据此改数值。
+ *
+ * 这里就是那个「命中」的判据来源：每 400ms 报一次「指针是否停在某个数字框上」。
+ * ⛔ 必须是**心跳**而不是边沿：原生侧 900ms 过期（防止面板崩溃后滚轮缩放被永久吞掉），
+ *    而用户悬停在框上时指针是静止的 —— 边沿上报会在 900ms 后失效。
+ * ⛔ 指针不在数字框上时要发一次 on:0（而不是就此沉默），
+ *    这样「从框上移开 → 立刻滚动画布」不会有一段 900ms 的空窗被吞。
+ * ⛔ 断开时不发：原生侧本来就过期清零，不需要在断连时再刷一帧。 */
+let nfBeatTimer: any = null;
+let nfLastOn = -1;
+
+function startNumFieldHoverBeat(): void {
+  if (nfBeatTimer) return;
+  nfBeatTimer = setInterval(() => {
+    if (!connected) { nfLastOn = -1; return; }
+    const on = numFieldHoverActive() ? 1 : 0;
+    if (on) {
+      sendHostMessage({ type: 'nfHover', on: 1 });
+      nfLastOn = 1;
+    } else if (nfLastOn !== 0) {
+      sendHostMessage({ type: 'nfHover', on: 0 });
+      nfLastOn = 0;
+    }
+  }, 400);
 }
 
 /* ---------------------------------------------------------------- 原生回执（一次性）
@@ -146,6 +180,14 @@ function installPanelHoverWatch(): void {
     if (!force && t - lastBeat < 80) return;
     lastBeat = t;
     sendHostMessage({ type: 'panelHover', on: 1 });
+    /* 0x023B：顺手把「指针是否在数字框上」也刷一帧 —— 用户从别处移到框上时，
+       400ms 的常驻心跳可能还没到，那一瞬间的滚轮会漏给面板滚动。
+       这里在**指针移动时**立刻补一帧，状态没变且不悬停时不重复发。 */
+    const nf = numFieldHoverActive() ? 1 : 0;
+    if (nf === 1 || nf !== nfLastOn) {
+      sendHostMessage({ type: 'nfHover', on: nf });
+      nfLastOn = nf;
+    }
   };
   const onEnter = () => beat(true);
   const onDown = () => beat(true);
@@ -196,6 +238,11 @@ export function connectSmoothDaemon(): () => void {
       ws.onmessage = (ev: any) => {
         try {
           const msg = JSON.parse(ev.data);
+          /* 0x023B：原生 WH_MOUSE_LL 代理回来的数字框滚轮（dir=+1 增大） */
+          if (msg?.type === 'nfWheel') {
+            numFieldNativeWheel(Number(msg.dir) || 0, msg.shift === 1 || msg.shift === true);
+            return;
+          }
           if (msg?.type === 'smoothState') handleLassoSmoothMessage(msg);
           else dispatchHostMessage(msg);   /* canvasClickResult 等一次性回执 */
         } catch { /* ignore */ }
@@ -214,6 +261,9 @@ export function connectSmoothDaemon(): () => void {
   /* 0x0234：与 WebSocket 同生命周期；建连即装，真正卸载时才摘。
      重连（onclose → open）不重装，避免同一 document 上叠多份监听。 */
   installPanelHoverWatch();
+  /* 0x023B：数字框悬停心跳（原生滚轮代理的命中判据）。常驻一条 400ms 定时器，
+     断开时只置位不发帧，成本可忽略。 */
+  startNumFieldHoverBeat();
 
   closeFn = () => {
     closedByUs = true;

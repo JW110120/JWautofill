@@ -5,7 +5,9 @@
 
 ## 索引（`refs/` 下）
 
-`fill-and-stroke`（填充/描边/清除）｜`frontend-css`（CSS/面板/主题）｜`busy-gate`（闸门/模态）｜`uxp-api-layer`（UXP/API/性能）｜`pixel-algorithms`（像素）｜`toolchain-and-env`（构建/部署）｜`lasso-smoothing`（平滑/HUD/断流/闸门/吸管，O22–O62）｜`keyhook-8li`（键盘钩子/滚轮热键 0x0235）｜`brush-mixer-reservoir`（混合器）｜`poly-snap-0x0211-0x021F`（临时模式/冻结/吸附）｜`blend-hotkey-yield-0x0224`（混合模式让位）｜`ironrules-1-89`（1–89 全文）｜`ironrules-90-129`（90–129 全文）
+`fill-and-stroke`（填充/描边/清除）｜`frontend-css`（CSS/面板/主题）｜`busy-gate`（闸门/模态）｜`uxp-api-layer`（UXP/API/性能）｜`pixel-algorithms`（像素）｜`toolchain-and-env`（构建/部署）｜`lasso-smoothing`（平滑/HUD/断流/闸门/吸管，O22–O62）｜`keyhook-8li`（键盘钩子/滚轮热键 0x0235）｜`brush-mixer-reservoir`（混合器）｜`poly-snap-0x0211-0x021F`（临时模式/冻结/吸附）｜`blend-hotkey-yield-0x0224`（混合模式让位）｜`tool-ring-0x023A`（工具图标呼吸外框 → 0x023B 流光/重定标 → 0x023E `RING_DX_NUDGE=3`/`RING_DY_NUDGE=1` **固化进常量**，⛔ 产品位置禁止靠 ring.ini；见 `2026-11-18.md` 第 8–12 轮）｜`ironrules-1-89`（1–89 全文）｜`ironrules-90-129`（90–129 全文）
+
+**UXP 坑（2026-11-18 实证）**：`wheel` **不沿冒泡/捕获传播**，只在"最近的滚动容器/该元素自身"派发 ⇒ 要给元素滚轮就必须挂到整条祖先链（见 `NumField` 分发器）。
 
 **校验**：改 CSS 跑 3 个 guard（只扫 `src/styles/*.css`）；类型检查 `npx tsc -p tsconfig.check.json`（⛔ 别用 `tsc --noEmit`）；改 .c 跑 `build.sh`（须沙箱外）零告警 + 导出表 5 项；改面板**别跑 `yarn build`**（那会产出 production 覆盖 `yarn watch` 的 dev 构建）—— watch 会自动重编，再把 `dist/bundle.js` 复制到 `Plug-ins\dist\` 即可。全仓 ~168 条历史错误在 `app.tsx`/`adjustments`/`components`，只看自己碰过的行。
 

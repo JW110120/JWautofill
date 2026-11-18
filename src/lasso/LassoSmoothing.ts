@@ -545,6 +545,36 @@ function send(msg: any): void {
   try { sender(msg); } catch { /* 发送失败由 SmoothBridge 的重连机制兜底 */ }
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   0x023A：工具图标呼吸外框（H 自动填充 vs L/M 单纯选区的视觉区分）
+   ──────────────────────────────────────────────────────────────────────────
+   面板只下发「该不该显示 + 颜色」，几何与绘制全在 .8li
+   （`smooth_engine.c` 的 `ring_*` 段：独立线程 + 分层窗口画在 PS 选项栏的工具图标上）。
+   ⛔ 与平滑总开关**无关**：关掉平滑照样要能看见这个标记。
+   ⛔ 独立消息（不走 penSmooth 整包）：penSmooth 的 `on` 是平滑总开关，混进去会把
+      I_ENABLED 反复写 0/1（`commit()` 还会发 cmd=2 卸钩）。
+   ⛔ 颜色 = `--primary-color` 的恒值 rgb(38,128,235)（见 styles/theme.ts，四主题同值）。 */
+const RING_COLOR = 0x2680EB;
+let ringWanted = false;
+/** null = 还没发过（首轮必发） */
+let lastRingSent: number | null = null;
+
+/** 下发外框开关（幂等：线格式没变就不发）。 */
+export function pushToolRing(on: boolean): void {
+  ringWanted = !!on;
+  const wire = ringWanted ? 1 : 0;
+  if (lastRingSent === wire) return;
+  lastRingSent = wire;
+  send({ type: 'toolRing', on: wire, color: RING_COLOR });
+}
+
+/** 建连后重放（.8li 随 PS 启动是一个新进程，槽位/线程都是空的）。 */
+function resendToolRing(): void {
+  const wire = ringWanted ? 1 : 0;
+  lastRingSent = wire;
+  send({ type: 'toolRing', on: wire, color: RING_COLOR });
+}
+
 function toWire(p: LassoSmoothParams) {
     return {
         mode: MODE_TO_WIRE[p.mode] ?? 0,
@@ -682,6 +712,9 @@ export function resendLassoSmoothing(): void {
      而 .8li 随 PS 启动就是一个新进程。不发 ⇒ 用户面板上开关明明开着、
      按住 Alt 却一点不吸（且没有任何报错可查）。 */
   send({ type: 'polySnap', on: polySnapOn ? 1 : 0 });
+  /* 0x023A：工具图标外框同样必须每轮重放 —— 关闭状态下也要发（0），
+     否则 .8li 新进程里上一次会话遗留的 1 会让外框一直亮着。 */
+  resendToolRing();
   // 主动询问一次状态：这是「对端支不支持本协议」的探针 —— 支持则必回一帧 smoothState，
   // 不支持（旧版守护进程把未知 type 静默丢弃）则什么都不回，由 PROBE_TIMEOUT_MS 判定。
   send({ type: 'smoothStatus' });

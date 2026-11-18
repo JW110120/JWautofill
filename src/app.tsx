@@ -51,6 +51,7 @@ import {
   pushLassoSmoothParams, onLassoSmoothStatus,
   initialLassoSmoothParams, setPenSmooth, setSmoothToolGate, getSmoothToolGate, noteToolReadOk,
   setAltToolOverride, setPolySnapEnabled,
+  pushToolRing,
   restorePersistedPenSmooth, isPenSmoothOn,
   SMOOTH_RADIUS_MIN, SMOOTH_RADIUS_MAX,
   SMOOTH_CATCHUP_MIN, SMOOTH_CATCHUP_MAX,
@@ -910,6 +911,10 @@ class App extends React.Component<AppProps, AppState> {
             // 平滑模块（.8li）自己的连接（18924）。刻意与 connectHotkeyDaemon 分开调用：
             // 两条 WebSocket 的生命周期必须互不相干，否则「停快捷键服务」又会把平滑带下水。
             this.unsubSmoothDaemon = connectSmoothDaemon();
+            /* 0x023A：外框初始态。建连后 resendLassoSmoothing 会先发一帧 0，
+               这里补一次当前值 —— 面板挂载时主开关可能已经是开着的
+               （persisted 恢复比 componentDidUpdate 早）。 */
+            try { pushToolRing(this.state.isEnabled); } catch { /* ignore */ }
         } catch (e) {
             console.error('⚠️ 建立热键链路失败:', e);
         }
@@ -1200,6 +1205,14 @@ class App extends React.Component<AppProps, AppState> {
         if (prevState.isEnabled !== this.state.isEnabled ||
             prevState.autoOffOnOtherTool !== this.state.autoOffOnOtherTool) {
             this.syncToolWatch();
+        }
+        /* 0x023A：工具图标呼吸外框跟着**主开关**走。
+           「H 自动填充」与「L/M 单纯选区」在画布上没有视觉差别，靠这一圈提示
+           用户当前处于哪一种；画在 PS 选项栏上只能由 .8li 的独立线程做，
+           面板只负责下发意图（见 smooth_engine.c 的 ring_* 段）。
+           ⛔ 与平滑总开关无关：平滑关着也必须能看见。 */
+        if (prevState.isEnabled !== this.state.isEnabled) {
+            try { pushToolRing(this.state.isEnabled); } catch { /* ignore */ }
         }
         // 「填充选项」展开/可见状态变化时同步快速蒙版巡检（同样放在早退之前）
         if (prevState.isExpanded !== this.state.isExpanded ||

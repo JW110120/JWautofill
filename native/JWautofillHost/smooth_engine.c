@@ -10440,6 +10440,445 @@ static void hud_stop(void)
     InterlockedExchange(&g_hudStop, 0);
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   0x023A：工具图标呼吸外框（AutoFill 视觉标记）
+   ──────────────────────────────────────────────────────────────────────────
+   目的（用户 2026-11-18 第 8 轮原话）：「区分 H 的自动填充与 L / M 的单纯选区，
+   自动填充激活时在左上角选区工具（工具图标）外侧画一圈 --primary-color 的呼吸外框」。
+
+   为什么必须做在 .8li：UXP 面板只能画自己的 HTML 画布，画不到 PS 的选项栏上。
+   进程内 + 分层窗口 + UpdateLayeredWindow 是唯一路径。
+
+   ⛔ 继承 HUD 的四条血泪（少一条就出事）：
+     ① `WS_EX_TRANSPARENT` 必须留着 —— 否则"画了东西的像素会吃掉鼠标消息"，
+        落在工具图标上的点击就废了（HUD 第十四轮血案）；
+     ② 建窗即带 `WS_EX_TOPMOST`，且**每帧** `SetWindowPos(HWND_TOPMOST)` ——
+        ULW 只提交内容/位置、完全不碰 z 序，不重申就会被 PS 主窗盖住；
+     ③ 用 ULW + 32bpp 预乘 alpha，不要 `SetLayeredWindowAttributes(COLORKEY)`；
+     ④ 窗口只由本线程建（loader lock 里不许建窗）。
+
+   几何：不做"猜一个像素"，而是**以选项栏窗口为锚**：
+     bar    = 本进程主框（class="Photoshop"）下最宽的 `OWL.ControlBar`（选项栏）
+     图标盒 = 边长取栏高的 2/3，左边距 2.3×边长 + RING_DX_NUDGE，垂直居中 + RING_DY_NUDGE
+   ⛔ 位置微调一律写成下面的常量（RING_DX_NUDGE / RING_DY_NUDGE），**不要**靠用户目录的
+      ring.ini —— 用户要求「多端编译出来的 .8li 位置一致」，ini 只在单机上生效会造成端间不一致。
+   ⚠️ 0x023B 重定标：上一版（sz=栏高-2、dx=2.4×sz、dy=1）实测框住的是
+     **工具图标右侧的下拉箭头**，而且比图标大一圈 ⇒ 用户「偏右 + 像异常」。
+   ⚠️ 不同 PS 版本/缩放下仍可能对不上 ⇒ 给一个**外置标定**入口：
+     `%LOCALAPPDATA%\JWautofill\smooth8li\ring.ini`
+        [ring]
+        dx_off=-1  ; 【推荐】相对默认位置的偏移（可负），1px 级微调只写这一行
+        dy_off=0
+        ; 下面三行是旧的绝对覆盖写法，写了就完全取代推导值（一般不必用）
+        dx=57      ; 图标左边缘相对选项栏左边缘（物理像素）
+        dy=6       ; 上边缘相对选项栏上边缘
+        size=25    ; 边长
+     文件不存在就用上面的推导值。**每次重算位置都重读**（改 ini 立即生效，
+     不必重启 PS）⇒ 标定成本降到"改一个数字"，不用为对齐重编 .8li。
+     ⛔ 绝对项与偏移项可叠加：先按 dx/dy/size 覆盖，再 dx_off/dy_off 加偏移。
+   ══════════════════════════════════════════════════════════════════════════ */
+#define RING_CLASS      L"JWautofillToolRing"
+#define RING_FPS_MS     33        /* ≈30fps，一个 30×30 的 ULW 提交，CPU 可忽略 */
+#define RING_PERIOD_MS  1600      /* 光带绕一圈的周期（0x023B：整圈呼吸 → 顺时针流光） */
+#define RING_HOLD_MS    240       /* 位置重算间隔（跨线程 GetWindowRect 不便宜） */
+#define RING_DX_NUDGE   3         /* 0x023C +2、0x023D 再 +1（用户两次实测）⇒ 累计右移 3px。
+                                     ring.ini 的 `dx=`（绝对）/ `dx_off=`（相对）优先于此值。 */
+#define RING_DY_NUDGE   1         /* 0x023E：用户实测「再往下 1px」（上一轮已右移到位的垂直微调）。
+                                     ⛔ 固化在代码里，多端编译出来的 .8li 位置一致；
+                                        不要靠用户目录的 ring.ini 做这种产品级标定。 */
+
+static volatile LONG g_ringOn;                 /* 面板下发：1 = 该显示 */
+static volatile LONG g_ringColor = 0x2F80ED;   /* 面板下发：主题 primary-color */
+static HANDLE        g_ringThread;
+static DWORD         g_ringTid;
+static volatile LONG g_ringStop;
+
+/** 极简 int 解析（`ring.ini` 用；不想引 atof/sscanf 进这条路径）。 */
+static int ring_int(const char* s)
+{
+    int neg = 0, v = 0;
+    if (!s) return 0;
+    while (*s == ' ') s++;
+    if (*s == '-') { neg = 1; s++; }
+    while (*s >= '0' && *s <= '9') v = v * 10 + (*s++ - '0');
+    return neg ? -v : v;
+}
+
+/** 读外置标定（存在则覆盖推导值）。返回 1 = 命中 ini。
+    · `dx` / `dy` / `size` = **绝对**覆盖（旧写法，仍支持）
+    · `dx_off` / `dy_off` = **相对默认值的偏移**（可负）⇒ 1px 级微调只写这一行，
+      默认值将来改了（换 PS 版本、改 RING_DX_NUDGE）偏移依然叠加在正确基准上。
+    ⛔ 顺序必须是「先绝对、后偏移」；`strstr` 找 "dx=" 不会误命中 "dx_off="
+       （前者要求 d,x,= 连续，后者是 d,x,_,o,f,f,=）。 */
+static int ring_read_ini(int* dx, int* dy, int* size)
+{
+    const char* dir = jw_log_dir();
+    char path[520];
+    FILE* f;
+    char buf[512];
+    size_t n;
+    const char* p;
+    int got = 0;
+    if (!dir || !dir[0]) return 0;
+    _snprintf(path, sizeof(path), "%sring.ini", dir);
+    f = fopen(path, "rb");
+    if (!f) return 0;
+    n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    if ((p = strstr(buf, "dx=")) != NULL)   { *dx   = ring_int(p + 3); got = 1; }
+    if ((p = strstr(buf, "dy=")) != NULL)   { *dy   = ring_int(p + 3); got = 1; }
+    if ((p = strstr(buf, "size=")) != NULL) { *size = ring_int(p + 6); got = 1; }
+    if ((p = strstr(buf, "dx_off=")) != NULL) { *dx += ring_int(p + 7); got = 1; }
+    if ((p = strstr(buf, "dy_off=")) != NULL) { *dy += ring_int(p + 7); got = 1; }
+    return got;
+}
+
+typedef struct { HWND best; int score; } RING_PICK;
+
+static BOOL CALLBACK ring_frame_cb(HWND h, LPARAM lp)
+{
+    DWORD pid = 0;
+    char cls[96];
+    RECT r;
+    RING_PICK* pk = (RING_PICK*)lp;
+    GetWindowThreadProcessId(h, &pid);
+    if (pid != GetCurrentProcessId()) return TRUE;
+    if (!IsWindowVisible(h)) return TRUE;
+    cls[0] = 0;
+    GetClassNameA(h, cls, (int)sizeof(cls) - 1);
+    if (strcmp(cls, "Photoshop") != 0) return TRUE;
+    if (!GetWindowRect(h, &r)) return TRUE;
+    int area = (r.right - r.left) * (r.bottom - r.top);
+    if (area > pk->score) { pk->score = area; pk->best = h; }
+    return TRUE;
+}
+
+static BOOL CALLBACK ring_bar_cb(HWND h, LPARAM lp)
+{
+    char cls[96];
+    RECT r;
+    RING_PICK* pk = (RING_PICK*)lp;
+    cls[0] = 0;
+    GetClassNameA(h, cls, (int)sizeof(cls) - 1);
+    /* ⚠️ 用子串匹配而不是全等：不同 PS 版本的选项栏类名可能是
+       `OWL.ControlBar` / `OWL.ControlBarBase` 等变体，宽窄判据（w≥160、一栏高）
+       已经足够把这堆"控制栏"里真正的选项栏挑出来（取最宽的那个）。 */
+    if (strstr(cls, "ControlBar") == NULL) return TRUE;
+    if (!IsWindowVisible(h)) return TRUE;
+    if (!GetWindowRect(h, &r)) return TRUE;
+    int w = r.right - r.left;
+    int hh = r.bottom - r.top;
+    if (w < 160 || hh < 14 || hh > 80) return TRUE;   /* 选项栏是"很宽、一栏高" */
+    if (w > pk->score) { pk->score = w; pk->best = h; }   /* score 这里存宽度 */
+    return TRUE;
+}
+
+/* 0x023B：流光光带的逐点不透明度。
+ *   d    = 该点落后光头的弧长（0 = 正好在光头，越大越靠尾）
+ *   tail = 光带总长
+ * 头尾用平方衰减（尾端收得干净），另叠一层很淡的底光 RING_BASE_A，
+ * 让「框在哪」始终可辨，而不会整圈抢视线。 */
+#define RING_BASE_A   22
+static int ring_band_alpha(int d, int tail)
+{
+    int k;
+    if (tail <= 0) return RING_BASE_A;
+    if (d >= tail) return RING_BASE_A;
+    k = tail - d;
+    return RING_BASE_A + (k * k * (255 - RING_BASE_A)) / (tail * tail);
+}
+
+/** 写一个预乘 alpha 像素（32bpp 自上而下 DIB）。 */
+static void ring_put(u32* px, int w, int x, int y,
+                     unsigned r8, unsigned g8, unsigned b8, int a)
+{
+    if (a <= 0) return;
+    if (a > 255) a = 255;
+    px[y * w + x] = ((u32)a << 24)
+                  | ((u32)((r8 * (unsigned)a) / 255) << 16)
+                  | ((u32)((g8 * (unsigned)a) / 255) << 8)
+                  | ((u32)((b8 * (unsigned)a) / 255));
+}
+
+static DWORD WINAPI ring_thread(LPVOID param)
+{
+    (void)param;
+    HINSTANCE inst = g_hInst ? g_hInst : GetModuleHandleW(NULL);
+    WNDCLASSEXW wc;
+    HWND wnd = NULL;
+    HDC mem = NULL;
+    HBITMAP dib = NULL;
+    void* bits = NULL;
+    int curW = 0, curH = 0;
+    HWND frame = NULL, bar = NULL;
+    RECT target;
+    int haveTarget = 0;
+    DWORD lastResolve = 0, lastFg = 0, lastNoBarLog = 0;
+    int fgOk = 1;
+    int loggedOnce = 0;
+
+    memset(&target, 0, sizeof(target));
+    memset(&wc, 0, sizeof(wc));
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = DefWindowProcW;   /* 内容全走 ULW，不需要窗口过程 */
+    wc.hInstance = inst;
+    wc.lpszClassName = RING_CLASS;
+    {
+        ATOM atom = RegisterClassExW(&wc);
+        /* ERROR_CLASS_ALREADY_EXISTS 必须放行（同 hud_thread：双份注入的第二个实例） */
+        if (atom || GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
+            wnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TOPMOST
+                                  | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
+                                  RING_CLASS, L"", WS_POPUP, 0, 0, 8, 8,
+                                  NULL, NULL, inst, NULL);
+            if (!wnd)
+                logf("# [ring] CreateWindowExW 失败 err=%lu\n", (unsigned long)GetLastError());
+        }
+    }
+
+    while (!g_ringStop) {
+        MSG msg;
+        DWORD now;
+        while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
+            if (msg.message == WM_QUIT) break;
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        if (g_ringStop) break;
+        now = GetTickCount();
+
+        if (!g_ringOn || !wnd) {
+            if (wnd && IsWindowVisible(wnd)) ShowWindow(wnd, SW_HIDE);
+            haveTarget = 0;
+            Sleep(60);
+            continue;
+        }
+        /* PS 不在前台就别把圈留在别人的窗口上 */
+        if ((DWORD)(now - lastFg) >= 400) {
+            HWND fg = GetForegroundWindow();
+            DWORD fp = 0;
+            lastFg = now;
+            if (fg) GetWindowThreadProcessId(fg, &fp);
+            fgOk = (fp == GetCurrentProcessId()) ? 1 : 0;
+        }
+        if (!fgOk) {
+            if (IsWindowVisible(wnd)) ShowWindow(wnd, SW_HIDE);
+            haveTarget = 0;
+            Sleep(80);
+            continue;
+        }
+
+        if (!haveTarget || (DWORD)(now - lastResolve) >= RING_HOLD_MS) {
+            RECT br;
+            lastResolve = now;
+            haveTarget = 0;
+            if (!frame || !IsWindow(frame)) {
+                RING_PICK pk;
+                pk.best = NULL; pk.score = 0;
+                EnumWindows(ring_frame_cb, (LPARAM)&pk);
+                frame = pk.best;
+                bar = NULL;
+            }
+            if (frame && (!bar || !IsWindow(bar))) {
+                RING_PICK pk;
+                pk.best = NULL; pk.score = 0;
+                EnumChildWindows(frame, ring_bar_cb, (LPARAM)&pk);
+                bar = pk.best;
+            }
+            if (bar && IsWindow(bar) && GetWindowRect(bar, &br)) {
+                int h = br.bottom - br.top;
+                /* 0x023B：几何重定标（用户实测「偏右、太大」）。
+                   旧值 sz=h-2、dx=2.4×sz 框住的是**图标右侧的下拉箭头**，
+                   而不是工具图标本身。按 1x 截图实测（选项栏高 38、套索图标
+                   ≈20×20，图标左边缘距栏左 ≈58px）：
+                     · 图标盒边长 ≈ 栏高的 2/3（38 → 25）
+                     · 左边距 ≈ 2.3×边长（25 → 57）
+                     · 垂直居中（dy = 余高的 1/2），不再贴顶
+                   0x023C：用户实测仍偏左 2px ⇒ 左边距 +2（RING_DX_NUDGE）。
+                   0x023D：再 +1（累计右移 3px）。
+                   0x023E：垂直 +1（RING_DY_NUDGE）—— 用户明确要求「位置固化进 .8li、
+                   多端编译即一致」，所以产品级标定一律写常量，⛔ 不靠 ring.ini。
+                   ring.ini 仅保留作临时排查（默认不存在，不影响任何一台机器）。 */
+                int sz = (h * 2) / 3;
+                int dx = (sz * 23) / 10 + RING_DX_NUDGE;
+                int dy = (h - sz) / 2 + RING_DY_NUDGE;
+                int ini = ring_read_ini(&dx, &dy, &sz);
+                if (sz < 10) sz = 10;
+                if (sz > 96) sz = 96;
+                target.left   = br.left + dx;
+                target.top    = br.top + dy;
+                target.right  = target.left + sz;
+                target.bottom = target.top + sz;
+                haveTarget = 1;
+                if (!loggedOnce) {
+                    loggedOnce = 1;
+                    logf("# [ring] 锚点 bar=(%ld,%ld,%ld,%ld) icon=(%ld,%ld,%ld,%ld) sz=%d dx=%d dy=%d%s\n",
+                         (long)br.left, (long)br.top, (long)br.right, (long)br.bottom,
+                         (long)target.left, (long)target.top,
+                         (long)target.right, (long)target.bottom,
+                         sz, dx, dy, ini ? "（ring.ini 标定）" : "");
+                }
+            } else if ((DWORD)(now - lastNoBarLog) >= 5000) {
+                lastNoBarLog = now;
+                logf("# [ring] 未找到选项栏（frame=%p bar=%p）⇒ 外框不显示\n",
+                     (void*)frame, (void*)bar);
+            }
+            if (!haveTarget) {
+                if (IsWindowVisible(wnd)) ShowWindow(wnd, SW_HIDE);
+                Sleep(120);
+                continue;
+            }
+        }
+
+        {
+            int wantW = (target.right - target.left) + 4;
+            int wantH = (target.bottom - target.top) + 4;
+            if (wantW != curW || wantH != curH) {
+                if (dib) { DeleteObject(dib); dib = NULL; bits = NULL; }
+                if (mem) { DeleteDC(mem); mem = NULL; }
+                BITMAPINFO bi;
+                HDC scr;
+                memset(&bi, 0, sizeof(bi));
+                bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+                bi.bmiHeader.biWidth = wantW;
+                bi.bmiHeader.biHeight = -wantH;        /* 自上而下 */
+                bi.bmiHeader.biPlanes = 1;
+                bi.bmiHeader.biBitCount = 32;
+                bi.bmiHeader.biCompression = BI_RGB;
+                scr = GetDC(NULL);
+                dib = CreateDIBSection(scr, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+                mem = CreateCompatibleDC(scr);
+                if (dib) SelectObject(mem, dib);
+                ReleaseDC(NULL, scr);
+                curW = wantW;
+                curH = wantH;
+            }
+        }
+        if (!dib || !bits || !mem) { Sleep(120); continue; }
+
+        {
+            /* ── 0x023B：顺时针流光（取代旧的"整圈同相呼吸"）─────────────────
+               旧版是 RoundRect + 全环统一 alpha 的正弦呼吸，用户看了直说
+               「有点像异常情况」—— 整圈同时明暗，读起来像画了个方框在闪，
+               不像灯。改成：沿边框跑一束光（头亮、尾渐隐），其余部分留一层
+               很淡的底光，视觉上就是「一段光顺着边框顺时针转」。
+               顺时针 = 屏幕坐标下的 上(左→右) → 右(上→下) → 下(右→左) → 左(下→上)。
+               ⛔ 不用 GDI 画：GDI 无抗锯齿、也无从做逐像素渐变；直接写 32bpp
+                  缓冲（HUD 同款预乘 alpha），每帧只有 ~200 个边界像素。 */
+            const int LW = 2;                      /* 线宽 */
+            const int x0 = 1, y0 = 1;
+            const int x1 = curW - 2, y1 = curH - 2;
+            const int rw = x1 - x0 + 1, rh = y1 - y0 + 1;
+            const int perim = 2 * (rw + rh);
+            unsigned long col = (unsigned long)g_ringColor & 0xFFFFFF;
+            unsigned r8 = (col >> 16) & 0xFF, g8 = (col >> 8) & 0xFF, b8 = col & 0xFF;
+            u32* px = (u32*)bits;
+            int head, tail, xx, yy, s, d;
+            POINT ptDst, ptSrc;
+            SIZE szLay;
+            BLENDFUNCTION bf;
+
+            memset(bits, 0, (size_t)curW * curH * 4);
+            if (perim <= 0) { Sleep(RING_FPS_MS); continue; }
+            head = (int)(((now % RING_PERIOD_MS) * (DWORD)perim) / RING_PERIOD_MS);
+            tail = (perim * 45) / 100;             /* 光带长度 = 周长的 45% */
+
+            for (int band = 0; band < LW; band++) {
+                /* 上边：左 → 右 */
+                yy = y0 + band;
+                for (xx = x0; xx <= x1; xx++) {
+                    s = xx - x0;
+                    d = head - s; if (d < 0) d += perim;
+                    ring_put(px, curW, xx, yy, r8, g8, b8, ring_band_alpha(d, tail));
+                }
+                /* 右边：上 → 下 */
+                xx = x1 - band;
+                for (yy = y0; yy <= y1; yy++) {
+                    s = rw + (yy - y0);
+                    d = head - s; if (d < 0) d += perim;
+                    ring_put(px, curW, xx, yy, r8, g8, b8, ring_band_alpha(d, tail));
+                }
+                /* 下边：右 → 左 */
+                yy = y1 - band;
+                for (xx = x1; xx >= x0; xx--) {
+                    s = rw + rh + (x1 - xx);
+                    d = head - s; if (d < 0) d += perim;
+                    ring_put(px, curW, xx, yy, r8, g8, b8, ring_band_alpha(d, tail));
+                }
+                /* 左边：下 → 上 */
+                xx = x0 + band;
+                for (yy = y1; yy >= y0; yy--) {
+                    s = 2 * rw + rh + (y1 - yy);
+                    d = head - s; if (d < 0) d += perim;
+                    ring_put(px, curW, xx, yy, r8, g8, b8, ring_band_alpha(d, tail));
+                }
+            }
+
+            ptDst.x = target.left - 2;
+            ptDst.y = target.top - 2;
+            ptSrc.x = 0;
+            ptSrc.y = 0;
+            szLay.cx = curW;
+            szLay.cy = curH;
+            bf.BlendOp = AC_SRC_OVER;
+            bf.BlendFlags = 0;
+            bf.SourceConstantAlpha = 255;
+            bf.AlphaFormat = AC_SRC_ALPHA;
+            UpdateLayeredWindow(wnd, NULL, &ptDst, &szLay, mem, &ptSrc, 0, &bf, ULW_ALPHA);
+            SetWindowPos(wnd, HWND_TOPMOST, ptDst.x, ptDst.y, 0, 0,
+                         SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            if (!IsWindowVisible(wnd)) ShowWindow(wnd, SW_SHOWNA);
+        }
+        Sleep(RING_FPS_MS);
+    }
+
+    if (dib) DeleteObject(dib);
+    if (mem) DeleteDC(mem);
+    if (wnd) DestroyWindow(wnd);
+    return 0;
+}
+
+/** 启动外框线程（幂等 + 活性检查，形状与 hud_start 一致）。 */
+static void ring_start(void)
+{
+    if (g_ringThread) {
+        DWORD code = 0;
+        if (GetExitCodeThread(g_ringThread, &code) && code == STILL_ACTIVE) return;
+        CloseHandle(g_ringThread);
+        g_ringThread = NULL;
+        g_ringTid = 0;
+    }
+    InterlockedExchange(&g_ringStop, 0);
+    g_ringThread = CreateThread(NULL, 0, ring_thread, NULL, 0, &g_ringTid);
+}
+
+/** 面板下发开关。⛔ 只在"开"的时候拉线程：关掉时线程继续空转等下一次开启。 */
+void ring_set_on(int on)
+{
+    InterlockedExchange(&g_ringOn, on ? 1 : 0);
+    if (on) ring_start();
+}
+
+/** 面板下发主题色（0xRRGGBB）。 */
+void ring_set_color(unsigned long rgb)
+{
+    if (rgb) InterlockedExchange(&g_ringColor, (LONG)(rgb & 0xFFFFFF));
+}
+
+/** 停线程并 join（幂等）。⛔ 必须早于 FreeLibrary（同 hud_stop）。 */
+void ring_stop(void)
+{
+    if (!g_ringThread) return;
+    InterlockedExchange(&g_ringStop, 1);
+    if (g_ringTid) PostThreadMessageW(g_ringTid, WM_QUIT, 0, 0);
+    WaitForSingleObject(g_ringThread, 3000);
+    CloseHandle(g_ringThread);
+    g_ringThread = NULL;
+    g_ringTid = 0;
+    InterlockedExchange(&g_ringStop, 0);
+}
+
 /* ================================================================== 导出 */
 /* ⛔ 版本史（核验方式：引擎日志头 `ver=`，**不要**静态反汇编 —— 编译器序言是
    `55 48 83 EC 20` 且 `mov eax` 后会插 `xchg`，裸搜 `B8 xx 01 00 00 C3` 必漏）：
@@ -11111,6 +11550,7 @@ __declspec(dllexport) int jwwh_unhook(void)
        ⛔ 必须在 do_unhook / 本函数返回之前完成 —— 渲染线程持有窗口过程，
           它活着的时候绝不能让本模块被卸载。 */
     hud_stop();
+    ring_stop();          /* 0x023A 工具图标外框线程：同 hud_stop，必须早于 FreeLibrary */
     penraw_stop();
     cursamp_stop();
     do_unhook();

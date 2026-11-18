@@ -53,6 +53,19 @@
  *   · Esc：放弃本次编辑，回退到当前值。
  *   · 编辑中给父级 `.num-input-row` 挂 `is-focus`（外边框变主题色）。
  *
+ * ── 滚轮为什么改成「document 捕获 + 分发器」（第 4 版，2026-11-18）────────
+ *   第 3 版把 `<input>` 全部删掉后，用户实测：编辑时滚轮**完全不动数值**，
+ *   只有面板滚动条在滚。根因是 UXP 的第四个性情：
+ *     **非滚动元素收不到 `wheel`** —— 事件目标是「最近的滚动容器」，
+ *     挂在元素自身的 `{ passive: false }` 监听一次都不触发（`preventDefault` 自然也无从谈起）。
+ *   对照证据：`AdjustmentPanel` 的滚轮拦截之所以有效，正是因为它挂在**滚动容器本身**上。
+ *   ⇒ 在 `document` **捕获阶段**拦一次（先于滚动容器的默认动作），三级判定挑出归属：
+ *       ① 坐标命中某框所在行（最准，需 `clientX/clientY`）
+ *       ② `target` 落在某框内（有的版本仍派给元素）
+ *       ③ 全插件只有一个框在编辑态 ⇒ 就是它（用户主诉场景：点进去再滚）
+ *     命中才 `preventDefault()`，没压到数字框的滚轮照旧滚面板。
+ *   ⛔ 全插件只能有**一个**分发器：每个框各挂一个会把同一次滚轮算成多格。
+ *
  * ⛔ 不要在组件内部渲染 `.num-input-row`：调用点都已经有那个容器，
  *    本组件只产出「显示态文本 / 编辑态文本」，容器宽度/边框/单位对齐规则沿用旧 CSS。
  * ⛔ 提交时**只夹紧、不对齐 step**：手输 3.3（step=0.5）是用户意图，不该被抹成 3.5。
@@ -97,6 +110,231 @@ function charOfKey(key: string): string {
     if (key === '.' || key === 'Decimal' || key === ',' || key === 'Comma') return '.';
     if (key === '-' || key === 'Subtract') return '-';
     return '';
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   滚轮分发器（模块级单例，见文件头「第 4 版」）
+   ⛔ 不要在组件里给节点单独挂 wheel：UXP 的 wheel 目标只有滚动容器，
+      非滚动元素上的监听一次都不会触发（数值不动、面板照滚）。
+   ⛔ 也不要用 React 的 `onWheel`：React 17+ 以 passive 方式挂在根节点，
+      `preventDefault()` 无效，照样滚面板。
+   ═══════════════════════════════════════════════════════════════════════════ */
+interface WheelField {
+    /** 命中区：数字框所在的行容器 `.num-input-row`（34×22，位置即视觉盒） */
+    row: () => any;
+    isEditing: () => boolean;
+    /** 真正处理一次滚轮；返回 true 表示"这次滚轮归我"，外层的 preventDefault 才生效 */
+    onWheel: (e: any) => boolean;
+    /** 0x023B：原生代理回来的滚轮（dir=+1 增大 / -1 减小）。返回 true = 已消费。 */
+    onNative: (dir: number, shift: boolean) => boolean;
+}
+
+const WHEEL_FIELDS: WheelField[] = [];
+/** 当前鼠标悬停的数字框（给"事件不带坐标"的版本兜底，见分发器④/⑤） */
+let HOVER_FIELD: WheelField | null = null;
+let wheelBound = false;
+/** 诊断日志余量（打满 3 条就静音，避免刷屏） */
+let wheelLogLeft = 3;
+/** 「wheel 是否进过 DOM」只打一次 */
+let wheelSawLog = 0;
+/** Shift 物理键状态兜底：个别 UXP 版本的 wheel 事件里 `shiftKey` 缺失 */
+let shiftHeld = false;
+
+const swallowWheel = (e: any) => {
+    try { e.preventDefault(); } catch { /* ignore */ }
+    try { e.stopPropagation(); } catch { /* ignore */ }
+    try { if (e.stopImmediatePropagation) e.stopImmediatePropagation(); } catch { /* ignore */ }
+};
+
+const handleGlobalWheel = (e: any) => {
+    if (!WHEEL_FIELDS.length || !e) return;
+    if (e.__jwNfWheel) return;         // window / document 两处都挂，去重防跳两格
+    const cx = typeof e.clientX === 'number' ? e.clientX : NaN;
+    const cy = typeof e.clientY === 'number' ? e.clientY : NaN;
+    const hasPt = isFinite(cx) && isFinite(cy);
+    /* 一次性诊断：区分「wheel 压根没进 DOM」与「进了但命中判定不对」——
+       前者一行日志都没有，后者会打出 target/坐标。 */
+    if (wheelSawLog < 1) {
+        wheelSawLog++;
+        try {
+            const t: any = e && e.target;
+            console.log('[NumField] wheel 首次到达 target='
+                + String(t && (t.tagName || '') + '.' + (t.className || ''))
+                + ' 坐标=' + hasPt + '(' + cx + ',' + cy + ')');
+        } catch { /* ignore */ }
+    }
+    let hit: WheelField | null = null;
+    let how = '';
+
+    /* ① 坐标命中（最准） */
+    if (hasPt) {
+        for (let i = 0; i < WHEEL_FIELDS.length; i++) {
+            const row = WHEEL_FIELDS[i].row();
+            if (!row || !row.getBoundingClientRect) continue;
+            const b = row.getBoundingClientRect();
+            if (b && cx >= b.left && cx <= b.right && cy >= b.top && cy <= b.bottom) {
+                hit = WHEEL_FIELDS[i];
+                how = '坐标';
+                break;
+            }
+        }
+    }
+    /* ② target 落在框内（有些版本仍把 wheel 派给元素本身） */
+    if (!hit) {
+        const t: any = e.target;
+        if (t) {
+            for (let i = 0; i < WHEEL_FIELDS.length; i++) {
+                const row = WHEEL_FIELDS[i].row();
+                if (row && row.contains && row.contains(t)) {
+                    hit = WHEEL_FIELDS[i];
+                    how = 'target';
+                    break;
+                }
+            }
+        }
+    }
+    /* ③ 指针悬停中的框（鼠标进出由 mouseenter/mouseleave 维护，同样只在没坐标时用） */
+    if (!hit && !hasPt && HOVER_FIELD && WHEEL_FIELDS.indexOf(HOVER_FIELD) >= 0) {
+        hit = HOVER_FIELD;
+        how = '悬停';
+    }
+    /* ④ 全场唯一编辑中的框（点进去再滚 —— 用户主诉场景，这条是保底）。
+       ⚠️ 只在这个版本**压根没给坐标**时启用：一旦有坐标就说明①②已能精确定位，
+          再开这条会让"编辑中随手滚面板"变成"数值被暗改且面板不滚"。 */
+    if (!hit && !hasPt) {
+        let only: WheelField | null = null;
+        let cnt = 0;
+        for (let i = 0; i < WHEEL_FIELDS.length; i++) {
+            if (WHEEL_FIELDS[i].isEditing()) { only = WHEEL_FIELDS[i]; cnt++; }
+        }
+        if (cnt === 1) { hit = only; how = '编辑中'; }
+    }
+    if (!hit) return;
+
+    if (!hit.onWheel(e)) return;      // 禁用态/无方向 ⇒ 不拦，面板照常滚
+    swallowWheel(e);
+    try { e.__jwNfWheel = true; } catch { /* ignore */ }
+    if (wheelLogLeft > 0) {
+        wheelLogLeft--;
+        try {
+            const t: any = e && e.target;
+            console.log('[NumField] 滚轮 命中=' + how
+                + ' 坐标=' + hasPt
+                + ' shift=' + String(e && e.shiftKey) + '/物理' + String(shiftHeld)
+                + ' target=' + String(t && (t.tagName || '') + '.' + (t.className || '')));
+        } catch { /* ignore */ }
+    }
+};
+
+const BOUND_ELS: any[] = [];
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   0x023B：原生滚轮代理（面板侧入口）
+   ───────────────────────────────────────────────────────────────────────────
+   第 5 版把分发器挂到整条祖先链，实测**依然不动数值** ⇒ 结论：这个 UXP 版本的
+   `wheel` 根本不进脚本层（连滚动容器自己的监听也拿不到——面板能滚是原生行为）。
+   ⇒ 唯一可行路径：.8li 里的 `WH_MOUSE_LL` 在消息进入 PS 之前截住它，
+     转成一条 `nfWheel` 投回来，并把这次滚动吞掉（面板因此不滚）。
+
+   面板这一侧的职责只有两件：
+     ① 告诉原生「指针此刻是否停在某个数字框上」（SmoothBridge 每 400ms 心跳）；
+     ② 收到 `nfWheel` 时把它落到具体字段上。
+
+   ⛔ 归属判定用**指针坐标**，不用 mouseenter 维护的 HOVER_FIELD ——
+      UXP 不保证派发 enter/leave，用它当唯一依据时一旦为 null 整条链路静默失效。
+      坐标来自事件本身，指针静止时仍是最后一次的位置，正好对应
+      「悬停在框上不动、直接滚轮」这个主诉场景。
+   ⛔ 模块内只有一个分发入口：31 个框各发一次会把一次滚轮算成多格。
+   ═══════════════════════════════════════════════════════════════════════════ */
+let ptX = NaN;
+let ptY = NaN;
+let ptTracked = false;
+
+function trackPointer() {
+    if (ptTracked) return;
+    const doc: any = (globalThis as any).document;
+    if (!doc || !doc.addEventListener) return;
+    ptTracked = true;
+    const onMove = (e: any) => {
+        const x = e && e.clientX;
+        const y = e && e.clientY;
+        if (typeof x === 'number' && typeof y === 'number') { ptX = x; ptY = y; }
+    };
+    const names = ['mousemove', 'pointermove', 'mousedown', 'pointerdown'];
+    for (let i = 0; i < names.length; i++) {
+        try { doc.addEventListener(names[i], onMove, true); } catch { /* UXP 可能不支持某类事件 */ }
+    }
+}
+
+/** 坐标命中的字段（没有坐标经验时返回 null）。 */
+function fieldAtPointer(): WheelField | null {
+    if (!isFinite(ptX) || !isFinite(ptY)) return null;
+    for (let i = 0; i < WHEEL_FIELDS.length; i++) {
+        const row = WHEEL_FIELDS[i].row();
+        if (!row || !row.getBoundingClientRect) continue;
+        const b = row.getBoundingClientRect();
+        if (b && ptX >= b.left && ptX <= b.right && ptY >= b.top && ptY <= b.bottom) {
+            return WHEEL_FIELDS[i];
+        }
+    }
+    return null;
+}
+
+/** 指针是否正落在某个数字框上（原生侧据此决定吞不吞这次滚轮）。 */
+export function numFieldHoverActive(): boolean {
+    if (fieldAtPointer()) return true;
+    if (!isFinite(ptX) || !isFinite(ptY)) return HOVER_FIELD !== null;   // 没坐标：退回 hover 事件
+    return false;
+}
+
+/** 把一条原生 `nfWheel` 落到具体字段上。返回 true = 有人接住了。 */
+export function numFieldNativeWheel(dir: number, shift: boolean): boolean {
+    if (!dir) return false;
+    let f = fieldAtPointer();
+    if (!f) {
+        /* 指针已移开但仍在编辑态 ⇒ 归那个唯一编辑中的框（与 ④ 同一条保底） */
+        let only: WheelField | null = null;
+        let cnt = 0;
+        for (let i = 0; i < WHEEL_FIELDS.length; i++) {
+            if (WHEEL_FIELDS[i].isEditing()) { only = WHEEL_FIELDS[i]; cnt++; }
+        }
+        if (cnt === 1) f = only;
+    }
+    if (!f) return false;
+    return !!f.onNative(dir > 0 ? 1 : -1, !!shift);
+}
+
+/** 在某个元素上挂"分发器"（同一元素只挂一次）。 */
+function bindWheelOn(el: any) {
+    if (!el || !el.addEventListener) return;
+    for (let i = 0; i < BOUND_ELS.length; i++) if (BOUND_ELS[i] === el) return;
+    BOUND_ELS.push(el);
+    try { el.addEventListener('wheel', handleGlobalWheel, { passive: false } as any); }
+    catch { try { el.addEventListener('wheel', handleGlobalWheel, false); } catch { /* ignore */ } }
+}
+
+function bindWheelDispatcher() {
+    if (wheelBound) return;
+    const doc: any = (globalThis as any).document;
+    const win: any = globalThis as any;
+    if (!doc || !doc.addEventListener) return;
+    wheelBound = true;
+    trackPointer();
+    /* ⛔ 必须捕获 + passive:false：捕获才能在滚动容器的默认动作之前拦下。
+       document 与 window 各挂一次（有的 UXP 版本只在 window 上派发），
+       靠 `__jwNfWheel` 标记去重 ⇒ 同一次滚轮只会处理一格。 */
+    try { doc.addEventListener('wheel', handleGlobalWheel, { capture: true, passive: false } as any); }
+    catch { try { doc.addEventListener('wheel', handleGlobalWheel, true); } catch { /* ignore */ } }
+    try { if (win && win.addEventListener) win.addEventListener('wheel', handleGlobalWheel, { capture: true, passive: false } as any); }
+    catch { try { if (win && win.addEventListener) win.addEventListener('wheel', handleGlobalWheel, true); } catch { /* ignore */ } }
+    /* Shift 物理键状态（只在 wheel 事件没给 shiftKey 时才用到） */
+    const onShift = (down: boolean) => (ev: any) => {
+        const k = ev && ev.key;
+        if (k === 'Shift' || (ev && ev.keyCode === 16)) shiftHeld = down;
+    };
+    try { doc.addEventListener('keydown', onShift(true), true); } catch { /* ignore */ }
+    try { doc.addEventListener('keyup', onShift(false), true); } catch { /* ignore */ }
+    try { if (win && win.addEventListener) win.addEventListener('blur', () => { shiftHeld = false; }, false); } catch { /* ignore */ }
 }
 
 export const NumField: React.FC<NumFieldProps> = (props) => {
@@ -379,22 +617,27 @@ export const NumField: React.FC<NumFieldProps> = (props) => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [editing, stepNum, minNum, maxNum, dec]);
 
-    const handleWheel = (e: any) => {
-        // 自己吃掉，既不滚面板也不让任何原生控件看到
-        try { e.preventDefault(); } catch { /* ignore */ }
-        try { e.stopPropagation(); } catch { /* ignore */ }
-        if (disabled) return;
+    /** 这次滚轮是否要按"加速"走：优先信事件自带的 `shiftKey`，
+     *  只有它缺失时才退到物理键状态（个别 UXP 版本不填这个字段）。 */
+    const shiftFast = (e: any): boolean => {
+        if (e && typeof e.shiftKey === 'boolean') return e.shiftKey;
+        return shiftHeld;
+    };
+
+    /** 处理一次滚轮。返回 true = 这次滚轮归我（外层才会 preventDefault 拦住面板滚动）。 */
+    const handleWheel = (e: any): boolean => {
+        if (disabled) return false;
         let dy = 0;
         if (typeof e.deltaY === 'number' && e.deltaY !== 0) dy = e.deltaY;
         else if (typeof e.wheelDelta === 'number' && e.wheelDelta !== 0) dy = -e.wheelDelta;
         else if (typeof e.detail === 'number' && e.detail !== 0) dy = e.detail;
-        if (!dy) return;
+        if (!dy) return false;
         // 向下 = 减小（与 PS / 原生一致）
         const dir = dy > 0 ? -1 : 1;
         // 编辑中就以草稿为基准（用户可能刚敲了半截）；否则用已提交值
         const typed = editing ? parseFloat(draftRef.current) : NaN;
         const base = isFinite(typed) ? typed : latest.current;
-        const next = snap(base + dir * stepNum * multOf(!!e.shiftKey));
+        const next = snap(base + dir * stepNum * multOf(shiftFast(e)));
         emit(next);
         if (editing) {
             const s = fmt(next);
@@ -402,23 +645,75 @@ export const NumField: React.FC<NumFieldProps> = (props) => {
             setCaretBoth(s.length);
             setSelAllBoth(false);
         }
+        return true;
     };
 
-    /* ⛔ 滚轮**只能用原生监听**，不能用 React 的 onWheel：
-       React 17+ 把 wheel 以 **passive** 方式挂在根节点上，`preventDefault()` 无效，
-       面板会跟着一起滚（既有铁律：UXP 里被动的轮子事件挡不住）。
-       ⇒ 在节点本身上挂 `{ passive: false }` 的监听，并走 ref 取最新闭包。
-       ⚠️ 节点在两种状态下是**同一个 div** ⇒ 依赖留空即可，不必随 editing 重挂。 */
     const wheelRef = React.useRef<any>(null);
     wheelRef.current = handleWheel;
+
+    /** 0x023B：原生代理回来的滚轮（不经过 DOM 事件，所以没有 preventDefault 这回事）。 */
+    const handleNative = (dir: number, fast: boolean): boolean => {
+        if (disabled) return false;
+        const typed = editing ? parseFloat(draftRef.current) : NaN;
+        const base = isFinite(typed) ? typed : latest.current;
+        const next = snap(base + dir * stepNum * multOf(fast));
+        emit(next);
+        if (editing) {
+            const s = fmt(next);
+            setDraftBoth(s);
+            setCaretBoth(s.length);
+            setSelAllBoth(false);
+        }
+        return true;
+    };
+    const nativeRef = React.useRef<any>(null);
+    nativeRef.current = handleNative;
+    const editingRef = React.useRef<boolean>(false);
+    editingRef.current = editing;
+    /** 本框在分发器里的登记项（悬停判定用） */
+    const entryRef = React.useRef<WheelField | null>(null);
+
+    /* ── 把自己登记进模块级滚轮分发器（见文件头「第 4 版」）────────────────
+       ⛔ UXP 里 wheel **不走冒泡/捕获传播**（document/window 的捕获监听实测一次没响），
+          只在"目标元素自身"派发，目标是最近的滚动容器 ⇒ 必须把同一个分发器
+          挂到**整条祖先链**上（下面那段循环），靠 `__jwNfWheel` 去重。
+       这里先登记"我是谁、命中区在哪"，供分发器做归属判定。 */
     React.useEffect(() => {
+        const entry: WheelField = {
+            row: () => {
+                const el = nodeRef.current;
+                return el && el.parentElement ? el.parentElement : el;
+            },
+            isEditing: () => !!editingRef.current,
+            onWheel: (ev: any) => (wheelRef.current ? !!wheelRef.current(ev) : false),
+            onNative: (d: number, sh: boolean) => (nativeRef.current ? !!nativeRef.current(d, sh) : false),
+        };
+        WHEEL_FIELDS.push(entry);
+        entryRef.current = entry;
+        bindWheelDispatcher();
+
         const el = nodeRef.current;
-        if (!el || !el.addEventListener) return () => { /* ignore */ };
-        const h = (ev: any) => { if (wheelRef.current) wheelRef.current(ev); };
-        try { el.addEventListener('wheel', h, { passive: false }); }
-        catch { try { el.addEventListener('wheel', h, false); } catch { /* ignore */ } }
+        /* ⛔⛔ 关键：把分发器挂到**整条祖先链**上（含面板滚动容器）。
+           UXP 的 wheel 目标是「最近的滚动容器」，而且实测**不走冒泡/捕获传播**
+           （document/window 的捕获监听一次都没响），只在目标元素自身派发。
+           既然目标一定是某个祖先，就把链上每一层都挂一份；同一次滚轮靠
+           `__jwNfWheel` 去重，绝不会跳多格。
+           这也是项目里唯一已验证可行的形状：AdjustmentPanel 的滚轮拦截正是
+           挂在滚动容器自己身上。 */
+        {
+            let up: any = el;
+            for (let depth = 0; depth < 16 && up; depth++) {
+                bindWheelOn(up);
+                up = up.parentElement;
+            }
+            bindWheelOn((globalThis as any).document);
+        }
+        /* 节点自身也已在上面那一圈里绑过了 ⇒ 不必再单独挂一条。 */
         return () => {
-            try { el.removeEventListener('wheel', h, false); } catch { /* ignore */ }
+            const i = WHEEL_FIELDS.indexOf(entry);
+            if (i >= 0) WHEEL_FIELDS.splice(i, 1);
+            if (HOVER_FIELD === entry) HOVER_FIELD = null;
+            entryRef.current = null;
         };
     }, []);
 
@@ -437,6 +732,8 @@ export const NumField: React.FC<NumFieldProps> = (props) => {
                 + (editing ? ' is-editing' : '')}
             title={title}
             tabIndex={disabled ? -1 : 0}
+            onMouseEnter={() => { if (entryRef.current) HOVER_FIELD = entryRef.current; }}
+            onMouseLeave={() => { if (HOVER_FIELD && HOVER_FIELD === entryRef.current) HOVER_FIELD = null; }}
             onMouseDown={(e: any) => {
                 if (disabled) return;
                 // 自己接管：阻止原生可能引发的拖动选择

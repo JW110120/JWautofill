@@ -191,6 +191,30 @@ static char g_khWheelCombo[KH_COMBO_MAX];
    每条 delta 可能只有 30 ⇒ 攒够 120 才算「一格」，避免一下滚过三档。 */
 static LONG g_khWheelAcc;
 
+/* --- 0x023B：面板数字框（NumField）的**原生滚轮代理** ---
+ *
+ * 为什么必须走这里：UXP 面板里的普通 div **收不到 wheel**（事件目标是「最近的滚动容器」），
+ *   文档/窗口的捕获阶段也一次都不触发（第 4/5 版实测）。删掉原生 <input> 之后，
+ *   「点进数字框滚轮改数值」在 DOM 层就是死路 —— 只有 PS 进程内的 WH_MOUSE_LL
+ *   能在那条消息进入 PS 之前截住它。
+ *
+ * 协议（两条）：
+ *   面板 → 原生：`{"type":"nfHover","on":1}` 指针悬停在某个数字框上（面板侧 400ms 心跳，
+ *                **不是边沿** —— 指针静止悬停时不会有新事件，边沿会过期）；
+ *   原生 → 面板：`{"type":"nfWheel","dir":±1,"shift":0|1}`（走 18924 广播）。
+ *
+ * ⛔ 吞键条件：nfHover 未过期 ∧ 本次滚动有增量 ∧ 前台是本进程。
+ *    过期（KH_NF_HOLD_MS）= 面板崩溃/断连/指针早已离开时的兜底，
+ *    否则滚轮缩放会被永久吞掉（用户第一大忌）。
+ * ⛔ 方向口径：dir=+1 表示**增大**（滚轮向前/向上），与面板 handleWheel 的
+ *    「dy>0 ⇒ 减小」互为镜像 —— 两边都别自己再翻一次。 */
+#define KH_NF_HOLD_MS 900
+static volatile LONG g_nfHoverMs;                 /* 0 = 未悬停；否则最后一次上报的时刻 */
+#define KH_NFQ 24
+static volatile LONG g_nfQDir[KH_NFQ];
+static volatile LONG g_nfQShift[KH_NFQ];
+static volatile LONG g_nfQHead, g_nfQTail;
+
 /* --- SPSC 环（单生产者=钩子线程 / 单消费者=调度线程） --- */
 static char g_khHitQ[KH_HITQ][KH_COMBO_MAX];
 /* 0x0235：「命中方向」与 combo 平行的一份附带参数。
@@ -1429,6 +1453,29 @@ static void kh_hit_push_dir(const char* combo, int dir)
     SetEvent(g_khWake);
 }
 
+/* 0x023B：把一条 JSON 投给 18924（面板主通道）。
+   ⛔ 由 plugin_main.c 提供（那边有 g_cliS 列表与 g_sendLk），本文件不碰那份状态。
+   ⛔ 只允许在**调度/看护线程**调用（内部会做 socket 发送，可能阻塞到 SNDTIMEO）。 */
+extern void jw_panel_broadcast(const char* msg);
+
+/* 0x023B：入队一次「数字框滚轮」。dir=+1 增大 / -1 减小（见文件头状态块的注释）。 */
+static void kh_nf_push(int dir, int shift)
+{
+    LONG t = g_nfQTail;
+    if (t - g_nfQHead >= KH_NFQ) return;          /* 环满即丢（低频路径，理论不可达） */
+    g_nfQDir[t % KH_NFQ] = (dir < 0) ? -1 : 1;
+    g_nfQShift[t % KH_NFQ] = shift ? 1 : 0;
+    InterlockedExchange(&g_nfQTail, t + 1);
+    SetEvent(g_khWake);
+}
+
+/* 0x023B：面板上报「指针悬停在数字框上」。⛔ 只写时间戳（心跳语义）：
+   面板侧每 400ms 刷一次，停发 900ms 后判定过期 ⇒ 滚轮自动回到 PS（缩放画布）。 */
+void kh_note_nf_hover(int on)
+{
+    InterlockedExchange(&g_nfHoverMs, on ? (LONG)GetTickCount() : 0);
+}
+
 static void kh_send_recording_progress(const char* combo)
 {
     SOCKET c;
@@ -2146,6 +2193,32 @@ static LRESULT CALLBACK kh_mse_proc(int code, WPARAM w, LPARAM l)
         const MSLLHOOKSTRUCT* m = (const MSLLHOOKSTRUCT*)l;
         int delta = m ? (int)(short)HIWORD(m->mouseData) : 0;
 
+        /* ===== 0x023B：插件面板的数字框（NumField）=====
+         *
+         * 面板里的普通 div 收不到 wheel（UXP 只把它派给最近的滚动容器），
+         * 所以「指针停在一个数字框上滚动 ⇒ 改数值」只能由这里接管：
+         * 把这一次滚动转成一条 nfWheel 消息投给 18924，并**吞掉**事件，
+         * 面板滚动条因此不会跟着动（这正是用户要的语义）。
+         *
+         * ⛔ 放在最前面（先于录制、先于滚轮热键）：数字框永远优先，
+         *    否则录制期支线会把这次滚动当成组合键捕获。
+         * ⛔ 四条全条件与，任一不成立就原样放行（滚轮缩放在任何情况下都不能坏）：
+         *    ① nfHover 新鲜（面板 400ms 心跳，900ms 过期）；
+         *    ② delta 非 0；
+         *    ③ 前台是本进程；
+         *    ④ 不是「文本输入态」（+别的程序的输入框里滚字，绝不能吞）。
+         * ⛔ 这里只做入队（O(1) 无锁），发送在调度线程 —— 钩子回调里不碰 socket。 */
+        {
+            LONG ts = g_nfHoverMs;
+            if (ts && delta && !g_khTextGuard
+                && (DWORD)(GetTickCount() - (DWORD)ts) < KH_NF_HOLD_MS
+                && kh_ps_foreground()) {
+                int shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) ? 1 : 0;
+                kh_nf_push(delta > 0 ? 1 : -1, shift);
+                return 1;                  /* 吞掉：面板不滚，PS 不缩放 */
+            }
+        }
+
         /* 录制：把「修饰键 + Wheel」当成一个普通组合键捕获（与键盘侧同一套待确认流程）。
            ⛔ 不吞事件、不记账（滚轮不参与 kh_dual_mark 的去重）。 */
         if (g_khRecording) {
@@ -2596,6 +2669,19 @@ static DWORD WINAPI kh_dispatch_thread(LPVOID param)
             memcpy(&e, &g_khOutQ[h % KH_OUTQ], sizeof(e));
             g_khOutHead = h + 1;
             if (!wc_send_text_lk(e.s, e.msg, &g_khSendLk)) kh_cli_mark_close(e.s);
+        }
+
+        /* ②b 0x023B：数字框滚轮 → 18924（面板据此改数值） */
+        for (;;) {
+            LONG t = g_nfQTail, h = g_nfQHead;
+            if (h == t) break;
+            int dir = (int)g_nfQDir[h % KH_NFQ];
+            int sh  = (int)g_nfQShift[h % KH_NFQ];
+            g_nfQHead = h + 1;
+            char m[96];
+            _snprintf(m, sizeof(m), "{\"type\":\"nfWheel\",\"dir\":%d,\"shift\":%d}",
+                      dir, sh);
+            jw_panel_broadcast(m);
         }
 
         /* ③ 热键命中广播 */
@@ -3399,6 +3485,10 @@ void keyhook_start(void)
     g_khMap = g_khMapBuf[0];
     g_khHitHead = g_khHitTail = g_khHitDrops = 0;
     g_khOutHead = g_khOutTail = 0;
+    /* 0x023B：重启后 nfHover 必须归零 —— 否则上一次会话的「悬停在数字框上」
+       会带进新会话，滚轮缩放在 PS 里被吞掉且看不出原因。 */
+    g_nfQHead = g_nfQTail = 0;
+    InterlockedExchange(&g_nfHoverMs, 0);
     g_khHlogHead = g_khHlogTail = 0;
     g_khPidIdx = 0;
     g_khPidCount = 0;
