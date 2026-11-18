@@ -2324,7 +2324,58 @@ __declspec(dllexport) long AutoPluginMain(const char* caller, const char* select
      用于答复「Shift+L 是否被当成裸 L 吞掉」（结论：不会，匹配是精确的）。
    - 面板侧：`fillModeCycle` 条目默认 `Ctrl+Wheel`，经 FillModeCycleBus 分发。
    无共享槽位变化（`CFG_NLONGS` 仍 61）。 */
-__declspec(dllexport) long jw8li_version(void) { return 0x0235; }
+
+/* 0x0236 = 【HUD 在「上方标题栏/选项栏」误显：祖先链上溯】
+   用户报：「拉绳平滑开着，光标移到上方标题栏想改羽化，一点就冒出 HUD」。
+   现场（jwwh-5696.log，17:36:26.352 与 17:36:08.837 两条对照，同一支笔）：
+     · 选项栏上（漏，why 全绿）`焦点门·过 cur=(251,41)`
+       hit=Static(8D1262) parent=PSViewC(151308)
+     · 画布上（正常放行）`焦点门·过 cur=(1493,545)`
+       hit=Static(181AC2) parent=PSViewC(7A1560)
+   ⇒ 两条链**前两层完全同名同形**：`PSViewC` 是 Adobe 的通用视图类，
+     选项栏里也用它。0x0233/0x0234 的三条判据（外进程 / hit 类名 / 直接父类名）
+     在这种组合下必然全绿；只有命中的 Edit（羽化输入框）才挡得住，
+     所以用户「点空白或点箭头」时漏、"点输入框"时挡得住 —— 现象时有时无。
+   修法：`canvas_focus_ok()` 在三条判据全绿后，自 parent 起**再上溯 ≤4 层**，
+     只认「容器级」类名（`hud_ui_anc_class`：OWL.ControlBar / OWL.Palette /
+     OWL.Toolbar / OWL.ApplicationBar / OWL.MenuBar / Chrome_ / Qt / PSPanel /
+     PSDock / PSFloatC）⇒ 判非画布，why 新增 7。
+   ⛔⛔ **`OWL.TabGroup` / `OWL.Tab` 永远不进这张表**：0x0236 首版把它们当"面板
+      选项卡容器"写进去，用户重启后立即报「HUD 完全不能显示，画布上也出不来」。
+      真机日志（jwwh-9572，18:01:14.886）给出画布的真实链：
+        `hit=Static(BF1B58) parent=PSViewC(1A12C0) 链=OWL.Document>OWL.TabGroup`
+      —— OWL 用 TabGroup 装**文档标签页**，画布就在其下；面板里的选项卡与文档标签页
+      共用这一类名，只能靠更上面的 `OWL.ControlBar` / `OWL.Palette` 区分。
+      ⇒ 上溯时见到 `OWL.Document` 也立即**停并放行**（这条链已经通到画布）。
+   ⛔ 遇 `OWL.Dock` / `OWL.WindowGroup` / 主框立即**停并放行**：三者覆盖整个客户区，
+      画布就在其下，走过头会误伤 100% 正常绘制（0x0234 的教训）。
+   ⛔ 上溯不用 `hud_ui_class()` 那张表：它含 `OWL.ShadowView`/`Static`/`Edit`，
+      这些在画布链上也可能出现，误命中会让画布 HUD 永久消失（0x0121 的死法）。
+   ⛔ 只门 HUD 显隐：宽判 / 补流 / 代投 / 吸附 / 平滑逐字不动。
+   诊断：`焦点门·挡(非画布)` 新增「祖先=」与整条「链=」两个字段 ⇒ 万一误挡，
+   一眼看出卡在哪一层。无共享槽位变化（`CFG_NLONGS` 仍 61）。 */
+
+/* 0x0237 = 【HUD：拖浮窗标题栏松手后短暂误显 —— 焦点门「进画布」迟滞】
+   用户报：「长按 Coolorus 浮窗的标题栏拖位置，拖动中不显示 HUD（正确），
+   但笔一抬起就短暂显示一段 HUD，随后自己消失」。
+   真机日志（jwwh-15996，18:14:22）：
+     18:14:22.350 `焦点门·过 cur=(573,337) hit=Static par=PSViewC mouseMsg=OWL.Dock`
+     18:14:22.353 `显示: stroke=1 penDown=1 toolOk=1 ...`
+     18:14:22.477 `隐藏: 门槛断满 93ms ... ck=1 cv=0 gate=1 penDown=1`
+   链条：拖动浮窗时 Windows 把它从命中测试里摘出去（DWM 幽灵窗口），
+   `WindowFromPoint` 在**松手那一瞬间**返回下面的画布视图 ⇒ 焦点门 0→1；
+   此刻 `penDown` 还挂在 1（合成包残留 / CONTACT_HOLD 尾巴）⇒ cheapOk 成立
+   ⇒ 圆冒 124ms；随后浮窗恢复命中 ⇒ cv 翻回 0 ⇒ 隐藏。
+   修法：只给 `cv` 的「0 → 1」方向加迟滞 `CANVAS_OK_ENTER_MS`(200ms) ——
+   `cv=0` 时记 `s_cvOffAt`，之后必须连续 200ms 都命中画布才放行（why=8）。
+   ⛔ 为什么不用「起笔点必须在画布」：Wintab 悬停时 penDown 就可能为 1，
+      那样「笔悬停在面板上再移到画布落笔」会整笔没有 HUD（0x0121 的死法）。
+   ⛔ 为什么不拖慢正常绘制：画布作画时光标一直在画布内，`cv=0` 的时刻是
+      「上一次离开画布」，早已超过 200ms ⇒ 第一帧就放行。
+   ⛔ `cheapOk=0`（笔抬着）的跳帧**不推进** `s_cvOffAt`，否则每笔起头白等 200ms。
+   ⛔ 只门 HUD 显隐；宽判 / 补流 / 代投 / 吸附 / 平滑逐字不动。
+   无共享槽位变化（`CFG_NLONGS` 仍 61）。 */
+__declspec(dllexport) long jw8li_version(void) { return 0x0237; }
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {

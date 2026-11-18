@@ -14,6 +14,8 @@ import { psRead, runAsModal } from '../utils/psAccess';
 import { pickForegroundColor } from '../utils/ColorPicker';
 import { isPsBusy, psBusyRemain } from '../utils/psProbe';
 import { noteHostBusy } from '../utils/hostInteraction';
+// 2026-11-17：五种选区工具的「选区模式 / 羽化」快照与强制（自动填充进入/退出时守护）
+import { enterAutoFill, restoreOne } from '../utils/SelectionToolGuard';
 // ⛔ 本模块**不再** import 任何 LassoSmoothing 的东西：套索平滑与热键虽同处一个 .8li，
 //    但是两条独立的 WebSocket（平滑 18924 / 热键 18923）——停一侧不影响另一侧，
 //    首先就得让两条连接的生命周期互不相干 —— 这里保留任何一句桥接都会把两者重新绑死。
@@ -799,17 +801,30 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
     // 于是守护进程广播给 N 个面板也只会翻转一次（详见 MainToggleBus 头部说明）。
     const combo = msg.combo ?? '';
     const token = 'hit|' + (combo || 'toggleMain') + '|' + Math.floor(Date.now() / 400);
-    void requestMainToggle(token)
-      .then((st: MainToggleState) => {
+    void (async () => {
+      /* 2026-11-17（v2 用户确认）：守护顺序合并成一条「先到位，再拍照」——
+         目标不是当前工具就先切过去，然后才逐个拍照片、逐个拧旋钮（见 enterAutoFill）。
+         「入口就是普通套索」时目标等于当前工具 ⇒ 不切、直接拍，即用户的情况二。
+         ⚠️ token 同时充当多面板去重令牌：同一次命中在所有面板上算出同一个串，
+            只有一个面板会真的拍照，其余面板只按需上锁。
+         抑制位由守护内部打；本分支要让 H「保持开启回套索」生效，故守护后清位。 */
+      try {
+        await enterAutoFill('lassoTool', token, noteSelfToolSwitch,
+          (t) => selectToolByRef(t as ToolRef));
+      }
+      catch (e) { console.warn('[选区工具守护] 进入自动填充失败:', e); }
+      clearSelfToolSwitch();
+      try {
+        const st = await requestMainToggle(token);
         for (const l of hotkeyListeners) {
           try { l({ combo, action: 'toggleMain', ok: true, enabled: st.enabled }); } catch { /* ignore */ }
         }
-      })
-      .catch(() => {
+      } catch {
         for (const l of hotkeyListeners) {
           try { l({ combo, action: 'toggleMain', ok: false }); } catch { /* ignore */ }
         }
-      });
+      }
+    })();
     return;
   }
   if (msg.action === 'focusLasso') {
@@ -827,6 +842,10 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
       });
     // 工具切回套索 —— 但**只在真的跑偏时**才发命令（0x0235，见 selectLassoIfStrayed 说明）。
     selectLassoIfStrayed();
+    // 2026-11-17：退出自动填充 ⇒ 只把「当前这一个」套索工具恢复成用户原值，不碰其它工具。
+    // ⚠️ 抑制位必须传：restoreOne 内部可能补一次 select 确认工具已落地，
+    //    不抑制就会被巡检当成「用户换工具」而误关主开关（虽然这里本来就要关）。
+    void restoreOne('lassoTool', noteSelfToolSwitch);
     return;
   }
   if (msg.action === 'lassoCycle') {
@@ -842,6 +861,8 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
     const combo = msg.combo ?? '';
     const target = cycleLassoTool();
     for (const l of hotkeyListeners) { try { l({ combo, action: 'lassoCycle', brush: target, ok: true }); } catch { /* ignore */ } }
+    // 2026-11-17：只恢复本次调出的这一个套索子工具（各归各，绝不加载别的工具的）。
+    void restoreOne(target, noteSelfToolSwitch);
     return;
   }
   if (msg.action === 'fillToolCycle') {
@@ -853,18 +874,31 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
           见 App.isOtherTool；本键更不会主动调 autoTurnOffMain）。
        ⛔ 顺序：**先切工具，再开开关**。反过来的话，面板的 onMainToggleChanged
           「关→开且勾了自动切套索」会在工具还没落地时抢着切回套索（那条逻辑服务 H 键，
-          不该覆盖用户刚按下的工具键）。切工具前已在 cycleFillTool 里打了抑制位。 */
+          不该覆盖用户刚按下的工具键）。切工具由 enterAutoFill 串行完成后，本分支补打抑制位。 */
     const combo = msg.combo ?? '';
-    const target = cycleFillTool();
     const token = 'fillToolCycle|' + (combo || FILL_TOOL_CYCLE_ID) + '|' + Math.floor(Date.now() / 400);
-    void requestMainToggle(token)
-      .then((st: MainToggleState) => {
+    void (async () => {
+      /* 2026-11-17（v2 用户确认）：Shift+H 属「激活自动填充」，同样走「先到位，再拍照」
+         这一条合并规则（见 enterAutoFill）。
+         ⚠️ 循环目标必须在守护**之前**算好：它会按当前工具校准游标，而守护会连切工具。
+         ⚠️ 切工具由 enterAutoFill 统一串行完成（不能再用 cycleFillTool 的异步 switchToolTo，
+            否则与守护内部的 select 并发打架）；这里只调用「算目标+推进游标」的纯函数。 */
+      const target = nextFillToolTarget();
+      try {
+        await enterAutoFill(target, token, noteSelfToolSwitch,
+          (t) => selectToolByRef(t as ToolRef));
+      }
+      catch (e) { console.warn('[选区工具守护] 进入自动填充失败:', e); }
+      // Shift+H 要护住刚切到的循环目标，别被 onMainToggleChanged 拽回套索 ⇒ 补打抑制位。
+      noteSelfToolSwitch();
+      try {
+        const st = await requestMainToggle(token);
         for (const l of hotkeyListeners) { try { l({ combo, action: 'fillToolCycle', brush: target, ok: true, enabled: st.enabled }); } catch { /* ignore */ } }
-      })
-      .catch(() => {
+      } catch {
         /* 开关写失败也要把「已切到哪个工具」告诉面板：工具是真切了，提示不能吞掉。 */
         for (const l of hotkeyListeners) { try { l({ combo, action: 'fillToolCycle', brush: target, ok: true }); } catch { /* ignore */ } }
-      });
+      }
+    })();
     return;
   }
   if (msg.action === 'focusMarquee' || msg.action === 'marqueeCycle') {
@@ -880,6 +914,10 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
     const combo = msg.combo ?? '';
     const isRectKey = msg.action === 'focusMarquee';
     const target = isRectKey ? focusRectMarquee() : cycleMarqueeTool();
+    // 2026-11-17：只恢复本次调出的这一个选框工具（各归各，绝不加载别的工具的）。
+    // ⚠️ 这个键的切工具是异步发出去的（focusRectMarquee/cycleMarqueeTool 内部 switchToolTo），
+    //    restoreOne 会自己补一次 select 确认，避免读到的还是切换前的那个工具的选项。
+    void restoreOne(target, noteSelfToolSwitch);
     const token = msg.action + '|' + (combo || (isRectKey ? FOCUS_MARQUEE_ID : MARQUEE_CYCLE_ID))
       + '|' + Math.floor(Date.now() / 400);
     void requestMainToggleOff(token)
@@ -1299,6 +1337,9 @@ function noteSelfToolSwitch(): void { selfToolSwitchAt = Date.now(); }
 export function hotkeyToolSwitchRecent(ms: number = 1500): boolean {
   return selfToolSwitchAt > 0 && (Date.now() - selfToolSwitchAt) < ms;
 }
+/** 2026-11-17：拍照片内部的连续 select 会刷新上面的抑制位；拍完必须清掉，
+ *  否则 H 键「关→开切套索」会被这 1.5s 时窗误挡，停在画笔上不回套索。 */
+function clearSelfToolSwitch(): void { selfToolSwitchAt = 0; }
 
 /* ==========================================================================
    工具模式：新增三组「工具键」（2026-11-16，用户要求）
@@ -1451,11 +1492,14 @@ function switchToolTo(target: ToolRef, tag: string): void {
 }
 
 /**
- * 五工具循环一格（Shift+H 命中时调用）。
+ * 五工具循环「算目标 + 推进游标」的纯函数（Shift+H 命中时调用）。
+ * ⛔ 2026-11-17：**只算目标、不切工具** —— 实际切工具交给 enterAutoFill 按用户指定的
+ *    「切套索/拍照」顺序串行完成。若这里再异步 switchToolTo，会与拍照片内部的 select 并发打架。
+ * ⛔ 必须在拍照片**之前**调用：它按当前工具校准游标；拍照片会连切五种工具改写当前工具。
  * ⛔ 循环顺序固定为 FILL_TOOL_GROUP（用户指定），不读工具栏图标顺序 —— 选框与套索
  *    在工具栏里分属两个组，没有「自然顺序」可言，只能按需求写死一份。
  */
-function cycleFillTool(): ToolRef {
+function nextFillToolTarget(): ToolRef {
   if (fillToolCycleIdx < 0) {
     const cur = readToolIdSync();
     const i = cur ? FILL_TOOL_GROUP.findIndex(r => r.toLowerCase() === cur.toLowerCase()) : -1;
@@ -1464,8 +1508,6 @@ function cycleFillTool(): ToolRef {
   fillToolCycleIdx = (fillToolCycleIdx + 1) % FILL_TOOL_GROUP.length;
   const target = FILL_TOOL_GROUP[fillToolCycleIdx];
   console.log('[选区填充工具循环] ⇒ ' + target);
-  noteSelfToolSwitch();
-  switchToolTo(target, '选区填充工具循环');
   return target;
 }
 

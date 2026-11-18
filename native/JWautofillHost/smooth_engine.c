@@ -8406,6 +8406,30 @@ static DWORD WINAPI worker(LPVOID param)
    超过这个时长就强行画一帧陈旧的几何 —— 静止的圆也比消失的圆好。 */
 #define HUD_SKIP_MAX_MS    200
 
+/* ⛔⛔ 0x0237：**焦点门「进画布」迟滞** —— 命中测试跳回画布后，必须连续命中
+   `CANVAS_OK_ENTER_MS` 才算「真的在画布上」，才允许画 HUD。
+   用户报（2026-11-17）：「长按 Coolorus 浮窗的标题栏拖位置，拖动中不显示 HUD
+   （正确），但**画笔一抬起就短暂显示一段 HUD**，随后自己消失」。
+   真机日志（jwwh-15996，18:14:22）：
+     ``` 
+     18:14:22.350 焦点门·过 cur=(573,337) hit=Static par=PSViewC mouseMsg=OWL.Dock
+     18:14:22.353 显示: stroke=1 penDown=1 toolOk=1 ...
+     18:14:22.477 隐藏: 门槛断满 93ms ... ck=1 cv=0 gate=1 penDown=1 ...
+     ```
+   链条：浮窗拖动时 Windows 把窗口从命中测试里摘出去（DWM 幽灵窗口），
+   `WindowFromPoint` 在**松手那一瞬间**返回下面的画布视图 ⇒ 焦点门由 0 翻 1；
+   此时 `penDown` 还是 1（合成包残留 / CONTACT_HOLD 尾巴）⇒ `cheapOk` 成立
+   ⇒ 圆冒出来；124ms 后浮窗恢复命中 ⇒ cv 翻回 0 ⇒ 隐藏。
+   ⇒ 只给「0 → 1」这个方向加迟滞：`cv=0` 时记下时刻，之后必须连续 200ms
+      都命中画布才放行。真机误显窗口是 124ms ⇒ 被完整吃掉。
+   ⛔⛔ 为什么不是「起笔点在画布才许显示」：Wintab 悬停时 `penDown` 就可能为 1，
+      那样「笔悬停在面板上再移到画布落笔」会整笔没有 HUD（0x0121 的死法）。
+   ⛔ 为什么不影响正常绘制：在画布上作画时光标一直在画布内，`cv=0` 的时刻是
+      「上一次离开画布」，早就超过 200ms ⇒ 第一帧就放行（无延迟）。
+      只有「光标刚从非画布区域跳进来」的 200ms 内不画 —— 那时用户还没落笔。
+   ⛔ 只门 HUD 显隐（`canvasOk`），宽判 `canvas_hit_ok` / 补流 / 代投 / 平滑逐字不动。 */
+#define CANVAS_OK_ENTER_MS 200
+
 static HANDLE        g_hudThread;
 static DWORD        g_hudTid;
 /* 绳身「已绷直」的渲染侧状态（滞回死区用；仅渲染线程读写）。
@@ -8704,6 +8728,38 @@ static void canvas_hit_probe(POINT cur, int *child, int *rootIsFrame, int *sameP
       Qt624QWindowToolSaveBits），OWL 是一族（OWL.Dock / OWL.WindowGroup /
       OWL.ShadowView / OWL.ApplicationBar）。jwwh-6072 实证：正常画布绘制命中
       PSViewC / Static / Photoshop；下列前缀只出现在面板、浮层与边缘 UI 上。 */
+/* 0x0236：HUD 焦点门「祖先上溯」的最大层数 —— 选项栏那条链是
+   Static → PSViewC → OWL.ControlBar（2 层），留 4 层余量。
+   ⛔ 不能无限上溯：`OWL.Dock` 覆盖整个客户区，走过头会把画布一起挡掉。 */
+#define ANC_MAX_UP 4
+
+/* 0x0236：**祖先专用**的容器名单。
+   ⛔ 不直接复用 `hud_ui_class()`：它把 `OWL.ShadowView`、`Static`、`Edit`、`Button`
+      一并算 UI —— 这些在**画布链上也可能出现**；祖先判据一旦误命中，整个画布的 HUD
+      会永久消失（0x0121 的死法）。
+   ⛔⛔ **`OWL.TabGroup` / `OWL.Tab` 绝不能在这里**：真机日志（jwwh-9572，
+      18:01:14.886）实锤画布链就是
+        `hit=Static(BF1B58) parent=PSViewC(1A12C0) 链=OWL.Document>OWL.TabGroup`
+      —— OWL 用 TabGroup 装**文档标签页**，画布就在它下面。0x0236 首版把
+      TabGroup 当"面板容器"写进名单 ⇒ 画布上 why=7 每帧都挡 ⇒ 用户报
+      「HUD 完全不能显示，画布上也出不来」。⚠️ 面板里的选项卡与文档标签页
+      **共用这一类名**，只能靠更上面的 `OWL.Palette` / `OWL.ControlBar` 区分。 */
+static int hud_ui_anc_class(const char *c)
+{
+    static const char *const pre[] = {
+        "OWL.ControlBar", "OWL.Palette", "OWL.Toolbar",
+        "OWL.ApplicationBar", "OWL.MenuBar",
+        "Chrome_", "Qt", "PSPanel", "PSDock", "PSFloatC"
+    };
+    unsigned i;
+    if (!c || !c[0]) return 0;
+    for (i = 0; i < sizeof(pre) / sizeof(pre[0]); ++i) {
+        size_t n = strlen(pre[i]);
+        if (strncmp(c, pre[i], n) == 0) return 1;
+    }
+    return 0;
+}
+
 static int hud_ui_class(const char *c, int isParent)
 {
     /* ⛔ 0x0234：把 0x0233 的 `"OWL."` 一刀切拆开 —— 现场窗口树证明
@@ -8856,16 +8912,69 @@ static int canvas_focus_ok(POINT cur, int *why)
         int foreign = (hitPid != 0 && hitPid != GetCurrentProcessId());
         int uiSelf  = hud_ui_class(dbgHit, 0);
         int uiPar   = hud_ui_class(dbgPar, 1);
-        if (foreign || uiSelf || uiPar) {
-            *why = 5;
+        /* ⛔⛔⛔ 0x0236：`PSViewC` 是**通用视图类**，画布与选项栏里同名同形 ⇒
+           0x0233/0x0234 那三条（外进程 / hit 类名 / 父类名）在
+           「hit=Static、parent=PSViewC」这个组合上**双双落空**。
+           现场（jwwh 日志 17:36:26.352）：
+             · 画布上   `焦点门·过 cur=(251,41)？` 否 —— 画布正常点在 (1493,545)：
+                        hit=Static(181AC2) par=PSViewC(7A1560)
+             · 选项栏上 `焦点门·过 cur=(251,41)`：hit=Static(8D1262)
+                        par=PSViewC(**151308**) —— 而 151308 的父是 OWL.ControlBar(130A9C)
+           两条链的**前两层完全一样**，唯一的差别在更上面。用户报的正是这个：
+           「拉绳平滑开着，光标移到上方选项栏改羽化，一点就冒出 HUD」。
+           ⇒ 补一条「跳过同名通用类、找最近一个有身份的祖先」：自 parent 起最多上溯
+              ANC_MAX_UP 层，命中 UI 家族容器 ⇒ 非画布（why=7）。
+           ⛔ 遇主框 / OWL.Dock / OWL.WindowGroup 立即**停并放行**：这三者是覆盖
+              整个客户区的容器，画布就在它们下面（0x0233 的教训，撞了会误伤 100%
+              正常绘制）。⛔ 只服务 HUD 显隐；宽判/补流/代投/吸附/平滑逐字不动。 */
+        int  ancUI = 0;
+        char dbgAnc[64];
+        char dbgChain[160];      /* 整条上溯链（诊断：万一误挡，一眼看出卡在哪一层） */
+        dbgAnc[0] = 0;
+        dbgChain[0] = 0;
+        if (!foreign && !uiSelf && !uiPar) {
+            HWND up = par ? par : hit;
+            int depth = 0;
+            while (up && up != s_psFrame && depth < ANC_MAX_UP) {
+                HWND nx = GetParent(up);
+                if (!nx || nx == up || nx == s_psFrame) break;
+                up = nx;
+                depth++;
+                char uc[64];
+                uc[0] = 0;
+                GetClassNameA(up, uc, sizeof(uc) - 1);
+                {
+                    size_t used = strlen(dbgChain);
+                    if (used + strlen(uc) + 2 < sizeof(dbgChain))
+                        _snprintf(dbgChain + used, sizeof(dbgChain) - used, "%s%s",
+                                  used ? ">" : "", uc);
+                }
+                /* ⛔ 0x0236 修正：`OWL.Document` 也必须停并放行 —— 真机画布链是
+                   `Static → PSViewC → OWL.TabGroup → OWL.Document`，见到文档容器
+                   就说明这条链通到画布，再往上走只会撞到「文档标签页 / 主框」这类
+                   容器造成误挡。 */
+                if (strncmp(uc, "OWL.Dock", 8) == 0
+                    || strncmp(uc, "OWL.WindowGroup", 15) == 0
+                    || strncmp(uc, "OWL.Document", 12) == 0) break;   /* 容器 ⇒ 放行 */
+                if (hud_ui_anc_class(uc)) {
+                    ancUI = 1;
+                    strncpy(dbgAnc, uc, sizeof(dbgAnc) - 1);
+                    dbgAnc[sizeof(dbgAnc) - 1] = 0;
+                    break;
+                }
+            }
+        }
+        if (foreign || uiSelf || uiPar || ancUI) {
+            *why = (ancUI && !foreign && !uiSelf && !uiPar) ? 7 : 5;
             static DWORD s_panelLogAt;
             DWORD nowP = GetTickCount();
             if ((DWORD)(nowP - s_panelLogAt) >= 2000) {
                 s_panelLogAt = nowP;
                 logf("# [hud] 焦点门·挡(非画布): hit=%p class=%s parent=%p(%s) "
-                     "外进程=%d 自身UI=%d 父UI=%d cur=(%ld,%ld) frame=%p\n",
+                     "外进程=%d 自身UI=%d 父UI=%d 祖先=%s 链=%s cur=(%ld,%ld) frame=%p\n",
                      (void *)hit, dbgHit, (void *)par, dbgPar,
                      foreign, uiSelf, uiPar,
+                     dbgAnc[0] ? dbgAnc : "(无)", dbgChain[0] ? dbgChain : "(无)",
                      (long)cur.x, (long)cur.y, (void *)s_psFrame);
             }
             return 0;
@@ -9467,11 +9576,25 @@ static DWORD WINAPI hud_thread(LPVOID param)
            ⇒ 现在它们在 wantVisible 之后再判，只跳过重绘（见 `staleFrame`）。 */
         frame_resolve(now);
         static int s_cvOkLast;                /* 跳帧时沿用的上一次结论（**仅 HUD 显隐/诊断用**） */
+        /* ⛔ 0x0237：最近一次「命中非画布」的时刻（0 = 从未发生 ⇒ fail-open 放行）。
+           ⛔ 只在 `cv=0` 时推进；`cheapOk=0`（笔抬着）的跳帧**不推进**——
+              否则每一笔起头都要白等 200ms（见 CANVAS_OK_ENTER_MS 的注释）。 */
+        static DWORD s_cvOffAt;
         int cvWhy = s_cvWhyDbg;               /* 默认不翻转 ⇒ 不误报「焦点门恢复」 */
         int canvasOk, canvasHit;
         if (cheapOk) {
             cvWhy = 0;
-            canvasOk = canvas_focus_ok(cur, &cvWhy);
+            int cvRaw = canvas_focus_ok(cur, &cvWhy);
+            if (!cvRaw) {
+                s_cvOffAt = now ? now : GetTickCount();
+                canvasOk = 0;
+            } else if (!s_cvOffAt
+                       || (DWORD)(now - s_cvOffAt) >= CANVAS_OK_ENTER_MS) {
+                canvasOk = 1;
+            } else {
+                canvasOk = 0;                 /* 刚从非画布跳回来 ⇒ 迟滞中，不画 */
+                cvWhy = 8;                    /* 只用于诊断行，不影响 was 语义 */
+            }
             s_cvOkLast = canvasOk;
         } else {
             canvasOk = s_cvOkLast;
@@ -9543,7 +9666,9 @@ static DWORD WINAPI hud_thread(LPVOID param)
                     "", "主框未解析⇒本门放行(fail-open)", "前台不是主框",
                     "焦点不在文档区", "光标不在文档区矩形",
                     "命中窗口/其父是停靠面板或UI控件(非画布)", /* 0x0234 why=5 */
-                    "插件面板心跳：笔在面板上(非画布)"        /* 0x0234 why=6 */
+                    "插件面板心跳：笔在面板上(非画布)",        /* 0x0234 why=6 */
+                    "祖先链命中UI容器：选项栏/面板里的通用 PSViewC·Static(非画布)", /* 0x0236 why=7 */
+                    "进画布迟滞：刚从非画布跳回，未满 200ms(暂不画)" /* 0x0237 why=8 */
                 };
                 HWND fg2 = GetForegroundWindow();
                 DWORD pid2 = 0, tid2 = fg2 ? GetWindowThreadProcessId(fg2, &pid2) : 0;
@@ -9628,7 +9753,16 @@ static DWORD WINAPI hud_thread(LPVOID param)
            ⛔ 别改成「保留窗口但什么都不画」：那样窗口虽透明，`s_hudVisible`/去抖状态
               仍按「显示中」累积，下一轮真实起笔时首次显示会被误判成`刚隐藏过`。 */
         int polyAltHold = (g_cfg && g_cfg[CFG_I_POLYALT]) ? 1 : 0;
-        int wantVisible = polyAltHold ? polyHint : (((cheapOk && canvasOk) || polyHint) ? 1 : 0);
+        /* ⛔⛔ 0x0236：**参考线也不许出画布**。旧式 `(cheapOk && canvasOk) || polyHint`
+           让 `polyHint` 完全绕开焦点门 —— 用户把光标移到选项栏改参数时，只要 350ms 内
+           吸过一次，参考线照样画在画布上（同一批日志里 17:36 那几次「面板区 cur=(251,41)
+           仍出 HUD」就含这条通路）。
+           ⇒ 把 canvasOk 提成**外层公共门**：圆与参考线都只在「焦点+光标都在画布」时才画。
+           ⛔ 0x0219 的原意得到保留：参考线仍然**不并进 cheapOk**（逐点点击时包流/落笔
+              判据本就不成立），只是不能再无视「在不在画布上」这个物理事实。 */
+        int wantVisible = (canvasOk
+                           && (polyAltHold ? polyHint
+                                           : ((cheapOk || polyHint) ? 1 : 0))) ? 1 : 0;
         /* —— 0x020A：显示去抖（根因见 HUD_RESURF_DEBOUNCE_MS 处）——
            ⛔ 只在「刚隐藏过」时启用：正常起笔（首次 / 隔了 >1.5s）必须立即出现，
               否则每一笔的圆都会迟到 180ms，手感立刻变钝。 */

@@ -4186,12 +4186,17 @@ title={helpTexts.selectionFill.blendMode}>
                             title={helpTexts.selectionFill.feather}>
                             羽化
                         </label>
-                        {/* ⚠️ 步长必须与数字输入框一致为 1：滑杆若仍走 0.5，会写入「X.5」，
-                            而 .num-input-row 是定宽 34px，小数位显示不下（只显出「1…」）。 */}
+                        {/* 2026-11-17：步长统一为 **0.5**（用户指定）。
+                            ⚠️ 三处必须永远一致：本滑杆 step、下面的数字框 step、
+                               DragHandler.configs.feather.step（拖「羽化」标签调值）。
+                               历史上滑杆/输入框被改成 1 而 DragHandler 仍是 0.5 ⇒
+                               拖标签出「X.5」、滑杆出整数，两条通路互相打架。
+                            ⚠️ .num-input-row 定宽 34px：0.5 步长会出现「10.5」这种四位显示，
+                               本行数字框与「px」仍在行尾，暂不加宽；若真机被裁剪再说。 */}
                         <RangeSlider
                             min={0}
                             max={20}
-                            step={1}
+                            step={0.5}
                             value={this.state.feather}
                             onChange={this.handleFeatherChange}
                             className="slider-track"
@@ -4203,7 +4208,7 @@ title={helpTexts.selectionFill.blendMode}>
                                     type="number"
                                     min="0"
                                     max="20"
-                                    step="1"
+                                    step="0.5"
                                     value={this.state.feather}
                                     onChange={(e) => this.setState({ feather: Number(e.target.value) })}
                                     title={helpTexts.selectionFill.featherInput}
