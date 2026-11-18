@@ -349,7 +349,9 @@ body.compact-app #app .app-root > .panel > .panel-section .row-grid-fit .grid-ce
       但两者的**行盒高度**不同 ⇒ 墨迹位置差 5px：
         · 填充选项首行 = .radio-vertical > .radio-option，行盒 23px，圆点 12px 居中
           ⇒ 墨迹顶 ≈ 盒顶 + 5.5px；
-        · 选区改造首行 = .row-between，行盒 32px（右列 .num-input-row 撑起），
+        · 选区改造首行 = .row-between，行盒 32px（右列 .num-input-row 撑起：
+          22px 高 + 上下各 5px margin —— 2026-11-18 起视觉盒变矮，但**占位盒仍是 32px**，
+          所以这里的 5px 偏移无需重算），
           13px 文字在 32px 里居中 ⇒ 墨迹顶 ≈ 盒顶 + 10.5px。
       ⇒ 锐度那一行看起来比「纯色」低 5px，用户 2026-10-23 要求两者一致。
       故把本行上外边距 10px → 5px（20px → 15px 盒间距），墨迹对齐。 */

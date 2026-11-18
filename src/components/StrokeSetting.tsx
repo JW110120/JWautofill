@@ -6,6 +6,7 @@ import Select from './Select';
 import RadioGroup, { RadioOption } from './RadioGroup';
 import { calcDragValue } from '../utils/dragSensitivity';
 import { helpTexts } from '../constants/helpTexts';
+import NumField from './NumField';
 
 /** 描边位置三列选项：模块级常量，保持引用稳定（RadioGroup 已 React.memo）。 */
 const STROKE_POSITION_OPTIONS: RadioOption[] = [
@@ -130,8 +131,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
           />
           <div className="row-start">
             <div className="num-input-row">
-            <input
-              type="number"
+            <NumField
               min="0"
               max="20"
               step="0.5"
@@ -209,8 +209,7 @@ const StrokeSetting: React.FC<StrokeSettingProps> = ({
           />
           <div className="row-start">
             <div className="num-input-row">
-            <input
-              type="number"
+            <NumField
               min="0"
               max="100"
               value={opacity}

@@ -8406,29 +8406,15 @@ static DWORD WINAPI worker(LPVOID param)
    超过这个时长就强行画一帧陈旧的几何 —— 静止的圆也比消失的圆好。 */
 #define HUD_SKIP_MAX_MS    200
 
-/* ⛔⛔ 0x0237：**焦点门「进画布」迟滞** —— 命中测试跳回画布后，必须连续命中
-   `CANVAS_OK_ENTER_MS` 才算「真的在画布上」，才允许画 HUD。
-   用户报（2026-11-17）：「长按 Coolorus 浮窗的标题栏拖位置，拖动中不显示 HUD
-   （正确），但**画笔一抬起就短暂显示一段 HUD**，随后自己消失」。
-   真机日志（jwwh-15996，18:14:22）：
-     ``` 
-     18:14:22.350 焦点门·过 cur=(573,337) hit=Static par=PSViewC mouseMsg=OWL.Dock
-     18:14:22.353 显示: stroke=1 penDown=1 toolOk=1 ...
-     18:14:22.477 隐藏: 门槛断满 93ms ... ck=1 cv=0 gate=1 penDown=1 ...
-     ```
-   链条：浮窗拖动时 Windows 把窗口从命中测试里摘出去（DWM 幽灵窗口），
-   `WindowFromPoint` 在**松手那一瞬间**返回下面的画布视图 ⇒ 焦点门由 0 翻 1；
-   此时 `penDown` 还是 1（合成包残留 / CONTACT_HOLD 尾巴）⇒ `cheapOk` 成立
-   ⇒ 圆冒出来；124ms 后浮窗恢复命中 ⇒ cv 翻回 0 ⇒ 隐藏。
-   ⇒ 只给「0 → 1」这个方向加迟滞：`cv=0` 时记下时刻，之后必须连续 200ms
-      都命中画布才放行。真机误显窗口是 124ms ⇒ 被完整吃掉。
-   ⛔⛔ 为什么不是「起笔点在画布才许显示」：Wintab 悬停时 `penDown` 就可能为 1，
-      那样「笔悬停在面板上再移到画布落笔」会整笔没有 HUD（0x0121 的死法）。
-   ⛔ 为什么不影响正常绘制：在画布上作画时光标一直在画布内，`cv=0` 的时刻是
-      「上一次离开画布」，早就超过 200ms ⇒ 第一帧就放行（无延迟）。
-      只有「光标刚从非画布区域跳进来」的 200ms 内不画 —— 那时用户还没落笔。
-   ⛔ 只门 HUD 显隐（`canvasOk`），宽判 `canvas_hit_ok` / 补流 / 代投 / 平滑逐字不动。 */
-#define CANVAS_OK_ENTER_MS 200
+/* ⛔⛔ 0x0237（**已于 0x0239 停用，保留墓碑**）：焦点门「进画布」迟滞 200ms。
+   当时想用它吃掉「拖浮窗松手后 HUD 闪 124ms」，结果两头不讨好：
+     · 拖浮窗没治好 —— 幽灵窗能让 `WindowFromPoint` 连续几百毫秒返回画布，
+       200ms 早就被满足（真机 jwwh-12640，10:13:02）；
+     · 副作用明确 —— 从面板移回画布后的第一笔要白等 200ms，
+       用户报「拉绳 HUD 响应速度不理想」。
+   ⇒ 0x0239 起：迟滞**删除**（`canvasOk` 直接取焦点门结论），
+      「拖浮窗」改由**起笔闩**（`s_offCanvasStroke039`）负责，见 HUD 段注释。
+   ⛔ 不要把它加回来：任何「按时间等」的门都治不住幽灵窗，只会增加延迟。 */
 
 static HANDLE        g_hudThread;
 static DWORD        g_hudTid;
@@ -9575,25 +9561,93 @@ static DWORD WINAPI hud_thread(LPVOID param)
            直接矛盾，也正是用户报的「绘制过程中 HUD 偶尔闪一下又回来」。
            ⇒ 现在它们在 wantVisible 之后再判，只跳过重绘（见 `staleFrame`）。 */
         frame_resolve(now);
+        /* ⛔⛔ 0x0239：**「这一笔是在画布外落下的」⇒ 整笔不许出 HUD**（0x0238 的复核版）
+           来历：0x0237 的 200ms「进画布迟滞」挡不住拖浮窗（幽灵窗能让
+           `WindowFromPoint` 连续几百毫秒都返回画布）；0x0238 改成「落笔边沿取样一次」
+           又走到了另一个极端 —— 真机 jwwh-22792（10:27）里：
+             `起笔在画布外: cur=(774,508) why=4 ⇒ 整笔不出 HUD`
+           光标明明在画布上，`canvas_focus_ok` 却在那一帧判了 why=4（文档区矩形抖动），
+           一次取样定生死 ⇒ **用户连丢两笔**（他说「前两笔 HUD 都没显示」）。
+           ⇒ 三条修正：
+             ① 落笔取样改成 **60ms 内复核**：`penDown` 边沿若首帧判「不在画布」，
+                先挂起（不闩），接下来 60ms 内每帧重问一次，**任一次通过就放行**；
+                只有连续 60ms 都不通过才闩死。瞬态抖动被吃掉。
+             ② **抬笔自救**：闩住之后，只要笔抬着且焦点门连续确认画布 250ms，
+                立即解除 —— 用户从面板移回画布画下一笔时不会被上一笔的历史连累。
+             ③ **0x0237 的 200ms 迟滞彻底删除**（见下面 canvasOk）：它只带来延迟
+                （用户报「拉绳响应速度不理想」），而拖浮窗那件事已经由本闩负责。
+           ⛔ 为什么只用 `canvas_focus_ok` 取样、不用 `canvas_hit_ok()`：后者只认
+              **主框矩形**（0x022B），浮窗就浮在画布上方 ⇒ 恒 1，判不出来。
+           ⛔ 为什么不改 `g_penDown` 本身、也不要求每帧都在画布内（0x0121 死法）：
+              这一位只作用于 HUD 的 `canvasOk`；悬停期 `g_penDown` 恒 1 时没有边沿，
+              这一位保持上次值，不误伤「笔悬停在面板上再移到画布落笔」。
+           ⛔ 开销：只在落笔瞬间与「闩着＋笔抬着」这两个小窗口里问窗口管理器。 */
+#define LATCH_VERIFY_MS 60
+#define LATCH_REARM_MS  250
+        static int s_prevPen038;
+        static int s_offCanvasStroke039;      /* 1 = 这一笔起笔在画布外，整笔不画 */
+        static DWORD s_latchVerifyUntil;      /* >0 = 复核中（截止时刻） */
+        static DWORD s_latchUpSince;          /* 自救计时：笔抬着且焦点门为真的起始时刻 */
+        DWORD nowT = now ? now : GetTickCount();
+
+        if (g_penDown && !s_prevPen038) {
+            /* 新的一笔：先按「通过」处理，首帧不通过才进入复核 */
+            s_offCanvasStroke039 = 0;
+            s_latchUpSince = 0;
+            int w038 = 0;
+            int cvOnDown = curOk ? canvas_focus_ok(cur, &w038) : 1;
+            s_latchVerifyUntil = cvOnDown ? 0 : (nowT + LATCH_VERIFY_MS);
+        }
+        if (s_latchVerifyUntil && g_penDown) {
+            int w039 = 0;
+            int cv2 = curOk ? canvas_focus_ok(cur, &w039) : 1;
+            if (cv2) {
+                s_latchVerifyUntil = 0;               /* 复核通过 ⇒ 放行 */
+            } else if ((LONG)(nowT - s_latchVerifyUntil) >= 0) {
+                s_latchVerifyUntil = 0;
+                s_offCanvasStroke039 = 1;             /* 连续 60ms 都不在画布 ⇒ 闩死 */
+                static DWORD s_offLogAt;
+                if ((DWORD)(nowT - s_offLogAt) >= 2000) {
+                    s_offLogAt = nowT;
+                    logf("# [hud] 起笔在画布外: cur=(%ld,%ld) why=%d ⇒ 整笔不出 HUD\n",
+                         (long)cur.x, (long)cur.y, w039);
+                }
+            }
+        }
+        if (s_offCanvasStroke039 && !g_penDown) {
+            /* 抬笔自救：笔离开后，焦点门连续确认画布 250ms ⇒ 解除（下一笔照常） */
+            int w040 = 0;
+            int cvUp = curOk ? canvas_focus_ok(cur, &w040) : 0;
+            if (cvUp) {
+                if (!s_latchUpSince) s_latchUpSince = nowT;
+                else if ((DWORD)(nowT - s_latchUpSince) >= LATCH_REARM_MS) {
+                    s_offCanvasStroke039 = 0;
+                    s_latchUpSince = 0;
+                    logf("# [hud] 起笔闩解除：笔抬着且焦点门连续 %ums 确认画布\n",
+                         (unsigned)LATCH_REARM_MS);
+                }
+            } else {
+                s_latchUpSince = 0;
+            }
+        } else if (g_penDown) {
+            s_latchUpSince = 0;
+        }
+        s_prevPen038 = g_penDown;
         static int s_cvOkLast;                /* 跳帧时沿用的上一次结论（**仅 HUD 显隐/诊断用**） */
-        /* ⛔ 0x0237：最近一次「命中非画布」的时刻（0 = 从未发生 ⇒ fail-open 放行）。
-           ⛔ 只在 `cv=0` 时推进；`cheapOk=0`（笔抬着）的跳帧**不推进**——
-              否则每一笔起头都要白等 200ms（见 CANVAS_OK_ENTER_MS 的注释）。 */
-        static DWORD s_cvOffAt;
         int cvWhy = s_cvWhyDbg;               /* 默认不翻转 ⇒ 不误报「焦点门恢复」 */
         int canvasOk, canvasHit;
         if (cheapOk) {
             cvWhy = 0;
             int cvRaw = canvas_focus_ok(cur, &cvWhy);
             if (!cvRaw) {
-                s_cvOffAt = now ? now : GetTickCount();
-                canvasOk = 0;
-            } else if (!s_cvOffAt
-                       || (DWORD)(now - s_cvOffAt) >= CANVAS_OK_ENTER_MS) {
-                canvasOk = 1;
+                canvasOk = 0;                 /* 焦点门判「不在画布」 */
+            } else if (s_offCanvasStroke039) {
+                canvasOk = 0;                 /* 0x0239：这一笔起笔在画布外 ⇒ 不许画 */
+                cvWhy = 9;
             } else {
-                canvasOk = 0;                 /* 刚从非画布跳回来 ⇒ 迟滞中，不画 */
-                cvWhy = 8;                    /* 只用于诊断行，不影响 was 语义 */
+                canvasOk = 1;                 /* ⛔ 0x0239：不再有 200ms 进画布迟滞 ——
+                                                 它只增加延迟（用户报「拉绳响应慢」），
+                                                 拖浮窗那件事已由起笔闩负责。 */
             }
             s_cvOkLast = canvasOk;
         } else {
@@ -9668,7 +9722,8 @@ static DWORD WINAPI hud_thread(LPVOID param)
                     "命中窗口/其父是停靠面板或UI控件(非画布)", /* 0x0234 why=5 */
                     "插件面板心跳：笔在面板上(非画布)",        /* 0x0234 why=6 */
                     "祖先链命中UI容器：选项栏/面板里的通用 PSViewC·Static(非画布)", /* 0x0236 why=7 */
-                    "进画布迟滞：刚从非画布跳回，未满 200ms(暂不画)" /* 0x0237 why=8 */
+                    "进画布迟滞(0x0239 已停用，仅占位保持索引)", /* 0x0237 why=8 */
+                    "起笔在画布外：这一笔按在浮窗/面板上(整笔不画)"    /* 0x0238 why=9 */
                 };
                 HWND fg2 = GetForegroundWindow();
                 DWORD pid2 = 0, tid2 = fg2 ? GetWindowThreadProcessId(fg2, &pid2) : 0;

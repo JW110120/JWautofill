@@ -97,6 +97,7 @@ import {
 import { invalidateLayerSnapshot } from './utils/layerTreeSnapshot';
 import ToggleSwitch from './components/ToggleSwitch';
 import RadioGroup, { RadioOption } from './components/RadioGroup';
+import NumField from './components/NumField';
 import { helpTexts } from './constants/helpTexts';
 
 /**
@@ -194,13 +195,44 @@ const hideNativeWidgetsOfSections = (root: HTMLElement | null, ids: string[]) =>
 // （例如「折叠/展开所有分区」会连续调用两次）。这里做帧内幂等合并。
 let resyncScheduled = 0;
 
+/* ⛔⛔ 2026-11-18 用户报「切换平滑模式后点击整体错位 ≈45px」——根因在这里。
+ *
+ *   模式切换会**增删整行**（标准 3 行 / 拉绳 2 行 / 追笔 1 行），而面板常常正滚在底部：
+ *   内容一变矮，滚动容器的 max 就比**旧的 scrollTop** 小一行（≈42~45px）。
+ *   UXP 的原生滚动视图在这件事上分两层：布局层会自己夹紧，绘制/命中层却保留旧偏移
+ *   ⇒ 看到的位置与命中的位置整体差那一行的距离（点「追笔」实际点到它下面那行滑块），
+ *   而**任何一次真实滚动都会把两层对齐** —— 这正是用户说的「能自愈、条件不明」。
+ *
+ *   ⇒ 内容高度一变就主动写一次**夹紧后的** scrollTop（把越界量从绘制层抹掉），
+ *     再 1px 抖动强制两层重排，最后按**重新读取的 max** 恢复。
+ *   ⛔ 恢复时绝不能写夹紧前的旧 t：那正是把越界值塞回绘制层的动作。
+ *   ⛔ 无溢出（max<=0）时只写 0 不抖动：此时正确的滚动量就是 0，抖动纯属浪费。 */
 const doResyncNativeWidgets = (root: HTMLElement | null) => {
     if (!root) return;
-    const max = root.scrollHeight - root.clientHeight;
-    if (max <= 0) return; /* 无溢出时跳过，避免抖动 */
-    const t = root.scrollTop;
-    root.scrollTop = t < max ? t + 1 : Math.max(0, t - 1);
-    const restore = () => { root.scrollTop = t; };
+    const max = Math.max(0, root.scrollHeight - root.clientHeight);
+    const t = Math.max(0, Math.min(root.scrollTop, max));   /* ⛔ 先夹回合法区间 */
+    root.scrollTop = t;                                     /* 抹掉越界残量 */
+    if (max <= 0) {
+        /* ⛔ 没有溢出 ⇒ 写 0 是**空操作**，绘制层残留的偏移抹不掉。
+           临时补 2px 可滚动余量，做一次**真实**滚动（真滚动才会重算绘制层），
+           随后把余量撤掉 —— 全程在同一个同步块内，用户看不到滚动条闪现。 */
+        const prev = root.style.paddingBottom;
+        try {
+            const cs = typeof getComputedStyle === 'function' ? getComputedStyle(root) : null;
+            const pad = cs ? (parseFloat(cs.paddingBottom) || 0) : 0;
+            root.style.paddingBottom = (pad + 2) + 'px';
+            root.scrollTop = 1;
+            root.scrollTop = 0;
+        } catch { /* ignore */ }
+        try { root.style.paddingBottom = prev; } catch { /* ignore */ }
+        return;
+    }
+    root.scrollTop = t < max ? t + 1 : t - 1;
+    const restore = () => {
+        /* 恢复前重新夹一次：这一帧里布局可能又变过（模式行增删/折叠） */
+        const m2 = Math.max(0, root.scrollHeight - root.clientHeight);
+        root.scrollTop = Math.max(0, Math.min(t, m2));
+    };
     if (typeof requestAnimationFrame === 'function') requestAnimationFrame(restore);
     else restore();
 };
@@ -215,6 +247,63 @@ const resyncNativeWidgets = (root: HTMLElement | null) => {
     });
 };
 
+/** 内容高度变化后**等布局落定**再做一次重排（rAF ×2 ≈ 提交后两帧）。
+ *  只调 resyncNativeWidgets 是不够的：它可能排在 React 提交**之前**（等价于拿旧布局
+ *  算 max），而这次错位的后果又是「差一行」级的。多补一帧，代价 ≈33ms 且看不见。 */
+const resyncAfterLayout = (root: HTMLElement | null) => {
+    resyncNativeWidgets(root);
+    const schedule = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : null;
+    if (!schedule) return;
+    schedule(() => schedule(() => resyncNativeWidgets(root)));
+};
+
+/* ⛔⛔ 2026-11-18：**命中错位自愈守卫**（用户报「切换平滑模式后点哪儿都错 45px，能自愈」）。
+ *
+ *   机理仍未 100% 证实（无法本地复现），但现象很确定：**看到的位置与命中的位置整体差一行**，
+ *   而任何一次真实滚动都会把它对齐。这类「绘制层 / 命中层不同步」的错位，脚本没有办法
+ *   直接读取，只能**从事件里反推**：命中的元素必须包含鼠标落点，否则就是错位。
+ *   ⇒ 在捕获阶段拦 mousedown 做一次几何校验：
+ *       · 正常（99.99%）：只是读一次 rect，无感；
+ *       · 错位：打一条带完整现场（偏差/矩形/scrollTop/内容高）的日志，并**立刻强制重排**，
+ *         让用户的下一次点击就恢复正常，同时把现场留给我们定位。
+ *   ⛔ 容差 2px：边框压线、1px 舍入不算错位（误报会让每次点击都白做一次重排）。
+ *   ⛔ 只观察 + 自愈，**不改写事件**：把点击「转发」到推测的目标属于改写用户操作，
+ *      一旦推测错（例如点在两个元素缝隙里）就是凭空触发一个控件。 */
+const installHitTestGuard = (
+    getScope: () => HTMLElement | null,
+    getScrollRoot: () => HTMLElement | null
+): (() => void) => {
+    const doc: any = typeof document !== 'undefined' ? document : null;
+    if (!doc || !doc.addEventListener) return () => { /* ignore */ };
+    const onDown = (e: any) => {
+        const t = e && e.target;
+        const scope = getScope();
+        if (!t || !scope || !t.getBoundingClientRect) return;
+        if (t !== scope && scope.contains && !scope.contains(t)) return;
+        const r = t.getBoundingClientRect();
+        const x = Number(e.clientX);
+        const y = Number(e.clientY);
+        if (!isFinite(x) || !isFinite(y)) return;
+        if (x >= r.left - 2 && x <= r.right + 2 && y >= r.top - 2 && y <= r.bottom + 2) return;
+        const dy = y < r.top ? Math.round(y - r.top) : Math.round(y - r.bottom);
+        const root = getScrollRoot();
+        console.warn('[命中错位] 鼠标落点不在命中元素的矩形内 ⇒ UXP 绘制/命中不同步'
+            + ' | target=' + String(t.className || t.tagName || '?')
+            + ' 点=(' + Math.round(x) + ',' + Math.round(y) + ')'
+            + ' 矩形=(' + Math.round(r.left) + ',' + Math.round(r.top)
+            + ',' + Math.round(r.right) + ',' + Math.round(r.bottom) + ')'
+            + ' 纵向偏差=' + dy + 'px'
+            + ' scrollTop=' + (root ? root.scrollTop : '?')
+            + ' 内容高=' + (root ? root.scrollHeight : '?')
+            + ' 视口高=' + (root ? root.clientHeight : '?'));
+        resyncNativeWidgets(root);
+    };
+    doc.addEventListener('mousedown', onDown, true);
+    return () => {
+        try { doc.removeEventListener('mousedown', onDown, true); } catch { /* ignore */ }
+    };
+};
+
 /** 套索平滑状态档是否是「错误档」（2026-10-23：决定标题下方的异常通知条是否现身）。
  *  warn = 服务没起来 / 版本过旧（要用户处置）；fail = 标定失败 / 平滑中断（要用户反馈）。
  *  「关 / 准备中 / 生效中」不是错误 —— 不占位，常态省空间。 */
@@ -225,6 +314,8 @@ interface AppProps {}
 
 class App extends React.Component<AppProps, AppState> {
     private unsubMainToggle: (() => void) | null = null;
+    /** 命中错位守卫的卸载函数（2026-11-18，见 installHitTestGuard） */
+    private uninstallHitGuard: (() => void) | null = null;
     // 0x0209：Alt 边沿（工具模式「临时吸管」）的订阅器
     private unsubAltHold: (() => void) | null = null;
     /**
@@ -626,6 +717,11 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     async componentDidMount() {
+        // 命中错位守卫：纯观察 + 自愈，放在最前（不依赖下面任何 await 的结果）
+        this.uninstallHitGuard = installHitTestGuard(
+            () => document.getElementById('app'),
+            () => this.panelRef.current
+        );
         // ===== 全局快捷键链路：必须最先建立 =====
         // 这段绝不能放在任何 await 之后。componentDidMount 下面还有一连串 await
         // （文件系统探测、事件监听注册、蒙版模式检测…），任何一个抛错或卡住，
@@ -1125,7 +1221,7 @@ class App extends React.Component<AppProps, AppState> {
            否则会留下残影（数字画在旧位置）。 */
         const smoothErrBar = smoothToneIsError(this.smoothBarTone()) || !!this.state.appHotkeyNotify;
         if (this.smoothErrBarVisible !== null && smoothErrBar !== this.smoothErrBarVisible) {
-            resyncNativeWidgets(this.panelRef.current);
+            resyncAfterLayout(this.panelRef.current);
         }
         this.smoothErrBarVisible = smoothErrBar;
 
@@ -1242,6 +1338,10 @@ class App extends React.Component<AppProps, AppState> {
             console.error('❌ 应用关闭前预设保存失败:', error);
         }
         
+        if (this.uninstallHitGuard) {
+            try { this.uninstallHitGuard(); } catch { /* ignore */ }
+            this.uninstallHitGuard = null;
+        }
         if (this.unsubMainToggle) {
             try { this.unsubMainToggle(); } catch { /* ignore */ }
             this.unsubMainToggle = null;
@@ -1436,7 +1536,8 @@ class App extends React.Component<AppProps, AppState> {
         this.setState(prevState => ({
             isSelectionOptionsExpanded: !prevState.isSelectionOptionsExpanded
         }));
-        resyncNativeWidgets(root);
+        // ⛔ 必须等布局落定：折叠也会让内容变矮（同 handleSmoothModeChange 的 45px 错位）
+        resyncAfterLayout(root);
     }
 
     handleSelectionContrastChange(value: number) {
@@ -1468,7 +1569,7 @@ class App extends React.Component<AppProps, AppState> {
         this.setState(prevState => ({
             isSmoothOptionsExpanded: !prevState.isSmoothOptionsExpanded
         }));
-        resyncNativeWidgets(root);
+        resyncAfterLayout(root);
     }
 
     /**
@@ -1518,7 +1619,10 @@ class App extends React.Component<AppProps, AppState> {
         // 切换模式会**增删整行**（见 smoothParamApplies）⇒ 必须补一次原生控件重排：
         // UXP 的原生视图不随 DOM 重排自动更新，被移除那几行的数字输入框会在原位留下
         // 「残影数字」，比折叠分区里的同类问题更显眼（那里有 hideNativeWidgetsOfSections 兜底）。
-        resyncNativeWidgets(this.panelRef.current);
+        // ⛔⛔ 而且**必须等布局落定再补**：行被删掉后面板常正滚在底部，新的 max 比旧
+        //    scrollTop 少一行；此刻拿旧布局去「抖动 + 恢复」会把越界的那一行塞回绘制层，
+        //    造成「看到的位置与命中位置差 45px」（2026-11-18 用户报，见 resyncAfterLayout）。
+        resyncAfterLayout(this.panelRef.current);
     }
 
     /**
@@ -1989,7 +2093,7 @@ class App extends React.Component<AppProps, AppState> {
             const isExpanded = !prevState.isExpanded;
             return { isExpanded };
         });
-        resyncNativeWidgets(root);
+        resyncAfterLayout(root);
     }
 
     /**
@@ -4165,8 +4269,7 @@ title={helpTexts.selectionFill.blendMode}>
                         />
                         <div className="row-start">
                             <div className="num-input-row">
-                                <input
-                                    type="number"
+                                <NumField
                                     min="0"
                                     max="100"
                                     value={this.state.opacity}
@@ -4204,8 +4307,7 @@ title={helpTexts.selectionFill.blendMode}>
                         />
                         <div className="row-start">
                             <div className="num-input-row">
-                                <input
-                                    type="number"
+                                <NumField
                                     min="0"
                                     max="20"
                                     step="0.5"
@@ -4368,8 +4470,7 @@ title={helpTexts.selectionFill.blendMode}>
                             />
                             <div className="row-start">
                                 <div className="num-input-row">
-                                    <input
-                                        type="number"
+                                    <NumField
                                         min="0"
                                         max="100"
                                         step="1"
@@ -4405,8 +4506,7 @@ title={helpTexts.selectionFill.blendMode}>
                             />
                             <div className="row-start">
                                 <div className="num-input-row">
-                                    <input
-                                        type="number"
+                                    <NumField
                                         min={SMOOTH_RADIUS_MIN}
                                         max={SMOOTH_RADIUS_MAX}
                                         step="1"
@@ -4454,8 +4554,7 @@ title={helpTexts.selectionFill.blendMode}>
                             />
                             <div className="row-start">
                                 <div className="num-input-row">
-                                    <input
-                                        type="number"
+                                    <NumField
                                         min={SMOOTH_CATCHUP_MIN}
                                         max={SMOOTH_CATCHUP_MAX}
                                         step="1"
@@ -4506,8 +4605,7 @@ title={helpTexts.selectionFill.blendMode}>
                             />
                             <div className="row-start">
                                 <div className="num-input-row">
-                                    <input
-                                        type="number"
+                                    <NumField
                                         min="0"
                                         max="90"
                                         step="1"
@@ -4600,8 +4698,7 @@ title={helpTexts.selectionFill.selectionContrast}>
                                     />
                                     <div className="row-start">
                                         <div className="num-input-row">
-                                        <input
-                                            type="number"
+                                        <NumField
                                             min="0"
                                             max="100"
                                             value={this.state.selectionContrast}
@@ -4631,8 +4728,7 @@ title={helpTexts.selectionFill.selectionExpand}>
                                     />
                                     <div className="row-start">
                                         <div className="num-input-row">
-                                        <input
-                                            type="number"
+                                        <NumField
                                             min="0"
                                             max="100"
                                             value={this.state.selectionExpand}

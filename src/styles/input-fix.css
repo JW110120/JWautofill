@@ -3,8 +3,11 @@
    作用域：#app 主面板（滑块容器 / 折叠区 / 次级面板）为主，
    折叠区规则同时覆盖 #pixeladjustment 工具箱（两面板折叠区同一套，见下）。 */
 
-/* 主面板（#app）中的input number字段应该有较低的z-index */
-#app input[type="number"] {
+/* 主面板（#app）中的input number字段应该有较低的z-index
+   ⚠️ 2026-11-18：数字框改成自绘（NumField）后不再是 `type="number"`，
+      因此这里必须同时命中 `.num-field`，否则新控件没有任何层级约束。 */
+#app input[type="number"],
+#app input.num-field {
     position: relative;
     z-index: 1 !important;
 }
@@ -87,8 +90,11 @@ body.secondary-panel-open #app .app-root > .panel > .panel-section .row-between 
       的 visibility:visible（特异性 (1,3,1) 高于本条 (1,2,1)）。
    ⚠️ 不用 display:none —— 保留布局占位，遮罩背后的排版零重排。 */
 body.app-visibility-panel-open #app input[type="number"],
+body.app-visibility-panel-open #app input.num-field,
 body.app-fill-settings-open #app input[type="number"],
-body.app-hotkey-panel-open #app input[type="number"] {
+body.app-fill-settings-open #app input.num-field,
+body.app-hotkey-panel-open #app input[type="number"],
+body.app-hotkey-panel-open #app input.num-field {
     visibility: hidden !important;
     opacity: 0 !important;
     pointer-events: none !important;
@@ -102,7 +108,8 @@ body.app-hotkey-panel-open #app input[type="number"] {
    样式表 !important 判在内联 !important 之上，导致次级面板（渐变/图案/
    描边/颜色）的下拉菜单下方数字永远压不住、浮在菜单上。去掉 !important
    后，内联 important 正常胜过本普通声明，遮挡生效且不引起布局位移。 */
-#app .panel-section ~ .panel input[type="number"] {
+#app .panel-section ~ .panel input[type="number"],
+#app .panel-section ~ .panel input.num-field {
     visibility: visible;
     opacity: 1;
     pointer-events: auto;

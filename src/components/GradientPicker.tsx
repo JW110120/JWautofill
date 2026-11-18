@@ -12,6 +12,7 @@ import { calcDragValue } from '../utils/dragSensitivity';
 import RangeSlider from './RangeSlider';
 import Select from './Select';
 import { helpTexts } from '../constants/helpTexts';
+import NumField from './NumField';
 
 interface GradientPickerProps {
     isOpen: boolean;
@@ -1494,8 +1495,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         </label>
                     <div className="row-start">
                         <div className="num-input-row">
-                            <input
-                                type="number"
+                            <NumField
                                 min="0"
                                 max="100"
                                 value={Math.round(parseFloat(stops[selectedStopIndex].color.match(/,\s*([\d.]+)\s*\)$/)?.[1] || '1') * 100)}
@@ -1800,8 +1800,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     />
                     <div className="row-start">
                         <div className="num-input-row">
-                            <input
-                                type="number"
+                            <NumField
                                 min="0"
                                 max="360"
                                 value={angle}

@@ -18,16 +18,14 @@ import { defaultTheme, Provider } from '@adobe/react-spectrum';
 import AdjustmentPanel from './adjustments/AdjustmentPanel';
 import BrushStudio from './brushstudio/BrushStudio';
 import { MenuManager } from './utils/MenuManager';
-import { installNumberInputWheel } from './utils/numberInputWheel';
 
 // 初始化主题
 initializeTheme();
 
-// ⛔ 2026-11-17：接管所有数字输入框的滚轮步长。
-//    PS 27.8 之前的 UXP 把 number 输入框的滚轮步长写死 0.1、无视 step
-//    （羽化 0.5 / 半径 1 / 扁平化 50 全被滚成 0.1 一格）。
-//    必须在首次渲染前装好：一次全局监听覆盖两个面板的全部 31 个输入框。
-installNumberInputWheel();
+// ⛔ 2026-11-18：`installNumberInputWheel()` 已停用。
+//    全插件 31 个数字框已改为自绘 `NumField`（src/components/NumField.tsx），
+//    滚轮/键盘/夹紧都在组件内自己算，不再需要「事后纠正原生 0.1」那套 document 级监听。
+//    该模块只剩历史价值（记录 UXP 27.8 前 number 控件的三个坑），不要再引入。
 
 // 设置所有面板的菜单
 MenuManager.setup();

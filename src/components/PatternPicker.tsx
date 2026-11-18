@@ -13,6 +13,7 @@ import RangeSlider from './RangeSlider';
 import Select from './Select';
 import RadioGroup, { RadioOption } from './RadioGroup';
 import { helpTexts } from '../constants/helpTexts';
+import NumField from './NumField';
 
 /** 图案「填充方式」两列选项：模块级常量，保持引用稳定（RadioGroup 已 React.memo）。 */
 const PATTERN_FILL_MODE_OPTIONS: RadioOption[] = [
@@ -1918,8 +1919,7 @@ const rotatePatternPreview = (
                     />
                     <div className="row-start">
                         <div className="num-input-row">
-                            <input
-                                type="number"
+                            <NumField
                                 min="0"
                                 max="360"
                                 value={angle}
@@ -1945,8 +1945,7 @@ const rotatePatternPreview = (
                     />
                     <div className="row-start">
                         <div className="num-input-row">
-                            <input
-                                type="number"
+                            <NumField
                                 min="20"
                                 max="300"
                                 value={scale}

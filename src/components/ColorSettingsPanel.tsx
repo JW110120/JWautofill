@@ -8,6 +8,7 @@ import { calcDragValue } from '../utils/dragSensitivity';
 import RadioGroup, { RadioOption } from './RadioGroup';
 import FormulaToggle from './FormulaToggle';
 import { helpTexts } from '../constants/helpTexts';
+import NumField from './NumField';
 
 /** 「计算方法」两列选项：模块级常量，保持引用稳定（RadioGroup 已 React.memo）。 */
 const CALCULATION_MODE_OPTIONS: RadioOption[] = [
@@ -270,8 +271,7 @@ const ColorSettingsPanel: React.FC<ColorSettingsProps> = ({
                 />
                 <div className="row-start">
                     <div className="num-input-row">
-                        <input
-                            type="number"
+                        <NumField
                             min={min}
                             max={max}
                             value={value || 0}

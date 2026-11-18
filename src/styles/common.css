@@ -166,8 +166,11 @@ html, body {
   user-select: none;
   touch-action: none;
   box-sizing: border-box;
-  /* 轨道两端缩进量，容器可通过覆盖此变量来调整可见轨道宽度 */
-  --rs-track-inset: 6px;
+  /* 轨道两端缩进量，容器可通过覆盖此变量来调整可见轨道宽度。
+     ⚠️ 2026-11-18 用户要求「滑块左右各拓宽 3px」⇒ 6px → 3px。
+        改小的前提是**手柄已改成边对齐**（见 .range-slider-thumb 注释）：
+        以前手柄圆心贴轨道端点、圆周外溢 6px 才需要这么宽的缩进。 */
+  --rs-track-inset: 3px;
 }
 
 /* 通用自定义滑块轨道 */
@@ -196,16 +199,23 @@ html, body {
 
 /* 通用自定义滑块色标
    ⚠️ 2026-10-23 用户要求：手柄统一 var(--primary-color)（取代原先随主题深浅反转的
-      var(--control-handle-color)——该令牌已随本次改造退役，见 theme.ts），与滑块填充、
+       var(--control-handle-color)——该令牌已随本次改造退役，见 theme.ts），与滑块填充、
       开关开启态手柄同一视觉语言；**不加描边**，轮廓靠「实心圆 + 投影」勾出。
-      投影的另一个用处：满量程时手柄压在蓝色填充上（同色），没有投影会糊成一团。 */
+      投影的另一个用处：满量程时手柄压在蓝色填充上（同色），没有投影会糊成一团。
+   ⚠️ 2026-11-18 用户要求改成「边对齐」行程：min 时手柄**左边缘**贴轨道左端、
+      max 时**右边缘**贴轨道右端（原来是圆心贴端点，圆周外溢 6px ⇒ 看起来左间距偏小）。
+      ⇒ 手柄不再吃 `margin-left:-6px`（圆心对齐的写法），改由组件内联给
+        `left: percent%` + `margin-left: -(percent×12/100)px`：
+        percent=0 → 0；50 → 50%−6px；100 → 100%−12px ⇒ 两端恰好边对齐、零像素取整误差。
+      ⛔ 12px 这个尺寸在 RangeSlider.tsx 里有同名常量 THUMB，两处必须同步。 */
 .range-slider-thumb {
   position: absolute;
   top: 50%;
   width: 12px;
   height: 12px;
   margin-top: -6px;
-  margin-left: -6px;
+  /* ⛔ 不要写 margin-left:-6px：那是「圆心贴端点」的旧行程，会让手柄两端外溢 */
+  margin-left: 0;
   border-radius: 50%;
   -webkit-border-radius: 50%;
   background-color: var(--primary-color);
@@ -314,15 +324,26 @@ html, body {
 }
 
 /* 通用数字输入框容器
-   ⚠️ 必须固定宽 34px（= 左右 border 1px + input 32px）：不写 width 会被数字位数撑开，
-      同一列每行宽度不同 ⇒ 后面的 .num-unit 跟着漂移，「单位符号对不齐」。
-      改这一处即覆盖全插件全部调用点。 */
+   ⚠️ 必须固定宽 34px：不写 width 会被数字位数撑开，同一列每行宽度不同 ⇒
+      后面的 .num-unit 跟着漂移，「单位符号对不齐」。改这一处即覆盖全插件全部调用点。
+   ⚠️ 宽度口径（2026-11-18 定案，**别再改**）：34px 总宽 − 左右 border 1px = 32px 内宽；
+      input 左右各 2px padding ⇒ 28px 可用文字宽。实测 SourceHanSansCN 12px 数字
+      一字符 6.59px、句点 3.24px、负号 4.12px ⇒ 最长的常规值 `14.5`/`20.5` = 23.0px、
+      `-20.5` = 27.1px，**都在 28px 内**。此前 34px 会裁掉 `14.5`，是因为当时还是
+      原生 `input[type=number]`，右侧被它自带的上下箭头吃了 ~10px；换成自绘文本框后
+      箭头不存在，34px 足够 ⇒ 不必再加宽（40px 会让个位数看起来右侧空一大截）。
+   ⚠️ 高度 22px + 上下 margin 5px：**视觉盒缩到 22px，占位盒仍是 32px**
+      （22 + 5 + 5 = 32）⇒ 行高、纵向节奏、与滑块的中心对齐全部不变。
+      22px 是按「三位数四边留白相等」算出来的：内宽 32 − `100` 的 19.8px = 12.4px，
+      左右各 6.2px；12px 字号数字的 cap height = 0.733em ≈ 8.8px，
+      故高度 = 8.8 + 2×6.2 ≈ 21.2 ⇒ 取 22px（上下各 6.6px，与左右 6.2px 基本相等）。 */
 .num-input-row {
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  height: 32px;
+  height: 22px;
   width: 34px;          /* = 左右 border 1px + input 32px；固定宽 ⇒ 单位符号纵向对齐 */
+  margin: 5px 0;        /* ⛔ 别删：把占位盒补回 32px，行高与对齐不能变 */
   padding: 0;
   box-sizing: border-box;
   border: 1px solid var(--border-color);
@@ -332,13 +353,22 @@ html, body {
   overflow: hidden;
 }
 
+/* 正在输入（自绘数字框 NumField 聚焦）：外边框变主题色。
+   ⛔ 边框在**容器**上（input 自己无边框，见下面 .num-input-row input 的注释），
+      所以只能由组件给父级挂 `is-focus` 类（不要写 :focus-within，UXP 不支持）。 */
+.num-input-row.is-focus {
+  border-color: var(--primary-color);
+}
+
 /* 通用数字输入框本体：始终在 .num-input-row 裁剪容器内（去边框避免「框里框」）。
-   ⚠️ 宽度填满容器的固定 34px（写 32px 会让数字偏左、右侧留白）。
+   ⚠️ 宽度填满容器的内宽（写死像素会让数字偏左/偏右）。
    ⚠️ 垂直居中只能靠**改 input 盒高**：UXP 原生输入框的文字不从 line-height 居中，
-      而是锚在「原生绘制区上缘」往下画 ⇒ 视觉偏上。height 24→20px 后行容器(32px,
-      align-items:center)给它上下各 6px，盒顶落到 12px，墨迹才回几何中心。
+      而是锚在「原生绘制区上缘」往下画（固定下移 ≈10px）⇒ 墨迹中心 = 盒顶 + 10px。
+      容器高 22px（内高 20px）、input 也是 20px ⇒ 盒顶落在 1px（border）处，
+      墨迹中心 = 11px = 容器几何中心，**正好居中**。
       **统一规律：盒高每减 2px，文字下移 1px**（同步改 line-height）。
-      不要用 padding-top（原生控件绘制区不随内容盒走，实测无效），不要用 line-height。 */
+      不要用 padding-top（原生控件绘制区不随内容盒走，实测无效）。
+   ⚠️ 左右 padding 2px（不是 3px）：给 `-20.5` 这类最长值留出 28px 文字宽（见容器注释）。 */
 .num-input-row input {
   display: flex;
   align-items: center;
@@ -354,7 +384,7 @@ html, body {
   line-height: 20px;
   border: none;
   border-radius: 0;
-  padding: 0 3px;
+  padding: 0 2px;
   margin: 0;
   appearance: none;
   -webkit-appearance: none;
@@ -370,6 +400,86 @@ html, body {
 }
 .num-input-row-wide {
   width: 62px;
+}
+
+/* ⛔ 2026-11-18 第 3 版起，数字框**不存在任何 `<input>`**（显示态、编辑态都是 div，
+   见 components/NumField.tsx 文件头）。原先这里那条
+   `.num-input-row input.num-field { width: 100% }`（压过渐变面板的 60px）随之作废：
+   原生文本框会把文字画到左上、底色溢出盖住容器边框 —— 正是用户第 6 次反馈的两个问题。 */
+
+/* ⛔⛔ 显示态：普通 div，不用 input。
+   为什么（2026-11-18 像素实测）：UXP 里原生 input 的 `text-align: center` **不生效**，
+   文字永远左对齐 —— 40px 容器里 `15` 的左间隙 8px、右间隙 19px，个位数右侧空一大截。
+   换成 div 后居中由 flex 保证（与字体、位数、原生排版全部解耦）：
+     内宽 32px、`100` 的墨迹宽 ≈19.2px ⇒ 左右各 ≈6.4px；
+     高度 22px、12px 数字的 cap height ≈8.8px ⇒ 上下各 ≈6.6px，四边留白基本相等。
+   ⚠️ 高度必须与 input 一致（20px）：编辑态/显示态互换时文字不能跳。 */
+.num-input-row .num-field-view {
+  width: 100%;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  font-size: 12px;
+  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
+  color: var(--text-color);
+  line-height: 20px;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: text;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.num-field-view.is-disabled,
+.row-start.disabled .num-field-view,
+.row-between.disabled .num-field-view {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* —— 编辑态（自绘，见 NumField 文件头「第 3 版」）——
+   为什么不再用 `<input>` 扛编辑：UXP 的 type="text" 是原生 NSTextField 风格绘制，
+   文字锚在绘制区**左上**（不吃 line-height / text-align:center），绘制区连底色都比
+   CSS 盒大，而原生层压在 DOM 之上、`overflow:hidden` 裁不到它 ⇒ 点进去数字跑到左上角、
+   底色溢出去盖住 .num-input-row 的蓝色激活边框（用户 2026-11-18 截图实测）。
+   ⇒ 改成「同一个 div 内分三段渲染：光标前文本 / 光标 / 光标后文本」，
+     居中由外层 flex 保证，光标位置 = 字符串下标，19.5 这种多位值也不会错位。 */
+.num-input-row .num-field-edit {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  /* ⛔ 不许被压缩：内容超宽时要像显示态那样"两侧对称裁切"，
+     若让它 shrink 就会只裁右边（`-20.5` 会缺尾）。 */
+  flex: 0 0 auto;
+}
+
+/* 编辑态文字：字号/字体/行高必须与显示态**逐项一致**（否则点进去会"跳字号"）。 */
+.num-input-row .num-field-text {
+  font-size: 12px;
+  font-family: 'SourceHanSansCN-Normal', Arial, sans-serif;
+  color: var(--text-color);
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+/* 全选高亮（PS 手感：点进数值框即全选，首个按键覆盖）。
+   ⚠️ 文字写死白：与 `.select-opt-sel`（下拉选中项）同款处理 —— 主色蓝是固定中蓝，
+      配白在所有主题下都够对比；用 `--text-color` 在 darkest 下会糊。 */
+.num-input-row .num-field-text.is-selected {
+  background-color: var(--primary-color);
+  color: rgb(255, 255, 255);
+  border-radius: 2px;
+}
+
+/* 光标：1px 竖线，12px 高（≈ 12px 字号的字身高度，比 20px 行盒矮才不会顶满）。
+   ⚠️ 不做闪烁动画：UXP 的 @keyframes 支持不稳定，静止光标同样能指位。 */
+.num-input-row .num-field-caret {
+  width: 1px;
+  height: 12px;
+  flex: 0 0 1px;
+  background-color: var(--text-color);
 }
 
 /* 通用单位符号
@@ -566,7 +676,8 @@ html, body {
   user-select: none;
   touch-action: none;
   box-sizing: border-box;
-  --rs-track-inset: 6px;
+  /* 见 .range-slider 同名变量注释：3px = 原 6px 各向轨道内让出 3px（2026-11-18） */
+  --rs-track-inset: 3px;
   flex: 1 1 auto;
   min-width: 50px;
 }
