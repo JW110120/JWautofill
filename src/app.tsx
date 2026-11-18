@@ -2236,7 +2236,7 @@ class App extends React.Component<AppProps, AppState> {
                 </div>
                 <div className="panel-section">
                     <div className="row-between">
-                        <span className="label-6" title={helpTexts.selectionFill.visibilitySection} onClick={() => this.toggleSectionVisibility('smoothOptions')}>套索选区平滑</span>
+                        <span className="label-6" title={helpTexts.selectionFill.visibilitySection} onClick={() => this.toggleSectionVisibility('smoothOptions')}>套索轨迹平滑</span>
                         <ToggleSwitch checked={this.state.smoothOptionsVisible} onChange={() => this.toggleSectionVisibility('smoothOptions')} title={helpTexts.selectionFill.visibilitySection}  />
                     </div>
                     <div className="row-between">
@@ -4388,8 +4388,8 @@ title={helpTexts.selectionFill.blendMode}>
                         <div className={this.state.isSmoothOptionsExpanded ? 'collapse-icon-expanded' : 'collapse-icon'}>
                             <ExpandIcon expanded={this.state.isSmoothOptionsExpanded} />
                         </div>
-                        <span className="label-6">套索选区平滑</span>
-                        {/* ⛔ 2026-11-16 用户要求：标题从「选区平滑」改为「套索选区平滑」——
+                        <span className="label-6">套索轨迹平滑</span>
+                        {/* ⛔ 2026-11-16 用户要求：标题从「选区平滑」改为「套索轨迹平滑」——
                             这条平滑只作用在**套索类**工具的绘制轨迹上（下方「选区改造」才作用
                             在已生成的掩码上），旧标题容易被理解成「对任何选区都平滑」。
                             ⚠️ 字数从 4 变 6 ⇒ 宽度档必须同步从 label-4(47px) 换到
