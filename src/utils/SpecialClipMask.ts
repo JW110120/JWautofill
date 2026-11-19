@@ -1,5 +1,6 @@
 import { action, app, imaging } from 'photoshop';
 import { BLEND_MODE_CALCULATIONS } from './BlendModeCalculations';
+import { smLog } from './SmDebug';
 
 /**
  * 「特殊剪贴蒙版」—— 渐变 / 图案填充的那个「保留不透明度 / 剪贴蒙版」复选框。
@@ -98,6 +99,11 @@ export function isNonPixelLayerKind(kind?: string | null): boolean {
 /**
  * 尝试用 PS 原生剪贴蒙版（快，且基底可以是文字层 / 智能对象等任意类型）。
  *
+ * ⛔ 必须**回读验证**（2026-11-19 第 16 轮用户实测）：这条命令用的是
+ *    `dialogOptions: 'silent'`，宿主拒绝时**不抛异常**、只返回一个错误描述符 ⇒
+ *    旧写法 `return true` 会把「什么都没做」当成成功，调用方因此跳过像素收窄，
+ *    结果就是「有剪贴箭头、但像素铺满整个选区」（用户报的「没收到约束」）。
+ *
  * @returns true 表示建立成功；false 表示 PS 拒绝了这条命令（典型场景：
  *          目标下方那个图层本身已经是别的图层的剪贴蒙版），调用方应降级。
  */
@@ -114,7 +120,7 @@ export async function tryCreateNativeClippingMask(): Promise<boolean> {
             }],
             { synchronousExecution: true }
         );
-        return true;
+        return await readActiveLayerClippingFlag();
     } catch (e) {
         console.warn(
             '⚠️ 原生「创建剪贴蒙版」不可用（下方图层可能已是剪贴层），降级为像素 alpha 合成:',
@@ -122,6 +128,20 @@ export async function tryCreateNativeClippingMask(): Promise<boolean> {
         );
         return false;
     }
+}
+
+/**
+ * 回读活动图层的 `isClippingMask`。
+ *
+ * ⚠️ DOM 有时滞后一帧（刚下发完命令就立刻读会拿到旧值）⇒ 首次读不到 true 时
+ *    用 `resolveActiveLayerId()` 取一次即时 id 再按 id 查节点重判。
+ */
+async function readActiveLayerClippingFlag(): Promise<boolean> {
+    if (readActiveLayerClipState().isClippingMask) return true;
+    const id = await resolveActiveLayerId();
+    if (!id) return false;
+    const node = findLayerNodeById((app.activeDocument as any)?.layers, id);
+    return !!(node && node.isClippingMask);
 }
 
 /**
@@ -222,6 +242,550 @@ export function readActiveLayerClipState(): ActiveLayerClipState {
         console.warn('⚠️ 读取活动图层剪贴状态失败:', e);
         return { id: null, isClippingMask: false };
     }
+}
+
+/** 相邻（同级）图层信息：只带剪贴判定需要的字段。 */
+export interface NeighborLayerInfo {
+    id: number;
+    isClippingMask: boolean;
+    /** 是否有像素（判据同 `LayerInfoHandler.hasPixels`：像素层 + bounds 非空）。 */
+    hasPixels: boolean;
+    /** `layer.kind` 原样值（`'pixel'` / `'text'` / `'group'` …）。 */
+    kind?: string;
+}
+
+/** 在图层树里找到 `id` 所在的**同级列表**与它的下标（组内图层也能找到）。 */
+function findSiblingList(layers: any, id: number): { list: any; index: number } | null {
+    if (!layers || typeof layers.length !== 'number') return null;
+    for (let i = 0; i < layers.length; i++) {
+        const node: any = layers[i];
+        try {
+            if (node?.id === id) return { list: layers, index: i };
+            const kids = node?.layers;
+            if (kids && kids.length) {
+                const hit = findSiblingList(kids, id);
+                if (hit) return hit;
+            }
+        } catch { /* 单个节点读失败不影响其它节点 */ }
+    }
+    return null;
+}
+
+/**
+ * 读某个图层**紧邻下方**那一层（同级列表里的下一个）。
+ *
+ * ⚠️ UXP 的 `Document.layers[i]` 是**从上往下**排的（`[0]` = 最上层），
+ *    所以「下方」是 `index + 1`，不是 `index - 1`。
+ * ⚠️ 只在**同一级**里找：跨出图层组的那一刻就没有「下方图层」了（返回 null）。
+ */
+export function readLayerBelow(layerId: number): NeighborLayerInfo | null {
+    try {
+        const hit = findSiblingList((app.activeDocument as any)?.layers, layerId);
+        if (!hit) return null;
+        const below: any = hit.list[hit.index + 1];
+        if (!below || typeof below.id !== 'number') return null;
+        // ⚠️ `kind` / `bounds` 都是 DOM 属性读（0 次 IPC），但**必须各自兜住异常**：
+        //    图层组读 `bounds` 会抛 ⇒ 组被误判成「没有内容」，剪贴就跑偏了。
+        let kind: string | undefined;
+        let hasPixels = false;
+        try {
+            kind = below.kind;
+            const bounds = below.bounds;
+            hasPixels = kind === 'pixel' && !!bounds && bounds.width > 0 && bounds.height > 0;
+        } catch { /* 读不到就按「非像素层」处理，由调用方叠加 kind 判断 */ }
+        return { id: below.id, isClippingMask: !!below.isClippingMask, hasPixels, kind };
+    } catch (e) {
+        console.warn(`⚠️ 读取图层 ${layerId} 的下方图层失败:`, e);
+        return null;
+    }
+}
+
+/**
+ * 直接把**活动图层**的剪贴标志置真（DOM 属性写，0 次 IPC）。
+ *
+ * 为什么必须有这条路：PS 的「创建剪贴蒙版」只能指向**紧邻下方且本身不是剪贴层**的层。
+ * 目标层本身是剪贴组内成员时，`groupEvent` 一律被拒 —— 而用户要的是「结果层真的带剪贴箭头」。
+ * UXP 的 `Layer.isClippingMask` 是 **R/W**，直接置真即可把该层并入下方那个剪贴组。
+ *
+ * ⛔⛔ **只允许置真，永不置假**：`isClippingMask = false` 会把这一组里**上方所有**
+ *    剪贴层一起释放（UXP 文档原文：Releasing a clipping mask will also release the
+ *    layers above），那是不可逆的结构破坏（铁律 150）。
+ *
+ * @returns true = 此刻该层确实是剪贴层（含本来就是的情形）
+ * @param expectedId 期望被置真的图层 id（调用方刚从 batchPlay 拿到的即时值）。
+ *        ⚠️ 传了且与 DOM 的活动层不一致时按 id 重新定位 —— 刚建层 / 刚栅格化之后
+ *        `activeLayers[0]` 有概率滞后一帧，照旧按「活动层」写会把别人的剪贴打开。
+ */
+export async function enableActiveLayerClippingMask(expectedId?: number | null): Promise<boolean> {
+    try {
+        const doc: any = app.activeDocument;
+        let layer: any = doc?.activeLayers?.[0];
+        if (expectedId && (!layer || layer.id !== expectedId)) {
+            layer = findLayerNodeById(doc?.layers, expectedId);
+        }
+        if (!layer) return false;
+        if (layer.isClippingMask) return true;
+
+        layer.isClippingMask = true;
+        if (layer.isClippingMask) return true;
+
+        // DOM 偶尔滞后一帧：按 id 重新取一次节点再判
+        const id = typeof layer.id === 'number' ? layer.id : null;
+        const node = id ? findLayerNodeById(doc?.layers, id) : null;
+        return !!(node && node.isClippingMask);
+    } catch (e) {
+        console.warn('⚠️ 直接置「剪贴蒙版」标志被宿主拒绝:', e);
+        return false;
+    }
+}
+
+/**
+ * 「特殊蒙版 + 新建图层」要做的事，被拆成四问：
+ *   ① 谁**承载填充内容**（`resultLayerId`：`null` = 调用方新建一层）；
+ *   ② 谁**构成边界**（`boundaryLayerId`：剪贴指向它、像素按它的 alpha 收窄）；
+ *   ③ 要不要**新建图层**（`reuseTarget`：目标层是空层时直接复用它，不新建）；
+ *   ④ 要不要**填内容**（`shouldFill`：边界层完全没有像素 ⇒ 只建剪贴、不填东西）。
+ *
+ * 规则全部来自用户 2026-11-19 的真机口径（第 16 轮又补了三条边界）：
+ *
+ * | 目标层（激活图层） | 结果层 | 边界 | 填内容 |
+ * |---|---|---|---|
+ * | 有像素 / 非像素层 / 本身是剪贴层 | **新建**一层，落在目标层上方 | 目标层自己 | 是 |
+ * | 空的普通像素层 | **目标层自己**（不新建） | 紧邻下方那层 | 下方有内容才填 |
+ * | 空的普通像素层 + 下方无图层 | 目标层自己 | 无（不剪贴） | 是（普通填充） |
+ *
+ * ⛔⛔ 为什么空目标层必须**复用**而不是新建（用户 2026-11-19 截图实证）：新建的话
+ *    目标层会留成一个**空白层**悬在结果层上方 ⇒ 用户看到「空白图层 + 没约束的剪贴层 +
+ *    下方图层」三个图层，而他只选了一个图层做填充。空层里本来就没有内容可保，直接拿它
+ *    当结果层，图层数才和他心里的一致。
+ *
+ * ⛔ 为什么「下方也没有像素」时仍然建剪贴、但不填：用户口径是「仅仅是上方图层成为
+ *    下方图层的剪贴蒙版，不填充任何内容」。此时若照常填，就得靠「乘一个全 0 的 alpha」
+ *    把它擦掉 —— 那是把一整层的读、算、写白做一遍，而且擦完仍会留下一个
+ *    「有像素壳、视觉全空」的怪层。
+ *
+ * ⚠️ 必须在 `make layer` **之前**调用：建层会把活动目标换人，`layerInfo.layerId`
+ *    随即被覆盖成新层 id，那时再算就没有「目标层」这个概念了。
+ *
+ * ⚠️⚠️ 「目标层有没有内容」不能用 `hasPixels` 一个字段判：它的前提是 `kind === 'pixel'`
+ *    ⇒ 文字 / 智能对象 / 形状 / 图层组**恒为 false**，而它们恰恰是很好的剪贴基底
+ *    （PS 的原生剪贴对任意图层类型都成立）。漏了这一条，在文字层上填充就会被误判成
+ *    「空层」而去剪贴它**下方**那一层 —— 填充会落在文字之外。
+ *
+ * @returns null = 没有可用的目标层 id（调用方按原行为处理）
+ */
+export interface SpecialClipPlan {
+    /** 承载填充内容的图层：`null` = 调用方新建一层，结果层是新建的那层。 */
+    resultLayerId: number | null;
+    /** 边界层（剪贴指向它、像素按它的 alpha 收窄）；`null` = 没有边界（下方无图层）。 */
+    boundaryLayerId: number | null;
+    /** 边界层自己是不是剪贴层（决定原生剪贴是否可行）。 */
+    boundaryIsClipping: boolean;
+    /** 边界层是否有像素（决定要不要做像素收窄；非像素层只能靠剪贴结构裁）。 */
+    boundaryHasPixels: boolean;
+    /** 目标层是空层 ⇒ 直接复用目标层当结果层，**不新建图层**。 */
+    reuseTarget: boolean;
+    /** 是否值得填内容（边界层完全没有像素时为 false）。 */
+    shouldFill: boolean;
+}
+
+/**
+ * 依据**填充前**读到的目标层信息算出剪贴计划（判据见 `SpecialClipPlan` 的表）。
+ */
+export function planSpecialClipBase(target: {
+    layerId?: number | null;
+    hasPixels?: boolean;
+    isClippingMask?: boolean;
+    layerKind?: string | null;
+}): SpecialClipPlan | null {
+    const targetId = typeof target.layerId === 'number' ? target.layerId : null;
+    if (!targetId) return null;
+
+    // ① 有内容（像素层的像素 / 非像素层本身）/ 本身是剪贴层 ⇒ 新建结果层，边界是它自己
+    if (target.hasPixels || target.isClippingMask || isNonPixelLayerKind(target.layerKind)) {
+        return {
+            resultLayerId: null,
+            boundaryLayerId: targetId,
+            boundaryIsClipping: !!target.isClippingMask,
+            boundaryHasPixels: !!target.hasPixels,
+            reuseTarget: false,
+            shouldFill: true,
+        };
+    }
+
+    // ② 空的普通像素层 ⇒ 复用目标层当结果层，边界取紧邻下方那一层
+    const below = readLayerBelow(targetId);
+    if (!below) {
+        /* 下方已经没有图层（目标是同级最后一层）：没有可剪贴的对象 ⇒ 不建剪贴，
+           按普通填充处理（填进这个空层，用户至少能拿到内容）。 */
+        return {
+            resultLayerId: targetId,
+            boundaryLayerId: null,
+            boundaryIsClipping: false,
+            boundaryHasPixels: false,
+            reuseTarget: true,
+            shouldFill: true,
+        };
+    }
+    return {
+        resultLayerId: targetId,
+        boundaryLayerId: below.id,
+        boundaryIsClipping: below.isClippingMask,
+        boundaryHasPixels: below.hasPixels,
+        reuseTarget: true,
+        // 下方是像素空层 ⇒ 没有边界可依，只建剪贴结构、不填内容；
+        // 下方是文字 / 智能对象等非像素层 ⇒ 它本身有内容，正常填（由它裁）。
+        shouldFill: below.hasPixels || isNonPixelLayerKind(below.kind),
+    };
+}
+
+/** 图层此刻是否还存在于当前文档（组内也能找到）。 */
+export function layerExists(layerId: number): boolean {
+    try {
+        return !!findLayerNodeById((app.activeDocument as any)?.layers, layerId);
+    } catch {
+        return false;
+    }
+}
+
+/** 读图层名字（只用于「结果层接管空目标层的名字」，读不到就不改名）。 */
+function readLayerNameById(layerId: number): string | undefined {
+    try {
+        const node = findLayerNodeById((app.activeDocument as any)?.layers, layerId);
+        const name = node?.name;
+        return typeof name === 'string' && name.length > 0 ? name : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * 把图层改成指定名字（失败只告警 —— 改名是锦上添花，不能连累填充）。
+ *
+ * ⚠️ 两级：DOM 直接写（快）→ 失败再用 batchPlay 按 **id** 写。
+ *    内容层刚建好时 DOM 可能还没刷新出这个节点，只走 DOM 会静默失败，
+ *    用户看到的就是「图层 1 变成了 渐变填充 1」。
+ */
+async function renameLayerById(layerId: number, name: string): Promise<boolean> {
+    try {
+        const node: any = findLayerNodeById((app.activeDocument as any)?.layers, layerId);
+        if (node) {
+            node.name = name;
+            if (node.name === name) return true;
+        }
+    } catch (e) {
+        console.warn(`⚠️ 特殊蒙版：结果层改名为「${name}」失败（DOM 路径），改用 batchPlay:`, e);
+    }
+    try {
+        await action.batchPlay(
+            [{
+                _obj: 'set',
+                _target: [{ _ref: 'layer', _id: layerId }],
+                to: { _obj: 'layer', name },
+                _options: { dialogOptions: 'silent' },
+            }],
+            { synchronousExecution: true }
+        );
+        return true;
+    } catch (e) {
+        console.warn(`⚠️ 特殊蒙版：结果层改名为「${name}」失败（不影响填充结果）:`, e);
+        return false;
+    }
+}
+
+/** 等某个图层从 DOM 里消失（删层之后 UXP 的图层树会滞后一帧，最多等 `timeoutMs`）。 */
+async function waitLayerGone(layerId: number, timeoutMs = 400): Promise<boolean> {
+    const step = 40;
+    for (let waited = 0; waited <= timeoutMs; waited += step) {
+        if (!layerExists(layerId)) return true;
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, step));
+    }
+    return !layerExists(layerId);
+}
+
+/** 按 id 读剪贴标志（不依赖选中状态；读不到按 false）。 */
+export function readClippingFlagById(layerId: number): boolean {
+    try {
+        const node = findLayerNodeById((app.activeDocument as any)?.layers, layerId);
+        return !!node?.isClippingMask;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * 某个像素层此刻是否**确实是空的**（没有任何像素）。
+ *
+ * @returns `true` = 空像素层；`false` = 有内容 / 非像素层（**不许当空层删掉**）；
+ *          `null` = 找不到该图层或读不到属性（调用方自行决定，默认保守）。
+ */
+export function isLayerEmptyById(layerId: number): boolean | null {
+    try {
+        const node: any = findLayerNodeById((app.activeDocument as any)?.layers, layerId);
+        if (!node) return null;
+        const kind = node.kind;
+        if (kind !== 'pixel' && kind !== 'background') return false;
+        const b = node.bounds;
+        if (!b) return true;
+        return !(Number(b.width) > 0) || !(Number(b.height) > 0);
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * 把**指定 id 的图层**剪到紧邻下方那一层。
+ *
+ * ⛔ 为什么不能沿用「先单独 select、再单独 groupEvent」（用户 2026-11-19 第 18 轮实测）：
+ *    `select` 是否真的把活动目标换过去**无法保证**（组内图层 / 刚删过层的场合尤其），
+ *    而 `groupEvent` 打的是「当前活动图层」—— 两者之间只要错一步，剪贴就落到别人头上
+ *    （历史事故：原渐变被剪到背景上，不可逆）。所以这里把 `select` 与 `groupEvent`
+ *    **放进同一个 batchPlay 数组**：同一次 IPC 往返内先选后剪，中间没有间隙。
+ *    仍失败才降级成 DOM 置真（同样是 id 寻址，与选中无关）。
+ */
+export async function clipLayerToBelowById(layerId: number): Promise<boolean> {
+    if (readClippingFlagById(layerId)) return true;
+    try {
+        await action.batchPlay(
+            [
+                {
+                    _obj: 'select',
+                    _target: [{ _ref: 'layer', _id: layerId }],
+                    makeVisible: false,
+                    _options: { dialogOptions: 'silent' },
+                },
+                {
+                    _obj: 'groupEvent',
+                    _target: [{ _ref: 'layer', _enum: 'ordinal', _value: 'targetEnum' }],
+                    _options: { dialogOptions: 'silent' },
+                },
+            ],
+            { synchronousExecution: true }
+        );
+    } catch (e) {
+        smLog('剪贴·批量下发异常', String(e));
+    }
+    if (readClippingFlagById(layerId)) return true;
+    return enableActiveLayerClippingMask(layerId);
+}
+
+/**
+ * 「空目标层复用」的结果层交接：**让内容层顶替那个空图层**。
+ *
+ * ## 为什么不能把像素直接写回空目标层（2026-11-19 用户实测）
+ *
+ * 渐变 / 图案的收尾是「建内容层 → 栅格化 → 应用蒙版 → `imaging.putPixels` 写回目标层」。
+ * 目标层若是**空图层**（没有任何像素），这条写回会被宿主拒绝：
+ * 「渐变填充未完成：目标图层拒绝了像素写入…」—— 内容层被撤回、图层一片狼藉，
+ * 而调用方还以为填充成功，接着按「复用目标层」去建剪贴，把箭头建到了别人头上。
+ * 纯色模式不走像素写回（原生 fill 直接落在活动层），所以只有渐变 / 图案会踩到。
+ *
+ * 空图层里本来就没有内容可保，因此这里换个更朴素的做法：
+ *   ① 内容层的像素按**边界层 alpha** 收窄（特殊蒙版的语义，不能省）；
+ *   ② 删掉那个空目标层 —— 内容层因此直接落在边界层正上方；
+ *   ③ 内容层接管目标层的名字（用户看到的仍是「图层 1」，不会觉得图层凭空消失）；
+ *   ④ 建剪贴关系（此刻它下方紧邻的就是边界层，groupEvent 一次到位）。
+ *
+ * ⛔ 只在**删除成功**后才建剪贴：删不掉就保留原结构、不建箭头，
+ *    绝不把剪贴建到一个不确定的邻居上（那正是「原渐变被剪到背景上」的成因）。
+ *
+ * @returns true = 结构已按预期落定（改名 / 剪贴是否成功另算，失败只告警）
+ */
+export interface EmptyTargetReplacement {
+    /** 空的、被复用的目标层（将被内容层顶替）。 */
+    targetLayerId: number;
+    /** 结果层（内容层）。不传则取此刻的活动图层。 */
+    contentLayerId?: number | null;
+    /** 边界层（像素收窄的基准、剪贴指向的对象）；`null` = 下方没有图层。 */
+    boundaryLayerId: number | null;
+    /** 边界层是否有像素（非像素层只能靠剪贴结构裁，不做像素收窄）。 */
+    boundaryHasPixels: boolean;
+}
+
+/**
+ * 把内容层**向下合并**进紧邻下方的空目标层（原生「向下合并」）。
+ *
+ * 为什么这是首选（用户 2026-11-19 第 18 轮）：空图层不能走 `imaging.putPixels`，
+ * 但「合并」是宿主自己的像素搬运 —— 内容层融进目标层后，目标层**id / 名字 / 位置
+ * 全部不变**，图层数也不变，用户看到的仍然是「我选的那个图层被填了」。
+ * 相比之下「删空层 + 结果层接管名字」是三步都可能被宿主拒绝的绕路。
+ *
+ * ⛔ 前提：内容层紧邻下方**就是**目标层（否则合并会吃进别人的图层）。
+ * ⛔ 合并后必须回读：目标层不再为空 ⇒ 才算成功。
+ */
+async function mergeContentIntoEmptyTarget(contentId: number, targetLayerId: number): Promise<boolean> {
+    const below = readLayerBelow(contentId);
+    if (!below || below.id !== targetLayerId) {
+        smLog('交接·⓪合并跳过', { reason: '内容层下方不是目标层', below: below?.id ?? null });
+        return false;
+    }
+    try {
+        await action.batchPlay(
+            [
+                {
+                    _obj: 'select',
+                    _target: [{ _ref: 'layer', _id: contentId }],
+                    makeVisible: false,
+                    _options: { dialogOptions: 'silent' },
+                },
+                { _obj: 'mergeLayersNew', _options: { dialogOptions: 'silent' } },
+            ],
+            { synchronousExecution: true }
+        );
+    } catch (e) {
+        smLog('交接·⓪合并异常', String(e));
+        return false;
+    }
+    /* ⚠️ 判据只看「目标层现在有像素了」。合并后 DOM 有一帧延迟，所以先等一下再读
+       （`contentGone` 常常还是 false：图层树里那个内容层还没消失）。 */
+    await new Promise((r) => setTimeout(r, 120));
+    const targetEmptyNow = isLayerEmptyById(targetLayerId);
+    const targetFilled = targetEmptyNow === false;
+    smLog('交接·⓪合并进空层', {
+        ok: targetFilled,
+        contentGone: !layerExists(contentId),
+        targetEmptyNow,
+    });
+    return targetFilled;
+}
+
+export async function replaceEmptyTargetWithContent(opts: EmptyTargetReplacement): Promise<boolean> {
+    const { targetLayerId, boundaryLayerId, boundaryHasPixels } = opts;
+
+    /* ⓪ 定位结果层：优先用调用方给的「刚栅格化完的活动层 id」；不可信时按 id 自查。 */
+    let contentId: number | null = opts.contentLayerId ?? null;
+    if (!contentId) {
+        const activeId = await resolveActiveLayerId();
+        contentId = activeId && activeId > 0 ? activeId : null;
+    }
+    smLog('交接·开始', {
+        target: targetLayerId,
+        content: contentId,
+        boundary: boundaryLayerId,
+        boundaryHasPixels,
+        targetExists: layerExists(targetLayerId),
+        targetEmpty: isLayerEmptyById(targetLayerId),
+        contentSeenInDom: contentId ? layerExists(contentId) : false,
+        targetName: readLayerNameById(targetLayerId),
+        targetIsClip: readClippingFlagById(targetLayerId),
+    });
+    if (!contentId) {
+        smLog('交接·✗ 拿不到结果层 id，放弃');
+        return false;
+    }
+
+    /* ⚠️ `contentId === targetLayerId` 是**合法**情形，不是错误：宿主建内容层时有可能
+       「就地替换」那个空图层（新层接管旧层的 id 与位置）⇒ 此时目标层已经换人了，
+       没有可删的空层，但收窄 / 剪贴照样要做。旧实现在这里会误判成异常直接退出，
+       结果就是「填充成功、但既没约束也没箭头」。 */
+    const inPlace = contentId === targetLayerId;
+    let targetName = inPlace ? undefined : readLayerNameById(targetLayerId);
+
+    /* ⓪' 首选：内容层向下合并进空目标层（见 mergeContentIntoEmptyTarget）。
+       合并成功 ⇒ 结果层就是用户原来那个图层，后面的「删空层 / 改名」全部不需要。 */
+    let merged = false;
+    if (!inPlace) {
+        merged = await mergeContentIntoEmptyTarget(contentId, targetLayerId);
+        if (merged) contentId = targetLayerId;
+    }
+
+    // ① 像素收窄：先把内容裁到边界层的 alpha 以内（与剪贴结构无关，必须做）。
+    if (boundaryLayerId && boundaryHasPixels) {
+        const narrowed = await multiplyTopAlphaByBase({
+            docId: app.activeDocument.id,
+            baseLayerId: boundaryLayerId,
+            topLayerId: contentId,
+        });
+        smLog('交接·①收窄', { ok: narrowed, boundary: boundaryLayerId, content: contentId });
+        if (!narrowed) {
+            console.warn('⚠️ 特殊蒙版：结果层像素未能按边界层 alpha 收窄（填充结果保持原样）');
+        }
+    } else {
+        smLog('交接·①收窄跳过', { boundaryLayerId, boundaryHasPixels });
+    }
+
+    // ② 空目标层退场（**只在确认它确实没有像素时**才删 —— 宁可多一个空层，也不删用户内容）。
+    //    ⚠️ 只在 ⓪' 合并失败时才走这一步（合并成功的话目标层就是结果层，不能删）。
+    if (!inPlace && !merged) {
+        const empty = isLayerEmptyById(targetLayerId);
+        if (empty === false) {
+            smLog('交接·②跳过删除', '目标层已不是空层（有内容或非像素层）');
+        } else if (empty === null) {
+            /* ⛔ 读不到状态就**不许删**：那一层这时很可能已经被合并进了内容（有像素），
+               删掉就是不可逆的内容丢失。宁可留着它、只做收窄。 */
+            smLog('交接·②跳过删除', '读不到目标层状态，保守不删');
+        } else {
+            let deleted = await deleteLayerById(targetLayerId);
+            if (deleted && layerExists(targetLayerId)) {
+                // 兜底：batchPlay 报成功但层还在 ⇒ 换 DOM 的 remove()
+                try {
+                    const node: any = findLayerNodeById((app.activeDocument as any)?.layers, targetLayerId);
+                    node?.delete?.();
+                } catch (e) {
+                    smLog('交接·②DOM 删层异常', String(e));
+                }
+                deleted = !layerExists(targetLayerId);
+            }
+            smLog('交接·②删空层', {
+                ok: deleted,
+                stillExists: layerExists(targetLayerId),
+                name: targetName,
+            });
+        }
+    }
+
+    // ③ 选中结果层（选不上也**继续** —— 剪贴改走 id 寻址，不再依赖活动图层）。
+    const selected = await selectLayerById(contentId);
+    const activeId = await resolveActiveLayerId();
+    smLog('交接·③选中结果层', { selected, activeId, expect: contentId });
+
+    /* ④ 建立剪贴关系。
+       ⛔ 只在「结果层紧邻下方**就是**边界层」时才建：删空层万一没成功，紧邻下方就是
+          那个空层（alpha 全 0），此时建剪贴会让填充**整个不可见** —— 比没有箭头更糟。
+          这种情况宁可不建，交给 ① 的像素收窄保底。 */
+    if (boundaryLayerId) {
+        /* 删层之后 DOM 会滞后一帧（图层树还挂着已删除的空层）⇒ 先等它消失，
+           再判断「紧邻下方是谁」。不等待的话读到的 below 还是那个空层，剪贴就被跳过了。 */
+        const targetGone = inPlace || merged || await waitLayerGone(targetLayerId, 400);
+        const below = targetGone ? readLayerBelow(contentId) : null;
+        if (!targetGone) {
+            smLog('交接·④剪贴跳过', { reason: '空目标层仍在（删不掉），紧邻下方不是边界层' });
+        } else if (!below) {
+            smLog('交接·④剪贴跳过', '结果层下方没有同级图层');
+        } else if (below.id !== boundaryLayerId) {
+            smLog('交接·④剪贴跳过', {
+                reason: '紧邻下方不是边界层',
+                below: below.id,
+                boundary: boundaryLayerId,
+            });
+        } else {
+            const clipped = await clipLayerToBelowById(contentId);
+            smLog('交接·④剪贴', { ok: clipped, flag: readClippingFlagById(contentId) });
+            if (!clipped) {
+                console.warn(
+                    '⚠️ 特殊蒙版：宿主拒绝为结果层建立剪贴关系（像素已按边界层 alpha 收窄，' +
+                    '可见范围正确，但图层上没有剪贴箭头）'
+                );
+            }
+        }
+    } else {
+        smLog('交接·④剪贴跳过', '没有边界层（目标层下方为空）');
+    }
+
+    /* ⑤ 改名放**最后**：前面任何一步出错都不该让用户看到「图层 1 消失了」
+       （回到最初那个 bug 的观感）。改名失败只告警。 */
+    if (targetName) {
+        const renamed = await renameLayerById(contentId, targetName);
+        smLog('交接·⑤改名', { ok: renamed, name: targetName });
+    }
+
+    smLog('交接·结束', {
+        content: contentId,
+        name: readLayerNameById(contentId),
+        isClip: readClippingFlagById(contentId),
+    });
+    return true;
 }
 
 /** 按图层 ID 删除图层（不依赖「当前活动图层」是谁）。删不掉只告警，不打断填充流程。 */

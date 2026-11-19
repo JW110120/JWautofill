@@ -11,10 +11,10 @@
 
 **校验**：改 CSS 跑 3 个 guard（只扫 `src/styles/*.css`）；类型检查 `npx tsc -p tsconfig.check.json`（⛔ 别用 `tsc --noEmit`）；改 .c 跑 `build.sh`（须沙箱外）零告警 + 导出表 5 项；改面板**别跑 `yarn build`**（那会产出 production 覆盖 `yarn watch` 的 dev 构建）—— watch 会自动重编，再把 `dist/bundle.js` 复制到 `Plug-ins\dist\` 即可。全仓 ~168 条历史错误在 `app.tsx`/`adjustments`/`components`，只看自己碰过的行。
 
-## 铁律 90–154（**全文**见 `refs/ironrules-90-129.md` 与 `refs/ironrules-130-147.md`；本表不重复）
+## 铁律 90–163（**全文**见 `refs/ironrules-90-129.md` 与 `refs/ironrules-130-147.md`；本表不重复）
 
 90–129：`refs/ironrules-90-129.md`（临时模式/吸附/HUD/断流/编码/模态等，逐条一句话）。
-130–154：`refs/ironrules-130-147.md`（快捷键面板/工具键/菜单/样式/追笔/提示；**147 已回退**勿重蹈，148 标准强度线性化；**149–153 填充线**：`Document` 无 `bounds`、剪贴无法单层释放、收尾统一像素写回、**像素读必须按图层 `boundsNoEffects` 再按索引扩充成全文档**、**写回三态 `nothing` 不许降级合并**；**154 特殊蒙版收口到 APP 面板、纯色走原生 `preserveTransparency`**）。
+130–163：`refs/ironrules-130-147.md`（快捷键面板/工具键/菜单/样式/追笔/提示；**147 已回退**勿重蹈，148 标准强度线性化；**149–153 填充线**：`Document` 无 `bounds`、剪贴无法单层释放、收尾统一像素写回、**像素读必须按图层 `boundsNoEffects` 再按索引扩充成全文档**、**写回三态 `nothing` 不许降级合并**；**154 特殊蒙版收口到 APP 面板、纯色走原生 `preserveTransparency`**；**155「选区修正」分区=套索平滑（开关降级到首行、参数随开关渲染）+多边形吸附，divider 与填充选项同源**；**156 描边剪贴组安全：特殊蒙版走像素链、普通描边走 silent merge 三级兜底**；**157 特殊蒙版+新建图层遇剪贴目标 ⇒ `targetIsClipping` 分支做像素收窄（描边自然继承）；清除模式↔特殊蒙版双向互斥**；**158 剪贴结构三级链（read → groupEvent → DOM `isClippingMask=true`）、空目标层改剪贴下方那层、`layers[0]` 是最上层**；**159 特殊蒙版四问模型：空目标层复用不新建、收窄一律做、`groupEvent` 必须回读验证**；**160 「空目标层复用」不许写回空层（`putPixels` 被拒）⇒ `replaceEmptyTargetWithContent`（收窄→删空层→改名→剪贴）；`clipResultLayerToBoundary` 必须 `layerExists` + 回读活动层，绝不把 groupEvent 发到未验证的图层**；**161 当前图案/渐变跨会话持久化：渐变整份存 panel-state（先校验）、图案只存 id+transform（本体在预设文件、延后 1s 恢复），两个选择器按「初始选中」种一次**；**162 空目标层首选「内容层 select+mergeLayersNew 向下合并进空层」（id/名字/位置不变），删层只作降级且 `isLayerEmptyById===null` 一律不删；⛔ 不许用 `layerExists` 当流程门槛（DOM 滞后一帧）；剪贴走 `clipLayerToBelowById` 且只在「紧邻下方就是边界层」时建**；**163 静默失败链必须落地日志：`src/utils/SmDebug.ts` → `PluginData/debug/special-mask.log`**）。
 
 ## 其余铁律（1–89）—— 全文见 `refs/ironrules-1-89.md`
 

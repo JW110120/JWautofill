@@ -7,19 +7,28 @@ import {
     compositeTopIntoBase,
     deleteActiveLayer,
     deleteLayerById,
+    EmptyTargetReplacement,
     isNonPixelLayerKind,
     NON_PIXEL_LAYER_HINT,
     PixelWriteResult,
+    replaceEmptyTargetWithContent,
     resolveActiveLayerId,
     selectFrontLayer,
     selectLayerById,
 } from './SpecialClipMask';
+import { smLog } from './SmDebug';
 
 interface PatternFillOptions {
     opacity: number;
     blendMode: string;
     preserveTransparency: boolean;
     pattern: Pattern;
+    /**
+     * 「特殊蒙版 + 新建图层」撞上**空目标层**时的交接信息（同 `GradientFillOptions`）。
+     * ⛔ 有这个字段就**不能**把图案写回目标层：空图层没有像素，`putPixels` 会被宿主
+     *    拒绝（用户 2026-11-19 实测）。改为让临时图层顶替那个空层。
+     */
+    replaceEmptyTarget?: EmptyTargetReplacement;
 }
 
 // 盖图章模式：图案居中显示，不重复
@@ -949,7 +958,13 @@ export class PatternFill {
             //    PS 会把新建的图层自动塞进那个剪贴组 ⇒ 读它的像素 / 删它都会带裁剪语义，
             //    而纠正手段 `ungroup` 会把目标上方**整组**剪贴一起解除（用户 2026-11-19
             //    实测：一次填充后所有剪贴箭头全没）。放顶层 ⇒ 与剪贴关系彻底解耦。
-            await selectFrontLayer();
+            // ⛔ 空目标层复用这条路上**不能**切到顶层：临时层必须落在空层**正上方**，
+            //    交接（删掉空层）之后它下方紧邻的才是边界层，剪贴才不会建错对象。
+            if (options.replaceEmptyTarget) {
+                await selectLayerById(options.replaceEmptyTarget.targetLayerId);
+            } else {
+                await selectFrontLayer();
+            }
 
             // 新建待处理图层
             await action.batchPlay([createBlankLayer], { dialogOptions: 'dontDisplayDialogs' });
@@ -986,59 +1001,78 @@ export class PatternFill {
                 return;
             }
 
-            const useSpecialClip = !!layerInfo.hasPixels && !!options.preserveTransparency;
-
-            const writeResult: PixelWriteResult = (maskApplied && baseLayerId)
-                ? (useSpecialClip
-                    ? await blendTopIntoBase({
-                        docId: app.activeDocument.id,
-                        baseLayerId,
-                        topLayerId: topId,
-                        opacity: options.opacity,
-                        blendMode: options.blendMode,
-                    })
-                    : await compositeTopIntoBase({
-                        docId: app.activeDocument.id,
-                        baseLayerId,
-                        topLayerId: topId,
-                        opacity: options.opacity,
-                        blendMode: options.blendMode,
-                    }))
-                : 'failed';
-
-            if (writeResult !== 'failed') {
-                // ⚠️ 合成完必须**删除**临时层，不能 mergeLayersNew —— 合并会把两层
-                //    alpha 叠加（128 → 约 191），正是「不改变原有不透明度」要避免的。
-                // ⚠️ `'nothing'`（基底在选区处 alpha 全为 0 ⇒ 本来就不该填）同样只删层：
-                //    降级合并会合到**紧邻的那一层**（往往是最上方的剪贴蒙版），
-                //    表现为「在 alpha=0 的地方也填上了图案」，这是用户实测过的 bug。
-                if (!(await deleteLayerById(topId))) {
-                    await deleteActiveLayer();
-                }
-            } else {
-                // 【写回被拒】像素写回走不通（蒙版没能应用 / 目标锁了「透明像素」/
-                // 背景层或非像素层拒绝写入）。⛔ **不做任何降级合并**：
-                //   `mergeLayersNew` / `groupEvent` 只认**紧邻的那一层**，而临时层此刻
-                //   在文档最顶层，合并会把图案糊到别人的图层上（用户 2026-11-19 实测）。
-                // ⇒ 撤回临时层，让文档回到填充前的样子，然后明确报失败。
-                if (!(await deleteLayerById(topId))) {
-                    await deleteActiveLayer();
-                }
-
-                const reason = !maskApplied
-                    ? '无法把选区应用成图层蒙版'
-                    : !baseLayerId
-                        ? '找不到目标图层'
-                        : '目标图层拒绝了像素写入（可能锁定了「透明像素」，或该图层类型不支持写入）';
-                // 报错前先把手上的图层还给用户（删层会让 PS 自动选中相邻层）
-                if (baseLayerId) await selectLayerById(baseLayerId);
-                await core.showAlert({
-                    message: `图案填充未完成：${reason}。\n临时图层已撤回，原有图层未被改动。`
+            if (options.replaceEmptyTarget) {
+                /* 【特殊蒙版 + 空目标层】临时层顶替那个空层（用户 2026-11-19 实测）：
+                   ⛔ 绝不把图案写回空层（`putPixels` 会被宿主拒绝，弹
+                      「目标图层拒绝了像素写入」并让临时层白白撤回）。
+                   这里改成「按边界层 alpha 收窄 → 删空层 → 改名 → 建剪贴」这一套交接，
+                   临时层就是最终的结果层。 */
+                await replaceEmptyTargetWithContent({
+                    ...options.replaceEmptyTarget,
+                    contentLayerId: topId,
                 });
+                smLog('图案·交接返回', { topId });
+            } else {
+                const useSpecialClip = !!layerInfo.hasPixels && !!options.preserveTransparency;
+
+                const writeResult: PixelWriteResult = (maskApplied && baseLayerId)
+                    ? (useSpecialClip
+                        ? await blendTopIntoBase({
+                            docId: app.activeDocument.id,
+                            baseLayerId,
+                            topLayerId: topId,
+                            opacity: options.opacity,
+                            blendMode: options.blendMode,
+                        })
+                        : await compositeTopIntoBase({
+                            docId: app.activeDocument.id,
+                            baseLayerId,
+                            topLayerId: topId,
+                            opacity: options.opacity,
+                            blendMode: options.blendMode,
+                        }))
+                    : 'failed';
+
+                if (writeResult !== 'failed') {
+                    // ⚠️ 合成完必须**删除**临时层，不能 mergeLayersNew —— 合并会把两层
+                    //    alpha 叠加（128 → 约 191），正是「不改变原有不透明度」要避免的。
+                    // ⚠️ `'nothing'`（基底在选区处 alpha 全为 0 ⇒ 本来就不该填）同样只删层：
+                    //    降级合并会合到**紧邻的那一层**（往往是最上方的剪贴蒙版），
+                    //    表现为「在 alpha=0 的地方也填上了图案」，这是用户实测过的 bug。
+                    if (!(await deleteLayerById(topId))) {
+                        await deleteActiveLayer();
+                    }
+                } else {
+                    // 【写回被拒】像素写回走不通（蒙版没能应用 / 目标锁了「透明像素」/
+                    // 背景层或非像素层拒绝写入）。⛔ **不做任何降级合并**：
+                    //   `mergeLayersNew` / `groupEvent` 只认**紧邻的那一层**，而临时层此刻
+                    //   在文档最顶层，合并会把图案糊到别人的图层上（用户 2026-11-19 实测）。
+                    // ⇒ 撤回临时层，让文档回到填充前的样子，然后明确报失败。
+                    if (!(await deleteLayerById(topId))) {
+                        await deleteActiveLayer();
+                    }
+
+                    const reason = !maskApplied
+                        ? '无法把选区应用成图层蒙版'
+                        : !baseLayerId
+                            ? '找不到目标图层'
+                            : '目标图层拒绝了像素写入（可能锁定了「透明像素」，或该图层类型不支持写入）';
+                    // 报错前先把手上的图层还给用户（删层会让 PS 自动选中相邻层）
+                    if (baseLayerId) await selectLayerById(baseLayerId);
+                    await core.showAlert({
+                        message: `图案填充未完成：${reason}。\n临时图层已撤回，原有图层未被改动。`
+                    });
+                }
             }
 
-            // 收尾：活动目标还给用户原本的图层
-            if (baseLayerId) await selectLayerById(baseLayerId);
+            // 收尾：活动目标还给用户原本的图层。
+            // ⚠️ 空目标层复用这条路里 `baseLayerId` 那个空层已被结果层顶替 ⇒ 选它会失败，
+            //    要选的是接手之后的**结果层**。
+            if (options.replaceEmptyTarget) {
+                await selectLayerById(topId);
+            } else if (baseLayerId) {
+                await selectLayerById(baseLayerId);
+            }
 
 
             // 选中上一个选区，为主面板的清除选区留后路。

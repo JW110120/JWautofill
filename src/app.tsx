@@ -8,12 +8,21 @@ import { DragHandler } from './utils/DragHandler';
 import { FillHandler } from './utils/FillHandler';
 import { LayerInfoHandler, invalidateLayerInfoCache, shouldInvalidateLayerInfo } from './utils/LayerInfoHandler';
 import {
+    clipLayerToBelowById,
+    enableActiveLayerClippingMask,
     isNonPixelLayerKind,
+    layerExists,
     multiplyTopAlphaByBase,
+    planSpecialClipBase,
     readActiveLayerClipState,
+    readClippingFlagById,
+    readLayerBelow,
     resolveActiveLayerId,
+    selectLayerById,
+    SpecialClipPlan,
     tryCreateNativeClippingMask,
 } from './utils/SpecialClipMask';
+import { smLog, smLogSession } from './utils/SmDebug';
 import { ClearHandler } from './utils/ClearHandler';
 import ColorSettingsPanel from './components/ColorSettingsPanel';
 import PatternPicker from './components/PatternPicker';
@@ -145,6 +154,29 @@ const APP_HOTKEY_NOTIFY_TTL_MS = 5000;
  *    的自激循环重新变成风暴。
  */
 const SELECTION_SETTLE_MS = 120;
+
+/**
+ * 「上次选中的图案 / 渐变」恢复的延后时间（毫秒）。
+ *
+ * 为什么要延后：图案预设要把每个图案的 base64 解成 `Uint8Array`（纯 CPU 活儿），
+ * 启动期主线程正忙着挂面板、读文档状态；立刻跑会和首帧抢线程。
+ * 1 秒后 PS 基本空闲，用户此刻也还没画完第一个选区。
+ */
+const PERSISTED_SELECTION_RESTORE_MS = 1000;
+
+/**
+ * 校验存档里的渐变是否还能用（旧存档 / 手改过的文件可能是残缺对象）。
+ *
+ * ⛔ 不能「有值就塞进 state」：`fillGradient` 只判真值，残缺对象会在
+ *    `generateColorStops` 里抛错，表现为「一开面板首次填充就报错」。
+ */
+const isUsableGradient = (value: any): value is Gradient =>
+    !!value
+    && typeof value === 'object'
+    && (value.type === 'linear' || value.type === 'radial')
+    && Array.isArray(value.stops)
+    && value.stops.length > 0
+    && value.stops.every((s: any) => s && typeof s.color === 'string');
 
 /**
  * 「填充模式」三列 radio 的选项表：模块级常量（保持引用稳定，
@@ -1111,6 +1143,14 @@ class App extends React.Component<AppProps, AppState> {
                     ...initialLassoSmoothParams,
                     ...(loaded.appPanel.smoothParams ?? {}),
                 };
+                /* 「清除模式」与「特殊蒙版」**互斥**（同 toggleClearMode / toggleSpecialMask）。
+                   旧存档（或手改过的存档）可能把两个都存成 true —— 那是个不可实现的组合，
+                   恢复时按「清除模式优先」裁掉特殊蒙版，别让面板一打开就是
+                   「清除模式亮着、特殊蒙版亮着却灰着」的矛盾态。 */
+                const mergedClearMode = loaded.appPanel.clearMode ?? this.state.clearMode;
+                const mergedSpecialMask = mergedClearMode
+                    ? false
+                    : (loaded.appPanel.specialMask ?? this.state.specialMask);
                 this.setState({
                     isEnabled: loaded.appPanel.isEnabled ?? this.state.isEnabled,
                     isExpanded: loaded.appPanel.isExpanded ?? this.state.isExpanded,
@@ -1123,8 +1163,8 @@ class App extends React.Component<AppProps, AppState> {
                     createNewLayer: loaded.appPanel.createNewLayer ?? this.state.createNewLayer,
                     // 特殊蒙版：旧存档没有这个字段 ⇒ 回落到默认（关），
                     // 与旧版「图案 / 渐变子面板里的复选框默认不勾」手感一致。
-                    specialMask: loaded.appPanel.specialMask ?? this.state.specialMask,
-                    clearMode: loaded.appPanel.clearMode ?? this.state.clearMode,
+                    specialMask: mergedSpecialMask,
+                    clearMode: mergedClearMode,
                     // 「显示公式」四处独立开关：旧存档无此字段 ⇒ 逐项回落到默认（全关），
                     // 按作用域逐项合并，避免「整体覆盖」把用户已开启的其它处冲掉。
                     formulaVisible: {
@@ -1159,7 +1199,21 @@ class App extends React.Component<AppProps, AppState> {
                     polySnapEnabled: loaded.appPanel.polySnapEnabled ?? this.state.polySnapEnabled,
                     smoothOptionsVisible: loaded.appPanel.smoothOptionsVisible ?? this.state.smoothOptionsVisible,
                     isSmoothOptionsExpanded: loaded.appPanel.isSmoothOptionsExpanded ?? this.state.isSmoothOptionsExpanded,
+                    /* 上次选择 / 调好的渐变：整份对象都存在 panel-state.json 里（只有 stops
+                       数组，体积很小）⇒ 直接恢复，重启 PS 后不必重新挑（用户 2026-11-19 要求）。
+                       ⚠️ 必须校验后再用：残缺对象会让 generateColorStops 抛错。 */
+                    selectedGradient: isUsableGradient(loaded.appPanel.selectedGradient)
+                        ? loaded.appPanel.selectedGradient
+                        : this.state.selectedGradient,
                 });
+                /* 上次选中的**图案**：只存了 id（图案本体带几 MB 像素，不塞存档）⇒
+                   要等预设文件读完才拿得到本体，故延后到空闲再恢复。
+                   ⚠️ 不能等用户打开图案面板才恢复：填充只认 `state.selectedPattern`，
+                      用户不打开面板直接填充会收到「请先选择一个图案预设」。 */
+                this.restorePersistedPattern(
+                    loaded.appPanel.selectedPatternId,
+                    loaded.appPanel.selectedPatternTransform
+                );
                 // ⛔⛔ 2026-10-14（用户报「刚加载插件时 HUD 不显示、平滑不生效，
                 //    反复切换模式/开关拉绳提示才有机会恢复」的机理之一）：
                 //    LassoSmoothing 的模块级 params 在插件重载后是**默认值**，而工具闸门
@@ -1634,10 +1688,16 @@ class App extends React.Component<AppProps, AppState> {
             // 护栏挡掉、纯属冗余；而它经过的那条 cmd=2 路径正是 0x0118
             // 修复的「停摆中拨开关即杀补流」现场 —— 少发一次是一次。
             setPenSmooth(false, this.state.smoothParams);
+            // ⚠️ 2026-11-19：本开关现在**同时决定参数区是否渲染**（见 render 里的
+            //    `{isPenSmoothOn() && (<>…</>)}`）—— 拨一下会整块增删「滤波族三档 +
+            //    参数盒」。UXP 的原生数字输入不随 DOM 增删自动重排，被移除那几行会在
+            //    原位留下「残影数字」⇒ 等布局落定后补一次重排（同 handleSmoothModeChange）。
+            resyncAfterLayout(this.panelRef.current);
             return;
         }
         // 关着 ⇒ 开。未连接时发送必然失败，但意图会被记住并在建连后重放（见上）。
         setPenSmooth(true, this.state.smoothParams);
+        resyncAfterLayout(this.panelRef.current);
     }
 
     /** 模式单选：组件回传的是「原生形状」的事件对象，按 e.target.value 取值。 */
@@ -2252,7 +2312,7 @@ class App extends React.Component<AppProps, AppState> {
                 </div>
                 <div className="panel-section">
                     <div className="row-between">
-                        <span className="label-6" title={helpTexts.selectionFill.visibilitySection} onClick={() => this.toggleSectionVisibility('smoothOptions')}>套索轨迹平滑</span>
+                        <span className="label-4" title={helpTexts.selectionFill.visibilitySection} onClick={() => this.toggleSectionVisibility('smoothOptions')}>选区修正</span>
                         <ToggleSwitch checked={this.state.smoothOptionsVisible} onChange={() => this.toggleSectionVisibility('smoothOptions')} title={helpTexts.selectionFill.visibilitySection}  />
                     </div>
                     <div className="row-between">
@@ -2364,10 +2424,16 @@ class App extends React.Component<AppProps, AppState> {
     }
     
     toggleClearMode() {
-        this.setState(prevState => ({
-            clearMode: !prevState.clearMode,
-            createNewLayer: prevState.clearMode ? prevState.createNewLayer : false // 如果开启清除模式，关闭新建图层模式
-        }));
+        this.setState(prevState => {
+            const next = !prevState.clearMode;
+            return {
+                clearMode: next,
+                // 清除模式与「新建图层」/「特殊蒙版」**互斥**（三者的语义都不兼容）：
+                // 开启清除模式 ⇒ 另外两个一并关掉，避免留下「亮着但被禁用」的矛盾态。
+                createNewLayer: next ? false : prevState.createNewLayer,
+                specialMask: next ? false : prevState.specialMask,
+            };
+        });
     }
 
     /**
@@ -2487,6 +2553,74 @@ class App extends React.Component<AppProps, AppState> {
         this.setState({
             selectedPattern: pattern
         });
+        /* 图案的「当前选择」跨会话记忆（2026-11-19 用户要求：重启 PS 后不用重新挑）。
+           ⛔ 只落盘 **id + 变换参数**：`Pattern.patternRgbData` / `grayData` 是几 MB 的
+              像素数组，塞进 panel-state.json 会让每次落盘都搬运整份数据；本体由
+              `PresetManager.loadPatternPresets()` 从预设文件恢复（见 restorePersistedPattern）。
+           ⚠️ 抖动 300ms：这个回调在拖角度 / 缩放滑块时是按帧触发的。 */
+        if (pattern && pattern.id) {
+            PanelStateManager.update({
+                appPanel: {
+                    selectedPatternId: pattern.id,
+                    selectedPatternTransform: {
+                        angle: pattern.angle ?? 0,
+                        scale: pattern.scale ?? 100,
+                        fillMode: pattern.fillMode === 'tile' ? 'tile' : 'stamp',
+                        rotateAll: pattern.rotateAll !== false,
+                    },
+                },
+            }, { debounceMs: 300 }).catch(e => console.warn('⚠️ 保存当前图案设置失败:', e));
+        }
+    }
+
+    /**
+     * 恢复上次选中的图案预设（跨会话记忆，与 `handlePatternSelect` 的落盘配对）。
+     *
+     * 为什么必须延后：`loadPatternPresets` 要把每个图案的 base64 解码成 `Uint8Array`，
+     * 启动期立刻跑会与首帧 / 文档状态读取抢主线程（见 PERSISTED_SELECTION_RESTORE_MS）。
+     *
+     * ⚠️ 恢复前再看一眼 `selectedPattern`：延后窗口里用户可能已经自己挑了一个，
+     *    那时绝不能把旧图案盖上去。
+     * ⚠️ 预设被删掉（id 找不到）⇒ 静默跳过，不回退到别的图案（用户没选就是没选）。
+     */
+    private restorePersistedPattern(
+        patternId?: string | null,
+        transform?: { angle?: number; scale?: number; fillMode?: 'stamp' | 'tile'; rotateAll?: boolean }
+    ) {
+        if (!patternId) return;
+        setTimeout(() => {
+            void (async () => {
+                try {
+                    if (this.state.selectedPattern) return;
+                    const presets = await PresetManager.loadPatternPresets();
+                    const hit = Array.isArray(presets)
+                        ? presets.find(p => p && p.id === patternId)
+                        : null;
+                    if (!hit || !hit.patternRgbData) {
+                        console.warn('⚠️ 上次选中的图案预设已不存在，跳过恢复:', patternId);
+                        return;
+                    }
+                    const angle = typeof transform?.angle === 'number' ? transform.angle : 0;
+                    const scale = typeof transform?.scale === 'number' ? transform.scale : 100;
+                    this.setState({
+                        selectedPattern: {
+                            ...hit,
+                            angle,
+                            scale,
+                            fillMode: transform?.fillMode === 'tile' ? 'tile' : 'stamp',
+                            rotateAll: transform?.rotateAll !== false,
+                            // 填充链路读的是这两个「当前值」字段（见 PatternFill 的尺寸计算）
+                            components: hit.patternComponents || hit.components || 3,
+                            currentScale: scale,
+                            currentAngle: angle,
+                        },
+                    });
+                    console.log('✅ 已恢复上次选中的图案预设:', hit.name || patternId);
+                } catch (e) {
+                    console.warn('⚠️ 恢复上次选中的图案失败（不影响使用）:', e);
+                }
+            })();
+        }, PERSISTED_SELECTION_RESTORE_MS);
     }
 
     handleGradientSelect(gradient: Gradient | null) {
@@ -2852,7 +2986,15 @@ class App extends React.Component<AppProps, AppState> {
      * 纯色 / 图案 / 渐变三种模式共用这一个开关（2026-11-19 从两个子面板收口过来）。
      */
     toggleSpecialMask() {
-        this.setState(prevState => ({ specialMask: !prevState.specialMask }));
+        this.setState(prevState => {
+            const next = !prevState.specialMask;
+            return {
+                specialMask: next,
+                // 与「清除模式」互斥：清除是减淡/趋白，不是「只落在已有像素上」的上色，
+                // 两者同时为真没有可实现语义 ⇒ 开这个就必须关那个（反之亦然，见 toggleClearMode）。
+                clearMode: next ? false : prevState.clearMode,
+            };
+        });
     }
 
     /**
@@ -2950,15 +3092,56 @@ class App extends React.Component<AppProps, AppState> {
                 return true;
             }
 
-            /* 「特殊蒙版」的**基底图层 id**：新建图层会把活动目标换人，而纯色模式的
-               收尾（把新层剪贴到下方原图层）要用它 ⇒ 必须在 make layer 之前记下。
-               ⚠️ 下文那段 `layerInfo = {...}` 会把 layerId 覆盖成新层 id。 */
-            const specialMaskBaseId = layerInfo.layerId;
+            /* 「特殊蒙版」——2026-11-19 从图案 / 渐变两个子面板收口到本面板的全局开关，
+               三种填充模式共用。语义一句话：**填充只落在当前图层已有像素上，且不改它的 alpha。**
+               ⚠️ 这里要再判一次禁用条件：界面置灰只是提示，state 仍可能被复位/热键改到；
+                  而清除模式 / 快速蒙版 / 图层蒙版 / 单通道下，填充目标根本不是像素图层的像素。
+               ⚠️ 用 fillState 里的值（调用方可能传了一份改写过的 state 副本）。
+               ⚠️ 必须算在 `make layer` **之前**：剪贴计划要用填充前的目标层信息
+                  （建层后 `layerInfo.layerId` 就变成新层了）。 */
+            const specialMaskOn = !!fillState.specialMask && !this.isSpecialMaskDisabled();
+
+            /* 特殊蒙版 + 新建图层 ⇒ 先算出「谁承载内容、谁当边界、要不要新建、要不要填」
+               这四件事（判据表见 SpecialClipMask.planSpecialClipBase）。三种填充模式共用
+               同一份计划，**渐变也算在这里**（它自己建内容层，但边界 / 复用的判据必须同源）。 */
+            const specialClipPlan = (specialMaskOn
+                && this.state.createNewLayer
+                && !layerInfo.isInLayerMask)
+                ? planSpecialClipBase(layerInfo)
+                : null;
+
+            smLogSession('填充', {
+                mode: this.state.fillMode,
+                createNewLayer: this.state.createNewLayer,
+                specialMaskOn,
+                target: {
+                    id: layerInfo.layerId,
+                    kind: layerInfo.layerKind,
+                    hasPixels: layerInfo.hasPixels,
+                    isClip: layerInfo.isClippingMask,
+                    inMask: layerInfo.isInLayerMask,
+                },
+                plan: specialClipPlan,
+            });
+
+            /* 【只建剪贴、不填内容】目标层是空层、它下方那层也没有像素 ⇒ 用户要的是
+               「上方那层变成下方那层的剪贴蒙版，不填任何东西」。这里直接建结构就返回 ——
+               如果照常填再乘一个全 0 的 alpha 擦掉，等于白做一次整层读/算/写，还会留下
+               一个「有像素壳、视觉全空」的怪层。 */
+            if (specialClipPlan && !specialClipPlan.shouldFill) {
+                await this.clipResultLayerToBoundary(specialClipPlan);
+                return true;
+            }
 
             // ⚠️ 图层蒙版下**不得**新建图层：`make layer` 会立刻把活动目标从蒙版通道切到新图层，
             //    紧随的 fill 就落到新图层而不是蒙版（第一类失效的另一半原因）。
             //    与「新建图层」开关在图层蒙版下被禁用的语义一致（见 isCreateNewLayerDisabled）。
-            if (this.state.createNewLayer && this.state.fillMode !== 'gradient' && !layerInfo.isInLayerMask) {
+            // ⛔ `reuseTarget` 时**也不建**：目标层是空的，直接拿它当结果层 —— 否则它会
+            //    变成一个空白层悬在结果层上方（用户 2026-11-19 截图：三层的那个 bug）。
+            if (this.state.createNewLayer
+                && this.state.fillMode !== 'gradient'
+                && !layerInfo.isInLayerMask
+                && !specialClipPlan?.reuseTarget) {
                 await action.batchPlay(
                     [{
                         _obj: "make",
@@ -3006,12 +3189,29 @@ class App extends React.Component<AppProps, AppState> {
 
             const { isBackground, hasTransparencyLocked, hasPixels } = layerInfo;
 
-            /* 「特殊蒙版」——2026-11-19 从图案 / 渐变两个子面板收口到本面板的全局开关，
-               三种填充模式共用。语义一句话：**填充只落在当前图层已有像素上，且不改它的 alpha。**
-               ⚠️ 这里要再判一次禁用条件：界面置灰只是提示，state 仍可能被复位/热键改到；
-                  而清除模式 / 快速蒙版 / 图层蒙版 / 单通道下，填充目标根本不是像素图层的像素。
-               ⚠️ 用 fillState 里的值（调用方可能传了一份改写过的 state 副本）。 */
-            const specialMaskOn = !!fillState.specialMask && !this.isSpecialMaskDisabled();
+            /* 「空目标层复用」：结果层要**顶替**那个空图层（删掉它、接管名字、建剪贴）。
+               ⛔ 为什么不能像纯色那样直接往空层里填：渐变 / 图案的收尾是
+                  「建内容层 → 栅格化 → 应用蒙版 → imaging 写回目标层」，而**空图层**
+                  没有像素，`putPixels` 会被宿主拒绝（用户 2026-11-19 实测：弹
+                  「目标图层拒绝了像素写入」，确定后图层错位）。纯色走原生 fill，
+                  不碰 putPixels，所以不受影响。 */
+            /* ⛔ 这里**不再用 `layerExists(目标层)` 当门槛**（用户 2026-11-19 第 18 轮实测）：
+               那个 id 来自填充前读到的活动图层（此刻必然存在），而 UXP 的 `document.layers`
+               在刚建过层 / 刚删过层之后会**滞后一帧** —— 用它当门槛只会制造假阴性：交接被
+               静默跳过，渐变落成普通「新建图层」⇒ 没收窄、没箭头，正好是用户报的现象。
+               真正的安全闸放在交接函数内部（删空层前会再确认它确实是空层）。 */
+            const emptyTargetPlan = (specialClipPlan
+                && specialClipPlan.reuseTarget
+                && specialClipPlan.resultLayerId != null)
+                ? specialClipPlan
+                : null;
+            const replaceEmptyTarget = emptyTargetPlan
+                ? {
+                    targetLayerId: emptyTargetPlan.resultLayerId as number,
+                    boundaryLayerId: emptyTargetPlan.boundaryLayerId,
+                    boundaryHasPixels: emptyTargetPlan.boundaryHasPixels,
+                }
+                : undefined;
 
             if (this.state.fillMode === 'pattern') {
                 if (this.state.selectedPattern) {
@@ -3021,8 +3221,18 @@ class App extends React.Component<AppProps, AppState> {
                         pattern: this.state.selectedPattern,
                         // ⚠️ 不再读预设里的 preserveTransparency：那个字段只是旧版遗留，
                         //    开关已经收口到 APP 面板，读它会出现「面板上关着、填充却按开执行」。
-                        preserveTransparency: specialMaskOn
+                        preserveTransparency: specialMaskOn,
+                        replaceEmptyTarget
                     }, layerInfo, fillState);
+                    /* 特殊蒙版 + 新建图层（图案）：图案是合成进 layerInfo 指向的那一层的
+                       （新建的那层 / 复用的空目标层），而 PS 只会按「那层撞上的剪贴组」
+                       裁它，不一定是用户要的边界 ⇒ 统一补一次剪贴 + 像素收窄。
+                       ⚠️ 空目标层那条路已在 fillPattern 内部完成交接（删空层 / 改名 / 剪贴），
+                          这里再补一次会把剪贴建到已经换过人的图层上。 */
+                    if (specialClipPlan && !replaceEmptyTarget) {
+                        await this.clipResultLayerToBoundary(specialClipPlan);
+                    }
+                    if (replaceEmptyTarget) invalidateLayerInfoCache();
                     return true;
                 } else {
                     // 缺少图案预设，显示警告并跳过填充
@@ -3035,8 +3245,16 @@ class App extends React.Component<AppProps, AppState> {
                         opacity: this.state.opacity,
                         blendMode: this.state.blendMode,
                         gradient: this.state.selectedGradient,
-                        preserveTransparency: specialMaskOn
+                        preserveTransparency: specialMaskOn,
+                        replaceEmptyTarget
+                        // ⚠️ 空目标层复用 ⇒ 仍然走 `createNewLayer = true`（分支 1）：
+                        //    让渐变层独立存在，再由上面的 replaceEmptyTarget 把它扶正成结果层。
+                        //    ⛔ 不能再传 false 让它写回空层 —— 那正是宿主拒绝写入的那条路。
                     }, layerInfo, fillState, fillState.createNewLayer);
+                    if (specialClipPlan && !replaceEmptyTarget) {
+                        await this.clipResultLayerToBoundary(specialClipPlan);
+                    }
+                    if (replaceEmptyTarget) invalidateLayerInfoCache();
                     return true;
                 } else {
                     // 缺少渐变预设，显示警告并跳过填充
@@ -3102,8 +3320,9 @@ class App extends React.Component<AppProps, AppState> {
                     /* 特殊蒙版（纯色）：等价于 PS 原生「保留透明像素」的填充 ——
                        只改已有像素的 RGB，alpha 一个字节不动。
                        判据与渐变/图案那条 `useSpecialClip = hasPixels && 特殊蒙版` 对齐：
-                         · 空像素图层没有像素可保留 ⇒ 语义上就是普通填充（「新建图层」建出来的
-                           正是这种层，它的剪贴需求由下面那段 clipNewLayerToBase 承担）；
+                         · 空像素图层没有像素可保留 ⇒ 语义上就是普通填充（「新建图层」建出来的、
+                           以及被复用的空目标层都是这种，它们的边界由下面
+                           `clipResultLayerToBoundary` 统一补）；
                          · 背景层没有 alpha，「保留透明像素」在 PS 里本来就是灰的 ⇒ 排除；
                          · 文字 / 智能对象等非像素层不允许保留透明像素 ⇒ 退回普通填充。
                            （渐变/图案那边必须挡非像素层，是因为它们的收尾会 `rasterizeLayer`
@@ -3134,13 +3353,13 @@ class App extends React.Component<AppProps, AppState> {
                     await FillHandler.fillUnlocked(fillOptions, withDeselect);
                 }
 
-                /* 特殊蒙版 + 新建图层（纯色）：新层是空的，「保留透明像素」填不出内容，
-                   所以改成「填完之后把这一层剪贴到下方原图层上」—— 与渐变/图案的同名
-                   分支视觉等价（它们建的是 PS 原生剪贴蒙版，再按需收窄）。
-                   ⚠️ 放进 try 里：剪贴失败不能连累已经成功的填充（fillSelection 的
+                /* 特殊蒙版 + 新建图层（纯色）：结果层是刚建好的新层（或复用的空目标层），
+                   「保留透明像素」在这条路径上填不出内容（新层本来是空的）⇒ 先按普通填充
+                   落内容，再统一做「像素收窄 + 建剪贴结构」。
+                   ⚠️ 放进 try 里：收尾失败不能连累已经成功的填充（fillSelection 的
                       catch 会整段判失败并返回 false）。 */
-                if (specialMaskOn && this.state.createNewLayer && specialMaskBaseId) {
-                    await this.clipNewLayerToBase(specialMaskBaseId);
+                if (specialClipPlan) {
+                    await this.clipResultLayerToBoundary(specialClipPlan);
                 }
                 return true;
             }
@@ -3159,32 +3378,101 @@ class App extends React.Component<AppProps, AppState> {
     }
 
     /**
-     * 纯色「特殊蒙版 + 新建图层」的收尾：把刚填好的新层剪贴到下方原图层上。
+     * 纯色 / 图案 / 渐变「特殊蒙版 + 新建图层」的统一收尾，两件**必须都做**的事：
+     *   ① 把结果层的像素**收窄到边界图层 alpha 以内**（alpha=0 处不留像素）；
+     *   ② 让结果层成为**剪贴蒙版**（结构上带剪贴箭头，指向边界图层）。
      *
-     * 为什么需要这一步：纯色的特殊蒙版走的是 PS 原生「保留透明像素」，而新建图层是**空白**的
-     * ⇒ 一个像素都没有可保留，填出来就是空的。渐变/图案的做法是建内容层后再决定
-     * 「原生剪贴 / 按基底 alpha 收窄」，这里把同一套语义搬过来：
-     *   ① 优先 PS 原生「创建剪贴蒙版」（快、基底可以是文字层/智能对象等任意类型）；
-     *   ② 新层若是被 PS 自动塞进目标的剪贴组（`isClippingMask === true`），本来就已经剪贴了，
-     *      不再重复下发 —— 对已剪贴的层再建剪贴会被宿主拒绝并弹原生报错框；
-     *   ③ 原生被拒（基底本身是别人的剪贴蒙版）时，按基底 alpha 收窄新层的 alpha。
+     * ⛔ 为什么 ① 不能省（用户 2026-11-19 第 16 轮实测）：原生剪贴只是**渲染期**裁剪，
+     *    图层里那些越界的像素**物理上还在** —— 一旦把剪贴释放、或把这一层拿去合成，
+     *    填充就会漫出去。用户的口径是「alpha=0 的地方**不填充像素**」，所以必须真的
+     *    把 alpha 乘掉。② 才是「箭头」，两件事互不替代。
      *
+     * ⛔ 为什么 ② 要走**三级**（同一位用户两轮实测）：基底在剪贴组内最上层时 PS 不会把
+     *    结果层放进同一组（落到组外）；基底本身是剪贴层时 `groupEvent` 又必被拒。
+     *    所以：已是剪贴层 → 原生 groupEvent → 直接写 DOM 剪贴标志（只置真）。
+     *
+     * ⚠️ `plan.reuseTarget` 时结果层是**目标层自己**（空层复用），活动图层未必是它
+     *    （图案 / 渐变收尾都会改选活动层）⇒ 这里必须显式选回去，否则会把剪贴建到别人头上。
      * ⚠️ 失败一律只告警：填充本身已经完成，不能因为这个收尾把整次填充判死。
      */
-    private async clipNewLayerToBase(baseLayerId: number) {
+    private async clipResultLayerToBoundary(plan: SpecialClipPlan) {
         try {
-            const topId = await resolveActiveLayerId();
-            if (!topId || topId === baseLayerId) return;
-            const nativeOk = readActiveLayerClipState().isClippingMask
-                || await tryCreateNativeClippingMask();
-            if (nativeOk) return;
-            await multiplyTopAlphaByBase({
-                docId: app.activeDocument.id,
-                baseLayerId,
-                topLayerId: topId,
+            /* 结果层：复用目标层 ⇒ 先把活动图层切回它；新建的场合就是当前活动层。 */
+            let resultId = await resolveActiveLayerId();
+            if (plan.reuseTarget && plan.resultLayerId) {
+                /* ⛔⛔ 必须**先确认那一层还在**、再确认**选中的确实是它**（用户 2026-11-19 实测）：
+                   旧写法在 `selectLayerById` 失败时直接把 `resultId` 赋成期望值，于是后面
+                   的 `groupEvent` 作用在**当前活动图层**（可能已被删层的邻居顶上来，比如
+                   「原渐变」）身上 —— 表现为「填充失败后，原渐变莫名其妙变成了背景的
+                   剪贴蒙版」。宁可什么都不做，也不能把剪贴建到别人头上。 */
+                if (!layerExists(plan.resultLayerId)) {
+                    console.warn('⚠️ 特殊蒙版：结果层（复用的空目标层）已不存在，跳过剪贴收尾');
+                    return;
+                }
+                if (resultId !== plan.resultLayerId) {
+                    await selectLayerById(plan.resultLayerId);
+                    resultId = await resolveActiveLayerId();
+                }
+                if (resultId !== plan.resultLayerId) {
+                    console.warn(
+                        `⚠️ 特殊蒙版：结果层选回失败（active=${resultId}，期望 ${plan.resultLayerId}），` +
+                        '本次不建剪贴箭头（填充结果保持原样）'
+                    );
+                    return;
+                }
+            }
+            if (!resultId) return;
+
+            const boundaryId = plan.boundaryLayerId;
+            if (!boundaryId || boundaryId === resultId) return;
+
+            /* ① 像素收窄（先做：与剪贴结构无关，剪贴万一失败它仍是唯一的边界保证）。
+               ⚠️ 边界层不是像素层（文字 / 智能对象 / 组）时跳过：`imaging` 读不出它的
+                  alpha，此时「剪贴结构」本身就是边界，收窄反而可能读空后误判失败。 */
+            if (plan.boundaryHasPixels) {
+                const narrowed = await multiplyTopAlphaByBase({
+                    docId: app.activeDocument.id,
+                    baseLayerId: boundaryId,
+                    topLayerId: resultId,
+                });
+                if (!narrowed) {
+                    console.warn('⚠️ 特殊蒙版：结果层像素未能按边界层 alpha 收窄（填充结果保持原样）');
+                }
+            }
+
+            /* ② 坐实剪贴关系。
+               ⚠️ 先读后发：PS 有时已经把结果层塞进同组（此时 `isClippingMask === true`），
+                  对已剪贴的层再发 groupEvent 会把它**释放**掉（这条命令是开关语义）。
+               ⛔ `select` + `groupEvent` 必须**同一次 batchPlay 下发**（`clipLayerToBelowById`）：
+                  分两次发时，「活动目标是否真的换成了结果层」无法保证，剪贴就会落到别人头上。
+               ⛔ 结果层紧邻下方**不是**边界层时（例如空目标层没删掉）**不建剪贴**：
+                  那样会剪到一个 alpha 全 0 的层上，填充整块不可见 —— 比没箭头更糟。 */
+            const below = readLayerBelow(resultId)?.id ?? null;
+            let clipped = readClippingFlagById(resultId) || readActiveLayerClipState().isClippingMask;
+            if (!clipped && below === boundaryId) {
+                clipped = await clipLayerToBelowById(resultId);
+            }
+            /* 边界本身是剪贴层时，上一步必被拒（剪贴不能指向剪贴层）。这时直接写 DOM 的
+               剪贴标志 —— 该层会并入下方那个剪贴组，箭头指向组基底。
+               ⛔ 只置真：置假会释放整组（见 enableActiveLayerClippingMask）。 */
+            if (!clipped) clipped = await enableActiveLayerClippingMask(resultId);
+
+            smLog('收尾·剪贴', {
+                result: resultId,
+                boundary: boundaryId,
+                below,
+                clipped,
+                flag: readClippingFlagById(resultId),
             });
+
+            if (!clipped) {
+                console.warn(
+                    '⚠️ 特殊蒙版：宿主拒绝为结果层建立剪贴关系（像素已按边界层 alpha 收窄，' +
+                    '可见范围正确，但图层上没有剪贴箭头）'
+                );
+            }
         } catch (e) {
-            console.warn('⚠️ 特殊蒙版：新建图层剪贴到下方图层失败（填充结果保持原样）:', e);
+            console.warn('⚠️ 特殊蒙版：结果层剪贴到边界图层失败（填充结果保持原样）:', e);
         }
     }
 
@@ -4466,26 +4754,11 @@ title={helpTexts.selectionFill.blendMode}>
                         </div>
                     </div>
 
-                    {/* 多边形吸附：套索按住 Alt 临时切到多边形套索时的 8 向角度吸附。
-                        ⚠️ 开关只下发**意图**（WS 18924 的 `polySnap` → 原生共享槽 I_POLYSNAP），
-                           吸附、落笔冻结、青色参考线全在 .8li 里执行 —— 面板没有任何可回读的
-                           状态（PS 的临时模式本身也不派发工具变更），所以这里不做「未连接置灰」：
-                           未连接时记下意图，建连后 resendLassoSmoothing 自动重放。
-                        ⚠️ 与「选区平滑」**完全正交**（0x0221 起才真正成立）：平滑关着时
-                           按住 Alt 照样吸、照样有青色参考线。此前 .8li 只在平滑总开关为真时
-                           才调包处理，吸附整条链跟着一起死 —— 现在原生侧独立驱动。
-                        ⚠️ 放在本盒末尾（羽化之下）而不是外置：它描述的是「填充/选区这条
-                           工作流里的一步辅助」，与上两行同属一组；行间距靠 `.row-between`
-                           自带的 10px（块级容器内相邻外边距折叠），与「不透明度↔羽化」一致，
-                           不再需要任何自定义 CSS。 */}
-                    <div className="row-between poly-snap-row" title={helpTexts.selectionFill.polySnapRow}>
-                        <span className="label-5">多边形吸附</span>
-                        <ToggleSwitch
-                            checked={this.state.polySnapEnabled}
-                            onChange={() => this.togglePolySnap()}
-                            title={helpTexts.selectionFill.polySnapSwitch}
-                        />
-                    </div>
+                    {/* 多边形吸附已挪到「选区修正」折叠分区（2026-11-19 用户要求）：
+                        它与「套索轨迹平滑」同属「改写输入轨迹」，不放填充选项。
+                        ⚠️ 本容器（.slider-container）现在只装「不透明度 / 羽化」两行；
+                           若日后再往里加行，注意它是块级容器 ⇒ 相邻 .row-between
+                           的 10px 外边距会折叠成 10px（与现在这两行同档）。 */}
                 </div>
 
                 {/* APP 侧热键的即时反馈（2026-11-16 用户要求：全部放在「选区平滑」折叠分区
@@ -4510,44 +4783,20 @@ title={helpTexts.selectionFill.blendMode}>
                     </div>
                 )}
 
-                {/* 选区平滑：套索**绘制过程中**的实时平滑。
-                    ⚠️ 与下面「选区改造」是两条独立路径：本分区作用在**输入轨迹**
-                        （PS 收到笔坐标之前，由 PS 进程内的 .8li 平滑插件改写包坐标），
-                        选区改造作用在**已生成的选区掩码**。
-                       因此两者可以同时开启，效果是串联的（先平滑轨迹、再改造掩码）。 */}
+                {/* 选区修正：把「套索轨迹平滑」与「多边形吸附」这两项**修正输入轨迹**的开关
+                    收进同一个折叠分区（2026-11-19 用户要求）。
+                    ⚠️ 本分区作用在**输入轨迹**（PS 收到笔坐标之前，由 PS 进程内的 .8li
+                       改写包坐标），与下面「选区改造」（作用在**已生成的选区掩码**）是两条
+                       独立路径，两者可以同时开启，效果是串联的（先平滑轨迹、再改造掩码）。
+                    ⚠️ 分区标题只有 4 字 ⇒ label-4；「套索轨迹平滑」6 字是本分区**内容区第一行**，
+                       用 label-6，开关在行尾（详见下方注释）。 */}
                 {this.state.smoothOptionsVisible && (
                 <div className="collapse-section" data-section-id="smoothOptions">
                     <div className="collapse-header" onClick={this.toggleSmoothOptions} title={helpTexts.selectionFill.smoothOptionsToggle}>
                         <div className={this.state.isSmoothOptionsExpanded ? 'collapse-icon-expanded' : 'collapse-icon'}>
                             <ExpandIcon expanded={this.state.isSmoothOptionsExpanded} />
                         </div>
-                        <span className="label-6">套索轨迹平滑</span>
-                        {/* ⛔ 2026-11-16 用户要求：标题从「选区平滑」改为「套索轨迹平滑」——
-                            这条平滑只作用在**套索类**工具的绘制轨迹上（下方「选区改造」才作用
-                            在已生成的掩码上），旧标题容易被理解成「对任何选区都平滑」。
-                            ⚠️ 字数从 4 变 6 ⇒ 宽度档必须同步从 label-4(47px) 换到
-                               label-6(73px)（铁律 107：按字数选档，否则文字溢出压到右侧开关）。 */}
-                        {/* ⛔⛔ 2026-10-23 用户要求：套索平滑总开关从内容区状态条**挪到分区标题右侧**
-                            —— 常态不再占「状态条 32px + 间距 8px」的一整行，省纵向空间。
-                            开关语义与原状态条里那颗完全一致（下方注释整体搬迁）：
-                            ⛔ 开关**永不禁用**（2026-10-12 真机事故：置灰 = 用户没有任何入口）：
-                                未连接时点击会记下意图，.8li 就绪后自动重放（见 toggleLassoSmooth）。
-                            ⛔⛔ 2026-10-19：checked = 用户意图（isPenSmoothOn），**不看 connected** ——
-                                WS 瞬断时旧判据会把开关翻到关位、状态条闪「服务未启动」，
-                                用户什么都没做开关自己跳（用户报「偶尔自动变成服务未启动状态」）。
-                                现在：开关除非用户点击永不动；连接状态只在**异常时**进 notify-bar（见下）。
-                            ⚠️ 包一层 span 拦截点击冒泡：标题行整体是折叠/展开热区，不拦的话
-                                拨开关会连带折叠分区（CSS 拦不了事件，必须 stopPropagation）。
-                            ⚠️ 状态文案退进 hover 提示（title）：常态不占位，鼠标悬停仍看得到
-                                「生效中 / 关 / 服务未启动…」等全部情形（口径同 smoothStatusText）。 */}
-                        <span className="mask-sync-status-spacer" />
-                        <span className="collapse-header-control" onClick={(e) => e.stopPropagation()}>
-                            <ToggleSwitch
-                                checked={isPenSmoothOn()}
-                                onChange={this.toggleLassoSmooth}
-                                title={helpTexts.selectionFill.smoothEnabledSwitch + '\n当前状态：' + this.smoothStatusText()}
-                            />
-                        </span>
+                        <span className="label-4">选区修正</span>
                     </div>
                     {/* 异常态通知条（2026-10-23 用户要求「当有错误发生，通过notify-bar通知用户」）：
                         只 warn / fail 两档现身 —— 服务没起来 / 版本过旧（橙，要用户去装新 .8li）、
@@ -4570,6 +4819,32 @@ title={helpTexts.selectionFill.blendMode}>
                     )}
                     {this.state.isSmoothOptionsExpanded && (
                     <div className="collapse-content-expanded">
+                        {/* 「套索轨迹平滑」：6 字标题与开关分列两端（2026-11-19 用户要求）。
+                            它原是**整个折叠分区的标题行**，现在降级成分区内容区的第一项，
+                            只负责它自己那套轨迹平滑参数。
+                            ⛔ 开关**永不禁用**（2026-10-12 真机事故：置灰 = 用户没有任何入口）：
+                                未连接时点击会记下意图，.8li 就绪后自动重放（见 toggleLassoSmooth）。
+                            ⛔⛔ checked = 用户意图（isPenSmoothOn），**不看 connected**（2026-10-19）：
+                                WS 瞬断时旧判据会把开关翻到关位、状态条闪「服务未启动」，
+                                用户什么都没做开关自己跳。现在开关除非用户点击永不动；
+                                连接状态只在**异常时**进 notify-bar（见上方错误条）。
+                            ⚠️ 本行不再是折叠热区（header 已上移一层），**不需要**再包
+                               stopPropagation 的 span —— 那些包装是给旧 header 用的。
+                            ⚠️ 状态文案仍退进 hover 提示：常态不占位，悬停看得到全部情形。 */}
+                        <div className="row-between">
+                            <span className="label-6" title={helpTexts.selectionFill.smoothEnabledSwitch}>套索轨迹平滑</span>
+                            <ToggleSwitch
+                                checked={isPenSmoothOn()}
+                                onChange={this.toggleLassoSmooth}
+                                title={helpTexts.selectionFill.smoothEnabledSwitch + '\n当前状态：' + this.smoothStatusText()}
+                            />
+                        </div>
+                        {/* 参数（滤波族三档 + 参数盒）只在开关开启时渲染 ——
+                            关着时这些参数一个都不生效，留着只会让「哪些设置此刻有效」看不出来。
+                            ⚠️ 关闭时参数区整体消失，下方分割线/多边形吸附行**仍在**
+                               （它们是本分区的另一项，与平滑开关无关）。 */}
+                        {isPenSmoothOn() && (
+                        <>
                         {/* 滤波族：三列（与「填充模式」紧凑态的 .radio-trio-group 同款）。
                             ⚠️ `.smooth-mode-trio` 专属类只用于间距定位（见 app.css）：
                                 紧凑模式靠「内容区首元素 margin-top:5px」得到 15px，
@@ -4801,6 +5076,32 @@ title={helpTexts.selectionFill.blendMode}>
                         </div>
                         )}
                         </div>
+                        </>
+                        )}
+                        {/* 参数区与「多边形吸附」之间的分割线：与「填充选项」里的 divider
+                            完全同一份写法（同层同 class ⇒ 同一条 1px 线 + 上下各 10px，
+                            块容器内相邻外边距折叠取 max，不需要任何自定义间距）。
+                            ⚠️ 平滑关着时它仍在：本行属于分区的另一项，不是平滑参数的一部分。 */}
+                        <div className="divider" />
+                        {/* 多边形吸附（2026-11-19 从「填充选项」的滑块容器末尾挪到本分区）：
+                            语义上它和「套索轨迹平滑」是一类 —— 都在改写**输入轨迹**
+                            （平滑改笔坐标、吸附改折线方向），而「填充选项」那一盒子讲的是
+                            「填什么、落在哪」。挪过来后两项同处一个折叠分区，用户不必
+                            在面板上下两处各找一个与套索有关的开关。
+                            开关下发路径不变（WS 18924 的 `polySnap` → 原生共享槽 I_POLYSNAP），
+                            吸附/落笔冻结/青色参考线仍全在 .8li 里执行。
+                            ⚠️ 与「套索轨迹平滑」**完全正交**（0x0221 起才真正成立）：
+                               平滑关着时按住 Alt 照样吸、照样有青色参考线。
+                            ⚠️ 不做「未连接置灰」：未连接时记下意图，建连后
+                               resendLassoSmoothing 自动重放（见 LassoSmoothing）。 */}
+                        <div className="row-between poly-snap-row" title={helpTexts.selectionFill.polySnapRow}>
+                            <span className="label-5">多边形吸附</span>
+                            <ToggleSwitch
+                                checked={this.state.polySnapEnabled}
+                                onChange={() => this.togglePolySnap()}
+                                title={helpTexts.selectionFill.polySnapSwitch}
+                            />
+                        </div>
                         {/* ⛔ 2026-10-17：平滑运行诊断条（notify bar）已删除 —— 排障改看
                            %TEMP%\jwwh-<pid>.log（引擎日志）与 pi8li.log，面板不再常驻诊断条。 */}
                     </div>
@@ -5004,7 +5305,7 @@ title={helpTexts.selectionFill.selectionExpand}>
                                                 title={helpTexts.selectionFill.clearMode}
                                                 onClick={this.state.clearMode ? this.toggleClearSetting : undefined}
                                             >清除模式</span>
-                                            <ToggleSwitch checked={this.state.clearMode} onChange={this.toggleClearMode} disabled={this.state.createNewLayer} title={helpTexts.selectionFill.clearModeSwitch}  />
+                                            <ToggleSwitch checked={this.state.clearMode} onChange={this.toggleClearMode} disabled={this.state.createNewLayer || this.state.specialMask} title={helpTexts.selectionFill.clearModeSwitch}  />
                                         </div>
                                     </div>
                                 </div>
@@ -5136,7 +5437,7 @@ title={helpTexts.selectionFill.clearMode}>
                                                 <SettingsIcon/>
                                             </IconButton>
                                         )}
-                                        <ToggleSwitch checked={this.state.clearMode} onChange={this.toggleClearMode} disabled={this.state.createNewLayer} title={helpTexts.selectionFill.clearModeSwitch}  />
+                                        <ToggleSwitch checked={this.state.clearMode} onChange={this.toggleClearMode} disabled={this.state.createNewLayer || this.state.specialMask} title={helpTexts.selectionFill.clearModeSwitch}  />
                                     </div>
                                 </div>
                             </>
@@ -5176,6 +5477,17 @@ title={helpTexts.selectionFill.clearMode}>
                 onSelect={this.handlePatternSelect} 
                 isClearMode={this.state.clearMode}
                 resetToken={this.state.resetToken}
+                /* 跨会话恢复的「当前图案」：打开面板时把列表里的选中框落回它，
+                   与填充实际使用的是同一个图案（否则面板显示空、填充却用它）。 */
+                initialSelection={this.state.selectedPattern
+                    ? {
+                        id: this.state.selectedPattern.id,
+                        angle: this.state.selectedPattern.angle,
+                        scale: this.state.selectedPattern.scale,
+                        fillMode: this.state.selectedPattern.fillMode,
+                        rotateAll: this.state.selectedPattern.rotateAll,
+                    }
+                    : null}
             />
 
             {/* 渐变选择器 */}
@@ -5185,6 +5497,9 @@ title={helpTexts.selectionFill.clearMode}>
                 onSelect={this.handleGradientSelect} 
                 isClearMode={this.state.clearMode}
                 resetToken={this.state.resetToken}
+                /* 跨会话恢复的「当前渐变」：打开面板时把它回落到选中的预设 / 参数上，
+                   与填充实际使用的渐变保持一致。 */
+                initialGradient={this.state.selectedGradient}
             />
 
                 {/* 描边设置面板 */}

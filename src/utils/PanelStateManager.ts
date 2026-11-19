@@ -27,6 +27,23 @@ export type AppPanelState = {
   compactModes?: CompactModes;
   fillMode?: 'foreground' | 'pattern' | 'gradient';
   selectedGradient?: Gradient | null;
+  /**
+   * 当前选中的**图案预设 id**（跨会话记忆，2026-11-19 用户要求：重启 PS 后
+   * 不用重新挑图案 / 渐变）。
+   *
+   * ⚠️ 只存 id，**不存图案本体**：`Pattern` 里带着几 MB 的 `patternRgbData` /
+   *    `grayData`，塞进 panel-state.json 会让每次落盘都搬运整份像素。
+   *    图案本体由 `PresetManager.loadPatternPresets()` 从预设文件恢复，
+   *    这里只负责「上次选的是哪一个」。
+   */
+  selectedPatternId?: string | null;
+  /** 选中图案时的那套变换参数（与图案 id 配对恢复，缺字段回落默认值）。 */
+  selectedPatternTransform?: {
+    angle?: number;
+    scale?: number;
+    fillMode?: 'stamp' | 'tile';
+    rotateAll?: boolean;
+  };
   /** 套索实时平滑：滤波参数（deepMerge 按字段合并，缺字段回落默认值）。
    *  ⚠️ 开关**不在这里**：它是用户意图（LassoSmoothing 的 penOn，落盘在
    *    settings/smooth-enabled.json），面板经 isPenSmoothOn() 读取。 */

@@ -9,6 +9,16 @@ import {
     BackgroundClearAlgorithm,
     BinaryClearAlgorithm,
 } from './ClearAlgorithms';
+import {
+    compositeTopIntoBase,
+    deleteLayerById,
+    isNonPixelLayerKind,
+    multiplyTopAlphaByBase,
+    readActiveLayerClipState,
+    resolveActiveLayerId,
+    selectLayerById,
+    tryCreateNativeClippingMask,
+} from './SpecialClipMask';
 
 // 计算RGB颜色的灰度值
 function rgbToGray(red: number, green: number, blue: number): number {
@@ -50,6 +60,17 @@ interface LayerInfo {
      * 它同样会让 `clearEnum` 不可用，与背景图层是**同一个根因**，故共用一条分支。
      */
     hasTransparencyLocked?: boolean;
+    /**
+     * 目标图层的 id（`LayerInfoHandler` 一并带出）。
+     * 特殊蒙版描边要把像素合成回**这一层**，而此时活动图层早已换成了描边层。
+     */
+    layerId?: number;
+    /**
+     * 目标图层的种类（`layer.kind`）。
+     * 特殊蒙版描边的像素写回只对像素层成立，非像素层必须退回普通描边
+     * （判据见 `isNonPixelLayerKind`）。
+     */
+    layerKind?: string;
 }
 
 /**
@@ -212,15 +233,235 @@ export async function strokeSelection(state: AppState, layerInfo?: LayerInfo) {
         return;
     }
 
+    /**
+     * 特殊蒙版（保留目标图层已有像素）+ 描边（2026-11-19）。
+     *
+     * ⛔ 不能落进下面那条「新层描边 → 向下合并」的路径，原因有两条（用户实测）：
+     *   ① **目标层是剪贴组内成员**时，`make layer` 建出的描边层会被 PS **自动塞进
+     *      同一剪贴组** ⇒ `mergeLayersNew` 在「组内最上层」被宿主拒绝 ⇒
+     *      弹出「合并图层不可用」，整次描边丢失；
+     *   ② 即使合并成功（组内中下层），描边层被**基底**的 alpha 裁剪，而不是被
+     *      **目标层自身**的 alpha 裁剪 ⇒ 描边出现在目标层 alpha=0 的位置
+     *      （用户原话：「描边会渲染在剪贴蒙版 alpha=0 的地方」）。
+     *  ⇒ 改走像素：描边层 alpha × 目标层 alpha → 合成写回目标层 → 删描边层。
+     *     与渐变 / 图案的 `compositeTopIntoBase` 同一条链路。
+     *
+     * 排除背景层与「锁定透明像素」：
+     *   · 背景层没有 alpha，「保留已有像素」在 PS 里本来就是灰的；
+     *   · 锁定透明的层合并时 PS 会自动裁掉 alpha=0，走像素写回反而绕过了那条保护。
+     *   这两类退回普通描边，行为与改动前一致（本来就是它们最稳的路径）。
+     */
+    if (state.specialMask
+        && !layerInfo?.isBackground
+        && !layerInfo?.hasTransparencyLocked
+        /* ⛔ 非像素层（文字 / 智能对象 / 形状 / 调整层）不能走像素写回：
+              `putPixels` 在这些层上会失败，而普通描边的「新层 + 向下合并」本来能工作
+              （PS 会就地栅格化）⇒ 这类目标必须退回普通描边，否则是功能回归。 */
+        && !isNonPixelLayerKind(layerInfo?.layerKind)) {
+        /**
+         * 收窄 / 写回的**基底**是谁：
+         *   · 「新建图层」关闭 ⇒ 目标图层就是 `layerInfo.layerId`（描边前的活动层）；
+         *   · 「新建图层」开启 ⇒ 填充已经在**新层**上完成，此刻的活动层就是那个新层
+         *     （layerInfo 是填充**之前**读的，它的 layerId 是旧目标层 —— 用它会把描边
+         *      错写回原图层，新层反而没有描边）。
+         * 活动层读 DOM，0 次 IPC。
+         */
+        const baseLayerId = state.createNewLayer
+            ? readActiveLayerClipState().id
+            : layerInfo?.layerId;
+        if (baseLayerId) {
+            await strokeSelectionWithSpecialMask(strokeParams, baseLayerId);
+            return;
+        }
+    }
+
     // 像素图层的普通描边
     await strokeSelectionNormal(strokeParams);
+}
+
+/** 在当前活动图层上执行一次原生描边（形状/宽度/内外由 PS 算，见文件头注释）。 */
+async function strokeOnActiveLayer(strokeParams: any, opacity: number, blendMode: string) {
+    await batchPlay(
+        [{
+            _obj: "stroke",
+            width: {
+                _unit: "pixelsUnit",
+                _value: strokeParams.width
+            },
+            location: {
+                _enum: "strokeLength",
+                _value: strokeParams.position
+            },
+            opacity: {
+                _unit: "percentUnit",
+                _value: opacity
+            },
+            mode: {
+                _enum: "blendMode",
+                _value: blendMode
+            },
+            color: {
+                _obj: "RGBColor",
+                red: strokeParams.color.red,
+                green: strokeParams.color.green,
+                blue: strokeParams.color.blue
+            },
+            _options: {
+                dialogOptions: "dontDisplay"
+            }
+        }],
+        { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }
+    );
+}
+
+/**
+ * 特殊蒙版 + 描边：只落在**目标图层自身已有像素**上，且不改动这些像素的 alpha。
+ *
+ * 链路（三步，全部是像素级，不碰 merge / 剪贴命令）：
+ *   ① 新建描边层 → 原生 `stroke`（不透明度恒 100 / normal：用户那两档在③里应用）；
+ *   ② `multiplyTopAlphaByBase`：把描边层 alpha **乘上目标层自身 alpha**
+ *      ⇒ 目标层 alpha=0 的地方描边被抹掉（正是用户要的「不渲染在 alpha=0 处」）；
+ *   ③ `compositeTopIntoBase`：把描边层**合成进目标层**（alpha 取并集、颜色按用户的
+ *      不透明度与混合模式）⇒ 等价于「描边层向下合并」，但不受剪贴组结构限制。
+ * 收尾删掉描边层并把活动图层还给目标层；任何一步失败都不会留下垃圾图层。
+ *
+ * ⚠️ 目标层是空层（全透明）时②读不到像素 ⇒ 语义上「没有地方可描」，直接收场。
+ *    这不是失败：与「特殊蒙版 + 空层填充」同档（`blendTopIntoBase` 的 'nothing'）。
+ */
+async function strokeSelectionWithSpecialMask(strokeParams: any, baseLayerId: number) {
+    const docId = app.activeDocument.id;
+    let topId: number | null = null;
+    try {
+        // ① 新建描边层（位置与普通描边一致：目标层正上方；若被塞进剪贴组也无妨，
+        //    本路径从头到尾不合并、不建剪贴，最后直接删掉这一层）
+        await batchPlay(
+            [{
+                _obj: "make",
+                _target: [{ _ref: "layer" }],
+                _options: { dialogOptions: "dontDisplay" }
+            }],
+            { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }
+        );
+        topId = await resolveActiveLayerId();
+        if (!topId) throw new Error('拿不到描边层的图层 id');
+
+        await strokeOnActiveLayer(strokeParams, 100, 'normal');
+
+        // ② 按目标层自身 alpha 收窄
+        const narrowed = await multiplyTopAlphaByBase({ docId, baseLayerId, topLayerId: topId });
+        if (!narrowed) {
+            console.log('ℹ️ 特殊蒙版描边：目标图层没有可读像素（空层 / 全透明），本次不留描边');
+            return;
+        }
+
+        // ③ 合成写回目标层
+        const result = await compositeTopIntoBase({
+            docId,
+            baseLayerId,
+            topLayerId: topId,
+            opacity: strokeParams.opacity,
+            blendMode: strokeParams.blendMode,
+        });
+        if (result === 'failed') throw new Error('描边像素写回目标图层失败');
+        console.log(`✅ 特殊蒙版描边完成（${result}）`);
+    } catch (error) {
+        console.error('❌ 特殊蒙版描边失败:', error);
+        throw error;
+    } finally {
+        // 无论成功失败都不留描边层；活动图层还给用户原本那一层。
+        if (topId) await deleteLayerById(topId);
+        await selectLayerById(baseLayerId);
+    }
+}
+
+/**
+ * 描边层 → 目标层的收尾（**剪贴组安全**）。
+ *
+ * 为什么需要这一层：普通描边原来的收尾只有一条 `mergeLayersNew`。目标图层若
+ * **本身是剪贴组内成员**，`make layer` 建出的描边层会被 PS 自动塞进同一剪贴组，于是：
+ *   · 组内**最上层**：向下合并被宿主拒绝 ⇒ 弹出「合并图层不可用」（用户 2026-11-19 实测）；
+ *   · 组内中下层：合并能过，描边被**基底** alpha 裁剪（这是普通描边应有的效果，
+ *     与特殊蒙版无关，保持原样）。
+ *
+ * 失败后的顺序：
+ *   ① 常规 `mergeLayersNew`；
+ *   ② 先补一次原生「创建剪贴蒙版」把关系坐实，再合并（用户实测这一步就能通过）；
+ *   ③ 仍失败 ⇒ 像素合成兜底：并集写回目标层 + 删描边层（与特殊蒙版同一条链路）。
+ *
+ * ⛔ 所有命令一律 `silent`：失败的命令若用 `dontDisplay`，宿主会**弹出原生报错框并
+ *    绕过 JS try/catch**（`SpecialClipMask.ts` 文件头记录过同一个坑）—— 用户看到的
+ *    「合并图层不可用」框就是它。silent 才是真正不吭声的那档，且仍能被 catch 捕获。
+ *
+ * @returns true = 描边已落到目标层；false = 三条通路全失败（调用方只告警）
+ */
+async function mergeStrokeLayerDown(options: {
+    baseLayerId: number | null;
+    topLayerId: number | null;
+    opacity: number;
+    blendMode: string;
+}): Promise<boolean> {
+    const { baseLayerId, topLayerId, opacity, blendMode } = options;
+
+    const tryMerge = async () => {
+        await batchPlay(
+            [{
+                _obj: "mergeLayersNew",
+                _options: { dialogOptions: "silent" }
+            }],
+            { synchronousExecution: true }
+        );
+    };
+
+    // ① 常规路径（绝大多数情况，含普通图层 / 背景层 / 锁定透明的层）
+    try {
+        await tryMerge();
+        return true;
+    } catch (e) {
+        console.warn('⚠️ 描边层向下合并被拒（目标可能是剪贴组成员），尝试补建剪贴关系:', e);
+    }
+
+    // ② 补一次「创建剪贴蒙版」再合并
+    const grouped = await tryCreateNativeClippingMask();
+    if (grouped) {
+        try {
+            await tryMerge();
+            return true;
+        } catch (e) {
+            console.warn('⚠️ 补建剪贴关系后合并仍被拒，改走像素合成:', e);
+        }
+    }
+
+    // ③ 像素兜底
+    if (!baseLayerId || !topLayerId) return false;
+    try {
+        const result = await compositeTopIntoBase({
+            docId: app.activeDocument.id,
+            baseLayerId,
+            topLayerId,
+            opacity,
+            blendMode,
+        });
+        if (result === 'failed') return false;
+        await deleteLayerById(topLayerId);
+        await selectLayerById(baseLayerId);
+        console.log(`✅ 描边层已按像素合成写回目标图层（${result}）`);
+        return true;
+    } catch (e) {
+        console.warn('⚠️ 描边像素合成兜底失败:', e);
+        return false;
+    }
 }
 
 // 1.像素图层的普通描边√
 async function strokeSelectionNormal(strokeParams: any) {
     try {
         console.log('🔄 开始非快速蒙版普通描边，描边参数:', strokeParams);
-        
+
+        // 记录「描边前」的活动层 = 合并目标。
+        // ⚠️ 必须在 `make layer` **之前**读：建层后活动图层就换成描边层了。
+        //    合并失败时的像素兜底要用它（见 mergeStrokeLayerDown）。
+        const baseLayerId = readActiveLayerClipState().id;
+
         // 1. 新建准备描边的空白图层
         await batchPlay(
             [{
@@ -315,15 +556,21 @@ async function strokeSelectionNormal(strokeParams: any) {
         );
         
         // 5. 向下合并图层
-        await batchPlay(
-            [{
-                _obj: "mergeLayersNew",
-                _options: {
-                    dialogOptions: "dontDisplay"
-                }
-            }],
-            { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }
-        );
+        // ⚠️ 不能再直接 `mergeLayersNew`（2026-11-19 用户报「弹『合并图层不可用』」）：
+        //    目标图层若是剪贴组内成员，描边层已被 PS 塞进同一组，直接合并会在
+        //    「组内最上层」被宿主拒绝，且默认档位会**弹出原生报错框**。
+        //    收尾统一交给 mergeStrokeLayerDown（合并 → 补 groupEvent → 像素兜底）。
+        const topId = await resolveActiveLayerId();
+        const merged = await mergeStrokeLayerDown({
+            baseLayerId,
+            topLayerId: topId,
+            opacity: strokeParams.opacity,
+            blendMode: strokeParams.blendMode,
+        });
+        if (!merged) {
+            // 只告警：描边像素已经在屏幕上（描边层留在原地），不能因此把整次操作判失败。
+            console.warn('⚠️ 普通描边：描边层未能并回目标图层，已保留为独立图层');
+        }
 
         // 6. 恢复前景色
         if (savedForegroundColor) {

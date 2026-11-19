@@ -7,16 +7,21 @@ import {
     compositeTopIntoBase,
     deleteActiveLayer,
     deleteLayerById,
+    EmptyTargetReplacement,
+    enableActiveLayerClippingMask,
     isNonPixelLayerKind,
     multiplyTopAlphaByBase,
     NON_PIXEL_LAYER_HINT,
     PixelWriteResult,
+    planSpecialClipBase,
     readActiveLayerClipState,
+    replaceEmptyTargetWithContent,
     resolveActiveLayerId,
     selectFrontLayer,
     selectLayerById,
     tryCreateNativeClippingMask,
 } from './SpecialClipMask';
+import { smLog } from './SmDebug';
 
 
 
@@ -25,6 +30,15 @@ interface GradientFillOptions {
     blendMode: string;
     gradient: Gradient;
     preserveTransparency?: boolean;
+    /**
+     * 「特殊蒙版 + 新建图层」撞上**空目标层**时的交接信息（见
+     * `SpecialClipMask.replaceEmptyTargetWithContent`）。
+     *
+     * ⛔⛔ 有这个字段就**不能**走「像素写回目标层」那条收尾：空图层没有像素，
+     *    `imaging.putPixels` 会被宿主拒绝（用户 2026-11-19 实测弹
+     *    「目标图层拒绝了像素写入」）。这里改成让建好的渐变内容层**顶替**那个空层。
+     */
+    replaceEmptyTarget?: EmptyTargetReplacement;
 }
 
 interface LayerInfo {
@@ -79,6 +93,20 @@ export class GradientFill {
         //    （内容层建在最顶层），`setLayerProperties` 作用的是内容层而不是空图层，
         //    所以「空图层被顶替导致混合模式被盖掉」这件事从根上消失了。
         const baseLayerId = layerInfo.layerId ?? app.activeDocument.activeLayers[0]?.id;
+
+        /* 【新图层模式 + 特殊蒙版】的边界计划要在建渐变层**之前**算好（建层后
+           `layerInfo.layerId` 就不再是目标层了）。判据与纯色 / 图案完全同源
+           （SpecialClipMask.planSpecialClipBase），别在这里另写一套。
+           ⚠️ 空目标层（复用目标层）那条路由上层传 `options.replaceEmptyTarget`
+              显式接管，这里算出来的 `clipPlan` 只用于「目标层有内容 / 本身是剪贴层」。 */
+        const clipPlan = (createNewLayer && options.preserveTransparency)
+            ? planSpecialClipBase({
+                layerId: baseLayerId,
+                hasPixels: layerInfo.hasPixels,
+                isClippingMask: layerInfo.isClippingMask,
+                layerKind: layerInfo.layerKind,
+            })
+            : null;
 
         // 获取选区边界
         const bounds = app.activeDocument.selection.bounds;
@@ -194,9 +222,18 @@ export class GradientFill {
             //    语义，而唯一的解法 `ungroup` 会把**整组**剪贴一起解除（一次填充，三个
             //    箭头全没）。放到最顶层 ⇒ 一出生就没有任何剪贴关系，收尾统一走
             //    「像素写回目标层 → 删掉内容层」，全程不碰 groupEvent / ungroup / 合并。
-            if (!createNewLayer) {
+            if (options.replaceEmptyTarget) {
+                /* 【空目标层复用】把活动目标切到那个空层：内容层必须落在**它正上方**的
+                   紧邻位置 —— 交接时删掉空层，内容层下方紧邻的就是边界层，剪贴一次到位。
+                   ⛔ 这里不能走 `selectFrontLayer()`：内容层若建在文档最顶层，删掉空层的
+                      那一刻它下面紧邻的是「原来最上层那个图层」，剪贴就会建错对象。 */
+                await selectLayerById(options.replaceEmptyTarget.targetLayerId);
+            } else if (!createNewLayer) {
                 await selectFrontLayer();
             }
+            /* ⚠️ 这里原本还有一条「目标层没像素 ⇒ 先把活动目标挪到紧邻下方那层，渐变层建在
+               两者之间」的支路（`clipPlan.insertBelow`）。现在由 `replaceEmptyTarget`
+               （空目标层交接）承担：内容层建在空层**正上方**，交接时把空层删掉。 */
 
             await action.batchPlay([createGradientLayer], { dialogOptions: 'dontDisplayDialogs' });
             await action.batchPlay([setLayerProperties], { dialogOptions: 'dontDisplayDialogs' });
@@ -208,21 +245,54 @@ export class GradientFill {
                 await action.batchPlay([rasterizeLayer], { dialogOptions: 'dontDisplayDialogs' });
                 await action.batchPlay([applyMask], { dialogOptions: 'dontDisplayDialogs' });
 
-                if (options.preserveTransparency) {
-                    // 原生剪贴最快、且基底可以是文字层 / 智能对象等任意类型；
-                    // 只有「基底本身已经是别的图层的剪贴蒙版」时 PS 才拒绝 ⇒ 降级为 alpha 相乘。
-                    // ⚠️ 若建好就已经是剪贴层（PS 自动塞进目标的剪贴组），别再 groupEvent
-                    //    一次 —— 对已剪贴的图层再建剪贴会被拒（并弹出原生报错框）。
-                    const nativeOk = readActiveLayerClipState().isClippingMask
-                        || await tryCreateNativeClippingMask();
-                    if (!nativeOk) {
-                        // ⚠️ 栅格化有可能换掉图层 id ⇒ 用**此刻**的活动图层，
-                        //    别拿创建前那个 id 去读像素（读不到就静默白跑）。
-                        const topId = await resolveActiveLayerId();
-                        if (baseLayerId && topId) {
+                if (options.replaceEmptyTarget) {
+                    /* 【特殊蒙版 + 空目标层】内容层顶替那个空层（用户 2026-11-19 实测）：
+                       ⛔ 绝不把像素写回空层（`putPixels` 会被宿主拒绝，见
+                          `EmptyTargetReplacement` 的注释）；这里直接做
+                          「收窄 → 删空层 → 改名 → 建剪贴」这一套交接。 */
+                    const contentId = await resolveActiveLayerId();
+                    smLog('渐变·交接前', {
+                        contentId,
+                        baseLayerId,
+                        replaceEmptyTarget: options.replaceEmptyTarget,
+                        preserve: !!options.preserveTransparency,
+                    });
+                    const ok = await replaceEmptyTargetWithContent({
+                        ...options.replaceEmptyTarget,
+                        contentLayerId: contentId,
+                    });
+                    smLog('渐变·交接返回', ok);
+                } else if (options.preserveTransparency) {
+                    // ⚠️⚠️ 「建立剪贴关系」和「按基底自身 alpha 收窄」是**两件事**，都得做：
+                    //    · 目标层本身是剪贴层时，原生剪贴只能让它被**组基底**裁，组基底 ≠
+                    //      目标层 ⇒ 内容会渲染在目标层 alpha=0 的位置；
+                    //    · 目标层在剪贴组内**最上层**时，PS 并不保证把新建层自动放进同组
+                    //      （实测它会落到组外）⇒ 不能因为「基底是剪贴层」就跳过建剪贴，
+                    //      否则收尾后图层上没有剪贴箭头（用户 2026-11-19 实测）。
+                    //    所以：① 先争取剪贴关系（已在组内则只读判据，不重复下发）；
+                    //          groupEvent 被拒时直接写 DOM 的剪贴标志（只置真）；
+                    //         ② 剪贴指向的是组基底 / ① 失败 ⇒ 再做一次像素收窄。
+                    let clipped = readActiveLayerClipState().isClippingMask;
+                    if (!clipped) clipped = await tryCreateNativeClippingMask();
+
+                    // ⚠️ 栅格化有可能换掉图层 id ⇒ 收窄 / 写剪贴标志都用**此刻**的活动图层
+                    //    （batchPlay 的即时值），别拿创建前那个 id（读不到就静默白跑）。
+                    let topId: number | null = null;
+                    if (!clipped) {
+                        topId = await resolveActiveLayerId();
+                        clipped = await enableActiveLayerClippingMask(topId);
+                    }
+
+                    /* ⛔ 像素收窄**一律要做**（用户 2026-11-19 第 16 轮实测）：原生剪贴只是
+                       渲染期裁剪，越界的像素物理上还在 ⇒ 只建箭头会出现「有剪贴符号、
+                       但像素铺满整个选区」。边界层是像素层才收窄（非像素层只能靠箭头裁）。 */
+                    const boundaryId = clipPlan?.boundaryLayerId ?? baseLayerId;
+                    if (boundaryId && (clipPlan ? clipPlan.boundaryHasPixels : true)) {
+                        if (!topId) topId = await resolveActiveLayerId();
+                        if (topId && topId !== boundaryId) {
                             await multiplyTopAlphaByBase({
                                 docId: app.activeDocument.id,
-                                baseLayerId,
+                                baseLayerId: boundaryId,
                                 topLayerId: topId,
                             });
                         }

@@ -33,6 +33,20 @@ interface PatternPickerProps {
      * 首次挂载为 0，用 prevResetTokenRef 跳过第一次。
      */
     resetToken?: number;
+    /**
+     * 父面板持有的「当前图案」（跨会话恢复而来，见 app.tsx restorePersistedPattern）。
+     *
+     * 本面板的选中态是自己的 state（`selectedPattern` = 图案 id），父面板的值在
+     * 面板关闭/重开之间不会自动回流 ⇒ 首次打开面板时用它把选中框落回同一个图案。
+     * ⚠️ 只在「本面板还没有任何选中」时种一次（种完置 ref），之后一律以面板操作为准。
+     */
+    initialSelection?: {
+        id: string;
+        angle?: number;
+        scale?: number;
+        fillMode?: 'stamp' | 'tile';
+        rotateAll?: boolean;
+    } | null;
 }
 
 // 预览缩放档位 + 其下拉选项：模块级常量，保持引用稳定。
@@ -169,7 +183,8 @@ const rotatePatternPreview = (
         onClose,
         onSelect,
         isClearMode = false,
-        resetToken = 0
+        resetToken = 0,
+        initialSelection = null
     }) => {
     const [patterns, setPatterns] = useState<Pattern[]>([]);
     const [selectedPattern, setSelectedPattern] = useState<string | null>(null);
@@ -348,6 +363,28 @@ const rotatePatternPreview = (
             }
         })();
     }, [isOpen]);
+
+    /* 跨会话恢复的「当前图案」：把父面板的选中项落到本面板的列表选中态上。
+       ⚠️ 仅首次（initialSeedDoneRef）：之后用户的点选/取消就是事实，
+          不能因为父面板还留着旧值又把选中框画回去。
+       ⚠️ 必须等预设读进 `patterns` 再种：列表里没有这个 id 时置上选中态，
+          下面那条「选中 → onSelect」的 effect 找不到数据，等于白种。 */
+    const initialSeedDoneRef = useRef(false);
+    useEffect(() => {
+        if (!isOpen || initialSeedDoneRef.current) return;
+        const id = initialSelection?.id;
+        if (!id || patterns.length === 0) return;
+        initialSeedDoneRef.current = true;
+        // 预设已被删掉 ⇒ 不种（保留空选中态，由用户自己挑）
+        if (!patterns.some(p => p && p.id === id)) return;
+        setSelectedPattern(id);
+        if (typeof initialSelection?.angle === 'number') setAngle(initialSelection.angle);
+        if (typeof initialSelection?.scale === 'number') setScale(initialSelection.scale);
+        if (initialSelection?.fillMode === 'tile' || initialSelection?.fillMode === 'stamp') {
+            setFillMode(initialSelection.fillMode);
+        }
+        if (typeof initialSelection?.rotateAll === 'boolean') setRotateAll(initialSelection.rotateAll);
+    }, [isOpen, patterns, initialSelection]);
 
     // 当图案预设变更时，持久化保存（仅保存可序列化字段，加入500ms防抖）
     useEffect(() => {

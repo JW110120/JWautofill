@@ -26,6 +26,14 @@ interface GradientPickerProps {
      * 首次挂载为 0，用 prevResetTokenRef 跳过第一次。
      */
     resetToken?: number;
+    /**
+     * 父面板持有的「当前渐变」（跨会话恢复而来，见 app.tsx 的 selectedGradient 恢复）。
+     *
+     * 本面板的类型/角度/反向/色标全是自己的 state，父面板的值不会自动回流 ⇒
+     * 首次打开面板时用它把界面落回同一个渐变（否则面板显示默认黑白、填充却用旧的）。
+     * ⚠️ 只在「本面板还没有选中任何预设」时种一次（种完置 ref），之后以面板操作为准。
+     */
+    initialGradient?: (Gradient & { id?: string }) | null;
 }
 
 /**
@@ -365,7 +373,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     onClose,
     onSelect,
     isClearMode = false,
-    resetToken = 0
+    resetToken = 0,
+    initialGradient = null
 }) => {
     const [presets, setPresets] = useState<(Gradient & { id?: string; name?: string; preview?: string })[]>([]);
     const [selectedPreset, setSelectedPreset] = useState<number | null>(null);
@@ -439,6 +448,29 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             }
         })();
     }, [isOpen]);
+
+    /* 跨会话恢复的「当前渐变」：把父面板的选中项铺到本面板的类型 / 角度 / 反向 / 色标上。
+       ⚠️ 仅首次（initialSeedDoneRef）：之后用户在本面板的任何操作就是事实。
+       ⚠️ 必须等预设读进 `presets` 再种：要按 id 找到对应的预设、把选中框也落上去。 */
+    const initialSeedDoneRef = useRef(false);
+    useEffect(() => {
+        if (!isOpen || initialSeedDoneRef.current) return;
+        if (!initialGradient || !Array.isArray(initialGradient.stops) || initialGradient.stops.length === 0) return;
+        initialSeedDoneRef.current = true;
+        const id = (initialGradient as any).id;
+        const index = id ? presets.findIndex(p => (p as any)?.id === id) : -1;
+        if (index >= 0) setSelectedPreset(index);
+        setGradientType(initialGradient.type || 'linear');
+        setAngle(initialGradient.angle || 0);
+        setReverse(!!initialGradient.reverse);
+        setStops(initialGradient.stops.map((stop, i) => ({
+            ...stop,
+            colorPosition: stop.colorPosition !== undefined ? stop.colorPosition : stop.position,
+            opacityPosition: stop.opacityPosition !== undefined ? stop.opacityPosition : stop.position,
+            midpoint: stop.midpoint !== undefined ? stop.midpoint : (i < initialGradient.stops.length - 1 ? 50 : undefined),
+            opacityMidpoint: stop.opacityMidpoint !== undefined ? stop.opacityMidpoint : (i < initialGradient.stops.length - 1 ? 50 : undefined),
+        })));
+    }, [isOpen, presets, initialGradient]);
 
     // 当渐变预设变更时，防抖持久化保存（跳过初次加载期间）
     useEffect(() => {
@@ -1778,16 +1810,20 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
 
                 <div className="divider"></div>
 
-                {/* 角度行始终渲染：径向模式下仅置为禁用态（而非隐藏），
-                    这样 .gradient-settings-area 的容器高度在两种模式下保持一致，
-                    不会再出现切换径向时下拉相对容器上移/间距变化的观感。 */}
-                <div className={gradientType === 'radial' ? 'row-between disabled' : 'row-between'}>
-                    {/* 光标：常态 ew-resize 由 .label-drag 给出；径向禁用态的
-                        not-allowed 由 .row-between disabled label 覆盖（特异性更高） */}
+                {/* 角度行**仅线性渐变**渲染（2026-11-19 用户要求：径向没有角度概念）。
+                    ⚠️ 隐藏时必须连它**下方那条 divider** 一起隐藏：那条线的唯一职责是
+                       把「角度」与「反向」分开，角度没了就只剩一条悬空的线 —— 用户报的
+                       「径向多一根分割线」正是它。上方那条 divider（样式 ↔ 角度）保留，
+                       于是径向模式下是「样式 ─ divider ─ 反向」，与线性模式的节奏一致。
+                    ⚠️ 旧版这里是「径向时置灰不隐藏」，理由是保持容器高度稳定；
+                       现在改成隐藏，切换径向时本盒高度会减少一行 —— 用户明确要求优先。 */}
+                {gradientType !== 'radial' && (
+                <>
+                <div className="row-between">
                     <label
                         className="label-drag label-2"
                         title={helpTexts.gradient.adjustAngle}
-                        onMouseDown={gradientType === 'radial' ? undefined : handleAngleMouseDown}
+                        onMouseDown={handleAngleMouseDown}
                     >角度</label>
                     <RangeSlider
                         min={0}
@@ -1796,7 +1832,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         value={angle}
                         className="slider-track"
                         title={helpTexts.gradient.adjustAngle}
-                        disabled={gradientType === 'radial'}
                         onChange={(v) => setAngle(v)}
                     />
                     <div className="row-start">
@@ -1805,7 +1840,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                                 min="0"
                                 max="360"
                                 value={angle}
-                                disabled={gradientType === 'radial'}
                                 title={helpTexts.gradient.adjustAngle}
                                 onChange={(e) => setAngle(Number(e.target.value))}
                             />
@@ -1815,6 +1849,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 </div>
 
                 <div className="divider"></div>
+                </>
+                )}
 
                 <div className="row-between row-grid row-grid-flush">
                     <div className="grid-cell">

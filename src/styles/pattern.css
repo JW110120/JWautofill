@@ -104,3 +104,16 @@
 .border-panel-section > .radio-pair-group {
   margin: 5px 0;
 }
+
+/* 「角度 ↔ 缩放」两行之间的行距：与 APP 面板「不透明度 ↔ 羽化」严格同档（10px）。
+   ⚠️ 成因（本仓最常见的一类「间距偏大」）：APP 那两行在 .slider-container 里，
+      那是**块级**容器 ⇒ 相邻 .row-between 的 margin-bottom(10) 与 margin-top(10)
+      **折叠取 max** = 10px；而本盒是 .border-panel-section（flex 列容器）⇒
+      子项外边距**不折叠** ⇒ 10 + 10 = 20px，正好比 APP 面板松一倍。
+   ⚠️ 只把**后一行**的 margin-top 归零：上一行（角度）的 margin-bottom 保留，
+      于是它与上方缩略图区、与下方 divider 的距离全部维持原值，只有行间收紧。
+   ⚠️ 作用域挂 .subpanel-pattern：裸 `.border-panel-section > .row-between + .row-between`
+      会连渐变面板（样式/角度/反向）与平滑参数盒一起改掉。 */
+#app .subpanel-pattern .border-panel-section > .row-between + .row-between {
+  margin-top: 0;
+}
