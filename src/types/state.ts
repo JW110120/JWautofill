@@ -156,6 +156,18 @@ export interface AppState {
     selectionType: string;
     isExpanded: boolean;
     createNewLayer: boolean;  // 添加新状态
+    /**
+     * 「特殊蒙版」：填充只落在当前图层**已有像素**的范围内，且不改动这些像素的 alpha。
+     *
+     * ⚠️ 2026-11-19 收口：它原本是图案 / 渐变两个子面板里各自的一个复选框
+     *    （`Pattern.preserveTransparency` / `Gradient.preserveTransparency`），
+     *    只对「当次选中的预设」生效、且每次进面板都得重新勾。
+     *    现在提到 APP 面板「填充选项 · 新建图层」下方，成为**填充层面**的全局开关：
+     *    三种填充模式（纯色 / 图案 / 渐变）共用同一个值，随面板状态持久化。
+     * ⚠️ 必须是 AppState 字段（不能只写实例字段）：开关的变化要触发重渲染，
+     *    填充发生时由 `fillSelection` 直接读它决定走哪条分支。
+     */
+    specialMask: boolean;
     clearMode: boolean;  // 添加清除模式状态
     /**
      * 清除算法的用户选择（三组，见 utils/ClearAlgorithms.ts）。
@@ -292,6 +304,7 @@ export const initialState: AppState = {
     selectionType: 'normal',
     isExpanded: true,
     createNewLayer: false,    // 添加初始值
+    specialMask: false,    // 特殊蒙版默认关：与旧版「子面板复选框默认不勾」保持一致
     clearMode: false,    // 添加初始值
     // 清除算法默认值 = 重构前的既有行为，保证老用户升级后手感不变：
     //   背景图层 → whiten    （原 levels 提亮，白背景橡皮擦）

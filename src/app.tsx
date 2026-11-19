@@ -7,7 +7,13 @@ import { AppState, initialState, Gradient, CompactModes, CompactScope, initialCo
 import { DragHandler } from './utils/DragHandler';
 import { FillHandler } from './utils/FillHandler';
 import { LayerInfoHandler, invalidateLayerInfoCache, shouldInvalidateLayerInfo } from './utils/LayerInfoHandler';
-import { readActiveLayerClipState } from './utils/SpecialClipMask';
+import {
+    isNonPixelLayerKind,
+    multiplyTopAlphaByBase,
+    readActiveLayerClipState,
+    resolveActiveLayerId,
+    tryCreateNativeClippingMask,
+} from './utils/SpecialClipMask';
 import { ClearHandler } from './utils/ClearHandler';
 import ColorSettingsPanel from './components/ColorSettingsPanel';
 import PatternPicker from './components/PatternPicker';
@@ -670,6 +676,7 @@ class App extends React.Component<AppProps, AppState> {
         this.handleMouseMove = this.handleMouseMove.bind(this);
         this.handleMouseUp = this.handleMouseUp.bind(this);
         this.toggleCreateNewLayer = this.toggleCreateNewLayer.bind(this);
+        this.toggleSpecialMask = this.toggleSpecialMask.bind(this);
         this.toggleClearMode = this.toggleClearMode.bind(this);
         this.toggleCompactMode = this.toggleCompactMode.bind(this);
         this.toggleColorSettings = this.toggleColorSettings.bind(this);
@@ -955,6 +962,8 @@ class App extends React.Component<AppProps, AppState> {
                     autoOffOnOtherTool: this.state.autoOffOnOtherTool,
                     strokeEnabled: this.state.strokeEnabled,
                     createNewLayer: this.state.createNewLayer,
+                    // 特殊蒙版同属「用户选项」（开 / 关是习惯，不是数值参数）：复位时保持。
+                    specialMask: this.state.specialMask,
                     // 清除算法属于「用户选项」而非「参数」：复位不应把用户选好的
                     // 减法 / 乘法 / 趋白打回默认值（与 deselectAfterFill 等同理）。
                     clearBackgroundAlgorithm: this.state.clearBackgroundAlgorithm,
@@ -1079,6 +1088,7 @@ class App extends React.Component<AppProps, AppState> {
                     autoOffOnOtherTool: this.state.autoOffOnOtherTool,
                     strokeEnabled: this.state.strokeEnabled,
                     createNewLayer: this.state.createNewLayer,
+                    specialMask: this.state.specialMask,
                     clearMode: this.state.clearMode,
                     formulaVisible: this.state.formulaVisible,
                     clearBackgroundAlgorithm: this.state.clearBackgroundAlgorithm,
@@ -1111,6 +1121,9 @@ class App extends React.Component<AppProps, AppState> {
                     autoOffOnOtherTool: loaded.appPanel.autoOffOnOtherTool ?? this.state.autoOffOnOtherTool,
                     strokeEnabled: loaded.appPanel.strokeEnabled ?? this.state.strokeEnabled,
                     createNewLayer: loaded.appPanel.createNewLayer ?? this.state.createNewLayer,
+                    // 特殊蒙版：旧存档没有这个字段 ⇒ 回落到默认（关），
+                    // 与旧版「图案 / 渐变子面板里的复选框默认不勾」手感一致。
+                    specialMask: loaded.appPanel.specialMask ?? this.state.specialMask,
                     clearMode: loaded.appPanel.clearMode ?? this.state.clearMode,
                     // 「显示公式」四处独立开关：旧存档无此字段 ⇒ 逐项回落到默认（全关），
                     // 按作用域逐项合并，避免「整体覆盖」把用户已开启的其它处冲掉。
@@ -1297,6 +1310,7 @@ class App extends React.Component<AppProps, AppState> {
             'autoOffOnOtherTool',
             'strokeEnabled',
             'createNewLayer',
+            'specialMask',
             'clearMode',
             'formulaVisible',
             'clearBackgroundAlgorithm',
@@ -1325,6 +1339,7 @@ class App extends React.Component<AppProps, AppState> {
                     autoOffOnOtherTool: this.state.autoOffOnOtherTool,
                     strokeEnabled: this.state.strokeEnabled,
                     createNewLayer: this.state.createNewLayer,
+                    specialMask: this.state.specialMask,
                     clearMode: this.state.clearMode,
                     formulaVisible: this.state.formulaVisible,
                     clearBackgroundAlgorithm: this.state.clearBackgroundAlgorithm,
@@ -2830,6 +2845,31 @@ class App extends React.Component<AppProps, AppState> {
             || this.state.isInSingleColorChannel;
     }
 
+    /**
+     * 「特殊蒙版」开关。
+     *
+     * 语义：填充只落在当前图层**已有像素**的范围内，且不改动这些像素的 alpha。
+     * 纯色 / 图案 / 渐变三种模式共用这一个开关（2026-11-19 从两个子面板收口过来）。
+     */
+    toggleSpecialMask() {
+        this.setState(prevState => ({ specialMask: !prevState.specialMask }));
+    }
+
+    /**
+     * 「特殊蒙版」的禁用条件（两套版式共用，唯一事实来源）。
+     *
+     * 与「新建图层」的禁用条件**完全同构**：这四种场合下填充的目标根本不是
+     * 「像素图层的已有像素」，谈「保留已有像素」没有意义 ——
+     *   · 清除模式：清除是减淡/趋白，不是上色；
+     *   · 快速蒙版 / 图层蒙版：填充落在通道上（灰度），没有 alpha 可言；
+     *   · 单通道：填充写回单色通道，同样没有 alpha。
+     * ⚠️ 保留「是像素层 / 有没有像素」这类**逐次判定**不放在这里：
+     *    那取决于当前活动图层，菜单状态下读不到，且填充分支自己会再判一次。
+     */
+    isSpecialMaskDisabled() {
+        return this.isCreateNewLayerDisabled();
+    }
+
     async fillSelection(layerInfo?: LayerInfo | null, withDeselect = false, stateForFill?: AppState) {
         // 统一处理：若当前目标图层被隐藏，在操作前临时显示，操作后恢复隐藏
         // 注意：当选择"新建图层"时，目标会变为新图层（可见），无需临时显示原图层
@@ -2910,6 +2950,11 @@ class App extends React.Component<AppProps, AppState> {
                 return true;
             }
 
+            /* 「特殊蒙版」的**基底图层 id**：新建图层会把活动目标换人，而纯色模式的
+               收尾（把新层剪贴到下方原图层）要用它 ⇒ 必须在 make layer 之前记下。
+               ⚠️ 下文那段 `layerInfo = {...}` 会把 layerId 覆盖成新层 id。 */
+            const specialMaskBaseId = layerInfo.layerId;
+
             // ⚠️ 图层蒙版下**不得**新建图层：`make layer` 会立刻把活动目标从蒙版通道切到新图层，
             //    紧随的 fill 就落到新图层而不是蒙版（第一类失效的另一半原因）。
             //    与「新建图层」开关在图层蒙版下被禁用的语义一致（见 isCreateNewLayerDisabled）。
@@ -2960,14 +3005,23 @@ class App extends React.Component<AppProps, AppState> {
             }
 
             const { isBackground, hasTransparencyLocked, hasPixels } = layerInfo;
-    
+
+            /* 「特殊蒙版」——2026-11-19 从图案 / 渐变两个子面板收口到本面板的全局开关，
+               三种填充模式共用。语义一句话：**填充只落在当前图层已有像素上，且不改它的 alpha。**
+               ⚠️ 这里要再判一次禁用条件：界面置灰只是提示，state 仍可能被复位/热键改到；
+                  而清除模式 / 快速蒙版 / 图层蒙版 / 单通道下，填充目标根本不是像素图层的像素。
+               ⚠️ 用 fillState 里的值（调用方可能传了一份改写过的 state 副本）。 */
+            const specialMaskOn = !!fillState.specialMask && !this.isSpecialMaskDisabled();
+
             if (this.state.fillMode === 'pattern') {
                 if (this.state.selectedPattern) {
                     await PatternFill.fillPattern({
                         opacity: this.state.opacity,
                         blendMode: this.state.blendMode,
                         pattern: this.state.selectedPattern,
-                        preserveTransparency: this.state.selectedPattern.preserveTransparency
+                        // ⚠️ 不再读预设里的 preserveTransparency：那个字段只是旧版遗留，
+                        //    开关已经收口到 APP 面板，读它会出现「面板上关着、填充却按开执行」。
+                        preserveTransparency: specialMaskOn
                     }, layerInfo, fillState);
                     return true;
                 } else {
@@ -2981,7 +3035,7 @@ class App extends React.Component<AppProps, AppState> {
                         opacity: this.state.opacity,
                         blendMode: this.state.blendMode,
                         gradient: this.state.selectedGradient,
-                        preserveTransparency: this.state.selectedGradient.preserveTransparency
+                        preserveTransparency: specialMaskOn
                     }, layerInfo, fillState, fillState.createNewLayer);
                     return true;
                 } else {
@@ -3044,7 +3098,21 @@ class App extends React.Component<AppProps, AppState> {
                 const fillOptions = {
                     opacity: finalColor.opacity,
                     blendMode: this.state.blendMode,
-                    color: finalColor
+                    color: finalColor,
+                    /* 特殊蒙版（纯色）：等价于 PS 原生「保留透明像素」的填充 ——
+                       只改已有像素的 RGB，alpha 一个字节不动。
+                       判据与渐变/图案那条 `useSpecialClip = hasPixels && 特殊蒙版` 对齐：
+                         · 空像素图层没有像素可保留 ⇒ 语义上就是普通填充（「新建图层」建出来的
+                           正是这种层，它的剪贴需求由下面那段 clipNewLayerToBase 承担）；
+                         · 背景层没有 alpha，「保留透明像素」在 PS 里本来就是灰的 ⇒ 排除；
+                         · 文字 / 智能对象等非像素层不允许保留透明像素 ⇒ 退回普通填充。
+                           （渐变/图案那边必须挡非像素层，是因为它们的收尾会 `rasterizeLayer`
+                             把内容就地替换；纯色这里只是一条 fill，挡掉反而会变成功能回归。） */
+                    preserveTransparency: specialMaskOn
+                        && !this.state.createNewLayer
+                        && !!hasPixels
+                        && !isBackground
+                        && !isNonPixelLayerKind(layerInfo.layerKind)
                 };
 
     
@@ -3065,6 +3133,15 @@ class App extends React.Component<AppProps, AppState> {
                 else if (!hasTransparencyLocked && !isBackground) {
                     await FillHandler.fillUnlocked(fillOptions, withDeselect);
                 }
+
+                /* 特殊蒙版 + 新建图层（纯色）：新层是空的，「保留透明像素」填不出内容，
+                   所以改成「填完之后把这一层剪贴到下方原图层上」—— 与渐变/图案的同名
+                   分支视觉等价（它们建的是 PS 原生剪贴蒙版，再按需收窄）。
+                   ⚠️ 放进 try 里：剪贴失败不能连累已经成功的填充（fillSelection 的
+                      catch 会整段判失败并返回 false）。 */
+                if (specialMaskOn && this.state.createNewLayer && specialMaskBaseId) {
+                    await this.clipNewLayerToBase(specialMaskBaseId);
+                }
                 return true;
             }
         } catch (error) {
@@ -3078,6 +3155,36 @@ class App extends React.Component<AppProps, AppState> {
             } catch (e) {
                 console.warn('恢复图层隐藏状态失败:', e);
             }
+        }
+    }
+
+    /**
+     * 纯色「特殊蒙版 + 新建图层」的收尾：把刚填好的新层剪贴到下方原图层上。
+     *
+     * 为什么需要这一步：纯色的特殊蒙版走的是 PS 原生「保留透明像素」，而新建图层是**空白**的
+     * ⇒ 一个像素都没有可保留，填出来就是空的。渐变/图案的做法是建内容层后再决定
+     * 「原生剪贴 / 按基底 alpha 收窄」，这里把同一套语义搬过来：
+     *   ① 优先 PS 原生「创建剪贴蒙版」（快、基底可以是文字层/智能对象等任意类型）；
+     *   ② 新层若是被 PS 自动塞进目标的剪贴组（`isClippingMask === true`），本来就已经剪贴了，
+     *      不再重复下发 —— 对已剪贴的层再建剪贴会被宿主拒绝并弹原生报错框；
+     *   ③ 原生被拒（基底本身是别人的剪贴蒙版）时，按基底 alpha 收窄新层的 alpha。
+     *
+     * ⚠️ 失败一律只告警：填充本身已经完成，不能因为这个收尾把整次填充判死。
+     */
+    private async clipNewLayerToBase(baseLayerId: number) {
+        try {
+            const topId = await resolveActiveLayerId();
+            if (!topId || topId === baseLayerId) return;
+            const nativeOk = readActiveLayerClipState().isClippingMask
+                || await tryCreateNativeClippingMask();
+            if (nativeOk) return;
+            await multiplyTopAlphaByBase({
+                docId: app.activeDocument.id,
+                baseLayerId,
+                topLayerId: topId,
+            });
+        } catch (e) {
+            console.warn('⚠️ 特殊蒙版：新建图层剪贴到下方图层失败（填充结果保持原样）:', e);
         }
     }
 
@@ -4901,6 +5008,16 @@ title={helpTexts.selectionFill.selectionExpand}>
                                         </div>
                                     </div>
                                 </div>
+                                {/* 特殊蒙版（紧凑模式）：单独占一行、开关贴右。
+                                    ⚠️ 不塞进上面的两列网格：它决定「填充落在哪些像素上」，
+                                       属于填充层面的选项，与左右两列那些「执行期开关」不是一类；
+                                       挤进网格会和「清除模式」在视觉上读成一组。
+                                    ⚠️ 位置**紧跟「新建图层」那一行**（用户 2026-11-19 指定），
+                                       紧凑模式下网格行与网格行之间没有分割线，靠 13px 行距分隔。 */}
+                                <div className={this.isSpecialMaskDisabled() ? 'row-between disabled' : 'row-between'}>
+                                    <span className="label-4" title={helpTexts.selectionFill.specialMask}>特殊蒙版</span>
+                                    <ToggleSwitch checked={this.state.specialMask} onChange={this.toggleSpecialMask} disabled={this.isSpecialMaskDisabled()} title={helpTexts.selectionFill.specialMaskSwitch} />
+                                </div>
                                 {/* 描边模式行（.row-grid-fit）：左列「标签 + 开关」按内容宽靠左，
                                     右列撑满剩余宽度、内部用 row-end 把色板推到内容盒右缘。
                                     ⚠️ 2026-10-08 删除「描边设置」文字按钮（用户要求），功能交给
@@ -4957,6 +5074,20 @@ title={helpTexts.selectionFill.createNewLayer}>
                             新建图层
                             </span>
                                     <ToggleSwitch checked={this.state.createNewLayer} onChange={this.toggleCreateNewLayer} disabled={this.isCreateNewLayerDisabled()} title={helpTexts.selectionFill.createNewLayerSwitch}  />
+                                </div>
+                                <div className="divider" />
+
+                                {/* 特殊蒙版（2026-11-19 从图案 / 渐变子面板收口到这里）：
+                                    语义是「填充只落在当前图层已有像素上，且不改动这些像素的 alpha」。
+                                    放在「新建图层」正下方，因为它和「新建图层」一样是**填充层面**
+                                    的决策（决定填充落在哪、而不是填什么），三种填充模式共用。
+                                    ⚠️ 子面板里的复选框已删除：两个入口并存必然出现「这边关着、
+                                       那边开着」的分歧值，而填充只认一个。
+                                    ⚠️ 禁用条件与「新建图层」同构（清除模式 / 快速蒙版 / 图层蒙版 /
+                                       单通道）—— 那些场合的目标不是像素图层的像素。 */}
+                                <div className={this.isSpecialMaskDisabled() ? 'row-between disabled' : 'row-between'}>
+                                    <span className="label-4" title={helpTexts.selectionFill.specialMask}>特殊蒙版</span>
+                                    <ToggleSwitch checked={this.state.specialMask} onChange={this.toggleSpecialMask} disabled={this.isSpecialMaskDisabled()} title={helpTexts.selectionFill.specialMaskSwitch} />
                                 </div>
                                 <div className="divider" />
 

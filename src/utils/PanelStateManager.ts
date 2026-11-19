@@ -19,6 +19,8 @@ export type AppPanelState = {
   autoOffOnOtherTool?: boolean;
   strokeEnabled?: boolean;
   createNewLayer?: boolean;
+  /** 「特殊蒙版」：填充只作用于当前图层已有像素（纯色 / 图案 / 渐变共用，2026-11-19 收口） */
+  specialMask?: boolean;
   clearMode?: boolean;
   /** 「显示公式」四处独立开关（清除设置三组 + 纯色「计算方法」的公式条显隐） */
   formulaVisible?: FormulaVisibility;

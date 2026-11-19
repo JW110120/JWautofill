@@ -228,7 +228,6 @@ const rotatePatternPreview = (
         jpeg: 'image/jpeg',
         png: 'image/png',
     };
-    const [preserveTransparency, setPreserveTransparency] = useState<boolean>(false);
     
     // 添加蒙版状态检测
     const [isInLayerMask, setIsInLayerMask] = useState(false);
@@ -294,7 +293,6 @@ const rotatePatternPreview = (
                 scale,
                 fillMode,
                 rotateAll,
-                preserveTransparency,
                 components: selectedPatternData.patternComponents || selectedPatternData.components || 3,
                 currentScale: scale,
                 currentAngle: angle
@@ -307,32 +305,12 @@ const rotatePatternPreview = (
             
             return () => clearTimeout(debounceTimeoutId);
         }
-    }, [selectedPattern, angle, scale, fillMode, rotateAll, preserveTransparency, patterns, selectedPatterns.size]);
+    }, [selectedPattern, angle, scale, fillMode, rotateAll, patterns, selectedPatterns.size]);
 
-    /**
-     * 「特殊剪贴蒙版」勾选要**立刻**回传父面板。
-     *
-     * 上面那条实时更新 effect 有 300ms 防抖，而填充是「画完选区立刻发生」的 ——
-     * 勾完马上画选区，父面板还拿着**上一个**开关值，填充就会按旧状态执行
-     * （表现为「明明关了特殊剪贴，结果却像开着」）。这个开关直接决定走哪条分支。
-     */
-    const commitPreserveTransparency = (next: boolean) => {
-        setPreserveTransparency(next);
-        if (!selectedPattern || selectedPatterns.size > 0) return;
-        const data: any = patterns.find(p => p.id === selectedPattern);
-        if (!data || !data.grayData || !data.patternRgbData) return;
-        onSelect({
-            ...data,
-            angle,
-            scale,
-            fillMode,
-            rotateAll,
-            preserveTransparency: next,
-            components: data.patternComponents || data.components || 3,
-            currentScale: scale,
-            currentAngle: angle
-        });
-    };
+    /* ⛔ 「特殊剪贴蒙版」复选框已于 2026-11-19 从本面板移除：
+       它收口成 APP 面板「填充选项 · 特殊蒙版」这一个全局开关（三种填充模式共用）。
+       两个入口并存必然出现「这边关着、那边开着」的分歧值，而填充只认一个。
+       预设里的 `preserveTransparency` 字段保留（旧存档仍在），但填充不再读它。 */
 
     // 参数复位：只回参数，不碰预设。    // ⚠️ 刻意不 setPatterns —— 预设列表是用户资产，「参数复位」不该删掉后添加的预设
     //    （同时 setSelectedPattern(null)：图案的变换参数是「叠在选中图案之上」的，
@@ -350,7 +328,6 @@ const rotatePatternPreview = (
         setScale(100);
         setFillMode('stamp');
         setRotateAll(true);
-        setPreserveTransparency(false);
         setPreviewZoom(100);
         setPreviewOffset({ x: 0, y: 0 });
         setDragIndex(null);
@@ -1995,30 +1972,16 @@ const rotatePatternPreview = (
                     className="radio-pair-group"
                 />
 
-                <div className="divider"></div>
-
-                <div className="row-between row-grid row-grid-flush">
-                    <div className="grid-cell">
-                    <div className="row-start">
-                        <label
-                            htmlFor="transparencyCheckbox"
-                            className="label-6"
-                            title={helpTexts.pattern.clipMask}
-                            onClick={() => commitPreserveTransparency(!preserveTransparency)}
-                        >
-                            特殊剪贴蒙版
-                        </label>
-                        <input
-                            type="checkbox"
-                            id="transparencyCheckbox"
-                            checked={preserveTransparency}
-                            onChange={(e) => commitPreserveTransparency(e.target.checked)}
-                            className="checkbox-input"
-                            title={helpTexts.pattern.clipMask}
-                        />
-                    </div>
-                    </div>
-                    {fillMode === 'tile' && (
+                {/* 「特殊剪贴蒙版」复选框已移除（2026-11-19 收口到 APP 面板「特殊蒙版」）：
+                    原来它是左列、「旋转阵列」是右列。删除后本行只剩「旋转阵列」这一列，
+                    且只有 tile 模式才有内容 ⇒ **分割线 + 整行**一起随 fillMode 进退。
+                    ⚠️ divider 必须一起进 Fragment：它自身 margin:10px 0，单选模式下
+                       没有同行内容兜住，就会在 radio 与预览区之间留出一条空行
+                       （用户 2026-11-19 报的「去掉了复选框后有个空行」就是它）。 */}
+                {fillMode === 'tile' && (
+                    <>
+                    <div className="divider"></div>
+                    <div className="row-between row-grid row-grid-flush">
                         <div className="grid-cell">
                         <div className="row-start">
                             <label
@@ -2039,8 +2002,9 @@ const rotatePatternPreview = (
                             />
                         </div>
                         </div>
-                    )}
-                </div>
+                    </div>
+                    </>
+                )}
             </div>
             <div className="final-preview-container">
                 <div className="row-between preview-toolbar">

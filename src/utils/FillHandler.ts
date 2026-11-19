@@ -5,6 +5,17 @@ interface FillOptions {
     opacity: number;
     blendMode: string;
     color: { hsb: { hue: number; saturation: number; brightness: number } }; // 添加颜色参数
+    /**
+     * 「保留透明像素」——与填充对话框里那个同名复选框等价：
+     * 只改已有像素的颜色，**不改它们的 alpha**。
+     *
+     * APP 面板的「特殊蒙版」在纯色模式下就是靠它落地的（2026-11-19）：
+     * 图案 / 渐变那边走像素合成的 `blendTopIntoBase`，纯色没有内容图层、
+     * 也没有临时层可写回，最省的等价物就是这条原生选项（一次 IPC，零读像素）。
+     * ⚠️ 只对「像素图层且有像素」有意义：背景层 / 空图层 / 非像素层的判据在
+     *    app.tsx 的 fillSelection 里（那里能拿到 layerInfo）。
+     */
+    preserveTransparency?: boolean;
 }
 
 /**
@@ -39,7 +50,7 @@ async function playFillSequence(command: any, withDeselect: boolean): Promise<vo
 
 export class FillHandler {
     private static createBasicFillCommand(options: FillOptions) {
-        return {
+        const command: any = {
             _obj: 'fill',
             using: { _enum: 'fillContents', _value: 'color' },
             opacity: options.opacity,
@@ -51,6 +62,13 @@ export class FillHandler {
                 brightness: options.color.hsb.brightness
             }
         };
+        // 「特殊蒙版」（APP 面板开关）在纯色模式的落地：保留已有像素的 alpha。
+        // ⚠️ 只在为 true 时挂这个键 —— 显式写 false 在某些宿主版本上会被当成
+        //    「要求宿主处理该选项」，与不传不等价（本仓在别的命令上踩过 false 的坑）。
+        if (options.preserveTransparency) {
+            command.preserveTransparency = true;
+        }
+        return command;
     }
 
     /**

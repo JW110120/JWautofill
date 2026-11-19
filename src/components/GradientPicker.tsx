@@ -374,7 +374,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const [gradientType, setGradientType] = useState<'linear' | 'radial'>('linear');
     const [angle, setAngle] = useState(0);
     const [reverse, setReverse] = useState(false);
-    const [preserveTransparency, setPreserveTransparency] = useState<boolean>(false); // 添加新状态
     const [selectedStopIndex, setSelectedStopIndex] = useState<number | null>(null);
     const [selectedStopType, setSelectedStopType] = useState<'color' | 'opacity'>('color');
     const [stops, setStops] = useState<ExtendedGradientStop[]>([ 
@@ -386,21 +385,10 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const saveTimerRef = useRef<any>(null);
     const dirtyRef = useRef(false);
 
-    /**
-     * 「特殊剪贴蒙版」勾选要**立刻**回传父面板。
-     *
-     * 下面那条「参数变化 → 回写当前选中预设」的 effect 有 300ms 防抖，而填充是
-     * 「画完选区立刻发生」的 —— 勾完马上画选区，父面板还拿着**上一个**开关值，
-     * 填充就会按旧状态执行（表现为「明明关了特殊剪贴，结果却像开着」）。
-     * 这个开关直接决定走哪条分支，不能等防抖。
-     */
-    const commitPreserveTransparency = (next: boolean) => {
-        setPreserveTransparency(next);
-        if (selectedPreset === null) return;
-        const current: any = presets[selectedPreset];
-        if (!current) return;
-        onSelect({ ...current, preserveTransparency: next });
-    };
+    /* ⛔ 「特殊剪贴蒙版」复选框已于 2026-11-19 从本面板移除：
+       它收口成 APP 面板「填充选项 · 特殊蒙版」这一个全局开关（三种填充模式共用）。
+       两个入口并存必然出现「这边关着、那边开着」的分歧值，而填充只认一个。
+       预设里的 `preserveTransparency` 字段保留（旧存档仍在），但填充不再读它。 */
 
     // 拖拽排序所需的引用与状态
     const dragPresetIndexRef = useRef<number | null>(null);
@@ -427,7 +415,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
         setGradientType('linear');
         setAngle(0);
         setReverse(false);
-        setPreserveTransparency(false);
         setStops([
             { color: 'rgba(0, 0, 0, 1)', position: 0, colorPosition: 0, opacityPosition: 0, midpoint: 50, opacityMidpoint: 50 },
             { color: 'rgba(255, 255, 255, 1)', position: 100, colorPosition: 100, opacityPosition: 100, midpoint: 50, opacityMidpoint: 50 }
@@ -624,8 +611,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                     opacityPosition: stop.opacityPosition,
                     midpoint: stop.midpoint,
                     opacityMidpoint: stop.opacityMidpoint
-                })),
-                preserveTransparency
+                }))
             };
             updatedPresets[selectedPreset] = updatedPreset;
             setPresets(updatedPresets);
@@ -637,7 +623,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             
             return () => clearTimeout(debounceTimeoutId);
         }
-    }, [gradientType, angle, reverse, stops, preserveTransparency, selectedPreset]);
+    }, [gradientType, angle, reverse, stops, selectedPreset]);
 
     const handleAddPreset = () => {
         const newPreset: Gradient & { id: string; name: string; preview?: string } = {
@@ -647,7 +633,6 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             type: gradientType,
             angle,
             reverse,
-            preserveTransparency,
             stops: stops.map(stop => ({
                 color: stop.color,
                 position: stop.position,
@@ -1852,27 +1837,11 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                         />
                     </div>
                     </div>
-
-                    <div className="grid-cell">
-                    <div className="row-start">
-                         <label
-                            className="label-6"
-                            htmlFor="transparencyCheckbox"
-                            title={helpTexts.gradient.preserveTransparency}
-                            onClick={() => commitPreserveTransparency(!preserveTransparency)}
-                        >
-                            特殊剪贴蒙版
-                        </label>
-                        <input
-                            type="checkbox"
-                            id="transparencyCheckbox"
-                            className="checkbox-input"
-                            checked={preserveTransparency}
-                            title={helpTexts.gradient.preserveTransparency}
-                            onChange={(e) => commitPreserveTransparency(e.target.checked)}
-                        />
-                    </div>
-                    </div>
+                    {/* 「特殊剪贴蒙版」复选框已移除（2026-11-19 收口到 APP 面板「特殊蒙版」）：
+                        右列原本是它，删掉后「反向」独占整行、仍靠左对齐。
+                        ⚠️ 外层 .row-between.row-grid.row-grid-flush 保留：common.css 里
+                           `.border-panel-section > .row-between.row-grid.row-grid-flush`
+                           那条 4px 右缘补偿规则仍按这个结构命中。 */}
                 </div>
             </div>
 
