@@ -20,6 +20,12 @@
 
 1–6 产物/构建｜7–13 闸门/面板（`'slct'` 三态、isPsBusy、gateAge、HUD AND 门）｜14–16 HUD/画布｜17–38 断流补流（三路输入、SYNTH_TIP_MAX_MS、`armed` 判据）｜39–44 键盘钩子/卸载｜45–53 UXP/画笔预设｜54–64 混合器储层｜65–70 在位闸｜71–73 工具闸门/光标｜74–80 HUD 门控/临时吸管｜81–83 标准滤波/文案｜84–86 HUD 坐标系/消失｜87–89 吸管键源
 
+## 工作方式（技能）
+
+大型改动（跨 3+ 文件 / 连续多步宿主操作 / 用户报「做了但没效果」）**默认先铺落地日志**：
+`.workbuddy/skills/uxp-debug-trace/`（模板 `templates/DebugTrace.ts`；本仓实现 `src/utils/SmDebug.ts`）。
+读日志一行命令：`node .workbuddy/skills/uxp-debug-trace/scripts/trace-tail.mjs`（自动找最新日志 + 比对 bundle mtime，产物比日志新说明还没重启 PS）。铁律 163。
+
 ## 维护约定
 
 超限先下沉 refs 再精简本文件（只留「编号 + 一句话 + refs 指针」）。`scripts/`=沉淀工具（git 跟踪）；`analysis/`=草稿（gitignored）；`outputs/` 废止。

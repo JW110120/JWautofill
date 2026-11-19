@@ -449,7 +449,7 @@ export function layerExists(layerId: number): boolean {
 }
 
 /** 读图层名字（只用于「结果层接管空目标层的名字」，读不到就不改名）。 */
-function readLayerNameById(layerId: number): string | undefined {
+export function readLayerNameById(layerId: number): string | undefined {
     try {
         const node = findLayerNodeById((app.activeDocument as any)?.layers, layerId);
         const name = node?.name;
@@ -601,6 +601,13 @@ export interface EmptyTargetReplacement {
     boundaryLayerId: number | null;
     /** 边界层是否有像素（非像素层只能靠剪贴结构裁，不做像素收窄）。 */
     boundaryHasPixels: boolean;
+    /**
+     * 目标层原来的名字（**必须在填充前读好**）。
+     * ⚠️ 宿主在建内容层时会把那个空层直接消耗掉（2026-11-19 日志实证：
+     *    `targetExists:false` + 内容层已经落在边界层正上方），交接时再按 id 读名字
+     *    已经读不到了 ⇒ 结果层只能保留「渐变填充 1」这样的自动名。
+     */
+    targetName?: string;
 }
 
 /**
@@ -680,7 +687,11 @@ export async function replaceEmptyTargetWithContent(opts: EmptyTargetReplacement
        没有可删的空层，但收窄 / 剪贴照样要做。旧实现在这里会误判成异常直接退出，
        结果就是「填充成功、但既没约束也没箭头」。 */
     const inPlace = contentId === targetLayerId;
-    let targetName = inPlace ? undefined : readLayerNameById(targetLayerId);
+    /* ⚠️ 名字必须用调用方在**填充前**读好的那份：宿主建内容层时会把空层消耗掉，
+       此刻再按 id 读已经读不到（日志里 `targetExists:false` 就是这个意思）。 */
+    let targetName = inPlace
+        ? undefined
+        : (opts.targetName ?? readLayerNameById(targetLayerId));
 
     /* ⓪' 首选：内容层向下合并进空目标层（见 mergeContentIntoEmptyTarget）。
        合并成功 ⇒ 结果层就是用户原来那个图层，后面的「删空层 / 改名」全部不需要。 */

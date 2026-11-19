@@ -17,6 +17,7 @@ import {
     readActiveLayerClipState,
     readClippingFlagById,
     readLayerBelow,
+    readLayerNameById,
     resolveActiveLayerId,
     selectLayerById,
     SpecialClipPlan,
@@ -3210,6 +3211,11 @@ class App extends React.Component<AppProps, AppState> {
                     targetLayerId: emptyTargetPlan.resultLayerId as number,
                     boundaryLayerId: emptyTargetPlan.boundaryLayerId,
                     boundaryHasPixels: emptyTargetPlan.boundaryHasPixels,
+                    /* ⚠️ 名字在**这里**读（填充前，DOM 稳定）。
+                       ⚠️ 宿主建内容层时会把那个空层直接消耗掉，交接时再读就没了
+                          （2026-11-19 日志：`targetExists:false`）⇒ 结果层会掉回
+                          「渐变填充 1」这种自动名。 */
+                    targetName: readLayerNameById(emptyTargetPlan.resultLayerId as number),
                 }
                 : undefined;
 
