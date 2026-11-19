@@ -1,7 +1,21 @@
-import { app, action, imaging } from 'photoshop';
+import { app, action, core, imaging } from 'photoshop';
 import { BLEND_MODES } from '../constants/blendModes';
 import { Pattern } from '../types/state';
 import { BLEND_MODE_CALCULATIONS, BlendModeFunction } from './BlendModeCalculations';
+import {
+    blendTopIntoBase,
+    compositeTopIntoBase,
+    deleteActiveLayer,
+    deleteLayerById,
+    isNonPixelLayerKind,
+    mergeIntoBase,
+    moveActiveLayerAbove,
+    NON_PIXEL_LAYER_HINT,
+    readActiveLayerClipState,
+    resolveActiveLayerId,
+    selectFrontLayer,
+    selectLayerById,
+} from './SpecialClipMask';
 
 interface PatternFillOptions {
     opacity: number;
@@ -618,6 +632,12 @@ interface LayerInfo {
     hasPixels: boolean;
     isInQuickMask: boolean;
     isInLayerMask: boolean;
+    /** 图层种类（`'pixel'` / `'text'` / `'smartObject'` / …），见 LayerInfoHandler。 */
+    layerKind?: string;
+    /** 填充前的活动图层 id —— 特殊剪贴蒙版的基底。 */
+    layerId?: number;
+    /** 填充前的活动图层是否正在被当作别人的剪贴蒙版（决定合并要不要先 groupEvent）。 */
+    isClippingMask?: boolean;
 }
 
 // 收集左上角和右下角像素的值，并且做处理
@@ -707,6 +727,19 @@ export class PatternFill {
         } else {
             console.log('📝 当前不在快速蒙版状态，使用常规填充方法');
         }
+
+        // ⚠️ 下面这套收尾链路（临时层 + 蒙版 → 应用蒙版 → 合并/像素回写）**只对普通像素
+        //    图层成立**：文字层 / 智能对象 / 形状层 / 调整层会被「就地替换」成图案像素，
+        //    图层组则连命令语义都不对。判据不能用 `hasPixels`（它的前提就是 `kind ===
+        //    'pixel'`，非像素层恒为 false）。「新建图层」模式下 app.tsx 已经先建好一个
+        //    空白像素层并把 layerInfo 同步过去了，所以这里不会误拦。
+        if (isNonPixelLayerKind(layerInfo.layerKind)) {
+            await core.showAlert({ message: NON_PIXEL_LAYER_HINT });
+            return;
+        }
+
+        // 填充前的活动图层就是「特殊剪贴蒙版的基底」—— 建临时层之后活动图层就换人了
+        const baseLayerId = layerInfo.layerId ?? app.activeDocument.activeLayers[0]?.id;
 
         // 获取选区边界
         const bounds = app.activeDocument.selection.bounds;
@@ -895,19 +928,9 @@ export class PatternFill {
             }
         };
 
-        // 第四步：剪贴蒙版的配置
-        const createClippingMask = {
-            _obj: "groupEvent",
-            _target: [{
-                _ref: "layer",
-                _enum: "ordinal",
-                _value: "targetEnum"
-            }],
-            _options: {
-                dialogOptions: "dontDisplay"
-            }
-        };
-
+        // 第四步：收尾用的命令
+        // ⚠️ 这里**没有**「创建剪贴蒙版」也没有「向下合并」常驻命令：两者的合法性都取决于
+        //    剪贴关系（见 SpecialClipMask.mergeIntoBase），统一过去处理。
         const applyMask = {
             _obj: "delete",
             _target: [
@@ -922,14 +945,14 @@ export class PatternFill {
                dialogOptions: "dontDisplay"
             }
          };
-        const mergeLayers = {
-            _obj: "mergeLayersNew",
-            _options: {
-                dialogOptions: "dontDisplay"
-            }
-        };
 
         try {
+            // ⚠️⚠️ 先把活动目标切到**文档最顶层**，再建临时层：目标是剪贴基底时，
+            //    PS 会把新建的图层自动塞进那个剪贴组 ⇒ 读它的像素 / 删它都会带裁剪语义，
+            //    而纠正手段 `ungroup` 会把目标上方**整组**剪贴一起解除（用户 2026-11-19
+            //    实测：一次填充后所有剪贴箭头全没）。放顶层 ⇒ 与剪贴关系彻底解耦。
+            await selectFrontLayer();
+
             // 新建待处理图层
             await action.batchPlay([createBlankLayer], { dialogOptions: 'dontDisplayDialogs' });
             await action.batchPlay([setLayerName], { dialogOptions: 'dontDisplayDialogs' });
@@ -941,34 +964,96 @@ export class PatternFill {
             
             // 设置图层属性
             await action.batchPlay([setLayerProperties], { dialogOptions: 'dontDisplayDialogs' });
-            
-            // 根据checkbox信息是否创建剪贴蒙版。
-            if (options.preserveTransparency) {
-                await action.batchPlay([createClippingMask], { dialogOptions: 'dontDisplayDialogs' });
-            }
-            
 
-            await action.batchPlay([applyMask], { dialogOptions: 'dontDisplayDialogs' });
-            await action.batchPlay([mergeLayers], { dialogOptions: 'dontDisplayDialogs' });
+            // ⚠️ 先「应用图层蒙版」再收尾：这一步把「选区 ∩ 图案自身 alpha」定形进
+            //    临时层的像素 alpha，后面的像素合成才有正确的权重来源。
+            //    ⚠️ 它也是像素写回的**前提** —— `imaging` 读写看不到图层蒙版，蒙版没应用掉
+            //    就写回等于把图案按整层糊上去（选区外也被填）。
+            let maskApplied = true;
+            try {
+                await action.batchPlay([applyMask], { dialogOptions: 'dontDisplayDialogs' });
+            } catch (e) {
+                maskApplied = false;
+                console.warn('⚠️ 图案填充：应用图层蒙版失败 ⇒ 放弃像素写回，改走合并降级:', e);
+            }
+
+            // 应用蒙版之后临时层的 id 仍以此刻为准（与渐变侧同一纪律：
+            // `rasterize/apply` 有可能换 id，DOM 读还有一帧滞后 ⇒ 走 batchPlay 即时值）
+            const topId = await resolveActiveLayerId();
+
+            if (!topId) {
+                await core.showAlert({
+                    message: '图案填充未完成：找不到临时图层（未改动任何图层）。'
+                });
+                return;
+            }
+
+            const useSpecialClip = !!layerInfo.hasPixels && !!options.preserveTransparency;
+
+            const written = maskApplied && baseLayerId
+                ? (useSpecialClip
+                    ? await blendTopIntoBase({
+                        docId: app.activeDocument.id,
+                        baseLayerId,
+                        topLayerId: topId,
+                        opacity: options.opacity,
+                        blendMode: options.blendMode,
+                    })
+                    : await compositeTopIntoBase({
+                        docId: app.activeDocument.id,
+                        baseLayerId,
+                        topLayerId: topId,
+                        opacity: options.opacity,
+                        blendMode: options.blendMode,
+                    }))
+                : false;
+
+            if (written) {
+                // ⚠️ 合成完必须**删除**临时层，不能 mergeLayersNew —— 合并会把两层
+                //    alpha 叠加（128 → 约 191），正是「不改变原有不透明度」要避免的。
+                if (!(await deleteLayerById(topId))) {
+                    await deleteActiveLayer();
+                }
+            } else {
+                // 降级：像素写回被拒 ⇒ 挪到目标层正上方再合并，至少让图案落上去。
+                await moveActiveLayerAbove(baseLayerId);
+                await mergeIntoBase({
+                    docId: app.activeDocument.id,
+                    baseLayerId,
+                    baseIsClippingMask: !!layerInfo.isClippingMask,
+                    contentIsClippingMask: readActiveLayerClipState().isClippingMask,
+                    opacity: options.opacity,
+                    blendMode: options.blendMode,
+                });
+            }
+
+            // 收尾：活动目标还给用户原本的图层
+            if (baseLayerId) await selectLayerById(baseLayerId);
 
 
             // 选中上一个选区，为主面板的清除选区留后路。
-            await action.batchPlay([{
-                _obj: "set",
-                _target: [
-                    {
-                        _ref: "channel",
-                        _property: "selection"
+            // ⚠️ 单独 try/catch + silent：没有上一个选区时这条 `set` 会被宿主拒绝，
+            //    失败的命令会弹原生「设置不可用」框并绕过外层 catch。
+            try {
+                await action.batchPlay([{
+                    _obj: "set",
+                    _target: [
+                        {
+                            _ref: "channel",
+                            _property: "selection"
+                        }
+                    ],
+                    to: {
+                        _enum: "ordinal",
+                        _value: "previous"
+                    },
+                    _options: {
+                        dialogOptions: "silent"
                     }
-                ],
-                to: {
-                    _enum: "ordinal",
-                    _value: "previous"
-                },
-                _options: {
-                    dialogOptions: "dontDisplay"
-                }
-            }], { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' });
+                }], { synchronousExecution: true });
+            } catch (e) {
+                console.warn('⚠️ 还原上一个选区失败（不影响本次填充）:', e);
+            }
 
             console.log("✅ 图案填充完成");
         } catch (error) {

@@ -16,6 +16,45 @@ export interface LayerInfo {
      * 现在随 layerInfo 一起带回，零额外往返。
      */
     isHidden?: boolean;
+    /**
+     * 活动图层的**图层种类**（`layer.kind` 的原样值：`'pixel'` / `'text'` /
+     * `'smartObject'` / `'solidColor'` / `'gradient'` / `'pattern'` / `'group'` /
+     * 各类调整层……）。
+     *
+     * 为什么必须带出来：渐变 / 图案填充的收尾链路
+     * （`rasterizeLayer` → 删蒙版 apply → `mergeLayersNew`）**只对普通像素图层成立** ——
+     * 文字层 / 智能对象 / 形状层 / 调整层 / 图层组走进去会得到「内容被就地替换」或
+     * 直接报错。判据不能复用 `hasPixels`：那个字段的前提就是 `kind === 'pixel'`，
+     * 非像素层在它那里恒为 false，二者语义正交。
+     *
+     * ⚠️ 背景图层同样是 `'pixel'`，靠 `isBackground` 区分，不要在这里再切一刀。
+     */
+    layerKind?: string;
+    /**
+     * 活动图层**自身**的混合模式（`layer.blendMode` 的 PS 原生枚举值，
+     * 如 `'normal'` / `'multiply'` / `'linearDodge'`），不是面板上那个显示名。
+     *
+     * 为什么必须带出来：「新建图层关闭 + 目标是无像素空图层」时，PS 会把那个空图层
+     * **直接顶替**成渐变填充图层 ⇒ `setLayerProperties` 写进去的混合模式会盖掉它原本
+     * 的模式。要还原就得在创建内容图层**之前**把原值记下来（那时活动图层还是它）。
+     */
+    blendMode?: string;
+    /**
+     * 活动图层 ID。特殊剪贴蒙版的像素写回需要「基底图层 ID」，
+     * 而写回发生在内容图层创建**之后**（活动图层已换人），故提前带出。
+     */
+    layerId?: number;
+    /**
+     * 活动图层**是否正在被当作别人的剪贴蒙版**（PS 的「向下剪贴」箭头，`layer.isClippingMask`）。
+     *
+     * 为什么必须带出来（2026-11-19 用户 8 组实测）：
+     *   · 目标层是「最上层的剪贴蒙版」时，新建的填充层**不会**自动剪贴，
+     *     `mergeLayersNew` 直接报「合并图层不可用」⇒ 填充整个丢失；
+     *   · 目标层是「剪贴基底」时，新建的填充层**会**被自动塞进剪贴组，
+     *     合并后继承裁剪语义 ⇒ 表现为「没开特殊剪贴却像开了」。
+     * 两条都只能靠这个字段提前判定，事后看合并报错已经太晚（错误框挡不住）。
+     */
+    isClippingMask?: boolean;
 }
 
 /**
@@ -115,6 +154,15 @@ function readLayerDomInfo(doc: any): LayerInfo | null {
         hasTransparencyLocked: !!activeLayer.transparentPixelsLocked,
         hasPixels,
         isHidden: !activeLayer.visible,
+        // ⚠️ 三个字段都是 DOM 属性读（0 次 batchPlay），随 layerInfo 一起带回。
+        //    `kind` / `blendMode` 用来把「只对像素层成立的收尾链路」挡在门外，
+        //    `id` 给特殊剪贴蒙版的像素写回当基底引用 —— 都不需要额外 IPC。
+        layerKind: activeLayer.kind,
+        blendMode: activeLayer.blendMode,
+        layerId: activeLayer.id,
+        // `isClippingMask` 同样是 DOM 属性读（0 次 batchPlay）：UXP 的 Layer 类直接暴露。
+        // 老宿主若没有这个属性 → undefined ⇒ `false`，只会退化成「不做剪贴纠偏」。
+        isClippingMask: !!(activeLayer as any).isClippingMask,
         // ⚠️ 快速蒙版 / 图层蒙版 / 单通道三个字段在 probeChannelState() 里补齐
         isInQuickMask: false,
         isInLayerMask: false,
@@ -274,6 +322,10 @@ async function probeLayerInfo(gen: number): Promise<LayerInfo | null> {
         hasTransparencyLocked: domInfo.hasTransparencyLocked,
         hasPixels: domInfo.hasPixels,
         isHidden: domInfo.isHidden,
+        layerKind: domInfo.layerKind,
+        blendMode: domInfo.blendMode,
+        layerId: domInfo.layerId,
+        isClippingMask: domInfo.isClippingMask,
         isInQuickMask: !!doc.quickMaskMode,
         isInLayerMask: channelState.inLayerMask,
         isInSingleColorChannel: channelState.inSingleChannel

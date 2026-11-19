@@ -7,6 +7,7 @@ import { AppState, initialState, Gradient, CompactModes, CompactScope, initialCo
 import { DragHandler } from './utils/DragHandler';
 import { FillHandler } from './utils/FillHandler';
 import { LayerInfoHandler, invalidateLayerInfoCache, shouldInvalidateLayerInfo } from './utils/LayerInfoHandler';
+import { readActiveLayerClipState } from './utils/SpecialClipMask';
 import { ClearHandler } from './utils/ClearHandler';
 import ColorSettingsPanel from './components/ColorSettingsPanel';
 import PatternPicker from './components/PatternPicker';
@@ -2931,6 +2932,31 @@ class App extends React.Component<AppProps, AppState> {
                 // 新建图层后活动图层已改变 ⇒ 必须让layerInfo 缓存失效，
                 // 否则下一次填充会拿到「新建之前那个图层」的信息。
                 invalidateLayerInfoCache();
+
+                // ⚠️ 目标图层已经换人，下游读的是这个局部变量（非像素层拦截 / hasPixels
+                //    分支 / 特殊剪贴蒙版的基底 id 都以它为准）。不同步的话，在文字层上开着
+                //    「新建图层」填充会被误判成「目标是文字层」而挡掉。
+                //    新建的是空白像素层 ⇒ 这些字段直接按事实覆盖（背景 / 透明锁 / 隐藏
+                //    都是**旧图层**的属性，留在新层上会让后续分支判错）。
+                // ⚠️ 新层可能被 PS 自动塞进剪贴组（目标层是剪贴基底时）—— 那是 PS 的
+                //    原生放置语义，**不改动它**：PS 里没有任何「只释放这一层」的命令，
+                //    `ungroup` / `Layer.isClippingMask = false` 都会把这组里**上方所有**
+                //    剪贴层一起释放（UXP 文档原文：Releasing a clipping mask will also
+                //    release the layers above；用户 2026-11-19 实测：三个箭头全没）。
+                //    这里只把**真实状态**记进 layerInfo，别让下游以为它是个独立层。
+                const newLayerClip = readActiveLayerClipState();
+
+                layerInfo = {
+                    ...layerInfo,
+                    layerKind: 'pixel',
+                    hasPixels: false,
+                    isBackground: false,
+                    hasTransparencyLocked: false,
+                    isHidden: false,
+                    isClippingMask: newLayerClip.isClippingMask,
+                    blendMode: BLEND_MODES[this.state.blendMode] || 'normal',
+                    layerId: app.activeDocument.activeLayers[0]?.id ?? layerInfo.layerId,
+                };
             }
 
             const { isBackground, hasTransparencyLocked, hasPixels } = layerInfo;

@@ -11,10 +11,10 @@
 
 **校验**：改 CSS 跑 3 个 guard（只扫 `src/styles/*.css`）；类型检查 `npx tsc -p tsconfig.check.json`（⛔ 别用 `tsc --noEmit`）；改 .c 跑 `build.sh`（须沙箱外）零告警 + 导出表 5 项；改面板**别跑 `yarn build`**（那会产出 production 覆盖 `yarn watch` 的 dev 构建）—— watch 会自动重编，再把 `dist/bundle.js` 复制到 `Plug-ins\dist\` 即可。全仓 ~168 条历史错误在 `app.tsx`/`adjustments`/`components`，只看自己碰过的行。
 
-## 铁律 90–148（**全文**见 `refs/ironrules-90-129.md` 与 `refs/ironrules-130-147.md`；本表不重复）
+## 铁律 90–152（**全文**见 `refs/ironrules-90-129.md` 与 `refs/ironrules-130-147.md`；本表不重复）
 
 90–129：`refs/ironrules-90-129.md`（临时模式/吸附/HUD/断流/编码/模态等，逐条一句话）。
-130–148：`refs/ironrules-130-147.md`（快捷键面板/工具键/菜单/样式/追笔/提示；**147 已回退**勿重蹈，148 标准强度线性化）。
+130–152：`refs/ironrules-130-147.md`（快捷键面板/工具键/菜单/样式/追笔/提示；**147 已回退**勿重蹈，148 标准强度线性化；**149–152 填充线**：`Document` 无 `bounds`、剪贴无法单层释放、收尾统一像素写回、**像素读必须按图层 `boundsNoEffects` 再按索引扩充成全文档**）。
 
 ## 其余铁律（1–89）—— 全文见 `refs/ironrules-1-89.md`
 

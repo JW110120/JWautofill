@@ -386,6 +386,22 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
     const saveTimerRef = useRef<any>(null);
     const dirtyRef = useRef(false);
 
+    /**
+     * 「特殊剪贴蒙版」勾选要**立刻**回传父面板。
+     *
+     * 下面那条「参数变化 → 回写当前选中预设」的 effect 有 300ms 防抖，而填充是
+     * 「画完选区立刻发生」的 —— 勾完马上画选区，父面板还拿着**上一个**开关值，
+     * 填充就会按旧状态执行（表现为「明明关了特殊剪贴，结果却像开着」）。
+     * 这个开关直接决定走哪条分支，不能等防抖。
+     */
+    const commitPreserveTransparency = (next: boolean) => {
+        setPreserveTransparency(next);
+        if (selectedPreset === null) return;
+        const current: any = presets[selectedPreset];
+        if (!current) return;
+        onSelect({ ...current, preserveTransparency: next });
+    };
+
     // 拖拽排序所需的引用与状态
     const dragPresetIndexRef = useRef<number | null>(null);
     const dragPresetActiveRef = useRef<boolean>(false);
@@ -1843,9 +1859,9 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             className="label-6"
                             htmlFor="transparencyCheckbox"
                             title={helpTexts.gradient.preserveTransparency}
-                            onClick={() => setPreserveTransparency(!preserveTransparency)}
+                            onClick={() => commitPreserveTransparency(!preserveTransparency)}
                         >
-                            保留不透明度
+                            特殊剪贴蒙版
                         </label>
                         <input
                             type="checkbox"
@@ -1853,7 +1869,7 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                             className="checkbox-input"
                             checked={preserveTransparency}
                             title={helpTexts.gradient.preserveTransparency}
-                            onChange={(e) => setPreserveTransparency(e.target.checked)}
+                            onChange={(e) => commitPreserveTransparency(e.target.checked)}
                         />
                     </div>
                     </div>

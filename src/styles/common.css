@@ -569,7 +569,7 @@ html, body {
      width: calc(100% + 4px) + margin-right: -4px ⇒ 墨迹右缘回到 ≈10px（与左侧对称）。
    ⚠️ 必须连 width 一起放大：.row-between 自带 width:100%、本行是 flex 列子项，
       只给负 margin 不会把盒子右移。
-   ⚠️ 作用域限定 .border-panel-section（渐变「反向/保留不透明度」、图案底部复选框行同结构）。
+   ⚠️ 作用域限定 .border-panel-section（渐变「反向/特殊剪贴蒙版」、图案底部复选框行同结构）。
    ⚠️ 不需为 .float-window 再写：浮窗内已无 row-grid。 */
 .border-panel-section > .row-between.row-grid.row-grid-flush {
   width: calc(100% + 4px);

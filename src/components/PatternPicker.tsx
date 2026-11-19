@@ -309,8 +309,32 @@ const rotatePatternPreview = (
         }
     }, [selectedPattern, angle, scale, fillMode, rotateAll, preserveTransparency, patterns, selectedPatterns.size]);
 
-    // 参数复位：只回参数，不碰预设。
-    // ⚠️ 刻意不 setPatterns —— 预设列表是用户资产，「参数复位」不该删掉后添加的预设
+    /**
+     * 「特殊剪贴蒙版」勾选要**立刻**回传父面板。
+     *
+     * 上面那条实时更新 effect 有 300ms 防抖，而填充是「画完选区立刻发生」的 ——
+     * 勾完马上画选区，父面板还拿着**上一个**开关值，填充就会按旧状态执行
+     * （表现为「明明关了特殊剪贴，结果却像开着」）。这个开关直接决定走哪条分支。
+     */
+    const commitPreserveTransparency = (next: boolean) => {
+        setPreserveTransparency(next);
+        if (!selectedPattern || selectedPatterns.size > 0) return;
+        const data: any = patterns.find(p => p.id === selectedPattern);
+        if (!data || !data.grayData || !data.patternRgbData) return;
+        onSelect({
+            ...data,
+            angle,
+            scale,
+            fillMode,
+            rotateAll,
+            preserveTransparency: next,
+            components: data.patternComponents || data.components || 3,
+            currentScale: scale,
+            currentAngle: angle
+        });
+    };
+
+    // 参数复位：只回参数，不碰预设。    // ⚠️ 刻意不 setPatterns —— 预设列表是用户资产，「参数复位」不该删掉后添加的预设
     //    （同时 setSelectedPattern(null)：图案的变换参数是「叠在选中图案之上」的，
     //    参数归零后原有选中态已不对应任何有效组合，清掉更干净；
     //    上面那条 onSelect 实时更新 effect 依赖 selectedPattern，会随之回传一次）。
@@ -1978,17 +2002,17 @@ const rotatePatternPreview = (
                     <div className="row-start">
                         <label
                             htmlFor="transparencyCheckbox"
-                            className="label-4"
+                            className="label-6"
                             title={helpTexts.pattern.clipMask}
-                            onClick={() => setPreserveTransparency(!preserveTransparency)}
+                            onClick={() => commitPreserveTransparency(!preserveTransparency)}
                         >
-                            剪贴蒙版
+                            特殊剪贴蒙版
                         </label>
                         <input
                             type="checkbox"
                             id="transparencyCheckbox"
                             checked={preserveTransparency}
-                            onChange={(e) => setPreserveTransparency(e.target.checked)}
+                            onChange={(e) => commitPreserveTransparency(e.target.checked)}
                             className="checkbox-input"
                             title={helpTexts.pattern.clipMask}
                         />

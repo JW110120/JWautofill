@@ -78,3 +78,22 @@
 - ⛔ **「控件不可用」时不要整行隐藏，改「标签 + 控件」双禁用态**（用户明确要求）：清除模式下混合模式行**始终渲染**，标签挂 `label-disabled`、`Select` 传 `disabled={clearMode}`。
   - ⚠️ `.label-4` 与 `.label-disabled` 同为 (0,1,0)，**同文件内**靠后置规则取胜（写 `className="label-4 label-disabled"` 即可）；**跨文件**（app.css 类 vs common.css）必须两级类。
 - ⚠️ **同轴控件步长必须一致**：羽化滑杆 `step` 与 number-input `step` 同为 1（滑杆 0.5 会写 `X.5`，而 `.num-input-row` 定宽 34px 显示不全）。
+
+## 十、特殊剪贴蒙版（原「保留不透明度 / 剪贴蒙版」复选框）
+
+- ⛔⛔ **禁止再用 PS 原生 `groupEvent`**：对「本身已经是别人的剪贴蒙版」的图层会直接报
+  「命令"创建剪贴蒙版"当前不可用」，而且 PS 剪贴蒙版**不能套娃**（只受紧邻一层约束
+  ⇒ 二次填充越出第一次的范围）。一律走 `src/utils/SpecialClipMask.ts`。
+- **语义定义**：只改目标图层 RGB，**目标 alpha 一个字节都不动**（原本 alpha=128，
+  填充后仍 128）。逐像素 `w = topA × baseA × opacity`，
+  `out.rgb = base.rgb×(1-w) + blend(base,top)×w`。
+- ⛔ 合成完**删除**填充层，**不能 `mergeLayersNew`** —— 合并把两层 alpha 叠加（128 → 约 191）。
+- 「新建图层」开启时也生效：原生 `groupEvent` 优先（基底可为文字层/智能对象），
+  仅在被拒时降级 `multiplyTopAlphaByBase`（只乘紧邻一层 alpha，不追剪贴链）。
+- 非像素层（文字/智能对象/形状/调整层/组）**跳过 + showAlert 提示先栅格化**；
+  判据用 `layerInfo.layerKind`，⛔ **不能用 `hasPixels`**（其前提就是 `kind==='pixel'`）。
+- 渐变收尾四条分支：①新层（栅格化+应用蒙版，再按需剪贴）②**新分支 2**：关新建+空像素层
+  （PS 会把空层**直接顶替**成渐变层 ⇒ 记原 `blendMode` → 栅格化+应用蒙版 → 还原）
+  ③有像素+特殊剪贴（像素合成+删层，失败降级合并）④有像素+不剪贴（原样合并）。
+- ⚠️ `app.tsx` 建新层后**必须同步 layerInfo**（kind/hasPixels/isBackground/
+  hasTransparencyLocked/isHidden/blendMode/layerId），否则下游按旧图层误判。
