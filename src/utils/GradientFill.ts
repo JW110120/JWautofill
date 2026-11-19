@@ -8,10 +8,9 @@ import {
     deleteActiveLayer,
     deleteLayerById,
     isNonPixelLayerKind,
-    mergeIntoBase,
-    moveActiveLayerAbove,
     multiplyTopAlphaByBase,
     NON_PIXEL_LAYER_HINT,
+    PixelWriteResult,
     readActiveLayerClipState,
     resolveActiveLayerId,
     selectFrontLayer,
@@ -261,7 +260,7 @@ export class GradientFill {
                 const contentId = await resolveActiveLayerId();
                 const useSpecialClip = !!layerInfo.hasPixels && !!options.preserveTransparency;
 
-                const written = maskApplied && contentId && baseLayerId
+                const writeResult: PixelWriteResult = (maskApplied && contentId && baseLayerId)
                     ? (useSpecialClip
                         ? await blendTopIntoBase({
                             docId: app.activeDocument.id,
@@ -277,24 +276,42 @@ export class GradientFill {
                             opacity: options.opacity,
                             blendMode: options.blendMode,
                         }))
-                    : false;
+                    : 'failed';
 
-                if (written && contentId) {
-                    // 删不掉就再按「活动图层」删一次（id 失效时按 id 删是静默失败的）
-                    if (!(await deleteLayerById(contentId))) {
+                if (writeResult !== 'failed') {
+                    // `'written'` = 已写回；`'nothing'` = 按语义本来就不该写
+                    // （特殊剪贴：基底在选区处 alpha 全为 0 ⇒ 一个像素都不该填）。
+                    // ⚠️ 两者都必须只**删掉内容层**：`'nothing'` 尤其不能降级合并 ——
+                    //    合并只认紧邻的那一层，会填到别人的图层上（用户实测：在
+                    //    alpha=0 处填充，结果落在最上方的剪贴蒙版上）。
+                    if (contentId) {
+                        if (!(await deleteLayerById(contentId))) await deleteActiveLayer();
+                    } else {
                         await deleteActiveLayer();
                     }
                 } else {
-                    // 降级：像素写回走不通（蒙版没能应用 / 锁定的背景 / 锁定透明像素）
-                    // ⇒ 把内容层挪到目标层正上方再合并，至少让填充落上去。
-                    if (contentId) await moveActiveLayerAbove(baseLayerId);
-                    await mergeIntoBase({
-                        docId: app.activeDocument.id,
-                        baseLayerId,
-                        baseIsClippingMask: !!layerInfo.isClippingMask,
-                        contentIsClippingMask: readActiveLayerClipState().isClippingMask,
-                        opacity: options.opacity,
-                        blendMode: options.blendMode,
+                    // 【写回被拒】像素写回走不通（蒙版没能应用 / 目标锁了「透明像素」/
+                    // 背景层或非像素层拒绝写入）。⛔ **不做任何降级合并**：
+                    //   `mergeLayersNew` / `groupEvent` 只认**紧邻的那一层**，而内容层此刻
+                    //   在文档最顶层，合并会把渐变糊到别人的图层上（用户 2026-11-19 实测：
+                    //   填到了最上方的剪贴蒙版上，还顺手新建了一个剪贴蒙版）。
+                    // ⇒ 撤回内容层，让文档回到填充前的样子，然后明确报失败。
+                    if (contentId) {
+                        if (!(await deleteLayerById(contentId))) await deleteActiveLayer();
+                    } else {
+                        await deleteActiveLayer();
+                    }
+
+                    const reason = !maskApplied
+                        ? '无法把选区应用成图层蒙版'
+                        : (!contentId || !baseLayerId)
+                            ? '找不到内容图层或目标图层'
+                            : '目标图层拒绝了像素写入（可能锁定了「透明像素」，或该图层类型不支持写入）';
+                    // 报错前先把手上的图层还给用户：删层会让 PS 自动选中相邻层，
+                    // 用户点掉弹框后看到的应该是自己原本那个图层。
+                    if (baseLayerId) await selectLayerById(baseLayerId);
+                    await core.showAlert({
+                        message: `渐变填充未完成：${reason}。\n临时图层已撤回，原有图层未被改动。`
                     });
                 }
 

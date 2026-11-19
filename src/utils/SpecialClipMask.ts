@@ -171,25 +171,6 @@ export async function selectLayerById(layerId: number): Promise<boolean> {
     }
 }
 
-/** 把活动图层挪到指定图层的**正上方**（降级合并前用）。 */
-export async function moveActiveLayerAbove(layerId: number): Promise<boolean> {
-    try {
-        await action.batchPlay(
-            [{
-                _obj: 'move',
-                _target: [{ _ref: 'layer', _enum: 'ordinal', _value: 'targetEnum' }],
-                to: { _ref: 'layer', _id: layerId },
-                _options: { dialogOptions: 'silent' },
-            }],
-            { synchronousExecution: true }
-        );
-        return true;
-    } catch (e) {
-        console.warn(`⚠️ 移动图层到 ${layerId} 上方失败:`, e);
-        return false;
-    }
-}
-
 /**
  * 取活动图层 id（内容层栅格化之后调用）。
  *
@@ -490,6 +471,20 @@ export interface SpecialClipOptions {
 }
 
 /**
+ * 像素写回的三态结果。
+ *
+ * ⚠️ **必须区分 `'nothing'` 和 `'failed'`**（2026-11-19 用户实测 bug）：
+ *   · `'nothing'` = 按语义**本来就不该写任何像素**（基底在选区处 alpha 全为 0 /
+ *     填充层在选区处全透明）⇒ 这是一次**成功的填充**，调用方只需删掉内容层。
+ *   · `'failed'` = 该写但写不进去（锁定的背景层 / 权限 / 宿主拒绝）⇒ 才允许降级。
+ *   旧实现用 boolean，把 `'nothing'` 也当失败 ⇒ 降级「挪到目标层上方 + 向下合并」⇒
+ *   PS 只能合到**紧邻的那一层**（往往是最上方的剪贴蒙版）⇒ 表现为
+ *   「在 alpha=0 的地方也填了一块渐变」「填到了最上层的同一个位置」
+ *   「弹『合并图层不可用』并在最上层剪贴蒙版上又新建一个剪贴蒙版」。
+ */
+export type PixelWriteResult = 'written' | 'nothing' | 'failed';
+
+/**
  * 把填充层的颜色**合成进**基底图层，基底 alpha 严格不变。
  *
  * 逐像素：`w = topA × baseA × opacity`，`out.rgb = base.rgb×(1-w) + blend(base,top)×w`。
@@ -499,26 +494,28 @@ export interface SpecialClipOptions {
  * 完成后调用方应**删除填充层**（不再 `mergeLayersNew`）：合并会把两层 alpha 叠加，
  * 128 → 约 191，正是本函数要避免的事情。
  *
- * @returns false = 读不到任何一层像素（空图层等），调用方应退回原路径并 warn。
+ * @returns `'nothing'` = 基底在选区处没有像素（alpha 全为 0）⇒ 语义上就该什么都不填，
+ *          调用方删掉内容层即可，**不要降级合并**；`'failed'` = 该写但写不进去。
  */
-export async function blendTopIntoBase(options: SpecialClipOptions): Promise<boolean> {
+export async function blendTopIntoBase(options: SpecialClipOptions): Promise<PixelWriteResult> {
     const { docId, baseLayerId, topLayerId, opacity, blendMode } = options;
     const { width, height } = getDocPixelSize();
     if (width <= 0 || height <= 0) {
         console.warn('⚠️ 特殊剪贴蒙版：拿不到文档像素尺寸，跳过');
-        return false;
+        return 'failed';
     }
 
     // ⚠️ 按两张图各自的 `boundsNoEffects` 读（不是文档矩形），再按 sourceBounds 索引扩充。
     const baseBlock = await readLayerBlock(docId, baseLayerId);
     if (!baseBlock) {
-        console.warn('⚠️ 特殊剪贴蒙版：基底图层没有可读像素，跳过');
-        return false;
+        // 基底在整层范围内都没有可读像素 ⇒ 特殊剪贴的可见范围为空 ⇒ 什么都不填。
+        console.log('ℹ️ 特殊剪贴蒙版：基底图层没有像素，本次不填充任何内容');
+        return 'nothing';
     }
     const topBlock = await readLayerBlock(docId, topLayerId);
     if (!topBlock) {
-        console.warn('⚠️ 特殊剪贴蒙版：填充层没有可读像素，跳过');
-        return false;
+        console.log('ℹ️ 特殊剪贴蒙版：填充层没有像素，本次不填充任何内容');
+        return 'nothing';
     }
 
     // 输出缓冲以基底为底（保持它原有的 alpha / 选区外像素原样）
@@ -560,20 +557,23 @@ export async function blendTopIntoBase(options: SpecialClipOptions): Promise<boo
     }
 
     if (touched === 0) {
-        console.warn('⚠️ 特殊剪贴蒙版：基底与填充层没有交集像素，跳过写回');
-        return false;
+        // ⚠️ 这不是失败：基底在这块选区里 alpha 全为 0（或填充层全透明）⇒
+        //    「只落在基底已有像素上」的语义下，正确结果就是**一个像素都不改**。
+        //    绝不能在这里降级去合并 —— 合并只认紧邻那一层，会填到别人的图层上。
+        console.log('ℹ️ 特殊剪贴蒙版：选区与基底像素没有交集，本次不填充任何内容（符合预期）');
+        return 'nothing';
     }
 
     try {
         await writeDocument(docId, baseLayerId, out, width, height, baseComponents);
     } catch (e) {
         // 背景图层 / 锁定透明像素 / 非像素图层都可能在这里被 PS 拒绝。
-        // 返回 false 让调用方退回「向下合并」，不要把整次填充判死。
+        // 返回 'failed' 让调用方退回「向下合并」，不要把整次填充判死。
         console.warn('⚠️ 特殊剪贴蒙版：写回基底失败，退回合并路径:', e);
-        return false;
+        return 'failed';
     }
     console.log(`✅ 特殊剪贴蒙版合成完成，影响 ${touched} 个像素（alpha 未改动）`);
-    return true;
+    return 'written';
 }
 
 /**
@@ -587,12 +587,13 @@ export async function blendTopIntoBase(options: SpecialClipOptions): Promise<boo
  *   · 新建层被自动塞进剪贴组 ⇒ 合并后继承裁剪语义（alpha 被钳住，看起来像开了特殊剪贴）。
  * 两条都绕不过去时，用本函数算准了写回，比和宿主掰扯可靠。
  *
- * @returns false = 读不到像素 / 写不进去，调用方应放弃并提示。
+ * @returns `'nothing'` = 填充层在选区里没有任何不透明像素（本来就没内容可写）；
+ *          `'failed'` = 该写但写不进去（锁定的背景层 / 宿主拒绝）。
  */
-export async function compositeTopIntoBase(options: SpecialClipOptions): Promise<boolean> {
+export async function compositeTopIntoBase(options: SpecialClipOptions): Promise<PixelWriteResult> {
     const { docId, baseLayerId, topLayerId, opacity, blendMode } = options;
     const { width, height } = getDocPixelSize();
-    if (width <= 0 || height <= 0) return false;
+    if (width <= 0 || height <= 0) return 'failed';
 
     // ⚠️ 按两张图各自的 `boundsNoEffects` 读（不是文档矩形），再按 sourceBounds 索引扩充。
     const baseBlock = await readLayerBlock(docId, baseLayerId);
@@ -600,8 +601,8 @@ export async function compositeTopIntoBase(options: SpecialClipOptions): Promise
     // ⚠️ 基底读不到像素**不是**失败：目标可能是个空像素图层（「新建图层关闭 + 填充
     //    目标是空图层」那条分支就是它）。空图层按「全透明」处理，填充照样写进去。
     if (!topBlock) {
-        console.warn('⚠️ 并集合成：填充层没有可读像素，跳过写回');
-        return false;
+        console.log('ℹ️ 并集合成：填充层没有可读像素，本次无内容可写');
+        return 'nothing';
     }
 
     const bc = baseBlock ? baseBlock.components : 4;
@@ -647,90 +648,19 @@ export async function compositeTopIntoBase(options: SpecialClipOptions): Promise
     }
 
     if (touched === 0) {
-        console.warn('⚠️ 并集合成：基底与填充层没有交集像素，跳过写回');
-        return false;
+        // 填充层在选区里全透明 ⇒ 本来就没有内容可写，这不是失败。
+        console.log('ℹ️ 并集合成：填充层在选区里没有不透明像素，本次无内容可写');
+        return 'nothing';
     }
 
     try {
         await writeDocument(docId, baseLayerId, out, width, height, bc);
     } catch (e) {
         console.warn('⚠️ 并集合成：写回基底失败:', e);
-        return false;
+        return 'failed';
     }
     console.log(`✅ 并集合成完成，影响 ${touched} 个像素（alpha 取并集）`);
-    return true;
-}
-
-/**
- * 收尾：把内容图层并进目标图层，按「合并 → 建立/释放剪贴关系后合并 → 像素并集写回」三级降级。
- *
- * 调用前提：内容图层已经**栅格化 + 应用蒙版**（alpha 已定形为选区）。
- *
- * 为什么需要它（2026-11-19 用户 8 组实测）：
- *   · 目标是**最上层的剪贴蒙版**时（如 B 剪贴到 A），新建的渐变层不会自动变成剪贴层
- *     ⇒ `mergeLayersNew` 报「合并图层不可用」，填充整个丢失（情况 5/6）；
- *   · 目标是**剪贴基底**时（如 A 被 B 剪贴），新建层会被自动塞进剪贴组
- *     ⇒ 合并能成功，但继承裁剪语义，看起来像误开了特殊剪贴（情况 1）。
- * 这两条都靠 `isClippingMask` 提前纠正，不再依赖「合并失败」这种事后信号。
- *
- * @returns `'merged'` = 原生合并成功；`'composited'` = 走像素写回；`'failed'` = 都没成。
- */
-export async function mergeIntoBase(options: {
-    docId: number;
-    baseLayerId: number | null;
-    /** 填充前目标层自身是否是剪贴蒙版（`layerInfo.isClippingMask`）。 */
-    baseIsClippingMask: boolean;
-    /** 内容图层此刻是否是剪贴蒙版（建好之后读一次）。 */
-    contentIsClippingMask: boolean;
-    opacity: number;
-    blendMode: string;
-}): Promise<'merged' | 'composited' | 'failed'> {
-    const { docId, baseLayerId, baseIsClippingMask, opacity, blendMode } = options;
-    let canMerge = true;
-
-    if (baseIsClippingMask && !options.contentIsClippingMask) {
-        // 目标层本身是剪贴蒙版 ⇒ 先把内容层也变成剪贴蒙版，合并才是合法操作
-        // （用户 2026-11-19 原话：「合并前应该增加一步 groupEvent」）。
-        await tryCreateNativeClippingMask();
-    } else if (!baseIsClippingMask && options.contentIsClippingMask) {
-        // 内容层被塞进了剪贴组，而目标不是剪贴层 ⇒ 合并会继承裁剪语义。
-        // ⛔ 不能「释放剪贴」：UXP 文档对 `Layer.isClippingMask` 写得很清楚 ——
-        //    「Releasing a clipping mask will also release the layers above」，
-        //    `ungroup` 同理，会把该剪贴组**所有**成员一起释放（用户实测：三个箭头全没）。
-        //    PS 里根本不存在「只释放某一层」的操作 ⇒ 直接跳过合并，改走像素并集写回
-        //    （像素读写不看剪贴关系，结果等价于「把这层并进目标层」）。
-        canMerge = false;
-        console.warn('⚠️ 内容层处于剪贴组中 ⇒ 放弃合并，改用像素并集写回');
-    }
-
-    if (canMerge) {
-        try {
-            await action.batchPlay(
-                [{ _obj: 'mergeLayersNew', _options: { dialogOptions: 'dontDisplay' } }],
-                { synchronousExecution: true, dialogOptions: 'dontDisplayDialogs' }
-            );
-            return 'merged';
-        } catch (e) {
-            console.warn('⚠️ 向下合并失败，改用像素并集写回:', e);
-        }
-    }
-
-    const top = readActiveLayerClipState();
-    if (!baseLayerId || !top.id) return 'failed';
-
-    // 合并失败后活动图层仍是内容层（`mergeLayersNew` 不留中间状态）
-    const ok = await compositeTopIntoBase({
-        docId,
-        baseLayerId,
-        topLayerId: top.id,
-        opacity,
-        blendMode,
-    });
-    if (!ok) return 'failed';
-
-    const deleted = await deleteLayerById(top.id);
-    if (!deleted) await deleteActiveLayer();
-    return 'composited';
+    return 'written';
 }
 
 /**

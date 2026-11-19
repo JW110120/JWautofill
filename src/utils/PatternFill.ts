@@ -8,10 +8,8 @@ import {
     deleteActiveLayer,
     deleteLayerById,
     isNonPixelLayerKind,
-    mergeIntoBase,
-    moveActiveLayerAbove,
     NON_PIXEL_LAYER_HINT,
-    readActiveLayerClipState,
+    PixelWriteResult,
     resolveActiveLayerId,
     selectFrontLayer,
     selectLayerById,
@@ -990,7 +988,7 @@ export class PatternFill {
 
             const useSpecialClip = !!layerInfo.hasPixels && !!options.preserveTransparency;
 
-            const written = maskApplied && baseLayerId
+            const writeResult: PixelWriteResult = (maskApplied && baseLayerId)
                 ? (useSpecialClip
                     ? await blendTopIntoBase({
                         docId: app.activeDocument.id,
@@ -1006,24 +1004,36 @@ export class PatternFill {
                         opacity: options.opacity,
                         blendMode: options.blendMode,
                     }))
-                : false;
+                : 'failed';
 
-            if (written) {
+            if (writeResult !== 'failed') {
                 // ⚠️ 合成完必须**删除**临时层，不能 mergeLayersNew —— 合并会把两层
                 //    alpha 叠加（128 → 约 191），正是「不改变原有不透明度」要避免的。
+                // ⚠️ `'nothing'`（基底在选区处 alpha 全为 0 ⇒ 本来就不该填）同样只删层：
+                //    降级合并会合到**紧邻的那一层**（往往是最上方的剪贴蒙版），
+                //    表现为「在 alpha=0 的地方也填上了图案」，这是用户实测过的 bug。
                 if (!(await deleteLayerById(topId))) {
                     await deleteActiveLayer();
                 }
             } else {
-                // 降级：像素写回被拒 ⇒ 挪到目标层正上方再合并，至少让图案落上去。
-                await moveActiveLayerAbove(baseLayerId);
-                await mergeIntoBase({
-                    docId: app.activeDocument.id,
-                    baseLayerId,
-                    baseIsClippingMask: !!layerInfo.isClippingMask,
-                    contentIsClippingMask: readActiveLayerClipState().isClippingMask,
-                    opacity: options.opacity,
-                    blendMode: options.blendMode,
+                // 【写回被拒】像素写回走不通（蒙版没能应用 / 目标锁了「透明像素」/
+                // 背景层或非像素层拒绝写入）。⛔ **不做任何降级合并**：
+                //   `mergeLayersNew` / `groupEvent` 只认**紧邻的那一层**，而临时层此刻
+                //   在文档最顶层，合并会把图案糊到别人的图层上（用户 2026-11-19 实测）。
+                // ⇒ 撤回临时层，让文档回到填充前的样子，然后明确报失败。
+                if (!(await deleteLayerById(topId))) {
+                    await deleteActiveLayer();
+                }
+
+                const reason = !maskApplied
+                    ? '无法把选区应用成图层蒙版'
+                    : !baseLayerId
+                        ? '找不到目标图层'
+                        : '目标图层拒绝了像素写入（可能锁定了「透明像素」，或该图层类型不支持写入）';
+                // 报错前先把手上的图层还给用户（删层会让 PS 自动选中相邻层）
+                if (baseLayerId) await selectLayerById(baseLayerId);
+                await core.showAlert({
+                    message: `图案填充未完成：${reason}。\n临时图层已撤回，原有图层未被改动。`
                 });
             }
 
