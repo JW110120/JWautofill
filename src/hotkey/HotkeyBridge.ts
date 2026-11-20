@@ -802,6 +802,24 @@ export function registerFuncRunner(fn: (funcId: string) => void) {
   funcRunner = fn;
 }
 
+/**
+ * 关闭「清除模式」（幂等，重复调用无副作用）。
+ *
+ * 2026-11-20 用户要求：Shift+E 改成「只开不关」之后，清除模式失去了用快捷键退出的路。
+ * ⇒ 用「回到选区填充」的两条键兼任出口：
+ *   · H（主开关 = 选区填充开关）
+ *   · Shift+H（切换选区填充 / 五工具循环）
+ * 两条都代表「我要回去正常填充」，此时清除模式必须落下来，否则下一笔仍是清除。
+ *
+ * ⛔ 用独立的 token 前缀 `clearOff|`：不能和 focusClear 那条「开启」命令共用 token，
+ *    否则 file 里的 token 相同会被 ClearModeBus 当成「同一次命中已处理」而跳过。
+ * ⛔ 400ms 时间桶与其它命令同一套：同一次命中广播给 N 个面板只执行一次。
+ */
+function requestClearModeOff(token: string) {
+  void requestClearModeSet('clearOff|' + token, false)
+    .catch((e) => console.error('⚠️ 关闭清除模式命令写入失败:', e));
+}
+
 function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?: string; dir?: number }) {
   if (msg.action === 'toggleMain') {
     // 主开关：翻转「共享状态」而不是调用本面板内的回调。
@@ -809,6 +827,9 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
     // 于是守护进程广播给 N 个面板也只会翻转一次（详见 MainToggleBus 头部说明）。
     const combo = msg.combo ?? '';
     const token = 'hit|' + (combo || 'toggleMain') + '|' + Math.floor(Date.now() / 400);
+    /* 按 H 关闭清除模式（2026-11-20 用户要求，见 requestClearModeOff 的说明）。
+       ⛔ 放在守护之前：清除模式是面板 state，走文件轮询，早发一拍就能早一拍落下。 */
+    requestClearModeOff(token);
     void (async () => {
       /* 2026-11-17（v2 用户确认）：守护顺序合并成一条「先到位，再拍照」——
          目标不是当前工具就先切过去，然后才逐个拍照片、逐个拧旋钮（见 enterAutoFill）。
@@ -885,6 +906,9 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
           不该覆盖用户刚按下的工具键）。切工具由 enterAutoFill 串行完成后，本分支补打抑制位。 */
     const combo = msg.combo ?? '';
     const token = 'fillToolCycle|' + (combo || FILL_TOOL_CYCLE_ID) + '|' + Math.floor(Date.now() / 400);
+    /* 按 Shift+H 关闭清除模式（2026-11-20 用户要求）：这条键的语义是「回到正常选区填充并
+       循环工具」，清除模式若还亮着，切过去的选区一做填充就变成清除，与用户按下这条键的意图相反。 */
+    requestClearModeOff(token);
     void (async () => {
       /* 2026-11-17（v2 用户确认）：Shift+H 属「激活自动填充」，同样走「先到位，再拍照」
          这一条合并规则（见 enterAutoFill）。
