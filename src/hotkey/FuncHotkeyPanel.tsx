@@ -8,8 +8,9 @@ import {
   armBackspaceDelete, disarmBackspaceDelete, onBackspaceDelete,
   onHotkeyState, requestHotkeyStatus,
   peekPersistedArm, getBlendHotkeyOn, setBlendHotkeyActive, isDaemonConnected,
-  requestConfigRefresh,
+  requestConfigRefresh, setBrushSizePresetActive,
 } from './HotkeyBridge';
+import { describeActiveDocTiers } from '../utils/BrushSizePreset';
 import { helpTexts } from '../constants/helpTexts';
 import { useBlendGuard, blendYieldHint } from './blendGuard';
 import { subscribeFocusMode, peekFocusMode } from '../utils/FocusModeBus';
@@ -41,6 +42,8 @@ import DashedDivider from '../components/DashedDivider';
 //                    ③ 矩形选框工具 / 切换选框工具（仅工具模式）
 //                    ④ 混合模式热键（自绘开关行，无组合键）/ 前景色拾色器 / 临时吸管
 //                    ⑤ 切换填充模式（默认 Ctrl+滚轮）/ 清除模式（仅工具模式）。
+//                    ⑥ 笔刷大小预设（自绘开关行，无组合键；Shift+[ / Shift+] 两条键由
+//                       HotkeyBridge 依开关写入配置，2026-11-20 新增）。
 //                    ⛔ 原来首块上的「选区填充」分组标题已删除：它与首行同名，属于
 //                      用户指出的「多余的选区填充」（2026-11-16）。
 // 行内布局：功能名在左、录好的快捷键在右（与笔刷热键分区一致）。
@@ -216,6 +219,8 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
     if (e.action === 'altTool') return '临时吸管';
     if (e.action === 'pickColor') return '前景色拾色器';
     if (e.action === 'blendHotkey') return '混合模式热键';
+    if (e.action === 'brushSizePreset') return '笔刷大小预设';
+    if (e.action === 'brushSizeStep') return e.brush === 'down' ? '笔刷大小减小' : '笔刷大小增大';
     if (e.action === 'runFunc') return getFuncHotkeyLabel(e.brush || '');
     return e.brush || '';
   };
@@ -438,6 +443,9 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
      （配置仍是开的；切回套索立刻显示回开位）。 */
   const blendGuard = useBlendGuard();
   const blendShownOn = blendHotkeyOn && !blendGuard.yielded;
+  /* 笔刷大小预设开关（2026-11-20）：配置里 brushSizePreset 条目 combo 非空 = 开。
+     ⛔ 与混合模式热键同一套编码（'1' / ''），不进「让位」机制：它本来就是给动笔类工具用的。 */
+  const brushSizeOn = !!entries.find(e => e.action === 'brushSizePreset')?.combo;
   const funcEntryOf = (funcId: string): HotkeyEntry | undefined =>
     entries.find(e => e.action === 'runFunc' && e.brush === funcId);
 
@@ -497,30 +505,66 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
       ? blendYieldHint(toolCn) + ' ' + helpTexts.funcHotkey.blendRow
       : helpTexts.funcHotkey.blendRow;
     return (
-      <React.Fragment key={key}>
-        <div
-          className="hotkey-entry-row hotkey-entry-row-static"
-          title={rowTitle}
-        >
-          <span className="hotkey-entry-name">混合模式热键</span>
-          <span className="divider-vertical">丨</span>
-          <span className="hotkey-entry-switch">
-            <ToggleSwitch
-              checked={on}
-              onChange={toggle}
-              disabled={yielded}
-              title={yielded ? blendYieldHint(toolCn) : (on ? '关闭混合模式热键' : '开启混合模式热键')}
-              aria-label="混合模式热键"
-            />
-          </span>
-        </div>
-        {/* 让位说明：只在真的让位时出现一行（11px 弱化字，与标题下的「未连接」提示同款）。
-            ⛔ 用内联样式而不是新 CSS 类：本子面板的两处同类提示都是这个写法，
-               新加类要在 adjustment.css 里配，反而更容易与既有行距打架。 */}
-        {yielded && (
-          <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>{blendYieldHint(toolCn)}</div>
-        )}
-      </React.Fragment>
+      <div
+        key={key}
+        className="hotkey-entry-row hotkey-entry-row-static"
+        title={rowTitle}
+      >
+        <span className="hotkey-entry-name">混合模式热键</span>
+        <span className="divider-vertical">丨</span>
+        <span className="hotkey-entry-switch">
+          <ToggleSwitch
+            checked={on}
+            onChange={toggle}
+            disabled={yielded}
+            title={yielded ? blendYieldHint(toolCn) : (on ? '关闭混合模式热键' : '开启混合模式热键')}
+            aria-label="混合模式热键"
+          />
+        </span>
+      </div>
+    );
+  };
+
+  // 笔刷大小预设行（2026-11-20 用户要求）：与混合模式热键同为「自绘开关行」——
+  // 右半列不是组合键而是 switch。⛔ 刻意不渲染任何副标题/说明行：
+  //   · 用户同轮要求删掉混合热键那条让位说明（同一块面板的既有风格就是「一条开关只有一行」）；
+  //   · 需要展开解释的口径全部放进 title（悬浮）与底部 notify-bar（点开关时的反馈）。
+  const renderBrushSizeSwitchRow = (key: string, on: boolean) => {
+    const toggle = () => {
+      if (!daemonConnected) { showMessage(helpTexts.funcHotkey.notConnected); return; }
+      const nextOn = !on;
+      if (!setBrushSizePresetActive(nextOn)) {
+        showMessage('推送配置失败：快捷键服务未连接，或配置路径尚未就绪（请重新加载插件后重试）');
+        return;
+      }
+      if (!nextOn) {
+        showMessage('笔刷大小预设已关闭：Shift+[ / Shift+] 恢复 Photoshop 原生行为（改笔尖硬度）');
+        return;
+      }
+      const tiers = describeActiveDocTiers();
+      const head = '笔刷大小预设已开启：Shift+[ 减小、Shift+] 增大'
+        + (tiers ? '（当前文档档位 ' + tiers + '，随文档像素数缩放）' : '（档位随文档像素数缩放）');
+      showMessage(hotkeyArmedRef.current
+        ? head
+        : head + '；但热键当前暂停：' + armHint + '，才会生效');
+    };
+    return (
+      <div
+        key={key}
+        className="hotkey-entry-row hotkey-entry-row-static"
+        title={helpTexts.funcHotkey.brushSizeRow}
+      >
+        <span className="hotkey-entry-name">笔刷大小预设</span>
+        <span className="divider-vertical">丨</span>
+        <span className="hotkey-entry-switch">
+          <ToggleSwitch
+            checked={on}
+            onChange={toggle}
+            title={on ? '关闭笔刷大小预设' : '开启笔刷大小预设'}
+            aria-label="笔刷大小预设"
+          />
+        </span>
+      </div>
     );
   };
 
@@ -588,6 +632,12 @@ export default function FuncHotkeyPanel({ onClose, scope = 'toolbox' }: { onClos
     renderFuncDefRow('fillModeCycle', helpTexts.funcHotkey.fillModeRow),
     focusMode && renderRow('focus_clear', focusClearEntry?.combo || '', '清除模式', 'focus_clear',
       helpTexts.funcHotkey.clearRow),
+  ]);
+  /* ⑥ 笔刷大小预设（2026-11-20）：Shift+[ / Shift+] 按档位改笔尖直径。
+     单独成块排在最后：它服务的是「动笔类工具」，与上面五块的选区/填充/拾色语义无关，
+     混进 ④⑤ 会让「这一块在讲什么」变得说不清。 */
+  pushBlock('brushSize', [
+    renderBrushSizeSwitchRow('brush_size_preset', brushSizeOn),
   ]);
 
   return (

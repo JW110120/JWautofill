@@ -787,10 +787,12 @@ class App extends React.Component<AppProps, AppState> {
             this.unsubFillModeCycle = subscribeFillModeCycle((dir) => {
                 this.cycleFillMode(dir);
             });
-            // 工具模式「清除模式」键（默认 Shift+E）：命令经 ClearModeBus 到达这里，
-            // 翻本面板的 clearMode（与面板上的勾选走同一个 toggleClearMode，语义一致）。
-            this.unsubClearModeToggle = subscribeClearModeToggle(() => {
-                this.toggleClearMode();
+            // 工具模式「清除模式」键（默认 Shift+E）：命令经 ClearModeBus 到达这里。
+            // ⛔ 2026-11-20：命令带**目标值**（want），收到就「置位」，不是翻转 ——
+            //    用户要求连按 Shift+E 始终停在开启态（旧实现连按两次会关掉）。
+            //    面板上的勾选/开关仍走 toggleClearMode（人的主动操作才允许关）。
+            this.unsubClearModeToggle = subscribeClearModeToggle((want) => {
+                this.setClearMode(want);
             });
             // 混合模式热键（Alt+Shift+<key>）：.8li 吞掉 PS 原生按键后经 BlendModeBus
             // 把目标模式送到这里，改「选区填充」的混合模式（不再改图层/工具的混合模式）。
@@ -2424,9 +2426,16 @@ class App extends React.Component<AppProps, AppState> {
         }
     }
     
-    toggleClearMode() {
+    /**
+     * 把「清除模式」置成指定状态（幂等：已经是目标值就什么都不做）。
+     *
+     * ⛔ 2026-11-20：Shift+E（工具模式清除键）走这条路而不是 toggleClearMode ——
+     *    那个键的语义是「进入清除模式」，连按必须一直开启。幂等还顺带避免了
+     *    「多面板各收到一次命令」时来回翻转（历史上 toggle 版一次命中能翻两次）。
+     */
+    setClearMode(next: boolean) {
         this.setState(prevState => {
-            const next = !prevState.clearMode;
+            if (prevState.clearMode === next) return null;
             return {
                 clearMode: next,
                 // 清除模式与「新建图层」/「特殊蒙版」**互斥**（三者的语义都不兼容）：
@@ -2435,6 +2444,10 @@ class App extends React.Component<AppProps, AppState> {
                 specialMask: next ? false : prevState.specialMask,
             };
         });
+    }
+
+    toggleClearMode() {
+        this.setClearMode(!this.state.clearMode);
     }
 
     /**

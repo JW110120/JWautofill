@@ -8,12 +8,14 @@ import { action, app } from 'photoshop';
 import { storage } from 'uxp';
 import { MainToggleState, requestMainToggle, requestMainToggleOff } from '../utils/MainToggleBus';
 import { requestFillModeCycle, FillModeDir } from '../utils/FillModeCycleBus';
-import { requestClearModeToggle } from '../utils/ClearModeBus';
+import { requestClearModeSet } from '../utils/ClearModeBus';
 import { requestBlendMode } from '../utils/BlendModeBus';
 import { psRead, runAsModal } from '../utils/psAccess';
 import { pickForegroundColor } from '../utils/ColorPicker';
 import { isPsBusy, psBusyRemain } from '../utils/psProbe';
 import { noteHostBusy } from '../utils/hostInteraction';
+// 2026-11-20：笔刷大小预设（Shift+[ / Shift+] 三档步进）的执行体
+import { stepBrushSize } from '../utils/BrushSizePreset';
 // 2026-11-17：五种选区工具的「选区模式 / 羽化」快照与强制（自动填充进入/退出时守护）
 import { enterAutoFill, restoreOne } from '../utils/SelectionToolGuard';
 // ⛔ 本模块**不再** import 任何 LassoSmoothing 的东西：套索平滑与热键虽同处一个 .8li，
@@ -35,11 +37,15 @@ export interface HotkeyEntry {
   //   fillToolCycle 五个选区工具循环（默认 Shift+H，保证主开关开启，2026-11-16 新增）
   //   focusMarquee 工具模式「矩形选框工具」键（默认 M，关主开关 + 切矩形选框）
   //   marqueeCycle 选框组循环（默认 Shift+M，矩形 ↔ 椭圆，关主开关）
+  //   brushSizePreset 笔刷大小预设开关（combo 非空=开，2026-11-20 新增）
+  //   brushSizeStep   笔刷大小档位步进（brush = 'down'/'up'，由开关写入的两条键触发）
   action: 'toggleMain' | 'applyBrush' | 'runFunc' | 'focusLasso' | 'focusClear' | 'altTool' | 'pickColor' | 'blendHotkey'
         | 'lassoCycle'       // 套索组循环（默认 Shift+L，2026-11-16 新增）
         | 'fillToolCycle'    // 五工具循环（默认 Shift+H，2026-11-16 新增）
         | 'focusMarquee'     // 矩形选框工具键（默认 M，2026-11-16 新增）
-        | 'marqueeCycle';    // 选框组循环（默认 Shift+M，2026-11-16 新增）
+        | 'marqueeCycle'     // 选框组循环（默认 Shift+M，2026-11-16 新增）
+        | 'brushSizePreset'  // 笔刷大小预设开关（2026-11-20 新增）
+        | 'brushSizeStep';   // 笔刷大小档位步进（Shift+[ / Shift+]，2026-11-20 新增）
   brush?: string;                // applyBrush 时的笔刷名（PS 预设名，需精确匹配）。
                                   // 注意：不支持同名笔刷——PS 按 _name 只会选中 Brushes 列表最上方那支。
                                   // runFunc 时复用本字段承载功能 id（见 funcHotkeyDefs.ts），
@@ -536,7 +542,8 @@ function normalizeEntry(e: any): HotkeyEntry | null {
       && action !== 'focusLasso' && action !== 'focusClear' && action !== 'altTool'
       && action !== 'pickColor' && action !== 'blendHotkey'
       && action !== 'lassoCycle' && action !== 'fillToolCycle'
-      && action !== 'focusMarquee' && action !== 'marqueeCycle') return null;
+      && action !== 'focusMarquee' && action !== 'marqueeCycle'
+      && action !== 'brushSizePreset' && action !== 'brushSizeStep') return null;
   // combo 为空的合法条目：主开关（'' = 已解绑）、笔刷（'' = 已解绑但条目保留在列表，
   // 单击选中后按退格即解绑，与「删除」按钮区分）、工具模式套索键（'' = 工具模式关闭时不装载）、
   // 临时吸管键（'' = 工具模式关闭时不装载）、
@@ -545,7 +552,8 @@ function normalizeEntry(e: any): HotkeyEntry | null {
   if (!combo && action !== 'toggleMain' && action !== 'applyBrush' && action !== 'focusLasso'
       && action !== 'focusClear' && action !== 'altTool' && action !== 'blendHotkey'
       && action !== 'lassoCycle' && action !== 'fillToolCycle'
-      && action !== 'focusMarquee' && action !== 'marqueeCycle') return null;
+      && action !== 'focusMarquee' && action !== 'marqueeCycle'
+      && action !== 'brushSizePreset' && action !== 'brushSizeStep') return null;
   // runFunc 必须携带功能 id（复用 brush 字段），缺了就无法执行，丢弃。
   if (action === 'runFunc' && !brush) return null;
   return { id, combo, action, brush };
@@ -933,7 +941,10 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
     // 工具模式下的「清除模式」键（默认 Shift+E）：两件事，互不干扰——
     //   ① 确保主开关开启：MainToggleBus.doToggle 在工具模式下本就是「只开不关」
     //      （已开着则什么都不做）⇒ 无论此前开关是开是关，按下即保证开启；
-    //   ② 切换清除模式：写 ClearModeBus，APP 面板订阅后翻自己的 state。
+    //   ② **开启**清除模式（置位，不是翻转）：写 ClearModeBus，APP 面板订阅后把
+    //      clearMode 置成 true。⛔ 2026-11-20 用户要求：连按 Shift+E 必须一直是开启，
+    //      旧实现（toggle）连按两次会关掉，与「这个键的作用是进入清除模式」相悖。
+    //      关闭清除模式走面板上的勾选/开关。
     // ⚠️ 绝不在这一步关主开关 —— 用户明确要求「按 Shift+E 开/关清除模式都不会关主开关」。
     // token 去重同上：同一次命中在所有面板上只各执行一次。
     const combo = msg.combo ?? '';
@@ -945,8 +956,8 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
       .catch(() => {
         for (const l of hotkeyListeners) { try { l({ combo, action: 'focusClear', ok: false }); } catch { /* ignore */ } }
       });
-    void requestClearModeToggle('clear|' + token)
-      .catch((e) => console.error('⚠️ 清除模式切换命令写入失败:', e));
+    void requestClearModeSet('clear|' + token, true)
+      .catch((e) => console.error('⚠️ 清除模式命令写入失败:', e));
     // ⛔⛔ 0x022F：**不再无条件切套索** —— 那正是「Shift+E 之后第一笔被吞」的元凶。
     //   0x013D 写这段时（钩子时代）Shift+E 会漏给 PS，PS 自己把工具循环成橡皮擦，
     //   所以「命中即切回套索」是必要补救。现在 Shift+E 带 MOD_SHIFT ⇒
@@ -1033,6 +1044,32 @@ function handleHotkey(msg: { id: string; combo?: string; action: string;  brush?
       .catch(() => {
         for (const l of hotkeyListeners) { try { l({ combo, action: 'runFunc', brush: msg.brush!, ok: false }); } catch { /* ignore */ } }
       });
+    return;
+  }
+  if (msg.action === 'brushSizeStep') {
+    /* 笔刷大小档位步进（Shift+[ / Shift+]）。
+       ⛔⛔ 这里**必须去重**：.8li 把命中广播给所有客户端（#app 与 #pixeladjustment
+          各一条 WS），两个 JS 上下文都会走到这里 —— 不去重就是「按一下跳两档」。
+          token 用原生的 `seq`（一次命中一个绝对序号，两块面板算出的值必然相同），
+          没有 seq 的老 .8li 退回时间桶（与 fillMode 同款兜底）。
+          真正的互斥/幂等在 BrushSizePreset 里做（锁文件 + token 状态），
+          这里只负责把「同一次命中」翻译成同一个 token。 */
+    const dir = msg.brush === 'down' ? -1 : 1;
+    const seq = Number((msg as any).seq);
+    const token = isFinite(seq) && seq > 0
+      ? 'brushSize|seq|' + seq
+      : 'brushSize|' + (msg.combo || '') + '|' + Math.floor(Date.now() / 400);
+    const combo = msg.combo ?? '';
+    void stepBrushSize(dir, token)
+      .then((r) => {
+        /* 反馈本身不发 notify：画布上的笔尖圆圈当场变大变小就是最直接的反馈，
+           每次按键都往通知条灌一行反而在画图时碍眼（用户没要求）。
+           事件照发，面板若想做提示可以直接订阅。 */
+        for (const l of hotkeyListeners) {
+          try { l({ combo, action: 'brushSizeStep', brush: msg.brush, ok: r.ok }); } catch { /* ignore */ }
+        }
+      })
+      .catch((e) => { console.warn('⚠️ 笔刷大小步进失败:', e); });
     return;
   }
   if (msg.action === 'runFunc' && msg.brush) {
@@ -1545,11 +1582,12 @@ export function isDaemonConnected(): boolean {
 
 // ===== 工具模式：「清除模式」键（默认 Shift+E，2026-10-19 新增）=====
 // 语义（用户原话）：无论主开关是关闭或开启，按下 Shift+E 都会开启主开关；
-// 主开关开启时按 Shift+E 只切换清除模式，绝不关闭主开关。
+// 主开关开启时按 Shift+E **只开启清除模式**（置位，不翻转 —— 2026-11-20 改），
+// 绝不关闭主开关，也不会把清除模式关掉。
 // 实现走两条既有总线：
 //   ① requestMainToggle —— MainToggleBus.doToggle 在工具模式下本就是「只开不关」
 //      （见该文件 focus 分支），已开着则什么都不做，完美匹配「确保开启」；
-//   ② requestClearModeToggle —— 清除模式切换命令（APP 面板订阅后翻自己的 state）。
+//   ② requestClearModeSet(token, true) —— 清除模式置位命令（APP 面板订阅后写 state）。
 // 该键与套索工具键同规矩：**只在工具模式开启时装载**（combo 非空），关闭时置空、
 // 由守护进程跳过注册，从而完全不影响 PS 原生的 Shift+E（正常是「反选」的变体键位，
 // 工具模式外绝不拦截）。用户自定义过的键记忆在 brush 字段。
@@ -1791,6 +1829,60 @@ export function setBlendHotkeyActive(on: boolean): boolean {
   const desired: HotkeyEntry = { id: BLEND_HOTKEY_ID, combo: on ? '1' : '', action: 'blendHotkey', brush: '' };
   if (idx >= 0 && cachedConfig[idx].id === BLEND_HOTKEY_ID && cachedConfig[idx].combo === desired.combo) return true;
   const next = idx >= 0 ? cachedConfig.map((e, i) => (i === idx ? desired : e)) : [...cachedConfig, desired];
+  cachedConfig = next;
+  emitConfig();
+  return pushConfig(next);
+}
+
+// ===== 笔刷大小预设（2026-11-20 新增）=====
+// 需求：APP 面板「自定义快捷键」里一个开关，开启后 Shift+[ 减小 / Shift+] 增大，
+// 按「小/中/大」三档跳（划线条 / 铺块面 / 刷背景），档位随文档像素数缩放。
+//
+// 实现口径（为什么是「写入两条 brushSizeStep 条目」而不是再改一次 .8li）：
+//   · .8li 对除 blendHotkey 外的 action **一律不解释、只透传**，热键表是照配置逐条
+//     注册的 —— 所以只要把 combo 写成 "Shift+[" / "Shift+]"，原生侧会自动把它们
+//     注册成系统级独占热键并广播回来（action 原样带回，brush 承载方向）。
+//   · 这样本次功能**不需要重编 .8li、不需要重启 PS**，迭代只在 JS 侧。
+//   · 代价：这两条键在开关打开期间由插件独占（PS 原生的 Shift+[ = 减硬度 让位），
+//     这正是用户要的语义。名单外的工具按了不做事（见 BrushSizePreset 的工具闸门）。
+// 编码与混合模式热键同款：开关条目 combo = '1'（开）/ ''（关），两条步进条目
+// 也保留在配置里（combo 置空 = 已解绑，原生跳过注册），开关再打开时无需重建。
+export const BRUSH_SIZE_PRESET_ID = 'brush_size_preset';
+export const BRUSH_SIZE_STEP_DOWN_ID = 'brush_size_down';
+export const BRUSH_SIZE_STEP_UP_ID = 'brush_size_up';
+export const DEFAULT_BRUSH_SIZE_DOWN_COMBO = 'Shift+[';
+export const DEFAULT_BRUSH_SIZE_UP_COMBO = 'Shift+]';
+
+/** 笔刷大小预设当前是否开启（配置帧驱动；未连接时以本地缓存为准）。 */
+export function getBrushSizePresetOn(): boolean {
+  const e = cachedConfig.find(x => x.action === 'brushSizePreset');
+  return !!e && !!e.combo;
+}
+
+/** 两条步进键的当前组合键（提示/展示用；关着时仍回显默认值）。 */
+export function getBrushSizeStepCombos(): { down: string; up: string } {
+  const d = cachedConfig.find(x => x.action === 'brushSizeStep' && x.brush === 'down');
+  const u = cachedConfig.find(x => x.action === 'brushSizeStep' && x.brush === 'up');
+  return {
+    down: d?.combo || DEFAULT_BRUSH_SIZE_DOWN_COMBO,
+    up: u?.combo || DEFAULT_BRUSH_SIZE_UP_COMBO,
+  };
+}
+
+/**
+ * 开关笔刷大小预设（写入共享配置，.8li 收 config 帧即重建热键表）。
+ * 返回 false = 配置尚未就绪 / 推送失败（UI 据此提示「服务未连接」）。
+ */
+export function setBrushSizePresetActive(on: boolean): boolean {
+  if (!configLoaded) return false;
+  const desired: HotkeyEntry[] = [
+    { id: BRUSH_SIZE_PRESET_ID, combo: on ? '1' : '', action: 'brushSizePreset', brush: '' },
+    { id: BRUSH_SIZE_STEP_DOWN_ID, combo: on ? DEFAULT_BRUSH_SIZE_DOWN_COMBO : '', action: 'brushSizeStep', brush: 'down' },
+    { id: BRUSH_SIZE_STEP_UP_ID, combo: on ? DEFAULT_BRUSH_SIZE_UP_COMBO : '', action: 'brushSizeStep', brush: 'up' },
+  ];
+  const ids = [BRUSH_SIZE_PRESET_ID, BRUSH_SIZE_STEP_DOWN_ID, BRUSH_SIZE_STEP_UP_ID];
+  const rest = cachedConfig.filter(e => ids.indexOf(e.id) < 0 && e.action !== 'brushSizePreset' && e.action !== 'brushSizeStep');
+  const next = [...rest, ...desired];
   cachedConfig = next;
   emitConfig();
   return pushConfig(next);

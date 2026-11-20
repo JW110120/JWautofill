@@ -442,6 +442,10 @@ export default function BrushHotkeySection() {
     //    「该组合键已被「1」占用」（brush='1' 是开关标记）。与 FuncHotkeyPanel 的
     //    `entryDisplayName` 保持同一份名单，避免两处文案漂移。
     if (e.action === 'blendHotkey') return '混合模式热键';
+    // 2026-11-20：笔刷大小预设的开关条目与两条步进条目同样住在配置里（brush=''/'down'/'up'），
+    // 不补这两行的话，冲突提示会变成「已被「down」占用」。
+    if (e.action === 'brushSizePreset') return '笔刷大小预设';
+    if (e.action === 'brushSizeStep') return e.brush === 'down' ? '笔刷大小减小' : '笔刷大小增大';
     if (e.action === 'runFunc') return getFuncHotkeyLabel(e.brush || '');
     return e.brush || '';
   };

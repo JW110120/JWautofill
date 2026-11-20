@@ -22,6 +22,10 @@ const STATE_FILE = 'clear-mode-toggle.json';
 
 interface ClearModeToggleEvent {
     token: string;
+    /** 目标状态：true = 开启清除模式，false = 关闭。⛔ 不是「翻转」——
+     *  2026-11-20 用户要求「多次按 Shift+E 必须始终是开启」，所以命令带上目标值，
+     *  收到几次都只是把状态**置成同一个值**（幂等），不会再翻回去。 */
+    want: boolean;
     rev: number;
     ts: number;
 }
@@ -66,6 +70,8 @@ async function readRaw(): Promise<ClearModeToggleEvent | null> {
         if (!j || typeof j !== 'object') return null;
         return {
             token: typeof j.token === 'string' ? j.token : '',
+            // 老文件（无 want 字段）按「开启」解释：这条通道的语义已从「翻转」改成「置开启」。
+            want: j.want === false ? false : true,
             rev: Number(j.rev) || 0,
             ts: Number(j.ts) || 0,
         };
@@ -78,15 +84,21 @@ async function readRaw(): Promise<ClearModeToggleEvent | null> {
 let writeChain: Promise<unknown> = Promise.resolve();
 
 /**
- * 处理一次「热键命中」：把清除模式切换命令写进共享文件。
+ * 处理一次「热键命中」：把「清除模式 = want」的命令写进共享文件。
+ *
+ * ⛔ 2026-11-20：语义从**翻转**改成**置位**（用户原话：「确保多次按 Shift+E
+ *    也会保持清除模式始终开启」）。旧实现是 toggle，在工具模式下连按两次就关掉了，
+ *    而工具模式的清除键本意是「进入清除模式」，不该有「退出」的含义。
+ *    面板上的勾选/开关仍走 app.tsx 自己的 toggleClearMode，不受影响。
+ *
  * 同一次命中在所有面板上用同一个 token 调用；文件里已是该 token 则跳过，
  * 保证无论多少个面板收到 .8li 的广播，命令都只被写入/执行一次。
  */
-export async function requestClearModeToggle(token: string): Promise<void> {
+export async function requestClearModeSet(token: string, want: boolean): Promise<void> {
     const run = writeChain.then(async () => {
         const cur = await readRaw();
         if (cur && cur.token === token) return; // 同一次命中已被处理过
-        const next: ClearModeToggleEvent = { token, rev: (cur?.rev || 0) + 1, ts: Date.now() };
+        const next: ClearModeToggleEvent = { token, want, rev: (cur?.rev || 0) + 1, ts: Date.now() };
         const folder = await getSettingsFolder();
         const file = await folder.createFile(STATE_FILE, { overwrite: true });
         await file.write(JSON.stringify(next), { format: getFormats().utf8 });
@@ -104,16 +116,26 @@ const memListeners = new Set<() => void>();
 function emitMem() { memListeners.forEach((l) => { try { l(); } catch { /* ignore */ } }); }
 
 /**
- * 订阅清除模式切换命令（默认每 250ms 轮询一次共享文件；写入后内存即时唤醒）。
- * 只有 APP 面板订阅：收到命令后由它翻自己的 state（toggleClearMode）。
+ * 订阅清除模式命令（默认每 250ms 轮询一次共享文件；写入后内存即时唤醒）。
+ * 只有 APP 面板订阅：收到命令后把 `clearMode` **置成** `want`（不是翻转）。
  */
 export function subscribeClearModeToggle(
-    cb: () => void,
+    cb: (want: boolean) => void,
     intervalMs: number = 250
 ): () => void {
     let stopped = false;
     let busy = false;
     let last: ClearModeToggleEvent | null = cached;
+    /**
+     * 订阅时刻（2026-11-20）。
+     *
+     * ⛔ 文件里躺着的是**上一次**按键留下的命令。面板重载/新开时若把旧命令当新命令
+     *    执行，就会在用户没按键的情况下把清除模式改成文件里的值 —— 置位版比翻转版
+     *    更容易被撞见（面板一打开清除模式就自己亮起来）。
+     *    ⇒ 只执行「写入时间晚于订阅时刻」的命令（同一台机器同一个 Date.now，无时钟偏差；
+     *      留 200ms 容差给「订阅与首轮读之间刚好按下」的边界）。
+     */
+    const subscribeAt = Date.now();
 
     const tick = async () => {
         if (stopped || busy) return;
@@ -123,7 +145,9 @@ export function subscribeClearModeToggle(
             if (ev && (!last || ev.rev !== last.rev || ev.token !== last.token)) {
                 last = ev;
                 cached = ev;
-                try { cb(); } catch (_) { /* 订阅方异常不影响轮询 */ }
+                if ((Number(ev.ts) || 0) + 200 >= subscribeAt) {
+                    try { cb(ev.want); } catch (_) { /* 订阅方异常不影响轮询 */ }
+                }
             }
         } catch (_) {
             /* 读失败保持上一状态，下一次再试 */
